@@ -239,6 +239,155 @@ func TestIndexEmptyGitRepoSummary(t *testing.T) {
 	assert.Empty(t, sum.HistorySkipNote)
 }
 
+func TestIndexTypeScriptModules(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"web/src/api/client.ts": `export async function fetchJSON(path: string) {
+	return fetch(path);
+}
+`,
+		"web/src/api/snapshots.ts": `import { fetchJSON } from "./client";
+import * as util from "../util";
+
+export function load(id: string) {
+	fetchJSON("/snap/" + id);
+	util.clean(id);
+}
+`,
+		"web/src/util.ts": `export function clean(s: string) {
+	return s.trim();
+}
+`,
+	}
+	for rel, content := range files {
+		p := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	}
+
+	sum, st := runIndex(t, root)
+	assert.Equal(t, 3, sum.FilesParsed)
+
+	// Named import: bare fetchJSON() call resolves across modules.
+	fetchJSON := mustFind(t, st, "web/src/api/client.fetchJSON")
+	callers, err := st.Callers(fetchJSON.ID)
+	require.NoError(t, err)
+	require.Len(t, callers, 1)
+	assert.Equal(t, "web/src/api/snapshots.load", callers[0].FQN)
+
+	// Namespace import: util.clean() resolves through the qualifier.
+	clean := mustFind(t, st, "web/src/util.clean")
+	callers, err = st.Callers(clean.ID)
+	require.NoError(t, err)
+	require.Len(t, callers, 1)
+	assert.Equal(t, "web/src/api/snapshots.load", callers[0].FQN)
+
+	// Module-level IMPORTS edges: snapshots -> client and util.
+	snapMod := mustFind(t, st, "web/src/api/snapshots")
+	require.Equal(t, model.KindPackage, snapMod.Kind)
+	targets, err := st.EdgesFrom(snapMod.ID, model.EdgeImports)
+	require.NoError(t, err)
+
+	var fqns []string
+	for _, s := range targets {
+		fqns = append(fqns, s.FQN)
+	}
+	assert.ElementsMatch(t, []string{"web/src/api/client", "web/src/util"}, fqns)
+}
+
+func TestUniqueNameJudgedAcrossEcmaDialects(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		// render exists in BOTH a .ts and a .tsx file: not unique within
+		// the ECMA family, so the unique-name fallback must abstain.
+		// Per-dialect buckets would see one candidate each and fabricate
+		// an edge.
+		"store.ts": `export class Store {
+	render(): string { return "s"; }
+}
+`,
+		"panel.tsx": `export class Panel {
+	render(): string { return "p"; }
+}
+`,
+		"caller.ts": `export function use(x: { render(): string }) {
+	x.render();
+}
+`,
+	}
+	for rel, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	use := mustFind(t, st, "caller.use")
+	callees, err := st.Callees(use.ID)
+	require.NoError(t, err)
+	assert.Empty(t, callees, "ambiguous method name across dialects must produce no edge")
+}
+
+func TestNoCrossLanguagePackageKeyCollision(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/app\n",
+		// Go package whose directory key "web/api" textually equals the
+		// module key a TS import of "./api" resolves to.
+		"web/api/api.go": `package api
+
+func Parse() {}
+`,
+		"web/consumer.ts": `import { Parse } from "./api";
+
+export function use(s: string) {
+	Parse(s);
+}
+`,
+	}
+	for rel, content := range files {
+		p := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	// The TS import must not resolve into the Go namespace.
+	parse := mustFind(t, st, "web/api.Parse")
+	callers, err := st.Callers(parse.ID)
+	require.NoError(t, err)
+	assert.Empty(t, callers, "a TS import must never resolve to a Go function")
+
+	// Two package nodes share FQN "web/api" (the Go directory and the TS
+	// import target); the Go one is the node that DEFINES Parse. It must
+	// have no importer from the TS side.
+	pkgs, err := st.FindSymbols("web/api", 10)
+	require.NoError(t, err)
+
+	var goPkg *model.Symbol
+
+	for i := range pkgs {
+		defined, err := st.EdgesFrom(pkgs[i].ID, model.EdgeDefines)
+		require.NoError(t, err)
+
+		for _, d := range defined {
+			if d.FQN == "web/api.Parse" {
+				goPkg = &pkgs[i]
+			}
+		}
+	}
+
+	require.NotNil(t, goPkg, "the Go package node must DEFINE Parse")
+
+	importers, err := st.EdgesTo(goPkg.ID, model.EdgeImports)
+	require.NoError(t, err)
+
+	for _, imp := range importers {
+		assert.NotEqual(t, "web/consumer", imp.FQN,
+			"the TS module must not gain an IMPORTS edge into the Go package")
+	}
+}
+
 func TestIndexIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root)

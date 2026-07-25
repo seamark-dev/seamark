@@ -17,8 +17,21 @@ import (
 
 // Import is one import clause of a file.
 type Import struct {
-	Path      string // as written, e.g. "github.com/spf13/cobra"
-	LocalName string // alias or last path segment; "" for blank/dot imports
+	Path string // as written, e.g. "github.com/spf13/cobra" or "./api/client"
+	// LocalName is the identifier that qualifies member calls through this
+	// import: the Go package alias, or a JS/TS namespace import (`* as ns`).
+	// "" when the import contributes no qualifier.
+	LocalName string
+	// Named lists identifiers imported un-aliased into the file's scope
+	// (`import {foo} from …`). Bare calls to these resolve into the
+	// imported module. Aliased imports are omitted — their local names
+	// cannot be looked up in the target module. Unused by Go.
+	Named []string
+	// Resolved is the repo-relative package/module key this import points
+	// at, when the extractor can resolve it by itself (JS/TS relative
+	// specifiers). "" means the indexer decides (Go module paths) or the
+	// import is external.
+	Resolved string
 }
 
 // CallRef is an unresolved call site inside a declaration.
@@ -60,6 +73,18 @@ type Extractor interface {
 	Close()
 }
 
+// LanguageFamily groups languages that share one symbol namespace: the
+// three ECMA dialects (JS, TS, TSX) import each other freely and must be
+// resolved as a single family; every other language is its own.
+func LanguageFamily(lang string) string {
+	switch EcmaDialect(lang) {
+	case EcmaJS, EcmaTS, EcmaTSX:
+		return "ecma"
+	default:
+		return lang
+	}
+}
+
 // Registry maps file extensions to extractors.
 type Registry struct {
 	byExt      map[string]Extractor
@@ -68,14 +93,21 @@ type Registry struct {
 
 // NewRegistry constructs all built-in extractors.
 func NewRegistry() (*Registry, error) {
-	goEx, err := NewGoExtractor()
-	if err != nil {
-		return nil, err
-	}
-
 	r := &Registry{byExt: map[string]Extractor{}}
 
-	for _, ex := range []Extractor{goEx} {
+	builders := []func() (Extractor, error){
+		func() (Extractor, error) { return NewGoExtractor() },
+		func() (Extractor, error) { return NewEcmaExtractor(EcmaJS) },
+		func() (Extractor, error) { return NewEcmaExtractor(EcmaTS) },
+		func() (Extractor, error) { return NewEcmaExtractor(EcmaTSX) },
+	}
+	for _, build := range builders {
+		ex, err := build()
+		if err != nil {
+			r.Close()
+			return nil, err
+		}
+
 		r.extractors = append(r.extractors, ex)
 
 		for _, ext := range ex.Extensions() {

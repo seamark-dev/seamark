@@ -204,6 +204,68 @@ import (
 	}, got)
 }
 
+func TestGroupedVarBlocks(t *testing.T) {
+	src := `package p
+
+// Grouped vars nest inside var_spec_list in the grammar.
+var (
+	A = 1
+	B = 2
+)
+
+var C = 3
+
+func f() {
+	var local = 4
+	_ = local
+}
+`
+	ex, err := NewGoExtractor()
+	require.NoError(t, err)
+	defer ex.Close()
+
+	res, err := ex.Extract("p.go", []byte(src))
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(res.Symbols))
+	for _, d := range res.Symbols {
+		names = append(names, d.Symbol.Name)
+	}
+	assert.ElementsMatch(t, []string{"A", "B", "C", "f"}, names)
+
+	a := symbolByFQN(t, res, "A")
+	assert.Equal(t, model.KindVar, a.Symbol.Kind)
+	assert.NotEmpty(t, a.Symbol.DocHash, "doc comment above the grouped block must hash")
+}
+
+func TestFunctionLocalDeclsAreNotSymbols(t *testing.T) {
+	src := `package p
+
+func Work() {
+	const local = 1
+	var buf string
+	type pair struct{ a, b int }
+	_ = buf
+	_ = pair{local, 2}
+}
+
+const Exported = 2
+`
+	ex, err := NewGoExtractor()
+	require.NoError(t, err)
+	defer ex.Close()
+
+	res, err := ex.Extract("p.go", []byte(src))
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(res.Symbols))
+	for _, d := range res.Symbols {
+		names = append(names, d.Symbol.Name)
+	}
+	assert.ElementsMatch(t, []string{"Work", "Exported"}, names,
+		"function-local const/var/type must not become module symbols")
+}
+
 func TestReceiverForms(t *testing.T) {
 	src := `package p
 

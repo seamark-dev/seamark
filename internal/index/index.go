@@ -293,12 +293,23 @@ type graph struct {
 	results    []*parse.FileResult
 	modulePath string
 
-	packages map[string]*model.Symbol // package key -> package symbol
-	// declared symbols by (package, name); values point into results.
+	// All keys below are scoped per language family (scopedKey): a Go
+	// package directory and an ES module can share the same repo-relative
+	// key ("web/api" the directory vs web/api.ts the file) without being
+	// the same namespace — unscoped keys let a TS import resolve into Go
+	// symbols with high confidence.
+	packages map[string]*model.Symbol // scoped package key -> package symbol
+	// declared symbols by (scoped package key, name).
 	decls map[string]map[string][]*model.Symbol
-	// methods by bare name across the repo, for lowest-confidence resolution.
-	methodsByName map[string][]*model.Symbol
+	// methods by (family, bare name), for lowest-confidence resolution.
+	// Family, not dialect: TS/TSX/JS share one namespace, and judging
+	// uniqueness per dialect would fabricate edges a repo-wide duplicate
+	// should suppress.
+	methodsByName map[string]map[string][]*model.Symbol
 }
+
+// scopedKey namespaces a package key by language family.
+func scopedKey(family, key string) string { return family + "\x00" + key }
 
 func buildGraph(results []*parse.FileResult, modulePath string) *graph {
 	g := &graph{
@@ -306,57 +317,72 @@ func buildGraph(results []*parse.FileResult, modulePath string) *graph {
 		modulePath:    modulePath,
 		packages:      map[string]*model.Symbol{},
 		decls:         map[string]map[string][]*model.Symbol{},
-		methodsByName: map[string][]*model.Symbol{},
+		methodsByName: map[string]map[string][]*model.Symbol{},
 	}
 	for _, res := range results {
-		g.packageSymbol(res.Package)
+		fam := parse.LanguageFamily(res.Language)
+		g.packageSymbol(fam, res.Package)
 
 		for i := range res.Symbols {
 			sym := &res.Symbols[i].Symbol
-			byName := g.decls[res.Package]
+			sk := scopedKey(fam, res.Package)
+			byName := g.decls[sk]
 
 			if byName == nil {
 				byName = map[string][]*model.Symbol{}
-				g.decls[res.Package] = byName
+				g.decls[sk] = byName
 			}
 
 			byName[sym.Name] = append(byName[sym.Name], sym)
 
 			if sym.Kind == model.KindMethod {
-				g.methodsByName[sym.Name] = append(g.methodsByName[sym.Name], sym)
+				methods := g.methodsByName[fam]
+				if methods == nil {
+					methods = map[string][]*model.Symbol{}
+					g.methodsByName[fam] = methods
+				}
+
+				methods[sym.Name] = append(methods[sym.Name], sym)
 			}
 		}
 		// Pre-create package symbols for import targets so insertion order
 		// is deterministic and edges always have both endpoints.
 		for _, imp := range res.Imports {
-			g.packageSymbol(g.importKey(imp.Path))
+			g.packageSymbol(fam, g.importKey(imp))
 		}
 	}
 	return g
 }
 
-// importKey maps an import path to a package-symbol key: repo-relative for
-// internal packages, the import path itself for external ones.
-func (g *graph) importKey(importPath string) string {
-	if g.modulePath == "" {
-		return importPath
+// importKey maps an import to a package-symbol key: the extractor's own
+// resolution when it has one (JS/TS relative specifiers), repo-relative
+// translation for Go module paths, the raw path for external imports.
+func (g *graph) importKey(imp parse.Import) string {
+	if imp.Resolved != "" {
+		return imp.Resolved
 	}
 
-	if importPath == g.modulePath {
+	if g.modulePath == "" {
+		return imp.Path
+	}
+
+	if imp.Path == g.modulePath {
 		return ""
 	}
 
-	if rel, ok := strings.CutPrefix(importPath, g.modulePath+"/"); ok {
+	if rel, ok := strings.CutPrefix(imp.Path, g.modulePath+"/"); ok {
 		return rel
 	}
 
-	return importPath
+	return imp.Path
 }
 
-// packageSymbol lazily creates the grouping symbol for a package key.
-// The repo root package is named "." to keep FQNs non-empty.
-func (g *graph) packageSymbol(key string) *model.Symbol {
-	if sym, ok := g.packages[key]; ok {
+// packageSymbol lazily creates the grouping symbol for a package key
+// within one language family. The repo root package is named "." to keep
+// FQNs non-empty.
+func (g *graph) packageSymbol(family, key string) *model.Symbol {
+	sk := scopedKey(family, key)
+	if sym, ok := g.packages[sk]; ok {
 		return sym
 	}
 
@@ -366,7 +392,7 @@ func (g *graph) packageSymbol(key string) *model.Symbol {
 	}
 
 	sym := &model.Symbol{FQN: fqn, Name: path.Base(fqn), Kind: model.KindPackage}
-	g.packages[key] = sym
+	g.packages[sk] = sym
 
 	return sym
 }
@@ -381,9 +407,25 @@ func (g *graph) write(tx *store.Tx) error {
 	}
 
 	for _, res := range g.results {
+		pkg := g.packages[scopedKey(parse.LanguageFamily(res.Language), res.Package)]
+
 		for i := range res.Symbols {
-			if err := tx.InsertSymbol(&res.Symbols[i].Symbol); err != nil {
+			sym := &res.Symbols[i].Symbol
+			if err := tx.InsertSymbol(sym); err != nil {
 				return err
+			}
+
+			// DEFINES edges tie each symbol to its package/module node —
+			// and disambiguate same-FQN package nodes across language
+			// families (a Go dir and an ES module can share a key).
+			if pkg != nil {
+				err := tx.InsertEdge(model.Edge{
+					Src: pkg.ID, Dst: sym.ID,
+					Kind: model.EdgeDefines, Origin: model.OriginParse,
+				})
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -404,10 +446,11 @@ func (g *graph) write(tx *store.Tx) error {
 }
 
 func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
-	src := g.packages[res.Package]
+	fam := parse.LanguageFamily(res.Language)
+	src := g.packages[scopedKey(fam, res.Package)]
 
 	for _, imp := range res.Imports {
-		dst := g.packages[g.importKey(imp.Path)]
+		dst := g.packages[scopedKey(fam, g.importKey(imp))]
 
 		if src == nil || dst == nil || src == dst {
 			continue
@@ -428,23 +471,34 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 // writeCallEdges resolves the call references of one declaration, in
 // descending confidence order (RFC §3: every edge declares its derivation):
 //
-//  1. bare identifier   → function in the same package    (same-package)
-//  2. selector whose    → function in the imported repo   (qualified)
-//     qualifier is an     package
-//     import alias
-//  3. any other         → the single repo symbol with     (unique-name)
-//     selector call       that method name, if unique
+//  1. bare identifier    → named import target module,     (qualified)
+//     that is a named      else function in the same       (same-package)
+//     import               package/module
+//  2. selector whose     → function in the imported repo   (qualified)
+//     qualifier is an      package/module
+//     import alias or
+//     namespace import
+//  3. any other          → the single same-language repo   (unique-name)
+//     selector call        symbol with that method name
 //
 // Known limitation, accepted for M1: resolution is purely syntactic, so a
 // local variable shadowing an import alias (or sharing a method name) can
 // produce a wrong edge. The origin column declares the derivation exactly
 // so consumers can weigh it; proper scope tracking is future work.
 func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.SymbolDecl) error {
-	imports := map[string]string{} // local name -> package key
+	fam := parse.LanguageFamily(res.Language)
+
+	imports := map[string]string{} // qualifier local name -> scoped package key
+	named := map[string]string{}   // bare imported name -> scoped package key
 
 	for _, imp := range res.Imports {
+		key := scopedKey(fam, g.importKey(imp))
 		if imp.LocalName != "" {
-			imports[imp.LocalName] = g.importKey(imp.Path)
+			imports[imp.LocalName] = key
+		}
+
+		for _, n := range imp.Named {
+			named[n] = key
 		}
 	}
 
@@ -453,15 +507,22 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 		origin := ""
 
 		if !call.Selector {
-			// Bare identifier: only ever a same-package function. Selector
-			// calls must not land here — x.db.Close() is a method call on a
-			// value, not a reference into the package scope.
-			dst = pickUnique(g.decls[res.Package][call.Name], model.KindFunction)
-			origin = model.OriginSamePackage
+			// Bare identifier: a named import wins over the local scope
+			// (that is what the import means); otherwise a function in the
+			// same package/module. Selector calls must not land here —
+			// x.db.Close() is a method call on a value, not a reference
+			// into the package scope.
+			if pkgKey, ok := named[call.Name]; ok {
+				dst = pickUnique(g.decls[pkgKey][call.Name], model.KindFunction)
+				origin = model.OriginQualified
+			} else {
+				dst = pickUnique(g.decls[scopedKey(fam, res.Package)][call.Name], model.KindFunction)
+				origin = model.OriginSamePackage
+			}
 		} else if pkgKey, ok := imports[call.Qualifier]; ok {
 			dst = pickUnique(g.decls[pkgKey][call.Name], model.KindFunction)
 			origin = model.OriginQualified
-		} else if candidates := g.methodsByName[call.Name]; len(candidates) == 1 {
+		} else if candidates := g.methodsByName[fam][call.Name]; len(candidates) == 1 {
 			dst = candidates[0]
 			origin = model.OriginUniqueName
 		}

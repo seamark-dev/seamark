@@ -23,6 +23,7 @@ const goDeclQuery = `
 (type_declaration (type_spec name: (type_identifier) @type.name) @type.spec) @type.decl
 (const_declaration (const_spec name: (identifier) @const.name) @const.spec)
 (var_declaration (var_spec name: (identifier) @var.name) @var.spec)
+(var_declaration (var_spec_list (var_spec name: (identifier) @var.name) @var.spec))
 (import_spec) @import.spec
 `
 
@@ -164,6 +165,18 @@ func (g *GoExtractor) addValueDecl(res *FileResult, src []byte, pkg string,
 	spec, nameNode *tree_sitter.Node, kind model.SymbolKind,
 ) {
 	if nameNode == nil {
+		return
+	}
+
+	// Only package-level declarations are symbols; const/var/type blocks
+	// inside function bodies are implementation detail. Grouped var blocks
+	// nest their specs one level deeper (var_spec_list).
+	p := spec.Parent()
+	if p != nil && p.Kind() == "var_spec_list" {
+		p = p.Parent()
+	}
+
+	if p == nil || p.Parent() == nil || p.Parent().Kind() != "source_file" {
 		return
 	}
 
@@ -316,14 +329,21 @@ func goSignature(decl *tree_sitter.Node, src []byte) string {
 // declaration; "" when there is none. Storing the hash rather than the text
 // keeps the index small while still detecting doc drift (RFC §5.1).
 func docHash(decl *tree_sitter.Node, src []byte) string {
-	// type/const/var specs sit inside a declaration node; the doc comment
-	// attaches to the outer declaration.
+	// Specs and declarators sit inside wrapper nodes (Go declaration
+	// blocks, JS lexical declarations and export statements); the doc
+	// comment attaches to the outermost wrapper.
 	anchor := decl
-	if p := decl.Parent(); p != nil {
+
+	for p := anchor.Parent(); p != nil; p = anchor.Parent() {
 		switch p.Kind() {
-		case "type_declaration", "const_declaration", "var_declaration":
+		case "type_declaration", "const_declaration", "var_declaration",
+			"var_spec_list", "lexical_declaration", "variable_declaration",
+			"export_statement":
 			anchor = p
+			continue
 		}
+
+		break
 	}
 
 	var parts []string
