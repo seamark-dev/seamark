@@ -238,6 +238,49 @@ func f() {
 	assert.NotEmpty(t, a.Symbol.DocHash, "doc comment above the grouped block must hash")
 }
 
+func TestTypeAliases(t *testing.T) {
+	src := `package p
+
+// Legacy is the old name.
+type Legacy = Modern
+
+type Modern struct{}
+
+type (
+	Grouped      struct{}
+	GroupedAlias = Grouped
+)
+
+func f() {
+	type local = int
+
+	var x local
+	_ = x
+}
+`
+	ex, err := NewGoExtractor()
+	require.NoError(t, err)
+	defer ex.Close()
+
+	res, err := ex.Extract("p.go", []byte(src))
+	require.NoError(t, err)
+
+	// Aliases use the type_alias node kind, not type_spec — both grouped
+	// and ungrouped forms must extract; function-local aliases must not.
+	for _, fqn := range []string{"Legacy", "Modern", "Grouped", "GroupedAlias"} {
+		d := symbolByFQN(t, res, fqn)
+		assert.Equal(t, model.KindType, d.Symbol.Kind, "kind of %s", fqn)
+	}
+
+	legacy := symbolByFQN(t, res, "Legacy")
+	assert.Equal(t, "Legacy = Modern", legacy.Symbol.Sig, "spec-text convention, like type_spec sigs")
+	assert.NotEmpty(t, legacy.Symbol.DocHash, "doc comment above an alias must hash")
+
+	for _, d := range res.Symbols {
+		assert.NotEqual(t, "local", d.Symbol.Name, "function-local alias leaked")
+	}
+}
+
 func TestFunctionLocalDeclsAreNotSymbols(t *testing.T) {
 	src := `package p
 

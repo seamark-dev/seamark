@@ -21,6 +21,7 @@ const goDeclQuery = `
 (function_declaration name: (identifier) @func.name) @func.decl
 (method_declaration name: (field_identifier) @method.name) @method.decl
 (type_declaration (type_spec name: (type_identifier) @type.name) @type.spec) @type.decl
+(type_declaration (type_alias name: (type_identifier) @type.name) @type.spec) @type.decl
 (const_declaration (const_spec name: (identifier) @const.name) @const.spec)
 (var_declaration (var_spec name: (identifier) @var.name) @var.spec)
 (var_declaration (var_spec_list (var_spec name: (identifier) @var.name) @var.spec))
