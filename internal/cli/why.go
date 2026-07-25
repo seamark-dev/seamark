@@ -149,17 +149,13 @@ func symbolReport(w io.Writer, st *store.Store, sym model.Symbol) error {
 	}
 
 	if len(callers) > 0 {
-		fmt.Fprintf(w, "\ncallers (%d)\n", len(callers))
-		for _, c := range limitSyms(callers, 15) {
-			fmt.Fprintf(w, "  %-40s %s\n", c.FQN, location(c))
-		}
+		fmt.Fprintf(w, "\ncallers (%d)%s\n", len(callers), originSummary(callers))
+		printCallEdges(w, callers)
 	}
 
 	if len(callees) > 0 {
-		fmt.Fprintf(w, "\ncalls (%d)\n", len(callees))
-		for _, c := range limitSyms(callees, 15) {
-			fmt.Fprintf(w, "  %-40s %s\n", c.FQN, location(c))
-		}
+		fmt.Fprintf(w, "\ncalls (%d)%s\n", len(callees), originSummary(callees))
+		printCallEdges(w, callees)
 	}
 
 	if sym.File != "" {
@@ -226,6 +222,40 @@ func historySections(w io.Writer, st *store.Store, file string) error {
 	}
 
 	return nil
+}
+
+// printCallEdges lists neighbors with the derivation of each edge, so a
+// low-confidence unique-name guess never masquerades as a resolved call.
+func printCallEdges(w io.Writer, edges []store.CallEdge) {
+	shown := edges
+	if len(shown) > 15 {
+		shown = shown[:15]
+	}
+
+	for _, c := range shown {
+		fmt.Fprintf(w, "  %-40s %-34s [%s]\n", c.FQN, location(c.Symbol), c.Origin)
+	}
+
+	if len(edges) > len(shown) {
+		fmt.Fprintf(w, "  … %d more\n", len(edges)-len(shown))
+	}
+}
+
+// originSummary flags edge lists dominated by the name-guess tier.
+func originSummary(edges []store.CallEdge) string {
+	guesses := 0
+
+	for _, c := range edges {
+		if c.Origin == model.OriginUniqueName {
+			guesses++
+		}
+	}
+
+	if guesses == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("  — %d resolved by name match only", guesses)
 }
 
 func location(s model.Symbol) string {

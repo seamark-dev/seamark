@@ -82,11 +82,13 @@ func TestCallersAndCallees(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, callers, 1)
 	assert.Equal(t, run.FQN, callers[0].FQN)
+	assert.Equal(t, model.OriginQualified, callers[0].Origin, "edge origin must surface")
 
 	callees, err := s.Callees(run.ID)
 	require.NoError(t, err)
 	require.Len(t, callees, 1)
 	assert.Equal(t, helper.FQN, callees[0].FQN)
+	assert.Equal(t, model.OriginQualified, callees[0].Origin)
 }
 
 func TestCoChangePartnersEitherOrientation(t *testing.T) {

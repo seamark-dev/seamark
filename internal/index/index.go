@@ -319,11 +319,33 @@ func buildGraph(results []*parse.FileResult, modulePath string) *graph {
 		decls:         map[string]map[string][]*model.Symbol{},
 		methodsByName: map[string]map[string][]*model.Symbol{},
 	}
+	// A Python package's __init__.py and a sibling module can claim the
+	// same key ("api/__init__.py" and "api.py" → "api"). Python gives the
+	// package precedence and the module becomes unimportable; mirror that
+	// by keeping the shadowed file's symbols out of the resolution maps.
+	// (They are still stored as symbols — the code exists.)
+	pyInitKeys := map[string]bool{}
+
+	for _, res := range results {
+		if res.Language == "python" && strings.HasSuffix(res.Path, "__init__.py") {
+			pyInitKeys[res.Package] = true
+		}
+	}
+
+	shadowed := func(res *parse.FileResult) bool {
+		return res.Language == "python" &&
+			!strings.HasSuffix(res.Path, "__init__.py") && pyInitKeys[res.Package]
+	}
+
 	for _, res := range results {
 		fam := parse.LanguageFamily(res.Language)
 		g.packageSymbol(fam, res.Package)
 
 		for i := range res.Symbols {
+			if shadowed(res) {
+				continue
+			}
+
 			sym := &res.Symbols[i].Symbol
 			sk := scopedKey(fam, res.Package)
 			byName := g.decls[sk]
@@ -348,10 +370,23 @@ func buildGraph(results []*parse.FileResult, modulePath string) *graph {
 		// Pre-create package symbols for import targets so insertion order
 		// is deterministic and edges always have both endpoints.
 		for _, imp := range res.Imports {
-			g.packageSymbol(fam, g.importKey(imp))
+			if key, ok := g.importKeyOK(imp); ok {
+				g.packageSymbol(fam, key)
+			}
 		}
 	}
 	return g
+}
+
+// importKeyOK returns the package key for an import; false for relative
+// specifiers that escaped the repo, which must not materialize junk
+// package nodes (their raw dotted/relative text is not a key).
+func (g *graph) importKeyOK(imp parse.Import) (string, bool) {
+	if imp.Resolved == "" && strings.HasPrefix(imp.Path, ".") {
+		return "", false
+	}
+
+	return g.importKey(imp), true
 }
 
 // importKey maps an import to a package-symbol key: the extractor's own
@@ -450,7 +485,12 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 	src := g.packages[scopedKey(fam, res.Package)]
 
 	for _, imp := range res.Imports {
-		dst := g.packages[scopedKey(fam, g.importKey(imp))]
+		key, ok := g.importKeyOK(imp)
+		if !ok {
+			continue
+		}
+
+		dst := g.packages[scopedKey(fam, key)]
 
 		if src == nil || dst == nil || src == dst {
 			continue
@@ -478,7 +518,9 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 //     qualifier is an      package/module
 //     import alias or
 //     namespace import
-//  3. any other          → the single same-language repo   (unique-name)
+//  3. self/cls/this      → the method of the caller's      (same-class)
+//     method call          own class, when declared there
+//  4. any other          → the single same-family repo     (unique-name)
 //     selector call        symbol with that method name
 //
 // Known limitation, accepted for M1: resolution is purely syntactic, so a
@@ -492,7 +534,12 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 	named := map[string]string{}   // bare imported name -> scoped package key
 
 	for _, imp := range res.Imports {
-		key := scopedKey(fam, g.importKey(imp))
+		rawKey, ok := g.importKeyOK(imp)
+		if !ok {
+			continue
+		}
+
+		key := scopedKey(fam, rawKey)
 		if imp.LocalName != "" {
 			imports[imp.LocalName] = key
 		}
@@ -502,11 +549,17 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 		}
 	}
 
+	// A function can reach the same destination through several call
+	// sites resolved by different tiers; keep the best origin per target
+	// so a same-class resolution is never reported as a name-match guess.
+	best := map[int64]string{}
+
 	for _, call := range decl.Calls {
 		var dst *model.Symbol
 		origin := ""
 
-		if !call.Selector {
+		switch {
+		case !call.Selector:
 			// Bare identifier: a named import wins over the local scope
 			// (that is what the import means); otherwise a function in the
 			// same package/module. Selector calls must not land here —
@@ -519,20 +572,51 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 				dst = pickUnique(g.decls[scopedKey(fam, res.Package)][call.Name], model.KindFunction)
 				origin = model.OriginSamePackage
 			}
-		} else if pkgKey, ok := imports[call.Qualifier]; ok {
-			dst = pickUnique(g.decls[pkgKey][call.Name], model.KindFunction)
-			origin = model.OriginQualified
-		} else if candidates := g.methodsByName[fam][call.Name]; len(candidates) == 1 {
-			dst = candidates[0]
-			origin = model.OriginUniqueName
+		case call.Receiver && decl.Symbol.Kind == model.KindMethod:
+			// The receiver shadows any same-named import, so this tier
+			// comes first. The caller's FQN is <pkg>.<Class>.<name>; a
+			// sibling method shares everything but the last segment.
+			want := strings.TrimSuffix(decl.Symbol.FQN, "."+decl.Symbol.Name) + "." + call.Name
+
+			for _, c := range g.decls[scopedKey(fam, res.Package)][call.Name] {
+				if c.Kind == model.KindMethod && c.FQN == want {
+					dst = c
+					origin = model.OriginSameClass
+
+					break
+				}
+			}
+
+			// Miss (e.g. an inherited method): the guess tier may catch it.
+			if dst == nil {
+				dst, origin = g.uniqueMethod(fam, call.Name)
+			}
+		case call.Qualifier != "":
+			if pkgKey, ok := imports[call.Qualifier]; ok {
+				// A known import qualifier that does not resolve is a call
+				// into an external module — never fall through to a guess.
+				dst = pickUnique(g.decls[pkgKey][call.Name], model.KindFunction)
+				origin = model.OriginQualified
+			} else {
+				dst, origin = g.uniqueMethod(fam, call.Name)
+			}
+		default:
+			// Complex operand (x.db.Close()): only the guess tier applies.
+			dst, origin = g.uniqueMethod(fam, call.Name)
 		}
 
-		if dst == nil || dst == &decl.Symbol {
+		if dst == nil || dst.ID == decl.Symbol.ID {
 			continue
 		}
 
+		if cur, seen := best[dst.ID]; !seen || originRank(origin) > originRank(cur) {
+			best[dst.ID] = origin
+		}
+	}
+
+	for dstID, origin := range best {
 		err := tx.InsertEdge(model.Edge{
-			Src: decl.Symbol.ID, Dst: dst.ID,
+			Src: decl.Symbol.ID, Dst: dstID,
 			Kind: model.EdgeCalls, Origin: origin,
 		})
 		if err != nil {
@@ -541,6 +625,26 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 	}
 
 	return nil
+}
+
+// originRank orders derivations by confidence for edge dedup: any resolved
+// tier beats the name-match guess.
+func originRank(origin string) int {
+	if origin == model.OriginUniqueName {
+		return 1
+	}
+
+	return 2
+}
+
+// uniqueMethod is the lowest-confidence tier: the single method in the
+// language family carrying the called name, if exactly one exists.
+func (g *graph) uniqueMethod(fam, name string) (dst *model.Symbol, origin string) {
+	if candidates := g.methodsByName[fam][name]; len(candidates) == 1 {
+		return candidates[0], model.OriginUniqueName
+	}
+
+	return nil, ""
 }
 
 // pickUnique returns the sole symbol of the wanted kind, nil otherwise.

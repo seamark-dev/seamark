@@ -388,6 +388,222 @@ export function use(s: string) {
 	}
 }
 
+func TestIndexPythonModules(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"api/client.py": `def fetch_json(path):
+    return path
+`,
+		"api/tracker.py": `def record(x):
+    return x
+`,
+		"api/snapshots.py": `from .client import fetch_json
+from . import tracker
+
+
+class Store:
+    def load(self, snap_id):
+        fetch_json(snap_id)
+        tracker.record(snap_id)
+        return self.decorate(snap_id)
+
+    def decorate(self, snap_id):
+        return snap_id
+`,
+	}
+	for rel, content := range files {
+		p := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	load := mustFind(t, st, "api/snapshots.Store.load")
+	callees, err := st.Callees(load.ID)
+	require.NoError(t, err)
+
+	var fqns []string
+	for _, c := range callees {
+		fqns = append(fqns, c.FQN)
+	}
+	assert.ElementsMatch(t, []string{
+		"api/client.fetch_json",        // relative named import, bare call
+		"api/tracker.record",           // `from . import tracker` qualifier
+		"api/snapshots.Store.decorate", // self-call, same class
+	}, fqns)
+}
+
+func TestSameClassResolution(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		// Two classes with a method named refresh: unique-name would
+		// abstain, but self/this calls resolve within the caller's class.
+		"a.py": `class Cache:
+    def refresh(self):
+        return 1
+
+    def tick(self):
+        return self.refresh()
+`,
+		"b.ts": `export class Panel {
+	refresh(): number { return 2; }
+
+	tick(): number { return this.refresh(); }
+}
+`,
+	}
+	for rel, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	pyTick := mustFind(t, st, "a.Cache.tick")
+	callees, err := st.Callees(pyTick.ID)
+	require.NoError(t, err)
+	require.Len(t, callees, 1, "self.refresh() must resolve despite the cross-file duplicate")
+	assert.Equal(t, "a.Cache.refresh", callees[0].FQN)
+
+	tsTick := mustFind(t, st, "b.Panel.tick")
+	callees, err = st.Callees(tsTick.ID)
+	require.NoError(t, err)
+	require.Len(t, callees, 1, "this.refresh() must resolve despite the cross-file duplicate")
+	assert.Equal(t, "b.Panel.refresh", callees[0].FQN)
+}
+
+func TestLocalNamedSelfDoesNotFabricateSameClassEdge(t *testing.T) {
+	root := t.TempDir()
+	// Worker has a helper; so does Other — two candidates, so unique-name
+	// must abstain, and the local `cls` must not trigger the same-class
+	// tier (which would confidently pick Worker.helper, wrongly).
+	src := `def get_other():
+    return None
+
+
+class Worker:
+    def run(self):
+        cls = get_other()
+        return cls.helper()
+
+    def helper(self):
+        return 1
+
+
+class Other:
+    def helper(self):
+        return 2
+`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "m.py"), []byte(src), 0o644))
+
+	_, st := runIndex(t, root)
+
+	run := mustFind(t, st, "m.Worker.run")
+	callees, err := st.Callees(run.ID)
+	require.NoError(t, err)
+
+	for _, c := range callees {
+		assert.NotEqual(t, "m.Worker.helper", c.FQN,
+			"a local variable named cls must not resolve as the receiver")
+	}
+}
+
+func TestInitShadowsSiblingModule(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		// api.py and api/__init__.py both claim key "api"; Python's import
+		// system gives the package precedence and api.py is unreachable.
+		"api.py": `def f():
+    return "module"
+`,
+		"api/__init__.py": `def g():
+    return "package"
+`,
+		"consumer.py": `from api import f, g
+
+
+def use():
+    f()
+    g()
+`,
+	}
+	for rel, content := range files {
+		p := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	use := mustFind(t, st, "consumer.use")
+	callees, err := st.Callees(use.ID)
+	require.NoError(t, err)
+
+	var fqns []string
+	for _, c := range callees {
+		fqns = append(fqns, c.FQN)
+	}
+	// g resolves into the package; f exists only in the shadowed api.py,
+	// where that import would raise ImportError — no edge.
+	assert.Equal(t, []string{"api.g"}, fqns)
+}
+
+func TestBestOriginWinsPerEdge(t *testing.T) {
+	root := t.TempDir()
+	// tick reaches refresh twice: via a complex operand (unique-name
+	// guess) first in source order, then via self (same-class). The
+	// stored edge must carry the stronger origin.
+	src := `class Cache:
+    def tick(self):
+        get_cache().refresh()
+        self.refresh()
+
+    def refresh(self):
+        return 1
+
+
+def get_cache():
+    return Cache()
+`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "c.py"), []byte(src), 0o644))
+
+	_, st := runIndex(t, root)
+
+	tick := mustFind(t, st, "c.Cache.tick")
+	callees, err := st.Callees(tick.ID)
+	require.NoError(t, err)
+
+	found := false
+
+	for _, c := range callees {
+		if c.FQN == "c.Cache.refresh" {
+			found = true
+
+			assert.Equal(t, model.OriginSameClass, c.Origin,
+				"the stronger derivation must win over the source-order-first guess")
+		}
+	}
+
+	require.True(t, found, "tick must reach refresh")
+}
+
+func TestEscapedRelativeImportLeavesNoJunkNode(t *testing.T) {
+	root := t.TempDir()
+	src := `from ....outside import thing
+
+
+def use():
+    thing()
+`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "top.py"), []byte(src), 0o644))
+
+	_, st := runIndex(t, root)
+
+	syms, err := st.FindSymbols("outside", 10)
+	require.NoError(t, err)
+	assert.Empty(t, syms, "an import escaping the repo must not materialize a package node")
+}
+
 func TestIndexIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root)

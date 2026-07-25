@@ -156,7 +156,14 @@ func (g *GoExtractor) addFuncLike(res *FileResult, src []byte, pkg string,
 		DocHash: docHash(decl, src),
 	}
 
-	res.Symbols = append(res.Symbols, SymbolDecl{Symbol: sym, Calls: g.callsIn(decl, src)})
+	// Methods flag calls through their named receiver (s.helper()) so the
+	// resolver can pin them to the receiver type instead of guessing.
+	selfName := ""
+	if kind == model.KindMethod {
+		selfName = goReceiverName(decl, src)
+	}
+
+	res.Symbols = append(res.Symbols, SymbolDecl{Symbol: sym, Calls: g.callsIn(decl, src, selfName)})
 }
 
 // addValueDecl records a type/const/var spec (no body mining — initializer
@@ -193,8 +200,9 @@ func (g *GoExtractor) addValueDecl(res *FileResult, src []byte, pkg string,
 	}})
 }
 
-// callsIn runs the call query inside one declaration.
-func (g *GoExtractor) callsIn(decl *tree_sitter.Node, src []byte) []CallRef {
+// callsIn runs the call query inside one declaration. selfName is the
+// method's receiver identifier ("" for functions).
+func (g *GoExtractor) callsIn(decl *tree_sitter.Node, src []byte, selfName string) []CallRef {
 	qc := tree_sitter.NewQueryCursor()
 	defer qc.Close()
 
@@ -224,6 +232,7 @@ func (g *GoExtractor) callsIn(decl *tree_sitter.Node, src []byte) []CallRef {
 				}
 				if op := node.ChildByFieldName("operand"); op != nil && op.Kind() == "identifier" {
 					ref.Qualifier = op.Utf8Text(src)
+					ref.Receiver = selfName != "" && ref.Qualifier == selfName
 				}
 				out = append(out, ref)
 			}
@@ -231,6 +240,27 @@ func (g *GoExtractor) callsIn(decl *tree_sitter.Node, src []byte) []CallRef {
 	}
 
 	return out
+}
+
+// goReceiverName extracts the receiver's identifier: "s" in (s *Store).
+func goReceiverName(methodDecl *tree_sitter.Node, src []byte) string {
+	recv := methodDecl.ChildByFieldName("receiver")
+	if recv == nil {
+		return ""
+	}
+
+	for i := uint(0); i < recv.NamedChildCount(); i++ {
+		param := recv.NamedChild(i)
+		if param.Kind() != "parameter_declaration" {
+			continue
+		}
+
+		if n := param.ChildByFieldName("name"); n != nil {
+			return n.Utf8Text(src)
+		}
+	}
+
+	return ""
 }
 
 // goReceiverType extracts the receiver type name of a method declaration,
@@ -338,7 +368,7 @@ func docHash(decl *tree_sitter.Node, src []byte) string {
 		switch p.Kind() {
 		case "type_declaration", "const_declaration", "var_declaration",
 			"var_spec_list", "lexical_declaration", "variable_declaration",
-			"export_statement":
+			"export_statement", "expression_statement", "decorated_definition":
 			anchor = p
 			continue
 		}

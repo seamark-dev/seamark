@@ -219,6 +219,42 @@ func TestEcmaExportedArrowConstSignature(t *testing.T) {
 		"export/const wrappers are part of the signature")
 }
 
+func TestEcmaThisReceiverAndRebinding(t *testing.T) {
+	src := `export class Panel {
+	tick(): number {
+		const f = () => this.refresh();
+		function inner() {
+			return this.refresh();
+		}
+		this.refresh();
+		return f();
+	}
+
+	refresh(): number { return 1; }
+}
+`
+	res := extractTS(t, "panel.ts", src)
+	tick := symbolByFQN(t, res, "panel.Panel.tick")
+
+	receivers, rebound := 0, 0
+
+	for _, c := range tick.Calls {
+		if c.Name != "refresh" {
+			continue
+		}
+		if c.Receiver {
+			receivers++
+		} else {
+			rebound++
+		}
+	}
+
+	// Direct `this.refresh()` and the arrow-wrapped one keep lexical this;
+	// the one inside the plain nested function is rebound.
+	assert.Equal(t, 2, receivers, "direct + arrow this-calls are receiver calls")
+	assert.Equal(t, 1, rebound, "nested plain function rebinds this")
+}
+
 func TestEcmaJavaScriptAndTSX(t *testing.T) {
 	jsSrc := `const compute = function (a, b) {
 	return a + b;

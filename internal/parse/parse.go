@@ -46,6 +46,11 @@ type CallRef struct {
 	// package-level functions; selector calls must never be, even when
 	// Qualifier is empty — the operand is a value, not the package scope.
 	Selector bool
+	// Receiver marks a call through the enclosing method's own receiver —
+	// Python's first parameter, Go's named receiver, JS/TS's lexical
+	// `this`. Set by the extractor from the declaration, never inferred
+	// from spelling: a local variable named "self" must not qualify.
+	Receiver bool
 }
 
 // SymbolDecl is a declared symbol plus the call references inside its body.
@@ -100,6 +105,7 @@ func NewRegistry() (*Registry, error) {
 		func() (Extractor, error) { return NewEcmaExtractor(EcmaJS) },
 		func() (Extractor, error) { return NewEcmaExtractor(EcmaTS) },
 		func() (Extractor, error) { return NewEcmaExtractor(EcmaTSX) },
+		func() (Extractor, error) { return NewPyExtractor() },
 	}
 	for _, build := range builders {
 		ex, err := build()

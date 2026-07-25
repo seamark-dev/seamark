@@ -63,10 +63,10 @@ func TestIndexThenWhy(t *testing.T) {
 	assert.Contains(t, out, "symbols", "index summary should report symbol count")
 	assert.FileExists(t, filepath.Join(root, ".seamark", "index.db"))
 
-	// Symbol report: helper's caller is main.
+	// Symbol report: helper's caller is main, with the edge's derivation.
 	out, err = run(t, "-C", root, "why", "helper")
 	require.NoError(t, err)
-	for _, want := range []string{"helper", "(function)", "a.go:6", "callers (1)", "main"} {
+	for _, want := range []string{"helper", "(function)", "a.go:6", "callers (1)", "main", "[same-package]"} {
 		assert.Contains(t, out, want)
 	}
 

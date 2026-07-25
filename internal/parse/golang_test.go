@@ -144,8 +144,8 @@ func TestExtractCallRefs(t *testing.T) {
 
 	settle := symbolByFQN(t, res, "internal/billing.Invoice.Settle")
 	assert.Contains(t, settle.Calls,
-		CallRef{Qualifier: "inv", Name: "reload", Line: 28, Selector: true},
-		"Settle should record the inv.reload() call")
+		CallRef{Qualifier: "inv", Name: "reload", Line: 28, Selector: true, Receiver: true},
+		"Settle should record the inv.reload() call as a receiver call")
 
 	// Bare calls are not selectors; the resolver depends on the distinction.
 	assert.Contains(t, charge.Calls,

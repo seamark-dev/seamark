@@ -367,14 +367,63 @@ func (s *Store) EdgesTo(id int64, kind model.EdgeKind) ([]model.Symbol, error) {
 	)
 }
 
-// Callers returns symbols with a CALLS edge into id.
-func (s *Store) Callers(id int64) ([]model.Symbol, error) {
-	return s.EdgesTo(id, model.EdgeCalls)
+// CallEdge is a call-graph neighbor together with the edge's declared
+// derivation (model.Origin*), so surfaces can show confidence instead of
+// presenting every edge as equally trustworthy.
+type CallEdge struct {
+	model.Symbol
+	Origin string
 }
 
-// Callees returns symbols id has a CALLS edge to.
-func (s *Store) Callees(id int64) ([]model.Symbol, error) {
-	return s.EdgesFrom(id, model.EdgeCalls)
+const symbolColsPrefixed = `s.id, s.fqn, s.name, s.kind, s.file, s.start_line, s.start_col, s.end_line, s.end_col, s.sig, s.doc_hash`
+
+func (s *Store) queryCallEdges(q string, id int64) ([]CallEdge, error) {
+	rows, err := s.db.Query(q, id, string(model.EdgeCalls))
+	if err != nil {
+		return nil, err
+	}
+
+	// Close error deliberately dropped: iteration failures surface via rows.Err().
+	defer func() { _ = rows.Close() }()
+
+	var out []CallEdge
+
+	for rows.Next() {
+		var (
+			c    CallEdge
+			kind string
+		)
+
+		err := rows.Scan(&c.ID, &c.FQN, &c.Name, &kind, &c.File,
+			&c.Span.StartLine, &c.Span.StartCol, &c.Span.EndLine, &c.Span.EndCol,
+			&c.Sig, &c.DocHash, &c.Origin)
+		if err != nil {
+			return nil, err
+		}
+
+		c.Kind = model.SymbolKind(kind)
+		out = append(out, c)
+	}
+
+	return out, rows.Err()
+}
+
+// Callers returns symbols with a CALLS edge into id, with edge origins.
+func (s *Store) Callers(id int64) ([]CallEdge, error) {
+	return s.queryCallEdges(
+		`SELECT `+symbolColsPrefixed+`, e.origin
+		 FROM edge e JOIN symbol s ON s.id = e.src
+		 WHERE e.dst = ? AND e.kind = ?
+		 ORDER BY s.fqn`, id)
+}
+
+// Callees returns symbols id has a CALLS edge to, with edge origins.
+func (s *Store) Callees(id int64) ([]CallEdge, error) {
+	return s.queryCallEdges(
+		`SELECT `+symbolColsPrefixed+`, e.origin
+		 FROM edge e JOIN symbol s ON s.id = e.dst
+		 WHERE e.src = ? AND e.kind = ?
+		 ORDER BY s.fqn`, id)
 }
 
 // CoChangePartner is a co-change row oriented around a queried file.

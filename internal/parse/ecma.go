@@ -262,8 +262,16 @@ func (e *EcmaExtractor) callsIn(decl *tree_sitter.Node, src []byte) []CallRef {
 					Line:     uint32(node.StartPosition().Row) + 1,
 					Selector: true,
 				}
-				if obj := node.ChildByFieldName("object"); obj != nil && obj.Kind() == "identifier" {
-					ref.Qualifier = obj.Utf8Text(src)
+				if obj := node.ChildByFieldName("object"); obj != nil {
+					switch obj.Kind() {
+					case "identifier":
+						ref.Qualifier = obj.Utf8Text(src)
+					case "this":
+						// `this` is its own node kind — unforgeable, unlike
+						// Python's self. It only counts as the receiver when
+						// no nested non-arrow function rebinds it.
+						ref.Receiver = thisIsReceiver(node, decl)
+					}
 				}
 
 				out = append(out, ref)
@@ -272,6 +280,27 @@ func (e *EcmaExtractor) callsIn(decl *tree_sitter.Node, src []byte) []CallRef {
 	}
 
 	return out
+}
+
+// thisIsReceiver reports whether `this` at node still refers to the
+// enclosing method's instance. Arrow functions keep lexical this; any
+// plain function or nested method (object literals, class expressions)
+// between the call and the declaration rebinds it.
+func thisIsReceiver(node, decl *tree_sitter.Node) bool {
+	for p := node.Parent(); p != nil; p = p.Parent() {
+		if p.StartByte() == decl.StartByte() && p.EndByte() == decl.EndByte() {
+			return true
+		}
+
+		switch p.Kind() {
+		case "function_expression", "function_declaration",
+			"generator_function", "generator_function_declaration",
+			"method_definition":
+			return false
+		}
+	}
+
+	return false
 }
 
 // atModuleTopLevel reports whether a declaration sits directly in the
