@@ -1,0 +1,39 @@
+# golangci-lint v2 configuration.
+# Standard set = errcheck, govet, ineffassign, staticcheck, unused.
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - gocritic   # style/perf review comments as lint: tagged switch, De Morgan, …
+    - misspell
+    - revive
+  settings:
+    errcheck:
+      # A CLI has no meaningful recovery from a failed print to its own
+      # stdout/stderr; checking every Fprintf would drown the real signals.
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        # We keep long parameter lists readable case by case; combining
+        # same-type params is not always clearer.
+        - paramTypeCombine
+        # Micro-copy warnings (~100-byte structs) in CLI report paths;
+        # pointer-heavy signatures are not worth it until profiling says so.
+        - hugeParam
+        - rangeValCopy
+    revive:
+      rules:
+        - name: exported
+          disabled: false
+
+formatters:
+  enable:
+    - gofmt
