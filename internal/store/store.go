@@ -618,6 +618,153 @@ func (s *Store) DecisionsForFile(file string, limit int) ([]model.Decision, erro
 	return out, rows.Err()
 }
 
+// RecentDecisions returns the latest repo-wide decisions, newest first.
+func (s *Store) RecentDecisions(limit int) ([]model.Decision, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	rows, err := s.db.Query(
+		`SELECT id, kind, ref, ts, author, title, body
+		 FROM decision ORDER BY ts DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// Close error deliberately dropped: iteration failures surface via rows.Err().
+	defer func() { _ = rows.Close() }()
+
+	var out []model.Decision
+
+	for rows.Next() {
+		var d model.Decision
+		var kind string
+
+		if err := rows.Scan(&d.ID, &kind, &d.Ref, &d.TS, &d.Author, &d.Title, &d.Body); err != nil {
+			return nil, err
+		}
+
+		d.Kind = model.DecisionKind(kind)
+		out = append(out, d)
+	}
+
+	return out, rows.Err()
+}
+
+// HotFile is a co-change hub: a file whose changes rarely travel alone.
+type HotFile struct {
+	File     string
+	Partners int
+	MaxLift  float64
+}
+
+// HotFiles returns the files most coupled to the rest of the repo by
+// history. Pairs are stored once per (a, b), so both columns count.
+func (s *Store) HotFiles(limit int) ([]HotFile, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	rows, err := s.db.Query(
+		`SELECT f, COUNT(*) AS partners, MAX(lift)
+		 FROM (SELECT file_a AS f, lift FROM cochange WHERE lift >= 1.0
+		       UNION ALL
+		       SELECT file_b AS f, lift FROM cochange WHERE lift >= 1.0)
+		 GROUP BY f ORDER BY partners DESC, f LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// Close error deliberately dropped: iteration failures surface via rows.Err().
+	defer func() { _ = rows.Close() }()
+
+	var out []HotFile
+
+	for rows.Next() {
+		var h HotFile
+
+		if err := rows.Scan(&h.File, &h.Partners, &h.MaxLift); err != nil {
+			return nil, err
+		}
+
+		out = append(out, h)
+	}
+
+	return out, rows.Err()
+}
+
+// CalledSymbol is a symbol with its caller count.
+type CalledSymbol struct {
+	model.Symbol
+	Callers int
+}
+
+// TopCalled returns the most-called symbols — the load-bearing API
+// surface a newcomer (human or agent) should read first.
+func (s *Store) TopCalled(limit int) ([]CalledSymbol, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	rows, err := s.db.Query(
+		`SELECT `+symbolColsPrefixed+`, COUNT(*) AS callers
+		 FROM edge e JOIN symbol s ON s.id = e.dst
+		 WHERE e.kind = ?
+		 GROUP BY e.dst ORDER BY callers DESC, s.fqn LIMIT ?`,
+		string(model.EdgeCalls), limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// Close error deliberately dropped: iteration failures surface via rows.Err().
+	defer func() { _ = rows.Close() }()
+
+	var out []CalledSymbol
+
+	for rows.Next() {
+		var c CalledSymbol
+		var kind string
+
+		if err := rows.Scan(&c.ID, &c.FQN, &c.Name, &kind, &c.File,
+			&c.Span.StartLine, &c.Span.StartCol, &c.Span.EndLine, &c.Span.EndCol,
+			&c.Sig, &c.DocHash, &c.Callers); err != nil {
+			return nil, err
+		}
+
+		c.Kind = model.SymbolKind(kind)
+		out = append(out, c)
+	}
+
+	return out, rows.Err()
+}
+
+// FileSymbolCounts returns per-file symbol counts, for module summaries.
+func (s *Store) FileSymbolCounts() (map[string]int, error) {
+	rows, err := s.db.Query(
+		`SELECT file, COUNT(*) FROM symbol WHERE file != '' GROUP BY file`)
+	if err != nil {
+		return nil, err
+	}
+
+	// Close error deliberately dropped: iteration failures surface via rows.Err().
+	defer func() { _ = rows.Close() }()
+
+	out := map[string]int{}
+
+	for rows.Next() {
+		var file string
+		var n int
+
+		if err := rows.Scan(&file, &n); err != nil {
+			return nil, err
+		}
+
+		out[file] = n
+	}
+
+	return out, rows.Err()
+}
+
 // Stats summarizes index contents for `seamark index` output.
 type Stats struct {
 	Symbols   int

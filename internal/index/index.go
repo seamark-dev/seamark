@@ -978,26 +978,7 @@ func (g *graph) uniqueMethod(fam, name, callerFile string) (dst *model.Symbol, o
 
 // isTestPath reports whether a file is test code, by each language's
 // naming convention.
-func isTestPath(p string) bool {
-	base := path.Base(p)
-
-	switch {
-	case strings.HasSuffix(base, "_test.go"),
-		strings.HasPrefix(base, "test_"),
-		strings.HasSuffix(base, "_test.py"),
-		strings.Contains(base, ".test."),
-		strings.Contains(base, ".spec."):
-		return true
-	}
-
-	for seg := range strings.SplitSeq(path.Dir(p), "/") {
-		if seg == "tests" || seg == "test" || seg == "__tests__" {
-			return true
-		}
-	}
-
-	return false
-}
+func isTestPath(p string) bool { return model.IsTestPath(p) }
 
 // pickUnique returns the sole symbol of the wanted kind, nil otherwise.
 // Ambiguity (build-tag variants, redeclarations) yields no edge rather than

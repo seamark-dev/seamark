@@ -217,17 +217,64 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
       nonlocal (declaring a second method named X anywhere invalidates
       an edge elsewhere), so invalidation must be tracked per name
 
-### M5 — MCP server
+### M5 — MCP server ← complete 2026-07-26
 
-- [ ] Five tools: `orient`, `change_set`, `why`, `check`, `expand`
-- [ ] MCP resources (derived architecture doc) and prompts (onboarding)
+- [x] Five tools: `orient`, `change_set`, `why`, `check`, `expand` —
+      hand-rolled newline-delimited JSON-RPC stdio transport (same call
+      as the LSP: no SDK dependency for a protocol subset this small).
+      Reports shared with the CLI via the extracted internal/report
+      package; new `seamark orient` CLI command rides along
+- [x] Every tool call self-repairs freshness (fingerprint fast path),
+      tool failures travel in-band (isError) so the model corrects
+      course, expand caps at 250 lines and refuses to leave the
+      workspace, orient filters test helpers out of most-called
+- [x] MCP resource (seamark://orient) and `onboard` prompt; .mcp.json
+      shipped at repo root for Claude Code auto-discovery
+- Validated on trading-tools: orient surfaces the api/schemas.py ↔
+  web schema.ts coupling as top change hubs; change_set on
+  (api/schemas.py, db/models.py) returns the TS schema/client and the
+  architecture docs as history-suggested companions
+- Validated in a live Claude Code session (2026-07-26): correct tool
+  selection from descriptions alone across orient/change_set/why/expand;
+  agent's own post-session review confirmed the core bet — co-change/
+  lift is "the hardest-to-replicate part and the biggest saving", while
+  structure queries are merely a compact substitute for grep. Its
+  closing mental model ("seamark for orientation and risk before an
+  edit; direct tools for the edit itself") is now encoded in the
+  server's initialize instructions, along with the fact that freshness
+  is automatic (the agent wrongly assumed the index could be stale).
+  Session also exposed the silent-empty-section gap in change_set
+  (agent burned probe calls re-checking) — fixed with the `defines` line
 
 ### M6 — Lessons loop
 
-- [ ] Capture failure signals (test pass→fail after agent edit, reverted agent
-      commit, human correction)
-- [ ] Cluster by region + symptom; promote at N≥3 to pattern/structural rule
-      (as a PR to `.seamark/rules/`, never auto-enabled)
+Design sharpened 2026-07-26 from trading-tools experience (recurring
+automated-review comments: non-ASCII in .py, repeat Ruff/Pyright
+findings). Reviewer-agnostic by design: CodeRabbit, Copilot review,
+human reviewers — all arrive through the same PR-comment API.
+
+- Capture: ALL PR review comments via `gh api .../pulls/comments` with
+  a `since` watermark → `decision(kind=pr_review)` rows, whoever wrote
+  them. When a comment carries a recognizable rule code (RUF001, E501,
+  report*) it extracts with regex, no LLM — an opportunistic fast path,
+  not a CodeRabbit dependency. A stronger signal than revert detection.
+- Cluster: by (tool, rule) when a code extracted, else by (region,
+  normalized symptom) — which is what human prose falls into;
+  `hits`/`last_hit` for decay, as per RFC §5.4.
+- Surface by cost tier, cheapest wins:
+  - Tier 0 (zero tokens): N≥3 recurrences of a mechanical rule promote
+    to a proposed PostToolUse check (`ruff check --select <codes>` on
+    the edited file) — a `.seamark/` diff for human review, never
+    auto-enabled. Agent pays tokens only on violation.
+  - Tier 1 (bounded): non-mechanical lessons become one-liners in MCP
+    orient/why responses, top-k by occurrences × recency, region-scoped.
+    Never CLAUDE.md (always-on cost, grows forever, gets ignored).
+  - Tier 2 (deferred): offline LLM distillation of human threads.
+
+- [ ] Mine PR review comments (gh api, watermark) into decision rows;
+      cluster; promote mechanical clusters to proposed checks
+- [ ] Also capture failure signals (test pass→fail after agent edit,
+      reverted agent commit, human correction)
 - [ ] Decay: no hit in 90 days → propose deletion; anchor changed → flag stale
 
 ### v1.0

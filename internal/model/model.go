@@ -10,6 +10,11 @@
 // generated prose.
 package model
 
+import (
+	"path"
+	"strings"
+)
+
 // SymbolKind classifies a Symbol row.
 type SymbolKind string
 
@@ -115,4 +120,29 @@ type Decision struct {
 	Title  string
 	Body   string
 	Files  []string // repo-relative files this decision touched
+}
+
+// IsTestPath reports whether a file is test code, by each language's
+// naming convention. Shared by resolution (test doubles must not win
+// unique-name matches) and reporting (orientation shows the production
+// surface, not test helpers).
+func IsTestPath(p string) bool {
+	base := path.Base(p)
+
+	switch {
+	case strings.HasSuffix(base, "_test.go"),
+		strings.HasPrefix(base, "test_"),
+		strings.HasSuffix(base, "_test.py"),
+		strings.Contains(base, ".test."),
+		strings.Contains(base, ".spec."):
+		return true
+	}
+
+	for seg := range strings.SplitSeq(path.Dir(p), "/") {
+		if seg == "tests" || seg == "test" || seg == "__tests__" {
+			return true
+		}
+	}
+
+	return false
 }

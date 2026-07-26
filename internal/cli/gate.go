@@ -14,6 +14,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/render"
+	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -243,15 +244,7 @@ func renderDecision(w io.Writer, d *gate.Decision, asJSON bool) error {
 			return err
 		}
 	} else {
-		fmt.Fprintf(w, "verdict  %s (mode: %s)\n", d.Verdict, d.Mode)
-
-		if len(d.Effects) > 0 {
-			fmt.Fprintf(w, "effects  %s\n", render.Sanitize(fmt.Sprint(d.Effects)))
-		}
-
-		for _, m := range d.Matches {
-			fmt.Fprintf(w, "  [%s] %s: %s\n", m.Verdict, m.RuleID, render.Sanitize(m.Message))
-		}
+		report.Decision(w, d)
 	}
 
 	if d.Blocking() {

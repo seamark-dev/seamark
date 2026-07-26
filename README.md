@@ -136,6 +136,38 @@ pyright, or tsserver — it adds the layer they cannot see:
 Setup for Neovim (0.9+) and VS Code: see [docs/editors.md](docs/editors.md)
 and the ready-made configs in [editors/](editors/).
 
+## Agent integration: the MCP server
+
+`seamark mcp` speaks the Model Context Protocol over stdio. Five tools,
+not forty — tool definitions are replayed to the model on every turn, so
+a sprawling "token-saving" server defeats itself:
+
+| Tool | Answers |
+|---|---|
+| `orient` | one-screen repo overview: modules, most-called API, change hubs, recent decisions |
+| `why` | everything about a symbol or file: callers with confidence, co-change, commits |
+| `change_set` | pre-edit: what history says changes together with your planned files |
+| `check` | a diff's reachable effects and the policy verdict |
+| `expand` | progressive disclosure: turn any ref a report returned into source lines |
+
+Register it in Claude Code by dropping an `.mcp.json` at the repo root
+(this repository ships one):
+
+```json
+{"mcpServers": {"seamark": {"command": "seamark", "args": ["mcp"]}}}
+```
+
+Every tool call re-checks the workspace fingerprint first and re-indexes
+if anything changed, so answers never come from a stale graph. The
+server also exposes the orientation as an MCP resource and an `onboard`
+prompt that walks an agent through the repo cheapest-signal-first.
+
+A typical agent exchange, on this repository's own history:
+`change_set(["internal/gate/gate.go"])` answers with the files that
+historically ship alongside gate changes and the effect tags the edit
+can reach — the "what am I about to forget?" question, answered from
+evidence before the first line is written.
+
 ## Guarding agents: the gate
 
 `seamark gate` classifies a shell command's effects and evaluates your
@@ -314,15 +346,22 @@ propagate backwards along call edges to fixpoint, with depth.
   tags conservatively as `db:write`.
 - Co-change needs history: on a young repo the empirical layer is thin
   until commits accumulate.
+- Seamark is a navigator, not an oracle. It tells you where to look and
+  what usually travels together; "usually changes with" is empirical
+  evidence, never a guarantee that *your* edit is safe or complete. For
+  a pinpoint lookup of a known symbol, a plain file read is cheaper —
+  seamark earns its round-trip on orientation, risk, and history
+  questions.
 
 ## Status & roadmap
 
 Working today: indexer (Go/TS/JS/Python), history mining, effects +
-propagation, LSP server, gate + check + audit, Claude Code hook.
-Planned next (see [docs/PLAN.md](docs/PLAN.md)): MCP server (`orient`,
-`change_set`, `why`, `check`, `expand`), function-grain history
-enrichment, `seamarkd` daemon with incremental indexing, prebuilt
-binaries + npm/Homebrew distribution.
+propagation, LSP server, gate + check + audit, Claude Code hook, MCP
+server (`orient`, `change_set`, `why`, `check`, `expand` + resource +
+prompt). Planned next (see [docs/PLAN.md](docs/PLAN.md)): review-comment
+mining into the lessons loop, function-grain history enrichment,
+`seamarkd` daemon with incremental indexing, prebuilt binaries +
+npm/Homebrew distribution.
 
 ## Development
 

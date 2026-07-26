@@ -160,6 +160,19 @@ func TestWhyWithoutIndexFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "seamark index", "error should point at the fix")
 }
 
+func TestOrientCommand(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	out, err := run(t, "-C", root, "orient")
+	require.NoError(t, err)
+	assert.Contains(t, out, "orientation")
+	assert.Contains(t, out, "modules (by symbol count)")
+	assert.Contains(t, out, "most-called")
+}
+
 func TestWhyUnknownSymbolFails(t *testing.T) {
 	root := writeFixture(t)
 	_, err := run(t, "-C", root, "index")
