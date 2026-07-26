@@ -1,6 +1,19 @@
 rfc/
 bin/
-.seamark/
 *.db
 node_modules/
 .DS_Store
+
+# Working notes stay local; the README is the public doc surface.
+CLAUDE.md
+
+# Claude Code config: the PreToolUse gate hook ships with the repo,
+# personal overrides do not.
+.claude/*
+!.claude/settings.json
+
+# Seamark state: the index and audit log stay local; policy and catalogue
+# overlays are policy-as-code and belong in review.
+.seamark/*
+!.seamark/policy.yaml
+!.seamark/effects.yaml

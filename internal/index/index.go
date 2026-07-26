@@ -4,7 +4,10 @@
 package index
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -30,14 +33,20 @@ type Options struct {
 	DBPath string
 	// History tunes the git mining pass.
 	History history.Options
+	// Force rebuilds even when the workspace fingerprint says the index
+	// is already current.
+	Force bool
 	// Logf receives progress and warnings; nil discards them.
 	Logf func(format string, args ...any)
 }
 
 // Summary reports what a run produced.
 type Summary struct {
-	Root         string
-	DBPath       string
+	Root   string
+	DBPath string
+	// Skipped is true when the workspace fingerprint matched the index
+	// and nothing was rebuilt.
+	Skipped      bool
 	FilesSeen    int // files listed in the workspace
 	FilesParsed  int // files a language extractor handled
 	ParseErrors  int
@@ -67,6 +76,15 @@ func Run(opts Options) (*Summary, error) {
 	dbPath := opts.DBPath
 	if dbPath == "" {
 		dbPath = store.DefaultPath(root)
+	}
+
+	// Fast path: an unchanged workspace needs no work. This makes
+	// "reindex whenever unsure" free (~30ms) for the CLI, and no-change
+	// saves free for the LSP server.
+	if !opts.Force {
+		if sum := freshSummary(root, dbPath, start); sum != nil {
+			return sum, nil
+		}
 	}
 
 	files, err := listFiles(root)
@@ -165,8 +183,10 @@ func Run(opts Options) (*Summary, error) {
 	}
 
 	for k, v := range map[string]string{
-		"repo_root":  root,
-		"indexed_at": fmt.Sprint(time.Now().Unix()),
+		"repo_root":     root,
+		"indexed_at":    fmt.Sprint(time.Now().Unix()),
+		"indexed_state": WorkspaceState(root),
+		"history_mined": fmt.Sprint(sum.HistoryMined),
 	} {
 		if err := st.SetMeta(k, v); err != nil {
 			return nil, err
@@ -180,6 +200,140 @@ func Run(opts Options) (*Summary, error) {
 	sum.Duration = time.Since(start)
 
 	return sum, nil
+}
+
+// freshSummary returns a Skipped summary when the index at dbPath was
+// built from the current workspace state; nil when a rebuild is needed.
+func freshSummary(root, dbPath string, start time.Time) *Summary {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil
+	}
+
+	current := WorkspaceState(root)
+	if current == "" {
+		return nil // no cheap fingerprint without git: rebuild
+	}
+
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = st.Close() }() // read-only probe
+
+	indexed, err := st.GetMeta("indexed_state")
+	if err != nil || indexed != current {
+		return nil
+	}
+
+	stats, err := st.Stats()
+	if err != nil {
+		return nil
+	}
+
+	root, _ = st.GetMeta("repo_root")
+	mined, _ := st.GetMeta("history_mined")
+
+	return &Summary{
+		Root: root, DBPath: dbPath, Skipped: true,
+		HistoryMined: mined == "true",
+		Stats:        stats,
+		Duration:     time.Since(start),
+	}
+}
+
+// WorkspaceState fingerprints the workspace content the index depends
+// on: HEAD, the status listing, the CONTENT of tracked changes (`git
+// diff HEAD` — an already-dirty file edited again keeps its status line
+// but not its patch), and a size+mtime proxy for untracked files (their
+// status line never changes either). Two equal fingerprints mean the
+// index is current. "" when git is unavailable — there is no cheap
+// fingerprint without it.
+func WorkspaceState(root string) string {
+	gitOut := func(args ...string) ([]byte, bool) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+
+		out, err := cmd.Output()
+
+		return out, err == nil
+	}
+
+	head, ok := gitOut("rev-parse", "HEAD")
+	if !ok {
+		return ""
+	}
+
+	// .seamark holds seamark's OWN state (index.db, audit.jsonl): every
+	// run mutates it, so including it would invalidate the fingerprint we
+	// just stored and every workspace would look permanently stale.
+	const exclSeamark = ":(exclude).seamark"
+
+	status, ok := gitOut("status", "--porcelain", "-z", "--", ".", exclSeamark)
+	if !ok {
+		return ""
+	}
+
+	diff, ok := gitOut("diff", "HEAD", "--", ".", exclSeamark)
+	if !ok {
+		return ""
+	}
+
+	h := sha256.New()
+	h.Write(head)
+	h.Write(status)
+	h.Write(diff)
+
+	// The one .seamark file that DOES shape index output: the effect
+	// overlay. Hash its content explicitly so editing it triggers a
+	// rebuild even though the directory is otherwise excluded.
+	if overlay, err := os.ReadFile(filepath.Join(root, ".seamark", "effects.yaml")); err == nil {
+		h.Write(overlay)
+	}
+
+	budget := 4096 // bound the stat walk on pathological untracked trees
+
+	for entry := range strings.SplitSeq(string(status), "\x00") {
+		if !strings.HasPrefix(entry, "?? ") || budget <= 0 {
+			continue
+		}
+
+		statInto(h, filepath.Join(root, filepath.FromSlash(entry[3:])), &budget)
+	}
+
+	return hex.EncodeToString(h.Sum(nil)[:8])
+}
+
+// statInto hashes a content proxy (path, size, mtime) for an untracked
+// file, or every file under an untracked directory.
+func statInto(h io.Writer, p string, budget *int) {
+	info, err := os.Stat(p)
+	if err != nil {
+		return
+	}
+
+	if !info.IsDir() {
+		fmt.Fprintf(h, "%s|%d|%d\n", p, info.Size(), info.ModTime().UnixNano())
+		*budget--
+
+		return
+	}
+
+	_ = filepath.WalkDir(p, func(fp string, d os.DirEntry, err error) error {
+		if err != nil || *budget <= 0 {
+			return filepath.SkipAll
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		if info, err := d.Info(); err == nil {
+			fmt.Fprintf(h, "%s|%d|%d\n", fp, info.Size(), info.ModTime().UnixNano())
+			*budget--
+		}
+
+		return nil
+	})
 }
 
 // ResolveRoot widens to the git toplevel when inside a repository.

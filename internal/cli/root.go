@@ -4,9 +4,13 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/seamark-dev/seamark/internal/gate"
 )
 
 // version is stamped by the Makefile via -ldflags.
@@ -35,7 +39,8 @@ weird, and (soon) which paths can reach production.`,
 	root.PersistentFlags().StringVar(&opts.dbPath, "db", "",
 		"index database path (default <workspace>/.seamark/index.db)")
 
-	root.AddCommand(newIndexCmd(opts), newWhyCmd(opts), newLSPCmd(opts), newVersionCmd())
+	root.AddCommand(newIndexCmd(opts), newWhyCmd(opts), newLSPCmd(opts),
+		newGateCmd(opts), newCheckCmd(opts), newVersionCmd())
 
 	return root
 }
@@ -50,10 +55,17 @@ func newVersionCmd() *cobra.Command {
 	}
 }
 
-// Execute runs the CLI and returns a process exit code.
+// Execute runs the CLI and returns a process exit code. Policy blocks get
+// a distinct code (2) so PreToolUse hooks and CI can tell "denied" from
+// "broken".
 func Execute() int {
 	if err := New().Execute(); err != nil {
-		fmt.Fprintln(New().ErrOrStderr(), "seamark:", err)
+		fmt.Fprintln(os.Stderr, "seamark:", err)
+
+		if errors.Is(err, gate.ErrBlocked) {
+			return 2
+		}
+
 		return 1
 	}
 

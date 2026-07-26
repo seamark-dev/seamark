@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
@@ -31,6 +32,8 @@ or a repo-relative file path.`,
 				return err
 			}
 			defer func() { _ = st.Close() }() // read-only surface, nothing to lose
+
+			staleNote(cmd.ErrOrStderr(), st, root)
 
 			return runWhy(cmd.OutOrStdout(), st, root, args[0])
 		},
@@ -68,6 +71,19 @@ func openIndex(opts *options) (*store.Store, string, error) {
 	}
 
 	return st, root, nil
+}
+
+// staleNote warns when the workspace changed since the index was built —
+// answers from a stale graph should never look authoritative.
+func staleNote(w io.Writer, st *store.Store, root string) {
+	indexed, err := st.GetMeta("indexed_state")
+	if err != nil || indexed == "" {
+		return
+	}
+
+	if current := index.WorkspaceState(root); current != "" && current != indexed {
+		fmt.Fprintln(w, "note: the workspace changed since the last index — run `seamark index` to refresh")
+	}
 }
 
 func gitToplevel(dir string) (string, error) {

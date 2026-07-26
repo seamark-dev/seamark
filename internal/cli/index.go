@@ -11,6 +11,8 @@ import (
 
 func newIndexCmd(opts *options) *cobra.Command {
 	histOpts := history.Options{}
+
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "index",
 		Short: "Build or refresh the workspace index",
@@ -23,6 +25,7 @@ under .seamark/; re-running replaces derived data atomically.`,
 				Root:    opts.workspace,
 				DBPath:  opts.dbPath,
 				History: histOpts,
+				Force:   force,
 				Logf: func(format string, a ...any) {
 					fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...)
 				},
@@ -32,6 +35,11 @@ under .seamark/; re-running replaces derived data atomically.`,
 			}
 
 			out := cmd.OutOrStdout()
+
+			if sum.Skipped {
+				fmt.Fprintf(out, "index already up to date (%s); --force rebuilds\n", sum.DBPath)
+				return nil
+			}
 
 			fmt.Fprintf(out, "indexed %s in %s\n", sum.Root, sum.Duration.Round(1e6))
 			fmt.Fprintf(out, "  files    %d seen, %d parsed", sum.FilesSeen, sum.FilesParsed)
@@ -60,6 +68,8 @@ under .seamark/; re-running replaces derived data atomically.`,
 		},
 	}
 
+	cmd.Flags().BoolVar(&force, "force", false,
+		"rebuild even when the workspace is unchanged since the last index")
 	cmd.Flags().IntVar(&histOpts.MaxCommits, "max-commits", 0,
 		"git history window for mining (default 5000)")
 	cmd.Flags().IntVar(&histOpts.MaxFilesPerCommit, "max-files-per-commit", 0,

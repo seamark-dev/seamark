@@ -14,6 +14,47 @@
 #
 # Tags: db:write db:read proc:exec fs:write net:egress infra:mutate
 
+# Command sinks classify the effects of SHELL COMMANDS for the gate
+# (§5.5). `subcommands` restricts the match ("terraform plan" is fine,
+# "terraform apply" mutates); without it, any invocation matches.
+commands:
+  - name: terraform
+    subcommands: [apply, destroy, import, taint]
+    tag: infra:mutate
+  - name: pulumi
+    subcommands: [up, destroy, refresh]
+    tag: infra:mutate
+  - name: kubectl
+    subcommands: [apply, delete, patch, scale, drain, cordon, replace, edit]
+    tag: infra:mutate
+  - name: helm
+    subcommands: [install, upgrade, uninstall, rollback]
+    tag: infra:mutate
+  - name: aws
+    tag: infra:touch
+  - name: gcloud
+    tag: infra:touch
+  - name: psql
+    tag: db:write
+  - name: mysql
+    tag: db:write
+  - name: redis-cli
+    tag: db:write
+  - name: rm
+    tag: fs:write
+  - name: dd
+    tag: fs:write
+  - name: curl
+    tag: net:egress
+  - name: wget
+    tag: net:egress
+  - name: docker
+    subcommands: [push]
+    tag: net:egress
+  - name: npm
+    subcommands: [publish]
+    tag: net:egress
+
 sinks:
   # --- Go ---------------------------------------------------------------
   - language: go

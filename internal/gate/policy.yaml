@@ -1,0 +1,39 @@
+# Default gate policy (RFC-001 §5.5). Ships in WARN mode: verdicts are
+# reported but nothing blocks until a workspace opts into enforcement —
+# a policy layer that cries wolf gets disabled (§10). Override or extend
+# in <workspace>/.seamark/policy.yaml.
+#
+# Rules are CEL expressions over:
+#   effect   list of tags the command classifies to ("infra:mutate" …)
+#   command  {name, argv, raw, is_push, is_force_push, target_branch, dynamic}
+#   env      {is_prod, is_dev, detected: {VAR: value…}}
+#   diff     {files, effects}   (populated by `seamark check`)
+# effect.contains("x") and "x" in effect are both supported.
+
+mode: warn
+
+environment:
+  detect: [AWS_PROFILE, KUBECONFIG, DATABASE_URL, ENV, ENVIRONMENT, DEPLOY_ENV]
+  prod_markers: [prod, production, live]
+
+deny:
+  - id: no-prod-infra-mutation
+    when: 'effect.contains("infra:mutate") && env.is_prod'
+    message: infrastructure mutation against a production environment requires a human
+
+  - id: no-force-push-default-branch
+    when: 'command.is_force_push && command.target_branch in ["main", "master"]'
+    message: force-push to the default branch
+
+require_approval:
+  - id: prod-db-write
+    when: 'effect.contains("db:write") && env.is_prod'
+    message: database write against a production environment
+
+  - id: dynamic-argv0-prod
+    when: 'command.dynamic && env.is_prod'
+    message: command name comes from a variable — effects cannot be classified
+
+  - id: diff-reaches-infra
+    when: 'diff.effects.contains("infra:mutate")'
+    message: this change can reach infrastructure mutation

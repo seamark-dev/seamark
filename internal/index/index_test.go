@@ -745,6 +745,72 @@ def test_uses_fake(engine):
 	assert.Empty(t, callees, "production session.begin() must not resolve into a test double")
 }
 
+func TestIndexFastPathSkipsFreshWorkspace(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	git := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v\n%s", args, out)
+	}
+	git("init", "-b", "main")
+	git("add", "-A")
+	git("commit", "-m", "initial")
+
+	first, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.False(t, first.Skipped)
+
+	// Unchanged workspace: the fast path answers from the fingerprint.
+	second, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.True(t, second.Skipped, "unchanged workspace must not rebuild")
+	assert.Equal(t, first.Stats, second.Stats, "skipped summary reports real stats")
+
+	// Force overrides the fast path.
+	forced, err := Run(Options{Root: root, Force: true})
+	require.NoError(t, err)
+	assert.False(t, forced.Skipped)
+
+	// A content change defeats the fingerprint.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "new.go"),
+		[]byte("package main\n\nfunc added() {}\n"), 0o644))
+
+	third, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.False(t, third.Skipped, "changed workspace must rebuild")
+
+	// Re-editing an ALREADY-DIRTY tracked file must register too: its
+	// `git status` line does not change, only its content does. The
+	// fingerprint has to be content-sensitive, not status-sensitive.
+	tracked := filepath.Join(root, "main.go")
+
+	require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc main() {}\n"), 0o644))
+
+	fourth, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.False(t, fourth.Skipped, "dirtying a tracked file must rebuild")
+
+	require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc main() { _ = 1 }\n"), 0o644))
+
+	fifth, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.False(t, fifth.Skipped, "editing an already-dirty file must rebuild")
+
+	// And back to rest: nothing changed since the fifth run.
+	sixth, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.True(t, sixth.Skipped)
+}
+
 func TestIndexIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root)

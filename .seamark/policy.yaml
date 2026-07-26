@@ -1,0 +1,28 @@
+# Seamark's own gate policy — dogfooding and the reference example.
+# This file REPLACES the embedded default policy (policy is reviewed as a
+# whole, not merged), so the default rules worth keeping are restated.
+#
+# Effect: in any Claude Code session in this repo, the PreToolUse hook
+# (.claude/settings.json) runs `seamark gate --enforce`, so the deny rules
+# below actually block the agent. Pushing — force or plain — stays a
+# human decision made from a human terminal.
+
+mode: enforce
+
+environment:
+  detect: [AWS_PROFILE, KUBECONFIG, DATABASE_URL, ENV, ENVIRONMENT, DEPLOY_ENV]
+  prod_markers: [prod, production, live]
+
+deny:
+  - id: no-push-default-branch
+    when: 'command.is_push && command.target_branch in ["main", "master"]'
+    message: pushing to the default branch is a human decision — use a feature branch, or push from your own terminal
+
+  - id: no-prod-infra-mutation
+    when: 'effect.contains("infra:mutate") && env.is_prod'
+    message: infrastructure mutation against a production environment requires a human
+
+require_approval:
+  - id: dynamic-argv0
+    when: 'command.dynamic'
+    message: command name comes from a variable — effects cannot be classified
