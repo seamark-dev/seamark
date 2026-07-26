@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -135,7 +136,7 @@ func symbolReport(w io.Writer, st *store.Store, sym model.Symbol) error {
 	if sym.Sig != "" {
 		// Signatures come from source text; a raw string literal in a var
 		// initializer can carry control bytes, so they get the same wash.
-		fmt.Fprintf(w, "  sig      %s\n", sanitize(sym.Sig))
+		fmt.Fprintf(w, "  sig      %s\n", render.Sanitize(sym.Sig))
 	}
 
 	callers, err := st.Callers(sym.ID)
@@ -217,7 +218,7 @@ func historySections(w io.Writer, st *store.Store, file string) error {
 
 			fmt.Fprintf(w, "  %s  %.8s  %-60s %s %s\n",
 				time.Unix(d.TS, 0).Format("2006-01-02"), d.Ref,
-				truncate(sanitize(d.Title), 60), sanitize(d.Author), marker)
+				render.Truncate(render.Sanitize(d.Title), 60), render.Sanitize(d.Author), marker)
 		}
 	}
 
@@ -272,29 +273,4 @@ func limitSyms(syms []model.Symbol, n int) []model.Symbol {
 	}
 
 	return syms
-}
-
-// truncate shortens s to at most n runes; byte slicing would cut multi-byte
-// characters in half.
-func truncate(s string, n int) string {
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-
-	return string(runes[:n-1]) + "…"
-}
-
-// sanitize strips control characters before untrusted text reaches the
-// terminal: commit titles and authors come straight from git history, where
-// ANSI/OSC escape sequences are legal and can manipulate the viewer's
-// terminal (title changes, cursor moves, fake hyperlinks).
-func sanitize(s string) string {
-	return strings.Map(func(r rune) rune {
-		if (r < 0x20 && r != '\t') || r == 0x7f {
-			return -1
-		}
-
-		return r
-	}, s)
 }

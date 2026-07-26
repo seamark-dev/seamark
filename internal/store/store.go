@@ -349,6 +349,56 @@ func (s *Store) SymbolsInFile(file string) ([]model.Symbol, error) {
 	)
 }
 
+// SymbolAt returns the innermost symbol whose span covers a 1-based line
+// of file, or nil when the line is outside every declaration.
+func (s *Store) SymbolAt(file string, line uint32) (*model.Symbol, error) {
+	syms, err := s.querySymbols(
+		`SELECT `+symbolCols+` FROM symbol
+		 WHERE file = ? AND start_line <= ? AND end_line >= ?
+		 ORDER BY (end_line - start_line), start_line DESC
+		 LIMIT 1`, file, line, line,
+	)
+	if err != nil || len(syms) == 0 {
+		return nil, err
+	}
+
+	return &syms[0], nil
+}
+
+// CallerCounts returns the CALLS in-degree of every symbol defined in
+// file, for surfaces that annotate whole files at once (code lenses).
+func (s *Store) CallerCounts(file string) (map[int64]int, error) {
+	rows, err := s.db.Query(
+		`SELECT e.dst, COUNT(*)
+		 FROM edge e JOIN symbol s ON s.id = e.dst
+		 WHERE s.file = ? AND e.kind = ?
+		 GROUP BY e.dst`, file, string(model.EdgeCalls),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Close error deliberately dropped: iteration failures surface via rows.Err().
+	defer func() { _ = rows.Close() }()
+
+	out := map[int64]int{}
+
+	for rows.Next() {
+		var (
+			id int64
+			n  int
+		)
+
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+
+		out[id] = n
+	}
+
+	return out, rows.Err()
+}
+
 // EdgesFrom returns symbols id has an outgoing edge of the given kind to.
 func (s *Store) EdgesFrom(id int64, kind model.EdgeKind) ([]model.Symbol, error) {
 	return s.querySymbols(

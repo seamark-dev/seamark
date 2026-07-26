@@ -10,6 +10,9 @@ LDFLAGS := -ldflags "-X $(MODULE)/internal/cli.version=$(VERSION)"
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
 
+install: ## Install seamark into ~/.local/bin
+	CGO_ENABLED=1 go build $(LDFLAGS) -o $(HOME)/.local/bin/seamark ./cmd/seamark
+
 test: ## Run all tests
 	CGO_ENABLED=1 go test ./...
 

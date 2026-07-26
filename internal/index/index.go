@@ -58,7 +58,7 @@ func Run(opts Options) (*Summary, error) {
 		logf = func(string, ...any) {}
 	}
 
-	root, err := resolveRoot(opts.Root)
+	root, err := ResolveRoot(opts.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -176,8 +176,8 @@ func Run(opts Options) (*Summary, error) {
 	return sum, nil
 }
 
-// resolveRoot widens to the git toplevel when inside a repository.
-func resolveRoot(root string) (string, error) {
+// ResolveRoot widens to the git toplevel when inside a repository.
+func ResolveRoot(root string) (string, error) {
 	if root == "" {
 		root = "."
 	}
