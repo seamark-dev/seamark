@@ -641,6 +641,110 @@ func Transform(s string) string { return s }
 	assert.Equal(t, model.OriginQualified, callers[0].Origin)
 }
 
+func TestEffectDetectionAndPropagation(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/fx\n",
+		// Go: direct sink through an import-qualified call, propagated up
+		// a two-level call chain.
+		"runner.go": `package main
+
+import "os/exec"
+
+func runCmd() {
+	exec.Command("ls").Run()
+}
+
+func level1() {
+	runCmd()
+}
+
+func main() {
+	level1()
+}
+`,
+		// Python: a named-import bare call (from subprocess import run)
+		// and a method-matcher sink (cur.execute).
+		"jobs.py": `from subprocess import run
+
+
+def shell(cmd):
+    run(cmd)
+
+
+def persist(cur, row):
+    cur.execute("INSERT ...", row)
+`,
+	}
+	for rel, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+	}
+
+	sum, st := runIndex(t, root)
+	assert.Positive(t, sum.Stats.Tagged, "summary reports tagged symbols")
+
+	wantEffect := func(query, tag, origin string, depth int) {
+		t.Helper()
+
+		sym := mustFind(t, st, query)
+		effs, err := st.EffectsForSymbol(sym.ID)
+		require.NoError(t, err)
+		require.Len(t, effs, 1, "effects of %s", query)
+		assert.Equal(t, store.Effect{Tag: tag, Origin: origin, Depth: depth}, effs[0], query)
+	}
+
+	wantEffect("runCmd", "proc:exec", "direct", 0)
+	wantEffect("level1", "proc:exec", "propagated", 1)
+	wantEffect("main", "proc:exec", "propagated", 2)
+	wantEffect("jobs.shell", "proc:exec", "direct", 0)
+	wantEffect("jobs.persist", "db:write", "direct", 0)
+
+	// Untagged symbols stay clean.
+	other := mustFind(t, st, "jobs")
+	effs, err := st.EffectsForSymbol(other.ID)
+	require.NoError(t, err)
+	assert.Empty(t, effs, "the module package symbol carries no effects")
+}
+
+func TestUniqueNameSkipsTestDoubles(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		// The only repo-declared method named `begin` lives in a test
+		// double. Production callers must never resolve into it; test
+		// callers legitimately may.
+		"tests/test_db.py": `class _FakeEngine:
+    def begin(self):
+        return None
+
+
+def test_uses_fake(engine):
+    engine.begin()
+`,
+		"api/service.py": `def save(session, row):
+    session.begin()
+    return row
+`,
+	}
+	for rel, content := range files {
+		p := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	begin := mustFind(t, st, "tests/test_db._FakeEngine.begin")
+	callers, err := st.Callers(begin.ID)
+	require.NoError(t, err)
+	require.Len(t, callers, 1, "only the test-file caller may resolve to the double")
+	assert.Equal(t, "tests/test_db.test_uses_fake", callers[0].FQN)
+
+	save := mustFind(t, st, "api/service.save")
+	callees, err := st.Callees(save.ID)
+	require.NoError(t, err)
+	assert.Empty(t, callees, "production session.begin() must not resolve into a test double")
+}
+
 func TestIndexIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root)

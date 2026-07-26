@@ -51,6 +51,10 @@ under .seamark/; re-running replaces derived data atomically.`,
 				fmt.Fprintf(out, "  history  skipped (%s)\n", sum.HistorySkipNote)
 			}
 
+			if sum.Stats.Tagged > 0 {
+				fmt.Fprintf(out, "  effects  %d symbols can reach a sink\n", sum.Stats.Tagged)
+			}
+
 			fmt.Fprintf(out, "  index    %s\n", sum.DBPath)
 			return nil
 		},

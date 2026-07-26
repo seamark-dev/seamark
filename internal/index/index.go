@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seamark-dev/seamark/internal/effects"
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/parse"
@@ -133,7 +134,12 @@ func Run(opts Options) (*Summary, error) {
 	}
 	defer func() { _ = st.Close() }() // read results are already committed
 
-	g := buildGraph(results, readGoModules(root, files))
+	catalog, err := effects.Load(root)
+	if err != nil {
+		return nil, err
+	}
+
+	g := buildGraph(results, readGoModules(root, files), catalog)
 
 	err = st.Rebuild(func(tx *store.Tx) error {
 		if err := g.write(tx); err != nil {
@@ -333,18 +339,26 @@ type graph struct {
 	// uniqueness per dialect would fabricate edges a repo-wide duplicate
 	// should suppress.
 	methodsByName map[string]map[string][]*model.Symbol
+
+	catalog *effects.Catalog
+	// direct effect tags per symbol id, from catalogue matches.
+	direct map[int64]map[string]bool
+	// callEdges keeps (caller, callee) ids for effect propagation.
+	callEdges [][2]int64
 }
 
 // scopedKey namespaces a package key by language family.
 func scopedKey(family, key string) string { return family + "\x00" + key }
 
-func buildGraph(results []*parse.FileResult, modules []goModule) *graph {
+func buildGraph(results []*parse.FileResult, modules []goModule, catalog *effects.Catalog) *graph {
 	g := &graph{
 		results:       results,
 		modules:       modules,
 		packages:      map[string]*model.Symbol{},
 		decls:         map[string]map[string][]*model.Symbol{},
 		methodsByName: map[string]map[string][]*model.Symbol{},
+		catalog:       catalog,
+		direct:        map[int64]map[string]bool{},
 	}
 	// A Python package's __init__.py and a sibling module can claim the
 	// same key ("api/__init__.py" and "api.py" → "api"). Python gives the
@@ -504,7 +518,7 @@ func (g *graph) write(tx *store.Tx) error {
 		}
 	}
 
-	return nil
+	return g.writeEffects(tx)
 }
 
 func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
@@ -557,10 +571,20 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.SymbolDecl) error {
 	fam := parse.LanguageFamily(res.Language)
 
-	imports := map[string]string{} // qualifier local name -> scoped package key
-	named := map[string]string{}   // bare imported name -> scoped package key
+	imports := map[string]string{}    // qualifier local name -> scoped package key
+	named := map[string]string{}      // bare imported name -> scoped package key
+	rawImports := map[string]string{} // qualifier local name -> import path as written
+	rawNamed := map[string]string{}   // bare imported name -> import path as written
 
 	for _, imp := range res.Imports {
+		if imp.LocalName != "" {
+			rawImports[imp.LocalName] = imp.Path
+		}
+
+		for _, n := range imp.Named {
+			rawNamed[n] = imp.Path
+		}
+
 		rawKey, ok := g.importKeyOK(imp)
 		if !ok {
 			continue
@@ -582,6 +606,10 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 	best := map[int64]string{}
 
 	for _, call := range decl.Calls {
+		// Effect detection runs on the raw reference: the interesting
+		// sinks live in external dependencies and never resolve to edges.
+		g.detectCallEffects(fam, rawImports, rawNamed, decl.Symbol.ID, call)
+
 		var dst *model.Symbol
 		origin := ""
 
@@ -616,7 +644,7 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 
 			// Miss (e.g. an inherited method): the guess tier may catch it.
 			if dst == nil {
-				dst, origin = g.uniqueMethod(fam, call.Name)
+				dst, origin = g.uniqueMethod(fam, call.Name, res.Path)
 			}
 		case call.Qualifier != "":
 			if pkgKey, ok := imports[call.Qualifier]; ok {
@@ -625,11 +653,11 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 				dst = pickUnique(g.decls[pkgKey][call.Name], model.KindFunction)
 				origin = model.OriginQualified
 			} else {
-				dst, origin = g.uniqueMethod(fam, call.Name)
+				dst, origin = g.uniqueMethod(fam, call.Name, res.Path)
 			}
 		default:
 			// Complex operand (x.db.Close()): only the guess tier applies.
-			dst, origin = g.uniqueMethod(fam, call.Name)
+			dst, origin = g.uniqueMethod(fam, call.Name, res.Path)
 		}
 
 		if dst == nil || dst.ID == decl.Symbol.ID {
@@ -649,6 +677,108 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 		if err != nil {
 			return err
 		}
+
+		g.callEdges = append(g.callEdges, [2]int64{decl.Symbol.ID, dstID})
+	}
+
+	return nil
+}
+
+// detectCallEffects records catalogue matches for one call site on the
+// enclosing symbol.
+func (g *graph) detectCallEffects(fam string, rawImports, rawNamed map[string]string,
+	symID int64, call parse.CallRef,
+) {
+	if g.catalog == nil {
+		return
+	}
+
+	var tags []string
+
+	if call.Selector {
+		if p, ok := rawImports[call.Qualifier]; ok && call.Qualifier != "" {
+			tags = append(tags, g.catalog.MatchImport(fam, p, call.Name)...)
+		}
+
+		tags = append(tags, g.catalog.MatchMethod(fam, call.Name)...)
+	} else {
+		if p, ok := rawNamed[call.Name]; ok {
+			tags = append(tags, g.catalog.MatchImport(fam, p, call.Name)...)
+		}
+
+		tags = append(tags, g.catalog.MatchCall(fam, call.Name)...)
+	}
+
+	if len(tags) == 0 {
+		return
+	}
+
+	set := g.direct[symID]
+	if set == nil {
+		set = map[string]bool{}
+		g.direct[symID] = set
+	}
+
+	for _, t := range tags {
+		set[t] = true
+	}
+}
+
+// writeEffects propagates direct tags backwards along CALLS edges to
+// fixpoint (BFS, shortest depth wins) and stores the result: any symbol
+// can then be asked "what can this ultimately do?" (RFC-001 §5.2).
+func (g *graph) writeEffects(tx *store.Tx) error {
+	type key struct {
+		id  int64
+		tag string
+	}
+
+	type item struct {
+		id  int64
+		tag string
+		d   int
+	}
+
+	depth := map[key]int{}
+
+	var queue []item
+
+	for id, tags := range g.direct {
+		for tag := range tags {
+			depth[key{id, tag}] = 0
+			queue = append(queue, item{id, tag, 0})
+		}
+	}
+
+	callers := map[int64][]int64{}
+	for _, e := range g.callEdges {
+		callers[e[1]] = append(callers[e[1]], e[0])
+	}
+
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+
+		for _, caller := range callers[cur.id] {
+			k := key{caller, cur.tag}
+			if d, seen := depth[k]; seen && d <= cur.d+1 {
+				continue
+			}
+
+			depth[k] = cur.d + 1
+			queue = append(queue, item{caller, cur.tag, cur.d + 1})
+		}
+	}
+
+	for k, d := range depth {
+		origin := "propagated"
+		if d == 0 {
+			origin = "direct"
+		}
+
+		if err := tx.InsertEffect(k.id, k.tag, origin, d); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -666,12 +796,53 @@ func originRank(origin string) int {
 
 // uniqueMethod is the lowest-confidence tier: the single method in the
 // language family carrying the called name, if exactly one exists.
-func (g *graph) uniqueMethod(fam, name string) (dst *model.Symbol, origin string) {
-	if candidates := g.methodsByName[fam][name]; len(candidates) == 1 {
+// Production callers never resolve into test files — test doubles (fake
+// engines, stub clients) carry generic names (set, begin, fetchone) that
+// are often the only repo-declared occurrence, and every such edge is a
+// fabrication.
+func (g *graph) uniqueMethod(fam, name, callerFile string) (dst *model.Symbol, origin string) {
+	candidates := g.methodsByName[fam][name]
+
+	if !isTestPath(callerFile) {
+		var prod []*model.Symbol
+
+		for _, c := range candidates {
+			if !isTestPath(c.File) {
+				prod = append(prod, c)
+			}
+		}
+
+		candidates = prod
+	}
+
+	if len(candidates) == 1 {
 		return candidates[0], model.OriginUniqueName
 	}
 
 	return nil, ""
+}
+
+// isTestPath reports whether a file is test code, by each language's
+// naming convention.
+func isTestPath(p string) bool {
+	base := path.Base(p)
+
+	switch {
+	case strings.HasSuffix(base, "_test.go"),
+		strings.HasPrefix(base, "test_"),
+		strings.HasSuffix(base, "_test.py"),
+		strings.Contains(base, ".test."),
+		strings.Contains(base, ".spec."):
+		return true
+	}
+
+	for seg := range strings.SplitSeq(path.Dir(p), "/") {
+		if seg == "tests" || seg == "test" || seg == "__tests__" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // pickUnique returns the sole symbol of the wanted kind, nil otherwise.

@@ -177,7 +177,10 @@ func fixtureRepo(t *testing.T) string {
 
 	write := func(rel, content string) {
 		t.Helper()
-		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+
+		p := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
 	}
 
 	write("go.mod", "module example.com/fix\n")
@@ -186,6 +189,9 @@ func fixtureRepo(t *testing.T) string {
 	// Shape exists in BOTH families: cross-language name mirror.
 	write("shape.go", "package main\n\ntype Shape struct{}\n\nfunc useShape(s Shape) {}\n")
 	write("shape.ts", "export class Shape {}\n")
+	// version is a same-file const AND a distant function: the const wins.
+	write("vers.go", "package main\n\nconst version = \"1\"\n\nfunc useVersion() string { return version }\n")
+	write("util/util.go", "package util\n\nfunc version() string { return \"u\" }\n")
 	git("init", "-b", "main")
 	git("add", "-A")
 	git("commit", "-m", "initial layout")
@@ -255,6 +261,15 @@ func TestLifecycleHoverAndCodeLens(t *testing.T) {
 	})
 	assert.Contains(t, string(mirror), "Shape struct{}", "the Go mirror wins in a Go file")
 	assert.Contains(t, string(mirror), "**type**")
+
+	// A same-file const must win over a distant same-named function:
+	// hovering "version" inside useVersion (line 4, char 36 of vers.go).
+	verHover := c.request("textDocument/hover", map[string]any{
+		"textDocument": map[string]any{"uri": uri(root, "vers.go")},
+		"position":     map[string]any{"line": 4, "character": 36},
+	})
+	assert.Contains(t, string(verHover), `version = \"1\"`, "the local const's card")
+	assert.NotContains(t, string(verHover), "util", "never the cross-file function")
 
 	// Hover on an empty line yields null, not an error.
 	empty := c.request("textDocument/hover", map[string]any{

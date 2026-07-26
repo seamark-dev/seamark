@@ -353,7 +353,7 @@ func goSignature(decl *tree_sitter.Node, src []byte) string {
 		end = body.StartByte()
 	}
 
-	return firstLine(strings.TrimSpace(string(src[decl.StartByte():end])))
+	return collapseWS(string(src[decl.StartByte():end]))
 }
 
 // docHash hashes the contiguous comment block immediately above a
@@ -426,6 +426,13 @@ func firstLine(s string) string {
 	first, _, _ := strings.Cut(s, "\n")
 
 	return strings.TrimSpace(first)
+}
+
+// collapseWS folds a multi-line declaration header into one line: runs of
+// whitespace (newlines, indentation) become single spaces, so signatures
+// spanning several lines don't truncate at the first ("async def f(").
+func collapseWS(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // toSlash normalizes to forward slashes so package keys are OS-independent.

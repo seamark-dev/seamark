@@ -242,15 +242,38 @@ func (s *Server) symbolUnderCursor(rel string, pos Position) (*model.Symbol, err
 }
 
 // resolveName finds the symbol an identifier most plausibly refers to:
-// a same-file match first, then a repo-wide unique match. Ambiguity
-// yields nil — the enclosing-declaration fallback beats a wrong guess.
+// a same-file match first (any kind), then a repo-wide unique match among
+// callables of the same language family. Ambiguity yields nil — the
+// enclosing-declaration fallback beats a wrong guess.
 func (s *Server) resolveName(word, rel string, enclosing *model.Symbol) *model.Symbol {
 	cands, err := s.st.SymbolsByName(word)
 	if err != nil || len(cands) == 0 {
 		return nil
 	}
 
-	// Callable/type symbols outrank consts and vars for hover purposes.
+	// Same-file wins regardless of kind: a module-level const named
+	// "version" must not lose its hover to a distant function that
+	// happens to share the name.
+	var sameFile []model.Symbol
+
+	for _, c := range cands {
+		if c.File == rel {
+			sameFile = append(sameFile, c)
+		}
+	}
+
+	switch {
+	case len(sameFile) == 1:
+		if enclosing != nil && sameFile[0].ID == enclosing.ID {
+			return nil // hovering the declaration itself: fallback handles it
+		}
+
+		return &sameFile[0]
+	case len(sameFile) > 1:
+		return nil // locally ambiguous (duplicate names): never guess
+	}
+
+	// Cross-file: callable/type symbols outrank consts and vars.
 	preferred := make([]model.Symbol, 0, len(cands))
 
 	for _, c := range cands {
@@ -283,22 +306,11 @@ func (s *Server) resolveName(word, rel string, enclosing *model.Symbol) *model.S
 		}
 	}
 
-	var sameFile []model.Symbol
-
-	for _, c := range preferred {
-		if c.File == rel {
-			sameFile = append(sameFile, c)
-		}
-	}
-
-	switch {
-	case len(sameFile) == 1 && (enclosing == nil || sameFile[0].ID != enclosing.ID):
-		return &sameFile[0]
-	case len(sameFile) == 0 && len(preferred) == 1:
+	if len(preferred) == 1 {
 		return &preferred[0]
-	default:
-		return nil
 	}
+
+	return nil
 }
 
 // wordAt reads the identifier at a position from the file on disk (sync
@@ -386,6 +398,27 @@ func (s *Server) hoverMarkdown(sym *model.Symbol) (string, error) {
 	}
 
 	b.WriteString("\n")
+
+	tags, err := s.st.EffectsForSymbol(sym.ID)
+	if err != nil {
+		return "", err
+	}
+
+	if len(tags) > 0 {
+		parts := make([]string, 0, len(tags))
+
+		// Tags come from the workspace overlay — untrusted in a cloned
+		// repo; code-span them like every other foreign string.
+		for _, e := range tags {
+			if e.Origin == "direct" {
+				parts = append(parts, mdCodeSpan(e.Tag)+" (direct)")
+			} else {
+				parts = append(parts, fmt.Sprintf("%s (%d hops)", mdCodeSpan(e.Tag), e.Depth))
+			}
+		}
+
+		fmt.Fprintf(&b, "\n**Reaches** %s\n", strings.Join(parts, " · "))
+	}
 
 	partners, err := s.st.CoChangePartners(sym.File, diagMinLift, 3)
 	if err != nil {
@@ -536,7 +569,12 @@ func (s *Server) handleDidSave(p *didSaveParams) error {
 
 	if len(missing) > 0 {
 		diags = append(diags, diagnostic{
-			Range:    Range{Start: Position{Line: 0}, End: Position{Line: 0}},
+			// Cover the whole first line: a zero-width range renders as an
+			// invisible speck in editors.
+			Range: Range{
+				Start: Position{Line: 0},
+				End:   Position{Line: 0, Character: ^uint32(0) >> 1},
+			},
 			Severity: severityInfo,
 			Source:   "seamark",
 			Message:  "usually changed together, not in this change: " + strings.Join(missing, "; "),

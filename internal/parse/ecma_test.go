@@ -211,6 +211,22 @@ import y from "./button";
 	}, got)
 }
 
+func TestEcmaMultiLineDecoratorSkipped(t *testing.T) {
+	src := `@Component({
+  selector: "app-x",
+  template: "<div/>",
+})
+class Widget {
+  render(): string { return "w"; }
+}
+`
+	res := extractTS(t, "widget.ts", src)
+
+	widget := symbolByFQN(t, res, "widget.Widget")
+	assert.Equal(t, "class Widget", widget.Symbol.Sig,
+		"multi-line decorator bodies must not leak into the signature")
+}
+
 func TestEcmaExportedArrowConstSignature(t *testing.T) {
 	res := extractTS(t, "web/src/api/snapshots.ts", tsFixture)
 

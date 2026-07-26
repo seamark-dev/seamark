@@ -479,9 +479,7 @@ func pySignature(decl *tree_sitter.Node, src []byte) string {
 		end = body.StartByte()
 	}
 
-	text := strings.TrimSpace(string(src[decl.StartByte():end]))
-
-	return strings.TrimSuffix(strings.TrimSpace(firstLine(text)), ":")
+	return strings.TrimSuffix(collapseWS(string(src[decl.StartByte():end])), ":")
 }
 
 // pyDocHash hashes the declaration's docstring (the first statement of its

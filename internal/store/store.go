@@ -209,6 +209,57 @@ func (t *Tx) InsertDecision(d *model.Decision) error {
 	return nil
 }
 
+// InsertEffect stores one effect tag on a symbol. origin is "direct" for
+// catalogue hits, "propagated" for tags inherited along CALLS edges.
+func (t *Tx) InsertEffect(symbolID int64, tag, origin string, depth int) error {
+	_, err := t.tx.Exec(
+		`INSERT INTO effect (symbol_id, tag, origin, depth) VALUES (?, ?, ?, ?)
+		 ON CONFLICT (symbol_id, tag) DO UPDATE SET
+		   origin = excluded.origin, depth = excluded.depth
+		 WHERE excluded.depth < effect.depth`,
+		symbolID, tag, origin, depth,
+	)
+	if err != nil {
+		return fmt.Errorf("store: insert effect %s on %d: %w", tag, symbolID, err)
+	}
+
+	return nil
+}
+
+// Effect is one tag carried by a symbol.
+type Effect struct {
+	Tag    string
+	Origin string // direct | propagated
+	Depth  int    // 0 for direct
+}
+
+// EffectsForSymbol returns a symbol's tags, direct first, then by depth.
+func (s *Store) EffectsForSymbol(id int64) ([]Effect, error) {
+	rows, err := s.db.Query(
+		`SELECT tag, origin, depth FROM effect WHERE symbol_id = ?
+		 ORDER BY depth, tag`, id,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Close error deliberately dropped: iteration failures surface via rows.Err().
+	defer func() { _ = rows.Close() }()
+
+	var out []Effect
+
+	for rows.Next() {
+		var e Effect
+		if err := rows.Scan(&e.Tag, &e.Origin, &e.Depth); err != nil {
+			return nil, err
+		}
+
+		out = append(out, e)
+	}
+
+	return out, rows.Err()
+}
+
 const symbolCols = `id, fqn, name, kind, file, start_line, start_col, end_line, end_col, sig, doc_hash`
 
 func scanSymbol(row interface{ Scan(...any) error }) (model.Symbol, error) {
@@ -573,21 +624,24 @@ type Stats struct {
 	Edges     int
 	CoChanges int
 	Decisions int
+	// Tagged counts symbols carrying at least one effect tag.
+	Tagged int
 }
 
 // Stats returns row counts of the derived tables.
 func (s *Store) Stats() (Stats, error) {
 	var st Stats
 	for _, c := range []struct {
-		table string
+		query string
 		dst   *int
 	}{
-		{"symbol", &st.Symbols},
-		{"edge", &st.Edges},
-		{"cochange", &st.CoChanges},
-		{"decision", &st.Decisions},
+		{"SELECT COUNT(*) FROM symbol", &st.Symbols},
+		{"SELECT COUNT(*) FROM edge", &st.Edges},
+		{"SELECT COUNT(*) FROM cochange", &st.CoChanges},
+		{"SELECT COUNT(*) FROM decision", &st.Decisions},
+		{"SELECT COUNT(DISTINCT symbol_id) FROM effect", &st.Tagged},
 	} {
-		if err := s.db.QueryRow("SELECT COUNT(*) FROM " + c.table).Scan(c.dst); err != nil {
+		if err := s.db.QueryRow(c.query).Scan(c.dst); err != nil {
 			return st, err
 		}
 	}

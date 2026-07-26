@@ -139,6 +139,26 @@ func symbolReport(w io.Writer, st *store.Store, sym model.Symbol) error {
 		fmt.Fprintf(w, "  sig      %s\n", render.Sanitize(sym.Sig))
 	}
 
+	effects, err := st.EffectsForSymbol(sym.ID)
+	if err != nil {
+		return err
+	}
+
+	if len(effects) > 0 {
+		parts := make([]string, 0, len(effects))
+
+		// Tags come from the workspace overlay — untrusted in a cloned repo.
+		for _, e := range effects {
+			if e.Origin == "direct" {
+				parts = append(parts, render.Sanitize(e.Tag)+" [direct]")
+			} else {
+				parts = append(parts, fmt.Sprintf("%s [depth %d]", render.Sanitize(e.Tag), e.Depth))
+			}
+		}
+
+		fmt.Fprintf(w, "  effects  %s\n", strings.Join(parts, " · "))
+	}
+
 	callers, err := st.Callers(sym.ID)
 	if err != nil {
 		return err

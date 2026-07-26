@@ -456,14 +456,23 @@ func ecmaSignature(decl *tree_sitter.Node, src []byte) string {
 		}
 	}
 
-	text := strings.TrimSpace(string(src[start.StartByte():end]))
+	// Skip decorator NODES entirely: their arguments span lines
+	// (@Component({...})), so line-based "@" filtering would leak the
+	// decorator body into the signature.
+	textStart := start.StartByte()
 
-	for line := range strings.SplitSeq(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "@") {
-			return line
+	for _, holder := range []*tree_sitter.Node{start, decl} {
+		for i := uint(0); i < holder.NamedChildCount(); i++ {
+			child := holder.NamedChild(i)
+			if child.Kind() == "decorator" && child.EndByte() > textStart {
+				textStart = child.EndByte()
+			}
 		}
 	}
 
-	return firstLine(text)
+	if textStart >= end {
+		textStart = start.StartByte()
+	}
+
+	return collapseWS(string(src[textStart:end]))
 }

@@ -2,3 +2,5 @@ rfc/
 bin/
 .seamark/
 *.db
+node_modules/
+.DS_Store

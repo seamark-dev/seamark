@@ -1,0 +1,97 @@
+# Default effect-sink catalogue (RFC-001 §5.2). Deliberately a data file:
+# effect knowledge is framework-specific and community-extensible — put
+# additions in <workspace>/.seamark/effects.yaml with the same shape; they
+# merge on top of this list.
+#
+# Matcher kinds (exactly one per entry):
+#   import: <path> + names: [..] — calls qualified through an import of
+#           this path (os.RemoveAll, subprocess.run), including names
+#           imported directly into scope (from subprocess import run).
+#   method: <name>               — any attribute/method call with this
+#           name, regardless of receiver (conn.execute). Lower precision,
+#           used where receivers are values the indexer cannot type.
+#   call:   <name>               — a bare call by this name (fetch).
+#
+# Tags: db:write db:read proc:exec fs:write net:egress infra:mutate
+
+sinks:
+  # --- Go ---------------------------------------------------------------
+  - language: go
+    import: os/exec
+    names: [Command, CommandContext]
+    tag: proc:exec
+  - language: go
+    import: os
+    names: [Remove, RemoveAll, WriteFile, Rename, Truncate, Chmod, Chown, Mkdir, MkdirAll]
+    tag: fs:write
+  - language: go
+    import: database/sql
+    names: [Exec, ExecContext]
+    tag: db:write
+  - language: go
+    import: database/sql
+    names: [Query, QueryContext, QueryRow, QueryRowContext]
+    tag: db:read
+  - language: go
+    import: net/http
+    names: [Get, Post, PostForm, Head, Do, NewRequest]
+    tag: net:egress
+  - language: go
+    method: Exec # sql.DB/Tx/Stmt method calls through variables
+    tag: db:write
+  - language: go
+    method: ExecContext
+    tag: db:write
+
+  # --- Python -----------------------------------------------------------
+  - language: python
+    import: subprocess
+    names: [run, call, check_call, check_output, Popen]
+    tag: proc:exec
+  - language: python
+    import: os
+    names: [remove, unlink, rmdir, rename, makedirs, mkdir]
+    tag: fs:write
+  - language: python
+    import: os
+    names: [system, popen]
+    tag: proc:exec
+  - language: python
+    import: shutil
+    names: [rmtree, move, copyfile, copytree]
+    tag: fs:write
+  - language: python
+    import: requests
+    names: [get, post, put, delete, patch, request]
+    tag: net:egress
+  - language: python
+    import: httpx
+    names: [get, post, put, delete, patch, request]
+    tag: net:egress
+  - language: python
+    method: execute # DB-API cursors/connections
+    tag: db:write
+  - language: python
+    method: executemany
+    tag: db:write
+
+  # --- JS/TS ------------------------------------------------------------
+  - language: ecma
+    call: fetch
+    tag: net:egress
+  - language: ecma
+    import: child_process
+    names: [exec, execSync, spawn, spawnSync, execFile, fork]
+    tag: proc:exec
+  - language: ecma
+    import: node:child_process
+    names: [exec, execSync, spawn, spawnSync, execFile, fork]
+    tag: proc:exec
+  - language: ecma
+    import: fs
+    names: [writeFile, writeFileSync, rm, rmSync, unlink, unlinkSync, rename, renameSync, mkdir, mkdirSync]
+    tag: fs:write
+  - language: ecma
+    import: node:fs
+    names: [writeFile, writeFileSync, rm, rmSync, unlink, unlinkSync, rename, renameSync, mkdir, mkdirSync]
+    tag: fs:write

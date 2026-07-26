@@ -180,6 +180,20 @@ func TestPySignatureAndDoc(t *testing.T) {
 	assert.Equal(t, "def size(self)", size.Symbol.Sig, "decorator must not leak into the sig")
 }
 
+func TestPyMultiLineSignatureCollapses(t *testing.T) {
+	src := `async def patch_me(
+    user_id: int,
+    payload: dict,
+) -> dict:
+    return payload
+`
+	res := extractPy(t, "m.py", src)
+
+	patch := symbolByFQN(t, res, "m.patch_me")
+	assert.Equal(t, "async def patch_me( user_id: int, payload: dict, ) -> dict",
+		patch.Symbol.Sig, "multi-line headers fold into one line instead of truncating")
+}
+
 func TestPyInitModuleKey(t *testing.T) {
 	src := `def make():
     return 1
