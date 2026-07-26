@@ -11,6 +11,17 @@
             "statusMessage": "seamark gate: classifying command"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/yuri/.local/bin/seamark lessons --hook",
+            "timeout": 10,
+            "statusMessage": "seamark: checking review lessons"
+          }
+        ]
       }
     ]
   }

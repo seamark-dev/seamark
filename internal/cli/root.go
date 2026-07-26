@@ -40,8 +40,8 @@ weird, and (soon) which paths can reach production.`,
 		"index database path (default <workspace>/.seamark/index.db)")
 
 	root.AddCommand(newIndexCmd(opts), newWhyCmd(opts), newOrientCmd(opts),
-		newLSPCmd(opts), newGateCmd(opts), newCheckCmd(opts), newMCPCmd(opts),
-		newVersionCmd())
+		newLessonsCmd(opts), newLSPCmd(opts), newGateCmd(opts), newCheckCmd(opts),
+		newMCPCmd(opts), newVersionCmd())
 
 	return root
 }

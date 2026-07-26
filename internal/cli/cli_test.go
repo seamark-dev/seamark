@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/store"
 )
 
 // run executes the CLI with args against a fresh command tree, returning
@@ -180,6 +183,55 @@ func TestWhyUnknownSymbolFails(t *testing.T) {
 
 	_, err = run(t, "-C", root, "why", "definitely_not_there_xyz")
 	assert.Error(t, err)
+}
+
+func TestLessonsHook(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// Seed a lesson on a.go's region (the fixture root) via a raw store
+	// write, then confirm the hook injects it for an edit to that file.
+	seedLesson(t, root, "a.go", "RUF001", 4)
+
+	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` +
+		filepath.Join(root, "a.go") + `"}}`
+
+	out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+
+	var hook struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &hook))
+	assert.Equal(t, "PreToolUse", hook.HookSpecificOutput.HookEventName)
+	assert.Contains(t, hook.HookSpecificOutput.AdditionalContext, "RUF001")
+
+	// A file with no lessons produces no output — the hook stays silent.
+	quiet := `{"tool_name":"Edit","tool_input":{"file_path":"` +
+		filepath.Join(root, "nowhere.go") + `"}}`
+	out, _, err = runIn(t, quiet, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Empty(t, strings.TrimSpace(out))
+}
+
+// seedLesson writes one lesson row directly, so hook tests don't need a
+// live GitHub source.
+func seedLesson(t *testing.T, root, region, symptom string, occ int) {
+	t.Helper()
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+
+	require.NoError(t, st.ReplaceLessons([]model.Lesson{
+		{ClusterKey: region + "\x00" + symptom, Region: region,
+			Reviewer: "coderabbit", Symptom: symptom, Occurrences: occ, LastTS: 1},
+	}))
 }
 
 // runIn is runErr with a stdin payload, for hook-mode tests.

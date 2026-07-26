@@ -151,6 +151,25 @@ every agent tool call) leaves them untouched rather than re-hitting the
 network. A failed mine (offline, logged out) fails safe: it keeps the
 lessons already stored rather than clearing them.
 
+### Aware without being told
+
+Having the lessons in `why`/`orient` only helps if an agent *asks*. To
+make it automatic, wire the edit hook — a `PreToolUse` hook that injects
+the relevant lessons the moment an agent is about to edit a file:
+
+```json
+{ "hooks": { "PreToolUse": [ {
+  "matcher": "Edit|Write|MultiEdit",
+  "hooks": [ { "type": "command", "command": "seamark lessons --hook" } ]
+} ] } }
+```
+
+Now an agent editing anything under `scripts/` is told "reviewers keep
+flagging E702, RUF001 here" whether or not it thought to check — a single
+local index read, no network, silent for files with no lessons. (Proven:
+a headless agent given a plain edit task with no mention of seamark still
+named every flagged rule.)
+
 ### Tuning what surfaces
 
 Like the gate's policy, a committed `.seamark/lessons.yaml` controls what

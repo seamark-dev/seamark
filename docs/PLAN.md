@@ -274,6 +274,16 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
       clustering on CodeRabbit's severity boilerplate (fixed by
       extracting the bold issue title), and `(root)` cross-contamination
       (root-level comments now cluster file-scoped, not lumped).
+- [x] Push-based awareness — the PreToolUse edit hook. `seamark lessons
+      --hook` reads tool_input.file_path from an Edit/Write payload and
+      emits the file's lessons as `additionalContext`; wired in
+      settings.json on `Edit|Write|MultiEdit`. Read-only, offline, silent
+      when a file has no lessons. PROVEN 2026-07-26: a headless agent
+      given a normal edit task in scripts/ with NO seamark mention
+      received the lessons and named all seven flagged codes in its
+      answer — vs. the identical pre-hook test where it named none. This
+      is what closes "available" → "aware without being told"; MCP alone
+      is pull-only and an unprompted agent does not consult it.
 - [x] Configurable, gate-style: committed `.seamark/lessons.yaml`
       overlay applied at surface time (no re-mining) — `threshold`
       override, `mute` (by rule and/or region prefix, kills the
