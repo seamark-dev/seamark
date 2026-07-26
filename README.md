@@ -64,9 +64,17 @@ make install        # builds and installs to ~/.local/bin/seamark
 Then, in any repository:
 
 ```bash
+seamark init        # scaffold config + wire the Claude Code agent hooks
 seamark index       # parse + mine history + propagate effects (~seconds)
 seamark why <symbol-or-file>
 ```
+
+`seamark init` is optional but does the one-time setup for you: it writes
+starter `.seamark/policy.yaml` and `.seamark/lessons.yaml` (never
+overwriting existing files), adds the `.gitignore` carve-outs, and merges
+the gate and review-lessons hooks into `.claude/settings.json` — leaving
+any hooks you already have intact, and safe to re-run. Pass `--print` to
+preview every change first.
 
 The index is a single SQLite file under `.seamark/` — delete it to start
 fresh, commit nothing.
@@ -189,6 +197,21 @@ pin:                             # your "must not be ignored" list —
 `mute` kills noise; `pin` is the escape hatch for a rule you care about
 more than the mined frequency implies. Both flow through `why`, `orient`,
 and the edit hook via one path, so they never disagree.
+
+You don't have to author this by hand. `seamark lessons --list` prints
+every mined lesson — including the one-off noise that `why`/`orient` hide
+— with the exact rule and region values to paste, and flags anything your
+config already mutes:
+
+```text
+$ seamark lessons --list
+review lessons (all mined, strongest first) — 436 total
+
+  ×20   E702                 scripts        [coderabbit]
+  ×3    F541                 scripts        [coderabbit]  (muted)
+  ×1    RUF002               fetcher.py     [coderabbit]
+  …
+```
 
 ## Editor integration
 

@@ -79,8 +79,9 @@ func LoadConfig(root string) (*Config, error) {
 	return cfg, nil
 }
 
-// muted reports whether a mined lesson is hidden by config.
-func (c *Config) muted(l model.Lesson) bool {
+// Muted reports whether a mined lesson is hidden by config — exported so
+// the `--list` ledger can flag what the user has already silenced.
+func (c *Config) Muted(l model.Lesson) bool {
 	for _, m := range c.Mute {
 		if m.Rule != "" && !strings.EqualFold(m.Rule, l.Symptom) {
 			continue
@@ -142,7 +143,7 @@ func (c *Config) Surface(mined []model.Lesson, scope string) []model.Lesson {
 	out := c.pinsFor(scope)
 
 	for _, l := range mined {
-		if l.Occurrences < c.Threshold || c.muted(l) {
+		if l.Occurrences < c.Threshold || c.Muted(l) {
 			continue
 		}
 

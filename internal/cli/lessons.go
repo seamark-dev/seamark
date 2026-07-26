@@ -20,49 +20,78 @@ func newLessonsCmd(opts *options) *cobra.Command {
 	var (
 		file     string
 		hookMode bool
+		list     bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "lessons --file <path>",
-		Short: "Show the recurring review feedback for a file's area",
+		Use:   "lessons [--file <path> | --list]",
+		Short: "Show the recurring review feedback mined from pull requests",
 		Long: `Prints the review lessons (mined by "index --reviews", tuned by
-.seamark/lessons.yaml) that apply to a file — the mistakes reviewers keep
-flagging in that part of the tree.
+.seamark/lessons.yaml) — the mistakes reviewers keep flagging.
 
-With --hook, reads a Claude Code PreToolUse JSON payload from stdin and
-emits the file's lessons as additionalContext, so an agent about to edit
-the file is reminded automatically. It is read-only and offline: no
-network, no re-indexing, silent when a file has no lessons.`,
+  --file <path>  the lessons that apply to one file's area
+  --list         every mined lesson repo-wide, with config syntax to
+                 mute the noise or pin what must never be ignored
+  --hook         read a Claude Code PreToolUse payload from stdin and emit
+                 the edited file's lessons as additionalContext
+
+--hook is read-only and offline: no network, no re-indexing, silent when
+a file has no lessons.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if hookMode {
+			switch {
+			case hookMode:
 				return runLessonsHook(cmd, opts)
-			}
+			case list:
+				return runLessonsList(cmd, opts)
+			case strings.TrimSpace(file) != "":
+				st, root, err := openIndex(opts)
+				if err != nil {
+					return err
+				}
+				defer func() { _ = st.Close() }()
 
-			if strings.TrimSpace(file) == "" {
-				return fmt.Errorf("provide --file <path> (or --hook for PreToolUse mode)")
-			}
+				lessons, err := lessonsForFile(st, root, file)
+				if err != nil {
+					return err
+				}
 
-			st, root, err := openIndex(opts)
-			if err != nil {
-				return err
+				return report.PrintLessonReminder(cmd.OutOrStdout(), file, lessons)
+			default:
+				return fmt.Errorf("provide --file <path>, --list, or --hook")
 			}
-			defer func() { _ = st.Close() }()
-
-			lessons, err := lessonsForFile(st, root, file)
-			if err != nil {
-				return err
-			}
-
-			return report.PrintLessonReminder(cmd.OutOrStdout(), file, lessons)
 		},
 	}
 
 	cmd.Flags().StringVar(&file, "file", "", "repo-relative (or absolute) path to look up")
+	cmd.Flags().BoolVar(&list, "list", false, "list every mined lesson with config-tuning syntax")
 	cmd.Flags().BoolVar(&hookMode, "hook", false,
 		"read a PreToolUse JSON payload from stdin and emit lessons as additionalContext")
 
 	return cmd
+}
+
+// runLessonsList prints the full ledger of mined lessons.
+func runLessonsList(cmd *cobra.Command, opts *options) error {
+	st, root, err := openIndex(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	lessons, err := st.AllLessons(0)
+	if err != nil {
+		return err
+	}
+
+	cfg, err := reviews.LoadConfig(root)
+	if err != nil {
+		cfg = reviews.DefaultConfig()
+	}
+
+	report.PrintLessonLedger(cmd.OutOrStdout(), lessons, cfg)
+
+	return nil
 }
 
 // runLessonsHook implements the PreToolUse path. It must never fail the

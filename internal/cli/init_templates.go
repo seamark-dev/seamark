@@ -1,0 +1,73 @@
+package cli
+
+// Starter files written by `seamark init`. They ship in WARN mode and
+// with everything commented, so init never changes enforcement behaviour
+// on its own — the user opts in by editing.
+
+const starterPolicy = `# Seamark gate policy (RFC-001 §5.5). Evaluated before an agent runs a
+# command and over a diff's blast radius. Ships in WARN mode: verdicts
+# are reported but nothing blocks until you switch to enforce.
+#
+# Rules are CEL expressions over:
+#   effect   list of tags the command classifies to ("infra:mutate" …)
+#   command  {name, argv, raw, is_push, is_force_push, target_branch, dynamic}
+#   env      {is_prod, is_dev, detected: {VAR: value…}}
+#   diff     {files, effects}   (populated by ` + "`seamark check`" + `)
+
+mode: warn   # switch to "enforce" to make deny/approval verdicts exit 2
+
+environment:
+  detect: [AWS_PROFILE, KUBECONFIG, DATABASE_URL, ENV, ENVIRONMENT, DEPLOY_ENV]
+  prod_markers: [prod, production, live]
+
+deny:
+  - id: no-prod-infra-mutation
+    when: 'effect.contains("infra:mutate") && env.is_prod'
+    message: infrastructure mutation against a production environment requires a human
+
+  - id: no-force-push-default-branch
+    when: 'command.is_force_push && command.target_branch in ["main", "master"]'
+    message: force-push to the default branch
+
+require_approval:
+  - id: prod-db-write
+    when: 'effect.contains("db:write") && env.is_prod'
+    message: database write against a production environment
+
+  - id: dynamic-argv0-prod
+    when: 'command.dynamic && env.is_prod'
+    message: command name comes from a variable — effects cannot be classified
+
+  - id: diff-reaches-infra
+    when: 'diff.effects.contains("infra:mutate")'
+    message: this change can reach infrastructure mutation
+`
+
+const starterLessons = `# Tune how mined review lessons surface (RFC-001 §5.4). Committed and
+# reviewed like policy.yaml — applied at surface time, so edits take
+# effect immediately without re-mining. An absent file means "defaults":
+# nothing muted, nothing pinned, threshold 2.
+#
+# Lessons come from ` + "`seamark index --reviews`" + ` (PR review comments) and
+# appear in ` + "`why <file>`" + `, ` + "`orient`" + `, and the PreToolUse edit hook.
+# Run ` + "`seamark lessons --list`" + ` to see every mined lesson and the exact
+# rule/region values to paste below.
+
+# Minimum recurrences before a mined lesson surfaces. A single comment is
+# noise; a pattern needs repetition.
+threshold: 2
+
+# Hush noise. Match by rule code and/or region (a file or directory
+# prefix). An entry with both narrows to that rule in that region.
+mute:
+  # - rule: F541                 # f-strings-without-placeholders, don't care
+  # - region: alembic/versions   # generated migrations — ignore lessons here
+
+# Your exceptions that must NOT be ignored: surfaced always, for their
+# region, even if mining found them once or never. The note is shown to
+# the agent verbatim.
+pin:
+  # - rule: RUF001
+  #   region: scripts
+  #   note: "Keep scripts ASCII — smart quotes from chat have bitten us"
+`

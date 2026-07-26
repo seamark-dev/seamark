@@ -303,6 +303,29 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
       instead of aborting the report (and MCP). (5) dead MaxComments knob
       removed. (6) hook injection framed as untrusted quoted data
       (defense-in-depth vs NL injection; escapes/protocol already safe).
+- [x] Onboarding + config ergonomics (2026-07-26): `seamark init`
+      scaffolds `.seamark/{policy,lessons}.yaml` starters (warn-mode,
+      never clobbering), adds the `.gitignore` carve-outs, and merges the
+      gate + lessons PreToolUse hooks into `.claude/settings.json` —
+      preserving existing hooks/settings, idempotent, resolved
+      `os.Executable()` path, `--print` dry-run. `seamark lessons --list`
+      is the config ledger: every mined lesson (incl. below-threshold
+      one-offs) with the rule/region to paste and a `(muted)` flag for
+      what's already hidden. (Deliberately NOT a YAML-mutating command —
+      the config stays hand-owned and reviewable, like policy.yaml.)
+      Review round fixed before commit: hook detection was a substring
+      match that could clobber a user command containing the marker (and
+      mis-place seamark's hook onto the wrong matcher) → now a suffix
+      match with the joining space; binary path shell-quoted (spaced
+      install paths); a present-but-wrong-typed hooks field errors instead
+      of silently overwriting user data; starter policy gained the
+      dynamic-argv0-prod rule the embedded default has, and is now
+      regression-tested through gate.LoadPolicy + EvalCommand.
+- [ ] Firing audit log (`.seamark/lessons-audit.jsonl`, append-only, one
+      line per hook injection) — the true gate-audit analog, for impact
+      measurement and decay (a lesson whose region is never edited is a
+      removal candidate). Pairs with the decay work below, not with
+      config-ease (the ledger covers that).
 - [ ] Tier 0 (zero-token promotion): N≥3 mechanical recurrences → a
       proposed PostToolUse `ruff check --select <codes>` on edited files,
       as a `.seamark/` diff for human review, never auto-enabled. The
@@ -329,7 +352,8 @@ cost tier, cheapest wins:
 ### v1.0
 
 - [ ] `seamark orient` markdown digest + MCP resource
-- [ ] One-line install; agent auto-detect
+- [x] One-command setup: `seamark init` wires config + agent hooks
+- [ ] One-line install (prebuilt binaries); agent auto-detect
 - [ ] Audit log surfaced
 
 ## Current architecture (as built)

@@ -219,6 +219,32 @@ func TestLessonsHook(t *testing.T) {
 	assert.Empty(t, strings.TrimSpace(out))
 }
 
+func TestLessonsList(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// A below-threshold one-off must still appear in the ledger (it's the
+	// raw material for deciding what to pin), unlike why/orient.
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.ReplaceLessons([]model.Lesson{
+		{ClusterKey: "scripts\x00E702", Region: "scripts", Reviewer: "coderabbit",
+			Symptom: "E702", Occurrences: 9, LastTS: 2},
+		{ClusterKey: "a.go\x00RUF001", Region: "a.go", Reviewer: "coderabbit",
+			Symptom: "RUF001", Occurrences: 1, LastTS: 1},
+	}))
+	require.NoError(t, st.Close())
+
+	out, err := run(t, "-C", root, "lessons", "--list")
+	require.NoError(t, err)
+	assert.Contains(t, out, "2 total")
+	assert.Contains(t, out, "E702")
+	assert.Contains(t, out, "RUF001", "one-offs appear in the ledger")
+	assert.Contains(t, out, ".seamark/lessons.yaml", "shows tuning syntax")
+}
+
 // seedLesson writes one lesson row directly, so hook tests don't need a
 // live GitHub source.
 func seedLesson(t *testing.T, root, region, symptom string, occ int) {

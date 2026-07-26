@@ -871,6 +871,29 @@ func (s *Store) LessonsForFile(file string, minOccur, limit int) ([]model.Lesson
 	return scanLessons(rows)
 }
 
+// AllLessons returns every mined lesson repo-wide, strongest first —
+// including the one-offs that TopLessons filters out. It is the ledger
+// `seamark lessons --list` shows so a user can decide what to mute or
+// pin. limit <= 0 means no cap.
+func (s *Store) AllLessons(limit int) ([]model.Lesson, error) {
+	q := `SELECT ` + lessonCols + ` FROM lesson
+	      ORDER BY occurrences DESC, last_ts DESC, region`
+
+	args := []any{}
+
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return scanLessons(rows)
+}
+
 // TopLessons returns the strongest recurring review patterns repo-wide.
 func (s *Store) TopLessons(minOccur, limit int) ([]model.Lesson, error) {
 	if limit <= 0 {

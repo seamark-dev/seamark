@@ -236,6 +236,43 @@ func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson) error
 	return nil
 }
 
+// PrintLessonLedger lists every mined lesson — the raw material for
+// tuning .seamark/lessons.yaml. Below-threshold one-offs are shown too
+// (they are exactly what a user might want to mute or pin), each marked
+// if the current config already hides it, followed by copy-paste config
+// syntax.
+func PrintLessonLedger(w io.Writer, lessons []model.Lesson, cfg *reviews.Config) {
+	if len(lessons) == 0 {
+		fmt.Fprintln(w, "no review lessons yet — run `seamark index --reviews` "+
+			"(needs gh authenticated and a github.com remote)")
+
+		return
+	}
+
+	fmt.Fprintf(w, "review lessons (all mined, strongest first) — %d total\n\n", len(lessons))
+
+	for _, l := range lessons {
+		marker := ""
+		if cfg.Muted(l) {
+			marker = "  (muted)"
+		}
+
+		fmt.Fprintf(w, "  ×%-4d %-28s %-26s [%s]%s\n",
+			l.Occurrences, render.Truncate(render.Sanitize(l.Symptom), 28),
+			render.Sanitize(l.Region), render.Sanitize(l.Reviewer), marker)
+	}
+
+	fmt.Fprint(w, `
+Tune what surfaces in .seamark/lessons.yaml (applied without re-mining):
+  mute:                   # hide noise
+    - rule: <CODE>        #   a code everywhere
+    - region: <path>      #   or a whole tree
+  pin:                    # never ignore — surfaces always, even a one-off
+    - rule: <CODE>
+      region: <path>
+`)
+}
+
 // printLessons renders clustered review feedback. Symptom text comes
 // from comment bodies (and pinned config notes) — untrusted — so it is
 // sanitized and truncated. A pinned lesson shows "pinned", not a count.
@@ -248,7 +285,7 @@ func printLessons(w io.Writer, lessons []model.Lesson) {
 
 		fmt.Fprintf(w, "  %-34s %-7s %s [%s]\n",
 			render.Truncate(render.Sanitize(l.Symptom), 34), count,
-			render.Sanitize(l.Region), l.Reviewer)
+			render.Sanitize(l.Region), render.Sanitize(l.Reviewer))
 	}
 }
 

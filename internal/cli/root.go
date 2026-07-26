@@ -39,9 +39,9 @@ weird, and (soon) which paths can reach production.`,
 	root.PersistentFlags().StringVar(&opts.dbPath, "db", "",
 		"index database path (default <workspace>/.seamark/index.db)")
 
-	root.AddCommand(newIndexCmd(opts), newWhyCmd(opts), newOrientCmd(opts),
-		newLessonsCmd(opts), newLSPCmd(opts), newGateCmd(opts), newCheckCmd(opts),
-		newMCPCmd(opts), newVersionCmd())
+	root.AddCommand(newInitCmd(opts), newIndexCmd(opts), newWhyCmd(opts),
+		newOrientCmd(opts), newLessonsCmd(opts), newLSPCmd(opts), newGateCmd(opts),
+		newCheckCmd(opts), newMCPCmd(opts), newVersionCmd())
 
 	return root
 }
