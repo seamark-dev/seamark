@@ -102,9 +102,17 @@ calls (8)  — 3 resolved by name match only
   ...
 
 usually changed with  (empirical, lift > 1 means beyond chance)
+  internal/effects/effects.go   6/58 commits   lift 4.1   · mostly MatchCommand, Load
 recent decisions
   2026-07-26  ...  Implement Python parser
 ```
+
+The `usually changed with` lines carry **function grain**: for each
+partner, `· mostly …` names the functions that git's hunk headers show
+were actually touched in the commits shared with this file — a factual
+report of what moved together, not a statistical claim (function-level
+*lift* would be noise; a function accumulates history ~10× slower than
+its file).
 
 Read it top to bottom: this function *can ultimately spawn a process*
 (one hop away — it calls the push detector, which shells out to git to

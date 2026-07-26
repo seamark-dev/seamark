@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/reviews"
@@ -149,9 +150,26 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 
 	if len(partners) > 0 {
 		fmt.Fprintf(w, "\nusually changed with  (empirical, lift > 1 means beyond chance)\n")
+
+		// Function grain (RFC-001 §2.5): name the functions of each partner
+		// that the shared commits actually touched — a factual report from
+		// git's hunk headers, not a statistical claim. Best-effort: skipped
+		// when there is no git repo or root.
+		root, _ := st.GetMeta("repo_root")
+		var shared map[string]bool
+		if root != "" {
+			shared = history.FileCommits(root, file)
+		}
+
 		for _, p := range partners {
-			fmt.Fprintf(w, "  %-50s %2d/%d commits   lift %.1f\n",
+			fmt.Fprintf(w, "  %-50s %2d/%d commits   lift %.1f",
 				p.File, p.Together, p.Total, p.Lift)
+
+			if funcs := history.PartnerFunctions(root, p.File, shared, 3); len(funcs) > 0 {
+				fmt.Fprintf(w, "   · mostly %s", render.Sanitize(strings.Join(funcs, ", ")))
+			}
+
+			fmt.Fprintln(w)
 		}
 	}
 

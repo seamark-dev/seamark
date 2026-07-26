@@ -117,11 +117,34 @@ function×function lift would be noise at any honest threshold. But git's
 hunk headers name the enclosing function (`@@ … @@ def foo`), which makes
 factual function-grain reporting cheap:
 
-- [ ] Hover/`why` enrichment: for each co-change partner, mine the hunk
-      headers of the shared commits only and list the partner functions
-      they touched — "`engine.py` — 12/399, lift 4.8 · mostly
-      `recompute_state`, `apply_overlay`". A report of what happened, not
-      a statistical claim (§3: every artifact is falsifiable).
+- [x] `why` enrichment (2026-07-26): for each co-change partner, name the
+      functions the shared commits touched — "`journals.py` 10/399, lift
+      7.1 · mostly `get_metrics_for`, `update_trade_for`". Query-time
+      (`internal/history/funcgrain.go`): `FileCommits` gets the queried
+      file's commit set, `PartnerFunctions` reads the partner's diff
+      history once (`git log -U0 -p`, ~40ms/file) and tallies the
+      hunk-header function context of the shared commits, distilling each
+      to a bare identifier (`class Foo`/`func (x) Run`/`def bar` → the
+      name). Measured cost: +0.49s worst case on a 10-partner hot file.
+      Best-effort: silently omitted for non-git repos and partners git
+      can't resolve a funcname for (generated files, non-code). Grain is
+      git's default (enclosing top-level construct / method) — method
+      precision via per-language diff drivers is the refinement below.
+      Review round fixed before commit: the per-partner `git log -U0 -p`
+      buffered a file's whole diff history via cmd.Output() (a
+      package-lock.json / generated file = hundreds of MB on the why/MCP
+      path) — now a streaming reader (O(one line)), a commit-count cap
+      (5000), and a 5s timeout; funcName regex anchored to line start so
+      prose containing a keyword isn't mis-read. Known residual (documented
+      in code): the shared-commit set is the full co-change window, so a
+      bulk commit dropped from lift (>30 files) that touched both files can
+      still contribute a name — minor over-count.
+- [ ] Better funcname grain via git built-in diff drivers (`diff=python`
+      etc. through an injected attr-source) for consistent method-level
+      names, not just git's column-0 default.
+- [ ] Align the function-grain commit set exactly to the co-change window
+      (same MaxFilesPerCommit bulk filter), so the "mostly" names never
+      include a commit the lift number excluded.
 - [ ] Populate `decision_link` at symbol grain during indexing (schema
       already carries it): map new commits' hunks onto current symbol
       spans so real function-level statistics accumulate as history grows.
