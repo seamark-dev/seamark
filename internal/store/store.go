@@ -213,6 +213,92 @@ func (t *Tx) InsertDecision(d *model.Decision) error {
 	return nil
 }
 
+// CacheEntry is one file's cached parse output.
+type CacheEntry struct {
+	Hash string
+	Data []byte
+}
+
+// LoadParseCache returns the whole per-file parse cache. Callers version-
+// check separately (via meta) and tolerate a decode failure per entry, so
+// this simply hands back the stored blobs.
+func (s *Store) LoadParseCache() (map[string]CacheEntry, error) {
+	rows, err := s.db.Query(`SELECT file, hash, data FROM parse_cache`)
+	if err != nil {
+		return nil, err
+	}
+
+	// Close error deliberately dropped: iteration failures surface via rows.Err().
+	defer func() { _ = rows.Close() }()
+
+	out := map[string]CacheEntry{}
+
+	for rows.Next() {
+		var file string
+		var e CacheEntry
+
+		if err := rows.Scan(&file, &e.Hash, &e.Data); err != nil {
+			return nil, err
+		}
+
+		out[file] = e
+	}
+
+	return out, rows.Err()
+}
+
+// UpsertParseCache stores one file's parse output.
+func (t *Tx) UpsertParseCache(file, hash string, data []byte) error {
+	_, err := t.tx.Exec(
+		`INSERT INTO parse_cache (file, hash, data) VALUES (?, ?, ?)
+		 ON CONFLICT (file) DO UPDATE SET hash = excluded.hash, data = excluded.data`,
+		file, hash, data,
+	)
+	if err != nil {
+		return fmt.Errorf("store: cache %s: %w", file, err)
+	}
+
+	return nil
+}
+
+// PruneParseCache drops cache rows for files no longer in the workspace,
+// so a deleted file's stale parse output cannot linger.
+func (t *Tx) PruneParseCache(keep map[string]bool) error {
+	rows, err := t.tx.Query(`SELECT file FROM parse_cache`)
+	if err != nil {
+		return err
+	}
+
+	var stale []string
+
+	for rows.Next() {
+		var file string
+		if err := rows.Scan(&file); err != nil {
+			_ = rows.Close()
+			return err
+		}
+
+		if !keep[file] {
+			stale = append(stale, file)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+
+	_ = rows.Close()
+
+	for _, file := range stale {
+		if _, err := t.tx.Exec(`DELETE FROM parse_cache WHERE file = ?`, file); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // InsertLesson stores one clustered review lesson. The cluster_key is
 // unique; a repeated key accumulates occurrences and keeps the most
 // recent example, so callers may insert per-cluster without pre-merging.

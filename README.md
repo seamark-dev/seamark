@@ -382,22 +382,32 @@ current — and reacts according to what a stale answer would cost:
 | `seamark why` | Answers immediately, with a stderr note when the workspace changed since the last index |
 | `seamark index` | No-ops in well under a second when nothing changed (`--force` rebuilds) — running it "just in case" is free |
 
-A full rebuild is fast enough to be the current strategy: ~3.5s for an
-831-file, three-language monorepo; ~150ms for a small repo. The
-fingerprint check itself is ~30ms.
+When the workspace *has* changed, a **content-hashed per-file parse
+cache** means only the files that actually changed are re-parsed — the
+rest are served from cache. Tree-sitter parsing is ~60% of index time, so
+this is the big lever: on the 831-file monorepo, a one-file edit
+reindexes in **~1.3s instead of ~3.2s**, and the result is byte-identical
+to a full rebuild (resolution and effect propagation always run globally
+— they are nearly free, and global exactness is what makes edges
+trustworthy). `seamark index` reports it:
 
-### Planned: incremental indexing
+```text
+files    832 seen, 703 parsed — 1 reparsed, 702 from cache
+```
 
-Measured breakdown of that 3.5s: history mining 0.6s, parse + graph +
-SQLite ~2.9s. The roadmap attacks it in order of value
+A first index (or `--force`) is a full parse: ~3.2s for the monorepo,
+~150ms for a small repo. The fingerprint check itself is ~30ms.
+
+### Planned: further incremental work
+
+Measured breakdown of a full 3.2s index: parse 1.8s (now cached),
+history mining 0.7s, SQLite write 0.4s, resolution 0.003s. With parse
+cached, history and write are the remaining costs. The roadmap
 (see [docs/PLAN.md](docs/PLAN.md)):
 
-1. **Incremental inputs, exact outputs** — a content-hashed per-file
-   parse cache (re-parse only changed files) and a git-log watermark
-   (mine only commits since the last run). Resolution and effect
-   propagation stay full-fidelity: they are the cheap part, and global
-   exactness is what makes edges trustworthy. Expected result: a
-   one-file change reindexes in well under a second.
+1. **History watermark** — mine only commits since the last run
+   (`git log <last-sha>..HEAD`) with counter-based co-change updates,
+   removing the 0.7s.
 2. **`seamarkd` daemon** — fsnotify watching with debounced incremental
    refresh and delta writes; the LSP becomes a thin client and freshness
    becomes keystroke-adjacent instead of save-adjacent.

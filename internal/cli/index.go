@@ -82,6 +82,10 @@ CLI (gh) authenticated and a github.com remote.`,
 				fmt.Fprintf(out, " (%d errors)", sum.ParseErrors)
 			}
 
+			if cached := sum.FilesParsed - sum.FilesReparsed; cached > 0 {
+				fmt.Fprintf(out, " — %d reparsed, %d from cache", sum.FilesReparsed, cached)
+			}
+
 			fmt.Fprintln(out)
 			fmt.Fprintf(out, "  symbols  %d\n", sum.Stats.Symbols)
 			fmt.Fprintf(out, "  edges    %d\n", sum.Stats.Edges)

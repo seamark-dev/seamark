@@ -4,7 +4,9 @@
 package index
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -47,11 +49,15 @@ type Summary struct {
 	DBPath string
 	// Skipped is true when the workspace fingerprint matched the index
 	// and nothing was rebuilt.
-	Skipped      bool
-	FilesSeen    int // files listed in the workspace
-	FilesParsed  int // files a language extractor handled
-	ParseErrors  int
-	HistoryMined bool
+	Skipped     bool
+	FilesSeen   int // files listed in the workspace
+	FilesParsed int // files a language extractor handled
+	// FilesReparsed counts files actually run through tree-sitter this
+	// pass; the rest were served from the parse cache. Equals FilesParsed
+	// on a --force or first index.
+	FilesReparsed int
+	ParseErrors   int
+	HistoryMined  bool
 	// HistorySkipNote says why the history layer is absent when
 	// HistoryMined is false: "not a git repository" and "mining failed"
 	// are different situations and must not be conflated in output.
@@ -93,6 +99,17 @@ func Run(opts Options) (*Summary, error) {
 		return nil, err
 	}
 
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = st.Close() }() // read results are already committed
+
+	// Parse cache: an unchanged file reuses its stored FileResult instead
+	// of re-running tree-sitter (~60% of index time). --force ignores it;
+	// a version bump or a decode failure falls back to a fresh parse.
+	cache := loadParseCache(st, opts.Force, logf)
+
 	registry, err := parse.NewRegistry()
 	if err != nil {
 		return nil, err
@@ -103,6 +120,9 @@ func Run(opts Options) (*Summary, error) {
 	sum := &Summary{Root: root, DBPath: dbPath, FilesSeen: len(files)}
 
 	var results []*parse.FileResult
+
+	upserts := map[string]store.CacheEntry{} // reparsed files to persist
+	keep := map[string]bool{}                // files still present (prune the rest)
 
 	for _, rel := range files {
 		ex := registry.ForPath(rel)
@@ -117,6 +137,19 @@ func Run(opts Options) (*Summary, error) {
 			continue
 		}
 
+		keep[rel] = true
+		hash := hashBytes(src)
+
+		// Reuse the cached parse when the bytes are identical.
+		if ent, ok := cache[rel]; ok && ent.Hash == hash {
+			if res, err := decodeResult(ent.Data); err == nil {
+				results = append(results, res)
+				sum.FilesParsed++
+				continue
+			}
+			// A corrupt or incompatible blob just means reparse below.
+		}
+
 		res, err := ex.Extract(rel, src)
 		if err != nil {
 			logf("warn: parse %s: %v", rel, err)
@@ -126,6 +159,11 @@ func Run(opts Options) (*Summary, error) {
 
 		results = append(results, res)
 		sum.FilesParsed++
+		sum.FilesReparsed++
+
+		if data, err := encodeResult(res); err == nil {
+			upserts[rel] = store.CacheEntry{Hash: hash, Data: data}
+		}
 	}
 
 	// History is best-effort: a non-git workspace still gets a structure graph.
@@ -146,12 +184,6 @@ func Run(opts Options) (*Summary, error) {
 
 		sum.HistorySkipNote = "not a git repository"
 	}
-
-	st, err := store.Open(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = st.Close() }() // read results are already committed
 
 	catalog, err := effects.Load(root)
 	if err != nil {
@@ -177,17 +209,26 @@ func Run(opts Options) (*Summary, error) {
 			}
 		}
 
-		return nil
+		// Persist the parse cache in the same transaction as the graph, so
+		// the two never disagree about which file versions were indexed.
+		for rel, ent := range upserts {
+			if err := tx.UpsertParseCache(rel, ent.Hash, ent.Data); err != nil {
+				return err
+			}
+		}
+
+		return tx.PruneParseCache(keep)
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	for k, v := range map[string]string{
-		"repo_root":     root,
-		"indexed_at":    fmt.Sprint(time.Now().Unix()),
-		"indexed_state": WorkspaceState(root),
-		"history_mined": fmt.Sprint(sum.HistoryMined),
+		"repo_root":           root,
+		"indexed_at":          fmt.Sprint(time.Now().Unix()),
+		"indexed_state":       WorkspaceState(root),
+		"history_mined":       fmt.Sprint(sum.HistoryMined),
+		"parse_cache_version": parseCacheVersion,
 	} {
 		if err := st.SetMeta(k, v); err != nil {
 			return nil, err
@@ -201,6 +242,66 @@ func Run(opts Options) (*Summary, error) {
 	sum.Duration = time.Since(start)
 
 	return sum, nil
+}
+
+// parseCacheVersion guards the on-disk parse cache. Bump it whenever the
+// extractors or the FileResult layout change in a way that makes old
+// cached blobs wrong (a decode failure already forces a reparse; this
+// skips loading a large stale cache in the first place).
+const parseCacheVersion = "1"
+
+// loadParseCache returns the stored per-file parse cache, or an empty map
+// when forced, version-stale, or unreadable — every one of which just
+// means "reparse everything", never a failure.
+func loadParseCache(st *store.Store, force bool, logf func(string, ...any)) map[string]store.CacheEntry {
+	empty := map[string]store.CacheEntry{}
+
+	if force {
+		return empty
+	}
+
+	if v, err := st.GetMeta("parse_cache_version"); err != nil || v != parseCacheVersion {
+		return empty
+	}
+
+	cache, err := st.LoadParseCache()
+	if err != nil {
+		logf("warn: parse cache unreadable, reparsing: %v", err)
+
+		return empty
+	}
+
+	return cache
+}
+
+// hashBytes returns the hex sha256 of a file's bytes — the parse cache key.
+func hashBytes(b []byte) string {
+	sum := sha256.Sum256(b)
+
+	return hex.EncodeToString(sum[:])
+}
+
+// encodeResult / decodeResult (de)serialize a FileResult for the cache.
+// gob is tolerant of added/removed struct fields, so minor model changes
+// degrade to a reparse rather than corruption.
+func encodeResult(r *parse.FileResult) ([]byte, error) {
+	var b bytes.Buffer
+
+	if err := gob.NewEncoder(&b).Encode(r); err != nil {
+		return nil, err
+	}
+
+	return b.Bytes(), nil
+}
+
+func decodeResult(data []byte) (*parse.FileResult, error) {
+	var r parse.FileResult
+
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&r); err != nil {
+		return nil, err
+	}
+
+	return &r, nil
 }
 
 // RefreshReviews mines pull-request review comments for the repo at root

@@ -1,9 +1,12 @@
 package index
 
 import (
+	"database/sql"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -860,4 +863,184 @@ func TestRefreshReviewsKeepsLessonsWhenSourceUnavailable(t *testing.T) {
 	kept, err := st.TopLessons(1, 10)
 	require.NoError(t, err)
 	assert.Len(t, kept, 1, "a failed fetch must not wipe stored lessons")
+}
+
+func TestParseCacheReusesUnchanged(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	first, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.Equal(t, first.FilesParsed, first.FilesReparsed, "cold index reparses every file")
+	require.NotZero(t, first.FilesParsed)
+
+	// A non-git fixture has no fingerprint fast-path, so this Run really
+	// executes the parse loop — and must serve every file from cache.
+	second, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.Equal(t, first.FilesParsed, second.FilesParsed)
+	assert.Zero(t, second.FilesReparsed, "unchanged files come from the cache")
+	assert.Equal(t, first.Stats, second.Stats, "cached result identical to fresh")
+}
+
+func TestParseCacheReparsesChangedAndMatchesFull(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	_, err := Run(Options{Root: root})
+	require.NoError(t, err)
+
+	// Change one file's content; a second file stays byte-identical.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"),
+		[]byte("package main\n\nfunc main() {}\n\nfunc added() {}\n"), 0o644))
+
+	incr, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.Equal(t, 1, incr.FilesReparsed, "only the changed file reparses")
+
+	// The incremental graph MUST equal a from-scratch rebuild of the same
+	// state — this is the invariant the whole feature rests on.
+	full, err := Run(Options{Root: root, Force: true})
+	require.NoError(t, err)
+	assert.Equal(t, full.FilesParsed, full.FilesReparsed, "--force reparses all")
+	assert.Equal(t, full.Stats, incr.Stats, "incremental == full rebuild")
+}
+
+func TestParseCachePrunesDeletedFile(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	_, err := Run(Options{Root: root})
+	require.NoError(t, err)
+
+	// Delete a source file and reindex: its symbols must vanish and its
+	// cache row must be pruned (not linger to reappear).
+	require.NoError(t, os.Remove(filepath.Join(root, "internal", "util", "util.go")))
+
+	_, st := runIndex(t, root)
+
+	syms, err := st.FindSymbols("Greet", 5)
+	require.NoError(t, err)
+	assert.Empty(t, syms, "a deleted file's symbols must not survive")
+}
+
+func TestParseCacheVersionBumpReparses(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	_, err := Run(Options{Root: root})
+	require.NoError(t, err)
+
+	// Simulate a seamark upgrade: a stale cache version forces a reparse.
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.SetMeta("parse_cache_version", "stale"))
+	require.NoError(t, st.Close())
+
+	again, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.Equal(t, again.FilesParsed, again.FilesReparsed,
+		"a version mismatch reparses everything")
+}
+
+// graphDump renders the full graph — symbols with spans/sig/doc-hash,
+// edges with their derivation origin, and effect tags with depth — into a
+// stable, id-independent string (keyed by FQN, not autoincrement id) so
+// two indexes can be compared for byte-identical CONTENT, not just counts.
+func graphDump(t *testing.T, dbPath string) string {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var b strings.Builder
+
+	dumpRows(t, &b, db, "SYM",
+		`SELECT fqn, kind, file, start_line, start_col, end_line, end_col, sig, doc_hash
+		 FROM symbol ORDER BY fqn, start_line, kind`)
+	dumpRows(t, &b, db, "EDGE",
+		`SELECT s.fqn, d.fqn, e.kind, e.origin
+		 FROM edge e JOIN symbol s ON s.id = e.src JOIN symbol d ON d.id = e.dst
+		 ORDER BY 1, 2, 3, 4`)
+	dumpRows(t, &b, db, "EFFECT",
+		`SELECT s.fqn, ef.tag, ef.origin, ef.depth
+		 FROM effect ef JOIN symbol s ON s.id = ef.symbol_id
+		 ORDER BY 1, 2, 3`)
+
+	return b.String()
+}
+
+func dumpRows(t *testing.T, b *strings.Builder, db *sql.DB, tag, query string) {
+	t.Helper()
+
+	rows, err := db.Query(query)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+
+	cols, err := rows.Columns()
+	require.NoError(t, err)
+
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+
+		require.NoError(t, rows.Scan(ptrs...))
+		fmt.Fprintf(b, "%s %v\n", tag, vals)
+	}
+
+	require.NoError(t, rows.Err())
+}
+
+// TestParseCacheGraphContentMatchesFull is the strong form of the core
+// invariant: a cached (incremental) index must reconstruct a graph
+// IDENTICAL in content — spans, signatures, edge origins, effect depths —
+// to a from-scratch rebuild, not merely equal in row counts. It would
+// catch a gob field silently dropped, a span mangled, or an edge origin
+// downgraded, all of which leave the counts untouched.
+func TestParseCacheGraphContentMatchesFull(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	_, err := Run(Options{Root: root}) // cold: populate cache
+	require.NoError(t, err)
+
+	// Change one file; the others must be served from cache on the next run.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "main.go"),
+		[]byte("package main\n\nimport \"example.com/app/internal/util\"\n\nfunc main() { run() }\n\nfunc run() { util.Greet(\"hi\") }\n"), 0o644))
+
+	incr, err := Run(Options{Root: root}) // incremental (cache active)
+	require.NoError(t, err)
+	require.Less(t, incr.FilesReparsed, incr.FilesParsed, "some files must come from cache")
+
+	incrDump := graphDump(t, store.DefaultPath(root))
+
+	_, err = Run(Options{Root: root, Force: true}) // full rebuild of the same state
+	require.NoError(t, err)
+
+	fullDump := graphDump(t, store.DefaultPath(root))
+
+	assert.Equal(t, fullDump, incrDump,
+		"the cached graph must be identical in content to a full rebuild, not just in counts")
+}
+
+func TestForceRepopulatesCacheForNextRun(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	_, err := Run(Options{Root: root})
+	require.NoError(t, err)
+
+	forced, err := Run(Options{Root: root, Force: true})
+	require.NoError(t, err)
+	assert.Equal(t, forced.FilesParsed, forced.FilesReparsed, "--force reparses all")
+
+	// …but it must leave a fresh cache behind, so the NEXT non-force run
+	// benefits rather than reparsing everything again.
+	next, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.Zero(t, next.FilesReparsed, "--force must repopulate the cache")
 }

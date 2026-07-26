@@ -79,6 +79,17 @@ CREATE TABLE IF NOT EXISTS decision_file (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS decision_file_file ON decision_file (file);
 
+-- incremental indexing cache (M-freshness L1) --------------------------
+-- Per-file parse output, keyed by content hash: an unchanged file reuses
+-- its cached FileResult instead of re-running tree-sitter (the dominant
+-- cost). Survives Rebuild (it is a cache, not derived graph state); a
+-- decode failure or version bump simply forces a reparse.
+CREATE TABLE IF NOT EXISTS parse_cache (
+    file TEXT PRIMARY KEY,
+    hash TEXT NOT NULL,   -- sha256 hex of the file's bytes
+    data BLOB NOT NULL    -- gob-encoded parse.FileResult
+) WITHOUT ROWID;
+
 -- effects (populated in M4) --------------------------------------------
 
 CREATE TABLE IF NOT EXISTS effect (

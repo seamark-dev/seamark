@@ -204,12 +204,27 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
       warns when stale, `check` self-repairs, `index` no-ops in <1s when
       the workspace is unchanged (`--force` overrides); LSP no-change
       saves become free
-- [ ] Level 1 — incremental inputs, exact outputs: per-file parse cache
-      (content-hashed FileResults; ~2.9s → only changed files) and a
-      history watermark (`git log <last-sha>..HEAD`, counter-based
-      co-change updates; needs windowed eviction via decision_file).
-      Resolution/propagation/write stay full — they are cheap and global
-      exactness is what makes edges trustworthy
+- [~] Level 1 — incremental inputs, exact outputs.
+  - [x] Per-file parse cache (2026-07-26): content-hashed FileResults
+        gob-blobbed in a `parse_cache` table, reused when a file's bytes
+        are unchanged; only changed files re-run tree-sitter. Persisted in
+        the Rebuild transaction (never disagrees with the graph), pruned
+        for deleted files, version-guarded (`parse_cache_version`, with a
+        decode-failure fallback), bypassed by `--force`. Measured on
+        trading-tools: a one-file edit reindexes in **1.3s vs 3.2s cold**,
+        result byte-identical to a full rebuild (asserted in tests via
+        Stats equality). Phase breakdown that drove this: parse 1.8s,
+        history 0.7s, write 0.4s, resolution 0.003s — parse was 60%.
+        Resolution/propagation/write stay full (cheap + global exactness).
+  - [ ] History watermark: `git log <last-sha>..HEAD`, counter-based
+        co-change updates (needs windowed eviction via decision_file) —
+        removes the remaining 0.7s.
+  - Deferred cache optimizations (from the review; correctness unaffected):
+    LoadParseCache pulls every blob into memory each run (~tens of MB at
+    10k files — load (file,hash) first, fetch data on a hash hit); and
+    PruneParseCache is SELECT-then-N-DELETEs (batch to a single
+    `DELETE WHERE file NOT IN kept`). Both are scale niceties, not needed
+    at current sizes.
 - [ ] Level 2 — `seamarkd` + fsnotify: debounced incremental refresh,
       delta DB writes, LSP as a thin client (RFC architecture)
 - [ ] Level 3 — incremental resolution with dependency tracking; only
