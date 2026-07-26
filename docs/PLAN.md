@@ -321,11 +321,15 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
       of silently overwriting user data; starter policy gained the
       dynamic-argv0-prod rule the embedded default has, and is now
       regression-tested through gate.LoadPolicy + EvalCommand.
-- [ ] Firing audit log (`.seamark/lessons-audit.jsonl`, append-only, one
-      line per hook injection) — the true gate-audit analog, for impact
-      measurement and decay (a lesson whose region is never edited is a
-      removal candidate). Pairs with the decay work below, not with
-      config-ease (the ledger covers that).
+- [x] Firing audit log (`.seamark/lessons-audit.jsonl`, append-only, one
+      line per hook injection: {ts, file, tool, fired[]}) — the true
+      gate-audit analog. Written best-effort by the edit hook (never fails
+      the edit), read by `seamark lessons --stats`, which ranks the
+      most-surfaced lessons and lists those that WOULD surface but never
+      have — the decay signal (a lesson whose region no edit touches is a
+      pruning candidate). Verified live on trading-tools. Aggregation
+      (reviews.Summarize) is pure + unit-tested; log rotation still
+      deferred (shared with the gate audit's unbounded-growth note).
 - [ ] Tier 0 (zero-token promotion): N≥3 mechanical recurrences → a
       proposed PostToolUse `ruff check --select <codes>` on edited files,
       as a `.seamark/` diff for human review, never auto-enabled. The

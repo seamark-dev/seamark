@@ -14,6 +14,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -243,6 +244,42 @@ func TestLessonsList(t *testing.T) {
 	assert.Contains(t, out, "E702")
 	assert.Contains(t, out, "RUF001", "one-offs appear in the ledger")
 	assert.Contains(t, out, ".seamark/lessons.yaml", "shows tuning syntax")
+}
+
+func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// One surfaced lesson on a.go's region, one on an unedited region.
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.ReplaceLessons([]model.Lesson{
+		{ClusterKey: "a.go\x00RUF001", Region: "a.go", Reviewer: "coderabbit",
+			Symptom: "RUF001", Occurrences: 4, LastTS: 1},
+		{ClusterKey: "other\x00E501", Region: "other", Reviewer: "coderabbit",
+			Symptom: "E501", Occurrences: 3, LastTS: 1},
+	}))
+	require.NoError(t, st.Close())
+
+	// Fire the hook on a.go — it must record a firing.
+	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` +
+		filepath.Join(root, "a.go") + `"}}`
+	_, _, err = runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+	require.Len(t, firings, 1, "the hook logged one firing")
+	assert.Equal(t, "Edit", firings[0].Tool)
+
+	// --stats surfaces the fired lesson and the never-fired decay candidate.
+	out, err := run(t, "-C", root, "lessons", "--stats")
+	require.NoError(t, err)
+	assert.Contains(t, out, "RUF001", "the fired lesson is surfaced")
+	assert.Contains(t, out, "never fired", "the unedited-region lesson is a decay candidate")
+	assert.Contains(t, out, "E501")
 }
 
 // seedLesson writes one lesson row directly, so hook tests don't need a

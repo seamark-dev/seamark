@@ -21,10 +21,11 @@ func newLessonsCmd(opts *options) *cobra.Command {
 		file     string
 		hookMode bool
 		list     bool
+		stats    bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "lessons [--file <path> | --list]",
+		Use:   "lessons [--file <path> | --list | --stats]",
 		Short: "Show the recurring review feedback mined from pull requests",
 		Long: `Prints the review lessons (mined by "index --reviews", tuned by
 .seamark/lessons.yaml) — the mistakes reviewers keep flagging.
@@ -32,6 +33,8 @@ func newLessonsCmd(opts *options) *cobra.Command {
   --file <path>  the lessons that apply to one file's area
   --list         every mined lesson repo-wide, with config syntax to
                  mute the noise or pin what must never be ignored
+  --stats        which lessons the edit hook actually surfaced to agents,
+                 and which would surface but never have (decay candidates)
   --hook         read a Claude Code PreToolUse payload from stdin and emit
                  the edited file's lessons as additionalContext
 
@@ -44,6 +47,8 @@ a file has no lessons.`,
 				return runLessonsHook(cmd, opts)
 			case list:
 				return runLessonsList(cmd, opts)
+			case stats:
+				return runLessonsStats(cmd, opts)
 			case strings.TrimSpace(file) != "":
 				st, root, err := openIndex(opts)
 				if err != nil {
@@ -65,6 +70,7 @@ a file has no lessons.`,
 
 	cmd.Flags().StringVar(&file, "file", "", "repo-relative (or absolute) path to look up")
 	cmd.Flags().BoolVar(&list, "list", false, "list every mined lesson with config-tuning syntax")
+	cmd.Flags().BoolVar(&stats, "stats", false, "summarize the firing log: what surfaced, what never fires")
 	cmd.Flags().BoolVar(&hookMode, "hook", false,
 		"read a PreToolUse JSON payload from stdin and emit lessons as additionalContext")
 
@@ -98,7 +104,7 @@ func runLessonsList(cmd *cobra.Command, opts *options) error {
 // tool it guards: any error (no index, unreadable payload) yields empty
 // output and exit 0, so a missing seamark index can't block edits.
 func runLessonsHook(cmd *cobra.Command, opts *options) error {
-	path, err := readHookFilePath(cmd.InOrStdin())
+	path, tool, err := readHookInput(cmd.InOrStdin())
 	if err != nil || path == "" {
 		return nil // nothing to say; never block the edit
 	}
@@ -121,7 +127,46 @@ func runLessonsHook(cmd *cobra.Command, opts *options) error {
 	out.HookSpecificOutput.HookEventName = "PreToolUse"
 	out.HookSpecificOutput.AdditionalContext = b.String()
 
-	return json.NewEncoder(cmd.OutOrStdout()).Encode(out)
+	// Emit the verdict FIRST so the edit's go-ahead never waits on the
+	// audit write; then record best-effort — a slow or failed append must
+	// neither delay nor block the edit.
+	err = json.NewEncoder(cmd.OutOrStdout()).Encode(out)
+
+	_ = reviews.RecordFiring(root, toRepoRel(root, path), tool, lessons)
+
+	return err
+}
+
+// runLessonsStats prints the firing-log summary: which lessons actually
+// reach agents, and which would surface but never have (decay signal).
+func runLessonsStats(cmd *cobra.Command, opts *options) error {
+	st, root, err := openIndex(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	firings, err := reviews.ReadFirings(root)
+	if err != nil {
+		return err
+	}
+
+	mined, err := st.AllLessons(0)
+	if err != nil {
+		return err
+	}
+
+	cfg, err := reviews.LoadConfig(root)
+	if err != nil {
+		cfg = reviews.DefaultConfig()
+	}
+
+	// The set that COULD fire: what the config surfaces repo-wide.
+	surfaced := cfg.Surface(mined, "")
+
+	report.PrintFiringSummary(cmd.OutOrStdout(), reviews.Summarize(firings, surfaced))
+
+	return nil
 }
 
 // hookOutput is the PreToolUse response shape: additionalContext is
@@ -133,25 +178,26 @@ type hookOutput struct {
 	} `json:"hookSpecificOutput"`
 }
 
-// readHookFilePath extracts tool_input.file_path from a PreToolUse
-// payload (Edit, Write, and MultiEdit all carry it).
-func readHookFilePath(r io.Reader) (string, error) {
+// readHookInput extracts the edited file path and tool name from a
+// PreToolUse payload (Edit, Write, and MultiEdit all carry file_path).
+func readHookInput(r io.Reader) (file, tool string, err error) {
 	data, err := io.ReadAll(io.LimitReader(r, 1<<20))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	var payload struct {
+		ToolName  string `json:"tool_name"`
 		ToolInput struct {
 			FilePath string `json:"file_path"`
 		} `json:"tool_input"`
 	}
 
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	return payload.ToolInput.FilePath, nil
+	return payload.ToolInput.FilePath, payload.ToolName, nil
 }
 
 // lessonsForFile normalizes path to repo-relative and returns the

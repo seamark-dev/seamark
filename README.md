@@ -213,6 +213,27 @@ review lessons (all mined, strongest first) — 436 total
   …
 ```
 
+### Is it working? `lessons --stats`
+
+The edit hook appends a line to `.seamark/lessons-audit.jsonl` each time
+it reminds an agent — the impact/decay counterpart to the gate's audit
+log. `seamark lessons --stats` turns that into which lessons actually
+reach agents, and which *would* surface but never have (a lesson whose
+region no edit touches is a pruning candidate):
+
+```text
+$ seamark lessons --stats
+lesson firings — 128 edits reminded across 24 files
+
+most surfaced
+  ×41  E702                 scripts          last 2026-07-26
+  ×18  RUF001               scripts          last 2026-07-26
+  …
+never fired — 7 lessons in regions no edit has touched (decay candidates)
+  E741                 tests
+  …
+```
+
 ## Editor integration
 
 `seamark lsp` is a secondary language server that runs *alongside* gopls,

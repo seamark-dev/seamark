@@ -236,6 +236,58 @@ func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson) error
 	return nil
 }
 
+// PrintFiringSummary renders the edit-hook firing log: how often lessons
+// actually reached an agent, and which would surface but never have — the
+// decay signal (a lesson whose region no edit touches is a pruning
+// candidate). All lesson text is untrusted, hence sanitized.
+func PrintFiringSummary(w io.Writer, s reviews.Summary) {
+	if s.Total == 0 {
+		fmt.Fprintln(w, "no lesson firings recorded yet — the edit hook logs each time it "+
+			"reminds an agent (wire it with `seamark init`)")
+
+		return
+	}
+
+	fmt.Fprintf(w, "lesson firings — %d edits reminded across %d files\n\n", s.Total, s.Files)
+
+	fmt.Fprintf(w, "most surfaced\n")
+
+	shown := s.Ranked
+	if len(shown) > 12 {
+		shown = shown[:12]
+	}
+
+	for _, f := range shown {
+		fmt.Fprintf(w, "  ×%-4d %-30s %-24s  last %s\n",
+			f.Count, render.Truncate(render.Sanitize(f.Symptom), 30),
+			render.Sanitize(f.Region), firingDate(f.LastTS))
+	}
+
+	if len(s.NeverFired) > 0 {
+		fmt.Fprintf(w, "\nnever fired — %d lessons in regions no edit has touched (decay candidates)\n",
+			len(s.NeverFired))
+
+		never := s.NeverFired
+		if len(never) > 12 {
+			never = never[:12]
+		}
+
+		for _, l := range never {
+			fmt.Fprintf(w, "  %-30s %s\n",
+				render.Truncate(render.Sanitize(l.Symptom), 30), render.Sanitize(l.Region))
+		}
+	}
+}
+
+// firingDate trims an RFC3339 timestamp to its date for compact display.
+func firingDate(ts string) string {
+	if len(ts) >= 10 {
+		return ts[:10]
+	}
+
+	return ts
+}
+
 // PrintLessonLedger lists every mined lesson — the raw material for
 // tuning .seamark/lessons.yaml. Below-threshold one-offs are shown too
 // (they are exactly what a user might want to mute or pin), each marked
