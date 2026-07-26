@@ -21,6 +21,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/parse"
+	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -200,6 +201,55 @@ func Run(opts Options) (*Summary, error) {
 	sum.Duration = time.Since(start)
 
 	return sum, nil
+}
+
+// RefreshReviews mines pull-request review comments for the repo at root
+// and replaces the stored lesson set (RFC-001 §5.4 capture). It is
+// best-effort and network-bound, deliberately separate from Run: reviews
+// change on a PR cadence, not on every local edit, so this is invoked on
+// demand (`seamark index --reviews`) rather than on every structural
+// reindex. An absent or unreachable source is a Note, not an error.
+func RefreshReviews(root, dbPath string, logf func(string, ...any)) (reviews.Result, error) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+
+	root, err := ResolveRoot(root)
+	if err != nil {
+		return reviews.Result{}, err
+	}
+
+	if dbPath == "" {
+		dbPath = store.DefaultPath(root)
+	}
+
+	res, err := reviews.Mine(root, reviews.Options{}, nil)
+	if err != nil {
+		return res, err
+	}
+
+	if res.Note != "" {
+		logf("note: %s", res.Note)
+	}
+
+	// Only swap the stored set when the fetch actually succeeded. A
+	// transient failure (offline, gh logged out, not a GitHub checkout)
+	// must never wipe previously-mined lessons.
+	if !res.Fetched {
+		return res, nil
+	}
+
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return res, err
+	}
+	defer func() { _ = st.Close() }()
+
+	if err := st.ReplaceLessons(res.Lessons); err != nil {
+		return res, err
+	}
+
+	return res, nil
 }
 
 // freshSummary returns a Skipped summary when the index at dbPath was

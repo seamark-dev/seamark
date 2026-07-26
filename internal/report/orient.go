@@ -25,6 +25,10 @@ func Orient(w io.Writer, st *store.Store, root string) error {
 	fmt.Fprintf(w, "  index  %d symbols · %d call/def edges · %d co-change pairs · %d decisions · %d effect-tagged symbols\n",
 		stats.Symbols, stats.Edges, stats.CoChanges, stats.Decisions, stats.Tagged)
 
+	if stats.Lessons > 0 {
+		fmt.Fprintf(w, "         %d review lessons (run `seamark index --reviews` to refresh)\n", stats.Lessons)
+	}
+
 	if err := moduleSection(w, st); err != nil {
 		return err
 	}
@@ -75,6 +79,23 @@ func Orient(w io.Writer, st *store.Store, root string) error {
 	if len(decisions) > 0 {
 		fmt.Fprintf(w, "\nrecent decisions\n")
 		printDecisions(w, decisions)
+	}
+
+	cfg := loadLessonConfig(w, root)
+
+	mined, err := st.TopLessons(1, 200)
+	if err != nil {
+		return err
+	}
+
+	lessons := cfg.Surface(mined, "") // repo-wide scope: every pin applies
+	if len(lessons) > 6 {
+		lessons = lessons[:6]
+	}
+
+	if len(lessons) > 0 {
+		fmt.Fprintf(w, "\nreviewers keep flagging  (recurring feedback — avoid the repeat)\n")
+		printLessons(w, lessons)
 	}
 
 	fmt.Fprintf(w, "\nnext: `why <symbol|file>` for any of the above; `change_set` before editing; `expand` for source\n")

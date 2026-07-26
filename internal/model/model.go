@@ -122,6 +122,22 @@ type Decision struct {
 	Files  []string // repo-relative files this decision touched
 }
 
+// Lesson is a cluster of recurring review feedback (M6): the same kind
+// of comment landing on the same region across pull requests. It is the
+// anti-repeat signal — "reviewers keep flagging X here" — surfaced to an
+// agent before it makes the mistake a fourth time.
+type Lesson struct {
+	ID          int64
+	ClusterKey  string // stable identity of (region, symptom); the upsert key
+	Region      string // file or directory the feedback lands in
+	Reviewer    string // coderabbit | copilot | bot | human | mixed
+	Symptom     string // a rule code (RUF001) or a normalized message
+	Fix         string // extracted suggestion, when the comment carried one
+	Occurrences int    // how many comments fall in this cluster
+	LastTS      int64  // most recent occurrence, unix seconds
+	ExampleURL  string // a representative comment, for provenance
+}
+
 // IsTestPath reports whether a file is test code, by each language's
 // naming convention. Shared by resolution (test doubles must not win
 // unique-name matches) and reporting (orientation shows the production

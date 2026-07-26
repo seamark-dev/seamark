@@ -119,6 +119,58 @@ history, the `usually changed with` section is where the surprises live.
 The history layer (co-change, decisions) is language-agnostic — it works
 on every file git tracks.
 
+## Learning from review history
+
+Agents repeat mistakes. The same linter code, the same "use timezone-aware
+datetimes," the same non-ASCII character keeps getting flagged in review
+— by CodeRabbit, by Copilot, by a human — and the correction never sticks
+past the session. `seamark index --reviews` mines your pull-request review
+comments and clusters the recurrences into **lessons**:
+
+```text
+$ seamark why scripts/rollover.py
+...
+reviewers keep flagging  (recurring across pull requests)
+  E702                     ×20  scripts [coderabbit]
+  RUF001                   ×6   scripts [coderabbit]
+  reportArgumentType       ×2   api/services [coderabbit]
+```
+
+A cited linter code clusters by directory (a habit, not one line); an
+un-coded comment clusters by file and issue title. Only patterns that
+recur (≥2) surface, region-scoped, so an agent editing `scripts/` sees
+what reviewers keep catching there *before* it makes the mistake again —
+through the same `why`/`orient` an agent already calls, no extra tokens
+per turn and nothing bolted onto CLAUDE.md.
+
+It's reviewer-agnostic (bots and humans travel the same path) and
+best-effort: needs the GitHub CLI (`gh`) authenticated and a github.com
+remote; without them the layer is simply absent. Lessons refresh on the
+review cadence — `--reviews` is opt-in, and a normal `seamark index` (and
+every agent tool call) leaves them untouched rather than re-hitting the
+network. A failed mine (offline, logged out) fails safe: it keeps the
+lessons already stored rather than clearing them.
+
+### Tuning what surfaces
+
+Like the gate's policy, a committed `.seamark/lessons.yaml` controls what
+shows — applied at surface time, so edits take effect with no re-mining:
+
+```yaml
+threshold: 2                     # min recurrences to surface (default 2)
+mute:
+  - rule: F541                   # hush a noisy rule everywhere
+  - region: alembic/versions     # …or every lesson under generated code
+pin:                             # your "must not be ignored" list —
+  - rule: RUF001                 # surfaced always for its region, even if
+    region: scripts              # mining found it once or never
+    note: "Keep scripts ASCII — smart quotes have bitten us"
+```
+
+`mute` kills noise; `pin` is the escape hatch for a rule you care about
+more than the mined frequency implies. Both flow through `why`, `orient`,
+and the edit hook via one path, so they never disagree.
+
 ## Editor integration
 
 `seamark lsp` is a secondary language server that runs *alongside* gopls,
@@ -358,10 +410,10 @@ propagate backwards along call edges to fixpoint, with depth.
 Working today: indexer (Go/TS/JS/Python), history mining, effects +
 propagation, LSP server, gate + check + audit, Claude Code hook, MCP
 server (`orient`, `change_set`, `why`, `check`, `expand` + resource +
-prompt). Planned next (see [docs/PLAN.md](docs/PLAN.md)): review-comment
-mining into the lessons loop, function-grain history enrichment,
-`seamarkd` daemon with incremental indexing, prebuilt binaries +
-npm/Homebrew distribution.
+prompt), review-comment lessons (`index --reviews`). Planned next (see
+[docs/PLAN.md](docs/PLAN.md)): zero-token check promotion from recurring
+lessons, function-grain history enrichment, `seamarkd` daemon with
+incremental indexing, prebuilt binaries + npm/Homebrew distribution.
 
 ## Development
 

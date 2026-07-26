@@ -824,3 +824,40 @@ func TestIndexIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, syms, 1, "Greet must appear exactly once after re-index")
 }
+
+func TestRefreshReviewsKeepsLessonsWhenSourceUnavailable(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	// A git repo with NO GitHub remote: reviews.Mine reports "not a
+	// GitHub repository" (Fetched=false), so RefreshReviews must leave any
+	// previously-mined lessons intact rather than wiping them (finding #1).
+	cmd := exec.Command("git", "init")
+	cmd.Dir = root
+	require.NoError(t, cmd.Run())
+
+	dbPath := store.DefaultPath(root)
+
+	_, err := Run(Options{Root: root, DBPath: dbPath})
+	require.NoError(t, err)
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, st.ReplaceLessons([]model.Lesson{
+		{ClusterKey: "scripts\x00RUF001", Region: "scripts", Reviewer: "coderabbit",
+			Symptom: "RUF001", Occurrences: 5, LastTS: 1},
+	}))
+	require.NoError(t, st.Close())
+
+	res, err := RefreshReviews(root, dbPath, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Fetched, "no GitHub remote → not a successful fetch")
+
+	st, err = store.Open(dbPath)
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+
+	kept, err := st.TopLessons(1, 10)
+	require.NoError(t, err)
+	assert.Len(t, kept, 1, "a failed fetch must not wipe stored lessons")
+}

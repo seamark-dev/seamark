@@ -246,36 +246,75 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
   Session also exposed the silent-empty-section gap in change_set
   (agent burned probe calls re-checking) — fixed with the `defines` line
 
-### M6 — Lessons loop
+### M6 — Lessons loop ← capture + surface (Tier 1) complete 2026-07-26
 
-Design sharpened 2026-07-26 from trading-tools experience (recurring
-automated-review comments: non-ASCII in .py, repeat Ruff/Pyright
+- [x] Mine PR review comments into recurring "lessons":
+      `internal/reviews` fetches `pulls/comments` through an injectable
+      Fetcher (default shells out to `gh api --paginate`), parses the
+      concatenated-per-page JSON with a streaming decoder, classifies the
+      reviewer (coderabbit | copilot | bot | human) and clusters. A cited
+      linter code (RUF001, E501, reportArgumentType) clusters by
+      (directory, code); an un-coded comment clusters by (file, bold
+      issue-title fingerprint). Reviewer-agnostic: bots and humans travel
+      the same path. Degrades to a Note (never an error) with no gh / no
+      auth / no GitHub remote / no PRs.
+      - Store: `lesson` table given reviewer/last_ts/example_url columns;
+        `ReplaceLessons` is its own transaction — lessons refresh on the
+        review cadence (`seamark index --reviews`), NOT on every
+        structural reindex, so the MCP self-repair never triggers network
+        fetches. Rebuild leaves `lesson` intact.
+      - Surface (Tier 1): region-scoped `reviewers keep flagging` block in
+        `why <file>` (occurrences ≥ 2) and repo-wide in `orient` — flows
+        through MCP with zero protocol change.
+- [x] Live-validated on trading-tools (2026-07-26, real CodeRabbit +
+      Copilot history, 477 comments): top clusters are exactly the
+      anti-repeat signal — `E702 ×20`, `RUF001 ×6` (the non-ASCII case),
+      `BLE001`, `reportArgumentType`, `B008`, `E741`. Real data drove
+      three fixes the fixtures missed: gh's per-page array concatenation,
+      clustering on CodeRabbit's severity boilerplate (fixed by
+      extracting the bold issue title), and `(root)` cross-contamination
+      (root-level comments now cluster file-scoped, not lumped).
+- [x] Configurable, gate-style: committed `.seamark/lessons.yaml`
+      overlay applied at surface time (no re-mining) — `threshold`
+      override, `mute` (by rule and/or region prefix, kills the
+      generated-code/`(root)` noise), and `pin` (curated lessons that
+      surface always for their region, even if never mined — the "must
+      not be ignored" list, with a human note). One `Config.Surface` path
+      shared by why, orient, and the hook so they never disagree.
+- [x] Adversarial review round (2026-07-26) fixed before commit: (1)
+      data-loss — a transient mining failure (offline, gh logged out,
+      non-GitHub checkout) wiped all stored lessons via
+      ReplaceLessons(nil); now Result carries a Fetched flag and the swap
+      only happens on a genuine successful fetch (verified: 401 → "kept
+      existing", count unchanged). (2) rule-code regex forged codes from
+      SHA256/RFC3339/HTTP200/ISO8601; now anchored to a known linter-
+      prefix allowlist. (3) concatenated-page decode now tested. (4)
+      malformed lessons.yaml degrades why/orient to defaults + a note
+      instead of aborting the report (and MCP). (5) dead MaxComments knob
+      removed. (6) hook injection framed as untrusted quoted data
+      (defense-in-depth vs NL injection; escapes/protocol already safe).
+- [ ] Tier 0 (zero-token promotion): N≥3 mechanical recurrences → a
+      proposed PostToolUse `ruff check --select <codes>` on edited files,
+      as a `.seamark/` diff for human review, never auto-enabled. The
+      hook already proves the plumbing; this swaps injected text for the
+      linter actually running
+- [ ] Decay/watermark: `since`-incremental fetch; hits/last_hit aging
+      (currently the mined window IS the recency filter — no all-time
+      tally to decay)
+- [ ] Tier 2 (deferred): offline LLM distillation of human prose threads;
+      also capture non-review failure signals (test pass→fail, reverts)
+
 findings). Reviewer-agnostic by design: CodeRabbit, Copilot review,
-human reviewers — all arrive through the same PR-comment API.
-
-- Capture: ALL PR review comments via `gh api .../pulls/comments` with
-  a `since` watermark → `decision(kind=pr_review)` rows, whoever wrote
-  them. When a comment carries a recognizable rule code (RUF001, E501,
-  report*) it extracts with regex, no LLM — an opportunistic fast path,
-  not a CodeRabbit dependency. A stronger signal than revert detection.
-- Cluster: by (tool, rule) when a code extracted, else by (region,
-  normalized symptom) — which is what human prose falls into;
-  `hits`/`last_hit` for decay, as per RFC §5.4.
-- Surface by cost tier, cheapest wins:
+human reviewers — all arrive through the same PR-comment API. Surface by
+cost tier, cheapest wins:
   - Tier 0 (zero tokens): N≥3 recurrences of a mechanical rule promote
     to a proposed PostToolUse check (`ruff check --select <codes>` on
     the edited file) — a `.seamark/` diff for human review, never
     auto-enabled. Agent pays tokens only on violation.
-  - Tier 1 (bounded): non-mechanical lessons become one-liners in MCP
-    orient/why responses, top-k by occurrences × recency, region-scoped.
-    Never CLAUDE.md (always-on cost, grows forever, gets ignored).
+  - Tier 1 (bounded, DONE): recurring lessons become one-liners in MCP
+    orient/why responses, ranked by occurrences, region-scoped. Never
+    CLAUDE.md (always-on cost, grows forever, gets ignored).
   - Tier 2 (deferred): offline LLM distillation of human threads.
-
-- [ ] Mine PR review comments (gh api, watermark) into decision rows;
-      cluster; promote mechanical clusters to proposed checks
-- [ ] Also capture failure signals (test pass→fail after agent edit,
-      reverted agent commit, human correction)
-- [ ] Decay: no hit in 90 days → propose deletion; anchor changed → flag stale
 
 ### v1.0
 

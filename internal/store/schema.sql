@@ -102,13 +102,19 @@ CREATE TABLE IF NOT EXISTS rule (
     last_hit   INTEGER
 ) WITHOUT ROWID;
 
+-- A lesson is a cluster of review-comment recurrences (M6). Recomputed
+-- from the mined comment window on every rebuild, so occurrences reflect
+-- recent activity rather than an all-time tally that never decays.
 CREATE TABLE IF NOT EXISTS lesson (
     id               INTEGER PRIMARY KEY,
-    cluster_key      TEXT NOT NULL,
-    region           TEXT NOT NULL DEFAULT '',
-    symptom          TEXT NOT NULL DEFAULT '',
-    fix              TEXT NOT NULL DEFAULT '',
+    cluster_key      TEXT NOT NULL UNIQUE,
+    region           TEXT NOT NULL DEFAULT '',  -- file or directory the flag lands in
+    reviewer         TEXT NOT NULL DEFAULT '',  -- coderabbit | copilot | bot | human | mixed
+    symptom          TEXT NOT NULL DEFAULT '',  -- rule code (RUF001) or a normalized message
+    fix              TEXT NOT NULL DEFAULT '',  -- extracted suggestion, when present
     occurrences      INTEGER NOT NULL DEFAULT 1,
+    last_ts          INTEGER NOT NULL DEFAULT 0, -- most recent occurrence (unix seconds)
+    example_url      TEXT NOT NULL DEFAULT '',   -- a representative comment, for provenance
     promoted_rule_id TEXT
 );
-CREATE INDEX IF NOT EXISTS lesson_cluster ON lesson (cluster_key);
+CREATE INDEX IF NOT EXISTS lesson_region ON lesson (region);

@@ -216,3 +216,46 @@ func TestMetaSurvivesRebuild(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, missing)
 }
+
+func TestLessonReplaceAndQuery(t *testing.T) {
+	s := openTestStore(t)
+
+	first := []model.Lesson{
+		{ClusterKey: "scripts\x00RUF001", Region: "scripts", Reviewer: "coderabbit",
+			Symptom: "RUF001", Occurrences: 6, LastTS: 100},
+		{ClusterKey: "api\x00E501", Region: "api", Reviewer: "human",
+			Symptom: "E501", Occurrences: 3, LastTS: 90},
+		{ClusterKey: "api\x00once", Region: "api", Reviewer: "copilot",
+			Symptom: "one-off", Occurrences: 1, LastTS: 80},
+	}
+	require.NoError(t, s.ReplaceLessons(first))
+
+	// A file inherits its directory's lessons; minOccur hides the one-off.
+	got, err := s.LessonsForFile("api/service.py", 2, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "E501", got[0].Symptom)
+
+	// Directory-region lessons attach to files directly in that directory.
+	got, err = s.LessonsForFile("scripts/x.py", 2, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "RUF001", got[0].Symptom)
+	assert.Equal(t, 6, got[0].Occurrences)
+
+	// TopLessons ranks by occurrences, filtered by threshold.
+	top, err := s.TopLessons(2, 10)
+	require.NoError(t, err)
+	require.Len(t, top, 2)
+	assert.Equal(t, "RUF001", top[0].Symptom, "strongest first")
+
+	// Replace is a full swap, not an append.
+	require.NoError(t, s.ReplaceLessons([]model.Lesson{
+		{ClusterKey: "web\x00any", Region: "web", Symptom: "x", Occurrences: 4, LastTS: 5},
+	}))
+
+	top, err = s.TopLessons(1, 10)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, "web", top[0].Region, "old lessons gone after replace")
+}

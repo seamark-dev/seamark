@@ -12,6 +12,7 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	stdpath "path"
 	"path/filepath"
 	"strings"
 
@@ -108,7 +109,10 @@ func (s *Store) Rebuild(fn func(tx *Tx) error) error {
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after Commit
 
-	// Wipe in dependency order.
+	// Wipe in dependency order. Lessons are NOT wiped here: they are
+	// mined from GitHub on a different cadence than local code changes
+	// (see ReplaceLessons), so a structural reindex — including the MCP
+	// self-repair on every tool call — must leave them intact.
 	for _, table := range []string{
 		"decision_link", "decision_file", "decision",
 		"cochange", "effect", "edge", "symbol",
@@ -204,6 +208,60 @@ func (t *Tx) InsertDecision(d *model.Decision) error {
 		); err != nil {
 			return fmt.Errorf("store: link decision %s to %s: %w", d.Ref, f, err)
 		}
+	}
+
+	return nil
+}
+
+// InsertLesson stores one clustered review lesson. The cluster_key is
+// unique; a repeated key accumulates occurrences and keeps the most
+// recent example, so callers may insert per-cluster without pre-merging.
+func (t *Tx) InsertLesson(l *model.Lesson) error {
+	_, err := t.tx.Exec(
+		`INSERT INTO lesson
+		   (cluster_key, region, reviewer, symptom, fix, occurrences, last_ts, example_url)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (cluster_key) DO UPDATE SET
+		   occurrences = lesson.occurrences + excluded.occurrences,
+		   last_ts     = MAX(lesson.last_ts, excluded.last_ts),
+		   reviewer    = excluded.reviewer,
+		   example_url = CASE WHEN excluded.last_ts >= lesson.last_ts
+		                 THEN excluded.example_url ELSE lesson.example_url END`,
+		l.ClusterKey, l.Region, l.Reviewer, l.Symptom, l.Fix,
+		l.Occurrences, l.LastTS, l.ExampleURL,
+	)
+	if err != nil {
+		return fmt.Errorf("store: insert lesson %s: %w", l.ClusterKey, err)
+	}
+
+	return nil
+}
+
+// ReplaceLessons atomically swaps the lesson set for a freshly mined
+// one. Lessons are refreshed on the review-mining cadence, not the
+// structural-reindex cadence, so this is their own transaction rather
+// than part of Rebuild.
+func (s *Store) ReplaceLessons(lessons []model.Lesson) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin lessons: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+
+	if _, err := tx.Exec("DELETE FROM lesson"); err != nil {
+		return fmt.Errorf("store: wipe lessons: %w", err)
+	}
+
+	t := &Tx{tx: tx}
+
+	for i := range lessons {
+		if err := t.InsertLesson(&lessons[i]); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit lessons: %w", err)
 	}
 
 	return nil
@@ -765,6 +823,72 @@ func (s *Store) FileSymbolCounts() (map[string]int, error) {
 	return out, rows.Err()
 }
 
+// scanLessons reads model.Lesson rows from a query selecting the lesson
+// columns in a fixed order.
+func scanLessons(rows *sql.Rows) ([]model.Lesson, error) {
+	// Close error deliberately dropped: iteration failures surface via rows.Err().
+	defer func() { _ = rows.Close() }()
+
+	var out []model.Lesson
+
+	for rows.Next() {
+		var l model.Lesson
+
+		if err := rows.Scan(&l.ID, &l.ClusterKey, &l.Region, &l.Reviewer,
+			&l.Symptom, &l.Fix, &l.Occurrences, &l.LastTS, &l.ExampleURL); err != nil {
+			return nil, err
+		}
+
+		out = append(out, l)
+	}
+
+	return out, rows.Err()
+}
+
+const lessonCols = `id, cluster_key, region, reviewer, symptom, fix, occurrences, last_ts, example_url`
+
+// LessonsForFile returns recurring review feedback whose region is the
+// file itself or the directory it lives in, strongest first. minOccur
+// filters one-off comments — a lesson is a pattern, not a single note.
+func (s *Store) LessonsForFile(file string, minOccur, limit int) ([]model.Lesson, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	// dir may be "." for a root-level file; no lesson carries that region
+	// (root comments are stored file-scoped), so it simply won't match.
+	dir := stdpath.Dir(file)
+
+	rows, err := s.db.Query(
+		`SELECT `+lessonCols+` FROM lesson
+		 WHERE (region = ? OR region = ?) AND occurrences >= ?
+		 ORDER BY occurrences DESC, last_ts DESC
+		 LIMIT ?`, file, dir, minOccur, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	return scanLessons(rows)
+}
+
+// TopLessons returns the strongest recurring review patterns repo-wide.
+func (s *Store) TopLessons(minOccur, limit int) ([]model.Lesson, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	rows, err := s.db.Query(
+		`SELECT `+lessonCols+` FROM lesson
+		 WHERE occurrences >= ?
+		 ORDER BY occurrences DESC, last_ts DESC
+		 LIMIT ?`, minOccur, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	return scanLessons(rows)
+}
+
 // Stats summarizes index contents for `seamark index` output.
 type Stats struct {
 	Symbols   int
@@ -773,6 +897,8 @@ type Stats struct {
 	Decisions int
 	// Tagged counts symbols carrying at least one effect tag.
 	Tagged int
+	// Lessons counts clustered review-feedback patterns (M6).
+	Lessons int
 }
 
 // Stats returns row counts of the derived tables.
@@ -787,6 +913,7 @@ func (s *Store) Stats() (Stats, error) {
 		{"SELECT COUNT(*) FROM cochange", &st.CoChanges},
 		{"SELECT COUNT(*) FROM decision", &st.Decisions},
 		{"SELECT COUNT(DISTINCT symbol_id) FROM effect", &st.Tagged},
+		{"SELECT COUNT(*) FROM lesson", &st.Lessons},
 	} {
 		if err := s.db.QueryRow(c.query).Scan(c.dst); err != nil {
 			return st, err
