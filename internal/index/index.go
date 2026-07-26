@@ -133,7 +133,7 @@ func Run(opts Options) (*Summary, error) {
 	}
 	defer func() { _ = st.Close() }() // read results are already committed
 
-	g := buildGraph(results, moduleName(root))
+	g := buildGraph(results, readGoModules(root, files))
 
 	err = st.Rebuild(func(tx *store.Tx) error {
 		if err := g.write(tx); err != nil {
@@ -273,25 +273,52 @@ func underSkippedDir(rel string) bool {
 
 var moduleRe = regexp.MustCompile(`(?m)^module\s+(\S+)`)
 
-// moduleName reads the Go module path from go.mod, "" when absent. It lets
-// the resolver translate absolute import paths into repo-relative packages.
-func moduleName(root string) string {
-	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
-	if err != nil {
-		return ""
+// goModule maps one go.mod to its repo location.
+type goModule struct {
+	dir  string // repo-relative directory, "" for the root
+	path string // module path declared in go.mod
+}
+
+// readGoModules parses every go.mod in the workspace. Monorepos nest Go
+// modules (a Go ingestor inside a Python repo): imports must resolve
+// against their OWN module, or every cross-package call in a nested
+// module silently loses its edges. Longest module path first so nested
+// modules shadow their parents.
+func readGoModules(root string, files []string) []goModule {
+	var mods []goModule
+
+	for _, f := range files {
+		if path.Base(f) != "go.mod" {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(f)))
+		if err != nil {
+			continue
+		}
+
+		m := moduleRe.FindSubmatch(data)
+		if m == nil {
+			continue
+		}
+
+		dir := path.Dir(f)
+		if dir == "." {
+			dir = ""
+		}
+
+		mods = append(mods, goModule{dir: dir, path: string(m[1])})
 	}
 
-	if m := moduleRe.FindSubmatch(data); m != nil {
-		return string(m[1])
-	}
+	sort.Slice(mods, func(i, j int) bool { return len(mods[i].path) > len(mods[j].path) })
 
-	return ""
+	return mods
 }
 
 // graph is the in-memory staging area between parsing and storage.
 type graph struct {
-	results    []*parse.FileResult
-	modulePath string
+	results []*parse.FileResult
+	modules []goModule
 
 	// All keys below are scoped per language family (scopedKey): a Go
 	// package directory and an ES module can share the same repo-relative
@@ -311,10 +338,10 @@ type graph struct {
 // scopedKey namespaces a package key by language family.
 func scopedKey(family, key string) string { return family + "\x00" + key }
 
-func buildGraph(results []*parse.FileResult, modulePath string) *graph {
+func buildGraph(results []*parse.FileResult, modules []goModule) *graph {
 	g := &graph{
 		results:       results,
-		modulePath:    modulePath,
+		modules:       modules,
 		packages:      map[string]*model.Symbol{},
 		decls:         map[string]map[string][]*model.Symbol{},
 		methodsByName: map[string]map[string][]*model.Symbol{},
@@ -397,16 +424,16 @@ func (g *graph) importKey(imp parse.Import) string {
 		return imp.Resolved
 	}
 
-	if g.modulePath == "" {
-		return imp.Path
-	}
+	// Modules are sorted longest-path-first, so a nested module shadows
+	// its parent for imports under its prefix.
+	for _, m := range g.modules {
+		if imp.Path == m.path {
+			return m.dir
+		}
 
-	if imp.Path == g.modulePath {
-		return ""
-	}
-
-	if rel, ok := strings.CutPrefix(imp.Path, g.modulePath+"/"); ok {
-		return rel
+		if rel, ok := strings.CutPrefix(imp.Path, m.path+"/"); ok {
+			return path.Join(m.dir, rel)
+		}
 	}
 
 	return imp.Path

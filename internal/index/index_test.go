@@ -604,6 +604,43 @@ def use():
 	assert.Empty(t, syms, "an import escaping the repo must not materialize a package node")
 }
 
+func TestNestedGoModuleResolvesImports(t *testing.T) {
+	root := t.TempDir()
+	// The trading-tools shape: a Python repo with a Go module nested in a
+	// subdirectory. Its internal imports must resolve against ITS go.mod,
+	// not the (absent) root one.
+	files := map[string]string{
+		"main.py":         "def top():\n    return 1\n",
+		"ingestor/go.mod": "module example.com/ingestor\n",
+		"ingestor/cmd/run.go": `package main
+
+import "example.com/ingestor/internal/bars"
+
+func main() {
+	bars.Transform("x")
+}
+`,
+		"ingestor/internal/bars/bars.go": `package bars
+
+func Transform(s string) string { return s }
+`,
+	}
+	for rel, content := range files {
+		p := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	transform := mustFind(t, st, "ingestor/internal/bars.Transform")
+	callers, err := st.Callers(transform.ID)
+	require.NoError(t, err)
+	require.Len(t, callers, 1, "cross-package call inside a nested module must resolve")
+	assert.Equal(t, "ingestor/cmd.main", callers[0].FQN)
+	assert.Equal(t, model.OriginQualified, callers[0].Origin)
+}
+
 func TestIndexIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root)

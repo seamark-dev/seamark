@@ -183,6 +183,9 @@ func fixtureRepo(t *testing.T) string {
 	write("go.mod", "module example.com/fix\n")
 	write("a.go", "package main\n\nfunc main() { helper() }\n\n// helper does the work.\nfunc helper() {}\n")
 	write("b.go", "package main\n\nfunc other() {}\n")
+	// Shape exists in BOTH families: cross-language name mirror.
+	write("shape.go", "package main\n\ntype Shape struct{}\n\nfunc useShape(s Shape) {}\n")
+	write("shape.ts", "export class Shape {}\n")
 	git("init", "-b", "main")
 	git("add", "-A")
 	git("commit", "-m", "initial layout")
@@ -232,6 +235,27 @@ func TestLifecycleHoverAndCodeLens(t *testing.T) {
 		assert.Contains(t, string(hover), want, "hover markdown")
 	}
 
+	// Hover on a CALL SITE describes the callee, not the enclosing
+	// function: line 2 is "func main() { helper() }", character 14 is
+	// inside "helper".
+	callSite := c.request("textDocument/hover", map[string]any{
+		"textDocument": map[string]any{"uri": uri(root, "a.go")},
+		"position":     map[string]any{"line": 2, "character": 14},
+	})
+	assert.Contains(t, string(callSite), "func helper()", "call-site hover resolves the callee")
+	assert.Contains(t, string(callSite), "1 callers")
+
+	// Cross-language mirrors resolve within the hovered file's family:
+	// "Shape" exists in Go and TS; hovering its usage in shape.go (line 4
+	// "func useShape(s Shape) {}", char 18) must pick the Go type, not
+	// bail out as ambiguous.
+	mirror := c.request("textDocument/hover", map[string]any{
+		"textDocument": map[string]any{"uri": uri(root, "shape.go")},
+		"position":     map[string]any{"line": 4, "character": 18},
+	})
+	assert.Contains(t, string(mirror), "Shape struct{}", "the Go mirror wins in a Go file")
+	assert.Contains(t, string(mirror), "**type**")
+
 	// Hover on an empty line yields null, not an error.
 	empty := c.request("textDocument/hover", map[string]any{
 		"textDocument": map[string]any{"uri": uri(root, "a.go")},
@@ -261,6 +285,8 @@ func TestDidSavePublishesCoChangeDiagnostics(t *testing.T) {
 	assert.Contains(t, string(params), "b.go", "the unmodified partner is named")
 	assert.Contains(t, string(params), "usually changed together")
 	assert.Contains(t, string(params), `"severity":3`)
+	assert.Equal(t, 1, strings.Count(string(params), `"severity"`),
+		"partners merge into ONE diagnostic; stacked ones fight over the virtual-text slot")
 
 	// Committing everything makes the next save quiet: diagnostics clear.
 	git := exec.Command("git", "commit", "-am", "done")

@@ -349,6 +349,13 @@ func (s *Store) SymbolsInFile(file string) ([]model.Symbol, error) {
 	)
 }
 
+// SymbolsByName returns every symbol with exactly this name.
+func (s *Store) SymbolsByName(name string) ([]model.Symbol, error) {
+	return s.querySymbols(
+		`SELECT `+symbolCols+` FROM symbol WHERE name = ? ORDER BY fqn`, name,
+	)
+}
+
 // SymbolAt returns the innermost symbol whose span covers a 1-based line
 // of file, or nil when the line is outside every declaration.
 func (s *Store) SymbolAt(file string, line uint32) (*model.Symbol, error) {

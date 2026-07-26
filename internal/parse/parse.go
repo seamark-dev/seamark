@@ -90,6 +90,23 @@ func LanguageFamily(lang string) string {
 	}
 }
 
+// FamilyForPath returns the language family for a file path by extension,
+// "" when unsupported. Kept in sync with the extractors' Extensions() —
+// static so read-only surfaces can classify paths without instantiating
+// parsers.
+func FamilyForPath(p string) string {
+	switch filepath.Ext(p) {
+	case ".go":
+		return "go"
+	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts":
+		return "ecma"
+	case ".py":
+		return "python"
+	default:
+		return ""
+	}
+}
+
 // Registry maps file extensions to extractors.
 type Registry struct {
 	byExt      map[string]Extractor

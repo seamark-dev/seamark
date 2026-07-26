@@ -11,9 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/parse"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -197,7 +200,7 @@ func (s *Server) handleHover(p *hoverParams) (*hoverResult, error) {
 		return nil, err
 	}
 
-	sym, err := s.st.SymbolAt(rel, p.Position.Line+1)
+	sym, err := s.symbolUnderCursor(rel, p.Position)
 	if err != nil || sym == nil {
 		return nil, err // nil hover: nothing under the cursor
 	}
@@ -214,6 +217,143 @@ func (s *Server) handleHover(p *hoverParams) (*hoverResult, error) {
 			End:   Position{Line: sym.Span.StartLine - 1, Character: ^uint32(0) >> 1},
 		},
 	}, nil
+}
+
+// symbolUnderCursor resolves what the cursor is on: the identifier at the
+// position when it names a known symbol (so hovering a CALL SITE describes
+// the callee, like gopls), falling back to the innermost enclosing
+// declaration (hovering a body line describes its function).
+func (s *Server) symbolUnderCursor(rel string, pos Position) (*model.Symbol, error) {
+	enclosing, err := s.st.SymbolAt(rel, pos.Line+1)
+	if err != nil {
+		return nil, err
+	}
+
+	word := s.wordAt(rel, pos)
+	if word == "" || (enclosing != nil && word == enclosing.Name) {
+		return enclosing, nil
+	}
+
+	if target := s.resolveName(word, rel, enclosing); target != nil {
+		return target, nil
+	}
+
+	return enclosing, nil
+}
+
+// resolveName finds the symbol an identifier most plausibly refers to:
+// a same-file match first, then a repo-wide unique match. Ambiguity
+// yields nil — the enclosing-declaration fallback beats a wrong guess.
+func (s *Server) resolveName(word, rel string, enclosing *model.Symbol) *model.Symbol {
+	cands, err := s.st.SymbolsByName(word)
+	if err != nil || len(cands) == 0 {
+		return nil
+	}
+
+	// Callable/type symbols outrank consts and vars for hover purposes.
+	preferred := make([]model.Symbol, 0, len(cands))
+
+	for _, c := range cands {
+		switch c.Kind {
+		case model.KindFunction, model.KindMethod, model.KindType:
+			preferred = append(preferred, c)
+		}
+	}
+
+	if len(preferred) == 0 {
+		preferred = cands
+	}
+
+	// Cross-language name mirrors are common (a Python schema type and
+	// its generated TS twin); prefer candidates from the hovered file's
+	// own language family before declaring ambiguity.
+	if len(preferred) > 1 {
+		if fam := parse.FamilyForPath(rel); fam != "" {
+			var sameFam []model.Symbol
+
+			for _, c := range preferred {
+				if parse.FamilyForPath(c.File) == fam {
+					sameFam = append(sameFam, c)
+				}
+			}
+
+			if len(sameFam) > 0 {
+				preferred = sameFam
+			}
+		}
+	}
+
+	var sameFile []model.Symbol
+
+	for _, c := range preferred {
+		if c.File == rel {
+			sameFile = append(sameFile, c)
+		}
+	}
+
+	switch {
+	case len(sameFile) == 1 && (enclosing == nil || sameFile[0].ID != enclosing.ID):
+		return &sameFile[0]
+	case len(sameFile) == 0 && len(preferred) == 1:
+		return &preferred[0]
+	default:
+		return nil
+	}
+}
+
+// wordAt reads the identifier at a position from the file on disk (sync
+// kind None: the server never holds buffer contents; on-save flows make
+// disk current). Position.Character counts UTF-16 code units per LSP.
+func (s *Server) wordAt(rel string, pos Position) string {
+	data, err := os.ReadFile(filepath.Join(s.root, filepath.FromSlash(rel)))
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(string(data), "\n")
+	if int(pos.Line) >= len(lines) {
+		return ""
+	}
+
+	line := lines[pos.Line]
+
+	// UTF-16 offset -> byte offset.
+	byteOff, units := 0, uint32(0)
+
+	for i, r := range line {
+		if units >= pos.Character {
+			byteOff = i
+			break
+		}
+
+		units += uint32(len(utf16.Encode([]rune{r})))
+		byteOff = i + utf8.RuneLen(r)
+	}
+
+	isIdent := func(b byte) bool {
+		return b == '_' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
+	}
+
+	// Editors put the cursor ON a character; accept being just past one.
+	if byteOff >= len(line) || (!isIdent(line[byteOff]) && byteOff > 0 && isIdent(line[byteOff-1])) {
+		byteOff--
+	}
+
+	if byteOff < 0 || byteOff >= len(line) || !isIdent(line[byteOff]) {
+		return ""
+	}
+
+	start, end := byteOff, byteOff+1
+
+	for start > 0 && isIdent(line[start-1]) {
+		start--
+	}
+
+	for end < len(line) && isIdent(line[end]) {
+		end++
+	}
+
+	return line[start:end]
 }
 
 // hoverMarkdown renders the decision layer for one symbol: what it is,
@@ -374,25 +514,33 @@ func (s *Server) handleDidSave(p *didSaveParams) error {
 		return err
 	}
 
-	diags := []diagnostic{}
+	// One diagnostic listing every missing partner, strongest first —
+	// stacked whole-file diagnostics fight over the single virtual-text
+	// slot editors render, and the weakest one can win.
+	var missing []string
 
 	for _, partner := range partners {
 		if partner.Together < diagMinTogether || modified(partner.File) {
 			continue
 		}
 
+		missing = append(missing, fmt.Sprintf("%s (%d/%d commits, lift %.1f)",
+			partner.File, partner.Together, partner.Total, partner.Lift))
+
+		if len(missing) == diagMaxPerFile {
+			break
+		}
+	}
+
+	diags := []diagnostic{}
+
+	if len(missing) > 0 {
 		diags = append(diags, diagnostic{
 			Range:    Range{Start: Position{Line: 0}, End: Position{Line: 0}},
 			Severity: severityInfo,
 			Source:   "seamark",
-			Message: fmt.Sprintf(
-				"usually changed together: %s (%d of %d commits, lift %.1f) is not part of this change",
-				partner.File, partner.Together, partner.Total, partner.Lift),
+			Message:  "usually changed together, not in this change: " + strings.Join(missing, "; "),
 		})
-
-		if len(diags) == diagMaxPerFile {
-			break
-		}
 	}
 
 	return s.publishDiagnostics(p.TextDocument.URI, diags)
