@@ -86,6 +86,10 @@ CLI (gh) authenticated and a github.com remote.`,
 				fmt.Fprintf(out, " — %d reparsed, %d from cache", sum.FilesReparsed, cached)
 			}
 
+			if sum.FilesSkipped > 0 {
+				fmt.Fprintf(out, "; %d skipped (generated/excluded)", sum.FilesSkipped)
+			}
+
 			fmt.Fprintln(out)
 			fmt.Fprintf(out, "  symbols  %d\n", sum.Stats.Symbols)
 			fmt.Fprintf(out, "  edges    %d\n", sum.Stats.Edges)

@@ -21,8 +21,8 @@ func newInitCmd(opts *options) *cobra.Command {
 		Short: "Set up seamark in this repository (config scaffolds + agent hooks)",
 		Long: `Prepares a repository to use seamark:
 
-  - scaffolds .seamark/policy.yaml and .seamark/lessons.yaml (starters,
-    never overwriting an existing file)
+  - scaffolds .seamark/policy.yaml, .seamark/lessons.yaml and
+    .seamark/config.yaml (starters, never overwriting an existing file)
   - adds the .gitignore carve-outs that keep the index local but the
     policy-as-code files in review
   - wires the Claude Code PreToolUse hooks into .claude/settings.json:
@@ -76,6 +76,7 @@ func runInit(w io.Writer, root, bin string, printOnly bool) error {
 	}{
 		{".seamark/policy.yaml", starterPolicy},
 		{".seamark/lessons.yaml", starterLessons},
+		{".seamark/config.yaml", starterConfig},
 	} {
 		path := filepath.Join(root, filepath.FromSlash(f.rel))
 		if _, err := os.Stat(path); err == nil {
@@ -116,7 +117,9 @@ func runInit(w io.Writer, root, bin string, printOnly bool) error {
 	return nil
 }
 
-// gitignoreBlock is appended verbatim when the carve-outs are absent.
+// gitignoreBlock is appended verbatim when no carve-outs are present; a
+// .gitignore initialized by an older seamark grows just the lines it is
+// missing.
 const gitignoreBlock = `
 # Seamark: the index and audit log stay local; the policy-as-code
 # overlays belong in review.
@@ -124,7 +127,23 @@ const gitignoreBlock = `
 !.seamark/policy.yaml
 !.seamark/effects.yaml
 !.seamark/lessons.yaml
+!.seamark/config.yaml
 `
+
+// carveoutLines returns the pattern lines of gitignoreBlock (comments and
+// blanks dropped) — the unit ensureGitignore checks and repairs, so a new
+// overlay file added to the block reaches already-initialized repos too.
+func carveoutLines() []string {
+	var lines []string
+
+	for _, ln := range strings.Split(gitignoreBlock, "\n") {
+		if ln != "" && !strings.HasPrefix(ln, "#") {
+			lines = append(lines, ln)
+		}
+	}
+
+	return lines
+}
 
 func ensureGitignore(w io.Writer, root string, printOnly bool) error {
 	path := filepath.Join(root, ".gitignore")
@@ -134,9 +153,32 @@ func ensureGitignore(w io.Writer, root string, printOnly bool) error {
 		return err
 	}
 
-	if strings.Contains(string(data), ".seamark/*") {
+	present := map[string]bool{}
+	for _, ln := range strings.Split(string(data), "\n") {
+		present[strings.TrimSpace(ln)] = true
+	}
+
+	lines := carveoutLines()
+
+	var missing []string
+
+	for _, ln := range lines {
+		if !present[ln] {
+			missing = append(missing, ln)
+		}
+	}
+
+	if len(missing) == 0 {
 		fmt.Fprintf(w, "  kept    .gitignore (seamark carve-outs already present)\n")
 		return nil
+	}
+
+	// No carve-outs at all gets the commented block; an older block grows
+	// just its missing lines. Appending at the end keeps every `!`
+	// re-include after `.seamark/*`, the order gitignore precedence needs.
+	block := gitignoreBlock
+	if len(missing) < len(lines) {
+		block = "\n" + strings.Join(missing, "\n") + "\n"
 	}
 
 	verb := "updated"
@@ -151,7 +193,7 @@ func ensureGitignore(w io.Writer, root string, printOnly bool) error {
 		}
 		defer func() { _ = f.Close() }()
 
-		if _, err := f.WriteString(gitignoreBlock); err != nil {
+		if _, err := f.WriteString(block); err != nil {
 			return err
 		}
 	}

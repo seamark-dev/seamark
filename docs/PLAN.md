@@ -71,6 +71,16 @@ rethink before building more.
       `__init__.py` package collapse, docstring hashing, and a same-class
       resolution tier (self/cls/this — also wired for TS) shared with the
       other languages
+- [x] Indexing config (2026-07-27): committed `.seamark/config.yaml` —
+      generated files (`Code generated … DO NOT EDIT.` header) skipped by
+      default (`index.generated: true` opts back in), plus `index.exclude`
+      globs (basename / `**/`-prefix / dir-prefix / full-path) on top of
+      .gitignore. Skips counted in `seamark index` output; a glob that
+      could never match fails the load instead of silently no-opping; both
+      index-shaping overlays (`effects.yaml`, `config.yaml`) are hashed
+      into the freshness fingerprint so an overlay-only edit rebuilds; and
+      `seamark init` now repairs an older .gitignore block by appending
+      newly-added carve-out lines
 - Measured on trading-tools (703 files, 10k symbols, 22k edges, ~3s):
   same-package 3818 / qualified 2799 / same-class 464 / unique-name 658
   CALLS edges. Known noise, by design filterable via `origin`: common
@@ -209,8 +219,9 @@ factual function-grain reporting cheap:
       command sinks match past global flag values (`kubectl -n prod
       delete`), `git push origin HEAD` resolves to the current branch,
       the freshness fingerprint is content-sensitive (already-dirty file
-      edits register; `.seamark/` state excluded, `effects.yaml` overlay
-      hashed in), diff headers with spaces/quoted paths parse, and the
+      edits register; `.seamark/` state excluded, the `effects.yaml` and
+      `config.yaml` overlays hashed in), diff headers with spaces/quoted
+      paths parse, and the
       hook reads PreToolUse JSON natively (`--hook`) failing CLOSED under
       enforce (malformed/empty payload, policy/CEL errors → exit 2)
 - [ ] Audit log hardening: size-based rotation for audit.jsonl and an

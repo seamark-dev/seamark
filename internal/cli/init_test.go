@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -147,7 +148,9 @@ func TestRunInitScaffoldsAndIsIdempotent(t *testing.T) {
 	require.NoError(t, runInit(&b1, root, "/bin/seamark", false))
 
 	// Files exist with expected content.
-	for _, rel := range []string{".seamark/policy.yaml", ".seamark/lessons.yaml", ".gitignore"} {
+	for _, rel := range []string{
+		".seamark/policy.yaml", ".seamark/lessons.yaml", ".seamark/config.yaml", ".gitignore",
+	} {
 		assert.FileExists(t, filepath.Join(root, filepath.FromSlash(rel)))
 	}
 
@@ -170,6 +173,36 @@ func TestRunInitScaffoldsAndIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(data, &settings))
 	assert.Len(t, commands(t, settings), 2, "re-run must not duplicate hooks")
+}
+
+func TestEnsureGitignoreAddsMissingCarveouts(t *testing.T) {
+	root := t.TempDir()
+
+	// A .gitignore from an older seamark: block present, but from before
+	// the config.yaml carve-out existed.
+	old := "bin/\n\n# Seamark: local state.\n.seamark/*\n!.seamark/policy.yaml\n" +
+		"!.seamark/effects.yaml\n!.seamark/lessons.yaml\n"
+	path := filepath.Join(root, ".gitignore")
+	require.NoError(t, os.WriteFile(path, []byte(old), 0o644))
+
+	var b testWriter
+	require.NoError(t, ensureGitignore(&b, root, false))
+	assert.Contains(t, b.String(), "updated")
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	got := string(data)
+
+	// Only the missing line was appended — no duplicated block — and the
+	// re-include lands after `.seamark/*`, as gitignore precedence needs.
+	assert.Contains(t, got, "!.seamark/config.yaml")
+	assert.Equal(t, 1, strings.Count(got, ".seamark/*"))
+	assert.Greater(t, strings.Index(got, "!.seamark/config.yaml"), strings.Index(got, ".seamark/*"))
+
+	// Re-run: nothing left to repair.
+	var b2 testWriter
+	require.NoError(t, ensureGitignore(&b2, root, false))
+	assert.Contains(t, b2.String(), "kept")
 }
 
 func TestRunInitPrintWritesNothing(t *testing.T) {

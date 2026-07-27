@@ -43,6 +43,23 @@ require_approval:
     message: this change can reach infrastructure mutation
 `
 
+const starterConfig = `# Indexing options — what enters the graph at all.
+# Committed and reviewed like the other .seamark overlays.
+
+index:
+  # Index files carrying a "// Code generated ... DO NOT EDIT." header
+  # (protoc, stringer, mockgen, go generate …). Default false: generated
+  # code is boilerplate that inflates the graph and pollutes most-called.
+  generated: false
+
+  # Extra paths to skip, on top of .gitignore and the built-in skip dirs.
+  #   *.pb.go        a basename glob, any directory
+  #   **/*_test.go   the same, explicit
+  #   internal/gen/  a directory prefix
+  exclude:
+    # - "**/*_test.go"   # uncomment for a production-only graph
+`
+
 const starterLessons = `# Tune how mined review lessons surface (RFC-001 §5.4). Committed and
 # reviewed like policy.yaml — applied at surface time, so edits take
 # effect immediately without re-mining. An absent file means "defaults":

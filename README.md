@@ -70,8 +70,9 @@ seamark why <symbol-or-file>
 ```
 
 `seamark init` is optional but does the one-time setup for you: it writes
-starter `.seamark/policy.yaml` and `.seamark/lessons.yaml` (never
-overwriting existing files), adds the `.gitignore` carve-outs, and merges
+starter `.seamark/policy.yaml`, `.seamark/lessons.yaml` and
+`.seamark/config.yaml` (never overwriting existing files), adds the
+`.gitignore` carve-outs, and merges
 the gate and review-lessons hooks into `.claude/settings.json` — leaving
 any hooks you already have intact, and safe to re-run. Pass `--print` to
 preview every change first.
@@ -424,6 +425,29 @@ cached, history and write are the remaining costs. The roadmap
    lowest-confidence resolution tier is nonlocal (a new method named `X`
    anywhere can invalidate an edge elsewhere), and cheap exactness beats
    clever approximation until the numbers say otherwise.
+
+## Choosing what gets indexed
+
+The indexer skips two things by default: anything `.gitignore` ignores,
+and files carrying the conventional `Code generated … DO NOT EDIT.`
+header (protoc, stringer, mockgen, …) — generated code inflates the
+graph and pollutes most-called lists without ever being hand-navigated.
+A committed `.seamark/config.yaml` tunes both:
+
+```yaml
+index:
+  generated: true      # index generated files after all
+  exclude:             # extra paths to skip, on top of .gitignore
+    - "*.pb.go"        # basename glob, any directory
+    - "internal/gen/"  # directory prefix
+    # - "**/*_test.go" # uncomment for a production-only graph
+```
+
+Skipped files are counted in the `seamark index` output, and a malformed
+config — including an exclude glob that could never match — fails the
+index loudly rather than being silently ignored. Config edits count as
+workspace changes, so the next `seamark index` (or any self-repairing
+surface) picks them up automatically.
 
 ## Extending the effect catalogue
 

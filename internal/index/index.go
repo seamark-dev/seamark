@@ -56,8 +56,11 @@ type Summary struct {
 	// pass; the rest were served from the parse cache. Equals FilesParsed
 	// on a --force or first index.
 	FilesReparsed int
-	ParseErrors   int
-	HistoryMined  bool
+	// FilesSkipped counts supported files dropped by config — generated
+	// (default) or an exclude glob.
+	FilesSkipped int
+	ParseErrors  int
+	HistoryMined bool
 	// HistorySkipNote says why the history layer is absent when
 	// HistoryMined is false: "not a git repository" and "mining failed"
 	// are different situations and must not be conflated in output.
@@ -110,6 +113,11 @@ func Run(opts Options) (*Summary, error) {
 	// a version bump or a decode failure falls back to a fresh parse.
 	cache := loadParseCache(st, opts.Force, logf)
 
+	cfg, err := LoadConfig(root)
+	if err != nil {
+		return nil, err
+	}
+
 	registry, err := parse.NewRegistry()
 	if err != nil {
 		return nil, err
@@ -130,10 +138,24 @@ func Run(opts Options) (*Summary, error) {
 			continue
 		}
 
+		// A config exclude glob is a path-only decision — skip before
+		// even reading the file.
+		if cfg.excluded(rel) {
+			sum.FilesSkipped++
+			continue
+		}
+
 		src, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
 			logf("warn: read %s: %v", rel, err)
 			sum.ParseErrors++
+			continue
+		}
+
+		// Generated code is boilerplate that inflates the graph and
+		// pollutes most-called; skip it unless the workspace opts in.
+		if !cfg.Index.Generated && isGenerated(src) {
+			sum.FilesSkipped++
 			continue
 		}
 
@@ -434,11 +456,16 @@ func WorkspaceState(root string) string {
 	h.Write(status)
 	h.Write(diff)
 
-	// The one .seamark file that DOES shape index output: the effect
-	// overlay. Hash its content explicitly so editing it triggers a
-	// rebuild even though the directory is otherwise excluded.
-	if overlay, err := os.ReadFile(filepath.Join(root, ".seamark", "effects.yaml")); err == nil {
-		h.Write(overlay)
+	// The .seamark files that DO shape index output: the effect overlay
+	// and the indexing config. Hash their content explicitly so editing
+	// either triggers a rebuild even though the directory is otherwise
+	// excluded. The name goes in too, so content moving between the files
+	// cannot collide into the same fingerprint.
+	for _, name := range []string{"effects.yaml", "config.yaml"} {
+		if overlay, err := os.ReadFile(filepath.Join(root, ".seamark", name)); err == nil {
+			h.Write([]byte(name))
+			h.Write(overlay)
+		}
 	}
 
 	budget := 4096 // bound the stat walk on pathological untracked trees
