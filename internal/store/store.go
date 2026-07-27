@@ -941,15 +941,24 @@ func (s *Store) LessonsForFile(file string, minOccur, limit int) ([]model.Lesson
 		limit = 10
 	}
 
-	// dir may be "." for a root-level file; no lesson carries that region
-	// (root comments are stored file-scoped), so it simply won't match.
-	dir := stdpath.Dir(file)
+	// Match the file itself and every ancestor directory: rule-code
+	// clustering scopes lessons to the file's package, and cross-file
+	// merging can widen a region further up the tree. Enumerating the
+	// ancestors keeps the match exact (a LIKE prefix would treat the
+	// `_` in ordinary filenames as a wildcard) and on the region index.
+	args := []any{file}
+	for dir := stdpath.Dir(file); dir != "." && dir != "/"; dir = stdpath.Dir(dir) {
+		args = append(args, dir)
+	}
+
+	marks := strings.Repeat(",?", len(args))[1:]
+	args = append(args, minOccur, limit)
 
 	rows, err := s.db.Query(
 		`SELECT `+lessonCols+` FROM lesson
-		 WHERE (region = ? OR region = ?) AND occurrences >= ?
+		 WHERE region IN (`+marks+`) AND occurrences >= ?
 		 ORDER BY occurrences DESC, last_ts DESC
-		 LIMIT ?`, file, dir, minOccur, limit)
+		 LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}

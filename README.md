@@ -154,11 +154,23 @@ reviewers keep flagging  (recurring across pull requests)
 ```
 
 A cited linter code clusters by directory (a habit, not one line); an
-un-coded comment clusters by file and issue title. Only patterns that
-recur (≥2) surface, region-scoped, so an agent editing `scripts/` sees
-what reviewers keep catching there *before* it makes the mistake again —
-through the same `why`/`orient` an agent already calls, no extra tokens
-per turn and nothing bolted onto CLAUDE.md.
+un-coded comment clusters by file and issue title, and a fingerprint
+recurring across several files widens to their common directory —
+repeated feedback is a habit of an area, not a property of one file.
+Only patterns that recur (≥2) surface, region-scoped, so an agent
+editing `scripts/` sees what reviewers keep catching there *before* it
+makes the mistake again — through the same `why`/`orient` an agent
+already calls, no extra tokens per turn and nothing bolted onto
+CLAUDE.md.
+
+Just as important is what is *not* a lesson. Thread replies are
+conversation about a finding, never the finding — mining them once made
+an author's "fixed" the top lesson of a real repo. Comments with nothing
+actionable ("Very smart!", a bare link) are dropped rather than
+clustered. And a linter code only counts when actually cited: not when a
+matching token appears in quoted tool output (`rg -A10` once minted a
+fake "A10" lesson from a bot's analysis script), and not in a repo that
+doesn't contain the linter's language at all.
 
 It's reviewer-agnostic (bots and humans travel the same path) and
 best-effort: needs the GitHub CLI (`gh`) authenticated and a github.com
@@ -221,6 +233,12 @@ review lessons (all mined, strongest first) — 436 total
   ×1    RUF002               fetcher.py     [coderabbit]
   …
 ```
+
+`--region <dir>` narrows the ledger to one area — its lessons and its
+ancestors', one-offs included. Reading a package's raw findings side by
+side is how a pattern too varied for exact clustering gets spotted (ten
+differently-worded "reset pooled state" findings are one lesson to a
+reader), whether the reader is you or an agent you point at it.
 
 ### Is it working? `lessons --stats`
 

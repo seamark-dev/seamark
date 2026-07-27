@@ -2,7 +2,10 @@ package reviews
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,6 +39,12 @@ func comment(id int, login, userType, path string, line int, pr int, body string
 		"created_at": "2026-07-2%dT10:00:00Z",
 		"pull_request_url": "https://api.github.com/repos/o/r/pulls/%d"
 	}`, id, login, userType, body, path, line, line, pr, id, (id%9)+1, pr)
+}
+
+// reply marks a comment JSON as a thread reply to parent.
+func reply(parent int, commentJSON string) string {
+	return strings.Replace(commentJSON, "{",
+		fmt.Sprintf(`{"in_reply_to_id": %d,`, parent), 1)
 }
 
 type clustered struct {
@@ -126,12 +135,16 @@ func TestUncodedCommentsClusterByFileAndFuzzyMessage(t *testing.T) {
 func TestExtractRuleCode(t *testing.T) {
 	cases := []struct{ body, want string }{
 		{"Please fix `RUF001` here", "RUF001"},
-		{"E501 line too long", "E501"},
-		{"B008 in a default arg", "B008"},
 		{"PLC0414 useless import alias", "PLC0414"},
 		{"DTZ005 needs a tz", "DTZ005"},
 		{"reportArgumentType: wrong type passed", "reportArgumentType"},
 		{"pyright: reportOptionalMemberAccess", "reportOptionalMemberAccess"},
+		// Short prefixes are ordinary word shapes, so they only count when
+		// cited the way linters cite them — backticks or parentheses.
+		{"line too long `E501`", "E501"},
+		{"flake8 (B008) in a default arg", "B008"},
+		{"E501 line too long", ""},
+		{"B008 in a default arg", ""},
 		// Not linter codes — must NOT be treated as such (finding #2).
 		{"use RFC3339 for timestamps", ""},
 		{"hash with SHA256 please", ""},
@@ -139,11 +152,126 @@ func TestExtractRuleCode(t *testing.T) {
 		{"the ISO8601 format", ""},
 		{"This uses HTTP and TODO but no code", ""},
 		{"See PR 123 for context", ""},
+		// The token that minted a fake "A10" lesson on a real repo: a
+		// ripgrep flag inside CodeRabbit's executed-script block.
+		{"rg -n -B3 -A10 'fieldRenderer' resolve/*.go", ""},
+		{"benchmarked on an A100 GPU", ""},
+		// Quoted machinery is not a citation: codes inside fences and
+		// details blocks don't count, even for long prefixes.
+		{"see the output:\n```\nRUF001 a.py:1\n```\nlooks stale", ""},
+		{"<details>runner log RUF001</details>rest of the comment", ""},
 	}
 
 	for _, c := range cases {
 		assert.Equal(t, c.want, extractRuleCode(c.body), c.body)
 	}
+}
+
+func TestRepliesAreNotLessons(t *testing.T) {
+	// The finding is the top-level comment; everything below it in the
+	// thread is conversation ABOUT the finding — the author's "fixed",
+	// the reviewer's follow-up — and mining it inflated author acks into
+	// the top lessons of a real repo ("fixed" ×15).
+	page := ghPage(
+		comment(1, "reviewer", "User", "api/x.py", 5, 1, "Reset pooled state before reuse."),
+		reply(1, comment(2, "author", "User", "api/x.py", 5, 1, "fixed")),
+		reply(1, comment(3, "reviewer", "User", "api/x.py", 5, 1, "Thanks — also please clear the arena refs on this path.")),
+	)
+
+	got := mine(t, page)
+
+	require.Len(t, got, 1, "only the top-level finding becomes a lesson")
+	assert.Equal(t, 1, got[0].occ)
+	assert.Equal(t, "reset pooled state before reuse", got[0].symptom)
+}
+
+func TestInsubstantialCommentsAreDropped(t *testing.T) {
+	// Top-level but content-free: reactions, shorthand, bare links, and
+	// bodies that normalize to nothing. None of these can guide an agent.
+	page := ghPage(
+		comment(1, "author", "User", "api/a.py", 1, 1, "Fixed."),
+		comment(2, "reviewer", "User", "api/b.py", 2, 1, "Very smart!"),
+		comment(3, "reviewer", "User", "api/c.py", 3, 1, "looks good to me"),
+		comment(4, "author", "User", "api/d.py", 4, 1, "Updated in https://github.com/o/r/pull/5"),
+		comment(5, "reviewer", "User", "api/e.py", 5, 1, "```suggestion\nfoo()\n```"),
+	)
+
+	assert.Empty(t, mine(t, page))
+}
+
+func TestCodeRabbitFindingBetweenDetailsBlocks(t *testing.T) {
+	// The real CodeRabbit layout (from wundergraph/graphql-go-tools
+	// PR 1605): severity tagline, an Analysis-chain details block with an
+	// executed script, THEN the bold finding, then the AI-prompt details
+	// block and fingerprint comments. Greedy details-stripping used to
+	// delete the finding and the script's `rg -A10` minted a fake "A10"
+	// rule-code lesson.
+	body := "_🎯 Functional Correctness_ | _🟠 Major_ | _⚡ Quick win_\n\n" +
+		"<details>\n<summary>🧩 Analysis chain</summary>\n\n🏁 Script executed:\n\n" +
+		"```shell\nrg -n -B3 -A10 'fieldRenderer' v2/pkg/engine/resolve/*.go\n```\n\n" +
+		"Repository: o/r\n</details>\n\n" +
+		"**Include the response-shaping context in this grouping guard.** " +
+		"`resolutionGroupKey` still ignores per-subscriber output knobs.\n\n" +
+		"<details>\n<summary>🤖 Prompt for AI Agents</summary>\nprompt text\n</details>\n\n" +
+		"<!-- fingerprinting:phantom -->"
+
+	page := ghPage(comment(1, "coderabbitai[bot]", "Bot", "v2/pkg/engine/resolve/resolve.go", 100, 1605, body))
+
+	got := mine(t, page)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "include the response shaping context in this grouping guard",
+		got[0].symptom, "the bold finding between the details blocks is the fingerprint")
+	assert.Equal(t, "v2/pkg/engine/resolve/resolve.go", got[0].region)
+}
+
+func TestMergeAcrossFiles(t *testing.T) {
+	// The same un-coded fingerprint in several files is a habit of the
+	// area: merged to the deepest common directory, occurrences summed —
+	// per-file counting would leave each copy below the threshold.
+	page := ghPage(
+		comment(1, "reviewer", "User", "engine/resolve/a.go", 1, 1, "Reset pooled state before reuse."),
+		comment(2, "coderabbitai[bot]", "Bot", "engine/resolve/b.go", 2, 2, "reset pooled state before reuse"),
+		comment(3, "reviewer", "User", "engine/visitor/c.go", 3, 3, "Reset pooled state before reuse!"),
+	)
+
+	got := mine(t, page)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "engine", got[0].region, "widened to the deepest common directory")
+	assert.Equal(t, 3, got[0].occ)
+	assert.Equal(t, "mixed", got[0].reviewer, "reviewer sets merge too")
+}
+
+func TestMergeStopsAtRepoRoot(t *testing.T) {
+	// A fingerprint scattered across unrelated top-level trees must NOT
+	// merge: the common region would be the repo root, and a root lesson
+	// fires on every edit everywhere.
+	page := ghPage(
+		comment(1, "reviewer", "User", "engine/a.go", 1, 1, "Reset pooled state before reuse."),
+		comment(2, "reviewer", "User", "docs/b.md", 2, 2, "Reset pooled state before reuse."),
+	)
+
+	got := mine(t, page)
+
+	require.Len(t, got, 2, "cross-tree fingerprints stay file-scoped")
+
+	for _, l := range got {
+		assert.Equal(t, 1, l.occ)
+	}
+}
+
+func TestRuleCodeLessonsDoNotMergeAcrossDirectories(t *testing.T) {
+	// Coded lessons cluster per directory by design — a package's habit.
+	// The cross-file merge must leave them alone.
+	page := ghPage(
+		comment(1, "coderabbitai[bot]", "Bot", "pkg1/a.py", 1, 1, "Non-ascii `RUF001` in the docstring"),
+		comment(2, "coderabbitai[bot]", "Bot", "pkg2/b.py", 2, 2, "Non-ascii `RUF001` in the docstring"),
+	)
+
+	got := mine(t, page)
+
+	require.Len(t, got, 2, "one lesson per package, not one merged")
 }
 
 func TestParseConcatenatedPages(t *testing.T) {
@@ -233,6 +361,10 @@ func TestMineEndToEndWithInjectedFetcher(t *testing.T) {
 		require.NoError(t, cmd.Run())
 	}
 
+	// The workspace has Python, so Python linter codes are live.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "pkg", "a.py"), []byte("x = 1\n"), 0o644))
+
 	page := ghPage(
 		comment(1, "coderabbitai[bot]", "Bot", "pkg/a.py", 1, 1, "`RUF001` non-ascii"),
 		comment(2, "coderabbitai[bot]", "Bot", "pkg/b.py", 2, 2, "`RUF001` again"),
@@ -250,6 +382,42 @@ func TestMineEndToEndWithInjectedFetcher(t *testing.T) {
 	require.Len(t, res.Lessons, 1)
 	assert.Equal(t, "RUF001", res.Lessons[0].Symptom)
 	assert.Equal(t, 2, res.Lessons[0].Occurrences)
+}
+
+func TestMineGatesLinterCodesOnLanguage(t *testing.T) {
+	// Every recognized rule-code family is a Python linter; in a repo
+	// with no Python a match like `RUF001` in quoted output is a token
+	// collision. The gate drops the code and the comment clusters by its
+	// message instead.
+	root := t.TempDir()
+
+	for _, args := range [][]string{
+		{"init"}, {"remote", "add", "origin", "git@github.com:o/r.git"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		require.NoError(t, cmd.Run())
+	}
+
+	page := ghPage(
+		comment(1, "coderabbitai[bot]", "Bot", "pkg/a.go", 1, 1, "Docstring uses a non-ascii char `RUF001`"),
+	)
+	fetch := func(string, string, Options) ([]byte, error) { return []byte(page), nil }
+
+	res, err := Mine(root, Options{}, fetch)
+	require.NoError(t, err)
+	require.Len(t, res.Lessons, 1)
+	assert.NotEqual(t, "RUF001", res.Lessons[0].Symptom, "no Python in the repo — not a citation")
+	assert.Equal(t, "pkg/a.go", res.Lessons[0].Region, "falls back to file-scoped message clustering")
+
+	// The same repo grown a Python file flips the gate.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "tool.py"), []byte("x = 1\n"), 0o644))
+
+	res, err = Mine(root, Options{}, fetch)
+	require.NoError(t, err)
+	require.Len(t, res.Lessons, 1)
+	assert.Equal(t, "RUF001", res.Lessons[0].Symptom)
+	assert.Equal(t, "pkg", res.Lessons[0].Region)
 }
 
 func TestMineDegradesWithoutGitHubRemote(t *testing.T) {

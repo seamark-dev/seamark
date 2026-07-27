@@ -26,6 +26,7 @@ type ghComment struct {
 	HTMLURL        string `json:"html_url"`
 	CreatedAt      string `json:"created_at"` // RFC3339
 	PullRequestURL string `json:"pull_request_url"`
+	InReplyTo      int64  `json:"in_reply_to_id"` // 0 for a top-level comment
 }
 
 // parseComments decodes the GitHub review-comment payload into
@@ -82,6 +83,7 @@ func normalize(g ghComment) Comment {
 		CreatedAt: parseTime(g.CreatedAt),
 		PR:        prNumber(g.PullRequestURL),
 		RuleCode:  extractRuleCode(g.Body),
+		InReplyTo: g.InReplyTo,
 	}
 }
 
@@ -103,27 +105,56 @@ func classifyReviewer(login, userType string) string {
 	}
 }
 
-// linterPrefixes is the set of rule-code families seamark recognizes:
-// Ruff / flake8 / pycodestyle / pyflakes / pylint (PLC/PLE/PLR/PLW) and
-// their plugins. Anchoring to real prefixes keeps a bare `[A-Z]{1,4}\d+`
-// from swallowing tokens like SHA256, RFC3339, HTTP200, or ISO8601 —
-// which would forge a rule code and mis-cluster unrelated comments.
-// Extend as new linters appear; unknown codes just fall to the message
-// fingerprint, so a miss degrades, a false positive corrupts.
-const linterPrefixes = `RUF|PL[CERW]|ANN|ASYNC|BLE|COM|DTZ|EM|ERA|EXE|FBT|FLY|FURB|` +
-	`ICN|INP|ISC|NPY|PERF|PGH|PIE|PTH|PYI|RSE|RET|SIM|SLF|SLOT|TCH|TID|TRY|YTT|` +
-	`ARG|FA|PD|PT|UP|C4|C9|T1|T2|E|W|F|B|A|D|G|N|Q|S`
+// The rule-code families seamark recognizes: Ruff / flake8 / pycodestyle
+// / pyflakes / pylint (PLC/PLE/PLR/PLW) and their plugins. Anchoring to
+// real prefixes keeps a bare `[A-Z]{1,4}\d+` from swallowing tokens like
+// SHA256, RFC3339, HTTP200, or ISO8601 — which would forge a rule code
+// and mis-cluster unrelated comments. Extend as new linters appear;
+// unknown codes just fall to the message fingerprint, so a miss
+// degrades, a false positive corrupts.
+//
+// The families split by how safe their prefix is in prose. Three letters
+// and up (RUF001) collide with nothing and match anywhere; one- and
+// two-letter prefixes are ordinary word shapes (`rg -A10` once minted a
+// fake "A10" lesson from a CodeRabbit analysis script), so those only
+// count when cited the way linters cite them — wrapped in backticks or
+// parentheses. Longer alternatives come first: Go regexps take the
+// leftmost-first alternative, so `EM` must be tried before `E`.
+const (
+	longPrefixes = `RUF|PL[CERW]|ANN|ASYNC|BLE|COM|DTZ|ERA|EXE|FBT|FLY|FURB|` +
+		`ICN|INP|ISC|NPY|PERF|PGH|PIE|PTH|PYI|RSE|RET|SIM|SLF|SLOT|TCH|TID|TRY|YTT|ARG`
+	shortPrefixes = `EM|FA|PD|PT|UP|C4|C9|T1|T2|E|W|F|B|A|D|G|N|Q|S`
+	shortCode     = `(?:` + shortPrefixes + `)\d{2,4}`
+)
 
-// ruleCodeRe matches a cited linter code: a known prefix followed by
-// 2–4 digits, or a Pyright-style report rule (reportArgumentType).
-var ruleCodeRe = regexp.MustCompile(
-	`\b(?:` + linterPrefixes + `)\d{2,4}\b|\breport[A-Z][A-Za-z]+\b`)
+var (
+	longCodeRe = regexp.MustCompile(
+		`\b(?:` + longPrefixes + `)\d{2,4}\b|\breport[A-Z][A-Za-z]+\b`)
+	shortCodeRe = regexp.MustCompile(
+		"`(" + shortCode + ")`" + `|\((` + shortCode + `)\)`)
+)
 
 // extractRuleCode returns the first linter code cited in a comment body,
 // or "" — the opportunistic fast path that lets bot comments cluster by
-// (tool, rule) instead of by fuzzy message text.
+// (tool, rule) instead of by fuzzy message text. It reads the stripped
+// body: a code inside an executed script, a fenced example, or a details
+// block is quoted machinery, not a citation.
 func extractRuleCode(body string) string {
-	return ruleCodeRe.FindString(body)
+	s := stripBoilerplate(body)
+
+	if code := longCodeRe.FindString(s); code != "" {
+		return code
+	}
+
+	if m := shortCodeRe.FindStringSubmatch(s); m != nil {
+		if m[1] != "" {
+			return m[1]
+		}
+
+		return m[2]
+	}
+
+	return ""
 }
 
 // prNumber pulls the PR number off a pull_request_url

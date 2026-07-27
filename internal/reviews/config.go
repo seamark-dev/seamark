@@ -87,7 +87,7 @@ func (c *Config) Muted(l model.Lesson) bool {
 			continue
 		}
 
-		if m.Region != "" && !regionMatches(m.Region, l.Region) {
+		if m.Region != "" && !RegionMatches(m.Region, l.Region) {
 			continue
 		}
 
@@ -110,7 +110,7 @@ func (c *Config) pinsFor(scope string) []model.Lesson {
 
 	for _, p := range c.Pin {
 		if scope != "" && p.Region != "" && p.Region != "*" &&
-			!regionMatches(p.Region, scope) && !regionMatches(scope, p.Region) {
+			!RegionMatches(p.Region, scope) && !RegionMatches(scope, p.Region) {
 			continue
 		}
 
@@ -153,9 +153,10 @@ func (c *Config) Surface(mined []model.Lesson, scope string) []model.Lesson {
 	return out
 }
 
-// regionMatches reports whether target sits within region: an exact
-// match, or region as a path-prefix directory of target.
-func regionMatches(region, target string) bool {
+// RegionMatches reports whether target sits within region: an exact
+// match, or region as a path-prefix directory of target. Exported for
+// the `lessons --region` ledger filter.
+func RegionMatches(region, target string) bool {
 	if region == target {
 		return true
 	}

@@ -243,6 +243,18 @@ func TestLessonReplaceAndQuery(t *testing.T) {
 	assert.Equal(t, "RUF001", got[0].Symptom)
 	assert.Equal(t, 6, got[0].Occurrences)
 
+	// …and to files anywhere below it: cross-file merging widens regions
+	// to an ancestor directory, which must still reach nested files.
+	got, err = s.LessonsForFile("scripts/nested/deep/y.py", 2, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "RUF001", got[0].Symptom, "ancestor-region lessons apply to nested files")
+
+	// A sibling directory that merely shares a name prefix must not match.
+	got, err = s.LessonsForFile("scripts2/z.py", 2, 10)
+	require.NoError(t, err)
+	assert.Empty(t, got, "name-prefix sibling dirs are out of scope")
+
 	// TopLessons ranks by occurrences, filtered by threshold.
 	top, err := s.TopLessons(2, 10)
 	require.NoError(t, err)

@@ -68,6 +68,25 @@ func TestOrientSurfacesTopLessons(t *testing.T) {
 	assert.Contains(t, out, "RUF001")
 }
 
+func TestPinnedNoteSurvivesUntruncated(t *testing.T) {
+	// A pin's note IS the guidance: the template promises it is "shown to
+	// the agent verbatim", and on a real repo a hard 34-char cut reduced
+	// a curated 10-finding pin to "Adding a fie…" — the agent never saw
+	// the instruction. Lesson text must reach every surface whole.
+	note := "Adding a field to a pooled struct? Reset it in Free() and " +
+		"deep-copy it in clone(). Reviewers have flagged this ten times."
+	lessons := []model.Lesson{
+		{Region: "engine/resolve", Reviewer: "pinned",
+			Symptom: "pooled-state-reset — " + note, Occurrences: 1 << 30},
+	}
+
+	var b strings.Builder
+	require.NoError(t, PrintLessonReminder(&b, "engine/resolve/context.go", lessons))
+
+	assert.Contains(t, b.String(), note, "the full note reaches the agent")
+	assert.NotContains(t, b.String(), "…", "no ellipsis truncation on lesson text")
+}
+
 func TestLessonSymptomSanitized(t *testing.T) {
 	root := t.TempDir()
 	st, err := store.Open(filepath.Join(root, "index.db"))

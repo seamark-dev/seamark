@@ -12,8 +12,11 @@
 package reviews
 
 import (
+	"bytes"
 	"fmt"
+	"io/fs"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -32,6 +35,7 @@ type Comment struct {
 	CreatedAt int64  // unix seconds
 	PR        int    // pull-request number
 	RuleCode  string // extracted linter code (RUF001, reportArgumentType…), or ""
+	InReplyTo int64  // id of the thread's top comment; 0 when this IS one
 }
 
 // Options bounds a mining pass. Empty today; the field for a `since`
@@ -85,7 +89,58 @@ func Mine(root string, opts Options, fetch Fetcher) (Result, error) {
 		return Result{Fetched: true, Note: "no review comments found"}, nil
 	}
 
+	// Every recognized rule-code family is a Python linter today, so in
+	// a repo with no Python at all any match is a token collision, never
+	// a citation. Dropping the code sends the comment to the message
+	// fingerprint instead. Split per-family when other languages' linters
+	// join the list.
+	if !hasPython(root) {
+		for i := range comments {
+			comments[i].RuleCode = ""
+		}
+	}
+
 	return Result{Lessons: cluster(comments), Fetched: true}, nil
+}
+
+// hasPython reports whether the workspace contains Python source. git
+// answers fast and gitignore-aware (-co: tracked and untracked alike);
+// outside git a walk looks for the first .py file, skipping the usual
+// dependency dirs.
+func hasPython(root string) bool {
+	cmd := exec.Command("git", "ls-files", "-z", "-co", "--exclude-standard", "--", "*.py")
+	cmd.Dir = root
+
+	if out, err := cmd.Output(); err == nil {
+		return len(bytes.TrimSpace(out)) > 0
+	}
+
+	found := false
+
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if d.IsDir() {
+			name := d.Name()
+			if p != root && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules") {
+				return filepath.SkipDir
+			}
+
+			return nil
+		}
+
+		if strings.HasSuffix(p, ".py") {
+			found = true
+
+			return filepath.SkipAll
+		}
+
+		return nil
+	})
+
+	return found
 }
 
 // remoteRe extracts owner/repo from the common github.com remote forms:

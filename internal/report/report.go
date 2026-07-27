@@ -277,7 +277,7 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 
 	for _, f := range shown {
 		fmt.Fprintf(w, "  ×%-4d %-30s %-24s  last %s\n",
-			f.Count, render.Truncate(render.Sanitize(f.Symptom), 30),
+			f.Count, render.Sanitize(f.Symptom),
 			render.Sanitize(f.Region), firingDate(f.LastTS))
 	}
 
@@ -292,7 +292,7 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 
 		for _, l := range never {
 			fmt.Fprintf(w, "  %-30s %s\n",
-				render.Truncate(render.Sanitize(l.Symptom), 30), render.Sanitize(l.Region))
+				render.Sanitize(l.Symptom), render.Sanitize(l.Region))
 		}
 	}
 }
@@ -328,7 +328,7 @@ func PrintLessonLedger(w io.Writer, lessons []model.Lesson, cfg *reviews.Config)
 		}
 
 		fmt.Fprintf(w, "  ×%-4d %-28s %-26s [%s]%s\n",
-			l.Occurrences, render.Truncate(render.Sanitize(l.Symptom), 28),
+			l.Occurrences, render.Sanitize(l.Symptom),
 			render.Sanitize(l.Region), render.Sanitize(l.Reviewer), marker)
 	}
 
@@ -345,7 +345,11 @@ Tune what surfaces in .seamark/lessons.yaml (applied without re-mining):
 
 // printLessons renders clustered review feedback. Symptom text comes
 // from comment bodies (and pinned config notes) — untrusted — so it is
-// sanitized and truncated. A pinned lesson shows "pinned", not a count.
+// sanitized, but never truncated: this line IS the guidance on every
+// surface, including the edit hook's injected context, and a pinned
+// note cut mid-sentence defeats the pin (mined fingerprints are ≤80
+// chars by construction; pinned notes are the user's own words). A
+// pinned lesson shows "pinned", not a count.
 func printLessons(w io.Writer, lessons []model.Lesson) {
 	for _, l := range lessons {
 		count := fmt.Sprintf("×%d", l.Occurrences)
@@ -354,7 +358,7 @@ func printLessons(w io.Writer, lessons []model.Lesson) {
 		}
 
 		fmt.Fprintf(w, "  %-34s %-7s %s [%s]\n",
-			render.Truncate(render.Sanitize(l.Symptom), 34), count,
+			render.Sanitize(l.Symptom), count,
 			render.Sanitize(l.Region), render.Sanitize(l.Reviewer))
 	}
 }

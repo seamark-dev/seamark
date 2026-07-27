@@ -3,6 +3,7 @@ bin/
 *.db
 node_modules/
 .DS_Store
+testdb/
 
 # Working notes stay local; the README is the public doc surface.
 CLAUDE.md

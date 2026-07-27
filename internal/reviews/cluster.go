@@ -14,9 +14,15 @@ import (
 // (directory, code) so a linter finding that recurs across a package
 // reads as one lesson; an un-coded comment clusters by (file, normalized
 // message) so repeated prose about one file collapses too.
+//
+// Not every comment is a finding: thread replies are conversation about a
+// finding (the author's "fixed", the reviewer's follow-up), and top-level
+// remarks without substance ("Very smart!") teach nothing. Both are
+// dropped here — mining them was the dominant noise source on real repos.
 func cluster(comments []Comment) []model.Lesson {
 	byKey := map[string]*model.Lesson{}
 	reviewers := map[string]map[string]bool{} // key -> set of reviewers
+	uncoded := map[string]bool{}              // keys clustered by message, not code
 
 	for i := range comments {
 		c := &comments[i]
@@ -25,7 +31,15 @@ func cluster(comments []Comment) []model.Lesson {
 			continue // not a file-anchored comment; nothing to attach it to
 		}
 
+		if c.InReplyTo != 0 {
+			continue // a reply discusses a finding; the finding is the lesson
+		}
+
 		region, symptom := regionAndSymptom(c)
+		if symptom == "" {
+			continue // no substance to learn from
+		}
+
 		key := region + "\x00" + symptom
 
 		lesson := byKey[key]
@@ -38,6 +52,7 @@ func cluster(comments []Comment) []model.Lesson {
 			}
 			byKey[key] = lesson
 			reviewers[key] = map[string]bool{}
+			uncoded[key] = c.RuleCode == ""
 		}
 
 		lesson.Occurrences++
@@ -49,6 +64,8 @@ func cluster(comments []Comment) []model.Lesson {
 			lesson.ExampleURL = c.URL
 		}
 	}
+
+	mergeAcrossFiles(byKey, reviewers, uncoded)
 
 	out := make([]model.Lesson, 0, len(byKey))
 
@@ -69,11 +86,106 @@ func cluster(comments []Comment) []model.Lesson {
 	return out
 }
 
+// mergeAcrossFiles widens un-coded lessons whose fingerprint recurs in
+// several files to their deepest common directory: identical feedback in
+// three files is a habit of the area, not a property of any one file —
+// and per-file counting would leave each copy below the surface
+// threshold. Merging stops at the repo root: a fingerprint scattered
+// across unrelated top-level trees would otherwise become a repo-wide
+// lesson that fires on every edit.
+func mergeAcrossFiles(byKey map[string]*model.Lesson,
+	reviewers map[string]map[string]bool, uncoded map[string]bool,
+) {
+	bySymptom := map[string][]string{} // symptom -> keys of un-coded lessons
+
+	for key := range byKey {
+		if uncoded[key] {
+			bySymptom[byKey[key].Symptom] = append(bySymptom[byKey[key].Symptom], key)
+		}
+	}
+
+	for symptom, keys := range bySymptom {
+		if len(keys) < 2 {
+			continue
+		}
+
+		// Deterministic merge order, so ties on LastTS always elect the
+		// same representative ExampleURL run to run.
+		sort.Strings(keys)
+
+		regions := make([]string, len(keys))
+		for i, key := range keys {
+			regions[i] = byKey[key].Region
+		}
+
+		dir := commonDir(regions)
+		if dir == "" {
+			continue // only the root is shared; keep the lessons file-scoped
+		}
+
+		merged := &model.Lesson{
+			ClusterKey: dir + "\x00" + symptom,
+			Region:     dir,
+			Symptom:    symptom,
+		}
+		set := map[string]bool{}
+
+		for _, key := range keys {
+			l := byKey[key]
+			merged.Occurrences += l.Occurrences
+
+			if l.LastTS >= merged.LastTS {
+				merged.LastTS = l.LastTS
+				merged.ExampleURL = l.ExampleURL
+			}
+
+			for r := range reviewers[key] {
+				set[r] = true
+			}
+
+			delete(byKey, key)
+			delete(reviewers, key)
+		}
+
+		byKey[merged.ClusterKey] = merged
+		reviewers[merged.ClusterKey] = set
+	}
+}
+
+// commonDir returns the deepest directory shared by every file path, ""
+// when only the repo root is.
+func commonDir(files []string) string {
+	segs := strings.Split(path.Dir(files[0]), "/")
+
+	for _, f := range files[1:] {
+		other := strings.Split(path.Dir(f), "/")
+
+		if len(other) < len(segs) {
+			segs = segs[:len(other)]
+		}
+
+		for i := range segs {
+			if segs[i] != other[i] {
+				segs = segs[:i]
+				break
+			}
+		}
+	}
+
+	common := path.Join(segs...)
+	if common == "." {
+		return ""
+	}
+
+	return common
+}
+
 // regionAndSymptom derives a lesson's clustering coordinates from one
 // comment. A cited rule code widens the region to the directory (the
 // finding is about a coding habit, not one line); otherwise the region
 // is the specific file and the symptom is a coarse fingerprint of the
-// message so slightly different wordings still collapse.
+// message so slightly different wordings still collapse. An empty
+// symptom means the comment carries nothing worth learning.
 func regionAndSymptom(c *Comment) (region, symptom string) {
 	if c.RuleCode != "" {
 		// A cited code recurring across a package is a habit; cluster by
@@ -92,10 +204,18 @@ func regionAndSymptom(c *Comment) (region, symptom string) {
 }
 
 var (
-	// detailsRe cuts CodeRabbit's appended "<details>🤖 Prompt for AI
-	// Agents</details>" block and everything after it — pure boilerplate.
-	detailsRe = regexp.MustCompile(`(?s)<details>.*`)
-	fenceRe   = regexp.MustCompile("(?s)```.*?```")
+	// detailsBlockRe removes each closed "<details>…</details>" block.
+	// CodeRabbit wraps its boilerplate in them ("🧩 Analysis chain" with
+	// executed scripts BEFORE the finding, "🤖 Prompt for AI Agents"
+	// after) — the finding itself sits between the blocks, so removal
+	// must be per-block, never greedy-to-the-end.
+	detailsBlockRe = regexp.MustCompile(`(?s)<details>.*?</details>`)
+	// detailsTailRe cuts an unclosed trailing block, the pre-block
+	// fallback for truncated bodies.
+	detailsTailRe = regexp.MustCompile(`(?s)<details>.*`)
+	htmlNoteRe    = regexp.MustCompile(`(?s)<!--.*?-->`)
+	fenceRe       = regexp.MustCompile("(?s)```.*?```")
+	urlRe         = regexp.MustCompile(`https?://\S+`)
 	// boldRe captures the first **bold** span. Reviewers (CodeRabbit
 	// especially) put a one-line issue title there, after an italic
 	// severity tagline — a far better fingerprint than the raw first line.
@@ -106,15 +226,41 @@ var (
 	numberRunRe = regexp.MustCompile(`\b\d+\b`)
 )
 
-// normalizeSymptom reduces a comment body to a coarse fingerprint of the
-// issue it raises. It prefers the reviewer's own bold title, falling back
-// to the first sentence, then lowercases and strips markup, digits, and
-// punctuation so near-identical wordings cluster together. Distinct
-// issues get distinct fingerprints — and correctly stay one-offs that
-// never cross the recurrence threshold.
-func normalizeSymptom(body string) string {
-	s := detailsRe.ReplaceAllString(body, " ")
+// stripBoilerplate removes the non-finding matter of a comment body:
+// details blocks, HTML comments, code fences, and URLs. Shared by the
+// fingerprint and the rule-code extractor — a linter code inside an
+// executed script or a fenced example is quoted machinery, not a citation
+// (`rg -A10` in a CodeRabbit analysis script once minted a fake "A10"
+// lesson).
+func stripBoilerplate(body string) string {
+	s := detailsBlockRe.ReplaceAllString(body, " ")
+	s = detailsTailRe.ReplaceAllString(s, " ")
+	s = htmlNoteRe.ReplaceAllString(s, " ")
 	s = fenceRe.ReplaceAllString(s, " ")
+
+	return urlRe.ReplaceAllString(s, " ")
+}
+
+// ackFingerprints are normalized fingerprints that pass the word floor
+// yet still teach nothing: reactions to a change, not feedback about it.
+var ackFingerprints = map[string]bool{
+	"looks good to me": true, "sounds good to me": true, "makes sense to me": true,
+	"this looks good": true, "this is fine": true, "good catch thanks": true,
+	"thanks good catch": true, "thanks for fixing": true, "you are right": true,
+	"yes you are right": true, "will fix in a follow up": true,
+}
+
+// normalizeSymptom reduces a comment body to a coarse fingerprint of the
+// issue it raises, or "" when there is no issue to fingerprint. It
+// prefers the reviewer's own bold title, falling back to the first
+// sentence, then lowercases and strips markup, digits, and punctuation so
+// near-identical wordings cluster together. Distinct issues get distinct
+// fingerprints — and correctly stay one-offs that never cross the
+// recurrence threshold. Fingerprints under three words are dropped: what
+// survives normalization that short ("fixed", "stale comment", "fmt") is
+// reaction or shorthand, never guidance an agent could apply.
+func normalizeSymptom(body string) string {
+	s := stripBoilerplate(body)
 
 	if m := boldRe.FindStringSubmatch(s); m != nil {
 		s = m[1] // the issue title
@@ -133,8 +279,8 @@ func normalizeSymptom(body string) string {
 		s = strings.TrimSpace(s[:limit])
 	}
 
-	if s == "" {
-		s = "review comment"
+	if strings.Count(s, " ") < 2 || ackFingerprints[s] {
+		return ""
 	}
 
 	return s

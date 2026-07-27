@@ -19,24 +19,29 @@ import (
 func newLessonsCmd(opts *options) *cobra.Command {
 	var (
 		file     string
+		region   string
 		hookMode bool
 		list     bool
 		stats    bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "lessons [--file <path> | --list | --stats]",
+		Use:   "lessons [--file <path> | --list [--region <prefix>] | --stats]",
 		Short: "Show the recurring review feedback mined from pull requests",
 		Long: `Prints the review lessons (mined by "index --reviews", tuned by
 .seamark/lessons.yaml) — the mistakes reviewers keep flagging.
 
-  --file <path>  the lessons that apply to one file's area
-  --list         every mined lesson repo-wide, with config syntax to
-                 mute the noise or pin what must never be ignored
-  --stats        which lessons the edit hook actually surfaced to agents,
-                 and which would surface but never have (decay candidates)
-  --hook         read a Claude Code PreToolUse payload from stdin and emit
-                 the edited file's lessons as additionalContext
+  --file <path>    the lessons that apply to one file's area
+  --list           every mined lesson repo-wide, with config syntax to
+                   mute the noise or pin what must never be ignored
+  --region <path>  narrow --list to one directory's area: its lessons
+                   and its ancestors' — the raw material (including
+                   below-threshold one-offs) for spotting a pattern the
+                   per-file counters cannot see. Implies --list.
+  --stats          which lessons the edit hook actually surfaced to agents,
+                   and which would surface but never have (decay candidates)
+  --hook           read a Claude Code PreToolUse payload from stdin and emit
+                   the edited file's lessons as additionalContext
 
 --hook is read-only and offline: no network, no re-indexing, silent when
 a file has no lessons.`,
@@ -45,8 +50,8 @@ a file has no lessons.`,
 			switch {
 			case hookMode:
 				return runLessonsHook(cmd, opts)
-			case list:
-				return runLessonsList(cmd, opts)
+			case list || strings.TrimSpace(region) != "":
+				return runLessonsList(cmd, opts, strings.TrimSpace(region))
 			case stats:
 				return runLessonsStats(cmd, opts)
 			case strings.TrimSpace(file) != "":
@@ -70,6 +75,7 @@ a file has no lessons.`,
 
 	cmd.Flags().StringVar(&file, "file", "", "repo-relative (or absolute) path to look up")
 	cmd.Flags().BoolVar(&list, "list", false, "list every mined lesson with config-tuning syntax")
+	cmd.Flags().StringVar(&region, "region", "", "narrow --list to a directory's area (implies --list)")
 	cmd.Flags().BoolVar(&stats, "stats", false, "summarize the firing log: what surfaced, what never fires")
 	cmd.Flags().BoolVar(&hookMode, "hook", false,
 		"read a PreToolUse JSON payload from stdin and emit lessons as additionalContext")
@@ -77,8 +83,12 @@ a file has no lessons.`,
 	return cmd
 }
 
-// runLessonsList prints the full ledger of mined lessons.
-func runLessonsList(cmd *cobra.Command, opts *options) error {
+// runLessonsList prints the ledger of mined lessons — every one, or, with
+// a region, those in that directory's area. A region-scoped ledger is
+// the pattern-hunting view: per-file clustering keeps semantically
+// related one-offs apart, and reading an area's raw findings side by
+// side is how a human (or an agent) spots what the counters cannot.
+func runLessonsList(cmd *cobra.Command, opts *options, region string) error {
 	st, root, err := openIndex(opts)
 	if err != nil {
 		return err
@@ -88,6 +98,22 @@ func runLessonsList(cmd *cobra.Command, opts *options) error {
 	lessons, err := st.AllLessons(0)
 	if err != nil {
 		return err
+	}
+
+	if region != "" {
+		region = toRepoRel(root, region)
+		scoped := lessons[:0]
+
+		// A lesson belongs to the area if its region sits inside the
+		// asked-for prefix — or is an ancestor of it, so a directory
+		// query still shows the package-wide lessons that cover it.
+		for _, l := range lessons {
+			if reviews.RegionMatches(region, l.Region) || reviews.RegionMatches(l.Region, region) {
+				scoped = append(scoped, l)
+			}
+		}
+
+		lessons = scoped
 	}
 
 	cfg, err := reviews.LoadConfig(root)

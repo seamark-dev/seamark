@@ -244,6 +244,14 @@ func TestLessonsList(t *testing.T) {
 	assert.Contains(t, out, "E702")
 	assert.Contains(t, out, "RUF001", "one-offs appear in the ledger")
 	assert.Contains(t, out, ".seamark/lessons.yaml", "shows tuning syntax")
+
+	// --region narrows the ledger to one area (implying --list): the raw
+	// per-file findings an agent reads side by side to spot a pattern.
+	out, err = run(t, "-C", root, "lessons", "--region", "scripts")
+	require.NoError(t, err)
+	assert.Contains(t, out, "E702", "lessons inside the region stay")
+	assert.NotContains(t, out, "RUF001", "lessons outside the region are filtered")
+	assert.Contains(t, out, "1 total")
 }
 
 func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
