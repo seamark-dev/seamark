@@ -38,9 +38,14 @@ type Comment struct {
 	InReplyTo int64  // id of the thread's top comment; 0 when this IS one
 }
 
-// Options bounds a mining pass. Empty today; the field for a `since`
-// watermark lands with incremental mining.
-type Options struct{}
+// Options bounds a mining pass. (The field for a `since` watermark
+// lands with incremental mining.)
+type Options struct {
+	// Logf receives fetch and clustering progress; nil discards it. The
+	// GitHub fetch is the silent long pole of a mine — pages of network
+	// I/O — and silence reads as stuck.
+	Logf func(format string, args ...any)
+}
 
 // Fetcher returns raw GitHub review-comment JSON (a single JSON array,
 // paginated pages already concatenated) for owner/repo. Injected so
@@ -75,6 +80,13 @@ func Mine(root string, opts Options, fetch Fetcher) (Result, error) {
 		fetch = ghFetch
 	}
 
+	logf := opts.Logf
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+
+	logf("reviews: fetching PR comments for %s/%s…", owner, repo)
+
 	raw, err := fetch(owner, repo, opts)
 	if err != nil {
 		return Result{Note: "review mining skipped: " + err.Error()}, nil
@@ -84,6 +96,8 @@ func Mine(root string, opts Options, fetch Fetcher) (Result, error) {
 	if err != nil {
 		return Result{Note: "review comments unreadable: " + err.Error()}, nil
 	}
+
+	logf("reviews: %d comments fetched; clustering…", len(comments))
 
 	// From here the fetch succeeded: even zero comments is a real answer
 	// (the repo has none), safe to replace the stored set with.
@@ -176,7 +190,8 @@ func githubSlug(root string) (owner, repo string, ok bool) {
 // ghFetch is the default Fetcher: it asks the GitHub CLI for every review
 // comment on the repo's pull requests, following pagination. gh handles
 // authentication and host resolution; if it is missing or unauthenticated
-// the error surfaces as a skip Note upstream.
+// the error surfaces as a skip Note upstream. Progress streams through
+// opts.Logf as data arrives — a large repo is minutes of pages.
 func ghFetch(owner, repo string, opts Options) ([]byte, error) {
 	path := fmt.Sprintf("repos/%s/%s/pulls/comments?per_page=100", owner, repo)
 
@@ -184,20 +199,49 @@ func ghFetch(owner, repo string, opts Options) ([]byte, error) {
 	// single flat JSON array (no --slurp, which older gh lacks).
 	cmd := exec.Command("gh", "api", "--paginate", path)
 
-	out, err := cmd.Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			msg := strings.TrimSpace(string(ee.Stderr))
-			// gh's auth hint is multi-line and noisy; keep it short.
-			if i := strings.IndexByte(msg, '\n'); i > 0 {
-				msg = msg[:i]
-			}
+	out := &progressWriter{logf: opts.Logf, next: progressStep}
 
-			return nil, fmt.Errorf("gh api: %s", msg)
+	var errb bytes.Buffer
+
+	cmd.Stdout = out
+	cmd.Stderr = &errb
+
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(errb.String())
+		// gh's auth hint is multi-line and noisy; keep it short.
+		if i := strings.IndexByte(msg, '\n'); i > 0 {
+			msg = msg[:i]
 		}
 
-		return nil, fmt.Errorf("gh api: %w (is the GitHub CLI installed?)", err)
+		if msg == "" {
+			return nil, fmt.Errorf("gh api: %w (is the GitHub CLI installed?)", err)
+		}
+
+		return nil, fmt.Errorf("gh api: %s", msg)
 	}
 
-	return out, nil
+	return out.buf.Bytes(), nil
+}
+
+// progressStep is how much fetched data earns one progress line —
+// roughly two pages of comments.
+const progressStep = 512 * 1024
+
+// progressWriter accumulates the fetch while reporting its size at
+// coarse intervals.
+type progressWriter struct {
+	buf  bytes.Buffer
+	logf func(format string, args ...any)
+	next int
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	p.buf.Write(b)
+
+	for p.logf != nil && p.buf.Len() >= p.next {
+		p.logf("reviews: %.1f MB fetched…", float64(p.next)/(1<<20))
+		p.next += progressStep
+	}
+
+	return len(b), nil
 }

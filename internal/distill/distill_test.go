@@ -124,6 +124,26 @@ func TestRunHonorsRegionAndLimit(t *testing.T) {
 	assert.Equal(t, 1, res.GroupsSkipped, "api group already distilled")
 }
 
+func TestRunMetersAgentTraffic(t *testing.T) {
+	st := openSeeded(t, pooledState)
+
+	reply := `{"patterns": []}`
+	empty := &fakeAgent{fn: func(string) (string, error) { return reply, nil }}
+
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), empty, Options{})
+	require.NoError(t, err)
+
+	assert.Greater(t, res.PromptChars, 500, "the prompt carries the findings")
+	assert.Equal(t, len(reply), res.ReplyChars)
+	assert.Contains(t, res.CostNote(), "tokens sent")
+	assert.Contains(t, res.CostNote(), "(estimated)")
+
+	// A fully-skipped run cost nothing and says nothing.
+	res, err = Run(context.Background(), st, NewLexicalGrouper(), empty, Options{})
+	require.NoError(t, err)
+	assert.Empty(t, res.CostNote())
+}
+
 func TestRunPrunesStaleProposals(t *testing.T) {
 	st := openSeeded(t, pooledState)
 

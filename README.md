@@ -210,6 +210,7 @@ shows — applied at surface time, so edits take effect with no re-mining:
 
 ```yaml
 threshold: 2                     # min recurrences to surface (default 2)
+pin_budget: 3                    # pins the edit hook injects per edit (default 3)
 mute:
   - rule: F541                   # hush a noisy rule everywhere
   - region: alembic/versions     # …or every lesson under generated code
@@ -220,8 +221,16 @@ pin:                             # your "must not be ignored" list —
 ```
 
 `mute` kills noise; `pin` is the escape hatch for a rule you care about
-more than the mined frequency implies. Both flow through `why`, `orient`,
-and the edit hook via one path, so they never disagree.
+more than the mined frequency implies — written by hand, exactly like
+policy.yaml rules (the distiller below can draft them, but never has
+to). Both flow through `why`, `orient`, and the edit hook via one path,
+so they never disagree.
+
+Pins are powerful, so their injection cost is budgeted: the edit hook
+carries at most `pin_budget` pins per edit (default 3), most specific
+region first — a pin on the file beats its package beats a repo-wide
+`*` — with a `+N more` pointer for the rest. Deliberate views (`--file`,
+`why`) always show everything; only the ambient injection is capped.
 
 You don't have to author this by hand. `seamark lessons --list` prints
 every mined lesson — including the one-off noise that `why`/`orient` hide
@@ -254,7 +263,11 @@ Exact clustering can't see that ten differently-worded findings are one
 mistake. `seamark lessons --distill` can: it batches the raw findings
 into candidate groups and asks **your own agent CLI** (`claude` by
 default — seamark holds no API keys) to name what recurs, as proposed
-pins:
+pins. It is an optional accelerator, nothing more: every entry it
+drafts is one you could write by hand in the same file, and repos
+without an agent CLI (or without the appetite for tokens) simply skip
+it. Each run reports what it spent — per group and in total, estimated
+tokens and wall time:
 
 ```text
 $ seamark lessons --distill --region v2/pkg/engine

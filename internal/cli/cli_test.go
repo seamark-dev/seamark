@@ -359,6 +359,69 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	assert.Contains(t, err.Error(), "unexpected argument")
 }
 
+func TestHookBudgetsPinsFileViewDoesNot(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// Five pins covering a.go, in mixed specificity — the real-world
+	// shape after a generous distill --apply session.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(`
+pin:
+  - {rule: wide-one, region: "*", note: "w1"}
+  - {rule: wide-two, region: "*", note: "w2"}
+  - {rule: wide-three, region: "*", note: "w3"}
+  - {rule: on-file-one, region: a.go, note: "f1"}
+  - {rule: on-file-two, region: a.go, note: "f2"}
+`), 0o644))
+
+	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` +
+		filepath.Join(root, "a.go") + `"}}`
+
+	out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+
+	var hook struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &hook))
+	ctx := hook.HookSpecificOutput.AdditionalContext
+
+	// Budget 3, file-specific first, the rest pointed at.
+	assert.Contains(t, ctx, "on-file-one")
+	assert.Contains(t, ctx, "on-file-two")
+	assert.Contains(t, ctx, "wide-one")
+	assert.NotContains(t, ctx, "wide-two", "beyond the budget")
+	assert.Contains(t, ctx, "+2 more pins")
+
+	// The deliberate --file view shows all five, no pointer line.
+	listing, err := run(t, "-C", root, "lessons", "--file", "a.go")
+	require.NoError(t, err)
+	assert.Contains(t, listing, "wide-three")
+	assert.NotContains(t, listing, "more pins")
+
+	// pin_budget in lessons.yaml raises the injection cap.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(`
+pin_budget: 5
+pin:
+  - {rule: wide-one, region: "*", note: "w1"}
+  - {rule: wide-two, region: "*", note: "w2"}
+  - {rule: wide-three, region: "*", note: "w3"}
+  - {rule: on-file-one, region: a.go, note: "f1"}
+  - {rule: on-file-two, region: a.go, note: "f2"}
+`), 0o644))
+
+	out, _, err = runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal([]byte(out), &hook))
+	assert.Contains(t, hook.HookSpecificOutput.AdditionalContext, "wide-three")
+	assert.NotContains(t, hook.HookSpecificOutput.AdditionalContext, "more pins")
+}
+
 func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
 	root := writeFixture(t)
 

@@ -96,9 +96,16 @@ mute:
 
 # Your exceptions that must NOT be ignored: surfaced always, for their
 # region, even if mining found them once or never. The note is shown to
-# the agent verbatim.
+# the agent verbatim. Write pins by hand, or let ` + "`lessons --distill`" + `
+# draft them — same entries, same review, distill is optional.
 pin:
   # - rule: RUF001
   #   region: scripts
   #   note: "Keep scripts ASCII — smart quotes from chat have bitten us"
+
+# How many pins the EDIT HOOK injects per edit (most specific region
+# first; the rest are one pointer line away). Deliberate views (--file,
+# why) always show everything. Default 3 — every applied pin taxes every
+# future edit, so spend consciously.
+# pin_budget: 3
 `

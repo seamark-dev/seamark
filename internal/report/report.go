@@ -230,25 +230,44 @@ func loadLessonConfig(w io.Writer, root string) *reviews.Config {
 // config's mute/pin/threshold rules — the single path every surface
 // (why, orient, the edit hook) shares, so they never disagree.
 func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit int) ([]model.Lesson, error) {
+	out, _, err := LessonsForScopeBudget(st, cfg, file, limit, 0)
+
+	return out, err
+}
+
+// LessonsForScopeBudget is LessonsForScope with a pin cap for ambient
+// surfaces (the edit hook); trimmed reports how many applicable pins the
+// budget held back, so the caller can point at them instead of hiding
+// them.
+func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, limit, pinBudget int) ([]model.Lesson, int, error) {
+	// A pin budget above the surface's own cap would let the cap eat
+	// pins with trimmed=0 — a silent drop, exactly what the budget
+	// contract forbids. Clamp so every held-back pin is counted.
+	if pinBudget > limit {
+		pinBudget = limit
+	}
+
 	// Query with threshold 1 (everything for this region); the config's
 	// Surface applies the real threshold, mute, and pins.
 	mined, err := st.LessonsForFile(file, 1, 100)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	out := cfg.Surface(mined, file)
+	out, trimmed := cfg.SurfaceBudget(mined, file, pinBudget)
 	if len(out) > limit {
 		out = out[:limit]
 	}
 
-	return out, nil
+	return out, trimmed, nil
 }
 
 // PrintLessonReminder writes a compact standalone lessons block for one
 // file — used by `seamark lessons` and the PreToolUse edit hook. Writes
-// nothing when there are no lessons, so the hook stays silent.
-func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson) error {
+// nothing when there are no lessons, so the hook stays silent. morePins
+// is how many applicable pins the injection budget held back; they are
+// pointed at, never silently dropped.
+func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson, morePins int) error {
 	if len(lessons) == 0 {
 		return nil
 	}
@@ -263,6 +282,11 @@ func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson) error
 		"Reviewers repeatedly flag these here; avoid repeating them:\n",
 		render.Sanitize(file))
 	printLessons(w, lessons)
+
+	if morePins > 0 {
+		fmt.Fprintf(w, "(+%d more pins for this area: `seamark lessons --file %s`)\n",
+			morePins, render.Sanitize(file))
+	}
 
 	// The promotion loop's cheapest trigger: the agent editing here is
 	// the one best placed to notice a repeat these lessons miss — and a
@@ -452,6 +476,10 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal)
 
 	fmt.Fprintln(w)
 
+	if res.TokensNote != "" {
+		fmt.Fprintln(w, res.TokensNote)
+	}
+
 	if len(pending) == 0 {
 		fmt.Fprintln(w, "\nno proposals pending — nothing recurs that the mined lessons miss")
 
@@ -486,6 +514,9 @@ type DistillSummary struct {
 	GroupsFailed  int
 	GroupsPending int
 	PrunedStale   int
+	// TokensNote is the caller-rendered cost line ("~59k tokens sent …"),
+	// empty when nothing was sent.
+	TokensNote string
 }
 
 func printDecisions(w io.Writer, decisions []model.Decision) {

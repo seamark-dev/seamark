@@ -346,7 +346,7 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (reviews.Res
 		dbPath = store.DefaultPath(root)
 	}
 
-	res, err := reviews.Mine(root, reviews.Options{}, nil)
+	res, err := reviews.Mine(root, reviews.Options{Logf: logf}, nil)
 	if err != nil {
 		return res, err
 	}

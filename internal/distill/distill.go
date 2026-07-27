@@ -48,7 +48,13 @@ type Result struct {
 	GroupsFailed  int // agent or parse errors (not marked; retried next run)
 	GroupsPending int // new groups left unread (limit or region filter)
 	PrunedStale   int // pending proposals dropped because their group changed
-	Proposals     []model.Proposal
+	// PromptChars/ReplyChars meter the run's agent traffic — the basis
+	// for the ~token estimate shown to the user. Failed groups count
+	// too: their cost was paid.
+	PromptChars int
+	ReplyChars  int
+	Duration    time.Duration
+	Proposals   []model.Proposal
 }
 
 // Run executes the plan half of distillation: group the findings, skip
@@ -57,6 +63,8 @@ type Result struct {
 // never touches .seamark/lessons.yaml — applying is a separate, human
 // decision.
 func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoker, opts Options) (*Result, error) {
+	start := time.Now()
+
 	logf := opts.Logf
 	if logf == nil {
 		logf = func(string, ...any) {}
@@ -103,7 +111,12 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 
 		logf("distilling %d findings (%s, %s)", len(g.Findings), regionLabel(g.Region), g.Signature)
 
-		proposals, err := distillGroup(ctx, inv, g)
+		began := time.Now()
+
+		proposals, sent, received, err := distillGroup(ctx, inv, g)
+		res.PromptChars += sent
+		res.ReplyChars += received
+
 		if err != nil {
 			// Not marked: a transient agent failure must not burn the
 			// group's one chance. The next run retries it.
@@ -112,6 +125,9 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 
 			continue
 		}
+
+		logf("  %s, ~%s tokens sent / ~%s back, %d proposal(s)",
+			time.Since(began).Round(time.Second), estTokens(sent), estTokens(received), len(proposals))
 
 		res.GroupsRead++
 
@@ -128,20 +144,51 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 		}
 	}
 
+	res.Duration = time.Since(start)
+
 	return res, nil
 }
 
-// distillGroup sends one group to the agent and validates the reply.
-func distillGroup(ctx context.Context, inv agent.Invoker, g Group) ([]model.Proposal, error) {
+// distillGroup sends one group to the agent and validates the reply,
+// reporting the traffic sizes either way — cost is paid on failure too.
+func distillGroup(ctx context.Context, inv agent.Invoker, g Group) (proposals []model.Proposal, sent, received int, err error) {
 	ctx, cancel := context.WithTimeout(ctx, perGroupTimeout)
 	defer cancel()
 
-	reply, err := inv.Invoke(ctx, buildPrompt(g))
+	prompt := buildPrompt(g)
+
+	reply, err := inv.Invoke(ctx, prompt)
 	if err != nil {
-		return nil, err
+		return nil, len(prompt), len(reply), err
 	}
 
-	return parseReply(reply, g, inv.Name())
+	proposals, err = parseReply(reply, g, inv.Name())
+
+	return proposals, len(prompt), len(reply), err
+}
+
+// CostNote renders what the run cost: estimated tokens both ways and
+// wall time. Empty when no agent traffic happened — a fully-skipped run
+// was free and says nothing.
+func (r *Result) CostNote() string {
+	if r.PromptChars == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("agent traffic: ~%s tokens sent, ~%s received (estimated), %s",
+		estTokens(r.PromptChars), estTokens(r.ReplyChars), r.Duration.Round(time.Second))
+}
+
+// estTokens approximates tokens from text size (≈4 bytes each).
+// Provider-neutral by design: exact usage is adapter-specific, an
+// estimate is universal — and always presented with a "~".
+func estTokens(chars int) string {
+	tokens := chars / 4
+	if tokens >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(tokens)/1000)
+	}
+
+	return fmt.Sprintf("%d", tokens)
 }
 
 // buildPrompt frames the group for the agent. The findings are quoted

@@ -76,6 +76,46 @@ func TestPinAlwaysSurfacesForRegion(t *testing.T) {
 	assert.Contains(t, got[0].Symptom, "keep it ASCII", "the note travels into the symptom")
 }
 
+func TestSurfaceBudgetRanksBySpecificity(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Pin = []PinRule{
+		{Rule: "repo-wide", Region: "*", Note: "n"},
+		{Rule: "on-the-file", Region: "a/b/x.go", Note: "n"},
+		{Rule: "on-the-tree", Region: "a", Note: "n"},
+		{Rule: "on-the-package", Region: "a/b", Note: "n"},
+	}
+
+	out, trimmed := cfg.SurfaceBudget(nil, "a/b/x.go", 2)
+
+	require.Len(t, out, 2)
+	assert.Equal(t, 2, trimmed)
+	assert.Contains(t, out[0].Symptom, "on-the-file", "deepest region wins the budget")
+	assert.Contains(t, out[1].Symptom, "on-the-package")
+
+	// Unbudgeted (deliberate surfaces): everything, still ranked.
+	out, trimmed = cfg.SurfaceBudget(nil, "a/b/x.go", 0)
+	assert.Len(t, out, 4)
+	assert.Zero(t, trimmed)
+
+	// Equal specificity keeps the config file's order (user priority).
+	cfg.Pin = []PinRule{
+		{Rule: "first", Region: "a/b", Note: "n"},
+		{Rule: "second", Region: "a/b", Note: "n"},
+	}
+
+	out, _ = cfg.SurfaceBudget(nil, "a/b/x.go", 1)
+	require.Len(t, out, 1)
+	assert.Contains(t, out[0].Symptom, "first")
+}
+
+func TestHookPinBudgetDefaultAndOverride(t *testing.T) {
+	assert.Equal(t, DefaultPinBudget, DefaultConfig().HookPinBudget())
+
+	cfg := DefaultConfig()
+	cfg.PinBudget = 7
+	assert.Equal(t, 7, cfg.HookPinBudget())
+}
+
 func TestPinScopedOutOfRegion(t *testing.T) {
 	cfg := &Config{
 		Threshold: 2,

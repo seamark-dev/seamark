@@ -51,7 +51,9 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    turn recurring patterns into proposed pins — the plan
                    half of plan/apply; nothing touches lessons.yaml here.
                    Composes with --region and --limit (token budget);
-                   already-read groups are never paid for twice.
+                   already-read groups are never paid for twice. Fully
+                   optional: pins are plain YAML you can write by hand —
+                   distill only drafts them.
   --apply p3,p7    turn chosen proposals into pins. Writes lessons.yaml
                    only when config.yaml sets distill.write; otherwise
                    prints the block to paste. Never automatic.
@@ -91,12 +93,12 @@ a file has no lessons.`,
 				}
 				defer func() { _ = st.Close() }()
 
-				lessons, err := lessonsForFile(st, root, file)
+				lessons, _, err := lessonsForFile(st, root, file, false)
 				if err != nil {
 					return err
 				}
 
-				return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, file), lessons)
+				return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, file), lessons, 0)
 			default:
 				return fmt.Errorf("provide --file <path>, --list, or --hook")
 			}
@@ -299,6 +301,7 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		GroupsFailed:  res.GroupsFailed,
 		GroupsPending: res.GroupsPending,
 		PrunedStale:   res.PrunedStale,
+		TokensNote:    res.CostNote(),
 	}, pending)
 
 	return nil
@@ -350,13 +353,13 @@ func runLessonsHook(cmd *cobra.Command, opts *options) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	lessons, err := lessonsForFile(st, root, path)
+	lessons, morePins, err := lessonsForFile(st, root, path, true)
 	if err != nil || len(lessons) == 0 {
 		return nil
 	}
 
 	var b strings.Builder
-	_ = report.PrintLessonReminder(&b, toRepoRel(root, path), lessons)
+	_ = report.PrintLessonReminder(&b, toRepoRel(root, path), lessons, morePins)
 
 	out := hookOutput{}
 	out.HookSpecificOutput.HookEventName = "PreToolUse"
@@ -436,8 +439,10 @@ func readHookInput(r io.Reader) (file, tool string, err error) {
 }
 
 // lessonsForFile normalizes path to repo-relative and returns the
-// config-filtered lessons for its area.
-func lessonsForFile(st *store.Store, root, path string) ([]model.Lesson, error) {
+// config-filtered lessons for its area. ambient applies the pin budget:
+// the hook is an injection the agent never asked for, so it is capped;
+// the --file view is a deliberate question and gets everything.
+func lessonsForFile(st *store.Store, root, path string, ambient bool) ([]model.Lesson, int, error) {
 	rel := toRepoRel(root, path)
 
 	// A malformed config must not silence the hook or the --file view;
@@ -447,7 +452,12 @@ func lessonsForFile(st *store.Store, root, path string) ([]model.Lesson, error) 
 		cfg = reviews.DefaultConfig()
 	}
 
-	return report.LessonsForScope(st, cfg, rel, 8)
+	budget := 0
+	if ambient {
+		budget = cfg.HookPinBudget()
+	}
+
+	return report.LessonsForScopeBudget(st, cfg, rel, 8, budget)
 }
 
 // toRepoRel converts an absolute or ./-prefixed path to the repo-relative
