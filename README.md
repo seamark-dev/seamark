@@ -1,10 +1,14 @@
-# Seamark
+<p align="center">
+  <img src="assets/seamark-banner-2560.png" alt="Seamark — the safe channel and the hazard" width="720">
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/go-%E2%89%A51.25-00ADD8.svg" alt="Go"></a>
+  <a href="#get-started"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg" alt="Platform"></a>
+</p>
 
 **The graph your repo's history knows and your code's blast radius — served to your editor, your agents, and your CI.**
-
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/go-%E2%89%A51.25-00ADD8.svg)](go.mod)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#get-started)
 
 Seamark indexes which files *really* change together, why the weird parts
 are weird, and which code paths can reach a database write, a process
