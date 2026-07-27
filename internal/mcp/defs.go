@@ -48,11 +48,12 @@ var toolDefs = []map[string]any{
 	},
 	{
 		"name": "expand",
-		"description": "Progressive disclosure: turn a ref from another report " +
-			"(symbol, FQN, or file:start-end) into source lines.",
+		"description": "Progressive disclosure: turn a ref from another report into its " +
+			"content — a symbol, FQN, or file:start-end into source lines; lessons:<dir> " +
+			"into an area's raw review findings (one-offs included, for pattern-spotting).",
 		"inputSchema": objSchema(map[string]any{
 			"ref": map[string]any{"type": "string",
-				"description": "symbol name, FQN, or file:start[-end]"},
+				"description": "symbol name, FQN, file:start[-end], or lessons:<dir>"},
 		}, []string{"ref"}),
 	},
 }

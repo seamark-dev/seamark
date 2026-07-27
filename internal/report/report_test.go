@@ -37,7 +37,7 @@ func seedStore(t *testing.T) (st *store.Store, root string) {
 		{ClusterKey: "scripts\x00RUF001", Region: "scripts", Reviewer: "coderabbit",
 			Symptom: "RUF001", Occurrences: 6, LastTS: 100},
 		{ClusterKey: "scripts\x00once", Region: "scripts", Reviewer: "human",
-			Symptom: "one-off", Occurrences: 1, LastTS: 50},
+			Symptom: "solitary finding", Occurrences: 1, LastTS: 50},
 	}))
 
 	return st, root
@@ -53,7 +53,8 @@ func TestWhySurfacesRegionLessons(t *testing.T) {
 	assert.Contains(t, out, "reviewers keep flagging")
 	assert.Contains(t, out, "RUF001")
 	assert.Contains(t, out, "×6")
-	assert.NotContains(t, out, "one-off", "a single comment is below the recurrence threshold")
+	assert.NotContains(t, out, "solitary finding", "a single comment is below the recurrence threshold")
+	assert.Contains(t, out, "expand lessons:scripts", "the raw-ledger ref is advertised")
 }
 
 func TestOrientSurfacesTopLessons(t *testing.T) {

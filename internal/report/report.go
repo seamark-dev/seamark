@@ -194,9 +194,22 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 	if len(lessons) > 0 {
 		fmt.Fprintf(w, "\nreviewers keep flagging  (recurring across pull requests)\n")
 		printLessons(w, lessons)
+		fmt.Fprintf(w, "  raw findings incl. one-offs: expand lessons:%s (MCP) or `seamark lessons --region %s`\n",
+			lessonScope(file), lessonScope(file))
 	}
 
 	return nil
+}
+
+// lessonScope is the area a file's raw-lesson hint points at: its
+// directory, or the file itself at the repo root (root files stay
+// file-scoped everywhere in the lessons layer).
+func lessonScope(file string) string {
+	if dir := filepath.ToSlash(filepath.Dir(file)); dir != "." {
+		return dir
+	}
+
+	return file
 }
 
 // loadLessonConfig loads the lessons overlay, degrading to defaults with
@@ -250,6 +263,13 @@ func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson) error
 		"Reviewers repeatedly flag these here; avoid repeating them:\n",
 		render.Sanitize(file))
 	printLessons(w, lessons)
+
+	// The promotion loop's cheapest trigger: the agent editing here is
+	// the one best placed to notice a repeat these lessons miss — and a
+	// pin is proposed to the user, never self-added.
+	fmt.Fprintf(w, "(all raw findings: `seamark lessons --region %s` — a repeated mistake "+
+		"not covered above is worth proposing as a pin in .seamark/lessons.yaml)\n",
+		render.Sanitize(lessonScope(file)))
 
 	return nil
 }
@@ -306,20 +326,58 @@ func firingDate(ts string) string {
 	return ts
 }
 
-// PrintLessonLedger lists every mined lesson — the raw material for
-// tuning .seamark/lessons.yaml. Below-threshold one-offs are shown too
-// (they are exactly what a user might want to mute or pin), each marked
-// if the current config already hides it, followed by copy-paste config
-// syntax.
-func PrintLessonLedger(w io.Writer, lessons []model.Lesson, cfg *reviews.Config) {
+// LedgerForRegion returns every mined lesson in a region's area: the
+// region itself, everything beneath it, and the ancestor regions that
+// cover it. An empty region is the whole repo. This is the raw-material
+// view shared by `lessons --list/--region` and `expand lessons:<dir>`.
+func LedgerForRegion(st *store.Store, region string) ([]model.Lesson, error) {
+	lessons, err := st.AllLessons(0)
+	if err != nil {
+		return nil, err
+	}
+
+	if region == "" {
+		return lessons, nil
+	}
+
+	scoped := lessons[:0]
+
+	for _, l := range lessons {
+		if reviews.RegionMatches(region, l.Region) || reviews.RegionMatches(l.Region, region) {
+			scoped = append(scoped, l)
+		}
+	}
+
+	return scoped, nil
+}
+
+// PrintLessonLedger lists every mined lesson in scope ("" = repo-wide) —
+// the raw material for tuning .seamark/lessons.yaml. Below-threshold
+// one-offs are shown too (they are exactly what a reader might want to
+// mute or pin), each marked if the current config already hides it,
+// followed by copy-paste config syntax and the promotion nudge: spotting
+// a pattern in this list is how a lesson becomes a pin.
+func PrintLessonLedger(w io.Writer, lessons []model.Lesson, cfg *reviews.Config, scope string) {
 	if len(lessons) == 0 {
+		if scope != "" {
+			fmt.Fprintf(w, "no review lessons under %s — widen the region, or run `seamark index --reviews`\n",
+				render.Sanitize(scope))
+
+			return
+		}
+
 		fmt.Fprintln(w, "no review lessons yet — run `seamark index --reviews` "+
 			"(needs gh authenticated and a github.com remote)")
 
 		return
 	}
 
-	fmt.Fprintf(w, "review lessons (all mined, strongest first) — %d total\n\n", len(lessons))
+	where := ""
+	if scope != "" {
+		where = " for " + render.Sanitize(scope)
+	}
+
+	fmt.Fprintf(w, "review lessons%s (all mined, strongest first) — %d total\n\n", where, len(lessons))
 
 	for _, l := range lessons {
 		marker := ""
@@ -340,6 +398,12 @@ Tune what surfaces in .seamark/lessons.yaml (applied without re-mining):
   pin:                    # never ignore — surfaces always, even a one-off
     - rule: <CODE>
       region: <path>
+      note: <the guidance, shown verbatim>
+
+Several one-offs describing the same mistake in different words are a
+real pattern this exact-match clustering cannot see. If you spot one
+here, propose a pin (short rule label, region, note) — suggest it for
+review, never add it to the config unasked.
 `)
 }
 

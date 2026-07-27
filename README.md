@@ -235,10 +235,14 @@ review lessons (all mined, strongest first) — 436 total
 ```
 
 `--region <dir>` narrows the ledger to one area — its lessons and its
-ancestors', one-offs included. Reading a package's raw findings side by
-side is how a pattern too varied for exact clustering gets spotted (ten
-differently-worded "reset pooled state" findings are one lesson to a
-reader), whether the reader is you or an agent you point at it.
+ancestors', one-offs included; agents on MCP reach the same view as
+`expand lessons:<dir>`, and `why` advertises the ref whenever it shows
+lessons. Reading a package's raw findings side by side is how a pattern
+too varied for exact clustering gets spotted (ten differently-worded
+"reset pooled state" findings are one lesson to a reader), whether the
+reader is you or an agent you point at it — and the ledger's footer
+tells that reader what to do with a spotted pattern: propose a pin for
+review, never self-add it.
 
 ### Is it working? `lessons --stats`
 
@@ -290,7 +294,7 @@ a sprawling "token-saving" server defeats itself:
 | `why` | everything about a symbol or file: callers with confidence, co-change, commits |
 | `change_set` | pre-edit: what history says changes together with your planned files |
 | `check` | a diff's reachable effects and the policy verdict |
-| `expand` | progressive disclosure: turn any ref a report returned into source lines |
+| `expand` | progressive disclosure: turn any ref a report returned into its content — source lines, or `lessons:<dir>` for an area's raw review findings |
 
 Register it in Claude Code by dropping an `.mcp.json` at the repo root
 (this repository ships one):

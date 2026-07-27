@@ -324,7 +324,7 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (string, error){
 		}
 
 		if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.Ref) == "" {
-			return "", fmt.Errorf("expand needs {\"ref\": \"<symbol or file:start-end>\"}")
+			return "", fmt.Errorf("expand needs {\"ref\": \"<symbol, file:start-end, or lessons:<dir>>\"}")
 		}
 
 		return s.withStore(func(st *store.Store) (string, error) {

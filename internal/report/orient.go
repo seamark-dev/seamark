@@ -98,7 +98,8 @@ func Orient(w io.Writer, st *store.Store, root string) error {
 		printLessons(w, lessons)
 	}
 
-	fmt.Fprintf(w, "\nnext: `why <symbol|file>` for any of the above; `change_set` before editing; `expand` for source\n")
+	fmt.Fprintf(w, "\nnext: `why <symbol|file>` for any of the above; `change_set` before editing; "+
+		"`expand` for source; `expand lessons:<dir>` for an area's raw review findings\n")
 
 	return nil
 }

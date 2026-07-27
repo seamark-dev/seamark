@@ -16,10 +16,16 @@ import (
 // narrower ref, it does not get a whole file by accident.
 const expandLineCap = 250
 
-// Expand resolves ref — a symbol name/FQN, or "file:start[-end]" — and
-// writes that source region. This is the second half of every other
-// report's contract: they return refs, Expand turns a ref into code.
+// Expand resolves ref — a symbol name/FQN, "file:start[-end]", or
+// "lessons:<dir>" — and writes what it names: source lines, or an
+// area's raw review-lesson ledger. This is the second half of every
+// other report's contract: they return refs, Expand turns a ref into
+// content.
 func Expand(w io.Writer, st *store.Store, root, ref string) error {
+	if region, ok := strings.CutPrefix(ref, "lessons:"); ok {
+		return expandLessons(w, st, root, region)
+	}
+
 	if file, start, end, ok := parseSpanRef(ref); ok {
 		return writeRegion(w, root, file, start, end)
 	}
@@ -43,6 +49,40 @@ func Expand(w io.Writer, st *store.Store, root, ref string) error {
 	}
 
 	return writeRegion(w, root, sym.File, sym.Span.StartLine, sym.Span.EndLine)
+}
+
+// expandLessonCap bounds one lessons expand, echoing expandLineCap's
+// contract: an agent that wants more narrows the region, it does not
+// get the whole repo's ledger by accident.
+const expandLessonCap = 200
+
+// expandLessons writes the raw lesson ledger for a region — every mined
+// finding in its area, one-offs included. This is the pattern-hunting
+// view behind the "reviewers keep flagging" summaries: exact clustering
+// cannot merge ten differently-worded findings about one mistake, but a
+// reader of the raw set can.
+func expandLessons(w io.Writer, st *store.Store, root, region string) error {
+	region = strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(region), "./"), "/")
+
+	lessons, err := LedgerForRegion(st, region)
+	if err != nil {
+		return err
+	}
+
+	over := 0
+
+	if len(lessons) > expandLessonCap {
+		over = len(lessons) - expandLessonCap
+		lessons = lessons[:expandLessonCap]
+	}
+
+	PrintLessonLedger(w, lessons, loadLessonConfig(w, root), region)
+
+	if over > 0 {
+		fmt.Fprintf(w, "… %d more — expand lessons:<deeper-dir> to narrow\n", over)
+	}
+
+	return nil
 }
 
 // parseSpanRef recognizes "path/file.go:12" and "path/file.go:12-40".

@@ -1,6 +1,7 @@
 package report
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,7 +9,48 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/model"
 )
+
+func TestExpandLessonsRef(t *testing.T) {
+	st, root := seedStore(t)
+
+	var b strings.Builder
+	require.NoError(t, Expand(&b, st, root, "lessons:scripts"))
+
+	out := b.String()
+	assert.Contains(t, out, "review lessons for scripts")
+	assert.Contains(t, out, "RUF001")
+	assert.Contains(t, out, "solitary finding",
+		"below-threshold one-offs are the point of the raw view")
+	assert.Contains(t, out, "propose a pin", "the promotion nudge rides along")
+
+	// A region with nothing says so instead of dumping the whole repo.
+	b.Reset()
+	require.NoError(t, Expand(&b, st, root, "lessons:elsewhere"))
+	assert.Contains(t, b.String(), "no review lessons under elsewhere")
+}
+
+func TestExpandLessonsCapped(t *testing.T) {
+	st, root := seedStore(t)
+
+	many := make([]model.Lesson, 0, expandLessonCap+30)
+	for i := 0; i < expandLessonCap+30; i++ {
+		many = append(many, model.Lesson{
+			ClusterKey:  fmt.Sprintf("pkg/f%d.py\x00finding %d", i, i),
+			Region:      fmt.Sprintf("pkg/f%d.py", i),
+			Symptom:     fmt.Sprintf("finding number %d", i),
+			Occurrences: 1, LastTS: int64(i),
+		})
+	}
+	require.NoError(t, st.ReplaceLessons(many))
+
+	var b strings.Builder
+	require.NoError(t, Expand(&b, st, root, "lessons:pkg"))
+	assert.Contains(t, b.String(), "… 30 more",
+		"an oversized ledger is capped with a narrowing hint, not dumped")
+}
 
 func TestParseSpanRef(t *testing.T) {
 	cases := []struct {

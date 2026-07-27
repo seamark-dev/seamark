@@ -66,7 +66,7 @@ a file has no lessons.`,
 					return err
 				}
 
-				return report.PrintLessonReminder(cmd.OutOrStdout(), file, lessons)
+				return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, file), lessons)
 			default:
 				return fmt.Errorf("provide --file <path>, --list, or --hook")
 			}
@@ -95,25 +95,13 @@ func runLessonsList(cmd *cobra.Command, opts *options, region string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	lessons, err := st.AllLessons(0)
-	if err != nil {
-		return err
-	}
-
 	if region != "" {
 		region = toRepoRel(root, region)
-		scoped := lessons[:0]
+	}
 
-		// A lesson belongs to the area if its region sits inside the
-		// asked-for prefix — or is an ancestor of it, so a directory
-		// query still shows the package-wide lessons that cover it.
-		for _, l := range lessons {
-			if reviews.RegionMatches(region, l.Region) || reviews.RegionMatches(l.Region, region) {
-				scoped = append(scoped, l)
-			}
-		}
-
-		lessons = scoped
+	lessons, err := report.LedgerForRegion(st, region)
+	if err != nil {
+		return err
 	}
 
 	cfg, err := reviews.LoadConfig(root)
@@ -121,7 +109,7 @@ func runLessonsList(cmd *cobra.Command, opts *options, region string) error {
 		cfg = reviews.DefaultConfig()
 	}
 
-	report.PrintLessonLedger(cmd.OutOrStdout(), lessons, cfg)
+	report.PrintLessonLedger(cmd.OutOrStdout(), lessons, cfg, region)
 
 	return nil
 }
@@ -147,7 +135,7 @@ func runLessonsHook(cmd *cobra.Command, opts *options) error {
 	}
 
 	var b strings.Builder
-	_ = report.PrintLessonReminder(&b, path, lessons)
+	_ = report.PrintLessonReminder(&b, toRepoRel(root, path), lessons)
 
 	out := hookOutput{}
 	out.HookSpecificOutput.HookEventName = "PreToolUse"

@@ -211,6 +211,8 @@ func TestLessonsHook(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &hook))
 	assert.Equal(t, "PreToolUse", hook.HookSpecificOutput.HookEventName)
 	assert.Contains(t, hook.HookSpecificOutput.AdditionalContext, "RUF001")
+	assert.Contains(t, hook.HookSpecificOutput.AdditionalContext, "lessons --region",
+		"the hook points at the raw ledger and the pin-proposal loop")
 
 	// A file with no lessons produces no output — the hook stays silent.
 	quiet := `{"tool_name":"Edit","tool_input":{"file_path":"` +
