@@ -368,6 +368,56 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding)
 	return nil
 }
 
+// AllFindings returns every stored finding — the distiller's input.
+func (s *Store) AllFindings() ([]model.Finding, error) {
+	rows, err := s.db.Query(
+		`SELECT id, lesson_key, path, pr, reviewer, body, url, created_at
+		 FROM finding ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	return scanFindings(rows)
+}
+
+// MarkDistilled records that a candidate group's evidence set has been
+// read by the distiller, so the same signature is never paid for again.
+func (s *Store) MarkDistilled(signature, region string, at int64) error {
+	_, err := s.db.Exec(
+		`INSERT INTO distilled (signature, region, at) VALUES (?, ?, ?)
+		 ON CONFLICT (signature) DO UPDATE SET region = excluded.region, at = excluded.at`,
+		signature, region, at)
+	if err != nil {
+		return fmt.Errorf("store: mark distilled %s: %w", signature, err)
+	}
+
+	return nil
+}
+
+// DistilledSignatures returns the evidence sets already processed.
+func (s *Store) DistilledSignatures() (map[string]bool, error) {
+	rows, err := s.db.Query(`SELECT signature FROM distilled`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := map[string]bool{}
+
+	for rows.Next() {
+		var sig string
+
+		if err := rows.Scan(&sig); err != nil {
+			return nil, err
+		}
+
+		out[sig] = true
+	}
+
+	return out, rows.Err()
+}
+
 // FindingsForLesson returns the raw comments behind one lesson, oldest
 // first — the evidence trail a distiller or a provenance view reads.
 func (s *Store) FindingsForLesson(clusterKey string) ([]model.Finding, error) {
@@ -379,6 +429,10 @@ func (s *Store) FindingsForLesson(clusterKey string) ([]model.Finding, error) {
 	}
 	defer func() { _ = rows.Close() }()
 
+	return scanFindings(rows)
+}
+
+func scanFindings(rows *sql.Rows) ([]model.Finding, error) {
 	var out []model.Finding
 
 	for rows.Next() {

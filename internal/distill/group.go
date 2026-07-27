@@ -1,0 +1,377 @@
+// Package distill turns the raw review findings behind lessons into
+// candidate groups for LLM distillation (RFC-001 §5.4 Tier 2). Exact
+// clustering cannot merge ten differently-worded findings about one
+// mistake; a reader of the raw material can — this package prepares
+// that reader's batches.
+//
+// The pipeline is built around one economic invariant: an unchanged
+// evidence set is never distilled twice. Findings carry stable ids
+// (GitHub comment ids), a group's Signature hashes its member ids, and
+// the store remembers which signatures were already processed. A new
+// finding changes its group's signature — exactly that group is re-read,
+// nothing else.
+//
+// Grouping is a Grouper: the contract (deterministic output, stable
+// signatures) is the architecture, the strategy is replaceable. The
+// built-in lexical grouper connects findings that share salient tokens
+// — identifiers survive in finding bodies, and "reset"/"pooled"/"Free"
+// recurring across files is precisely the trace a semantic pattern
+// leaves — then buckets the remainder by directory. An embedding-based
+// grouper can replace it without touching the pipeline or the stored
+// state.
+package distill
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"path"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/seamark-dev/seamark/internal/model"
+)
+
+// Group is one distillation batch: findings that plausibly share a
+// theme (or at least a neighborhood), with a stable identity.
+type Group struct {
+	// Region is the deepest directory common to every member, "" when
+	// the members span top-level trees (a repo-wide theme batch).
+	Region string
+	// Findings are the members, ordered by id.
+	Findings []model.Finding
+	// Signature identifies the evidence set: the hash of the member
+	// ids. Same members — same signature, regardless of ordering or of
+	// anything outside the group.
+	Signature string
+}
+
+// Grouper buckets findings into candidate groups. Implementations must
+// be deterministic: the same findings yield the same groups with the
+// same signatures, in the same order.
+type Grouper interface {
+	Group(findings []model.Finding) []Group
+}
+
+// lexicalGrouper is the built-in strategy: theme groups from shared
+// salient tokens, area groups from directories, singletons dropped.
+type lexicalGrouper struct {
+	// minShared is how many salient tokens two findings must share to
+	// be considered thematically connected.
+	minShared int
+	// maxDocFrac drops tokens present in more than this fraction of
+	// findings: a word that appears everywhere connects nothing.
+	maxDocFrac float64
+	// maxGroup caps a group's size; oversized theme components are
+	// split by directory, oversized area buckets by id order.
+	maxGroup int
+}
+
+// NewLexicalGrouper returns the default token-overlap Grouper.
+//
+// The thresholds are measured, not guessed (graphql-go-tools, 1517
+// findings + the pooled-state benchmark): minShared 3 or 4 halves the
+// number of blank-region cap-sized slices — less transitive chaining —
+// but drops the pooled-state theme to 6/8 then 5/8 members, sacrificing
+// exactly the cross-wording recall this package exists for. 2 keeps the
+// benchmark at 8/8 and accepts one large weak-link component that the
+// size cap turns into bounded, id-ordered (≈chronological) batches. A
+// smarter Grouper (two-tier edge strength, embeddings) is the upgrade
+// path if mixed batches prove to dilute distillation quality.
+func NewLexicalGrouper() Grouper {
+	return &lexicalGrouper{minShared: 2, maxDocFrac: 0.10, maxGroup: 40}
+}
+
+// Group implements Grouper.
+func (g *lexicalGrouper) Group(findings []model.Finding) []Group {
+	if len(findings) == 0 {
+		return nil
+	}
+
+	// Sort by id first: every later step iterates slices, so this one
+	// sort makes the whole pipeline order-insensitive to input.
+	sorted := make([]model.Finding, len(findings))
+	copy(sorted, findings)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+
+	tokens := make([]map[string]bool, len(sorted))
+	df := map[string]int{}
+
+	for i := range sorted {
+		tokens[i] = salientTokens(&sorted[i])
+		for tok := range tokens[i] {
+			df[tok]++
+		}
+	}
+
+	// Drop ubiquitous tokens: in a resolver engine every finding says
+	// "resolve"; keeping it would chain the whole repo into one blob.
+	// The floor keeps the filter dormant on small sets, where a token
+	// carried by most findings IS the theme, not noise.
+	cutoff := int(g.maxDocFrac * float64(len(sorted)))
+	if cutoff < 8 {
+		cutoff = 8
+	}
+
+	for i := range tokens {
+		for tok := range tokens[i] {
+			if df[tok] > cutoff {
+				delete(tokens[i], tok)
+			}
+		}
+	}
+
+	// Union-find over "share enough tokens" pairs. Transitivity is the
+	// point: A~B and B~C pulls a wording bridge into one theme even
+	// when A and C share nothing directly.
+	parent := make([]int, len(sorted))
+	for i := range parent {
+		parent[i] = i
+	}
+
+	find := func(x int) int {
+		for parent[x] != x {
+			parent[x] = parent[parent[x]]
+			x = parent[x]
+		}
+
+		return x
+	}
+
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sharedAtLeast(tokens[i], tokens[j], g.minShared) {
+				parent[find(i)] = find(j)
+			}
+		}
+	}
+
+	members := map[int][]model.Finding{} // component root -> findings
+	for i := range sorted {
+		root := find(i)
+		members[root] = append(members[root], sorted[i])
+	}
+
+	var themes []Group
+
+	byDir := map[string][]model.Finding{} // leftovers for area grouping
+
+	roots := make([]int, 0, len(members))
+	for root := range members {
+		roots = append(roots, root)
+	}
+
+	sort.Ints(roots)
+
+	for _, root := range roots {
+		fs := members[root]
+		if len(fs) < 2 {
+			// A component of one has no recurrence to distill; it waits
+			// in its directory bucket for company.
+			byDir[path.Dir(fs[0].Path)] = append(byDir[path.Dir(fs[0].Path)], fs[0])
+
+			continue
+		}
+
+		themes = append(themes, g.splitOversized(fs)...)
+	}
+
+	out := themes
+	out = append(out, g.areaGroups(byDir)...)
+
+	// Present strongest evidence first; signature ties are impossible.
+	sort.Slice(out, func(i, j int) bool {
+		if len(out[i].Findings) != len(out[j].Findings) {
+			return len(out[i].Findings) > len(out[j].Findings)
+		}
+
+		return out[i].Signature < out[j].Signature
+	})
+
+	return out
+}
+
+// splitOversized turns one theme component into groups within the size
+// cap. The component is already thematically coherent, so plain id-order
+// slices are fine — and, unlike a split by directory, they cannot strand
+// a member whose file happens to sit alone in its directory.
+func (g *lexicalGrouper) splitOversized(fs []model.Finding) []Group {
+	var out []Group
+
+	for _, slice := range slices(fs, g.maxGroup) {
+		out = append(out, makeGroup(slice))
+	}
+
+	return out
+}
+
+// areaGroups buckets thematically unconnected findings by directory —
+// full coverage even where token overlap saw nothing. Buckets of one
+// are dropped: a singleton has no recurrence to distill, and its
+// signature will change the moment a neighbor arrives.
+func (g *lexicalGrouper) areaGroups(byDir map[string][]model.Finding) []Group {
+	var out []Group
+
+	for _, dir := range sortedKeys(byDir) {
+		for _, slice := range slices(byDir[dir], g.maxGroup) {
+			if len(slice) >= 2 {
+				out = append(out, makeGroup(slice))
+			}
+		}
+	}
+
+	return out
+}
+
+// makeGroup assembles a Group: members by id, common region, signature.
+func makeGroup(fs []model.Finding) Group {
+	sort.Slice(fs, func(i, j int) bool { return fs[i].ID < fs[j].ID })
+
+	h := sha256.New()
+	for _, f := range fs {
+		fmt.Fprintf(h, "%d,", f.ID)
+	}
+
+	return Group{
+		Region:    commonDir(fs),
+		Findings:  fs,
+		Signature: hex.EncodeToString(h.Sum(nil))[:16],
+	}
+}
+
+// commonDir is the deepest directory shared by every member's path, ""
+// when only the repo root is (reviews has a sibling for lesson merging;
+// here root-common is fine — a group is a batch, not a surfaced region).
+func commonDir(fs []model.Finding) string {
+	segs := strings.Split(path.Dir(fs[0].Path), "/")
+
+	for _, f := range fs[1:] {
+		other := strings.Split(path.Dir(f.Path), "/")
+
+		if len(other) < len(segs) {
+			segs = segs[:len(other)]
+		}
+
+		for i := range segs {
+			if segs[i] != other[i] {
+				segs = segs[:i]
+				break
+			}
+		}
+	}
+
+	common := path.Join(segs...)
+	if common == "." {
+		return ""
+	}
+
+	return common
+}
+
+var tokenRe = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9_]{3,}`)
+
+// stopTokens are words too common in review prose to signal a theme.
+var stopTokens = map[string]bool{
+	"this": true, "that": true, "with": true, "from": true, "have": true,
+	"will": true, "must": true, "should": true, "would": true, "could": true,
+	"when": true, "then": true, "than": true, "here": true, "there": true,
+	"please": true, "consider": true, "avoid": true, "instead": true,
+	"function": true, "method": true, "value": true, "return": true,
+	"file": true, "line": true, "code": true, "change": true, "same": true,
+	"also": true, "only": true, "into": true, "after": true, "before": true,
+	"suggestion": true, "shell": true,
+}
+
+// tokensPerFinding caps how much one finding contributes: a giant body
+// must not become a hub that chains unrelated groups together.
+const tokensPerFinding = 40
+
+// salientTokens extracts the theme-bearing vocabulary of one finding:
+// lowercased words and identifiers of length ≥4, stopwords out, capped
+// in text order. Identifiers are the strongest signal — the same
+// backticked field name recurring across files is a semantic link no
+// prose paraphrase can hide.
+func salientTokens(f *model.Finding) map[string]bool {
+	out := map[string]bool{}
+
+	for _, tok := range tokenRe.FindAllString(f.Body, -1) {
+		tok = strings.ToLower(tok)
+
+		if stopTokens[tok] {
+			continue
+		}
+
+		out[tok] = true
+		if len(out) >= tokensPerFinding {
+			break
+		}
+	}
+
+	return out
+}
+
+// sharedAtLeast reports whether two token sets intersect in at least n
+// entries, without materializing the intersection.
+func sharedAtLeast(a, b map[string]bool, n int) bool {
+	if len(b) < len(a) {
+		a, b = b, a
+	}
+
+	seen := 0
+
+	for tok := range a {
+		if b[tok] {
+			seen++
+			if seen >= n {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// slices cuts fs into chunks of at most size, preserving order. A
+// trailing chunk of one is rebalanced by borrowing from its neighbor
+// (…39+2 instead of …40+1): downstream drops single-member groups as
+// "no recurrence", and a finding that HAD company must never be lost to
+// an accident of arithmetic.
+func slices(fs []model.Finding, size int) [][]model.Finding {
+	if len(fs) == 0 {
+		return nil
+	}
+
+	starts := []int{}
+	for at := 0; at < len(fs); at += size {
+		starts = append(starts, at)
+	}
+
+	if last := starts[len(starts)-1]; len(starts) > 1 && len(fs)-last == 1 {
+		starts[len(starts)-1]--
+	}
+
+	var out [][]model.Finding
+
+	for i, at := range starts {
+		end := len(fs)
+		if i+1 < len(starts) {
+			end = starts[i+1]
+		}
+
+		out = append(out, fs[at:end])
+	}
+
+	return out
+}
+
+func sortedKeys(m map[string][]model.Finding) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+
+	return keys
+}

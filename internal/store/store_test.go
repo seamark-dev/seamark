@@ -272,6 +272,24 @@ func TestLessonReplaceAndQuery(t *testing.T) {
 	assert.Equal(t, "web", top[0].Region, "old lessons gone after replace")
 }
 
+func TestDistilledSignatureMemory(t *testing.T) {
+	s := openTestStore(t)
+
+	sigs, err := s.DistilledSignatures()
+	require.NoError(t, err)
+	assert.Empty(t, sigs)
+
+	require.NoError(t, s.MarkDistilled("abc123", "v2/pkg", 100))
+	require.NoError(t, s.MarkDistilled("def456", "", 100))
+	// Re-marking updates in place rather than erroring — a group can be
+	// legitimately re-read after its membership changes back.
+	require.NoError(t, s.MarkDistilled("abc123", "v2/pkg", 200))
+
+	sigs, err = s.DistilledSignatures()
+	require.NoError(t, err)
+	assert.Equal(t, map[string]bool{"abc123": true, "def456": true}, sigs)
+}
+
 func TestFindingsRoundTripAndSwap(t *testing.T) {
 	s := openTestStore(t)
 

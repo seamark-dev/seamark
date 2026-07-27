@@ -149,3 +149,15 @@ CREATE TABLE IF NOT EXISTS finding (
 );
 CREATE INDEX IF NOT EXISTS finding_lesson ON finding (lesson_key);
 CREATE INDEX IF NOT EXISTS finding_path ON finding (path);
+
+-- Distillation memory (M6 Tier 2): which candidate-group evidence sets
+-- have already been read by the distiller. A signature hashes the
+-- member finding ids, so an unchanged group is never paid for twice —
+-- and any new finding changes its group's signature, re-opening exactly
+-- that group. Proposal rows (their own lifecycle: proposed / applied /
+-- dismissed) land in a separate table with the distill command.
+CREATE TABLE IF NOT EXISTS distilled (
+    signature TEXT PRIMARY KEY,           -- hash of the member finding ids
+    region    TEXT NOT NULL DEFAULT '',   -- the group's area, for reporting
+    at        INTEGER NOT NULL DEFAULT 0  -- unix seconds of the run
+) WITHOUT ROWID;
