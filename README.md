@@ -271,7 +271,10 @@ tokens and wall time:
 
 ```text
 $ seamark lessons --distill --region v2/pkg/engine
+distilling 40 findings (v2/pkg, 1728e3d64e76a8ef)
+  42s, ~5.3k tokens sent / ~433 back, 2 proposal(s)
 distill plan — 50 groups: 3 read, 40 already distilled
+agent traffic: ~15.9k tokens sent, ~1.2k received (estimated), 2m6s
 
 proposed pins — distilled from review findings, awaiting YOUR decision
 
@@ -279,7 +282,7 @@ proposed pins — distilled from review findings, awaiting YOUR decision
         When a struct is reused across runs, reset all accumulated
         state — not just the primary field — before reusing it.
 
-decide: `seamark lessons --apply p6` pins it; `--dismiss p6` remembers the no
+decide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; `--dismiss` remembers the no
 ```
 
 The economics are engineered for repeated use: every group's evidence

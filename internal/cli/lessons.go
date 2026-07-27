@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -54,10 +55,13 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    already-read groups are never paid for twice. Fully
                    optional: pins are plain YAML you can write by hand —
                    distill only drafts them.
-  --apply p3,p7    turn chosen proposals into pins. Writes lessons.yaml
-                   only when config.yaml sets distill.write; otherwise
-                   prints the block to paste. Never automatic.
-  --dismiss p2     record a no — the same evidence is never re-proposed
+  --apply p3,p7    turn chosen proposals into pins; ranges work too
+                   (p1..p9 applies whatever inside is still pending).
+                   Writes lessons.yaml only when config.yaml sets
+                   distill.write; otherwise prints the block to paste.
+                   Never automatic.
+  --dismiss p2     record a no — the same evidence is never re-proposed.
+                   Takes lists and ranges like --apply
   --hook           read a Claude Code PreToolUse payload from stdin and emit
                    the edited file's lessons as additionalContext
 
@@ -116,43 +120,147 @@ a file has no lessons.`,
 	cmd.Flags().IntVar(&limit, "limit", 10,
 		"max new groups one --distill run sends to the agent (0 = all)")
 	cmd.Flags().StringVar(&applyIDs, "apply", "",
-		"apply proposals as pins by id (p3,p7); writes lessons.yaml only with distill.write in config")
+		"apply proposals as pins by id or range (p3,p7 or p1..p9); writes lessons.yaml only with distill.write in config")
 	cmd.Flags().StringVar(&dismissIDs, "dismiss", "",
-		"dismiss proposals by id (p2) — remembered, never re-proposed for the same evidence")
+		"dismiss proposals by id or range (p2 or p1..p9) — remembered, never re-proposed for the same evidence")
 
 	return cmd
 }
 
-// parseProposalIDs reads "p3,p7" (or bare "3,7") into deduplicated ids
-// — "p3,p3" must count as one, or the count check downstream misreads
-// a typo as a missing proposal.
-func parseProposalIDs(s string) ([]int64, error) {
-	var ids []int64
+// proposalSelection is a parsed --apply/--dismiss argument. The two
+// forms carry different intent: a bare id (p3) is a precise pointer and
+// must name a pending proposal; a range (p1..p9 or p1-p9) means "these,
+// whichever still need a decision", so the holes left by earlier
+// applies and dismissals are skipped, not errors.
+type proposalSelection struct {
+	exact  []int64
+	ranges [][2]int64
+}
 
-	seen := map[int64]bool{}
+// maxRangeWidth guards against a typo'd range selecting the universe.
+const maxRangeWidth = 1000
+
+// parseSelection reads "p3,p7,p10..p14" (spaces and bare numbers fine).
+func parseSelection(s string) (*proposalSelection, error) {
+	sel := &proposalSelection{}
 
 	for part := range strings.SplitSeq(s, ",") {
-		part = strings.TrimPrefix(strings.TrimSpace(part), "p")
+		part = strings.TrimSpace(part)
 		if part == "" {
 			continue // spaced lists arrive with empty segments; harmless
 		}
 
-		id, err := strconv.ParseInt(part, 10, 64)
-		if err != nil || id <= 0 {
-			return nil, fmt.Errorf("%q is not a proposal id (want p<N> from the distill plan)", part)
+		lo, hi, isRange := cutRange(part)
+		if !isRange {
+			id, err := parsePID(part)
+			if err != nil {
+				return nil, err
+			}
+
+			sel.exact = append(sel.exact, id)
+
+			continue
 		}
 
-		if !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
+		a, err := parsePID(lo)
+		if err != nil {
+			return nil, err
 		}
+
+		b, err := parsePID(hi)
+		if err != nil {
+			return nil, err
+		}
+
+		if b < a {
+			return nil, fmt.Errorf("range p%d..p%d is reversed", a, b)
+		}
+
+		if b-a >= maxRangeWidth {
+			return nil, fmt.Errorf("range p%d..p%d is implausibly wide", a, b)
+		}
+
+		sel.ranges = append(sel.ranges, [2]int64{a, b})
 	}
 
-	if len(ids) == 0 {
+	if len(sel.exact) == 0 && len(sel.ranges) == 0 {
 		return nil, fmt.Errorf("no proposal ids given (want p<N> from the distill plan)")
 	}
 
-	return ids, nil
+	return sel, nil
+}
+
+// cutRange splits a range on ".." or "-" (the same dash the expand span
+// syntax uses); anything else is a single id.
+func cutRange(part string) (lo, hi string, ok bool) {
+	if l, h, found := strings.Cut(part, ".."); found {
+		return l, h, true
+	}
+
+	if l, h, found := strings.Cut(part, "-"); found {
+		return l, h, true
+	}
+
+	return "", "", false
+}
+
+func parsePID(s string) (int64, error) {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "p")
+
+	id, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("%q is not a proposal id (want p<N> from the distill plan)", s)
+	}
+
+	return id, nil
+}
+
+// resolveSelection turns a selection into concrete pending proposals,
+// id order, deduplicated. Exact ids must be pending; ranges take what
+// they find.
+func resolveSelection(pending []model.Proposal, raw string) ([]model.Proposal, error) {
+	sel, err := parseSelection(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	byID := make(map[int64]model.Proposal, len(pending))
+	for _, p := range pending {
+		byID[p.ID] = p
+	}
+
+	added := map[int64]bool{}
+
+	var out []model.Proposal
+
+	for _, id := range sel.exact {
+		p, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("p%d is not a pending proposal (already decided, or unknown — see the distill plan)", id)
+		}
+
+		if !added[id] {
+			added[id] = true
+			out = append(out, p)
+		}
+	}
+
+	for _, r := range sel.ranges {
+		for _, p := range pending {
+			if p.ID >= r[0] && p.ID <= r[1] && !added[p.ID] {
+				added[p.ID] = true
+				out = append(out, p)
+			}
+		}
+	}
+
+	if len(out) == 0 {
+		return nil, fmt.Errorf("nothing in %q is still pending — see the distill plan", raw)
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+
+	return out, nil
 }
 
 // runLessonsApply turns chosen proposals into pins. The pins land in
@@ -161,25 +269,25 @@ func parseProposalIDs(s string) ([]int64, error) {
 // to paste — either way, nothing was ever applied without an explicit
 // human command naming explicit proposals.
 func runLessonsApply(cmd *cobra.Command, opts *options, raw string) error {
-	ids, err := parseProposalIDs(raw)
-	if err != nil {
-		return err
-	}
-
 	st, root, err := openIndex(opts)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
 
-	ps, err := st.ProposalsByIDs(ids)
+	pending, err := st.Proposals(model.ProposalProposed)
 	if err != nil {
 		return err
 	}
 
-	if len(ps) != len(ids) {
-		return fmt.Errorf("only %d of %d ids are pending proposals — see `seamark lessons --distill` for the plan",
-			len(ps), len(ids))
+	ps, err := resolveSelection(pending, raw)
+	if err != nil {
+		return err
+	}
+
+	ids := make([]int64, len(ps))
+	for i, p := range ps {
+		ids[i] = p.ID
 	}
 
 	out := cmd.OutOrStdout()
@@ -226,26 +334,30 @@ func runLessonsApply(cmd *cobra.Command, opts *options, raw string) error {
 // runLessonsDismiss records a no on chosen proposals. The signature
 // memory does the rest: the same evidence set is never re-proposed.
 func runLessonsDismiss(cmd *cobra.Command, opts *options, raw string) error {
-	ids, err := parseProposalIDs(raw)
-	if err != nil {
-		return err
-	}
-
 	st, _, err := openIndex(opts)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
 
-	n, err := st.SetProposalStatus(ids, model.ProposalDismissed)
+	pending, err := st.Proposals(model.ProposalProposed)
 	if err != nil {
 		return err
 	}
 
-	if n != len(ids) {
-		fmt.Fprintf(cmd.OutOrStdout(), "dismissed %d of %d (the rest were not pending proposals)\n", n, len(ids))
+	ps, err := resolveSelection(pending, raw)
+	if err != nil {
+		return err
+	}
 
-		return nil
+	ids := make([]int64, len(ps))
+	for i, p := range ps {
+		ids[i] = p.ID
+	}
+
+	n, err := st.SetProposalStatus(ids, model.ProposalDismissed)
+	if err != nil {
+		return err
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "dismissed %d proposal(s) — remembered; the same evidence will not return\n", n)

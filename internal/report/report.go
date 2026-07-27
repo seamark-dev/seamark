@@ -500,8 +500,8 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal)
 		fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Note))
 	}
 
-	fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p<id>[,p<id>]` pins it; "+
-		"`--dismiss p<id>` remembers the no\n")
+	fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; "+
+		"`--dismiss` remembers the no\n")
 }
 
 // DistillSummary is the run-shape PrintDistillPlan reports; a mirror of
