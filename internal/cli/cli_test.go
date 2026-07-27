@@ -256,6 +256,109 @@ func TestLessonsList(t *testing.T) {
 	assert.Contains(t, out, "1 total")
 }
 
+func TestLessonsDistillPlanFlow(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// Seed two findings that bucket into one group, and point the agent
+	// config at a shell script standing in for a real CLI — the whole
+	// pipeline runs, no network, no claude.
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "human",
+			Body: "Reset pooled state before reuse in this handler."},
+		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "human",
+			Body: "Pooled state must be reset on reuse here too."},
+	}))
+	require.NoError(t, st.Close())
+
+	replyPath := filepath.Join(root, "agent-reply.json")
+	require.NoError(t, os.WriteFile(replyPath,
+		[]byte(`{"patterns":[{"rule":"pooled-state-reset","note":"Reset pooled state on every reuse.","finding_ids":[11,12]}]}`),
+		0o644))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  argv: [\"sh\", \"-c\", \"cat >/dev/null; cat "+replyPath+"\"]\n"), 0o644))
+
+	out, err := run(t, "-C", root, "lessons", "--distill")
+	require.NoError(t, err)
+	assert.Contains(t, out, "1 read")
+	assert.Contains(t, out, "pooled-state-reset")
+	assert.Contains(t, out, "Reset pooled state on every reuse.")
+	assert.Contains(t, out, "2 findings cited")
+	assert.Contains(t, out, "awaiting YOUR decision")
+
+	// Second run: nothing re-read, the pending plan still shows.
+	out, err = run(t, "-C", root, "lessons", "--distill")
+	require.NoError(t, err)
+	assert.Contains(t, out, "1 already distilled")
+	assert.Contains(t, out, "pooled-state-reset", "pending proposals persist across runs")
+
+	// An unusable agent config is a loud, actionable error.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  cli: hal9000\n"), 0o644))
+
+	_, err = run(t, "-C", root, "lessons", "--distill")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "distill unavailable")
+
+	// ---- decide: apply without the write gate prints, never edits ----
+	out, err = run(t, "-C", root, "lessons", "--apply", "p1")
+	require.NoError(t, err)
+	assert.Contains(t, out, "distill.write is off")
+	assert.Contains(t, out, "pooled-state-reset", "the block to paste is printed")
+	assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons.yaml"))
+
+	// With the gate on, apply writes the pin and it goes live end to
+	// end: the hook path surfaces it for a file in the region.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("distill:\n  write: true\n"), 0o644))
+
+	out, err = run(t, "-C", root, "lessons", "--apply", "p1")
+	require.NoError(t, err)
+	assert.Contains(t, out, "applied 1 pin(s)")
+
+	data, err := os.ReadFile(filepath.Join(root, ".seamark", "lessons.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "pooled-state-reset")
+	assert.Contains(t, string(data), "distilled by custom/v1")
+
+	out, err = run(t, "-C", root, "lessons", "--file", "api/a.go")
+	require.NoError(t, err)
+	assert.Contains(t, out, "pooled-state-reset — Reset pooled state on every reuse.",
+		"an applied pin surfaces like any hand-written one")
+
+	// Applied is a decision: the id is no longer pending.
+	_, err = run(t, "-C", root, "lessons", "--apply", "p1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "0 of 1")
+
+	// Dismiss needs a pending proposal — bad ids are named, not silent.
+	out, err = run(t, "-C", root, "lessons", "--dismiss", "p999")
+	require.NoError(t, err)
+	assert.Contains(t, out, "dismissed 0 of 1")
+
+	_, err = run(t, "-C", root, "lessons", "--apply", "pX")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a proposal id")
+
+	// The natural spaced form: the shell splits "--apply p1, p2" into
+	// positional args, which must fold back into the id list instead of
+	// tripping cobra's unknown-command error (a real-session paper cut).
+	_, err = run(t, "-C", root, "lessons", "--apply", "p1,", "p2,", "p3")
+	require.Error(t, err, "none are pending (p1 applied, p2/p3 absent) — but all must PARSE")
+	assert.Contains(t, err.Error(), "0 of 3", "all three spaced ids were understood")
+
+	// A stray positional without --apply/--dismiss stays an error.
+	_, err = run(t, "-C", root, "lessons", "p1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unexpected argument")
+}
+
 func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
 	root := writeFixture(t)
 

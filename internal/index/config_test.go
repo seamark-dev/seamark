@@ -70,6 +70,19 @@ func TestLoadConfigDefaultsAndParse(t *testing.T) {
 	assert.False(t, cfg.excluded("a/b.go"))
 }
 
+func TestLoadConfigIgnoresOtherSections(t *testing.T) {
+	// config.yaml is shared: the agent section (internal/agent) lives in
+	// the same file and must not break the indexing reader.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  cli: claude\nindex:\n  generated: true\n"), 0o644))
+
+	cfg, err := LoadConfig(root)
+	require.NoError(t, err)
+	assert.True(t, cfg.Index.Generated, "own section still parses")
+}
+
 func TestCheckExclude(t *testing.T) {
 	for _, ok := range []string{
 		"*.pb.go", "**/*_test.go", "internal/gen/", "api/schemas.py", "./x.go",

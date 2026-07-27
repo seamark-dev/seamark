@@ -248,6 +248,43 @@ reader is you or an agent you point at it — and the ledger's footer
 tells that reader what to do with a spotted pattern: propose a pin for
 review, never self-add it.
 
+### Distilling patterns: plan → apply
+
+Exact clustering can't see that ten differently-worded findings are one
+mistake. `seamark lessons --distill` can: it batches the raw findings
+into candidate groups and asks **your own agent CLI** (`claude` by
+default — seamark holds no API keys) to name what recurs, as proposed
+pins:
+
+```text
+$ seamark lessons --distill --region v2/pkg/engine
+distill plan — 50 groups: 3 read, 40 already distilled
+
+proposed pins — distilled from review findings, awaiting YOUR decision
+
+  p6    reset-reused-visitor-state   v2/pkg    2 findings cited [claude/v1]
+        When a struct is reused across runs, reset all accumulated
+        state — not just the primary field — before reusing it.
+
+decide: `seamark lessons --apply p6` pins it; `--dismiss p6` remembers the no
+```
+
+The economics are engineered for repeated use: every group's evidence
+set has a signature, a distilled signature is **never paid for twice**,
+and a new finding reopens exactly its own group. `--limit` (default 10
+groups) and `--region` budget each run. Dismissals are permanent memory;
+a pattern only returns if its evidence changes.
+
+And it is proposal-only by construction: the model must cite the finding
+ids behind every pattern (uncited patterns are dropped — it cannot
+invent evidence), regions are computed from the cited files, and nothing
+reaches `.seamark/lessons.yaml` except through an explicit `--apply` of
+explicit ids. Even then, seamark edits the file itself only if
+`config.yaml` opts in (`distill: {write: true}`) — otherwise apply
+prints the pin block for you to paste. Applied entries are inserted
+under your existing `pin:` section with provenance comments; everything
+hand-written stays byte-for-byte.
+
 ### Is it working? `lessons --stats`
 
 The edit hook appends a line to `.seamark/lessons-audit.jsonl` each time

@@ -427,6 +427,67 @@ func printLessons(w io.Writer, lessons []model.Lesson) {
 	}
 }
 
+// PrintDistillPlan renders a distillation run and the full pending
+// plan: every proposal awaiting a decision, this run's newcomers
+// included. Proposal text is model output — untrusted — so it is
+// sanitized; notes are never truncated (they are the payload).
+func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal) {
+	fmt.Fprintf(w, "distill plan — %d groups: %d read", res.GroupsTotal, res.GroupsRead)
+
+	if res.GroupsSkipped > 0 {
+		fmt.Fprintf(w, ", %d already distilled", res.GroupsSkipped)
+	}
+
+	if res.GroupsFailed > 0 {
+		fmt.Fprintf(w, ", %d failed (retried next run)", res.GroupsFailed)
+	}
+
+	if res.GroupsPending > 0 {
+		fmt.Fprintf(w, ", %d left for another run (raise --limit or drop --region)", res.GroupsPending)
+	}
+
+	if res.PrunedStale > 0 {
+		fmt.Fprintf(w, "; %d stale proposals pruned", res.PrunedStale)
+	}
+
+	fmt.Fprintln(w)
+
+	if len(pending) == 0 {
+		fmt.Fprintln(w, "\nno proposals pending — nothing recurs that the mined lessons miss")
+
+		return
+	}
+
+	fmt.Fprintf(w, "\nproposed pins — distilled from review findings, awaiting YOUR decision\n")
+
+	for _, p := range pending {
+		region := p.Region
+		if region == "" {
+			region = "*"
+		}
+
+		fmt.Fprintf(w, "\n  p%-4d %-34s %-26s %d findings cited [%s]\n",
+			p.ID, render.Sanitize(p.Rule), render.Sanitize(region),
+			len(p.Members), render.Sanitize(p.Agent))
+		fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Note))
+	}
+
+	fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p<id>[,p<id>]` pins it; "+
+		"`--dismiss p<id>` remembers the no\n")
+}
+
+// DistillSummary is the run-shape PrintDistillPlan reports; a mirror of
+// distill.Result's counters, kept here so report does not import the
+// distill package.
+type DistillSummary struct {
+	GroupsTotal   int
+	GroupsRead    int
+	GroupsSkipped int
+	GroupsFailed  int
+	GroupsPending int
+	PrunedStale   int
+}
+
 func printDecisions(w io.Writer, decisions []model.Decision) {
 	for _, d := range decisions {
 		marker := " "

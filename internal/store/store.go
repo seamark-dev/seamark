@@ -10,6 +10,7 @@ package store
 import (
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	stdpath "path"
@@ -416,6 +417,175 @@ func (s *Store) DistilledSignatures() (map[string]bool, error) {
 	}
 
 	return out, rows.Err()
+}
+
+// InsertProposal stores one distilled proposal and returns its id.
+func (s *Store) InsertProposal(p *model.Proposal) error {
+	members, err := json.Marshal(p.Members)
+	if err != nil {
+		return fmt.Errorf("store: encode proposal members: %w", err)
+	}
+
+	res, err := s.db.Exec(
+		`INSERT INTO proposal (signature, rule, region, note, members, agent, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Signature, p.Rule, p.Region, p.Note, string(members), p.Agent, p.Status, p.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("store: insert proposal %s: %w", p.Rule, err)
+	}
+
+	p.ID, err = res.LastInsertId()
+
+	return err
+}
+
+// Proposals returns proposals in one lifecycle state, newest first.
+func (s *Store) Proposals(status string) ([]model.Proposal, error) {
+	rows, err := s.db.Query(
+		`SELECT id, signature, rule, region, note, members, agent, status, created_at
+		 FROM proposal WHERE status = ? ORDER BY id DESC`, status)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []model.Proposal
+
+	for rows.Next() {
+		var p model.Proposal
+		var members string
+
+		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &p.Note,
+			&members, &p.Agent, &p.Status, &p.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := json.Unmarshal([]byte(members), &p.Members); err != nil {
+			return nil, fmt.Errorf("store: proposal %d members: %w", p.ID, err)
+		}
+
+		out = append(out, p)
+	}
+
+	return out, rows.Err()
+}
+
+// ProposalsByIDs returns the pending proposals with the given ids, in
+// id order. Only 'proposed' rows qualify: applied and dismissed ones
+// already carry a decision.
+func (s *Store) ProposalsByIDs(ids []int64) ([]model.Proposal, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+
+	marks := strings.Repeat(",?", len(ids))[1:]
+
+	rows, err := s.db.Query(
+		`SELECT id, signature, rule, region, note, members, agent, status, created_at
+		 FROM proposal WHERE status = 'proposed' AND id IN (`+marks+`) ORDER BY id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []model.Proposal
+
+	for rows.Next() {
+		var p model.Proposal
+		var members string
+
+		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &p.Note,
+			&members, &p.Agent, &p.Status, &p.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := json.Unmarshal([]byte(members), &p.Members); err != nil {
+			return nil, fmt.Errorf("store: proposal %d members: %w", p.ID, err)
+		}
+
+		out = append(out, p)
+	}
+
+	return out, rows.Err()
+}
+
+// SetProposalStatus moves pending proposals to a decided state and
+// reports how many actually moved. Only 'proposed' rows transition:
+// a decision, once made, is not silently overwritten.
+func (s *Store) SetProposalStatus(ids []int64, to string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	args := []any{to}
+	for _, id := range ids {
+		args = append(args, id)
+	}
+
+	marks := strings.Repeat(",?", len(ids))[1:]
+
+	res, err := s.db.Exec(
+		`UPDATE proposal SET status = ? WHERE status = 'proposed' AND id IN (`+marks+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+
+	n, _ := res.RowsAffected()
+
+	return int(n), nil
+}
+
+// PruneStaleProposals deletes pending proposals whose evidence group no
+// longer exists in the current grouping (its membership changed, so a
+// fresh distill of the new signature supersedes them). Applied and
+// dismissed rows are never touched — they are the decision memory.
+func (s *Store) PruneStaleProposals(liveSignatures map[string]bool) (int, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT signature FROM proposal WHERE status = 'proposed'`)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stale []any
+
+	for rows.Next() {
+		var sig string
+
+		if err := rows.Scan(&sig); err != nil {
+			return 0, err
+		}
+
+		if !liveSignatures[sig] {
+			stale = append(stale, sig)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	if len(stale) == 0 {
+		return 0, nil
+	}
+
+	marks := strings.Repeat(",?", len(stale))[1:]
+
+	res, err := s.db.Exec(
+		`DELETE FROM proposal WHERE status = 'proposed' AND signature IN (`+marks+`)`, stale...)
+	if err != nil {
+		return 0, err
+	}
+
+	n, _ := res.RowsAffected()
+
+	return int(n), nil
 }
 
 // FindingsForLesson returns the raw comments behind one lesson, oldest

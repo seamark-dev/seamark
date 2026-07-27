@@ -290,6 +290,39 @@ func TestDistilledSignatureMemory(t *testing.T) {
 	assert.Equal(t, map[string]bool{"abc123": true, "def456": true}, sigs)
 }
 
+func TestProposalLifecycle(t *testing.T) {
+	s := openTestStore(t)
+
+	p := model.Proposal{Signature: "sig", Rule: "r", Region: "a", Note: "n",
+		Members: []int64{1, 2}, Agent: "claude/v1", Status: model.ProposalProposed}
+	require.NoError(t, s.InsertProposal(&p))
+	require.NotZero(t, p.ID)
+
+	// Pending fetch by id round-trips every field.
+	got, err := s.ProposalsByIDs([]int64{p.ID})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, p, got[0])
+
+	// A decision moves it out of pending — and is final: the second
+	// transition attempt touches nothing.
+	n, err := s.SetProposalStatus([]int64{p.ID}, model.ProposalApplied)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	n, err = s.SetProposalStatus([]int64{p.ID}, model.ProposalDismissed)
+	require.NoError(t, err)
+	assert.Zero(t, n, "a decision, once made, is not overwritten")
+
+	got, err = s.ProposalsByIDs([]int64{p.ID})
+	require.NoError(t, err)
+	assert.Empty(t, got, "decided proposals are not pending")
+
+	applied, err := s.Proposals(model.ProposalApplied)
+	require.NoError(t, err)
+	require.Len(t, applied, 1)
+}
+
 func TestFindingsRoundTripAndSwap(t *testing.T) {
 	s := openTestStore(t)
 

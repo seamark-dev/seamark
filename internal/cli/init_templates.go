@@ -58,6 +58,20 @@ index:
   #   internal/gen/  a directory prefix
   exclude:
     # - "**/*_test.go"   # uncomment for a production-only graph
+
+# Which agent CLI seamark may shell out to for inference-backed features
+# (lesson distillation). Seamark holds no credentials: the CLI is one
+# you already run and have already authenticated.
+# agent:
+#   cli: claude                  # the built-in preset (default)
+#   argv: ["my-llm", "--print"]  # or any CLI reading a prompt on stdin
+
+# Distillation plan/apply. write lets "lessons --apply" insert accepted
+# pins into .seamark/lessons.yaml itself; without it, apply prints the
+# block for you to paste. Applying is always an explicit human command
+# naming explicit proposal ids — this only gates who edits the file.
+# distill:
+#   write: true
 `
 
 const starterLessons = `# Tune how mined review lessons surface (RFC-001 §5.4). Committed and
