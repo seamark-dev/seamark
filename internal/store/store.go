@@ -323,19 +323,22 @@ func (t *Tx) InsertLesson(l *model.Lesson) error {
 	return nil
 }
 
-// ReplaceLessons atomically swaps the lesson set for a freshly mined
-// one. Lessons are refreshed on the review-mining cadence, not the
-// structural-reindex cadence, so this is their own transaction rather
-// than part of Rebuild.
-func (s *Store) ReplaceLessons(lessons []model.Lesson) error {
+// ReplaceLessons atomically swaps the lesson set — and the raw findings
+// behind it — for a freshly mined one. Lessons are refreshed on the
+// review-mining cadence, not the structural-reindex cadence, so this is
+// their own transaction rather than part of Rebuild. Wiping both tables
+// together keeps a finding's lesson_key from ever dangling.
+func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: begin lessons: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after Commit
 
-	if _, err := tx.Exec("DELETE FROM lesson"); err != nil {
-		return fmt.Errorf("store: wipe lessons: %w", err)
+	for _, table := range []string{"lesson", "finding"} {
+		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
+			return fmt.Errorf("store: wipe %s: %w", table, err)
+		}
 	}
 
 	t := &Tx{tx: tx}
@@ -346,11 +349,51 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson) error {
 		}
 	}
 
+	for i := range findings {
+		f := &findings[i]
+
+		_, err := tx.Exec(
+			`INSERT INTO finding (id, lesson_key, path, pr, reviewer, body, url, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			f.ID, f.LessonKey, f.Path, f.PR, f.Reviewer, f.Body, f.URL, f.CreatedAt)
+		if err != nil {
+			return fmt.Errorf("store: insert finding %d: %w", f.ID, err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit lessons: %w", err)
 	}
 
 	return nil
+}
+
+// FindingsForLesson returns the raw comments behind one lesson, oldest
+// first — the evidence trail a distiller or a provenance view reads.
+func (s *Store) FindingsForLesson(clusterKey string) ([]model.Finding, error) {
+	rows, err := s.db.Query(
+		`SELECT id, lesson_key, path, pr, reviewer, body, url, created_at
+		 FROM finding WHERE lesson_key = ? ORDER BY created_at, id`, clusterKey)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []model.Finding
+
+	for rows.Next() {
+		var f model.Finding
+
+		err := rows.Scan(&f.ID, &f.LessonKey, &f.Path, &f.PR,
+			&f.Reviewer, &f.Body, &f.URL, &f.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, f)
+	}
+
+	return out, rows.Err()
 }
 
 // InsertEffect stores one effect tag on a symbol. origin is "direct" for

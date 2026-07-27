@@ -38,7 +38,7 @@ func seedStore(t *testing.T) (st *store.Store, root string) {
 			Symptom: "RUF001", Occurrences: 6, LastTS: 100},
 		{ClusterKey: "scripts\x00once", Region: "scripts", Reviewer: "human",
 			Symptom: "solitary finding", Occurrences: 1, LastTS: 50},
-	}))
+	}, nil))
 
 	return st, root
 }
@@ -99,7 +99,7 @@ func TestLessonSymptomSanitized(t *testing.T) {
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
 		{ClusterKey: "k", Region: "x", Reviewer: "bot",
 			Symptom: "bad\x1b[31mansi", Occurrences: 3, LastTS: 1},
-	}))
+	}, nil))
 
 	var b strings.Builder
 	require.NoError(t, Orient(&b, st, root))

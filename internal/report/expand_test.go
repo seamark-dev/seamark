@@ -44,7 +44,7 @@ func TestExpandLessonsCapped(t *testing.T) {
 			Occurrences: 1, LastTS: int64(i),
 		})
 	}
-	require.NoError(t, st.ReplaceLessons(many))
+	require.NoError(t, st.ReplaceLessons(many, nil))
 
 	var b strings.Builder
 	require.NoError(t, Expand(&b, st, root, "lessons:pkg"))

@@ -900,7 +900,7 @@ func TestRefreshReviewsKeepsLessonsWhenSourceUnavailable(t *testing.T) {
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
 		{ClusterKey: "scripts\x00RUF001", Region: "scripts", Reviewer: "coderabbit",
 			Symptom: "RUF001", Occurrences: 5, LastTS: 1},
-	}))
+	}, nil))
 	require.NoError(t, st.Close())
 
 	res, err := RefreshReviews(root, dbPath, nil)

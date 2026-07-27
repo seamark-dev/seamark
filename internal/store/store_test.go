@@ -228,7 +228,7 @@ func TestLessonReplaceAndQuery(t *testing.T) {
 		{ClusterKey: "api\x00once", Region: "api", Reviewer: "copilot",
 			Symptom: "one-off", Occurrences: 1, LastTS: 80},
 	}
-	require.NoError(t, s.ReplaceLessons(first))
+	require.NoError(t, s.ReplaceLessons(first, nil))
 
 	// A file inherits its directory's lessons; minOccur hides the one-off.
 	got, err := s.LessonsForFile("api/service.py", 2, 10)
@@ -264,10 +264,40 @@ func TestLessonReplaceAndQuery(t *testing.T) {
 	// Replace is a full swap, not an append.
 	require.NoError(t, s.ReplaceLessons([]model.Lesson{
 		{ClusterKey: "web\x00any", Region: "web", Symptom: "x", Occurrences: 4, LastTS: 5},
-	}))
+	}, nil))
 
 	top, err = s.TopLessons(1, 10)
 	require.NoError(t, err)
 	require.Len(t, top, 1)
 	assert.Equal(t, "web", top[0].Region, "old lessons gone after replace")
+}
+
+func TestFindingsRoundTripAndSwap(t *testing.T) {
+	s := openTestStore(t)
+
+	lessons := []model.Lesson{
+		{ClusterKey: "api\x00E501", Region: "api", Symptom: "E501", Occurrences: 2, LastTS: 90},
+	}
+	findings := []model.Finding{
+		{ID: 11, LessonKey: "api\x00E501", Path: "api/a.py", PR: 7,
+			Reviewer: "coderabbit", Body: "line too long, wrap it", URL: "u1", CreatedAt: 80},
+		{ID: 12, LessonKey: "api\x00E501", Path: "api/b.py", PR: 8,
+			Reviewer: "human", Body: "wrap this line", URL: "u2", CreatedAt: 90},
+	}
+	require.NoError(t, s.ReplaceLessons(lessons, findings))
+
+	got, err := s.FindingsForLesson("api\x00E501")
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, findings[0], got[0], "oldest first, all fields intact")
+	assert.Equal(t, findings[1], got[1])
+
+	// A fresh mine swaps findings together with lessons — no orphans.
+	require.NoError(t, s.ReplaceLessons([]model.Lesson{
+		{ClusterKey: "web\x00x", Region: "web", Symptom: "x", Occurrences: 1},
+	}, nil))
+
+	got, err = s.FindingsForLesson("api\x00E501")
+	require.NoError(t, err)
+	assert.Empty(t, got, "old findings gone after replace")
 }

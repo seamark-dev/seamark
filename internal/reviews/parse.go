@@ -35,6 +35,11 @@ type ghComment struct {
 // back-to-back (`[…][…]`) instead of merging them, so a plain Unmarshal
 // fails at the second page. The decoder loop handles both the merged and
 // concatenated shapes.
+//
+// Duplicate ids are dropped (first occurrence wins): pagination is not a
+// snapshot, so an item shifting across a page boundary mid-fetch can
+// arrive twice — and a duplicate must neither double-count a lesson nor
+// collide on the finding table's primary key and fail the whole mine.
 func parseComments(raw []byte) ([]Comment, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
@@ -44,6 +49,8 @@ func parseComments(raw []byte) ([]Comment, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 
 	var out []Comment
+
+	seen := map[int64]bool{}
 
 	for {
 		var page []ghComment
@@ -58,6 +65,11 @@ func parseComments(raw []byte) ([]Comment, error) {
 		}
 
 		for _, g := range page {
+			if seen[g.ID] {
+				continue
+			}
+
+			seen[g.ID] = true
 			out = append(out, normalize(g))
 		}
 	}

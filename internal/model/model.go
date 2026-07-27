@@ -138,6 +138,22 @@ type Lesson struct {
 	ExampleURL  string // a representative comment, for provenance
 }
 
+// Finding is one raw review comment behind a lesson — the full material
+// the 80-char fingerprint was distilled from. Lessons answer "what
+// keeps happening"; findings keep the evidence, so deeper passes
+// (distillation, provenance display) work from what reviewers actually
+// wrote rather than from lossy summaries.
+type Finding struct {
+	ID        int64  // GitHub review-comment id — stable across mines
+	LessonKey string // ClusterKey of the lesson this comment fed
+	Path      string // repo-relative file the comment lands on
+	PR        int    // pull-request number
+	Reviewer  string // coderabbit | copilot | bot | human
+	Body      string // boilerplate-stripped comment text, capped
+	URL       string // html_url, for provenance
+	CreatedAt int64  // unix seconds
+}
+
 // IsTestPath reports whether a file is test code, by each language's
 // naming convention. Shared by resolution (test doubles must not win
 // unique-name matches) and reporting (orientation shows the production

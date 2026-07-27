@@ -59,7 +59,8 @@ CLI (gh) authenticated and a github.com remote.`,
 
 				switch {
 				case len(res.Lessons) > 0:
-					fmt.Fprintf(out, "  reviews  %d recurring lessons mined\n", len(res.Lessons))
+					fmt.Fprintf(out, "  reviews  %d lessons mined from %d findings\n",
+						len(res.Lessons), len(res.Findings))
 				case res.Fetched:
 					fmt.Fprintf(out, "  reviews  none (%s)\n", res.Note)
 				default:

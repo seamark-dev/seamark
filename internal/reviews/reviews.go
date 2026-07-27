@@ -51,11 +51,13 @@ type Fetcher func(owner, repo string, opts Options) ([]byte, error)
 // genuine "zero comments now" (Fetched, empty Lessons — the set may be
 // cleared) from a degraded run (not Fetched — the source was absent or
 // unreachable, and stored lessons must be preserved). Note explains an
-// empty result either way.
+// empty result either way. Findings are the raw comments behind Lessons,
+// stored alongside them so deeper passes work from full material.
 type Result struct {
-	Lessons []model.Lesson
-	Fetched bool
-	Note    string
+	Lessons  []model.Lesson
+	Findings []model.Finding
+	Fetched  bool
+	Note     string
 }
 
 // Mine fetches review comments for the repository at root, parses and
@@ -100,7 +102,9 @@ func Mine(root string, opts Options, fetch Fetcher) (Result, error) {
 		}
 	}
 
-	return Result{Lessons: cluster(comments), Fetched: true}, nil
+	lessons, findings := cluster(comments)
+
+	return Result{Lessons: lessons, Findings: findings, Fetched: true}, nil
 }
 
 // hasPython reports whether the workspace contains Python source. git

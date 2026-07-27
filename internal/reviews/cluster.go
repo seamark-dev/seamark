@@ -5,24 +5,29 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/seamark-dev/seamark/internal/model"
 )
 
-// cluster groups comments into lessons. The clustering key answers "the
-// same kind of feedback, in the same area": a cited rule code clusters by
-// (directory, code) so a linter finding that recurs across a package
-// reads as one lesson; an un-coded comment clusters by (file, normalized
-// message) so repeated prose about one file collapses too.
+// cluster groups comments into lessons, and keeps each accepted comment
+// as a Finding linked to its lesson — the full evidence behind the
+// fingerprint. The clustering key answers "the same kind of feedback, in
+// the same area": a cited rule code clusters by (directory, code) so a
+// linter finding that recurs across a package reads as one lesson; an
+// un-coded comment clusters by (file, normalized message) so repeated
+// prose about one file collapses too.
 //
 // Not every comment is a finding: thread replies are conversation about a
 // finding (the author's "fixed", the reviewer's follow-up), and top-level
 // remarks without substance ("Very smart!") teach nothing. Both are
 // dropped here — mining them was the dominant noise source on real repos.
-func cluster(comments []Comment) []model.Lesson {
+func cluster(comments []Comment) ([]model.Lesson, []model.Finding) {
 	byKey := map[string]*model.Lesson{}
 	reviewers := map[string]map[string]bool{} // key -> set of reviewers
 	uncoded := map[string]bool{}              // keys clustered by message, not code
+
+	var findings []model.Finding
 
 	for i := range comments {
 		c := &comments[i]
@@ -63,9 +68,21 @@ func cluster(comments []Comment) []model.Lesson {
 			lesson.LastTS = c.CreatedAt
 			lesson.ExampleURL = c.URL
 		}
+
+		findings = append(findings, model.Finding{
+			ID: c.ID, LessonKey: key, Path: c.Path, PR: c.PR,
+			Reviewer: c.Reviewer, Body: findingBody(c.Body),
+			URL: c.URL, CreatedAt: c.CreatedAt,
+		})
 	}
 
-	mergeAcrossFiles(byKey, reviewers, uncoded)
+	remap := mergeAcrossFiles(byKey, reviewers, uncoded)
+
+	for i := range findings {
+		if to, ok := remap[findings[i].LessonKey]; ok {
+			findings[i].LessonKey = to
+		}
+	}
 
 	out := make([]model.Lesson, 0, len(byKey))
 
@@ -83,7 +100,36 @@ func cluster(comments []Comment) []model.Lesson {
 		return out[i].LastTS > out[j].LastTS
 	})
 
-	return out
+	return out, findings
+}
+
+// findingBodyCap bounds one stored finding. Real findings run well under
+// this once details blocks are gone; the cap only guards against a
+// pathological body bloating the index.
+const findingBodyCap = 4096
+
+// findingBody is the stored form of a comment: details blocks and HTML
+// comments removed (reviewer-bot machinery), code fences deliberately
+// KEPT — a ```suggestion fence often carries the fix itself — and the
+// result capped at a rune boundary. This is what distillation and
+// provenance display read, so it must stay faithful prose, not a
+// fingerprint.
+func findingBody(body string) string {
+	s := detailsBlockRe.ReplaceAllString(body, " ")
+	s = detailsTailRe.ReplaceAllString(s, " ")
+	s = htmlNoteRe.ReplaceAllString(s, " ")
+	s = strings.TrimSpace(s)
+
+	if len(s) > findingBodyCap {
+		cut := findingBodyCap
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+
+		s = strings.TrimSpace(s[:cut])
+	}
+
+	return s
 }
 
 // mergeAcrossFiles widens un-coded lessons whose fingerprint recurs in
@@ -92,10 +138,11 @@ func cluster(comments []Comment) []model.Lesson {
 // and per-file counting would leave each copy below the surface
 // threshold. Merging stops at the repo root: a fingerprint scattered
 // across unrelated top-level trees would otherwise become a repo-wide
-// lesson that fires on every edit.
+// lesson that fires on every edit. The returned map records every
+// absorbed key's new home, so finding links can follow the merge.
 func mergeAcrossFiles(byKey map[string]*model.Lesson,
 	reviewers map[string]map[string]bool, uncoded map[string]bool,
-) {
+) map[string]string {
 	bySymptom := map[string][]string{} // symptom -> keys of un-coded lessons
 
 	for key := range byKey {
@@ -103,6 +150,8 @@ func mergeAcrossFiles(byKey map[string]*model.Lesson,
 			bySymptom[byKey[key].Symptom] = append(bySymptom[byKey[key].Symptom], key)
 		}
 	}
+
+	remap := map[string]string{}
 
 	for symptom, keys := range bySymptom {
 		if len(keys) < 2 {
@@ -145,11 +194,14 @@ func mergeAcrossFiles(byKey map[string]*model.Lesson,
 
 			delete(byKey, key)
 			delete(reviewers, key)
+			remap[key] = merged.ClusterKey
 		}
 
 		byKey[merged.ClusterKey] = merged
 		reviewers[merged.ClusterKey] = set
 	}
+
+	return remap
 }
 
 // commonDir returns the deepest directory shared by every file path, ""

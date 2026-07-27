@@ -368,7 +368,7 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (reviews.Res
 	}
 	defer func() { _ = st.Close() }()
 
-	if err := st.ReplaceLessons(res.Lessons); err != nil {
+	if err := st.ReplaceLessons(res.Lessons, res.Findings); err != nil {
 		return res, err
 	}
 

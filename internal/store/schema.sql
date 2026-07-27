@@ -129,3 +129,23 @@ CREATE TABLE IF NOT EXISTS lesson (
     promoted_rule_id TEXT
 );
 CREATE INDEX IF NOT EXISTS lesson_region ON lesson (region);
+
+-- The raw review comments behind the lessons (M6 Tier 2 input): the
+-- substance-filtered, top-level comments exactly as clustered, kept in
+-- full so distillation and provenance work from what reviewers wrote,
+-- not from 80-char fingerprints. Replaced together with lesson on every
+-- successful mine; the GitHub comment id is stable across mines, which
+-- is what makes incremental distillation (group signatures over member
+-- ids) possible.
+CREATE TABLE IF NOT EXISTS finding (
+    id         INTEGER PRIMARY KEY,        -- GitHub review-comment id
+    lesson_key TEXT NOT NULL,              -- lesson.cluster_key this comment fed
+    path       TEXT NOT NULL,              -- repo-relative file
+    pr         INTEGER NOT NULL DEFAULT 0,
+    reviewer   TEXT NOT NULL DEFAULT '',
+    body       TEXT NOT NULL,              -- boilerplate-stripped, capped
+    url        TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS finding_lesson ON finding (lesson_key);
+CREATE INDEX IF NOT EXISTS finding_path ON finding (path);

@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/model"
 )
 
 // ghPage builds a GitHub pulls/comments JSON array from terse specs, so
@@ -57,17 +59,25 @@ type clustered struct {
 func mine(t *testing.T, json string) []clustered {
 	t.Helper()
 
+	got, _ := mineWithFindings(t, json)
+
+	return got
+}
+
+func mineWithFindings(t *testing.T, json string) ([]clustered, []model.Finding) {
+	t.Helper()
+
 	comments, err := parseComments([]byte(json))
 	require.NoError(t, err)
 
-	lessons := cluster(comments)
+	lessons, findings := cluster(comments)
 
 	got := make([]clustered, len(lessons))
 	for i, l := range lessons {
 		got[i] = clustered{l.Region, l.Symptom, l.Reviewer, l.Occurrences}
 	}
 
-	return got
+	return got, findings
 }
 
 func TestRuleCodeClustersByDirectory(t *testing.T) {
@@ -235,12 +245,64 @@ func TestMergeAcrossFiles(t *testing.T) {
 		comment(3, "reviewer", "User", "engine/visitor/c.go", 3, 3, "Reset pooled state before reuse!"),
 	)
 
-	got := mine(t, page)
+	got, findings := mineWithFindings(t, page)
 
 	require.Len(t, got, 1)
 	assert.Equal(t, "engine", got[0].region, "widened to the deepest common directory")
 	assert.Equal(t, 3, got[0].occ)
 	assert.Equal(t, "mixed", got[0].reviewer, "reviewer sets merge too")
+
+	// The findings follow the merge: all three link to the merged lesson.
+	require.Len(t, findings, 3)
+
+	for _, f := range findings {
+		assert.Equal(t, "engine\x00reset pooled state before reuse", f.LessonKey,
+			"finding %d must be remapped to the merged lesson", f.ID)
+	}
+}
+
+func TestFindingsCarryTheEvidence(t *testing.T) {
+	// Every comment that becomes (part of) a lesson is kept as a Finding
+	// linked to it; dropped comments (replies, no substance) leave none.
+	page := ghPage(
+		comment(1, "coderabbitai[bot]", "Bot", "research/a.py", 10, 100, "Docstring uses a non-ASCII character. `RUF001`"),
+		comment(2, "coderabbitai[bot]", "Bot", "research/b.py", 20, 101, "Ambiguous unicode: `RUF001` please fix"),
+		reply(1, comment(3, "author", "User", "research/a.py", 10, 100, "fixed")),
+	)
+
+	got, findings := mineWithFindings(t, page)
+
+	require.Len(t, got, 1)
+	require.Len(t, findings, 2, "two accepted comments, the reply left out")
+
+	for _, f := range findings {
+		assert.Equal(t, "research\x00RUF001", f.LessonKey)
+		assert.NotEmpty(t, f.Body)
+		assert.NotEmpty(t, f.URL)
+	}
+
+	assert.Equal(t, int64(1), findings[0].ID, "GitHub comment id is the finding id")
+	assert.Equal(t, 100, findings[0].PR)
+	assert.Equal(t, "research/a.py", findings[0].Path)
+}
+
+func TestFindingBodyKeepsFencesDropsMachinery(t *testing.T) {
+	body := "**Fix the guard.**\n\n<details>\n<summary>🧩 Analysis chain</summary>\nscript output\n</details>\n\n" +
+		"```suggestion\nif x == nil { return }\n```\n\n<!-- fingerprint -->"
+
+	got := findingBody(body)
+
+	assert.Contains(t, got, "**Fix the guard.**")
+	assert.Contains(t, got, "```suggestion", "the suggested fix is the valuable part")
+	assert.Contains(t, got, "if x == nil { return }")
+	assert.NotContains(t, got, "Analysis chain", "details blocks are machinery")
+	assert.NotContains(t, got, "fingerprint", "HTML comments are machinery")
+
+	// A pathological body is capped without splitting a rune.
+	long := strings.Repeat("é", findingBodyCap)
+	capped := findingBody(long)
+	assert.LessOrEqual(t, len(capped), findingBodyCap)
+	assert.True(t, strings.HasSuffix(capped, "é"), "cap must cut at a rune boundary")
 }
 
 func TestMergeStopsAtRepoRoot(t *testing.T) {
@@ -451,6 +513,18 @@ func TestMineDegradesWhenFetchFails(t *testing.T) {
 	require.NoError(t, err, "a fetch failure (no auth, no gh) must not abort indexing")
 	assert.Empty(t, res.Lessons)
 	assert.Contains(t, res.Note, "skipped")
+}
+
+func TestParseDropsDuplicatesAcrossPages(t *testing.T) {
+	// GitHub pagination is not a snapshot: an item shifting across a page
+	// boundary mid-fetch arrives on two pages. The duplicate must not
+	// double-count a lesson — or collide on the finding table's primary
+	// key and fail the entire mine.
+	dup := comment(7, "coderabbitai[bot]", "Bot", "a.py", 1, 1, "Non-ascii char in the docstring `RUF001`")
+
+	got, err := parseComments([]byte(ghPage(dup) + ghPage(dup)))
+	require.NoError(t, err)
+	require.Len(t, got, 1, "the duplicated page item must be dropped")
 }
 
 func TestParseHandlesEmptyAndGarbage(t *testing.T) {

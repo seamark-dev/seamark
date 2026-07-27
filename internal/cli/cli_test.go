@@ -237,7 +237,7 @@ func TestLessonsList(t *testing.T) {
 			Symptom: "E702", Occurrences: 9, LastTS: 2},
 		{ClusterKey: "a.go\x00RUF001", Region: "a.go", Reviewer: "coderabbit",
 			Symptom: "RUF001", Occurrences: 1, LastTS: 1},
-	}))
+	}, nil))
 	require.NoError(t, st.Close())
 
 	out, err := run(t, "-C", root, "lessons", "--list")
@@ -270,7 +270,7 @@ func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
 			Symptom: "RUF001", Occurrences: 4, LastTS: 1},
 		{ClusterKey: "other\x00E501", Region: "other", Reviewer: "coderabbit",
 			Symptom: "E501", Occurrences: 3, LastTS: 1},
-	}))
+	}, nil))
 	require.NoError(t, st.Close())
 
 	// Fire the hook on a.go — it must record a firing.
@@ -304,7 +304,7 @@ func seedLesson(t *testing.T, root, region, symptom string, occ int) {
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
 		{ClusterKey: region + "\x00" + symptom, Region: region,
 			Reviewer: "coderabbit", Symptom: symptom, Occurrences: occ, LastTS: 1},
-	}))
+	}, nil))
 }
 
 // runIn is runErr with a stdin payload, for hook-mode tests.
