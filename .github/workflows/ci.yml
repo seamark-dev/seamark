@@ -1,0 +1,60 @@
+# CI: tests on both supported platforms, race detector on Linux, lint.
+# Steps go through the Makefile so CI and a dev shell run identical
+# commands (CGO_ENABLED=1 lives there, tree-sitter needs it).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Tests
+        run: make test
+
+      # The race detector multiplies runtime; once, on the cheap runner,
+      # is the right price for what it catches.
+      - name: Race detector
+        if: matrix.os == 'ubuntu-latest'
+        run: make test-race
+
+      - name: Build
+        run: make build
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12
