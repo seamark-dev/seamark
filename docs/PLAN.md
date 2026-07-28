@@ -387,8 +387,26 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
 - [ ] Decay/watermark: `since`-incremental fetch; hits/last_hit aging
       (currently the mined window IS the recency filter — no all-time
       tally to decay)
-- [ ] Tier 2 (deferred): offline LLM distillation of human prose threads;
-      also capture non-review failure signals (test pass→fail, reverts)
+- [x] Tier 2 distillation (2026-07-27): `lessons --distill` batches raw
+      findings (stored in full behind every lesson) into candidate
+      groups — token-overlap themes plus per-directory coverage, capped
+      at 40 — and reads each NEW group once through the user's own agent
+      CLI (`claude -p` preset; any stdin CLI via `agent.argv`; seamark
+      holds no keys). Cite-or-die validation: patterns must cite ≥2 real
+      member finding ids, regions computed from citations, never trusted
+      from the model. Plan/apply: proposals persist with p-ids;
+      `--apply p3,p7` / ranges `p1..p9` (holes tolerated, bare ids
+      strict) insert pins into lessons.yaml — only with the
+      `distill.write` config opt-in, else printed to paste; `--dismiss`
+      is permanent memory. Group signatures (hash of member ids) mean an
+      unchanged evidence set is never paid for twice; runs report ~token
+      cost. Hook pin injection budgeted (`pin_budget`, default 3,
+      deepest region first, "+N more" pointer). Validated on
+      graphql-go-tools (14/14 proposals applied by the human) and
+      trading-tools (domain-specific pins incl. session-boundary and
+      statistical-baseline rules).
+- [ ] Non-review failure signals (test pass→fail, reverts) as finding
+      sources — the rest of the original Tier 2 idea
 
 findings). Reviewer-agnostic by design: CodeRabbit, Copilot review,
 human reviewers — all arrive through the same PR-comment API. Surface by
@@ -400,7 +418,8 @@ cost tier, cheapest wins:
   - Tier 1 (bounded, DONE): recurring lessons become one-liners in MCP
     orient/why responses, ranked by occurrences, region-scoped. Never
     CLAUDE.md (always-on cost, grows forever, gets ignored).
-  - Tier 2 (deferred): offline LLM distillation of human threads.
+  - Tier 2 (DONE, see above): distillation of human threads through the
+    user's own agent CLI — plan/apply, cite-or-die, never auto-enabled.
 
 ### v1.0
 

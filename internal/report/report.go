@@ -133,7 +133,7 @@ func fileReport(w io.Writer, st *store.Store, cfg *reviews.Config, file string) 
 	if len(syms) > 0 {
 		fmt.Fprintf(w, "\ndefines (%d)\n", len(syms))
 		for _, s := range limitSyms(syms, 20) {
-			fmt.Fprintf(w, "  %-40s %-8s line %d\n", s.FQN, s.Kind, s.Span.StartLine)
+			fmt.Fprintf(w, "  %-8s line %-5d %s\n", s.Kind, s.Span.StartLine, s.FQN)
 		}
 	}
 
@@ -162,11 +162,11 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 		}
 
 		for _, p := range partners {
-			fmt.Fprintf(w, "  %-50s %2d/%d commits   lift %.1f",
-				p.File, p.Together, p.Total, p.Lift)
+			fmt.Fprintf(w, "  %2d/%-3d commits  lift %-5.1f %s",
+				p.Together, p.Total, p.Lift, p.File)
 
 			if funcs := history.PartnerFunctions(root, p.File, shared, 3); len(funcs) > 0 {
-				fmt.Fprintf(w, "   · mostly %s", render.Sanitize(strings.Join(funcs, ", ")))
+				fmt.Fprintf(w, "  · mostly %s", render.Sanitize(strings.Join(funcs, ", ")))
 			}
 
 			fmt.Fprintln(w)
@@ -230,25 +230,44 @@ func loadLessonConfig(w io.Writer, root string) *reviews.Config {
 // config's mute/pin/threshold rules — the single path every surface
 // (why, orient, the edit hook) shares, so they never disagree.
 func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit int) ([]model.Lesson, error) {
+	out, _, err := LessonsForScopeBudget(st, cfg, file, limit, 0)
+
+	return out, err
+}
+
+// LessonsForScopeBudget is LessonsForScope with a pin cap for ambient
+// surfaces (the edit hook); trimmed reports how many applicable pins the
+// budget held back, so the caller can point at them instead of hiding
+// them.
+func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, limit, pinBudget int) ([]model.Lesson, int, error) {
+	// A pin budget above the surface's own cap would let the cap eat
+	// pins with trimmed=0 — a silent drop, exactly what the budget
+	// contract forbids. Clamp so every held-back pin is counted.
+	if pinBudget > limit {
+		pinBudget = limit
+	}
+
 	// Query with threshold 1 (everything for this region); the config's
 	// Surface applies the real threshold, mute, and pins.
 	mined, err := st.LessonsForFile(file, 1, 100)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	out := cfg.Surface(mined, file)
+	out, trimmed := cfg.SurfaceBudget(mined, file, pinBudget)
 	if len(out) > limit {
 		out = out[:limit]
 	}
 
-	return out, nil
+	return out, trimmed, nil
 }
 
 // PrintLessonReminder writes a compact standalone lessons block for one
 // file — used by `seamark lessons` and the PreToolUse edit hook. Writes
-// nothing when there are no lessons, so the hook stays silent.
-func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson) error {
+// nothing when there are no lessons, so the hook stays silent. morePins
+// is how many applicable pins the injection budget held back; they are
+// pointed at, never silently dropped.
+func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson, morePins int) error {
 	if len(lessons) == 0 {
 		return nil
 	}
@@ -263,6 +282,11 @@ func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson) error
 		"Reviewers repeatedly flag these here; avoid repeating them:\n",
 		render.Sanitize(file))
 	printLessons(w, lessons)
+
+	if morePins > 0 {
+		fmt.Fprintf(w, "(+%d more pins for this area: `seamark lessons --file %s`)\n",
+			morePins, render.Sanitize(file))
+	}
 
 	// The promotion loop's cheapest trigger: the agent editing here is
 	// the one best placed to notice a repeat these lessons miss — and a
@@ -296,9 +320,9 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 	}
 
 	for _, f := range shown {
-		fmt.Fprintf(w, "  ×%-4d %-30s %-24s  last %s\n",
-			f.Count, render.Sanitize(f.Symptom),
-			render.Sanitize(f.Region), firingDate(f.LastTS))
+		fmt.Fprintf(w, "  ×%-4d %-40s last %s  %s\n",
+			f.Count, render.Sanitize(f.Region),
+			firingDate(f.LastTS), render.Sanitize(f.Symptom))
 	}
 
 	if len(s.NeverFired) > 0 {
@@ -311,8 +335,8 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 		}
 
 		for _, l := range never {
-			fmt.Fprintf(w, "  %-30s %s\n",
-				render.Sanitize(l.Symptom), render.Sanitize(l.Region))
+			fmt.Fprintf(w, "  %-40s %s\n",
+				render.Sanitize(l.Region), render.Sanitize(l.Symptom))
 		}
 	}
 }
@@ -380,14 +404,14 @@ func PrintLessonLedger(w io.Writer, lessons []model.Lesson, cfg *reviews.Config,
 	fmt.Fprintf(w, "review lessons%s (all mined, strongest first) — %d total\n\n", where, len(lessons))
 
 	for _, l := range lessons {
-		marker := ""
+		reviewer := "[" + render.Sanitize(l.Reviewer) + "]"
 		if cfg.Muted(l) {
-			marker = "  (muted)"
+			reviewer += " (muted)"
 		}
 
-		fmt.Fprintf(w, "  ×%-4d %-28s %-26s [%s]%s\n",
-			l.Occurrences, render.Sanitize(l.Symptom),
-			render.Sanitize(l.Region), render.Sanitize(l.Reviewer), marker)
+		fmt.Fprintf(w, "  ×%-4d %-46s %-21s %s\n",
+			l.Occurrences, render.Sanitize(l.Region),
+			reviewer, render.Sanitize(l.Symptom))
 	}
 
 	fmt.Fprint(w, `
@@ -407,13 +431,15 @@ review, never add it to the config unasked.
 `)
 }
 
-// printLessons renders clustered review feedback. Symptom text comes
-// from comment bodies (and pinned config notes) — untrusted — so it is
-// sanitized, but never truncated: this line IS the guidance on every
-// surface, including the edit hook's injected context, and a pinned
-// note cut mid-sentence defeats the pin (mined fingerprints are ≤80
-// chars by construction; pinned notes are the user's own words). A
-// pinned lesson shows "pinned", not a count.
+// printLessons renders clustered review feedback, fixed-width metadata
+// first and the symptom text last: the text is the only variable-length
+// field, and trailing it means one long note can never break the
+// alignment of everything after it. Symptom text comes from comment
+// bodies (and pinned config notes) — untrusted — so it is sanitized,
+// but never truncated: this line IS the guidance on every surface,
+// including the edit hook's injected context, and a pinned note cut
+// mid-sentence defeats the pin. A pinned lesson shows "pinned", not a
+// count.
 func printLessons(w io.Writer, lessons []model.Lesson) {
 	for _, l := range lessons {
 		count := fmt.Sprintf("×%d", l.Occurrences)
@@ -421,10 +447,78 @@ func printLessons(w io.Writer, lessons []model.Lesson) {
 			count = "pinned"
 		}
 
-		fmt.Fprintf(w, "  %-34s %-7s %s [%s]\n",
-			render.Sanitize(l.Symptom), count,
-			render.Sanitize(l.Region), render.Sanitize(l.Reviewer))
+		fmt.Fprintf(w, "  %-7s %-38s %-13s %s\n",
+			count, render.Sanitize(l.Region),
+			"["+render.Sanitize(l.Reviewer)+"]", render.Sanitize(l.Symptom))
 	}
+}
+
+// PrintDistillPlan renders a distillation run and the full pending
+// plan: every proposal awaiting a decision, this run's newcomers
+// included. Proposal text is model output — untrusted — so it is
+// sanitized; notes are never truncated (they are the payload).
+func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal) {
+	fmt.Fprintf(w, "distill plan — %d groups: %d read", res.GroupsTotal, res.GroupsRead)
+
+	if res.GroupsSkipped > 0 {
+		fmt.Fprintf(w, ", %d already distilled", res.GroupsSkipped)
+	}
+
+	if res.GroupsFailed > 0 {
+		fmt.Fprintf(w, ", %d failed (retried next run)", res.GroupsFailed)
+	}
+
+	if res.GroupsPending > 0 {
+		fmt.Fprintf(w, ", %d left for another run (raise --limit or drop --region)", res.GroupsPending)
+	}
+
+	if res.PrunedStale > 0 {
+		fmt.Fprintf(w, "; %d stale proposals pruned", res.PrunedStale)
+	}
+
+	fmt.Fprintln(w)
+
+	if res.TokensNote != "" {
+		fmt.Fprintln(w, res.TokensNote)
+	}
+
+	if len(pending) == 0 {
+		fmt.Fprintln(w, "\nno proposals pending — nothing recurs that the mined lessons miss")
+
+		return
+	}
+
+	fmt.Fprintf(w, "\nproposed pins — distilled from review findings, awaiting YOUR decision\n")
+
+	for _, p := range pending {
+		region := p.Region
+		if region == "" {
+			region = "*"
+		}
+
+		fmt.Fprintf(w, "\n  p%-4d %-34s %-26s %d findings cited [%s]\n",
+			p.ID, render.Sanitize(p.Rule), render.Sanitize(region),
+			len(p.Members), render.Sanitize(p.Agent))
+		fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Note))
+	}
+
+	fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; "+
+		"`--dismiss` remembers the no\n")
+}
+
+// DistillSummary is the run-shape PrintDistillPlan reports; a mirror of
+// distill.Result's counters, kept here so report does not import the
+// distill package.
+type DistillSummary struct {
+	GroupsTotal   int
+	GroupsRead    int
+	GroupsSkipped int
+	GroupsFailed  int
+	GroupsPending int
+	PrunedStale   int
+	// TokensNote is the caller-rendered cost line ("~59k tokens sent …"),
+	// empty when nothing was sent.
+	TokensNote string
 }
 
 func printDecisions(w io.Writer, decisions []model.Decision) {
@@ -441,20 +535,49 @@ func printDecisions(w io.Writer, decisions []model.Decision) {
 	}
 }
 
-// printCallEdges lists neighbors with the derivation of each edge, so a
-// low-confidence unique-name guess never masquerades as a resolved call.
+// printCallEdges lists neighbors: the derivation first (how much to
+// trust an edge is the first question, and the tag is fixed-width), the
+// symbol, and the location trailing — the only unbounded field, so a
+// long test path can't shear the columns. Production edges lead and
+// test edges collapse to one count line: a hot constructor has a
+// hundred TestXxx callers, and they bury the fourteen that matter —
+// the same production-surface stance orient takes. A symbol referenced
+// only from tests still shows its test edges rather than nothing.
 func printCallEdges(w io.Writer, edges []store.CallEdge) {
-	shown := edges
+	var prod, tests []store.CallEdge
+
+	for _, c := range edges {
+		if model.IsTestPath(c.File) {
+			tests = append(tests, c)
+		} else {
+			prod = append(prod, c)
+		}
+	}
+
+	shown := prod
+
+	if len(prod) == 0 {
+		shown, tests = tests, nil
+	}
+
+	overflow := 0
+
 	if len(shown) > 15 {
+		overflow = len(shown) - 15
 		shown = shown[:15]
 	}
 
 	for _, c := range shown {
-		fmt.Fprintf(w, "  %-40s %-34s [%s]\n", c.FQN, location(c.Symbol), c.Origin)
+		fmt.Fprintf(w, "  %-15s %-44s %s\n",
+			"["+c.Origin+"]", c.FQN, location(c.Symbol))
 	}
 
-	if len(edges) > len(shown) {
-		fmt.Fprintf(w, "  … %d more\n", len(edges)-len(shown))
+	if overflow > 0 {
+		fmt.Fprintf(w, "  … %d more\n", overflow)
+	}
+
+	if len(tests) > 0 {
+		fmt.Fprintf(w, "  (+%d in tests)\n", len(tests))
 	}
 }
 

@@ -161,3 +161,21 @@ CREATE TABLE IF NOT EXISTS distilled (
     region    TEXT NOT NULL DEFAULT '',   -- the group's area, for reporting
     at        INTEGER NOT NULL DEFAULT 0  -- unix seconds of the run
 ) WITHOUT ROWID;
+
+-- Distilled pin proposals (the "plan" half of plan/apply). status is
+-- the lifecycle: proposed rows await a decision; applied/dismissed rows
+-- are memory — a dismissed pattern is not re-proposed unless its
+-- evidence set (signature) changes. Stale 'proposed' rows whose
+-- signature left the current grouping are pruned on the next plan.
+CREATE TABLE IF NOT EXISTS proposal (
+    id         INTEGER PRIMARY KEY,
+    signature  TEXT NOT NULL,
+    rule       TEXT NOT NULL,
+    region     TEXT NOT NULL DEFAULT '',
+    note       TEXT NOT NULL,
+    members    TEXT NOT NULL,             -- JSON array of cited finding ids
+    agent      TEXT NOT NULL DEFAULT '',  -- provenance: adapter + prompt version
+    status     TEXT NOT NULL DEFAULT 'proposed',
+    created_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS proposal_status ON proposal (status);

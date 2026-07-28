@@ -154,6 +154,30 @@ type Finding struct {
 	CreatedAt int64  // unix seconds
 }
 
+// Proposal lifecycle states.
+const (
+	ProposalProposed  = "proposed"
+	ProposalApplied   = "applied"
+	ProposalDismissed = "dismissed"
+)
+
+// Proposal is one distilled pattern awaiting a human decision: a
+// pin-shaped lesson synthesized by the configured agent from a group of
+// findings (the members it cited). Proposals follow the plan/apply
+// contract — the distiller may only ever PROPOSE; a pin reaches
+// .seamark/lessons.yaml exclusively through an explicit apply.
+type Proposal struct {
+	ID        int64
+	Signature string  // the evidence group that produced it
+	Rule      string  // short kebab-case pin label
+	Region    string  // narrowest directory covering the cited members ("" = repo-wide)
+	Note      string  // the guidance, pin-ready
+	Members   []int64 // finding ids the agent cited — verified to exist in the group
+	Agent     string  // provenance: adapter name + prompt version
+	Status    string  // proposed | applied | dismissed
+	CreatedAt int64
+}
+
 // IsTestPath reports whether a file is test code, by each language's
 // naming convention. Shared by resolution (test doubles must not win
 // unique-name matches) and reporting (orientation shows the production

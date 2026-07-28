@@ -527,6 +527,50 @@ func TestParseDropsDuplicatesAcrossPages(t *testing.T) {
 	require.Len(t, got, 1, "the duplicated page item must be dropped")
 }
 
+func TestMineReportsProgress(t *testing.T) {
+	root := t.TempDir()
+
+	for _, args := range [][]string{
+		{"init"}, {"remote", "add", "origin", "git@github.com:o/r.git"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		require.NoError(t, cmd.Run())
+	}
+
+	page := ghPage(comment(1, "r", "User", "a.go", 1, 1, "Reset pooled state before reuse here."))
+
+	var lines []string
+
+	_, err := Mine(root, Options{Logf: func(format string, args ...any) {
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}}, func(string, string, Options) ([]byte, error) { return []byte(page), nil })
+	require.NoError(t, err)
+
+	joined := strings.Join(lines, "\n")
+	assert.Contains(t, joined, "fetching PR comments")
+	assert.Contains(t, joined, "1 comments fetched; clustering")
+}
+
+func TestProgressWriterReportsAtSteps(t *testing.T) {
+	var lines []string
+
+	pw := &progressWriter{next: progressStep,
+		logf: func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }}
+
+	chunk := make([]byte, 200*1024)
+
+	for i := 0; i < 6; i++ { // 1.2 MB in 200KB writes
+		_, err := pw.Write(chunk)
+		require.NoError(t, err)
+	}
+
+	require.Len(t, lines, 2, "one line per 512KB step")
+	assert.Contains(t, lines[0], "0.5 MB fetched")
+	assert.Contains(t, lines[1], "1.0 MB fetched")
+	assert.Equal(t, 6*200*1024, pw.buf.Len(), "progress must not eat the payload")
+}
+
 func TestParseHandlesEmptyAndGarbage(t *testing.T) {
 	empty, err := parseComments([]byte("  "))
 	require.NoError(t, err)

@@ -2,12 +2,42 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/index"
 )
+
+// indexProgress adapts index.Run's phase events to the live terminal
+// renderer. Nil on a non-terminal, so piped output stays byte-identical
+// to before.
+func indexProgress(u *ui) func(phase string, done, total int) {
+	if !u.tty {
+		return nil
+	}
+
+	last := ""
+
+	return func(phase string, done, total int) {
+		if phase != last {
+			u.finish("")
+			u.phase(phase, "")
+			last = phase
+		}
+
+		switch {
+		case phase == "scan":
+			u.finish(fmt.Sprintf("%d files", done))
+			last = ""
+		case phase == "parse":
+			u.update(bar(done, total))
+		case total > 0 && done == total:
+			u.update("done")
+		}
+	}
+}
 
 func newIndexCmd(opts *options) *cobra.Command {
 	histOpts := history.Options{}
@@ -32,16 +62,22 @@ CLI (gh) authenticated and a github.com remote.`,
 				fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...)
 			}
 
+			u := newUI(cmd.ErrOrStderr())
+			defer u.finish("")
+
 			sum, err := index.Run(index.Options{
-				Root:    opts.workspace,
-				DBPath:  opts.dbPath,
-				History: histOpts,
-				Force:   force,
-				Logf:    logf,
+				Root:     opts.workspace,
+				DBPath:   opts.dbPath,
+				History:  histOpts,
+				Force:    force,
+				Logf:     logf,
+				Progress: indexProgress(u),
 			})
 			if err != nil {
 				return err
 			}
+
+			u.finish("")
 
 			out := cmd.OutOrStdout()
 
@@ -52,7 +88,23 @@ CLI (gh) authenticated and a github.com remote.`,
 					return nil
 				}
 
-				res, err := index.RefreshReviews(sum.Root, opts.dbPath, logf)
+				// The fetch is the long pole of the whole command —
+				// minutes of GitHub pages on a big repo. On a terminal
+				// its progress lines become the live phase detail.
+				rlogf := logf
+				if u.tty {
+					u.phase("reviews", "…")
+
+					rlogf = func(format string, a ...any) {
+						// The phase line already says "reviews".
+						u.update(strings.TrimPrefix(fmt.Sprintf(format, a...), "reviews: "))
+					}
+				}
+
+				res, err := index.RefreshReviews(sum.Root, opts.dbPath, rlogf)
+
+				u.finish("")
+
 				if err != nil {
 					return err
 				}

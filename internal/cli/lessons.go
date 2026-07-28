@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/seamark-dev/seamark/internal/agent"
+	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/report"
@@ -18,15 +22,19 @@ import (
 
 func newLessonsCmd(opts *options) *cobra.Command {
 	var (
-		file     string
-		region   string
-		hookMode bool
-		list     bool
-		stats    bool
+		file       string
+		region     string
+		hookMode   bool
+		list       bool
+		stats      bool
+		distillRun bool
+		limit      int
+		applyIDs   string
+		dismissIDs string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "lessons [--file <path> | --list [--region <prefix>] | --stats]",
+		Use:   "lessons [--file <path> | --list [--region <prefix>] | --stats | --distill | --apply | --dismiss]",
 		Short: "Show the recurring review feedback mined from pull requests",
 		Long: `Prints the review lessons (mined by "index --reviews", tuned by
 .seamark/lessons.yaml) — the mistakes reviewers keep flagging.
@@ -40,16 +48,51 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    per-file counters cannot see. Implies --list.
   --stats          which lessons the edit hook actually surfaced to agents,
                    and which would surface but never have (decay candidates)
+  --distill        send NEW groups of raw findings to your agent CLI and
+                   turn recurring patterns into proposed pins — the plan
+                   half of plan/apply; nothing touches lessons.yaml here.
+                   Composes with --region and --limit (token budget);
+                   already-read groups are never paid for twice. Fully
+                   optional: pins are plain YAML you can write by hand —
+                   distill only drafts them.
+  --apply p3,p7    turn chosen proposals into pins; ranges work too
+                   (p1..p9 applies whatever inside is still pending).
+                   Writes lessons.yaml only when config.yaml sets
+                   distill.write; otherwise prints the block to paste.
+                   Never automatic.
+  --dismiss p2     record a no — the same evidence is never re-proposed.
+                   Takes lists and ranges like --apply
   --hook           read a Claude Code PreToolUse payload from stdin and emit
                    the edited file's lessons as additionalContext
 
 --hook is read-only and offline: no network, no re-indexing, silent when
 a file has no lessons.`,
-		Args: cobra.NoArgs,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Applying and dismissing are opposite decisions; both at
+			// once would silently route everything (positional ids
+			// included) to apply.
+			if strings.TrimSpace(applyIDs) != "" && strings.TrimSpace(dismissIDs) != "" {
+				return fmt.Errorf("--apply and --dismiss are opposite decisions — run them one at a time")
+			}
+
+			// `--apply p1, p2` is natural typing; the shell splits the
+			// spaced list into positional args, so fold them back in.
+			if len(args) > 0 && strings.TrimSpace(applyIDs)+strings.TrimSpace(dismissIDs) == "" {
+				return fmt.Errorf("unexpected argument %q — provide --file, --list, --distill, --apply, or --dismiss", args[0])
+			}
+
+			extra := strings.Join(args, ",")
+
 			switch {
 			case hookMode:
 				return runLessonsHook(cmd, opts)
+			case strings.TrimSpace(applyIDs) != "":
+				return runLessonsApply(cmd, opts, applyIDs+","+extra)
+			case strings.TrimSpace(dismissIDs) != "":
+				return runLessonsDismiss(cmd, opts, dismissIDs+","+extra)
+			case distillRun:
+				return runLessonsDistill(cmd, opts, strings.TrimSpace(region), limit)
 			case list || strings.TrimSpace(region) != "":
 				return runLessonsList(cmd, opts, strings.TrimSpace(region))
 			case stats:
@@ -61,26 +104,338 @@ a file has no lessons.`,
 				}
 				defer func() { _ = st.Close() }()
 
-				lessons, err := lessonsForFile(st, root, file)
+				lessons, _, err := lessonsForFile(st, root, file, false)
 				if err != nil {
 					return err
 				}
 
-				return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, file), lessons)
+				return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, file), lessons, 0)
 			default:
-				return fmt.Errorf("provide --file <path>, --list, or --hook")
+				return fmt.Errorf("provide --file <path>, --list, --stats, --distill, --apply, --dismiss, or --hook")
 			}
 		},
 	}
 
 	cmd.Flags().StringVar(&file, "file", "", "repo-relative (or absolute) path to look up")
 	cmd.Flags().BoolVar(&list, "list", false, "list every mined lesson with config-tuning syntax")
-	cmd.Flags().StringVar(&region, "region", "", "narrow --list to a directory's area (implies --list)")
+	cmd.Flags().StringVar(&region, "region", "", "narrow --list or --distill to a directory's area")
 	cmd.Flags().BoolVar(&stats, "stats", false, "summarize the firing log: what surfaced, what never fires")
 	cmd.Flags().BoolVar(&hookMode, "hook", false,
 		"read a PreToolUse JSON payload from stdin and emit lessons as additionalContext")
+	cmd.Flags().BoolVar(&distillRun, "distill", false,
+		"distill recurring patterns from raw findings into proposed pins (needs the agent CLI)")
+	cmd.Flags().IntVar(&limit, "limit", 10,
+		"max new groups one --distill run sends to the agent (0 = all)")
+	cmd.Flags().StringVar(&applyIDs, "apply", "",
+		"apply proposals as pins by id or range (p3,p7 or p1..p9); writes lessons.yaml only with distill.write in config")
+	cmd.Flags().StringVar(&dismissIDs, "dismiss", "",
+		"dismiss proposals by id or range (p2 or p1..p9) — remembered, never re-proposed for the same evidence")
 
 	return cmd
+}
+
+// proposalSelection is a parsed --apply/--dismiss argument. The two
+// forms carry different intent: a bare id (p3) is a precise pointer and
+// must name a pending proposal; a range (p1..p9 or p1-p9) means "these,
+// whichever still need a decision", so the holes left by earlier
+// applies and dismissals are skipped, not errors.
+type proposalSelection struct {
+	exact  []int64
+	ranges [][2]int64
+}
+
+// maxRangeWidth guards against a typo'd range selecting the universe.
+const maxRangeWidth = 1000
+
+// parseSelection reads "p3,p7,p10..p14" (spaces and bare numbers fine).
+func parseSelection(s string) (*proposalSelection, error) {
+	sel := &proposalSelection{}
+
+	for part := range strings.SplitSeq(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue // spaced lists arrive with empty segments; harmless
+		}
+
+		lo, hi, isRange := cutRange(part)
+		if !isRange {
+			id, err := parsePID(part)
+			if err != nil {
+				return nil, err
+			}
+
+			sel.exact = append(sel.exact, id)
+
+			continue
+		}
+
+		a, err := parsePID(lo)
+		if err != nil {
+			return nil, err
+		}
+
+		b, err := parsePID(hi)
+		if err != nil {
+			return nil, err
+		}
+
+		if b < a {
+			return nil, fmt.Errorf("range p%d..p%d is reversed", a, b)
+		}
+
+		if b-a >= maxRangeWidth {
+			return nil, fmt.Errorf("range p%d..p%d is implausibly wide", a, b)
+		}
+
+		sel.ranges = append(sel.ranges, [2]int64{a, b})
+	}
+
+	if len(sel.exact) == 0 && len(sel.ranges) == 0 {
+		return nil, fmt.Errorf("no proposal ids given (want p<N> from the distill plan)")
+	}
+
+	return sel, nil
+}
+
+// cutRange splits a range on ".." or "-" (the same dash the expand span
+// syntax uses); anything else is a single id.
+func cutRange(part string) (lo, hi string, ok bool) {
+	if l, h, found := strings.Cut(part, ".."); found {
+		return l, h, true
+	}
+
+	if l, h, found := strings.Cut(part, "-"); found {
+		return l, h, true
+	}
+
+	return "", "", false
+}
+
+func parsePID(s string) (int64, error) {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "p")
+
+	id, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("%q is not a proposal id (want p<N> from the distill plan)", s)
+	}
+
+	return id, nil
+}
+
+// resolveSelection turns a selection into concrete pending proposals,
+// id order, deduplicated. Exact ids must be pending; ranges take what
+// they find.
+func resolveSelection(pending []model.Proposal, raw string) ([]model.Proposal, error) {
+	sel, err := parseSelection(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	byID := make(map[int64]model.Proposal, len(pending))
+	for _, p := range pending {
+		byID[p.ID] = p
+	}
+
+	added := map[int64]bool{}
+
+	var out []model.Proposal
+
+	for _, id := range sel.exact {
+		p, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("p%d is not a pending proposal (already decided, or unknown — see the distill plan)", id)
+		}
+
+		if !added[id] {
+			added[id] = true
+			out = append(out, p)
+		}
+	}
+
+	for _, r := range sel.ranges {
+		for _, p := range pending {
+			if p.ID >= r[0] && p.ID <= r[1] && !added[p.ID] {
+				added[p.ID] = true
+				out = append(out, p)
+			}
+		}
+	}
+
+	if len(out) == 0 {
+		return nil, fmt.Errorf("nothing in %q is still pending — see the distill plan", raw)
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+
+	return out, nil
+}
+
+// runLessonsApply turns chosen proposals into pins. The pins land in
+// .seamark/lessons.yaml only when the workspace opted in via
+// distill.write; otherwise the rendered block is printed for the human
+// to paste — either way, nothing was ever applied without an explicit
+// human command naming explicit proposals.
+func runLessonsApply(cmd *cobra.Command, opts *options, raw string) error {
+	st, root, err := openIndex(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	pending, err := st.Proposals(model.ProposalProposed)
+	if err != nil {
+		return err
+	}
+
+	ps, err := resolveSelection(pending, raw)
+	if err != nil {
+		return err
+	}
+
+	ids := make([]int64, len(ps))
+	for i, p := range ps {
+		ids[i] = p.ID
+	}
+
+	out := cmd.OutOrStdout()
+
+	cfg, err := distill.LoadConfig(root)
+	if err != nil {
+		return err
+	}
+
+	if !cfg.Distill.Write {
+		block, err := distill.RenderPins(ps)
+		if err != nil {
+			return err
+		}
+
+		fmt.Fprintf(out, "distill.write is off in .seamark/config.yaml — paste under `pin:` in .seamark/lessons.yaml:\n\n%s\n", block)
+		fmt.Fprintln(out, "(proposals stay pending; enable distill.write to let apply edit the file)")
+
+		return nil
+	}
+
+	// File first, status second: if the status write fails, the worst
+	// case is a duplicate pin entry on a retried apply — visible in the
+	// yaml diff. The other order could mark a pin applied that never
+	// reached the file, which nothing would ever surface.
+	if err := distill.ApplyPins(root, ps); err != nil {
+		return err
+	}
+
+	applied, err := st.SetProposalStatus(ids, model.ProposalApplied)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "applied %d pin(s) to .seamark/lessons.yaml — review the diff and commit it\n", applied)
+
+	for _, p := range ps {
+		fmt.Fprintf(out, "  p%-4d %s\n", p.ID, p.Rule)
+	}
+
+	return nil
+}
+
+// runLessonsDismiss records a no on chosen proposals. The signature
+// memory does the rest: the same evidence set is never re-proposed.
+func runLessonsDismiss(cmd *cobra.Command, opts *options, raw string) error {
+	st, _, err := openIndex(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	pending, err := st.Proposals(model.ProposalProposed)
+	if err != nil {
+		return err
+	}
+
+	ps, err := resolveSelection(pending, raw)
+	if err != nil {
+		return err
+	}
+
+	ids := make([]int64, len(ps))
+	for i, p := range ps {
+		ids[i] = p.ID
+	}
+
+	n, err := st.SetProposalStatus(ids, model.ProposalDismissed)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "dismissed %d proposal(s) — remembered; the same evidence will not return\n", n)
+
+	return nil
+}
+
+// runLessonsDistill executes the plan half of Tier 2: read new evidence
+// groups through the configured agent, persist what survives validation
+// as proposals, and print the full pending plan. Applying is a separate
+// explicit step — this command never edits .seamark/lessons.yaml.
+func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit int) error {
+	st, root, err := openIndex(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	acfg, err := agent.LoadConfig(root)
+	if err != nil {
+		return err
+	}
+
+	inv, err := agent.New(acfg)
+	if err != nil {
+		return fmt.Errorf("distill unavailable: %w", err)
+	}
+
+	if region != "" {
+		region = toRepoRel(root, region)
+	}
+
+	dopts := distill.Options{
+		Region: region,
+		Limit:  limit,
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
+		},
+	}
+
+	// On a terminal, each agent call gets a live spinner with elapsed
+	// time instead of dead air; piped output keeps the plain log lines.
+	u := newUI(cmd.ErrOrStderr())
+	defer u.finish("")
+
+	if u.tty {
+		dopts.OnGroupStart = func(desc string) { u.phase("distill", desc) }
+		dopts.OnGroupDone = func(outcome string) { u.finish(outcome) }
+	}
+
+	res, err := distill.Run(cmd.Context(), st, distill.NewLexicalGrouper(), inv, dopts)
+	if err != nil {
+		return err
+	}
+
+	pending, err := st.Proposals(model.ProposalProposed)
+	if err != nil {
+		return err
+	}
+
+	report.PrintDistillPlan(cmd.OutOrStdout(), report.DistillSummary{
+		GroupsTotal:   res.GroupsTotal,
+		GroupsRead:    res.GroupsRead,
+		GroupsSkipped: res.GroupsSkipped,
+		GroupsFailed:  res.GroupsFailed,
+		GroupsPending: res.GroupsPending,
+		PrunedStale:   res.PrunedStale,
+		TokensNote:    res.CostNote(),
+	}, pending)
+
+	return nil
 }
 
 // runLessonsList prints the ledger of mined lessons — every one, or, with
@@ -129,13 +484,13 @@ func runLessonsHook(cmd *cobra.Command, opts *options) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	lessons, err := lessonsForFile(st, root, path)
+	lessons, morePins, err := lessonsForFile(st, root, path, true)
 	if err != nil || len(lessons) == 0 {
 		return nil
 	}
 
 	var b strings.Builder
-	_ = report.PrintLessonReminder(&b, toRepoRel(root, path), lessons)
+	_ = report.PrintLessonReminder(&b, toRepoRel(root, path), lessons, morePins)
 
 	out := hookOutput{}
 	out.HookSpecificOutput.HookEventName = "PreToolUse"
@@ -215,8 +570,10 @@ func readHookInput(r io.Reader) (file, tool string, err error) {
 }
 
 // lessonsForFile normalizes path to repo-relative and returns the
-// config-filtered lessons for its area.
-func lessonsForFile(st *store.Store, root, path string) ([]model.Lesson, error) {
+// config-filtered lessons for its area. ambient applies the pin budget:
+// the hook is an injection the agent never asked for, so it is capped;
+// the --file view is a deliberate question and gets everything.
+func lessonsForFile(st *store.Store, root, path string, ambient bool) ([]model.Lesson, int, error) {
 	rel := toRepoRel(root, path)
 
 	// A malformed config must not silence the hook or the --file view;
@@ -226,7 +583,12 @@ func lessonsForFile(st *store.Store, root, path string) ([]model.Lesson, error) 
 		cfg = reviews.DefaultConfig()
 	}
 
-	return report.LessonsForScope(st, cfg, rel, 8)
+	budget := 0
+	if ambient {
+		budget = cfg.HookPinBudget()
+	}
+
+	return report.LessonsForScopeBudget(st, cfg, rel, 8, budget)
 }
 
 // toRepoRel converts an absolute or ./-prefixed path to the repo-relative

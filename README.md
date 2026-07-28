@@ -96,18 +96,17 @@ internal/gate.EvalCommand  (function)
   sig      func EvalCommand(p *Policy, catalog *effects.Catalog, root, commandLine string) (*Decision, error)
   effects  proc:exec [depth 1]
 
-callers (3)
-  internal/cli.newGateCmd                  internal/cli/gate.go:20         [qualified]
-  internal/gate.evalCmd                    internal/gate/gate_test.go:30   [same-package]
-  ...
+callers (4)
+  [qualified]     internal/cli.newGateCmd                      internal/cli/gate.go:21
+  (+3 in tests)
 
 calls (8)  — 3 resolved by name match only
-  internal/effects.Catalog.MatchCommand    internal/effects/effects.go:140 [unique-name]
-  internal/gate.gitPush                    internal/gate/gate.go:388       [same-package]
+  [unique-name]   internal/effects.Catalog.MatchCommand        internal/effects/effects.go:140
+  [same-package]  internal/gate.gitPush                        internal/gate/gate.go:388
   ...
 
 usually changed with  (empirical, lift > 1 means beyond chance)
-  internal/effects/effects.go   6/58 commits   lift 4.1   · mostly MatchCommand, Load
+   6/58  commits  lift 4.1   internal/effects/effects.go  · mostly MatchCommand, Load
 recent decisions
   2026-07-26  ...  Implement Python parser
 ```
@@ -121,8 +120,8 @@ its file).
 
 Read it top to bottom: this function *can ultimately spawn a process*
 (one hop away — it calls the push detector, which shells out to git to
-resolve `HEAD`), here is who calls it including tests, and here is the
-commit trail.
+resolve `HEAD`), here is its production surface (test callers collapse
+to a count instead of burying it), and here is the commit trail.
 Every call edge declares how it was derived (`[qualified]`,
 `[same-package]`, `[same-class]`, or the low-confidence `[unique-name]`),
 so you always know how much to trust an edge. On a repo with real
@@ -152,9 +151,9 @@ comments and clusters the recurrences into **lessons**:
 $ seamark why scripts/rollover.py
 ...
 reviewers keep flagging  (recurring across pull requests)
-  E702                     ×20  scripts [coderabbit]
-  RUF001                   ×6   scripts [coderabbit]
-  reportArgumentType       ×2   api/services [coderabbit]
+  ×20     scripts                                [coderabbit]  E702
+  ×6      scripts                                [coderabbit]  RUF001
+  ×2      api/services                           [coderabbit]  reportArgumentType
 ```
 
 A cited linter code clusters by directory (a habit, not one line); an
@@ -210,6 +209,7 @@ shows — applied at surface time, so edits take effect with no re-mining:
 
 ```yaml
 threshold: 2                     # min recurrences to surface (default 2)
+pin_budget: 3                    # pins the edit hook injects per edit (default 3)
 mute:
   - rule: F541                   # hush a noisy rule everywhere
   - region: alembic/versions     # …or every lesson under generated code
@@ -220,8 +220,16 @@ pin:                             # your "must not be ignored" list —
 ```
 
 `mute` kills noise; `pin` is the escape hatch for a rule you care about
-more than the mined frequency implies. Both flow through `why`, `orient`,
-and the edit hook via one path, so they never disagree.
+more than the mined frequency implies — written by hand, exactly like
+policy.yaml rules (the distiller below can draft them, but never has
+to). Both flow through `why`, `orient`, and the edit hook via one path,
+so they never disagree.
+
+Pins are powerful, so their injection cost is budgeted: the edit hook
+carries at most `pin_budget` pins per edit (default 3), most specific
+region first — a pin on the file beats its package beats a repo-wide
+`*` — with a `+N more` pointer for the rest. Deliberate views (`--file`,
+`why`) always show everything; only the ambient injection is capped.
 
 You don't have to author this by hand. `seamark lessons --list` prints
 every mined lesson — including the one-off noise that `why`/`orient` hide
@@ -232,9 +240,9 @@ config already mutes:
 $ seamark lessons --list
 review lessons (all mined, strongest first) — 436 total
 
-  ×20   E702                 scripts        [coderabbit]
-  ×3    F541                 scripts        [coderabbit]  (muted)
-  ×1    RUF002               fetcher.py     [coderabbit]
+  ×20   scripts                                        [coderabbit]          E702
+  ×3    scripts                                        [coderabbit] (muted)  F541
+  ×1    fetcher.py                                     [coderabbit]          bound the target close probe
   …
 ```
 
@@ -247,6 +255,50 @@ too varied for exact clustering gets spotted (ten differently-worded
 reader is you or an agent you point at it — and the ledger's footer
 tells that reader what to do with a spotted pattern: propose a pin for
 review, never self-add it.
+
+### Distilling patterns: plan → apply
+
+Exact clustering can't see that ten differently-worded findings are one
+mistake. `seamark lessons --distill` can: it batches the raw findings
+into candidate groups and asks **your own agent CLI** (`claude` by
+default — seamark holds no API keys) to name what recurs, as proposed
+pins. It is an optional accelerator, nothing more: every entry it
+drafts is one you could write by hand in the same file, and repos
+without an agent CLI (or without the appetite for tokens) simply skip
+it. Each run reports what it spent — per group and in total, estimated
+tokens and wall time:
+
+```text
+$ seamark lessons --distill --region v2/pkg/engine
+distilling 40 findings (v2/pkg, 1728e3d64e76a8ef)
+  42s, ~5.3k tokens sent / ~433 back, 2 proposal(s)
+distill plan — 50 groups: 3 read, 40 already distilled, 7 left for another run (raise --limit or drop --region)
+agent traffic: ~15.9k tokens sent, ~1.2k received (estimated), 2m6s
+
+proposed pins — distilled from review findings, awaiting YOUR decision
+
+  p6    reset-reused-visitor-state   v2/pkg    2 findings cited [claude/v1]
+        When a struct is reused across runs, reset all accumulated
+        state — not just the primary field — before reusing it.
+
+decide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; `--dismiss` remembers the no
+```
+
+The economics are engineered for repeated use: every group's evidence
+set has a signature, a distilled signature is **never paid for twice**,
+and a new finding reopens exactly its own group. `--limit` (default 10
+groups) and `--region` budget each run. Dismissals are permanent memory;
+a pattern only returns if its evidence changes.
+
+And it is proposal-only by construction: the model must cite the finding
+ids behind every pattern (uncited patterns are dropped — it cannot
+invent evidence), regions are computed from the cited files, and nothing
+reaches `.seamark/lessons.yaml` except through an explicit `--apply` of
+explicit ids. Even then, seamark edits the file itself only if
+`config.yaml` opts in (`distill: {write: true}`) — otherwise apply
+prints the pin block for you to paste. Applied entries are inserted
+under your existing `pin:` section with provenance comments; everything
+hand-written stays byte-for-byte.
 
 ### Is it working? `lessons --stats`
 
@@ -261,11 +313,11 @@ $ seamark lessons --stats
 lesson firings — 128 edits reminded across 24 files
 
 most surfaced
-  ×41  E702                 scripts          last 2026-07-26
-  ×18  RUF001               scripts          last 2026-07-26
+  ×41  scripts                                  last 2026-07-26  E702
+  ×18  scripts                                  last 2026-07-26  RUF001
   …
 never fired — 7 lessons in regions no edit has touched (decay candidates)
-  E741                 tests
+  tests                                    E741
   …
 ```
 

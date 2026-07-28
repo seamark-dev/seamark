@@ -58,6 +58,20 @@ index:
   #   internal/gen/  a directory prefix
   exclude:
     # - "**/*_test.go"   # uncomment for a production-only graph
+
+# Which agent CLI seamark may shell out to for inference-backed features
+# (lesson distillation). Seamark holds no credentials: the CLI is one
+# you already run and have already authenticated.
+# agent:
+#   cli: claude                  # the built-in preset (default)
+#   argv: ["my-llm", "--print"]  # or any CLI reading a prompt on stdin
+
+# Distillation plan/apply. write lets "lessons --apply" insert accepted
+# pins into .seamark/lessons.yaml itself; without it, apply prints the
+# block for you to paste. Applying is always an explicit human command
+# naming explicit proposal ids — this only gates who edits the file.
+# distill:
+#   write: true
 `
 
 const starterLessons = `# Tune how mined review lessons surface (RFC-001 §5.4). Committed and
@@ -82,9 +96,16 @@ mute:
 
 # Your exceptions that must NOT be ignored: surfaced always, for their
 # region, even if mining found them once or never. The note is shown to
-# the agent verbatim.
+# the agent verbatim. Write pins by hand, or let ` + "`lessons --distill`" + `
+# draft them — same entries, same review, distill is optional.
 pin:
   # - rule: RUF001
   #   region: scripts
   #   note: "Keep scripts ASCII — smart quotes from chat have bitten us"
+
+# How many pins the EDIT HOOK injects per edit (most specific region
+# first; the rest are one pointer line away). Deliberate views (--file,
+# why) always show everything. Default 3 — every applied pin taxes every
+# future edit, so spend consciously.
+# pin_budget: 3
 `

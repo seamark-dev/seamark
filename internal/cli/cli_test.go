@@ -256,6 +256,227 @@ func TestLessonsList(t *testing.T) {
 	assert.Contains(t, out, "1 total")
 }
 
+func TestLessonsDistillPlanFlow(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// Seed two findings that bucket into one group, and point the agent
+	// config at a shell script standing in for a real CLI — the whole
+	// pipeline runs, no network, no claude.
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "human",
+			Body: "Reset pooled state before reuse in this handler."},
+		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "human",
+			Body: "Pooled state must be reset on reuse here too."},
+	}))
+	require.NoError(t, st.Close())
+
+	replyPath := filepath.Join(root, "agent-reply.json")
+	require.NoError(t, os.WriteFile(replyPath,
+		[]byte(`{"patterns":[
+			{"rule":"pooled-state-reset","note":"Reset pooled state on every reuse.","finding_ids":[11,12]},
+			{"rule":"second-rule","note":"Second note.","finding_ids":[11,12]},
+			{"rule":"third-rule","note":"Third note.","finding_ids":[11,12]}]}`),
+		0o644))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  argv: [\"sh\", \"-c\", \"cat >/dev/null; cat "+replyPath+"\"]\n"), 0o644))
+
+	out, err := run(t, "-C", root, "lessons", "--distill")
+	require.NoError(t, err)
+	assert.Contains(t, out, "1 read")
+	assert.Contains(t, out, "pooled-state-reset")
+	assert.Contains(t, out, "Reset pooled state on every reuse.")
+	assert.Contains(t, out, "2 findings cited")
+	assert.Contains(t, out, "awaiting YOUR decision")
+
+	// Second run: nothing re-read, the pending plan still shows.
+	out, err = run(t, "-C", root, "lessons", "--distill")
+	require.NoError(t, err)
+	assert.Contains(t, out, "1 already distilled")
+	assert.Contains(t, out, "pooled-state-reset", "pending proposals persist across runs")
+
+	// An unusable agent config is a loud, actionable error.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  cli: hal9000\n"), 0o644))
+
+	_, err = run(t, "-C", root, "lessons", "--distill")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "distill unavailable")
+
+	// ---- decide: apply without the write gate prints, never edits ----
+	out, err = run(t, "-C", root, "lessons", "--apply", "p1")
+	require.NoError(t, err)
+	assert.Contains(t, out, "distill.write is off")
+	assert.Contains(t, out, "pooled-state-reset", "the block to paste is printed")
+	assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons.yaml"))
+
+	// With the gate on, a dismissed hole plus a range: p2 is dismissed,
+	// then p1..p3 applies whatever is still pending — ranges tolerate
+	// holes, that is their point.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("distill:\n  write: true\n"), 0o644))
+
+	out, err = run(t, "-C", root, "lessons", "--dismiss", "p2")
+	require.NoError(t, err)
+	assert.Contains(t, out, "dismissed 1 proposal(s)")
+
+	out, err = run(t, "-C", root, "lessons", "--apply", "p1..p3")
+	require.NoError(t, err)
+	assert.Contains(t, out, "applied 2 pin(s)", "the range skips the dismissed hole")
+
+	data, err := os.ReadFile(filepath.Join(root, ".seamark", "lessons.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "pooled-state-reset")
+	assert.Contains(t, string(data), "third-rule")
+	assert.NotContains(t, string(data), "second-rule", "dismissed proposals never land")
+	assert.Contains(t, string(data), "distilled by custom/v1")
+
+	out, err = run(t, "-C", root, "lessons", "--file", "api/a.go")
+	require.NoError(t, err)
+	assert.Contains(t, out, "pooled-state-reset — Reset pooled state on every reuse.",
+		"an applied pin surfaces like any hand-written one")
+
+	// A bare id is a precise pointer: decided or unknown errors by name.
+	_, err = run(t, "-C", root, "lessons", "--apply", "p1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "p1 is not a pending proposal")
+
+	_, err = run(t, "-C", root, "lessons", "--dismiss", "p999")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "p999 is not a pending proposal")
+
+	_, err = run(t, "-C", root, "lessons", "--apply", "pX")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a proposal id")
+
+	// The natural spaced form: the shell splits "--apply p1, p2" into
+	// positional args, which must fold back into the id list instead of
+	// tripping cobra's unknown-command error (a real-session paper cut).
+	_, err = run(t, "-C", root, "lessons", "--apply", "p9,", "p10")
+	require.Error(t, err, "nothing pending — but the spaced ids must PARSE")
+	assert.Contains(t, err.Error(), "p9 is not a pending proposal", "spaced list understood, error by name")
+
+	// An exhausted range says so instead of pretending success.
+	_, err = run(t, "-C", root, "lessons", "--apply", "p1..p3")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "still pending")
+
+	// A stray positional without --apply/--dismiss stays an error.
+	_, err = run(t, "-C", root, "lessons", "p1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unexpected argument")
+
+	// Opposite decisions in one command refuse before touching anything.
+	_, err = run(t, "-C", root, "lessons", "--apply", "p1", "--dismiss", "p2")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "one at a time")
+}
+
+func TestSelectionParsingAndResolution(t *testing.T) {
+	pending := []model.Proposal{
+		{ID: 1, Rule: "a"}, {ID: 3, Rule: "c"}, {ID: 4, Rule: "d"}, {ID: 9, Rule: "i"},
+	}
+
+	// A range takes what it finds (2 is a hole), dash form included,
+	// mixed with exact ids, deduplicated, id-ordered.
+	got, err := resolveSelection(pending, "p3, p1..p4, 9")
+	require.NoError(t, err)
+
+	ids := make([]int64, len(got))
+	for i, p := range got {
+		ids[i] = p.ID
+	}
+
+	assert.Equal(t, []int64{1, 3, 4, 9}, ids)
+
+	got, err = resolveSelection(pending, "p1-p4")
+	require.NoError(t, err)
+	assert.Len(t, got, 3, "dash ranges work like dotted ones")
+
+	// Reversed and absurd ranges fail loudly.
+	_, err = resolveSelection(pending, "p9..p1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reversed")
+
+	_, err = resolveSelection(pending, "p1..p99999")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "implausibly wide")
+
+	// Exact ids stay strict even next to a tolerant range.
+	_, err = resolveSelection(pending, "p2, p1..p9")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "p2 is not a pending proposal")
+}
+
+func TestHookBudgetsPinsFileViewDoesNot(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// Five pins covering a.go, in mixed specificity — the real-world
+	// shape after a generous distill --apply session.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(`
+pin:
+  - {rule: wide-one, region: "*", note: "w1"}
+  - {rule: wide-two, region: "*", note: "w2"}
+  - {rule: wide-three, region: "*", note: "w3"}
+  - {rule: on-file-one, region: a.go, note: "f1"}
+  - {rule: on-file-two, region: a.go, note: "f2"}
+`), 0o644))
+
+	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` +
+		filepath.Join(root, "a.go") + `"}}`
+
+	out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+
+	var hook struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &hook))
+	ctx := hook.HookSpecificOutput.AdditionalContext
+
+	// Budget 3, file-specific first, the rest pointed at.
+	assert.Contains(t, ctx, "on-file-one")
+	assert.Contains(t, ctx, "on-file-two")
+	assert.Contains(t, ctx, "wide-one")
+	assert.NotContains(t, ctx, "wide-two", "beyond the budget")
+	assert.Contains(t, ctx, "+2 more pins")
+
+	// The deliberate --file view shows all five, no pointer line.
+	listing, err := run(t, "-C", root, "lessons", "--file", "a.go")
+	require.NoError(t, err)
+	assert.Contains(t, listing, "wide-three")
+	assert.NotContains(t, listing, "more pins")
+
+	// pin_budget in lessons.yaml raises the injection cap.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(`
+pin_budget: 5
+pin:
+  - {rule: wide-one, region: "*", note: "w1"}
+  - {rule: wide-two, region: "*", note: "w2"}
+  - {rule: wide-three, region: "*", note: "w3"}
+  - {rule: on-file-one, region: a.go, note: "f1"}
+  - {rule: on-file-two, region: a.go, note: "f2"}
+`), 0o644))
+
+	out, _, err = runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal([]byte(out), &hook))
+	assert.Contains(t, hook.HookSpecificOutput.AdditionalContext, "wide-three")
+	assert.NotContains(t, hook.HookSpecificOutput.AdditionalContext, "more pins")
+}
+
 func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
 	root := writeFixture(t)
 
