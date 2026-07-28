@@ -320,9 +320,9 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 	}
 
 	for _, f := range shown {
-		fmt.Fprintf(w, "  ×%-4d %-30s %-24s  last %s\n",
-			f.Count, render.Sanitize(f.Symptom),
-			render.Sanitize(f.Region), firingDate(f.LastTS))
+		fmt.Fprintf(w, "  ×%-4d %-40s last %s  %s\n",
+			f.Count, render.Sanitize(f.Region),
+			firingDate(f.LastTS), render.Sanitize(f.Symptom))
 	}
 
 	if len(s.NeverFired) > 0 {
@@ -335,8 +335,8 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 		}
 
 		for _, l := range never {
-			fmt.Fprintf(w, "  %-30s %s\n",
-				render.Sanitize(l.Symptom), render.Sanitize(l.Region))
+			fmt.Fprintf(w, "  %-40s %s\n",
+				render.Sanitize(l.Region), render.Sanitize(l.Symptom))
 		}
 	}
 }
@@ -404,14 +404,14 @@ func PrintLessonLedger(w io.Writer, lessons []model.Lesson, cfg *reviews.Config,
 	fmt.Fprintf(w, "review lessons%s (all mined, strongest first) — %d total\n\n", where, len(lessons))
 
 	for _, l := range lessons {
-		marker := ""
+		reviewer := "[" + render.Sanitize(l.Reviewer) + "]"
 		if cfg.Muted(l) {
-			marker = "  (muted)"
+			reviewer += " (muted)"
 		}
 
-		fmt.Fprintf(w, "  ×%-4d %-28s %-26s [%s]%s\n",
-			l.Occurrences, render.Sanitize(l.Symptom),
-			render.Sanitize(l.Region), render.Sanitize(l.Reviewer), marker)
+		fmt.Fprintf(w, "  ×%-4d %-46s %-21s %s\n",
+			l.Occurrences, render.Sanitize(l.Region),
+			reviewer, render.Sanitize(l.Symptom))
 	}
 
 	fmt.Fprint(w, `
@@ -431,13 +431,15 @@ review, never add it to the config unasked.
 `)
 }
 
-// printLessons renders clustered review feedback. Symptom text comes
-// from comment bodies (and pinned config notes) — untrusted — so it is
-// sanitized, but never truncated: this line IS the guidance on every
-// surface, including the edit hook's injected context, and a pinned
-// note cut mid-sentence defeats the pin (mined fingerprints are ≤80
-// chars by construction; pinned notes are the user's own words). A
-// pinned lesson shows "pinned", not a count.
+// printLessons renders clustered review feedback, fixed-width metadata
+// first and the symptom text last: the text is the only variable-length
+// field, and trailing it means one long note can never break the
+// alignment of everything after it. Symptom text comes from comment
+// bodies (and pinned config notes) — untrusted — so it is sanitized,
+// but never truncated: this line IS the guidance on every surface,
+// including the edit hook's injected context, and a pinned note cut
+// mid-sentence defeats the pin. A pinned lesson shows "pinned", not a
+// count.
 func printLessons(w io.Writer, lessons []model.Lesson) {
 	for _, l := range lessons {
 		count := fmt.Sprintf("×%d", l.Occurrences)
@@ -445,9 +447,9 @@ func printLessons(w io.Writer, lessons []model.Lesson) {
 			count = "pinned"
 		}
 
-		fmt.Fprintf(w, "  %-34s %-7s %s [%s]\n",
-			render.Sanitize(l.Symptom), count,
-			render.Sanitize(l.Region), render.Sanitize(l.Reviewer))
+		fmt.Fprintf(w, "  %-7s %-38s %-13s %s\n",
+			count, render.Sanitize(l.Region),
+			"["+render.Sanitize(l.Reviewer)+"]", render.Sanitize(l.Symptom))
 	}
 }
 

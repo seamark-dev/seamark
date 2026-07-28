@@ -152,9 +152,9 @@ comments and clusters the recurrences into **lessons**:
 $ seamark why scripts/rollover.py
 ...
 reviewers keep flagging  (recurring across pull requests)
-  E702                     ×20  scripts [coderabbit]
-  RUF001                   ×6   scripts [coderabbit]
-  reportArgumentType       ×2   api/services [coderabbit]
+  ×20     scripts                                [coderabbit]  E702
+  ×6      scripts                                [coderabbit]  RUF001
+  ×2      api/services                           [coderabbit]  reportArgumentType
 ```
 
 A cited linter code clusters by directory (a habit, not one line); an
@@ -241,9 +241,9 @@ config already mutes:
 $ seamark lessons --list
 review lessons (all mined, strongest first) — 436 total
 
-  ×20   E702                 scripts        [coderabbit]
-  ×3    F541                 scripts        [coderabbit]  (muted)
-  ×1    RUF002               fetcher.py     [coderabbit]
+  ×20   scripts                                        [coderabbit]          E702
+  ×3    scripts                                        [coderabbit] (muted)  F541
+  ×1    fetcher.py                                     [coderabbit]          bound the target close probe
   …
 ```
 
@@ -314,11 +314,11 @@ $ seamark lessons --stats
 lesson firings — 128 edits reminded across 24 files
 
 most surfaced
-  ×41  E702                 scripts          last 2026-07-26
-  ×18  RUF001               scripts          last 2026-07-26
+  ×41  scripts                                  last 2026-07-26  E702
+  ×18  scripts                                  last 2026-07-26  RUF001
   …
 never fired — 7 lessons in regions no edit has touched (decay candidates)
-  E741                 tests
+  tests                                    E741
   …
 ```
 

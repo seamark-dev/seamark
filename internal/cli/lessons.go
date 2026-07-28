@@ -390,13 +390,25 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		region = toRepoRel(root, region)
 	}
 
-	res, err := distill.Run(cmd.Context(), st, distill.NewLexicalGrouper(), inv, distill.Options{
+	dopts := distill.Options{
 		Region: region,
 		Limit:  limit,
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 		},
-	})
+	}
+
+	// On a terminal, each agent call gets a live spinner with elapsed
+	// time instead of dead air; piped output keeps the plain log lines.
+	u := newUI(cmd.ErrOrStderr())
+	defer u.finish("")
+
+	if u.tty {
+		dopts.OnGroupStart = func(desc string) { u.phase("distill", desc) }
+		dopts.OnGroupDone = func(outcome string) { u.finish(outcome) }
+	}
+
+	res, err := distill.Run(cmd.Context(), st, distill.NewLexicalGrouper(), inv, dopts)
 	if err != nil {
 		return err
 	}

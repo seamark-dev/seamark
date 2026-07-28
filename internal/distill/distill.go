@@ -38,6 +38,12 @@ type Options struct {
 	Limit int
 	// Logf receives progress; nil discards it.
 	Logf func(format string, args ...any)
+	// OnGroupStart/OnGroupDone drive interactive surfaces through the
+	// long silent stretch of each agent call: start fires with the
+	// group's description before the call, done with the outcome after.
+	// When nil, the same information flows through Logf as plain lines.
+	OnGroupStart func(desc string)
+	OnGroupDone  func(outcome string)
 }
 
 // Result reports what a run did.
@@ -109,7 +115,13 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 			continue
 		}
 
-		logf("distilling %d findings (%s, %s)", len(g.Findings), regionLabel(g.Region), g.Signature)
+		desc := fmt.Sprintf("%d findings (%s, %s)", len(g.Findings), regionLabel(g.Region), g.Signature)
+
+		if opts.OnGroupStart != nil {
+			opts.OnGroupStart(desc)
+		} else {
+			logf("distilling %s", desc)
+		}
 
 		began := time.Now()
 
@@ -120,14 +132,25 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 		if err != nil {
 			// Not marked: a transient agent failure must not burn the
 			// group's one chance. The next run retries it.
-			logf("warn: group %s: %v", g.Signature, err)
+			if opts.OnGroupDone != nil {
+				opts.OnGroupDone(fmt.Sprintf("failed: %v (retried next run)", err))
+			} else {
+				logf("warn: group %s: %v", g.Signature, err)
+			}
+
 			res.GroupsFailed++
 
 			continue
 		}
 
-		logf("  %s, ~%s tokens sent / ~%s back, %d proposal(s)",
+		outcome := fmt.Sprintf("%s, ~%s tokens sent / ~%s back, %d proposal(s)",
 			time.Since(began).Round(time.Second), estTokens(sent), estTokens(received), len(proposals))
+
+		if opts.OnGroupDone != nil {
+			opts.OnGroupDone(outcome)
+		} else {
+			logf("  %s", outcome)
+		}
 
 		res.GroupsRead++
 

@@ -144,6 +144,26 @@ func TestRunMetersAgentTraffic(t *testing.T) {
 	assert.Empty(t, res.CostNote())
 }
 
+func TestRunDrivesGroupCallbacks(t *testing.T) {
+	st := openSeeded(t, pooledState)
+
+	empty := &fakeAgent{fn: func(string) (string, error) { return `{"patterns": []}`, nil }}
+
+	var starts, dones []string
+
+	_, err := Run(context.Background(), st, NewLexicalGrouper(), empty, Options{
+		OnGroupStart: func(d string) { starts = append(starts, d) },
+		OnGroupDone:  func(o string) { dones = append(dones, o) },
+	})
+	require.NoError(t, err)
+
+	require.Len(t, starts, 1)
+	require.Len(t, dones, 1)
+	assert.Contains(t, starts[0], "findings")
+	assert.Contains(t, dones[0], "tokens sent")
+	assert.Contains(t, dones[0], "0 proposal(s)")
+}
+
 func TestRunPrunesStaleProposals(t *testing.T) {
 	st := openSeeded(t, pooledState)
 

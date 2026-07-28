@@ -41,6 +41,11 @@ type Options struct {
 	Force bool
 	// Logf receives progress and warnings; nil discards them.
 	Logf func(format string, args ...any)
+	// Progress receives phase events for interactive surfaces: a phase
+	// name with units done/total (0 total = indeterminate, reported
+	// again as 1/1 when the phase ends). Nil discards — piped and agent
+	// surfaces stay on Logf's plain lines.
+	Progress func(phase string, done, total int)
 }
 
 // Summary reports what a run produced.
@@ -125,6 +130,21 @@ func Run(opts Options) (*Summary, error) {
 
 	defer registry.Close()
 
+	progress := opts.Progress
+	if progress == nil {
+		progress = func(string, int, int) {}
+	}
+
+	supported := 0
+
+	for _, rel := range files {
+		if registry.ForPath(rel) != nil {
+			supported++
+		}
+	}
+
+	progress("scan", len(files), len(files))
+
 	sum := &Summary{Root: root, DBPath: dbPath, FilesSeen: len(files)}
 
 	var results []*parse.FileResult
@@ -132,11 +152,16 @@ func Run(opts Options) (*Summary, error) {
 	upserts := map[string]store.CacheEntry{} // reparsed files to persist
 	keep := map[string]bool{}                // files still present (prune the rest)
 
+	handled := 0
+
 	for _, rel := range files {
 		ex := registry.ForPath(rel)
 		if ex == nil {
 			continue
 		}
+
+		handled++
+		progress("parse", handled, supported)
 
 		// A config exclude glob is a path-only decision — skip before
 		// even reading the file.
@@ -193,7 +218,9 @@ func Run(opts Options) (*Summary, error) {
 	var pairs []model.CoChange
 
 	if history.IsRepo(root) {
+		progress("history", 0, 0)
 		decisions, pairs, err = history.Mine(root, opts.History)
+		progress("history", 1, 1)
 		if err != nil {
 			logf("warn: history mining failed: %v", err)
 
@@ -211,6 +238,8 @@ func Run(opts Options) (*Summary, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	progress("write", 0, 0)
 
 	g := buildGraph(results, readGoModules(root, files), catalog)
 
@@ -260,6 +289,8 @@ func Run(opts Options) (*Summary, error) {
 	if sum.Stats, err = st.Stats(); err != nil {
 		return nil, err
 	}
+
+	progress("write", 1, 1)
 
 	sum.Duration = time.Since(start)
 

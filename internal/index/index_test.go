@@ -865,6 +865,42 @@ func TestOverlayEditDefeatsFastPath(t *testing.T) {
 	assert.False(t, fourth.Skipped, "an effects.yaml edit must rebuild")
 }
 
+func TestRunEmitsProgressPhases(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	type event struct {
+		phase       string
+		done, total int
+	}
+
+	var events []event
+
+	_, err := Run(Options{Root: root, Progress: func(phase string, done, total int) {
+		events = append(events, event{phase, done, total})
+	}})
+	require.NoError(t, err)
+
+	phases := map[string]bool{}
+	lastParse := 0
+
+	for _, e := range events {
+		phases[e.phase] = true
+
+		if e.phase == "parse" {
+			assert.Greater(t, e.done, lastParse, "parse progress is monotonic")
+			assert.Positive(t, e.total)
+			lastParse = e.done
+		}
+	}
+
+	assert.True(t, phases["scan"] && phases["parse"] && phases["write"],
+		"the core phases must be reported: %v", phases)
+
+	final := events[len(events)-1]
+	assert.Equal(t, event{"write", 1, 1}, final, "the write phase closes the run")
+}
+
 func TestIndexIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root)
