@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -87,7 +88,23 @@ CLI (gh) authenticated and a github.com remote.`,
 					return nil
 				}
 
-				res, err := index.RefreshReviews(sum.Root, opts.dbPath, logf)
+				// The fetch is the long pole of the whole command —
+				// minutes of GitHub pages on a big repo. On a terminal
+				// its progress lines become the live phase detail.
+				rlogf := logf
+				if u.tty {
+					u.phase("reviews", "…")
+
+					rlogf = func(format string, a ...any) {
+						// The phase line already says "reviews".
+						u.update(strings.TrimPrefix(fmt.Sprintf(format, a...), "reviews: "))
+					}
+				}
+
+				res, err := index.RefreshReviews(sum.Root, opts.dbPath, rlogf)
+
+				u.finish("")
+
 				if err != nil {
 					return err
 				}

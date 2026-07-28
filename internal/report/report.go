@@ -133,7 +133,7 @@ func fileReport(w io.Writer, st *store.Store, cfg *reviews.Config, file string) 
 	if len(syms) > 0 {
 		fmt.Fprintf(w, "\ndefines (%d)\n", len(syms))
 		for _, s := range limitSyms(syms, 20) {
-			fmt.Fprintf(w, "  %-40s %-8s line %d\n", s.FQN, s.Kind, s.Span.StartLine)
+			fmt.Fprintf(w, "  %-8s line %-5d %s\n", s.Kind, s.Span.StartLine, s.FQN)
 		}
 	}
 
@@ -162,11 +162,11 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 		}
 
 		for _, p := range partners {
-			fmt.Fprintf(w, "  %-50s %2d/%d commits   lift %.1f",
-				p.File, p.Together, p.Total, p.Lift)
+			fmt.Fprintf(w, "  %2d/%-3d commits  lift %-5.1f %s",
+				p.Together, p.Total, p.Lift, p.File)
 
 			if funcs := history.PartnerFunctions(root, p.File, shared, 3); len(funcs) > 0 {
-				fmt.Fprintf(w, "   · mostly %s", render.Sanitize(strings.Join(funcs, ", ")))
+				fmt.Fprintf(w, "  · mostly %s", render.Sanitize(strings.Join(funcs, ", ")))
 			}
 
 			fmt.Fprintln(w)
@@ -535,20 +535,49 @@ func printDecisions(w io.Writer, decisions []model.Decision) {
 	}
 }
 
-// printCallEdges lists neighbors with the derivation of each edge, so a
-// low-confidence unique-name guess never masquerades as a resolved call.
+// printCallEdges lists neighbors: the derivation first (how much to
+// trust an edge is the first question, and the tag is fixed-width), the
+// symbol, and the location trailing — the only unbounded field, so a
+// long test path can't shear the columns. Production edges lead and
+// test edges collapse to one count line: a hot constructor has a
+// hundred TestXxx callers, and they bury the fourteen that matter —
+// the same production-surface stance orient takes. A symbol referenced
+// only from tests still shows its test edges rather than nothing.
 func printCallEdges(w io.Writer, edges []store.CallEdge) {
-	shown := edges
+	var prod, tests []store.CallEdge
+
+	for _, c := range edges {
+		if model.IsTestPath(c.File) {
+			tests = append(tests, c)
+		} else {
+			prod = append(prod, c)
+		}
+	}
+
+	shown := prod
+
+	if len(prod) == 0 {
+		shown, tests = tests, nil
+	}
+
+	overflow := 0
+
 	if len(shown) > 15 {
+		overflow = len(shown) - 15
 		shown = shown[:15]
 	}
 
 	for _, c := range shown {
-		fmt.Fprintf(w, "  %-40s %-34s [%s]\n", c.FQN, location(c.Symbol), c.Origin)
+		fmt.Fprintf(w, "  %-15s %-44s %s\n",
+			"["+c.Origin+"]", c.FQN, location(c.Symbol))
 	}
 
-	if len(edges) > len(shown) {
-		fmt.Fprintf(w, "  … %d more\n", len(edges)-len(shown))
+	if overflow > 0 {
+		fmt.Fprintf(w, "  … %d more\n", overflow)
+	}
+
+	if len(tests) > 0 {
+		fmt.Fprintf(w, "  (+%d in tests)\n", len(tests))
 	}
 }
 

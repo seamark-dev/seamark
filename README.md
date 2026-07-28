@@ -96,18 +96,17 @@ internal/gate.EvalCommand  (function)
   sig      func EvalCommand(p *Policy, catalog *effects.Catalog, root, commandLine string) (*Decision, error)
   effects  proc:exec [depth 1]
 
-callers (3)
-  internal/cli.newGateCmd                  internal/cli/gate.go:20         [qualified]
-  internal/gate.evalCmd                    internal/gate/gate_test.go:30   [same-package]
-  ...
+callers (4)
+  [qualified]     internal/cli.newGateCmd                      internal/cli/gate.go:21
+  (+3 in tests)
 
 calls (8)  — 3 resolved by name match only
-  internal/effects.Catalog.MatchCommand    internal/effects/effects.go:140 [unique-name]
-  internal/gate.gitPush                    internal/gate/gate.go:388       [same-package]
+  [unique-name]   internal/effects.Catalog.MatchCommand        internal/effects/effects.go:140
+  [same-package]  internal/gate.gitPush                        internal/gate/gate.go:388
   ...
 
 usually changed with  (empirical, lift > 1 means beyond chance)
-  internal/effects/effects.go   6/58 commits   lift 4.1   · mostly MatchCommand, Load
+   6/58  commits  lift 4.1   internal/effects/effects.go  · mostly MatchCommand, Load
 recent decisions
   2026-07-26  ...  Implement Python parser
 ```
@@ -121,8 +120,8 @@ its file).
 
 Read it top to bottom: this function *can ultimately spawn a process*
 (one hop away — it calls the push detector, which shells out to git to
-resolve `HEAD`), here is who calls it including tests, and here is the
-commit trail.
+resolve `HEAD`), here is its production surface (test callers collapse
+to a count instead of burying it), and here is the commit trail.
 Every call edge declares how it was derived (`[qualified]`,
 `[same-package]`, `[same-class]`, or the low-confidence `[unique-name]`),
 so you always know how much to trust an edge. On a repo with real
