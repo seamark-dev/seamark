@@ -41,6 +41,27 @@ func TestInvokeHonorsContextDeadline(t *testing.T) {
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
+func TestBoundedBufferCapsWithoutFailingWrites(t *testing.T) {
+	b := &boundedBuffer{max: 8}
+
+	n, err := b.Write([]byte("0123456789"))
+	require.NoError(t, err)
+	assert.Equal(t, 10, n, "the writer must never see a short write")
+	assert.Equal(t, "01234567", b.String(), "overflow is discarded at the cap")
+
+	n, err = b.Write([]byte("more"))
+	require.NoError(t, err)
+	assert.Equal(t, 4, n)
+	assert.Equal(t, "01234567", b.String())
+}
+
+func TestInvokeCapsRunawayOutput(t *testing.T) {
+	// 8 MB of output must cost at most the cap, not the whole payload.
+	out, err := fake("head -c 8388608 /dev/zero | tr '\\0' 'x'").Invoke(context.Background(), "")
+	require.NoError(t, err)
+	assert.Equal(t, maxStdout, len(out))
+}
+
 func TestNewResolvesConfig(t *testing.T) {
 	// Custom argv wins and is usable as-is.
 	cfg := &Config{}

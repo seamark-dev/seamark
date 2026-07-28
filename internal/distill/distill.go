@@ -143,8 +143,17 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 			continue
 		}
 
+		// One transaction for the proposals and the signature mark:
+		// partial persistence would either duplicate proposals on the
+		// retry or silently discard what a paid agent call found. The
+		// outcome is announced only after it is real.
+		saved, err := st.SaveDistilledGroup(g.Signature, g.Region, time.Now().Unix(), proposals)
+		if err != nil {
+			return nil, err
+		}
+
 		outcome := fmt.Sprintf("%s, ~%s tokens sent / ~%s back, %d proposal(s)",
-			time.Since(began).Round(time.Second), estTokens(sent), estTokens(received), len(proposals))
+			time.Since(began).Round(time.Second), estTokens(sent), estTokens(received), len(saved))
 
 		if opts.OnGroupDone != nil {
 			opts.OnGroupDone(outcome)
@@ -152,19 +161,8 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 			logf("  %s", outcome)
 		}
 
+		res.Proposals = append(res.Proposals, saved...)
 		res.GroupsRead++
-
-		for i := range proposals {
-			if err := st.InsertProposal(&proposals[i]); err != nil {
-				return nil, err
-			}
-		}
-
-		res.Proposals = append(res.Proposals, proposals...)
-
-		if err := st.MarkDistilled(g.Signature, g.Region, time.Now().Unix()); err != nil {
-			return nil, err
-		}
 	}
 
 	res.Duration = time.Since(start)

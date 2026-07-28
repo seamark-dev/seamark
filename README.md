@@ -272,7 +272,7 @@ tokens and wall time:
 $ seamark lessons --distill --region v2/pkg/engine
 distilling 40 findings (v2/pkg, 1728e3d64e76a8ef)
   42s, ~5.3k tokens sent / ~433 back, 2 proposal(s)
-distill plan — 50 groups: 3 read, 40 already distilled
+distill plan — 50 groups: 3 read, 40 already distilled, 7 left for another run (raise --limit or drop --region)
 agent traffic: ~15.9k tokens sent, ~1.2k received (estimated), 2m6s
 
 proposed pins — distilled from review findings, awaiting YOUR decision

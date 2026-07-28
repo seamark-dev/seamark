@@ -200,7 +200,11 @@ func (c *Config) SurfaceBudget(mined []model.Lesson, scope string, pinBudget int
 
 // regionDepth ranks region specificity: repo-wide is 0, each path
 // segment adds one. A file region naturally outranks its directory.
+// Trailing slashes are normalized away, the same equivalence
+// RegionMatches applies — "a/b" and "a/b/" are one region.
 func regionDepth(region string) int {
+	region = strings.TrimSuffix(region, "/")
+
 	if region == "" || region == "*" {
 		return 0
 	}

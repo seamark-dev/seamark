@@ -34,7 +34,7 @@ func newLessonsCmd(opts *options) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "lessons [--file <path> | --list [--region <prefix>] | --stats]",
+		Use:   "lessons [--file <path> | --list [--region <prefix>] | --stats | --distill | --apply | --dismiss]",
 		Short: "Show the recurring review feedback mined from pull requests",
 		Long: `Prints the review lessons (mined by "index --reviews", tuned by
 .seamark/lessons.yaml) — the mistakes reviewers keep flagging.
@@ -69,6 +69,13 @@ func newLessonsCmd(opts *options) *cobra.Command {
 a file has no lessons.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Applying and dismissing are opposite decisions; both at
+			// once would silently route everything (positional ids
+			// included) to apply.
+			if strings.TrimSpace(applyIDs) != "" && strings.TrimSpace(dismissIDs) != "" {
+				return fmt.Errorf("--apply and --dismiss are opposite decisions — run them one at a time")
+			}
+
 			// `--apply p1, p2` is natural typing; the shell splits the
 			// spaced list into positional args, so fold them back in.
 			if len(args) > 0 && strings.TrimSpace(applyIDs)+strings.TrimSpace(dismissIDs) == "" {
@@ -104,7 +111,7 @@ a file has no lessons.`,
 
 				return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, file), lessons, 0)
 			default:
-				return fmt.Errorf("provide --file <path>, --list, or --hook")
+				return fmt.Errorf("provide --file <path>, --list, --stats, --distill, --apply, --dismiss, or --hook")
 			}
 		},
 	}

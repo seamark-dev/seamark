@@ -323,6 +323,37 @@ func TestProposalLifecycle(t *testing.T) {
 	require.Len(t, applied, 1)
 }
 
+func TestSaveDistilledGroupIsAtomic(t *testing.T) {
+	s := openTestStore(t)
+
+	saved, err := s.SaveDistilledGroup("sig-1", "v2/pkg", 100, []model.Proposal{
+		{Signature: "sig-1", Rule: "a", Note: "n", Members: []int64{1, 2}, Status: model.ProposalProposed},
+		{Signature: "sig-1", Rule: "b", Note: "n", Members: []int64{3, 4}, Status: model.ProposalProposed},
+	})
+	require.NoError(t, err)
+	require.Len(t, saved, 2)
+	assert.NotZero(t, saved[0].ID)
+	assert.NotZero(t, saved[1].ID)
+
+	// Both halves landed together: the proposals and the mark.
+	pending, err := s.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	assert.Len(t, pending, 2)
+
+	sigs, err := s.DistilledSignatures()
+	require.NoError(t, err)
+	assert.True(t, sigs["sig-1"])
+
+	// Zero proposals still records the mark — an empty result is an
+	// answer that must not be paid for twice.
+	_, err = s.SaveDistilledGroup("sig-2", "", 101, nil)
+	require.NoError(t, err)
+
+	sigs, err = s.DistilledSignatures()
+	require.NoError(t, err)
+	assert.True(t, sigs["sig-2"])
+}
+
 func TestFindingsRoundTripAndSwap(t *testing.T) {
 	s := openTestStore(t)
 

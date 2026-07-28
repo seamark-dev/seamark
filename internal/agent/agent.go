@@ -117,15 +117,47 @@ type cliInvoker struct {
 
 func (c *cliInvoker) Name() string { return c.name }
 
+// Output caps: a well-behaved agent reply is kilobytes; a runaway CLI
+// must not grow seamark's memory without limit. Overflow is discarded —
+// a truncated reply fails downstream validation, which retries.
+const (
+	maxStdout = 4 << 20
+	maxStderr = 64 << 10
+)
+
+// boundedBuffer keeps at most max bytes and silently discards the rest,
+// always reporting success so the subprocess never sees a write error.
+type boundedBuffer struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+
+	if room := b.max - b.buf.Len(); room > 0 {
+		if len(p) > room {
+			p = p[:room]
+		}
+
+		b.buf.Write(p)
+	}
+
+	return n, nil
+}
+
+func (b *boundedBuffer) String() string { return b.buf.String() }
+
 // Invoke runs the CLI with prompt on stdin. Stdin (not an argument)
 // keeps large prompts off the process table and clear of argv limits.
 func (c *cliInvoker) Invoke(ctx context.Context, prompt string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.argv[0], c.argv[1:]...)
 	cmd.Stdin = strings.NewReader(prompt)
 
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errb
+	out := &boundedBuffer{max: maxStdout}
+	errb := &boundedBuffer{max: maxStderr}
+	cmd.Stdout = out
+	cmd.Stderr = errb
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {

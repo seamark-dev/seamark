@@ -371,6 +371,11 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	_, err = run(t, "-C", root, "lessons", "p1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpected argument")
+
+	// Opposite decisions in one command refuse before touching anything.
+	_, err = run(t, "-C", root, "lessons", "--apply", "p1", "--dismiss", "p2")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "one at a time")
 }
 
 func TestSelectionParsingAndResolution(t *testing.T) {

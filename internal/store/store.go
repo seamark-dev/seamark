@@ -419,14 +419,27 @@ func (s *Store) DistilledSignatures() (map[string]bool, error) {
 	return out, rows.Err()
 }
 
+// proposalCols is the column list every proposal query selects, in
+// scanProposals order.
+const proposalCols = `id, signature, rule, region, note, members, agent, status, created_at`
+
 // InsertProposal stores one distilled proposal and returns its id.
 func (s *Store) InsertProposal(p *model.Proposal) error {
+	return insertProposal(s.db, p)
+}
+
+// execer is the slice of database/sql shared by *sql.DB and *sql.Tx.
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func insertProposal(db execer, p *model.Proposal) error {
 	members, err := json.Marshal(p.Members)
 	if err != nil {
 		return fmt.Errorf("store: encode proposal members: %w", err)
 	}
 
-	res, err := s.db.Exec(
+	res, err := db.Exec(
 		`INSERT INTO proposal (signature, rule, region, note, members, agent, status, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.Signature, p.Rule, p.Region, p.Note, string(members), p.Agent, p.Status, p.CreatedAt)
@@ -439,16 +452,53 @@ func (s *Store) InsertProposal(p *model.Proposal) error {
 	return err
 }
 
+// SaveDistilledGroup persists one distilled group atomically: its
+// surviving proposals and its signature memory in a single transaction.
+// The two must never diverge — proposals without the mark would be
+// duplicated by the retry the unmarked signature invites; a mark
+// without the proposals would silently discard the patterns a paid
+// agent call found.
+func (s *Store) SaveDistilledGroup(signature, region string, at int64, proposals []model.Proposal) ([]model.Proposal, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("store: begin distilled group: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+
+	for i := range proposals {
+		if err := insertProposal(tx, &proposals[i]); err != nil {
+			return nil, err
+		}
+	}
+
+	_, err = tx.Exec(
+		`INSERT INTO distilled (signature, region, at) VALUES (?, ?, ?)
+		 ON CONFLICT (signature) DO UPDATE SET region = excluded.region, at = excluded.at`,
+		signature, region, at)
+	if err != nil {
+		return nil, fmt.Errorf("store: mark distilled %s: %w", signature, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("store: commit distilled group: %w", err)
+	}
+
+	return proposals, nil
+}
+
 // Proposals returns proposals in one lifecycle state, newest first.
 func (s *Store) Proposals(status string) ([]model.Proposal, error) {
 	rows, err := s.db.Query(
-		`SELECT id, signature, rule, region, note, members, agent, status, created_at
-		 FROM proposal WHERE status = ? ORDER BY id DESC`, status)
+		`SELECT `+proposalCols+` FROM proposal WHERE status = ? ORDER BY id DESC`, status)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
+	return scanProposals(rows)
+}
+
+func scanProposals(rows *sql.Rows) ([]model.Proposal, error) {
 	var out []model.Proposal
 
 	for rows.Next() {
@@ -487,33 +537,14 @@ func (s *Store) ProposalsByIDs(ids []int64) ([]model.Proposal, error) {
 	marks := strings.Repeat(",?", len(ids))[1:]
 
 	rows, err := s.db.Query(
-		`SELECT id, signature, rule, region, note, members, agent, status, created_at
-		 FROM proposal WHERE status = 'proposed' AND id IN (`+marks+`) ORDER BY id`, args...)
+		`SELECT `+proposalCols+` FROM proposal
+		 WHERE status = 'proposed' AND id IN (`+marks+`) ORDER BY id`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []model.Proposal
-
-	for rows.Next() {
-		var p model.Proposal
-		var members string
-
-		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &p.Note,
-			&members, &p.Agent, &p.Status, &p.CreatedAt)
-		if err != nil {
-			return nil, err
-		}
-
-		if err := json.Unmarshal([]byte(members), &p.Members); err != nil {
-			return nil, fmt.Errorf("store: proposal %d members: %w", p.ID, err)
-		}
-
-		out = append(out, p)
-	}
-
-	return out, rows.Err()
+	return scanProposals(rows)
 }
 
 // SetProposalStatus moves pending proposals to a decided state and

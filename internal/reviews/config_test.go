@@ -108,6 +108,15 @@ func TestSurfaceBudgetRanksBySpecificity(t *testing.T) {
 	assert.Contains(t, out[0].Symptom, "first")
 }
 
+func TestRegionDepthNormalizesTrailingSlash(t *testing.T) {
+	// "a/b" and "a/b/" are one region to RegionMatches; specificity
+	// ranking must agree, or a trailing slash buys a budget slot.
+	assert.Equal(t, regionDepth("a/b"), regionDepth("a/b/"))
+	assert.Equal(t, 0, regionDepth("/"))
+	assert.Equal(t, 0, regionDepth("*"))
+	assert.Equal(t, 1, regionDepth("scripts/"))
+}
+
 func TestHookPinBudgetDefaultAndOverride(t *testing.T) {
 	assert.Equal(t, DefaultPinBudget, DefaultConfig().HookPinBudget())
 
