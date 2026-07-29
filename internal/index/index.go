@@ -385,29 +385,30 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 		logf("warn: fix mining failed: %v", err)
 	}
 
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return reviews.Result{}, 0, err
+	}
+	defer func() { _ = st.Close() }()
+
+	// Persisted before the network is touched: the two sources degrade
+	// independently, and a review failure — however it arrives — must
+	// not discard fix findings already mined from local git.
+	if fixRes.Mined {
+		if err := st.ReplaceFixFindings(fixRes.Findings); err != nil {
+			return reviews.Result{}, 0, err
+		}
+
+		fixCount = len(fixRes.Findings)
+	}
+
 	res, err = reviews.Mine(root, reviews.Options{Logf: logf}, nil)
 	if err != nil {
-		return res, 0, err
+		return res, fixCount, err
 	}
 
 	if res.Note != "" {
 		logf("note: %s", res.Note)
-	}
-
-	st, err := store.Open(dbPath)
-	if err != nil {
-		return res, 0, err
-	}
-	defer func() { _ = st.Close() }()
-
-	// Fix findings swap on their own cadence — a successful git mine is
-	// authoritative regardless of what the review fetch did.
-	if fixRes.Mined {
-		if err := st.ReplaceFixFindings(fixRes.Findings); err != nil {
-			return res, 0, err
-		}
-
-		fixCount = len(fixRes.Findings)
 	}
 
 	// Reviews swap only when the fetch actually succeeded. A transient

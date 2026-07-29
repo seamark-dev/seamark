@@ -36,13 +36,16 @@ func TestClassify(t *testing.T) {
 	}
 }
 
-// repo builds a scratch git repository and returns a commit helper.
-func repo(t *testing.T) (root string, commit func(msg string, files map[string]string)) {
+// repo builds a scratch git repository and returns a commit helper plus
+// the raw git runner, for tests that need branches or merges.
+func repo(t *testing.T) (root string, commit func(msg string, files map[string]string),
+	git func(args ...string),
+) {
 	t.Helper()
 
 	root = t.TempDir()
 
-	git := func(args ...string) {
+	git = func(args ...string) {
 		t.Helper()
 
 		cmd := exec.Command("git", args...)
@@ -70,11 +73,11 @@ func repo(t *testing.T) (root string, commit func(msg string, files map[string]s
 		git("commit", "--allow-empty", "-m", msg)
 	}
 
-	return root, commit
+	return root, commit, git
 }
 
 func TestMineEndToEnd(t *testing.T) {
-	root, commit := repo(t)
+	root, commit, _ := repo(t)
 
 	commit("initial", map[string]string{"a.go": "package a\n\nfunc Run() {}\n"})
 	commit("fix: nil check before dereference (#42)", map[string]string{
@@ -107,7 +110,7 @@ func TestMineEndToEnd(t *testing.T) {
 }
 
 func TestRevertedFixesAreExcludedAndRevertsIncluded(t *testing.T) {
-	root, commit := repo(t)
+	root, commit, _ := repo(t)
 
 	commit("initial", map[string]string{"a.go": "package a\nvar x = 1\n"})
 	commit("fix: wrong constant", map[string]string{"a.go": "package a\nvar x = 2\n"})
@@ -126,7 +129,7 @@ func TestRevertedFixesAreExcludedAndRevertsIncluded(t *testing.T) {
 }
 
 func TestBulkFixesAreExcluded(t *testing.T) {
-	root, commit := repo(t)
+	root, commit, _ := repo(t)
 
 	commit("initial", map[string]string{"a.go": "package a\n"})
 
@@ -145,23 +148,12 @@ func TestBulkFixesAreExcluded(t *testing.T) {
 }
 
 func TestDuplicatePatchesCountOnce(t *testing.T) {
-	root, commit := repo(t)
+	root, commit, git := repo(t)
 
 	commit("initial", map[string]string{"a.go": "package a\nvar x = 1\n"})
 
 	// The same patch under two shas — the cherry-pick/backport shape —
 	// via two branches making the identical edit, merged.
-	git := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = root
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
-			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "git %v\n%s", args, out)
-	}
-
 	git("checkout", "-b", "side")
 	commit("fix: guard divide by zero", map[string]string{"a.go": "package a\nvar x = 1\nvar guard = true\n"})
 	original := strings.TrimSpace(gitStdout(t, root, "rev-parse", "HEAD"))
@@ -182,7 +174,7 @@ func TestDuplicatePatchesCountOnce(t *testing.T) {
 }
 
 func TestPathsWithSpacesAreMined(t *testing.T) {
-	root, commit := repo(t)
+	root, commit, _ := repo(t)
 
 	commit("initial", map[string]string{"pkg/my file.go": "package a\n"})
 	commit("fix: guard the spaced path", map[string]string{

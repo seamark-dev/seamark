@@ -168,6 +168,22 @@ const (
 	SourceFixSubject      = "fix:subject"
 )
 
+// fixMinedSources are the sources one pass of fix mining produces —
+// every fix tier plus reverts, which the same provider classifies. They
+// share a replace lifecycle, so a new tier must be listed here to be
+// swapped rather than accumulate. Deliberately an explicit list and not
+// "everything that is not a review": a future provider on its own
+// cadence (CI transitions, say) must not have its findings wiped by a
+// fix mine.
+var fixMinedSources = []string{
+	SourceFixConventional, SourceFixIssueLink, SourceFixSubject, SourceRevert,
+}
+
+// FixMinedSources returns the sources replaced together with fix mining.
+func FixMinedSources() []string {
+	return append([]string(nil), fixMinedSources...)
+}
+
 // Proposal lifecycle states. Dismissed and superseded are both "not in
 // the pin file", but they mean opposite things about the pattern:
 // dismissed rejects the guidance, superseded keeps it and drops a

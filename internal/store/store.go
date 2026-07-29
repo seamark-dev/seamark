@@ -422,8 +422,15 @@ func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after Commit
 
-	_, err = tx.Exec("DELETE FROM finding WHERE source LIKE 'fix:%' OR source = ?",
-		model.SourceRevert)
+	sources := model.FixMinedSources()
+
+	args := make([]any, len(sources))
+	for i, s := range sources {
+		args[i] = s
+	}
+
+	_, err = tx.Exec(
+		"DELETE FROM finding WHERE source IN ("+strings.Repeat(",?", len(sources))[1:]+")", args...)
 	if err != nil {
 		return fmt.Errorf("store: wipe fix findings: %w", err)
 	}

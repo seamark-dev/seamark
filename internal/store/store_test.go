@@ -324,6 +324,39 @@ func TestProposalLifecycle(t *testing.T) {
 	require.Len(t, applied, 1)
 }
 
+func TestReplaceFixFindingsTouchesOnlyFixSources(t *testing.T) {
+	s := openTestStore(t)
+
+	// One finding per source, plus a source no provider produces yet —
+	// the stand-in for a future provider on its own cadence, which a fix
+	// mine must not wipe.
+	seed := []model.Finding{
+		{ID: 1, Path: "a.py", Body: "review", Source: model.SourceReview},
+		{ID: 2, Path: "b.go", Body: "conv", Source: model.SourceFixConventional},
+		{ID: 3, Path: "c.go", Body: "link", Source: model.SourceFixIssueLink},
+		{ID: 4, Path: "d.go", Body: "subj", Source: model.SourceFixSubject},
+		{ID: 5, Path: "e.go", Body: "revert", Source: model.SourceRevert},
+		{ID: 6, Path: "f.go", Body: "ci", Source: "ci:failure"},
+	}
+	require.NoError(t, s.ReplaceLessons(nil, seed))
+
+	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
+		{ID: 9, Path: "new.go", Body: "fresh", Source: model.SourceFixConventional},
+	}))
+
+	got, err := s.AllFindings()
+	require.NoError(t, err)
+
+	left := map[int64]string{}
+	for _, f := range got {
+		left[f.ID] = f.Source
+	}
+
+	assert.Equal(t, map[int64]string{
+		1: model.SourceReview, 6: "ci:failure", 9: model.SourceFixConventional,
+	}, left, "every fix-mined source is swapped; other providers' findings survive")
+}
+
 func TestSaveDistilledGroupIsAtomic(t *testing.T) {
 	s := openTestStore(t)
 
