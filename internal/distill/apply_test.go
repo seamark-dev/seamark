@@ -149,9 +149,9 @@ pin:
 	path := filepath.Join(root, ".seamark", "lessons.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(original), 0o644))
 
-	removed, err := RemovePins(root, []string{"docs-code-drift"})
+	removed, err := RemovePins(root, []PinKey{{Rule: "docs-code-drift", Region: "*"}})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"docs-code-drift"}, removed)
+	assert.Equal(t, []PinKey{{Rule: "docs-code-drift", Region: "*"}}, removed)
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -177,12 +177,68 @@ pin:
 	assert.Len(t, cfg.Mute, 1)
 }
 
+func TestRemovePinsLeavesMuteRulesAlone(t *testing.T) {
+	// A mute entry has the very same `- rule: x` shape as a pin, so a
+	// scan that ignores sections would delete the mute too — and the
+	// verification would then refuse the whole prune.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+
+	path := filepath.Join(root, ".seamark", "lessons.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"mute:\n  - rule: shared-name\n\npin:\n  - rule: shared-name\n    region: api\n    note: A pin.\n"),
+		0o644))
+
+	removed, err := RemovePins(root, []PinKey{{Rule: "shared-name", Region: "api"}})
+	require.NoError(t, err)
+	require.Len(t, removed, 1)
+
+	cfg, err := reviews.LoadConfig(root)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Pin, "the pin is gone")
+	require.Len(t, cfg.Mute, 1, "the mute rule of the same name survives")
+	assert.Equal(t, "shared-name", cfg.Mute[0].Rule)
+}
+
+func TestRemovePinsDistinguishesRegions(t *testing.T) {
+	// The same rule pinned in two areas is two pins; pruning one must
+	// not take its namesake.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+
+	path := filepath.Join(root, ".seamark", "lessons.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"pin:\n  - rule: dup\n    region: api\n    note: For api.\n"+
+			"  - rule: dup\n    region: web\n    note: For web.\n"+
+			"  - rule: dup\n    region: \"*\"\n    note: Repo-wide.\n"), 0o644))
+
+	removed, err := RemovePins(root, []PinKey{{Rule: "dup", Region: "web"}})
+	require.NoError(t, err)
+	require.Equal(t, []PinKey{{Rule: "dup", Region: "web"}}, removed)
+
+	cfg, err := reviews.LoadConfig(root)
+	require.NoError(t, err)
+	require.Len(t, cfg.Pin, 2)
+	assert.Equal(t, "api", cfg.Pin[0].Region)
+	assert.Equal(t, "*", cfg.Pin[1].Region)
+
+	// An empty region means repo-wide, the form ApplyPins writes as "*".
+	removed, err = RemovePins(root, []PinKey{{Rule: "dup", Region: ""}})
+	require.NoError(t, err)
+	require.Len(t, removed, 1)
+
+	cfg, err = reviews.LoadConfig(root)
+	require.NoError(t, err)
+	require.Len(t, cfg.Pin, 1)
+	assert.Equal(t, "api", cfg.Pin[0].Region, "only the repo-wide one went")
+}
+
 func TestRemovePinsHandlesAbsentAndMissingFile(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
 
 	// No file at all: nothing to prune, not an error.
-	removed, err := RemovePins(root, []string{"anything"})
+	removed, err := RemovePins(root, []PinKey{{Rule: "anything"}})
 	require.NoError(t, err)
 	assert.Empty(t, removed)
 
@@ -191,7 +247,7 @@ func TestRemovePinsHandlesAbsentAndMissingFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(original), 0o644))
 
 	// Already pruned by hand: still not an error, and nothing is written.
-	removed, err = RemovePins(root, []string{"gone-already"})
+	removed, err = RemovePins(root, []PinKey{{Rule: "gone-already"}})
 	require.NoError(t, err)
 	assert.Empty(t, removed)
 
@@ -208,7 +264,7 @@ func TestRemovePinsRefusesUnparseableFile(t *testing.T) {
 	path := filepath.Join(root, ".seamark", "lessons.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(broken), 0o644))
 
-	_, err := RemovePins(root, []string{"x"})
+	_, err := RemovePins(root, []PinKey{{Rule: "x"}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fix it before pruning")
 
@@ -229,7 +285,7 @@ func TestRemovePinsRoundTripsWithApply(t *testing.T) {
 
 	require.NoError(t, ApplyPins(root, applyFixture))
 
-	removed, err := RemovePins(root, []string{applyFixture[0].Rule})
+	removed, err := RemovePins(root, []PinKey{{Rule: applyFixture[0].Rule, Region: applyFixture[0].Region}})
 	require.NoError(t, err)
 	require.Len(t, removed, 1)
 

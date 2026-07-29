@@ -199,8 +199,10 @@ fix density  9 of the last 20 commits here were fixes
 phrased over a recent window so it decays as calmer history accumulates.
 
 It's reviewer-agnostic (bots and humans travel the same path) and
-best-effort: needs the GitHub CLI (`gh`) authenticated and a github.com
-remote; without them the layer is simply absent. Lessons refresh on the
+best-effort: **review-comment** mining needs the GitHub CLI (`gh`)
+authenticated and a github.com remote, and without them that half is
+simply absent — fix findings keep coming from local git, offline and on
+any remote, since the two sources degrade independently. Lessons refresh on the
 review cadence — `--reviews` is opt-in, and a normal `seamark index` (and
 every agent tool call) leaves them untouched rather than re-hitting the
 network. A failed mine (offline, logged out) fails safe: it keeps the

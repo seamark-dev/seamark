@@ -78,17 +78,25 @@ func newLessonsCmd(opts *options) *cobra.Command {
 a file has no lessons.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Applying and dismissing are opposite decisions; both at
-			// once would silently route everything (positional ids
-			// included) to apply.
-			if strings.TrimSpace(applyIDs) != "" && strings.TrimSpace(dismissIDs) != "" {
-				return fmt.Errorf("--apply and --dismiss are opposite decisions — run them one at a time")
+			// Apply, dismiss and prune are three different decisions
+			// about the same ids; two at once would silently route
+			// everything (positional ids included) to whichever the
+			// switch reaches first.
+			decisions := 0
+			for _, ids := range []string{applyIDs, dismissIDs, pruneIDs} {
+				if strings.TrimSpace(ids) != "" {
+					decisions++
+				}
+			}
+
+			if decisions > 1 {
+				return fmt.Errorf("--apply, --dismiss and --prune are different decisions — run them one at a time")
 			}
 
 			// `--apply p1, p2` is natural typing; the shell splits the
 			// spaced list into positional args, so fold them back in.
-			if len(args) > 0 && strings.TrimSpace(applyIDs)+strings.TrimSpace(dismissIDs) == "" {
-				return fmt.Errorf("unexpected argument %q — provide --file, --list, --distill, --apply, or --dismiss", args[0])
+			if len(args) > 0 && decisions == 0 {
+				return fmt.Errorf("unexpected argument %q — provide --file, --list, --distill, --apply, --dismiss, or --prune", args[0])
 			}
 
 			extra := strings.Join(args, ",")
@@ -239,17 +247,19 @@ func parsePID(s string) (int64, error) {
 	return id, nil
 }
 
-// resolveSelection turns a selection into concrete pending proposals,
-// id order, deduplicated. Exact ids must be pending; ranges take what
-// they find.
-func resolveSelection(pending []model.Proposal, raw string) ([]model.Proposal, error) {
+// resolveSelection turns a selection into concrete proposals from the
+// candidate set, id order, deduplicated. Exact ids must be in that set;
+// ranges take what they find. state names what the candidates are
+// ("pending", "applied") so an error says which ledger it looked in —
+// pruning searches applied proposals, not pending ones.
+func resolveSelection(candidates []model.Proposal, raw, state string) ([]model.Proposal, error) {
 	sel, err := parseSelection(raw)
 	if err != nil {
 		return nil, err
 	}
 
-	byID := make(map[int64]model.Proposal, len(pending))
-	for _, p := range pending {
+	byID := make(map[int64]model.Proposal, len(candidates))
+	for _, p := range candidates {
 		byID[p.ID] = p
 	}
 
@@ -260,7 +270,7 @@ func resolveSelection(pending []model.Proposal, raw string) ([]model.Proposal, e
 	for _, id := range sel.exact {
 		p, ok := byID[id]
 		if !ok {
-			return nil, fmt.Errorf("p%d is not a pending proposal (already decided, or unknown — see the distill plan)", id)
+			return nil, fmt.Errorf("p%d is not %s (see `seamark lessons --proposals`)", id, state)
 		}
 
 		if !added[id] {
@@ -270,7 +280,7 @@ func resolveSelection(pending []model.Proposal, raw string) ([]model.Proposal, e
 	}
 
 	for _, r := range sel.ranges {
-		for _, p := range pending {
+		for _, p := range candidates {
 			if p.ID >= r[0] && p.ID <= r[1] && !added[p.ID] {
 				added[p.ID] = true
 				out = append(out, p)
@@ -279,7 +289,7 @@ func resolveSelection(pending []model.Proposal, raw string) ([]model.Proposal, e
 	}
 
 	if len(out) == 0 {
-		return nil, fmt.Errorf("nothing in %q is still pending — see the distill plan", raw)
+		return nil, fmt.Errorf("nothing in %q is %s (see `seamark lessons --proposals`)", raw, state)
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -304,7 +314,7 @@ func runLessonsApply(cmd *cobra.Command, opts *options, raw string) error {
 		return err
 	}
 
-	ps, err := resolveSelection(pending, raw)
+	ps, err := resolveSelection(pending, raw, "pending")
 	if err != nil {
 		return err
 	}
@@ -371,18 +381,21 @@ func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
 		return err
 	}
 
-	ps, err := resolveSelection(applied, raw)
+	ps, err := resolveSelection(applied, raw, "applied")
 	if err != nil {
 		return err
 	}
 
 	out := cmd.OutOrStdout()
 
-	rules := make([]string, len(ps))
+	// Rule plus region: the same rule is legitimately pinned in several
+	// areas, and pruning one must not take its namesakes with it.
+	keys := make([]distill.PinKey, len(ps))
 	ids := make([]int64, len(ps))
 
 	for i, p := range ps {
-		rules[i], ids[i] = p.Rule, p.ID
+		keys[i] = distill.PinKey{Rule: p.Rule, Region: p.Region}
+		ids[i] = p.ID
 	}
 
 	cfg, err := distill.LoadConfig(root)
@@ -403,7 +416,7 @@ func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
 		return nil
 	}
 
-	removed, err := distill.RemovePins(root, rules)
+	removed, err := distill.RemovePins(root, keys)
 	if err != nil {
 		return err
 	}
@@ -441,7 +454,7 @@ func runLessonsDismiss(cmd *cobra.Command, opts *options, raw string) error {
 		return err
 	}
 
-	ps, err := resolveSelection(pending, raw)
+	ps, err := resolveSelection(pending, raw, "pending")
 	if err != nil {
 		return err
 	}
@@ -515,9 +528,16 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 	}
 
 	// The workspace's pins — hand-written and applied alike — are
-	// patterns the distiller must not re-derive under a new name.
+	// patterns the distiller must not re-derive under a new name. A
+	// malformed config must not abort a run that is about to spend real
+	// tokens, but it must not pass unnoticed either: without the pins
+	// every already-captured pattern looks new.
 	lcfg, err := reviews.LoadConfig(root)
 	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"warn: .seamark/lessons.yaml ignored (%s) — distilling without your pins, "+
+				"so patterns you already pinned may be proposed again\n", err)
+
 		lcfg = reviews.DefaultConfig()
 	}
 

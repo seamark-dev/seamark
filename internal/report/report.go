@@ -522,14 +522,21 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal)
 	fmt.Fprintf(w, "\nproposed pins — distilled from review findings, awaiting YOUR decision\n")
 
 	for _, p := range pending {
-		fmt.Fprintf(w, "\n  p%-4d %-34s %-26s %d findings cited [%s]\n",
-			p.ID, render.Sanitize(p.Rule), render.Sanitize(regionLabel(p.Region)),
-			len(p.Members), render.Sanitize(p.Agent))
-		fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Note))
+		printProposal(w, p)
 	}
 
 	fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; "+
 		"`--dismiss` remembers the no\n")
+}
+
+// printProposal renders one pending proposal: its identity line and the
+// guidance beneath. Model output, hence sanitized; never truncated,
+// because the note is the whole point of showing it.
+func printProposal(w io.Writer, p model.Proposal) {
+	fmt.Fprintf(w, "\n  p%-4d %-34s %-26s %d findings cited [%s]\n",
+		p.ID, render.Sanitize(p.Rule), render.Sanitize(regionLabel(p.Region)),
+		len(p.Members), render.Sanitize(p.Agent))
+	fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Note))
 }
 
 // PrintProposalLedger renders the distillation decision record: what is
@@ -554,10 +561,7 @@ func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Propos
 		fmt.Fprintf(w, "\nawaiting your decision\n")
 
 		for _, p := range pending {
-			fmt.Fprintf(w, "\n  p%-4d %-34s %-26s %d findings cited [%s]\n",
-				p.ID, render.Sanitize(p.Rule), render.Sanitize(regionLabel(p.Region)),
-				len(p.Members), render.Sanitize(p.Agent))
-			fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Note))
+			printProposal(w, p)
 		}
 
 		fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p<id>` (ranges work: p1..p9); "+

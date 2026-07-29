@@ -346,11 +346,11 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	// A bare id is a precise pointer: decided or unknown errors by name.
 	_, err = run(t, "-C", root, "lessons", "--apply", "p1")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "p1 is not a pending proposal")
+	assert.Contains(t, err.Error(), "p1 is not pending")
 
 	_, err = run(t, "-C", root, "lessons", "--dismiss", "p999")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "p999 is not a pending proposal")
+	assert.Contains(t, err.Error(), "p999 is not pending")
 
 	_, err = run(t, "-C", root, "lessons", "--apply", "pX")
 	require.Error(t, err)
@@ -361,12 +361,12 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	// tripping cobra's unknown-command error (a real-session paper cut).
 	_, err = run(t, "-C", root, "lessons", "--apply", "p9,", "p10")
 	require.Error(t, err, "nothing pending — but the spaced ids must PARSE")
-	assert.Contains(t, err.Error(), "p9 is not a pending proposal", "spaced list understood, error by name")
+	assert.Contains(t, err.Error(), "p9 is not pending", "spaced list understood, error by name")
 
 	// An exhausted range says so instead of pretending success.
 	_, err = run(t, "-C", root, "lessons", "--apply", "p1..p3")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "still pending")
+	assert.Contains(t, err.Error(), "is pending")
 
 	// A stray positional without --apply/--dismiss stays an error.
 	_, err = run(t, "-C", root, "lessons", "p1")
@@ -495,7 +495,7 @@ func TestLessonsPruneRetiresRestatements(t *testing.T) {
 	// is refused rather than silently recorded.
 	_, err = run(t, "-C", root, "lessons", "--prune", "p2")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not a pending proposal")
+	assert.Contains(t, err.Error(), "p2 is not applied", "prune searches the applied ledger, and says so")
 }
 
 func TestSelectionParsingAndResolution(t *testing.T) {
@@ -505,7 +505,7 @@ func TestSelectionParsingAndResolution(t *testing.T) {
 
 	// A range takes what it finds (2 is a hole), dash form included,
 	// mixed with exact ids, deduplicated, id-ordered.
-	got, err := resolveSelection(pending, "p3, p1..p4, 9")
+	got, err := resolveSelection(pending, "p3, p1..p4, 9", "pending")
 	require.NoError(t, err)
 
 	ids := make([]int64, len(got))
@@ -515,23 +515,23 @@ func TestSelectionParsingAndResolution(t *testing.T) {
 
 	assert.Equal(t, []int64{1, 3, 4, 9}, ids)
 
-	got, err = resolveSelection(pending, "p1-p4")
+	got, err = resolveSelection(pending, "p1-p4", "pending")
 	require.NoError(t, err)
 	assert.Len(t, got, 3, "dash ranges work like dotted ones")
 
 	// Reversed and absurd ranges fail loudly.
-	_, err = resolveSelection(pending, "p9..p1")
+	_, err = resolveSelection(pending, "p9..p1", "pending")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reversed")
 
-	_, err = resolveSelection(pending, "p1..p99999")
+	_, err = resolveSelection(pending, "p1..p99999", "pending")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "implausibly wide")
 
 	// Exact ids stay strict even next to a tolerant range.
-	_, err = resolveSelection(pending, "p2, p1..p9")
+	_, err = resolveSelection(pending, "p2, p1..p9", "pending")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "p2 is not a pending proposal")
+	assert.Contains(t, err.Error(), "p2 is not pending")
 }
 
 func TestHookBudgetsPinsFileViewDoesNot(t *testing.T) {

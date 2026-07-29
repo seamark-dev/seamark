@@ -2,6 +2,7 @@ package distill
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,14 +123,33 @@ func ApplyPins(root string, ps []model.Proposal) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
+// PinKey identifies one pin entry. A rule name alone is not an
+// identity: the same rule is legitimately pinned in several regions
+// (RUF001 for scripts and for api), and pruning one must not take the
+// others with it.
+type PinKey struct {
+	Rule   string
+	Region string
+}
+
+// normalized pairs a rule with its canonical region, since an absent
+// region and "*" both mean repo-wide (ApplyPins writes the star).
+func (k PinKey) normalized() PinKey {
+	if k.Region == "" {
+		k.Region = "*"
+	}
+
+	return k
+}
+
 // RemovePins deletes the named pins from <root>/.seamark/lessons.yaml,
 // with their provenance comments, leaving every other byte alone. It is
 // the inverse of ApplyPins and deliberately more careful: adding a
 // wrong entry is visible in a diff, while deleting a neighbouring one
-// destroys work. A rule already absent is not an error (the user may
+// destroys work. A pin already absent is not an error (the user may
 // have pruned it by hand); the result must parse AND contain exactly
 // the expected remaining pins, or nothing is written.
-func RemovePins(root string, rules []string) (removed []string, err error) {
+func RemovePins(root string, keys []PinKey) (removed []PinKey, err error) {
 	path := filepath.Join(root, ".seamark", "lessons.yaml")
 
 	data, err := os.ReadFile(path)
@@ -146,29 +166,47 @@ func RemovePins(root string, rules []string) (removed []string, err error) {
 		return nil, fmt.Errorf("lessons.yaml does not parse; fix it before pruning: %w", err)
 	}
 
-	drop := map[string]bool{}
-	for _, r := range rules {
-		drop[r] = true
+	drop := map[PinKey]bool{}
+	for _, k := range keys {
+		drop[k.normalized()] = true
 	}
 
 	lines := strings.Split(string(data), "\n")
 	cut := make([]bool, len(lines))
+	section := ""
 
 	for i, line := range lines {
-		rule, ok := pinEntryRule(line)
-		if !ok || !drop[rule] {
+		// `mute:` entries have the very same `- rule: x` shape as pins,
+		// so a rule name is only a pin inside the pin section.
+		if key, ok := topLevelKey(line); ok {
+			section = key
 			continue
 		}
 
-		start, end := i, i+1
+		if section != "pin" {
+			continue
+		}
 
-		// The entry's own body: deeper-indented continuation lines.
+		rule, ok := pinEntryRule(line)
+		if !ok {
+			continue
+		}
+
+		// The entry's own body: deeper-indented continuation lines,
+		// which is also where its region lives.
+		end := i + 1
 		for end < len(lines) && isContinuation(lines[end]) {
 			end++
 		}
 
+		key := PinKey{Rule: rule, Region: entryRegion(lines[i+1 : end])}.normalized()
+		if !drop[key] {
+			continue
+		}
+
 		// Its provenance comment sits directly above, unseparated by a
 		// blank line — that is how ApplyPins writes it.
+		start := i
 		for start > 0 && strings.HasPrefix(strings.TrimSpace(lines[start-1]), "#") {
 			start--
 		}
@@ -177,7 +215,7 @@ func RemovePins(root string, rules []string) (removed []string, err error) {
 			cut[j] = true
 		}
 
-		removed = append(removed, rule)
+		removed = append(removed, key)
 	}
 
 	if len(removed) == 0 {
@@ -206,6 +244,19 @@ func RemovePins(root string, rules []string) (removed []string, err error) {
 	return removed, os.WriteFile(path, []byte(content), 0o644)
 }
 
+// topLevelKey reads the name of an unindented `key:` line — how the
+// scan knows which section it is standing in.
+func topLevelKey(line string) (string, bool) {
+	if line == "" || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") ||
+		strings.HasPrefix(strings.TrimSpace(line), "#") {
+		return "", false
+	}
+
+	key, _, found := strings.Cut(line, ":")
+
+	return strings.TrimSpace(key), found
+}
+
 // pinEntryRule reads the rule name off a `- rule: x` list item at pin
 // indentation, or reports false for any other line.
 func pinEntryRule(line string) (string, bool) {
@@ -215,6 +266,18 @@ func pinEntryRule(line string) (string, bool) {
 	}
 
 	return strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "- rule:")), `"'`), true
+}
+
+// entryRegion reads the region off a pin entry's continuation lines;
+// an entry without one is repo-wide.
+func entryRegion(body []string) string {
+	for _, line := range body {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "region:"); ok {
+			return strings.Trim(strings.TrimSpace(rest), `"'`)
+		}
+	}
+
+	return "*"
 }
 
 // isContinuation reports whether a line belongs to the list item above
@@ -234,34 +297,49 @@ func isContinuation(line string) bool {
 // rules are gone, every other pin survives with its note intact, and no
 // other section moved. A textual edit that passes YAML parsing can
 // still have eaten a neighbour — this is what catches that.
-func verifyPruned(before, after *reviews.Config, drop map[string]bool) error {
-	want := map[string]string{}
+func verifyPruned(before, after *reviews.Config, drop map[PinKey]bool) error {
+	pinNotes := func(cfg *reviews.Config) map[PinKey]string {
+		out := map[PinKey]string{}
+		for _, p := range cfg.Pin {
+			out[PinKey{Rule: p.Rule, Region: p.Region}.normalized()] = p.Note
+		}
 
-	for _, p := range before.Pin {
-		if !drop[p.Rule] {
-			want[p.Rule] = p.Note
+		return out
+	}
+
+	want, got := pinNotes(before), pinNotes(after)
+
+	for key, note := range want {
+		if drop[key] {
+			continue
+		}
+
+		if kept, ok := got[key]; !ok || kept != note {
+			return fmt.Errorf("refusing to write: pruning would have changed pin %q in %s",
+				key.Rule, key.Region)
 		}
 	}
 
-	got := map[string]string{}
-	for _, p := range after.Pin {
-		got[p.Rule] = p.Note
-	}
-
-	for rule, note := range want {
-		if kept, ok := got[rule]; !ok || kept != note {
-			return fmt.Errorf("refusing to write: pruning would have changed pin %q", rule)
+	for key := range got {
+		if drop[key] {
+			return fmt.Errorf("refusing to write: pin %q in %s survived the prune",
+				key.Rule, key.Region)
 		}
 	}
 
-	for rule := range got {
-		if drop[rule] {
-			return fmt.Errorf("refusing to write: pin %q survived the prune", rule)
+	// Mute rules are compared by content, not count: an edit that
+	// swapped one for another would otherwise pass unnoticed.
+	mutes := func(cfg *reviews.Config) map[reviews.MuteRule]int {
+		out := map[reviews.MuteRule]int{}
+		for _, m := range cfg.Mute {
+			out[m]++
 		}
+
+		return out
 	}
 
-	if len(after.Mute) != len(before.Mute) || after.Threshold != before.Threshold ||
-		after.PinBudget != before.PinBudget {
+	if !maps.Equal(mutes(before), mutes(after)) ||
+		after.Threshold != before.Threshold || after.PinBudget != before.PinBudget {
 		return fmt.Errorf("refusing to write: pruning would have changed other settings")
 	}
 
