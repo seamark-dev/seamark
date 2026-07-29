@@ -47,6 +47,12 @@ func LoadConfig(root string) (*Config, error) {
 	return cfg, nil
 }
 
+// provenanceMarker identifies a comment seamark wrote above a pin it
+// applied. Pruning removes only comments carrying it — anything else
+// above an entry is the user's prose, and deleting that is exactly the
+// work RemovePins exists to protect.
+const provenanceMarker = "seamark lessons --distill"
+
 // RenderPins renders proposals as ready-to-paste pin entries, each with
 // its provenance comment. The YAML values are marshaled, not
 // hand-quoted — a note containing quotes or colons must not be able to
@@ -67,8 +73,8 @@ func RenderPins(ps []model.Proposal) (string, error) {
 			return "", fmt.Errorf("render pin %s: %w", p.Rule, err)
 		}
 
-		fmt.Fprintf(&b, "  # distilled by %s from %d findings (seamark lessons --distill, p%d)\n",
-			p.Agent, len(p.Members), p.ID)
+		fmt.Fprintf(&b, "  # distilled by %s from %d findings (%s, p%d)\n",
+			p.Agent, len(p.Members), provenanceMarker, p.ID)
 
 		for line := range strings.SplitSeq(strings.TrimRight(string(entry), "\n"), "\n") {
 			fmt.Fprintf(&b, "  %s\n", line)
@@ -204,10 +210,13 @@ func RemovePins(root string, keys []PinKey) (removed []PinKey, err error) {
 			continue
 		}
 
-		// Its provenance comment sits directly above, unseparated by a
-		// blank line — that is how ApplyPins writes it.
+		// Its provenance comment sits directly above — but only comments
+		// seamark itself wrote go with the entry. A user's comment there
+		// may describe the section rather than this pin (certainly so
+		// when the pin is the section's first), and its prose is not
+		// ours to delete.
 		start := i
-		for start > 0 && strings.HasPrefix(strings.TrimSpace(lines[start-1]), "#") {
+		for start > 0 && isProvenanceComment(lines[start-1]) {
 			start--
 		}
 
@@ -266,6 +275,14 @@ func pinEntryRule(line string) (string, bool) {
 	}
 
 	return strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "- rule:")), `"'`), true
+}
+
+// isProvenanceComment reports whether a line is a comment seamark wrote
+// when applying a pin.
+func isProvenanceComment(line string) bool {
+	trimmed := strings.TrimSpace(line)
+
+	return strings.HasPrefix(trimmed, "#") && strings.Contains(trimmed, provenanceMarker)
 }
 
 // entryRegion reads the region off a pin entry's continuation lines;

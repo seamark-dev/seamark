@@ -177,6 +177,43 @@ pin:
 	assert.Len(t, cfg.Mute, 1)
 }
 
+func TestRemovePinsKeepsCommentsItDidNotWrite(t *testing.T) {
+	// Only seamark's own provenance comment travels with an entry. A
+	// user's comment above a pin may well describe the section — which
+	// it certainly does when the pin is the section's first — and its
+	// prose is not ours to delete.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+
+	path := filepath.Join(root, ".seamark", "lessons.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"pin:\n"+
+			"  # Hand-written pins below — keep them alphabetical.\n"+
+			"  - rule: aaa\n    region: api\n    note: First.\n"+
+			"  # distilled by claude/v3 from 2 findings (seamark lessons --distill, p9)\n"+
+			"  - rule: bbb\n    region: api\n    note: Second.\n"), 0o644))
+
+	// The first entry: its neighbouring comment is the user's and stays.
+	_, err := RemovePins(root, []PinKey{{Rule: "aaa", Region: "api"}})
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "keep them alphabetical",
+		"a comment seamark did not write survives the prune")
+	assert.NotContains(t, string(data), "rule: aaa")
+
+	// The distilled entry: its own provenance comment goes with it.
+	_, err = RemovePins(root, []PinKey{{Rule: "bbb", Region: "api"}})
+	require.NoError(t, err)
+
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "distilled by claude/v3")
+	assert.NotContains(t, string(data), "rule: bbb")
+	assert.Contains(t, string(data), "keep them alphabetical", "and the user's comment still stands")
+}
+
 func TestRemovePinsLeavesMuteRulesAlone(t *testing.T) {
 	// A mute entry has the very same `- rule: x` shape as a pin, so a
 	// scan that ignores sections would delete the mute too — and the
