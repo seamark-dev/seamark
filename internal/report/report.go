@@ -579,21 +579,49 @@ func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Propos
 		redundant += len(c) - 1
 	}
 
-	fmt.Fprintf(w, "\nnear-duplicates — %d applied pins restate one already pinned "+
-		"(prune by hand in .seamark/lessons.yaml)\n", redundant)
+	fmt.Fprintf(w, "\nnear-duplicates — %d applied pins restate one already pinned\n", redundant)
+
+	var allDrop []string
 
 	for _, c := range clusters {
-		ids := make([]string, 0, len(c))
-		for _, p := range c {
-			ids = append(ids, fmt.Sprintf("p%d", p.ID))
-		}
+		keep, drop := survivor(c)
 
-		fmt.Fprintf(w, "  %d× %s\n", len(c), strings.Join(ids, " "))
+		fmt.Fprintf(w, "\n  keep  p%-4d %s\n", keep.ID, render.Sanitize(keep.Rule))
 
-		for _, p := range c {
-			fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Rule))
+		for _, p := range drop {
+			fmt.Fprintf(w, "  prune p%-4d %s\n", p.ID, render.Sanitize(p.Rule))
+			allDrop = append(allDrop, fmt.Sprintf("p%d", p.ID))
 		}
 	}
+
+	fmt.Fprintf(w, "\nprune the restatements: `seamark lessons --prune %s`\n",
+		strings.Join(allDrop, ","))
+	fmt.Fprintf(w, "  (removes those pins from .seamark/lessons.yaml — needs distill.write in "+
+		"config.yaml, else it prints the list; the theme stays pinned by its survivor. "+
+		"Pick different survivors by pruning different ids, or edit the file by hand.)\n")
+}
+
+// survivor picks which pin of a duplicate cluster to keep: the one
+// resting on the most cited evidence, ties going to the most recent
+// wording. It is a suggestion — the caller prunes whichever ids they
+// choose.
+func survivor(cluster []model.Proposal) (keep model.Proposal, drop []model.Proposal) {
+	keep = cluster[0]
+
+	for _, p := range cluster[1:] {
+		if len(p.Members) > len(keep.Members) ||
+			(len(p.Members) == len(keep.Members) && p.ID > keep.ID) {
+			keep = p
+		}
+	}
+
+	for _, p := range cluster {
+		if p.ID != keep.ID {
+			drop = append(drop, p)
+		}
+	}
+
+	return keep, drop
 }
 
 // printDecided lists settled proposals one line each: the decision

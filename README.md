@@ -323,8 +323,15 @@ applied, or **dismissed** — and a restatement is dropped before it
 reaches the ledger. The check is deterministic and costs nothing: no
 agent call is needed to see that two short rules say the same thing.
 `seamark lessons --proposals` audits the pins you already have the same
-way, naming near-duplicate clusters for you to prune (it never edits
-the file).
+way: it names each near-duplicate cluster, suggests which entry to keep
+(the one resting on the most evidence), and hands you the command —
+`seamark lessons --prune p16,p45` — to retire the rest. Pruning is not
+dismissal: the theme stays pinned by its survivor and the distiller
+still counts it as known, where a dismissal would suppress it. Like
+`--apply`, it edits `lessons.yaml` only with `distill.write` set, it
+removes each entry with its provenance comment and nothing else, and it
+refuses to write at all unless the result still parses with every other
+pin intact.
 
 And it is proposal-only by construction: the model must cite the finding
 ids behind every pattern (uncited patterns are dropped — it cannot

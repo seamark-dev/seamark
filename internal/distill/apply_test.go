@@ -122,6 +122,122 @@ func TestRepoWideRegionRendersAsStar(t *testing.T) {
 	assert.Equal(t, "*", cfg.Pin[0].Region)
 }
 
+func TestRemovePinsTakesEntryAndProvenanceOnly(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+
+	original := `# My tuning notes — hard-won.
+threshold: 3
+pin_budget: 4
+
+mute:
+  - rule: E702
+
+pin:
+  # Keep scripts ASCII — smart quotes have bitten us.
+  - rule: ascii-only
+    region: scripts
+    note: "ASCII only"
+  # distilled by claude/v2 from 3 findings (seamark lessons --distill, p16)
+  - rule: docs-code-drift
+    region: "*"
+    note: Update every doc that describes changed behavior.
+  - rule: keep-me
+    region: api
+    note: A hand-written pin that must survive untouched.
+`
+	path := filepath.Join(root, ".seamark", "lessons.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o644))
+
+	removed, err := RemovePins(root, []string{"docs-code-drift"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"docs-code-drift"}, removed)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	got := string(data)
+
+	assert.NotContains(t, got, "docs-code-drift")
+	assert.NotContains(t, got, "seamark lessons --distill, p16", "its provenance comment goes too")
+
+	// Everything else is byte-intact — including the neighbour above,
+	// whose comment must not be swept up with the entry below it.
+	assert.Contains(t, got, "# Keep scripts ASCII — smart quotes have bitten us.")
+	assert.Contains(t, got, "hard-won")
+	assert.Contains(t, got, "rule: E702")
+
+	cfg, err := reviews.LoadConfig(root)
+	require.NoError(t, err)
+	require.Len(t, cfg.Pin, 2)
+	assert.Equal(t, "ascii-only", cfg.Pin[0].Rule)
+	assert.Equal(t, "keep-me", cfg.Pin[1].Rule)
+	assert.Equal(t, "A hand-written pin that must survive untouched.", cfg.Pin[1].Note)
+	assert.Equal(t, 3, cfg.Threshold)
+	assert.Equal(t, 4, cfg.PinBudget)
+	assert.Len(t, cfg.Mute, 1)
+}
+
+func TestRemovePinsHandlesAbsentAndMissingFile(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+
+	// No file at all: nothing to prune, not an error.
+	removed, err := RemovePins(root, []string{"anything"})
+	require.NoError(t, err)
+	assert.Empty(t, removed)
+
+	original := "pin:\n  - rule: kept\n    region: api\n    note: n\n"
+	path := filepath.Join(root, ".seamark", "lessons.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o644))
+
+	// Already pruned by hand: still not an error, and nothing is written.
+	removed, err = RemovePins(root, []string{"gone-already"})
+	require.NoError(t, err)
+	assert.Empty(t, removed)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, original, string(data))
+}
+
+func TestRemovePinsRefusesUnparseableFile(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+
+	broken := "pin: [\n  - rule: x\n"
+	path := filepath.Join(root, ".seamark", "lessons.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(broken), 0o644))
+
+	_, err := RemovePins(root, []string{"x"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fix it before pruning")
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, broken, string(data), "a refused prune writes nothing")
+}
+
+func TestRemovePinsRoundTripsWithApply(t *testing.T) {
+	// What apply writes, prune must remove exactly — leaving the file
+	// as it was before the apply.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+
+	before := "threshold: 2\n\npin:\n  - rule: original\n    region: api\n    note: Keep this one.\n"
+	path := filepath.Join(root, ".seamark", "lessons.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(before), 0o644))
+
+	require.NoError(t, ApplyPins(root, applyFixture))
+
+	removed, err := RemovePins(root, []string{applyFixture[0].Rule})
+	require.NoError(t, err)
+	require.Len(t, removed, 1)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, before, string(data), "prune undoes apply byte for byte")
+}
+
 func TestDistillConfigGate(t *testing.T) {
 	// Absent: write off — apply prints instead of editing.
 	cfg, err := LoadConfig(t.TempDir())

@@ -168,11 +168,16 @@ const (
 	SourceFixSubject      = "fix:subject"
 )
 
-// Proposal lifecycle states.
+// Proposal lifecycle states. Dismissed and superseded are both "not in
+// the pin file", but they mean opposite things about the pattern:
+// dismissed rejects the guidance, superseded keeps it and drops a
+// redundant wording of it. Conflating them would let pruning a
+// duplicate silently suppress a theme the user still wants.
 const (
-	ProposalProposed  = "proposed"
-	ProposalApplied   = "applied"
-	ProposalDismissed = "dismissed"
+	ProposalProposed   = "proposed"
+	ProposalApplied    = "applied"
+	ProposalDismissed  = "dismissed"
+	ProposalSuperseded = "superseded"
 )
 
 // Proposal is one distilled pattern awaiting a human decision: a

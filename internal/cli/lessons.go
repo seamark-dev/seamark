@@ -32,6 +32,7 @@ func newLessonsCmd(opts *options) *cobra.Command {
 		limit        int
 		applyIDs     string
 		dismissIDs   string
+		pruneIDs     string
 	)
 
 	cmd := &cobra.Command{
@@ -65,6 +66,11 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    Never automatic.
   --dismiss p2     record a no — the same evidence is never re-proposed.
                    Takes lists and ranges like --apply
+  --prune p16,p45  drop applied pins that restate another (the ledger
+                   names the clusters and hands you the command). Not a
+                   dismissal: the theme stays pinned by its survivor, so
+                   the distiller still counts it as known. Edits
+                   lessons.yaml only with distill.write, like --apply.
   --hook           read a Claude Code PreToolUse payload from stdin and emit
                    the edited file's lessons as additionalContext
 
@@ -94,6 +100,8 @@ a file has no lessons.`,
 				return runLessonsApply(cmd, opts, applyIDs+","+extra)
 			case strings.TrimSpace(dismissIDs) != "":
 				return runLessonsDismiss(cmd, opts, dismissIDs+","+extra)
+			case strings.TrimSpace(pruneIDs) != "":
+				return runLessonsPrune(cmd, opts, pruneIDs+","+extra)
 			case proposalList:
 				return runLessonsProposals(cmd, opts)
 			case distillRun:
@@ -137,6 +145,8 @@ a file has no lessons.`,
 		"apply proposals as pins by id or range (p3,p7 or p1..p9); writes lessons.yaml only with distill.write in config")
 	cmd.Flags().StringVar(&dismissIDs, "dismiss", "",
 		"dismiss proposals by id or range (p2 or p1..p9) — remembered, never re-proposed for the same evidence")
+	cmd.Flags().StringVar(&pruneIDs, "prune", "",
+		"remove applied pins that restate another (p16,p45) — the theme stays pinned by its survivor")
 
 	return cmd
 }
@@ -340,6 +350,78 @@ func runLessonsApply(cmd *cobra.Command, opts *options, raw string) error {
 
 	for _, p := range ps {
 		fmt.Fprintf(out, "  p%-4d %s\n", p.ID, p.Rule)
+	}
+
+	return nil
+}
+
+// runLessonsPrune retires applied pins that restate another. It is not
+// a dismissal: the guidance stays pinned by whichever entry survives,
+// so the proposal becomes "superseded" and the theme is still known to
+// the distiller. Editing lessons.yaml obeys the same gate as --apply.
+func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
+	st, root, err := openIndex(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	applied, err := st.Proposals(model.ProposalApplied)
+	if err != nil {
+		return err
+	}
+
+	ps, err := resolveSelection(applied, raw)
+	if err != nil {
+		return err
+	}
+
+	out := cmd.OutOrStdout()
+
+	rules := make([]string, len(ps))
+	ids := make([]int64, len(ps))
+
+	for i, p := range ps {
+		rules[i], ids[i] = p.Rule, p.ID
+	}
+
+	cfg, err := distill.LoadConfig(root)
+	if err != nil {
+		return err
+	}
+
+	if !cfg.Distill.Write {
+		fmt.Fprintf(out, "distill.write is off in .seamark/config.yaml — remove these pins from "+
+			".seamark/lessons.yaml by hand:\n\n")
+
+		for _, p := range ps {
+			fmt.Fprintf(out, "  p%-4d %s\n", p.ID, p.Rule)
+		}
+
+		fmt.Fprintln(out, "\n(the proposals stay applied; enable distill.write to let prune edit the file)")
+
+		return nil
+	}
+
+	removed, err := distill.RemovePins(root, rules)
+	if err != nil {
+		return err
+	}
+
+	n, err := st.SupersedeProposals(ids)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "pruned %d pin(s) from .seamark/lessons.yaml, %d proposal(s) marked superseded — "+
+		"review the diff and commit it\n", len(removed), n)
+
+	for _, p := range ps {
+		fmt.Fprintf(out, "  p%-4d %s\n", p.ID, p.Rule)
+	}
+
+	if len(removed) < len(ps) {
+		fmt.Fprintf(out, "(%d were already absent from the file)\n", len(ps)-len(removed))
 	}
 
 	return nil

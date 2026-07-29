@@ -122,6 +122,152 @@ func ApplyPins(root string, ps []model.Proposal) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
+// RemovePins deletes the named pins from <root>/.seamark/lessons.yaml,
+// with their provenance comments, leaving every other byte alone. It is
+// the inverse of ApplyPins and deliberately more careful: adding a
+// wrong entry is visible in a diff, while deleting a neighbouring one
+// destroys work. A rule already absent is not an error (the user may
+// have pruned it by hand); the result must parse AND contain exactly
+// the expected remaining pins, or nothing is written.
+func RemovePins(root string, rules []string) (removed []string, err error) {
+	path := filepath.Join(root, ".seamark", "lessons.yaml")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // nothing to prune
+		}
+
+		return nil, err
+	}
+
+	before := &reviews.Config{}
+	if err := yaml.Unmarshal(data, before); err != nil {
+		return nil, fmt.Errorf("lessons.yaml does not parse; fix it before pruning: %w", err)
+	}
+
+	drop := map[string]bool{}
+	for _, r := range rules {
+		drop[r] = true
+	}
+
+	lines := strings.Split(string(data), "\n")
+	cut := make([]bool, len(lines))
+
+	for i, line := range lines {
+		rule, ok := pinEntryRule(line)
+		if !ok || !drop[rule] {
+			continue
+		}
+
+		start, end := i, i+1
+
+		// The entry's own body: deeper-indented continuation lines.
+		for end < len(lines) && isContinuation(lines[end]) {
+			end++
+		}
+
+		// Its provenance comment sits directly above, unseparated by a
+		// blank line — that is how ApplyPins writes it.
+		for start > 0 && strings.HasPrefix(strings.TrimSpace(lines[start-1]), "#") {
+			start--
+		}
+
+		for j := start; j < end; j++ {
+			cut[j] = true
+		}
+
+		removed = append(removed, rule)
+	}
+
+	if len(removed) == 0 {
+		return nil, nil
+	}
+
+	kept := make([]string, 0, len(lines))
+
+	for i, line := range lines {
+		if !cut[i] {
+			kept = append(kept, line)
+		}
+	}
+
+	content := strings.Join(kept, "\n")
+
+	after := &reviews.Config{}
+	if err := yaml.Unmarshal([]byte(content), after); err != nil {
+		return nil, fmt.Errorf("refusing to write: pruned lessons.yaml would not parse: %w", err)
+	}
+
+	if err := verifyPruned(before, after, drop); err != nil {
+		return nil, err
+	}
+
+	return removed, os.WriteFile(path, []byte(content), 0o644)
+}
+
+// pinEntryRule reads the rule name off a `- rule: x` list item at pin
+// indentation, or reports false for any other line.
+func pinEntryRule(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(line, " ") || !strings.HasPrefix(trimmed, "- rule:") {
+		return "", false
+	}
+
+	return strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "- rule:")), `"'`), true
+}
+
+// isContinuation reports whether a line belongs to the list item above
+// it: indented, and not itself a new item or a new key at any lower
+// indentation.
+func isContinuation(line string) bool {
+	if strings.TrimSpace(line) == "" {
+		return false
+	}
+
+	trimmed := strings.TrimSpace(line)
+
+	return strings.HasPrefix(line, "    ") && !strings.HasPrefix(trimmed, "- ")
+}
+
+// verifyPruned checks the edit did exactly what was asked: the dropped
+// rules are gone, every other pin survives with its note intact, and no
+// other section moved. A textual edit that passes YAML parsing can
+// still have eaten a neighbour — this is what catches that.
+func verifyPruned(before, after *reviews.Config, drop map[string]bool) error {
+	want := map[string]string{}
+
+	for _, p := range before.Pin {
+		if !drop[p.Rule] {
+			want[p.Rule] = p.Note
+		}
+	}
+
+	got := map[string]string{}
+	for _, p := range after.Pin {
+		got[p.Rule] = p.Note
+	}
+
+	for rule, note := range want {
+		if kept, ok := got[rule]; !ok || kept != note {
+			return fmt.Errorf("refusing to write: pruning would have changed pin %q", rule)
+		}
+	}
+
+	for rule := range got {
+		if drop[rule] {
+			return fmt.Errorf("refusing to write: pin %q survived the prune", rule)
+		}
+	}
+
+	if len(after.Mute) != len(before.Mute) || after.Threshold != before.Threshold ||
+		after.PinBudget != before.PinBudget {
+		return fmt.Errorf("refusing to write: pruning would have changed other settings")
+	}
+
+	return nil
+}
+
 // insertPins splices the rendered block into the file text.
 func insertPins(content, block string) (string, error) {
 	lines := strings.Split(content, "\n")

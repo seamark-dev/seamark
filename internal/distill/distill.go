@@ -213,7 +213,8 @@ func knownPatterns(st *store.Store, pins []model.Proposal) (*Known, error) {
 	known := NewKnown(pins)
 
 	for _, status := range []string{
-		model.ProposalProposed, model.ProposalApplied, model.ProposalDismissed,
+		model.ProposalProposed, model.ProposalApplied,
+		model.ProposalDismissed, model.ProposalSuperseded,
 	} {
 		stored, err := st.Proposals(status)
 		if err != nil {

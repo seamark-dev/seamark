@@ -418,6 +418,86 @@ func TestLessonsProposalsLedger(t *testing.T) {
 	assert.Contains(t, out, "--apply p<id>", "the decide commands ride along")
 }
 
+func TestLessonsPruneRetiresRestatements(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// Two pins saying the same thing, one saying something else.
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	for _, p := range []model.Proposal{
+		{Signature: "s1", Rule: "docs-code-drift", Region: "api",
+			Note:    "Update every doc, comment, and README that describes the changed behavior.",
+			Members: []int64{1, 2, 3}, Agent: "claude/v2", Status: model.ProposalApplied},
+		{Signature: "s2", Rule: "docs-out-of-sync-with-code", Region: "api",
+			Note:    "Keep docstrings, comments, and README examples matching the code when behavior changes.",
+			Members: []int64{4, 5}, Agent: "claude/v2", Status: model.ProposalApplied},
+		{Signature: "s3", Rule: "bounded-event-deferral", Region: "api",
+			Note:    "Route deferred events through one bounded queue so backpressure cannot amplify goroutines.",
+			Members: []int64{6, 7}, Agent: "claude/v2", Status: model.ProposalApplied},
+	} {
+		require.NoError(t, st.InsertProposal(&p))
+	}
+
+	require.NoError(t, st.Close())
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n"+
+			"  - rule: docs-code-drift\n    region: api\n    note: Update every doc.\n"+
+			"  - rule: docs-out-of-sync-with-code\n    region: api\n    note: Keep docstrings matching.\n"+
+			"  - rule: bounded-event-deferral\n    region: api\n    note: One bounded queue.\n"), 0o644))
+
+	// The ledger names the cluster and hands over a ready command.
+	out, err := run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+	assert.Contains(t, out, "near-duplicates")
+	assert.Contains(t, out, "keep  p1", "the pin resting on more evidence survives")
+	assert.Contains(t, out, "prune p2")
+	assert.Contains(t, out, "--prune p2")
+	assert.NotContains(t, out, "prune p3", "distinct guidance is never suggested for pruning")
+
+	// Gate off: it tells you what to remove, and changes nothing.
+	out, err = run(t, "-C", root, "lessons", "--prune", "p2")
+	require.NoError(t, err)
+	assert.Contains(t, out, "distill.write is off")
+	assert.Contains(t, out, "docs-out-of-sync-with-code")
+
+	data, err := os.ReadFile(filepath.Join(root, ".seamark", "lessons.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "docs-out-of-sync-with-code", "nothing removed without the gate")
+
+	// Gate on: the pin goes, the survivor and the unrelated pin stay,
+	// and the proposal is superseded rather than dismissed.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("distill:\n  write: true\n"), 0o644))
+
+	out, err = run(t, "-C", root, "lessons", "--prune", "p2")
+	require.NoError(t, err)
+	assert.Contains(t, out, "pruned 1 pin(s)")
+	assert.Contains(t, out, "1 proposal(s) marked superseded")
+
+	data, err = os.ReadFile(filepath.Join(root, ".seamark", "lessons.yaml"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "docs-out-of-sync-with-code")
+	assert.Contains(t, string(data), "docs-code-drift")
+	assert.Contains(t, string(data), "bounded-event-deferral")
+
+	out, err = run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+	assert.Contains(t, out, "2 applied", "the pruned one left the applied set")
+	assert.NotContains(t, out, "near-duplicates", "and the cluster is gone")
+
+	// A pruned pin is not a dismissal: pruning something never applied
+	// is refused rather than silently recorded.
+	_, err = run(t, "-C", root, "lessons", "--prune", "p2")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a pending proposal")
+}
+
 func TestSelectionParsingAndResolution(t *testing.T) {
 	pending := []model.Proposal{
 		{ID: 1, Rule: "a"}, {ID: 3, Rule: "c"}, {ID: 4, Rule: "d"}, {ID: 9, Rule: "i"},

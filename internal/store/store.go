@@ -639,11 +639,22 @@ func (s *Store) ProposalsByIDs(ids []int64) ([]model.Proposal, error) {
 // reports how many actually moved. Only 'proposed' rows transition:
 // a decision, once made, is not silently overwritten.
 func (s *Store) SetProposalStatus(ids []int64, to string) (int, error) {
+	return s.transition(ids, model.ProposalProposed, to)
+}
+
+// SupersedeProposals retires applied proposals whose pin was pruned as
+// a restatement of another. Only 'applied' rows move: superseding
+// something never applied would be meaningless.
+func (s *Store) SupersedeProposals(ids []int64) (int, error) {
+	return s.transition(ids, model.ProposalApplied, model.ProposalSuperseded)
+}
+
+func (s *Store) transition(ids []int64, from, to string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 
-	args := []any{to}
+	args := []any{to, from}
 	for _, id := range ids {
 		args = append(args, id)
 	}
@@ -651,7 +662,7 @@ func (s *Store) SetProposalStatus(ids []int64, to string) (int, error) {
 	marks := strings.Repeat(",?", len(ids))[1:]
 
 	res, err := s.db.Exec(
-		`UPDATE proposal SET status = ? WHERE status = 'proposed' AND id IN (`+marks+`)`, args...)
+		`UPDATE proposal SET status = ? WHERE status = ? AND id IN (`+marks+`)`, args...)
 	if err != nil {
 		return 0, err
 	}
