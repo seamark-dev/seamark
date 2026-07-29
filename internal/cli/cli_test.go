@@ -279,8 +279,8 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	require.NoError(t, os.WriteFile(replyPath,
 		[]byte(`{"patterns":[
 			{"rule":"pooled-state-reset","note":"Reset pooled state on every reuse.","finding_ids":[11,12]},
-			{"rule":"second-rule","note":"Second note.","finding_ids":[11,12]},
-			{"rule":"third-rule","note":"Third note.","finding_ids":[11,12]}]}`),
+			{"rule":"second-rule","note":"Validate request payload bounds before touching the database.","finding_ids":[11,12]},
+			{"rule":"third-rule","note":"Close the websocket subscription on every worker exit path.","finding_ids":[11,12]}]}`),
 		0o644))
 
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))

@@ -499,6 +499,10 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal)
 		fmt.Fprintf(w, ", %d left for another run (raise --limit or drop --region)", res.GroupsPending)
 	}
 
+	if res.Duplicates > 0 {
+		fmt.Fprintf(w, "; %d restated something already pinned", res.Duplicates)
+	}
+
 	if res.PrunedStale > 0 {
 		fmt.Fprintf(w, "; %d stale proposals pruned", res.PrunedStale)
 	}
@@ -533,7 +537,9 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal)
 // then what was applied or dismissed, compactly. Read-only — unlike
 // --distill, it never spends an agent call, so "what did I decide?" and
 // "what is waiting?" cost nothing to ask.
-func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Proposal) {
+func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Proposal,
+	clusters [][]model.Proposal,
+) {
 	if len(pending)+len(applied)+len(dismissed) == 0 {
 		fmt.Fprintln(w, "no proposals yet — run `seamark lessons --distill` to draft some "+
 			"(or write pins by hand in .seamark/lessons.yaml)")
@@ -560,6 +566,34 @@ func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Propos
 
 	printDecided(w, "applied — these are pins in .seamark/lessons.yaml", applied)
 	printDecided(w, "dismissed — not re-proposed unless their evidence changes", dismissed)
+
+	// Pins applied before duplicate detection existed (or written by
+	// hand in several wordings) still crowd the injection budget. Name
+	// the clusters; pruning stays the human's edit.
+	if len(clusters) == 0 {
+		return
+	}
+
+	redundant := 0
+	for _, c := range clusters {
+		redundant += len(c) - 1
+	}
+
+	fmt.Fprintf(w, "\nnear-duplicates — %d applied pins restate one already pinned "+
+		"(prune by hand in .seamark/lessons.yaml)\n", redundant)
+
+	for _, c := range clusters {
+		ids := make([]string, 0, len(c))
+		for _, p := range c {
+			ids = append(ids, fmt.Sprintf("p%d", p.ID))
+		}
+
+		fmt.Fprintf(w, "  %d× %s\n", len(c), strings.Join(ids, " "))
+
+		for _, p := range c {
+			fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Rule))
+		}
+	}
 }
 
 // printDecided lists settled proposals one line each: the decision
@@ -597,6 +631,7 @@ type DistillSummary struct {
 	GroupsFailed  int
 	GroupsPending int
 	PrunedStale   int
+	Duplicates    int
 	// TokensNote is the caller-rendered cost line ("~59k tokens sent …"),
 	// empty when nothing was sent.
 	TokensNote string

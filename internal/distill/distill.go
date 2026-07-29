@@ -46,6 +46,12 @@ type Options struct {
 	// When nil, the same information flows through Logf as plain lines.
 	OnGroupStart func(desc string)
 	OnGroupDone  func(outcome string)
+	// Pins are the patterns already captured in .seamark/lessons.yaml,
+	// hand-written ones included, as Rule/Note pairs. A distilled
+	// pattern that restates one of them is dropped: groups are read
+	// independently, so a repo-wide mistake would otherwise be
+	// re-proposed under a new name by every group it appears in.
+	Pins []model.Proposal
 }
 
 // Result reports what a run did.
@@ -62,7 +68,10 @@ type Result struct {
 	PromptChars int
 	ReplyChars  int
 	Duration    time.Duration
-	Proposals   []model.Proposal
+	// Duplicates counts distilled patterns dropped as restatements of
+	// something already pinned, proposed, or decided.
+	Duplicates int
+	Proposals  []model.Proposal
 }
 
 // Run executes the plan half of distillation: group the findings, skip
@@ -97,6 +106,11 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 	}
 
 	done, err := st.DistilledSignatures()
+	if err != nil {
+		return nil, err
+	}
+
+	known, err := knownPatterns(st, opts.Pins)
 	if err != nil {
 		return nil, err
 	}
@@ -145,11 +159,30 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 			continue
 		}
 
+		// Drop what is already captured. Groups are read independently,
+		// so a repo-wide mistake surfaces in several of them; without
+		// this the pin file fills with the same lesson under new names.
+		fresh := proposals[:0]
+
+		for _, p := range proposals {
+			if of, dup := known.Restated(p); dup {
+				logf("  skipped %s — restates %s", p.Rule, of)
+				res.Duplicates++
+
+				continue
+			}
+
+			// Known immediately, so two groups in one run cannot both
+			// propose it either.
+			known.Add(p)
+			fresh = append(fresh, p)
+		}
+
 		// One transaction for the proposals and the signature mark:
 		// partial persistence would either duplicate proposals on the
 		// retry or silently discard what a paid agent call found. The
 		// outcome is announced only after it is real.
-		saved, err := st.SaveDistilledGroup(g.Signature, g.Region, time.Now().Unix(), proposals)
+		saved, err := st.SaveDistilledGroup(g.Signature, g.Region, time.Now().Unix(), fresh)
 		if err != nil {
 			return nil, err
 		}
@@ -170,6 +203,29 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 	res.Duration = time.Since(start)
 
 	return res, nil
+}
+
+// knownPatterns collects everything already captured: the workspace's
+// pins plus every stored proposal, whatever its status. A dismissed
+// proposal counts — the user said no, and re-proposing it under a new
+// name would relitigate a decision.
+func knownPatterns(st *store.Store, pins []model.Proposal) (*Known, error) {
+	known := NewKnown(pins)
+
+	for _, status := range []string{
+		model.ProposalProposed, model.ProposalApplied, model.ProposalDismissed,
+	} {
+		stored, err := st.Proposals(status)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, p := range stored {
+			known.Add(p)
+		}
+	}
+
+	return known, nil
 }
 
 // distillGroup sends one group to the agent and validates the reply,

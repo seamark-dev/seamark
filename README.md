@@ -313,6 +313,19 @@ and a new finding reopens exactly its own group. `--limit` (default 10
 groups) and `--region` budget each run. Dismissals are permanent memory;
 a pattern only returns if its evidence changes.
 
+Candidate groups are read independently, so a repo-wide mistake shows up
+in several of them — and a distiller with no memory would re-propose it
+under a new name every time (measured on a real repo before this check:
+65 applied pins carried only 50 distinct themes). Every distilled
+pattern is therefore compared against what is already captured — your
+pins, hand-written ones included, and every proposal already pending,
+applied, or **dismissed** — and a restatement is dropped before it
+reaches the ledger. The check is deterministic and costs nothing: no
+agent call is needed to see that two short rules say the same thing.
+`seamark lessons --proposals` audits the pins you already have the same
+way, naming near-duplicate clusters for you to prune (it never edits
+the file).
+
 And it is proposal-only by construction: the model must cite the finding
 ids behind every pattern (uncited patterns are dropped — it cannot
 invent evidence), regions are computed from the cited files, and nothing

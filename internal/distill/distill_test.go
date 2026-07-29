@@ -86,6 +86,34 @@ func TestRunValidatesPersistsAndNeverPaysTwice(t *testing.T) {
 	assert.Equal(t, 1, res.GroupsSkipped)
 }
 
+func TestRunDropsRestatementsOfKnownPatterns(t *testing.T) {
+	st := openSeeded(t, pooledState)
+
+	agent := &fakeAgent{fn: func(string) (string, error) {
+		return `{"patterns": [
+			{"rule": "reset-pooled-state", "note": "Reset pooled state on reuse: clear every accumulated field in Free before the object is handed out again.", "finding_ids": [1, 3]},
+			{"rule": "bounded-event-deferral", "note": "Route deferred events through one bounded queue so backpressure cannot amplify goroutines.", "finding_ids": [5, 7]}
+		]}`, nil
+	}}
+
+	// A hand-written pin already covers the first pattern.
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), agent, Options{
+		Pins: []model.Proposal{{
+			Rule: "pooled-state-reset",
+			Note: "Reset every accumulated field in Free() before a pooled object is reused.",
+		}},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, res.Duplicates, "the pattern the pin already covers is dropped")
+	require.Len(t, res.Proposals, 1)
+	assert.Equal(t, "bounded-event-deferral", res.Proposals[0].Rule, "genuinely new guidance survives")
+
+	stored, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	assert.Len(t, stored, 1, "a restatement never reaches the ledger")
+}
+
 func TestRunRetriesFailedGroups(t *testing.T) {
 	st := openSeeded(t, pooledState)
 

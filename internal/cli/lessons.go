@@ -399,7 +399,10 @@ func runLessonsProposals(cmd *cobra.Command, opts *options) error {
 		}
 	}
 
-	report.PrintProposalLedger(cmd.OutOrStdout(), states[0], states[1], states[2])
+	// Applied pins are the ones that cost context on every edit, so the
+	// duplicate audit runs over them.
+	report.PrintProposalLedger(cmd.OutOrStdout(), states[0], states[1], states[2],
+		distill.Clusters(states[1]))
 
 	return nil
 }
@@ -429,9 +432,22 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		region = toRepoRel(root, region)
 	}
 
+	// The workspace's pins — hand-written and applied alike — are
+	// patterns the distiller must not re-derive under a new name.
+	lcfg, err := reviews.LoadConfig(root)
+	if err != nil {
+		lcfg = reviews.DefaultConfig()
+	}
+
+	pins := make([]model.Proposal, 0, len(lcfg.Pin))
+	for _, p := range lcfg.Pin {
+		pins = append(pins, model.Proposal{Rule: p.Rule, Note: p.Note, Region: p.Region})
+	}
+
 	dopts := distill.Options{
 		Region: region,
 		Limit:  limit,
+		Pins:   pins,
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 		},
@@ -464,6 +480,7 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		GroupsFailed:  res.GroupsFailed,
 		GroupsPending: res.GroupsPending,
 		PrunedStale:   res.PrunedStale,
+		Duplicates:    res.Duplicates,
 		TokensNote:    res.CostNote(),
 	}, pending)
 
