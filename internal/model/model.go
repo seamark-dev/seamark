@@ -144,15 +144,29 @@ type Lesson struct {
 // (distillation, provenance display) work from what reviewers actually
 // wrote rather than from lossy summaries.
 type Finding struct {
-	ID        int64  // GitHub review-comment id — stable across mines
-	LessonKey string // ClusterKey of the lesson this comment fed
-	Path      string // repo-relative file the comment lands on
-	PR        int    // pull-request number
+	ID        int64  // stable across mines: GitHub comment id, or sha-derived for fixes
+	LessonKey string // ClusterKey of the lesson this comment fed; "" for fix findings
+	Path      string // repo-relative file (a fix's most-changed code file)
+	PR        int    // pull-request number, 0 when unknown
 	Reviewer  string // coderabbit | copilot | bot | human
-	Body      string // boilerplate-stripped comment text, capped
-	URL       string // html_url, for provenance
+	Body      string // boilerplate-stripped text, capped
+	URL       string // provenance link (comment or commit), "" when none
 	CreatedAt int64  // unix seconds
+	// Source is the provider and its derivation: review, revert, or
+	// fix:conventional / fix:issue-link / fix:subject — every finding
+	// declares how it was mined, like every edge declares how it was
+	// resolved.
+	Source string
 }
+
+// Finding sources.
+const (
+	SourceReview          = "review"
+	SourceRevert          = "revert"
+	SourceFixConventional = "fix:conventional"
+	SourceFixIssueLink    = "fix:issue-link"
+	SourceFixSubject      = "fix:subject"
+)
 
 // Proposal lifecycle states.
 const (

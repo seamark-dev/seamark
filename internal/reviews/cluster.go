@@ -72,7 +72,7 @@ func cluster(comments []Comment) ([]model.Lesson, []model.Finding) {
 		findings = append(findings, model.Finding{
 			ID: c.ID, LessonKey: key, Path: c.Path, PR: c.PR,
 			Reviewer: c.Reviewer, Body: findingBody(c.Body),
-			URL: c.URL, CreatedAt: c.CreatedAt,
+			URL: c.URL, CreatedAt: c.CreatedAt, Source: model.SourceReview,
 		})
 	}
 

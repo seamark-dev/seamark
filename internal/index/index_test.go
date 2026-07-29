@@ -939,7 +939,7 @@ func TestRefreshReviewsKeepsLessonsWhenSourceUnavailable(t *testing.T) {
 	}, nil))
 	require.NoError(t, st.Close())
 
-	res, err := RefreshReviews(root, dbPath, nil)
+	res, _, err := RefreshReviews(root, dbPath, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Fetched, "no GitHub remote → not a successful fetch")
 

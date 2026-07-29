@@ -66,7 +66,53 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: apply schema: %w", err)
 	}
 
+	if err := migrate(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: migrate: %w", err)
+	}
+
 	return &Store{db: db}, nil
+}
+
+// migrate applies the additive changes CREATE IF NOT EXISTS cannot
+// express. Every step is idempotent and guarded by inspecting the live
+// schema, so opening an old database upgrades it in place and opening a
+// new one is a no-op.
+func migrate(db *sql.DB) error {
+	// finding.source arrived with fix mining (providers beyond reviews).
+	has, err := hasColumn(db, "finding", "source")
+	if err != nil {
+		return err
+	}
+
+	if !has {
+		// Every pre-migration finding came from review mining.
+		_, err = db.Exec(`ALTER TABLE finding ADD COLUMN source TEXT NOT NULL DEFAULT 'review'`)
+	}
+
+	return err
+}
+
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var name string
+
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+
+		if name == column {
+			return true, nil
+		}
+	}
+
+	return false, rows.Err()
 }
 
 // Close releases the underlying database handle.
@@ -336,10 +382,14 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding)
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after Commit
 
-	for _, table := range []string{"lesson", "finding"} {
-		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
-			return fmt.Errorf("store: wipe %s: %w", table, err)
-		}
+	if _, err := tx.Exec("DELETE FROM lesson"); err != nil {
+		return fmt.Errorf("store: wipe lesson: %w", err)
+	}
+
+	// Only the review provider's findings: fix findings live on the git
+	// mining cadence and must survive a review re-mine.
+	if _, err := tx.Exec("DELETE FROM finding WHERE source = ?", model.SourceReview); err != nil {
+		return fmt.Errorf("store: wipe review findings: %w", err)
 	}
 
 	t := &Tx{tx: tx}
@@ -351,14 +401,8 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding)
 	}
 
 	for i := range findings {
-		f := &findings[i]
-
-		_, err := tx.Exec(
-			`INSERT INTO finding (id, lesson_key, path, pr, reviewer, body, url, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			f.ID, f.LessonKey, f.Path, f.PR, f.Reviewer, f.Body, f.URL, f.CreatedAt)
-		if err != nil {
-			return fmt.Errorf("store: insert finding %d: %w", f.ID, err)
+		if err := insertFinding(tx, &findings[i]); err != nil {
+			return err
 		}
 	}
 
@@ -369,10 +413,54 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding)
 	return nil
 }
 
+// ReplaceFixFindings atomically swaps the fix-derived findings — their
+// own lifecycle, independent of the review set.
+func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin fix findings: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+
+	_, err = tx.Exec("DELETE FROM finding WHERE source LIKE 'fix:%' OR source = ?",
+		model.SourceRevert)
+	if err != nil {
+		return fmt.Errorf("store: wipe fix findings: %w", err)
+	}
+
+	for i := range findings {
+		if err := insertFinding(tx, &findings[i]); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit fix findings: %w", err)
+	}
+
+	return nil
+}
+
+func insertFinding(db execer, f *model.Finding) error {
+	if f.Source == "" {
+		f.Source = model.SourceReview
+	}
+
+	_, err := db.Exec(
+		`INSERT INTO finding (id, lesson_key, path, pr, reviewer, body, url, created_at, source)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		f.ID, f.LessonKey, f.Path, f.PR, f.Reviewer, f.Body, f.URL, f.CreatedAt, f.Source)
+	if err != nil {
+		return fmt.Errorf("store: insert finding %d: %w", f.ID, err)
+	}
+
+	return nil
+}
+
 // AllFindings returns every stored finding — the distiller's input.
 func (s *Store) AllFindings() ([]model.Finding, error) {
 	rows, err := s.db.Query(
-		`SELECT id, lesson_key, path, pr, reviewer, body, url, created_at
+		`SELECT id, lesson_key, path, pr, reviewer, body, url, created_at, source
 		 FROM finding ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -623,7 +711,7 @@ func (s *Store) PruneStaleProposals(liveSignatures map[string]bool) (int, error)
 // first — the evidence trail a distiller or a provenance view reads.
 func (s *Store) FindingsForLesson(clusterKey string) ([]model.Finding, error) {
 	rows, err := s.db.Query(
-		`SELECT id, lesson_key, path, pr, reviewer, body, url, created_at
+		`SELECT id, lesson_key, path, pr, reviewer, body, url, created_at, source
 		 FROM finding WHERE lesson_key = ? ORDER BY created_at, id`, clusterKey)
 	if err != nil {
 		return nil, err
@@ -640,7 +728,7 @@ func scanFindings(rows *sql.Rows) ([]model.Finding, error) {
 		var f model.Finding
 
 		err := rows.Scan(&f.ID, &f.LessonKey, &f.Path, &f.PR,
-			&f.Reviewer, &f.Body, &f.URL, &f.CreatedAt)
+			&f.Reviewer, &f.Body, &f.URL, &f.CreatedAt, &f.Source)
 		if err != nil {
 			return nil, err
 		}

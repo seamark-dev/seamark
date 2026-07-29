@@ -71,6 +71,48 @@ func TestOrientSurfacesTopLessons(t *testing.T) {
 	assert.Contains(t, out, "RUF001")
 }
 
+func TestFixDensityLine(t *testing.T) {
+	root := t.TempDir()
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	commits := []struct{ title, body string }{
+		{"fix: nil deref in loader", ""},
+		{"add feature", ""},
+		{"fix(api): wrong status code", ""},
+		{"refactor helpers", ""},
+		{"docs update", ""},
+		{"extend config", ""},
+		// Classified by its BODY at mining time; the density must agree.
+		{"harden worker", "Fixes #12"},
+	}
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		for i, c := range commits {
+			kind := model.DecisionCommit
+			if i == 5 {
+				kind = model.DecisionRevert // reverts count as corrections too
+			}
+
+			err := tx.InsertDecision(&model.Decision{
+				Kind: kind, Ref: fmt.Sprintf("sha%02d", i), TS: int64(1000 - i),
+				Title: c.title, Body: c.body, Files: []string{"api/hot.go"}})
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}))
+
+	var b strings.Builder
+	require.NoError(t, Why(&b, st, root, "api/hot.go"))
+
+	assert.Contains(t, b.String(), "fix density  4 of the last 7 commits here were fixes",
+		"two subject fixes, one revert, one body-only issue link")
+}
+
 func TestPinnedNoteSurvivesUntruncated(t *testing.T) {
 	// A pin's note IS the guidance: the template promises it is "shown to
 	// the agent verbatim", and on a real repo a hard 34-char cut reduced

@@ -335,7 +335,8 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	assert.Contains(t, string(data), "pooled-state-reset")
 	assert.Contains(t, string(data), "third-rule")
 	assert.NotContains(t, string(data), "second-rule", "dismissed proposals never land")
-	assert.Contains(t, string(data), "distilled by custom/v1")
+	assert.Contains(t, string(data), "distilled by custom/",
+		"provenance is stamped; the version bumps with the prompt")
 
 	out, err = run(t, "-C", root, "lessons", "--file", "api/a.go")
 	require.NoError(t, err)

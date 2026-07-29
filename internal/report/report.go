@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seamark-dev/seamark/internal/fixes"
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -173,12 +174,38 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 		}
 	}
 
-	decisions, err := st.DecisionsForFile(file, 10)
+	decisions, err := st.DecisionsForFile(file, 20)
 	if err != nil {
 		return err
 	}
 
+	// Fix density: the deterministic hotspot signal — what share of this
+	// file's recent commits were corrections. Phrased over the last-K
+	// window so it decays as non-fix history accumulates, never an
+	// all-time tally. Needs a minimum of history to mean anything.
+	if len(decisions) >= 5 {
+		fixCount := 0
+
+		for _, d := range decisions {
+			// Body too, not just the title: mining classifies on both, and
+			// a "harden worker" commit whose body says "Fixes #12" is a
+			// fix finding — the density must count the same commits.
+			if d.Kind == model.DecisionRevert || fixes.Classify(d.Title, d.Body) != "" {
+				fixCount++
+			}
+		}
+
+		if fixCount > 0 {
+			fmt.Fprintf(w, "\nfix density  %d of the last %d commits here were fixes\n",
+				fixCount, len(decisions))
+		}
+	}
+
 	if len(decisions) > 0 {
+		if len(decisions) > 10 {
+			decisions = decisions[:10]
+		}
+
 		fmt.Fprintf(w, "\nrecent decisions\n")
 		printDecisions(w, decisions)
 	}

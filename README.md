@@ -175,6 +175,29 @@ matching token appears in quoted tool output (`rg -A10` once minted a
 fake "A10" lesson from a bot's analysis script), and not in a repo that
 doesn't contain the linter's language at all.
 
+### Fixes are findings too
+
+Review quality varies; **fix commits exist in every repository.** The
+same `index --reviews` pass also mines them, purely from local git — no
+GitHub needed at all: commits classified as fixes by explicit intent
+(`fix:` subjects, `fixes #N` links, `Revert` commits; never substring
+matches — "prefix" and "fixture" don't count), minus the ones that
+teach nothing (typo/lint/CI chores, 30-file bulk refactors), minus
+cherry-pick duplicates (patch identity: a backport is the same event)
+and fixes that were later reverted. Each surviving fix becomes a
+finding whose body carries the commit message *and the patch* — because
+the patch is the signal that survives useless messages (measured: two
+anonymous "fix: PR review" commits still grouped correctly on patch
+content alone). Fix findings feed the distiller alongside review
+findings — a fix and the review comments on its PR are counted as one
+event — and power a deterministic hotspot line in `why`:
+
+```text
+fix density  9 of the last 20 commits here were fixes
+```
+
+phrased over a recent window so it decays as calmer history accumulates.
+
 It's reviewer-agnostic (bots and humans travel the same path) and
 best-effort: needs the GitHub CLI (`gh`) authenticated and a github.com
 remote; without them the layer is simply absent. Lessons refresh on the
