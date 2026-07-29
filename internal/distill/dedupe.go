@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
 // Deduplication of PROPOSALS, distinct from the deduplication of
@@ -83,18 +84,29 @@ func jaccard(a, b map[string]bool) float64 {
 }
 
 // topic is the comparable form of one pattern: its label and guidance
-// reduced to topic words.
+// reduced to topic words, plus the region it governs.
 type topic struct {
-	label string
-	rule  map[string]bool
-	note  map[string]bool
+	label  string
+	region string
+	rule   map[string]bool
+	note   map[string]bool
 }
 
 func newTopic(rule, note string) topic {
 	return topic{
-		label: rule,
-		// Rule labels are kebab-case slugs — short words like "nan" or
-		// "et" carry meaning there, so the floor is lower than in prose.
+		// The label is echoed back — into an agent prompt and onto a
+		// terminal — so it is normalized to the same kebab slug the
+		// distiller's own rules get. Pins are hand-written in committed
+		// config, which on a cloned or contributed-to repo is no more
+		// trusted than a review comment: unnormalized, a multiline rule
+		// would inject lines into the prompt's instruction block and a
+		// long one would blow the primer budget the label cap exists to
+		// bound. cleanRule strips everything but [a-z0-9-] and caps the
+		// length, so both are structurally impossible.
+		label: cleanRule(rule),
+		// Matching still reads the raw text: words() lowercases and
+		// drops punctuation itself, so normalization changes nothing
+		// about which patterns are judged to restate each other.
 		rule: words(strings.ReplaceAll(rule, "-", " "), 2),
 		note: words(note, 3),
 	}
@@ -147,7 +159,49 @@ func NewKnown(patterns ...[]model.Proposal) *Known {
 // Add records a pattern as known — used as a run proceeds, so two
 // groups in the same pass cannot both propose the same thing.
 func (k *Known) Add(p model.Proposal) {
-	k.topics = append(k.topics, newTopic(p.Rule, p.Note))
+	t := newTopic(p.Rule, p.Note)
+	t.region = p.Region
+	k.topics = append(k.topics, t)
+}
+
+// Labels lists the rule names already captured for an area, newest
+// first, at most limit of them. They are fed to the distiller so it can
+// skip what is known and spend the call looking for something else —
+// labels only, because the notes would cost more tokens than the
+// duplicates they prevent.
+func (k *Known) Labels(region string, limit int) []string {
+	var out []string
+
+	seen := map[string]bool{}
+
+	for _, t := range k.topics {
+		if len(out) >= limit {
+			break
+		}
+
+		if t.label == "" || seen[t.label] || !governs(t.region, region) {
+			continue
+		}
+
+		seen[t.label] = true
+		out = append(out, t.label)
+	}
+
+	return out
+}
+
+// governs reports whether a pattern pinned at pinRegion bears on work
+// in groupRegion. Repo-wide pins always do; otherwise either may
+// contain the other — a pin on api/services is worth knowing about
+// when distilling api, and vice versa. A cross-tree group (no common
+// region) sees everything, which the caller's limit bounds.
+func governs(pinRegion, groupRegion string) bool {
+	if pinRegion == "" || pinRegion == "*" || groupRegion == "" {
+		return true
+	}
+
+	return reviews.RegionMatches(pinRegion, groupRegion) ||
+		reviews.RegionMatches(groupRegion, pinRegion)
 }
 
 // Restated returns the label of the known pattern p duplicates, and

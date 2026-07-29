@@ -310,7 +310,14 @@ decide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; `--dismi
 The economics are engineered for repeated use: every group's evidence
 set has a signature, a distilled signature is **never paid for twice**,
 and a new finding reopens exactly its own group. `--limit` (default 10
-groups) and `--region` budget each run. Dismissals are permanent memory;
+groups) and `--region` budget each run — and a budgeted run spends its
+calls where they are worth most, reading the groups whose evidence no
+proposal has cited yet before the well-mined ones. Nothing is filtered
+out: coverage changes the order, never the corpus, because dropping
+evidence could starve a genuinely new pattern of the recurrence it
+needs. Each batch also arrives knowing the rule *labels* already pinned
+for its area, so the call looks past them — labels only, since carrying
+the notes would cost more tokens than the duplicates they prevent. Dismissals are permanent memory;
 a pattern only returns if its evidence changes.
 
 Candidate groups are read independently, so a repo-wide mistake shows up
