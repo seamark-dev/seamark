@@ -379,6 +379,45 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	assert.Contains(t, err.Error(), "one at a time")
 }
 
+func TestLessonsProposalsLedger(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// Empty ledger says so, and points at how to fill it.
+	out, err := run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+	assert.Contains(t, out, "no proposals yet")
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	for _, p := range []model.Proposal{
+		{Signature: "s1", Rule: "pending-one", Region: "api", Note: "Guard the boundary.",
+			Members: []int64{1, 2}, Agent: "claude/v2", Status: model.ProposalProposed},
+		{Signature: "s2", Rule: "applied-one", Region: "", Note: "n",
+			Members: []int64{3, 4}, Agent: "claude/v2", Status: model.ProposalApplied},
+		{Signature: "s3", Rule: "dismissed-one", Region: "web", Note: "n",
+			Members: []int64{5, 6}, Agent: "claude/v2", Status: model.ProposalDismissed},
+	} {
+		require.NoError(t, st.InsertProposal(&p))
+	}
+
+	require.NoError(t, st.Close())
+
+	out, err = run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "1 pending, 1 applied, 1 dismissed")
+	assert.Contains(t, out, "pending-one")
+	assert.Contains(t, out, "Guard the boundary.", "pending proposals show their full note")
+	assert.Contains(t, out, "applied-one")
+	assert.Contains(t, out, "dismissed-one")
+	assert.Contains(t, out, "*", "a repo-wide region renders as *")
+	assert.Contains(t, out, "--apply p<id>", "the decide commands ride along")
+}
+
 func TestSelectionParsingAndResolution(t *testing.T) {
 	pending := []model.Proposal{
 		{ID: 1, Rule: "a"}, {ID: 3, Rule: "c"}, {ID: 4, Rule: "d"}, {ID: 9, Rule: "i"},

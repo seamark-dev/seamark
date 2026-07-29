@@ -22,19 +22,20 @@ import (
 
 func newLessonsCmd(opts *options) *cobra.Command {
 	var (
-		file       string
-		region     string
-		hookMode   bool
-		list       bool
-		stats      bool
-		distillRun bool
-		limit      int
-		applyIDs   string
-		dismissIDs string
+		file         string
+		region       string
+		hookMode     bool
+		list         bool
+		stats        bool
+		distillRun   bool
+		proposalList bool
+		limit        int
+		applyIDs     string
+		dismissIDs   string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "lessons [--file <path> | --list [--region <prefix>] | --stats | --distill | --apply | --dismiss]",
+		Use:   "lessons [--file <path> | --list [--region <prefix>] | --stats | --distill | --proposals]",
 		Short: "Show the recurring review feedback mined from pull requests",
 		Long: `Prints the review lessons (mined by "index --reviews", tuned by
 .seamark/lessons.yaml) — the mistakes reviewers keep flagging.
@@ -55,6 +56,8 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    already-read groups are never paid for twice. Fully
                    optional: pins are plain YAML you can write by hand —
                    distill only drafts them.
+  --proposals      the decision ledger — what is pending, applied, and
+                   dismissed. Read-only: never spends an agent call.
   --apply p3,p7    turn chosen proposals into pins; ranges work too
                    (p1..p9 applies whatever inside is still pending).
                    Writes lessons.yaml only when config.yaml sets
@@ -91,6 +94,8 @@ a file has no lessons.`,
 				return runLessonsApply(cmd, opts, applyIDs+","+extra)
 			case strings.TrimSpace(dismissIDs) != "":
 				return runLessonsDismiss(cmd, opts, dismissIDs+","+extra)
+			case proposalList:
+				return runLessonsProposals(cmd, opts)
 			case distillRun:
 				return runLessonsDistill(cmd, opts, strings.TrimSpace(region), limit)
 			case list || strings.TrimSpace(region) != "":
@@ -111,7 +116,7 @@ a file has no lessons.`,
 
 				return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, file), lessons, 0)
 			default:
-				return fmt.Errorf("provide --file <path>, --list, --stats, --distill, --apply, --dismiss, or --hook")
+				return fmt.Errorf("provide --file <path>, --list, --stats, --distill, --proposals, --apply, --dismiss, or --hook")
 			}
 		},
 	}
@@ -124,6 +129,8 @@ a file has no lessons.`,
 		"read a PreToolUse JSON payload from stdin and emit lessons as additionalContext")
 	cmd.Flags().BoolVar(&distillRun, "distill", false,
 		"distill recurring patterns from raw findings into proposed pins (needs the agent CLI)")
+	cmd.Flags().BoolVar(&proposalList, "proposals", false,
+		"show the distillation ledger: pending, applied, and dismissed proposals (no agent calls)")
 	cmd.Flags().IntVar(&limit, "limit", 10,
 		"max new groups one --distill run sends to the agent (0 = all)")
 	cmd.Flags().StringVar(&applyIDs, "apply", "",
@@ -368,6 +375,31 @@ func runLessonsDismiss(cmd *cobra.Command, opts *options, raw string) error {
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "dismissed %d proposal(s) — remembered; the same evidence will not return\n", n)
+
+	return nil
+}
+
+// runLessonsProposals prints the distillation ledger. Read-only and
+// offline: the plan view costs an agent call when new groups exist, so
+// "what is waiting for me?" needs a way to ask for free.
+func runLessonsProposals(cmd *cobra.Command, opts *options) error {
+	st, _, err := openIndex(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	states := make([][]model.Proposal, 3)
+
+	for i, status := range []string{
+		model.ProposalProposed, model.ProposalApplied, model.ProposalDismissed,
+	} {
+		if states[i], err = st.Proposals(status); err != nil {
+			return err
+		}
+	}
+
+	report.PrintProposalLedger(cmd.OutOrStdout(), states[0], states[1], states[2])
 
 	return nil
 }

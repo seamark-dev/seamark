@@ -518,19 +518,73 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal)
 	fmt.Fprintf(w, "\nproposed pins — distilled from review findings, awaiting YOUR decision\n")
 
 	for _, p := range pending {
-		region := p.Region
-		if region == "" {
-			region = "*"
-		}
-
 		fmt.Fprintf(w, "\n  p%-4d %-34s %-26s %d findings cited [%s]\n",
-			p.ID, render.Sanitize(p.Rule), render.Sanitize(region),
+			p.ID, render.Sanitize(p.Rule), render.Sanitize(regionLabel(p.Region)),
 			len(p.Members), render.Sanitize(p.Agent))
 		fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Note))
 	}
 
 	fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; "+
 		"`--dismiss` remembers the no\n")
+}
+
+// PrintProposalLedger renders the distillation decision record: what is
+// still pending (with the full note and the commands that decide it),
+// then what was applied or dismissed, compactly. Read-only — unlike
+// --distill, it never spends an agent call, so "what did I decide?" and
+// "what is waiting?" cost nothing to ask.
+func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Proposal) {
+	if len(pending)+len(applied)+len(dismissed) == 0 {
+		fmt.Fprintln(w, "no proposals yet — run `seamark lessons --distill` to draft some "+
+			"(or write pins by hand in .seamark/lessons.yaml)")
+
+		return
+	}
+
+	fmt.Fprintf(w, "distilled proposals — %d pending, %d applied, %d dismissed\n",
+		len(pending), len(applied), len(dismissed))
+
+	if len(pending) > 0 {
+		fmt.Fprintf(w, "\nawaiting your decision\n")
+
+		for _, p := range pending {
+			fmt.Fprintf(w, "\n  p%-4d %-34s %-26s %d findings cited [%s]\n",
+				p.ID, render.Sanitize(p.Rule), render.Sanitize(regionLabel(p.Region)),
+				len(p.Members), render.Sanitize(p.Agent))
+			fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Note))
+		}
+
+		fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p<id>` (ranges work: p1..p9); "+
+			"`--dismiss` remembers the no\n")
+	}
+
+	printDecided(w, "applied — these are pins in .seamark/lessons.yaml", applied)
+	printDecided(w, "dismissed — not re-proposed unless their evidence changes", dismissed)
+}
+
+// printDecided lists settled proposals one line each: the decision
+// record, not the guidance (the applied ones already speak through
+// lessons.yaml).
+func printDecided(w io.Writer, heading string, ps []model.Proposal) {
+	if len(ps) == 0 {
+		return
+	}
+
+	fmt.Fprintf(w, "\n%s\n", heading)
+
+	for _, p := range ps {
+		fmt.Fprintf(w, "  p%-4d %-34s %s\n",
+			p.ID, render.Sanitize(p.Rule), render.Sanitize(regionLabel(p.Region)))
+	}
+}
+
+// regionLabel renders a proposal's region, repo-wide as "*".
+func regionLabel(region string) string {
+	if region == "" {
+		return "*"
+	}
+
+	return region
 }
 
 // DistillSummary is the run-shape PrintDistillPlan reports; a mirror of
