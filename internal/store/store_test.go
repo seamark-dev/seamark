@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -323,6 +324,39 @@ func TestProposalLifecycle(t *testing.T) {
 	require.Len(t, applied, 1)
 }
 
+func TestReplaceFixFindingsTouchesOnlyFixSources(t *testing.T) {
+	s := openTestStore(t)
+
+	// One finding per source, plus a source no provider produces yet —
+	// the stand-in for a future provider on its own cadence, which a fix
+	// mine must not wipe.
+	seed := []model.Finding{
+		{ID: 1, Path: "a.py", Body: "review", Source: model.SourceReview},
+		{ID: 2, Path: "b.go", Body: "conv", Source: model.SourceFixConventional},
+		{ID: 3, Path: "c.go", Body: "link", Source: model.SourceFixIssueLink},
+		{ID: 4, Path: "d.go", Body: "subj", Source: model.SourceFixSubject},
+		{ID: 5, Path: "e.go", Body: "revert", Source: model.SourceRevert},
+		{ID: 6, Path: "f.go", Body: "ci", Source: "ci:failure"},
+	}
+	require.NoError(t, s.ReplaceLessons(nil, seed))
+
+	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
+		{ID: 9, Path: "new.go", Body: "fresh", Source: model.SourceFixConventional},
+	}))
+
+	got, err := s.AllFindings()
+	require.NoError(t, err)
+
+	left := map[int64]string{}
+	for _, f := range got {
+		left[f.ID] = f.Source
+	}
+
+	assert.Equal(t, map[int64]string{
+		1: model.SourceReview, 6: "ci:failure", 9: model.SourceFixConventional,
+	}, left, "every fix-mined source is swapped; other providers' findings survive")
+}
+
 func TestSaveDistilledGroupIsAtomic(t *testing.T) {
 	s := openTestStore(t)
 
@@ -352,6 +386,50 @@ func TestSaveDistilledGroupIsAtomic(t *testing.T) {
 	sigs, err = s.DistilledSignatures()
 	require.NoError(t, err)
 	assert.True(t, sigs["sig-2"])
+}
+
+func TestMigrationAddsFindingSource(t *testing.T) {
+	// A database created before fix mining has a finding table without
+	// the source column; Open must upgrade it in place and classify the
+	// existing rows as review findings.
+	path := filepath.Join(t.TempDir(), "index.db")
+
+	raw, err := sql.Open("sqlite", "file:"+path)
+	require.NoError(t, err)
+	_, err = raw.Exec(`CREATE TABLE finding (
+		id INTEGER PRIMARY KEY, lesson_key TEXT NOT NULL, path TEXT NOT NULL,
+		pr INTEGER NOT NULL DEFAULT 0, reviewer TEXT NOT NULL DEFAULT '',
+		body TEXT NOT NULL, url TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL DEFAULT 0)`)
+	require.NoError(t, err)
+	_, err = raw.Exec(`INSERT INTO finding (id, lesson_key, path, body) VALUES (7, 'k', 'a.py', 'old row')`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	s, err := Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	got, err := s.AllFindings()
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, model.SourceReview, got[0].Source, "pre-migration rows are review findings")
+
+	// And the upgraded table accepts the new lifecycle.
+	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
+		{ID: 99, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
+	}))
+
+	got, err = s.AllFindings()
+	require.NoError(t, err)
+	assert.Len(t, got, 2)
+
+	// Review re-mine wipes only review rows; the fix finding survives.
+	require.NoError(t, s.ReplaceLessons(nil, nil))
+
+	got, err = s.AllFindings()
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, int64(99), got[0].ID, "fix findings live on the git cadence")
 }
 
 func TestFindingsRoundTripAndSwap(t *testing.T) {

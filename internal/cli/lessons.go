@@ -22,19 +22,21 @@ import (
 
 func newLessonsCmd(opts *options) *cobra.Command {
 	var (
-		file       string
-		region     string
-		hookMode   bool
-		list       bool
-		stats      bool
-		distillRun bool
-		limit      int
-		applyIDs   string
-		dismissIDs string
+		file         string
+		region       string
+		hookMode     bool
+		list         bool
+		stats        bool
+		distillRun   bool
+		proposalList bool
+		limit        int
+		applyIDs     string
+		dismissIDs   string
+		pruneIDs     string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "lessons [--file <path> | --list [--region <prefix>] | --stats | --distill | --apply | --dismiss]",
+		Use:   "lessons [--file <path> | --list [--region <prefix>] | --stats | --distill | --proposals]",
 		Short: "Show the recurring review feedback mined from pull requests",
 		Long: `Prints the review lessons (mined by "index --reviews", tuned by
 .seamark/lessons.yaml) — the mistakes reviewers keep flagging.
@@ -55,6 +57,8 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    already-read groups are never paid for twice. Fully
                    optional: pins are plain YAML you can write by hand —
                    distill only drafts them.
+  --proposals      the decision ledger — what is pending, applied, and
+                   dismissed. Read-only: never spends an agent call.
   --apply p3,p7    turn chosen proposals into pins; ranges work too
                    (p1..p9 applies whatever inside is still pending).
                    Writes lessons.yaml only when config.yaml sets
@@ -62,6 +66,11 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    Never automatic.
   --dismiss p2     record a no — the same evidence is never re-proposed.
                    Takes lists and ranges like --apply
+  --prune p16,p45  drop applied pins that restate another (the ledger
+                   names the clusters and hands you the command). Not a
+                   dismissal: the theme stays pinned by its survivor, so
+                   the distiller still counts it as known. Edits
+                   lessons.yaml only with distill.write, like --apply.
   --hook           read a Claude Code PreToolUse payload from stdin and emit
                    the edited file's lessons as additionalContext
 
@@ -69,17 +78,25 @@ func newLessonsCmd(opts *options) *cobra.Command {
 a file has no lessons.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Applying and dismissing are opposite decisions; both at
-			// once would silently route everything (positional ids
-			// included) to apply.
-			if strings.TrimSpace(applyIDs) != "" && strings.TrimSpace(dismissIDs) != "" {
-				return fmt.Errorf("--apply and --dismiss are opposite decisions — run them one at a time")
+			// Apply, dismiss and prune are three different decisions
+			// about the same ids; two at once would silently route
+			// everything (positional ids included) to whichever the
+			// switch reaches first.
+			decisions := 0
+			for _, ids := range []string{applyIDs, dismissIDs, pruneIDs} {
+				if strings.TrimSpace(ids) != "" {
+					decisions++
+				}
+			}
+
+			if decisions > 1 {
+				return fmt.Errorf("--apply, --dismiss and --prune are different decisions — run them one at a time")
 			}
 
 			// `--apply p1, p2` is natural typing; the shell splits the
 			// spaced list into positional args, so fold them back in.
-			if len(args) > 0 && strings.TrimSpace(applyIDs)+strings.TrimSpace(dismissIDs) == "" {
-				return fmt.Errorf("unexpected argument %q — provide --file, --list, --distill, --apply, or --dismiss", args[0])
+			if len(args) > 0 && decisions == 0 {
+				return fmt.Errorf("unexpected argument %q — provide --file, --list, --distill, --apply, --dismiss, or --prune", args[0])
 			}
 
 			extra := strings.Join(args, ",")
@@ -91,6 +108,10 @@ a file has no lessons.`,
 				return runLessonsApply(cmd, opts, applyIDs+","+extra)
 			case strings.TrimSpace(dismissIDs) != "":
 				return runLessonsDismiss(cmd, opts, dismissIDs+","+extra)
+			case strings.TrimSpace(pruneIDs) != "":
+				return runLessonsPrune(cmd, opts, pruneIDs+","+extra)
+			case proposalList:
+				return runLessonsProposals(cmd, opts)
 			case distillRun:
 				return runLessonsDistill(cmd, opts, strings.TrimSpace(region), limit)
 			case list || strings.TrimSpace(region) != "":
@@ -111,7 +132,7 @@ a file has no lessons.`,
 
 				return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, file), lessons, 0)
 			default:
-				return fmt.Errorf("provide --file <path>, --list, --stats, --distill, --apply, --dismiss, or --hook")
+				return fmt.Errorf("provide --file <path>, --list, --stats, --distill, --proposals, --apply, --dismiss, or --hook")
 			}
 		},
 	}
@@ -124,12 +145,16 @@ a file has no lessons.`,
 		"read a PreToolUse JSON payload from stdin and emit lessons as additionalContext")
 	cmd.Flags().BoolVar(&distillRun, "distill", false,
 		"distill recurring patterns from raw findings into proposed pins (needs the agent CLI)")
+	cmd.Flags().BoolVar(&proposalList, "proposals", false,
+		"show the distillation ledger: pending, applied, and dismissed proposals (no agent calls)")
 	cmd.Flags().IntVar(&limit, "limit", 10,
 		"max new groups one --distill run sends to the agent (0 = all)")
 	cmd.Flags().StringVar(&applyIDs, "apply", "",
 		"apply proposals as pins by id or range (p3,p7 or p1..p9); writes lessons.yaml only with distill.write in config")
 	cmd.Flags().StringVar(&dismissIDs, "dismiss", "",
 		"dismiss proposals by id or range (p2 or p1..p9) — remembered, never re-proposed for the same evidence")
+	cmd.Flags().StringVar(&pruneIDs, "prune", "",
+		"remove applied pins that restate another (p16,p45) — the theme stays pinned by its survivor")
 
 	return cmd
 }
@@ -222,17 +247,19 @@ func parsePID(s string) (int64, error) {
 	return id, nil
 }
 
-// resolveSelection turns a selection into concrete pending proposals,
-// id order, deduplicated. Exact ids must be pending; ranges take what
-// they find.
-func resolveSelection(pending []model.Proposal, raw string) ([]model.Proposal, error) {
+// resolveSelection turns a selection into concrete proposals from the
+// candidate set, id order, deduplicated. Exact ids must be in that set;
+// ranges take what they find. state names what the candidates are
+// ("pending", "applied") so an error says which ledger it looked in —
+// pruning searches applied proposals, not pending ones.
+func resolveSelection(candidates []model.Proposal, raw, state string) ([]model.Proposal, error) {
 	sel, err := parseSelection(raw)
 	if err != nil {
 		return nil, err
 	}
 
-	byID := make(map[int64]model.Proposal, len(pending))
-	for _, p := range pending {
+	byID := make(map[int64]model.Proposal, len(candidates))
+	for _, p := range candidates {
 		byID[p.ID] = p
 	}
 
@@ -243,7 +270,7 @@ func resolveSelection(pending []model.Proposal, raw string) ([]model.Proposal, e
 	for _, id := range sel.exact {
 		p, ok := byID[id]
 		if !ok {
-			return nil, fmt.Errorf("p%d is not a pending proposal (already decided, or unknown — see the distill plan)", id)
+			return nil, fmt.Errorf("p%d is not %s (see `seamark lessons --proposals`)", id, state)
 		}
 
 		if !added[id] {
@@ -253,7 +280,7 @@ func resolveSelection(pending []model.Proposal, raw string) ([]model.Proposal, e
 	}
 
 	for _, r := range sel.ranges {
-		for _, p := range pending {
+		for _, p := range candidates {
 			if p.ID >= r[0] && p.ID <= r[1] && !added[p.ID] {
 				added[p.ID] = true
 				out = append(out, p)
@@ -262,7 +289,7 @@ func resolveSelection(pending []model.Proposal, raw string) ([]model.Proposal, e
 	}
 
 	if len(out) == 0 {
-		return nil, fmt.Errorf("nothing in %q is still pending — see the distill plan", raw)
+		return nil, fmt.Errorf("nothing in %q is %s (see `seamark lessons --proposals`)", raw, state)
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -287,7 +314,7 @@ func runLessonsApply(cmd *cobra.Command, opts *options, raw string) error {
 		return err
 	}
 
-	ps, err := resolveSelection(pending, raw)
+	ps, err := resolveSelection(pending, raw, "pending")
 	if err != nil {
 		return err
 	}
@@ -338,6 +365,81 @@ func runLessonsApply(cmd *cobra.Command, opts *options, raw string) error {
 	return nil
 }
 
+// runLessonsPrune retires applied pins that restate another. It is not
+// a dismissal: the guidance stays pinned by whichever entry survives,
+// so the proposal becomes "superseded" and the theme is still known to
+// the distiller. Editing lessons.yaml obeys the same gate as --apply.
+func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
+	st, root, err := openIndex(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	applied, err := st.Proposals(model.ProposalApplied)
+	if err != nil {
+		return err
+	}
+
+	ps, err := resolveSelection(applied, raw, "applied")
+	if err != nil {
+		return err
+	}
+
+	out := cmd.OutOrStdout()
+
+	// Rule plus region: the same rule is legitimately pinned in several
+	// areas, and pruning one must not take its namesakes with it.
+	keys := make([]distill.PinKey, len(ps))
+	ids := make([]int64, len(ps))
+
+	for i, p := range ps {
+		keys[i] = distill.PinKey{Rule: p.Rule, Region: p.Region}
+		ids[i] = p.ID
+	}
+
+	cfg, err := distill.LoadConfig(root)
+	if err != nil {
+		return err
+	}
+
+	if !cfg.Distill.Write {
+		fmt.Fprintf(out, "distill.write is off in .seamark/config.yaml — remove these pins from "+
+			".seamark/lessons.yaml by hand:\n\n")
+
+		for _, p := range ps {
+			fmt.Fprintf(out, "  p%-4d %s\n", p.ID, p.Rule)
+		}
+
+		fmt.Fprintln(out, "\n(the proposals stay applied; enable distill.write to let prune edit the file)")
+
+		return nil
+	}
+
+	removed, err := distill.RemovePins(root, keys)
+	if err != nil {
+		return err
+	}
+
+	n, err := st.SupersedeProposals(ids)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "pruned %d pin(s) from .seamark/lessons.yaml, %d proposal(s) marked superseded — "+
+		"review the diff and commit it\n", len(removed), n)
+
+	for _, p := range ps {
+		fmt.Fprintf(out, "  p%-4d %s\n", p.ID, p.Rule)
+	}
+
+	if len(removed) < len(ps) {
+		fmt.Fprintf(out, "(%d were already absent from the file)\n", len(ps)-len(removed))
+	}
+
+	return nil
+}
+
 // runLessonsDismiss records a no on chosen proposals. The signature
 // memory does the rest: the same evidence set is never re-proposed.
 func runLessonsDismiss(cmd *cobra.Command, opts *options, raw string) error {
@@ -352,7 +454,7 @@ func runLessonsDismiss(cmd *cobra.Command, opts *options, raw string) error {
 		return err
 	}
 
-	ps, err := resolveSelection(pending, raw)
+	ps, err := resolveSelection(pending, raw, "pending")
 	if err != nil {
 		return err
 	}
@@ -368,6 +470,34 @@ func runLessonsDismiss(cmd *cobra.Command, opts *options, raw string) error {
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "dismissed %d proposal(s) — remembered; the same evidence will not return\n", n)
+
+	return nil
+}
+
+// runLessonsProposals prints the distillation ledger. Read-only and
+// offline: the plan view costs an agent call when new groups exist, so
+// "what is waiting for me?" needs a way to ask for free.
+func runLessonsProposals(cmd *cobra.Command, opts *options) error {
+	st, _, err := openIndex(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	states := make([][]model.Proposal, 3)
+
+	for i, status := range []string{
+		model.ProposalProposed, model.ProposalApplied, model.ProposalDismissed,
+	} {
+		if states[i], err = st.Proposals(status); err != nil {
+			return err
+		}
+	}
+
+	// Applied pins are the ones that cost context on every edit, so the
+	// duplicate audit runs over them.
+	report.PrintProposalLedger(cmd.OutOrStdout(), states[0], states[1], states[2],
+		distill.Clusters(states[1]))
 
 	return nil
 }
@@ -397,9 +527,29 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		region = toRepoRel(root, region)
 	}
 
+	// The workspace's pins — hand-written and applied alike — are
+	// patterns the distiller must not re-derive under a new name. A
+	// malformed config must not abort a run that is about to spend real
+	// tokens, but it must not pass unnoticed either: without the pins
+	// every already-captured pattern looks new.
+	lcfg, err := reviews.LoadConfig(root)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"warn: .seamark/lessons.yaml ignored (%s) — distilling without your pins, "+
+				"so patterns you already pinned may be proposed again\n", err)
+
+		lcfg = reviews.DefaultConfig()
+	}
+
+	pins := make([]model.Proposal, 0, len(lcfg.Pin))
+	for _, p := range lcfg.Pin {
+		pins = append(pins, model.Proposal{Rule: p.Rule, Note: p.Note, Region: p.Region})
+	}
+
 	dopts := distill.Options{
 		Region: region,
 		Limit:  limit,
+		Pins:   pins,
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 		},
@@ -432,6 +582,7 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		GroupsFailed:  res.GroupsFailed,
 		GroupsPending: res.GroupsPending,
 		PrunedStale:   res.PrunedStale,
+		Duplicates:    res.Duplicates,
 		TokensNote:    res.CostNote(),
 	}, pending)
 

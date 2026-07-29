@@ -279,8 +279,8 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	require.NoError(t, os.WriteFile(replyPath,
 		[]byte(`{"patterns":[
 			{"rule":"pooled-state-reset","note":"Reset pooled state on every reuse.","finding_ids":[11,12]},
-			{"rule":"second-rule","note":"Second note.","finding_ids":[11,12]},
-			{"rule":"third-rule","note":"Third note.","finding_ids":[11,12]}]}`),
+			{"rule":"second-rule","note":"Validate request payload bounds before touching the database.","finding_ids":[11,12]},
+			{"rule":"third-rule","note":"Close the websocket subscription on every worker exit path.","finding_ids":[11,12]}]}`),
 		0o644))
 
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
@@ -335,7 +335,8 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	assert.Contains(t, string(data), "pooled-state-reset")
 	assert.Contains(t, string(data), "third-rule")
 	assert.NotContains(t, string(data), "second-rule", "dismissed proposals never land")
-	assert.Contains(t, string(data), "distilled by custom/v1")
+	assert.Contains(t, string(data), "distilled by custom/",
+		"provenance is stamped; the version bumps with the prompt")
 
 	out, err = run(t, "-C", root, "lessons", "--file", "api/a.go")
 	require.NoError(t, err)
@@ -345,11 +346,11 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	// A bare id is a precise pointer: decided or unknown errors by name.
 	_, err = run(t, "-C", root, "lessons", "--apply", "p1")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "p1 is not a pending proposal")
+	assert.Contains(t, err.Error(), "p1 is not pending")
 
 	_, err = run(t, "-C", root, "lessons", "--dismiss", "p999")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "p999 is not a pending proposal")
+	assert.Contains(t, err.Error(), "p999 is not pending")
 
 	_, err = run(t, "-C", root, "lessons", "--apply", "pX")
 	require.Error(t, err)
@@ -360,12 +361,12 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	// tripping cobra's unknown-command error (a real-session paper cut).
 	_, err = run(t, "-C", root, "lessons", "--apply", "p9,", "p10")
 	require.Error(t, err, "nothing pending — but the spaced ids must PARSE")
-	assert.Contains(t, err.Error(), "p9 is not a pending proposal", "spaced list understood, error by name")
+	assert.Contains(t, err.Error(), "p9 is not pending", "spaced list understood, error by name")
 
 	// An exhausted range says so instead of pretending success.
 	_, err = run(t, "-C", root, "lessons", "--apply", "p1..p3")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "still pending")
+	assert.Contains(t, err.Error(), "is pending")
 
 	// A stray positional without --apply/--dismiss stays an error.
 	_, err = run(t, "-C", root, "lessons", "p1")
@@ -378,6 +379,125 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	assert.Contains(t, err.Error(), "one at a time")
 }
 
+func TestLessonsProposalsLedger(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// Empty ledger says so, and points at how to fill it.
+	out, err := run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+	assert.Contains(t, out, "no proposals yet")
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	for _, p := range []model.Proposal{
+		{Signature: "s1", Rule: "pending-one", Region: "api", Note: "Guard the boundary.",
+			Members: []int64{1, 2}, Agent: "claude/v2", Status: model.ProposalProposed},
+		{Signature: "s2", Rule: "applied-one", Region: "", Note: "n",
+			Members: []int64{3, 4}, Agent: "claude/v2", Status: model.ProposalApplied},
+		{Signature: "s3", Rule: "dismissed-one", Region: "web", Note: "n",
+			Members: []int64{5, 6}, Agent: "claude/v2", Status: model.ProposalDismissed},
+	} {
+		require.NoError(t, st.InsertProposal(&p))
+	}
+
+	require.NoError(t, st.Close())
+
+	out, err = run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "1 pending, 1 applied, 1 dismissed")
+	assert.Contains(t, out, "pending-one")
+	assert.Contains(t, out, "Guard the boundary.", "pending proposals show their full note")
+	assert.Contains(t, out, "applied-one")
+	assert.Contains(t, out, "dismissed-one")
+	assert.Contains(t, out, "*", "a repo-wide region renders as *")
+	assert.Contains(t, out, "--apply p<id>", "the decide commands ride along")
+}
+
+func TestLessonsPruneRetiresRestatements(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// Two pins saying the same thing, one saying something else.
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	for _, p := range []model.Proposal{
+		{Signature: "s1", Rule: "docs-code-drift", Region: "api",
+			Note:    "Update every doc, comment, and README that describes the changed behavior.",
+			Members: []int64{1, 2, 3}, Agent: "claude/v2", Status: model.ProposalApplied},
+		{Signature: "s2", Rule: "docs-out-of-sync-with-code", Region: "api",
+			Note:    "Keep docstrings, comments, and README examples matching the code when behavior changes.",
+			Members: []int64{4, 5}, Agent: "claude/v2", Status: model.ProposalApplied},
+		{Signature: "s3", Rule: "bounded-event-deferral", Region: "api",
+			Note:    "Route deferred events through one bounded queue so backpressure cannot amplify goroutines.",
+			Members: []int64{6, 7}, Agent: "claude/v2", Status: model.ProposalApplied},
+	} {
+		require.NoError(t, st.InsertProposal(&p))
+	}
+
+	require.NoError(t, st.Close())
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n"+
+			"  - rule: docs-code-drift\n    region: api\n    note: Update every doc.\n"+
+			"  - rule: docs-out-of-sync-with-code\n    region: api\n    note: Keep docstrings matching.\n"+
+			"  - rule: bounded-event-deferral\n    region: api\n    note: One bounded queue.\n"), 0o644))
+
+	// The ledger names the cluster and hands over a ready command.
+	out, err := run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+	assert.Contains(t, out, "near-duplicates")
+	assert.Contains(t, out, "keep  p1", "the pin resting on more evidence survives")
+	assert.Contains(t, out, "prune p2")
+	assert.Contains(t, out, "--prune p2")
+	assert.NotContains(t, out, "prune p3", "distinct guidance is never suggested for pruning")
+
+	// Gate off: it tells you what to remove, and changes nothing.
+	out, err = run(t, "-C", root, "lessons", "--prune", "p2")
+	require.NoError(t, err)
+	assert.Contains(t, out, "distill.write is off")
+	assert.Contains(t, out, "docs-out-of-sync-with-code")
+
+	data, err := os.ReadFile(filepath.Join(root, ".seamark", "lessons.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "docs-out-of-sync-with-code", "nothing removed without the gate")
+
+	// Gate on: the pin goes, the survivor and the unrelated pin stay,
+	// and the proposal is superseded rather than dismissed.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("distill:\n  write: true\n"), 0o644))
+
+	out, err = run(t, "-C", root, "lessons", "--prune", "p2")
+	require.NoError(t, err)
+	assert.Contains(t, out, "pruned 1 pin(s)")
+	assert.Contains(t, out, "1 proposal(s) marked superseded")
+
+	data, err = os.ReadFile(filepath.Join(root, ".seamark", "lessons.yaml"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "docs-out-of-sync-with-code")
+	assert.Contains(t, string(data), "docs-code-drift")
+	assert.Contains(t, string(data), "bounded-event-deferral")
+
+	out, err = run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+	assert.Contains(t, out, "2 applied", "the pruned one left the applied set")
+	assert.NotContains(t, out, "near-duplicates", "and the cluster is gone")
+
+	// A pruned pin is not a dismissal: pruning something never applied
+	// is refused rather than silently recorded.
+	_, err = run(t, "-C", root, "lessons", "--prune", "p2")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "p2 is not applied", "prune searches the applied ledger, and says so")
+}
+
 func TestSelectionParsingAndResolution(t *testing.T) {
 	pending := []model.Proposal{
 		{ID: 1, Rule: "a"}, {ID: 3, Rule: "c"}, {ID: 4, Rule: "d"}, {ID: 9, Rule: "i"},
@@ -385,7 +505,7 @@ func TestSelectionParsingAndResolution(t *testing.T) {
 
 	// A range takes what it finds (2 is a hole), dash form included,
 	// mixed with exact ids, deduplicated, id-ordered.
-	got, err := resolveSelection(pending, "p3, p1..p4, 9")
+	got, err := resolveSelection(pending, "p3, p1..p4, 9", "pending")
 	require.NoError(t, err)
 
 	ids := make([]int64, len(got))
@@ -395,23 +515,23 @@ func TestSelectionParsingAndResolution(t *testing.T) {
 
 	assert.Equal(t, []int64{1, 3, 4, 9}, ids)
 
-	got, err = resolveSelection(pending, "p1-p4")
+	got, err = resolveSelection(pending, "p1-p4", "pending")
 	require.NoError(t, err)
 	assert.Len(t, got, 3, "dash ranges work like dotted ones")
 
 	// Reversed and absurd ranges fail loudly.
-	_, err = resolveSelection(pending, "p9..p1")
+	_, err = resolveSelection(pending, "p9..p1", "pending")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reversed")
 
-	_, err = resolveSelection(pending, "p1..p99999")
+	_, err = resolveSelection(pending, "p1..p99999", "pending")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "implausibly wide")
 
 	// Exact ids stay strict even next to a tolerant range.
-	_, err = resolveSelection(pending, "p2, p1..p9")
+	_, err = resolveSelection(pending, "p2, p1..p9", "pending")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "p2 is not a pending proposal")
+	assert.Contains(t, err.Error(), "p2 is not pending")
 }
 
 func TestHookBudgetsPinsFileViewDoesNot(t *testing.T) {

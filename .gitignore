@@ -20,3 +20,7 @@ CLAUDE.md
 !.seamark/effects.yaml
 !.seamark/lessons.yaml
 !.seamark/config.yaml
+
+# Codex
+.codex/
+AGENTS.md

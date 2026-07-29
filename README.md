@@ -175,9 +175,34 @@ matching token appears in quoted tool output (`rg -A10` once minted a
 fake "A10" lesson from a bot's analysis script), and not in a repo that
 doesn't contain the linter's language at all.
 
+### Fixes are findings too
+
+Review quality varies; **fix commits exist in every repository.** The
+same `index --reviews` pass also mines them, purely from local git — no
+GitHub needed at all: commits classified as fixes by explicit intent
+(`fix:` subjects, `fixes #N` links, `Revert` commits; never substring
+matches — "prefix" and "fixture" don't count), minus the ones that
+teach nothing (typo/lint/CI chores, 30-file bulk refactors), minus
+cherry-pick duplicates (patch identity: a backport is the same event)
+and fixes that were later reverted. Each surviving fix becomes a
+finding whose body carries the commit message *and the patch* — because
+the patch is the signal that survives useless messages (measured: two
+anonymous "fix: PR review" commits still grouped correctly on patch
+content alone). Fix findings feed the distiller alongside review
+findings — a fix and the review comments on its PR are counted as one
+event — and power a deterministic hotspot line in `why`:
+
+```text
+fix density  9 of the last 20 commits here were fixes
+```
+
+phrased over a recent window so it decays as calmer history accumulates.
+
 It's reviewer-agnostic (bots and humans travel the same path) and
-best-effort: needs the GitHub CLI (`gh`) authenticated and a github.com
-remote; without them the layer is simply absent. Lessons refresh on the
+best-effort: **review-comment** mining needs the GitHub CLI (`gh`)
+authenticated and a github.com remote, and without them that half is
+simply absent — fix findings keep coming from local git, offline and on
+any remote, since the two sources degrade independently. Lessons refresh on the
 review cadence — `--reviews` is opt-in, and a normal `seamark index` (and
 every agent tool call) leaves them untouched rather than re-hitting the
 network. A failed mine (offline, logged out) fails safe: it keeps the
@@ -287,8 +312,35 @@ decide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; `--dismi
 The economics are engineered for repeated use: every group's evidence
 set has a signature, a distilled signature is **never paid for twice**,
 and a new finding reopens exactly its own group. `--limit` (default 10
-groups) and `--region` budget each run. Dismissals are permanent memory;
+groups) and `--region` budget each run — and a budgeted run spends its
+calls where they are worth most, reading the groups whose evidence no
+proposal has cited yet before the well-mined ones. Nothing is filtered
+out: coverage changes the order, never the corpus, because dropping
+evidence could starve a genuinely new pattern of the recurrence it
+needs. Each batch also arrives knowing the rule *labels* already pinned
+for its area, so the call looks past them — labels only, since carrying
+the notes would cost more tokens than the duplicates they prevent. Dismissals are permanent memory;
 a pattern only returns if its evidence changes.
+
+Candidate groups are read independently, so a repo-wide mistake shows up
+in several of them — and a distiller with no memory would re-propose it
+under a new name every time (measured on a real repo before this check:
+65 applied pins carried only 50 distinct themes). Every distilled
+pattern is therefore compared against what is already captured — your
+pins, hand-written ones included, and every proposal already pending,
+applied, or **dismissed** — and a restatement is dropped before it
+reaches the ledger. The check is deterministic and costs nothing: no
+agent call is needed to see that two short rules say the same thing.
+`seamark lessons --proposals` audits the pins you already have the same
+way: it names each near-duplicate cluster, suggests which entry to keep
+(the one resting on the most evidence), and hands you the command —
+`seamark lessons --prune p16,p45` — to retire the rest. Pruning is not
+dismissal: the theme stays pinned by its survivor and the distiller
+still counts it as known, where a dismissal would suppress it. Like
+`--apply`, it edits `lessons.yaml` only with `distill.write` set, it
+removes each entry with its provenance comment and nothing else, and it
+refuses to write at all unless the result still parses with every other
+pin intact.
 
 And it is proposal-only by construction: the model must cite the finding
 ids behind every pattern (uncited patterns are dropped — it cannot

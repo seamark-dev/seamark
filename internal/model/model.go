@@ -144,21 +144,56 @@ type Lesson struct {
 // (distillation, provenance display) work from what reviewers actually
 // wrote rather than from lossy summaries.
 type Finding struct {
-	ID        int64  // GitHub review-comment id — stable across mines
-	LessonKey string // ClusterKey of the lesson this comment fed
-	Path      string // repo-relative file the comment lands on
-	PR        int    // pull-request number
+	ID        int64  // stable across mines: GitHub comment id, or sha-derived for fixes
+	LessonKey string // ClusterKey of the lesson this comment fed; "" for fix findings
+	Path      string // repo-relative file (a fix's most-changed code file)
+	PR        int    // pull-request number, 0 when unknown
 	Reviewer  string // coderabbit | copilot | bot | human
-	Body      string // boilerplate-stripped comment text, capped
-	URL       string // html_url, for provenance
+	Body      string // boilerplate-stripped text, capped
+	URL       string // provenance link (comment or commit), "" when none
 	CreatedAt int64  // unix seconds
+	// Source is the provider and its derivation: review, revert, or
+	// fix:conventional / fix:issue-link / fix:subject — every finding
+	// declares how it was mined, like every edge declares how it was
+	// resolved.
+	Source string
 }
 
-// Proposal lifecycle states.
+// Finding sources.
 const (
-	ProposalProposed  = "proposed"
-	ProposalApplied   = "applied"
-	ProposalDismissed = "dismissed"
+	SourceReview          = "review"
+	SourceRevert          = "revert"
+	SourceFixConventional = "fix:conventional"
+	SourceFixIssueLink    = "fix:issue-link"
+	SourceFixSubject      = "fix:subject"
+)
+
+// fixMinedSources are the sources one pass of fix mining produces —
+// every fix tier plus reverts, which the same provider classifies. They
+// share a replace lifecycle, so a new tier must be listed here to be
+// swapped rather than accumulate. Deliberately an explicit list and not
+// "everything that is not a review": a future provider on its own
+// cadence (CI transitions, say) must not have its findings wiped by a
+// fix mine.
+var fixMinedSources = []string{
+	SourceFixConventional, SourceFixIssueLink, SourceFixSubject, SourceRevert,
+}
+
+// FixMinedSources returns the sources replaced together with fix mining.
+func FixMinedSources() []string {
+	return append([]string(nil), fixMinedSources...)
+}
+
+// Proposal lifecycle states. Dismissed and superseded are both "not in
+// the pin file", but they mean opposite things about the pattern:
+// dismissed rejects the guidance, superseded keeps it and drops a
+// redundant wording of it. Conflating them would let pruning a
+// duplicate silently suppress a theme the user still wants.
+const (
+	ProposalProposed   = "proposed"
+	ProposalApplied    = "applied"
+	ProposalDismissed  = "dismissed"
+	ProposalSuperseded = "superseded"
 )
 
 // Proposal is one distilled pattern awaiting a human decision: a

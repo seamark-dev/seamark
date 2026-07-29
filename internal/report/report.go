@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seamark-dev/seamark/internal/fixes"
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -173,12 +174,38 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 		}
 	}
 
-	decisions, err := st.DecisionsForFile(file, 10)
+	decisions, err := st.DecisionsForFile(file, 20)
 	if err != nil {
 		return err
 	}
 
+	// Fix density: the deterministic hotspot signal — what share of this
+	// file's recent commits were corrections. Phrased over the last-K
+	// window so it decays as non-fix history accumulates, never an
+	// all-time tally. Needs a minimum of history to mean anything.
+	if len(decisions) >= 5 {
+		fixCount := 0
+
+		for _, d := range decisions {
+			// Body too, not just the title: mining classifies on both, and
+			// a "harden worker" commit whose body says "Fixes #12" is a
+			// fix finding — the density must count the same commits.
+			if d.Kind == model.DecisionRevert || fixes.Classify(d.Title, d.Body) != "" {
+				fixCount++
+			}
+		}
+
+		if fixCount > 0 {
+			fmt.Fprintf(w, "\nfix density  %d of the last %d commits here were fixes\n",
+				fixCount, len(decisions))
+		}
+	}
+
 	if len(decisions) > 0 {
+		if len(decisions) > 10 {
+			decisions = decisions[:10]
+		}
+
 		fmt.Fprintf(w, "\nrecent decisions\n")
 		printDecisions(w, decisions)
 	}
@@ -472,6 +499,10 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal)
 		fmt.Fprintf(w, ", %d left for another run (raise --limit or drop --region)", res.GroupsPending)
 	}
 
+	if res.Duplicates > 0 {
+		fmt.Fprintf(w, "; %d restated something already pinned", res.Duplicates)
+	}
+
 	if res.PrunedStale > 0 {
 		fmt.Fprintf(w, "; %d stale proposals pruned", res.PrunedStale)
 	}
@@ -491,19 +522,135 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal)
 	fmt.Fprintf(w, "\nproposed pins — distilled from review findings, awaiting YOUR decision\n")
 
 	for _, p := range pending {
-		region := p.Region
-		if region == "" {
-			region = "*"
-		}
-
-		fmt.Fprintf(w, "\n  p%-4d %-34s %-26s %d findings cited [%s]\n",
-			p.ID, render.Sanitize(p.Rule), render.Sanitize(region),
-			len(p.Members), render.Sanitize(p.Agent))
-		fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Note))
+		printProposal(w, p)
 	}
 
 	fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; "+
 		"`--dismiss` remembers the no\n")
+}
+
+// printProposal renders one pending proposal: its identity line and the
+// guidance beneath. Model output, hence sanitized; never truncated,
+// because the note is the whole point of showing it.
+func printProposal(w io.Writer, p model.Proposal) {
+	fmt.Fprintf(w, "\n  p%-4d %-34s %-26s %d findings cited [%s]\n",
+		p.ID, render.Sanitize(p.Rule), render.Sanitize(regionLabel(p.Region)),
+		len(p.Members), render.Sanitize(p.Agent))
+	fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Note))
+}
+
+// PrintProposalLedger renders the distillation decision record: what is
+// still pending (with the full note and the commands that decide it),
+// then what was applied or dismissed, compactly. Read-only — unlike
+// --distill, it never spends an agent call, so "what did I decide?" and
+// "what is waiting?" cost nothing to ask.
+func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Proposal,
+	clusters [][]model.Proposal,
+) {
+	if len(pending)+len(applied)+len(dismissed) == 0 {
+		fmt.Fprintln(w, "no proposals yet — run `seamark lessons --distill` to draft some "+
+			"(or write pins by hand in .seamark/lessons.yaml)")
+
+		return
+	}
+
+	fmt.Fprintf(w, "distilled proposals — %d pending, %d applied, %d dismissed\n",
+		len(pending), len(applied), len(dismissed))
+
+	if len(pending) > 0 {
+		fmt.Fprintf(w, "\nawaiting your decision\n")
+
+		for _, p := range pending {
+			printProposal(w, p)
+		}
+
+		fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p<id>` (ranges work: p1..p9); "+
+			"`--dismiss` remembers the no\n")
+	}
+
+	printDecided(w, "applied — these are pins in .seamark/lessons.yaml", applied)
+	printDecided(w, "dismissed — not re-proposed unless their evidence changes", dismissed)
+
+	// Pins applied before duplicate detection existed (or written by
+	// hand in several wordings) still crowd the injection budget. Name
+	// the clusters; pruning stays the human's edit.
+	if len(clusters) == 0 {
+		return
+	}
+
+	redundant := 0
+	for _, c := range clusters {
+		redundant += len(c) - 1
+	}
+
+	fmt.Fprintf(w, "\nnear-duplicates — %d applied pins restate one already pinned\n", redundant)
+
+	var allDrop []string
+
+	for _, c := range clusters {
+		keep, drop := survivor(c)
+
+		fmt.Fprintf(w, "\n  keep  p%-4d %s\n", keep.ID, render.Sanitize(keep.Rule))
+
+		for _, p := range drop {
+			fmt.Fprintf(w, "  prune p%-4d %s\n", p.ID, render.Sanitize(p.Rule))
+			allDrop = append(allDrop, fmt.Sprintf("p%d", p.ID))
+		}
+	}
+
+	fmt.Fprintf(w, "\nprune the restatements: `seamark lessons --prune %s`\n",
+		strings.Join(allDrop, ","))
+	fmt.Fprintf(w, "  (removes those pins from .seamark/lessons.yaml — needs distill.write in "+
+		"config.yaml, else it prints the list; the theme stays pinned by its survivor. "+
+		"Pick different survivors by pruning different ids, or edit the file by hand.)\n")
+}
+
+// survivor picks which pin of a duplicate cluster to keep: the one
+// resting on the most cited evidence, ties going to the most recent
+// wording. It is a suggestion — the caller prunes whichever ids they
+// choose.
+func survivor(cluster []model.Proposal) (keep model.Proposal, drop []model.Proposal) {
+	keep = cluster[0]
+
+	for _, p := range cluster[1:] {
+		if len(p.Members) > len(keep.Members) ||
+			(len(p.Members) == len(keep.Members) && p.ID > keep.ID) {
+			keep = p
+		}
+	}
+
+	for _, p := range cluster {
+		if p.ID != keep.ID {
+			drop = append(drop, p)
+		}
+	}
+
+	return keep, drop
+}
+
+// printDecided lists settled proposals one line each: the decision
+// record, not the guidance (the applied ones already speak through
+// lessons.yaml).
+func printDecided(w io.Writer, heading string, ps []model.Proposal) {
+	if len(ps) == 0 {
+		return
+	}
+
+	fmt.Fprintf(w, "\n%s\n", heading)
+
+	for _, p := range ps {
+		fmt.Fprintf(w, "  p%-4d %-34s %s\n",
+			p.ID, render.Sanitize(p.Rule), render.Sanitize(regionLabel(p.Region)))
+	}
+}
+
+// regionLabel renders a proposal's region, repo-wide as "*".
+func regionLabel(region string) string {
+	if region == "" {
+		return "*"
+	}
+
+	return region
 }
 
 // DistillSummary is the run-shape PrintDistillPlan reports; a mirror of
@@ -516,6 +663,7 @@ type DistillSummary struct {
 	GroupsFailed  int
 	GroupsPending int
 	PrunedStale   int
+	Duplicates    int
 	// TokensNote is the caller-rendered cost line ("~59k tokens sent …"),
 	// empty when nothing was sent.
 	TokensNote string

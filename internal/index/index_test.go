@@ -939,9 +939,22 @@ func TestRefreshReviewsKeepsLessonsWhenSourceUnavailable(t *testing.T) {
 	}, nil))
 	require.NoError(t, st.Close())
 
-	res, err := RefreshReviews(root, dbPath, nil)
+	res, fixCount, err := RefreshReviews(root, dbPath, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Fetched, "no GitHub remote → not a successful fetch")
+
+	// Fix mining is local and independent: it runs and persists whatever
+	// the review half does, so the two sources never take each other
+	// down. (writeFixture's repo has no fix commits, hence zero.)
+	assert.Zero(t, fixCount)
+
+	fixStore, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	stored, err := fixStore.AllFindings()
+	require.NoError(t, err)
+	require.NoError(t, fixStore.Close())
+	assert.Empty(t, stored)
 
 	st, err = store.Open(dbPath)
 	require.NoError(t, err)

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/effects"
+	"github.com/seamark-dev/seamark/internal/fixes"
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/parse"
@@ -357,53 +358,71 @@ func decodeResult(data []byte) (*parse.FileResult, error) {
 	return &r, nil
 }
 
-// RefreshReviews mines pull-request review comments for the repo at root
-// and replaces the stored lesson set (RFC-001 §5.4 capture). It is
-// best-effort and network-bound, deliberately separate from Run: reviews
-// change on a PR cadence, not on every local edit, so this is invoked on
-// demand (`seamark index --reviews`) rather than on every structural
-// reindex. An absent or unreachable source is a Note, not an error.
-func RefreshReviews(root, dbPath string, logf func(string, ...any)) (reviews.Result, error) {
+// RefreshReviews mines the lesson sources for the repo at root: PR
+// review comments (network, via gh) and fix commits (local git) — each
+// degrading independently, so a repo without GitHub still gains fix
+// findings and an offline run still keeps its stored reviews. It is
+// deliberately separate from Run: lesson sources change on the
+// review/push cadence, not on every local edit. fixCount reports the
+// fix findings stored this pass.
+func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews.Result, fixCount int, err error) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 
-	root, err := ResolveRoot(root)
+	root, err = ResolveRoot(root)
 	if err != nil {
-		return reviews.Result{}, err
+		return reviews.Result{}, 0, err
 	}
 
 	if dbPath == "" {
 		dbPath = store.DefaultPath(root)
 	}
 
-	res, err := reviews.Mine(root, reviews.Options{Logf: logf}, nil)
+	// Fix mining first: local, fast, and independent of gh presence.
+	fixRes, err := fixes.Mine(root, fixes.Options{Logf: logf})
 	if err != nil {
-		return res, err
+		logf("warn: fix mining failed: %v", err)
+	}
+
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return reviews.Result{}, 0, err
+	}
+	defer func() { _ = st.Close() }()
+
+	// Persisted before the network is touched: the two sources degrade
+	// independently, and a review failure — however it arrives — must
+	// not discard fix findings already mined from local git.
+	if fixRes.Mined {
+		if err := st.ReplaceFixFindings(fixRes.Findings); err != nil {
+			return reviews.Result{}, 0, err
+		}
+
+		fixCount = len(fixRes.Findings)
+	}
+
+	res, err = reviews.Mine(root, reviews.Options{Logf: logf}, nil)
+	if err != nil {
+		return res, fixCount, err
 	}
 
 	if res.Note != "" {
 		logf("note: %s", res.Note)
 	}
 
-	// Only swap the stored set when the fetch actually succeeded. A
-	// transient failure (offline, gh logged out, not a GitHub checkout)
-	// must never wipe previously-mined lessons.
+	// Reviews swap only when the fetch actually succeeded. A transient
+	// failure (offline, gh logged out, not a GitHub checkout) must never
+	// wipe previously-mined lessons.
 	if !res.Fetched {
-		return res, nil
+		return res, fixCount, nil
 	}
-
-	st, err := store.Open(dbPath)
-	if err != nil {
-		return res, err
-	}
-	defer func() { _ = st.Close() }()
 
 	if err := st.ReplaceLessons(res.Lessons, res.Findings); err != nil {
-		return res, err
+		return res, fixCount, err
 	}
 
-	return res, nil
+	return res, fixCount, nil
 }
 
 // freshSummary returns a Skipped summary when the index at dbPath was

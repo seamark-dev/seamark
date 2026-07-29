@@ -138,14 +138,19 @@ CREATE INDEX IF NOT EXISTS lesson_region ON lesson (region);
 -- is what makes incremental distillation (group signatures over member
 -- ids) possible.
 CREATE TABLE IF NOT EXISTS finding (
-    id         INTEGER PRIMARY KEY,        -- GitHub review-comment id
-    lesson_key TEXT NOT NULL,              -- lesson.cluster_key this comment fed
+    id         INTEGER PRIMARY KEY,        -- GitHub comment id, or sha-derived for fixes
+    lesson_key TEXT NOT NULL,              -- lesson.cluster_key this comment fed ('' for fixes)
     path       TEXT NOT NULL,              -- repo-relative file
     pr         INTEGER NOT NULL DEFAULT 0,
     reviewer   TEXT NOT NULL DEFAULT '',
     body       TEXT NOT NULL,              -- boilerplate-stripped, capped
     url        TEXT NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL DEFAULT 0
+    created_at INTEGER NOT NULL DEFAULT 0,
+    -- Which provider mined it, with its derivation — review | revert |
+    -- fix:conventional | fix:issue-link | fix:subject. Providers re-mine
+    -- on different cadences, so each replaces only its own rows.
+    -- (Existing databases gain this column via the migration in Open.)
+    source     TEXT NOT NULL DEFAULT 'review'
 );
 CREATE INDEX IF NOT EXISTS finding_lesson ON finding (lesson_key);
 CREATE INDEX IF NOT EXISTS finding_path ON finding (path);

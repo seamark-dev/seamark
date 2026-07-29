@@ -101,7 +101,7 @@ CLI (gh) authenticated and a github.com remote.`,
 					}
 				}
 
-				res, err := index.RefreshReviews(sum.Root, opts.dbPath, rlogf)
+				res, fixCount, err := index.RefreshReviews(sum.Root, opts.dbPath, rlogf)
 
 				u.finish("")
 
@@ -119,6 +119,8 @@ CLI (gh) authenticated and a github.com remote.`,
 					// The fetch failed; existing lessons were left intact.
 					fmt.Fprintf(out, "  reviews  skipped: %s (kept existing)\n", res.Note)
 				}
+
+				fmt.Fprintf(out, "  fixes    %d findings mined from fix commits\n", fixCount)
 
 				return nil
 			}
@@ -170,7 +172,7 @@ CLI (gh) authenticated and a github.com remote.`,
 	cmd.Flags().BoolVar(&force, "force", false,
 		"rebuild even when the workspace is unchanged since the last index")
 	cmd.Flags().BoolVar(&reviews, "reviews", false,
-		"also mine PR review comments into lessons (needs gh + a GitHub remote)")
+		"also mine lesson sources: PR review comments (needs gh + GitHub) and fix commits (local git)")
 	cmd.Flags().IntVar(&histOpts.MaxCommits, "max-commits", 0,
 		"git history window for mining (default 5000)")
 	cmd.Flags().IntVar(&histOpts.MaxFilesPerCommit, "max-files-per-commit", 0,

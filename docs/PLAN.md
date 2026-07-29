@@ -405,8 +405,21 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
       graphql-go-tools (14/14 proposals applied by the human) and
       trading-tools (domain-specific pins incl. session-boundary and
       statistical-baseline rules).
-- [ ] Non-review failure signals (test pass→fail, reverts) as finding
-      sources — the rest of the original Tier 2 idea
+- [x] Fix commits and reverts as finding sources (2026-07-28, validated
+      by a pre-build probe: 49/72 findings per test repo survive honest
+      12-month classification; distilling them yielded pin-grade
+      patterns on both repos, with patch content carrying the signal
+      where commit messages were useless). internal/fixes provider:
+      tiered classification (fix:conventional / fix:issue-link /
+      fix:subject / revert, chore + 30-file bulk exclusions), patch-id
+      dedup (backports are one event), reverted-fix exclusion,
+      sha-derived stable ids, PR stamping for cross-provider dedup
+      ("same PR = one event" in the distill prompt, promptVersion v2).
+      finding.source column via the store's first guarded migration;
+      per-source replace lifecycles. Deterministic `fix density` line
+      in why (last-20-commit window, reverts count, chores don't).
+- [ ] CI failure→fix transitions and bug-labeled issues as finding
+      sources — the rest of the original idea
 
 findings). Reviewer-agnostic by design: CodeRabbit, Copilot review,
 human reviewers — all arrive through the same PR-comment API. Surface by
