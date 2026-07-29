@@ -203,6 +203,13 @@ func TestRemovePinsKeepsCommentsItDidNotWrite(t *testing.T) {
 		"a comment seamark did not write survives the prune")
 	assert.NotContains(t, string(data), "rule: aaa")
 
+	// The next entry is untouched, provenance included: an entry's
+	// deletion range must stop before the comment introducing the pin
+	// that follows it.
+	assert.Contains(t, string(data), "rule: bbb")
+	assert.Contains(t, string(data), "distilled by claude/v3",
+		"the following pin keeps its own provenance comment")
+
 	// The distilled entry: its own provenance comment goes with it.
 	_, err = RemovePins(root, []PinKey{{Rule: "bbb", Region: "api"}})
 	require.NoError(t, err)
