@@ -101,9 +101,26 @@ func seamarkPath() string {
 }
 
 func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
-	gateMode, err := resolveGateMode(root, gateMode)
+	// 0. Load, validate and merge .claude/settings.json BEFORE touching
+	// anything: a malformed or wrong-shaped file must abort init before
+	// the scaffold writes, never halfway through them.
+	settingsPath := filepath.Join(root, ".claude", "settings.json")
+
+	settings, err := loadSettings(settingsPath)
 	if err != nil {
 		return err
+	}
+
+	gateMode = resolveGateMode(settings, gateMode)
+
+	// Remember the pre-merge gate mode: silently dropping enforcement on
+	// a re-init would be as bad as silently installing it, so a mode
+	// change on an existing hook is reported loudly by writeHooks.
+	previous := installedGateMode(settings)
+
+	hooksChanged, err := mergeHooks(settings, bin, gateMode)
+	if err != nil {
+		return fmt.Errorf("%s: %w", settingsPath, err)
 	}
 
 	verb := "wrote"
@@ -143,8 +160,8 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
 		return err
 	}
 
-	// 3. Claude Code hooks.
-	if err := ensureHooks(w, root, bin, gateMode, printOnly); err != nil {
+	// 3. Claude Code hooks — validated and merged above, write-only here.
+	if err := writeHooks(w, settingsPath, settings, hooksChanged, bin, gateMode, previous, printOnly); err != nil {
 		return err
 	}
 
@@ -187,35 +204,39 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
 	return nil
 }
 
+// loadSettings reads and parses a .claude/settings.json. An absent file
+// is an empty map; an unparseable one is a loud error with remediation —
+// raised before init writes anything, so a broken file cannot leave the
+// repository half-initialized.
+func loadSettings(path string) (map[string]any, error) {
+	settings := map[string]any{}
+
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return nil, fmt.Errorf("%s: %w (fix or move it, then re-run)", path, err)
+		}
+	case !os.IsNotExist(err):
+		return nil, err
+	}
+
+	return settings, nil
+}
+
 // resolveGateMode turns the --gate-mode flag into the mode to install.
 // An empty flag keeps what a previous init installed (warn on the first
 // run): enforcement must never be added — or removed — implicitly.
-func resolveGateMode(root, requested string) (string, error) {
+func resolveGateMode(settings map[string]any, requested string) string {
 	if requested != "" {
-		return requested, nil
-	}
-
-	data, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return gateModeWarn, nil
-		}
-
-		return "", err
-	}
-
-	// Malformed settings default to warn here; ensureHooks reports the
-	// parse error with remediation before anything is written.
-	settings := map[string]any{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return gateModeWarn, nil
+		return requested
 	}
 
 	if mode := installedGateMode(settings); mode != "" {
-		return mode, nil
+		return mode
 	}
 
-	return gateModeWarn, nil
+	return gateModeWarn
 }
 
 // policyFileMode reads the mode of .seamark/policy.yaml through the real
@@ -365,31 +386,11 @@ func hookSpecs(gateMode string) []hookSpec {
 	}
 }
 
-func ensureHooks(w io.Writer, root, bin, gateMode string, printOnly bool) error {
-	path := filepath.Join(root, ".claude", "settings.json")
-
-	settings := map[string]any{}
-
-	data, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(data, &settings); err != nil {
-			return fmt.Errorf("%s: %w (fix or move it, then re-run)", path, err)
-		}
-	case !os.IsNotExist(err):
-		return err
-	}
-
-	// Remember the pre-merge gate mode: silently dropping enforcement on a
-	// re-init would be as bad as silently installing it, so a mode change
-	// on an existing hook is reported loudly below.
-	previous := installedGateMode(settings)
-
-	changed, err := mergeHooks(settings, bin, gateMode)
-	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-
+// writeHooks persists the already-merged settings and reports what
+// happened. All parsing and validation runs earlier in runInit, before
+// any file is written — this function only serializes and narrates.
+func writeHooks(w io.Writer, path string, settings map[string]any, changed bool,
+	bin, gateMode, previous string, printOnly bool) error {
 	if !changed {
 		fmt.Fprintf(w, "  kept    .claude/settings.json (seamark hooks already wired)\n")
 		printHookCommands(w, bin, gateMode)
@@ -468,7 +469,7 @@ func installedGateMode(settings map[string]any) string {
 // map, preserving every other hook and updating (never duplicating) a
 // seamark hook already present. Returns whether anything changed. It
 // errors rather than silently overwriting a present-but-wrong-typed
-// hooks/PreToolUse field — the same loud handling ensureHooks gives
+// hooks/PreToolUse field — the same loud handling loadSettings gives
 // malformed JSON.
 func mergeHooks(settings map[string]any, bin, gateMode string) (changed bool, err error) {
 	hooks, err := childMap(settings, "hooks")

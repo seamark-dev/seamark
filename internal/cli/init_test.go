@@ -339,27 +339,47 @@ func TestRunInitReportsBrokenPolicy(t *testing.T) {
 }
 
 func TestRunInitRejectsMalformedSettings(t *testing.T) {
-	// Malformed .claude/settings.json: resolveGateMode falls back to warn
-	// (nothing worse can be inferred), but ensureHooks must refuse loudly
-	// rather than silently overwriting the user's file.
-	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	// A broken .claude/settings.json must abort init BEFORE anything is
+	// written: no scaffolds, no .gitignore edits, and the broken file
+	// itself survives untouched for the user to fix.
+	for name, body := range map[string]string{
+		"malformed json":    "{not json",
+		"wrong-typed hooks": `{"hooks": "a string"}`,
+	} {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
 
-	path := filepath.Join(root, ".claude", "settings.json")
-	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o644))
+		path := filepath.Join(root, ".claude", "settings.json")
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
 
-	mode, err := resolveGateMode(root, "")
-	require.NoError(t, err)
-	assert.Equal(t, gateModeWarn, mode, "an unreadable install must not resolve to enforce")
+		var b testWriter
+		err := runInit(&b, root, "/bin/seamark", "", false)
+		require.Error(t, err, name)
 
-	var b testWriter
-	err = runInit(&b, root, "/bin/seamark", "", false)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "fix or move it")
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, body, string(data), "%s: the broken file must survive untouched", name)
 
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, "{not json", string(data), "the malformed file must survive untouched")
+		assert.NoFileExists(t, filepath.Join(root, ".seamark", "policy.yaml"),
+			"%s: a failed init must not leave scaffolds behind", name)
+		assert.NoFileExists(t, filepath.Join(root, ".gitignore"),
+			"%s: a failed init must not touch .gitignore", name)
+	}
+}
+
+func TestResolveGateMode(t *testing.T) {
+	// The explicit flag always wins; otherwise the installed hook's mode
+	// is kept; a fresh install resolves to warn.
+	installed := map[string]any{"hooks": map[string]any{"PreToolUse": []any{
+		map[string]any{"matcher": "Bash", "hooks": []any{
+			map[string]any{"type": "command", "command": "/bin/seamark gate --enforce --hook"},
+		}},
+	}}}
+
+	assert.Equal(t, gateModeWarn, resolveGateMode(map[string]any{}, ""))
+	assert.Equal(t, gateModeEnforce, resolveGateMode(map[string]any{}, gateModeEnforce))
+	assert.Equal(t, gateModeEnforce, resolveGateMode(installed, ""))
+	assert.Equal(t, gateModeWarn, resolveGateMode(installed, gateModeWarn))
 }
 
 func TestOwnedBySeamark(t *testing.T) {
