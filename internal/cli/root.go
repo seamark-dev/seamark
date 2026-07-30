@@ -30,7 +30,7 @@ func New() *cobra.Command {
 		Short: "An effects-and-history graph for your repository",
 		Long: `Seamark indexes what your repo's history knows and what your code can
 actually do: which files really change together, why the weird parts are
-weird, and (soon) which paths can reach production.`,
+weird, and which paths can reach production.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

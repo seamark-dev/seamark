@@ -60,6 +60,44 @@ type Options struct {
 	// independently, so a repo-wide mistake would otherwise be
 	// re-proposed under a new name by every group it appears in.
 	Pins []model.Proposal
+	// Agent is the resolved agent command line, for the preflight
+	// disclosure only — the Invoker is what actually runs it.
+	Agent []string
+	// OnPreflight receives the plan before the first agent call: what
+	// would be sent, where, and roughly what it would cost.
+	OnPreflight func(Preflight)
+	// DryRun stops after the preflight: nothing is sent, marked, pruned,
+	// or persisted. The Invoker may be nil on a dry run.
+	DryRun bool
+}
+
+// Preflight is the pre-invocation disclosure. Metadata only — never
+// finding bodies.
+type Preflight struct {
+	// Agent is the command line each group's prompt would be piped to.
+	Agent []string
+	// Groups describes each evidence group that would be sent this run.
+	Groups []GroupPlan
+	// PromptChars totals the prompts exactly as they would be sent now.
+	// Execution primes later prompts with labels learned from earlier
+	// groups, so treat it as a close lower bound.
+	PromptChars int
+	// Findings counts the finding bodies across all planned groups.
+	Findings int
+	// BodyCap is the per-finding truncation applied inside prompts — the
+	// only bound on what a body carries: bodies are NOT redacted.
+	BodyCap int
+}
+
+// Tokens renders the preflight's approximate token cost.
+func (p Preflight) Tokens() string { return estTokens(p.PromptChars) }
+
+// GroupPlan is one group's slice of the preflight.
+type GroupPlan struct {
+	Signature   string
+	Region      string
+	Findings    int
+	PromptChars int
 }
 
 // Result reports what a run did.
@@ -109,8 +147,11 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 
 	res := &Result{GroupsTotal: len(groups)}
 
-	if res.PrunedStale, err = st.PruneStaleProposals(live); err != nil {
-		return nil, err
+	// A dry run must not mutate anything — pruning included.
+	if !opts.DryRun {
+		if res.PrunedStale, err = st.PruneStaleProposals(live); err != nil {
+			return nil, err
+		}
 	}
 
 	done, err := st.DistilledSignatures()
@@ -128,22 +169,46 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 	// drawn yet, instead of in whatever order the grouper emitted.
 	orderByCoverage(groups, cited)
 
+	// Selection first, execution after: the split is what makes an
+	// honest preflight possible — the disclosure names exactly the
+	// groups the loop below would send.
+	var planned []Group
+
 	for _, g := range groups {
-		if done[g.Signature] {
+		switch {
+		case done[g.Signature]:
 			res.GroupsSkipped++
-			continue
-		}
-
-		if opts.Region != "" && !withinRegion(opts.Region, g.Region) {
+		case opts.Region != "" && !withinRegion(opts.Region, g.Region):
 			res.GroupsPending++
-			continue
-		}
-
-		if opts.Limit > 0 && res.GroupsRead+res.GroupsFailed >= opts.Limit {
+		case opts.Limit > 0 && len(planned) >= opts.Limit:
 			res.GroupsPending++
-			continue
+		default:
+			planned = append(planned, g)
+		}
+	}
+
+	if opts.OnPreflight != nil {
+		pf := Preflight{Agent: opts.Agent, BodyCap: promptBodyCap}
+
+		for _, g := range planned {
+			chars := len(buildPrompt(g, known.Labels(g.Region, maxKnownLabels)))
+			pf.Groups = append(pf.Groups, GroupPlan{Signature: g.Signature,
+				Region: g.Region, Findings: len(g.Findings), PromptChars: chars})
+			pf.PromptChars += chars
+			pf.Findings += len(g.Findings)
 		}
 
+		opts.OnPreflight(pf)
+	}
+
+	if opts.DryRun {
+		res.GroupsPending += len(planned)
+		res.Duration = time.Since(start)
+
+		return res, nil
+	}
+
+	for _, g := range planned {
 		desc := fmt.Sprintf("%d findings (%s, %s)", len(g.Findings), regionLabel(g.Region), g.Signature)
 
 		if opts.OnGroupStart != nil {

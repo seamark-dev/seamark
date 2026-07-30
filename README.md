@@ -162,9 +162,10 @@ recurring across several files widens to their common directory —
 repeated feedback is a habit of an area, not a property of one file.
 Only patterns that recur (≥2) surface, region-scoped, so an agent
 editing `scripts/` sees what reviewers keep catching there *before* it
-makes the mistake again — through the same `why`/`orient` an agent
-already calls, no extra tokens per turn and nothing bolted onto
-CLAUDE.md.
+makes the mistake again — through the same `seamark why` and
+`seamark orient` (the repo-wide overview: modules, most-called symbols,
+change hubs, recent decisions) an agent already calls, no extra tokens
+per turn and nothing bolted onto CLAUDE.md.
 
 Just as important is what is *not* a lesson. Thread replies are
 conversation about a finding, never the finding — mining them once made
@@ -689,7 +690,7 @@ like the built-ins.
 │ tree     │      │                           │      ├──────────────┤
 ├──────────┤      │  co-change (lift) +       │────▶ │ CLI / hooks  │
 │ git log  │─mine──▶ decisions per region      │      ├──────────────┤
-├──────────┤      │                           │────▶ │ MCP (planned)│
+├──────────┤      │                           │────▶ │ MCP  (stdio) │
 │ .seamark/ │─load──▶ effect propagation to     │      └──────────────┘
 │ yaml     │      │  fixpoint + CEL policy    │
 └──────────┘      └────────── SQLite ─────────┘
@@ -722,13 +723,20 @@ propagate backwards along call edges to fixpoint, with depth.
 
 ## Status & roadmap
 
-Working today: indexer (Go/TS/JS/Python), history mining, effects +
-propagation, LSP server, gate + check + audit, Claude Code hook, MCP
-server (`orient`, `change_set`, `why`, `check`, `expand` + resource +
-prompt), review-comment lessons (`index --reviews`). Planned next (see
-[docs/PLAN.md](docs/PLAN.md)): zero-token check promotion from recurring
-lessons, function-grain history enrichment, `seamarkd` daemon with
-incremental indexing, prebuilt binaries + npm/Homebrew distribution.
+Working today: indexer (Go/TS/JS/Python), history + review + fix-commit
+mining, effects + propagation, LSP server, gate + check + secret-safe
+audit, Claude Code hooks, MCP server (`orient`, `change_set`, `why`,
+`check`, `expand` + resource + prompt), lesson distillation with
+plan/apply (`lessons --distill`), HTML report (`seamark report`),
+versioned schema with durable-state export/import (`seamark state`).
+Planned next (see [docs/PLAN.md](docs/PLAN.md)): `seamark status` and
+`seamark doctor`, zero-token check promotion from recurring lessons,
+function-grain history enrichment, prebuilt binaries + npm/Homebrew
+distribution.
+
+What touches the network, what reaches a model, and what Guard can and
+cannot defend against are documented in [docs/data-flow.md](docs/data-flow.md)
+and [docs/threat-model.md](docs/threat-model.md).
 
 ## Development
 

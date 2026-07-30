@@ -78,28 +78,41 @@ func LoadConfig(root string) (*Config, error) {
 	return cfg, nil
 }
 
+// Resolve maps the config to the exact argv it would run, erroring on
+// an unknown preset or an empty custom command — but without requiring
+// the binary on PATH, so the pre-flight disclosure works even when the
+// CLI is missing. The returned name identifies the adapter for
+// provenance.
+func Resolve(cfg *Config) (name string, argv []string, err error) {
+	if len(cfg.Agent.Argv) > 0 {
+		if cfg.Agent.Argv[0] == "" {
+			return "", nil, fmt.Errorf("agent.argv must start with a command")
+		}
+
+		return "custom", cfg.Agent.Argv, nil
+	}
+
+	name = cfg.Agent.CLI
+	if name == "" {
+		name = "claude"
+	}
+
+	preset, ok := presets[name]
+	if !ok {
+		return "", nil, fmt.Errorf("unknown agent cli %q (known: %s; or set agent.argv)",
+			name, strings.Join(presetNames(), ", "))
+	}
+
+	return name, preset, nil
+}
+
 // New resolves the configured agent into an Invoker. It fails fast —
 // unknown preset, empty custom argv, or a binary not on PATH — so the
 // caller can say "distill unavailable: …" before any work is done.
 func New(cfg *Config) (Invoker, error) {
-	argv := cfg.Agent.Argv
-	name := "custom"
-
-	if len(argv) == 0 {
-		name = cfg.Agent.CLI
-		if name == "" {
-			name = "claude"
-		}
-
-		preset, ok := presets[name]
-		if !ok {
-			return nil, fmt.Errorf("unknown agent cli %q (known: %s; or set agent.argv)",
-				name, strings.Join(presetNames(), ", "))
-		}
-
-		argv = preset
-	} else if argv[0] == "" {
-		return nil, fmt.Errorf("agent.argv must start with a command")
+	name, argv, err := Resolve(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	if _, err := exec.LookPath(argv[0]); err != nil {

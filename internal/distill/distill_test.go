@@ -86,6 +86,60 @@ func TestRunValidatesPersistsAndNeverPaysTwice(t *testing.T) {
 	assert.Equal(t, 1, res.GroupsSkipped)
 }
 
+func TestRunDryRunDisclosesAndSendsNothing(t *testing.T) {
+	st := openSeeded(t, pooledState)
+
+	var pf Preflight
+
+	// A nil invoker: the dry run must never need one — disclosure works
+	// even when the agent CLI is missing.
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), nil, Options{
+		DryRun:      true,
+		Agent:       []string{"claude", "-p"},
+		OnPreflight: func(p Preflight) { pf = p },
+	})
+	require.NoError(t, err)
+
+	// The disclosure names the planned groups with real sizes…
+	require.NotEmpty(t, pf.Groups)
+	assert.Equal(t, []string{"claude", "-p"}, pf.Agent)
+	assert.Positive(t, pf.PromptChars, "prompt sizes are computed, not guessed")
+	assert.Equal(t, len(pooledState), pf.Findings)
+	assert.Positive(t, pf.BodyCap)
+
+	// …and nothing was sent, marked, or persisted.
+	assert.Zero(t, res.GroupsRead)
+	assert.Equal(t, len(pf.Groups), res.GroupsPending, "planned groups stay pending")
+
+	marks, err := st.DistilledSignatures()
+	require.NoError(t, err)
+	assert.Empty(t, marks, "a dry run must not mark anything distilled")
+
+	pending, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+}
+
+func TestRunPreflightFiresBeforeRealRuns(t *testing.T) {
+	st := openSeeded(t, pooledState)
+
+	agent := &fakeAgent{fn: func(string) (string, error) {
+		return `{"patterns": []}`, nil
+	}}
+
+	preflights := 0
+
+	_, err := Run(context.Background(), st, NewLexicalGrouper(), agent, Options{
+		OnPreflight: func(p Preflight) {
+			preflights++
+			assert.Zero(t, agent.calls, "disclosure must precede the first agent call")
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, preflights)
+	assert.Positive(t, agent.calls, "a real run still executes after the preflight")
+}
+
 func TestRunDropsRestatementsOfKnownPatterns(t *testing.T) {
 	st := openSeeded(t, pooledState)
 

@@ -414,6 +414,6 @@ func TestRedactSecretsPatterns(t *testing.T) {
 		`PASSWORD="a b c" deploy`:  "PASSWORD=[REDACTED] deploy",
 		`--token="multi word" run`: "--token=[REDACTED] run",
 	} {
-		assert.Equal(t, want, redactSecrets(input), "input: %s", input)
+		assert.Equal(t, want, RedactSecrets(input), "input: %s", input)
 	}
 }

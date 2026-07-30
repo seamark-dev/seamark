@@ -411,6 +411,89 @@ func TestLessonsList(t *testing.T) {
 	assert.Contains(t, out, "1 total")
 }
 
+func TestLessonsDistillDryRun(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "human",
+			Body: "Reset pooled state before reuse in this handler."},
+		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "human",
+			Body: "Pooled state must be reset on reuse here too."},
+	}))
+	require.NoError(t, st.Close())
+
+	// The fake agent leaves a marker when invoked — the dry run must not.
+	marker := filepath.Join(root, "agent-was-called")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  argv: [\"sh\", \"-c\", \"touch "+marker+"; echo '{}'\"]\n"), 0o644))
+
+	out, err := run(t, "-C", root, "lessons", "--distill", "--dry-run")
+	require.NoError(t, err)
+
+	// The disclosure covers agent, size, contents, and redaction status —
+	// without any finding bodies.
+	assert.Contains(t, out, "preflight")
+	assert.Contains(t, out, "sh -c")
+	assert.Contains(t, out, "2 finding(s)")
+	assert.Contains(t, out, "tokens")
+	assert.Contains(t, out, "redaction none")
+	assert.Contains(t, out, "nothing was sent")
+	assert.NotContains(t, out, "Reset pooled state", "finding bodies must not appear in a dry run")
+
+	assert.NoFileExists(t, marker, "the agent CLI must not be invoked")
+
+	st, err = store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	pending, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "a dry run must not persist proposals")
+	require.NoError(t, st.Close())
+
+	// A dry run without --distill is a usage error — including when a
+	// mutating mode is present: --apply must never run with --dry-run
+	// attached, and the pending proposal set must stay untouched.
+	_, err = run(t, "-C", root, "lessons", "--dry-run")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--distill")
+
+	_, err = run(t, "-C", root, "lessons", "--apply", "p1", "--dry-run")
+	require.Error(t, err, "--apply with --dry-run must be rejected before dispatch")
+	assert.Contains(t, err.Error(), "--distill")
+
+	_, err = run(t, "-C", root, "lessons", "--dismiss", "p1", "--dry-run")
+	require.Error(t, err, "--dismiss with --dry-run must be rejected before dispatch")
+
+	// A dry run works even when the configured agent does not exist —
+	// disclosure must not require the binary.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  argv: [\"no-such-agent-binary\"]\n"), 0o644))
+
+	out, err = run(t, "-C", root, "lessons", "--distill", "--dry-run")
+	require.NoError(t, err)
+	assert.Contains(t, out, "no-such-agent-binary")
+
+	// But an invalid configuration is an error, not an empty disclosure:
+	// a dry run must not paper over an unknown preset.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  cli: hal9000\n"), 0o644))
+
+	_, err = run(t, "-C", root, "lessons", "--distill", "--dry-run")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hal9000")
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  argv: [\"\"]\n"), 0o644))
+
+	_, err = run(t, "-C", root, "lessons", "--distill", "--dry-run")
+	require.Error(t, err, "an empty custom executable must be rejected")
+}
+
 func TestLessonsDistillPlanFlow(t *testing.T) {
 	root := writeFixture(t)
 
@@ -991,6 +1074,46 @@ func TestReportWithoutIndexFails(t *testing.T) {
 	_, err := run(t, "-C", root, "report")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no index found")
+}
+
+// TestReadmeCoversEveryCommand is the docs-drift check: every shipped
+// command is mentioned in the README, and no shipped command is
+// labelled planned or coming soon. The RFC's rule: no shipped command
+// may be presented as future work.
+func TestReadmeCoversEveryCommand(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	require.NoError(t, err)
+
+	readme := string(data)
+
+	for _, c := range New().Commands() {
+		name := c.Name()
+		if name == "help" || name == "completion" || name == "version" {
+			continue // cobra plumbing, not product surface
+		}
+
+		assert.Contains(t, readme, "seamark "+name,
+			"README must document `seamark %s` (or retire the command)", name)
+
+		for _, label := range []string{"planned", "soon"} {
+			re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(name) + `[^\n]{0,40}\(` + label + `\)`)
+			assert.False(t, re.MatchString(readme),
+				"README labels shipped command %q as (%s)", name, label)
+		}
+
+		// The roadmap paragraph must not name a shipped command either —
+		// "Planned next: … seamark doctor" would otherwise stay green
+		// after doctor ships.
+		if i := strings.Index(readme, "Planned next"); i >= 0 {
+			para := readme[i:]
+			if j := strings.Index(para, "\n\n"); j >= 0 {
+				para = para[:j]
+			}
+
+			assert.NotContains(t, para, "seamark "+name,
+				"the roadmap paragraph still lists shipped command %q as planned", name)
+		}
+	}
 }
 
 func TestWriteAtomicLeavesNoLeftovers(t *testing.T) {
