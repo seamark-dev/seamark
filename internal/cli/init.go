@@ -530,9 +530,10 @@ func applyExisting(pre []any, markers []string, want string) (found, updated boo
 
 // ownedBySeamark reports whether cmd is one of seamark's own hook
 // commands: a marker suffix AND a binary whose basename is exactly
-// seamark. The binary check keeps the marker from claiming someone
-// else's hook — `company-security gate --hook` (or a lookalike such as
-// `seamark2`) must never be rewritten to ours.
+// seamark (allowing the Windows .exe suffix). The binary check keeps the
+// marker from claiming someone else's hook — `company-security gate
+// --hook` (or a lookalike such as `seamark2`) must never be rewritten to
+// ours.
 func ownedBySeamark(cmd string, markers []string) bool {
 	for _, marker := range markers {
 		rest, ok := strings.CutSuffix(cmd, " "+marker)
@@ -540,7 +541,9 @@ func ownedBySeamark(cmd string, markers []string) bool {
 			continue
 		}
 
-		return filepath.Base(strings.Trim(rest, "'")) == "seamark"
+		base := filepath.Base(strings.Trim(rest, "'"))
+
+		return strings.TrimSuffix(base, ".exe") == "seamark"
 	}
 
 	return false

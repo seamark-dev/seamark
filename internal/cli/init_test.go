@@ -366,14 +366,17 @@ func TestOwnedBySeamark(t *testing.T) {
 	markers := []string{"gate --hook", "gate --enforce --hook"}
 
 	for cmd, want := range map[string]bool{
-		"/bin/seamark gate --hook":              true,
-		"/bin/seamark gate --enforce --hook":    true,
-		"'/Apps/My Tools/seamark' gate --hook":  true,
-		"/usr/bin/company-security gate --hook": false,
-		"/bin/seamarketing-tool gate --hook":    false,
-		"/bin/seamark2 gate --enforce --hook":   false,
-		"/bin/seamark lessons --hook":           false, // not a gate marker
-		"my-tool --lessons --hook-dir=/x":       false,
+		"/bin/seamark gate --hook":                        true,
+		"/bin/seamark gate --enforce --hook":              true,
+		"'/Apps/My Tools/seamark' gate --hook":            true,
+		"/c/tools/seamark.exe gate --hook":                true,
+		"'/c/my tools/seamark.exe' gate --enforce --hook": true,
+		"/usr/bin/company-security gate --hook":           false,
+		"/bin/seamarketing-tool gate --hook":              false,
+		"/bin/seamark2 gate --enforce --hook":             false,
+		"/bin/seamark2.exe gate --hook":                   false,
+		"/bin/seamark lessons --hook":                     false, // not a gate marker
+		"my-tool --lessons --hook-dir=/x":                 false,
 	} {
 		assert.Equal(t, want, ownedBySeamark(cmd, markers), "cmd: %s", cmd)
 	}
