@@ -366,8 +366,7 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (string, error){
 				return "", err
 			}
 
-			if err := gate.Audit(s.root, "mcp.check",
-				fmt.Sprintf("diff (%d bytes)", len(p.Diff)), decision); err != nil {
+			if err := gate.Audit(s.root, "mcp.check", p.Diff, policy, decision); err != nil {
 				s.logf("mcp: audit log: %v", err)
 			}
 

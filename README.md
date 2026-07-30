@@ -536,7 +536,21 @@ run ends with a `gate` line stating the effective behavior.
 
 The agent sees the denial reason and corrects course; you see every
 decision in `.seamark/audit.jsonl` — an append-only trail of what your
-agents attempted, when, and why it was allowed or blocked.
+agents attempted, when, and why it was allowed or blocked. The log is
+secret-safe by default: entries store the normalized command names, a
+SHA-256 of the input, the verdict, and the policy hash — never the raw
+command line, which frequently carries tokens, passwords, and connection
+strings. It is created `0600` and rotated by size and age (one previous
+generation kept; entries expire after 30 days). To also persist the
+input line, opt in via `policy.yaml`:
+
+```yaml
+audit:
+  raw: true
+```
+
+Raw inputs are scrubbed of secret-shaped patterns best-effort — treat
+such a log as sensitive.
 
 ## Blast radius of a diff
 

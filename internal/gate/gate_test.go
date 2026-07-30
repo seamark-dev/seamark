@@ -313,25 +313,4 @@ deny:
 	assert.Contains(t, err.Error(), "broken")
 }
 
-func TestAuditLogAppends(t *testing.T) {
-	p, c, root := testSetup(t)
-
-	d := evalCmd(t, p, c, root, "terraform apply")
-	require.NoError(t, Audit(root, "gate", "terraform apply", d))
-	require.NoError(t, Audit(root, "gate", "ls", evalCmd(t, p, c, root, "ls")))
-
-	data, err := os.ReadFile(filepath.Join(root, ".seamark", "audit.jsonl"))
-	require.NoError(t, err)
-
-	lines := 0
-
-	for _, b := range data {
-		if b == '\n' {
-			lines++
-		}
-	}
-
-	assert.Equal(t, 2, lines, "append-only JSONL, one entry per decision")
-	assert.Contains(t, string(data), `"kind":"gate"`)
-	assert.Contains(t, string(data), "terraform apply")
-}
+// Audit log behaviour is covered in audit_test.go.

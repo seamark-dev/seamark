@@ -1,14 +1,11 @@
 package gate
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/google/cel-go/common/types"
 	"mvdan.cc/sh/v3/syntax"
@@ -36,6 +33,13 @@ type Decision struct {
 	Mode    string   `json:"mode"`    // warn | enforce
 	Effects []string `json:"effects"`
 	Matches []Match  `json:"matches,omitempty"`
+	// Commands are the normalized command names found in the input
+	// (wrappers unwrapped, interpreter payloads included) — what the
+	// audit log stores instead of the raw command line.
+	Commands []string `json:"commands,omitempty"`
+	// PolicySHA identifies the exact policy text that produced this
+	// decision.
+	PolicySHA string `json:"policy_sha256,omitempty"`
 }
 
 // Blocking reports whether this decision should stop execution: only
@@ -146,7 +150,12 @@ func EvalCommand(p *Policy, catalog *effects.Catalog, root, commandLine string) 
 	targetBranch := ""
 	parses := 0
 
-	var argv []string
+	var (
+		argv  []string
+		names []string
+	)
+
+	seen := map[string]bool{}
 
 	for len(cmds) > 0 {
 		c := unwrap(cmds[0])
@@ -164,6 +173,11 @@ func EvalCommand(p *Policy, catalog *effects.Catalog, root, commandLine string) 
 		name := path.Base(c.argv[0])
 		if len(argv) == 0 {
 			argv = c.argv
+		}
+
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
 		}
 
 		// Interpreter and eval payloads re-enter the analysis: `bash -c
@@ -227,7 +241,14 @@ func EvalCommand(p *Policy, catalog *effects.Catalog, root, commandLine string) 
 		"diff": emptyDiff(),
 	}
 
-	return p.evaluate(tags, activation)
+	d, err := p.evaluate(tags, activation)
+	if err != nil {
+		return nil, err
+	}
+
+	d.Commands = names
+
+	return d, nil
 }
 
 // extractCmd statically resolves a CallExpr's words. Words containing
@@ -433,13 +454,16 @@ func gitPush(args []string, root string) (isPush, isForce bool, branch string) {
 	return true, isForce, ""
 }
 
+// emptyDiff is the diff activation for command evaluations: every key
+// rules may access is present (CEL errors on missing keys), nothing is
+// touched.
 func emptyDiff() map[string]any {
 	return map[string]any{"files": []string{}, "effects": []string{}}
 }
 
 // evaluate runs every rule and keeps the strongest verdict.
 func (p *Policy) evaluate(tags []string, activation map[string]any) (*Decision, error) {
-	d := &Decision{Verdict: VerdictAllow, Mode: p.Mode, Effects: tags}
+	d := &Decision{Verdict: VerdictAllow, Mode: p.Mode, Effects: tags, PolicySHA: p.Hash}
 
 	run := func(rules []Rule, verdict string) error {
 		for i := range rules {
@@ -471,33 +495,4 @@ func (p *Policy) evaluate(tags []string, activation map[string]any) (*Decision, 
 	}
 
 	return d, nil
-}
-
-// Audit appends the decision to <root>/.seamark/audit.jsonl. The log is
-// append-only JSONL: no open-source tool in this category has an audit
-// trail, and several enterprises need one (RFC-001 §5.5).
-func Audit(root, kind, input string, d *Decision) error {
-	dir := filepath.Join(root, ".seamark")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-
-	f, err := os.OpenFile(filepath.Join(dir, "audit.jsonl"),
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }() // write errors surface via Encode
-
-	entry := map[string]any{
-		"ts":      time.Now().UTC().Format(time.RFC3339),
-		"kind":    kind,
-		"input":   input,
-		"verdict": d.Verdict,
-		"mode":    d.Mode,
-		"effects": d.Effects,
-		"matches": d.Matches,
-	}
-
-	return json.NewEncoder(f).Encode(entry)
 }

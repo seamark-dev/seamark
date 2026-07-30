@@ -87,7 +87,7 @@ enforce mode a deny/approval verdict exits with code 2.`,
 				return failClosed(err)
 			}
 
-			if err := gate.Audit(root, "gate", commandLine, decision); err != nil {
+			if err := gate.Audit(root, "gate", commandLine, policy, decision); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "seamark: audit log: %v\n", err)
 			}
 
@@ -191,7 +191,9 @@ Policy rules over diff.* decide the verdict.`,
 				return err
 			}
 
-			if err := gate.Audit(root, "check", fmt.Sprintf("diff (%d bytes)", len(diffText)), decision); err != nil {
+			// The diff itself is the input: hashed by default, redacted
+			// and truncated when raw logging is opted into.
+			if err := gate.Audit(root, "check", diffText, policy, decision); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "seamark: audit log: %v\n", err)
 			}
 
