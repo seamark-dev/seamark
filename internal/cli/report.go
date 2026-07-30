@@ -103,6 +103,12 @@ so it can be attached to a pull request or read offline.`,
 // report from yesterday used to be. The rename either happens or it
 // does not, and until it does the old report is exactly as it was.
 func writeAtomic(path string, data []byte) error {
+	return writeAtomicMode(path, data, 0o644)
+}
+
+// writeAtomicMode is writeAtomic with an explicit final mode — state
+// exports carry decisions and stay 0600; reports are shareable 0644.
+func writeAtomicMode(path string, data []byte, mode os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
@@ -124,9 +130,9 @@ func writeAtomic(path string, data []byte) error {
 		return err
 	}
 
-	// CreateTemp makes the file 0600; a report is not a secret, and the
-	// non-atomic path wrote 0644.
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+	// CreateTemp makes the file 0600; apply the caller's intended mode
+	// before the rename publishes it.
+	if err := os.Chmod(tmp.Name(), mode); err != nil {
 		return err
 	}
 

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -59,19 +58,9 @@ func newOrientCmd(opts *options) *cobra.Command {
 
 // openIndex opens an existing index, refusing to create an empty one.
 func openIndex(opts *options) (*store.Store, string, error) {
-	root, err := filepath.Abs(opts.workspace)
+	dbPath, root, err := resolveDBPath(opts)
 	if err != nil {
 		return nil, "", err
-	}
-
-	dbPath := opts.dbPath
-	if dbPath == "" {
-		// Mirror the indexer: the index lives at the git toplevel.
-		if r, err := gitToplevel(root); err == nil {
-			root = r
-		}
-
-		dbPath = store.DefaultPath(root)
 	}
 
 	if _, err := os.Stat(dbPath); err != nil {
@@ -81,6 +70,17 @@ func openIndex(opts *options) (*store.Store, string, error) {
 	st, err := store.Open(dbPath)
 	if err != nil {
 		return nil, "", err
+	}
+
+	// A database created without an index run (`state import` on a fresh
+	// clone does this) has the schema and possibly durable decisions, but
+	// no graph. Treating it as a valid, empty index would answer every
+	// question with silence instead of "index first". indexed_at is
+	// written by every successful index run, git or not (indexed_state is
+	// empty on non-git workspaces).
+	if v, err := st.GetMeta("indexed_at"); err != nil || v == "" {
+		_ = st.Close()
+		return nil, "", errors.New("no index found; run `seamark index` first")
 	}
 
 	if r, err := st.GetMeta("repo_root"); err == nil && r != "" {
