@@ -203,6 +203,69 @@ func TestAuditRefusesSymlinkedLog(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm(), "target permissions must be untouched")
 }
 
+func TestAuditTightensRetainedGeneration(t *testing.T) {
+	p, c, root := testSetup(t)
+
+	// A recent but world-readable .1 (hand-copied, or left by an
+	// interrupted run) is tightened in place — not left exposed until it
+	// ages out, and not rotated away.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(auditPath(root)+".1", []byte("history\n"), 0o644))
+
+	require.NoError(t, Audit(root, "gate", "ls", p, evalCmd(t, p, c, root, "ls")))
+
+	info, err := os.Stat(auditPath(root) + ".1")
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	data, err := os.ReadFile(auditPath(root) + ".1")
+	require.NoError(t, err)
+	assert.Equal(t, "history\n", string(data), "tightened, not replaced")
+}
+
+func TestAuditRemovesPlantedRetainedSymlink(t *testing.T) {
+	p, c, root := testSetup(t)
+
+	// A symlink planted as the retained generation is removed, never
+	// chmodded or written through.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+
+	victim := filepath.Join(root, "victim.txt")
+	require.NoError(t, os.WriteFile(victim, []byte("precious"), 0o644))
+	require.NoError(t, os.Symlink(victim, auditPath(root)+".1"))
+
+	require.NoError(t, Audit(root, "gate", "ls", p, evalCmd(t, p, c, root, "ls")))
+
+	_, err := os.Lstat(auditPath(root) + ".1")
+	assert.True(t, os.IsNotExist(err), "the planted link is removed")
+
+	info, err := os.Stat(victim)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm(), "the target's permissions are untouched")
+
+	data, err := os.ReadFile(victim)
+	require.NoError(t, err)
+	assert.Equal(t, "precious", string(data), "the target's content is untouched")
+}
+
+func TestAuditRefusesSymlinkedDir(t *testing.T) {
+	p, c, root := testSetup(t)
+	p.Audit.Raw = true
+
+	// .seamark itself as a symlink: raw audit output (and the lock file)
+	// must not be redirected outside the repository.
+	outside := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, ".seamark")))
+
+	err := Audit(root, "gate", "deploy --password hunter2", p, evalCmd(t, p, c, root, "ls"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+
+	entries, err := os.ReadDir(outside)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "nothing may be written through the planted directory link")
+}
+
 func TestAuditRotatesByAge(t *testing.T) {
 	p, c, root := testSetup(t)
 

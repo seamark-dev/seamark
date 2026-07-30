@@ -41,6 +41,13 @@ func Audit(root, kind, input string, p *Policy, d *Decision) error {
 		return err
 	}
 
+	// .seamark itself must be a real directory: a planted directory
+	// symlink would redirect the lock and the audit data — including
+	// opt-in raw inputs — outside the repository.
+	if err := refuseSymlinkDir(dir); err != nil {
+		return err
+	}
+
 	// One exclusive lock spans tighten → rotate → append: concurrent
 	// hooks cannot lose an entry to a rotation race, rotate twice, or
 	// rename a freshly-started log over the retained generation.
@@ -118,6 +125,27 @@ func lockAudit(dir string) (func(), error) {
 	return func() { _ = unlockFile(f); _ = f.Close() }, nil
 }
 
+// refuseSymlinkDir errors unless p is a plain directory — never a
+// symlink to one. Like refuseSymlink this defuses planted traps; an
+// actor racing the check with a live filesystem swap already has shell
+// access and needs no such trick.
+func refuseSymlinkDir(p string) error {
+	info, err := os.Lstat(p)
+	if err != nil {
+		return err
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("gate: audit: %s is a symlink — refusing to write through it", p)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("gate: audit: %s is not a directory", p)
+	}
+
+	return nil
+}
+
 // refuseSymlink errors when p exists and is a symlink; an audit log must
 // never be a pointer to somewhere else.
 func refuseSymlink(p string) error {
@@ -142,9 +170,22 @@ func refuseSymlink(p string) error {
 // oldest entry has aged out; a rotated generation past maxAuditAge
 // (its mtime is its newest entry) is removed.
 func tightenAndRotate(path string) error {
+	// The retained generation gets the same treatment as the live log:
+	// a planted symlink is removed (our namespace, never followed), an
+	// aged generation expires, and a world-readable one is tightened —
+	// it holds exactly the history this hardening protects.
 	if info, err := os.Lstat(path + ".1"); err == nil {
-		if time.Since(info.ModTime()) > maxAuditAge {
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
 			if err := os.Remove(path + ".1"); err != nil {
+				return err
+			}
+		case time.Since(info.ModTime()) > maxAuditAge:
+			if err := os.Remove(path + ".1"); err != nil {
+				return err
+			}
+		case info.Mode().Perm() != 0o600:
+			if err := os.Chmod(path+".1", 0o600); err != nil {
 				return err
 			}
 		}
