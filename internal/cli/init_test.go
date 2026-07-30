@@ -30,10 +30,10 @@ func commands(t *testing.T, settings map[string]any) []string {
 	return out
 }
 
-func mustMerge(t *testing.T, settings map[string]any, bin string) bool {
+func mustMerge(t *testing.T, settings map[string]any, bin, gateMode string) bool {
 	t.Helper()
 
-	changed, err := mergeHooks(settings, bin)
+	changed, err := mergeHooks(settings, bin, gateMode)
 	require.NoError(t, err)
 
 	return changed
@@ -42,11 +42,40 @@ func mustMerge(t *testing.T, settings map[string]any, bin string) bool {
 func TestMergeHooksIntoEmpty(t *testing.T) {
 	settings := map[string]any{}
 
-	assert.True(t, mustMerge(t, settings, "/bin/seamark"))
+	assert.True(t, mustMerge(t, settings, "/bin/seamark", gateModeWarn))
+
+	// The default gate hook carries no --enforce: policy.yaml alone
+	// decides whether anything blocks.
+	cmds := commands(t, settings)
+	assert.Contains(t, cmds, "/bin/seamark gate --hook")
+	assert.Contains(t, cmds, "/bin/seamark lessons --hook")
+	assert.NotContains(t, cmds, "/bin/seamark gate --enforce --hook")
+}
+
+func TestMergeHooksEnforceMode(t *testing.T) {
+	settings := map[string]any{}
+
+	assert.True(t, mustMerge(t, settings, "/bin/seamark", gateModeEnforce))
+	assert.Contains(t, commands(t, settings), "/bin/seamark gate --enforce --hook")
+}
+
+func TestMergeHooksSwitchesGateMode(t *testing.T) {
+	settings := map[string]any{}
+	require.True(t, mustMerge(t, settings, "/bin/seamark", gateModeEnforce))
+
+	// enforce → warn rewrites the hook in place: one gate hook, no flag.
+	assert.True(t, mustMerge(t, settings, "/bin/seamark", gateModeWarn))
 
 	cmds := commands(t, settings)
+	assert.Len(t, cmds, 2, "mode switch must rewrite, not duplicate")
+	assert.Contains(t, cmds, "/bin/seamark gate --hook")
+
+	// And back: warn → enforce.
+	assert.True(t, mustMerge(t, settings, "/bin/seamark", gateModeEnforce))
+
+	cmds = commands(t, settings)
+	assert.Len(t, cmds, 2)
 	assert.Contains(t, cmds, "/bin/seamark gate --enforce --hook")
-	assert.Contains(t, cmds, "/bin/seamark lessons --hook")
 }
 
 func TestMergeHooksPreservesExisting(t *testing.T) {
@@ -77,13 +106,13 @@ func TestMergeHooksPreservesExisting(t *testing.T) {
 		},
 	}
 
-	require.True(t, mustMerge(t, settings, "/bin/seamark"))
+	require.True(t, mustMerge(t, settings, "/bin/seamark", gateModeWarn))
 
 	cmds := commands(t, settings)
 	assert.Contains(t, cmds, "my-own-linter", "the user's hook must survive")
 	assert.Contains(t, cmds, "my-tool --lessons --hook-dir=/x",
 		"a command merely containing the marker must not be rewritten")
-	assert.Contains(t, cmds, "/bin/seamark gate --enforce --hook")
+	assert.Contains(t, cmds, "/bin/seamark gate --hook")
 	assert.Contains(t, cmds, "/bin/seamark lessons --hook")
 
 	assert.Equal(t, "opus", settings["model"], "unrelated settings untouched")
@@ -93,20 +122,23 @@ func TestMergeHooksPreservesExisting(t *testing.T) {
 }
 
 func TestMergeHooksIdempotent(t *testing.T) {
-	settings := map[string]any{}
-	require.True(t, mustMerge(t, settings, "/bin/seamark"))
+	for _, mode := range []string{gateModeWarn, gateModeEnforce} {
+		settings := map[string]any{}
+		require.True(t, mustMerge(t, settings, "/bin/seamark", mode))
 
-	// A second merge with the same binary changes nothing.
-	assert.False(t, mustMerge(t, settings, "/bin/seamark"), "re-run must be a no-op")
-	assert.Len(t, commands(t, settings), 2, "no duplicate hooks")
+		// A second merge with the same binary and mode changes nothing.
+		assert.False(t, mustMerge(t, settings, "/bin/seamark", mode),
+			"re-run in %s mode must be a no-op", mode)
+		assert.Len(t, commands(t, settings), 2, "no duplicate hooks")
+	}
 }
 
 func TestMergeHooksUpdatesChangedPath(t *testing.T) {
 	settings := map[string]any{}
-	require.True(t, mustMerge(t, settings, "/old/seamark"))
+	require.True(t, mustMerge(t, settings, "/old/seamark", gateModeWarn))
 
 	// A moved binary: the command path is rewritten, not duplicated.
-	assert.True(t, mustMerge(t, settings, "/new/seamark"))
+	assert.True(t, mustMerge(t, settings, "/new/seamark", gateModeWarn))
 
 	cmds := commands(t, settings)
 	assert.Len(t, cmds, 2)
@@ -117,14 +149,14 @@ func TestMergeHooksUpdatesChangedPath(t *testing.T) {
 
 func TestMergeHooksQuotesPathWithSpaces(t *testing.T) {
 	settings := map[string]any{}
-	require.True(t, mustMerge(t, settings, "/Apps/My Tools/seamark"))
+	require.True(t, mustMerge(t, settings, "/Apps/My Tools/seamark", gateModeWarn))
 
 	for _, c := range commands(t, settings) {
 		assert.Contains(t, c, "'/Apps/My Tools/seamark'", "a spaced path must be shell-quoted")
 	}
 
 	// And a quoted install is still recognized on re-run (idempotent).
-	assert.False(t, mustMerge(t, settings, "/Apps/My Tools/seamark"))
+	assert.False(t, mustMerge(t, settings, "/Apps/My Tools/seamark", gateModeWarn))
 }
 
 func TestMergeHooksRejectsMalformedHooks(t *testing.T) {
@@ -132,12 +164,12 @@ func TestMergeHooksRejectsMalformedHooks(t *testing.T) {
 	// discarded (finding #3).
 	for _, bad := range []any{"a string", []any{"x"}, 42.0} {
 		settings := map[string]any{"hooks": bad}
-		_, err := mergeHooks(settings, "/bin/seamark")
+		_, err := mergeHooks(settings, "/bin/seamark", gateModeWarn)
 		assert.Error(t, err, "hooks=%v (%T) must be rejected", bad, bad)
 	}
 
 	settings := map[string]any{"hooks": map[string]any{"PreToolUse": "not an array"}}
-	_, err := mergeHooks(settings, "/bin/seamark")
+	_, err := mergeHooks(settings, "/bin/seamark", gateModeWarn)
 	assert.Error(t, err, "a non-array PreToolUse must be rejected")
 }
 
@@ -145,7 +177,7 @@ func TestRunInitScaffoldsAndIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 
 	var b1 testWriter
-	require.NoError(t, runInit(&b1, root, "/bin/seamark", false))
+	require.NoError(t, runInit(&b1, root, "/bin/seamark", gateModeWarn, false))
 
 	// Files exist with expected content.
 	for _, rel := range []string{
@@ -166,7 +198,7 @@ func TestRunInitScaffoldsAndIsIdempotent(t *testing.T) {
 
 	// Re-run: everything kept, no duplication.
 	var b2 testWriter
-	require.NoError(t, runInit(&b2, root, "/bin/seamark", false))
+	require.NoError(t, runInit(&b2, root, "/bin/seamark", gateModeWarn, false))
 	assert.Contains(t, b2.String(), "kept")
 
 	data, err = os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
@@ -209,11 +241,15 @@ func TestRunInitPrintWritesNothing(t *testing.T) {
 	root := t.TempDir()
 
 	var b testWriter
-	require.NoError(t, runInit(&b, root, "/bin/seamark", true))
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, true))
 
 	assert.NoFileExists(t, filepath.Join(root, ".seamark", "policy.yaml"))
 	assert.NoFileExists(t, filepath.Join(root, ".claude", "settings.json"))
 	assert.Contains(t, b.String(), "would write")
+
+	// The preview shows the exact hook commands.
+	assert.Contains(t, b.String(), "/bin/seamark gate --hook")
+	assert.Contains(t, b.String(), "/bin/seamark lessons --hook")
 }
 
 func TestRunInitKeepsExistingConfig(t *testing.T) {
@@ -223,13 +259,241 @@ func TestRunInitKeepsExistingConfig(t *testing.T) {
 		[]byte("mode: enforce\n"), 0o644))
 
 	var b testWriter
-	require.NoError(t, runInit(&b, root, "/bin/seamark", false))
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false))
 
 	// An existing policy is never clobbered.
 	got, err := os.ReadFile(filepath.Join(root, ".seamark", "policy.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, "mode: enforce\n", string(got))
 	assert.Contains(t, b.String(), "kept")
+}
+
+func TestRunInitStatesGateMode(t *testing.T) {
+	// Every init run states the effective blocking behaviour — the trust
+	// contract is that enforcement is never a surprise.
+	root := t.TempDir()
+
+	var warn testWriter
+	require.NoError(t, runInit(&warn, root, "/bin/seamark", gateModeWarn, false))
+	assert.Contains(t, warn.String(), "gate    warn")
+	assert.Contains(t, warn.String(), "nothing blocks")
+
+	var enforce testWriter
+	require.NoError(t, runInit(&enforce, t.TempDir(), "/bin/seamark", gateModeEnforce, false))
+	assert.Contains(t, enforce.String(), "gate    enforce")
+}
+
+func TestRunInitReportsKeptEnforcePolicy(t *testing.T) {
+	// `init --gate-mode enforce` then `init --gate-mode warn`: the policy
+	// file is kept, still says enforce, and the warn hook follows it — so
+	// the summary must say "enforce", never "nothing blocks".
+	root := t.TempDir()
+
+	var first testWriter
+	require.NoError(t, runInit(&first, root, "/bin/seamark", gateModeEnforce, false))
+
+	var second testWriter
+	require.NoError(t, runInit(&second, root, "/bin/seamark", gateModeWarn, false))
+	assert.Contains(t, second.String(), "gate    enforce")
+	assert.Contains(t, second.String(), "policy.yaml", "the summary must point at the kept policy")
+	assert.NotContains(t, second.String(), "nothing blocks")
+}
+
+func TestRunInitReportsKeptWarnPolicyUnderEnforce(t *testing.T) {
+	// The mirror case: --gate-mode enforce over a kept warn policy. The
+	// hook enforces, but plain gate/check runs follow the file — the
+	// divergence must be stated, not hidden.
+	root := t.TempDir()
+
+	var first testWriter
+	require.NoError(t, runInit(&first, root, "/bin/seamark", gateModeWarn, false))
+
+	var second testWriter
+	require.NoError(t, runInit(&second, root, "/bin/seamark", gateModeEnforce, false))
+	assert.Contains(t, second.String(), "gate    enforce")
+	assert.Contains(t, second.String(), "mode: warn", "the kept policy's differing mode must be named")
+}
+
+func TestRunInitReportsBrokenPolicy(t *testing.T) {
+	// A policy file that fails to load changes what the hook does with
+	// every command; the summary must say which way it fails.
+	broken := []byte("mode: [broken\n")
+
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), broken, 0o644))
+
+	var warn testWriter
+	require.NoError(t, runInit(&warn, root, "/bin/seamark", gateModeWarn, false))
+	assert.Contains(t, warn.String(), "failed to load")
+	assert.Contains(t, warn.String(), "fails open")
+
+	root = t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), broken, 0o644))
+
+	var enforce testWriter
+	require.NoError(t, runInit(&enforce, root, "/bin/seamark", gateModeEnforce, false))
+	assert.Contains(t, enforce.String(), "failed to load")
+	assert.Contains(t, enforce.String(), "fails closed")
+}
+
+func TestRunInitRejectsMalformedSettings(t *testing.T) {
+	// A broken .claude/settings.json must abort init BEFORE anything is
+	// written: no scaffolds, no .gitignore edits, and the broken file
+	// itself survives untouched for the user to fix.
+	for name, body := range map[string]string{
+		"malformed json":    "{not json",
+		"wrong-typed hooks": `{"hooks": "a string"}`,
+	} {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+
+		path := filepath.Join(root, ".claude", "settings.json")
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+
+		var b testWriter
+		err := runInit(&b, root, "/bin/seamark", "", false)
+		require.Error(t, err, name)
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, body, string(data), "%s: the broken file must survive untouched", name)
+
+		assert.NoFileExists(t, filepath.Join(root, ".seamark", "policy.yaml"),
+			"%s: a failed init must not leave scaffolds behind", name)
+		assert.NoFileExists(t, filepath.Join(root, ".gitignore"),
+			"%s: a failed init must not touch .gitignore", name)
+	}
+}
+
+func TestResolveGateMode(t *testing.T) {
+	// The explicit flag always wins; otherwise the installed hook's mode
+	// is kept; a fresh install resolves to warn.
+	installed := map[string]any{"hooks": map[string]any{"PreToolUse": []any{
+		map[string]any{"matcher": "Bash", "hooks": []any{
+			map[string]any{"type": "command", "command": "/bin/seamark gate --enforce --hook"},
+		}},
+	}}}
+
+	assert.Equal(t, gateModeWarn, resolveGateMode(map[string]any{}, ""))
+	assert.Equal(t, gateModeEnforce, resolveGateMode(map[string]any{}, gateModeEnforce))
+	assert.Equal(t, gateModeEnforce, resolveGateMode(installed, ""))
+	assert.Equal(t, gateModeWarn, resolveGateMode(installed, gateModeWarn))
+}
+
+func TestOwnedBySeamark(t *testing.T) {
+	markers := []string{"gate --hook", "gate --enforce --hook"}
+
+	for cmd, want := range map[string]bool{
+		"/bin/seamark gate --hook":                        true,
+		"/bin/seamark gate --enforce --hook":              true,
+		"'/Apps/My Tools/seamark' gate --hook":            true,
+		"/c/tools/seamark.exe gate --hook":                true,
+		"'/c/my tools/seamark.exe' gate --enforce --hook": true,
+		"/usr/bin/company-security gate --hook":           false,
+		"/bin/seamarketing-tool gate --hook":              false,
+		"/bin/seamark2 gate --enforce --hook":             false,
+		"/bin/seamark2.exe gate --hook":                   false,
+		"/bin/seamark lessons --hook":                     false, // not a gate marker
+		"my-tool --lessons --hook-dir=/x":                 false,
+	} {
+		assert.Equal(t, want, ownedBySeamark(cmd, markers), "cmd: %s", cmd)
+	}
+}
+
+func TestRunInitShowsHookCommandsWhenKept(t *testing.T) {
+	// The exact-command listing must not depend on whether settings.json
+	// needed an update: a no-op re-run (or its --print preview) shows the
+	// same commands a fresh install does.
+	root := t.TempDir()
+
+	var first testWriter
+	require.NoError(t, runInit(&first, root, "/bin/seamark", gateModeWarn, false))
+
+	var kept testWriter
+	require.NoError(t, runInit(&kept, root, "/bin/seamark", "", true))
+	assert.Contains(t, kept.String(), "kept    .claude/settings.json")
+	assert.Contains(t, kept.String(), "/bin/seamark gate --hook")
+	assert.Contains(t, kept.String(), "/bin/seamark lessons --hook")
+}
+
+// seedSettings writes a .claude/settings.json with the given PreToolUse
+// command wired on Bash.
+func seedSettings(t *testing.T, root, command string) {
+	t.Helper()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+
+	settings := `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[` +
+		`{"type":"command","command":"` + command + `"}]}]}}`
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(settings), 0o644))
+}
+
+func readSettings(t *testing.T, root string) map[string]any {
+	t.Helper()
+
+	var settings map[string]any
+
+	data, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(data, &settings))
+
+	return settings
+}
+
+func TestRunInitExplicitWarnMigratesEnforceHook(t *testing.T) {
+	// An enforce hook (from --gate-mode enforce, or a pre-warn-default
+	// init) is downgraded only on an EXPLICIT --gate-mode warn — and the
+	// change is reported loudly, because it alters blocking behaviour.
+	root := t.TempDir()
+	seedSettings(t, root, "/bin/seamark gate --enforce --hook")
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false))
+	assert.Contains(t, b.String(), "note", "dropping enforcement must be reported")
+	assert.Contains(t, b.String(), "--gate-mode enforce", "the note must say how to restore it")
+
+	cmds := commands(t, readSettings(t, root))
+	assert.Contains(t, cmds, "/bin/seamark gate --hook", "the enforce hook is rewritten in place")
+	assert.NotContains(t, cmds, "/bin/seamark gate --enforce --hook")
+	assert.Len(t, cmds, 2, "gate rewritten + lessons added — no duplicates")
+}
+
+func TestRunInitDefaultKeepsInstalledEnforce(t *testing.T) {
+	// A plain re-run of init (no --gate-mode) must never weaken an
+	// installed enforce hook: enforcement is only removed explicitly.
+	root := t.TempDir()
+	seedSettings(t, root, "/bin/seamark gate --enforce --hook")
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", "", false))
+
+	cmds := commands(t, readSettings(t, root))
+	assert.Contains(t, cmds, "/bin/seamark gate --enforce --hook", "enforce survives a plain re-init")
+	assert.Contains(t, b.String(), "gate    enforce")
+	assert.NotContains(t, b.String(), "note    ", "nothing changed mode, nothing to warn about")
+}
+
+func TestRunInitLeavesForeignGateHookAlone(t *testing.T) {
+	// A hook that merely ends with our marker but runs someone else's
+	// binary is not ours: it must survive untouched, and it must not be
+	// mistaken for an installed seamark mode.
+	root := t.TempDir()
+	seedSettings(t, root, "/usr/bin/company-security gate --enforce --hook")
+
+	assert.Empty(t, installedGateMode(readSettings(t, root)),
+		"a foreign gate hook must not read as seamark's")
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", "", false))
+
+	cmds := commands(t, readSettings(t, root))
+	assert.Contains(t, cmds, "/usr/bin/company-security gate --enforce --hook",
+		"the foreign hook survives untouched")
+	assert.Contains(t, cmds, "/bin/seamark gate --hook", "seamark's own hook is added beside it")
+	assert.Contains(t, b.String(), "gate    warn", "a foreign enforce hook must not flip our default")
 }
 
 func TestStarterPolicyLoadsAndEvaluates(t *testing.T) {
@@ -250,6 +514,24 @@ func TestStarterPolicyLoadsAndEvaluates(t *testing.T) {
 	d, err := gate.EvalCommand(policy, catalog, root, "ls -la")
 	require.NoError(t, err, "starter policy must evaluate a command without error")
 	assert.Equal(t, "warn", d.Mode, "starter ships in warn mode")
+}
+
+func TestStarterPolicyEnforceVariant(t *testing.T) {
+	// The enforce scaffold is the warn template with one line swapped; a
+	// template edit that breaks the swap would silently ship warn to a
+	// user who explicitly asked for enforce.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"),
+		[]byte(starterPolicyFor(gateModeEnforce)), 0o644))
+
+	policy, err := gate.LoadPolicy(root)
+	require.NoError(t, err, "the enforce starter must still parse and compile")
+	assert.Equal(t, "enforce", policy.Mode)
+
+	assert.NotEqual(t, starterPolicy, starterPolicyFor(gateModeEnforce),
+		"the mode-line swap must actually change the template")
+	assert.Equal(t, starterPolicy, starterPolicyFor(gateModeWarn))
 }
 
 // testWriter is a minimal io.Writer capturing output.

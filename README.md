@@ -508,7 +508,7 @@ the caller — hook- and CI-friendly).
 
 ### As a Claude Code hook
 
-`.claude/settings.json`:
+`seamark init` wires this into `.claude/settings.json`:
 
 ```json
 {
@@ -517,17 +517,22 @@ the caller — hook- and CI-friendly).
       "matcher": "Bash",
       "hooks": [{
         "type": "command",
-        "command": "seamark gate --enforce --hook"
+        "command": "seamark gate --hook"
       }]
     }]
   }
 }
 ```
 
-`--hook` reads the PreToolUse JSON from stdin natively — no jq, and the
-gate **fails closed** under `--enforce`: a malformed payload, a broken
-policy file, or an internal error blocks the command instead of silently
-allowing it.
+`--hook` reads the PreToolUse JSON from stdin natively — no jq. By
+default the hook follows the mode in `.seamark/policy.yaml` (warn), so
+**a first install never blocks a command**. Opting in with
+`seamark init --gate-mode enforce` bakes `--enforce` into the hook:
+deny/require_approval verdicts exit 2 and block, and the gate **fails
+closed** — a malformed payload, a broken policy file, or an internal
+error blocks the command instead of silently allowing it. Re-running
+`init` without `--gate-mode` keeps whatever mode is installed, and every
+run ends with a `gate` line stating the effective behavior.
 
 The agent sees the denial reason and corrects course; you see every
 decision in `.seamark/audit.jsonl` — an append-only trail of what your

@@ -1,12 +1,23 @@
 package cli
 
-// Starter files written by `seamark init`. They ship in WARN mode and
-// with everything commented, so init never changes enforcement behaviour
-// on its own — the user opts in by editing.
+import "strings"
+
+// Starter files written by `seamark init`. The policy ships with example
+// rules active but in WARN mode by default, so verdicts surface without
+// blocking anything — enforcement is an explicit opt-in
+// (`init --gate-mode enforce`), never something init turns on by itself.
+
+// The two spellings of the policy mode line. starterPolicy embeds the
+// warn line; starterPolicyFor swaps in the enforce line, so the swap can
+// never miss (the template literally contains the constant it replaces).
+const (
+	policyModeLineWarn    = `mode: warn   # verdicts are reported, nothing blocks; "enforce" exits 2`
+	policyModeLineEnforce = `mode: enforce   # deny/require_approval verdicts exit 2; "warn" only reports`
+)
 
 const starterPolicy = `# Seamark gate policy (RFC-001 §5.5). Evaluated before an agent runs a
-# command and over a diff's blast radius. Ships in WARN mode: verdicts
-# are reported but nothing blocks until you switch to enforce.
+# command and over a diff's blast radius. Mode "warn" reports verdicts
+# without blocking; "enforce" makes deny/require_approval verdicts exit 2.
 #
 # Rules are CEL expressions over:
 #   effect   list of tags the command classifies to ("infra:mutate" …)
@@ -14,7 +25,7 @@ const starterPolicy = `# Seamark gate policy (RFC-001 §5.5). Evaluated before a
 #   env      {is_prod, is_dev, detected: {VAR: value…}}
 #   diff     {files, effects}   (populated by ` + "`seamark check`" + `)
 
-mode: warn   # switch to "enforce" to make deny/approval verdicts exit 2
+` + policyModeLineWarn + `
 
 environment:
   detect: [AWS_PROFILE, KUBECONFIG, DATABASE_URL, ENV, ENVIRONMENT, DEPLOY_ENV]
@@ -42,6 +53,18 @@ require_approval:
     when: 'diff.effects.contains("infra:mutate")'
     message: this change can reach infrastructure mutation
 `
+
+// starterPolicyFor returns the policy scaffold for a gate mode. The
+// template is authored in warn; enforce swaps the one mode line, so an
+// `init --gate-mode enforce` writes a policy file that agrees with the
+// hook it installs instead of contradicting it.
+func starterPolicyFor(gateMode string) string {
+	if gateMode != gateModeEnforce {
+		return starterPolicy
+	}
+
+	return strings.Replace(starterPolicy, policyModeLineWarn, policyModeLineEnforce, 1)
+}
 
 const starterConfig = `# Indexing options — what enters the graph at all.
 # Committed and reviewed like the other .seamark overlays.
