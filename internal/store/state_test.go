@@ -147,7 +147,12 @@ func TestImportRejectsBadBundles(t *testing.T) {
 	_, err = s.ImportState(&State{Version: 1, Proposals: []ProposalState{
 		{Signature: "", Rule: "r", Status: model.ProposalApplied},
 	}})
-	require.Error(t, err, "an empty signature must be refused")
+	require.Error(t, err, "an empty proposal signature must be refused")
+
+	_, err = s.ImportState(&State{Version: 1, Distilled: []DistilledMark{
+		{Signature: ""},
+	}})
+	require.Error(t, err, "an empty distillation-mark signature must be refused")
 
 	// A failed import leaves nothing behind (single transaction).
 	proposals, err := s.Proposals(model.ProposalApplied)

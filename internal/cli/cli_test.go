@@ -129,11 +129,17 @@ func TestStateExportImportRoundTrip(t *testing.T) {
 	}))
 	require.NoError(t, st.Close())
 
-	// Export to a file; the file is created private.
-	exportPath := filepath.Join(root, "state.json")
+	// Export to a file in a directory that does not exist yet; the file
+	// is created private.
+	exportPath := filepath.Join(root, "backups", "state.json")
 	out, err := run(t, "-C", root, "state", "export", "--out", exportPath)
 	require.NoError(t, err)
 	assert.Contains(t, out, "1 proposals")
+
+	// `--out -` is the stdout alias, matching report's convention.
+	out, err = run(t, "-C", root, "state", "export", "--out", "-")
+	require.NoError(t, err)
+	assert.Contains(t, out, "seamark_state_version")
 
 	info, err := os.Stat(exportPath)
 	require.NoError(t, err)

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/seamark-dev/seamark/internal/model"
@@ -136,6 +137,12 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 		if p.Signature == "" || p.Rule == "" || !validStatus[p.Status] {
 			return stats, fmt.Errorf("store: invalid proposal in import: signature=%q rule=%q status=%q",
 				p.Signature, p.Rule, p.Status)
+		}
+	}
+
+	for _, m := range st.Distilled {
+		if m.Signature == "" {
+			return stats, errors.New("store: invalid distillation mark in import: empty signature")
 		}
 	}
 

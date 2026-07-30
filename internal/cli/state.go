@@ -83,7 +83,7 @@ func newStateExportCmd(opts *options) *cobra.Command {
 
 			data = append(data, '\n')
 
-			if outPath == "" {
+			if outPath == "" || outPath == "-" {
 				_, err := cmd.OutOrStdout().Write(data)
 				return err
 			}
@@ -92,6 +92,10 @@ func newStateExportCmd(opts *options) *cobra.Command {
 			// would replace the very data being exported.
 			if samePath(outPath, dbPath) {
 				return fmt.Errorf("state export: --out %s is the index database; choose another path", outPath)
+			}
+
+			if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+				return fmt.Errorf("state export: create %s: %w", filepath.Dir(outPath), err)
 			}
 
 			// Atomic replace: an interrupted or failed write must leave a
@@ -109,7 +113,8 @@ func newStateExportCmd(opts *options) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&outPath, "out", "", "write to a file instead of stdout (atomic, 0600)")
+	cmd.Flags().StringVar(&outPath, "out", "",
+		"write to a file instead of stdout (atomic, 0600; - for stdout)")
 
 	return cmd
 }

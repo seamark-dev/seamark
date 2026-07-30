@@ -7,8 +7,9 @@
 // distilled, lesson, finding, rule) holding human decisions and paid
 // inference that no rebuild can regenerate. The database is therefore NOT
 // disposable; deleting it destroys decisions. Rebuilds preserve the
-// durable tables, the schema is versioned (migrate.go), and state.go
-// makes the durable subset portable.
+// durable tables and the schema is versioned (migrate.go). state.go makes
+// the decision subset — proposals and distillation marks — portable;
+// lessons, findings and rules are re-mined rather than exported.
 //
 // The store is deliberately dumb: it validates nothing about the graph and
 // contains no language knowledge. Writers (the indexer, the history miner)
