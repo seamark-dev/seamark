@@ -418,6 +418,26 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
       finding.source column via the store's first guarded migration;
       per-source replace lifecycles. Deterministic `fix density` line
       in why (last-20-commit window, reverts count, chores don't).
+- [x] `seamark report` (2026-07-29): the human half of the loop, as one
+      self-contained HTML file (no server, no external assets). Four
+      sections, ported from a throwaway Python mockup that had already
+      earned its keep — reading it is how the 17-of-65 duplicate-pin
+      problem was spotted, which is why `--prune` exists. Decision queue
+      (pending proposals, cited evidence, provenance links, the commands
+      that decide them), near-duplicate audit over applied pins
+      (`distill.Clusters`), hotspot map (parsed files by directory, area
+      = churn, colour = fix density — the shared `report.FixCount`
+      definition, so it cannot disagree with `why`), and the full lesson
+      ledger, filterable and cell-scoped. Untrusted text throughout, so
+      the page is built entirely through html/template: the SVG map is
+      emitted from geometry structs rather than assembled as markup, and
+      nothing in the package produces `template.HTML`. Output is
+      deterministic given the generation timestamp: no map iteration
+      order leaks into the page, so an unchanged index re-renders
+      identically apart from the stamped time (the clock is a parameter,
+      which is what lets a test assert the whole page). Every truncation
+      is declared on the page, and the map states what fraction of the
+      repo it drew.
 - [ ] CI failure→fix transitions and bug-labeled issues as finding
       sources — the rest of the original idea
 

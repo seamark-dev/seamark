@@ -1241,6 +1241,52 @@ func (s *Store) HotFiles(limit int) ([]HotFile, error) {
 	return out, rows.Err()
 }
 
+// FileChurn is how much of the repo's history a file has absorbed: the
+// number of decisions (commits, PRs, reverts) recorded against it.
+type FileChurn struct {
+	File    string
+	Commits int
+}
+
+// FileChurn returns the most-touched files, busiest first. Where
+// HotFiles ranks by coupling ("this rarely changes alone"), this ranks
+// by sheer activity — the area metric behind the report's hotspot map,
+// and the candidate set a fix-density pass then colours.
+// A non-positive limit returns every file, as AllLessons does.
+func (s *Store) FileChurn(limit int) ([]FileChurn, error) {
+	q := `SELECT file, COUNT(*) AS commits FROM decision_file
+	      GROUP BY file ORDER BY commits DESC, file`
+
+	args := []any{}
+
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Close error deliberately dropped: iteration failures surface via rows.Err().
+	defer func() { _ = rows.Close() }()
+
+	var out []FileChurn
+
+	for rows.Next() {
+		var f FileChurn
+
+		if err := rows.Scan(&f.File, &f.Commits); err != nil {
+			return nil, err
+		}
+
+		out = append(out, f)
+	}
+
+	return out, rows.Err()
+}
+
 // CalledSymbol is a symbol with its caller count.
 type CalledSymbol struct {
 	model.Symbol

@@ -183,19 +183,8 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 	// file's recent commits were corrections. Phrased over the last-K
 	// window so it decays as non-fix history accumulates, never an
 	// all-time tally. Needs a minimum of history to mean anything.
-	if len(decisions) >= 5 {
-		fixCount := 0
-
-		for _, d := range decisions {
-			// Body too, not just the title: mining classifies on both, and
-			// a "harden worker" commit whose body says "Fixes #12" is a
-			// fix finding — the density must count the same commits.
-			if d.Kind == model.DecisionRevert || fixes.Classify(d.Title, d.Body) != "" {
-				fixCount++
-			}
-		}
-
-		if fixCount > 0 {
+	if len(decisions) >= MinFixDensityHistory {
+		if fixCount := FixCount(decisions); fixCount > 0 {
 			fmt.Fprintf(w, "\nfix density  %d of the last %d commits here were fixes\n",
 				fixCount, len(decisions))
 		}
@@ -222,16 +211,43 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 		fmt.Fprintf(w, "\nreviewers keep flagging  (recurring across pull requests)\n")
 		printLessons(w, lessons)
 		fmt.Fprintf(w, "  raw findings incl. one-offs: expand lessons:%s (MCP) or `seamark lessons --region %s`\n",
-			lessonScope(file), lessonScope(file))
+			LessonScope(file), LessonScope(file))
 	}
 
 	return nil
 }
 
-// lessonScope is the area a file's raw-lesson hint points at: its
+// MinFixDensityHistory is the least history a fix-density figure needs
+// before it is worth stating: "1 of the last 2 commits" is noise, not a
+// 50% hotspot.
+const MinFixDensityHistory = 5
+
+// FixCount reports how many of these decisions were corrections —
+// reverts, plus every commit the fix miner would classify as a fix.
+// Exported because more than one surface ranks files by it (the `why`
+// fix-density line, the HTML report's heat colours), and two surfaces
+// counting different commits would disagree about which file is hot.
+func FixCount(decisions []model.Decision) int {
+	n := 0
+
+	for _, d := range decisions {
+		// Body too, not just the title: mining classifies on both, and
+		// a "harden worker" commit whose body says "Fixes #12" is a
+		// fix finding — the density must count the same commits.
+		if d.Kind == model.DecisionRevert || fixes.Classify(d.Title, d.Body) != "" {
+			n++
+		}
+	}
+
+	return n
+}
+
+// LessonScope is the area a file's raw-lesson hint points at: its
 // directory, or the file itself at the repo root (root files stay
-// file-scoped everywhere in the lessons layer).
-func lessonScope(file string) string {
+// file-scoped everywhere in the lessons layer). Exported because the
+// hotspot map scopes a file's cell the same way — clicking a cell must
+// find the lessons that would fire when editing it.
+func LessonScope(file string) string {
 	if dir := filepath.ToSlash(filepath.Dir(file)); dir != "." {
 		return dir
 	}
@@ -320,7 +336,7 @@ func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson, moreP
 	// pin is proposed to the user, never self-added.
 	fmt.Fprintf(w, "(all raw findings: `seamark lessons --region %s` — a repeated mistake "+
 		"not covered above is worth proposing as a pin in .seamark/lessons.yaml)\n",
-		render.Sanitize(lessonScope(file)))
+		render.Sanitize(LessonScope(file)))
 
 	return nil
 }

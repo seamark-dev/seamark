@@ -1,0 +1,321 @@
+{{- /*
+The report page. Every value interpolated here is untrusted text —
+review comments, commit subjects, model-written notes — and reaches the
+page only through html/template's contextual escaping. There is
+deliberately no template.HTML anywhere: the SVG map is drawn from
+geometry structs below rather than assembled as markup in Go, so a file
+path can never become an element.
+*/ -}}
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>seamark report — {{.Repo}}</title>
+<style>
+:root {
+  --ink:#14181A; --paper:#F4F3F0; --amber:#E8B23A; --rust:#C4553D; --sea:#4B7A6B;
+  --bg:var(--paper); --fg:var(--ink); --dim:#6B7280; --line:#DDD9D2; --panel:#FFFFFF;
+  --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,monospace;
+  --sans:system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme:dark) {
+  :root { --bg:#14181A; --fg:#F4F3F0; --dim:#8B95A1; --line:#262C30; --panel:#1B2124; }
+}
+* { box-sizing:border-box }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 var(--mono); }
+.wrap { max-width:1120px; margin:0 auto; padding:0 20px 80px }
+header.top { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line);
+  padding:16px 0 12px; margin-bottom:22px; z-index:5 }
+.brand { display:flex; align-items:center; gap:10px; font-size:19px; font-weight:700;
+  letter-spacing:-.4px }
+.brand svg { flex:none }
+.sub { color:var(--dim); font-size:12px; margin-top:4px }
+.stats { display:flex; gap:18px; flex-wrap:wrap; margin-top:10px; font-size:12px }
+.stats b { font-size:17px; font-weight:700; display:block }
+.stats span { color:var(--dim) }
+.stale { margin-top:10px; padding:8px 12px; border:1px solid var(--rust); border-radius:7px;
+  color:var(--rust); font-size:12px }
+h2 { font-size:13px; text-transform:uppercase; letter-spacing:1.3px; color:var(--dim);
+  margin:34px 0 12px; font-weight:600 }
+h2 .hint { text-transform:none; letter-spacing:0; font-weight:400; margin-left:8px }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+  padding:14px 16px; margin-bottom:10px }
+.card header { display:flex; align-items:center; gap:10px; margin-bottom:6px }
+.card h3 { font-size:14px; margin:0; font-weight:700; flex:1 }
+.pid { font-size:12px; color:var(--amber); font-weight:700 }
+.badge { font-size:10px; padding:2px 7px; border-radius:99px; border:1px solid var(--line);
+  color:var(--dim) }
+.badge.proposed { border-color:var(--amber); color:var(--amber) }
+.note { margin:0 0 8px; font-family:var(--sans); font-size:13.5px }
+.meta { display:flex; gap:14px; font-size:11.5px; color:var(--dim); flex-wrap:wrap }
+.region { color:var(--sea) }
+.aged { color:var(--amber) }
+details { margin-top:9px }
+summary { cursor:pointer; font-size:11.5px; color:var(--dim) }
+.evidence { list-style:none; padding:0; margin:8px 0 0 }
+.evidence li { border-left:2px solid var(--line); padding:2px 0 2px 10px; margin-bottom:8px }
+.evidence code { font-size:11px; color:var(--dim); margin-left:6px }
+.evidence a { font-size:11px; color:var(--sea); margin-left:6px }
+.evidence pre { white-space:pre-wrap; font-size:11.5px; margin:4px 0 0; color:var(--fg);
+  max-height:130px; overflow:auto }
+.src { font-size:10px; padding:1px 6px; border-radius:99px; background:var(--line) }
+.src.fix, .src.revert { background:rgba(232,178,58,.22); color:var(--amber) }
+.actions { margin-top:9px; display:flex; gap:8px; flex-wrap:wrap }
+.actions code { font-size:11px; background:var(--bg); border:1px solid var(--line);
+  padding:3px 8px; border-radius:5px; cursor:copy }
+svg.map { width:100%; height:auto; display:block; border:1px solid var(--line);
+  border-radius:8px; background:var(--panel) }
+.cell { cursor:pointer } .cell:hover rect, .cell:focus rect { stroke:var(--fg); stroke-width:1.5 }
+.cn { font:600 11px var(--mono) }
+.cm { font:10px var(--mono); opacity:.8 }
+.grp { fill:none; stroke:var(--line); stroke-width:1 }
+.grpname { font:600 10.5px var(--mono); fill:var(--dim); letter-spacing:.4px }
+.dupe { border:1px solid var(--line); border-left:3px solid var(--rust); border-radius:8px;
+  padding:10px 14px; margin-bottom:8px; background:var(--panel) }
+.dupehead { font-size:11px; color:var(--rust); text-transform:uppercase; letter-spacing:.8px;
+  margin-bottom:6px }
+.dupline { font-size:12.5px; padding:2px 0 }
+.dn { color:var(--dim); font-family:var(--sans); font-size:12px; margin-left:8px }
+.legend { display:flex; gap:14px; font-size:11px; color:var(--dim); margin-top:8px; flex-wrap:wrap }
+.sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px }
+input.filter { width:100%; padding:9px 12px; font:13px var(--mono); background:var(--panel);
+  color:var(--fg); border:1px solid var(--line); border-radius:7px; margin-bottom:10px }
+table { width:100%; border-collapse:collapse; font-size:12.5px }
+th { text-align:left; font-size:11px; color:var(--dim); text-transform:uppercase;
+  letter-spacing:.7px; padding:6px 8px; border-bottom:1px solid var(--line); cursor:pointer;
+  user-select:none }
+td { padding:5px 8px; border-bottom:1px solid var(--line); vertical-align:top }
+td.num { color:var(--amber); font-weight:700; width:46px }
+td.mono { color:var(--sea); white-space:nowrap; max-width:290px; overflow:hidden;
+  text-overflow:ellipsis }
+.rev { font-size:10px; color:var(--dim) }
+.empty { border:1px dashed var(--line); border-radius:8px; padding:22px; text-align:center;
+  color:var(--dim) }
+.more { color:var(--dim); font-size:11.5px; margin-top:8px }
+footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line); color:var(--dim);
+  font-size:11px }
+</style></head><body><div class="wrap">
+
+<header class="top">
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M8 12 L26 32 L8 52 Z" fill="#F4F3F0" stroke="#8B95A1" stroke-width="1"/>
+      <path d="M56 12 L38 32 L56 52 Z" fill="#E8B23A"/>
+      <line x1="32" y1="8" x2="32" y2="56" stroke="#E8B23A" stroke-width="2.5"
+        stroke-dasharray="5 4"/>
+    </svg>
+    seamark report
+  </div>
+  <div class="sub">{{.Repo}} · index state {{if .IndexState}}{{.IndexState}}{{else}}unknown{{end}} · generated {{.Generated}}</div>
+  <div class="stats">
+    {{- range .Stats}}
+    <div><b>{{.Value}}</b><span>{{.Label}}</span></div>
+    {{- end}}
+  </div>
+  {{- if .Stale}}
+  <div class="stale">The workspace has changed since this index was built — run
+    <code>seamark index</code> and regenerate before trusting these numbers.</div>
+  {{- end}}
+</header>
+
+<h2>Decision queue <span class="hint">{{if .Sources}}evidence: {{.Sources}}{{else}}no findings mined yet{{end}}</span></h2>
+{{- if not .Cards}}
+<div class="empty">Nothing distilled yet — run <code>seamark lessons --distill</code> to turn
+  mined findings into pin proposals.</div>
+{{- else if not .Pending}}
+<div class="empty">Nothing pending — every distilled pattern has been decided.<br>
+  The cards below are the ledger, in the same shape a pending one takes.</div>
+{{- end}}
+{{- range .Cards}}
+<article class="card">
+  <header>
+    <span class="pid">p{{.ID}}</span>
+    <h3>{{.Rule}}</h3>
+    <span class="badge {{.Status}}">{{.Status}}</span>
+  </header>
+  <p class="note">{{.Note}}</p>
+  <div class="meta">
+    <span class="region">{{.Region}}</span>
+    {{- if eq .Retrieved .Cited}}
+    <span>{{plural .Cited "finding"}} · {{plural .Events "event"}}</span>
+    {{- else}}
+    <span class="aged">{{plural .Cited "finding"}} cited ·
+      {{- if .Retrieved}} {{.Retrieved}} still in the index
+      {{- else}} evidence has aged out of the mining window{{end}}</span>
+    {{- end}}
+    <span class="agent">{{.Agent}}</span>
+  </div>
+  {{- if .Evidence}}
+  <details><summary>evidence ({{len .Evidence}})</summary>
+    <ul class="evidence">
+      {{- range .Evidence}}
+      <li>
+        <span class="src {{.Kind}}">{{.Source}}</span><code>{{.Path}}</code>
+        {{- if .URL}}<a href="{{.URL}}" rel="noopener noreferrer nofollow">source</a>{{end}}
+        <pre>{{.Body}}</pre>
+      </li>
+      {{- end}}
+    </ul>
+  </details>
+  {{- end}}
+  {{- if .Pending}}
+  <div class="actions">
+    <code>seamark lessons --apply p{{.ID}}</code>
+    <code>seamark lessons --dismiss p{{.ID}}</code>
+  </div>
+  {{- end}}
+</article>
+{{- end}}
+{{- if gt .CardsTotal (len .Cards)}}
+<div class="more">Showing {{len .Cards}} of {{.CardsTotal}} proposals — the rest are in
+  <code>seamark lessons --proposals</code>.</div>
+{{- end}}
+
+<h2>Near-duplicate pins <span class="hint">
+  {{- if .Duplicates}}{{.Redundant}} of {{.AppliedPins}} applied pins restate a theme already pinned
+  {{- else}}an audit of the applied pins against each other{{end}}</span></h2>
+{{- if .Duplicates}}
+{{- range .Duplicates}}
+<div class="dupe">
+  <div class="dupehead">{{plural (len .Pins) "pin"}}, one theme</div>
+  {{- range .Pins}}
+  <div class="dupline"><span class="pid">p{{.ID}}</span> <b>{{.Rule}}</b>
+    <span class="dn">{{.Digest}}</span></div>
+  {{- end}}
+</div>
+{{- end}}
+<div class="more">Drop the redundant ones with
+  <code>seamark lessons --prune p&lt;id&gt;</code> — seamark never edits lessons.yaml unasked.</div>
+{{- else}}
+<div class="empty">No near-duplicates among {{.AppliedPins}} applied pins.</div>
+{{- end}}
+
+<h2>Hotspot map <span class="hint">parsed files grouped by directory · area = commits touching
+  the file · colour = share of recent commits that were fixes · click a cell to filter
+  lessons</span></h2>
+{{- if .Cells}}
+<svg class="map" viewBox="0 0 {{px .MapWidth}} {{px .MapHeight}}">
+  {{- range .Groups}}
+  <rect class="grp" x="{{at .X 1}}" y="{{at .Y 1}}" width="{{side .W}}" height="{{side .H}}"
+    rx="6"/>
+  <text class="grpname" x="{{at .X 8}}" y="{{at .Y 13}}">{{.Label}} · {{plural .Files "file"}}</text>
+  {{- end}}
+  {{- range .Cells}}
+  <g class="cell" data-scope="{{.Scope}}" tabindex="0" role="button" aria-label="{{.Tooltip}}">
+    <title>{{.Tooltip}}</title>
+    <rect x="{{px .X}}" y="{{px .Y}}" width="{{side .W}}" height="{{side .H}}" rx="3"
+      fill="{{.Fill}}"/>
+    {{- if .Label}}
+    <text x="{{at .X 6}}" y="{{at .Y 15}}" class="cn" fill="{{.Ink}}">{{.Label}}</text>
+    {{- end}}
+    {{- if .Metric}}
+    <text x="{{at .X 6}}" y="{{at .Y 29}}" class="cm" fill="{{.Ink}}">{{.Metric}}</text>
+    {{- end}}
+  </g>
+  {{- end}}
+</svg>
+<div class="legend">
+  <span><i class="sw" style="background:#C4553D"></i>≥40% fixes</span>
+  <span><i class="sw" style="background:#E8B23A"></i>≥25%</span>
+  <span><i class="sw" style="background:#B8A44A"></i>≥12%</span>
+  <span><i class="sw" style="background:#4B7A6B"></i>calm, or too little history</span>
+</div>
+<div class="more">Drawing {{len .Cells}} of {{plural .FilesWithHistory "file"}} with history — the
+  busiest directories, and the busiest few files in each.</div>
+{{- else}}
+<div class="empty">No file history indexed yet — <code>seamark index</code> reads git to build
+  this map.</div>
+{{- end}}
+
+<h2>Lessons <span class="hint">every mined lesson, one-offs included — filter or sort to
+  triage</span></h2>
+{{- if .Lessons}}
+<input class="filter" id="filter" aria-label="Filter lessons by region or text"
+  placeholder="filter by region or text…  (click a hotspot cell to scope)">
+<table id="lessons"><thead><tr>
+  <th data-sort="num" scope="col">×</th>
+  <th data-sort="text" scope="col">region</th>
+  <th data-sort="text" scope="col">reviewer</th>
+  <th data-sort="text" scope="col">symptom</th>
+</tr></thead><tbody>
+  {{- range .Lessons}}
+  <tr data-text="{{.Search}}" data-scopes="{{.Scopes}}">
+    <td class="num">{{.Occurrences}}</td>
+    <td class="mono">{{.Region}}</td>
+    <td><span class="rev">{{.Reviewer}}</span></td>
+    <td>{{.Symptom}}</td>
+  </tr>
+  {{- end}}
+</tbody></table>
+{{- if gt .LessonsTotal (len .Lessons)}}
+<div class="more">Showing the {{len .Lessons}} most frequent of {{.LessonsTotal}} lessons — the
+  full ledger is <code>seamark lessons --list</code>.</div>
+{{- end}}
+{{- else}}
+<div class="empty">No lessons mined yet — <code>seamark index --reviews</code> reads pull-request
+  feedback, and fix commits are mined from git.</div>
+{{- end}}
+
+<footer>
+  Snapshot of the index at state {{.IndexState}} — regenerate after <code>seamark index</code>.
+  All text quoted from review comments, commits, and distilled proposals is escaped, never
+  rendered as markup.
+</footer>
+</div>
+<script>
+const filter = document.getElementById('filter');
+const rows = filter ? [...document.querySelectorAll('#lessons tbody tr')] : [];
+
+// Two ways to narrow the table, and they are not the same thing. Typing
+// searches text. Clicking a hotspot cell selects a region, and which
+// lessons belong to a region was decided when the page was generated —
+// each row carries its scopes, so a lesson merely *mentioning* a
+// directory is not mistaken for one that governs it.
+let scope = null;
+
+function apply() {
+  const q = filter.value.toLowerCase().trim();
+
+  rows.forEach(r => {
+    r.hidden = scope
+      ? !r.dataset.scopes.split(' ').includes(scope)
+      : Boolean(q) && !r.dataset.text.includes(q);
+  });
+}
+
+function scopeTo(cell) {
+  if (!filter) return;
+  scope = cell.dataset.scope;
+  filter.value = scope;
+  apply();
+  document.getElementById('lessons').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+// Typing anything leaves region mode: the box is a search box again.
+filter?.addEventListener('input', () => { scope = null; apply(); });
+
+document.querySelectorAll('.cell').forEach(cell => {
+  cell.addEventListener('click', () => scopeTo(cell));
+  cell.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scopeTo(cell); }
+  });
+});
+
+document.querySelectorAll('th[data-sort]').forEach((th, i) => th.addEventListener('click', () => {
+  const body = document.querySelector('#lessons tbody');
+  const numeric = th.dataset.sort === 'num';
+  const dir = th.dataset.dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
+  const sorted = [...body.rows].sort((a, b) => {
+    const x = a.cells[i].textContent, y = b.cells[i].textContent;
+    const c = numeric ? (+x) - (+y) : x.localeCompare(y);
+    return dir === 'asc' ? c : -c;
+  });
+  sorted.forEach(r => body.appendChild(r));
+}));
+
+document.querySelectorAll('.actions code').forEach(c => c.addEventListener('click', () => {
+  navigator.clipboard?.writeText(c.textContent);
+  const original = c.textContent;
+  c.textContent = 'copied ✓';
+  setTimeout(() => { c.textContent = original; }, 900);
+}));
+</script></body></html>
