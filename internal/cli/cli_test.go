@@ -697,6 +697,70 @@ func TestGateHookModeFailsClosed(t *testing.T) {
 	assert.NotErrorIs(t, err, gate.ErrBlocked)
 }
 
+// TestInitDefaultCannotBlock is the end-to-end trust-contract test: a
+// first `seamark init` must not be able to produce a blocking verdict —
+// not on a deny-rule match, not even on a broken policy file.
+func TestInitDefaultCannotBlock(t *testing.T) {
+	root := writeFixture(t)
+
+	out, err := run(t, "-C", root, "init")
+	require.NoError(t, err)
+	assert.Contains(t, out, "gate    warn")
+
+	// The installed hook must not carry --enforce anywhere.
+	data, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "--enforce")
+
+	// A command matching a starter deny rule: the verdict surfaces, the
+	// command still passes (exit 0).
+	payload := `{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}`
+	stdout, _, err := runIn(t, payload, "-C", root, "gate", "--hook")
+	require.NoError(t, err, "a default init must never block")
+	assert.Contains(t, stdout, "deny")
+	assert.Contains(t, stdout, "mode: warn")
+
+	// Even a broken policy fails open in a default install: the error is
+	// reported, but nothing blocks.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"),
+		[]byte("mode: [broken\n"), 0o644))
+
+	_, _, err = runIn(t, payload, "-C", root, "gate", "--hook")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, gate.ErrBlocked, "a broken policy must not block a default install")
+}
+
+func TestInitGateModeEnforceBlocks(t *testing.T) {
+	root := writeFixture(t)
+
+	out, err := run(t, "-C", root, "init", "--gate-mode", "enforce")
+	require.NoError(t, err)
+	assert.Contains(t, out, "gate    enforce")
+
+	// The scaffolded policy agrees with the hook it was installed with.
+	data, err := os.ReadFile(filepath.Join(root, ".seamark", "policy.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "mode: enforce")
+
+	// And the installed hook really carries the flag.
+	hooks, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(hooks), "gate --enforce --hook")
+
+	// The installed hook blocks a deny match end to end.
+	payload := `{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}`
+	_, _, err = runIn(t, payload, "-C", root, "gate", "--enforce", "--hook")
+	assert.ErrorIs(t, err, gate.ErrBlocked)
+}
+
+func TestInitRejectsUnknownGateMode(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "init", "--gate-mode", "block-everything")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--gate-mode")
+}
+
 func TestReportWritesASelfContainedPage(t *testing.T) {
 	root := writeFixture(t)
 	gitify(t, root)
