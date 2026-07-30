@@ -559,6 +559,24 @@ func TestStaleIndexWarnsInsideTheFile(t *testing.T) {
 	assert.Contains(t, stale.String(), "The workspace has changed")
 }
 
+func TestInteractiveControlsAreKeyboardOperable(t *testing.T) {
+	// Everything clickable must be reachable and operable without a
+	// mouse: focusable in the markup, driven by the shared Enter/Space
+	// handler in the script.
+	st, root := seed(t)
+	page := renderPage(t, st, root)
+
+	assert.Contains(t, page, `<th data-sort="num" scope="col" tabindex="0" aria-sort="none">`,
+		"sortable headers are focusable and announce their sort state")
+	assert.Contains(t, page,
+		`<code tabindex="0" role="button" aria-label="Copy the apply command">seamark lessons --apply p1</code>`,
+		"copy controls are focusable buttons")
+	assert.Contains(t, page, `tabindex="0" role="button" aria-label=`,
+		"map cells are focusable buttons")
+	assert.Contains(t, page, "function pressable",
+		"the script wires keyboard activation for all of them")
+}
+
 func TestMapIsWellFormedMarkup(t *testing.T) {
 	st, root := seed(t)
 	page := renderPage(t, st, root)

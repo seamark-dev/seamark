@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -718,9 +719,25 @@ func TestReportWritesASelfContainedPage(t *testing.T) {
 	assert.Contains(t, html, "seamark report")
 
 	// Self-contained: nothing is fetched when the file is opened, so it
-	// works from an email attachment on a machine with no network.
-	for _, external := range []string{"http://", "https://cdn", "<link rel=\"stylesheet\"", "src=\"http"} {
-		assert.NotContains(t, html, external, "the page must not load anything external")
+	// works from an email attachment on a machine with no network. An
+	// <a href> to provenance is navigation and stays allowed; what must
+	// not exist is anything the browser resolves while *rendering* —
+	// element sources, stylesheets, imports, CSS url() — unless it is an
+	// inline data: URI.
+	for _, m := range regexp.MustCompile(`(?i)\b(?:src|srcset)\s*=\s*["']([^"']*)`).
+		FindAllStringSubmatch(html, -1) {
+		assert.Truef(t, strings.HasPrefix(m[1], "data:"),
+			"a source the browser would fetch: %s", m[0])
+	}
+
+	for _, m := range regexp.MustCompile(`(?i)\burl\(\s*["']?([^"')]*)`).
+		FindAllStringSubmatch(html, -1) {
+		assert.Truef(t, strings.HasPrefix(m[1], "data:"),
+			"a CSS resource the browser would fetch: %s", m[0])
+	}
+
+	for _, banned := range []string{`(?i)<link\b`, `(?i)@import\b`, `(?i)<(?:iframe|object|embed)\b`} {
+		assert.NotRegexp(t, banned, html, "the page must not load anything external")
 	}
 }
 

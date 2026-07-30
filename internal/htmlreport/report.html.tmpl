@@ -159,8 +159,8 @@ footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line); co
   {{- end}}
   {{- if .Pending}}
   <div class="actions">
-    <code>seamark lessons --apply p{{.ID}}</code>
-    <code>seamark lessons --dismiss p{{.ID}}</code>
+    <code tabindex="0" role="button" aria-label="Copy the apply command">seamark lessons --apply p{{.ID}}</code>
+    <code tabindex="0" role="button" aria-label="Copy the dismiss command">seamark lessons --dismiss p{{.ID}}</code>
   </div>
   {{- end}}
 </article>
@@ -232,10 +232,10 @@ footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line); co
 <input class="filter" id="filter" aria-label="Filter lessons by region or text"
   placeholder="filter by region or text…  (click a hotspot cell to scope)">
 <table id="lessons"><thead><tr>
-  <th data-sort="num" scope="col">×</th>
-  <th data-sort="text" scope="col">region</th>
-  <th data-sort="text" scope="col">reviewer</th>
-  <th data-sort="text" scope="col">symptom</th>
+  <th data-sort="num" scope="col" tabindex="0" aria-sort="none">×</th>
+  <th data-sort="text" scope="col" tabindex="0" aria-sort="none">region</th>
+  <th data-sort="text" scope="col" tabindex="0" aria-sort="none">reviewer</th>
+  <th data-sort="text" scope="col" tabindex="0" aria-sort="none">symptom</th>
 </tr></thead><tbody>
   {{- range .Lessons}}
   <tr data-text="{{.Search}}" data-scopes="{{.Scopes}}">
@@ -293,17 +293,24 @@ function scopeTo(cell) {
 // Typing anything leaves region mode: the box is a search box again.
 filter?.addEventListener('input', () => { scope = null; apply(); });
 
-document.querySelectorAll('.cell').forEach(cell => {
-  cell.addEventListener('click', () => scopeTo(cell));
-  cell.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scopeTo(cell); }
+// Every interactive element answers the keyboard the same way it
+// answers the mouse: focusable in the markup, Enter and Space here.
+function pressable(el, action) {
+  el.addEventListener('click', action);
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action(); }
   });
-});
+}
 
-document.querySelectorAll('th[data-sort]').forEach((th, i) => th.addEventListener('click', () => {
+document.querySelectorAll('.cell').forEach(cell => pressable(cell, () => scopeTo(cell)));
+
+const headers = [...document.querySelectorAll('th[data-sort]')];
+headers.forEach((th, i) => pressable(th, () => {
   const body = document.querySelector('#lessons tbody');
   const numeric = th.dataset.sort === 'num';
   const dir = th.dataset.dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
+  headers.forEach(h => h.setAttribute('aria-sort', 'none'));
+  th.setAttribute('aria-sort', dir === 'asc' ? 'ascending' : 'descending');
   const sorted = [...body.rows].sort((a, b) => {
     const x = a.cells[i].textContent, y = b.cells[i].textContent;
     const c = numeric ? (+x) - (+y) : x.localeCompare(y);
@@ -312,7 +319,7 @@ document.querySelectorAll('th[data-sort]').forEach((th, i) => th.addEventListene
   sorted.forEach(r => body.appendChild(r));
 }));
 
-document.querySelectorAll('.actions code').forEach(c => c.addEventListener('click', () => {
+document.querySelectorAll('.actions code').forEach(c => pressable(c, () => {
   navigator.clipboard?.writeText(c.textContent);
   const original = c.textContent;
   c.textContent = 'copied ✓';
