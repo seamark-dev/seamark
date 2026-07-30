@@ -454,6 +454,9 @@ func gitPush(args []string, root string) (isPush, isForce bool, branch string) {
 	return true, isForce, ""
 }
 
+// emptyDiff is the diff activation for command evaluations: every key
+// rules may access is present (CEL errors on missing keys), nothing is
+// touched.
 func emptyDiff() map[string]any {
 	return map[string]any{"files": []string{}, "effects": []string{}}
 }

@@ -225,6 +225,22 @@ func TestAuditRotatesByAge(t *testing.T) {
 	assert.Contains(t, string(rotated), oldTS, "…into the retained generation")
 }
 
+func TestAuditRotatesUnreadableLog(t *testing.T) {
+	p, c, root := testSetup(t)
+
+	// A first line past the scanner's token limit cannot be age-checked:
+	// it must rotate aside as stale, not persist forever unexamined.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	junk := strings.Repeat("x", 2<<20) // 2 MiB, no newline, below the size cap
+	require.NoError(t, os.WriteFile(auditPath(root), []byte(junk), 0o600))
+
+	require.NoError(t, Audit(root, "gate", "ls", p, evalCmd(t, p, c, root, "ls")))
+
+	rotated, err := os.Stat(auditPath(root) + ".1")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2<<20), rotated.Size(), "the unreadable log moved aside whole")
+}
+
 func TestAuditExpiresRotatedGeneration(t *testing.T) {
 	p, c, root := testSetup(t)
 

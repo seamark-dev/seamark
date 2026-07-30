@@ -192,7 +192,10 @@ func oldestEntryStale(f *os.File) bool {
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20) // tolerate long legacy lines
 
 	if !sc.Scan() {
-		return false // empty log: nothing to age out
+		// A genuinely empty log has nothing to age out; a read failure
+		// (a first line past the token limit, an I/O error) counts as
+		// stale — rotating unreadable junk aside is always safe.
+		return sc.Err() != nil
 	}
 
 	var first struct {
