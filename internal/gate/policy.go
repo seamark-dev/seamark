@@ -6,6 +6,7 @@
 package gate
 
 import (
+	"crypto/sha256"
 	_ "embed"
 	"fmt"
 	"os"
@@ -41,8 +42,20 @@ type Policy struct {
 		Detect      []string `yaml:"detect"`
 		ProdMarkers []string `yaml:"prod_markers"`
 	} `yaml:"environment"`
+	// Audit configures decision logging. Raw opts into persisting the
+	// input line (secret patterns redacted best-effort); the default
+	// entry carries only a SHA-256 of the input, because command lines
+	// frequently embed tokens, passwords and connection strings.
+	Audit struct {
+		Raw bool `yaml:"raw"`
+	} `yaml:"audit"`
 	Deny            []Rule `yaml:"deny"`
 	RequireApproval []Rule `yaml:"require_approval"`
+
+	// Hash is the SHA-256 of the policy source that produced this rule
+	// set: audit entries carry it so a decision can be correlated with
+	// the exact policy text that made it.
+	Hash string `yaml:"-"`
 }
 
 // LoadPolicy returns the workspace policy at .seamark/policy.yaml, or the
@@ -64,6 +77,8 @@ func LoadPolicy(root string) (*Policy, error) {
 	if err := yaml.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("gate: %s: %w", source, err)
 	}
+
+	p.Hash = fmt.Sprintf("%x", sha256.Sum256(data))
 
 	if p.Mode == "" {
 		p.Mode = "warn"

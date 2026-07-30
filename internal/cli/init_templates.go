@@ -31,6 +31,14 @@ environment:
   detect: [AWS_PROFILE, KUBECONFIG, DATABASE_URL, ENV, ENVIRONMENT, DEPLOY_ENV]
   prod_markers: [prod, production, live]
 
+# Decision log (.seamark/audit.jsonl: 0600, rotated by size and age,
+# gitignored). Each entry stores the normalized command names, a SHA-256
+# of the input, the verdict and the policy hash — never the raw command
+# line, which frequently carries tokens, passwords and connection strings.
+# audit:
+#   raw: true   # ALSO persist the input line. Secret-shaped patterns are
+#               # redacted best-effort, but treat the log as sensitive.
+
 deny:
   - id: no-prod-infra-mutation
     when: 'effect.contains("infra:mutate") && env.is_prod'
