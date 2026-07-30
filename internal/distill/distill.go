@@ -408,17 +408,19 @@ const (
 	maxNoteLen  = 300
 	maxPerGroup = 5
 	// minCitedEvents is the recurrence bar, counted in events rather
-	// than citations — see countEvents.
+	// than citations — see CountEvents.
 	minCitedEvents = 2
 )
 
-// countEvents collapses cited findings into distinct events: findings
+// CountEvents collapses cited findings into distinct events: findings
 // sharing a pull request are one event (the review comment and the fix
 // commit that answered it), while findings without a pr number are
 // independent. The prompt states this rule; validation enforces it,
 // because the model's arithmetic is not evidence — the same reason
-// cited ids are checked against the group rather than trusted.
-func countEvents(cited []model.Finding) int {
+// cited ids are checked against the group rather than trusted. Exported
+// so the report counts a proposal's evidence exactly as the recurrence
+// bar did.
+func CountEvents(cited []model.Finding) int {
 	events := map[string]bool{}
 
 	for _, f := range cited {
@@ -486,7 +488,7 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 		rule := cleanRule(p.Rule)
 		note := strings.TrimSpace(p.Note)
 
-		if rule == "" || note == "" || countEvents(cited) < minCitedEvents {
+		if rule == "" || note == "" || CountEvents(cited) < minCitedEvents {
 			continue
 		}
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -694,4 +695,127 @@ func TestGateHookModeFailsClosed(t *testing.T) {
 	_, _, err = runIn(t, "{not json", "-C", root, "gate", "--hook")
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, gate.ErrBlocked)
+}
+
+func TestReportWritesASelfContainedPage(t *testing.T) {
+	root := writeFixture(t)
+	gitify(t, root)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	out, err := run(t, "-C", root, "report")
+	require.NoError(t, err)
+
+	path := filepath.Join(root, ".seamark", "report.html")
+	assert.Contains(t, out, path, "the command says where it wrote")
+
+	page, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	html := string(page)
+	assert.Contains(t, html, "<!doctype html>")
+	assert.Contains(t, html, "</html>")
+	assert.Contains(t, html, "seamark report")
+
+	// Self-contained: nothing is fetched when the file is opened, so it
+	// works from an email attachment on a machine with no network. An
+	// <a href> to provenance is navigation and stays allowed; what must
+	// not exist is anything the browser resolves while *rendering* —
+	// element sources, stylesheets, imports, CSS url() — unless it is an
+	// inline data: URI.
+	for _, m := range regexp.MustCompile(`(?i)\b(?:src|srcset)\s*=\s*["']([^"']*)`).
+		FindAllStringSubmatch(html, -1) {
+		assert.Truef(t, strings.HasPrefix(m[1], "data:"),
+			"a source the browser would fetch: %s", m[0])
+	}
+
+	for _, m := range regexp.MustCompile(`(?i)\burl\(\s*["']?([^"')]*)`).
+		FindAllStringSubmatch(html, -1) {
+		assert.Truef(t, strings.HasPrefix(m[1], "data:"),
+			"a CSS resource the browser would fetch: %s", m[0])
+	}
+
+	for _, banned := range []string{`(?i)<link\b`, `(?i)@import\b`, `(?i)<(?:iframe|object|embed)\b`} {
+		assert.NotRegexp(t, banned, html, "the page must not load anything external")
+	}
+}
+
+func TestReportToStdout(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	out, err := run(t, "-C", root, "report", "-o", "-")
+	require.NoError(t, err)
+	assert.Contains(t, out, "<!doctype html>")
+	assert.NoFileExists(t, filepath.Join(root, ".seamark", "report.html"),
+		"writing to stdout must not also leave a file behind")
+}
+
+func TestReportHonoursAnExplicitPath(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	target := filepath.Join(root, "docs", "audit", "report.html")
+
+	_, err = run(t, "-C", root, "report", "--out", target)
+	require.NoError(t, err)
+	assert.FileExists(t, target, "missing parent directories are created")
+}
+
+func TestReportWithoutIndexFails(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "report")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no index found")
+}
+
+func TestWriteAtomicLeavesNoLeftovers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.html")
+
+	require.NoError(t, writeAtomic(path, []byte("first")))
+	require.NoError(t, writeAtomic(path, []byte("second")))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "second", string(data))
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm(),
+		"a report is readable, not 0600 as CreateTemp makes it")
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "the temporary file is renamed away, never left behind")
+	assert.Equal(t, "report.html", entries[0].Name())
+}
+
+func TestWriteAtomicKeepsTheOldFileWhenWritingFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.html")
+
+	require.NoError(t, writeAtomic(path, []byte("yesterday's good report")))
+
+	// A directory that cannot be written to stands in for any failure
+	// between opening the temporary file and renaming it into place.
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	require.Error(t, writeAtomic(path, []byte("today's half-written report")))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "yesterday's good report", string(data),
+		"a failed write must not cost the reader the report they already had")
 }

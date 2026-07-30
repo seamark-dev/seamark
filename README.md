@@ -373,6 +373,43 @@ never fired — 7 lessons in regions no edit has touched (decay candidates)
   …
 ```
 
+### Reviewing it all: `seamark report`
+
+Agents read the compact text reports over MCP. The person who has to
+decide what the repo should actually *remember* needs a different
+surface — everything at once, in one place:
+
+```bash
+seamark report            # → .seamark/report.html
+seamark report --open     # ...and open it
+seamark report -o - > /tmp/audit.html
+```
+
+One self-contained HTML file — no server, no assets, nothing fetched
+when it is opened — so it can be attached to a pull request or read on a
+machine with no network. Four sections:
+
+- **Decision queue** — every proposal awaiting `--apply`/`--dismiss`,
+  with the findings it cited (click through to the original review
+  comment) and the commands that decide it. The header line says what
+  the evidence rests on: *469 review · 34 fix:conventional · 15
+  fix:subject*.
+- **Near-duplicate pins** — which *applied* pins restate a theme already
+  pinned. This is the audit that found 17 redundant pins out of 65 in a
+  real repo, and the reason `lessons --prune` exists.
+- **Hotspot map** — the files seamark parsed, grouped by directory: area
+  is how much history a file carries, colour is what share of its recent
+  commits were corrections. Same fix-density definition `why` prints, so
+  the two surfaces never disagree. Click a cell to filter the lessons
+  below to that region.
+- **Lessons** — every mined lesson including the one-offs, filterable
+  and sortable. The raw material for tuning `lessons.yaml`.
+
+The page is a snapshot: it stamps the index state it was built from,
+warns inside the file when the workspace has moved on since, and says so
+whenever a list was truncated. All quoted text — review comments, commit
+subjects, model-written notes — is escaped, never rendered as markup.
+
 ## Editor integration
 
 `seamark lsp` is a secondary language server that runs *alongside* gopls,
@@ -519,6 +556,7 @@ current — and reacts according to what a stale answer would cost:
 | `seamark check` | **Self-repairs**: missing or stale index is rebuilt before evaluating — a blast radius from stale line spans would be a wrong safety answer |
 | `seamark gate` | Never needs the index (catalogue + policy only); always current |
 | `seamark why` | Answers immediately, with a stderr note when the workspace changed since the last index |
+| `seamark report` | Same note, plus a banner **inside the file** — a report outlives the terminal that produced it |
 | `seamark index` | No-ops in well under a second when nothing changed (`--force` rebuilds) — running it "just in case" is free |
 
 When the workspace *has* changed, a **content-hashed per-file parse

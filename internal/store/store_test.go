@@ -119,6 +119,42 @@ func TestDecisionsForFile(t *testing.T) {
 	assert.Equal(t, "abc123", decisions[0].Ref)
 }
 
+func TestFileChurnRanksByActivity(t *testing.T) {
+	s := openTestStore(t)
+	seed(t, s)
+
+	// Three more commits on a.go only, so it outranks b.go 4 to 1.
+	require.NoError(t, s.Rebuild(func(tx *Tx) error {
+		for i, ref := range []string{"c1", "c2", "c3"} {
+			d := model.Decision{Kind: model.DecisionCommit, Ref: ref,
+				TS: int64(1700000100 + i), Files: []string{"pkg/a/a.go"}}
+			if err := tx.InsertDecision(&d); err != nil {
+				return err
+			}
+		}
+
+		return tx.InsertDecision(&model.Decision{Kind: model.DecisionCommit,
+			Ref: "abc123", TS: 1700000000, Files: []string{"pkg/a/a.go", "pkg/b/b.go"}})
+	}))
+
+	churn, err := s.FileChurn(10)
+	require.NoError(t, err)
+	require.Len(t, churn, 2)
+	assert.Equal(t, FileChurn{File: "pkg/a/a.go", Commits: 4}, churn[0])
+	assert.Equal(t, FileChurn{File: "pkg/b/b.go", Commits: 1}, churn[1])
+
+	// The limit is a limit, and it keeps the busiest end.
+	churn, err = s.FileChurn(1)
+	require.NoError(t, err)
+	require.Len(t, churn, 1)
+	assert.Equal(t, "pkg/a/a.go", churn[0].File)
+
+	// No limit means every file, so a caller can count them.
+	churn, err = s.FileChurn(0)
+	require.NoError(t, err)
+	assert.Len(t, churn, 2)
+}
+
 func TestRebuildReplacesDerivedTables(t *testing.T) {
 	s := openTestStore(t)
 	seed(t, s)

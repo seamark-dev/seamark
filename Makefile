@@ -5,7 +5,7 @@ MODULE  := github.com/seamark-dev/seamark
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -ldflags "-X $(MODULE)/internal/cli.version=$(VERSION)"
 
-.PHONY: build test lint fmt tidy index clean
+.PHONY: build test lint fmt tidy index report clean
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -31,6 +31,9 @@ tidy: ## Sync go.mod/go.sum (-e: the tree-sitter grammar module's test files
 
 index: build ## Self-index this repository
 	$(BINARY) index
+
+report: index ## Self-index, then write .seamark/report.html
+	$(BINARY) report
 
 clean: ## Remove build artifacts and the local index
 	rm -rf bin .seamark
