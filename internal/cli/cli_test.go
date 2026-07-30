@@ -114,6 +114,154 @@ func gitify(t *testing.T, root string) {
 	}
 }
 
+func TestStateExportImportRoundTrip(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// Plant a durable decision behind the CLI's back.
+	st, err := store.Open(filepath.Join(root, ".seamark", "index.db"))
+	require.NoError(t, err)
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "sig-1", Rule: "keep-ascii", Note: "ascii only",
+		Status: model.ProposalDismissed, CreatedAt: 1700000000,
+	}))
+	require.NoError(t, st.Close())
+
+	// Export to a file; the file is created private.
+	exportPath := filepath.Join(root, "state.json")
+	out, err := run(t, "-C", root, "state", "export", "--out", exportPath)
+	require.NoError(t, err)
+	assert.Contains(t, out, "1 proposals")
+
+	info, err := os.Stat(exportPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "an export carries decisions — private by default")
+
+	// Import into a fresh clone that has never been indexed: the restore
+	// path must not require an index to exist.
+	clone := writeFixture(t)
+	out, err = run(t, "-C", clone, "state", "import", exportPath)
+	require.NoError(t, err)
+	assert.Contains(t, out, "1 added")
+
+	cloneStore, err := store.Open(filepath.Join(clone, ".seamark", "index.db"))
+	require.NoError(t, err)
+	defer func() { _ = cloneStore.Close() }()
+
+	dismissed, err := cloneStore.Proposals(model.ProposalDismissed)
+	require.NoError(t, err)
+	require.Len(t, dismissed, 1)
+	assert.Equal(t, "keep-ascii", dismissed[0].Rule)
+}
+
+func TestStateExportWithoutIndexFails(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "state", "export")
+	require.Error(t, err, "exporting from nothing must not fabricate an empty bundle")
+	assert.Contains(t, err.Error(), "no index")
+}
+
+func TestStateExportRefusesToOverwriteDatabase(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(root, ".seamark", "index.db")
+	before, err := os.ReadFile(dbPath)
+	require.NoError(t, err)
+
+	_, err = run(t, "-C", root, "state", "export", "--out", dbPath)
+	require.Error(t, err, "--out must never target the database being exported")
+	assert.Contains(t, err.Error(), "index database")
+
+	after, err := os.ReadFile(dbPath)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "the database must be byte-identical")
+}
+
+func TestStateExportReplacesAtomicallyAndTightens(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// A pre-existing world-readable destination: the atomic replace
+	// installs a fresh 0600 file rather than inheriting loose perms.
+	out := filepath.Join(root, "state.json")
+	require.NoError(t, os.WriteFile(out, []byte("old export"), 0o644))
+
+	_, err = run(t, "-C", root, "state", "export", "--out", out)
+	require.NoError(t, err)
+
+	info, err := os.Stat(out)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	data, err := os.ReadFile(out)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "seamark_state_version")
+}
+
+func TestStateImportRejectsTrailingData(t *testing.T) {
+	root := writeFixture(t)
+
+	_, _, err := runIn(t, `{"seamark_state_version":1}{"seamark_state_version":1}`,
+		"-C", root, "state", "import")
+	require.Error(t, err, "concatenated documents must not half-import")
+	assert.Contains(t, err.Error(), "trailing data")
+}
+
+func TestStateImportRefusesForeignRepository(t *testing.T) {
+	// Two distinct repositories: distinct root commits. The fixtures are
+	// byte-identical and git hashes deterministically, so the second repo
+	// needs distinct content to get a distinct root commit.
+	src := writeFixture(t)
+	gitify(t, src)
+
+	dst := writeFixture(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dst, "other.txt"), []byte("different\n"), 0o644))
+	gitify(t, dst)
+
+	_, err := run(t, "-C", src, "index")
+	require.NoError(t, err)
+
+	bundle := filepath.Join(src, "state.json")
+	_, err = run(t, "-C", src, "state", "export", "--out", bundle)
+	require.NoError(t, err)
+
+	_, err = run(t, "-C", dst, "state", "import", bundle)
+	require.Error(t, err, "a bundle from another repository must be refused")
+	assert.Contains(t, err.Error(), "different repository")
+
+	// --force is the explicit override.
+	out, err := run(t, "-C", dst, "state", "import", "--force", bundle)
+	require.NoError(t, err)
+	assert.Contains(t, out, "proposals")
+}
+
+func TestWhyAfterImportOnlyDatabaseStillWantsIndex(t *testing.T) {
+	root := writeFixture(t)
+
+	// Restoring state before the first index run creates the database —
+	// but graph questions must still say "index first", not answer
+	// emptily from a graphless file.
+	_, _, err := runIn(t, `{"seamark_state_version":1}`, "-C", root, "state", "import")
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(root, ".seamark", "index.db"))
+
+	_, err = run(t, "-C", root, "why", "anything")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no index found")
+
+	_, err = run(t, "-C", root, "orient")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no index found")
+}
+
 func TestWhyWarnsWhenStale(t *testing.T) {
 	root := writeFixture(t)
 	gitify(t, root)

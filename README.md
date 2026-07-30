@@ -594,6 +594,29 @@ files    832 seen, 703 parsed — 1 reparsed, 702 from cache
 A first index (or `--force`) is a full parse: ~3.2s for the monorepo,
 ~150ms for a small repo. The fingerprint check itself is ~30ms.
 
+## Durable state: the index is not a throwaway cache
+
+`.seamark/index.db` carries two kinds of state with different lifecycles.
+The derived graph — symbols, edges, co-change, decisions, effects — is
+rebuilt from the workspace on every reindex. But the same file also holds
+**durable decisions**: proposal history with your applied/dismissed
+verdicts, and the distillation memory that keeps paid agent calls from
+ever being repeated. Rebuilds (including `--force`) preserve those
+tables; **deleting the file destroys them**. The schema is versioned with
+ordered migrations — an older seamark refuses a newer database instead of
+guessing at it.
+
+To back up or move the durable part:
+
+```bash
+seamark state export --out decisions.json   # proposals + distillation memory
+seamark state import decisions.json         # merge into this clone (works pre-index)
+```
+
+Import never overwrites a local decision: it adds missing rows, and a
+still-pending proposal may adopt an imported verdict — a decision beats
+no decision.
+
 ### Planned: further incremental work
 
 Measured breakdown of a full 3.2s index: parse 1.8s (now cached),

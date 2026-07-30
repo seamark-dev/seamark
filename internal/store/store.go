@@ -1,6 +1,15 @@
 // Package store owns the on-disk index: a single SQLite file holding the
 // structure, history, effects, and policy tables (RFC-001 §5.1).
 //
+// The file carries two classes of state with different lifecycles: derived
+// tables (symbols, edges, co-change, decisions, effects) that Rebuild
+// wipes and recomputes from the workspace, and durable tables (proposal,
+// distilled, lesson, finding, rule) holding human decisions and paid
+// inference that no rebuild can regenerate. The database is therefore NOT
+// disposable; deleting it destroys decisions. Rebuilds preserve the
+// durable tables, the schema is versioned (migrate.go), and state.go
+// makes the durable subset portable.
+//
 // The store is deliberately dumb: it validates nothing about the graph and
 // contains no language knowledge. Writers (the indexer, the history miner)
 // batch rows inside Rebuild; readers get focused query helpers tuned for the
@@ -61,58 +70,30 @@ func Open(path string) (*Store, error) {
 	// The index has a single writer and local readers; one connection avoids
 	// SQLITE_BUSY without a retry dance.
 	db.SetMaxOpenConns(1)
+
+	// Refuse a NEWER database before applying schema.sql or migrations:
+	// re-executing this binary's DDL against a newer schema could
+	// half-recreate structures the newer version removed. The check runs
+	// first so the refusal's "left untouched" promise is actually true.
+	if err := refuseNewer(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
 	if _, err := db.Exec(schemaSQL); err != nil {
 		_ = db.Close() // the schema error is the one worth reporting
 		return nil, fmt.Errorf("store: apply schema: %w", err)
 	}
 
-	if err := migrate(db); err != nil {
+	// Version reconciliation runs on every open: new databases are
+	// stamped, old ones upgrade in ordered steps, newer ones are refused
+	// (see migrate.go).
+	if err := ensureVersion(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("store: migrate: %w", err)
+		return nil, err
 	}
 
 	return &Store{db: db}, nil
-}
-
-// migrate applies the additive changes CREATE IF NOT EXISTS cannot
-// express. Every step is idempotent and guarded by inspecting the live
-// schema, so opening an old database upgrades it in place and opening a
-// new one is a no-op.
-func migrate(db *sql.DB) error {
-	// finding.source arrived with fix mining (providers beyond reviews).
-	has, err := hasColumn(db, "finding", "source")
-	if err != nil {
-		return err
-	}
-
-	if !has {
-		// Every pre-migration finding came from review mining.
-		_, err = db.Exec(`ALTER TABLE finding ADD COLUMN source TEXT NOT NULL DEFAULT 'review'`)
-	}
-
-	return err
-}
-
-func hasColumn(db *sql.DB, table, column string) (bool, error) {
-	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var name string
-
-		if err := rows.Scan(&name); err != nil {
-			return false, err
-		}
-
-		if name == column {
-			return true, nil
-		}
-	}
-
-	return false, rows.Err()
 }
 
 // Close releases the underlying database handle.
