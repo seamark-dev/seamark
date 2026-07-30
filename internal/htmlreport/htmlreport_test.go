@@ -571,10 +571,12 @@ func TestInteractiveControlsAreKeyboardOperable(t *testing.T) {
 	assert.Contains(t, page,
 		`<code tabindex="0" role="button" aria-label="Copy the apply command">seamark lessons --apply p1</code>`,
 		"copy controls are focusable buttons")
-	assert.Contains(t, page, `tabindex="0" role="button" aria-label=`,
-		"map cells are focusable buttons")
-	assert.Contains(t, page, "function pressable",
-		"the script wires keyboard activation for all of them")
+	// Anchored to the cell element: a bare attribute substring would
+	// also match the copy controls above and prove nothing about cells.
+	assert.Regexp(t, `<g class="cell"[^>]* tabindex="0"[^>]* role="button"[^>]* aria-label="`,
+		page, "map cells are focusable buttons")
+	assert.Contains(t, page, "pressable(cell, () => scopeTo(cell))",
+		"the script wires cells through the keyboard helper, not just click")
 }
 
 func TestMapIsWellFormedMarkup(t *testing.T) {
