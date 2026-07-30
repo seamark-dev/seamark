@@ -338,6 +338,47 @@ func TestRunInitReportsBrokenPolicy(t *testing.T) {
 	assert.Contains(t, enforce.String(), "fails closed")
 }
 
+func TestRunInitRejectsMalformedSettings(t *testing.T) {
+	// Malformed .claude/settings.json: resolveGateMode falls back to warn
+	// (nothing worse can be inferred), but ensureHooks must refuse loudly
+	// rather than silently overwriting the user's file.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+
+	path := filepath.Join(root, ".claude", "settings.json")
+	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o644))
+
+	mode, err := resolveGateMode(root, "")
+	require.NoError(t, err)
+	assert.Equal(t, gateModeWarn, mode, "an unreadable install must not resolve to enforce")
+
+	var b testWriter
+	err = runInit(&b, root, "/bin/seamark", "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fix or move it")
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "{not json", string(data), "the malformed file must survive untouched")
+}
+
+func TestOwnedBySeamark(t *testing.T) {
+	markers := []string{"gate --hook", "gate --enforce --hook"}
+
+	for cmd, want := range map[string]bool{
+		"/bin/seamark gate --hook":              true,
+		"/bin/seamark gate --enforce --hook":    true,
+		"'/Apps/My Tools/seamark' gate --hook":  true,
+		"/usr/bin/company-security gate --hook": false,
+		"/bin/seamarketing-tool gate --hook":    false,
+		"/bin/seamark2 gate --enforce --hook":   false,
+		"/bin/seamark lessons --hook":           false, // not a gate marker
+		"my-tool --lessons --hook-dir=/x":       false,
+	} {
+		assert.Equal(t, want, ownedBySeamark(cmd, markers), "cmd: %s", cmd)
+	}
+}
+
 func TestRunInitShowsHookCommandsWhenKept(t *testing.T) {
 	// The exact-command listing must not depend on whether settings.json
 	// needed an update: a no-op re-run (or its --print preview) shows the
