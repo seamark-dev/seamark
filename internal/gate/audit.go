@@ -100,7 +100,7 @@ func Audit(root, kind, input string, p *Policy, d *Decision) error {
 	}
 
 	if p.Audit.Raw {
-		entry["input"] = truncate(redactSecrets(input), maxRawInput)
+		entry["input"] = truncate(RedactSecrets(input), maxRawInput)
 	}
 
 	// One Encode is one write of one line: with O_APPEND, concurrent
@@ -278,8 +278,8 @@ var redactions = []redaction{
 	{regexp.MustCompile(`(?i)\b(bearer\s+)\S+`), "${1}[REDACTED]"},
 }
 
-// redactSecrets scrubs known secret-bearing patterns from an input line.
-func redactSecrets(s string) string {
+// RedactSecrets scrubs known secret-bearing patterns from an input line.
+func RedactSecrets(s string) string {
 	for _, r := range redactions {
 		s = r.re.ReplaceAllString(s, r.replacement)
 	}

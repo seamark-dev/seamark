@@ -13,8 +13,10 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/distill"
+	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
@@ -28,6 +30,7 @@ func newLessonsCmd(opts *options) *cobra.Command {
 		list         bool
 		stats        bool
 		distillRun   bool
+		dryRun       bool
 		proposalList bool
 		limit        int
 		applyIDs     string
@@ -78,6 +81,13 @@ func newLessonsCmd(opts *options) *cobra.Command {
 a file has no lessons.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Validated BEFORE any dispatch: `--apply p1 --dry-run` must
+			// be a usage error, never an apply that ignored the flag —
+			// a command carrying --dry-run must not mutate anything.
+			if dryRun && !distillRun {
+				return fmt.Errorf("--dry-run only applies to --distill")
+			}
+
 			// Apply, dismiss and prune are three different decisions
 			// about the same ids; two at once would silently route
 			// everything (positional ids included) to whichever the
@@ -113,7 +123,7 @@ a file has no lessons.`,
 			case proposalList:
 				return runLessonsProposals(cmd, opts)
 			case distillRun:
-				return runLessonsDistill(cmd, opts, strings.TrimSpace(region), limit)
+				return runLessonsDistill(cmd, opts, strings.TrimSpace(region), limit, dryRun)
 			case list || strings.TrimSpace(region) != "":
 				return runLessonsList(cmd, opts, strings.TrimSpace(region))
 			case stats:
@@ -145,6 +155,8 @@ a file has no lessons.`,
 		"read a PreToolUse JSON payload from stdin and emit lessons as additionalContext")
 	cmd.Flags().BoolVar(&distillRun, "distill", false,
 		"distill recurring patterns from raw findings into proposed pins (needs the agent CLI)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
+		"with --distill: show what would be sent to the agent (groups, sizes, cost) without sending anything")
 	cmd.Flags().BoolVar(&proposalList, "proposals", false,
 		"show the distillation ledger: pending, applied, and dismissed proposals (no agent calls)")
 	cmd.Flags().IntVar(&limit, "limit", 10,
@@ -506,7 +518,8 @@ func runLessonsProposals(cmd *cobra.Command, opts *options) error {
 // groups through the configured agent, persist what survives validation
 // as proposals, and print the full pending plan. Applying is a separate
 // explicit step — this command never edits .seamark/lessons.yaml.
-func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit int) error {
+// A dry run stops after the preflight disclosure: nothing is sent.
+func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit int, dryRun bool) error {
 	st, root, err := openIndex(opts)
 	if err != nil {
 		return err
@@ -518,9 +531,21 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		return err
 	}
 
-	inv, err := agent.New(acfg)
+	// The config must resolve for every run — an unknown preset is a
+	// broken configuration, not something a dry run may paper over. But
+	// a dry run needs no invoker: disclosure works with the binary
+	// missing from PATH.
+	_, agentArgv, err := agent.Resolve(acfg)
 	if err != nil {
 		return fmt.Errorf("distill unavailable: %w", err)
+	}
+
+	var inv agent.Invoker
+
+	if !dryRun {
+		if inv, err = agent.New(acfg); err != nil {
+			return fmt.Errorf("distill unavailable: %w", err)
+		}
 	}
 
 	if region != "" {
@@ -550,9 +575,18 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		Region: region,
 		Limit:  limit,
 		Pins:   pins,
+		Agent:  agentArgv,
+		DryRun: dryRun,
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 		},
+	}
+
+	// The preflight discloses what is about to leave the machine —
+	// always, not only on dry runs: sending findings to a model-backed
+	// CLI must never be a surprise.
+	dopts.OnPreflight = func(pf distill.Preflight) {
+		printPreflight(cmd.OutOrStdout(), pf, dryRun)
 	}
 
 	// On a terminal, each agent call gets a live spinner with elapsed
@@ -568,6 +602,14 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 	res, err := distill.Run(cmd.Context(), st, distill.NewLexicalGrouper(), inv, dopts)
 	if err != nil {
 		return err
+	}
+
+	if dryRun {
+		fmt.Fprintf(cmd.OutOrStdout(),
+			"\n(dry run — nothing was sent; %d group(s) remain unread; drop --dry-run to distill)\n",
+			res.GroupsPending)
+
+		return nil
 	}
 
 	pending, err := st.Proposals(model.ProposalProposed)
@@ -587,6 +629,47 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 	}, pending)
 
 	return nil
+}
+
+// printPreflight renders the pre-invocation disclosure: what would be
+// sent to the agent, where, and roughly what it costs. Finding bodies
+// never appear here. The agent argv and region names come from
+// repository-controlled files (config.yaml, file paths), so they are
+// sanitized before printing and the argv is additionally scrubbed of
+// secret-shaped values — the disclosure must not be forgeable by the
+// text it discloses, nor leak a credential embedded in the config.
+func printPreflight(w io.Writer, pf distill.Preflight, dryRun bool) {
+	fmt.Fprintf(w, "distill preflight — what leaves this machine\n")
+	fmt.Fprintf(w, "  agent     %s  (your CLI, chosen by .seamark/config.yaml; assumed to reach\n"+
+		"            a remote model service)\n",
+		render.Sanitize(gate.RedactSecrets(strings.Join(pf.Agent, " "))))
+
+	if len(pf.Groups) == 0 {
+		fmt.Fprintf(w, "  payload   nothing — every evidence group has already been distilled\n")
+		return
+	}
+
+	fmt.Fprintf(w, "  payload   %d group(s), %d finding(s), ~%s tokens\n",
+		len(pf.Groups), pf.Findings, pf.Tokens())
+	fmt.Fprintf(w, "  contents  per finding: reviewer comment or fix-commit subject verbatim (it\n"+
+		"            may quote your code), repo-relative path, finding id, source, PR\n"+
+		"            number and reviewer name; plus rule labels of patterns already\n"+
+		"            pinned or previously proposed — no source files, no diffs\n")
+	fmt.Fprintf(w, "  redaction none — bodies are sent as written, capped at %d chars each\n", pf.BodyCap)
+
+	for _, g := range pf.Groups {
+		region := g.Region
+		if region == "" {
+			region = "repo-wide"
+		}
+
+		fmt.Fprintf(w, "    %-28s %3d finding(s)  ~%s tokens\n",
+			render.Sanitize(region), g.Findings, distill.Preflight{PromptChars: g.PromptChars}.Tokens())
+	}
+
+	if !dryRun {
+		fmt.Fprintln(w)
+	}
 }
 
 // runLessonsList prints the ledger of mined lessons — every one, or, with
