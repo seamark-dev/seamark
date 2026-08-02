@@ -22,7 +22,9 @@ func (s *Store) EdgeOriginCounts() (map[string]int, error) {
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := map[string]int{}
+	// Lazily allocated: an empty result stays nil, so the JSON forms
+	// (omitempty) round-trip without an empty-vs-nil mismatch.
+	var out map[string]int
 
 	for rows.Next() {
 		var (
@@ -32,6 +34,10 @@ func (s *Store) EdgeOriginCounts() (map[string]int, error) {
 
 		if err := rows.Scan(&origin, &n); err != nil {
 			return nil, err
+		}
+
+		if out == nil {
+			out = map[string]int{}
 		}
 
 		out[origin] = n
@@ -101,7 +107,9 @@ func (s *Store) FindingCounts() (map[string]int, error) {
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := map[string]int{}
+	// Lazily allocated for the same empty-vs-nil reason as
+	// EdgeOriginCounts; readers index into it, which is nil-safe.
+	var out map[string]int
 
 	for rows.Next() {
 		var (
@@ -111,6 +119,10 @@ func (s *Store) FindingCounts() (map[string]int, error) {
 
 		if err := rows.Scan(&source, &n); err != nil {
 			return nil, err
+		}
+
+		if out == nil {
+			out = map[string]int{}
 		}
 
 		out[source] = n

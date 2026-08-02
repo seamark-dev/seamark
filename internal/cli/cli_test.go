@@ -382,7 +382,7 @@ func TestCheckNotesUnindexedFiles(t *testing.T) {
 
 	// A diff touching a file the index has no symbols for: the verdict
 	// must carry the uncertainty, not read as a clean allow.
-	diff := "--- a/mystery.go\n+++ b/mystery.go\n@@ -1 +1,2 @@\n+package main\n"
+	diff := "--- a/mystery.go\n+++ b/mystery.go\n@@ -0,0 +1 @@\n+package main\n"
 
 	out, _, err := runIn(t, diff, "-C", root, "check")
 	require.NoError(t, err)

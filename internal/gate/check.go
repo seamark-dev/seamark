@@ -28,8 +28,36 @@ func EvalDiff(p *Policy, st *store.Store, diffText string) (*Decision, error) {
 	file := ""
 	oldFile := ""
 
+	// register marks a path as touched even before (or without) any
+	// hunk: binary, mode-only, rename-only, and empty-file changes have
+	// no `@@` hunks, yet all alter behaviour-relevant state and must
+	// enter diff.files and the uncertainty accounting.
+	register := func(p string) {
+		if p == "" {
+			return
+		}
+
+		if _, ok := touched[p]; !ok {
+			touched[p] = nil
+		}
+	}
+
 	for line := range strings.SplitSeq(diffText, "\n") {
 		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			file, oldFile = "", "" // new record
+
+			if p := gitHeaderPath(line); p != "" {
+				file = p
+				register(p)
+			}
+		case strings.HasPrefix(line, "rename to "):
+			// More reliable than the `diff --git` split for spaced
+			// paths; replaces the record's registration when they differ.
+			if p := diffHeaderPath(strings.TrimPrefix(line, "rename to "), ""); p != "" {
+				file = p
+				register(p)
+			}
 		case strings.HasPrefix(line, "--- "):
 			oldFile = diffHeaderPath(line[4:], "a/")
 		case strings.HasPrefix(line, "+++ "):
@@ -41,6 +69,8 @@ func EvalDiff(p *Policy, st *store.Store, diffText string) (*Decision, error) {
 			if file == "" && oldFile != "" {
 				file = oldFile
 			}
+
+			register(file)
 		default:
 			m := hunkRe.FindStringSubmatch(line)
 			if m == nil || file == "" {
@@ -146,6 +176,28 @@ func EvalDiff(p *Policy, st *store.Store, diffText string) (*Decision, error) {
 	}
 
 	return d, nil
+}
+
+// gitHeaderPath extracts the new-side path from a `diff --git a/X b/Y`
+// record line. Quoted forms unwrap; unquoted forms split on the LAST
+// " b/", which is only ambiguous for paths containing " b/" themselves —
+// and any later rename/---/+++ header then corrects the record. This
+// line is the only path source for hunkless records (binary, mode-only,
+// empty-file changes).
+func gitHeaderPath(line string) string {
+	rest := strings.TrimPrefix(line, "diff --git ")
+
+	if i := strings.LastIndex(rest, ` "b/`); i >= 0 {
+		if unquoted, err := strconv.Unquote(rest[i+1:]); err == nil {
+			return strings.TrimPrefix(unquoted, "b/")
+		}
+	}
+
+	if i := strings.LastIndex(rest, " b/"); i >= 0 {
+		return rest[i+3:]
+	}
+
+	return ""
 }
 
 // diffHeaderPath extracts the repo-relative path from a "---"/"+++"

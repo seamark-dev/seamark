@@ -604,7 +604,7 @@ seamark status          # or --json; also served as MCP resource seamark://statu
 ```text
 workspace      current (schema v2)
 parsed         703 of 832 seen files (98 skipped by config)
-symbols        1221, 2931 call/def edges (71% qualified · 24% same-package · 5% unique-name)
+symbols        1221, 2931 edges — call resolution 71% qualified · 24% same-package · 5% unique-name (1796 calls)
 effects        83 direct-sink symbols, 692 by propagation
 history        3814 decisions; evidence median age 74d (oldest 1042d)
 reviews        3 lessons from 120 review findings; last mined 9d ago

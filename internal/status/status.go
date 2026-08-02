@@ -20,6 +20,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -228,8 +229,20 @@ func Print(w io.Writer, s *Status) {
 		fmt.Fprintf(w, "reviews        never mined — run `seamark index --reviews`\n")
 	}
 
-	if fixes := total(s.Findings) - reviewFindings; fixes > 0 {
-		fmt.Fprintf(w, "fixes          %d findings mined from local git\n", fixes)
+	// Only the fix-mined sources: a future provider (say ci:failure)
+	// must not be silently counted as a fix.
+	fixes := 0
+	for _, src := range model.FixMinedSources() {
+		fixes += s.Findings[src]
+	}
+
+	if fixes > 0 {
+		noun := "findings"
+		if fixes == 1 {
+			noun = "finding"
+		}
+
+		fmt.Fprintf(w, "fixes          %d %s mined from local git\n", fixes, noun)
 	}
 
 	if s.DistillAgent != "" {
@@ -248,15 +261,21 @@ func Print(w io.Writer, s *Status) {
 // reporting it.
 func printGate(w io.Writer, s *Status) {
 	if s.GatePolicyError != "" {
-		switch s.GateHookMode {
-		case hooks.ModeEnforce:
+		switch {
+		case s.GateHookMode == hooks.ModeEnforce:
 			fmt.Fprintf(w, "gate           POLICY BROKEN (%s)\n"+
 				"               the enforce hook FAILS CLOSED: every hooked command blocks until the policy is fixed\n",
 				s.GatePolicyError)
-		case hooks.ModeWarn:
+		case s.GateHookMode == hooks.ModeWarn:
 			fmt.Fprintf(w, "gate           POLICY BROKEN (%s)\n"+
 				"               the warn hook fails open: nothing blocks, and nothing is being checked\n",
 				s.GatePolicyError)
+		case s.GateHookError != "":
+			// Broken policy AND unreadable hook config: the effective
+			// behaviour is unknown, not "no hook".
+			fmt.Fprintf(w, "gate           POLICY BROKEN (%s)\n"+
+				"               hook configuration UNREADABLE (%s) — effective behaviour unknown\n",
+				s.GatePolicyError, s.GateHookError)
 		default:
 			fmt.Fprintf(w, "gate           POLICY BROKEN (%s); no operational Claude hook\n", s.GatePolicyError)
 		}
@@ -296,7 +315,13 @@ func originSummary(origins map[string]int) string {
 		keys = append(keys, k)
 	}
 
-	sort.Slice(keys, func(i, j int) bool { return origins[keys[i]] > origins[keys[j]] })
+	sort.Slice(keys, func(i, j int) bool {
+		if origins[keys[i]] != origins[keys[j]] {
+			return origins[keys[i]] > origins[keys[j]]
+		}
+
+		return keys[i] < keys[j] // deterministic order for equal counts
+	})
 
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
@@ -304,15 +329,6 @@ func originSummary(origins map[string]int) string {
 	}
 
 	return strings.Join(parts, " · ") + fmt.Sprintf(" (%d calls)", calls)
-}
-
-func total(m map[string]int) int {
-	n := 0
-	for _, v := range m {
-		n += v
-	}
-
-	return n
 }
 
 // age renders a unix timestamp as a coarse human age.

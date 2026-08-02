@@ -40,8 +40,13 @@ func Orient(w io.Writer, st *store.Store, root string) error {
 		}
 
 		if json.Unmarshal([]byte(summary), &cov) == nil && cov.ParseErrors > 0 {
-			fmt.Fprintf(w, "  WARN   %d files failed to parse and are invisible below — `seamark status` has details\n",
-				cov.ParseErrors)
+			noun := "files"
+			if cov.ParseErrors == 1 {
+				noun = "file"
+			}
+
+			fmt.Fprintf(w, "  WARN   %d %s failed to parse and are invisible below — `seamark status` has details\n",
+				cov.ParseErrors, noun)
 		}
 	}
 

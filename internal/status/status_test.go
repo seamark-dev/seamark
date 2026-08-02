@@ -154,7 +154,7 @@ func TestPrintSeparatesFixMiningFromReviews(t *testing.T) {
 	out := b.String()
 
 	assert.Contains(t, out, "reviews        never mined")
-	assert.Contains(t, out, "fixes          1 findings mined from local git")
+	assert.Contains(t, out, "fixes          1 finding mined from local git")
 }
 
 func TestPrintBrokenPolicyStatesHookConsequence(t *testing.T) {
@@ -217,6 +217,5 @@ func TestStatusJSONRoundTrips(t *testing.T) {
 
 	var back Status
 	require.NoError(t, json.Unmarshal(data, &back))
-	assert.Equal(t, s.Symbols, back.Symbols)
-	assert.Equal(t, s.Coverage, back.Coverage)
+	assert.Equal(t, s, &back, "every field must survive the JSON round trip")
 }
