@@ -26,6 +26,7 @@ import (
 	stdpath "path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -386,6 +387,16 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding)
 		if err := insertFinding(tx, &findings[i]); err != nil {
 			return err
 		}
+	}
+
+	// Stamp the mine time in the same transaction: the freshness signal
+	// `seamark status` reports must never disagree with the data.
+	_, err = tx.Exec(
+		`INSERT INTO meta (key, value) VALUES ('reviews_mined_at', ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		fmt.Sprint(time.Now().Unix()))
+	if err != nil {
+		return fmt.Errorf("store: stamp review mine: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

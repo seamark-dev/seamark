@@ -595,6 +595,31 @@ files    832 seen, 703 parsed — 1 reparsed, 702 from cache
 A first index (or `--force`) is a full parse: ~3.2s for the monorepo,
 ~150ms for a small repo. The fingerprint check itself is ~30ms.
 
+## How much can the answers be trusted?
+
+```bash
+seamark status          # or --json; also served as MCP resource seamark://status
+```
+
+```text
+workspace      current (schema v2)
+parsed         703 of 832 seen files (98 skipped by config)
+symbols        1221, 2931 call/def edges (71% qualified · 24% same-package · 5% unique-name)
+effects        83 direct-sink symbols, 692 by propagation
+history        3814 decisions; evidence median age 74d (oldest 1042d)
+reviews        3 lessons from 120 review findings; last mined 9d ago
+distillation   claude -p — external data processing when run (see `lessons --distill --dry-run`)
+gate           hook installed; policy mode warn governs
+```
+
+Every safety-sensitive answer needs this context: **"no effects found"
+from a half-parsed index is not "no effects."** The same honesty runs
+through the other surfaces — `orient` warns when files failed to parse,
+and `seamark check` attaches a note (and exposes
+`diff.unindexed_files` to policy rules) when changed files have no
+indexed symbols, so absence of evidence never silently reads as
+evidence of safety.
+
 ## Durable state: the index is not a throwaway cache
 
 `.seamark/index.db` carries two kinds of state with different lifecycles.
@@ -726,13 +751,13 @@ propagate backwards along call edges to fixpoint, with depth.
 Working today: indexer (Go/TS/JS/Python), history + review + fix-commit
 mining, effects + propagation, LSP server, gate + check + secret-safe
 audit, Claude Code hooks, MCP server (`orient`, `change_set`, `why`,
-`check`, `expand` + resource + prompt), lesson distillation with
+`check`, `expand` + resources + prompt), lesson distillation with
 plan/apply (`lessons --distill`), HTML report (`seamark report`),
-versioned schema with durable-state export/import (`seamark state`).
-Planned next (see [docs/PLAN.md](docs/PLAN.md)): `seamark status` and
-`seamark doctor`, zero-token check promotion from recurring lessons,
-function-grain history enrichment, prebuilt binaries + npm/Homebrew
-distribution.
+versioned schema with durable-state export/import (`seamark state`),
+index-health reporting (`seamark status`). Planned next (see
+[docs/PLAN.md](docs/PLAN.md)): a doctor command for installation health,
+zero-token check promotion from recurring lessons, function-grain
+history enrichment, prebuilt binaries + npm/Homebrew distribution.
 
 What touches the network, what reaches a model, and what Guard can and
 cannot defend against are documented in [docs/data-flow.md](docs/data-flow.md)

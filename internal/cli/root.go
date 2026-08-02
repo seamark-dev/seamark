@@ -42,7 +42,7 @@ weird, and which paths can reach production.`,
 	root.AddCommand(newInitCmd(opts), newIndexCmd(opts), newWhyCmd(opts),
 		newOrientCmd(opts), newLessonsCmd(opts), newReportCmd(opts), newLSPCmd(opts),
 		newGateCmd(opts), newCheckCmd(opts), newMCPCmd(opts), newStateCmd(opts),
-		newVersionCmd())
+		newStatusCmd(opts), newVersionCmd())
 
 	return root
 }

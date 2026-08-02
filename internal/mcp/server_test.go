@@ -239,10 +239,12 @@ func TestResourcesAndPrompts(t *testing.T) {
 		`{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"seamark://nope"}}`,
 		`{"jsonrpc":"2.0","id":4,"method":"prompts/list"}`,
 		`{"jsonrpc":"2.0","id":5,"method":"prompts/get","params":{"name":"onboard"}}`,
+		`{"jsonrpc":"2.0","id":6,"method":"resources/read","params":{"uri":"seamark://status"}}`,
 	)
 
 	require.Nil(t, resps["1"].Error)
 	assert.Contains(t, string(resps["1"].Result), "seamark://orient")
+	assert.Contains(t, string(resps["1"].Result), "seamark://status")
 
 	var read struct {
 		Contents []struct {
@@ -256,6 +258,14 @@ func TestResourcesAndPrompts(t *testing.T) {
 
 	require.NotNil(t, resps["3"].Error)
 	assert.Equal(t, codeResourceNotFound, resps["3"].Error.Code)
+
+	// The health resource: the same status report the CLI prints, so an
+	// agent can weigh every other answer without a new top-level tool.
+	require.Nil(t, resps["6"].Error)
+	require.NoError(t, json.Unmarshal(resps["6"].Result, &read))
+	require.Len(t, read.Contents, 1)
+	assert.Contains(t, read.Contents[0].Text, "symbols")
+	assert.Contains(t, read.Contents[0].Text, "gate")
 
 	require.Nil(t, resps["4"].Error)
 	assert.Contains(t, string(resps["4"].Result), "onboard")

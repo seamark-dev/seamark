@@ -257,11 +257,12 @@ deny:
 }
 
 func TestDiffHeaderPath(t *testing.T) {
-	assert.Equal(t, "my file.txt", diffHeaderPath("b/my file.txt\t"),
+	assert.Equal(t, "my file.txt", diffHeaderPath("b/my file.txt\t", "b/"),
 		"git appends a TAB for paths with spaces")
-	assert.Equal(t, "a\tb.go", diffHeaderPath(`"b/a\tb.go"`), "C-quoted special paths unwrap")
-	assert.Equal(t, "", diffHeaderPath("/dev/null"))
-	assert.Equal(t, "x.go", diffHeaderPath("b/x.go"))
+	assert.Equal(t, "a\tb.go", diffHeaderPath(`"b/a\tb.go"`, "b/"), "C-quoted special paths unwrap")
+	assert.Equal(t, "", diffHeaderPath("/dev/null", "b/"))
+	assert.Equal(t, "x.go", diffHeaderPath("b/x.go", "b/"))
+	assert.Equal(t, "gone.go", diffHeaderPath("a/gone.go", "a/"), "the old side trims its own prefix")
 }
 
 func TestUnparseableCommandFailsClosed(t *testing.T) {

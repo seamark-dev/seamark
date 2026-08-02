@@ -95,8 +95,8 @@ CREATE TABLE IF NOT EXISTS parse_cache (
 CREATE TABLE IF NOT EXISTS effect (
     symbol_id INTEGER NOT NULL REFERENCES symbol (id),
     tag       TEXT    NOT NULL,
-    origin    TEXT    NOT NULL,           -- DIRECT | PROPAGATED
-    depth     INTEGER NOT NULL DEFAULT 0, -- 0 for DIRECT
+    origin    TEXT    NOT NULL,           -- direct | propagated (lowercase, as written by the indexer)
+    depth     INTEGER NOT NULL DEFAULT 0, -- 0 for direct
     PRIMARY KEY (symbol_id, tag)
 ) WITHOUT ROWID;
 

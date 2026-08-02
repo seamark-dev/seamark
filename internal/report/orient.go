@@ -1,6 +1,7 @@
 package report
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"path"
@@ -27,6 +28,21 @@ func Orient(w io.Writer, st *store.Store, root string) error {
 
 	if stats.Lessons > 0 {
 		fmt.Fprintf(w, "         %d review lessons (run `seamark index --reviews` to refresh)\n", stats.Lessons)
+	}
+
+	// A compact coverage warning when files failed to parse: everything
+	// below describes only the code the index can see, and pretending
+	// otherwise would make incomplete answers look authoritative
+	// (RFC-001 §5.2). Details live in `seamark status`.
+	if summary, err := st.GetMeta("index_summary"); err == nil && summary != "" {
+		var cov struct {
+			ParseErrors int `json:"parse_errors"`
+		}
+
+		if json.Unmarshal([]byte(summary), &cov) == nil && cov.ParseErrors > 0 {
+			fmt.Fprintf(w, "  WARN   %d files failed to parse and are invisible below — `seamark status` has details\n",
+				cov.ParseErrors)
+		}
 	}
 
 	if err := moduleSection(w, st); err != nil {

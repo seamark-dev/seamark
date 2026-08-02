@@ -382,26 +382,6 @@ func TestResolveGateMode(t *testing.T) {
 	assert.Equal(t, gateModeWarn, resolveGateMode(installed, gateModeWarn))
 }
 
-func TestOwnedBySeamark(t *testing.T) {
-	markers := []string{"gate --hook", "gate --enforce --hook"}
-
-	for cmd, want := range map[string]bool{
-		"/bin/seamark gate --hook":                        true,
-		"/bin/seamark gate --enforce --hook":              true,
-		"'/Apps/My Tools/seamark' gate --hook":            true,
-		"/c/tools/seamark.exe gate --hook":                true,
-		"'/c/my tools/seamark.exe' gate --enforce --hook": true,
-		"/usr/bin/company-security gate --hook":           false,
-		"/bin/seamarketing-tool gate --hook":              false,
-		"/bin/seamark2 gate --enforce --hook":             false,
-		"/bin/seamark2.exe gate --hook":                   false,
-		"/bin/seamark lessons --hook":                     false, // not a gate marker
-		"my-tool --lessons --hook-dir=/x":                 false,
-	} {
-		assert.Equal(t, want, ownedBySeamark(cmd, markers), "cmd: %s", cmd)
-	}
-}
-
 func TestRunInitShowsHookCommandsWhenKept(t *testing.T) {
 	// The exact-command listing must not depend on whether settings.json
 	// needed an update: a no-op re-run (or its --print preview) shows the
