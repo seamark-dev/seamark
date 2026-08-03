@@ -57,7 +57,8 @@ agents inside real isolation regardless.
 
 ## Distribution
 
-Tagged releases ship native archives for macOS and Linux (amd64/arm64),
+Released: [v0.1.0](https://github.com/seamark-dev/seamark/releases)
+(2026-08-03) ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
 (`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
 compiler. Windows is untested and unsupported. Artifact signing, SBOMs,

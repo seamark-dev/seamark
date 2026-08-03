@@ -6,10 +6,10 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
-## Unreleased
+## v0.1.0 — 2026-08-03
 
-The production-readiness line — everything between the first prototype
-and the first tagged release:
+The first tagged release: the production-readiness line — everything
+between the first prototype and here.
 
 - **Trust baseline.** A default `seamark init` can never block a
   command; gate enforcement is an explicit opt-in (`--gate-mode
