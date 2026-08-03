@@ -52,6 +52,14 @@ func DefaultPath(root string) string {
 	return filepath.Join(root, DefaultDir, DefaultDBName)
 }
 
+// dsn builds a "file:" DSN. Paths are parsed as URIs: a raw %, ? or #
+// in the workspace path would truncate it or swallow the params.
+func dsn(path, params string) string {
+	escaped := strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23").Replace(path)
+
+	return "file:" + escaped + "?" + params
+}
+
 // Open opens (creating if necessary) the index database at path and applies
 // the schema. The schema is idempotent; opening an existing index is cheap.
 func Open(path string) (*Store, error) {
@@ -59,12 +67,8 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: create index dir: %w", err)
 	}
 
-	// "file:" DSNs are parsed as URIs: a raw %, ? or # in the workspace
-	// path would truncate it or swallow the pragmas. Escape those bytes.
-	escaped := strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23").Replace(path)
-	dsn := "file:" + escaped + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
-
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", dsn(path,
+		"_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"))
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
