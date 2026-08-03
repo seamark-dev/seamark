@@ -27,9 +27,10 @@ doesn't contain the linter's language at all.
 
 ## Fix commits are findings too
 
-Review quality varies; **fix commits exist in every repository.** The
-same `index --reviews` pass also mines them, purely from local git — no
-GitHub needed at all: commits classified as fixes by explicit intent
+Review quality varies; **fix commits are a signal most repositories
+carry.** The same `index --reviews` pass mines them whenever they exist,
+purely from local git — no GitHub needed at all: commits classified as
+fixes by explicit intent
 (`fix:` subjects, `fixes #N` links, `Revert` commits; never substring
 matches — "prefix" and "fixture" don't count), minus the ones that teach
 nothing (typo/lint/CI chores, 30-file bulk refactors), minus cherry-pick

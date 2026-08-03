@@ -81,12 +81,16 @@ starter `.seamark/policy.yaml`, `.seamark/lessons.yaml` and
 `.gitignore` carve-outs, and merges
 the gate and review-lessons hooks into `.claude/settings.json` — leaving
 any hooks you already have intact, and safe to re-run. Pass `--print` to
-preview every change first. A default install **never blocks anything**;
-enforcement is a separate, explicit opt-in ([Journey 3](#journey-3-guard-agent-commands)).
+preview every change first. A fresh install on the starter warn policy
+**never blocks anything** (an existing `enforce` policy is kept, and
+keeps enforcing); turning enforcement on is a separate, explicit opt-in
+([Journey 3](#journey-3-guard-agent-commands)).
 
-Everything lives in one SQLite file under `.seamark/`, gitignored except
-the reviewed YAML overlays. The file is _not_ a throwaway cache once you
-start deciding on proposals — see [Durable state](#durable-state-the-index-is-not-a-throwaway-cache).
+The graph and your proposal decisions live in one SQLite database under
+`.seamark/`, beside the audit logs and generated reports — all
+gitignored except the reviewed YAML overlays. The database is _not_ a
+throwaway cache once you start deciding on proposals — see
+[Durable state](#durable-state-the-index-is-not-a-throwaway-cache).
 
 ## The mental model
 
@@ -98,10 +102,11 @@ review comment or fix commit         what a reviewer (or a fix) said, once
         ↓  mined by `seamark index --reviews`
 finding      one raw observation, kept verbatim with its provenance
         ↓  clustered on recurrence (≥2)
-lesson       a pattern reviewers keep flagging in a region
+lesson       a pattern recurring across findings in a region — review-
+             or fix-derived alike
         ↓  distilled by your agent CLI (optional) — or written by hand
 proposal     a candidate rule awaiting YOUR decision
-        ↓  `lessons --apply`  (a dismissal is remembered forever)
+        ↓  `lessons --apply`  (a dismissal sticks until its evidence changes)
 pin          an accepted rule, surfaced to agents at edit time
 ```
 
@@ -213,9 +218,10 @@ invalidated before its replacement exists — each said exactly once,
 each a production incident wearing a review comment. `seamark lessons
 --distill` is how they become permanent: it batches the raw findings
 through **your own agent CLI** (a full disclosure prints first;
-`--dry-run` shows the payload without sending anything) into proposed
+`--dry-run` prints it and sends nothing — the exact payload is
+documented in [docs/data-flow.md](docs/data-flow.md)) into proposed
 pins — every proposal cites its evidence, nothing lands without your
-explicit `--apply`, a dismissal is remembered forever.
+explicit `--apply`, and a dismissal sticks until its evidence changes.
 
 That drift-risk one-off, distilled together with a "regenerate the
 frontend schema after this change" comment from `api/schemas.py`, is now

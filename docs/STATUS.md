@@ -34,7 +34,7 @@ Review mining, fix mining, lessons, distillation, pins.
 | Capability | State |
 |---|---|
 | Fix-commit mining (local git) | working, offline |
-| Review-comment mining | working; requires authenticated `gh` and a github.com remote |
+| Review-comment mining | working; requires an authenticated `gh` CLI and a GitHub remote on github.com |
 | Lessons + edit hook + tuning (`lessons.yaml`) | working |
 | Distillation (plan/apply, dedup memory, preflight disclosure, `--dry-run`) | working; requires your own agent CLI; sends finding text to it ([data-flow.md](data-flow.md)) |
 
