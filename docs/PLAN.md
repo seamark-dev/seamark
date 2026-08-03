@@ -8,8 +8,9 @@ config — propagated transitively along call edges). On top of the graph sits a
 policy engine evaluated at edit time and before tool execution. One engine,
 three surfaces: LSP, MCP, CLI/hooks.
 
-This document tracks the build order and current status. It is a working plan,
-not a spec; sections get checked off and refined as milestones land.
+This document is the design history and working plan — the narrative of how
+things got built and why. For the concise, current production status per
+capability profile, read [STATUS.md](STATUS.md) instead.
 
 ## Principles that shape the build order
 
