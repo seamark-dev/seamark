@@ -1,0 +1,127 @@
+# Release: native builds per platform — CGO (tree-sitter) rules out
+# cross-compiling from one host — each smoke-tested end to end before it
+# ships, checksummed at assembly. The result is a DRAFT release: a human
+# reads the generated notes against CHANGELOG.md and presses publish.
+# Signing and SBOMs are deliberately deferred (docs/STATUS.md).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# One run per tag at a time: re-runs and re-pushed tags serialize
+# instead of racing the release-assembly step.
+concurrency:
+  group: release-${{ github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, goos: linux, goarch: amd64 }
+          - { runner: ubuntu-24.04-arm, goos: linux, goarch: arm64 }
+          - { runner: macos-15-intel, goos: darwin, goarch: amd64 }
+          - { runner: macos-15, goos: darwin, goarch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      # Git permits tag names (v1;id, v1/rc) that would be shell syntax
+      # or nested paths in recipes and archive names. Validate the tag
+      # before anything else runs — via env, never template interpolation
+      # into the script, which would itself be the injection.
+      - name: Validate tag name
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          case "$TAG" in
+            v*[!A-Za-z0-9._-]*|v)
+              echo "tag '$TAG' contains characters unsafe for versions and paths" >&2
+              exit 1;;
+            v*) ;;
+            *)
+              echo "tag '$TAG' does not start with v" >&2
+              exit 1;;
+          esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so `git describe` resolves tags for CHANGELOG
+          # context; the build version itself comes from the pushed tag.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # VERSION is the pushed tag, explicitly: `git describe` may pick a
+      # DIFFERENT tag when one commit carries several, and the archive,
+      # the embedded version, and the release must all agree.
+      - name: Build archive
+        env:
+          TAG: ${{ github.ref_name }}
+        run: make release-archive VERSION="$TAG"
+
+      - name: Smoke-test the unpacked archive
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          tar -xzf dist/*.tar.gz -C dist
+          scripts/release-smoke.sh dist/seamark_*/seamark
+          embedded=$(dist/seamark_*/seamark version)
+          case "$embedded" in
+            *"$TAG"*) ;;
+            *) echo "embedded version '$embedded' does not carry tag '$TAG'" >&2; exit 1;;
+          esac
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: archive-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      # Idempotent per tag: a re-run refreshes an existing DRAFT's assets
+      # (--clobber) but refuses to touch a published release — published
+      # artifacts are immutable history. --verify-tag makes creation
+      # require the pushed tag rather than minting one.
+      - name: Create or refresh draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if state=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null); then
+            if [ "$state" != "true" ]; then
+              echo "release $GITHUB_REF_NAME is already published; refusing to modify it" >&2
+              exit 1
+            fi
+            gh release upload "$GITHUB_REF_NAME" dist/* \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "seamark $GITHUB_REF_NAME" \
+              --draft --verify-tag --generate-notes
+          fi

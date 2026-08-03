@@ -1,5 +1,6 @@
 rfc/
 bin/
+dist/
 *.db
 node_modules/
 .DS_Store
