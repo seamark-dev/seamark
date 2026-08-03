@@ -57,9 +57,12 @@ agents inside real isolation regardless.
 
 ## Distribution
 
-Source builds only (Go ≥ 1.25 + a C compiler), macOS and Linux.
-Windows is untested and unsupported. Prebuilt binaries, checksums, and
-package-manager installs are the next distribution milestone.
+Tagged releases ship native archives for macOS and Linux (amd64/arm64),
+each smoke-tested end to end before publishing, with SHA-256 checksums
+(`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
+compiler. Windows is untested and unsupported. Artifact signing, SBOMs,
+and package-manager installs (Homebrew, npm) are the next distribution
+milestone.
 
 ## Verification
 

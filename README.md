@@ -58,14 +58,30 @@ a commit, or a policy file. No LLM-generated "insights" are ever stored.
 
 ## Get started
 
-Requires Go ≥ 1.25 and a C compiler (tree-sitter uses CGO). Prebuilt
-binaries and package-manager installs are planned; today it builds from
-source:
+Tagged [releases](https://github.com/seamark-dev/seamark/releases) attach
+smoke-tested archives for macOS and Linux (amd64/arm64) with SHA-256
+checksums:
+
+```bash
+sha256sum -c --ignore-missing SHA256SUMS   # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
+tar -xzf seamark_*.tar.gz
+mkdir -p ~/.local/bin
+install seamark_*/seamark ~/.local/bin/
+```
+
+A matching checksum verifies the archive against the published
+`SHA256SUMS` — integrity, not publisher identity; artifact signing is
+not yet available ([docs/STATUS.md](docs/STATUS.md)).
+
+Or build from source — Go ≥ 1.25 and a C compiler (tree-sitter uses
+CGO):
 
 ```bash
 git clone https://github.com/seamark-dev/seamark && cd seamark
 make install        # builds and installs to ~/.local/bin/seamark
 ```
+
+Both routes install to `~/.local/bin` — make sure it is on your `PATH`.
 
 Then, in any repository:
 
@@ -570,7 +586,7 @@ design history in [docs/PLAN.md](docs/PLAN.md). Trust boundaries:
 Planned next (see [docs/PLAN.md](docs/PLAN.md)): zero-token check
 promotion from recurring lessons, function-grain history enrichment,
 history watermark + incremental daemon for keystroke-adjacent freshness,
-prebuilt binaries + npm/Homebrew distribution.
+signed artifacts + npm/Homebrew packaging.
 
 ## Development
 
