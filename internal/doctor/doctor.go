@@ -255,7 +255,9 @@ func checkMCP(r *Report, root string) {
 	}
 
 	for name, srv := range cfg.Servers {
-		if filepath.Base(srv.Command) == "seamark" {
+		// Same basename rule as hooks.OwnedBySeamark: exact "seamark",
+		// tolerating the Windows .exe suffix.
+		if strings.TrimSuffix(filepath.Base(srv.Command), ".exe") == "seamark" {
 			r.add("mcp", StateOK, fmt.Sprintf("registered in .mcp.json as %q", name), "")
 			return
 		}
