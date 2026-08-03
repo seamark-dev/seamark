@@ -40,6 +40,10 @@ type Decision struct {
 	// PolicySHA identifies the exact policy text that produced this
 	// decision.
 	PolicySHA string `json:"policy_sha256,omitempty"`
+	// Notes carry uncertainty the verdict alone would hide — e.g.
+	// changed files the index has no symbols for. A note never changes
+	// the verdict; it changes how much the verdict may be trusted.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // Blocking reports whether this decision should stop execution: only
@@ -458,7 +462,7 @@ func gitPush(args []string, root string) (isPush, isForce bool, branch string) {
 // rules may access is present (CEL errors on missing keys), nothing is
 // touched.
 func emptyDiff() map[string]any {
-	return map[string]any{"files": []string{}, "effects": []string{}}
+	return map[string]any{"files": []string{}, "effects": []string{}, "unindexed_files": 0}
 }
 
 // evaluate runs every rule and keeps the strongest verdict.

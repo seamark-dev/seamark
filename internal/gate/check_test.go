@@ -112,3 +112,31 @@ func TestCheckDiffOutsideBlastRadius(t *testing.T) {
 	assert.Empty(t, d.Effects)
 	assert.Equal(t, VerdictAllow, d.Verdict)
 }
+
+func TestEvalDiffRegistersHunklessRecords(t *testing.T) {
+	st, root := checkFixture(t)
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	// Records without any `@@` hunk still alter behaviour-relevant state
+	// and must enter diff.files and the uncertainty accounting — a
+	// binary swap or a +x bit must never read as an empty diff.
+	for name, tc := range map[string]struct{ diff, path string }{
+		"binary": {
+			"diff --git a/logo.png b/logo.png\nindex abc1234..def5678 100644\n" +
+				"Binary files a/logo.png and b/logo.png differ\n", "logo.png"},
+		"mode-only": {
+			"diff --git a/script.sh b/script.sh\nold mode 100644\nnew mode 100755\n", "script.sh"},
+		"rename-only": {
+			"diff --git a/old.go b/new.go\nsimilarity index 100%\n" +
+				"rename from old.go\nrename to new.go\n", "new.go"},
+		"empty-file": {
+			"diff --git a/empty.go b/empty.go\nnew file mode 100644\nindex 0000000..e69de29\n", "empty.go"},
+	} {
+		d, err := EvalDiff(p, st, tc.diff)
+		require.NoError(t, err, name)
+		require.NotEmpty(t, d.Notes, "%s: a hunkless change must carry uncertainty", name)
+		assert.Contains(t, d.Notes[0], tc.path, "%s: the affected path must be named", name)
+	}
+}

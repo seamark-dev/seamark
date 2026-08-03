@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/seamark-dev/seamark/internal/report"
+	"github.com/seamark-dev/seamark/internal/status"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -72,13 +73,22 @@ func objSchema(props map[string]any, required []string) map[string]any {
 	return schema
 }
 
-const orientURI = "seamark://orient"
+const (
+	orientURI = "seamark://orient"
+	statusURI = "seamark://status"
+)
 
 var resourceDefs = []map[string]any{
 	{
 		"uri":         orientURI,
 		"name":        "Repository orientation",
 		"description": "The orient report as a readable resource: modules, hot paths, decisions.",
+		"mimeType":    "text/plain",
+	},
+	{
+		"uri":         statusURI,
+		"name":        "Index health",
+		"description": "Semantic health of the index: coverage, edge confidence, history age, integrations — the context for interpreting every other answer.",
 		"mimeType":    "text/plain",
 	},
 }
@@ -92,23 +102,40 @@ func (s *Server) readResource(params json.RawMessage) (any, *rpcError) {
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
 	}
 
-	if p.URI != orientURI {
+	var render func(st *store.Store) (string, error)
+
+	switch p.URI {
+	case orientURI:
+		render = func(st *store.Store) (string, error) {
+			var b bytes.Buffer
+			err := report.Orient(&b, st, s.root)
+
+			return b.String(), err
+		}
+	case statusURI:
+		render = func(st *store.Store) (string, error) {
+			health, err := status.Gather(st, s.root)
+			if err != nil {
+				return "", err
+			}
+
+			var b bytes.Buffer
+			status.Print(&b, health)
+
+			return b.String(), nil
+		}
+	default:
 		return nil, &rpcError{Code: codeResourceNotFound, Message: "unknown resource: " + p.URI}
 	}
 
-	text, err := s.withStore(func(st *store.Store) (string, error) {
-		var b bytes.Buffer
-		err := report.Orient(&b, st, s.root)
-
-		return b.String(), err
-	})
+	text, err := s.withStore(render)
 	if err != nil {
 		return nil, &rpcError{Code: codeInternal, Message: err.Error()}
 	}
 
 	return map[string]any{
 		"contents": []map[string]any{
-			{"uri": orientURI, "mimeType": "text/plain", "text": text},
+			{"uri": p.URI, "mimeType": "text/plain", "text": text},
 		},
 	}, nil
 }

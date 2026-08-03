@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/gob"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -275,12 +276,26 @@ func Run(opts Options) (*Summary, error) {
 		return nil, err
 	}
 
+	// The file-coverage summary is persisted so `seamark status` can
+	// report parser coverage long after this run's stdout is gone. A
+	// safety answer without coverage context is uninterpretable.
+	coverage, err := json.Marshal(map[string]int{
+		"files_seen":    sum.FilesSeen,
+		"files_parsed":  sum.FilesParsed,
+		"files_skipped": sum.FilesSkipped,
+		"parse_errors":  sum.ParseErrors,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	for k, v := range map[string]string{
 		"repo_root":           root,
 		"indexed_at":          fmt.Sprint(time.Now().Unix()),
 		"indexed_state":       WorkspaceState(root),
 		"history_mined":       fmt.Sprint(sum.HistoryMined),
 		"parse_cache_version": parseCacheVersion,
+		"index_summary":       string(coverage),
 	} {
 		if err := st.SetMeta(k, v); err != nil {
 			return nil, err
@@ -445,6 +460,13 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 
 	indexed, err := st.GetMeta("indexed_state")
 	if err != nil || indexed != current {
+		return nil
+	}
+
+	// A database from before coverage persistence has no index_summary;
+	// skipping would strand it on "coverage unknown" forever, because the
+	// fingerprint still matches. One full pass records it.
+	if summary, err := st.GetMeta("index_summary"); err != nil || summary == "" {
 		return nil
 	}
 

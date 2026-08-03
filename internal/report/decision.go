@@ -21,4 +21,10 @@ func Decision(w io.Writer, d *gate.Decision) {
 	for _, m := range d.Matches {
 		fmt.Fprintf(w, "  [%s] %s: %s\n", m.Verdict, m.RuleID, render.Sanitize(m.Message))
 	}
+
+	// Uncertainty travels with the verdict: an allow over unindexed
+	// files must not read like a clean allow.
+	for _, n := range d.Notes {
+		fmt.Fprintf(w, "  note: %s\n", render.Sanitize(n))
+	}
 }

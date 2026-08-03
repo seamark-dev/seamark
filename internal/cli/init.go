@@ -11,15 +11,15 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/index"
 )
 
-// Gate hook modes. Warn installs a hook that follows .seamark/policy.yaml
-// and never blocks by itself; enforce bakes --enforce into the hook, so
-// blocking verdicts exit 2 and the gate's own failures fail closed.
+// Gate hook modes — shared with the status surfaces via internal/hooks,
+// which owns the marker spellings and the ownership rule.
 const (
-	gateModeWarn    = "warn"
-	gateModeEnforce = "enforce"
+	gateModeWarn    = hooks.ModeWarn
+	gateModeEnforce = hooks.ModeEnforce
 )
 
 func newInitCmd(opts *options) *cobra.Command {
@@ -357,17 +357,8 @@ type hookSpec struct {
 	timeout int
 }
 
-// gateMarker returns the gate hook's argument tail for a mode. Warn omits
-// --enforce so .seamark/policy.yaml stays the single source of truth for
-// blocking; enforce bakes the flag in, which also makes the gate's own
-// failures block (fail closed).
-func gateMarker(gateMode string) string {
-	if gateMode == gateModeEnforce {
-		return "gate --enforce --hook"
-	}
-
-	return "gate --hook"
-}
+// gateMarker is the shared marker rule (see internal/hooks).
+func gateMarker(gateMode string) string { return hooks.GateMarker(gateMode) }
 
 // hookSpecs returns the hooks init installs for a gate mode. The opposite
 // mode's marker is listed as legacy, so switching modes rewrites the
@@ -445,24 +436,9 @@ func printHookCommands(w io.Writer, bin, gateMode string) {
 	}
 }
 
-// installedGateMode reports the mode of an already-installed gate hook:
-// enforce, warn, or "" when none is present.
+// installedGateMode is the shared detection rule (see internal/hooks).
 func installedGateMode(settings map[string]any) string {
-	hooks, _ := settings["hooks"].(map[string]any)
-	pre, _ := hooks["PreToolUse"].([]any)
-
-	mode := ""
-
-	forEachCommand(pre, func(_ map[string]any, cmd string) {
-		switch {
-		case ownedBySeamark(cmd, []string{gateMarker(gateModeEnforce)}):
-			mode = gateModeEnforce
-		case ownedBySeamark(cmd, []string{gateMarker(gateModeWarn)}):
-			mode = gateModeWarn
-		}
-	})
-
-	return mode
+	return hooks.InstalledGateMode(settings)
 }
 
 // mergeHooks adds seamark's PreToolUse hooks into an existing settings
@@ -472,12 +448,12 @@ func installedGateMode(settings map[string]any) string {
 // hooks/PreToolUse field — the same loud handling loadSettings gives
 // malformed JSON.
 func mergeHooks(settings map[string]any, bin, gateMode string) (changed bool, err error) {
-	hooks, err := childMap(settings, "hooks")
+	hookMap, err := childMap(settings, "hooks")
 	if err != nil {
 		return false, err
 	}
 
-	pre, err := childSlice(hooks, "PreToolUse")
+	pre, err := childSlice(hookMap, "PreToolUse")
 	if err != nil {
 		return false, err
 	}
@@ -503,18 +479,18 @@ func mergeHooks(settings map[string]any, bin, gateMode string) (changed bool, er
 		changed = true
 	}
 
-	hooks["PreToolUse"] = pre
+	hookMap["PreToolUse"] = pre
 
 	return changed, nil
 }
 
 // applyExisting rewrites seamark's own hook command to want if present,
-// recognized by ownedBySeamark, so an unrelated command that merely
-// contains or ends with the marker text is left alone. Reports whether
-// such a hook existed and whether it changed.
+// recognized by hooks.OwnedBySeamark, so an unrelated command that
+// merely contains or ends with the marker text is left alone. Reports
+// whether such a hook existed and whether it changed.
 func applyExisting(pre []any, markers []string, want string) (found, updated bool) {
 	forEachCommand(pre, func(h map[string]any, cmd string) {
-		if !ownedBySeamark(cmd, markers) {
+		if !hooks.OwnedBySeamark(cmd, markers) {
 			return
 		}
 
@@ -529,27 +505,6 @@ func applyExisting(pre []any, markers []string, want string) (found, updated boo
 	return found, updated
 }
 
-// ownedBySeamark reports whether cmd is one of seamark's own hook
-// commands: a marker suffix AND a binary whose basename is exactly
-// seamark (allowing the Windows .exe suffix). The binary check keeps the
-// marker from claiming someone else's hook — `company-security gate
-// --hook` (or a lookalike such as `seamark2`) must never be rewritten to
-// ours.
-func ownedBySeamark(cmd string, markers []string) bool {
-	for _, marker := range markers {
-		rest, ok := strings.CutSuffix(cmd, " "+marker)
-		if !ok {
-			continue
-		}
-
-		base := filepath.Base(strings.Trim(rest, "'"))
-
-		return strings.TrimSuffix(base, ".exe") == "seamark"
-	}
-
-	return false
-}
-
 // shellQuote single-quotes a path that a shell would otherwise split or
 // interpret; a clean path is returned as-is. Claude Code runs hook
 // commands through a shell, so a binary path with spaces must be quoted.
@@ -561,30 +516,10 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// forEachCommand visits every command hook under a PreToolUse array.
+// forEachCommand is the shared traversal (see internal/hooks); init's
+// callers do not need the matcher.
 func forEachCommand(pre []any, fn func(h map[string]any, cmd string)) {
-	for _, e := range pre {
-		entry, ok := e.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		hs, ok := entry["hooks"].([]any)
-		if !ok {
-			continue
-		}
-
-		for _, h := range hs {
-			hm, ok := h.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			if cmd, ok := hm["command"].(string); ok {
-				fn(hm, cmd)
-			}
-		}
-	}
+	hooks.ForEachCommand(pre, func(_ string, h map[string]any, cmd string) { fn(h, cmd) })
 }
 
 // childMap returns m[key] as a map, creating it in place if absent. A

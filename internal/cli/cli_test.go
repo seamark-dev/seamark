@@ -332,6 +332,164 @@ func TestOrientCommand(t *testing.T) {
 	assert.Contains(t, out, "most-called")
 }
 
+func TestStatusReportsHealth(t *testing.T) {
+	root := writeFixture(t)
+	gitify(t, root)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	out, err := run(t, "-C", root, "status")
+	require.NoError(t, err)
+	assert.Contains(t, out, "workspace      current")
+	assert.Contains(t, out, "schema v")
+	assert.Contains(t, out, "parsed")
+	assert.Contains(t, out, "symbols")
+	assert.Contains(t, out, "gate")
+
+	// Machine-readable form parses and carries the same facts.
+	out, err = run(t, "-C", root, "status", "--json")
+	require.NoError(t, err)
+
+	var s map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &s))
+	assert.Equal(t, "current", s["freshness"])
+	assert.NotEmpty(t, s["schema_version"])
+
+	// Editing the workspace flips freshness — status must never claim
+	// current over a changed tree.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "new.go"),
+		[]byte("package main\nfunc extra() {}\n"), 0o644))
+
+	out, err = run(t, "-C", root, "status")
+	require.NoError(t, err)
+	assert.Contains(t, out, "STALE")
+}
+
+func TestStatusWithoutIndexFails(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "status")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no index")
+}
+
+func TestCheckNotesUnindexedFiles(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// A diff touching a file the index has no symbols for: the verdict
+	// must carry the uncertainty, not read as a clean allow.
+	diff := "--- a/mystery.go\n+++ b/mystery.go\n@@ -0,0 +1 @@\n+package main\n"
+
+	out, _, err := runIn(t, diff, "-C", root, "check")
+	require.NoError(t, err)
+	assert.Contains(t, out, "note:")
+	assert.Contains(t, out, "mystery.go")
+	assert.Contains(t, out, "unknown, not clean")
+
+	// And policy can act on it: a rule over diff.unindexed_files fires.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(
+		"mode: warn\nrequire_approval:\n"+
+			"  - id: unindexed-blindspot\n"+
+			"    when: 'diff.unindexed_files > 0'\n"+
+			"    message: changed files outside index coverage\n"), 0o644))
+
+	out, _, err = runIn(t, diff, "-C", root, "check")
+	require.NoError(t, err)
+	assert.Contains(t, out, "unindexed-blindspot")
+}
+
+func TestCheckNotesChangesOutsideSymbolSpans(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// a.go IS indexed (it has symbols), but this diff touches only line
+	// 1 — the package/import area outside any symbol span. Import edits
+	// change resolution and reach; the verdict must carry the
+	// uncertainty instead of reading as a clean allow.
+	diff := "--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-package main\n+package main // touched\n"
+
+	out, _, err := runIn(t, diff, "-C", root, "check")
+	require.NoError(t, err)
+	assert.Contains(t, out, "note:")
+	assert.Contains(t, out, "a.go")
+	assert.Contains(t, out, "unknown, not clean")
+}
+
+func TestCheckNotesWholeFileDeletion(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// A whole-file deletion has `+++ /dev/null`: the vanished path must
+	// appear in the verdict, never as an empty trustworthy diff.
+	diff := "--- a/mystery.go\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-package main\n-\n-func gone() {}\n"
+
+	out, _, err := runIn(t, diff, "-C", root, "check")
+	require.NoError(t, err)
+	assert.Contains(t, out, "note:")
+	assert.Contains(t, out, "mystery.go", "the deleted path must surface in the uncertainty note")
+}
+
+func TestIndexBackfillsCoverageSummary(t *testing.T) {
+	root := writeFixture(t)
+	gitify(t, root)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// Simulate a pre-coverage database: same fingerprint, no summary.
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.SetMeta("index_summary", ""))
+	require.NoError(t, st.Close())
+
+	// A plain reindex must NOT take the fast path — the advertised
+	// upgrade route is `seamark index`, not `--force` folklore.
+	out, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "already up to date")
+
+	st, err = store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+
+	summary, err := st.GetMeta("index_summary")
+	require.NoError(t, err)
+	assert.NotEmpty(t, summary, "the reindex must record coverage")
+}
+
+func TestOrientWarnsOnParseErrors(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	// A clean fixture orients without the warning…
+	out, err := run(t, "-C", root, "orient")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "WARN")
+
+	// …and a recorded parse failure surfaces compactly.
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.SetMeta("index_summary",
+		`{"files_seen":3,"files_parsed":2,"parse_errors":1}`))
+	require.NoError(t, st.Close())
+
+	out, err = run(t, "-C", root, "orient")
+	require.NoError(t, err)
+	assert.Contains(t, out, "WARN")
+	assert.Contains(t, out, "failed to parse")
+}
+
 func TestWhyUnknownSymbolFails(t *testing.T) {
 	root := writeFixture(t)
 	_, err := run(t, "-C", root, "index")
