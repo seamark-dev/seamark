@@ -114,24 +114,64 @@ func InstalledGateMode(settings map[string]any) string {
 	return mode
 }
 
+// LessonsMarker is the edit-lessons hook's argument tail.
+const LessonsMarker = "lessons --hook"
+
+// LessonsHookInstalled reports whether seamark's edit-lessons hook is
+// operational in a parsed settings map: a "command"-typed hook under a
+// matcher covering Edit tools.
+func LessonsHookInstalled(settings map[string]any) bool {
+	hooks, _ := settings["hooks"].(map[string]any)
+	pre, _ := hooks["PreToolUse"].([]any)
+
+	found := false
+
+	ForEachCommand(pre, func(matcher string, h map[string]any, cmd string) {
+		if !strings.Contains(matcher, "Edit") {
+			return
+		}
+
+		if t, _ := h["type"].(string); t != "command" {
+			return
+		}
+
+		if OwnedBySeamark(cmd, []string{LessonsMarker}) {
+			found = true
+		}
+	})
+
+	return found
+}
+
+// ReadSettings loads <root>/.claude/settings.json; a missing file is an
+// empty map, an unparseable one an error.
+func ReadSettings(root string) (map[string]any, error) {
+	data, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
+	if os.IsNotExist(err) {
+		return map[string]any{}, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	settings := map[string]any{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return nil, fmt.Errorf(".claude/settings.json: %w", err)
+	}
+
+	return settings, nil
+}
+
 // InstalledGateModeAt reads <root>/.claude/settings.json and reports the
 // installed gate-hook mode; "" with a nil error when the file is absent
 // or simply carries no seamark gate hook. An unreadable or unparseable
 // file is an error — "your hook configuration cannot be read" and "no
 // hook installed" are different findings and must not be conflated.
 func InstalledGateModeAt(root string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
-	if os.IsNotExist(err) {
-		return "", nil
-	}
-
+	settings, err := ReadSettings(root)
 	if err != nil {
 		return "", err
-	}
-
-	settings := map[string]any{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return "", fmt.Errorf(".claude/settings.json: %w", err)
 	}
 
 	return InstalledGateMode(settings), nil

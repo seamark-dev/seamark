@@ -30,6 +30,7 @@ optional.
 | LSP server (`seamark lsp`) | source tree, `index.db` | your editor (stdio) | none | refreshed index |
 | Report (`seamark report`) | `index.db` | a local HTML file | none | yes |
 | State (`seamark state export`/`import`) | durable tables in `index.db` | a local JSON file, or stdin/stdout | none | yes |
+| Health (`seamark status`, `seamark doctor`) | `index.db`, local config, PATH | terminal | none | no |
 
 Every command that runs `git` or `gh` does so as a subprocess of the
 local binary you already trust; seamark adds no credentials of its own
@@ -81,6 +82,8 @@ even when the agent CLI is not installed.
 | `mcp` | no | the connected agent client | index refresh, `audit.jsonl` (check tool) | no | no | no |
 | `lsp` | no | your editor | index refresh | no | no | no |
 | `state` | no | no | `index.db` on import | no | no | no |
+| `status` | no | no | no | no | no | no |
+| `doctor` | no | no | no | no | no | no |
 
 See [threat-model.md](threat-model.md) for what these boundaries do and
 do not defend against.

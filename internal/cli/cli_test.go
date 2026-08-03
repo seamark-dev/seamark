@@ -466,6 +466,42 @@ func TestIndexBackfillsCoverageSummary(t *testing.T) {
 	assert.NotEmpty(t, summary, "the reindex must record coverage")
 }
 
+func TestDoctorReportsAndFails(t *testing.T) {
+	root := writeFixture(t)
+	gitify(t, root)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	out, err := run(t, "-C", root, "doctor")
+	require.NoError(t, err, "a healthy workspace must pass")
+	assert.Contains(t, out, "installation health")
+	assert.Contains(t, out, "schema v")
+
+	// JSON form parses.
+	out, err = run(t, "-C", root, "doctor", "--json")
+	require.NoError(t, err)
+
+	var report struct {
+		Checks []struct{ Name, State string } `json:"checks"`
+		Fails  int                            `json:"fails"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &report))
+	assert.NotEmpty(t, report.Checks)
+	assert.Zero(t, report.Fails)
+
+	// A broken policy is a failed check and a non-zero exit — CI can
+	// gate on doctor.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"),
+		[]byte("mode: [broken\n"), 0o644))
+
+	out, err = run(t, "-C", root, "doctor")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed")
+	assert.Contains(t, out, "fail")
+	assert.Contains(t, out, "policy")
+}
+
 func TestOrientWarnsOnParseErrors(t *testing.T) {
 	root := writeFixture(t)
 

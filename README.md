@@ -620,6 +620,19 @@ and `seamark check` attaches a note (and exposes
 indexed symbols, so absence of evidence never silently reads as
 evidence of safety.
 
+Installation health is the other half:
+
+```bash
+seamark doctor          # read-only, offline; exit 1 when a check fails
+```
+
+`doctor` verifies everything seamark needs to run — git, the index
+database (schema version and SQLite integrity), policy and
+effect-catalogue compilation, Claude Code hook wiring, the distillation
+agent, `gh`, MCP registration, and that the policy-as-code overlays are
+not accidentally gitignored — and prints an exact corrective action for
+anything broken, changing nothing itself.
+
 ## Durable state: the index is not a throwaway cache
 
 `.seamark/index.db` carries two kinds of state with different lifecycles.
@@ -754,8 +767,8 @@ audit, Claude Code hooks, MCP server (`orient`, `change_set`, `why`,
 `check`, `expand` + resources + prompt), lesson distillation with
 plan/apply (`lessons --distill`), HTML report (`seamark report`),
 versioned schema with durable-state export/import (`seamark state`),
-index-health reporting (`seamark status`). Planned next (see
-[docs/PLAN.md](docs/PLAN.md)): a doctor command for installation health,
+index-health reporting (`seamark status`), installation diagnostics
+(`seamark doctor`). Planned next (see [docs/PLAN.md](docs/PLAN.md)):
 zero-token check promotion from recurring lessons, function-grain
 history enrichment, prebuilt binaries + npm/Homebrew distribution.
 
