@@ -39,8 +39,11 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
+          # Same character contract as the Makefile's VERSION guard:
+          # A-Za-z0-9._+- (semver build metadata like v1.2.3+build.1 is
+          # legitimate; everything else stays rejected).
           case "$TAG" in
-            v*[!A-Za-z0-9._-]*|v)
+            v*[!A-Za-z0-9._+-]*|v)
               echo "tag '$TAG' contains characters unsafe for versions and paths" >&2
               exit 1;;
             v*) ;;

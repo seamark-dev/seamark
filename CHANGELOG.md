@@ -3,7 +3,8 @@
 Notable changes, newest first. Every tagged release attaches
 smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `SHA256SUMS` file; verify a download with
-`sha256sum -c --ignore-missing SHA256SUMS`.
+`sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
+`shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
 ## Unreleased
 

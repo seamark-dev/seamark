@@ -69,6 +69,10 @@ mkdir -p ~/.local/bin
 install seamark_*/seamark ~/.local/bin/
 ```
 
+A matching checksum verifies the archive against the published
+`SHA256SUMS` — integrity, not publisher identity; artifact signing is
+not yet available ([docs/STATUS.md](docs/STATUS.md)).
+
 Or build from source — Go ≥ 1.25 and a C compiler (tree-sitter uses
 CGO):
 
@@ -76,6 +80,8 @@ CGO):
 git clone https://github.com/seamark-dev/seamark && cd seamark
 make install        # builds and installs to ~/.local/bin/seamark
 ```
+
+Both routes install to `~/.local/bin` — make sure it is on your `PATH`.
 
 Then, in any repository:
 
