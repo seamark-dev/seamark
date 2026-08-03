@@ -1,0 +1,72 @@
+# Production status
+
+The concise, current state of seamark — what each capability profile can
+be trusted with today. Design history and engineering narrative live in
+[PLAN.md](PLAN.md); this page only says what is true now.
+
+Seamark's surface splits into three capability profiles with different
+maturity. They share one binary and one index; they do not share one
+trust level.
+
+## Navigate — stable
+
+Local indexing, history mining, orientation, and the read surfaces.
+
+| Capability | State |
+|---|---|
+| Indexer (Go, TypeScript/TSX/JS, Python) | working; parse cache, self-repairing freshness |
+| History layer (co-change, decisions, fix density) | working; needs git history to be useful |
+| `why`, `orient`, `change_set` | working (CLI + MCP) |
+| LSP server (hover, lenses, omission diagnostics) | working; editor setup is manual ([editors.md](editors.md)) |
+| HTML report | working |
+| MCP server | working; five tools + `orient`/`status` resources + `onboard` prompt |
+| Schema versioning, durable-state export/import | working |
+| Health: `seamark status`, `seamark doctor` | working |
+
+Known limits are documented in the README's *Honest limits*: syntactic
+resolution with labeled confidence, no scope tracking, conservative
+Python DB tagging.
+
+## Learn — functional, integration-dependent
+
+Review mining, fix mining, lessons, distillation, pins.
+
+| Capability | State |
+|---|---|
+| Fix-commit mining (local git) | working, offline |
+| Review-comment mining | working; requires authenticated `gh` and a github.com remote |
+| Lessons + edit hook + tuning (`lessons.yaml`) | working |
+| Distillation (plan/apply, dedup memory, preflight disclosure, `--dry-run`) | working; requires your own agent CLI; sends finding text to it ([data-flow.md](data-flow.md)) |
+
+## Guard — warn mode ready; enforcement is beta
+
+Command gate, diff check, audit, hooks.
+
+| Capability | State |
+|---|---|
+| Command classification (shell parser, wrappers, interpreter payloads, dynamic detection) | working |
+| Diff blast radius with coverage uncertainty (`unindexed_files`) | working |
+| Warn mode (report, never block) | ready — the recommended deployment |
+| Secret-safe audit log (hashed by default, 0600, rotation, flock) | working |
+| Enforce mode (exit 2, fail closed) | works, **beta**: an agent that can edit `policy.yaml` or `.claude/settings.json` can weaken it ([threat-model.md](threat-model.md)) |
+| Real approvals (`require_approval` with out-of-band human tokens) | **not built** — today a require_approval verdict simply blocks under enforce |
+| Policy integrity (pinned policy outside agent reach) | **not built** |
+
+Guard is a defense-in-depth policy layer, not a sandbox. Run untrusted
+agents inside real isolation regardless.
+
+## Distribution
+
+Source builds only (Go ≥ 1.25 + a C compiler), macOS and Linux.
+Windows is untested and unsupported. Prebuilt binaries, checksums, and
+package-manager installs are the next distribution milestone.
+
+## Verification
+
+- CI: full test suite + lint on every change; regression tests pin the
+  trust baseline (non-blocking default init, audit redaction, durable
+  state surviving rebuilds, docs-command drift).
+- No public benchmark exists yet; performance numbers in the README are
+  measured on one real monorepo and labeled as such.
+- External pilots: none yet — that is the bar between "works here" and
+  "production-ready", and claims stay scoped until it is met.
