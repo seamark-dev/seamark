@@ -558,10 +558,20 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 			note = strings.TrimSpace(note[:maxNoteLen])
 		}
 
+		// Region set from evidence coverage, never from the reply — the
+		// model cites findings; where they live is checked arithmetic.
+		regions := coverageRegions(cited)
+
+		region := ""
+		if len(regions) > 0 {
+			region = regions[0]
+		}
+
 		out = append(out, model.Proposal{
 			Signature: g.Signature,
 			Rule:      rule,
-			Region:    commonDir(cited),
+			Region:    region,
+			Regions:   regions,
 			Note:      note,
 			Members:   ids,
 			Agent:     agentName + "/" + promptVersion,

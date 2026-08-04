@@ -9,7 +9,7 @@ import (
 // schemaVersion is the schema this binary understands and writes. Bump it
 // together with a new migrations entry — never alone: a version without a
 // migration would leave every existing database behind.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // schemaVersionKey is the meta row recording a database's version.
 const schemaVersionKey = "schema_version"
@@ -32,6 +32,7 @@ type migration struct {
 //     first such step, not before.
 var migrations = []migration{
 	{to: 2, run: addFindingSource},
+	{to: 3, run: addRegionSetsAndPaths},
 }
 
 // addFindingSource (v1 → v2): finding.source arrived with fix mining —
@@ -48,6 +49,30 @@ func addFindingSource(tx *sql.Tx) error {
 	}
 
 	return err
+}
+
+// addRegionSetsAndPaths (v2 → v3): proposals gained evidence-coverage
+// region sets and fix findings their full code footprint (RFC-002
+// Phase B). Empty-string defaults mean "derive from the single-value
+// column", so pre-existing rows need no rewrite.
+func addRegionSetsAndPaths(tx *sql.Tx) error {
+	for _, col := range []struct{ table, name, ddl string }{
+		{"proposal", "regions", `ALTER TABLE proposal ADD COLUMN regions TEXT NOT NULL DEFAULT ''`},
+		{"finding", "paths", `ALTER TABLE finding ADD COLUMN paths TEXT NOT NULL DEFAULT ''`},
+	} {
+		has, err := hasColumn(tx, col.table, col.name)
+		if err != nil {
+			return err
+		}
+
+		if !has {
+			if _, err := tx.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 // refuseNewer rejects a database stamped by a newer seamark BEFORE any

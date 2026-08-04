@@ -350,28 +350,26 @@ func coveredClusters(st *store.Store, cfg *reviews.Config) (map[string]bool, err
 		return nil, err
 	}
 
-	var cited []int64
-
-	for _, p := range applied {
-		if pinLive(cfg, p.Rule, p.Region) {
-			cited = append(cited, p.Members...)
-		}
-	}
-
-	if len(cited) == 0 {
-		return nil, nil
-	}
-
-	counts, err := st.ClusterCitation(cited)
-	if err != nil {
-		return nil, err
-	}
-
+	// Coverage is judged PER PIN, never across a union of citations:
+	// pin A citing one half of a cluster and unrelated pin B the other
+	// half captures nothing — neither pin carries the theme, and the
+	// union would suppress an unresolved recurrence.
 	covered := map[string]bool{}
 
-	for key, c := range counts {
-		if c.Cited == c.Total {
-			covered[key] = true
+	for _, p := range applied {
+		if !pinLive(cfg, p) || len(p.Members) == 0 {
+			continue
+		}
+
+		counts, err := st.ClusterCitation(p.Members)
+		if err != nil {
+			return nil, err
+		}
+
+		for key, c := range counts {
+			if c.Cited == c.Total {
+				covered[key] = true
+			}
 		}
 	}
 
@@ -379,32 +377,19 @@ func coveredClusters(st *store.Store, cfg *reviews.Config) (map[string]bool, err
 }
 
 // pinLive reports whether lessons.yaml currently carries a pin with
-// this rule and region — the same identity apply/prune use, normalized
-// the same way ("" and "*" are one repo-wide region, trailing slashes
-// don't count).
-func pinLive(cfg *reviews.Config, rule, region string) bool {
+// this proposal's rule and region set — the exact identity apply and
+// prune use (reviews.NewPinKey), so liveness can never disagree with
+// what those commands would write or remove.
+func pinLive(cfg *reviews.Config, proposal model.Proposal) bool {
+	want := reviews.NewPinKey(proposal.Rule, proposal.Region, proposal.Regions)
+
 	for _, p := range cfg.Pin {
-		if strings.EqualFold(p.Rule, rule) && sameRegion(p.Region, region) {
+		if reviews.NewPinKey(p.Rule, p.Region, p.Regions) == want {
 			return true
 		}
 	}
 
 	return false
-}
-
-// sameRegion compares two pin regions under the repo-wide and
-// trailing-slash equivalences.
-func sameRegion(a, b string) bool {
-	norm := func(r string) string {
-		r = strings.TrimSuffix(r, "/")
-		if r == "*" {
-			return ""
-		}
-
-		return r
-	}
-
-	return norm(a) == norm(b)
 }
 
 // PrintLessonReminder writes a compact standalone lessons block for one
@@ -666,7 +651,7 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal)
 // because the note is the whole point of showing it.
 func printProposal(w io.Writer, p model.Proposal) {
 	fmt.Fprintf(w, "\n  p%-4d %-34s %-26s %d findings cited [%s]\n",
-		p.ID, render.Sanitize(p.Rule), render.Sanitize(regionLabel(p.Region)),
+		p.ID, render.Sanitize(p.Rule), render.Sanitize(regionLabel(p)),
 		len(p.Members), render.Sanitize(p.Agent))
 	fmt.Fprintf(w, "        %s\n", render.Sanitize(p.Note))
 }
@@ -772,17 +757,17 @@ func printDecided(w io.Writer, heading string, ps []model.Proposal) {
 
 	for _, p := range ps {
 		fmt.Fprintf(w, "  p%-4d %-34s %s\n",
-			p.ID, render.Sanitize(p.Rule), render.Sanitize(regionLabel(p.Region)))
+			p.ID, render.Sanitize(p.Rule), render.Sanitize(regionLabel(p)))
 	}
 }
 
-// regionLabel renders a proposal's region, repo-wide as "*".
-func regionLabel(region string) string {
-	if region == "" {
-		return "*"
+// regionLabel renders a proposal's region set, repo-wide as "*".
+func regionLabel(p model.Proposal) string {
+	if set := p.RegionSet(); len(set) > 0 {
+		return strings.Join(set, ", ")
 	}
 
-	return region
+	return "*"
 }
 
 // DistillSummary is the run-shape PrintDistillPlan reports; a mirror of

@@ -406,7 +406,7 @@ func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
 	ids := make([]int64, len(ps))
 
 	for i, p := range ps {
-		keys[i] = distill.PinKey{Rule: p.Rule, Region: p.Region}
+		keys[i] = distill.NewPinKey(p.Rule, p.Region, p.Regions)
 		ids[i] = p.ID
 	}
 
@@ -433,7 +433,25 @@ func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
 		return err
 	}
 
-	n, err := st.SupersedeProposals(ids)
+	// Supersede ONLY what actually left the file: a pin the textual
+	// edit could not find (already pruned by hand, or an exotic layout)
+	// must keep its applied status, or the database says "not pinned"
+	// while lessons.yaml still carries the entry — and liveness,
+	// coverage, and the audit all reason from that lie.
+	removedKeys := make(map[distill.PinKey]bool, len(removed))
+	for _, k := range removed {
+		removedKeys[k] = true
+	}
+
+	var removedIDs []int64
+
+	for i, p := range ps {
+		if removedKeys[keys[i]] {
+			removedIDs = append(removedIDs, p.ID)
+		}
+	}
+
+	n, err := st.SupersedeProposals(removedIDs)
 	if err != nil {
 		return err
 	}
@@ -446,7 +464,7 @@ func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
 	}
 
 	if len(removed) < len(ps) {
-		fmt.Fprintf(out, "(%d were already absent from the file)\n", len(ps)-len(removed))
+		fmt.Fprintf(out, "(%d were not found in the file and keep their applied status)\n", len(ps)-len(removed))
 	}
 
 	return nil
@@ -568,7 +586,10 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 
 	pins := make([]model.Proposal, 0, len(lcfg.Pin))
 	for _, p := range lcfg.Pin {
-		pins = append(pins, model.Proposal{Rule: p.Rule, Note: p.Note, Region: p.Region})
+		// AllRegions resolves the union once at the boundary, so a
+		// hand-written pin carrying both keys governs everywhere it says.
+		pins = append(pins, model.Proposal{
+			Rule: p.Rule, Note: p.Note, Region: p.Region, Regions: p.AllRegions()})
 	}
 
 	dopts := distill.Options{

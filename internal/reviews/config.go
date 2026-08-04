@@ -59,11 +59,78 @@ type MuteRule struct {
 	Region string `yaml:"region"`
 }
 
-// PinRule is a hand-authored lesson that always surfaces for its region.
+// PinRule is a hand-authored lesson that always surfaces for its
+// region(s).
 type PinRule struct {
 	Rule   string `yaml:"rule"`   // the symptom shown (a code or short label)
 	Region string `yaml:"region"` // file or directory; "*" or "" is repo-wide
-	Note   string `yaml:"note"`   // human explanation, carried into output
+	// Regions widens a pin to a small set of places — one theme
+	// legitimately living in `api` AND `db` needs no repo-wide `*`.
+	// Flow-rendered (`regions: [api, db]`) so applied entries stay
+	// single-line-parseable; readers predating this field see Region,
+	// the set's first entry — narrower than the `*` they used to get.
+	Regions []string `yaml:"regions,omitempty,flow"`
+	Note    string   `yaml:"note"` // human explanation, carried into output
+}
+
+// AllRegions returns the pin's effective region set — Region and
+// Regions merged, trailing slashes trimmed, deduplicated. Nil means
+// repo-wide ("*" and "" collapse to it).
+func (p PinRule) AllRegions() []string {
+	var out []string
+
+	seen := map[string]bool{}
+
+	for _, r := range append([]string{p.Region}, p.Regions...) {
+		r = strings.TrimSuffix(r, "/")
+
+		if r == "" || r == "*" || seen[r] {
+			continue
+		}
+
+		seen[r] = true
+		out = append(out, r)
+	}
+
+	return out
+}
+
+// appliesTo reports whether the pin bears on scope — any region
+// containing (or contained by) it; a repo-wide pin bears on everything.
+func (p PinRule) appliesTo(scope string) bool {
+	regions := p.AllRegions()
+
+	if scope == "" || len(regions) == 0 {
+		return true
+	}
+
+	for _, r := range regions {
+		if RegionMatches(r, scope) || RegionMatches(scope, r) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// matchDepth ranks the pin's specificity for scope: the depth of its
+// deepest region applying there (repo-wide is 0). A pin on the file
+// beats one on its package beats `*`, exactly as with single regions —
+// a multi-region pin ranks by the region that earned it the slot.
+func (p PinRule) matchDepth(scope string) int {
+	best := 0
+
+	for _, r := range p.AllRegions() {
+		if scope != "" && !RegionMatches(r, scope) && !RegionMatches(scope, r) {
+			continue
+		}
+
+		if d := regionDepth(r); d > best {
+			best = d
+		}
+	}
+
+	return best
 }
 
 // DefaultConfig is the zero-tuning config: nothing muted or pinned,
@@ -130,12 +197,9 @@ func (c *Config) pinsFor(scope string) []PinRule {
 	var out []PinRule
 
 	for _, p := range c.Pin {
-		if scope != "" && p.Region != "" && p.Region != "*" &&
-			!RegionMatches(p.Region, scope) && !RegionMatches(scope, p.Region) {
-			continue
+		if p.appliesTo(scope) {
+			out = append(out, p)
 		}
-
-		out = append(out, p)
 	}
 
 	return out
@@ -149,7 +213,7 @@ func pinLesson(p PinRule) model.Lesson {
 		symptom = strings.TrimSpace(p.Rule + " — " + p.Note)
 	}
 
-	region := p.Region
+	region := strings.Join(p.AllRegions(), ", ")
 	if region == "" {
 		region = "*"
 	}
@@ -181,9 +245,10 @@ func (c *Config) SurfaceBudget(mined []model.Lesson, scope string, pinBudget int
 	pins := c.pinsFor(scope)
 
 	// Stable: equal specificity keeps the config file's order, which is
-	// the user's own priority order.
+	// the user's own priority order. A multi-region pin ranks by its
+	// deepest region that applies to this scope.
 	sort.SliceStable(pins, func(i, j int) bool {
-		return regionDepth(pins[i].Region) > regionDepth(pins[j].Region)
+		return pins[i].matchDepth(scope) > pins[j].matchDepth(scope)
 	})
 
 	// Ambient surfaces collapse restatements before the cap: two
@@ -279,4 +344,53 @@ func RegionMatches(region, target string) bool {
 	}
 
 	return strings.HasPrefix(target, strings.TrimSuffix(region, "/")+"/")
+}
+
+// PinKey identifies one pin entry. A rule name alone is not an
+// identity: the same rule is legitimately pinned in several regions
+// (RUF001 for scripts and for api), and pruning one must not take the
+// others with it. Region holds the canonical form of the pin's whole
+// region set — sorted, NUL-joined, "*" for repo-wide — so the key
+// stays comparable, region ORDER never splits an identity, and no
+// legal path byte can make two different sets collide (a comma can
+// appear in a directory name; NUL cannot).
+type PinKey struct {
+	Rule   string
+	Region string
+}
+
+// String renders the key for error messages and logs: the NUL joins
+// become readable separators.
+func (k PinKey) String() string {
+	return k.Rule + " @ " + strings.ReplaceAll(k.Region, "\x00", ", ")
+}
+
+// NewPinKey builds the canonical identity from a pin's rule and its
+// region fields (single + set, either may be empty). Every consumer —
+// apply, prune, the file parser, liveness checks — must construct keys
+// through here, or two spellings of one pin drift apart.
+func NewPinKey(rule, region string, regions []string) PinKey {
+	seen := map[string]bool{}
+
+	var set []string
+
+	for _, r := range append([]string{region}, regions...) {
+		r = strings.TrimSuffix(strings.TrimSpace(r), "/")
+
+		if r == "" || r == "*" || seen[r] {
+			continue
+		}
+
+		seen[r] = true
+		set = append(set, r)
+	}
+
+	sort.Strings(set)
+
+	canonical := strings.Join(set, "\x00")
+	if canonical == "" {
+		canonical = "*"
+	}
+
+	return PinKey{Rule: strings.ToLower(strings.TrimSpace(rule)), Region: canonical}
 }

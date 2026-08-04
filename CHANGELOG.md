@@ -8,6 +8,35 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **Region sets replace the repo-wide `*` collapse.** A proposal's
+  region is now a small set (≤3 directories, depth ≤3) covering ≥80%
+  of its cited *events*: test and doc paths don't vote (test-only
+  evidence keeps its test region), root files can't drag a theme to
+  `*`, and a theme living in `api` AND `db` says so instead of saying
+  "everywhere". Measured on the corpora that motivated it: repo-wide
+  proposals drop from 35/65 to 3/65 and 3/27 to 0/27. Applied pins
+  carry both `region:` (first entry — what older seamark reads, still
+  narrower than the old `*`) and `regions: [a, b]`; the schema
+  migrates to v3 (`proposal.regions`, `finding.paths`) automatically.
+  Deliberately NOT migrated: existing proposals and their applied pins
+  keep the regions they were decided under — rewriting them would
+  silently change pin identities behind lessons.yaml's back. New
+  distillations get sets immediately; existing pins tighten through
+  the upcoming revalidation audit, which shows the recomputed regions
+  next to the stored ones with the command to apply them.
+- **Fix findings point at the code, not the churn.** A fix's primary
+  file is its most-changed non-test, non-doc file (tests routinely
+  out-churn the fix they cover), and the finding stores the commit's
+  full code footprint for region inference.
+- **Merge-commit workflows get PR attribution.** Branch commits inherit
+  their pull request from merge topology (`Merge pull request #N` +
+  rev-list), so a review comment and the `fix: PR review` commit
+  answering it finally count as one event in repos that don't squash.
+  Explicit `(#N)` / `fixes #N` references still win. A merge from a
+  `fix/`-named branch whose commits carry no fix-shaped message becomes
+  one `fix:branch` finding (the merge's diff) — the tier only fires
+  where there was no signal at all, and the source label shows in every
+  evidence header.
 - **Captured themes surface once.** A mined lesson stops surfacing in
   `why` and the edit hook when an applied pin cites every finding in
   its cluster AND that pin is currently present in lessons.yaml — the

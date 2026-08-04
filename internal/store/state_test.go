@@ -133,6 +133,33 @@ func TestImportResolvesPendingProposal(t *testing.T) {
 	assert.Len(t, dismissed, 1)
 }
 
+func TestImportedDecisionCarriesItsRegions(t *testing.T) {
+	// The decision was made against the imported row's content: a local
+	// pending row adopting the status must adopt the region set too, or
+	// pin-identity checks (liveness, prune) look for a stale repo-wide
+	// key while lessons.yaml carries the multi-region pin.
+	s := openTestStore(t)
+
+	require.NoError(t, s.InsertProposal(&model.Proposal{
+		Signature: "sig-2", Rule: "validate-at-the-boundary", Note: "n",
+		Status: model.ProposalProposed, CreatedAt: 1,
+	}))
+
+	stats, err := s.ImportState(&State{Version: 1, Proposals: []ProposalState{
+		{Signature: "sig-2", Rule: "validate-at-the-boundary", Note: "n",
+			Region: "api", Regions: []string{"api", "db"},
+			Status: model.ProposalApplied, CreatedAt: 1},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.ProposalsUpdated)
+
+	applied, err := s.Proposals(model.ProposalApplied)
+	require.NoError(t, err)
+	require.Len(t, applied, 1)
+	assert.Equal(t, "api", applied[0].Region)
+	assert.Equal(t, []string{"api", "db"}, applied[0].Regions)
+}
+
 func TestImportRejectsBadBundles(t *testing.T) {
 	s := openTestStore(t)
 

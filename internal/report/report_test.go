@@ -331,3 +331,54 @@ func TestDismissedProposalsDontSuppressMinedLessons(t *testing.T) {
 	require.Len(t, out, 1)
 	assert.Contains(t, out[0].Symptom, "wrap engine context")
 }
+
+func TestSplitCitationsAcrossPinsDoNotCover(t *testing.T) {
+	// Two live pins each citing half a cluster: the union covers it,
+	// but neither pin carries the theme — the lesson must keep
+	// surfacing.
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	require.NoError(t, st.ReplaceLessons([]model.Lesson{
+		{ClusterKey: "k", Region: "api", Reviewer: "human",
+			Symptom: "wrap engine context", Occurrences: 2},
+	}, []model.Finding{
+		{ID: 1, LessonKey: "k", Path: "api/a.go", Body: "one", Source: model.SourceReview},
+		{ID: 2, LessonKey: "k", Path: "api/b.go", Body: "two", Source: model.SourceReview},
+	}))
+
+	first, err := st.SaveDistilledGroup("sig-x", "api", 1, []model.Proposal{{
+		Signature: "sig-x", Rule: "alpha-theme", Region: "api",
+		Note: "First unrelated theme.", Members: []int64{1}, Status: model.ProposalProposed,
+	}})
+	require.NoError(t, err)
+
+	second, err := st.SaveDistilledGroup("sig-y", "api", 1, []model.Proposal{{
+		Signature: "sig-y", Rule: "beta-theme", Region: "api",
+		Note: "Second unrelated theme.", Members: []int64{2}, Status: model.ProposalProposed,
+	}})
+	require.NoError(t, err)
+
+	_, err = st.SetProposalStatus([]int64{first[0].ID, second[0].ID}, model.ProposalApplied)
+	require.NoError(t, err)
+
+	cfg := reviews.DefaultConfig()
+	cfg.Pin = []reviews.PinRule{
+		{Rule: "alpha-theme", Region: "api", Note: "n"},
+		{Rule: "beta-theme", Region: "api", Note: "n"},
+	}
+
+	out, _, err := LessonsForScopeBudget(st, cfg, "api/z.go", 8, 0)
+	require.NoError(t, err)
+
+	var b strings.Builder
+	for _, l := range out {
+		b.WriteString(l.Symptom + "\n")
+	}
+
+	assert.Contains(t, b.String(), "wrap engine context",
+		"a cluster split across two pins' citations is not captured by either")
+}

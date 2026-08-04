@@ -301,7 +301,7 @@ func (r *Report) buildCards(proposals []model.Proposal, findings []model.Finding
 		// can age out of the index. Counting only what is still there
 		// would report a well-founded pin as resting on nothing.
 		card := Card{
-			ID: p.ID, Rule: clean(p.Rule), Region: regionLabel(p.Region),
+			ID: p.ID, Rule: clean(p.Rule), Region: regionLabel(p),
 			Note: clean(p.Note), Agent: clean(p.Agent), Status: p.Status,
 			Pending: p.Status == model.ProposalProposed,
 			Cited:   len(p.Members), Retrieved: len(cited),
@@ -692,14 +692,14 @@ func dirLabel(dir string) string {
 	return shortenPath(dir, 34)
 }
 
-// regionLabel names a proposal's area, with the repo-wide star spelled
-// the way lessons.yaml spells it.
-func regionLabel(region string) string {
-	if region == "" {
-		return "*"
+// regionLabel names a proposal's area — the full region set, with the
+// repo-wide star spelled the way lessons.yaml spells it.
+func regionLabel(p model.Proposal) string {
+	if set := p.RegionSet(); len(set) > 0 {
+		return clean(strings.Join(set, ", "))
 	}
 
-	return clean(region)
+	return "*"
 }
 
 // safeURL passes through plain http(s) links and drops everything else.

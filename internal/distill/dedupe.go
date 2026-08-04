@@ -32,11 +32,12 @@ import (
 //  2. Wording (internal/wording): no agent call is needed to see that
 //     two short rules say the same thing.
 
-// entry is one known pattern: its comparable wording, the region it
-// governs, and the evidence it cited (empty for config pins).
+// entry is one known pattern: its comparable wording, the regions it
+// governs (nil = repo-wide), and the evidence it cited (empty for
+// config pins).
 type entry struct {
 	topic     wording.Topic
-	region    string
+	regions   []string
 	signature string  // evidence group that produced it; "" for config pins
 	members   []int64 // sorted; nil when the pattern cites no findings
 }
@@ -69,7 +70,7 @@ func NewKnown(patterns ...[]model.Proposal) *Known {
 func (k *Known) Add(p model.Proposal) {
 	k.entries = append(k.entries, entry{
 		topic:     wording.New(p.Rule, p.Note),
-		region:    p.Region,
+		regions:   p.RegionSet(),
 		signature: p.Signature,
 		members:   sortedIDs(p.Members),
 	})
@@ -91,7 +92,7 @@ func (k *Known) Labels(region string, limit int) []string {
 		}
 
 		label := e.topic.Label()
-		if label == "" || seen[label] || !governs(e.region, region) {
+		if label == "" || seen[label] || !governs(e.regions, region) {
 			continue
 		}
 
@@ -102,18 +103,25 @@ func (k *Known) Labels(region string, limit int) []string {
 	return out
 }
 
-// governs reports whether a pattern pinned at pinRegion bears on work
-// in groupRegion. Repo-wide pins always do; otherwise either may
-// contain the other — a pin on api/services is worth knowing about
-// when distilling api, and vice versa. A cross-tree group (no common
-// region) sees everything, which the caller's limit bounds.
-func governs(pinRegion, groupRegion string) bool {
-	if pinRegion == "" || pinRegion == "*" || groupRegion == "" {
+// governs reports whether a pattern pinned at pinRegions bears on work
+// in groupRegion. Repo-wide pins (nil) always do; otherwise any of the
+// pin's regions may contain or be contained by the group's — a pin on
+// api/services is worth knowing about when distilling api, and vice
+// versa. A cross-tree group (no common region) sees everything, which
+// the caller's limit bounds.
+func governs(pinRegions []string, groupRegion string) bool {
+	if len(pinRegions) == 0 || groupRegion == "" {
 		return true
 	}
 
-	return reviews.RegionMatches(pinRegion, groupRegion) ||
-		reviews.RegionMatches(groupRegion, pinRegion)
+	for _, r := range pinRegions {
+		if reviews.RegionMatches(r, groupRegion) ||
+			reviews.RegionMatches(groupRegion, r) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Restated returns the label of the known pattern p duplicates, and

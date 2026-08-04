@@ -173,3 +173,15 @@ func TestClustersCatchRederivedEvidence(t *testing.T) {
 	assert.NotEqual(t, int64(60), got[0][0].ID)
 	assert.NotEqual(t, int64(60), got[0][1].ID)
 }
+
+func TestGovernsNormalizesWildcardRegions(t *testing.T) {
+	// A proposal whose Regions slipped in as ["*"] (an import, a hand-
+	// built row) is repo-wide: it must govern every area, not literally
+	// match a directory named "*" and govern none.
+	known := NewKnown([]model.Proposal{
+		{Rule: "wildcard-pin", Note: "Applies everywhere.", Regions: []string{"*"}},
+	})
+
+	labels := known.Labels("api", 10)
+	assert.Contains(t, labels, "wildcard-pin", "a wildcard region set governs everywhere")
+}

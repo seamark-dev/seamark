@@ -102,6 +102,42 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+// OpenReadOnly opens an EXISTING database for querying only: no schema
+// application, no migrations, no writes — the opener for diagnostics
+// that must leave the target byte-identical. The database must already
+// carry this binary's schema version: an older one would fail queries
+// on missing columns, a newer one must not be guessed at — both are
+// refused with the same advice, run a current `seamark index` against
+// it first.
+func OpenReadOnly(path string) (*Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("store: open read-only: %w", err)
+	}
+
+	db, err := sql.Open("sqlite", dsn(path, "mode=ro&_pragma=busy_timeout(5000)"))
+	if err != nil {
+		return nil, fmt.Errorf("store: open %s read-only: %w", path, err)
+	}
+
+	db.SetMaxOpenConns(1)
+
+	stored, err := readVersion(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	if stored != schemaVersion {
+		_ = db.Close()
+
+		return nil, fmt.Errorf("store: database schema is v%d but this seamark reads v%d — "+
+			"run `seamark index` against it first (read-only open migrates nothing)",
+			stored, schemaVersion)
+	}
+
+	return &Store{db: db}, nil
+}
+
 // Close releases the underlying database handle.
 func (s *Store) Close() error { return s.db.Close() }
 
@@ -445,15 +481,48 @@ func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
 	return nil
 }
 
+// findingCols is the column list every finding query selects, in
+// scanFindings order.
+const findingCols = `id, lesson_key, path, pr, reviewer, body, url, created_at, source, paths`
+
+// encodeStrings stores a string slice as JSON, ” for none — the
+// column defaults pre-migration rows carry.
+func encodeStrings(v []string) (string, error) {
+	if len(v) == 0 {
+		return "", nil
+	}
+
+	b, err := json.Marshal(v)
+
+	return string(b), err
+}
+
+// decodeStrings is encodeStrings' inverse.
+func decodeStrings(s string) ([]string, error) {
+	if s == "" {
+		return nil, nil
+	}
+
+	var out []string
+	err := json.Unmarshal([]byte(s), &out)
+
+	return out, err
+}
+
 func insertFinding(db execer, f *model.Finding) error {
 	if f.Source == "" {
 		f.Source = model.SourceReview
 	}
 
-	_, err := db.Exec(
-		`INSERT INTO finding (id, lesson_key, path, pr, reviewer, body, url, created_at, source)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		f.ID, f.LessonKey, f.Path, f.PR, f.Reviewer, f.Body, f.URL, f.CreatedAt, f.Source)
+	paths, err := encodeStrings(f.Paths)
+	if err != nil {
+		return fmt.Errorf("store: encode finding paths: %w", err)
+	}
+
+	_, err = db.Exec(
+		`INSERT INTO finding (id, lesson_key, path, pr, reviewer, body, url, created_at, source, paths)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		f.ID, f.LessonKey, f.Path, f.PR, f.Reviewer, f.Body, f.URL, f.CreatedAt, f.Source, paths)
 	if err != nil {
 		return fmt.Errorf("store: insert finding %d: %w", f.ID, err)
 	}
@@ -464,8 +533,7 @@ func insertFinding(db execer, f *model.Finding) error {
 // AllFindings returns every stored finding — the distiller's input.
 func (s *Store) AllFindings() ([]model.Finding, error) {
 	rows, err := s.db.Query(
-		`SELECT id, lesson_key, path, pr, reviewer, body, url, created_at, source
-		 FROM finding ORDER BY id`)
+		`SELECT ` + findingCols + ` FROM finding ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -513,7 +581,7 @@ func (s *Store) DistilledSignatures() (map[string]bool, error) {
 
 // proposalCols is the column list every proposal query selects, in
 // scanProposals order.
-const proposalCols = `id, signature, rule, region, note, members, agent, status, created_at`
+const proposalCols = `id, signature, rule, region, regions, note, members, agent, status, created_at`
 
 // InsertProposal stores one distilled proposal and returns its id.
 func (s *Store) InsertProposal(p *model.Proposal) error {
@@ -531,10 +599,15 @@ func insertProposal(db execer, p *model.Proposal) error {
 		return fmt.Errorf("store: encode proposal members: %w", err)
 	}
 
+	regions, err := encodeStrings(p.Regions)
+	if err != nil {
+		return fmt.Errorf("store: encode proposal regions: %w", err)
+	}
+
 	res, err := db.Exec(
-		`INSERT INTO proposal (signature, rule, region, note, members, agent, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Signature, p.Rule, p.Region, p.Note, string(members), p.Agent, p.Status, p.CreatedAt)
+		`INSERT INTO proposal (signature, rule, region, regions, note, members, agent, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Signature, p.Rule, p.Region, regions, p.Note, string(members), p.Agent, p.Status, p.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("store: insert proposal %s: %w", p.Rule, err)
 	}
@@ -595,16 +668,21 @@ func scanProposals(rows *sql.Rows) ([]model.Proposal, error) {
 
 	for rows.Next() {
 		var p model.Proposal
-		var members string
 
-		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &p.Note,
-			&members, &p.Agent, &p.Status, &p.CreatedAt)
+		var members, regions string
+
+		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &regions,
+			&p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
 
 		if err := json.Unmarshal([]byte(members), &p.Members); err != nil {
 			return nil, fmt.Errorf("store: proposal %d members: %w", p.ID, err)
+		}
+
+		if p.Regions, err = decodeStrings(regions); err != nil {
+			return nil, fmt.Errorf("store: proposal %d regions: %w", p.ID, err)
 		}
 
 		out = append(out, p)
@@ -726,8 +804,8 @@ func (s *Store) PruneStaleProposals(liveSignatures map[string]bool) (int, error)
 // first — the evidence trail a distiller or a provenance view reads.
 func (s *Store) FindingsForLesson(clusterKey string) ([]model.Finding, error) {
 	rows, err := s.db.Query(
-		`SELECT id, lesson_key, path, pr, reviewer, body, url, created_at, source
-		 FROM finding WHERE lesson_key = ? ORDER BY created_at, id`, clusterKey)
+		`SELECT `+findingCols+` FROM finding
+		 WHERE lesson_key = ? ORDER BY created_at, id`, clusterKey)
 	if err != nil {
 		return nil, err
 	}
@@ -853,10 +931,16 @@ func scanFindings(rows *sql.Rows) ([]model.Finding, error) {
 	for rows.Next() {
 		var f model.Finding
 
+		var paths string
+
 		err := rows.Scan(&f.ID, &f.LessonKey, &f.Path, &f.PR,
-			&f.Reviewer, &f.Body, &f.URL, &f.CreatedAt, &f.Source)
+			&f.Reviewer, &f.Body, &f.URL, &f.CreatedAt, &f.Source, &paths)
 		if err != nil {
 			return nil, err
+		}
+
+		if f.Paths, err = decodeStrings(paths); err != nil {
+			return nil, fmt.Errorf("store: finding %d paths: %w", f.ID, err)
 		}
 
 		out = append(out, f)

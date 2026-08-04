@@ -235,3 +235,48 @@ func TestLoadConfigRejectsMalformed(t *testing.T) {
 	_, err := LoadConfig(root)
 	require.Error(t, err, "a typo'd config must fail loudly, not silently ignore mutes")
 }
+
+func TestMultiRegionPinAppliesAndDisplays(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Pin = []PinRule{{Rule: "validate-at-the-boundary", Region: "api",
+		Regions: []string{"api", "db"}, Note: "Validate at the edge."}}
+
+	require.Len(t, cfg.Surface(nil, "api/routes.py"), 1)
+	require.Len(t, cfg.Surface(nil, "db/schema.py"), 1, "the set's second region applies too")
+	assert.Empty(t, cfg.Surface(nil, "web/src/x.ts"), "outside every region, the pin stays quiet")
+
+	got := cfg.Surface(nil, "db/schema.py")
+	assert.Equal(t, "api, db", got[0].Region, "the full set is displayed")
+}
+
+func TestMultiRegionPinRanksByMatchedDepth(t *testing.T) {
+	// The region that earned the slot is the one that ranks: a set pin
+	// with a deep match beats a shallow single-region pin, even though
+	// the set also carries an unrelated region.
+	cfg := DefaultConfig()
+	cfg.Pin = []PinRule{
+		{Rule: "broad-guard", Region: "a", Note: "n"},
+		{Rule: "deep-set-guard", Regions: []string{"a/b", "zzz"}, Note: "n"},
+	}
+
+	out, trimmed := cfg.SurfaceBudget(nil, "a/b/x.go", 1)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, 1, trimmed)
+	assert.Contains(t, out[0].Symptom, "deep-set-guard")
+}
+
+func TestNewPinKeyCanonicalizes(t *testing.T) {
+	assert.Equal(t, NewPinKey("Dup", "", nil), NewPinKey("dup", "*", nil),
+		"case, empty, and star spellings are one repo-wide identity")
+	assert.Equal(t, NewPinKey("d", "db", []string{"api"}), NewPinKey("d", "api", []string{"db", "api/"}),
+		"the union is order-insensitive and slash-normalized")
+	assert.NotEqual(t, NewPinKey("d", "api", nil), NewPinKey("d", "api", []string{"db"}),
+		"a wider set is a different pin")
+}
+
+func TestNewPinKeyCommaRegionsDoNotCollide(t *testing.T) {
+	// A comma is a legal path byte: one region named "a,b" must never
+	// share an identity with the two-region set {a, b}.
+	assert.NotEqual(t, NewPinKey("r", "a,b", nil), NewPinKey("r", "a", []string{"b"}))
+}

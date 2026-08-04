@@ -150,7 +150,10 @@ CREATE TABLE IF NOT EXISTS finding (
     -- fix:conventional | fix:issue-link | fix:subject. Providers re-mine
     -- on different cadences, so each replaces only its own rows.
     -- (Existing databases gain this column via the migration in Open.)
-    source     TEXT NOT NULL DEFAULT 'review'
+    source     TEXT NOT NULL DEFAULT 'review',
+    -- A fix commit's full code footprint (JSON array, primary first),
+    -- '' for review findings. (Migration-added on existing databases.)
+    paths      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS finding_lesson ON finding (lesson_key);
 CREATE INDEX IF NOT EXISTS finding_path ON finding (path);
@@ -176,7 +179,10 @@ CREATE TABLE IF NOT EXISTS proposal (
     id         INTEGER PRIMARY KEY,
     signature  TEXT NOT NULL,
     rule       TEXT NOT NULL,
-    region     TEXT NOT NULL DEFAULT '',
+    region     TEXT NOT NULL DEFAULT '',  -- first region of regions ('' = repo-wide)
+    -- The evidence-coverage region set (JSON array, ≤3 entries), '' to
+    -- derive from region. (Migration-added on existing databases.)
+    regions    TEXT NOT NULL DEFAULT '',
     note       TEXT NOT NULL,
     members    TEXT NOT NULL,             -- JSON array of cited finding ids
     agent      TEXT NOT NULL DEFAULT '',  -- provenance: adapter + prompt version

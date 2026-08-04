@@ -35,7 +35,12 @@ fixes by explicit intent
 matches — "prefix" and "fixture" don't count), minus the ones that teach
 nothing (typo/lint/CI chores, 30-file bulk refactors), minus cherry-pick
 duplicates (patch identity: a backport is the same event) and fixes that
-were later reverted. Each surviving fix becomes a finding whose body
+were later reverted. A merge from a `fix/`-named branch whose commits
+carry no fix-shaped message of their own counts too (`fix:branch` — the
+author declared the fix in the branch name; the finding is the merge's
+diff), and in merge-commit workflows every branch commit inherits its
+pull request from the merge topology, so a review comment and the fix
+commit answering it count as one event. Each surviving fix becomes a finding whose body
 carries the commit message *and the patch* — the patch is the signal
 that survives useless messages (measured: two anonymous "fix: PR review"
 commits still grouped correctly on patch content alone).
