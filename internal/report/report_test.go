@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -381,4 +382,160 @@ func TestSplitCitationsAcrossPinsDoNotCover(t *testing.T) {
 
 	assert.Contains(t, b.String(), "wrap engine context",
 		"a cluster split across two pins' citations is not captured by either")
+}
+
+func TestWeakEvidencePinsRankLastAndGetTagged(t *testing.T) {
+	// Confidence at the surface: a single-event pin (the v1-era shape)
+	// must not out-rank a hand-written pin for a budget slot, and the
+	// ambient surface tags it so the agent knows what it is leaning on.
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	// One PR, two comments: one event — weak under current rules.
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, LessonKey: "k", Path: "api/a.go", PR: 9, Body: "b", Source: model.SourceReview},
+		{ID: 2, LessonKey: "k", Path: "api/b.go", PR: 9, Body: "b", Source: model.SourceReview},
+	}))
+
+	saved, err := st.SaveDistilledGroup("sig-w", "api", 1, []model.Proposal{{
+		Signature: "sig-w", Rule: "single-event-guidance", Region: "api",
+		Note: "Distilled from one review exchange.", Members: []int64{1, 2},
+		Status: model.ProposalProposed,
+	}})
+	require.NoError(t, err)
+	_, err = st.SetProposalStatus([]int64{saved[0].ID}, model.ProposalApplied)
+	require.NoError(t, err)
+
+	cfg := reviews.DefaultConfig()
+	cfg.Pin = []reviews.PinRule{
+		// File order puts the weak distilled pin FIRST; rank must
+		// reorder so the hand-written pin wins the single slot.
+		{Rule: "single-event-guidance", Region: "api", Note: "Distilled from one review exchange."},
+		{Rule: "hand-written-guard", Region: "api", Note: "A human wrote this deliberately."},
+	}
+
+	out, trimmed, err := LessonsForScopeBudget(st, cfg, "api/z.go", 8, 1)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, 1, trimmed)
+	assert.Contains(t, out[0].Symptom, "hand-written-guard",
+		"a hand-written pin outranks weak distilled evidence for the slot")
+
+	// Unbudgeted (why): every pin shows, the weak one carries its facts
+	// in the display-only annotation — never in Symptom, whose text is
+	// the firing log's identity and must not age.
+	out, _, err = LessonsForScopeBudget(st, cfg, "api/z.go", 8, 0)
+	require.NoError(t, err)
+
+	var all strings.Builder
+
+	for _, l := range out {
+		all.WriteString(l.Symptom + " | " + l.Annotation + "\n")
+		assert.NotContains(t, l.Symptom, "event(s)",
+			"aging facts must never leak into the lesson's identity")
+	}
+
+	assert.Contains(t, all.String(), "weak: 1 event(s)",
+		"deliberate views print the tier with its facts")
+}
+
+func TestLessonsForFilesUnionsAndBudgets(t *testing.T) {
+	// The multi-file surface: one repo-wide pin applying to every file
+	// appears once, per-region pins join in, and the change budget caps
+	// the union with an honest count.
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	// Distinct topics: the union collapses restatements globally, and
+	// this test is about the merge, not dedup.
+	cfg := reviews.DefaultConfig()
+	cfg.Pin = []reviews.PinRule{
+		{Rule: "secrets-hygiene", Region: "*", Note: "Applies to every file exactly once."},
+		{Rule: "boundary-validation", Region: "api", Note: "Validate request payloads at the edge."},
+		{Rule: "transaction-atomicity", Region: "db", Note: "Wrap dependent writes in one transaction."},
+	}
+
+	lessons, trimmed, err := LessonsForFiles(st, cfg, []string{"api/a.go", "db/b.go"}, 6)
+	require.NoError(t, err)
+	assert.Zero(t, trimmed)
+
+	var all strings.Builder
+	for _, l := range lessons {
+		all.WriteString(l.Symptom + "\n")
+	}
+
+	assert.Len(t, lessons, 3, "the repo-wide pin is one line, not one per file")
+	assert.Contains(t, all.String(), "boundary-validation")
+	assert.Contains(t, all.String(), "transaction-atomicity")
+
+	capped, trimmed, err := LessonsForFiles(st, cfg, []string{"api/a.go", "db/b.go"}, 2)
+	require.NoError(t, err)
+	assert.Len(t, capped, 2)
+	assert.Equal(t, 1, trimmed, "the held-back lesson is counted, never hidden")
+}
+
+func TestChangeSetCarriesLessons(t *testing.T) {
+	// The moment-of-change surface: an agent calling change_set before
+	// a multi-file edit gets the memory that used to live only in the
+	// per-file hook.
+	st, root := seedStore(t)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n  - rule: guard-empty-datasets\n    region: scripts\n"+
+			"    note: Guard datasets before reductions.\n"), 0o644))
+
+	var b strings.Builder
+	require.NoError(t, ChangeSet(&b, st, root, []string{"scripts/task.py"}))
+
+	out := b.String()
+	assert.Contains(t, out, "lessons for this change")
+	assert.Contains(t, out, "[pin · scripts] guard-empty-datasets")
+	assert.Contains(t, out, "RUF001", "mined recurrence rides along")
+}
+
+func TestStrongPinFromLaterFileBeatsWeakFromFirst(t *testing.T) {
+	// Rank must survive the multi-file merge: a weak pin surfaced by
+	// the FIRST file must not hold a budget slot a hand-written
+	// (strong) pin from a LATER file deserves.
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	// One PR, two comments: one event — weak.
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, LessonKey: "k", Path: "api/a.go", PR: 9, Body: "b", Source: model.SourceReview},
+		{ID: 2, LessonKey: "k", Path: "api/b.go", PR: 9, Body: "b", Source: model.SourceReview},
+	}))
+
+	saved, err := st.SaveDistilledGroup("sig-w", "api", 1, []model.Proposal{{
+		Signature: "sig-w", Rule: "single-event-guidance", Region: "api",
+		Note: "Distilled from one review exchange.", Members: []int64{1, 2},
+		Status: model.ProposalProposed,
+	}})
+	require.NoError(t, err)
+	_, err = st.SetProposalStatus([]int64{saved[0].ID}, model.ProposalApplied)
+	require.NoError(t, err)
+
+	cfg := reviews.DefaultConfig()
+	cfg.Pin = []reviews.PinRule{
+		{Rule: "single-event-guidance", Region: "api", Note: "Distilled from one review exchange."},
+		{Rule: "transaction-atomicity", Region: "db", Note: "Wrap dependent writes in one transaction."},
+	}
+
+	// api file first, db file second; budget 1.
+	lessons, trimmed, err := LessonsForFiles(st, cfg, []string{"api/x.go", "db/y.go"}, 1)
+	require.NoError(t, err)
+	require.Len(t, lessons, 1)
+	assert.Equal(t, 1, trimmed, "the held-back pin is counted")
+	assert.Contains(t, lessons[0].Symptom, "transaction-atomicity",
+		"the hand-written pin from the later file wins the slot over weak evidence")
 }

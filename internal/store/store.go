@@ -870,6 +870,103 @@ func (s *Store) ClusterCitation(ids []int64) (map[string]ClusterCited, error) {
 	return out, nil
 }
 
+// UpdateProposalRegionsBatch rewrites the region sets of the given
+// proposals in ONE transaction — the ledger half of retarget is
+// all-or-nothing, so a mid-batch failure can never leave some pins
+// retargeted in the database and others not while the file already
+// carries every new identity.
+func (s *Store) UpdateProposalRegionsBatch(ps []model.Proposal) error {
+	if len(ps) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin region update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+
+	for _, p := range ps {
+		encoded, err := encodeStrings(p.Regions)
+		if err != nil {
+			return fmt.Errorf("store: encode proposal regions: %w", err)
+		}
+
+		if _, err := tx.Exec(`UPDATE proposal SET region = ?, regions = ? WHERE id = ?`,
+			p.Region, encoded, p.ID); err != nil {
+			return fmt.Errorf("store: update proposal %d regions: %w", p.ID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// FindingsMetaByIDs returns the cited findings' metadata — everything
+// confidence assessment needs (path, pr, source, timestamps) WITHOUT
+// the bodies, so ambient surfaces can assess pins on every edit
+// without hauling the corpus into memory. Duplicate ids are fine.
+func (s *Store) FindingsMetaByIDs(ids []int64) (map[int64]model.Finding, error) {
+	seen := make(map[int64]bool, len(ids))
+	unique := make([]any, 0, len(ids))
+
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+		}
+	}
+
+	out := make(map[int64]model.Finding, len(unique))
+
+	for len(unique) > 0 {
+		chunk := unique
+		if len(chunk) > 500 {
+			chunk = chunk[:500]
+		}
+
+		unique = unique[len(chunk):]
+
+		marks := strings.Repeat(",?", len(chunk))[1:]
+
+		rows, err := s.db.Query(
+			`SELECT id, path, pr, created_at, source, paths FROM finding
+			 WHERE id IN (`+marks+`)`, chunk...)
+		if err != nil {
+			return nil, err
+		}
+
+		for rows.Next() {
+			var f model.Finding
+
+			var paths string
+
+			if err := rows.Scan(&f.ID, &f.Path, &f.PR, &f.CreatedAt, &f.Source, &paths); err != nil {
+				_ = rows.Close()
+
+				return nil, err
+			}
+
+			if f.Paths, err = decodeStrings(paths); err != nil {
+				_ = rows.Close()
+
+				return nil, fmt.Errorf("store: finding %d paths: %w", f.ID, err)
+			}
+
+			out[f.ID] = f
+		}
+
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+
+			return nil, err
+		}
+
+		_ = rows.Close()
+	}
+
+	return out, nil
+}
+
 // countByKey runs a two-column (key, count) GROUP BY query in chunks of
 // the given args, feeding each row to add. The query carries one %s for
 // the placeholder list.

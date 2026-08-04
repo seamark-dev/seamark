@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -18,6 +19,7 @@ import (
 func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error {
 	inSet := map[string]bool{}
 	resolved := make([]string, 0, len(files))
+	lessonFiles := make([]string, 0, len(files))
 
 	for _, f := range files {
 		name, ok := asIndexedFile(st, root, f)
@@ -29,6 +31,12 @@ func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error 
 		}
 
 		inSet[name] = true
+
+		// Lessons need only a path: a brand-new file in a pinned region
+		// deserves its guidance MOST — it has no history to learn from.
+		// Co-change and exposure need the index, so resolved stays the
+		// gate for those.
+		lessonFiles = append(lessonFiles, name)
 
 		if ok {
 			resolved = append(resolved, name)
@@ -66,6 +74,25 @@ func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error 
 	}
 
 	suggestCompanions(w, companions)
+
+	// The repository's memory, at the moment it matters (RFC-002 §8):
+	// the pins and recurring lessons governing the files about to
+	// change, budgeted like every ambient injection. Degrades to
+	// nothing, never fails the report — a broken lessons config must
+	// not take the co-change answer down with it.
+	cfg, err := reviews.LoadConfig(root)
+	if err != nil {
+		cfg = reviews.DefaultConfig()
+	}
+
+	lessons, trimmed, err := LessonsForFiles(st, cfg, lessonFiles, cfg.ChangeSetBudget())
+	if err == nil && len(lessons) > 0 {
+		PrintLessonBlock(w,
+			"lessons for this change  (regions map to the files above; avoid repeating these)",
+			lessons, trimmed)
+
+		_ = reviews.RecordFiringSurface(root, "change_set", lessonFiles, "", lessons)
+	}
 
 	return nil
 }

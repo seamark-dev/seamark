@@ -24,6 +24,11 @@ const DefaultThreshold = 2
 // is consent; being injected into is not.
 const DefaultPinBudget = 3
 
+// DefaultChangeBudget bounds the lessons one change_set answer carries.
+// Its own knob, not the hook's: a ten-file change set under the
+// per-file budget would print thirty lines.
+const DefaultChangeBudget = 6
+
 // Config tunes how mined lessons surface (`.seamark/lessons.yaml`),
 // applied at surface time so edits take effect without re-mining — the
 // same contract as the gate's policy.yaml. An absent file yields
@@ -35,6 +40,9 @@ type Config struct {
 	// (most-specific regions first; the rest are one pointer line away).
 	// 0 means DefaultPinBudget.
 	PinBudget int `yaml:"pin_budget"`
+	// ChangeBudget overrides how many lessons one change_set answer
+	// carries across all its files. 0 means DefaultChangeBudget.
+	ChangeBudget int `yaml:"change_budget"`
 	// Mute hides mined lessons by rule code and/or region prefix.
 	Mute []MuteRule `yaml:"mute"`
 	// Pin surfaces curated lessons unconditionally — the "must not be
@@ -49,6 +57,15 @@ func (c *Config) HookPinBudget() int {
 	}
 
 	return DefaultPinBudget
+}
+
+// ChangeSetBudget resolves the effective change_set lesson cap.
+func (c *Config) ChangeSetBudget() int {
+	if c.ChangeBudget > 0 {
+		return c.ChangeBudget
+	}
+
+	return DefaultChangeBudget
 }
 
 // MuteRule hides lessons. An empty field matches anything, so {rule:
@@ -236,60 +253,82 @@ func (c *Config) Surface(mined []model.Lesson, scope string) []model.Lesson {
 	return out
 }
 
+// PinAnnotator supplies surface-time knowledge the config layer cannot
+// compute itself: an evidence-confidence rank (higher surfaces first)
+// and an optional note appended to the pin's rendered symptom. A nil
+// annotator ranks every pin equally and adds nothing.
+type PinAnnotator func(PinRule) (rank int, note string)
+
 // SurfaceBudget is Surface with a pin cap for ambient surfaces: at most
 // pinBudget pins (0 = unlimited), most specific region first — a pin on
 // the file beats one on its package beats a repo-wide `*`. The trimmed
 // count comes back so the caller can say "+N more" instead of hiding
 // them: budgeted, never silent.
 func (c *Config) SurfaceBudget(mined []model.Lesson, scope string, pinBudget int) (out []model.Lesson, trimmed int) {
-	pins := c.pinsFor(scope)
-
-	// Stable: equal specificity keeps the config file's order, which is
-	// the user's own priority order. A multi-region pin ranks by its
-	// deepest region that applies to this scope.
-	sort.SliceStable(pins, func(i, j int) bool {
-		return pins[i].matchDepth(scope) > pins[j].matchDepth(scope)
-	})
-
-	// Ambient surfaces collapse restatements before the cap: two
-	// wordings of one theme must not spend two of the hook's three
-	// slots. Deliberate views (budget 0) keep every entry — the file is
-	// the user's own, and auditing it needs the duplicates visible.
-	if pinBudget > 0 {
-		var dupes int
-
-		pins, dupes = collapseRestated(pins)
-		trimmed += dupes
-	}
-
-	if pinBudget > 0 && len(pins) > pinBudget {
-		trimmed += len(pins) - pinBudget
-		pins = pins[:pinBudget]
-	}
-
-	for _, p := range pins {
-		out = append(out, pinLesson(p))
-	}
-
-	for _, l := range mined {
-		if l.Occurrences < c.Threshold || c.Muted(l) {
-			continue
-		}
-
-		out = append(out, l)
-	}
-
-	return out, trimmed
+	return c.SurfaceBudgetAnnotated(mined, scope, pinBudget, nil)
 }
 
-// collapseRestated drops pins that restate an earlier — more specific,
-// per the caller's sort — pin. Greedy against the kept set, not
-// transitive: a pin is dropped only when it restates one that
+// SurfacedPin is one applicable pin with its surfacing metadata — the
+// building block for surfaces that merge pins across scopes and must
+// keep rank and specificity through the merge.
+type SurfacedPin struct {
+	Pin  PinRule
+	Rank int    // annotator's confidence rank; equal when unannotated
+	Note string // annotator's display note, "" for none
+	// Depth is the deepest of the pin's regions matching the queried
+	// scope — the specificity that earned it consideration there.
+	Depth int
+}
+
+// Lesson renders the surfaced pin the way every surface shows pins.
+func (sp SurfacedPin) Lesson() model.Lesson {
+	l := pinLesson(sp.Pin)
+	// Display-only: identity (Symptom) must stay stable while the
+	// annotation ages, or firing statistics fragment.
+	l.Annotation = sp.Note
+
+	return l
+}
+
+// SurfacePins returns the pins applying to scope, ordered by
+// (confidence rank, specificity, file order) — restatements NOT
+// collapsed, so a caller merging several scopes can collapse once at
+// its own grain.
+func (c *Config) SurfacePins(scope string, annotate PinAnnotator) []SurfacedPin {
+	applicable := c.pinsFor(scope)
+
+	pins := make([]SurfacedPin, len(applicable))
+
+	for i, p := range applicable {
+		pins[i] = SurfacedPin{Pin: p, Depth: p.matchDepth(scope)}
+
+		if annotate != nil {
+			pins[i].Rank, pins[i].Note = annotate(p)
+		}
+	}
+
+	// Stable: equal rank and specificity keep the config file's order,
+	// which is the user's own priority order. A multi-region pin ranks
+	// by its deepest region that applies to this scope.
+	sort.SliceStable(pins, func(i, j int) bool {
+		if pins[i].Rank != pins[j].Rank {
+			return pins[i].Rank > pins[j].Rank
+		}
+
+		return pins[i].Depth > pins[j].Depth
+	})
+
+	return pins
+}
+
+// CollapseRestated drops surfaced pins that restate an earlier —
+// higher-ranked, per the caller's order — pin. Greedy against the kept
+// set, not transitive: a pin is dropped only when it restates one that
 // survived. The dropped count feeds the caller's "+N more" so a
 // collapsed duplicate is pointed at, never silently hidden.
 // (Bare linter-code pins collapse only on equal codes — wording.Topic
 // owns that rule, so every dedup surface treats codes the same way.)
-func collapseRestated(pins []PinRule) (kept []PinRule, dropped int) {
+func CollapseRestated(pins []SurfacedPin) (kept []SurfacedPin, dropped int) {
 	if len(pins) < 2 {
 		return pins, 0
 	}
@@ -297,8 +336,8 @@ func collapseRestated(pins []PinRule) (kept []PinRule, dropped int) {
 	topics := make([]wording.Topic, 0, len(pins))
 	kept = pins[:0]
 
-	for _, p := range pins {
-		t := wording.New(p.Rule, p.Note)
+	for _, sp := range pins {
+		t := wording.New(sp.Pin.Rule, sp.Pin.Note)
 
 		dup := false
 
@@ -315,10 +354,50 @@ func collapseRestated(pins []PinRule) (kept []PinRule, dropped int) {
 		}
 
 		topics = append(topics, t)
-		kept = append(kept, p)
+		kept = append(kept, sp)
 	}
 
 	return kept, len(pins) - len(kept)
+}
+
+// SurfaceBudgetAnnotated is SurfaceBudget with a PinAnnotator: pins
+// compete for budget slots by (confidence rank, deepest matching
+// region) — a weak-evidence pin must not hold a slot a strong one
+// wants — and annotator notes travel into the rendered lesson.
+func (c *Config) SurfaceBudgetAnnotated(mined []model.Lesson, scope string, pinBudget int,
+	annotate PinAnnotator,
+) (out []model.Lesson, trimmed int) {
+	pins := c.SurfacePins(scope, annotate)
+
+	// Ambient surfaces collapse restatements before the cap: two
+	// wordings of one theme must not spend two of the hook's three
+	// slots. Deliberate views (budget 0) keep every entry — the file is
+	// the user's own, and auditing it needs the duplicates visible.
+	if pinBudget > 0 {
+		var dupes int
+
+		pins, dupes = CollapseRestated(pins)
+		trimmed += dupes
+	}
+
+	if pinBudget > 0 && len(pins) > pinBudget {
+		trimmed += len(pins) - pinBudget
+		pins = pins[:pinBudget]
+	}
+
+	for _, sp := range pins {
+		out = append(out, sp.Lesson())
+	}
+
+	for _, l := range mined {
+		if l.Occurrences < c.Threshold || c.Muted(l) {
+			continue
+		}
+
+		out = append(out, l)
+	}
+
+	return out, trimmed
 }
 
 // regionDepth ranks region specificity: repo-wide is 0, each path

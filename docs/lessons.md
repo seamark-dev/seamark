@@ -16,6 +16,13 @@ your authenticated `gh` CLI and clusters the recurrences:
   recurring across several files widens to their common directory.
 - Only patterns that recur (≥2 by default) surface in `why`/`orient`.
 
+Review evidence has a shelf life: comments older than two years are
+dropped at mining time (fix commits always had a one-year window), with
+one guarantee for slow repositories — the newest 200 comments always
+survive, so a repo with three pull requests a year keeps a working
+corpus with no tuning. `reviews: {window_days: N}` in config.yaml
+adjusts it; `0` means unlimited.
+
 Just as important is what is *not* a lesson. Thread replies are
 conversation about a finding, never the finding — mining them once made
 an author's "fixed" the top lesson of a real repo. Comments with nothing

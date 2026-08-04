@@ -11,6 +11,7 @@
 package model
 
 import (
+	"fmt"
 	"path"
 	"strings"
 )
@@ -136,6 +137,11 @@ type Lesson struct {
 	Occurrences int    // how many comments fall in this cluster
 	LastTS      int64  // most recent occurrence, unix seconds
 	ExampleURL  string // a representative comment, for provenance
+	// Annotation is surface-time display text (a confidence tag like
+	// "weak evidence: 1 event"), never part of the lesson's identity:
+	// the firing log records Symptom, and an annotation that changes
+	// with age must not split one lesson into many statistical rows.
+	Annotation string
 }
 
 // Finding is one raw review comment behind a lesson — the full material
@@ -293,4 +299,25 @@ func IsTestPath(p string) bool {
 	}
 
 	return false
+}
+
+// CountEvents collapses findings into distinct events: findings
+// sharing a pull request are one event (the review comment and the fix
+// commit that answered it), while findings without a pr number are
+// independent. The distiller's recurrence bar, region inference, and
+// confidence all count evidence this way — one definition, or two
+// surfaces disagree about what recurred.
+func CountEvents(findings []Finding) int {
+	events := map[string]bool{}
+
+	for _, f := range findings {
+		key := fmt.Sprintf("id:%d", f.ID)
+		if f.PR > 0 {
+			key = fmt.Sprintf("pr:%d", f.PR)
+		}
+
+		events[key] = true
+	}
+
+	return len(events)
 }

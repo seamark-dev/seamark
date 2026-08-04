@@ -142,7 +142,7 @@ func TestCoverageRegions(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		assert.Equal(t, c.want, coverageRegions(c.cited), c.name)
+		assert.Equal(t, c.want, CoverageRegions(c.cited), c.name)
 	}
 }
 
@@ -154,10 +154,10 @@ func TestCoverageRegionsIsOrderInsensitive(t *testing.T) {
 		{ID: 4, PR: 4, Path: "api/deps.py"},
 	}
 
-	first := coverageRegions(cited)
+	first := CoverageRegions(cited)
 
 	reversed := []model.Finding{cited[3], cited[2], cited[1], cited[0]}
-	assert.Equal(t, first, coverageRegions(reversed),
+	assert.Equal(t, first, CoverageRegions(reversed),
 		"citation order must not change the region set")
 }
 
@@ -206,7 +206,7 @@ func TestRecomputeRegionsRealProposals(t *testing.T) {
 
 			total++
 
-			regions := coverageRegions(cited)
+			regions := CoverageRegions(cited)
 
 			old := p.Region
 			if old == "" {

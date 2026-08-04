@@ -417,7 +417,15 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 		fixCount = len(fixRes.Findings)
 	}
 
-	res, err = reviews.Mine(root, reviews.Options{Logf: logf}, nil)
+	// The window is the only config the review miner takes; a broken
+	// config file must not down the mine — defaults apply, exactly as
+	// every other surface degrades.
+	windowDays := 0
+	if cfg, err := LoadConfig(root); err == nil {
+		windowDays = cfg.ReviewWindowDays()
+	}
+
+	res, err = reviews.Mine(root, reviews.Options{Logf: logf, WindowDays: windowDays}, nil)
 	if err != nil {
 		return res, fixCount, err
 	}

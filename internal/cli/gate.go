@@ -197,7 +197,21 @@ Policy rules over diff.* decide the verdict.`,
 				fmt.Fprintf(cmd.ErrOrStderr(), "seamark: audit log: %v\n", err)
 			}
 
-			return renderDecision(cmd.OutOrStdout(), decision, asJSON)
+			renderErr := renderDecision(cmd.OutOrStdout(), decision, asJSON)
+
+			// A blocked check still gets its advisory — a deny is
+			// exactly when the lessons for the touched files matter
+			// most; only a genuine render failure skips it. JSON stays
+			// verdict-shaped either way.
+			if renderErr != nil && !errors.Is(renderErr, gate.ErrBlocked) {
+				return renderErr
+			}
+
+			if !asJSON {
+				report.CheckAdvisory(cmd.OutOrStdout(), st, root, gate.ChangedPaths(diffText))
+			}
+
+			return renderErr
 		},
 	}
 

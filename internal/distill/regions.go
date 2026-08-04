@@ -46,7 +46,7 @@ const (
 	voteQuorum = 0.5
 )
 
-// coverageRegions computes a proposal's region set from its cited
+// CoverageRegions computes a proposal's region set from its cited
 // evidence: a small set of directories (≤ maxRegions, depth ≤
 // maxRegionDepth) covering at least coverTarget of the voting events,
 // chosen greedily — most new events first. Greedy is not guaranteed
@@ -54,7 +54,7 @@ const (
 // been found where it misses a cover an exhaustive search would find,
 // and it stays linear in candidates where exhaustion is combinatorial.
 // Nil means repo-wide — rendered `*`, exactly as before.
-func coverageRegions(cited []model.Finding) []string {
+func CoverageRegions(cited []model.Finding) []string {
 	votes, total := eventVotes(cited)
 
 	if len(votes) == 0 || len(votes) < int(math.Ceil(voteQuorum*float64(total))) {

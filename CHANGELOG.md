@@ -8,6 +8,30 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **Evidence confidence, everywhere pins compete.** Every distilled pin
+  now carries a deterministic tier — strong / fair / weak — computed on
+  read from what its citations still support: distinct events, source
+  diversity (review+fix), recency, and whether the cited files still
+  exist. Weak pins lose injection-budget slots to strong ones and carry
+  a "weak evidence" tag in the hook; `why` prints each pin's tier with
+  the facts behind it. Nothing is stored, nothing is model-scored.
+- **The proposals ledger re-judges old decisions.** `lessons
+  --proposals` now shows each pin's evidence health under TODAY'S rules
+  — recomputed events, liveness, prompt era — and the regions current
+  inference would assign. The new `lessons --retarget p3,p7` applies
+  that tightening to lessons.yaml and the ledger together (write-gated
+  like `--apply`): the upgrade path for pins distilled before region
+  sets.
+- **change_set and check carry the memory.** `change_set` answers now
+  end with the budgeted lessons governing the files about to change
+  (`change_budget`, default 6), and `check` appends an advisory block
+  for the diff's files — clearly marked, never part of the verdict.
+  Both record to the firing log with a surface tag, so `--stats`
+  reflects all ambient exposure.
+- **Review evidence gets a shelf life.** Review mining keeps two years
+  of comments (fix mining always kept one) — with the newest 200 always
+  surviving, so slow repositories keep a working corpus untuned.
+  `reviews: {window_days: N}` adjusts; `0` means unlimited.
 - **Region sets replace the repo-wide `*` collapse.** A proposal's
   region is now a small set (≤3 directories, depth ≤3) covering ≥80%
   of its cited *events*: test and doc paths don't vote (test-only

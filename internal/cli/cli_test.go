@@ -1354,3 +1354,110 @@ func TestWriteAtomicKeepsTheOldFileWhenWritingFails(t *testing.T) {
 	assert.Equal(t, "yesterday's good report", string(data),
 		"a failed write must not cost the reader the report they already had")
 }
+
+func TestLessonsRetargetFlow(t *testing.T) {
+	// The upgrade path for pins distilled before region sets: the
+	// ledger names the drift, --retarget rewrites lessons.yaml and the
+	// ledger row together.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.SetMeta("indexed_at", "1"))
+	require.NoError(t, st.SetMeta("repo_root", root))
+
+	// Two independent events in scripts/: recomputed regions [scripts],
+	// but the stored proposal is repo-wide — the pre-region-set shape.
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, LessonKey: "k", Path: "scripts/a.py", PR: 1, Body: "x", Source: model.SourceReview},
+		{ID: 2, LessonKey: "k", Path: "scripts/b.py", PR: 2, Body: "y", Source: model.SourceReview},
+	}))
+
+	saved, err := st.SaveDistilledGroup("sig-r", "", 1, []model.Proposal{{
+		Signature: "sig-r", Rule: "guard-empty-datasets", Region: "",
+		Note: "Guard datasets for emptiness before reductions.", Members: []int64{1, 2},
+		Agent: "claude/v1", Status: model.ProposalProposed,
+	}})
+	require.NoError(t, err)
+	_, err = st.SetProposalStatus([]int64{saved[0].ID}, model.ProposalApplied)
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n  - rule: guard-empty-datasets\n    region: '*'\n"+
+			"    note: Guard datasets for emptiness before reductions.\n"), 0o644))
+
+	// The ledger names the drift and the era.
+	out, err := run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+	assert.Contains(t, out, "regions now: scripts")
+	assert.Contains(t, out, "prompt v1", "the grandfathering era is visible")
+	assert.Contains(t, out, "--retarget p1")
+
+	// Without the write gate: prints, changes nothing.
+	out, err = run(t, "-C", root, "lessons", "--retarget", "p1")
+	require.NoError(t, err)
+	assert.Contains(t, out, "distill.write is off")
+
+	data, err := os.ReadFile(filepath.Join(root, ".seamark", "lessons.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "region: '*'", "no write without the gate")
+
+	// With the gate: file and ledger move together.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("distill:\n  write: true\n"), 0o644))
+
+	out, err = run(t, "-C", root, "lessons", "--retarget", "p1")
+	require.NoError(t, err)
+	assert.Contains(t, out, "retargeted 1 pin(s)")
+
+	data, err = os.ReadFile(filepath.Join(root, ".seamark", "lessons.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "region: scripts")
+	assert.NotContains(t, string(data), "region: '*'")
+
+	st, err = store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+
+	applied, err := st.Proposals(model.ProposalApplied)
+	require.NoError(t, err)
+	require.Len(t, applied, 1)
+	assert.Equal(t, "scripts", applied[0].Region)
+	assert.Equal(t, []string{"scripts"}, applied[0].Regions)
+
+	// Idempotent: a second retarget finds nothing to do.
+	out, err = run(t, "-C", root, "lessons", "--retarget", "p1")
+	require.NoError(t, err)
+	assert.Contains(t, out, "regions already current")
+}
+
+func TestBlockedCheckStillPrintsAdvisoryLessons(t *testing.T) {
+	// A deny is exactly when the lessons for the touched files matter
+	// most: the advisory must survive the blocking verdict, and reach
+	// files the index has never seen (a brand-new file in a pinned
+	// region deserves its guidance MOST).
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(
+		"mode: enforce\ndeny:\n"+
+			"  - id: unindexed-blindspot\n"+
+			"    when: 'diff.unindexed_files > 0'\n"+
+			"    message: changed files outside index coverage\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n  - rule: scripts-guidance\n    region: scripts\n"+
+			"    note: Guard datasets before reductions.\n"), 0o644))
+
+	diff := "--- a/scripts/new_tool.py\n+++ b/scripts/new_tool.py\n@@ -0,0 +1 @@\n+x = 1\n"
+
+	stdout, _, err := runIn(t, diff, "-C", root, "check")
+	require.Error(t, err, "the enforce-mode deny must still block")
+	assert.Contains(t, stdout, "advisory — recurring lessons for touched files")
+	assert.Contains(t, stdout, "scripts-guidance",
+		"a new, unindexed file in a pinned region receives its lesson even on a blocked check")
+}
