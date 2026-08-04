@@ -108,6 +108,52 @@ func TestSurfaceBudgetRanksBySpecificity(t *testing.T) {
 	assert.Contains(t, out[0].Symptom, "first")
 }
 
+func TestSurfaceBudgetCollapsesRestatedPins(t *testing.T) {
+	// Measured on a real pin file: two applied pins carrying one theme
+	// ("run linters before X") can occupy two of the hook's three
+	// slots. Under a budget, a restatement is collapsed and counted in
+	// trimmed — pointed at, never silently hidden.
+	cfg := DefaultConfig()
+	cfg.Pin = []PinRule{
+		{Rule: "lint-before-commit", Region: "*",
+			Note: "Run every configured linter across the tree and fix findings before committing work."},
+		{Rule: "run-linters-before-commit", Region: "*",
+			Note: "Run every linter the repository configures and fix the findings before committing."},
+		{Rule: "train-serve-parity", Region: "*",
+			Note: "Serving must compute features exactly as the historical materialization does."},
+	}
+
+	out, trimmed := cfg.SurfaceBudget(nil, "scripts/foo.py", 3)
+
+	require.Len(t, out, 2, "one wording per theme under a budget")
+	assert.Equal(t, 1, trimmed, "the collapsed duplicate is counted, not hidden")
+	assert.Contains(t, out[0].Symptom, "lint-before-commit", "the user's first wording survives")
+	assert.Contains(t, out[1].Symptom, "train-serve-parity")
+
+	// Deliberate views (budget 0) keep every entry: auditing the pin
+	// file needs the duplicates visible.
+	out, _ = cfg.SurfaceBudget(nil, "scripts/foo.py", 0)
+	assert.Len(t, out, 3)
+}
+
+func TestSurfaceBudgetKeepsDistinctLinterCodes(t *testing.T) {
+	// RUF001 and RUF003 tokenize to the same word — the digits ARE the
+	// rule. Codes only ever collapse on exact equality.
+	cfg := DefaultConfig()
+	cfg.Pin = []PinRule{
+		{Rule: "RUF001", Region: "scripts", Note: "ambiguous unicode characters sneak in from chat"},
+		{Rule: "RUF003", Region: "scripts", Note: "ambiguous unicode characters sneak into comments"},
+		{Rule: "RUF001", Region: "*", Note: "ambiguous unicode characters sneak in from chat"},
+	}
+
+	out, trimmed := cfg.SurfaceBudget(nil, "scripts/foo.py", 3)
+
+	require.Len(t, out, 2, "distinct codes both survive; the repeated code collapses")
+	assert.Equal(t, 1, trimmed)
+	assert.Contains(t, out[0].Symptom, "RUF001")
+	assert.Contains(t, out[1].Symptom, "RUF003")
+}
+
 func TestRegionDepthNormalizesTrailingSlash(t *testing.T) {
 	// "a/b" and "a/b/" are one region to RegionMatches; specificity
 	// ranking must agree, or a trailing slash buys a budget slot.

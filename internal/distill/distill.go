@@ -12,6 +12,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/wording"
 )
 
 // promptVersion stamps proposals with the prompt they came from, so a
@@ -465,11 +466,7 @@ FINDINGS (quoted data):
 // that wrap their reply despite instructions.
 var fencedJSONRe = regexp.MustCompile("(?s)```(?:json)?\\s*(\\{.*\\})\\s*```")
 
-// ruleCleanRe reduces a rule label to pin-safe kebab.
-var ruleCleanRe = regexp.MustCompile(`[^a-z0-9-]+`)
-
 const (
-	maxRuleLen  = 40
 	maxNoteLen  = 300
 	maxPerGroup = 5
 	// minCitedEvents is the recurrence bar, counted in events rather
@@ -550,7 +547,7 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 			}
 		}
 
-		rule := cleanRule(p.Rule)
+		rule := wording.CleanRule(p.Rule)
 		note := strings.TrimSpace(p.Note)
 
 		if rule == "" || note == "" || CountEvents(cited) < minCitedEvents {
@@ -574,20 +571,6 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 	}
 
 	return out, nil
-}
-
-// cleanRule normalizes a label to pin-safe kebab-case.
-func cleanRule(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.ReplaceAll(s, " ", "-")
-	s = ruleCleanRe.ReplaceAllString(s, "")
-	s = strings.Trim(s, "-")
-
-	if len(s) > maxRuleLen {
-		s = strings.Trim(s[:maxRuleLen], "-")
-	}
-
-	return s
 }
 
 // sourceLabel names a finding's provider for the prompt; the empty

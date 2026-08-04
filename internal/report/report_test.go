@@ -144,9 +144,13 @@ func TestPinBudgetAboveSurfaceCapStaysAccounted(t *testing.T) {
 	cfg := reviews.DefaultConfig()
 	cfg.PinBudget = 20
 
-	for i := 0; i < 10; i++ {
-		cfg.Pin = append(cfg.Pin, reviews.PinRule{
-			Rule: fmt.Sprintf("pin-%02d", i), Region: "*", Note: "n"})
+	// Distinct topics: the ambient path collapses restated pins before
+	// budgeting, and this test is about budget arithmetic, not dedup.
+	for _, rule := range []string{
+		"alpha-guard", "bravo-guard", "charlie-guard", "delta-guard", "echo-guard",
+		"foxtrot-guard", "golf-guard", "hotel-guard", "india-guard", "juliet-guard",
+	} {
+		cfg.Pin = append(cfg.Pin, reviews.PinRule{Rule: rule, Region: "*", Note: "n"})
 	}
 
 	out, trimmed, err := LessonsForScopeBudget(st, cfg, "a/x.go", 8, cfg.HookPinBudget())

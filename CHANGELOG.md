@@ -6,6 +6,23 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## Unreleased
+
+- **Proposal dedup by evidence.** A distilled pattern citing exactly the
+  same findings as one already proposed, applied, dismissed, or pinned
+  is dropped as a re-derivation, whatever its wording (measured: two
+  applied pins with identical citations and unrelated names). The
+  `lessons --proposals` audit flags such pairs for pruning. Bare
+  linter-code pins (RUF001 vs RUF003) never merge on wording; the edit
+  hook collapses restated pins before spending its injection budget.
+- **Stable distillation batches.** Oversized candidate groups are cut by
+  finding-id hash instead of position, so one new finding re-opens one
+  batch instead of re-billing the whole component. One-time cost on
+  upgrade: existing oversized-group signatures change once, so the next
+  `lessons --distill` re-reads those groups (small groups keep their
+  signatures; applied and dismissed decisions are unaffected, and
+  re-read groups cannot re-propose already-captured themes).
+
 ## v0.1.0 — 2026-08-03
 
 The first tagged release: the production-readiness line — everything

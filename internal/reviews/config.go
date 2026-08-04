@@ -10,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/wording"
 )
 
 // DefaultThreshold is the minimum recurrences before a mined lesson
@@ -122,12 +123,11 @@ func (c *Config) Muted(l model.Lesson) bool {
 	return false
 }
 
-// pinsFor returns the pinned lessons that apply to scope — a file or
+// pinsFor returns the pin rules that apply to scope — a file or
 // directory, or "" for a repo-wide view (orient), where every pin
-// applies. Pins render as ordinary lessons marked with the "pinned"
-// reviewer so they sort to the top and read as deliberate.
-func (c *Config) pinsFor(scope string) []model.Lesson {
-	var out []model.Lesson
+// applies.
+func (c *Config) pinsFor(scope string) []PinRule {
+	var out []PinRule
 
 	for _, p := range c.Pin {
 		if scope != "" && p.Region != "" && p.Region != "*" &&
@@ -135,25 +135,31 @@ func (c *Config) pinsFor(scope string) []model.Lesson {
 			continue
 		}
 
-		symptom := p.Rule
-		if p.Note != "" {
-			symptom = strings.TrimSpace(p.Rule + " — " + p.Note)
-		}
-
-		region := p.Region
-		if region == "" {
-			region = "*"
-		}
-
-		out = append(out, model.Lesson{
-			Region: region, Reviewer: "pinned", Symptom: symptom,
-			// A large occurrence count keeps pins above the threshold and
-			// ranked ahead of mined lessons.
-			Occurrences: 1 << 30,
-		})
+		out = append(out, p)
 	}
 
 	return out
+}
+
+// pinLesson renders a pin as an ordinary lesson marked with the
+// "pinned" reviewer, so it sorts to the top and reads as deliberate.
+func pinLesson(p PinRule) model.Lesson {
+	symptom := p.Rule
+	if p.Note != "" {
+		symptom = strings.TrimSpace(p.Rule + " — " + p.Note)
+	}
+
+	region := p.Region
+	if region == "" {
+		region = "*"
+	}
+
+	return model.Lesson{
+		Region: region, Reviewer: "pinned", Symptom: symptom,
+		// A large occurrence count keeps pins above the threshold and
+		// ranked ahead of mined lessons.
+		Occurrences: 1 << 30,
+	}
 }
 
 // Surface applies the config to a set of mined lessons for a given scope:
@@ -180,12 +186,25 @@ func (c *Config) SurfaceBudget(mined []model.Lesson, scope string, pinBudget int
 		return regionDepth(pins[i].Region) > regionDepth(pins[j].Region)
 	})
 
+	// Ambient surfaces collapse restatements before the cap: two
+	// wordings of one theme must not spend two of the hook's three
+	// slots. Deliberate views (budget 0) keep every entry — the file is
+	// the user's own, and auditing it needs the duplicates visible.
+	if pinBudget > 0 {
+		var dupes int
+
+		pins, dupes = collapseRestated(pins)
+		trimmed += dupes
+	}
+
 	if pinBudget > 0 && len(pins) > pinBudget {
-		trimmed = len(pins) - pinBudget
+		trimmed += len(pins) - pinBudget
 		pins = pins[:pinBudget]
 	}
 
-	out = pins
+	for _, p := range pins {
+		out = append(out, pinLesson(p))
+	}
 
 	for _, l := range mined {
 		if l.Occurrences < c.Threshold || c.Muted(l) {
@@ -196,6 +215,45 @@ func (c *Config) SurfaceBudget(mined []model.Lesson, scope string, pinBudget int
 	}
 
 	return out, trimmed
+}
+
+// collapseRestated drops pins that restate an earlier — more specific,
+// per the caller's sort — pin. Greedy against the kept set, not
+// transitive: a pin is dropped only when it restates one that
+// survived. The dropped count feeds the caller's "+N more" so a
+// collapsed duplicate is pointed at, never silently hidden.
+// (Bare linter-code pins collapse only on equal codes — wording.Topic
+// owns that rule, so every dedup surface treats codes the same way.)
+func collapseRestated(pins []PinRule) (kept []PinRule, dropped int) {
+	if len(pins) < 2 {
+		return pins, 0
+	}
+
+	topics := make([]wording.Topic, 0, len(pins))
+	kept = pins[:0]
+
+	for _, p := range pins {
+		t := wording.New(p.Rule, p.Note)
+
+		dup := false
+
+		for _, k := range topics {
+			if t.Restates(k) {
+				dup = true
+
+				break
+			}
+		}
+
+		if dup {
+			continue
+		}
+
+		topics = append(topics, t)
+		kept = append(kept, p)
+	}
+
+	return kept, len(pins) - len(kept)
 }
 
 // regionDepth ranks region specificity: repo-wide is 0, each path
