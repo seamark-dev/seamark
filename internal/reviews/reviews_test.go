@@ -583,3 +583,25 @@ func TestParseHandlesEmptyAndGarbage(t *testing.T) {
 	_, err = parseComments([]byte("{not an array"))
 	require.Error(t, err)
 }
+
+func TestCommentSecretsAreRedactedAtParse(t *testing.T) {
+	// A reviewer quoting the credential it flags ("hardcodes
+	// postgres://user:pass@…") must not turn seamark into a broadcaster:
+	// the body is scrubbed at parse, so finding bodies, fingerprints,
+	// prompts, and hook injections all inherit the redaction.
+	page := ghPage(comment(1, "Copilot", "Bot", "scripts/db.py", 5, 100,
+		"This script hard codes a postgres url including credentials "+
+			"postgresql://trading:trading123@localhost:5432/db — read it from the environment."))
+
+	lessons, findings := mineWithFindings(t, page)
+
+	require.Len(t, findings, 1)
+	assert.NotContains(t, findings[0].Body, "trading123")
+	assert.Contains(t, findings[0].Body, "[REDACTED]")
+
+	require.NotEmpty(t, lessons)
+
+	for _, l := range lessons {
+		assert.NotContains(t, l.symptom, "trading123", "fingerprints must not carry the secret")
+	}
+}

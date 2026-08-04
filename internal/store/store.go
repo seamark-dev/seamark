@@ -736,6 +736,117 @@ func (s *Store) FindingsForLesson(clusterKey string) ([]model.Finding, error) {
 	return scanFindings(rows)
 }
 
+// ClusterCited counts one mined cluster's findings: how many are among
+// a given citation set, and how many exist in total.
+type ClusterCited struct {
+	Cited, Total int
+}
+
+// ClusterCitation reports, for every mined-lesson cluster the given
+// finding ids touch, how much of the cluster those ids cover. The
+// caller decides what coverage means — this method only counts.
+// Duplicate ids are deduplicated first, so overlapping citation sets
+// cannot inflate a count past the cluster's size.
+func (s *Store) ClusterCitation(ids []int64) (map[string]ClusterCited, error) {
+	seen := make(map[int64]bool, len(ids))
+	unique := make([]int64, 0, len(ids))
+
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+		}
+	}
+
+	out := map[string]ClusterCited{}
+
+	// Chunked IN lists: cited ids number in the hundreds, and SQLite's
+	// parameter limit must never be the thing that breaks a surface.
+	err := s.countByKey(`SELECT lesson_key, COUNT(*) FROM finding
+		 WHERE lesson_key != '' AND id IN (%s) GROUP BY lesson_key`,
+		int64Args(unique), func(key string, n int) {
+			c := out[key]
+			c.Cited += n
+			out[key] = c
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	keys := make([]any, 0, len(out))
+	for key := range out {
+		keys = append(keys, key)
+	}
+
+	err = s.countByKey(`SELECT lesson_key, COUNT(*) FROM finding
+		 WHERE lesson_key IN (%s) GROUP BY lesson_key`,
+		keys, func(key string, n int) {
+			c := out[key]
+			c.Total += n
+			out[key] = c
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// countByKey runs a two-column (key, count) GROUP BY query in chunks of
+// the given args, feeding each row to add. The query carries one %s for
+// the placeholder list.
+func (s *Store) countByKey(query string, args []any, add func(key string, n int)) error {
+	for len(args) > 0 {
+		chunk := args
+		if len(chunk) > 500 {
+			chunk = chunk[:500]
+		}
+
+		args = args[len(chunk):]
+
+		marks := strings.Repeat(",?", len(chunk))[1:]
+
+		rows, err := s.db.Query(fmt.Sprintf(query, marks), chunk...)
+		if err != nil {
+			return err
+		}
+
+		for rows.Next() {
+			var key string
+
+			var n int
+
+			if err := rows.Scan(&key, &n); err != nil {
+				_ = rows.Close()
+
+				return err
+			}
+
+			add(key, n)
+		}
+
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+
+			return err
+		}
+
+		_ = rows.Close()
+	}
+
+	return nil
+}
+
+// int64Args widens ids for the driver.
+func int64Args(ids []int64) []any {
+	out := make([]any, len(ids))
+	for i, id := range ids {
+		out[i] = id
+	}
+
+	return out
+}
+
 func scanFindings(rows *sql.Rows) ([]model.Finding, error) {
 	var out []model.Finding
 

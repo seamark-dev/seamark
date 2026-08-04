@@ -8,6 +8,25 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **Captured themes surface once.** A mined lesson stops surfacing in
+  `why` and the edit hook when an applied pin cites every finding in
+  its cluster AND that pin is currently present in lessons.yaml — the
+  file stays the source of truth, so a hand-pruned pin resurfaces its
+  lesson, a partially-cited cluster keeps surfacing (one comment can
+  flag two mistakes), and a recurrence arriving after the pin was
+  applied re-opens the lesson. The ledger (`lessons --list`,
+  `--region`) still shows every raw lesson.
+- **Secret redaction in mined text.** Review-comment bodies and
+  fix-commit patches are scrubbed of secret-shaped values (connection
+  strings, tokens, password assignments) at mining time, with the same
+  patterns the gate's raw audit log uses — a credential a reviewer
+  quoted once is not re-broadcast into agent context on every edit.
+  Already-stored findings keep their text until the next
+  `seamark index --reviews` re-mines them.
+- **Compact hook injection.** The edit-hook reminder drops the
+  terminal-table padding, per-line regions, and reviewer names for
+  `- [pin]` / `- [×N]` lines: the reader is a model, and the tokens now
+  go to the guidance. Deliberate views keep the full table.
 - **Proposal dedup by evidence.** A distilled pattern citing exactly the
   same findings as one already proposed, applied, dismissed, or pinned
   is dropped as a re-derivation, whatever its wording (measured: two

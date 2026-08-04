@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/redact"
 )
 
 // Options bounds a fix-mining pass.
@@ -290,7 +291,10 @@ func buildFinding(root string, c commit) (model.Finding, bool) {
 
 	fmt.Fprintf(&b, "patch:\n%s", trimPatch(string(patch), patchCap))
 
-	body := b.String()
+	// Redact before capping: commit messages and patches carry the
+	// credentials being removed ("-DATABASE_URL=postgres://u:pass@…"),
+	// and a cap cut must never expose the tail of a scrubbed secret.
+	body := redact.Secrets(b.String())
 	if len(body) > bodyCap {
 		body = body[:bodyCap]
 	}

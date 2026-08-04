@@ -207,3 +207,24 @@ func gitStdout(t *testing.T, root string, args ...string) string {
 
 	return string(out)
 }
+
+func TestFixFindingSecretsAreRedacted(t *testing.T) {
+	// The patch of a credential-removal fix carries the credential being
+	// removed — in the "-" lines. Stored findings are broadcast into
+	// distillation prompts and agent context, so they are scrubbed.
+	root, commit, _ := repo(t)
+
+	commit("initial", map[string]string{
+		"conf.py": "DB = \"postgresql://svc:hunter2secret@db:5432/prod\"\nAPI_TOKEN=\"abc123xyz\"\n"})
+	commit("fix: read database credentials from the environment",
+		map[string]string{"conf.py": "import os\n\nDB = os.environ[\"DB_URL\"]\n"})
+
+	res, err := Mine(root, Options{})
+	require.NoError(t, err)
+	require.Len(t, res.Findings, 1)
+
+	body := res.Findings[0].Body
+	assert.NotContains(t, body, "hunter2secret", "removed credentials must not survive in the patch excerpt")
+	assert.NotContains(t, body, "abc123xyz")
+	assert.Contains(t, body, "[REDACTED]")
+}

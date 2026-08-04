@@ -13,9 +13,9 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/distill"
-	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/reviews"
@@ -642,7 +642,7 @@ func printPreflight(w io.Writer, pf distill.Preflight, dryRun bool) {
 	fmt.Fprintf(w, "distill preflight — what leaves this machine\n")
 	fmt.Fprintf(w, "  agent     %s  (your CLI, chosen by .seamark/config.yaml; assumed to reach\n"+
 		"            a remote model service)\n",
-		render.Sanitize(gate.RedactSecrets(strings.Join(pf.Agent, " "))))
+		render.Sanitize(redact.Secrets(strings.Join(pf.Agent, " "))))
 
 	if len(pf.Groups) == 0 {
 		fmt.Fprintf(w, "  payload   nothing — every evidence group has already been distilled\n")

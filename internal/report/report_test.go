@@ -190,3 +190,144 @@ func TestLessonSymptomSanitized(t *testing.T) {
 
 	assert.NotContains(t, b.String(), "\x1b", "escape sequences must be washed out")
 }
+
+func TestCapturedThemesDontRideTheMinedChannel(t *testing.T) {
+	// An applied pin captures a theme; the mined lessons its citations
+	// came from must stop surfacing — otherwise a theme whose pin lost
+	// the injection budget still rides in through the mined channel, and
+	// a shown pin gets said twice. Coverage demands the WHOLE cluster
+	// cited and the pin live in lessons.yaml (both asserted below).
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	require.NoError(t, st.ReplaceLessons([]model.Lesson{
+		{ClusterKey: "k-creds", Region: "scripts", Reviewer: "copilot",
+			Symptom: "hard codes a postgres url including credentials", Occurrences: 2},
+		{ClusterKey: "k-ruff", Region: "scripts", Reviewer: "coderabbit",
+			Symptom: "RUF003", Occurrences: 2},
+	}, []model.Finding{
+		{ID: 1, LessonKey: "k-creds", Path: "scripts/db.py", Body: "creds", Source: model.SourceReview},
+		{ID: 2, LessonKey: "k-creds", Path: "scripts/etl.py", Body: "creds again", Source: model.SourceReview},
+		{ID: 3, LessonKey: "k-ruff", Path: "scripts/x.py", Body: "unicode dash", Source: model.SourceReview},
+	}))
+
+	saved, err := st.SaveDistilledGroup("sig-a", "scripts", 1, []model.Proposal{{
+		Signature: "sig-a", Rule: "hardcoded-db-credentials", Region: "scripts",
+		Note: "Read credentials from the environment.", Members: []int64{1, 2},
+		Status: model.ProposalProposed,
+	}})
+	require.NoError(t, err)
+	require.Len(t, saved, 1)
+
+	// The pin as `--apply` writes it into lessons.yaml.
+	pinned := reviews.DefaultConfig()
+	pinned.Pin = []reviews.PinRule{{Rule: "hardcoded-db-credentials", Region: "scripts",
+		Note: "Read credentials from the environment."}}
+
+	symptoms := func(cfg *reviews.Config) string {
+		out, _, err := LessonsForScopeBudget(st, cfg, "scripts/foo.py", 8, 3)
+		require.NoError(t, err)
+
+		var b strings.Builder
+		for _, l := range out {
+			b.WriteString(l.Symptom + "\n")
+		}
+
+		return b.String()
+	}
+
+	// Merely proposed: nothing is captured yet, both lessons surface.
+	assert.Contains(t, symptoms(pinned), "postgres")
+	assert.Contains(t, symptoms(pinned), "RUF003")
+
+	// Applied with the pin live: the credentials cluster is captured —
+	// its two findings are exactly the citations; the unrelated
+	// cluster stays.
+	_, err = st.SetProposalStatus([]int64{saved[0].ID}, model.ProposalApplied)
+	require.NoError(t, err)
+	assert.NotContains(t, symptoms(pinned), "postgres", "a captured theme must not surface as a mined lesson")
+	assert.Contains(t, symptoms(pinned), "RUF003", "uncaptured recurrence keeps surfacing")
+
+	// Pin hand-removed from lessons.yaml (the distill.write:false prune
+	// flow leaves the proposal applied): the lesson must resurface —
+	// zero surfacings is worse than two.
+	assert.Contains(t, symptoms(reviews.DefaultConfig()), "postgres",
+		"a manually pruned pin resurfaces its source lesson")
+}
+
+func TestPartialCitationDoesNotCoverACluster(t *testing.T) {
+	// Citing one member proves origin, not that the pin subsumes the
+	// cluster: one comment can flag two mistakes, and a recurrence
+	// arriving after the pin was applied re-opens the lesson.
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	require.NoError(t, st.ReplaceLessons([]model.Lesson{
+		{ClusterKey: "k", Region: "api", Reviewer: "human",
+			Symptom: "wrap engine context", Occurrences: 3},
+	}, []model.Finding{
+		{ID: 1, LessonKey: "k", Path: "api/a.go", Body: "one", Source: model.SourceReview},
+		{ID: 2, LessonKey: "k", Path: "api/b.go", Body: "two", Source: model.SourceReview},
+		{ID: 3, LessonKey: "k", Path: "api/c.go", Body: "post-pin recurrence", Source: model.SourceReview},
+	}))
+
+	saved, err := st.SaveDistilledGroup("sig-c", "api", 1, []model.Proposal{{
+		Signature: "sig-c", Rule: "wrap-engine-context", Region: "api",
+		Note: "Wrap the engine context at every call site.", Members: []int64{1, 2},
+		Status: model.ProposalProposed,
+	}})
+	require.NoError(t, err)
+	_, err = st.SetProposalStatus([]int64{saved[0].ID}, model.ProposalApplied)
+	require.NoError(t, err)
+
+	cfg := reviews.DefaultConfig()
+	cfg.Pin = []reviews.PinRule{{Rule: "wrap-engine-context", Region: "api", Note: "n"}}
+
+	out, _, err := LessonsForScopeBudget(st, cfg, "api/z.go", 8, 0)
+	require.NoError(t, err)
+
+	var b strings.Builder
+	for _, l := range out {
+		b.WriteString(l.Symptom + "\n")
+	}
+
+	assert.Contains(t, b.String(), "wrap engine context",
+		"a cluster with an uncited finding is not fully captured and keeps surfacing")
+}
+
+func TestDismissedProposalsDontSuppressMinedLessons(t *testing.T) {
+	// A dismissal rejects the distilled guidance, not the raw
+	// recurrence — mute is the tool for hiding that.
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	require.NoError(t, st.ReplaceLessons([]model.Lesson{
+		{ClusterKey: "k", Region: "api", Reviewer: "human",
+			Symptom: "wrap engine context", Occurrences: 3},
+	}, []model.Finding{
+		{ID: 9, LessonKey: "k", Path: "api/a.go", Body: "wrap it", Source: model.SourceReview},
+	}))
+
+	saved, err := st.SaveDistilledGroup("sig-b", "api", 1, []model.Proposal{{
+		Signature: "sig-b", Rule: "wrap-engine-context", Region: "api",
+		Note: "Wrap the engine context at every call site.", Members: []int64{9},
+		Status: model.ProposalProposed,
+	}})
+	require.NoError(t, err)
+	_, err = st.SetProposalStatus([]int64{saved[0].ID}, model.ProposalDismissed)
+	require.NoError(t, err)
+
+	out, _, err := LessonsForScopeBudget(st, reviews.DefaultConfig(), "api/b.go", 8, 3)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Contains(t, out[0].Symptom, "wrap engine context")
+}
