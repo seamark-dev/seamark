@@ -6,7 +6,11 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
-## Unreleased
+## v0.2.0 — 2026-08-05
+
+The evidence-quality line: pins that say where they apply and how much
+their evidence still supports them, and surfaces that inject that
+memory at the moment of change.
 
 - **Evidence confidence, everywhere pins compete.** Every distilled pin
   now carries a deterministic tier — strong / fair / weak — computed on
@@ -95,6 +99,15 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   `lessons --distill` re-reads those groups (small groups keep their
   signatures; applied and dismissed decisions are unaffected, and
   re-read groups cannot re-propose already-captured themes).
+
+Upgrade notes: databases upgrade to schema v3 in place on first open
+(an older binary then refuses them — the versioning contract). Existing
+pins keep the regions they were decided under: `lessons --proposals`
+shows what today's inference would assign, `lessons --retarget` applies
+it. The next `lessons --distill` re-reads once-oversized groups whose
+batch signatures changed — the preflight prices that before anything is
+sent — and already-stored review text picks up secret redaction on the
+next `seamark index --reviews`.
 
 ## v0.1.0 — 2026-08-03
 

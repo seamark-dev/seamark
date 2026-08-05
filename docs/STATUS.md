@@ -16,7 +16,7 @@ Local indexing, history mining, orientation, and the read surfaces.
 |---|---|
 | Indexer (Go, TypeScript/TSX/JS, Python) | working; parse cache, self-repairing freshness |
 | History layer (co-change, decisions, fix density) | working; needs git history to be useful |
-| `why`, `orient`, `change_set` | working (CLI + MCP) |
+| `why`, `orient`, `change_set` | working (CLI + MCP; `change_set` is MCP-only) |
 | LSP server (hover, lenses, omission diagnostics) | working; editor setup is manual ([editors.md](editors.md)) |
 | HTML report | working |
 | MCP server | working; five tools + `orient`/`status` resources + `onboard` prompt |
@@ -36,6 +36,7 @@ Review mining, fix mining, lessons, distillation, pins.
 | Fix-commit mining (local git) | working, offline |
 | Review-comment mining | working; requires an authenticated `gh` CLI and a GitHub remote on github.com |
 | Lessons + edit hook + tuning (`lessons.yaml`) | working |
+| Evidence confidence + ledger revalidation (`--proposals`, `--retarget`) | working; tiers recomputed on read, never stored |
 | Distillation (plan/apply, dedup memory, preflight disclosure, `--dry-run`) | working; requires your own agent CLI; sends finding text to it ([data-flow.md](data-flow.md)) |
 
 ## Guard — warn mode ready; enforcement is beta
@@ -57,8 +58,8 @@ agents inside real isolation regardless.
 
 ## Distribution
 
-Released: [v0.1.0](https://github.com/seamark-dev/seamark/releases)
-(2026-08-03) ships native archives for macOS and Linux (amd64/arm64),
+Released: [v0.2.0](https://github.com/seamark-dev/seamark/releases)
+(2026-08-05) ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
 (`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
 compiler. Windows is untested and unsupported. Artifact signing, SBOMs,
