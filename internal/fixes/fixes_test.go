@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -431,4 +432,75 @@ func TestBranchFixWithRevertedMemberStaysOut(t *testing.T) {
 		assert.NotEqual(t, model.SourceFixBranch, f.Source,
 			"a branch fix with a reverted member must not survive")
 	}
+}
+
+// commitDated is commit with an explicit author+committer date — for
+// branches whose commits predate the mining window.
+func commitDated(t *testing.T, root, msg, when string, files map[string]string) {
+	t.Helper()
+
+	for rel, content := range files {
+		p := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	}
+
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "--allow-empty", "-m", msg}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_AUTHOR_DATE="+when, "GIT_COMMITTER_DATE="+when,
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v\n%s", args, out)
+	}
+}
+
+func TestOutOfWindowChoreMemberStillExcludes(t *testing.T) {
+	// A branch can sit unmerged past the mining window: --since bounds
+	// the commit log, not the merge's rev-list walk. The chore commit
+	// inside must still be seen and still exclude the merge — an absent
+	// bySha entry must never read as "no signal".
+	root, commit, git := repo(t)
+
+	commit("initial", map[string]string{"a.go": "package a\n\nfunc Run() {}\n"})
+
+	old := time.Now().Add(-2 * DefaultWindow).Format(time.RFC3339)
+
+	git("checkout", "-b", "fix/stale-branch")
+	commitDated(t, root, "fix lint errors", old,
+		map[string]string{"a.go": "package a\n\nfunc Run() {}\n\n// ok\n"})
+	git("checkout", "main")
+	git("merge", "--no-ff", "fix/stale-branch",
+		"-m", "Merge pull request #50 from yuri/fix/stale-branch")
+
+	res, err := Mine(root, Options{})
+	require.NoError(t, err)
+	assert.Empty(t, res.Findings, "a chore member outside the window must still exclude the merge")
+}
+
+func TestOutOfWindowNeutralMemberKeepsBranchFix(t *testing.T) {
+	// The flip side: an old member that carries no fix, chore, or revert
+	// signal must not cost the merge its finding — resolution, not
+	// blanket exclusion, is the contract.
+	root, commit, git := repo(t)
+
+	commit("initial", map[string]string{"a.go": "package a\n\nfunc Run() {}\n"})
+
+	old := time.Now().Add(-2 * DefaultWindow).Format(time.RFC3339)
+
+	git("checkout", "-b", "fix/slow-burner")
+	commitDated(t, root, "handle the session-boundary edge case", old,
+		map[string]string{"a.go": "package a\n\nfunc Run() { guard() }\n"})
+	git("checkout", "main")
+	git("merge", "--no-ff", "fix/slow-burner",
+		"-m", "Merge pull request #51 from yuri/fix/slow-burner")
+
+	res, err := Mine(root, Options{})
+	require.NoError(t, err)
+	require.Len(t, res.Findings, 1)
+	assert.Equal(t, model.SourceFixBranch, res.Findings[0].Source)
+	assert.Equal(t, 51, res.Findings[0].PR)
 }

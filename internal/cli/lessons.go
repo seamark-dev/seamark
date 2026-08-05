@@ -1096,9 +1096,15 @@ func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
 	lessonsPath := filepath.Join(root, ".seamark", "lessons.yaml")
 	orig, origErr := os.ReadFile(lessonsPath)
 
+	// The restored file must keep the user's permissions, not gain ours.
+	origMode := os.FileMode(0o644)
+	if st, err := os.Stat(lessonsPath); err == nil {
+		origMode = st.Mode().Perm()
+	}
+
 	restore := func() {
 		if origErr == nil {
-			if werr := os.WriteFile(lessonsPath, orig, 0o644); werr != nil {
+			if werr := os.WriteFile(lessonsPath, orig, origMode); werr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(),
 					"seamark: could not restore lessons.yaml (%v) — recover it from git\n", werr)
 			}
@@ -1110,6 +1116,12 @@ func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
 	if len(fileOps) > 0 {
 		removed, err := distill.RemovePins(root, fileOpKeys)
 		if err != nil {
+			// RemovePins usually fails before touching the file, but a
+			// write cut short (disk full) leaves it mangled — restoring
+			// the captured bytes is a no-op in the first case and the
+			// rescue in the second.
+			restore()
+
 			return err
 		}
 

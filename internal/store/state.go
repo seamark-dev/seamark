@@ -163,11 +163,11 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 		case err != nil && err != sql.ErrNoRows:
 			return stats, err
 		case err == nil && local == model.ProposalProposed && p.Status != model.ProposalProposed:
-			// The whole imported row travels with the decision, regions
-			// included: the human decided against the imported content,
-			// and a local row keeping its own (possibly repo-wide) region
-			// would desynchronize pin identity from the lessons.yaml the
-			// same bundle's apply wrote.
+			// The identity fields travel with the decision — status plus
+			// region and regions: the human decided against the imported
+			// content, and a local row keeping its own (possibly
+			// repo-wide) region would desynchronize pin identity from
+			// the lessons.yaml the same bundle's apply wrote.
 			regions, err := encodeStrings(p.Regions)
 			if err != nil {
 				return stats, err

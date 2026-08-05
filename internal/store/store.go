@@ -114,6 +114,12 @@ func OpenReadOnly(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: open read-only: %w", err)
 	}
 
+	// mode=ro is enough for our WAL databases: SQLite reads the
+	// -wal/-shm sidecars itself when they exist, and their absence just
+	// means the last writer checkpointed cleanly. immutable=1 is
+	// deliberately NOT set — another seamark may be writing this
+	// database right now, and immutable would serve stale pages as
+	// truth.
 	db, err := sql.Open("sqlite", dsn(path, "mode=ro&_pragma=busy_timeout(5000)"))
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s read-only: %w", path, err)
@@ -124,7 +130,10 @@ func OpenReadOnly(path string) (*Store, error) {
 	stored, err := readVersion(db)
 	if err != nil {
 		_ = db.Close()
-		return nil, err
+
+		// The first actual read: a dirty WAL on a read-only filesystem
+		// surfaces here, and the bare driver error names no file.
+		return nil, fmt.Errorf("store: read %s read-only: %w", path, err)
 	}
 
 	if stored != schemaVersion {
@@ -918,59 +927,43 @@ func (s *Store) FindingsMetaByIDs(ids []int64) (map[int64]model.Finding, error) 
 
 	out := make(map[int64]model.Finding, len(unique))
 
-	for len(unique) > 0 {
-		chunk := unique
-		if len(chunk) > 500 {
-			chunk = chunk[:500]
-		}
-
-		unique = unique[len(chunk):]
-
-		marks := strings.Repeat(",?", len(chunk))[1:]
-
-		rows, err := s.db.Query(
-			`SELECT id, path, pr, created_at, source, paths FROM finding
-			 WHERE id IN (`+marks+`)`, chunk...)
-		if err != nil {
-			return nil, err
-		}
-
-		for rows.Next() {
+	err := s.chunked(
+		`SELECT id, path, pr, created_at, source, paths FROM finding
+		 WHERE id IN (%s)`, unique,
+		func(rows *sql.Rows) error {
 			var f model.Finding
 
 			var paths string
 
 			if err := rows.Scan(&f.ID, &f.Path, &f.PR, &f.CreatedAt, &f.Source, &paths); err != nil {
-				_ = rows.Close()
-
-				return nil, err
+				return err
 			}
 
-			if f.Paths, err = decodeStrings(paths); err != nil {
-				_ = rows.Close()
-
-				return nil, fmt.Errorf("store: finding %d paths: %w", f.ID, err)
+			decoded, err := decodeStrings(paths)
+			if err != nil {
+				return fmt.Errorf("store: finding %d paths: %w", f.ID, err)
 			}
 
+			f.Paths = decoded
 			out[f.ID] = f
-		}
 
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-
-			return nil, err
-		}
-
-		_ = rows.Close()
+			return nil
+		})
+	if err != nil {
+		return nil, err
 	}
 
 	return out, nil
 }
 
-// countByKey runs a two-column (key, count) GROUP BY query in chunks of
-// the given args, feeding each row to add. The query carries one %s for
-// the placeholder list.
-func (s *Store) countByKey(query string, args []any, add func(key string, n int)) error {
+// chunked runs an IN-list query against args in slices of 500 — SQLite
+// bounds bound-parameter counts, and one giant list would fail exactly
+// on the large repositories that need the query most. query must be a
+// constant SQL template supplied by an internal caller, never caller
+// input, with its single %s reserved for the generated placeholder
+// list. scan owns all column reading for one row; iteration errors and
+// Close bookkeeping stay here.
+func (s *Store) chunked(query string, args []any, scan func(*sql.Rows) error) error {
 	for len(args) > 0 {
 		chunk := args
 		if len(chunk) > 500 {
@@ -987,17 +980,11 @@ func (s *Store) countByKey(query string, args []any, add func(key string, n int)
 		}
 
 		for rows.Next() {
-			var key string
-
-			var n int
-
-			if err := rows.Scan(&key, &n); err != nil {
+			if err := scan(rows); err != nil {
 				_ = rows.Close()
 
 				return err
 			}
-
-			add(key, n)
 		}
 
 		if err := rows.Err(); err != nil {
@@ -1010,6 +997,25 @@ func (s *Store) countByKey(query string, args []any, add func(key string, n int)
 	}
 
 	return nil
+}
+
+// countByKey runs a two-column (key, count) GROUP BY query in chunks of
+// the given args, feeding each row to add — the same %s template
+// contract as chunked.
+func (s *Store) countByKey(query string, args []any, add func(key string, n int)) error {
+	return s.chunked(query, args, func(rows *sql.Rows) error {
+		var key string
+
+		var n int
+
+		if err := rows.Scan(&key, &n); err != nil {
+			return err
+		}
+
+		add(key, n)
+
+		return nil
+	})
 }
 
 // int64Args widens ids for the driver.

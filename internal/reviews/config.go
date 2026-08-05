@@ -207,6 +207,14 @@ func (c *Config) Muted(l model.Lesson) bool {
 	return false
 }
 
+// SurfacesMined reports whether a mined lesson clears the surfacing
+// bar: recurred at least Threshold times and not muted. The one rule
+// every surface (hook, why, change_set, check) applies — inlining it
+// at a call site invites the surfaces to quietly disagree.
+func (c *Config) SurfacesMined(l model.Lesson) bool {
+	return l.Occurrences >= c.Threshold && !c.Muted(l)
+}
+
 // pinsFor returns the pin rules that apply to scope — a file or
 // directory, or "" for a repo-wide view (orient), where every pin
 // applies.
@@ -334,7 +342,9 @@ func CollapseRestated(pins []SurfacedPin) (kept []SurfacedPin, dropped int) {
 	}
 
 	topics := make([]wording.Topic, 0, len(pins))
-	kept = pins[:0]
+	// Fresh storage, not pins[:0]: an in-place filter would overwrite
+	// the caller's slice contents behind its back.
+	kept = make([]SurfacedPin, 0, len(pins))
 
 	for _, sp := range pins {
 		t := wording.New(sp.Pin.Rule, sp.Pin.Note)
@@ -390,7 +400,7 @@ func (c *Config) SurfaceBudgetAnnotated(mined []model.Lesson, scope string, pinB
 	}
 
 	for _, l := range mined {
-		if l.Occurrences < c.Threshold || c.Muted(l) {
+		if !c.SurfacesMined(l) {
 			continue
 		}
 

@@ -166,6 +166,13 @@ func Mine(root string, opts Options) (Result, error) {
 		bySha[c.sha] = c
 	}
 
+	// Branch members can predate the mining window: --since bounds the
+	// commit log, not each merge's rev-list walk. A member missing from
+	// the windowed log must be fetched and classified here — the zero
+	// commit would otherwise read as "no signal" and wave the merge
+	// through unexamined.
+	resolveMembers(root, merges, bySha)
+
 	seenMergePatch := map[string]bool{}
 
 	// Oldest first, so the ORIGINAL merge survives patch-identity
@@ -182,9 +189,12 @@ func Mine(root string, opts Options) (Result, error) {
 		excluded := false
 
 		for _, s := range m.commits {
-			c := bySha[s]
+			c, known := bySha[s]
 
-			if c.source != "" || choreRe.MatchString(c.subject) || reverted[s] {
+			// A member that stayed unknown even after resolveMembers
+			// cannot be vouched for — excluding the merge beats mining
+			// unexamined evidence.
+			if !known || c.source != "" || choreRe.MatchString(c.subject) || reverted[s] {
 				excluded = true
 
 				break
@@ -322,6 +332,53 @@ func listMerges(root, since string) []mergeCommit {
 	}
 
 	return merges
+}
+
+// resolveMembers backfills bySha with branch commits the windowed log
+// never saw (a branch merged today can carry commits committed before
+// the window opened). Only merges the branch tier could mine are worth
+// the lookup, and one git call covers them all. A failed lookup leaves
+// the shas unknown, which the caller treats as exclusion.
+func resolveMembers(root string, merges []mergeCommit, bySha map[string]commit) {
+	seen := map[string]bool{}
+
+	var missing []string
+
+	for _, m := range merges {
+		if !fixBranchRe.MatchString(m.branch) || choreRe.MatchString(m.branch) {
+			continue
+		}
+
+		for _, s := range m.commits {
+			if _, ok := bySha[s]; !ok && !seen[s] {
+				seen[s] = true
+
+				missing = append(missing, s)
+			}
+		}
+	}
+
+	if len(missing) == 0 {
+		return
+	}
+
+	out, err := gitOut(root, append([]string{"show", "-s", "--format=%H%x00%s%x00%b%x1e"},
+		missing...)...)
+	if err != nil {
+		return
+	}
+
+	for rec := range strings.SplitSeq(string(out), "\x1e") {
+		parts := strings.SplitN(strings.TrimLeft(rec, "\n"), "\x00", 3)
+		if len(parts) != 3 {
+			continue
+		}
+
+		c := commit{sha: parts[0], subject: parts[1], body: strings.TrimSpace(parts[2])}
+		c.source = Classify(c.subject, c.body)
+
+		bySha[c.sha] = c
+	}
 }
 
 // prMapOf recovers each branch commit's pull request from merge

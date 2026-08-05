@@ -51,8 +51,11 @@ var redactions = []redaction{
 	// "api_key": "abc" (JSON) — with colonNames, see above.
 	{regexp.MustCompile(`(?i)(['"]?[A-Z0-9_.-]*` + colonNames + `[A-Z0-9_.-]*['"]?\s*:\s*)` + secretValue),
 		"${1}[REDACTED]"},
-	// URL userinfo: scheme://user:pass@host keeps user and host.
-	{regexp.MustCompile(`(://[^/\s@:]+:)[^@\s]+@`), "${1}[REDACTED]@"},
+	// URL userinfo: scheme://user:pass@host keeps user and host. The
+	// password class excludes "/" (RFC 3986 requires it percent-encoded
+	// in userinfo), or host:port/path@… — a URL whose PATH carries an
+	// "@" — would read as credentials and be mangled.
+	{regexp.MustCompile(`(://[^/\s@:]+:)[^@/\s]+@`), "${1}[REDACTED]@"},
 	// Bearer tokens in headers: Authorization: Bearer eyJ….
 	{regexp.MustCompile(`(?i)\b(bearer\s+)\S+`), "${1}[REDACTED]"},
 }

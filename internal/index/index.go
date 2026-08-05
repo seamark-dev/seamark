@@ -419,10 +419,14 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 
 	// The window is the only config the review miner takes; a broken
 	// config file must not down the mine — defaults apply, exactly as
-	// every other surface degrades.
+	// every other surface degrades. But degrading silently would hide
+	// the breakage, so it is at least said out loud.
 	windowDays := 0
+
 	if cfg, err := LoadConfig(root); err == nil {
 		windowDays = cfg.ReviewWindowDays()
+	} else {
+		logf("config: %v — review window default applies", err)
 	}
 
 	res, err = reviews.Mine(root, reviews.Options{Logf: logf, WindowDays: windowDays}, nil)

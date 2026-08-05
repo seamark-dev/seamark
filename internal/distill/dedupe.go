@@ -167,7 +167,7 @@ func sameBatch(a, b string) bool {
 }
 
 // sortedIDs returns a sorted copy of ids, nil when there are none —
-// the comparable form evidenceNested expects.
+// the comparable form evidenceEqual expects.
 func sortedIDs(ids []int64) []int64 {
 	if len(ids) == 0 {
 		return nil

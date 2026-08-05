@@ -34,6 +34,14 @@ func TestAssessTiers(t *testing.T) {
 		// Old evidence and a deleted file.
 		5: {ID: 5, PR: 5, Path: "api/gone.go", Source: model.SourceReview,
 			CreatedAt: now.Add(-600 * day).Unix()},
+		// Fresh, corroborated — but every cited file is gone.
+		6: {ID: 6, PR: 6, Path: "api/gone.go", Source: model.SourceReview,
+			CreatedAt: now.Add(-20 * day).Unix()},
+		7: {ID: 7, PR: 7, Path: "api/gone.go", Source: model.SourceFixConventional,
+			CreatedAt: now.Add(-30 * day).Unix()},
+		// Living files, corroborated — but past the decay horizon.
+		8: live(8, 8, model.SourceReview, 600*day),
+		9: live(9, 9, model.SourceFixConventional, 620*day),
 	}
 
 	cases := []struct {
@@ -54,6 +62,12 @@ func TestAssessTiers(t *testing.T) {
 		{"stale evidence",
 			model.Proposal{Members: []int64{5, 3}}, TierFair,
 			"two events but one cites deleted code — not strong, not dead"},
+		{"all cited files deleted",
+			model.Proposal{Members: []int64{6, 7}}, TierWeak,
+			"two fresh corroborated events, but guidance entirely about deleted code"},
+		{"decayed past the horizon",
+			model.Proposal{Members: []int64{8, 9}}, TierWeak,
+			"two live-path corroborated events, newest older than the 540d weak bound"},
 	}
 
 	for _, c := range cases {

@@ -498,8 +498,7 @@ func LessonsForFiles(st *store.Store, cfg *reviews.Config, files []string, budge
 		}
 
 		for _, l := range ls {
-			if seenCluster[l.ClusterKey] || covered[l.ClusterKey] ||
-				l.Occurrences < cfg.Threshold || cfg.Muted(l) {
+			if seenCluster[l.ClusterKey] || covered[l.ClusterKey] || !cfg.SurfacesMined(l) {
 				continue
 			}
 

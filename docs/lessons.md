@@ -288,12 +288,10 @@ be ahead of the ledger, and the next `--retarget` detects exactly that
 state and repairs it with a ledger-only update. Re-running is always
 safe: "regions already current" is the steady state.
 
-The same ledger names near-duplicate clusters among applied pins,
-suggests which entry to keep (the one resting on the most evidence),
-and hands you the command — `seamark lessons --prune p16,p45` — to
-retire the rest. Pruning is not dismissal: the theme stays pinned by
-its survivor and the distiller still counts it as known, where a
-dismissal would suppress it.
+The same ledger also flags near-duplicate clusters among applied pins
+and hands you the `--prune` command to retire the redundant entries —
+see "One theme, one pin" above for how that audit works and why
+pruning is not dismissal.
 
 ### Proposal-only by construction
 

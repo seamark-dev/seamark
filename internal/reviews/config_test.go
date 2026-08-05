@@ -136,6 +136,29 @@ func TestSurfaceBudgetCollapsesRestatedPins(t *testing.T) {
 	assert.Len(t, out, 3)
 }
 
+func TestCollapseRestatedPreservesInput(t *testing.T) {
+	// The caller's slice must come back untouched: an in-place filter
+	// would silently rewrite pins the caller still holds (report.go
+	// keeps its ranked slice for the trimmed accounting).
+	pins := []SurfacedPin{
+		{Pin: PinRule{Rule: "lint-before-commit",
+			Note: "Run every configured linter and fix findings before committing work."}},
+		{Pin: PinRule{Rule: "train-serve-parity",
+			Note: "Serving must compute features exactly as the historical materialization does."}},
+		{Pin: PinRule{Rule: "run-linters-before-commit",
+			Note: "Run every linter the repository configures and fix the findings before committing."}},
+	}
+
+	orig := make([]SurfacedPin, len(pins))
+	copy(orig, pins)
+
+	kept, dropped := CollapseRestated(pins)
+
+	require.Len(t, kept, 2)
+	assert.Equal(t, 1, dropped)
+	assert.Equal(t, orig, pins, "the input slice is not storage for the result")
+}
+
 func TestSurfaceBudgetKeepsDistinctLinterCodes(t *testing.T) {
 	// RUF001 and RUF003 tokenize to the same word — the digits ARE the
 	// rule. Codes only ever collapse on exact equality.

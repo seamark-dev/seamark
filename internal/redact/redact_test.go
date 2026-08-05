@@ -32,6 +32,9 @@ func TestSecretsPatterns(t *testing.T) {
 		// Comparisons are not assignments; prose colons stay prose.
 		"if password == provided": "if password == provided",
 		"auth: needs a refactor":  "auth: needs a refactor",
+		// host:port followed by a path with an "@" is not userinfo —
+		// the password class stops at "/" (RFC 3986 encodes it there).
+		"see https://example.com:8080/mail@host for details": "see https://example.com:8080/mail@host for details",
 	} {
 		assert.Equal(t, want, Secrets(input), "input: %s", input)
 	}
