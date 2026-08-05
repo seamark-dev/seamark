@@ -632,3 +632,34 @@ func TestSourceMixOrdersByFrequency(t *testing.T) {
 	assert.Equal(t, "3 review · 1 fix:conventional · 1 revert", mix)
 	assert.Empty(t, sourceMix(nil))
 }
+
+func TestCardsCarryEvidenceHealth(t *testing.T) {
+	// The HTML report is where the human decides, so the same
+	// re-judgment the --proposals ledger prints must be on the card:
+	// tier with facts, prompt era, and the regions today's inference
+	// would assign — with the retarget command when they drifted.
+	st, root := seed(t)
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, LessonKey: "k", Path: "scripts/a.py", PR: 1, Body: "x", Source: model.SourceReview},
+		{ID: 2, LessonKey: "k", Path: "scripts/b.py", PR: 2, Body: "y", Source: model.SourceReview},
+	}))
+
+	saved, err := st.SaveDistilledGroup("sig-h", "", 1, []model.Proposal{{
+		Signature: "sig-h", Rule: "guard-empty-datasets", Region: "",
+		Note: "Guard datasets before reductions.", Members: []int64{1, 2},
+		Agent: "claude/v1", Status: model.ProposalProposed,
+	}})
+	require.NoError(t, err)
+	_, err = st.SetProposalStatus([]int64{saved[0].ID}, model.ProposalApplied)
+	require.NoError(t, err)
+
+	var b strings.Builder
+	require.NoError(t, Generate(&b, st, root, time.Unix(1_700_000_000, 0)))
+
+	page := b.String()
+	assert.Contains(t, page, `class="badge weak"`, "the tier badge renders")
+	assert.Contains(t, page, "prompt v1", "the grandfathering era is visible")
+	assert.Contains(t, page, "regions now: scripts", "region drift is named")
+	assert.Contains(t, page, "--retarget p", "the drifted applied pin hands over the retarget command")
+}

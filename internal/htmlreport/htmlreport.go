@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seamark-dev/seamark/internal/confidence"
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
@@ -104,7 +105,15 @@ type Card struct {
 	Cited     int
 	Retrieved int
 	Events    int
-	Evidence  []Evidence
+	// Evidence health (RFC-002 §7), recomputed at report time: the
+	// confidence tier with its facts, the prompt era when the proposal
+	// predates the current recurrence rules, and the regions today's
+	// inference would assign when they differ from the stored ones.
+	Tier       string
+	Facts      string
+	Era        string
+	RegionsNow string
+	Evidence   []Evidence
 }
 
 // Evidence is one finding behind a proposal, as displayed.
@@ -214,7 +223,7 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		FilesWithHistory: len(churn),
 	}
 
-	r.buildCards(proposals, findings)
+	r.buildCards(proposals, findings, root, now)
 	r.buildDuplicates(proposals)
 
 	// The map first: it decides which scopes exist, and each lesson row
@@ -268,7 +277,7 @@ func allProposals(st *store.Store) ([]model.Proposal, error) {
 
 // buildCards renders the decision queue: pending proposals first, then
 // the most recent decisions, each with the findings it cited.
-func (r *Report) buildCards(proposals []model.Proposal, findings []model.Finding) {
+func (r *Report) buildCards(proposals []model.Proposal, findings []model.Finding, root string, now time.Time) {
 	byID := make(map[int64]model.Finding, len(findings))
 	for _, f := range findings {
 		byID[f.ID] = f
@@ -306,6 +315,30 @@ func (r *Report) buildCards(proposals []model.Proposal, findings []model.Finding
 			Pending: p.Status == model.ProposalProposed,
 			Cited:   len(p.Members), Retrieved: len(cited),
 			Events: distill.CountEvents(cited),
+		}
+
+		// The same re-judgment the --proposals ledger prints: this page
+		// is where the human decides, so the decision-relevant facts
+		// must be on the card, not only in the terminal.
+		if p.Status == model.ProposalProposed || p.Status == model.ProposalApplied {
+			tier, facts := confidence.Assess(p, byID, root, now)
+			card.Tier = tier.String()
+			card.Facts = clean(facts.Line())
+
+			if strings.HasSuffix(p.Agent, "/v1") {
+				card.Era = "distilled under prompt v1, before the same-PR-counts-once rule"
+			}
+
+			if len(cited) > 0 {
+				recomputed := distill.CoverageRegions(cited)
+
+				if reviews.NewPinKey("x", "", recomputed) != reviews.NewPinKey("x", "", p.RegionSet()) {
+					card.RegionsNow = clean(strings.Join(recomputed, ", "))
+					if card.RegionsNow == "" {
+						card.RegionsNow = "*"
+					}
+				}
+			}
 		}
 
 		for _, f := range cited {

@@ -45,6 +45,11 @@ h2 .hint { text-transform:none; letter-spacing:0; font-weight:400; margin-left:8
 .badge { font-size:10px; padding:2px 7px; border-radius:99px; border:1px solid var(--line);
   color:var(--dim) }
 .badge.proposed { border-color:var(--amber); color:var(--amber) }
+.badge.weak { border-color:var(--amber); color:var(--amber) }
+.badge.fair { opacity:.75 }
+.badge.strong { opacity:.55 }
+.health { font-size:11px; color:var(--dim); margin:4px 0 0 }
+.health .drift { color:var(--amber) }
 .note { margin:0 0 8px; font-family:var(--sans); font-size:13.5px }
 .meta { display:flex; gap:14px; font-size:11.5px; color:var(--dim); flex-wrap:wrap }
 .region { color:var(--sea) }
@@ -131,6 +136,7 @@ footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line); co
     <span class="pid">p{{.ID}}</span>
     <h3>{{.Rule}}</h3>
     <span class="badge {{.Status}}">{{.Status}}</span>
+    {{- if .Tier}}<span class="badge {{.Tier}}" title="{{.Facts}}">{{.Tier}}</span>{{end}}
   </header>
   <p class="note">{{.Note}}</p>
   <div class="meta">
@@ -144,6 +150,15 @@ footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line); co
     {{- end}}
     <span class="agent">{{.Agent}}</span>
   </div>
+  {{- if and .Tier (ne .Tier "strong")}}
+  <p class="health">{{.Tier}} — {{.Facts}}</p>
+  {{- end}}
+  {{- if .Era}}
+  <p class="health">{{.Era}}</p>
+  {{- end}}
+  {{- if .RegionsNow}}
+  <p class="health drift">regions now: {{.RegionsNow}}</p>
+  {{- end}}
   {{- if .Evidence}}
   <details><summary>evidence ({{len .Evidence}})</summary>
     <ul class="evidence">
@@ -161,6 +176,10 @@ footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line); co
   <div class="actions">
     <code tabindex="0" role="button" aria-label="Copy the apply command">seamark lessons --apply p{{.ID}}</code>
     <code tabindex="0" role="button" aria-label="Copy the dismiss command">seamark lessons --dismiss p{{.ID}}</code>
+  </div>
+  {{- else if .RegionsNow}}
+  <div class="actions">
+    <code tabindex="0" role="button" aria-label="Copy the retarget command">seamark lessons --retarget p{{.ID}}</code>
   </div>
   {{- end}}
 </article>

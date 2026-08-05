@@ -21,7 +21,8 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   inference would assign. The new `lessons --retarget p3,p7` applies
   that tightening to lessons.yaml and the ledger together (write-gated
   like `--apply`): the upgrade path for pins distilled before region
-  sets.
+  sets. The HTML report's decision cards carry the same health — tier
+  badge, facts, era, and the drift line with its retarget command.
 - **change_set and check carry the memory.** `change_set` answers now
   end with the budgeted lessons governing the files about to change
   (`change_budget`, default 6), and `check` appends an advisory block
