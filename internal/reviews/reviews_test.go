@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -582,4 +583,63 @@ func TestParseHandlesEmptyAndGarbage(t *testing.T) {
 
 	_, err = parseComments([]byte("{not an array"))
 	require.Error(t, err)
+}
+
+func TestCommentSecretsAreRedactedAtParse(t *testing.T) {
+	// A reviewer quoting the credential it flags ("hardcodes
+	// postgres://user:pass@…") must not turn seamark into a broadcaster:
+	// the body is scrubbed at parse, so finding bodies, fingerprints,
+	// prompts, and hook injections all inherit the redaction.
+	page := ghPage(comment(1, "Copilot", "Bot", "scripts/db.py", 5, 100,
+		"This script hard codes a postgres url including credentials "+
+			"postgresql://trading:trading123@localhost:5432/db — read it from the environment."))
+
+	lessons, findings := mineWithFindings(t, page)
+
+	require.Len(t, findings, 1)
+	assert.NotContains(t, findings[0].Body, "trading123")
+	assert.Contains(t, findings[0].Body, "[REDACTED]")
+
+	require.NotEmpty(t, lessons)
+
+	for _, l := range lessons {
+		assert.NotContains(t, l.symptom, "trading123", "fingerprints must not carry the secret")
+	}
+}
+
+func TestWindowCommentsFloorAndCutoff(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	day := int64(24 * 3600)
+
+	var comments []Comment
+
+	// 250 recent (inside any window), 100 ancient.
+	for i := 0; i < 250; i++ {
+		comments = append(comments, Comment{ID: int64(i), CreatedAt: now.Unix() - int64(i)*day/24})
+	}
+
+	for i := 0; i < 100; i++ {
+		comments = append(comments, Comment{ID: int64(1000 + i), CreatedAt: now.Unix() - 3000*day - int64(i)})
+	}
+
+	got := windowComments(comments, 0, now)
+	assert.Len(t, got, 250, "everything inside the window survives; the ancient tail drops")
+
+	// A slow repo: 50 in-window, 300 ancient — the floor keeps the
+	// newest 200 total.
+	var slow []Comment
+
+	for i := 0; i < 50; i++ {
+		slow = append(slow, Comment{ID: int64(i), CreatedAt: now.Unix() - int64(i)})
+	}
+
+	for i := 0; i < 300; i++ {
+		slow = append(slow, Comment{ID: int64(5000 + i), CreatedAt: now.Unix() - 3000*day - int64(i)})
+	}
+
+	got = windowComments(slow, 0, now)
+	assert.Len(t, got, 200, "the count floor tops the corpus up with the newest beyond-window comments")
+
+	// Unlimited (config window_days: 0 → -1).
+	assert.Len(t, windowComments(slow, -1, now), 350)
 }

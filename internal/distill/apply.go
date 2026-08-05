@@ -61,14 +61,20 @@ func RenderPins(ps []model.Proposal) (string, error) {
 	var b strings.Builder
 
 	for _, p := range ps {
-		region := p.Region
-		if region == "" {
-			region = "*"
+		pin := reviews.PinRule{Rule: p.Rule, Region: "*", Note: p.Note}
+
+		// Both keys on purpose: `region` carries the first (deepest-
+		// coverage) region for readers that predate sets — narrower
+		// than the `*` they used to get — and `regions` the full set.
+		if set := p.RegionSet(); len(set) > 0 {
+			pin.Region = set[0]
+
+			if len(set) > 1 {
+				pin.Regions = set
+			}
 		}
 
-		entry, err := yaml.Marshal([]reviews.PinRule{{
-			Rule: p.Rule, Region: region, Note: p.Note,
-		}})
+		entry, err := yaml.Marshal([]reviews.PinRule{pin})
 		if err != nil {
 			return "", fmt.Errorf("render pin %s: %w", p.Rule, err)
 		}
@@ -129,23 +135,15 @@ func ApplyPins(root string, ps []model.Proposal) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-// PinKey identifies one pin entry. A rule name alone is not an
-// identity: the same rule is legitimately pinned in several regions
-// (RUF001 for scripts and for api), and pruning one must not take the
-// others with it.
-type PinKey struct {
-	Rule   string
-	Region string
-}
+// PinKey aliases the pin identity owned by the reviews package —
+// apply and prune consume it, but the identity of a pin belongs with
+// PinRule, and surfaces (report) must reach it without importing the
+// distiller.
+type PinKey = reviews.PinKey
 
-// normalized pairs a rule with its canonical region, since an absent
-// region and "*" both mean repo-wide (ApplyPins writes the star).
-func (k PinKey) normalized() PinKey {
-	if k.Region == "" {
-		k.Region = "*"
-	}
-
-	return k
+// NewPinKey re-exports reviews.NewPinKey for the apply/prune callers.
+func NewPinKey(rule, region string, regions []string) PinKey {
+	return reviews.NewPinKey(rule, region, regions)
 }
 
 // RemovePins deletes the named pins from <root>/.seamark/lessons.yaml,
@@ -174,7 +172,10 @@ func RemovePins(root string, keys []PinKey) (removed []PinKey, err error) {
 
 	drop := map[PinKey]bool{}
 	for _, k := range keys {
-		drop[k.normalized()] = true
+		// Heal raw-constructed keys: canonicalization is idempotent on
+		// already-canonical strings, and a bare {Rule, Region: ""} must
+		// mean repo-wide here exactly as it does everywhere else.
+		drop[NewPinKey(k.Rule, k.Region, nil)] = true
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -205,7 +206,9 @@ func RemovePins(root string, keys []PinKey) (removed []PinKey, err error) {
 			end++
 		}
 
-		key := PinKey{Rule: rule, Region: entryRegion(lines[i+1 : end])}.normalized()
+		body := lines[i+1 : end]
+
+		key := NewPinKey(rule, entryRegion(body), entryRegions(body))
 		if !drop[key] {
 			continue
 		}
@@ -286,28 +289,84 @@ func isProvenanceComment(line string) bool {
 }
 
 // entryRegion reads the region off a pin entry's continuation lines;
-// an entry without one is repo-wide.
+// an entry without one is repo-wide (NewPinKey canonicalizes "").
 func entryRegion(body []string) string {
 	for _, line := range body {
-		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "region:"); ok {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "regions:") {
+			continue // the set line; entryRegions reads it
+		}
+
+		if rest, ok := strings.CutPrefix(trimmed, "region:"); ok {
 			return strings.Trim(strings.TrimSpace(rest), `"'`)
 		}
 	}
 
-	return "*"
+	return ""
+}
+
+// entryRegions reads the region set off a pin entry's continuation
+// lines: flow style (`regions: [api, db]` — what ApplyPins writes) or
+// block style (a bare `regions:` followed by `- api` items — what a
+// hand edit legitimately writes). Missing either would compute a wrong
+// identity, prune nothing, and desynchronize the file from the
+// proposal ledger.
+func entryRegions(body []string) []string {
+	for i, line := range body {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "regions:")
+		if !ok {
+			continue
+		}
+
+		rest = strings.TrimSpace(rest)
+
+		// Block style: the items follow on their own lines.
+		if rest == "" {
+			var out []string
+
+			for _, next := range body[i+1:] {
+				item, ok := strings.CutPrefix(strings.TrimSpace(next), "- ")
+				if !ok {
+					break
+				}
+
+				if r := strings.Trim(strings.TrimSpace(item), `"'`); r != "" {
+					out = append(out, r)
+				}
+			}
+
+			return out
+		}
+
+		rest = strings.TrimPrefix(rest, "[")
+		rest = strings.TrimSuffix(rest, "]")
+
+		var out []string
+
+		for part := range strings.SplitSeq(rest, ",") {
+			if r := strings.Trim(strings.TrimSpace(part), `"'`); r != "" {
+				out = append(out, r)
+			}
+		}
+
+		return out
+	}
+
+	return nil
 }
 
 // isContinuation reports whether a line belongs to the list item above
-// it: indented, and not itself a new item or a new key at any lower
-// indentation.
+// it. Pin entries live at two-space indent (`  - rule: x`), so any
+// line indented four or more spaces is the entry's body — including a
+// nested block-style list item (`      - api` under `    regions:`),
+// which a hand edit legitimately writes where ApplyPins writes flow.
 func isContinuation(line string) bool {
 	if strings.TrimSpace(line) == "" {
 		return false
 	}
 
-	trimmed := strings.TrimSpace(line)
-
-	return strings.HasPrefix(line, "    ") && !strings.HasPrefix(trimmed, "- ")
+	return strings.HasPrefix(line, "    ")
 }
 
 // verifyPruned checks the edit did exactly what was asked: the dropped
@@ -318,7 +377,7 @@ func verifyPruned(before, after *reviews.Config, drop map[PinKey]bool) error {
 	pinNotes := func(cfg *reviews.Config) map[PinKey]string {
 		out := map[PinKey]string{}
 		for _, p := range cfg.Pin {
-			out[PinKey{Rule: p.Rule, Region: p.Region}.normalized()] = p.Note
+			out[NewPinKey(p.Rule, p.Region, p.Regions)] = p.Note
 		}
 
 		return out
@@ -332,15 +391,13 @@ func verifyPruned(before, after *reviews.Config, drop map[PinKey]bool) error {
 		}
 
 		if kept, ok := got[key]; !ok || kept != note {
-			return fmt.Errorf("refusing to write: pruning would have changed pin %q in %s",
-				key.Rule, key.Region)
+			return fmt.Errorf("refusing to write: pruning would have changed pin %s", key)
 		}
 	}
 
 	for key := range got {
 		if drop[key] {
-			return fmt.Errorf("refusing to write: pin %q in %s survived the prune",
-				key.Rule, key.Region)
+			return fmt.Errorf("refusing to write: pin %s survived the prune", key)
 		}
 	}
 

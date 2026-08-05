@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"time"
+
+	"github.com/seamark-dev/seamark/internal/redact"
 )
 
 const auditFile = "audit.jsonl"
@@ -100,7 +101,7 @@ func Audit(root, kind, input string, p *Policy, d *Decision) error {
 	}
 
 	if p.Audit.Raw {
-		entry["input"] = truncate(RedactSecrets(input), maxRawInput)
+		entry["input"] = truncate(redact.Secrets(input), maxRawInput)
 	}
 
 	// One Encode is one write of one line: with O_APPEND, concurrent
@@ -248,43 +249,6 @@ func oldestEntryStale(f *os.File) bool {
 	}
 
 	return time.Since(first.TS) > maxAuditAge
-}
-
-// redaction is one secret-shaped pattern and its replacement.
-type redaction struct {
-	re          *regexp.Regexp
-	replacement string
-}
-
-// secretValue matches a flag or assignment payload: a quoted string
-// (whitespace included — `--password 'correct horse battery staple'`
-// must not leak its tail) or one unquoted token.
-const secretValue = `('[^']*'|"[^"]*"|\S+)`
-
-// redactions cover the common ways secrets ride in command lines. This
-// is best-effort scrubbing for the OPT-IN raw log, not a guarantee — the
-// default log never stores the input at all.
-var redactions = []redaction{
-	// Environment assignments whose name smells secret-bearing:
-	// AWS_SECRET_ACCESS_KEY=…, DB_PASSWORD=…, api_token=….
-	{regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|CREDENTIALS?|AUTH|ACCESS_?KEY|PRIVATE_?KEY)[A-Z0-9_]*)=` + secretValue),
-		"${1}=[REDACTED]"},
-	// Value-taking secret flags: --password x, --token=x, --api-key x.
-	{regexp.MustCompile(`(?i)(--?(?:password|passwd|token|api-?key|secret|access-?key|private-?key|auth(?:orization)?)[= ])` + secretValue),
-		"${1}[REDACTED]"},
-	// URL userinfo: scheme://user:pass@host keeps user and host.
-	{regexp.MustCompile(`(://[^/\s@:]+:)[^@\s]+@`), "${1}[REDACTED]@"},
-	// Bearer tokens in headers: Authorization: Bearer eyJ….
-	{regexp.MustCompile(`(?i)\b(bearer\s+)\S+`), "${1}[REDACTED]"},
-}
-
-// RedactSecrets scrubs known secret-bearing patterns from an input line.
-func RedactSecrets(s string) string {
-	for _, r := range redactions {
-		s = r.re.ReplaceAllString(s, r.replacement)
-	}
-
-	return s
 }
 
 // truncate bounds s to limit bytes on a rune boundary. It runs AFTER

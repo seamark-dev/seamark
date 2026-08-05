@@ -22,11 +22,13 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/redact"
 )
 
 // Options bounds a fix-mining pass.
@@ -128,6 +130,8 @@ func Mine(root string, opts Options) (Result, error) {
 
 	reverted := revertedShas(root)
 	dupes := duplicatePatchShas(root, since)
+	merges := listMerges(root, since)
+	prMap := prMapOf(merges)
 
 	var out []model.Finding
 
@@ -138,7 +142,78 @@ func Mine(root string, opts Options) (Result, error) {
 			continue
 		}
 
-		f, ok := buildFinding(root, c)
+		f, ok := buildFinding(root, c, prMap)
+		if !ok {
+			continue
+		}
+
+		out = append(out, f)
+		kept++
+	}
+
+	// Branch-name tier: a merge from fix/… whose commits carried no
+	// fix-shaped message of their own is a fix the author declared only
+	// in the branch name — without this, that pull request contributes
+	// nothing. Strictly additive by construction: any classified commit
+	// inside means the fix is already mined, and this tier stays out.
+	// The other exclusions the commit tier enforces hold here too: a
+	// chore-shaped branch (fix/lint) or a chore commit inside teaches
+	// nothing, a reverted member means the fix was at least partly
+	// undone, and a backport merged through a second branch is the same
+	// event (patch identity, oldest merge kept).
+	bySha := make(map[string]commit, len(commits))
+	for _, c := range commits {
+		bySha[c.sha] = c
+	}
+
+	// Branch members can predate the mining window: --since bounds the
+	// commit log, not each merge's rev-list walk. A member missing from
+	// the windowed log must be fetched and classified here — the zero
+	// commit would otherwise read as "no signal" and wave the merge
+	// through unexamined.
+	resolveMembers(root, merges, bySha)
+
+	seenMergePatch := map[string]bool{}
+
+	// Oldest first, so the ORIGINAL merge survives patch-identity
+	// dedup and a new backport cannot change the surviving sha — the
+	// same stability argument as duplicatePatchShas.
+	for i := len(merges) - 1; i >= 0; i-- {
+		m := merges[i]
+
+		if !fixBranchRe.MatchString(m.branch) || choreRe.MatchString(m.branch) ||
+			reverted[m.sha] || len(m.commits) == 0 {
+			continue
+		}
+
+		excluded := false
+
+		for _, s := range m.commits {
+			c, known := bySha[s]
+
+			// A member that stayed unknown even after resolveMembers
+			// cannot be vouched for — excluding the merge beats mining
+			// unexamined evidence.
+			if !known || c.source != "" || choreRe.MatchString(c.subject) || reverted[s] {
+				excluded = true
+
+				break
+			}
+		}
+
+		if excluded {
+			continue
+		}
+
+		if id := mergePatchID(root, m.sha); id != "" {
+			if seenMergePatch[id] {
+				continue
+			}
+
+			seenMergePatch[id] = true
+		}
+
+		f, ok := buildMergeFinding(root, m)
 		if !ok {
 			continue
 		}
@@ -177,6 +252,200 @@ func listCommits(root, since string) (commits []commit, mined bool) {
 	}
 
 	return commits, true
+}
+
+var (
+	// mergeSubjectRe reads the pull-request number and head ref off a
+	// merge commit's subject — GitHub's default wording.
+	mergeSubjectRe = regexp.MustCompile(`^Merge pull request #(\d+) from (\S+)`)
+	// mergeBranchRe reads the branch off a plain `git merge` subject —
+	// the local-workflow twin, which carries no PR number.
+	mergeBranchRe = regexp.MustCompile(`^Merge branch '([^']+)'`)
+	// fixBranchRe recognizes a branch name that declares a fix.
+	fixBranchRe = regexp.MustCompile(`^(?:fix|bugfix|hotfix)/`)
+)
+
+// maxPRCommits bounds one merge's branch walk: past this, it is a
+// long-lived integration branch, not a reviewable pull request, and
+// attributing its commits to one PR would be noise.
+const maxPRCommits = 200
+
+// mergeCommit is one merge parsed from the log: what it merged, from
+// which branch, for which pull request.
+type mergeCommit struct {
+	sha     string
+	ts      int64
+	subject string
+	body    string
+	pr      int      // 0 for local merges
+	branch  string   // head ref minus the owner segment; "" when unparseable
+	commits []string // the branch commits it brought in; nil when capped
+}
+
+// listMerges parses the windowed merge log. Squash-merge repos have no
+// merges — this is one cheap git call there. rev-list per merge names
+// exactly the commits the merge brought in, capped at maxPRCommits
+// (past the cap commits stays nil — the merge is an integration event,
+// not a reviewable change).
+func listMerges(root, since string) []mergeCommit {
+	out, err := gitOut(root, "log", "--merges", since, "--format=%H%x00%at%x00%s%x00%b%x1e")
+	if err != nil {
+		return nil
+	}
+
+	var merges []mergeCommit
+
+	for rec := range strings.SplitSeq(string(out), "\x1e") {
+		parts := strings.SplitN(strings.TrimLeft(rec, "\n"), "\x00", 4)
+		if len(parts) != 4 {
+			continue
+		}
+
+		ts, _ := strconv.ParseInt(parts[1], 10, 64)
+		m := mergeCommit{sha: parts[0], ts: ts,
+			subject: parts[2], body: strings.TrimSpace(parts[3])}
+
+		if g := mergeSubjectRe.FindStringSubmatch(m.subject); g != nil {
+			m.pr, _ = strconv.Atoi(g[1])
+			// The head ref is owner/branch; the branch may itself
+			// contain slashes (owner/fix/holiday-ux).
+			if _, branch, found := strings.Cut(g[2], "/"); found {
+				m.branch = branch
+			}
+		} else if g := mergeBranchRe.FindStringSubmatch(m.subject); g != nil {
+			m.branch = g[1]
+		} else {
+			continue // not a shape we can attribute
+		}
+
+		branch, err := gitOut(root, "rev-list", "--no-merges",
+			fmt.Sprintf("--max-count=%d", maxPRCommits+1), m.sha+"^1.."+m.sha+"^2")
+		if err != nil {
+			continue // an octopus or shallow edge; other merges still map
+		}
+
+		if shas := strings.Fields(string(branch)); len(shas) <= maxPRCommits {
+			m.commits = shas
+		}
+
+		merges = append(merges, m)
+	}
+
+	return merges
+}
+
+// resolveMembers backfills bySha with branch commits the windowed log
+// never saw (a branch merged today can carry commits committed before
+// the window opened). Only merges the branch tier could mine are worth
+// the lookup, and one git call covers them all. A failed lookup leaves
+// the shas unknown, which the caller treats as exclusion.
+func resolveMembers(root string, merges []mergeCommit, bySha map[string]commit) {
+	seen := map[string]bool{}
+
+	var missing []string
+
+	for _, m := range merges {
+		if !fixBranchRe.MatchString(m.branch) || choreRe.MatchString(m.branch) {
+			continue
+		}
+
+		for _, s := range m.commits {
+			if _, ok := bySha[s]; !ok && !seen[s] {
+				seen[s] = true
+
+				missing = append(missing, s)
+			}
+		}
+	}
+
+	if len(missing) == 0 {
+		return
+	}
+
+	out, err := gitOut(root, append([]string{"show", "-s", "--format=%H%x00%s%x00%b%x1e"},
+		missing...)...)
+	if err != nil {
+		return
+	}
+
+	for rec := range strings.SplitSeq(string(out), "\x1e") {
+		parts := strings.SplitN(strings.TrimLeft(rec, "\n"), "\x00", 3)
+		if len(parts) != 3 {
+			continue
+		}
+
+		c := commit{sha: parts[0], subject: parts[1], body: strings.TrimSpace(parts[2])}
+		c.source = Classify(c.subject, c.body)
+
+		bySha[c.sha] = c
+	}
+}
+
+// prMapOf recovers each branch commit's pull request from merge
+// topology: squash-merge repos carry the PR in every subject; merge-
+// commit repos carry it nowhere else. Measured on a real repo, every
+// fix finding had pr=0, so a review comment and the fix commit
+// answering it counted as two independent events — recurrence inflated
+// exactly where evidence was weakest.
+//
+// listMerges walks newest-first and later assignments overwrite, so a
+// commit reachable from several merges (a criss-cross) settles on the
+// OLDEST merge — the pull request that first landed it.
+func prMapOf(merges []mergeCommit) map[string]int {
+	prBySha := map[string]int{}
+
+	for _, m := range merges {
+		if m.pr == 0 {
+			continue
+		}
+
+		for _, s := range m.commits {
+			prBySha[s] = m.pr
+		}
+	}
+
+	return prBySha
+}
+
+// mergePatchID computes the stable patch identity of a merge's diff
+// against its first parent — how two backport merges of one change are
+// recognized as one event. "" on any failure: dedup degrades to
+// per-merge findings rather than aborting the tier.
+func mergePatchID(root, sha string) string {
+	diffCmd := exec.Command("git", "diff", sha+"^1", sha)
+	diffCmd.Dir = root
+
+	idCmd := exec.Command("git", "patch-id", "--stable")
+	idCmd.Dir = root
+
+	pipe, err := diffCmd.StdoutPipe()
+	if err != nil {
+		return ""
+	}
+
+	idCmd.Stdin = pipe
+
+	var id bytes.Buffer
+
+	idCmd.Stdout = &id
+
+	if err := diffCmd.Start(); err != nil {
+		return ""
+	}
+
+	if err := idCmd.Run(); err != nil {
+		_ = diffCmd.Wait()
+
+		return ""
+	}
+
+	_ = diffCmd.Wait()
+
+	if fields := strings.Fields(id.String()); len(fields) > 0 {
+		return fields[0]
+	}
+
+	return ""
 }
 
 // revertedShas returns commits later undone, over the whole history: a
@@ -260,14 +529,16 @@ func duplicatePatchShas(root, since string) map[string]bool {
 // buildFinding assembles the finding for one classified fix: primary
 // file, touched functions from the hunk headers, and a bounded patch
 // excerpt — the patch is the signal that survives useless messages.
-func buildFinding(root string, c commit) (model.Finding, bool) {
+// prMap supplies the merge-topology PR fallback; an explicit reference
+// in the message always wins over inference.
+func buildFinding(root string, c commit, prMap map[string]int) (model.Finding, bool) {
 	stat, err := gitOut(root, "show", "--format=", "--numstat", c.sha)
 	if err != nil {
 		return model.Finding{}, false
 	}
 
-	path, files := primaryFile(string(stat))
-	if path == "" || files > maxFilesPerFix {
+	paths, files := fixFiles(string(stat))
+	if len(paths) == 0 || files > maxFilesPerFix {
 		return model.Finding{}, false
 	}
 
@@ -276,35 +547,77 @@ func buildFinding(root string, c commit) (model.Finding, bool) {
 		return model.Finding{}, false
 	}
 
-	var b strings.Builder
-
-	fmt.Fprintf(&b, "fix commit %s\nsubject: %s\n", c.sha[:8], c.subject)
-
-	if c.body != "" {
-		fmt.Fprintf(&b, "%s\n", c.body)
-	}
-
-	if funcs := touchedFunctions(string(patch), 5); len(funcs) > 0 {
-		fmt.Fprintf(&b, "functions: %s\n", strings.Join(funcs, ", "))
-	}
-
-	fmt.Fprintf(&b, "patch:\n%s", trimPatch(string(patch), patchCap))
-
-	body := b.String()
-	if len(body) > bodyCap {
-		body = body[:bodyCap]
-	}
-
 	return model.Finding{
 		ID:        shaID(c.sha),
-		Path:      path,
-		PR:        prNumber(c.subject, c.body),
+		Path:      paths[0],
+		Paths:     paths,
+		PR:        commitPR(c, prMap),
 		Reviewer:  "human",
-		Body:      body,
+		Body:      assembleBody(c.sha, c.subject, c.body, string(patch)),
 		URL:       "",
 		CreatedAt: c.ts,
 		Source:    c.source,
 	}, true
+}
+
+// buildMergeFinding assembles the finding for a branch-declared fix:
+// the merge's whole diff against its first parent — what the pull
+// request changed — under the same caps as a single commit's patch.
+func buildMergeFinding(root string, m mergeCommit) (model.Finding, bool) {
+	stat, err := gitOut(root, "diff", "--numstat", m.sha+"^1", m.sha)
+	if err != nil {
+		return model.Finding{}, false
+	}
+
+	paths, files := fixFiles(string(stat))
+	if len(paths) == 0 || files > maxFilesPerFix {
+		return model.Finding{}, false
+	}
+
+	patch, err := gitOut(root, "diff", "--unified=1", m.sha+"^1", m.sha)
+	if err != nil {
+		return model.Finding{}, false
+	}
+
+	return model.Finding{
+		ID:        shaID(m.sha),
+		Path:      paths[0],
+		Paths:     paths,
+		PR:        m.pr,
+		Reviewer:  "human",
+		Body:      assembleBody(m.sha, m.subject, m.body, string(patch)),
+		URL:       "",
+		CreatedAt: m.ts,
+		Source:    model.SourceFixBranch,
+	}, true
+}
+
+// assembleBody renders a finding's stored text: header, message,
+// touched functions, bounded patch excerpt. Redaction runs before the
+// cap — commit messages and patches carry the credentials being
+// removed ("-DATABASE_URL=postgres://u:pass@…"), and a cap cut must
+// never expose the tail of a scrubbed secret.
+func assembleBody(sha, subject, msg, patch string) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "fix commit %s\nsubject: %s\n", sha[:8], subject)
+
+	if msg != "" {
+		fmt.Fprintf(&b, "%s\n", msg)
+	}
+
+	if funcs := touchedFunctions(patch, 5); len(funcs) > 0 {
+		fmt.Fprintf(&b, "functions: %s\n", strings.Join(funcs, ", "))
+	}
+
+	fmt.Fprintf(&b, "patch:\n%s", trimPatch(patch, patchCap))
+
+	body := redact.Secrets(b.String())
+	if len(body) > bodyCap {
+		body = body[:bodyCap]
+	}
+
+	return body
 }
 
 // skipDirs mirrors the indexer's never-worth-parsing set (kept local:
@@ -314,10 +627,31 @@ var skipDirs = map[string]bool{
 	"dist": true, "build": true,
 }
 
-// primaryFile picks the most-changed code file from --numstat output
-// and reports the total file count.
-func primaryFile(numstat string) (path string, files int) {
-	best, bestChurn := "", -1
+// maxFootprintPaths bounds a finding's stored path list: enough for
+// region inference to see the real change, without a wide fix bloating
+// the row.
+const maxFootprintPaths = 10
+
+// changedFile is one --numstat row that survived the skip list.
+type changedFile struct {
+	path  string
+	churn int
+}
+
+// fixFiles parses --numstat output into the commit's code footprint —
+// non-skipped files by churn (ties by path, so the order is stable) —
+// and reports the total file count for the bulk-commit cutoff.
+//
+// The FIRST entry is the semantic home: the most-changed file that is
+// neither a test nor documentation. Churn alone routinely elects the
+// test (a fix's test grows more lines than the fix — measured: every
+// fix-sourced proposal on a real repo carried a tests/ evidence path
+// and landed at region `*` because of it). Tests and docs stay in the
+// footprint as evidence; they just never lead it. When the commit
+// touches only tests and docs, the churn winner leads — a test-only
+// fix is legitimately about the tests.
+func fixFiles(numstat string) (paths []string, files int) {
+	var changed []changedFile
 
 	for line := range strings.SplitSeq(numstat, "\n") {
 		// Tab-delimited, not space: `1\t0\tpkg/my file.go` is one valid
@@ -338,12 +672,42 @@ func primaryFile(numstat string) (path string, files int) {
 		add, _ := strconv.Atoi(parts[0])
 		del, _ := strconv.Atoi(parts[1])
 
-		if churn := add + del; churn > bestChurn {
-			best, bestChurn = parts[2], churn
+		changed = append(changed, changedFile{path: parts[2], churn: add + del})
+	}
+
+	sort.Slice(changed, func(i, j int) bool {
+		if changed[i].churn != changed[j].churn {
+			return changed[i].churn > changed[j].churn
+		}
+
+		return changed[i].path < changed[j].path
+	})
+
+	lead := -1
+
+	for i, c := range changed {
+		if !model.IsTestPath(c.path) && !model.IsDocPath(c.path) {
+			lead = i
+
+			break
 		}
 	}
 
-	return best, files
+	if lead > 0 {
+		home := changed[lead]
+		changed = append(changed[:lead], changed[lead+1:]...)
+		changed = append([]changedFile{home}, changed...)
+	}
+
+	for _, c := range changed {
+		if len(paths) >= maxFootprintPaths {
+			break
+		}
+
+		paths = append(paths, c.path)
+	}
+
+	return paths, files
 }
 
 // touchedFunctions distills the hunk headers' function context.
@@ -391,6 +755,17 @@ func trimPatch(patch string, cap_ int) string {
 	}
 
 	return b.String()
+}
+
+// commitPR resolves a commit's pull request: the message's own
+// reference first (explicit beats inferred), then the merge-topology
+// map.
+func commitPR(c commit, prMap map[string]int) int {
+	if pr := prNumber(c.subject, c.body); pr > 0 {
+		return pr
+	}
+
+	return prMap[c.sha]
 }
 
 // prNumber extracts the PR (or linked issue) number — the cross-provider

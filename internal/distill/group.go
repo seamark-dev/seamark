@@ -23,8 +23,10 @@ package distill
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"path"
 	"regexp"
 	"sort"
@@ -76,9 +78,9 @@ type lexicalGrouper struct {
 // but drops the pooled-state theme to 6/8 then 5/8 members, sacrificing
 // exactly the cross-wording recall this package exists for. 2 keeps the
 // benchmark at 8/8 and accepts one large weak-link component that the
-// size cap turns into bounded, id-ordered (≈chronological) batches. A
-// smarter Grouper (two-tier edge strength, embeddings) is the upgrade
-// path if mixed batches prove to dilute distillation quality.
+// size cap turns into bounded, id-hash-bucketed batches. A smarter
+// Grouper (two-tier edge strength, embeddings) is the upgrade path if
+// mixed batches prove to dilute distillation quality.
 func NewLexicalGrouper() Grouper {
 	return &lexicalGrouper{minShared: 2, maxDocFrac: 0.10, maxGroup: 40}
 }
@@ -193,35 +195,114 @@ func (g *lexicalGrouper) Group(findings []model.Finding) []Group {
 }
 
 // splitOversized turns one theme component into groups within the size
-// cap. The component is already thematically coherent, so plain id-order
-// slices are fine — and, unlike a split by directory, they cannot strand
-// a member whose file happens to sit alone in its directory.
+// cap. The component is already thematically coherent, so any cut is
+// fine for reading — but NOT for the signature economics: cutting by
+// position means one new low-id member shifts every boundary, every
+// slice signature churns, and the whole component is re-read and
+// re-billed (measured: two different runs each minted a proposal from
+// the same evidence subset that way). Members are therefore bucketed by
+// a hash of their id — a new finding perturbs exactly its own bucket.
 func (g *lexicalGrouper) splitOversized(fs []model.Finding) []Group {
 	var out []Group
 
-	for _, slice := range slices(fs, g.maxGroup) {
-		out = append(out, makeGroup(slice))
+	for _, part := range g.bounded(fs) {
+		out = append(out, makeGroup(part))
 	}
 
 	return out
 }
 
 // areaGroups buckets thematically unconnected findings by directory —
-// full coverage even where token overlap saw nothing. Buckets of one
-// are dropped: a singleton has no recurrence to distill, and its
-// signature will change the moment a neighbor arrives.
+// full coverage even where token overlap saw nothing. Directories of
+// one are dropped: a singleton has no recurrence to distill, and its
+// signature will change the moment a neighbor arrives. Oversized
+// directories split through the same stable bucketing as theme
+// components — a hot directory grows constantly, which is exactly when
+// positional cuts would churn every signature it has.
 func (g *lexicalGrouper) areaGroups(byDir map[string][]model.Finding) []Group {
 	var out []Group
 
 	for _, dir := range sortedKeys(byDir) {
-		for _, slice := range slices(byDir[dir], g.maxGroup) {
-			if len(slice) >= 2 {
-				out = append(out, makeGroup(slice))
-			}
+		if len(byDir[dir]) < 2 {
+			continue
+		}
+
+		for _, part := range g.bounded(byDir[dir]) {
+			out = append(out, makeGroup(part))
 		}
 	}
 
 	return out
+}
+
+// bounded cuts an oversized set into id-hash buckets of at most
+// maxGroup members. The bucket count is a power of two, so it only
+// changes when the set crosses a doubling boundary — growth between
+// boundaries touches one bucket, and today's re-bill-everything is the
+// new worst case, paid logarithmically rarely instead of per finding.
+func (g *lexicalGrouper) bounded(fs []model.Finding) [][]model.Finding {
+	if len(fs) <= g.maxGroup {
+		return [][]model.Finding{fs}
+	}
+
+	k := 1
+	for k*g.maxGroup < len(fs) {
+		k <<= 1
+	}
+
+	buckets := make([][]model.Finding, k)
+
+	for _, f := range fs {
+		i := idBucket(f.ID, k)
+		buckets[i] = append(buckets[i], f)
+	}
+
+	// A singleton bucket would be dropped downstream as "no
+	// recurrence" — but its member HAS company in this set, and a
+	// finding with company must never be lost to an accident of
+	// hashing. Merge it into the lowest-indexed other occupied bucket.
+	for i, b := range buckets {
+		if len(b) != 1 {
+			continue
+		}
+
+		for j := range buckets {
+			if j != i && len(buckets[j]) > 0 {
+				buckets[j] = append(buckets[j], b[0])
+				buckets[i] = nil
+
+				break
+			}
+		}
+	}
+
+	var out [][]model.Finding
+
+	for _, b := range buckets {
+		if len(b) == 0 {
+			continue
+		}
+
+		// Hash skew can overfill a bucket; the positional split stays
+		// confined to that one bucket.
+		out = append(out, slices(b, g.maxGroup)...)
+	}
+
+	return out
+}
+
+// idBucket hashes a finding id into one of k buckets. FNV-1a keeps the
+// spread uniform for both id shapes in the corpus: sequential GitHub
+// comment ids and sha-derived fix ids.
+func idBucket(id int64, k int) int {
+	h := fnv.New64a()
+
+	var buf [8]byte
+
+	binary.BigEndian.PutUint64(buf[:], uint64(id))
+	_, _ = h.Write(buf[:])
+
+	return int(h.Sum64() % uint64(k))
 }
 
 // makeGroup assembles a Group: members by id, common region, signature.

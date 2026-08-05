@@ -200,6 +200,45 @@ func gitHeaderPath(line string) string {
 	return ""
 }
 
+// ChangedPaths lists the repo-relative files a unified diff touches, in
+// first-appearance order — the same header parsing EvalDiff trusts, so
+// an advisory surface (lessons on `check`) can never disagree with the
+// verdict about which files changed.
+func ChangedPaths(diffText string) []string {
+	seen := map[string]bool{}
+
+	var out []string
+
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+
+	oldFile := ""
+
+	for line := range strings.SplitSeq(diffText, "\n") {
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			oldFile = ""
+			add(gitHeaderPath(line))
+		case strings.HasPrefix(line, "rename to "):
+			add(diffHeaderPath(strings.TrimPrefix(line, "rename to "), ""))
+		case strings.HasPrefix(line, "--- "):
+			oldFile = diffHeaderPath(line[4:], "a/")
+		case strings.HasPrefix(line, "+++ "):
+			if p := diffHeaderPath(line[4:], "b/"); p != "" {
+				add(p)
+			} else {
+				add(oldFile) // whole-file deletion: the old path vanished
+			}
+		}
+	}
+
+	return out
+}
+
 // diffHeaderPath extracts the repo-relative path from a "---"/"+++"
 // header value (prefix "a/" or "b/" respectively). Git appends a TAB to
 // paths containing spaces and C-quotes paths with special characters —

@@ -12,6 +12,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/wording"
 )
 
 // promptVersion stamps proposals with the prompt they came from, so a
@@ -465,11 +466,7 @@ FINDINGS (quoted data):
 // that wrap their reply despite instructions.
 var fencedJSONRe = regexp.MustCompile("(?s)```(?:json)?\\s*(\\{.*\\})\\s*```")
 
-// ruleCleanRe reduces a rule label to pin-safe kebab.
-var ruleCleanRe = regexp.MustCompile(`[^a-z0-9-]+`)
-
 const (
-	maxRuleLen  = 40
 	maxNoteLen  = 300
 	maxPerGroup = 5
 	// minCitedEvents is the recurrence bar, counted in events rather
@@ -477,28 +474,9 @@ const (
 	minCitedEvents = 2
 )
 
-// CountEvents collapses cited findings into distinct events: findings
-// sharing a pull request are one event (the review comment and the fix
-// commit that answered it), while findings without a pr number are
-// independent. The prompt states this rule; validation enforces it,
-// because the model's arithmetic is not evidence — the same reason
-// cited ids are checked against the group rather than trusted. Exported
-// so the report counts a proposal's evidence exactly as the recurrence
-// bar did.
-func CountEvents(cited []model.Finding) int {
-	events := map[string]bool{}
-
-	for _, f := range cited {
-		key := fmt.Sprintf("id:%d", f.ID)
-		if f.PR > 0 {
-			key = fmt.Sprintf("pr:%d", f.PR)
-		}
-
-		events[key] = true
-	}
-
-	return len(events)
-}
+// CountEvents re-exports model.CountEvents — the recurrence bar counts
+// events, and older callers reach it through the distill package.
+func CountEvents(cited []model.Finding) int { return model.CountEvents(cited) }
 
 // parseReply validates the agent's output into proposals. The contract
 // is cite-or-die: every pattern must cite ≥2 finding ids that really
@@ -550,7 +528,7 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 			}
 		}
 
-		rule := cleanRule(p.Rule)
+		rule := wording.CleanRule(p.Rule)
 		note := strings.TrimSpace(p.Note)
 
 		if rule == "" || note == "" || CountEvents(cited) < minCitedEvents {
@@ -561,10 +539,20 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 			note = strings.TrimSpace(note[:maxNoteLen])
 		}
 
+		// Region set from evidence coverage, never from the reply — the
+		// model cites findings; where they live is checked arithmetic.
+		regions := CoverageRegions(cited)
+
+		region := ""
+		if len(regions) > 0 {
+			region = regions[0]
+		}
+
 		out = append(out, model.Proposal{
 			Signature: g.Signature,
 			Rule:      rule,
-			Region:    commonDir(cited),
+			Region:    region,
+			Regions:   regions,
 			Note:      note,
 			Members:   ids,
 			Agent:     agentName + "/" + promptVersion,
@@ -574,20 +562,6 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 	}
 
 	return out, nil
-}
-
-// cleanRule normalizes a label to pin-safe kebab-case.
-func cleanRule(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.ReplaceAll(s, " ", "-")
-	s = ruleCleanRe.ReplaceAllString(s, "")
-	s = strings.Trim(s, "-")
-
-	if len(s) > maxRuleLen {
-		s = strings.Trim(s[:maxRuleLen], "-")
-	}
-
-	return s
 }
 
 // sourceLabel names a finding's provider for the prompt; the empty

@@ -1,11 +1,11 @@
 package distill
 
 import (
-	"regexp"
-	"strings"
+	"sort"
 
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/wording"
 )
 
 // Deduplication of PROPOSALS, distinct from the deduplication of
@@ -17,120 +17,29 @@ import (
 // something already pinned, and the edit hook's injection budget was
 // spending its slots on near-identical guidance.
 //
-// The check is deterministic and free: no agent call is needed to see
-// that two short rules say the same thing. Thresholds were calibrated
-// against that repo's real pins — every hand-identified duplicate
-// cluster is caught, and no distinct pin is merged.
+// Two checks run, both deterministic and free, in order of strength:
+//
+//  1. Evidence identity. Group signatures churn as the corpus grows
+//     (slice boundaries move), so two different groups can cite the
+//     same finding subset — measured: two applied pins with
+//     byte-identical member lists whose wordings shared almost nothing
+//     ("run-linters-before-commit" / "lint-clean-before-push"). EQUAL
+//     citation sets are one pattern, whatever the words say. Equality
+//     only, never containment: one finding can flag two mistakes, so a
+//     subset is legitimate distinct evidence — and a wrong suppression
+//     is persistent (the group is marked distilled), while a missed
+//     duplicate stays visible and prunable.
+//  2. Wording (internal/wording): no agent call is needed to see that
+//     two short rules say the same thing.
 
-const (
-	ruleOverlap = 0.40 // rule labels alone are conclusive at this overlap
-	noteOverlap = 0.30 // …or the guidance text is
-	// Weaker agreement in BOTH counts as duplication: differently-named
-	// rules whose notes rhyme (leaky-error-payloads vs
-	// no-internal-details-in-client-errors).
-	ruleWeak = 0.25
-	noteWeak = 0.18
-)
-
-var wordRe = regexp.MustCompile(`[a-z]+`)
-
-// stopWords carry no topic: they inflate overlap between unrelated
-// rules and hide it between related ones.
-var stopWords = map[string]bool{
-	"the": true, "and": true, "for": true, "with": true, "when": true, "never": true,
-	"always": true, "must": true, "not": true, "dont": true, "are": true, "this": true,
-	"that": true, "from": true, "into": true, "before": true, "after": true, "use": true,
-	"using": true, "set": true, "get": true, "make": true, "sure": true, "keep": true,
-	"only": true, "same": true, "its": true, "their": true, "them": true, "they": true,
-	"you": true, "your": true, "our": true, "any": true, "all": true, "each": true,
-	"every": true, "than": true, "then": true, "instead": true, "rather": true,
-}
-
-// words tokenizes text into topic words of at least minLen length, with
-// plurals folded: "error" and "errors" are one topic, and rules about
-// the same mistake routinely disagree on number ("leaky-error-payloads"
-// vs "no-internal-details-in-client-errors" shared nothing until this).
-func words(s string, minLen int) map[string]bool {
-	out := map[string]bool{}
-
-	for _, w := range wordRe.FindAllString(strings.ToLower(s), -1) {
-		if len(w) > 4 && strings.HasSuffix(w, "s") && !strings.HasSuffix(w, "ss") {
-			w = w[:len(w)-1]
-		}
-
-		if len(w) > minLen && !stopWords[w] {
-			out[w] = true
-		}
-	}
-
-	return out
-}
-
-// jaccard is the overlap of two token sets, 0 when either is empty.
-func jaccard(a, b map[string]bool) float64 {
-	if len(a) == 0 || len(b) == 0 {
-		return 0
-	}
-
-	shared := 0
-
-	for w := range a {
-		if b[w] {
-			shared++
-		}
-	}
-
-	return float64(shared) / float64(len(a)+len(b)-shared)
-}
-
-// topic is the comparable form of one pattern: its label and guidance
-// reduced to topic words, plus the region it governs.
-type topic struct {
-	label  string
-	region string
-	rule   map[string]bool
-	note   map[string]bool
-}
-
-func newTopic(rule, note string) topic {
-	return topic{
-		// The label is echoed back — into an agent prompt and onto a
-		// terminal — so it is normalized to the same kebab slug the
-		// distiller's own rules get. Pins are hand-written in committed
-		// config, which on a cloned or contributed-to repo is no more
-		// trusted than a review comment: unnormalized, a multiline rule
-		// would inject lines into the prompt's instruction block and a
-		// long one would blow the primer budget the label cap exists to
-		// bound. cleanRule strips everything but [a-z0-9-] and caps the
-		// length, so both are structurally impossible.
-		label: cleanRule(rule),
-		// Matching still reads the raw text: words() lowercases and
-		// drops punctuation itself, so normalization changes nothing
-		// about which patterns are judged to restate each other.
-		rule: words(strings.ReplaceAll(rule, "-", " "), 2),
-		note: words(note, 3),
-	}
-}
-
-// minNoteWords is how much guidance text a note needs before its
-// overlap means anything: two four-word notes sharing one incidental
-// word score 0.3 on pure arithmetic and say nothing to a reader.
-const minNoteWords = 4
-
-// restates reports whether two patterns say the same thing.
-func (t topic) restates(o topic) bool {
-	r := jaccard(t.rule, o.rule)
-	if r >= ruleOverlap {
-		return true
-	}
-
-	if len(t.note) < minNoteWords || len(o.note) < minNoteWords {
-		return false // too little prose to judge; the labels already disagreed
-	}
-
-	n := jaccard(t.note, o.note)
-
-	return n >= noteOverlap || (r >= ruleWeak && n >= noteWeak)
+// entry is one known pattern: its comparable wording, the regions it
+// governs (nil = repo-wide), and the evidence it cited (empty for
+// config pins).
+type entry struct {
+	topic     wording.Topic
+	regions   []string
+	signature string  // evidence group that produced it; "" for config pins
+	members   []int64 // sorted; nil when the pattern cites no findings
 }
 
 // Known is the set of patterns already captured: every pin in
@@ -139,7 +48,7 @@ func (t topic) restates(o topic) bool {
 // news — including one the user dismissed, since a dismissal is a
 // decision the distiller must not relitigate.
 type Known struct {
-	topics []topic
+	entries []entry
 }
 
 // NewKnown builds the set. Pins arrive as Proposals carrying just Rule
@@ -159,9 +68,12 @@ func NewKnown(patterns ...[]model.Proposal) *Known {
 // Add records a pattern as known — used as a run proceeds, so two
 // groups in the same pass cannot both propose the same thing.
 func (k *Known) Add(p model.Proposal) {
-	t := newTopic(p.Rule, p.Note)
-	t.region = p.Region
-	k.topics = append(k.topics, t)
+	k.entries = append(k.entries, entry{
+		topic:     wording.New(p.Rule, p.Note),
+		regions:   p.RegionSet(),
+		signature: p.Signature,
+		members:   sortedIDs(p.Members),
+	})
 }
 
 // Labels lists the rule names already captured for an area, newest
@@ -174,48 +86,120 @@ func (k *Known) Labels(region string, limit int) []string {
 
 	seen := map[string]bool{}
 
-	for _, t := range k.topics {
+	for _, e := range k.entries {
 		if len(out) >= limit {
 			break
 		}
 
-		if t.label == "" || seen[t.label] || !governs(t.region, region) {
+		label := e.topic.Label()
+		if label == "" || seen[label] || !governs(e.regions, region) {
 			continue
 		}
 
-		seen[t.label] = true
-		out = append(out, t.label)
+		seen[label] = true
+		out = append(out, label)
 	}
 
 	return out
 }
 
-// governs reports whether a pattern pinned at pinRegion bears on work
-// in groupRegion. Repo-wide pins always do; otherwise either may
-// contain the other — a pin on api/services is worth knowing about
-// when distilling api, and vice versa. A cross-tree group (no common
-// region) sees everything, which the caller's limit bounds.
-func governs(pinRegion, groupRegion string) bool {
-	if pinRegion == "" || pinRegion == "*" || groupRegion == "" {
+// governs reports whether a pattern pinned at pinRegions bears on work
+// in groupRegion. Repo-wide pins (nil) always do; otherwise any of the
+// pin's regions may contain or be contained by the group's — a pin on
+// api/services is worth knowing about when distilling api, and vice
+// versa. A cross-tree group (no common region) sees everything, which
+// the caller's limit bounds.
+func governs(pinRegions []string, groupRegion string) bool {
+	if len(pinRegions) == 0 || groupRegion == "" {
 		return true
 	}
 
-	return reviews.RegionMatches(pinRegion, groupRegion) ||
-		reviews.RegionMatches(groupRegion, pinRegion)
+	for _, r := range pinRegions {
+		if reviews.RegionMatches(r, groupRegion) ||
+			reviews.RegionMatches(groupRegion, r) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Restated returns the label of the known pattern p duplicates, and
-// whether it duplicates one at all.
+// whether it duplicates one at all. Evidence identity is checked
+// before wording: it is the stronger claim, and it catches the pairs
+// wording cannot.
+//
+// Identity deliberately skips patterns from p's own reply batch (same
+// signature): one finding can flag two mistakes, so a model reading a
+// group may honestly cite the same members for distinct patterns — the
+// wording check still guards that batch against padding. Across
+// batches the same citations mean the corpus was re-carved and the
+// theme re-derived, which is exactly the duplication to stop.
 func (k *Known) Restated(p model.Proposal) (string, bool) {
-	t := newTopic(p.Rule, p.Note)
+	if mine := sortedIDs(p.Members); mine != nil {
+		for _, e := range k.entries {
+			if sameBatch(p.Signature, e.signature) {
+				continue
+			}
 
-	for _, known := range k.topics {
-		if t.restates(known) {
-			return known.label, true
+			if evidenceEqual(mine, e.members) {
+				return e.topic.Label(), true
+			}
+		}
+	}
+
+	t := wording.New(p.Rule, p.Note)
+
+	for _, e := range k.entries {
+		if t.Restates(e.topic) {
+			return e.topic.Label(), true
 		}
 	}
 
 	return "", false
+}
+
+// sameBatch reports whether two signatures name the same reply batch.
+// Empty signatures never match: a pattern with no batch has no
+// batch-mates.
+func sameBatch(a, b string) bool {
+	return a != "" && a == b
+}
+
+// sortedIDs returns a sorted copy of ids, nil when there are none —
+// the comparable form evidenceEqual expects.
+func sortedIDs(ids []int64) []int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	out := make([]int64, len(ids))
+	copy(out, ids)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+
+	return out
+}
+
+// evidenceEqual reports whether two citation sets are identical. Two
+// patterns drawn from exactly the same evidence in different batches
+// are one pattern re-derived — the measured duplication shape. Strict
+// containment deliberately does NOT count: a subset can be a different
+// mistake the same findings also flag, and suppressing it would mark
+// its group distilled with the lesson unextracted. Both slices must be
+// sorted; either being empty never matches — a config pin cites
+// nothing and identity says nothing about it.
+func evidenceEqual(a, b []int64) bool {
+	if len(a) == 0 || len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Clusters groups patterns that restate each other, largest first;
@@ -237,14 +221,23 @@ func Clusters(ps []model.Proposal) [][]model.Proposal {
 		return x
 	}
 
-	topics := make([]topic, len(ps))
+	topics := make([]wording.Topic, len(ps))
+	sets := make([][]int64, len(ps))
+
 	for i, p := range ps {
-		topics[i] = newTopic(p.Rule, p.Note)
+		topics[i] = wording.New(p.Rule, p.Note)
+		sets[i] = sortedIDs(p.Members)
 	}
 
 	for i := range ps {
 		for j := i + 1; j < len(ps); j++ {
-			if topics[i].restates(topics[j]) {
+			// Same rules as Restated: equal evidence is conclusive even
+			// when the wordings share nothing — except inside one reply
+			// batch, where shared citations are legitimate.
+			rederived := !sameBatch(ps[i].Signature, ps[j].Signature) &&
+				evidenceEqual(sets[i], sets[j])
+
+			if topics[i].Restates(topics[j]) || rederived {
 				parent[find(i)] = find(j)
 			}
 		}

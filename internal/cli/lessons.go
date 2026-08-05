@@ -4,18 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/seamark-dev/seamark/internal/agent"
+	"github.com/seamark-dev/seamark/internal/confidence"
 	"github.com/seamark-dev/seamark/internal/distill"
-	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/reviews"
@@ -36,6 +39,7 @@ func newLessonsCmd(opts *options) *cobra.Command {
 		applyIDs     string
 		dismissIDs   string
 		pruneIDs     string
+		retargetIDs  string
 	)
 
 	cmd := &cobra.Command{
@@ -74,6 +78,11 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    dismissal: the theme stays pinned by its survivor, so
                    the distiller still counts it as known. Edits
                    lessons.yaml only with distill.write, like --apply.
+  --retarget p3    update an applied pin's regions to what today's
+                   inference computes from its living evidence (the
+                   --proposals ledger names the candidates). Edits
+                   lessons.yaml and the ledger together; write-gated
+                   like --apply, else prints the block.
   --hook           read a Claude Code PreToolUse payload from stdin and emit
                    the edited file's lessons as additionalContext
 
@@ -93,14 +102,14 @@ a file has no lessons.`,
 			// everything (positional ids included) to whichever the
 			// switch reaches first.
 			decisions := 0
-			for _, ids := range []string{applyIDs, dismissIDs, pruneIDs} {
+			for _, ids := range []string{applyIDs, dismissIDs, pruneIDs, retargetIDs} {
 				if strings.TrimSpace(ids) != "" {
 					decisions++
 				}
 			}
 
 			if decisions > 1 {
-				return fmt.Errorf("--apply, --dismiss and --prune are different decisions — run them one at a time")
+				return fmt.Errorf("--apply, --dismiss, --prune and --retarget are different decisions — run them one at a time")
 			}
 
 			// `--apply p1, p2` is natural typing; the shell splits the
@@ -120,6 +129,8 @@ a file has no lessons.`,
 				return runLessonsDismiss(cmd, opts, dismissIDs+","+extra)
 			case strings.TrimSpace(pruneIDs) != "":
 				return runLessonsPrune(cmd, opts, pruneIDs+","+extra)
+			case strings.TrimSpace(retargetIDs) != "":
+				return runLessonsRetarget(cmd, opts, retargetIDs+","+extra)
 			case proposalList:
 				return runLessonsProposals(cmd, opts)
 			case distillRun:
@@ -167,6 +178,8 @@ a file has no lessons.`,
 		"dismiss proposals by id or range (p2 or p1..p9) — remembered, never re-proposed for the same evidence")
 	cmd.Flags().StringVar(&pruneIDs, "prune", "",
 		"remove applied pins that restate another (p16,p45) — the theme stays pinned by its survivor")
+	cmd.Flags().StringVar(&retargetIDs, "retarget", "",
+		"update applied pins to the regions today's inference computes (p3,p7) — lessons.yaml and the ledger together, write-gated like --apply")
 
 	return cmd
 }
@@ -406,7 +419,7 @@ func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
 	ids := make([]int64, len(ps))
 
 	for i, p := range ps {
-		keys[i] = distill.PinKey{Rule: p.Rule, Region: p.Region}
+		keys[i] = distill.NewPinKey(p.Rule, p.Region, p.Regions)
 		ids[i] = p.ID
 	}
 
@@ -433,7 +446,25 @@ func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
 		return err
 	}
 
-	n, err := st.SupersedeProposals(ids)
+	// Supersede ONLY what actually left the file: a pin the textual
+	// edit could not find (already pruned by hand, or an exotic layout)
+	// must keep its applied status, or the database says "not pinned"
+	// while lessons.yaml still carries the entry — and liveness,
+	// coverage, and the audit all reason from that lie.
+	removedKeys := make(map[distill.PinKey]bool, len(removed))
+	for _, k := range removed {
+		removedKeys[k] = true
+	}
+
+	var removedIDs []int64
+
+	for i, p := range ps {
+		if removedKeys[keys[i]] {
+			removedIDs = append(removedIDs, p.ID)
+		}
+	}
+
+	n, err := st.SupersedeProposals(removedIDs)
 	if err != nil {
 		return err
 	}
@@ -446,7 +477,7 @@ func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
 	}
 
 	if len(removed) < len(ps) {
-		fmt.Fprintf(out, "(%d were already absent from the file)\n", len(ps)-len(removed))
+		fmt.Fprintf(out, "(%d were not found in the file and keep their applied status)\n", len(ps)-len(removed))
 	}
 
 	return nil
@@ -490,7 +521,7 @@ func runLessonsDismiss(cmd *cobra.Command, opts *options, raw string) error {
 // offline: the plan view costs an agent call when new groups exist, so
 // "what is waiting for me?" needs a way to ask for free.
 func runLessonsProposals(cmd *cobra.Command, opts *options) error {
-	st, _, err := openIndex(opts)
+	st, root, err := openIndex(opts)
 	if err != nil {
 		return err
 	}
@@ -506,12 +537,81 @@ func runLessonsProposals(cmd *cobra.Command, opts *options) error {
 		}
 	}
 
+	health, err := proposalHealth(st, root, append(states[0], states[1]...))
+	if err != nil {
+		return err
+	}
+
 	// Applied pins are the ones that cost context on every edit, so the
 	// duplicate audit runs over them.
 	report.PrintProposalLedger(cmd.OutOrStdout(), states[0], states[1], states[2],
-		distill.Clusters(states[1]))
+		distill.Clusters(states[1]), health)
 
 	return nil
+}
+
+// proposalHealth re-judges proposals under TODAY'S rules (RFC-002 §7):
+// confidence tier over living evidence, the prompt era when the row
+// predates the recurrence rules, and the regions current inference
+// would assign. Purely derived — recomputed on every ask, stored
+// nowhere, acted on only by explicit commands.
+func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int64]report.ProposalHealth, error) {
+	if len(ps) == 0 {
+		return nil, nil
+	}
+
+	var cited []int64
+
+	for _, p := range ps {
+		cited = append(cited, p.Members...)
+	}
+
+	meta, err := st.FindingsMetaByIDs(cited)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	out := make(map[int64]report.ProposalHealth, len(ps))
+
+	for _, p := range ps {
+		tier, facts := confidence.Assess(p, meta, root, now)
+
+		h := report.ProposalHealth{Tier: tier.String(), Facts: facts.Line()}
+
+		if strings.HasSuffix(p.Agent, "/v1") {
+			h.Era = "distilled under prompt v1, before the same-PR-counts-once rule"
+		}
+
+		var living []model.Finding
+
+		for _, id := range p.Members {
+			if f, ok := meta[id]; ok {
+				living = append(living, f)
+			}
+		}
+
+		if len(living) > 0 {
+			recomputed := distill.CoverageRegions(living)
+
+			if !regionSetsEqual(recomputed, p.RegionSet()) {
+				h.Retarget = strings.Join(recomputed, ", ")
+				if h.Retarget == "" {
+					h.Retarget = "*"
+				}
+			}
+		}
+
+		out[p.ID] = h
+	}
+
+	return out, nil
+}
+
+// regionSetsEqual compares two region sets order-insensitively, the
+// same equivalence the pin identity uses.
+func regionSetsEqual(a, b []string) bool {
+	return reviews.NewPinKey("x", "", a) == reviews.NewPinKey("x", "", b)
 }
 
 // runLessonsDistill executes the plan half of Tier 2: read new evidence
@@ -568,7 +668,10 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 
 	pins := make([]model.Proposal, 0, len(lcfg.Pin))
 	for _, p := range lcfg.Pin {
-		pins = append(pins, model.Proposal{Rule: p.Rule, Note: p.Note, Region: p.Region})
+		// AllRegions resolves the union once at the boundary, so a
+		// hand-written pin carrying both keys governs everywhere it says.
+		pins = append(pins, model.Proposal{
+			Rule: p.Rule, Note: p.Note, Region: p.Region, Regions: p.AllRegions()})
 	}
 
 	dopts := distill.Options{
@@ -642,7 +745,7 @@ func printPreflight(w io.Writer, pf distill.Preflight, dryRun bool) {
 	fmt.Fprintf(w, "distill preflight — what leaves this machine\n")
 	fmt.Fprintf(w, "  agent     %s  (your CLI, chosen by .seamark/config.yaml; assumed to reach\n"+
 		"            a remote model service)\n",
-		render.Sanitize(gate.RedactSecrets(strings.Join(pf.Agent, " "))))
+		render.Sanitize(redact.Secrets(strings.Join(pf.Agent, " "))))
 
 	if len(pf.Groups) == 0 {
 		fmt.Fprintf(w, "  payload   nothing — every evidence group has already been distilled\n")
@@ -860,4 +963,243 @@ func openIndexQuiet(opts *options) (*store.Store, string, error) {
 	}
 
 	return st, root, nil
+}
+
+// runLessonsRetarget updates applied pins to the regions today's
+// inference computes from their living evidence — the upgrade path for
+// pins distilled before region sets (or whose evidence moved). The
+// YAML entry and the ledger row change together or not at all: a pin
+// identity that exists in only one of them breaks liveness, coverage,
+// and pruning.
+func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
+	st, root, err := openIndex(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	applied, err := st.Proposals(model.ProposalApplied)
+	if err != nil {
+		return err
+	}
+
+	ps, err := resolveSelection(applied, raw, "applied")
+	if err != nil {
+		return err
+	}
+
+	out := cmd.OutOrStdout()
+
+	var cited []int64
+
+	for _, p := range ps {
+		cited = append(cited, p.Members...)
+	}
+
+	meta, err := st.FindingsMetaByIDs(cited)
+	if err != nil {
+		return err
+	}
+
+	// The retarget plan: proposals whose recomputed regions differ,
+	// with the updated row ready to write.
+	var (
+		updated []model.Proposal
+		oldKeys []distill.PinKey
+	)
+
+	for _, p := range ps {
+		var living []model.Finding
+
+		for _, id := range p.Members {
+			if f, ok := meta[id]; ok {
+				living = append(living, f)
+			}
+		}
+
+		if len(living) == 0 {
+			fmt.Fprintf(out, "  p%-4d %s — evidence aged out; nothing to recompute from (prune instead?)\n",
+				p.ID, render.Sanitize(p.Rule))
+
+			continue
+		}
+
+		regions := distill.CoverageRegions(living)
+		if regionSetsEqual(regions, p.RegionSet()) {
+			fmt.Fprintf(out, "  p%-4d %s — regions already current\n", p.ID, render.Sanitize(p.Rule))
+
+			continue
+		}
+
+		next := p
+		next.Regions = regions
+		next.Region = ""
+
+		if len(regions) > 0 {
+			next.Region = regions[0]
+		}
+
+		updated = append(updated, next)
+		oldKeys = append(oldKeys, distill.NewPinKey(p.Rule, p.Region, p.Regions))
+	}
+
+	if len(updated) == 0 {
+		fmt.Fprintln(out, "nothing to retarget")
+
+		return nil
+	}
+
+	cfg, err := distill.LoadConfig(root)
+	if err != nil {
+		return err
+	}
+
+	if !cfg.Distill.Write {
+		block, err := distill.RenderPins(updated)
+		if err != nil {
+			return err
+		}
+
+		fmt.Fprintf(out, "distill.write is off in .seamark/config.yaml — replace these pins in "+
+			".seamark/lessons.yaml by hand:\n\n%s\n(nothing was changed; enable distill.write "+
+			"to let retarget edit the file and the ledger together)\n", block)
+
+		return nil
+	}
+
+	// Self-heal first: a crash between an earlier retarget's file write
+	// and its ledger update leaves the NEW pin in lessons.yaml with the
+	// OLD regions in the database. Those need only the ledger half —
+	// touching the file again would fail to find the old key forever.
+	lcfg, lerr := reviews.LoadConfig(root)
+
+	var fileOps, dbOnly []model.Proposal
+
+	var fileOpKeys []distill.PinKey
+
+	for i, p := range updated {
+		newKey := distill.NewPinKey(p.Rule, p.Region, p.Regions)
+
+		if lerr == nil && pinKeyLive(lcfg, newKey) && !pinKeyLive(lcfg, oldKeys[i]) {
+			dbOnly = append(dbOnly, p)
+
+			continue
+		}
+
+		fileOps = append(fileOps, p)
+		fileOpKeys = append(fileOpKeys, oldKeys[i])
+	}
+
+	// Capture the file EXACTLY as it is: any failure past the removal
+	// restores these bytes, so file and ledger move together or not at
+	// all.
+	lessonsPath := filepath.Join(root, ".seamark", "lessons.yaml")
+	orig, origErr := os.ReadFile(lessonsPath)
+
+	// The restored file must keep the user's permissions, not gain ours.
+	origMode := os.FileMode(0o644)
+	if st, err := os.Stat(lessonsPath); err == nil {
+		origMode = st.Mode().Perm()
+	}
+
+	restore := func() {
+		if origErr == nil {
+			if werr := os.WriteFile(lessonsPath, orig, origMode); werr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"seamark: could not restore lessons.yaml (%v) — recover it from git\n", werr)
+			}
+		}
+	}
+
+	var apply []model.Proposal
+
+	if len(fileOps) > 0 {
+		removed, err := distill.RemovePins(root, fileOpKeys)
+		if err != nil {
+			// RemovePins usually fails before touching the file, but a
+			// write cut short (disk full) leaves it mangled — restoring
+			// the captured bytes is a no-op in the first case and the
+			// rescue in the second.
+			restore()
+
+			return err
+		}
+
+		removedSet := make(map[distill.PinKey]bool, len(removed))
+		for _, k := range removed {
+			removedSet[k] = true
+		}
+
+		// Only pins that actually left the file get the new entry and
+		// the ledger update — same one-sided-edit refusal as prune.
+		for i, p := range fileOps {
+			if removedSet[fileOpKeys[i]] {
+				apply = append(apply, p)
+			} else {
+				fmt.Fprintf(out, "  p%-4d %s — not found in lessons.yaml; left untouched\n",
+					p.ID, render.Sanitize(p.Rule))
+			}
+		}
+
+		if len(apply) > 0 {
+			if err := distill.ApplyPins(root, apply); err != nil {
+				restore()
+
+				return fmt.Errorf("retarget aborted, lessons.yaml restored: %w", err)
+			}
+		}
+	}
+
+	batch := make([]model.Proposal, 0, len(apply)+len(dbOnly))
+	batch = append(batch, apply...)
+	batch = append(batch, dbOnly...)
+
+	if len(batch) == 0 {
+		fmt.Fprintln(out, "no pins retargeted")
+
+		return nil
+	}
+
+	// One transaction for every ledger row: a partial database update
+	// alongside a fully-written file would desynchronize identities.
+	if err := st.UpdateProposalRegionsBatch(batch); err != nil {
+		restore()
+
+		return fmt.Errorf("retarget aborted, lessons.yaml restored: %w", err)
+	}
+
+	for _, p := range batch {
+		fmt.Fprintf(out, "  p%-4d %s → %s\n", p.ID, render.Sanitize(p.Rule),
+			render.Sanitize(regionSetLabel(p)))
+	}
+
+	if len(dbOnly) > 0 {
+		fmt.Fprintf(out, "(%d pin(s) were already retargeted in lessons.yaml; only the ledger moved)\n",
+			len(dbOnly))
+	}
+
+	fmt.Fprintf(out, "retargeted %d pin(s) — review the lessons.yaml diff and commit it\n", len(batch))
+
+	return nil
+}
+
+// pinKeyLive reports whether lessons.yaml carries a pin with exactly
+// this identity.
+func pinKeyLive(cfg *reviews.Config, key distill.PinKey) bool {
+	for _, p := range cfg.Pin {
+		if reviews.NewPinKey(p.Rule, p.Region, p.Regions) == key {
+			return true
+		}
+	}
+
+	return false
+}
+
+// regionSetLabel renders a proposal's effective regions for output.
+func regionSetLabel(p model.Proposal) string {
+	if set := p.RegionSet(); len(set) > 0 {
+		return strings.Join(set, ", ")
+	}
+
+	return "*"
 }

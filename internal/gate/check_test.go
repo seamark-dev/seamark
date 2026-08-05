@@ -140,3 +140,22 @@ func TestEvalDiffRegistersHunklessRecords(t *testing.T) {
 		assert.Contains(t, d.Notes[0], tc.path, "%s: the affected path must be named", name)
 	}
 }
+
+func TestChangedPaths(t *testing.T) {
+	diff := "diff --git a/api/a.go b/api/a.go\n" +
+		"--- a/api/a.go\n+++ b/api/a.go\n@@ -1,2 +1,2 @@\n-x\n+y\n" +
+		"diff --git a/old.go b/new.go\nrename from old.go\nrename to new.go\n" +
+		"diff --git a/gone.go b/gone.go\n--- a/gone.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-z\n" +
+		// A --no-prefix deletion: the `diff --git` header has no ` b/`
+		// marker to split on, so the old-file fallback is the ONLY
+		// thing that can register the path.
+		"diff --git gone2.go gone2.go\n--- gone2.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-w\n"
+
+	got := ChangedPaths(diff)
+
+	// A rename registers its NEW path — the file going forward, the
+	// same reading EvalDiff uses; a whole-file deletion registers the
+	// old path (what vanished must not look like an empty diff).
+	assert.Equal(t, []string{"api/a.go", "new.go", "gone.go", "gone2.go"}, got,
+		"edits, renames, and whole-file deletions all register")
+}

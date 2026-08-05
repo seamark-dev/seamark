@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/seamark-dev/seamark/internal/redact"
 )
 
 // ghComment mirrors the fields we use from a GitHub pull-request review
@@ -77,24 +79,31 @@ func parseComments(raw []byte) ([]Comment, error) {
 	return out, nil
 }
 
-// normalize converts a raw GitHub comment to our Comment shape.
+// normalize converts a raw GitHub comment to our Comment shape. The
+// body is secret-scrubbed HERE, at the single entry point, so every
+// derivative — finding bodies, lesson fingerprints, distillation
+// prompts, hook injections — inherits the redaction: a credential a
+// reviewer quoted once ("hardcodes postgres://user:pass@…") must not be
+// re-broadcast into agent context on every future edit.
 func normalize(g ghComment) Comment {
 	line := g.Line
 	if line == 0 {
 		line = g.OriginalLine // outdated comments keep only original_line
 	}
 
+	body := redact.Secrets(g.Body)
+
 	return Comment{
 		ID:        g.ID,
 		Reviewer:  classifyReviewer(g.User.Login, g.User.Type),
 		Author:    g.User.Login,
-		Body:      g.Body,
+		Body:      body,
 		Path:      g.Path,
 		Line:      line,
 		URL:       g.HTMLURL,
 		CreatedAt: parseTime(g.CreatedAt),
 		PR:        prNumber(g.PullRequestURL),
-		RuleCode:  extractRuleCode(g.Body),
+		RuleCode:  extractRuleCode(body),
 		InReplyTo: g.InReplyTo,
 	}
 }

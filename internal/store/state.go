@@ -2,7 +2,6 @@ package store
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -31,14 +30,15 @@ type State struct {
 // stable finding ids, so the same evidence produces the same signature
 // on any machine.
 type ProposalState struct {
-	Signature string  `json:"signature"`
-	Rule      string  `json:"rule"`
-	Region    string  `json:"region,omitempty"`
-	Note      string  `json:"note"`
-	Members   []int64 `json:"members,omitempty"`
-	Agent     string  `json:"agent,omitempty"`
-	Status    string  `json:"status"`
-	CreatedAt int64   `json:"created_at"`
+	Signature string   `json:"signature"`
+	Rule      string   `json:"rule"`
+	Region    string   `json:"region,omitempty"`
+	Regions   []string `json:"regions,omitempty"`
+	Note      string   `json:"note"`
+	Members   []int64  `json:"members,omitempty"`
+	Agent     string   `json:"agent,omitempty"`
+	Status    string   `json:"status"`
+	CreatedAt int64    `json:"created_at"`
 }
 
 // DistilledMark is one row of distillation memory: evidence sets already
@@ -85,8 +85,9 @@ func (s *Store) ExportState() (*State, error) {
 
 	for _, p := range proposals {
 		out.Proposals = append(out.Proposals, ProposalState{
-			Signature: p.Signature, Rule: p.Rule, Region: p.Region, Note: p.Note,
-			Members: p.Members, Agent: p.Agent, Status: p.Status, CreatedAt: p.CreatedAt,
+			Signature: p.Signature, Rule: p.Rule, Region: p.Region,
+			Regions: p.Regions, Note: p.Note, Members: p.Members,
+			Agent: p.Agent, Status: p.Status, CreatedAt: p.CreatedAt,
 		})
 	}
 
@@ -162,8 +163,20 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 		case err != nil && err != sql.ErrNoRows:
 			return stats, err
 		case err == nil && local == model.ProposalProposed && p.Status != model.ProposalProposed:
-			if _, err := tx.Exec(`UPDATE proposal SET status = ? WHERE signature = ? AND rule = ?`,
-				p.Status, p.Signature, p.Rule); err != nil {
+			// The identity fields travel with the decision — status plus
+			// region and regions: the human decided against the imported
+			// content, and a local row keeping its own (possibly
+			// repo-wide) region would desynchronize pin identity from
+			// the lessons.yaml the same bundle's apply wrote.
+			regions, err := encodeStrings(p.Regions)
+			if err != nil {
+				return stats, err
+			}
+
+			if _, err := tx.Exec(
+				`UPDATE proposal SET status = ?, region = ?, regions = ?
+				 WHERE signature = ? AND rule = ?`,
+				p.Status, p.Region, regions, p.Signature, p.Rule); err != nil {
 				return stats, err
 			}
 
@@ -171,16 +184,15 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 		case err == nil:
 			stats.ProposalsSkipped++
 		default:
-			members, err := json.Marshal(p.Members)
-			if err != nil {
-				return stats, err
+			// One insert path for proposals everywhere: a column added
+			// to the table must not silently go missing from imports.
+			row := model.Proposal{
+				Signature: p.Signature, Rule: p.Rule, Region: p.Region,
+				Regions: p.Regions, Note: p.Note, Members: p.Members,
+				Agent: p.Agent, Status: p.Status, CreatedAt: p.CreatedAt,
 			}
 
-			if _, err := tx.Exec(
-				`INSERT INTO proposal (signature, rule, region, note, members, agent, status, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				p.Signature, p.Rule, p.Region, p.Note, string(members),
-				p.Agent, p.Status, p.CreatedAt); err != nil {
+			if err := insertProposal(tx, &row); err != nil {
 				return stats, err
 			}
 

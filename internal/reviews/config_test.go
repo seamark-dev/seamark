@@ -108,6 +108,75 @@ func TestSurfaceBudgetRanksBySpecificity(t *testing.T) {
 	assert.Contains(t, out[0].Symptom, "first")
 }
 
+func TestSurfaceBudgetCollapsesRestatedPins(t *testing.T) {
+	// Measured on a real pin file: two applied pins carrying one theme
+	// ("run linters before X") can occupy two of the hook's three
+	// slots. Under a budget, a restatement is collapsed and counted in
+	// trimmed — pointed at, never silently hidden.
+	cfg := DefaultConfig()
+	cfg.Pin = []PinRule{
+		{Rule: "lint-before-commit", Region: "*",
+			Note: "Run every configured linter across the tree and fix findings before committing work."},
+		{Rule: "run-linters-before-commit", Region: "*",
+			Note: "Run every linter the repository configures and fix the findings before committing."},
+		{Rule: "train-serve-parity", Region: "*",
+			Note: "Serving must compute features exactly as the historical materialization does."},
+	}
+
+	out, trimmed := cfg.SurfaceBudget(nil, "scripts/foo.py", 3)
+
+	require.Len(t, out, 2, "one wording per theme under a budget")
+	assert.Equal(t, 1, trimmed, "the collapsed duplicate is counted, not hidden")
+	assert.Contains(t, out[0].Symptom, "lint-before-commit", "the user's first wording survives")
+	assert.Contains(t, out[1].Symptom, "train-serve-parity")
+
+	// Deliberate views (budget 0) keep every entry: auditing the pin
+	// file needs the duplicates visible.
+	out, _ = cfg.SurfaceBudget(nil, "scripts/foo.py", 0)
+	assert.Len(t, out, 3)
+}
+
+func TestCollapseRestatedPreservesInput(t *testing.T) {
+	// The caller's slice must come back untouched: an in-place filter
+	// would silently rewrite pins the caller still holds (report.go
+	// keeps its ranked slice for the trimmed accounting).
+	pins := []SurfacedPin{
+		{Pin: PinRule{Rule: "lint-before-commit",
+			Note: "Run every configured linter and fix findings before committing work."}},
+		{Pin: PinRule{Rule: "train-serve-parity",
+			Note: "Serving must compute features exactly as the historical materialization does."}},
+		{Pin: PinRule{Rule: "run-linters-before-commit",
+			Note: "Run every linter the repository configures and fix the findings before committing."}},
+	}
+
+	orig := make([]SurfacedPin, len(pins))
+	copy(orig, pins)
+
+	kept, dropped := CollapseRestated(pins)
+
+	require.Len(t, kept, 2)
+	assert.Equal(t, 1, dropped)
+	assert.Equal(t, orig, pins, "the input slice is not storage for the result")
+}
+
+func TestSurfaceBudgetKeepsDistinctLinterCodes(t *testing.T) {
+	// RUF001 and RUF003 tokenize to the same word — the digits ARE the
+	// rule. Codes only ever collapse on exact equality.
+	cfg := DefaultConfig()
+	cfg.Pin = []PinRule{
+		{Rule: "RUF001", Region: "scripts", Note: "ambiguous unicode characters sneak in from chat"},
+		{Rule: "RUF003", Region: "scripts", Note: "ambiguous unicode characters sneak into comments"},
+		{Rule: "RUF001", Region: "*", Note: "ambiguous unicode characters sneak in from chat"},
+	}
+
+	out, trimmed := cfg.SurfaceBudget(nil, "scripts/foo.py", 3)
+
+	require.Len(t, out, 2, "distinct codes both survive; the repeated code collapses")
+	assert.Equal(t, 1, trimmed)
+	assert.Contains(t, out[0].Symptom, "RUF001")
+	assert.Contains(t, out[1].Symptom, "RUF003")
+}
+
 func TestRegionDepthNormalizesTrailingSlash(t *testing.T) {
 	// "a/b" and "a/b/" are one region to RegionMatches; specificity
 	// ranking must agree, or a trailing slash buys a budget slot.
@@ -188,4 +257,49 @@ func TestLoadConfigRejectsMalformed(t *testing.T) {
 
 	_, err := LoadConfig(root)
 	require.Error(t, err, "a typo'd config must fail loudly, not silently ignore mutes")
+}
+
+func TestMultiRegionPinAppliesAndDisplays(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Pin = []PinRule{{Rule: "validate-at-the-boundary", Region: "api",
+		Regions: []string{"api", "db"}, Note: "Validate at the edge."}}
+
+	require.Len(t, cfg.Surface(nil, "api/routes.py"), 1)
+	require.Len(t, cfg.Surface(nil, "db/schema.py"), 1, "the set's second region applies too")
+	assert.Empty(t, cfg.Surface(nil, "web/src/x.ts"), "outside every region, the pin stays quiet")
+
+	got := cfg.Surface(nil, "db/schema.py")
+	assert.Equal(t, "api, db", got[0].Region, "the full set is displayed")
+}
+
+func TestMultiRegionPinRanksByMatchedDepth(t *testing.T) {
+	// The region that earned the slot is the one that ranks: a set pin
+	// with a deep match beats a shallow single-region pin, even though
+	// the set also carries an unrelated region.
+	cfg := DefaultConfig()
+	cfg.Pin = []PinRule{
+		{Rule: "broad-guard", Region: "a", Note: "n"},
+		{Rule: "deep-set-guard", Regions: []string{"a/b", "zzz"}, Note: "n"},
+	}
+
+	out, trimmed := cfg.SurfaceBudget(nil, "a/b/x.go", 1)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, 1, trimmed)
+	assert.Contains(t, out[0].Symptom, "deep-set-guard")
+}
+
+func TestNewPinKeyCanonicalizes(t *testing.T) {
+	assert.Equal(t, NewPinKey("Dup", "", nil), NewPinKey("dup", "*", nil),
+		"case, empty, and star spellings are one repo-wide identity")
+	assert.Equal(t, NewPinKey("d", "db", []string{"api"}), NewPinKey("d", "api", []string{"db", "api/"}),
+		"the union is order-insensitive and slash-normalized")
+	assert.NotEqual(t, NewPinKey("d", "api", nil), NewPinKey("d", "api", []string{"db"}),
+		"a wider set is a different pin")
+}
+
+func TestNewPinKeyCommaRegionsDoNotCollide(t *testing.T) {
+	// A comma is a legal path byte: one region named "a,b" must never
+	// share an identity with the two-region set {a, b}.
+	assert.NotEqual(t, NewPinKey("r", "a,b", nil), NewPinKey("r", "a", []string{"b"}))
 }

@@ -18,7 +18,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/seamark-dev/seamark/internal/model"
 )
@@ -45,6 +47,52 @@ type Options struct {
 	// GitHub fetch is the silent long pole of a mine — pages of network
 	// I/O — and silence reads as stuck.
 	Logf func(format string, args ...any)
+	// WindowDays bounds how old a review comment may be and still
+	// enter the corpus (RFC-002 §9): fix mining always had a shelf
+	// life; review comments were immortal, and seven-year-old feedback
+	// weighed like last month's. 0 means DefaultReviewWindowDays;
+	// negative means unlimited (the config's `window_days: 0`).
+	WindowDays int
+}
+
+// DefaultReviewWindowDays is the review-mining recency window — twice
+// the fix window, because review prose ages better than patches.
+const DefaultReviewWindowDays = 730
+
+// reviewCountFloor keeps slow repositories alive: at least this many
+// of the NEWEST comments survive the window, so a repo with three pull
+// requests a year keeps a working corpus with zero configuration.
+const reviewCountFloor = 200
+
+// windowComments applies the recency window with its count floor:
+// newest first, everything inside the window, topped up to the floor
+// from beyond it.
+func windowComments(comments []Comment, windowDays int, now time.Time) []Comment {
+	if windowDays < 0 {
+		return comments
+	}
+
+	if windowDays == 0 {
+		windowDays = DefaultReviewWindowDays
+	}
+
+	cutoff := now.AddDate(0, 0, -windowDays).Unix()
+
+	sorted := make([]Comment, len(comments))
+	copy(sorted, comments)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].CreatedAt > sorted[j].CreatedAt
+	})
+
+	var out []Comment
+
+	for _, c := range sorted {
+		if c.CreatedAt >= cutoff || len(out) < reviewCountFloor {
+			out = append(out, c)
+		}
+	}
+
+	return out
 }
 
 // Fetcher returns raw GitHub review-comment JSON (a single JSON array,
@@ -97,7 +145,15 @@ func Mine(root string, opts Options, fetch Fetcher) (Result, error) {
 		return Result{Note: "review comments unreadable: " + err.Error()}, nil
 	}
 
-	logf("reviews: %d comments fetched; clustering…", len(comments))
+	fetched := len(comments)
+	comments = windowComments(comments, opts.WindowDays, time.Now())
+
+	if dropped := fetched - len(comments); dropped > 0 {
+		logf("reviews: %d comments fetched; %d beyond the recency window dropped, clustering…",
+			fetched, dropped)
+	} else {
+		logf("reviews: %d comments fetched; clustering…", fetched)
+	}
 
 	// From here the fetch succeeded: even zero comments is a real answer
 	// (the repo has none), safe to replace the stored set with.

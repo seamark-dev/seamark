@@ -400,20 +400,3 @@ func TestEvalCommandCollectsNames(t *testing.T) {
 	assert.ElementsMatch(t, []string{"terraform", "tee", "bash", "psql"}, d.Commands)
 	assert.NotContains(t, d.Commands, "sudo")
 }
-
-func TestRedactSecretsPatterns(t *testing.T) {
-	for input, want := range map[string]string{
-		"A=1 ls":                         "A=1 ls", // benign assignment untouched
-		"MY_TOKEN=abc ls":                "MY_TOKEN=[REDACTED] ls",
-		"--password=x --port 5432":       "--password=[REDACTED] --port 5432",
-		"http://u:p@h/x":                 "http://u:[REDACTED]@h/x",
-		"Authorization: Bearer tok":      "Authorization: Bearer [REDACTED]",
-		"echo add token support to docs": "echo add token support to docs", // prose survives
-		// Quoted values are consumed whole, spaces included.
-		"--password 'a b c' -h x":  "--password [REDACTED] -h x",
-		`PASSWORD="a b c" deploy`:  "PASSWORD=[REDACTED] deploy",
-		`--token="multi word" run`: "--token=[REDACTED] run",
-	} {
-		assert.Equal(t, want, RedactSecrets(input), "input: %s", input)
-	}
-}

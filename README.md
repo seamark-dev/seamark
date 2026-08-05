@@ -246,13 +246,20 @@ remarks that became the repo's contract-synchronization rule:
 
 ```yaml
 - rule: keep-parallel-implementations-consistent
-  region: "*"
+  region: api
+  regions: [api, core]
   note: "When two runtimes or call sites share a contract, mirror validation
     strictness and regenerate derived artifacts: run make sync-api after
     schemas.py changes, and keep the Go/Python seed loaders equally
     fail-fast."
-  # distilled by claude/v2 from 2 findings (seamark lessons --distill, p61)
+  # distilled by claude/v2 from 2 findings (seamark lessons --distill, p60)
 ```
+
+The region set is computed from the cited evidence, never guessed: a
+theme living in `api` AND `core` says exactly that instead of claiming
+the whole repo, so the pin only spends injection budget where its
+evidence points. (Measured on the two development corpora, evidence-
+coverage regions cut repo-wide `*` pins from 35 of 65 to 3.)
 
 More pins the two repos distilled and applied:
 
@@ -280,13 +287,43 @@ wires: one local index read per edit, silent for files with no lessons.
 (Proven: a headless agent given a plain edit task with no mention of
 seamark still named every flagged rule.)
 
+Every distilled pin also carries a live **confidence tier** — strong /
+fair / weak, computed on each read from what its citations still
+support: distinct events, review+fix corroboration, recency, and
+whether the cited files still exist. Weak pins lose injection-budget
+slots to strong ones and are tagged when they do surface; nothing is
+stored, nothing is model-scored.
+
+The whole lifecycle is `seamark lessons`, one flag per decision:
+
+| Flag              | What it does                                                                                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--file <path>`   | the lessons that would fire when editing one file — the hook's view, uncapped                                                                                 |
+| `--list` / `--region <dir>` | the raw ledger, one-offs included, with copy-paste config syntax                                                                                    |
+| `--distill`       | batch new findings through your agent CLI into proposed pins; already-distilled evidence is never paid for twice (`--region`, `--limit`, `--dry-run` budget it; a preflight always discloses first) |
+| `--proposals`     | the decision ledger, free: pending/applied/dismissed, each with its confidence facts, its prompt-era note, and the regions today's inference would assign      |
+| `--apply p3,p7`   | pin chosen proposals (ranges work: `p1..p9`); writes `lessons.yaml` only with `distill.write`, else prints the block to paste                                 |
+| `--dismiss p2`    | record a no — the same evidence is never re-proposed                                                                                                          |
+| `--prune p16,p45` | retire pins that restate another (the ledger names the clusters); the theme stays pinned by its survivor                                                      |
+| `--retarget p3`   | update an applied pin to the regions its living evidence supports now — failures roll `lessons.yaml` back, and re-running always converges                    |
+| `--stats`         | the firing log: which lessons actually reach agents (split by surface: hook / change_set / check), and which never fire — the decay signal                    |
+| `--hook`          | the PreToolUse entry point `seamark init` wires; offline, silent when a file has no lessons                                                                   |
+
+Mined text is scrubbed of secret-shaped values (connection strings,
+tokens) before it is stored — a credential a reviewer quoted once must
+not be re-broadcast into agent context on every edit — and review
+evidence has a shelf life: two years by default, with the newest 200
+comments always kept so slow repositories stay covered.
+
 A committed `.seamark/lessons.yaml` tunes what surfaces — `mute` kills
-noise, `pin` forces what must never be ignored, `threshold` sets the
-recurrence bar — and `seamark report` renders the whole decision queue
-as one self-contained HTML page. The full pipeline — mining heuristics,
-fix-commit classification, distillation economics, near-duplicate
-pruning, the firing stats — is documented in
-[docs/lessons.md](docs/lessons.md).
+noise, `pin` forces what must never be ignored (single `region` or a
+`regions: [api, db]` set), `threshold` sets the recurrence bar,
+`pin_budget` caps the hook's injection (default 3), `change_budget` the
+`change_set` block (default 6) — and `seamark report` renders the whole
+decision queue as one self-contained HTML page. The full pipeline —
+mining heuristics, fix-commit classification, region inference,
+confidence tiers, distillation economics, near-duplicate pruning, the
+firing stats — is documented in [docs/lessons.md](docs/lessons.md).
 
 ## Journey 3: guard agent commands
 
@@ -374,6 +411,11 @@ when the edited function never touches a sink itself. Policy rules over
 `diff.effects` gate merges the same way `gate` gates commands, and
 `diff.unindexed_files` exposes coverage blind spots to your rules —
 changed files the index cannot attribute never silently read as safe.
+The text output also appends the recurring lessons governing the
+touched files — clearly marked advisory, never part of the verdict,
+printed even when the verdict blocks (a deny is exactly when they
+matter). `--json` stays verdict-shaped; `--enforce` makes blocking
+verdicts exit 2.
 
 What Guard can and cannot defend against is stated plainly in
 [docs/threat-model.md](docs/threat-model.md): it is a defense-in-depth
@@ -395,13 +437,13 @@ stdio. Five tools, not forty — tool definitions are replayed to the
 model on every turn, so a sprawling "token-saving" server defeats
 itself:
 
-| Tool         | Answers                                                                                                                                      |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `orient`     | one-screen repo overview: modules, most-called API, change hubs, recent decisions                                                            |
-| `why`        | everything about a symbol or file: callers with confidence, co-change, commits                                                               |
-| `change_set` | pre-edit: what history says changes together with your planned files                                                                         |
-| `check`      | a diff's reachable effects and the policy verdict                                                                                            |
-| `expand`     | progressive disclosure: turn any ref a report returned into its content — source lines, or `lessons:<dir>` for an area's raw review findings |
+| Tool         | Answers                                                                                                                                       |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `orient`     | one-screen repo overview: modules, most-called API, change hubs, recent decisions                                                             |
+| `why`        | everything about a symbol or file: callers with confidence, co-change, commits, the lessons that govern it                                    |
+| `change_set` | pre-edit: what history says changes together with your planned files, plus the budgeted lessons governing them (new files included)           |
+| `check`      | a diff's reachable effects and the policy verdict, with the touched files' lessons as a marked advisory                                       |
+| `expand`     | progressive disclosure: turn any ref a report returned into its content — source lines, or `lessons:<dir>` for an area's raw review findings  |
 
 Register it in Claude Code by dropping an `.mcp.json` at the repo root
 (this repository ships one):
@@ -418,8 +460,8 @@ cheapest-signal-first.
 
 **Humans** — `seamark report` renders everything the learning layer has
 concluded as one self-contained HTML page (decision queue,
-near-duplicate pins, hotspot map, full lesson ledger); see
-[docs/lessons.md](docs/lessons.md).
+near-duplicate pins, hotspot map, full lesson ledger) — `--open` opens
+it, `-o -` streams it to stdout; see [docs/lessons.md](docs/lessons.md).
 
 Freshness is handled per surface, priced by what a stale answer would
 cost: `check` **self-repairs** before evaluating (a blast radius from
@@ -438,7 +480,7 @@ seamark status          # or --json; also served as MCP resource seamark://statu
 ```
 
 ```text
-workspace      current (schema v2)
+workspace      current (schema v3)
 parsed         703 of 832 seen files (98 skipped by config)
 symbols        1221, 2931 edges — call resolution 71% qualified · 24% same-package · 5% unique-name (1796 calls)
 effects        83 direct-sink symbols, 692 by propagation
@@ -512,6 +554,28 @@ Skipped files are counted in the `seamark index` output, and a malformed
 config — including an exclude glob that could never match — fails the
 index loudly rather than being silently ignored. Config edits count as
 workspace changes, so the next index picks them up automatically.
+
+The same `config.yaml` carries the other opt-ins, each defaulting to
+the safe side:
+
+```yaml
+reviews:
+  window_days: 730 # review-comment shelf life; 0 = unlimited.
+  #                  The newest 200 comments always survive the window.
+distill:
+  write: false # --apply/--prune/--retarget print the block for you to
+  #              paste; flip to true to let them edit lessons.yaml
+agent:
+  cli: claude # the agent CLI --distill pipes findings through (the default)
+  # argv: ["my-llm", "--stdin"]   # …or a custom command line
+```
+
+History mining has two flags on `seamark index` itself: `--max-commits`
+bounds the git window (default 5000) and `--max-files-per-commit`
+excludes bulk refactors from co-change (default 30). Every command
+takes `-C <dir>` to name the workspace and `--db <path>` to override
+the index location; `status`, `doctor`, `gate`, and `check` speak
+`--json` for machines.
 
 **Effect catalogue** — effect knowledge is data, not code. The built-in
 catalogue covers ~40 sinks across Go, Python, and JS/TS plus common CLI

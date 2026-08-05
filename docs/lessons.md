@@ -16,6 +16,13 @@ your authenticated `gh` CLI and clusters the recurrences:
   recurring across several files widens to their common directory.
 - Only patterns that recur (≥2 by default) surface in `why`/`orient`.
 
+Review evidence has a shelf life: comments older than two years are
+dropped at mining time (fix commits always had a one-year window), with
+one guarantee for slow repositories — the newest 200 comments always
+survive, so a repo with three pull requests a year keeps a working
+corpus with no tuning. `reviews: {window_days: N}` in config.yaml
+adjusts it; `0` means unlimited.
+
 Just as important is what is *not* a lesson. Thread replies are
 conversation about a finding, never the finding — mining them once made
 an author's "fixed" the top lesson of a real repo. Comments with nothing
@@ -35,7 +42,12 @@ fixes by explicit intent
 matches — "prefix" and "fixture" don't count), minus the ones that teach
 nothing (typo/lint/CI chores, 30-file bulk refactors), minus cherry-pick
 duplicates (patch identity: a backport is the same event) and fixes that
-were later reverted. Each surviving fix becomes a finding whose body
+were later reverted. A merge from a `fix/`-named branch whose commits
+carry no fix-shaped message of their own counts too (`fix:branch` — the
+author declared the fix in the branch name; the finding is the merge's
+diff), and in merge-commit workflows every branch commit inherits its
+pull request from the merge topology, so a review comment and the fix
+commit answering it count as one event. Each surviving fix becomes a finding whose body
 carries the commit message *and the patch* — the patch is the signal
 that survives useless messages (measured: two anonymous "fix: PR review"
 commits still grouped correctly on patch content alone).
@@ -65,6 +77,7 @@ surface time, so edits take effect with no re-mining:
 ```yaml
 threshold: 2                     # min recurrences to surface (default 2)
 pin_budget: 3                    # pins the edit hook injects per edit (default 3)
+change_budget: 6                 # lessons one change_set answer carries (default 6)
 mute:
   - rule: F541                   # hush a noisy rule everywhere
   - region: alembic/versions     # …or every lesson under generated code
@@ -72,6 +85,10 @@ pin:                             # your "must not be ignored" list —
   - rule: RUF001                 # surfaced always for its region, even if
     region: scripts              # mining found it once or never
     note: "Keep scripts ASCII — smart quotes have bitten us"
+  - rule: validate-at-the-boundary
+    region: api                  # a theme living in two places names both:
+    regions: [api, db]           # a set beats a repo-wide `*`
+    note: "Enforce closed sets and non-null contracts at the edge."
 ```
 
 `mute` kills noise; `pin` is the escape hatch for a rule you care about
@@ -81,10 +98,12 @@ flow through `why`, `orient`, and the edit hook via one path, so they
 never disagree.
 
 Pins are powerful, so their injection cost is budgeted: the edit hook
-carries at most `pin_budget` pins per edit (default 3), most specific
-region first — a pin on the file beats its package beats a repo-wide
-`*` — with a `+N more` pointer for the rest. Deliberate views (`--file`,
-`why`) always show everything; only the ambient injection is capped.
+carries at most `pin_budget` pins per edit (default 3), ranked by
+evidence confidence first and region specificity second — a weak pin
+must not hold a slot a strong one wants, and among equals a pin on the
+file beats its package beats a repo-wide `*` — with a `+N more` pointer
+for the rest. Deliberate views (`--file`, `why`) always show
+everything; only the ambient injection is capped.
 
 ## The ledger: lessons --list
 
@@ -159,6 +178,40 @@ the call looks past them — labels only, since carrying the notes would
 cost more tokens than the duplicates they prevent. Dismissals are
 permanent memory; a pattern only returns if its evidence changes.
 
+### "Will distill re-process what it already processed?"
+
+Only where the evidence set changed — and the skip is absolute, not a
+discount. The memory keys on a group's **signature: a hash of its
+member finding ids**. A group whose signature is already recorded is
+skipped with zero tokens (no agent call happens at all), and the plan
+line says so: `50 groups: 3 read, 40 already distilled`. Any change to
+a group's membership means a new signature, and a re-read sends the
+**whole group again**, previously-seen findings included — the model
+needs the full group to judge recurrence; there is no incremental
+"just the new ones" mode.
+
+What changes membership, in practice:
+
+- **A new finding** re-opens exactly its own group (groups are cut by a
+  hash of finding ids, so growth perturbs one batch, not the corpus).
+- **A finding aging out** — the mining windows move, and a group that
+  loses a member re-reads. A re-mine after a long gap therefore causes
+  a one-time bump.
+- **Upgrading across a grouping change** re-cuts the affected groups
+  once; the changelog calls it out when a release does this.
+
+Three things keep a re-read bump from being waste. `--distill
+--dry-run` prices the exact plan first — every group that would be
+sent, with its ~token estimate — and sends nothing; `--limit` and
+`--region` spread the bump across runs. Re-reads cannot re-propose what
+you already have: every reply is checked against your pins and every
+decided proposal (dismissals included, by cited-evidence identity as
+well as wording), so the tokens buy only genuinely new patterns. And
+because *decided* proposals are permanent dedup memory while *pending*
+ones whose group churns are pruned and re-derived, deciding what is
+pending **before** a re-mine or upgrade preserves those calls instead
+of paying for them twice.
+
 ### One theme, one pin
 
 Candidate groups are read independently, so a repo-wide mistake shows up
@@ -177,6 +230,69 @@ way: it names each near-duplicate cluster, suggests which entry to keep
 dismissal: the theme stays pinned by its survivor and the distiller
 still counts it as known, where a dismissal would suppress it.
 
+### Where a pin points: region sets
+
+A proposal's region is computed from its cited evidence, never taken
+from the model's reply — and it is a **set** (`region: api` plus
+`regions: [api, db]`, at most three directories, depth at most three),
+chosen to cover at least 80% of the cited *events*. Events vote, not
+findings: six comments on one pull request are one voice. Test and doc
+paths abstain (a fix's test usually out-churns the fix — the vote
+belongs to the code it corrected; a lesson whose entire evidence is
+test files keeps its test region), root-level files never drag a theme
+repo-wide, and when the voting evidence is genuinely scattered the
+honest answer stays `*`. Measured on the two development corpora, this
+cut repo-wide pins from 35 of 65 to 3 — every one of which used to tax
+the injection budget of every edit in the repository.
+
+### How much to trust a pin: confidence
+
+Every distilled pin carries a tier — **strong / fair / weak** —
+recomputed on each read from what its citations still support: distinct
+events (a review comment and the fix commit answering it count once),
+source corroboration (review AND fix beats either alone), recency, and
+whether the cited files still exist in the workspace. Nothing is stored
+and nothing is model-scored, so a pin's tier honestly decays as its
+evidence does. Confidence is not decoration: pins compete for the
+hook's injection budget by tier before specificity, a weak pin that
+does surface is tagged (`weak evidence: 1 event(s), review, newest
+50d`), and deliberate views (`why`, `--file`) print every matched pin's
+tier with the facts behind it — as an argument you can check, never a
+bare score.
+
+### Revalidating old decisions: the ledger and --retarget
+
+`seamark lessons --proposals` re-judges every pending and applied
+proposal under *today's* rules, for free: its confidence facts, a note
+when it was distilled under an older prompt (before the recurrence
+rules tightened), dead citations, and — when current inference
+disagrees with the stored regions — a `regions now:` line with one
+command covering every drifted pin:
+
+```text
+  p65   train-serve-parity                 *
+        fair — 2 event(s), fix, newest 65d
+        regions now: workers
+
+retarget: `seamark lessons --retarget p65,p62,…` updates those pins to
+the recomputed regions (lessons.yaml and the ledger together)
+```
+
+`--retarget` is the upgrade path for pins distilled before region sets
+existed. On any ordinary failure the two halves move **together or not
+at all**: the ledger updates in one transaction, and if either the
+file write or that transaction fails, lessons.yaml is restored to its
+original bytes. The one exception is a hard crash in the narrow window
+between the file write and the ledger transaction — the file can then
+be ahead of the ledger, and the next `--retarget` detects exactly that
+state and repairs it with a ledger-only update. Re-running is always
+safe: "regions already current" is the steady state.
+
+The same ledger also flags near-duplicate clusters among applied pins
+and hands you the `--prune` command to retire the redundant entries —
+see "One theme, one pin" above for how that audit works and why
+pruning is not dismissal.
+
 ### Proposal-only by construction
 
 The model must cite the finding ids behind every pattern (uncited
@@ -186,22 +302,50 @@ through an explicit `--apply` of explicit ids. Even then, seamark edits
 the file itself only if `config.yaml` opts in (`distill: {write: true}`)
 — otherwise apply prints the pin block for you to paste. Applied entries
 are inserted under your existing `pin:` section with provenance
-comments; everything hand-written stays byte-for-byte. `--prune` obeys
-the same write gate, removes each entry with its provenance comment and
-nothing else, and refuses to write at all unless the result still parses
-with every other pin intact.
+comments; everything hand-written stays byte-for-byte. `--prune` and
+`--retarget` obey the same write gate, remove or replace each entry
+with its provenance comment and nothing else, and refuse to write at
+all unless the result still parses with every other pin intact.
+
+## The moment of change: hook, change_set, check
+
+Three ambient surfaces inject the memory exactly when it can still
+change the outcome, each budgeted (an injection is someone else's
+tokens) and each deduplicated — a mined lesson whose whole cluster an
+applied pin already cites is suppressed rather than said twice, and two
+pins wording one theme never spend two slots:
+
+- **The edit hook** (`lessons --hook`, wired by `seamark init`): per
+  file, at most `pin_budget` pins (default 3, confidence-ranked, a
+  `+N more` pointer for the rest) plus the file's recurring mined
+  lessons. Offline, silent when there is nothing to say.
+- **`change_set` (MCP)**: before a multi-file edit, the union of the
+  files' lessons under `change_budget` (default 6) — merged by
+  identity, ranked by confidence across the whole set, regions shown as
+  the map back onto the files. New files count: a brand-new file in a
+  pinned region gets its guidance before its first line exists.
+- **`check`** (CLI and MCP): after the policy verdict, the touched
+  files' lessons as a clearly-marked advisory — printed even when the
+  verdict blocks, because a deny is exactly when they matter; `--json`
+  stays verdict-shaped.
+
+All three record what they surfaced to the firing log, tagged by
+surface, so the stats below never conflate a speculative plan with an
+actual pre-edit reminder.
 
 ## Is it working? lessons --stats
 
-The edit hook appends a line to `.seamark/lessons-audit.jsonl` each time
-it reminds an agent — the impact/decay counterpart to the gate's audit
-log. `seamark lessons --stats` turns that into which lessons actually
-reach agents, and which *would* surface but never have (a lesson whose
-region no edit touches is a pruning candidate):
+Every ambient surface appends a line to `.seamark/lessons-audit.jsonl`
+when it reminds an agent — the impact/decay counterpart to the gate's
+audit log. `seamark lessons --stats` turns that into which lessons
+actually reach agents, split by surface (a `change_set` plan and a CI
+`check` are exposure, not edits reminded), and which *would* surface
+but never have (a lesson whose region no edit touches is a pruning
+candidate):
 
 ```text
 $ seamark lessons --stats
-lesson firings — 128 edits reminded across 24 files
+lesson firings — 128 hook reminders, 31 change_set, 12 check — across 24 files
 
 most surfaced
   ×41  scripts                                  last 2026-07-26  E702
@@ -230,9 +374,11 @@ machine with no network. Four sections:
 
 - **Decision queue** — every proposal awaiting `--apply`/`--dismiss`,
   with the findings it cited (click through to the original review
-  comment) and the commands that decide it. The header line says what
-  the evidence rests on: *469 review · 34 fix:conventional · 15
-  fix:subject*.
+  comment), the commands that decide it, and each card's evidence
+  health: the confidence tier with its facts, the prompt-era note, and
+  a `regions now:` drift line with the `--retarget` command when
+  today's inference disagrees. The header line says what the evidence
+  rests on: *469 review · 34 fix:conventional · 15 fix:subject*.
 - **Near-duplicate pins** — which *applied* pins restate a theme already
   pinned. This is the audit that found 17 redundant pins out of 65 in a
   real repo, and the reason `lessons --prune` exists.

@@ -353,3 +353,66 @@ func TestDistillConfigGate(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, cfg.Distill.Write, "reads its own section of the shared file")
 }
+
+func TestApplyAndPruneMultiRegionPin(t *testing.T) {
+	// The two-key form: `region` carries the first region for readers
+	// that predate sets, `regions` the full set — and prune must treat
+	// the pair as one identity, order aside.
+	root := t.TempDir()
+
+	p := model.Proposal{ID: 9, Rule: "validate-at-the-boundary",
+		Region: "api", Regions: []string{"api", "db"},
+		Note:    "Enforce closed sets and non-null contracts at the edge.",
+		Members: []int64{1, 2}, Agent: "claude/v3"}
+
+	require.NoError(t, ApplyPins(root, []model.Proposal{p}))
+
+	data, err := os.ReadFile(filepath.Join(root, ".seamark", "lessons.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "region: api")
+	assert.Contains(t, string(data), "regions: [api, db]", "the set renders flow-style, one line")
+
+	cfg, err := reviews.LoadConfig(root)
+	require.NoError(t, err)
+	require.Len(t, cfg.Pin, 1)
+	assert.Equal(t, []string{"api", "db"}, cfg.Pin[0].AllRegions())
+
+	// Prune by the same identity, regions in a DIFFERENT order.
+	removed, err := RemovePins(root, []PinKey{NewPinKey(p.Rule, "", []string{"db", "api"})})
+	require.NoError(t, err)
+	require.Len(t, removed, 1)
+
+	cfg, err = reviews.LoadConfig(root)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Pin, "the multi-region pin went as one entry")
+}
+
+func TestPruneParsesBlockStyleRegions(t *testing.T) {
+	// A hand-edited pin with block-style regions is the same identity
+	// as the flow form ApplyPins writes — prune must find and remove
+	// it whole, nested items included.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+
+	path := filepath.Join(root, ".seamark", "lessons.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"pin:\n"+
+			"  - rule: validate-at-the-boundary\n"+
+			"    region: api\n"+
+			"    regions:\n"+
+			"      - api\n"+
+			"      - db\n"+
+			"    note: Validate at the edge.\n"+
+			"  - rule: keeper\n"+
+			"    region: web\n"+
+			"    note: Stays.\n"), 0o644))
+
+	removed, err := RemovePins(root, []PinKey{NewPinKey("validate-at-the-boundary", "", []string{"db", "api"})})
+	require.NoError(t, err)
+	require.Len(t, removed, 1, "the block-style entry is one identity with the flow form")
+
+	cfg, err := reviews.LoadConfig(root)
+	require.NoError(t, err)
+	require.Len(t, cfg.Pin, 1)
+	assert.Equal(t, "keeper", cfg.Pin[0].Rule)
+}

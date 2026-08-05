@@ -32,6 +32,27 @@ type Config struct {
 		// entry (`internal/gen/`) matches a directory prefix.
 		Exclude []string `yaml:"exclude"`
 	} `yaml:"index"`
+
+	Reviews struct {
+		// WindowDays bounds how old a mined review comment may be:
+		// absent means the 730-day default, 0 means unlimited. The
+		// newest 200 comments always survive the window, so a slow
+		// repository keeps a working corpus with no tuning.
+		WindowDays *int `yaml:"window_days"`
+	} `yaml:"reviews"`
+}
+
+// ReviewWindowDays maps the config field onto reviews.Options
+// semantics: 0 = default, negative = unlimited.
+func (c *Config) ReviewWindowDays() int {
+	switch {
+	case c.Reviews.WindowDays == nil:
+		return 0
+	case *c.Reviews.WindowDays == 0:
+		return -1
+	default:
+		return *c.Reviews.WindowDays
+	}
 }
 
 // LoadConfig reads <root>/.seamark/config.yaml. A missing file is not an

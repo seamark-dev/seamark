@@ -11,6 +11,7 @@
 package model
 
 import (
+	"fmt"
 	"path"
 	"strings"
 )
@@ -136,6 +137,11 @@ type Lesson struct {
 	Occurrences int    // how many comments fall in this cluster
 	LastTS      int64  // most recent occurrence, unix seconds
 	ExampleURL  string // a representative comment, for provenance
+	// Annotation is surface-time display text (a confidence tag like
+	// "weak evidence: 1 event"), never part of the lesson's identity:
+	// the firing log records Symptom, and an annotation that changes
+	// with age must not split one lesson into many statistical rows.
+	Annotation string
 }
 
 // Finding is one raw review comment behind a lesson — the full material
@@ -146,7 +152,14 @@ type Lesson struct {
 type Finding struct {
 	ID        int64  // stable across mines: GitHub comment id, or sha-derived for fixes
 	LessonKey string // ClusterKey of the lesson this comment fed; "" for fix findings
-	Path      string // repo-relative file (a fix's most-changed code file)
+	// Path is the finding's semantic home: the commented file for a
+	// review finding, the most-changed non-test code file for a fix.
+	Path string
+	// Paths is a fix commit's full code footprint (primary first, by
+	// churn, capped) — what region inference votes with, so a fix whose
+	// test out-churned it still points at the code it corrected. Nil
+	// for review findings: their single Path IS the location.
+	Paths     []string
 	PR        int    // pull-request number, 0 when unknown
 	Reviewer  string // coderabbit | copilot | bot | human
 	Body      string // boilerplate-stripped text, capped
@@ -166,6 +179,10 @@ const (
 	SourceFixConventional = "fix:conventional"
 	SourceFixIssueLink    = "fix:issue-link"
 	SourceFixSubject      = "fix:subject"
+	// SourceFixBranch marks a fix whose only declaration is its branch
+	// name: a merge from fix/… whose commits carried no fix-shaped
+	// message of their own. The finding is the merge's whole diff.
+	SourceFixBranch = "fix:branch"
 )
 
 // fixMinedSources are the sources one pass of fix mining produces —
@@ -176,7 +193,8 @@ const (
 // cadence (CI transitions, say) must not have its findings wiped by a
 // fix mine.
 var fixMinedSources = []string{
-	SourceFixConventional, SourceFixIssueLink, SourceFixSubject, SourceRevert,
+	SourceFixConventional, SourceFixIssueLink, SourceFixSubject,
+	SourceFixBranch, SourceRevert,
 }
 
 // FixMinedSources returns the sources replaced together with fix mining.
@@ -203,14 +221,59 @@ const (
 // .seamark/lessons.yaml exclusively through an explicit apply.
 type Proposal struct {
 	ID        int64
-	Signature string  // the evidence group that produced it
-	Rule      string  // short kebab-case pin label
-	Region    string  // narrowest directory covering the cited members ("" = repo-wide)
+	Signature string // the evidence group that produced it
+	Rule      string // short kebab-case pin label
+	// Region is the first (deepest-coverage) region of Regions, kept as
+	// a single value for display and for readers that predate region
+	// sets ("" = repo-wide).
+	Region string
+	// Regions is the evidence-coverage region set (at most 3 directories
+	// covering ≥80% of the cited events; see distill.coverageRegions).
+	// Empty means "derive from Region" — pre-set rows and repo-wide
+	// proposals both land there.
+	Regions   []string
 	Note      string  // the guidance, pin-ready
 	Members   []int64 // finding ids the agent cited — verified to exist in the group
 	Agent     string  // provenance: adapter name + prompt version
 	Status    string  // proposed | applied | dismissed
 	CreatedAt int64
+}
+
+// RegionSet returns the effective region set: Regions when present,
+// else the single Region, else nil — which means repo-wide. A "*" (or
+// empty) entry anywhere means the whole set is repo-wide: matching
+// code compares literal paths, and an unnormalized wildcard would
+// match nothing instead of everything.
+func (p Proposal) RegionSet() []string {
+	var out []string
+
+	for _, r := range p.Regions {
+		if r == "" || r == "*" {
+			return nil
+		}
+
+		out = append(out, r)
+	}
+
+	if len(out) > 0 {
+		return out
+	}
+
+	if p.Region != "" && p.Region != "*" {
+		return []string{p.Region}
+	}
+
+	return nil
+}
+
+// IsDocPath reports whether a file is documentation — never the
+// semantic home of a code change. Shared by fix mining (a doc file
+// must not be elected a fix's primary file) and region inference (doc
+// paths don't vote; a README citation must not drag a region to
+// repo-wide).
+func IsDocPath(p string) bool {
+	return strings.HasSuffix(p, ".md") ||
+		strings.HasPrefix(p, "docs/") || strings.HasPrefix(p, "rfc/")
 }
 
 // IsTestPath reports whether a file is test code, by each language's
@@ -236,4 +299,25 @@ func IsTestPath(p string) bool {
 	}
 
 	return false
+}
+
+// CountEvents collapses findings into distinct events: findings
+// sharing a pull request are one event (the review comment and the fix
+// commit that answered it), while findings without a pr number are
+// independent. The distiller's recurrence bar, region inference, and
+// confidence all count evidence this way — one definition, or two
+// surfaces disagree about what recurred.
+func CountEvents(findings []Finding) int {
+	events := map[string]bool{}
+
+	for _, f := range findings {
+		key := fmt.Sprintf("id:%d", f.ID)
+		if f.PR > 0 {
+			key = fmt.Sprintf("pr:%d", f.PR)
+		}
+
+		events[key] = true
+	}
+
+	return len(events)
 }

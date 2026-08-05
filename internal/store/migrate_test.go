@@ -147,3 +147,53 @@ func TestMigrationsAreOrdered(t *testing.T) {
 	assert.Equal(t, schemaVersion, last,
 		"the last migration must land on the current version — a version bump without a migration strands existing databases")
 }
+
+func TestOpenUpgradesVersionTwoDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+
+	// Rewind a current database to v2: drop the v3 columns and stamp
+	// the old version — a database written before region sets.
+	s, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+
+	db, err := rawOpen(t, path)
+	require.NoError(t, err)
+	_, err = db.Exec(`ALTER TABLE proposal DROP COLUMN regions`)
+	require.NoError(t, err)
+	_, err = db.Exec(`ALTER TABLE finding DROP COLUMN paths`)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE meta SET value = '2' WHERE key = ?`, schemaVersionKey)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s, err = Open(path)
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+
+	v, err := s.GetMeta(schemaVersionKey)
+	require.NoError(t, err)
+	assert.Equal(t, strconv.Itoa(schemaVersion), v)
+
+	// Both migrated columns round-trip, and pre-set rows ('' defaults)
+	// read back as empty sets rather than errors.
+	p := model.Proposal{Signature: "sig", Rule: "r", Region: "api",
+		Regions: []string{"api", "db"}, Note: "n", Members: []int64{1},
+		Status: model.ProposalProposed}
+	require.NoError(t, s.InsertProposal(&p))
+
+	require.NoError(t, s.ReplaceLessons(nil, []model.Finding{
+		{ID: 5, LessonKey: "k", Path: "workers/w.py", Body: "b",
+			Paths: []string{"workers/w.py", "tests/test_w.py"}, Source: model.SourceReview},
+	}))
+
+	got, err := s.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, []string{"api", "db"}, got[0].Regions)
+
+	findings, err := s.AllFindings()
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Equal(t, []string{"workers/w.py", "tests/test_w.py"}, findings[0].Paths)
+}

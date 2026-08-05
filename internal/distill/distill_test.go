@@ -12,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/wording"
 )
 
 // fakeAgent scripts Invoke; calls counts invocations — the token meter.
@@ -197,7 +198,7 @@ func TestPromptIsPrimedWithKnownLabels(t *testing.T) {
 	// of them appear, so it stays a rounding error on a real ~9k-token
 	// batch however many pins a repo accumulates.
 	primer := prompt[strings.Index(prompt, "ALREADY CAPTURED"):strings.Index(prompt, "FINDINGS")]
-	assert.Less(t, len(primer), maxKnownLabels*(maxRuleLen+2)+400,
+	assert.Less(t, len(primer), maxKnownLabels*(wording.MaxRuleLen+2)+400,
 		"the primer is capped by construction")
 }
 
@@ -219,7 +220,7 @@ func TestPinLabelsCannotEscapeTheirLine(t *testing.T) {
 
 	for _, l := range labels {
 		assert.NotContains(t, l, "\n", "a label is one line by construction")
-		assert.LessOrEqual(t, len(l), maxRuleLen, "and bounded, so 40 of them stay a rounding error")
+		assert.LessOrEqual(t, len(l), wording.MaxRuleLen, "and bounded, so 40 of them stay a rounding error")
 		assert.Regexp(t, `^[a-z0-9-]+$`, l, "only slug characters survive")
 	}
 

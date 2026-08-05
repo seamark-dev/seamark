@@ -21,6 +21,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -154,7 +155,7 @@ func Gather(st *store.Store, root string) (*Status, error) {
 			// Repository-controlled text headed for terminals and MCP
 			// clients: strip control sequences, scrub secret-shaped
 			// values — same treatment as the distill preflight.
-			s.DistillAgent = render.Sanitize(gate.RedactSecrets(strings.Join(argv, " ")))
+			s.DistillAgent = render.Sanitize(redact.Secrets(strings.Join(argv, " ")))
 		}
 	}
 

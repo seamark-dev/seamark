@@ -6,6 +6,96 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## Unreleased
+
+- **Evidence confidence, everywhere pins compete.** Every distilled pin
+  now carries a deterministic tier — strong / fair / weak — computed on
+  read from what its citations still support: distinct events, source
+  diversity (review+fix), recency, and whether the cited files still
+  exist. Weak pins lose injection-budget slots to strong ones and carry
+  a "weak evidence" tag in the hook; `why` prints each pin's tier with
+  the facts behind it. Nothing is stored, nothing is model-scored.
+- **The proposals ledger re-judges old decisions.** `lessons
+  --proposals` now shows each pin's evidence health under TODAY'S rules
+  — recomputed events, liveness, prompt era — and the regions current
+  inference would assign. The new `lessons --retarget p3,p7` applies
+  that tightening to lessons.yaml and the ledger together (write-gated
+  like `--apply`): the upgrade path for pins distilled before region
+  sets. The HTML report's decision cards carry the same health — tier
+  badge, facts, era, and the drift line with its retarget command.
+- **change_set and check carry the memory.** `change_set` answers now
+  end with the budgeted lessons governing the files about to change
+  (`change_budget`, default 6), and `check` appends an advisory block
+  for the diff's files — clearly marked, never part of the verdict.
+  Both record to the firing log with a surface tag, so `--stats`
+  reflects all ambient exposure.
+- **Review evidence gets a shelf life.** Review mining keeps two years
+  of comments (fix mining always kept one) — with the newest 200 always
+  surviving, so slow repositories keep a working corpus untuned.
+  `reviews: {window_days: N}` adjusts; `0` means unlimited.
+- **Region sets replace the repo-wide `*` collapse.** A proposal's
+  region is now a small set (≤3 directories, depth ≤3) covering ≥80%
+  of its cited *events*: test and doc paths don't vote (test-only
+  evidence keeps its test region), root files can't drag a theme to
+  `*`, and a theme living in `api` AND `db` says so instead of saying
+  "everywhere". Measured on the corpora that motivated it: repo-wide
+  proposals drop from 35/65 to 3/65 and 3/27 to 0/27. Applied pins
+  carry both `region:` (first entry — what older seamark reads, still
+  narrower than the old `*`) and `regions: [a, b]`; the schema
+  migrates to v3 (`proposal.regions`, `finding.paths`) automatically.
+  Deliberately NOT migrated: existing proposals and their applied pins
+  keep the regions they were decided under — rewriting them would
+  silently change pin identities behind lessons.yaml's back. New
+  distillations get sets immediately; existing pins tighten through
+  the upcoming revalidation audit, which shows the recomputed regions
+  next to the stored ones with the command to apply them.
+- **Fix findings point at the code, not the churn.** A fix's primary
+  file is its most-changed non-test, non-doc file (tests routinely
+  out-churn the fix they cover), and the finding stores the commit's
+  full code footprint for region inference.
+- **Merge-commit workflows get PR attribution.** Branch commits inherit
+  their pull request from merge topology (`Merge pull request #N` +
+  rev-list), so a review comment and the `fix: PR review` commit
+  answering it finally count as one event in repos that don't squash.
+  Explicit `(#N)` / `fixes #N` references still win. A merge from a
+  `fix/`-named branch whose commits carry no fix-shaped message becomes
+  one `fix:branch` finding (the merge's diff) — the tier only fires
+  where there was no signal at all, and the source label shows in every
+  evidence header.
+- **Captured themes surface once.** A mined lesson stops surfacing in
+  `why` and the edit hook when an applied pin cites every finding in
+  its cluster AND that pin is currently present in lessons.yaml — the
+  file stays the source of truth, so a hand-pruned pin resurfaces its
+  lesson, a partially-cited cluster keeps surfacing (one comment can
+  flag two mistakes), and a recurrence arriving after the pin was
+  applied re-opens the lesson. The ledger (`lessons --list`,
+  `--region`) still shows every raw lesson.
+- **Secret redaction in mined text.** Review-comment bodies and
+  fix-commit patches are scrubbed of secret-shaped values (connection
+  strings, tokens, password assignments) at mining time, with the same
+  patterns the gate's raw audit log uses — a credential a reviewer
+  quoted once is not re-broadcast into agent context on every edit.
+  Already-stored findings keep their text until the next
+  `seamark index --reviews` re-mines them.
+- **Compact hook injection.** The edit-hook reminder drops the
+  terminal-table padding, per-line regions, and reviewer names for
+  `- [pin]` / `- [×N]` lines: the reader is a model, and the tokens now
+  go to the guidance. Deliberate views keep the full table.
+- **Proposal dedup by evidence.** A distilled pattern citing exactly the
+  same findings as one already proposed, applied, dismissed, or pinned
+  is dropped as a re-derivation, whatever its wording (measured: two
+  applied pins with identical citations and unrelated names). The
+  `lessons --proposals` audit flags such pairs for pruning. Bare
+  linter-code pins (RUF001 vs RUF003) never merge on wording; the edit
+  hook collapses restated pins before spending its injection budget.
+- **Stable distillation batches.** Oversized candidate groups are cut by
+  finding-id hash instead of position, so one new finding re-opens one
+  batch instead of re-billing the whole component. One-time cost on
+  upgrade: existing oversized-group signatures change once, so the next
+  `lessons --distill` re-reads those groups (small groups keep their
+  signatures; applied and dismissed decisions are unaffected, and
+  re-read groups cannot re-propose already-captured themes).
+
 ## v0.1.0 — 2026-08-03
 
 The first tagged release: the production-readiness line — everything

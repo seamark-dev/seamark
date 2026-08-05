@@ -9,79 +9,94 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 )
 
-// The pairs below are verbatim from a real pin file (trading-tools,
-// 65 applied pins) where 23% turned out to restate something already
-// pinned. They are the calibration set: every "same" pair was judged a
-// duplicate by hand, every "distinct" pair is genuinely separate
-// guidance that must survive.
-func TestRestatesOnRealPins(t *testing.T) {
-	same := []struct{ a, b model.Proposal }{
-		{
-			model.Proposal{Rule: "leaky-error-payloads",
-				Note: "Never return or persist raw exception text/backend details in error payloads. Log full context internally and surface only a thin, generic, client-safe message."},
-			model.Proposal{Rule: "no-internal-details-in-client-errors",
-				Note: "Never surface raw exception or library text (ValueError, UUID parse errors) in HTTP responses; log internally and return a generic message."},
-		},
-		{
-			model.Proposal{Rule: "docs-code-drift",
-				Note: "When you change a tool payload, stage list, or behavior, update every doc, RFC, and index that describes it."},
-			model.Proposal{Rule: "docs-out-of-sync-with-code",
-				Note: "Keep docstrings, comments, README examples, and OpenAPI descriptions matching the code."},
-		},
-		{
-			model.Proposal{Rule: "empty-collection-guard",
-				Note: "Guard collections for emptiness before calling min(), max(), or positional indexing."},
-			model.Proposal{Rule: "guard-empty-before-reduction",
-				Note: "Check that DataFrames, index slices, and arrays are non-empty before calling .max()/.min()."},
-		},
-		{
-			model.Proposal{Rule: "atomic-write-and-promote",
-				Note: "Don't leave persisted state inconsistent under partial failure or concurrency: wrap dependent writes in one transaction."},
-			model.Proposal{Rule: "atomic-multi-step-writes",
-				Note: "Never leave persisted state invalid between dependent writes: wrap trade+leg inserts in one transaction."},
-		},
-		{
-			// Same label, different wording — the case that slipped
-			// through a note-only comparison.
-			model.Proposal{Rule: "mask-internal-errors-from-clients",
-				Note: "Route every failure path through api.errors.log_and_raise so clients never see internals."},
-			model.Proposal{Rule: "mask-internal-errors-from-clients",
-				Note: "Wrap DB/stats/deserialization failures with log_and_raise: log richly, return a thin message."},
-		},
+// The wording calibration set lives with the wording package; the
+// tests here cover what dedupe adds on top of it: evidence identity.
+//
+// The regression shape is real: group signatures churn as the corpus
+// grows, and two different groups once cited the byte-identical
+// 7-finding subset — both proposals were applied ("run-linters-
+// before-commit" / "lint-clean-before-push") because their wordings
+// shared almost nothing. Identity must catch what wording cannot.
+func TestRestatedByEvidenceIdentity(t *testing.T) {
+	known := NewKnown([]model.Proposal{
+		{ID: 54, Rule: "run-linters-before-commit",
+			Note:    "Run every linter the repo configures before committing.",
+			Members: []int64{101, 102, 103, 104, 105, 106, 107}},
+	})
+
+	cases := []struct {
+		name    string
+		members []int64
+		dup     bool
+	}{
+		{"identical evidence", []int64{101, 102, 103, 104, 105, 106, 107}, true},
+		// Containment is NOT identity: one finding can flag two
+		// mistakes, so a subset can be a genuinely different pattern —
+		// and suppressing it would mark its group distilled with the
+		// lesson unextracted. Wording still judges these.
+		{"subset of known evidence", []int64{102, 105}, false},
+		{"superset of known evidence", []int64{100, 101, 102, 103, 104, 105, 106, 107}, false},
+		{"overlapping but not nested", []int64{106, 107, 200}, false},
+		{"disjoint evidence", []int64{200, 201}, false},
 	}
 
-	for _, c := range same {
-		assert.True(t, newTopic(c.a.Rule, c.a.Note).restates(newTopic(c.b.Rule, c.b.Note)),
-			"%q and %q say the same thing", c.a.Rule, c.b.Rule)
-	}
+	for _, c := range cases {
+		// Wording is deliberately unrelated: identity alone must decide.
+		of, dup := known.Restated(model.Proposal{
+			Rule:    "atomic-snapshot-promotion",
+			Note:    "Stage a full generation before promoting the live archive.",
+			Members: c.members,
+		})
 
-	distinct := []struct{ a, b model.Proposal }{
-		{
-			model.Proposal{Rule: "holiday-aware-session-dates",
-				Note: "Compute next/prev trading session with the holiday-and-weekend-aware calendar, never calendar arithmetic."},
-			model.Proposal{Rule: "train-serve-parity",
-				Note: "Live serving must compute features exactly as the historical materialization does — same normalization denominator, same source key."},
-		},
-		{
-			model.Proposal{Rule: "no-silent-default-quantity",
-				Note: "Never substitute a default quantity when the source lacks or zeroes it; fail fast instead."},
-			model.Proposal{Rule: "bound-refetch-triggers",
-				Note: "Do not key a refetch effect on a value that changes with every live tick; bucket or debounce the key."},
-		},
-		{
-			// Both about guarding inputs, but different mistakes: NaN
-			// contamination vs unvalidated request bounds.
-			model.Proposal{Rule: "guard-nan-and-missing-numerics",
-				Note: "Never feed possibly-missing or non-finite numbers into comparisons or float(); drop NaN and sentinels explicitly."},
-			model.Proposal{Rule: "unvalidated-input-bounds",
-				Note: "Validate CLI args and request fields before acting on them: reject non-positive limits and out-of-range offsets."},
-		},
-	}
+		assert.Equal(t, c.dup, dup, c.name)
 
-	for _, c := range distinct {
-		assert.False(t, newTopic(c.a.Rule, c.a.Note).restates(newTopic(c.b.Rule, c.b.Note)),
-			"%q and %q are separate guidance", c.a.Rule, c.b.Rule)
+		if c.dup {
+			assert.Equal(t, "run-linters-before-commit", of, c.name)
+		}
 	}
+}
+
+func TestRestatedIdentitySparesSameReplyPatterns(t *testing.T) {
+	// One finding can flag two mistakes: a model reading a group may
+	// honestly cite the same members for distinct patterns in one
+	// reply. Identity must not collapse batch-mates — wording still
+	// guards the batch against padding.
+	known := NewKnown([]model.Proposal{
+		{Rule: "leaky-error-payloads", Signature: "sig-a",
+			Note:    "Never surface raw exception text in responses; log internally, return a generic message.",
+			Members: []int64{11, 12}},
+	})
+
+	_, dup := known.Restated(model.Proposal{
+		Rule: "pooled-state-reset", Signature: "sig-a",
+		Note:    "Reset every pooled field in Free() before the struct is reused.",
+		Members: []int64{11, 12},
+	})
+	assert.False(t, dup, "same reply, distinct wording: both patterns stand")
+
+	of, dup := known.Restated(model.Proposal{
+		Rule: "pooled-state-reset", Signature: "sig-b",
+		Note:    "Reset every pooled field in Free() before the struct is reused.",
+		Members: []int64{11, 12},
+	})
+	assert.True(t, dup, "the same citations from a DIFFERENT batch are a re-derivation")
+	assert.Equal(t, "leaky-error-payloads", of)
+}
+
+func TestRestatedIdentityIgnoresConfigPins(t *testing.T) {
+	// Config pins cite no findings; identity must say nothing about
+	// them, in either direction.
+	known := NewKnown([]model.Proposal{
+		{Rule: "ascii-only-scripts", Note: "Keep scripts ASCII — smart quotes have bitten us."},
+	})
+
+	_, dup := known.Restated(model.Proposal{
+		Rule: "bounded-event-deferral",
+		Note: "Route deferred events through one bounded forwarding queue so backpressure cannot amplify goroutines.",
+		// Any members at all: nested-against-nothing must not trigger.
+		Members: []int64{1, 2},
+	})
+	assert.False(t, dup, "evidence can never nest inside an evidence-free pin")
 }
 
 func TestKnownCoversPinsAndEveryDecision(t *testing.T) {
@@ -133,4 +148,40 @@ func TestClustersGroupsAndOrders(t *testing.T) {
 	}
 
 	assert.Empty(t, Clusters(ps[:1]), "a lone pin has nothing to restate")
+}
+
+func TestClustersCatchRederivedEvidence(t *testing.T) {
+	// The p54/p56 shape: identical citations, wordings that share
+	// almost nothing. The audit must name them one cluster so the
+	// human gets a prune suggestion.
+	ps := []model.Proposal{
+		{ID: 54, Rule: "run-linters-before-commit",
+			Note:    "Run every linter the repo configures before committing.",
+			Members: []int64{101, 102, 103}},
+		{ID: 56, Rule: "atomic-snapshot-promotion",
+			Note:    "Stage a full generation before promoting the live archive.",
+			Members: []int64{101, 102, 103}},
+		{ID: 60, Rule: "train-serve-parity",
+			Note:    "Serving must compute features exactly as the historical materialization does.",
+			Members: []int64{300, 301}},
+	}
+
+	got := Clusters(ps)
+
+	require.Len(t, got, 1)
+	require.Len(t, got[0], 2)
+	assert.NotEqual(t, int64(60), got[0][0].ID)
+	assert.NotEqual(t, int64(60), got[0][1].ID)
+}
+
+func TestGovernsNormalizesWildcardRegions(t *testing.T) {
+	// A proposal whose Regions slipped in as ["*"] (an import, a hand-
+	// built row) is repo-wide: it must govern every area, not literally
+	// match a directory named "*" and govern none.
+	known := NewKnown([]model.Proposal{
+		{Rule: "wildcard-pin", Note: "Applies everywhere.", Regions: []string{"*"}},
+	})
+
+	labels := known.Labels("api", 10)
+	assert.Contains(t, labels, "wildcard-pin", "a wildcard region set governs everywhere")
 }

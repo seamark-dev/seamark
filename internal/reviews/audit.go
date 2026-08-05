@@ -29,16 +29,27 @@ type FiredLesson struct {
 
 // Firing is one record of the edit hook surfacing lessons before an edit.
 type Firing struct {
-	TS    string        `json:"ts"`
-	File  string        `json:"file"`
-	Tool  string        `json:"tool"`
+	TS string `json:"ts"`
+	// Surface names the emitter: "" reads as the edit hook (the only
+	// writer before change_set and check joined).
+	Surface string `json:"surface,omitempty"`
+	// File carries a single-file firing (the hook); Files a multi-file
+	// one (change_set, check) — individually, so distinct-file counts
+	// stay meaningful whatever order a diff lists them in.
+	File  string        `json:"file,omitempty"`
+	Files []string      `json:"files,omitempty"`
+	Tool  string        `json:"tool,omitempty"`
 	Fired []FiredLesson `json:"fired"`
 }
 
-// RecordFiring appends a firing record to <root>/.seamark/lessons-audit.jsonl.
-// The caller (the edit hook) treats the error as best-effort: an audit
-// write must never fail the edit it observed.
-func RecordFiring(root, file, tool string, lessons []model.Lesson) error {
+// RecordFiringSurface appends a firing record to
+// <root>/.seamark/lessons-audit.jsonl with the emitting surface named
+// ("" reads as the edit hook | change_set | check) — --stats reads all
+// ambient exposure, not just the hook's. Files travel individually so
+// a ten-file check counts ten files, not one joined string. Callers
+// treat the error as best-effort: an audit write must never fail the
+// action it observed.
+func RecordFiringSurface(root, surface string, files []string, tool string, lessons []model.Lesson) error {
 	if len(lessons) == 0 {
 		return nil
 	}
@@ -49,12 +60,31 @@ func RecordFiring(root, file, tool string, lessons []model.Lesson) error {
 	}
 
 	rec := Firing{
-		TS:    time.Now().UTC().Format(time.RFC3339),
-		File:  file,
-		Tool:  tool,
-		Fired: fired,
+		TS:      time.Now().UTC().Format(time.RFC3339),
+		Surface: surface,
+		Tool:    tool,
+		Fired:   fired,
 	}
 
+	// The single-file shape stays byte-compatible with every log the
+	// hook wrote before surfaces existed.
+	if len(files) == 1 {
+		rec.File = files[0]
+	} else {
+		rec.Files = files
+	}
+
+	return appendFiring(root, rec)
+}
+
+// RecordFiring is RecordFiringSurface for the edit hook, the original
+// (and unnamed) surface.
+func RecordFiring(root, file, tool string, lessons []model.Lesson) error {
+	return RecordFiringSurface(root, "", []string{file}, tool, lessons)
+}
+
+// appendFiring writes one record to the firing log.
+func appendFiring(root string, rec Firing) error {
 	dir := filepath.Join(root, ".seamark")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -143,7 +173,11 @@ type Fired struct {
 
 // Summary is the aggregate the `--stats` view renders.
 type Summary struct {
-	Total      int            // firing events
+	Total int // firing events across every surface
+	// BySurface splits the events: an actual pre-edit hook reminder, a
+	// change_set plan, and a CI check are different kinds of exposure,
+	// and "edits reminded" must not count the other two.
+	BySurface  map[string]int
 	Files      int            // distinct files that triggered a firing
 	Ranked     []Fired        // surfaced lessons that fired, most-fired first
 	NeverFired []model.Lesson // lessons that would surface but never have
@@ -157,9 +191,23 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 
 	count := map[key]*Fired{}
 	files := map[string]bool{}
+	bySurface := map[string]int{}
 
 	for _, fr := range firings {
-		files[fr.File] = true
+		surface := fr.Surface
+		if surface == "" {
+			surface = "hook"
+		}
+
+		bySurface[surface]++
+
+		if fr.File != "" {
+			files[fr.File] = true
+		}
+
+		for _, f := range fr.Files {
+			files[f] = true
+		}
 
 		for _, fl := range fr.Fired {
 			k := key{fl.Region, fl.Symptom}
@@ -206,6 +254,7 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 
 	return Summary{
 		Total:      len(firings),
+		BySurface:  bySurface,
 		Files:      len(files),
 		Ranked:     ranked,
 		NeverFired: never,

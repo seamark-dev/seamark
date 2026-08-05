@@ -218,6 +218,58 @@ func TestTrailingSingletonIsRebalancedNotLost(t *testing.T) {
 	assert.Equal(t, 41, total, "a finding with company must never be lost to chunking")
 }
 
+func TestBoundedSplitIsStableUnderGrowth(t *testing.T) {
+	// The signature economics stand on this: one new finding must
+	// reopen one group, not re-bill the whole component the way
+	// positional slicing did (boundaries shift, every slice churns).
+	g := NewLexicalGrouper().(*lexicalGrouper)
+
+	var fs []model.Finding
+
+	for i := 0; i < 100; i++ {
+		fs = append(fs, model.Finding{ID: int64(1000 + i*7), Path: "pkg/hot/hot.go"})
+	}
+
+	sigsOf := func(parts [][]model.Finding) map[string]bool {
+		out := map[string]bool{}
+
+		for _, part := range parts {
+			out[makeGroup(part).Signature] = true
+		}
+
+		return out
+	}
+
+	before := g.bounded(fs)
+
+	total := 0
+
+	for _, part := range before {
+		assert.GreaterOrEqual(t, len(part), 2, "no singleton escapes the merge")
+		assert.LessOrEqual(t, len(part), g.maxGroup, "cap must hold")
+		total += len(part)
+	}
+
+	assert.Equal(t, 100, total, "bucketing must not lose findings")
+
+	// The newcomer's id sorts BEFORE every existing one: a regression
+	// to positional slicing would shift every boundary and churn every
+	// signature, so this catches it — a max-id append would not (it
+	// only extends the last positional slice).
+	grown := append([]model.Finding{{ID: 7, Path: "pkg/hot/hot.go"}}, fs...)
+	beforeSigs, afterSigs := sigsOf(before), sigsOf(g.bounded(grown))
+
+	fresh := 0
+
+	for s := range afterSigs {
+		if !beforeSigs[s] {
+			fresh++
+		}
+	}
+
+	assert.Equal(t, 1, fresh, "one new finding reopens exactly one group")
+}
+
 // TestGroupRealFindings is the live benchmark: it reads a populated
 // index (testdb/index.db at the repo root, or $SEAMARK_DISTILL_DB) and
 // reports how the grouper carves real findings. Skipped when no such

@@ -102,6 +102,51 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+// OpenReadOnly opens an EXISTING database for querying only: no schema
+// application, no migrations, no writes — the opener for diagnostics
+// that must leave the target byte-identical. The database must already
+// carry this binary's schema version: an older one would fail queries
+// on missing columns, a newer one must not be guessed at — both are
+// refused with the same advice, run a current `seamark index` against
+// it first.
+func OpenReadOnly(path string) (*Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("store: open read-only: %w", err)
+	}
+
+	// mode=ro is enough for our WAL databases: SQLite reads the
+	// -wal/-shm sidecars itself when they exist, and their absence just
+	// means the last writer checkpointed cleanly. immutable=1 is
+	// deliberately NOT set — another seamark may be writing this
+	// database right now, and immutable would serve stale pages as
+	// truth.
+	db, err := sql.Open("sqlite", dsn(path, "mode=ro&_pragma=busy_timeout(5000)"))
+	if err != nil {
+		return nil, fmt.Errorf("store: open %s read-only: %w", path, err)
+	}
+
+	db.SetMaxOpenConns(1)
+
+	stored, err := readVersion(db)
+	if err != nil {
+		_ = db.Close()
+
+		// The first actual read: a dirty WAL on a read-only filesystem
+		// surfaces here, and the bare driver error names no file.
+		return nil, fmt.Errorf("store: read %s read-only: %w", path, err)
+	}
+
+	if stored != schemaVersion {
+		_ = db.Close()
+
+		return nil, fmt.Errorf("store: database schema is v%d but this seamark reads v%d — "+
+			"run `seamark index` against it first (read-only open migrates nothing)",
+			stored, schemaVersion)
+	}
+
+	return &Store{db: db}, nil
+}
+
 // Close releases the underlying database handle.
 func (s *Store) Close() error { return s.db.Close() }
 
@@ -445,15 +490,48 @@ func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
 	return nil
 }
 
+// findingCols is the column list every finding query selects, in
+// scanFindings order.
+const findingCols = `id, lesson_key, path, pr, reviewer, body, url, created_at, source, paths`
+
+// encodeStrings stores a string slice as JSON, ” for none — the
+// column defaults pre-migration rows carry.
+func encodeStrings(v []string) (string, error) {
+	if len(v) == 0 {
+		return "", nil
+	}
+
+	b, err := json.Marshal(v)
+
+	return string(b), err
+}
+
+// decodeStrings is encodeStrings' inverse.
+func decodeStrings(s string) ([]string, error) {
+	if s == "" {
+		return nil, nil
+	}
+
+	var out []string
+	err := json.Unmarshal([]byte(s), &out)
+
+	return out, err
+}
+
 func insertFinding(db execer, f *model.Finding) error {
 	if f.Source == "" {
 		f.Source = model.SourceReview
 	}
 
-	_, err := db.Exec(
-		`INSERT INTO finding (id, lesson_key, path, pr, reviewer, body, url, created_at, source)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		f.ID, f.LessonKey, f.Path, f.PR, f.Reviewer, f.Body, f.URL, f.CreatedAt, f.Source)
+	paths, err := encodeStrings(f.Paths)
+	if err != nil {
+		return fmt.Errorf("store: encode finding paths: %w", err)
+	}
+
+	_, err = db.Exec(
+		`INSERT INTO finding (id, lesson_key, path, pr, reviewer, body, url, created_at, source, paths)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		f.ID, f.LessonKey, f.Path, f.PR, f.Reviewer, f.Body, f.URL, f.CreatedAt, f.Source, paths)
 	if err != nil {
 		return fmt.Errorf("store: insert finding %d: %w", f.ID, err)
 	}
@@ -464,8 +542,7 @@ func insertFinding(db execer, f *model.Finding) error {
 // AllFindings returns every stored finding — the distiller's input.
 func (s *Store) AllFindings() ([]model.Finding, error) {
 	rows, err := s.db.Query(
-		`SELECT id, lesson_key, path, pr, reviewer, body, url, created_at, source
-		 FROM finding ORDER BY id`)
+		`SELECT ` + findingCols + ` FROM finding ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -513,7 +590,7 @@ func (s *Store) DistilledSignatures() (map[string]bool, error) {
 
 // proposalCols is the column list every proposal query selects, in
 // scanProposals order.
-const proposalCols = `id, signature, rule, region, note, members, agent, status, created_at`
+const proposalCols = `id, signature, rule, region, regions, note, members, agent, status, created_at`
 
 // InsertProposal stores one distilled proposal and returns its id.
 func (s *Store) InsertProposal(p *model.Proposal) error {
@@ -531,10 +608,15 @@ func insertProposal(db execer, p *model.Proposal) error {
 		return fmt.Errorf("store: encode proposal members: %w", err)
 	}
 
+	regions, err := encodeStrings(p.Regions)
+	if err != nil {
+		return fmt.Errorf("store: encode proposal regions: %w", err)
+	}
+
 	res, err := db.Exec(
-		`INSERT INTO proposal (signature, rule, region, note, members, agent, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Signature, p.Rule, p.Region, p.Note, string(members), p.Agent, p.Status, p.CreatedAt)
+		`INSERT INTO proposal (signature, rule, region, regions, note, members, agent, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Signature, p.Rule, p.Region, regions, p.Note, string(members), p.Agent, p.Status, p.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("store: insert proposal %s: %w", p.Rule, err)
 	}
@@ -595,16 +677,21 @@ func scanProposals(rows *sql.Rows) ([]model.Proposal, error) {
 
 	for rows.Next() {
 		var p model.Proposal
-		var members string
 
-		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &p.Note,
-			&members, &p.Agent, &p.Status, &p.CreatedAt)
+		var members, regions string
+
+		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &regions,
+			&p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
 
 		if err := json.Unmarshal([]byte(members), &p.Members); err != nil {
 			return nil, fmt.Errorf("store: proposal %d members: %w", p.ID, err)
+		}
+
+		if p.Regions, err = decodeStrings(regions); err != nil {
+			return nil, fmt.Errorf("store: proposal %d regions: %w", p.ID, err)
 		}
 
 		out = append(out, p)
@@ -726,8 +813,8 @@ func (s *Store) PruneStaleProposals(liveSignatures map[string]bool) (int, error)
 // first — the evidence trail a distiller or a provenance view reads.
 func (s *Store) FindingsForLesson(clusterKey string) ([]model.Finding, error) {
 	rows, err := s.db.Query(
-		`SELECT id, lesson_key, path, pr, reviewer, body, url, created_at, source
-		 FROM finding WHERE lesson_key = ? ORDER BY created_at, id`, clusterKey)
+		`SELECT `+findingCols+` FROM finding
+		 WHERE lesson_key = ? ORDER BY created_at, id`, clusterKey)
 	if err != nil {
 		return nil, err
 	}
@@ -736,16 +823,227 @@ func (s *Store) FindingsForLesson(clusterKey string) ([]model.Finding, error) {
 	return scanFindings(rows)
 }
 
+// ClusterCited counts one mined cluster's findings: how many are among
+// a given citation set, and how many exist in total.
+type ClusterCited struct {
+	Cited, Total int
+}
+
+// ClusterCitation reports, for every mined-lesson cluster the given
+// finding ids touch, how much of the cluster those ids cover. The
+// caller decides what coverage means — this method only counts.
+// Duplicate ids are deduplicated first, so overlapping citation sets
+// cannot inflate a count past the cluster's size.
+func (s *Store) ClusterCitation(ids []int64) (map[string]ClusterCited, error) {
+	seen := make(map[int64]bool, len(ids))
+	unique := make([]int64, 0, len(ids))
+
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+		}
+	}
+
+	out := map[string]ClusterCited{}
+
+	// Chunked IN lists: cited ids number in the hundreds, and SQLite's
+	// parameter limit must never be the thing that breaks a surface.
+	err := s.countByKey(`SELECT lesson_key, COUNT(*) FROM finding
+		 WHERE lesson_key != '' AND id IN (%s) GROUP BY lesson_key`,
+		int64Args(unique), func(key string, n int) {
+			c := out[key]
+			c.Cited += n
+			out[key] = c
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	keys := make([]any, 0, len(out))
+	for key := range out {
+		keys = append(keys, key)
+	}
+
+	err = s.countByKey(`SELECT lesson_key, COUNT(*) FROM finding
+		 WHERE lesson_key IN (%s) GROUP BY lesson_key`,
+		keys, func(key string, n int) {
+			c := out[key]
+			c.Total += n
+			out[key] = c
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// UpdateProposalRegionsBatch rewrites the region sets of the given
+// proposals in ONE transaction — the ledger half of retarget is
+// all-or-nothing, so a mid-batch failure can never leave some pins
+// retargeted in the database and others not while the file already
+// carries every new identity.
+func (s *Store) UpdateProposalRegionsBatch(ps []model.Proposal) error {
+	if len(ps) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin region update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+
+	for _, p := range ps {
+		encoded, err := encodeStrings(p.Regions)
+		if err != nil {
+			return fmt.Errorf("store: encode proposal regions: %w", err)
+		}
+
+		if _, err := tx.Exec(`UPDATE proposal SET region = ?, regions = ? WHERE id = ?`,
+			p.Region, encoded, p.ID); err != nil {
+			return fmt.Errorf("store: update proposal %d regions: %w", p.ID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// FindingsMetaByIDs returns the cited findings' metadata — everything
+// confidence assessment needs (path, pr, source, timestamps) WITHOUT
+// the bodies, so ambient surfaces can assess pins on every edit
+// without hauling the corpus into memory. Duplicate ids are fine.
+func (s *Store) FindingsMetaByIDs(ids []int64) (map[int64]model.Finding, error) {
+	seen := make(map[int64]bool, len(ids))
+	unique := make([]any, 0, len(ids))
+
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+		}
+	}
+
+	out := make(map[int64]model.Finding, len(unique))
+
+	err := s.chunked(
+		`SELECT id, path, pr, created_at, source, paths FROM finding
+		 WHERE id IN (%s)`, unique,
+		func(rows *sql.Rows) error {
+			var f model.Finding
+
+			var paths string
+
+			if err := rows.Scan(&f.ID, &f.Path, &f.PR, &f.CreatedAt, &f.Source, &paths); err != nil {
+				return err
+			}
+
+			decoded, err := decodeStrings(paths)
+			if err != nil {
+				return fmt.Errorf("store: finding %d paths: %w", f.ID, err)
+			}
+
+			f.Paths = decoded
+			out[f.ID] = f
+
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// chunked runs an IN-list query against args in slices of 500 — SQLite
+// bounds bound-parameter counts, and one giant list would fail exactly
+// on the large repositories that need the query most. query must be a
+// constant SQL template supplied by an internal caller, never caller
+// input, with its single %s reserved for the generated placeholder
+// list. scan owns all column reading for one row; iteration errors and
+// Close bookkeeping stay here.
+func (s *Store) chunked(query string, args []any, scan func(*sql.Rows) error) error {
+	for len(args) > 0 {
+		chunk := args
+		if len(chunk) > 500 {
+			chunk = chunk[:500]
+		}
+
+		args = args[len(chunk):]
+
+		marks := strings.Repeat(",?", len(chunk))[1:]
+
+		rows, err := s.db.Query(fmt.Sprintf(query, marks), chunk...)
+		if err != nil {
+			return err
+		}
+
+		for rows.Next() {
+			if err := scan(rows); err != nil {
+				_ = rows.Close()
+
+				return err
+			}
+		}
+
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+
+			return err
+		}
+
+		_ = rows.Close()
+	}
+
+	return nil
+}
+
+// countByKey runs a two-column (key, count) GROUP BY query in chunks of
+// the given args, feeding each row to add — the same %s template
+// contract as chunked.
+func (s *Store) countByKey(query string, args []any, add func(key string, n int)) error {
+	return s.chunked(query, args, func(rows *sql.Rows) error {
+		var key string
+
+		var n int
+
+		if err := rows.Scan(&key, &n); err != nil {
+			return err
+		}
+
+		add(key, n)
+
+		return nil
+	})
+}
+
+// int64Args widens ids for the driver.
+func int64Args(ids []int64) []any {
+	out := make([]any, len(ids))
+	for i, id := range ids {
+		out[i] = id
+	}
+
+	return out
+}
+
 func scanFindings(rows *sql.Rows) ([]model.Finding, error) {
 	var out []model.Finding
 
 	for rows.Next() {
 		var f model.Finding
 
+		var paths string
+
 		err := rows.Scan(&f.ID, &f.LessonKey, &f.Path, &f.PR,
-			&f.Reviewer, &f.Body, &f.URL, &f.CreatedAt, &f.Source)
+			&f.Reviewer, &f.Body, &f.URL, &f.CreatedAt, &f.Source, &paths)
 		if err != nil {
 			return nil, err
+		}
+
+		if f.Paths, err = decodeStrings(paths); err != nil {
+			return nil, fmt.Errorf("store: finding %d paths: %w", f.ID, err)
 		}
 
 		out = append(out, f)

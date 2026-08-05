@@ -372,6 +372,7 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (string, error){
 
 			var b bytes.Buffer
 			report.Decision(&b, decision)
+			report.CheckAdvisory(&b, st, s.root, gate.ChangedPaths(p.Diff))
 
 			return b.String(), nil
 		})
