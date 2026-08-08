@@ -18,7 +18,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke
+.PHONY: build test lint fmt tidy index report clean release-archive smoke lessons-bench
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -63,6 +63,9 @@ release-archive: build ## Package a versioned archive for this platform into ./d
 
 smoke: build ## End-to-end smoke test of the built binary in a fresh fixture repo
 	scripts/release-smoke.sh $(BINARY)
+
+lessons-bench: build ## RFC-003 A/B experiment: 2 x N headless agent sessions (costs tokens; BENCH_FLAGS=-dry-run first)
+	go run ./cmd/lessons-bench $(BENCH_FLAGS)
 
 clean: ## Remove build artifacts and the local index
 	rm -rf bin dist .seamark
