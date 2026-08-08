@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -144,4 +145,42 @@ func TestSummarize(t *testing.T) {
 
 	require.Len(t, s.NeverFired, 1)
 	assert.Equal(t, "E501", s.NeverFired[0].Symptom, "surfaced but never fired = decay candidate")
+}
+
+func TestExposureSurvivesCosmeticPinEdits(t *testing.T) {
+	record := func(p PinRule) FiredLesson {
+		// Exactly what RecordFiring persists: the raw rendered pair.
+		l := SurfacedPin{Pin: p}.Lesson()
+
+		return FiredLesson{Region: l.Region, Symptom: l.Symptom}
+	}
+
+	pin := PinRule{
+		Rule: "Pool-Reset", Regions: []string{"pkg/b", "pkg/a"},
+		Note: "reset in Free and clone",
+	}
+
+	exposure := FirstFirings([]Firing{
+		{TS: "2026-08-01T10:00:00Z", Fired: []FiredLesson{record(pin)}},
+		{TS: "2026-08-02T10:00:00Z", Fired: []FiredLesson{record(pin)}},
+	})
+
+	// Reordered regions and rule-case tweaks are the same pin: the
+	// exposure clock survives the edit.
+	edited := PinRule{
+		Rule: "pool-reset", Regions: []string{"pkg/a", "pkg/b"},
+		Note: "reset in Free and clone",
+	}
+
+	exp, ok := exposure[PinIdentity(edited)]
+	require.True(t, ok)
+	assert.Equal(t, 2, exp.Count)
+	assert.True(t, exp.First.Equal(time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)))
+
+	// A reworded note is a new treatment: the clock resets.
+	reworded := pin
+	reworded.Note = "reset in Free, deep-copy in clone"
+
+	_, ok = exposure[PinIdentity(reworded)]
+	assert.False(t, ok)
 }

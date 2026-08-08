@@ -265,14 +265,22 @@ bare score.
 `seamark lessons --proposals` re-judges every pending and applied
 proposal under *today's* rules, for free: its confidence facts, a note
 when it was distilled under an older prompt (before the recurrence
-rules tightened), dead citations, and — when current inference
-disagrees with the stored regions — a `regions now:` line with one
-command covering every drifted pin:
+rules tightened), dead citations, the outcome verdict for applied pins
+(the same sentence `--stats` prints — see "Do pins actually change
+behavior?"), and — when current inference disagrees with the stored
+regions — a `regions now:` line with one command covering every
+drifted pin:
 
 ```text
   p65   train-serve-parity                 *
         fair — 2 event(s), fix, newest 65d
+        working — flagged 4× in ~120 region-commits before exposure; 0× in 31 since (fired 9×)
         regions now: workers
+  p47   leak-exception-to-client           svc/api
+        not landing — recurred 2× since exposure (fired 12×)
+
+not landing — p47 fire but the mistake recurs; escalation is yours:
+reword the note, raise the pin, or graduate it to a check
 
 retarget: `seamark lessons --retarget p65,p62,…` updates those pins to
 the recomputed regions (lessons.yaml and the ledger together)
@@ -354,7 +362,43 @@ most surfaced
 never fired — 7 lessons in regions no edit has touched (decay candidates)
   tests                                    E741
   …
+
+pin outcomes — 3 measured: 1 working, 1 not landing, 1 untested
+  p47   leak-exception-to-client           not landing — recurred 2× since exposure (fired 12×)
+  p16   pooled-state-reset                 working — flagged 10× in ~200 region-commits before exposure; 0× in 84 since (fired 41×)
+  p9    cap-per-request-query              untested — 3 region-commits since exposure (fired 5×)
 ```
+
+### Do pins actually change behavior? The outcome loop
+
+Firing counts measure *exposure* — a pin reached an agent. The `pin
+outcomes` block measures *effect*: did the pin's mistake recur after
+agents started seeing it? For every applied pin, seamark joins three
+things it already stores — the firing log (when the pin first reached
+an agent), the finding table (did the same mistake get flagged or
+fixed again after that), and mined history (how many commits touched
+the pin's regions since, so silence in a quiet region is never read as
+success). Everything is recomputed on each run; there is no model
+call, no score, and no new state.
+
+Three verdicts, each a sentence you can check against your own repo:
+
+- **`not landing`** — the pin fires and the mistake recurred anyway.
+  This is the actionable class: the ledger suggests rewording the
+  note, pruning, or promoting the pin toward a machine-checked rule.
+- **`working`** — flagged N times before exposure, zero since, across
+  enough region commits to mean something. Validation, not a removal
+  signal: the pin may be the reason the mistake stopped.
+- **`untested`** — no verdict yet, and the sentence says why: the pin
+  never fired, too few commits touched its regions (fewer than 5),
+  the finding corpus was not re-mined after exposure (run `seamark
+  index --reviews`), or every cited finding has aged out of the
+  mining window.
+
+The exposure clock starts at a pin's **first firing**, not its apply
+date — a pin no agent ever saw cannot have changed behavior. Rewording
+a pin's note restarts its clock (a different reminder is a different
+treatment); reordering its regions or retouching case does not.
 
 ## Reviewing it all: seamark report
 
@@ -375,9 +419,12 @@ machine with no network. Four sections:
 - **Decision queue** — every proposal awaiting `--apply`/`--dismiss`,
   with the findings it cited (click through to the original review
   comment), the commands that decide it, and each card's evidence
-  health: the confidence tier with its facts, the prompt-era note, and
-  a `regions now:` drift line with the `--retarget` command when
-  today's inference disagrees. The header line says what the evidence
+  health: the confidence tier with its facts, the prompt-era note, the
+  outcome verdict for applied pins (`not landing` highlighted — it is
+  the one that needs action), and a `regions now:` drift line with the
+  `--retarget` command when today's inference disagrees. The header
+  stats row carries the aggregate: how many pins were measured, and
+  how many are not landing. The evidence-mix line says what it all
   rests on: *469 review · 34 fix:conventional · 15 fix:subject*.
 - **Near-duplicate pins** — which *applied* pins restate a theme already
   pinned. This is the audit that found 17 redundant pins out of 65 in a

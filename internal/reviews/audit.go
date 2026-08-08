@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/model"
@@ -25,6 +26,24 @@ const maxAuditLine = 1 << 20
 type FiredLesson struct {
 	Region  string `json:"region"`
 	Symptom string `json:"symptom"`
+}
+
+// canonicalIdentity normalizes the parts of a rendered identity that
+// carry no meaning: region order, symptom case, and whitespace. This
+// keeps a pin's exposure history across cosmetic lessons.yaml edits
+// (reordered regions, retouched case). The note text stays significant:
+// a reworded note is a different reminder and restarts the exposure
+// clock. Only the measurement join uses this; records on disk and the
+// Summarize display keep the raw rendered form.
+func (fl FiredLesson) canonicalIdentity() FiredLesson {
+	// Known limit: a region path containing ", " would split wrong.
+	regions := strings.Split(fl.Region, ", ")
+	sort.Strings(regions)
+
+	return FiredLesson{
+		Region:  strings.Join(regions, ", "),
+		Symptom: strings.ToLower(strings.TrimSpace(fl.Symptom)),
+	}
 }
 
 // Firing is one record of the edit hook surfacing lessons before an edit.
@@ -259,4 +278,51 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 		Ranked:     ranked,
 		NeverFired: never,
 	}
+}
+
+// Exposure is one lesson's firing history: when it first reached an
+// agent, and how many times in total. The first firing — not the pin's
+// apply date — starts the outcome loop's exposure clock, because a pin
+// that never surfaced cannot have changed behavior.
+type Exposure struct {
+	First time.Time // earliest firing with a parseable timestamp, UTC
+	Count int       // firing records naming this lesson, all surfaces
+}
+
+// FirstFirings folds the firing log into per-identity exposure. Keys
+// are canonical identities; look pins up with PinIdentity, never by
+// re-building the rendered strings. A record with an unparseable
+// timestamp still counts toward Count but cannot set First; an
+// identity with no parseable timestamp at all is omitted, which
+// downstream reads as never fired.
+func FirstFirings(firings []Firing) map[FiredLesson]Exposure {
+	counts := make(map[FiredLesson]int)
+	filtered := make(map[FiredLesson]time.Time)
+
+	for _, entry := range firings {
+		var firedAt *time.Time
+		if ts, err := time.Parse(time.RFC3339, entry.TS); err == nil {
+			firedAt = &ts
+		}
+
+		for _, lesson := range entry.Fired {
+			k := lesson.canonicalIdentity()
+			counts[k]++
+
+			if firedAt == nil {
+				continue
+			}
+
+			if first, ok := filtered[k]; !ok || firedAt.Before(first) {
+				filtered[k] = *firedAt
+			}
+		}
+	}
+
+	out := make(map[FiredLesson]Exposure, len(filtered))
+	for fl, first := range filtered {
+		out[fl] = Exposure{First: first.UTC(), Count: counts[fl]}
+	}
+
+	return out
 }

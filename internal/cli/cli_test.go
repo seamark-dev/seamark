@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -848,6 +849,57 @@ func TestLessonsProposalsLedger(t *testing.T) {
 	assert.Contains(t, out, "dismissed-one")
 	assert.Contains(t, out, "*", "a repo-wide region renders as *")
 	assert.Contains(t, out, "--apply p<id>", "the decide commands ride along")
+}
+
+// TestLessonsProposalsLedgerShowsOutcome wires the passive loop through
+// the real command: a cited finding before exposure, an uncited
+// recurrence in the same cluster after, one genuine firing record — the
+// ledger must render the not-landing sentence and the escalation hint.
+func TestLessonsProposalsLedgerShowsOutcome(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	now := time.Now()
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, LessonKey: "api\x00boundary", Path: "api/handler.go", PR: 11,
+			Body: "guard the api boundary", CreatedAt: now.Add(-time.Hour).Unix(), Source: "review"},
+		{ID: 2, LessonKey: "api\x00boundary", Path: "api/handler.go", PR: 12,
+			Body: "api boundary unguarded again", CreatedAt: now.Add(time.Hour).Unix(), Source: "review"},
+	}))
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "s1", Rule: "boundary-guard", Region: "api", Note: "Guard it.",
+		Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalApplied,
+	}))
+	require.NoError(t, st.Close())
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n  - rule: boundary-guard\n    region: api\n    note: Guard it.\n"), 0o644))
+
+	pin := reviews.PinRule{Rule: "boundary-guard", Region: "api", Note: "Guard it."}
+	require.NoError(t, reviews.RecordFiring(root, "api/handler.go", "Edit",
+		[]model.Lesson{reviews.SurfacedPin{Pin: pin}.Lesson()}))
+
+	out, err := run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "not landing — recurred 1× since exposure (fired 1×)")
+	assert.Contains(t, out, "escalation is yours")
+
+	// --stats prints the same reading: both surfaces render the exact
+	// same sentence from outcome.Line.
+	out, err = run(t, "-C", root, "lessons", "--stats")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "pin outcomes — 1 measured: 0 working, 1 not landing, 0 untested")
+	assert.Contains(t, out, "boundary-guard")
+	assert.Contains(t, out, "not landing — recurred 1× since exposure (fired 1×)")
 }
 
 func TestLessonsPruneRetiresRestatements(t *testing.T) {

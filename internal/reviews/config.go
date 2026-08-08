@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -251,6 +252,15 @@ func pinLesson(p PinRule) model.Lesson {
 	}
 }
 
+// PinIdentity returns the canonical identity this pin's firings are
+// counted under. It wraps pinLesson — the same rendering every surface
+// emits — so the log's writer and this reader cannot drift apart.
+func PinIdentity(p PinRule) FiredLesson {
+	l := pinLesson(p)
+
+	return FiredLesson{Region: l.Region, Symptom: l.Symptom}.canonicalIdentity()
+}
+
 // Surface applies the config to a set of mined lessons for a given scope:
 // drop muted lessons, drop those below threshold, then prepend the
 // applicable pins. The result is what any surface (why, orient, the
@@ -349,17 +359,7 @@ func CollapseRestated(pins []SurfacedPin) (kept []SurfacedPin, dropped int) {
 	for _, sp := range pins {
 		t := wording.New(sp.Pin.Rule, sp.Pin.Note)
 
-		dup := false
-
-		for _, k := range topics {
-			if t.Restates(k) {
-				dup = true
-
-				break
-			}
-		}
-
-		if dup {
+		if slices.ContainsFunc(topics, t.Restates) {
 			continue
 		}
 
@@ -482,4 +482,18 @@ func NewPinKey(rule, region string, regions []string) PinKey {
 	}
 
 	return PinKey{Rule: strings.ToLower(strings.TrimSpace(rule)), Region: canonical}
+}
+
+// FindPin returns the pin lessons.yaml currently carries under this
+// identity. Callers use it for liveness checks and to read the live
+// note — the wording the firing log actually saw, which a hand-edit
+// may have moved away from the proposal's stored note.
+func (c *Config) FindPin(key PinKey) (PinRule, bool) {
+	for _, p := range c.Pin {
+		if NewPinKey(p.Rule, p.Region, p.Regions) == key {
+			return p, true
+		}
+	}
+
+	return PinRule{}, false
 }

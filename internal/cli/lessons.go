@@ -18,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
@@ -573,6 +574,7 @@ func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int6
 
 	now := time.Now()
 	out := make(map[int64]report.ProposalHealth, len(ps))
+	var appliedPs []model.Proposal
 
 	for _, p := range ps {
 		tier, facts := confidence.Assess(p, meta, root, now)
@@ -602,7 +604,38 @@ func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int6
 			}
 		}
 
+		if p.Status == model.ProposalApplied {
+			appliedPs = append(appliedPs, p)
+		}
+
 		out[p.ID] = h
+	}
+
+	// Passive-loop verdicts for the applied subset. Pins
+	// Gather cannot measure get no Outcome, and the printer renders
+	// nothing for them.
+	if len(appliedPs) > 0 {
+		cfg, err := reviews.LoadConfig(root)
+		if err != nil {
+			cfg = reviews.DefaultConfig()
+		}
+
+		firings, err := reviews.ReadFirings(root)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read firing log: %w", err)
+		}
+
+		readings, err := outcome.Gather(st, cfg, appliedPs, firings)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read applied proposal outcomes: %w", err)
+		}
+
+		for id, r := range readings {
+			h := out[id]
+			h.Outcome = r.Line()
+			h.Escalate = r.Verdict == outcome.VerdictNotLanding
+			out[id] = h
+		}
 	}
 
 	return out, nil
@@ -671,7 +704,8 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		// AllRegions resolves the union once at the boundary, so a
 		// hand-written pin carrying both keys governs everywhere it says.
 		pins = append(pins, model.Proposal{
-			Rule: p.Rule, Note: p.Note, Region: p.Region, Regions: p.AllRegions()})
+			Rule: p.Rule, Note: p.Note, Region: p.Region, Regions: p.AllRegions(),
+		})
 	}
 
 	dopts := distill.Options{
@@ -848,18 +882,18 @@ func runLessonsHook(cmd *cobra.Command, opts *options) error {
 func runLessonsStats(cmd *cobra.Command, opts *options) error {
 	st, root, err := openIndex(opts)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read index: %w", err)
 	}
 	defer func() { _ = st.Close() }()
 
 	firings, err := reviews.ReadFirings(root)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read firing log: %w", err)
 	}
 
 	mined, err := st.AllLessons(0)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to fetch mined lessons: %w", err)
 	}
 
 	cfg, err := reviews.LoadConfig(root)
@@ -871,6 +905,18 @@ func runLessonsStats(cmd *cobra.Command, opts *options) error {
 	surfaced := cfg.Surface(mined, "")
 
 	report.PrintFiringSummary(cmd.OutOrStdout(), reviews.Summarize(firings, surfaced))
+
+	applied, err := st.Proposals(model.ProposalApplied)
+	if err != nil {
+		return fmt.Errorf("failed to fetch applied proposals: %w", err)
+	}
+
+	readings, err := outcome.Gather(st, cfg, applied, firings)
+	if err != nil {
+		return fmt.Errorf("failed to gather applied proposal outcomes: %w", err)
+	}
+
+	report.PrintOutcomes(cmd.OutOrStdout(), applied, readings)
 
 	return nil
 }

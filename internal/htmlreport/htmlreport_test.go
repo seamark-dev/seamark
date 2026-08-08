@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -662,4 +664,50 @@ func TestCardsCarryEvidenceHealth(t *testing.T) {
 	assert.Contains(t, page, "prompt v1", "the grandfathering era is visible")
 	assert.Contains(t, page, "regions now: scripts", "region drift is named")
 	assert.Contains(t, page, "--retarget p", "the drifted applied pin hands over the retarget command")
+}
+
+// TestReportShowsPinOutcome wires the passive loop into the page: an
+// applied pin with a recurrence after a real firing must render its
+// not-landing sentence with the notlanding style, and the stats row
+// must carry the measured and not-landing tiles.
+func TestReportShowsPinOutcome(t *testing.T) {
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	// One cited finding before the firing, one uncited finding in the
+	// same cluster after it: the review-side join reads "not landing".
+	now := time.Now()
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, LessonKey: "api\x00boundary", Path: "api/handler.py", PR: 11,
+			Body: "guard the api boundary", CreatedAt: now.Add(-time.Hour).Unix(), Source: "review"},
+		{ID: 2, LessonKey: "api\x00boundary", Path: "api/handler.py", PR: 12,
+			Body: "api boundary unguarded again", CreatedAt: now.Add(time.Hour).Unix(), Source: "review"},
+	}))
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "s1", Rule: "boundary-guard", Region: "api", Note: "Guard it.",
+		Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalApplied,
+	}))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n  - rule: boundary-guard\n    region: api\n    note: Guard it.\n"), 0o644))
+
+	pin := reviews.PinRule{Rule: "boundary-guard", Region: "api", Note: "Guard it."}
+	require.NoError(t, reviews.RecordFiring(root, "api/handler.py", "Edit",
+		[]model.Lesson{reviews.SurfacedPin{Pin: pin}.Lesson()}))
+
+	page := renderPage(t, st, root)
+
+	// The exact Line() sentence, with the actionable style on it.
+	assert.Contains(t, page, "not landing — recurred 1× since exposure (fired 1×)")
+	assert.Contains(t, page, `class="health notlanding"`)
+
+	// The stats row carries the aggregate.
+	assert.Contains(t, page, "<b>1</b><span>pins measured</span>")
+	assert.Contains(t, page, "<b>1</b><span>not landing</span>")
 }

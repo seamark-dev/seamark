@@ -301,12 +301,12 @@ The whole lifecycle is `seamark lessons`, one flag per decision:
 | `--file <path>`   | the lessons that would fire when editing one file — the hook's view, uncapped                                                                                 |
 | `--list` / `--region <dir>` | the raw ledger, one-offs included, with copy-paste config syntax                                                                                    |
 | `--distill`       | batch new findings through your agent CLI into proposed pins; already-distilled evidence is never paid for twice (`--region`, `--limit`, `--dry-run` budget it; a preflight always discloses first) |
-| `--proposals`     | the decision ledger, free: pending/applied/dismissed, each with its confidence facts, its prompt-era note, and the regions today's inference would assign      |
+| `--proposals`     | the decision ledger, free: pending/applied/dismissed, each with its confidence facts, its prompt-era note, its outcome verdict (applied pins), and the regions today's inference would assign |
 | `--apply p3,p7`   | pin chosen proposals (ranges work: `p1..p9`); writes `lessons.yaml` only with `distill.write`, else prints the block to paste                                 |
 | `--dismiss p2`    | record a no — the same evidence is never re-proposed                                                                                                          |
 | `--prune p16,p45` | retire pins that restate another (the ledger names the clusters); the theme stays pinned by its survivor                                                      |
 | `--retarget p3`   | update an applied pin to the regions its living evidence supports now — failures roll `lessons.yaml` back, and re-running always converges                    |
-| `--stats`         | the firing log: which lessons actually reach agents (split by surface: hook / change_set / check), and which never fire — the decay signal                    |
+| `--stats`         | the firing log: which lessons actually reach agents (split by surface: hook / change_set / check), which never fire — the decay signal — and per-pin outcomes: did the mistake recur after the pin started firing (working / not landing / untested) |
 | `--hook`          | the PreToolUse entry point `seamark init` wires; offline, silent when a file has no lessons                                                                   |
 
 Mined text is scrubbed of secret-shaped values (connection strings,
@@ -323,7 +323,8 @@ noise, `pin` forces what must never be ignored (single `region` or a
 decision queue as one self-contained HTML page. The full pipeline —
 mining heuristics, fix-commit classification, region inference,
 confidence tiers, distillation economics, near-duplicate pruning, the
-firing stats — is documented in [docs/lessons.md](docs/lessons.md).
+firing stats, and the outcome loop that answers whether pins actually
+change behavior — is documented in [docs/lessons.md](docs/lessons.md).
 
 ## Journey 3: guard agent commands
 

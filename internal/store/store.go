@@ -22,9 +22,11 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	stdpath "path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -443,7 +445,8 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding)
 	_, err = tx.Exec(
 		`INSERT INTO meta (key, value) VALUES ('reviews_mined_at', ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		fmt.Sprint(time.Now().Unix()))
+		fmt.Sprint(time.Now().Unix()),
+	)
 	if err != nil {
 		return fmt.Errorf("store: stamp review mine: %w", err)
 	}
@@ -472,7 +475,8 @@ func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
 	}
 
 	_, err = tx.Exec(
-		"DELETE FROM finding WHERE source IN ("+strings.Repeat(",?", len(sources))[1:]+")", args...)
+		"DELETE FROM finding WHERE source IN ("+strings.Repeat(",?", len(sources))[1:]+")", args...,
+	)
 	if err != nil {
 		return fmt.Errorf("store: wipe fix findings: %w", err)
 	}
@@ -531,7 +535,8 @@ func insertFinding(db execer, f *model.Finding) error {
 	_, err = db.Exec(
 		`INSERT INTO finding (id, lesson_key, path, pr, reviewer, body, url, created_at, source, paths)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		f.ID, f.LessonKey, f.Path, f.PR, f.Reviewer, f.Body, f.URL, f.CreatedAt, f.Source, paths)
+		f.ID, f.LessonKey, f.Path, f.PR, f.Reviewer, f.Body, f.URL, f.CreatedAt, f.Source, paths,
+	)
 	if err != nil {
 		return fmt.Errorf("store: insert finding %d: %w", f.ID, err)
 	}
@@ -542,7 +547,8 @@ func insertFinding(db execer, f *model.Finding) error {
 // AllFindings returns every stored finding — the distiller's input.
 func (s *Store) AllFindings() ([]model.Finding, error) {
 	rows, err := s.db.Query(
-		`SELECT ` + findingCols + ` FROM finding ORDER BY id`)
+		`SELECT ` + findingCols + ` FROM finding ORDER BY id`,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -557,7 +563,8 @@ func (s *Store) MarkDistilled(signature, region string, at int64) error {
 	_, err := s.db.Exec(
 		`INSERT INTO distilled (signature, region, at) VALUES (?, ?, ?)
 		 ON CONFLICT (signature) DO UPDATE SET region = excluded.region, at = excluded.at`,
-		signature, region, at)
+		signature, region, at,
+	)
 	if err != nil {
 		return fmt.Errorf("store: mark distilled %s: %w", signature, err)
 	}
@@ -616,7 +623,8 @@ func insertProposal(db execer, p *model.Proposal) error {
 	res, err := db.Exec(
 		`INSERT INTO proposal (signature, rule, region, regions, note, members, agent, status, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Signature, p.Rule, p.Region, regions, p.Note, string(members), p.Agent, p.Status, p.CreatedAt)
+		p.Signature, p.Rule, p.Region, regions, p.Note, string(members), p.Agent, p.Status, p.CreatedAt,
+	)
 	if err != nil {
 		return fmt.Errorf("store: insert proposal %s: %w", p.Rule, err)
 	}
@@ -648,7 +656,8 @@ func (s *Store) SaveDistilledGroup(signature, region string, at int64, proposals
 	_, err = tx.Exec(
 		`INSERT INTO distilled (signature, region, at) VALUES (?, ?, ?)
 		 ON CONFLICT (signature) DO UPDATE SET region = excluded.region, at = excluded.at`,
-		signature, region, at)
+		signature, region, at,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("store: mark distilled %s: %w", signature, err)
 	}
@@ -663,7 +672,8 @@ func (s *Store) SaveDistilledGroup(signature, region string, at int64, proposals
 // Proposals returns proposals in one lifecycle state, newest first.
 func (s *Store) Proposals(status string) ([]model.Proposal, error) {
 	rows, err := s.db.Query(
-		`SELECT `+proposalCols+` FROM proposal WHERE status = ? ORDER BY id DESC`, status)
+		`SELECT `+proposalCols+` FROM proposal WHERE status = ? ORDER BY id DESC`, status,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -717,7 +727,8 @@ func (s *Store) ProposalsByIDs(ids []int64) ([]model.Proposal, error) {
 
 	rows, err := s.db.Query(
 		`SELECT `+proposalCols+` FROM proposal
-		 WHERE status = 'proposed' AND id IN (`+marks+`) ORDER BY id`, args...)
+		 WHERE status = 'proposed' AND id IN (`+marks+`) ORDER BY id`, args...,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -753,7 +764,8 @@ func (s *Store) transition(ids []int64, from, to string) (int, error) {
 	marks := strings.Repeat(",?", len(ids))[1:]
 
 	res, err := s.db.Exec(
-		`UPDATE proposal SET status = ? WHERE status = ? AND id IN (`+marks+`)`, args...)
+		`UPDATE proposal SET status = ? WHERE status = ? AND id IN (`+marks+`)`, args...,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -799,7 +811,8 @@ func (s *Store) PruneStaleProposals(liveSignatures map[string]bool) (int, error)
 	marks := strings.Repeat(",?", len(stale))[1:]
 
 	res, err := s.db.Exec(
-		`DELETE FROM proposal WHERE status = 'proposed' AND signature IN (`+marks+`)`, stale...)
+		`DELETE FROM proposal WHERE status = 'proposed' AND signature IN (`+marks+`)`, stale...,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -814,7 +827,8 @@ func (s *Store) PruneStaleProposals(liveSignatures map[string]bool) (int, error)
 func (s *Store) FindingsForLesson(clusterKey string) ([]model.Finding, error) {
 	rows, err := s.db.Query(
 		`SELECT `+findingCols+` FROM finding
-		 WHERE lesson_key = ? ORDER BY created_at, id`, clusterKey)
+		 WHERE lesson_key = ? ORDER BY created_at, id`, clusterKey,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -948,7 +962,8 @@ func (s *Store) FindingsMetaByIDs(ids []int64) (map[int64]model.Finding, error) 
 			out[f.ID] = f
 
 			return nil
-		})
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1365,7 +1380,8 @@ func (s *Store) Callers(id int64) ([]CallEdge, error) {
 		`SELECT `+symbolColsPrefixed+`, e.origin
 		 FROM edge e JOIN symbol s ON s.id = e.src
 		 WHERE e.dst = ? AND e.kind = ?
-		 ORDER BY s.fqn`, id)
+		 ORDER BY s.fqn`, id,
+	)
 }
 
 // Callees returns symbols id has a CALLS edge to, with edge origins.
@@ -1374,7 +1390,8 @@ func (s *Store) Callees(id int64) ([]CallEdge, error) {
 		`SELECT `+symbolColsPrefixed+`, e.origin
 		 FROM edge e JOIN symbol s ON s.id = e.dst
 		 WHERE e.src = ? AND e.kind = ?
-		 ORDER BY s.fqn`, id)
+		 ORDER BY s.fqn`, id,
+	)
 }
 
 // CoChangePartner is a co-change row oriented around a queried file.
@@ -1461,6 +1478,94 @@ func (s *Store) DecisionsForFile(file string, limit int) ([]model.Decision, erro
 	return out, rows.Err()
 }
 
+// CountCommitsTouching counts the distinct commits and reverts whose
+// files fall inside any of the given regions within [since, until).
+// The outcome loop uses this as its activity denominator: a region
+// with no commits since exposure cannot prove a pin works.
+//
+// A region matches as an exact file or as a directory prefix. Empty
+// regions means repo-wide. Times are unix seconds like decision.ts;
+// until <= 0 means no upper bound. Only commits and reverts count:
+// pr/adr rows carry no file activity of their own, and counting them
+// would double-count commits once a PR provider exists.
+func (s *Store) CountCommitsTouching(regions []string, since, until int64) (int, error) {
+	if until <= 0 {
+		until = math.MaxInt64
+	}
+
+	// EXISTS filters out decisions with no file rows (merge and empty
+	// commits): they are not code activity, and in a PR-merge workflow
+	// counting them would roughly double every repo-wide figure.
+	q := `SELECT COUNT(*) FROM decision d
+	WHERE d.kind IN(?, ?) AND d.ts >= ? AND d.ts < ?
+	AND EXISTS (SELECT 1 FROM decision_file df WHERE df.decision_id = d.id)`
+
+	args := []any{string(model.DecisionCommit), string(model.DecisionRevert), since, until}
+
+	if len(regions) > 0 {
+		// DISTINCT: a commit touching several region files, or two
+		// regions of the same pin, is one commit.
+		q = `SELECT COUNT(DISTINCT d.id)
+		     FROM decision d
+		     JOIN decision_file df ON df.decision_id = d.id
+		     WHERE d.kind IN (?, ?) AND d.ts >= ? AND d.ts < ?`
+
+		var clauses []string
+
+		for _, r := range regions {
+			clauses = append(clauses, `(df.file = ? OR df.file LIKE ? ESCAPE '\')`)
+			args = append(args, r, escapeLike(r)+"/%")
+		}
+
+		q += ` AND (` + strings.Join(clauses, " OR ") + `)`
+	}
+
+	var count int
+	err := s.db.QueryRow(q, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("store: count commits touching %v: %w", regions, err)
+	}
+
+	return count, nil
+}
+
+// Meta keys recording when each finding channel was last mined (unix
+// seconds, written by index.RefreshReviews). All readers and writers
+// must use these constants: a misspelled key does not error, it
+// silently reads as "never mined".
+const (
+	MetaFixesMinedAt   = "fixes_mined_at"
+	MetaReviewsMinedAt = "reviews_mined_at"
+)
+
+// EvidenceHorizon returns the timestamp the finding corpus is known
+// current through: the older of the two mining stamps, because a
+// recurrence can arrive through either channel. Zero when either
+// stamp is missing — a store that cannot prove it looked cannot claim
+// nothing was found, so verdicts stay untested until
+// `seamark index --reviews` runs once.
+func (s *Store) EvidenceHorizon() int64 {
+	var horizon int64
+
+	for i, key := range []string{MetaFixesMinedAt, MetaReviewsMinedAt} {
+		v, err := s.GetMeta(key)
+		if err != nil {
+			return 0
+		}
+
+		ts, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return 0
+		}
+
+		if i == 0 || ts < horizon {
+			horizon = ts
+		}
+	}
+
+	return horizon
+}
+
 // RecentDecisions returns the latest repo-wide decisions, newest first.
 func (s *Store) RecentDecisions(limit int) ([]model.Decision, error) {
 	if limit <= 0 {
@@ -1469,7 +1574,8 @@ func (s *Store) RecentDecisions(limit int) ([]model.Decision, error) {
 
 	rows, err := s.db.Query(
 		`SELECT id, kind, ref, ts, author, title, body
-		 FROM decision ORDER BY ts DESC LIMIT ?`, limit)
+		 FROM decision ORDER BY ts DESC LIMIT ?`, limit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1513,7 +1619,8 @@ func (s *Store) HotFiles(limit int) ([]HotFile, error) {
 		 FROM (SELECT file_a AS f, lift FROM cochange WHERE lift >= 1.0
 		       UNION ALL
 		       SELECT file_b AS f, lift FROM cochange WHERE lift >= 1.0)
-		 GROUP BY f ORDER BY partners DESC, f LIMIT ?`, limit)
+		 GROUP BY f ORDER BY partners DESC, f LIMIT ?`, limit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1600,7 +1707,8 @@ func (s *Store) TopCalled(limit int) ([]CalledSymbol, error) {
 		 FROM edge e JOIN symbol s ON s.id = e.dst
 		 WHERE e.kind = ?
 		 GROUP BY e.dst ORDER BY callers DESC, s.fqn LIMIT ?`,
-		string(model.EdgeCalls), limit)
+		string(model.EdgeCalls), limit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1630,7 +1738,8 @@ func (s *Store) TopCalled(limit int) ([]CalledSymbol, error) {
 // FileSymbolCounts returns per-file symbol counts, for module summaries.
 func (s *Store) FileSymbolCounts() (map[string]int, error) {
 	rows, err := s.db.Query(
-		`SELECT file, COUNT(*) FROM symbol WHERE file != '' GROUP BY file`)
+		`SELECT file, COUNT(*) FROM symbol WHERE file != '' GROUP BY file`,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1703,7 +1812,8 @@ func (s *Store) LessonsForFile(file string, minOccur, limit int) ([]model.Lesson
 		`SELECT `+lessonCols+` FROM lesson
 		 WHERE region IN (`+marks+`) AND occurrences >= ?
 		 ORDER BY occurrences DESC, last_ts DESC
-		 LIMIT ?`, args...)
+		 LIMIT ?`, args...,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1744,7 +1854,8 @@ func (s *Store) TopLessons(minOccur, limit int) ([]model.Lesson, error) {
 		`SELECT `+lessonCols+` FROM lesson
 		 WHERE occurrences >= ?
 		 ORDER BY occurrences DESC, last_ts DESC
-		 LIMIT ?`, minOccur, limit)
+		 LIMIT ?`, minOccur, limit,
+	)
 	if err != nil {
 		return nil, err
 	}
