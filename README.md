@@ -649,9 +649,10 @@ design history in [docs/PLAN.md](docs/PLAN.md). Trust boundaries:
 [docs/threat-model.md](docs/threat-model.md).
 
 Planned next (see [docs/PLAN.md](docs/PLAN.md)): zero-token check
-promotion from recurring lessons, function-grain history enrichment,
-history watermark + incremental daemon for keystroke-adjacent freshness,
-signed artifacts + npm/Homebrew packaging.
+promotion from recurring lessons, function-grain precision refinements,
+public signal evaluation and multi-instance lessons evidence, history
+watermark + incremental daemon for keystroke-adjacent freshness, and signed
+artifacts + npm/Homebrew packaging.
 
 ## Development
 

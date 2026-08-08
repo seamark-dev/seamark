@@ -43,6 +43,12 @@ func TestRunRejectsUnknownInstanceBeforeSetup(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown benchmark instance")
 }
 
+func TestAllInstancesRefusesPaidRun(t *testing.T) {
+	err := run(options{instance: "all", trials: 1})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "preflight-only")
+}
+
 func TestRunRejectsInvalidTrialCountBeforeSetup(t *testing.T) {
 	for _, opts := range []options{
 		{trials: 0, dryRun: true},

@@ -71,7 +71,14 @@ milestone.
 - CI: full test suite + lint on every change; regression tests pin the
   trust baseline (non-blocking default init, audit redaction, durable
   state surviving rebuilds, docs-command drift).
-- No public benchmark exists yet; performance numbers in the README are
-  measured on one real monorepo and labeled as such.
+- The first committed synthetic lessons pilot records a promising result: on
+  the schema-sync task, hook-on preserved the owner invariant in 3/3 completed
+  trials versus 0/3 for hook-off. It used a dirty development binary and falls
+  below the frozen pair count, so it validates the harness and task but is not
+  release evidence. The frozen registry requires three independent instances
+  with five valid pairs each under the pinned model, effort, and clean-build
+  conditions. Raw rows live under `bench/`, and `make lessons-bench-report`
+  keeps incompatible fingerprints separate; the calibration and artifact
+  protocol is in [bench/README.md](../bench/README.md).
 - External pilots: none yet — that is the bar between "works here" and
   "production-ready", and claims stay scoped until it is met.

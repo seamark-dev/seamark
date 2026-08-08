@@ -35,6 +35,7 @@ func generateRepository(dir string, history []step) error {
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return err
 			}
+
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 				return err
 			}
@@ -43,6 +44,7 @@ func generateRepository(dir string, history []step) error {
 		if err := runGit(dir, "add", "-A"); err != nil {
 			return err
 		}
+
 		if err := runGit(dir, "commit", "-q", "-m", s.message); err != nil {
 			return err
 		}
@@ -62,7 +64,8 @@ func runGit(dir string, args ...string) error {
 
 	cmd := exec.Command("git", append(base, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(
+		os.Environ(),
 		"GIT_AUTHOR_DATE="+commitDate,
 		"GIT_COMMITTER_DATE="+commitDate,
 	)

@@ -2,12 +2,10 @@ package bench
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"time"
 )
 
 const (
@@ -49,6 +47,7 @@ func SchemaSyncInstance() Instance {
 		ApplyGold:    applySchemaSyncGold,
 		ApplyNaive:   applySchemaSyncNaive,
 		JudgeVersion: "python-ts-schema-sync-v1",
+		sourceFile:   "schema_sync_fixture.go",
 		Checks: []Command{
 			{
 				Name: "python3",
@@ -77,7 +76,7 @@ func GenerateSchemaSyncFixture(dir string) error {
 // JudgeSchemaSync first verifies the requested backend behavior, then derives
 // the expected TypeScript client independently of the agent-editable generator.
 func JudgeSchemaSync(dir string) (Verdict, error) {
-	taskPass, err := runSchemaJudgeCommand(dir, "python3", "-c", schemaSyncTaskProbe)
+	taskPass, err := runJudgeCommand(dir, "python3", "-c", schemaSyncTaskProbe)
 	if err != nil {
 		return Verdict{}, err
 	}
@@ -88,7 +87,7 @@ func JudgeSchemaSync(dir string) (Verdict, error) {
 		}, nil
 	}
 
-	syncPass, err := runSchemaJudgeCommand(dir, "python3", "-c", schemaSyncInvariantProbe)
+	syncPass, err := runJudgeCommand(dir, "python3", "-c", schemaSyncInvariantProbe)
 	if err != nil {
 		return Verdict{}, err
 	}
@@ -105,30 +104,6 @@ func JudgeSchemaSync(dir string) (Verdict, error) {
 		Avoided:  true,
 		Notes:    "backend response complete; generated TypeScript client is synchronized",
 	}, nil
-}
-
-func runSchemaJudgeCommand(dir, name string, args ...string) (bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	cmd.Env = agentEnvironment(dir)
-	cmd.WaitDelay = processWaitDelay
-	if out, err := cmd.CombinedOutput(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return false, nil
-		}
-
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return false, nil
-		}
-
-		return false, fmt.Errorf("run schema-sync judge: %w\n%s", err, out)
-	}
-
-	return true, nil
 }
 
 func applySchemaSyncNaive(dir string) error {

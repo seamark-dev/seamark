@@ -1,0 +1,20 @@
+schema_version: 1
+
+claims:
+  - id: lessons-owner-invariant
+    claim: Contextual lessons reduce recurrence of known owner-specific defects without reducing visible task completion.
+    primary_metric: invariant_pass_rate_among_task_complete
+    comparison: hook-on_vs_hook-off
+    direction: higher
+    required_model: claude-haiku-4-5-20251001
+    required_effort: medium
+    require_clean_seamark: true
+    minimum_effect: 0.30
+    minimum_instance_effect: 0.0
+    maximum_harmful_interference: 0.05
+    minimum_instances: 3
+    minimum_valid_pairs_per_instance: 5
+    instances:
+      - python-ts-schema-sync-v1
+      - python-cache-version-v1
+      - go-export-registry-v1

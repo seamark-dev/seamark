@@ -36,6 +36,9 @@ type Instance struct {
 	// persisted rows to the exact interpretation used by this instance.
 	JudgeVersion string
 	Checks       []Command
+	// sourceFile names the embedded implementation that defines a built-in
+	// fixture and its hidden judge. It stays empty for caller-supplied instances.
+	sourceFile string
 
 	// ExploreFiles are repository-relative paths whose appearance in an
 	// assistant message is useful diagnostic evidence. They do not affect the
@@ -182,19 +185,6 @@ func (i Instance) TaskSHA() string {
 	sum := sha256.Sum256([]byte(i.Task))
 
 	return hex.EncodeToString(sum[:])
-}
-
-// InstanceByID resolves the stable CLI-facing benchmark catalogue. Instances
-// are constructed on demand so callers can safely customize a returned value
-// without mutating shared state.
-func InstanceByID(id string) (Instance, error) {
-	switch id {
-	case "", SchemaSyncInstanceID:
-		return SchemaSyncInstance(), nil
-	default:
-		return Instance{}, fmt.Errorf("unknown benchmark instance %q (available: %s)",
-			id, SchemaSyncInstanceID)
-	}
 }
 
 func resolveInstance(cfg RunConfig) Instance {

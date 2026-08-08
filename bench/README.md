@@ -6,21 +6,30 @@ reads the fixture through its normal filesystem tools.
 
 ## Safe run sequence
 
-Build Seamark and run the no-agent preflight first:
+Build Seamark and run every no-agent preflight first:
 
 ```sh
-make build
-make lessons-bench BENCH_FLAGS='-preflight-only -model claude-haiku-4-5-20251001'
+make lessons-bench-preflight
 ```
 
-Then calibrate exactly one paired trial:
+The first paid step is a single hook-off calibration for one instance. It asks
+whether a capable unassisted agent still misses the owner-specific invariant:
 
 ```sh
-make lessons-bench BENCH_FLAGS='-trials 1 -model claude-haiku-4-5-20251001 -max-budget-usd 1'
+make lessons-bench BENCH_FLAGS='-instance python-cache-version-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-cache-calibration-v5.jsonl -transcripts /tmp/seamark-cache-calibration'
 ```
 
-Inspect both transcripts and patches before increasing the trial count. The
-default is intentionally one trial per arm, not ten.
+Proceed only if the row is valid, the visible task passes, and the invariant
+fails (`task=true invariant=false`). Inspect the transcript and patch before
+calibrating the next instance:
+
+```sh
+make lessons-bench BENCH_FLAGS='-instance go-export-registry-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-export-calibration-v5.jsonl -transcripts /tmp/seamark-export-calibration'
+```
+
+Do not increase the trial count or run hook-on until both tasks have a useful
+baseline ceiling. Calibration artifacts belong in `/tmp` and are not release
+evidence. The default is intentionally one trial per arm, not ten.
 
 The default Claude adapter:
 
@@ -38,7 +47,7 @@ The default Claude adapter:
 Do not use `--bare` or `--safe-mode` in a custom adapter: both disable the
 project hook the treatment is meant to measure.
 
-## Included instance
+## Included instances
 
 - `python-ts-schema-sync-v1` asks for a Python API response field. The visible
   backend implementation and public tests pass without touching the generated
@@ -49,8 +58,19 @@ project hook the treatment is meant to measure.
   This instance requires `python3` and `make`; preflight verifies both before
   any agent session is purchased.
 
-The fixture is generated locally from frozen source and history. No private
-repository is read, copied, or required at run time.
+- `python-cache-version-v1` asks for another Python API response field. Public
+  checks cover the response, while the owner invariant requires bumping a
+  response-cache version learned from a prior analogous change in git history.
+- `go-export-registry-v1` asks for a Go Markdown preview renderer. Public checks
+  cover synchronous previews, while the owner invariant requires registering
+  the new format in a separate asynchronous worker registry. This supplies an
+  independent language and failure mechanism rather than another schema-sync
+  variant.
+
+Each fixture is generated locally from frozen source and git history. No
+private repository is read, copied, or required at run time. `-instance all`
+is deliberately restricted to preflight and dry-run modes; paid instances must
+be selected explicitly.
 
 ## Preflight contract
 
@@ -69,7 +89,7 @@ Preflight spends no model tokens. It rejects a run unless:
 
 ## Result validity
 
-Schema-v4 rows separately record task success and owner-invariant success.
+Schema-v5 rows separately record task success and owner-invariant success.
 Only rows with both `valid=true` and `pair_valid=true` enter arm tallies.
 Provider errors, rate limits, missing structured output, unexpected plugins or
 MCP servers, model mismatches, and non-firing treatment hooks are excluded.
@@ -95,4 +115,57 @@ Cost estimates only use valid prior rows with the exact same fingerprint. The
 fingerprint binds the task, checks, agent command, model, effort, timeout,
 runtime identity, exact Seamark binary digest, treatment and placebo content,
 generated fixture HEAD, naive and gold patches, judge version, and embedded
-benchmark harness sources.
+execution, validation, and selected-instance sources. Adding a report or an
+unrelated fixture does not invalidate an otherwise unchanged experiment.
+
+## Frozen claim and reporting
+
+`claims.yaml` freezes the initial lessons claim before the corpus is expanded:
+at least three independent instances, at least five valid paired trials per
+instance, a mean lift of at least 30 percentage points in invariant
+success among task-complete runs, no negative per-instance effect, and no more
+than 5% harmful task interference. Claim-level evidence must use the pinned
+Haiku model at medium effort and a clean committed Seamark build.
+A successful single fixture remains a fixture-specific result, not proof of the
+cross-instance claim.
+
+`result.schema.json` documents result schema v5. The report command also
+strictly validates every row and refuses malformed data, invalid token totals,
+duplicate input files, duplicate trial arms, and conflicting identities that
+reuse a fingerprint:
+
+```sh
+make lessons-bench-report \
+  BENCH_RESULTS='bench/schema-sync-release-v5.jsonl bench/cache-version-release-v5.jsonl bench/export-registry-release-v5.jsonl' \
+  BENCH_REPORT_FLAGS='-out bench/lessons-report-v5.md'
+```
+
+The report records the SHA-256 of every raw input, keeps fingerprints in
+separate immutable cohorts, reports paired direction and harmful interference,
+includes an evidence window, exact experimental identities, and an approximate
+95% score interval, and evaluates the committed threshold without silently
+pooling incompatible runs. The committed three-pair
+schema-sync pilot (`3/3` hook-on versus `0/3`
+hook-off) validates that fixture and the treatment path only; it used a dirty
+development binary and is below the frozen evidence floor.
+
+## Artifact policy
+
+Commit the claim registry, result schema, frozen fixture sources, selected
+valid paired release JSONL, and the generated Markdown report. Do not commit
+calibration runs, interrupted or rate-limited attempts, or exploratory tuning
+outputs. Generate release evidence only after committing the harness so every
+row names a clean, recoverable Seamark version. Full transcripts remain local
+and ignored because they are large and
+may contain generated repository content; artifact files are created
+exclusively with `0600` permissions and a reused run ID is refused before an
+agent session is purchased. Retain them securely for audit while the
+corresponding release evidence is under review.
+
+Schema-v5 rows created by the current harness include SHA-256 digests of the
+transcript, stderr stream, and final patch, so local artifacts can be matched
+to published rows without publishing their contents. Strict reporting requires
+each artifact path and digest together. The earlier dirty schema-sync pilot
+predates those digests and remains historical calibration rather than release
+evidence. A release report is reproducible only from its named raw inputs and
+committed claim registry.

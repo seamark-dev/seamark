@@ -22,7 +22,7 @@ func TestSchemaSyncFixtureIsDeterministicAndHealthy(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, verdict.TaskDone)
 	assert.False(t, verdict.Avoided)
-	synchronized, err := runSchemaJudgeCommand(a, "python3", "tools/sync_api.py", "--check")
+	synchronized, err := runJudgeCommand(a, "python3", "tools/sync_api.py", "--check")
 	require.NoError(t, err)
 	assert.True(t, synchronized, "the untouched fixture must start synchronized")
 
@@ -134,7 +134,7 @@ fi
 	assert.Equal(t, ArmHookOff, sum.Rows[2].Arm)
 	assert.NotEmpty(t, sum.RunID)
 	assert.Equal(t, sum.RunID, sum.Rows[0].RunID)
-	assert.Equal(t, 4, sum.Rows[0].SchemaVersion)
+	assert.Equal(t, ResultSchemaVersion, sum.Rows[0].SchemaVersion)
 
 	assert.Equal(t, Tally{
 		Attempted: 2, Ran: 2, Completed: 2, Avoided: 2, Firings: 2, MeanInput: 1200,
@@ -181,9 +181,15 @@ fi
 	assert.True(t, os.IsNotExist(err), "the control must not carry the lesson")
 
 	assert.NotEmpty(t, rows[0].Patch)
+	assert.NotEmpty(t, rows[0].PatchSHA)
+	assert.NotEmpty(t, rows[0].TranscriptSHA)
 	patch, err := os.ReadFile(rows[0].Patch)
 	require.NoError(t, err)
+	assert.Equal(t, hashBytes(patch), rows[0].PatchSHA)
 	assert.Contains(t, string(patch), "billingCurrency")
+	transcript, err := os.ReadFile(rows[0].Transcript)
+	require.NoError(t, err)
+	assert.Equal(t, hashBytes(transcript), rows[0].TranscriptSHA)
 }
 
 func TestInstanceByID(t *testing.T) {
@@ -194,6 +200,14 @@ func TestInstanceByID(t *testing.T) {
 	schemaInstance, err := InstanceByID(SchemaSyncInstanceID)
 	require.NoError(t, err)
 	assert.Equal(t, SchemaSyncRule, schemaInstance.Rule)
+	assert.Equal(t, []string{
+		SchemaSyncInstanceID, CacheVersionInstanceID, ExportRegistryInstanceID,
+	}, InstanceIDs())
+	for _, instance := range Instances() {
+		assert.NotEmpty(t, instance.sourceFile)
+		_, sourceErr := instanceSources.ReadFile(instance.sourceFile)
+		require.NoError(t, sourceErr)
+	}
 
 	_, err = InstanceByID("missing")
 	require.Error(t, err)

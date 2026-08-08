@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,9 +116,12 @@ type Row struct {
 	// Transcript is where this trial's raw agent output was saved;
 	// StderrLog and Patch keep the rest of the audit record, so a
 	// verdict stays checkable after the trial dir is deleted.
-	Transcript string `json:"transcript,omitempty"`
-	StderrLog  string `json:"stderr,omitempty"`
-	Patch      string `json:"patch,omitempty"`
+	Transcript    string `json:"transcript,omitempty"`
+	TranscriptSHA string `json:"transcript_sha256,omitempty"`
+	StderrLog     string `json:"stderr,omitempty"`
+	StderrSHA     string `json:"stderr_sha256,omitempty"`
+	Patch         string `json:"patch,omitempty"`
+	PatchSHA      string `json:"patch_sha256,omitempty"`
 	// Checks are public repository-local validation commands. Hidden task and
 	// invariant judges are represented by TaskDone and Avoided above.
 	ChecksPass bool          `json:"checks_pass"`
@@ -391,6 +395,7 @@ func Run(ctx context.Context, cfg RunConfig) (Summary, error) {
 
 				break
 			}
+
 			if ctx.Err() != nil {
 				stopForCancel = true
 
@@ -438,6 +443,7 @@ func Run(ctx context.Context, cfg RunConfig) (Summary, error) {
 
 			break
 		}
+
 		if stop || stopForCancel {
 			break
 		}
@@ -457,6 +463,7 @@ func Run(ctx context.Context, cfg RunConfig) (Summary, error) {
 	if sum.StoppedReason != "" {
 		return sum, fmt.Errorf("benchmark stopped: %s", sum.StoppedReason)
 	}
+
 	if runErr != nil {
 		return sum, runErr
 	}
@@ -499,6 +506,7 @@ func validArtifactToken(value string) bool {
 	if value == "" || len(value) > 128 {
 		return false
 	}
+
 	for _, r := range value {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
 			(r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
@@ -525,13 +533,16 @@ func tallyRow(sum *Summary, row Row, contexts map[Arm][]int64) {
 	if row.TaskDone {
 		t.Completed++
 	}
+
 	if row.TaskDone && row.Avoided {
 		t.Avoided++
 	}
+
 	t.Firings += row.HookFirings
 	if row.ContextTokens > 0 {
 		contexts[row.Arm] = append(contexts[row.Arm], row.ContextTokens)
 	}
+
 	sum.ByArm[row.Arm] = t
 }
 
@@ -582,8 +593,13 @@ func runTrial(ctx context.Context, cfg RunConfig, instance Instance, work string
 		return Row{}, err
 	}
 
+	fixture := fixtureHead(dir)
+	if fixture == "" {
+		return Row{}, fmt.Errorf("trial fixture has no git HEAD")
+	}
+
 	row := Row{
-		SchemaVersion:  4,
+		SchemaVersion:  ResultSchemaVersion,
 		TS:             time.Now().UTC().Format(time.RFC3339),
 		RunID:          cfg.RunID,
 		Instance:       instance.ID,
@@ -600,7 +616,17 @@ func runTrial(ctx context.Context, cfg RunConfig, instance Instance, work string
 		MaxBudgetUSD:   cfg.MaxBudgetUSD,
 		RuntimeID:      cfg.RuntimeID,
 		Fingerprint:    cfg.Fingerprint,
-		Fixture:        fixtureHead(dir),
+		Fixture:        fixture,
+	}
+
+	if cfg.TranscriptDir != "" {
+		if err := os.MkdirAll(cfg.TranscriptDir, 0o700); err != nil {
+			return Row{}, err
+		}
+
+		if err := ensureArtifactsAbsent(cfg.TranscriptDir, artifactBase(row)); err != nil {
+			return Row{}, err
+		}
 	}
 
 	stdout, stderr, exit, timedOut, err := runAgent(ctx, cfg, instance, dir)
@@ -617,28 +643,26 @@ func runTrial(ctx context.Context, cfg RunConfig, instance Instance, work string
 	// Transcript and stderr are saved before parsing, so even output
 	// the parser cannot read stays available as evidence.
 	if cfg.TranscriptDir != "" {
-		if err := os.MkdirAll(cfg.TranscriptDir, 0o755); err != nil {
-			return Row{}, err
-		}
-
 		base := artifactBase(row)
 
 		if len(stdout) > 0 {
 			path := filepath.Join(cfg.TranscriptDir, base+".jsonl")
-			if err := os.WriteFile(path, stdout, 0o644); err != nil {
+			if err := writeArtifactExclusive(path, stdout); err != nil {
 				return Row{}, err
 			}
 
 			row.Transcript = path
+			row.TranscriptSHA = hashBytes(stdout)
 		}
 
 		if len(stderr) > 0 {
 			path := filepath.Join(cfg.TranscriptDir, base+".stderr.log")
-			if err := os.WriteFile(path, stderr, 0o644); err != nil {
+			if err := writeArtifactExclusive(path, stderr); err != nil {
 				return Row{}, err
 			}
 
 			row.StderrLog = path
+			row.StderrSHA = hashBytes(stderr)
 		}
 	}
 
@@ -694,15 +718,59 @@ func runTrial(ctx context.Context, cfg RunConfig, instance Instance, work string
 			name := artifactBase(row) + ".patch"
 			path := filepath.Join(cfg.TranscriptDir, name)
 
-			if err := os.WriteFile(path, patch, 0o644); err != nil {
+			if err := writeArtifactExclusive(path, patch); err != nil {
 				return Row{}, err
 			}
 
 			row.Patch = path
+			row.PatchSHA = hashBytes(patch)
 		}
 	}
 
 	return row, nil
+}
+
+func writeArtifactExclusive(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create benchmark artifact: %w", err)
+	}
+
+	complete := false
+	defer func() {
+		_ = file.Close()
+		if !complete {
+			_ = os.Remove(path)
+		}
+	}()
+
+	if n, err := file.Write(data); err != nil {
+		return fmt.Errorf("write benchmark artifact: %w", err)
+	} else if n != len(data) {
+		return fmt.Errorf("write benchmark artifact: %w", io.ErrShortWrite)
+	}
+
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close benchmark artifact: %w", err)
+	}
+
+	complete = true
+
+	return nil
+}
+
+func ensureArtifactsAbsent(dir, base string) error {
+	for _, suffix := range []string{".jsonl", ".stderr.log", ".patch"} {
+		path := filepath.Join(dir, base+suffix)
+
+		if _, err := os.Lstat(path); err == nil {
+			return fmt.Errorf("benchmark artifact already exists: %s", path)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect benchmark artifact: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func artifactBase(row Row) string {
@@ -1041,42 +1109,44 @@ func agentEnvironment(dir string) []string {
 		"CLAUDE_CONFIG_DIR":              true,
 		// Language and shell startup injection makes the same fixture behave
 		// differently depending on the operator's workstation.
-		"PYTHONPATH":          true,
-		"PYTHONHOME":          true,
-		"PYTHONSTARTUP":       true,
-		"PYTHONUSERBASE":      true,
-		"PYTHONINSPECT":       true,
-		"PYTHONWARNINGS":      true,
-		"PYTHONBREAKPOINT":    true,
-		"PYTHONPLATLIBDIR":    true,
-		"PYTHONEXECUTABLE":    true,
-		"VIRTUAL_ENV":         true,
-		"PIP_CONFIG_FILE":     true,
-		"BASH_ENV":            true,
-		"ENV":                 true,
-		"CDPATH":              true,
-		"GLOBIGNORE":          true,
-		"MAKEFLAGS":           true,
-		"MFLAGS":              true,
-		"MAKEFILES":           true,
-		"GIT_DIR":             true,
-		"GIT_WORK_TREE":       true,
-		"GIT_INDEX_FILE":      true,
-		"GIT_CONFIG_GLOBAL":   true,
-		"GIT_CONFIG_SYSTEM":   true,
-		"GIT_CONFIG_NOSYSTEM": true,
-		"TMPDIR":              true,
-		"GOCACHE":             true,
-		"GOMODCACHE":          true,
-		"GOPATH":              true,
-		"GOTOOLCHAIN":         true,
-		"GOPROXY":             true,
-		"XDG_CACHE_HOME":      true,
-		"npm_config_cache":    true,
-		"PIP_CACHE_DIR":       true,
-		"PYTHONNOUSERSITE":    true,
-		"PYTHONHASHSEED":      true,
-		"PYTHONUTF8":          true,
+		"PYTHONPATH":              true,
+		"PYTHONHOME":              true,
+		"PYTHONSTARTUP":           true,
+		"PYTHONUSERBASE":          true,
+		"PYTHONINSPECT":           true,
+		"PYTHONWARNINGS":          true,
+		"PYTHONBREAKPOINT":        true,
+		"PYTHONPLATLIBDIR":        true,
+		"PYTHONEXECUTABLE":        true,
+		"PYTHONPYCACHEPREFIX":     true,
+		"PYTHONDONTWRITEBYTECODE": true,
+		"VIRTUAL_ENV":             true,
+		"PIP_CONFIG_FILE":         true,
+		"BASH_ENV":                true,
+		"ENV":                     true,
+		"CDPATH":                  true,
+		"GLOBIGNORE":              true,
+		"MAKEFLAGS":               true,
+		"MFLAGS":                  true,
+		"MAKEFILES":               true,
+		"GIT_DIR":                 true,
+		"GIT_WORK_TREE":           true,
+		"GIT_INDEX_FILE":          true,
+		"GIT_CONFIG_GLOBAL":       true,
+		"GIT_CONFIG_SYSTEM":       true,
+		"GIT_CONFIG_NOSYSTEM":     true,
+		"TMPDIR":                  true,
+		"GOCACHE":                 true,
+		"GOMODCACHE":              true,
+		"GOPATH":                  true,
+		"GOTOOLCHAIN":             true,
+		"GOPROXY":                 true,
+		"XDG_CACHE_HOME":          true,
+		"npm_config_cache":        true,
+		"PIP_CACHE_DIR":           true,
+		"PYTHONNOUSERSITE":        true,
+		"PYTHONHASHSEED":          true,
+		"PYTHONUTF8":              true,
 	}
 
 	env := make([]string, 0, len(os.Environ())+12)
@@ -1189,6 +1259,7 @@ func parseRateLimit(line []byte, row *Row) {
 			OverageStatus string `json:"overageStatus"`
 		} `json:"rate_limit_info"`
 	}
+
 	if json.Unmarshal(line, &event) != nil {
 		return
 	}
@@ -1261,8 +1332,10 @@ func parseResult(stdout []byte, row *Row) bool {
 	row.CacheCreationTokens = res.Usage.CacheCreation
 	row.ContextTokens = res.Usage.Input + res.Usage.CacheRead + res.Usage.CacheCreation
 	row.OutputTokens = res.Usage.Output
+
 	if len(res.ModelUsage) > 0 {
 		row.ModelUsage = make(map[string]ModelUsage, len(res.ModelUsage))
+
 		for model, usage := range res.ModelUsage {
 			row.ModelUsage[model] = ModelUsage{
 				InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
@@ -1340,6 +1413,7 @@ func validateAgentResult(cfg RunConfig, row *Row) {
 
 		return
 	}
+
 	if cfg.Model != "" && !modelMatches(cfg.Model, row.Model) {
 		invalidateInfrastructure(row,
 			fmt.Sprintf("requested model %q but agent initialized %q", cfg.Model, row.Model))
@@ -1404,9 +1478,17 @@ func appendRow(path string, row Row) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
 
-	_, err = f.Write(append(data, '\n'))
+	data = append(data, '\n')
+	if n, writeErr := f.Write(data); writeErr != nil {
+		_ = f.Close()
 
-	return err
+		return writeErr
+	} else if n != len(data) {
+		_ = f.Close()
+
+		return io.ErrShortWrite
+	}
+
+	return f.Close()
 }

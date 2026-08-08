@@ -334,6 +334,30 @@ func TestWireHookHonorsParentDeadline(t *testing.T) {
 	assert.Less(t, time.Since(started), time.Second)
 }
 
+func TestRunJudgeCommandIgnoresStalePythonBytecode(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "fixture_module.py")
+	require.NoError(t, os.WriteFile(source, []byte("VALUE = 1\n"), 0o644))
+	info, err := os.Stat(source)
+	require.NoError(t, err)
+
+	prime := exec.Command("python3", "-c", "import fixture_module")
+	prime.Dir = dir
+	prime.Env = agentEnvironment(dir)
+	require.NoError(t, prime.Run())
+
+	// Keep source size and timestamp unchanged so normal Python imports would
+	// accept the now-stale timestamp-based bytecode generated above.
+	require.NoError(t, os.WriteFile(source, []byte("VALUE = 2\n"), 0o644))
+	require.NoError(t, os.Chtimes(source, info.ModTime(), info.ModTime()))
+
+	pass, err := runJudgeCommand(
+		dir, "python3", "-c", "import fixture_module; assert fixture_module.VALUE == 2",
+	)
+	require.NoError(t, err)
+	assert.True(t, pass)
+}
+
 func TestArtifactNamesIncludeInstanceAndRun(t *testing.T) {
 	base := Row{Instance: "instance/v1", Arm: ArmHookOff, Trial: 1}
 	first := base
@@ -343,6 +367,19 @@ func TestArtifactNamesIncludeInstanceAndRun(t *testing.T) {
 
 	assert.Equal(t, "instance_v1-run-a-hook-off-01", artifactBase(first))
 	assert.NotEqual(t, artifactBase(first), artifactBase(second))
+}
+
+func TestRunRejectsUnsafeRunIDBeforeCreatingArtifacts(t *testing.T) {
+	transcripts := t.TempDir()
+	_, err := Run(context.Background(), RunConfig{
+		Trials: 1, RunID: "../escape", TranscriptDir: transcripts,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "run ID")
+
+	entries, readErr := os.ReadDir(transcripts)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries)
 }
 
 func TestPriorCostForFingerprint(t *testing.T) {
@@ -603,4 +640,44 @@ func TestFingerprintBindsExperimentDefinition(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, baseFingerprint, explicitDefaultArms,
 		"implicit and explicit default assignment are the same experiment")
+}
+
+func TestFingerprintSourceBoundary(t *testing.T) {
+	entries, err := harnessSources.ReadDir(".")
+	require.NoError(t, err)
+	names := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		names[entry.Name()] = true
+	}
+	assert.True(t, names["fingerprint.go"], "fingerprint logic must bind its own implementation")
+	assert.False(t, names["catalog.go"], "catalogue-only additions must not invalidate existing cohorts")
+
+	instance := SchemaSyncInstance()
+	digest, err := fingerprintInstanceSource(instance)
+	require.NoError(t, err)
+	source, err := instanceSources.ReadFile(instance.sourceFile)
+	require.NoError(t, err)
+	assert.Equal(t, hashBytes(source), digest)
+
+	custom := instance
+	custom.sourceFile = ""
+	digest, err = fingerprintInstanceSource(custom)
+	require.NoError(t, err)
+	assert.Equal(t, "custom-instance", digest)
+}
+
+func TestWriteArtifactExclusiveIsPrivateAndRefusesOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "trial.patch")
+	require.NoError(t, ensureArtifactsAbsent(dir, "trial"))
+	require.NoError(t, writeArtifactExclusive(path, []byte("first\n")))
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	require.Error(t, writeArtifactExclusive(path, []byte("second\n")))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "first\n", string(data))
+	require.Error(t, ensureArtifactsAbsent(dir, "trial"))
 }

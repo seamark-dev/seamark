@@ -4,9 +4,9 @@
 // generated fixture repo per trial, a frozen task, a deterministic
 // judge. See internal/bench for the design and its guardrails.
 //
-// This spends real agent sessions (2 x -trials of them). Run with
-// -dry-run first to see the plan; run at release cadence, never in
-// per-PR CI.
+// Paid runs spend len(selected arms) x -trials agent sessions. The "all"
+// instance selector is restricted to no-agent preflight/dry-run modes. Run at
+// release cadence, never in per-PR CI.
 package main
 
 import (
@@ -29,10 +29,12 @@ func main() {
 	var opts options
 	flag.IntVar(&opts.trials, "trials", 1, "trials per arm; calibrate one pair before increasing")
 	flag.StringVar(&opts.arm, "arm", "both", "which arm to run: both, all, hook-on, hook-off, file-only, or placebo")
-	flag.StringVar(&opts.instance, "instance", bench.SchemaSyncInstanceID, "benchmark instance: "+bench.SchemaSyncInstanceID)
+	flag.StringVar(&opts.instance, "instance", bench.SchemaSyncInstanceID,
+		"benchmark instance: "+strings.Join(bench.InstanceIDs(), ", ")+", or all for preflight/dry-run")
 	flag.BoolVar(&opts.dryRun, "dry-run", false, "run preflight and print the plan without agent calls")
 	flag.BoolVar(&opts.preflightOnly, "preflight-only", false, "validate fixture, judges, checks, and arm wiring, then exit")
-	flag.StringVar(&opts.out, "out", "bench/results-v4.jsonl", "results file, one JSONL row per attempted session (appended)")
+	flag.StringVar(&opts.out, "out", fmt.Sprintf("bench/results-v%d.jsonl", bench.ResultSchemaVersion),
+		"results file, one JSONL row per attempted session (appended)")
 	flag.StringVar(&opts.transcripts, "transcripts", "bench/transcripts", "directory for per-trial agent transcripts; empty disables")
 	flag.StringVar(&opts.agent, "agent", "", "custom agent command (space-split); bypasses Claude runtime validation")
 	flag.StringVar(&opts.model, "model", "", "exact Claude model ID (required with the default agent; aliases are refused)")
@@ -69,17 +71,41 @@ type options struct {
 }
 
 func run(opts options) error {
+	if opts.instance == "all" {
+		if !opts.preflightOnly && !opts.dryRun {
+			return fmt.Errorf("-instance all is preflight-only; calibrate and run each instance explicitly")
+		}
+
+		for i, id := range bench.InstanceIDs() {
+			if i > 0 {
+				fmt.Println()
+			}
+
+			instanceOpts := opts
+			instanceOpts.instance = id
+
+			if err := run(instanceOpts); err != nil {
+				return fmt.Errorf("instance %s: %w", id, err)
+			}
+		}
+
+		return nil
+	}
+
 	arms, err := parseArms(opts.arm)
 	if err != nil {
 		return err
 	}
+
 	instance, err := bench.InstanceByID(opts.instance)
 	if err != nil {
 		return err
 	}
+
 	if opts.trials < 1 {
 		return fmt.Errorf("-trials must be at least 1")
 	}
+
 	bin := opts.seamarkBin
 	if bin == "" {
 		bin = filepath.Join("bin", "seamark")
@@ -98,6 +124,7 @@ func run(opts options) error {
 	if err != nil {
 		return err
 	}
+
 	agentVersion := cliVersion(argv[0])
 	seamarkSHA, err := bench.FileSHA256(abs)
 	if err != nil {
@@ -147,24 +174,36 @@ func run(opts options) error {
 	// follows (the distill preflight precedent).
 	fmt.Printf("lessons-bench — %s, pin %q, %d trials x %d arm(s) = %d headless agent sessions\n",
 		instance.ID, instance.Rule, opts.trials, armCount, armCount*opts.trials)
+
 	if managed {
 		fmt.Printf("  agent    claude %s, effort=%s, native sandbox=strict\n", opts.model, opts.effort)
 	} else {
 		fmt.Printf("  agent    custom adapter %s\n", argv[0])
 	}
+
 	if managed {
 		fmt.Printf("  budget   $%.2f/session; $%.2f absolute run cap\n",
 			opts.maxBudgetUSD, opts.maxBudgetUSD*float64(armCount*opts.trials))
 	} else {
 		fmt.Println("  budget   custom adapter owns its cost cap")
 	}
+
 	fmt.Printf("  runtime  %s\n", runtimeID)
 	fmt.Printf("  seamark  %s (%s, sha256 %.12s…)\n", abs, cfg.Version, cfg.SeamarkSHA)
 	fmt.Printf("  run      %.12s…\n", cfg.Fingerprint)
-	fmt.Printf("  results  %s (appended)\n", opts.out)
+
+	if opts.dryRun || opts.preflightOnly {
+		fmt.Printf("  results  %s (no rows written during preflight)\n", opts.out)
+	} else {
+		fmt.Printf("  results  %s (appended)\n", opts.out)
+	}
 
 	if opts.transcripts != "" {
-		fmt.Printf("  logs     %s (full agent transcript per trial)\n", opts.transcripts)
+		if opts.dryRun || opts.preflightOnly {
+			fmt.Printf("  logs     %s (no artifacts written during preflight)\n", opts.transcripts)
+		} else {
+			fmt.Printf("  logs     %s (full agent transcript per trial)\n", opts.transcripts)
+		}
 	}
 
 	fmt.Printf("  task     %s\n", instance.Task)
@@ -175,6 +214,7 @@ func run(opts options) error {
 	if err := bench.Preflight(preflightCtx, cfg); err != nil {
 		return fmt.Errorf("preflight: %w", err)
 	}
+
 	fmt.Println("  preflight passed — deterministic base/naive/gold, checks, judges, and arm wiring")
 
 	if opts.dryRun || opts.preflightOnly {
@@ -198,6 +238,7 @@ func run(opts options) error {
 	for _, line := range sum.Lines() {
 		fmt.Println(line)
 	}
+
 	if err != nil {
 		return err
 	}
@@ -214,9 +255,11 @@ func agentCommand(opts options) (argv []string, managed bool, err error) {
 
 		return argv, false, nil
 	}
+
 	if !exactModelID(opts.model) {
 		return nil, false, fmt.Errorf("-model must be an exact model ID, not an alias (got %q)", opts.model)
 	}
+
 	if opts.maxBudgetUSD <= 0 {
 		return nil, false, fmt.Errorf("-max-budget-usd must be positive")
 	}
@@ -245,6 +288,7 @@ func exactModelID(model string) bool {
 	if model == "" {
 		return false
 	}
+
 	if strings.Contains(strings.ToLower(model), "latest") {
 		return false
 	}
@@ -263,8 +307,10 @@ func parseArms(arm string) ([]bench.Arm, error) {
 	case "", "both":
 		return nil, nil
 	case "all":
-		return []bench.Arm{bench.ArmHookOn, bench.ArmHookOff,
-			bench.ArmFileOnly, bench.ArmPlacebo}, nil
+		return []bench.Arm{
+			bench.ArmHookOn, bench.ArmHookOff,
+			bench.ArmFileOnly, bench.ArmPlacebo,
+		}, nil
 	case "hook-on", "on":
 		return []bench.Arm{bench.ArmHookOn}, nil
 	case "hook-off", "off", "baseline":
@@ -298,7 +344,9 @@ func localRuntimeID(agentVersion string, instance bench.Instance) string {
 		runtime.GOOS + "/" + runtime.GOARCH,
 		"agent=" + agentVersion,
 	}
+
 	seen := make(map[string]bool)
+
 	for _, check := range instance.Checks {
 		if seen[check.Name] {
 			continue
@@ -331,6 +379,7 @@ func commandVersion(name string, args ...string) string {
 	if output == "" {
 		return "unknown"
 	}
+
 	line, _, _ := strings.Cut(output, "\n")
 
 	return line

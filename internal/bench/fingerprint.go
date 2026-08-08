@@ -12,12 +12,19 @@ import (
 	"time"
 )
 
-// harnessSources makes changes to the benchmark implementation part of the
-// run identity even before a release version is bumped. SeamarkSHA separately
-// binds rows to the exact executable used by the hook.
+// harnessSources makes changes to trial execution and validation part of the
+// run identity even before a release version is bumped. Reporting and tests do
+// not affect an experiment fingerprint. SeamarkSHA separately binds rows to
+// the exact executable used by the hook.
 //
-//go:embed *.go
+//go:embed fingerprint.go run.go instance.go preflight.go repository.go judge_command.go
 var harnessSources embed.FS
+
+// instanceSources binds judge implementations to the selected instance only.
+// Generated HEAD and naive/gold patches bind fixture content independently.
+//
+//go:embed *_fixture.go
+var instanceSources embed.FS
 
 // FileSHA256 returns the digest used to bind result rows to the exact Seamark
 // executable that served their hooks.
@@ -77,44 +84,51 @@ func Fingerprint(cfg RunConfig) (string, error) {
 		return "", err
 	}
 
+	instanceSourceSHA, err := fingerprintInstanceSource(instance)
+	if err != nil {
+		return "", err
+	}
+
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
 	}
 
 	payload := struct {
-		Schema           int             `json:"schema"`
-		Instance         string          `json:"instance"`
-		Rule             string          `json:"rule"`
-		TaskSHA          string          `json:"task_sha256"`
-		LessonSHA        string          `json:"lesson_sha256"`
-		PlaceboSHA       string          `json:"placebo_sha256"`
-		FixtureHEAD      string          `json:"fixture_head"`
-		GoldPatchSHA     string          `json:"gold_patch_sha256"`
-		NaivePatchSHA    string          `json:"naive_patch_sha256"`
-		JudgeVersion     string          `json:"judge_version"`
-		HarnessSourceSHA string          `json:"harness_source_sha256"`
-		Checks           []checkIdentity `json:"checks"`
-		AgentCommand     string          `json:"agent_command_sha256"`
-		AgentVersion     string          `json:"agent_version"`
-		Model            string          `json:"model"`
-		Effort           string          `json:"effort"`
-		MaxBudgetUSD     float64         `json:"max_budget_usd"`
-		TimeoutMS        int64           `json:"timeout_ms"`
-		RuntimeID        string          `json:"runtime_id"`
-		SeamarkVersion   string          `json:"seamark_version"`
-		SeamarkSHA       string          `json:"seamark_sha256"`
-		Arms             []Arm           `json:"arms"`
-		PrepareIndex     bool            `json:"prepare_index"`
-		StructuredResult bool            `json:"require_structured_result"`
-		CleanInit        bool            `json:"require_clean_init"`
+		Schema            int             `json:"schema"`
+		Instance          string          `json:"instance"`
+		Rule              string          `json:"rule"`
+		TaskSHA           string          `json:"task_sha256"`
+		LessonSHA         string          `json:"lesson_sha256"`
+		PlaceboSHA        string          `json:"placebo_sha256"`
+		FixtureHEAD       string          `json:"fixture_head"`
+		GoldPatchSHA      string          `json:"gold_patch_sha256"`
+		NaivePatchSHA     string          `json:"naive_patch_sha256"`
+		JudgeVersion      string          `json:"judge_version"`
+		HarnessSourceSHA  string          `json:"harness_source_sha256"`
+		InstanceSourceSHA string          `json:"instance_source_sha256"`
+		Checks            []checkIdentity `json:"checks"`
+		AgentCommand      string          `json:"agent_command_sha256"`
+		AgentVersion      string          `json:"agent_version"`
+		Model             string          `json:"model"`
+		Effort            string          `json:"effort"`
+		MaxBudgetUSD      float64         `json:"max_budget_usd"`
+		TimeoutMS         int64           `json:"timeout_ms"`
+		RuntimeID         string          `json:"runtime_id"`
+		SeamarkVersion    string          `json:"seamark_version"`
+		SeamarkSHA        string          `json:"seamark_sha256"`
+		Arms              []Arm           `json:"arms"`
+		PrepareIndex      bool            `json:"prepare_index"`
+		StructuredResult  bool            `json:"require_structured_result"`
+		CleanInit         bool            `json:"require_clean_init"`
 	}{
 		Schema: 4, Instance: instance.ID, Rule: instance.Rule,
 		TaskSHA: instance.TaskSHA(), LessonSHA: hashBytes([]byte(instance.LessonYAML)),
 		PlaceboSHA:  hashBytes([]byte(instance.PlaceboYAML)),
 		FixtureHEAD: material.fixtureHEAD, GoldPatchSHA: material.goldPatchSHA,
 		NaivePatchSHA: material.naivePatchSHA, JudgeVersion: instance.JudgeVersion,
-		HarnessSourceSHA: harnessSHA, Checks: checks, AgentCommand: agentCommand,
+		HarnessSourceSHA: harnessSHA, InstanceSourceSHA: instanceSourceSHA,
+		Checks: checks, AgentCommand: agentCommand,
 		AgentVersion: cfg.AgentVersion, Model: cfg.Model, Effort: cfg.Effort,
 		MaxBudgetUSD: cfg.MaxBudgetUSD, TimeoutMS: timeout.Milliseconds(),
 		RuntimeID: cfg.RuntimeID, SeamarkVersion: cfg.Version, SeamarkSHA: cfg.SeamarkSHA,
@@ -142,13 +156,16 @@ func fingerprintInstance(instance Instance) (instanceFingerprintMaterial, error)
 	if err := instance.Generate(gold); err != nil {
 		return instanceFingerprintMaterial{}, fmt.Errorf("generate fingerprint fixture: %w", err)
 	}
+
 	head := fixtureHead(gold)
 	if head == "" {
 		return instanceFingerprintMaterial{}, fmt.Errorf("fingerprint fixture has no HEAD")
 	}
+
 	if err := instance.ApplyGold(gold); err != nil {
 		return instanceFingerprintMaterial{}, fmt.Errorf("apply fingerprint gold patch: %w", err)
 	}
+
 	goldPatch, err := workingTreePatch(gold)
 	if err != nil {
 		return instanceFingerprintMaterial{}, err
@@ -158,9 +175,11 @@ func fingerprintInstance(instance Instance) (instanceFingerprintMaterial, error)
 	if err := instance.Generate(naive); err != nil {
 		return instanceFingerprintMaterial{}, fmt.Errorf("generate fingerprint naive fixture: %w", err)
 	}
+
 	if err := instance.ApplyNaive(naive); err != nil {
 		return instanceFingerprintMaterial{}, fmt.Errorf("apply fingerprint naive patch: %w", err)
 	}
+
 	naivePatch, err := workingTreePatch(naive)
 	if err != nil {
 		return instanceFingerprintMaterial{}, err
@@ -184,6 +203,7 @@ func workingTreePatch(dir string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read fingerprint patch: %w", err)
 	}
+
 	if len(out) == 0 {
 		return nil, fmt.Errorf("fingerprint patch is empty")
 	}
@@ -214,6 +234,21 @@ func fingerprintHarnessSources() (string, error) {
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func fingerprintInstanceSource(instance Instance) (string, error) {
+	if instance.sourceFile == "" {
+		// Custom internal/test instances remain bound by task, lessons,
+		// fixture HEAD, patches, checks, and their explicit JudgeVersion.
+		return "custom-instance", nil
+	}
+
+	data, err := instanceSources.ReadFile(instance.sourceFile)
+	if err != nil {
+		return "", fmt.Errorf("read embedded instance source %s: %w", instance.sourceFile, err)
+	}
+
+	return hashBytes(data), nil
 }
 
 func hashBytes(data []byte) string {
