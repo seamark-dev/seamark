@@ -81,6 +81,8 @@ type Firing struct {
 	// context; it is zero for a suppressed match.
 	Delivery     DeliveryStatus `json:"delivery,omitempty"`
 	SessionSHA   string         `json:"session_sha256,omitempty"`
+	MatchSHA     string         `json:"match_sha256,omitempty"`
+	Generation   uint64         `json:"context_generation,omitempty"`
 	ContextBytes int            `json:"context_bytes,omitempty"`
 }
 
@@ -96,6 +98,8 @@ func (f Firing) Delivered() bool {
 type HookDelivery struct {
 	Status       DeliveryStatus
 	SessionID    string
+	MatchID      string
+	Generation   uint64
 	ContextBytes int
 }
 
@@ -148,11 +152,22 @@ func RecordHookDelivery(root, file, tool string, lessons []model.Lesson, deliver
 
 	rec.Delivery = status
 	rec.ContextBytes = delivery.ContextBytes
+
 	if delivery.SessionID != "" {
-		rec.SessionSHA = fmt.Sprintf("%x", sha256.Sum256([]byte(root+"\x00"+delivery.SessionID)))
+		rec.SessionSHA = sessionDigest(root, delivery.SessionID)
 	}
 
+	if delivery.MatchID != "" {
+		rec.MatchSHA = matchDigest(root, delivery.SessionID, delivery.MatchID)
+	}
+
+	rec.Generation = delivery.Generation
+
 	return appendFiring(root, rec)
+}
+
+func matchDigest(root, sessionID, matchID string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(root+"\x00"+sessionID+"\x00"+matchID)))
 }
 
 func newFiring(surface string, files []string, tool string, lessons []model.Lesson) (Firing, bool) {
@@ -297,8 +312,9 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 	type key struct{ region, symptom string }
 
 	type sessionLessonKey struct {
-		session string
-		lesson  FiredLesson
+		session    string
+		generation uint64
+		lesson     FiredLesson
 	}
 
 	count := map[key]*Fired{}
@@ -333,7 +349,7 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 				allRepeated := true
 
 				for _, lesson := range fr.Fired {
-					key := sessionLessonKey{fr.SessionSHA, lesson.canonicalIdentity()}
+					key := sessionLessonKey{fr.SessionSHA, fr.Generation, lesson.canonicalIdentity()}
 					if !seenSessionLessons[key] {
 						allRepeated = false
 						seenSessionLessons[key] = true

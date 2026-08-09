@@ -78,6 +78,7 @@ surface time, so edits take effect with no re-mining:
 threshold: 2                     # min recurrences to surface (default 2)
 pin_budget: 3                    # pins the edit hook injects per edit (default 3)
 change_budget: 6                 # lessons one change_set answer carries (default 6)
+hook_delivery: once-per-context  # suppress repeats until context compaction
 mute:
   - rule: F541                   # hush a noisy rule everywhere
   - region: alembic/versions     # …or every lesson under generated code
@@ -104,6 +105,16 @@ must not hold a slot a strong one wants, and among equals a pin on the
 file beats its package beats a repo-wide `*` — with a `+N more` pointer
 for the rest. Deliberate views (`--file`, `why`) always show
 everything; only the ambient injection is capped.
+
+Hook delivery defaults to `always`, preserving the original behavior. Set
+`hook_delivery: once-per-context` to inject a lesson only once in the current
+provider session. `seamark init` installs a `PostCompact` lifecycle hook that
+starts a fresh delivery generation after Claude Code summarizes old context,
+so a reminder can return when it is useful again. The optimization is
+deliberately fail-open: missing session identity, corrupt local state, or a
+state-lock failure causes normal injection rather than silently hiding a
+lesson. Only repository-scoped session and lesson digests are stored in the
+gitignored `.seamark/lessons-hook-state.json`; entries expire after 24 hours.
 
 ## The ledger: lessons --list
 
@@ -326,7 +337,9 @@ pins wording one theme never spend two slots:
 - **The edit hook** (`lessons --hook`, wired by `seamark init`): per
   file, at most `pin_budget` pins (default 3, confidence-ranked, a
   `+N more` pointer for the rest) plus the file's recurring mined
-  lessons. Offline, silent when there is nothing to say.
+  lessons. Offline, silent when there is nothing to say. With opt-in
+  `hook_delivery: once-per-context`, already-delivered lessons stay silent
+  until Claude Code compacts the current session.
 - **`change_set` (MCP)**: before a multi-file edit, the union of the
   files' lessons under `change_budget` (default 6) — merged by
   identity, ranked by confidence across the whole set, regions shown as
@@ -346,13 +359,14 @@ actual pre-edit reminder.
 Every ambient surface appends a line to `.seamark/lessons-audit.jsonl`
 when it reminds an agent — the impact/decay counterpart to the gate's
 audit log. Edit-hook records also carry the rendered context byte count,
-delivery status, and a repository-scoped SHA-256 digest of the provider session
-ID; the raw session ID is never persisted or made correlatable across
-repositories. These fields make repeated delivery measurable without changing
-when reminders appear. `seamark lessons --stats` turns the log into which
-lessons actually reach agents, split by surface (a `change_set` plan and a CI
-`check` are exposure, not edits reminded), and which *would* surface but never
-have (a lesson whose region no edit touches is a pruning candidate). For
+delivery status, context generation, and repository-scoped SHA-256 digests of
+the provider session and tool-use match; raw provider identifiers are never
+persisted or made correlatable across repositories. These fields make repeated
+delivery and opt-in suppression measurable. `seamark lessons --stats` turns
+the log into which lessons actually reach agents, split by surface (a
+`change_set` plan and a CI `check` are exposure, not edits reminded), and which
+*would* surface but never have (a lesson whose region no edit touches is a
+pruning candidate). For
 instrumented hook records it also reports injected context bytes, repeated
 in-session injections, and suppressed repeats:
 

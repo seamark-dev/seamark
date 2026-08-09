@@ -30,6 +30,19 @@ const DefaultPinBudget = 3
 // per-file budget would print thirty lines.
 const DefaultChangeBudget = 6
 
+// HookDeliveryMode controls whether an ambient edit hook repeats lesson
+// context within one provider context window.
+type HookDeliveryMode string
+
+const (
+	// HookDeliveryAlways preserves the original behavior: every matching edit
+	// receives the applicable lesson context.
+	HookDeliveryAlways HookDeliveryMode = "always"
+	// HookDeliveryOncePerContext emits each lesson once per provider session,
+	// then permits it again after a context-compaction reset.
+	HookDeliveryOncePerContext HookDeliveryMode = "once-per-context"
+)
+
 // Config tunes how mined lessons surface (`.seamark/lessons.yaml`),
 // applied at surface time so edits take effect without re-mining — the
 // same contract as the gate's policy.yaml. An absent file yields
@@ -37,6 +50,9 @@ const DefaultChangeBudget = 6
 type Config struct {
 	// Threshold overrides the minimum recurrences to surface a lesson.
 	Threshold int `yaml:"threshold"`
+	// Delivery controls repeated ambient edit-hook context. Empty means
+	// HookDeliveryAlways for compatibility with existing configuration files.
+	Delivery HookDeliveryMode `yaml:"hook_delivery"`
 	// PinBudget overrides how many pins the edit hook injects per edit
 	// (most-specific regions first; the rest are one pointer line away).
 	// 0 means DefaultPinBudget.
@@ -49,6 +65,15 @@ type Config struct {
 	// Pin surfaces curated lessons unconditionally — the "must not be
 	// ignored" list — even when mining never found them.
 	Pin []PinRule `yaml:"pin"`
+}
+
+// HookDelivery resolves the effective edit-hook delivery mode.
+func (c *Config) HookDelivery() HookDeliveryMode {
+	if c.Delivery == "" {
+		return HookDeliveryAlways
+	}
+
+	return c.Delivery
 }
 
 // HookPinBudget resolves the effective per-injection pin cap.
@@ -181,6 +206,13 @@ func LoadConfig(root string) (*Config, error) {
 
 	if cfg.Threshold <= 0 {
 		cfg.Threshold = DefaultThreshold
+	}
+
+	switch cfg.HookDelivery() {
+	case HookDeliveryAlways, HookDeliveryOncePerContext:
+	default:
+		return nil, fmt.Errorf("lessons config: hook_delivery must be %q or %q, got %q",
+			HookDeliveryAlways, HookDeliveryOncePerContext, cfg.Delivery)
 	}
 
 	return cfg, nil

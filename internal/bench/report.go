@@ -52,12 +52,17 @@ type ReportInput struct {
 
 // ArmReport aggregates valid and invalid attempts for one arm.
 type ArmReport struct {
-	Attempted     int
-	Valid         int
-	TaskDone      int
-	InvariantPass int
-	ContextTokens int64
-	CostUSD       float64
+	Attempted        int
+	Valid            int
+	TaskDone         int
+	InvariantPass    int
+	ContextTokens    int64
+	CostUSD          float64
+	HookMatches      int
+	HookInjections   int
+	HookRepeated     int
+	HookSuppressed   int
+	HookContextBytes int
 }
 
 // CohortReport is one immutable experiment fingerprint. Different harness,
@@ -75,6 +80,7 @@ type CohortReport struct {
 	SeamarkSHA       string
 	AgentVersion     string
 	Effort           string
+	HookDelivery     HookDeliveryMode
 	RuntimeID        string
 	MaxBudgetUSD     float64
 	Rows             int
@@ -268,8 +274,7 @@ func BuildBenchmarkReport(paths []string, registry ClaimRegistry) (BenchmarkRepo
 	paths = slices.Clone(paths)
 	sort.Strings(paths)
 	report := BenchmarkReport{
-		ResultSchemaVersion: ResultSchemaVersion,
-		ClaimSchemaVersion:  registry.SchemaVersion,
+		ClaimSchemaVersion: registry.SchemaVersion,
 	}
 	var allRows []Row
 	var evidenceFrom, evidenceTo time.Time
@@ -296,6 +301,14 @@ func BuildBenchmarkReport(paths []string, registry ClaimRegistry) (BenchmarkRepo
 		})
 
 		for _, row := range rows {
+			if report.ResultSchemaVersion == 0 {
+				report.ResultSchemaVersion = row.SchemaVersion
+			} else if row.SchemaVersion != report.ResultSchemaVersion {
+				return BenchmarkReport{}, fmt.Errorf(
+					"mixed result schema versions: v%d and v%d", report.ResultSchemaVersion, row.SchemaVersion,
+				)
+			}
+
 			ts, _ := time.Parse(time.RFC3339, row.TS) // ValidateResultRow already checked it.
 
 			if evidenceFrom.IsZero() || ts.Before(evidenceFrom) {
@@ -375,6 +388,7 @@ type pairRows struct {
 type cohortIdentity struct {
 	taskSHA, pin, fixture, requestedModel            string
 	seamarkVersion, seamarkSHA, agentVersion, effort string
+	hookDelivery                                     HookDeliveryMode
 	runtimeID                                        string
 	maxBudgetUSD                                     float64
 }
@@ -385,6 +399,7 @@ func reportIdentity(row Row) cohortIdentity {
 		requestedModel: row.RequestedModel, seamarkVersion: row.SeamarkVersion,
 		seamarkSHA: row.SeamarkSHA, agentVersion: row.AgentVersion,
 		effort: row.Effort, runtimeID: row.RuntimeID, maxBudgetUSD: row.MaxBudgetUSD,
+		hookDelivery: row.HookDelivery,
 	}
 }
 
@@ -405,6 +420,7 @@ func buildCohorts(rows []Row) ([]CohortReport, error) {
 			RequestedModel: first.RequestedModel, SeamarkVersion: first.SeamarkVersion,
 			SeamarkSHA: first.SeamarkSHA, AgentVersion: first.AgentVersion,
 			Effort: first.Effort, RuntimeID: first.RuntimeID,
+			HookDelivery: first.HookDelivery,
 			MaxBudgetUSD: first.MaxBudgetUSD, Rows: len(cohortRows),
 		}
 
@@ -517,6 +533,11 @@ func accumulateArm(arm *ArmReport, row Row) {
 
 	arm.ContextTokens += row.ContextTokens
 	arm.CostUSD += row.CostUSD
+	arm.HookMatches += row.HookMatches
+	arm.HookInjections += row.HookInjections
+	arm.HookRepeated += row.HookRepeated
+	arm.HookSuppressed += row.HookSuppressed
+	arm.HookContextBytes += row.HookContextBytes
 }
 
 func assessClaims(claims []Claim, cohorts []CohortReport) []ClaimAssessment {
@@ -690,6 +711,19 @@ func (r BenchmarkReport) Markdown() string {
 		)
 	}
 
+	if r.ResultSchemaVersion >= 6 {
+		out.WriteString("\n### Hook delivery intensity\n\n")
+		out.WriteString("| Instance | Fingerprint | Delivery | Matches | Injections | Repeated injections | Suppressed | Context bytes |\n")
+		out.WriteString("|---|---|---|---:|---:|---:|---:|---:|\n")
+		for _, cohort := range r.Cohorts {
+			fmt.Fprintf(&out, "| %s | `%s` | %s | %d | %d | %d | %d | %d |\n",
+				tableCell(cohort.Instance), cohort.Fingerprint, tableCell(string(cohort.HookDelivery)),
+				cohort.HookOn.HookMatches,
+				cohort.HookOn.HookInjections, cohort.HookOn.HookRepeated,
+				cohort.HookOn.HookSuppressed, cohort.HookOn.HookContextBytes)
+		}
+	}
+
 	out.WriteString("\n### Exact cohort identities\n\n")
 
 	for _, cohort := range r.Cohorts {
@@ -702,6 +736,11 @@ func (r BenchmarkReport) Markdown() string {
 		fmt.Fprintf(&out, "  - Model requested %s, observed %s; effort %s; maximum $%.2f/session.\n",
 			markdownCode(valueOrNA(cohort.RequestedModel)), markdownCode(valueOrNA(cohort.Model)),
 			markdownCode(valueOrNA(cohort.Effort)), cohort.MaxBudgetUSD)
+
+		if r.ResultSchemaVersion >= 6 {
+			fmt.Fprintf(&out, "  - Hook delivery policy: %s.\n", markdownCode(string(cohort.HookDelivery)))
+		}
+
 		fmt.Fprintf(&out, "  - Agent %s; runtime %s.\n",
 			markdownCode(valueOrNA(cohort.AgentVersion)), markdownCode(valueOrNA(cohort.RuntimeID)))
 		fmt.Fprintf(&out, "  - Seamark %s; binary %s.\n",

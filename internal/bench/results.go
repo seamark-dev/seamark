@@ -8,17 +8,24 @@ import (
 )
 
 // ResultSchemaVersion is the immutable contract emitted by the current
-// harness and accepted by strict reporting. Version 5 adds artifact digests
-// and requires every persisted artifact path to carry its matching digest.
-const ResultSchemaVersion = 5
+// harness and accepted by strict reporting. Version 6 adds explicit hook
+// delivery intensity while strict reporting continues to accept frozen v5
+// evidence without rewriting it.
+const ResultSchemaVersion = 6
+
+const oldestSupportedResultSchemaVersion = 5
 
 // ValidateResultRow enforces the semantic contract documented by
-// bench/result.schema.json. It is intentionally stricter than ReadRows, whose
+// the versioned schemas in bench/. It is intentionally stricter than ReadRows, whose
 // best-effort behavior remains useful for historical cost estimation.
 func ValidateResultRow(row Row) error {
+	if row.SchemaVersion < oldestSupportedResultSchemaVersion ||
+		row.SchemaVersion > ResultSchemaVersion {
+		return fmt.Errorf("schema_version is %d, supported versions are %d through %d",
+			row.SchemaVersion, oldestSupportedResultSchemaVersion, ResultSchemaVersion)
+	}
+
 	switch {
-	case row.SchemaVersion != ResultSchemaVersion:
-		return fmt.Errorf("schema_version is %d, want %d", row.SchemaVersion, ResultSchemaVersion)
 	case row.TS == "":
 		return fmt.Errorf("ts is required")
 	case row.RunID == "":
@@ -50,12 +57,37 @@ func ValidateResultRow(row Row) error {
 	case row.InputTokens < 0 || row.CacheReadTokens < 0 || row.CacheCreationTokens < 0 ||
 		row.ContextTokens < 0 || row.OutputTokens < 0:
 		return fmt.Errorf("token counts must not be negative")
-	case row.HookFirings < 0 || row.HookAuditRows < 0 || row.Turns < 0 || row.PermissionDenials < 0:
+	case row.HookFirings < 0 || row.HookAuditRows < 0 || row.HookMatches < 0 ||
+		row.HookInjections < 0 || row.HookRepeated < 0 || row.HookSuppressed < 0 ||
+		row.HookContextBytes < 0 || row.Turns < 0 || row.PermissionDenials < 0:
 		return fmt.Errorf("event counts must not be negative")
 	case row.CostUSD < 0 || math.IsNaN(row.CostUSD) || math.IsInf(row.CostUSD, 0) || row.DurationMS < 0:
 		return fmt.Errorf("cost must be finite and cost and duration must not be negative")
 	case row.MaxBudgetUSD < 0 || math.IsNaN(row.MaxBudgetUSD) || math.IsInf(row.MaxBudgetUSD, 0):
 		return fmt.Errorf("maximum budget must be finite and not negative")
+	}
+
+	if row.SchemaVersion >= 6 {
+		switch {
+		case row.HookDelivery != HookDeliveryAlways && row.HookDelivery != HookDeliveryOncePerContext:
+			return fmt.Errorf("hook_delivery must be %q or %q", HookDeliveryAlways, HookDeliveryOncePerContext)
+		case row.HookMatches > row.HookAuditRows:
+			return fmt.Errorf("hook_matches cannot exceed hook_audit_rows")
+		case row.HookMatches != row.HookInjections+row.HookSuppressed:
+			return fmt.Errorf("hook_matches must equal hook_injections plus hook_suppressed")
+		case row.HookRepeated > row.HookInjections:
+			return fmt.Errorf("hook_repeated_injections cannot exceed hook_injections")
+		case row.HookDelivery == HookDeliveryAlways && row.HookSuppressed != 0:
+			return fmt.Errorf("hook_suppressed must be zero when hook_delivery is %q", HookDeliveryAlways)
+		case row.HookFirings != row.HookInjections:
+			return fmt.Errorf("hook_firings must equal hook_injections in schema v6")
+		case row.Valid && (row.Arm == ArmHookOn || row.Arm == ArmPlacebo) && row.HookInjections == 0:
+			return fmt.Errorf("valid treatment rows require a matching hook injection")
+		case row.Valid && (row.Arm == ArmHookOff || row.Arm == ArmFileOnly) &&
+			(row.HookMatches != 0 || row.HookInjections != 0 || row.HookRepeated != 0 ||
+				row.HookSuppressed != 0 || row.HookContextBytes != 0):
+			return fmt.Errorf("valid control rows cannot contain hook delivery intensity")
+		}
 	}
 
 	if row.InputTokens > math.MaxInt64-row.CacheReadTokens ||

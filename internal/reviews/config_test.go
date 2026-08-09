@@ -223,6 +223,7 @@ func TestLoadConfigDefaultsWhenAbsent(t *testing.T) {
 	cfg, err := LoadConfig(t.TempDir()) // no .seamark/lessons.yaml
 	require.NoError(t, err)
 	assert.Equal(t, DefaultThreshold, cfg.Threshold)
+	assert.Equal(t, HookDeliveryAlways, cfg.HookDelivery())
 	assert.Empty(t, cfg.Mute)
 	assert.Empty(t, cfg.Pin)
 }
@@ -232,6 +233,7 @@ func TestLoadConfigParsesFile(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(`
 threshold: 3
+hook_delivery: once-per-context
 mute:
   - rule: F541
   - region: alembic/versions
@@ -244,9 +246,20 @@ pin:
 	cfg, err := LoadConfig(root)
 	require.NoError(t, err)
 	assert.Equal(t, 3, cfg.Threshold)
+	assert.Equal(t, HookDeliveryOncePerContext, cfg.HookDelivery())
 	require.Len(t, cfg.Mute, 2)
 	require.Len(t, cfg.Pin, 1)
 	assert.Equal(t, "scripts", cfg.Pin[0].Region)
+}
+
+func TestLoadConfigRejectsUnknownHookDelivery(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("hook_delivery: sometimes\n"), 0o644))
+
+	_, err := LoadConfig(root)
+	require.ErrorContains(t, err, "hook_delivery must be")
 }
 
 func TestLoadConfigRejectsMalformed(t *testing.T) {

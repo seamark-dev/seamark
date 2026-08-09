@@ -573,6 +573,55 @@ func TestLessonsHook(t *testing.T) {
 	assert.Empty(t, strings.TrimSpace(out))
 }
 
+func TestLessonsHookOncePerContextResetsAfterCompaction(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	seedLesson(t, root, "a.go", "RUF001", 4)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("threshold: 2\nhook_delivery: once-per-context\n"), 0o644))
+	payload := `{"session_id":"session-one","tool_name":"Edit","tool_input":{"file_path":"` +
+		filepath.Join(root, "a.go") + `"}}`
+
+	first, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Contains(t, first, "RUF001")
+
+	second, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Empty(t, strings.TrimSpace(second), "the same context receives no duplicate lesson")
+
+	_, _, err = runIn(t, `{"session_id":"session-one"}`,
+		"-C", root, "lessons", "--hook-reset")
+	require.NoError(t, err)
+
+	third, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Contains(t, third, "RUF001", "PostCompact starts a new delivery generation")
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+	require.Len(t, firings, 3)
+	assert.Equal(t, reviews.DeliveryInjected, firings[0].Delivery)
+	assert.Equal(t, reviews.DeliverySuppressedRepeat, firings[1].Delivery)
+	assert.Equal(t, reviews.DeliveryInjected, firings[2].Delivery)
+}
+
+func TestLessonsHookAlwaysRemainsTheDefault(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	seedLesson(t, root, "a.go", "RUF001", 4)
+
+	payload := `{"session_id":"session-one","tool_name":"Edit","tool_input":{"file_path":"` +
+		filepath.Join(root, "a.go") + `"}}`
+	for range 2 {
+		out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+		require.NoError(t, err)
+		assert.Contains(t, out, "RUF001")
+	}
+}
+
 func TestLessonsList(t *testing.T) {
 	root := writeFixture(t)
 
@@ -1137,6 +1186,8 @@ func TestLessonsHookDoesNotRecordFailedOutput(t *testing.T) {
 	_, err := run(t, "-C", root, "index")
 	require.NoError(t, err)
 	seedLesson(t, root, "a.go", "RUF001", 4)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("threshold: 2\nhook_delivery: once-per-context\n"), 0o644))
 
 	payload := `{"session_id":"session-to-hash","tool_name":"Edit","tool_input":{"file_path":"` +
 		filepath.Join(root, "a.go") + `"}}`
@@ -1151,6 +1202,11 @@ func TestLessonsHookDoesNotRecordFailedOutput(t *testing.T) {
 	firings, readErr := reviews.ReadFirings(root)
 	require.NoError(t, readErr)
 	assert.Empty(t, firings, "a failed hook response never reached the agent")
+
+	out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Contains(t, out, "RUF001",
+		"failed output must not mark the lesson delivered in once-per-context state")
 }
 
 // seedLesson writes one lesson row directly, so hook tests don't need a

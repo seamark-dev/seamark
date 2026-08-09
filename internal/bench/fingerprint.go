@@ -47,6 +47,11 @@ func Fingerprint(cfg RunConfig) (string, error) {
 	if err := instance.Validate(); err != nil {
 		return "", err
 	}
+
+	if !knownHookDelivery(cfg.HookDelivery) {
+		return "", fmt.Errorf("unknown hook delivery mode %q", cfg.HookDelivery)
+	}
+
 	arms, err := resolvedArms(cfg.Arms)
 	if err != nil {
 		return "", err
@@ -95,34 +100,35 @@ func Fingerprint(cfg RunConfig) (string, error) {
 	}
 
 	payload := struct {
-		Schema            int             `json:"schema"`
-		Instance          string          `json:"instance"`
-		Rule              string          `json:"rule"`
-		TaskSHA           string          `json:"task_sha256"`
-		LessonSHA         string          `json:"lesson_sha256"`
-		PlaceboSHA        string          `json:"placebo_sha256"`
-		FixtureHEAD       string          `json:"fixture_head"`
-		GoldPatchSHA      string          `json:"gold_patch_sha256"`
-		NaivePatchSHA     string          `json:"naive_patch_sha256"`
-		JudgeVersion      string          `json:"judge_version"`
-		HarnessSourceSHA  string          `json:"harness_source_sha256"`
-		InstanceSourceSHA string          `json:"instance_source_sha256"`
-		Checks            []checkIdentity `json:"checks"`
-		AgentCommand      string          `json:"agent_command_sha256"`
-		AgentVersion      string          `json:"agent_version"`
-		Model             string          `json:"model"`
-		Effort            string          `json:"effort"`
-		MaxBudgetUSD      float64         `json:"max_budget_usd"`
-		TimeoutMS         int64           `json:"timeout_ms"`
-		RuntimeID         string          `json:"runtime_id"`
-		SeamarkVersion    string          `json:"seamark_version"`
-		SeamarkSHA        string          `json:"seamark_sha256"`
-		Arms              []Arm           `json:"arms"`
-		PrepareIndex      bool            `json:"prepare_index"`
-		StructuredResult  bool            `json:"require_structured_result"`
-		CleanInit         bool            `json:"require_clean_init"`
+		Schema            int              `json:"schema"`
+		Instance          string           `json:"instance"`
+		Rule              string           `json:"rule"`
+		TaskSHA           string           `json:"task_sha256"`
+		LessonSHA         string           `json:"lesson_sha256"`
+		PlaceboSHA        string           `json:"placebo_sha256"`
+		FixtureHEAD       string           `json:"fixture_head"`
+		GoldPatchSHA      string           `json:"gold_patch_sha256"`
+		NaivePatchSHA     string           `json:"naive_patch_sha256"`
+		JudgeVersion      string           `json:"judge_version"`
+		HarnessSourceSHA  string           `json:"harness_source_sha256"`
+		InstanceSourceSHA string           `json:"instance_source_sha256"`
+		Checks            []checkIdentity  `json:"checks"`
+		AgentCommand      string           `json:"agent_command_sha256"`
+		AgentVersion      string           `json:"agent_version"`
+		Model             string           `json:"model"`
+		Effort            string           `json:"effort"`
+		MaxBudgetUSD      float64          `json:"max_budget_usd"`
+		TimeoutMS         int64            `json:"timeout_ms"`
+		RuntimeID         string           `json:"runtime_id"`
+		SeamarkVersion    string           `json:"seamark_version"`
+		SeamarkSHA        string           `json:"seamark_sha256"`
+		Arms              []Arm            `json:"arms"`
+		PrepareIndex      bool             `json:"prepare_index"`
+		StructuredResult  bool             `json:"require_structured_result"`
+		CleanInit         bool             `json:"require_clean_init"`
+		HookDelivery      HookDeliveryMode `json:"hook_delivery"`
 	}{
-		Schema: 4, Instance: instance.ID, Rule: instance.Rule,
+		Schema: 5, Instance: instance.ID, Rule: instance.Rule,
 		TaskSHA: instance.TaskSHA(), LessonSHA: hashBytes([]byte(instance.LessonYAML)),
 		PlaceboSHA:  hashBytes([]byte(instance.PlaceboYAML)),
 		FixtureHEAD: material.fixtureHEAD, GoldPatchSHA: material.goldPatchSHA,
@@ -134,6 +140,7 @@ func Fingerprint(cfg RunConfig) (string, error) {
 		RuntimeID: cfg.RuntimeID, SeamarkVersion: cfg.Version, SeamarkSHA: cfg.SeamarkSHA,
 		Arms: arms, PrepareIndex: cfg.PrepareIndex,
 		StructuredResult: cfg.RequireStructuredResult, CleanInit: cfg.RequireCleanInit,
+		HookDelivery: effectiveHookDelivery(cfg),
 	}
 
 	return hashJSON(payload)

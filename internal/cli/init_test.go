@@ -16,14 +16,18 @@ import (
 
 // commands flattens every PreToolUse command string in a settings map.
 func commands(t *testing.T, settings map[string]any) []string {
+	return commandsForEvent(t, settings, "PreToolUse")
+}
+
+func commandsForEvent(t *testing.T, settings map[string]any, event string) []string {
 	t.Helper()
 
 	hooks, _ := settings["hooks"].(map[string]any)
-	pre, _ := hooks["PreToolUse"].([]any)
+	events, _ := hooks[event].([]any)
 
 	var out []string
 
-	forEachCommand(pre, func(_ map[string]any, cmd string) {
+	forEachCommand(events, func(_ map[string]any, cmd string) {
 		out = append(out, cmd)
 	})
 
@@ -50,6 +54,8 @@ func TestMergeHooksIntoEmpty(t *testing.T) {
 	assert.Contains(t, cmds, "/bin/seamark gate --hook")
 	assert.Contains(t, cmds, "/bin/seamark lessons --hook")
 	assert.NotContains(t, cmds, "/bin/seamark gate --enforce --hook")
+	assert.Equal(t, []string{"/bin/seamark lessons --hook-reset"},
+		commandsForEvent(t, settings, "PostCompact"))
 }
 
 func TestMergeHooksEnforceMode(t *testing.T) {
@@ -119,6 +125,25 @@ func TestMergeHooksPreservesExisting(t *testing.T) {
 
 	hooks := settings["hooks"].(map[string]any)
 	assert.NotNil(t, hooks["Stop"], "other hook events untouched")
+	assert.Equal(t, []string{"/bin/seamark lessons --hook-reset"},
+		commandsForEvent(t, settings, "PostCompact"))
+}
+
+func TestMergeHooksPreservesExistingPostCompact(t *testing.T) {
+	settings := map[string]any{"hooks": map[string]any{
+		"PostCompact": []any{map[string]any{
+			"hooks": []any{map[string]any{
+				"type": "command", "command": "notify-context-change",
+			}},
+		}},
+	}}
+
+	require.True(t, mustMerge(t, settings, "/bin/seamark", gateModeWarn))
+	assert.ElementsMatch(t, []string{
+		"notify-context-change", "/bin/seamark lessons --hook-reset",
+	}, commandsForEvent(t, settings, "PostCompact"))
+	assert.False(t, mustMerge(t, settings, "/bin/seamark", gateModeWarn))
+	assert.Len(t, commandsForEvent(t, settings, "PostCompact"), 2)
 }
 
 func TestMergeHooksIdempotent(t *testing.T) {
@@ -130,6 +155,8 @@ func TestMergeHooksIdempotent(t *testing.T) {
 		assert.False(t, mustMerge(t, settings, "/bin/seamark", mode),
 			"re-run in %s mode must be a no-op", mode)
 		assert.Len(t, commands(t, settings), 2, "no duplicate hooks")
+		assert.Len(t, commandsForEvent(t, settings, "PostCompact"), 1,
+			"no duplicate context-reset hooks")
 	}
 }
 
@@ -171,6 +198,10 @@ func TestMergeHooksRejectsMalformedHooks(t *testing.T) {
 	settings := map[string]any{"hooks": map[string]any{"PreToolUse": "not an array"}}
 	_, err := mergeHooks(settings, "/bin/seamark", gateModeWarn)
 	assert.Error(t, err, "a non-array PreToolUse must be rejected")
+
+	settings = map[string]any{"hooks": map[string]any{"PostCompact": "not an array"}}
+	_, err = mergeHooks(settings, "/bin/seamark", gateModeWarn)
+	assert.Error(t, err, "a non-array PostCompact must be rejected")
 }
 
 func TestRunInitScaffoldsAndIsIdempotent(t *testing.T) {
@@ -195,6 +226,7 @@ func TestRunInitScaffoldsAndIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(data, &settings))
 	assert.Len(t, commands(t, settings), 2)
+	assert.Len(t, commandsForEvent(t, settings, "PostCompact"), 1)
 
 	// Re-run: everything kept, no duplication.
 	var b2 testWriter
@@ -205,6 +237,8 @@ func TestRunInitScaffoldsAndIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(data, &settings))
 	assert.Len(t, commands(t, settings), 2, "re-run must not duplicate hooks")
+	assert.Len(t, commandsForEvent(t, settings, "PostCompact"), 1,
+		"re-run must not duplicate the context-reset hook")
 }
 
 func TestEnsureGitignoreAddsMissingCarveouts(t *testing.T) {

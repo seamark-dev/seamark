@@ -51,7 +51,8 @@ func TestRecordHookDeliveryHashesSessionAndMeasuresContext(t *testing.T) {
 	require.NoError(t, RecordHookDelivery(root, "api/handler.py", "Edit", []model.Lesson{
 		{Region: "api", Symptom: "Keep the generated client synchronized."},
 	}, HookDelivery{
-		Status: DeliveryInjected, SessionID: "provider-session-secret", ContextBytes: 437,
+		Status: DeliveryInjected, SessionID: "provider-session-secret",
+		MatchID: "provider-tool-secret", Generation: 2, ContextBytes: 437,
 	}))
 
 	firings, err := ReadFirings(root)
@@ -59,6 +60,8 @@ func TestRecordHookDeliveryHashesSessionAndMeasuresContext(t *testing.T) {
 	require.Len(t, firings, 1)
 	assert.Equal(t, DeliveryInjected, firings[0].Delivery)
 	assert.Len(t, firings[0].SessionSHA, 64)
+	assert.Len(t, firings[0].MatchSHA, 64)
+	assert.Equal(t, uint64(2), firings[0].Generation)
 	assert.NotContains(t, firings[0].SessionSHA, "provider-session-secret")
 	assert.Equal(t, 437, firings[0].ContextBytes)
 	assert.True(t, firings[0].Delivered())
@@ -66,6 +69,8 @@ func TestRecordHookDeliveryHashesSessionAndMeasuresContext(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "provider-session-secret",
 		"the provider session ID must never reach the audit file")
+	assert.NotContains(t, string(raw), "provider-tool-secret",
+		"the provider tool-use ID must never reach the audit file")
 
 	otherRoot := t.TempDir()
 	require.NoError(t, RecordHookDelivery(otherRoot, "api/handler.py", "Edit", []model.Lesson{
@@ -208,23 +213,25 @@ func TestSummarizeMeasuresRepeatedHookDeliveryWithinSession(t *testing.T) {
 	lessonA := FiredLesson{Region: "api", Symptom: "synchronize generated client"}
 	lessonB := FiredLesson{Region: "api", Symptom: "bump cache version"}
 	firings := []Firing{
-		{File: "api/a.py", Delivery: DeliveryInjected, SessionSHA: "session-a",
+		{File: "api/a.py", Delivery: DeliveryInjected, SessionSHA: "session-a", Generation: 1,
 			ContextBytes: 400, Fired: []FiredLesson{lessonA}},
-		{File: "api/b.py", Delivery: DeliveryInjected, SessionSHA: "session-a",
+		{File: "api/b.py", Delivery: DeliveryInjected, SessionSHA: "session-a", Generation: 1,
 			ContextBytes: 420, Fired: []FiredLesson{lessonA}},
-		{File: "api/c.py", Delivery: DeliveryInjected, SessionSHA: "session-a",
+		{File: "api/c.py", Delivery: DeliveryInjected, SessionSHA: "session-a", Generation: 1,
 			ContextBytes: 450, Fired: []FiredLesson{lessonA, lessonB}},
-		{File: "api/d.py", Delivery: DeliveryInjected, SessionSHA: "session-b",
+		{File: "api/d.py", Delivery: DeliveryInjected, SessionSHA: "session-b", Generation: 1,
 			ContextBytes: 410, Fired: []FiredLesson{lessonA}},
+		{File: "api/e.py", Delivery: DeliveryInjected, SessionSHA: "session-a", Generation: 2,
+			ContextBytes: 430, Fired: []FiredLesson{lessonA}},
 	}
 
 	s := Summarize(firings, nil)
 
-	assert.Equal(t, 4, s.InstrumentedHookFirings)
+	assert.Equal(t, 5, s.InstrumentedHookFirings)
 	assert.Equal(t, 1, s.RepeatedHookFirings,
 		"only the second delivery contains no lesson new to its session")
 	assert.Zero(t, s.SuppressedHookFirings)
-	assert.Equal(t, 1680, s.HookContextBytes)
+	assert.Equal(t, 2110, s.HookContextBytes)
 }
 
 func TestExposureSurvivesCosmeticPinEdits(t *testing.T) {

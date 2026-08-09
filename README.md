@@ -319,8 +319,11 @@ A committed `.seamark/lessons.yaml` tunes what surfaces — `mute` kills
 noise, `pin` forces what must never be ignored (single `region` or a
 `regions: [api, db]` set), `threshold` sets the recurrence bar,
 `pin_budget` caps the hook's injection (default 3), `change_budget` the
-`change_set` block (default 6) — and `seamark report` renders the whole
-decision queue as one self-contained HTML page. The full pipeline —
+`change_set` block (default 6), and opt-in
+`hook_delivery: once-per-context` suppresses repeat lesson context until
+Claude Code compacts the session. The default is `always`; delivery state is
+local, digest-only, short-lived, and fails open. `seamark report` renders the
+whole decision queue as one self-contained HTML page. The full pipeline —
 mining heuristics, fix-commit classification, region inference,
 confidence tiers, distillation economics, near-duplicate pruning, the
 firing stats, and the outcome loop that answers whether pins actually
@@ -381,6 +384,10 @@ closed** — a malformed payload, a broken policy file, or an internal
 error blocks the command instead of silently allowing it. Re-running
 `init` without `--gate-mode` keeps whatever mode is installed, and every
 run ends with a `gate` line stating the effective behavior.
+
+The same init also wires the edit-time lessons hook and a silent
+`PostCompact` reset. The reset matters only when `.seamark/lessons.yaml` opts
+into `hook_delivery: once-per-context`; default `always` delivery is unchanged.
 
 The agent sees the denial reason and corrects course; you see every
 decision in `.seamark/audit.jsonl` — an append-only trail of what your

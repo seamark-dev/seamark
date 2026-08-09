@@ -1,4 +1,4 @@
-// Package hooks knows how seamark's Claude Code PreToolUse hooks are
+// Package hooks knows how seamark's Claude Code hooks are
 // spelled in .claude/settings.json: the marker strings, the ownership
 // rule, and gate-mode detection live here once — init writes hooks,
 // status reads them, and two copies of the matching logic would drift.
@@ -32,7 +32,7 @@ func GateMarker(mode string) string {
 	return "gate --hook"
 }
 
-// ForEachCommand visits every command hook under a PreToolUse array,
+// ForEachCommand visits every command hook under one hook-event array,
 // passing each entry's matcher alongside the hook.
 func ForEachCommand(pre []any, fn func(matcher string, h map[string]any, cmd string)) {
 	for _, e := range pre {
@@ -116,6 +116,10 @@ func InstalledGateMode(settings map[string]any) string {
 
 // LessonsMarker is the edit-lessons hook's argument tail.
 const LessonsMarker = "lessons --hook"
+
+// LessonsResetMarker is the PostCompact hook that starts a new lesson
+// delivery generation for the provider session.
+const LessonsResetMarker = "lessons --hook-reset"
 
 // LessonsHookInstalled reports whether seamark's edit-lessons hook is
 // operational in a parsed settings map: a "command"-typed hook under a

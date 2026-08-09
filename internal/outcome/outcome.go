@@ -20,14 +20,14 @@ import (
 type Verdict int
 
 const (
-	// VerdictUntested: not enough evidence to judge the pin. See
+	// VerdictUntested means there is not enough evidence to judge the pin. See
 	// Reason for which evidence is missing.
 	VerdictUntested Verdict = iota
-	// VerdictWorking: the pin fired, the region saw enough commits,
+	// VerdictWorking means the pin fired, the region saw enough commits,
 	// and the mistake did not recur. Validation only — not a signal
 	// to remove the pin.
 	VerdictWorking
-	// VerdictNotLanding: the pin fired and the mistake recurred
+	// VerdictNotLanding means the pin fired and the mistake recurred
 	// anyway. The one verdict that calls for action.
 	VerdictNotLanding
 )
@@ -48,11 +48,16 @@ func (v Verdict) String() string {
 type Reason int
 
 const (
-	ReasonMeasured      Reason = iota // working / not landing: all checks passed
-	ReasonNeverFired                  // no firing under the pin's current identity
-	ReasonLowActivity                 // fewer than MinExposureActivity region-commits since exposure
-	ReasonStaleEvidence               // findings not mined since exposure, so zero recurrences proves nothing
-	ReasonDeadCitations               // all cited findings aged out of the mining window
+	// ReasonMeasured means all checks passed; the verdict is working or not landing.
+	ReasonMeasured Reason = iota
+	// ReasonNeverFired means there is no firing under the pin's current identity.
+	ReasonNeverFired
+	// ReasonLowActivity means fewer than MinExposureActivity region-commits exist since exposure.
+	ReasonLowActivity
+	// ReasonStaleEvidence means findings were not mined since exposure.
+	ReasonStaleEvidence
+	// ReasonDeadCitations means all cited findings aged out of the mining window.
+	ReasonDeadCitations
 )
 
 // MinExposureActivity is the minimum number of post-exposure commits

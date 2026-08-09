@@ -57,7 +57,7 @@ func TestBuildBenchmarkReportEvaluatesFrozenThreshold(t *testing.T) {
 	assert.Contains(t, markdown, "3 favorable, 0 unfavorable")
 	assert.Contains(t, markdown, "+100 pp")
 	assert.Contains(t, markdown, "Approximate 95% Wilson score interval")
-	assert.Contains(t, markdown, "Result schema: v5; claim schema: v1")
+	assert.Contains(t, markdown, "Result schema: v6; claim schema: v1")
 	assert.Contains(t, markdown, "model-a")
 	assert.Contains(t, markdown, strings.Repeat("b", 64))
 	assert.Contains(t, markdown, "3 valid pairs; mean effect ≥ +30 pp")
@@ -75,6 +75,67 @@ func TestBuildBenchmarkReportRejectsInvalidRows(t *testing.T) {
 	_, err := BuildBenchmarkReport([]string{path}, testClaimRegistry())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "context_tokens")
+}
+
+func TestBuildBenchmarkReportPreservesFrozenV5Evidence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "results-v5.jsonl")
+	for _, arm := range []Arm{ArmHookOn, ArmHookOff} {
+		row := validReportRow("run-v5", arm, 1, arm == ArmHookOn)
+		row.SchemaVersion = 5
+		row.HookDelivery = ""
+		row.HookMatches = 0
+		row.HookInjections = 0
+		require.NoError(t, appendRow(path, row))
+	}
+
+	report, err := BuildBenchmarkReport([]string{path}, testClaimRegistry())
+	require.NoError(t, err)
+	assert.Equal(t, 5, report.ResultSchemaVersion)
+	assert.Contains(t, report.Markdown(), "Result schema: v5; claim schema: v1")
+}
+
+func TestBuildBenchmarkReportRejectsMixedResultSchemas(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mixed.jsonl")
+	v5 := validReportRow("run-v5", ArmHookOn, 1, true)
+	v5.SchemaVersion = 5
+	v5.HookDelivery = ""
+	v5.HookMatches = 0
+	v5.HookInjections = 0
+	require.NoError(t, appendRow(path, v5))
+	require.NoError(t, appendRow(path, validReportRow("run-v6", ArmHookOff, 1, false)))
+
+	_, err := BuildBenchmarkReport([]string{path}, testClaimRegistry())
+	require.ErrorContains(t, err, "mixed result schema versions")
+}
+
+func TestBenchmarkReportIdentifiesDeliveryIntensityCohorts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "delivery.jsonl")
+	alwaysFingerprint := strings.Repeat("a", 64)
+	onceFingerprint := strings.Repeat("b", 64)
+
+	for _, arm := range []Arm{ArmHookOn, ArmHookOff} {
+		always := validReportRow("run-always", arm, 1, arm == ArmHookOn)
+		always.Fingerprint = alwaysFingerprint
+		require.NoError(t, appendRow(path, always))
+
+		once := validReportRow("run-once", arm, 1, arm == ArmHookOn)
+		once.Fingerprint = onceFingerprint
+		once.HookDelivery = HookDeliveryOncePerContext
+		if arm == ArmHookOn {
+			once.HookMatches = 2
+			once.HookSuppressed = 1
+		}
+		require.NoError(t, appendRow(path, once))
+	}
+
+	report, err := BuildBenchmarkReport([]string{path}, testClaimRegistry())
+	require.NoError(t, err)
+	require.Len(t, report.Cohorts, 2)
+
+	markdown := report.Markdown()
+	assert.Contains(t, markdown, "| Instance | Fingerprint | Delivery | Matches |")
+	assert.Contains(t, markdown, "| "+SchemaSyncInstanceID+" | `"+alwaysFingerprint+"` | always | 1 | 1 | 0 | 0 |")
+	assert.Contains(t, markdown, "| "+SchemaSyncInstanceID+" | `"+onceFingerprint+"` | once-per-context | 2 | 1 | 0 | 1 |")
 }
 
 func TestBuildBenchmarkReportRejectsUnknownResultFields(t *testing.T) {
@@ -197,6 +258,31 @@ func TestValidateResultRowRequiresArtifactPathDigestPairs(t *testing.T) {
 	assert.NoError(t, ValidateResultRow(row))
 }
 
+func TestValidateResultRowRequiresConsistentV6HookIntensity(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Row)
+	}{
+		{"unknown delivery", func(row *Row) { row.HookDelivery = "sometimes" }},
+		{"matches", func(row *Row) { row.HookMatches = 2 }},
+		{"repeats", func(row *Row) { row.HookRepeated = 2 }},
+		{"always suppression", func(row *Row) { row.HookMatches = 2; row.HookSuppressed = 1 }},
+		{"legacy mismatch", func(row *Row) { row.HookFirings = 2 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := validReportRow("run-a", ArmHookOn, 1, true)
+			tc.mutate(&row)
+			require.Error(t, ValidateResultRow(row))
+		})
+	}
+
+	row := validReportRow("run-a", ArmHookOn, 1, true)
+	row.HookDelivery = HookDeliveryOncePerContext
+	row.HookMatches = 2
+	row.HookSuppressed = 1
+	assert.NoError(t, ValidateResultRow(row))
+}
+
 func TestCommittedClaimsAndResultSchemaAreValid(t *testing.T) {
 	registry, err := LoadClaimRegistry(filepath.Join("..", "..", "bench", "claims.yaml"))
 	require.NoError(t, err)
@@ -206,7 +292,7 @@ func TestCommittedClaimsAndResultSchemaAreValid(t *testing.T) {
 	assert.Equal(t, "medium", registry.Claims[0].RequiredEffort)
 	assert.True(t, registry.Claims[0].RequireCleanSeamark)
 
-	data, err := os.ReadFile(filepath.Join("..", "..", "bench", "result.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "bench", "result-v6.schema.json"))
 	require.NoError(t, err)
 	var schema map[string]any
 	require.NoError(t, json.Unmarshal(data, &schema))
@@ -223,7 +309,10 @@ func TestCommittedClaimsAndResultSchemaAreValid(t *testing.T) {
 	for _, value := range requiredValues {
 		required = append(required, value.(string))
 	}
-	for _, field := range []string{"fixture", "checks", "fingerprint"} {
+	for _, field := range []string{
+		"fixture", "checks", "fingerprint", "hook_matches", "hook_injections",
+		"hook_repeated_injections", "hook_suppressed", "hook_context_bytes", "hook_delivery",
+	} {
 		assert.Contains(t, required, field)
 	}
 	dependent, ok := schema["dependentRequired"].(map[string]any)
@@ -233,6 +322,27 @@ func TestCommittedClaimsAndResultSchemaAreValid(t *testing.T) {
 	} {
 		assert.Contains(t, dependent, field)
 	}
+	ifSchema, ok := schema["if"].(map[string]any)
+	require.True(t, ok)
+	ifProperties, ok := ifSchema["properties"].(map[string]any)
+	require.True(t, ok)
+	ifDelivery, ok := ifProperties["hook_delivery"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "always", ifDelivery["const"])
+	thenSchema, ok := schema["then"].(map[string]any)
+	require.True(t, ok)
+	thenProperties, ok := thenSchema["properties"].(map[string]any)
+	require.True(t, ok)
+	thenSuppressed, ok := thenProperties["hook_suppressed"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(0), thenSuppressed["const"])
+
+	v5, err := os.ReadFile(filepath.Join("..", "..", "bench", "result.schema.json"))
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(v5, &schema))
+	properties = schema["properties"].(map[string]any)
+	version = properties["schema_version"].(map[string]any)
+	assert.Equal(t, float64(5), version["const"], "the published v5 schema remains frozen")
 }
 
 func TestLoadClaimRegistryRejectsUnknownFields(t *testing.T) {
@@ -351,6 +461,7 @@ func validReportRow(runID string, arm Arm, trial int, avoided bool) Row {
 		SeamarkSHA:     strings.Repeat("d", 64),
 		AgentVersion:   "agent test",
 		Effort:         "medium",
+		HookDelivery:   HookDeliveryAlways,
 		MaxBudgetUSD:   0.25,
 		RuntimeID:      "test-runtime",
 		Fingerprint:    strings.Repeat("b", 64),
@@ -358,6 +469,8 @@ func validReportRow(runID string, arm Arm, trial int, avoided bool) Row {
 	if arm == ArmHookOn || arm == ArmPlacebo {
 		row.HookFirings = 1
 		row.HookAuditRows = 1
+		row.HookMatches = 1
+		row.HookInjections = 1
 	}
 
 	return row

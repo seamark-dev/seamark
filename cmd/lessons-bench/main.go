@@ -39,6 +39,8 @@ func main() {
 	flag.StringVar(&opts.agent, "agent", "", "custom agent command (space-split); bypasses Claude runtime validation")
 	flag.StringVar(&opts.model, "model", "", "exact Claude model ID (required with the default agent; aliases are refused)")
 	flag.StringVar(&opts.effort, "effort", "medium", "pinned Claude effort level")
+	flag.StringVar(&opts.hookDelivery, "hook-delivery", string(bench.HookDeliveryAlways),
+		"hook repeat policy: always or once-per-context")
 	flag.Float64Var(&opts.maxBudgetUSD, "max-budget-usd", 1, "hard provider cost cap per agent session")
 	flag.StringVar(&opts.seamarkBin, "seamark", "", "seamark binary for the hook arm; default: ./bin/seamark (make build)")
 	flag.StringVar(&opts.runtimeID, "runtime-id", "", "additional immutable runtime/container digest recorded in the fingerprint")
@@ -63,6 +65,7 @@ type options struct {
 	agent         string
 	model         string
 	effort        string
+	hookDelivery  string
 	maxBudgetUSD  float64
 	seamarkBin    string
 	runtimeID     string
@@ -104,6 +107,16 @@ func run(opts options) error {
 
 	if opts.trials < 1 {
 		return fmt.Errorf("-trials must be at least 1")
+	}
+
+	if opts.hookDelivery == "" {
+		opts.hookDelivery = string(bench.HookDeliveryAlways)
+	}
+
+	if opts.hookDelivery != string(bench.HookDeliveryAlways) &&
+		opts.hookDelivery != string(bench.HookDeliveryOncePerContext) {
+		return fmt.Errorf("-hook-delivery must be %q or %q",
+			bench.HookDeliveryAlways, bench.HookDeliveryOncePerContext)
 	}
 
 	bin := opts.seamarkBin
@@ -154,6 +167,7 @@ func run(opts options) error {
 		Effort:                  opts.effort,
 		MaxBudgetUSD:            opts.maxBudgetUSD,
 		RuntimeID:               runtimeID,
+		HookDelivery:            bench.HookDeliveryMode(opts.hookDelivery),
 		RequireStructuredResult: managed,
 		RequireCleanInit:        managed,
 		Log: func(format string, args ...any) {
@@ -189,6 +203,7 @@ func run(opts options) error {
 	}
 
 	fmt.Printf("  runtime  %s\n", runtimeID)
+	fmt.Printf("  delivery %s\n", cfg.HookDelivery)
 	fmt.Printf("  seamark  %s (%s, sha256 %.12s…)\n", abs, cfg.Version, cfg.SeamarkSHA)
 	fmt.Printf("  fingerprint %.12s…\n", cfg.Fingerprint)
 

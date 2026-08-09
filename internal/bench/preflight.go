@@ -18,6 +18,10 @@ func Preflight(ctx context.Context, cfg RunConfig) error {
 		return err
 	}
 
+	if !knownHookDelivery(cfg.HookDelivery) {
+		return fmt.Errorf("unknown hook delivery mode %q", cfg.HookDelivery)
+	}
+
 	root, err := os.MkdirTemp("", "seamark-bench-preflight-")
 	if err != nil {
 		return err
@@ -117,7 +121,7 @@ func Preflight(ctx context.Context, cfg RunConfig) error {
 		return fmt.Errorf("wire hook-on arm: %w", err)
 	}
 
-	if err := validateArmWiring(off, on, instance); err != nil {
+	if err := validateArmWiring(off, on, cfg, instance); err != nil {
 		return err
 	}
 
@@ -136,7 +140,7 @@ func assertNoTreatment(dir string) error {
 	return nil
 }
 
-func validateArmWiring(off, on string, instance Instance) error {
+func validateArmWiring(off, on string, cfg RunConfig, instance Instance) error {
 	offSettings, err := os.ReadFile(filepath.Join(off, ".claude", "settings.json"))
 	if err != nil {
 		return fmt.Errorf("read hook-off settings: %w", err)
@@ -164,8 +168,14 @@ func validateArmWiring(off, on string, instance Instance) error {
 		return fmt.Errorf("read hook-on lesson: %w", err)
 	}
 
-	if string(lesson) != instance.LessonYAML {
+	if string(lesson) != lessonsForDelivery(cfg, instance.LessonYAML) {
 		return fmt.Errorf("hook-on lesson differs from the instance")
+	}
+
+	if effectiveHookDelivery(cfg) == HookDeliveryOncePerContext &&
+		(!strings.Contains(string(onSettings), "PostCompact") ||
+			!strings.Contains(string(onSettings), "lessons --hook-reset")) {
+		return fmt.Errorf("once-per-context hook-on settings lack a PostCompact reset")
 	}
 
 	return nil

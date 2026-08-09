@@ -10,13 +10,14 @@ Build Seamark and run every no-agent preflight first:
 
 ```sh
 make lessons-bench-preflight
+make lessons-bench-preflight BENCH_FLAGS='-hook-delivery once-per-context'
 ```
 
 The first paid step is a single hook-off calibration for one instance. It asks
 whether a capable unassisted agent still misses the owner-specific invariant:
 
 ```sh
-make lessons-bench BENCH_FLAGS='-instance python-cache-version-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-cache-calibration-v5.jsonl -transcripts /tmp/seamark-cache-calibration'
+make lessons-bench BENCH_FLAGS='-instance python-cache-version-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery always -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-cache-calibration-v6.jsonl -transcripts /tmp/seamark-cache-calibration'
 ```
 
 Proceed only if the row is valid, the visible task passes, and the invariant
@@ -24,7 +25,7 @@ fails (`task=true invariant=false`). Inspect the transcript and patch before
 calibrating the next instance:
 
 ```sh
-make lessons-bench BENCH_FLAGS='-instance go-export-registry-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-export-calibration-v5.jsonl -transcripts /tmp/seamark-export-calibration'
+make lessons-bench BENCH_FLAGS='-instance go-export-registry-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery always -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-export-calibration-v6.jsonl -transcripts /tmp/seamark-export-calibration'
 ```
 
 Do not increase the trial count or run hook-on until both tasks have a useful
@@ -85,11 +86,16 @@ Preflight spends no model tokens. It rejects a run unless:
 6. every repository check has a bounded per-command timeout;
 7. the base fixture contains no Seamark or Claude treatment artifacts;
 8. hook-off receives common sandbox settings but no hook or lesson; and
-9. hook-on receives the exact lesson and hook configuration.
+9. hook-on receives the exact lesson, selected delivery policy, edit hook, and
+   (for once-per-context delivery) compaction-reset hook.
 
 ## Result validity
 
-Schema-v5 rows separately record task success and owner-invariant success.
+Schema-v5 and schema-v6 rows separately record task success and
+owner-invariant success. Schema v6 additionally records matching hook
+invocations, actual injections, repeated injections, fully suppressed matches,
+and injected context bytes. Reports accept frozen v5 evidence but never mix
+schema versions in one report.
 Only rows with both `valid=true` and `pair_valid=true` enter arm tallies.
 Provider errors, rate limits, missing structured output, unexpected plugins or
 MCP servers, model mismatches, and non-firing treatment hooks are excluded.
@@ -129,7 +135,8 @@ Haiku model at medium effort and a clean committed Seamark build.
 A successful single fixture remains a fixture-specific result, not proof of the
 cross-instance claim.
 
-`result.schema.json` documents result schema v5. The report command also
+`result.schema.json` remains the frozen result-schema-v5 contract;
+`result-v6.schema.json` documents current output. The report command also
 strictly validates every row and refuses malformed data, invalid token totals,
 duplicate input files, duplicate trial arms, and conflicting identities that
 reuse a fingerprint:
@@ -177,20 +184,21 @@ owner-specific companion surface. Because provider usage sums the growing
 context processed across turns, an extra tool/agent turn can account for far
 more tokens than the reminder text.
 
-### Planned delivery-cost work
+### Delivery-cost experiment
 
-The next benchmark iteration will:
+Schema v6 supports `-hook-delivery always|once-per-context`. The latter keeps
+repository-scoped session and canonical lesson-content digests in local state,
+suppresses repeats under a cross-process lock, permits changed lessons, resets
+after context compaction, expires inactive sessions after 24 hours, and fails
+open when identity or state is unavailable. `always` remains the product and
+benchmark default.
 
-- record matched edits, actual injections, suppressed repeats, and injected
-  bytes separately;
-- evaluate once-per-session delivery keyed by repository, provider session ID,
-  and canonical lesson-content digest;
-- allow a changed lesson to fire again and re-enable delivery after context
-  compaction or a long session;
-- keep state short-lived, concurrency-safe, and local, while failing open when
-  session identity or state is unavailable; and
-- compare effect, turns, context, and cost with the current behavior before
-  changing the default.
+The next paid step is a controlled comparison of these policies, not a
+replacement of the existing hook-on/hook-off effectiveness cohort. Run a
+single paired calibration first and inspect schema-v6 delivery fields and
+transcripts. Only then expand enough repetitions to compare invariant success,
+turns, context, cost, injection count, suppression count, and injected bytes.
+The two policies have different fingerprints and must remain separate cohorts.
 
 ## Artifact policy
 
@@ -205,7 +213,7 @@ exclusively with `0600` permissions and a reused run ID is refused before an
 agent session is purchased. Retain them securely for audit while the
 corresponding release evidence is under review.
 
-Schema-v5 rows created by the current harness include SHA-256 digests of the
+Schema-v5 and schema-v6 rows include SHA-256 digests of the
 transcript, stderr stream, and final patch, so local artifacts can be matched
 to published rows without publishing their contents. Strict reporting requires
 each artifact path and digest together. The earlier dirty schema-sync pilot

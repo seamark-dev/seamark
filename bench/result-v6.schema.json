@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seamark.dev/schemas/lessons-benchmark-result-v6.json",
+  "title": "Seamark lessons benchmark result row, schema v6",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ts",
+    "run_id",
+    "instance",
+    "task_sha256",
+    "pin",
+    "arm",
+    "trial",
+    "task_pass",
+    "invariant_pass",
+    "valid",
+    "pair_valid",
+    "fixture",
+    "hook_matches",
+    "hook_injections",
+    "hook_repeated_injections",
+    "hook_suppressed",
+    "hook_context_bytes",
+    "hook_delivery",
+    "checks_pass",
+    "checks",
+    "agent_exit",
+    "fingerprint"
+  ],
+  "dependentRequired": {
+    "transcript": ["transcript_sha256"],
+    "transcript_sha256": ["transcript"],
+    "stderr": ["stderr_sha256"],
+    "stderr_sha256": ["stderr"],
+    "patch": ["patch_sha256"],
+    "patch_sha256": ["patch"]
+  },
+  "properties": {
+    "schema_version": { "const": 6 },
+    "ts": { "type": "string", "format": "date-time" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "instance": { "type": "string", "minLength": 1 },
+    "task_sha256": { "$ref": "#/$defs/sha256" },
+    "pin": { "type": "string", "minLength": 1 },
+    "arm": { "enum": ["hook-on", "hook-off", "file-only", "placebo"] },
+    "trial": { "type": "integer", "minimum": 1 },
+    "task_pass": { "type": "boolean" },
+    "invariant_pass": { "type": "boolean" },
+    "notes": { "type": "string" },
+    "valid": { "type": "boolean" },
+    "pair_valid": { "type": "boolean" },
+    "invalid_reason": { "type": "string" },
+    "infrastructure_failure": { "type": "boolean" },
+    "fixture": { "$ref": "#/$defs/git_oid" },
+    "hook_firings": { "type": "integer", "minimum": 0 },
+    "hook_audit_rows": { "type": "integer", "minimum": 0 },
+    "hook_matches": { "type": "integer", "minimum": 0 },
+    "hook_injections": { "type": "integer", "minimum": 0 },
+    "hook_repeated_injections": { "type": "integer", "minimum": 0 },
+    "hook_suppressed": { "type": "integer", "minimum": 0 },
+    "hook_context_bytes": { "type": "integer", "minimum": 0 },
+    "hook_delivery": { "enum": ["always", "once-per-context"] },
+    "transcript": { "type": "string" },
+    "transcript_sha256": { "$ref": "#/$defs/sha256" },
+    "stderr": { "type": "string" },
+    "stderr_sha256": { "$ref": "#/$defs/sha256" },
+    "patch": { "type": "string" },
+    "patch_sha256": { "$ref": "#/$defs/sha256" },
+    "checks_pass": { "type": "boolean" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "pass"],
+        "properties": {
+          "command": { "type": "string" },
+          "pass": { "type": "boolean" },
+          "timed_out": { "type": "boolean" },
+          "output": { "type": "string" }
+        }
+      }
+    },
+    "lesson_file_read": { "type": "boolean" },
+    "explored": { "type": "array", "items": { "type": "string" } },
+    "requested_model": { "type": "string" },
+    "model": { "type": "string" },
+    "model_usage": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/model_usage" }
+    },
+    "input_tokens": { "type": "integer", "minimum": 0 },
+    "cache_read_input_tokens": { "type": "integer", "minimum": 0 },
+    "cache_creation_input_tokens": { "type": "integer", "minimum": 0 },
+    "context_tokens": { "type": "integer", "minimum": 0 },
+    "output_tokens": { "type": "integer", "minimum": 0 },
+    "turns": { "type": "integer", "minimum": 0 },
+    "permission_denials": { "type": "integer", "minimum": 0 },
+    "cost_usd": { "type": "number", "minimum": 0 },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "agent_exit": { "type": "integer" },
+    "timed_out": { "type": "boolean" },
+    "agent_error": { "type": "boolean" },
+    "init_seen": { "type": "boolean" },
+    "result_seen": { "type": "boolean" },
+    "tools": { "type": "array", "items": { "type": "string" } },
+    "plugins": { "type": "array", "items": { "type": "string" } },
+    "mcp_servers": { "type": "array", "items": { "type": "string" } },
+    "seamark_version": { "type": "string" },
+    "seamark_sha256": { "$ref": "#/$defs/sha256" },
+    "agent_version": { "type": "string" },
+    "effort": { "type": "string" },
+    "max_budget_usd": { "type": "number", "minimum": 0 },
+    "runtime_id": { "type": "string" },
+    "fingerprint": { "$ref": "#/$defs/sha256" }
+  },
+  "if": {
+    "properties": {
+      "hook_delivery": { "const": "always" }
+    }
+  },
+  "then": {
+    "properties": {
+      "hook_suppressed": { "const": 0 }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "git_oid": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "model_usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "cache_read_input_tokens": { "type": "integer", "minimum": 0 },
+        "cache_creation_input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "cost_usd": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

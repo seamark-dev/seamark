@@ -119,6 +119,11 @@ const starterLessons = `# Tune how mined review lessons surface (RFC-001 §5.4).
 # noise; a pattern needs repetition.
 threshold: 2
 
+# Ambient edit-hook delivery. "always" preserves the original behavior.
+# "once-per-context" emits each lesson once per provider session, then allows
+# it again after Claude Code compacts that session's context.
+# hook_delivery: once-per-context
+
 # Hush noise. Match by rule code and/or region (a file or directory
 # prefix). An entry with both narrows to that rule in that region.
 mute:

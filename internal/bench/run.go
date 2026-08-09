@@ -23,6 +23,16 @@ import (
 // seamark artifacts; each arm installs exactly what it measures.
 type Arm string
 
+// HookDeliveryMode is the lessons hook policy measured by a benchmark cohort.
+type HookDeliveryMode = reviews.HookDeliveryMode
+
+const (
+	// HookDeliveryAlways repeats matching context on every edit.
+	HookDeliveryAlways = reviews.HookDeliveryAlways
+	// HookDeliveryOncePerContext suppresses a delivered lesson until compaction.
+	HookDeliveryOncePerContext = reviews.HookDeliveryOncePerContext
+)
+
 const (
 	// ArmHookOff is the true baseline: no lesson anywhere, no hook.
 	ArmHookOff Arm = "hook-off"
@@ -67,6 +77,8 @@ type RunConfig struct {
 	// RunID groups rows and makes transcript names unique across concurrent
 	// invocations. Empty asks Run to generate a cryptographically random ID.
 	RunID string
+	// HookDelivery selects the edit-hook repeat policy. Empty means always.
+	HookDelivery HookDeliveryMode
 
 	// RequireStructuredResult and RequireCleanInit are true for the
 	// default Claude adapter. Stub/custom adapters may leave them false.
@@ -113,6 +125,13 @@ type Row struct {
 	// firings. HookFirings counts only rows proving that the selected lesson
 	// reached an in-region edit through the expected hook surface.
 	HookAuditRows int `json:"hook_audit_rows,omitempty"`
+	// Schema v6 delivery intensity. Matches counts matching edit-hook
+	// invocations; each match either injected context or was fully suppressed.
+	HookMatches      int `json:"hook_matches"`
+	HookInjections   int `json:"hook_injections"`
+	HookRepeated     int `json:"hook_repeated_injections"`
+	HookSuppressed   int `json:"hook_suppressed"`
+	HookContextBytes int `json:"hook_context_bytes"`
 	// Transcript is where this trial's raw agent output was saved;
 	// StderrLog and Patch keep the rest of the audit record, so a
 	// verdict stays checkable after the trial dir is deleted.
@@ -158,6 +177,7 @@ type Row struct {
 	SeamarkSHA          string                `json:"seamark_sha256,omitempty"`
 	AgentVersion        string                `json:"agent_version,omitempty"`
 	Effort              string                `json:"effort,omitempty"`
+	HookDelivery        HookDeliveryMode      `json:"hook_delivery,omitempty"`
 	MaxBudgetUSD        float64               `json:"max_budget_usd,omitempty"`
 	RuntimeID           string                `json:"runtime_id,omitempty"`
 	Fingerprint         string                `json:"fingerprint,omitempty"`
@@ -175,13 +195,18 @@ type ModelUsage struct {
 
 // Tally is one arm's aggregate.
 type Tally struct {
-	Attempted int
-	Ran       int
-	Invalid   int
-	Completed int // trials where the task was done at all
-	Avoided   int // completed trials where the owner invariant passed
-	Firings   int // hook firing records across the arm's trials
-	MeanInput int64
+	Attempted    int
+	Ran          int
+	Invalid      int
+	Completed    int // trials where the task was done at all
+	Avoided      int // completed trials where the owner invariant passed
+	Firings      int // hook firing records across the arm's trials
+	Matches      int
+	Injections   int
+	Repeated     int
+	Suppressed   int
+	ContextBytes int
+	MeanInput    int64
 }
 
 // Summary is the whole run's outcome, per arm.
@@ -214,6 +239,13 @@ func (s Summary) Lines() []string {
 		out = append(out, fmt.Sprintf(
 			"context processed — hook-on mean %d vs hook-off %d (%+d per trial)",
 			on.MeanInput, off.MeanInput, on.MeanInput-off.MeanInput,
+		))
+	}
+
+	if on.Matches > 0 {
+		out = append(out, fmt.Sprintf(
+			"hook delivery — %d matches, %d injections, %d repeated, %d suppressed, %d context bytes",
+			on.Matches, on.Injections, on.Repeated, on.Suppressed, on.ContextBytes,
 		))
 	}
 
@@ -253,6 +285,12 @@ func (s Summary) Lines() []string {
 func firingNote(arm Arm, row Row) string {
 	if arm != ArmHookOn && arm != ArmPlacebo {
 		return ""
+	}
+
+	if row.SchemaVersion >= 6 {
+		return fmt.Sprintf("  hook=%d/%d repeat=%d suppressed=%d bytes=%d",
+			row.HookInjections, row.HookMatches, row.HookRepeated,
+			row.HookSuppressed, row.HookContextBytes)
 	}
 
 	return fmt.Sprintf("  hook×%d", row.HookFirings)
@@ -300,6 +338,9 @@ func Run(ctx context.Context, cfg RunConfig) (Summary, error) {
 
 	if cfg.Trials < 1 {
 		return Summary{}, fmt.Errorf("trials must be at least 1")
+	}
+	if !knownHookDelivery(cfg.HookDelivery) {
+		return Summary{}, fmt.Errorf("unknown hook delivery mode %q", cfg.HookDelivery)
 	}
 
 	logf := cfg.Log
@@ -539,6 +580,12 @@ func tallyRow(sum *Summary, row Row, contexts map[Arm][]int64) {
 	}
 
 	t.Firings += row.HookFirings
+	t.Matches += row.HookMatches
+	t.Injections += row.HookInjections
+	t.Repeated += row.HookRepeated
+	t.Suppressed += row.HookSuppressed
+	t.ContextBytes += row.HookContextBytes
+
 	if row.ContextTokens > 0 {
 		contexts[row.Arm] = append(contexts[row.Arm], row.ContextTokens)
 	}
@@ -613,6 +660,7 @@ func runTrial(ctx context.Context, cfg RunConfig, instance Instance, work string
 		SeamarkSHA:     cfg.SeamarkSHA,
 		AgentVersion:   cfg.AgentVersion,
 		Effort:         cfg.Effort,
+		HookDelivery:   effectiveHookDelivery(cfg),
 		MaxBudgetUSD:   cfg.MaxBudgetUSD,
 		RuntimeID:      cfg.RuntimeID,
 		Fingerprint:    cfg.Fingerprint,
@@ -682,12 +730,17 @@ func runTrial(ctx context.Context, cfg RunConfig, instance Instance, work string
 			return Row{}, err // Instance.Validate makes this unreachable.
 		}
 
-		matching, total, err := matchingTreatmentFirings(dir, expectedPin)
+		intensity, err := matchingTreatmentFirings(dir, expectedPin)
 		if err != nil {
 			invalidateInfrastructure(&row, "cannot validate lesson hook: "+err.Error())
 		} else {
-			row.HookFirings = matching
-			row.HookAuditRows = total
+			row.HookFirings = intensity.Injections
+			row.HookAuditRows = intensity.AuditRows
+			row.HookMatches = intensity.Matches
+			row.HookInjections = intensity.Injections
+			row.HookRepeated = intensity.Repeated
+			row.HookSuppressed = intensity.Suppressed
+			row.HookContextBytes = intensity.ContextBytes
 		}
 
 		if row.HookFirings == 0 && row.Valid {
@@ -824,21 +877,21 @@ func wireArm(ctx context.Context, dir string, cfg RunConfig, instance Instance, 
 
 	switch arm {
 	case ArmHookOff:
-		return writeAgentSettings(dir, "")
+		return writeAgentSettings(dir, "", "")
 	case ArmFileOnly:
-		if err := writeLessons(dir, instance.LessonYAML); err != nil {
+		if err := writeLessons(dir, lessonsForDelivery(cfg, instance.LessonYAML)); err != nil {
 			return err
 		}
 
-		return writeAgentSettings(dir, "")
+		return writeAgentSettings(dir, "", "")
 	case ArmPlacebo:
-		if err := writeLessons(dir, instance.PlaceboYAML); err != nil {
+		if err := writeLessons(dir, lessonsForDelivery(cfg, instance.PlaceboYAML)); err != nil {
 			return err
 		}
 
 		return wireHook(ctx, dir, cfg, hookBin)
 	case ArmHookOn:
-		if err := writeLessons(dir, instance.LessonYAML); err != nil {
+		if err := writeLessons(dir, lessonsForDelivery(cfg, instance.LessonYAML)); err != nil {
 			return err
 		}
 
@@ -853,35 +906,102 @@ func knownArm(arm Arm) bool {
 		arm == ArmPlacebo || arm == ArmHookOn
 }
 
+func effectiveHookDelivery(cfg RunConfig) HookDeliveryMode {
+	if cfg.HookDelivery == "" {
+		return HookDeliveryAlways
+	}
+
+	return cfg.HookDelivery
+}
+
+func knownHookDelivery(mode HookDeliveryMode) bool {
+	return mode == "" || mode == HookDeliveryAlways || mode == HookDeliveryOncePerContext
+}
+
 // matchingTreatmentFirings distinguishes treatment delivery from ambient
 // audit activity. A valid firing must come from the edit hook, name the exact
 // installed pin, identify an edit tool, and target a file inside that pin's
 // configured region. An unrelated pin or another Seamark surface is evidence
 // that Seamark ran, but not that this trial received its treatment.
-func matchingTreatmentFirings(dir string, pin reviews.PinRule) (matching, total int, err error) {
+type hookIntensity struct {
+	Matches      int
+	Injections   int
+	Repeated     int
+	Suppressed   int
+	ContextBytes int
+	AuditRows    int
+}
+
+func matchingTreatmentFirings(dir string, pin reviews.PinRule) (hookIntensity, error) {
 	expected := reviews.PinIdentity(pin)
 	firings, err := reviews.ReadFirings(dir)
 	if err != nil {
-		return 0, 0, err
+		return hookIntensity{}, err
 	}
 
-	for _, firing := range firings {
-		if !firing.Delivered() || firing.Surface != "" || !editTool(firing.Tool) ||
+	type matchState struct {
+		injected, suppressed bool
+	}
+
+	matches := make(map[string]matchState)
+	seen := make(map[string]bool)
+	result := hookIntensity{AuditRows: len(firings)}
+
+	for i, firing := range firings {
+		if firing.Surface != "" || !editTool(firing.Tool) ||
 			firing.File == "" || len(firing.Files) != 0 ||
 			!pinAppliesToFile(pin, firing.File) {
 			continue
 		}
 
+		matched := false
 		for _, fired := range firing.Fired {
 			if canonicalFiredLesson(fired) == expected {
-				matching++
-
+				matched = true
 				break
 			}
 		}
+		if !matched {
+			continue
+		}
+
+		matchKey := firing.MatchSHA
+		if matchKey == "" {
+			matchKey = fmt.Sprintf("legacy-row-%d", i)
+		}
+		state := matches[matchKey]
+
+		switch {
+		case firing.Delivered():
+			if !state.injected {
+				state.injected = true
+				result.Injections++
+				result.ContextBytes += firing.ContextBytes
+
+				seenKey := fmt.Sprintf("%s\x00%d\x00%s\x00%s",
+					firing.SessionSHA, firing.Generation, expected.Region, expected.Symptom)
+				if firing.SessionSHA != "" && seen[seenKey] {
+					result.Repeated++
+				}
+				if firing.SessionSHA != "" {
+					seen[seenKey] = true
+				}
+			}
+		case firing.Delivery == reviews.DeliverySuppressedRepeat:
+			state.suppressed = true
+		}
+
+		matches[matchKey] = state
 	}
 
-	return matching, len(firings), nil
+	result.Matches = len(matches)
+	for _, state := range matches {
+		if state.suppressed && !state.injected {
+			result.Suppressed++
+		}
+	}
+
+	return result, nil
 }
 
 func editTool(tool string) bool {
@@ -965,13 +1085,26 @@ func writeLessons(dir, content string) error {
 	return os.WriteFile(filepath.Join(seamarkDir, "lessons.yaml"), []byte(content), 0o644)
 }
 
+func lessonsForDelivery(cfg RunConfig, content string) string {
+	if effectiveHookDelivery(cfg) == HookDeliveryOncePerContext {
+		return "hook_delivery: once-per-context\n" + content
+	}
+
+	return content
+}
+
 // wireHook writes the trial repo's Claude Code settings with the same
 // PreToolUse hook `seamark init` installs, and optionally indexes the
 // fixture so the hook has a store to read (the hook opens the index;
 // without one it stays silent and the arm would silently equal
 // hook-off).
 func wireHook(ctx context.Context, dir string, cfg RunConfig, hookBin string) error {
-	if err := writeAgentSettings(dir, fmt.Sprintf("%q lessons --hook", hookBin)); err != nil {
+	resetCommand := ""
+	if effectiveHookDelivery(cfg) == HookDeliveryOncePerContext {
+		resetCommand = fmt.Sprintf("%q lessons --hook-reset", hookBin)
+	}
+
+	if err := writeAgentSettings(dir, fmt.Sprintf("%q lessons --hook", hookBin), resetCommand); err != nil {
 		return err
 	}
 
@@ -1002,7 +1135,7 @@ func wireHook(ctx context.Context, dir string, cfg RunConfig, hookBin string) er
 // arms differ only by the PreToolUse entry added here and their lesson file.
 // The sandbox is a hard gate: if OS-level enforcement is unavailable Claude
 // must fail the session instead of silently running commands on the host.
-func writeAgentSettings(dir, hookCommand string) error {
+func writeAgentSettings(dir, hookCommand, resetCommand string) error {
 	settings := map[string]any{
 		"autoMemoryEnabled": false,
 		"permissions": map[string]any{
@@ -1024,7 +1157,7 @@ func writeAgentSettings(dir, hookCommand string) error {
 	}
 
 	if hookCommand != "" {
-		settings["hooks"] = map[string]any{
+		hookSettings := map[string]any{
 			"PreToolUse": []any{map[string]any{
 				"matcher": "Edit|Write|MultiEdit",
 				"hooks": []any{map[string]any{
@@ -1033,6 +1166,14 @@ func writeAgentSettings(dir, hookCommand string) error {
 				}},
 			}},
 		}
+		if resetCommand != "" {
+			hookSettings["PostCompact"] = []any{map[string]any{
+				"hooks": []any{map[string]any{
+					"type": "command", "command": resetCommand,
+				}},
+			}}
+		}
+		settings["hooks"] = hookSettings
 	}
 
 	data, err := json.MarshalIndent(settings, "", "  ")

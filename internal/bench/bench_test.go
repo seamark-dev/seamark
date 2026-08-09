@@ -454,6 +454,35 @@ func TestRunRejectsUnknownArmBeforeStarting(t *testing.T) {
 	assert.Empty(t, entries, "invalid assignment must not create or mutate a trial")
 }
 
+func TestRunRejectsUnknownHookDeliveryBeforeStarting(t *testing.T) {
+	work := t.TempDir()
+	sum, err := Run(context.Background(), RunConfig{
+		Trials: 1, Arms: []Arm{ArmHookOff}, AgentArgv: []string{"/usr/bin/true"},
+		WorkDir: work, Keep: true, HookDelivery: "sometimes",
+	})
+	require.ErrorContains(t, err, "unknown hook delivery mode")
+	assert.Empty(t, sum.Rows)
+}
+
+func TestWireArmOncePerContextInstallsPolicyAndReset(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "fixture")
+	instance := SchemaSyncInstance()
+	require.NoError(t, instance.Generate(dir))
+	require.NoError(t, wireArm(context.Background(), dir, RunConfig{
+		SeamarkBin: "/opt/seamark", HookDelivery: HookDeliveryOncePerContext,
+	}, instance, ArmHookOn))
+
+	lessons, err := os.ReadFile(filepath.Join(dir, ".seamark", "lessons.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(lessons), "hook_delivery: once-per-context")
+
+	settings, err := os.ReadFile(filepath.Join(dir, ".claude", "settings.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(settings), "lessons --hook")
+	assert.Contains(t, string(settings), "PostCompact")
+	assert.Contains(t, string(settings), "lessons --hook-reset")
+}
+
 func TestMatchingTreatmentFiringsRequiresIdentitySurfaceToolAndRegion(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, writeLessons(dir, schemaSyncLessonYAML))
@@ -483,10 +512,57 @@ func TestMatchingTreatmentFiringsRequiresIdentitySurfaceToolAndRegion(t *testing
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, ".seamark", "lessons-audit.jsonl"), []byte(audit.String()), 0o644))
 
-	matching, total, err := matchingTreatmentFirings(dir, cfg.Pin[0])
+	intensity, err := matchingTreatmentFirings(dir, cfg.Pin[0])
 	require.NoError(t, err)
-	assert.Equal(t, 1, matching)
-	assert.Equal(t, 6, total)
+	assert.Equal(t, 2, intensity.Matches)
+	assert.Equal(t, 1, intensity.Injections)
+	assert.Equal(t, 1, intensity.Suppressed)
+	assert.Equal(t, 6, intensity.AuditRows)
+}
+
+func TestMatchingTreatmentFiringsMeasuresRepeatedAndGroupedDelivery(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, writeLessons(dir, schemaSyncLessonYAML))
+	cfg, err := reviews.LoadConfig(dir)
+	require.NoError(t, err)
+	expected := reviews.PinIdentity(cfg.Pin[0])
+
+	firings := []reviews.Firing{
+		{File: "server/schema.py", Tool: "Edit", Delivery: reviews.DeliveryInjected,
+			SessionSHA: "session", MatchSHA: "match-1", Generation: 1, ContextBytes: 400,
+			Fired: []reviews.FiredLesson{expected}},
+		{File: "server/presenters.py", Tool: "Edit", Delivery: reviews.DeliveryInjected,
+			SessionSHA: "session", MatchSHA: "match-2", Generation: 1, ContextBytes: 420,
+			Fired: []reviews.FiredLesson{expected}},
+		{File: "server/presenters.py", Tool: "Edit", Delivery: reviews.DeliverySuppressedRepeat,
+			SessionSHA: "session", MatchSHA: "match-2", Generation: 1,
+			Fired: []reviews.FiredLesson{expected}},
+		{File: "server/schema.py", Tool: "Edit", Delivery: reviews.DeliveryInjected,
+			SessionSHA: "session", MatchSHA: "match-3", Generation: 2, ContextBytes: 410,
+			Fired: []reviews.FiredLesson{expected}},
+		{File: "server/schema.py", Tool: "Edit", Delivery: reviews.DeliverySuppressedRepeat,
+			SessionSHA: "session", MatchSHA: "match-4", Generation: 2,
+			Fired: []reviews.FiredLesson{expected}},
+	}
+
+	var audit strings.Builder
+	for _, firing := range firings {
+		data, marshalErr := json.Marshal(firing)
+		require.NoError(t, marshalErr)
+		audit.Write(data)
+		audit.WriteByte('\n')
+	}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, ".seamark", "lessons-audit.jsonl"), []byte(audit.String()), 0o644))
+
+	intensity, err := matchingTreatmentFirings(dir, cfg.Pin[0])
+	require.NoError(t, err)
+	assert.Equal(t, 4, intensity.Matches)
+	assert.Equal(t, 3, intensity.Injections)
+	assert.Equal(t, 1, intensity.Repeated)
+	assert.Equal(t, 1, intensity.Suppressed,
+		"a partly suppressed match that still injected context is not fully suppressed")
+	assert.Equal(t, 1230, intensity.ContextBytes)
 }
 
 func TestRunStopsWhenSelectedTreatmentNeverFires(t *testing.T) {
@@ -629,6 +705,7 @@ func TestFingerprintBindsExperimentDefinition(t *testing.T) {
 		{Instance: base, RequireStructuredResult: true},
 		{Instance: base, RequireCleanInit: true},
 		{Instance: base, Arms: []Arm{ArmHookOff}},
+		{Instance: base, HookDelivery: HookDeliveryOncePerContext},
 	}
 	for _, cfg := range controls {
 		fingerprint, fingerprintErr := Fingerprint(cfg)
@@ -642,6 +719,13 @@ func TestFingerprintBindsExperimentDefinition(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, baseFingerprint, explicitDefaultArms,
 		"implicit and explicit default assignment are the same experiment")
+
+	explicitDefaultDelivery, err := Fingerprint(RunConfig{
+		Instance: base, HookDelivery: HookDeliveryAlways,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, baseFingerprint, explicitDefaultDelivery,
+		"implicit and explicit always delivery are the same experiment")
 }
 
 func TestFingerprintSourceBoundary(t *testing.T) {
