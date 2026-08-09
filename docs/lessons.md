@@ -345,15 +345,22 @@ actual pre-edit reminder.
 
 Every ambient surface appends a line to `.seamark/lessons-audit.jsonl`
 when it reminds an agent — the impact/decay counterpart to the gate's
-audit log. `seamark lessons --stats` turns that into which lessons
-actually reach agents, split by surface (a `change_set` plan and a CI
-`check` are exposure, not edits reminded), and which *would* surface
-but never have (a lesson whose region no edit touches is a pruning
-candidate):
+audit log. Edit-hook records also carry the rendered context byte count,
+delivery status, and a repository-scoped SHA-256 digest of the provider session
+ID; the raw session ID is never persisted or made correlatable across
+repositories. These fields make repeated delivery measurable without changing
+when reminders appear. `seamark lessons --stats` turns the log into which
+lessons actually reach agents, split by surface (a `change_set` plan and a CI
+`check` are exposure, not edits reminded), and which *would* surface but never
+have (a lesson whose region no edit touches is a pruning candidate). For
+instrumented hook records it also reports injected context bytes, repeated
+in-session injections, and suppressed repeats:
 
 ```text
 $ seamark lessons --stats
 lesson firings — 128 hook reminders, 31 change_set, 12 check — across 24 files
+
+hook delivery — instrumented: 128 injected (84 repeated), 0 suppressed; context: 57344 bytes
 
 most surfaced
   ×41  scripts                                  last 2026-07-26  E702

@@ -686,6 +686,13 @@ func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson, moreP
 // candidate). All lesson text is untrusted, hence sanitized.
 func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 	if s.Total == 0 {
+		if s.SuppressedHookFirings > 0 {
+			fmt.Fprintln(w, "no lesson firings delivered — recorded hook matches were suppressed")
+			printHookDeliverySummary(w, s)
+
+			return
+		}
+
 		fmt.Fprintln(w, "no lesson firings recorded yet — the edit hook logs each time it "+
 			"reminds an agent (wire it with `seamark init`)")
 
@@ -694,6 +701,8 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 
 	fmt.Fprintf(w, "lesson firings — %d hook reminders, %d change_set, %d check — across %d files\n\n",
 		s.BySurface["hook"], s.BySurface["change_set"], s.BySurface["check"], s.Files)
+
+	printHookDeliverySummary(w, s)
 
 	fmt.Fprintf(w, "most surfaced\n")
 
@@ -722,6 +731,17 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 				render.Sanitize(l.Region), render.Sanitize(l.Symptom))
 		}
 	}
+}
+
+func printHookDeliverySummary(w io.Writer, s reviews.Summary) {
+	if s.InstrumentedHookFirings == 0 && s.SuppressedHookFirings == 0 {
+		return
+	}
+
+	fmt.Fprintf(w, "hook delivery — instrumented: %d injected (%d repeated), "+
+		"%d suppressed; context: %d bytes\n\n",
+		s.InstrumentedHookFirings, s.RepeatedHookFirings,
+		s.SuppressedHookFirings, s.HookContextBytes)
 }
 
 // firingDate trims an RFC3339 timestamp to its date for compact display.

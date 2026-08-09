@@ -24,7 +24,7 @@ optional.
 | Distillation (`lessons --distill`) | mined findings | your agent CLI's stdin → its model service | via the agent CLI | proposals + signature marks in `index.db` |
 | Pin apply (`lessons --apply`) | your decision | `.seamark/lessons.yaml` (committed file; only with `distill.write`) | none | yes |
 | Gate hook (`gate --hook`) | the agent's proposed command | verdict on stdout/exit code; `.seamark/audit.jsonl` | none | audit entries |
-| Edit hook (`lessons --hook`) | edited file path | lesson reminders on stdout | none | firing log (`lessons-audit.jsonl`) |
+| Edit hook (`lessons --hook`) | edited file path and provider session ID | lesson reminders on stdout | none | firing log with path, lesson identity, delivery status/context bytes, and repository-scoped session hash (`lessons-audit.jsonl`) |
 | Diff check (`seamark check`) | a unified diff | verdict; audit entry; index self-repair | none | audit entries, refreshed index |
 | MCP server (`seamark mcp`) | `index.db` | the connected agent client, per request (stdio) | none | index self-repair |
 | LSP server (`seamark lsp`) | source tree, `index.db` | your editor (stdio) | none | refreshed index |

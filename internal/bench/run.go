@@ -866,7 +866,7 @@ func matchingTreatmentFirings(dir string, pin reviews.PinRule) (matching, total 
 	}
 
 	for _, firing := range firings {
-		if firing.Surface != "" || !editTool(firing.Tool) ||
+		if !firing.Delivered() || firing.Surface != "" || !editTool(firing.Tool) ||
 			firing.File == "" || len(firing.Files) != 0 ||
 			!pinAppliesToFile(pin, firing.File) {
 			continue

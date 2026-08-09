@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1099,22 +1100,57 @@ func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
 	require.NoError(t, st.Close())
 
 	// Fire the hook on a.go — it must record a firing.
-	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` +
+	payload := `{"session_id":"session-to-hash","tool_name":"Edit","tool_input":{"file_path":"` +
 		filepath.Join(root, "a.go") + `"}}`
-	_, _, err = runIn(t, payload, "-C", root, "lessons", "--hook")
+	hookJSON, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
 	require.NoError(t, err)
+	var response hookOutput
+	require.NoError(t, json.Unmarshal([]byte(hookJSON), &response))
 
 	firings, err := reviews.ReadFirings(root)
 	require.NoError(t, err)
 	require.Len(t, firings, 1, "the hook logged one firing")
 	assert.Equal(t, "Edit", firings[0].Tool)
+	assert.Equal(t, reviews.DeliveryInjected, firings[0].Delivery)
+	assert.Len(t, firings[0].SessionSHA, 64)
+	assert.NotEqual(t, "session-to-hash", firings[0].SessionSHA)
+	assert.Equal(t, len(response.HookSpecificOutput.AdditionalContext), firings[0].ContextBytes)
 
 	// --stats surfaces the fired lesson and the never-fired decay candidate.
 	out, err := run(t, "-C", root, "lessons", "--stats")
 	require.NoError(t, err)
 	assert.Contains(t, out, "RUF001", "the fired lesson is surfaced")
+	assert.Contains(t, out, "hook delivery — instrumented: 1 injected (0 repeated)")
 	assert.Contains(t, out, "never fired", "the unedited-region lesson is a decay candidate")
 	assert.Contains(t, out, "E501")
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
+func TestLessonsHookDoesNotRecordFailedOutput(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	seedLesson(t, root, "a.go", "RUF001", 4)
+
+	payload := `{"session_id":"session-to-hash","tool_name":"Edit","tool_input":{"file_path":"` +
+		filepath.Join(root, "a.go") + `"}}`
+	cmd := New()
+	cmd.SetIn(strings.NewReader(payload))
+	cmd.SetOut(failingWriter{})
+	cmd.SetArgs([]string{"-C", root, "lessons", "--hook"})
+
+	err = cmd.Execute()
+	require.Error(t, err)
+
+	firings, readErr := reviews.ReadFirings(root)
+	require.NoError(t, readErr)
+	assert.Empty(t, firings, "a failed hook response never reached the agent")
 }
 
 // seedLesson writes one lesson row directly, so hook tests don't need a

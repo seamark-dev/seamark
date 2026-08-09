@@ -469,6 +469,8 @@ func TestMatchingTreatmentFiringsRequiresIdentitySurfaceToolAndRegion(t *testing
 		{File: "docs/readme.md", Tool: "Edit", Fired: []reviews.FiredLesson{expected}},
 		{File: "server/schema.py", Tool: "Read", Fired: []reviews.FiredLesson{expected}},
 		{File: "server/schema.py", Tool: "MultiEdit", Fired: []reviews.FiredLesson{expected}},
+		{File: "server/schema.py", Tool: "Edit", Delivery: reviews.DeliverySuppressedRepeat,
+			Fired: []reviews.FiredLesson{expected}},
 	}
 
 	var audit strings.Builder
@@ -484,7 +486,7 @@ func TestMatchingTreatmentFiringsRequiresIdentitySurfaceToolAndRegion(t *testing
 	matching, total, err := matchingTreatmentFirings(dir, cfg.Pin[0])
 	require.NoError(t, err)
 	assert.Equal(t, 1, matching)
-	assert.Equal(t, 5, total)
+	assert.Equal(t, 6, total)
 }
 
 func TestRunStopsWhenSelectedTreatmentNeverFires(t *testing.T) {

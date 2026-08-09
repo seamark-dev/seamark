@@ -2,7 +2,9 @@ package reviews
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -21,6 +23,19 @@ const auditFile = "lessons-audit.jsonl"
 // under a kilobyte. A longer "line" is corruption (a torn append, stray
 // binary) — it is skipped, not fatal.
 const maxAuditLine = 1 << 20
+
+// DeliveryStatus records whether a matching edit actually received the
+// rendered lesson context. Empty means an injected legacy record written
+// before delivery status was captured.
+type DeliveryStatus string
+
+const (
+	// DeliveryInjected means the rendered context was emitted to the agent.
+	DeliveryInjected DeliveryStatus = "injected"
+	// DeliverySuppressedRepeat means the match was recorded without emitting
+	// context because the same lesson had already reached the session.
+	DeliverySuppressedRepeat DeliveryStatus = "suppressed-repeat"
+)
 
 // FiredLesson identifies one lesson surfaced in a firing.
 type FiredLesson struct {
@@ -59,6 +74,29 @@ type Firing struct {
 	Files []string      `json:"files,omitempty"`
 	Tool  string        `json:"tool,omitempty"`
 	Fired []FiredLesson `json:"fired"`
+	// Delivery is present on edit-hook records written by current versions.
+	// SessionSHA joins repeated matches without persisting the provider's raw
+	// session identifier or making it correlatable across repositories.
+	// ContextBytes measures the exact UTF-8 payload emitted as additional
+	// context; it is zero for a suppressed match.
+	Delivery     DeliveryStatus `json:"delivery,omitempty"`
+	SessionSHA   string         `json:"session_sha256,omitempty"`
+	ContextBytes int            `json:"context_bytes,omitempty"`
+}
+
+// Delivered reports whether the record represents context that reached the
+// agent. Legacy records have no status and are treated as delivered.
+func (f Firing) Delivered() bool {
+	return f.Delivery == "" || f.Delivery == DeliveryInjected
+}
+
+// HookDelivery describes one edit-hook match. SessionID is hashed before it is
+// persisted; callers must pass the rendered additional-context byte count, not
+// an estimate.
+type HookDelivery struct {
+	Status       DeliveryStatus
+	SessionID    string
+	ContextBytes int
 }
 
 // RecordFiringSurface appends a firing record to
@@ -69,8 +107,57 @@ type Firing struct {
 // treat the error as best-effort: an audit write must never fail the
 // action it observed.
 func RecordFiringSurface(root, surface string, files []string, tool string, lessons []model.Lesson) error {
-	if len(lessons) == 0 {
+	rec, ok := newFiring(surface, files, tool, lessons)
+	if !ok {
 		return nil
+	}
+
+	return appendFiring(root, rec)
+}
+
+// RecordFiring is RecordFiringSurface for the edit hook, the original
+// (and unnamed) surface.
+func RecordFiring(root, file, tool string, lessons []model.Lesson) error {
+	return RecordFiringSurface(root, "", []string{file}, tool, lessons)
+}
+
+// RecordHookDelivery appends an instrumented edit-hook record. It preserves
+// RecordFiring for callers and historical tests that intentionally exercise
+// the legacy on-disk shape.
+func RecordHookDelivery(root, file, tool string, lessons []model.Lesson, delivery HookDelivery) error {
+	if delivery.ContextBytes < 0 {
+		return fmt.Errorf("hook delivery context bytes cannot be negative")
+	}
+
+	status := delivery.Status
+	switch delivery.Status {
+	case "", DeliveryInjected:
+		status = DeliveryInjected
+	case DeliverySuppressedRepeat:
+		if delivery.ContextBytes != 0 {
+			return fmt.Errorf("suppressed hook delivery cannot contain context bytes")
+		}
+	default:
+		return fmt.Errorf("unknown hook delivery status %q", delivery.Status)
+	}
+
+	rec, ok := newFiring("", []string{file}, tool, lessons)
+	if !ok {
+		return nil
+	}
+
+	rec.Delivery = status
+	rec.ContextBytes = delivery.ContextBytes
+	if delivery.SessionID != "" {
+		rec.SessionSHA = fmt.Sprintf("%x", sha256.Sum256([]byte(root+"\x00"+delivery.SessionID)))
+	}
+
+	return appendFiring(root, rec)
+}
+
+func newFiring(surface string, files []string, tool string, lessons []model.Lesson) (Firing, bool) {
+	if len(lessons) == 0 {
+		return Firing{}, false
 	}
 
 	fired := make([]FiredLesson, len(lessons))
@@ -93,13 +180,7 @@ func RecordFiringSurface(root, surface string, files []string, tool string, less
 		rec.Files = files
 	}
 
-	return appendFiring(root, rec)
-}
-
-// RecordFiring is RecordFiringSurface for the edit hook, the original
-// (and unnamed) surface.
-func RecordFiring(root, file, tool string, lessons []model.Lesson) error {
-	return RecordFiringSurface(root, "", []string{file}, tool, lessons)
+	return rec, true
 }
 
 // appendFiring writes one record to the firing log.
@@ -192,7 +273,7 @@ type Fired struct {
 
 // Summary is the aggregate the `--stats` view renders.
 type Summary struct {
-	Total int // firing events across every surface
+	Total int // delivered firing events across every surface
 	// BySurface splits the events: an actual pre-edit hook reminder, a
 	// change_set plan, and a CI check are different kinds of exposure,
 	// and "edits reminded" must not count the other two.
@@ -200,6 +281,13 @@ type Summary struct {
 	Files      int            // distinct files that triggered a firing
 	Ranked     []Fired        // surfaced lessons that fired, most-fired first
 	NeverFired []model.Lesson // lessons that would surface but never have
+	// Delivery-intensity fields cover current instrumented edit-hook rows.
+	// RepeatedHookFirings is a subset of InstrumentedHookFirings where every
+	// lesson had already been injected in the same provider session.
+	InstrumentedHookFirings int
+	RepeatedHookFirings     int
+	SuppressedHookFirings   int
+	HookContextBytes        int
 }
 
 // Summarize aggregates firings and cross-references the currently-
@@ -208,14 +296,54 @@ type Summary struct {
 func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 	type key struct{ region, symptom string }
 
+	type sessionLessonKey struct {
+		session string
+		lesson  FiredLesson
+	}
+
 	count := map[key]*Fired{}
 	files := map[string]bool{}
 	bySurface := map[string]int{}
+	delivered := 0
+	seenSessionLessons := map[sessionLessonKey]bool{}
+
+	var instrumented, repeated, suppressed, contextBytes int
 
 	for _, fr := range firings {
+		if !fr.Delivered() {
+			if fr.Surface == "" && fr.Delivery == DeliverySuppressedRepeat {
+				suppressed++
+			}
+
+			continue
+		}
+
+		delivered++
+
 		surface := fr.Surface
 		if surface == "" {
 			surface = "hook"
+		}
+
+		if surface == "hook" && fr.Delivery == DeliveryInjected {
+			instrumented++
+			contextBytes += fr.ContextBytes
+
+			if fr.SessionSHA != "" && len(fr.Fired) > 0 {
+				allRepeated := true
+
+				for _, lesson := range fr.Fired {
+					key := sessionLessonKey{fr.SessionSHA, lesson.canonicalIdentity()}
+					if !seenSessionLessons[key] {
+						allRepeated = false
+						seenSessionLessons[key] = true
+					}
+				}
+
+				if allRepeated {
+					repeated++
+				}
+			}
 		}
 
 		bySurface[surface]++
@@ -272,11 +400,15 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 	}
 
 	return Summary{
-		Total:      len(firings),
-		BySurface:  bySurface,
-		Files:      len(files),
-		Ranked:     ranked,
-		NeverFired: never,
+		Total:                   delivered,
+		BySurface:               bySurface,
+		Files:                   len(files),
+		Ranked:                  ranked,
+		NeverFired:              never,
+		InstrumentedHookFirings: instrumented,
+		RepeatedHookFirings:     repeated,
+		SuppressedHookFirings:   suppressed,
+		HookContextBytes:        contextBytes,
 	}
 }
 
@@ -300,6 +432,10 @@ func FirstFirings(firings []Firing) map[FiredLesson]Exposure {
 	filtered := make(map[FiredLesson]time.Time)
 
 	for _, entry := range firings {
+		if !entry.Delivered() {
+			continue
+		}
+
 		var firedAt *time.Time
 		if ts, err := time.Parse(time.RFC3339, entry.TS); err == nil {
 			firedAt = &ts

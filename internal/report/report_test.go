@@ -653,3 +653,13 @@ func TestPrintOutcomesOrdersActionableFirst(t *testing.T) {
 	PrintOutcomes(&sb, applied, nil)
 	assert.Zero(t, sb.Len())
 }
+
+func TestPrintFiringSummaryReportsSuppressionOnlyHistory(t *testing.T) {
+	var out strings.Builder
+	PrintFiringSummary(&out, reviews.Summary{SuppressedHookFirings: 3})
+
+	assert.Contains(t, out.String(), "no lesson firings delivered")
+	assert.Contains(t, out.String(),
+		"hook delivery — instrumented: 0 injected (0 repeated), 3 suppressed")
+	assert.NotContains(t, out.String(), "no lesson firings recorded yet")
+}

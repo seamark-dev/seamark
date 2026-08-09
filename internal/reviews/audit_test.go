@@ -45,6 +45,58 @@ func TestRecordFiringNoLessonsIsNoop(t *testing.T) {
 	assert.True(t, os.IsNotExist(err))
 }
 
+func TestRecordHookDeliveryHashesSessionAndMeasuresContext(t *testing.T) {
+	root := t.TempDir()
+
+	require.NoError(t, RecordHookDelivery(root, "api/handler.py", "Edit", []model.Lesson{
+		{Region: "api", Symptom: "Keep the generated client synchronized."},
+	}, HookDelivery{
+		Status: DeliveryInjected, SessionID: "provider-session-secret", ContextBytes: 437,
+	}))
+
+	firings, err := ReadFirings(root)
+	require.NoError(t, err)
+	require.Len(t, firings, 1)
+	assert.Equal(t, DeliveryInjected, firings[0].Delivery)
+	assert.Len(t, firings[0].SessionSHA, 64)
+	assert.NotContains(t, firings[0].SessionSHA, "provider-session-secret")
+	assert.Equal(t, 437, firings[0].ContextBytes)
+	assert.True(t, firings[0].Delivered())
+	raw, err := os.ReadFile(filepath.Join(root, ".seamark", auditFile))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "provider-session-secret",
+		"the provider session ID must never reach the audit file")
+
+	otherRoot := t.TempDir()
+	require.NoError(t, RecordHookDelivery(otherRoot, "api/handler.py", "Edit", []model.Lesson{
+		{Region: "api", Symptom: "Keep the generated client synchronized."},
+	}, HookDelivery{
+		Status: DeliveryInjected, SessionID: "provider-session-secret", ContextBytes: 437,
+	}))
+	otherFirings, err := ReadFirings(otherRoot)
+	require.NoError(t, err)
+	require.Len(t, otherFirings, 1)
+	assert.NotEqual(t, firings[0].SessionSHA, otherFirings[0].SessionSHA,
+		"the same provider session cannot be correlated across repository logs")
+}
+
+func TestRecordHookDeliveryValidatesMetadataWithoutLessons(t *testing.T) {
+	root := t.TempDir()
+	tests := []HookDelivery{
+		{Status: DeliveryInjected, ContextBytes: -1},
+		{Status: DeliveryStatus("future-status")},
+		{Status: DeliverySuppressedRepeat, ContextBytes: 1},
+	}
+
+	for _, delivery := range tests {
+		err := RecordHookDelivery(root, "api/handler.py", "Edit", nil, delivery)
+		require.Error(t, err, "invalid metadata must not be hidden by an empty lesson set")
+	}
+
+	_, err := os.Stat(filepath.Join(root, ".seamark", auditFile))
+	assert.True(t, os.IsNotExist(err), "invalid delivery metadata must not create an audit log")
+}
+
 func TestReadFiringsMissingAndGarbage(t *testing.T) {
 	root := t.TempDir()
 
@@ -125,6 +177,10 @@ func TestSummarize(t *testing.T) {
 			{Region: "scripts", Symptom: "E702"},
 			{Region: "scripts", Symptom: "RUF001"},
 		}},
+		{TS: "2026-07-03T00:00:00Z", File: "scripts/c.py",
+			Delivery: DeliverySuppressedRepeat, Fired: []FiredLesson{
+				{Region: "scripts", Symptom: "E702"},
+			}},
 	}
 
 	surfaced := []model.Lesson{
@@ -135,8 +191,9 @@ func TestSummarize(t *testing.T) {
 
 	s := Summarize(firings, surfaced)
 
-	assert.Equal(t, 2, s.Total, "two firing events")
+	assert.Equal(t, 2, s.Total, "only two records delivered context")
 	assert.Equal(t, 2, s.Files, "two distinct files")
+	assert.Equal(t, 1, s.SuppressedHookFirings)
 
 	require.NotEmpty(t, s.Ranked)
 	assert.Equal(t, "E702", s.Ranked[0].Symptom, "most-fired first")
@@ -145,6 +202,29 @@ func TestSummarize(t *testing.T) {
 
 	require.Len(t, s.NeverFired, 1)
 	assert.Equal(t, "E501", s.NeverFired[0].Symptom, "surfaced but never fired = decay candidate")
+}
+
+func TestSummarizeMeasuresRepeatedHookDeliveryWithinSession(t *testing.T) {
+	lessonA := FiredLesson{Region: "api", Symptom: "synchronize generated client"}
+	lessonB := FiredLesson{Region: "api", Symptom: "bump cache version"}
+	firings := []Firing{
+		{File: "api/a.py", Delivery: DeliveryInjected, SessionSHA: "session-a",
+			ContextBytes: 400, Fired: []FiredLesson{lessonA}},
+		{File: "api/b.py", Delivery: DeliveryInjected, SessionSHA: "session-a",
+			ContextBytes: 420, Fired: []FiredLesson{lessonA}},
+		{File: "api/c.py", Delivery: DeliveryInjected, SessionSHA: "session-a",
+			ContextBytes: 450, Fired: []FiredLesson{lessonA, lessonB}},
+		{File: "api/d.py", Delivery: DeliveryInjected, SessionSHA: "session-b",
+			ContextBytes: 410, Fired: []FiredLesson{lessonA}},
+	}
+
+	s := Summarize(firings, nil)
+
+	assert.Equal(t, 4, s.InstrumentedHookFirings)
+	assert.Equal(t, 1, s.RepeatedHookFirings,
+		"only the second delivery contains no lesson new to its session")
+	assert.Zero(t, s.SuppressedHookFirings)
+	assert.Equal(t, 1680, s.HookContextBytes)
 }
 
 func TestExposureSurvivesCosmeticPinEdits(t *testing.T) {
@@ -163,6 +243,8 @@ func TestExposureSurvivesCosmeticPinEdits(t *testing.T) {
 	exposure := FirstFirings([]Firing{
 		{TS: "2026-08-01T10:00:00Z", Fired: []FiredLesson{record(pin)}},
 		{TS: "2026-08-02T10:00:00Z", Fired: []FiredLesson{record(pin)}},
+		{TS: "2026-08-03T10:00:00Z", Delivery: DeliverySuppressedRepeat,
+			Fired: []FiredLesson{record(pin)}},
 	})
 
 	// Reordered regions and rule-case tweaks are the same pin: the
@@ -174,7 +256,7 @@ func TestExposureSurvivesCosmeticPinEdits(t *testing.T) {
 
 	exp, ok := exposure[PinIdentity(edited)]
 	require.True(t, ok)
-	assert.Equal(t, 2, exp.Count)
+	assert.Equal(t, 2, exp.Count, "a suppressed repeat is not an exposure")
 	assert.True(t, exp.First.Equal(time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)))
 
 	// A reworded note is a new treatment: the clock resets.

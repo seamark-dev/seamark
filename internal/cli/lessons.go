@@ -844,8 +844,8 @@ func runLessonsList(cmd *cobra.Command, opts *options, region string) error {
 // tool it guards: any error (no index, unreadable payload) yields empty
 // output and exit 0, so a missing seamark index can't block edits.
 func runLessonsHook(cmd *cobra.Command, opts *options) error {
-	path, tool, err := readHookInput(cmd.InOrStdin())
-	if err != nil || path == "" {
+	input, err := readHookInput(cmd.InOrStdin())
+	if err != nil || input.File == "" {
 		return nil // nothing to say; never block the edit
 	}
 
@@ -855,13 +855,13 @@ func runLessonsHook(cmd *cobra.Command, opts *options) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	lessons, morePins, err := lessonsForFile(st, root, path, true)
+	lessons, morePins, err := lessonsForFile(st, root, input.File, true)
 	if err != nil || len(lessons) == 0 {
 		return nil
 	}
 
 	var b strings.Builder
-	_ = report.PrintLessonReminder(&b, toRepoRel(root, path), lessons, morePins)
+	_ = report.PrintLessonReminder(&b, toRepoRel(root, input.File), lessons, morePins)
 
 	out := hookOutput{}
 	out.HookSpecificOutput.HookEventName = "PreToolUse"
@@ -870,11 +870,16 @@ func runLessonsHook(cmd *cobra.Command, opts *options) error {
 	// Emit the verdict FIRST so the edit's go-ahead never waits on the
 	// audit write; then record best-effort — a slow or failed append must
 	// neither delay nor block the edit.
-	err = json.NewEncoder(cmd.OutOrStdout()).Encode(out)
+	if err := json.NewEncoder(cmd.OutOrStdout()).Encode(out); err != nil {
+		return err
+	}
 
-	_ = reviews.RecordFiring(root, toRepoRel(root, path), tool, lessons)
+	_ = reviews.RecordHookDelivery(root, toRepoRel(root, input.File), input.Tool, lessons,
+		reviews.HookDelivery{
+			Status: reviews.DeliveryInjected, SessionID: input.SessionID, ContextBytes: b.Len(),
+		})
 
-	return err
+	return nil
 }
 
 // runLessonsStats prints the firing-log summary: which lessons actually
@@ -930,15 +935,22 @@ type hookOutput struct {
 	} `json:"hookSpecificOutput"`
 }
 
-// readHookInput extracts the edited file path and tool name from a
-// PreToolUse payload (Edit, Write, and MultiEdit all carry file_path).
-func readHookInput(r io.Reader) (file, tool string, err error) {
+type lessonsHookInput struct {
+	File      string
+	Tool      string
+	SessionID string
+}
+
+// readHookInput extracts the edit and session identity from a PreToolUse
+// payload (Edit, Write, and MultiEdit all carry file_path).
+func readHookInput(r io.Reader) (lessonsHookInput, error) {
 	data, err := io.ReadAll(io.LimitReader(r, 1<<20))
 	if err != nil {
-		return "", "", err
+		return lessonsHookInput{}, err
 	}
 
 	var payload struct {
+		SessionID string `json:"session_id"`
 		ToolName  string `json:"tool_name"`
 		ToolInput struct {
 			FilePath string `json:"file_path"`
@@ -946,10 +958,12 @@ func readHookInput(r io.Reader) (file, tool string, err error) {
 	}
 
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return "", "", err
+		return lessonsHookInput{}, err
 	}
 
-	return payload.ToolInput.FilePath, payload.ToolName, nil
+	return lessonsHookInput{
+		File: payload.ToolInput.FilePath, Tool: payload.ToolName, SessionID: payload.SessionID,
+	}, nil
 }
 
 // lessonsForFile normalizes path to repo-relative and returns the
