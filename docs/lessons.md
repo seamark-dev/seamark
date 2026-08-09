@@ -106,15 +106,41 @@ file beats its package beats a repo-wide `*` — with a `+N more` pointer
 for the rest. Deliberate views (`--file`, `why`) always show
 everything; only the ambient injection is capped.
 
-Hook delivery defaults to `always`, preserving the original behavior. Set
-`hook_delivery: once-per-context` to inject a lesson only once in the current
-provider session. `seamark init` installs a `PostCompact` lifecycle hook that
-starts a fresh delivery generation after Claude Code summarizes old context,
-so a reminder can return when it is useful again. The optimization is
-deliberately fail-open: missing session identity, corrupt local state, or a
-state-lock failure causes normal injection rather than silently hiding a
-lesson. Only repository-scoped session and lesson digests are stored in the
-gitignored `.seamark/lessons-hook-state.json`; entries expire after 24 hours.
+### Hook delivery modes
+
+Choose one `hook_delivery` value in `.seamark/lessons.yaml`. Omitting the key
+is equivalent to `always`.
+
+To repeat matching lessons after every edit:
+
+```yaml
+# Default: maximize reminder visibility.
+hook_delivery: always
+```
+
+To avoid sending the same lesson repeatedly while an agent works in one
+context window:
+
+```yaml
+# Reduce repeated context; reminders return after context compaction.
+hook_delivery: once-per-context
+```
+
+With `once-per-context`, the first matching edit injects the lesson and later
+matching edits in the same provider session stay silent for that lesson.
+Different lessons can still be injected, and changing a lesson's region or
+symptom gives it a new identity. `seamark init` installs a `PostCompact`
+lifecycle hook that starts a fresh delivery generation after Claude Code
+summarizes old context, so delivered reminders can return when they are useful
+again. After upgrading Seamark, run init once to install or refresh the hooks.
+Configuration is then read on every hook invocation, so switching modes does
+not require re-running init.
+
+The optimization is deliberately fail-open: missing session identity, corrupt
+local state, or a state-lock failure causes normal injection rather than
+silently hiding a lesson. Only repository-scoped session and lesson digests
+are stored in the gitignored `.seamark/lessons-hook-state.json`; entries expire
+after 24 hours.
 
 ## The ledger: lessons --list
 

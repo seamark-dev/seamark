@@ -319,11 +319,40 @@ A committed `.seamark/lessons.yaml` tunes what surfaces — `mute` kills
 noise, `pin` forces what must never be ignored (single `region` or a
 `regions: [api, db]` set), `threshold` sets the recurrence bar,
 `pin_budget` caps the hook's injection (default 3), `change_budget` the
-`change_set` block (default 6), and opt-in
-`hook_delivery: once-per-context` suppresses repeat lesson context until
-Claude Code compacts the session. The default is `always`; delivery state is
-local, digest-only, short-lived, and fails open. `seamark report` renders the
-whole decision queue as one self-contained HTML page. The full pipeline —
+`change_set` block (default 6), and `hook_delivery` controls whether a
+matching lesson repeats during the current agent context.
+
+### Choose how often hook lessons repeat
+
+Choose one of these settings in `.seamark/lessons.yaml`. If the key is
+omitted, Seamark uses `always`.
+
+Use the default when every matching edit should receive the reminder:
+
+```yaml
+# Repeat matching lessons after every edit (default).
+hook_delivery: always
+```
+
+Use the opt-in mode to reduce repeated context when an agent edits the same
+area several times:
+
+```yaml
+# Deliver each lesson once, then allow it again after context compaction.
+hook_delivery: once-per-context
+```
+
+`once-per-context` suppresses only lessons already delivered in the current
+agent context—the conversation content the model can still see. The
+`seamark init` command installs the `PostCompact` reset that lets those lessons
+return after Claude Code compacts old context. After upgrading Seamark, run
+`seamark init` once to install or refresh these hooks; changing the setting
+later does not require running init again. If the session identity or local
+state is unavailable, Seamark fails open and delivers the lesson normally.
+
+See [Hook delivery modes](docs/lessons.md#hook-delivery-modes) for the state,
+privacy, and lifecycle details. `seamark report` renders the whole decision
+queue as one self-contained HTML page. The full pipeline —
 mining heuristics, fix-commit classification, region inference,
 confidence tiers, distillation economics, near-duplicate pruning, the
 firing stats, and the outcome loop that answers whether pins actually

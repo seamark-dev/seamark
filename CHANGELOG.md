@@ -6,6 +6,29 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## Unreleased
+
+- **Once-per-context lesson delivery.** `.seamark/lessons.yaml` now accepts
+  `hook_delivery: once-per-context` to inject each matching lesson once in the
+  current agent context instead of repeating it after every edit. The default
+  remains `always`. Local state contains only repository-scoped session and
+  lesson digests, expires after 24 hours, resets after Claude Code compaction,
+  and fails open so missing identity, lock contention, or corrupt state never
+  hides guidance. Hook audit records carry match and context-generation
+  digests; `lessons --stats` distinguishes injections, repeats, suppressions,
+  and injected bytes.
+- **Auditable delivery-cost benchmarks.** Benchmark result schema v6 records
+  the selected delivery policy and its hook intensity, keeps policy cohorts in
+  separate fingerprints, and labels them in Markdown reports. The first
+  two-pair export-registry calibration reduced four matching hook events to one
+  injection and three suppressions per treatment session, with zero repeated
+  injections and no loss of owner-invariant success. The small dirty-build
+  sample does not yet support a token-cost claim.
+
+Upgrade note: run `seamark init` once after upgrading to install the
+`PostCompact` lifecycle hook. Switching `hook_delivery` modes afterward does
+not require another init run.
+
 ## v0.2.0 — 2026-08-05
 
 The evidence-quality line: pins that say where they apply and how much

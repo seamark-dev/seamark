@@ -184,7 +184,7 @@ owner-specific companion surface. Because provider usage sums the growing
 context processed across turns, an extra tool/agent turn can account for far
 more tokens than the reminder text.
 
-### Delivery-cost experiment
+### Delivery-policy calibration
 
 Schema v6 supports `-hook-delivery always|once-per-context`. The latter keeps
 repository-scoped session and canonical lesson-content digests in local state,
@@ -193,12 +193,32 @@ after context compaction, expires inactive sessions after 24 hours, and fails
 open when identity or state is unavailable. `always` remains the product and
 benchmark default.
 
-The next paid step is a controlled comparison of these policies, not a
-replacement of the existing hook-on/hook-off effectiveness cohort. Run a
-single paired calibration first and inspect schema-v6 delivery fields and
-transcripts. Only then expand enough repetitions to compare invariant success,
-turns, context, cost, injection count, suppression count, and injected bytes.
-The two policies have different fingerprints and must remain separate cohorts.
+The first mechanism smoke test completed on 2026-08-09 with one valid
+hook-on session: three matching edits produced one injection, two suppressions,
+zero repeated injections, and 455 injected bytes; the visible task and owner
+invariant both passed. A follow-up two-pair export-registry calibration produced
+the same result in both treatment sessions: four matches, one injection, three
+suppressions, zero repeats, and 455 bytes. Both hook-on sessions passed the
+owner invariant, while both hook-off sessions completed the task but missed it.
+
+For context, the earlier clean `always` release cohort and the new
+`once-per-context` calibration observed:
+
+| Delivery cohort | Valid pairs | Hook-on invariant | Hook-off invariant | Hook-on delivery per session | Mean context on/off | Mean cost on/off |
+|---|---:|---:|---:|---|---:|---:|
+| `always` (schema v5, clean release) | 5 | 5/5 | 0/5 | 3.6 firings; suppression not measured | 279k / 225k | $0.084 / $0.073 |
+| `once-per-context` (schema v6, dirty calibration) | 2 | 2/2 | 0/2 | 4 matches; 1 injection; 3 suppressed; 0 repeated | 346k / 200k | $0.094 / $0.069 |
+
+This establishes that once-per-context suppression works without weakening the
+lesson on this fixture. It does **not** establish a token or cost reduction:
+the tiny calibration's hook-on sessions processed more context despite sending
+the reminder once. The cohorts differ in size, harness schema, build identity,
+and run date, and agent-turn variance dominates a 455-byte reminder. The
+remaining evidence gap is a clean, balanced comparison of both policies under
+the same model/runtime, with enough repetitions to estimate turns, context,
+and cost. Until that evidence exists, no delivery-efficiency claim is made.
+Delivery policy is part of the fingerprint, so `always` and
+`once-per-context` are reported as distinct cohorts rather than being pooled.
 
 ## Artifact policy
 
