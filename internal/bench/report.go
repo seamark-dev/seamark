@@ -752,8 +752,9 @@ func (r BenchmarkReport) Markdown() string {
 
 	out.WriteString("\n## Interpretation guardrail\n\n")
 	out.WriteString("A cohort can validate the harness or support its specific task without establishing the cross-instance product claim. " +
-		"Threshold assessment remains insufficient until the committed claim registry's model, effort, clean-build, " +
-		"independent-instance, and valid-pair conditions are met.\n")
+		"A passing assessment supports only the committed synthetic claim under the exact model, effort, clean-build, " +
+		"independent-instance, and valid-pair conditions; it does not establish external validity. An insufficient assessment " +
+		"must not be promoted to a product claim.\n")
 
 	return out.String()
 }

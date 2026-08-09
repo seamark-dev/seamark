@@ -190,7 +190,7 @@ func run(opts options) error {
 
 	fmt.Printf("  runtime  %s\n", runtimeID)
 	fmt.Printf("  seamark  %s (%s, sha256 %.12s…)\n", abs, cfg.Version, cfg.SeamarkSHA)
-	fmt.Printf("  run      %.12s…\n", cfg.Fingerprint)
+	fmt.Printf("  fingerprint %.12s…\n", cfg.Fingerprint)
 
 	if opts.dryRun || opts.preflightOnly {
 		fmt.Printf("  results  %s (no rows written during preflight)\n", opts.out)
