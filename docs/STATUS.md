@@ -71,14 +71,15 @@ milestone.
 - CI: full test suite + lint on every change; regression tests pin the
   trust baseline (non-blocking default init, audit redaction, durable
   state surviving rebuilds, docs-command drift).
-- The first committed synthetic lessons pilot records a promising result: on
-  the schema-sync task, hook-on preserved the owner invariant in 3/3 completed
-  trials versus 0/3 for hook-off. It used a dirty development binary and falls
-  below the frozen pair count, so it validates the harness and task but is not
-  release evidence. The frozen registry requires three independent instances
-  with five valid pairs each under the pinned model, effort, and clean-build
-  conditions. Raw rows live under `bench/`, and `make lessons-bench-report`
-  keeps incompatible fingerprints separate; the calibration and artifact
-  protocol is in [bench/README.md](../bench/README.md).
+- The first clean synthetic lessons release cohort meets the frozen controlled
+  threshold across three independent fixtures and five paired trials each:
+  hook-on preserved the owner invariant in 15/15 task-complete runs versus
+  3/15 for hook-off, with no visible-task regressions. Mean cross-instance lift
+  was +80 percentage points and the worst instance was +40 points. Hook-on used
+  about 11.4% more processed context and 8.4% more measured cost. This is
+  reproducible evidence for the exact Haiku/medium/runtime conditions, not
+  external validation; the schema-sync instance alone remains uncertain. Raw
+  rows and the generated report live under `bench/`; the calibration, artifact,
+  and interpretation protocol is in [bench/README.md](../bench/README.md).
 - External pilots: none yet — that is the bar between "works here" and
   "production-ready", and claims stay scoped until it is met.

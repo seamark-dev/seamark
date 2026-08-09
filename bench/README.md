@@ -144,10 +144,53 @@ The report records the SHA-256 of every raw input, keeps fingerprints in
 separate immutable cohorts, reports paired direction and harmful interference,
 includes an evidence window, exact experimental identities, and an approximate
 95% score interval, and evaluates the committed threshold without silently
-pooling incompatible runs. The committed three-pair
-schema-sync pilot (`3/3` hook-on versus `0/3`
-hook-off) validates that fixture and the treatment path only; it used a dirty
-development binary and is below the frozen evidence floor.
+pooling incompatible runs.
+
+The first clean release cohort uses Seamark `v0.2.0-3-g6d5d87d`, Claude Haiku
+`claude-haiku-4-5-20251001`, medium effort, and five valid pairs per instance:
+
+| Instance | Hook-on invariant | Hook-off invariant | Effect | Approx. 95% interval | Mean context on/off | Cost on/off |
+|---|---:|---:|---:|---:|---:|---:|
+| `python-ts-schema-sync-v1` | 5/5 | 3/5 | +40 pp | -12 to +77 pp | 368k / 353k | $0.47 / $0.46 |
+| `python-cache-version-v1` | 5/5 | 0/5 | +100 pp | +39 to +100 pp | 279k / 253k | $0.41 / $0.38 |
+| `go-export-registry-v1` | 5/5 | 0/5 | +100 pp | +39 to +100 pp | 279k / 224k | $0.42 / $0.37 |
+
+All 30 sessions completed the visible task, so harmful task interference was
+0%. The mean cross-instance effect was +80 percentage points and the worst
+instance effect was +40 points; the cohort therefore passes the frozen
+synthetic threshold. The schema-sync interval still includes zero, the corpus
+contains only three generated fixtures, and all runs use one model/runtime, so
+this is reproducible controlled evidence rather than external validation. The
+earlier dirty three-pair schema-sync pilot remains historical calibration.
+
+### Observed treatment cost
+
+Across the 15 release pairs, hook-on processed 4.64 million context tokens
+versus 4.16 million for hook-off: about +32k per session, or +11.4%. Measured
+cost was $1.30 versus $1.20, about +8.4%. The increase is material and should
+remain visible beside effectiveness. The literal lesson reminder is too small
+to explain most of the gap by itself: each rendering was only 435–456 bytes.
+The hook currently repeated it two times per schema run, three times per cache
+run, and three or four times per export run. Hook-on also averaged 22.3 agent
+turns versus 21.2 and was associated with inspection or updates of the
+owner-specific companion surface. Because provider usage sums the growing
+context processed across turns, an extra tool/agent turn can account for far
+more tokens than the reminder text.
+
+### Planned delivery-cost work
+
+The next benchmark iteration will:
+
+- record matched edits, actual injections, suppressed repeats, and injected
+  bytes separately;
+- evaluate once-per-session delivery keyed by repository, provider session ID,
+  and canonical lesson-content digest;
+- allow a changed lesson to fire again and re-enable delivery after context
+  compaction or a long session;
+- keep state short-lived, concurrency-safe, and local, while failing open when
+  session identity or state is unavailable; and
+- compare effect, turns, context, and cost with the current behavior before
+  changing the default.
 
 ## Artifact policy
 
