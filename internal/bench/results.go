@@ -183,6 +183,10 @@ func validLowerHex(value string, length int) bool {
 // estimate made from another model, task, or runtime is worse than no estimate
 // because it creates false confidence before a paid run.
 func PriorCostFor(path, fingerprint string) (rows int, meanInput int64, meanCost float64, ok bool) {
+	if fingerprint == "" {
+		return 0, 0, 0, false
+	}
+
 	rs, err := ReadRows(path)
 	if err != nil || len(rs) == 0 {
 		return 0, 0, 0, false
@@ -192,7 +196,7 @@ func PriorCostFor(path, fingerprint string) (rows int, meanInput int64, meanCost
 	var costTotal float64
 
 	for _, row := range rs {
-		if fingerprint != "" && row.Fingerprint != fingerprint {
+		if row.Fingerprint != fingerprint {
 			continue
 		}
 

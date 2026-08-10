@@ -30,7 +30,8 @@ func TestCacheVersionFixture(t *testing.T) {
 	assert.True(t, naive.TaskDone)
 	assert.False(t, naive.Avoided)
 	assert.Contains(t, naive.Notes, "cache namespace")
-	assert.True(t, checksPass(runChecks(context.Background(), a, instance.Checks)))
+	naiveChecks := runChecks(context.Background(), a, instance.Checks)
+	assert.True(t, checksPass(naiveChecks), failedChecks(naiveChecks))
 
 	require.NoError(t, instance.ApplyGold(a))
 	gold, err := instance.Judge(a)
@@ -67,7 +68,8 @@ func TestExportRegistryFixture(t *testing.T) {
 	assert.True(t, naive.TaskDone)
 	assert.False(t, naive.Avoided)
 	assert.Contains(t, naive.Notes, "registry is stale")
-	assert.True(t, checksPass(runChecks(context.Background(), a, instance.Checks)))
+	naiveChecks := runChecks(context.Background(), a, instance.Checks)
+	assert.True(t, checksPass(naiveChecks), failedChecks(naiveChecks))
 
 	require.NoError(t, instance.ApplyGold(a))
 	gold, err := instance.Judge(a)

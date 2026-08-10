@@ -116,11 +116,13 @@ func TestBenchmarkReportIdentifiesDeliveryIntensityCohorts(t *testing.T) {
 	for _, arm := range []Arm{ArmHookOn, ArmHookOff} {
 		always := validReportRow("run-always", arm, 1, arm == ArmHookOn)
 		always.Fingerprint = alwaysFingerprint
+		always.HookAuditRows = 2
 		require.NoError(t, appendRow(path, always))
 
 		once := validReportRow("run-once", arm, 1, arm == ArmHookOn)
 		once.Fingerprint = onceFingerprint
 		once.HookDelivery = HookDeliveryOncePerContext
+		once.HookAuditRows = 2
 		if arm == ArmHookOn {
 			once.HookMatches = 2
 			once.HookSuppressed = 1
@@ -148,6 +150,23 @@ func TestBuildBenchmarkReportRejectsUnknownResultFields(t *testing.T) {
 	_, err = BuildBenchmarkReport([]string{path}, testClaimRegistry())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown field")
+}
+
+func TestBuildBenchmarkReportRejectsTrailingJSONLContent(t *testing.T) {
+	for name, trailing := range map[string]string{
+		"second value": ` {}`,
+		"invalid text": ` trailing`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "results.jsonl")
+			data, err := json.Marshal(validReportRow("run-a", ArmHookOn, 1, true))
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(path, append(append(data, trailing...), '\n'), 0o600))
+
+			_, err = BuildBenchmarkReport([]string{path}, testClaimRegistry())
+			require.ErrorContains(t, err, path+":1: trailing content")
+		})
+	}
 }
 
 func TestBuildBenchmarkReportRejectsDuplicateEvidence(t *testing.T) {
@@ -278,6 +297,7 @@ func TestValidateResultRowRequiresConsistentV6HookIntensity(t *testing.T) {
 
 	row := validReportRow("run-a", ArmHookOn, 1, true)
 	row.HookDelivery = HookDeliveryOncePerContext
+	row.HookAuditRows = 2
 	row.HookMatches = 2
 	row.HookSuppressed = 1
 	assert.NoError(t, ValidateResultRow(row))

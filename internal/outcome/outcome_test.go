@@ -9,10 +9,29 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
+
+func TestLinkedFindingsUseOneHopIndexesAndKeepCorpusOrder(t *testing.T) {
+	all := []model.Finding{
+		{ID: 9, LessonKey: "other", Body: "unrelated"},
+		{ID: 1, LessonKey: "cluster", Body: "cited review"},
+		{ID: 2, LessonKey: "cluster", Body: "same review cluster"},
+		{ID: 3, Body: "lexically grouped fix"},
+		{ID: 4, Body: "area-only fix"},
+	}
+	groups := []distill.Group{
+		{Findings: []model.Finding{all[1], all[3]}},
+		{Area: true, Findings: []model.Finding{all[1], all[4]}},
+	}
+
+	got := linked([]int64{1}, indexFindingLinks(all, groups))
+	require.Len(t, got, 3)
+	assert.Equal(t, []int64{1, 2, 3}, []int64{got[0].ID, got[1].ID, got[2].ID})
+}
 
 // TestGather tests the whole passive loop end to end: findings and
 // commits are seeded around a real RecordFiring timestamp, the audit

@@ -156,7 +156,7 @@ pooling incompatible runs.
 The first clean release cohort uses Seamark `v0.2.0-3-g6d5d87d`, Claude Haiku
 `claude-haiku-4-5-20251001`, medium effort, and five valid pairs per instance:
 
-| Instance | Hook-on invariant | Hook-off invariant | Effect | Approx. 95% interval | Mean context on/off | Cost on/off |
+| Instance | Hook-on invariant | Hook-off invariant | Effect | Approx. 95% interval | Mean context on/off | Total cost on/off |
 |---|---:|---:|---:|---:|---:|---:|
 | `python-ts-schema-sync-v1` | 5/5 | 3/5 | +40 pp | -12 to +77 pp | 368k / 353k | $0.47 / $0.46 |
 | `python-cache-version-v1` | 5/5 | 0/5 | +100 pp | +39 to +100 pp | 279k / 253k | $0.41 / $0.38 |

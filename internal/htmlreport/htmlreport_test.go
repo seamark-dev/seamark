@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -710,4 +711,37 @@ func TestReportShowsPinOutcome(t *testing.T) {
 	// The stats row carries the aggregate.
 	assert.Contains(t, page, "<b>1</b><span>pins measured</span>")
 	assert.Contains(t, page, "<b>1</b><span>not landing</span>")
+}
+
+func TestNotLandingColorsMeetWCAGContrast(t *testing.T) {
+	assert.GreaterOrEqual(t, contrastRatio("#A33A2B", "#F4F3F0"), 4.5)
+	assert.GreaterOrEqual(t, contrastRatio("#EF806B", "#14181A"), 4.5)
+	assert.GreaterOrEqual(t, contrastRatio("#EF806B", "#1B2124"), 4.5)
+	assert.Contains(t, pageSource, "--rust:#A33A2B")
+	assert.Contains(t, pageSource, "--rust:#EF806B")
+}
+
+func contrastRatio(foreground, background string) float64 {
+	lighter := relativeLuminance(foreground)
+	darker := relativeLuminance(background)
+	if lighter < darker {
+		lighter, darker = darker, lighter
+	}
+
+	return (lighter + 0.05) / (darker + 0.05)
+}
+
+func relativeLuminance(hex string) float64 {
+	var red, green, blue uint8
+	_, _ = fmt.Sscanf(hex, "#%02x%02x%02x", &red, &green, &blue)
+	channel := func(value uint8) float64 {
+		srgb := float64(value) / 255
+		if srgb <= 0.04045 {
+			return srgb / 12.92
+		}
+
+		return math.Pow((srgb+0.055)/1.055, 2.4)
+	}
+
+	return 0.2126*channel(red) + 0.7152*channel(green) + 0.0722*channel(blue)
 }

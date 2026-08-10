@@ -316,7 +316,7 @@ drifted pin:
   p47   leak-exception-to-client           svc/api
         not landing — recurred 2× since exposure (fired 12×)
 
-not landing — p47 fire but the mistake recurs; escalation is yours:
+not landing — p47 fires but the mistake recurs; escalation is yours:
 reword the note, raise the pin, or graduate it to a check
 
 retarget: `seamark lessons --retarget p65,p62,…` updates those pins to

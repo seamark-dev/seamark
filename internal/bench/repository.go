@@ -65,9 +65,11 @@ func runGit(dir string, args ...string) error {
 	cmd := exec.Command("git", append(base, args...)...)
 	cmd.Dir = dir
 	cmd.Env = append(
-		os.Environ(),
+		sanitizedEnvironment(),
 		"GIT_AUTHOR_DATE="+commitDate,
 		"GIT_COMMITTER_DATE="+commitDate,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
 	)
 
 	if out, err := cmd.CombinedOutput(); err != nil {

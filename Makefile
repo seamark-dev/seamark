@@ -68,7 +68,7 @@ lessons-bench: build ## Controlled headless agent experiment (costs tokens; BENC
 	go run ./cmd/lessons-bench $(BENCH_FLAGS)
 
 lessons-bench-preflight: build ## Validate every benchmark fixture without buying agent sessions
-	go run ./cmd/lessons-bench -instance all -preflight-only -agent /usr/bin/true $(BENCH_FLAGS)
+	go run ./cmd/lessons-bench -instance all -preflight-only -agent "$$(command -v true)" $(BENCH_FLAGS)
 
 lessons-bench-report: ## Render selected JSONL evidence (BENCH_RESULTS="bench/file.jsonl ..."; stdout by default)
 	go run ./cmd/lessons-bench-report -claims bench/claims.yaml $(BENCH_REPORT_FLAGS) $(BENCH_RESULTS)

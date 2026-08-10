@@ -952,6 +952,25 @@ func TestLessonsProposalsLedgerShowsOutcome(t *testing.T) {
 	assert.Contains(t, out, "not landing — recurred 1× since exposure (fired 1×)")
 }
 
+func TestLessonsOutcomeSurfacesRejectMalformedConfig(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("hook_delivery: sometimes\n"), 0o644))
+
+	_, err = run(t, "-C", root, "lessons", "--stats")
+	require.ErrorContains(t, err, "failed to load lessons config")
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+	_, err = proposalHealth(st, root, []model.Proposal{{
+		ID: 1, Status: model.ProposalApplied,
+	}})
+	require.ErrorContains(t, err, "failed to load lessons config")
+}
+
 func TestLessonsPruneRetiresRestatements(t *testing.T) {
 	root := writeFixture(t)
 

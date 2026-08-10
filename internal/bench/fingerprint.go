@@ -17,7 +17,7 @@ import (
 // not affect an experiment fingerprint. SeamarkSHA separately binds rows to
 // the exact executable used by the hook.
 //
-//go:embed fingerprint.go run.go instance.go preflight.go repository.go judge_command.go
+//go:embed fingerprint.go run.go instance.go preflight.go repository.go judge_command.go results.go
 var harnessSources embed.FS
 
 // instanceSources binds judge implementations to the selected instance only.

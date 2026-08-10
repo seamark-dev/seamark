@@ -362,6 +362,15 @@ func readRowsStrict(path string) ([]Row, string, error) {
 			return nil, "", fmt.Errorf("%s:%d: %w", path, lineNumber, err)
 		}
 
+		var trailing json.RawMessage
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			if err == nil {
+				err = fmt.Errorf("multiple JSON values")
+			}
+
+			return nil, "", fmt.Errorf("%s:%d: trailing content: %w", path, lineNumber, err)
+		}
+
 		if err := ValidateResultRow(row); err != nil {
 			return nil, "", fmt.Errorf("%s:%d: %w", path, lineNumber, err)
 		}

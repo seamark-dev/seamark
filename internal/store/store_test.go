@@ -444,6 +444,9 @@ func TestLessonReplaceAndQuery(t *testing.T) {
 		},
 	}
 	require.NoError(t, s.ReplaceLessons(first, nil))
+	reviewStamp, err := s.GetMeta(MetaReviewsMinedAt)
+	require.NoError(t, err)
+	assert.NotEmpty(t, reviewStamp, "lesson replacement owns the review-mine stamp")
 
 	// A file inherits its directory's lessons; minOccur hides the one-off.
 	got, err := s.LessonsForFile("api/service.py", 2, 10)

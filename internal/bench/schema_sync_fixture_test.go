@@ -12,11 +12,25 @@ import (
 )
 
 func TestSchemaSyncFixtureIsDeterministicAndHealthy(t *testing.T) {
+	t.Setenv("GIT_AUTHOR_NAME", "host author")
+	t.Setenv("GIT_AUTHOR_EMAIL", "host-author@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "host committer")
+	t.Setenv("GIT_COMMITTER_EMAIL", "host-committer@example.com")
+	t.Setenv("GIT_AUTHOR_DATE", "2030-01-01T00:00:00Z")
+	t.Setenv("GIT_COMMITTER_DATE", "2030-01-01T00:00:00Z")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "user.name")
+	t.Setenv("GIT_CONFIG_VALUE_0", "host config")
+
 	a := filepath.Join(t.TempDir(), "a")
 	b := filepath.Join(t.TempDir(), "b")
 	require.NoError(t, GenerateSchemaSyncFixture(a))
 	require.NoError(t, GenerateSchemaSyncFixture(b))
 	assert.Equal(t, head(t, a), head(t, b))
+	identity, err := exec.Command("git", "-C", a, "show", "-s", "--format=%an|%ae|%cn|%ce|%aI|%cI").Output()
+	require.NoError(t, err)
+	assert.Equal(t, "bench|bench@seamark.dev|bench|bench@seamark.dev|"+
+		commitDate+"|"+commitDate+"\n", string(identity))
 
 	verdict, err := JudgeSchemaSync(a)
 	require.NoError(t, err)
@@ -138,6 +152,7 @@ fi
 
 	assert.Equal(t, Tally{
 		Attempted: 2, Ran: 2, Completed: 2, Avoided: 2, Firings: 2, MeanInput: 1200,
+		Matches: 2, Injections: 2,
 	},
 		sum.ByArm[ArmHookOn])
 	assert.Equal(t, Tally{Attempted: 2, Ran: 2, Completed: 2, MeanInput: 1000},
@@ -145,13 +160,16 @@ fi
 	assert.Equal(t, SchemaSyncRule, sum.Rule)
 
 	lines := sum.Lines()
-	require.Len(t, lines, 2)
+	require.Len(t, lines, 3)
 	assert.Equal(t,
 		"sync-generated-api-client — hook-on: 2/2 avoided (2/2 completed); hook-off: 0/2 avoided (2/2 completed)",
 		lines[0])
 	assert.Equal(t,
 		"context processed — hook-on mean 1200 vs hook-off 1000 (+200 per trial)",
 		lines[1])
+	assert.Equal(t,
+		"hook delivery — 2 matches, 2 injections, 0 repeated, 0 suppressed, 0 context bytes",
+		lines[2])
 
 	rows, err := ReadRows(out)
 	require.NoError(t, err)

@@ -1000,9 +1000,14 @@ func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Propos
 
 	printDecidedHealth(w, "applied — these are pins in .seamark/lessons.yaml", applied, health)
 	if ids := escalateIDs(applied, health); len(ids) > 0 {
-		fmt.Fprintf(w, "\nnot landing — %s fire but the mistake recurs; escalation is yours: "+
+		verb := "fire"
+		if len(ids) == 1 {
+			verb = "fires"
+		}
+
+		fmt.Fprintf(w, "\nnot landing — %s %s but the mistake recurs; escalation is yours: "+
 			"reword the note, raise the pin, or graduate it to a check\n",
-			strings.Join(ids, ", "))
+			strings.Join(ids, ", "), verb)
 	}
 
 	printDecided(w, "dismissed — not re-proposed unless their evidence changes", dismissed)

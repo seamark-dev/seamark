@@ -621,19 +621,9 @@ func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int6
 	// Gather cannot measure get no Outcome, and the printer renders
 	// nothing for them.
 	if len(appliedPs) > 0 {
-		cfg, err := reviews.LoadConfig(root)
+		_, _, readings, err := gatherAppliedOutcomes(st, root, appliedPs)
 		if err != nil {
-			cfg = reviews.DefaultConfig()
-		}
-
-		firings, err := reviews.ReadFirings(root)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read firing log: %w", err)
-		}
-
-		readings, err := outcome.Gather(st, cfg, appliedPs, firings)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read applied proposal outcomes: %w", err)
+			return nil, err
 		}
 
 		for id, r := range readings {
@@ -968,19 +958,19 @@ func runLessonsStats(cmd *cobra.Command, opts *options) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	firings, err := reviews.ReadFirings(root)
-	if err != nil {
-		return fmt.Errorf("failed to read firing log: %w", err)
-	}
-
 	mined, err := st.AllLessons(0)
 	if err != nil {
 		return fmt.Errorf("failed to fetch mined lessons: %w", err)
 	}
 
-	cfg, err := reviews.LoadConfig(root)
+	applied, err := st.Proposals(model.ProposalApplied)
 	if err != nil {
-		cfg = reviews.DefaultConfig()
+		return fmt.Errorf("failed to fetch applied proposals: %w", err)
+	}
+
+	cfg, firings, readings, err := gatherAppliedOutcomes(st, root, applied)
+	if err != nil {
+		return err
 	}
 
 	// The set that COULD fire: what the config surfaces repo-wide.
@@ -988,19 +978,34 @@ func runLessonsStats(cmd *cobra.Command, opts *options) error {
 
 	report.PrintFiringSummary(cmd.OutOrStdout(), reviews.Summarize(firings, surfaced))
 
-	applied, err := st.Proposals(model.ProposalApplied)
+	report.PrintOutcomes(cmd.OutOrStdout(), applied, readings)
+
+	return nil
+}
+
+// gatherAppliedOutcomes is the shared evidence boundary for user-facing
+// outcome surfaces. A malformed lessons configuration must fail consistently:
+// silently substituting defaults would judge firings against rules the agent
+// never received.
+func gatherAppliedOutcomes(st *store.Store, root string, applied []model.Proposal) (
+	*reviews.Config, []reviews.Firing, map[int64]outcome.Reading, error,
+) {
+	cfg, err := reviews.LoadConfig(root)
 	if err != nil {
-		return fmt.Errorf("failed to fetch applied proposals: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to load lessons config: %w", err)
+	}
+
+	firings, err := reviews.ReadFirings(root)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to read firing log: %w", err)
 	}
 
 	readings, err := outcome.Gather(st, cfg, applied, firings)
 	if err != nil {
-		return fmt.Errorf("failed to gather applied proposal outcomes: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to gather applied proposal outcomes: %w", err)
 	}
 
-	report.PrintOutcomes(cmd.OutOrStdout(), applied, readings)
-
-	return nil
+	return cfg, firings, readings, nil
 }
 
 // hookOutput is the PreToolUse response shape: additionalContext is

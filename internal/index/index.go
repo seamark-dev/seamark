@@ -455,10 +455,6 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 		return res, fixCount, err
 	}
 
-	if err := st.SetMeta(store.MetaReviewsMinedAt, fmt.Sprint(time.Now().Unix())); err != nil {
-		return res, fixCount, err
-	}
-
 	return res, fixCount, nil
 }
 

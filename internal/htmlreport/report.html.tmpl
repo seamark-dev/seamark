@@ -12,13 +12,14 @@ path can never become an element.
 <title>seamark report — {{.Repo}}</title>
 <style>
 :root {
-  --ink:#14181A; --paper:#F4F3F0; --amber:#E8B23A; --rust:#C4553D; --sea:#4B7A6B;
+  --ink:#14181A; --paper:#F4F3F0; --amber:#E8B23A; --rust:#A33A2B; --sea:#4B7A6B;
   --bg:var(--paper); --fg:var(--ink); --dim:#6B7280; --line:#DDD9D2; --panel:#FFFFFF;
   --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,monospace;
   --sans:system-ui,-apple-system,sans-serif;
 }
 @media (prefers-color-scheme:dark) {
-  :root { --bg:#14181A; --fg:#F4F3F0; --dim:#8B95A1; --line:#262C30; --panel:#1B2124; }
+  :root { --bg:#14181A; --fg:#F4F3F0; --dim:#8B95A1; --line:#262C30; --panel:#1B2124;
+    --rust:#EF806B; }
 }
 * { box-sizing:border-box }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 var(--mono); }

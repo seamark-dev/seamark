@@ -443,8 +443,9 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding)
 	// Stamp the mine time in the same transaction: the freshness signal
 	// `seamark status` reports must never disagree with the data.
 	_, err = tx.Exec(
-		`INSERT INTO meta (key, value) VALUES ('reviews_mined_at', ?)
+		`INSERT INTO meta (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		MetaReviewsMinedAt,
 		fmt.Sprint(time.Now().Unix()),
 	)
 	if err != nil {
@@ -1530,7 +1531,7 @@ func (s *Store) CountCommitsTouching(regions []string, since, until int64) (int,
 }
 
 // Meta keys recording when each finding channel was last mined (unix
-// seconds, written by index.RefreshReviews). All readers and writers
+// seconds, written with the corresponding finding refresh). All readers and writers
 // must use these constants: a misspelled key does not error, it
 // silently reads as "never mined".
 const (

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -76,5 +78,7 @@ func TestLocalRuntimeIDIncludesFixtureToolchains(t *testing.T) {
 }
 
 func TestCLIVersionRejectsEmptyOutput(t *testing.T) {
-	assert.Equal(t, "unknown", cliVersion("/usr/bin/true"))
+	path := filepath.Join(t.TempDir(), "silent-agent")
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	assert.Equal(t, "unknown", cliVersion(path))
 }

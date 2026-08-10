@@ -343,6 +343,10 @@ func Run(ctx context.Context, cfg RunConfig) (Summary, error) {
 		return Summary{}, fmt.Errorf("unknown hook delivery mode %q", cfg.HookDelivery)
 	}
 
+	if err := validateDeliveredInstance(cfg, instance); err != nil {
+		return Summary{}, err
+	}
+
 	logf := cfg.Log
 	if logf == nil {
 		logf = func(string, ...any) {}
@@ -918,6 +922,22 @@ func knownHookDelivery(mode HookDeliveryMode) bool {
 	return mode == "" || mode == HookDeliveryAlways || mode == HookDeliveryOncePerContext
 }
 
+// validateDeliveredInstance applies the selected delivery policy before
+// validating both lesson documents. This is the exact YAML written into paid
+// treatment arms, so policy injection cannot turn an otherwise valid fixture
+// into an ambiguous or malformed configuration after preflight.
+func validateDeliveredInstance(cfg RunConfig, instance Instance) error {
+	delivered := instance
+	delivered.LessonYAML = lessonsForDelivery(cfg, instance.LessonYAML)
+	delivered.PlaceboYAML = lessonsForDelivery(cfg, instance.PlaceboYAML)
+
+	if err := delivered.Validate(); err != nil {
+		return fmt.Errorf("validate delivered lessons: %w", err)
+	}
+
+	return nil
+}
+
 // matchingTreatmentFirings distinguishes treatment delivery from ambient
 // audit activity. A valid firing must come from the edit hook, name the exact
 // installed pin, identify an edit tool, and target a file inside that pin's
@@ -1169,7 +1189,10 @@ func writeAgentSettings(dir, hookCommand, resetCommand string) error {
 		if resetCommand != "" {
 			hookSettings["PostCompact"] = []any{map[string]any{
 				"hooks": []any{map[string]any{
-					"type": "command", "command": resetCommand,
+					"type":          "command",
+					"command":       resetCommand,
+					"timeout":       10,
+					"statusMessage": "seamark: resetting lesson delivery",
 				}},
 			}}
 		}
@@ -1233,70 +1256,84 @@ func runAgent(parent context.Context, cfg RunConfig, instance Instance, dir stri
 	return stdout, stderr, 0, false, nil
 }
 
+// inheritedEnvironmentBlocklist contains host settings that can change fixture
+// generation, agent behavior, or validation. Every benchmark subprocess starts
+// from the same filtered environment; individual commands then add only their
+// explicitly owned settings.
+var inheritedEnvironmentBlocklist = map[string]bool{
+	"ANTHROPIC_MODEL":                true,
+	"ANTHROPIC_DEFAULT_OPUS_MODEL":   true,
+	"ANTHROPIC_DEFAULT_SONNET_MODEL": true,
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL":  true,
+	"CLAUDE_CODE_EFFORT_LEVEL":       true,
+	"CLAUDE_CONFIG_DIR":              true,
+	// Language and shell startup injection makes the same fixture behave
+	// differently depending on the operator's workstation.
+	"PYTHONPATH":              true,
+	"PYTHONHOME":              true,
+	"PYTHONSTARTUP":           true,
+	"PYTHONUSERBASE":          true,
+	"PYTHONINSPECT":           true,
+	"PYTHONWARNINGS":          true,
+	"PYTHONBREAKPOINT":        true,
+	"PYTHONPLATLIBDIR":        true,
+	"PYTHONEXECUTABLE":        true,
+	"PYTHONPYCACHEPREFIX":     true,
+	"PYTHONDONTWRITEBYTECODE": true,
+	"VIRTUAL_ENV":             true,
+	"PIP_CONFIG_FILE":         true,
+	"BASH_ENV":                true,
+	"ENV":                     true,
+	"CDPATH":                  true,
+	"GLOBIGNORE":              true,
+	"MAKEFLAGS":               true,
+	"MFLAGS":                  true,
+	"MAKEFILES":               true,
+	"GIT_DIR":                 true,
+	"GIT_WORK_TREE":           true,
+	"GIT_INDEX_FILE":          true,
+	"GIT_AUTHOR_NAME":         true,
+	"GIT_AUTHOR_EMAIL":        true,
+	"GIT_AUTHOR_DATE":         true,
+	"GIT_COMMITTER_NAME":      true,
+	"GIT_COMMITTER_EMAIL":     true,
+	"GIT_COMMITTER_DATE":      true,
+	"GIT_CONFIG_GLOBAL":       true,
+	"GIT_CONFIG_SYSTEM":       true,
+	"GIT_CONFIG_NOSYSTEM":     true,
+	"TMPDIR":                  true,
+	"GOCACHE":                 true,
+	"GOMODCACHE":              true,
+	"GOPATH":                  true,
+	"GOTOOLCHAIN":             true,
+	"GOPROXY":                 true,
+	"XDG_CACHE_HOME":          true,
+	"npm_config_cache":        true,
+	"PIP_CACHE_DIR":           true,
+	"PYTHONNOUSERSITE":        true,
+	"PYTHONHASHSEED":          true,
+	"PYTHONUTF8":              true,
+}
+
+func sanitizedEnvironment() []string {
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if !inheritedEnvironmentBlocklist[name] && !strings.HasPrefix(name, "GIT_CONFIG_") {
+			env = append(env, entry)
+		}
+	}
+
+	return env
+}
+
 func agentEnvironment(dir string) []string {
 	cache := filepath.Join(dir, ".bench-cache")
 	for _, sub := range []string{"tmp", "go-build", "go-mod", "go-path", "xdg", "npm", "pip"} {
 		_ = os.MkdirAll(filepath.Join(cache, sub), 0o755)
 	}
 
-	// Explicit CLI flags own model and effort selection. Inherited selectors
-	// would make a supposedly pinned run depend on the caller's shell.
-	drop := map[string]bool{
-		"ANTHROPIC_MODEL":                true,
-		"ANTHROPIC_DEFAULT_OPUS_MODEL":   true,
-		"ANTHROPIC_DEFAULT_SONNET_MODEL": true,
-		"ANTHROPIC_DEFAULT_HAIKU_MODEL":  true,
-		"CLAUDE_CODE_EFFORT_LEVEL":       true,
-		"CLAUDE_CONFIG_DIR":              true,
-		// Language and shell startup injection makes the same fixture behave
-		// differently depending on the operator's workstation.
-		"PYTHONPATH":              true,
-		"PYTHONHOME":              true,
-		"PYTHONSTARTUP":           true,
-		"PYTHONUSERBASE":          true,
-		"PYTHONINSPECT":           true,
-		"PYTHONWARNINGS":          true,
-		"PYTHONBREAKPOINT":        true,
-		"PYTHONPLATLIBDIR":        true,
-		"PYTHONEXECUTABLE":        true,
-		"PYTHONPYCACHEPREFIX":     true,
-		"PYTHONDONTWRITEBYTECODE": true,
-		"VIRTUAL_ENV":             true,
-		"PIP_CONFIG_FILE":         true,
-		"BASH_ENV":                true,
-		"ENV":                     true,
-		"CDPATH":                  true,
-		"GLOBIGNORE":              true,
-		"MAKEFLAGS":               true,
-		"MFLAGS":                  true,
-		"MAKEFILES":               true,
-		"GIT_DIR":                 true,
-		"GIT_WORK_TREE":           true,
-		"GIT_INDEX_FILE":          true,
-		"GIT_CONFIG_GLOBAL":       true,
-		"GIT_CONFIG_SYSTEM":       true,
-		"GIT_CONFIG_NOSYSTEM":     true,
-		"TMPDIR":                  true,
-		"GOCACHE":                 true,
-		"GOMODCACHE":              true,
-		"GOPATH":                  true,
-		"GOTOOLCHAIN":             true,
-		"GOPROXY":                 true,
-		"XDG_CACHE_HOME":          true,
-		"npm_config_cache":        true,
-		"PIP_CACHE_DIR":           true,
-		"PYTHONNOUSERSITE":        true,
-		"PYTHONHASHSEED":          true,
-		"PYTHONUTF8":              true,
-	}
-
-	env := make([]string, 0, len(os.Environ())+12)
-	for _, entry := range os.Environ() {
-		name, _, _ := strings.Cut(entry, "=")
-		if !drop[name] && !strings.HasPrefix(name, "GIT_CONFIG_") {
-			env = append(env, entry)
-		}
-	}
+	env := sanitizedEnvironment()
 
 	env = append(
 		env,

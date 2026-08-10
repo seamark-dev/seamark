@@ -98,7 +98,7 @@ func applyCacheVersionNaive(dir string) error {
 		"server/domain.py":     cacheVersionDomainGold,
 		"server/presenters.py": cacheVersionPresentersGold,
 	} {
-		if err := os.WriteFile(filepath.Join(dir, rel), []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(rel)), []byte(content), 0o644); err != nil {
 			return err
 		}
 	}

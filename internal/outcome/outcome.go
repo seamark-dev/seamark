@@ -7,7 +7,6 @@ package outcome
 
 import (
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/distill"
@@ -139,6 +138,7 @@ func Gather(st *store.Store, cfg *reviews.Config, applied []model.Proposal,
 	// Groups are not persisted anywhere, so re-derive them once here;
 	// the same run serves every pin's fix-side join below.
 	groups := distill.NewLexicalGrouper().Group(all)
+	links := indexFindingLinks(all, groups)
 	exposure := reviews.FirstFirings(firings)
 
 	out := make(map[int64]Reading, len(applied))
@@ -179,7 +179,7 @@ func Gather(st *store.Store, cfg *reviews.Config, applied []model.Proposal,
 				return nil, fmt.Errorf("failed to count post-exposure commits for %s: %w", pin, err)
 			}
 
-			r = assess(exp, true, linked(p.Members, all, groups), pre, post, minedThrough)
+			r = assess(exp, true, linked(p.Members, links), pre, post, minedThrough)
 		}
 
 		r.ProposalID = p.ID
@@ -190,6 +190,52 @@ func Gather(st *store.Store, cfg *reviews.Config, applied []model.Proposal,
 	return out, nil
 }
 
+// findingLinks indexes the two one-hop relationships used by outcome
+// measurement. all retains store order so linked returns byte-for-byte the same
+// ordering as the finding corpus after selecting through either index.
+type findingLinks struct {
+	all               []model.Finding
+	byID              map[int64]model.Finding
+	byKey             map[string][]int64
+	groupsByFindingID map[int64][]int64
+}
+
+func indexFindingLinks(all []model.Finding, groups []distill.Group) findingLinks {
+	links := findingLinks{
+		all:               all,
+		byID:              make(map[int64]model.Finding, len(all)),
+		byKey:             make(map[string][]int64),
+		groupsByFindingID: make(map[int64][]int64),
+	}
+
+	for _, f := range all {
+		links.byID[f.ID] = f
+		if f.LessonKey != "" {
+			links.byKey[f.LessonKey] = append(links.byKey[f.LessonKey], f.ID)
+		}
+	}
+
+	for _, group := range groups {
+		// Area groups bucket findings by location rather than shared mistake.
+		if group.Area {
+			continue
+		}
+
+		var fixes []int64
+		for _, f := range group.Findings {
+			if f.LessonKey == "" {
+				fixes = append(fixes, f.ID)
+			}
+		}
+
+		for _, f := range group.Findings {
+			links.groupsByFindingID[f.ID] = append(links.groupsByFindingID[f.ID], fixes...)
+		}
+	}
+
+	return links
+}
+
 // linked returns the findings tied to a pin's mistake, through two
 // joins: review findings that share a cluster key with a cited
 // finding, and fix findings that share a lexical group with one (fix
@@ -197,52 +243,27 @@ func Gather(st *store.Store, cfg *reviews.Config, applied []model.Proposal,
 // Both joins reach one hop from the citations; there is no transitive
 // chaining. The result has no duplicates and keeps the id order of
 // the findings table.
-func linked(members []int64, all []model.Finding, groups []distill.Group) []model.Finding {
-	member := make(map[int64]bool, len(members))
+func linked(members []int64, links findingLinks) []model.Finding {
 	want := make(map[int64]bool, len(members))
-	keys := make(map[string]bool)
 
 	for _, id := range members {
-		member[id] = true
 		want[id] = true
-	}
 
-	for _, f := range all {
-		// Skip the empty key: every fix finding carries "", so letting
-		// it into the set would join the entire fix corpus to the pin.
-		if member[f.ID] && f.LessonKey != "" {
-			keys[f.LessonKey] = true
-		}
-	}
-
-	for _, g := range groups {
-		// Skip area groups: they bucket unrelated findings that only
-		// share a directory, so membership there does not mean the
-		// same mistake.
-		if g.Area {
-			continue
-		}
-
-		if !slices.ContainsFunc(g.Findings, func(f model.Finding) bool {
-			return member[f.ID]
-		}) {
-			continue
-		}
-
-		for _, f := range g.Findings {
-			// Only take findings without a cluster key. Keyed (review)
-			// findings join by exact lesson_key above; two different
-			// clusters sharing vocabulary is not a recurrence.
-			if f.LessonKey == "" {
-				want[f.ID] = true
+		if f, ok := links.byID[id]; ok && f.LessonKey != "" {
+			for _, linkedID := range links.byKey[f.LessonKey] {
+				want[linkedID] = true
 			}
+		}
+
+		for _, linkedID := range links.groupsByFindingID[id] {
+			want[linkedID] = true
 		}
 	}
 
 	var out []model.Finding
 
-	for _, f := range all {
-		if want[f.ID] || keys[f.LessonKey] {
+	for _, f := range links.all {
+		if want[f.ID] {
 			out = append(out, f)
 		}
 	}

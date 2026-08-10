@@ -24,6 +24,15 @@ func head(t *testing.T, dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
+func noopAgent(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "noop-agent")
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	return path
+}
+
 // TestRunArmsInstallTheRightLesson checks the two optional arms: file-only
 // gets the treatment lesson without a hook, while placebo gets the hook and a
 // distinct lesson.
@@ -103,7 +112,7 @@ func TestRunStopsCleanlyOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	sum, err := Run(ctx, RunConfig{Trials: 3, AgentArgv: []string{"/usr/bin/true"}})
+	sum, err := Run(ctx, RunConfig{Trials: 3, AgentArgv: []string{noopAgent(t)}})
 	require.NoError(t, err, "a cancelled run reports partial results, not an error")
 	assert.Empty(t, sum.Rows)
 }
@@ -122,7 +131,7 @@ func TestRunPersistsCompletedArmWhenPairIsCancelled(t *testing.T) {
 
 	sum, err := Run(ctx, RunConfig{
 		Trials: 1, Arms: []Arm{ArmHookOff, ArmFileOnly}, Instance: instance,
-		AgentArgv: []string{"/usr/bin/true"}, Out: out,
+		AgentArgv: []string{noopAgent(t)}, Out: out,
 	})
 	require.NoError(t, err)
 	require.Len(t, sum.Rows, 1)
@@ -152,7 +161,7 @@ func TestRunPersistsCompletedArmWhenPairedSetupFails(t *testing.T) {
 
 	sum, err := Run(context.Background(), RunConfig{
 		Trials: 1, Arms: []Arm{ArmHookOff, ArmFileOnly}, Instance: instance,
-		AgentArgv: []string{"/usr/bin/true"}, Out: out,
+		AgentArgv: []string{noopAgent(t)}, Out: out,
 	})
 	require.Error(t, err)
 	require.Len(t, sum.Rows, 1)
@@ -195,7 +204,7 @@ func TestRunSingleArm(t *testing.T) {
 	sum, err := Run(context.Background(), RunConfig{
 		Trials:    1,
 		Arms:      []Arm{ArmHookOff},
-		AgentArgv: []string{"/usr/bin/true"},
+		AgentArgv: []string{noopAgent(t)},
 	})
 	require.NoError(t, err)
 
@@ -300,6 +309,9 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	t.Setenv("VIRTUAL_ENV", "/host/venv")
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
+	t.Setenv("GIT_CONFIG_VALUE_0", "/host/hooks")
+	t.Setenv("GIT_AUTHOR_NAME", "host author")
+	t.Setenv("GIT_COMMITTER_EMAIL", "host@example.com")
 
 	env := agentEnvironment(dir)
 	joined := strings.Join(env, "\n")
@@ -312,6 +324,9 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	assert.NotContains(t, joined, "VIRTUAL_ENV=/host/venv")
 	assert.NotContains(t, joined, "GIT_CONFIG_COUNT=1")
 	assert.NotContains(t, joined, "GIT_CONFIG_KEY_0=core.hooksPath")
+	assert.NotContains(t, joined, "GIT_CONFIG_VALUE_0=/host/hooks")
+	assert.NotContains(t, joined, "GIT_AUTHOR_NAME=host author")
+	assert.NotContains(t, joined, "GIT_COMMITTER_EMAIL=host@example.com")
 	assert.Contains(t, joined, "GOCACHE="+filepath.Join(dir, ".bench-cache", "go-build"))
 	assert.Contains(t, joined, "GOPROXY=off")
 	assert.Contains(t, joined, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
@@ -397,6 +412,9 @@ func TestPriorCostForFingerprint(t *testing.T) {
 		require.NoError(t, appendRow(path, row))
 	}
 
+	_, _, _, ok = PriorCostFor(path, "")
+	assert.False(t, ok, "an empty fingerprint must never pool unrelated cohorts")
+
 	rows, meanContext, meanCost, ok := PriorCostFor(path, "wanted")
 	require.True(t, ok)
 	assert.Equal(t, 1, rows)
@@ -410,7 +428,7 @@ func TestRunPreservesCallerWorkDirAndRemovesOnlyTrial(t *testing.T) {
 	require.NoError(t, os.WriteFile(sentinel, []byte("keep"), 0o644))
 
 	_, err := Run(context.Background(), RunConfig{
-		Trials: 1, Arms: []Arm{ArmHookOff}, AgentArgv: []string{"/usr/bin/true"},
+		Trials: 1, Arms: []Arm{ArmHookOff}, AgentArgv: []string{noopAgent(t)},
 		WorkDir: work,
 	})
 	require.NoError(t, err)
@@ -430,7 +448,7 @@ func TestRunDoesNotReuseOrRemovePreexistingTrialDir(t *testing.T) {
 	require.NoError(t, os.WriteFile(sentinel, []byte("keep"), 0o644))
 
 	_, err := Run(context.Background(), RunConfig{
-		Trials: 1, Arms: []Arm{ArmHookOff}, AgentArgv: []string{"/usr/bin/true"},
+		Trials: 1, Arms: []Arm{ArmHookOff}, AgentArgv: []string{noopAgent(t)},
 		WorkDir: work,
 	})
 	require.Error(t, err)
@@ -443,7 +461,7 @@ func TestRunDoesNotReuseOrRemovePreexistingTrialDir(t *testing.T) {
 func TestRunRejectsUnknownArmBeforeStarting(t *testing.T) {
 	work := t.TempDir()
 	sum, err := Run(context.Background(), RunConfig{
-		Trials: 1, Arms: []Arm{"future-arm"}, AgentArgv: []string{"/usr/bin/true"},
+		Trials: 1, Arms: []Arm{"future-arm"}, AgentArgv: []string{noopAgent(t)},
 		WorkDir: work, Keep: true,
 	})
 	require.Error(t, err)
@@ -457,11 +475,42 @@ func TestRunRejectsUnknownArmBeforeStarting(t *testing.T) {
 func TestRunRejectsUnknownHookDeliveryBeforeStarting(t *testing.T) {
 	work := t.TempDir()
 	sum, err := Run(context.Background(), RunConfig{
-		Trials: 1, Arms: []Arm{ArmHookOff}, AgentArgv: []string{"/usr/bin/true"},
+		Trials: 1, Arms: []Arm{ArmHookOff}, AgentArgv: []string{noopAgent(t)},
 		WorkDir: work, Keep: true, HookDelivery: "sometimes",
 	})
 	require.ErrorContains(t, err, "unknown hook delivery mode")
 	assert.Empty(t, sum.Rows)
+}
+
+func TestRunRejectsInvalidDeliveredLessonsBeforeStarting(t *testing.T) {
+	work := t.TempDir()
+	instance := SchemaSyncInstance()
+	instance.LessonYAML = "hook_delivery: always\n" + instance.LessonYAML
+
+	sum, err := Run(context.Background(), RunConfig{
+		Trials: 1, Arms: []Arm{ArmHookOff}, AgentArgv: []string{noopAgent(t)},
+		Instance: instance, WorkDir: work, Keep: true,
+		HookDelivery: HookDeliveryOncePerContext,
+	})
+	require.ErrorContains(t, err, "validate delivered lessons")
+	assert.Empty(t, sum.Rows)
+	entries, readErr := os.ReadDir(work)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries, "invalid delivered YAML must fail before fixture generation")
+}
+
+func TestPreflightRejectsMissingSeamarkBeforeGeneratingFixture(t *testing.T) {
+	generated := false
+	instance := SchemaSyncInstance()
+	instance.Generate = func(string) error {
+		generated = true
+
+		return nil
+	}
+
+	err := Preflight(context.Background(), RunConfig{Instance: instance})
+	require.ErrorContains(t, err, "preflight requires the seamark binary")
+	assert.False(t, generated)
 }
 
 func TestWireArmOncePerContextInstallsPolicyAndReset(t *testing.T) {
@@ -481,6 +530,8 @@ func TestWireArmOncePerContextInstallsPolicyAndReset(t *testing.T) {
 	assert.Contains(t, string(settings), "lessons --hook")
 	assert.Contains(t, string(settings), "PostCompact")
 	assert.Contains(t, string(settings), "lessons --hook-reset")
+	assert.Contains(t, string(settings), `"timeout": 10`)
+	assert.Contains(t, string(settings), `"statusMessage": "seamark: resetting lesson delivery"`)
 }
 
 func TestMatchingTreatmentFiringsRequiresIdentitySurfaceToolAndRegion(t *testing.T) {
@@ -736,6 +787,7 @@ func TestFingerprintSourceBoundary(t *testing.T) {
 		names[entry.Name()] = true
 	}
 	assert.True(t, names["fingerprint.go"], "fingerprint logic must bind its own implementation")
+	assert.True(t, names["results.go"], "row validation semantics must be part of the run identity")
 	assert.False(t, names["catalog.go"], "catalogue-only additions must not invalidate existing cohorts")
 
 	instance := SchemaSyncInstance()

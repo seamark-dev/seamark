@@ -595,7 +595,7 @@ func TestProposalLedgerRendersOutcome(t *testing.T) {
 	assert.Contains(t, out, "not landing — recurred 2× since exposure (fired 12×)")
 
 	// The escalation hint names exactly the not-landing set.
-	assert.Contains(t, out, "not landing — p47 fire but the mistake recurs")
+	assert.Contains(t, out, "not landing — p47 fires but the mistake recurs")
 	assert.NotContains(t, out, "p16 fire")
 
 	// Two measured pins, two sentences — p9 has no reading, so no line.

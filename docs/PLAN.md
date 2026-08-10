@@ -467,7 +467,7 @@ cost tier, cheapest wins:
 
 ## Current architecture (as built)
 
-```
+```text
 cmd/seamark/            entry point
 cmd/lessons-bench*/     controlled agent benchmark and report entry points
 internal/cli/           init, index, why/orient, lessons, gate/check, state,

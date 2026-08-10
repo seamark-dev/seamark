@@ -21,6 +21,13 @@ func Preflight(ctx context.Context, cfg RunConfig) error {
 	if !knownHookDelivery(cfg.HookDelivery) {
 		return fmt.Errorf("unknown hook delivery mode %q", cfg.HookDelivery)
 	}
+	if cfg.SeamarkBin == "" {
+		return fmt.Errorf("preflight requires the seamark binary")
+	}
+
+	if err := validateDeliveredInstance(cfg, instance); err != nil {
+		return err
+	}
 
 	root, err := os.MkdirTemp("", "seamark-bench-preflight-")
 	if err != nil {
@@ -96,10 +103,6 @@ func Preflight(ctx context.Context, cfg RunConfig) error {
 
 	if results := runChecks(ctx, baseA, instance.Checks); !checksPass(results) {
 		return fmt.Errorf("canonical patch checks failed: %s", failedChecks(results))
-	}
-
-	if cfg.SeamarkBin == "" {
-		return fmt.Errorf("preflight requires the seamark binary")
 	}
 
 	off := filepath.Join(root, "hook-off")
