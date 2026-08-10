@@ -6,8 +6,39 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
-## Unreleased
+## v0.3.0 — 2026-08-10
 
+The outcome line: the system now measures whether its own lessons work —
+passively from data every repo already has, and actively with a
+controlled, reproducible benchmark — and tunes how lessons are
+delivered based on what those measurements showed.
+
+- **The passive outcome loop.** Every applied pin now carries a verdict
+  computed from data seamark already holds — the firing log, the
+  finding table, and mined history: `working` (flagged N× before
+  exposure, none since, across enough region commits), `not landing`
+  (the pin fires and the mistake recurs — the ledger names these and
+  suggests escalation), or `untested` (with the missing evidence named:
+  never fired, quiet region, evidence not mined since exposure,
+  citations aged out). Rendered as the same falsifiable sentence in
+  `lessons --stats`, the `--proposals` ledger, and the HTML report.
+  Deterministic, recomputed per ask, no new stored state. Exposure
+  starts at a pin's first firing — a pin no agent ever saw cannot have
+  changed behavior — and mining freshness is now stamped so absence of
+  recurrence is never claimed from an unmined corpus.
+- **A controlled lessons benchmark, with its first passing claim.**
+  `make lessons-bench` runs paired headless agent sessions in generated
+  fixture repositories built around owner-specific invariants that
+  public checks do not cover (a generated TS client, a cache version, an
+  async worker registry). Model and effort are pinned, sessions are
+  sandboxed and budget-capped, every row carries artifact digests, and
+  a no-spend preflight proves the judges discriminate before anything
+  is purchased. The first clean cohort (3 instances × 5 valid pairs,
+  Haiku, medium effort) passed the pre-frozen claim: hook-on preserved
+  the owner invariant 15/15 versus 3/15 hook-off, +80 pp mean lift, no
+  visible-task regressions ([bench/lessons-report-v5.md](bench/lessons-report-v5.md)).
+  Reproducible controlled evidence under exact conditions — not
+  external validation.
 - **Once-per-context lesson delivery.** `.seamark/lessons.yaml` now accepts
   `hook_delivery: once-per-context` to inject each matching lesson once in the
   current agent context instead of repeating it after every edit. The default
