@@ -303,6 +303,25 @@ func TestValidateResultRowRequiresConsistentV6HookIntensity(t *testing.T) {
 	assert.NoError(t, ValidateResultRow(row))
 }
 
+func TestValidateResultRowRejectsCheckSummaryMismatch(t *testing.T) {
+	t.Run("summary passes with failed check", func(t *testing.T) {
+		row := validReportRow("run-a", ArmHookOff, 1, false)
+		row.Checks[0].Pass = false
+
+		require.ErrorContains(t, ValidateResultRow(row),
+			"checks_pass does not match individual check results")
+	})
+
+	t.Run("summary fails with all checks passing", func(t *testing.T) {
+		row := validReportRow("run-a", ArmHookOff, 1, false)
+		row.TaskDone = false
+		row.ChecksPass = false
+
+		require.ErrorContains(t, ValidateResultRow(row),
+			"checks_pass does not match individual check results")
+	})
+}
+
 func TestCommittedClaimsAndResultSchemaAreValid(t *testing.T) {
 	registry, err := LoadClaimRegistry(filepath.Join("..", "..", "bench", "claims.yaml"))
 	require.NoError(t, err)
@@ -344,7 +363,7 @@ func TestCommittedClaimsAndResultSchemaAreValid(t *testing.T) {
 	}
 	allOf, ok := schema["allOf"].([]any)
 	require.True(t, ok)
-	require.Len(t, allOf, 6)
+	require.Len(t, allOf, 7)
 	alwaysConstraint, ok := allOf[0].(map[string]any)
 	require.True(t, ok)
 	ifSchema, ok := alwaysConstraint["if"].(map[string]any)
@@ -361,6 +380,11 @@ func TestCommittedClaimsAndResultSchemaAreValid(t *testing.T) {
 	thenSuppressed, ok := thenProperties["hook_suppressed"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, float64(0), thenSuppressed["const"])
+
+	checksConstraint, ok := allOf[3].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, checksConstraint, "then", "checks_pass=true must require every check to pass")
+	assert.Contains(t, checksConstraint, "else", "checks_pass=false must require a failed check")
 
 	v5, err := os.ReadFile(filepath.Join("..", "..", "bench", "result.schema.json"))
 	require.NoError(t, err)

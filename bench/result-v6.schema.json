@@ -154,6 +154,33 @@
     },
     {
       "if": {
+        "properties": { "checks_pass": { "const": true } },
+        "required": ["checks_pass"]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "items": {
+              "properties": { "pass": { "const": true } },
+              "required": ["pass"]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "checks": {
+            "contains": {
+              "properties": { "pass": { "const": false } },
+              "required": ["pass"]
+            },
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
         "properties": { "pair_valid": { "const": true } },
         "required": ["pair_valid"]
       },
