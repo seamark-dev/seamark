@@ -883,7 +883,9 @@ func wireArm(ctx context.Context, dir string, cfg RunConfig, instance Instance, 
 	case ArmHookOff:
 		return writeAgentSettings(dir, "", "")
 	case ArmFileOnly:
-		if err := writeLessons(dir, lessonsForDelivery(cfg, instance.LessonYAML)); err != nil {
+		// Delivery policy config belongs to the hook mechanism. Keep the
+		// file-only control byte-identical across hook policies.
+		if err := writeLessons(dir, instance.LessonYAML); err != nil {
 			return err
 		}
 
@@ -968,6 +970,18 @@ func matchingTreatmentFirings(dir string, pin reviews.PinRule) (hookIntensity, e
 	result := hookIntensity{AuditRows: len(firings)}
 
 	for i, firing := range firings {
+		switch firing.Delivery {
+		case "", reviews.DeliveryInjected, reviews.DeliverySuppressedRepeat:
+		default:
+			return hookIntensity{}, fmt.Errorf("audit row %d has unknown hook delivery status %q",
+				i+1, firing.Delivery)
+		}
+
+		if firing.Delivery != "" && firing.Surface != "" {
+			return hookIntensity{}, fmt.Errorf("audit row %d has hook delivery status on surface %q",
+				i+1, firing.Surface)
+		}
+
 		if firing.Surface != "" || !editTool(firing.Tool) ||
 			firing.File == "" || len(firing.Files) != 0 ||
 			!pinAppliesToFile(pin, firing.File) {
@@ -1257,16 +1271,55 @@ func runAgent(parent context.Context, cfg RunConfig, instance Instance, dir stri
 }
 
 // inheritedEnvironmentBlocklist contains host settings that can change fixture
-// generation, agent behavior, or validation. Every benchmark subprocess starts
-// from the same filtered environment; individual commands then add only their
-// explicitly owned settings.
+// generation, agent behavior, provider routing, or validation. Authentication
+// variables and CLAUDE_CONFIG_DIR are intentionally preserved: the benchmark
+// must keep working with the operator's existing subscription or API-key login
+// without copying secrets.
+// Every benchmark subprocess starts from the same filtered environment;
+// individual commands then add only their explicitly owned settings.
 var inheritedEnvironmentBlocklist = map[string]bool{
-	"ANTHROPIC_MODEL":                true,
-	"ANTHROPIC_DEFAULT_OPUS_MODEL":   true,
-	"ANTHROPIC_DEFAULT_SONNET_MODEL": true,
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL":  true,
-	"CLAUDE_CODE_EFFORT_LEVEL":       true,
-	"CLAUDE_CONFIG_DIR":              true,
+	"ANTHROPIC_MODEL":                       true,
+	"ANTHROPIC_DEFAULT_OPUS_MODEL":          true,
+	"ANTHROPIC_DEFAULT_SONNET_MODEL":        true,
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL":         true,
+	"ANTHROPIC_SMALL_FAST_MODEL":            true,
+	"ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION": true,
+	"ANTHROPIC_BASE_URL":                    true,
+	"ANTHROPIC_AWS_BASE_URL":                true,
+	"ANTHROPIC_BEDROCK_BASE_URL":            true,
+	"ANTHROPIC_VERTEX_BASE_URL":             true,
+	"ANTHROPIC_FOUNDRY_BASE_URL":            true,
+	"ANTHROPIC_FOUNDRY_RESOURCE":            true,
+	"ANTHROPIC_CUSTOM_HEADERS":              true,
+	"CLAUDE_CODE_EFFORT_LEVEL":              true,
+	"CLAUDE_CODE_USE_ANTHROPIC_AWS":         true,
+	"CLAUDE_CODE_USE_BEDROCK":               true,
+	"CLAUDE_CODE_USE_FOUNDRY":               true,
+	"CLAUDE_CODE_USE_MANTLE":                true,
+	"CLAUDE_CODE_USE_VERTEX":                true,
+	"CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST":  true,
+	"CLAUDE_CODE_EXTRA_BODY":                true,
+	"CLAUDE_CODE_MAX_CONTEXT_TOKENS":        true,
+	"CLAUDE_CODE_DISABLE_1M_CONTEXT":        true,
+	"CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": true,
+	"CLAUDE_CODE_DISABLE_THINKING":          true,
+	"DISABLE_INTERLEAVED_THINKING":          true,
+	"MAX_THINKING_TOKENS":                   true,
+	"DISABLE_PROMPT_CACHING":                true,
+	"DISABLE_PROMPT_CACHING_FABLE":          true,
+	"DISABLE_PROMPT_CACHING_HAIKU":          true,
+	"DISABLE_PROMPT_CACHING_OPUS":           true,
+	"DISABLE_PROMPT_CACHING_SONNET":         true,
+	// Values owned below must be removed before their pinned replacements are
+	// appended. Duplicate environment keys have platform-dependent lookup
+	// behavior and make the effective runtime ambiguous.
+	"CLAUDE_CODE_DISABLE_AUTO_MEMORY":          true,
+	"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":       true,
+	"CLAUDE_CODE_DISABLE_POLICY_SKILLS":        true,
+	"ENABLE_CLAUDEAI_MCP_SERVERS":              true,
+	"DISABLE_AUTOUPDATER":                      true,
+	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": true,
+	"CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL":        true,
 	// Language and shell startup injection makes the same fixture behave
 	// differently depending on the operator's workstation.
 	"PYTHONPATH":              true,
@@ -1338,6 +1391,9 @@ func agentEnvironment(dir string) []string {
 	env = append(
 		env,
 		"CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
+		"CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1",
+		"CLAUDE_CODE_DISABLE_POLICY_SKILLS=1",
+		"ENABLE_CLAUDEAI_MCP_SERVERS=false",
 		"DISABLE_AUTOUPDATER=1",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 		"CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1",

@@ -201,9 +201,10 @@ func TestSummarize(t *testing.T) {
 	assert.Equal(t, 1, s.SuppressedHookFirings)
 
 	require.NotEmpty(t, s.Ranked)
-	assert.Equal(t, "E702", s.Ranked[0].Symptom, "most-fired first")
+	assert.Equal(t, "E702", s.Ranked[0].Symptom, "most-matched first")
 	assert.Equal(t, 2, s.Ranked[0].Count)
-	assert.Equal(t, "2026-07-02T00:00:00Z", s.Ranked[0].LastTS, "latest firing wins")
+	assert.Equal(t, 3, s.Ranked[0].Matches)
+	assert.Equal(t, "2026-07-03T00:00:00Z", s.Ranked[0].LastTS, "latest match wins")
 
 	require.Len(t, s.NeverFired, 1)
 	assert.Equal(t, "E501", s.NeverFired[0].Symptom, "surfaced but never fired = decay candidate")
@@ -264,6 +265,7 @@ func TestExposureSurvivesCosmeticPinEdits(t *testing.T) {
 	exp, ok := exposure[PinIdentity(edited)]
 	require.True(t, ok)
 	assert.Equal(t, 2, exp.Count, "a suppressed repeat is not an exposure")
+	assert.Equal(t, 3, exp.Matches, "suppressed repeats remain visible as matching opportunities")
 	assert.True(t, exp.First.Equal(time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)))
 
 	// A reworded note is a new treatment: the clock resets.

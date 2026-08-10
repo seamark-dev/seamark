@@ -394,7 +394,10 @@ the log into which lessons actually reach agents, split by surface (a
 *would* surface but never have (a lesson whose region no edit touches is a
 pruning candidate). For
 instrumented hook records it also reports injected context bytes, repeated
-in-session injections, and suppressed repeats:
+in-session injections, and suppressed repeats. Per-lesson rankings keep actual
+delivery and matching opportunities separate: after one injection and three
+suppressed edits, a lesson reads `×1 delivered / ×4 matched` rather than looking
+as cold as a lesson that matched only once:
 
 ```text
 $ seamark lessons --stats
@@ -427,6 +430,11 @@ fixed again after that), and mined history (how many commits touched
 the pin's regions since, so silence in a quiet region is never read as
 success). Everything is recomputed on each run; there is no model
 call, no score, and no new state.
+
+With `once-per-context`, outcome sentences continue to start exposure at the
+first actual delivery, but also show total matches when repeats were suppressed
+(for example, `delivered 1×; matched 4×`). This keeps “reached the agent” distinct
+from “the edited region matched the pin.”
 
 Three verdicts, each a sentence you can check against your own repo:
 

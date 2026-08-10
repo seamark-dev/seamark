@@ -282,8 +282,9 @@ func readAuditLine(br *bufio.Reader, limit int) (line []byte, tooLong bool, err 
 type Fired struct {
 	Region  string
 	Symptom string
-	Count   int
-	LastTS  string
+	Count   int    // records that delivered this lesson
+	Matches int    // delivered plus suppressed records naming this lesson
+	LastTS  string // most recent delivered or suppressed match
 }
 
 // Summary is the aggregate the `--stats` view renders.
@@ -294,7 +295,7 @@ type Summary struct {
 	// and "edits reminded" must not count the other two.
 	BySurface  map[string]int
 	Files      int            // distinct files that triggered a firing
-	Ranked     []Fired        // surfaced lessons that fired, most-fired first
+	Ranked     []Fired        // surfaced lessons, most matching opportunities first
 	NeverFired []model.Lesson // lessons that would surface but never have
 	// Delivery-intensity fields cover current instrumented edit-hook rows.
 	// RepeatedHookFirings is a subset of InstrumentedHookFirings where every
@@ -326,11 +327,40 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 	var instrumented, repeated, suppressed, contextBytes int
 
 	for _, fr := range firings {
-		if !fr.Delivered() {
-			if fr.Surface == "" && fr.Delivery == DeliverySuppressedRepeat {
-				suppressed++
+		// Unknown delivery values are corrupt future/input records. Product stats
+		// stay best-effort and skip them; the benchmark's strict evidence path
+		// rejects them instead.
+		switch fr.Delivery {
+		case "", DeliveryInjected:
+		case DeliverySuppressedRepeat:
+			if fr.Surface != "" {
+				continue
+			}
+		default:
+			continue
+		}
+
+		isSuppressed := fr.Surface == "" && fr.Delivery == DeliverySuppressedRepeat
+		if isSuppressed {
+			suppressed++
+		}
+
+		for _, fl := range fr.Fired {
+			k := key{fl.Region, fl.Symptom}
+
+			f := count[k]
+			if f == nil {
+				f = &Fired{Region: fl.Region, Symptom: fl.Symptom}
+				count[k] = f
 			}
 
+			f.Matches++
+			if fr.TS > f.LastTS {
+				f.LastTS = fr.TS
+			}
+		}
+
+		if !fr.Delivered() {
 			continue
 		}
 
@@ -374,17 +404,7 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 
 		for _, fl := range fr.Fired {
 			k := key{fl.Region, fl.Symptom}
-
-			f := count[k]
-			if f == nil {
-				f = &Fired{Region: fl.Region, Symptom: fl.Symptom}
-				count[k] = f
-			}
-
-			f.Count++
-			if fr.TS > f.LastTS {
-				f.LastTS = fr.TS
-			}
+			count[k].Count++
 		}
 	}
 
@@ -394,6 +414,10 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 	}
 
 	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].Matches != ranked[j].Matches {
+			return ranked[i].Matches > ranked[j].Matches
+		}
+
 		if ranked[i].Count != ranked[j].Count {
 			return ranked[i].Count > ranked[j].Count
 		}
@@ -410,7 +434,8 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 			continue
 		}
 
-		if _, ok := count[key{l.Region, l.Symptom}]; !ok {
+		f, ok := count[key{l.Region, l.Symptom}]
+		if !ok || f.Count == 0 {
 			never = append(never, l)
 		}
 	}
@@ -433,21 +458,38 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 // apply date — starts the outcome loop's exposure clock, because a pin
 // that never surfaced cannot have changed behavior.
 type Exposure struct {
-	First time.Time // earliest firing with a parseable timestamp, UTC
-	Count int       // firing records naming this lesson, all surfaces
+	First   time.Time // earliest delivered firing with a parseable timestamp, UTC
+	Count   int       // delivered firing records naming this lesson, all surfaces
+	Matches int       // delivered plus suppressed records naming this lesson
 }
 
-// FirstFirings folds the firing log into per-identity exposure. Keys
-// are canonical identities; look pins up with PinIdentity, never by
+// FirstFirings folds the firing log into per-identity exposure and matching
+// opportunities. Suppressed matches increase Matches but never Count or First.
+// Keys are canonical identities; look pins up with PinIdentity, never by
 // re-building the rendered strings. A record with an unparseable
 // timestamp still counts toward Count but cannot set First; an
 // identity with no parseable timestamp at all is omitted, which
 // downstream reads as never fired.
 func FirstFirings(firings []Firing) map[FiredLesson]Exposure {
 	counts := make(map[FiredLesson]int)
+	matches := make(map[FiredLesson]int)
 	filtered := make(map[FiredLesson]time.Time)
 
 	for _, entry := range firings {
+		switch entry.Delivery {
+		case "", DeliveryInjected:
+		case DeliverySuppressedRepeat:
+			if entry.Surface != "" {
+				continue
+			}
+		default:
+			continue
+		}
+
+		for _, lesson := range entry.Fired {
+			matches[lesson.canonicalIdentity()]++
+		}
+
 		if !entry.Delivered() {
 			continue
 		}
@@ -473,7 +515,7 @@ func FirstFirings(firings []Firing) map[FiredLesson]Exposure {
 
 	out := make(map[FiredLesson]Exposure, len(filtered))
 	for fl, first := range filtered {
-		out[fl] = Exposure{First: first.UTC(), Count: counts[fl]}
+		out[fl] = Exposure{First: first.UTC(), Count: counts[fl], Matches: matches[fl]}
 	}
 
 	return out

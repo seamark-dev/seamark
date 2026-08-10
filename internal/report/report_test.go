@@ -663,3 +663,19 @@ func TestPrintFiringSummaryReportsSuppressionOnlyHistory(t *testing.T) {
 		"hook delivery — instrumented: 0 injected (0 repeated), 3 suppressed")
 	assert.NotContains(t, out.String(), "no lesson firings recorded yet")
 }
+
+func TestPrintFiringSummaryShowsPerLessonMatchesWhenDeliveryIsSuppressed(t *testing.T) {
+	var out strings.Builder
+	PrintFiringSummary(&out, reviews.Summary{
+		Total:     1,
+		BySurface: map[string]int{"hook": 1},
+		Ranked: []reviews.Fired{{
+			Region: "api", Symptom: "sync generated client", Count: 1, Matches: 4,
+			LastTS: "2026-08-10T12:00:00Z",
+		}},
+		InstrumentedHookFirings: 1,
+		SuppressedHookFirings:   3,
+	})
+
+	assert.Contains(t, out.String(), "×1    delivered / ×4    matched")
+}

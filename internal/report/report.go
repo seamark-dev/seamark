@@ -712,6 +712,14 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 	}
 
 	for _, f := range shown {
+		if f.Matches > f.Count {
+			fmt.Fprintf(w, "  ×%-4d delivered / ×%-4d matched  %-40s last %s  %s\n",
+				f.Count, f.Matches, render.Sanitize(f.Region),
+				firingDate(f.LastTS), render.Sanitize(f.Symptom))
+
+			continue
+		}
+
 		fmt.Fprintf(w, "  ×%-4d %-40s last %s  %s\n",
 			f.Count, render.Sanitize(f.Region),
 			firingDate(f.LastTS), render.Sanitize(f.Symptom))

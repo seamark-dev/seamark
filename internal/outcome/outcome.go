@@ -70,7 +70,8 @@ type Reading struct {
 	ProposalID  int64
 	Exposed     bool      // at least one firing under the pin's current identity
 	First       time.Time // exposure start: the first firing; zero when !Exposed
-	Firings     int       // total firing records naming the pin
+	Firings     int       // delivered firing records naming the pin
+	Matches     int       // delivered plus suppressed records naming the pin
 	PreEvents   int       // mistake events before exposure (the pin's evidence)
 	PreCommits  int       // commits in the pin's regions before exposure
 	PostEvents  int       // mistake events since exposure — the recurrence count
@@ -84,29 +85,37 @@ type Reading struct {
 // reading differently. The output is fixed words and numbers only, so
 // callers do not need to sanitize it.
 func (r Reading) Line() string {
+	exposure := r.exposureText()
+
 	switch {
 	case !r.Exposed:
 		return "untested — never fired"
 	case r.Verdict == VerdictNotLanding:
-		return fmt.Sprintf("not landing — recurred %d× since exposure (fired %d×)",
-			r.PostEvents, r.Firings)
+		return fmt.Sprintf("not landing — recurred %d× since exposure (%s)",
+			r.PostEvents, exposure)
 	case r.Verdict == VerdictUntested:
 		switch r.Reason {
 		case ReasonDeadCitations:
-			return fmt.Sprintf("untested — citations aged out of the mining window (fired %d×)",
-				r.Firings)
+			return fmt.Sprintf("untested — citations aged out of the mining window (%s)", exposure)
 		case ReasonStaleEvidence:
-			return fmt.Sprintf("untested — evidence not mined since exposure (fired %d×)",
-				r.Firings)
+			return fmt.Sprintf("untested — evidence not mined since exposure (%s)", exposure)
 		default:
-			return fmt.Sprintf("untested — %s since exposure (fired %d×)",
-				regionCommits(r.PostCommits), r.Firings)
+			return fmt.Sprintf("untested — %s since exposure (%s)",
+				regionCommits(r.PostCommits), exposure)
 		}
 	default:
 		return fmt.Sprintf("working — flagged %d× in ~%s before exposure; "+
-			"%d× in %d since (fired %d×)",
-			r.PreEvents, regionCommits(r.PreCommits), r.PostEvents, r.PostCommits, r.Firings)
+			"%d× in %d since (%s)",
+			r.PreEvents, regionCommits(r.PreCommits), r.PostEvents, r.PostCommits, exposure)
 	}
+}
+
+func (r Reading) exposureText() string {
+	if r.Matches > r.Firings {
+		return fmt.Sprintf("delivered %d×; matched %d×", r.Firings, r.Matches)
+	}
+
+	return fmt.Sprintf("fired %d×", r.Firings)
 }
 
 // regionCommits formats a commit count with its unit, singular for 1.
@@ -300,6 +309,7 @@ func assess(exp reviews.Exposure, exposed bool, linked []model.Finding,
 		Exposed:     true,
 		First:       exp.First,
 		Firings:     exp.Count,
+		Matches:     exp.Matches,
 		PreEvents:   model.CountEvents(pre),
 		PreCommits:  preCommits,
 		PostEvents:  model.CountEvents(post),

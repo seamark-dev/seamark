@@ -35,15 +35,24 @@ evidence. The default is intentionally one trial per arm, not ten.
 The default Claude adapter:
 
 - requires an exact model ID and pinned effort;
-- uses only project settings and disables user plugins, MCP servers, skills,
-  browser integration, memory, and session persistence;
+- selects only the project setting source and disables user plugins, MCP
+  servers, skills, browser integration, memory, and session persistence;
 - exposes only Read, Edit, Write, and Bash;
 - enables Claude Code's native OS sandbox with hard failure when unavailable,
   repository-only writes, no unsandboxed escape hatch, and no approved network
   domains for Bash subprocesses;
 - moves Go, Python, and Node caches into the trial directory and disables Go
   dependency downloads;
+- removes inherited provider-routing, helper-model, thinking-budget, and prompt-
+  caching overrides while preserving existing OAuth and API-key authentication;
 - caps provider spend per session and preserves the complete stream transcript.
+
+The adapter deliberately preserves and does not redirect `CLAUDE_CONFIG_DIR`:
+doing otherwise would detach saved credentials on Linux and Windows.
+`--setting-sources project` keeps ordinary user instructions out of the session,
+but organization-managed policy and global account state remain host
+prerequisites. Use a dedicated runner when publishing evidence intended to
+reproduce across operators.
 
 Do not use `--bare` or `--safe-mode` in a custom adapter: both disable the
 project hook the treatment is meant to measure.
@@ -136,10 +145,11 @@ A successful single fixture remains a fixture-specific result, not proof of the
 cross-instance claim.
 
 `result.schema.json` remains the frozen result-schema-v5 contract;
-`result-v6.schema.json` documents current output. The report command also
-strictly validates every row and refuses malformed data, invalid token totals,
-duplicate input files, duplicate trial arms, and conflicting identities that
-reuse a fingerprint:
+`result-v6.schema.json` documents current output and enforces the implications
+JSON Schema can express. Arithmetic relations such as delivery and token sums
+remain semantic constraints; the report command is the normative validator for
+those and also refuses malformed data, duplicate input files, duplicate trial
+arms, and conflicting identities that reuse a fingerprint:
 
 ```sh
 make lessons-bench-report \

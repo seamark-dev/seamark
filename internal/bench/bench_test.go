@@ -301,6 +301,14 @@ echo '{"type":"result","is_error":true,"api_error_status":429,"result":"rate lim
 func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("ANTHROPIC_MODEL", "unwanted")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://gateway.invalid")
+	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+	t.Setenv("ANTHROPIC_SMALL_FAST_MODEL", "unwanted-helper")
+	t.Setenv("MAX_THINKING_TOKENS", "1")
+	t.Setenv("DISABLE_PROMPT_CACHING", "1")
+	t.Setenv("ANTHROPIC_API_KEY", "test-api-auth")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-oauth-auth")
+	t.Setenv("CLAUDE_CONFIG_DIR", "/test/claude-auth-config")
 	t.Setenv("CLAUDE_CODE_EFFORT_LEVEL", "max")
 	t.Setenv("PYTHONPATH", "/host/python")
 	t.Setenv("PYTHONHOME", "/host/python-home")
@@ -312,28 +320,51 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	t.Setenv("GIT_CONFIG_VALUE_0", "/host/hooks")
 	t.Setenv("GIT_AUTHOR_NAME", "host author")
 	t.Setenv("GIT_COMMITTER_EMAIL", "host@example.com")
+	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "0")
+	t.Setenv("ENABLE_CLAUDEAI_MCP_SERVERS", "true")
+	t.Setenv("GOPROXY", "https://proxy.invalid")
 
-	env := agentEnvironment(dir)
-	joined := strings.Join(env, "\n")
-	assert.NotContains(t, joined, "ANTHROPIC_MODEL=unwanted")
-	assert.NotContains(t, joined, "CLAUDE_CODE_EFFORT_LEVEL=max")
-	assert.NotContains(t, joined, "PYTHONPATH=/host/python")
-	assert.NotContains(t, joined, "PYTHONHOME=/host/python-home")
-	assert.NotContains(t, joined, "BASH_ENV=/host/bash-env")
-	assert.NotContains(t, joined, "MAKEFLAGS=--jobs=99")
-	assert.NotContains(t, joined, "VIRTUAL_ENV=/host/venv")
-	assert.NotContains(t, joined, "GIT_CONFIG_COUNT=1")
-	assert.NotContains(t, joined, "GIT_CONFIG_KEY_0=core.hooksPath")
-	assert.NotContains(t, joined, "GIT_CONFIG_VALUE_0=/host/hooks")
-	assert.NotContains(t, joined, "GIT_AUTHOR_NAME=host author")
-	assert.NotContains(t, joined, "GIT_COMMITTER_EMAIL=host@example.com")
-	assert.Contains(t, joined, "GOCACHE="+filepath.Join(dir, ".bench-cache", "go-build"))
-	assert.Contains(t, joined, "GOPROXY=off")
-	assert.Contains(t, joined, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
-	assert.Contains(t, joined, "PYTHONNOUSERSITE=1")
-	assert.Contains(t, joined, "PYTHONHASHSEED=0")
-	assert.Contains(t, joined, "GIT_CONFIG_NOSYSTEM=1")
-	assert.Contains(t, joined, "GIT_CONFIG_GLOBAL="+os.DevNull)
+	env := environmentByKey(t, agentEnvironment(dir))
+	for _, key := range []string{
+		"ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
+		"ANTHROPIC_SMALL_FAST_MODEL", "MAX_THINKING_TOKENS", "DISABLE_PROMPT_CACHING",
+		"CLAUDE_CODE_EFFORT_LEVEL", "PYTHONPATH", "PYTHONHOME", "BASH_ENV", "MAKEFLAGS",
+		"VIRTUAL_ENV", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+		"GIT_AUTHOR_NAME", "GIT_COMMITTER_EMAIL",
+	} {
+		assert.NotContains(t, env, key)
+	}
+
+	assert.Equal(t, "test-api-auth", env["ANTHROPIC_API_KEY"],
+		"authentication must survive environment normalization")
+	assert.Equal(t, "test-oauth-auth", env["CLAUDE_CODE_OAUTH_TOKEN"],
+		"subscription authentication must survive environment normalization")
+	assert.Equal(t, "/test/claude-auth-config", env["CLAUDE_CONFIG_DIR"],
+		"custom configuration directories may contain the operator's saved credentials")
+	assert.Equal(t, filepath.Join(dir, ".bench-cache", "go-build"), env["GOCACHE"])
+	assert.Equal(t, "off", env["GOPROXY"])
+	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
+	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"])
+	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_POLICY_SKILLS"])
+	assert.Equal(t, "false", env["ENABLE_CLAUDEAI_MCP_SERVERS"])
+	assert.Equal(t, "1", env["PYTHONNOUSERSITE"])
+	assert.Equal(t, "0", env["PYTHONHASHSEED"])
+	assert.Equal(t, "1", env["GIT_CONFIG_NOSYSTEM"])
+	assert.Equal(t, os.DevNull, env["GIT_CONFIG_GLOBAL"])
+}
+
+func environmentByKey(t *testing.T, entries []string) map[string]string {
+	t.Helper()
+
+	out := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		key, value, ok := strings.Cut(entry, "=")
+		require.True(t, ok, "environment entry lacks '=': %q", entry)
+		require.NotContains(t, out, key, "duplicate environment key %q", key)
+		out[key] = value
+	}
+
+	return out
 }
 
 func TestWireHookHonorsParentDeadline(t *testing.T) {
@@ -534,6 +565,33 @@ func TestWireArmOncePerContextInstallsPolicyAndReset(t *testing.T) {
 	assert.Contains(t, string(settings), `"statusMessage": "seamark: resetting lesson delivery"`)
 }
 
+func TestWireArmFileOnlyDoesNotInstallHookDeliveryPolicy(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "fixture")
+	instance := SchemaSyncInstance()
+	require.NoError(t, instance.Generate(dir))
+	require.NoError(t, wireArm(context.Background(), dir, RunConfig{
+		SeamarkBin: "/opt/seamark", HookDelivery: HookDeliveryOncePerContext,
+	}, instance, ArmFileOnly))
+
+	lessons, err := os.ReadFile(filepath.Join(dir, ".seamark", "lessons.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, instance.LessonYAML, string(lessons))
+
+	configured, err := reviews.LoadConfig(dir)
+	require.NoError(t, err)
+	assert.Equal(t, reviews.HookDeliveryAlways, configured.HookDelivery(),
+		"file-only keeps the lesson file's default delivery policy")
+
+	settingsData, err := os.ReadFile(filepath.Join(dir, ".claude", "settings.json"))
+	require.NoError(t, err)
+	var settings map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(settingsData, &settings))
+	assert.NotContains(t, settings, "hooks", "file-only must not install delivery lifecycle hooks")
+
+	assert.NoFileExists(t, filepath.Join(dir, ".seamark", "lessons-hook-state.json"))
+	assert.NoFileExists(t, filepath.Join(dir, ".seamark", "lessons-hook-state.lock"))
+}
+
 func TestMatchingTreatmentFiringsRequiresIdentitySurfaceToolAndRegion(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, writeLessons(dir, schemaSyncLessonYAML))
@@ -614,6 +672,25 @@ func TestMatchingTreatmentFiringsMeasuresRepeatedAndGroupedDelivery(t *testing.T
 	assert.Equal(t, 1, intensity.Suppressed,
 		"a partly suppressed match that still injected context is not fully suppressed")
 	assert.Equal(t, 1230, intensity.ContextBytes)
+}
+
+func TestMatchingTreatmentFiringsRejectsUnknownDeliveryStatus(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, writeLessons(dir, schemaSyncLessonYAML))
+	cfg, err := reviews.LoadConfig(dir)
+	require.NoError(t, err)
+	expected := reviews.PinIdentity(cfg.Pin[0])
+
+	data, err := json.Marshal(reviews.Firing{
+		File: "server/schema.py", Tool: "Edit", Delivery: "future-status",
+		Fired: []reviews.FiredLesson{expected},
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, ".seamark", "lessons-audit.jsonl"), append(data, '\n'), 0o644))
+
+	_, err = matchingTreatmentFirings(dir, cfg.Pin[0])
+	require.ErrorContains(t, err, "unknown hook delivery status")
 }
 
 func TestRunStopsWhenSelectedTreatmentNeverFires(t *testing.T) {

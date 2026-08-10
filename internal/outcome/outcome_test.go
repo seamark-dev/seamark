@@ -33,6 +33,17 @@ func TestLinkedFindingsUseOneHopIndexesAndKeepCorpusOrder(t *testing.T) {
 	assert.Equal(t, []int64{1, 2, 3}, []int64{got[0].ID, got[1].ID, got[2].ID})
 }
 
+func TestReadingLineReportsSuppressedMatchesAlongsideDeliveries(t *testing.T) {
+	r := Reading{
+		Exposed: true, Firings: 1, Matches: 4, PostEvents: 1,
+		Verdict: VerdictNotLanding,
+	}
+
+	assert.Equal(t,
+		"not landing — recurred 1× since exposure (delivered 1×; matched 4×)",
+		r.Line())
+}
+
 // TestGather tests the whole passive loop end to end: findings and
 // commits are seeded around a real RecordFiring timestamp, the audit
 // log is written and read through the production code path, and every

@@ -16,7 +16,9 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   and fails open so missing identity, lock contention, or corrupt state never
   hides guidance. Hook audit records carry match and context-generation
   digests; `lessons --stats` distinguishes injections, repeats, suppressions,
-  and injected bytes.
+  and injected bytes. Per-lesson stats and passive outcome sentences now show
+  match-inclusive counts alongside actual deliveries when repeats were
+  suppressed, without moving the first-delivery exposure clock.
 - **Auditable delivery-cost benchmarks.** Benchmark result schema v6 records
   the selected delivery policy and its hook intensity, keeps policy cohorts in
   separate fingerprints, and labels them in Markdown reports. The first
@@ -24,6 +26,13 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   injection and three suppressions per treatment session, with zero repeated
   injections and no loss of owner-invariant success. The small dirty-build
   sample does not yet support a token-cost claim.
+- **More reproducible benchmark sessions.** The managed Claude adapter now
+  strips inherited provider-routing, helper-model, thinking-budget, and prompt-
+  caching overrides while preserving existing OAuth and API-key discovery. It
+  also rejects unknown hook-delivery evidence during the run, keeps the file-
+  only arm byte-stable across hook policies, and aligns the public v6 JSON
+  Schema with the semantic validator where standard JSON Schema can express
+  the constraint.
 
 Upgrade note: run `seamark init` once after upgrading to install the
 `PostCompact` lifecycle hook. Switching `hook_delivery` modes afterward does

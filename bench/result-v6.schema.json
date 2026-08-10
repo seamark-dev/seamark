@@ -71,15 +71,23 @@
     "checks_pass": { "type": "boolean" },
     "checks": {
       "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["command", "pass"],
         "properties": {
-          "command": { "type": "string" },
+          "command": { "type": "string", "minLength": 1 },
           "pass": { "type": "boolean" },
           "timed_out": { "type": "boolean" },
           "output": { "type": "string" }
+        },
+        "if": {
+          "properties": { "timed_out": { "const": true } },
+          "required": ["timed_out"]
+        },
+        "then": {
+          "properties": { "pass": { "const": false } }
         }
       }
     },
@@ -116,16 +124,79 @@
     "runtime_id": { "type": "string" },
     "fingerprint": { "$ref": "#/$defs/sha256" }
   },
-  "if": {
-    "properties": {
-      "hook_delivery": { "const": "always" }
+  "allOf": [
+    {
+      "if": {
+        "properties": { "hook_delivery": { "const": "always" } },
+        "required": ["hook_delivery"]
+      },
+      "then": {
+        "properties": { "hook_suppressed": { "const": 0 } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "invariant_pass": { "const": true } },
+        "required": ["invariant_pass"]
+      },
+      "then": {
+        "properties": { "task_pass": { "const": true } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "task_pass": { "const": true } },
+        "required": ["task_pass"]
+      },
+      "then": {
+        "properties": { "checks_pass": { "const": true } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "pair_valid": { "const": true } },
+        "required": ["pair_valid"]
+      },
+      "then": {
+        "properties": { "valid": { "const": true } }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "valid": { "const": true },
+          "arm": { "enum": ["hook-on", "placebo"] }
+        },
+        "required": ["valid", "arm"]
+      },
+      "then": {
+        "required": ["hook_firings"],
+        "properties": {
+          "hook_firings": { "minimum": 1 },
+          "hook_injections": { "minimum": 1 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "valid": { "const": true },
+          "arm": { "enum": ["hook-off", "file-only"] }
+        },
+        "required": ["valid", "arm"]
+      },
+      "then": {
+        "properties": {
+          "hook_firings": { "const": 0 },
+          "hook_matches": { "const": 0 },
+          "hook_injections": { "const": 0 },
+          "hook_repeated_injections": { "const": 0 },
+          "hook_suppressed": { "const": 0 },
+          "hook_context_bytes": { "const": 0 }
+        }
+      }
     }
-  },
-  "then": {
-    "properties": {
-      "hook_suppressed": { "const": 0 }
-    }
-  },
+  ],
   "$defs": {
     "sha256": {
       "type": "string",
