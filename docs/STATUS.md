@@ -38,6 +38,9 @@ Review mining, fix mining, lessons, distillation, pins.
 | Lessons + edit hook + tuning (`lessons.yaml`) | working |
 | Evidence confidence + ledger revalidation (`--proposals`, `--retarget`) | working; tiers recomputed on read, never stored |
 | Distillation (plan/apply, dedup memory, preflight disclosure, `--dry-run`) | working; requires your own agent CLI; sends finding text to it ([data-flow.md](data-flow.md)) |
+| Passive outcome loop (per-pin `working` / `not landing` / `untested` verdicts in `--stats`, the ledger, and the HTML report) | working; deterministic, recomputed on read, honesty-gated on activity and mining freshness |
+| Once-per-context hook delivery (`hook_delivery` in `lessons.yaml`) | working; opt-in, digest-only local state, fails open; needs one `seamark init` re-run for the `PostCompact` hook |
+| Lessons benchmark (`make lessons-bench`, paired headless sessions, frozen claim registry) | working; operator-run, spends provider tokens; protocol in [bench/README.md](../bench/README.md) |
 
 ## Guard — warn mode ready; enforcement is beta
 
@@ -58,8 +61,8 @@ agents inside real isolation regardless.
 
 ## Distribution
 
-Released: [v0.2.0](https://github.com/seamark-dev/seamark/releases)
-(2026-08-05) ships native archives for macOS and Linux (amd64/arm64),
+Released: [v0.3.0](https://github.com/seamark-dev/seamark/releases)
+(2026-08-10) ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
 (`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
 compiler. Windows is untested and unsupported. Artifact signing, SBOMs,
