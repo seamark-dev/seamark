@@ -71,7 +71,15 @@ milestone.
 - CI: full test suite + lint on every change; regression tests pin the
   trust baseline (non-blocking default init, audit redaction, durable
   state surviving rebuilds, docs-command drift).
-- No public benchmark exists yet; performance numbers in the README are
-  measured on one real monorepo and labeled as such.
+- The first clean synthetic lessons release cohort meets the frozen controlled
+  threshold across three independent fixtures and five paired trials each:
+  hook-on preserved the owner invariant in 15/15 task-complete runs versus
+  3/15 for hook-off, with no visible-task regressions. Mean cross-instance lift
+  was +80 percentage points and the worst instance was +40 points. Hook-on used
+  about 11.4% more processed context and 8.4% more measured cost. This is
+  reproducible evidence for the exact Haiku/medium/runtime conditions, not
+  external validation; the schema-sync instance alone remains uncertain. Raw
+  rows and the generated report live under `bench/`; the calibration, artifact,
+  and interpretation protocol is in [bench/README.md](../bench/README.md).
 - External pilots: none yet — that is the bar between "works here" and
   "production-ready", and claims stay scoped until it is met.

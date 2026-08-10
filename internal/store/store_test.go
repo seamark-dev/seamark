@@ -25,10 +25,14 @@ func openTestStore(t *testing.T) *Store {
 //	pkg/a.Run -> pkg/b.Helper (CALLS), with co-change and one decision.
 func seed(t *testing.T, s *Store) (run, helper model.Symbol) {
 	t.Helper()
-	run = model.Symbol{FQN: "pkg/a.Run", Name: "Run", Kind: model.KindFunction,
-		File: "pkg/a/a.go", Span: model.Span{StartLine: 10, EndLine: 20}, Sig: "func Run() error"}
-	helper = model.Symbol{FQN: "pkg/b.Helper", Name: "Helper", Kind: model.KindFunction,
-		File: "pkg/b/b.go", Span: model.Span{StartLine: 5, EndLine: 8}}
+	run = model.Symbol{
+		FQN: "pkg/a.Run", Name: "Run", Kind: model.KindFunction,
+		File: "pkg/a/a.go", Span: model.Span{StartLine: 10, EndLine: 20}, Sig: "func Run() error",
+	}
+	helper = model.Symbol{
+		FQN: "pkg/b.Helper", Name: "Helper", Kind: model.KindFunction,
+		File: "pkg/b/b.go", Span: model.Span{StartLine: 5, EndLine: 8},
+	}
 
 	err := s.Rebuild(func(tx *Tx) error {
 		for _, sym := range []*model.Symbol{&run, &helper} {
@@ -36,17 +40,23 @@ func seed(t *testing.T, s *Store) (run, helper model.Symbol) {
 				return err
 			}
 		}
-		if err := tx.InsertEdge(model.Edge{Src: run.ID, Dst: helper.ID,
-			Kind: model.EdgeCalls, Origin: model.OriginQualified}); err != nil {
+		if err := tx.InsertEdge(model.Edge{
+			Src: run.ID, Dst: helper.ID,
+			Kind: model.EdgeCalls, Origin: model.OriginQualified,
+		}); err != nil {
 			return err
 		}
-		if err := tx.InsertCoChange(model.CoChange{FileA: "pkg/a/a.go", FileB: "pkg/b/b.go",
-			Together: 7, Total: 40, Lift: 3.5}); err != nil {
+		if err := tx.InsertCoChange(model.CoChange{
+			FileA: "pkg/a/a.go", FileB: "pkg/b/b.go",
+			Together: 7, Total: 40, Lift: 3.5,
+		}); err != nil {
 			return err
 		}
-		return tx.InsertDecision(&model.Decision{Kind: model.DecisionCommit,
-			Ref: "abc123", TS: 1700000000, Author: "yuri",
-			Title: "extract Helper", Files: []string{"pkg/a/a.go", "pkg/b/b.go"}})
+		return tx.InsertDecision(&model.Decision{
+			Kind: model.DecisionCommit,
+			Ref:  "abc123", TS: 1700000000, Author: "yuri",
+			Title: "extract Helper", Files: []string{"pkg/a/a.go", "pkg/b/b.go"},
+		})
 	})
 	require.NoError(t, err, "seed rebuild")
 	return run, helper
@@ -126,15 +136,19 @@ func TestFileChurnRanksByActivity(t *testing.T) {
 	// Three more commits on a.go only, so it outranks b.go 4 to 1.
 	require.NoError(t, s.Rebuild(func(tx *Tx) error {
 		for i, ref := range []string{"c1", "c2", "c3"} {
-			d := model.Decision{Kind: model.DecisionCommit, Ref: ref,
-				TS: int64(1700000100 + i), Files: []string{"pkg/a/a.go"}}
+			d := model.Decision{
+				Kind: model.DecisionCommit, Ref: ref,
+				TS: int64(1700000100 + i), Files: []string{"pkg/a/a.go"},
+			}
 			if err := tx.InsertDecision(&d); err != nil {
 				return err
 			}
 		}
 
-		return tx.InsertDecision(&model.Decision{Kind: model.DecisionCommit,
-			Ref: "abc123", TS: 1700000000, Files: []string{"pkg/a/a.go", "pkg/b/b.go"}})
+		return tx.InsertDecision(&model.Decision{
+			Kind: model.DecisionCommit,
+			Ref:  "abc123", TS: 1700000000, Files: []string{"pkg/a/a.go", "pkg/b/b.go"},
+		})
 	}))
 
 	churn, err := s.FileChurn(10)
@@ -155,14 +169,166 @@ func TestFileChurnRanksByActivity(t *testing.T) {
 	assert.Len(t, churn, 2)
 }
 
+func TestCountCommitsTouching(t *testing.T) {
+	s := openTestStore(t)
+
+	// A purpose-built history: one hot region (pkg/engine) with a
+	// sibling-name trap beside it, an exact-file region, a revert, a
+	// commit spanning two regions, a pr row, and a directory whose name
+	// contains a LIKE wildcard.
+	require.NoError(t, s.Rebuild(func(tx *Tx) error {
+		for _, d := range []model.Decision{
+			{
+				Kind: model.DecisionCommit, Ref: "c-early", TS: 1000,
+				Files: []string{"pkg/engine/pool.go", "pkg/engine/ctx.go"},
+			},
+			{
+				Kind: model.DecisionCommit, Ref: "c-exact", TS: 2000,
+				Files: []string{"docs/notes.md"},
+			},
+			{
+				Kind: model.DecisionCommit, Ref: "c-sibling", TS: 2000,
+				Files: []string{"pkg/engine2/x.go"},
+			},
+			{
+				Kind: model.DecisionRevert, Ref: "c-revert", TS: 3000,
+				Files: []string{"pkg/engine/pool.go"},
+			},
+			{
+				Kind: model.DecisionCommit, Ref: "c-span", TS: 4000,
+				Files: []string{"pkg/engine/a.go", "web/src/app.ts"},
+			},
+			{
+				Kind: model.DecisionPR, Ref: "pr-1", TS: 4000,
+				Files: []string{"pkg/engine/pool.go"},
+			},
+			{
+				Kind: model.DecisionCommit, Ref: "c-escape", TS: 5000,
+				Files: []string{"a%b/file.go"},
+			},
+			{
+				Kind: model.DecisionCommit, Ref: "c-noescape", TS: 5000,
+				Files: []string{"axb/file.go"},
+			},
+			// A merge commit: recorded as a decision, no file rows.
+			{
+				Kind: model.DecisionCommit, Ref: "c-merge", TS: 1500,
+			},
+		} {
+			if err := tx.InsertDecision(&d); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}))
+
+	cases := []struct {
+		name    string
+		regions []string
+		since   int64
+		until   int64
+		want    int
+	}{
+		{
+			"window is half-open: since counts, until does not",
+			[]string{"pkg/engine"},
+			1000, 3000, 1,
+		},
+		{
+			"until zero means unbounded",
+			[]string{"pkg/engine"},
+			1000, 0, 3,
+		},
+		{
+			"a region can be an exact file",
+			[]string{"docs/notes.md"},
+			0, 0, 1,
+		},
+		{
+			"prefix match stops at the path boundary",
+			[]string{"pkg/engine"},
+			2000, 3000, 0,
+		},
+		{
+			"a commit touching two region files counts once",
+			[]string{"pkg/engine"},
+			1000, 2000, 1,
+		},
+		{
+			"a commit spanning both pin regions counts once",
+			[]string{"pkg/engine", "web/src"},
+			4000, 5000, 1,
+		},
+		{
+			"a pr row is not activity",
+			[]string{"pkg/engine"},
+			4000, 5000, 1,
+		},
+		{
+			"a revert is activity",
+			[]string{"pkg/engine"},
+			3000, 4000, 1,
+		},
+		{
+			"nil regions is repo-wide, but only commits that touched files",
+			nil, 0, 0, 7,
+		},
+		{
+			"a file-less merge is not activity anywhere",
+			nil, 1500, 1501, 0,
+		},
+		{
+			"LIKE wildcards in a region name stay literal",
+			[]string{"a%b"},
+			0, 0, 1,
+		},
+		{
+			"an untouched region counts zero",
+			[]string{"no/such/dir"},
+			0, 0, 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := s.CountCommitsTouching(tc.regions, tc.since, tc.until)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestEvidenceHorizon(t *testing.T) {
+	s := openTestStore(t)
+
+	// No stamps recorded: the horizon is zero.
+	assert.Zero(t, s.EvidenceHorizon())
+
+	// One stamp alone is still zero — recurrence can arrive through
+	// either channel, so the horizon is the older of the two.
+	require.NoError(t, s.SetMeta(MetaFixesMinedAt, "2000"))
+	assert.Zero(t, s.EvidenceHorizon())
+
+	require.NoError(t, s.SetMeta(MetaReviewsMinedAt, "1500"))
+	assert.Equal(t, int64(1500), s.EvidenceHorizon())
+
+	// Moving the newer stamp forward does not raise the horizon; the
+	// older stamp still bounds it.
+	require.NoError(t, s.SetMeta(MetaReviewsMinedAt, "3000"))
+	assert.Equal(t, int64(2000), s.EvidenceHorizon())
+}
+
 func TestRebuildReplacesDerivedTables(t *testing.T) {
 	s := openTestStore(t)
 	seed(t, s)
 
 	// Second rebuild with a single different symbol replaces everything.
 	err := s.Rebuild(func(tx *Tx) error {
-		return tx.InsertSymbol(&model.Symbol{FQN: "pkg/c.New", Name: "New",
-			Kind: model.KindFunction, File: "pkg/c/c.go"})
+		return tx.InsertSymbol(&model.Symbol{
+			FQN: "pkg/c.New", Name: "New",
+			Kind: model.KindFunction, File: "pkg/c/c.go",
+		})
 	})
 	require.NoError(t, err)
 
@@ -186,8 +352,10 @@ func TestRebuildRollsBackOnError(t *testing.T) {
 
 	errBoom := errors.New("intentional")
 	err := s.Rebuild(func(tx *Tx) error {
-		if err := tx.InsertSymbol(&model.Symbol{FQN: "x.Boom", Name: "Boom",
-			Kind: model.KindFunction}); err != nil {
+		if err := tx.InsertSymbol(&model.Symbol{
+			FQN: "x.Boom", Name: "Boom",
+			Kind: model.KindFunction,
+		}); err != nil {
 			return err
 		}
 		return errBoom
@@ -218,10 +386,14 @@ func TestFindSymbolsFTSRankOrder(t *testing.T) {
 
 	// The weaker match gets the LOWER rowid: with the old IN-subquery form
 	// results came back in rowid order, so this ordering would flip.
-	weak := model.Symbol{FQN: "zz.chargeback", Name: "chargeback",
-		Kind: model.KindFunction, File: "zz/b.go"}
-	strong := model.Symbol{FQN: "charge/charge.Charge", Name: "Charge",
-		Kind: model.KindFunction, File: "charge/charge.go"}
+	weak := model.Symbol{
+		FQN: "zz.chargeback", Name: "chargeback",
+		Kind: model.KindFunction, File: "zz/b.go",
+	}
+	strong := model.Symbol{
+		FQN: "charge/charge.Charge", Name: "Charge",
+		Kind: model.KindFunction, File: "charge/charge.go",
+	}
 
 	err := s.Rebuild(func(tx *Tx) error {
 		for _, sym := range []*model.Symbol{&weak, &strong} {
@@ -258,14 +430,23 @@ func TestLessonReplaceAndQuery(t *testing.T) {
 	s := openTestStore(t)
 
 	first := []model.Lesson{
-		{ClusterKey: "scripts\x00RUF001", Region: "scripts", Reviewer: "coderabbit",
-			Symptom: "RUF001", Occurrences: 6, LastTS: 100},
-		{ClusterKey: "api\x00E501", Region: "api", Reviewer: "human",
-			Symptom: "E501", Occurrences: 3, LastTS: 90},
-		{ClusterKey: "api\x00once", Region: "api", Reviewer: "copilot",
-			Symptom: "one-off", Occurrences: 1, LastTS: 80},
+		{
+			ClusterKey: "scripts\x00RUF001", Region: "scripts", Reviewer: "coderabbit",
+			Symptom: "RUF001", Occurrences: 6, LastTS: 100,
+		},
+		{
+			ClusterKey: "api\x00E501", Region: "api", Reviewer: "human",
+			Symptom: "E501", Occurrences: 3, LastTS: 90,
+		},
+		{
+			ClusterKey: "api\x00once", Region: "api", Reviewer: "copilot",
+			Symptom: "one-off", Occurrences: 1, LastTS: 80,
+		},
 	}
 	require.NoError(t, s.ReplaceLessons(first, nil))
+	reviewStamp, err := s.GetMeta(MetaReviewsMinedAt)
+	require.NoError(t, err)
+	assert.NotEmpty(t, reviewStamp, "lesson replacement owns the review-mine stamp")
 
 	// A file inherits its directory's lessons; minOccur hides the one-off.
 	got, err := s.LessonsForFile("api/service.py", 2, 10)
@@ -330,8 +511,10 @@ func TestDistilledSignatureMemory(t *testing.T) {
 func TestProposalLifecycle(t *testing.T) {
 	s := openTestStore(t)
 
-	p := model.Proposal{Signature: "sig", Rule: "r", Region: "a", Note: "n",
-		Members: []int64{1, 2}, Agent: "claude/v1", Status: model.ProposalProposed}
+	p := model.Proposal{
+		Signature: "sig", Rule: "r", Region: "a", Note: "n",
+		Members: []int64{1, 2}, Agent: "claude/v1", Status: model.ProposalProposed,
+	}
 	require.NoError(t, s.InsertProposal(&p))
 	require.NotZero(t, p.ID)
 
@@ -475,10 +658,14 @@ func TestFindingsRoundTripAndSwap(t *testing.T) {
 		{ClusterKey: "api\x00E501", Region: "api", Symptom: "E501", Occurrences: 2, LastTS: 90},
 	}
 	findings := []model.Finding{
-		{ID: 11, LessonKey: "api\x00E501", Path: "api/a.py", PR: 7,
-			Reviewer: "coderabbit", Body: "line too long, wrap it", URL: "u1", CreatedAt: 80},
-		{ID: 12, LessonKey: "api\x00E501", Path: "api/b.py", PR: 8,
-			Reviewer: "human", Body: "wrap this line", URL: "u2", CreatedAt: 90},
+		{
+			ID: 11, LessonKey: "api\x00E501", Path: "api/a.py", PR: 7,
+			Reviewer: "coderabbit", Body: "line too long, wrap it", URL: "u1", CreatedAt: 80,
+		},
+		{
+			ID: 12, LessonKey: "api\x00E501", Path: "api/b.py", PR: 8,
+			Reviewer: "human", Body: "wrap this line", URL: "u2", CreatedAt: 90,
+		},
 	}
 	require.NoError(t, s.ReplaceLessons(lessons, findings))
 

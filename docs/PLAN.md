@@ -26,22 +26,22 @@ capability profile, read [STATUS.md](STATUS.md) instead.
 
 ## Milestones
 
-### M0 — Foundations (partially deferred)
+### M0 — Foundations and release engineering (partially complete)
 
-The original M0 is the release matrix (Zig-CC cross-compilation, static musl
-linking, npm `optionalDependencies` skeleton). The parts that gate local
-development are done; the CI/release matrix is deferred until there is a
-feature worth releasing (tracked below as "Release engineering").
+The original M0 proposed a cross-compilation and npm release matrix. The
+project now has a narrower, tested native-runner release path; the remaining
+distribution work is tracked below instead of describing all releases as
+deferred.
 
 - [x] Go module, project layout, Makefile, Apache-2.0 license
 - [x] **FTS5 verified present in `modernc.org/sqlite`** (pure-Go driver, no
       CGO needed for storage; CGO is still required by tree-sitter)
 - [x] SQLite schema v1 (see `internal/store/schema.sql`)
-- [ ] Release engineering: GitHub Actions matrix (zig cc for linux/windows,
-      native macOS runners), static musl linking, npm optionalDeps packages,
-      `--provenance` publishing — **deferred until M2 lands**
+- [~] Release engineering: v0.2.0 ships smoke-tested native macOS/Linux
+      archives (amd64/arm64) and SHA-256 checksums. Artifact signing, SBOMs,
+      Homebrew/npm distribution, and Windows support remain.
 
-### M1 — Indexer + history miner (the go/no-go gate) ← current
+### M1 — Indexer + history miner (gate passed 2026-07-25)
 
 Prove the history layer tells a human something they did not know. If
 `seamark why` on a well-known repo produces nothing surprising, stop and
@@ -90,7 +90,7 @@ rethink before building more.
   148 edges). Candidate tuning for M2: exclude test-file symbols from the
   unique-name pool, or surface origin in `why` output.
 
-### M2 — LSP server ← current
+### M2 — LSP server (working; daemonization deferred)
 
 - [x] `seamark lsp`: hover (sig, caller counts with confidence, co-change
       partners, recent decisions), codeLens (caller counts + file-level
@@ -171,7 +171,7 @@ factual function-grain reporting cheap:
 - [ ] Diagnostics delivery: LSP for humans, structured tool errors for agents
 - [ ] `prose` tier deferred until agent sampling integration exists
 
-### M4 — Effects + security gate ← current
+### M4 — Effects + security gate (working; enforcement beta)
 
 - [x] Sink catalogue as YAML data: embedded default (Go/Python/TS, ~40
       sinks) + additive `.seamark/effects.yaml` workspace overlay; three
@@ -225,10 +225,12 @@ factual function-grain reporting cheap:
       paths parse, and the
       hook reads PreToolUse JSON natively (`--hook`) failing CLOSED under
       enforce (malformed/empty payload, policy/CEL errors → exit 2)
-- [ ] Audit log hardening: size-based rotation for audit.jsonl and an
-      advisory-lock note (concurrent writers on NFS may interleave >4k
-      entries); known limit — `bash script.sh` file payloads are not
-      read, so script contents classify only when invoked inline
+- [x] Audit log hardening: raw commands are opt-in and redacted; logs use
+      `0600`, refuse symlink traps, rotate by size and age, and serialize local
+      writers with an advisory lock. On filesystems without reliable locking,
+      concurrency remains best-effort. Known classifier limit: `bash
+      script.sh` file payloads are not read, so script contents classify only
+      when invoked inline.
 
 ### Freshness & incremental indexing
 
@@ -455,23 +457,36 @@ cost tier, cheapest wins:
   - Tier 2 (DONE, see above): distillation of human threads through the
     user's own agent CLI — plan/apply, cite-or-die, never auto-enabled.
 
-### v1.0
+### Original v1.0 product checklist
 
-- [ ] `seamark orient` markdown digest + MCP resource
+- [x] `seamark orient` CLI digest + MCP tool/resource
 - [x] One-command setup: `seamark init` wires config + agent hooks
-- [ ] One-line install (prebuilt binaries); agent auto-detect
+- [~] Prebuilt release archives for supported platforms; package-manager
+      installation and broader agent auto-detection remain
 - [ ] Audit log surfaced
 
 ## Current architecture (as built)
 
-```
+```text
 cmd/seamark/            entry point
-internal/cli/           cobra commands: index, why, version
+cmd/lessons-bench*/     controlled agent benchmark and report entry points
+internal/cli/           init, index, why/orient, lessons, gate/check, state,
+                        doctor/status, report, LSP, and MCP commands
 internal/index/         orchestrator: walk → parse → resolve → store + history
-internal/parse/         language registry, tree-sitter extractors (Go first)
+internal/parse/         Go, TypeScript/JavaScript, and Python extractors
 internal/history/       git log miner: co-change pairs + decision rows
+internal/effects/       sink matching and transitive effect propagation
+internal/gate/          command/diff policy, classification, and safe audit
+internal/reviews/       review ingestion and finding normalization
+internal/fixes/         fix-transition mining
+internal/distill/       proposal generation, validation, and deduplication
+internal/lsp/           editor protocol surface
+internal/mcp/           agent tool, resource, and prompt surface
+internal/report/        shared orientation and explanation rendering
+internal/htmlreport/    deterministic human audit report
 internal/store/         SQLite (modernc, pure Go) schema + queries + FTS5
 internal/model/         shared types: Symbol, Edge, CoChange, Decision
+internal/bench/         isolated synthetic fixtures, judges, and evidence
 ```
 
 Schema notes (deviations from the RFC sketch, all additive):

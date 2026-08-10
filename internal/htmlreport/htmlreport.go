@@ -27,6 +27,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/reviews"
@@ -114,6 +115,11 @@ type Card struct {
 	Era        string
 	RegionsNow string
 	Evidence   []Evidence
+	// Outcome is the passive loop's verdict sentence,
+	// present only for measured applied pins.
+	Outcome string
+	// NotLanding styles the outcome as the class that needs action.
+	NotLanding bool
 }
 
 // Evidence is one finding behind a proposal, as displayed.
@@ -199,6 +205,29 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		return nil, err
 	}
 
+	cfg, err := reviews.LoadConfig(root)
+	if err != nil {
+		cfg = reviews.DefaultConfig()
+	}
+
+	firings, err := reviews.ReadFirings(root)
+	if err != nil {
+		return nil, err
+	}
+
+	var applied []model.Proposal
+
+	for _, p := range proposals {
+		if p.Status == model.ProposalApplied {
+			applied = append(applied, p)
+		}
+	}
+
+	readings, err := outcome.Gather(st, cfg, applied, firings)
+	if err != nil {
+		return nil, err
+	}
+
 	// One churn query serves both the headline count and the map, so the
 	// two can never describe different sets of files.
 	churn, err := st.FileChurn(0)
@@ -223,7 +252,7 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		FilesWithHistory: len(churn),
 	}
 
-	r.buildCards(proposals, findings, root, now)
+	r.buildCards(proposals, findings, readings, root, now)
 	r.buildDuplicates(proposals)
 
 	// The map first: it decides which scopes exist, and each lesson row
@@ -235,11 +264,21 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 
 	r.buildLessons(lessons)
 
+	notLanding := 0
+
+	for _, rd := range readings {
+		if rd.Verdict == outcome.VerdictNotLanding {
+			notLanding++
+		}
+	}
+
 	r.Stats = []Stat{
 		{len(lessons), "lessons"},
 		{len(findings), "findings"},
 		{r.Pending, "pending proposals"},
 		{r.CardsTotal - r.Pending, "decided"},
+		{len(readings), "pins measured"},
+		{notLanding, "not landing"},
 		{len(churn), "files with history"},
 	}
 
@@ -277,7 +316,13 @@ func allProposals(st *store.Store) ([]model.Proposal, error) {
 
 // buildCards renders the decision queue: pending proposals first, then
 // the most recent decisions, each with the findings it cited.
-func (r *Report) buildCards(proposals []model.Proposal, findings []model.Finding, root string, now time.Time) {
+func (r *Report) buildCards(
+	proposals []model.Proposal,
+	findings []model.Finding,
+	readings map[int64]outcome.Reading,
+	root string,
+	now time.Time,
+) {
 	byID := make(map[int64]model.Finding, len(findings))
 	for _, f := range findings {
 		byID[f.ID] = f
@@ -338,6 +383,13 @@ func (r *Report) buildCards(proposals []model.Proposal, findings []model.Finding
 						card.RegionsNow = "*"
 					}
 				}
+			}
+
+			// The passive-loop verdict; readings only contains measured
+			// applied pins, so no status check is needed here.
+			if rd, ok := readings[p.ID]; ok {
+				card.Outcome = clean(rd.Line())
+				card.NotLanding = rd.Verdict == outcome.VerdictNotLanding
 			}
 		}
 

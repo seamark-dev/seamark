@@ -18,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
@@ -30,6 +31,7 @@ func newLessonsCmd(opts *options) *cobra.Command {
 		file         string
 		region       string
 		hookMode     bool
+		hookReset    bool
 		list         bool
 		stats        bool
 		distillRun   bool
@@ -123,6 +125,8 @@ a file has no lessons.`,
 			switch {
 			case hookMode:
 				return runLessonsHook(cmd, opts)
+			case hookReset:
+				return runLessonsHookReset(cmd, opts)
 			case strings.TrimSpace(applyIDs) != "":
 				return runLessonsApply(cmd, opts, applyIDs+","+extra)
 			case strings.TrimSpace(dismissIDs) != "":
@@ -164,6 +168,9 @@ a file has no lessons.`,
 	cmd.Flags().BoolVar(&stats, "stats", false, "summarize the firing log: what surfaced, what never fires")
 	cmd.Flags().BoolVar(&hookMode, "hook", false,
 		"read a PreToolUse JSON payload from stdin and emit lessons as additionalContext")
+	cmd.Flags().BoolVar(&hookReset, "hook-reset", false,
+		"read a PostCompact JSON payload from stdin and reset once-per-context delivery")
+	_ = cmd.Flags().MarkHidden("hook-reset")
 	cmd.Flags().BoolVar(&distillRun, "distill", false,
 		"distill recurring patterns from raw findings into proposed pins (needs the agent CLI)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
@@ -573,6 +580,7 @@ func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int6
 
 	now := time.Now()
 	out := make(map[int64]report.ProposalHealth, len(ps))
+	var appliedPs []model.Proposal
 
 	for _, p := range ps {
 		tier, facts := confidence.Assess(p, meta, root, now)
@@ -602,7 +610,28 @@ func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int6
 			}
 		}
 
+		if p.Status == model.ProposalApplied {
+			appliedPs = append(appliedPs, p)
+		}
+
 		out[p.ID] = h
+	}
+
+	// Passive-loop verdicts for the applied subset. Pins
+	// Gather cannot measure get no Outcome, and the printer renders
+	// nothing for them.
+	if len(appliedPs) > 0 {
+		_, _, readings, err := gatherAppliedOutcomes(st, root, appliedPs)
+		if err != nil {
+			return nil, err
+		}
+
+		for id, r := range readings {
+			h := out[id]
+			h.Outcome = r.Line()
+			h.Escalate = r.Verdict == outcome.VerdictNotLanding
+			out[id] = h
+		}
 	}
 
 	return out, nil
@@ -671,7 +700,8 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		// AllRegions resolves the union once at the boundary, so a
 		// hand-written pin carrying both keys governs everywhere it says.
 		pins = append(pins, model.Proposal{
-			Rule: p.Rule, Note: p.Note, Region: p.Region, Regions: p.AllRegions()})
+			Rule: p.Rule, Note: p.Note, Region: p.Region, Regions: p.AllRegions(),
+		})
 	}
 
 	dopts := distill.Options{
@@ -810,8 +840,8 @@ func runLessonsList(cmd *cobra.Command, opts *options, region string) error {
 // tool it guards: any error (no index, unreadable payload) yields empty
 // output and exit 0, so a missing seamark index can't block edits.
 func runLessonsHook(cmd *cobra.Command, opts *options) error {
-	path, tool, err := readHookInput(cmd.InOrStdin())
-	if err != nil || path == "" {
+	input, err := readHookInput(cmd.InOrStdin())
+	if err != nil || input.File == "" {
 		return nil // nothing to say; never block the edit
 	}
 
@@ -821,13 +851,61 @@ func runLessonsHook(cmd *cobra.Command, opts *options) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	lessons, morePins, err := lessonsForFile(st, root, path, true)
+	cfg := loadLessonsConfig(root)
+	lessons, morePins, err := lessonsForFileConfig(st, cfg, root, input.File, true)
 	if err != nil || len(lessons) == 0 {
 		return nil
 	}
 
+	if cfg.HookDelivery() == reviews.HookDeliveryOncePerContext && input.SessionID != "" {
+		lease, stateErr := reviews.BeginHookDelivery(root, input.SessionID, lessons)
+		if stateErr == nil {
+			defer func() { _ = lease.Close() }()
+
+			selected := lease.Inject()
+			if len(selected) == 0 {
+				suppressed, generation := lease.Suppressed(), lease.Generation()
+				_ = lease.Close()
+				recordHookDelivery(root, input, suppressed,
+					reviews.DeliverySuppressedRepeat, generation, 0)
+
+				return nil
+			}
+
+			contextBytes, err := emitLessonsHook(cmd.OutOrStdout(), root, input.File, selected, morePins)
+			if err != nil {
+				return err
+			}
+
+			// Output has already reached the provider. A state write failure must
+			// fail open for later edits, not turn this successful hook into a block.
+			_ = lease.Commit()
+			_ = lease.Close()
+
+			recordHookDelivery(root, input, selected, reviews.DeliveryInjected,
+				lease.Generation(), contextBytes)
+			recordHookDelivery(root, input, lease.Suppressed(),
+				reviews.DeliverySuppressedRepeat, lease.Generation(), 0)
+
+			return nil
+		}
+		// State is advisory. Corruption, lock failure, or an unsupported
+		// platform degrades to the original always-inject behavior below.
+	}
+
+	contextBytes, err := emitLessonsHook(cmd.OutOrStdout(), root, input.File, lessons, morePins)
+	if err != nil {
+		return err
+	}
+
+	recordHookDelivery(root, input, lessons, reviews.DeliveryInjected, 0, contextBytes)
+
+	return nil
+}
+
+func emitLessonsHook(w io.Writer, root, file string, lessons []model.Lesson, morePins int) (int, error) {
 	var b strings.Builder
-	_ = report.PrintLessonReminder(&b, toRepoRel(root, path), lessons, morePins)
+	_ = report.PrintLessonReminder(&b, toRepoRel(root, file), lessons, morePins)
 
 	out := hookOutput{}
 	out.HookSpecificOutput.HookEventName = "PreToolUse"
@@ -836,11 +914,39 @@ func runLessonsHook(cmd *cobra.Command, opts *options) error {
 	// Emit the verdict FIRST so the edit's go-ahead never waits on the
 	// audit write; then record best-effort — a slow or failed append must
 	// neither delay nor block the edit.
-	err = json.NewEncoder(cmd.OutOrStdout()).Encode(out)
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		return 0, err
+	}
 
-	_ = reviews.RecordFiring(root, toRepoRel(root, path), tool, lessons)
+	return b.Len(), nil
+}
 
-	return err
+func recordHookDelivery(root string, input lessonsHookInput, lessons []model.Lesson,
+	status reviews.DeliveryStatus, generation uint64, contextBytes int,
+) {
+	_ = reviews.RecordHookDelivery(root, toRepoRel(root, input.File), input.Tool, lessons,
+		reviews.HookDelivery{
+			Status: status, SessionID: input.SessionID, MatchID: input.MatchID,
+			Generation: generation, ContextBytes: contextBytes,
+		})
+}
+
+// runLessonsHookReset implements the PostCompact lifecycle hook. It is silent
+// and best-effort: compaction must proceed even if local state is unavailable.
+func runLessonsHookReset(cmd *cobra.Command, opts *options) error {
+	input, err := readHookLifecycleInput(cmd.InOrStdin())
+	if err != nil || input.SessionID == "" {
+		return nil
+	}
+
+	root, err := index.ResolveRoot(opts.workspace)
+	if err != nil {
+		return nil
+	}
+
+	_ = reviews.ResetHookDelivery(root, input.SessionID)
+
+	return nil
 }
 
 // runLessonsStats prints the firing-log summary: which lessons actually
@@ -848,23 +954,23 @@ func runLessonsHook(cmd *cobra.Command, opts *options) error {
 func runLessonsStats(cmd *cobra.Command, opts *options) error {
 	st, root, err := openIndex(opts)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read index: %w", err)
 	}
 	defer func() { _ = st.Close() }()
 
-	firings, err := reviews.ReadFirings(root)
-	if err != nil {
-		return err
-	}
-
 	mined, err := st.AllLessons(0)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to fetch mined lessons: %w", err)
 	}
 
-	cfg, err := reviews.LoadConfig(root)
+	applied, err := st.Proposals(model.ProposalApplied)
 	if err != nil {
-		cfg = reviews.DefaultConfig()
+		return fmt.Errorf("failed to fetch applied proposals: %w", err)
+	}
+
+	cfg, firings, readings, err := gatherAppliedOutcomes(st, root, applied)
+	if err != nil {
+		return err
 	}
 
 	// The set that COULD fire: what the config surfaces repo-wide.
@@ -872,7 +978,34 @@ func runLessonsStats(cmd *cobra.Command, opts *options) error {
 
 	report.PrintFiringSummary(cmd.OutOrStdout(), reviews.Summarize(firings, surfaced))
 
+	report.PrintOutcomes(cmd.OutOrStdout(), applied, readings)
+
 	return nil
+}
+
+// gatherAppliedOutcomes is the shared evidence boundary for user-facing
+// outcome surfaces. A malformed lessons configuration must fail consistently:
+// silently substituting defaults would judge firings against rules the agent
+// never received.
+func gatherAppliedOutcomes(st *store.Store, root string, applied []model.Proposal) (
+	*reviews.Config, []reviews.Firing, map[int64]outcome.Reading, error,
+) {
+	cfg, err := reviews.LoadConfig(root)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to load lessons config: %w", err)
+	}
+
+	firings, err := reviews.ReadFirings(root)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to read firing log: %w", err)
+	}
+
+	readings, err := outcome.Gather(st, cfg, applied, firings)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to gather applied proposal outcomes: %w", err)
+	}
+
+	return cfg, firings, readings, nil
 }
 
 // hookOutput is the PreToolUse response shape: additionalContext is
@@ -884,15 +1017,28 @@ type hookOutput struct {
 	} `json:"hookSpecificOutput"`
 }
 
-// readHookInput extracts the edited file path and tool name from a
-// PreToolUse payload (Edit, Write, and MultiEdit all carry file_path).
-func readHookInput(r io.Reader) (file, tool string, err error) {
+type lessonsHookInput struct {
+	File      string
+	Tool      string
+	SessionID string
+	MatchID   string
+}
+
+type lessonsHookLifecycleInput struct {
+	SessionID string
+}
+
+// readHookInput extracts the edit and session identity from a PreToolUse
+// payload (Edit, Write, and MultiEdit all carry file_path).
+func readHookInput(r io.Reader) (lessonsHookInput, error) {
 	data, err := io.ReadAll(io.LimitReader(r, 1<<20))
 	if err != nil {
-		return "", "", err
+		return lessonsHookInput{}, err
 	}
 
 	var payload struct {
+		SessionID string `json:"session_id"`
+		ToolUseID string `json:"tool_use_id"`
 		ToolName  string `json:"tool_name"`
 		ToolInput struct {
 			FilePath string `json:"file_path"`
@@ -900,10 +1046,30 @@ func readHookInput(r io.Reader) (file, tool string, err error) {
 	}
 
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return "", "", err
+		return lessonsHookInput{}, err
 	}
 
-	return payload.ToolInput.FilePath, payload.ToolName, nil
+	return lessonsHookInput{
+		File: payload.ToolInput.FilePath, Tool: payload.ToolName,
+		SessionID: payload.SessionID, MatchID: payload.ToolUseID,
+	}, nil
+}
+
+func readHookLifecycleInput(r io.Reader) (lessonsHookLifecycleInput, error) {
+	data, err := io.ReadAll(io.LimitReader(r, 1<<20))
+	if err != nil {
+		return lessonsHookLifecycleInput{}, err
+	}
+
+	var payload struct {
+		SessionID string `json:"session_id"`
+	}
+
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return lessonsHookLifecycleInput{}, err
+	}
+
+	return lessonsHookLifecycleInput{SessionID: payload.SessionID}, nil
 }
 
 // lessonsForFile normalizes path to repo-relative and returns the
@@ -911,14 +1077,22 @@ func readHookInput(r io.Reader) (file, tool string, err error) {
 // the hook is an injection the agent never asked for, so it is capped;
 // the --file view is a deliberate question and gets everything.
 func lessonsForFile(st *store.Store, root, path string, ambient bool) ([]model.Lesson, int, error) {
-	rel := toRepoRel(root, path)
+	return lessonsForFileConfig(st, loadLessonsConfig(root), root, path, ambient)
+}
 
-	// A malformed config must not silence the hook or the --file view;
-	// fall back to defaults (mirrors why/orient's degrade-not-fail).
+func loadLessonsConfig(root string) *reviews.Config {
 	cfg, err := reviews.LoadConfig(root)
 	if err != nil {
-		cfg = reviews.DefaultConfig()
+		return reviews.DefaultConfig()
 	}
+
+	return cfg
+}
+
+func lessonsForFileConfig(st *store.Store, cfg *reviews.Config, root, path string,
+	ambient bool,
+) ([]model.Lesson, int, error) {
+	rel := toRepoRel(root, path)
 
 	budget := 0
 	if ambient {

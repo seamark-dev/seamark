@@ -78,6 +78,7 @@ surface time, so edits take effect with no re-mining:
 threshold: 2                     # min recurrences to surface (default 2)
 pin_budget: 3                    # pins the edit hook injects per edit (default 3)
 change_budget: 6                 # lessons one change_set answer carries (default 6)
+hook_delivery: once-per-context  # suppress repeats until context compaction
 mute:
   - rule: F541                   # hush a noisy rule everywhere
   - region: alembic/versions     # …or every lesson under generated code
@@ -104,6 +105,42 @@ must not hold a slot a strong one wants, and among equals a pin on the
 file beats its package beats a repo-wide `*` — with a `+N more` pointer
 for the rest. Deliberate views (`--file`, `why`) always show
 everything; only the ambient injection is capped.
+
+### Hook delivery modes
+
+Choose one `hook_delivery` value in `.seamark/lessons.yaml`. Omitting the key
+is equivalent to `always`.
+
+To repeat matching lessons after every edit:
+
+```yaml
+# Default: maximize reminder visibility.
+hook_delivery: always
+```
+
+To avoid sending the same lesson repeatedly while an agent works in one
+context window:
+
+```yaml
+# Reduce repeated context; reminders return after context compaction.
+hook_delivery: once-per-context
+```
+
+With `once-per-context`, the first matching edit injects the lesson and later
+matching edits in the same provider session stay silent for that lesson.
+Different lessons can still be injected, and changing a lesson's region or
+symptom gives it a new identity. `seamark init` installs a `PostCompact`
+lifecycle hook that starts a fresh delivery generation after Claude Code
+summarizes old context, so delivered reminders can return when they are useful
+again. After upgrading Seamark, run init once to install or refresh the hooks.
+Configuration is then read on every hook invocation, so switching modes does
+not require re-running init.
+
+The optimization is deliberately fail-open: missing session identity, corrupt
+local state, or a state-lock failure causes normal injection rather than
+silently hiding a lesson. Only repository-scoped session and lesson digests
+are stored in the gitignored `.seamark/lessons-hook-state.json`; entries expire
+after 24 hours.
 
 ## The ledger: lessons --list
 
@@ -265,14 +302,22 @@ bare score.
 `seamark lessons --proposals` re-judges every pending and applied
 proposal under *today's* rules, for free: its confidence facts, a note
 when it was distilled under an older prompt (before the recurrence
-rules tightened), dead citations, and — when current inference
-disagrees with the stored regions — a `regions now:` line with one
-command covering every drifted pin:
+rules tightened), dead citations, the outcome verdict for applied pins
+(the same sentence `--stats` prints — see "Do pins actually change
+behavior?"), and — when current inference disagrees with the stored
+regions — a `regions now:` line with one command covering every
+drifted pin:
 
 ```text
   p65   train-serve-parity                 *
         fair — 2 event(s), fix, newest 65d
+        working — flagged 4× in ~120 region-commits before exposure; 0× in 31 since (fired 9×)
         regions now: workers
+  p47   leak-exception-to-client           svc/api
+        not landing — recurred 2× since exposure (fired 12×)
+
+not landing — p47 fires but the mistake recurs; escalation is yours:
+reword the note, raise the pin, or graduate it to a check
 
 retarget: `seamark lessons --retarget p65,p62,…` updates those pins to
 the recomputed regions (lessons.yaml and the ledger together)
@@ -318,7 +363,9 @@ pins wording one theme never spend two slots:
 - **The edit hook** (`lessons --hook`, wired by `seamark init`): per
   file, at most `pin_budget` pins (default 3, confidence-ranked, a
   `+N more` pointer for the rest) plus the file's recurring mined
-  lessons. Offline, silent when there is nothing to say.
+  lessons. Offline, silent when there is nothing to say. With opt-in
+  `hook_delivery: once-per-context`, already-delivered lessons stay silent
+  until Claude Code compacts the current session.
 - **`change_set` (MCP)**: before a multi-file edit, the union of the
   files' lessons under `change_budget` (default 6) — merged by
   identity, ranked by confidence across the whole set, regions shown as
@@ -337,15 +384,26 @@ actual pre-edit reminder.
 
 Every ambient surface appends a line to `.seamark/lessons-audit.jsonl`
 when it reminds an agent — the impact/decay counterpart to the gate's
-audit log. `seamark lessons --stats` turns that into which lessons
-actually reach agents, split by surface (a `change_set` plan and a CI
-`check` are exposure, not edits reminded), and which *would* surface
-but never have (a lesson whose region no edit touches is a pruning
-candidate):
+audit log. Edit-hook records also carry the rendered context byte count,
+delivery status, context generation, and repository-scoped SHA-256 digests of
+the provider session and tool-use match; raw provider identifiers are never
+persisted or made correlatable across repositories. These fields make repeated
+delivery and opt-in suppression measurable. `seamark lessons --stats` turns
+the log into which lessons actually reach agents, split by surface (a
+`change_set` plan and a CI `check` are exposure, not edits reminded), and which
+*would* surface but never have (a lesson whose region no edit touches is a
+pruning candidate). For
+instrumented hook records it also reports injected context bytes, repeated
+in-session injections, and suppressed repeats. Per-lesson rankings keep actual
+delivery and matching opportunities separate: after one injection and three
+suppressed edits, a lesson reads `×1 delivered / ×4 matched` rather than looking
+as cold as a lesson that matched only once:
 
 ```text
 $ seamark lessons --stats
 lesson firings — 128 hook reminders, 31 change_set, 12 check — across 24 files
+
+hook delivery — instrumented: 128 injected (84 repeated), 0 suppressed; context: 57344 bytes
 
 most surfaced
   ×41  scripts                                  last 2026-07-26  E702
@@ -354,7 +412,48 @@ most surfaced
 never fired — 7 lessons in regions no edit has touched (decay candidates)
   tests                                    E741
   …
+
+pin outcomes — 3 measured: 1 working, 1 not landing, 1 untested
+  p47   leak-exception-to-client           not landing — recurred 2× since exposure (fired 12×)
+  p16   pooled-state-reset                 working — flagged 10× in ~200 region-commits before exposure; 0× in 84 since (fired 41×)
+  p9    cap-per-request-query              untested — 3 region-commits since exposure (fired 5×)
 ```
+
+### Do pins actually change behavior? The outcome loop
+
+Firing counts measure *exposure* — a pin reached an agent. The `pin
+outcomes` block measures *effect*: did the pin's mistake recur after
+agents started seeing it? For every applied pin, seamark joins three
+things it already stores — the firing log (when the pin first reached
+an agent), the finding table (did the same mistake get flagged or
+fixed again after that), and mined history (how many commits touched
+the pin's regions since, so silence in a quiet region is never read as
+success). Everything is recomputed on each run; there is no model
+call, no score, and no new state.
+
+With `once-per-context`, outcome sentences continue to start exposure at the
+first actual delivery, but also show total matches when repeats were suppressed
+(for example, `delivered 1×; matched 4×`). This keeps “reached the agent” distinct
+from “the edited region matched the pin.”
+
+Three verdicts, each a sentence you can check against your own repo:
+
+- **`not landing`** — the pin fires and the mistake recurred anyway.
+  This is the actionable class: the ledger suggests rewording the
+  note, pruning, or promoting the pin toward a machine-checked rule.
+- **`working`** — flagged N times before exposure, zero since, across
+  enough region commits to mean something. Validation, not a removal
+  signal: the pin may be the reason the mistake stopped.
+- **`untested`** — no verdict yet, and the sentence says why: the pin
+  never fired, too few commits touched its regions (fewer than 5),
+  the finding corpus was not re-mined after exposure (run `seamark
+  index --reviews`), or every cited finding has aged out of the
+  mining window.
+
+The exposure clock starts at a pin's **first firing**, not its apply
+date — a pin no agent ever saw cannot have changed behavior. Rewording
+a pin's note restarts its clock (a different reminder is a different
+treatment); reordering its regions or retouching case does not.
 
 ## Reviewing it all: seamark report
 
@@ -375,9 +474,12 @@ machine with no network. Four sections:
 - **Decision queue** — every proposal awaiting `--apply`/`--dismiss`,
   with the findings it cited (click through to the original review
   comment), the commands that decide it, and each card's evidence
-  health: the confidence tier with its facts, the prompt-era note, and
-  a `regions now:` drift line with the `--retarget` command when
-  today's inference disagrees. The header line says what the evidence
+  health: the confidence tier with its facts, the prompt-era note, the
+  outcome verdict for applied pins (`not landing` highlighted — it is
+  the one that needs action), and a `regions now:` drift line with the
+  `--retarget` command when today's inference disagrees. The header
+  stats row carries the aggregate: how many pins were measured, and
+  how many are not landing. The evidence-mix line says what it all
   rests on: *469 review · 34 fix:conventional · 15 fix:subject*.
 - **Near-duplicate pins** — which *applied* pins restate a theme already
   pinned. This is the audit that found 17 redundant pins out of 65 in a

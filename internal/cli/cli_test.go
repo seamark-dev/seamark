@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -571,6 +573,55 @@ func TestLessonsHook(t *testing.T) {
 	assert.Empty(t, strings.TrimSpace(out))
 }
 
+func TestLessonsHookOncePerContextResetsAfterCompaction(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	seedLesson(t, root, "a.go", "RUF001", 4)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("threshold: 2\nhook_delivery: once-per-context\n"), 0o644))
+	payload := `{"session_id":"session-one","tool_name":"Edit","tool_input":{"file_path":"` +
+		filepath.Join(root, "a.go") + `"}}`
+
+	first, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Contains(t, first, "RUF001")
+
+	second, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Empty(t, strings.TrimSpace(second), "the same context receives no duplicate lesson")
+
+	_, _, err = runIn(t, `{"session_id":"session-one"}`,
+		"-C", root, "lessons", "--hook-reset")
+	require.NoError(t, err)
+
+	third, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Contains(t, third, "RUF001", "PostCompact starts a new delivery generation")
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+	require.Len(t, firings, 3)
+	assert.Equal(t, reviews.DeliveryInjected, firings[0].Delivery)
+	assert.Equal(t, reviews.DeliverySuppressedRepeat, firings[1].Delivery)
+	assert.Equal(t, reviews.DeliveryInjected, firings[2].Delivery)
+}
+
+func TestLessonsHookAlwaysRemainsTheDefault(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	seedLesson(t, root, "a.go", "RUF001", 4)
+
+	payload := `{"session_id":"session-one","tool_name":"Edit","tool_input":{"file_path":"` +
+		filepath.Join(root, "a.go") + `"}}`
+	for range 2 {
+		out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+		require.NoError(t, err)
+		assert.Contains(t, out, "RUF001")
+	}
+}
+
 func TestLessonsList(t *testing.T) {
 	root := writeFixture(t)
 
@@ -850,6 +901,76 @@ func TestLessonsProposalsLedger(t *testing.T) {
 	assert.Contains(t, out, "--apply p<id>", "the decide commands ride along")
 }
 
+// TestLessonsProposalsLedgerShowsOutcome wires the passive loop through
+// the real command: a cited finding before exposure, an uncited
+// recurrence in the same cluster after, one genuine firing record — the
+// ledger must render the not-landing sentence and the escalation hint.
+func TestLessonsProposalsLedgerShowsOutcome(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	now := time.Now()
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, LessonKey: "api\x00boundary", Path: "api/handler.go", PR: 11,
+			Body: "guard the api boundary", CreatedAt: now.Add(-time.Hour).Unix(), Source: "review"},
+		{ID: 2, LessonKey: "api\x00boundary", Path: "api/handler.go", PR: 12,
+			Body: "api boundary unguarded again", CreatedAt: now.Add(time.Hour).Unix(), Source: "review"},
+	}))
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "s1", Rule: "boundary-guard", Region: "api", Note: "Guard it.",
+		Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalApplied,
+	}))
+	require.NoError(t, st.Close())
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n  - rule: boundary-guard\n    region: api\n    note: Guard it.\n"), 0o644))
+
+	pin := reviews.PinRule{Rule: "boundary-guard", Region: "api", Note: "Guard it."}
+	require.NoError(t, reviews.RecordFiring(root, "api/handler.go", "Edit",
+		[]model.Lesson{reviews.SurfacedPin{Pin: pin}.Lesson()}))
+
+	out, err := run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "not landing — recurred 1× since exposure (fired 1×)")
+	assert.Contains(t, out, "escalation is yours")
+
+	// --stats prints the same reading: both surfaces render the exact
+	// same sentence from outcome.Line.
+	out, err = run(t, "-C", root, "lessons", "--stats")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "pin outcomes — 1 measured: 0 working, 1 not landing, 0 untested")
+	assert.Contains(t, out, "boundary-guard")
+	assert.Contains(t, out, "not landing — recurred 1× since exposure (fired 1×)")
+}
+
+func TestLessonsOutcomeSurfacesRejectMalformedConfig(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("hook_delivery: sometimes\n"), 0o644))
+
+	_, err = run(t, "-C", root, "lessons", "--stats")
+	require.ErrorContains(t, err, "failed to load lessons config")
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+	_, err = proposalHealth(st, root, []model.Proposal{{
+		ID: 1, Status: model.ProposalApplied,
+	}})
+	require.ErrorContains(t, err, "failed to load lessons config")
+}
+
 func TestLessonsPruneRetiresRestatements(t *testing.T) {
 	root := writeFixture(t)
 
@@ -1047,22 +1168,64 @@ func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
 	require.NoError(t, st.Close())
 
 	// Fire the hook on a.go — it must record a firing.
-	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` +
+	payload := `{"session_id":"session-to-hash","tool_name":"Edit","tool_input":{"file_path":"` +
 		filepath.Join(root, "a.go") + `"}}`
-	_, _, err = runIn(t, payload, "-C", root, "lessons", "--hook")
+	hookJSON, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
 	require.NoError(t, err)
+	var response hookOutput
+	require.NoError(t, json.Unmarshal([]byte(hookJSON), &response))
 
 	firings, err := reviews.ReadFirings(root)
 	require.NoError(t, err)
 	require.Len(t, firings, 1, "the hook logged one firing")
 	assert.Equal(t, "Edit", firings[0].Tool)
+	assert.Equal(t, reviews.DeliveryInjected, firings[0].Delivery)
+	assert.Len(t, firings[0].SessionSHA, 64)
+	assert.NotEqual(t, "session-to-hash", firings[0].SessionSHA)
+	assert.Equal(t, len(response.HookSpecificOutput.AdditionalContext), firings[0].ContextBytes)
 
 	// --stats surfaces the fired lesson and the never-fired decay candidate.
 	out, err := run(t, "-C", root, "lessons", "--stats")
 	require.NoError(t, err)
 	assert.Contains(t, out, "RUF001", "the fired lesson is surfaced")
+	assert.Contains(t, out, "hook delivery — instrumented: 1 injected (0 repeated)")
 	assert.Contains(t, out, "never fired", "the unedited-region lesson is a decay candidate")
 	assert.Contains(t, out, "E501")
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
+func TestLessonsHookDoesNotRecordFailedOutput(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	seedLesson(t, root, "a.go", "RUF001", 4)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("threshold: 2\nhook_delivery: once-per-context\n"), 0o644))
+
+	payload := `{"session_id":"session-to-hash","tool_name":"Edit","tool_input":{"file_path":"` +
+		filepath.Join(root, "a.go") + `"}}`
+	cmd := New()
+	cmd.SetIn(strings.NewReader(payload))
+	cmd.SetOut(failingWriter{})
+	cmd.SetArgs([]string{"-C", root, "lessons", "--hook"})
+
+	err = cmd.Execute()
+	require.Error(t, err)
+
+	firings, readErr := reviews.ReadFirings(root)
+	require.NoError(t, readErr)
+	assert.Empty(t, firings, "a failed hook response never reached the agent")
+
+	out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Contains(t, out, "RUF001",
+		"failed output must not mark the lesson delivered in once-per-context state")
 }
 
 // seedLesson writes one lesson row directly, so hook tests don't need a

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -37,10 +38,14 @@ func seedStore(t *testing.T) (st *store.Store, root string) {
 	}))
 
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
-		{ClusterKey: "scripts\x00RUF001", Region: "scripts", Reviewer: "coderabbit",
-			Symptom: "RUF001", Occurrences: 6, LastTS: 100},
-		{ClusterKey: "scripts\x00once", Region: "scripts", Reviewer: "human",
-			Symptom: "solitary finding", Occurrences: 1, LastTS: 50},
+		{
+			ClusterKey: "scripts\x00RUF001", Region: "scripts", Reviewer: "coderabbit",
+			Symptom: "RUF001", Occurrences: 6, LastTS: 100,
+		},
+		{
+			ClusterKey: "scripts\x00once", Region: "scripts", Reviewer: "human",
+			Symptom: "solitary finding", Occurrences: 1, LastTS: 50,
+		},
 	}, nil))
 
 	return st, root
@@ -98,7 +103,8 @@ func TestFixDensityLine(t *testing.T) {
 
 			err := tx.InsertDecision(&model.Decision{
 				Kind: kind, Ref: fmt.Sprintf("sha%02d", i), TS: int64(1000 - i),
-				Title: c.title, Body: c.body, Files: []string{"api/hot.go"}})
+				Title: c.title, Body: c.body, Files: []string{"api/hot.go"},
+			})
 			if err != nil {
 				return err
 			}
@@ -122,8 +128,10 @@ func TestPinnedNoteSurvivesUntruncated(t *testing.T) {
 	note := "Adding a field to a pooled struct? Reset it in Free() and " +
 		"deep-copy it in clone(). Reviewers have flagged this ten times."
 	lessons := []model.Lesson{
-		{Region: "engine/resolve", Reviewer: "pinned",
-			Symptom: "pooled-state-reset — " + note, Occurrences: 1 << 30},
+		{
+			Region: "engine/resolve", Reviewer: "pinned",
+			Symptom: "pooled-state-reset — " + note, Occurrences: 1 << 30,
+		},
 	}
 
 	var b strings.Builder
@@ -182,8 +190,10 @@ func TestLessonSymptomSanitized(t *testing.T) {
 	// Symptom text originates in untrusted comment bodies; a control
 	// byte must not survive into rendered output.
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
-		{ClusterKey: "k", Region: "x", Reviewer: "bot",
-			Symptom: "bad\x1b[31mansi", Occurrences: 3, LastTS: 1},
+		{
+			ClusterKey: "k", Region: "x", Reviewer: "bot",
+			Symptom: "bad\x1b[31mansi", Occurrences: 3, LastTS: 1,
+		},
 	}, nil))
 
 	var b strings.Builder
@@ -205,10 +215,14 @@ func TestCapturedThemesDontRideTheMinedChannel(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
-		{ClusterKey: "k-creds", Region: "scripts", Reviewer: "copilot",
-			Symptom: "hard codes a postgres url including credentials", Occurrences: 2},
-		{ClusterKey: "k-ruff", Region: "scripts", Reviewer: "coderabbit",
-			Symptom: "RUF003", Occurrences: 2},
+		{
+			ClusterKey: "k-creds", Region: "scripts", Reviewer: "copilot",
+			Symptom: "hard codes a postgres url including credentials", Occurrences: 2,
+		},
+		{
+			ClusterKey: "k-ruff", Region: "scripts", Reviewer: "coderabbit",
+			Symptom: "RUF003", Occurrences: 2,
+		},
 	}, []model.Finding{
 		{ID: 1, LessonKey: "k-creds", Path: "scripts/db.py", Body: "creds", Source: model.SourceReview},
 		{ID: 2, LessonKey: "k-creds", Path: "scripts/etl.py", Body: "creds again", Source: model.SourceReview},
@@ -225,8 +239,10 @@ func TestCapturedThemesDontRideTheMinedChannel(t *testing.T) {
 
 	// The pin as `--apply` writes it into lessons.yaml.
 	pinned := reviews.DefaultConfig()
-	pinned.Pin = []reviews.PinRule{{Rule: "hardcoded-db-credentials", Region: "scripts",
-		Note: "Read credentials from the environment."}}
+	pinned.Pin = []reviews.PinRule{{
+		Rule: "hardcoded-db-credentials", Region: "scripts",
+		Note: "Read credentials from the environment.",
+	}}
 
 	symptoms := func(cfg *reviews.Config) string {
 		out, _, err := LessonsForScopeBudget(st, cfg, "scripts/foo.py", 8, 3)
@@ -234,7 +250,8 @@ func TestCapturedThemesDontRideTheMinedChannel(t *testing.T) {
 
 		var b strings.Builder
 		for _, l := range out {
-			b.WriteString(l.Symptom + "\n")
+			b.WriteString(l.Symptom)
+			b.WriteByte('\n')
 		}
 
 		return b.String()
@@ -270,8 +287,10 @@ func TestPartialCitationDoesNotCoverACluster(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
-		{ClusterKey: "k", Region: "api", Reviewer: "human",
-			Symptom: "wrap engine context", Occurrences: 3},
+		{
+			ClusterKey: "k", Region: "api", Reviewer: "human",
+			Symptom: "wrap engine context", Occurrences: 3,
+		},
 	}, []model.Finding{
 		{ID: 1, LessonKey: "k", Path: "api/a.go", Body: "one", Source: model.SourceReview},
 		{ID: 2, LessonKey: "k", Path: "api/b.go", Body: "two", Source: model.SourceReview},
@@ -295,7 +314,8 @@ func TestPartialCitationDoesNotCoverACluster(t *testing.T) {
 
 	var b strings.Builder
 	for _, l := range out {
-		b.WriteString(l.Symptom + "\n")
+		b.WriteString(l.Symptom)
+		b.WriteByte('\n')
 	}
 
 	assert.Contains(t, b.String(), "wrap engine context",
@@ -312,8 +332,10 @@ func TestDismissedProposalsDontSuppressMinedLessons(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
-		{ClusterKey: "k", Region: "api", Reviewer: "human",
-			Symptom: "wrap engine context", Occurrences: 3},
+		{
+			ClusterKey: "k", Region: "api", Reviewer: "human",
+			Symptom: "wrap engine context", Occurrences: 3,
+		},
 	}, []model.Finding{
 		{ID: 9, LessonKey: "k", Path: "api/a.go", Body: "wrap it", Source: model.SourceReview},
 	}))
@@ -344,8 +366,10 @@ func TestSplitCitationsAcrossPinsDoNotCover(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
-		{ClusterKey: "k", Region: "api", Reviewer: "human",
-			Symptom: "wrap engine context", Occurrences: 2},
+		{
+			ClusterKey: "k", Region: "api", Reviewer: "human",
+			Symptom: "wrap engine context", Occurrences: 2,
+		},
 	}, []model.Finding{
 		{ID: 1, LessonKey: "k", Path: "api/a.go", Body: "one", Source: model.SourceReview},
 		{ID: 2, LessonKey: "k", Path: "api/b.go", Body: "two", Source: model.SourceReview},
@@ -377,7 +401,8 @@ func TestSplitCitationsAcrossPinsDoNotCover(t *testing.T) {
 
 	var b strings.Builder
 	for _, l := range out {
-		b.WriteString(l.Symptom + "\n")
+		b.WriteString(l.Symptom)
+		b.WriteByte('\n')
 	}
 
 	assert.Contains(t, b.String(), "wrap engine context",
@@ -433,7 +458,11 @@ func TestWeakEvidencePinsRankLastAndGetTagged(t *testing.T) {
 	var all strings.Builder
 
 	for _, l := range out {
-		all.WriteString(l.Symptom + " | " + l.Annotation + "\n")
+		all.WriteString(l.Symptom)
+		all.WriteString(" | ")
+		all.WriteString(l.Annotation)
+		all.WriteByte('\n')
+
 		assert.NotContains(t, l.Symptom, "event(s)",
 			"aging facts must never leak into the lesson's identity")
 	}
@@ -467,7 +496,8 @@ func TestLessonsForFilesUnionsAndBudgets(t *testing.T) {
 
 	var all strings.Builder
 	for _, l := range lessons {
-		all.WriteString(l.Symptom + "\n")
+		all.WriteString(l.Symptom)
+		all.WriteByte('\n')
 	}
 
 	assert.Len(t, lessons, 3, "the repo-wide pin is one line, not one per file")
@@ -489,7 +519,8 @@ func TestChangeSetCarriesLessons(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
 		"pin:\n  - rule: guard-empty-datasets\n    region: scripts\n"+
-			"    note: Guard datasets before reductions.\n"), 0o644))
+			"    note: Guard datasets before reductions.\n",
+	), 0o644))
 
 	var b strings.Builder
 	require.NoError(t, ChangeSet(&b, st, root, []string{"scripts/task.py"}))
@@ -538,4 +569,113 @@ func TestStrongPinFromLaterFileBeatsWeakFromFirst(t *testing.T) {
 	assert.Equal(t, 1, trimmed, "the held-back pin is counted")
 	assert.Contains(t, lessons[0].Symptom, "transaction-atomicity",
 		"the hand-written pin from the later file wins the slot over weak evidence")
+}
+
+func TestProposalLedgerRendersOutcome(t *testing.T) {
+	applied := []model.Proposal{
+		{ID: 16, Rule: "pooled-state-reset", Region: "engine"},
+		{ID: 47, Rule: "leak-exception-to-client", Region: "svc/api"},
+		{ID: 9, Rule: "cap-per-request-query", Region: "web"},
+	}
+
+	health := map[int64]ProposalHealth{
+		16: {Tier: "strong", Outcome: "working — flagged 10× in ~200 region-commits " +
+			"before exposure; 0× in 84 since (fired 41×)"},
+		47: {Tier: "strong", Escalate: true,
+			Outcome: "not landing — recurred 2× since exposure (fired 12×)"},
+		// p9 carries no reading: an unmeasured pin must render nothing.
+	}
+
+	var sb strings.Builder
+	PrintProposalLedger(&sb, nil, applied, nil, nil, health)
+	out := sb.String()
+
+	assert.Contains(t, out,
+		"working — flagged 10× in ~200 region-commits before exposure; 0× in 84 since (fired 41×)")
+	assert.Contains(t, out, "not landing — recurred 2× since exposure (fired 12×)")
+
+	// The escalation hint names exactly the not-landing set.
+	assert.Contains(t, out, "not landing — p47 fires but the mistake recurs")
+	assert.NotContains(t, out, "p16 fire")
+
+	// Two measured pins, two sentences — p9 has no reading, so no line.
+	assert.Equal(t, 2, strings.Count(out, "(fired"))
+
+	// No escalating pins — no hint block at all.
+	sb.Reset()
+	PrintProposalLedger(&sb, nil, applied[:1], nil, nil,
+		map[int64]ProposalHealth{16: {Tier: "strong"}})
+	assert.NotContains(t, sb.String(), "escalation is yours")
+}
+
+func TestPrintOutcomesOrdersActionableFirst(t *testing.T) {
+	applied := []model.Proposal{
+		{ID: 9, Rule: "cap-per-request-query", Region: "web"},
+		{ID: 16, Rule: "pooled-state-reset", Region: "engine"},
+		{ID: 47, Rule: "leak-exception-to-client", Region: "svc/api"},
+	}
+
+	readings := map[int64]outcome.Reading{
+		9: {ProposalID: 9, Exposed: true, Firings: 5, PostCommits: 3,
+			Verdict: outcome.VerdictUntested, Reason: outcome.ReasonLowActivity},
+		16: {ProposalID: 16, Exposed: true, Firings: 41, PreEvents: 10,
+			PreCommits: 200, PostCommits: 84, Verdict: outcome.VerdictWorking},
+		47: {ProposalID: 47, Exposed: true, Firings: 12, PostEvents: 2,
+			Verdict: outcome.VerdictNotLanding},
+	}
+
+	var sb strings.Builder
+	PrintOutcomes(&sb, applied, readings)
+	out := sb.String()
+
+	// The aggregate line adds up: measured = working + not landing + untested.
+	assert.Contains(t, out, "pin outcomes — 3 measured: 1 working, 1 not landing, 1 untested")
+
+	// Actionable first: not landing, then working, then untested —
+	// regardless of proposal order.
+	notLanding := strings.Index(out, "leak-exception-to-client")
+	working := strings.Index(out, "pooled-state-reset")
+	untested := strings.Index(out, "cap-per-request-query")
+	require.NotEqual(t, -1, notLanding)
+	require.NotEqual(t, -1, working)
+	require.NotEqual(t, -1, untested)
+	assert.Less(t, notLanding, working)
+	assert.Less(t, working, untested)
+
+	// Each row carries its falsifiable sentence.
+	assert.Contains(t, out, "not landing — recurred 2× since exposure (fired 12×)")
+	assert.Contains(t, out,
+		"working — flagged 10× in ~200 region-commits before exposure; 0× in 84 since (fired 41×)")
+	assert.Contains(t, out, "untested — 3 region-commits since exposure (fired 5×)")
+
+	// Nothing measured — nothing printed, not an empty header.
+	sb.Reset()
+	PrintOutcomes(&sb, applied, nil)
+	assert.Zero(t, sb.Len())
+}
+
+func TestPrintFiringSummaryReportsSuppressionOnlyHistory(t *testing.T) {
+	var out strings.Builder
+	PrintFiringSummary(&out, reviews.Summary{SuppressedHookFirings: 3})
+
+	assert.Contains(t, out.String(), "no lesson firings delivered")
+	assert.Contains(t, out.String(),
+		"hook delivery — instrumented: 0 injected (0 repeated), 3 suppressed")
+	assert.NotContains(t, out.String(), "no lesson firings recorded yet")
+}
+
+func TestPrintFiringSummaryShowsPerLessonMatchesWhenDeliveryIsSuppressed(t *testing.T) {
+	var out strings.Builder
+	PrintFiringSummary(&out, reviews.Summary{
+		Total:     1,
+		BySurface: map[string]int{"hook": 1},
+		Ranked: []reviews.Fired{{
+			Region: "api", Symptom: "sync generated client", Count: 1, Matches: 4,
+			LastTS: "2026-08-10T12:00:00Z",
+		}},
+		InstrumentedHookFirings: 1,
+		SuppressedHookFirings:   3,
+	})
+
+	assert.Contains(t, out.String(), "×1    delivered / ×4    matched")
 }

@@ -47,6 +47,11 @@ type Group struct {
 	// ids. Same members — same signature, regardless of ordering or of
 	// anything outside the group.
 	Signature string
+	// Area marks a directory bucket: thematically unconnected findings
+	// batched so distillation still covers them. Membership in an area
+	// group only means "same directory", so consumers that treat group
+	// membership as "same mistake" (the outcome loop) must skip these.
+	Area bool
 }
 
 // Grouper buckets findings into candidate groups. Implementations must
@@ -111,10 +116,7 @@ func (g *lexicalGrouper) Group(findings []model.Finding) []Group {
 	// "resolve"; keeping it would chain the whole repo into one blob.
 	// The floor keeps the filter dormant on small sets, where a token
 	// carried by most findings IS the theme, not noise.
-	cutoff := int(g.maxDocFrac * float64(len(sorted)))
-	if cutoff < 8 {
-		cutoff = 8
-	}
+	cutoff := max(int(g.maxDocFrac*float64(len(sorted))), 8)
 
 	for i := range tokens {
 		for tok := range tokens[i] {
@@ -228,7 +230,10 @@ func (g *lexicalGrouper) areaGroups(byDir map[string][]model.Finding) []Group {
 		}
 
 		for _, part := range g.bounded(byDir[dir]) {
-			out = append(out, makeGroup(part))
+			grp := makeGroup(part)
+			grp.Area = true
+
+			out = append(out, grp)
 		}
 	}
 

@@ -20,7 +20,7 @@ integrations are live (review mining, distillation agent, gate hook).
 
 This is the context every safety-sensitive answer needs: "no effects
 found" from a half-parsed index is not "no effects". Installation
-problems belong to a future doctor command; status assumes seamark runs
+problems belong to ` + "`seamark doctor`" + `; status assumes seamark runs
 and asks how much its answers can be trusted.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

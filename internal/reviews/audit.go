@@ -2,11 +2,14 @@ package reviews
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/model"
@@ -21,10 +24,41 @@ const auditFile = "lessons-audit.jsonl"
 // binary) — it is skipped, not fatal.
 const maxAuditLine = 1 << 20
 
+// DeliveryStatus records whether a matching edit actually received the
+// rendered lesson context. Empty means an injected legacy record written
+// before delivery status was captured.
+type DeliveryStatus string
+
+const (
+	// DeliveryInjected means the rendered context was emitted to the agent.
+	DeliveryInjected DeliveryStatus = "injected"
+	// DeliverySuppressedRepeat means the match was recorded without emitting
+	// context because the same lesson had already reached the session.
+	DeliverySuppressedRepeat DeliveryStatus = "suppressed-repeat"
+)
+
 // FiredLesson identifies one lesson surfaced in a firing.
 type FiredLesson struct {
 	Region  string `json:"region"`
 	Symptom string `json:"symptom"`
+}
+
+// canonicalIdentity normalizes the parts of a rendered identity that
+// carry no meaning: region order, symptom case, and whitespace. This
+// keeps a pin's exposure history across cosmetic lessons.yaml edits
+// (reordered regions, retouched case). The note text stays significant:
+// a reworded note is a different reminder and restarts the exposure
+// clock. Only the measurement join uses this; records on disk and the
+// Summarize display keep the raw rendered form.
+func (fl FiredLesson) canonicalIdentity() FiredLesson {
+	// Known limit: a region path containing ", " would split wrong.
+	regions := strings.Split(fl.Region, ", ")
+	sort.Strings(regions)
+
+	return FiredLesson{
+		Region:  strings.Join(regions, ", "),
+		Symptom: strings.ToLower(strings.TrimSpace(fl.Symptom)),
+	}
 }
 
 // Firing is one record of the edit hook surfacing lessons before an edit.
@@ -40,6 +74,33 @@ type Firing struct {
 	Files []string      `json:"files,omitempty"`
 	Tool  string        `json:"tool,omitempty"`
 	Fired []FiredLesson `json:"fired"`
+	// Delivery is present on edit-hook records written by current versions.
+	// SessionSHA joins repeated matches without persisting the provider's raw
+	// session identifier or making it correlatable across repositories.
+	// ContextBytes measures the exact UTF-8 payload emitted as additional
+	// context; it is zero for a suppressed match.
+	Delivery     DeliveryStatus `json:"delivery,omitempty"`
+	SessionSHA   string         `json:"session_sha256,omitempty"`
+	MatchSHA     string         `json:"match_sha256,omitempty"`
+	Generation   uint64         `json:"context_generation,omitempty"`
+	ContextBytes int            `json:"context_bytes,omitempty"`
+}
+
+// Delivered reports whether the record represents context that reached the
+// agent. Legacy records have no status and are treated as delivered.
+func (f Firing) Delivered() bool {
+	return f.Delivery == "" || f.Delivery == DeliveryInjected
+}
+
+// HookDelivery describes one edit-hook match. SessionID is hashed before it is
+// persisted; callers must pass the rendered additional-context byte count, not
+// an estimate.
+type HookDelivery struct {
+	Status       DeliveryStatus
+	SessionID    string
+	MatchID      string
+	Generation   uint64
+	ContextBytes int
 }
 
 // RecordFiringSurface appends a firing record to
@@ -50,8 +111,68 @@ type Firing struct {
 // treat the error as best-effort: an audit write must never fail the
 // action it observed.
 func RecordFiringSurface(root, surface string, files []string, tool string, lessons []model.Lesson) error {
-	if len(lessons) == 0 {
+	rec, ok := newFiring(surface, files, tool, lessons)
+	if !ok {
 		return nil
+	}
+
+	return appendFiring(root, rec)
+}
+
+// RecordFiring is RecordFiringSurface for the edit hook, the original
+// (and unnamed) surface.
+func RecordFiring(root, file, tool string, lessons []model.Lesson) error {
+	return RecordFiringSurface(root, "", []string{file}, tool, lessons)
+}
+
+// RecordHookDelivery appends an instrumented edit-hook record. It preserves
+// RecordFiring for callers and historical tests that intentionally exercise
+// the legacy on-disk shape.
+func RecordHookDelivery(root, file, tool string, lessons []model.Lesson, delivery HookDelivery) error {
+	if delivery.ContextBytes < 0 {
+		return fmt.Errorf("hook delivery context bytes cannot be negative")
+	}
+
+	status := delivery.Status
+	switch delivery.Status {
+	case "", DeliveryInjected:
+		status = DeliveryInjected
+	case DeliverySuppressedRepeat:
+		if delivery.ContextBytes != 0 {
+			return fmt.Errorf("suppressed hook delivery cannot contain context bytes")
+		}
+	default:
+		return fmt.Errorf("unknown hook delivery status %q", delivery.Status)
+	}
+
+	rec, ok := newFiring("", []string{file}, tool, lessons)
+	if !ok {
+		return nil
+	}
+
+	rec.Delivery = status
+	rec.ContextBytes = delivery.ContextBytes
+
+	if delivery.SessionID != "" {
+		rec.SessionSHA = sessionDigest(root, delivery.SessionID)
+	}
+
+	if delivery.MatchID != "" {
+		rec.MatchSHA = matchDigest(root, delivery.SessionID, delivery.MatchID)
+	}
+
+	rec.Generation = delivery.Generation
+
+	return appendFiring(root, rec)
+}
+
+func matchDigest(root, sessionID, matchID string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(root+"\x00"+sessionID+"\x00"+matchID)))
+}
+
+func newFiring(surface string, files []string, tool string, lessons []model.Lesson) (Firing, bool) {
+	if len(lessons) == 0 {
+		return Firing{}, false
 	}
 
 	fired := make([]FiredLesson, len(lessons))
@@ -74,13 +195,7 @@ func RecordFiringSurface(root, surface string, files []string, tool string, less
 		rec.Files = files
 	}
 
-	return appendFiring(root, rec)
-}
-
-// RecordFiring is RecordFiringSurface for the edit hook, the original
-// (and unnamed) surface.
-func RecordFiring(root, file, tool string, lessons []model.Lesson) error {
-	return RecordFiringSurface(root, "", []string{file}, tool, lessons)
+	return rec, true
 }
 
 // appendFiring writes one record to the firing log.
@@ -167,20 +282,28 @@ func readAuditLine(br *bufio.Reader, limit int) (line []byte, tooLong bool, err 
 type Fired struct {
 	Region  string
 	Symptom string
-	Count   int
-	LastTS  string
+	Count   int    // records that delivered this lesson
+	Matches int    // delivered plus suppressed records naming this lesson
+	LastTS  string // most recent delivered or suppressed match
 }
 
 // Summary is the aggregate the `--stats` view renders.
 type Summary struct {
-	Total int // firing events across every surface
+	Total int // delivered firing events across every surface
 	// BySurface splits the events: an actual pre-edit hook reminder, a
 	// change_set plan, and a CI check are different kinds of exposure,
 	// and "edits reminded" must not count the other two.
 	BySurface  map[string]int
 	Files      int            // distinct files that triggered a firing
-	Ranked     []Fired        // surfaced lessons that fired, most-fired first
+	Ranked     []Fired        // surfaced lessons, most matching opportunities first
 	NeverFired []model.Lesson // lessons that would surface but never have
+	// Delivery-intensity fields cover current instrumented edit-hook rows.
+	// RepeatedHookFirings is a subset of InstrumentedHookFirings where every
+	// lesson had already been injected in the same provider session.
+	InstrumentedHookFirings int
+	RepeatedHookFirings     int
+	SuppressedHookFirings   int
+	HookContextBytes        int
 }
 
 // Summarize aggregates firings and cross-references the currently-
@@ -189,14 +312,84 @@ type Summary struct {
 func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 	type key struct{ region, symptom string }
 
+	type sessionLessonKey struct {
+		session    string
+		generation uint64
+		lesson     FiredLesson
+	}
+
 	count := map[key]*Fired{}
 	files := map[string]bool{}
 	bySurface := map[string]int{}
+	delivered := 0
+	seenSessionLessons := map[sessionLessonKey]bool{}
+
+	var instrumented, repeated, suppressed, contextBytes int
 
 	for _, fr := range firings {
+		// Unknown delivery values are corrupt future/input records. Product stats
+		// stay best-effort and skip them; the benchmark's strict evidence path
+		// rejects them instead.
+		switch fr.Delivery {
+		case "", DeliveryInjected:
+		case DeliverySuppressedRepeat:
+			if fr.Surface != "" {
+				continue
+			}
+		default:
+			continue
+		}
+
+		isSuppressed := fr.Surface == "" && fr.Delivery == DeliverySuppressedRepeat
+		if isSuppressed {
+			suppressed++
+		}
+
+		for _, fl := range fr.Fired {
+			k := key{fl.Region, fl.Symptom}
+
+			f := count[k]
+			if f == nil {
+				f = &Fired{Region: fl.Region, Symptom: fl.Symptom}
+				count[k] = f
+			}
+
+			f.Matches++
+			if fr.TS > f.LastTS {
+				f.LastTS = fr.TS
+			}
+		}
+
+		if !fr.Delivered() {
+			continue
+		}
+
+		delivered++
+
 		surface := fr.Surface
 		if surface == "" {
 			surface = "hook"
+		}
+
+		if surface == "hook" && fr.Delivery == DeliveryInjected {
+			instrumented++
+			contextBytes += fr.ContextBytes
+
+			if fr.SessionSHA != "" && len(fr.Fired) > 0 {
+				allRepeated := true
+
+				for _, lesson := range fr.Fired {
+					key := sessionLessonKey{fr.SessionSHA, fr.Generation, lesson.canonicalIdentity()}
+					if !seenSessionLessons[key] {
+						allRepeated = false
+						seenSessionLessons[key] = true
+					}
+				}
+
+				if allRepeated {
+					repeated++
+				}
+			}
 		}
 
 		bySurface[surface]++
@@ -211,17 +404,7 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 
 		for _, fl := range fr.Fired {
 			k := key{fl.Region, fl.Symptom}
-
-			f := count[k]
-			if f == nil {
-				f = &Fired{Region: fl.Region, Symptom: fl.Symptom}
-				count[k] = f
-			}
-
-			f.Count++
-			if fr.TS > f.LastTS {
-				f.LastTS = fr.TS
-			}
+			count[k].Count++
 		}
 	}
 
@@ -231,6 +414,10 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 	}
 
 	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].Matches != ranked[j].Matches {
+			return ranked[i].Matches > ranked[j].Matches
+		}
+
 		if ranked[i].Count != ranked[j].Count {
 			return ranked[i].Count > ranked[j].Count
 		}
@@ -247,16 +434,89 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 			continue
 		}
 
-		if _, ok := count[key{l.Region, l.Symptom}]; !ok {
+		f, ok := count[key{l.Region, l.Symptom}]
+		if !ok || f.Count == 0 {
 			never = append(never, l)
 		}
 	}
 
 	return Summary{
-		Total:      len(firings),
-		BySurface:  bySurface,
-		Files:      len(files),
-		Ranked:     ranked,
-		NeverFired: never,
+		Total:                   delivered,
+		BySurface:               bySurface,
+		Files:                   len(files),
+		Ranked:                  ranked,
+		NeverFired:              never,
+		InstrumentedHookFirings: instrumented,
+		RepeatedHookFirings:     repeated,
+		SuppressedHookFirings:   suppressed,
+		HookContextBytes:        contextBytes,
 	}
+}
+
+// Exposure is one lesson's firing history: when it first reached an
+// agent, and how many times in total. The first firing — not the pin's
+// apply date — starts the outcome loop's exposure clock, because a pin
+// that never surfaced cannot have changed behavior.
+type Exposure struct {
+	First   time.Time // earliest delivered firing with a parseable timestamp, UTC
+	Count   int       // delivered firing records naming this lesson, all surfaces
+	Matches int       // delivered plus suppressed records naming this lesson
+}
+
+// FirstFirings folds the firing log into per-identity exposure and matching
+// opportunities. Suppressed matches increase Matches but never Count or First.
+// Keys are canonical identities; look pins up with PinIdentity, never by
+// re-building the rendered strings. A record with an unparseable
+// timestamp still counts toward Count but cannot set First; an
+// identity with no parseable timestamp at all is omitted, which
+// downstream reads as never fired.
+func FirstFirings(firings []Firing) map[FiredLesson]Exposure {
+	counts := make(map[FiredLesson]int)
+	matches := make(map[FiredLesson]int)
+	filtered := make(map[FiredLesson]time.Time)
+
+	for _, entry := range firings {
+		switch entry.Delivery {
+		case "", DeliveryInjected:
+		case DeliverySuppressedRepeat:
+			if entry.Surface != "" {
+				continue
+			}
+		default:
+			continue
+		}
+
+		for _, lesson := range entry.Fired {
+			matches[lesson.canonicalIdentity()]++
+		}
+
+		if !entry.Delivered() {
+			continue
+		}
+
+		var firedAt *time.Time
+		if ts, err := time.Parse(time.RFC3339, entry.TS); err == nil {
+			firedAt = &ts
+		}
+
+		for _, lesson := range entry.Fired {
+			k := lesson.canonicalIdentity()
+			counts[k]++
+
+			if firedAt == nil {
+				continue
+			}
+
+			if first, ok := filtered[k]; !ok || firedAt.Before(first) {
+				filtered[k] = *firedAt
+			}
+		}
+	}
+
+	out := make(map[FiredLesson]Exposure, len(filtered))
+	for fl, first := range filtered {
+		out[fl] = Exposure{First: first.UTC(), Count: counts[fl], Matches: matches[fl]}
+	}
+
+	return out
 }

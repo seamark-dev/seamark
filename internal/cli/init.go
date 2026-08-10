@@ -37,9 +37,9 @@ func newInitCmd(opts *options) *cobra.Command {
     .seamark/config.yaml (starters, never overwriting an existing file)
   - adds the .gitignore carve-outs that keep the index local but the
     policy-as-code files in review
-  - wires the Claude Code PreToolUse hooks into .claude/settings.json:
-    the command gate on Bash, the review-lessons reminder on edits —
-    merged into any existing hooks, and safe to re-run
+  - wires Claude Code hooks into .claude/settings.json: the command gate
+    on Bash, the review-lessons reminder on edits, and a PostCompact
+    delivery reset — merged into any existing hooks, and safe to re-run
 
 A first init never blocks anything: it installs the gate hook in warn
 mode, which reports verdicts and always lets the command through.
@@ -341,8 +341,9 @@ func ensureGitignore(w io.Writer, root string, printOnly bool) error {
 	return nil
 }
 
-// hookSpec is one PreToolUse hook seamark installs.
+// hookSpec is one Claude Code hook seamark installs.
 type hookSpec struct {
+	event   string
 	matcher string
 	// marker is the command's argument tail (everything after the binary
 	// path). It is matched as a suffix — with the joining space — to
@@ -370,10 +371,12 @@ func hookSpecs(gateMode string) []hookSpec {
 	}
 
 	return []hookSpec{
-		{"Bash", gateMarker(gateMode), []string{gateMarker(other)},
+		{"PreToolUse", "Bash", gateMarker(gateMode), []string{gateMarker(other)},
 			"seamark gate: classifying command", 15},
-		{"Edit|Write|MultiEdit", "lessons --hook", nil,
+		{"PreToolUse", "Edit|Write|MultiEdit", hooks.LessonsMarker, nil,
 			"seamark: checking review lessons", 10},
+		{"PostCompact", "", hooks.LessonsResetMarker, nil,
+			"seamark: resetting lesson delivery", 10},
 	}
 }
 
@@ -409,7 +412,7 @@ func writeHooks(w io.Writer, path string, settings map[string]any, changed bool,
 		}
 	}
 
-	fmt.Fprintf(w, "  %s .claude/settings.json (PreToolUse hooks: gate + lessons)\n", verb)
+	fmt.Fprintf(w, "  %s .claude/settings.json (gate + lessons + context reset hooks)\n", verb)
 	printHookCommands(w, bin, gateMode)
 
 	// The note states only what changed — the hook flag; whether anything
@@ -432,7 +435,12 @@ func writeHooks(w io.Writer, path string, settings map[string]any, changed bool,
 // which tool must never require opening settings.json to find out.
 func printHookCommands(w io.Writer, bin, gateMode string) {
 	for _, spec := range hookSpecs(gateMode) {
-		fmt.Fprintf(w, "          %-22s %s %s\n", spec.matcher, shellQuote(bin), spec.marker)
+		where := spec.event
+		if spec.matcher != "" {
+			where += " " + spec.matcher
+		}
+
+		fmt.Fprintf(w, "          %-30s %s %s\n", where, shellQuote(bin), spec.marker)
 	}
 }
 
@@ -441,7 +449,7 @@ func installedGateMode(settings map[string]any) string {
 	return hooks.InstalledGateMode(settings)
 }
 
-// mergeHooks adds seamark's PreToolUse hooks into an existing settings
+// mergeHooks adds seamark's hooks into an existing settings
 // map, preserving every other hook and updating (never duplicating) a
 // seamark hook already present. Returns whether anything changed. It
 // errors rather than silently overwriting a present-but-wrong-typed
@@ -453,33 +461,36 @@ func mergeHooks(settings map[string]any, bin, gateMode string) (changed bool, er
 		return false, err
 	}
 
-	pre, err := childSlice(hookMap, "PreToolUse")
-	if err != nil {
-		return false, err
-	}
-
 	for _, spec := range hookSpecs(gateMode) {
+		eventHooks, err := childSlice(hookMap, spec.event)
+		if err != nil {
+			return false, err
+		}
+
 		want := shellQuote(bin) + " " + spec.marker
 
-		found, updated := applyExisting(pre, append([]string{spec.marker}, spec.legacy...), want)
+		found, updated := applyExisting(eventHooks, append([]string{spec.marker}, spec.legacy...), want)
 		if found {
 			changed = changed || updated
 			continue
 		}
 
-		pre = append(pre, map[string]any{
-			"matcher": spec.matcher,
+		entry := map[string]any{
 			"hooks": []any{map[string]any{
 				"type":          "command",
 				"command":       want,
 				"timeout":       spec.timeout,
 				"statusMessage": spec.status,
 			}},
-		})
+		}
+		if spec.matcher != "" {
+			entry["matcher"] = spec.matcher
+		}
+
+		eventHooks = append(eventHooks, entry)
+		hookMap[spec.event] = eventHooks
 		changed = true
 	}
-
-	hookMap["PreToolUse"] = pre
 
 	return changed, nil
 }

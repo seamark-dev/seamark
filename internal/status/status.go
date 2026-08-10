@@ -99,7 +99,7 @@ func Gather(st *store.Store, root string) (*Status, error) {
 	}{
 		{"schema_version", func(v string) { s.SchemaVersion = v }},
 		{"indexed_at", func(v string) { s.IndexedAt = parseUnix(v) }},
-		{"reviews_mined_at", func(v string) { s.ReviewsMinedAt = parseUnix(v) }},
+		{store.MetaReviewsMinedAt, func(v string) { s.ReviewsMinedAt = parseUnix(v) }},
 		{"index_summary", func(v string) {
 			var c Coverage
 			if json.Unmarshal([]byte(v), &c) == nil {

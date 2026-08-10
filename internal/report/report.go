@@ -16,6 +16,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/fixes"
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
@@ -624,14 +625,9 @@ func coveredClusters(st *store.Store, cfg *reviews.Config, applied []model.Propo
 // what those commands would write or remove.
 func pinLive(cfg *reviews.Config, proposal model.Proposal) bool {
 	want := reviews.NewPinKey(proposal.Rule, proposal.Region, proposal.Regions)
+	_, ok := cfg.FindPin(want)
 
-	for _, p := range cfg.Pin {
-		if reviews.NewPinKey(p.Rule, p.Region, p.Regions) == want {
-			return true
-		}
-	}
-
-	return false
+	return ok
 }
 
 // PrintLessonReminder writes a compact standalone lessons block for one
@@ -690,6 +686,13 @@ func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson, moreP
 // candidate). All lesson text is untrusted, hence sanitized.
 func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 	if s.Total == 0 {
+		if s.SuppressedHookFirings > 0 {
+			fmt.Fprintln(w, "no lesson firings delivered — recorded hook matches were suppressed")
+			printHookDeliverySummary(w, s)
+
+			return
+		}
+
 		fmt.Fprintln(w, "no lesson firings recorded yet — the edit hook logs each time it "+
 			"reminds an agent (wire it with `seamark init`)")
 
@@ -699,6 +702,8 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 	fmt.Fprintf(w, "lesson firings — %d hook reminders, %d change_set, %d check — across %d files\n\n",
 		s.BySurface["hook"], s.BySurface["change_set"], s.BySurface["check"], s.Files)
 
+	printHookDeliverySummary(w, s)
+
 	fmt.Fprintf(w, "most surfaced\n")
 
 	shown := s.Ranked
@@ -707,6 +712,14 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 	}
 
 	for _, f := range shown {
+		if f.Matches > f.Count {
+			fmt.Fprintf(w, "  ×%-4d delivered / ×%-4d matched  %-40s last %s  %s\n",
+				f.Count, f.Matches, render.Sanitize(f.Region),
+				firingDate(f.LastTS), render.Sanitize(f.Symptom))
+
+			continue
+		}
+
 		fmt.Fprintf(w, "  ×%-4d %-40s last %s  %s\n",
 			f.Count, render.Sanitize(f.Region),
 			firingDate(f.LastTS), render.Sanitize(f.Symptom))
@@ -728,6 +741,17 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 	}
 }
 
+func printHookDeliverySummary(w io.Writer, s reviews.Summary) {
+	if s.InstrumentedHookFirings == 0 && s.SuppressedHookFirings == 0 {
+		return
+	}
+
+	fmt.Fprintf(w, "hook delivery — instrumented: %d injected (%d repeated), "+
+		"%d suppressed; context: %d bytes\n\n",
+		s.InstrumentedHookFirings, s.RepeatedHookFirings,
+		s.SuppressedHookFirings, s.HookContextBytes)
+}
+
 // firingDate trims an RFC3339 timestamp to its date for compact display.
 func firingDate(ts string) string {
 	if len(ts) >= 10 {
@@ -735,6 +759,38 @@ func firingDate(ts string) string {
 	}
 
 	return ts
+}
+
+// PrintOutcomes renders the passive loop's verdicts under --stats:
+// an aggregate count line, then one verdict sentence per measured
+// pin. Not-landing pins print first because they are the ones that
+// need action. When nothing was measured it prints nothing, not an
+// empty header.
+func PrintOutcomes(w io.Writer, applied []model.Proposal, readings map[int64]outcome.Reading) {
+	if len(readings) == 0 {
+		return
+	}
+
+	counts := map[outcome.Verdict]int{}
+
+	for _, r := range readings {
+		counts[r.Verdict]++
+	}
+
+	fmt.Fprintf(w, "\npin outcomes — %d measured: %d working, %d not landing, %d untested\n",
+		len(readings), counts[outcome.VerdictWorking],
+		counts[outcome.VerdictNotLanding], counts[outcome.VerdictUntested])
+
+	for _, verdict := range []outcome.Verdict{
+		outcome.VerdictNotLanding, outcome.VerdictWorking, outcome.VerdictUntested,
+	} {
+		for _, p := range applied {
+			if r, ok := readings[p.ID]; ok && r.Verdict == verdict {
+				fmt.Fprintf(w, "  p%-4d %-34s %s\n",
+					p.ID, render.Sanitize(p.Rule), r.Line())
+			}
+		}
+	}
 }
 
 // LedgerForRegion returns every mined lesson in a region's area: the
@@ -910,6 +966,13 @@ type ProposalHealth struct {
 	Facts    string
 	Era      string // e.g. "distilled under prompt v1, before the recurrence rule"
 	Retarget string // recomputed regions when they differ; "" when current
+	// Outcome is the passive loop's verdict sentence (outcome.Line)
+	// for applied pins. Empty when the pin cannot be measured: pending
+	// proposals, pruned pins, hand-written pins without citations.
+	Outcome string
+	// Escalate is true for not-landing pins: the pin fires and the
+	// mistake recurs anyway. Drives the escalation hint in the ledger.
+	Escalate bool
 }
 
 // PrintProposalLedger renders the distillation decision record: what is
@@ -944,6 +1007,17 @@ func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Propos
 	}
 
 	printDecidedHealth(w, "applied — these are pins in .seamark/lessons.yaml", applied, health)
+	if ids := escalateIDs(applied, health); len(ids) > 0 {
+		verb := "fire"
+		if len(ids) == 1 {
+			verb = "fires"
+		}
+
+		fmt.Fprintf(w, "\nnot landing — %s %s but the mistake recurs; escalation is yours: "+
+			"reword the note, raise the pin, or graduate it to a check\n",
+			strings.Join(ids, ", "), verb)
+	}
+
 	printDecided(w, "dismissed — not re-proposed unless their evidence changes", dismissed)
 
 	retargets := retargetIDs(applied, health)
@@ -1048,6 +1122,10 @@ func printHealth(w io.Writer, h ProposalHealth) {
 	if h.Retarget != "" {
 		fmt.Fprintf(w, "        regions now: %s\n", render.Sanitize(h.Retarget))
 	}
+
+	if h.Outcome != "" {
+		fmt.Fprintf(w, "        %s\n", render.Sanitize(h.Outcome))
+	}
 }
 
 // retargetIDs lists the applied proposals whose recomputed regions
@@ -1057,6 +1135,20 @@ func retargetIDs(applied []model.Proposal, health map[int64]ProposalHealth) []st
 
 	for _, p := range applied {
 		if health[p.ID].Retarget != "" {
+			out = append(out, fmt.Sprintf("p%d", p.ID))
+		}
+	}
+
+	return out
+}
+
+// escalateIDs lists the applied proposals whose pins read "not
+// landing", in pN form for the hint line.
+func escalateIDs(applied []model.Proposal, health map[int64]ProposalHealth) []string {
+	var out []string
+
+	for _, p := range applied {
+		if health[p.ID].Escalate {
 			out = append(out, fmt.Sprintf("p%d", p.ID))
 		}
 	}

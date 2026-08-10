@@ -415,6 +415,12 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 		}
 
 		fixCount = len(fixRes.Findings)
+
+		// Stamp the mine time. The outcome loop only trusts "no
+		// recurrence since exposure" if mining actually ran since.
+		if err := st.SetMeta(store.MetaFixesMinedAt, fmt.Sprint(time.Now().Unix())); err != nil {
+			return reviews.Result{}, 0, err
+		}
 	}
 
 	// The window is the only config the review miner takes; a broken

@@ -12,13 +12,14 @@ path can never become an element.
 <title>seamark report — {{.Repo}}</title>
 <style>
 :root {
-  --ink:#14181A; --paper:#F4F3F0; --amber:#E8B23A; --rust:#C4553D; --sea:#4B7A6B;
+  --ink:#14181A; --paper:#F4F3F0; --amber:#E8B23A; --rust:#A33A2B; --sea:#4B7A6B;
   --bg:var(--paper); --fg:var(--ink); --dim:#6B7280; --line:#DDD9D2; --panel:#FFFFFF;
   --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,monospace;
   --sans:system-ui,-apple-system,sans-serif;
 }
 @media (prefers-color-scheme:dark) {
-  :root { --bg:#14181A; --fg:#F4F3F0; --dim:#8B95A1; --line:#262C30; --panel:#1B2124; }
+  :root { --bg:#14181A; --fg:#F4F3F0; --dim:#8B95A1; --line:#262C30; --panel:#1B2124;
+    --rust:#EF806B; }
 }
 * { box-sizing:border-box }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 var(--mono); }
@@ -50,6 +51,7 @@ h2 .hint { text-transform:none; letter-spacing:0; font-weight:400; margin-left:8
 .badge.strong { opacity:.55 }
 .health { font-size:11px; color:var(--dim); margin:4px 0 0 }
 .health .drift { color:var(--amber) }
+.health.notlanding { color:var(--rust); font-weight:600 }
 .note { margin:0 0 8px; font-family:var(--sans); font-size:13.5px }
 .meta { display:flex; gap:14px; font-size:11.5px; color:var(--dim); flex-wrap:wrap }
 .region { color:var(--sea) }
@@ -152,6 +154,9 @@ footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line); co
   </div>
   {{- if and .Tier (ne .Tier "strong")}}
   <p class="health">{{.Tier}} — {{.Facts}}</p>
+  {{- end}}
+  {{- if .Outcome}}
+  <p class="health{{if .NotLanding}} notlanding{{end}}">{{.Outcome}}</p>
   {{- end}}
   {{- if .Era}}
   <p class="health">{{.Era}}</p>

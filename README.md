@@ -301,12 +301,12 @@ The whole lifecycle is `seamark lessons`, one flag per decision:
 | `--file <path>`   | the lessons that would fire when editing one file — the hook's view, uncapped                                                                                 |
 | `--list` / `--region <dir>` | the raw ledger, one-offs included, with copy-paste config syntax                                                                                    |
 | `--distill`       | batch new findings through your agent CLI into proposed pins; already-distilled evidence is never paid for twice (`--region`, `--limit`, `--dry-run` budget it; a preflight always discloses first) |
-| `--proposals`     | the decision ledger, free: pending/applied/dismissed, each with its confidence facts, its prompt-era note, and the regions today's inference would assign      |
+| `--proposals`     | the decision ledger, free: pending/applied/dismissed, each with its confidence facts, its prompt-era note, its outcome verdict (applied pins), and the regions today's inference would assign |
 | `--apply p3,p7`   | pin chosen proposals (ranges work: `p1..p9`); writes `lessons.yaml` only with `distill.write`, else prints the block to paste                                 |
 | `--dismiss p2`    | record a no — the same evidence is never re-proposed                                                                                                          |
 | `--prune p16,p45` | retire pins that restate another (the ledger names the clusters); the theme stays pinned by its survivor                                                      |
 | `--retarget p3`   | update an applied pin to the regions its living evidence supports now — failures roll `lessons.yaml` back, and re-running always converges                    |
-| `--stats`         | the firing log: which lessons actually reach agents (split by surface: hook / change_set / check), and which never fire — the decay signal                    |
+| `--stats`         | the firing log: which lessons actually reach agents (split by surface: hook / change_set / check), which never fire — the decay signal — and per-pin outcomes: did the mistake recur after the pin started firing (working / not landing / untested) |
 | `--hook`          | the PreToolUse entry point `seamark init` wires; offline, silent when a file has no lessons                                                                   |
 
 Mined text is scrubbed of secret-shaped values (connection strings,
@@ -319,11 +319,44 @@ A committed `.seamark/lessons.yaml` tunes what surfaces — `mute` kills
 noise, `pin` forces what must never be ignored (single `region` or a
 `regions: [api, db]` set), `threshold` sets the recurrence bar,
 `pin_budget` caps the hook's injection (default 3), `change_budget` the
-`change_set` block (default 6) — and `seamark report` renders the whole
-decision queue as one self-contained HTML page. The full pipeline —
+`change_set` block (default 6), and `hook_delivery` controls whether a
+matching lesson repeats during the current agent context.
+
+### Choose how often hook lessons repeat
+
+Choose one of these settings in `.seamark/lessons.yaml`. If the key is
+omitted, Seamark uses `always`.
+
+Use the default when every matching edit should receive the reminder:
+
+```yaml
+# Repeat matching lessons after every edit (default).
+hook_delivery: always
+```
+
+Use the opt-in mode to reduce repeated context when an agent edits the same
+area several times:
+
+```yaml
+# Deliver each lesson once, then allow it again after context compaction.
+hook_delivery: once-per-context
+```
+
+`once-per-context` suppresses only lessons already delivered in the current
+agent context—the conversation content the model can still see. The
+`seamark init` command installs the `PostCompact` reset that lets those lessons
+return after Claude Code compacts old context. After upgrading Seamark, run
+`seamark init` once to install or refresh these hooks; changing the setting
+later does not require running init again. If the session identity or local
+state is unavailable, Seamark fails open and delivers the lesson normally.
+
+See [Hook delivery modes](docs/lessons.md#hook-delivery-modes) for the state,
+privacy, and lifecycle details. `seamark report` renders the whole decision
+queue as one self-contained HTML page. The full pipeline —
 mining heuristics, fix-commit classification, region inference,
 confidence tiers, distillation economics, near-duplicate pruning, the
-firing stats — is documented in [docs/lessons.md](docs/lessons.md).
+firing stats, and the outcome loop that answers whether pins actually
+change behavior — is documented in [docs/lessons.md](docs/lessons.md).
 
 ## Journey 3: guard agent commands
 
@@ -380,6 +413,10 @@ closed** — a malformed payload, a broken policy file, or an internal
 error blocks the command instead of silently allowing it. Re-running
 `init` without `--gate-mode` keeps whatever mode is installed, and every
 run ends with a `gate` line stating the effective behavior.
+
+The same init also wires the edit-time lessons hook and a silent
+`PostCompact` reset. The reset matters only when `.seamark/lessons.yaml` opts
+into `hook_delivery: once-per-context`; default `always` delivery is unchanged.
 
 The agent sees the denial reason and corrects course; you see every
 decision in `.seamark/audit.jsonl` — an append-only trail of what your
@@ -648,9 +685,10 @@ design history in [docs/PLAN.md](docs/PLAN.md). Trust boundaries:
 [docs/threat-model.md](docs/threat-model.md).
 
 Planned next (see [docs/PLAN.md](docs/PLAN.md)): zero-token check
-promotion from recurring lessons, function-grain history enrichment,
-history watermark + incremental daemon for keystroke-adjacent freshness,
-signed artifacts + npm/Homebrew packaging.
+promotion from recurring lessons, function-grain precision refinements,
+public signal evaluation and multi-instance lessons evidence, history
+watermark + incremental daemon for keystroke-adjacent freshness, and signed
+artifacts + npm/Homebrew packaging.
 
 ## Development
 

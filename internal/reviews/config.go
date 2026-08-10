@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -29,6 +30,19 @@ const DefaultPinBudget = 3
 // per-file budget would print thirty lines.
 const DefaultChangeBudget = 6
 
+// HookDeliveryMode controls whether an ambient edit hook repeats lesson
+// context within one provider context window.
+type HookDeliveryMode string
+
+const (
+	// HookDeliveryAlways preserves the original behavior: every matching edit
+	// receives the applicable lesson context.
+	HookDeliveryAlways HookDeliveryMode = "always"
+	// HookDeliveryOncePerContext emits each lesson once per provider session,
+	// then permits it again after a context-compaction reset.
+	HookDeliveryOncePerContext HookDeliveryMode = "once-per-context"
+)
+
 // Config tunes how mined lessons surface (`.seamark/lessons.yaml`),
 // applied at surface time so edits take effect without re-mining — the
 // same contract as the gate's policy.yaml. An absent file yields
@@ -36,6 +50,9 @@ const DefaultChangeBudget = 6
 type Config struct {
 	// Threshold overrides the minimum recurrences to surface a lesson.
 	Threshold int `yaml:"threshold"`
+	// Delivery controls repeated ambient edit-hook context. Empty means
+	// HookDeliveryAlways for compatibility with existing configuration files.
+	Delivery HookDeliveryMode `yaml:"hook_delivery"`
 	// PinBudget overrides how many pins the edit hook injects per edit
 	// (most-specific regions first; the rest are one pointer line away).
 	// 0 means DefaultPinBudget.
@@ -48,6 +65,15 @@ type Config struct {
 	// Pin surfaces curated lessons unconditionally — the "must not be
 	// ignored" list — even when mining never found them.
 	Pin []PinRule `yaml:"pin"`
+}
+
+// HookDelivery resolves the effective edit-hook delivery mode.
+func (c *Config) HookDelivery() HookDeliveryMode {
+	if c.Delivery == "" {
+		return HookDeliveryAlways
+	}
+
+	return c.Delivery
 }
 
 // HookPinBudget resolves the effective per-injection pin cap.
@@ -182,6 +208,13 @@ func LoadConfig(root string) (*Config, error) {
 		cfg.Threshold = DefaultThreshold
 	}
 
+	switch cfg.HookDelivery() {
+	case HookDeliveryAlways, HookDeliveryOncePerContext:
+	default:
+		return nil, fmt.Errorf("lessons config: hook_delivery must be %q or %q, got %q",
+			HookDeliveryAlways, HookDeliveryOncePerContext, cfg.Delivery)
+	}
+
 	return cfg, nil
 }
 
@@ -249,6 +282,15 @@ func pinLesson(p PinRule) model.Lesson {
 		// ranked ahead of mined lessons.
 		Occurrences: 1 << 30,
 	}
+}
+
+// PinIdentity returns the canonical identity this pin's firings are
+// counted under. It wraps pinLesson — the same rendering every surface
+// emits — so the log's writer and this reader cannot drift apart.
+func PinIdentity(p PinRule) FiredLesson {
+	l := pinLesson(p)
+
+	return FiredLesson{Region: l.Region, Symptom: l.Symptom}.canonicalIdentity()
 }
 
 // Surface applies the config to a set of mined lessons for a given scope:
@@ -349,17 +391,7 @@ func CollapseRestated(pins []SurfacedPin) (kept []SurfacedPin, dropped int) {
 	for _, sp := range pins {
 		t := wording.New(sp.Pin.Rule, sp.Pin.Note)
 
-		dup := false
-
-		for _, k := range topics {
-			if t.Restates(k) {
-				dup = true
-
-				break
-			}
-		}
-
-		if dup {
+		if slices.ContainsFunc(topics, t.Restates) {
 			continue
 		}
 
@@ -482,4 +514,18 @@ func NewPinKey(rule, region string, regions []string) PinKey {
 	}
 
 	return PinKey{Rule: strings.ToLower(strings.TrimSpace(rule)), Region: canonical}
+}
+
+// FindPin returns the pin lessons.yaml currently carries under this
+// identity. Callers use it for liveness checks and to read the live
+// note — the wording the firing log actually saw, which a hand-edit
+// may have moved away from the proposal's stored note.
+func (c *Config) FindPin(key PinKey) (PinRule, bool) {
+	for _, p := range c.Pin {
+		if NewPinKey(p.Rule, p.Region, p.Regions) == key {
+			return p, true
+		}
+	}
+
+	return PinRule{}, false
 }
