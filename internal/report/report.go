@@ -1000,6 +1000,12 @@ type ProposalHealth struct {
 	// Escalate is true for not-landing pins: the pin fires and the
 	// mistake recurs anyway. Drives the escalation hint in the ledger.
 	Escalate bool
+	// Pruned is true for applied rows whose pin is not in
+	// .seamark/lessons.yaml (hand-pruned, or an apply block never
+	// pasted). The pin delivers nothing, so region advice is
+	// suppressed — a retarget hint here would name a pin the command
+	// cannot find.
+	Pruned bool
 }
 
 // PrintProposalLedger renders the distillation decision record: what is
@@ -1149,6 +1155,10 @@ func printDecidedHealth(w io.Writer, heading string, ps []model.Proposal, health
 func printHealth(w io.Writer, h ProposalHealth) {
 	if h.Tier != "" && h.Tier != "strong" {
 		fmt.Fprintf(w, "        %s — %s\n", h.Tier, render.Sanitize(h.Facts))
+	}
+
+	if h.Pruned {
+		fmt.Fprintf(w, "        not in .seamark/lessons.yaml — this pin delivers nothing until it returns\n")
 	}
 
 	if h.Era != "" {

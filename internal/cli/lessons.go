@@ -635,6 +635,15 @@ func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int6
 			h.Era = "distilled under prompt v1, before the same-PR-counts-once rule"
 		}
 
+		// The liveness rule every applied-pin surface uses: a row whose
+		// pin left lessons.yaml delivers nothing, so region advice is
+		// suppressed and the state is named instead.
+		if p.Status == model.ProposalApplied {
+			if _, live := cfg.FindPin(reviews.NewPinKey(p.Rule, p.Region, p.Regions)); !live {
+				h.Pruned = true
+			}
+		}
+
 		var living []model.Finding
 
 		for _, id := range p.Members {
@@ -643,7 +652,7 @@ func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int6
 			}
 		}
 
-		if len(living) > 0 {
+		if len(living) > 0 && !h.Pruned {
 			// One recompute for every "regions now" reader: coverage
 			// widened by confirmed triggers, so this line can never ask
 			// the user to undo a stored widening.
@@ -1061,7 +1070,14 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 		fmt.Fprintf(out, ", %d batch(es) failed (retried next run)", res.BatchesFailed)
 	}
 
-	fmt.Fprintf(out, "; ~%s tokens sent / ~%s back\n", res.TokensSent(), res.TokensBack())
+	// Failed batches may have died before any request left the machine;
+	// "sent" would overstate what was spent.
+	verb := "sent"
+	if res.BatchesFailed > 0 {
+		verb = "attempted"
+	}
+
+	fmt.Fprintf(out, "; ~%s tokens %s / ~%s back\n", res.TokensSent(), verb, res.TokensBack())
 
 	if res.AppliedStored > 0 {
 		fmt.Fprintln(out, "applied pins with new triggers show their widened regions in "+

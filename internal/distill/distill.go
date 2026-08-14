@@ -550,8 +550,12 @@ func CountEvents(cited []model.Finding) int { return model.CountEvents(cited) }
 // stays unmarked and is retried); an invalid individual pattern is
 // silently dropped.
 func parseReply(reply string, g Group, agentName string) ([]model.Proposal, error) {
+	// The pointer distinguishes the contract's explicit empty answer
+	// ({"patterns": []}) from {}, null, or a misspelled key. Marking a
+	// group distilled on the latter would permanently record an answer
+	// nobody gave — the paid one chance to read this evidence, gone.
 	var parsed struct {
-		Patterns []struct {
+		Patterns *[]struct {
 			Rule         string   `json:"rule"`
 			Note         string   `json:"note"`
 			FindingIDs   []int64  `json:"finding_ids"`
@@ -568,6 +572,10 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 		return nil, fmt.Errorf("reply is not the requested JSON: %v", err)
 	}
 
+	if parsed.Patterns == nil {
+		return nil, fmt.Errorf("reply carries no \"patterns\" key — not an empty answer, the group retries")
+	}
+
 	member := map[int64]model.Finding{}
 	for _, f := range g.Findings {
 		member[f.ID] = f
@@ -575,7 +583,7 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 
 	var out []model.Proposal
 
-	for _, p := range parsed.Patterns {
+	for _, p := range *parsed.Patterns {
 		if len(out) >= maxPerGroup {
 			break
 		}

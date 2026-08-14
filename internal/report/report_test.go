@@ -635,6 +635,13 @@ func TestProposalLedgerRendersScopeAdvisory(t *testing.T) {
 	assert.Less(t, strings.Index(out, "applied — these are pins"),
 		strings.Index(out, "trigger scope:"), "the tail follows the lists")
 
+	// A pruned pin names its state instead of advising.
+	sb.Reset()
+	PrintProposalLedger(&sb, nil, applied, nil, nil, map[int64]ProposalHealth{
+		5: {Tier: "strong", Pruned: true},
+	})
+	assert.Contains(t, sb.String(), "not in .seamark/lessons.yaml")
+
 	// A blocked confirmed trigger renders its own line — no drift and
 	// no advisory would otherwise mention it.
 	sb.Reset()

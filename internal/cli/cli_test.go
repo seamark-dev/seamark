@@ -1175,6 +1175,13 @@ func TestRetargetKeepsStoredWidening(t *testing.T) {
 
 	require.NoError(t, st.Close())
 
+	// Both pins are live in the yaml — region advice only applies to
+	// pins that actually deliver.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n"+
+			"  - rule: already-widened\n    region: web/src/api\n    regions: [web/src/api, api]\n    note: n\n"+
+			"  - rule: still-narrow\n    region: web/src/api\n    note: n\n"), 0o644))
+
 	out, err := run(t, "-C", root, "lessons", "--proposals")
 	require.NoError(t, err)
 
@@ -1232,11 +1239,77 @@ func TestLedgerShowsBlockedTrigger(t *testing.T) {
 	}))
 	require.NoError(t, st.Close())
 
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n  - rule: capped-pin\n    region: web/src/api\n"+
+			"    regions: [web/src/api, cmd, internal]\n    note: n\n"), 0o644))
+
 	out, err := run(t, "-C", root, "lessons", "--proposals")
 	require.NoError(t, err)
 
 	assert.Contains(t, out, "confirmed by co-change (38 shared commits) but not deliverable")
 	assert.NotContains(t, out, "regions now:", "no drift — the cap keeps recompute equal to stored")
+}
+
+// TestLedgerNamesPrunedPinsInsteadOfAdvising pins the p45 lesson from
+// the field: a hand-pruned pin delivers nothing, so the ledger must
+// say that instead of computing drift and handing the user a retarget
+// command that will refuse it.
+func TestLedgerNamesPrunedPinsInsteadOfAdvising(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, Path: "web/src/api/schema.ts", Body: "b",
+			CreatedAt: time.Now().Unix(), Source: "review"},
+	}))
+
+	// Stored region disagrees with coverage, so the pin WOULD drift —
+	// but no lessons.yaml carries it.
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "s1", Rule: "hand-pruned", Region: "api",
+		Note: "n", Members: []int64{1},
+		Agent: "claude/v4", Status: model.ProposalApplied,
+	}))
+	require.NoError(t, st.Close())
+
+	out, err := run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "not in .seamark/lessons.yaml — this pin delivers nothing")
+	assert.NotContains(t, out, "regions now:", "no advice for a pin that cannot act on it")
+	assert.NotContains(t, out, "--retarget p", "the hint must not name a pin retarget will refuse")
+}
+
+// TestExtractSummarySaysAttemptedOnFailure: a CLI that dies before any
+// request must not be reported as having "sent" tokens.
+func TestExtractSummarySaysAttemptedOnFailure(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "s1", Rule: "r", Region: "api", Note: "n",
+		Members: []int64{1}, Agent: "claude/v4", Status: model.ProposalProposed,
+	}))
+	require.NoError(t, st.Close())
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  argv: [\"sh\", \"-c\", \"cat >/dev/null; exit 1\"]\n"), 0o644))
+
+	out, err := run(t, "-C", root, "lessons", "--extract-triggers")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "1 batch(es) failed")
+	assert.Contains(t, out, "tokens attempted")
+	assert.NotContains(t, out, "tokens sent")
 }
 
 func TestLessonsOutcomeSurfacesRejectMalformedConfig(t *testing.T) {

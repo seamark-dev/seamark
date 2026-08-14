@@ -87,6 +87,35 @@ func TestRunValidatesPersistsAndNeverPaysTwice(t *testing.T) {
 	assert.Equal(t, 1, res.GroupsSkipped)
 }
 
+func TestRunRejectsAnswerlessReplies(t *testing.T) {
+	// {} and {"patterns": null} parse as JSON but answer nothing.
+	// Marking the group distilled on them would burn its one paid
+	// chance; the group must stay unmarked and retry.
+	st := openSeeded(t, pooledState)
+
+	reply := `{}`
+	agent := &fakeAgent{fn: func(string) (string, error) { return reply, nil }}
+
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), agent, Options{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.GroupsFailed)
+	assert.Zero(t, res.GroupsSkipped)
+
+	// The retry pays again and the explicit empty answer marks it.
+	reply = `{"patterns": []}`
+
+	res, err = Run(context.Background(), st, NewLexicalGrouper(), agent, Options{})
+	require.NoError(t, err)
+	assert.Equal(t, 2, agent.calls, "an unanswered group is retried, not remembered")
+	assert.Equal(t, 1, res.GroupsRead)
+	assert.Zero(t, res.GroupsFailed)
+
+	res, err = Run(context.Background(), st, NewLexicalGrouper(), agent, Options{})
+	require.NoError(t, err)
+	assert.Equal(t, 2, agent.calls, "the explicit empty answer IS remembered")
+	assert.Equal(t, 1, res.GroupsSkipped)
+}
+
 func TestRunDryRunDisclosesAndSendsNothing(t *testing.T) {
 	st := openSeeded(t, pooledState)
 
