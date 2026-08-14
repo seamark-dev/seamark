@@ -900,7 +900,10 @@ func printLessons(w io.Writer, lessons []model.Lesson) {
 // plan: every proposal awaiting a decision, this run's newcomers
 // included. Proposal text is model output — untrusted — so it is
 // sanitized; notes are never truncated (they are the payload).
-func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal) {
+// scopes carries the trigger-scope advisory line per flagged proposal
+// id (rendered by the caller — report does not import distill). Nil
+// means no advisories: the plan prints exactly as before.
+func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal, scopes map[int64]string) {
 	fmt.Fprintf(w, "distill plan — %d groups: %d read", res.GroupsTotal, res.GroupsRead)
 
 	if res.GroupsSkipped > 0 {
@@ -937,12 +940,28 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal)
 
 	fmt.Fprintf(w, "\nproposed pins — distilled from review findings, awaiting YOUR decision\n")
 
+	var flagged []string
+
 	for _, p := range pending {
 		printProposal(w, p)
+
+		if line := scopes[p.ID]; line != "" {
+			fmt.Fprintf(w, "        %s\n", render.Sanitize(line))
+			flagged = append(flagged, fmt.Sprintf("p%d", p.ID))
+		}
 	}
 
 	fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; "+
 		"`--dismiss` remembers the no\n")
+
+	// A fresh mis-scoped proposal announces itself here, at creation —
+	// the cheapest moment to fix delivery, before the pin is installed.
+	if len(flagged) > 0 {
+		fmt.Fprintf(w, "\ntrigger scope: %s — the note and co-change history point outside "+
+			"the proposal's regions; the advisory above names the regions to consider "+
+			"(apply, then widen regions in .seamark/lessons.yaml)\n",
+			strings.Join(flagged, ", "))
+	}
 }
 
 // printProposal renders one pending proposal: its identity line and the
@@ -973,6 +992,8 @@ type ProposalHealth struct {
 	// Escalate is true for not-landing pins: the pin fires and the
 	// mistake recurs anyway. Drives the escalation hint in the ledger.
 	Escalate bool
+	// Scope is the trigger-scope advisory
+	Scope string
 }
 
 // PrintProposalLedger renders the distillation decision record: what is
@@ -1025,6 +1046,15 @@ func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Propos
 		fmt.Fprintf(w, "\nretarget: `seamark lessons --retarget %s` updates those pins to the "+
 			"recomputed regions (lessons.yaml and the ledger together; needs distill.write, "+
 			"else it prints the block)\n", strings.Join(retargets, ","))
+	}
+
+	// The scope advisories live on their cards above; a long ledger
+	// buries them, so the flagged set is named once at the end.
+	if ids := scopeIDs(pending, applied, health); len(ids) > 0 {
+		fmt.Fprintf(w, "\ntrigger scope: %s — the note and co-change history point outside "+
+			"the pin's regions; each advisory above names the regions to consider "+
+			"(applied pins: widen regions in .seamark/lessons.yaml; pending pins: "+
+			"apply, then widen)\n", strings.Join(ids, ", "))
 	}
 
 	// Pins applied before duplicate detection existed (or written by
@@ -1126,6 +1156,10 @@ func printHealth(w io.Writer, h ProposalHealth) {
 	if h.Outcome != "" {
 		fmt.Fprintf(w, "        %s\n", render.Sanitize(h.Outcome))
 	}
+
+	if h.Scope != "" {
+		fmt.Fprintf(w, "        %s\n", render.Sanitize(h.Scope))
+	}
 }
 
 // retargetIDs lists the applied proposals whose recomputed regions
@@ -1150,6 +1184,23 @@ func escalateIDs(applied []model.Proposal, health map[int64]ProposalHealth) []st
 	for _, p := range applied {
 		if health[p.ID].Escalate {
 			out = append(out, fmt.Sprintf("p%d", p.ID))
+		}
+	}
+
+	return out
+}
+
+// scopeIDs lists the proposals whose trigger-scope advisory fired, in
+// pN form for the tail line. Pending rows lead: they are decidable
+// now, before a mis-scoped pin is installed.
+func scopeIDs(pending, applied []model.Proposal, health map[int64]ProposalHealth) []string {
+	var out []string
+
+	for _, ps := range [][]model.Proposal{pending, applied} {
+		for _, p := range ps {
+			if health[p.ID].Scope != "" {
+				out = append(out, fmt.Sprintf("p%d", p.ID))
+			}
 		}
 	}
 

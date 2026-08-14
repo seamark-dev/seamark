@@ -598,7 +598,7 @@ func (s *Store) DistilledSignatures() (map[string]bool, error) {
 
 // proposalCols is the column list every proposal query selects, in
 // scanProposals order.
-const proposalCols = `id, signature, rule, region, regions, note, members, agent, status, created_at`
+const proposalCols = `id, signature, rule, region, regions, trigger_paths, note, members, agent, status, created_at`
 
 // InsertProposal stores one distilled proposal and returns its id.
 func (s *Store) InsertProposal(p *model.Proposal) error {
@@ -621,10 +621,15 @@ func insertProposal(db execer, p *model.Proposal) error {
 		return fmt.Errorf("store: encode proposal regions: %w", err)
 	}
 
+	triggers, err := encodeStrings(p.TriggerPaths)
+	if err != nil {
+		return fmt.Errorf("store: encode proposal trigger paths: %w", err)
+	}
+
 	res, err := db.Exec(
-		`INSERT INTO proposal (signature, rule, region, regions, note, members, agent, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Signature, p.Rule, p.Region, regions, p.Note, string(members), p.Agent, p.Status, p.CreatedAt,
+		`INSERT INTO proposal (signature, rule, region, regions, trigger_paths, note, members, agent, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Signature, p.Rule, p.Region, regions, triggers, p.Note, string(members), p.Agent, p.Status, p.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("store: insert proposal %s: %w", p.Rule, err)
@@ -689,10 +694,10 @@ func scanProposals(rows *sql.Rows) ([]model.Proposal, error) {
 	for rows.Next() {
 		var p model.Proposal
 
-		var members, regions string
+		var members, regions, triggers string
 
 		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &regions,
-			&p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt)
+			&triggers, &p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -703,6 +708,10 @@ func scanProposals(rows *sql.Rows) ([]model.Proposal, error) {
 
 		if p.Regions, err = decodeStrings(regions); err != nil {
 			return nil, fmt.Errorf("store: proposal %d regions: %w", p.ID, err)
+		}
+
+		if p.TriggerPaths, err = decodeStrings(triggers); err != nil {
+			return nil, fmt.Errorf("store: proposal %d trigger paths: %w", p.ID, err)
 		}
 
 		out = append(out, p)

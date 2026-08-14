@@ -1,6 +1,7 @@
 package reviews
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -183,11 +184,17 @@ func DefaultConfig() *Config {
 	return &Config{Threshold: DefaultThreshold}
 }
 
+// ErrLessonsConfig marks a failed read or parse of
+// .seamark/lessons.yaml. Callers branch with errors.Is; the message
+// text around it is presentation, not contract.
+var ErrLessonsConfig = errors.New("lessons config")
+
 // LoadConfig reads <root>/.seamark/lessons.yaml. A missing file is not
 // an error — it means "defaults". A malformed file IS an error: silently
 // ignoring a typo'd mute would surface noise the user asked to hide.
 // Callers that must stay robust (why/orient/MCP) fall back to
-// DefaultConfig on error rather than failing the whole report.
+// DefaultConfig on error rather than failing the whole report. Every
+// error carries ErrLessonsConfig.
 func LoadConfig(root string) (*Config, error) {
 	cfg := DefaultConfig()
 
@@ -197,11 +204,11 @@ func LoadConfig(root string) (*Config, error) {
 			return cfg, nil
 		}
 
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrLessonsConfig, err)
 	}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("lessons config: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrLessonsConfig, err)
 	}
 
 	if cfg.Threshold <= 0 {
@@ -211,8 +218,8 @@ func LoadConfig(root string) (*Config, error) {
 	switch cfg.HookDelivery() {
 	case HookDeliveryAlways, HookDeliveryOncePerContext:
 	default:
-		return nil, fmt.Errorf("lessons config: hook_delivery must be %q or %q, got %q",
-			HookDeliveryAlways, HookDeliveryOncePerContext, cfg.Delivery)
+		return nil, fmt.Errorf("%w: hook_delivery must be %q or %q, got %q",
+			ErrLessonsConfig, HookDeliveryAlways, HookDeliveryOncePerContext, cfg.Delivery)
 	}
 
 	return cfg, nil

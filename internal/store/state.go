@@ -34,11 +34,15 @@ type ProposalState struct {
 	Rule      string   `json:"rule"`
 	Region    string   `json:"region,omitempty"`
 	Regions   []string `json:"regions,omitempty"`
-	Note      string   `json:"note"`
-	Members   []int64  `json:"members,omitempty"`
-	Agent     string   `json:"agent,omitempty"`
-	Status    string   `json:"status"`
-	CreatedAt int64    `json:"created_at"`
+	// TriggerPaths travel with the proposal: they feed region
+	// recomputation, and losing them on import would let a retarget
+	// silently narrow the imported delivery.
+	TriggerPaths []string `json:"trigger_paths,omitempty"`
+	Note         string   `json:"note"`
+	Members      []int64  `json:"members,omitempty"`
+	Agent        string   `json:"agent,omitempty"`
+	Status       string   `json:"status"`
+	CreatedAt    int64    `json:"created_at"`
 }
 
 // DistilledMark is one row of distillation memory: evidence sets already
@@ -86,7 +90,8 @@ func (s *Store) ExportState() (*State, error) {
 	for _, p := range proposals {
 		out.Proposals = append(out.Proposals, ProposalState{
 			Signature: p.Signature, Rule: p.Rule, Region: p.Region,
-			Regions: p.Regions, Note: p.Note, Members: p.Members,
+			Regions: p.Regions, TriggerPaths: p.TriggerPaths,
+			Note: p.Note, Members: p.Members,
 			Agent: p.Agent, Status: p.Status, CreatedAt: p.CreatedAt,
 		})
 	}
@@ -164,19 +169,27 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 			return stats, err
 		case err == nil && local == model.ProposalProposed && p.Status != model.ProposalProposed:
 			// The identity fields travel with the decision — status plus
-			// region and regions: the human decided against the imported
-			// content, and a local row keeping its own (possibly
-			// repo-wide) region would desynchronize pin identity from
-			// the lessons.yaml the same bundle's apply wrote.
+			// region, regions, and trigger paths: the user decided
+			// against the imported content, and a local row keeping its
+			// own (possibly repo-wide) region would desynchronize pin
+			// identity from the lessons.yaml the same bundle's apply
+			// wrote. Triggers ride along so a later retarget cannot
+			// silently narrow the adopted delivery.
 			regions, err := encodeStrings(p.Regions)
 			if err != nil {
 				return stats, err
 			}
 
+			triggers, err := encodeStrings(p.TriggerPaths)
+			if err != nil {
+				return stats, err
+			}
+
 			if _, err := tx.Exec(
-				`UPDATE proposal SET status = ?, region = ?, regions = ?
+				`UPDATE proposal SET status = ?, region = ?, regions = ?, trigger_paths = ?
 				 WHERE signature = ? AND rule = ?`,
-				p.Status, p.Region, regions, p.Signature, p.Rule); err != nil {
+				p.Status, p.Region, regions, triggers, p.Signature, p.Rule,
+			); err != nil {
 				return stats, err
 			}
 
@@ -188,7 +201,8 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 			// to the table must not silently go missing from imports.
 			row := model.Proposal{
 				Signature: p.Signature, Rule: p.Rule, Region: p.Region,
-				Regions: p.Regions, Note: p.Note, Members: p.Members,
+				Regions: p.Regions, TriggerPaths: p.TriggerPaths,
+				Note: p.Note, Members: p.Members,
 				Agent: p.Agent, Status: p.Status, CreatedAt: p.CreatedAt,
 			}
 

@@ -17,7 +17,8 @@ func seedDecisions(t *testing.T, s *Store) {
 	require.NoError(t, s.InsertProposal(&model.Proposal{
 		Signature: "sig-1", Rule: "no-naked-returns", Region: "internal",
 		Note: "avoid naked returns", Members: []int64{11, 12},
-		Agent: "claude/v1", Status: model.ProposalDismissed, CreatedAt: 1700000000,
+		TriggerPaths: []string{"cmd/gen.go"},
+		Agent:        "claude/v1", Status: model.ProposalDismissed, CreatedAt: 1700000000,
 	}))
 	require.NoError(t, s.MarkDistilled("sig-1", "internal", 1700000000))
 	require.NoError(t, s.ReplaceLessons(
@@ -78,6 +79,8 @@ func TestExportImportRoundTrip(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, "no-naked-returns", got[0].Rule)
 	assert.Equal(t, []int64{11, 12}, got[0].Members)
+	assert.Equal(t, []string{"cmd/gen.go"}, got[0].TriggerPaths,
+		"trigger paths survive the wire")
 
 	marks, err := dst.DistilledSignatures()
 	require.NoError(t, err)

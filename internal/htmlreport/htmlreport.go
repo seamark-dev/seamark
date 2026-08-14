@@ -114,7 +114,11 @@ type Card struct {
 	Facts      string
 	Era        string
 	RegionsNow string
-	Evidence   []Evidence
+	// Scope is the trigger-scope advisory sentence (RFC-004): the note
+	// and co-change history point outside the pin's regions, so
+	// delivery may miss the trigger site. Same Line() the ledger prints.
+	Scope    string
+	Evidence []Evidence
 	// Outcome is the passive loop's verdict sentence,
 	// present only for measured applied pins.
 	Outcome string
@@ -228,6 +232,20 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		return nil, err
 	}
 
+	// The same trigger-scope audit the ledger prints, from the same
+	// helper, over the cards' own evidence universe — the surfaces
+	// cannot disagree. With a fallback config every applied pin reads
+	// as pruned and skips; pending rows still audit.
+	byID := make(map[int64]model.Finding, len(findings))
+	for _, f := range findings {
+		byID[f.ID] = f
+	}
+
+	scopes, err := distill.AuditScopes(st, cfg, root, proposals, byID)
+	if err != nil {
+		return nil, err
+	}
+
 	// One churn query serves both the headline count and the map, so the
 	// two can never describe different sets of files.
 	churn, err := st.FileChurn(0)
@@ -252,7 +270,7 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		FilesWithHistory: len(churn),
 	}
 
-	r.buildCards(proposals, findings, readings, root, now)
+	r.buildCards(proposals, byID, readings, scopes, root, now)
 	r.buildDuplicates(proposals)
 
 	// The map first: it decides which scopes exist, and each lesson row
@@ -315,18 +333,16 @@ func allProposals(st *store.Store) ([]model.Proposal, error) {
 }
 
 // buildCards renders the decision queue: pending proposals first, then
-// the most recent decisions, each with the findings it cited.
+// the most recent decisions, each with the findings it cited. byID is
+// the evidence universe the caller also feeds the scope audit.
 func (r *Report) buildCards(
 	proposals []model.Proposal,
-	findings []model.Finding,
+	byID map[int64]model.Finding,
 	readings map[int64]outcome.Reading,
+	scopes map[int64]distill.ScopeAdvisory,
 	root string,
 	now time.Time,
 ) {
-	byID := make(map[int64]model.Finding, len(findings))
-	for _, f := range findings {
-		byID[f.ID] = f
-	}
 
 	r.CardsTotal = len(proposals)
 
@@ -390,6 +406,12 @@ func (r *Report) buildCards(
 			if rd, ok := readings[p.ID]; ok {
 				card.Outcome = clean(rd.Line())
 				card.NotLanding = rd.Verdict == outcome.VerdictNotLanding
+			}
+
+			// The trigger-scope advisory; scopes only contains flagged
+			// pending and applied rows, same rule.
+			if adv, ok := scopes[p.ID]; ok {
+				card.Scope = clean(adv.Line())
 			}
 		}
 

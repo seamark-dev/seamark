@@ -952,6 +952,79 @@ func TestLessonsProposalsLedgerShowsOutcome(t *testing.T) {
 	assert.Contains(t, out, "not landing — recurred 1× since exposure (fired 1×)")
 }
 
+// TestLessonsProposalsLedgerShowsScopeAdvisory wires the trigger-scope
+// audit through the real command: notes name the trigger file, the
+// evidence file's co-change partner agrees, and the ledger renders one
+// advisory per flagged pin. Applied pins are judged by their LIVE yaml
+// note; pruned pins are skipped.
+func TestLessonsProposalsLedgerShowsScopeAdvisory(t *testing.T) {
+	root := writeFixture(t)
+
+	for _, rel := range []string{"api/schemas.py", "web/src/api/schema.ts"} {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte("x\n"), 0o644))
+	}
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	// Rebuild wipes the graph tables and plants the co-change edge;
+	// findings and proposals are durable and inserted after it.
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		return tx.InsertCoChange(model.CoChange{
+			FileA: "api/schemas.py", FileB: "web/src/api/schema.ts",
+			Together: 38, Total: 400, Lift: 6.6,
+		})
+	}))
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, Path: "web/src/api/schema.ts", Body: "regenerate the client",
+			CreatedAt: time.Now().Unix(), Source: "review"},
+	}))
+
+	for _, p := range []model.Proposal{
+		{Signature: "s1", Rule: "pending-named", Region: "web/src/api",
+			Note: "Edit api/schemas.py first.", Members: []int64{1},
+			Agent: "claude/v3", Status: model.ProposalProposed},
+		{Signature: "s2", Rule: "applied-reworded", Region: "web/src/api",
+			Note: "Edit api/schemas.py first.", Members: []int64{1},
+			Agent: "claude/v3", Status: model.ProposalApplied},
+		{Signature: "s3", Rule: "applied-pruned", Region: "web/src/api",
+			Note: "Edit api/schemas.py first.", Members: []int64{1},
+			Agent: "claude/v3", Status: model.ProposalApplied},
+		{Signature: "s4", Rule: "applied-named", Region: "web/src/api",
+			Note: "Sync the client.", Members: []int64{1},
+			Agent: "claude/v3", Status: model.ProposalApplied},
+	} {
+		require.NoError(t, st.InsertProposal(&p))
+	}
+
+	require.NoError(t, st.Close())
+
+	// The yaml file is the live truth for applied pins: s2's note no
+	// longer names the trigger, s3 is pruned, s4's note gained it.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n"+
+			"  - rule: applied-reworded\n    region: web/src/api\n    note: Sync the client.\n"+
+			"  - rule: applied-named\n    region: web/src/api\n    note: Edit api/schemas.py first.\n"), 0o644))
+
+	out, err := run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, strings.Count(out, "delivery may miss the trigger"),
+		"pending-named and applied-named only: reworded and pruned pins stay silent")
+	assert.Equal(t, 2, strings.Count(out, "consider regions: [web/src/api, api]"))
+	assert.Contains(t, out, "api/schemas.py (outside the regions)")
+	assert.Contains(t, out, "38 shared commits")
+	assert.Contains(t, out, "trigger scope: p1, p4",
+		"the tail names the flagged set so a long ledger cannot bury it")
+}
+
 func TestLessonsOutcomeSurfacesRejectMalformedConfig(t *testing.T) {
 	root := writeFixture(t)
 	_, err := run(t, "-C", root, "index")
@@ -959,8 +1032,10 @@ func TestLessonsOutcomeSurfacesRejectMalformedConfig(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
 		[]byte("hook_delivery: sometimes\n"), 0o644))
 
+	// Identity, not text: every surface must carry the sentinel, and
+	// each may phrase its own context around it.
 	_, err = run(t, "-C", root, "lessons", "--stats")
-	require.ErrorContains(t, err, "failed to load lessons config")
+	require.ErrorIs(t, err, reviews.ErrLessonsConfig)
 
 	st, err := store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
@@ -968,7 +1043,7 @@ func TestLessonsOutcomeSurfacesRejectMalformedConfig(t *testing.T) {
 	_, err = proposalHealth(st, root, []model.Proposal{{
 		ID: 1, Status: model.ProposalApplied,
 	}})
-	require.ErrorContains(t, err, "failed to load lessons config")
+	require.ErrorIs(t, err, reviews.ErrLessonsConfig)
 }
 
 func TestLessonsPruneRetiresRestatements(t *testing.T) {

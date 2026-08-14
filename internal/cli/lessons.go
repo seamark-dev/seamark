@@ -567,6 +567,11 @@ func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int6
 		return nil, nil
 	}
 
+	cfg, err := reviews.LoadConfig(root)
+	if err != nil {
+		return nil, fmt.Errorf("lessons proposalHealth: reading .seamark/lessons.yaml: %w", err)
+	}
+
 	var cited []int64
 
 	for _, p := range ps {
@@ -578,6 +583,11 @@ func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int6
 		return nil, err
 	}
 
+	advisories, err := distill.AuditScopes(st, cfg, root, ps, meta)
+	if err != nil {
+		return nil, fmt.Errorf("lessons proposalHealth: auditing scopes: %w", err)
+	}
+
 	now := time.Now()
 	out := make(map[int64]report.ProposalHealth, len(ps))
 	var appliedPs []model.Proposal
@@ -586,6 +596,10 @@ func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int6
 		tier, facts := confidence.Assess(p, meta, root, now)
 
 		h := report.ProposalHealth{Tier: tier.String(), Facts: facts.Line()}
+
+		if adv, ok := advisories[p.ID]; ok {
+			h.Scope = adv.Line()
+		}
 
 		if strings.HasSuffix(p.Agent, "/v1") {
 			h.Era = "distilled under prompt v1, before the same-PR-counts-once rule"
@@ -750,6 +764,8 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		return err
 	}
 
+	// Scope advisories for the fresh plan arrive with surface C
+	// (RFC-004 Phase 1); nil keeps today's output until then.
 	report.PrintDistillPlan(cmd.OutOrStdout(), report.DistillSummary{
 		GroupsTotal:   res.GroupsTotal,
 		GroupsRead:    res.GroupsRead,
@@ -759,7 +775,7 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		PrunedStale:   res.PrunedStale,
 		Duplicates:    res.Duplicates,
 		TokensNote:    res.CostNote(),
-	}, pending)
+	}, pending, nil)
 
 	return nil
 }

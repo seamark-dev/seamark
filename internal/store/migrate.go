@@ -9,7 +9,7 @@ import (
 // schemaVersion is the schema this binary understands and writes. Bump it
 // together with a new migrations entry — never alone: a version without a
 // migration would leave every existing database behind.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // schemaVersionKey is the meta row recording a database's version.
 const schemaVersionKey = "schema_version"
@@ -33,6 +33,7 @@ type migration struct {
 var migrations = []migration{
 	{to: 2, run: addFindingSource},
 	{to: 3, run: addRegionSetsAndPaths},
+	{to: 4, run: addProposalTriggerPaths},
 }
 
 // addFindingSource (v1 → v2): finding.source arrived with fix mining —
@@ -75,6 +76,23 @@ func addRegionSetsAndPaths(tx *sql.Tx) error {
 	return nil
 }
 
+// addProposalTriggerPaths (v3 → v4): proposals gained validated trigger
+// paths — where the mistake is made, distinct from where the
+// evidence lives. The empty default means "none extracted yet", so
+// pre-existing rows need no rewrite.
+func addProposalTriggerPaths(tx *sql.Tx) error {
+	has, err := hasColumn(tx, "proposal", "trigger_paths")
+	if err != nil {
+		return err
+	}
+
+	if !has {
+		_, err = tx.Exec(`ALTER TABLE proposal ADD COLUMN trigger_paths TEXT NOT NULL DEFAULT ''`)
+	}
+
+	return err
+}
+
 // refuseNewer rejects a database stamped by a newer seamark BEFORE any
 // DDL has run — guessing at unknown schema would risk the durable
 // decisions it holds. A missing meta table means fresh or pre-versioning;
@@ -83,7 +101,8 @@ func refuseNewer(db *sql.DB) error {
 	var n int
 
 	err := db.QueryRow(
-		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'meta'`).Scan(&n)
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'meta'`,
+	).Scan(&n)
 	if err != nil {
 		return err
 	}
@@ -106,7 +125,8 @@ func checkNotNewer(stored int) error {
 		return fmt.Errorf(
 			"store: database schema is v%d but this seamark understands v%d — "+
 				"upgrade seamark (the database was left untouched; do not delete it: "+
-				"it holds your proposal decisions)", stored, schemaVersion)
+				"it holds your proposal decisions)", stored, schemaVersion,
+		)
 	}
 
 	return nil
@@ -162,7 +182,8 @@ func ensureVersion(db *sql.DB) error {
 	_, err = db.Exec(
 		`INSERT INTO meta (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		schemaVersionKey, strconv.Itoa(schemaVersion))
+		schemaVersionKey, strconv.Itoa(schemaVersion),
+	)
 
 	return err
 }
@@ -194,7 +215,8 @@ func writeVersion(tx *sql.Tx, v int) error {
 	_, err := tx.Exec(
 		`INSERT INTO meta (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		schemaVersionKey, strconv.Itoa(v))
+		schemaVersionKey, strconv.Itoa(v),
+	)
 
 	return err
 }
