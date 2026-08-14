@@ -244,7 +244,15 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		byID[f.ID] = f
 	}
 
-	scopes, err := distill.AuditScopes(st, cfg, root, proposals, byID)
+	// Only the visible cards need store work: allProposals sorted the
+	// list exactly the way buildCards truncates it, and the ledger on
+	// a mature corpus holds several times maxCards rows.
+	visible := proposals
+	if len(visible) > maxCards {
+		visible = visible[:maxCards]
+	}
+
+	scopes, err := distill.AuditScopes(st, cfg, root, visible, byID)
 	if err != nil {
 		return nil, err
 	}
@@ -254,10 +262,10 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 	// set the ledger and --retarget use. Blocked triggers ride along —
 	// a confirmed miss with no drift line must not vanish from the
 	// page.
-	regionsNow := make(map[int64][]string, len(proposals))
+	regionsNow := make(map[int64][]string, len(visible))
 	blocked := make(map[int64]string)
 
-	for _, p := range proposals {
+	for _, p := range visible {
 		if p.Status != model.ProposalProposed && p.Status != model.ProposalApplied {
 			continue
 		}

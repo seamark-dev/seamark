@@ -135,9 +135,12 @@ a file has no lessons.`,
 			}
 
 			// The read-only view would be silently swallowed: dispatch
-			// reaches the decision first and never prints the ledger.
-			if proposalList && decisions > 0 {
-				return fmt.Errorf("--proposals does not combine with --apply, --dismiss, --prune, or --retarget — run it before or after the decision")
+			// reaches the decision first and never prints the ledger —
+			// or reaches the ledger first and never spends the run the
+			// user asked for.
+			if proposalList && (decisions > 0 || distillRun || extractTriggers) {
+				return fmt.Errorf("--proposals does not combine with --apply, --dismiss, --prune, " +
+					"--retarget, --distill, or --extract-triggers — run it before or after")
 			}
 
 			// `--apply p1, p2` is natural typing; the shell splits the
@@ -807,6 +810,14 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 
 	res, err := distill.Run(cmd.Context(), st, distill.NewLexicalGrouper(), inv, dopts)
 	if err != nil {
+		// Groups saved before the failure are marked and kept; say so,
+		// or the error implies the whole paid run was lost.
+		if res != nil && res.GroupsRead > 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"distill stopped after %d group(s) read — persisted proposals and signature marks are kept\n",
+				res.GroupsRead)
+		}
+
 		return err
 	}
 
@@ -1031,8 +1042,12 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 		DryRun: dryRun,
 		Agent:  agentArgv,
 		OnPreflight: func(pf distill.ExtractPreflight) {
+			// The same scrubbing printPreflight applies: the disclosure
+			// must not leak a credential embedded in config.yaml, nor
+			// carry terminal control characters.
 			fmt.Fprintf(out, "extraction preflight — %d proposal(s) in %d batch(es), ~%s tokens to %s\n",
-				pf.Proposals, pf.Batches, pf.Tokens(), strings.Join(pf.Agent, " "))
+				pf.Proposals, pf.Batches, pf.Tokens(),
+				render.Sanitize(redact.Secrets(strings.Join(pf.Agent, " "))))
 			fmt.Fprintf(out, "  each item sends its rule, note, evidence paths, and one excerpt (capped %d chars)\n",
 				pf.BodyCap)
 		},
@@ -1054,6 +1069,13 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 
 	res, err := distill.ExtractTriggers(cmd.Context(), st, inv, candidates, meta, eopts)
 	if err != nil {
+		// Stamped rows stay done; the next run resumes after them.
+		if res != nil && res.Examined > 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"extraction stopped after %d examined, %d stored — answered rows are stamped; re-running resumes\n",
+				res.Examined, res.Stored)
+		}
+
 		return err
 	}
 

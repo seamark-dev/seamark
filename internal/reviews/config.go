@@ -184,9 +184,11 @@ func DefaultConfig() *Config {
 	return &Config{Threshold: DefaultThreshold}
 }
 
-// ErrLessonsConfig marks a failed read or parse of
-// .seamark/lessons.yaml. Callers branch with errors.Is; the message
-// text around it is presentation, not contract.
+// ErrLessonsConfig marks a failed read, parse, or validation of
+// .seamark/lessons.yaml — an unreadable file, malformed yaml, and
+// invalid field values (an unknown hook_delivery) all carry it.
+// Callers branch with errors.Is; the message text around it is
+// presentation, not contract.
 var ErrLessonsConfig = errors.New("lessons config")
 
 // LoadConfig reads <root>/.seamark/lessons.yaml. A missing file is not

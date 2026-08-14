@@ -261,6 +261,32 @@ func TestExtractTriggersRespectsConcurrentApply(t *testing.T) {
 		"triggers still store — they do not change identity")
 }
 
+func TestExtractTriggersReturnsPartialResultOnStoreError(t *testing.T) {
+	// A store failure mid-run must not discard the counters: the CLI
+	// reports what completed, and stamped rows stay done.
+	root := scopeRoot(t, "api/schemas.py", "web/src/api/schema.ts")
+	st := scopeStore(t)
+
+	p := model.Proposal{Signature: "s1", Rule: "r", Region: "web/src/api",
+		Note: "n", Members: []int64{1}, Status: model.ProposalProposed}
+	require.NoError(t, st.InsertProposal(&p))
+
+	meta := map[int64]model.Finding{1: reviewFinding(1, "web/src/api/schema.ts")}
+
+	fake := &fakeAgent{fn: func(string) (string, error) {
+		_ = st.Close() // the store dies while the agent is thinking
+
+		return fmt.Sprintf(`{"triggers": [{"id": %d, "trigger_paths": ["api/schemas.py"]}]}`, p.ID), nil
+	}}
+
+	res, err := ExtractTriggers(context.Background(), st, fake,
+		[]model.Proposal{p}, meta, ExtractOptions{Root: root})
+
+	require.Error(t, err)
+	require.NotNil(t, res, "the partial result rides along with the error")
+	assert.Equal(t, 1, res.Examined)
+}
+
 func TestExtractTriggersFailedBatchIsRetryable(t *testing.T) {
 	root := scopeRoot(t, "api/schemas.py")
 	st := scopeStore(t)

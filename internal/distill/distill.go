@@ -292,9 +292,12 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 				}
 			}
 
+			// The result rides along with a store error: earlier groups
+			// were saved and marked, and the caller must be able to say
+			// so instead of implying the whole run was lost.
 			regions, _, err := RecomputeRegions(st, opts.Root, *p, cited)
 			if err != nil {
-				return nil, err
+				return res, err
 			}
 
 			p.Regions = regions
@@ -311,7 +314,7 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 		// outcome is announced only after it is real.
 		saved, err := st.SaveDistilledGroup(g.Signature, g.Region, time.Now().Unix(), fresh)
 		if err != nil {
-			return nil, err
+			return res, err
 		}
 
 		outcome := fmt.Sprintf("%s, ~%s tokens sent / ~%s back, %d proposal(s)",

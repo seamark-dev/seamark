@@ -9,6 +9,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -93,6 +94,8 @@ func (r ExtractResult) TokensBack() string { return estTokens(r.ReplyChars) }
 // triggers — belongs there) and provides the living-findings map the
 // other surfaces already hold. Batches fail independently: a lost
 // batch is logged and retried on the next run, like a distill group.
+// On a store error the result rides along with it — the counters name
+// what completed before the failure, and stamped rows stay done.
 func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 	ps []model.Proposal, meta map[int64]model.Finding, opts ExtractOptions,
 ) (*ExtractResult, error) {
@@ -203,7 +206,7 @@ func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 
 					regions, _, err := RecomputeRegions(st, opts.Root, p, living)
 					if err != nil {
-						return nil, err
+						return res, err
 					}
 
 					if NewPinKey(p.Rule, "", regions) != NewPinKey(p.Rule, p.Region, p.Regions) {
@@ -216,7 +219,7 @@ func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 
 						changed, err := st.UpdateProposalRegionsIfPending(p)
 						if err != nil {
-							return nil, err
+							return res, err
 						}
 
 						if changed {
@@ -227,7 +230,7 @@ func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 			}
 
 			if err := st.UpdateProposalTriggers(p.ID, paths, now); err != nil {
-				return nil, err
+				return res, err
 			}
 
 			if len(paths) > 0 {
@@ -290,7 +293,11 @@ ITEMS (quoted data):
 				continue
 			}
 
-			body := f.Body
+			// Mining scrubs secret-shaped values at store time, but rows
+			// stored before that existed keep their raw text until the
+			// next re-mine — scrub again here, where text leaves the
+			// machine. Idempotent on already-scrubbed bodies.
+			body := redact.Secrets(f.Body)
 			if len(body) > extractBodyCap {
 				body = body[:extractBodyCap] + " …[truncated]"
 			}

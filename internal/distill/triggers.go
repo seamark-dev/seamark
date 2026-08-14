@@ -119,17 +119,25 @@ func RecomputeRegions(st *store.Store, root string, p model.Proposal, living []m
 	regions := CoverageRegions(living)
 	facts := make([]TriggerFact, 0, len(p.TriggerPaths))
 
+	// One partner fetch serves every trigger path: up to three of them
+	// confirm against the same evidence files. A proposal without
+	// triggers costs no queries.
+	var partners map[string][]store.CoChangePartner
+
+	if len(p.TriggerPaths) > 0 {
+		var err error
+
+		if partners, err = evidencePartners(st, living); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	for _, tp := range p.TriggerPaths {
 		f := TriggerFact{Path: tp, Region: triggerRegion(root, tp)}
 
-		together, err := confirmTrigger(st, tp, living)
-		if err != nil {
-			return nil, nil, err
-		}
+		f.Together = confirmTrigger(partners, tp)
 
-		f.Together = together
-
-		if together > 0 && f.Region != "" {
+		if f.Together > 0 && f.Region != "" {
 			switch {
 			case len(regions) == 0 || isInsideRegions(f.Region, regions):
 				f.Covered = true
@@ -147,14 +155,11 @@ func RecomputeRegions(st *store.Store, root string, p model.Proposal, living []m
 	return regions, facts, nil
 }
 
-// confirmTrigger is the history rung: the strongest co-change edge
-// between the cited evidence and the trigger path — the together
-// count of the best partner that is the path itself or lives under
-// it. Zero means history cannot confirm the trigger. Test and doc
-// partners never confirm: they are not delivery targets.
-func confirmTrigger(st *store.Store, trigger string, cited []model.Finding) (int, error) {
-	best := 0
-	seen := make(map[string]struct{})
+// evidencePartners fetches each unique evidence file's co-change
+// partners, once. The result feeds every trigger confirmation of one
+// proposal.
+func evidencePartners(st *store.Store, cited []model.Finding) (map[string][]store.CoChangePartner, error) {
+	out := map[string][]store.CoChangePartner{}
 
 	for _, f := range cited {
 		fPaths := f.Paths
@@ -163,32 +168,46 @@ func confirmTrigger(st *store.Store, trigger string, cited []model.Finding) (int
 		}
 
 		for _, evidencePath := range fPaths {
-			if _, dup := seen[evidencePath]; dup {
+			if _, done := out[evidencePath]; done {
 				continue
 			}
 
-			seen[evidencePath] = struct{}{}
-
 			partners, err := st.CoChangePartners(evidencePath, scopeMinLift, scopePartnerRank)
 			if err != nil {
-				return 0, err
+				return nil, err
 			}
 
-			for _, partner := range partners {
-				if partner.Together < scopeMinTogether || partner.Together <= best {
-					continue
-				}
+			out[evidencePath] = partners
+		}
+	}
 
-				if model.IsTestPath(partner.File) || model.IsDocPath(partner.File) {
-					continue
-				}
+	return out, nil
+}
 
-				if partner.File == trigger || strings.HasPrefix(partner.File, trigger+"/") {
-					best = partner.Together
-				}
+// confirmTrigger is the history rung: the strongest co-change edge
+// between the cited evidence and the trigger path — the together
+// count of the best partner that is the path itself or lives under
+// it. Zero means history cannot confirm the trigger. Test and doc
+// partners never confirm: they are not delivery targets. Pure over
+// the fetched partners; a max, so map order cannot change the answer.
+func confirmTrigger(partners map[string][]store.CoChangePartner, trigger string) int {
+	best := 0
+
+	for _, ps := range partners {
+		for _, partner := range ps {
+			if partner.Together < scopeMinTogether || partner.Together <= best {
+				continue
+			}
+
+			if model.IsTestPath(partner.File) || model.IsDocPath(partner.File) {
+				continue
+			}
+
+			if partner.File == trigger || strings.HasPrefix(partner.File, trigger+"/") {
+				best = partner.Together
 			}
 		}
 	}
 
-	return best, nil
+	return best
 }

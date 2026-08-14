@@ -762,6 +762,55 @@ func TestReportShowsScopeAdvisory(t *testing.T) {
 		"one advisory, on the flagged card only")
 }
 
+// TestReportShowsBlockedTrigger wires the confirmed-but-blocked case
+// into the page: a capped region set with a confirmed outside trigger
+// produces no drift line, so the card must carry the blocked sentence.
+func TestReportShowsBlockedTrigger(t *testing.T) {
+	root := t.TempDir()
+
+	for _, rel := range []string{"api/schemas.py", "web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte("x\n"), 0o644))
+	}
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		return tx.InsertCoChange(model.CoChange{
+			FileA: "api/schemas.py", FileB: "web/src/api/schema.ts",
+			Together: 38, Total: 400, Lift: 6.6,
+		})
+	}))
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, Path: "web/src/api/schema.ts", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+		{ID: 2, Path: "cmd/a.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+		{ID: 3, Path: "internal/b.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+	}))
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "s1", Rule: "capped-pin", Region: "web/src/api",
+		Regions:      []string{"web/src/api", "cmd", "internal"},
+		TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: time.Now().Unix(),
+		Note: "n", Members: []int64{1, 2, 3},
+		Agent: "claude/v4", Status: model.ProposalApplied,
+	}))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n  - rule: capped-pin\n    region: web/src/api\n"+
+			"    regions: [web/src/api, cmd, internal]\n    note: n\n"), 0o644))
+
+	page := renderPage(t, st, root)
+
+	assert.Contains(t, page, "confirmed by co-change (38 shared commits) but not deliverable")
+	assert.NotContains(t, page, "regions now:", "the cap keeps recompute equal to stored — no drift")
+}
+
 func TestNotLandingColorsMeetWCAGContrast(t *testing.T) {
 	assert.GreaterOrEqual(t, contrastRatio("#A33A2B", "#F4F3F0"), 4.5)
 	assert.GreaterOrEqual(t, contrastRatio("#EF806B", "#14181A"), 4.5)

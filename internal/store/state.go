@@ -186,16 +186,27 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 				return stats, err
 			}
 
-			triggers, err := encodeStrings(p.TriggerPaths)
-			if err != nil {
-				return stats, err
-			}
+			// Trigger fields adopt only when the import ANSWERED the
+			// question: an unanswered imported row must not wipe an
+			// answer this machine already paid for.
+			if p.TriggerChecked > 0 {
+				triggers, err := encodeStrings(p.TriggerPaths)
+				if err != nil {
+					return stats, err
+				}
 
-			if _, err := tx.Exec(
-				`UPDATE proposal SET status = ?, region = ?, regions = ?,
-				   trigger_paths = ?, trigger_checked_at = ?
+				if _, err := tx.Exec(
+					`UPDATE proposal SET status = ?, region = ?, regions = ?,
+					   trigger_paths = ?, trigger_checked_at = ?
+					 WHERE signature = ? AND rule = ?`,
+					p.Status, p.Region, regions, triggers, p.TriggerChecked, p.Signature, p.Rule,
+				); err != nil {
+					return stats, err
+				}
+			} else if _, err := tx.Exec(
+				`UPDATE proposal SET status = ?, region = ?, regions = ?
 				 WHERE signature = ? AND rule = ?`,
-				p.Status, p.Region, regions, triggers, p.TriggerChecked, p.Signature, p.Rule,
+				p.Status, p.Region, regions, p.Signature, p.Rule,
 			); err != nil {
 				return stats, err
 			}

@@ -126,6 +126,37 @@ func TestImportFillsUnansweredTriggerQuestions(t *testing.T) {
 		assert.Equal(t, int64(1700000100), got[0].TriggerChecked)
 	})
 
+	t.Run("adopting an unanswered decision keeps the local answer", func(t *testing.T) {
+		// The imported row decided the proposal but never asked the
+		// trigger question; the local machine did. Adoption takes the
+		// decision and keeps the paid answer.
+		unanswered := openTestStore(t)
+		require.NoError(t, unanswered.InsertProposal(&model.Proposal{
+			Signature: "sig-1", Rule: "r", Note: "n",
+			Status: model.ProposalDismissed, CreatedAt: 1,
+		}))
+
+		bundle, err := unanswered.ExportState()
+		require.NoError(t, err)
+
+		dst := openTestStore(t)
+		require.NoError(t, dst.InsertProposal(&model.Proposal{
+			Signature: "sig-1", Rule: "r", Note: "n", Status: model.ProposalProposed,
+			TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: 1700000300, CreatedAt: 1,
+		}))
+
+		stats, err := dst.ImportState(bundle)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.ProposalsUpdated)
+
+		got, err := dst.Proposals(model.ProposalDismissed)
+		require.NoError(t, err)
+		require.Len(t, got, 1, "the decision is adopted")
+		assert.Equal(t, []string{"api/schemas.py"}, got[0].TriggerPaths,
+			"the locally paid answer survives the adoption")
+		assert.Equal(t, int64(1700000300), got[0].TriggerChecked)
+	})
+
 	t.Run("a local answer is never overwritten", func(t *testing.T) {
 		dst := openTestStore(t)
 		require.NoError(t, dst.InsertProposal(&model.Proposal{

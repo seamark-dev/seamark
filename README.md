@@ -305,7 +305,7 @@ The whole lifecycle is `seamark lessons`, one flag per decision:
 | `--apply p3,p7`   | pin chosen proposals (ranges work: `p1..p9`); writes `lessons.yaml` only with `distill.write`, else prints the block to paste                                 |
 | `--dismiss p2`    | record a no — the same evidence is never re-proposed                                                                                                          |
 | `--prune p16,p45` | retire pins that restate another (the ledger names the clusters); the theme stays pinned by its survivor                                                      |
-| `--retarget p3`   | update an applied pin to the regions its living evidence supports now — coverage plus confirmed trigger paths; failures roll `lessons.yaml` back, and re-running always converges |
+| `--retarget p3`   | update an applied pin to the regions its living evidence supports now — coverage plus confirmed trigger paths; ordinary failures roll `lessons.yaml` back, and if a hard crash leaves the file ahead of the ledger, the next run detects and repairs exactly that |
 | `--extract-triggers` | ask your agent CLI where each already-pinned mistake is MADE (see below); every answer is verified, answered proposals are never re-paid, and `--dry-run` discloses first |
 | `--stats`         | the firing log: which lessons actually reach agents (split by surface: hook / change_set / check), which never fire — the decay signal — and per-pin outcomes: did the mistake recur after the pin started firing (working / not landing / untested) |
 | `--hook`          | the PreToolUse entry point `seamark init` wires; offline, silent when a file has no lessons                                                                   |
