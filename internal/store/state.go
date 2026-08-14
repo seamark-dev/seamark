@@ -36,13 +36,15 @@ type ProposalState struct {
 	Regions   []string `json:"regions,omitempty"`
 	// TriggerPaths travel with the proposal: they feed region
 	// recomputation, and losing them on import would let a retarget
-	// silently narrow the imported delivery.
-	TriggerPaths []string `json:"trigger_paths,omitempty"`
-	Note         string   `json:"note"`
-	Members      []int64  `json:"members,omitempty"`
-	Agent        string   `json:"agent,omitempty"`
-	Status       string   `json:"status"`
-	CreatedAt    int64    `json:"created_at"`
+	// silently narrow the imported delivery. The checked stamp rides
+	// along so an import does not re-purchase answered questions.
+	TriggerPaths   []string `json:"trigger_paths,omitempty"`
+	TriggerChecked int64    `json:"trigger_checked_at,omitempty"`
+	Note           string   `json:"note"`
+	Members        []int64  `json:"members,omitempty"`
+	Agent          string   `json:"agent,omitempty"`
+	Status         string   `json:"status"`
+	CreatedAt      int64    `json:"created_at"`
 }
 
 // DistilledMark is one row of distillation memory: evidence sets already
@@ -58,6 +60,9 @@ type ImportStats struct {
 	ProposalsAdded   int
 	ProposalsUpdated int // pending rows that adopted an imported decision
 	ProposalsSkipped int
+	// TriggersFilled counts kept-local rows whose unanswered trigger
+	// question adopted an imported answer — paid once, on one machine.
+	TriggersFilled   int
 	DistilledAdded   int
 	DistilledSkipped int
 }
@@ -91,7 +96,8 @@ func (s *Store) ExportState() (*State, error) {
 		out.Proposals = append(out.Proposals, ProposalState{
 			Signature: p.Signature, Rule: p.Rule, Region: p.Region,
 			Regions: p.Regions, TriggerPaths: p.TriggerPaths,
-			Note: p.Note, Members: p.Members,
+			TriggerChecked: p.TriggerChecked,
+			Note:           p.Note, Members: p.Members,
 			Agent: p.Agent, Status: p.Status, CreatedAt: p.CreatedAt,
 		})
 	}
@@ -186,15 +192,40 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 			}
 
 			if _, err := tx.Exec(
-				`UPDATE proposal SET status = ?, region = ?, regions = ?, trigger_paths = ?
+				`UPDATE proposal SET status = ?, region = ?, regions = ?,
+				   trigger_paths = ?, trigger_checked_at = ?
 				 WHERE signature = ? AND rule = ?`,
-				p.Status, p.Region, regions, triggers, p.Signature, p.Rule,
+				p.Status, p.Region, regions, triggers, p.TriggerChecked, p.Signature, p.Rule,
 			); err != nil {
 				return stats, err
 			}
 
 			stats.ProposalsUpdated++
 		case err == nil:
+			// Kept local — with one exception riding along: an imported
+			// ANSWERED trigger question fills a local row that never
+			// asked, so no machine re-pays for it. A local answer is
+			// never overwritten.
+			if p.TriggerChecked > 0 {
+				triggers, err := encodeStrings(p.TriggerPaths)
+				if err != nil {
+					return stats, err
+				}
+
+				res, err := tx.Exec(
+					`UPDATE proposal SET trigger_paths = ?, trigger_checked_at = ?
+					 WHERE signature = ? AND rule = ? AND trigger_checked_at = 0`,
+					triggers, p.TriggerChecked, p.Signature, p.Rule,
+				)
+				if err != nil {
+					return stats, err
+				}
+
+				if n, err := res.RowsAffected(); err == nil && n > 0 {
+					stats.TriggersFilled++
+				}
+			}
+
 			stats.ProposalsSkipped++
 		default:
 			// One insert path for proposals everywhere: a column added
@@ -202,7 +233,8 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 			row := model.Proposal{
 				Signature: p.Signature, Rule: p.Rule, Region: p.Region,
 				Regions: p.Regions, TriggerPaths: p.TriggerPaths,
-				Note: p.Note, Members: p.Members,
+				TriggerChecked: p.TriggerChecked,
+				Note:           p.Note, Members: p.Members,
 				Agent: p.Agent, Status: p.Status, CreatedAt: p.CreatedAt,
 			}
 

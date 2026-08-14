@@ -22,7 +22,11 @@ import (
 // same-PR-counts-once deduplication rule.
 // v3: the batch is primed with the rule labels already captured for its
 // area, so a call spends its reasoning on what is not yet known.
-const promptVersion = "v3"
+// v4: the reply may name trigger paths — where the mistake is made,
+// when that differs from where the findings live. The harness
+// validates them and widens delivery regions only with co-change
+// confirmation (RFC-004).
+const promptVersion = "v4"
 
 // maxKnownLabels bounds the primer. Labels are ~25 characters, so forty
 // of them cost a few hundred tokens against a ~9k-token batch — the
@@ -64,6 +68,10 @@ type Options struct {
 	// Agent is the resolved agent command line, for the preflight
 	// disclosure only — the Invoker is what actually runs it.
 	Agent []string
+	// Root is the workspace root. Trigger paths named by the agent are
+	// verified against this tree; empty drops them all — an unverified
+	// name must not reach storage.
+	Root string
 	// OnPreflight receives the plan before the first agent call: what
 	// would be sent, where, and roughly what it would cost.
 	OnPreflight func(Preflight)
@@ -193,8 +201,10 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 
 		for _, g := range planned {
 			chars := len(buildPrompt(g, known.Labels(g.Region, maxKnownLabels)))
-			pf.Groups = append(pf.Groups, GroupPlan{Signature: g.Signature,
-				Region: g.Region, Findings: len(g.Findings), PromptChars: chars})
+			pf.Groups = append(pf.Groups, GroupPlan{
+				Signature: g.Signature,
+				Region:    g.Region, Findings: len(g.Findings), PromptChars: chars,
+			})
 			pf.PromptChars += chars
 			pf.Findings += len(g.Findings)
 		}
@@ -256,6 +266,43 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 			// propose it either.
 			known.Add(p)
 			fresh = append(fresh, p)
+		}
+
+		// The remaining trigger rungs: existence in the working tree,
+		// then co-change confirmation, which alone may widen the
+		// delivery regions.
+		for i := range fresh {
+			p := &fresh[i]
+
+			// Every v4 proposal was asked the trigger question — an
+			// omitted answer is an answer. The stamp keeps the backfill
+			// from re-purchasing it.
+			p.TriggerChecked = time.Now().Unix()
+
+			p.TriggerPaths = validateTriggerPaths(opts.Root, p.TriggerPaths)
+			if len(p.TriggerPaths) == 0 {
+				continue
+			}
+
+			var cited []model.Finding
+
+			for _, id := range p.Members {
+				if f, ok := memberFinding(g, id); ok {
+					cited = append(cited, f)
+				}
+			}
+
+			regions, _, err := RecomputeRegions(st, opts.Root, *p, cited)
+			if err != nil {
+				return nil, err
+			}
+
+			p.Regions = regions
+			p.Region = ""
+
+			if len(regions) > 0 {
+				p.Region = regions[0]
+			}
 		}
 
 		// One transaction for the proposals and the signature mark:
@@ -351,6 +398,17 @@ func orderByCoverage(groups []Group, cited map[int64]bool) {
 	})
 }
 
+// memberFinding looks one cited finding up in its group.
+func memberFinding(g Group, id int64) (model.Finding, bool) {
+	for _, f := range g.Findings {
+		if f.ID == id {
+			return f, true
+		}
+	}
+
+	return model.Finding{}, false
+}
+
 // distillGroup sends one group to the agent and validates the reply,
 // reporting the traffic sizes either way — cost is paid on failure too.
 func distillGroup(ctx context.Context, inv agent.Invoker, g Group,
@@ -419,6 +477,12 @@ For each pattern, reply with:
   know, distilled from the findings (max 250 characters)
 - "finding_ids": the ids of ALL findings showing this pattern (at
   least 2 — a pattern needs recurrence)
+- "trigger_paths" (optional): up to 3 repo-relative paths — files or
+  directories — that a code author edits when MAKING this mistake.
+  Include it ONLY when that place differs from the files the findings
+  point at (e.g. the findings flag a generated client, but the
+  mistake is made in the backend model it is generated from). Omit
+  the key when they are the same.
 
 Reply with ONLY this JSON, no other text:
 {"patterns": [{"rule": "...", "note": "...", "finding_ids": [1, 2]}]}
@@ -488,9 +552,10 @@ func CountEvents(cited []model.Finding) int { return model.CountEvents(cited) }
 func parseReply(reply string, g Group, agentName string) ([]model.Proposal, error) {
 	var parsed struct {
 		Patterns []struct {
-			Rule       string  `json:"rule"`
-			Note       string  `json:"note"`
-			FindingIDs []int64 `json:"finding_ids"`
+			Rule         string   `json:"rule"`
+			Note         string   `json:"note"`
+			FindingIDs   []int64  `json:"finding_ids"`
+			TriggerPaths []string `json:"trigger_paths"`
 		} `json:"patterns"`
 	}
 
@@ -553,11 +618,14 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 			Rule:      rule,
 			Region:    region,
 			Regions:   regions,
-			Note:      note,
-			Members:   ids,
-			Agent:     agentName + "/" + promptVersion,
-			Status:    model.ProposalProposed,
-			CreatedAt: time.Now().Unix(),
+			// Syntax rung only: existence and co-change confirmation
+			// need the tree and the store, which Run holds.
+			TriggerPaths: cleanTriggerPaths(p.TriggerPaths),
+			Note:         note,
+			Members:      ids,
+			Agent:        agentName + "/" + promptVersion,
+			Status:       model.ProposalProposed,
+			CreatedAt:    time.Now().Unix(),
 		})
 	}
 

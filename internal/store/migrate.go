@@ -9,7 +9,7 @@ import (
 // schemaVersion is the schema this binary understands and writes. Bump it
 // together with a new migrations entry — never alone: a version without a
 // migration would leave every existing database behind.
-const schemaVersion = 4
+const schemaVersion = 5
 
 // schemaVersionKey is the meta row recording a database's version.
 const schemaVersionKey = "schema_version"
@@ -34,6 +34,7 @@ var migrations = []migration{
 	{to: 2, run: addFindingSource},
 	{to: 3, run: addRegionSetsAndPaths},
 	{to: 4, run: addProposalTriggerPaths},
+	{to: 5, run: addProposalTriggerChecked},
 }
 
 // addFindingSource (v1 → v2): finding.source arrived with fix mining —
@@ -88,6 +89,23 @@ func addProposalTriggerPaths(tx *sql.Tx) error {
 
 	if !has {
 		_, err = tx.Exec(`ALTER TABLE proposal ADD COLUMN trigger_paths TEXT NOT NULL DEFAULT ''`)
+	}
+
+	return err
+}
+
+// addProposalTriggerChecked (v4 → v5): "examined, none found" became
+// distinct from "never examined" — without the stamp, every
+// extraction run re-pays for the same negative answers. A separate
+// step because v4 databases may already be stamped in the wild.
+func addProposalTriggerChecked(tx *sql.Tx) error {
+	has, err := hasColumn(tx, "proposal", "trigger_checked_at")
+	if err != nil {
+		return err
+	}
+
+	if !has {
+		_, err = tx.Exec(`ALTER TABLE proposal ADD COLUMN trigger_checked_at INTEGER NOT NULL DEFAULT 0`)
 	}
 
 	return err

@@ -635,6 +635,14 @@ func TestProposalLedgerRendersScopeAdvisory(t *testing.T) {
 	assert.Less(t, strings.Index(out, "applied — these are pins"),
 		strings.Index(out, "trigger scope:"), "the tail follows the lists")
 
+	// A blocked confirmed trigger renders its own line — no drift and
+	// no advisory would otherwise mention it.
+	sb.Reset()
+	PrintProposalLedger(&sb, nil, applied, nil, nil, map[int64]ProposalHealth{
+		5: {Tier: "strong", Blocked: "trigger api/schemas.py — confirmed by co-change (38 shared commits) but not deliverable"},
+	})
+	assert.Contains(t, sb.String(), "but not deliverable")
+
 	// Region lines group together: the advisory follows "regions now:".
 	sb.Reset()
 	PrintProposalLedger(&sb, nil, applied, nil, nil, map[int64]ProposalHealth{
@@ -662,25 +670,25 @@ func TestDistillPlanShowsScopeAdvisories(t *testing.T) {
 		{ID: 72, Rule: "quiet-one", Region: "api", Note: "n", Members: []int64{3}},
 	}
 
-	scope := "delivery may miss the trigger: the note names api/schemas.py (outside the regions) " +
-		"and evidence web/src/api/schema.ts co-changes with it (38 shared commits) " +
-		"— consider regions: [web/src/api, api]"
+	confirmed := "trigger api/schemas.py — confirmed by co-change (38 shared commits); regions include api"
+	unconfirmed := "trigger cmd/gen.go — named by the distiller, not confirmed by history; consider regions after apply"
 
 	var sb strings.Builder
 
 	PrintDistillPlan(&sb, DistillSummary{GroupsTotal: 1, GroupsRead: 1}, pending,
-		map[int64]string{71: scope})
+		map[int64][]string{71: {confirmed, unconfirmed}}, []string{"p71"})
 	out := sb.String()
 
-	assert.Contains(t, out, scope, "a fresh mis-scoped proposal announces itself")
-	assert.Equal(t, 1, strings.Count(out, "delivery may miss the trigger"),
-		"unflagged proposals render no scope line")
+	assert.Contains(t, out, confirmed, "a widened proposal announces what happened")
+	assert.Contains(t, out, unconfirmed)
 	assert.Contains(t, out, "trigger scope: p71")
+	assert.Equal(t, 1, strings.Count(out, "confirmed by co-change"),
+		"the unflagged proposal renders no annotation lines")
 
-	// No advisories — the plan prints exactly as before.
+	// No annotations — the plan prints exactly as before.
 	sb.Reset()
-	PrintDistillPlan(&sb, DistillSummary{GroupsTotal: 1, GroupsRead: 1}, pending, nil)
-	assert.NotContains(t, sb.String(), "trigger scope:")
+	PrintDistillPlan(&sb, DistillSummary{GroupsTotal: 1, GroupsRead: 1}, pending, nil, nil)
+	assert.NotContains(t, sb.String(), "trigger")
 }
 
 func TestPrintOutcomesOrdersActionableFirst(t *testing.T) {

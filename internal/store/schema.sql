@@ -187,6 +187,10 @@ CREATE TABLE IF NOT EXISTS proposal (
     -- distiller, verified by the harness; region recomputation reads
     -- them. (Migration-added on existing databases.)
     trigger_paths TEXT NOT NULL DEFAULT '',
+    -- When the trigger question was last answered (unix seconds, 0 =
+    -- never): a negative answer must not be re-purchased on the next
+    -- extraction run. (Migration-added on existing databases.)
+    trigger_checked_at INTEGER NOT NULL DEFAULT 0,
     note       TEXT NOT NULL,
     members    TEXT NOT NULL,             -- JSON array of cited finding ids
     agent      TEXT NOT NULL DEFAULT '',  -- provenance: adapter + prompt version

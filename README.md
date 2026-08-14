@@ -305,9 +305,24 @@ The whole lifecycle is `seamark lessons`, one flag per decision:
 | `--apply p3,p7`   | pin chosen proposals (ranges work: `p1..p9`); writes `lessons.yaml` only with `distill.write`, else prints the block to paste                                 |
 | `--dismiss p2`    | record a no — the same evidence is never re-proposed                                                                                                          |
 | `--prune p16,p45` | retire pins that restate another (the ledger names the clusters); the theme stays pinned by its survivor                                                      |
-| `--retarget p3`   | update an applied pin to the regions its living evidence supports now — failures roll `lessons.yaml` back, and re-running always converges                    |
+| `--retarget p3`   | update an applied pin to the regions its living evidence supports now — coverage plus confirmed trigger paths; failures roll `lessons.yaml` back, and re-running always converges |
+| `--extract-triggers` | ask your agent CLI where each already-pinned mistake is MADE (see below); every answer is verified, answered proposals are never re-paid, and `--dry-run` discloses first |
 | `--stats`         | the firing log: which lessons actually reach agents (split by surface: hook / change_set / check), which never fire — the decay signal — and per-pin outcomes: did the mistake recur after the pin started firing (working / not landing / untested) |
 | `--hook`          | the PreToolUse entry point `seamark init` wires; offline, silent when a file has no lessons                                                                   |
+
+Pins scope to where the evidence lives — where reviewers commented.
+Some mistakes are MADE somewhere else: a "regenerate the client"
+lesson lands on the generated TypeScript file, while the author who
+forgets is editing the backend model. Distillation therefore asks the
+agent for **trigger paths** and verifies each answer in three steps —
+it must parse, it must exist in the working tree, and co-change
+history must confirm it against the cited evidence — before the pin's
+regions widen to deliver at the trigger. Unverified names never move
+delivery. The `--proposals` ledger, the HTML report, and the distill
+plan flag pins whose note and co-change history agree that delivery
+misses the trigger, and `--retarget` applies the widened set.
+`--extract-triggers` asks the same one question for proposals
+distilled before extraction existed.
 
 Mined text is scrubbed of secret-shaped values (connection strings,
 tokens) before it is stored — a credential a reviewer quoted once must

@@ -163,16 +163,32 @@ func AuditScope(st *store.Store, root, note string, regions []string, cited []mo
 		return ScopeAdvisory{}, false, nil
 	}
 
-	best.Suggested = widenRegions(regions, triggerRegion(best.Partner))
+	best.Suggested = widenRegions(regions, triggerRegion(root, best.Partner))
 
 	return best, true, nil
 }
 
-// triggerRegion is the delivery region for a trigger path: its
-// directory, capped at maxRegionDepth. Empty for root-level paths —
-// no region can express them.
-func triggerRegion(p string) string {
-	ancestors := regionAncestors(path.Dir(p))
+// triggerRegion is the delivery region for a trigger path: the path
+// itself when the working tree says it is a directory, else its
+// parent directory — capped at maxRegionDepth. Empty for root-level
+// files, for an empty root, and for paths no longer in the tree: a
+// vanished path is never a delivery target.
+func triggerRegion(root, p string) string {
+	if root == "" {
+		return ""
+	}
+
+	info, err := os.Stat(filepath.Join(root, filepath.FromSlash(p)))
+	if err != nil {
+		return ""
+	}
+
+	dir := path.Dir(p)
+	if info.IsDir() {
+		dir = p
+	}
+
+	ancestors := regionAncestors(dir)
 	if len(ancestors) == 0 {
 		return ""
 	}

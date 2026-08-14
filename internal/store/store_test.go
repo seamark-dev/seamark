@@ -657,8 +657,9 @@ func TestProposalTriggerPathsRoundTrip(t *testing.T) {
 	require.NoError(t, s.InsertProposal(&model.Proposal{
 		Signature: "s1", Rule: "schema-sync", Region: "web/src/api",
 		Regions: []string{"web/src/api", "api"}, Note: "n", Members: []int64{1},
-		TriggerPaths: []string{"api/schemas.py", "api/routes"},
-		Status:       model.ProposalProposed, CreatedAt: 1,
+		TriggerPaths:   []string{"api/schemas.py", "api/routes"},
+		TriggerChecked: 1700000000,
+		Status:         model.ProposalProposed, CreatedAt: 1,
 	}))
 	require.NoError(t, s.InsertProposal(&model.Proposal{
 		Signature: "s2", Rule: "no-triggers", Note: "n", Members: []int64{2},
@@ -671,7 +672,18 @@ func TestProposalTriggerPathsRoundTrip(t *testing.T) {
 
 	// Newest first: got[0] is s2.
 	assert.Nil(t, got[0].TriggerPaths, "absent triggers stay nil")
+	assert.Zero(t, got[0].TriggerChecked, "never examined")
 	assert.Equal(t, []string{"api/schemas.py", "api/routes"}, got[1].TriggerPaths)
+	assert.Equal(t, int64(1700000000), got[1].TriggerChecked)
+
+	// The negative answer: no paths, but the question is settled.
+	require.NoError(t, s.UpdateProposalTriggers(got[0].ID, nil, 1700000500))
+
+	got, err = s.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	assert.Nil(t, got[0].TriggerPaths)
+	assert.Equal(t, int64(1700000500), got[0].TriggerChecked,
+		"examined-none is distinct from never-examined")
 }
 
 func TestMigrationAddsProposalTriggerPaths(t *testing.T) {
@@ -701,16 +713,18 @@ func TestMigrationAddsProposalTriggerPaths(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Nil(t, got[0].TriggerPaths, "pre-migration rows carry no triggers")
 
-	// The upgraded table accepts triggered rows.
+	// The upgraded table accepts triggered, stamped rows.
 	require.NoError(t, s.InsertProposal(&model.Proposal{
 		Signature: "s2", Rule: "new-row", Note: "n", Members: []int64{2},
-		TriggerPaths: []string{"api/schemas.py"}, Status: model.ProposalProposed,
+		TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: 1700000000,
+		Status: model.ProposalProposed,
 	}))
 
 	got, err = s.Proposals(model.ProposalProposed)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, []string{"api/schemas.py"}, got[0].TriggerPaths)
+	assert.Equal(t, int64(1700000000), got[0].TriggerChecked)
 }
 
 func TestFindingsRoundTripAndSwap(t *testing.T) {

@@ -32,6 +32,23 @@ func TestInvokeSurfacesFirstStderrLine(t *testing.T) {
 	assert.NotContains(t, err.Error(), "/login", "only the first line; CLIs get chatty")
 }
 
+func TestInvokeFallsBackToStdoutComplaint(t *testing.T) {
+	// claude -p reports usage limits and auth errors on STDOUT in pipe
+	// mode with an empty stderr; the user must see the message, not a
+	// bare exit status.
+	_, err := fake("cat >/dev/null; echo 'Claude AI usage limit reached'; exit 1").
+		Invoke(context.Background(), "x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "usage limit reached")
+	assert.Contains(t, err.Error(), "exit status 1", "the exit code stays visible beside the message")
+}
+
+func TestInvokeSilentFailureKeepsExitStatus(t *testing.T) {
+	_, err := fake("cat >/dev/null; exit 7").Invoke(context.Background(), "x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exit status 7")
+}
+
 func TestInvokeHonorsContextDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()

@@ -6,6 +6,49 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## Unreleased
+
+- **Lessons deliver where the mistake is made.** Distilled pins used to
+  scope to where reviewers commented — the repair site. For
+  cross-boundary mistakes that is the wrong place: a "regenerate the
+  client" lesson scoped to the generated TypeScript file can never
+  fire for the author editing the backend model. Distillation now asks
+  the agent for trigger paths and verifies every answer in three steps
+  — it must parse, it must exist in the working tree, and co-change
+  history must confirm it against the cited evidence — and only then
+  widens the pin's regions to deliver at the trigger. A new advisory
+  ("delivery may miss the trigger") flags mis-scoped pins on the
+  `--proposals` ledger, the HTML report, and the distill plan, with a
+  tail block so long lists cannot bury it. One shared recompute now
+  backs every "regions now" reader, so `--retarget` applies a widening
+  and can never strip one.
+- **`lessons --extract-triggers` upgrades existing corpora.** Small
+  batched agent calls ask the one trigger question per
+  already-distilled proposal: a preflight always discloses cost,
+  `--dry-run` stops there, live per-batch progress shows during the
+  calls, and every answer — including "no trigger" — is stamped so
+  re-running is free. Pending proposals widen in place; applied pins
+  surface their drift in the ledger for the explicit `--retarget`, so
+  an installed pin's delivery never changes without you. Hand-pruned
+  pins are skipped: there is no delivery to widen. Field runs on the
+  two development corpora: 17 of 53 proposals gained validated
+  triggers on a two-language repository (the schema-sync pins now
+  deliver at the backend model that triggers them), while a
+  single-ecosystem repository correctly produced only same-site
+  triggers and no false cross-boundary widenings.
+- **Sharper failures.** Agent CLI complaints that arrive on stdout —
+  usage limits, expired OAuth sessions — now surface in the error
+  instead of a bare exit status. Contradictory flag combinations
+  (`--dry-run` with a decision flag, `--proposals` with `--apply`,
+  spending modes together) are refused before dispatch instead of one
+  flag being silently ignored.
+
+Upgrade note: the database upgrades to schema v5 in place on first
+open (trigger paths, plus the answered-question stamp that keeps
+re-runs free); an older binary then refuses the upgraded database —
+the versioning contract. State bundles carry both fields; older
+binaries still import the rest of a newer bundle.
+
 ## v0.3.0 — 2026-08-10
 
 The outcome line: the system now measures whether its own lessons work —

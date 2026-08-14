@@ -201,6 +201,12 @@ given.`,
 				stats.ProposalsAdded, stats.ProposalsUpdated, stats.ProposalsSkipped,
 				stats.DistilledAdded, stats.DistilledSkipped)
 
+			if stats.TriggersFilled > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(),
+					"trigger answers: %d kept-local row(s) adopted an imported answer — not re-purchased here\n",
+					stats.TriggersFilled)
+			}
+
 			return nil
 		},
 	}

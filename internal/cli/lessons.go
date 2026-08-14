@@ -28,20 +28,21 @@ import (
 
 func newLessonsCmd(opts *options) *cobra.Command {
 	var (
-		file         string
-		region       string
-		hookMode     bool
-		hookReset    bool
-		list         bool
-		stats        bool
-		distillRun   bool
-		dryRun       bool
-		proposalList bool
-		limit        int
-		applyIDs     string
-		dismissIDs   string
-		pruneIDs     string
-		retargetIDs  string
+		file            string
+		region          string
+		hookMode        bool
+		hookReset       bool
+		list            bool
+		stats           bool
+		distillRun      bool
+		dryRun          bool
+		proposalList    bool
+		limit           int
+		applyIDs        string
+		dismissIDs      string
+		pruneIDs        string
+		retargetIDs     string
+		extractTriggers bool
 	)
 
 	cmd := &cobra.Command{
@@ -85,6 +86,14 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    --proposals ledger names the candidates). Edits
                    lessons.yaml and the ledger together; write-gated
                    like --apply, else prints the block.
+  --extract-triggers
+                   backfill trigger paths for proposals distilled
+                   before extraction existed: small agent calls name
+                   where each mistake is MADE, the harness validates,
+                   pending rows retarget in place, applied pins show
+                   the drift in --proposals for --retarget. Composes
+                   with --dry-run. Rows keep their answer — with
+                   paths or without — so re-running is free.
   --hook           read a Claude Code PreToolUse payload from stdin and emit
                    the edited file's lessons as additionalContext
 
@@ -95,8 +104,8 @@ a file has no lessons.`,
 			// Validated BEFORE any dispatch: `--apply p1 --dry-run` must
 			// be a usage error, never an apply that ignored the flag —
 			// a command carrying --dry-run must not mutate anything.
-			if dryRun && !distillRun {
-				return fmt.Errorf("--dry-run only applies to --distill")
+			if dryRun && !distillRun && !extractTriggers {
+				return fmt.Errorf("--dry-run only applies to --distill and --extract-triggers")
 			}
 
 			// Apply, dismiss and prune are three different decisions
@@ -112,6 +121,23 @@ a file has no lessons.`,
 
 			if decisions > 1 {
 				return fmt.Errorf("--apply, --dismiss, --prune and --retarget are different decisions — run them one at a time")
+			}
+
+			// Agent-spending modes never combine with decision flags:
+			// dispatch order would silently run the decision and ignore
+			// --dry-run — the exact mutation the guard above forbids.
+			if (distillRun || extractTriggers) && decisions > 0 {
+				return fmt.Errorf("--distill and --extract-triggers do not combine with --apply, --dismiss, --prune, or --retarget")
+			}
+
+			if distillRun && extractTriggers {
+				return fmt.Errorf("--distill and --extract-triggers are separate runs — one at a time")
+			}
+
+			// The read-only view would be silently swallowed: dispatch
+			// reaches the decision first and never prints the ledger.
+			if proposalList && decisions > 0 {
+				return fmt.Errorf("--proposals does not combine with --apply, --dismiss, --prune, or --retarget — run it before or after the decision")
 			}
 
 			// `--apply p1, p2` is natural typing; the shell splits the
@@ -137,6 +163,8 @@ a file has no lessons.`,
 				return runLessonsRetarget(cmd, opts, retargetIDs+","+extra)
 			case proposalList:
 				return runLessonsProposals(cmd, opts)
+			case extractTriggers:
+				return runLessonsExtractTriggers(cmd, opts, dryRun)
 			case distillRun:
 				return runLessonsDistill(cmd, opts, strings.TrimSpace(region), limit, dryRun)
 			case list || strings.TrimSpace(region) != "":
@@ -174,7 +202,7 @@ a file has no lessons.`,
 	cmd.Flags().BoolVar(&distillRun, "distill", false,
 		"distill recurring patterns from raw findings into proposed pins (needs the agent CLI)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
-		"with --distill: show what would be sent to the agent (groups, sizes, cost) without sending anything")
+		"with --distill or --extract-triggers: show what would be sent to the agent (sizes, cost) without sending anything")
 	cmd.Flags().BoolVar(&proposalList, "proposals", false,
 		"show the distillation ledger: pending, applied, and dismissed proposals (no agent calls)")
 	cmd.Flags().IntVar(&limit, "limit", 10,
@@ -187,6 +215,8 @@ a file has no lessons.`,
 		"remove applied pins that restate another (p16,p45) — the theme stays pinned by its survivor")
 	cmd.Flags().StringVar(&retargetIDs, "retarget", "",
 		"update applied pins to the regions today's inference computes (p3,p7) — lessons.yaml and the ledger together, write-gated like --apply")
+	cmd.Flags().BoolVar(&extractTriggers, "extract-triggers", false,
+		"backfill trigger paths for existing proposals via small agent calls (needs the agent CLI); composes with --dry-run")
 
 	return cmd
 }
@@ -614,12 +644,31 @@ func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int6
 		}
 
 		if len(living) > 0 {
-			recomputed := distill.CoverageRegions(living)
+			// One recompute for every "regions now" reader: coverage
+			// widened by confirmed triggers, so this line can never ask
+			// the user to undo a stored widening.
+			recomputed, facts, err := distill.RecomputeRegions(st, root, p, living)
+			if err != nil {
+				return nil, err
+			}
 
 			if !regionSetsEqual(recomputed, p.RegionSet()) {
 				h.Retarget = strings.Join(recomputed, ", ")
 				if h.Retarget == "" {
 					h.Retarget = "*"
+				}
+			}
+
+			// A blocked trigger produces no drift and no advisory —
+			// without this line, a confirmed delivery miss is
+			// invisible everywhere after the extraction summary.
+			for _, f := range facts {
+				if line := f.BlockedLine(); line != "" {
+					if h.Blocked != "" {
+						h.Blocked += "; "
+					}
+
+					h.Blocked += line
 				}
 			}
 		}
@@ -723,6 +772,7 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		Limit:  limit,
 		Pins:   pins,
 		Agent:  agentArgv,
+		Root:   root,
 		DryRun: dryRun,
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
@@ -764,8 +814,16 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		return err
 	}
 
-	// Scope advisories for the fresh plan arrive with surface C
-	// (RFC-004 Phase 1); nil keeps today's output until then.
+	// The plan below is the paid result; annotations are advisory. A
+	// failure here degrades to a warning instead of hiding what was
+	// purchased — the proposals are persisted either way.
+	notes, flagged, err := planAnnotations(st, lcfg, root, pending)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warn: trigger annotations unavailable (%v)\n", err)
+
+		notes, flagged = nil, nil
+	}
+
 	report.PrintDistillPlan(cmd.OutOrStdout(), report.DistillSummary{
 		GroupsTotal:   res.GroupsTotal,
 		GroupsRead:    res.GroupsRead,
@@ -775,7 +833,240 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		PrunedStale:   res.PrunedStale,
 		Duplicates:    res.Duplicates,
 		TokensNote:    res.CostNote(),
-	}, pending, nil)
+	}, pending, notes, flagged)
+
+	return nil
+}
+
+// planAnnotations renders the trigger lines the distill plan prints
+// under each pending proposal: what each stored trigger path did
+// (confirmed and widened, or named but unconfirmed), plus the
+// note-based scope advisory for proposals without triggers. flagged
+// lists the pN ids whose delivery may still miss the trigger.
+func planAnnotations(st *store.Store, lcfg *reviews.Config, root string,
+	pending []model.Proposal,
+) (notes map[int64][]string, flagged []string, err error) {
+	if len(pending) == 0 {
+		return nil, nil, nil
+	}
+
+	var ids []int64
+
+	for _, p := range pending {
+		ids = append(ids, p.Members...)
+	}
+
+	meta, err := st.FindingsMetaByIDs(ids)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	advisories, err := distill.AuditScopes(st, lcfg, root, pending, meta)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	notes = map[int64][]string{}
+	missed := map[int64]bool{}
+
+	for _, p := range pending {
+		var living []model.Finding
+
+		for _, id := range p.Members {
+			if f, ok := meta[id]; ok {
+				living = append(living, f)
+			}
+		}
+
+		if len(p.TriggerPaths) > 0 && len(living) > 0 {
+			_, facts, err := distill.RecomputeRegions(st, root, p, living)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			for _, f := range facts {
+				switch {
+				case f.Widened:
+					notes[p.ID] = append(notes[p.ID], fmt.Sprintf(
+						"trigger %s — confirmed by co-change (%d shared commits); regions include %s",
+						f.Path, f.Together, f.Region,
+					))
+				case f.Together == 0:
+					notes[p.ID] = append(notes[p.ID], fmt.Sprintf(
+						"trigger %s — named by the distiller, not confirmed by history; "+
+							"consider regions after apply", f.Path,
+					))
+					missed[p.ID] = true
+				case !f.Covered:
+					// Confirmed but blocked — the shared sentence, so
+					// the ledger and report cannot disagree.
+					notes[p.ID] = append(notes[p.ID], f.BlockedLine())
+					missed[p.ID] = true
+				}
+				// Covered triggers stay silent: confirmed and already
+				// delivered, nothing to do.
+			}
+		}
+
+		if adv, ok := advisories[p.ID]; ok {
+			notes[p.ID] = append(notes[p.ID], adv.Line())
+			missed[p.ID] = true
+		}
+	}
+
+	for _, p := range pending {
+		if missed[p.ID] {
+			flagged = append(flagged, fmt.Sprintf("p%d", p.ID))
+		}
+	}
+
+	return notes, flagged, nil
+}
+
+// runLessonsExtractTriggers backfills trigger paths for proposals
+// distilled before extraction existed. Small agent calls
+// name where each mistake is made; the harness validates every name.
+// Pending rows retarget in place. Applied pins only gain stored
+// triggers — their drift shows in --proposals, and the explicit
+// --retarget applies it.
+func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) error {
+	st, root, err := openIndex(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	acfg, err := agent.LoadConfig(root)
+	if err != nil {
+		return err
+	}
+
+	_, agentArgv, err := agent.Resolve(acfg)
+	if err != nil {
+		return fmt.Errorf("extraction unavailable: %w", err)
+	}
+
+	var inv agent.Invoker
+
+	if !dryRun {
+		if inv, err = agent.New(acfg); err != nil {
+			return fmt.Errorf("extraction unavailable: %w", err)
+		}
+	}
+
+	// The liveness rule every applied-pin surface uses: a hand-pruned
+	// or re-scoped pin delivers nothing, so paying to extract its
+	// triggers buys nothing.
+	lcfg, err := reviews.LoadConfig(root)
+	if err != nil {
+		return fmt.Errorf("failed to load lessons config: %w", err)
+	}
+
+	// Pending and applied rows are delivery; dismissed ones are not.
+	// Rows whose trigger question was already answered — with paths or
+	// without — are done, so re-running is free.
+	var candidates []model.Proposal
+
+	pruned := 0
+
+	for _, status := range []string{model.ProposalProposed, model.ProposalApplied} {
+		ps, err := st.Proposals(status)
+		if err != nil {
+			return err
+		}
+
+		for _, p := range ps {
+			if len(p.TriggerPaths) > 0 || p.TriggerChecked > 0 {
+				continue
+			}
+
+			if p.Status == model.ProposalApplied {
+				if _, live := lcfg.FindPin(reviews.NewPinKey(p.Rule, p.Region, p.Regions)); !live {
+					pruned++
+
+					continue
+				}
+			}
+
+			candidates = append(candidates, p)
+		}
+	}
+
+	out := cmd.OutOrStdout()
+
+	if pruned > 0 {
+		fmt.Fprintf(out, "%d applied row(s) skipped — their pins are not in .seamark/lessons.yaml, "+
+			"so there is no delivery to widen\n", pruned)
+	}
+
+	if len(candidates) == 0 {
+		fmt.Fprintln(out, "nothing to extract — every pending and applied proposal has an answered "+
+			"trigger question (or none exist)")
+
+		return nil
+	}
+
+	var ids []int64
+
+	for _, p := range candidates {
+		ids = append(ids, p.Members...)
+	}
+
+	meta, err := st.FindingsMetaByIDs(ids)
+	if err != nil {
+		return err
+	}
+
+	eopts := distill.ExtractOptions{
+		Root:   root,
+		DryRun: dryRun,
+		Agent:  agentArgv,
+		OnPreflight: func(pf distill.ExtractPreflight) {
+			fmt.Fprintf(out, "extraction preflight — %d proposal(s) in %d batch(es), ~%s tokens to %s\n",
+				pf.Proposals, pf.Batches, pf.Tokens(), strings.Join(pf.Agent, " "))
+			fmt.Fprintf(out, "  each item sends its rule, note, evidence paths, and one excerpt (capped %d chars)\n",
+				pf.BodyCap)
+		},
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
+		},
+	}
+
+	// On a terminal, each agent call gets a live spinner with elapsed
+	// time instead of dead air — the same surface distill uses; piped
+	// output keeps the plain log lines.
+	u := newUI(cmd.ErrOrStderr())
+	defer u.finish("")
+
+	if u.tty {
+		eopts.OnBatchStart = func(desc string) { u.phase("extract", desc) }
+		eopts.OnBatchDone = func(outcome string) { u.finish(outcome) }
+	}
+
+	res, err := distill.ExtractTriggers(cmd.Context(), st, inv, candidates, meta, eopts)
+	if err != nil {
+		return err
+	}
+
+	if dryRun {
+		fmt.Fprintln(out, "\n(dry run — nothing was sent; drop --dry-run to extract)")
+
+		return nil
+	}
+
+	fmt.Fprintf(out, "\nextracted — %d examined, %d named triggers, %d stored, %d pending retargeted",
+		res.Examined, res.Named, res.Stored, res.Retargeted)
+
+	if res.BatchesFailed > 0 {
+		fmt.Fprintf(out, ", %d batch(es) failed (retried next run)", res.BatchesFailed)
+	}
+
+	fmt.Fprintf(out, "; ~%s tokens sent / ~%s back\n", res.TokensSent(), res.TokensBack())
+
+	if res.AppliedStored > 0 {
+		fmt.Fprintln(out, "applied pins with new triggers show their widened regions in "+
+			"`lessons --proposals`; `--retarget` applies them")
+	}
 
 	return nil
 }
@@ -1214,7 +1505,14 @@ func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
 			continue
 		}
 
-		regions := distill.CoverageRegions(living)
+		// The same recompute the health line shows: coverage widened by
+		// confirmed triggers. Retarget must apply the widened set, not
+		// strip it back to bare coverage.
+		regions, _, err := distill.RecomputeRegions(st, root, p, living)
+		if err != nil {
+			return err
+		}
+
 		if regionSetsEqual(regions, p.RegionSet()) {
 			fmt.Fprintf(out, "  p%-4d %s — regions already current\n", p.ID, render.Sanitize(p.Rule))
 

@@ -598,7 +598,7 @@ func (s *Store) DistilledSignatures() (map[string]bool, error) {
 
 // proposalCols is the column list every proposal query selects, in
 // scanProposals order.
-const proposalCols = `id, signature, rule, region, regions, trigger_paths, note, members, agent, status, created_at`
+const proposalCols = `id, signature, rule, region, regions, trigger_paths, trigger_checked_at, note, members, agent, status, created_at`
 
 // InsertProposal stores one distilled proposal and returns its id.
 func (s *Store) InsertProposal(p *model.Proposal) error {
@@ -627,9 +627,11 @@ func insertProposal(db execer, p *model.Proposal) error {
 	}
 
 	res, err := db.Exec(
-		`INSERT INTO proposal (signature, rule, region, regions, trigger_paths, note, members, agent, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Signature, p.Rule, p.Region, regions, triggers, p.Note, string(members), p.Agent, p.Status, p.CreatedAt,
+		`INSERT INTO proposal (signature, rule, region, regions, trigger_paths, trigger_checked_at,
+		   note, members, agent, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Signature, p.Rule, p.Region, regions, triggers, p.TriggerChecked,
+		p.Note, string(members), p.Agent, p.Status, p.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("store: insert proposal %s: %w", p.Rule, err)
@@ -697,7 +699,7 @@ func scanProposals(rows *sql.Rows) ([]model.Proposal, error) {
 		var members, regions, triggers string
 
 		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &regions,
-			&triggers, &p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt)
+			&triggers, &p.TriggerChecked, &p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -901,6 +903,54 @@ func (s *Store) ClusterCitation(ids []int64) (map[string]ClusterCited, error) {
 	}
 
 	return out, nil
+}
+
+// UpdateProposalTriggers stores one proposal's validated trigger
+// paths and stamps when the question was answered — an empty answer
+// is an answer, and must not be re-purchased. Regions are written
+// separately: pending rows retarget in the same extraction run,
+// applied pins only through the explicit --retarget — an installed
+// pin's delivery never changes without the user.
+func (s *Store) UpdateProposalTriggers(id int64, paths []string, checkedAt int64) error {
+	triggers, err := encodeStrings(paths)
+	if err != nil {
+		return fmt.Errorf("store: encode proposal trigger paths: %w", err)
+	}
+
+	if _, err := s.db.Exec(`UPDATE proposal SET trigger_paths = ?, trigger_checked_at = ? WHERE id = ?`,
+		triggers, checkedAt, id); err != nil {
+		return fmt.Errorf("store: update proposal %d trigger paths: %w", id, err)
+	}
+
+	return nil
+}
+
+// UpdateProposalRegionsIfPending rewrites one proposal's regions only
+// while it is still 'proposed', atomically. Extraction re-checks the
+// status at write time: a proposal applied by a concurrent command
+// during the agent call must keep the identity its yaml pin was
+// installed with, or liveness, pruning, and outcomes all reason from
+// a split identity.
+func (s *Store) UpdateProposalRegionsIfPending(p model.Proposal) (bool, error) {
+	encoded, err := encodeStrings(p.Regions)
+	if err != nil {
+		return false, fmt.Errorf("store: encode proposal regions: %w", err)
+	}
+
+	res, err := s.db.Exec(
+		`UPDATE proposal SET region = ?, regions = ? WHERE id = ? AND status = ?`,
+		p.Region, encoded, p.ID, model.ProposalProposed,
+	)
+	if err != nil {
+		return false, fmt.Errorf("store: update proposal %d regions: %w", p.ID, err)
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return n > 0, nil
 }
 
 // UpdateProposalRegionsBatch rewrites the region sets of the given

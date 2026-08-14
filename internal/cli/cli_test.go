@@ -1025,6 +1025,220 @@ func TestLessonsProposalsLedgerShowsScopeAdvisory(t *testing.T) {
 		"the tail names the flagged set so a long ledger cannot bury it")
 }
 
+// TestLessonsExtractTriggersBackfill drives the backfill end to end:
+// disclosure and dry run first, then a scripted agent names a trigger,
+// the harness validates it, and the pending row retargets in place.
+func TestLessonsExtractTriggersBackfill(t *testing.T) {
+	root := writeFixture(t)
+
+	for _, rel := range []string{"api/schemas.py", "web/src/api/schema.ts"} {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte("x\n"), 0o644))
+	}
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		return tx.InsertCoChange(model.CoChange{
+			FileA: "api/schemas.py", FileB: "web/src/api/schema.ts",
+			Together: 38, Total: 400, Lift: 6.6,
+		})
+	}))
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, Path: "web/src/api/schema.ts", Body: "regenerate the client",
+			CreatedAt: time.Now().Unix(), Source: "review"},
+	}))
+
+	// p1 gets a trigger; p2's answer is negative; p3's pin is not in
+	// lessons.yaml — hand-pruned, no delivery to widen.
+	for _, p := range []model.Proposal{
+		{Signature: "s1", Rule: "schema-sync", Region: "web/src/api",
+			Note: "Keep the generated client current.", Members: []int64{1},
+			Agent: "claude/v3", Status: model.ProposalProposed},
+		{Signature: "s2", Rule: "no-trigger-here", Region: "web/src/api",
+			Note: "n", Members: []int64{1},
+			Agent: "claude/v3", Status: model.ProposalProposed},
+		{Signature: "s3", Rule: "hand-pruned", Region: "web/src/api",
+			Note: "n", Members: []int64{1},
+			Agent: "claude/v3", Status: model.ProposalApplied},
+	} {
+		require.NoError(t, st.InsertProposal(&p))
+	}
+
+	require.NoError(t, st.Close())
+
+	replyPath := filepath.Join(root, "extract-reply.json")
+	require.NoError(t, os.WriteFile(replyPath,
+		[]byte(`{"triggers":[{"id":1,"trigger_paths":["api/schemas.py","api/ghost.py"]}]}`), 0o644))
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  argv: [\"sh\", \"-c\", \"cat >/dev/null; cat "+replyPath+"\"]\n"), 0o644))
+
+	// Spending modes never combine with decision flags: dispatch order
+	// must not turn --dry-run into a mutation.
+	_, err = run(t, "-C", root, "lessons", "--apply", "p1", "--extract-triggers", "--dry-run")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "do not combine")
+
+	_, err = run(t, "-C", root, "lessons", "--distill", "--extract-triggers")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "one at a time")
+
+	// The read-only ledger view would be silently swallowed by dispatch.
+	_, err = run(t, "-C", root, "lessons", "--proposals", "--apply", "p1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--proposals does not combine")
+
+	// The dry run discloses and stops; the pruned pin never rides.
+	out, err := run(t, "-C", root, "lessons", "--extract-triggers", "--dry-run")
+	require.NoError(t, err)
+	assert.Contains(t, out, "1 applied row(s) skipped")
+	assert.Contains(t, out, "extraction preflight — 2 proposal(s) in 1 batch(es)")
+	assert.Contains(t, out, "(dry run — nothing was sent")
+
+	// The real run stores the validated path and retargets the row.
+	out, err = run(t, "-C", root, "lessons", "--extract-triggers")
+	require.NoError(t, err)
+	assert.Contains(t, out, "2 examined, 1 named triggers, 1 stored, 1 pending retargeted")
+
+	st, err = store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	rows, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+
+	// Newest first: rows[0] is p2, rows[1] is p1.
+	assert.Nil(t, rows[0].TriggerPaths)
+	assert.Positive(t, rows[0].TriggerChecked, "a negative answer is stamped, not forgotten")
+	assert.Equal(t, []string{"api/schemas.py"}, rows[1].TriggerPaths,
+		"the ghost path must not survive validation")
+	assert.Equal(t, []string{"web/src/api", "api"}, rows[1].Regions)
+	require.NoError(t, st.Close())
+
+	// Re-running is free: answered rows — with paths or without — are
+	// done, and the pruned pin still never rides.
+	out, err = run(t, "-C", root, "lessons", "--extract-triggers")
+	require.NoError(t, err)
+	assert.Contains(t, out, "nothing to extract")
+}
+
+// TestRetargetKeepsStoredWidening pins the unified recompute: a pin
+// whose regions already include a confirmed trigger shows no drift,
+// and a narrow one is retargeted TO the widened set — never stripped
+// back to bare evidence coverage.
+func TestRetargetKeepsStoredWidening(t *testing.T) {
+	root := writeFixture(t)
+
+	for _, rel := range []string{"api/schemas.py", "web/src/api/schema.ts"} {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte("x\n"), 0o644))
+	}
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		return tx.InsertCoChange(model.CoChange{
+			FileA: "api/schemas.py", FileB: "web/src/api/schema.ts",
+			Together: 38, Total: 400, Lift: 6.6,
+		})
+	}))
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, Path: "web/src/api/schema.ts", Body: "regenerate the client",
+			CreatedAt: time.Now().Unix(), Source: "review"},
+	}))
+
+	for _, p := range []model.Proposal{
+		{Signature: "s1", Rule: "already-widened", Region: "web/src/api",
+			Regions: []string{"web/src/api", "api"}, TriggerPaths: []string{"api/schemas.py"},
+			Note: "n", Members: []int64{1}, Agent: "claude/v4", Status: model.ProposalApplied},
+		{Signature: "s2", Rule: "still-narrow", Region: "web/src/api",
+			TriggerPaths: []string{"api/schemas.py"},
+			Note:         "n", Members: []int64{1}, Agent: "claude/v4", Status: model.ProposalApplied},
+	} {
+		require.NoError(t, st.InsertProposal(&p))
+	}
+
+	require.NoError(t, st.Close())
+
+	out, err := run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, strings.Count(out, "regions now:"),
+		"the widened pin shows no phantom drift")
+	assert.Contains(t, out, "regions now: web/src/api, api")
+	assert.Contains(t, out, "--retarget p2")
+
+	// Write gate off: retarget prints the block it would apply — the
+	// widened set, not bare coverage.
+	out, err = run(t, "-C", root, "lessons", "--retarget", "p2")
+	require.NoError(t, err)
+	assert.Contains(t, out, "[web/src/api, api]")
+}
+
+// TestLedgerShowsBlockedTrigger pins finding visibility: a backfilled
+// applied pin whose confirmed trigger is blocked by the region cap
+// produces no drift and no note advisory — the ledger must still say
+// so.
+func TestLedgerShowsBlockedTrigger(t *testing.T) {
+	root := writeFixture(t)
+
+	for _, rel := range []string{"api/schemas.py", "web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte("x\n"), 0o644))
+	}
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		return tx.InsertCoChange(model.CoChange{
+			FileA: "api/schemas.py", FileB: "web/src/api/schema.ts",
+			Together: 38, Total: 400, Lift: 6.6,
+		})
+	}))
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, Path: "web/src/api/schema.ts", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+		{ID: 2, Path: "cmd/a.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+		{ID: 3, Path: "internal/b.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+	}))
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "s1", Rule: "capped-pin", Region: "web/src/api",
+		Regions:      []string{"web/src/api", "cmd", "internal"},
+		TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: time.Now().Unix(),
+		Note: "n", Members: []int64{1, 2, 3},
+		Agent: "claude/v4", Status: model.ProposalApplied,
+	}))
+	require.NoError(t, st.Close())
+
+	out, err := run(t, "-C", root, "lessons", "--proposals")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "confirmed by co-change (38 shared commits) but not deliverable")
+	assert.NotContains(t, out, "regions now:", "no drift — the cap keeps recompute equal to stored")
+}
+
 func TestLessonsOutcomeSurfacesRejectMalformedConfig(t *testing.T) {
 	root := writeFixture(t)
 	_, err := run(t, "-C", root, "index")

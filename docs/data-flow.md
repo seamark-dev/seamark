@@ -22,6 +22,7 @@ optional.
 | Review mining (`index --reviews`) | GitHub PR review comments, via your `gh` | `index.db` (lessons, findings) | GitHub API through `gh` | yes |
 | Fix mining (part of `index`) | local `git log` | `index.db` (findings) | none | yes |
 | Distillation (`lessons --distill`) | mined findings | your agent CLI's stdin → its model service | via the agent CLI | proposals + signature marks in `index.db` |
+| Trigger backfill (`lessons --extract-triggers`) | proposal notes + evidence paths and one excerpt each | your agent CLI's stdin → its model service | via the agent CLI | validated trigger paths + answered-question stamps in `index.db` |
 | Pin apply (`lessons --apply`) | your decision | `.seamark/lessons.yaml` (committed file; only with `distill.write`) | none | yes |
 | Gate hook (`gate --hook`) | the agent's proposed command | verdict on stdout/exit code; `.seamark/audit.jsonl` | none | audit entries |
 | Edit hook (`lessons --hook`) | edited file path and provider session ID | lesson reminders on stdout | none | firing log plus optional local, digest-only once-per-context state |
@@ -68,6 +69,14 @@ seamark lessons --distill --dry-run   # the full disclosure, nothing sent
 The dry run prints metadata only — never finding bodies — and works
 even when the agent CLI is not installed.
 
+`lessons --extract-triggers` sends a smaller slice through the same
+agent CLI: per already-distilled proposal, its rule label, its note
+(model-written text you reviewed at apply time), the repo-relative
+paths of its cited evidence, and ONE evidence excerpt capped at 400
+characters. Same preflight, same `--dry-run`, same `agent:` line from
+`config.yaml`. The reply is never trusted: named paths must exist in
+the working tree, and only co-change-confirmed ones widen delivery.
+
 ## Command declarations
 
 | Command | Network | Sends data to another process/model | Writes repo-local state | Modifies committed files | Can block | Needs credentials |
@@ -75,7 +84,7 @@ even when the agent CLI is not installed.
 | `init` | no | no | `.seamark/` scaffolds, `.claude/settings.json` | `.gitignore`, scaffolded YAML (meant to be committed) | no | no |
 | `index` | only `--reviews`, via `gh` | no | `index.db` | no | no | `gh` auth for `--reviews` |
 | `why` / `orient` | no | no | no | no | no | no |
-| `lessons` | no | `--distill`: your agent CLI | proposals in `index.db`; firing log | `lessons.yaml`, only via `--apply`/`--prune` with `distill.write` | no | the agent CLI's own |
+| `lessons` | no | `--distill` and `--extract-triggers`: your agent CLI | proposals, trigger paths in `index.db`; firing log | `lessons.yaml`, only via `--apply`/`--prune`/`--retarget` with `distill.write` | no | the agent CLI's own |
 | `report` | no | no | the HTML file | no | no | no |
 | `gate` | no | no | `audit.jsonl` | no | exit 2 under enforce | no |
 | `check` | no | no | `audit.jsonl`, index refresh | no | exit 2 under enforce | no |

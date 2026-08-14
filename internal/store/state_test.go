@@ -17,8 +17,8 @@ func seedDecisions(t *testing.T, s *Store) {
 	require.NoError(t, s.InsertProposal(&model.Proposal{
 		Signature: "sig-1", Rule: "no-naked-returns", Region: "internal",
 		Note: "avoid naked returns", Members: []int64{11, 12},
-		TriggerPaths: []string{"cmd/gen.go"},
-		Agent:        "claude/v1", Status: model.ProposalDismissed, CreatedAt: 1700000000,
+		TriggerPaths: []string{"cmd/gen.go"}, TriggerChecked: 1700000100,
+		Agent: "claude/v1", Status: model.ProposalDismissed, CreatedAt: 1700000000,
 	}))
 	require.NoError(t, s.MarkDistilled("sig-1", "internal", 1700000000))
 	require.NoError(t, s.ReplaceLessons(
@@ -81,6 +81,8 @@ func TestExportImportRoundTrip(t *testing.T) {
 	assert.Equal(t, []int64{11, 12}, got[0].Members)
 	assert.Equal(t, []string{"cmd/gen.go"}, got[0].TriggerPaths,
 		"trigger paths survive the wire")
+	assert.Equal(t, int64(1700000100), got[0].TriggerChecked,
+		"the answered-question stamp survives the wire — an import must not re-purchase it")
 
 	marks, err := dst.DistilledSignatures()
 	require.NoError(t, err)
@@ -92,6 +94,53 @@ func TestExportImportRoundTrip(t *testing.T) {
 	assert.Zero(t, stats.ProposalsAdded)
 	assert.Equal(t, 1, stats.ProposalsSkipped)
 	assert.Equal(t, 1, stats.DistilledSkipped)
+}
+
+func TestImportFillsUnansweredTriggerQuestions(t *testing.T) {
+	// Two clones, both applied the same proposal; only one paid for
+	// extraction. The import fills the unanswered local row — and
+	// never overwrites a local answer.
+	src := openTestStore(t)
+	require.NoError(t, src.InsertProposal(&model.Proposal{
+		Signature: "sig-1", Rule: "r", Note: "n", Status: model.ProposalApplied,
+		TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: 1700000100, CreatedAt: 1,
+	}))
+
+	state, err := src.ExportState()
+	require.NoError(t, err)
+
+	t.Run("unanswered local row adopts the answer", func(t *testing.T) {
+		dst := openTestStore(t)
+		require.NoError(t, dst.InsertProposal(&model.Proposal{
+			Signature: "sig-1", Rule: "r", Note: "n", Status: model.ProposalApplied, CreatedAt: 1,
+		}))
+
+		stats, err := dst.ImportState(state)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.TriggersFilled)
+		assert.Equal(t, 1, stats.ProposalsSkipped, "the row itself stays local")
+
+		got, err := dst.Proposals(model.ProposalApplied)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"api/schemas.py"}, got[0].TriggerPaths)
+		assert.Equal(t, int64(1700000100), got[0].TriggerChecked)
+	})
+
+	t.Run("a local answer is never overwritten", func(t *testing.T) {
+		dst := openTestStore(t)
+		require.NoError(t, dst.InsertProposal(&model.Proposal{
+			Signature: "sig-1", Rule: "r", Note: "n", Status: model.ProposalApplied,
+			TriggerPaths: []string{"db/other.py"}, TriggerChecked: 1700000200, CreatedAt: 1,
+		}))
+
+		stats, err := dst.ImportState(state)
+		require.NoError(t, err)
+		assert.Zero(t, stats.TriggersFilled)
+
+		got, err := dst.Proposals(model.ProposalApplied)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"db/other.py"}, got[0].TriggerPaths, "local answers win")
+	})
 }
 
 func TestImportNeverOverwritesLocalDecisions(t *testing.T) {
