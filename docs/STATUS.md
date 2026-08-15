@@ -38,6 +38,7 @@ Review mining, fix mining, lessons, distillation, pins.
 | Lessons + edit hook + tuning (`lessons.yaml`) | working |
 | Evidence confidence + ledger revalidation (`--proposals`, `--retarget`) | working; tiers recomputed on read, never stored |
 | Distillation (plan/apply, dedup memory, preflight disclosure, `--dry-run`) | working; requires your own agent CLI; sends finding text to it ([data-flow.md](data-flow.md)) |
+| Trigger paths (extraction at distill time, `--extract-triggers` backfill, scope advisory in the ledger/report/plan) | working; every named path is verified against the tree and co-change history before delivery widens; answered proposals are never re-paid |
 | Passive outcome loop (per-pin `working` / `not landing` / `untested` verdicts in `--stats`, the ledger, and the HTML report) | working; deterministic, recomputed on read, honesty-gated on activity and mining freshness |
 | Once-per-context hook delivery (`hook_delivery` in `lessons.yaml`) | working; opt-in, digest-only local state, fails open; needs one `seamark init` re-run for the `PostCompact` hook |
 | Lessons benchmark (`make lessons-bench`, paired headless sessions, frozen claim registry) | working; operator-run, spends provider tokens; protocol in [bench/README.md](../bench/README.md) |

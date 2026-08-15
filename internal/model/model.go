@@ -231,12 +231,22 @@ type Proposal struct {
 	// covering ≥80% of the cited events; see distill.coverageRegions).
 	// Empty means "derive from Region" — pre-set rows and repo-wide
 	// proposals both land there.
-	Regions   []string
-	Note      string  // the guidance, pin-ready
-	Members   []int64 // finding ids the agent cited — verified to exist in the group
-	Agent     string  // provenance: adapter name + prompt version
-	Status    string  // proposed | applied | dismissed
-	CreatedAt int64
+	Regions []string
+	// TriggerPaths are validated repo paths where the mistake is MADE,
+	// named by the distiller and verified by the harness.
+	// Region recomputation reads them, so widened regions survive a
+	// retarget. Nil for rows distilled before extraction existed.
+	TriggerPaths []string
+	// TriggerChecked is when the trigger question was last answered
+	// for this row (unix seconds; 0 = never). "Examined, none found"
+	// must stay distinct from "never examined", or every extraction
+	// run re-pays for the same negative answers.
+	TriggerChecked int64
+	Note           string  // the guidance, pin-ready
+	Members        []int64 // finding ids the agent cited — verified to exist in the group
+	Agent          string  // provenance: adapter name + prompt version
+	Status         string  // proposed | applied | dismissed
+	CreatedAt      int64
 }
 
 // RegionSet returns the effective region set: Regions when present,

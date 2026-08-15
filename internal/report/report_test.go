@@ -608,6 +608,96 @@ func TestProposalLedgerRendersOutcome(t *testing.T) {
 	assert.NotContains(t, sb.String(), "escalation is yours")
 }
 
+func TestProposalLedgerRendersScopeAdvisory(t *testing.T) {
+	scope := "delivery may miss the trigger: the note names api/schemas.py (outside the regions) " +
+		"and evidence web/src/api/schema.ts co-changes with it (38 shared commits) " +
+		"— consider regions: [web/src/api, api]"
+
+	pending := []model.Proposal{{ID: 71, Rule: "regenerate-web-schema", Region: "web/src/api", Note: "n"}}
+	applied := []model.Proposal{{ID: 5, Rule: "quiet-one", Region: "api"}}
+
+	var sb strings.Builder
+
+	PrintProposalLedger(&sb, pending, applied, nil, nil, map[int64]ProposalHealth{
+		71: {Tier: "strong", Scope: scope},
+		5:  {Tier: "strong"},
+	})
+	out := sb.String()
+
+	assert.Contains(t, out, scope)
+	assert.Equal(t, 1, strings.Count(out, "delivery may miss the trigger"),
+		"unflagged pins render no scope line")
+
+	// The tail block names the flagged set once, after the lists, so a
+	// long ledger cannot bury the advisory.
+	assert.Contains(t, out, "trigger scope: p71")
+	assert.Contains(t, out, "widen regions in .seamark/lessons.yaml")
+	assert.Less(t, strings.Index(out, "applied — these are pins"),
+		strings.Index(out, "trigger scope:"), "the tail follows the lists")
+
+	// A pruned pin names its state instead of advising.
+	sb.Reset()
+	PrintProposalLedger(&sb, nil, applied, nil, nil, map[int64]ProposalHealth{
+		5: {Tier: "strong", Pruned: true},
+	})
+	assert.Contains(t, sb.String(), "not in .seamark/lessons.yaml")
+
+	// A blocked confirmed trigger renders its own line — no drift and
+	// no advisory would otherwise mention it.
+	sb.Reset()
+	PrintProposalLedger(&sb, nil, applied, nil, nil, map[int64]ProposalHealth{
+		5: {Tier: "strong", Blocked: "trigger api/schemas.py — confirmed by co-change (38 shared commits) but not deliverable"},
+	})
+	assert.Contains(t, sb.String(), "but not deliverable")
+
+	// Region lines group together: the advisory follows "regions now:".
+	sb.Reset()
+	PrintProposalLedger(&sb, nil, applied, nil, nil, map[int64]ProposalHealth{
+		5: {Tier: "strong", Retarget: "api, db", Scope: scope},
+	})
+	out = sb.String()
+
+	require.Contains(t, out, "regions now: api, db")
+	assert.Less(t, strings.Index(out, "regions now:"), strings.Index(out, "delivery may miss"),
+		"scope renders after the retarget line")
+	assert.Contains(t, out, "trigger scope: p5")
+
+	// No flagged pins — no tail at all.
+	sb.Reset()
+	PrintProposalLedger(&sb, nil, applied, nil, nil, map[int64]ProposalHealth{
+		5: {Tier: "strong"},
+	})
+	assert.NotContains(t, sb.String(), "trigger scope:")
+}
+
+func TestDistillPlanShowsScopeAdvisories(t *testing.T) {
+	pending := []model.Proposal{
+		{ID: 71, Rule: "regenerate-web-schema", Region: "web/src/api",
+			Note: "Edit api/schemas.py first.", Members: []int64{1, 2}},
+		{ID: 72, Rule: "quiet-one", Region: "api", Note: "n", Members: []int64{3}},
+	}
+
+	confirmed := "trigger api/schemas.py — confirmed by co-change (38 shared commits); regions include api"
+	unconfirmed := "trigger cmd/gen.go — named by the distiller, not confirmed by history; consider regions after apply"
+
+	var sb strings.Builder
+
+	PrintDistillPlan(&sb, DistillSummary{GroupsTotal: 1, GroupsRead: 1}, pending,
+		map[int64][]string{71: {confirmed, unconfirmed}}, []string{"p71"})
+	out := sb.String()
+
+	assert.Contains(t, out, confirmed, "a widened proposal announces what happened")
+	assert.Contains(t, out, unconfirmed)
+	assert.Contains(t, out, "trigger scope: p71")
+	assert.Equal(t, 1, strings.Count(out, "confirmed by co-change"),
+		"the unflagged proposal renders no annotation lines")
+
+	// No annotations — the plan prints exactly as before.
+	sb.Reset()
+	PrintDistillPlan(&sb, DistillSummary{GroupsTotal: 1, GroupsRead: 1}, pending, nil, nil)
+	assert.NotContains(t, sb.String(), "trigger")
+}
+
 func TestPrintOutcomesOrdersActionableFirst(t *testing.T) {
 	applied := []model.Proposal{
 		{ID: 9, Rule: "cap-per-request-query", Region: "web"},

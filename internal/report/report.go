@@ -900,7 +900,14 @@ func printLessons(w io.Writer, lessons []model.Lesson) {
 // plan: every proposal awaiting a decision, this run's newcomers
 // included. Proposal text is model output — untrusted — so it is
 // sanitized; notes are never truncated (they are the payload).
-func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal) {
+// notes carries caller-rendered annotation lines per proposal id —
+// trigger confirmations and scope advisories (report does not import
+// distill). scopeFlagged lists the pN ids whose delivery may miss the
+// trigger; they get the tail hint. Nil for both: the plan prints
+// exactly as before.
+func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal,
+	notes map[int64][]string, scopeFlagged []string,
+) {
 	fmt.Fprintf(w, "distill plan — %d groups: %d read", res.GroupsTotal, res.GroupsRead)
 
 	if res.GroupsSkipped > 0 {
@@ -939,10 +946,22 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal)
 
 	for _, p := range pending {
 		printProposal(w, p)
+
+		for _, line := range notes[p.ID] {
+			fmt.Fprintf(w, "        %s\n", render.Sanitize(line))
+		}
 	}
 
 	fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; "+
 		"`--dismiss` remembers the no\n")
+
+	// A fresh mis-scoped proposal announces itself here, at creation —
+	// the cheapest moment to fix delivery, before the pin is installed.
+	if len(scopeFlagged) > 0 {
+		fmt.Fprintf(w, "\ntrigger scope: %s — the notes above name a trigger the regions "+
+			"do not reach; apply, then widen regions in .seamark/lessons.yaml\n",
+			strings.Join(scopeFlagged, ", "))
+	}
 }
 
 // printProposal renders one pending proposal: its identity line and the
@@ -966,6 +985,14 @@ type ProposalHealth struct {
 	Facts    string
 	Era      string // e.g. "distilled under prompt v1, before the recurrence rule"
 	Retarget string // recomputed regions when they differ; "" when current
+	// Scope is the trigger-scope advisory (RFC-004 Phase 1): the note
+	// names a path outside the pin's regions and co-change evidence
+	// agrees. Empty when the signals do not agree — the common case.
+	Scope string
+	// Blocked reports confirmed triggers that cannot widen delivery
+	// (region cap, no expressible region). Without it a confirmed
+	// miss would be invisible: no drift, no advisory.
+	Blocked string
 	// Outcome is the passive loop's verdict sentence (outcome.Line)
 	// for applied pins. Empty when the pin cannot be measured: pending
 	// proposals, pruned pins, hand-written pins without citations.
@@ -973,6 +1000,12 @@ type ProposalHealth struct {
 	// Escalate is true for not-landing pins: the pin fires and the
 	// mistake recurs anyway. Drives the escalation hint in the ledger.
 	Escalate bool
+	// Pruned is true for applied rows whose pin is not in
+	// .seamark/lessons.yaml (hand-pruned, or an apply block never
+	// pasted). The pin delivers nothing, so region advice is
+	// suppressed — a retarget hint here would name a pin the command
+	// cannot find.
+	Pruned bool
 }
 
 // PrintProposalLedger renders the distillation decision record: what is
@@ -1025,6 +1058,15 @@ func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Propos
 		fmt.Fprintf(w, "\nretarget: `seamark lessons --retarget %s` updates those pins to the "+
 			"recomputed regions (lessons.yaml and the ledger together; needs distill.write, "+
 			"else it prints the block)\n", strings.Join(retargets, ","))
+	}
+
+	// The scope advisories live on their cards above; a long ledger
+	// buries them, so the flagged set is named once at the end.
+	if ids := scopeIDs(pending, applied, health); len(ids) > 0 {
+		fmt.Fprintf(w, "\ntrigger scope: %s — the note and co-change history point outside "+
+			"the pin's regions; each advisory above names the regions to consider "+
+			"(applied pins: widen regions in .seamark/lessons.yaml; pending pins: "+
+			"apply, then widen)\n", strings.Join(ids, ", "))
 	}
 
 	// Pins applied before duplicate detection existed (or written by
@@ -1115,6 +1157,10 @@ func printHealth(w io.Writer, h ProposalHealth) {
 		fmt.Fprintf(w, "        %s — %s\n", h.Tier, render.Sanitize(h.Facts))
 	}
 
+	if h.Pruned {
+		fmt.Fprintf(w, "        not in .seamark/lessons.yaml — this pin delivers nothing until it returns\n")
+	}
+
 	if h.Era != "" {
 		fmt.Fprintf(w, "        %s\n", render.Sanitize(h.Era))
 	}
@@ -1125,6 +1171,14 @@ func printHealth(w io.Writer, h ProposalHealth) {
 
 	if h.Outcome != "" {
 		fmt.Fprintf(w, "        %s\n", render.Sanitize(h.Outcome))
+	}
+
+	if h.Scope != "" {
+		fmt.Fprintf(w, "        %s\n", render.Sanitize(h.Scope))
+	}
+
+	if h.Blocked != "" {
+		fmt.Fprintf(w, "        %s\n", render.Sanitize(h.Blocked))
 	}
 }
 
@@ -1150,6 +1204,23 @@ func escalateIDs(applied []model.Proposal, health map[int64]ProposalHealth) []st
 	for _, p := range applied {
 		if health[p.ID].Escalate {
 			out = append(out, fmt.Sprintf("p%d", p.ID))
+		}
+	}
+
+	return out
+}
+
+// scopeIDs lists the proposals whose trigger-scope advisory fired, in
+// pN form for the tail line. Pending rows lead: they are decidable
+// now, before a mis-scoped pin is installed.
+func scopeIDs(pending, applied []model.Proposal, health map[int64]ProposalHealth) []string {
+	var out []string
+
+	for _, ps := range [][]model.Proposal{pending, applied} {
+		for _, p := range ps {
+			if health[p.ID].Scope != "" {
+				out = append(out, fmt.Sprintf("p%d", p.ID))
+			}
 		}
 	}
 

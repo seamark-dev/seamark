@@ -114,7 +114,14 @@ type Card struct {
 	Facts      string
 	Era        string
 	RegionsNow string
-	Evidence   []Evidence
+	// Scope is the trigger-scope advisory sentence (RFC-004): the note
+	// and co-change history point outside the pin's regions, so
+	// delivery may miss the trigger site. Same Line() the ledger prints.
+	Scope string
+	// Blocked reports confirmed triggers that cannot widen delivery —
+	// no drift and no advisory would otherwise mention them.
+	Blocked  string
+	Evidence []Evidence
 	// Outcome is the passive loop's verdict sentence,
 	// present only for measured applied pins.
 	Outcome string
@@ -228,6 +235,71 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		return nil, err
 	}
 
+	// The same trigger-scope audit the ledger prints, from the same
+	// helper, over the cards' own evidence universe — the surfaces
+	// cannot disagree. With a fallback config every applied pin reads
+	// as pruned and skips; pending rows still audit.
+	byID := make(map[int64]model.Finding, len(findings))
+	for _, f := range findings {
+		byID[f.ID] = f
+	}
+
+	// Only the visible cards need store work: allProposals sorted the
+	// list exactly the way buildCards truncates it, and the ledger on
+	// a mature corpus holds several times maxCards rows.
+	visible := proposals
+	if len(visible) > maxCards {
+		visible = visible[:maxCards]
+	}
+
+	scopes, err := distill.AuditScopes(st, cfg, root, visible, byID)
+	if err != nil {
+		return nil, err
+	}
+
+	// One recompute for every "regions now" reader (see
+	// distill.RecomputeRegions): the cards must show the same widened
+	// set the ledger and --retarget use. Blocked triggers ride along —
+	// a confirmed miss with no drift line must not vanish from the
+	// page.
+	regionsNow := make(map[int64][]string, len(visible))
+	blocked := make(map[int64]string)
+
+	for _, p := range visible {
+		if p.Status != model.ProposalProposed && p.Status != model.ProposalApplied {
+			continue
+		}
+
+		var living []model.Finding
+
+		for _, id := range p.Members {
+			if f, ok := byID[id]; ok {
+				living = append(living, f)
+			}
+		}
+
+		if len(living) == 0 {
+			continue
+		}
+
+		recomputed, facts, err := distill.RecomputeRegions(st, root, p, living)
+		if err != nil {
+			return nil, err
+		}
+
+		regionsNow[p.ID] = recomputed
+
+		for _, f := range facts {
+			if line := f.BlockedLine(); line != "" {
+				if blocked[p.ID] != "" {
+					blocked[p.ID] += "; "
+				}
+
+				blocked[p.ID] += line
+			}
+		}
+	}
+
 	// One churn query serves both the headline count and the map, so the
 	// two can never describe different sets of files.
 	churn, err := st.FileChurn(0)
@@ -252,7 +324,7 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		FilesWithHistory: len(churn),
 	}
 
-	r.buildCards(proposals, findings, readings, root, now)
+	r.buildCards(proposals, byID, readings, scopes, regionsNow, blocked, root, now)
 	r.buildDuplicates(proposals)
 
 	// The map first: it decides which scopes exist, and each lesson row
@@ -315,18 +387,18 @@ func allProposals(st *store.Store) ([]model.Proposal, error) {
 }
 
 // buildCards renders the decision queue: pending proposals first, then
-// the most recent decisions, each with the findings it cited.
+// the most recent decisions, each with the findings it cited. byID is
+// the evidence universe the caller also feeds the scope audit.
 func (r *Report) buildCards(
 	proposals []model.Proposal,
-	findings []model.Finding,
+	byID map[int64]model.Finding,
 	readings map[int64]outcome.Reading,
+	scopes map[int64]distill.ScopeAdvisory,
+	regionsNow map[int64][]string,
+	blocked map[int64]string,
 	root string,
 	now time.Time,
 ) {
-	byID := make(map[int64]model.Finding, len(findings))
-	for _, f := range findings {
-		byID[f.ID] = f
-	}
 
 	r.CardsTotal = len(proposals)
 
@@ -374,9 +446,7 @@ func (r *Report) buildCards(
 				card.Era = "distilled under prompt v1, before the same-PR-counts-once rule"
 			}
 
-			if len(cited) > 0 {
-				recomputed := distill.CoverageRegions(cited)
-
+			if recomputed, ok := regionsNow[p.ID]; ok {
 				if reviews.NewPinKey("x", "", recomputed) != reviews.NewPinKey("x", "", p.RegionSet()) {
 					card.RegionsNow = clean(strings.Join(recomputed, ", "))
 					if card.RegionsNow == "" {
@@ -391,6 +461,14 @@ func (r *Report) buildCards(
 				card.Outcome = clean(rd.Line())
 				card.NotLanding = rd.Verdict == outcome.VerdictNotLanding
 			}
+
+			// The trigger-scope advisory; scopes only contains flagged
+			// pending and applied rows, same rule.
+			if adv, ok := scopes[p.ID]; ok {
+				card.Scope = clean(adv.Line())
+			}
+
+			card.Blocked = clean(blocked[p.ID])
 		}
 
 		for _, f := range cited {

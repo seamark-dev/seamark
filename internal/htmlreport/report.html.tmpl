@@ -164,6 +164,12 @@ footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line); co
   {{- if .RegionsNow}}
   <p class="health drift">regions now: {{.RegionsNow}}</p>
   {{- end}}
+  {{- if .Scope}}
+  <p class="health drift">{{.Scope}}</p>
+  {{- end}}
+  {{- if .Blocked}}
+  <p class="health drift">{{.Blocked}}</p>
+  {{- end}}
   {{- if .Evidence}}
   <details><summary>evidence ({{len .Evidence}})</summary>
     <ul class="evidence">

@@ -178,12 +178,21 @@ func (c *cliInvoker) Invoke(ctx context.Context, prompt string) (string, error) 
 		}
 
 		msg := strings.TrimSpace(errb.String())
+		if msg == "" {
+			// Some CLIs put the complaint on stdout in pipe mode —
+			// claude -p reports usage limits and auth errors there.
+			// Without this, the user sees a bare exit status.
+			msg = strings.TrimSpace(out.String())
+		}
+
 		if i := strings.IndexByte(msg, '\n'); i > 0 {
 			msg = msg[:i] // first line carries the point; CLIs get chatty
 		}
 
 		if msg == "" {
 			msg = err.Error()
+		} else {
+			msg = fmt.Sprintf("%s (%s)", msg, err.Error())
 		}
 
 		return "", fmt.Errorf("agent %s: %s", c.name, msg)
