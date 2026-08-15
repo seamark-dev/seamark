@@ -6,7 +6,12 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
-## Unreleased
+## v0.4.0 — 2026-08-15
+
+The delivery line: a lesson is only as good as where it fires. This
+release moves pins from where reviewers commented to where the mistake
+is made, verifies every move against the working tree and co-change
+history, and gives existing corpora a one-command upgrade.
 
 - **Lessons deliver where the mistake is made.** Distilled pins used to
   scope to where reviewers commented — the repair site. For
@@ -35,13 +40,27 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   triggers on a two-language repository (the schema-sync pins now
   deliver at the backend model that triggers them), while a
   single-ecosystem repository correctly produced only same-site
-  triggers and no false cross-boundary widenings.
+  triggers and no false cross-boundary widenings. Answers travel in
+  state bundles: an import fills a local row that never asked, and
+  never overwrites a locally paid answer.
+- **The ledger says what it knows.** An applied row whose pin left
+  `lessons.yaml` is named plainly ("delivers nothing until it
+  returns") instead of receiving region advice a retarget would
+  refuse. A confirmed trigger that cannot widen delivery — the region
+  set is full, or the path has no region — prints its own line on the
+  ledger, the report, and the plan: no drift line and no advisory
+  would otherwise mention it.
 - **Sharper failures.** Agent CLI complaints that arrive on stdout —
   usage limits, expired OAuth sessions — now surface in the error
-  instead of a bare exit status. Contradictory flag combinations
-  (`--dry-run` with a decision flag, `--proposals` with `--apply`,
-  spending modes together) are refused before dispatch instead of one
-  flag being silently ignored.
+  instead of a bare exit status. A JSON reply missing its expected key
+  is retried, not recorded: a paid group read or trigger answer is
+  never burned on `{}`. An interrupted run reports what completed —
+  stamped rows stay done and the next run resumes. Contradictory flag
+  combinations (`--dry-run` with a decision flag, `--proposals` with
+  `--apply` or `--distill`, spending modes together) are refused
+  before dispatch instead of one flag being silently ignored. And
+  extraction excerpts pass secret redaction before leaving the
+  machine, covering rows mined before store-time scrubbing existed.
 
 Upgrade note: the database upgrades to schema v5 in place on first
 open (trigger paths, plus the answered-question stamp that keeps
