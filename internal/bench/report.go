@@ -440,7 +440,6 @@ type cohortIdentity struct {
 	taskSHA, pin, fixture, requestedModel            string
 	seamarkVersion, seamarkSHA, agentVersion, effort string
 	hookDelivery                                     HookDeliveryMode
-	hookExposure                                     HookExposureExpectation
 	comparisonFamily, protocolFingerprint            string
 	runtimeID                                        string
 	maxBudgetUSD                                     float64
@@ -452,7 +451,7 @@ func reportIdentity(row Row) cohortIdentity {
 		requestedModel: row.RequestedModel, seamarkVersion: row.SeamarkVersion,
 		seamarkSHA: row.SeamarkSHA, agentVersion: row.AgentVersion,
 		effort: row.Effort, runtimeID: row.RuntimeID, maxBudgetUSD: row.MaxBudgetUSD,
-		hookDelivery: row.HookDelivery, hookExposure: row.HookExposure,
+		hookDelivery:     row.HookDelivery,
 		comparisonFamily: row.ComparisonFamily, protocolFingerprint: row.ProtocolFingerprint,
 	}
 }
@@ -474,7 +473,7 @@ func buildCohorts(rows []Row) ([]CohortReport, error) {
 			RequestedModel: first.RequestedModel, SeamarkVersion: first.SeamarkVersion,
 			SeamarkSHA: first.SeamarkSHA, AgentVersion: first.AgentVersion,
 			Effort: first.Effort, RuntimeID: first.RuntimeID,
-			HookDelivery: first.HookDelivery, HookExposure: first.HookExposure,
+			HookDelivery:        first.HookDelivery,
 			ComparisonFamily:    first.ComparisonFamily,
 			ProtocolFingerprint: first.ProtocolFingerprint,
 			MaxBudgetUSD:        first.MaxBudgetUSD, Rows: len(cohortRows),
@@ -492,6 +491,13 @@ func buildCohorts(rows []Row) ([]CohortReport, error) {
 			if reportIdentity(*row) != identity {
 				return nil, fmt.Errorf("rows reuse fingerprint %s with conflicting experiment identity",
 					shortHash(key.fingerprint))
+			}
+			if row.Arm == ArmHookOn || row.Arm == ArmPlacebo {
+				if cohort.HookExposure != "" && cohort.HookExposure != row.HookExposure {
+					return nil, fmt.Errorf("rows reuse fingerprint %s with conflicting hook exposure expectations",
+						shortHash(key.fingerprint))
+				}
+				cohort.HookExposure = row.HookExposure
 			}
 
 			if row.Valid && cohort.Model != "" && row.Model != "" && row.Model != cohort.Model {

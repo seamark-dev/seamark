@@ -150,11 +150,16 @@ func TestRunPersistsCompletedArmWhenPairIsCancelled(t *testing.T) {
 func TestRunPersistsCompletedArmWhenPairedSetupFails(t *testing.T) {
 	instance := SchemaSyncInstance()
 	realGenerate := instance.Generate
-	generations := 0
+	trialGenerations := 0
 	instance.Generate = func(dir string) error {
-		generations++
-		if generations == 2 {
-			return assert.AnError
+		// Run regenerates fingerprint repositories before trial setup. Count
+		// only the two assigned trial directories this test intends to exercise.
+		switch filepath.Base(dir) {
+		case "hook-off-01", "file-only-01":
+			trialGenerations++
+			if trialGenerations == 2 {
+				return assert.AnError
+			}
 		}
 
 		return realGenerate(dir)

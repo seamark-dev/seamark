@@ -66,6 +66,18 @@ func TestBuildBenchmarkReportEvaluatesFrozenThreshold(t *testing.T) {
 	assert.NotContains(t, markdown, "Threshold assessment remains insufficient")
 }
 
+func TestBuildBenchmarkReportDerivesExposureFromHookedArm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "results.jsonl")
+	// Persist hook-off first: row order must not make the cohort exposure "none".
+	require.NoError(t, appendRow(path, validReportRow("run-a", ArmHookOff, 1, false)))
+	require.NoError(t, appendRow(path, validReportRow("run-a", ArmHookOn, 1, true)))
+
+	report, err := BuildBenchmarkReport([]string{path}, testClaimRegistry())
+	require.NoError(t, err)
+	require.Len(t, report.Cohorts, 1)
+	assert.Equal(t, HookExposureRequired, report.Cohorts[0].HookExposure)
+}
+
 func TestBuildBenchmarkReportRejectsInvalidRows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "results.jsonl")
 	row := validReportRow("run-a", ArmHookOn, 1, true)
@@ -622,7 +634,7 @@ func TestCrossInstanceClaimAssessment(t *testing.T) {
 			Cohorts: []CohortReport{treatment, control}, Assessments: assessments,
 		}).Markdown()
 		assert.Contains(t, markdown, "difference-in-differences: +80.0 pp")
-		assert.Contains(t, markdown, "(python-ts-schema-sync-v1 hook-on − hook-off) −")
+		assert.Contains(t, markdown, "(`python-ts-schema-sync-v1` hook-on − hook-off) −")
 		assert.NotContains(t, markdown, "control hook-on rate")
 	})
 
