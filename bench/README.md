@@ -17,7 +17,7 @@ The first paid step is a single hook-off calibration for one instance. It asks
 whether a capable unassisted agent still misses the owner-specific invariant:
 
 ```sh
-make lessons-bench BENCH_FLAGS='-instance python-cache-version-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery always -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-cache-calibration-v6.jsonl -transcripts /tmp/seamark-cache-calibration'
+make lessons-bench BENCH_FLAGS='-instance python-cache-version-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery always -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-cache-calibration-v7.jsonl -transcripts /tmp/seamark-cache-calibration'
 ```
 
 Proceed only if the row is valid, the visible task passes, and the invariant
@@ -25,7 +25,7 @@ fails (`task=true invariant=false`). Inspect the transcript and patch before
 calibrating the next instance:
 
 ```sh
-make lessons-bench BENCH_FLAGS='-instance go-export-registry-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery always -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-export-calibration-v6.jsonl -transcripts /tmp/seamark-export-calibration'
+make lessons-bench BENCH_FLAGS='-instance go-export-registry-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery always -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-export-calibration-v7.jsonl -transcripts /tmp/seamark-export-calibration'
 ```
 
 Do not increase the trial count or run hook-on until both tasks have a useful
@@ -68,6 +68,14 @@ project hook the treatment is meant to measure.
   This instance requires `python3` and `make`; preflight verifies both before
   any agent session is purchased.
 
+- `python-ts-schema-sync-repair-v1` is the matched trigger-extraction control.
+  It reuses the schema-sync task, fixture, judges, patches, checks, and lesson
+  text, but scopes the lesson to the generated TypeScript repair directory
+  instead of the backend trigger directory. Its hooked arm declares exposure
+  optional: a correctly wired hook that sees no matching editor operation is
+  valid experimental data, not an infrastructure failure. Reports compare the
+  two variants only when their shared protocol fingerprints match.
+
 - `python-cache-version-v1` asks for another Python API response field. Public
   checks cover the response, while the owner invariant requires bumping a
   response-cache version learned from a prior analogous change in git history.
@@ -81,6 +89,35 @@ Each fixture is generated locally from frozen source and git history. No
 private repository is read, copied, or required at run time. `-instance all`
 is deliberately restricted to preflight and dry-run modes; paid instances must
 be selected explicitly.
+
+### Trigger-scope calibration
+
+Run this comparison only from a reviewed, committed tree: the frozen claim
+rejects dirty Seamark builds. Start with one paired trial for each variant,
+using identical agent, budget, timeout, arms, and delivery policy:
+
+```sh
+make lessons-bench BENCH_FLAGS='-instance python-ts-schema-sync-v1 -arm both -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery once-per-context -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-trigger-scope-calibration-v7.jsonl -transcripts /tmp/seamark-trigger-scope-calibration-v7'
+
+make lessons-bench BENCH_FLAGS='-instance python-ts-schema-sync-repair-v1 -arm both -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery once-per-context -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-repair-scope-calibration-v7.jsonl -transcripts /tmp/seamark-repair-scope-calibration-v7'
+```
+
+Compare the value printed as `fingerprint` by the trigger run with the value
+printed as `protocol` by the repair run; they must be equal. The trigger run
+does not print a separate protocol line because its protocol and full
+fingerprint are identical. Its hook-on row must prove at least one injection.
+The repair-scoped hook-on row may validly report zero matches and zero
+injections; that absence is the control behavior, not an infrastructure
+failure. Generate the diagnostic report from both files:
+
+```sh
+make lessons-bench-report \
+  BENCH_RESULTS='/tmp/seamark-trigger-scope-calibration-v7.jsonl /tmp/seamark-repair-scope-calibration-v7.jsonl' \
+  BENCH_REPORT_FLAGS='-out /tmp/seamark-trigger-scope-calibration-v7.md'
+```
+
+One pair validates wiring and direction only. Inspect both patches and
+transcripts before authorizing the frozen five-pair cohort.
 
 ## Preflight contract
 
@@ -100,14 +137,18 @@ Preflight spends no model tokens. It rejects a run unless:
 
 ## Result validity
 
-Schema-v5 and schema-v6 rows separately record task success and
-owner-invariant success. Schema v6 additionally records matching hook
+Schema-v5 through schema-v7 rows separately record task success and
+owner-invariant success. Schema v6 added matching hook
 invocations, actual injections, repeated injections, fully suppressed matches,
-and injected context bytes. Reports accept frozen v5 evidence but never mix
-schema versions in one report.
+and injected context bytes. Schema v7 adds the per-row hook-exposure
+expectation and a protocol fingerprint shared by intentional experiment
+variants. Reports accept frozen v5/v6 evidence but never mix schema versions
+in one report.
 Only rows with both `valid=true` and `pair_valid=true` enter arm tallies.
 Provider errors, rate limits, missing structured output, unexpected plugins or
-MCP servers, model mismatches, and non-firing treatment hooks are excluded.
+MCP servers, model mismatches, and non-firing required-exposure hooks are
+excluded. A scope-control instance may explicitly permit zero exposure; its
+preflight still proves that the hook and exact lesson were installed.
 For a hooked arm, a firing counts only when the selected lesson identity,
 edit-hook surface, edit tool, and configured file region all match. Treatment
 or provider failures stop the batch before another paid session is started and
@@ -144,12 +185,29 @@ Haiku model at medium effort and a clean committed Seamark build.
 A successful single fixture remains a fixture-specific result, not proof of the
 cross-instance claim.
 
-`result.schema.json` remains the frozen result-schema-v5 contract;
-`result-v6.schema.json` documents current output and enforces the implications
-JSON Schema can express. Arithmetic relations such as delivery and token sums
-remain semantic constraints; the report command is the normative validator for
-those and also refuses malformed data, duplicate input files, duplicate trial
-arms, and conflicting identities that reuse a fingerprint:
+The trigger-extraction claim is a separate matched factorial experiment. It
+compares the hook-on minus hook-off effect for the trigger-scoped instance with
+the same effect for the repair-scoped control. Both cohorts must have the same
+protocol fingerprint, which binds the shared task, fixture, judges, checks,
+agent configuration, runtime, Seamark binary, budget, timeout, and delivery
+policy. The frozen contrast is:
+
+```text
+(trigger-scoped hook-on - hook-off) - (repair-scoped hook-on - hook-off)
+```
+
+This benchmark measures the behavioral value of the trigger regions produced
+by extraction. Deterministic extraction validation remains responsible for
+proving that the production pipeline derives and stores those regions from
+evidence rather than from the benchmark's hand-authored fixture.
+
+`result.schema.json` and `result-v6.schema.json` remain the frozen v5/v6
+contracts. `result-v7.schema.json` documents current output and enforces the
+implications JSON Schema can express. Arithmetic relations such as delivery
+and token sums remain semantic constraints; the report command is the
+normative validator for those and also refuses malformed data, duplicate input
+files, duplicate trial arms, and conflicting identities that reuse a
+fingerprint:
 
 ```sh
 make lessons-bench-report \
@@ -196,12 +254,12 @@ more tokens than the reminder text.
 
 ### Delivery-policy calibration
 
-Schema v6 supports `-hook-delivery always|once-per-context`. The latter keeps
-repository-scoped session and canonical lesson-content digests in local state,
-suppresses repeats under a cross-process lock, permits changed lessons, resets
-after context compaction, expires inactive sessions after 24 hours, and fails
-open when identity or state is unavailable. `always` remains the product and
-benchmark default.
+Schemas v6 and v7 support `-hook-delivery always|once-per-context`. The latter
+keeps repository-scoped session and canonical lesson-content digests in local
+state, suppresses repeats under a cross-process lock, permits changed lessons,
+resets after context compaction, expires inactive sessions after 24 hours, and
+fails open when identity or state is unavailable. `always` remains the product
+and benchmark default.
 
 The first mechanism smoke test completed on 2026-08-09 with one valid
 hook-on session: three matching edits produced one injection, two suppressions,
@@ -243,7 +301,7 @@ exclusively with `0600` permissions and a reused run ID is refused before an
 agent session is purchased. Retain them securely for audit while the
 corresponding release evidence is under review.
 
-Schema-v5 and schema-v6 rows include SHA-256 digests of the
+Schema-v5 through schema-v7 rows include SHA-256 digests of the
 transcript, stderr stream, and final patch, so local artifacts can be matched
 to published rows without publishing their contents. Strict reporting requires
 each artifact path and digest together. The earlier dirty schema-sync pilot

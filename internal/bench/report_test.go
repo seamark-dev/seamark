@@ -57,7 +57,7 @@ func TestBuildBenchmarkReportEvaluatesFrozenThreshold(t *testing.T) {
 	assert.Contains(t, markdown, "3 favorable, 0 unfavorable")
 	assert.Contains(t, markdown, "+100 pp")
 	assert.Contains(t, markdown, "Approximate 95% Wilson score interval")
-	assert.Contains(t, markdown, "Result schema: v6; claim schema: v1")
+	assert.Contains(t, markdown, "Result schema: v7; claim schema: v1")
 	assert.Contains(t, markdown, "model-a")
 	assert.Contains(t, markdown, strings.Repeat("b", 64))
 	assert.Contains(t, markdown, "3 valid pairs; mean effect ≥ +30 pp")
@@ -83,8 +83,11 @@ func TestBuildBenchmarkReportPreservesFrozenV5Evidence(t *testing.T) {
 		row := validReportRow("run-v5", arm, 1, arm == ArmHookOn)
 		row.SchemaVersion = 5
 		row.HookDelivery = ""
+		row.HookExposure = ""
 		row.HookMatches = 0
 		row.HookInjections = 0
+		row.ProtocolFingerprint = ""
+		row.ComparisonFamily = ""
 		require.NoError(t, appendRow(path, row))
 	}
 
@@ -94,13 +97,33 @@ func TestBuildBenchmarkReportPreservesFrozenV5Evidence(t *testing.T) {
 	assert.Contains(t, report.Markdown(), "Result schema: v5; claim schema: v1")
 }
 
+func TestBuildBenchmarkReportPreservesFrozenV6Evidence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "results-v6.jsonl")
+	for _, arm := range []Arm{ArmHookOn, ArmHookOff} {
+		row := validReportRow("run-v6", arm, 1, arm == ArmHookOn)
+		row.SchemaVersion = 6
+		row.HookExposure = ""
+		row.ProtocolFingerprint = ""
+		row.ComparisonFamily = ""
+		require.NoError(t, appendRow(path, row))
+	}
+
+	report, err := BuildBenchmarkReport([]string{path}, testClaimRegistry())
+	require.NoError(t, err)
+	assert.Equal(t, 6, report.ResultSchemaVersion)
+	assert.Contains(t, report.Markdown(), "| always | n/a |")
+}
+
 func TestBuildBenchmarkReportRejectsMixedResultSchemas(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mixed.jsonl")
 	v5 := validReportRow("run-v5", ArmHookOn, 1, true)
 	v5.SchemaVersion = 5
 	v5.HookDelivery = ""
+	v5.HookExposure = ""
 	v5.HookMatches = 0
 	v5.HookInjections = 0
+	v5.ProtocolFingerprint = ""
+	v5.ComparisonFamily = ""
 	require.NoError(t, appendRow(path, v5))
 	require.NoError(t, appendRow(path, validReportRow("run-v6", ArmHookOff, 1, false)))
 
@@ -135,9 +158,9 @@ func TestBenchmarkReportIdentifiesDeliveryIntensityCohorts(t *testing.T) {
 	require.Len(t, report.Cohorts, 2)
 
 	markdown := report.Markdown()
-	assert.Contains(t, markdown, "| Instance | Fingerprint | Delivery | Matches |")
-	assert.Contains(t, markdown, "| "+SchemaSyncInstanceID+" | `"+alwaysFingerprint+"` | always | 1 | 1 | 0 | 0 |")
-	assert.Contains(t, markdown, "| "+SchemaSyncInstanceID+" | `"+onceFingerprint+"` | once-per-context | 2 | 1 | 0 | 1 |")
+	assert.Contains(t, markdown, "| Instance | Fingerprint | Delivery | Exposure | Matches |")
+	assert.Contains(t, markdown, "| "+SchemaSyncInstanceID+" | `"+alwaysFingerprint+"` | always | required | 1 | 1 | 0 | 0 |")
+	assert.Contains(t, markdown, "| "+SchemaSyncInstanceID+" | `"+onceFingerprint+"` | once-per-context | required | 2 | 1 | 0 | 1 |")
 }
 
 func TestBuildBenchmarkReportRejectsUnknownResultFields(t *testing.T) {
@@ -277,7 +300,7 @@ func TestValidateResultRowRequiresArtifactPathDigestPairs(t *testing.T) {
 	assert.NoError(t, ValidateResultRow(row))
 }
 
-func TestValidateResultRowRequiresConsistentV6HookIntensity(t *testing.T) {
+func TestValidateResultRowRequiresConsistentHookIntensity(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		mutate func(*Row)
@@ -303,6 +326,26 @@ func TestValidateResultRowRequiresConsistentV6HookIntensity(t *testing.T) {
 	assert.NoError(t, ValidateResultRow(row))
 }
 
+func TestValidateResultRowAllowsOptionalHookExposureWithoutInjection(t *testing.T) {
+	row := validReportRow("run-a", ArmHookOn, 1, false)
+	row.HookExposure = HookExposureOptional
+	row.HookFirings = 0
+	row.HookAuditRows = 0
+	row.HookMatches = 0
+	row.HookInjections = 0
+	assert.NoError(t, ValidateResultRow(row))
+
+	required := row
+	required.HookExposure = HookExposureRequired
+	require.ErrorContains(t, ValidateResultRow(required),
+		"required-exposure rows require a matching hook injection")
+
+	control := validReportRow("run-a", ArmHookOff, 1, false)
+	control.HookExposure = HookExposureOptional
+	require.ErrorContains(t, ValidateResultRow(control),
+		"control rows require hook_exposure")
+}
+
 func TestValidateResultRowRejectsCheckSummaryMismatch(t *testing.T) {
 	t.Run("summary passes with failed check", func(t *testing.T) {
 		row := validReportRow("run-a", ArmHookOff, 1, false)
@@ -325,13 +368,22 @@ func TestValidateResultRowRejectsCheckSummaryMismatch(t *testing.T) {
 func TestCommittedClaimsAndResultSchemaAreValid(t *testing.T) {
 	registry, err := LoadClaimRegistry(filepath.Join("..", "..", "bench", "claims.yaml"))
 	require.NoError(t, err)
-	require.Len(t, registry.Claims, 1)
+	require.Len(t, registry.Claims, 2)
 	assert.Equal(t, 3, registry.Claims[0].MinimumInstances)
 	assert.Equal(t, "claude-haiku-4-5-20251001", registry.Claims[0].RequiredModel)
 	assert.Equal(t, "medium", registry.Claims[0].RequiredEffort)
 	assert.True(t, registry.Claims[0].RequireCleanSeamark)
 
-	data, err := os.ReadFile(filepath.Join("..", "..", "bench", "result-v6.schema.json"))
+	scoping := registry.Claims[1]
+	assert.Equal(t, "lessons-delivery-scoping", scoping.ID)
+	assert.Equal(t, comparisonDifferenceInDiffs, scoping.Comparison)
+	assert.Equal(t, SchemaSyncInstanceID, scoping.TreatmentInstance)
+	assert.Equal(t, SchemaSyncRepairInstanceID, scoping.ControlInstance)
+	assert.Equal(t, 0.40, scoping.MinimumEffect)
+	assert.Equal(t, "claude-haiku-4-5-20251001", scoping.RequiredModel)
+	assert.True(t, scoping.RequireCleanSeamark)
+
+	data, err := os.ReadFile(filepath.Join("..", "..", "bench", "result-v7.schema.json"))
 	require.NoError(t, err)
 	var schema map[string]any
 	require.NoError(t, json.Unmarshal(data, &schema))
@@ -351,6 +403,7 @@ func TestCommittedClaimsAndResultSchemaAreValid(t *testing.T) {
 	for _, field := range []string{
 		"fixture", "checks", "fingerprint", "hook_matches", "hook_injections",
 		"hook_repeated_injections", "hook_suppressed", "hook_context_bytes", "hook_delivery",
+		"hook_exposure", "protocol_fingerprint",
 	} {
 		assert.Contains(t, required, field)
 	}
@@ -483,37 +536,166 @@ func TestClaimAssessmentDoesNotHideARegressedInstanceInTheMean(t *testing.T) {
 	assert.Equal(t, "does not pass frozen threshold", assessments[0].Status)
 }
 
+func crossInstanceClaim() Claim {
+	return Claim{
+		ID: "scoping-claim", Claim: "claim", PrimaryMetric: "invariant_pass_rate_among_task_complete",
+		Comparison: comparisonDifferenceInDiffs, Direction: "higher",
+		TreatmentInstance: SchemaSyncInstanceID, ControlInstance: SchemaSyncRepairInstanceID,
+		RequiredModel: "model-a", RequiredEffort: "medium", RequireCleanSeamark: true,
+		MinimumEffect: 0.40, MinimumInstanceEffect: 0.40, MaximumHarmfulInterference: 0.05,
+		MinimumInstances: 2, MinimumValidPairsPerInstance: 5,
+		Instances: []string{SchemaSyncInstanceID, SchemaSyncRepairInstanceID},
+	}
+}
+
+func TestCrossInstanceClaimValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*Claim)
+		wantErr string
+	}{
+		{"valid", func(*Claim) {}, ""},
+		{"missing control", func(c *Claim) { c.ControlInstance = "" },
+			"requires treatment_instance and control_instance"},
+		{"self comparison", func(c *Claim) { c.ControlInstance = c.TreatmentInstance },
+			"compares an instance with itself"},
+		{"control not listed", func(c *Claim) { c.Instances = []string{SchemaSyncInstanceID, CacheVersionInstanceID} },
+			"must both appear in instances"},
+		{"extra instance", func(c *Claim) {
+			c.Instances = append(c.Instances, CacheVersionInstanceID)
+		}, "exactly its two compared instances"},
+		{"wrong minimum instances", func(c *Claim) { c.MinimumInstances = 1 },
+			"minimum_instances must be 2"},
+		{"within-instance claim with treatment set", func(c *Claim) {
+			c.Comparison = comparisonHookOnVsOff
+		}, "does not take treatment/control instances"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			claim := crossInstanceClaim()
+			tc.mutate(&claim)
+
+			err := ClaimRegistry{SchemaVersion: 1, Claims: []Claim{claim}}.Validate()
+
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestCrossInstanceClaimAssessment(t *testing.T) {
+	claim := crossInstanceClaim()
+	claim.RequiredModel = ""
+	claim.RequiredEffort = ""
+	claim.RequireCleanSeamark = false
+
+	treatment := CohortReport{
+		Instance: SchemaSyncInstanceID, ValidPairs: 5,
+		ComparisonFamily: SchemaSyncScopingFamily, ProtocolFingerprint: strings.Repeat("e", 64),
+		HookOn:  ArmReport{TaskDone: 5, InvariantPass: 5},
+		HookOff: ArmReport{TaskDone: 5, InvariantPass: 1},
+	}
+	control := CohortReport{
+		Instance: SchemaSyncRepairInstanceID, ValidPairs: 5,
+		ComparisonFamily: SchemaSyncScopingFamily, ProtocolFingerprint: strings.Repeat("e", 64),
+		HookOn:  ArmReport{TaskDone: 5, InvariantPass: 1},
+		HookOff: ArmReport{TaskDone: 5, InvariantPass: 1},
+	}
+
+	t.Run("scoping effect passes", func(t *testing.T) {
+		assessments := assessClaims([]Claim{claim}, []CohortReport{treatment, control})
+		require.Len(t, assessments, 1)
+
+		a := assessments[0]
+		assert.Equal(t, "passes frozen threshold", a.Status)
+		assert.InDelta(t, 0.8, a.MeanEffect, 1e-9, "treatment effect 4/5 minus control effect 0/5")
+		assert.InDelta(t, 0.8, a.WorstInstanceEffect, 1e-9, "one comparison — mean and worst agree")
+		assert.Contains(t, a.AnchorNote, "component effects — treatment +80.0 pp, control +0.0 pp")
+
+		markdown := (BenchmarkReport{
+			ResultSchemaVersion: ResultSchemaVersion, ClaimSchemaVersion: 1,
+			Cohorts: []CohortReport{treatment, control}, Assessments: assessments,
+		}).Markdown()
+		assert.Contains(t, markdown, "difference-in-differences: +80.0 pp")
+		assert.Contains(t, markdown, "(python-ts-schema-sync-v1 hook-on − hook-off) −")
+		assert.NotContains(t, markdown, "control hook-on rate")
+	})
+
+	t.Run("no scoping effect fails", func(t *testing.T) {
+		equal := control
+		equal.HookOn = ArmReport{TaskDone: 5, InvariantPass: 5}
+
+		assessments := assessClaims([]Claim{claim}, []CohortReport{treatment, equal})
+		require.Len(t, assessments, 1)
+		assert.Equal(t, "does not pass frozen threshold", assessments[0].Status)
+		assert.InDelta(t, 0, assessments[0].MeanEffect, 1e-9)
+	})
+
+	t.Run("missing control cohort stays insufficient", func(t *testing.T) {
+		assessments := assessClaims([]Claim{claim}, []CohortReport{treatment})
+		require.Len(t, assessments, 1)
+		assert.Equal(t, "insufficient evidence", assessments[0].Status)
+	})
+
+	t.Run("protocol mismatch stays insufficient", func(t *testing.T) {
+		mismatched := control
+		mismatched.ProtocolFingerprint = strings.Repeat("f", 64)
+
+		assessments := assessClaims([]Claim{claim}, []CohortReport{treatment, mismatched})
+		require.Len(t, assessments, 1)
+		assert.Equal(t, "insufficient evidence", assessments[0].Status)
+		assert.Contains(t, assessments[0].Reason, "do not share one comparison family and protocol fingerprint")
+	})
+
+	t.Run("harmful interference fails the claim", func(t *testing.T) {
+		harmed := treatment
+		harmed.HarmfulPairs = 3
+
+		assessments := assessClaims([]Claim{claim}, []CohortReport{harmed, control})
+		require.Len(t, assessments, 1)
+		assert.Equal(t, "does not pass frozen threshold", assessments[0].Status)
+	})
+}
+
 func validReportRow(runID string, arm Arm, trial int, avoided bool) Row {
 	row := Row{
-		SchemaVersion:  ResultSchemaVersion,
-		TS:             "2026-08-08T12:00:00Z",
-		RunID:          runID,
-		Instance:       SchemaSyncInstanceID,
-		TaskSHA:        SchemaSyncInstance().TaskSHA(),
-		Pin:            SchemaSyncRule,
-		Arm:            arm,
-		Trial:          trial,
-		TaskDone:       true,
-		Avoided:        avoided,
-		Valid:          true,
-		PairValid:      true,
-		Fixture:        strings.Repeat("c", 40),
-		ChecksPass:     true,
-		Checks:         []CheckResult{{Command: "make test", Pass: true}},
-		RequestedModel: "model-a",
-		Model:          "model-a",
-		InputTokens:    10,
-		ContextTokens:  10,
-		CostUSD:        0.01,
-		AgentExit:      0,
-		SeamarkVersion: "seamark test",
-		SeamarkSHA:     strings.Repeat("d", 64),
-		AgentVersion:   "agent test",
-		Effort:         "medium",
-		HookDelivery:   HookDeliveryAlways,
-		MaxBudgetUSD:   0.25,
-		RuntimeID:      "test-runtime",
-		Fingerprint:    strings.Repeat("b", 64),
+		SchemaVersion:       ResultSchemaVersion,
+		TS:                  "2026-08-08T12:00:00Z",
+		RunID:               runID,
+		Instance:            SchemaSyncInstanceID,
+		TaskSHA:             SchemaSyncInstance().TaskSHA(),
+		Pin:                 SchemaSyncRule,
+		Arm:                 arm,
+		Trial:               trial,
+		TaskDone:            true,
+		Avoided:             avoided,
+		Valid:               true,
+		PairValid:           true,
+		Fixture:             strings.Repeat("c", 40),
+		ChecksPass:          true,
+		Checks:              []CheckResult{{Command: "make test", Pass: true}},
+		RequestedModel:      "model-a",
+		Model:               "model-a",
+		InputTokens:         10,
+		ContextTokens:       10,
+		CostUSD:             0.01,
+		AgentExit:           0,
+		SeamarkVersion:      "seamark test",
+		SeamarkSHA:          strings.Repeat("d", 64),
+		AgentVersion:        "agent test",
+		Effort:              "medium",
+		HookDelivery:        HookDeliveryAlways,
+		HookExposure:        expectedHookExposure(SchemaSyncInstance(), arm),
+		MaxBudgetUSD:        0.25,
+		RuntimeID:           "test-runtime",
+		Fingerprint:         strings.Repeat("b", 64),
+		ProtocolFingerprint: strings.Repeat("e", 64),
+		ComparisonFamily:    SchemaSyncScopingFamily,
 	}
 	if arm == ArmHookOn || arm == ArmPlacebo {
 		row.HookFirings = 1

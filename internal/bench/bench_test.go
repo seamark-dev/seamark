@@ -94,6 +94,8 @@ func TestRunRecordsTimeouts(t *testing.T) {
 	assert.Equal(t, -1, sum.Rows[0].AgentExit)
 	assert.True(t, sum.Rows[0].TimedOut)
 	assert.Contains(t, sum.Rows[0].Notes, "timed out")
+	assert.NotEmpty(t, sum.Rows[0].Fingerprint)
+	assert.NotEmpty(t, sum.Rows[0].ProtocolFingerprint)
 }
 
 func TestSummaryWarnsWhenHookNeverFired(t *testing.T) {
@@ -428,6 +430,76 @@ func TestRunRejectsUnsafeRunIDBeforeCreatingArtifacts(t *testing.T) {
 	assert.Empty(t, entries)
 }
 
+func TestRunRejectsCallerSuppliedFingerprintMismatch(t *testing.T) {
+	base := RunConfig{
+		Trials: 1, Arms: []Arm{ArmHookOff}, AgentArgv: []string{noopAgent(t)},
+	}
+	expectedFingerprint, err := Fingerprint(base)
+	require.NoError(t, err)
+	expectedProtocol, err := ProtocolFingerprint(base)
+	require.NoError(t, err)
+
+	differentFrom := func(value string) string {
+		candidate := strings.Repeat("0", 64)
+		if candidate == value {
+			return strings.Repeat("1", 64)
+		}
+
+		return candidate
+	}
+
+	for _, tc := range []struct {
+		name    string
+		prepare func(*RunConfig)
+		wantErr string
+	}{
+		{
+			name: "full fingerprint",
+			prepare: func(cfg *RunConfig) {
+				cfg.Fingerprint = differentFrom(expectedFingerprint)
+			},
+			wantErr: "supplied benchmark fingerprint",
+		},
+		{
+			name: "protocol fingerprint",
+			prepare: func(cfg *RunConfig) {
+				cfg.ProtocolFingerprint = differentFrom(expectedProtocol)
+			},
+			wantErr: "supplied benchmark protocol fingerprint",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			cfg.WorkDir = t.TempDir()
+			tc.prepare(&cfg)
+
+			sum, runErr := Run(context.Background(), cfg)
+			require.ErrorContains(t, runErr, tc.wantErr)
+			assert.Empty(t, sum.Rows)
+			entries, readErr := os.ReadDir(cfg.WorkDir)
+			require.NoError(t, readErr)
+			assert.Empty(t, entries, "a mismatched identity must fail before creating a trial")
+		})
+	}
+}
+
+func TestRunAcceptsMatchingCallerSuppliedFingerprints(t *testing.T) {
+	cfg := RunConfig{
+		Trials: 1, Arms: []Arm{ArmHookOff}, AgentArgv: []string{noopAgent(t)},
+	}
+	var err error
+	cfg.Fingerprint, err = Fingerprint(cfg)
+	require.NoError(t, err)
+	cfg.ProtocolFingerprint, err = ProtocolFingerprint(cfg)
+	require.NoError(t, err)
+
+	sum, err := Run(context.Background(), cfg)
+	require.NoError(t, err)
+	require.Len(t, sum.Rows, 1)
+	assert.Equal(t, cfg.Fingerprint, sum.Rows[0].Fingerprint)
+	assert.Equal(t, cfg.ProtocolFingerprint, sum.Rows[0].ProtocolFingerprint)
+}
+
 func TestPriorCostForFingerprint(t *testing.T) {
 	_, _, _, ok := PriorCostFor(filepath.Join(t.TempDir(), "missing.jsonl"), "wanted")
 	assert.False(t, ok)
@@ -711,6 +783,26 @@ echo '{"file":"server/schema.py","tool":"Edit","fired":[{"region":"server","symp
 	assert.Contains(t, sum.StoppedReason, "selected lesson hook never fired")
 }
 
+func TestOptionalExposureScopeControlAcceptsNoMatchingFiring(t *testing.T) {
+	stub := filepath.Join(t.TempDir(), "agent.sh")
+	require.NoError(t, os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	sum, err := Run(context.Background(), RunConfig{
+		Trials: 1, Arms: []Arm{ArmHookOn}, Instance: SchemaSyncRepairInstance(),
+		AgentArgv: []string{stub}, Keep: true, WorkDir: t.TempDir(),
+	})
+	require.NoError(t, err)
+	require.Len(t, sum.Rows, 1)
+	row := sum.Rows[0]
+	assert.True(t, row.Valid)
+	assert.True(t, row.PairValid)
+	assert.Equal(t, HookExposureOptional, row.HookExposure)
+	assert.Zero(t, row.HookInjections)
+	assert.False(t, row.InfrastructureFailure)
+	assert.Contains(t, strings.Join(sum.Lines(), "\n"),
+		"scope control — the hook matched no hook-on edit")
+}
+
 func TestStructuredTimeoutIsAnAgentOutcome(t *testing.T) {
 	row := Row{
 		Valid: true, TimedOut: true, InitSeen: true, Model: "claude-test",
@@ -870,12 +962,31 @@ func TestFingerprintSourceBoundary(t *testing.T) {
 	instance := SchemaSyncInstance()
 	digest, err := fingerprintInstanceSource(instance)
 	require.NoError(t, err)
-	source, err := instanceSources.ReadFile(instance.sourceFile)
+	assert.True(t, validSHA256(digest))
+
+	repairDigest, err := fingerprintInstanceSource(SchemaSyncRepairInstance())
 	require.NoError(t, err)
-	assert.Equal(t, hashBytes(source), digest)
+	assert.NotEqual(t, digest, repairDigest,
+		"the repair variant source must affect its full cohort fingerprint")
+
+	baseProtocol, err := ProtocolFingerprint(RunConfig{Instance: instance})
+	require.NoError(t, err)
+	repairProtocol, err := ProtocolFingerprint(RunConfig{Instance: SchemaSyncRepairInstance()})
+	require.NoError(t, err)
+	assert.Equal(t, baseProtocol, repairProtocol,
+		"the intentional scope variant must retain the shared experiment protocol")
+
+	baseFingerprint, err := Fingerprint(RunConfig{Instance: instance})
+	require.NoError(t, err)
+	repairFingerprint, err := Fingerprint(RunConfig{Instance: SchemaSyncRepairInstance()})
+	require.NoError(t, err)
+	assert.NotEqual(t, baseFingerprint, repairFingerprint,
+		"variant rows must remain in separate immutable cohorts")
 
 	custom := instance
 	custom.sourceFile = ""
+	custom.ComparisonFamily = ""
+	custom.ProtocolInstance = ""
 	digest, err = fingerprintInstanceSource(custom)
 	require.NoError(t, err)
 	assert.Equal(t, "custom-instance", digest)

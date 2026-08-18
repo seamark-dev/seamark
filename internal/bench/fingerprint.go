@@ -100,35 +100,38 @@ func Fingerprint(cfg RunConfig) (string, error) {
 	}
 
 	payload := struct {
-		Schema            int              `json:"schema"`
-		Instance          string           `json:"instance"`
-		Rule              string           `json:"rule"`
-		TaskSHA           string           `json:"task_sha256"`
-		LessonSHA         string           `json:"lesson_sha256"`
-		PlaceboSHA        string           `json:"placebo_sha256"`
-		FixtureHEAD       string           `json:"fixture_head"`
-		GoldPatchSHA      string           `json:"gold_patch_sha256"`
-		NaivePatchSHA     string           `json:"naive_patch_sha256"`
-		JudgeVersion      string           `json:"judge_version"`
-		HarnessSourceSHA  string           `json:"harness_source_sha256"`
-		InstanceSourceSHA string           `json:"instance_source_sha256"`
-		Checks            []checkIdentity  `json:"checks"`
-		AgentCommand      string           `json:"agent_command_sha256"`
-		AgentVersion      string           `json:"agent_version"`
-		Model             string           `json:"model"`
-		Effort            string           `json:"effort"`
-		MaxBudgetUSD      float64          `json:"max_budget_usd"`
-		TimeoutMS         int64            `json:"timeout_ms"`
-		RuntimeID         string           `json:"runtime_id"`
-		SeamarkVersion    string           `json:"seamark_version"`
-		SeamarkSHA        string           `json:"seamark_sha256"`
-		Arms              []Arm            `json:"arms"`
-		PrepareIndex      bool             `json:"prepare_index"`
-		StructuredResult  bool             `json:"require_structured_result"`
-		CleanInit         bool             `json:"require_clean_init"`
-		HookDelivery      HookDeliveryMode `json:"hook_delivery"`
+		Schema            int                     `json:"schema"`
+		Instance          string                  `json:"instance"`
+		Rule              string                  `json:"rule"`
+		TaskSHA           string                  `json:"task_sha256"`
+		LessonSHA         string                  `json:"lesson_sha256"`
+		PlaceboSHA        string                  `json:"placebo_sha256"`
+		FixtureHEAD       string                  `json:"fixture_head"`
+		GoldPatchSHA      string                  `json:"gold_patch_sha256"`
+		NaivePatchSHA     string                  `json:"naive_patch_sha256"`
+		JudgeVersion      string                  `json:"judge_version"`
+		HarnessSourceSHA  string                  `json:"harness_source_sha256"`
+		InstanceSourceSHA string                  `json:"instance_source_sha256"`
+		Checks            []checkIdentity         `json:"checks"`
+		AgentCommand      string                  `json:"agent_command_sha256"`
+		AgentVersion      string                  `json:"agent_version"`
+		Model             string                  `json:"model"`
+		Effort            string                  `json:"effort"`
+		MaxBudgetUSD      float64                 `json:"max_budget_usd"`
+		TimeoutMS         int64                   `json:"timeout_ms"`
+		RuntimeID         string                  `json:"runtime_id"`
+		SeamarkVersion    string                  `json:"seamark_version"`
+		SeamarkSHA        string                  `json:"seamark_sha256"`
+		Arms              []Arm                   `json:"arms"`
+		PrepareIndex      bool                    `json:"prepare_index"`
+		StructuredResult  bool                    `json:"require_structured_result"`
+		CleanInit         bool                    `json:"require_clean_init"`
+		HookDelivery      HookDeliveryMode        `json:"hook_delivery"`
+		HookExposure      HookExposureExpectation `json:"hook_exposure"`
+		ComparisonFamily  string                  `json:"comparison_family,omitempty"`
+		ProtocolInstance  string                  `json:"protocol_instance,omitempty"`
 	}{
-		Schema: 5, Instance: instance.ID, Rule: instance.Rule,
+		Schema: 6, Instance: instance.ID, Rule: instance.Rule,
 		TaskSHA: instance.TaskSHA(), LessonSHA: hashBytes([]byte(instance.LessonYAML)),
 		PlaceboSHA:  hashBytes([]byte(instance.PlaceboYAML)),
 		FixtureHEAD: material.fixtureHEAD, GoldPatchSHA: material.goldPatchSHA,
@@ -140,10 +143,44 @@ func Fingerprint(cfg RunConfig) (string, error) {
 		RuntimeID: cfg.RuntimeID, SeamarkVersion: cfg.Version, SeamarkSHA: cfg.SeamarkSHA,
 		Arms: arms, PrepareIndex: cfg.PrepareIndex,
 		StructuredResult: cfg.RequireStructuredResult, CleanInit: cfg.RequireCleanInit,
-		HookDelivery: effectiveHookDelivery(cfg),
+		HookDelivery:     effectiveHookDelivery(cfg),
+		HookExposure:     instance.effectiveHookExposure(),
+		ComparisonFamily: instance.ComparisonFamily,
+		ProtocolInstance: instance.ProtocolInstance,
 	}
 
 	return hashJSON(payload)
+}
+
+// ProtocolFingerprint binds two intentional instance variants to identical
+// task, fixture, judge, harness, agent, and runtime conditions. The canonical
+// instance contributes the full fingerprint; only the variant's scoped lesson
+// and exposure expectation are excluded. Reports require equality before
+// evaluating a difference-in-differences claim.
+func ProtocolFingerprint(cfg RunConfig) (string, error) {
+	instance := resolveInstance(cfg)
+	if err := instance.Validate(); err != nil {
+		return "", err
+	}
+
+	if instance.ComparisonFamily == "" {
+		return Fingerprint(cfg)
+	}
+
+	canonical, err := InstanceByID(instance.ProtocolInstance)
+	if err != nil {
+		return "", fmt.Errorf("comparison protocol instance: %w", err)
+	}
+
+	if canonical.ComparisonFamily != instance.ComparisonFamily ||
+		canonical.ProtocolInstance != instance.ProtocolInstance {
+		return "", fmt.Errorf("benchmark instance %q has incompatible comparison protocol %q",
+			instance.ID, instance.ProtocolInstance)
+	}
+
+	cfg.Instance = canonical
+
+	return Fingerprint(cfg)
 }
 
 type instanceFingerprintMaterial struct {
@@ -250,12 +287,25 @@ func fingerprintInstanceSource(instance Instance) (string, error) {
 		return "custom-instance", nil
 	}
 
-	data, err := instanceSources.ReadFile(instance.sourceFile)
-	if err != nil {
-		return "", fmt.Errorf("read embedded instance source %s: %w", instance.sourceFile, err)
+	files := []string{instance.sourceFile}
+	if instance.variantSourceFile != "" {
+		files = append(files, instance.variantSourceFile)
 	}
 
-	return hashBytes(data), nil
+	h := sha256.New()
+	for _, name := range files {
+		data, err := instanceSources.ReadFile(name)
+		if err != nil {
+			return "", fmt.Errorf("read embedded instance source %s: %w", name, err)
+		}
+
+		_, _ = h.Write([]byte(name))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write(data)
+		_, _ = h.Write([]byte{0})
+	}
+
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func hashBytes(data []byte) string {

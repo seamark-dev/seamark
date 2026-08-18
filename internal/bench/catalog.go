@@ -12,6 +12,7 @@ import (
 func Instances() []Instance {
 	return []Instance{
 		SchemaSyncInstance(),
+		SchemaSyncRepairInstance(),
 		CacheVersionInstance(),
 		ExportRegistryInstance(),
 	}

@@ -18,3 +18,22 @@ claims:
       - python-ts-schema-sync-v1
       - python-cache-version-v1
       - go-export-registry-v1
+
+  - id: lessons-delivery-scoping
+    claim: Trigger-scoped delivery causes invariant preservation; the identical pin scoped to the repair site does not deliver. Measures delivery given scoping — the extraction pipeline that produces trigger scoping in production is verified separately.
+    primary_metric: invariant_pass_rate_among_task_complete
+    comparison: difference_in_differences
+    treatment_instance: python-ts-schema-sync-v1
+    control_instance: python-ts-schema-sync-repair-v1
+    direction: higher
+    required_model: claude-haiku-4-5-20251001
+    required_effort: medium
+    require_clean_seamark: true
+    minimum_effect: 0.40
+    minimum_instance_effect: 0.40
+    maximum_harmful_interference: 0.05
+    minimum_instances: 2
+    minimum_valid_pairs_per_instance: 5
+    instances:
+      - python-ts-schema-sync-v1
+      - python-ts-schema-sync-repair-v1
