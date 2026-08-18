@@ -6,6 +6,20 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## Unreleased
+
+- **Trigger-scoped delivery now has a controlled benchmark.** A matched
+  schema-sync fixture compares the same lesson at the backend trigger with its
+  former generated-client repair scope. Five clean pairs per variant produced
+  a +100 percentage-point difference-in-differences effect: trigger hook-on
+  preserved the owner invariant 5/5 versus 0/5 hook-off, while the
+  repair-scoped control was 3/5 in both arms and received zero hook exposure.
+  All 20 sessions completed the visible task. Result schema v7 records whether
+  hook exposure is required or optional and binds intentional variants with a
+  shared protocol fingerprint, preventing incompatible cohorts from being
+  compared. This is synthetic evidence under one pinned model/runtime, not an
+  external-validity claim.
+
 ## v0.4.0 — 2026-08-15
 
 The delivery line: a lesson is only as good as where it fires. This

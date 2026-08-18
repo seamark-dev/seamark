@@ -324,6 +324,14 @@ misses the trigger, and `--retarget` applies the widened set.
 `--extract-triggers` asks the same one question for proposals
 distilled before extraction existed.
 
+A clean matched benchmark of this exact failure mode measured a +100
+percentage-point difference-in-differences effect across five pairs per scope:
+the trigger-scoped lesson preserved the invariant 5/5 versus 0/5 without the
+hook, while the repair-scoped control was 3/5 in both arms and never fired.
+This is controlled synthetic evidence under one pinned model/runtime, not
+external validation; see the
+[full report](bench/trigger-scope-report-v7.md).
+
 Mined text is scrubbed of secret-shaped values (connection strings,
 tokens) before it is stored — a credential a reviewer quoted once must
 not be re-broadcast into agent context on every edit — and review
@@ -701,7 +709,7 @@ design history in [docs/PLAN.md](docs/PLAN.md). Trust boundaries:
 
 Planned next (see [docs/PLAN.md](docs/PLAN.md)): zero-token check
 promotion from recurring lessons, function-grain precision refinements,
-public signal evaluation and multi-instance lessons evidence, history
+public signal evaluation and pinned public-repository lessons validation, history
 watermark + incremental daemon for keystroke-adjacent freshness, and signed
 artifacts + npm/Homebrew packaging.
 

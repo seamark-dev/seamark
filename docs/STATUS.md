@@ -85,5 +85,14 @@ milestone.
   external validation; the schema-sync instance alone remains uncertain. Raw
   rows and the generated report live under `bench/`; the calibration, artifact,
   and interpretation protocol is in [bench/README.md](../bench/README.md).
+- The clean trigger-scope cohort also meets its frozen controlled threshold:
+  trigger-scoped delivery preserved the schema-sync invariant in 5/5 hooked
+  sessions versus 0/5 unhooked, while the repair-scoped control was 3/5 in
+  both arms and received zero hook exposure. The protocol-matched
+  difference-in-differences effect was +100 percentage points, with all 20
+  visible tasks complete and no harmful interference. This demonstrates the
+  behavioral value of delivering at a known trigger; extraction accuracy and
+  external validity remain separate open evidence requirements. Raw evidence
+  and the report live under `bench/`.
 - External pilots: none yet — that is the bar between "works here" and
   "production-ready", and claims stay scoped until it is met.

@@ -201,6 +201,40 @@ by extraction. Deterministic extraction validation remains responsible for
 proving that the production pipeline derives and stores those regions from
 evidence rather than from the benchmark's hand-authored fixture.
 
+### Trigger-scope release cohort
+
+The first clean trigger-scope cohort ran on 2026-08-18 with Seamark
+`v0.4.0-3-gb5c1bd8`, Claude Haiku 4.5 at medium effort, once-per-context
+delivery, and five valid pairs per variant:
+
+| Variant | Hook-on invariant | Hook-off invariant | Within-variant effect | Approx. 95% interval | Mean context on/off | Total cost on/off |
+|---|---:|---:|---:|---:|---:|---:|
+| Trigger-scoped | 5/5 | 0/5 | +100 pp | +39 to +100 pp | 300k / 269k | $0.42 / $0.39 |
+| Repair-scoped control | 3/5 | 3/5 | +0 pp | -46 to +46 pp | 270k / 336k | $0.40 / $0.44 |
+
+All 20 sessions completed the visible task, with no harmful task regression.
+The matched difference-in-differences effect was +100 percentage points,
+passing the frozen +40-point threshold. The trigger treatment recorded ten
+matching edits, five injections, five suppressions, zero repeated injections,
+and 2,209 injected bytes. The repair-scoped hook recorded zero matches and
+zero injections, as expected: the agent never edited the generated-client
+region where the old pin would have waited.
+
+The control's spontaneous invariant success varied by trial, but its aggregate
+rate was exactly 3/5 in both arms. Subtracting that baseline is why the claim
+uses a protocol-matched factorial comparison rather than comparing raw
+hook-on rates. Context usage also moved in opposite directions across the two
+variants, so this cohort supports delivery effectiveness, not a token-saving
+claim. Raw rows and the generated assessment are in
+[`trigger-scope-release-v7.jsonl`](trigger-scope-release-v7.jsonl),
+[`repair-scope-release-v7.jsonl`](repair-scope-release-v7.jsonl), and
+[`trigger-scope-report-v7.md`](trigger-scope-report-v7.md).
+
+This is controlled synthetic evidence for one cross-boundary invariant under
+one model/runtime. It does not establish extraction precision on unseen
+repositories or external validity; the next evidence step remains a pinned
+public-repository task.
+
 `result.schema.json` and `result-v6.schema.json` remain the frozen v5/v6
 contracts. `result-v7.schema.json` documents current output and enforces the
 implications JSON Schema can express. Arithmetic relations such as delivery
