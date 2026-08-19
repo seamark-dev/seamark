@@ -330,7 +330,10 @@ the trigger-scoped lesson preserved the invariant 5/5 versus 0/5 without the
 hook, while the repair-scoped control was 3/5 in both arms and never fired.
 This is controlled synthetic evidence under one pinned model/runtime, not
 external validation; see the
-[full report](bench/trigger-scope-report-v7.md).
+[full report](bench/trigger-scope-report-v7.md). A protocol-matched
+OpenTelemetry-Go case at an exact historical commit is now available as the
+next public-repository test; its threshold is frozen, but it has no accepted
+paid result yet ([runbook](bench/README.md#pinned-public-repository-calibration)).
 
 Mined text is scrubbed of secret-shaped values (connection strings,
 tokens) before it is stored — a credential a reviewer quoted once must
@@ -707,11 +710,11 @@ design history in [docs/PLAN.md](docs/PLAN.md). Trust boundaries:
 [docs/data-flow.md](docs/data-flow.md) and
 [docs/threat-model.md](docs/threat-model.md).
 
-Planned next (see [docs/PLAN.md](docs/PLAN.md)): zero-token check
-promotion from recurring lessons, function-grain precision refinements,
-public signal evaluation and pinned public-repository lessons validation, history
-watermark + incremental daemon for keystroke-adjacent freshness, and signed
-artifacts + npm/Homebrew packaging.
+Planned next (see [docs/PLAN.md](docs/PLAN.md)): run and review the frozen
+pinned OpenTelemetry-Go lessons experiment, zero-token check promotion from
+recurring lessons, function-grain precision refinements, public signal
+evaluation, history watermark + incremental daemon for keystroke-adjacent
+freshness, and signed artifacts + npm/Homebrew packaging.
 
 ## Development
 

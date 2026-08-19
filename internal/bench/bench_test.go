@@ -330,12 +330,16 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "0")
 	t.Setenv("ENABLE_CLAUDEAI_MCP_SERVERS", "true")
 	t.Setenv("GOPROXY", "https://proxy.invalid")
+	t.Setenv("GOFLAGS", "-mod=mod")
+	t.Setenv("GOENV", "/host/go/env")
+	t.Setenv("GOWORK", "/host/go.work")
 
 	env := environmentByKey(t, agentEnvironment(dir))
 	for _, key := range []string{
 		"ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
 		"ANTHROPIC_SMALL_FAST_MODEL", "MAX_THINKING_TOKENS", "DISABLE_PROMPT_CACHING",
 		"CLAUDE_CODE_EFFORT_LEVEL", "PYTHONPATH", "PYTHONHOME", "BASH_ENV", "MAKEFLAGS",
+		"SEAMARK_BENCH_CACHE_DIR", "GOFLAGS",
 		"VIRTUAL_ENV", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
 		"GIT_AUTHOR_NAME", "GIT_COMMITTER_EMAIL",
 	} {
@@ -349,7 +353,9 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	assert.Equal(t, "/test/claude-auth-config", env["CLAUDE_CONFIG_DIR"],
 		"custom configuration directories may contain the operator's saved credentials")
 	assert.Equal(t, filepath.Join(dir, ".bench-cache", "go-build"), env["GOCACHE"])
+	assert.Equal(t, "off", env["GOENV"])
 	assert.Equal(t, "off", env["GOPROXY"])
+	assert.Equal(t, "off", env["GOWORK"])
 	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
 	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"])
 	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_POLICY_SKILLS"])

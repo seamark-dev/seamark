@@ -1,8 +1,8 @@
-// Command lessons-bench runs the RFC-003 §2 active experiment: does
+// Command lessons-bench runs the active experiment: does
 // the seamark lessons hook change what a headless agent writes? Two
-// arms differing in exactly one bit (the hook wired or absent), a
-// generated fixture repo per trial, a frozen task, a deterministic
-// judge. See internal/bench for the design and its guardrails.
+// arms differing in exactly one bit (the hook wired or absent), a fresh
+// synthetic or pinned-public worktree per trial, a frozen task, and a
+// deterministic judge. See internal/bench for the design and its guardrails.
 //
 // Paid runs spend len(selected arms) x -trials agent sessions. The "all"
 // instance selector is restricted to no-agent preflight/dry-run modes. Run at

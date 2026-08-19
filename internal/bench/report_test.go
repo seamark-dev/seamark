@@ -380,7 +380,7 @@ func TestValidateResultRowRejectsCheckSummaryMismatch(t *testing.T) {
 func TestCommittedClaimsAndResultSchemaAreValid(t *testing.T) {
 	registry, err := LoadClaimRegistry(filepath.Join("..", "..", "bench", "claims.yaml"))
 	require.NoError(t, err)
-	require.Len(t, registry.Claims, 2)
+	require.Len(t, registry.Claims, 3)
 	assert.Equal(t, 3, registry.Claims[0].MinimumInstances)
 	assert.Equal(t, "claude-haiku-4-5-20251001", registry.Claims[0].RequiredModel)
 	assert.Equal(t, "medium", registry.Claims[0].RequiredEffort)
@@ -394,6 +394,15 @@ func TestCommittedClaimsAndResultSchemaAreValid(t *testing.T) {
 	assert.Equal(t, 0.40, scoping.MinimumEffect)
 	assert.Equal(t, "claude-haiku-4-5-20251001", scoping.RequiredModel)
 	assert.True(t, scoping.RequireCleanSeamark)
+
+	public := registry.Claims[2]
+	assert.Equal(t, "lessons-public-delivery-scoping", public.ID)
+	assert.Equal(t, comparisonDifferenceInDiffs, public.Comparison)
+	assert.Equal(t, OTelHistogramInstanceID, public.TreatmentInstance)
+	assert.Equal(t, OTelHistogramRepairInstanceID, public.ControlInstance)
+	assert.Equal(t, 0.40, public.MinimumEffect)
+	assert.Equal(t, "claude-haiku-4-5-20251001", public.RequiredModel)
+	assert.True(t, public.RequireCleanSeamark)
 
 	data, err := os.ReadFile(filepath.Join("..", "..", "bench", "result-v7.schema.json"))
 	require.NoError(t, err)

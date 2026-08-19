@@ -15,6 +15,8 @@ func Instances() []Instance {
 		SchemaSyncRepairInstance(),
 		CacheVersionInstance(),
 		ExportRegistryInstance(),
+		OTelHistogramInstance(),
+		OTelHistogramRepairInstance(),
 	}
 }
 

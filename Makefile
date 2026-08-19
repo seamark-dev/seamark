@@ -18,7 +18,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke lessons-bench lessons-bench-preflight lessons-bench-report
+.PHONY: build test lint fmt tidy index report clean release-archive smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -66,6 +66,11 @@ smoke: build ## End-to-end smoke test of the built binary in a fresh fixture rep
 
 lessons-bench: build ## Controlled headless agent experiment (costs tokens; BENCH_FLAGS=-dry-run first)
 	go run ./cmd/lessons-bench $(BENCH_FLAGS)
+
+BENCH_INSTANCE ?= opentelemetry-go-histogram-reset-v1
+
+lessons-bench-prepare: ## Fetch and verify one public benchmark source for offline trials
+	go run ./cmd/lessons-bench-prepare -instance "$(BENCH_INSTANCE)"
 
 lessons-bench-preflight: build ## Validate every benchmark fixture without buying agent sessions
 	go run ./cmd/lessons-bench -instance all -preflight-only -agent "$$(command -v true)" $(BENCH_FLAGS)

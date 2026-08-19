@@ -75,6 +75,12 @@ type Instance struct {
 	// assistant message is useful diagnostic evidence. They do not affect the
 	// verdict.
 	ExploreFiles []string
+
+	// Prepare materializes any external, pinned source required by Generate.
+	// Synthetic instances leave it nil. Public-repository instances use an
+	// explicit preparation step so paid runs and their agents never depend on
+	// network access.
+	Prepare func(context.Context) (string, error)
 }
 
 // Verdict is one trial's deterministic judgment, read from the code the agent

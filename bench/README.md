@@ -1,12 +1,23 @@
 # Lessons benchmark operations
 
-The benchmark runs coding agents in fresh, generated repositories. Source code
-is never pasted into the task prompt: the agent receives the frozen task and
-reads the fixture through its normal filesystem tools.
+The benchmark runs coding agents in fresh worktrees created from either local
+synthetic fixtures or an exact pinned public-repository commit. Source code is
+never pasted into the task prompt: the agent receives the frozen task and
+reads the repository through its normal filesystem tools.
 
 ## Safe run sequence
 
-Build Seamark and run every no-agent preflight first:
+Prepare the public OpenTelemetry-Go source once. This explicit step is the only
+part of the public-repository workflow that uses the network: it fetches the
+exact commit, vendors the nested Go module, verifies the frozen dependency-tree
+digest, and stores the result in the user cache. The repair-scoped variant uses
+the same cache.
+
+```sh
+make lessons-bench-prepare BENCH_INSTANCE=opentelemetry-go-histogram-reset-v1
+```
+
+Then build Seamark and run every no-agent preflight:
 
 ```sh
 make lessons-bench-preflight
@@ -85,10 +96,26 @@ project hook the treatment is meant to measure.
   independent language and failure mechanism rather than another schema-sync
   variant.
 
-Each fixture is generated locally from frozen source and git history. No
-private repository is read, copied, or required at run time. `-instance all`
-is deliberately restricted to preflight and dry-run modes; paid instances must
-be selected explicitly.
+- `opentelemetry-go-histogram-reset-v1` checks out OpenTelemetry-Go at commit
+  `0eb89a5210e64df2f38611b95d1ae0afd6b88fd7`, derived from
+  [issue #8399](https://github.com/open-telemetry/opentelemetry-go/issues/8399)
+  and [PR #8403](https://github.com/open-telemetry/opentelemetry-go/pull/8403).
+  The visible task fixes stale fields when an explicit-bucket histogram reuses
+  a data point. The owner invariant requires the parallel fix in both delta and
+  cumulative exponential-histogram collection. Its trigger-scoped lesson
+  matches the explicit implementation the task leads an agent to edit.
+
+- `opentelemetry-go-histogram-reset-repair-v1` is the protocol-matched public
+  control. It changes only the lesson region, moving it to the exponential
+  repair file. Zero hook exposure is valid for this control. Both public
+  variants use a prepared, content-verified vendor tree and run trials with Go
+  downloads disabled; the paid agent never receives network access.
+
+Synthetic fixtures are generated locally from frozen source and git history;
+the public fixture is cloned from its verified local cache. No private
+repository is read, copied, or required at run time. Prepare the public cache
+before using `-instance all`. That selector is deliberately restricted to
+preflight and dry-run modes; paid instances must be selected explicitly.
 
 ### Trigger-scope calibration
 
@@ -119,11 +146,43 @@ make lessons-bench-report \
 One pair validates wiring and direction only. Inspect both patches and
 transcripts before authorizing the frozen five-pair cohort.
 
+### Pinned public-repository calibration
+
+The OpenTelemetry pair follows the same trigger-versus-repair protocol on real,
+historical source. Run it only from a reviewed, committed tree. Start with a
+single hook-off trigger trial so an unexpectedly easy or impossible visible
+task does not consume a full cohort:
+
+```sh
+make lessons-bench BENCH_FLAGS='-instance opentelemetry-go-histogram-reset-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery once-per-context -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-otel-trigger-calibration-v7.jsonl -transcripts /tmp/seamark-otel-trigger-calibration-v7'
+```
+
+The useful baseline is `task=true invariant=false`. Inspect its patch and
+transcript before running one paired trial for each variant:
+
+```sh
+make lessons-bench BENCH_FLAGS='-instance opentelemetry-go-histogram-reset-v1 -arm both -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery once-per-context -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-otel-trigger-pilot-v7.jsonl -transcripts /tmp/seamark-otel-trigger-pilot-v7'
+
+make lessons-bench BENCH_FLAGS='-instance opentelemetry-go-histogram-reset-repair-v1 -arm both -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery once-per-context -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-otel-repair-pilot-v7.jsonl -transcripts /tmp/seamark-otel-repair-pilot-v7'
+```
+
+The trigger run's printed `fingerprint` must equal the repair run's printed
+`protocol`, the trigger hook-on row must show an injection, and zero exposure is
+valid for the repair hook-on row. These pilot artifacts remain in `/tmp`; do
+not increase to the frozen five-pair cohort until the task, patches, transcript,
+and diagnostic report have been reviewed:
+
+```sh
+make lessons-bench-report \
+  BENCH_RESULTS='/tmp/seamark-otel-trigger-pilot-v7.jsonl /tmp/seamark-otel-repair-pilot-v7.jsonl' \
+  BENCH_REPORT_FLAGS='-out /tmp/seamark-otel-pilot-v7.md'
+```
+
 ## Preflight contract
 
 Preflight spends no model tokens. It rejects a run unless:
 
-1. two generated repositories have the same commit hash;
+1. two fresh fixture worktrees have the same commit hash;
 2. the untouched repository passes its public checks but not the task judge;
 3. a task-complete naive solution passes public checks and the task judge but
    fails the owner-invariant judge;
@@ -201,16 +260,23 @@ by extraction. Deterministic extraction validation remains responsible for
 proving that the production pipeline derives and stores those regions from
 evidence rather than from the benchmark's hand-authored fixture.
 
+`lessons-public-delivery-scoping` freezes the same +40-point matched contrast
+for the pinned OpenTelemetry-Go trigger and repair variants, with five valid
+pairs per variant. It is intentionally a one-repository claim: passing it would
+show that the delivery mechanism transfers to this exact historical public
+task under the pinned model/runtime, not that results generalize across public
+repositories. The claim was committed before any paid OpenTelemetry run.
+
 ### Trigger-scope release cohort
 
 The first clean trigger-scope cohort ran on 2026-08-18 with Seamark
 `v0.4.0-3-gb5c1bd8`, Claude Haiku 4.5 at medium effort, once-per-context
 delivery, and five valid pairs per variant:
 
-| Variant | Hook-on invariant | Hook-off invariant | Within-variant effect | Approx. 95% interval | Mean context on/off | Total cost on/off |
-|---|---:|---:|---:|---:|---:|---:|
-| Trigger-scoped | 5/5 | 0/5 | +100 pp | +39 to +100 pp | 300k / 269k | $0.42 / $0.39 |
-| Repair-scoped control | 3/5 | 3/5 | +0 pp | -46 to +46 pp | 270k / 336k | $0.40 / $0.44 |
+| Variant               | Hook-on invariant | Hook-off invariant | Within-variant effect | Approx. 95% interval | Mean context on/off | Total cost on/off |
+| --------------------- | ----------------: | -----------------: | --------------------: | -------------------: | ------------------: | ----------------: |
+| Trigger-scoped        |               5/5 |                0/5 |               +100 pp |       +39 to +100 pp |         300k / 269k |     $0.42 / $0.39 |
+| Repair-scoped control |               3/5 |                3/5 |                 +0 pp |        -46 to +46 pp |         270k / 336k |     $0.40 / $0.44 |
 
 All 20 sessions completed the visible task, with no harmful task regression.
 The matched difference-in-differences effect was +100 percentage points,
@@ -232,8 +298,8 @@ claim. Raw rows and the generated assessment are in
 
 This is controlled synthetic evidence for one cross-boundary invariant under
 one model/runtime. It does not establish extraction precision on unseen
-repositories or external validity; the next evidence step remains a pinned
-public-repository task.
+repositories or external validity. The pinned OpenTelemetry-Go experiment
+above is the next evidence step; no paid result has been accepted yet.
 
 `result.schema.json` and `result-v6.schema.json` remain the frozen v5/v6
 contracts. `result-v7.schema.json` documents current output and enforces the
@@ -258,11 +324,11 @@ pooling incompatible runs.
 The first clean release cohort uses Seamark `v0.2.0-3-g6d5d87d`, Claude Haiku
 `claude-haiku-4-5-20251001`, medium effort, and five valid pairs per instance:
 
-| Instance | Hook-on invariant | Hook-off invariant | Effect | Approx. 95% interval | Mean context on/off | Total cost on/off |
-|---|---:|---:|---:|---:|---:|---:|
-| `python-ts-schema-sync-v1` | 5/5 | 3/5 | +40 pp | -12 to +77 pp | 368k / 353k | $0.47 / $0.46 |
-| `python-cache-version-v1` | 5/5 | 0/5 | +100 pp | +39 to +100 pp | 279k / 253k | $0.41 / $0.38 |
-| `go-export-registry-v1` | 5/5 | 0/5 | +100 pp | +39 to +100 pp | 279k / 224k | $0.42 / $0.37 |
+| Instance                   | Hook-on invariant | Hook-off invariant |  Effect | Approx. 95% interval | Mean context on/off | Total cost on/off |
+| -------------------------- | ----------------: | -----------------: | ------: | -------------------: | ------------------: | ----------------: |
+| `python-ts-schema-sync-v1` |               5/5 |                3/5 |  +40 pp |        -12 to +77 pp |         368k / 353k |     $0.47 / $0.46 |
+| `python-cache-version-v1`  |               5/5 |                0/5 | +100 pp |       +39 to +100 pp |         279k / 253k |     $0.41 / $0.38 |
+| `go-export-registry-v1`    |               5/5 |                0/5 | +100 pp |       +39 to +100 pp |         279k / 224k |     $0.42 / $0.37 |
 
 All 30 sessions completed the visible task, so harmful task interference was
 0%. The mean cross-instance effect was +80 percentage points and the worst
@@ -306,10 +372,10 @@ owner invariant, while both hook-off sessions completed the task but missed it.
 For context, the earlier clean `always` release cohort and the new
 `once-per-context` calibration observed:
 
-| Delivery cohort | Valid pairs | Hook-on invariant | Hook-off invariant | Hook-on delivery per session | Mean context on/off | Mean cost on/off |
-|---|---:|---:|---:|---|---:|---:|
-| `always` (schema v5, clean release) | 5 | 5/5 | 0/5 | 3.6 firings; suppression not measured | 279k / 225k | $0.084 / $0.073 |
-| `once-per-context` (schema v6, dirty calibration) | 2 | 2/2 | 0/2 | 4 matches; 1 injection; 3 suppressed; 0 repeated | 346k / 200k | $0.094 / $0.069 |
+| Delivery cohort                                   | Valid pairs | Hook-on invariant | Hook-off invariant | Hook-on delivery per session                     | Mean context on/off | Mean cost on/off |
+| ------------------------------------------------- | ----------: | ----------------: | -----------------: | ------------------------------------------------ | ------------------: | ---------------: |
+| `always` (schema v5, clean release)               |           5 |               5/5 |                0/5 | 3.6 firings; suppression not measured            |         279k / 225k |  $0.084 / $0.073 |
+| `once-per-context` (schema v6, dirty calibration) |           2 |               2/2 |                0/2 | 4 matches; 1 injection; 3 suppressed; 0 repeated |         346k / 200k |  $0.094 / $0.069 |
 
 This establishes that once-per-context suppression works without weakening the
 lesson on this fixture. It does **not** establish a token or cost reduction:

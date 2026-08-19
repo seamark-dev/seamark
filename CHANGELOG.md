@@ -8,6 +8,15 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **Pinned public-repository lessons benchmark.** The harness can now prepare
+  and verify an exact OpenTelemetry-Go commit, including a content-pinned
+  vendored dependency tree, before creating fresh network-isolated agent
+  worktrees. A historical histogram-reset task compares the same lesson at the
+  explicit-histogram trigger and exponential-histogram repair sites. Hidden
+  judges distinguish visible task completion from the parallel delta and
+  cumulative owner invariant, and a task-complete naive patch proves that
+  distinction during preflight. The public matched claim is frozen before its
+  first paid run; no external-validity result is claimed yet.
 - **Trigger-scoped delivery now has a controlled benchmark.** A matched
   schema-sync fixture compares the same lesson at the backend trigger with its
   former generated-client repair scope. Five clean pairs per variant produced

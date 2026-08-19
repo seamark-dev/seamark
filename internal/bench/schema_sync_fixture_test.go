@@ -224,6 +224,7 @@ func TestInstanceByID(t *testing.T) {
 	assert.Equal(t, []string{
 		SchemaSyncInstanceID, SchemaSyncRepairInstanceID,
 		CacheVersionInstanceID, ExportRegistryInstanceID,
+		OTelHistogramInstanceID, OTelHistogramRepairInstanceID,
 	}, InstanceIDs())
 	for _, instance := range Instances() {
 		assert.NotEmpty(t, instance.sourceFile)
