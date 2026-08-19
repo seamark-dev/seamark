@@ -25,9 +25,11 @@ const (
 	otelHistogramTrigger    = "sdk/metric/internal/aggregate/histogram.go"
 	otelHistogramRepair     = "sdk/metric/internal/aggregate/exponential_histogram.go"
 
-	otelHistogramTask = `Fix the metric SDK so reused explicit-bucket histogram datapoints do not retain ` +
-		"`Sum`, `Min`, or `Max`" + ` values from an earlier collection when sum or min/max recording is disabled. ` +
-		`Keep the change focused and add or update tests as appropriate.`
+	otelHistogramTask = `Fix the metric SDK so a reused destination datapoint from a delta explicit-bucket ` +
+		`histogram does not retain ` + "`Sum`, `Min`, or `Max`" + ` values from an earlier aggregation when ` +
+		`the later delta histogram has sum or min/max recording disabled. The same destination aggregation may ` +
+		`be reused across collectors with different recording settings. Keep the change focused and add or update ` +
+		`tests as appropriate.`
 
 	otelHistogramLessonYAML = `pin:
   - rule: ` + OTelHistogramRule + `

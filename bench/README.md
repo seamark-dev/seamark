@@ -151,19 +151,21 @@ transcripts before authorizing the frozen five-pair cohort.
 The OpenTelemetry pair follows the same trigger-versus-repair protocol on real,
 historical source. Run it only from a reviewed, committed tree. Start with a
 single hook-off trigger trial so an unexpectedly easy or impossible visible
-task does not consume a full cohort:
+task does not consume a full cohort. The $0.50 session ceiling leaves room for
+realistic test development on this larger codebase; it is a cap, not a spending
+target, and must remain identical across both arms and scope variants:
 
 ```sh
-make lessons-bench BENCH_FLAGS='-instance opentelemetry-go-histogram-reset-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery once-per-context -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-otel-trigger-calibration-v7.jsonl -transcripts /tmp/seamark-otel-trigger-calibration-v7'
+make lessons-bench BENCH_FLAGS='-instance opentelemetry-go-histogram-reset-v1 -arm hook-off -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery once-per-context -max-budget-usd 0.50 -timeout 10m -out /tmp/seamark-otel-trigger-calibration-v7.jsonl -transcripts /tmp/seamark-otel-trigger-calibration-v7'
 ```
 
 The useful baseline is `task=true invariant=false`. Inspect its patch and
 transcript before running one paired trial for each variant:
 
 ```sh
-make lessons-bench BENCH_FLAGS='-instance opentelemetry-go-histogram-reset-v1 -arm both -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery once-per-context -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-otel-trigger-pilot-v7.jsonl -transcripts /tmp/seamark-otel-trigger-pilot-v7'
+make lessons-bench BENCH_FLAGS='-instance opentelemetry-go-histogram-reset-v1 -arm both -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery once-per-context -max-budget-usd 0.50 -timeout 10m -out /tmp/seamark-otel-trigger-pilot-v7.jsonl -transcripts /tmp/seamark-otel-trigger-pilot-v7'
 
-make lessons-bench BENCH_FLAGS='-instance opentelemetry-go-histogram-reset-repair-v1 -arm both -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery once-per-context -max-budget-usd 0.25 -timeout 10m -out /tmp/seamark-otel-repair-pilot-v7.jsonl -transcripts /tmp/seamark-otel-repair-pilot-v7'
+make lessons-bench BENCH_FLAGS='-instance opentelemetry-go-histogram-reset-repair-v1 -arm both -trials 1 -model claude-haiku-4-5-20251001 -effort medium -hook-delivery once-per-context -max-budget-usd 0.50 -timeout 10m -out /tmp/seamark-otel-repair-pilot-v7.jsonl -transcripts /tmp/seamark-otel-repair-pilot-v7'
 ```
 
 The trigger run's printed `fingerprint` must equal the repair run's printed

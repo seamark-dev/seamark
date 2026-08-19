@@ -24,6 +24,8 @@ func TestOTelHistogramInstancesShareProtocolExceptScope(t *testing.T) {
 	assert.Equal(t, HookExposureOptional, repair.effectiveHookExposure())
 	assert.Equal(t, trigger.Task, repair.Task)
 	assert.Equal(t, trigger.JudgeVersion, repair.JudgeVersion)
+	assert.Contains(t, trigger.Task, "delta explicit-bucket")
+	assert.Contains(t, trigger.Task, "same destination aggregation")
 	assert.NotContains(t, trigger.Task, "exponential")
 
 	triggerPin, err := parseSinglePin(trigger.LessonYAML)
