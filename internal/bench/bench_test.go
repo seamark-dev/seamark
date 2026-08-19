@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -305,8 +306,26 @@ echo '{"type":"result","is_error":true,"api_error_status":429,"result":"rate lim
 	assert.Contains(t, sum.StoppedReason, "HTTP 429")
 }
 
+func TestRunAgentAppendsWorkingTreeInstruction(t *testing.T) {
+	stub := filepath.Join(t.TempDir(), "agent.sh")
+	require.NoError(t, os.WriteFile(stub, []byte("#!/bin/sh\nprintf '%s' \"$1\"\n"), 0o755))
+	instance := SchemaSyncInstance()
+
+	stdout, stderr, exit, timedOut, err := runAgent(context.Background(), RunConfig{
+		AgentArgv: []string{stub}, Timeout: time.Second,
+	}, instance, t.TempDir())
+
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	assert.Zero(t, exit)
+	assert.False(t, timedOut)
+	assert.Equal(t, agentPrompt(instance.Task), string(stdout))
+	assert.Contains(t, string(stdout), agentWorkingTreeInstruction)
+}
+
 func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", "/host/home")
 	t.Setenv("ANTHROPIC_MODEL", "unwanted")
 	t.Setenv("ANTHROPIC_BASE_URL", "https://gateway.invalid")
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
@@ -341,7 +360,7 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 		"ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
 		"ANTHROPIC_SMALL_FAST_MODEL", "MAX_THINKING_TOKENS", "DISABLE_PROMPT_CACHING",
 		"CLAUDE_CODE_EFFORT_LEVEL", "PYTHONPATH", "PYTHONHOME", "BASH_ENV", "MAKEFLAGS",
-		"SEAMARK_BENCH_CACHE_DIR", "GOFLAGS", "GOTELEMETRYDIR",
+		"SEAMARK_BENCH_CACHE_DIR", "GOFLAGS", "GOTELEMETRY", "GOTELEMETRYDIR",
 		"VIRTUAL_ENV", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
 		"GIT_AUTHOR_NAME", "GIT_COMMITTER_EMAIL",
 	} {
@@ -354,10 +373,11 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 		"subscription authentication must survive environment normalization")
 	assert.Equal(t, "/test/claude-auth-config", env["CLAUDE_CONFIG_DIR"],
 		"custom configuration directories may contain the operator's saved credentials")
+	assert.Equal(t, filepath.Join(dir, ".bench-cache", "home"), env["HOME"])
 	assert.Equal(t, filepath.Join(dir, ".bench-cache", "go-build"), env["GOCACHE"])
+	assert.Equal(t, filepath.Join(dir, ".bench-cache", "xdg-config"), env["XDG_CONFIG_HOME"])
 	assert.Equal(t, "off", env["GOENV"])
 	assert.Equal(t, "off", env["GOPROXY"])
-	assert.Equal(t, "off", env["GOTELEMETRY"])
 	assert.Equal(t, "off", env["GOWORK"])
 	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
 	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"])
@@ -367,6 +387,35 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	assert.Equal(t, "0", env["PYTHONHASHSEED"])
 	assert.Equal(t, "1", env["GIT_CONFIG_NOSYSTEM"])
 	assert.Equal(t, os.DevNull, env["GIT_CONFIG_GLOBAL"])
+}
+
+func TestAgentEnvironmentPreservesDefaultClaudeCredentials(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(t.TempDir(), "operator-home")
+	t.Setenv("HOME", hostHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	env := environmentByKey(t, agentEnvironment(dir))
+
+	assert.Equal(t, filepath.Join(hostHome, ".claude"), env["CLAUDE_CONFIG_DIR"])
+	assert.Equal(t, filepath.Join(dir, ".bench-cache", "home"), env["HOME"])
+}
+
+func TestAgentEnvironmentKeepsGoTelemetryInsideTrial(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Go uses Windows application-data variables instead of HOME")
+	}
+
+	dir := t.TempDir()
+	cmd := exec.Command("go", "env", "GOTELEMETRYDIR")
+	cmd.Env = agentEnvironment(dir)
+	out, err := cmd.Output()
+	require.NoError(t, err)
+
+	telemetryDir := strings.TrimSpace(string(out))
+	rel, err := filepath.Rel(filepath.Join(dir, ".bench-cache"), telemetryDir)
+	require.NoError(t, err)
+	assert.True(t, filepath.IsLocal(rel), "Go telemetry escaped the trial cache: %s", telemetryDir)
 }
 
 func environmentByKey(t *testing.T, entries []string) map[string]string {

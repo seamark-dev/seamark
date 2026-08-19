@@ -16,7 +16,9 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   judges distinguish visible task completion from the parallel delta and
   cumulative owner invariant, and a task-complete naive patch proves that
   distinction during preflight. The public matched claim is frozen before its
-  first paid run; no external-validity result is claimed yet.
+  first paid run. Paid sessions isolate home and XDG state while reusing saved
+  Claude authentication, and agents leave trial changes uncommitted. No
+  external-validity result is claimed yet.
 - **Trigger-scoped delivery now has a controlled benchmark.** A matched
   schema-sync fixture compares the same lesson at the backend trigger with its
   former generated-client repair scope. Five clean pairs per variant produced

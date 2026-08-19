@@ -1267,10 +1267,16 @@ func writeAgentSettings(dir, hookCommand, resetCommand string) error {
 	return os.WriteFile(filepath.Join(claudeDir, "settings.json"), data, 0o644)
 }
 
-// runAgent runs the configured agent command in the trial dir with
-// the task appended as the last argument. A non-zero exit is a result
-// (recorded on the row), not an error: some agents exit non-zero on
-// partial work, and the judge reads the files either way.
+const agentWorkingTreeInstruction = "Do not create commits or stage changes. Leave all edits in the working tree for review."
+
+func agentPrompt(task string) string {
+	return task + "\n\n" + agentWorkingTreeInstruction
+}
+
+// runAgent runs the configured agent command in the trial dir with the task
+// and benchmark-owned working-tree instruction appended as the last argument.
+// A non-zero exit is a result (recorded on the row), not an error: some agents
+// exit non-zero on partial work, and the judge reads the files either way.
 func runAgent(parent context.Context, cfg RunConfig, instance Instance, dir string) (stdout, stderr []byte, exit int, timedOut bool, err error) {
 	if len(cfg.AgentArgv) == 0 {
 		return nil, nil, 0, false, fmt.Errorf("empty agent command")
@@ -1279,7 +1285,7 @@ func runAgent(parent context.Context, cfg RunConfig, instance Instance, dir stri
 	ctx, cancel := context.WithTimeout(parent, cfg.Timeout)
 	defer cancel()
 
-	argv := append(slices.Clone(cfg.AgentArgv), instance.Task)
+	argv := append(slices.Clone(cfg.AgentArgv), agentPrompt(instance.Task))
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
@@ -1313,9 +1319,9 @@ func runAgent(parent context.Context, cfg RunConfig, instance Instance, dir stri
 
 // inheritedEnvironmentBlocklist contains host settings that can change fixture
 // generation, agent behavior, provider routing, or validation. Authentication
-// variables and CLAUDE_CONFIG_DIR are intentionally preserved: the benchmark
-// must keep working with the operator's existing subscription or API-key login
-// without copying secrets.
+// variables are preserved. CLAUDE_CONFIG_DIR and the original HOME are read
+// before filtering so agentEnvironment can reconnect saved Claude credentials
+// after replacing HOME with a trial-local directory.
 // Every benchmark subprocess starts from the same filtered environment;
 // individual commands then add only their explicitly owned settings.
 var inheritedEnvironmentBlocklist = map[string]bool{
@@ -1357,6 +1363,7 @@ var inheritedEnvironmentBlocklist = map[string]bool{
 	"CLAUDE_CODE_DISABLE_AUTO_MEMORY":          true,
 	"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":       true,
 	"CLAUDE_CODE_DISABLE_POLICY_SKILLS":        true,
+	"CLAUDE_CONFIG_DIR":                        true,
 	"ENABLE_CLAUDEAI_MCP_SERVERS":              true,
 	"DISABLE_AUTOUPDATER":                      true,
 	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": true,
@@ -1384,6 +1391,7 @@ var inheritedEnvironmentBlocklist = map[string]bool{
 	"MAKEFLAGS":               true,
 	"MFLAGS":                  true,
 	"MAKEFILES":               true,
+	"HOME":                    true,
 	"GIT_DIR":                 true,
 	"GIT_WORK_TREE":           true,
 	"GIT_INDEX_FILE":          true,
@@ -1408,6 +1416,7 @@ var inheritedEnvironmentBlocklist = map[string]bool{
 	"GOTELEMETRYDIR":          true,
 	"GOWORK":                  true,
 	"XDG_CACHE_HOME":          true,
+	"XDG_CONFIG_HOME":         true,
 	"npm_config_cache":        true,
 	"PIP_CACHE_DIR":           true,
 	"PYTHONNOUSERSITE":        true,
@@ -1428,8 +1437,16 @@ func sanitizedEnvironment() []string {
 }
 
 func agentEnvironment(dir string) []string {
+	hostHome := os.Getenv("HOME")
+	claudeConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	if claudeConfigDir == "" && hostHome != "" {
+		claudeConfigDir = filepath.Join(hostHome, ".claude")
+	}
+
 	cache := filepath.Join(dir, ".bench-cache")
-	for _, sub := range []string{"tmp", "go-build", "go-mod", "go-path", "xdg", "npm", "pip"} {
+	for _, sub := range []string{
+		"home", "tmp", "go-build", "go-mod", "go-path", "xdg-cache", "xdg-config", "npm", "pip",
+	} {
 		_ = os.MkdirAll(filepath.Join(cache, sub), 0o755)
 	}
 
@@ -1437,6 +1454,7 @@ func agentEnvironment(dir string) []string {
 
 	env = append(
 		env,
+		"HOME="+filepath.Join(cache, "home"),
 		"CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
 		"CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1",
 		"CLAUDE_CODE_DISABLE_POLICY_SKILLS=1",
@@ -1451,9 +1469,9 @@ func agentEnvironment(dir string) []string {
 		"GOENV=off",
 		"GOTOOLCHAIN=local",
 		"GOPROXY=off",
-		"GOTELEMETRY=off",
 		"GOWORK=off",
-		"XDG_CACHE_HOME="+filepath.Join(cache, "xdg"),
+		"XDG_CACHE_HOME="+filepath.Join(cache, "xdg-cache"),
+		"XDG_CONFIG_HOME="+filepath.Join(cache, "xdg-config"),
 		"npm_config_cache="+filepath.Join(cache, "npm"),
 		"PIP_CACHE_DIR="+filepath.Join(cache, "pip"),
 		"PYTHONNOUSERSITE=1",
@@ -1462,6 +1480,9 @@ func agentEnvironment(dir string) []string {
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
 	)
+	if claudeConfigDir != "" {
+		env = append(env, "CLAUDE_CONFIG_DIR="+claudeConfigDir)
+	}
 
 	return env
 }
