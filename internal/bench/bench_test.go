@@ -270,6 +270,21 @@ func TestParseAgentOutputRejectsProviderFailure(t *testing.T) {
 	assert.Contains(t, row.InvalidReason, "rate limit")
 }
 
+func TestParseAgentOutputRejectsProviderAPIErrorWithoutStatus(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","model":"claude-haiku-4-5-20251001","tools":["Read","Edit","Write","Bash"],"mcp_servers":[],"plugins":[]}`,
+		`{"type":"result","subtype":"success","is_error":true,"result":"API Error: Connection closed mid-response. The response above may be incomplete.","usage":{}}`,
+	}, "\n")
+
+	row := Row{Valid: true}
+	parseAgentOutput([]byte(stream), &row, SchemaSyncInstance())
+
+	assert.False(t, row.Valid)
+	assert.True(t, row.AgentError)
+	assert.True(t, row.InfrastructureFailure)
+	assert.Contains(t, row.InvalidReason, "provider API error")
+}
+
 func TestParseAgentOutputAcceptsAllowedQuotaWithoutOverage(t *testing.T) {
 	stream := strings.Join([]string{
 		`{"type":"system","subtype":"init","model":"claude-haiku-4-5-20251001","tools":["Read","Edit","Write","Bash"],"mcp_servers":[],"plugins":[]}`,

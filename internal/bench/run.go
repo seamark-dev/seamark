@@ -1684,9 +1684,21 @@ func parseResult(stdout []byte, row *Row) bool {
 	if res.APIErrorStatus >= 400 {
 		invalidateInfrastructure(row,
 			fmt.Sprintf("agent provider error HTTP %d", res.APIErrorStatus))
+	} else if res.IsError && providerAPIError(res.Result) {
+		// Claude can report a transport/provider failure without an HTTP
+		// status, including a connection closed mid-response. Those sessions
+		// did not receive a complete agent attempt and must not be scored as a
+		// task outcome. Budget and turn-limit results remain valid outcomes.
+		invalidateInfrastructure(row, "agent provider API error")
 	}
 
 	return true
+}
+
+func providerAPIError(result string) bool {
+	result = strings.TrimSpace(result)
+	return strings.EqualFold(result, "API Error") ||
+		strings.HasPrefix(strings.ToLower(result), "api error:")
 }
 
 func validateAgentResult(cfg RunConfig, row *Row) {
