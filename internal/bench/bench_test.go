@@ -457,6 +457,30 @@ func TestWireHookHonorsParentDeadline(t *testing.T) {
 	assert.Less(t, time.Since(started), time.Second)
 }
 
+func TestInstallHarnessBinaryWorksFromNestedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(t.TempDir(), "seamark")
+	require.NoError(t, os.WriteFile(source, []byte("benchmark binary"), 0o755))
+
+	hookBin, err := installHarnessBinary(dir, RunConfig{
+		PrepareIndex: true,
+		SeamarkBin:   source,
+	})
+	require.NoError(t, err)
+	assert.True(t, filepath.IsAbs(hookBin), "hook command must not depend on the agent's working directory")
+
+	nested := filepath.Join(dir, "sdk", "metric")
+	require.NoError(t, os.MkdirAll(nested, 0o755))
+	resolved := hookBin
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(nested, resolved)
+	}
+
+	data, err := os.ReadFile(resolved)
+	require.NoError(t, err, "copied hook binary must remain reachable after the agent changes directory")
+	assert.Equal(t, []byte("benchmark binary"), data)
+}
+
 func TestRunJudgeCommandIgnoresStalePythonBytecode(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "fixture_module.py")

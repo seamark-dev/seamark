@@ -1123,8 +1123,10 @@ func excludeHarnessArtifacts(dir string) error {
 
 // installHarnessBinary places the exact measured Seamark binary inside the
 // trial boundary. Hooks no longer need to execute a binary from the host
-// workspace, which would violate the sandbox's read boundary. Hermetic unit
-// tests disable index preparation and keep using their inert fake path.
+// workspace, which would violate the sandbox's read boundary. The returned
+// path is absolute because Claude's persistent shell can change directories
+// before a later edit hook runs. Hermetic unit tests disable index preparation
+// and keep using their inert fake path.
 func installHarnessBinary(dir string, cfg RunConfig) (string, error) {
 	if !cfg.PrepareIndex {
 		return cfg.SeamarkBin, nil
@@ -1138,7 +1140,11 @@ func installHarnessBinary(dir string, cfg RunConfig) (string, error) {
 	// .seamark is already excluded from Seamark's own code index, so the
 	// executable cannot distort routing or fixture size.
 	rel := filepath.Join(".seamark", "bin", "seamark")
-	abs := filepath.Join(dir, rel)
+	abs, err := filepath.Abs(filepath.Join(dir, rel))
+	if err != nil {
+		return "", err
+	}
+
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return "", err
 	}
@@ -1147,7 +1153,7 @@ func installHarnessBinary(dir string, cfg RunConfig) (string, error) {
 		return "", err
 	}
 
-	return rel, nil
+	return abs, nil
 }
 
 // writeLessons installs a lessons.yaml into the trial repo.
