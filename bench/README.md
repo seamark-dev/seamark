@@ -59,13 +59,14 @@ The default Claude adapter:
 - tells agents to leave trial changes uncommitted and unstaged for evaluation;
 - caps provider spend per session and preserves the complete stream transcript.
 
-The adapter redirects `HOME` and XDG configuration into the disposable trial
-directory. It preserves an explicit `CLAUDE_CONFIG_DIR`, or points it at the
-operator's original `HOME/.claude` when unset, so existing authentication keeps
-working without copying credentials. `--setting-sources project` keeps ordinary
-user instructions out of the session, but organization-managed policy and
-global account state remain host prerequisites. Use a dedicated runner when
-publishing evidence intended to reproduce across operators.
+The Claude process retains the operator's `HOME` and `CLAUDE_CONFIG_DIR` so
+existing keychain, subscription, and API-key authentication keeps working. Its
+shell and hook subprocesses run through a wrapper with disposable `HOME` and XDG
+configuration paths, keeping language tools such as Go away from operator state.
+`--setting-sources project` keeps ordinary user instructions out of the session,
+but organization-managed policy and global account state remain host
+prerequisites. Use a dedicated runner when publishing evidence intended to
+reproduce across operators.
 
 Do not use `--bare` or `--safe-mode` in a custom adapter: both disable the
 project hook the treatment is meant to measure.

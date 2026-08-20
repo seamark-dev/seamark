@@ -1285,11 +1285,17 @@ func runAgent(parent context.Context, cfg RunConfig, instance Instance, dir stri
 	ctx, cancel := context.WithTimeout(parent, cfg.Timeout)
 	defer cancel()
 
+	if err := writeAgentToolEnvironment(dir); err != nil {
+		return nil, nil, 0, false, fmt.Errorf("prepare agent environment: %w", err)
+	}
+
+	env := agentEnvironment(dir)
+
 	argv := append(slices.Clone(cfg.AgentArgv), agentPrompt(instance.Task))
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = agentEnvironment(dir)
+	cmd.Env = env
 	cmd.WaitDelay = processWaitDelay
 
 	var outBuf, errBuf bytes.Buffer
@@ -1318,10 +1324,9 @@ func runAgent(parent context.Context, cfg RunConfig, instance Instance, dir stri
 }
 
 // inheritedEnvironmentBlocklist contains host settings that can change fixture
-// generation, agent behavior, provider routing, or validation. Authentication
-// variables are preserved. CLAUDE_CONFIG_DIR and the original HOME are read
-// before filtering so agentEnvironment can reconnect saved Claude credentials
-// after replacing HOME with a trial-local directory.
+// generation, agent behavior, provider routing, or validation. Authentication,
+// HOME, and CLAUDE_CONFIG_DIR are preserved for the agent process; Bash and
+// hook subprocesses receive isolated home/config paths through the shell prefix.
 // Every benchmark subprocess starts from the same filtered environment;
 // individual commands then add only their explicitly owned settings.
 var inheritedEnvironmentBlocklist = map[string]bool{
@@ -1363,7 +1368,7 @@ var inheritedEnvironmentBlocklist = map[string]bool{
 	"CLAUDE_CODE_DISABLE_AUTO_MEMORY":          true,
 	"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":       true,
 	"CLAUDE_CODE_DISABLE_POLICY_SKILLS":        true,
-	"CLAUDE_CONFIG_DIR":                        true,
+	"CLAUDE_CODE_SHELL_PREFIX":                 true,
 	"ENABLE_CLAUDEAI_MCP_SERVERS":              true,
 	"DISABLE_AUTOUPDATER":                      true,
 	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": true,
@@ -1391,7 +1396,6 @@ var inheritedEnvironmentBlocklist = map[string]bool{
 	"MAKEFLAGS":               true,
 	"MFLAGS":                  true,
 	"MAKEFILES":               true,
-	"HOME":                    true,
 	"GIT_DIR":                 true,
 	"GIT_WORK_TREE":           true,
 	"GIT_INDEX_FILE":          true,
@@ -1416,7 +1420,8 @@ var inheritedEnvironmentBlocklist = map[string]bool{
 	"GOTELEMETRYDIR":          true,
 	"GOWORK":                  true,
 	"XDG_CACHE_HOME":          true,
-	"XDG_CONFIG_HOME":         true,
+	"SEAMARK_BENCH_TOOL_HOME": true,
+	"SEAMARK_BENCH_TOOL_XDG":  true,
 	"npm_config_cache":        true,
 	"PIP_CACHE_DIR":           true,
 	"PYTHONNOUSERSITE":        true,
@@ -1436,28 +1441,48 @@ func sanitizedEnvironment() []string {
 	return env
 }
 
-func agentEnvironment(dir string) []string {
-	hostHome := os.Getenv("HOME")
-	claudeConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
-	if claudeConfigDir == "" && hostHome != "" {
-		claudeConfigDir = filepath.Join(hostHome, ".claude")
+const toolEnvironmentPrefix = `#!/bin/sh
+export HOME="$SEAMARK_BENCH_TOOL_HOME"
+export XDG_CONFIG_HOME="$SEAMARK_BENCH_TOOL_XDG"
+exec /bin/bash -c "$1"
+`
+
+func writeAgentToolEnvironment(dir string) error {
+	cache := filepath.Join(dir, ".bench-cache")
+
+	for _, sub := range []string{
+		"home", "tmp", "go-build", "go-mod", "go-path", "xdg-cache", "xdg-config", "npm", "pip",
+	} {
+		if err := os.MkdirAll(filepath.Join(cache, sub), 0o755); err != nil {
+			return fmt.Errorf("create agent cache %q: %w", sub, err)
+		}
 	}
 
+	prefix := filepath.Join(cache, "tool-environment.sh")
+	if err := os.WriteFile(prefix, []byte(toolEnvironmentPrefix), 0o700); err != nil {
+		return fmt.Errorf("write shell environment prefix: %w", err)
+	}
+
+	return nil
+}
+
+func agentEnvironment(dir string) []string {
 	cache := filepath.Join(dir, ".bench-cache")
 	for _, sub := range []string{
 		"home", "tmp", "go-build", "go-mod", "go-path", "xdg-cache", "xdg-config", "npm", "pip",
 	} {
 		_ = os.MkdirAll(filepath.Join(cache, sub), 0o755)
 	}
+	prefix := filepath.Join(cache, "tool-environment.sh")
 
 	env := sanitizedEnvironment()
 
 	env = append(
 		env,
-		"HOME="+filepath.Join(cache, "home"),
 		"CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
 		"CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1",
 		"CLAUDE_CODE_DISABLE_POLICY_SKILLS=1",
+		"CLAUDE_CODE_SHELL_PREFIX="+prefix,
 		"ENABLE_CLAUDEAI_MCP_SERVERS=false",
 		"DISABLE_AUTOUPDATER=1",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
@@ -1471,7 +1496,6 @@ func agentEnvironment(dir string) []string {
 		"GOPROXY=off",
 		"GOWORK=off",
 		"XDG_CACHE_HOME="+filepath.Join(cache, "xdg-cache"),
-		"XDG_CONFIG_HOME="+filepath.Join(cache, "xdg-config"),
 		"npm_config_cache="+filepath.Join(cache, "npm"),
 		"PIP_CACHE_DIR="+filepath.Join(cache, "pip"),
 		"PYTHONNOUSERSITE=1",
@@ -1479,10 +1503,9 @@ func agentEnvironment(dir string) []string {
 		"PYTHONUTF8=1",
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"SEAMARK_BENCH_TOOL_HOME="+filepath.Join(cache, "home"),
+		"SEAMARK_BENCH_TOOL_XDG="+filepath.Join(cache, "xdg-config"),
 	)
-	if claudeConfigDir != "" {
-		env = append(env, "CLAUDE_CONFIG_DIR="+claudeConfigDir)
-	}
 
 	return env
 }

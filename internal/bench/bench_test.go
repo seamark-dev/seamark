@@ -347,13 +347,17 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	t.Setenv("GIT_AUTHOR_NAME", "host author")
 	t.Setenv("GIT_COMMITTER_EMAIL", "host@example.com")
 	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "0")
+	t.Setenv("CLAUDE_CODE_SHELL_PREFIX", "/host/prefix")
 	t.Setenv("ENABLE_CLAUDEAI_MCP_SERVERS", "true")
+	t.Setenv("SEAMARK_BENCH_TOOL_HOME", "/host/tool-home")
+	t.Setenv("SEAMARK_BENCH_TOOL_XDG", "/host/tool-xdg")
 	t.Setenv("GOPROXY", "https://proxy.invalid")
 	t.Setenv("GOFLAGS", "-mod=mod")
 	t.Setenv("GOENV", "/host/go/env")
 	t.Setenv("GOTELEMETRY", "on")
 	t.Setenv("GOTELEMETRYDIR", "/host/go/telemetry")
 	t.Setenv("GOWORK", "/host/go.work")
+	t.Setenv("XDG_CONFIG_HOME", "/host/xdg-config")
 
 	env := environmentByKey(t, agentEnvironment(dir))
 	for _, key := range []string{
@@ -373,9 +377,14 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 		"subscription authentication must survive environment normalization")
 	assert.Equal(t, "/test/claude-auth-config", env["CLAUDE_CONFIG_DIR"],
 		"custom configuration directories may contain the operator's saved credentials")
-	assert.Equal(t, filepath.Join(dir, ".bench-cache", "home"), env["HOME"])
+	assert.Equal(t, "/host/home", env["HOME"],
+		"the agent process needs the operator home for keychain-backed authentication")
+	assert.Equal(t, "/host/xdg-config", env["XDG_CONFIG_HOME"])
+	assert.Equal(t, filepath.Join(dir, ".bench-cache", "tool-environment.sh"),
+		env["CLAUDE_CODE_SHELL_PREFIX"])
+	assert.Equal(t, filepath.Join(dir, ".bench-cache", "home"), env["SEAMARK_BENCH_TOOL_HOME"])
+	assert.Equal(t, filepath.Join(dir, ".bench-cache", "xdg-config"), env["SEAMARK_BENCH_TOOL_XDG"])
 	assert.Equal(t, filepath.Join(dir, ".bench-cache", "go-build"), env["GOCACHE"])
-	assert.Equal(t, filepath.Join(dir, ".bench-cache", "xdg-config"), env["XDG_CONFIG_HOME"])
 	assert.Equal(t, "off", env["GOENV"])
 	assert.Equal(t, "off", env["GOPROXY"])
 	assert.Equal(t, "off", env["GOWORK"])
@@ -389,7 +398,7 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	assert.Equal(t, os.DevNull, env["GIT_CONFIG_GLOBAL"])
 }
 
-func TestAgentEnvironmentPreservesDefaultClaudeCredentials(t *testing.T) {
+func TestAgentEnvironmentPreservesDefaultClaudeHome(t *testing.T) {
 	dir := t.TempDir()
 	hostHome := filepath.Join(t.TempDir(), "operator-home")
 	t.Setenv("HOME", hostHome)
@@ -397,8 +406,8 @@ func TestAgentEnvironmentPreservesDefaultClaudeCredentials(t *testing.T) {
 
 	env := environmentByKey(t, agentEnvironment(dir))
 
-	assert.Equal(t, filepath.Join(hostHome, ".claude"), env["CLAUDE_CONFIG_DIR"])
-	assert.Equal(t, filepath.Join(dir, ".bench-cache", "home"), env["HOME"])
+	assert.Equal(t, hostHome, env["HOME"])
+	assert.Empty(t, env["CLAUDE_CONFIG_DIR"])
 }
 
 func TestAgentEnvironmentKeepsGoTelemetryInsideTrial(t *testing.T) {
@@ -407,8 +416,11 @@ func TestAgentEnvironmentKeepsGoTelemetryInsideTrial(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	cmd := exec.Command("go", "env", "GOTELEMETRYDIR")
-	cmd.Env = agentEnvironment(dir)
+	require.NoError(t, writeAgentToolEnvironment(dir))
+	env := agentEnvironment(dir)
+	byKey := environmentByKey(t, env)
+	cmd := exec.Command(byKey["CLAUDE_CODE_SHELL_PREFIX"], "go env GOTELEMETRYDIR")
+	cmd.Env = env
 	out, err := cmd.Output()
 	require.NoError(t, err)
 
