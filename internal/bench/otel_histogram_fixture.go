@@ -29,7 +29,8 @@ const (
 		`histogram does not retain ` + "`Sum`, `Min`, or `Max`" + ` values from an earlier aggregation when ` +
 		`the later delta histogram has sum or min/max recording disabled. The same destination aggregation may ` +
 		`be reused across collectors with different recording settings. Keep the change focused and add or update ` +
-		`tests as appropriate.`
+		`tests as appropriate. Before finishing, verify the result with ` +
+		"`go -C sdk/metric test ./internal/aggregate`."
 
 	otelHistogramLessonYAML = `pin:
   - rule: ` + OTelHistogramRule + `

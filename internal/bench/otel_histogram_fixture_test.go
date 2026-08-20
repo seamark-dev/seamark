@@ -26,6 +26,7 @@ func TestOTelHistogramInstancesShareProtocolExceptScope(t *testing.T) {
 	assert.Equal(t, trigger.JudgeVersion, repair.JudgeVersion)
 	assert.Contains(t, trigger.Task, "delta explicit-bucket")
 	assert.Contains(t, trigger.Task, "same destination aggregation")
+	assert.Contains(t, trigger.Task, "go -C sdk/metric test ./internal/aggregate")
 	assert.NotContains(t, trigger.Task, "exponential")
 
 	triggerPin, err := parseSinglePin(trigger.LessonYAML)
