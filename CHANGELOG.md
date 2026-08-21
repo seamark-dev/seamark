@@ -18,7 +18,22 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   distinction during preflight. The public matched claim is frozen before its
   first paid run. Paid shell and hook subprocesses isolate home and XDG state
   while the Claude process retains saved authentication, and agents leave trial
-  changes uncommitted. No external-validity result is claimed yet.
+  changes uncommitted. The accepted clean cohort passed its frozen threshold:
+  trigger-scoped delivery preserved the parallel histogram invariant 5/5
+  versus 0/5 without the hook, while the repair-scoped control was 1/5 versus
+  0/5. The +80 percentage-point difference-in-differences effect exceeded the
+  precommitted +40-point bar, with all 20 visible tasks complete and no harmful
+  interference. Raw rows and the generated report are committed under
+  `bench/` ([report](bench/otel-report-v7.md)). This is one pinned public task,
+  model, and runtime—not broad external validity.
+- **Benchmark failures are evidence too.** Calibration exposed two harness
+  confounds before the accepted cohort: an agent added uncompilable tests after
+  missing OpenTelemetry's nested Go module, and Claude later returned a
+  status-less `API Error: Connection closed mid-response`. The shared task now
+  names the exact offline module-local test command, and provider API errors
+  without an HTTP status are excluded as infrastructure failures while genuine
+  budget or turn exhaustion remains a measured agent outcome. Both discarded
+  attempts remain calibration, not silently pooled release evidence.
 - **Trigger-scoped delivery now has a controlled benchmark.** A matched
   schema-sync fixture compares the same lesson at the backend trigger with its
   former generated-client repair scope. Five clean pairs per variant produced

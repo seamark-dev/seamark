@@ -305,8 +305,66 @@ claim. Raw rows and the generated assessment are in
 
 This is controlled synthetic evidence for one cross-boundary invariant under
 one model/runtime. It does not establish extraction precision on unseen
-repositories or external validity. The pinned OpenTelemetry-Go experiment
-above is the next evidence step; no paid result has been accepted yet.
+repositories or external validity.
+
+### OpenTelemetry public-repository release cohort
+
+The accepted clean public cohort ran on 2026-08-20 with Seamark
+`v0.4.0-11-g67707a2`, Claude Haiku 4.5 at medium effort,
+once-per-context delivery, and five valid pairs per scope variant. Both
+variants used OpenTelemetry-Go commit
+`0eb89a5210e64df2f38611b95d1ae0afd6b88fd7` with the same task, judges,
+offline vendor tree, budget, timeout, and protocol fingerprint:
+
+| Variant | Hook-on invariant | Hook-off invariant | Within-variant effect | Approx. 95% interval | Mean context on/off | Total cost on/off |
+|---|---:|---:|---:|---:|---:|---:|
+| Trigger-scoped | 5/5 | 0/5 | +100 pp | +39 to +100 pp | 1,360k / 1,340k | $1.61 / $1.49 |
+| Repair-scoped control | 1/5 | 0/5 | +20 pp | -26 to +62 pp | 1,365k / 1,050k | $1.54 / $1.24 |
+
+The matched difference-in-differences effect was +80 percentage points,
+passing the frozen +40-point threshold. All 20 sessions completed the visible
+task, so harmful task interference was 0%. The trigger treatment recorded five
+matches and five injections—one per session, 3,060 bytes total. The
+repair-scoped hook recorded two matches, one injection, one suppression, and
+624 injected bytes: in one treatment run the agent independently reached the
+repair file, so the late reminder could help finish the companion work. The
+control's +20-point effect is therefore retained and subtracted rather than
+discarded.
+
+Trigger hook-on processed only 1.5% more context than hook-off in this cohort;
+measured cost was about 8.0% higher, or $0.024 per treatment session. The
+repair control had a much larger context imbalance even though four of its
+five hook-on sessions received no injection. With five pairs, these noisy
+usage figures support no general token- or cost-efficiency claim.
+
+Calibration materially improved the protocol before this accepted run. One
+earlier treatment agent implemented the invariant but added uncompilable tests
+after failing to locate OpenTelemetry's nested Go module; the task now gives
+both arms the exact offline verification command. A later attempt contained a
+status-less provider interruption (`API Error: Connection closed
+mid-response`) that the first classifier treated as an agent outcome. That
+cohort was discarded, the classifier was fixed to exclude provider API errors
+without conflating budget or turn exhaustion, and the complete experiment was
+rerun from a new clean fingerprint. Neither calibration is pooled into the
+release evidence.
+
+The accepted raw rows and generated assessment are
+[`otel-trigger-release-v7.jsonl`](otel-trigger-release-v7.jsonl),
+[`otel-repair-release-v7.jsonl`](otel-repair-release-v7.jsonl), and
+[`otel-report-v7.md`](otel-report-v7.md). This result establishes the
+behavioral value of correct trigger placement for this pinned historical task;
+the fixture uses a hand-authored lesson, so automatic extraction from the
+upstream review remains a separate validation step.
+
+Regenerate the committed assessment directly from its named raw inputs:
+
+```sh
+make lessons-bench-report \
+  BENCH_RESULTS='bench/otel-trigger-release-v7.jsonl bench/otel-repair-release-v7.jsonl' \
+  BENCH_REPORT_FLAGS='-out /tmp/seamark-otel-report-v7.md'
+
+cmp /tmp/seamark-otel-report-v7.md bench/otel-report-v7.md
+```
 
 `result.schema.json` and `result-v6.schema.json` remain the frozen v5/v6
 contracts. `result-v7.schema.json` documents current output and enforces the

@@ -41,7 +41,7 @@ Review mining, fix mining, lessons, distillation, pins.
 | Trigger paths (extraction at distill time, `--extract-triggers` backfill, scope advisory in the ledger/report/plan) | working; every named path is verified against the tree and co-change history before delivery widens; answered proposals are never re-paid |
 | Passive outcome loop (per-pin `working` / `not landing` / `untested` verdicts in `--stats`, the ledger, and the HTML report) | working; deterministic, recomputed on read, honesty-gated on activity and mining freshness |
 | Once-per-context hook delivery (`hook_delivery` in `lessons.yaml`) | working; opt-in, digest-only local state, fails open; needs one `seamark init` re-run for the `PostCompact` hook |
-| Lessons benchmark (`make lessons-bench`, paired headless sessions, frozen claim registry) | working; synthetic corpus plus one prepared, pinned OpenTelemetry-Go task; operator-run and spends provider tokens; protocol in [bench/README.md](../bench/README.md) |
+| Lessons benchmark (`make lessons-bench`, paired headless sessions, frozen claim registry) | working; accepted synthetic and pinned OpenTelemetry-Go cohorts; operator-run and spends provider tokens; protocol and evidence in [bench/README.md](../bench/README.md) |
 
 ## Guard — warn mode ready; enforcement is beta
 
@@ -94,8 +94,12 @@ milestone.
   behavioral value of delivering at a known trigger; extraction accuracy and
   external validity remain separate open evidence requirements. Raw evidence
   and the report live under `bench/`.
-- External evidence: a reproducible OpenTelemetry-Go trigger/repair benchmark
-  is implemented at an exact historical commit with deterministic judges and
-  offline dependencies. Its threshold is frozen, but no paid cohort has been
-  accepted yet. Until that run passes review, the public-repository result is
-  still an open bar between "works here" and broader production evidence.
+- The accepted OpenTelemetry-Go cohort meets its frozen public-repository
+  threshold at an exact historical commit: trigger-scoped delivery preserved
+  the parallel histogram invariant 5/5 versus 0/5 without the hook; the
+  repair-scoped control was 1/5 versus 0/5. The protocol-matched
+  difference-in-differences effect was +80 percentage points, all 20 visible
+  tasks completed, and harmful interference was 0%. This is evidence for one
+  pinned task, Haiku/medium configuration, and runtime—not broad external
+  validity. Raw rows and the
+  [generated assessment](../bench/otel-report-v7.md) live under `bench/`.
