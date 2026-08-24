@@ -965,6 +965,78 @@ func TestRefreshReviewsKeepsLessonsWhenSourceUnavailable(t *testing.T) {
 	assert.Len(t, kept, 1, "a failed fetch must not wipe stored lessons")
 }
 
+func TestRefreshFixesMinesReachableHistoryWithoutReplacingReviews(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	git := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v\n%s", args, out)
+	}
+
+	git("init", "-b", "main")
+	git("add", "-A")
+	git("commit", "-m", "initial")
+
+	mainPath := filepath.Join(root, "main.go")
+	data, err := os.ReadFile(mainPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(mainPath,
+		append(data, []byte("\nfunc resetHelperState() {}\n")...), 0o644))
+	git("add", "-A")
+	git("commit", "-m", "fix: reset helper state before reuse (#42)")
+
+	_, err = Run(Options{Root: root})
+	require.NoError(t, err)
+
+	dbPath := store.DefaultPath(root)
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, st.ReplaceLessons([]model.Lesson{{
+		ClusterKey: "main.go\x00review", Region: "main.go", Reviewer: "human",
+		Symptom: "review", Occurrences: 1,
+	}}, []model.Finding{{
+		ID: 7, LessonKey: "main.go\x00review", Path: "main.go",
+		Body: "existing review", Source: model.SourceReview,
+	}}))
+	require.NoError(t, st.Close())
+
+	count, err := RefreshFixes(root, dbPath, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	st, err = store.Open(dbPath)
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+
+	findings, err := st.AllFindings()
+	require.NoError(t, err)
+	require.Len(t, findings, 2)
+
+	sources := map[string]int{}
+	for _, finding := range findings {
+		sources[finding.Source]++
+	}
+	assert.Equal(t, 1, sources[model.SourceReview])
+	assert.Equal(t, 1, sources[model.SourceFixConventional])
+
+	lessons, err := st.TopLessons(1, 10)
+	require.NoError(t, err)
+	assert.Len(t, lessons, 1, "local fix refresh must not replace the review provider's data")
+
+	stamp, err := st.GetMeta(store.MetaFixesMinedAt)
+	require.NoError(t, err)
+	assert.NotEmpty(t, stamp)
+}
+
 func TestParseCacheReusesUnchanged(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root)

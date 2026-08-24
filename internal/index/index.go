@@ -373,6 +373,58 @@ func decodeResult(data []byte) (*parse.FileResult, error) {
 	return &r, nil
 }
 
+// RefreshFixes mines and persists only fix commits reachable from the
+// repository's current HEAD. It performs no network access, which makes it the
+// deterministic lesson-source mode for a pinned historical checkout.
+func RefreshFixes(root, dbPath string, logf func(string, ...any)) (int, error) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+
+	root, err := ResolveRoot(root)
+	if err != nil {
+		return 0, err
+	}
+
+	if dbPath == "" {
+		dbPath = store.DefaultPath(root)
+	}
+
+	res, err := fixes.Mine(root, fixes.Options{Logf: logf})
+	if err != nil {
+		return 0, err
+	}
+
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = st.Close() }()
+
+	return persistFixes(st, res)
+}
+
+// persistFixes swaps one successful local mine into the shared finding
+// corpus. An unmined result preserves existing rows: a missing Git repository
+// must not look like an authoritative empty history.
+func persistFixes(st *store.Store, res fixes.Result) (int, error) {
+	if !res.Mined {
+		return 0, nil
+	}
+
+	if err := st.ReplaceFixFindings(res.Findings); err != nil {
+		return 0, err
+	}
+
+	// The outcome loop only trusts "no recurrence since exposure" if
+	// mining actually ran since.
+	if err := st.SetMeta(store.MetaFixesMinedAt, fmt.Sprint(time.Now().Unix())); err != nil {
+		return 0, err
+	}
+
+	return len(res.Findings), nil
+}
+
 // RefreshReviews mines the lesson sources for the repo at root: PR
 // review comments (network, via gh) and fix commits (local git) — each
 // degrading independently, so a repo without GitHub still gains fix
@@ -409,18 +461,8 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 	// Persisted before the network is touched: the two sources degrade
 	// independently, and a review failure — however it arrives — must
 	// not discard fix findings already mined from local git.
-	if fixRes.Mined {
-		if err := st.ReplaceFixFindings(fixRes.Findings); err != nil {
-			return reviews.Result{}, 0, err
-		}
-
-		fixCount = len(fixRes.Findings)
-
-		// Stamp the mine time. The outcome loop only trusts "no
-		// recurrence since exposure" if mining actually ran since.
-		if err := st.SetMeta(store.MetaFixesMinedAt, fmt.Sprint(time.Now().Unix())); err != nil {
-			return reviews.Result{}, 0, err
-		}
+	if fixCount, err = persistFixes(st, fixRes); err != nil {
+		return reviews.Result{}, 0, err
 	}
 
 	// The window is the only config the review miner takes; a broken

@@ -43,8 +43,9 @@ func newIndexCmd(opts *options) *cobra.Command {
 	histOpts := history.Options{}
 
 	var (
-		force   bool
-		reviews bool
+		force     bool
+		reviews   bool
+		fixesOnly bool
 	)
 	cmd := &cobra.Command{
 		Use:   "index",
@@ -54,8 +55,9 @@ for co-change coupling and decisions. The index is a single SQLite file
 under .seamark/; re-running replaces derived data atomically.
 
 With --reviews, also mines pull-request review comments (CodeRabbit,
-Copilot, humans) from GitHub into recurring "lessons" — needs the GitHub
-CLI (gh) authenticated and a github.com remote.`,
+Copilot, humans) from GitHub and fix commits from local Git history. With
+--fixes-only, mines only local fix commits reachable from HEAD and performs no
+network access.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			logf := func(format string, a ...any) {
@@ -83,8 +85,19 @@ CLI (gh) authenticated and a github.com remote.`,
 
 			// Review mining runs on the review cadence, not the structural
 			// one, so it happens even when the structure is unchanged.
-			mineReviews := func() error {
-				if !reviews {
+			mineLessons := func() error {
+				if !reviews && !fixesOnly {
+					return nil
+				}
+
+				if fixesOnly {
+					fixCount, err := index.RefreshFixes(sum.Root, opts.dbPath, logf)
+					if err != nil {
+						return err
+					}
+
+					fmt.Fprintf(out, "  fixes    %d findings mined from fix commits\n", fixCount)
+
 					return nil
 				}
 
@@ -127,7 +140,7 @@ CLI (gh) authenticated and a github.com remote.`,
 
 			if sum.Skipped {
 				fmt.Fprintf(out, "index already up to date (%s); --force rebuilds\n", sum.DBPath)
-				return mineReviews()
+				return mineLessons()
 			}
 
 			fmt.Fprintf(out, "indexed %s in %s\n", sum.Root, sum.Duration.Round(1e6))
@@ -160,7 +173,7 @@ CLI (gh) authenticated and a github.com remote.`,
 				fmt.Fprintf(out, "  effects  %d symbols can reach a sink\n", sum.Stats.Tagged)
 			}
 
-			if err := mineReviews(); err != nil {
+			if err := mineLessons(); err != nil {
 				return err
 			}
 
@@ -173,6 +186,9 @@ CLI (gh) authenticated and a github.com remote.`,
 		"rebuild even when the workspace is unchanged since the last index")
 	cmd.Flags().BoolVar(&reviews, "reviews", false,
 		"also mine lesson sources: PR review comments (needs gh + GitHub) and fix commits (local git)")
+	cmd.Flags().BoolVar(&fixesOnly, "fixes-only", false,
+		"mine only fix commits reachable from HEAD (local git, no network)")
+	cmd.MarkFlagsMutuallyExclusive("reviews", "fixes-only")
 	cmd.Flags().IntVar(&histOpts.MaxCommits, "max-commits", 0,
 		"git history window for mining (default 5000)")
 	cmd.Flags().IntVar(&histOpts.MaxFilesPerCommit, "max-files-per-commit", 0,

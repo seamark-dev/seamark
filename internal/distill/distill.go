@@ -44,9 +44,10 @@ const promptBodyCap = 1500
 
 // Options tunes one distillation run.
 type Options struct {
-	// Region restricts the run to groups whose Region sits within this
-	// prefix ("" = everywhere). Cross-tree theme groups (Region "") only
-	// run when no region filter is set.
+	// Region restricts the finding corpus before grouping ("" =
+	// everywhere). This keeps unrelated findings outside a requested tree
+	// from changing token frequencies, bridging components, or consuming a
+	// budgeted call.
 	Region string
 	// Limit caps how many new groups one run reads (0 = all). The cap
 	// is the budget lever: each group is one agent invocation.
@@ -107,6 +108,16 @@ type GroupPlan struct {
 	Region      string
 	Findings    int
 	PromptChars int
+	Evidence    []FindingPlan
+}
+
+// FindingPlan identifies one finding without disclosing its body. It lets a
+// user verify the evidence boundary before approving a model call.
+type FindingPlan struct {
+	ID     int64
+	Source string
+	PR     int
+	Path   string
 }
 
 // Result reports what a run did.
@@ -147,11 +158,39 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 		return nil, err
 	}
 
+	if opts.Region != "" {
+		regional := findings[:0]
+		for _, finding := range findings {
+			if withinRegion(opts.Region, finding.Path) {
+				regional = append(regional, finding)
+			}
+		}
+
+		findings = regional
+	}
+
 	groups := grouper.Group(findings)
 
 	live := make(map[string]bool, len(groups))
 	for _, g := range groups {
 		live[g.Signature] = true
+	}
+
+	// A scoped corpus says nothing about proposals elsewhere. Preserve
+	// their signatures so pruning cannot mistake "outside this run" for
+	// "its evidence disappeared". Proposals inside the scope still face
+	// the current regional group set and are pruned normally when stale.
+	if opts.Region != "" {
+		pending, err := st.Proposals(model.ProposalProposed)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, proposal := range pending {
+			if !proposalWithinRegion(opts.Region, proposal) {
+				live[proposal.Signature] = true
+			}
+		}
 	}
 
 	res := &Result{GroupsTotal: len(groups)}
@@ -187,8 +226,6 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 		switch {
 		case done[g.Signature]:
 			res.GroupsSkipped++
-		case opts.Region != "" && !withinRegion(opts.Region, g.Region):
-			res.GroupsPending++
 		case opts.Limit > 0 && len(planned) >= opts.Limit:
 			res.GroupsPending++
 		default:
@@ -201,10 +238,19 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 
 		for _, g := range planned {
 			chars := len(buildPrompt(g, known.Labels(g.Region, maxKnownLabels)))
-			pf.Groups = append(pf.Groups, GroupPlan{
+			plan := GroupPlan{
 				Signature: g.Signature,
 				Region:    g.Region, Findings: len(g.Findings), PromptChars: chars,
-			})
+			}
+
+			for _, finding := range g.Findings {
+				plan.Evidence = append(plan.Evidence, FindingPlan{
+					ID: finding.ID, Source: sourceLabel(finding.Source),
+					PR: finding.PR, Path: finding.Path,
+				})
+			}
+
+			pf.Groups = append(pf.Groups, plan)
 			pf.PromptChars += chars
 			pf.Findings += len(g.Findings)
 		}
@@ -653,15 +699,33 @@ func sourceLabel(source string) string {
 	return source
 }
 
-// withinRegion reports whether a group's region sits inside the filter
-// prefix. A cross-tree group (region "") matches only the empty filter:
-// it has members outside every prefix by construction.
-func withinRegion(filter, region string) bool {
-	if region == "" {
+// withinRegion reports whether a repository-relative candidate is the
+// requested path or sits below the requested directory prefix.
+func withinRegion(filter, candidate string) bool {
+	if candidate == "" {
 		return false
 	}
 
-	return region == filter || strings.HasPrefix(region, strings.TrimSuffix(filter, "/")+"/")
+	return candidate == filter || strings.HasPrefix(candidate, strings.TrimSuffix(filter, "/")+"/")
+}
+
+// proposalWithinRegion reports whether a scoped run sees the proposal's
+// entire effective region set. A cross-tree proposal must survive a run over
+// just one of its regions: that partial corpus cannot establish that all of
+// the proposal's evidence disappeared.
+func proposalWithinRegion(filter string, proposal model.Proposal) bool {
+	regions := proposal.Regions
+	if len(regions) == 0 {
+		regions = []string{proposal.Region}
+	}
+
+	for _, region := range regions {
+		if !withinRegion(filter, region) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func regionLabel(region string) string {

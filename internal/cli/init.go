@@ -195,7 +195,8 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
 	}
 
 	fmt.Fprintf(w, "\nnext: `seamark index` to build the graph, "+
-		"`seamark index --reviews` to mine review lessons\n")
+		"`seamark index --reviews` for reviews + fixes, "+
+		"or `seamark index --fixes-only` for local fixes\n")
 
 	if printOnly {
 		fmt.Fprintf(w, "(nothing was written — --print)\n")

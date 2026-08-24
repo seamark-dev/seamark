@@ -99,6 +99,14 @@ func TestIndexThenWhy(t *testing.T) {
 	assert.Contains(t, out, "defines (2)")
 }
 
+func TestIndexRejectsReviewsWithFixesOnly(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index", "--reviews", "--fixes-only")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "none of the others can be")
+}
+
 func gitify(t *testing.T, root string) {
 	t.Helper()
 
@@ -687,7 +695,13 @@ func TestLessonsDistillDryRun(t *testing.T) {
 	assert.Contains(t, out, "sh -c")
 	assert.Contains(t, out, "2 finding(s)")
 	assert.Contains(t, out, "tokens")
-	assert.Contains(t, out, "redaction none")
+	assert.Contains(t, out, "fix-commit message")
+	assert.Contains(t, out, "patch excerpt")
+	assert.Contains(t, out, "no whole source files")
+	assert.Contains(t, out, "no additional dispatch redaction")
+	assert.Contains(t, out, "mining already scrubs secret-shaped values")
+	assert.Contains(t, out, "review PR #1  api/a.go  (finding 11)")
+	assert.Contains(t, out, "review PR #2  api/b.go  (finding 12)")
 	assert.Contains(t, out, "nothing was sent")
 	assert.NotContains(t, out, "Reset pooled state", "finding bodies must not appear in a dry run")
 

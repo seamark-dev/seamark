@@ -1129,11 +1129,12 @@ func printPreflight(w io.Writer, pf distill.Preflight, dryRun bool) {
 
 	fmt.Fprintf(w, "  payload   %d group(s), %d finding(s), ~%s tokens\n",
 		len(pf.Groups), pf.Findings, pf.Tokens())
-	fmt.Fprintf(w, "  contents  per finding: reviewer comment or fix-commit subject verbatim (it\n"+
-		"            may quote your code), repo-relative path, finding id, source, PR\n"+
-		"            number and reviewer name; plus rule labels of patterns already\n"+
-		"            pinned or previously proposed — no source files, no diffs\n")
-	fmt.Fprintf(w, "  redaction none — bodies are sent as written, capped at %d chars each\n", pf.BodyCap)
+	fmt.Fprintf(w, "  contents  per finding: bounded review comment, or fix-commit message,\n"+
+		"            changed-function names and patch excerpt; plus repo-relative path,\n"+
+		"            finding id, source, PR number, reviewer, and existing rule labels\n"+
+		"            — no whole source files or environment values\n")
+	fmt.Fprintf(w, "  redaction no additional dispatch redaction — stored bodies are sent as written,\n"+
+		"            capped at %d chars each (mining already scrubs secret-shaped values)\n", pf.BodyCap)
 
 	for _, g := range pf.Groups {
 		region := g.Region
@@ -1143,6 +1144,17 @@ func printPreflight(w io.Writer, pf distill.Preflight, dryRun bool) {
 
 		fmt.Fprintf(w, "    %-28s %3d finding(s)  ~%s tokens\n",
 			render.Sanitize(region), g.Findings, distill.Preflight{PromptChars: g.PromptChars}.Tokens())
+
+		for _, evidence := range g.Evidence {
+			pr := ""
+			if evidence.PR > 0 {
+				pr = fmt.Sprintf(" PR #%d", evidence.PR)
+			}
+
+			fmt.Fprintf(w, "      - %s%s  %s  (finding %d)\n",
+				render.Sanitize(evidence.Source), pr,
+				render.Sanitize(evidence.Path), evidence.ID)
+		}
 	}
 
 	if !dryRun {

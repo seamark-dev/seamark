@@ -8,7 +8,11 @@ lesson → proposal → pin**.
 ## What gets mined, and what deliberately does not
 
 `seamark index --reviews` fetches pull-request review comments through
-your authenticated `gh` CLI and clusters the recurrences:
+your authenticated `gh` CLI and also mines local fix commits. Use
+`seamark index --fixes-only` when only the local, commit-reachable fix source
+should be refreshed and no network access is allowed.
+
+Review recurrences are clustered as follows:
 
 - A cited linter code clusters by directory — a habit of an area, not a
   property of one line.
@@ -35,8 +39,8 @@ doesn't contain the linter's language at all.
 ## Fix commits are findings too
 
 Review quality varies; **fix commits are a signal most repositories
-carry.** The same `index --reviews` pass mines them whenever they exist,
-purely from local git — no GitHub needed at all: commits classified as
+carry.** Both `index --reviews` and `index --fixes-only` mine them whenever
+they exist, purely from local git — no GitHub needed at all: commits classified as
 fixes by explicit intent
 (`fix:` subjects, `fixes #N` links, `Revert` commits; never substring
 matches — "prefix" and "fixture" don't count), minus the ones that teach
@@ -65,9 +69,11 @@ phrased over a recent window so it decays as calmer history accumulates.
 The two sources degrade independently: review mining needs `gh`
 authenticated and a github.com remote; fix mining works offline on any
 remote. A failed mine (offline, logged out) fails safe — it keeps the
-lessons already stored rather than clearing them. Lessons refresh only
-on the review cadence: a normal `seamark index` (and every agent tool
-call) leaves them untouched rather than re-hitting the network.
+lessons already stored rather than clearing them. `--fixes-only` likewise
+preserves existing review rows; use a fresh index when an experiment must
+contain only local fixes. Lessons refresh only on an explicit `--reviews` or
+`--fixes-only` pass: a normal `seamark index` (and every agent tool call)
+leaves them untouched rather than re-hitting the network.
 
 ## Tuning what surfaces: lessons.yaml
 
@@ -178,6 +184,14 @@ default — seamark holds no API keys) to name what recurs, as proposed
 pins. It is an optional accelerator, nothing more: every entry it drafts
 is one you could write by hand in the same file, and repos without an
 agent CLI (or without the appetite for tokens) simply skip it.
+
+The
+[OpenTelemetry histogram-reset case study](case-studies/opentelemetry-histogram-reset.md)
+walks through this boundary on a pinned public history: two independent fix
+events become a proposal, a human decides what to pin, and a separate pre-fix
+worktree demonstrates delivery and auditability. The reusable
+[case-study protocol](case-studies/protocol.md) keeps its results separate from
+the controlled benchmark.
 
 Before anything is sent, a preflight disclosure prints the exact agent
 command line, the group and finding counts, and the estimated token
@@ -483,7 +497,7 @@ Three verdicts, each a sentence you can check against your own repo:
 - **`untested`** — no verdict yet, and the sentence says why: the pin
   never fired, too few commits touched its regions (fewer than 5),
   the finding corpus was not re-mined after exposure (run `seamark
-  index --reviews`), or every cited finding has aged out of the
+  index --reviews` or `seamark index --fixes-only`), or every cited finding has aged out of the
   mining window.
 
 The exposure clock starts at a pin's **first firing**, not its apply

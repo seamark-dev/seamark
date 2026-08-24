@@ -132,6 +132,9 @@ func TestRunDryRunDisclosesAndSendsNothing(t *testing.T) {
 
 	// The disclosure names the planned groups with real sizes…
 	require.NotEmpty(t, pf.Groups)
+	require.NotEmpty(t, pf.Groups[0].Evidence)
+	assert.Equal(t, pooledState[0].ID, pf.Groups[0].Evidence[0].ID)
+	assert.Equal(t, pooledState[0].Path, pf.Groups[0].Evidence[0].Path)
 	assert.Equal(t, []string{"claude", "-p"}, pf.Agent)
 	assert.Positive(t, pf.PromptChars, "prompt sizes are computed, not guessed")
 	assert.Equal(t, len(pooledState), pf.Findings)
@@ -349,12 +352,43 @@ func TestRunHonorsRegionAndLimit(t *testing.T) {
 	res, err := Run(context.Background(), st, NewLexicalGrouper(), empty, Options{Region: "api"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.GroupsRead, "only the api group is read")
-	assert.Equal(t, 1, res.GroupsPending, "the web group waits")
+	assert.Zero(t, res.GroupsPending, "out-of-region evidence is outside this run, not pending work")
 
 	res, err = Run(context.Background(), st, NewLexicalGrouper(), empty, Options{Limit: 1})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.GroupsRead, "limit budgets the run")
 	assert.Equal(t, 1, res.GroupsSkipped, "api group already distilled")
+}
+
+func TestRunFiltersRegionBeforeGrouping(t *testing.T) {
+	// Globally, the middle finding is a lexical bridge between the two
+	// API findings. A regional run must never disclose it or let it alter
+	// the API group's membership.
+	findings := []model.Finding{
+		{ID: 1, Path: "api/a.go", Body: "alphaBridge betaBridge first handler"},
+		{ID: 2, Path: "other/bridge.go", Body: "alphaBridge betaBridge gammaBridge deltaBridge"},
+		{ID: 3, Path: "api/b.go", Body: "gammaBridge deltaBridge second worker"},
+	}
+	st := openSeeded(t, findings)
+
+	var prompt string
+	var pf Preflight
+	agent := &fakeAgent{fn: func(p string) (string, error) {
+		prompt = p
+
+		return `{"patterns": []}`, nil
+	}}
+
+	_, err := Run(context.Background(), st, NewLexicalGrouper(), agent, Options{
+		Region:      "api",
+		OnPreflight: func(p Preflight) { pf = p },
+	})
+	require.NoError(t, err)
+	require.Len(t, pf.Groups, 1)
+	assert.Equal(t, 2, pf.Findings)
+	assert.Contains(t, prompt, "first handler")
+	assert.Contains(t, prompt, "second worker")
+	assert.NotContains(t, prompt, "other/bridge.go")
 }
 
 func TestRunMetersAgentTraffic(t *testing.T) {
@@ -422,6 +456,54 @@ func TestRunPrunesStaleProposals(t *testing.T) {
 	dismissed, err := st.Proposals(model.ProposalDismissed)
 	require.NoError(t, err)
 	require.Len(t, dismissed, 1, "dismissals are memory, never pruned")
+}
+
+func TestRegionalRunDoesNotPruneProposalsElsewhere(t *testing.T) {
+	st := openSeeded(t, []model.Finding{
+		{ID: 1, Path: "api/a.go", Body: "Guard optional handler state before access."},
+		{ID: 2, Path: "api/b.go", Body: "Wrap worker failures with operation context."},
+	})
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "web-signature", Rule: "web-rule", Region: "web/src",
+		Note: "Keep the web invariant.", Members: []int64{90, 91},
+		Status: model.ProposalProposed,
+	}))
+
+	empty := &fakeAgent{fn: func(string) (string, error) { return `{"patterns": []}`, nil }}
+
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), empty, Options{Region: "api"})
+	require.NoError(t, err)
+	assert.Zero(t, res.PrunedStale)
+
+	pending, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, "web-rule", pending[0].Rule)
+}
+
+func TestRegionalRunDoesNotPruneCrossTreeProposal(t *testing.T) {
+	st := openSeeded(t, []model.Finding{
+		{ID: 1, Path: "api/a.go", Body: "Guard optional handler state before access."},
+		{ID: 2, Path: "api/b.go", Body: "Wrap worker failures with operation context."},
+	})
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "cross-tree-signature", Rule: "cross-tree-rule", Region: "api",
+		Regions: []string{"api", "web"}, Note: "Keep both implementations synchronized.",
+		Members: []int64{90, 91}, Status: model.ProposalProposed,
+	}))
+
+	empty := &fakeAgent{fn: func(string) (string, error) { return `{"patterns": []}`, nil }}
+
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), empty, Options{Region: "api"})
+	require.NoError(t, err)
+	assert.Zero(t, res.PrunedStale)
+
+	pending, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, "cross-tree-rule", pending[0].Rule)
 }
 
 func TestRecurrenceCountsEventsNotCitations(t *testing.T) {

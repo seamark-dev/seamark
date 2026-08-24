@@ -8,7 +8,8 @@ that is a bug.
 Seamark itself runs no cloud service, sends no telemetry, and stores no
 credentials. Three boundaries can carry repository-derived data further
 than this machine, all through tools you configure: the `gh` CLI for
-review mining, your agent CLI for distillation, and the agent client you
+review mining, your agent CLI for distillation and trigger extraction, and the
+agent client you
 connect over MCP (or the editor over LSP) — everything seamark serves to
 a connected client is content that client may forward to *its own* model
 service. Each is authenticated and chosen by you; the first two are
@@ -19,8 +20,8 @@ optional.
 | Capability | Data source | Destination | Network | Persisted |
 |---|---|---|---|---|
 | Index (`seamark index`) | source tree, local git history | `.seamark/index.db` | none | yes |
-| Review mining (`index --reviews`) | GitHub PR review comments, via your `gh` | `index.db` (lessons, findings) | GitHub API through `gh` | yes |
-| Fix mining (part of `index`) | local `git log` | `index.db` (findings) | none | yes |
+| Review + fix mining (`index --reviews`) | GitHub PR review comments via your `gh`, plus local `git log` | `index.db` (lessons, findings) | GitHub API through `gh` | yes |
+| Fix-only mining (`index --fixes-only`) | local `git log` | `index.db` (findings) | none | yes |
 | Distillation (`lessons --distill`) | mined findings | your agent CLI's stdin → its model service | via the agent CLI | proposals + signature marks in `index.db` |
 | Trigger backfill (`lessons --extract-triggers`) | proposal notes + evidence paths and one excerpt each | your agent CLI's stdin → its model service | via the agent CLI | validated trigger paths + answered-question stamps in `index.db` |
 | Pin apply (`lessons --apply`) | your decision | `.seamark/lessons.yaml` (committed file; only with `distill.write`) | none | yes |
@@ -35,17 +36,19 @@ optional.
 
 Every command that runs `git` or `gh` does so as a subprocess of the
 local binary you already trust; seamark adds no credentials of its own
-and requires none (`gh` must be authenticated by you for `--reviews`).
+and requires none (`gh` must be authenticated by you for `--reviews`;
+`--fixes-only` is local and offline).
 
 ## What distillation sends
 
 `lessons --distill` is the one capability that hands repository-derived
 text to a model. Before the first agent call it prints a preflight: the
-exact agent command line, how many groups and findings would be sent,
-and the approximate token cost. The payload per finding is:
+exact agent command line, how many groups and findings would be sent, each
+finding's source/PR/path identity, and the approximate token cost. The payload
+per finding is:
 
-- the reviewer's comment or fix-commit subject, verbatim (it may quote
-  your code, because reviewers do), capped per finding;
+- the stored finding body, capped per finding: a review comment, or a
+  fix-commit message with changed-function names and a bounded patch excerpt;
 - the finding's provenance: its id, source kind (review / fix / revert),
   PR number when known, and the reviewer's name;
 - the repo-relative file path;
@@ -53,12 +56,15 @@ and the approximate token cost. The payload per finding is:
   ones and previously proposed ones alike, dismissed included (so the
   model does not re-derive or relitigate them).
 
-No source files, no diffs, no environment values. **No redaction is
-applied to finding bodies** — they are sent as reviewers wrote them.
+No whole source files or environment values are sent. Fix findings do carry
+the bounded patch excerpt described above. Mining scrubs secret-shaped values
+before storing findings; **no additional redaction is applied at dispatch** —
+the capped stored bodies are sent as written.
 
 The executable itself comes from the committed
 `.seamark/config.yaml` (`agent:` section). That file chooses what
-`--distill` runs — treat changes to it like code, and check the
+`--distill` and `--extract-triggers` run — treat changes to it like code, and
+check the
 preflight's `agent` line in a repository you did not author
 (see [threat-model.md](threat-model.md)).
 

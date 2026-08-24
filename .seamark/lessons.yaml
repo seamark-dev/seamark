@@ -3,7 +3,8 @@
 # effect immediately without re-mining. An absent file means "defaults":
 # nothing muted, nothing pinned, threshold 2.
 #
-# Lessons come from `seamark index --reviews` (PR review comments) and
+# Lessons come from `seamark index --reviews` (reviews + fix commits) or
+# `seamark index --fixes-only` (local fix commits only), and
 # appear in `why <file>`, `orient`, and the PreToolUse edit hook.
 
 # Minimum recurrences before a mined lesson surfaces. A single comment is

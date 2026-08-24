@@ -8,6 +8,15 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **Historical distillation can now use a bounded local-fix corpus.**
+  `seamark index --fixes-only` refreshes fix commits reachable from the pinned
+  `HEAD` without querying GitHub or deleting an existing review corpus.
+  Region-scoped distillation filters findings before grouping, fix-miner
+  envelope text no longer drives lexical similarity, and weak two-token
+  bridges cannot grow unbounded components. The preflight identifies every
+  planned finding by source, PR, and path without printing its body. A reduced
+  OpenTelemetry histogram-reset corpus locks the intended two-fix group and
+  excludes an unrelated same-package fix.
 - **Pinned public-repository lessons benchmark.** The harness can now prepare
   and verify an exact OpenTelemetry-Go commit, including a content-pinned
   vendored dependency tree, before creating fresh network-isolated agent

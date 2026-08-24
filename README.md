@@ -115,7 +115,7 @@ everywhere — CLI help, docs, and report alike:
 
 ```text
 review comment or fix commit         what a reviewer (or a fix) said, once
-        ↓  mined by `seamark index --reviews`
+        ↓  mined by `seamark index --reviews` or `--fixes-only`
 finding      one raw observation, kept verbatim with its provenance
         ↓  clustered on recurrence (≥2)
 lesson       a pattern recurring across findings in a region — review-
@@ -204,7 +204,13 @@ sticks past the session. Mine it instead:
 
 ```bash
 seamark index --reviews    # review comments via your gh CLI + fix commits from local git
+seamark index --fixes-only # fix commits only; local git, deterministic and offline
 ```
+
+Use `--fixes-only` for a pinned historical checkout or any run that must not
+depend on live GitHub data. It refreshes the local-fix source without fetching
+or deleting an existing review corpus; start with a fresh index when the
+experiment must contain fixes and nothing else.
 
 Recurring feedback surfaces region-scoped through the same `seamark why`
 / `seamark orient` an agent already calls — no extra tokens per turn,
@@ -339,8 +345,14 @@ control was 1/5 versus 0/5. The resulting +80 percentage-point
 difference-in-differences effect passed its precommitted +40-point threshold,
 and all 20 sessions completed the visible task. This is public-repository
 evidence for one pinned task and runtime—not a claim that every repository or
-model benefits; see the [full report](bench/otel-report-v7.md) and
-[runbook](bench/README.md#pinned-public-repository-calibration).
+model benefits. The step-by-step
+[OpenTelemetry case study](docs/case-studies/opentelemetry-histogram-reset.md)
+connects historical learning, human acceptance, hook delivery, and the audit
+trail; its reusable evidence rules live in the
+[case-study protocol](docs/case-studies/protocol.md). See the
+[full report](bench/otel-report-v7.md) and
+[benchmark runbook](bench/README.md#pinned-public-repository-calibration) for
+the independent paired evidence.
 
 Mined text is scrubbed of secret-shaped values (connection strings,
 tokens) before it is stored — a credential a reviewer quoted once must
@@ -717,8 +729,9 @@ design history in [docs/PLAN.md](docs/PLAN.md). Trust boundaries:
 [docs/data-flow.md](docs/data-flow.md) and
 [docs/threat-model.md](docs/threat-model.md).
 
-Planned next (see [docs/PLAN.md](docs/PLAN.md)): validate that distillation can
-recover the OpenTelemetry lesson and trigger from its historical review,
+Planned next (see [docs/PLAN.md](docs/PLAN.md)): run the pinned
+[OpenTelemetry distillation and replay case study](docs/case-studies/opentelemetry-histogram-reset.md)
+against its historical review and fix evidence,
 zero-token check promotion from recurring lessons, function-grain precision
 refinements, public signal evaluation, history watermark + incremental daemon
 for keystroke-adjacent freshness, and signed artifacts + npm/Homebrew

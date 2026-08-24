@@ -354,7 +354,11 @@ The accepted raw rows and generated assessment are
 [`otel-report-v7.md`](otel-report-v7.md). This result establishes the
 behavioral value of correct trigger placement for this pinned historical task;
 the fixture uses a hand-authored lesson, so automatic extraction from the
-upstream review remains a separate validation step.
+upstream review and fix history remains a separate validation step. The
+[OpenTelemetry case study](../docs/case-studies/opentelemetry-histogram-reset.md)
+defines that experiment; the generic
+[case-study protocol](../docs/case-studies/protocol.md) prevents its user-style
+replay from being pooled into this controlled cohort.
 
 Regenerate the committed assessment directly from its named raw inputs:
 
