@@ -271,10 +271,8 @@ func TestParseAgentOutputRejectsProviderFailure(t *testing.T) {
 }
 
 func TestParseAgentOutputRejectsProviderAPIErrorWithoutStatus(t *testing.T) {
-	stream := strings.Join([]string{
-		`{"type":"system","subtype":"init","model":"claude-haiku-4-5-20251001","tools":["Read","Edit","Write","Bash"],"mcp_servers":[],"plugins":[]}`,
-		`{"type":"result","subtype":"success","is_error":true,"result":"API Error: Connection closed mid-response. The response above may be incomplete.","usage":{}}`,
-	}, "\n")
+	stream := `{"type":"system","subtype":"init","model":"claude-haiku-4-5-20251001","tools":["Read","Edit","Write","Bash"],"mcp_servers":[],"plugins":[]}` + "\n" +
+		`{"type":"result","subtype":"success","is_error":true,"result":"API Error: Connection closed mid-response. The response above may be incomplete.","usage":{}}`
 
 	row := Row{Valid: true}
 	parseAgentOutput([]byte(stream), &row, SchemaSyncInstance())

@@ -763,12 +763,12 @@ func TestReportShowsScopeAdvisory(t *testing.T) {
 }
 
 // TestReportShowsBlockedTrigger wires the confirmed-but-blocked case
-// into the page: a capped region set with a confirmed outside trigger
+// into the page: a stored trigger that vanished from the working tree
 // produces no drift line, so the card must carry the blocked sentence.
 func TestReportShowsBlockedTrigger(t *testing.T) {
 	root := t.TempDir()
 
-	for _, rel := range []string{"api/schemas.py", "web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
+	for _, rel := range []string{"web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
 		p := filepath.Join(root, filepath.FromSlash(rel))
 
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
@@ -808,7 +808,8 @@ func TestReportShowsBlockedTrigger(t *testing.T) {
 	page := renderPage(t, st, root)
 
 	assert.Contains(t, page, "confirmed by co-change (38 shared commits) but not deliverable")
-	assert.NotContains(t, page, "regions now:", "the cap keeps recompute equal to stored — no drift")
+	assert.Contains(t, page, "absent from the working tree")
+	assert.NotContains(t, page, "regions now:", "evidence coverage remains unchanged — no drift")
 }
 
 func TestNotLandingColorsMeetWCAGContrast(t *testing.T) {

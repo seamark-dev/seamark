@@ -959,7 +959,7 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal,
 	// the cheapest moment to fix delivery, before the pin is installed.
 	if len(scopeFlagged) > 0 {
 		fmt.Fprintf(w, "\ntrigger scope: %s — the notes above name a trigger the regions "+
-			"do not reach; apply, then widen regions in .seamark/lessons.yaml\n",
+			"do not reach; review the trigger and proposed delivery regions before applying\n",
 			strings.Join(scopeFlagged, ", "))
 	}
 }
@@ -989,8 +989,8 @@ type ProposalHealth struct {
 	// names a path outside the pin's regions and co-change evidence
 	// agrees. Empty when the signals do not agree — the common case.
 	Scope string
-	// Blocked reports confirmed triggers that cannot widen delivery
-	// (region cap, no expressible region). Without it a confirmed
+	// Blocked reports confirmed triggers that cannot become delivery
+	// scopes (region cap or vanished path). Without it a confirmed
 	// miss would be invisible: no drift, no advisory.
 	Blocked string
 	// Outcome is the passive loop's verdict sentence (outcome.Line)
@@ -1063,10 +1063,9 @@ func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Propos
 	// The scope advisories live on their cards above; a long ledger
 	// buries them, so the flagged set is named once at the end.
 	if ids := scopeIDs(pending, applied, health); len(ids) > 0 {
-		fmt.Fprintf(w, "\ntrigger scope: %s — the note and co-change history point outside "+
-			"the pin's regions; each advisory above names the regions to consider "+
-			"(applied pins: widen regions in .seamark/lessons.yaml; pending pins: "+
-			"apply, then widen)\n", strings.Join(ids, ", "))
+		fmt.Fprintf(w, "\ntrigger scope: %s — each advisory above names a trigger and "+
+			"delivery scope to review (applied pins change through `--retarget`; "+
+			"pending pins change when applied)\n", strings.Join(ids, ", "))
 	}
 
 	// Pins applied before duplicate detection existed (or written by

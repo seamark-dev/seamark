@@ -191,6 +191,9 @@ CREATE TABLE IF NOT EXISTS proposal (
     -- never): a negative answer must not be re-purchased on the next
     -- extraction run. (Migration-added on existing databases.)
     trigger_checked_at INTEGER NOT NULL DEFAULT 0,
+    -- Semantic version of the trigger question. Version 0 predates
+    -- versioning and may be re-asked after the question changes.
+    trigger_prompt_version INTEGER NOT NULL DEFAULT 0,
     note       TEXT NOT NULL,
     members    TEXT NOT NULL,             -- JSON array of cited finding ids
     agent      TEXT NOT NULL DEFAULT '',  -- provenance: adapter + prompt version

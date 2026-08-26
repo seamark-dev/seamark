@@ -10,7 +10,7 @@ import (
 
 // StateVersion is the version of the portable state format. Bump only
 // with a reader that still accepts every older version.
-const StateVersion = 1
+const StateVersion = 2
 
 // State is the portable durable-state bundle: the proposal decisions and
 // paid distillation memory that a rebuild cannot regenerate. Everything
@@ -38,13 +38,14 @@ type ProposalState struct {
 	// recomputation, and losing them on import would let a retarget
 	// silently narrow the imported delivery. The checked stamp rides
 	// along so an import does not re-purchase answered questions.
-	TriggerPaths   []string `json:"trigger_paths,omitempty"`
-	TriggerChecked int64    `json:"trigger_checked_at,omitempty"`
-	Note           string   `json:"note"`
-	Members        []int64  `json:"members,omitempty"`
-	Agent          string   `json:"agent,omitempty"`
-	Status         string   `json:"status"`
-	CreatedAt      int64    `json:"created_at"`
+	TriggerPaths         []string `json:"trigger_paths,omitempty"`
+	TriggerChecked       int64    `json:"trigger_checked_at,omitempty"`
+	TriggerPromptVersion int      `json:"trigger_prompt_version,omitempty"`
+	Note                 string   `json:"note"`
+	Members              []int64  `json:"members,omitempty"`
+	Agent                string   `json:"agent,omitempty"`
+	Status               string   `json:"status"`
+	CreatedAt            int64    `json:"created_at"`
 }
 
 // DistilledMark is one row of distillation memory: evidence sets already
@@ -96,8 +97,8 @@ func (s *Store) ExportState() (*State, error) {
 		out.Proposals = append(out.Proposals, ProposalState{
 			Signature: p.Signature, Rule: p.Rule, Region: p.Region,
 			Regions: p.Regions, TriggerPaths: p.TriggerPaths,
-			TriggerChecked: p.TriggerChecked,
-			Note:           p.Note, Members: p.Members,
+			TriggerChecked: p.TriggerChecked, TriggerPromptVersion: p.TriggerPromptVersion,
+			Note: p.Note, Members: p.Members,
 			Agent: p.Agent, Status: p.Status, CreatedAt: p.CreatedAt,
 		})
 	}
@@ -150,6 +151,11 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 			return stats, fmt.Errorf("store: invalid proposal in import: signature=%q rule=%q status=%q",
 				p.Signature, p.Rule, p.Status)
 		}
+
+		if len(p.TriggerPaths) > model.MaxTriggerPaths {
+			return stats, fmt.Errorf("store: invalid proposal in import: %d trigger paths exceeds limit %d",
+				len(p.TriggerPaths), model.MaxTriggerPaths)
+		}
 	}
 
 	for _, m := range st.Distilled {
@@ -165,6 +171,13 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 	defer func() { _ = tx.Rollback() }() // no-op after Commit
 
 	for _, p := range st.Proposals {
+		// State v1 predates explicit question provenance. Preserve its
+		// positive answers, while keeping negative ones eligible for the
+		// corrected question through the legacy version.
+		if p.TriggerChecked > 0 && p.TriggerPromptVersion == 0 {
+			p.TriggerPromptVersion = 1
+		}
+
 		var local string
 
 		err := tx.QueryRow(`SELECT status FROM proposal WHERE signature = ? AND rule = ?`,
@@ -197,9 +210,10 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 
 				if _, err := tx.Exec(
 					`UPDATE proposal SET status = ?, region = ?, regions = ?,
-					   trigger_paths = ?, trigger_checked_at = ?
+					   trigger_paths = ?, trigger_checked_at = ?, trigger_prompt_version = ?
 					 WHERE signature = ? AND rule = ?`,
-					p.Status, p.Region, regions, triggers, p.TriggerChecked, p.Signature, p.Rule,
+					p.Status, p.Region, regions, triggers, p.TriggerChecked,
+					p.TriggerPromptVersion, p.Signature, p.Rule,
 				); err != nil {
 					return stats, err
 				}
@@ -224,9 +238,12 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 				}
 
 				res, err := tx.Exec(
-					`UPDATE proposal SET trigger_paths = ?, trigger_checked_at = ?
-					 WHERE signature = ? AND rule = ? AND trigger_checked_at = 0`,
-					triggers, p.TriggerChecked, p.Signature, p.Rule,
+					`UPDATE proposal SET trigger_paths = ?, trigger_checked_at = ?,
+					   trigger_prompt_version = ?
+					 WHERE signature = ? AND rule = ? AND trigger_paths = ''
+					   AND trigger_prompt_version < ?`,
+					triggers, p.TriggerChecked, p.TriggerPromptVersion,
+					p.Signature, p.Rule, p.TriggerPromptVersion,
 				)
 				if err != nil {
 					return stats, err
@@ -244,8 +261,8 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 			row := model.Proposal{
 				Signature: p.Signature, Rule: p.Rule, Region: p.Region,
 				Regions: p.Regions, TriggerPaths: p.TriggerPaths,
-				TriggerChecked: p.TriggerChecked,
-				Note:           p.Note, Members: p.Members,
+				TriggerChecked: p.TriggerChecked, TriggerPromptVersion: p.TriggerPromptVersion,
+				Note: p.Note, Members: p.Members,
 				Agent: p.Agent, Status: p.Status, CreatedAt: p.CreatedAt,
 			}
 

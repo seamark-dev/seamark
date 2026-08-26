@@ -214,6 +214,11 @@ const (
 	ProposalSuperseded = "superseded"
 )
 
+// MaxTriggerPaths is the durable upper bound on one proposal's trigger
+// answer and precise delivery union. Importers enforce the same contract as
+// live distillation.
+const MaxTriggerPaths = 3
+
 // Proposal is one distilled pattern awaiting a human decision: a
 // pin-shaped lesson synthesized by the configured agent from a group of
 // findings (the members it cited). Proposals follow the plan/apply
@@ -223,30 +228,34 @@ type Proposal struct {
 	ID        int64
 	Signature string // the evidence group that produced it
 	Rule      string // short kebab-case pin label
-	// Region is the first (deepest-coverage) region of Regions, kept as
+	// Region is the first current delivery region of Regions, kept as
 	// a single value for display and for readers that predate region
 	// sets ("" = repo-wide).
 	Region string
-	// Regions is the evidence-coverage region set (at most 3 directories
-	// covering ≥80% of the cited events; see distill.coverageRegions).
-	// Empty means "derive from Region" — pre-set rows and repo-wide
-	// proposals both land there.
+	// Regions is the current bounded delivery set. It starts as evidence
+	// coverage and may become a set of verified trigger files or
+	// directories. Empty means "derive from Region" — pre-set rows and
+	// repo-wide proposals both land there.
 	Regions []string
 	// TriggerPaths are validated repo paths where the mistake is MADE,
 	// named by the distiller and verified by the harness.
-	// Region recomputation reads them, so widened regions survive a
-	// retarget. Nil for rows distilled before extraction existed.
+	// Region recomputation reads them, so precise trigger scopes survive
+	// a retarget. Nil for rows distilled before extraction existed.
 	TriggerPaths []string
 	// TriggerChecked is when the trigger question was last answered
 	// for this row (unix seconds; 0 = never). "Examined, none found"
 	// must stay distinct from "never examined", or every extraction
 	// run re-pays for the same negative answers.
 	TriggerChecked int64
-	Note           string  // the guidance, pin-ready
-	Members        []int64 // finding ids the agent cited — verified to exist in the group
-	Agent          string  // provenance: adapter name + prompt version
-	Status         string  // proposed | applied | dismissed
-	CreatedAt      int64
+	// TriggerPromptVersion identifies the extraction question that produced
+	// the answer. A newer semantic question may re-examine an old negative
+	// answer once without disturbing already validated positive triggers.
+	TriggerPromptVersion int
+	Note                 string  // the guidance, pin-ready
+	Members              []int64 // finding ids the agent cited — verified to exist in the group
+	Agent                string  // provenance: adapter name + prompt version
+	Status               string  // proposed | applied | dismissed
+	CreatedAt            int64
 }
 
 // RegionSet returns the effective region set: Regions when present,

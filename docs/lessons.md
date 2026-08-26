@@ -283,8 +283,8 @@ still counts it as known, where a dismissal would suppress it.
 
 ### Where a pin points: region sets
 
-A proposal's region is computed from its cited evidence, never taken
-from the model's reply — and it is a **set** (`region: api` plus
+A proposal first gets fallback coverage computed from its cited evidence,
+never from the model's path arithmetic — and it is a **set** (`region: api` plus
 `regions: [api, db]`, at most three directories, depth at most three),
 chosen to cover at least 80% of the cited *events*. Events vote, not
 findings: six comments on one pull request are one voice. Test and doc
@@ -294,7 +294,9 @@ test files keeps its test region), root-level files never drag a theme
 repo-wide, and when the voting evidence is genuinely scattered the
 honest answer stays `*`. Measured on the two development corpora, this
 cut repo-wide pins from 35 of 65 to 3 — every one of which used to tax
-the injection budget of every edit in the repository.
+the injection budget of every edit in the repository. A verified trigger can
+then replace that broad fallback with the more precise delivery set described
+next.
 
 ### Where the mistake is made: trigger paths
 
@@ -302,30 +304,33 @@ Evidence lives where reviewers commented — the *repair* site. Some
 mistakes are made somewhere else: a "regenerate the client" lesson
 lands on the generated TypeScript file, while the author who forgets
 is editing the backend model, where a pin scoped to the generated file
-can never fire. Distillation therefore also asks the model for
-**trigger paths** — the files or directories an author edits when
-*making* the mistake, when that place differs from the evidence — and
-verifies every answer in three rungs: it must parse as a repo-relative
-path, it must exist in the working tree, and co-change history must
-confirm it against the cited evidence (the trigger, or a file under
-it, among the evidence file's strongest partners). Only a confirmed
-trigger widens the pin's region set; the same cap of three applies,
-and an unverified name never moves delivery. The distill plan says
-what each trigger did — confirmed and widened, named but unconfirmed,
-or confirmed but blocked by a full region set — and the ledger and
-report repeat the blocked case, because it produces no drift line and
-would otherwise be invisible.
+can never fire. Distillation therefore requires **trigger paths** — up
+to three files or directories an author edits when *making* the
+mistake. A trigger may be one of the cited evidence paths when another
+citation is the companion repair site. Every named path must parse as
+repo-relative and exist in the working tree. Seamark then accepts it when it
+is an exact cited production path or that path's immediate parent, or when
+co-change history confirms it against the cited evidence. Accepted triggers
+become the precise delivery set—even an individual file. Evidence
+coverage remains the fallback when no trigger verifies, and an
+unverified name never moves delivery. The distill plan says whether
+each trigger was directly cited, confirmed by co-change, unconfirmed,
+or no longer deliverable. The ledger and report retain the durable scope,
+drift, and blocked-trigger state; the creation-time plan additionally shows
+positive direct and co-change confirmations.
 
 Proposals distilled before trigger extraction existed are upgraded
 with `lessons --extract-triggers`: small batched agent calls ask the
 one question per proposal (rule, note, evidence paths, one capped
 excerpt — a preflight discloses the cost, `--dry-run` stops there).
-Every answer is stamped, "no trigger" included, so re-running is free.
-Pending proposals adopt their widened regions in place; applied pins
+Every answer records the semantic question version, "no trigger" included, so
+re-running is free. A changed question re-asks legacy negative answers once
+without disturbing existing positive trigger paths.
+Pending proposals adopt their verified trigger scopes in place; applied pins
 only store the triggers and surface a `regions now:` drift line —
 delivery of an installed pin never changes without an explicit
 `--retarget`. Hand-pruned pins are skipped: there is no delivery to
-widen. When the note itself names a real outside path and co-change
+retarget. When the note itself names a real outside path and co-change
 agrees, the ledger additionally flags the pin — `delivery may miss the
 trigger: …` — with a tail block naming every flagged id.
 
@@ -371,9 +376,8 @@ the recomputed regions (lessons.yaml and the ledger together)
 ```
 
 `--retarget` is the upgrade path for pins distilled before region sets
-or trigger extraction existed. "Regions now" is one shared recompute —
-evidence coverage widened by confirmed trigger paths — so a retarget
-applies a widening and can never strip one back to bare coverage. On
+or trigger extraction existed. "Regions now" is one shared recompute:
+verified trigger scopes when available, evidence coverage otherwise. On
 any ordinary failure the two halves move **together or not at all**: the ledger updates in one transaction, and if either the
 file write or that transaction fails, lessons.yaml is restored to its
 original bytes. The one exception is a hard crash in the narrow window
@@ -390,9 +394,10 @@ pruning is not dismissal.
 ### Proposal-only by construction
 
 The model must cite the finding ids behind every pattern (uncited
-patterns are dropped — it cannot invent evidence), regions are computed
-from the cited files and widened only by co-change-confirmed trigger
-paths, and nothing reaches `.seamark/lessons.yaml` except
+patterns are dropped — it cannot invent evidence), every pattern must
+give an explicit trigger-path answer, and named paths affect delivery
+only after tree and evidence/history validation. Nothing reaches
+`.seamark/lessons.yaml` except
 through an explicit `--apply` of explicit ids. Even then, seamark edits
 the file itself only if `config.yaml` opts in (`distill: {write: true}`)
 — otherwise apply prints the pin block for you to paste. Applied entries

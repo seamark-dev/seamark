@@ -739,7 +739,12 @@ func trimPatch(patch string, cap_ int) string {
 	var b strings.Builder
 
 	for line := range strings.SplitSeq(patch, "\n") {
-		if strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "diff --git") ||
+		if strings.HasPrefix(line, "diff --git ") {
+			parts := strings.SplitN(line, " ", 4)
+			if len(parts) == 4 {
+				line = "file: " + strings.TrimPrefix(parts[3], "b/")
+			}
+		} else if strings.HasPrefix(line, "index ") ||
 			strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
 			continue
 		}

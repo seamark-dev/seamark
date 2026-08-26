@@ -47,11 +47,13 @@ exact agent command line, how many groups and findings would be sent, each
 finding's source/PR/path identity, and the approximate token cost. The payload
 per finding is:
 
-- the stored finding body, capped per finding: a review comment, or a
-  fix-commit message with changed-function names and a bounded patch excerpt;
+- the stored finding body, bounded within a fixed per-group evidence budget:
+  a review comment, or a fix-commit message with changed-function names and
+  representative production hunks sampled ahead of test/documentation noise;
 - the finding's provenance: its id, source kind (review / fix / revert),
   PR number when known, and the reviewer's name;
-- the repo-relative file path;
+- the primary repo-relative path and the finding's relevant non-document path
+  footprint (fix commits can span parallel implementations);
 - the rule labels of patterns already captured for the area — pinned
   ones and previously proposed ones alike, dismissed included (so the
   model does not re-derive or relitigate them).
@@ -80,8 +82,10 @@ agent CLI: per already-distilled proposal, its rule label, its note
 (model-written text you reviewed at apply time), the repo-relative
 paths of its cited evidence, and ONE evidence excerpt capped at 400
 characters. Same preflight, same `--dry-run`, same `agent:` line from
-`config.yaml`. The reply is never trusted: named paths must exist in
-the working tree, and only co-change-confirmed ones widen delivery.
+`config.yaml`. The reply is never trusted: named paths must exist in the
+working tree and must be an exact cited production path, its immediate
+parent, or confirmed by co-change history. Verified paths become precise
+delivery scopes; evidence coverage is the fallback when none verify.
 
 ## Command declarations
 

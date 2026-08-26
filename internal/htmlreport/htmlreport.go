@@ -118,7 +118,7 @@ type Card struct {
 	// and co-change history point outside the pin's regions, so
 	// delivery may miss the trigger site. Same Line() the ledger prints.
 	Scope string
-	// Blocked reports confirmed triggers that cannot widen delivery —
+	// Blocked reports confirmed triggers that cannot become delivery scopes —
 	// no drift and no advisory would otherwise mention them.
 	Blocked  string
 	Evidence []Evidence
@@ -258,7 +258,7 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 	}
 
 	// One recompute for every "regions now" reader (see
-	// distill.RecomputeRegions): the cards must show the same widened
+	// distill.RecomputeRegions): the cards must show the same current
 	// set the ledger and --retarget use. Blocked triggers ride along —
 	// a confirmed miss with no drift line must not vanish from the
 	// page.

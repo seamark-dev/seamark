@@ -437,7 +437,7 @@ func salientTokens(f *model.Finding) map[string]bool {
 // cheap lexical candidate search ignores generic provenance labels and
 // trailers that otherwise connect unrelated fixes.
 func groupingText(f *model.Finding) string {
-	if !strings.HasPrefix(f.Source, "fix:") && f.Source != model.SourceRevert {
+	if !isFixFinding(f.Source) {
 		return f.Body
 	}
 
@@ -492,6 +492,10 @@ func groupingText(f *model.Finding) string {
 	primary.WriteString(detail.String())
 
 	return primary.String()
+}
+
+func isFixFinding(source string) bool {
+	return strings.HasPrefix(source, "fix:") || source == model.SourceRevert
 }
 
 func semanticTokenCount(text string) int {

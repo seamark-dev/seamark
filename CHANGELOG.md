@@ -8,6 +8,25 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **Distillation preserves cross-file owner knowledge and targets its trigger.**
+  Prompt v5 discloses every relevant non-document path in a fix finding,
+  shares a fixed evidence budget adaptively across each group, and samples
+  distinct production hunks before repetitive test noise. It explicitly asks
+  for parallel-implementation, layer, generated-artifact, and
+  producer/consumer relationships, and every proposed pattern must answer the
+  trigger-path question. A trigger that is an exact cited production path or
+  its immediate parent is now valid without an unnecessary co-change edge;
+  otherwise history must still confirm it. Test-only citations and broad
+  ancestors cannot establish direct delivery. Verified triggers become exact,
+  bounded delivery scopes, including individual files, while evidence
+  coverage remains the safe fallback. This intentionally supersedes v0.4.0's widen-only behavior:
+  `--retarget` may now narrow an evidence-scoped pin to its verified trigger.
+  The corrected extraction question re-asks legacy negative answers once;
+  existing positive trigger answers are preserved. State bundles v2 carry
+  that question version while imports still accept v1. The preserved first
+  OpenTelemetry case-study proposal motivated these changes: it found the
+  generic stale-field rule but lost the explicit/exponential relationship and
+  returned no trigger.
 - **Historical distillation can now use a bounded local-fix corpus.**
   `seamark index --fixes-only` refreshes fix commits reachable from the pinned
   `HEAD` without querying GitHub or deleting an existing review corpus.

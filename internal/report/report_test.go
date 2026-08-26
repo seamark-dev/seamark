@@ -631,7 +631,7 @@ func TestProposalLedgerRendersScopeAdvisory(t *testing.T) {
 	// The tail block names the flagged set once, after the lists, so a
 	// long ledger cannot bury the advisory.
 	assert.Contains(t, out, "trigger scope: p71")
-	assert.Contains(t, out, "widen regions in .seamark/lessons.yaml")
+	assert.Contains(t, out, "applied pins change through `--retarget`")
 	assert.Less(t, strings.Index(out, "applied — these are pins"),
 		strings.Index(out, "trigger scope:"), "the tail follows the lists")
 
@@ -677,7 +677,7 @@ func TestDistillPlanShowsScopeAdvisories(t *testing.T) {
 		{ID: 72, Rule: "quiet-one", Region: "api", Note: "n", Members: []int64{3}},
 	}
 
-	confirmed := "trigger api/schemas.py — confirmed by co-change (38 shared commits); regions include api"
+	confirmed := "trigger api/schemas.py — directly cited by the evidence; delivery targets api/schemas.py"
 	unconfirmed := "trigger cmd/gen.go — named by the distiller, not confirmed by history; consider regions after apply"
 
 	var sb strings.Builder
@@ -686,11 +686,12 @@ func TestDistillPlanShowsScopeAdvisories(t *testing.T) {
 		map[int64][]string{71: {confirmed, unconfirmed}}, []string{"p71"})
 	out := sb.String()
 
-	assert.Contains(t, out, confirmed, "a widened proposal announces what happened")
+	assert.Contains(t, out, confirmed, "a precise proposal announces what happened")
 	assert.Contains(t, out, unconfirmed)
 	assert.Contains(t, out, "trigger scope: p71")
-	assert.Equal(t, 1, strings.Count(out, "confirmed by co-change"),
+	assert.Equal(t, 1, strings.Count(out, "directly cited by the evidence"),
 		"the unflagged proposal renders no annotation lines")
+	assert.Contains(t, out, "review the trigger and proposed delivery regions")
 
 	// No annotations — the plan prints exactly as before.
 	sb.Reset()

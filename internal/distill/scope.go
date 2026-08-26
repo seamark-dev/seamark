@@ -163,17 +163,33 @@ func AuditScope(st *store.Store, root, note string, regions []string, cited []mo
 		return ScopeAdvisory{}, false, nil
 	}
 
-	best.Suggested = widenRegions(regions, triggerRegion(root, best.Partner))
+	best.Suggested = widenRegions(regions, inferredTriggerRegion(root, best.Partner))
 
 	return best, true, nil
 }
 
-// triggerRegion is the delivery region for a trigger path: the path
-// itself when the working tree says it is a directory, else its
-// parent directory — capped at maxRegionDepth. Empty for root-level
-// files, for an empty root, and for paths no longer in the tree: a
-// vanished path is never a delivery target.
+// triggerRegion is the exact delivery region for a trigger path. File
+// regions are intentional: the trigger answers where the mistake is
+// introduced, so broadening a named file back to a capped directory
+// would discard the precision the distiller supplied. Empty for an
+// empty root or a path no longer in the tree.
 func triggerRegion(root, p string) string {
+	if root == "" {
+		return ""
+	}
+
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(p))); err != nil {
+		return ""
+	}
+
+	return p
+}
+
+// inferredTriggerRegion deliberately stays broader than an explicit
+// trigger. AuditScope inferred the path from prose plus co-change data;
+// reducing that heuristic to a capped directory avoids pretending it
+// has file-level certainty.
+func inferredTriggerRegion(root, p string) string {
 	if root == "" {
 		return ""
 	}

@@ -11,17 +11,16 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// Trigger paths: where a mistake is MADE, distinct from
-// where its evidence lives. The distiller names them; the harness
-// verifies them in three rungs — syntax, existence in the working
-// tree, co-change confirmation. Only a confirmed trigger may widen
-// delivery regions: an unverified name must not tax every edit under
-// a wrong directory.
+// Trigger paths: where a mistake is MADE, distinct from where its
+// evidence may also be repaired. The distiller names them; the harness
+// verifies syntax and existence, then requires either a direct citation
+// or co-change confirmation. Verified triggers become the delivery
+// regions; evidence coverage remains the conservative fallback.
 
-// maxTriggerPaths bounds how many trigger paths one proposal stores.
-// Past three the pin has no specific trigger — it is repo-wide in all
-// but name, the same reasoning as maxRegions.
-const maxTriggerPaths = 3
+// maxTriggerPaths bounds both the model reply and the eventual delivery
+// union. It matches maxRegions, so every valid answer can remain
+// expressible without silently discarding a trigger.
+const maxTriggerPaths = model.MaxTriggerPaths
 
 // cleanTriggerPaths is the syntax rung: trim wrapping, drop absolute
 // and parent-escaping paths, normalize, dedupe, cap. Pure — existence
@@ -82,49 +81,60 @@ func validateTriggerPaths(root string, paths []string) []string {
 // history, for the plan and ledger surfaces.
 type TriggerFact struct {
 	Path     string // the stored trigger path
-	Region   string // its delivery region; "" for root-level or vanished paths
+	Region   string // its exact delivery region; "" for vanished paths
 	Together int    // strongest confirming co-change edge; 0 = unconfirmed
-	Widened  bool   // true when it changed the recomputed region set
-	// Covered is true when the trigger region already sits inside the
-	// set — confirmed and delivered, nothing to do. A confirmed fact
-	// with neither Covered nor Widened was BLOCKED (region cap, or no
-	// expressible region); surfaces must say so, not stay silent.
-	Covered bool
+	Direct   bool   // true when the trigger is itself cited evidence
+	Selected bool   // true when the recomputed delivery set reaches it
 }
 
 // BlockedLine renders the confirmed-but-undeliverable sentence every
 // surface prints — the plan, the ledger, and the HTML report must not
-// phrase the same fact differently. Empty for facts that widened, are
-// covered, or are unconfirmed.
+// phrase the same fact differently. Empty for selected or unconfirmed
+// facts.
 func (f TriggerFact) BlockedLine() string {
-	if f.Together == 0 || f.Widened || f.Covered {
+	if f.Selected || (!f.Direct && f.Together == 0) {
 		return ""
 	}
 
-	return fmt.Sprintf("trigger %s — confirmed by co-change (%d shared commits) but not "+
-		"deliverable: the region set is full or the path has no region; "+
-		"widen regions in .seamark/lessons.yaml by hand", f.Path, f.Together)
+	confirmation := "directly cited by the evidence"
+	if !f.Direct {
+		confirmation = fmt.Sprintf("confirmed by co-change (%d shared commits)", f.Together)
+	}
+
+	return fmt.Sprintf("trigger %s — %s but not "+
+		"deliverable: the region set is full or the path is absent from the working tree; "+
+		"review the trigger or edit regions in .seamark/lessons.yaml by hand", f.Path, confirmation)
 }
 
 // RecomputeRegions returns the regions today's inference assigns a
-// proposal: evidence coverage, widened by each stored trigger path
-// that co-change history confirms. Every reader of "regions now" —
-// distillation, the ledger, --retarget — must use this one function,
-// or a retarget would silently narrow a widened delivery. Repo-wide
-// coverage (nil) stays repo-wide: it already reaches every trigger,
-// and widening it would NARROW delivery. root locates the working
-// tree, which decides whether a trigger is a directory or a file.
+// proposal. Verified trigger paths are the most precise delivery
+// surface: a trigger is accepted when it is directly cited evidence or
+// when history confirms it co-changes with that evidence. If none are
+// accepted, evidence coverage is the conservative fallback. Every
+// reader of "regions now" — distillation, the ledger, --retarget — must
+// use this one function. root locates the working tree and rejects
+// vanished trigger paths.
 func RecomputeRegions(st *store.Store, root string, p model.Proposal, living []model.Finding,
 ) ([]string, []TriggerFact, error) {
-	regions := CoverageRegions(living)
+	coverage := CoverageRegions(living)
 	facts := make([]TriggerFact, 0, len(p.TriggerPaths))
+	selected := make([]string, 0, min(len(p.TriggerPaths), maxRegions))
 
-	// One partner fetch serves every trigger path: up to three of them
-	// confirm against the same evidence files. A proposal without
-	// triggers costs no queries.
+	// Directly cited triggers need no historical inference. Fetch
+	// partners only when at least one surviving trigger needs it; one
+	// fetch then serves all such paths.
 	var partners map[string][]store.CoChangePartner
+	needsHistory := false
 
-	if len(p.TriggerPaths) > 0 {
+	for _, tp := range p.TriggerPaths {
+		if !triggerDirectlyCited(tp, living) {
+			needsHistory = true
+
+			break
+		}
+	}
+
+	if needsHistory {
 		var err error
 
 		if partners, err = evidencePartners(st, living); err != nil {
@@ -133,26 +143,86 @@ func RecomputeRegions(st *store.Store, root string, p model.Proposal, living []m
 	}
 
 	for _, tp := range p.TriggerPaths {
-		f := TriggerFact{Path: tp, Region: triggerRegion(root, tp)}
+		f := TriggerFact{
+			Path: tp, Region: triggerRegion(root, tp),
+			Direct: triggerDirectlyCited(tp, living),
+		}
 
-		f.Together = confirmTrigger(partners, tp)
+		if !f.Direct {
+			f.Together = confirmTrigger(partners, tp)
+		}
 
-		if f.Together > 0 && f.Region != "" {
-			switch {
-			case len(regions) == 0 || isInsideRegions(f.Region, regions):
-				f.Covered = true
-			default:
-				if widened := widenRegions(regions, f.Region); widened != nil {
-					regions = widened
-					f.Widened = true
-				}
-			}
+		if (f.Direct || f.Together > 0) && f.Region != "" {
+			var selectedOK bool
+
+			selected, selectedOK = addDeliveryRegion(selected, f.Region)
+			f.Selected = selectedOK
 		}
 
 		facts = append(facts, f)
 	}
 
-	return regions, facts, nil
+	if len(selected) > 0 {
+		return selected, facts, nil
+	}
+
+	return coverage, facts, nil
+}
+
+// triggerDirectlyCited recognizes a trigger that points at a cited
+// production path or its immediate parent directory. Arbitrary ancestors are
+// not direct evidence: allowing one nested citation to bless a top-level
+// directory would give an uncorroborated model answer too much delivery.
+// Test and documentation paths cannot establish direct delivery.
+func triggerDirectlyCited(trigger string, cited []model.Finding) bool {
+	if model.IsTestPath(trigger) || model.IsDocPath(trigger) {
+		return false
+	}
+
+	for _, f := range cited {
+		for _, evidencePath := range relevantFindingPaths(f) {
+			if model.IsTestPath(evidencePath) || model.IsDocPath(evidencePath) {
+				continue
+			}
+
+			if evidencePath == trigger || path.Dir(evidencePath) == trigger {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// addDeliveryRegion adds one exact trigger scope to a bounded region
+// union. A parent replaces children; a child already reached by a
+// parent is selected without spending another slot.
+func addDeliveryRegion(regions []string, candidate string) ([]string, bool) {
+	if candidate == "" {
+		return regions, false
+	}
+
+	for _, region := range regions {
+		if candidate == region || strings.HasPrefix(candidate, region+"/") {
+			return regions, true
+		}
+	}
+
+	kept := make([]string, 0, len(regions)+1)
+
+	for _, region := range regions {
+		if strings.HasPrefix(region, candidate+"/") {
+			continue
+		}
+
+		kept = append(kept, region)
+	}
+
+	if len(kept) >= maxRegions {
+		return regions, false
+	}
+
+	return append(kept, candidate), true
 }
 
 // evidencePartners fetches each unique evidence file's co-change
@@ -186,8 +256,9 @@ func evidencePartners(st *store.Store, cited []model.Finding) (map[string][]stor
 
 // confirmTrigger is the history rung: the strongest co-change edge
 // between the cited evidence and the trigger path — the together
-// count of the best partner that is the path itself or lives under
-// it. Zero means history cannot confirm the trigger. Test and doc
+// count of the best partner that is the path itself or whose immediate
+// parent is the named directory. Zero means history cannot confirm the
+// trigger. Test and doc
 // partners never confirm: they are not delivery targets. Pure over
 // the fetched partners; a max, so map order cannot change the answer.
 func confirmTrigger(partners map[string][]store.CoChangePartner, trigger string) int {
@@ -203,7 +274,7 @@ func confirmTrigger(partners map[string][]store.CoChangePartner, trigger string)
 				continue
 			}
 
-			if partner.File == trigger || strings.HasPrefix(partner.File, trigger+"/") {
+			if partner.File == trigger || path.Dir(partner.File) == trigger {
 				best = partner.Together
 			}
 		}

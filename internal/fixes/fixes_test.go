@@ -458,6 +458,18 @@ func commitDated(t *testing.T, root, msg, when string, files map[string]string) 
 	}
 }
 
+func TestTrimPatchPreservesCompactFileIdentity(t *testing.T) {
+	patch := "diff --git a/api/handler.go b/api/handler.go\n" +
+		"index 111..222 100644\n--- a/api/handler.go\n+++ b/api/handler.go\n" +
+		"@@ -1 +1 @@ func handle()\n-old\n+new\n"
+
+	got := trimPatch(patch, 1_000)
+	assert.Contains(t, got, "file: api/handler.go")
+	assert.NotContains(t, got, "diff --git")
+	assert.NotContains(t, got, "index 111")
+	assert.Contains(t, got, "@@ -1 +1 @@ func handle()")
+}
+
 func TestOutOfWindowChoreMemberStillExcludes(t *testing.T) {
 	// A branch can sit unmerged past the mining window: --since bounds
 	// the commit log, not the merge's rev-list walk. The chore commit

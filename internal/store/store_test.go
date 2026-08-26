@@ -677,13 +677,14 @@ func TestProposalTriggerPathsRoundTrip(t *testing.T) {
 	assert.Equal(t, int64(1700000000), got[1].TriggerChecked)
 
 	// The negative answer: no paths, but the question is settled.
-	require.NoError(t, s.UpdateProposalTriggers(got[0].ID, nil, 1700000500))
+	require.NoError(t, s.UpdateProposalTriggers(got[0].ID, nil, 1700000500, 2))
 
 	got, err = s.Proposals(model.ProposalProposed)
 	require.NoError(t, err)
 	assert.Nil(t, got[0].TriggerPaths)
 	assert.Equal(t, int64(1700000500), got[0].TriggerChecked,
 		"examined-none is distinct from never-examined")
+	assert.Equal(t, 2, got[0].TriggerPromptVersion)
 }
 
 func TestMigrationAddsProposalTriggerPaths(t *testing.T) {

@@ -18,7 +18,8 @@ func seedDecisions(t *testing.T, s *Store) {
 		Signature: "sig-1", Rule: "no-naked-returns", Region: "internal",
 		Note: "avoid naked returns", Members: []int64{11, 12},
 		TriggerPaths: []string{"cmd/gen.go"}, TriggerChecked: 1700000100,
-		Agent: "claude/v1", Status: model.ProposalDismissed, CreatedAt: 1700000000,
+		TriggerPromptVersion: 2,
+		Agent:                "claude/v1", Status: model.ProposalDismissed, CreatedAt: 1700000000,
 	}))
 	require.NoError(t, s.MarkDistilled("sig-1", "internal", 1700000000))
 	require.NoError(t, s.ReplaceLessons(
@@ -83,6 +84,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 		"trigger paths survive the wire")
 	assert.Equal(t, int64(1700000100), got[0].TriggerChecked,
 		"the answered-question stamp survives the wire — an import must not re-purchase it")
+	assert.Equal(t, 2, got[0].TriggerPromptVersion)
 
 	marks, err := dst.DistilledSignatures()
 	require.NoError(t, err)
@@ -263,6 +265,12 @@ func TestImportRejectsBadBundles(t *testing.T) {
 		{Signature: ""},
 	}})
 	require.Error(t, err, "an empty distillation-mark signature must be refused")
+
+	_, err = s.ImportState(&State{Version: StateVersion, Proposals: []ProposalState{{
+		Signature: "sig", Rule: "r", Status: model.ProposalApplied,
+		TriggerPaths: []string{"a", "b", "c", "d"},
+	}}})
+	require.Error(t, err, "import cannot bypass the live trigger-path cap")
 
 	// A failed import leaves nothing behind (single transaction).
 	proposals, err := s.Proposals(model.ProposalApplied)

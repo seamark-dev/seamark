@@ -261,11 +261,12 @@ remarks that became the repo's contract-synchronization rule:
   # distilled by claude/v2 from 2 findings (seamark lessons --distill, p60)
 ```
 
-The region set is computed from the cited evidence, never guessed: a
-theme living in `api` AND `core` says exactly that instead of claiming
-the whole repo, so the pin only spends injection budget where its
-evidence points. (Measured on the two development corpora, evidence-
-coverage regions cut repo-wide `*` pins from 35 of 65 to 3.)
+The fallback region set is computed from the cited evidence, never
+guessed: a theme living in `api` AND `core` says exactly that instead of
+claiming the whole repo. A verified trigger can narrow that fallback to
+the exact edit surface where the mistake is introduced. (Measured on
+the two development corpora, evidence-coverage regions cut repo-wide
+`*` pins from 35 of 65 to 3.)
 
 More pins the two repos distilled and applied:
 
@@ -311,24 +312,27 @@ The whole lifecycle is `seamark lessons`, one flag per decision:
 | `--apply p3,p7`   | pin chosen proposals (ranges work: `p1..p9`); writes `lessons.yaml` only with `distill.write`, else prints the block to paste                                 |
 | `--dismiss p2`    | record a no — the same evidence is never re-proposed                                                                                                          |
 | `--prune p16,p45` | retire pins that restate another (the ledger names the clusters); the theme stays pinned by its survivor                                                      |
-| `--retarget p3`   | update an applied pin to the regions its living evidence supports now — coverage plus confirmed trigger paths; ordinary failures roll `lessons.yaml` back, and if a hard crash leaves the file ahead of the ledger, the next run detects and repairs exactly that |
+| `--retarget p3`   | update an applied pin to the regions current inference supports — verified trigger scopes when available, evidence coverage otherwise; ordinary failures roll `lessons.yaml` back, and if a hard crash leaves the file ahead of the ledger, the next run detects and repairs exactly that |
 | `--extract-triggers` | ask your agent CLI where each already-pinned mistake is MADE (see below); every answer is verified, answered proposals are never re-paid, and `--dry-run` discloses first |
 | `--stats`         | the firing log: which lessons actually reach agents (split by surface: hook / change_set / check), which never fire — the decay signal — and per-pin outcomes: did the mistake recur after the pin started firing (working / not landing / untested) |
 | `--hook`          | the PreToolUse entry point `seamark init` wires; offline, silent when a file has no lessons                                                                   |
 
-Pins scope to where the evidence lives — where reviewers commented.
-Some mistakes are MADE somewhere else: a "regenerate the client"
-lesson lands on the generated TypeScript file, while the author who
-forgets is editing the backend model. Distillation therefore asks the
-agent for **trigger paths** and verifies each answer in three steps —
-it must parse, it must exist in the working tree, and co-change
-history must confirm it against the cited evidence — before the pin's
-regions widen to deliver at the trigger. Unverified names never move
-delivery. The `--proposals` ledger, the HTML report, and the distill
-plan flag pins whose note and co-change history agree that delivery
-misses the trigger, and `--retarget` applies the widened set.
-`--extract-triggers` asks the same one question for proposals
-distilled before extraction existed.
+Evidence tells Seamark where a problem was observed or repaired. A
+**trigger path** tells it where an author can introduce the mistake.
+Those can differ: a "regenerate the client" finding may live on the
+generated TypeScript file, while the omission begins in the backend
+model. Distillation must answer the trigger question for every proposed
+pattern. Each named path must parse and exist in the working tree, then
+it is accepted when it is an exact cited production path, the immediate
+parent of one, or co-change history confirms it against the cited evidence.
+Verified triggers become the precise delivery scopes—even a single file—while
+evidence coverage remains the fallback if none verify. Unverified names
+never move delivery. The `--proposals` ledger and HTML report show the
+current scope, and `--retarget` applies it explicitly to an installed
+pin. `--extract-triggers` asks the same question for proposals distilled
+before trigger extraction existed. When that semantic question changes,
+legacy negative answers are re-asked once; existing positive trigger paths
+are left alone.
 
 A clean matched benchmark of this exact failure mode measured a +100
 percentage-point difference-in-differences effect across five pairs per scope:
