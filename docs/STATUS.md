@@ -54,7 +54,7 @@ Command gate, diff check, audit, hooks.
 | Warn mode (report, never block) | ready — the recommended deployment |
 | Secret-safe audit log (hashed by default, 0600, rotation, flock) | working |
 | Enforce mode (exit 2, fail closed) | works, **beta**: an agent that can edit `policy.yaml` or `.claude/settings.json` can weaken it ([threat-model.md](threat-model.md)) |
-| Real approvals (`require_approval` with out-of-band human tokens) | **not built** — today a require_approval verdict simply blocks under enforce |
+| Real approvals (`require_approval` with out-of-band approval tokens) | **not built** — today a require_approval verdict simply blocks under enforce |
 | Policy integrity (pinned policy outside agent reach) | **not built** |
 
 Guard is a defense-in-depth policy layer, not a sandbox. Run untrusted

@@ -1,0 +1,1 @@
+ok  	go.opentelemetry.io/otel/sdk/metric/internal/aggregate	0.401s

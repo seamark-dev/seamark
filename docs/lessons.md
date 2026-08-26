@@ -188,8 +188,8 @@ agent CLI (or without the appetite for tokens) simply skip it.
 The
 [OpenTelemetry histogram-reset case study](case-studies/opentelemetry-histogram-reset.md)
 walks through this boundary on a pinned public history: two independent fix
-events become a proposal, a human decides what to pin, and a separate pre-fix
-worktree demonstrates delivery and auditability. The reusable
+events become a proposal, a maintainer decides what to pin, and a separate
+pre-fix worktree demonstrates delivery and auditability. The reusable
 [case-study protocol](case-studies/protocol.md) keeps its results separate from
 the controlled benchmark.
 

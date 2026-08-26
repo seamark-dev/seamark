@@ -1,0 +1,5 @@
+git version 2.50.1 (Apple Git-155)
+seamark v0.4.0-13-g5ffbd13
+2.1.220 (Claude Code)
+0a1d12fb662e80de7f6f17128efc3960c6dc121b 2026-06-10T09:57:18-04:00 fix: clear stale histogram fields on datapoint reuse (#8403)
+0eb89a5210e64df2f38611b95d1ae0afd6b88fd7 2026-06-10T09:37:37-04:00 Fix memory leak in exemplar reservoir by storing SpanContext instead of Context (#8389)

@@ -329,7 +329,7 @@ between the first prototype and here.
   evidence" from "not indexed".
 - **Distribution.** This release pipeline: per-platform native builds,
   end-to-end smoke tests on every artifact, SHA-256 checksums, draft
-  releases for human review.
+  releases for maintainer review.
 
 Upgrade notes: a pre-existing hook installed as `gate --enforce --hook`
 is preserved by re-running `seamark init` (mode is kept unless

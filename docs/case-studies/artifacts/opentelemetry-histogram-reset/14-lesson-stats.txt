@@ -1,0 +1,6 @@
+lesson firings — 1 hook reminders, 0 change_set, 0 check — across 1 files
+
+hook delivery — instrumented: 1 injected (0 repeated), 2 suppressed; context: 588 bytes
+
+most surfaced
+  ×1    delivered / ×3    matched  sdk/metric/internal/aggregate/histogram.go, sdk/metric/internal/aggregate/exponential_histogram.go last 2026-08-26  reused-datapoint-stale-fields — When a collect path reuses metricdata datapoint slots across cycles, explicitly zero every conditionally-set field (Sum, Min, Max) in the else branch; apply the same fix to both delta and cumulative in histogram.go and exponential_histogram.go.

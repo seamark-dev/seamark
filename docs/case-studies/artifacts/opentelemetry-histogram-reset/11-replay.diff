@@ -1,0 +1,161 @@
+diff --git a/sdk/metric/internal/aggregate/exponential_histogram.go b/sdk/metric/internal/aggregate/exponential_histogram.go
+index 767b1d6dc..414ccb2b4 100644
+--- a/sdk/metric/internal/aggregate/exponential_histogram.go
++++ b/sdk/metric/internal/aggregate/exponential_histogram.go
+@@ -412,12 +412,20 @@ func (e *expoHistogram[N]) delta(
+ 
+ 		if !e.noSum {
+ 			hDPts[i].Sum = val.sum.load()
++		} else {
++			// Slot may be reused; clear stale Sum from previous series.
++			var zero N
++			hDPts[i].Sum = zero
+ 		}
+ 		if !e.noMinMax {
+ 			if val.minMax.set.Load() {
+ 				hDPts[i].Min = metricdata.NewExtrema(val.minMax.minimum.Load())
+ 				hDPts[i].Max = metricdata.NewExtrema(val.minMax.maximum.Load())
+ 			}
++		} else {
++			// Slot may be reused; clear stale Min/Max from previous series.
++			hDPts[i].Min = metricdata.Extrema[N]{}
++			hDPts[i].Max = metricdata.Extrema[N]{}
+ 		}
+ 
+ 		collectExemplars(&hDPts[i].Exemplars, val.res.Collect)
+@@ -488,12 +496,20 @@ func (e *expoHistogram[N]) cumulative(
+ 
+ 		if !e.noSum {
+ 			hDPts[i].Sum = val.sum.load()
++		} else {
++			// Slot may be reused; clear stale Sum from previous series.
++			var zero N
++			hDPts[i].Sum = zero
+ 		}
+ 		if !e.noMinMax {
+ 			if val.minMax.set.Load() {
+ 				hDPts[i].Min = metricdata.NewExtrema(val.minMax.minimum.Load())
+ 				hDPts[i].Max = metricdata.NewExtrema(val.minMax.maximum.Load())
+ 			}
++		} else {
++			// Slot may be reused; clear stale Min/Max from previous series.
++			hDPts[i].Min = metricdata.Extrema[N]{}
++			hDPts[i].Max = metricdata.Extrema[N]{}
+ 		}
+ 
+ 		collectExemplars(&hDPts[i].Exemplars, val.res.Collect)
+diff --git a/sdk/metric/internal/aggregate/histogram.go b/sdk/metric/internal/aggregate/histogram.go
+index 701da7a76..9328257dc 100644
+--- a/sdk/metric/internal/aggregate/histogram.go
++++ b/sdk/metric/internal/aggregate/histogram.go
+@@ -210,6 +210,10 @@ func (s *deltaHistogram[N]) collect(
+ 
+ 		if !s.noSum {
+ 			hDPts[i].Sum = val.total.load()
++		} else {
++			// Slot may be reused; clear stale Sum from previous series.
++			var zero N
++			hDPts[i].Sum = zero
+ 		}
+ 
+ 		if !s.noMinMax {
+@@ -217,6 +221,10 @@ func (s *deltaHistogram[N]) collect(
+ 				hDPts[i].Min = metricdata.NewExtrema(val.minMax.minimum.Load())
+ 				hDPts[i].Max = metricdata.NewExtrema(val.minMax.maximum.Load())
+ 			}
++		} else {
++			// Slot may be reused; clear stale Min/Max from previous series.
++			hDPts[i].Min = metricdata.Extrema[N]{}
++			hDPts[i].Max = metricdata.Extrema[N]{}
+ 		}
+ 
+ 		collectExemplars(&hDPts[i].Exemplars, val.res.Collect)
+diff --git a/sdk/metric/internal/aggregate/histogram_test.go b/sdk/metric/internal/aggregate/histogram_test.go
+index e1429d697..cf9fbcebe 100644
+--- a/sdk/metric/internal/aggregate/histogram_test.go
++++ b/sdk/metric/internal/aggregate/histogram_test.go
+@@ -520,6 +520,84 @@ func TestDeltaHistogramReset(t *testing.T) {
+ 	metricdatatest.AssertAggregationsEqual(t, expect, data)
+ }
+ 
++func TestDeltaHistogramReuseDestinationWithNoSum(t *testing.T) {
++	orig := now
++	now = func() time.Time { return y2k }
++	t.Cleanup(func() { now = orig })
++
++	// First histogram: with sum recording enabled
++	h1 := newDeltaHistogram[int64](bounds, noMinMax, false, 0, dropExemplars[int64])
++	h1.measure(t.Context(), 2, alice, nil)
++
++	// Collect into destination
++	var dest metricdata.Aggregation = metricdata.Histogram[int64]{}
++	n := h1.collect(&dest)
++	require.Equal(t, 1, n)
++	histogram1 := dest.(metricdata.Histogram[int64])
++	require.Len(t, histogram1.DataPoints, 1)
++	require.Equal(t, int64(2), histogram1.DataPoints[0].Sum)
++	_, minValid := histogram1.DataPoints[0].Min.Value()
++	_, maxValid := histogram1.DataPoints[0].Max.Value()
++	require.True(t, minValid)
++	require.True(t, maxValid)
++
++	// Second histogram: with sum recording disabled, reusing the same destination
++	h2 := newDeltaHistogram[int64](bounds, noMinMax, true, 0, dropExemplars[int64])
++	h2.measure(t.Context(), 3, alice, nil)
++
++	// Collect into the same destination
++	n = h2.collect(&dest)
++	require.Equal(t, 1, n)
++	histogram2 := dest.(metricdata.Histogram[int64])
++	require.Len(t, histogram2.DataPoints, 1)
++	// Sum should be zero (cleared) since noSum is true
++	require.Equal(t, int64(0), histogram2.DataPoints[0].Sum, "Sum should be cleared when noSum is true")
++	// Min and Max should still be valid since noMinMax is false
++	_, minValid = histogram2.DataPoints[0].Min.Value()
++	_, maxValid = histogram2.DataPoints[0].Max.Value()
++	require.True(t, minValid)
++	require.True(t, maxValid)
++}
++
++func TestDeltaHistogramReuseDestinationWithNoMinMax(t *testing.T) {
++	orig := now
++	now = func() time.Time { return y2k }
++	t.Cleanup(func() { now = orig })
++
++	// First histogram: with min/max recording enabled
++	h1 := newDeltaHistogram[int64](bounds, false, false, 0, dropExemplars[int64])
++	h1.measure(t.Context(), 2, alice, nil)
++
++	// Collect into destination
++	var dest metricdata.Aggregation = metricdata.Histogram[int64]{}
++	n := h1.collect(&dest)
++	require.Equal(t, 1, n)
++	histogram1 := dest.(metricdata.Histogram[int64])
++	require.Len(t, histogram1.DataPoints, 1)
++	require.Equal(t, int64(2), histogram1.DataPoints[0].Sum)
++	_, minValid := histogram1.DataPoints[0].Min.Value()
++	_, maxValid := histogram1.DataPoints[0].Max.Value()
++	require.True(t, minValid)
++	require.True(t, maxValid)
++
++	// Second histogram: with min/max recording disabled, reusing the same destination
++	h2 := newDeltaHistogram[int64](bounds, true, false, 0, dropExemplars[int64])
++	h2.measure(t.Context(), 3, alice, nil)
++
++	// Collect into the same destination
++	n = h2.collect(&dest)
++	require.Equal(t, 1, n)
++	histogram2 := dest.(metricdata.Histogram[int64])
++	require.Len(t, histogram2.DataPoints, 1)
++	// Sum should still have value since noSum is false
++	require.Equal(t, int64(3), histogram2.DataPoints[0].Sum)
++	// Min and Max should be cleared since noMinMax is true
++	_, minValid = histogram2.DataPoints[0].Min.Value()
++	_, maxValid = histogram2.DataPoints[0].Max.Value()
++	require.False(t, minValid, "Min should be cleared when noMinMax is true")
++	require.False(t, maxValid, "Max should be cleared when noMinMax is true")
++}
++
+ func BenchmarkHistogram(b *testing.B) {
+ 	b.Run("Int64/Cumulative", benchmarkAggregate(func() (Measure[int64], ComputeAggregation) {
+ 		return Builder[int64]{
