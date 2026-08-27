@@ -732,12 +732,10 @@ design history in [docs/PLAN.md](docs/PLAN.md). Trust boundaries:
 [docs/data-flow.md](docs/data-flow.md) and
 [docs/threat-model.md](docs/threat-model.md).
 
-Planned next (see [docs/PLAN.md](docs/PLAN.md)): run the pinned
-[OpenTelemetry distillation and replay case study](docs/case-studies/opentelemetry-histogram-reset.md)
-against its historical review and fix evidence,
-zero-token check promotion from recurring lessons, function-grain precision
-refinements, public signal evaluation, history watermark + incremental daemon
-for keystroke-adjacent freshness, and signed artifacts + npm/Homebrew
+Planned next (see [docs/PLAN.md](docs/PLAN.md)): zero-token check promotion
+from recurring lessons, function-grain precision refinements, public signal
+evaluation, a history watermark and incremental daemon for
+keystroke-adjacent freshness, and signed artifacts with npm/Homebrew
 packaging.
 
 ## Development

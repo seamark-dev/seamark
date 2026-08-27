@@ -675,9 +675,9 @@ func TestLessonsDistillDryRun(t *testing.T) {
 	st, err := store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
 	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
-		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "human",
+		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "person",
 			Body: "Reset pooled state before reuse in this handler."},
-		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "human",
+		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "person",
 			Body: "Pooled state must be reset on reuse here too."},
 	}))
 	require.NoError(t, st.Close())
@@ -792,9 +792,9 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	st, err := store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
 	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
-		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "human",
+		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "person",
 			Body: "Reset pooled state before reuse in this handler."},
-		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "human",
+		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "person",
 			Body: "Pooled state must be reset on reuse here too."},
 	}))
 	require.NoError(t, st.Close())

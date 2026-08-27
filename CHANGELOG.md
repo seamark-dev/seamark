@@ -26,7 +26,10 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   that question version while imports still accept v1. The preserved first
   OpenTelemetry case-study proposal motivated these changes: it found the
   generic stale-field rule but lost the explicit/exponential relationship and
-  returned no trigger.
+  returned no trigger. Prompt v6 also reapplies best-effort secret scrubbing
+  when stored evidence is dispatched, which protects legacy findings created
+  before storage-time redaction. Trigger-question v3 bounds companion path
+  metadata per finding and across each extraction batch.
 - **Historical distillation can now use a bounded local-fix corpus.**
   `seamark index --fixes-only` refreshes fix commits reachable from the pinned
   `HEAD` without querying GitHub or deleting an existing review corpus.

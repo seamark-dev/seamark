@@ -9,12 +9,10 @@ import (
 	"time"
 )
 
-// ui renders live phase progress on a terminal: an animated spinner
-// line per phase, rewritten in place, resolving to a ◆ done line. It is
-// strictly a presentation layer for humans — when the writer is not a
-// terminal (piped output, CI, agents) every method is a no-op and the
-// caller's plain log lines remain the only output, so not one ANSI byte
-// can reach an agent's context or a captured log.
+// ui shows live phase progress as an animated terminal line that becomes
+// a ◆ done line. It runs only on interactive terminals. Its methods are
+// no-ops for piped output, CI, and agents, so ANSI control bytes cannot
+// enter agent context or captured logs.
 type ui struct {
 	mu      sync.Mutex
 	w       io.Writer

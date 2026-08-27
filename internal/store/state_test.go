@@ -36,7 +36,7 @@ func TestRebuildPreservesDecisions(t *testing.T) {
 
 	// A full rebuild — including the --force path and the MCP self-repair
 	// — wipes only derived tables. THE durability invariant: no reindex
-	// may destroy human decisions or paid inference.
+	// may destroy reviewed decisions or paid inference.
 	seed(t, s)
 
 	dismissed, err := s.Proposals(model.ProposalDismissed)

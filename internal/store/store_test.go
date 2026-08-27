@@ -435,7 +435,7 @@ func TestLessonReplaceAndQuery(t *testing.T) {
 			Symptom: "RUF001", Occurrences: 6, LastTS: 100,
 		},
 		{
-			ClusterKey: "api\x00E501", Region: "api", Reviewer: "human",
+			ClusterKey: "api\x00E501", Region: "api", Reviewer: "person",
 			Symptom: "E501", Occurrences: 3, LastTS: 90,
 		},
 		{
@@ -741,7 +741,7 @@ func TestFindingsRoundTripAndSwap(t *testing.T) {
 		},
 		{
 			ID: 12, LessonKey: "api\x00E501", Path: "api/b.py", PR: 8,
-			Reviewer: "human", Body: "wrap this line", URL: "u2", CreatedAt: 90,
+			Reviewer: "person", Body: "wrap this line", URL: "u2", CreatedAt: 90,
 		},
 	}
 	require.NoError(t, s.ReplaceLessons(lessons, findings))

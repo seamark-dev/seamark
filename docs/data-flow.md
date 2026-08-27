@@ -52,16 +52,17 @@ per finding is:
   representative production hunks sampled ahead of test/documentation noise;
 - the finding's provenance: its id, source kind (review / fix / revert),
   PR number when known, and the reviewer's name;
-- the primary repo-relative path and the finding's relevant non-document path
-  footprint (fix commits can span parallel implementations);
+- the primary repo-relative path and a bounded part of the finding's relevant
+  non-document path footprint (fix commits can span parallel implementations);
 - the rule labels of patterns already captured for the area — pinned
   ones and previously proposed ones alike, dismissed included (so the
   model does not re-derive or relitigate them).
 
-No whole source files or environment values are sent. Fix findings do carry
-the bounded patch excerpt described above. Mining scrubs secret-shaped values
-before storing findings; **no additional redaction is applied at dispatch** —
-the capped stored bodies are sent as written.
+No environment values are sent. Seamark does not read whole source files for
+distillation, but a bounded patch excerpt can contain a complete small file
+that a fix added or rewrote. Mining scrubs secret-shaped values before storing
+findings. Dispatch applies the same best-effort scrub again before sending a
+bounded stored body, including rows created by older versions.
 
 The executable itself comes from the committed
 `.seamark/config.yaml` (`agent:` section). That file chooses what

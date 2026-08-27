@@ -60,6 +60,16 @@ func TestPromptFindingEvidenceSharesPathsAndBodyBudget(t *testing.T) {
 		"the finding's primary identity survives even when auxiliary doc paths are filtered")
 }
 
+func TestPromptFindingEvidenceRedactsLegacySecretsAtDispatch(t *testing.T) {
+	_, body := promptFindingEvidence(model.Finding{
+		Path: "api/handler.go",
+		Body: "API_TOKEN=legacy-secret-value keep this diagnostic context",
+	}, 500)
+
+	assert.Contains(t, body, "API_TOKEN=[REDACTED]")
+	assert.NotContains(t, body, "legacy-secret-value")
+}
+
 func TestCompactFixEvidencePrioritizesProductionHunksAcrossLanguages(t *testing.T) {
 	body := `fix commit 12345678
 subject: keep generated clients and cache adapters synchronized

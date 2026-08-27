@@ -1,9 +1,8 @@
 // Package reviews mines pull-request review comments into lessons: the
-// recurring feedback a repository's reviewers — CodeRabbit, Copilot, or
-// humans — leave on the same kind of change. It is the capture half of
-// RFC-001 §5.4's anti-repeat loop, and the source is reviewer-agnostic:
-// every reviewer's comments arrive through the same GitHub API, so a bot
-// and a human are clustered the same way.
+// recurring feedback left on the same kind of change. It is the capture
+// half of RFC-001 §5.4's anti-repeat loop. The source is reviewer-agnostic:
+// all review comments arrive through the same GitHub API and use the same
+// clustering rules.
 //
 // The network is reached through an injectable Fetcher; the default
 // shells out to `gh`, and every failure mode (no gh, no auth, no GitHub
@@ -28,7 +27,7 @@ import (
 // Comment is one review comment, normalized from the GitHub API.
 type Comment struct {
 	ID        int64
-	Reviewer  string // classified: coderabbit | copilot | bot | human
+	Reviewer  string // classified: coderabbit | copilot | bot | person
 	Author    string // raw user.login
 	Body      string
 	Path      string // repo-relative file the comment lands on

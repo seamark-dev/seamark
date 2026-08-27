@@ -99,8 +99,8 @@ index:
 
 # Distillation plan/apply. write lets "lessons --apply" insert accepted
 # pins into .seamark/lessons.yaml itself; without it, apply prints the
-# block for you to paste. Applying is always an explicit human command
-# naming explicit proposal ids — this only gates who edits the file.
+# block for you to paste. Applying always requires an explicit command
+# with proposal ids; this option controls only who edits the file.
 # distill:
 #   write: true
 `

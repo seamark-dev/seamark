@@ -1001,7 +1001,7 @@ func TestRefreshFixesMinesReachableHistoryWithoutReplacingReviews(t *testing.T) 
 	st, err := store.Open(dbPath)
 	require.NoError(t, err)
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{{
-		ClusterKey: "main.go\x00review", Region: "main.go", Reviewer: "human",
+		ClusterKey: "main.go\x00review", Region: "main.go", Reviewer: "person",
 		Symptom: "review", Occurrences: 1,
 	}}, []model.Finding{{
 		ID: 7, LessonKey: "main.go\x00review", Path: "main.go",

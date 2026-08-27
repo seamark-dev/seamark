@@ -296,7 +296,7 @@ func TestAuditScopeSuggestedRegionShape(t *testing.T) {
 
 		require.NoError(t, err)
 		require.True(t, ok, "the advisory still names the miss")
-		assert.Nil(t, adv.Suggested, "past maxRegions the human decides what to remove")
+		assert.Nil(t, adv.Suggested, "past maxRegions the report leaves removal to the reviewer")
 	})
 
 	// Delivery regions form a union, so a region contained by the

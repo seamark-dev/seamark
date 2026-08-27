@@ -131,7 +131,7 @@ type Lesson struct {
 	ID          int64
 	ClusterKey  string // stable identity of (region, symptom); the upsert key
 	Region      string // file or directory the feedback lands in
-	Reviewer    string // coderabbit | copilot | bot | human | mixed
+	Reviewer    string // coderabbit | copilot | bot | person | mixed
 	Symptom     string // a rule code (RUF001) or a normalized message
 	Fix         string // extracted suggestion, when the comment carried one
 	Occurrences int    // how many comments fall in this cluster
@@ -161,7 +161,7 @@ type Finding struct {
 	// for review findings: their single Path IS the location.
 	Paths     []string
 	PR        int    // pull-request number, 0 when unknown
-	Reviewer  string // coderabbit | copilot | bot | human
+	Reviewer  string // coderabbit | copilot | bot | person
 	Body      string // boilerplate-stripped text, capped
 	URL       string // provenance link (comment or commit), "" when none
 	CreatedAt int64  // unix seconds
@@ -219,11 +219,10 @@ const (
 // live distillation.
 const MaxTriggerPaths = 3
 
-// Proposal is one distilled pattern awaiting a human decision: a
-// pin-shaped lesson synthesized by the configured agent from a group of
-// findings (the members it cited). Proposals follow the plan/apply
-// contract — the distiller may only ever PROPOSE; a pin reaches
-// .seamark/lessons.yaml exclusively through an explicit apply.
+// Proposal is one distilled pattern awaiting review. It is a pin-shaped
+// lesson synthesized by the configured agent from the findings it cited.
+// Proposals follow the plan/apply contract: the distiller may only propose.
+// A pin reaches .seamark/lessons.yaml only through an explicit apply.
 type Proposal struct {
 	ID        int64
 	Signature string // the evidence group that produced it

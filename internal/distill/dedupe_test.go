@@ -152,8 +152,8 @@ func TestClustersGroupsAndOrders(t *testing.T) {
 
 func TestClustersCatchRederivedEvidence(t *testing.T) {
 	// The p54/p56 shape: identical citations, wordings that share
-	// almost nothing. The audit must name them one cluster so the
-	// human gets a prune suggestion.
+	// almost nothing. The audit must name them as one cluster so the
+	// report can suggest pruning.
 	ps := []model.Proposal{
 		{ID: 54, Rule: "run-linters-before-commit",
 			Note:    "Run every linter the repo configures before committing.",

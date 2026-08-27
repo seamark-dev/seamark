@@ -17,10 +17,9 @@ import (
 type Config struct {
 	Distill struct {
 		// Write lets `lessons --apply` edit .seamark/lessons.yaml. Off
-		// by default: without it, apply prints the pin block for the
-		// human to paste — seamark never modifies a reviewed config
-		// file without the workspace having opted in, in that same
-		// reviewed config.
+		// by default: without it, apply prints the pin block for manual
+		// insertion. Seamark edits a reviewed config only when that same
+		// config opts in.
 		Write bool `yaml:"write"`
 	} `yaml:"distill"`
 }

@@ -43,7 +43,7 @@ func seedStore(t *testing.T) (st *store.Store, root string) {
 			Symptom: "RUF001", Occurrences: 6, LastTS: 100,
 		},
 		{
-			ClusterKey: "scripts\x00once", Region: "scripts", Reviewer: "human",
+			ClusterKey: "scripts\x00once", Region: "scripts", Reviewer: "person",
 			Symptom: "solitary finding", Occurrences: 1, LastTS: 50,
 		},
 	}, nil))
@@ -288,7 +288,7 @@ func TestPartialCitationDoesNotCoverACluster(t *testing.T) {
 
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
 		{
-			ClusterKey: "k", Region: "api", Reviewer: "human",
+			ClusterKey: "k", Region: "api", Reviewer: "person",
 			Symptom: "wrap engine context", Occurrences: 3,
 		},
 	}, []model.Finding{
@@ -333,7 +333,7 @@ func TestDismissedProposalsDontSuppressMinedLessons(t *testing.T) {
 
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
 		{
-			ClusterKey: "k", Region: "api", Reviewer: "human",
+			ClusterKey: "k", Region: "api", Reviewer: "person",
 			Symptom: "wrap engine context", Occurrences: 3,
 		},
 	}, []model.Finding{
@@ -367,7 +367,7 @@ func TestSplitCitationsAcrossPinsDoNotCover(t *testing.T) {
 
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
 		{
-			ClusterKey: "k", Region: "api", Reviewer: "human",
+			ClusterKey: "k", Region: "api", Reviewer: "person",
 			Symptom: "wrap engine context", Occurrences: 2,
 		},
 	}, []model.Finding{
@@ -439,7 +439,7 @@ func TestWeakEvidencePinsRankLastAndGetTagged(t *testing.T) {
 		// File order puts the weak distilled pin FIRST; rank must
 		// reorder so the hand-written pin wins the single slot.
 		{Rule: "single-event-guidance", Region: "api", Note: "Distilled from one review exchange."},
-		{Rule: "hand-written-guard", Region: "api", Note: "A human wrote this deliberately."},
+		{Rule: "hand-written-guard", Region: "api", Note: "This guidance was added manually."},
 	}
 
 	out, trimmed, err := LessonsForScopeBudget(st, cfg, "api/z.go", 8, 1)
@@ -692,6 +692,8 @@ func TestDistillPlanShowsScopeAdvisories(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(out, "directly cited by the evidence"),
 		"the unflagged proposal renders no annotation lines")
 	assert.Contains(t, out, "review the trigger and proposed delivery regions")
+	assert.Contains(t, out, "--apply p71", "the example must name an actual pending proposal")
+	assert.NotContains(t, out, "--apply p3,p7", "generic ids can produce a non-executable hint")
 
 	// No annotations — the plan prints exactly as before.
 	sb.Reset()

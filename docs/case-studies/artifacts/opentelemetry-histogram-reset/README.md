@@ -38,3 +38,9 @@ package and behavior checks listed above.
 Absolute operator paths and setting values were removed or redacted before
 publication. Provider transcripts and unrelated local diagnostics are not
 included.
+
+These captures record Seamark v0.4.0-13, the version used for the experiment.
+That version printed a generic `p3,p7` apply example and described only
+storage-time redaction. Current builds print an ID from the actual pending set
+and reapply best-effort secret scrubbing when stored evidence is dispatched.
+The raw captures remain unchanged so they continue to record the original run.

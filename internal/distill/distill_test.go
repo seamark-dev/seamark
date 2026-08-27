@@ -544,6 +544,53 @@ func TestRegionalRunDoesNotPruneCrossTreeProposal(t *testing.T) {
 	assert.Equal(t, "cross-tree-rule", pending[0].Rule)
 }
 
+func TestRegionalRunPreservesProposalWithEvidenceOutsideCorpus(t *testing.T) {
+	st := openSeeded(t, []model.Finding{
+		{ID: 1, Path: "api/a.go", Body: "Guard optional handler state before access."},
+		{ID: 2, Path: "api/b.go", Body: "Wrap worker failures with operation context."},
+	})
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "partial-signature", Rule: "partial-rule", Region: "api",
+		Note: "Keep both implementations synchronized.", Members: []int64{1, 90},
+		Status: model.ProposalProposed,
+	}))
+
+	empty := &fakeAgent{fn: func(string) (string, error) { return `{"patterns": []}`, nil }}
+
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), empty, Options{Region: "api"})
+	require.NoError(t, err)
+	assert.Zero(t, res.PrunedStale,
+		"delivery metadata must not let a partial corpus prune missing evidence")
+
+	pending, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+}
+
+func TestRegionalRunPrunesStaleProposalWhenAllEvidenceIsInCorpus(t *testing.T) {
+	st := openSeeded(t, []model.Finding{
+		{ID: 1, Path: "api/a.go", Body: "Guard optional handler state before access."},
+		{ID: 2, Path: "api/b.go", Body: "Wrap worker failures with operation context."},
+	})
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "gone", Rule: "stale-rule", Region: "web",
+		Note: "Stale delivery metadata must not preserve this proposal.", Members: []int64{1, 2},
+		Status: model.ProposalProposed,
+	}))
+
+	empty := &fakeAgent{fn: func(string) (string, error) { return `{"patterns": []}`, nil }}
+
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), empty, Options{Region: "api"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.PrunedStale)
+
+	pending, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+}
+
 func TestRecurrenceCountsEventsNotCitations(t *testing.T) {
 	// A review comment and the fix commit answering it share a PR: one
 	// event, so a "pattern" citing only those two is not recurrence.

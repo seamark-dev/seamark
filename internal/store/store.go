@@ -4,7 +4,7 @@
 // The file carries two classes of state with different lifecycles: derived
 // tables (symbols, edges, co-change, decisions, effects) that Rebuild
 // wipes and recomputes from the workspace, and durable tables (proposal,
-// distilled, lesson, finding, rule) holding human decisions and paid
+// distilled, lesson, finding, rule) holding reviewed decisions and paid
 // inference that no rebuild can regenerate. The database is therefore NOT
 // disposable; deleting it destroys decisions. Rebuilds preserve the
 // durable tables and the schema is versioned (migrate.go). state.go makes
@@ -1767,8 +1767,8 @@ type CalledSymbol struct {
 	Callers int
 }
 
-// TopCalled returns the most-called symbols — the load-bearing API
-// surface a newcomer (human or agent) should read first.
+// TopCalled returns the most-called symbols: the load-bearing API surface
+// a newcomer should read first.
 func (s *Store) TopCalled(limit int) ([]CalledSymbol, error) {
 	if limit <= 0 {
 		limit = 10

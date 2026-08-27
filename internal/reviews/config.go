@@ -114,7 +114,7 @@ type PinRule struct {
 	// single-line-parseable; readers predating this field see Region,
 	// the set's first entry — narrower than the `*` they used to get.
 	Regions []string `yaml:"regions,omitempty,flow"`
-	Note    string   `yaml:"note"` // human explanation, carried into output
+	Note    string   `yaml:"note"` // guidance shown in output
 }
 
 // AllRegions returns the pin's effective region set — Region and

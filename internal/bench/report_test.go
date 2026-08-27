@@ -62,7 +62,7 @@ func TestBuildBenchmarkReportEvaluatesFrozenThreshold(t *testing.T) {
 	assert.Contains(t, markdown, strings.Repeat("b", 64))
 	assert.Contains(t, markdown, "3 valid pairs; mean effect ≥ +30 pp")
 	assert.Contains(t, markdown, "passes frozen threshold")
-	assert.Contains(t, markdown, "supports only the committed synthetic claim")
+	assert.Contains(t, markdown, "supports only the committed claim")
 	assert.NotContains(t, markdown, "Threshold assessment remains insufficient")
 }
 

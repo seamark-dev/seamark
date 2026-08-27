@@ -185,6 +185,37 @@ func TestBuildExtractPromptAllowsCitedTriggersAndKeepsExcerptUTF8(t *testing.T) 
 	assert.True(t, utf8.ValidString(prompt))
 }
 
+func TestBuildExtractPromptBoundsEvidencePathMetadata(t *testing.T) {
+	var batch []model.Proposal
+	meta := make(map[int64]model.Finding)
+
+	for i := range extractBatch {
+		id := int64(i + 1)
+		p := model.Proposal{ID: id, Rule: fmt.Sprintf("rule-%d", i), Note: "n", Members: []int64{id}}
+		batch = append(batch, p)
+
+		paths := make([]string, 0, 20)
+		for j := range 20 {
+			paths = append(paths, fmt.Sprintf("generated/very-long-client-path-%02d-%02d-with-metadata.ts", i, j))
+		}
+		meta[id] = model.Finding{ID: id, Path: fmt.Sprintf("api/primary-%02d.go", i), Paths: paths}
+	}
+
+	prompt := buildExtractPrompt(batch, meta)
+	pathBytes := 0
+
+	for line := range strings.SplitSeq(prompt, "\n") {
+		if files, ok := strings.CutPrefix(line, "    evidence files: "); ok {
+			pathBytes += len(files)
+		}
+	}
+
+	assert.LessOrEqual(t, pathBytes, extractPathBytesPerPrompt,
+		"serialized evidence paths share one bounded batch budget")
+	assert.NotContains(t, prompt, "with-metadata.ts, generated/very-long-client-path-00-10",
+		"one finding cannot contribute an unbounded footprint")
+}
+
 func TestExtractTriggersRejectsAnswerlessReplies(t *testing.T) {
 	// {} and {"triggers": null} parse as JSON but answer nothing.
 	// Stamping rows on them would permanently record answers nobody

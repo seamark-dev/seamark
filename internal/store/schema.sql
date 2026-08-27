@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS lesson (
     id               INTEGER PRIMARY KEY,
     cluster_key      TEXT NOT NULL UNIQUE,
     region           TEXT NOT NULL DEFAULT '',  -- file or directory the flag lands in
-    reviewer         TEXT NOT NULL DEFAULT '',  -- coderabbit | copilot | bot | human | mixed
+    reviewer         TEXT NOT NULL DEFAULT '',  -- coderabbit | copilot | bot | person | mixed
     symptom          TEXT NOT NULL DEFAULT '',  -- rule code (RUF001) or a normalized message
     fix              TEXT NOT NULL DEFAULT '',  -- extracted suggestion, when present
     occurrences      INTEGER NOT NULL DEFAULT 1,

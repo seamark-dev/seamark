@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,6 +59,35 @@ func TestPublicRepositoryPrepareAndGenerate(t *testing.T) {
 	originURL, err := exec.Command("git", "-C", generated, "remote", "get-url", "origin").Output()
 	require.NoError(t, err)
 	assert.Equal(t, origin+"\n", string(originURL))
+}
+
+func TestPublicRepositoryPrepareRejectsExistingCacheWithMissingVendor(t *testing.T) {
+	cacheRoot := t.TempDir()
+	t.Setenv(publicBenchmarkCacheEnv, cacheRoot)
+
+	target := filepath.Join(cacheRoot, "existing-cache")
+	require.NoError(t, generateRepository(target, []step{{
+		message: "base",
+		files: map[string]string{
+			"module/go.mod":  "module example.com/app\n\ngo 1.25\n",
+			"module/main.go": "package app\n",
+		},
+	}}))
+
+	spec := publicRepositorySpec{
+		InstanceID: "test-public-instance",
+		CacheKey:   "existing-cache",
+		URL:        filepath.Join(t.TempDir(), "must-not-be-cloned"),
+		Commit:     fixtureHead(target),
+		ModuleDir:  "module",
+		VendorSHA:  strings.Repeat("a", 64),
+	}
+
+	_, err := spec.prepare(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is invalid")
+	assert.Contains(t, err.Error(), "remove that cache directory and prepare again")
+	assert.Contains(t, err.Error(), "hash cached vendor tree")
 }
 
 func TestTreeSHA256BindsPathsAndContent(t *testing.T) {

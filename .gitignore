@@ -13,12 +13,8 @@ CLAUDE.md
 .claude/*
 
 # Seamark state: the index and audit log stay local; policy and catalogue
-# overlays are policy-as-code and belong in review.
+# overlays are policy-as-code and belong in review (temporarry excluded).
 .seamark/*
-#!.seamark/policy.yaml
-#!.seamark/effects.yaml
-#!.seamark/lessons.yaml
-#!.seamark/config.yaml
 
 # Codex
 .codex/

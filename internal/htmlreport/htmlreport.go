@@ -1,10 +1,8 @@
-// Package htmlreport renders the index as one self-contained HTML page:
-// the human half of seamark. Agents read the compact text reports over
-// MCP; a person auditing what the learning layer has concluded needs to
-// see it all at once — what is pending a decision, what has been pinned
-// twice in different words, where fixes concentrate, and every raw
-// lesson behind those. The page is a snapshot, written to a file, with
-// no server and no external assets.
+// Package htmlreport renders the index as one self-contained HTML page.
+// Agents read compact text reports over MCP; this page supports a broader
+// audit of pending decisions, duplicate pins, fix concentrations, and the
+// raw lessons behind them. It is a file-based snapshot with no server or
+// external assets.
 //
 // Everything it displays is untrusted text — review comments, commit
 // subjects, and model-written proposals — so the page is built through
@@ -434,9 +432,9 @@ func (r *Report) buildCards(
 			Events: distill.CountEvents(cited),
 		}
 
-		// The same re-judgment the --proposals ledger prints: this page
-		// is where the human decides, so the decision-relevant facts
-		// must be on the card, not only in the terminal.
+		// Show the same current assessment as the --proposals ledger.
+		// Decision-relevant facts belong on the card, not only in the
+		// terminal.
 		if p.Status == model.ProposalProposed || p.Status == model.ProposalApplied {
 			tier, facts := confidence.Assess(p, byID, root, now)
 			card.Tier = tier.String()

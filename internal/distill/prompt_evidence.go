@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/redact"
 )
 
 const (
@@ -100,11 +101,13 @@ func promptFindingPaths(f model.Finding, maxBytes int) []string {
 }
 
 func promptFindingBody(f model.Finding, maxChars int) string {
+	body := redact.Secrets(f.Body)
+
 	if !isFixFinding(f.Source) {
-		return truncatePromptText(f.Body, maxChars)
+		return truncatePromptText(body, maxChars)
 	}
 
-	return compactFixEvidence(f.Body, maxChars)
+	return compactFixEvidence(body, maxChars)
 }
 
 // compactFixEvidence keeps the commit message and samples distinct code
@@ -203,9 +206,11 @@ func compactFunctionLine(line string) string {
 }
 
 func splitPatchHunks(patch string) []string {
-	var hunks []string
-	var current strings.Builder
-	var file string
+	var (
+		hunks   []string
+		current strings.Builder
+		file    string
+	)
 
 	for line := range strings.Lines(patch) {
 		if filePath, ok := strings.CutPrefix(line, "file: "); ok {

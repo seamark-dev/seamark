@@ -51,10 +51,14 @@ func (s publicRepositorySpec) prepare(ctx context.Context) (string, error) {
 
 	target := filepath.Join(root, s.CacheKey)
 
-	if err := s.validateCache(target); err == nil {
+	if _, err := os.Lstat(target); err == nil {
+		if err := s.validateCache(target); err != nil {
+			return "", fmt.Errorf("public benchmark cache %s is invalid: %w; remove that cache directory and prepare again", target, err)
+		}
+
 		return target, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("public benchmark cache %s is invalid: %w; remove that cache directory and prepare again", target, err)
+		return "", fmt.Errorf("inspect public benchmark cache %s: %w", target, err)
 	}
 
 	tmp, err := os.MkdirTemp(root, ".prepare-"+s.CacheKey+"-")
@@ -157,7 +161,7 @@ func (s publicRepositorySpec) generate(dir string) error {
 		return fmt.Errorf("public benchmark checkout HEAD %q, want %q", head, s.Commit)
 	}
 
-	if out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output(); err != nil {
+	if out, err := runPreparationCommandOutput(cloneCtx, dir, "git", "status", "--porcelain"); err != nil {
 		return fmt.Errorf("inspect public benchmark checkout: %w", err)
 	} else if len(out) != 0 {
 		return fmt.Errorf("public benchmark checkout is dirty: %s", out)
@@ -221,7 +225,13 @@ func (s publicRepositorySpec) validateCache(dir string) error {
 }
 
 func runPreparationCommand(ctx context.Context, dir, name string, args ...string) error {
-	return runPreparationCommandEnv(ctx, dir, preparationEnvironment(), name, args...)
+	_, err := runPreparationCommandOutput(ctx, dir, name, args...)
+
+	return err
+}
+
+func runPreparationCommandOutput(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	return runPreparationCommandOutputEnv(ctx, dir, preparationEnvironment(), name, args...)
 }
 
 func preparationEnvironment() []string {
@@ -233,6 +243,14 @@ func preparationEnvironment() []string {
 }
 
 func runPreparationCommandEnv(ctx context.Context, dir string, env []string, name string, args ...string) error {
+	_, err := runPreparationCommandOutputEnv(ctx, dir, env, name, args...)
+
+	return err
+}
+
+func runPreparationCommandOutputEnv(ctx context.Context, dir string, env []string,
+	name string, args ...string,
+) ([]byte, error) {
 	commandCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -244,13 +262,13 @@ func runPreparationCommandEnv(ctx context.Context, dir string, env []string, nam
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if commandCtx.Err() != nil {
-			return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), commandCtx.Err())
+			return nil, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), commandCtx.Err())
 		}
 
-		return fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, out)
+		return nil, fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, out)
 	}
 
-	return nil
+	return out, nil
 }
 
 func treeSHA256(root string) (string, error) {

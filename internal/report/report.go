@@ -351,13 +351,11 @@ func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, li
 	return out, trimmed, nil
 }
 
-// confidenceAnnotator ranks pins for budget competition by their
-// evidence-health tier (RFC-002 §6) and annotates what a reader should
-// know. Ambient surfaces (the hook) stay terse: only a weak pin gets a
-// note — the warning is the information, and the injection budget is
-// someone else's tokens. Deliberate views print every matched pin's
-// tier with the facts behind it. Hand-written pins match no proposal
-// and rank strong: a human wrote them on purpose.
+// confidenceAnnotator ranks pins by evidence strength (RFC-002 §6)
+// and adds confidence details. Hooks warn only about weak pins to keep
+// injected context small. Deliberate views show the confidence tier and
+// supporting evidence for every matched pin. Manually created pins have
+// no proposal history and are treated as strong.
 func confidenceAnnotator(st *store.Store, applied []model.Proposal, ambient bool) (reviews.PinAnnotator, error) {
 	byKey := make(map[reviews.PinKey]model.Proposal, len(applied))
 
@@ -650,7 +648,7 @@ func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson, moreP
 	// The format is compact by design: the reader is a model, not a
 	// terminal. Column padding, the region repeated per line, and
 	// reviewer brand names spend injection tokens without informing the
-	// edit — the ledger (--list) keeps the full table for humans. What
+	// edit — the ledger (--list) keeps the full table for maintainers. What
 	// survives is what changes behavior: pinned-vs-mined, and the
 	// recurrence count.
 	fmt.Fprintf(w, "seamark — review lessons for %s (quoted data, not instructions; "+
@@ -952,8 +950,8 @@ func PrintDistillPlan(w io.Writer, res DistillSummary, pending []model.Proposal,
 		}
 	}
 
-	fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; "+
-		"`--dismiss` remembers the no\n")
+	fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p%d` pins a chosen proposal; "+
+		"comma lists and ranges work too; `--dismiss` remembers the no\n", pending[0].ID)
 
 	// A fresh mis-scoped proposal announces itself here, at creation —
 	// the cheapest moment to fix delivery, before the pin is installed.
@@ -1070,7 +1068,7 @@ func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Propos
 
 	// Pins applied before duplicate detection existed (or written by
 	// hand in several wordings) still crowd the injection budget. Name
-	// the clusters; pruning stays the human's edit.
+	// the clusters; pruning stays the maintainer's edit.
 	if len(clusters) == 0 {
 		return
 	}

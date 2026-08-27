@@ -30,7 +30,9 @@ import (
 // an adaptive evidence budget; fix excerpts sample distinct production
 // hunks. The prompt asks for owner-specific coupling and requires an
 // explicit trigger_paths answer, including [] when none are known.
-const promptVersion = "v5"
+// v6: dispatch reapplies secret-shaped-value redaction so legacy stored
+// findings receive the same privacy boundary as newly mined findings.
+const promptVersion = "v6"
 
 // maxKnownLabels bounds the primer. Labels are ~25 characters, so forty
 // of them cost a few hundred tokens against a ~9k-token batch — the
@@ -105,8 +107,8 @@ type Preflight struct {
 	Findings int
 	// BodyCap is the largest per-finding evidence cap across planned groups.
 	// Groups share a fixed total budget, so smaller groups can show more
-	// of each finding. Path metadata and body share this cap; bodies are NOT
-	// additionally redacted.
+	// of each finding. Path metadata and body share this cap; dispatch
+	// reapplies best-effort secret redaction before the body is sent.
 	BodyCap int
 }
 
@@ -156,7 +158,7 @@ type Result struct {
 // Run executes the plan half of distillation: group the findings, skip
 // evidence sets already read, send each remaining group to the agent,
 // validate what comes back, and persist the survivors as proposals. It
-// never touches .seamark/lessons.yaml — applying is a separate, human
+// never touches .seamark/lessons.yaml — applying is a separate, operator
 // decision.
 func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoker, opts Options) (*Result, error) {
 	start := time.Now()
@@ -194,13 +196,18 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 	// "its evidence disappeared". Proposals inside the scope still face
 	// the current regional group set and are pruned normally when stale.
 	if opts.Region != "" {
+		corpus := make(map[int64]struct{}, len(findings))
+		for _, finding := range findings {
+			corpus[finding.ID] = struct{}{}
+		}
+
 		pending, err := st.Proposals(model.ProposalProposed)
 		if err != nil {
 			return nil, err
 		}
 
 		for _, proposal := range pending {
-			if !proposalWithinRegion(opts.Region, proposal) {
+			if !proposalMembersInCorpus(proposal, corpus) {
 				live[proposal.Signature] = true
 			}
 		}
@@ -737,18 +744,16 @@ func withinRegion(filter, candidate string) bool {
 	return candidate == filter || strings.HasPrefix(candidate, strings.TrimSuffix(filter, "/")+"/")
 }
 
-// proposalWithinRegion reports whether a scoped run sees the proposal's
-// entire effective region set. A cross-tree proposal must survive a run over
-// just one of its regions: that partial corpus cannot establish that all of
-// the proposal's evidence disappeared.
-func proposalWithinRegion(filter string, proposal model.Proposal) bool {
-	regions := proposal.Regions
-	if len(regions) == 0 {
-		regions = []string{proposal.Region}
+// proposalMembersInCorpus reports whether a scoped run can account for every
+// finding that produced a proposal. Stored regions are delivery metadata and
+// can be narrower, wider, or stale; they are not evidence of corpus coverage.
+func proposalMembersInCorpus(proposal model.Proposal, corpus map[int64]struct{}) bool {
+	if len(proposal.Members) == 0 {
+		return false
 	}
 
-	for _, region := range regions {
-		if !withinRegion(filter, region) {
+	for _, id := range proposal.Members {
+		if _, ok := corpus[id]; !ok {
 			return false
 		}
 	}

@@ -54,8 +54,8 @@ func newIndexCmd(opts *options) *cobra.Command {
 for co-change coupling and decisions. The index is a single SQLite file
 under .seamark/; re-running replaces derived data atomically.
 
-With --reviews, also mines pull-request review comments (CodeRabbit,
-Copilot, humans) from GitHub and fix commits from local Git history. With
+With --reviews, also mines pull-request review comments from GitHub and fix
+commits from local Git history. With
 --fixes-only, mines only local fix commits reachable from HEAD and performs no
 network access.`,
 		Args: cobra.NoArgs,

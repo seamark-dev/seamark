@@ -109,8 +109,8 @@ func normalize(g ghComment) Comment {
 }
 
 // classifyReviewer buckets a comment author. The bot names are stable
-// GitHub app logins; anything else with user type Bot is a generic bot,
-// and the rest are humans.
+// GitHub app logins. Any other account with user type Bot is a generic
+// bot; all remaining accounts use the default reviewer class.
 func classifyReviewer(login, userType string) string {
 	l := strings.ToLower(login)
 
@@ -122,7 +122,7 @@ func classifyReviewer(login, userType string) string {
 	case userType == "Bot" || strings.HasSuffix(l, "[bot]"):
 		return "bot"
 	default:
-		return "human"
+		return "person"
 	}
 }
 

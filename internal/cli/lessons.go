@@ -364,9 +364,9 @@ func resolveSelection(candidates []model.Proposal, raw, state string) ([]model.P
 
 // runLessonsApply turns chosen proposals into pins. The pins land in
 // .seamark/lessons.yaml only when the workspace opted in via
-// distill.write; otherwise the rendered block is printed for the human
-// to paste — either way, nothing was ever applied without an explicit
-// human command naming explicit proposals.
+// distill.write. Otherwise, it prints the rendered block for manual
+// insertion. In both modes, applying requires an explicit command that
+// names the proposals.
 func runLessonsApply(cmd *cobra.Command, opts *options, raw string) error {
 	st, root, err := openIndex(opts)
 	if err != nil {
@@ -1180,8 +1180,8 @@ func printPreflight(w io.Writer, pf distill.Preflight, dryRun bool) {
 // runLessonsList prints the ledger of mined lessons — every one, or, with
 // a region, those in that directory's area. A region-scoped ledger is
 // the pattern-hunting view: per-file clustering keeps semantically
-// related one-offs apart, and reading an area's raw findings side by
-// side is how a human (or an agent) spots what the counters cannot.
+// related one-offs apart. Reading an area's raw findings together can
+// reveal patterns that counters miss.
 func runLessonsList(cmd *cobra.Command, opts *options, region string) error {
 	st, root, err := openIndex(opts)
 	if err != nil {
