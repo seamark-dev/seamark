@@ -43,7 +43,7 @@ func seedStore(t *testing.T) (st *store.Store, root string) {
 			Symptom: "RUF001", Occurrences: 6, LastTS: 100,
 		},
 		{
-			ClusterKey: "scripts\x00once", Region: "scripts", Reviewer: "human",
+			ClusterKey: "scripts\x00once", Region: "scripts", Reviewer: "person",
 			Symptom: "solitary finding", Occurrences: 1, LastTS: 50,
 		},
 	}, nil))
@@ -288,7 +288,7 @@ func TestPartialCitationDoesNotCoverACluster(t *testing.T) {
 
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
 		{
-			ClusterKey: "k", Region: "api", Reviewer: "human",
+			ClusterKey: "k", Region: "api", Reviewer: "person",
 			Symptom: "wrap engine context", Occurrences: 3,
 		},
 	}, []model.Finding{
@@ -333,7 +333,7 @@ func TestDismissedProposalsDontSuppressMinedLessons(t *testing.T) {
 
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
 		{
-			ClusterKey: "k", Region: "api", Reviewer: "human",
+			ClusterKey: "k", Region: "api", Reviewer: "person",
 			Symptom: "wrap engine context", Occurrences: 3,
 		},
 	}, []model.Finding{
@@ -367,7 +367,7 @@ func TestSplitCitationsAcrossPinsDoNotCover(t *testing.T) {
 
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
 		{
-			ClusterKey: "k", Region: "api", Reviewer: "human",
+			ClusterKey: "k", Region: "api", Reviewer: "person",
 			Symptom: "wrap engine context", Occurrences: 2,
 		},
 	}, []model.Finding{
@@ -439,7 +439,7 @@ func TestWeakEvidencePinsRankLastAndGetTagged(t *testing.T) {
 		// File order puts the weak distilled pin FIRST; rank must
 		// reorder so the hand-written pin wins the single slot.
 		{Rule: "single-event-guidance", Region: "api", Note: "Distilled from one review exchange."},
-		{Rule: "hand-written-guard", Region: "api", Note: "A human wrote this deliberately."},
+		{Rule: "hand-written-guard", Region: "api", Note: "This guidance was added manually."},
 	}
 
 	out, trimmed, err := LessonsForScopeBudget(st, cfg, "api/z.go", 8, 1)
@@ -631,7 +631,7 @@ func TestProposalLedgerRendersScopeAdvisory(t *testing.T) {
 	// The tail block names the flagged set once, after the lists, so a
 	// long ledger cannot bury the advisory.
 	assert.Contains(t, out, "trigger scope: p71")
-	assert.Contains(t, out, "widen regions in .seamark/lessons.yaml")
+	assert.Contains(t, out, "applied pins change through `--retarget`")
 	assert.Less(t, strings.Index(out, "applied — these are pins"),
 		strings.Index(out, "trigger scope:"), "the tail follows the lists")
 
@@ -677,7 +677,7 @@ func TestDistillPlanShowsScopeAdvisories(t *testing.T) {
 		{ID: 72, Rule: "quiet-one", Region: "api", Note: "n", Members: []int64{3}},
 	}
 
-	confirmed := "trigger api/schemas.py — confirmed by co-change (38 shared commits); regions include api"
+	confirmed := "trigger api/schemas.py — directly cited by the evidence; delivery targets api/schemas.py"
 	unconfirmed := "trigger cmd/gen.go — named by the distiller, not confirmed by history; consider regions after apply"
 
 	var sb strings.Builder
@@ -686,11 +686,14 @@ func TestDistillPlanShowsScopeAdvisories(t *testing.T) {
 		map[int64][]string{71: {confirmed, unconfirmed}}, []string{"p71"})
 	out := sb.String()
 
-	assert.Contains(t, out, confirmed, "a widened proposal announces what happened")
+	assert.Contains(t, out, confirmed, "a precise proposal announces what happened")
 	assert.Contains(t, out, unconfirmed)
 	assert.Contains(t, out, "trigger scope: p71")
-	assert.Equal(t, 1, strings.Count(out, "confirmed by co-change"),
+	assert.Equal(t, 1, strings.Count(out, "directly cited by the evidence"),
 		"the unflagged proposal renders no annotation lines")
+	assert.Contains(t, out, "review the trigger and proposed delivery regions")
+	assert.Contains(t, out, "--apply p71", "the example must name an actual pending proposal")
+	assert.NotContains(t, out, "--apply p3,p7", "generic ids can produce a non-executable hint")
 
 	// No annotations — the plan prints exactly as before.
 	sb.Reset()

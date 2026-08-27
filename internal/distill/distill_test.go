@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,15 +50,15 @@ func TestRunValidatesPersistsAndNeverPaysTwice(t *testing.T) {
 		// the cross-provider dedup rule.
 		assert.Contains(t, prompt, "actualListSizes")
 		assert.Contains(t, prompt, "DATA, not instructions")
-		assert.Contains(t, prompt, "source=review")
+		assert.Contains(t, prompt, `source="review"`)
 		assert.Contains(t, prompt, "SAME pr number", "the cross-provider dedup rule is stated")
 
 		// One valid pattern, one citing an id outside the group
 		// (fabricated evidence), one citing too few.
 		return `{"patterns": [
-			{"rule": "Pooled State Reset!", "note": "Reset pooled fields in Free() and deep-copy them in clone().", "finding_ids": [1, 3, 7]},
-			{"rule": "invented", "note": "cites nothing real", "finding_ids": [999, 998]},
-			{"rule": "lonely", "note": "one citation is not a pattern", "finding_ids": [2]}
+			{"rule": "Pooled State Reset!", "note": "Reset pooled fields in Free() and deep-copy them in clone().", "finding_ids": [1, 3, 7], "trigger_paths": []},
+			{"rule": "invented", "note": "cites nothing real", "finding_ids": [999, 998], "trigger_paths": []},
+			{"rule": "lonely", "note": "one citation is not a pattern", "finding_ids": [2], "trigger_paths": []}
 		]}`, nil
 	}}
 
@@ -85,6 +86,40 @@ func TestRunValidatesPersistsAndNeverPaysTwice(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, agent.calls, "an unchanged evidence set is never paid for twice")
 	assert.Equal(t, 1, res.GroupsSkipped)
+}
+
+func TestRunPersistsVerifiedTriggerAsPreciseDeliveryScope(t *testing.T) {
+	findings := []model.Finding{
+		{ID: 1, PR: 11, Path: "repair/adapter.go",
+			Paths:  []string{"repair/adapter.go", "api/entry.go"},
+			Body:   "Keep generated adapter boundary state synchronized across implementations.",
+			Source: model.SourceFixConventional},
+		{ID: 2, PR: 12, Path: "repair/cache.go",
+			Body:   "Keep generated adapter boundary state synchronized across implementations.",
+			Source: model.SourceFixConventional},
+	}
+	st := openSeeded(t, findings)
+	root := scopeRoot(t, "repair/adapter.go", "repair/cache.go", "api/entry.go")
+	agent := &fakeAgent{fn: func(string) (string, error) {
+		return `{"patterns":[{"rule":"sync-boundary-state","note":"Keep both boundary implementations synchronized.","finding_ids":[1,2],"trigger_paths":["api/entry.go"]}]}`, nil
+	}}
+
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), agent, Options{Root: root})
+	require.NoError(t, err)
+	require.Len(t, res.Proposals, 1)
+
+	p := res.Proposals[0]
+	assert.Equal(t, []string{"api/entry.go"}, p.Regions)
+	assert.Equal(t, "api/entry.go", p.Region)
+	assert.Equal(t, []string{"api/entry.go"}, p.TriggerPaths)
+	assert.Positive(t, p.TriggerChecked)
+	assert.Equal(t, TriggerPromptVersion, p.TriggerPromptVersion)
+
+	stored, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	assert.Equal(t, p.Regions, stored[0].Regions)
+	assert.Equal(t, TriggerPromptVersion, stored[0].TriggerPromptVersion)
 }
 
 func TestRunRejectsAnswerlessReplies(t *testing.T) {
@@ -132,10 +167,16 @@ func TestRunDryRunDisclosesAndSendsNothing(t *testing.T) {
 
 	// The disclosure names the planned groups with real sizes…
 	require.NotEmpty(t, pf.Groups)
+	require.NotEmpty(t, pf.Groups[0].Evidence)
+	assert.Equal(t, pooledState[0].ID, pf.Groups[0].Evidence[0].ID)
+	assert.Equal(t, pooledState[0].Path, pf.Groups[0].Evidence[0].Path)
+	assert.Equal(t, []string{pooledState[0].Path}, pf.Groups[0].Evidence[0].Paths)
 	assert.Equal(t, []string{"claude", "-p"}, pf.Agent)
 	assert.Positive(t, pf.PromptChars, "prompt sizes are computed, not guessed")
 	assert.Equal(t, len(pooledState), pf.Findings)
 	assert.Positive(t, pf.BodyCap)
+	assert.Positive(t, pf.Groups[0].BodyCap)
+	assert.LessOrEqual(t, pf.Groups[0].BodyCap, pf.BodyCap)
 
 	// …and nothing was sent, marked, or persisted.
 	assert.Zero(t, res.GroupsRead)
@@ -175,8 +216,8 @@ func TestRunDropsRestatementsOfKnownPatterns(t *testing.T) {
 
 	agent := &fakeAgent{fn: func(string) (string, error) {
 		return `{"patterns": [
-			{"rule": "reset-pooled-state", "note": "Reset pooled state on reuse: clear every accumulated field in Free before the object is handed out again.", "finding_ids": [1, 3]},
-			{"rule": "bounded-event-deferral", "note": "Route deferred events through one bounded queue so backpressure cannot amplify goroutines.", "finding_ids": [5, 7]}
+			{"rule": "reset-pooled-state", "note": "Reset pooled state on reuse: clear every accumulated field in Free before the object is handed out again.", "finding_ids": [1, 3], "trigger_paths": []},
+			{"rule": "bounded-event-deferral", "note": "Route deferred events through one bounded queue so backpressure cannot amplify goroutines.", "finding_ids": [5, 7], "trigger_paths": []}
 		]}`, nil
 	}}
 
@@ -349,12 +390,43 @@ func TestRunHonorsRegionAndLimit(t *testing.T) {
 	res, err := Run(context.Background(), st, NewLexicalGrouper(), empty, Options{Region: "api"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.GroupsRead, "only the api group is read")
-	assert.Equal(t, 1, res.GroupsPending, "the web group waits")
+	assert.Zero(t, res.GroupsPending, "out-of-region evidence is outside this run, not pending work")
 
 	res, err = Run(context.Background(), st, NewLexicalGrouper(), empty, Options{Limit: 1})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.GroupsRead, "limit budgets the run")
 	assert.Equal(t, 1, res.GroupsSkipped, "api group already distilled")
+}
+
+func TestRunFiltersRegionBeforeGrouping(t *testing.T) {
+	// Globally, the middle finding is a lexical bridge between the two
+	// API findings. A regional run must never disclose it or let it alter
+	// the API group's membership.
+	findings := []model.Finding{
+		{ID: 1, Path: "api/a.go", Body: "alphaBridge betaBridge first handler"},
+		{ID: 2, Path: "other/bridge.go", Body: "alphaBridge betaBridge gammaBridge deltaBridge"},
+		{ID: 3, Path: "api/b.go", Body: "gammaBridge deltaBridge second worker"},
+	}
+	st := openSeeded(t, findings)
+
+	var prompt string
+	var pf Preflight
+	agent := &fakeAgent{fn: func(p string) (string, error) {
+		prompt = p
+
+		return `{"patterns": []}`, nil
+	}}
+
+	_, err := Run(context.Background(), st, NewLexicalGrouper(), agent, Options{
+		Region:      "api",
+		OnPreflight: func(p Preflight) { pf = p },
+	})
+	require.NoError(t, err)
+	require.Len(t, pf.Groups, 1)
+	assert.Equal(t, 2, pf.Findings)
+	assert.Contains(t, prompt, "first handler")
+	assert.Contains(t, prompt, "second worker")
+	assert.NotContains(t, prompt, "other/bridge.go")
 }
 
 func TestRunMetersAgentTraffic(t *testing.T) {
@@ -424,6 +496,101 @@ func TestRunPrunesStaleProposals(t *testing.T) {
 	require.Len(t, dismissed, 1, "dismissals are memory, never pruned")
 }
 
+func TestRegionalRunDoesNotPruneProposalsElsewhere(t *testing.T) {
+	st := openSeeded(t, []model.Finding{
+		{ID: 1, Path: "api/a.go", Body: "Guard optional handler state before access."},
+		{ID: 2, Path: "api/b.go", Body: "Wrap worker failures with operation context."},
+	})
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "web-signature", Rule: "web-rule", Region: "web/src",
+		Note: "Keep the web invariant.", Members: []int64{90, 91},
+		Status: model.ProposalProposed,
+	}))
+
+	empty := &fakeAgent{fn: func(string) (string, error) { return `{"patterns": []}`, nil }}
+
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), empty, Options{Region: "api"})
+	require.NoError(t, err)
+	assert.Zero(t, res.PrunedStale)
+
+	pending, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, "web-rule", pending[0].Rule)
+}
+
+func TestRegionalRunDoesNotPruneCrossTreeProposal(t *testing.T) {
+	st := openSeeded(t, []model.Finding{
+		{ID: 1, Path: "api/a.go", Body: "Guard optional handler state before access."},
+		{ID: 2, Path: "api/b.go", Body: "Wrap worker failures with operation context."},
+	})
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "cross-tree-signature", Rule: "cross-tree-rule", Region: "api",
+		Regions: []string{"api", "web"}, Note: "Keep both implementations synchronized.",
+		Members: []int64{90, 91}, Status: model.ProposalProposed,
+	}))
+
+	empty := &fakeAgent{fn: func(string) (string, error) { return `{"patterns": []}`, nil }}
+
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), empty, Options{Region: "api"})
+	require.NoError(t, err)
+	assert.Zero(t, res.PrunedStale)
+
+	pending, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, "cross-tree-rule", pending[0].Rule)
+}
+
+func TestRegionalRunPreservesProposalWithEvidenceOutsideCorpus(t *testing.T) {
+	st := openSeeded(t, []model.Finding{
+		{ID: 1, Path: "api/a.go", Body: "Guard optional handler state before access."},
+		{ID: 2, Path: "api/b.go", Body: "Wrap worker failures with operation context."},
+	})
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "partial-signature", Rule: "partial-rule", Region: "api",
+		Note: "Keep both implementations synchronized.", Members: []int64{1, 90},
+		Status: model.ProposalProposed,
+	}))
+
+	empty := &fakeAgent{fn: func(string) (string, error) { return `{"patterns": []}`, nil }}
+
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), empty, Options{Region: "api"})
+	require.NoError(t, err)
+	assert.Zero(t, res.PrunedStale,
+		"delivery metadata must not let a partial corpus prune missing evidence")
+
+	pending, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+}
+
+func TestRegionalRunPrunesStaleProposalWhenAllEvidenceIsInCorpus(t *testing.T) {
+	st := openSeeded(t, []model.Finding{
+		{ID: 1, Path: "api/a.go", Body: "Guard optional handler state before access."},
+		{ID: 2, Path: "api/b.go", Body: "Wrap worker failures with operation context."},
+	})
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "gone", Rule: "stale-rule", Region: "web",
+		Note: "Stale delivery metadata must not preserve this proposal.", Members: []int64{1, 2},
+		Status: model.ProposalProposed,
+	}))
+
+	empty := &fakeAgent{fn: func(string) (string, error) { return `{"patterns": []}`, nil }}
+
+	res, err := Run(context.Background(), st, NewLexicalGrouper(), empty, Options{Region: "api"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.PrunedStale)
+
+	pending, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+}
+
 func TestRecurrenceCountsEventsNotCitations(t *testing.T) {
 	// A review comment and the fix commit answering it share a PR: one
 	// event, so a "pattern" citing only those two is not recurrence.
@@ -432,7 +599,7 @@ func TestRecurrenceCountsEventsNotCitations(t *testing.T) {
 		{ID: 2, Path: "a/y.go", PR: 42, Source: model.SourceFixConventional},
 	})
 
-	got, err := parseReply(`{"patterns":[{"rule":"r","note":"n","finding_ids":[1,2]}]}`, sameEvent, "fake")
+	got, err := parseReply(`{"patterns":[{"rule":"r","note":"n","finding_ids":[1,2],"trigger_paths":[]}]}`, sameEvent, "fake")
 	require.NoError(t, err)
 	assert.Empty(t, got, "same-PR findings are one event; the prompt rule is enforced, not trusted")
 
@@ -442,7 +609,7 @@ func TestRecurrenceCountsEventsNotCitations(t *testing.T) {
 		{ID: 2, Path: "a/y.go", PR: 77, Source: model.SourceFixConventional},
 	})
 
-	got, err = parseReply(`{"patterns":[{"rule":"r","note":"n","finding_ids":[1,2]}]}`, twoEvents, "fake")
+	got, err = parseReply(`{"patterns":[{"rule":"r","note":"n","finding_ids":[1,2],"trigger_paths":[]}]}`, twoEvents, "fake")
 	require.NoError(t, err)
 	assert.Len(t, got, 1)
 
@@ -454,7 +621,7 @@ func TestRecurrenceCountsEventsNotCitations(t *testing.T) {
 		{ID: 3, Path: "a/z.go", Source: model.SourceFixSubject},
 	})
 
-	got, err = parseReply(`{"patterns":[{"rule":"r","note":"n","finding_ids":[1,2,3]}]}`, noPRs, "fake")
+	got, err = parseReply(`{"patterns":[{"rule":"r","note":"n","finding_ids":[1,2,3],"trigger_paths":[]}]}`, noPRs, "fake")
 	require.NoError(t, err)
 	require.Len(t, got, 1, "pr-less findings are independent events")
 	assert.Len(t, got[0].Members, 3)
@@ -477,14 +644,14 @@ func TestParseReplyShapes(t *testing.T) {
 	})
 
 	// Fenced JSON is tolerated — agents wrap replies despite orders.
-	fenced := "Here you go:\n```json\n{\"patterns\":[{\"rule\":\"r\",\"note\":\"n\",\"finding_ids\":[1,2]}]}\n```"
+	fenced := "Here you go:\n```json\n{\"patterns\":[{\"rule\":\"r\",\"note\":\"n\",\"finding_ids\":[1,2],\"trigger_paths\":[]}]}\n```"
 	got, err := parseReply(fenced, g, "fake")
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "a", got[0].Region)
 
 	// Duplicated citations collapse.
-	dup := `{"patterns":[{"rule":"r","note":"n","finding_ids":[1,1,2]}]}`
+	dup := `{"patterns":[{"rule":"r","note":"n","finding_ids":[1,1,2],"trigger_paths":[]}]}`
 	got, err = parseReply(dup, g, "fake")
 	require.NoError(t, err)
 	require.Len(t, got, 1)
@@ -493,7 +660,7 @@ func TestParseReplyShapes(t *testing.T) {
 	// A flood of patterns is capped.
 	var many []string
 	for i := 0; i < 9; i++ {
-		many = append(many, `{"rule":"r`+string(rune('a'+i))+`","note":"n","finding_ids":[1,2]}`)
+		many = append(many, `{"rule":"r`+string(rune('a'+i))+`","note":"n","finding_ids":[1,2],"trigger_paths":[]}`)
 	}
 
 	got, err = parseReply(`{"patterns":[`+strings.Join(many, ",")+`]}`, g, "fake")
@@ -501,9 +668,30 @@ func TestParseReplyShapes(t *testing.T) {
 	assert.Len(t, got, maxPerGroup)
 
 	// An over-long note is trimmed to the cap, not rejected.
-	long := `{"patterns":[{"rule":"r","note":"` + strings.Repeat("x", 500) + `","finding_ids":[1,2]}]}`
+	long := `{"patterns":[{"rule":"r","note":"` + strings.Repeat("x", 500) + `","finding_ids":[1,2],"trigger_paths":[]}]}`
 	got, err = parseReply(long, g, "fake")
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Len(t, got[0].Note, maxNoteLen)
+
+	unicodeNote := `{"patterns":[{"rule":"r","note":"` + strings.Repeat("é", 250) +
+		`","finding_ids":[1,2],"trigger_paths":[]}]}`
+	got, err = parseReply(unicodeNote, g, "fake")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.LessOrEqual(t, len(got[0].Note), maxNoteLen)
+	assert.True(t, utf8.ValidString(got[0].Note))
+}
+
+func TestParseReplyRequiresTriggerPathsAnswer(t *testing.T) {
+	g := makeGroup([]model.Finding{
+		{ID: 1, Path: "a/x.go", PR: 1}, {ID: 2, Path: "a/y.go", PR: 2},
+	})
+
+	_, err := parseReply(
+		`{"patterns":[{"rule":"r","note":"n","finding_ids":[1,2]}]}`,
+		g, "fake",
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required trigger_paths")
 }

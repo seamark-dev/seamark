@@ -105,7 +105,7 @@ func TestReviewerClassification(t *testing.T) {
 		{"Copilot", "Bot", "copilot"},
 		{"copilot-pull-request-reviewer[bot]", "Bot", "copilot"},
 		{"dependabot[bot]", "Bot", "bot"},
-		{"yuribuerov", "User", "human"},
+		{"yuribuerov", "User", "person"},
 	}
 
 	for _, c := range cases {

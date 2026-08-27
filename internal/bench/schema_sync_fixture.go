@@ -13,6 +13,9 @@ const (
 	SchemaSyncInstanceID = "python-ts-schema-sync-v1"
 	// SchemaSyncRule is the treatment lesson's stable identity.
 	SchemaSyncRule = "sync-generated-api-client"
+	// SchemaSyncScopingFamily binds the trigger-scoped and repair-scoped
+	// variants into one matched factorial experiment.
+	SchemaSyncScopingFamily = "python-ts-schema-sync-scoping-v1"
 
 	schemaSyncTask = `Expose each workspace's billing currency in ` + "`GET /api/workspaces/{id}`" + ` responses. ` +
 		`Return it as ` + "`billingCurrency`" + `, sourced from ` +
@@ -37,17 +40,19 @@ const (
 // workflow is the same one used by mixed Python/TypeScript monorepos.
 func SchemaSyncInstance() Instance {
 	return Instance{
-		ID:           SchemaSyncInstanceID,
-		Rule:         SchemaSyncRule,
-		Task:         schemaSyncTask,
-		LessonYAML:   schemaSyncLessonYAML,
-		PlaceboYAML:  schemaSyncPlaceboYAML,
-		Generate:     GenerateSchemaSyncFixture,
-		Judge:        JudgeSchemaSync,
-		ApplyGold:    applySchemaSyncGold,
-		ApplyNaive:   applySchemaSyncNaive,
-		JudgeVersion: "python-ts-schema-sync-v1",
-		sourceFile:   "schema_sync_fixture.go",
+		ID:               SchemaSyncInstanceID,
+		Rule:             SchemaSyncRule,
+		Task:             schemaSyncTask,
+		LessonYAML:       schemaSyncLessonYAML,
+		PlaceboYAML:      schemaSyncPlaceboYAML,
+		Generate:         GenerateSchemaSyncFixture,
+		Judge:            JudgeSchemaSync,
+		ApplyGold:        applySchemaSyncGold,
+		ApplyNaive:       applySchemaSyncNaive,
+		JudgeVersion:     "python-ts-schema-sync-v1",
+		ComparisonFamily: SchemaSyncScopingFamily,
+		ProtocolInstance: SchemaSyncInstanceID,
+		sourceFile:       "schema_sync_fixture.go",
 		Checks: []Command{
 			{
 				Name: "python3",

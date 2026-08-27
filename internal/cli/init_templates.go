@@ -42,7 +42,7 @@ environment:
 deny:
   - id: no-prod-infra-mutation
     when: 'effect.contains("infra:mutate") && env.is_prod'
-    message: infrastructure mutation against a production environment requires a human
+    message: production infrastructure mutation requires maintainer action
 
   - id: no-force-push-default-branch
     when: 'command.is_force_push && command.target_branch in ["main", "master"]'
@@ -91,16 +91,16 @@ index:
     # - "**/*_test.go"   # uncomment for a production-only graph
 
 # Which agent CLI seamark may shell out to for inference-backed features
-# (lesson distillation). Seamark holds no credentials: the CLI is one
-# you already run and have already authenticated.
+# (lesson distillation and trigger extraction). Seamark holds no credentials:
+# the CLI is one you already run and have already authenticated.
 # agent:
 #   cli: claude                  # the built-in preset (default)
 #   argv: ["my-llm", "--print"]  # or any CLI reading a prompt on stdin
 
 # Distillation plan/apply. write lets "lessons --apply" insert accepted
 # pins into .seamark/lessons.yaml itself; without it, apply prints the
-# block for you to paste. Applying is always an explicit human command
-# naming explicit proposal ids — this only gates who edits the file.
+# block for you to paste. Applying always requires an explicit command
+# with proposal ids; this option controls only who edits the file.
 # distill:
 #   write: true
 `
@@ -110,7 +110,8 @@ const starterLessons = `# Tune how mined review lessons surface (RFC-001 §5.4).
 # effect immediately without re-mining. An absent file means "defaults":
 # nothing muted, nothing pinned, threshold 2.
 #
-# Lessons come from ` + "`seamark index --reviews`" + ` (PR review comments) and
+# Lessons come from ` + "`seamark index --reviews`" + ` (reviews + fix commits) or
+# ` + "`seamark index --fixes-only`" + ` (local fix commits only), and
 # appear in ` + "`why <file>`" + `, ` + "`orient`" + `, and the PreToolUse edit hook.
 # Run ` + "`seamark lessons --list`" + ` to see every mined lesson and the exact
 # rule/region values to paste below.

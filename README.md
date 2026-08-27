@@ -8,13 +8,13 @@
   <a href="#get-started"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg" alt="Platform"></a>
 </p>
 
-**The graph your repo's history knows and your code's blast radius — served to your editor, your agents, and your CI.**
+**Repository history and code blast radius for your editor, agents, and CI.**
 
-Seamark indexes which files _really_ change together, why the weird parts
-are weird, and which code paths can reach a database write, a process
-spawn, or your production infrastructure. It serves that as editor
-diagnostics, answers `why` on the CLI, and enforces your rules as
-machine checks on agent commands — not as paragraphs in a prompt.
+Seamark finds which files change together, explains unusual code, and shows
+which code paths can reach a database write, a process spawn, or production
+infrastructure. It provides editor diagnostics, answers `why` on the CLI, and
+checks agent commands against your rules. The rules are machine checks, not
+paragraphs in a prompt.
 **Mistakes get caught instead of explained.**
 
 > A _seamark_ is a navigational marker that shows both the safe channel
@@ -26,7 +26,7 @@ machine checks on agent commands — not as paragraphs in a prompt.
 - [Journey 1: understand an unfamiliar repository](#journey-1-understand-an-unfamiliar-repository)
 - [Journey 2: stop repeating review mistakes](#journey-2-stop-repeating-review-mistakes)
 - [Journey 3: guard agent commands](#journey-3-guard-agent-commands)
-- [Surfaces: editor, agents, humans](#surfaces-editor-agents-humans)
+- [Surfaces: editor, agents, maintainers](#surfaces-editor-agents-maintainers)
 - [How much can the answers be trusted?](#how-much-can-the-answers-be-trusted)
 - [Durable state](#durable-state-the-index-is-not-a-throwaway-cache)
 - [Configuration](#configuration)
@@ -36,8 +36,8 @@ machine checks on agent commands — not as paragraphs in a prompt.
 
 ## Why seamark?
 
-Code-graph tools converged on one design: parse symbols, store a graph,
-save tokens. Three problems stay unsolved by all of them:
+Most code-graph tools use the same design: parse symbols, store a graph, and
+save tokens. Three problems remain:
 
 | Problem                                                                                             | What seamark does about it                                                                                         |
 | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -45,16 +45,16 @@ save tokens. Three problems stay unsolved by all of them:
 | Agents repeat mistakes; the fix is a prompt paragraph that costs tokens every turn and gets ignored | Rules are **checks**, evaluated at edit/run time; they cost nothing until violated                                 |
 | Agents cause real damage and the guardrails are regex denylists                                     | A real shell parser + effect classification + policy over your declared environment, with an append-only audit log |
 
-Measured on a real production monorepo (831 files, Python + TypeScript +
-Go, 447 commits): full index in **~3s**; the strongest signal found was a
-hand-synchronized Python↔TypeScript schema contract (38 shared commits,
-lift 6.6) — invisible to every language server by construction, caught by
-seamark as a save-time diagnostic. 598 symbols were found to transitively
-reach a sink (DB write, process spawn, network egress).
+On a production monorepo with 831 files and 447 commits, Seamark built the full
+Python, TypeScript, and Go index in **~3s**. Its strongest signal was a manually
+synchronized Python↔TypeScript schema contract: 38 shared commits with lift
+6.6. Language servers cannot detect this history signal, but Seamark reported
+it as a save-time diagnostic. Seamark also found 598 symbols that could reach
+a sink such as a database write, process spawn, or network egress.
 
-Everything in the index is **falsifiable**: every edge traces to a parse,
-a commit, or a policy file. No LLM-generated "insights" are ever stored.
-100% local. No account, no API key, no telemetry.
+Every result in the index is **falsifiable** and traceable to a parse, commit,
+or policy file. Seamark does not store LLM-generated "insights." The index is
+local. Seamark requires no account or API key and sends no telemetry.
 
 ## Get started
 
@@ -69,9 +69,9 @@ mkdir -p ~/.local/bin
 install seamark_*/seamark ~/.local/bin/
 ```
 
-A matching checksum verifies the archive against the published
-`SHA256SUMS` — integrity, not publisher identity; artifact signing is
-not yet available ([docs/STATUS.md](docs/STATUS.md)).
+A matching checksum verifies the archive against the published `SHA256SUMS`.
+This verifies integrity, not publisher identity. Artifact signing is not yet
+available ([docs/STATUS.md](docs/STATUS.md)).
 
 Or build from source — Go ≥ 1.25 and a C compiler (tree-sitter uses
 CGO):
@@ -81,7 +81,8 @@ git clone https://github.com/seamark-dev/seamark && cd seamark
 make install        # builds and installs to ~/.local/bin/seamark
 ```
 
-Both routes install to `~/.local/bin` — make sure it is on your `PATH`.
+Both routes install to `~/.local/bin`. Make sure that directory is on your
+`PATH`.
 
 Then, in any repository:
 
@@ -91,21 +92,20 @@ seamark index       # parse + mine history + propagate effects (~seconds)
 seamark why <symbol-or-file>
 ```
 
-`seamark init` is optional but does the one-time setup for you: it writes
-starter `.seamark/policy.yaml`, `.seamark/lessons.yaml` and
-`.seamark/config.yaml` (never overwriting existing files), adds the
-`.gitignore` carve-outs, and merges
-the gate and review-lessons hooks into `.claude/settings.json` — leaving
-any hooks you already have intact, and safe to re-run. Pass `--print` to
-preview every change first. A fresh install on the starter warn policy
-**never blocks anything** (an existing `enforce` policy is kept, and
-keeps enforcing); turning enforcement on is a separate, explicit opt-in
+`seamark init` is optional. It performs the one-time setup without overwriting
+existing files. It writes starter `.seamark/policy.yaml`,
+`.seamark/lessons.yaml`, and `.seamark/config.yaml`; adds the `.gitignore`
+exceptions; and merges the gate and review-lesson hooks into
+`.claude/settings.json`. Existing hooks remain unchanged, so you can safely run
+the command again. Pass `--print` to preview each change. A fresh install with
+the starter warn policy **never blocks anything**. An existing `enforce` policy
+remains in force. Enabling enforcement is a separate, explicit action
 ([Journey 3](#journey-3-guard-agent-commands)).
 
-The graph and your proposal decisions live in one SQLite database under
-`.seamark/`, beside the audit logs and generated reports — all
-gitignored except the reviewed YAML overlays. The database is _not_ a
-throwaway cache once you start deciding on proposals — see
+The graph and your proposal decisions are in one SQLite database under
+`.seamark/`, beside the audit logs and generated reports. Git ignores these
+files but keeps the reviewed YAML overlays. After you decide on proposals, the
+database is _not_ a temporary cache. See
 [Durable state](#durable-state-the-index-is-not-a-throwaway-cache).
 
 ## The mental model
@@ -115,7 +115,7 @@ everywhere — CLI help, docs, and report alike:
 
 ```text
 review comment or fix commit         what a reviewer (or a fix) said, once
-        ↓  mined by `seamark index --reviews`
+        ↓  mined by `seamark index --reviews` or `--fixes-only`
 finding      one raw observation, kept verbatim with its provenance
         ↓  clustered on recurrence (≥2)
 lesson       a pattern recurring across findings in a region — review-
@@ -198,17 +198,24 @@ on every file git tracks.
 
 _Ten minutes to make the last hundred code reviews teach your agents._
 
-Agents repeat mistakes. The correction lives in review threads — said
-once by CodeRabbit, once by Copilot, once by a tired human — and never
-sticks past the session. Mine it instead:
+Agents repeat mistakes. Review threads contain the correction, but the lesson
+does not persist after the session. It can appear once from CodeRabbit, once
+from Copilot, and once from a tired reviewer. Mine it instead:
 
 ```bash
 seamark index --reviews    # review comments via your gh CLI + fix commits from local git
+seamark index --fixes-only # fix commits only; local git, deterministic and offline
 ```
 
-Recurring feedback surfaces region-scoped through the same `seamark why`
-/ `seamark orient` an agent already calls — no extra tokens per turn,
-nothing bolted onto CLAUDE.md. From a private monorepo:
+Use `--fixes-only` for a pinned historical checkout or a run that must not use
+live GitHub data. It refreshes the local-fix source without fetching or
+deleting the existing review corpus. Use a fresh index when the experiment
+must contain only fixes.
+
+Seamark shows recurring feedback for the relevant region through the same
+`seamark why` and `seamark orient` commands that an agent already calls. It
+does not add tokens to every turn or add content to `CLAUDE.md`. For example,
+from a private monorepo:
 
 ```text
 $ seamark why scripts/fetcher.py
@@ -255,11 +262,12 @@ remarks that became the repo's contract-synchronization rule:
   # distilled by claude/v2 from 2 findings (seamark lessons --distill, p60)
 ```
 
-The region set is computed from the cited evidence, never guessed: a
-theme living in `api` AND `core` says exactly that instead of claiming
-the whole repo, so the pin only spends injection budget where its
-evidence points. (Measured on the two development corpora, evidence-
-coverage regions cut repo-wide `*` pins from 35 of 65 to 3.)
+The fallback region set is computed from the cited evidence, never
+guessed: a theme living in `api` AND `core` says exactly that instead of
+claiming the whole repo. A verified trigger can narrow that fallback to
+the exact edit surface where the mistake is introduced. (Measured on
+the two development corpora, evidence-coverage regions cut repo-wide
+`*` pins from 35 of 65 to 3.)
 
 More pins the two repos distilled and applied:
 
@@ -305,24 +313,51 @@ The whole lifecycle is `seamark lessons`, one flag per decision:
 | `--apply p3,p7`   | pin chosen proposals (ranges work: `p1..p9`); writes `lessons.yaml` only with `distill.write`, else prints the block to paste                                 |
 | `--dismiss p2`    | record a no — the same evidence is never re-proposed                                                                                                          |
 | `--prune p16,p45` | retire pins that restate another (the ledger names the clusters); the theme stays pinned by its survivor                                                      |
-| `--retarget p3`   | update an applied pin to the regions its living evidence supports now — coverage plus confirmed trigger paths; ordinary failures roll `lessons.yaml` back, and if a hard crash leaves the file ahead of the ledger, the next run detects and repairs exactly that |
+| `--retarget p3`   | update an applied pin to the regions current inference supports — verified trigger scopes when available, evidence coverage otherwise; ordinary failures roll `lessons.yaml` back, and if a hard crash leaves the file ahead of the ledger, the next run detects and repairs exactly that |
 | `--extract-triggers` | ask your agent CLI where each already-pinned mistake is MADE (see below); every answer is verified, answered proposals are never re-paid, and `--dry-run` discloses first |
 | `--stats`         | the firing log: which lessons actually reach agents (split by surface: hook / change_set / check), which never fire — the decay signal — and per-pin outcomes: did the mistake recur after the pin started firing (working / not landing / untested) |
 | `--hook`          | the PreToolUse entry point `seamark init` wires; offline, silent when a file has no lessons                                                                   |
 
-Pins scope to where the evidence lives — where reviewers commented.
-Some mistakes are MADE somewhere else: a "regenerate the client"
-lesson lands on the generated TypeScript file, while the author who
-forgets is editing the backend model. Distillation therefore asks the
-agent for **trigger paths** and verifies each answer in three steps —
-it must parse, it must exist in the working tree, and co-change
-history must confirm it against the cited evidence — before the pin's
-regions widen to deliver at the trigger. Unverified names never move
-delivery. The `--proposals` ledger, the HTML report, and the distill
-plan flag pins whose note and co-change history agree that delivery
-misses the trigger, and `--retarget` applies the widened set.
-`--extract-triggers` asks the same one question for proposals
-distilled before extraction existed.
+Evidence tells Seamark where a problem was observed or repaired. A
+**trigger path** tells it where an author can introduce the mistake.
+Those can differ: a "regenerate the client" finding may live on the
+generated TypeScript file, while the omission begins in the backend
+model. Distillation must answer the trigger question for every proposed
+pattern. Each named path must parse and exist in the working tree, then
+it is accepted when it is an exact cited production path, the immediate
+parent of one, or co-change history confirms it against the cited evidence.
+Verified triggers become the precise delivery scopes—even a single file—while
+evidence coverage remains the fallback if none verify. Unverified names
+never move delivery. The `--proposals` ledger and HTML report show the
+current scope, and `--retarget` applies it explicitly to an installed
+pin. `--extract-triggers` asks the same question for proposals distilled
+before trigger extraction existed. When that semantic question changes,
+legacy negative answers are re-asked once; existing positive trigger paths
+are left alone.
+
+A clean matched benchmark of this exact failure mode measured a +100
+percentage-point difference-in-differences effect across five pairs per scope:
+the trigger-scoped lesson preserved the invariant 5/5 versus 0/5 without the
+hook, while the repair-scoped control was 3/5 in both arms and never fired.
+This is controlled synthetic evidence under one pinned model/runtime, not
+external validation; see the
+[full report](bench/trigger-scope-report-v7.md).
+
+A second matched benchmark reproduced the mechanism on an exact historical
+OpenTelemetry-Go commit. Trigger-scoped delivery preserved the parallel
+histogram-reset invariant 5/5 versus 0/5 without the hook; the repair-scoped
+control was 1/5 versus 0/5. The resulting +80 percentage-point
+difference-in-differences effect passed its precommitted +40-point threshold,
+and all 20 sessions completed the visible task. This is public-repository
+evidence for one pinned task and runtime—not a claim that every repository or
+model benefits. The step-by-step
+[OpenTelemetry case study](docs/case-studies/opentelemetry-histogram-reset.md)
+connects historical learning, maintainer acceptance, hook delivery, and the
+audit trail. Its reusable evidence rules are in the
+[case-study protocol](docs/case-studies/protocol.md). See the
+[full report](bench/otel-report-v7.md) and
+[benchmark runbook](bench/README.md#pinned-public-repository-calibration) for
+the independent paired evidence.
 
 Mined text is scrubbed of secret-shaped values (connection strings,
 tokens) before it is stored — a credential a reviewer quoted once must
@@ -385,7 +420,7 @@ and CI:
 $ KUBECONFIG=~/.kube/prod.yaml seamark gate --command "terraform apply -auto-approve"
 verdict  deny (mode: warn)
 effects  [infra:mutate]
-  [deny] no-prod-infra-mutation: infrastructure mutation against a production environment requires a human
+  [deny] no-prod-infra-mutation: production infrastructure mutation requires maintainer action
 ```
 
 What makes it more than a denylist:
@@ -411,7 +446,7 @@ mode: warn # report only; flip to "enforce" when the rules have earned trust
 deny:
   - id: no-prod-infra-mutation
     when: 'effect.contains("infra:mutate") && env.is_prod'
-    message: infrastructure mutation against production requires a human
+    message: production infrastructure mutation requires maintainer action
 require_approval:
   - id: prod-db-write
     when: 'effect.contains("db:write") && env.is_prod'
@@ -473,21 +508,21 @@ What Guard can and cannot defend against is stated plainly in
 [docs/threat-model.md](docs/threat-model.md): it is a defense-in-depth
 policy layer, not a sandbox.
 
-## Surfaces: editor, agents, humans
+## Surfaces: editor, agents, maintainers
 
 **Editor** — `seamark lsp` is a secondary language server that runs
-_alongside_ gopls, pyright, or tsserver, adding the layer they cannot
-see: hover with effect reach and co-change partners, caller-count code
-lenses, and the save-time omission diagnostic (_"usually changed
-together, not in this change: src/api/schema.ts — 38/58 commits, lift
-6.6"_). Conservative thresholds by design; a diagnostic that nags gets
-disabled. Setup: [docs/editors.md](docs/editors.md) and the ready-made
-configs in [editors/](editors/).
+_alongside_ gopls, pyright, or tsserver. It adds information they cannot see:
+effect reach and co-change partners in hover text, caller counts in code
+lenses, and save-time omission diagnostics (_"usually changed together, not
+in this change: src/api/schema.ts — 38/58 commits, lift 6.6"_). The thresholds
+are conservative because users disable noisy diagnostics. See
+[docs/editors.md](docs/editors.md) and the ready-made configurations in
+[editors/](editors/).
 
-**Agents** — `seamark mcp` speaks the Model Context Protocol over
-stdio. Five tools, not forty — tool definitions are replayed to the
-model on every turn, so a sprawling "token-saving" server defeats
-itself:
+**Agents** — `seamark mcp` provides the Model Context Protocol over standard
+input and output. It provides five tools, not forty. Tool definitions return
+to the model on every turn, so a large server can use more tokens than it
+saves:
 
 | Tool         | Answers                                                                                                                                       |
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -504,26 +539,24 @@ Register it in Claude Code by dropping an `.mcp.json` at the repo root
 { "mcpServers": { "seamark": { "command": "seamark", "args": ["mcp"] } } }
 ```
 
-Every tool call re-checks the workspace fingerprint first and re-indexes
-if anything changed, so answers never come from a stale graph. The
-server also exposes `seamark://orient` and `seamark://status` as
-resources and an `onboard` prompt that walks an agent through the repo
-cheapest-signal-first.
+Every tool call checks the workspace fingerprint and re-indexes when something
+changed. Answers do not come from a stale graph. The server also exposes
+`seamark://orient` and `seamark://status` as resources. Its `onboard` prompt
+guides an agent through the repository, starting with the lowest-cost signal.
 
-**Humans** — `seamark report` renders everything the learning layer has
-concluded as one self-contained HTML page (decision queue,
-near-duplicate pins, hotspot map, full lesson ledger) — `--open` opens
-it, `-o -` streams it to stdout; see [docs/lessons.md](docs/lessons.md).
+**Maintainers** — `seamark report` creates one self-contained HTML page with
+the decision queue, near-duplicate pins, hotspot map, and full lesson ledger.
+Use `--open` to open it or `-o -` to write it to standard output. See
+[docs/lessons.md](docs/lessons.md).
 
-Freshness is handled per surface, priced by what a stale answer would
-cost: `check` **self-repairs** before evaluating (a blast radius from
-stale line spans would be a wrong safety answer), the LSP reindexes on
-save, MCP re-checks on every call, `why` answers immediately with a
-staleness note, and `seamark index` no-ops in well under a second when
-nothing changed — running it "just in case" is free. A content-hashed
-per-file parse cache keeps reindexing at ~1.3s on an 831-file monorepo
-(full parse ~3.2s, byte-identical results; resolution and propagation
-always run globally so edges stay exact).
+Each surface handles freshness according to the risk of stale data. `check`
+**self-repairs** before evaluation because stale line spans can produce an
+incorrect safety result. The LSP re-indexes on save, and MCP checks on every
+call. `why` responds immediately and adds a staleness note. `seamark index`
+finishes in well under one second when nothing changed. A content-hashed,
+per-file parse cache keeps re-indexing at about 1.3 seconds on an 831-file
+monorepo, compared with about 3.2 seconds for a full parse. Resolution and
+propagation still run globally, so the edges remain exact.
 
 ## How much can the answers be trusted?
 
@@ -699,11 +732,11 @@ design history in [docs/PLAN.md](docs/PLAN.md). Trust boundaries:
 [docs/data-flow.md](docs/data-flow.md) and
 [docs/threat-model.md](docs/threat-model.md).
 
-Planned next (see [docs/PLAN.md](docs/PLAN.md)): zero-token check
-promotion from recurring lessons, function-grain precision refinements,
-public signal evaluation and multi-instance lessons evidence, history
-watermark + incremental daemon for keystroke-adjacent freshness, and signed
-artifacts + npm/Homebrew packaging.
+Planned next (see [docs/PLAN.md](docs/PLAN.md)): zero-token check promotion
+from recurring lessons, function-grain precision refinements, public signal
+evaluation, a history watermark and incremental daemon for
+keystroke-adjacent freshness, and signed artifacts with npm/Homebrew
+packaging.
 
 ## Development
 

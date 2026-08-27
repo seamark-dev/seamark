@@ -1,0 +1,29 @@
+distill preflight — what leaves this machine
+  agent     claude -p  (your CLI, chosen by .seamark/config.yaml; assumed to reach
+            a remote model service)
+  payload   1 group(s), 2 finding(s), ~2.0k tokens
+  contents  per finding: bounded review comment, or fix-commit message,
+            changed-function names and representative patch excerpts; plus relevant
+            repo-relative paths, finding id, source, PR number, reviewer, and labels
+            — no whole source files or environment values
+  redaction no additional dispatch redaction — stored bodies are sent as written,
+            with path metadata and body sharing up to 3000 chars per finding; groups share a fixed evidence budget
+            (mining already scrubs secret-shaped values)
+    sdk/metric/internal/aggregate   2 finding(s)  ~2.0k tokens  3000 chars/finding max
+      - fix:conventional PR #8403  sdk/metric/internal/aggregate/exponential_histogram.go  (finding 728759585664303326)
+        paths  sdk/metric/internal/aggregate/exponential_histogram.go, sdk/metric/internal/aggregate/exponential_histogram_test.go, sdk/metric/internal/aggregate/histogram_test.go, sdk/metric/internal/aggregate/histogram.go
+      - fix:issue-link PR #8428  sdk/metric/internal/aggregate/histogram.go  (finding 5121900077751038754)
+
+distilling 2 findings (sdk/metric/internal/aggregate, 34a4bd6be6effc65)
+  12s, ~2.0k tokens sent / ~123 back, 1 proposal(s)
+distill plan — 1 groups: 1 read
+agent traffic: ~2.0k tokens sent, ~123 received (estimated), 12s
+
+proposed pins — distilled from review findings, awaiting YOUR decision
+
+  p1    reused-datapoint-stale-fields      sdk/metric/internal/aggregate/histogram.go, sdk/metric/internal/aggregate/exponential_histogram.go 2 findings cited [claude/v5]
+        When a collect path reuses metricdata datapoint slots across cycles, explicitly zero every conditionally-set field (Sum, Min, Max) in the else branch; apply the same fix to both delta and cumulative in histogram.go and exponential_histogram.go.
+        trigger sdk/metric/internal/aggregate/histogram.go — directly cited by the evidence; delivery targets sdk/metric/internal/aggregate/histogram.go
+        trigger sdk/metric/internal/aggregate/exponential_histogram.go — directly cited by the evidence; delivery targets sdk/metric/internal/aggregate/exponential_histogram.go
+
+decide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; `--dismiss` remembers the no

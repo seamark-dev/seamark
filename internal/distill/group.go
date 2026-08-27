@@ -64,9 +64,13 @@ type Grouper interface {
 // lexicalGrouper is the built-in strategy: theme groups from shared
 // salient tokens, area groups from directories, singletons dropped.
 type lexicalGrouper struct {
-	// minShared is how many salient tokens two findings must share to
-	// be considered thematically connected.
-	minShared int
+	// strongShared joins findings without a component-size constraint.
+	strongShared int
+	// weakShared admits wording bridges, but only while the resulting
+	// component stays small. This preserves cross-wording recall without
+	// letting a chain of generic two-token overlaps swallow the corpus.
+	weakShared       int
+	maxWeakComponent int
 	// maxDocFrac drops tokens present in more than this fraction of
 	// findings: a word that appears everywhere connects nothing.
 	maxDocFrac float64
@@ -77,17 +81,16 @@ type lexicalGrouper struct {
 
 // NewLexicalGrouper returns the default token-overlap Grouper.
 //
-// The thresholds are measured, not guessed (graphql-go-tools, 1517
-// findings + the pooled-state benchmark): minShared 3 or 4 halves the
-// number of blank-region cap-sized slices — less transitive chaining —
-// but drops the pooled-state theme to 6/8 then 5/8 members, sacrificing
-// exactly the cross-wording recall this package exists for. 2 keeps the
-// benchmark at 8/8 and accepts one large weak-link component that the
-// size cap turns into bounded, id-hash-bucketed batches. A smarter
-// Grouper (two-tier edge strength, embeddings) is the upgrade path if
-// mixed batches prove to dilute distillation quality.
+// Three shared tokens form an unconstrained strong edge. Two-token edges are
+// useful wording bridges (the pooled-state corpus needs them), but may only
+// build a small component. This two-tier rule prevents the weak transitive
+// chains observed in large public repositories without giving up the recall
+// that motivated lexical grouping.
 func NewLexicalGrouper() Grouper {
-	return &lexicalGrouper{minShared: 2, maxDocFrac: 0.10, maxGroup: 40}
+	return &lexicalGrouper{
+		strongShared: 3, weakShared: 2, maxWeakComponent: 12,
+		maxDocFrac: 0.10, maxGroup: 40,
+	}
 }
 
 // Group implements Grouper.
@@ -126,12 +129,15 @@ func (g *lexicalGrouper) Group(findings []model.Finding) []Group {
 		}
 	}
 
-	// Union-find over "share enough tokens" pairs. Transitivity is the
-	// point: A~B and B~C pulls a wording bridge into one theme even
-	// when A and C share nothing directly.
+	// Strong edges establish the semantic cores first. Weak edges then
+	// attach wording bridges only while the combined component remains
+	// reviewable; a long A~B~C~… chain must not become one theme merely
+	// because every neighboring pair shares two generic words.
 	parent := make([]int, len(sorted))
+	sizes := make([]int, len(sorted))
 	for i := range parent {
 		parent[i] = i
+		sizes[i] = 1
 	}
 
 	find := func(x int) int {
@@ -143,10 +149,29 @@ func (g *lexicalGrouper) Group(findings []model.Finding) []Group {
 		return x
 	}
 
+	union := func(i, j, cap int) {
+		a, b := find(i), find(j)
+		if a == b || cap > 0 && sizes[a]+sizes[b] > cap {
+			return
+		}
+
+		parent[b] = a
+		sizes[a] += sizes[b]
+	}
+
 	for i := 0; i < len(sorted); i++ {
 		for j := i + 1; j < len(sorted); j++ {
-			if sharedAtLeast(tokens[i], tokens[j], g.minShared) {
-				parent[find(i)] = find(j)
+			if sharedAtLeast(tokens[i], tokens[j], g.strongShared) {
+				union(i, j, 0)
+			}
+		}
+	}
+
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if weakBridgeAllowed(&sorted[i], &sorted[j]) &&
+				sharedAtLeast(tokens[i], tokens[j], g.weakShared) {
+				union(i, j, g.maxWeakComponent)
 			}
 		}
 	}
@@ -194,6 +219,16 @@ func (g *lexicalGrouper) Group(findings []model.Finding) []Group {
 	})
 
 	return out
+}
+
+// weakBridgeAllowed reserves two-token transitivity for review prose, where
+// terse differently-worded comments need it. Fix findings carry a commit
+// message, changed functions, and a patch excerpt; accepting a weak edge there
+// mostly connects their shared mining envelope. Fix-to-fix and mixed-source
+// recurrence therefore need the strong threshold.
+func weakBridgeAllowed(a, b *model.Finding) bool {
+	return sourceLabel(a.Source) == model.SourceReview &&
+		sourceLabel(b.Source) == model.SourceReview
 }
 
 // splitOversized turns one theme component into groups within the size
@@ -381,7 +416,7 @@ const tokensPerFinding = 40
 func salientTokens(f *model.Finding) map[string]bool {
 	out := map[string]bool{}
 
-	for _, tok := range tokenRe.FindAllString(f.Body, -1) {
+	for _, tok := range tokenRe.FindAllString(groupingText(f), -1) {
 		tok = strings.ToLower(tok)
 
 		if stopTokens[tok] {
@@ -395,6 +430,85 @@ func salientTokens(f *model.Finding) map[string]bool {
 	}
 
 	return out
+}
+
+// groupingText removes the storage envelope added by fix mining before token
+// comparison. The full body still reaches the distillation prompt; only the
+// cheap lexical candidate search ignores generic provenance labels and
+// trailers that otherwise connect unrelated fixes.
+func groupingText(f *model.Finding) string {
+	if !isFixFinding(f.Source) {
+		return f.Body
+	}
+
+	var primary, detail strings.Builder
+	inDetail := false
+
+	for line := range strings.Lines(f.Body) {
+		line = strings.TrimSpace(line)
+
+		switch {
+		case line == "", line == "---------":
+			continue
+		case strings.HasPrefix(line, "fix commit "):
+			continue
+		case strings.HasPrefix(line, "subject:"):
+			line = strings.TrimSpace(strings.TrimPrefix(line, "subject:"))
+		case strings.HasPrefix(line, "Co-authored-by:"),
+			strings.HasPrefix(line, "Signed-off-by:"):
+			continue
+		case strings.HasPrefix(line, "functions:"):
+			inDetail = true
+			line = strings.TrimSpace(strings.TrimPrefix(line, "functions:"))
+		case line == "patch:":
+			inDetail = true
+			continue
+		case inDetail && (strings.HasPrefix(line, "@@") ||
+			strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---")):
+			continue
+		}
+
+		if line == "" {
+			continue
+		}
+
+		if inDetail {
+			detail.WriteString(line)
+			detail.WriteByte('\n')
+		} else {
+			primary.WriteString(line)
+			primary.WriteByte('\n')
+		}
+	}
+
+	// A real commit message is the highest-signal summary. Patch/function
+	// detail is the fallback for anonymous messages such as "fix: PR
+	// review", not extra vocabulary that every already-descriptive fix
+	// needs to contribute to lexical grouping.
+	if semanticTokenCount(primary.String()) >= 4 {
+		return primary.String()
+	}
+
+	primary.WriteString(detail.String())
+
+	return primary.String()
+}
+
+func isFixFinding(source string) bool {
+	return strings.HasPrefix(source, "fix:") || source == model.SourceRevert
+}
+
+func semanticTokenCount(text string) int {
+	seen := map[string]bool{}
+
+	for _, token := range tokenRe.FindAllString(text, -1) {
+		token = strings.ToLower(token)
+		if !stopTokens[token] {
+			seen[token] = true
+		}
+	}
+
+	return len(seen)
 }
 
 // sharedAtLeast reports whether two token sets intersect in at least n

@@ -148,6 +148,36 @@ func TestMigrationsAreOrdered(t *testing.T) {
 		"the last migration must land on the current version — a version bump without a migration strands existing databases")
 }
 
+func TestMigrationVersionsLegacyTriggerAnswersWithoutRewritingThem(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+	s, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, s.InsertProposal(&model.Proposal{
+		Signature: "s1", Rule: "r", Note: "n", Status: model.ProposalProposed,
+		TriggerChecked: 1700000000,
+	}))
+	require.NoError(t, s.Close())
+
+	db, err := rawOpen(t, path)
+	require.NoError(t, err)
+	_, err = db.Exec(`ALTER TABLE proposal DROP COLUMN trigger_prompt_version`)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE meta SET value = '5' WHERE key = ?`, schemaVersionKey)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s, err = Open(path)
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+
+	got, err := s.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, int64(1700000000), got[0].TriggerChecked)
+	assert.Zero(t, got[0].TriggerPromptVersion,
+		"the additive migration marks historical answers as legacy without erasing them")
+}
+
 func TestOpenUpgradesVersionTwoDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.db")
 

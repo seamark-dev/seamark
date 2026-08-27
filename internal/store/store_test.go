@@ -435,7 +435,7 @@ func TestLessonReplaceAndQuery(t *testing.T) {
 			Symptom: "RUF001", Occurrences: 6, LastTS: 100,
 		},
 		{
-			ClusterKey: "api\x00E501", Region: "api", Reviewer: "human",
+			ClusterKey: "api\x00E501", Region: "api", Reviewer: "person",
 			Symptom: "E501", Occurrences: 3, LastTS: 90,
 		},
 		{
@@ -677,13 +677,14 @@ func TestProposalTriggerPathsRoundTrip(t *testing.T) {
 	assert.Equal(t, int64(1700000000), got[1].TriggerChecked)
 
 	// The negative answer: no paths, but the question is settled.
-	require.NoError(t, s.UpdateProposalTriggers(got[0].ID, nil, 1700000500))
+	require.NoError(t, s.UpdateProposalTriggers(got[0].ID, nil, 1700000500, 2))
 
 	got, err = s.Proposals(model.ProposalProposed)
 	require.NoError(t, err)
 	assert.Nil(t, got[0].TriggerPaths)
 	assert.Equal(t, int64(1700000500), got[0].TriggerChecked,
 		"examined-none is distinct from never-examined")
+	assert.Equal(t, 2, got[0].TriggerPromptVersion)
 }
 
 func TestMigrationAddsProposalTriggerPaths(t *testing.T) {
@@ -740,7 +741,7 @@ func TestFindingsRoundTripAndSwap(t *testing.T) {
 		},
 		{
 			ID: 12, LessonKey: "api\x00E501", Path: "api/b.py", PR: 8,
-			Reviewer: "human", Body: "wrap this line", URL: "u2", CreatedAt: 90,
+			Reviewer: "person", Body: "wrap this line", URL: "u2", CreatedAt: 90,
 		},
 	}
 	require.NoError(t, s.ReplaceLessons(lessons, findings))

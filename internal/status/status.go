@@ -332,7 +332,7 @@ func originSummary(origins map[string]int) string {
 	return strings.Join(parts, " · ") + fmt.Sprintf(" (%d calls)", calls)
 }
 
-// age renders a unix timestamp as a coarse human age.
+// age renders a Unix timestamp as a coarse relative age.
 func age(ts int64) string {
 	if ts <= 0 {
 		return "unknown"

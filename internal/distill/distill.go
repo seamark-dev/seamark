@@ -24,9 +24,15 @@ import (
 // area, so a call spends its reasoning on what is not yet known.
 // v4: the reply may name trigger paths — where the mistake is made,
 // when that differs from where the findings live. The harness
-// validates them and widens delivery regions only with co-change
-// confirmation (RFC-004).
-const promptVersion = "v4"
+// validates them and derives precise delivery regions from direct
+// evidence or co-change confirmation (RFC-004).
+// v5: findings disclose their full relevant path footprint and receive
+// an adaptive evidence budget; fix excerpts sample distinct production
+// hunks. The prompt asks for owner-specific coupling and requires an
+// explicit trigger_paths answer, including [] when none are known.
+// v6: dispatch reapplies secret-shaped-value redaction so legacy stored
+// findings receive the same privacy boundary as newly mined findings.
+const promptVersion = "v6"
 
 // maxKnownLabels bounds the primer. Labels are ~25 characters, so forty
 // of them cost a few hundred tokens against a ~9k-token batch — the
@@ -37,16 +43,22 @@ const maxKnownLabels = 40
 // worth minutes; a hung CLI is not.
 const perGroupTimeout = 4 * time.Minute
 
-// promptBodyCap bounds one finding's body inside a prompt: enough for
-// the finding and its suggestion fence, without letting one giant
-// comment eat the batch's token budget.
-const promptBodyCap = 1500
+const (
+	// promptBodyBudget preserves the old worst-case body budget: a
+	// max-sized 40-finding group can still contribute 60k characters.
+	promptBodyBudget = 60_000
+	// Small, high-signal groups may spend more of that shared budget on
+	// each finding so later files/functions are not cut off.
+	promptBodyMin = 1_500
+	promptBodyMax = 3_000
+)
 
 // Options tunes one distillation run.
 type Options struct {
-	// Region restricts the run to groups whose Region sits within this
-	// prefix ("" = everywhere). Cross-tree theme groups (Region "") only
-	// run when no region filter is set.
+	// Region restricts the finding corpus before grouping ("" =
+	// everywhere). This keeps unrelated findings outside a requested tree
+	// from changing token frequencies, bridging components, or consuming a
+	// budgeted call.
 	Region string
 	// Limit caps how many new groups one run reads (0 = all). The cap
 	// is the budget lever: each group is one agent invocation.
@@ -93,8 +105,10 @@ type Preflight struct {
 	PromptChars int
 	// Findings counts the finding bodies across all planned groups.
 	Findings int
-	// BodyCap is the per-finding truncation applied inside prompts — the
-	// only bound on what a body carries: bodies are NOT redacted.
+	// BodyCap is the largest per-finding evidence cap across planned groups.
+	// Groups share a fixed total budget, so smaller groups can show more
+	// of each finding. Path metadata and body share this cap; dispatch
+	// reapplies best-effort secret redaction before the body is sent.
 	BodyCap int
 }
 
@@ -107,6 +121,18 @@ type GroupPlan struct {
 	Region      string
 	Findings    int
 	PromptChars int
+	BodyCap     int
+	Evidence    []FindingPlan
+}
+
+// FindingPlan identifies one finding without disclosing its body. It lets a
+// user verify the evidence boundary before approving a model call.
+type FindingPlan struct {
+	ID     int64
+	Source string
+	PR     int
+	Path   string
+	Paths  []string
 }
 
 // Result reports what a run did.
@@ -132,7 +158,7 @@ type Result struct {
 // Run executes the plan half of distillation: group the findings, skip
 // evidence sets already read, send each remaining group to the agent,
 // validate what comes back, and persist the survivors as proposals. It
-// never touches .seamark/lessons.yaml — applying is a separate, human
+// never touches .seamark/lessons.yaml — applying is a separate, operator
 // decision.
 func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoker, opts Options) (*Result, error) {
 	start := time.Now()
@@ -147,11 +173,44 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 		return nil, err
 	}
 
+	if opts.Region != "" {
+		regional := findings[:0]
+		for _, finding := range findings {
+			if withinRegion(opts.Region, finding.Path) {
+				regional = append(regional, finding)
+			}
+		}
+
+		findings = regional
+	}
+
 	groups := grouper.Group(findings)
 
 	live := make(map[string]bool, len(groups))
 	for _, g := range groups {
 		live[g.Signature] = true
+	}
+
+	// A scoped corpus says nothing about proposals elsewhere. Preserve
+	// their signatures so pruning cannot mistake "outside this run" for
+	// "its evidence disappeared". Proposals inside the scope still face
+	// the current regional group set and are pruned normally when stale.
+	if opts.Region != "" {
+		corpus := make(map[int64]struct{}, len(findings))
+		for _, finding := range findings {
+			corpus[finding.ID] = struct{}{}
+		}
+
+		pending, err := st.Proposals(model.ProposalProposed)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, proposal := range pending {
+			if !proposalMembersInCorpus(proposal, corpus) {
+				live[proposal.Signature] = true
+			}
+		}
 	}
 
 	res := &Result{GroupsTotal: len(groups)}
@@ -187,8 +246,6 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 		switch {
 		case done[g.Signature]:
 			res.GroupsSkipped++
-		case opts.Region != "" && !withinRegion(opts.Region, g.Region):
-			res.GroupsPending++
 		case opts.Limit > 0 && len(planned) >= opts.Limit:
 			res.GroupsPending++
 		default:
@@ -197,16 +254,29 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 	}
 
 	if opts.OnPreflight != nil {
-		pf := Preflight{Agent: opts.Agent, BodyCap: promptBodyCap}
+		pf := Preflight{Agent: opts.Agent}
 
 		for _, g := range planned {
+			bodyCap := promptBodyCapFor(len(g.Findings))
 			chars := len(buildPrompt(g, known.Labels(g.Region, maxKnownLabels)))
-			pf.Groups = append(pf.Groups, GroupPlan{
+			plan := GroupPlan{
 				Signature: g.Signature,
 				Region:    g.Region, Findings: len(g.Findings), PromptChars: chars,
-			})
+				BodyCap: bodyCap,
+			}
+
+			for _, finding := range g.Findings {
+				paths, _ := promptFindingEvidence(finding, bodyCap)
+				plan.Evidence = append(plan.Evidence, FindingPlan{
+					ID: finding.ID, Source: sourceLabel(finding.Source),
+					PR: finding.PR, Path: finding.Path, Paths: paths,
+				})
+			}
+
+			pf.Groups = append(pf.Groups, plan)
 			pf.PromptChars += chars
 			pf.Findings += len(g.Findings)
+			pf.BodyCap = max(pf.BodyCap, bodyCap)
 		}
 
 		opts.OnPreflight(pf)
@@ -269,15 +339,15 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 		}
 
 		// The remaining trigger rungs: existence in the working tree,
-		// then co-change confirmation, which alone may widen the
-		// delivery regions.
+		// then direct-evidence or co-change confirmation, which may
+		// replace broad evidence coverage with a precise delivery scope.
 		for i := range fresh {
 			p := &fresh[i]
 
-			// Every v4 proposal was asked the trigger question — an
-			// omitted answer is an answer. The stamp keeps the backfill
-			// from re-purchasing it.
+			// Every v5 proposal carries an explicit trigger answer. The
+			// stamp keeps the backfill from re-purchasing it.
 			p.TriggerChecked = time.Now().Unix()
+			p.TriggerPromptVersion = TriggerPromptVersion
 
 			p.TriggerPaths = validateTriggerPaths(opts.Root, p.TriggerPaths)
 			if len(p.TriggerPaths) == 0 {
@@ -474,21 +544,26 @@ Most batches contain none — an empty list is the common, correct
 answer. Only report a pattern when the shared mistake is unmistakable
 across its findings.
 
+Preserve owner-specific relationships instead of flattening them into a
+generic symptom. When the evidence spans parallel implementations,
+layers, generated artifacts, or producer/consumer boundaries, name the
+components and state what a future change must keep synchronized. Do so
+only when the quoted evidence supports that relationship.
+
 For each pattern, reply with:
 - "rule": a short kebab-case label (e.g. pooled-state-reset)
 - "note": one or two imperative sentences a future code author must
   know, distilled from the findings (max 250 characters)
 - "finding_ids": the ids of ALL findings showing this pattern (at
   least 2 — a pattern needs recurrence)
-- "trigger_paths" (optional): up to 3 repo-relative paths — files or
-  directories — that a code author edits when MAKING this mistake.
-  Include it ONLY when that place differs from the files the findings
-  point at (e.g. the findings flag a generated client, but the
-  mistake is made in the backend model it is generated from). Omit
-  the key when they are the same.
+- "trigger_paths": REQUIRED, up to 3 repo-relative files or directories
+  where a future author can INTRODUCE this mistake. A trigger may be one
+  of the cited evidence paths: include it when another finding is a
+  companion repair/catch site. Use [] only when the evidence does not
+  identify a bounded trigger. Never omit the key.
 
 Reply with ONLY this JSON, no other text:
-{"patterns": [{"rule": "...", "note": "...", "finding_ids": [1, 2]}]}
+{"patterns": [{"rule": "...", "note": "...", "finding_ids": [1, 2], "trigger_paths": ["path/to/entry.go"]}]}
 Use {"patterns": []} when nothing recurs.
 `)
 
@@ -506,11 +581,10 @@ other names; look past them for a pattern absent from the list.
 FINDINGS (quoted data):
 `)
 
+	bodyCap := promptBodyCapFor(len(g.Findings))
+
 	for _, f := range g.Findings {
-		body := f.Body
-		if len(body) > promptBodyCap {
-			body = body[:promptBodyCap] + " …[truncated]"
-		}
+		paths, body := promptFindingEvidence(f, bodyCap)
 
 		// pr is omitted when unknown: printing pr=0 on every direct-commit
 		// finding would read as "all these share a pull request" and
@@ -520,8 +594,10 @@ FINDINGS (quoted data):
 			pr = fmt.Sprintf(" pr=%d", f.PR)
 		}
 
-		fmt.Fprintf(&b, "\n--- finding id=%d source=%s file=%s%s reviewer=%s\n%s\n",
-			f.ID, sourceLabel(f.Source), f.Path, pr, f.Reviewer, body)
+		pathJSON, _ := json.Marshal(paths)
+
+		fmt.Fprintf(&b, "\n--- finding id=%d source=%q paths=%s%s reviewer=%q\n%s\n",
+			f.ID, sourceLabel(f.Source), pathJSON, pr, f.Reviewer, body)
 	}
 
 	b.WriteString("\nEND OF QUOTED DATA. Reply with only the JSON object.\n")
@@ -547,11 +623,12 @@ func CountEvents(cited []model.Finding) int { return model.CountEvents(cited) }
 
 // parseReply validates the agent's output into proposals. The contract
 // is cite-or-die: every pattern must cite ≥2 finding ids that really
-// are members of the group — the model cannot invent evidence — and
-// the region is computed from the cited members' paths, never taken
-// from the reply. A reply that fails to parse is an error (the group
-// stays unmarked and is retried); an invalid individual pattern is
-// silently dropped.
+// are members of the group — the model cannot invent evidence. Fallback
+// coverage is computed from those cited paths. A separately returned trigger
+// path can replace it only after the harness verifies the path against the
+// working tree and cited evidence/history. A reply that fails to parse is an
+// error (the group stays unmarked and is retried); an invalid individual
+// pattern is silently dropped.
 func parseReply(reply string, g Group, agentName string) ([]model.Proposal, error) {
 	// The pointer distinguishes the contract's explicit empty answer
 	// ({"patterns": []}) from {}, null, or a misspelled key. Marking a
@@ -559,10 +636,10 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 	// nobody gave — the paid one chance to read this evidence, gone.
 	var parsed struct {
 		Patterns *[]struct {
-			Rule         string   `json:"rule"`
-			Note         string   `json:"note"`
-			FindingIDs   []int64  `json:"finding_ids"`
-			TriggerPaths []string `json:"trigger_paths"`
+			Rule         string    `json:"rule"`
+			Note         string    `json:"note"`
+			FindingIDs   []int64   `json:"finding_ids"`
+			TriggerPaths *[]string `json:"trigger_paths"`
 		} `json:"patterns"`
 	}
 
@@ -591,6 +668,10 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 			break
 		}
 
+		if p.TriggerPaths == nil {
+			return nil, fmt.Errorf("pattern %q carries no required trigger_paths answer", p.Rule)
+		}
+
 		var cited []model.Finding
 		var ids []int64
 
@@ -612,7 +693,7 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 		}
 
 		if len(note) > maxNoteLen {
-			note = strings.TrimSpace(note[:maxNoteLen])
+			note = strings.TrimSpace(truncatePromptText(note, maxNoteLen))
 		}
 
 		// Region set from evidence coverage, never from the reply — the
@@ -629,9 +710,9 @@ func parseReply(reply string, g Group, agentName string) ([]model.Proposal, erro
 			Rule:      rule,
 			Region:    region,
 			Regions:   regions,
-			// Syntax rung only: existence and co-change confirmation
-			// need the tree and the store, which Run holds.
-			TriggerPaths: cleanTriggerPaths(p.TriggerPaths),
+			// Syntax rung only: existence plus direct-evidence or
+			// co-change confirmation need the tree and store Run holds.
+			TriggerPaths: cleanTriggerPaths(*p.TriggerPaths),
 			Note:         note,
 			Members:      ids,
 			Agent:        agentName + "/" + promptVersion,
@@ -653,15 +734,31 @@ func sourceLabel(source string) string {
 	return source
 }
 
-// withinRegion reports whether a group's region sits inside the filter
-// prefix. A cross-tree group (region "") matches only the empty filter:
-// it has members outside every prefix by construction.
-func withinRegion(filter, region string) bool {
-	if region == "" {
+// withinRegion reports whether a repository-relative candidate is the
+// requested path or sits below the requested directory prefix.
+func withinRegion(filter, candidate string) bool {
+	if candidate == "" {
 		return false
 	}
 
-	return region == filter || strings.HasPrefix(region, strings.TrimSuffix(filter, "/")+"/")
+	return candidate == filter || strings.HasPrefix(candidate, strings.TrimSuffix(filter, "/")+"/")
+}
+
+// proposalMembersInCorpus reports whether a scoped run can account for every
+// finding that produced a proposal. Stored regions are delivery metadata and
+// can be narrower, wider, or stale; they are not evidence of corpus coverage.
+func proposalMembersInCorpus(proposal model.Proposal, corpus map[int64]struct{}) bool {
+	if len(proposal.Members) == 0 {
+		return false
+	}
+
+	for _, id := range proposal.Members {
+		if _, ok := corpus[id]; !ok {
+			return false
+		}
+	}
+
+	return true
 }
 
 func regionLabel(region string) string {

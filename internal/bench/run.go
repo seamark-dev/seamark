@@ -74,6 +74,9 @@ type RunConfig struct {
 	MaxBudgetUSD float64
 	RuntimeID    string // sandbox/toolchain identity
 	Fingerprint  string // immutable instance + runtime configuration hash
+	// ProtocolFingerprint omits the intentionally varied instance scope while
+	// binding every shared part of a cross-instance experiment.
+	ProtocolFingerprint string
 	// RunID groups rows and makes transcript names unique across concurrent
 	// invocations. Empty asks Run to generate a cryptographically random ID.
 	RunID string
@@ -152,35 +155,38 @@ type Row struct {
 	// Explored lists instance-selected files the agent named in its own
 	// messages and tool calls, in first-mention order. It is diagnostic
 	// evidence only and never affects a verdict.
-	Explored            []string              `json:"explored,omitempty"`
-	RequestedModel      string                `json:"requested_model,omitempty"`
-	Model               string                `json:"model,omitempty"`
-	ModelUsage          map[string]ModelUsage `json:"model_usage,omitempty"`
-	InputTokens         int64                 `json:"input_tokens,omitempty"`
-	CacheReadTokens     int64                 `json:"cache_read_input_tokens,omitempty"`
-	CacheCreationTokens int64                 `json:"cache_creation_input_tokens,omitempty"`
-	ContextTokens       int64                 `json:"context_tokens,omitempty"`
-	OutputTokens        int64                 `json:"output_tokens,omitempty"`
-	Turns               int                   `json:"turns,omitempty"`
-	PermissionDenials   int                   `json:"permission_denials,omitempty"`
-	CostUSD             float64               `json:"cost_usd,omitempty"`
-	DurationMS          int64                 `json:"duration_ms,omitempty"`
-	AgentExit           int                   `json:"agent_exit"`
-	TimedOut            bool                  `json:"timed_out,omitempty"`
-	AgentError          bool                  `json:"agent_error,omitempty"`
-	InitSeen            bool                  `json:"init_seen,omitempty"`
-	ResultSeen          bool                  `json:"result_seen,omitempty"`
-	Tools               []string              `json:"tools,omitempty"`
-	Plugins             []string              `json:"plugins,omitempty"`
-	MCPServers          []string              `json:"mcp_servers,omitempty"`
-	SeamarkVersion      string                `json:"seamark_version,omitempty"`
-	SeamarkSHA          string                `json:"seamark_sha256,omitempty"`
-	AgentVersion        string                `json:"agent_version,omitempty"`
-	Effort              string                `json:"effort,omitempty"`
-	HookDelivery        HookDeliveryMode      `json:"hook_delivery,omitempty"`
-	MaxBudgetUSD        float64               `json:"max_budget_usd,omitempty"`
-	RuntimeID           string                `json:"runtime_id,omitempty"`
-	Fingerprint         string                `json:"fingerprint,omitempty"`
+	Explored            []string                `json:"explored,omitempty"`
+	RequestedModel      string                  `json:"requested_model,omitempty"`
+	Model               string                  `json:"model,omitempty"`
+	ModelUsage          map[string]ModelUsage   `json:"model_usage,omitempty"`
+	InputTokens         int64                   `json:"input_tokens,omitempty"`
+	CacheReadTokens     int64                   `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationTokens int64                   `json:"cache_creation_input_tokens,omitempty"`
+	ContextTokens       int64                   `json:"context_tokens,omitempty"`
+	OutputTokens        int64                   `json:"output_tokens,omitempty"`
+	Turns               int                     `json:"turns,omitempty"`
+	PermissionDenials   int                     `json:"permission_denials,omitempty"`
+	CostUSD             float64                 `json:"cost_usd,omitempty"`
+	DurationMS          int64                   `json:"duration_ms,omitempty"`
+	AgentExit           int                     `json:"agent_exit"`
+	TimedOut            bool                    `json:"timed_out,omitempty"`
+	AgentError          bool                    `json:"agent_error,omitempty"`
+	InitSeen            bool                    `json:"init_seen,omitempty"`
+	ResultSeen          bool                    `json:"result_seen,omitempty"`
+	Tools               []string                `json:"tools,omitempty"`
+	Plugins             []string                `json:"plugins,omitempty"`
+	MCPServers          []string                `json:"mcp_servers,omitempty"`
+	SeamarkVersion      string                  `json:"seamark_version,omitempty"`
+	SeamarkSHA          string                  `json:"seamark_sha256,omitempty"`
+	AgentVersion        string                  `json:"agent_version,omitempty"`
+	Effort              string                  `json:"effort,omitempty"`
+	HookDelivery        HookDeliveryMode        `json:"hook_delivery,omitempty"`
+	HookExposure        HookExposureExpectation `json:"hook_exposure,omitempty"`
+	MaxBudgetUSD        float64                 `json:"max_budget_usd,omitempty"`
+	RuntimeID           string                  `json:"runtime_id,omitempty"`
+	Fingerprint         string                  `json:"fingerprint,omitempty"`
+	ProtocolFingerprint string                  `json:"protocol_fingerprint,omitempty"`
+	ComparisonFamily    string                  `json:"comparison_family,omitempty"`
 }
 
 // ModelUsage preserves provider-reported usage for every model involved in a
@@ -216,6 +222,7 @@ type Summary struct {
 	RunID         string
 	Instance      string
 	Rule          string
+	HookExposure  HookExposureExpectation
 	StoppedReason string
 }
 
@@ -263,13 +270,17 @@ func (s Summary) Lines() []string {
 		}
 	}
 
-	// A hooked arm whose trials never fired measured nothing: the
-	// arms were identical and the counts above must not be read as a
-	// pin effect.
+	// A required-exposure arm whose trials never fired measured nothing. An
+	// optional-exposure scope control reports the same observation as expected
+	// experimental data rather than an infrastructure failure.
 	for _, arm := range []Arm{ArmHookOn, ArmPlacebo} {
 		if t := s.ByArm[arm]; t.Ran > 0 && t.Firings == 0 {
-			out = append(out, fmt.Sprintf("warning — the hook never fired in any %s trial; "+
-				"that arm measured nothing (does the agent run project hooks headless?)", arm))
+			if s.HookExposure == HookExposureOptional {
+				out = append(out, fmt.Sprintf("scope control — the hook matched no %s edit; zero exposure is valid for this instance", arm))
+			} else {
+				out = append(out, fmt.Sprintf("warning — the hook never fired in any %s trial; "+
+					"that arm measured nothing (does the agent run project hooks headless?)", arm))
+			}
 		}
 	}
 
@@ -347,6 +358,32 @@ func Run(ctx context.Context, cfg RunConfig) (Summary, error) {
 		return Summary{}, err
 	}
 
+	suppliedFingerprint := cfg.Fingerprint
+	expectedFingerprint, err := Fingerprint(cfg)
+	if err != nil {
+		return Summary{}, fmt.Errorf("fingerprint benchmark: %w", err)
+	}
+
+	if suppliedFingerprint != "" && suppliedFingerprint != expectedFingerprint {
+		return Summary{}, fmt.Errorf("supplied benchmark fingerprint %q does not match computed %q",
+			suppliedFingerprint, expectedFingerprint)
+	}
+
+	cfg.Fingerprint = expectedFingerprint
+
+	suppliedProtocolFingerprint := cfg.ProtocolFingerprint
+	expectedProtocolFingerprint, err := ProtocolFingerprint(cfg)
+	if err != nil {
+		return Summary{}, fmt.Errorf("fingerprint benchmark protocol: %w", err)
+	}
+
+	if suppliedProtocolFingerprint != "" && suppliedProtocolFingerprint != expectedProtocolFingerprint {
+		return Summary{}, fmt.Errorf("supplied benchmark protocol fingerprint %q does not match computed %q",
+			suppliedProtocolFingerprint, expectedProtocolFingerprint)
+	}
+
+	cfg.ProtocolFingerprint = expectedProtocolFingerprint
+
 	logf := cfg.Log
 	if logf == nil {
 		logf = func(string, ...any) {}
@@ -374,6 +411,7 @@ func Run(ctx context.Context, cfg RunConfig) (Summary, error) {
 
 	sum := Summary{
 		ByArm: map[Arm]Tally{}, RunID: cfg.RunID, Instance: instance.ID, Rule: instance.Rule,
+		HookExposure: instance.effectiveHookExposure(),
 	}
 
 	work := cfg.WorkDir
@@ -650,25 +688,28 @@ func runTrial(ctx context.Context, cfg RunConfig, instance Instance, work string
 	}
 
 	row := Row{
-		SchemaVersion:  ResultSchemaVersion,
-		TS:             time.Now().UTC().Format(time.RFC3339),
-		RunID:          cfg.RunID,
-		Instance:       instance.ID,
-		TaskSHA:        instance.TaskSHA(),
-		Pin:            instance.Rule,
-		Arm:            arm,
-		Trial:          trial,
-		Valid:          true,
-		RequestedModel: cfg.Model,
-		SeamarkVersion: cfg.Version,
-		SeamarkSHA:     cfg.SeamarkSHA,
-		AgentVersion:   cfg.AgentVersion,
-		Effort:         cfg.Effort,
-		HookDelivery:   effectiveHookDelivery(cfg),
-		MaxBudgetUSD:   cfg.MaxBudgetUSD,
-		RuntimeID:      cfg.RuntimeID,
-		Fingerprint:    cfg.Fingerprint,
-		Fixture:        fixture,
+		SchemaVersion:       ResultSchemaVersion,
+		TS:                  time.Now().UTC().Format(time.RFC3339),
+		RunID:               cfg.RunID,
+		Instance:            instance.ID,
+		TaskSHA:             instance.TaskSHA(),
+		Pin:                 instance.Rule,
+		Arm:                 arm,
+		Trial:               trial,
+		Valid:               true,
+		RequestedModel:      cfg.Model,
+		SeamarkVersion:      cfg.Version,
+		SeamarkSHA:          cfg.SeamarkSHA,
+		AgentVersion:        cfg.AgentVersion,
+		Effort:              cfg.Effort,
+		HookDelivery:        effectiveHookDelivery(cfg),
+		HookExposure:        expectedHookExposure(instance, arm),
+		MaxBudgetUSD:        cfg.MaxBudgetUSD,
+		RuntimeID:           cfg.RuntimeID,
+		Fingerprint:         cfg.Fingerprint,
+		ProtocolFingerprint: cfg.ProtocolFingerprint,
+		ComparisonFamily:    instance.ComparisonFamily,
+		Fixture:             fixture,
 	}
 
 	if cfg.TranscriptDir != "" {
@@ -747,7 +788,7 @@ func runTrial(ctx context.Context, cfg RunConfig, instance Instance, work string
 			row.HookContextBytes = intensity.ContextBytes
 		}
 
-		if row.HookFirings == 0 && row.Valid {
+		if row.HookFirings == 0 && row.Valid && row.HookExposure == HookExposureRequired {
 			invalidateInfrastructure(&row, "selected lesson hook never fired for an in-region edit")
 		}
 	}
@@ -1082,8 +1123,10 @@ func excludeHarnessArtifacts(dir string) error {
 
 // installHarnessBinary places the exact measured Seamark binary inside the
 // trial boundary. Hooks no longer need to execute a binary from the host
-// workspace, which would violate the sandbox's read boundary. Hermetic unit
-// tests disable index preparation and keep using their inert fake path.
+// workspace, which would violate the sandbox's read boundary. The returned
+// path is absolute because Claude's persistent shell can change directories
+// before a later edit hook runs. Hermetic unit tests disable index preparation
+// and keep using their inert fake path.
 func installHarnessBinary(dir string, cfg RunConfig) (string, error) {
 	if !cfg.PrepareIndex {
 		return cfg.SeamarkBin, nil
@@ -1097,7 +1140,11 @@ func installHarnessBinary(dir string, cfg RunConfig) (string, error) {
 	// .seamark is already excluded from Seamark's own code index, so the
 	// executable cannot distort routing or fixture size.
 	rel := filepath.Join(".seamark", "bin", "seamark")
-	abs := filepath.Join(dir, rel)
+	abs, err := filepath.Abs(filepath.Join(dir, rel))
+	if err != nil {
+		return "", err
+	}
+
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return "", err
 	}
@@ -1106,7 +1153,7 @@ func installHarnessBinary(dir string, cfg RunConfig) (string, error) {
 		return "", err
 	}
 
-	return rel, nil
+	return abs, nil
 }
 
 // writeLessons installs a lessons.yaml into the trial repo.
@@ -1226,10 +1273,16 @@ func writeAgentSettings(dir, hookCommand, resetCommand string) error {
 	return os.WriteFile(filepath.Join(claudeDir, "settings.json"), data, 0o644)
 }
 
-// runAgent runs the configured agent command in the trial dir with
-// the task appended as the last argument. A non-zero exit is a result
-// (recorded on the row), not an error: some agents exit non-zero on
-// partial work, and the judge reads the files either way.
+const agentWorkingTreeInstruction = "Do not create commits or stage changes. Leave all edits in the working tree for review."
+
+func agentPrompt(task string) string {
+	return task + "\n\n" + agentWorkingTreeInstruction
+}
+
+// runAgent runs the configured agent command in the trial dir with the task
+// and benchmark-owned working-tree instruction appended as the last argument.
+// A non-zero exit is a result (recorded on the row), not an error: some agents
+// exit non-zero on partial work, and the judge reads the files either way.
 func runAgent(parent context.Context, cfg RunConfig, instance Instance, dir string) (stdout, stderr []byte, exit int, timedOut bool, err error) {
 	if len(cfg.AgentArgv) == 0 {
 		return nil, nil, 0, false, fmt.Errorf("empty agent command")
@@ -1238,11 +1291,17 @@ func runAgent(parent context.Context, cfg RunConfig, instance Instance, dir stri
 	ctx, cancel := context.WithTimeout(parent, cfg.Timeout)
 	defer cancel()
 
-	argv := append(slices.Clone(cfg.AgentArgv), instance.Task)
+	if err := writeAgentToolEnvironment(dir); err != nil {
+		return nil, nil, 0, false, fmt.Errorf("prepare agent environment: %w", err)
+	}
+
+	env := agentEnvironment(dir)
+
+	argv := append(slices.Clone(cfg.AgentArgv), agentPrompt(instance.Task))
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = agentEnvironment(dir)
+	cmd.Env = env
 	cmd.WaitDelay = processWaitDelay
 
 	var outBuf, errBuf bytes.Buffer
@@ -1271,10 +1330,9 @@ func runAgent(parent context.Context, cfg RunConfig, instance Instance, dir stri
 }
 
 // inheritedEnvironmentBlocklist contains host settings that can change fixture
-// generation, agent behavior, provider routing, or validation. Authentication
-// variables and CLAUDE_CONFIG_DIR are intentionally preserved: the benchmark
-// must keep working with the operator's existing subscription or API-key login
-// without copying secrets.
+// generation, agent behavior, provider routing, or validation. Authentication,
+// HOME, and CLAUDE_CONFIG_DIR are preserved for the agent process; Bash and
+// hook subprocesses receive isolated home/config paths through the shell prefix.
 // Every benchmark subprocess starts from the same filtered environment;
 // individual commands then add only their explicitly owned settings.
 var inheritedEnvironmentBlocklist = map[string]bool{
@@ -1316,6 +1374,7 @@ var inheritedEnvironmentBlocklist = map[string]bool{
 	"CLAUDE_CODE_DISABLE_AUTO_MEMORY":          true,
 	"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":       true,
 	"CLAUDE_CODE_DISABLE_POLICY_SKILLS":        true,
+	"CLAUDE_CODE_SHELL_PREFIX":                 true,
 	"ENABLE_CLAUDEAI_MCP_SERVERS":              true,
 	"DISABLE_AUTOUPDATER":                      true,
 	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": true,
@@ -1333,6 +1392,7 @@ var inheritedEnvironmentBlocklist = map[string]bool{
 	"PYTHONEXECUTABLE":        true,
 	"PYTHONPYCACHEPREFIX":     true,
 	"PYTHONDONTWRITEBYTECODE": true,
+	"SEAMARK_BENCH_CACHE_DIR": true,
 	"VIRTUAL_ENV":             true,
 	"PIP_CONFIG_FILE":         true,
 	"BASH_ENV":                true,
@@ -1356,11 +1416,18 @@ var inheritedEnvironmentBlocklist = map[string]bool{
 	"GIT_CONFIG_NOSYSTEM":     true,
 	"TMPDIR":                  true,
 	"GOCACHE":                 true,
+	"GOENV":                   true,
 	"GOMODCACHE":              true,
 	"GOPATH":                  true,
+	"GOFLAGS":                 true,
 	"GOTOOLCHAIN":             true,
 	"GOPROXY":                 true,
+	"GOTELEMETRY":             true,
+	"GOTELEMETRYDIR":          true,
+	"GOWORK":                  true,
 	"XDG_CACHE_HOME":          true,
+	"SEAMARK_BENCH_TOOL_HOME": true,
+	"SEAMARK_BENCH_TOOL_XDG":  true,
 	"npm_config_cache":        true,
 	"PIP_CACHE_DIR":           true,
 	"PYTHONNOUSERSITE":        true,
@@ -1380,11 +1447,39 @@ func sanitizedEnvironment() []string {
 	return env
 }
 
+const toolEnvironmentPrefix = `#!/bin/sh
+export HOME="$SEAMARK_BENCH_TOOL_HOME"
+export XDG_CONFIG_HOME="$SEAMARK_BENCH_TOOL_XDG"
+exec /bin/bash -c "$1"
+`
+
+func writeAgentToolEnvironment(dir string) error {
+	cache := filepath.Join(dir, ".bench-cache")
+
+	for _, sub := range []string{
+		"home", "tmp", "go-build", "go-mod", "go-path", "xdg-cache", "xdg-config", "npm", "pip",
+	} {
+		if err := os.MkdirAll(filepath.Join(cache, sub), 0o755); err != nil {
+			return fmt.Errorf("create agent cache %q: %w", sub, err)
+		}
+	}
+
+	prefix := filepath.Join(cache, "tool-environment.sh")
+	if err := os.WriteFile(prefix, []byte(toolEnvironmentPrefix), 0o700); err != nil {
+		return fmt.Errorf("write shell environment prefix: %w", err)
+	}
+
+	return nil
+}
+
 func agentEnvironment(dir string) []string {
 	cache := filepath.Join(dir, ".bench-cache")
-	for _, sub := range []string{"tmp", "go-build", "go-mod", "go-path", "xdg", "npm", "pip"} {
+	for _, sub := range []string{
+		"home", "tmp", "go-build", "go-mod", "go-path", "xdg-cache", "xdg-config", "npm", "pip",
+	} {
 		_ = os.MkdirAll(filepath.Join(cache, sub), 0o755)
 	}
+	prefix := filepath.Join(cache, "tool-environment.sh")
 
 	env := sanitizedEnvironment()
 
@@ -1393,6 +1488,7 @@ func agentEnvironment(dir string) []string {
 		"CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
 		"CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1",
 		"CLAUDE_CODE_DISABLE_POLICY_SKILLS=1",
+		"CLAUDE_CODE_SHELL_PREFIX="+prefix,
 		"ENABLE_CLAUDEAI_MCP_SERVERS=false",
 		"DISABLE_AUTOUPDATER=1",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
@@ -1401,9 +1497,11 @@ func agentEnvironment(dir string) []string {
 		"GOCACHE="+filepath.Join(cache, "go-build"),
 		"GOMODCACHE="+filepath.Join(cache, "go-mod"),
 		"GOPATH="+filepath.Join(cache, "go-path"),
+		"GOENV=off",
 		"GOTOOLCHAIN=local",
 		"GOPROXY=off",
-		"XDG_CACHE_HOME="+filepath.Join(cache, "xdg"),
+		"GOWORK=off",
+		"XDG_CACHE_HOME="+filepath.Join(cache, "xdg-cache"),
 		"npm_config_cache="+filepath.Join(cache, "npm"),
 		"PIP_CACHE_DIR="+filepath.Join(cache, "pip"),
 		"PYTHONNOUSERSITE=1",
@@ -1411,6 +1509,8 @@ func agentEnvironment(dir string) []string {
 		"PYTHONUTF8=1",
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"SEAMARK_BENCH_TOOL_HOME="+filepath.Join(cache, "home"),
+		"SEAMARK_BENCH_TOOL_XDG="+filepath.Join(cache, "xdg-config"),
 	)
 
 	return env
@@ -1584,9 +1684,21 @@ func parseResult(stdout []byte, row *Row) bool {
 	if res.APIErrorStatus >= 400 {
 		invalidateInfrastructure(row,
 			fmt.Sprintf("agent provider error HTTP %d", res.APIErrorStatus))
+	} else if res.IsError && providerAPIError(res.Result) {
+		// Claude can report a transport/provider failure without an HTTP
+		// status, including a connection closed mid-response. Those sessions
+		// did not receive a complete agent attempt and must not be scored as a
+		// task outcome. Budget and turn-limit results remain valid outcomes.
+		invalidateInfrastructure(row, "agent provider API error")
 	}
 
 	return true
+}
+
+func providerAPIError(result string) bool {
+	result = strings.TrimSpace(result)
+	return strings.EqualFold(result, "API Error") ||
+		strings.HasPrefix(strings.ToLower(result), "api error:")
 }
 
 func validateAgentResult(cfg RunConfig, row *Row) {

@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS lesson (
     id               INTEGER PRIMARY KEY,
     cluster_key      TEXT NOT NULL UNIQUE,
     region           TEXT NOT NULL DEFAULT '',  -- file or directory the flag lands in
-    reviewer         TEXT NOT NULL DEFAULT '',  -- coderabbit | copilot | bot | human | mixed
+    reviewer         TEXT NOT NULL DEFAULT '',  -- coderabbit | copilot | bot | person | mixed
     symptom          TEXT NOT NULL DEFAULT '',  -- rule code (RUF001) or a normalized message
     fix              TEXT NOT NULL DEFAULT '',  -- extracted suggestion, when present
     occurrences      INTEGER NOT NULL DEFAULT 1,
@@ -191,6 +191,9 @@ CREATE TABLE IF NOT EXISTS proposal (
     -- never): a negative answer must not be re-purchased on the next
     -- extraction run. (Migration-added on existing databases.)
     trigger_checked_at INTEGER NOT NULL DEFAULT 0,
+    -- Semantic version of the trigger question. Version 0 predates
+    -- versioning and may be re-asked after the question changes.
+    trigger_prompt_version INTEGER NOT NULL DEFAULT 0,
     note       TEXT NOT NULL,
     members    TEXT NOT NULL,             -- JSON array of cited finding ids
     agent      TEXT NOT NULL DEFAULT '',  -- provenance: adapter + prompt version

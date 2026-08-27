@@ -25,12 +25,26 @@ type ClaimRegistry struct {
 	Claims        []Claim `yaml:"claims"`
 }
 
+// The comparison kinds a claim may freeze. hook-on_vs_hook-off is the
+// within-instance treatment effect. difference_in_differences compares that
+// effect across two protocol-matched variants, isolating the one intentional
+// difference between them.
+const (
+	comparisonHookOnVsOff       = "hook-on_vs_hook-off"
+	comparisonDifferenceInDiffs = "difference_in_differences"
+)
+
 // Claim defines one falsifiable product claim and its evidence floor.
 type Claim struct {
-	ID                           string   `yaml:"id"`
-	Claim                        string   `yaml:"claim"`
-	PrimaryMetric                string   `yaml:"primary_metric"`
-	Comparison                   string   `yaml:"comparison"`
+	ID            string `yaml:"id"`
+	Claim         string `yaml:"claim"`
+	PrimaryMetric string `yaml:"primary_metric"`
+	Comparison    string `yaml:"comparison"`
+	// TreatmentInstance and ControlInstance name the two variants a
+	// difference_in_differences claim compares. Both must appear in
+	// Instances; empty for hook-on_vs_hook-off claims.
+	TreatmentInstance            string   `yaml:"treatment_instance,omitempty"`
+	ControlInstance              string   `yaml:"control_instance,omitempty"`
 	Direction                    string   `yaml:"direction"`
 	RequiredModel                string   `yaml:"required_model"`
 	RequiredEffort               string   `yaml:"required_effort"`
@@ -68,29 +82,32 @@ type ArmReport struct {
 // CohortReport is one immutable experiment fingerprint. Different harness,
 // fixture, model, or runtime identities are never pooled.
 type CohortReport struct {
-	Instance         string
-	Fingerprint      string
-	Task             string
-	TaskSHA          string
-	Pin              string
-	Fixture          string
-	RequestedModel   string
-	Model            string
-	SeamarkVersion   string
-	SeamarkSHA       string
-	AgentVersion     string
-	Effort           string
-	HookDelivery     HookDeliveryMode
-	RuntimeID        string
-	MaxBudgetUSD     float64
-	Rows             int
-	ValidPairs       int
-	FavorablePairs   int
-	UnfavorablePairs int
-	TiedPairs        int
-	HarmfulPairs     int
-	HookOn           ArmReport
-	HookOff          ArmReport
+	Instance            string
+	Fingerprint         string
+	Task                string
+	TaskSHA             string
+	Pin                 string
+	Fixture             string
+	RequestedModel      string
+	Model               string
+	SeamarkVersion      string
+	SeamarkSHA          string
+	AgentVersion        string
+	Effort              string
+	HookDelivery        HookDeliveryMode
+	HookExposure        HookExposureExpectation
+	ComparisonFamily    string
+	ProtocolFingerprint string
+	RuntimeID           string
+	MaxBudgetUSD        float64
+	Rows                int
+	ValidPairs          int
+	FavorablePairs      int
+	UnfavorablePairs    int
+	TiedPairs           int
+	HarmfulPairs        int
+	HookOn              ArmReport
+	HookOff             ArmReport
 }
 
 // Effect returns the hook-on minus hook-off invariant-pass rate, conditional
@@ -142,6 +159,9 @@ type ClaimAssessment struct {
 	MeanEffect          float64
 	WorstInstanceEffect float64
 	HarmfulInterference float64
+	// AnchorNote carries the component effects behind a factorial claim. It is
+	// report-only; the frozen verdict uses their difference.
+	AnchorNote string
 }
 
 // BenchmarkReport is a deterministic summary of explicit raw inputs.
@@ -214,8 +234,11 @@ func (r ClaimRegistry) Validate() error {
 			return fmt.Errorf("claim %q has no statement", claim.ID)
 		case claim.PrimaryMetric != "invariant_pass_rate_among_task_complete":
 			return fmt.Errorf("claim %q has unsupported primary metric %q", claim.ID, claim.PrimaryMetric)
-		case claim.Comparison != "hook-on_vs_hook-off":
+		case claim.Comparison != comparisonHookOnVsOff && claim.Comparison != comparisonDifferenceInDiffs:
 			return fmt.Errorf("claim %q has unsupported comparison %q", claim.ID, claim.Comparison)
+		case claim.Comparison == comparisonHookOnVsOff &&
+			(claim.TreatmentInstance != "" || claim.ControlInstance != ""):
+			return fmt.Errorf("claim %q does not take treatment/control instances", claim.ID)
 		case claim.Direction != "higher":
 			return fmt.Errorf("claim %q has unsupported direction %q", claim.ID, claim.Direction)
 		case strings.TrimSpace(claim.RequiredModel) == "" || claim.RequiredModel != strings.TrimSpace(claim.RequiredModel):
@@ -254,6 +277,25 @@ func (r ClaimRegistry) Validate() error {
 			}
 
 			seenInstances[id] = true
+		}
+
+		// A cross-instance claim is one comparison: exactly the two
+		// named cohorts, nothing pooled, nothing implicit.
+		if claim.Comparison == comparisonDifferenceInDiffs {
+			switch {
+			case claim.TreatmentInstance == "" || claim.ControlInstance == "":
+				return fmt.Errorf("claim %q requires treatment_instance and control_instance", claim.ID)
+			case claim.TreatmentInstance == claim.ControlInstance:
+				return fmt.Errorf("claim %q compares an instance with itself", claim.ID)
+			case !seenInstances[claim.TreatmentInstance] || !seenInstances[claim.ControlInstance]:
+				return fmt.Errorf("claim %q treatment and control must both appear in instances", claim.ID)
+			case len(claim.Instances) != 2:
+				return fmt.Errorf("claim %q must list exactly its two compared instances", claim.ID)
+			case claim.MinimumInstances != 2:
+				return fmt.Errorf("claim %q minimum_instances must be 2 for a cross-instance comparison", claim.ID)
+			case claim.MinimumInstanceEffect != claim.MinimumEffect:
+				return fmt.Errorf("claim %q must use the same effect threshold for its single factorial contrast", claim.ID)
+			}
 		}
 	}
 
@@ -398,6 +440,7 @@ type cohortIdentity struct {
 	taskSHA, pin, fixture, requestedModel            string
 	seamarkVersion, seamarkSHA, agentVersion, effort string
 	hookDelivery                                     HookDeliveryMode
+	comparisonFamily, protocolFingerprint            string
 	runtimeID                                        string
 	maxBudgetUSD                                     float64
 }
@@ -408,7 +451,8 @@ func reportIdentity(row Row) cohortIdentity {
 		requestedModel: row.RequestedModel, seamarkVersion: row.SeamarkVersion,
 		seamarkSHA: row.SeamarkSHA, agentVersion: row.AgentVersion,
 		effort: row.Effort, runtimeID: row.RuntimeID, maxBudgetUSD: row.MaxBudgetUSD,
-		hookDelivery: row.HookDelivery,
+		hookDelivery:     row.HookDelivery,
+		comparisonFamily: row.ComparisonFamily, protocolFingerprint: row.ProtocolFingerprint,
 	}
 }
 
@@ -429,8 +473,10 @@ func buildCohorts(rows []Row) ([]CohortReport, error) {
 			RequestedModel: first.RequestedModel, SeamarkVersion: first.SeamarkVersion,
 			SeamarkSHA: first.SeamarkSHA, AgentVersion: first.AgentVersion,
 			Effort: first.Effort, RuntimeID: first.RuntimeID,
-			HookDelivery: first.HookDelivery,
-			MaxBudgetUSD: first.MaxBudgetUSD, Rows: len(cohortRows),
+			HookDelivery:        first.HookDelivery,
+			ComparisonFamily:    first.ComparisonFamily,
+			ProtocolFingerprint: first.ProtocolFingerprint,
+			MaxBudgetUSD:        first.MaxBudgetUSD, Rows: len(cohortRows),
 		}
 
 		if instance, err := InstanceByID(first.Instance); err == nil && instance.TaskSHA() == first.TaskSHA {
@@ -445,6 +491,13 @@ func buildCohorts(rows []Row) ([]CohortReport, error) {
 			if reportIdentity(*row) != identity {
 				return nil, fmt.Errorf("rows reuse fingerprint %s with conflicting experiment identity",
 					shortHash(key.fingerprint))
+			}
+			if row.Arm == ArmHookOn || row.Arm == ArmPlacebo {
+				if cohort.HookExposure != "" && cohort.HookExposure != row.HookExposure {
+					return nil, fmt.Errorf("rows reuse fingerprint %s with conflicting hook exposure expectations",
+						shortHash(key.fingerprint))
+				}
+				cohort.HookExposure = row.HookExposure
 			}
 
 			if row.Valid && cohort.Model != "" && row.Model != "" && row.Model != cohort.Model {
@@ -613,6 +666,12 @@ func assessClaims(claims []Claim, cohorts []CohortReport) []ClaimAssessment {
 			continue
 		}
 
+		if claim.Comparison == comparisonDifferenceInDiffs {
+			assessments = append(assessments, assessDifferenceInDifferences(claim, assessment, selected))
+
+			continue
+		}
+
 		var (
 			effectTotal    float64
 			harmful, pairs int
@@ -663,6 +722,67 @@ func assessClaims(claims []Claim, cohorts []CohortReport) []ClaimAssessment {
 	}
 
 	return assessments
+}
+
+// assessDifferenceInDifferences judges a scoped factorial claim. It subtracts
+// each variant's hook-off baseline before comparing variants, so ordinary
+// model drift in baseline task behavior is not credited to delivery scoping.
+// Both cohorts already passed the frozen model, effort, clean-build, and
+// pair-count conditions.
+func assessDifferenceInDifferences(claim Claim, assessment ClaimAssessment,
+	selected map[string]CohortReport,
+) ClaimAssessment {
+	treatment, treatmentOK := selected[claim.TreatmentInstance]
+	control, controlOK := selected[claim.ControlInstance]
+
+	if !treatmentOK || !controlOK {
+		assessment.Reason = "treatment or control cohort is missing despite the instance count"
+
+		return assessment
+	}
+
+	if treatment.ComparisonFamily == "" ||
+		treatment.ComparisonFamily != control.ComparisonFamily ||
+		treatment.ProtocolFingerprint == "" ||
+		treatment.ProtocolFingerprint != control.ProtocolFingerprint {
+		assessment.Reason = "treatment and control cohorts do not share one comparison family and protocol fingerprint"
+
+		return assessment
+	}
+
+	treatmentEffect, treatmentOK := treatment.Effect()
+	controlEffect, controlOK := control.Effect()
+	if !treatmentOK || !controlOK {
+		assessment.Reason = "a qualifying cohort has no task-complete result in one arm"
+
+		return assessment
+	}
+
+	// One factorial contrast: mean and worst are the same number, kept so the
+	// shared assessment fields stay truthful.
+	effect := treatmentEffect - controlEffect
+	assessment.MeanEffect = effect
+	assessment.WorstInstanceEffect = effect
+
+	pairs := treatment.ValidPairs + control.ValidPairs
+	assessment.HarmfulInterference =
+		float64(treatment.HarmfulPairs+control.HarmfulPairs) / float64(pairs)
+	assessment.AnchorNote = fmt.Sprintf(
+		"component effects — treatment %+.1f pp, control %+.1f pp; difference-in-differences %+.1f pp",
+		treatmentEffect*100, controlEffect*100, effect*100,
+	)
+
+	if effect >= claim.MinimumEffect &&
+		effect >= claim.MinimumInstanceEffect &&
+		assessment.HarmfulInterference <= claim.MaximumHarmfulInterference {
+		assessment.Status = "passes frozen threshold"
+		assessment.Reason = "difference-in-differences and harmful-interference thresholds pass"
+	} else {
+		assessment.Status = "does not pass frozen threshold"
+		assessment.Reason = "difference-in-differences or harmful-interference threshold failed"
+	}
+
+	return assessment
 }
 
 func cohortMatchesClaimConditions(cohort CohortReport, claim Claim) bool {
@@ -722,11 +842,12 @@ func (r BenchmarkReport) Markdown() string {
 
 	if r.ResultSchemaVersion >= 6 {
 		out.WriteString("\n### Hook delivery intensity\n\n")
-		out.WriteString("| Instance | Fingerprint | Delivery | Matches | Injections | Repeated injections | Suppressed | Context bytes |\n")
-		out.WriteString("|---|---|---|---:|---:|---:|---:|---:|\n")
+		out.WriteString("| Instance | Fingerprint | Delivery | Exposure | Matches | Injections | Repeated injections | Suppressed | Context bytes |\n")
+		out.WriteString("|---|---|---|---|---:|---:|---:|---:|---:|\n")
 		for _, cohort := range r.Cohorts {
-			fmt.Fprintf(&out, "| %s | `%s` | %s | %d | %d | %d | %d | %d |\n",
+			fmt.Fprintf(&out, "| %s | `%s` | %s | %s | %d | %d | %d | %d | %d |\n",
 				tableCell(cohort.Instance), cohort.Fingerprint, tableCell(string(cohort.HookDelivery)),
+				tableCell(valueOrNA(string(cohort.HookExposure))),
 				cohort.HookOn.HookMatches,
 				cohort.HookOn.HookInjections, cohort.HookOn.HookRepeated,
 				cohort.HookOn.HookSuppressed, cohort.HookOn.HookContextBytes)
@@ -748,6 +869,12 @@ func (r BenchmarkReport) Markdown() string {
 
 		if r.ResultSchemaVersion >= 6 {
 			fmt.Fprintf(&out, "  - Hook delivery policy: %s.\n", markdownCode(string(cohort.HookDelivery)))
+		}
+
+		if r.ResultSchemaVersion >= 7 {
+			fmt.Fprintf(&out, "  - Hook exposure: %s; comparison family %s; protocol %s.\n",
+				markdownCode(string(cohort.HookExposure)), markdownCode(valueOrNA(cohort.ComparisonFamily)),
+				markdownCode(cohort.ProtocolFingerprint))
 		}
 
 		fmt.Fprintf(&out, "  - Agent %s; runtime %s.\n",
@@ -782,26 +909,46 @@ func (r BenchmarkReport) Markdown() string {
 		if assessment.QualifyingInstances > 0 {
 			fmt.Fprintf(&out, " (qualifying instances: %d", assessment.QualifyingInstances)
 			if assessment.Status != "insufficient evidence" {
-				fmt.Fprintf(&out, ", mean effect: %+.1f pp, worst instance: %+.1f pp, harmful interference: %.1f%%",
-					assessment.MeanEffect*100, assessment.WorstInstanceEffect*100,
-					assessment.HarmfulInterference*100)
+				if assessment.Definition.Comparison == comparisonDifferenceInDiffs {
+					fmt.Fprintf(&out, ", difference-in-differences: %+.1f pp, harmful interference: %.1f%%",
+						assessment.MeanEffect*100, assessment.HarmfulInterference*100)
+				} else {
+					fmt.Fprintf(&out, ", mean effect: %+.1f pp, worst instance: %+.1f pp, harmful interference: %.1f%%",
+						assessment.MeanEffect*100, assessment.WorstInstanceEffect*100,
+						assessment.HarmfulInterference*100)
+				}
 			}
 			out.WriteString(")")
 		}
 
 		out.WriteString(".\n")
 		claim := assessment.Definition
-		fmt.Fprintf(&out, "  - Frozen conditions: %d instances × %d valid pairs; mean effect ≥ %+.0f pp; "+
-			"worst instance ≥ %+.0f pp; harmful task interference ≤ %.1f%%; model %s; effort %s; clean Seamark required.\n",
-			claim.MinimumInstances, claim.MinimumValidPairsPerInstance, claim.MinimumEffect*100,
-			claim.MinimumInstanceEffect*100, claim.MaximumHarmfulInterference*100,
-			markdownCode(claim.RequiredModel), markdownCode(claim.RequiredEffort))
+		if claim.Comparison == comparisonDifferenceInDiffs {
+			fmt.Fprintf(&out, "  - Frozen conditions: two protocol-matched variants × %d valid pairs; "+
+				"treatment effect minus control effect ≥ %+.0f pp; harmful task interference ≤ %.1f%%; "+
+				"model %s; effort %s; clean Seamark required.\n",
+				claim.MinimumValidPairsPerInstance, claim.MinimumEffect*100,
+				claim.MaximumHarmfulInterference*100,
+				markdownCode(claim.RequiredModel), markdownCode(claim.RequiredEffort))
+			fmt.Fprintf(&out, "  - Comparison: (%s hook-on − hook-off) − (%s hook-on − hook-off).\n",
+				markdownCode(claim.TreatmentInstance), markdownCode(claim.ControlInstance))
+		} else {
+			fmt.Fprintf(&out, "  - Frozen conditions: %d instances × %d valid pairs; mean effect ≥ %+.0f pp; "+
+				"worst instance ≥ %+.0f pp; harmful task interference ≤ %.1f%%; model %s; effort %s; clean Seamark required.\n",
+				claim.MinimumInstances, claim.MinimumValidPairsPerInstance, claim.MinimumEffect*100,
+				claim.MinimumInstanceEffect*100, claim.MaximumHarmfulInterference*100,
+				markdownCode(claim.RequiredModel), markdownCode(claim.RequiredEffort))
+		}
+
+		if assessment.AnchorNote != "" {
+			fmt.Fprintf(&out, "  - Report-only observations: %s.\n", assessment.AnchorNote)
+		}
 	}
 
 	out.WriteString("\n## Interpretation guardrail\n\n")
-	out.WriteString("A cohort can validate the harness or support its specific task without establishing the cross-instance product claim. " +
-		"A passing assessment supports only the committed synthetic claim under the exact model, effort, clean-build, " +
-		"independent-instance, and valid-pair conditions; it does not establish external validity. An insufficient assessment " +
+	out.WriteString("A cohort can validate the harness or support its specific task without establishing a broader product claim. " +
+		"A passing assessment supports only the committed claim under the exact model, effort, clean-build, " +
+		"specified instance/variant, protocol, and valid-pair conditions; it does not establish external validity. An insufficient assessment " +
 		"must not be promoted to a product claim.\n")
 
 	return out.String()

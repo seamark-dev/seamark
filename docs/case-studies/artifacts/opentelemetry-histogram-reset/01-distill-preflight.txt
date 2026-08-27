@@ -1,0 +1,17 @@
+distill preflight — what leaves this machine
+  agent     claude -p  (your CLI, chosen by .seamark/config.yaml; assumed to reach
+            a remote model service)
+  payload   1 group(s), 2 finding(s), ~2.0k tokens
+  contents  per finding: bounded review comment, or fix-commit message,
+            changed-function names and representative patch excerpts; plus relevant
+            repo-relative paths, finding id, source, PR number, reviewer, and labels
+            — no whole source files or environment values
+  redaction no additional dispatch redaction — stored bodies are sent as written,
+            with path metadata and body sharing up to 3000 chars per finding; groups share a fixed evidence budget
+            (mining already scrubs secret-shaped values)
+    sdk/metric/internal/aggregate   2 finding(s)  ~2.0k tokens  3000 chars/finding max
+      - fix:conventional PR #8403  sdk/metric/internal/aggregate/exponential_histogram.go  (finding 728759585664303326)
+        paths  sdk/metric/internal/aggregate/exponential_histogram.go, sdk/metric/internal/aggregate/exponential_histogram_test.go, sdk/metric/internal/aggregate/histogram_test.go, sdk/metric/internal/aggregate/histogram.go
+      - fix:issue-link PR #8428  sdk/metric/internal/aggregate/histogram.go  (finding 5121900077751038754)
+
+(dry run — nothing was sent; 1 group(s) remain unread; drop --dry-run to distill)

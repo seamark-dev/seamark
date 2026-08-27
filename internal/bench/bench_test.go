@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -94,6 +95,8 @@ func TestRunRecordsTimeouts(t *testing.T) {
 	assert.Equal(t, -1, sum.Rows[0].AgentExit)
 	assert.True(t, sum.Rows[0].TimedOut)
 	assert.Contains(t, sum.Rows[0].Notes, "timed out")
+	assert.NotEmpty(t, sum.Rows[0].Fingerprint)
+	assert.NotEmpty(t, sum.Rows[0].ProtocolFingerprint)
 }
 
 func TestSummaryWarnsWhenHookNeverFired(t *testing.T) {
@@ -148,11 +151,16 @@ func TestRunPersistsCompletedArmWhenPairIsCancelled(t *testing.T) {
 func TestRunPersistsCompletedArmWhenPairedSetupFails(t *testing.T) {
 	instance := SchemaSyncInstance()
 	realGenerate := instance.Generate
-	generations := 0
+	trialGenerations := 0
 	instance.Generate = func(dir string) error {
-		generations++
-		if generations == 2 {
-			return assert.AnError
+		// Run regenerates fingerprint repositories before trial setup. Count
+		// only the two assigned trial directories this test intends to exercise.
+		switch filepath.Base(dir) {
+		case "hook-off-01", "file-only-01":
+			trialGenerations++
+			if trialGenerations == 2 {
+				return assert.AnError
+			}
 		}
 
 		return realGenerate(dir)
@@ -262,6 +270,19 @@ func TestParseAgentOutputRejectsProviderFailure(t *testing.T) {
 	assert.Contains(t, row.InvalidReason, "rate limit")
 }
 
+func TestParseAgentOutputRejectsProviderAPIErrorWithoutStatus(t *testing.T) {
+	stream := `{"type":"system","subtype":"init","model":"claude-haiku-4-5-20251001","tools":["Read","Edit","Write","Bash"],"mcp_servers":[],"plugins":[]}` + "\n" +
+		`{"type":"result","subtype":"success","is_error":true,"result":"API Error: Connection closed mid-response. The response above may be incomplete.","usage":{}}`
+
+	row := Row{Valid: true}
+	parseAgentOutput([]byte(stream), &row, SchemaSyncInstance())
+
+	assert.False(t, row.Valid)
+	assert.True(t, row.AgentError)
+	assert.True(t, row.InfrastructureFailure)
+	assert.Contains(t, row.InvalidReason, "provider API error")
+}
+
 func TestParseAgentOutputAcceptsAllowedQuotaWithoutOverage(t *testing.T) {
 	stream := strings.Join([]string{
 		`{"type":"system","subtype":"init","model":"claude-haiku-4-5-20251001","tools":["Read","Edit","Write","Bash"],"mcp_servers":[],"plugins":[]}`,
@@ -298,8 +319,26 @@ echo '{"type":"result","is_error":true,"api_error_status":429,"result":"rate lim
 	assert.Contains(t, sum.StoppedReason, "HTTP 429")
 }
 
+func TestRunAgentAppendsWorkingTreeInstruction(t *testing.T) {
+	stub := filepath.Join(t.TempDir(), "agent.sh")
+	require.NoError(t, os.WriteFile(stub, []byte("#!/bin/sh\nprintf '%s' \"$1\"\n"), 0o755))
+	instance := SchemaSyncInstance()
+
+	stdout, stderr, exit, timedOut, err := runAgent(context.Background(), RunConfig{
+		AgentArgv: []string{stub}, Timeout: time.Second,
+	}, instance, t.TempDir())
+
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	assert.Zero(t, exit)
+	assert.False(t, timedOut)
+	assert.Equal(t, agentPrompt(instance.Task), string(stdout))
+	assert.Contains(t, string(stdout), agentWorkingTreeInstruction)
+}
+
 func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", "/host/home")
 	t.Setenv("ANTHROPIC_MODEL", "unwanted")
 	t.Setenv("ANTHROPIC_BASE_URL", "https://gateway.invalid")
 	t.Setenv("CLAUDE_CODE_USE_BEDROCK", "1")
@@ -321,14 +360,24 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	t.Setenv("GIT_AUTHOR_NAME", "host author")
 	t.Setenv("GIT_COMMITTER_EMAIL", "host@example.com")
 	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "0")
+	t.Setenv("CLAUDE_CODE_SHELL_PREFIX", "/host/prefix")
 	t.Setenv("ENABLE_CLAUDEAI_MCP_SERVERS", "true")
+	t.Setenv("SEAMARK_BENCH_TOOL_HOME", "/host/tool-home")
+	t.Setenv("SEAMARK_BENCH_TOOL_XDG", "/host/tool-xdg")
 	t.Setenv("GOPROXY", "https://proxy.invalid")
+	t.Setenv("GOFLAGS", "-mod=mod")
+	t.Setenv("GOENV", "/host/go/env")
+	t.Setenv("GOTELEMETRY", "on")
+	t.Setenv("GOTELEMETRYDIR", "/host/go/telemetry")
+	t.Setenv("GOWORK", "/host/go.work")
+	t.Setenv("XDG_CONFIG_HOME", "/host/xdg-config")
 
 	env := environmentByKey(t, agentEnvironment(dir))
 	for _, key := range []string{
 		"ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
 		"ANTHROPIC_SMALL_FAST_MODEL", "MAX_THINKING_TOKENS", "DISABLE_PROMPT_CACHING",
 		"CLAUDE_CODE_EFFORT_LEVEL", "PYTHONPATH", "PYTHONHOME", "BASH_ENV", "MAKEFLAGS",
+		"SEAMARK_BENCH_CACHE_DIR", "GOFLAGS", "GOTELEMETRY", "GOTELEMETRYDIR",
 		"VIRTUAL_ENV", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
 		"GIT_AUTHOR_NAME", "GIT_COMMITTER_EMAIL",
 	} {
@@ -341,8 +390,17 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 		"subscription authentication must survive environment normalization")
 	assert.Equal(t, "/test/claude-auth-config", env["CLAUDE_CONFIG_DIR"],
 		"custom configuration directories may contain the operator's saved credentials")
+	assert.Equal(t, "/host/home", env["HOME"],
+		"the agent process needs the operator home for keychain-backed authentication")
+	assert.Equal(t, "/host/xdg-config", env["XDG_CONFIG_HOME"])
+	assert.Equal(t, filepath.Join(dir, ".bench-cache", "tool-environment.sh"),
+		env["CLAUDE_CODE_SHELL_PREFIX"])
+	assert.Equal(t, filepath.Join(dir, ".bench-cache", "home"), env["SEAMARK_BENCH_TOOL_HOME"])
+	assert.Equal(t, filepath.Join(dir, ".bench-cache", "xdg-config"), env["SEAMARK_BENCH_TOOL_XDG"])
 	assert.Equal(t, filepath.Join(dir, ".bench-cache", "go-build"), env["GOCACHE"])
+	assert.Equal(t, "off", env["GOENV"])
 	assert.Equal(t, "off", env["GOPROXY"])
+	assert.Equal(t, "off", env["GOWORK"])
 	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
 	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"])
 	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_POLICY_SKILLS"])
@@ -351,6 +409,38 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	assert.Equal(t, "0", env["PYTHONHASHSEED"])
 	assert.Equal(t, "1", env["GIT_CONFIG_NOSYSTEM"])
 	assert.Equal(t, os.DevNull, env["GIT_CONFIG_GLOBAL"])
+}
+
+func TestAgentEnvironmentPreservesDefaultClaudeHome(t *testing.T) {
+	dir := t.TempDir()
+	hostHome := filepath.Join(t.TempDir(), "operator-home")
+	t.Setenv("HOME", hostHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	env := environmentByKey(t, agentEnvironment(dir))
+
+	assert.Equal(t, hostHome, env["HOME"])
+	assert.Empty(t, env["CLAUDE_CONFIG_DIR"])
+}
+
+func TestAgentEnvironmentKeepsGoTelemetryInsideTrial(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Go uses Windows application-data variables instead of HOME")
+	}
+
+	dir := t.TempDir()
+	require.NoError(t, writeAgentToolEnvironment(dir))
+	env := agentEnvironment(dir)
+	byKey := environmentByKey(t, env)
+	cmd := exec.Command(byKey["CLAUDE_CODE_SHELL_PREFIX"], "go env GOTELEMETRYDIR")
+	cmd.Env = env
+	out, err := cmd.Output()
+	require.NoError(t, err)
+
+	telemetryDir := strings.TrimSpace(string(out))
+	rel, err := filepath.Rel(filepath.Join(dir, ".bench-cache"), telemetryDir)
+	require.NoError(t, err)
+	assert.True(t, filepath.IsLocal(rel), "Go telemetry escaped the trial cache: %s", telemetryDir)
 }
 
 func environmentByKey(t *testing.T, entries []string) map[string]string {
@@ -378,6 +468,30 @@ func TestWireHookHonorsParentDeadline(t *testing.T) {
 	err := wireHook(ctx, dir, RunConfig{PrepareIndex: true, SeamarkBin: bin}, bin)
 	require.Error(t, err)
 	assert.Less(t, time.Since(started), time.Second)
+}
+
+func TestInstallHarnessBinaryWorksFromNestedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(t.TempDir(), "seamark")
+	require.NoError(t, os.WriteFile(source, []byte("benchmark binary"), 0o755))
+
+	hookBin, err := installHarnessBinary(dir, RunConfig{
+		PrepareIndex: true,
+		SeamarkBin:   source,
+	})
+	require.NoError(t, err)
+	assert.True(t, filepath.IsAbs(hookBin), "hook command must not depend on the agent's working directory")
+
+	nested := filepath.Join(dir, "sdk", "metric")
+	require.NoError(t, os.MkdirAll(nested, 0o755))
+	resolved := hookBin
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(nested, resolved)
+	}
+
+	data, err := os.ReadFile(resolved)
+	require.NoError(t, err, "copied hook binary must remain reachable after the agent changes directory")
+	assert.Equal(t, []byte("benchmark binary"), data)
 }
 
 func TestRunJudgeCommandIgnoresStalePythonBytecode(t *testing.T) {
@@ -426,6 +540,76 @@ func TestRunRejectsUnsafeRunIDBeforeCreatingArtifacts(t *testing.T) {
 	entries, readErr := os.ReadDir(transcripts)
 	require.NoError(t, readErr)
 	assert.Empty(t, entries)
+}
+
+func TestRunRejectsCallerSuppliedFingerprintMismatch(t *testing.T) {
+	base := RunConfig{
+		Trials: 1, Arms: []Arm{ArmHookOff}, AgentArgv: []string{noopAgent(t)},
+	}
+	expectedFingerprint, err := Fingerprint(base)
+	require.NoError(t, err)
+	expectedProtocol, err := ProtocolFingerprint(base)
+	require.NoError(t, err)
+
+	differentFrom := func(value string) string {
+		candidate := strings.Repeat("0", 64)
+		if candidate == value {
+			return strings.Repeat("1", 64)
+		}
+
+		return candidate
+	}
+
+	for _, tc := range []struct {
+		name    string
+		prepare func(*RunConfig)
+		wantErr string
+	}{
+		{
+			name: "full fingerprint",
+			prepare: func(cfg *RunConfig) {
+				cfg.Fingerprint = differentFrom(expectedFingerprint)
+			},
+			wantErr: "supplied benchmark fingerprint",
+		},
+		{
+			name: "protocol fingerprint",
+			prepare: func(cfg *RunConfig) {
+				cfg.ProtocolFingerprint = differentFrom(expectedProtocol)
+			},
+			wantErr: "supplied benchmark protocol fingerprint",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			cfg.WorkDir = t.TempDir()
+			tc.prepare(&cfg)
+
+			sum, runErr := Run(context.Background(), cfg)
+			require.ErrorContains(t, runErr, tc.wantErr)
+			assert.Empty(t, sum.Rows)
+			entries, readErr := os.ReadDir(cfg.WorkDir)
+			require.NoError(t, readErr)
+			assert.Empty(t, entries, "a mismatched identity must fail before creating a trial")
+		})
+	}
+}
+
+func TestRunAcceptsMatchingCallerSuppliedFingerprints(t *testing.T) {
+	cfg := RunConfig{
+		Trials: 1, Arms: []Arm{ArmHookOff}, AgentArgv: []string{noopAgent(t)},
+	}
+	var err error
+	cfg.Fingerprint, err = Fingerprint(cfg)
+	require.NoError(t, err)
+	cfg.ProtocolFingerprint, err = ProtocolFingerprint(cfg)
+	require.NoError(t, err)
+
+	sum, err := Run(context.Background(), cfg)
+	require.NoError(t, err)
+	require.Len(t, sum.Rows, 1)
+	assert.Equal(t, cfg.Fingerprint, sum.Rows[0].Fingerprint)
+	assert.Equal(t, cfg.ProtocolFingerprint, sum.Rows[0].ProtocolFingerprint)
 }
 
 func TestPriorCostForFingerprint(t *testing.T) {
@@ -711,6 +895,26 @@ echo '{"file":"server/schema.py","tool":"Edit","fired":[{"region":"server","symp
 	assert.Contains(t, sum.StoppedReason, "selected lesson hook never fired")
 }
 
+func TestOptionalExposureScopeControlAcceptsNoMatchingFiring(t *testing.T) {
+	stub := filepath.Join(t.TempDir(), "agent.sh")
+	require.NoError(t, os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	sum, err := Run(context.Background(), RunConfig{
+		Trials: 1, Arms: []Arm{ArmHookOn}, Instance: SchemaSyncRepairInstance(),
+		AgentArgv: []string{stub}, Keep: true, WorkDir: t.TempDir(),
+	})
+	require.NoError(t, err)
+	require.Len(t, sum.Rows, 1)
+	row := sum.Rows[0]
+	assert.True(t, row.Valid)
+	assert.True(t, row.PairValid)
+	assert.Equal(t, HookExposureOptional, row.HookExposure)
+	assert.Zero(t, row.HookInjections)
+	assert.False(t, row.InfrastructureFailure)
+	assert.Contains(t, strings.Join(sum.Lines(), "\n"),
+		"scope control — the hook matched no hook-on edit")
+}
+
 func TestStructuredTimeoutIsAnAgentOutcome(t *testing.T) {
 	row := Row{
 		Valid: true, TimedOut: true, InitSeen: true, Model: "claude-test",
@@ -870,12 +1074,31 @@ func TestFingerprintSourceBoundary(t *testing.T) {
 	instance := SchemaSyncInstance()
 	digest, err := fingerprintInstanceSource(instance)
 	require.NoError(t, err)
-	source, err := instanceSources.ReadFile(instance.sourceFile)
+	assert.True(t, validSHA256(digest))
+
+	repairDigest, err := fingerprintInstanceSource(SchemaSyncRepairInstance())
 	require.NoError(t, err)
-	assert.Equal(t, hashBytes(source), digest)
+	assert.NotEqual(t, digest, repairDigest,
+		"the repair variant source must affect its full cohort fingerprint")
+
+	baseProtocol, err := ProtocolFingerprint(RunConfig{Instance: instance})
+	require.NoError(t, err)
+	repairProtocol, err := ProtocolFingerprint(RunConfig{Instance: SchemaSyncRepairInstance()})
+	require.NoError(t, err)
+	assert.Equal(t, baseProtocol, repairProtocol,
+		"the intentional scope variant must retain the shared experiment protocol")
+
+	baseFingerprint, err := Fingerprint(RunConfig{Instance: instance})
+	require.NoError(t, err)
+	repairFingerprint, err := Fingerprint(RunConfig{Instance: SchemaSyncRepairInstance()})
+	require.NoError(t, err)
+	assert.NotEqual(t, baseFingerprint, repairFingerprint,
+		"variant rows must remain in separate immutable cohorts")
 
 	custom := instance
 	custom.sourceFile = ""
+	custom.ComparisonFamily = ""
+	custom.ProtocolInstance = ""
 	digest, err = fingerprintInstanceSource(custom)
 	require.NoError(t, err)
 	assert.Equal(t, "custom-instance", digest)

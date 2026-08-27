@@ -1,0 +1,9 @@
+distilled proposals — 1 pending, 0 applied, 0 dismissed
+
+awaiting your decision
+
+  p1    reused-datapoint-stale-fields      sdk/metric/internal/aggregate/histogram.go, sdk/metric/internal/aggregate/exponential_histogram.go 2 findings cited [claude/v5]
+        When a collect path reuses metricdata datapoint slots across cycles, explicitly zero every conditionally-set field (Sum, Min, Max) in the else branch; apply the same fix to both delta and cumulative in histogram.go and exponential_histogram.go.
+        fair — 2 event(s), fix, newest 77d
+
+decide: `seamark lessons --apply p<id>` (ranges work: p1..p9); `--dismiss` remembers the no

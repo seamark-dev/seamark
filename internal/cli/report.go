@@ -31,10 +31,10 @@ func newReportCmd(opts *options) *cobra.Command {
 decision, the applied pins that restate each other, where fixes concentrate
 in the tree, and every mined lesson behind those.
 
-Agents read the compact text reports over MCP; this is the surface for the
-human who has to decide what the repo should actually remember. The page is
-self-contained — no server, no assets, nothing fetched when it is opened —
-so it can be attached to a pull request or read offline.`,
+Agents read compact text reports over MCP. Maintainers use this page to decide
+what the repository should remember. It is self-contained: no server, no
+external assets, and nothing fetched when it is opened. It can be attached to
+a pull request or read offline.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, root, err := openIndex(opts)

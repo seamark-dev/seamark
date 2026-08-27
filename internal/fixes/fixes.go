@@ -552,7 +552,7 @@ func buildFinding(root string, c commit, prMap map[string]int) (model.Finding, b
 		Path:      paths[0],
 		Paths:     paths,
 		PR:        commitPR(c, prMap),
-		Reviewer:  "human",
+		Reviewer:  "person",
 		Body:      assembleBody(c.sha, c.subject, c.body, string(patch)),
 		URL:       "",
 		CreatedAt: c.ts,
@@ -584,7 +584,7 @@ func buildMergeFinding(root string, m mergeCommit) (model.Finding, bool) {
 		Path:      paths[0],
 		Paths:     paths,
 		PR:        m.pr,
-		Reviewer:  "human",
+		Reviewer:  "person",
 		Body:      assembleBody(m.sha, m.subject, m.body, string(patch)),
 		URL:       "",
 		CreatedAt: m.ts,
@@ -739,7 +739,11 @@ func trimPatch(patch string, cap_ int) string {
 	var b strings.Builder
 
 	for line := range strings.SplitSeq(patch, "\n") {
-		if strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "diff --git") ||
+		if strings.HasPrefix(line, "diff --git ") {
+			if path, ok := gitDiffDestination(line); ok {
+				line = "file: " + path
+			}
+		} else if strings.HasPrefix(line, "index ") ||
 			strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
 			continue
 		}
@@ -755,6 +759,91 @@ func trimPatch(patch string, cap_ int) string {
 	}
 
 	return b.String()
+}
+
+// gitDiffDestination extracts the destination pathname from a Git diff
+// header. Git leaves ordinary spaces unquoted but uses C-style quoting for
+// tabs, control bytes, quotes, and some non-ASCII paths. An unquoted header
+// with more than one possible " b/" boundary is ambiguous and stays intact.
+func gitDiffDestination(line string) (string, bool) {
+	header, ok := strings.CutPrefix(line, "diff --git ")
+	if !ok {
+		return "", false
+	}
+
+	oldPath, newPath, ok := splitGitDiffPaths(header)
+	if !ok || !strings.HasPrefix(oldPath, "a/") || !strings.HasPrefix(newPath, "b/") ||
+		len(oldPath) == 2 || len(newPath) == 2 || strings.ContainsAny(newPath, "\r\n") {
+		return "", false
+	}
+
+	return strings.TrimPrefix(newPath, "b/"), true
+}
+
+func splitGitDiffPaths(header string) (oldPath, newPath string, ok bool) {
+	if strings.HasPrefix(header, `"`) {
+		oldPath, rest, ok := cutGitQuotedPath(header)
+		if !ok || !strings.HasPrefix(rest, " ") {
+			return "", "", false
+		}
+
+		newPath, ok := parseFinalGitPath(rest[1:])
+
+		return oldPath, newPath, ok
+	}
+
+	if boundary := strings.Index(header, ` "`); boundary >= 0 {
+		newPath, rest, ok := cutGitQuotedPath(header[boundary+1:])
+		if !ok || rest != "" {
+			return "", "", false
+		}
+
+		return header[:boundary], newPath, true
+	}
+
+	const separator = " b/"
+	boundary := strings.Index(header, separator)
+	if boundary < 0 || strings.Contains(header[boundary+len(separator):], separator) {
+		return "", "", false
+	}
+
+	return header[:boundary], header[boundary+1:], true
+}
+
+func parseFinalGitPath(value string) (string, bool) {
+	if !strings.HasPrefix(value, `"`) {
+		return value, value != ""
+	}
+
+	path, rest, ok := cutGitQuotedPath(value)
+
+	return path, ok && rest == ""
+}
+
+func cutGitQuotedPath(value string) (path, rest string, ok bool) {
+	if !strings.HasPrefix(value, `"`) {
+		return "", value, false
+	}
+
+	escaped := false
+
+	for i := 1; i < len(value); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case value[i] == '\\':
+			escaped = true
+		case value[i] == '"':
+			path, err := strconv.Unquote(value[:i+1])
+			if err != nil {
+				return "", value, false
+			}
+
+			return path, value[i+1:], true
+		}
+	}
+
+	return "", value, false
 }
 
 // commitPR resolves a commit's pull request: the message's own

@@ -4,7 +4,7 @@
 // The file carries two classes of state with different lifecycles: derived
 // tables (symbols, edges, co-change, decisions, effects) that Rebuild
 // wipes and recomputes from the workspace, and durable tables (proposal,
-// distilled, lesson, finding, rule) holding human decisions and paid
+// distilled, lesson, finding, rule) holding reviewed decisions and paid
 // inference that no rebuild can regenerate. The database is therefore NOT
 // disposable; deleting it destroys decisions. Rebuilds preserve the
 // durable tables and the schema is versioned (migrate.go). state.go makes
@@ -598,7 +598,8 @@ func (s *Store) DistilledSignatures() (map[string]bool, error) {
 
 // proposalCols is the column list every proposal query selects, in
 // scanProposals order.
-const proposalCols = `id, signature, rule, region, regions, trigger_paths, trigger_checked_at, note, members, agent, status, created_at`
+const proposalCols = `id, signature, rule, region, regions, trigger_paths, trigger_checked_at,
+trigger_prompt_version, note, members, agent, status, created_at`
 
 // InsertProposal stores one distilled proposal and returns its id.
 func (s *Store) InsertProposal(p *model.Proposal) error {
@@ -611,6 +612,11 @@ type execer interface {
 }
 
 func insertProposal(db execer, p *model.Proposal) error {
+	if len(p.TriggerPaths) > model.MaxTriggerPaths {
+		return fmt.Errorf("store: proposal %s has %d trigger paths; maximum is %d",
+			p.Rule, len(p.TriggerPaths), model.MaxTriggerPaths)
+	}
+
 	members, err := json.Marshal(p.Members)
 	if err != nil {
 		return fmt.Errorf("store: encode proposal members: %w", err)
@@ -628,9 +634,9 @@ func insertProposal(db execer, p *model.Proposal) error {
 
 	res, err := db.Exec(
 		`INSERT INTO proposal (signature, rule, region, regions, trigger_paths, trigger_checked_at,
-		   note, members, agent, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Signature, p.Rule, p.Region, regions, triggers, p.TriggerChecked,
+		   trigger_prompt_version, note, members, agent, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Signature, p.Rule, p.Region, regions, triggers, p.TriggerChecked, p.TriggerPromptVersion,
 		p.Note, string(members), p.Agent, p.Status, p.CreatedAt,
 	)
 	if err != nil {
@@ -699,7 +705,8 @@ func scanProposals(rows *sql.Rows) ([]model.Proposal, error) {
 		var members, regions, triggers string
 
 		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &regions,
-			&triggers, &p.TriggerChecked, &p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt)
+			&triggers, &p.TriggerChecked, &p.TriggerPromptVersion,
+			&p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -911,14 +918,19 @@ func (s *Store) ClusterCitation(ids []int64) (map[string]ClusterCited, error) {
 // separately: pending rows retarget in the same extraction run,
 // applied pins only through the explicit --retarget — an installed
 // pin's delivery never changes without the user.
-func (s *Store) UpdateProposalTriggers(id int64, paths []string, checkedAt int64) error {
+func (s *Store) UpdateProposalTriggers(id int64, paths []string, checkedAt int64, promptVersion int) error {
+	if len(paths) > model.MaxTriggerPaths {
+		return fmt.Errorf("store: proposal %d has %d trigger paths; maximum is %d",
+			id, len(paths), model.MaxTriggerPaths)
+	}
+
 	triggers, err := encodeStrings(paths)
 	if err != nil {
 		return fmt.Errorf("store: encode proposal trigger paths: %w", err)
 	}
 
-	if _, err := s.db.Exec(`UPDATE proposal SET trigger_paths = ?, trigger_checked_at = ? WHERE id = ?`,
-		triggers, checkedAt, id); err != nil {
+	if _, err := s.db.Exec(`UPDATE proposal SET trigger_paths = ?, trigger_checked_at = ?,
+		trigger_prompt_version = ? WHERE id = ?`, triggers, checkedAt, promptVersion, id); err != nil {
 		return fmt.Errorf("store: update proposal %d trigger paths: %w", id, err)
 	}
 
@@ -1755,8 +1767,8 @@ type CalledSymbol struct {
 	Callers int
 }
 
-// TopCalled returns the most-called symbols — the load-bearing API
-// surface a newcomer (human or agent) should read first.
+// TopCalled returns the most-called symbols: the load-bearing API surface
+// a newcomer should read first.
 func (s *Store) TopCalled(limit int) ([]CalledSymbol, error) {
 	if limit <= 0 {
 		limit = 10

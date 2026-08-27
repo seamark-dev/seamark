@@ -1,7 +1,6 @@
-# Release: native builds per platform — CGO (tree-sitter) rules out
-# cross-compiling from one host — each smoke-tested end to end before it
-# ships, checksummed at assembly. The result is a DRAFT release: a human
-# reads the generated notes against CHANGELOG.md and presses publish.
+# Release builds each platform natively because tree-sitter requires CGO.
+# Each artifact is smoke-tested and checksummed. The workflow creates a draft;
+# a maintainer reviews its notes against CHANGELOG.md before publishing it.
 # Signing and SBOMs are deliberately deferred (docs/STATUS.md).
 name: Release
 

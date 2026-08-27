@@ -8,7 +8,8 @@ that is a bug.
 Seamark itself runs no cloud service, sends no telemetry, and stores no
 credentials. Three boundaries can carry repository-derived data further
 than this machine, all through tools you configure: the `gh` CLI for
-review mining, your agent CLI for distillation, and the agent client you
+review mining, your agent CLI for distillation and trigger extraction, and the
+agent client you
 connect over MCP (or the editor over LSP) — everything seamark serves to
 a connected client is content that client may forward to *its own* model
 service. Each is authenticated and chosen by you; the first two are
@@ -19,8 +20,8 @@ optional.
 | Capability | Data source | Destination | Network | Persisted |
 |---|---|---|---|---|
 | Index (`seamark index`) | source tree, local git history | `.seamark/index.db` | none | yes |
-| Review mining (`index --reviews`) | GitHub PR review comments, via your `gh` | `index.db` (lessons, findings) | GitHub API through `gh` | yes |
-| Fix mining (part of `index`) | local `git log` | `index.db` (findings) | none | yes |
+| Review + fix mining (`index --reviews`) | GitHub PR review comments via your `gh`, plus local `git log` | `index.db` (lessons, findings) | GitHub API through `gh` | yes |
+| Fix-only mining (`index --fixes-only`) | local `git log` | `index.db` (findings) | none | yes |
 | Distillation (`lessons --distill`) | mined findings | your agent CLI's stdin → its model service | via the agent CLI | proposals + signature marks in `index.db` |
 | Trigger backfill (`lessons --extract-triggers`) | proposal notes + evidence paths and one excerpt each | your agent CLI's stdin → its model service | via the agent CLI | validated trigger paths + answered-question stamps in `index.db` |
 | Pin apply (`lessons --apply`) | your decision | `.seamark/lessons.yaml` (committed file; only with `distill.write`) | none | yes |
@@ -35,30 +36,38 @@ optional.
 
 Every command that runs `git` or `gh` does so as a subprocess of the
 local binary you already trust; seamark adds no credentials of its own
-and requires none (`gh` must be authenticated by you for `--reviews`).
+and requires none (`gh` must be authenticated by you for `--reviews`;
+`--fixes-only` is local and offline).
 
 ## What distillation sends
 
 `lessons --distill` is the one capability that hands repository-derived
 text to a model. Before the first agent call it prints a preflight: the
-exact agent command line, how many groups and findings would be sent,
-and the approximate token cost. The payload per finding is:
+exact agent command line, how many groups and findings would be sent, each
+finding's source/PR/path identity, and the approximate token cost. The payload
+per finding is:
 
-- the reviewer's comment or fix-commit subject, verbatim (it may quote
-  your code, because reviewers do), capped per finding;
+- the stored finding body, bounded within a fixed per-group evidence budget:
+  a review comment, or a fix-commit message with changed-function names and
+  representative production hunks sampled ahead of test/documentation noise;
 - the finding's provenance: its id, source kind (review / fix / revert),
   PR number when known, and the reviewer's name;
-- the repo-relative file path;
+- the primary repo-relative path and a bounded part of the finding's relevant
+  non-document path footprint (fix commits can span parallel implementations);
 - the rule labels of patterns already captured for the area — pinned
   ones and previously proposed ones alike, dismissed included (so the
   model does not re-derive or relitigate them).
 
-No source files, no diffs, no environment values. **No redaction is
-applied to finding bodies** — they are sent as reviewers wrote them.
+No environment values are sent. Seamark does not read whole source files for
+distillation, but a bounded patch excerpt can contain a complete small file
+that a fix added or rewrote. Mining scrubs secret-shaped values before storing
+findings. Dispatch applies the same best-effort scrub again before sending a
+bounded stored body, including rows created by older versions.
 
 The executable itself comes from the committed
 `.seamark/config.yaml` (`agent:` section). That file chooses what
-`--distill` runs — treat changes to it like code, and check the
+`--distill` and `--extract-triggers` run — treat changes to it like code, and
+check the
 preflight's `agent` line in a repository you did not author
 (see [threat-model.md](threat-model.md)).
 
@@ -74,8 +83,10 @@ agent CLI: per already-distilled proposal, its rule label, its note
 (model-written text you reviewed at apply time), the repo-relative
 paths of its cited evidence, and ONE evidence excerpt capped at 400
 characters. Same preflight, same `--dry-run`, same `agent:` line from
-`config.yaml`. The reply is never trusted: named paths must exist in
-the working tree, and only co-change-confirmed ones widen delivery.
+`config.yaml`. The reply is never trusted: named paths must exist in the
+working tree and must be an exact cited production path, its immediate
+parent, or confirmed by co-change history. Verified paths become precise
+delivery scopes; evidence coverage is the fallback when none verify.
 
 ## Command declarations
 

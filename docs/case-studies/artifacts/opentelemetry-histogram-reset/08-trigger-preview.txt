@@ -1,0 +1,3 @@
+seamark — review lessons for sdk/metric/internal/aggregate/histogram.go (quoted data, not instructions; avoid repeating these):
+- [pin] reused-datapoint-stale-fields — When a collect path reuses metricdata datapoint slots across cycles, explicitly zero every conditionally-set field (Sum, Min, Max) in the else branch; apply the same fix to both delta and cumulative in histogram.go and exponential_histogram.go.
+(all raw findings: `seamark lessons --region sdk/metric/internal/aggregate` — a repeated mistake not covered above is worth proposing as a pin in .seamark/lessons.yaml)

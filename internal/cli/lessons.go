@@ -364,9 +364,9 @@ func resolveSelection(candidates []model.Proposal, raw, state string) ([]model.P
 
 // runLessonsApply turns chosen proposals into pins. The pins land in
 // .seamark/lessons.yaml only when the workspace opted in via
-// distill.write; otherwise the rendered block is printed for the human
-// to paste — either way, nothing was ever applied without an explicit
-// human command naming explicit proposals.
+// distill.write. Otherwise, it prints the rendered block for manual
+// insertion. In both modes, applying requires an explicit command that
+// names the proposals.
 func runLessonsApply(cmd *cobra.Command, opts *options, raw string) error {
 	st, root, err := openIndex(opts)
 	if err != nil {
@@ -656,9 +656,8 @@ func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int6
 		}
 
 		if len(living) > 0 && !h.Pruned {
-			// One recompute for every "regions now" reader: coverage
-			// widened by confirmed triggers, so this line can never ask
-			// the user to undo a stored widening.
+			// One recompute for every "regions now" reader: verified
+			// trigger scopes when available, evidence coverage otherwise.
 			recomputed, facts, err := distill.RecomputeRegions(st, root, p, living)
 			if err != nil {
 				return nil, err
@@ -860,7 +859,7 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 
 // planAnnotations renders the trigger lines the distill plan prints
 // under each pending proposal: what each stored trigger path did
-// (confirmed and widened, or named but unconfirmed), plus the
+// (directly cited, co-change confirmed, or unconfirmed), plus the
 // note-based scope advisory for proposals without triggers. flagged
 // lists the pN ids whose delivery may still miss the trigger.
 func planAnnotations(st *store.Store, lcfg *reviews.Config, root string,
@@ -906,25 +905,28 @@ func planAnnotations(st *store.Store, lcfg *reviews.Config, root string,
 
 			for _, f := range facts {
 				switch {
-				case f.Widened:
+				case f.Selected && f.Direct:
 					notes[p.ID] = append(notes[p.ID], fmt.Sprintf(
-						"trigger %s — confirmed by co-change (%d shared commits); regions include %s",
+						"trigger %s — directly cited by the evidence; delivery targets %s",
+						f.Path, f.Region,
+					))
+				case f.Selected:
+					notes[p.ID] = append(notes[p.ID], fmt.Sprintf(
+						"trigger %s — confirmed by co-change (%d shared commits); delivery targets %s",
 						f.Path, f.Together, f.Region,
 					))
-				case f.Together == 0:
+				case !f.Direct && f.Together == 0:
 					notes[p.ID] = append(notes[p.ID], fmt.Sprintf(
 						"trigger %s — named by the distiller, not confirmed by history; "+
 							"consider regions after apply", f.Path,
 					))
 					missed[p.ID] = true
-				case !f.Covered:
+				default:
 					// Confirmed but blocked — the shared sentence, so
 					// the ledger and report cannot disagree.
 					notes[p.ID] = append(notes[p.ID], f.BlockedLine())
 					missed[p.ID] = true
 				}
-				// Covered triggers stay silent: confirmed and already
-				// delivered, nothing to do.
 			}
 		}
 
@@ -983,8 +985,9 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 	}
 
 	// Pending and applied rows are delivery; dismissed ones are not.
-	// Rows whose trigger question was already answered — with paths or
-	// without — are done, so re-running is free.
+	// Rows with validated paths are done. A negative answer is done only
+	// under the current semantic question; legacy negatives are re-asked
+	// once when that question changes.
 	var candidates []model.Proposal
 
 	pruned := 0
@@ -996,7 +999,8 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 		}
 
 		for _, p := range ps {
-			if len(p.TriggerPaths) > 0 || p.TriggerChecked > 0 {
+			if len(p.TriggerPaths) > 0 ||
+				(p.TriggerChecked > 0 && p.TriggerPromptVersion >= distill.TriggerPromptVersion) {
 				continue
 			}
 
@@ -1016,7 +1020,7 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 
 	if pruned > 0 {
 		fmt.Fprintf(out, "%d applied row(s) skipped — their pins are not in .seamark/lessons.yaml, "+
-			"so there is no delivery to widen\n", pruned)
+			"so there is no delivery to retarget\n", pruned)
 	}
 
 	if len(candidates) == 0 {
@@ -1102,7 +1106,7 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 	fmt.Fprintf(out, "; ~%s tokens %s / ~%s back\n", res.TokensSent(), verb, res.TokensBack())
 
 	if res.AppliedStored > 0 {
-		fmt.Fprintln(out, "applied pins with new triggers show their widened regions in "+
+		fmt.Fprintln(out, "applied pins with new triggers show their current delivery scopes in "+
 			"`lessons --proposals`; `--retarget` applies them")
 	}
 
@@ -1129,11 +1133,13 @@ func printPreflight(w io.Writer, pf distill.Preflight, dryRun bool) {
 
 	fmt.Fprintf(w, "  payload   %d group(s), %d finding(s), ~%s tokens\n",
 		len(pf.Groups), pf.Findings, pf.Tokens())
-	fmt.Fprintf(w, "  contents  per finding: reviewer comment or fix-commit subject verbatim (it\n"+
-		"            may quote your code), repo-relative path, finding id, source, PR\n"+
-		"            number and reviewer name; plus rule labels of patterns already\n"+
-		"            pinned or previously proposed — no source files, no diffs\n")
-	fmt.Fprintf(w, "  redaction none — bodies are sent as written, capped at %d chars each\n", pf.BodyCap)
+	fmt.Fprintf(w, "  contents  per finding: bounded review comment, or fix-commit message,\n"+
+		"            changed-function names and representative patch excerpts; plus relevant\n"+
+		"            repo-relative paths, finding id, source, PR number, reviewer, and labels\n"+
+		"            — no whole source files or environment values\n")
+	fmt.Fprintf(w, "  redaction no additional dispatch redaction — stored bodies are sent as written,\n"+
+		"            with path metadata and body sharing up to %d chars per finding; groups share a fixed evidence budget\n"+
+		"            (mining already scrubs secret-shaped values)\n", pf.BodyCap)
 
 	for _, g := range pf.Groups {
 		region := g.Region
@@ -1141,8 +1147,29 @@ func printPreflight(w io.Writer, pf distill.Preflight, dryRun bool) {
 			region = "repo-wide"
 		}
 
-		fmt.Fprintf(w, "    %-28s %3d finding(s)  ~%s tokens\n",
-			render.Sanitize(region), g.Findings, distill.Preflight{PromptChars: g.PromptChars}.Tokens())
+		fmt.Fprintf(w, "    %-28s %3d finding(s)  ~%s tokens  %d chars/finding max\n",
+			render.Sanitize(region), g.Findings,
+			distill.Preflight{PromptChars: g.PromptChars}.Tokens(), g.BodyCap)
+
+		for _, evidence := range g.Evidence {
+			pr := ""
+			if evidence.PR > 0 {
+				pr = fmt.Sprintf(" PR #%d", evidence.PR)
+			}
+
+			fmt.Fprintf(w, "      - %s%s  %s  (finding %d)\n",
+				render.Sanitize(evidence.Source), pr,
+				render.Sanitize(evidence.Path), evidence.ID)
+
+			if len(evidence.Paths) > 1 {
+				paths := make([]string, 0, len(evidence.Paths))
+				for _, p := range evidence.Paths {
+					paths = append(paths, render.Sanitize(p))
+				}
+
+				fmt.Fprintf(w, "        paths  %s\n", strings.Join(paths, ", "))
+			}
+		}
 	}
 
 	if !dryRun {
@@ -1153,8 +1180,8 @@ func printPreflight(w io.Writer, pf distill.Preflight, dryRun bool) {
 // runLessonsList prints the ledger of mined lessons — every one, or, with
 // a region, those in that directory's area. A region-scoped ledger is
 // the pattern-hunting view: per-file clustering keeps semantically
-// related one-offs apart, and reading an area's raw findings side by
-// side is how a human (or an agent) spots what the counters cannot.
+// related one-offs apart. Reading an area's raw findings together can
+// reveal patterns that counters miss.
 func runLessonsList(cmd *cobra.Command, opts *options, region string) error {
 	st, root, err := openIndex(opts)
 	if err != nil {
@@ -1543,9 +1570,8 @@ func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
 			continue
 		}
 
-		// The same recompute the health line shows: coverage widened by
-		// confirmed triggers. Retarget must apply the widened set, not
-		// strip it back to bare coverage.
+		// The same recompute the health line shows: verified trigger
+		// scopes when available, evidence coverage otherwise.
 		regions, _, err := distill.RecomputeRegions(st, root, p, living)
 		if err != nil {
 			return err

@@ -144,6 +144,9 @@ fi
 	})
 	require.NoError(t, err)
 	require.Len(t, sum.Rows, 4)
+	for _, row := range sum.Rows {
+		require.NoError(t, ValidateResultRow(row))
+	}
 	assert.Equal(t, ArmHookOn, sum.Rows[0].Arm)
 	assert.Equal(t, ArmHookOff, sum.Rows[2].Arm)
 	assert.NotEmpty(t, sum.RunID)
@@ -219,7 +222,9 @@ func TestInstanceByID(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, SchemaSyncRule, schemaInstance.Rule)
 	assert.Equal(t, []string{
-		SchemaSyncInstanceID, CacheVersionInstanceID, ExportRegistryInstanceID,
+		SchemaSyncInstanceID, SchemaSyncRepairInstanceID,
+		CacheVersionInstanceID, ExportRegistryInstanceID,
+		OTelHistogramInstanceID, OTelHistogramRepairInstanceID,
 	}, InstanceIDs())
 	for _, instance := range Instances() {
 		assert.NotEmpty(t, instance.sourceFile)

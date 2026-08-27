@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
@@ -97,6 +99,14 @@ func TestIndexThenWhy(t *testing.T) {
 	out, err = run(t, "-C", root, "why", "a.go")
 	require.NoError(t, err)
 	assert.Contains(t, out, "defines (2)")
+}
+
+func TestIndexRejectsReviewsWithFixesOnly(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index", "--reviews", "--fixes-only")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "none of the others can be")
 }
 
 func gitify(t *testing.T, root string) {
@@ -665,9 +675,9 @@ func TestLessonsDistillDryRun(t *testing.T) {
 	st, err := store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
 	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
-		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "human",
+		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "person",
 			Body: "Reset pooled state before reuse in this handler."},
-		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "human",
+		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "person",
 			Body: "Pooled state must be reset on reuse here too."},
 	}))
 	require.NoError(t, st.Close())
@@ -687,7 +697,13 @@ func TestLessonsDistillDryRun(t *testing.T) {
 	assert.Contains(t, out, "sh -c")
 	assert.Contains(t, out, "2 finding(s)")
 	assert.Contains(t, out, "tokens")
-	assert.Contains(t, out, "redaction none")
+	assert.Contains(t, out, "fix-commit message")
+	assert.Contains(t, out, "patch excerpt")
+	assert.Contains(t, out, "no whole source files")
+	assert.Contains(t, out, "no additional dispatch redaction")
+	assert.Contains(t, out, "mining already scrubs secret-shaped values")
+	assert.Contains(t, out, "review PR #1  api/a.go  (finding 11)")
+	assert.Contains(t, out, "review PR #2  api/b.go  (finding 12)")
 	assert.Contains(t, out, "nothing was sent")
 	assert.NotContains(t, out, "Reset pooled state", "finding bodies must not appear in a dry run")
 
@@ -739,6 +755,31 @@ func TestLessonsDistillDryRun(t *testing.T) {
 	require.Error(t, err, "an empty custom executable must be rejected")
 }
 
+func TestDistillPreflightShowsRelevantFixPathsAndAdaptiveCap(t *testing.T) {
+	var out bytes.Buffer
+
+	printPreflight(&out, distill.Preflight{
+		Agent: []string{"claude", "-p"}, PromptChars: 4_000, Findings: 2, BodyCap: 3_000,
+		Groups: []distill.GroupPlan{{
+			Region: "sdk/metric/internal/aggregate", Findings: 2,
+			PromptChars: 4_000, BodyCap: 3_000,
+			Evidence: []distill.FindingPlan{{
+				ID: 1, Source: model.SourceFixConventional, PR: 8403,
+				Path: "sdk/metric/internal/aggregate/exponential_histogram.go",
+				Paths: []string{
+					"sdk/metric/internal/aggregate/exponential_histogram.go",
+					"sdk/metric/internal/aggregate/histogram.go",
+				},
+			}},
+		}},
+	}, true)
+
+	text := out.String()
+	assert.Contains(t, text, "3000 chars/finding max")
+	assert.Contains(t, text, "paths  sdk/metric/internal/aggregate/exponential_histogram.go, "+
+		"sdk/metric/internal/aggregate/histogram.go")
+}
+
 func TestLessonsDistillPlanFlow(t *testing.T) {
 	root := writeFixture(t)
 
@@ -751,9 +792,9 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	st, err := store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
 	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
-		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "human",
+		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "person",
 			Body: "Reset pooled state before reuse in this handler."},
-		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "human",
+		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "person",
 			Body: "Pooled state must be reset on reuse here too."},
 	}))
 	require.NoError(t, st.Close())
@@ -761,9 +802,9 @@ func TestLessonsDistillPlanFlow(t *testing.T) {
 	replyPath := filepath.Join(root, "agent-reply.json")
 	require.NoError(t, os.WriteFile(replyPath,
 		[]byte(`{"patterns":[
-			{"rule":"pooled-state-reset","note":"Reset pooled state on every reuse.","finding_ids":[11,12]},
-			{"rule":"second-rule","note":"Validate request payload bounds before touching the database.","finding_ids":[11,12]},
-			{"rule":"third-rule","note":"Close the websocket subscription on every worker exit path.","finding_ids":[11,12]}]}`),
+			{"rule":"pooled-state-reset","note":"Reset pooled state on every reuse.","finding_ids":[11,12],"trigger_paths":[]},
+			{"rule":"second-rule","note":"Validate request payload bounds before touching the database.","finding_ids":[11,12],"trigger_paths":[]},
+			{"rule":"third-rule","note":"Close the websocket subscription on every worker exit path.","finding_ids":[11,12],"trigger_paths":[]}]}`),
 		0o644))
 
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
@@ -1118,9 +1159,10 @@ func TestLessonsExtractTriggersBackfill(t *testing.T) {
 	// Newest first: rows[0] is p2, rows[1] is p1.
 	assert.Nil(t, rows[0].TriggerPaths)
 	assert.Positive(t, rows[0].TriggerChecked, "a negative answer is stamped, not forgotten")
+	assert.Equal(t, distill.TriggerPromptVersion, rows[0].TriggerPromptVersion)
 	assert.Equal(t, []string{"api/schemas.py"}, rows[1].TriggerPaths,
 		"the ghost path must not survive validation")
-	assert.Equal(t, []string{"web/src/api", "api"}, rows[1].Regions)
+	assert.Equal(t, []string{"api/schemas.py"}, rows[1].Regions)
 	require.NoError(t, st.Close())
 
 	// Re-running is free: answered rows — with paths or without — are
@@ -1128,13 +1170,65 @@ func TestLessonsExtractTriggersBackfill(t *testing.T) {
 	out, err = run(t, "-C", root, "lessons", "--extract-triggers")
 	require.NoError(t, err)
 	assert.Contains(t, out, "nothing to extract")
+
+	// A negative answer from the legacy question is re-asked exactly once;
+	// positive trigger answers above remain untouched.
+	st, err = store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	legacy := model.Proposal{
+		Signature: "s4", Rule: "legacy-negative", Region: "web/src/api",
+		Note: "n", Members: []int64{1}, Agent: "claude/v4",
+		Status: model.ProposalProposed, TriggerChecked: time.Now().Unix(),
+	}
+	require.NoError(t, st.InsertProposal(&legacy))
+	require.NoError(t, st.Close())
+	require.NoError(t, os.WriteFile(replyPath,
+		[]byte(fmt.Sprintf(`{"triggers":[{"id":%d,"trigger_paths":[]}]}`, legacy.ID)), 0o644))
+
+	out, err = run(t, "-C", root, "lessons", "--extract-triggers")
+	require.NoError(t, err)
+	assert.Contains(t, out, "1 examined")
+
+	st, err = store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	rows, err = st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+	require.NotEmpty(t, rows)
+	assert.Equal(t, distill.TriggerPromptVersion, rows[0].TriggerPromptVersion)
 }
 
-// TestRetargetKeepsStoredWidening pins the unified recompute: a pin
-// whose regions already include a confirmed trigger shows no drift,
-// and a narrow one is retargeted TO the widened set — never stripped
-// back to bare evidence coverage.
-func TestRetargetKeepsStoredWidening(t *testing.T) {
+func TestPlanAnnotationsReportsDirectTriggerDelivery(t *testing.T) {
+	root := writeFixture(t)
+	trigger := filepath.Join(root, "api", "entry.go")
+	require.NoError(t, os.MkdirAll(filepath.Dir(trigger), 0o755))
+	require.NoError(t, os.WriteFile(trigger, []byte("package api\n"), 0o644))
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	defer func() { _ = st.Close() }()
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{{
+		ID: 1, Path: "api/entry.go", Body: "b", Source: model.SourceFixConventional,
+	}}))
+
+	p := model.Proposal{
+		ID: 1, Rule: "keep-boundary-synchronized", Region: "api",
+		Regions: []string{"api/entry.go"}, TriggerPaths: []string{"api/entry.go"},
+		Members: []int64{1}, Status: model.ProposalProposed, Note: "Keep the boundary synchronized.",
+	}
+	notes, flagged, err := planAnnotations(st, &reviews.Config{}, root, []model.Proposal{p})
+	require.NoError(t, err)
+	assert.Empty(t, flagged)
+	require.Len(t, notes[p.ID], 1)
+	assert.Equal(t,
+		"trigger api/entry.go — directly cited by the evidence; delivery targets api/entry.go",
+		notes[p.ID][0])
+}
+
+// TestRetargetKeepsStoredTriggerScope pins the unified recompute: a pin
+// already targeting a confirmed trigger shows no drift, while a broad
+// evidence-scoped pin is retargeted to that precise edit surface.
+func TestRetargetKeepsStoredTriggerScope(t *testing.T) {
 	root := writeFixture(t)
 
 	for _, rel := range []string{"api/schemas.py", "web/src/api/schema.ts"} {
@@ -1163,10 +1257,10 @@ func TestRetargetKeepsStoredWidening(t *testing.T) {
 	}))
 
 	for _, p := range []model.Proposal{
-		{Signature: "s1", Rule: "already-widened", Region: "web/src/api",
-			Regions: []string{"web/src/api", "api"}, TriggerPaths: []string{"api/schemas.py"},
+		{Signature: "s1", Rule: "already-targeted", Region: "api/schemas.py",
+			Regions: []string{"api/schemas.py"}, TriggerPaths: []string{"api/schemas.py"},
 			Note: "n", Members: []int64{1}, Agent: "claude/v4", Status: model.ProposalApplied},
-		{Signature: "s2", Rule: "still-narrow", Region: "web/src/api",
+		{Signature: "s2", Rule: "still-broad", Region: "web/src/api",
 			TriggerPaths: []string{"api/schemas.py"},
 			Note:         "n", Members: []int64{1}, Agent: "claude/v4", Status: model.ProposalApplied},
 	} {
@@ -1179,32 +1273,31 @@ func TestRetargetKeepsStoredWidening(t *testing.T) {
 	// pins that actually deliver.
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
 		"pin:\n"+
-			"  - rule: already-widened\n    region: web/src/api\n    regions: [web/src/api, api]\n    note: n\n"+
-			"  - rule: still-narrow\n    region: web/src/api\n    note: n\n"), 0o644))
+			"  - rule: already-targeted\n    region: api/schemas.py\n    note: n\n"+
+			"  - rule: still-broad\n    region: web/src/api\n    note: n\n"), 0o644))
 
 	out, err := run(t, "-C", root, "lessons", "--proposals")
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, strings.Count(out, "regions now:"),
-		"the widened pin shows no phantom drift")
-	assert.Contains(t, out, "regions now: web/src/api, api")
+		"the precisely targeted pin shows no phantom drift")
+	assert.Contains(t, out, "regions now: api/schemas.py")
 	assert.Contains(t, out, "--retarget p2")
 
-	// Write gate off: retarget prints the block it would apply — the
-	// widened set, not bare coverage.
+	// Write gate off: retarget prints the exact trigger scope it would
+	// apply, not bare evidence coverage.
 	out, err = run(t, "-C", root, "lessons", "--retarget", "p2")
 	require.NoError(t, err)
-	assert.Contains(t, out, "[web/src/api, api]")
+	assert.Contains(t, out, "region: api/schemas.py")
 }
 
-// TestLedgerShowsBlockedTrigger pins finding visibility: a backfilled
-// applied pin whose confirmed trigger is blocked by the region cap
-// produces no drift and no note advisory — the ledger must still say
-// so.
+// TestLedgerShowsBlockedTrigger pins finding visibility: a stored
+// trigger that vanished from the working tree produces no drift and no
+// note advisory — the ledger must still say so.
 func TestLedgerShowsBlockedTrigger(t *testing.T) {
 	root := writeFixture(t)
 
-	for _, rel := range []string{"api/schemas.py", "web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
+	for _, rel := range []string{"web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
 		p := filepath.Join(root, filepath.FromSlash(rel))
 
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
@@ -1247,7 +1340,8 @@ func TestLedgerShowsBlockedTrigger(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, out, "confirmed by co-change (38 shared commits) but not deliverable")
-	assert.NotContains(t, out, "regions now:", "no drift — the cap keeps recompute equal to stored")
+	assert.Contains(t, out, "absent from the working tree")
+	assert.NotContains(t, out, "regions now:", "no verified trigger leaves evidence coverage unchanged")
 }
 
 // TestLedgerNamesPrunedPinsInsteadOfAdvising pins the p45 lesson from

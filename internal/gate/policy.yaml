@@ -19,7 +19,7 @@ environment:
 deny:
   - id: no-prod-infra-mutation
     when: 'effect.contains("infra:mutate") && env.is_prod'
-    message: infrastructure mutation against a production environment requires a human
+    message: production infrastructure mutation requires maintainer action
 
   - id: no-force-push-default-branch
     when: 'command.is_force_push && command.target_branch in ["main", "master"]'

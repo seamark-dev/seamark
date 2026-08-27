@@ -4,14 +4,16 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 )
 
 // ResultSchemaVersion is the immutable contract emitted by the current
-// harness and accepted by strict reporting. Version 6 adds explicit hook
-// delivery intensity while strict reporting continues to accept frozen v5
-// evidence without rewriting it.
-const ResultSchemaVersion = 6
+// harness and accepted by strict reporting. Version 7 adds the hook-exposure
+// expectation and a shared protocol fingerprint for scoped factorial
+// experiments. Strict reporting continues to accept frozen v5/v6 evidence
+// without rewriting it.
+const ResultSchemaVersion = 7
 
 const oldestSupportedResultSchemaVersion = 5
 
@@ -50,7 +52,8 @@ func ValidateResultRow(row Row) error {
 		return fmt.Errorf("checks must contain at least one public validation command")
 	case row.HookFirings > row.HookAuditRows:
 		return fmt.Errorf("hook_firings cannot exceed hook_audit_rows")
-	case row.Valid && (row.Arm == ArmHookOn || row.Arm == ArmPlacebo) && row.HookFirings == 0:
+	case row.SchemaVersion < 7 && row.Valid &&
+		(row.Arm == ArmHookOn || row.Arm == ArmPlacebo) && row.HookFirings == 0:
 		return fmt.Errorf("valid treatment rows require a matching hook firing")
 	case row.Valid && (row.Arm == ArmHookOff || row.Arm == ArmFileOnly) && row.HookFirings != 0:
 		return fmt.Errorf("valid control rows cannot contain treatment hook firings")
@@ -80,13 +83,31 @@ func ValidateResultRow(row Row) error {
 		case row.HookDelivery == HookDeliveryAlways && row.HookSuppressed != 0:
 			return fmt.Errorf("hook_suppressed must be zero when hook_delivery is %q", HookDeliveryAlways)
 		case row.HookFirings != row.HookInjections:
-			return fmt.Errorf("hook_firings must equal hook_injections in schema v6")
-		case row.Valid && (row.Arm == ArmHookOn || row.Arm == ArmPlacebo) && row.HookInjections == 0:
+			return fmt.Errorf("hook_firings must equal hook_injections in schema v6 and later")
+		case row.SchemaVersion == 6 && row.Valid &&
+			(row.Arm == ArmHookOn || row.Arm == ArmPlacebo) && row.HookInjections == 0:
 			return fmt.Errorf("valid treatment rows require a matching hook injection")
 		case row.Valid && (row.Arm == ArmHookOff || row.Arm == ArmFileOnly) &&
 			(row.HookMatches != 0 || row.HookInjections != 0 || row.HookRepeated != 0 ||
 				row.HookSuppressed != 0 || row.HookContextBytes != 0):
 			return fmt.Errorf("valid control rows cannot contain hook delivery intensity")
+		}
+	}
+
+	if row.SchemaVersion >= 7 {
+		hooked := row.Arm == ArmHookOn || row.Arm == ArmPlacebo
+		switch {
+		case hooked && row.HookExposure != HookExposureRequired && row.HookExposure != HookExposureOptional:
+			return fmt.Errorf("hooked rows require hook_exposure %q or %q",
+				HookExposureRequired, HookExposureOptional)
+		case !hooked && row.HookExposure != HookExposureNone:
+			return fmt.Errorf("control rows require hook_exposure %q", HookExposureNone)
+		case hooked && row.Valid && row.HookExposure == HookExposureRequired && row.HookInjections == 0:
+			return fmt.Errorf("valid required-exposure rows require a matching hook injection")
+		case !validSHA256(row.ProtocolFingerprint):
+			return fmt.Errorf("protocol_fingerprint must be a lowercase SHA-256")
+		case row.ComparisonFamily != strings.TrimSpace(row.ComparisonFamily):
+			return fmt.Errorf("comparison_family must be trimmed")
 		}
 	}
 

@@ -1,0 +1,10 @@
+=== RUN   TestSeamarkCaseExplicitHistogramReuse
+--- PASS: TestSeamarkCaseExplicitHistogramReuse (0.00s)
+=== RUN   TestSeamarkCaseExponentialHistogramReuse
+=== RUN   TestSeamarkCaseExponentialHistogramReuse/DeltaTemporality
+=== RUN   TestSeamarkCaseExponentialHistogramReuse/CumulativeTemporality
+--- PASS: TestSeamarkCaseExponentialHistogramReuse (0.00s)
+    --- PASS: TestSeamarkCaseExponentialHistogramReuse/DeltaTemporality (0.00s)
+    --- PASS: TestSeamarkCaseExponentialHistogramReuse/CumulativeTemporality (0.00s)
+PASS
+ok  	go.opentelemetry.io/otel/sdk/metric/internal/aggregate	0.488s

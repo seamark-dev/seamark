@@ -6,6 +6,77 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## Unreleased
+
+- **Distillation preserves cross-file owner knowledge and targets its trigger.**
+  Prompt v5 discloses every relevant non-document path in a fix finding,
+  shares a fixed evidence budget adaptively across each group, and samples
+  distinct production hunks before repetitive test noise. It explicitly asks
+  for parallel-implementation, layer, generated-artifact, and
+  producer/consumer relationships, and every proposed pattern must answer the
+  trigger-path question. A trigger that is an exact cited production path or
+  its immediate parent is now valid without an unnecessary co-change edge;
+  otherwise history must still confirm it. Test-only citations and broad
+  ancestors cannot establish direct delivery. Verified triggers become exact,
+  bounded delivery scopes, including individual files, while evidence
+  coverage remains the safe fallback. This intentionally supersedes v0.4.0's widen-only behavior:
+  `--retarget` may now narrow an evidence-scoped pin to its verified trigger.
+  The corrected extraction question re-asks legacy negative answers once;
+  existing positive trigger answers are preserved. State bundles v2 carry
+  that question version while imports still accept v1. The preserved first
+  OpenTelemetry case-study proposal motivated these changes: it found the
+  generic stale-field rule but lost the explicit/exponential relationship and
+  returned no trigger. Prompt v6 also reapplies best-effort secret scrubbing
+  when stored evidence is dispatched, which protects legacy findings created
+  before storage-time redaction. Trigger-question v3 bounds companion path
+  metadata per finding and across each extraction batch.
+- **Historical distillation can now use a bounded local-fix corpus.**
+  `seamark index --fixes-only` refreshes fix commits reachable from the pinned
+  `HEAD` without querying GitHub or deleting an existing review corpus.
+  Region-scoped distillation filters findings before grouping, fix-miner
+  envelope text no longer drives lexical similarity, and weak two-token
+  bridges cannot grow unbounded components. The preflight identifies every
+  planned finding by source, PR, and path without printing its body. A reduced
+  OpenTelemetry histogram-reset corpus locks the intended two-fix group and
+  excludes an unrelated same-package fix.
+- **Pinned public-repository lessons benchmark.** The harness can now prepare
+  and verify an exact OpenTelemetry-Go commit, including a content-pinned
+  vendored dependency tree, before creating fresh network-isolated agent
+  worktrees. A historical histogram-reset task compares the same lesson at the
+  explicit-histogram trigger and exponential-histogram repair sites. Hidden
+  judges distinguish visible task completion from the parallel delta and
+  cumulative owner invariant, and a task-complete naive patch proves that
+  distinction during preflight. The public matched claim is frozen before its
+  first paid run. Paid shell and hook subprocesses isolate home and XDG state
+  while the Claude process retains saved authentication, and agents leave trial
+  changes uncommitted. The accepted clean cohort passed its frozen threshold:
+  trigger-scoped delivery preserved the parallel histogram invariant 5/5
+  versus 0/5 without the hook, while the repair-scoped control was 1/5 versus
+  0/5. The +80 percentage-point difference-in-differences effect exceeded the
+  precommitted +40-point bar, with all 20 visible tasks complete and no harmful
+  interference. Raw rows and the generated report are committed under
+  `bench/` ([report](bench/otel-report-v7.md)). This is one pinned public task,
+  model, and runtime—not broad external validity.
+- **Benchmark failures are evidence too.** Calibration exposed two harness
+  confounds before the accepted cohort: an agent added uncompilable tests after
+  missing OpenTelemetry's nested Go module, and Claude later returned a
+  status-less `API Error: Connection closed mid-response`. The shared task now
+  names the exact offline module-local test command, and provider API errors
+  without an HTTP status are excluded as infrastructure failures while genuine
+  budget or turn exhaustion remains a measured agent outcome. Both discarded
+  attempts remain calibration, not silently pooled release evidence.
+- **Trigger-scoped delivery now has a controlled benchmark.** A matched
+  schema-sync fixture compares the same lesson at the backend trigger with its
+  former generated-client repair scope. Five clean pairs per variant produced
+  a +100 percentage-point difference-in-differences effect: trigger hook-on
+  preserved the owner invariant 5/5 versus 0/5 hook-off, while the
+  repair-scoped control was 3/5 in both arms and received zero hook exposure.
+  All 20 sessions completed the visible task. Result schema v7 records whether
+  hook exposure is required or optional and binds intentional variants with a
+  shared protocol fingerprint, preventing incompatible cohorts from being
+  compared. This is synthetic evidence under one pinned model/runtime, not an
+  external-validity claim.
+
 ## v0.4.0 — 2026-08-15
 
 The delivery line: a lesson is only as good as where it fires. This
@@ -261,7 +332,7 @@ between the first prototype and here.
   evidence" from "not indexed".
 - **Distribution.** This release pipeline: per-platform native builds,
   end-to-end smoke tests on every artifact, SHA-256 checksums, draft
-  releases for human review.
+  releases for maintainer review.
 
 Upgrade notes: a pre-existing hook installed as `gate --enforce --hook`
 is preserved by re-running `seamark init` (mode is kept unless

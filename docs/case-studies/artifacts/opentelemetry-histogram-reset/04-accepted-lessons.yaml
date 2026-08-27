@@ -1,0 +1,45 @@
+# Tune how mined review lessons surface (RFC-001 §5.4). Committed and
+# reviewed like policy.yaml — applied at surface time, so edits take
+# effect immediately without re-mining. An absent file means "defaults":
+# nothing muted, nothing pinned, threshold 2.
+#
+# Lessons come from `seamark index --reviews` (reviews + fix commits) or
+# `seamark index --fixes-only` (local fix commits only), and
+# appear in `why <file>`, `orient`, and the PreToolUse edit hook.
+# Run `seamark lessons --list` to see every mined lesson and the exact
+# rule/region values to paste below.
+
+# Minimum recurrences before a mined lesson surfaces. A single comment is
+# noise; a pattern needs repetition.
+threshold: 2
+
+# Ambient edit-hook delivery. "always" preserves the original behavior.
+# "once-per-context" emits each lesson once per provider session, then allows
+# it again after Claude Code compacts that session's context.
+hook_delivery: once-per-context
+
+# Hush noise. Match by rule code and/or region (a file or directory
+# prefix). An entry with both narrows to that rule in that region.
+mute:
+  # - rule: F541                 # f-strings-without-placeholders, don't care
+  # - region: alembic/versions   # generated migrations — ignore lessons here
+
+# Your exceptions that must NOT be ignored: surfaced always, for their
+# region, even if mining found them once or never. The note is shown to
+# the agent verbatim. Write pins by hand, or let `lessons --distill`
+# draft them — same entries, same review, distill is optional.
+pin:
+  # distilled by claude/v5 from 2 findings (seamark lessons --distill, p1)
+  - rule: reused-datapoint-stale-fields
+    region: sdk/metric/internal/aggregate/histogram.go
+    regions: [sdk/metric/internal/aggregate/histogram.go, sdk/metric/internal/aggregate/exponential_histogram.go]
+    note: When a collect path reuses metricdata datapoint slots across cycles, explicitly zero every conditionally-set field (Sum, Min, Max) in the else branch; apply the same fix to both delta and cumulative in histogram.go and exponential_histogram.go.
+  # - rule: RUF001
+  #   region: scripts
+  #   note: "Keep scripts ASCII — smart quotes from chat have bitten us"
+
+# How many pins the EDIT HOOK injects per edit (most specific region
+# first; the rest are one pointer line away). Deliberate views (--file,
+# why) always show everything. Default 3 — every applied pin taxes every
+# future edit, so spend consciously.
+# pin_budget: 3

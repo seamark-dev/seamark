@@ -164,6 +164,96 @@ func TestUbiquitousTokensDoNotChainTheRepo(t *testing.T) {
 	}
 }
 
+func TestWeakTokenBridgesCannotBuildGiantComponents(t *testing.T) {
+	// Every neighboring pair shares exactly two unique tokens. Pure
+	// union-find transitivity turns this into one 30-finding component
+	// even though the endpoints share nothing. Weak bridges are useful,
+	// but their components must stay reviewably small.
+	var findings []model.Finding
+
+	for i := 0; i < 30; i++ {
+		body := fmt.Sprintf("site%d unique%d", i, i)
+		if i > 0 {
+			body += fmt.Sprintf(" bridge%da bridge%db", i-1, i-1)
+		}
+		if i < 29 {
+			body += fmt.Sprintf(" bridge%da bridge%db", i, i)
+		}
+
+		findings = append(findings, model.Finding{
+			ID: int64(i + 1), Path: fmt.Sprintf("pkg/p%d/f.go", i),
+			Body: body, Source: model.SourceReview,
+		})
+	}
+
+	groups := NewLexicalGrouper().Group(findings)
+	require.NotEmpty(t, groups)
+
+	covered := 0
+	for _, group := range groups {
+		assert.LessOrEqual(t, len(group.Findings), 12)
+		covered += len(group.Findings)
+	}
+	assert.Equal(t, len(findings), covered)
+}
+
+func TestOpenTelemetryHistogramFixesFormBoundedTheme(t *testing.T) {
+	// Reduced verbatim-shaped corpus from the pinned OpenTelemetry
+	// checkout. The third fix is in the same package and its stored
+	// function/patch envelope shares framework vocabulary, but it is a
+	// different last-value race. The two histogram reuse events must
+	// form the candidate group by their commit messages alone.
+	findings := []model.Finding{
+		{
+			ID: 728759585664303326, PR: 8403,
+			Path:   "sdk/metric/internal/aggregate/exponential_histogram.go",
+			Source: model.SourceFixConventional,
+			Body: `fix commit 0a1d12fb
+subject: fix: clear stale histogram fields on datapoint reuse (#8403)
+Fixes #8399
+
+---------
+Co-authored-by: Example <example@example.com>
+functions: This project adheres to Semantic Versioning, func (e *expoHistogram[N]) delta(, func (e *expoHistogram[N]) cumulative(
+patch:
+@@ collect
++ clear Sum, Min, and Max when histogram recording is disabled`,
+		},
+		{
+			ID: 2335893288262408980, PR: 8056,
+			Path:   "sdk/metric/internal/aggregate/lastvalue.go",
+			Source: model.SourceFixSubject,
+			Body: `fix commit 206ac291
+subject: Fix race in the lastvalue aggregation where 0 could be observed (#8056)
+functions: This project adheres to Semantic Versioning, func collect metricdata Aggregation
+patch:
+@@ collect
++ use atomic state for the first observed metric value`,
+		},
+		{
+			ID: 5121900077751038754, PR: 8428,
+			Path:   "sdk/metric/internal/aggregate/histogram.go",
+			Source: model.SourceFixIssueLink,
+			Body: `fix commit 4714a4fb
+subject: sdk/metric: reuse cumulative-histogram Collect buffers to reduce heap usage (#8428)
+The cumulative histogram now reuses destination buffers across Collect cycles and explicitly clears Sum, Min, and Max because iteration order is unstable.
+Fixes #8427
+functions: func (s *cumulativeHistogram[N]) collect(
+patch:
+@@ collect
++ clear reused histogram datapoint fields before assignment`,
+		},
+	}
+
+	groups := NewLexicalGrouper().Group(findings)
+	require.Len(t, groups, 1)
+	require.Len(t, groups[0].Findings, 2)
+	assert.False(t, groups[0].Area)
+	assert.Equal(t, "sdk/metric/internal/aggregate", groups[0].Region)
+	assert.Equal(t, []int64{728759585664303326, 5121900077751038754},
+		[]int64{groups[0].Findings[0].ID, groups[0].Findings[1].ID})
+}
+
 func TestOversizedGroupsRespectCap(t *testing.T) {
 	// 100 findings in one directory sharing a strong theme: capped
 	// slices, never one giant prompt.

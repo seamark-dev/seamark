@@ -14,6 +14,22 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
+// HookExposureExpectation says whether a hooked arm must prove that its
+// configured pin matched the agent's edit trajectory. Most benchmark
+// treatments require an injection. A scope-control instance may make exposure
+// optional because the absence of a match is the behavior under test; preflight
+// still proves that the hook and lesson were installed correctly.
+type HookExposureExpectation string
+
+const (
+	// HookExposureRequired invalidates a hooked row that proves no matching injection.
+	HookExposureRequired HookExposureExpectation = "required"
+	// HookExposureOptional permits zero exposure for a scoped control.
+	HookExposureOptional HookExposureExpectation = "optional"
+	// HookExposureNone is reserved for arms with no hook treatment.
+	HookExposureNone HookExposureExpectation = "none"
+)
+
 // Instance is one immutable benchmark problem. The runner deliberately knows
 // nothing about the fixture's language or mistake class: generation, judging,
 // and verification all live here so additional instances do not fork the
@@ -36,14 +52,35 @@ type Instance struct {
 	// persisted rows to the exact interpretation used by this instance.
 	JudgeVersion string
 	Checks       []Command
+	// HookExposure controls validation of hooked arms. Empty means required,
+	// preserving the original benchmark contract. Optional is reserved for a
+	// scope-control whose valid outcome may be zero matching edits.
+	HookExposure HookExposureExpectation
+	// ComparisonFamily groups intentionally different instances that form one
+	// factorial experiment. Empty means the instance is not cross-compared.
+	ComparisonFamily string
+	// ProtocolInstance names the canonical instance whose full fingerprint
+	// defines the shared protocol for ComparisonFamily. Every family variant
+	// points to the same canonical instance.
+	ProtocolInstance string
 	// sourceFile names the embedded implementation that defines a built-in
 	// fixture and its hidden judge. It stays empty for caller-supplied instances.
 	sourceFile string
+	// variantSourceFile adds the small variant definition to the full cohort
+	// fingerprint while sourceFile remains the shared implementation bound into
+	// the cross-instance protocol fingerprint.
+	variantSourceFile string
 
 	// ExploreFiles are repository-relative paths whose appearance in an
 	// assistant message is useful diagnostic evidence. They do not affect the
 	// verdict.
 	ExploreFiles []string
+
+	// Prepare materializes any external, pinned source required by Generate.
+	// Synthetic instances leave it nil. Public-repository instances use an
+	// explicit preparation step so paid runs and their agents never depend on
+	// network access.
+	Prepare func(context.Context) (string, error)
 }
 
 // Verdict is one trial's deterministic judgment, read from the code the agent
@@ -142,6 +179,12 @@ func (i Instance) Validate() error {
 		return fmt.Errorf("benchmark instance %q has no judge version", i.ID)
 	case len(i.Checks) == 0:
 		return fmt.Errorf("benchmark instance %q has no validation commands", i.ID)
+	case i.HookExposure != "" && i.HookExposure != HookExposureRequired &&
+		i.HookExposure != HookExposureOptional:
+		return fmt.Errorf("benchmark instance %q has unknown hook exposure expectation %q",
+			i.ID, i.HookExposure)
+	case (i.ComparisonFamily == "") != (i.ProtocolInstance == ""):
+		return fmt.Errorf("benchmark instance %q must set comparison family and protocol instance together", i.ID)
 	}
 
 	treatment, err := parseSinglePin(i.LessonYAML)
@@ -162,6 +205,22 @@ func (i Instance) Validate() error {
 	}
 
 	return nil
+}
+
+func (i Instance) effectiveHookExposure() HookExposureExpectation {
+	if i.HookExposure == "" {
+		return HookExposureRequired
+	}
+
+	return i.HookExposure
+}
+
+func expectedHookExposure(i Instance, arm Arm) HookExposureExpectation {
+	if arm == ArmHookOn || arm == ArmPlacebo {
+		return i.effectiveHookExposure()
+	}
+
+	return HookExposureNone
 }
 
 func parseSinglePin(data string) (reviews.PinRule, error) {

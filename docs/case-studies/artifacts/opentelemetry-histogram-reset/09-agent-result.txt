@@ -1,0 +1,30 @@
+Work Complete ✓
+
+The metric SDK has been successfully fixed to prevent delta and exponential
+histograms from retaining stale Sum, Min, and Max values when reusing
+destination datapoints across collectors with different recording settings.
+
+Files Modified
+
+1. sdk/metric/internal/aggregate/histogram.go - Delta explicit-bucket histogram
+2. sdk/metric/internal/aggregate/exponential_histogram.go - Both delta and cumulative exponential histograms
+3. sdk/metric/internal/aggregate/histogram_test.go - Added regression tests
+
+Verification
+
+- ✓ All existing tests pass
+- ✓ New regression tests pass (TestDeltaHistogramReuseDestinationWithNoSum, TestDeltaHistogramReuseDestinationWithNoMinMax)
+- ✓ Full make precommit passes (exit code 0)
+- ✓ Aggregate test suite passes: go test -C sdk/metric ./internal/aggregate
+
+The fix ensures that when a destination aggregation's datapoint slots are
+reused across collection cycles, any fields that shouldn't be set based on the
+current recording configuration (noSum or noMinMax) are explicitly zeroed out
+to prevent stale values from persisting.
+
+✻ Sautéed for 9s
+
+※ recap: Fixed delta and exponential histograms to clear stale Sum, Min, Max
+values when reusing destination datapoints across collectors with different
+recording settings. All tests pass; work is complete. (disable recaps in
+/config)

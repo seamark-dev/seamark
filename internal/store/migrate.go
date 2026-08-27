@@ -9,7 +9,7 @@ import (
 // schemaVersion is the schema this binary understands and writes. Bump it
 // together with a new migrations entry — never alone: a version without a
 // migration would leave every existing database behind.
-const schemaVersion = 5
+const schemaVersion = 6
 
 // schemaVersionKey is the meta row recording a database's version.
 const schemaVersionKey = "schema_version"
@@ -35,6 +35,7 @@ var migrations = []migration{
 	{to: 3, run: addRegionSetsAndPaths},
 	{to: 4, run: addProposalTriggerPaths},
 	{to: 5, run: addProposalTriggerChecked},
+	{to: 6, run: addProposalTriggerPromptVersion},
 }
 
 // addFindingSource (v1 → v2): finding.source arrived with fix mining —
@@ -106,6 +107,22 @@ func addProposalTriggerChecked(tx *sql.Tx) error {
 
 	if !has {
 		_, err = tx.Exec(`ALTER TABLE proposal ADD COLUMN trigger_checked_at INTEGER NOT NULL DEFAULT 0`)
+	}
+
+	return err
+}
+
+// addProposalTriggerPromptVersion (v5 → v6) lets a changed semantic
+// question re-examine legacy negative answers once. The zero default marks
+// every historical answer as pre-versioning without rewriting durable rows.
+func addProposalTriggerPromptVersion(tx *sql.Tx) error {
+	has, err := hasColumn(tx, "proposal", "trigger_prompt_version")
+	if err != nil {
+		return err
+	}
+
+	if !has {
+		_, err = tx.Exec(`ALTER TABLE proposal ADD COLUMN trigger_prompt_version INTEGER NOT NULL DEFAULT 0`)
 	}
 
 	return err

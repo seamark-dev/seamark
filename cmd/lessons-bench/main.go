@@ -1,8 +1,8 @@
-// Command lessons-bench runs the RFC-003 §2 active experiment: does
+// Command lessons-bench runs the active experiment: does
 // the seamark lessons hook change what a headless agent writes? Two
-// arms differing in exactly one bit (the hook wired or absent), a
-// generated fixture repo per trial, a frozen task, a deterministic
-// judge. See internal/bench for the design and its guardrails.
+// arms differing in exactly one bit (the hook wired or absent), a fresh
+// synthetic or pinned-public worktree per trial, a frozen task, and a
+// deterministic judge. See internal/bench for the design and its guardrails.
 //
 // Paid runs spend len(selected arms) x -trials agent sessions. The "all"
 // instance selector is restricted to no-agent preflight/dry-run modes. Run at
@@ -174,7 +174,13 @@ func run(opts options) error {
 			fmt.Fprintf(os.Stderr, format+"\n", args...)
 		},
 	}
+
 	cfg.Fingerprint, err = bench.Fingerprint(cfg)
+	if err != nil {
+		return err
+	}
+
+	cfg.ProtocolFingerprint, err = bench.ProtocolFingerprint(cfg)
 	if err != nil {
 		return err
 	}
@@ -206,6 +212,9 @@ func run(opts options) error {
 	fmt.Printf("  delivery %s\n", cfg.HookDelivery)
 	fmt.Printf("  seamark  %s (%s, sha256 %.12s…)\n", abs, cfg.Version, cfg.SeamarkSHA)
 	fmt.Printf("  fingerprint %.12s…\n", cfg.Fingerprint)
+	if cfg.ProtocolFingerprint != cfg.Fingerprint {
+		fmt.Printf("  protocol %.12s… (%s)\n", cfg.ProtocolFingerprint, instance.ComparisonFamily)
+	}
 
 	if opts.dryRun || opts.preflightOnly {
 		fmt.Printf("  results  %s (no rows written during preflight)\n", opts.out)

@@ -203,9 +203,9 @@ func evidenceEqual(a, b []int64) bool {
 }
 
 // Clusters groups patterns that restate each other, largest first;
-// singletons are omitted. It is the audit of an existing pin file: what
-// is already there in several wordings, for a human to prune (seamark
-// never edits lessons.yaml unasked).
+// singletons are omitted. It audits an existing pin file for guidance
+// repeated in different words. Seamark reports the duplicates but never
+// edits lessons.yaml without an explicit request.
 func Clusters(ps []model.Proposal) [][]model.Proposal {
 	parent := make([]int, len(ps))
 	for i := range parent {

@@ -72,7 +72,7 @@ tamper-proof record.
   execution. Pair it with real isolation (containers, VM, devcontainer)
   when running untrusted agents.
 - Seamark never auto-applies model-generated rules; distilled proposals
-  require an explicit human `--apply`.
+  require an explicit maintainer `--apply`.
 - Warn mode never blocks anything, by contract; a default init installs
   warn mode only ([data-flow.md](data-flow.md) lists every capability's
   effects).

@@ -79,7 +79,7 @@ func seed(t *testing.T) (st *store.Store, root string) {
 		[]model.Lesson{
 			{ClusterKey: "api\x00RUF001", Region: "api", Reviewer: "coderabbit",
 				Symptom: "RUF001 ambiguous unicode", Occurrences: 7, LastTS: 200},
-			{ClusterKey: "api\x00naming", Region: "api", Reviewer: "human",
+			{ClusterKey: "api\x00naming", Region: "api", Reviewer: "person",
 				Symptom: "inconsistent naming", Occurrences: 1, LastTS: 100},
 		},
 		[]model.Finding{
@@ -88,7 +88,7 @@ func seed(t *testing.T) (st *store.Store, root string) {
 				URL:       "https://github.com/o/r/pull/4#discussion_r11",
 				CreatedAt: 200, Source: model.SourceReview},
 			{ID: 12, LessonKey: "api\x00RUF001", Path: "api/live.py", PR: 5,
-				Reviewer: "human", Body: "Same problem again.",
+				Reviewer: "person", Body: "Same problem again.",
 				CreatedAt: 210, Source: model.SourceReview},
 		}))
 
@@ -315,11 +315,11 @@ func TestRowsCarryTheScopesTheyBelongTo(t *testing.T) {
 	// unrelated directory that merely says "api", one repo-wide, and one
 	// below the api directory.
 	require.NoError(t, st.ReplaceLessons([]model.Lesson{
-		{ClusterKey: "a", Region: "web/src", Reviewer: "human",
+		{ClusterKey: "a", Region: "web/src", Reviewer: "person",
 			Symptom: "call the API with a timeout", Occurrences: 5, LastTS: 10},
-		{ClusterKey: "b", Region: "", Reviewer: "human",
+		{ClusterKey: "b", Region: "", Reviewer: "person",
 			Symptom: "repo-wide guidance", Occurrences: 4, LastTS: 10},
-		{ClusterKey: "c", Region: "api/services", Reviewer: "human",
+		{ClusterKey: "c", Region: "api/services", Reviewer: "person",
 			Symptom: "inside the api tree", Occurrences: 3, LastTS: 10},
 	}, nil))
 
@@ -469,7 +469,7 @@ func TestUntrustedTextNeverBecomesMarkup(t *testing.T) {
 	const payload = `<script>alert(1)</script>`
 
 	require.NoError(t, st.ReplaceLessons(
-		[]model.Lesson{{ClusterKey: "k", Region: "api\" onmouseover=\"x", Reviewer: "human",
+		[]model.Lesson{{ClusterKey: "k", Region: "api\" onmouseover=\"x", Reviewer: "person",
 			Symptom: payload, Occurrences: 3, LastTS: 10}},
 		[]model.Finding{{ID: 31, LessonKey: "k", Path: payload, Body: payload,
 			URL: "javascript:alert(1)", CreatedAt: 10, Source: model.SourceReview}}))
@@ -491,7 +491,7 @@ func TestControlCharactersAreStrippedButLineBreaksSurvive(t *testing.T) {
 	st, root := seed(t)
 
 	require.NoError(t, st.ReplaceLessons(
-		[]model.Lesson{{ClusterKey: "k", Region: "api", Reviewer: "human",
+		[]model.Lesson{{ClusterKey: "k", Region: "api", Reviewer: "person",
 			Symptom: "colour \x1b[31mred\x1b[0m escape", Occurrences: 2, LastTS: 10}},
 		[]model.Finding{{ID: 41, LessonKey: "k", Path: "api/live.py",
 			Body: "first line\nsecond line\x1b[0m", CreatedAt: 10, Source: model.SourceReview}}))
@@ -531,7 +531,7 @@ func TestTruncationIsAlwaysDeclared(t *testing.T) {
 	lessons := make([]model.Lesson, maxLessonRows+5)
 	for i := range lessons {
 		lessons[i] = model.Lesson{ClusterKey: fmt.Sprintf("k%d", i), Region: "api",
-			Reviewer: "human", Symptom: fmt.Sprintf("symptom %d", i),
+			Reviewer: "person", Symptom: fmt.Sprintf("symptom %d", i),
 			Occurrences: len(lessons) - i, LastTS: int64(i)}
 	}
 
@@ -637,8 +637,8 @@ func TestSourceMixOrdersByFrequency(t *testing.T) {
 }
 
 func TestCardsCarryEvidenceHealth(t *testing.T) {
-	// The HTML report is where the human decides, so the same
-	// re-judgment the --proposals ledger prints must be on the card:
+	// The HTML report supports the decision, so the same current
+	// assessment shown by --proposals must appear on the card:
 	// tier with facts, prompt era, and the regions today's inference
 	// would assign — with the retarget command when they drifted.
 	st, root := seed(t)
@@ -763,12 +763,12 @@ func TestReportShowsScopeAdvisory(t *testing.T) {
 }
 
 // TestReportShowsBlockedTrigger wires the confirmed-but-blocked case
-// into the page: a capped region set with a confirmed outside trigger
+// into the page: a stored trigger that vanished from the working tree
 // produces no drift line, so the card must carry the blocked sentence.
 func TestReportShowsBlockedTrigger(t *testing.T) {
 	root := t.TempDir()
 
-	for _, rel := range []string{"api/schemas.py", "web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
+	for _, rel := range []string{"web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
 		p := filepath.Join(root, filepath.FromSlash(rel))
 
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
@@ -808,7 +808,8 @@ func TestReportShowsBlockedTrigger(t *testing.T) {
 	page := renderPage(t, st, root)
 
 	assert.Contains(t, page, "confirmed by co-change (38 shared commits) but not deliverable")
-	assert.NotContains(t, page, "regions now:", "the cap keeps recompute equal to stored — no drift")
+	assert.Contains(t, page, "absent from the working tree")
+	assert.NotContains(t, page, "regions now:", "evidence coverage remains unchanged — no drift")
 }
 
 func TestNotLandingColorsMeetWCAGContrast(t *testing.T) {

@@ -43,9 +43,9 @@ deferred.
 
 ### M1 — Indexer + history miner (gate passed 2026-07-25)
 
-Prove the history layer tells a human something they did not know. If
-`seamark why` on a well-known repo produces nothing surprising, stop and
-rethink before building more.
+Prove the history layer gives maintainers useful information they did not
+know. If `seamark why` on a well-known repo produces nothing surprising, stop
+and rethink before building more.
 
 - [x] Store layer: schema migration, batch upserts, FTS5 symbol search
 - [x] Go extractor: tree-sitter parse → symbols (functions, methods, types,
@@ -168,7 +168,8 @@ factual function-grain reporting cheap:
 - [ ] `structural` tier: graph queries (e.g. `domain/` must not import `infra/`)
 - [ ] `pattern` tier: tree-sitter `.scm` queries scoped by CEL expressions
       over the graph
-- [ ] Diagnostics delivery: LSP for humans, structured tool errors for agents
+- [ ] Diagnostics delivery: LSP for developers, structured tool errors for
+      agents
 - [ ] `prose` tier deferred until agent sampling integration exists
 
 ### M4 — Effects + security gate (working; enforcement beta)
@@ -304,11 +305,12 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
       `internal/reviews` fetches `pulls/comments` through an injectable
       Fetcher (default shells out to `gh api --paginate`), parses the
       concatenated-per-page JSON with a streaming decoder, classifies the
-      reviewer (coderabbit | copilot | bot | human) and clusters. A cited
+      reviewer source (CodeRabbit, Copilot, another bot, or a person) and
+      clusters. A cited
       linter code (RUF001, E501, reportArgumentType) clusters by
       (directory, code); an un-coded comment clusters by (file, bold
-      issue-title fingerprint). Reviewer-agnostic: bots and humans travel
-      the same path. Degrades to a Note (never an error) with no gh / no
+      issue-title fingerprint). All reviewer sources travel the same path.
+      Degrades to a Note (never an error) with no gh / no
       auth / no GitHub remote / no PRs.
       - Store: `lesson` table given reviewer/last_ts/example_url columns;
         `ReplaceLessons` is its own transaction — lessons refresh on the
@@ -341,7 +343,7 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
       override, `mute` (by rule and/or region prefix, kills the
       generated-code/`(root)` noise), and `pin` (curated lessons that
       surface always for their region, even if never mined — the "must
-      not be ignored" list, with a human note). One `Config.Surface` path
+      not be ignored" list, with a maintainer note). One `Config.Surface` path
       shared by why, orient, and the hook so they never disagree.
 - [x] Adversarial review round (2026-07-26) fixed before commit: (1)
       data-loss — a transient mining failure (offline, gh logged out,
@@ -384,7 +386,7 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
       deferred (shared with the gate audit's unbounded-growth note).
 - [ ] Tier 0 (zero-token promotion): N≥3 mechanical recurrences → a
       proposed PostToolUse `ruff check --select <codes>` on edited files,
-      as a `.seamark/` diff for human review, never auto-enabled. The
+      as a `.seamark/` diff for maintainer review, never auto-enabled. The
       hook already proves the plumbing; this swaps injected text for the
       linter actually running
 - [ ] Decay/watermark: `since`-incremental fetch; hits/last_hit aging
@@ -405,7 +407,7 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
       unchanged evidence set is never paid for twice; runs report ~token
       cost. Hook pin injection budgeted (`pin_budget`, default 3,
       deepest region first, "+N more" pointer). Validated on
-      graphql-go-tools (14/14 proposals applied by the human) and
+      graphql-go-tools (14/14 proposals applied by maintainers) and
       trading-tools (domain-specific pins incl. session-boundary and
       statistical-baseline rules).
 - [x] Fix commits and reverts as finding sources (2026-07-28, validated
@@ -421,8 +423,8 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
       finding.source column via the store's first guarded migration;
       per-source replace lifecycles. Deterministic `fix density` line
       in why (last-20-commit window, reverts count, chores don't).
-- [x] `seamark report` (2026-07-29): the human half of the loop, as one
-      self-contained HTML file (no server, no external assets). Four
+- [x] `seamark report` (2026-07-29): the maintainer-facing half of the loop,
+      as one self-contained HTML file (no server, no external assets). Four
       sections, ported from a throwaway Python mockup that had already
       earned its keep — reading it is how the 17-of-65 duplicate-pin
       problem was spotted, which is why `--prune` exists. Decision queue
@@ -444,17 +446,17 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
 - [ ] CI failure→fix transitions and bug-labeled issues as finding
       sources — the rest of the original idea
 
-findings). Reviewer-agnostic by design: CodeRabbit, Copilot review,
-human reviewers — all arrive through the same PR-comment API. Surface by
+findings). Reviewer-agnostic by design: CodeRabbit, Copilot, and maintainer
+reviews all arrive through the same PR-comment API. Surface by
 cost tier, cheapest wins:
   - Tier 0 (zero tokens): N≥3 recurrences of a mechanical rule promote
     to a proposed PostToolUse check (`ruff check --select <codes>` on
-    the edited file) — a `.seamark/` diff for human review, never
+    the edited file) — a `.seamark/` diff for maintainer review, never
     auto-enabled. Agent pays tokens only on violation.
   - Tier 1 (bounded, DONE): recurring lessons become one-liners in MCP
     orient/why responses, ranked by occurrences, region-scoped. Never
     CLAUDE.md (always-on cost, grows forever, gets ignored).
-  - Tier 2 (DONE, see above): distillation of human threads through the
+  - Tier 2 (DONE, see above): distillation of reviewer threads through the
     user's own agent CLI — plan/apply, cite-or-die, never auto-enabled.
 
 ### Original v1.0 product checklist
@@ -483,7 +485,7 @@ internal/distill/       proposal generation, validation, and deduplication
 internal/lsp/           editor protocol surface
 internal/mcp/           agent tool, resource, and prompt surface
 internal/report/        shared orientation and explanation rendering
-internal/htmlreport/    deterministic human audit report
+internal/htmlreport/    deterministic maintainer audit report
 internal/store/         SQLite (modernc, pure Go) schema + queries + FTS5
 internal/model/         shared types: Symbol, Edge, CoChange, Decision
 internal/bench/         isolated synthetic fixtures, judges, and evidence
