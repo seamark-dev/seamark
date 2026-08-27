@@ -33,7 +33,7 @@ Review mining, fix mining, lessons, distillation, pins.
 
 | Capability | State |
 |---|---|
-| Fix-commit mining (local git) | working, offline |
+| Fix-commit mining (local git) | working, offline; `index --fixes-only` refreshes only fix evidence from local history |
 | Review-comment mining | working; requires an authenticated `gh` CLI and a GitHub remote on github.com |
 | Lessons + edit hook + tuning (`lessons.yaml`) | working |
 | Evidence confidence + ledger revalidation (`--proposals`, `--retarget`) | working; tiers recomputed on read, never stored |
@@ -62,8 +62,8 @@ agents inside real isolation regardless.
 
 ## Distribution
 
-Released: [v0.4.0](https://github.com/seamark-dev/seamark/releases)
-(2026-08-15) ships native archives for macOS and Linux (amd64/arm64),
+Released: [v0.5.0](https://github.com/seamark-dev/seamark/releases/tag/v0.5.0)
+(2026-08-27) ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
 (`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
 compiler. Windows is untested and unsupported. Artifact signing, SBOMs,
@@ -103,3 +103,12 @@ milestone.
   pinned task, Haiku/medium configuration, and runtime—not broad external
   validity. Raw rows and the
   [generated assessment](../bench/otel-report-v7.md) live under `bench/`.
+- The separate [OpenTelemetry case study](case-studies/opentelemetry-histogram-reset.md)
+  records the normal user workflow from a pinned commit through local-fix
+  indexing, bounded distillation, proposal review, accepted-pin delivery, and
+  independent verification. The replay recorded one 588-byte lesson injection
+  at the trigger and two suppressed repeat matches; focused package tests and
+  independent checks passed for explicit, exponential-delta, and
+  exponential-cumulative histogram reuse. This is a reproducible worked
+  example, not a causal or population-level extraction claim. Its sanitized,
+  checksummed captures are stored with the case study.

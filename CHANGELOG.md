@@ -6,7 +6,13 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
-## Unreleased
+## v0.5.0 — 2026-08-27
+
+The cross-file learning line: Seamark can now recover a repository-specific
+relationship from local fix history, verify where the mistake can begin, and
+deliver the accepted lesson at that trigger. This release also adds
+reproducible synthetic and OpenTelemetry-Go evidence for trigger-scoped
+delivery.
 
 - **Distillation preserves cross-file owner knowledge and targets its trigger.**
   Prompt v5 discloses every relevant non-document path in a fix finding,
@@ -19,8 +25,9 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   otherwise history must still confirm it. Test-only citations and broad
   ancestors cannot establish direct delivery. Verified triggers become exact,
   bounded delivery scopes, including individual files, while evidence
-  coverage remains the safe fallback. This intentionally supersedes v0.4.0's widen-only behavior:
-  `--retarget` may now narrow an evidence-scoped pin to its verified trigger.
+  coverage remains the safe fallback. This intentionally supersedes v0.4.0's
+  widen-only behavior: `--retarget` may now narrow an evidence-scoped pin to
+  its verified trigger.
   The corrected extraction question re-asks legacy negative answers once;
   existing positive trigger answers are preserved. State bundles v2 carry
   that question version while imports still accept v1. The preserved first
@@ -39,6 +46,16 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   planned finding by source, PR, and path without printing its body. A reduced
   OpenTelemetry histogram-reset corpus locks the intended two-fix group and
   excludes an unrelated same-package fix.
+- **A reproducible case study covers the complete learning-to-delivery path.**
+  The OpenTelemetry histogram-reset walkthrough starts from a pinned public
+  commit, builds a bounded local-fix corpus, previews and runs distillation,
+  records the maintainer's proposal decision, and replays the task with the
+  accepted lesson installed. The published evidence bundle includes the
+  proposal, applied pin, sanitized settings, patch, focused package test,
+  independent behavior checks, lesson statistics, hook audit, and checksums.
+  It is a worked example of the normal user workflow, not a claim that one
+  replay proves causation or general extraction accuracy
+  ([case study](docs/case-studies/opentelemetry-histogram-reset.md)).
 - **Pinned public-repository lessons benchmark.** The harness can now prepare
   and verify an exact OpenTelemetry-Go commit, including a content-pinned
   vendored dependency tree, before creating fresh network-isolated agent
