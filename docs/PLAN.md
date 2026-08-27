@@ -37,9 +37,9 @@ deferred.
 - [x] **FTS5 verified present in `modernc.org/sqlite`** (pure-Go driver, no
       CGO needed for storage; CGO is still required by tree-sitter)
 - [x] SQLite schema v1 (see `internal/store/schema.sql`)
-- [~] Release engineering: v0.2.0 ships smoke-tested native macOS/Linux
-      archives (amd64/arm64) and SHA-256 checksums. Artifact signing, SBOMs,
-      Homebrew/npm distribution, and Windows support remain.
+- [~] Release engineering: tagged releases ship smoke-tested native
+      macOS/Linux archives (amd64/arm64) and SHA-256 checksums. Artifact
+      signing, SBOMs, Homebrew/npm distribution, and Windows support remain.
 
 ### M1 — Indexer + history miner (gate passed 2026-07-25)
 
