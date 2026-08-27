@@ -214,7 +214,7 @@ func splitPatchHunks(patch string) []string {
 
 	for line := range strings.Lines(patch) {
 		if filePath, ok := strings.CutPrefix(line, "file: "); ok {
-			file = strings.TrimSpace(filePath)
+			file = strings.TrimSuffix(strings.TrimSuffix(filePath, "\n"), "\r")
 			continue
 		}
 

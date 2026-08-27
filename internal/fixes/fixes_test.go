@@ -470,6 +470,59 @@ func TestTrimPatchPreservesCompactFileIdentity(t *testing.T) {
 	assert.Contains(t, got, "@@ -1 +1 @@ func handle()")
 }
 
+func TestTrimPatchParsesGitPathHeaders(t *testing.T) {
+	tests := []struct {
+		name   string
+		header string
+		path   string
+	}{
+		{
+			name:   "spaces",
+			header: "diff --git a/api/my handler.go b/api/my handler.go",
+			path:   "api/my handler.go",
+		},
+		{
+			name:   "C-quoted",
+			header: `diff --git "a/api/tab\tname.go" "b/api/tab\tname.go"`,
+			path:   "api/tab\tname.go",
+		},
+		{
+			name:   "C-quoted octal UTF-8",
+			header: `diff --git "a/api/\303\251.go" "b/api/\303\251.go"`,
+			path:   "api/é.go",
+		},
+		{
+			name:   "mixed rename",
+			header: `diff --git a/api/old.go "b/api/tab\tname.go"`,
+			path:   "api/tab\tname.go",
+		},
+		{
+			name:   "leading and trailing spaces",
+			header: "diff --git a/ name.go  b/ name.go ",
+			path:   " name.go ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			patch := tt.header + "\n@@ -1 +1 @@ func handle()\n-old\n+new\n"
+			got := trimPatch(patch, 1_000)
+
+			assert.Contains(t, got, "file: "+tt.path+"\n")
+			assert.NotContains(t, got, "diff --git")
+		})
+	}
+}
+
+func TestTrimPatchKeepsAmbiguousGitHeader(t *testing.T) {
+	header := "diff --git a/api/old b/name.go b/api/new.go"
+	got := trimPatch(header+"\n@@ -1 +1 @@ func handle()\n-old\n+new\n", 1_000)
+
+	assert.Contains(t, got, header,
+		"an ambiguous pathname must not become an incorrect file marker")
+	assert.NotContains(t, got, "file:")
+}
+
 func TestOutOfWindowChoreMemberStillExcludes(t *testing.T) {
 	// A branch can sit unmerged past the mining window: --since bounds
 	// the commit log, not the merge's rev-list walk. The chore commit

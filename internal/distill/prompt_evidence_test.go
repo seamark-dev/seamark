@@ -126,6 +126,18 @@ func TestCompactFixHeaderDropsTrailersCaseInsensitively(t *testing.T) {
 	assert.Equal(t, "subject: fix", got)
 }
 
+func TestSplitPatchHunksPreservesWhitespaceInFileMarkers(t *testing.T) {
+	patch := "file:  leading and trailing.go \n" +
+		"@@ -1 +1 @@ func handle()\n-old\n+new\n" +
+		"file: api/tab\tname.go\n" +
+		"@@ -1 +1 @@ func other()\n-old\n+new\n"
+
+	hunks := splitPatchHunks(patch)
+	require.Len(t, hunks, 2)
+	assert.Contains(t, hunks[0], "file:  leading and trailing.go \n")
+	assert.Contains(t, hunks[1], "file: api/tab\tname.go\n")
+}
+
 func TestPromptDisclosesFullFixFootprintAndSamplesParallelProductionHunks(t *testing.T) {
 	f := model.Finding{
 		ID: 728759585664303326, PR: 8403,
