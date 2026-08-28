@@ -12,8 +12,9 @@ LDFLAGS := -ldflags "-X $(MODULE)/internal/cli.version=$(VERSION)"
 
 # Test builds use an explicit writable cache. This avoids failures when a
 # restricted macOS runner cannot access ~/Library/Caches/go-build.
-TEST_CACHE_ROOT := $(if $(strip $(TMPDIR)),$(patsubst %/,%,$(TMPDIR)),/tmp)
-TEST_GOCACHE    ?= $(TEST_CACHE_ROOT)/seamark-go-build-$(shell id -u)
+NORMALIZED_TMPDIR := $(patsubst %/,%,$(strip $(TMPDIR)))
+TEST_CACHE_ROOT   := $(if $(NORMALIZED_TMPDIR),$(NORMALIZED_TMPDIR),/tmp)
+TEST_GOCACHE      ?= $(TEST_CACHE_ROOT)/seamark-go-build-$(shell id -u)
 
 # Release packaging: one archive per platform, built natively (CGO rules
 # out cross-compiling from a single host — the release workflow runs this
