@@ -40,7 +40,7 @@ func TestSchemaSyncFixtureIsDeterministicAndHealthy(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, synchronized, "the untouched fixture must start synchronized")
 
-	results := runChecks(context.Background(), a, SchemaSyncInstance().Checks)
+	results := mustRunChecks(t, a, SchemaSyncInstance().Checks)
 	assert.True(t, checksPass(results), failedChecks(results))
 
 	for _, rel := range []string{".seamark", ".claude"} {
@@ -59,7 +59,7 @@ func TestSchemaSyncNaiveAndGoldSolutionsDiscriminateInvariant(t *testing.T) {
 	assert.True(t, verdict.TaskDone)
 	assert.False(t, verdict.Avoided)
 	assert.Contains(t, verdict.Notes, "stale")
-	assert.True(t, checksPass(runChecks(context.Background(), dir, SchemaSyncInstance().Checks)))
+	assert.True(t, checksPass(mustRunChecks(t, dir, SchemaSyncInstance().Checks)))
 
 	generated := filepath.Join(dir, "web", "src", "api", "generated.ts")
 	data, err := os.ReadFile(generated)

@@ -373,7 +373,7 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	t.Setenv("GOWORK", "/host/go.work")
 	t.Setenv("XDG_CONFIG_HOME", "/host/xdg-config")
 
-	env := environmentByKey(t, agentEnvironment(dir))
+	env := environmentByKey(t, mustAgentEnvironment(t, dir))
 	for _, key := range []string{
 		"ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
 		"ANTHROPIC_SMALL_FAST_MODEL", "MAX_THINKING_TOKENS", "DISABLE_PROMPT_CACHING",
@@ -420,7 +420,7 @@ func TestAgentEnvironmentPreservesDefaultClaudeHome(t *testing.T) {
 	t.Setenv("HOME", hostHome)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 
-	env := environmentByKey(t, agentEnvironment(dir))
+	env := environmentByKey(t, mustAgentEnvironment(t, dir))
 
 	assert.Equal(t, hostHome, env["HOME"])
 	assert.Empty(t, env["CLAUDE_CONFIG_DIR"])
@@ -433,7 +433,7 @@ func TestAgentEnvironmentDisablesGoTelemetryInsideTrial(t *testing.T) {
 
 	dir := t.TempDir()
 	require.NoError(t, writeAgentToolEnvironment(dir))
-	env := agentEnvironment(dir)
+	env := mustAgentEnvironment(t, dir)
 	byKey := environmentByKey(t, env)
 	cmd := exec.Command(byKey["CLAUDE_CODE_SHELL_PREFIX"],
 		"go env -json GOTELEMETRY GOTELEMETRYDIR")
@@ -446,6 +446,36 @@ func TestAgentEnvironmentDisablesGoTelemetryInsideTrial(t *testing.T) {
 	assert.Equal(t, "off", goEnv["GOTELEMETRY"])
 	assert.Equal(t, filepath.Join(dir, ".bench-cache", "go-telemetry"),
 		goEnv["GOTELEMETRYDIR"])
+}
+
+func TestAgentEnvironmentPropagatesGoTelemetrySetupFailure(t *testing.T) {
+	dir := t.TempDir()
+	cache := filepath.Join(dir, ".bench-cache")
+	require.NoError(t, os.MkdirAll(cache, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cache, "go-telemetry"), []byte("conflict"), 0o600))
+
+	env, err := agentEnvironment(dir)
+	require.Error(t, err)
+	assert.Nil(t, env)
+	assert.Contains(t, err.Error(), "create Go telemetry directory")
+}
+
+func mustAgentEnvironment(t *testing.T, dir string) []string {
+	t.Helper()
+
+	env, err := agentEnvironment(dir)
+	require.NoError(t, err)
+
+	return env
+}
+
+func mustRunChecks(t *testing.T, dir string, commands []Command) []CheckResult {
+	t.Helper()
+
+	results, err := runChecks(context.Background(), dir, commands)
+	require.NoError(t, err)
+
+	return results
 }
 
 func environmentByKey(t *testing.T, entries []string) map[string]string {
@@ -508,7 +538,7 @@ func TestRunJudgeCommandIgnoresStalePythonBytecode(t *testing.T) {
 
 	prime := exec.Command("python3", "-c", "import fixture_module")
 	prime.Dir = dir
-	prime.Env = agentEnvironment(dir)
+	prime.Env = mustAgentEnvironment(t, dir)
 	require.NoError(t, prime.Run())
 
 	// Keep source size and timestamp unchanged so normal Python imports would
@@ -946,9 +976,10 @@ func TestIsErrorWithoutProviderStatusIsAnAgentOutcome(t *testing.T) {
 
 func TestCommandTimeoutIsBounded(t *testing.T) {
 	started := time.Now()
-	result := (Command{
+	result, err := (Command{
 		Name: "/bin/sh", Args: []string{"-c", "exec sleep 5"}, Timeout: 50 * time.Millisecond,
 	}).run(context.Background(), t.TempDir())
+	require.NoError(t, err)
 
 	assert.False(t, result.Pass)
 	assert.True(t, result.TimedOut)

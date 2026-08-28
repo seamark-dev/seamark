@@ -30,7 +30,7 @@ func TestCacheVersionFixture(t *testing.T) {
 	assert.True(t, naive.TaskDone)
 	assert.False(t, naive.Avoided)
 	assert.Contains(t, naive.Notes, "cache namespace")
-	naiveChecks := runChecks(context.Background(), a, instance.Checks)
+	naiveChecks := mustRunChecks(t, a, instance.Checks)
 	assert.True(t, checksPass(naiveChecks), failedChecks(naiveChecks))
 
 	require.NoError(t, instance.ApplyGold(a))
@@ -38,7 +38,7 @@ func TestCacheVersionFixture(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, gold.TaskDone)
 	assert.True(t, gold.Avoided)
-	goldChecks := runChecks(context.Background(), a, instance.Checks)
+	goldChecks := mustRunChecks(t, a, instance.Checks)
 	assert.True(t, checksPass(goldChecks), failedChecks(goldChecks))
 
 	log, err := exec.Command("git", "-C", b, "log", "--format=%s").Output()
@@ -68,7 +68,7 @@ func TestExportRegistryFixture(t *testing.T) {
 	assert.True(t, naive.TaskDone)
 	assert.False(t, naive.Avoided)
 	assert.Contains(t, naive.Notes, "registry is stale")
-	naiveChecks := runChecks(context.Background(), a, instance.Checks)
+	naiveChecks := mustRunChecks(t, a, instance.Checks)
 	assert.True(t, checksPass(naiveChecks), failedChecks(naiveChecks))
 
 	require.NoError(t, instance.ApplyGold(a))
@@ -76,7 +76,7 @@ func TestExportRegistryFixture(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, gold.TaskDone)
 	assert.True(t, gold.Avoided)
-	goldChecks := runChecks(context.Background(), a, instance.Checks)
+	goldChecks := mustRunChecks(t, a, instance.Checks)
 	assert.True(t, checksPass(goldChecks), failedChecks(goldChecks))
 
 	log, err := exec.Command("git", "-C", b, "log", "--format=%s").Output()
@@ -179,7 +179,7 @@ func TestOwnerInvariantFixturePreflights(t *testing.T) {
 func assertFixtureHealthyAndUntreated(t *testing.T, dir string, instance Instance) {
 	t.Helper()
 
-	results := runChecks(context.Background(), dir, instance.Checks)
+	results := mustRunChecks(t, dir, instance.Checks)
 	assert.True(t, checksPass(results), failedChecks(results))
 	for _, rel := range []string{".seamark", ".claude"} {
 		_, err := os.Stat(filepath.Join(dir, rel))

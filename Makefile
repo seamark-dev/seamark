@@ -10,6 +10,11 @@ MODULE  := github.com/seamark-dev/seamark
 VERSION := $(shell (git describe --tags --always --dirty 2>/dev/null || echo dev) | LC_ALL=C tr -cd 'A-Za-z0-9._+-')
 LDFLAGS := -ldflags "-X $(MODULE)/internal/cli.version=$(VERSION)"
 
+# Test builds use an explicit writable cache. This avoids failures when a
+# restricted macOS runner cannot access ~/Library/Caches/go-build.
+TEST_CACHE_ROOT := $(if $(strip $(TMPDIR)),$(patsubst %/,%,$(TMPDIR)),/tmp)
+TEST_GOCACHE    ?= $(TEST_CACHE_ROOT)/seamark-go-build-$(shell id -u)
+
 # Release packaging: one archive per platform, built natively (CGO rules
 # out cross-compiling from a single host — the release workflow runs this
 # target on one runner per OS/arch).
@@ -27,10 +32,10 @@ install: ## Install seamark into ~/.local/bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(HOME)/.local/bin/seamark ./cmd/seamark
 
 test: ## Run all tests
-	CGO_ENABLED=1 go test ./...
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./...
 
 test-race: ## Run all tests with the race detector
-	CGO_ENABLED=1 go test -race ./...
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race ./...
 
 lint: ## Static analysis (config in .golangci.yml)
 	golangci-lint run ./...

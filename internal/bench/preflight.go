@@ -63,7 +63,12 @@ func Preflight(ctx context.Context, cfg RunConfig) error {
 		return fmt.Errorf("untouched fixture already passes the task judge")
 	}
 
-	if results := runChecks(ctx, baseA, instance.Checks); !checksPass(results) {
+	results, err := runChecks(ctx, baseA, instance.Checks)
+	if err != nil {
+		return fmt.Errorf("run untouched fixture checks: %w", err)
+	}
+
+	if !checksPass(results) {
 		return fmt.Errorf("untouched fixture checks failed: %s", failedChecks(results))
 	}
 
@@ -84,7 +89,12 @@ func Preflight(ctx context.Context, cfg RunConfig) error {
 		return fmt.Errorf("naive patch incorrectly passes the invariant judge")
 	}
 
-	if results := runChecks(ctx, baseB, instance.Checks); !checksPass(results) {
+	results, err = runChecks(ctx, baseB, instance.Checks)
+	if err != nil {
+		return fmt.Errorf("run naive fixture checks: %w", err)
+	}
+
+	if !checksPass(results) {
 		return fmt.Errorf("naive patch checks failed: %s", failedChecks(results))
 	}
 
@@ -101,7 +111,12 @@ func Preflight(ctx context.Context, cfg RunConfig) error {
 		return fmt.Errorf("canonical patch does not pass both judges: %s", goldVerdict.Notes)
 	}
 
-	if results := runChecks(ctx, baseA, instance.Checks); !checksPass(results) {
+	results, err = runChecks(ctx, baseA, instance.Checks)
+	if err != nil {
+		return fmt.Errorf("run canonical fixture checks: %w", err)
+	}
+
+	if !checksPass(results) {
 		return fmt.Errorf("canonical patch checks failed: %s", failedChecks(results))
 	}
 
@@ -189,13 +204,19 @@ func containsHook(settings []byte) bool {
 		strings.Contains(string(settings), "lessons --hook")
 }
 
-func runChecks(ctx context.Context, dir string, commands []Command) []CheckResult {
+func runChecks(ctx context.Context, dir string, commands []Command) ([]CheckResult, error) {
 	results := make([]CheckResult, 0, len(commands))
+
 	for _, command := range commands {
-		results = append(results, command.run(ctx, dir))
+		result, err := command.run(ctx, dir)
+		if err != nil {
+			return nil, err
+		}
+
+		results = append(results, result)
 	}
 
-	return results
+	return results, nil
 }
 
 func checksPass(results []CheckResult) bool {

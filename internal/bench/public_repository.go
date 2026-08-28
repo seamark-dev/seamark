@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -259,16 +260,21 @@ func runPreparationCommandOutputEnv(ctx context.Context, dir string, env []strin
 	cmd.Env = env
 	cmd.WaitDelay = processWaitDelay
 
-	out, err := cmd.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 	if err != nil {
 		if commandCtx.Err() != nil {
 			return nil, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), commandCtx.Err())
 		}
 
-		return nil, fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, out)
+		return nil, fmt.Errorf("%s %s: %w\n%s%s", name, strings.Join(args, " "), err,
+			stdout.Bytes(), stderr.Bytes())
 	}
 
-	return out, nil
+	return stdout.Bytes(), nil
 }
 
 func treeSHA256(root string) (string, error) {
