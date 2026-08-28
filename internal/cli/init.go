@@ -94,10 +94,37 @@ func seamarkPath() string {
 	}
 
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		return resolved
+		exe = resolved
 	}
 
-	return exe
+	return stableInstallPath(exe)
+}
+
+// stableInstallPath maps a versioned Homebrew Cellar path to the keg's
+// stable opt symlink. Homebrew deletes the old Cellar directory on every
+// upgrade, so hooks that keep it break. The opt symlink survives
+// upgrades. Every other path returns unchanged.
+func stableInstallPath(path string) string {
+	prefix, rest, found := strings.Cut(path, "/Cellar/seamark/")
+	if !found {
+		return path
+	}
+
+	// The remainder must be exactly <version>/bin/seamark. A different
+	// layout is not a Homebrew keg of this binary.
+	parts := strings.Split(rest, "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] != "bin" || parts[2] != "seamark" {
+		return path
+	}
+
+	// Substitute only when the opt symlink really exists, so a broken
+	// or partial install keeps the path that is known to work.
+	opt := filepath.Join(prefix, "opt", "seamark", "bin", "seamark")
+	if _, err := os.Stat(opt); err != nil {
+		return path
+	}
+
+	return opt
 }
 
 func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
