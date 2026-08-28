@@ -548,6 +548,53 @@ func TestStarterPolicyEnforceVariant(t *testing.T) {
 	assert.Equal(t, starterPolicy, starterPolicyFor(gateModeWarn))
 }
 
+// brewFixture builds a fake Homebrew prefix with a Cellar keg and,
+// optionally, the opt symlink target. It returns the Cellar binary path
+// and the opt binary path.
+func brewFixture(t *testing.T, withOpt bool) (cellarBin, optBin string) {
+	t.Helper()
+
+	prefix := t.TempDir()
+	cellarBin = filepath.Join(prefix, "Cellar", "seamark", "0.5.3", "bin", "seamark")
+	optBin = filepath.Join(prefix, "opt", "seamark", "bin", "seamark")
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(cellarBin), 0o755))
+	require.NoError(t, os.WriteFile(cellarBin, nil, 0o755))
+
+	if withOpt {
+		require.NoError(t, os.MkdirAll(filepath.Dir(optBin), 0o755))
+		require.NoError(t, os.WriteFile(optBin, nil, 0o755))
+	}
+
+	return cellarBin, optBin
+}
+
+func TestStableInstallPathRewritesHomebrewCellar(t *testing.T) {
+	// Homebrew deletes the versioned Cellar directory on upgrade; hooks
+	// must record the opt symlink, which survives upgrades.
+	cellarBin, optBin := brewFixture(t, true)
+
+	assert.Equal(t, optBin, stableInstallPath(cellarBin))
+}
+
+func TestStableInstallPathKeepsCellarWithoutOptLink(t *testing.T) {
+	// Without the opt symlink the Cellar path is the only one that
+	// works, so it must stay.
+	cellarBin, _ := brewFixture(t, false)
+
+	assert.Equal(t, cellarBin, stableInstallPath(cellarBin))
+}
+
+func TestStableInstallPathKeepsForeignPaths(t *testing.T) {
+	home := "/home/u/.local/bin/seamark"
+	assert.Equal(t, home, stableInstallPath(home))
+
+	// A Cellar-like fragment without the <version>/bin/seamark keg
+	// layout is not a Homebrew install and must stay untouched.
+	odd := "/x/Cellar/seamark/extra/0.1/bin/seamark"
+	assert.Equal(t, odd, stableInstallPath(odd))
+}
+
 // testWriter is a minimal io.Writer capturing output.
 type testWriter struct{ b []byte }
 
