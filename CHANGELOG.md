@@ -6,6 +6,24 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## v0.5.3 — 2026-08-28
+
+This patch makes the benchmark and its test suite reliable on macOS. It does
+not change lesson selection or delivery behavior.
+
+- **Trial-local Go telemetry no longer races cleanup.** Benchmark commands now
+  disable Go telemetry in the trial cache before they start. This prevents a
+  Go telemetry process from writing into a temporary trial after the command
+  has finished. Cache setup errors stop the affected check, judge, fixture
+  generator, index, or agent launch and are reported as infrastructure
+  failures instead of failed benchmark outcomes.
+- **Tests no longer depend on the default macOS Go build cache.** `make test`
+  and `make test-race` use a writable per-user cache under `TMPDIR`, with a
+  safe `/tmp` fallback. Public-repository preparation also keeps command
+  stdout separate from stderr, so a harmless macOS or Git diagnostic cannot
+  make a clean checkout appear dirty. Regression tests cover both failure
+  modes.
+
 ## v0.5.0 — 2026-08-27
 
 The cross-file learning line: Seamark can now recover a repository-specific
