@@ -2,6 +2,7 @@ package bench
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,4 +124,19 @@ func TestPreparationEnvironmentIgnoresHostGitConfiguration(t *testing.T) {
 	assert.Equal(t, "1", env["GIT_CONFIG_NOSYSTEM"])
 	assert.Equal(t, os.DevNull, env["GIT_CONFIG_GLOBAL"])
 	assert.NotContains(t, env, "GIT_CONFIG_COUNT")
+}
+
+func TestPreparationCommandOutputExcludesSuccessfulStderr(t *testing.T) {
+	const helperEnv = "SEAMARK_PREPARATION_OUTPUT_HELPER"
+	if os.Getenv(helperEnv) == "1" {
+		_, _ = fmt.Fprint(os.Stdout, "status output")
+		_, _ = fmt.Fprint(os.Stderr, "harmless warning")
+		os.Exit(0)
+	}
+
+	t.Setenv(helperEnv, "1")
+	out, err := runPreparationCommandOutput(context.Background(), "", os.Args[0],
+		"-test.run=^TestPreparationCommandOutputExcludesSuccessfulStderr$")
+	require.NoError(t, err)
+	assert.Equal(t, "status output", string(out))
 }

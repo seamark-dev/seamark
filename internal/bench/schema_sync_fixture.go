@@ -134,8 +134,15 @@ func applySchemaSyncGold(dir string) error {
 
 	cmd := exec.CommandContext(ctx, "python3", "tools/sync_api.py")
 	cmd.Dir = dir
-	cmd.Env = agentEnvironment(dir)
+
+	env, err := agentEnvironment(dir)
+	if err != nil {
+		return fmt.Errorf("prepare schema-sync generator environment: %w", err)
+	}
+
+	cmd.Env = env
 	cmd.WaitDelay = processWaitDelay
+
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("generate schema-sync client timed out after %s", defaultSetupTimeout)

@@ -125,7 +125,7 @@ func (c Command) String() string {
 	return c.Name + " " + strings.Join(c.Args, " ")
 }
 
-func (c Command) run(ctx context.Context, dir string) CheckResult {
+func (c Command) run(ctx context.Context, dir string) (CheckResult, error) {
 	timeout := c.Timeout
 	if timeout <= 0 {
 		timeout = defaultCheckTimeout
@@ -136,7 +136,13 @@ func (c Command) run(ctx context.Context, dir string) CheckResult {
 
 	cmd := exec.CommandContext(checkCtx, c.Name, c.Args...)
 	cmd.Dir = dir
-	cmd.Env = agentEnvironment(dir)
+
+	env, err := agentEnvironment(dir)
+	if err != nil {
+		return CheckResult{}, fmt.Errorf("prepare check environment: %w", err)
+	}
+
+	cmd.Env = env
 	cmd.WaitDelay = processWaitDelay
 
 	out, err := cmd.CombinedOutput()
@@ -151,7 +157,7 @@ func (c Command) run(ctx context.Context, dir string) CheckResult {
 		}
 	}
 
-	return result
+	return result, nil
 }
 
 // Validate rejects incomplete instances before they can spend an agent call.

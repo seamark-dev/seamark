@@ -1,7 +1,6 @@
 package bench
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,14 +56,14 @@ func TestOTelHistogramPreparedFixtureContract(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, verdict.TaskDone)
 	assert.False(t, verdict.Avoided)
-	assertChecksPass(t, runChecks(context.Background(), base, instance.Checks))
+	assertChecksPass(t, mustRunChecks(t, base, instance.Checks))
 
 	require.NoError(t, instance.ApplyNaive(base))
 	verdict, err = instance.Judge(base)
 	require.NoError(t, err)
 	assert.True(t, verdict.TaskDone)
 	assert.False(t, verdict.Avoided)
-	assertChecksPass(t, runChecks(context.Background(), base, instance.Checks))
+	assertChecksPass(t, mustRunChecks(t, base, instance.Checks))
 
 	gold := filepath.Join(t.TempDir(), "gold")
 	require.NoError(t, instance.Generate(gold))
@@ -73,7 +72,7 @@ func TestOTelHistogramPreparedFixtureContract(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, verdict.TaskDone)
 	assert.True(t, verdict.Avoided)
-	assertChecksPass(t, runChecks(context.Background(), gold, instance.Checks))
+	assertChecksPass(t, mustRunChecks(t, gold, instance.Checks))
 
 	status, err := os.ReadFile(filepath.Join(gold, ".git", "info", "exclude"))
 	require.NoError(t, err)

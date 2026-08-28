@@ -25,8 +25,14 @@ func runJudgeCommand(dir, name string, args ...string) (bool, error) {
 
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(
-		agentEnvironment(dir),
+
+	env, err := agentEnvironment(dir)
+	if err != nil {
+		return false, fmt.Errorf("prepare benchmark judge environment: %w", err)
+	}
+
+	env = append(
+		env,
 		// Python timestamp bytecode can stay valid after a same-size source
 		// rewrite within one second. A fresh per-command cache directory,
 		// together with disabled bytecode writes, makes hidden judges read the
@@ -35,6 +41,7 @@ func runJudgeCommand(dir, name string, args ...string) (bool, error) {
 		"PYTHONDONTWRITEBYTECODE=1",
 	)
 
+	cmd.Env = env
 	cmd.WaitDelay = processWaitDelay
 
 	if out, err := cmd.CombinedOutput(); err != nil {
