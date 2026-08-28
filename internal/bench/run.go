@@ -1424,6 +1424,7 @@ var inheritedEnvironmentBlocklist = map[string]bool{
 	"GOPROXY":                 true,
 	"GOTELEMETRY":             true,
 	"GOTELEMETRYDIR":          true,
+	"TEST_TELEMETRY_DIR":      true,
 	"GOWORK":                  true,
 	"XDG_CACHE_HOME":          true,
 	"SEAMARK_BENCH_TOOL_HOME": true,
@@ -1464,6 +1465,10 @@ func writeAgentToolEnvironment(dir string) error {
 		}
 	}
 
+	if err := disableGoTelemetry(cache); err != nil {
+		return err
+	}
+
 	prefix := filepath.Join(cache, "tool-environment.sh")
 	if err := os.WriteFile(prefix, []byte(toolEnvironmentPrefix), 0o700); err != nil {
 		return fmt.Errorf("write shell environment prefix: %w", err)
@@ -1479,6 +1484,10 @@ func agentEnvironment(dir string) []string {
 	} {
 		_ = os.MkdirAll(filepath.Join(cache, sub), 0o755)
 	}
+
+	// runAgent calls writeAgentToolEnvironment first and reports any error.
+	// Other harness commands use this best-effort setup directly.
+	_ = disableGoTelemetry(cache)
 	prefix := filepath.Join(cache, "tool-environment.sh")
 
 	env := sanitizedEnvironment()
@@ -1500,6 +1509,7 @@ func agentEnvironment(dir string) []string {
 		"GOENV=off",
 		"GOTOOLCHAIN=local",
 		"GOPROXY=off",
+		"TEST_TELEMETRY_DIR="+filepath.Join(cache, "go-telemetry"),
 		"GOWORK=off",
 		"XDG_CACHE_HOME="+filepath.Join(cache, "xdg-cache"),
 		"npm_config_cache="+filepath.Join(cache, "npm"),
@@ -1514,6 +1524,24 @@ func agentEnvironment(dir string) []string {
 	)
 
 	return env
+}
+
+// disableGoTelemetry prevents Go's telemetry sidecar from outliving a trial
+// command and racing cleanup. TEST_TELEMETRY_DIR is the Go toolchain's
+// isolated-environment override; the mode file keeps collection and upload
+// disabled without changing the operator's Go configuration.
+func disableGoTelemetry(cache string) error {
+	dir := filepath.Join(cache, "go-telemetry")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create Go telemetry directory: %w", err)
+	}
+
+	mode := filepath.Join(dir, "mode")
+	if err := os.WriteFile(mode, []byte("off"), 0o600); err != nil {
+		return fmt.Errorf("disable Go telemetry: %w", err)
+	}
+
+	return nil
 }
 
 // parseAgentOutput extracts runtime identity, usage, infrastructure errors,

@@ -369,6 +369,7 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	t.Setenv("GOENV", "/host/go/env")
 	t.Setenv("GOTELEMETRY", "on")
 	t.Setenv("GOTELEMETRYDIR", "/host/go/telemetry")
+	t.Setenv("TEST_TELEMETRY_DIR", "/host/go/test-telemetry")
 	t.Setenv("GOWORK", "/host/go.work")
 	t.Setenv("XDG_CONFIG_HOME", "/host/xdg-config")
 
@@ -400,6 +401,8 @@ func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {
 	assert.Equal(t, filepath.Join(dir, ".bench-cache", "go-build"), env["GOCACHE"])
 	assert.Equal(t, "off", env["GOENV"])
 	assert.Equal(t, "off", env["GOPROXY"])
+	assert.Equal(t, filepath.Join(dir, ".bench-cache", "go-telemetry"),
+		env["TEST_TELEMETRY_DIR"])
 	assert.Equal(t, "off", env["GOWORK"])
 	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
 	assert.Equal(t, "1", env["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"])
@@ -423,24 +426,26 @@ func TestAgentEnvironmentPreservesDefaultClaudeHome(t *testing.T) {
 	assert.Empty(t, env["CLAUDE_CONFIG_DIR"])
 }
 
-func TestAgentEnvironmentKeepsGoTelemetryInsideTrial(t *testing.T) {
+func TestAgentEnvironmentDisablesGoTelemetryInsideTrial(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Go uses Windows application-data variables instead of HOME")
+		t.Skip("the agent shell prefix requires /bin/bash")
 	}
 
 	dir := t.TempDir()
 	require.NoError(t, writeAgentToolEnvironment(dir))
 	env := agentEnvironment(dir)
 	byKey := environmentByKey(t, env)
-	cmd := exec.Command(byKey["CLAUDE_CODE_SHELL_PREFIX"], "go env GOTELEMETRYDIR")
+	cmd := exec.Command(byKey["CLAUDE_CODE_SHELL_PREFIX"],
+		"go env -json GOTELEMETRY GOTELEMETRYDIR")
 	cmd.Env = env
 	out, err := cmd.Output()
 	require.NoError(t, err)
 
-	telemetryDir := strings.TrimSpace(string(out))
-	rel, err := filepath.Rel(filepath.Join(dir, ".bench-cache"), telemetryDir)
-	require.NoError(t, err)
-	assert.True(t, filepath.IsLocal(rel), "Go telemetry escaped the trial cache: %s", telemetryDir)
+	var goEnv map[string]string
+	require.NoError(t, json.Unmarshal(out, &goEnv))
+	assert.Equal(t, "off", goEnv["GOTELEMETRY"])
+	assert.Equal(t, filepath.Join(dir, ".bench-cache", "go-telemetry"),
+		goEnv["GOTELEMETRYDIR"])
 }
 
 func environmentByKey(t *testing.T, entries []string) map[string]string {
