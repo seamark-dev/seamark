@@ -66,9 +66,14 @@ Released: [v0.5.0](https://github.com/seamark-dev/seamark/releases/tag/v0.5.0)
 (2026-08-27) ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
 (`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
-compiler. Windows is untested and unsupported. Artifact signing, SBOMs,
-and package-manager installs (Homebrew, npm) are the next distribution
-milestone.
+compiler. Windows is untested and unsupported.
+
+Homebrew: `brew install seamark-dev/tap/seamark` installs pre-built
+bottles for Apple Silicon macOS and x86_64 Linux from
+[seamark-dev/homebrew-tap](https://github.com/seamark-dev/homebrew-tap);
+other platforms build from source automatically. The tap README
+documents the bottle release runbook. Artifact signing,
+SBOMs, and an npm install are the next distribution milestone.
 
 ## Verification
 
