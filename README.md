@@ -58,6 +58,24 @@ local. Seamark requires no account or API key and sends no telemetry.
 
 ## Get started
 
+```bash
+brew install seamark-dev/tap/seamark
+
+cd your-project
+seamark init        # scaffold config + wire the Claude Code agent hooks
+seamark index       # parse + mine history + propagate effects (~seconds)
+seamark orient      # map the repo: hubs, load-bearing symbols, decisions
+```
+
+The [tap](https://github.com/seamark-dev/homebrew-tap) ships pre-built
+bottles for Apple Silicon macOS and x86_64 Linux; other platforms
+(including Intel macOS, Homebrew Tier 3) build from source
+automatically. Shell completions install with
+the formula. `seamark why <symbol-or-file>` then answers the first real
+question about any unfamiliar code.
+
+### Other install routes
+
 Tagged [releases](https://github.com/seamark-dev/seamark/releases) attach
 smoke-tested archives for macOS and Linux (amd64/arm64) with SHA-256
 checksums:
@@ -81,16 +99,8 @@ git clone https://github.com/seamark-dev/seamark && cd seamark
 make install        # builds and installs to ~/.local/bin/seamark
 ```
 
-Both routes install to `~/.local/bin`. Make sure that directory is on your
-`PATH`.
-
-Then, in any repository:
-
-```bash
-seamark init        # scaffold config + wire the Claude Code agent hooks
-seamark index       # parse + mine history + propagate effects (~seconds)
-seamark why <symbol-or-file>
-```
+Both of these routes install to `~/.local/bin`; make sure that directory
+is on your `PATH`. The Homebrew route handles `PATH` on its own.
 
 `seamark init` is optional. It performs the one-time setup without overwriting
 existing files. It writes starter `.seamark/policy.yaml`,
@@ -735,8 +745,9 @@ design history in [docs/PLAN.md](docs/PLAN.md). Trust boundaries:
 Planned next (see [docs/PLAN.md](docs/PLAN.md)): zero-token check promotion
 from recurring lessons, function-grain precision refinements, public signal
 evaluation, a history watermark and incremental daemon for
-keystroke-adjacent freshness, and signed artifacts with npm/Homebrew
-packaging.
+keystroke-adjacent freshness, and signed artifacts with npm packaging
+(Homebrew shipped via
+[seamark-dev/homebrew-tap](https://github.com/seamark-dev/homebrew-tap)).
 
 ## Development
 
