@@ -5,11 +5,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/skills"
 )
 
 func writeFixture(t *testing.T) string {
@@ -323,4 +326,71 @@ func TestFreshnessSelfRepair(t *testing.T) {
 	text, isErr := toolText(t, resps["1"])
 	require.False(t, isErr)
 	assert.Contains(t, text, "extra", "new symbol must be answerable after self-repair")
+}
+
+// section returns the body text under one "## " heading, up to the next.
+func section(body, heading string) string {
+	i := strings.Index(body, heading)
+	if i < 0 {
+		return ""
+	}
+
+	rest := body[i+len(heading):]
+	if j := strings.Index(rest, "\n## "); j >= 0 {
+		rest = rest[:j]
+	}
+
+	return rest
+}
+
+// TestSkillsNameOnlyRealTools pins the skill text to the tool surface. A
+// renamed or removed tool fails here before a client pre-approves a name
+// that no longer exists, or a workflow tells an agent to call one.
+func TestSkillsNameOnlyRealTools(t *testing.T) {
+	var tools []string
+	for _, d := range toolDefs {
+		tools = append(tools, d["name"].(string))
+	}
+
+	// The workflow each skill must state, per the agent-skills spec:
+	// understand orients and explains, plan measures blast radius before
+	// the edit, review checks the diff.
+	required := map[string][]string{
+		"seamark-understand-repo": {"orient", "why", "expand"},
+		"seamark-plan-change":     {"change_set", "why", "expand"},
+		"seamark-review-change":   {"check", "why"},
+	}
+
+	grant := regexp.MustCompile(`mcp__seamark__([a-z_]+)`)
+
+	names, err := skills.Names()
+	require.NoError(t, err)
+	require.Len(t, names, len(required), "every shipped skill declares the tools its workflow must name")
+
+	for _, name := range names {
+		want, ok := required[name]
+		require.True(t, ok, "%s: add its required tools to this test", name)
+
+		files, err := skills.Files(name)
+		require.NoError(t, err)
+
+		fm, body, err := skills.ParseFrontmatter(files[skills.SkillFile])
+		require.NoError(t, err)
+
+		// The grant names exactly the tool surface: a sixth tool or a
+		// dropped one must update the skills in the same change.
+		var granted []string
+		for _, m := range grant.FindAllStringSubmatch(fm.AllowedTools, -1) {
+			granted = append(granted, m[1])
+		}
+
+		assert.ElementsMatch(t, tools, granted, "%s: allowed-tools must grant each MCP tool once", name)
+
+		workflow := section(body, "## Workflow")
+		require.NotEmpty(t, workflow, "%s: no Workflow section", name)
+
+		for _, tool := range want {
+			assert.Contains(t, workflow, "`"+tool+"`", "%s: the workflow must name the %s tool", name, tool)
+		}
+	}
 }

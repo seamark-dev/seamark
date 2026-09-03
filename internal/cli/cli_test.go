@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,10 +17,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark"
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -1927,6 +1930,50 @@ func TestReadmeCoversEveryCommand(t *testing.T) {
 				"the roadmap paragraph still lists shipped command %q as planned", name)
 		}
 	}
+}
+
+// TestSkillsNameOnlyRealCommands mirrors TestReadmeCoversEveryCommand
+// for the embedded skill text: every backticked `seamark <command>` and
+// every Bash(seamark <command> ...) grant must name a shipped command, or
+// an agent on the CLI fallback follows a command that no longer exists.
+func TestSkillsNameOnlyRealCommands(t *testing.T) {
+	commands := map[string]bool{}
+	for _, c := range New().Commands() {
+		commands[c.Name()] = true
+	}
+
+	backticked := regexp.MustCompile("`seamark ([a-z-]+)")
+	bashGrant := regexp.MustCompile(`Bash\(seamark ([a-z-]+)`)
+	checked := 0
+
+	err := fs.WalkDir(seamark.SkillsFS, skills.Root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+
+		data, err := fs.ReadFile(seamark.SkillsFS, p)
+		require.NoError(t, err)
+
+		for _, m := range backticked.FindAllSubmatch(data, -1) {
+			checked++
+			assert.True(t, commands[string(m[1])], "%s names `seamark %s`, which is not a command", p, m[1])
+		}
+
+		if d.Name() == skills.SkillFile {
+			fm, _, err := skills.ParseFrontmatter(data)
+			require.NoError(t, err, p)
+
+			for _, m := range bashGrant.FindAllStringSubmatch(fm.AllowedTools, -1) {
+				checked++
+				assert.True(t, commands[m[1]], "%s grants Bash(seamark %s ...), which is not a command", p, m[1])
+			}
+		}
+
+		return nil
+	})
+	require.NoError(t, err)
+
+	assert.Greater(t, checked, 0, "the skill text must name seamark commands for this test to mean anything")
 }
 
 func TestWriteAtomicLeavesNoLeftovers(t *testing.T) {
