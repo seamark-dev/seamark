@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -202,4 +203,96 @@ func TestPrintAndJSON(t *testing.T) {
 	var back Report
 	require.NoError(t, json.Unmarshal(data, &back))
 	assert.Equal(t, r, &back, "the report must survive the JSON round trip")
+}
+
+// installSkills writes the shipped skills into one client directory of
+// the fixture, the way `seamark init --skills=<client>` would.
+func installSkills(t *testing.T, root, mode string) {
+	t.Helper()
+
+	targets, err := skills.Targets(root, mode)
+	require.NoError(t, err)
+	require.NoError(t, skills.Install(&bytes.Buffer{}, root, targets, false))
+}
+
+func TestRunReportsSkillsNotInstalled(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateInfo, checks["skills"].State, "opt-in skills are a fact, not a fault")
+	assert.Contains(t, checks["skills"].Detail, "not installed")
+	assert.Contains(t, checks["skills"].Fix, "seamark init --skills")
+}
+
+func TestRunReportsSkillsInstalled(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	installSkills(t, root, skills.ModeClaude)
+
+	r := Run(root, dbPath, "test")
+	checks := byName(r)
+
+	assert.Equal(t, StateOK, checks["skills"].State, checks["skills"].Detail)
+	assert.Contains(t, checks["skills"].Detail, "claude 3/3 current")
+	assert.Contains(t, checks["skills"].Detail, "codex not installed")
+	assert.Empty(t, checks["skills"].Fix)
+	assert.Zero(t, r.Warns, "%+v", r.Checks)
+}
+
+func TestRunDetectsStaleSkills(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	installSkills(t, root, skills.ModeClaude)
+
+	// A managed copy whose body drifted, as after a seamark upgrade.
+	skillMD := filepath.Join(root, ".claude", "skills", "seamark-plan-change", "SKILL.md")
+	require.NoError(t, os.WriteFile(skillMD,
+		[]byte("---\nname: seamark-plan-change\nmetadata:\n  seamark: managed\n---\nold body\n"), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateWarn, checks["skills"].State)
+	assert.Contains(t, checks["skills"].Detail, "1 stale")
+	assert.Contains(t, checks["skills"].Fix, "seamark init --skills")
+}
+
+func TestRunIgnoresForeignSkillDir(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+
+	// The user's own skill under a shipped name, nothing else installed:
+	// named, never a warning, never touched.
+	dir := filepath.Join(root, ".claude", "skills", "seamark-plan-change")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
+		[]byte("---\nname: seamark-plan-change\ndescription: mine\n---\nMine.\n"), 0o644))
+
+	r := Run(root, dbPath, "test")
+	checks := byName(r)
+
+	assert.Equal(t, StateInfo, checks["skills"].State)
+	assert.Contains(t, checks["skills"].Detail, "1 not managed")
+	assert.Contains(t, checks["skills"].Fix, "rename or remove",
+		"init --skills alone cannot replace the directory, so the fix must say so first")
+	assert.Contains(t, checks["skills"].Fix, "seamark init --skills")
+	assert.Zero(t, r.Warns, "%+v", r.Checks)
+
+	// Beside a complete managed install, the foreign directory is still
+	// only information, with the corrective choice spelled out.
+	installSkills(t, root, skills.ModeCodex)
+
+	checks = byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateInfo, checks["skills"].State)
+	assert.Contains(t, checks["skills"].Detail, "codex 3/3 current")
+	assert.Contains(t, checks["skills"].Fix, "not seamark's")
+}
+
+func TestRunWarnsOnUnreadableSkillDir(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "skills"), []byte("oops"), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateWarn, checks["skills"].State)
+	assert.Contains(t, checks["skills"].Detail, "codex unreadable")
 }

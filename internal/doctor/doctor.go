@@ -1,7 +1,7 @@
 // Package doctor diagnoses the seamark installation: binary, git, the
 // index database's schema and integrity, policy and effect-catalogue
-// compilation, hook wiring, agent and gh availability, and gitignore
-// sanity. Every check is read-only and offline — doctor reports exact
+// compilation, hook wiring, agent and gh availability, agent skills,
+// and gitignore sanity. Every check is read-only and offline — doctor reports exact
 // corrective actions and changes nothing. Semantic health (coverage,
 // confidence, freshness) is `seamark status`'s job; doctor asks whether
 // seamark can run at all.
@@ -23,6 +23,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/render"
+	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -86,6 +87,7 @@ func Run(root, dbPath, version string) *Report {
 	checkAgent(r, root)
 	checkGH(r)
 	checkMCP(r, root)
+	checkSkills(r, root)
 	checkGitignore(r, root)
 
 	return r
@@ -265,6 +267,56 @@ func checkMCP(r *Report, root string) {
 
 	r.add("mcp", StateInfo, ".mcp.json exists but registers no seamark server",
 		"`claude mcp add seamark -- seamark mcp` to serve the index to agents")
+}
+
+// checkSkills reports the agent skills per client directory. Not
+// installed is a fact, not a fault: skills are opt-in until the workflow
+// evaluation decides otherwise. A stale or missing managed copy is a
+// warning, because a client would load text that no longer matches this
+// binary's tool surface. A directory under a seamark skill name that
+// seamark does not own is named and never touched.
+func checkSkills(r *Report, root string) {
+	states := skills.Inspect(root)
+
+	var (
+		parts                          []string
+		installed, unreadable, foreign int
+		refresh                        bool
+	)
+
+	for _, s := range states {
+		parts = append(parts, s.Describe())
+		foreign += s.Foreign
+
+		switch {
+		case s.Err != "":
+			unreadable++
+		case s.Installed():
+			installed++
+			refresh = refresh || s.NeedsRefresh()
+		}
+	}
+
+	detail := strings.Join(parts, " · ")
+
+	// A foreign directory outranks "not installed": `seamark init
+	// --skills` never replaces it, so the fix must say what to do first.
+	switch {
+	case unreadable > 0:
+		r.add("skills", StateWarn, detail,
+			"make the skill directory readable, then re-run `seamark init --skills`")
+	case refresh:
+		r.add("skills", StateWarn, detail,
+			"re-run `seamark init --skills` to refresh the managed skills")
+	case foreign > 0:
+		r.add("skills", StateInfo, detail,
+			"a directory under a seamark skill name is not seamark's; rename or remove it, then run `seamark init --skills` to install the shipped skill")
+	case installed == 0:
+		r.add("skills", StateInfo, "agent skills not installed ("+detail+")",
+			"run `seamark init --skills` to add the seamark agent skills for Claude Code and Codex")
+	default:
+		r.add("skills", StateOK, detail, "")
+	}
 }
 
 // checkGitignore verifies the policy-as-code overlays are not ignored:

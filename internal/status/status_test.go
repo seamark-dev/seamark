@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -218,4 +219,76 @@ func TestStatusJSONRoundTrips(t *testing.T) {
 	var back Status
 	require.NoError(t, json.Unmarshal(data, &back))
 	assert.Equal(t, s, &back, "every field must survive the JSON round trip")
+}
+
+func TestGatherReportsSkills(t *testing.T) {
+	st, root := seededStore(t)
+
+	s, err := Gather(st, root)
+	require.NoError(t, err)
+	require.Len(t, s.Skills, 2, "both clients are reported, detected or not")
+	assert.False(t, s.Skills[0].Installed())
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.Contains(t, b.String(), "skills         not installed (`seamark init --skills`)")
+
+	targets, err := skills.Targets(root, skills.ModeClaude)
+	require.NoError(t, err)
+	require.NoError(t, skills.Install(&bytes.Buffer{}, root, targets, false))
+
+	s, err = Gather(st, root)
+	require.NoError(t, err)
+	assert.Equal(t, 3, s.Skills[0].Current)
+
+	b.Reset()
+	Print(&b, s)
+	assert.Contains(t, b.String(), "skills         claude 3/3 current · codex not installed")
+
+	// A stale managed copy must be visible beside the gate line, with
+	// the refresh named: a client would load text that no longer matches
+	// this binary's tool surface.
+	skillMD := filepath.Join(root, ".claude", "skills", "seamark-plan-change", "SKILL.md")
+	require.NoError(t, os.WriteFile(skillMD,
+		[]byte("---\nname: seamark-plan-change\nmetadata:\n  seamark: managed\n---\nold body\n"), 0o644))
+
+	s, err = Gather(st, root)
+	require.NoError(t, err)
+
+	b.Reset()
+	Print(&b, s)
+	assert.Contains(t, b.String(), "1 stale")
+	assert.Contains(t, b.String(), "re-run seamark init --skills")
+
+	// An unreadable client directory never fails Gather; it is described.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "skills"), []byte("oops"), 0o644))
+
+	s, err = Gather(st, root)
+	require.NoError(t, err)
+	assert.NotEmpty(t, s.Skills[1].Err)
+
+	b.Reset()
+	Print(&b, s)
+	assert.Contains(t, b.String(), "codex unreadable")
+}
+
+func TestPrintNamesForeignSkillDirectories(t *testing.T) {
+	st, root := seededStore(t)
+
+	// The user's own skill under a shipped name and nothing installed:
+	// a bare "not installed" would hide the collision that makes
+	// `seamark init --skills` skip that directory.
+	dir := filepath.Join(root, ".claude", "skills", "seamark-plan-change")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
+		[]byte("---\nname: seamark-plan-change\ndescription: mine\n---\nMine.\n"), 0o644))
+
+	s, err := Gather(st, root)
+	require.NoError(t, err)
+	assert.Equal(t, 1, s.Skills[0].Foreign)
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.Contains(t, b.String(), "skills         claude not installed, 1 not managed · codex not installed")
 }

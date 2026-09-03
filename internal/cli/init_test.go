@@ -752,3 +752,17 @@ func TestRunInitSkillsFailsBeforeAnyWriteWhenASkillFileIsUnreadable(t *testing.T
 	assert.NoFileExists(t, filepath.Join(root, ".claude", "settings.json"), "no hooks before the plan succeeds")
 	assert.Empty(t, b.String(), "nothing narrated, because nothing was written")
 }
+
+func TestRunInitWithoutSkillsNamesForeignDir(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".claude", "skills", "seamark-plan-change")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
+		[]byte("---\nname: seamark-plan-change\ndescription: mine\n---\nMine.\n"), 0o644))
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false))
+
+	assert.Contains(t, b.String(), "skills  claude not installed, 1 not managed")
+	assert.NotContains(t, b.String(), skillsHint, "the hint would hide the directory init --skills will not touch")
+}

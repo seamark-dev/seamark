@@ -418,6 +418,45 @@ func Inspect(root string) []ClientState {
 	return states
 }
 
+// NeedsRefresh reports whether a managed copy is stale or missing, the
+// two states `seamark init --skills` repairs.
+func (c ClientState) NeedsRefresh() bool {
+	return c.Installed() && (c.Stale > 0 || c.Missing > 0)
+}
+
+// Describe renders one client in a few words, for example
+// "claude 3/3 current, 1 stale" or "codex not installed". init, status,
+// and doctor all print it, so the three never phrase a state differently.
+func (c ClientState) Describe() string {
+	switch {
+	case c.Err != "":
+		return fmt.Sprintf("%s unreadable (%s)", c.Client, c.Err)
+	case !c.Installed():
+		if c.Foreign > 0 {
+			return fmt.Sprintf("%s not installed, %d not managed", c.Client, c.Foreign)
+		}
+
+		return c.Client + " not installed"
+	}
+
+	total := c.Current + c.Stale + c.Missing + c.Foreign
+	p := fmt.Sprintf("%s %d/%d current", c.Client, c.Current, total)
+
+	if c.Stale > 0 {
+		p += fmt.Sprintf(", %d stale", c.Stale)
+	}
+
+	if c.Missing > 0 {
+		p += fmt.Sprintf(", %d missing", c.Missing)
+	}
+
+	if c.Foreign > 0 {
+		p += fmt.Sprintf(", %d not managed", c.Foreign)
+	}
+
+	return p
+}
+
 // Summary renders the one-line view init and status print, for example
 // "claude 3/3 current · codex not installed". A stale or missing managed
 // copy names the corrective command once at the end.
@@ -428,31 +467,8 @@ func Summary(states []ClientState) string {
 	)
 
 	for _, s := range states {
-		switch {
-		case s.Err != "":
-			parts = append(parts, fmt.Sprintf("%s unreadable (%s)", s.Client, s.Err))
-		case !s.Installed():
-			parts = append(parts, s.Client+" not installed")
-		default:
-			total := s.Current + s.Stale + s.Missing + s.Foreign
-			p := fmt.Sprintf("%s %d/%d current", s.Client, s.Current, total)
-
-			if s.Stale > 0 {
-				p += fmt.Sprintf(", %d stale", s.Stale)
-				refresh = true
-			}
-
-			if s.Missing > 0 {
-				p += fmt.Sprintf(", %d missing", s.Missing)
-				refresh = true
-			}
-
-			if s.Foreign > 0 {
-				p += fmt.Sprintf(", %d not managed", s.Foreign)
-			}
-
-			parts = append(parts, p)
-		}
+		parts = append(parts, s.Describe())
+		refresh = refresh || s.NeedsRefresh()
 	}
 
 	line := strings.Join(parts, " · ")

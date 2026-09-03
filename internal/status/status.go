@@ -23,6 +23,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
+	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -84,6 +85,12 @@ type Status struct {
 	// GatePolicyError carries a policy file that fails to load — a state
 	// that changes every hook decision.
 	GatePolicyError string `json:"gate_policy_error,omitempty"`
+
+	// Skills is the agent-skills state per client directory. A stale copy
+	// after an upgrade must be visible here, beside the hook and MCP
+	// state, because a client would load text that no longer matches the
+	// binary's tool surface.
+	Skills []skills.ClientState `json:"skills,omitempty"`
 }
 
 // Gather assembles the health report from the store and the workspace.
@@ -173,6 +180,10 @@ func Gather(st *store.Store, root string) (*Status, error) {
 		s.GateHookError = hookErr.Error()
 	}
 
+	// Inspect never fails: an unreadable directory is recorded on its
+	// client record, and status describes it.
+	s.Skills = skills.Inspect(root)
+
 	return s, nil
 }
 
@@ -254,6 +265,24 @@ func Print(w io.Writer, s *Status) {
 	}
 
 	printGate(w, s)
+	printSkills(w, s)
+}
+
+// printSkills renders the agent-skills line beside the gate line. Not
+// installed states the command, because skills are opt-in; a stale,
+// foreign, or unreadable directory is spelled out, because a client
+// would otherwise load text that no longer matches this binary, or
+// `seamark init --skills` would not install what the reader expects.
+func printSkills(w io.Writer, s *Status) {
+	for _, c := range s.Skills {
+		if c.Installed() || c.Foreign > 0 || c.Err != "" {
+			fmt.Fprintf(w, "skills         %s\n", skills.Summary(s.Skills))
+
+			return
+		}
+	}
+
+	fmt.Fprintf(w, "skills         not installed (`seamark init --skills`)\n")
 }
 
 // printGate renders the effective gate behaviour. A broken policy means

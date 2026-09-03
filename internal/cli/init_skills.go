@@ -33,7 +33,8 @@ func planSkills(root, mode string) ([]skills.Entry, error) {
 
 // reportSkills prints init's skills block. With a mode it applies the
 // plan; without one it summarizes what is installed, so a plain re-run
-// never claims "not installed" over skills an earlier run wrote.
+// never claims "not installed" over skills an earlier run wrote, or
+// over a directory that `seamark init --skills` would refuse to touch.
 func reportSkills(w io.Writer, root, mode string, plan []skills.Entry, printOnly bool) error {
 	if mode != "" {
 		return skills.Apply(w, root, plan, printOnly)
@@ -42,7 +43,7 @@ func reportSkills(w io.Writer, root, mode string, plan []skills.Entry, printOnly
 	states := skills.Inspect(root)
 
 	for _, s := range states {
-		if s.Installed() || s.Err != "" {
+		if s.Installed() || s.Foreign > 0 || s.Err != "" {
 			fmt.Fprintf(w, "  skills  %s\n", skills.Summary(states))
 
 			return nil
