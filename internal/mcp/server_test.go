@@ -122,11 +122,21 @@ func TestLifecycleAndTools(t *testing.T) {
 		ServerInfo      struct {
 			Name string `json:"name"`
 		} `json:"serverInfo"`
+		Instructions string `json:"instructions"`
 	}
 	require.Nil(t, resps["1"].Error)
 	require.NoError(t, json.Unmarshal(resps["1"].Result, &init))
 	assert.Equal(t, "seamark", init.ServerInfo.Name)
 	assert.Equal(t, "2025-03-26", init.ProtocolVersion)
+
+	// The instructions state judgment rules, not a ritual. Each phrase is
+	// one rule the agent-skills specification requires: change_set
+	// before the edit, orient only when unfamiliar, check before
+	// completion over a diff that includes new files, co-change as
+	// usually, absence of evidence as unknown.
+	for _, phrase := range []string{"change_set", "before", "check", "git diff HEAD skips", "only when", "usually", "never means safe"} {
+		assert.Contains(t, init.Instructions, phrase)
+	}
 
 	// The notification produced no response.
 	assert.Len(t, resps, 7)
@@ -272,6 +282,23 @@ func TestResourcesAndPrompts(t *testing.T) {
 
 	require.Nil(t, resps["5"].Error)
 	assert.Contains(t, string(resps["5"].Result), "orient")
+
+	// The onboard prompt follows the same rules as the instructions:
+	// orient is conditional, change_set precedes the edit, and check
+	// precedes the completion report over a diff that includes new files.
+	var prompt struct {
+		Messages []struct {
+			Content struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	require.NoError(t, json.Unmarshal(resps["5"].Result, &prompt))
+	require.Len(t, prompt.Messages, 1)
+
+	for _, phrase := range []string{"change_set", "check", "git diff HEAD skips", "only when"} {
+		assert.Contains(t, prompt.Messages[0].Content.Text, phrase)
+	}
 }
 
 func TestFreshnessSelfRepair(t *testing.T) {
