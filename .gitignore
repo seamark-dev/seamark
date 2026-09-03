@@ -10,7 +10,11 @@ testdb/
 CLAUDE.md
 
 # Claude Code configuration is local and must not become repository policy.
+# The same holds for .agents/, which Codex reads: this repository is the
+# source of the skills, so a local `seamark init --skills` must not commit
+# a second copy of them.
 .claude/*
+.agents/
 
 # Seamark state: the index and audit log stay local; policy and catalogue
 # overlays are policy-as-code and belong in review (temporarry excluded).

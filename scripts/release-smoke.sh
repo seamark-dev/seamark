@@ -53,11 +53,16 @@ expect() {
 
 expect seamark          "$BIN" version
 expect "gate    warn"   "$BIN" init
+# Preview only: the fixture stays free of installed skills so `doctor`
+# below keeps reporting them as info and passing. The "would write"
+# lines prove the embedded skills tree made it into this archive.
+expect "would write"    "$BIN" init --skills --print
 expect symbols          "$BIN" index
 expect orientation      "$BIN" orient
 expect helper           "$BIN" why helper
 expect allow            "$BIN" gate --command "ls -la"
 expect workspace        "$BIN" status
+expect skills           "$BIN" status
 expect schema_version   "$BIN" status --json
 "$BIN" doctor           || fail "doctor (a fresh fixture must pass)"
 

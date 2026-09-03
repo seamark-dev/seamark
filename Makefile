@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -69,6 +69,14 @@ release-archive: build ## Package a versioned archive for this platform into ./d
 
 smoke: build ## End-to-end smoke test of the built binary in a fresh fixture repo
 	scripts/release-smoke.sh $(BINARY)
+
+# Local use only: the Go tests under internal/skills are the CI check for
+# the skills tree; this runs the client's own validator on top of them.
+skills-validate: ## Validate skills/ with Claude Code's validator (needs the claude CLI)
+	@command -v claude >/dev/null 2>&1 || { \
+		echo 'skills-validate: the claude CLI is not on PATH; install Claude Code (https://code.claude.com) to run it' >&2; \
+		exit 1; }
+	claude plugin validate --strict skills/
 
 lessons-bench: build ## Controlled headless agent experiment (costs tokens; BENCH_FLAGS=-dry-run first)
 	go run ./cmd/lessons-bench $(BENCH_FLAGS)

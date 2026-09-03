@@ -6,6 +6,25 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## Unreleased
+
+- **The MCP server states judgment rules, not a ritual.** The `initialize`
+  instructions and the `onboard` prompt now say when each tool earns its
+  cost: `change_set` before editing more than one file or an unfamiliar area,
+  `why` for a load-bearing symbol, `orient` only when the area is unfamiliar,
+  `check` on the diff (new files staged first) before reporting completion,
+  `expand` only for a needed ref. Co-change means "usually", and missing or
+  unindexed evidence never means safe.
+- **Agent skills, opt-in.** Three Agent Skills (`seamark-understand-repo`,
+  `seamark-plan-change`, `seamark-review-change`) ship inside the binary and
+  install with `seamark init --skills` into `.claude/skills/` and, when
+  `.agents/` exists, `.agents/skills/`. The installer refreshes only
+  directories that carry seamark's ownership marker, never writes through a
+  symlink, and previews with `--print`. `seamark doctor` and `seamark status`
+  report installed, stale, foreign, and unreadable copies; the release smoke
+  proves the embedded tree ships; `make skills-validate` runs Claude Code's
+  validator locally.
+
 ## v0.5.3 — 2026-08-28
 
 This patch makes the benchmark and its test suite reliable on macOS. It does

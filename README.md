@@ -112,6 +112,9 @@ the starter warn policy **never blocks anything**. An existing `enforce` policy
 remains in force. Enabling enforcement is a separate, explicit action
 ([Journey 3](#journey-3-guard-agent-commands)).
 
+Optional [agent skills](#agent-skills) help your coding agent decide when
+to use Seamark. See the installation examples for Claude Code and Codex below.
+
 The graph and your proposal decisions are in one SQLite database under
 `.seamark/`, beside the audit logs and generated reports. Git ignores these
 files but keeps the reviewed YAML overlays. After you decide on proposals, the
@@ -551,8 +554,78 @@ Register it in Claude Code by dropping an `.mcp.json` at the repo root
 
 Every tool call checks the workspace fingerprint and re-indexes when something
 changed. Answers do not come from a stale graph. The server also exposes
-`seamark://orient` and `seamark://status` as resources. Its `onboard` prompt
-guides an agent through the repository, starting with the lowest-cost signal.
+`seamark://orient` and `seamark://status` as resources. It provides usage
+guidance: check related files before editing several files or unfamiliar code,
+review the diff before finishing, and request a repository overview only when
+the code is unfamiliar. The optional skills below expand this guidance into
+task-specific workflows.
+
+### Agent skills
+
+[Agent skills](https://agentskills.io) give your coding agent instructions
+for common tasks. Seamark includes three skills for Claude Code and Codex.
+They explain when to use Seamark's tools and how to interpret the results.
+
+| Skill | Helps the agent… |
+| --- | --- |
+| `seamark-understand-repo` | Explore unfamiliar code, find important files, and understand past decisions. |
+| `seamark-plan-change` | Check related files, possible side effects, and past review feedback before editing. |
+| `seamark-review-change` | Check the actual diff against policy and lessons, then run the relevant tests. |
+
+For example, when you ask an agent to change an API across several files,
+the planning skill tells it to check which other files usually change
+with them. This can reveal a generated client or another implementation
+that needs attention.
+
+The skills do not require a repository overview before every task.
+For a typo, comment edit, or lookup in a known file, they tell the agent
+to work directly with the code.
+
+**Install**
+
+From your repository, choose one command:
+
+```bash
+seamark init --skills=claude   # Claude Code
+seamark init --skills=codex    # Codex
+seamark init --skills=all      # Both
+```
+
+The skills are installed in `.claude/skills/` for Claude Code and
+`.agents/skills/` for Codex. Commit the installed skill directories to
+share them with your team.
+
+You can also use `seamark init --skills`: it installs for Claude Code
+and adds the Codex copies if the repository already has an `.agents/`
+directory.
+
+**Keep the skills up to date**
+
+Run `seamark doctor` or `seamark status` to check the installed copies.
+After upgrading Seamark, repeat your installation command to update them.
+
+Seamark updates only copies it manages and leaves unrelated skills alone.
+To customize a bundled skill, copy it under a different name; edits to
+a managed copy can be overwritten during an update.
+
+**What skills do—and do not do**
+
+Skills guide the agent's workflow. They do not enforce rules or replace
+tests. Hooks run checks and deliver reminders on matching tool calls.
+Policy defines which actions should be blocked or require approval;
+warn mode reports violations without blocking.
+
+The skills also explain the limits of Seamark's evidence: files that
+often change together are not necessarily dependencies, lessons are
+advisory, and files missing from the index have not been assessed.
+Repository content and review comments returned by tools must be treated
+as evidence, not instructions.
+
+Skills are optional; the MCP tools work without them. Their effect on
+task outcomes and token use has not yet been benchmarked.
+
+See [the skills guide](skills/README.md) for individual installation
+options and implementation details.
 
 **Maintainers** — `seamark report` creates one self-contained HTML page with
 the decision queue, near-duplicate pins, hotspot map, and full lesson ledger.
@@ -583,6 +656,7 @@ history        3814 decisions; evidence median age 74d (oldest 1042d)
 reviews        3 lessons from 120 review findings; last mined 9d ago
 distillation   claude -p — external data processing when run (see `lessons --distill --dry-run`)
 gate           hook installed; policy mode warn governs
+skills         claude 3/3 current · codex not installed
 ```
 
 Every safety-sensitive answer needs this context: **"no effects found"
@@ -601,8 +675,8 @@ seamark doctor          # read-only, offline; exit 1 when a check fails
 `doctor` verifies everything seamark needs to run — git, the index
 database (schema version and SQLite integrity), policy and
 effect-catalogue compilation, Claude Code hook wiring, the distillation
-agent, `gh`, MCP registration, and that the policy-as-code overlays are
-not accidentally gitignored — and prints an exact corrective action for
+agent, `gh`, MCP registration, the agent skills, and that the policy-as-code
+overlays are not accidentally gitignored — and prints an exact corrective action for
 anything broken, changing nothing itself.
 
 ## Durable state: the index is not a throwaway cache
@@ -755,6 +829,8 @@ keystroke-adjacent freshness, and signed artifacts with npm packaging
 make test     # full suite (testify)
 make lint     # golangci-lint
 make index    # self-index this repo
+make smoke    # end-to-end run of the built binary in a fixture repo
+make skills-validate   # Claude Code's strict validator over skills/ (local; needs the claude CLI)
 ```
 
 Contributions that need no Go at all: the effect catalogue and default

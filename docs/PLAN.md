@@ -296,6 +296,9 @@ Measured on trading-tools (831 files): full index 3.46s = history mining
   edit; direct tools for the edit itself") is now encoded in the
   server's initialize instructions, along with the fact that freshness
   is automatic (the agent wrongly assumed the index could be stale).
+  Superseded 2026-09-03: that ritual wording ("orient once before the
+  first edit") gave way to judgment rules shared with the agent skills
+  under skills/ — see the Decisions log.
   Session also exposed the silent-empty-section gap in change_set
   (agent burned probe calls re-checking) — fixed with the `defines` line
 
@@ -510,6 +513,7 @@ Schema notes (deviations from the RFC sketch, all additive):
 | 2026-07-25 | Call edges in M1 are name-resolved best-effort (same package, then unique repo-wide match). Type-accurate resolution is a later refinement; edges record their origin so confidence is queryable. |
 | 2026-07-25 | Module path `github.com/seamark-dev/seamark` is final: the `seamark-dev` org and repo exist and are set as origin. |
 | 2026-07-25 | LSP transport: hand-rolled JSON-RPC 2.0 over stdio, not `tliron/glsp`. glsp v0.2.2 pulls ~15 modules (websockets, terminal styling, commonlog) for a protocol we use ~6 methods of; a hand-rolled framing layer is ~60 lines, dependency-free, and is the shared transport the MCP adapter reuses (§3: one engine, three protocols). |
+| 2026-09-03 | Agent skills: three intent-named skills (`seamark-understand-repo`, `seamark-plan-change`, `seamark-review-change`) embedded in the binary and installed opt-in by `seamark init --skills`, each carrying the same interpretation reference. The MCP `initialize` instructions and `onboard` prompt state the same judgment rules instead of a ritual. Default-on installation waits for a paired MCP-only versus MCP + skills benchmark run by a separate runner, so the lessons benchmark's fingerprint stays untouched; plugins ship no hooks until `doctor` can detect a hook installed twice. |
 
 ## Open questions carried from the RFC
 
