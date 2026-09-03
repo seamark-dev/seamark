@@ -42,7 +42,7 @@ lint: ## Static analysis (config in .golangci.yml)
 	golangci-lint run ./...
 
 fmt: ## Format all Go sources
-	gofmt -w cmd internal
+	gofmt -w cmd internal embed.go
 
 tidy: ## Sync go.mod/go.sum (-e: the tree-sitter grammar module's test files
 	# reference a package that does not exist; plain tidy errors on it)
