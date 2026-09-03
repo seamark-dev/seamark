@@ -599,6 +599,27 @@ You can also use `seamark init --skills`: it installs for Claude Code
 and adds the Codex copies if the repository already has an `.agents/`
 directory.
 
+**Let the agent call the tools without prompts**
+
+Claude Code asks before each seamark tool call unless a permission rule
+allows it. A skill's own `allowed-tools` grant lasts one turn, and in the
+version we tested (2.1.257) it applied only when the skill was invoked by
+name, although the documentation says it should also apply when the agent
+picks the skill. Persistent rules remove the prompts either way:
+
+```bash
+seamark init --skills --approve-tools   # or --approve-tools on its own
+```
+
+This merges eight exact allow rules into `.claude/settings.json`: one per
+seamark MCP tool (`mcp__seamark__orient` and the other four) and one per
+seamark skill (`Skill(seamark-plan-change)` and the other two). The tools
+are read-only queries over the local index, and a skill rule only lets the
+agent load that skill's text. Existing rules stay, nothing is ever removed,
+and `--print` previews the change. Codex keeps its own per-tool approval
+setting (`mcp_servers.seamark.tools.<tool>.approval_mode`), which seamark
+does not write.
+
 **Keep the skills up to date**
 
 Run `seamark doctor` or `seamark status` to check the installed copies.

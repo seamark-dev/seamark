@@ -394,3 +394,14 @@ func TestSkillsNameOnlyRealTools(t *testing.T) {
 		}
 	}
 }
+
+func TestToolNamesMatchToolDefs(t *testing.T) {
+	names := ToolNames()
+	require.Len(t, names, len(toolDefs))
+
+	for i, d := range toolDefs {
+		assert.Equal(t, d["name"], names[i])
+	}
+
+	assert.Contains(t, names, "change_set")
+}

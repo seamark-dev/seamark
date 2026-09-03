@@ -12,6 +12,12 @@ Install into a repository with `seamark init --skills`. It writes
 `.claude/skills/` and, when an `.agents/` directory exists, `.agents/skills/`.
 Use `--skills=claude`, `--skills=codex`, or `--skills=all` to choose explicitly.
 
+In Claude Code, add `--approve-tools` (or run `seamark init --approve-tools` on
+its own) to merge exact allow rules for the five MCP tools and the three
+skills into `.claude/settings.json`. A skill's own `allowed-tools` grant lasts
+one turn and, in the Claude Code version tested (2.1.257), applied only when
+the skill was invoked by name; the persistent rules cover both paths.
+
 To install one skill with the Skills CLI:
 
 ```bash

@@ -1976,6 +1976,20 @@ func TestSkillsNameOnlyRealCommands(t *testing.T) {
 	assert.Greater(t, checked, 0, "the skill text must name seamark commands for this test to mean anything")
 }
 
+func TestInitApproveToolsFlagWritesAllowRules(t *testing.T) {
+	root := writeFixture(t)
+
+	out, err := run(t, "-C", root, "init", "--skills=claude", "--approve-tools")
+	require.NoError(t, err)
+	assert.Contains(t, out, "approved 8 Claude Code allow rules")
+	assert.NotContains(t, out, "allow rules missing")
+
+	data, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"mcp__seamark__check"`)
+	assert.Contains(t, string(data), `"Skill(seamark-review-change)"`)
+}
+
 func TestInitSkillsFlagInstallsTheRequestedClient(t *testing.T) {
 	root := writeFixture(t)
 

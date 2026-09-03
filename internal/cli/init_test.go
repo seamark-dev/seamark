@@ -12,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/effects"
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/mcp"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -629,7 +630,7 @@ func TestRunInitSkillsInstallsForDetectedClients(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(root, ".agents"), 0o755))
 
 	var b testWriter
-	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto))
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto, false))
 
 	for _, rel := range append(skillFiles(t, skills.ClaudeDir), skillFiles(t, skills.AgentsDir)...) {
 		assert.FileExists(t, filepath.Join(root, filepath.FromSlash(rel)))
@@ -647,7 +648,7 @@ func TestRunInitSkillsClaudeOnlyWithoutAgentsDir(t *testing.T) {
 	root := t.TempDir()
 
 	var b testWriter
-	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto))
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto, false))
 
 	assert.DirExists(t, filepath.Join(root, ".claude", "skills", "seamark-plan-change"))
 	assert.NoDirExists(t, filepath.Join(root, ".agents"), "auto never creates the Codex directory")
@@ -658,10 +659,10 @@ func TestRunInitSkillsIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 
 	var first testWriter
-	require.NoError(t, runInitWith(&first, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto))
+	require.NoError(t, runInitWith(&first, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto, false))
 
 	var second testWriter
-	require.NoError(t, runInitWith(&second, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto))
+	require.NoError(t, runInitWith(&second, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto, false))
 
 	names, err := skills.Names()
 	require.NoError(t, err)
@@ -681,7 +682,7 @@ func TestRunInitSkillsLeavesForeignDirAlone(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(own), 0o644))
 
 	var b testWriter
-	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto))
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto, false))
 
 	assert.Contains(t, b.String(), "kept    .claude/skills/seamark-plan-change (not managed by seamark: no seamark marker)")
 
@@ -695,7 +696,7 @@ func TestRunInitSkillsPrintWritesNothing(t *testing.T) {
 	root := t.TempDir()
 
 	var b testWriter
-	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, true, skills.ModeAll))
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, true, skills.ModeAll, false))
 
 	assert.Contains(t, b.String(), "would write  .claude/skills/seamark-plan-change")
 	assert.Contains(t, b.String(), "would write  .agents/skills/seamark-plan-change")
@@ -713,7 +714,7 @@ func TestRunInitWithoutSkillsPrintsHint(t *testing.T) {
 
 	// Once skills are installed, a plain re-run reports them instead of
 	// claiming they are missing.
-	require.NoError(t, runInitWith(&testWriter{}, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude))
+	require.NoError(t, runInitWith(&testWriter{}, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude, false))
 
 	var again testWriter
 	require.NoError(t, runInit(&again, root, "/bin/seamark", gateModeWarn, false))
@@ -744,7 +745,7 @@ func TestRunInitSkillsFailsBeforeAnyWriteWhenASkillFileIsUnreadable(t *testing.T
 	t.Cleanup(func() { _ = os.Chmod(ref, 0o644) })
 
 	var b testWriter
-	err = runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude)
+	err = runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "interpreting-seamark.md")
 
@@ -765,4 +766,137 @@ func TestRunInitWithoutSkillsNamesForeignDir(t *testing.T) {
 
 	assert.Contains(t, b.String(), "skills  claude not installed, 1 not managed")
 	assert.NotContains(t, b.String(), skillsHint, "the hint would hide the directory init --skills will not touch")
+}
+
+// allowRules reads permissions.allow from the fixture's settings file.
+func allowRules(t *testing.T, root string) []string {
+	t.Helper()
+
+	perms, ok := readSettings(t, root)["permissions"].(map[string]any)
+	require.True(t, ok, "permissions object")
+
+	raw, ok := perms["allow"].([]any)
+	require.True(t, ok, "permissions.allow array")
+
+	var rules []string
+	for _, v := range raw {
+		rules = append(rules, v.(string))
+	}
+
+	return rules
+}
+
+func TestApproveRulesMatchToolSurfaceAndSkills(t *testing.T) {
+	rules, err := approveRules()
+	require.NoError(t, err)
+
+	var want []string
+	for _, tool := range mcp.ToolNames() {
+		want = append(want, "mcp__seamark__"+tool)
+	}
+
+	names, err := skills.Names()
+	require.NoError(t, err)
+
+	for _, name := range names {
+		want = append(want, "Skill("+name+")")
+	}
+
+	assert.Equal(t, want, rules)
+	assert.Len(t, rules, 8, "five tools and three skills")
+	assert.NotContains(t, rules, "Skill(seamark-*)", "exact names only: a wildcard would approve a future skill")
+}
+
+func TestRunInitApproveToolsMergesAllowRules(t *testing.T) {
+	root := t.TempDir()
+
+	// The user's own rule must survive, in place, ahead of ours.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":["Bash(ls *)"]}}`), 0o644))
+
+	var b testWriter
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, "", true))
+
+	assert.Contains(t, b.String(), "approved 8 Claude Code allow rules")
+	assert.Contains(t, b.String(), "          mcp__seamark__change_set")
+	assert.Contains(t, b.String(), "          Skill(seamark-plan-change)")
+
+	allow := allowRules(t, root)
+	require.Len(t, allow, 9)
+	assert.Equal(t, "Bash(ls *)", allow[0])
+
+	for _, r := range []string{
+		"mcp__seamark__orient", "mcp__seamark__why", "mcp__seamark__change_set", "mcp__seamark__check", "mcp__seamark__expand",
+		"Skill(seamark-understand-repo)", "Skill(seamark-plan-change)", "Skill(seamark-review-change)",
+	} {
+		assert.Contains(t, allow, r)
+	}
+
+	// The hooks landed in the same write.
+	assert.Len(t, commands(t, readSettings(t, root)), 2)
+
+	// Idempotent: a second run adds nothing, removes nothing, and says so.
+	var again testWriter
+	require.NoError(t, runInitWith(&again, root, "/bin/seamark", gateModeWarn, false, "", true))
+	assert.Contains(t, again.String(), "already approved")
+	assert.NotContains(t, again.String(), "approved 8")
+	assert.Len(t, allowRules(t, root), 9)
+}
+
+func TestRunInitApproveToolsPreviewWritesNothing(t *testing.T) {
+	root := t.TempDir()
+
+	var b testWriter
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, true, "", true))
+
+	assert.Contains(t, b.String(), "would approve 8")
+	assert.NoFileExists(t, filepath.Join(root, ".claude", "settings.json"))
+}
+
+func TestRunInitApproveToolsRejectsMalformedPermissions(t *testing.T) {
+	root := t.TempDir()
+
+	// A permissions field of the wrong type is the user's data; init
+	// refuses before writing anything, as it does for malformed hooks.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"permissions":[]}`), 0o644))
+
+	var b testWriter
+	err := runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, "", true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "permissions")
+	assert.NoDirExists(t, filepath.Join(root, ".seamark"), "nothing written before the merge succeeds")
+}
+
+func TestRunInitSkillsNotesMissingApproval(t *testing.T) {
+	root := t.TempDir()
+
+	// Skills without the rules: say exactly what is missing, with the command.
+	var b testWriter
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude, false))
+	assert.Contains(t, b.String(), "8 seamark allow rules missing from .claude/settings.json (5 MCP tools, 3 skills)")
+	assert.Contains(t, b.String(), "seamark init --approve-tools")
+
+	// Only the Skill rules missing: the note must not claim the tools
+	// are unapproved.
+	root2 := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root2, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root2, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":["mcp__seamark__orient","mcp__seamark__why","mcp__seamark__change_set","mcp__seamark__check","mcp__seamark__expand"]}}`), 0o644))
+
+	var partial testWriter
+	require.NoError(t, runInitWith(&partial, root2, "/bin/seamark", gateModeWarn, false, skills.ModeClaude, false))
+	assert.Contains(t, partial.String(), "3 seamark allow rules missing from .claude/settings.json (3 skills)")
+	assert.NotContains(t, partial.String(), "MCP tool")
+
+	// With the rules present the note disappears, on the same run and after.
+	var both testWriter
+	require.NoError(t, runInitWith(&both, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude, true))
+	assert.NotContains(t, both.String(), "allow rules missing")
+
+	var later testWriter
+	require.NoError(t, runInitWith(&later, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude, false))
+	assert.NotContains(t, later.String(), "allow rules missing")
 }

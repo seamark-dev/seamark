@@ -25,9 +25,10 @@ const (
 
 func newInitCmd(opts *options) *cobra.Command {
 	var (
-		printOnly  bool
-		gateMode   string
-		skillsMode string
+		printOnly    bool
+		gateMode     string
+		skillsMode   string
+		approveTools bool
 	)
 
 	cmd := &cobra.Command{
@@ -67,6 +68,17 @@ enforcement is never added or removed implicitly. Every run ends with a
 "gate" line stating the effective behaviour, derived from the installed
 hook and the policy file actually on disk.
 
+--approve-tools merges Claude Code allow rules into .claude/settings.json
+for the five seamark MCP tools and the three seamark skills, so they run
+without permission prompts. A skill's own allowed-tools grant lasts one
+turn and, in the Claude Code version tested (2.1.257), applied only when
+the skill was invoked by name; these persistent rules cover both that path
+and the case where the agent picks the skill. Additive and idempotent: existing rules
+stay and nothing is ever removed. Independent of --skills, so one setup
+command is:
+
+  seamark init --skills --approve-tools
+
 Use --print to preview every change without writing anything.`,
 		// init takes no positional arguments. The one likely mistake,
 		// "--skills codex", parses as the bare flag plus a stray word
@@ -97,7 +109,7 @@ Use --print to preview every change without writing anything.`,
 
 			bin := seamarkPath()
 
-			return runInitWith(cmd.OutOrStdout(), root, bin, gateMode, printOnly, skillsMode)
+			return runInitWith(cmd.OutOrStdout(), root, bin, gateMode, printOnly, skillsMode, approveTools)
 		},
 	}
 
@@ -111,6 +123,9 @@ Use --print to preview every change without writing anything.`,
 	// A bare --skills means auto; pflag then needs the = form for explicit
 	// values, which the help text and README both state.
 	cmd.Flags().Lookup("skills").NoOptDefVal = skills.ModeAuto
+	cmd.Flags().BoolVar(&approveTools, "approve-tools", false,
+		"merge Claude Code allow rules for the five seamark MCP tools and the three seamark skills "+
+			"into .claude/settings.json (additive; never removes a rule)")
 
 	return cmd
 }
@@ -161,12 +176,13 @@ func stableInstallPath(path string) string {
 // runInit is the pre-skills entry point; it installs no skills and keeps
 // its signature so existing callers and tests stay untouched.
 func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
-	return runInitWith(w, root, bin, gateMode, printOnly, "")
+	return runInitWith(w, root, bin, gateMode, printOnly, "", false)
 }
 
-// runInitWith is runInit plus an optional skills install. skillsMode is
-// one of skills.Modes, or empty for "not requested".
-func runInitWith(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode string) error {
+// runInitWith is runInit plus the optional skills install and the
+// optional allow-rule merge. skillsMode is one of skills.Modes, or empty
+// for "not requested"; approveTools merges the Claude Code allow rules.
+func runInitWith(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode string, approveTools bool) error {
 	// 0. Load, validate and merge .claude/settings.json BEFORE touching
 	// anything: a malformed or wrong-shaped file must abort init before
 	// the scaffold writes, never halfway through them.
@@ -187,6 +203,22 @@ func runInitWith(w io.Writer, root, bin, gateMode string, printOnly bool, skills
 	hooksChanged, err := mergeHooks(settings, bin, gateMode)
 	if err != nil {
 		return fmt.Errorf("%s: %w", settingsPath, err)
+	}
+
+	// --approve-tools merges into the same in-memory settings, before any
+	// write, for the same reason: a wrong-typed permissions field must
+	// abort here, and the file is written once, below, with the hooks.
+	var approved []string
+
+	if approveTools {
+		rules, err := approveRules()
+		if err != nil {
+			return err
+		}
+
+		if approved, err = mergeAllow(settings, rules); err != nil {
+			return fmt.Errorf("%s: %w", settingsPath, err)
+		}
 	}
 
 	// Plan the skills install here too, so a client directory that
@@ -234,14 +266,23 @@ func runInitWith(w io.Writer, root, bin, gateMode string, printOnly bool, skills
 	}
 
 	// 3. Claude Code hooks — validated and merged above, write-only here.
-	if err := writeHooks(w, settingsPath, settings, hooksChanged, bin, gateMode, previous, printOnly); err != nil {
+	// The allow rules ride in the same write, so the file lands once.
+	if err := writeHooks(w, settingsPath, settings, hooksChanged, len(approved) > 0, bin, gateMode, previous, printOnly); err != nil {
 		return err
+	}
+
+	if approveTools {
+		printApproved(w, approved, printOnly)
 	}
 
 	// 3b. Agent skills: opt-in, planned above, write-only here. Without
 	// the flag the line says what is installed, or how to install.
 	if err := reportSkills(w, root, skillsMode, skillsPlan, printOnly); err != nil {
 		return err
+	}
+
+	if skillsMode != "" && !approveTools {
+		noteMissingApproval(w, settings)
 	}
 
 	// 4. Report the EFFECTIVE blocking behaviour, derived from the hook
@@ -463,9 +504,11 @@ func hookSpecs(gateMode string) []hookSpec {
 // writeHooks persists the already-merged settings and reports what
 // happened. All parsing and validation runs earlier in runInit, before
 // any file is written — this function only serializes and narrates.
-func writeHooks(w io.Writer, path string, settings map[string]any, changed bool,
+// forceWrite persists the file even when no hook changed, because
+// another merge into the same settings (the allow rules) did.
+func writeHooks(w io.Writer, path string, settings map[string]any, changed, forceWrite bool,
 	bin, gateMode, previous string, printOnly bool) error {
-	if !changed {
+	if !changed && !forceWrite {
 		fmt.Fprintf(w, "  kept    .claude/settings.json (seamark hooks already wired)\n")
 		printHookCommands(w, bin, gateMode)
 
@@ -492,7 +535,12 @@ func writeHooks(w io.Writer, path string, settings map[string]any, changed bool,
 		}
 	}
 
-	fmt.Fprintf(w, "  %s .claude/settings.json (gate + lessons + context reset hooks)\n", verb)
+	if changed {
+		fmt.Fprintf(w, "  %s .claude/settings.json (gate + lessons + context reset hooks)\n", verb)
+	} else {
+		fmt.Fprintf(w, "  kept    .claude/settings.json (seamark hooks already wired)\n")
+	}
+
 	printHookCommands(w, bin, gateMode)
 
 	// The note states only what changed — the hook flag; whether anything

@@ -24,6 +24,12 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   report installed, stale, foreign, and unreadable copies; the release smoke
   proves the embedded tree ships; `make skills-validate` runs Claude Code's
   validator locally.
+- **`seamark init --approve-tools`.** Merges exact Claude Code allow rules
+  for the five MCP tools and the three skills into `.claude/settings.json`,
+  because a skill's own `allowed-tools` grant lasts one turn and, in the
+  Claude Code version tested (2.1.257), applied only when the user invoked
+  the skill by name, although the documentation says it covers both. Additive,
+  idempotent, previewable with `--print`, and independent of `--skills`.
 
 ## v0.5.3 — 2026-08-28
 
