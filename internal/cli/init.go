@@ -13,6 +13,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/skills"
 )
 
 // Gate hook modes — shared with the status surfaces via internal/hooks,
@@ -24,8 +25,9 @@ const (
 
 func newInitCmd(opts *options) *cobra.Command {
 	var (
-		printOnly bool
-		gateMode  string
+		printOnly  bool
+		gateMode   string
+		skillsMode string
 	)
 
 	cmd := &cobra.Command{
@@ -40,6 +42,14 @@ func newInitCmd(opts *options) *cobra.Command {
   - wires Claude Code hooks into .claude/settings.json: the command gate
     on Bash, the review-lessons reminder on edits, and a PostCompact
     delivery reset — merged into any existing hooks, and safe to re-run
+  - with --skills, installs the seamark agent skills (procedures for
+    understanding, planning, and reviewing with the seamark tools) into
+    .claude/skills and, when an .agents/ directory exists, .agents/skills;
+    --skills=claude, --skills=codex, or --skills=all overrides the
+    detection. A directory carrying seamark's ownership marker is
+    refreshed on re-run; any other directory of the same name is left
+    untouched. Without --skills nothing is installed and init prints
+    how to
 
 A first init never blocks anything: it installs the gate hook in warn
 mode, which reports verdicts and always lets the command through.
@@ -58,11 +68,26 @@ enforcement is never added or removed implicitly. Every run ends with a
 hook and the policy file actually on disk.
 
 Use --print to preview every change without writing anything.`,
-		Args: cobra.NoArgs,
+		// init takes no positional arguments. The one likely mistake,
+		// "--skills codex", parses as the bare flag plus a stray word
+		// because the flag has an optional value; name the = form instead
+		// of cobra's "unknown command".
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 && skills.ValidMode(args[0]) {
+				return fmt.Errorf("init: --skills takes its value with =, as in --skills=%s", args[0])
+			}
+
+			return cobra.NoArgs(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if gateMode != "" && gateMode != gateModeWarn && gateMode != gateModeEnforce {
 				return fmt.Errorf("init: --gate-mode must be %s or %s, got %q",
 					gateModeWarn, gateModeEnforce, gateMode)
+			}
+
+			if skillsMode != "" && !skills.ValidMode(skillsMode) {
+				return fmt.Errorf("init: --skills must be one of %s, got %q",
+					strings.Join(skills.Modes, ", "), skillsMode)
 			}
 
 			root, err := index.ResolveRoot(opts.workspace)
@@ -72,7 +97,7 @@ Use --print to preview every change without writing anything.`,
 
 			bin := seamarkPath()
 
-			return runInit(cmd.OutOrStdout(), root, bin, gateMode, printOnly)
+			return runInitWith(cmd.OutOrStdout(), root, bin, gateMode, printOnly, skillsMode)
 		},
 	}
 
@@ -80,6 +105,12 @@ Use --print to preview every change without writing anything.`,
 	cmd.Flags().StringVar(&gateMode, "gate-mode", "",
 		"gate hook mode: warn (report, never block) or enforce (blocking verdicts exit 2); "+
 			"omitted keeps the installed mode (warn on first init)")
+	cmd.Flags().StringVar(&skillsMode, "skills", "",
+		"install the seamark agent skills: auto (.claude/skills, plus .agents/skills when .agents/ exists), "+
+			"claude, codex, or all; a bare --skills means auto, other values need the = form (--skills=codex)")
+	// A bare --skills means auto; pflag then needs the = form for explicit
+	// values, which the help text and README both state.
+	cmd.Flags().Lookup("skills").NoOptDefVal = skills.ModeAuto
 
 	return cmd
 }
@@ -127,7 +158,15 @@ func stableInstallPath(path string) string {
 	return opt
 }
 
+// runInit is the pre-skills entry point; it installs no skills and keeps
+// its signature so existing callers and tests stay untouched.
 func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
+	return runInitWith(w, root, bin, gateMode, printOnly, "")
+}
+
+// runInitWith is runInit plus an optional skills install. skillsMode is
+// one of skills.Modes, or empty for "not requested".
+func runInitWith(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode string) error {
 	// 0. Load, validate and merge .claude/settings.json BEFORE touching
 	// anything: a malformed or wrong-shaped file must abort init before
 	// the scaffold writes, never halfway through them.
@@ -148,6 +187,13 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
 	hooksChanged, err := mergeHooks(settings, bin, gateMode)
 	if err != nil {
 		return fmt.Errorf("%s: %w", settingsPath, err)
+	}
+
+	// Plan the skills install here too, so a client directory that
+	// cannot be read aborts before the first scaffold lands.
+	skillsPlan, err := planSkills(root, skillsMode)
+	if err != nil {
+		return err
 	}
 
 	verb := "wrote"
@@ -189,6 +235,12 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
 
 	// 3. Claude Code hooks — validated and merged above, write-only here.
 	if err := writeHooks(w, settingsPath, settings, hooksChanged, bin, gateMode, previous, printOnly); err != nil {
+		return err
+	}
+
+	// 3b. Agent skills: opt-in, planned above, write-only here. Without
+	// the flag the line says what is installed, or how to install.
+	if err := reportSkills(w, root, skillsMode, skillsPlan, printOnly); err != nil {
 		return err
 	}
 

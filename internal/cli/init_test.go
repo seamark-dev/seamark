@@ -12,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/effects"
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/skills"
 )
 
 // commands flattens every PreToolUse command string in a settings map.
@@ -600,3 +601,154 @@ type testWriter struct{ b []byte }
 
 func (w *testWriter) Write(p []byte) (int, error) { w.b = append(w.b, p...); return len(p), nil }
 func (w *testWriter) String() string              { return string(w.b) }
+
+// skillFiles lists every shipped file of every skill under one client
+// directory, repository-relative.
+func skillFiles(t *testing.T, dir string) []string {
+	t.Helper()
+
+	names, err := skills.Names()
+	require.NoError(t, err)
+
+	var rels []string
+
+	for _, name := range names {
+		files, err := skills.Files(name)
+		require.NoError(t, err)
+
+		for rel := range files {
+			rels = append(rels, dir+"/"+name+"/"+rel)
+		}
+	}
+
+	return rels
+}
+
+func TestRunInitSkillsInstallsForDetectedClients(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".agents"), 0o755))
+
+	var b testWriter
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto))
+
+	for _, rel := range append(skillFiles(t, skills.ClaudeDir), skillFiles(t, skills.AgentsDir)...) {
+		assert.FileExists(t, filepath.Join(root, filepath.FromSlash(rel)))
+	}
+
+	out := b.String()
+	assert.Contains(t, out, "wrote  .claude/skills/seamark-plan-change")
+	assert.Contains(t, out, "wrote  .agents/skills/seamark-plan-change")
+	assert.NotContains(t, out, "not installed")
+	assert.Less(t, strings.Index(out, ".claude/skills/"), strings.Index(out, "gate    warn"),
+		"the skills block precedes the gate line")
+}
+
+func TestRunInitSkillsClaudeOnlyWithoutAgentsDir(t *testing.T) {
+	root := t.TempDir()
+
+	var b testWriter
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto))
+
+	assert.DirExists(t, filepath.Join(root, ".claude", "skills", "seamark-plan-change"))
+	assert.NoDirExists(t, filepath.Join(root, ".agents"), "auto never creates the Codex directory")
+	assert.NotContains(t, b.String(), ".agents/skills")
+}
+
+func TestRunInitSkillsIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+
+	var first testWriter
+	require.NoError(t, runInitWith(&first, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto))
+
+	var second testWriter
+	require.NoError(t, runInitWith(&second, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto))
+
+	names, err := skills.Names()
+	require.NoError(t, err)
+
+	for _, name := range names {
+		assert.Contains(t, second.String(), "kept    .claude/skills/"+name+" (current)")
+		assert.NotContains(t, second.String(), "wrote  .claude/skills/"+name)
+	}
+}
+
+func TestRunInitSkillsLeavesForeignDirAlone(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".claude", "skills", "seamark-plan-change")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	own := "---\nname: seamark-plan-change\ndescription: my own\n---\nMine.\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(own), 0o644))
+
+	var b testWriter
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto))
+
+	assert.Contains(t, b.String(), "kept    .claude/skills/seamark-plan-change (not managed by seamark: no seamark marker)")
+
+	data, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+	require.NoError(t, err)
+	assert.Equal(t, own, string(data))
+	assert.NoFileExists(t, filepath.Join(dir, "references", "interpreting-seamark.md"))
+}
+
+func TestRunInitSkillsPrintWritesNothing(t *testing.T) {
+	root := t.TempDir()
+
+	var b testWriter
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, true, skills.ModeAll))
+
+	assert.Contains(t, b.String(), "would write  .claude/skills/seamark-plan-change")
+	assert.Contains(t, b.String(), "would write  .agents/skills/seamark-plan-change")
+	assert.NoDirExists(t, filepath.Join(root, ".claude"))
+	assert.NoDirExists(t, filepath.Join(root, ".agents"))
+}
+
+func TestRunInitWithoutSkillsPrintsHint(t *testing.T) {
+	root := t.TempDir()
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false))
+	assert.Contains(t, b.String(), skillsHint)
+	assert.NoDirExists(t, filepath.Join(root, ".claude", "skills"), "no flag, no install")
+
+	// Once skills are installed, a plain re-run reports them instead of
+	// claiming they are missing.
+	require.NoError(t, runInitWith(&testWriter{}, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude))
+
+	var again testWriter
+	require.NoError(t, runInit(&again, root, "/bin/seamark", gateModeWarn, false))
+	assert.Contains(t, again.String(), "skills  claude 3/3 current")
+	assert.NotContains(t, again.String(), "not installed —")
+}
+
+func TestRunInitSkillsFailsBeforeAnyWriteWhenASkillFileIsUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions")
+	}
+
+	root := t.TempDir()
+
+	// Skills exist from an earlier install, one of them stale with an
+	// unreadable reference. The failed plan must abort init before the
+	// scaffolds and hooks land, not after.
+	targets, err := skills.Targets(root, skills.ModeClaude)
+	require.NoError(t, err)
+	require.NoError(t, skills.Install(&testWriter{}, root, targets, false))
+
+	dir := filepath.Join(root, ".claude", "skills", "seamark-plan-change")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
+		[]byte("---\nname: seamark-plan-change\nmetadata:\n  seamark: managed\n---\nstale\n"), 0o644))
+
+	ref := filepath.Join(dir, "references", "interpreting-seamark.md")
+	require.NoError(t, os.Chmod(ref, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(ref, 0o644) })
+
+	var b testWriter
+	err = runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "interpreting-seamark.md")
+
+	assert.NoDirExists(t, filepath.Join(root, ".seamark"), "no scaffold before the plan succeeds")
+	assert.NoFileExists(t, filepath.Join(root, ".claude", "settings.json"), "no hooks before the plan succeeds")
+	assert.Empty(t, b.String(), "nothing narrated, because nothing was written")
+}

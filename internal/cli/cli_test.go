@@ -1976,6 +1976,33 @@ func TestSkillsNameOnlyRealCommands(t *testing.T) {
 	assert.Greater(t, checked, 0, "the skill text must name seamark commands for this test to mean anything")
 }
 
+func TestInitSkillsFlagInstallsTheRequestedClient(t *testing.T) {
+	root := writeFixture(t)
+
+	out, err := run(t, "-C", root, "init", "--skills=codex")
+	require.NoError(t, err)
+	assert.Contains(t, out, "wrote  .agents/skills/seamark-plan-change")
+	assert.DirExists(t, filepath.Join(root, ".agents", "skills", "seamark-plan-change"))
+	assert.NoDirExists(t, filepath.Join(root, ".claude", "skills"), "codex means codex only")
+
+	// The bare flag means auto: Claude Code always, Codex now that
+	// .agents/ exists from the previous run.
+	out, err = run(t, "-C", root, "init", "--skills")
+	require.NoError(t, err)
+	assert.Contains(t, out, "wrote  .claude/skills/seamark-plan-change")
+	assert.Contains(t, out, "kept    .agents/skills/seamark-plan-change (current)")
+
+	_, err = run(t, "-C", root, "init", "--skills=bogus")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auto, claude, codex, all")
+
+	// The positional form is the one likely slip; the error names the
+	// = form rather than cobra's "unknown command".
+	_, err = run(t, "-C", root, "init", "--skills", "codex")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--skills=codex")
+}
+
 func TestWriteAtomicLeavesNoLeftovers(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "report.html")
