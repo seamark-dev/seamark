@@ -28,8 +28,13 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   for the five MCP tools and the three skills into `.claude/settings.json`,
   because a skill's own `allowed-tools` grant lasts one turn and, in the
   Claude Code version tested (2.1.257), applied only when the user invoked
-  the skill by name, although the documentation says it covers both. Additive,
-  idempotent, previewable with `--print`, and independent of `--skills`.
+  the skill by name, although the documentation says it covers both. For
+  Codex it appends the `seamark mcp` registration and `approval_mode =
+  "approve"` for exactly the five tools to `.codex/config.toml`, preserving
+  every existing byte and reporting conflicts instead of replacing them.
+  Additive, idempotent, previewable with `--print`, and independent of
+  `--skills`. `seamark doctor` and `seamark status` report both clients'
+  approval configuration.
 
 ## v0.5.3 — 2026-08-28
 

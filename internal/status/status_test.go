@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
@@ -291,4 +292,41 @@ func TestPrintNamesForeignSkillDirectories(t *testing.T) {
 	var b bytes.Buffer
 	Print(&b, s)
 	assert.Contains(t, b.String(), "skills         claude not installed, 1 not managed · codex not installed")
+}
+
+func TestGatherReportsApprovals(t *testing.T) {
+	st, root := seededStore(t)
+
+	s, err := Gather(st, root)
+	require.NoError(t, err)
+	require.Len(t, s.Approvals, 2)
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.Contains(t, b.String(), "approvals      not configured (`seamark init --approve-tools`)")
+
+	p, err := approve.PlanCodex(root)
+	require.NoError(t, err)
+	require.NoError(t, approve.ApplyCodex(&bytes.Buffer{}, root, p, false))
+
+	s, err = Gather(st, root)
+	require.NoError(t, err)
+	assert.Equal(t, approve.StateCurrent, s.Approvals[1].State())
+
+	b.Reset()
+	Print(&b, s)
+	assert.Contains(t, b.String(), "approvals      claude not configured · codex registered as \"seamark\", 5/5 tools approved")
+
+	// A malformed Codex file never fails Gather; it is described, with
+	// repository bytes sanitized before they reach a terminal.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"), []byte("[\x1b[31m\n"), 0o644))
+
+	s, err = Gather(st, root)
+	require.NoError(t, err)
+	assert.NotEmpty(t, s.Approvals[1].Err)
+
+	b.Reset()
+	Print(&b, s)
+	assert.Contains(t, b.String(), "codex unreadable")
+	assert.NotContains(t, b.String(), "\x1b")
 }

@@ -1,7 +1,7 @@
 // Package doctor diagnoses the seamark installation: binary, git, the
 // index database's schema and integrity, policy and effect-catalogue
 // compilation, hook wiring, agent and gh availability, agent skills,
-// and gitignore sanity. Every check is read-only and offline — doctor reports exact
+// tool approvals, and gitignore sanity. Every check is read-only and offline — doctor reports exact
 // corrective actions and changes nothing. Semantic health (coverage,
 // confidence, freshness) is `seamark status`'s job; doctor asks whether
 // seamark can run at all.
@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/agent"
+	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/effects"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
@@ -88,6 +89,7 @@ func Run(root, dbPath, version string) *Report {
 	checkGH(r)
 	checkMCP(r, root)
 	checkSkills(r, root)
+	checkApprovals(r, root)
 	checkGitignore(r, root)
 
 	return r
@@ -316,6 +318,57 @@ func checkSkills(r *Report, root string) {
 			"run `seamark init --skills` to add the seamark agent skills for Claude Code and Codex")
 	default:
 		r.add("skills", StateOK, detail, "")
+	}
+}
+
+// checkApprovals reports whether the project configuration lets the
+// seamark MCP tools run without prompts: Claude Code allow rules and
+// Codex per-tool approvals. Not configured is a fact, because approval
+// is opt-in. Partial, conflicting, and unreadable configuration each
+// get their own action. The detail names project configuration only:
+// user-level and managed client policy can still prompt on top.
+func checkApprovals(r *Report, root string) {
+	states := approve.Inspect(root)
+
+	var (
+		parts                                           []string
+		unreadable, conflicting, partial, current, none int
+	)
+
+	for _, s := range states {
+		parts = append(parts, s.Describe())
+
+		switch s.State() {
+		case approve.StateUnreadable:
+			unreadable++
+		case approve.StateConflicting:
+			conflicting++
+		case approve.StatePartial:
+			partial++
+		case approve.StateCurrent:
+			current++
+		default:
+			none++
+		}
+	}
+
+	detail := strings.Join(parts, " · ")
+
+	switch {
+	case unreadable > 0:
+		r.add("approvals", StateWarn, detail,
+			"fix the file, then re-run `seamark init --approve-tools`")
+	case conflicting > 0:
+		r.add("approvals", StateWarn, detail,
+			"seamark leaves explicit settings alone; edit the file by hand if the seamark tools should be approved")
+	case partial > 0:
+		r.add("approvals", StateWarn, detail,
+			"re-run `seamark init --approve-tools` to add the missing entries")
+	case current == 0:
+		r.add("approvals", StateInfo, "tool approvals not configured ("+detail+")",
+			"run `seamark init --approve-tools` so the seamark tools run without prompts; project configuration only — user or managed policy can still prompt")
+	default:
+		r.add("approvals", StateOK, detail+" (project configuration; user or managed policy can still prompt)", "")
 	}
 }
 

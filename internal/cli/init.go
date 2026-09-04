@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/index"
@@ -68,14 +69,18 @@ enforcement is never added or removed implicitly. Every run ends with a
 "gate" line stating the effective behaviour, derived from the installed
 hook and the policy file actually on disk.
 
---approve-tools merges Claude Code allow rules into .claude/settings.json
-for the five seamark MCP tools and the three seamark skills, so they run
-without permission prompts. A skill's own allowed-tools grant lasts one
-turn and, in the Claude Code version tested (2.1.257), applied only when
-the skill was invoked by name; these persistent rules cover both that path
-and the case where the agent picks the skill. Additive and idempotent: existing rules
-stay and nothing is ever removed. Independent of --skills, so one setup
-command is:
+--approve-tools configures the clients so the five seamark MCP tools run
+without permission prompts. For Claude Code it merges exact allow rules
+for the tools and the three seamark skills into .claude/settings.json; a
+skill's own allowed-tools grant lasts one turn and, in the version tested
+(2.1.257), applied only when the skill was invoked by name. For Codex it
+appends to .codex/config.toml: the "seamark mcp" registration when none
+exists and approval_mode = "approve" for exactly the five tools, never a
+server-wide default. Existing values, comments, and explicit restrictive
+settings stay; conflicts are reported, not replaced. Which clients: the
+--skills mode when given (--skills=codex --approve-tools is Codex only),
+otherwise Claude Code always and Codex when a .codex/ directory exists.
+One setup command:
 
   seamark init --skills --approve-tools
 
@@ -124,8 +129,8 @@ Use --print to preview every change without writing anything.`,
 	// values, which the help text and README both state.
 	cmd.Flags().Lookup("skills").NoOptDefVal = skills.ModeAuto
 	cmd.Flags().BoolVar(&approveTools, "approve-tools", false,
-		"merge Claude Code allow rules for the five seamark MCP tools and the three seamark skills "+
-			"into .claude/settings.json (additive; never removes a rule)")
+		"let the seamark MCP tools run without prompts: Claude Code allow rules in .claude/settings.json, "+
+			"Codex per-tool approvals in .codex/config.toml (additive; never removes a setting)")
 
 	return cmd
 }
@@ -208,16 +213,34 @@ func runInitWith(w io.Writer, root, bin, gateMode string, printOnly bool, skills
 	// --approve-tools merges into the same in-memory settings, before any
 	// write, for the same reason: a wrong-typed permissions field must
 	// abort here, and the file is written once, below, with the hooks.
-	var approved []string
+	// The Codex plan runs here too, so malformed TOML or a linked path
+	// aborts before the first scaffold lands.
+	var (
+		approved                    []string
+		codexPlan                   *approve.CodexPlan
+		approveClaude, approveCodex bool
+	)
 
 	if approveTools {
-		rules, err := approveRules()
-		if err != nil {
-			return err
+		if approveClaude, approveCodex, err = approvalTargets(root, skillsMode); err != nil {
+			return fmt.Errorf("init: %w", err)
 		}
 
-		if approved, err = mergeAllow(settings, rules); err != nil {
-			return fmt.Errorf("%s: %w", settingsPath, err)
+		if approveClaude {
+			rules, err := approve.ClaudeRules()
+			if err != nil {
+				return err
+			}
+
+			if approved, err = mergeAllow(settings, rules); err != nil {
+				return fmt.Errorf("%s: %w", settingsPath, err)
+			}
+		}
+
+		if approveCodex {
+			if codexPlan, err = approve.PlanCodex(root); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -271,8 +294,15 @@ func runInitWith(w io.Writer, root, bin, gateMode string, printOnly bool, skills
 		return err
 	}
 
-	if approveTools {
+	if approveClaude {
 		printApproved(w, approved, printOnly)
+	}
+
+	// 3a. Codex approvals: append-only, planned above.
+	if approveCodex {
+		if err := approve.ApplyCodex(w, root, codexPlan, printOnly); err != nil {
+			return err
+		}
 	}
 
 	// 3b. Agent skills: opt-in, planned above, write-only here. Without
@@ -282,7 +312,12 @@ func runInitWith(w io.Writer, root, bin, gateMode string, printOnly bool, skills
 	}
 
 	if skillsMode != "" && !approveTools {
-		noteMissingApproval(w, settings)
+		claude, codex, err := approvalTargets(root, skillsMode)
+		if err != nil {
+			return fmt.Errorf("init: %w", err)
+		}
+
+		noteMissingApproval(w, root, settings, claude, codex)
 	}
 
 	// 4. Report the EFFECTIVE blocking behaviour, derived from the hook

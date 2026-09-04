@@ -3,35 +3,42 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
-	"github.com/seamark-dev/seamark/internal/mcp"
+	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
-// approveRules returns the Claude Code allow rules --approve-tools merges:
-// one exact rule per seamark MCP tool and one exact Skill rule per shipped
-// skill. Exact names, never Skill(seamark-*): a wildcard would pre-approve
-// a skill that does not exist yet. The rules do not depend on whether the
-// skills are installed, so an MCP-only setup can approve the tools alone;
-// the benchmark's MCP-only arm needs exactly that.
-func approveRules() ([]string, error) {
-	var rules []string
+// approvalTargets names the clients --approve-tools configures. With
+// --skills the set follows the skills mode, so `--skills=codex
+// --approve-tools` touches Codex only. Without it, Claude Code always
+// and Codex when a .codex/ directory exists, because that is where its
+// configuration lives; skills detect Codex by .agents/ instead, since
+// the two artifacts live in different places.
+func approvalTargets(root, skillsMode string) (claude, codex bool, err error) {
+	if skillsMode != "" {
+		targets, err := skills.Targets(root, skillsMode)
+		if err != nil {
+			return false, false, err
+		}
 
-	for _, tool := range mcp.ToolNames() {
-		rules = append(rules, "mcp__seamark__"+tool)
+		for _, t := range targets {
+			switch t.Client {
+			case skills.ModeClaude:
+				claude = true
+			case skills.ModeCodex:
+				codex = true
+			}
+		}
+
+		return claude, codex, nil
 	}
 
-	names, err := skills.Names()
-	if err != nil {
-		return nil, err
-	}
+	info, err := os.Stat(filepath.Join(root, ".codex"))
 
-	for _, name := range names {
-		rules = append(rules, "Skill("+name+")")
-	}
-
-	return rules, nil
+	return true, err == nil && info.IsDir(), nil
 }
 
 // mergeAllow appends the rules missing from permissions.allow, in order,
@@ -71,35 +78,9 @@ func mergeAllow(settings map[string]any, rules []string) (added []string, err er
 	return added, nil
 }
 
-// missingAllow reports which rules permissions.allow lacks, reading the
-// settings without creating anything: the caller only narrates.
-func missingAllow(settings map[string]any, rules []string) []string {
-	present := map[string]bool{}
-
-	if perms, ok := settings["permissions"].(map[string]any); ok {
-		if allow, ok := perms["allow"].([]any); ok {
-			for _, v := range allow {
-				if s, ok := v.(string); ok {
-					present[s] = true
-				}
-			}
-		}
-	}
-
-	var missing []string
-
-	for _, r := range rules {
-		if !present[r] {
-			missing = append(missing, r)
-		}
-	}
-
-	return missing
-}
-
-// printApproved narrates the allow-rule merge in init's vocabulary and
-// lists every rule it added: what a repository pre-approves must never
-// require opening settings.json to find out.
+// printApproved narrates the Claude Code allow-rule merge in init's
+// vocabulary and lists every rule it added: what a repository
+// pre-approves must never require opening settings.json to find out.
 func printApproved(w io.Writer, added []string, printOnly bool) {
 	if len(added) == 0 {
 		fmt.Fprintf(w, "  kept    .claude/settings.json permissions (seamark tools and skills already approved)\n")
@@ -119,37 +100,65 @@ func printApproved(w io.Writer, added []string, printOnly bool) {
 	}
 }
 
-// noteMissingApproval prints one note when skills were installed but
-// allow rules --approve-tools writes are missing. It names what is
-// missing, by kind, and says those calls can prompt. It does not assert
-// which invocation path prompts: Claude Code's docs say a skill's own
-// allowed-tools grant covers user and model invocation for one turn, but
-// the 2.1.257 trial saw it apply to user invocation only. Persistent
-// rules cover both, so the note is right either way.
-func noteMissingApproval(w io.Writer, settings map[string]any) {
-	rules, err := approveRules()
+// noteMissingApproval prints one note per targeted client whose
+// approvals are missing after a skills install without --approve-tools.
+// It names what is missing and says those calls can prompt. It does not
+// assert which invocation path prompts: Claude Code's docs say a skill's
+// own allowed-tools grant covers user and model invocation for one turn,
+// but the 2.1.257 trial saw it apply to user invocation only, and Codex
+// approves MCP tools only through its own configuration. Persistent
+// rules cover every path, so the note is right either way.
+func noteMissingApproval(w io.Writer, root string, settings map[string]any, claude, codex bool) {
+	if claude {
+		noteMissingClaude(w, settings)
+	}
+
+	if codex {
+		noteMissingCodex(w, root)
+	}
+}
+
+func noteMissingClaude(w io.Writer, settings map[string]any) {
+	rules, err := approve.ClaudeRules()
 	if err != nil {
 		return
 	}
 
-	missing := missingAllow(settings, rules)
-	if len(missing) == 0 {
-		return
-	}
-
+	present := approve.AllowSet(settings)
 	tools, skillRules := 0, 0
 
-	for _, r := range missing {
-		if strings.HasPrefix(r, "Skill(") {
+	for _, r := range rules {
+		switch {
+		case present[r]:
+		case strings.HasPrefix(r, "Skill("):
 			skillRules++
-		} else {
+		default:
 			tools++
 		}
 	}
 
+	if tools+skillRules == 0 {
+		return
+	}
+
 	fmt.Fprintf(w, "  note    %d seamark allow rules missing from .claude/settings.json (%s); Claude Code can prompt\n"+
 		"          for those in manual mode — `seamark init --approve-tools` adds them (additive; --print previews)\n",
-		len(missing), missingKinds(tools, skillRules))
+		tools+skillRules, missingKinds(tools, skillRules))
+}
+
+func noteMissingCodex(w io.Writer, root string) {
+	p, err := approve.PlanCodex(root)
+	if err != nil || (!p.Register && len(p.Missing) == 0) {
+		return
+	}
+
+	state := fmt.Sprintf("%d/%d seamark tools approved in %s", len(p.Approved), len(approve.Tools), approve.CodexConfig)
+	if p.Register {
+		state = "seamark mcp is not registered in " + approve.CodexConfig
+	}
+
+	fmt.Fprintf(w, "  note    %s; Codex prompts for the rest —\n"+
+		"          `seamark init --skills=codex --approve-tools` registers the server and approves the five tools\n", state)
 }
 
 // missingKinds renders the missing rules by kind, for example

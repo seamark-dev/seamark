@@ -7,11 +7,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -295,4 +297,93 @@ func TestRunWarnsOnUnreadableSkillDir(t *testing.T) {
 
 	assert.Equal(t, StateWarn, checks["skills"].State)
 	assert.Contains(t, checks["skills"].Detail, "codex unreadable")
+}
+
+// approveClaude writes the eight Claude Code allow rules into the fixture.
+func approveClaude(t *testing.T, root string) {
+	t.Helper()
+
+	rules, err := approve.ClaudeRules()
+	require.NoError(t, err)
+
+	quoted := make([]string, 0, len(rules))
+	for _, r := range rules {
+		quoted = append(quoted, `"`+r+`"`)
+	}
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":[`+strings.Join(quoted, ",")+`]}}`), 0o644))
+}
+
+func TestRunReportsApprovalsNotConfigured(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateInfo, checks["approvals"].State, "opt-in approvals are a fact, not a fault")
+	assert.Contains(t, checks["approvals"].Detail, "not configured")
+	assert.Contains(t, checks["approvals"].Fix, "seamark init --approve-tools")
+	assert.Contains(t, checks["approvals"].Fix, "user or managed policy")
+}
+
+func TestRunReportsApprovalsConfigured(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	approveClaude(t, root)
+
+	p, err := approve.PlanCodex(root)
+	require.NoError(t, err)
+	require.NoError(t, approve.ApplyCodex(&bytes.Buffer{}, root, p, false))
+
+	r := Run(root, dbPath, "test")
+	checks := byName(r)
+
+	assert.Equal(t, StateOK, checks["approvals"].State, checks["approvals"].Detail)
+	assert.Contains(t, checks["approvals"].Detail, "claude 8/8 rules")
+	assert.Contains(t, checks["approvals"].Detail, "codex registered as \"seamark\", 5/5 tools approved")
+	assert.Contains(t, checks["approvals"].Detail, "project configuration")
+}
+
+func TestRunDetectsPartialApprovals(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":["mcp__seamark__orient"]}}`), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateWarn, checks["approvals"].State)
+	assert.Contains(t, checks["approvals"].Detail, "claude 1/8 rules")
+	assert.Contains(t, checks["approvals"].Fix, "seamark init --approve-tools")
+}
+
+func TestRunReportsConflictingAndUnreadableApprovals(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"),
+		[]byte("[mcp_servers.seamark]\ncommand = \"seamark\"\nargs = [\"mcp\"]\n\n[mcp_servers.seamark.tools.why]\napproval_mode = \"prompt\"\n"), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateWarn, checks["approvals"].State)
+	assert.Contains(t, checks["approvals"].Detail, "tools.why.approval_mode = \"prompt\"")
+	assert.Contains(t, checks["approvals"].Fix, "by hand")
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"), []byte("not toml [\n"), 0o644))
+
+	checks = byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateWarn, checks["approvals"].State)
+	assert.Contains(t, checks["approvals"].Detail, "codex unreadable")
+}
+
+func TestRunReportsDisabledCodexServerAsConflict(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"),
+		[]byte("[mcp_servers.seamark]\ncommand = \"seamark\"\nargs = [\"mcp\"]\nenabled = false\n\n[mcp_servers.seamark.tools.why]\napproval_mode = \"approve\"\n"), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateWarn, checks["approvals"].State, "a disabled server must not read as approved")
+	assert.Contains(t, checks["approvals"].Detail, "enabled = false")
 }

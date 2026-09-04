@@ -616,9 +616,35 @@ seamark MCP tool (`mcp__seamark__orient` and the other four) and one per
 seamark skill (`Skill(seamark-plan-change)` and the other two). The tools
 are read-only queries over the local index, and a skill rule only lets the
 agent load that skill's text. Existing rules stay, nothing is ever removed,
-and `--print` previews the change. Codex keeps its own per-tool approval
-setting (`mcp_servers.seamark.tools.<tool>.approval_mode`), which seamark
-does not write.
+and `--print` previews the change.
+
+For **Codex**, run this from your repository to install the skills,
+connect Codex to Seamark, and let it use Seamark's five tools without
+asking for permission each time:
+
+```bash
+seamark init --skills=codex --approve-tools
+```
+
+The connection and tool permissions are saved in `.codex/config.toml`.
+Codex must trust the repository for these settings to apply. Seamark
+preserves your existing settings and reports any conflicting restrictions.
+Your personal or organization settings may still require approval.
+
+Codex can choose the appropriate skill when you ask it to explore
+unfamiliar code, implement a change, or review your work. You can also
+name a skill directly:
+
+```text
+$seamark-plan-change Plan how to add a JSON output option to this CLI.
+```
+
+- **Check the setup:** run `seamark doctor` to see the installed skills,
+  Seamark registration, and tool permissions.
+- **Preview first:** add `--print` to the setup command to see what would
+  change without writing any files.
+- **Undo the tool setup:** remove only the tables Seamark added under the
+  `# seamark:` comment in `.codex/config.toml`. The installed skills stay.
 
 **Keep the skills up to date**
 

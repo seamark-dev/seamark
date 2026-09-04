@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -404,4 +405,10 @@ func TestToolNamesMatchToolDefs(t *testing.T) {
 	}
 
 	assert.Contains(t, names, "change_set")
+}
+
+// TestToolNamesMatchApproveTools pins the approval package's copy of the
+// tool list to the served surface: the two cannot import each other.
+func TestToolNamesMatchApproveTools(t *testing.T) {
+	assert.Equal(t, approve.Tools, ToolNames())
 }

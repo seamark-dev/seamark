@@ -16,7 +16,10 @@ In Claude Code, add `--approve-tools` (or run `seamark init --approve-tools` on
 its own) to merge exact allow rules for the five MCP tools and the three
 skills into `.claude/settings.json`. A skill's own `allowed-tools` grant lasts
 one turn and, in the Claude Code version tested (2.1.257), applied only when
-the skill was invoked by name; the persistent rules cover both paths.
+the skill was invoked by name; the persistent rules cover both paths. For
+Codex the same flag appends the `seamark mcp` registration and per-tool
+approvals to `.codex/config.toml`, since Codex approves MCP tools only
+through its own configuration.
 
 To install one skill with the Skills CLI:
 

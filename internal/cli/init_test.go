@@ -12,7 +12,6 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/effects"
 	"github.com/seamark-dev/seamark/internal/gate"
-	"github.com/seamark-dev/seamark/internal/mcp"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -786,25 +785,32 @@ func allowRules(t *testing.T, root string) []string {
 	return rules
 }
 
-func TestApproveRulesMatchToolSurfaceAndSkills(t *testing.T) {
-	rules, err := approveRules()
-	require.NoError(t, err)
+func TestApprovalTargetsFollowSkillsModeOrDetectCodex(t *testing.T) {
+	root := t.TempDir()
 
-	var want []string
-	for _, tool := range mcp.ToolNames() {
-		want = append(want, "mcp__seamark__"+tool)
+	claude, codex, err := approvalTargets(root, "")
+	require.NoError(t, err)
+	assert.True(t, claude)
+	assert.False(t, codex, "no .codex/ directory, no Codex configuration")
+
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
+	claude, codex, err = approvalTargets(root, "")
+	require.NoError(t, err)
+	assert.True(t, claude)
+	assert.True(t, codex)
+
+	for mode, want := range map[string][2]bool{
+		skills.ModeClaude: {true, false},
+		skills.ModeCodex:  {false, true},
+		skills.ModeAll:    {true, true},
+	} {
+		claude, codex, err = approvalTargets(root, mode)
+		require.NoError(t, err, mode)
+		assert.Equal(t, want, [2]bool{claude, codex}, mode)
 	}
 
-	names, err := skills.Names()
-	require.NoError(t, err)
-
-	for _, name := range names {
-		want = append(want, "Skill("+name+")")
-	}
-
-	assert.Equal(t, want, rules)
-	assert.Len(t, rules, 8, "five tools and three skills")
-	assert.NotContains(t, rules, "Skill(seamark-*)", "exact names only: a wildcard would approve a future skill")
+	_, _, err = approvalTargets(root, "bogus")
+	require.Error(t, err)
 }
 
 func TestRunInitApproveToolsMergesAllowRules(t *testing.T) {
@@ -899,4 +905,85 @@ func TestRunInitSkillsNotesMissingApproval(t *testing.T) {
 	var later testWriter
 	require.NoError(t, runInitWith(&later, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude, false))
 	assert.NotContains(t, later.String(), "allow rules missing")
+}
+
+func TestRunInitApproveToolsConfiguresCodexWhenDetected(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
+
+	var b testWriter
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, "", true))
+
+	assert.Contains(t, b.String(), "approved 8 Claude Code allow rules")
+	assert.Contains(t, b.String(), "wrote   .codex/config.toml (registered seamark mcp; approved 5 tools: orient, why, change_set, check, expand)")
+
+	data, err := os.ReadFile(filepath.Join(root, ".codex", "config.toml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "[mcp_servers.seamark.tools.check]\napproval_mode = \"approve\"")
+
+	// Idempotent on both sides.
+	var again testWriter
+	require.NoError(t, runInitWith(&again, root, "/bin/seamark", gateModeWarn, false, "", true))
+	assert.Contains(t, again.String(), "already approved")
+	assert.Contains(t, again.String(), "kept    .codex/config.toml (seamark registered as \"seamark\"; 5/5 tools approved)")
+
+	after, err := os.ReadFile(filepath.Join(root, ".codex", "config.toml"))
+	require.NoError(t, err)
+	assert.Equal(t, string(data), string(after))
+}
+
+func TestRunInitApproveToolsCodexOnlyThroughSkillsMode(t *testing.T) {
+	root := t.TempDir()
+
+	var b testWriter
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeCodex, true))
+
+	assert.DirExists(t, filepath.Join(root, ".agents", "skills", "seamark-plan-change"))
+	assert.FileExists(t, filepath.Join(root, ".codex", "config.toml"))
+	assert.NotContains(t, b.String(), "Claude Code allow rules", "codex means codex only")
+
+	_, hasPerms := readSettings(t, root)["permissions"]
+	assert.False(t, hasPerms, "no Claude rules were merged")
+}
+
+func TestRunInitApproveToolsPreviewWritesNoCodexConfig(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
+
+	var b testWriter
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, true, "", true))
+
+	assert.Contains(t, b.String(), "would write .codex/config.toml (registered seamark mcp; approved 5 tools")
+	assert.NoFileExists(t, filepath.Join(root, ".codex", "config.toml"))
+	assert.NoFileExists(t, filepath.Join(root, ".claude", "settings.json"))
+}
+
+func TestRunInitApproveToolsFailsBeforeAnyWriteOnMalformedCodexConfig(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"), []byte("[mcp_servers.seamark\n"), 0o644))
+
+	var b testWriter
+	err := runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, "", true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), ".codex/config.toml")
+	assert.NoDirExists(t, filepath.Join(root, ".seamark"), "nothing written before the plan succeeds")
+	assert.NoFileExists(t, filepath.Join(root, ".claude", "settings.json"))
+}
+
+func TestRunInitSkillsCodexNotesMissingApproval(t *testing.T) {
+	root := t.TempDir()
+
+	var b testWriter
+	require.NoError(t, runInitWith(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeCodex, false))
+	assert.Contains(t, b.String(), "seamark mcp is not registered in .codex/config.toml")
+	assert.Contains(t, b.String(), "seamark init --skills=codex --approve-tools")
+	assert.NotContains(t, b.String(), "Claude Code can prompt", "codex mode notes Codex only")
+
+	var approved testWriter
+	require.NoError(t, runInitWith(&approved, root, "/bin/seamark", gateModeWarn, false, skills.ModeCodex, true))
+
+	var later testWriter
+	require.NoError(t, runInitWith(&later, root, "/bin/seamark", gateModeWarn, false, skills.ModeCodex, false))
+	assert.NotContains(t, later.String(), "not registered")
 }

@@ -154,7 +154,7 @@ func Plan(root string, targets []Target) ([]Entry, error) {
 // returned: masking them as Stale would turn a permission problem into
 // a failed write later.
 func classify(root string, e Entry) (State, string, error) {
-	if link, err := symlinkIn(root, e.Rel); err != nil {
+	if link, err := SymlinkIn(root, e.Rel); err != nil {
 		return Absent, "", err
 	} else if link != "" {
 		return Foreign, "symlink at " + link, nil
@@ -186,7 +186,7 @@ func classify(root string, e Entry) (State, string, error) {
 	// points. Checked before SKILL.md is read, so a linked SKILL.md
 	// cannot borrow the marker from a file elsewhere.
 	for _, rel := range rels {
-		link, err := symlinkIn(root, path.Join(e.Rel, rel))
+		link, err := SymlinkIn(root, path.Join(e.Rel, rel))
 		if err != nil {
 			return Absent, "", err
 		}
@@ -236,13 +236,13 @@ func classify(root string, e Entry) (State, string, error) {
 	return Current, "", nil
 }
 
-// symlinkIn walks rel down from root one component at a time and
+// SymlinkIn walks rel down from root one component at a time and
 // returns the first component that is a symbolic link, or "" when none
 // is. The walk stops at the first missing component, because nothing
 // below it exists yet. Every path seamark reads or writes under a client
 // directory passes this check, so a link committed in a cloned
 // repository can never redirect a refresh outside the tree.
-func symlinkIn(root, rel string) (string, error) {
+func SymlinkIn(root, rel string) (string, error) {
 	parts := strings.Split(rel, "/")
 
 	for i := range parts {
@@ -340,7 +340,7 @@ func writeSkill(root string, e Entry) error {
 	for _, rel := range sortedKeys(files) {
 		target := path.Join(e.Rel, rel)
 
-		link, err := symlinkIn(root, target)
+		link, err := SymlinkIn(root, target)
 		if err != nil {
 			return err
 		}

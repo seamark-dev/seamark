@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/agent"
+	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/index"
@@ -91,6 +92,11 @@ type Status struct {
 	// state, because a client would load text that no longer matches the
 	// binary's tool surface.
 	Skills []skills.ClientState `json:"skills,omitempty"`
+
+	// Approvals is the tool-approval configuration per client: whether
+	// the seamark MCP tools can run without prompts. Project
+	// configuration only; user or managed policy can still prompt.
+	Approvals []approve.ClientApproval `json:"approvals,omitempty"`
 }
 
 // Gather assembles the health report from the store and the workspace.
@@ -183,6 +189,7 @@ func Gather(st *store.Store, root string) (*Status, error) {
 	// Inspect never fails: an unreadable directory is recorded on its
 	// client record, and status describes it.
 	s.Skills = skills.Inspect(root)
+	s.Approvals = approve.Inspect(root)
 
 	return s, nil
 }
@@ -266,6 +273,22 @@ func Print(w io.Writer, s *Status) {
 
 	printGate(w, s)
 	printSkills(w, s)
+	printApprovals(w, s)
+}
+
+// printApprovals renders the tool-approval line beside the skills line.
+// Not configured states the command, because approval is opt-in; a
+// partial, conflicting, or unreadable configuration is spelled out.
+func printApprovals(w io.Writer, s *Status) {
+	for _, c := range s.Approvals {
+		if c.State() != approve.StateNotConfigured {
+			fmt.Fprintf(w, "approvals      %s\n", render.Sanitize(approve.Summary(s.Approvals)))
+
+			return
+		}
+	}
+
+	fmt.Fprintf(w, "approvals      not configured (`seamark init --approve-tools`)\n")
 }
 
 // printSkills renders the agent-skills line beside the gate line. Not

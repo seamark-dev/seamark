@@ -1990,6 +1990,15 @@ func TestInitApproveToolsFlagWritesAllowRules(t *testing.T) {
 	assert.Contains(t, string(data), `"Skill(seamark-review-change)"`)
 }
 
+func TestInitApproveToolsFlagConfiguresCodex(t *testing.T) {
+	root := writeFixture(t)
+
+	out, err := run(t, "-C", root, "init", "--skills=codex", "--approve-tools")
+	require.NoError(t, err)
+	assert.Contains(t, out, "approved 5 tools: orient, why, change_set, check, expand")
+	assert.FileExists(t, filepath.Join(root, ".codex", "config.toml"))
+}
+
 func TestInitSkillsFlagInstallsTheRequestedClient(t *testing.T) {
 	root := writeFixture(t)
 
