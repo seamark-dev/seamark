@@ -4,10 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -110,7 +111,7 @@ func PlanCodex(root string) (*CodexPlan, error) {
 		p.Conflicts = append(p.Conflicts, fmt.Sprintf("mcp_servers.%s runs another command", CodexServer))
 	default:
 		p.Server, p.Register = CodexServer, true
-		p.Missing = append([]string(nil), Tools...)
+		p.Missing = slices.Clone(Tools)
 	}
 
 	if p.Register || len(p.Missing) > 0 {
@@ -126,7 +127,8 @@ func PlanCodex(root string) (*CodexPlan, error) {
 			p.block = renderBlock(p, data)
 
 			if _, err := toml.Decode(string(data)+p.block, &map[string]any{}); err != nil {
-				p.Conflicts = append(p.Conflicts, "existing tables cannot be extended by appending ("+render.Sanitize(firstLine(err.Error()))+")")
+				reason, _, _ := strings.Cut(err.Error(), "\n")
+				p.Conflicts = append(p.Conflicts, "existing tables cannot be extended by appending ("+render.Sanitize(reason)+")")
 				p.Missing, p.Register, p.block = nil, false, ""
 			}
 		}
@@ -155,18 +157,11 @@ func serversTable(cfg map[string]any) (map[string]any, error) {
 // preferring the conventional name when several exist. The basename
 // rule is doctor's: exact "seamark", tolerating the Windows suffix.
 func registration(servers map[string]any) string {
-	names := make([]string, 0, len(servers))
-	for name := range servers {
-		names = append(names, name)
-	}
-
-	sort.Strings(names)
-
 	if isSeamarkMCP(servers[CodexServer]) {
 		return CodexServer
 	}
 
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		if isSeamarkMCP(servers[name]) {
 			return name
 		}
@@ -198,14 +193,7 @@ func isSeamarkMCP(v any) bool {
 // validateServers checks every server in name order, so the error
 // names the same server on repeat.
 func validateServers(servers map[string]any) error {
-	names := make([]string, 0, len(servers))
-	for name := range servers {
-		names = append(names, name)
-	}
-
-	sort.Strings(names)
-
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		server, ok := servers[name].(map[string]any)
 		if !ok {
 			return fmt.Errorf("mcp_servers.%s must be a table", name)
@@ -296,9 +284,9 @@ func classifyTools(server map[string]any) (approved, missing, conflicts []string
 		mode, _ := entry["approval_mode"].(string)
 
 		switch {
-		case contains(disabled, t):
+		case slices.Contains(disabled, t):
 			conflicts = append(conflicts, "disabled_tools lists "+t)
-		case hasEnabled && !contains(enabledList, t):
+		case hasEnabled && !slices.Contains(enabledList, t):
 			conflicts = append(conflicts, "enabled_tools omits "+t)
 		case mode == "approve":
 			approved = append(approved, t)
@@ -657,22 +645,4 @@ func isStringArray(v any) bool {
 	}
 
 	return true
-}
-
-func contains(list []string, s string) bool {
-	for _, it := range list {
-		if it == s {
-			return true
-		}
-	}
-
-	return false
-}
-
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-
-	return s
 }

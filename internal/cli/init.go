@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -90,7 +91,7 @@ Use --print to preview every change without writing anything.`,
 		// because the flag has an optional value; name the = form instead
 		// of cobra's "unknown command".
 		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 1 && skills.ValidMode(args[0]) {
+			if len(args) == 1 && slices.Contains(skills.Modes, args[0]) {
 				return fmt.Errorf("init: --skills takes its value with =, as in --skills=%s", args[0])
 			}
 
@@ -102,7 +103,7 @@ Use --print to preview every change without writing anything.`,
 					gateModeWarn, gateModeEnforce, gateMode)
 			}
 
-			if skillsMode != "" && !skills.ValidMode(skillsMode) {
+			if skillsMode != "" && !slices.Contains(skills.Modes, skillsMode) {
 				return fmt.Errorf("init: --skills must be one of %s, got %q",
 					strings.Join(skills.Modes, ", "), skillsMode)
 			}
@@ -114,7 +115,7 @@ Use --print to preview every change without writing anything.`,
 
 			bin := seamarkPath()
 
-			return runInitWith(cmd.OutOrStdout(), root, bin, gateMode, printOnly, skillsMode, approveTools)
+			return runInit(cmd.OutOrStdout(), root, bin, gateMode, printOnly, skillsMode, approveTools)
 		},
 	}
 
@@ -178,16 +179,11 @@ func stableInstallPath(path string) string {
 	return opt
 }
 
-// runInit is the pre-skills entry point; it installs no skills and keeps
-// its signature so existing callers and tests stay untouched.
-func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
-	return runInitWith(w, root, bin, gateMode, printOnly, "", false)
-}
-
-// runInitWith is runInit plus the optional skills install and the
-// optional allow-rule merge. skillsMode is one of skills.Modes, or empty
-// for "not requested"; approveTools merges the Claude Code allow rules.
-func runInitWith(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode string, approveTools bool) error {
+// runInit writes the scaffolds and the hooks, then the opt-in extras.
+// skillsMode is one of skills.Modes, or empty for "not requested";
+// approveTools merges the Claude Code allow rules and, when Codex is a
+// target, appends the Codex approvals.
+func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode string, approveTools bool) error {
 	// 0. Load, validate and merge .claude/settings.json BEFORE touching
 	// anything: a malformed or wrong-shaped file must abort init before
 	// the scaffold writes, never halfway through them.
@@ -210,37 +206,39 @@ func runInitWith(w io.Writer, root, bin, gateMode string, printOnly bool, skills
 		return fmt.Errorf("%s: %w", settingsPath, err)
 	}
 
+	// The clients the approvals address, read once: --approve-tools
+	// configures them, and --skills without it notes what they lack.
+	claude, codex, err := approvalTargets(root, skillsMode)
+	if err != nil {
+		return fmt.Errorf("init: %w", err)
+	}
+
 	// --approve-tools merges into the same in-memory settings, before any
 	// write, for the same reason: a wrong-typed permissions field must
 	// abort here, and the file is written once, below, with the hooks.
 	// The Codex plan runs here too, so malformed TOML or a linked path
 	// aborts before the first scaffold lands.
 	var (
-		approved                    []string
-		codexPlan                   *approve.CodexPlan
-		approveClaude, approveCodex bool
+		approved  []string
+		codexPlan *approve.CodexPlan
 	)
 
-	if approveTools {
-		if approveClaude, approveCodex, err = approvalTargets(root, skillsMode); err != nil {
-			return fmt.Errorf("init: %w", err)
+	approveClaude, approveCodex := approveTools && claude, approveTools && codex
+
+	if approveClaude {
+		rules, err := approve.ClaudeRules()
+		if err != nil {
+			return err
 		}
 
-		if approveClaude {
-			rules, err := approve.ClaudeRules()
-			if err != nil {
-				return err
-			}
-
-			if approved, err = mergeAllow(settings, rules); err != nil {
-				return fmt.Errorf("%s: %w", settingsPath, err)
-			}
+		if approved, err = mergeAllow(settings, rules); err != nil {
+			return fmt.Errorf("%s: %w", settingsPath, err)
 		}
+	}
 
-		if approveCodex {
-			if codexPlan, err = approve.PlanCodex(root); err != nil {
-				return err
-			}
+	if approveCodex {
+		if codexPlan, err = approve.PlanCodex(root); err != nil {
+			return err
 		}
 	}
 
@@ -312,11 +310,6 @@ func runInitWith(w io.Writer, root, bin, gateMode string, printOnly bool, skills
 	}
 
 	if skillsMode != "" && !approveTools {
-		claude, codex, err := approvalTargets(root, skillsMode)
-		if err != nil {
-			return fmt.Errorf("init: %w", err)
-		}
-
 		noteMissingApproval(w, root, settings, claude, codex)
 	}
 
@@ -540,22 +533,11 @@ func hookSpecs(gateMode string) []hookSpec {
 // happened. All parsing and validation runs earlier in runInit, before
 // any file is written — this function only serializes and narrates.
 // forceWrite persists the file even when no hook changed, because
-// another merge into the same settings (the allow rules) did.
+// another merge into the same settings (the allow rules) did; the hook
+// line still says "kept", because the hooks did not change.
 func writeHooks(w io.Writer, path string, settings map[string]any, changed, forceWrite bool,
 	bin, gateMode, previous string, printOnly bool) error {
-	if !changed && !forceWrite {
-		fmt.Fprintf(w, "  kept    .claude/settings.json (seamark hooks already wired)\n")
-		printHookCommands(w, bin, gateMode)
-
-		return nil
-	}
-
-	verb := "updated"
-	if printOnly {
-		verb = "would update"
-	}
-
-	if !printOnly {
+	if (changed || forceWrite) && !printOnly {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
@@ -570,10 +552,13 @@ func writeHooks(w io.Writer, path string, settings map[string]any, changed, forc
 		}
 	}
 
-	if changed {
-		fmt.Fprintf(w, "  %s .claude/settings.json (gate + lessons + context reset hooks)\n", verb)
-	} else {
+	switch {
+	case !changed:
 		fmt.Fprintf(w, "  kept    .claude/settings.json (seamark hooks already wired)\n")
+	case printOnly:
+		fmt.Fprintf(w, "  would update .claude/settings.json (gate + lessons + context reset hooks)\n")
+	default:
+		fmt.Fprintf(w, "  updated .claude/settings.json (gate + lessons + context reset hooks)\n")
 	}
 
 	printHookCommands(w, bin, gateMode)

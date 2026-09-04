@@ -67,18 +67,6 @@ var toolDefs = []map[string]any{
 	},
 }
 
-// ToolNames lists the tool surface in definition order. init builds the
-// Claude Code allow rules from it, so a sixth tool is approved in the same
-// change that adds it, and tests pin the skills' grants to it.
-func ToolNames() []string {
-	names := make([]string, 0, len(toolDefs))
-	for _, d := range toolDefs {
-		names = append(names, d["name"].(string))
-	}
-
-	return names
-}
-
 func objSchema(props map[string]any, required []string) map[string]any {
 	if props == nil {
 		props = map[string]any{}

@@ -396,19 +396,14 @@ func TestSkillsNameOnlyRealTools(t *testing.T) {
 	}
 }
 
-func TestToolNamesMatchToolDefs(t *testing.T) {
-	names := ToolNames()
-	require.Len(t, names, len(toolDefs))
-
-	for i, d := range toolDefs {
-		assert.Equal(t, d["name"], names[i])
+// TestApproveToolsMatchToolDefs pins the approval package's copy of the
+// tool list to the served surface, in definition order: the two cannot
+// import each other, so a sixth tool must land in both in one change.
+func TestApproveToolsMatchToolDefs(t *testing.T) {
+	var names []string
+	for _, d := range toolDefs {
+		names = append(names, d["name"].(string))
 	}
 
-	assert.Contains(t, names, "change_set")
-}
-
-// TestToolNamesMatchApproveTools pins the approval package's copy of the
-// tool list to the served surface: the two cannot import each other.
-func TestToolNamesMatchApproveTools(t *testing.T) {
-	assert.Equal(t, approve.Tools, ToolNames())
+	assert.Equal(t, approve.Tools, names)
 }

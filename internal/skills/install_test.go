@@ -60,8 +60,6 @@ func TestTargetsPerMode(t *testing.T) {
 	_, err = Targets(root, "bogus")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "auto, claude, codex, all", "the error names the accepted values")
-	assert.False(t, ValidMode("bogus"))
-	assert.True(t, ValidMode(ModeAll))
 }
 
 func TestPlanClassifiesEveryState(t *testing.T) {
@@ -368,7 +366,7 @@ func TestApplyRefusesToWriteThroughASymlinkEvenWhenThePlanSaysAbsent(t *testing.
 
 	// A plan computed before the link appeared, or built by hand: the
 	// write-time check is the second line of defense.
-	entry := Entry{Target: claudeTarget, Name: "seamark-plan-change", Rel: ClaudeDir + "/seamark-plan-change", State: Absent}
+	entry := Entry{Name: "seamark-plan-change", Rel: ClaudeDir + "/seamark-plan-change", State: Absent}
 
 	var w bytes.Buffer
 	err := Apply(&w, root, []Entry{entry}, false)

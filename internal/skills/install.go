@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -44,17 +45,6 @@ var (
 	claudeTarget = Target{Client: ModeClaude, Dir: ClaudeDir}
 	codexTarget  = Target{Client: ModeCodex, Dir: AgentsDir}
 )
-
-// ValidMode reports whether mode is one of Modes.
-func ValidMode(mode string) bool {
-	for _, m := range Modes {
-		if m == mode {
-			return true
-		}
-	}
-
-	return false
-}
 
 // Targets returns the client directories one install mode addresses.
 func Targets(root, mode string) ([]Target, error) {
@@ -109,8 +99,7 @@ func (s State) String() string {
 
 // Entry is one skill directory in an install plan.
 type Entry struct {
-	Target Target
-	Name   string
+	Name string
 	// Rel is the repository-relative directory, slash-separated.
 	Rel   string
 	State State
@@ -131,7 +120,7 @@ func Plan(root string, targets []Target) ([]Entry, error) {
 
 	for _, t := range targets {
 		for _, name := range names {
-			e := Entry{Target: t, Name: name, Rel: path.Join(t.Dir, name)}
+			e := Entry{Name: name, Rel: path.Join(t.Dir, name)}
 
 			e.State, e.Reason, err = classify(root, e)
 			if err != nil {
@@ -178,7 +167,8 @@ func classify(root string, e Entry) (State, string, error) {
 		return Absent, "", err
 	}
 
-	rels := sortedKeys(shipped)
+	// Sorted, so a failure names the same path on repeat.
+	rels := slices.Sorted(maps.Keys(shipped))
 
 	// No shipped path may be, or pass through, a link. seamark never
 	// writes links, so one means the directory was altered by hand or by
@@ -263,19 +253,6 @@ func SymlinkIn(root, rel string) (string, error) {
 	return "", nil
 }
 
-// sortedKeys returns a file map's paths in sorted order, so narration,
-// comparison, and failures name the same path on repeat.
-func sortedKeys(files map[string][]byte) []string {
-	rels := make([]string, 0, len(files))
-	for rel := range files {
-		rels = append(rels, rel)
-	}
-
-	sort.Strings(rels)
-
-	return rels
-}
-
 // Apply executes a plan with one narrated line per skill directory, in
 // init's vocabulary: wrote, updated, kept, and the would- forms under
 // preview. An absent directory gets every shipped file; a stale managed
@@ -337,7 +314,7 @@ func writeSkill(root string, e Entry) error {
 		return err
 	}
 
-	for _, rel := range sortedKeys(files) {
+	for _, rel := range slices.Sorted(maps.Keys(files)) {
 		target := path.Join(e.Rel, rel)
 
 		link, err := SymlinkIn(root, target)

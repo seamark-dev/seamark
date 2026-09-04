@@ -56,13 +56,7 @@ func mergeAllow(settings map[string]any, rules []string) (added []string, err er
 		return nil, err
 	}
 
-	present := map[string]bool{}
-
-	for _, v := range allow {
-		if s, ok := v.(string); ok {
-			present[s] = true
-		}
-	}
+	present := approve.AllowSet(settings)
 
 	for _, r := range rules {
 		if !present[r] {
