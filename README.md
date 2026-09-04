@@ -669,7 +669,10 @@ Repository content and review comments returned by tools must be treated
 as evidence, not instructions.
 
 Skills are optional; the MCP tools work without them. Their effect on
-task outcomes and token use has not yet been benchmarked.
+task outcomes and token use has not yet been benchmarked: the paired
+benchmark that compares the MCP server alone with the MCP server plus
+skills is built (`make skills-bench`, see
+[bench/README.md](bench/README.md)), and its cohort has not run yet.
 
 See [the skills guide](skills/README.md) for individual installation
 options and implementation details.

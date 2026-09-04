@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seamark.dev/schemas/skills-workflow-result-v1.json",
+  "title": "Seamark skills workflow benchmark result row, schema v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ts",
+    "run_id",
+    "instance",
+    "task_sha256",
+    "trigger",
+    "companion",
+    "arm",
+    "trial",
+    "fixture",
+    "fingerprint",
+    "valid",
+    "pair_valid",
+    "change_set_before_first_edit",
+    "companion_named_by_change_set",
+    "why_followed_companion",
+    "check_after_last_edit",
+    "seamark_calls",
+    "edits",
+    "task_pass",
+    "invariant_pass",
+    "checks_pass",
+    "checks",
+    "agent_exit"
+  ],
+  "dependentRequired": {
+    "transcript": ["transcript_sha256"],
+    "transcript_sha256": ["transcript"],
+    "stderr": ["stderr_sha256"],
+    "stderr_sha256": ["stderr"],
+    "patch": ["patch_sha256"],
+    "patch_sha256": ["patch"]
+  },
+  "properties": {
+    "schema_version": { "const": 1 },
+    "ts": { "type": "string", "format": "date-time" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "instance": { "type": "string", "minLength": 1 },
+    "task_sha256": { "$ref": "#/$defs/sha256" },
+    "trigger": { "type": "string", "minLength": 1 },
+    "companion": { "type": "string", "minLength": 1 },
+    "arm": { "enum": ["mcp-only", "mcp-skills"] },
+    "trial": { "type": "integer", "minimum": 1 },
+    "fixture": { "$ref": "#/$defs/git_oid" },
+    "fingerprint": { "$ref": "#/$defs/sha256" },
+    "valid": { "type": "boolean" },
+    "pair_valid": { "type": "boolean" },
+    "invalid_reason": { "type": "string" },
+    "infrastructure_failure": { "type": "boolean" },
+    "init_seen": { "type": "boolean" },
+    "result_seen": { "type": "boolean" },
+    "tools": { "type": "array", "items": { "type": "string" } },
+    "mcp_servers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "status": { "type": "string" }
+        }
+      }
+    },
+    "skills": { "type": "array", "items": { "type": "string" } },
+    "plugins": { "type": "array", "items": { "type": "string" } },
+    "change_set_before_first_edit": { "type": "boolean" },
+    "change_set_files": { "type": "array", "items": { "type": "string" } },
+    "companion_named_by_change_set": { "type": "boolean" },
+    "why_followed_companion": { "type": "boolean" },
+    "check_after_last_edit": { "type": "boolean" },
+    "check_verdict": { "type": "string" },
+    "activations": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "seamark_calls": { "type": "integer", "minimum": 0 },
+    "seamark_tool_calls": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "edits": { "type": "integer", "minimum": 0 },
+    "first_edit_seq": { "type": "integer", "minimum": 1 },
+    "task_pass": { "type": "boolean" },
+    "invariant_pass": { "type": "boolean" },
+    "notes": { "type": "string" },
+    "checks_pass": { "type": "boolean" },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "pass"],
+        "properties": {
+          "command": { "type": "string", "minLength": 1 },
+          "pass": { "type": "boolean" },
+          "timed_out": { "type": "boolean" },
+          "output": { "type": "string" }
+        },
+        "if": {
+          "properties": { "timed_out": { "const": true } },
+          "required": ["timed_out"]
+        },
+        "then": {
+          "properties": { "pass": { "const": false } }
+        }
+      }
+    },
+    "requested_model": { "type": "string" },
+    "model": { "type": "string" },
+    "model_usage": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/model_usage" }
+    },
+    "input_tokens": { "type": "integer", "minimum": 0 },
+    "cache_read_input_tokens": { "type": "integer", "minimum": 0 },
+    "cache_creation_input_tokens": { "type": "integer", "minimum": 0 },
+    "context_tokens": { "type": "integer", "minimum": 0 },
+    "output_tokens": { "type": "integer", "minimum": 0 },
+    "turns": { "type": "integer", "minimum": 0 },
+    "permission_denials": { "type": "integer", "minimum": 0 },
+    "cost_usd": { "type": "number", "minimum": 0 },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "agent_exit": { "type": "integer" },
+    "timed_out": { "type": "boolean" },
+    "agent_error": { "type": "boolean" },
+    "seamark_version": { "type": "string" },
+    "seamark_sha256": { "$ref": "#/$defs/sha256" },
+    "agent_version": { "type": "string" },
+    "effort": { "type": "string" },
+    "max_budget_usd": { "type": "number", "minimum": 0 },
+    "runtime_id": { "type": "string" },
+    "transcript": { "type": "string" },
+    "transcript_sha256": { "$ref": "#/$defs/sha256" },
+    "stderr": { "type": "string" },
+    "stderr_sha256": { "$ref": "#/$defs/sha256" },
+    "patch": { "type": "string" },
+    "patch_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "invariant_pass": { "const": true } },
+        "required": ["invariant_pass"]
+      },
+      "then": {
+        "properties": { "task_pass": { "const": true } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "task_pass": { "const": true } },
+        "required": ["task_pass"]
+      },
+      "then": {
+        "properties": { "checks_pass": { "const": true } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "pair_valid": { "const": true } },
+        "required": ["pair_valid"]
+      },
+      "then": {
+        "properties": { "valid": { "const": true } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "why_followed_companion": { "const": true } },
+        "required": ["why_followed_companion"]
+      },
+      "then": {
+        "properties": { "companion_named_by_change_set": { "const": true } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "valid": { "const": true }, "arm": { "const": "mcp-only" } },
+        "required": ["valid", "arm"]
+      },
+      "then": {
+        "properties": {
+          "activations": { "maxItems": 0 },
+          "skills": { "maxItems": 0 }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "git_oid": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "model_usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "cache_read_input_tokens": { "type": "integer", "minimum": 0 },
+        "cache_creation_input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "cost_usd": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

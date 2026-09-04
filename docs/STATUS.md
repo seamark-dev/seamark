@@ -23,6 +23,7 @@ Local indexing, history mining, orientation, and the read surfaces.
 | Schema versioning, durable-state export/import | working |
 | Health: `seamark status`, `seamark doctor` | working |
 | Agent skills (`skills/`, embedded; `init --skills`) | working; opt-in; installs into `.claude/skills` and `.agents/skills`, reported by `status`/`doctor`; `init --approve-tools` writes the Claude Code allow rules and the Codex per-tool approvals the model-driven path needs, reported by `status`/`doctor`; effect on agent behavior not yet measured (phase 2 benchmark) |
+| Skills workflow benchmark (`make skills-bench`, MCP-only vs MCP + skills; `make skills-activation`) | harness ready; cohort pending; own rows, claims, fingerprint, and report, none shared with the lessons benchmark ([bench/README.md](../bench/README.md)) |
 
 Known limits are documented in the README's *Honest limits*: syntactic
 resolution with labeled confidence, no scope tracking, conservative

@@ -35,6 +35,18 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   Additive, idempotent, previewable with `--print`, and independent of
   `--skills`. `seamark doctor` and `seamark status` report both clients'
   approval configuration.
+- **Skills workflow benchmark harness.** `make skills-bench` runs the paired
+  experiment the skills were waiting for: an MCP-only arm against an MCP +
+  skills arm on co-change variants of the lessons fixtures, whose history
+  carries the trigger and companion files together, with the lessons judges,
+  sandbox, and preflight discipline. Rows record what the transcript proves
+  (`change_set` before the first edit, the companion named and followed,
+  `check` after the last edit, activations, calls, cost) in their own schema
+  and file. `make skills-activation` replays a checked-in prompt set and
+  records which skill loaded. `make skills-bench-report` assesses the frozen
+  `bench/workflow-claims.yaml`, which is committed after calibration and
+  before the cohort. The lessons harness sources, arms, claims, rows, and
+  reports are unchanged. No cohort has run yet; the skills stay opt-in.
 
 ## v0.5.3 — 2026-08-28
 

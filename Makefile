@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -91,6 +91,21 @@ lessons-bench-preflight: build ## Validate every benchmark fixture without buyin
 
 lessons-bench-report: ## Render selected JSONL evidence (BENCH_RESULTS="bench/file.jsonl ..."; stdout by default)
 	go run ./cmd/lessons-bench-report -claims bench/claims.yaml $(BENCH_REPORT_FLAGS) $(BENCH_RESULTS)
+
+# The skills workflow experiment shares the lessons fixtures and plumbing but
+# never a row file, a claim registry, or a fingerprint with the lessons
+# benchmark; see bench/README.md, "Skills workflow benchmark".
+skills-bench: build ## Paired MCP-only vs MCP + skills experiment (costs tokens; BENCH_FLAGS=-dry-run first)
+	go run ./cmd/skills-bench $(BENCH_FLAGS)
+
+skills-bench-preflight: build ## Validate every workflow fixture, its co-change pair, MCP, and arm wiring without buying agent sessions
+	go run ./cmd/skills-bench -instance all -preflight-only -agent "$$(command -v true)" $(BENCH_FLAGS)
+
+skills-bench-report: ## Render workflow JSONL evidence (BENCH_RESULTS="bench/file.jsonl ..."; BENCH_REPORT_FLAGS='-activation bench/activation-results-v1.jsonl')
+	go run ./cmd/skills-bench-report -claims bench/workflow-claims.yaml $(BENCH_REPORT_FLAGS) $(BENCH_RESULTS)
+
+skills-activation: build ## Replay the activation prompt set, one skills-arm session per prompt (costs tokens)
+	go run ./cmd/skills-bench -activation bench/activation/prompts.yaml $(BENCH_FLAGS)
 
 clean: ## Remove build artifacts and the local index
 	rm -rf bin dist .seamark

@@ -60,5 +60,7 @@ the evidence:
 | Policy | Rules evaluated by `gate` and `check`; blocking depends on the enforcement mode. |
 | Lessons | Advice learned from reviews and fixes, shown through hooks, tools, and reports. |
 
-Skills remain opt-in. A planned paired benchmark will compare MCP alone
-with MCP plus skills before a decision about enabling them by default.
+Skills remain opt-in. The paired benchmark that compares MCP alone with
+MCP plus skills is built (`make skills-bench`; protocol in
+[bench/README.md](../bench/README.md)) and its cohort has not run yet. The
+decision about enabling the skills by default waits for its report.
