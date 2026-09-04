@@ -275,9 +275,10 @@ func runSeamarkWithInput(ctx context.Context, bin, dir string, input []byte, arg
 	return stdout.Bytes(), nil
 }
 
-// validateWorkflowWiring asserts both arms carry the sandbox settings and the
-// MCP tool rules, only the skills arm carries the skills and their rules, and
-// neither carries a hook, a lesson, or an MCP registration file.
+// validateWorkflowWiring asserts both arms carry the sandbox settings, the
+// built-in skills switch, and the MCP tool rules, only the skills arm carries
+// the skills and their rules, and neither carries a hook, a lesson, or an MCP
+// registration file.
 func validateWorkflowWiring(only, withSkills string) error {
 	toolRules, err := workflowAllowRules(ArmMCPOnly)
 	if err != nil {
@@ -313,6 +314,17 @@ func validateWorkflowWiring(only, withSkills string) error {
 		for _, rule := range toolRules {
 			if !allow[rule] {
 				return fmt.Errorf("%s settings lack the allow rule %s", arm, rule)
+			}
+		}
+
+		if settings["disableBundledSkills"] != true {
+			return fmt.Errorf("%s settings do not switch off Claude Code's built-in skills", arm)
+		}
+
+		overrides, _ := settings["skillOverrides"].(map[string]any)
+		for name, mode := range builtInSkillOverrides {
+			if overrides[name] != mode {
+				return fmt.Errorf("%s settings lack the %s skill override", arm, name)
 			}
 		}
 

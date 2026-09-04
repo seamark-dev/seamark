@@ -480,7 +480,12 @@ Both arms connect the seamark MCP server from the binary installed inside
 the trial, index the fixture before the session, and approve the five MCP
 tools in `.claude/settings.json` exactly as `seamark init --approve-tools`
 does. They get the lessons sandbox block unchanged, no hook, no lesson file,
-and no `.mcp.json`.
+and no `.mcp.json`. Both arms also switch off Claude Code's own built-in
+skills (`disableBundledSkills: true`, plus a `skillOverrides` entry for the
+`doctor` skill, which ignores the global switch): the CLI ships skills such
+as `code-review` and `verify` that the `Skill` tool would otherwise expose in
+the skills arm alone, and the init record must list nothing but the seamark
+skills an arm installs.
 
 - `mcp-only`: nothing else. The `Skill` tool is not exposed.
 - `mcp-skills`: the three managed skills under `.claude/skills/`, the
@@ -489,7 +494,9 @@ and no `.mcp.json`.
 The agent command is the lessons adapter without `--disable-slash-commands`
 (that flag would hide project skills), with `--tools` extended by the five
 `mcp__seamark__<tool>` names plus `Skill` for the skills arm, and with the
-trial's `--strict-mcp-config --mcp-config` appended by the runner. The
+trial's `--mcp-config <json> --strict-mcp-config` appended by the runner in
+that order, because `--mcp-config` is variadic and the boolean flag stops it
+from swallowing the task prompt that follows. The
 assumption that `--tools` accepts those names and that the init record lists
 them is checked by the first calibration trial, not assumed.
 

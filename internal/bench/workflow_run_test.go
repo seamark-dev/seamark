@@ -173,15 +173,17 @@ func TestRunWorkflowPairsArmsAndReadsTheTrace(t *testing.T) {
 	assert.Empty(t, only.Skills)
 
 	// The runner appended the trial's MCP configuration and the task last.
+	// The boolean flag must sit between the variadic --mcp-config and the
+	// prompt, or the Claude CLI reads the prompt as a second configuration.
 	argv, err := os.ReadFile(filepath.Join(work, "mcp-skills-01", "argv.txt"))
 	require.NoError(t, err)
 	args := strings.Split(strings.TrimSpace(string(argv)), "\n")
 	require.GreaterOrEqual(t, len(args), 3)
-	assert.Equal(t, "--strict-mcp-config", args[0])
-	assert.Equal(t, "--mcp-config", args[1])
-	assert.Contains(t, args[2], `"command":"/opt/seamark/bin/seamark"`)
-	assert.Contains(t, args[2], `"-C"`)
-	assert.Contains(t, args[2], `"mcp"`)
+	assert.Equal(t, "--mcp-config", args[0])
+	assert.Contains(t, args[1], `"command":"/opt/seamark/bin/seamark"`)
+	assert.Contains(t, args[1], `"-C"`)
+	assert.Contains(t, args[1], `"mcp"`)
+	assert.Equal(t, "--strict-mcp-config", args[2])
 	assert.Equal(t, agentPrompt(SchemaSyncInstance().Task), strings.Join(args[3:], "\n"))
 
 	skillsTally, onlyTally := sum.ByArm[ArmMCPSkills], sum.ByArm[ArmMCPOnly]
@@ -232,13 +234,20 @@ func TestWireWorkflowArmsInstallExactlyTheirCondition(t *testing.T) {
 		assert.NoFileExists(t, filepath.Join(dir, ".seamark", "lessons.yaml"))
 		assert.NoFileExists(t, filepath.Join(dir, ".mcp.json"))
 
+		// Claude Code's built-in skills are off in both arms, so the init
+		// record can list only the seamark skills.
+		assert.Equal(t, true, settings["disableBundledSkills"])
+		assert.Equal(t, map[string]any{"doctor": "off"}, settings["skillOverrides"])
+
 		// The sandbox block is the lessons writer's own output.
 		lessons := filepath.Join(t.TempDir(), "lessons")
 		require.NoError(t, writeAgentSettings(lessons, "", ""))
 		expected, err := readTrialSettings(lessons)
 		require.NoError(t, err)
-		delete(settings, "permissions")
-		delete(expected, "permissions")
+		for _, key := range []string{"permissions", "disableBundledSkills", "skillOverrides"} {
+			delete(settings, key)
+			delete(expected, key)
+		}
 		assert.Equal(t, expected, settings)
 
 		exclude, err := os.ReadFile(filepath.Join(dir, ".git", "info", "exclude"))

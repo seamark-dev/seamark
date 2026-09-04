@@ -45,8 +45,10 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   and file. `make skills-activation` replays a checked-in prompt set and
   records which skill loaded. `make skills-bench-report` assesses the frozen
   `bench/workflow-claims.yaml`, which is committed after calibration and
-  before the cohort. The lessons harness sources, arms, claims, rows, and
-  reports are unchanged. No cohort has run yet; the skills stay opt-in.
+  before the cohort. Both arms switch off Claude Code's built-in skills, so
+  a row proves that only the seamark skills were loaded. The lessons harness
+  sources, arms, claims, rows, and reports are unchanged. No cohort has run
+  yet; the skills stay opt-in.
 
 ## v0.5.3 — 2026-08-28
 

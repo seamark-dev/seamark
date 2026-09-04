@@ -826,8 +826,11 @@ func saveSessionArtifacts(transcriptDir, base string, stdout, stderr []byte) (tr
 // --strict-mcp-config keeps the operator's own MCP servers out of the
 // session; the configuration names the seamark binary installed inside the
 // trial, so the agent never executes a binary from the host workspace.
+// --mcp-config takes a variadic list, so it comes first and the boolean
+// --strict-mcp-config closes the list. Otherwise the task prompt, which the
+// runner appends last, would be read as a second configuration file.
 func trialAgentArgv(argv []string, bin, dir string) []string {
-	return append(slices.Clone(argv), "--strict-mcp-config", "--mcp-config", trialMCPConfig(bin, dir))
+	return append(slices.Clone(argv), "--mcp-config", trialMCPConfig(bin, dir), "--strict-mcp-config")
 }
 
 // trialMCPConfig renders the MCP server entry for one trial. The workspace
@@ -929,6 +932,11 @@ func workflowAllowRules(arm WorkflowArm) ([]string, error) {
 	return toolRules, nil
 }
 
+// builtInSkillOverrides switches off the one Claude Code built-in skill that
+// the disableBundledSkills setting leaves in the init record. Both arms carry
+// it, so the record can list only the seamark skills the arm installs.
+var builtInSkillOverrides = map[string]any{"doctor": "off"}
+
 // writeWorkflowSettings writes the lessons harness's strict runtime settings
 // and adds the allow rules. The base document comes from the lessons writer,
 // so the sandbox block stays identical to the lessons arms by construction.
@@ -955,6 +963,13 @@ func writeWorkflowSettings(dir string, rules []string) error {
 
 	permissions["allow"] = rules
 	settings["permissions"] = permissions
+
+	// Claude Code ships its own skills (code-review, verify, and more) with
+	// the CLI. Both arms switch them off, so the arms differ only in the
+	// seamark skills and the init record lists nothing else. The doctor
+	// skill ignores the global switch and needs its own override.
+	settings["disableBundledSkills"] = true
+	settings["skillOverrides"] = builtInSkillOverrides
 
 	data, err = json.MarshalIndent(settings, "", "  ")
 	if err != nil {

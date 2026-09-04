@@ -2,6 +2,7 @@ package bench
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -120,6 +121,12 @@ func TestValidateWorkflowWiringNamesTheDefect(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, writeWorkflowSettings(withSkills, rules))
 		}, "lack the allow rule Skill("},
+		{"built-in skills on", func(t *testing.T, only, _ string) {
+			dropSetting(t, only, "disableBundledSkills")
+		}, "do not switch off Claude Code's built-in skills"},
+		{"doctor override missing", func(t *testing.T, _, withSkills string) {
+			dropSetting(t, withSkills, "skillOverrides")
+		}, "lack the doctor skill override"},
 	}
 
 	for _, tc := range cases {
@@ -132,4 +139,18 @@ func TestValidateWorkflowWiringNamesTheDefect(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.want)
 		})
 	}
+}
+
+// dropSetting removes one top-level key from a trial's settings file, so a
+// test can prove preflight notices the missing wiring.
+func dropSetting(t *testing.T, dir, key string) {
+	t.Helper()
+
+	settings, err := readTrialSettings(dir)
+	require.NoError(t, err)
+	delete(settings, key)
+
+	data, err := json.Marshal(settings)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), data, 0o644))
 }

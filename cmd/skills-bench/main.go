@@ -44,7 +44,7 @@ func main() {
 	flag.StringVar(&opts.out, "out", "",
 		"results file, one JSONL row per session (appended); default "+defaultWorkflowOut+", or "+defaultActivationOut+" with -activation")
 	flag.StringVar(&opts.transcripts, "transcripts", "bench/transcripts", "directory for per-session agent transcripts; empty disables")
-	flag.StringVar(&opts.agent, "agent", "", "custom agent command (space-split); bypasses Claude runtime validation; receives --strict-mcp-config, --mcp-config, and --max-turns like Claude")
+	flag.StringVar(&opts.agent, "agent", "", "custom agent command (space-split); bypasses Claude runtime validation; receives --mcp-config, --strict-mcp-config, and --max-turns like Claude")
 	flag.StringVar(&opts.model, "model", "", "exact Claude model ID (required with the default agent; aliases are refused)")
 	flag.StringVar(&opts.effort, "effort", "medium", "pinned Claude effort level")
 	flag.Float64Var(&opts.maxBudgetUSD, "max-budget-usd", 1, "hard provider cost cap per agent session")
