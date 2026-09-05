@@ -46,7 +46,10 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   records which skill loaded. `make skills-bench-report` assesses the frozen
   `bench/workflow-claims.yaml`, which is committed after calibration and
   before the cohort. Both arms switch off Claude Code's built-in skills, so
-  a row proves that only the seamark skills were loaded. The lessons harness
+  a row proves that only the seamark skills were loaded, and the runner
+  passes the trial's settings file with `--settings`, because Claude Code
+  ignores project allow rules in an untrusted workspace; a refused seamark
+  or `Skill` call now invalidates the row. The lessons harness
   sources, arms, claims, rows, and reports are unchanged. No cohort has run
   yet; the skills stay opt-in.
 

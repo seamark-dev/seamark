@@ -160,7 +160,8 @@ func TestRunActivationReplaysThePromptSet(t *testing.T) {
 	assert.Equal(t, ActivationPrepareNaive, byID["review-diff"].Prepare)
 
 	// The naive patch reached the review session's tree, and --max-turns
-	// reached the agent after the trial's MCP configuration.
+	// reached the agent after the trial's MCP configuration and settings
+	// file.
 	schema, err := os.ReadFile(filepath.Join(work, "activation-review-diff", "server", "schema.py"))
 	require.NoError(t, err)
 	assert.Contains(t, string(schema), "billingCurrency")
@@ -168,8 +169,10 @@ func TestRunActivationReplaysThePromptSet(t *testing.T) {
 	argv, err := os.ReadFile(filepath.Join(work, "activation-typo", "argv.txt"))
 	require.NoError(t, err)
 	args := strings.Split(strings.TrimSpace(string(argv)), "\n")
-	assert.Equal(t, []string{"--max-turns", "8"}, args[3:5])
-	assert.Equal(t, agentPrompt("Fix the typo in README.md."), strings.Join(args[5:], "\n"))
+	assert.Equal(t, "--settings", args[2])
+	assert.Equal(t, "--strict-mcp-config", args[4])
+	assert.Equal(t, []string{"--max-turns", "8"}, args[5:7])
+	assert.Equal(t, agentPrompt("Fix the typo in README.md."), strings.Join(args[7:], "\n"))
 
 	lines := strings.Join(sum.Lines(), "\n")
 	assert.Contains(t, lines, "activation — 4 valid session(s), 0 invalid")

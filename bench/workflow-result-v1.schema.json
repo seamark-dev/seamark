@@ -71,6 +71,7 @@
     },
     "skills": { "type": "array", "items": { "type": "string" } },
     "plugins": { "type": "array", "items": { "type": "string" } },
+    "denied_tools": { "type": "array", "items": { "type": "string", "minLength": 1 } },
     "change_set_before_first_edit": { "type": "boolean" },
     "change_set_files": { "type": "array", "items": { "type": "string" } },
     "companion_named_by_change_set": { "type": "boolean" },

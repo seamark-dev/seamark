@@ -163,6 +163,10 @@ type WorkflowRow struct {
 	MCPServers []MCPServerState `json:"mcp_servers,omitempty"`
 	Skills     []string         `json:"skills,omitempty"`
 	Plugins    []string         `json:"plugins,omitempty"`
+	// DeniedTools lists the tools the agent asked for and was refused, from
+	// the result record. A refused seamark tool or Skill tool means the arm's
+	// approvals were not in effect, so the row is invalid.
+	DeniedTools []string `json:"denied_tools,omitempty"`
 
 	WorkflowTrace
 
@@ -822,15 +826,22 @@ func saveSessionArtifacts(transcriptDir, base string, stdout, stderr []byte) (tr
 	return transcript, transcriptSHA, stderrLog, stderrSHA, nil
 }
 
-// trialAgentArgv appends the trial's MCP configuration to the arm's command.
-// --strict-mcp-config keeps the operator's own MCP servers out of the
-// session; the configuration names the seamark binary installed inside the
-// trial, so the agent never executes a binary from the host workspace.
+// trialAgentArgv appends the trial's MCP configuration and settings file to
+// the arm's command. --strict-mcp-config keeps the operator's own MCP
+// servers out of the session; the configuration names the seamark binary
+// installed inside the trial, so the agent never executes a binary from the
+// host workspace. --settings loads the trial's own .claude/settings.json a
+// second time, explicitly: Claude Code ignores the permissions.allow rules
+// of a project settings file in a workspace nobody has trusted, and a fresh
+// trial directory is never trusted. The file is the one seamark init
+// --approve-tools writes, so the measured setup stays the product's.
 // --mcp-config takes a variadic list, so it comes first and the boolean
-// --strict-mcp-config closes the list. Otherwise the task prompt, which the
-// runner appends last, would be read as a second configuration file.
+// --strict-mcp-config closes the command. Otherwise the task prompt, which
+// the runner appends last, would be read as a second configuration file.
 func trialAgentArgv(argv []string, bin, dir string) []string {
-	return append(slices.Clone(argv), "--mcp-config", trialMCPConfig(bin, dir), "--strict-mcp-config")
+	settings := filepath.Join(dir, ".claude", "settings.json")
+
+	return append(slices.Clone(argv), "--mcp-config", trialMCPConfig(bin, dir), "--settings", settings, "--strict-mcp-config")
 }
 
 // trialMCPConfig renders the MCP server entry for one trial. The workspace
@@ -1019,6 +1030,8 @@ type agentSession struct {
 	MCPServers []MCPServerState
 	Skills     []string
 	Plugins    []string
+	// DeniedTools are the tool names in the result's permission_denials.
+	DeniedTools []string
 
 	ResultSeen            bool
 	Usage                 AgentUsage
@@ -1052,6 +1065,7 @@ func readAgentSession(stdout []byte) agentSession {
 				parseRateLimit([]byte(line), &scratch)
 			case "result":
 				parseResult([]byte(line), &scratch)
+				parseWorkflowDenials([]byte(line), &session)
 			}
 		}
 	}
@@ -1092,6 +1106,7 @@ func (s agentSession) apply(row *WorkflowRow) {
 	row.MCPServers = s.MCPServers
 	row.Skills = s.Skills
 	row.Plugins = s.Plugins
+	row.DeniedTools = s.DeniedTools
 	row.ResultSeen = s.ResultSeen
 
 	requested, exit, timedOut := row.RequestedModel, row.AgentExit, row.TimedOut
@@ -1131,6 +1146,29 @@ func (e *initEntry) UnmarshalJSON(data []byte) error {
 	e.Name, e.Status = object.Name, object.Status
 
 	return nil
+}
+
+// parseWorkflowDenials reads the tool names the agent was refused from the
+// result record. The lessons parser keeps only their count; the workflow
+// validator needs the names to tell a refused seamark tool from a refused
+// WebFetch, which is a measured outcome.
+func parseWorkflowDenials(line []byte, session *agentSession) {
+	var result struct {
+		Type    string `json:"type"`
+		Denials []struct {
+			ToolName string `json:"tool_name"`
+		} `json:"permission_denials"`
+	}
+
+	if json.Unmarshal(line, &result) != nil || result.Type != "result" {
+		return
+	}
+
+	for _, denial := range result.Denials {
+		if denial.ToolName != "" && !slices.Contains(session.DeniedTools, denial.ToolName) {
+			session.DeniedTools = append(session.DeniedTools, denial.ToolName)
+		}
+	}
 }
 
 func parseWorkflowInit(line []byte, session *agentSession) {
@@ -1177,6 +1215,15 @@ func validateWorkflowSession(cfg WorkflowConfig, arm WorkflowArm, row *WorkflowR
 	if cfg.RequireExpectedInit {
 		if reason := unexpectedInit(arm, row); reason != "" {
 			invalidateWorkflowRow(row, reason)
+
+			return
+		}
+
+		// Claude Code ignores project allow rules in a workspace nobody has
+		// trusted, and a headless session cannot answer a prompt. A refused
+		// seamark or Skill call therefore means the arm was not delivered.
+		if tool := deniedArmTool(row.DeniedTools); tool != "" {
+			invalidateWorkflowRow(row, "agent was denied "+tool+": the allow rules were not in effect")
 
 			return
 		}
@@ -1231,6 +1278,19 @@ func unexpectedInit(arm WorkflowArm, row *WorkflowRow) string {
 	}
 
 	return setDifference("skill", expectedSkills, row.Skills)
+}
+
+// deniedArmTool returns the first refused tool that belongs to an arm's
+// condition: a seamark MCP tool or the Skill tool. Other refusals, such as
+// WebFetch, are the agent's own choices and stay measured outcomes.
+func deniedArmTool(denied []string) string {
+	for _, tool := range denied {
+		if tool == "Skill" || strings.HasPrefix(tool, "mcp__seamark__") {
+			return tool
+		}
+	}
+
+	return ""
 }
 
 // setDifference names the first extra or missing element between the

@@ -172,19 +172,22 @@ func TestRunWorkflowPairsArmsAndReadsTheTrace(t *testing.T) {
 	assert.Empty(t, only.Activations)
 	assert.Empty(t, only.Skills)
 
-	// The runner appended the trial's MCP configuration and the task last.
-	// The boolean flag must sit between the variadic --mcp-config and the
-	// prompt, or the Claude CLI reads the prompt as a second configuration.
+	// The runner appended the trial's MCP configuration, its settings file,
+	// and the task last. The boolean flag must sit between the variadic
+	// --mcp-config and the prompt, or the Claude CLI reads the prompt as a
+	// second configuration.
 	argv, err := os.ReadFile(filepath.Join(work, "mcp-skills-01", "argv.txt"))
 	require.NoError(t, err)
 	args := strings.Split(strings.TrimSpace(string(argv)), "\n")
-	require.GreaterOrEqual(t, len(args), 3)
+	require.GreaterOrEqual(t, len(args), 5)
 	assert.Equal(t, "--mcp-config", args[0])
 	assert.Contains(t, args[1], `"command":"/opt/seamark/bin/seamark"`)
 	assert.Contains(t, args[1], `"-C"`)
 	assert.Contains(t, args[1], `"mcp"`)
-	assert.Equal(t, "--strict-mcp-config", args[2])
-	assert.Equal(t, agentPrompt(SchemaSyncInstance().Task), strings.Join(args[3:], "\n"))
+	assert.Equal(t, "--settings", args[2])
+	assert.Equal(t, filepath.Join(work, "mcp-skills-01", ".claude", "settings.json"), args[3])
+	assert.Equal(t, "--strict-mcp-config", args[4])
+	assert.Equal(t, agentPrompt(SchemaSyncInstance().Task), strings.Join(args[5:], "\n"))
 
 	skillsTally, onlyTally := sum.ByArm[ArmMCPSkills], sum.ByArm[ArmMCPOnly]
 	assert.Equal(t, 1, skillsTally.Ran)
@@ -328,6 +331,10 @@ func TestValidateWorkflowSessionRejectsUndeliveredArms(t *testing.T) {
 		{"foreign skill", ArmMCPSkills, func(r *WorkflowRow) { r.Skills = append(r.Skills, "my-skill") }, "unexpected skill loaded: my-skill"},
 		{"no result", ArmMCPSkills, func(r *WorkflowRow) { r.ResultSeen = false }, "no structured result"},
 		{"model", ArmMCPSkills, func(r *WorkflowRow) { r.Model = "claude-other" }, "requested model"},
+		{"seamark tool denied", ArmMCPOnly, func(r *WorkflowRow) {
+			r.DeniedTools = []string{"WebFetch", "mcp__seamark__orient"}
+		}, "denied mcp__seamark__orient: the allow rules were not in effect"},
+		{"skill tool denied", ArmMCPSkills, func(r *WorkflowRow) { r.DeniedTools = []string{"Skill"} }, "denied Skill"},
 	}
 
 	for _, tc := range cases {
@@ -341,6 +348,13 @@ func TestValidateWorkflowSessionRejectsUndeliveredArms(t *testing.T) {
 			assert.Contains(t, row.InvalidReason, tc.want)
 		})
 	}
+
+	t.Run("a refused WebFetch is a measured outcome", func(t *testing.T) {
+		row := valid(ArmMCPOnly)
+		row.DeniedTools = []string{"WebFetch"}
+		validateWorkflowSession(cfg, ArmMCPOnly, &row)
+		assert.True(t, row.Valid)
+	})
 
 	t.Run("timeout keeps a row without result valid", func(t *testing.T) {
 		row := valid(ArmMCPOnly)
@@ -594,4 +608,23 @@ func TestWorkflowFingerprintSourceBoundary(t *testing.T) {
 	lessonsSHA, err := fingerprintHarnessSources()
 	require.NoError(t, err)
 	assert.True(t, validSHA256(lessonsSHA))
+}
+
+// TestReadAgentSessionRecordsDeniedTools proves the result record's
+// permission_denials reach the row by name, once each, so the validator can
+// tell a refused seamark tool from a refused WebFetch.
+func TestReadAgentSessionRecordsDeniedTools(t *testing.T) {
+	stdout := []byte(`{"type":"system","subtype":"init","model":"claude-test","tools":["Read"],"mcp_servers":[{"name":"seamark","status":"connected"}],"skills":[],"plugins":[]}
+{"type":"result","subtype":"success","is_error":false,"num_turns":3,"total_cost_usd":0.01,"permission_denials":[{"tool_name":"mcp__seamark__orient","tool_use_id":"a","tool_input":{}},{"tool_name":"mcp__seamark__orient","tool_use_id":"b","tool_input":{}},{"tool_name":"WebFetch","tool_use_id":"c","tool_input":{}}]}
+`)
+
+	session := readAgentSession(stdout)
+	assert.Equal(t, []string{"mcp__seamark__orient", "WebFetch"}, session.DeniedTools)
+
+	var row WorkflowRow
+	session.apply(&row)
+	assert.Equal(t, []string{"mcp__seamark__orient", "WebFetch"}, row.DeniedTools)
+	assert.Equal(t, 3, row.PermissionDenials)
+	assert.Equal(t, "mcp__seamark__orient", deniedArmTool(row.DeniedTools))
+	assert.Empty(t, deniedArmTool([]string{"WebFetch"}))
 }

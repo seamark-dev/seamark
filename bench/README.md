@@ -494,9 +494,18 @@ skills an arm installs.
 The agent command is the lessons adapter without `--disable-slash-commands`
 (that flag would hide project skills), with `--tools` extended by the five
 `mcp__seamark__<tool>` names plus `Skill` for the skills arm, and with the
-trial's `--mcp-config <json> --strict-mcp-config` appended by the runner in
-that order, because `--mcp-config` is variadic and the boolean flag stops it
-from swallowing the task prompt that follows. The
+trial's `--mcp-config <json> --settings <trial>/.claude/settings.json
+--strict-mcp-config` appended by the runner in that order, because
+`--mcp-config` is variadic and the boolean flag stops it from swallowing the
+task prompt that follows. The `--settings` flag loads the trial's own
+settings file a second time, explicitly: Claude Code ignores the
+`permissions.allow` rules of a project settings file in a workspace nobody
+has trusted (it says so on stderr), and a fresh trial directory is never
+trusted. The first cohort attempt ran without it, and every seamark call in
+all twelve sessions was refused; the rows looked valid because the refusal
+is a tool result, not an init fact. Now the result record's
+`permission_denials` are read by name, and a refused seamark tool or `Skill`
+tool invalidates the row. The
 assumption that `--tools` accepts those names and that the init record lists
 them is checked by the first calibration trial, not assumed.
 
@@ -537,8 +546,10 @@ what changed.
 A row is invalid when the init record lacks the arm's exact tool set, the
 `seamark` MCP server in the connected state, or (skills arm) exactly the
 three skills; when it lists a plugin; when the model differs from the
-requested one; or when the session ended without a structured result before
-its deadline. Provider errors stop the run before the next paid session, as
+requested one; when the agent was refused a seamark tool or the `Skill` tool
+(`denied_tools` keeps every refused name; a refused `WebFetch` stays a
+measured outcome); or when the session ended without a structured result
+before its deadline. Provider errors stop the run before the next paid session, as
 in the lessons harness. Only rows with `valid` and `pair_valid` enter the
 tallies.
 
