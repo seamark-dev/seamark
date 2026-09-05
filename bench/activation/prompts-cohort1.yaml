@@ -31,16 +31,6 @@ prompts:
     expect: seamark-plan-change
     note: A rename that spans files and an unfamiliar area; the companion client is the trap.
 
-  - id: plan-task-minimal
-    prompt: Expose each workspace's billing currency in `GET /api/workspaces/{id}` responses. Return it as `billingCurrency`, sourced from `Workspace.billing_currency`. Keep the change minimal and add or update tests as appropriate.
-    expect: seamark-plan-change
-    note: The cohort task verbatim, with "keep the change minimal"; the first cohort activated the plan skill in fewer than half of these sessions.
-
-  - id: plan-task-timezone
-    prompt: Add the workspace timezone to the workspace summary API response as timezone, from Workspace.timezone. Keep it small, and update tests if needed.
-    expect: seamark-plan-change
-    note: Task-shaped phrasing with a different field and a softer "keep it small"; the same multi-file shape.
-
   - id: review-before-commit
     prompt: I added billingCurrency to the workspace summary response in server/schema.py and server/presenters.py. Am I missing anything before I commit?
     expect: seamark-review-change
@@ -52,12 +42,6 @@ prompts:
     expect: seamark-review-change
     prepare: naive
     note: Review of an existing diff without naming the files; the skill must recognize the intent.
-
-  - id: review-task-handover
-    prompt: The billingCurrency change is done and the backend tests pass. Anything else before I hand it over? Keep the answer short.
-    expect: seamark-review-change
-    prepare: naive
-    note: A hand-over question in task language, without "review" or "commit"; the diff still lacks the generated client.
 
   - id: typo-readme
     prompt: In README.md, change "public schema descriptions" to "public schema definitions". Nothing else.

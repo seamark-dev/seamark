@@ -188,8 +188,12 @@ func validateTrace(row WorkflowRow) error {
 		return fmt.Errorf("change_set_files requires a change_set call")
 	case row.CompanionNamedByChangeSet && changeSets == 0:
 		return fmt.Errorf("companion_named_by_change_set requires a change_set call")
-	case row.WhyFollowedCompanion && (!row.CompanionNamedByChangeSet || whys == 0):
+	case row.CompanionNamedByCheck && checks == 0:
+		return fmt.Errorf("companion_named_by_check requires a check call")
+	case row.WhyFollowedCompanion && (!row.CompanionNamedByChangeSet && !row.CompanionNamedByCheck || whys == 0):
 		return fmt.Errorf("why_followed_companion requires a named companion and a why call")
+	case row.CompanionOpenedAfterNamed && !row.CompanionNamedByChangeSet && !row.CompanionNamedByCheck:
+		return fmt.Errorf("companion_opened_after_named requires a named companion")
 	case row.CheckAfterLastEdit && checks == 0:
 		return fmt.Errorf("check_after_last_edit requires a check call")
 	case row.CheckVerdict != "" && checks == 0:

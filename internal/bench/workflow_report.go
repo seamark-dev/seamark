@@ -20,6 +20,8 @@ type WorkflowArmReport struct {
 	InvariantPass  int
 	ChangeSetFirst int
 	CompanionNamed int
+	NamedByCheck   int
+	Opened         int
 	WhyFollowed    int
 	CheckLast      int
 	SeamarkCalls   int
@@ -427,6 +429,14 @@ func accumulateWorkflowArm(arm *WorkflowArmReport, row WorkflowRow) {
 		arm.CompanionNamed++
 	}
 
+	if row.CompanionNamedByCheck {
+		arm.NamedByCheck++
+	}
+
+	if row.CompanionOpenedAfterNamed {
+		arm.Opened++
+	}
+
 	if row.WhyFollowedCompanion {
 		arm.WhyFollowed++
 	}
@@ -720,18 +730,20 @@ func (r WorkflowReport) Markdown() string {
 
 	out.WriteString("\n### Process rates\n\n")
 	out.WriteString("Rates are over valid paired trials per arm. They are recorded beside the claim and never decide it.\n\n")
-	out.WriteString("| Instance | Arm | change_set before first edit | Companion named | why followed companion | check after last edit | Seamark calls per trial | Activations |\n")
-	out.WriteString("|---|---|---:|---:|---:|---:|---:|---|\n")
+	out.WriteString("| Instance | Arm | change_set before first edit | Companion named | Named by check | Companion opened | why followed companion | check after last edit | Seamark calls per trial | Activations |\n")
+	out.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n")
 
 	for _, cohort := range r.Cohorts {
 		for _, entry := range []struct {
 			arm    WorkflowArm
 			report WorkflowArmReport
 		}{{ArmMCPSkills, cohort.Skills}, {ArmMCPOnly, cohort.Only}} {
-			fmt.Fprintf(&out, "| %s | %s | %s | %s | %s | %s | %s | %s |\n",
+			fmt.Fprintf(&out, "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 				tableCell(cohort.Instance), entry.arm,
 				rate(entry.report.ChangeSetFirst, entry.report.Valid),
 				rate(entry.report.CompanionNamed, entry.report.Valid),
+				rate(entry.report.NamedByCheck, entry.report.Valid),
+				rate(entry.report.Opened, entry.report.Valid),
 				rate(entry.report.WhyFollowed, entry.report.Valid),
 				rate(entry.report.CheckLast, entry.report.Valid),
 				perTrial(entry.report.SeamarkCalls, entry.report.Valid),

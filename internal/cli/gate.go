@@ -208,7 +208,9 @@ Policy rules over diff.* decide the verdict.`,
 			}
 
 			if !asJSON {
-				report.CheckAdvisory(cmd.OutOrStdout(), st, root, gate.ChangedPaths(diffText))
+				changed := gate.ChangedPaths(diffText)
+				report.CheckCompanions(cmd.OutOrStdout(), st, root, changed)
+				report.CheckAdvisory(cmd.OutOrStdout(), st, root, changed)
 			}
 
 			return renderErr

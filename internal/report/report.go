@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/confidence"
-	"github.com/seamark-dev/seamark/internal/fixes"
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/outcome"
@@ -237,7 +236,7 @@ func FixCount(decisions []model.Decision) int {
 		// Body too, not just the title: mining classifies on both, and
 		// a "harden worker" commit whose body says "Fixes #12" is a
 		// fix finding — the density must count the same commits.
-		if d.Kind == model.DecisionRevert || fixes.Classify(d.Title, d.Body) != "" {
+		if isFix(d) {
 			n++
 		}
 	}

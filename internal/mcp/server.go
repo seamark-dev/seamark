@@ -365,7 +365,13 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (string, error){
 
 			var b bytes.Buffer
 			report.Decision(&b, decision)
-			report.CheckAdvisory(&b, st, s.root, gate.ChangedPaths(p.Diff))
+
+			// Companions before lessons: the forgotten file is the omission
+			// a review most often misses, and the lessons block is budgeted
+			// and may be long.
+			changed := gate.ChangedPaths(p.Diff)
+			report.CheckCompanions(&b, st, s.root, changed)
+			report.CheckAdvisory(&b, st, s.root, changed)
 
 			return b.String(), nil
 		})

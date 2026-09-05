@@ -505,7 +505,9 @@ trusted. The first cohort attempt ran without it, and every seamark call in
 all twelve sessions was refused; the rows looked valid because the refusal
 is a tool result, not an init fact. Now the result record's
 `permission_denials` are read by name, and a refused seamark tool or `Skill`
-tool invalidates the row. The
+tool invalidates the row. Both arms see the same `change_set` and `check`
+output, companions with their reasons included; the skills decide only
+whether and how the agent asks. The
 assumption that `--tools` accepts those names and that the init record lists
 them is checked by the first calibration trial, not assumed.
 
@@ -522,10 +524,30 @@ variants that end at the same tree as their base and differ only in history:
 | `python-cache-version-cochange-v1` | `server/presenters.py` | `server/cache.py` |
 | `go-export-registry-cochange-v1` | `internal/export/preview.go` | `internal/worker/registry.go` |
 
-Each variant grows its API in two feature commits that change the trigger
-and the companion together, keeps the backend-only mistake and its fix
-commit, and ends at exactly the base fixture's tree, so the base task,
-judges, patches, and checks apply unchanged. The pinned OpenTelemetry task
+Each variant writes twelve commits: four that change the trigger and the
+companion together (a feature added, a field exposed and later withdrawn,
+another feature), two that add the tests for those changes on their own,
+the backend-only mistake and its fix commit, and three unrelated commits so
+the window is not only the pair. It ends at exactly the base fixture's
+tree, so the base task, judges, patches, and checks apply unchanged. The
+histories were reworked after the first cohort: they had carried the pair
+in exactly two commits, the mining floor, which put the companion at the
+bottom of every co-change list, tied with or below the test files the agent
+edits anyway, and the agents read it as noise. Now the companion shares
+four commits with the trigger at lift 1.9, above every file the task does
+not plan; preflight and the fixture tests enforce that ordering against the
+naive patch's files. The cache-version fix commit also says what it fixes
+(`fix: version the summary cache namespace so shape changes evict old
+entries`), because that subject is what `change_set` quotes as the
+companion's reason.
+
+`python-ts-schema-sync-cochange-v1` is a discoverability control as much as
+a treatment instance: its Makefile has a `sync-api` target and the generated
+client says `DO NOT EDIT` in its first line, so an agent that greps for the
+new field finds the companion without history. In the first cohort the
+MCP-only arm reached 4/5 that way. The variant cannot drop those files
+without leaving the base tree, so the instance stays and its result reads
+as "no harm", not as headroom. The pinned OpenTelemetry task
 is not a workflow instance: its prepared checkout is a single-commit clone
 with no history, so no co-change pair can exist in it and the co-change gate
 refuses it. A public-repository workflow instance would need a deeper clone
@@ -537,9 +559,13 @@ Every row records the init facts (tools, MCP servers with their status,
 skills, plugins), the verdicts and checks, the usage, and a trace read from
 the agent's own tool calls, never from its prose: whether `change_set` ran
 before the first edit and with which files; whether its result named the
-companion the agent had not put in the call; whether `why` followed that
-companion; whether `check` ran after the last edit and what its verdict line
-said; which skills activated; and the seamark-call and edit counts. Edits
+companion the agent had not put in the call; whether a `check` result
+listed the companion under `history suggests also reviewing`; whether the
+agent opened the companion (Read, Edit, Write, or MultiEdit) after either
+tool named it, the step that decided the outcome in the first cohort;
+whether `why` followed that companion; whether `check` ran after the last
+edit and what its verdict line said; which skills activated; and the
+seamark-call and edit counts. Edits
 made through Bash are invisible to the trace; the patch stays the record of
 what changed.
 
@@ -603,7 +629,8 @@ session such as the Codex checklist.
 `workflow-claims.yaml` follows the lessons registry's shape with one
 comparison, `mcp-skills_vs_mcp-only`; the same threshold fields; an optional
 list of recorded process metrics (`change_set_before_first_edit_rate`,
-`companion_named_rate`, `why_followed_companion_rate`,
+`companion_named_rate`, `companion_named_by_check_rate`,
+`companion_opened_rate`, `why_followed_companion_rate`,
 `check_after_last_edit_rate`) that never gate the verdict; and an
 `activation` block with a `minimum_recall` per skill and a
 `maximum_false_activation`. The assessment rule is the lessons rule applied
@@ -654,7 +681,12 @@ skills-arm session per prompt on the instance the file names (the shipped
 set targets `python-ts-schema-sync-cochange-v1`, whose files its prompts
 name; another `-instance` is refused), capped by `-max-turns`. Each prompt
 expects one skill or `none`; a review prompt may ask for the naive patch
-first, so it sees a real diff. Rows go to `bench/activation-results-v1.jsonl`,
+first, so it sees a real diff. The set carries task-shaped prompts beside
+the friendly ones: the cohort task verbatim, with "keep the change minimal",
+a second field in the same shape, and a hand-over question that never says
+review or commit. The first cohort passed a ten-prompt set at 100% recall
+while the task itself activated the plan skill in 7 of 15 sessions; the
+activation rate that matters is the one under the task's wording. Rows go to `bench/activation-results-v1.jsonl`,
 never into a workflow file, and record the activated skills, the hit flag,
 and the usage. The turn cap is part of the fingerprint, and the report
 refuses to pool activation rows from different fingerprints, prompt sets,
@@ -672,6 +704,43 @@ any session is paid for, and an interrupted session is discarded rather than
 recorded.
 Codex activation is recorded by hand in
 `bench/activation/codex-checklist.md`.
+
+### First workflow cohort
+
+The first cohort ran on 2026-09-05 with Seamark `v0.5.4-14-g8f26e70`,
+Claude Haiku 4.5 at medium effort, and five valid pairs per instance; every
+row was valid and no seamark call was refused:
+
+| Instance | MCP + skills invariant | MCP-only invariant | Effect | Approx. 95% interval | Mean context skills/only |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `python-ts-schema-sync-cochange-v1` | 4/5 | 4/5 | +0 pp | -45 to +45 pp | 367k / 237k |
+| `python-cache-version-cochange-v1` | 0/5 | 0/5 | +0 pp | -43 to +43 pp | 243k / 232k |
+| `go-export-registry-cochange-v1` | 1/5 | 0/5 | +20 pp | -26 to +62 pp | 316k / 217k |
+
+The mean effect of +6.7 pp fails the frozen +30 pp claim; all 30 sessions
+completed the task. The activation set passed at 2/2 recall per skill and
+0/4 false activations. The raw rows and the generated assessment are in
+[`workflow-results-v1.jsonl`](workflow-results-v1.jsonl),
+[`activation-results-v1.jsonl`](activation-results-v1.jsonl), and
+[`skills-report-v1.md`](skills-report-v1.md). The activation rows were
+measured against the ten-prompt manifest of that day, kept as
+[`activation/prompts-cohort1.yaml`](activation/prompts-cohort1.yaml); pass
+it with `-prompts` to re-render that report, because the report refuses
+rows measured against another manifest.
+
+The transcripts locate the loss in a chain. The plan skill activated in
+7 of 15 skills-arm sessions; the task says "keep the change minimal" and
+the activation prompts did not. When it activated, `change_set` named the
+companion every time, but as the weakest line, two of six commits at lift
+1.3 below the test files, and the agents opened it in 6 of 7 sessions and
+acted on it in 5. Nobody called `why` on the companion in any of the 30
+sessions, although `why` is where the fix commit that explains it lives.
+`check` ran in 5 sessions and could not name the companion, because it had
+no co-change section. The MCP-only arm solved schema-sync 4/5 through the
+Makefile alone. Those findings are why the fixtures, the skills, the
+activation set, `change_set`, and `check` changed before the second cohort;
+that cohort runs on a new fingerprint and a new claim registry, and this
+one stays as the baseline it measured.
 
 ## Artifact policy
 

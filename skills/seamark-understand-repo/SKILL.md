@@ -34,9 +34,7 @@ Never call `orient` because Seamark exists. Call it once, when the repository or
 
 ## If the Seamark MCP tools are not available
 
-- `seamark orient` replaces `orient`; `seamark why <symbol|file>` replaces `why`; `seamark status` shows coverage and resolution confidence.
-- There is no command-line `expand`; read the file range directly. `seamark lessons --file <path>` shows the lessons for one file, and `seamark lessons --region <dir>` shows an area's raw findings in place of `expand lessons:<dir>`.
-- The command line prints a staleness note when the workspace changed since the last index; trust the note. Do not run `seamark index` on your own initiative unless a command reports that the index is missing, because the MCP tools self-repair the index on every call and never need it.
+The same index answers from the command line; the equivalents are listed in [references/interpreting-seamark.md](references/interpreting-seamark.md). Do not run `seamark index` on your own initiative unless a command reports that the index is missing, because the MCP tools self-repair the index on every call and never need it.
 
 ## Reading the output
 

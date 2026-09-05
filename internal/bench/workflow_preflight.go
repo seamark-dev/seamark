@@ -120,7 +120,54 @@ func cochangeGate(ctx context.Context, bin, dir string, instance WorkflowInstanc
 			instance.Trigger, instance.Companion, shared, workflowMinSharedCommits)
 	}
 
+	// The companion must be the strongest partner among the files the task
+	// does not plan. The first cohort ran on histories where it was the
+	// weakest line, tied with test files the agent edits anyway, and the
+	// agents read it as noise. The naive patch names the planned files.
+	if err := instance.ApplyNaive(dir); err != nil {
+		return fmt.Errorf("apply naive patch: %w", err)
+	}
+
+	planned, err := workingTreeChanges(ctx, dir)
+	if err != nil {
+		return err
+	}
+
+	for file, count := range partners {
+		if file == instance.Companion || planned[file] {
+			continue
+		}
+
+		if count > shared {
+			return fmt.Errorf("`why %s` lists %s with %d shared commits above the companion %s with %d; the history does not make the companion the strongest unplanned partner",
+				instance.Trigger, file, count, instance.Companion, shared)
+		}
+	}
+
 	return nil
+}
+
+// workingTreeChanges lists the repository-relative files the working tree
+// changed against HEAD, staged or not.
+func workingTreeChanges(ctx context.Context, dir string) (map[string]bool, error) {
+	setupCtx, cancel := context.WithTimeout(ctx, defaultSetupTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(setupCtx, "git", "-C", dir, "status", "--porcelain", "--untracked-files=all")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git status in fixture: %w", err)
+	}
+
+	changed := map[string]bool{}
+
+	for line := range strings.SplitSeq(string(out), "\n") {
+		if len(line) > 3 {
+			changed[strings.TrimSpace(line[3:])] = true
+		}
+	}
+
+	return changed, nil
 }
 
 // whyPartnerLine matches one line of the "usually changed with" section:

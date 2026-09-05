@@ -21,11 +21,21 @@ type WorkflowTrace struct {
 	// CompanionNamedByChangeSet is true when a change_set result named the
 	// companion file that the agent had not put in the call itself.
 	CompanionNamedByChangeSet bool `json:"companion_named_by_change_set"`
+	// CompanionNamedByCheck is true when a check result listed the companion
+	// under "history suggests also reviewing": the diff left it out and
+	// history named it. The unindexed-files note also quotes paths, so only
+	// that section counts.
+	CompanionNamedByCheck bool `json:"companion_named_by_check"`
 	// WhyFollowedCompanion is true when a why call whose query is the
-	// companion path followed the change_set that named it. A query by
-	// symbol or by bare file name does not count; the rule is the same in
-	// both arms.
+	// companion path followed the change_set or check that named it. A
+	// query by symbol or by bare file name does not count; the rule is the
+	// same in both arms.
 	WhyFollowedCompanion bool `json:"why_followed_companion"`
+	// CompanionOpenedAfterNamed is true when a Read, Edit, Write, or
+	// MultiEdit on the companion followed the call that named it. The first
+	// cohort showed this is the step that decides the outcome: a named
+	// companion the agent never opened was never acted on.
+	CompanionOpenedAfterNamed bool `json:"companion_opened_after_named"`
 	// CheckAfterLastEdit is true when a check call followed the last edit.
 	CheckAfterLastEdit bool `json:"check_after_last_edit"`
 	// CheckVerdict is the verdict line of the last check result, for
@@ -98,16 +108,25 @@ func parseWorkflowTrace(stdout []byte, companion string) WorkflowTrace {
 
 				if !trace.CompanionNamedByChangeSet && companionNamed(use.result, files, companion) {
 					trace.CompanionNamedByChangeSet = true
-					namedSeq = seq
+					if namedSeq == 0 {
+						namedSeq = seq
+					}
 				}
 			case "why":
-				if trace.CompanionNamedByChangeSet && seq > namedSeq &&
+				if namedSeq > 0 && seq > namedSeq &&
 					samePath(inputString(use.input, "query"), companion) {
 					trace.WhyFollowedCompanion = true
 				}
 			case "check":
 				lastCheck = seq
 				trace.CheckVerdict = verdictLine(use.result)
+
+				if !trace.CompanionNamedByCheck && companionSuggested(use.result, companion) {
+					trace.CompanionNamedByCheck = true
+					if namedSeq == 0 {
+						namedSeq = seq
+					}
+				}
 			}
 		case editTool(use.name):
 			trace.Edits++
@@ -116,6 +135,14 @@ func parseWorkflowTrace(stdout []byte, companion string) WorkflowTrace {
 			}
 
 			lastEdit = seq
+
+			if namedSeq > 0 && seq > namedSeq && pathIs(inputString(use.input, "file_path"), companion) {
+				trace.CompanionOpenedAfterNamed = true
+			}
+		case use.name == "Read":
+			if namedSeq > 0 && seq > namedSeq && pathIs(inputString(use.input, "file_path"), companion) {
+				trace.CompanionOpenedAfterNamed = true
+			}
 		case use.name == "Skill":
 			name := inputString(use.input, "skill")
 			if name == "" {
@@ -265,10 +292,43 @@ func companionNamed(result string, files []string, companion string) bool {
 	return true
 }
 
+// companionSuggested reports whether a check result lists the companion
+// under "history suggests also reviewing". The section ends at the first
+// blank line; a path quoted elsewhere in the result, such as the
+// unindexed-files note, does not count.
+func companionSuggested(result, companion string) bool {
+	inSection := false
+
+	for line := range strings.SplitSeq(result, "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		switch {
+		case strings.HasPrefix(trimmed, "history suggests also reviewing"):
+			inSection = true
+		case trimmed == "":
+			inSection = false
+		case inSection:
+			if field, _, _ := strings.Cut(trimmed, " "); samePath(field, companion) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // samePath compares two repository-relative paths after normalization, so
 // "./web/src/api/generated.ts" and "web/src/api/generated.ts" are equal.
 func samePath(a, b string) bool {
 	return cleanPath(a) == cleanPath(b)
+}
+
+// pathIs reports whether a tool's file_path, which Claude Code writes as an
+// absolute path inside the trial, is the repository-relative file.
+func pathIs(filePath, file string) bool {
+	clean := cleanPath(filePath)
+
+	return clean == cleanPath(file) || strings.HasSuffix(clean, "/"+cleanPath(file))
 }
 
 func cleanPath(value string) string {

@@ -772,3 +772,224 @@ func TestPrintFiringSummaryShowsPerLessonMatchesWhenDeliveryIsSuppressed(t *test
 
 	assert.Contains(t, out.String(), "×1    delivered / ×4    matched")
 }
+
+// seedCompanions builds an index where server/schema.py usually changes with
+// web/src/api/generated.ts and server/presenters.py, and the generated
+// client carries a fix commit. The store has no git repository behind it,
+// so the "mostly" hint stays absent and the fix line is the reason.
+func seedCompanions(t *testing.T) (st *store.Store, root string) {
+	t.Helper()
+
+	root = t.TempDir()
+
+	var err error
+	st, err = store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	schema := model.Symbol{FQN: "server/schema.SCHEMAS", Name: "SCHEMAS", Kind: model.KindFunction,
+		File: "server/schema.py", Span: model.Span{StartLine: 1, EndLine: 3}}
+	client := model.Symbol{FQN: "web/src/api/generated.WorkspaceSummary", Name: "WorkspaceSummary", Kind: model.KindFunction,
+		File: "web/src/api/generated.ts", Span: model.Span{StartLine: 1, EndLine: 3}}
+	tests := model.Symbol{FQN: "server/presenters.workspace_summary", Name: "workspace_summary", Kind: model.KindFunction,
+		File: "server/presenters.py", Span: model.Span{StartLine: 1, EndLine: 3}}
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		for _, sym := range []*model.Symbol{&schema, &client, &tests} {
+			if err := tx.InsertSymbol(sym); err != nil {
+				return err
+			}
+		}
+
+		for _, c := range []model.CoChange{
+			{FileA: "server/schema.py", FileB: "web/src/api/generated.ts", Together: 2, Total: 6, Lift: 1.3},
+			{FileA: "server/presenters.py", FileB: "server/schema.py", Together: 2, Total: 6, Lift: 1.3},
+		} {
+			if err := tx.InsertCoChange(c); err != nil {
+				return err
+			}
+		}
+
+		for _, d := range []model.Decision{
+			{Kind: model.DecisionCommit, Ref: strings.Repeat("a", 40), TS: 100, Title: "Expose workspace region",
+				Files: []string{"server/schema.py", "web/src/api/generated.ts"}},
+			{Kind: model.DecisionCommit, Ref: "7263562c" + strings.Repeat("b", 32), TS: 200,
+				Title: "fix: refresh web types after workspace schema change", Files: []string{"web/src/api/generated.ts"}},
+		} {
+			d := d
+			if err := tx.InsertDecision(&d); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}))
+
+	return st, root
+}
+
+func TestChangeSetSuggestsCompanionsWithReasons(t *testing.T) {
+	st, root := seedCompanions(t)
+
+	var b strings.Builder
+	require.NoError(t, ChangeSet(&b, st, root, []string{"server/schema.py"}))
+	out := b.String()
+
+	assert.Contains(t, out, CompanionsTitle)
+	assert.Contains(t, out, "web/src/api/generated.ts")
+	assert.Contains(t, out, "2 shared commits with server/schema.py, lift 1.3")
+	assert.Contains(t, out, "last fix here: fix: refresh web types after workspace schema change (7263562)")
+
+	// Equal numbers: the partner outside the planned directories comes
+	// before the one beside them, because that is the file a plan forgets.
+	start := strings.Index(out, CompanionsTitle)
+	require.NotEqual(t, -1, start)
+	closing := out[start:]
+	assert.Less(t, strings.Index(closing, "  web/src/api/generated.ts"), strings.Index(closing, "  server/presenters.py"))
+
+	// A planned file is never suggested back, indexed or not.
+	b.Reset()
+	require.NoError(t, ChangeSet(&b, st, root, []string{"server/schema.py", "web/src/api/generated.ts", "server/presenters.py"}))
+	assert.NotContains(t, b.String(), CompanionsTitle)
+
+	b.Reset()
+	require.NoError(t, ChangeSet(&b, st, root, []string{"server/schema.py", "web/src/api/new.ts"}))
+	assert.Contains(t, b.String(), "not in the index")
+	assert.Contains(t, b.String(), "  web/src/api/generated.ts")
+}
+
+func TestCheckCompanionsListsOnlyFilesAbsentFromTheDiff(t *testing.T) {
+	st, root := seedCompanions(t)
+
+	var b strings.Builder
+	CheckCompanions(&b, st, root, []string{"server/schema.py", "server/presenters.py"})
+	out := b.String()
+
+	assert.Contains(t, out, CompanionsTitle+"  (usually changes with the diff's files, absent from this diff)")
+	assert.Contains(t, out, "  web/src/api/generated.ts")
+	assert.Contains(t, out, "last fix here")
+	assert.NotContains(t, out, "  server/presenters.py", "a file in the diff is not a companion")
+
+	b.Reset()
+	CheckCompanions(&b, st, root, []string{"server/schema.py", "web/src/api/generated.ts", "server/presenters.py"})
+	assert.Empty(t, b.String(), "a diff that carries every partner gets no section")
+
+	b.Reset()
+	CheckCompanions(&b, st, root, nil)
+	assert.Empty(t, b.String())
+
+	b.Reset()
+	CheckCompanions(&b, st, root, []string{"docs/new.md"})
+	assert.Empty(t, b.String(), "an unindexed file has no partners and prints nothing")
+}
+
+func TestRankCompanionsOrdersByEvidenceThenModule(t *testing.T) {
+	ranked := rankCompanions(map[string]companion{
+		"a/same.py":  {file: "a/same.py", together: 2, lift: 1.3},
+		"b/other.py": {file: "b/other.py", together: 2, lift: 1.3, outside: true},
+		"a/weak.py":  {file: "a/weak.py", together: 1, lift: 3.0, outside: true},
+		"a/lift.py":  {file: "a/lift.py", together: 2, lift: 2.0},
+	})
+
+	files := make([]string, 0, len(ranked))
+	for _, c := range ranked {
+		files = append(files, c.file)
+	}
+
+	assert.Equal(t, []string{"a/lift.py", "b/other.py", "a/same.py", "a/weak.py"}, files)
+}
+
+func TestLatestFixPrefersTheNewestCorrection(t *testing.T) {
+	st, _ := seedCompanions(t)
+
+	fix := latestFix(st, "web/src/api/generated.ts")
+	require.NotNil(t, fix)
+	assert.Equal(t, "fix: refresh web types after workspace schema change", fix.Title)
+	assert.Equal(t, "7263562", shortRef(fix.Ref))
+	assert.Nil(t, latestFix(st, "server/schema.py"), "a feature commit is not a correction")
+	assert.Equal(t, "#42", shortRef("#42"), "a PR number stays whole")
+	adr := "docs/adr/" + strings.Repeat("x", 40) + ".md"
+	assert.Equal(t, adr, shortRef(adr), "a long path is not a hash")
+}
+
+func TestCheckCompanionsSeesPastThePlannedFiles(t *testing.T) {
+	// Every one of the diff's own files outranks the forgotten companion,
+	// and there are more of them than the closing list shows. The fetch
+	// must reach past them, or a large diff would never get a suggestion.
+	root := t.TempDir()
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	planned := make([]string, 0, 8)
+	for i := 0; i < 8; i++ {
+		planned = append(planned, fmt.Sprintf("server/module_%d.py", i))
+	}
+
+	// Rebuild starts from an empty store, so the whole index is one seed.
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		files := append([]string{"server/schema.py", "web/src/api/generated.ts"}, planned...)
+		for _, file := range files {
+			sym := model.Symbol{FQN: file + ".fn", Name: "fn", Kind: model.KindFunction,
+				File: file, Span: model.Span{StartLine: 1, EndLine: 1}}
+			if err := tx.InsertSymbol(&sym); err != nil {
+				return err
+			}
+		}
+
+		if err := tx.InsertCoChange(model.CoChange{FileA: "server/schema.py", FileB: "web/src/api/generated.ts",
+			Together: 2, Total: 20, Lift: 1.3}); err != nil {
+			return err
+		}
+
+		for i, file := range planned {
+			pair := model.CoChange{FileA: file, FileB: "server/schema.py", Together: 9 - i, Total: 20, Lift: 3.0}
+			if err := tx.InsertCoChange(pair); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}))
+
+	var b strings.Builder
+	CheckCompanions(&b, st, root, append([]string{"server/schema.py"}, planned...))
+	assert.Contains(t, b.String(), "  web/src/api/generated.ts", "the companion sits behind eight planned partners")
+	assert.NotContains(t, b.String(), "module_", "planned files are never suggested")
+}
+
+func TestLatestFixPrefersAClassifiedFixOverANewerRevert(t *testing.T) {
+	st, _ := seedCompanions(t)
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		sym := model.Symbol{FQN: "server/cache.KEY", Name: "KEY", Kind: model.KindFunction,
+			File: "server/cache.py", Span: model.Span{StartLine: 1, EndLine: 1}}
+		if err := tx.InsertSymbol(&sym); err != nil {
+			return err
+		}
+
+		for _, d := range []model.Decision{
+			{Kind: model.DecisionCommit, Ref: strings.Repeat("1", 40), TS: 100,
+				Title: "fix: version the summary cache namespace", Files: []string{"server/cache.py"}},
+			{Kind: model.DecisionRevert, Ref: strings.Repeat("2", 40), TS: 300,
+				Title: "Revert \"Expose the workspace plan tier in summaries\"", Files: []string{"server/cache.py"}},
+			{Kind: model.DecisionRevert, Ref: strings.Repeat("3", 40), TS: 400,
+				Title: "Revert \"Add search normalization\"", Files: []string{"server/search.py"}},
+		} {
+			d := d
+			if err := tx.InsertDecision(&d); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}))
+
+	fix := latestFix(st, "server/cache.py")
+	require.NotNil(t, fix)
+	assert.Equal(t, "fix: version the summary cache namespace", fix.Title, "the newer revert does not hide the fix that explains the rule")
+
+	revert := latestFix(st, "server/search.py")
+	require.NotNil(t, revert)
+	assert.Equal(t, model.DecisionRevert, revert.Kind, "a revert is still a correction when it is the only one")
+}

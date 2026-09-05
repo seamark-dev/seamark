@@ -91,7 +91,8 @@ func skillsArmTranscript() []byte {
 		toolUseLine("t3", "mcp__seamark__why", `{"query":"web/src/api/generated.ts"}`),
 		toolUseLine("t4", "Edit", `{"file_path":"server/schema.py"}`),
 		toolUseLine("t5", "mcp__seamark__check", `{}`),
-		toolResultLine("t5", `"verdict  allow (mode: warn)\n"`),
+		toolResultLine("t5", `"verdict  allow (mode: warn)\n\nhistory suggests also reviewing  (usually changes with the diff's files, absent from this diff)\n  web/src/api/generated.ts   2 shared commits with server/schema.py, lift 1.3\n"`),
+		toolUseLine("t6", "Read", `{"file_path":"/tmp/trial/web/src/api/generated.ts"}`),
 		resultLine,
 	)
 }
@@ -161,6 +162,8 @@ func TestRunWorkflowPairsArmsAndReadsTheTrace(t *testing.T) {
 	assert.True(t, withSkills.CompanionNamedByChangeSet)
 	assert.True(t, withSkills.WhyFollowedCompanion)
 	assert.True(t, withSkills.CheckAfterLastEdit)
+	assert.True(t, withSkills.CompanionNamedByCheck)
+	assert.True(t, withSkills.CompanionOpenedAfterNamed)
 	assert.Equal(t, "allow (mode: warn)", withSkills.CheckVerdict)
 	assert.Equal(t, []string{"seamark-plan-change"}, withSkills.Activations)
 	assert.Equal(t, 3, withSkills.SeamarkCalls)
@@ -195,13 +198,15 @@ func TestRunWorkflowPairsArmsAndReadsTheTrace(t *testing.T) {
 	assert.Equal(t, 1, skillsTally.CompanionNamed)
 	assert.Equal(t, 1, skillsTally.WhyFollowed)
 	assert.Equal(t, 1, skillsTally.CheckLast)
+	assert.Equal(t, 1, skillsTally.NamedByCheck)
+	assert.Equal(t, 1, skillsTally.Opened)
 	assert.Equal(t, map[string]int{"seamark-plan-change": 1}, skillsTally.Activations)
 	assert.Equal(t, 1, onlyTally.Ran)
 	assert.Zero(t, onlyTally.ChangeSetFirst)
 
 	lines := strings.Join(sum.Lines(), "\n")
 	assert.Contains(t, lines, SchemaSyncCochangeInstanceID+" — mcp-skills: 0/1 avoided (0/1 completed); mcp-only: 0/1 avoided (0/1 completed)")
-	assert.Contains(t, lines, "mcp-skills process — change_set before first edit 1/1, companion named 1/1, why followed 1/1, check after last edit 1/1, 3 seamark calls")
+	assert.Contains(t, lines, "mcp-skills process — change_set before first edit 1/1, companion named 1/1, named by check 1/1, companion opened 1/1, why followed 1/1, check after last edit 1/1, 3 seamark calls")
 	assert.Contains(t, lines, "mcp-skills activations — seamark-plan-change×1")
 	assert.Contains(t, lines, "note — no seamark tool call in any mcp-only trial")
 

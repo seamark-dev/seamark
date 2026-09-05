@@ -24,6 +24,8 @@ const comparisonSkillsVsMCPOnly = "mcp-skills_vs_mcp-only"
 var workflowProcessMetrics = []string{
 	"change_set_before_first_edit_rate",
 	"companion_named_rate",
+	"companion_named_by_check_rate",
+	"companion_opened_rate",
 	"why_followed_companion_rate",
 	"check_after_last_edit_rate",
 }

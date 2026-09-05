@@ -206,6 +206,8 @@ type WorkflowTally struct {
 	Avoided        int // completed trials where the owner invariant passed
 	ChangeSetFirst int // change_set ran before the first edit
 	CompanionNamed int // change_set named the companion
+	NamedByCheck   int // check named the companion the diff left out
+	Opened         int // the agent opened the companion after it was named
 	WhyFollowed    int // why followed the named companion
 	CheckLast      int // check ran after the last edit
 	SeamarkCalls   int
@@ -245,8 +247,8 @@ func (s WorkflowSummary) Lines() []string {
 		}
 
 		out = append(out, fmt.Sprintf(
-			"%s process — change_set before first edit %d/%d, companion named %d/%d, why followed %d/%d, check after last edit %d/%d, %d seamark calls",
-			arm, t.ChangeSetFirst, t.Ran, t.CompanionNamed, t.Ran, t.WhyFollowed, t.Ran, t.CheckLast, t.Ran, t.SeamarkCalls,
+			"%s process — change_set before first edit %d/%d, companion named %d/%d, named by check %d/%d, companion opened %d/%d, why followed %d/%d, check after last edit %d/%d, %d seamark calls",
+			arm, t.ChangeSetFirst, t.Ran, t.CompanionNamed, t.Ran, t.NamedByCheck, t.Ran, t.Opened, t.Ran, t.WhyFollowed, t.Ran, t.CheckLast, t.Ran, t.SeamarkCalls,
 		))
 	}
 
@@ -552,6 +554,14 @@ func tallyWorkflowRow(sum *WorkflowSummary, row WorkflowRow) {
 
 	if row.CompanionNamedByChangeSet {
 		t.CompanionNamed++
+	}
+
+	if row.CompanionNamedByCheck {
+		t.NamedByCheck++
+	}
+
+	if row.CompanionOpenedAfterNamed {
+		t.Opened++
 	}
 
 	if row.WhyFollowedCompanion {

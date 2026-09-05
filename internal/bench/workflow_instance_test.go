@@ -2,6 +2,7 @@ package bench
 
 import (
 	"bytes"
+	"context"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -78,7 +79,7 @@ func TestCochangeVariantsKeepTheBaseTreeAndCarryThePair(t *testing.T) {
 		fix     string
 	}{
 		{SchemaSyncCochangeInstance(), SchemaSyncInstance(), "fix: refresh web types after workspace schema change"},
-		{CacheVersionCochangeInstance(), CacheVersionInstance(), "fix: invalidate cached workspace summaries"},
+		{CacheVersionCochangeInstance(), CacheVersionInstance(), "fix: version the summary cache namespace so shape changes evict old entries"},
 		{ExportRegistryCochangeInstance(), ExportRegistryInstance(), "fix: register CSV formatter for queued exports"},
 	}
 
@@ -127,6 +128,7 @@ func TestCochangeVariantsKeepTheBaseTreeAndCarryThePair(t *testing.T) {
 			assertChecksPass(t, mustRunChecks(t, a, tc.variant.Checks))
 
 			require.NoError(t, tc.variant.ApplyNaive(a))
+			planned := workingTreeFiles(t, a)
 			naive, err := tc.variant.Judge(a)
 			require.NoError(t, err)
 			assert.True(t, naive.TaskDone)
@@ -143,8 +145,19 @@ func TestCochangeVariantsKeepTheBaseTreeAndCarryThePair(t *testing.T) {
 			// The same code path the binary runs: after indexing, `why <trigger>`
 			// names the companion among the files that usually change with it.
 			partners := whyPartners(t, b, tc.variant.Trigger)
-			assert.GreaterOrEqual(t, partners[tc.variant.Companion], 2,
-				"why %s must name %s with at least two shared commits", tc.variant.Trigger, tc.variant.Companion)
+			assert.GreaterOrEqual(t, partners[tc.variant.Companion], 4,
+				"why %s must name %s with at least four shared commits", tc.variant.Trigger, tc.variant.Companion)
+
+			// Among the files the task does not plan, the companion shares
+			// the most commits with the trigger: it is the top line of the
+			// closing list, not the weakest.
+			assert.NotContains(t, planned, tc.variant.Companion, "the naive patch must leave the companion alone")
+			for file, count := range partners {
+				if file != tc.variant.Companion && !planned[file] {
+					assert.LessOrEqual(t, count, partners[tc.variant.Companion],
+						"%s shares %d commits with %s, more than the companion", file, count, tc.variant.Trigger)
+				}
+			}
 		})
 	}
 }
@@ -237,4 +250,14 @@ func whyPartners(t *testing.T, dir, file string) map[string]int {
 	require.NoError(t, report.Why(&out, st, dir, file))
 
 	return parseWhyPartners(out.String())
+}
+
+// workingTreeFiles lists the files the working tree changed against HEAD.
+func workingTreeFiles(t *testing.T, dir string) map[string]bool {
+	t.Helper()
+
+	changed, err := workingTreeChanges(context.Background(), dir)
+	require.NoError(t, err)
+
+	return changed
 }

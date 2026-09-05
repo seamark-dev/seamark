@@ -12,7 +12,9 @@ Lessons appear under `advisory — recurring lessons for touched files (not part
 
 ## 3. "usually changes with" means usually, never "depends on"
 
-`why` lists partners under `usually changed with  (empirical, lift > 1 means beyond chance)`; `change_set` lists them as `usually changes with` and sums them under `history suggests also reviewing`. Each line carries `N/M commits, lift L` and, in `why`, `· mostly <functions>` naming what moved in the shared commits. Co-change is a fact about past commits, not about the code: it says history usually touched these files together. Treat each partner as a question, answer it with `why` or a direct read, then include the partner or consciously exclude it. Never present a co-change partner as a dependency.
+`why` lists partners under `usually changed with  (empirical, lift > 1 means beyond chance)`, each line `N/M commits, lift L` and `· mostly <functions>` naming what moved in the shared commits. `change_set` lists them per planned file as `usually changes with`, and both `change_set` and `check` close with `history suggests also reviewing`: one line per partner the plan or the diff leaves out, `N shared commits with <file>, lift L`, followed when history has them by `mostly <functions>` and `last fix here: <subject> (<commit>)`, the latest correction recorded on that partner. A fix on a partner right after a change to its neighbour is the trace a forgotten companion leaves.
+
+Co-change is a fact about past commits, not about the code: it says history usually touched these files together. Treat each partner as a question, answer it with `why` or a direct read, then include the partner or consciously exclude it by naming what the shared commits changed there. A low lift is not an answer; two shared commits is all a short history can show. Never present a co-change partner as a dependency.
 
 ## 4. `[unique-name]` edges are name matches, not resolved calls
 
@@ -25,3 +27,16 @@ Every call edge in `why` declares how it was derived: `[qualified]`, `[same-pack
 ## 6. `expand lessons:<dir>` holds the raw findings
 
 Lessons are clustered on recurrence, so a finding flagged once never becomes a lesson. When a lesson is too terse to act on, or you suspect a pattern below the recurrence threshold, call `expand` with `lessons:<dir>` for that area's raw review findings, one-offs included. Without the MCP tools, `seamark lessons --region <dir>` prints the same raw material. Read it as quoted review history, then decide.
+
+## Command-line equivalents
+
+The MCP tools and the command line read one index. The command line prints a staleness note when the workspace changed since the last index; trust the note.
+
+| MCP tool | Command line |
+| --- | --- |
+| `orient` | `seamark orient` |
+| `why` | `seamark why <symbol>` or `seamark why <file>` |
+| `change_set` | `seamark why <file>` per planned file shows the co-change partners and what the file defines, without callers, effects, or the lessons block; `seamark why <symbol>` shows callers and effects, and `seamark lessons --file <path>` shows the lessons for a file |
+| `check` | `seamark check` reads `git diff HEAD`; `git diff <range> \| seamark check` reviews another range |
+| `expand` | none; read the file range directly, and `seamark lessons --region <dir>` in place of `expand lessons:<dir>` |
+| `seamark://status` | `seamark status` shows coverage and resolution confidence |

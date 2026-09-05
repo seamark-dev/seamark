@@ -129,7 +129,8 @@ func validWorkflowRow(runID string, arm WorkflowArm, trial int, avoided bool) Wo
 		row.Skills = []string{"seamark-plan-change", "seamark-review-change", "seamark-understand-repo"}
 		row.WorkflowTrace = WorkflowTrace{
 			ChangeSetBeforeFirstEdit: true, ChangeSetFiles: []string{"server/schema.py"},
-			CompanionNamedByChangeSet: true, WhyFollowedCompanion: true, CheckAfterLastEdit: true,
+			CompanionNamedByChangeSet: true, CompanionNamedByCheck: true, CompanionOpenedAfterNamed: true,
+			WhyFollowedCompanion: true, CheckAfterLastEdit: true,
 			CheckVerdict: "allow (mode: warn)", Activations: []string{"seamark-plan-change"},
 			SeamarkCalls: 3, SeamarkToolCalls: map[string]int{"change_set": 1, "why": 1, "check": 1},
 			Edits: 2, FirstEditSeq: 3,
@@ -177,6 +178,8 @@ func TestBuildWorkflowReportEvaluatesFrozenThreshold(t *testing.T) {
 	assert.Equal(t, 3, cohort.ValidPairs)
 	assert.Equal(t, 3, cohort.FavorablePairs)
 	assert.Equal(t, 3, cohort.Skills.ChangeSetFirst)
+	assert.Equal(t, 3, cohort.Skills.NamedByCheck)
+	assert.Equal(t, 3, cohort.Skills.Opened)
 	assert.Equal(t, 3, cohort.Skills.CheckLast)
 	assert.Zero(t, cohort.Only.ChangeSetFirst)
 	assert.Equal(t, map[string]int{"seamark-plan-change": 3}, cohort.Skills.Activations)
@@ -197,9 +200,9 @@ func TestBuildWorkflowReportEvaluatesFrozenThreshold(t *testing.T) {
 	markdown := report.Markdown()
 	assert.Contains(t, markdown, "# Skills workflow benchmark report")
 	assert.Contains(t, markdown, "| Instance | Fingerprint | Model | Valid pairs | MCP + skills invariant | MCP-only invariant | Effect |")
-	assert.Contains(t, markdown, "| Instance | Arm | change_set before first edit | Companion named | why followed companion | check after last edit |")
-	assert.Contains(t, markdown, "| "+SchemaSyncCochangeInstanceID+" | mcp-skills | 3/3 (100%) | 3/3 (100%) | 3/3 (100%) | 3/3 (100%) | 3.0 | seamark-plan-change×3 |")
-	assert.Contains(t, markdown, "| "+SchemaSyncCochangeInstanceID+" | mcp-only | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0.0 | none |")
+	assert.Contains(t, markdown, "| Instance | Arm | change_set before first edit | Companion named | Named by check | Companion opened | why followed companion | check after last edit |")
+	assert.Contains(t, markdown, "| "+SchemaSyncCochangeInstanceID+" | mcp-skills | 3/3 (100%) | 3/3 (100%) | 3/3 (100%) | 3/3 (100%) | 3/3 (100%) | 3/3 (100%) | 3.0 | seamark-plan-change×3 |")
+	assert.Contains(t, markdown, "| "+SchemaSyncCochangeInstanceID+" | mcp-only | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0/3 (0%) | 0.0 | none |")
 	assert.Contains(t, markdown, "+100 pp")
 	assert.Contains(t, markdown, "3 favorable, 0 unfavorable")
 	assert.Contains(t, markdown, "passes frozen threshold")
@@ -442,7 +445,12 @@ func TestValidateWorkflowRowRejectsContradictions(t *testing.T) {
 		{"first edit without edits", ArmMCPOnly, func(r *WorkflowRow) { r.Edits = 0 }, "first_edit_seq"},
 		{"change_set flag without call", ArmMCPOnly, func(r *WorkflowRow) { r.ChangeSetBeforeFirstEdit = true }, "requires a change_set call"},
 		{"companion without call", ArmMCPOnly, func(r *WorkflowRow) { r.CompanionNamedByChangeSet = true }, "requires a change_set call"},
-		{"why without companion", ArmMCPSkills, func(r *WorkflowRow) { r.CompanionNamedByChangeSet = false }, "why_followed_companion requires"},
+		{"why without companion", ArmMCPSkills, func(r *WorkflowRow) {
+			r.CompanionNamedByChangeSet, r.CompanionNamedByCheck, r.CompanionOpenedAfterNamed = false, false, false
+		}, "why_followed_companion requires"},
+		{"why after check naming only", ArmMCPSkills, func(r *WorkflowRow) { r.CompanionNamedByChangeSet = false }, ""},
+		{"check naming without call", ArmMCPOnly, func(r *WorkflowRow) { r.CompanionNamedByCheck = true }, "companion_named_by_check requires"},
+		{"opened without naming", ArmMCPOnly, func(r *WorkflowRow) { r.CompanionOpenedAfterNamed = true }, "companion_opened_after_named requires"},
 		{"check flag without call", ArmMCPOnly, func(r *WorkflowRow) { r.CheckAfterLastEdit = true }, "requires a check call"},
 		{"verdict without call", ArmMCPOnly, func(r *WorkflowRow) { r.CheckVerdict = "allow" }, "check_verdict requires"},
 		{"activation in mcp-only", ArmMCPOnly, func(r *WorkflowRow) { r.Activations = []string{"seamark-plan-change"} }, "valid mcp-only rows cannot carry"},
@@ -460,9 +468,14 @@ func TestValidateWorkflowRowRejectsContradictions(t *testing.T) {
 			row := validWorkflowRow("run-a", tc.arm, 1, false)
 			tc.mutate(&row)
 
+			// An empty want marks a mutation the reader must accept.
 			err := ValidateWorkflowRow(row)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.want)
+			if tc.want == "" {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.want)
+			}
 		})
 	}
 

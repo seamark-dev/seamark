@@ -75,7 +75,9 @@
     "change_set_before_first_edit": { "type": "boolean" },
     "change_set_files": { "type": "array", "items": { "type": "string" } },
     "companion_named_by_change_set": { "type": "boolean" },
+    "companion_named_by_check": { "type": "boolean" },
     "why_followed_companion": { "type": "boolean" },
+    "companion_opened_after_named": { "type": "boolean" },
     "check_after_last_edit": { "type": "boolean" },
     "check_verdict": { "type": "string" },
     "activations": { "type": "array", "items": { "type": "string", "minLength": 1 } },
@@ -177,7 +179,22 @@
         "required": ["why_followed_companion"]
       },
       "then": {
-        "properties": { "companion_named_by_change_set": { "const": true } }
+        "anyOf": [
+          { "properties": { "companion_named_by_change_set": { "const": true } }, "required": ["companion_named_by_change_set"] },
+          { "properties": { "companion_named_by_check": { "const": true } }, "required": ["companion_named_by_check"] }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": { "companion_opened_after_named": { "const": true } },
+        "required": ["companion_opened_after_named"]
+      },
+      "then": {
+        "anyOf": [
+          { "properties": { "companion_named_by_change_set": { "const": true } }, "required": ["companion_named_by_change_set"] },
+          { "properties": { "companion_named_by_check": { "const": true } }, "required": ["companion_named_by_check"] }
+        ]
       }
     },
     {

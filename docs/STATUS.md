@@ -22,8 +22,8 @@ Local indexing, history mining, orientation, and the read surfaces.
 | MCP server | working; five tools + `orient`/`status` resources + `onboard` prompt |
 | Schema versioning, durable-state export/import | working |
 | Health: `seamark status`, `seamark doctor` | working |
-| Agent skills (`skills/`, embedded; `init --skills`) | working; opt-in; installs into `.claude/skills` and `.agents/skills`, reported by `status`/`doctor`; `init --approve-tools` writes the Claude Code allow rules and the Codex per-tool approvals the model-driven path needs, reported by `status`/`doctor`; effect on agent behavior not yet measured (phase 2 benchmark) |
-| Skills workflow benchmark (`make skills-bench`, MCP-only vs MCP + skills; `make skills-activation`) | harness ready; cohort pending; own rows, claims, fingerprint, and report, none shared with the lessons benchmark ([bench/README.md](../bench/README.md)) |
+| Agent skills (`skills/`, embedded; `init --skills`) | working; opt-in; installs into `.claude/skills` and `.agents/skills`, reported by `status`/`doctor`; `init --approve-tools` writes the Claude Code allow rules and the Codex per-tool approvals the model-driven path needs, reported by `status`/`doctor`; first paired cohort (2026-09-05, Haiku 4.5, 15 pairs) found no invariant effect at +6.7 pp against the frozen +30 pp; the skills changed process, not outcomes, so the fixtures, the skill text, `change_set`, and `check` were revised for the second cohort |
+| Skills workflow benchmark (`make skills-bench`, MCP-only vs MCP + skills; `make skills-activation`) | first cohort ran 2026-09-05 (no effect; see the agent skills row); fixtures, trace metrics, and activation set revised for the second cohort; own rows, claims, fingerprint, and report, none shared with the lessons benchmark ([bench/README.md](../bench/README.md)) |
 
 Known limits are documented in the README's *Honest limits*: syntactic
 resolution with labeled confidence, no scope tracking, conservative

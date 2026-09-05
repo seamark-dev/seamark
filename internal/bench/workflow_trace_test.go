@@ -222,3 +222,66 @@ func TestReadAgentSessionParsesInitShapes(t *testing.T) {
 		assert.Equal(t, agentSession{Valid: true}, session)
 	})
 }
+
+func TestParseWorkflowTraceCompanionOpenedAndNamedByCheck(t *testing.T) {
+	companion := "web/src/api/generated.ts"
+	checkWithCompanion := `"verdict  allow (mode: warn)\n\nhistory suggests also reviewing  (usually changes with the diff's files, absent from this diff)\n  web/src/api/generated.ts   2 shared commits with server/schema.py, lift 1.3\n    last fix here: fix: refresh web types (7263562)\n"`
+
+	t.Run("a Read of the companion after change_set named it counts as opened", func(t *testing.T) {
+		trace := parseWorkflowTrace(transcriptLines(
+			toolUseLine("t1", "Read", `{"file_path":"/tmp/trial/web/src/api/generated.ts"}`),
+			toolUseLine("t2", "mcp__seamark__change_set", `{"files":["server/schema.py"]}`),
+			toolResultLine("t2", `"`+changeSetResultText+`"`),
+			toolUseLine("t3", "Read", `{"file_path":"/tmp/trial/web/src/api/generated.ts"}`),
+		), companion)
+
+		assert.True(t, trace.CompanionNamedByChangeSet)
+		assert.True(t, trace.CompanionOpenedAfterNamed)
+		assert.False(t, trace.CompanionNamedByCheck)
+	})
+
+	t.Run("a Read before the naming does not count", func(t *testing.T) {
+		trace := parseWorkflowTrace(transcriptLines(
+			toolUseLine("t1", "Read", `{"file_path":"/tmp/trial/web/src/api/generated.ts"}`),
+			toolUseLine("t2", "mcp__seamark__change_set", `{"files":["server/schema.py"]}`),
+			toolResultLine("t2", `"`+changeSetResultText+`"`),
+			toolUseLine("t3", "Read", `{"file_path":"/tmp/trial/web/src/api/other.ts"}`),
+		), companion)
+
+		assert.True(t, trace.CompanionNamedByChangeSet)
+		assert.False(t, trace.CompanionOpenedAfterNamed)
+	})
+
+	t.Run("check names the companion only under its section", func(t *testing.T) {
+		trace := parseWorkflowTrace(transcriptLines(
+			toolUseLine("t1", "Edit", `{"file_path":"/tmp/trial/server/schema.py"}`),
+			toolUseLine("t2", "mcp__seamark__check", `{}`),
+			toolResultLine("t2", `"verdict  allow (mode: warn)\n  note: 1 of 2 changed files have changes outside any indexed symbol (web/src/api/generated.ts)\n"`),
+		), companion)
+
+		assert.False(t, trace.CompanionNamedByCheck, "the unindexed-files note quotes a path in the diff")
+
+		trace = parseWorkflowTrace(transcriptLines(
+			toolUseLine("t1", "Edit", `{"file_path":"/tmp/trial/server/schema.py"}`),
+			toolUseLine("t2", "mcp__seamark__check", `{}`),
+			toolResultLine("t2", checkWithCompanion),
+			toolUseLine("t3", "mcp__seamark__why", `{"query":"web/src/api/generated.ts"}`),
+			toolUseLine("t4", "Edit", `{"file_path":"/tmp/trial/web/src/api/generated.ts"}`),
+		), companion)
+
+		assert.True(t, trace.CompanionNamedByCheck)
+		assert.False(t, trace.CompanionNamedByChangeSet)
+		assert.True(t, trace.WhyFollowedCompanion, "why may follow a companion check named")
+		assert.True(t, trace.CompanionOpenedAfterNamed, "an Edit counts as opening")
+		assert.False(t, trace.CheckAfterLastEdit, "the companion edit came after the check")
+	})
+
+	t.Run("path helpers", func(t *testing.T) {
+		assert.True(t, pathIs("/private/var/x/mcp-skills-01/server/cache.py", "server/cache.py"))
+		assert.True(t, pathIs("./server/cache.py", "server/cache.py"))
+		assert.False(t, pathIs("/x/other/server/cache.py.bak", "server/cache.py"))
+		assert.False(t, pathIs("/x/myserver/cache.py", "server/cache.py"), "a suffix must start at a path boundary")
+		assert.True(t, companionSuggested("history suggests also reviewing\n  server/cache.py   2 shared commits with a.py, lift 1.3\n", "server/cache.py"))
+		assert.False(t, companionSuggested("history suggests also reviewing\n\n  server/cache.py\n", "server/cache.py"), "the section ends at a blank line")
+	})
+}

@@ -35,6 +35,29 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   Additive, idempotent, previewable with `--print`, and independent of
   `--skills`. `seamark doctor` and `seamark status` report both clients'
   approval configuration.
+- **`check` names the companions the diff left out.** After the verdict,
+  `check` (MCP tool and `seamark check`) prints `history suggests also
+  reviewing`: the files that usually change with the diff's files and that
+  the diff leaves untouched. The first skills cohort showed that a review
+  pass could not catch a forgotten companion because nothing in `check`
+  looked at co-change; now the omission history can see is on the screen
+  where the review happens.
+- **Companions come with their reason.** In `change_set` and `check`, each
+  suggested partner carries the planned file it shares the most commits
+  with and, when history has them, the functions those commits touched
+  there and the latest fix recorded on it (`last fix here: <subject>
+  (<commit>)`). Ties on shared commits and lift break in favour of the
+  partner outside the planned files' directories, the one a plan forgets.
+  A bare file name at lift 1.3 was the weakest line on the screen in the
+  first cohort; the reason is what makes it a question the agent answers.
+- **Skills rewritten around the cohort's failure points.** The plan skill
+  names the task shapes it covers, says that a request for a minimal change
+  does not switch it off, and turns "follow every surprise" into a rule
+  with an output: open or `why` every partner under `history suggests also
+  reviewing` and exclude one only by naming what the shared commits changed
+  there. The review skill answers the companions `check` lists. The
+  command-line fallback moved into the shared reference as one table, so
+  the skills are shorter.
 - **Skills workflow benchmark harness.** `make skills-bench` runs the paired
   experiment the skills were waiting for: an MCP-only arm against an MCP +
   skills arm on co-change variants of the lessons fixtures, whose history

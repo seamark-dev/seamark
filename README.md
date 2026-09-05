@@ -570,7 +570,7 @@ They explain when to use Seamark's tools and how to interpret the results.
 | --- | --- |
 | `seamark-understand-repo` | Explore unfamiliar code, find important files, and understand past decisions. |
 | `seamark-plan-change` | Check related files, possible side effects, and past review feedback before editing. |
-| `seamark-review-change` | Check the actual diff against policy and lessons, then run the relevant tests. |
+| `seamark-review-change` | Check the actual diff against policy, the companion files it left out, and lessons, then run the relevant tests. |
 
 For example, when you ask an agent to change an API across several files,
 the planning skill tells it to check which other files usually change
