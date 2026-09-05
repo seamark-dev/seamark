@@ -5,8 +5,10 @@
 # generated TypeScript client). `expect` names the skill that should load,
 # or `none` for a prompt every skill must leave alone. `prepare: naive`
 # applies the fixture's task-complete-but-invariant-breaking patch first, so
-# a review prompt sees a real diff. The pass criteria live in
-# bench/workflow-claims.yaml and are frozen before the cohort.
+# a review prompt sees a real diff. Each skill has five should-activate
+# prompts, so the frozen 0.8 recall bar tolerates one missed session per
+# skill; two passes on a four-prompt set each failed on a single flip. The
+# pass criteria live in bench/workflow-claims.yaml.
 schema_version: 1
 instance: python-ts-schema-sync-cochange-v1
 
@@ -20,6 +22,21 @@ prompts:
     prompt: Give me an orientation of this codebase. What are the main modules, which files change together most often, and what should I read first before changing the API?
     expect: seamark-understand-repo
     note: Explicit orientation request naming history questions only the index answers.
+
+  - id: understand-sync-mechanism
+    prompt: Walk me through how the TypeScript client stays in sync with the Python schema in this repository, and what has gone wrong with that in the past.
+    expect: seamark-understand-repo
+    note: An explanation that needs the decision trail; the fix commit is the answer.
+
+  - id: understand-load-bearing
+    prompt: I am new to this codebase. Which symbols in server/ carry the most callers, and which recent commits explain the current shape of the workspace summary API?
+    expect: seamark-understand-repo
+    note: Newcomer orientation phrased as callers and commits; only the index answers both.
+
+  - id: understand-cochange-hubs
+    prompt: Which files in this repository never change alone, and why? I want to know before I touch the API layer.
+    expect: seamark-understand-repo
+    note: A co-change question about the whole repository, stated before any change.
 
   - id: plan-billing-field
     prompt: Add each workspace's billing currency to the GET /api/workspaces/{id} response as billingCurrency, sourced from Workspace.billing_currency, and make sure every consumer of that response keeps working. Plan the change before editing.
@@ -36,10 +53,15 @@ prompts:
     expect: seamark-plan-change
     note: The cohort task verbatim, with "keep the change minimal"; the first cohort activated the plan skill in fewer than half of these sessions.
 
-  - id: plan-task-timezone
-    prompt: Add the workspace timezone to the workspace summary API response as timezone, from Workspace.timezone. Keep it small, and update tests if needed.
+  - id: plan-task-owner
+    prompt: Add the workspace owner id to the workspace summary API response as ownerId, from Workspace.owner_id. Keep it small, and update tests if needed.
     expect: seamark-plan-change
-    note: Task-shaped phrasing with a different field and a softer "keep it small"; the same multi-file shape.
+    note: Task-shaped phrasing with a different existing field and a softer "keep it small"; the same multi-file shape. An earlier version named a field the domain model does not have, and the agent spent its turns searching for it.
+
+  - id: plan-fix-missing-region
+    prompt: The web client shows "undefined" when a workspace summary arrives without a region. Fix this end to end, backend and client, and keep the change minimal.
+    expect: seamark-plan-change
+    note: A fix that spans the API and its consumer, with the minimal wording; the plan skill's fix case.
 
   - id: review-before-commit
     prompt: I added billingCurrency to the workspace summary response in server/schema.py and server/presenters.py. Am I missing anything before I commit?
@@ -58,6 +80,18 @@ prompts:
     expect: seamark-review-change
     prepare: naive
     note: A hand-over question in task language, without "review" or "commit"; the diff still lacks the generated client.
+
+  - id: review-before-pr
+    prompt: Before I open the pull request, review the current uncommitted change to the workspace summary API for anything the reviewers of this repository usually catch.
+    expect: seamark-review-change
+    prepare: naive
+    note: A pull-request review request that names recurring reviewer feedback; the lessons and the companion are both in play.
+
+  - id: review-what-breaks
+    prompt: I think the workspace summary change is complete. What would break that the tests do not cover? Keep it brief.
+    expect: seamark-review-change
+    prepare: naive
+    note: A completeness question in task language; the answer is the stale generated client.
 
   - id: typo-readme
     prompt: In README.md, change "public schema descriptions" to "public schema definitions". Nothing else.

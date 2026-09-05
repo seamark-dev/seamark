@@ -684,9 +684,12 @@ expects one skill or `none`; a review prompt may ask for the naive patch
 first, so it sees a real diff. The set carries task-shaped prompts beside
 the friendly ones: the cohort task verbatim, with "keep the change minimal",
 a second field in the same shape, and a hand-over question that never says
-review or commit. The first cohort passed a ten-prompt set at 100% recall
-while the task itself activated the plan skill in 7 of 15 sessions; the
-activation rate that matters is the one under the task's wording. Rows go to `bench/activation-results-v1.jsonl`,
+review or commit. Each skill has five should-activate prompts, so the frozen
+0.8 recall bar tolerates one missed session per skill; two passes on a
+four-prompt set each failed on a single flip in a different place. The first
+cohort passed a ten-prompt set at 100% recall while the task itself
+activated the plan skill in 7 of 15 sessions; the activation rate that
+matters is the one under the task's wording. Rows go to `bench/activation-results-v1.jsonl`,
 never into a workflow file, and record the activated skills, the hit flag,
 and the usage. The turn cap is part of the fingerprint, and the report
 refuses to pool activation rows from different fingerprints, prompt sets,
