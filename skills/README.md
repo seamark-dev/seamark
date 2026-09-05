@@ -2,7 +2,7 @@
 
 Three [Agent Skills](https://agentskills.io) that teach a coding agent when and how to use the Seamark MCP tools. They encode judgment (blast radius before a multi-file edit, `check` before completion, how to read co-change and coverage honestly), not tool aliases, and they stay silent for small localized edits.
 
-- `seamark-understand-repo`: understand, explain, or get oriented in a codebase, module, or area.
+- `seamark-understand-repo`: understand, explain, or get oriented in a codebase, module, or area; never for a request to change something, which the plan skill owns.
 - `seamark-plan-change`: implement, add, expose, change, refactor, or fix something that spans files or an unfamiliar area, even when asked to keep the change minimal.
 - `seamark-review-change`: review, double-check, or finish a change; "am I missing anything"; answers the companions `check` says the diff left out.
 

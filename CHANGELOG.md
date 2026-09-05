@@ -56,8 +56,10 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   with an output: open or `why` every partner under `history suggests also
   reviewing` and exclude one only by naming what the shared commits changed
   there. The review skill answers the companions `check` lists. The
-  command-line fallback moved into the shared reference as one table, so
-  the skills are shorter.
+  understand skill no longer claims requests to change something, because
+  it raced the plan skill for the cohort task on a fresh repository and won
+  a quarter of the time. The command-line fallback moved into the shared
+  reference as one table, so the skills are shorter.
 - **Skills workflow benchmark harness.** `make skills-bench` runs the paired
   experiment the skills were waiting for: an MCP-only arm against an MCP +
   skills arm on co-change variants of the lessons fixtures, whose history

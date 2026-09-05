@@ -1,6 +1,6 @@
 ---
 name: seamark-understand-repo
-description: Maps an unfamiliar repository, module, or subsystem when asked to understand, explain, or get oriented in a codebase or area, or before a change that crosses subsystems. Reads Seamark's index and git history before any source; modules, load-bearing symbols, change hubs, recent decisions, review lessons. Not for a pinpoint lookup of a known file or symbol.
+description: Maps an unfamiliar repository, module, or subsystem when asked to understand, explain, or get oriented in a codebase or area. Reads Seamark's index and git history before any source; modules, load-bearing symbols, change hubs, recent decisions, review lessons. Not for a request to implement, add, expose, change, or fix something, even in an unfamiliar area; seamark-plan-change covers that and calls orient itself when the area is new. Not for a pinpoint lookup of a known file or symbol.
 license: Apache-2.0
 metadata:
   seamark: managed
@@ -13,10 +13,11 @@ Reading source in file order spends context on what the code says and learns not
 
 ## Use when / do not use when
 
-Use this skill when asked to understand, explain, or get oriented in a codebase, a module, or a subsystem, or before a change that crosses subsystems.
+Use this skill when asked to understand, explain, or get oriented in a codebase, a module, or a subsystem.
 
 Do not use it, and make no Seamark call, when:
 
+- the task is to implement, add, expose, change, refactor, or fix something, in a familiar area or not; `seamark-plan-change` owns that request and calls `orient` itself when the area is new, so two skills never race for one prompt;
 - the question is a pinpoint lookup of a known file or symbol ("what does X return", "where is Y defined"); a direct read or a search answers it;
 - the task is a typo, a comment, or a formatting edit;
 - the task is a one-file change in an area you already understand; start from the file, and let `seamark-plan-change` decide whether `change_set` is worth a call.

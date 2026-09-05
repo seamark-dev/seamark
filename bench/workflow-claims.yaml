@@ -4,7 +4,9 @@
 # completed the task and missed the companion), and one activation run
 # (understand 2/2, plan 1/2, review 2/2, false activation 0/4). The effect
 # thresholds are the lessons registry's, so the two claims stay comparable.
-# Do not edit after a cohort starts.
+# 2026-09-05, after the first cohort and before the second: the two process
+# metrics the revised trace records were added; no threshold changed.
+# Do not edit while a cohort is running.
 schema_version: 1
 
 claims:
@@ -28,6 +30,8 @@ claims:
     process_metrics:
       - change_set_before_first_edit_rate
       - companion_named_rate
+      - companion_named_by_check_rate
+      - companion_opened_rate
       - why_followed_companion_rate
       - check_after_last_edit_rate
 
