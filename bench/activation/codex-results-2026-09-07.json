@@ -1,0 +1,1637 @@
+{
+  "schema": "codex-manual-activation-v1",
+  "date_utc": "2026-09-07",
+  "client": "codex",
+  "codex_version": "0.153.1",
+  "seamark_version": "seamark v0.5.4-20-g0f0d17a",
+  "source_head": "0f0d17a72c3a991eed02ab594f0f348976abec3d",
+  "seamark_binary_sha256": "f23f60fb914bf11a230c3fec72df4010004e29907dee8087c26461d59c52eacf",
+  "fixture_instance": "python-ts-schema-sync-cochange-v1",
+  "prompt_manifest": "prompts.yaml",
+  "prompt_manifest_sha256": "41f384dfce44824cc49bdd5fc2fc1bfa64c8186ce7d42373035b4ceb07e05227",
+  "claims_manifest": "../workflow-claims.yaml",
+  "claims_manifest_sha256": "320c973e650e7329ff17edf0721e913cb60060b0e7bf13b3f1f59ae6e1cb9a17",
+  "installed_skill_file_sha256": {
+    ".agents/skills/seamark-review-change/SKILL.md": "68e07e3317298d43eabfa1457b30b77372032e9deb872d7a9c24132880864c84",
+    ".agents/skills/seamark-understand-repo/SKILL.md": "db397831ff7cf16d443953fc858be42e89737d58e311cc31aa29548220c20667",
+    ".agents/skills/seamark-plan-change/SKILL.md": "1fd1d71200b556a06a7ee51c647b4384b402ac094cd7d1ad170d3c7df73e2ff8",
+    ".agents/skills/seamark-plan-change/references/interpreting-seamark.md": "0a8428f1370ecabde689d798908462b9f5a97dd383f81bb2cd7ee206364211c9",
+    ".agents/skills/seamark-understand-repo/references/interpreting-seamark.md": "0a8428f1370ecabde689d798908462b9f5a97dd383f81bb2cd7ee206364211c9",
+    ".agents/skills/seamark-review-change/references/interpreting-seamark.md": "0a8428f1370ecabde689d798908462b9f5a97dd383f81bb2cd7ee206364211c9"
+  },
+  "execution": {
+    "model": "gpt-5.4-mini",
+    "model_reasoning_effort": "medium",
+    "fresh_fixture_and_session_per_prompt": true,
+    "timeout_seconds": 300,
+    "max_parallel_sessions": 3,
+    "sandbox": "workspace-write",
+    "approval_policy": "never",
+    "ephemeral": true,
+    "ignore_user_config": true,
+    "ignore_rules": true,
+    "json_events": true,
+    "config_overrides": [
+      "model_reasoning_effort=\"medium\"",
+      "approval_policy=\"never\"",
+      "web_search=\"disabled\"",
+      "features.plugins=false",
+      "features.apps=false",
+      "features.multi_agent=false",
+      "features.hooks=false",
+      "features.memories=false",
+      "features.shell_snapshot=false",
+      "features.unbounded_connection_retries=false",
+      "mcp_servers.seamark.command=\"$SEAMARK_BIN\"",
+      "mcp_servers.seamark.args=[\"mcp\"]",
+      "mcp_servers.seamark.required=true",
+      "mcp_servers.seamark.default_tools_approval_mode=\"approve\"",
+      "skills.config=[{path=\"$USER_SKILLS/plan-implementation\",enabled=false},{path=\"$USER_SKILLS/review-code\",enabled=false},{path=\"$USER_SKILLS/write-spec\",enabled=false},{path=\"$USER_SKILLS/simplify-code\",enabled=false},{path=\"$CODEX_SKILLS/.system/review-agent\",enabled=false},{path=\"$CODEX_SKILLS/.system/skill-creator\",enabled=false},{path=\"$CODEX_SKILLS/.system/plugin-creator\",enabled=false},{path=\"$CODEX_SKILLS/.system/skill-installer\",enabled=false},{path=\"$CODEX_SKILLS/.system/openai-docs\",enabled=false},{path=\"$CODEX_SKILLS/.system/imagegen\",enabled=false}]"
+    ],
+    "per_fixture_override": "projects.\"$FIXTURE\".trust_level=\"trusted\"",
+    "mcp_registration": "Explicit CLI registration of the installed Seamark binary, required=true. The fixture also received seamark init --skills=codex --approve-tools.",
+    "preparation": "Fresh generated fixture for every prompt. Apply the exact naive backend patch for the five review prompts before init/index; leave the generated client unchanged. Restore init changes to .gitignore and exclude benchmark scaffolding through .git/info/exclude.",
+    "hard_provider_cost_cap_usd": null
+  },
+  "measurement": {
+    "activation": "Successful read of a SKILL.md, established from completed command events and returned frontmatter; mentions and directory listings alone do not count.",
+    "seamark_calls": "Completed MCP tool calls plus explicit Seamark CLI invocations, recorded separately. A nonzero command exit is retained as an attempted call. Help-only CLI invocations carry help_only=true.",
+    "usage": "Codex turn.completed usage. cached_input_tokens is a subset of input_tokens; reasoning_output_tokens is a subset of output_tokens. Dollar cost is not returned by this ChatGPT-authenticated CLI run.",
+    "scope": "Local-environment activation cohort. Personal skill exclusions were incomplete: review-before-pr also loaded review-code. These results do not establish isolation from personal skill metadata.",
+    "additional_skill_rule": "An additional skill on a should-activate prompt is recorded separately; false activation is measured only on the four should-not prompts."
+  },
+  "excluded_setup_attempts": [
+    {
+      "prompt_id": "symbol-lookup",
+      "reason": "Initial restricted launch failed to initialize the Codex app-server/state database before thread.started; no model session ran. Retried in a fresh fixture with host launch access."
+    }
+  ],
+  "metrics": {
+    "completed_sessions": 19,
+    "per_skill_recall": {
+      "seamark-understand-repo": {
+        "hits": 5,
+        "prompts": 5,
+        "rate": 1.0,
+        "minimum": 0.8,
+        "pass": true
+      },
+      "seamark-plan-change": {
+        "hits": 5,
+        "prompts": 5,
+        "rate": 1.0,
+        "minimum": 0.8,
+        "pass": true
+      },
+      "seamark-review-change": {
+        "hits": 5,
+        "prompts": 5,
+        "rate": 1.0,
+        "minimum": 0.8,
+        "pass": true
+      }
+    },
+    "false_activation": {
+      "count": 0,
+      "prompts": 4,
+      "rate": 0.0,
+      "maximum": 0.25,
+      "pass": true
+    },
+    "should_activate_sessions_with_additional_skills": [
+      "plan-billing-field",
+      "plan-rename-region",
+      "plan-task-minimal",
+      "plan-task-owner",
+      "plan-fix-missing-region",
+      "review-before-pr"
+    ],
+    "observed_non_seamark_skills": [
+      "review-code"
+    ],
+    "meets_activation_thresholds": true,
+    "usage": {
+      "input_tokens": 2674330,
+      "cached_input_tokens": 2401792,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 87343,
+      "reasoning_output_tokens": 39239
+    }
+  },
+  "results": [
+    {
+      "prompt_id": "understand-response-pipeline",
+      "expect": "seamark-understand-repo",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:03:02.294295+00:00",
+      "activated_skills": [
+        "seamark-understand-repo"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-understand-repo",
+          "item_id": "item_2",
+          "command": "/bin/zsh -lc \"sed -n '1,220p' $FIXTURE/.agents/skills/seamark-understand-repo/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "8456123b11b16d264140211129b6ac55a9a5c58d51433d2e98908afc66e3910f",
+          "observed_frontmatter_names": [
+            "seamark-understand-repo"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "mcp",
+          "tool": "orient",
+          "item_id": "item_3",
+          "arguments": {},
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_5",
+          "arguments": {
+            "query": "server/app.get_workspace"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_6",
+          "arguments": {
+            "query": "server/presenters.workspace_summary"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_7",
+          "arguments": {
+            "query": "server/schema.py"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_8",
+          "arguments": {
+            "query": "web/src/api/generated.ts"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_9",
+          "arguments": {
+            "query": "web/src/workspaces/card.ts"
+          },
+          "error": null,
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input_tokens": 117153,
+        "cached_input_tokens": 99328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 4148,
+        "reasoning_output_tokens": 959
+      },
+      "thread_id": "01a07d09-b145-7712-8e50-cea9229cdc63",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:04:31.933138+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/understand-response-pipeline.jsonl",
+      "transcript_sha256": "693b549f13bf9cc51249119970c064a62f9b39fd978352637a59e88701e48c22",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "understand-web-client",
+      "expect": "seamark-understand-repo",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:04:04.749226+00:00",
+      "activated_skills": [
+        "seamark-understand-repo"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-understand-repo",
+          "item_id": "item_1",
+          "command": "/bin/zsh -lc \"sed -n '1,240p' $FIXTURE/.agents/skills/seamark-understand-repo/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "8456123b11b16d264140211129b6ac55a9a5c58d51433d2e98908afc66e3910f",
+          "observed_frontmatter_names": [
+            "seamark-understand-repo"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "cli",
+          "tool": "orient",
+          "item_id": "item_4",
+          "command": "/bin/zsh -lc 'seamark orient'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_6",
+          "command": "/bin/zsh -lc 'seamark why server/app.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_9",
+          "command": "/bin/zsh -lc 'seamark why web/src/api/generated.ts'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_8",
+          "command": "/bin/zsh -lc 'seamark why server/presenters.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_7",
+          "command": "/bin/zsh -lc 'seamark why server/schema.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_27",
+          "command": "/bin/zsh -lc 'seamark why server/routes.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_28",
+          "command": "/bin/zsh -lc 'seamark why tools/sync_api.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "status",
+          "item_id": "item_30",
+          "command": "/bin/zsh -lc 'seamark status'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_32",
+          "command": "/bin/zsh -lc 'seamark why web/src/workspaces/card.ts'",
+          "exit_code": 0
+        }
+      ],
+      "usage": {
+        "input_tokens": 162025,
+        "cached_input_tokens": 143360,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 8675,
+        "reasoning_output_tokens": 3978
+      },
+      "thread_id": "01a07d0a-a540-7f92-82c7-9b68d9a2b333",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:06:45.795922+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/understand-web-client.jsonl",
+      "transcript_sha256": "38ce2a2b54c8aa09448fcff692c6c9b6692be90e538b79d79c385d65393db71d",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "understand-sync-mechanism",
+      "expect": "seamark-understand-repo",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:06:46.826882+00:00",
+      "activated_skills": [
+        "seamark-understand-repo"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-understand-repo",
+          "item_id": "item_1",
+          "command": "/bin/zsh -lc \"sed -n '1,220p' $FIXTURE/.agents/skills/seamark-understand-repo/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "8456123b11b16d264140211129b6ac55a9a5c58d51433d2e98908afc66e3910f",
+          "observed_frontmatter_names": [
+            "seamark-understand-repo"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "mcp",
+          "tool": "orient",
+          "item_id": "item_5",
+          "arguments": {},
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_7",
+          "arguments": {
+            "query": "server/schema.py"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_8",
+          "arguments": {
+            "query": "tools/sync_api.py"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_9",
+          "arguments": {
+            "query": "web/src/api/generated.ts"
+          },
+          "error": null,
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input_tokens": 147554,
+        "cached_input_tokens": 131584,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 7289,
+        "reasoning_output_tokens": 3487
+      },
+      "thread_id": "01a07d0d-1e4b-78b1-9858-fd33d405e8ee",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:09:01.460485+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/understand-sync-mechanism.jsonl",
+      "transcript_sha256": "e5dc1ad583fa898b5150d335ce35388d064f54f9684437fa3255270e6df1dfbe",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "understand-load-bearing",
+      "expect": "seamark-understand-repo",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:09:02.366561+00:00",
+      "activated_skills": [
+        "seamark-understand-repo"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-understand-repo",
+          "item_id": "item_1",
+          "command": "/bin/zsh -lc \"sed -n '1,220p' $FIXTURE/.agents/skills/seamark-understand-repo/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "8456123b11b16d264140211129b6ac55a9a5c58d51433d2e98908afc66e3910f",
+          "observed_frontmatter_names": [
+            "seamark-understand-repo"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "mcp",
+          "tool": "orient",
+          "item_id": "item_3",
+          "arguments": {},
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_5",
+          "arguments": {
+            "query": "server/presenters.workspace_summary"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_6",
+          "arguments": {
+            "query": "server/app.get_workspace"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_7",
+          "arguments": {
+            "query": "server/presenters.py"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "expand",
+          "item_id": "item_9",
+          "arguments": {
+            "ref": "server/presenters.py:1-120"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "expand",
+          "item_id": "item_10",
+          "arguments": {
+            "ref": "server/app.py:1-120"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "expand",
+          "item_id": "item_11",
+          "arguments": {
+            "ref": "tests/test_presenters.py:1-220"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "expand",
+          "item_id": "item_12",
+          "arguments": {
+            "ref": "server/schema.py:1-220"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_26",
+          "arguments": {
+            "query": "server/app.encode_response"
+          },
+          "error": null,
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input_tokens": 105232,
+        "cached_input_tokens": 92672,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 5635,
+        "reasoning_output_tokens": 3543
+      },
+      "thread_id": "01a07d0f-2fc2-7db0-9d87-3172196845a9",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:10:51.365029+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/understand-load-bearing.jsonl",
+      "transcript_sha256": "f55f7a4a8eb24118f1d012a19a53a8464ccfbc2ef765a405af53a4c435178f5e",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "understand-cochange-hubs",
+      "expect": "seamark-understand-repo",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:10:52.260183+00:00",
+      "activated_skills": [
+        "seamark-understand-repo"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-understand-repo",
+          "item_id": "item_5",
+          "command": "/bin/zsh -c \"sed -n '1,260p' $FIXTURE/.agents/skills/seamark-understand-repo/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "db397831ff7cf16d443953fc858be42e89737d58e311cc31aa29548220c20667",
+          "observed_frontmatter_names": [
+            "seamark-understand-repo"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "mcp",
+          "tool": "orient",
+          "item_id": "item_6",
+          "arguments": {},
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_8",
+          "arguments": {
+            "query": "server/schema.py"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_9",
+          "arguments": {
+            "query": "web/src/api/generated.ts"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_10",
+          "arguments": {
+            "query": "server/presenters.py"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_11",
+          "arguments": {
+            "query": "web/src/workspaces/card.ts"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_12",
+          "arguments": {
+            "query": "tests/test_presenters.py"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_14",
+          "arguments": {
+            "query": "server/app.py"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_15",
+          "arguments": {
+            "query": "server/app.encode_response"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_16",
+          "arguments": {
+            "query": "server/app.get_workspace"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "change_set",
+          "item_id": "item_18",
+          "arguments": {
+            "files": [
+              "server/app.py",
+              "server/presenters.py",
+              "server/schema.py",
+              "web/src/api/generated.ts",
+              "web/src/workspaces/card.ts",
+              "tests/test_presenters.py"
+            ]
+          },
+          "error": null,
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input_tokens": 91382,
+        "cached_input_tokens": 76800,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 4379,
+        "reasoning_output_tokens": 2691
+      },
+      "thread_id": "01a07d10-dd06-7de0-83d6-746f3e0cf6fd",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:12:24.120177+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/understand-cochange-hubs.jsonl",
+      "transcript_sha256": "c23f092d48a0c53a9a7ce272f36c6734511e39c2b25cf01f9820262a954bfeea",
+      "failed_commands": [
+        {
+          "item_id": "item_2",
+          "command": "/bin/zsh -c \"sed -n '1,240p' $FIXTURE/.agents/skills/understand-cochange-hubs/SKILL.md\"",
+          "exit_code": 1
+        }
+      ],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "plan-billing-field",
+      "expect": "seamark-plan-change",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:06:45.469568+00:00",
+      "activated_skills": [
+        "seamark-plan-change",
+        "seamark-review-change"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-plan-change",
+          "item_id": "item_2",
+          "command": "/bin/zsh -lc \"sed -n '1,220p' $FIXTURE/.agents/skills/seamark-plan-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "a3db9dc88c8fb88f54b60ab5b8359436cdccd8fcfc5ef6ea4a0899c98881356a",
+          "observed_frontmatter_names": [
+            "seamark-plan-change"
+          ]
+        },
+        {
+          "skill": "seamark-review-change",
+          "item_id": "item_53",
+          "command": "/bin/zsh -lc \"sed -n '1,240p' $FIXTURE/.agents/skills/seamark-review-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "80b2216ecfd936a573402688a6970a08c98a0fdcbd4568022424a8adb9a4e9b9",
+          "observed_frontmatter_names": [
+            "seamark-review-change"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "cli",
+          "tool": "orient",
+          "item_id": "item_24",
+          "command": "/bin/zsh -lc 'seamark orient'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_31",
+          "command": "/bin/zsh -lc 'seamark why tests/test_presenters.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_30",
+          "command": "/bin/zsh -lc 'seamark why web/src/api/generated.ts'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_28",
+          "command": "/bin/zsh -lc 'seamark why server/presenters.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_29",
+          "command": "/bin/zsh -lc 'seamark why server/schema.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "lessons",
+          "item_id": "item_35",
+          "command": "/bin/zsh -lc 'seamark lessons --help'",
+          "exit_code": 0,
+          "help_only": true
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_36",
+          "command": "/bin/zsh -lc 'seamark why web/src/api/client.ts'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_37",
+          "command": "/bin/zsh -lc 'seamark why web/src/workspaces/card.ts'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "lessons",
+          "item_id": "item_38",
+          "command": "/bin/zsh -lc 'seamark lessons --file server/presenters.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "lessons",
+          "item_id": "item_42",
+          "command": "/bin/zsh -lc 'seamark lessons --file tests/test_presenters.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "lessons",
+          "item_id": "item_41",
+          "command": "/bin/zsh -lc 'seamark lessons --file web/src/api/generated.ts'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "lessons",
+          "item_id": "item_40",
+          "command": "/bin/zsh -lc 'seamark lessons --file web/src/workspaces/card.ts'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "lessons",
+          "item_id": "item_39",
+          "command": "/bin/zsh -lc 'seamark lessons --file server/schema.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "check",
+          "item_id": "item_55",
+          "command": "/bin/zsh -lc 'seamark check'",
+          "exit_code": 0
+        }
+      ],
+      "usage": {
+        "input_tokens": 321221,
+        "cached_input_tokens": 296960,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 7760,
+        "reasoning_output_tokens": 3469
+      },
+      "thread_id": "01a07d0d-192d-7722-825e-14238fb1a9f3",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:09:38.966325+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/plan-billing-field.jsonl",
+      "transcript_sha256": "3d8d606d545bab93fd735c2405588a73a121a0bc5013a8159313f8c717d0978d",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "plan-rename-region",
+      "expect": "seamark-plan-change",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:09:39.823992+00:00",
+      "activated_skills": [
+        "seamark-plan-change",
+        "seamark-review-change"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-plan-change",
+          "item_id": "item_1",
+          "command": "/bin/zsh -lc \"sed -n '1,220p' $FIXTURE/.agents/skills/seamark-plan-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "a3db9dc88c8fb88f54b60ab5b8359436cdccd8fcfc5ef6ea4a0899c98881356a",
+          "observed_frontmatter_names": [
+            "seamark-plan-change"
+          ]
+        },
+        {
+          "skill": "seamark-review-change",
+          "item_id": "item_29",
+          "command": "/bin/zsh -lc \"sed -n '1,220p' $FIXTURE/.agents/skills/seamark-review-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "80b2216ecfd936a573402688a6970a08c98a0fdcbd4568022424a8adb9a4e9b9",
+          "observed_frontmatter_names": [
+            "seamark-review-change"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "mcp",
+          "tool": "orient",
+          "item_id": "item_3",
+          "arguments": {},
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "change_set",
+          "item_id": "item_14",
+          "arguments": {
+            "files": [
+              "server/schema.py",
+              "server/presenters.py",
+              "tests/test_presenters.py",
+              "web/src/api/generated.ts",
+              "web/src/workspaces/card.ts"
+            ]
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_15",
+          "arguments": {
+            "query": "server/presenters.workspace_summary"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_16",
+          "arguments": {
+            "query": "web/src/api/generated.ts"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_17",
+          "arguments": {
+            "query": "server/schema.py"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_18",
+          "arguments": {
+            "query": "web/src/workspaces/card.ts"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "check",
+          "item_id": "item_30",
+          "arguments": {},
+          "error": null,
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input_tokens": 189315,
+        "cached_input_tokens": 168448,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 4456,
+        "reasoning_output_tokens": 1540
+      },
+      "thread_id": "01a07d0f-c20c-7172-bed2-bffe9ff37d6c",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:11:32.496776+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/plan-rename-region.jsonl",
+      "transcript_sha256": "97837b46fa63900b555594af56333f9d40681a839942e019c2255f25020dc709",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "plan-task-minimal",
+      "expect": "seamark-plan-change",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:11:33.351663+00:00",
+      "activated_skills": [
+        "seamark-plan-change",
+        "seamark-review-change"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-plan-change",
+          "item_id": "item_2",
+          "command": "/bin/zsh -lc \"sed -n '1,240p' $FIXTURE/.agents/skills/seamark-plan-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "a3db9dc88c8fb88f54b60ab5b8359436cdccd8fcfc5ef6ea4a0899c98881356a",
+          "observed_frontmatter_names": [
+            "seamark-plan-change"
+          ]
+        },
+        {
+          "skill": "seamark-review-change",
+          "item_id": "item_40",
+          "command": "/bin/zsh -lc \"sed -n '1,260p' $FIXTURE/.agents/skills/seamark-review-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "80b2216ecfd936a573402688a6970a08c98a0fdcbd4568022424a8adb9a4e9b9",
+          "observed_frontmatter_names": [
+            "seamark-review-change"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "cli",
+          "tool": "status",
+          "item_id": "item_14",
+          "command": "/bin/zsh -lc 'seamark status'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_17",
+          "command": "/bin/zsh -lc 'seamark why server/schema.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_16",
+          "command": "/bin/zsh -lc 'seamark why server/presenters.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "why",
+          "item_id": "item_19",
+          "command": "/bin/zsh -lc 'seamark why tests/test_presenters.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "lessons",
+          "item_id": "item_27",
+          "command": "/bin/zsh -lc 'seamark lessons --file web/src/api/generated.ts'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "lessons",
+          "item_id": "item_28",
+          "command": "/bin/zsh -lc 'seamark lessons --file tests/test_presenters.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "lessons",
+          "item_id": "item_29",
+          "command": "/bin/zsh -lc 'seamark lessons --file server/presenters.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "lessons",
+          "item_id": "item_32",
+          "command": "/bin/zsh -lc 'seamark lessons --file server/schema.py'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "lessons",
+          "item_id": "item_31",
+          "command": "/bin/zsh -lc 'seamark lessons --file web/src/api/generated.ts'",
+          "exit_code": 0
+        },
+        {
+          "transport": "cli",
+          "tool": "check",
+          "item_id": "item_42",
+          "command": "/bin/zsh -lc 'seamark check'",
+          "exit_code": 0
+        }
+      ],
+      "usage": {
+        "input_tokens": 320297,
+        "cached_input_tokens": 295424,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 7046,
+        "reasoning_output_tokens": 2336
+      },
+      "thread_id": "01a07d11-7d8d-7e73-a1d0-d4becf813fc2",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:14:13.183618+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/plan-task-minimal.jsonl",
+      "transcript_sha256": "a63d69f4978f92677c365f8c05dd79a2e5c86fde0de02699cf2d723d1624756d",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "plan-task-owner",
+      "expect": "seamark-plan-change",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:14:14.066374+00:00",
+      "activated_skills": [
+        "seamark-plan-change",
+        "seamark-review-change"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-plan-change",
+          "item_id": "item_2",
+          "command": "/bin/zsh -lc \"sed -n '1,220p' $FIXTURE/.agents/skills/seamark-plan-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "a3db9dc88c8fb88f54b60ab5b8359436cdccd8fcfc5ef6ea4a0899c98881356a",
+          "observed_frontmatter_names": [
+            "seamark-plan-change"
+          ]
+        },
+        {
+          "skill": "seamark-review-change",
+          "item_id": "item_33",
+          "command": "/bin/zsh -lc \"sed -n '1,240p' $FIXTURE/.agents/skills/seamark-review-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "80b2216ecfd936a573402688a6970a08c98a0fdcbd4568022424a8adb9a4e9b9",
+          "observed_frontmatter_names": [
+            "seamark-review-change"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "mcp",
+          "tool": "orient",
+          "item_id": "item_11",
+          "arguments": {},
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "change_set",
+          "item_id": "item_15",
+          "arguments": {
+            "files": [
+              "server/presenters.py",
+              "server/schema.py",
+              "tests/test_presenters.py",
+              "web/src/api/generated.ts",
+              "tools/sync_api.py",
+              "server/app.py"
+            ]
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_19",
+          "arguments": {
+            "query": "web/src/workspaces/card.ts"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "check",
+          "item_id": "item_34",
+          "arguments": {},
+          "error": null,
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input_tokens": 209895,
+        "cached_input_tokens": 194048,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 5498,
+        "reasoning_output_tokens": 2376
+      },
+      "thread_id": "01a07d13-f14c-7262-bd6a-eec99ad42b7a",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:16:19.197962+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/plan-task-owner.jsonl",
+      "transcript_sha256": "4ea04cba1d4066fef1c4fdedc0b8cec51e42dc2b713953bf88c5f9f3262bfec2",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "plan-fix-missing-region",
+      "expect": "seamark-plan-change",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:15:53.048724+00:00",
+      "activated_skills": [
+        "seamark-plan-change",
+        "seamark-review-change"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-plan-change",
+          "item_id": "item_2",
+          "command": "/bin/zsh -lc \"sed -n '1,220p' $FIXTURE/.agents/skills/seamark-plan-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "a3db9dc88c8fb88f54b60ab5b8359436cdccd8fcfc5ef6ea4a0899c98881356a",
+          "observed_frontmatter_names": [
+            "seamark-plan-change"
+          ]
+        },
+        {
+          "skill": "seamark-review-change",
+          "item_id": "item_43",
+          "command": "/bin/zsh -lc \"sed -n '1,240p' $FIXTURE/.agents/skills/seamark-review-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "80b2216ecfd936a573402688a6970a08c98a0fdcbd4568022424a8adb9a4e9b9",
+          "observed_frontmatter_names": [
+            "seamark-review-change"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "mcp",
+          "tool": "change_set",
+          "item_id": "item_22",
+          "arguments": {
+            "files": [
+              "server/presenters.py",
+              "server/schema.py",
+              "server/app.py",
+              "tests/test_presenters.py",
+              "tools/sync_api.py",
+              "web/src/api/generated.ts",
+              "web/src/workspaces/card.ts"
+            ]
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "check",
+          "item_id": "item_45",
+          "arguments": {
+            "diff": "diff --git a/server/app.py b/server/app.py\nindex 0fd26a6..a52a9d9 100644\n--- a/server/app.py\n+++ b/server/app.py\n@@ -4,7 +4,7 @@ from server.presenters import workspace_summary\n from server.schema import SCHEMAS\n \n \n def encode_response(schema_name: str, payload: dict[str, str]) -> dict[str, str]:\n-    allowed = {name for name, _ in SCHEMAS[schema_name]}\n+    allowed = {field[0] for field in SCHEMAS[schema_name]}\n     return {name: value for name, value in payload.items() if name in allowed}\n \n \n diff --git a/server/presenters.py b/server/presenters.py\nindex 52974f8..f8ae1e6 100644\n--- a/server/presenters.py\n+++ b/server/presenters.py\n@@ -2,7 +2,10 @@ from server.domain import Workspace\n \n \n def workspace_summary(workspace: Workspace) -> dict[str, str]:\n-    return {\n+    summary = {\n         \"id\": workspace.id,\n         \"displayName\": workspace.display_name,\n-        \"region\": workspace.region,\n     }\n+    if workspace.region is not None:\n+        summary[\"region\"] = workspace.region\n+    return summary\n diff --git a/server/schema.py b/server/schema.py\nindex 5e0601e..7cd2de3 100644\n--- a/server/schema.py\n+++ b/server/schema.py\n@@ -4,6 +4,6 @@ SCHEMAS = {\n     \"WorkspaceSummary\": (\n         (\"id\", \"string\"),\n         (\"displayName\", \"string\"),\n-        (\"region\", \"string\"),\n+        (\"region\", \"string\", True),\n     ),\n }\ndiff --git a/tests/test_presenters.py b/tests/test_presenters.py\nindex 1fdb3f9..1b9cff9 100644\n--- a/tests/test_presenters.py\n+++ b/tests/test_presenters.py\n@@ -12,5 +12,12 @@ class WorkspaceSummaryTests(unittest.TestCase):\n         self.assertEqual(payload[\"displayName\"], \"Northwind\")\n         self.assertEqual(payload[\"region\"], \"eu-west\")\n \n+    def test_omits_region_when_missing(self) -> None:\n+        workspace = Workspace(\"ws-2\", \"Northwind\", None, \"EUR\", \"user-1\")\n+        payload = get_workspace(workspace)\n+        self.assertEqual(payload[\"id\"], \"ws-2\")\n+        self.assertEqual(payload[\"displayName\"], \"Northwind\")\n+        self.assertNotIn(\"region\", payload)\n+\n \n if __name__ == \"__main__\":\n     unittest.main()\ndiff --git a/tools/sync_api.py b/tools/sync_api.py\nindex 2689fe3..5c38ca7 100644\n--- a/tools/sync_api.py\n+++ b/tools/sync_api.py\n@@ -17,8 +17,11 @@ def render() -> str:\n     ]\n     for name, fields in SCHEMAS.items():\n         lines.append(f\"export interface {name} {{\")\n-        for field, kind in fields:\n-            lines.append(f\"  {field}: {kind};\")\n+        for field in fields:\n+            name_, kind = field[0], field[1]\n+            optional = len(field) > 2 and bool(field[2])\n+            suffix = \"?\" if optional else \"\"\n+            lines.append(f\"  {name_}{suffix}: {kind};\")\n         lines.extend((\"}\", \"\"))\n     return \"\\n\".join(lines)\ndiff --git a/web/src/api/generated.ts b/web/src/api/generated.ts\nindex 3e09df0..7ecdf52 100644\n--- a/web/src/api/generated.ts\n+++ b/web/src/api/generated.ts\n@@ -3,5 +3,5 @@\n export interface WorkspaceSummary {\n   id: string;\n   displayName: string;\n-  region: string;\n+  region?: string;\n }\ndiff --git a/web/src/workspaces/card.ts b/web/src/workspaces/card.ts\nindex 6fd3286..f035bb3 100644\n--- a/web/src/workspaces/card.ts\n+++ b/web/src/workspaces/card.ts\n@@ -1,5 +1,7 @@\n import type { WorkspaceSummary } from \"../api/generated\";\n \n export function workspaceTitle(workspace: WorkspaceSummary): string {\n-  return workspace.displayName + \" \u00b7 \" + workspace.region;\n+  return workspace.region == null\n+    ? workspace.displayName\n+    : workspace.displayName + \" \u00b7 \" + workspace.region;\n }\n"
+          },
+          "error": null,
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input_tokens": 384427,
+        "cached_input_tokens": 364032,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 12520,
+        "reasoning_output_tokens": 6139
+      },
+      "thread_id": "01a07d15-7407-76e1-881d-63bdce586f9f",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:20:00.887817+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/plan-fix-missing-region.jsonl",
+      "transcript_sha256": "41f85a8bdb2e5cb57744588911b870044e7c042bf9f54c847e24a9b5ebfe599e",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "review-before-commit",
+      "expect": "seamark-review-change",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:06:50.355417+00:00",
+      "activated_skills": [
+        "seamark-review-change"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-review-change",
+          "item_id": "item_2",
+          "command": "/bin/zsh -lc \"sed -n '1,220p' $FIXTURE/.agents/skills/seamark-review-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "80b2216ecfd936a573402688a6970a08c98a0fdcbd4568022424a8adb9a4e9b9",
+          "observed_frontmatter_names": [
+            "seamark-review-change"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "mcp",
+          "tool": "check",
+          "item_id": "item_6",
+          "arguments": {},
+          "error": null,
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input_tokens": 106818,
+        "cached_input_tokens": 92672,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 3396,
+        "reasoning_output_tokens": 1555
+      },
+      "thread_id": "01a07d0d-2c14-7703-a800-d24c7974f7c1",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:08:08.223001+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/review-before-commit.jsonl",
+      "transcript_sha256": "7a932a705fe6185b4e0599680bf6ced265df3a53b3cba5354faa8c74edddc45e",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "review-double-check",
+      "expect": "seamark-review-change",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:08:09.104482+00:00",
+      "activated_skills": [
+        "seamark-review-change"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-review-change",
+          "item_id": "item_1",
+          "command": "/bin/zsh -lc \"sed -n '1,240p' $FIXTURE/.agents/skills/seamark-review-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "80b2216ecfd936a573402688a6970a08c98a0fdcbd4568022424a8adb9a4e9b9",
+          "observed_frontmatter_names": [
+            "seamark-review-change"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "cli",
+          "tool": "check",
+          "item_id": "item_6",
+          "command": "/bin/zsh -lc 'seamark check'",
+          "exit_code": 0
+        }
+      ],
+      "usage": {
+        "input_tokens": 85366,
+        "cached_input_tokens": 75776,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 4061,
+        "reasoning_output_tokens": 2033
+      },
+      "thread_id": "01a07d0e-5fb8-79a0-a7b7-e0b3a88e6f79",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:09:30.433181+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/review-double-check.jsonl",
+      "transcript_sha256": "29d85e3b421274c0f40ef17d55721db687ceaced4d737af6ba7da78d452e3d4a",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "review-task-handover",
+      "expect": "seamark-review-change",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:09:31.310601+00:00",
+      "activated_skills": [
+        "seamark-review-change"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-review-change",
+          "item_id": "item_2",
+          "command": "/bin/zsh -lc \"sed -n '1,220p' $FIXTURE/.agents/skills/seamark-review-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "80b2216ecfd936a573402688a6970a08c98a0fdcbd4568022424a8adb9a4e9b9",
+          "observed_frontmatter_names": [
+            "seamark-review-change"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "mcp",
+          "tool": "check",
+          "item_id": "item_3",
+          "arguments": {},
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_7",
+          "arguments": {
+            "query": "server/presenters.py"
+          },
+          "error": null,
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input_tokens": 57239,
+        "cached_input_tokens": 45056,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 2458,
+        "reasoning_output_tokens": 1458
+      },
+      "thread_id": "01a07d0f-a0d0-7553-9a93-a5b5dbc469bc",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:10:25.409097+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/review-task-handover.jsonl",
+      "transcript_sha256": "49d2d6864e43bea5091d3e11b896b9c5191c2a95b83e4a58989d680c45867690",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "review-before-pr",
+      "expect": "seamark-review-change",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:10:26.297024+00:00",
+      "activated_skills": [
+        "review-code",
+        "seamark-review-change"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-review-change",
+          "item_id": "item_1",
+          "command": "/bin/zsh -lc \"sed -n '1,260p' $FIXTURE/.agents/skills/seamark-review-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "80b2216ecfd936a573402688a6970a08c98a0fdcbd4568022424a8adb9a4e9b9",
+          "observed_frontmatter_names": [
+            "seamark-review-change"
+          ]
+        },
+        {
+          "skill": "review-code",
+          "item_id": "item_3",
+          "command": "/bin/zsh -lc \"sed -n '1,220p' $USER_SKILLS/review-code/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "389cd04c53eba7689d8cc8ed72a3da333117506c63384877f98052f009644f3a",
+          "observed_frontmatter_names": [
+            "review-code"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "cli",
+          "tool": "check",
+          "item_id": "item_17",
+          "command": "/bin/zsh -lc 'seamark check'",
+          "exit_code": 0
+        }
+      ],
+      "usage": {
+        "input_tokens": 172789,
+        "cached_input_tokens": 159744,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 4866,
+        "reasoning_output_tokens": 1660
+      },
+      "thread_id": "01a07d10-7797-72d1-adf5-37541bc0fcf9",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:12:14.301763+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/review-before-pr.jsonl",
+      "transcript_sha256": "82d8399ead90bf5431d94a737dfb581ed7c2a6e062be76513e87712aa182fc13",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "review-what-breaks",
+      "expect": "seamark-review-change",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:12:15.176166+00:00",
+      "activated_skills": [
+        "seamark-review-change"
+      ],
+      "skill_read_evidence": [
+        {
+          "skill": "seamark-review-change",
+          "item_id": "item_2",
+          "command": "/bin/zsh -c \"sed -n '1,220p' $FIXTURE/.agents/skills/seamark-review-change/SKILL.md\"",
+          "exit_code": 0,
+          "output_sha256": "68e07e3317298d43eabfa1457b30b77372032e9deb872d7a9c24132880864c84",
+          "observed_frontmatter_names": [
+            "seamark-review-change"
+          ]
+        }
+      ],
+      "seamark_calls": [
+        {
+          "transport": "mcp",
+          "tool": "check",
+          "item_id": "item_5",
+          "arguments": {},
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_9",
+          "arguments": {
+            "query": "server/presenters.py"
+          },
+          "error": null,
+          "status": "completed"
+        },
+        {
+          "transport": "mcp",
+          "tool": "why",
+          "item_id": "item_10",
+          "arguments": {
+            "query": "server/schema.py"
+          },
+          "error": null,
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input_tokens": 115283,
+        "cached_input_tokens": 100864,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 3640,
+        "reasoning_output_tokens": 1746
+      },
+      "thread_id": "01a07d12-20ec-7d03-b188-005083afe41e",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:13:39.077205+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/review-what-breaks.jsonl",
+      "transcript_sha256": "30e9965e9b7a495c426d66441737e8f26f74025fb9ba991479a13d2a0b9c748e",
+      "failed_commands": [
+        {
+          "item_id": "item_25",
+          "command": "/bin/zsh -c 'make check-api-sync'",
+          "exit_code": 2
+        }
+      ],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "typo-readme",
+      "expect": "none",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:13:39.936135+00:00",
+      "activated_skills": [],
+      "skill_read_evidence": [],
+      "seamark_calls": [],
+      "usage": {
+        "input_tokens": 22272,
+        "cached_input_tokens": 14336,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 397,
+        "reasoning_output_tokens": 41
+      },
+      "thread_id": "01a07d13-6c06-79a3-8f41-c59e1eef85da",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:13:55.617237+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/typo-readme.jsonl",
+      "transcript_sha256": "6e06365e5d44ff57c751e5ce0c32dc4a46227c843aab928b8991aa958a71183e",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "comment-pagination",
+      "expect": "none",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:13:56.613130+00:00",
+      "activated_skills": [],
+      "skill_read_evidence": [],
+      "seamark_calls": [],
+      "usage": {
+        "input_tokens": 21951,
+        "cached_input_tokens": 18432,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 356,
+        "reasoning_output_tokens": 45
+      },
+      "thread_id": "01a07d13-ad23-7df2-8839-8e8ee7b7607d",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:14:12.748771+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/comment-pagination.jsonl",
+      "transcript_sha256": "125ceb20d86372451f3560e8a4153872f7c8d8114194dd1d4790d6682c1a9dc9",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "symbol-lookup",
+      "expect": "none",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:02:41.215243+00:00",
+      "activated_skills": [],
+      "skill_read_evidence": [],
+      "seamark_calls": [],
+      "usage": {
+        "input_tokens": 14454,
+        "cached_input_tokens": 6656,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 259,
+        "reasoning_output_tokens": 84
+      },
+      "thread_id": "01a07d09-5f73-7592-9342-5b320a7a3950",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:02:50.053003+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/symbol-lookup.jsonl",
+      "transcript_sha256": "f38fe42af28edf522a8192b5f7ed4827511a6c63c27646881b64cdcc7685728c",
+      "failed_commands": [],
+      "activation_hit": true
+    },
+    {
+      "prompt_id": "rename-local-variable",
+      "expect": "none",
+      "complete": true,
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "started_at": "2026-09-07T18:14:13.667874+00:00",
+      "activated_skills": [],
+      "skill_read_evidence": [],
+      "seamark_calls": [],
+      "usage": {
+        "input_tokens": 29657,
+        "cached_input_tokens": 25600,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 504,
+        "reasoning_output_tokens": 99
+      },
+      "thread_id": "01a07d13-efc7-76e3-b8c2-a2c0ec94e1d2",
+      "exit_code": 0,
+      "finished_at": "2026-09-07T18:14:33.552542+00:00",
+      "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
+      "transcript": "../transcripts/codex-activation-2026-09-07-v2/rename-local-variable.jsonl",
+      "transcript_sha256": "ab62ddc4e3f6eb9584d2d0be2108997037d19d8e1afde35b1aa745bca41c09db",
+      "failed_commands": [],
+      "activation_hit": true
+    }
+  ]
+}
