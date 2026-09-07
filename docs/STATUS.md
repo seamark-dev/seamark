@@ -22,8 +22,8 @@ Local indexing, history mining, orientation, and the read surfaces.
 | MCP server | working; five tools + `orient`/`status` resources + `onboard` prompt |
 | Schema versioning, durable-state export/import | working |
 | Health: `seamark status`, `seamark doctor` | working |
-| Agent skills (`skills/`, embedded; `init --skills`) | working; opt-in; installs into `.claude/skills` and `.agents/skills`, reported by `status`/`doctor`; `init --approve-tools` writes the Claude Code allow rules and the Codex per-tool approvals the model-driven path needs, reported by `status`/`doctor`; first paired cohort (2026-09-05, Haiku 4.5, 15 pairs) found no invariant effect at +6.7 pp against the frozen +30 pp; the skills changed process, not outcomes, so the fixtures, the skill text, `change_set`, and `check` were revised for the second cohort |
-| Skills workflow benchmark (`make skills-bench`, MCP-only vs MCP + skills; `make skills-activation`) | first cohort ran 2026-09-05 (no effect; see the agent skills row); fixtures, trace metrics, and activation set revised for the second cohort; own rows, claims, fingerprint, and report, none shared with the lessons benchmark ([bench/README.md](../bench/README.md)) |
+| Agent skills (`skills/`, embedded; `init --skills`) | working; opt-in; installs into `.claude/skills` and `.agents/skills`, reported by `status`/`doctor`; `init --approve-tools` writes the Claude Code allow rules and the Codex per-tool approvals the model-driven path needs, reported by `status`/`doctor`; the second paired cohort (2026-09-05, Haiku 4.5, 15 pairs) passed the frozen claim at +73 pp mean invariant lift (12/15 vs 1/15) at about twice the context per session; the skills stay opt-in so the spend is the user's decision ([bench/skills-report-v2.md](../bench/skills-report-v2.md)) |
+| Skills workflow benchmark (`make skills-bench`, MCP-only vs MCP + skills; `make skills-activation`) | two cohorts ran 2026-09-05: the first found no effect and its transcripts drove the fixture, skill, `change_set`, and `check` revisions; the second passed the frozen claim; own rows, claims, fingerprint, and report, none shared with the lessons benchmark ([bench/README.md](../bench/README.md)) |
 
 Known limits are documented in the README's *Honest limits*: syntactic
 resolution with labeled confidence, no scope tracking, conservative
@@ -64,8 +64,9 @@ agents inside real isolation regardless.
 
 ## Distribution
 
-Released: [v0.5.0](https://github.com/seamark-dev/seamark/releases/tag/v0.5.0)
-(2026-08-27) ships native archives for macOS and Linux (amd64/arm64),
+Released: [v0.6.0](https://github.com/seamark-dev/seamark/releases/tag/v0.6.0)
+(2026-09-05) adds the three opt-in agent skills and their benchmark and
+ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
 (`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
 compiler. Windows is untested and unsupported.
@@ -110,6 +111,18 @@ SBOMs, and an npm install are the next distribution milestone.
   pinned task, Haiku/medium configuration, and runtime—not broad external
   validity. Raw rows and the
   [generated assessment](../bench/otel-report-v7.md) live under `bench/`.
+- The second skills workflow cohort meets its frozen threshold across the
+  three co-change fixtures and five paired trials each: MCP + skills
+  preserved the companion-file invariant in 12/15 task-complete sessions
+  versus 1/15 for the MCP server and its approvals alone, +60, +80, and +80
+  percentage points per instance and +73 on average, with all 30 tasks
+  complete and no harmful interference. The activation set passed at 5/5
+  recall per skill and 0/4 false activations. The skills arm processed
+  about twice the context per session, which is why the skills stay opt-in.
+  The first cohort, on histories that carried the pair at the mining floor
+  and a `check` without a companion list, measured +6.7 points; both cohorts
+  and the diagnosis are in [bench/README.md](../bench/README.md) and the
+  [generated assessment](../bench/skills-report-v2.md).
 - The separate [OpenTelemetry case study](case-studies/opentelemetry-histogram-reset.md)
   records the normal user workflow from a pinned commit through local-fix
   indexing, bounded distillation, proposal review, accepted-pin delivery, and

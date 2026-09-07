@@ -621,6 +621,10 @@ make skills-activation BENCH_FLAGS='-model claude-haiku-4-5-20251001 -effort med
 make skills-bench-report BENCH_RESULTS='bench/workflow-results-v1.jsonl' BENCH_REPORT_FLAGS='-activation bench/activation-results-v1.jsonl -out bench/skills-report-v1.md'
 ```
 
+Each cohort gets its own numbered files (`-out bench/workflow-results-vN.jsonl`,
+`bench/activation-results-vN.jsonl`, `bench/skills-report-vN.md`), so a
+committed cohort's rows are never appended to.
+
 `-generate <dir>` writes one fixture without any wiring, for a manual
 session such as the Codex checklist.
 
@@ -744,6 +748,46 @@ Makefile alone. Those findings are why the fixtures, the skills, the
 activation set, `change_set`, and `check` changed before the second cohort;
 that cohort runs on a new fingerprint and a new claim registry, and this
 one stays as the baseline it measured.
+
+### Second workflow cohort
+
+The second cohort ran on 2026-09-05 with Seamark `v0.5.4-18-g802295a`
+(commit `802295a`), Claude Haiku 4.5 at medium effort, and five valid pairs
+per instance; every row was valid, no seamark call was refused, and the
+whole cohort cost $2.66:
+
+| Instance | MCP + skills invariant | MCP-only invariant | Effect | Approx. 95% interval | Mean context skills/only | Cost skills/only |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `python-ts-schema-sync-cochange-v1` | 4/5 | 1/5 | +60 pp | 0 to +83 pp | 471k / 209k | $0.55 / $0.31 |
+| `python-cache-version-cochange-v1` | 4/5 | 0/5 | +80 pp | +19 to +96 pp | 440k / 227k | $0.52 / $0.32 |
+| `go-export-registry-cochange-v1` | 4/5 | 0/5 | +80 pp | +19 to +96 pp | 491k / 286k | $0.58 / $0.37 |
+
+The mean effect of +73.3 pp and the worst instance at +60 pp pass the frozen
+claim; all 30 sessions completed the task. The activation gate, run once on
+the same commit before the cohort with the nineteen-prompt set, passed at
+5/5 recall per skill and 0/4 false activations. The raw rows and the
+generated assessment are in
+[`workflow-results-v2.jsonl`](workflow-results-v2.jsonl),
+[`activation-results-v2.jsonl`](activation-results-v2.jsonl), and
+[`skills-report-v2.md`](skills-report-v2.md).
+
+The process rates show what changed between the cohorts. The plan skill
+activated in 15/15 skills-arm sessions (7/15 before), `change_set` ran
+before the first edit in 15/15 (7/15), the companion was opened after being
+named in 14/15, and `check` ran after the last edit in 14/15 (5/15). The
+cache-version instance isolates the skills' contribution from the
+product changes: the MCP-only agents also ran `change_set` first in all
+five sessions and saw `server/cache.py` with its fix subject on the reason
+line, yet opened it in none; the skills arm opened it in five and bumped
+the namespace in four. Nobody called `why` on the companion in any of the
+30 sessions; the reason line made that hop unnecessary.
+
+The cost is real and stated beside the effect: the skills arm processed
+about twice the context per session, 200k to 260k tokens more, and cost
+about 70% more. The skills therefore stay opt-in. This is controlled
+synthetic evidence under one model, effort, and runtime; the fixtures were
+built to carry the pair, so it shows that the skills act on evidence that
+exists, not that every repository has it.
 
 ## Artifact policy
 

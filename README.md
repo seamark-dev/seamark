@@ -581,6 +581,16 @@ The skills do not require a repository overview before every task.
 For a typo, comment edit, or lookup in a known file, they tell the agent
 to work directly with the code.
 
+Measured effect: in a paired benchmark on three synthetic repositories
+whose history carries a companion file the task must not forget (Claude
+Haiku 4.5, medium effort, five pairs per repository), MCP + skills kept the
+companion in sync in 12 of 15 sessions against 1 of 15 for the MCP server
+alone, a mean lift of 73 percentage points. The skills arm processed about
+twice the context per session. That spend is yours to decide, so the skills
+stay opt-in; the assessment is in
+[`bench/skills-report-v2.md`](bench/skills-report-v2.md) and the protocol in
+[`bench/README.md`](bench/README.md).
+
 **Install**
 
 From your repository, choose one command:

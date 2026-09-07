@@ -19,19 +19,28 @@ go run ./cmd/skills-bench -instance python-ts-schema-sync-cochange-v1 -generate 
 cd /tmp/codex-fixture && seamark init --skills=codex --approve-tools && seamark index
 ```
 
-For the two review prompts, apply the naive change first (add
-`billingCurrency` to `server/schema.py` and `server/presenters.py` without
-regenerating the client), as `prepare: naive` does in the runner. Generate a
+For the review prompts marked `prepare: naive` in `prompts.yaml`, apply the
+naive change first (add `billingCurrency` to `server/schema.py` and
+`server/presenters.py` without regenerating the client), as the runner does. Generate a
 fresh directory for every prompt.
 
 | Prompt id | Expect | Date | Codex version | Activated skill | Seamark calls | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | understand-response-pipeline | seamark-understand-repo | | | | | |
 | understand-web-client | seamark-understand-repo | | | | | |
+| understand-sync-mechanism | seamark-understand-repo | | | | | |
+| understand-load-bearing | seamark-understand-repo | | | | | |
+| understand-cochange-hubs | seamark-understand-repo | | | | | |
 | plan-billing-field | seamark-plan-change | | | | | |
 | plan-rename-region | seamark-plan-change | | | | | |
+| plan-task-minimal | seamark-plan-change | | | | | |
+| plan-task-owner | seamark-plan-change | | | | | |
+| plan-fix-missing-region | seamark-plan-change | | | | | |
 | review-before-commit | seamark-review-change | | | | | |
 | review-double-check | seamark-review-change | | | | | |
+| review-task-handover | seamark-review-change | | | | | |
+| review-before-pr | seamark-review-change | | | | | |
+| review-what-breaks | seamark-review-change | | | | | |
 | typo-readme | none | | | | | |
 | comment-pagination | none | | | | | |
 | symbol-lookup | none | | | | | |

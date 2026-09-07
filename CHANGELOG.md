@@ -6,7 +6,7 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
-## Unreleased
+## v0.6.0 — 2026-09-05
 
 - **The MCP server states judgment rules, not a ritual.** The `initialize`
   instructions and the `onboard` prompt now say when each tool earns its
@@ -75,8 +75,20 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   passes the trial's settings file with `--settings`, because Claude Code
   ignores project allow rules in an untrusted workspace; a refused seamark
   or `Skill` call now invalidates the row. The lessons harness
-  sources, arms, claims, rows, and reports are unchanged. No cohort has run
-  yet; the skills stay opt-in.
+  sources, arms, claims, rows, and reports are unchanged.
+- **The skills preserve the companion-file invariant.** The second cohort
+  (2026-09-05, Claude Haiku 4.5 at medium effort, five valid pairs on each
+  of three co-change instances, $2.66) passed the frozen claim: MCP + skills
+  preserved the owner invariant in 12/15 task-complete sessions versus
+  1/15 for the MCP server alone, +60/+80/+80 percentage points per instance
+  and +73 on average against the frozen +30, with intervals of 0 to +83 and
+  +19 to +96, all 30 tasks completed, and no refused tool call. The first
+  cohort on the unrevised harness had measured +6.7 points. The activation
+  set passed at 5/5 recall per skill and 0/4 false activations. The cost
+  is visible: the skills arm processed about twice the context per
+  session. The skills stay opt-in (`seamark init --skills`), because that
+  spend is the user's to accept; the report is
+  [`bench/skills-report-v2.md`](bench/skills-report-v2.md).
 
 ## v0.5.3 — 2026-08-28
 
