@@ -44,6 +44,18 @@ func fixtureRoot(t *testing.T) (root, dbPath string) {
 	return root, dbPath
 }
 
+// stubAgent puts an executable named after the default agent CLI on
+// PATH for the test. A report-wide "no warnings" assertion must not
+// depend on whether the machine running the tests has Claude Code
+// installed: CI does not, a developer's laptop usually does.
+func stubAgent(t *testing.T) {
+	t.Helper()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // byName indexes a report's checks.
 func byName(r *Report) map[string]Check {
 	out := map[string]Check{}
@@ -228,6 +240,8 @@ func TestRunReportsSkillsNotInstalled(t *testing.T) {
 }
 
 func TestRunReportsSkillsInstalled(t *testing.T) {
+	stubAgent(t)
+
 	root, dbPath := fixtureRoot(t)
 	installSkills(t, root, skills.ModeClaude)
 
@@ -258,6 +272,8 @@ func TestRunDetectsStaleSkills(t *testing.T) {
 }
 
 func TestRunIgnoresForeignSkillDir(t *testing.T) {
+	stubAgent(t)
+
 	root, dbPath := fixtureRoot(t)
 
 	// The user's own skill under a shipped name, nothing else installed:
