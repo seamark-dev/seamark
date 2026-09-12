@@ -278,7 +278,8 @@ func Print(w io.Writer, s *Status) {
 
 // printApprovals renders the tool-approval line beside the skills line.
 // Not configured states the command, because approval is opt-in; a
-// partial, conflicting, or unreadable configuration is spelled out.
+// registration without approvals is partial, so it is spelled out with
+// the re-run hint, like a partial, conflicting, or unreadable one.
 func printApprovals(w io.Writer, s *Status) {
 	for _, c := range s.Approvals {
 		if c.State() != approve.StateNotConfigured {

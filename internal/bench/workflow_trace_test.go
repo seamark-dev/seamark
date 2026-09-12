@@ -104,6 +104,15 @@ func TestParseWorkflowTraceOrderRules(t *testing.T) {
 		assert.False(t, trace.WhyFollowedCompanion, "why cannot follow a companion that was never named")
 	})
 
+	t.Run("a companion planned by its absolute path is not named by the tool", func(t *testing.T) {
+		trace := parseWorkflowTrace(transcriptLines(
+			toolUseLine("t1", "mcp__seamark__change_set", `{"files":["/tmp/trial/server/schema.py","/tmp/trial/web/src/api/generated.ts"]}`),
+			toolResultLine("t1", `"`+changeSetResultText+`"`),
+		), companion)
+
+		assert.False(t, trace.CompanionNamedByChangeSet, "change_set accepts absolute paths, so the plan is read the same way")
+	})
+
 	t.Run("why before the naming change_set does not follow it", func(t *testing.T) {
 		trace := parseWorkflowTrace(transcriptLines(
 			toolUseLine("t1", "mcp__seamark__why", `{"query":"web/src/api/generated.ts"}`),
@@ -284,4 +293,11 @@ func TestParseWorkflowTraceCompanionOpenedAndNamedByCheck(t *testing.T) {
 		assert.True(t, companionSuggested("history suggests also reviewing\n  server/cache.py   2 shared commits with a.py, lift 1.3\n", "server/cache.py"))
 		assert.False(t, companionSuggested("history suggests also reviewing\n\n  server/cache.py\n", "server/cache.py"), "the section ends at a blank line")
 	})
+}
+
+func TestPathIsMatchesAbsolutePathsByTailOnly(t *testing.T) {
+	assert.True(t, pathIs("/tmp/trial/web/src/api/generated.ts", "web/src/api/generated.ts"))
+	assert.True(t, pathIs("./web/src/api/generated.ts", "web/src/api/generated.ts"))
+	assert.False(t, pathIs("old/web/src/api/generated.ts", "web/src/api/generated.ts"),
+		"a relative path that ends with the companion is another file")
 }

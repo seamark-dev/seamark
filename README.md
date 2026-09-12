@@ -626,7 +626,20 @@ seamark MCP tool (`mcp__seamark__orient` and the other four) and one per
 seamark skill (`Skill(seamark-plan-change)` and the other two). The tools
 are read-only queries over the local index, and a skill rule only lets the
 agent load that skill's text. Existing rules stay, nothing is ever removed,
-and `--print` previews the change.
+and `--print` previews the change. The tool rules are spelled with the
+server name your `.mcp.json` registers (`mcp__sm__orient` for a server
+named `sm`), a server-wide `mcp__seamark` rule counts as approving every
+tool, and a tool listed under `permissions.deny` or `permissions.ask` is
+reported as kept, never re-approved: Claude Code applies deny before
+allow, so an allow entry there would change nothing.
+
+Codex approvals are written when `--skills` names Codex (`codex` or
+`all`) or, without an explicit client, when a `.codex/` directory exists;
+`--skills=claude` configures Claude Code only. The skills themselves go to
+`.agents/skills/` when that directory exists. When only one of the two
+directories exists, init says which approvals are still missing. A
+registration without approvals, for either client, is reported as partial
+with the re-run hint, because every call still prompts.
 
 For **Codex**, run this from your repository to install the skills,
 connect Codex to Seamark, and let it use Seamark's five tools without

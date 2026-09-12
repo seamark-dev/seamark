@@ -1199,10 +1199,18 @@ func wireHook(ctx context.Context, dir string, cfg RunConfig, hookBin string) er
 		return nil
 	}
 
+	return indexFixture(ctx, dir, cfg.SeamarkBin)
+}
+
+// indexFixture builds the fixture's index with the given binary, so the
+// first hook or MCP call answers from a ready store instead of paying for a
+// rebuild inside the agent's session. The lessons and the workflow runners
+// both call it, so the two experiments prepare the index the same way.
+func indexFixture(ctx context.Context, dir, bin string) error {
 	setupCtx, cancel := context.WithTimeout(ctx, defaultSetupTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(setupCtx, cfg.SeamarkBin, "index")
+	cmd := exec.CommandContext(setupCtx, bin, "index")
 	cmd.Dir = dir
 
 	env, err := agentEnvironment(dir)

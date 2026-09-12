@@ -193,6 +193,10 @@ type ActivationRow struct {
 	MCPServers []MCPServerState `json:"mcp_servers,omitempty"`
 	Skills     []string         `json:"skills,omitempty"`
 	Plugins    []string         `json:"plugins,omitempty"`
+	// DeniedTools lists the tools the agent asked for and was refused. A
+	// refused Skill call is a recall miss the harness caused, not the
+	// model, so the row is invalid rather than a miss.
+	DeniedTools []string `json:"denied_tools,omitempty"`
 
 	SeamarkCalls     int            `json:"seamark_calls"`
 	SeamarkToolCalls map[string]int `json:"seamark_tool_calls,omitempty"`
@@ -413,8 +417,6 @@ func rateString(rate ActivationRate) string {
 // ActivationSummary is one activation run's outcome.
 type ActivationSummary struct {
 	Rows          []ActivationRow
-	RunID         string
-	Instance      string
 	StoppedReason string
 }
 
@@ -490,7 +492,7 @@ func RunActivation(ctx context.Context, cfg WorkflowConfig, prompts ActivationPr
 		return ActivationSummary{}, fmt.Errorf("run ID must contain only letters, digits, '.', '_', or '-'")
 	}
 
-	sum := ActivationSummary{RunID: cfg.RunID, Instance: instance.ID}
+	sum := ActivationSummary{}
 
 	work := cfg.WorkDir
 	createdWork := work == ""
@@ -647,6 +649,7 @@ func runActivationSession(ctx context.Context, cfg WorkflowConfig, work string, 
 	session := readAgentSession(stdout)
 	row.InitSeen, row.ResultSeen = session.InitSeen, session.ResultSeen
 	row.Tools, row.MCPServers, row.Skills, row.Plugins = session.Tools, session.MCPServers, session.Skills, session.Plugins
+	row.DeniedTools = session.DeniedTools
 
 	requested := row.RequestedModel
 	row.AgentUsage = session.Usage
@@ -682,6 +685,15 @@ func validateActivationSession(cfg WorkflowConfig, row *ActivationRow) {
 
 		if reason := unexpectedInit(ArmMCPSkills, &probe); reason != "" {
 			invalidateActivationRow(row, reason)
+
+			return
+		}
+
+		// The same rule as the workflow arm: a refused Skill or seamark
+		// call means the allow rules were not in effect, and a Skill call
+		// the harness refused would otherwise count as a recall hit.
+		if tool := deniedArmTool(row.DeniedTools); tool != "" {
+			invalidateActivationRow(row, "agent was denied "+tool+": the allow rules were not in effect")
 
 			return
 		}

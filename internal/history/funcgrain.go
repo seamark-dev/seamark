@@ -26,12 +26,15 @@ const (
 // gitScan runs git and calls onLine for each output line, streaming — so
 // memory stays O(one line) regardless of history size. Errors (not a repo,
 // timeout, git missing) yield no lines, so callers degrade to no output.
-func gitScan(dir string, onLine func(string), args ...string) {
-	ctx, cancel := context.WithTimeout(context.Background(), grainTimeout)
+// The scan stops at the caller's deadline or after grainTimeout, whichever
+// comes first, so a batch of scans can share one budget.
+func gitScan(ctx context.Context, dir string, stdin io.Reader, onLine func(string), args ...string) {
+	ctx, cancel := context.WithTimeout(ctx, grainTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.Stdin = stdin
 
 	out, err := cmd.StdoutPipe()
 	if err != nil {
@@ -59,10 +62,10 @@ func gitScan(dir string, onLine func(string), args ...string) {
 // to the mining window. It is the left side of a co-change intersection:
 // the commits shared with a partner are those in BOTH files' sets. Empty
 // (nil) when git is unavailable, so callers degrade to no enrichment.
-func FileCommits(repoRoot, file string) map[string]bool {
+func FileCommits(ctx context.Context, repoRoot, file string) map[string]bool {
 	set := map[string]bool{}
 
-	gitScan(repoRoot, func(line string) {
+	gitScan(ctx, repoRoot, nil, func(line string) {
 		if h := strings.TrimSpace(line); h != "" {
 			set[h] = true
 		}
@@ -82,36 +85,37 @@ func FileCommits(repoRoot, file string) map[string]bool {
 var hunkFunc = regexp.MustCompile(`^@@ .* @@\s*(.+)$`)
 
 // PartnerFunctions reports which functions of partner were most often
-// touched in the commits it shares with another file (shared). It streams
-// the partner's diff history (git log -U0 -p, capped + timed out) and
-// tallies the hunk-header function context of the shared commits only.
-// This is a factual report of what moved together — never a statistical
-// claim. NOTE: shared is the co-change window's commit set; a bulk commit
-// dropped from the lift metric (too many files) that still touched both
-// files can contribute here — a known, minor over-count.
-func PartnerFunctions(repoRoot, partner string, shared map[string]bool, limit int) []string {
+// touched in the commits it shares with another file (shared). It asks git
+// for the diff of those commits only, with `--no-walk --stdin`, so the cost
+// grows with the shared set and not with the partner's whole history: a
+// lockfile or a generated client with thousands of commits stays cheap.
+// The hashes go over stdin because a large set would overflow argv. This
+// is a factual report of what moved together — never a statistical claim.
+// NOTE: shared is the co-change window's commit set; a bulk commit dropped
+// from the lift metric (too many files) that still touched both files can
+// contribute here — a known, minor over-count.
+func PartnerFunctions(ctx context.Context, repoRoot, partner string, shared map[string]bool, limit int) []string {
 	if len(shared) == 0 {
 		return nil
 	}
 
 	counts := map[string]int{}
 	order := map[string]int{} // first-seen index, for stable tie-breaks
-	current := ""             // hash of the commit being scanned
-	inShared := false
 	next := 0
+
+	hashes := make([]string, 0, len(shared))
+	for h := range shared {
+		hashes = append(hashes, h)
+	}
+
+	sort.Strings(hashes)
 
 	// %x00%H frames each commit with a NUL + hash that patch text can never
 	// forge (every diff body line starts with +/-/space/\); -U0 keeps only
-	// hunk headers and changed lines.
-	gitScan(repoRoot, func(line string) {
+	// hunk headers and changed lines. The pathspec keeps only the commits
+	// that touched the partner, so every hunk seen belongs to a shared one.
+	gitScan(ctx, repoRoot, strings.NewReader(strings.Join(hashes, "\n")+"\n"), func(line string) {
 		if strings.HasPrefix(line, "\x00") {
-			current = strings.TrimPrefix(line, "\x00")
-			inShared = shared[current]
-
-			return
-		}
-
-		if !inShared {
 			return
 		}
 
@@ -128,8 +132,8 @@ func PartnerFunctions(repoRoot, partner string, shared map[string]bool, limit in
 
 			counts[name]++
 		}
-	}, "-c", "core.quotePath=off", "log", "--no-renames", "-U0", "-p",
-		"-n", strconv.Itoa(grainMaxCommits), "--format=%x00%H", "--", partner)
+	}, "-c", "core.quotePath=off", "log", "--no-renames", "--no-walk", "--stdin",
+		"-U0", "-p", "--format=%x00%H", "--", partner)
 
 	return topByCount(counts, order, limit)
 }

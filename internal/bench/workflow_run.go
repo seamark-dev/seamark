@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -90,10 +89,22 @@ func SameAgentArgv(argv []string) map[WorkflowArm][]string {
 // order. The list is the expected init tool set as well: a row whose init
 // record shows any other set is invalid.
 func WorkflowTools(arm WorkflowArm) []string {
-	tools := []string{"Read", "Edit", "Write", "Bash"}
+	return append(slices.Clone(baseAgentTools), conditionTools(arm)...)
+}
+
+// baseAgentTools are the tools both arms expose beside the condition: the
+// agent needs them to read and edit the fixture at all.
+var baseAgentTools = []string{"Read", "Edit", "Write", "Bash"}
+
+// conditionTools lists the tools that make up an arm's condition: the
+// seamark MCP tools for both arms and the Skill tool for the skills arm.
+// The tool list and the denied-tool rule both read it, so the two cannot
+// name different sets.
+func conditionTools(arm WorkflowArm) []string {
+	var tools []string
 
 	for _, tool := range approve.Tools {
-		tools = append(tools, "mcp__seamark__"+tool)
+		tools = append(tools, approve.ToolRule(approve.ClaudeServer, tool))
 	}
 
 	if arm == ArmMCPSkills {
@@ -199,11 +210,20 @@ type WorkflowRow struct {
 
 // WorkflowTally is one arm's aggregate over valid paired rows.
 type WorkflowTally struct {
-	Attempted      int
-	Ran            int
-	Invalid        int
-	Completed      int // trials where the task was done at all
-	Avoided        int // completed trials where the owner invariant passed
+	Ran       int
+	Invalid   int
+	Completed int // trials where the task was done at all
+	Avoided   int // completed trials where the owner invariant passed
+	WorkflowProcessCounts
+	MeanInput int64
+	CostUSD   float64
+}
+
+// WorkflowProcessCounts are the per-arm counts the run summary and the
+// report both accumulate over valid paired rows: the process rates the
+// experiment records beside the claim, the Seamark call volume, and the
+// skill activations. One type keeps the two tallies from drifting apart.
+type WorkflowProcessCounts struct {
 	ChangeSetFirst int // change_set ran before the first edit
 	CompanionNamed int // change_set named the companion
 	NamedByCheck   int // check named the companion the diff left out
@@ -212,15 +232,49 @@ type WorkflowTally struct {
 	CheckLast      int // check ran after the last edit
 	SeamarkCalls   int
 	Activations    map[string]int
-	MeanInput      int64
-	CostUSD        float64
+}
+
+// add counts one valid paired row.
+func (c *WorkflowProcessCounts) add(row WorkflowRow) {
+	if row.ChangeSetBeforeFirstEdit {
+		c.ChangeSetFirst++
+	}
+
+	if row.CompanionNamedByChangeSet {
+		c.CompanionNamed++
+	}
+
+	if row.CompanionNamedByCheck {
+		c.NamedByCheck++
+	}
+
+	if row.CompanionOpenedAfterNamed {
+		c.Opened++
+	}
+
+	if row.WhyFollowedCompanion {
+		c.WhyFollowed++
+	}
+
+	if row.CheckAfterLastEdit {
+		c.CheckLast++
+	}
+
+	c.SeamarkCalls += row.SeamarkCalls
+
+	if len(row.Activations) > 0 && c.Activations == nil {
+		c.Activations = map[string]int{}
+	}
+
+	for _, name := range row.Activations {
+		c.Activations[name]++
+	}
 }
 
 // WorkflowSummary is the whole run's outcome, per arm.
 type WorkflowSummary struct {
 	Rows          []WorkflowRow
 	ByArm         map[WorkflowArm]WorkflowTally
-	RunID         string
 	Instance      string
 	StoppedReason string
 }
@@ -260,6 +314,15 @@ func (s WorkflowSummary) Lines() []string {
 		out = append(out, fmt.Sprintf(
 			"context processed — mcp-skills mean %d vs mcp-only %d (%+d per trial)",
 			withSkills.MeanInput, only.MeanInput, withSkills.MeanInput-only.MeanInput,
+		))
+	}
+
+	// The spend is the other half of the trade the skills make; the report
+	// prints it per cohort, so the run summary prints it per arm too.
+	if withSkills.CostUSD > 0 || only.CostUSD > 0 {
+		out = append(out, fmt.Sprintf(
+			"cost — mcp-skills $%.2f vs mcp-only $%.2f over valid paired trials",
+			withSkills.CostUSD, only.CostUSD,
 		))
 	}
 
@@ -367,7 +430,7 @@ func RunWorkflow(ctx context.Context, cfg WorkflowConfig) (WorkflowSummary, erro
 		return WorkflowSummary{}, fmt.Errorf("run ID must contain only letters, digits, '.', '_', or '-'")
 	}
 
-	sum := WorkflowSummary{ByArm: map[WorkflowArm]WorkflowTally{}, RunID: cfg.RunID, Instance: instance.ID}
+	sum := WorkflowSummary{ByArm: map[WorkflowArm]WorkflowTally{}, Instance: instance.ID}
 
 	work := cfg.WorkDir
 	createdWork := work == ""
@@ -530,7 +593,6 @@ func knownWorkflowArm(arm WorkflowArm) bool {
 
 func tallyWorkflowRow(sum *WorkflowSummary, row WorkflowRow) {
 	t := sum.ByArm[row.Arm]
-	t.Attempted++
 
 	if !row.Valid || !row.PairValid {
 		t.Invalid++
@@ -548,40 +610,8 @@ func tallyWorkflowRow(sum *WorkflowSummary, row WorkflowRow) {
 		t.Avoided++
 	}
 
-	if row.ChangeSetBeforeFirstEdit {
-		t.ChangeSetFirst++
-	}
-
-	if row.CompanionNamedByChangeSet {
-		t.CompanionNamed++
-	}
-
-	if row.CompanionNamedByCheck {
-		t.NamedByCheck++
-	}
-
-	if row.CompanionOpenedAfterNamed {
-		t.Opened++
-	}
-
-	if row.WhyFollowedCompanion {
-		t.WhyFollowed++
-	}
-
-	if row.CheckAfterLastEdit {
-		t.CheckLast++
-	}
-
-	t.SeamarkCalls += row.SeamarkCalls
+	t.add(row)
 	t.CostUSD += row.CostUSD
-
-	if len(row.Activations) > 0 && t.Activations == nil {
-		t.Activations = map[string]int{}
-	}
-
-	for _, name := range row.Activations {
-		t.Activations[name]++
-	}
 
 	sum.ByArm[row.Arm] = t
 }
@@ -728,6 +758,17 @@ func runWorkflowTrial(ctx context.Context, cfg WorkflowConfig, work string, arm 
 	} else {
 		row.Checks = checks
 		row.ChecksPass = checksPass(row.Checks)
+
+		// An interrupt that lands while a check runs kills the check, and
+		// the killed command reports a plain failure. The verdict cannot
+		// tell that failure from a real one, so the row is not a
+		// measurement; a passing check set was complete before the signal.
+		// A row the session already invalidated keeps its reason, which
+		// names the harness fault the report must show.
+		if ctx.Err() != nil && !row.ChecksPass && row.Valid {
+			row.Valid = false
+			row.InvalidReason = "cancelled during repository checks"
+		}
 
 		if row.TaskDone && !row.ChecksPass {
 			row.TaskDone = false
@@ -926,7 +967,7 @@ func wireWorkflowArm(ctx context.Context, dir string, cfg WorkflowConfig, arm Wo
 		return bin, nil
 	}
 
-	return bin, indexTrial(ctx, dir, bin)
+	return bin, indexFixture(ctx, dir, bin)
 }
 
 // workflowAllowRules returns the allow rules an arm writes: the MCP tool
@@ -945,7 +986,7 @@ func workflowAllowRules(arm WorkflowArm) ([]string, error) {
 
 	var toolRules []string
 	for _, rule := range rules {
-		if strings.HasPrefix(rule, "mcp__seamark__") {
+		if strings.HasPrefix(rule, approve.ServerRule(approve.ClaudeServer)+"__") {
 			toolRules = append(toolRules, rule)
 		}
 	}
@@ -953,9 +994,11 @@ func workflowAllowRules(arm WorkflowArm) ([]string, error) {
 	return toolRules, nil
 }
 
-// builtInSkillOverrides switches off the one Claude Code built-in skill that
-// the disableBundledSkills setting leaves in the init record. Both arms carry
-// it, so the record can list only the seamark skills the arm installs.
+// builtInSkillOverrides switches off the Claude Code built-in skills that
+// the disableBundledSkills setting leaves in the init record; doctor is the
+// one known so far. Both arms carry the overrides, so the arms differ only
+// in the seamark skills. The list is best effort: a built-in that still
+// slips through is not the arm's doing, and unexpectedInit ignores it.
 var builtInSkillOverrides = map[string]any{"doctor": "off"}
 
 // writeWorkflowSettings writes the lessons harness's strict runtime settings
@@ -998,35 +1041,6 @@ func writeWorkflowSettings(dir string, rules []string) error {
 	}
 
 	return os.WriteFile(path, data, 0o644)
-}
-
-// indexTrial builds the fixture's index with the trial's own binary, so the
-// first MCP call answers from a ready store instead of paying for a rebuild
-// inside the agent's session.
-func indexTrial(ctx context.Context, dir, bin string) error {
-	setupCtx, cancel := context.WithTimeout(ctx, defaultSetupTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(setupCtx, bin, "index")
-	cmd.Dir = dir
-
-	env, err := agentEnvironment(dir)
-	if err != nil {
-		return fmt.Errorf("prepare seamark index environment: %w", err)
-	}
-
-	cmd.Env = env
-	cmd.WaitDelay = processWaitDelay
-
-	if out, err := cmd.CombinedOutput(); err != nil {
-		if setupCtx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("seamark index in fixture timed out after %s", defaultSetupTimeout)
-		}
-
-		return fmt.Errorf("seamark index in fixture: %w\n%s", err, out)
-	}
-
-	return nil
 }
 
 // agentSession is what a transcript says about the session apart from the
@@ -1277,25 +1291,42 @@ func unexpectedInit(arm WorkflowArm, row *WorkflowRow) string {
 		return reason
 	}
 
-	var expectedSkills []string
-	if arm == ArmMCPSkills {
-		names, err := skills.Names()
-		if err != nil {
-			return "cannot list shipped skills: " + err.Error()
-		}
+	names, err := skills.Names()
+	if err != nil {
+		return "cannot list shipped skills: " + err.Error()
+	}
 
+	// The seamark catalogue decides the arm: the skills arm must load
+	// every shipped skill and the MCP-only arm none. A Claude Code built-in
+	// the overrides did not switch off is the same in both arms and is not
+	// a reason to discard a paid session. Any other skill is a project or
+	// user skill that leaked into the trial, which the arm did not intend.
+	var expectedSkills, observed []string
+	if arm == ArmMCPSkills {
 		expectedSkills = names
 	}
 
-	return setDifference("skill", expectedSkills, row.Skills)
+	for _, skill := range row.Skills {
+		switch {
+		case slices.Contains(names, skill):
+			observed = append(observed, skill)
+		case builtInSkillOverrides[skill] != nil:
+		default:
+			return "unexpected skill loaded: " + skill
+		}
+	}
+
+	return setDifference("skill", expectedSkills, observed)
 }
 
 // deniedArmTool returns the first refused tool that belongs to an arm's
 // condition: a seamark MCP tool or the Skill tool. Other refusals, such as
 // WebFetch, are the agent's own choices and stay measured outcomes.
 func deniedArmTool(denied []string) string {
+	condition := conditionTools(ArmMCPSkills)
+
 	for _, tool := range denied {
-		if tool == "Skill" || strings.HasPrefix(tool, "mcp__seamark__") {
+		if slices.Contains(condition, tool) {
 			return tool
 		}
 	}

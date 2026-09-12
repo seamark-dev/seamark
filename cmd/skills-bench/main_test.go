@@ -130,6 +130,11 @@ func TestCheckExistingRowsGuardsTheResultsFile(t *testing.T) {
 	jsonLines(t, activation, validActivationRow())
 
 	assert.NoError(t, checkExistingRows(filepath.Join(dir, "missing.jsonl"), true))
+
+	empty := filepath.Join(dir, "empty.jsonl")
+	require.NoError(t, os.WriteFile(empty, nil, 0o600))
+	assert.NoError(t, checkExistingRows(empty, true), "an empty file is as safe to append to as a missing one")
+	assert.NoError(t, checkExistingRows(empty, false))
 	assert.NoError(t, checkExistingRows(workflow, false))
 	assert.NoError(t, checkExistingRows(activation, true))
 	require.ErrorContains(t, checkExistingRows(workflow, true), "holds workflow rows")

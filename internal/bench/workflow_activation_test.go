@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -452,4 +453,52 @@ func TestActivationReportRefusesMixedIdentities(t *testing.T) {
 		assert.Equal(t, 8, report.Activation.MaxTurns)
 		assert.Contains(t, report.Markdown(), "model requested `model-a`, observed `model-a`; turn cap 8 turns")
 	})
+}
+
+func TestValidateActivationSessionRejectsADeniedSkillCall(t *testing.T) {
+	cfg := WorkflowConfig{Model: "claude-test", RequireStructuredResult: true, RequireExpectedInit: true}
+
+	valid := func() ActivationRow {
+		names, err := skills.Names()
+		require.NoError(t, err)
+
+		return ActivationRow{Valid: true, InitSeen: true, ResultSeen: true,
+			Tools:      WorkflowTools(ArmMCPSkills),
+			MCPServers: []MCPServerState{{Name: "seamark", Status: "connected"}},
+			Skills:     names,
+			AgentUsage: AgentUsage{Model: "claude-test"},
+		}
+	}
+
+	row := valid()
+	validateActivationSession(cfg, &row)
+	assert.True(t, row.Valid, row.InvalidReason)
+
+	// A Skill call the harness refused would otherwise count as recall.
+	row = valid()
+	row.Activated = []string{"seamark-plan-change"}
+	row.DeniedTools = []string{"WebFetch", "Skill"}
+	validateActivationSession(cfg, &row)
+	assert.False(t, row.Valid)
+	assert.True(t, row.InfrastructureFailure)
+	assert.Contains(t, row.InvalidReason, "denied Skill: the allow rules were not in effect")
+
+	row = valid()
+	row.DeniedTools = []string{"WebFetch"}
+	validateActivationSession(cfg, &row)
+	assert.True(t, row.Valid, "a refused WebFetch is the agent's own choice")
+}
+
+func TestActivationTrialRecordsDeniedTools(t *testing.T) {
+	// The denied list travels from the result record into the row, so the
+	// rule above has something to read on a real session.
+	stdout := transcriptLines(
+		skillsArmInit,
+		toolUseLine("t1", "Skill", `{"skill":"seamark-plan-change"}`),
+		`{"type":"result","subtype":"success","is_error":false,"num_turns":2,"total_cost_usd":0.01,"permission_denials":[{"tool_name":"Skill","tool_use_id":"t1","tool_input":{}}]}`,
+	)
+
+	session := readAgentSession(stdout)
+	assert.Equal(t, []string{"Skill"}, session.DeniedTools)
+	assert.Equal(t, "Skill", deniedArmTool(session.DeniedTools))
 }

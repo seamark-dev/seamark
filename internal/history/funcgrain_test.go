@@ -1,9 +1,11 @@
 package history
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -92,10 +94,10 @@ func TestPartnerFunctionsNamesSharedCommitFunctions(t *testing.T) {
 		"b.go": "package b\n\nfunc Baz() int {\n\treturn 7\n}\n\nfunc Solo() {}\n",
 	})
 
-	shared := FileCommits(root, "a.go")
+	shared := FileCommits(context.Background(), root, "a.go")
 	require.Len(t, shared, 2, "a.go was in two commits")
 
-	funcs := PartnerFunctions(root, "b.go", shared, 5)
+	funcs := PartnerFunctions(context.Background(), root, "b.go", shared, 5)
 	assert.Contains(t, funcs, "Baz", "Baz changed in the commit shared with a.go")
 	assert.NotContains(t, funcs, "Solo", "Solo changed only in a b.go-alone commit")
 }
@@ -111,23 +113,50 @@ func TestPartnerFunctionsNewFileHasNoFuncContext(t *testing.T) {
 		"b.go": "package b\n\nfunc Baz() {}\n",
 	})
 
-	shared := FileCommits(root, "a.go")
+	shared := FileCommits(context.Background(), root, "a.go")
 	require.Len(t, shared, 1)
 
-	assert.Empty(t, PartnerFunctions(root, "b.go", shared, 5),
+	assert.Empty(t, PartnerFunctions(context.Background(), root, "b.go", shared, 5),
 		"a pure file-creation commit names no functions")
 }
 
 func TestFuncGrainDegradesWithoutGit(t *testing.T) {
 	root := t.TempDir() // not a git repo
 
-	assert.Nil(t, FileCommits(root, "x.go"))
-	assert.Nil(t, PartnerFunctions(root, "x.go", map[string]bool{"abc": true}, 3))
+	assert.Nil(t, FileCommits(context.Background(), root, "x.go"))
+	assert.Nil(t, PartnerFunctions(context.Background(), root, "x.go", map[string]bool{"abc": true}, 3))
 }
 
 func TestPartnerFunctionsEmptySharedIsNoop(t *testing.T) {
 	root, commit := contentRepo(t)
 	commit("x", map[string]string{"a.go": "package a\n\nfunc Foo() {}\n"})
 
-	assert.Nil(t, PartnerFunctions(root, "a.go", nil, 3), "no shared commits → no work")
+	assert.Nil(t, PartnerFunctions(context.Background(), root, "a.go", nil, 3), "no shared commits → no work")
+}
+
+func TestFuncGrainStopsAtCallerDeadline(t *testing.T) {
+	root, commit := contentRepo(t)
+	commit("x", map[string]string{"a.go": "package a\n\nfunc Foo() {}\n"})
+
+	// A caller that shares one budget across many scans passes a context;
+	// once it is spent every scan degrades to no output instead of running
+	// on for its own full timeout.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	assert.Nil(t, FileCommits(ctx, root, "a.go"))
+	assert.Nil(t, PartnerFunctions(ctx, root, "a.go", map[string]bool{"abc": true}, 3))
+}
+
+func TestPartnerFunctionsIgnoresCommitsOutsideTheSharedSet(t *testing.T) {
+	root, commit := contentRepo(t)
+
+	commit("create", map[string]string{"b.go": "package b\n\nfunc Baz() int {\n\treturn 1\n}\n"})
+	commit("only b", map[string]string{"b.go": "package b\n\nfunc Baz() int {\n\treturn 2\n}\n"})
+
+	// The shared set names a hash git does not know; --stdin then has no
+	// commit to show, and the pathspec alone must not widen the scan to the
+	// partner's full history.
+	assert.Empty(t, PartnerFunctions(context.Background(), root, "b.go",
+		map[string]bool{strings.Repeat("0", 40): true}, 3))
 }

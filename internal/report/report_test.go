@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -992,4 +993,68 @@ func TestLatestFixPrefersAClassifiedFixOverANewerRevert(t *testing.T) {
 	revert := latestFix(st, "server/search.py")
 	require.NotNil(t, revert)
 	assert.Equal(t, model.DecisionRevert, revert.Kind, "a revert is still a correction when it is the only one")
+}
+
+// gitCommit writes files into root and commits them, so a companion test
+// has real hunk headers for the "mostly" reason. It mirrors the history
+// package's helper because that helper is not exported.
+func gitCommit(t *testing.T, root, msg string, files map[string]string) {
+	t.Helper()
+
+	for name, body := range files {
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(body), 0o644))
+	}
+
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", msg}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v\n%s", args, out)
+	}
+}
+
+func TestCompanionReasonNamesFunctionsFromSharedCommitsOnly(t *testing.T) {
+	st, root := seedCompanions(t)
+
+	init := exec.Command("git", "init", "-q", "-b", "main")
+	init.Dir = root
+	require.NoError(t, init.Run())
+
+	schemaV1 := "def SCHEMAS():\n    return 1\n"
+	clientV1 := "export function WorkspaceSummary() {\n  return 1;\n}\n"
+	gitCommit(t, root, "create both", map[string]string{
+		"server/schema.py": schemaV1, "web/src/api/generated.ts": clientV1,
+	})
+
+	// The shared commit touches WorkspaceSummary; a client-only commit
+	// touches Solo, which the reason must leave out.
+	gitCommit(t, root, "expose region", map[string]string{
+		"server/schema.py":         "def SCHEMAS():\n    return 2\n",
+		"web/src/api/generated.ts": "export function WorkspaceSummary() {\n  return 2;\n}\n",
+	})
+	gitCommit(t, root, "client only", map[string]string{
+		"web/src/api/generated.ts": "export function WorkspaceSummary() {\n  return 2;\n}\n\nexport function Solo() {\n  return 3;\n}\n",
+	})
+
+	var b strings.Builder
+	require.NoError(t, ChangeSet(&b, st, root, []string{"server/schema.py"}))
+	out := b.String()
+
+	assert.Contains(t, out, "mostly WorkspaceSummary")
+	assert.NotContains(t, out, "Solo")
+	assert.Contains(t, out, "last fix here", "the index reason still prints beside the git one")
+}
+
+func TestPartnerFunctionsIndexesLikeTheList(t *testing.T) {
+	// Without a repository root there is no git to ask, so the slice has
+	// one nil entry per partner and printing never reads out of range.
+	funcs := partnerFunctions("", []companion{{file: "a"}, {file: "b"}})
+	require.Len(t, funcs, 2)
+	assert.Nil(t, funcs[0])
+	assert.Nil(t, funcs[1])
 }

@@ -484,8 +484,10 @@ and no `.mcp.json`. Both arms also switch off Claude Code's own built-in
 skills (`disableBundledSkills: true`, plus a `skillOverrides` entry for the
 `doctor` skill, which ignores the global switch): the CLI ships skills such
 as `code-review` and `verify` that the `Skill` tool would otherwise expose in
-the skills arm alone, and the init record must list nothing but the seamark
-skills an arm installs.
+the skills arm alone. The validator reads only the seamark catalogue from
+the init record: the skills arm must list every shipped skill and the
+MCP-only arm none. A built-in that still slips past the overrides is the
+same in both arms and does not discard a paid session.
 
 - `mcp-only`: nothing else. The `Skill` tool is not exposed.
 - `mcp-skills`: the three managed skills under `.claude/skills/`, the
@@ -574,10 +576,16 @@ A row is invalid when the init record lacks the arm's exact tool set, the
 three skills; when it lists a plugin; when the model differs from the
 requested one; when the agent was refused a seamark tool or the `Skill` tool
 (`denied_tools` keeps every refused name; a refused `WebFetch` stays a
-measured outcome); or when the session ended without a structured result
-before its deadline. Provider errors stop the run before the next paid session, as
-in the lessons harness. Only rows with `valid` and `pair_valid` enter the
-tallies.
+measured outcome); when the session ended without a structured result
+before its deadline; or when the operator's interrupt landed while a
+repository check ran and the check failed, because a killed check reports a
+plain failure the verdict cannot tell from a real one (`cancelled during
+repository checks`; a check set that passed before the signal keeps its
+row). Provider errors stop the run before the next paid session, as in the
+lessons harness. Only rows with `valid` and `pair_valid` enter the tallies.
+`companion_named_by_change_set` reads the planned files the way an edit's
+`file_path` is read, so a plan that names the companion by its absolute path
+inside the trial is the agent's own plan, not a suggestion.
 
 ### Preflight
 
@@ -705,10 +713,13 @@ it reached. It gives recall per skill on its should-activate prompts and the
 false-activation rate on the should-not prompts against the frozen criteria,
 counts should-activate sessions that also loaded another skill, and lists
 every prompt's outcome. Reaching `--max-turns` is a measured outcome, not an
-infrastructure failure. `skills-bench` refuses to append to a results file
-the strict reader would reject, so a corrupt or foreign line is found before
-any session is paid for, and an interrupted session is discarded rather than
-recorded.
+infrastructure failure. An activation row follows the skills-arm session
+rules, the refused-tool rule included: a `Skill` call the harness refused
+would otherwise count as recall, so the row is invalid instead
+(`denied_tools` keeps the names). `skills-bench` refuses to append to a
+results file the strict reader would reject, so a corrupt or foreign line is
+found before any session is paid for; an empty file is as safe as a missing
+one. An interrupted session is discarded rather than recorded.
 Codex activation is recorded by hand in
 `bench/activation/codex-checklist.md`.
 

@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/seamark-dev/seamark/internal/approve"
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -99,7 +101,7 @@ func cochangeGate(ctx context.Context, bin, dir string, instance WorkflowInstanc
 		return err
 	}
 
-	if err := indexTrial(ctx, dir, bin); err != nil {
+	if err := indexFixture(ctx, dir, bin); err != nil {
 		return err
 	}
 
@@ -343,7 +345,7 @@ func validateWorkflowWiring(only, withSkills string) error {
 	}
 
 	for dir, arm := range map[string]WorkflowArm{only: ArmMCPOnly, withSkills: ArmMCPSkills} {
-		settings, err := readTrialSettings(dir)
+		settings, err := hooks.ReadSettings(dir)
 		if err != nil {
 			return fmt.Errorf("%s: %w", arm, err)
 		}
@@ -357,7 +359,7 @@ func validateWorkflowWiring(only, withSkills string) error {
 			return fmt.Errorf("%s settings lack the strict sandbox block", arm)
 		}
 
-		allow := allowRules(settings)
+		allow := approve.AllowSet(settings)
 		for _, rule := range toolRules {
 			if !allow[rule] {
 				return fmt.Errorf("%s settings lack the allow rule %s", arm, rule)
@@ -382,12 +384,12 @@ func validateWorkflowWiring(only, withSkills string) error {
 		}
 	}
 
-	onlySettings, err := readTrialSettings(only)
+	onlySettings, err := hooks.ReadSettings(only)
 	if err != nil {
 		return err
 	}
 
-	for rule := range allowRules(onlySettings) {
+	for rule := range approve.AllowSet(onlySettings) {
 		if strings.HasPrefix(rule, "Skill(") {
 			return fmt.Errorf("mcp-only settings contain the skill rule %s", rule)
 		}
@@ -397,12 +399,12 @@ func validateWorkflowWiring(only, withSkills string) error {
 		return fmt.Errorf("mcp-only arm contains %s", skills.ClaudeDir)
 	}
 
-	skillsSettings, err := readTrialSettings(withSkills)
+	skillsSettings, err := hooks.ReadSettings(withSkills)
 	if err != nil {
 		return err
 	}
 
-	allow := allowRules(skillsSettings)
+	allow := approve.AllowSet(skillsSettings)
 	for _, rule := range allRules {
 		if !allow[rule] {
 			return fmt.Errorf("mcp-skills settings lack the allow rule %s", rule)
@@ -420,33 +422,4 @@ func validateWorkflowWiring(only, withSkills string) error {
 	}
 
 	return nil
-}
-
-func readTrialSettings(dir string) (map[string]any, error) {
-	data, err := os.ReadFile(filepath.Join(dir, ".claude", "settings.json"))
-	if err != nil {
-		return nil, fmt.Errorf("read settings: %w", err)
-	}
-
-	var settings map[string]any
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return nil, fmt.Errorf("parse settings: %w", err)
-	}
-
-	return settings, nil
-}
-
-func allowRules(settings map[string]any) map[string]bool {
-	rules := map[string]bool{}
-
-	permissions, _ := settings["permissions"].(map[string]any)
-	allow, _ := permissions["allow"].([]any)
-
-	for _, entry := range allow {
-		if rule, ok := entry.(string); ok {
-			rules[rule] = true
-		}
-	}
-
-	return rules
 }

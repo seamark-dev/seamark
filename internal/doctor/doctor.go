@@ -8,7 +8,6 @@
 package doctor
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -240,35 +239,24 @@ func checkGH(r *Report) {
 }
 
 func checkMCP(r *Report, root string) {
-	data, err := os.ReadFile(filepath.Join(root, ".mcp.json"))
-	if err != nil {
+	// The same lookup init and the approvals check use, so one report
+	// never names two different servers for one file.
+	reg, err := approve.ClaudeRegistration(root)
+
+	switch {
+	case err != nil && !reg.Exists:
+		r.add("mcp", StateWarn, ".mcp.json cannot be read: "+err.Error(), "fix the file")
+	case err != nil:
+		r.add("mcp", StateWarn, "unparseable: "+err.Error(), "fix the JSON")
+	case !reg.Exists:
 		r.add("mcp", StateInfo, "no project .mcp.json — MCP clients may be registered elsewhere",
 			"to register for Claude Code: `claude mcp add seamark -- seamark mcp`")
-		return
+	case reg.Server != "":
+		r.add("mcp", StateOK, fmt.Sprintf("registered in .mcp.json as %q", reg.Server), "")
+	default:
+		r.add("mcp", StateInfo, ".mcp.json exists but registers no seamark server",
+			"`claude mcp add seamark -- seamark mcp` to serve the index to agents")
 	}
-
-	var cfg struct {
-		Servers map[string]struct {
-			Command string `json:"command"`
-		} `json:"mcpServers"`
-	}
-
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		r.add("mcp", StateWarn, ".mcp.json is unparseable: "+err.Error(), "fix the JSON")
-		return
-	}
-
-	for name, srv := range cfg.Servers {
-		// Same basename rule as hooks.OwnedBySeamark: exact "seamark",
-		// tolerating the Windows .exe suffix.
-		if strings.TrimSuffix(filepath.Base(srv.Command), ".exe") == "seamark" {
-			r.add("mcp", StateOK, fmt.Sprintf("registered in .mcp.json as %q", name), "")
-			return
-		}
-	}
-
-	r.add("mcp", StateInfo, ".mcp.json exists but registers no seamark server",
-		"`claude mcp add seamark -- seamark mcp` to serve the index to agents")
 }
 
 // checkSkills reports the agent skills per client directory. Not
@@ -331,8 +319,8 @@ func checkApprovals(r *Report, root string) {
 	states := approve.Inspect(root)
 
 	var (
-		parts                                           []string
-		unreadable, conflicting, partial, current, none int
+		parts                                     []string
+		unreadable, conflicting, partial, current int
 	)
 
 	for _, s := range states {
@@ -347,8 +335,6 @@ func checkApprovals(r *Report, root string) {
 			partial++
 		case approve.StateCurrent:
 			current++
-		default:
-			none++
 		}
 	}
 

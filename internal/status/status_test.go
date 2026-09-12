@@ -305,6 +305,32 @@ func TestGatherReportsApprovals(t *testing.T) {
 	Print(&b, s)
 	assert.Contains(t, b.String(), "approvals      not configured (`seamark init --approve-tools`)")
 
+	// A registration with no approvals is still a fact the text states,
+	// so status and doctor agree on what exists.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"),
+		[]byte("[mcp_servers.seamark]\ncommand = \"seamark\"\nargs = [\"mcp\"]\n"), 0o644))
+
+	s, err = Gather(st, root)
+	require.NoError(t, err)
+
+	b.Reset()
+	Print(&b, s)
+	assert.Contains(t, b.String(), "approvals      claude not configured · codex registered as \"seamark\", 0/5 tools approved (re-run seamark init --approve-tools)")
+
+	// The same for a Claude Code registration without rules: the hint
+	// stays on the line.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mcp.json"),
+		[]byte(`{"mcpServers":{"seamark":{"command":"seamark","args":["mcp"]}}}`), 0o644))
+
+	s, err = Gather(st, root)
+	require.NoError(t, err)
+
+	b.Reset()
+	Print(&b, s)
+	assert.Contains(t, b.String(), "(re-run seamark init --approve-tools)")
+	require.NoError(t, os.Remove(filepath.Join(root, ".mcp.json")))
+
 	p, err := approve.PlanCodex(root)
 	require.NoError(t, err)
 	require.NoError(t, approve.ApplyCodex(&bytes.Buffer{}, root, p, false))

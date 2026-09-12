@@ -281,3 +281,50 @@ func yamlKeys(t *testing.T, header []byte) []string {
 
 	return keys
 }
+
+// TestBodyCommandsAreGranted pins every `seamark …` command a skill tells
+// the agent to run to a Bash grant in allowed-tools. The no-MCP fallback
+// is the one path where the agent runs the CLI, so an ungranted command
+// there prompts in interactive mode and is refused in `claude -p`. The
+// setup commands are named for the user, never run by the agent, and
+// `seamark index` is guarded by its own test above.
+func TestBodyCommandsAreGranted(t *testing.T) {
+	command := regexp.MustCompile("`(seamark [^`]*)`")
+	grant := regexp.MustCompile(`Bash\(([^)]*)\)`)
+	userCommands := []string{"seamark init", "seamark doctor", "seamark mcp", "seamark index"}
+
+	for _, name := range shipped {
+		fm, body, files := loadSkill(t, name)
+
+		var prefixes []string
+		for _, m := range grant.FindAllStringSubmatch(fm.AllowedTools, -1) {
+			prefixes = append(prefixes, strings.TrimSuffix(m[1], "*"))
+		}
+
+		require.NotEmpty(t, prefixes, name)
+
+		text := body + "\n" + string(files[referenceFile])
+
+	next:
+		for _, m := range command.FindAllStringSubmatch(text, -1) {
+			cmd := m[1]
+
+			for _, user := range userCommands {
+				if strings.HasPrefix(cmd, user) {
+					continue next
+				}
+			}
+
+			granted := false
+			for _, p := range prefixes {
+				if strings.HasPrefix(cmd, p) {
+					granted = true
+
+					break
+				}
+			}
+
+			assert.True(t, granted, "%s: %q is not covered by allowed-tools %q", name, cmd, fm.AllowedTools)
+		}
+	}
+}

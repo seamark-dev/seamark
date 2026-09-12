@@ -18,14 +18,9 @@ const skillsHint = "  skills  not installed — seamark init --skills adds the s
 // before init writes anything, for the same reason the settings merge
 // runs first: an unreadable directory must abort the run while the
 // tree is untouched. An empty mode plans nothing.
-func planSkills(root, mode string) ([]skills.Entry, error) {
-	if mode == "" {
+func planSkills(root string, targets []skills.Target) ([]skills.Entry, error) {
+	if len(targets) == 0 {
 		return nil, nil
-	}
-
-	targets, err := skills.Targets(root, mode)
-	if err != nil {
-		return nil, fmt.Errorf("init: %w", err)
 	}
 
 	return skills.Plan(root, targets)

@@ -1,11 +1,16 @@
 package report
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"maps"
 	"path"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/seamark-dev/seamark/internal/fixes"
 	"github.com/seamark-dev/seamark/internal/history"
@@ -127,6 +132,12 @@ func rankCompanions(companions map[string]companion) []companion {
 	return list
 }
 
+// companionReasonBudget bounds the git work behind one closing list. The
+// list prints on every change_set and check call, so the whole list shares
+// one deadline instead of paying a full timeout per partner; a slow history
+// then costs one budget, not six.
+const companionReasonBudget = 5 * time.Second
+
 // printCompanions writes the closing list: one line of numbers per partner
 // and, when history has them, one line of reasons. A bare file name was
 // the weakest line on the screen in the first workflow cohort; the reason
@@ -140,33 +151,85 @@ func printCompanions(w io.Writer, st *store.Store, root, title string, companion
 
 	fmt.Fprintln(w, title)
 
-	// FileCommits runs git once per set file; the cache keeps a set file
-	// that anchors several partners from paying that more than once.
-	shared := map[string]map[string]bool{}
+	funcs := partnerFunctions(root, list)
 
-	for _, c := range list {
+	for i, c := range list {
 		fmt.Fprintf(w, "  %-50s %d shared commits with %s, lift %.1f\n", c.file, c.together, c.with, c.lift)
 
-		if reason := companionReason(st, root, c, shared); reason != "" {
+		if reason := companionReason(st, c, funcs[i]); reason != "" {
 			fmt.Fprintf(w, "    %s\n", reason)
 		}
 	}
 }
 
-// companionReason names what the shared commits touched in the partner and
-// the latest correction recorded on it. The first needs git; the second
-// needs only the index, so an index without a repository still gives one.
-func companionReason(st *store.Store, root string, c companion, shared map[string]map[string]bool) string {
+// partnerFunctions names, for each listed partner, the functions the shared
+// commits touched in it; the result is indexed like list. Every git call in
+// the list runs concurrently under one deadline: the set files are scanned
+// once each, then every partner is diffed over its set file's commits only.
+// Without a repository root there is no git to ask, so every entry is nil.
+func partnerFunctions(root string, list []companion) [][]string {
+	funcs := make([][]string, len(list))
+	if root == "" {
+		return funcs
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), companionReasonBudget)
+	defer cancel()
+
+	// One scan per distinct set file: several partners usually anchor on
+	// the same planned file, and its commit list is the expensive part.
+	// The anchors are listed before the scans start, so no goroutine
+	// writes the map while another ranges over it.
+	shared := map[string]map[string]bool{}
+	for _, c := range list {
+		shared[c.with] = nil
+	}
+
+	anchors := slices.Sorted(maps.Keys(shared))
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, with := range anchors {
+		wg.Add(1)
+
+		go func(with string) {
+			defer wg.Done()
+
+			commits := history.FileCommits(ctx, root, with)
+
+			mu.Lock()
+			shared[with] = commits
+			mu.Unlock()
+		}(with)
+	}
+
+	wg.Wait()
+
+	for i, c := range list {
+		wg.Add(1)
+
+		go func(i int, c companion) {
+			defer wg.Done()
+
+			funcs[i] = history.PartnerFunctions(ctx, root, c.file, shared[c.with], 3)
+		}(i, c)
+	}
+
+	wg.Wait()
+
+	return funcs
+}
+
+// companionReason joins what the shared commits touched in the partner and
+// the latest correction recorded on it. The first comes from git and is
+// computed for the whole list at once; the second needs only the index, so
+// an index without a repository still gives one.
+func companionReason(st *store.Store, c companion, funcs []string) string {
 	var parts []string
 
-	if root != "" {
-		if _, ok := shared[c.with]; !ok {
-			shared[c.with] = history.FileCommits(root, c.with)
-		}
-
-		if funcs := history.PartnerFunctions(root, c.file, shared[c.with], 3); len(funcs) > 0 {
-			parts = append(parts, "mostly "+render.Sanitize(strings.Join(funcs, ", ")))
-		}
+	if len(funcs) > 0 {
+		parts = append(parts, "mostly "+render.Sanitize(strings.Join(funcs, ", ")))
 	}
 
 	if fix := latestFix(st, c.file); fix != nil {

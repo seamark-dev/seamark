@@ -34,7 +34,19 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   every existing byte and reporting conflicts instead of replacing them.
   Additive, idempotent, previewable with `--print`, and independent of
   `--skills`. `seamark doctor` and `seamark status` report both clients'
-  approval configuration.
+  approval configuration. The Claude Code rules are spelled with the server
+  name `.mcp.json` registers, a server-wide `mcp__seamark` rule counts for
+  every tool, and a rule under `permissions.deny` or `permissions.ask` is a
+  reported conflict, never counted as approved. Codex approvals follow the
+  `.codex/` directory or an explicit `--skills=codex`, with or without
+  `--skills`; a `[mcp_servers.seamark]` table left without its `command`
+  is completed in place instead of being reported as another command,
+  unless it carries an explicit setting such as `enabled = false`; a
+  header-shaped line inside a nested array no longer hides an inline
+  server table from the layout check; a registration with zero approvals
+  is partial for both clients, with the re-run hint; and an unparseable
+  `.mcp.json` is reported on the approvals line, because the server name
+  in it spells every rule.
 - **`check` names the companions the diff left out.** After the verdict,
   `check` (MCP tool and `seamark check`) prints `history suggests also
   reviewing`: the files that usually change with the diff's files and that
@@ -50,6 +62,15 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   partner outside the planned files' directories, the one a plan forgets.
   A bare file name at lift 1.3 was the weakest line on the screen in the
   first cohort; the reason is what makes it a question the agent answers.
+  The reasons are computed for the whole list at once under one five-second
+  budget, and git diffs only the commits the two files share (`git log
+  --no-walk --stdin`), so a lockfile or a generated client with thousands
+  of commits no longer costs a full timeout per partner on every
+  `change_set` and `check` call.
+- **Skills grant the CLI fallback they describe.** `allowed-tools` now
+  includes `Bash(seamark lessons --region *)`, the command the reference
+  names in place of `expand lessons:<dir>` when the MCP tools are absent; a
+  test pins every `seamark` command in a skill body to a grant.
 - **Skills rewritten around the cohort's failure points.** The plan skill
   names the task shapes it covers, says that a request for a minimal change
   does not switch it off, and turns "follow every surprise" into a rule

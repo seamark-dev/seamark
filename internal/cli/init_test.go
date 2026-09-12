@@ -987,3 +987,201 @@ func TestRunInitSkillsCodexNotesMissingApproval(t *testing.T) {
 	require.NoError(t, runInit(&later, root, "/bin/seamark", gateModeWarn, false, skills.ModeCodex, false))
 	assert.NotContains(t, later.String(), "not registered")
 }
+
+func TestApprovalTargetsUseOneRuleWithAndWithoutSkills(t *testing.T) {
+	// .codex/ without .agents/: the documented one-liner must configure
+	// Codex, whichever way the skills target was detected.
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
+
+	for _, mode := range []string{"", skills.ModeAuto} {
+		claude, codex, err := approvalTargets(root, mode)
+		require.NoError(t, err, mode)
+		assert.True(t, claude, mode)
+		assert.True(t, codex, mode)
+	}
+
+	// .agents/ without .codex/: skills go to Codex, approvals do not,
+	// unless --skills names Codex.
+	agents := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(agents, ".agents"), 0o755))
+
+	_, codex, err := approvalTargets(agents, skills.ModeAuto)
+	require.NoError(t, err)
+	assert.False(t, codex, "auto detection never creates .codex/")
+
+	_, codex, err = approvalTargets(agents, skills.ModeAll)
+	require.NoError(t, err)
+	assert.True(t, codex)
+
+	claude, codex, err := approvalTargets(root, skills.ModeClaude)
+	require.NoError(t, err)
+	assert.True(t, claude)
+	assert.False(t, codex, "an explicit client narrows the set even with .codex/ present")
+}
+
+func TestRunInitSkillsApproveToolsConfiguresCodexByItsDirectory(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeAuto, true))
+
+	assert.Contains(t, b.String(), "wrote   .codex/config.toml (registered seamark mcp; approved 5 tools")
+	assert.NotContains(t, b.String(), "0/5 tools approved")
+	assert.NoDirExists(t, filepath.Join(root, ".agents"), "no .agents/, so no Codex skills; approvals still land where Codex reads them")
+
+	// .agents/ alone installs the skills and notes the missing approvals
+	// instead of creating .codex/.
+	agents := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(agents, ".agents"), 0o755))
+
+	var note testWriter
+	require.NoError(t, runInit(&note, agents, "/bin/seamark", gateModeWarn, false, skills.ModeAuto, true))
+	assert.DirExists(t, filepath.Join(agents, ".agents", "skills", "seamark-plan-change"))
+	assert.NoFileExists(t, filepath.Join(agents, ".codex", "config.toml"))
+	assert.Contains(t, note.String(), "seamark mcp is not registered in .codex/config.toml")
+}
+
+func TestRunInitApproveToolsKeepsDenyAndAskRules(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"deny":["mcp__seamark__check"],"ask":["Skill(seamark-review-change)"]}}`), 0o644))
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, "", true))
+
+	assert.Contains(t, b.String(), "approved 6 Claude Code allow rules in .claude/settings.json (seamark MCP tools + skills; kept explicit settings: permissions.deny lists mcp__seamark__check; permissions.ask lists Skill(seamark-review-change))")
+
+	allow := allowRules(t, root)
+	assert.Len(t, allow, 6)
+	assert.NotContains(t, allow, "mcp__seamark__check", "an allow entry cannot override deny, so none is written")
+	assert.NotContains(t, allow, "Skill(seamark-review-change)")
+
+	// The server-wide rule already approves every tool: only the skill
+	// rules are added, and nothing redundant.
+	wide := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(wide, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(wide, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":["mcp__seamark"]}}`), 0o644))
+
+	var w testWriter
+	require.NoError(t, runInit(&w, wide, "/bin/seamark", gateModeWarn, false, "", true))
+	assert.Contains(t, w.String(), "approved 3 Claude Code allow rules")
+	assert.Equal(t, []string{"mcp__seamark", "Skill(seamark-plan-change)", "Skill(seamark-review-change)", "Skill(seamark-understand-repo)"}, allowRules(t, wide))
+}
+
+func TestRunInitApproveToolsSpellsRulesForTheRegisteredServer(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mcp.json"),
+		[]byte(`{"mcpServers":{"sm":{"command":"seamark","args":["mcp"]}}}`), 0o644))
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, "", true))
+
+	allow := allowRules(t, root)
+	assert.Contains(t, allow, "mcp__sm__check")
+	assert.NotContains(t, allow, "mcp__seamark__check", "Claude Code names tools after the .mcp.json server, so a seamark-prefixed rule would approve nothing")
+	assert.Contains(t, b.String(), "          mcp__sm__orient")
+
+	// A broken .mcp.json aborts before any write: a prefix guessed from
+	// it would be reported as current while every call prompts.
+	broken := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(broken, ".mcp.json"), []byte("{not json"), 0o644))
+
+	var nb testWriter
+	err := runInit(&nb, broken, "/bin/seamark", gateModeWarn, false, "", true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), ".mcp.json")
+	assert.NoDirExists(t, filepath.Join(broken, ".seamark"))
+}
+
+func TestRunInitReportsTheSettingsWriteWhenOnlyPermissionsChanged(t *testing.T) {
+	root := t.TempDir()
+
+	// First run wires the hooks; the second changes only the permissions,
+	// and the settings line must say the file was written for them.
+	var first testWriter
+	require.NoError(t, runInit(&first, root, "/bin/seamark", gateModeWarn, false, "", false))
+	assert.Contains(t, first.String(), "updated .claude/settings.json (gate + lessons + context reset hooks)")
+
+	var second testWriter
+	require.NoError(t, runInit(&second, root, "/bin/seamark", gateModeWarn, false, "", true))
+	assert.Contains(t, second.String(), "updated .claude/settings.json (permissions; seamark hooks already wired)")
+	assert.NotContains(t, second.String(), "kept    .claude/settings.json (seamark hooks")
+
+	var preview testWriter
+	require.NoError(t, runInit(&preview, t.TempDir(), "/bin/seamark", gateModeWarn, true, "", true))
+	assert.Contains(t, preview.String(), "would update .claude/settings.json (gate + lessons + context reset hooks)")
+
+	var third testWriter
+	require.NoError(t, runInit(&third, root, "/bin/seamark", gateModeWarn, false, "", true))
+	assert.Contains(t, third.String(), "kept    .claude/settings.json (seamark hooks already wired)", "nothing changed on the third run")
+}
+
+func TestRunInitApproveToolsNeverCallsADeniedRuleApproved(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":["mcp__seamark"],"deny":["Skill(seamark-plan-change)"]}}`), 0o644))
+
+	var first testWriter
+	require.NoError(t, runInit(&first, root, "/bin/seamark", gateModeWarn, false, "", true))
+	assert.Contains(t, first.String(), "approved 2 Claude Code allow rules")
+
+	// Nothing left to add, one rule denied: the line must not say
+	// "already approved", because doctor warns about the same file.
+	var second testWriter
+	require.NoError(t, runInit(&second, root, "/bin/seamark", gateModeWarn, false, "", true))
+	assert.Contains(t, second.String(), "kept    .claude/settings.json permissions (nothing to add; kept explicit settings: permissions.deny lists Skill(seamark-plan-change))")
+	assert.NotContains(t, second.String(), "already approved")
+}
+
+func TestRunInitSkillsNotesConflictingApprovals(t *testing.T) {
+	// Every rule allowed but one denied: no rule is missing, yet the
+	// denied tool still prompts, so the note must not fall silent.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":["mcp__seamark","Skill(seamark-understand-repo)","Skill(seamark-plan-change)","Skill(seamark-review-change)"],"deny":["mcp__seamark__check"]}}`), 0o644))
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude, false))
+	assert.Contains(t, b.String(), "explicit settings in .claude/settings.json keep 1 seamark rule from being approved (permissions.deny lists mcp__seamark__check)")
+	assert.Contains(t, b.String(), "edit the file by hand")
+	assert.NotContains(t, b.String(), "allow rules missing")
+
+	// Missing and denied together: one note carries both.
+	both := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(both, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(both, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"ask":["Skill(seamark-review-change)"]}}`), 0o644))
+
+	var nb testWriter
+	require.NoError(t, runInit(&nb, both, "/bin/seamark", gateModeWarn, false, skills.ModeClaude, false))
+	assert.Contains(t, nb.String(), "7 seamark allow rules missing from .claude/settings.json (5 MCP tools, 2 skills)")
+	assert.Contains(t, nb.String(), "kept explicit settings still prompt: permissions.ask lists Skill(seamark-review-change)")
+}
+
+func TestRunInitSkillsNotesMissingApprovalDespiteABrokenMCPConfig(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mcp.json"), []byte("{not json"), 0o644))
+
+	// --skills alone still tells the user what is missing; only
+	// --approve-tools stops, because it would write rules for a guess.
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude, false))
+	assert.Contains(t, b.String(), "8 seamark allow rules missing from .claude/settings.json")
+}
+
+func TestRunInitSkillsCountsRulesBehindAServerWideDeny(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":["Skill(seamark-understand-repo)","Skill(seamark-plan-change)","Skill(seamark-review-change)"],"deny":["mcp__seamark"]}}`), 0o644))
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude, false))
+	assert.Contains(t, b.String(), "keep 5 seamark rules from being approved (permissions.deny lists mcp__seamark)")
+}

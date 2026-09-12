@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/approve"
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -236,7 +239,7 @@ func TestWireWorkflowArmsInstallExactlyTheirCondition(t *testing.T) {
 		assert.Equal(t, cfg.SeamarkBin, bin, "hermetic wiring keeps the inert binary path")
 		dirs[arm] = dir
 
-		settings, err := readTrialSettings(dir)
+		settings, err := hooks.ReadSettings(dir)
 		require.NoError(t, err)
 		assert.NotContains(t, settings, "hooks")
 		assert.NoFileExists(t, filepath.Join(dir, ".seamark", "lessons.yaml"))
@@ -250,7 +253,7 @@ func TestWireWorkflowArmsInstallExactlyTheirCondition(t *testing.T) {
 		// The sandbox block is the lessons writer's own output.
 		lessons := filepath.Join(t.TempDir(), "lessons")
 		require.NoError(t, writeAgentSettings(lessons, "", ""))
-		expected, err := readTrialSettings(lessons)
+		expected, err := hooks.ReadSettings(lessons)
 		require.NoError(t, err)
 		for _, key := range []string{"permissions", "disableBundledSkills", "skillOverrides"} {
 			delete(settings, key)
@@ -263,17 +266,17 @@ func TestWireWorkflowArmsInstallExactlyTheirCondition(t *testing.T) {
 		assert.Contains(t, string(exclude), ".claude/")
 	}
 
-	onlySettings, err := readTrialSettings(dirs[ArmMCPOnly])
+	onlySettings, err := hooks.ReadSettings(dirs[ArmMCPOnly])
 	require.NoError(t, err)
 	assert.Equal(t, map[string]bool{
 		"mcp__seamark__orient": true, "mcp__seamark__why": true, "mcp__seamark__change_set": true,
 		"mcp__seamark__check": true, "mcp__seamark__expand": true,
-	}, allowRules(onlySettings))
+	}, approve.AllowSet(onlySettings))
 	assert.NoDirExists(t, filepath.Join(dirs[ArmMCPOnly], ".claude", "skills"))
 
-	skillsSettings, err := readTrialSettings(dirs[ArmMCPSkills])
+	skillsSettings, err := hooks.ReadSettings(dirs[ArmMCPSkills])
 	require.NoError(t, err)
-	rules := allowRules(skillsSettings)
+	rules := approve.AllowSet(skillsSettings)
 	assert.Len(t, rules, 8)
 	for _, name := range mustSkillNames(t) {
 		assert.True(t, rules["Skill("+name+")"], name)
@@ -333,7 +336,6 @@ func TestValidateWorkflowSessionRejectsUndeliveredArms(t *testing.T) {
 		{"skill in mcp-only", ArmMCPOnly, func(r *WorkflowRow) { r.Skills = []string{"seamark-plan-change"} }, "unexpected skill loaded"},
 		{"missing skill", ArmMCPSkills, func(r *WorkflowRow) { r.Skills = r.Skills[:2] }, "required skill missing"},
 		{"no skills", ArmMCPSkills, func(r *WorkflowRow) { r.Skills = nil }, "without the required skill set"},
-		{"foreign skill", ArmMCPSkills, func(r *WorkflowRow) { r.Skills = append(r.Skills, "my-skill") }, "unexpected skill loaded: my-skill"},
 		{"no result", ArmMCPSkills, func(r *WorkflowRow) { r.ResultSeen = false }, "no structured result"},
 		{"model", ArmMCPSkills, func(r *WorkflowRow) { r.Model = "claude-other" }, "requested model"},
 		{"seamark tool denied", ArmMCPOnly, func(r *WorkflowRow) {
@@ -353,6 +355,25 @@ func TestValidateWorkflowSessionRejectsUndeliveredArms(t *testing.T) {
 			assert.Contains(t, row.InvalidReason, tc.want)
 		})
 	}
+
+	t.Run("a built-in the overrides list is not the arm's doing", func(t *testing.T) {
+		// A Claude Code built-in that ignores disableBundledSkills is the
+		// same in both arms; only the catalogue decides the arm.
+		for _, arm := range []WorkflowArm{ArmMCPOnly, ArmMCPSkills} {
+			row := valid(arm)
+			row.Skills = append(row.Skills, "doctor")
+			validateWorkflowSession(cfg, arm, &row)
+			assert.True(t, row.Valid, "%s: %s", arm, row.InvalidReason)
+		}
+	})
+
+	t.Run("a project or user skill leaked into the trial invalidates it", func(t *testing.T) {
+		row := valid(ArmMCPSkills)
+		row.Skills = append(row.Skills, "my-skill")
+		validateWorkflowSession(cfg, ArmMCPSkills, &row)
+		assert.False(t, row.Valid)
+		assert.Contains(t, row.InvalidReason, "unexpected skill loaded: my-skill")
+	})
 
 	t.Run("a refused WebFetch is a measured outcome", func(t *testing.T) {
 		row := valid(ArmMCPOnly)
@@ -632,4 +653,84 @@ func TestReadAgentSessionRecordsDeniedTools(t *testing.T) {
 	assert.Equal(t, 3, row.PermissionDenials)
 	assert.Equal(t, "mcp__seamark__orient", deniedArmTool(row.DeniedTools))
 	assert.Empty(t, deniedArmTool([]string{"WebFetch"}))
+}
+
+func TestDeniedArmToolFollowsTheConditionTools(t *testing.T) {
+	// The denied-tool rule and the --tools list read one source, so a tool
+	// added to the condition is refused-checked without a second edit.
+	for _, tool := range conditionTools(ArmMCPSkills) {
+		assert.Equal(t, tool, deniedArmTool([]string{"WebFetch", tool}), tool)
+	}
+
+	for _, tool := range baseAgentTools {
+		assert.Empty(t, deniedArmTool([]string{tool}), "%s is not the condition", tool)
+	}
+
+	assert.Equal(t, append(slices.Clone(baseAgentTools), conditionTools(ArmMCPOnly)...), WorkflowTools(ArmMCPOnly))
+	assert.Equal(t, append(slices.Clone(baseAgentTools), conditionTools(ArmMCPSkills)...), WorkflowTools(ArmMCPSkills))
+	assert.NotContains(t, conditionTools(ArmMCPOnly), "Skill")
+	assert.Contains(t, conditionTools(ArmMCPSkills), "Skill")
+}
+
+func TestRunWorkflowInvalidatesARowCancelledDuringChecks(t *testing.T) {
+	// The agent finishes on its own; the interrupt lands while the
+	// repository check runs. The killed check reports a plain failure, which
+	// must not be recorded as the task failing.
+	flag := filepath.Join(t.TempDir(), "check-started")
+	instance := SchemaSyncCochangeInstance()
+	instance.Checks = []Command{{Name: "sh", Args: []string{"-c", "touch " + flag + " && exec sleep 5"}}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		for {
+			if _, err := os.Stat(flag); err == nil {
+				cancel()
+
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+
+	out := filepath.Join(t.TempDir(), "rows.jsonl")
+	sum, err := RunWorkflow(ctx, WorkflowConfig{
+		Trials: 1, Instance: instance, AgentArgv: SameAgentArgv([]string{cannedAgent(t)}),
+		SeamarkBin: "/opt/seamark/bin/seamark", Out: out, Model: "claude-test",
+		RequireStructuredResult: true, RequireExpectedInit: true,
+	})
+	require.NoError(t, err, "an interrupt is a stop, not a failure")
+	require.NotEmpty(t, sum.Rows, "the paid session before the interrupt keeps its row")
+
+	for _, row := range sum.Rows {
+		if row.ChecksPass {
+			continue
+		}
+
+		assert.False(t, row.Valid, "a killed check is not a measurement")
+		assert.False(t, row.PairValid)
+		assert.False(t, row.InfrastructureFailure, "an interrupt is not a harness fault")
+		assert.Contains(t, row.InvalidReason, "cancelled during repository checks")
+	}
+
+	assert.Empty(t, sum.StoppedReason)
+
+	assert.Zero(t, sum.ByArm[sum.Rows[0].Arm].Ran, "an invalid row is not tallied as a run")
+}
+
+func TestWorkflowSummaryLinesReportCost(t *testing.T) {
+	sum := WorkflowSummary{Instance: "x", ByArm: map[WorkflowArm]WorkflowTally{
+		ArmMCPSkills: {Ran: 2, CostUSD: 1.10},
+		ArmMCPOnly:   {Ran: 2, CostUSD: 0.65},
+	}}
+
+	assert.Contains(t, strings.Join(sum.Lines(), "\n"), "cost — mcp-skills $1.10 vs mcp-only $0.65")
+	assert.NotContains(t, strings.Join(WorkflowSummary{ByArm: map[WorkflowArm]WorkflowTally{}}.Lines(), "\n"), "cost —",
+		"a dry run with no spend prints no cost line")
 }

@@ -52,7 +52,7 @@ func newInitCmd(opts *options) *cobra.Command {
     detection. A directory carrying seamark's ownership marker is
     refreshed on re-run; any other directory of the same name is left
     untouched. Without --skills nothing is installed and init prints
-    how to
+    how to install them.
 
 A first init never blocks anything: it installs the gate hook in warn
 mode, which reports verdicts and always lets the command through.
@@ -78,10 +78,12 @@ skill's own allowed-tools grant lasts one turn and, in the version tested
 appends to .codex/config.toml: the "seamark mcp" registration when none
 exists and approval_mode = "approve" for exactly the five tools, never a
 server-wide default. Existing values, comments, and explicit restrictive
-settings stay; conflicts are reported, not replaced. Which clients: the
---skills mode when given (--skills=codex --approve-tools is Codex only),
-otherwise Claude Code always and Codex when a .codex/ directory exists.
-One setup command:
+settings stay; conflicts are reported, not replaced. The rules are spelled
+with the server name .mcp.json registers, so a server added under another
+name is approved under that name. Which clients: Claude Code unless
+--skills=codex; Codex when --skills names it (codex or all) or, without an
+explicit client, when a .codex/ directory exists; --skills=claude is
+Claude Code only. One setup command:
 
   seamark init --skills --approve-tools
 
@@ -219,19 +221,19 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 	// The Codex plan runs here too, so malformed TOML or a linked path
 	// aborts before the first scaffold lands.
 	var (
-		approved  []string
-		codexPlan *approve.CodexPlan
+		approved   []string
+		claudePlan *approve.ClaudePlan
+		codexPlan  *approve.CodexPlan
 	)
 
 	approveClaude, approveCodex := approveTools && claude, approveTools && codex
 
 	if approveClaude {
-		rules, err := approve.ClaudeRules()
-		if err != nil {
+		if claudePlan, err = planClaude(root, settings); err != nil {
 			return err
 		}
 
-		if approved, err = mergeAllow(settings, rules); err != nil {
+		if approved, err = mergeAllow(settings, claudePlan); err != nil {
 			return fmt.Errorf("%s: %w", settingsPath, err)
 		}
 	}
@@ -242,9 +244,18 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 		}
 	}
 
-	// Plan the skills install here too, so a client directory that
-	// cannot be read aborts before the first scaffold lands.
-	skillsPlan, err := planSkills(root, skillsMode)
+	// Resolve the skills targets once and plan the install here too, so
+	// a client directory that cannot be read aborts before the first
+	// scaffold lands.
+	var skillsTargets []skills.Target
+
+	if skillsMode != "" {
+		if skillsTargets, err = skills.Targets(root, skillsMode); err != nil {
+			return fmt.Errorf("init: %w", err)
+		}
+	}
+
+	skillsPlan, err := planSkills(root, skillsTargets)
 	if err != nil {
 		return err
 	}
@@ -293,7 +304,7 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 	}
 
 	if approveClaude {
-		printApproved(w, approved, printOnly)
+		printApproved(w, claudePlan, approved, printOnly)
 	}
 
 	// 3a. Codex approvals: append-only, planned above.
@@ -309,8 +320,14 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 		return err
 	}
 
-	if skillsMode != "" && !approveTools {
-		noteMissingApproval(w, root, settings, claude, codex)
+	// Note what this run left unapproved: every client the skills reached
+	// that --approve-tools did not. With a bare --skills that is Codex
+	// when .agents/ exists without .codex/, because the two artifacts are
+	// detected by different directories.
+	if skillsMode != "" {
+		skillsClaude, skillsCodex := skillsClients(skillsTargets)
+
+		noteMissingApproval(w, root, settings, skillsClaude && !approveClaude, skillsCodex && !approveCodex)
 	}
 
 	// 4. Report the EFFECTIVE blocking behaviour, derived from the hook
@@ -533,8 +550,9 @@ func hookSpecs(gateMode string) []hookSpec {
 // happened. All parsing and validation runs earlier in runInit, before
 // any file is written — this function only serializes and narrates.
 // forceWrite persists the file even when no hook changed, because
-// another merge into the same settings (the allow rules) did; the hook
-// line still says "kept", because the hooks did not change.
+// another merge into the same settings (the allow rules) did; the line
+// then says the file was updated for its permissions, so no line calls
+// a rewritten file kept.
 func writeHooks(w io.Writer, path string, settings map[string]any, changed, forceWrite bool,
 	bin, gateMode, previous string, printOnly bool) error {
 	if (changed || forceWrite) && !printOnly {
@@ -553,6 +571,10 @@ func writeHooks(w io.Writer, path string, settings map[string]any, changed, forc
 	}
 
 	switch {
+	case !changed && forceWrite && printOnly:
+		fmt.Fprintf(w, "  would update .claude/settings.json (permissions; seamark hooks already wired)\n")
+	case !changed && forceWrite:
+		fmt.Fprintf(w, "  updated .claude/settings.json (permissions; seamark hooks already wired)\n")
 	case !changed:
 		fmt.Fprintf(w, "  kept    .claude/settings.json (seamark hooks already wired)\n")
 	case printOnly:

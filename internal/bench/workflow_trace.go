@@ -277,14 +277,17 @@ func inputStrings(input json.RawMessage, key string) []string {
 
 // companionNamed reports whether a change_set result named the companion as
 // evidence rather than echoing a file the agent already planned: the result
-// contains the path and the call did not list it.
+// contains the path and the call did not list it. change_set accepts the
+// absolute path of a file inside the trial, so a planned file is matched
+// the way an edit's file_path is, or a plan spelled that way would count
+// as a suggestion.
 func companionNamed(result string, files []string, companion string) bool {
 	if !strings.Contains(result, companion) {
 		return false
 	}
 
 	for _, file := range files {
-		if samePath(file, companion) {
+		if pathIs(file, companion) {
 			return false
 		}
 	}
@@ -328,7 +331,10 @@ func samePath(a, b string) bool {
 func pathIs(filePath, file string) bool {
 	clean := cleanPath(filePath)
 
-	return clean == cleanPath(file) || strings.HasSuffix(clean, "/"+cleanPath(file))
+	// Only an absolute path is matched by its tail: change_set accepts
+	// one and resolves it inside the trial. A relative path that merely
+	// ends with the companion is another file.
+	return clean == cleanPath(file) || (path.IsAbs(clean) && strings.HasSuffix(clean, "/"+cleanPath(file)))
 }
 
 func cleanPath(value string) string {

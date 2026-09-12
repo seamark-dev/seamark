@@ -387,3 +387,58 @@ func TestRunReportsDisabledCodexServerAsConflict(t *testing.T) {
 	assert.Equal(t, StateWarn, checks["approvals"].State, "a disabled server must not read as approved")
 	assert.Contains(t, checks["approvals"].Detail, "enabled = false")
 }
+
+func TestRunWarnsOnARegistrationWithoutApprovals(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+
+	// Codex registered, nothing approved: every Codex call prompts, so
+	// the re-run hint is due even when Claude Code is complete.
+	approveClaude(t, root)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"),
+		[]byte("[mcp_servers.seamark]\ncommand = \"seamark\"\nargs = [\"mcp\"]\n"), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateWarn, checks["approvals"].State, checks["approvals"].Detail)
+	assert.Contains(t, checks["approvals"].Detail, `codex registered as "seamark", 0/5 tools approved`)
+	assert.Contains(t, checks["approvals"].Fix, "seamark init --approve-tools")
+
+	// A denied Claude Code rule is a conflict doctor warns about, not an
+	// approval it counts.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":["mcp__seamark__check"],"deny":["mcp__seamark__check"]}}`), 0o644))
+
+	checks = byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateWarn, checks["approvals"].State)
+	assert.Contains(t, checks["approvals"].Detail, "permissions.deny lists mcp__seamark__check")
+}
+
+func TestRunNamesTheBrokenMCPConfigOnBothLines(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	approveClaude(t, root)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mcp.json"), []byte("{not json"), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	// The server name in the file spells every rule, so the approvals
+	// count is unknowable until the file parses; both lines say so.
+	assert.Equal(t, StateWarn, checks["mcp"].State)
+	assert.Contains(t, checks["mcp"].Detail, "unparseable")
+	assert.Equal(t, StateWarn, checks["approvals"].State)
+	assert.Contains(t, checks["approvals"].Detail, "claude unreadable (.mcp.json")
+}
+
+func TestRunNamesTheSameServerOnBothLines(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mcp.json"),
+		[]byte(`{"mcpServers":{"zz":{"command":"seamark"},"sm":{"command":"seamark"}}}`), 0o644))
+
+	for i := 0; i < 10; i++ {
+		checks := byName(Run(root, dbPath, "test"))
+
+		assert.Equal(t, StateOK, checks["mcp"].State)
+		assert.Contains(t, checks["mcp"].Detail, `registered in .mcp.json as "sm"`, "name order, never map order")
+		assert.Contains(t, checks["approvals"].Detail, `for server "sm"`)
+	}
+}

@@ -14,22 +14,13 @@ import (
 
 // WorkflowArmReport aggregates one arm's valid paired rows of a cohort.
 type WorkflowArmReport struct {
-	Attempted      int
-	Valid          int
-	TaskDone       int
-	InvariantPass  int
-	ChangeSetFirst int
-	CompanionNamed int
-	NamedByCheck   int
-	Opened         int
-	WhyFollowed    int
-	CheckLast      int
-	SeamarkCalls   int
-	Edits          int
-	Turns          int
-	Activations    map[string]int
-	ContextTokens  int64
-	CostUSD        float64
+	Attempted     int
+	Valid         int
+	TaskDone      int
+	InvariantPass int
+	WorkflowProcessCounts
+	ContextTokens int64
+	CostUSD       float64
 }
 
 // WorkflowCohort is one immutable experiment fingerprint of the workflow
@@ -51,7 +42,6 @@ type WorkflowCohort struct {
 	Effort           string
 	RuntimeID        string
 	MaxBudgetUSD     float64
-	Rows             int
 	ValidPairs       int
 	FavorablePairs   int
 	UnfavorablePairs int
@@ -305,7 +295,7 @@ func buildWorkflowCohorts(rows []WorkflowRow) ([]WorkflowCohort, error) {
 			Fixture: first.Fixture, RequestedModel: first.RequestedModel,
 			SeamarkVersion: first.SeamarkVersion, SeamarkSHA: first.SeamarkSHA,
 			AgentVersion: first.AgentVersion, Effort: first.Effort, RuntimeID: first.RuntimeID,
-			MaxBudgetUSD: first.MaxBudgetUSD, Rows: len(cohortRows),
+			MaxBudgetUSD: first.MaxBudgetUSD,
 		}
 
 		if instance, err := WorkflowInstanceByID(first.Instance); err == nil && instance.TaskSHA() == first.TaskSHA {
@@ -421,43 +411,9 @@ func accumulateWorkflowArm(arm *WorkflowArmReport, row WorkflowRow) {
 		arm.InvariantPass++
 	}
 
-	if row.ChangeSetBeforeFirstEdit {
-		arm.ChangeSetFirst++
-	}
-
-	if row.CompanionNamedByChangeSet {
-		arm.CompanionNamed++
-	}
-
-	if row.CompanionNamedByCheck {
-		arm.NamedByCheck++
-	}
-
-	if row.CompanionOpenedAfterNamed {
-		arm.Opened++
-	}
-
-	if row.WhyFollowedCompanion {
-		arm.WhyFollowed++
-	}
-
-	if row.CheckAfterLastEdit {
-		arm.CheckLast++
-	}
-
-	arm.SeamarkCalls += row.SeamarkCalls
-	arm.Edits += row.Edits
-	arm.Turns += row.Turns
+	arm.add(row)
 	arm.ContextTokens += row.ContextTokens
 	arm.CostUSD += row.CostUSD
-
-	if len(row.Activations) > 0 && arm.Activations == nil {
-		arm.Activations = map[string]int{}
-	}
-
-	for _, name := range row.Activations {
-		arm.Activations[name]++
-	}
 }
 
 // assessWorkflowClaims applies the lessons assessment rule to the workflow

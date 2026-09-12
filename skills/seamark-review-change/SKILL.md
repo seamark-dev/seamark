@@ -4,7 +4,7 @@ description: Checks a finished change for what was missed when asked to review, 
 license: Apache-2.0
 metadata:
   seamark: managed
-allowed-tools: mcp__seamark__orient mcp__seamark__why mcp__seamark__change_set mcp__seamark__check mcp__seamark__expand Bash(seamark orient*) Bash(seamark why *) Bash(seamark check*) Bash(seamark status*) Bash(seamark lessons --file *)
+allowed-tools: mcp__seamark__orient mcp__seamark__why mcp__seamark__change_set mcp__seamark__check mcp__seamark__expand Bash(seamark orient*) Bash(seamark why *) Bash(seamark check*) Bash(seamark status*) Bash(seamark lessons --file *) Bash(seamark lessons --region *)
 ---
 
 # Review a change with Seamark

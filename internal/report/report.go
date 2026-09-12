@@ -5,6 +5,7 @@
 package report
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -158,17 +159,22 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 		// that the shared commits actually touched — a factual report from
 		// git's hunk headers, not a statistical claim. Best-effort: skipped
 		// when there is no git repo or root.
+		// One budget for the whole list, as the companions list has, so
+		// ten slow partners cost one timeout and not ten.
+		ctx, cancel := context.WithTimeout(context.Background(), companionReasonBudget)
+		defer cancel()
+
 		root, _ := st.GetMeta("repo_root")
 		var shared map[string]bool
 		if root != "" {
-			shared = history.FileCommits(root, file)
+			shared = history.FileCommits(ctx, root, file)
 		}
 
 		for _, p := range partners {
 			fmt.Fprintf(w, "  %2d/%-3d commits  lift %-5.1f %s",
 				p.Together, p.Total, p.Lift, p.File)
 
-			if funcs := history.PartnerFunctions(root, p.File, shared, 3); len(funcs) > 0 {
+			if funcs := history.PartnerFunctions(ctx, root, p.File, shared, 3); len(funcs) > 0 {
 				fmt.Fprintf(w, "  · mostly %s", render.Sanitize(strings.Join(funcs, ", ")))
 			}
 

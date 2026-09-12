@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -146,7 +147,7 @@ func TestValidateWorkflowWiringNamesTheDefect(t *testing.T) {
 func dropSetting(t *testing.T, dir, key string) {
 	t.Helper()
 
-	settings, err := readTrialSettings(dir)
+	settings, err := hooks.ReadSettings(dir)
 	require.NoError(t, err)
 	delete(settings, key)
 

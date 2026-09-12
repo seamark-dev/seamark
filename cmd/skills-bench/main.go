@@ -383,6 +383,13 @@ func checkExistingRows(path string, activation bool) error {
 		return err
 	}
 
+	// An empty file holds no row to contradict, so appending is as safe as
+	// creating the file; the strict reader alone would reject it as having
+	// no rows.
+	if len(data) == 0 {
+		return nil
+	}
+
 	if err := refuseMixedRows(path, data, activation); err != nil {
 		return err
 	}

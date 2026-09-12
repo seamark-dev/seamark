@@ -6,7 +6,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/seamark-dev/seamark/internal/bench"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -61,20 +60,6 @@ func TestRunRejectsInvalidTrialCountBeforeSetup(t *testing.T) {
 		assert.Contains(t, err.Error(), "-trials must be at least 1")
 		assert.NotContains(t, err.Error(), "seamark binary not found")
 	}
-}
-
-func TestLocalRuntimeIDIncludesFixtureToolchains(t *testing.T) {
-	goOnly := localRuntimeID("agent-test", bench.Instance{
-		Checks: []bench.Command{{Name: "go"}},
-	})
-	assert.Contains(t, goOnly, "go=")
-	assert.NotContains(t, goOnly, "python3=")
-	assert.NotContains(t, goOnly, "make=")
-	assert.Contains(t, goOnly, "agent=agent-test")
-
-	schema := localRuntimeID("agent-test", bench.SchemaSyncInstance())
-	assert.Contains(t, schema, "python3=")
-	assert.Contains(t, schema, "make=")
 }
 
 func TestCLIVersionRejectsEmptyOutput(t *testing.T) {
