@@ -840,7 +840,12 @@ func (a ActivationReport) render(out *strings.Builder) {
 	}
 
 	out.WriteString(".\n\n")
-	out.WriteString("| Prompt | Expected | Activated | Hit | Valid | Turns | Cost |\n|---|---|---|---|---|---:|---:|\n")
+	// The turn column is the num_turns figure the agent reports, which
+	// is not the unit --max-turns caps, so it can exceed the cap. A
+	// session that stopped at the cap stays valid: the cap is part of
+	// the measurement.
+	out.WriteString("Agent turns are the `num_turns` figure the agent reports; `--max-turns` counts a different unit, so the figure can exceed the cap, and a session that stopped at the cap stays valid.\n\n")
+	out.WriteString("| Prompt | Expected | Activated | Hit | Valid | Agent turns | Cost |\n|---|---|---|---|---|---:|---:|\n")
 
 	for _, row := range a.Rows {
 		valid := "yes"

@@ -36,7 +36,8 @@ func (w WorkflowInstance) Validate() error {
 		switch {
 		case field.value == "":
 			return fmt.Errorf("workflow instance %q has no %s file", w.ID, field.name)
-		case field.value != path.Clean(field.value) || strings.HasPrefix(field.value, "/") ||
+		case field.value == "." || field.value == ".." ||
+			field.value != path.Clean(field.value) || strings.HasPrefix(field.value, "/") ||
 			strings.HasPrefix(field.value, "../") || strings.Contains(field.value, "\\"):
 			return fmt.Errorf("workflow instance %q %s must be a clean repository-relative slash path, got %q",
 				w.ID, field.name, field.value)

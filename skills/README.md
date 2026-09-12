@@ -69,6 +69,7 @@ the evidence:
 | Lessons | Advice learned from reviews and fixes, shown through hooks, tools, and reports. |
 
 Skills remain opt-in. The paired benchmark that compares MCP alone with
-MCP plus skills is built (`make skills-bench`; protocol in
-[bench/README.md](../bench/README.md)) and its cohort has not run yet. The
-decision about enabling the skills by default waits for its report.
+MCP plus skills (`make skills-bench`; protocol in
+[bench/README.md](../bench/README.md)) ran two cohorts on 2026-09-05; the
+second passed the frozen claim ([report](../bench/skills-report-v2.md)).
+The decision about enabling the skills by default is still open.

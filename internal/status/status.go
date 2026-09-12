@@ -300,7 +300,7 @@ func printApprovals(w io.Writer, s *Status) {
 func printSkills(w io.Writer, s *Status) {
 	for _, c := range s.Skills {
 		if c.Installed() || c.Foreign > 0 || c.Err != "" {
-			fmt.Fprintf(w, "skills         %s\n", skills.Summary(s.Skills))
+			fmt.Fprintf(w, "skills         %s\n", render.Sanitize(skills.Summary(s.Skills)))
 
 			return
 		}

@@ -64,8 +64,9 @@ agents inside real isolation regardless.
 
 ## Distribution
 
-Released: [v0.6.0](https://github.com/seamark-dev/seamark/releases/tag/v0.6.0)
-(2026-09-05) adds the three opt-in agent skills and their benchmark and
+Latest published release: [v0.5.4](https://github.com/seamark-dev/seamark/releases/tag/v0.5.4)
+(2026-08-28). The next release, v0.6.0, is not yet published; it adds the
+three opt-in agent skills and their benchmark. Every release
 ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
 (`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C

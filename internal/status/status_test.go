@@ -356,3 +356,14 @@ func TestGatherReportsApprovals(t *testing.T) {
 	assert.Contains(t, b.String(), "codex unreadable")
 	assert.NotContains(t, b.String(), "\x1b")
 }
+
+func TestPrintSkillsSanitizesTheSummary(t *testing.T) {
+	// A read error carries the path, and a path can carry terminal
+	// escapes; the status line must not.
+	var b bytes.Buffer
+	Print(&b, &Status{Skills: []skills.ClientState{{Client: "claude", Err: "open r\x1b[2J/.claude/skills: boom"}}})
+
+	assert.Contains(t, b.String(), "skills         ")
+	assert.Contains(t, b.String(), "boom")
+	assert.NotContains(t, b.String(), "\x1b")
+}

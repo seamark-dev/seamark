@@ -1058,3 +1058,29 @@ func TestPartnerFunctionsIndexesLikeTheList(t *testing.T) {
 	assert.Nil(t, funcs[0])
 	assert.Nil(t, funcs[1])
 }
+
+func TestChangeSetSanitizesCompanionFileNames(t *testing.T) {
+	// File names come from git history, where control characters are
+	// legal; the text output must not carry them to the terminal.
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	schema := model.Symbol{FQN: "server/schema.SCHEMAS", Name: "SCHEMAS", Kind: model.KindFunction,
+		File: "server/schema.py", Span: model.Span{StartLine: 1, EndLine: 3}}
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		if err := tx.InsertSymbol(&schema); err != nil {
+			return err
+		}
+
+		return tx.InsertCoChange(model.CoChange{FileA: "server/schema.py", FileB: "web/\x1b[2Jgen.ts", Together: 2, Total: 6, Lift: 1.3})
+	}))
+
+	var b strings.Builder
+	require.NoError(t, ChangeSet(&b, st, root, []string{"server/schema.py"}))
+	assert.Contains(t, b.String(), "web/[2Jgen.ts")
+	assert.NotContains(t, b.String(), "\x1b")
+}

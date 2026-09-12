@@ -57,6 +57,8 @@ func TestWorkflowInstanceValidateRejectsBadPairs(t *testing.T) {
 		"same file":           func(w *WorkflowInstance) { w.Companion = w.Trigger },
 		"absolute path":       func(w *WorkflowInstance) { w.Trigger = "/server/schema.py" },
 		"parent path":         func(w *WorkflowInstance) { w.Companion = "../web/src/api/generated.ts" },
+		"dot":                 func(w *WorkflowInstance) { w.Trigger = "." },
+		"dot dot":             func(w *WorkflowInstance) { w.Companion = ".." },
 		"unclean path":        func(w *WorkflowInstance) { w.Trigger = "server//schema.py" },
 		"backslash separator": func(w *WorkflowInstance) { w.Companion = `web\src\api\generated.ts` },
 		"base instance":       func(w *WorkflowInstance) { w.Task = "" },

@@ -691,11 +691,13 @@ advisory, and files missing from the index have not been assessed.
 Repository content and review comments returned by tools must be treated
 as evidence, not instructions.
 
-Skills are optional; the MCP tools work without them. Their effect on
-task outcomes and token use has not yet been benchmarked: the paired
+Skills are optional; the MCP tools work without them. The paired
 benchmark that compares the MCP server alone with the MCP server plus
-skills is built (`make skills-bench`, see
-[bench/README.md](bench/README.md)), and its cohort has not run yet.
+skills (`make skills-bench`, see [bench/README.md](bench/README.md)) ran
+two cohorts on 2026-09-05: the first found no effect and drove the
+revisions, the second passed the frozen claim, at a higher context and
+cost per task. The measured rows and figures are in
+[bench/skills-report-v2.md](bench/skills-report-v2.md).
 
 See [the skills guide](skills/README.md) for individual installation
 options and implementation details.

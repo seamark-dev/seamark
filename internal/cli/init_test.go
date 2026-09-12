@@ -1185,3 +1185,88 @@ func TestRunInitSkillsCountsRulesBehindAServerWideDeny(t *testing.T) {
 	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeClaude, false))
 	assert.Contains(t, b.String(), "keep 5 seamark rules from being approved (permissions.deny lists mcp__seamark)")
 }
+
+func TestApprovalTargetsReportAnUnreadableCodexDirectory(t *testing.T) {
+	// A .codex/ that cannot be read is not the same as no .codex/: the
+	// error surfaces before init writes anything.
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every directory")
+	}
+
+	root := filepath.Join(t.TempDir(), "repo")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.Chmod(root, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
+
+	_, _, err := approvalTargets(root, "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, os.ErrPermission)
+}
+
+func TestRunInitSkillsCodexNotesKeptExplicitSettings(t *testing.T) {
+	// Nothing missing, nothing to register, but an inline table keeps
+	// the approvals from being written: the note must still say so, as
+	// the Claude note does for a deny or ask rule.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"),
+		[]byte("mcp_servers.seamark = { command = \"seamark\", args = [\"mcp\"] }\n"), 0o644))
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, skills.ModeCodex, false))
+	assert.Contains(t, b.String(), "explicit settings in .codex/config.toml keep seamark tools from being approved (existing inline tables cannot be extended by appending)")
+	assert.Contains(t, b.String(), "Codex prompts for those")
+
+	// Missing approvals beside an explicit setting: the kept setting is
+	// named on the same note.
+	root2 := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root2, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root2, ".codex", "config.toml"),
+		[]byte("[mcp_servers.seamark]\ncommand = \"seamark\"\nargs = [\"mcp\"]\n\n[mcp_servers.seamark.tools.why]\napproval_mode = \"prompt\"\n"), 0o644))
+
+	var b2 testWriter
+	require.NoError(t, runInit(&b2, root2, "/bin/seamark", gateModeWarn, false, skills.ModeCodex, false))
+	assert.Contains(t, b2.String(), "0/5 seamark tools approved in .codex/config.toml; kept explicit settings still prompt: tools.why.approval_mode = \"prompt\"; Codex prompts for the rest")
+}
+
+func TestRunInitRefusesASymlinkedSettingsPath(t *testing.T) {
+	// A committed link at .claude must not redirect the settings read or
+	// write outside the tree; the same rule the skills and Codex writers
+	// apply.
+	root := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, ".claude")))
+
+	var b testWriter
+	err := runInit(&b, root, "/bin/seamark", gateModeWarn, false, "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink at .claude")
+
+	entries, err := os.ReadDir(outside)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "nothing may be written through the link")
+
+	// The write-time check stands on its own, for a link that appears
+	// after the plan was made.
+	root2 := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root2, ".claude"), 0o755))
+	require.NoError(t, os.Symlink(filepath.Join(outside, "settings.json"), filepath.Join(root2, ".claude", "settings.json")))
+
+	err = writeHooks(&b, filepath.Join(root2, ".claude", "settings.json"), map[string]any{}, true, false, "/bin/seamark", gateModeWarn, "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink at .claude/settings.json")
+	assert.NoFileExists(t, filepath.Join(outside, "settings.json"))
+}
+
+func TestReportSkillsSanitizesTheSummary(t *testing.T) {
+	// A read error carries the path, and a path can carry terminal
+	// escapes; the init line must not.
+	root := filepath.Join(t.TempDir(), "r"+string(rune(0x1b))+"x")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "skills"), []byte("not a directory"), 0o644))
+
+	var b testWriter
+	require.NoError(t, reportSkills(&b, root, "", nil, false))
+	assert.Contains(t, b.String(), "  skills  ")
+	assert.NotContains(t, b.String(), "\x1b")
+}

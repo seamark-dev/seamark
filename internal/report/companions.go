@@ -154,7 +154,10 @@ func printCompanions(w io.Writer, st *store.Store, root, title string, companion
 	funcs := partnerFunctions(root, list)
 
 	for i, c := range list {
-		fmt.Fprintf(w, "  %-50s %d shared commits with %s, lift %.1f\n", c.file, c.together, c.with, c.lift)
+		// File names come from git history, where control characters are
+		// legal, so they are sanitized like commit titles before the terminal.
+		fmt.Fprintf(w, "  %-50s %d shared commits with %s, lift %.1f\n",
+			render.Sanitize(c.file), c.together, render.Sanitize(c.with), c.lift)
 
 		if reason := companionReason(st, c, funcs[i]); reason != "" {
 			fmt.Fprintf(w, "    %s\n", reason)

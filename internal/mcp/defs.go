@@ -16,7 +16,7 @@ var toolDefs = []map[string]any{
 	{
 		"name": "orient",
 		"description": "One-screen repo overview: scale, modules, most-called API, " +
-			"files that change in groups, recent decisions. Call once before the first edit.",
+			"files that change in groups, recent decisions. Call once when the repository or subsystem is unfamiliar.",
 		"inputSchema": objSchema(nil, nil),
 	},
 	{

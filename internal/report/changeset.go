@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -59,8 +60,10 @@ func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error 
 
 		for i, p := range partners {
 			if i < maxCompanions {
+				// Partner names come from git history, where control
+				// characters are legal, so they are sanitized before the terminal.
 				fmt.Fprintf(w, "  usually changes with  %-46s %2d/%d commits, lift %.1f\n",
-					p.File, p.Together, p.Total, p.Lift)
+					render.Sanitize(p.File), p.Together, p.Total, p.Lift)
 			}
 
 			set.note(companions, file, p)

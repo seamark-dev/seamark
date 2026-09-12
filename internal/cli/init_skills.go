@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -39,7 +40,7 @@ func reportSkills(w io.Writer, root, mode string, plan []skills.Entry, printOnly
 
 	for _, s := range states {
 		if s.Installed() || s.Foreign > 0 || s.Err != "" {
-			fmt.Fprintf(w, "  skills  %s\n", skills.Summary(states))
+			fmt.Fprintf(w, "  skills  %s\n", render.Sanitize(skills.Summary(states)))
 
 			return nil
 		}

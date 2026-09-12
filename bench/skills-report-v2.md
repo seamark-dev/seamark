@@ -92,7 +92,9 @@ Identity: fingerprint `189e610483c4fcfe04af99611936d011c7cec498b3a9036e0aa23f79e
 
 Frozen criteria: **passes frozen criteria**.
 
-| Prompt | Expected | Activated | Hit | Valid | Turns | Cost |
+Agent turns are the `num_turns` figure the agent reports; `--max-turns` counts a different unit, so the figure can exceed the cap, and a session that stopped at the cap stays valid.
+
+| Prompt | Expected | Activated | Hit | Valid | Agent turns | Cost |
 |---|---|---|---|---|---:|---:|
 | comment-pagination | none | none | true | yes | 3 | $0.02 |
 | plan-billing-field | seamark-plan-change | seamark-plan-change | true | yes | 9 | $0.04 |

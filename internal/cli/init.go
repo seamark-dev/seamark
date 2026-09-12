@@ -23,6 +23,9 @@ import (
 const (
 	gateModeWarn    = hooks.ModeWarn
 	gateModeEnforce = hooks.ModeEnforce
+	// settingsRel is the Claude Code settings file, repository-relative
+	// with slashes, as the symlink check reads paths.
+	settingsRel = ".claude/settings.json"
 )
 
 func newInitCmd(opts *options) *cobra.Command {
@@ -190,6 +193,10 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 	// anything: a malformed or wrong-shaped file must abort init before
 	// the scaffold writes, never halfway through them.
 	settingsPath := filepath.Join(root, ".claude", "settings.json")
+
+	if err := refuseSettingsLink(root); err != nil {
+		return err
+	}
 
 	settings, err := loadSettings(settingsPath)
 	if err != nil {
@@ -374,6 +381,23 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 // is an empty map; an unparseable one is a loud error with remediation —
 // raised before init writes anything, so a broken file cannot leave the
 // repository half-initialized.
+// refuseSettingsLink rejects a symbolic link at .claude or at
+// .claude/settings.json, the same rule the skills and Codex writers
+// apply: a link committed in a cloned repository must never redirect a
+// read or a write outside the tree.
+func refuseSettingsLink(root string) error {
+	link, err := skills.SymlinkIn(root, settingsRel)
+	if err != nil {
+		return err
+	}
+
+	if link != "" {
+		return fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", settingsRel, link)
+	}
+
+	return nil
+}
+
 func loadSettings(path string) (map[string]any, error) {
 	settings := map[string]any{}
 
@@ -556,6 +580,12 @@ func hookSpecs(gateMode string) []hookSpec {
 func writeHooks(w io.Writer, path string, settings map[string]any, changed, forceWrite bool,
 	bin, gateMode, previous string, printOnly bool) error {
 	if (changed || forceWrite) && !printOnly {
+		// Checked again right before the write: the tree may have changed
+		// since the load, and a link must never redirect the write.
+		if err := refuseSettingsLink(filepath.Dir(filepath.Dir(path))); err != nil {
+			return err
+		}
+
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}

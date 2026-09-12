@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -38,9 +39,19 @@ func approvalTargets(root, skillsMode string) (claude, codex bool, err error) {
 		return claude, true, nil
 	}
 
+	// A missing .codex/ means no Codex configuration. Any other stat
+	// error is reported before init writes anything, because a directory
+	// that cannot be read must not be silently treated as absent.
 	info, err := os.Stat(filepath.Join(root, ".codex"))
+	if errors.Is(err, os.ErrNotExist) {
+		return claude, false, nil
+	}
 
-	return claude, err == nil && info.IsDir(), nil
+	if err != nil {
+		return false, false, err
+	}
+
+	return claude, info.IsDir(), nil
 }
 
 // skillsClients reports which clients the resolved skills targets
@@ -199,13 +210,28 @@ func planClaude(root string, settings map[string]any) (*approve.ClaudePlan, erro
 
 func noteMissingCodex(w io.Writer, root string) {
 	p, err := approve.PlanCodex(root)
-	if err != nil || (!p.Register && len(p.Missing) == 0) {
+	if err != nil || (!p.Register && len(p.Missing) == 0 && len(p.Conflicts) == 0) {
+		return
+	}
+
+	// An explicit restrictive setting prompts as surely as a missing
+	// approval, and --approve-tools leaves it alone, so the note names
+	// it and says the fix is by hand, as the Claude note does.
+	if !p.Register && len(p.Missing) == 0 {
+		fmt.Fprintf(w, "  note    explicit settings in %s keep seamark tools from being approved (%s);\n"+
+			"          Codex prompts for those — edit the file by hand if they should run without prompts\n",
+			approve.CodexConfig, strings.Join(p.Conflicts, "; "))
+
 		return
 	}
 
 	state := fmt.Sprintf("%d/%d seamark tools approved in %s", len(p.Approved), len(approve.Tools), approve.CodexConfig)
 	if p.Register {
 		state = "seamark mcp is not registered in " + approve.CodexConfig
+	}
+
+	if len(p.Conflicts) > 0 {
+		state += "; kept explicit settings still prompt: " + strings.Join(p.Conflicts, "; ")
 	}
 
 	fmt.Fprintf(w, "  note    %s; Codex prompts for the rest —\n"+

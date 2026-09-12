@@ -76,7 +76,7 @@ func TestCommittedActivationPromptsAreValid(t *testing.T) {
 	}
 
 	for name, count := range perSkill {
-		assert.GreaterOrEqual(t, count, 2, "%s needs at least two should-activate prompts for a recall estimate", name)
+		assert.GreaterOrEqual(t, count, 5, "%s needs at least five should-activate prompts for a recall estimate", name)
 	}
 
 	assert.GreaterOrEqual(t, shouldNot, 4, "typo, comment, single symbol, and one-line rename cases")
