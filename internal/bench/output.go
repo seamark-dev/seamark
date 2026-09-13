@@ -50,6 +50,39 @@ func RejectOutputCollision(outPath string, protected []string) error {
 	return nil
 }
 
+// WriteReport writes a rendered report to outPath, or to stdout when
+// outPath is "-"; both report CLIs share the rule.
+func WriteReport(outPath string, content []byte) error {
+	if outPath == "-" {
+		_, err := os.Stdout.Write(content)
+
+		return err
+	}
+
+	return WriteAtomic(outPath, content)
+}
+
+// ResolveSeamarkBinary returns the absolute path of the seamark binary a
+// benchmark drives: the configured one, or bin/seamark from `make build`.
+// The file must exist, because every row hashes it.
+func ResolveSeamarkBinary(configured string) (string, error) {
+	bin := configured
+	if bin == "" {
+		bin = filepath.Join("bin", "seamark")
+	}
+
+	abs, err := filepath.Abs(bin)
+	if err != nil {
+		return "", err
+	}
+
+	if _, err := os.Stat(abs); err != nil {
+		return "", fmt.Errorf("seamark binary not found at %s — run `make build` first (or pass -seamark)", abs)
+	}
+
+	return abs, nil
+}
+
 // WriteAtomic writes content through a temporary file and a rename, so a
 // reader never sees a half-written report.
 func WriteAtomic(path string, content []byte) error {

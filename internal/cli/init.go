@@ -23,9 +23,6 @@ import (
 const (
 	gateModeWarn    = hooks.ModeWarn
 	gateModeEnforce = hooks.ModeEnforce
-	// settingsRel is the Claude Code settings file, repository-relative
-	// with slashes, as the symlink check reads paths.
-	settingsRel = ".claude/settings.json"
 )
 
 func newInitCmd(opts *options) *cobra.Command {
@@ -192,15 +189,13 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 	// 0. Load, validate and merge .claude/settings.json BEFORE touching
 	// anything: a malformed or wrong-shaped file must abort init before
 	// the scaffold writes, never halfway through them.
-	settingsPath := filepath.Join(root, ".claude", "settings.json")
-
 	if err := refuseSettingsLink(root); err != nil {
 		return err
 	}
 
-	settings, err := loadSettings(settingsPath)
+	settings, err := hooks.ReadSettings(root)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w (fix or move it, then re-run)", err)
 	}
 
 	gateMode = resolveGateMode(settings, gateMode)
@@ -212,7 +207,7 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 
 	hooksChanged, err := mergeHooks(settings, bin, gateMode)
 	if err != nil {
-		return fmt.Errorf("%s: %w", settingsPath, err)
+		return fmt.Errorf("%s: %w", approve.ClaudeSettings, err)
 	}
 
 	// The clients the approvals address, read once: --approve-tools
@@ -228,7 +223,6 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 	// The Codex plan runs here too, so malformed TOML or a linked path
 	// aborts before the first scaffold lands.
 	var (
-		approved   []string
 		claudePlan *approve.ClaudePlan
 		codexPlan  *approve.CodexPlan
 	)
@@ -240,8 +234,8 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 			return err
 		}
 
-		if approved, err = mergeAllow(settings, claudePlan); err != nil {
-			return fmt.Errorf("%s: %w", settingsPath, err)
+		if err := mergeAllow(settings, claudePlan); err != nil {
+			return fmt.Errorf("%s: %w", approve.ClaudeSettings, err)
 		}
 	}
 
@@ -254,17 +248,19 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 	// Resolve the skills targets once and plan the install here too, so
 	// a client directory that cannot be read aborts before the first
 	// scaffold lands.
-	var skillsTargets []skills.Target
+	var (
+		skillsTargets []skills.Target
+		skillsPlan    []skills.Entry
+	)
 
 	if skillsMode != "" {
 		if skillsTargets, err = skills.Targets(root, skillsMode); err != nil {
 			return fmt.Errorf("init: %w", err)
 		}
-	}
 
-	skillsPlan, err := planSkills(root, skillsTargets)
-	if err != nil {
-		return err
+		if skillsPlan, err = skills.Plan(root, skillsTargets); err != nil {
+			return err
+		}
 	}
 
 	verb := "wrote"
@@ -306,12 +302,14 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 
 	// 3. Claude Code hooks — validated and merged above, write-only here.
 	// The allow rules ride in the same write, so the file lands once.
-	if err := writeHooks(w, settingsPath, settings, hooksChanged, len(approved) > 0, bin, gateMode, previous, printOnly); err != nil {
+	permissionsChanged := approveClaude && len(claudePlan.Missing) > 0
+
+	if err := writeHooks(w, root, settings, hooksChanged, permissionsChanged, bin, gateMode, previous, printOnly); err != nil {
 		return err
 	}
 
 	if approveClaude {
-		printApproved(w, claudePlan, approved, printOnly)
+		printApproved(w, claudePlan, printOnly)
 	}
 
 	// 3a. Codex approvals: append-only, planned above.
@@ -323,18 +321,26 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 
 	// 3b. Agent skills: opt-in, planned above, write-only here. Without
 	// the flag the line says what is installed, or how to install.
-	if err := reportSkills(w, root, skillsMode, skillsPlan, printOnly); err != nil {
-		return err
-	}
+	if skillsMode == "" {
+		reportInstalledSkills(w, root)
+	} else {
+		if err := skills.Apply(w, root, skillsPlan, printOnly); err != nil {
+			return err
+		}
 
-	// Note what this run left unapproved: every client the skills reached
-	// that --approve-tools did not. With a bare --skills that is Codex
-	// when .agents/ exists without .codex/, because the two artifacts are
-	// detected by different directories.
-	if skillsMode != "" {
+		// Note what this run left unapproved: every client the skills
+		// reached that --approve-tools did not. With a bare --skills that
+		// is Codex when .agents/ exists without .codex/, because the two
+		// artifacts are detected by different directories.
 		skillsClaude, skillsCodex := skillsClients(skillsTargets)
 
-		noteMissingApproval(w, root, settings, skillsClaude && !approveClaude, skillsCodex && !approveCodex)
+		if skillsClaude && !approveClaude {
+			noteMissingClaude(w, root, settings)
+		}
+
+		if skillsCodex && !approveCodex {
+			noteMissingCodex(w, root)
+		}
 	}
 
 	// 4. Report the EFFECTIVE blocking behaviour, derived from the hook
@@ -377,41 +383,21 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 	return nil
 }
 
-// loadSettings reads and parses a .claude/settings.json. An absent file
-// is an empty map; an unparseable one is a loud error with remediation —
-// raised before init writes anything, so a broken file cannot leave the
-// repository half-initialized.
 // refuseSettingsLink rejects a symbolic link at .claude or at
 // .claude/settings.json, the same rule the skills and Codex writers
 // apply: a link committed in a cloned repository must never redirect a
 // read or a write outside the tree.
 func refuseSettingsLink(root string) error {
-	link, err := skills.SymlinkIn(root, settingsRel)
+	link, err := skills.SymlinkIn(root, approve.ClaudeSettings)
 	if err != nil {
 		return err
 	}
 
 	if link != "" {
-		return fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", settingsRel, link)
+		return fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", approve.ClaudeSettings, link)
 	}
 
 	return nil
-}
-
-func loadSettings(path string) (map[string]any, error) {
-	settings := map[string]any{}
-
-	data, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(data, &settings); err != nil {
-			return nil, fmt.Errorf("%s: %w (fix or move it, then re-run)", path, err)
-		}
-	case !os.IsNotExist(err):
-		return nil, err
-	}
-
-	return settings, nil
 }
 
 // resolveGateMode turns the --gate-mode flag into the mode to install.
@@ -573,18 +559,20 @@ func hookSpecs(gateMode string) []hookSpec {
 // writeHooks persists the already-merged settings and reports what
 // happened. All parsing and validation runs earlier in runInit, before
 // any file is written — this function only serializes and narrates.
-// forceWrite persists the file even when no hook changed, because
-// another merge into the same settings (the allow rules) did; the line
-// then says the file was updated for its permissions, so no line calls
-// a rewritten file kept.
-func writeHooks(w io.Writer, path string, settings map[string]any, changed, forceWrite bool,
+// permissionsChanged persists the file even when no hook changed,
+// because the allow-rule merge into the same settings did; the line then
+// says the file was updated for its permissions, so no line calls a
+// rewritten file kept.
+func writeHooks(w io.Writer, root string, settings map[string]any, changed, permissionsChanged bool,
 	bin, gateMode, previous string, printOnly bool) error {
-	if (changed || forceWrite) && !printOnly {
+	if (changed || permissionsChanged) && !printOnly {
 		// Checked again right before the write: the tree may have changed
 		// since the load, and a link must never redirect the write.
-		if err := refuseSettingsLink(filepath.Dir(filepath.Dir(path))); err != nil {
+		if err := refuseSettingsLink(root); err != nil {
 			return err
 		}
+
+		path := filepath.Join(root, filepath.FromSlash(approve.ClaudeSettings))
 
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
@@ -600,17 +588,20 @@ func writeHooks(w io.Writer, path string, settings map[string]any, changed, forc
 		}
 	}
 
-	switch {
-	case !changed && forceWrite && printOnly:
-		fmt.Fprintf(w, "  would update .claude/settings.json (permissions; seamark hooks already wired)\n")
-	case !changed && forceWrite:
-		fmt.Fprintf(w, "  updated .claude/settings.json (permissions; seamark hooks already wired)\n")
-	case !changed:
+	if !changed && !permissionsChanged {
 		fmt.Fprintf(w, "  kept    .claude/settings.json (seamark hooks already wired)\n")
-	case printOnly:
-		fmt.Fprintf(w, "  would update .claude/settings.json (gate + lessons + context reset hooks)\n")
-	default:
-		fmt.Fprintf(w, "  updated .claude/settings.json (gate + lessons + context reset hooks)\n")
+	} else {
+		verb, reason := "updated", "gate + lessons + context reset hooks"
+
+		if printOnly {
+			verb = "would update"
+		}
+
+		if !changed {
+			reason = "permissions; seamark hooks already wired"
+		}
+
+		fmt.Fprintf(w, "  %s .claude/settings.json (%s)\n", verb, reason)
 	}
 
 	printHookCommands(w, bin, gateMode)

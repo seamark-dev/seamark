@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/approve"
@@ -14,8 +13,9 @@ import (
 )
 
 // approvalTargets names the clients --approve-tools configures, by one
-// rule whether or not --skills is given. Claude Code is a target unless
-// --skills=codex. Codex is a target when --skills names it (codex or
+// rule whether or not --skills is given. skillsMode is one of
+// skills.Modes or empty; the command validates it. Claude Code is a
+// target unless --skills=codex. Codex is a target when --skills names it (codex or
 // all), or, without an explicit client, when a .codex/ directory exists,
 // because that is where its configuration lives; --skills=claude means
 // Claude only. A bare --skills detects the skills target by .agents/ and
@@ -25,11 +25,6 @@ import (
 // .agents/, right after the documentation promised the one-liner would
 // configure it.
 func approvalTargets(root, skillsMode string) (claude, codex bool, err error) {
-	if skillsMode != "" && !slices.Contains(skills.Modes, skillsMode) {
-		return false, false, fmt.Errorf("skills: unknown install mode %q (accepted: %s)",
-			skillsMode, strings.Join(skills.Modes, ", "))
-	}
-
 	claude = skillsMode != skills.ModeCodex
 
 	switch skillsMode {
@@ -71,33 +66,34 @@ func skillsClients(targets []skills.Target) (claude, codex bool) {
 }
 
 // mergeAllow appends the rules the plan reports missing to
-// permissions.allow, in order, and returns the ones it added. Existing
-// entries, the user's or ours, stay in place. A rule the plan lists as a
-// conflict is never appended: an allow entry cannot override a deny or
-// ask entry, so adding one would only claim what is not so. A
-// present-but-wrong-typed field is an error, not an overwrite, like the
-// hooks merge: init never clobbers the user's data.
-func mergeAllow(settings map[string]any, plan *approve.ClaudePlan) (added []string, err error) {
+// permissions.allow, in order. Existing entries, the user's or ours,
+// stay in place. A rule the plan lists as a conflict is never appended:
+// an allow entry cannot override a deny or ask entry, so adding one
+// would only claim what is not so. A present-but-wrong-typed field is
+// an error, not an overwrite, like the hooks merge: init never clobbers
+// the user's data.
+func mergeAllow(settings map[string]any, plan *approve.ClaudePlan) error {
 	perms, err := childMap(settings, "permissions")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	allow, err := childSlice(perms, "allow")
 	if err != nil {
-		return nil, err
+		return err
+	}
+
+	if len(plan.Missing) == 0 {
+		return nil
 	}
 
 	for _, r := range plan.Missing {
 		allow = append(allow, r)
-		added = append(added, r)
 	}
 
-	if len(added) > 0 {
-		perms["allow"] = allow
-	}
+	perms["allow"] = allow
 
-	return added, nil
+	return nil
 }
 
 // printApproved narrates the Claude Code allow-rule merge in init's
@@ -105,10 +101,10 @@ func mergeAllow(settings map[string]any, plan *approve.ClaudePlan) (added []stri
 // pre-approves must never require opening settings.json to find out.
 // Explicit deny or ask entries are named as kept, like the Codex line
 // does, so the user learns why a tool still prompts.
-func printApproved(w io.Writer, plan *approve.ClaudePlan, added []string, printOnly bool) {
+func printApproved(w io.Writer, plan *approve.ClaudePlan, printOnly bool) {
 	kept := approve.KeptSuffix(plan.Conflicts)
 
-	if len(added) == 0 && kept != "" {
+	if len(plan.Missing) == 0 && kept != "" {
 		// Nothing to add is not everything approved: the kept entries are
 		// exactly the rules that still prompt.
 		fmt.Fprintf(w, "  kept    .claude/settings.json permissions (nothing to add%s)\n", kept)
@@ -116,7 +112,7 @@ func printApproved(w io.Writer, plan *approve.ClaudePlan, added []string, printO
 		return
 	}
 
-	if len(added) == 0 {
+	if len(plan.Missing) == 0 {
 		fmt.Fprintf(w, "  kept    .claude/settings.json permissions (seamark tools and skills already approved)\n")
 
 		return
@@ -127,40 +123,30 @@ func printApproved(w io.Writer, plan *approve.ClaudePlan, added []string, printO
 		verb = "would approve"
 	}
 
-	fmt.Fprintf(w, "  %s %d Claude Code allow rules in .claude/settings.json (seamark MCP tools + skills%s)\n", verb, len(added), kept)
+	fmt.Fprintf(w, "  %s %d Claude Code allow rules in .claude/settings.json (seamark MCP tools + skills%s)\n", verb, len(plan.Missing), kept)
 
-	for _, r := range added {
+	for _, r := range plan.Missing {
 		fmt.Fprintf(w, "          %s\n", r)
 	}
 }
 
-// noteMissingApproval prints one note per targeted client whose
-// approvals are missing after a skills install without --approve-tools.
-// It names what is missing and says those calls can prompt. It does not
-// assert which invocation path prompts: Claude Code's docs say a skill's
-// own allowed-tools grant covers user and model invocation for one turn,
-// but the 2.1.257 trial saw it apply to user invocation only, and Codex
-// approves MCP tools only through its own configuration. Persistent
-// rules cover every path, so the note is right either way.
-func noteMissingApproval(w io.Writer, root string, settings map[string]any, claude, codex bool) {
-	if claude {
-		noteMissingClaude(w, root, settings)
-	}
-
-	if codex {
-		noteMissingCodex(w, root)
-	}
-}
-
+// noteMissingClaude prints the note for a Claude Code skills install
+// without --approve-tools: what is missing, and that those calls can
+// prompt. It does not assert which invocation path prompts: Claude
+// Code's docs say a skill's own allowed-tools grant covers user and
+// model invocation for one turn, but the 2.1.257 trial saw it apply to
+// user invocation only. Persistent rules cover every path, so the note
+// is right either way.
 func noteMissingClaude(w io.Writer, root string, settings map[string]any) {
-	plan, err := planClaude(root, settings)
+	// A broken .mcp.json stops --approve-tools, not the note: the rules
+	// are counted for the conventional name, which an unreadable
+	// registration falls back to, so the user still learns what is
+	// missing; doctor names the broken file.
+	reg, _ := approve.ClaudeRegistration(root)
+
+	plan, err := approve.PlanClaude(settings, reg.ServerName())
 	if err != nil {
-		// A broken .mcp.json stops --approve-tools, not the note: the
-		// rules are counted for the conventional name so the user still
-		// learns what is missing, and doctor names the broken file.
-		if plan, err = approve.PlanClaude(settings, approve.ClaudeServer); err != nil {
-			return
-		}
+		return
 	}
 
 	tools, skillRules := 0, 0
@@ -208,6 +194,9 @@ func planClaude(root string, settings map[string]any) (*approve.ClaudePlan, erro
 	return approve.PlanClaude(settings, reg.ServerName())
 }
 
+// noteMissingCodex prints the note for a Codex skills install without
+// --approve-tools. Codex approves MCP tools only through its own
+// configuration, so a missing approval always prompts.
 func noteMissingCodex(w io.Writer, root string) {
 	p, err := approve.PlanCodex(root)
 	if err != nil || (!p.Register && len(p.Missing) == 0 && len(p.Conflicts) == 0) {

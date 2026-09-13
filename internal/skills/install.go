@@ -122,8 +122,7 @@ func Plan(root string, targets []Target) ([]Entry, error) {
 		for _, name := range names {
 			e := Entry{Name: name, Rel: path.Join(t.Dir, name)}
 
-			e.State, e.Reason, err = classify(root, e)
-			if err != nil {
+			if err := classify(root, &e); err != nil {
 				return nil, err
 			}
 
@@ -134,19 +133,25 @@ func Plan(root string, targets []Target) ([]Entry, error) {
 	return entries, nil
 }
 
-// classify decides the state of one planned directory. A missing path
-// is Absent; a path seamark does not own is Foreign with the reason; an
+// classify sets the state of one planned directory. A missing path is
+// Absent; a path seamark does not own is Foreign with the reason; an
 // owned copy is Current or Stale by byte comparison with every shipped
-// file. Every file is compared before Stale is returned, so a read
-// error surfaces here, before init writes anything, rather than in the
-// middle of the refresh. Read errors other than "not found" are
-// returned: masking them as Stale would turn a permission problem into
-// a failed write later.
-func classify(root string, e Entry) (State, string, error) {
+// file. Every file is compared before Stale is set, so a read error
+// surfaces here, before init writes anything, rather than in the middle
+// of the refresh. Read errors other than "not found" are returned:
+// masking them as Stale would turn a permission problem into a failed
+// write later.
+func classify(root string, e *Entry) error {
+	foreign := func(reason string) error {
+		e.State, e.Reason = Foreign, reason
+
+		return nil
+	}
+
 	if link, err := SymlinkIn(root, e.Rel); err != nil {
-		return Absent, "", err
+		return err
 	} else if link != "" {
-		return Foreign, "symlink at " + link, nil
+		return foreign("symlink at " + link)
 	}
 
 	dir := filepath.Join(root, filepath.FromSlash(e.Rel))
@@ -155,16 +160,18 @@ func classify(root string, e Entry) (State, string, error) {
 
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		return Absent, "", nil
+		e.State = Absent
+
+		return nil
 	case err != nil:
-		return Absent, "", fmt.Errorf("%s: %w", e.Rel, err)
+		return fmt.Errorf("%s: %w", e.Rel, err)
 	case !info.IsDir():
-		return Foreign, "not a directory", nil
+		return foreign("not a directory")
 	}
 
 	shipped, err := Files(e.Name)
 	if err != nil {
-		return Absent, "", err
+		return err
 	}
 
 	// Sorted, so a failure names the same path on repeat.
@@ -178,11 +185,11 @@ func classify(root string, e Entry) (State, string, error) {
 	for _, rel := range rels {
 		link, err := SymlinkIn(root, path.Join(e.Rel, rel))
 		if err != nil {
-			return Absent, "", err
+			return err
 		}
 
 		if link != "" {
-			return Foreign, "symlink at " + strings.TrimPrefix(link, e.Rel+"/"), nil
+			return foreign("symlink at " + strings.TrimPrefix(link, e.Rel+"/"))
 		}
 	}
 
@@ -190,40 +197,36 @@ func classify(root string, e Entry) (State, string, error) {
 
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		return Foreign, "no " + SkillFile, nil
+		return foreign("no " + SkillFile)
 	case err != nil:
-		return Absent, "", fmt.Errorf("%s: %w", e.Rel, err)
+		return fmt.Errorf("%s: %w", e.Rel, err)
 	}
 
 	fm, _, err := ParseFrontmatter(skillMD)
 	if err != nil {
-		return Foreign, "unreadable frontmatter", nil
+		return foreign("unreadable frontmatter")
 	}
 
 	if !IsManaged(fm) {
-		return Foreign, "no seamark marker", nil
+		return foreign("no seamark marker")
 	}
 
-	stale := false
+	e.State = Current
 
 	for _, rel := range rels {
 		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
 
 		switch {
 		case errors.Is(err, os.ErrNotExist):
-			stale = true
+			e.State = Stale
 		case err != nil:
-			return Absent, "", fmt.Errorf("%s: %w", path.Join(e.Rel, rel), err)
+			return fmt.Errorf("%s: %w", path.Join(e.Rel, rel), err)
 		case !bytes.Equal(got, shipped[rel]):
-			stale = true
+			e.State = Stale
 		}
 	}
 
-	if stale {
-		return Stale, "", nil
-	}
-
-	return Current, "", nil
+	return nil
 }
 
 // SymlinkIn walks rel down from root one component at a time and
@@ -358,6 +361,14 @@ func (c ClientState) Installed() bool {
 	return c.Current+c.Stale > 0
 }
 
+// Notable reports whether the client is worth a line when nobody asked
+// for skills: it holds managed skills, a directory seamark does not own,
+// or an unreadable one. init and status print the summary only then, so
+// a plain run never claims "not installed" over any of the three.
+func (c ClientState) Notable() bool {
+	return c.Installed() || c.Foreign > 0 || c.Err != ""
+}
+
 // Inspect reports both clients regardless of detection, so a stale copy
 // in a directory auto would skip stays visible. A read error is recorded
 // on the client instead of failing the call: status must never fail
@@ -434,23 +445,25 @@ func (c ClientState) Describe() string {
 	return p
 }
 
-// Summary renders the one-line view init and status print, for example
-// "claude 3/3 current · codex not installed". A stale or missing managed
-// copy names the corrective command once at the end.
-func Summary(states []ClientState) string {
-	var (
-		parts   []string
-		refresh bool
-	)
+// Details renders every client's Describe on one line, for example
+// "claude 3/3 current · codex not installed". doctor prints it as the
+// detail of its own verdict; Summary adds the corrective command.
+func Details(states []ClientState) string {
+	parts := make([]string, 0, len(states))
 
 	for _, s := range states {
 		parts = append(parts, s.Describe())
-		refresh = refresh || s.NeedsRefresh()
 	}
 
-	line := strings.Join(parts, " · ")
+	return strings.Join(parts, " · ")
+}
 
-	if refresh {
+// Summary renders the one-line view init and status print. A stale or
+// missing managed copy names the corrective command once at the end.
+func Summary(states []ClientState) string {
+	line := Details(states)
+
+	if slices.ContainsFunc(states, ClientState.NeedsRefresh) {
 		line += " (re-run seamark init --skills)"
 	}
 

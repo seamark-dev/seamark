@@ -1050,6 +1050,43 @@ func TestCompanionReasonNamesFunctionsFromSharedCommitsOnly(t *testing.T) {
 	assert.Contains(t, out, "last fix here", "the index reason still prints beside the git one")
 }
 
+func TestAsIndexedFileNamesAMissByItsRepositoryPath(t *testing.T) {
+	// An unindexed file pasted from a subdirectory shell, or as an absolute
+	// path, is still named the way the index would name it, so the "not in
+	// the index" line and the companion exclusion use the partner spelling.
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "server"), 0o755))
+	t.Chdir(filepath.Join(root, "server"))
+
+	name, ok := asIndexedFile(st, root, "../web/new.ts")
+	assert.False(t, ok)
+	assert.Equal(t, "web/new.ts", name)
+
+	name, ok = asIndexedFile(st, root, filepath.Join(root, "web", "new.ts"))
+	assert.False(t, ok)
+	assert.Equal(t, "web/new.ts", name)
+
+	// A plain path is repository-relative by convention, so the working
+	// directory must not re-root it: the lessons for scripts/ would be
+	// looked up under server/scripts/ otherwise.
+	name, ok = asIndexedFile(st, root, "scripts/new.py")
+	assert.False(t, ok)
+	assert.Equal(t, "scripts/new.py", name)
+
+	// From a shell outside the root nothing better is known, so the query
+	// stays as given.
+	t.Chdir(t.TempDir())
+
+	name, ok = asIndexedFile(st, root, "./elsewhere/x.go")
+	assert.False(t, ok)
+	assert.Equal(t, "elsewhere/x.go", name)
+}
+
 func TestPartnerFunctionsIndexesLikeTheList(t *testing.T) {
 	// Without a repository root there is no git to ask, so the slice has
 	// one nil entry per partner and printing never reads out of range.

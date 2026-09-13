@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -298,12 +299,10 @@ func printApprovals(w io.Writer, s *Status) {
 // would otherwise load text that no longer matches this binary, or
 // `seamark init --skills` would not install what the reader expects.
 func printSkills(w io.Writer, s *Status) {
-	for _, c := range s.Skills {
-		if c.Installed() || c.Foreign > 0 || c.Err != "" {
-			fmt.Fprintf(w, "skills         %s\n", render.Sanitize(skills.Summary(s.Skills)))
+	if slices.ContainsFunc(s.Skills, skills.ClientState.Notable) {
+		fmt.Fprintf(w, "skills         %s\n", render.Sanitize(skills.Summary(s.Skills)))
 
-			return
-		}
+		return
 	}
 
 	fmt.Fprintf(w, "skills         not installed (`seamark init --skills`)\n")

@@ -140,7 +140,7 @@ func ClaudeRegistration(root string) (Registration, error) {
 	isSeamark := func(name string) bool {
 		srv, ok := cfg.Servers[name]
 
-		return ok && strings.TrimSuffix(filepath.Base(srv.Command), ".exe") == "seamark"
+		return ok && hooks.IsSeamarkBinary(srv.Command)
 	}
 
 	if isSeamark(ClaudeServer) {
@@ -445,7 +445,7 @@ func inspectClaude(root string) ClientApproval {
 
 	p, err := PlanClaude(settings, reg.ServerName())
 	if err != nil {
-		c.Err = err.Error()
+		c.Err = render.Sanitize(err.Error())
 
 		return c
 	}

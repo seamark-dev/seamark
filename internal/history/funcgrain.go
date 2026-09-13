@@ -110,15 +110,11 @@ func PartnerFunctions(ctx context.Context, repoRoot, partner string, shared map[
 
 	sort.Strings(hashes)
 
-	// %x00%H frames each commit with a NUL + hash that patch text can never
-	// forge (every diff body line starts with +/-/space/\); -U0 keeps only
-	// hunk headers and changed lines. The pathspec keeps only the commits
-	// that touched the partner, so every hunk seen belongs to a shared one.
+	// An empty format drops the commit headers, so only patch text streams;
+	// -U0 keeps only hunk headers and changed lines. The pathspec keeps
+	// only the commits that touched the partner, so every hunk seen
+	// belongs to a shared one.
 	gitScan(ctx, repoRoot, strings.NewReader(strings.Join(hashes, "\n")+"\n"), func(line string) {
-		if strings.HasPrefix(line, "\x00") {
-			return
-		}
-
 		m := hunkFunc.FindStringSubmatch(line)
 		if m == nil {
 			return
@@ -133,7 +129,7 @@ func PartnerFunctions(ctx context.Context, repoRoot, partner string, shared map[
 			counts[name]++
 		}
 	}, "-c", "core.quotePath=off", "log", "--no-renames", "--no-walk", "--stdin",
-		"-U0", "-p", "--format=%x00%H", "--", partner)
+		"-U0", "-p", "--format=", "--", partner)
 
 	return topByCount(counts, order, limit)
 }

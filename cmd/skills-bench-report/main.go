@@ -73,13 +73,5 @@ func run(claimsPath, outPath, promptsPath string, activationPaths, inputs []stri
 		return err
 	}
 
-	content := []byte(report.Markdown())
-
-	if outPath == "-" {
-		_, err = os.Stdout.Write(content)
-
-		return err
-	}
-
-	return bench.WriteAtomic(outPath, content)
+	return bench.WriteReport(outPath, []byte(report.Markdown()))
 }

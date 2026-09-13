@@ -267,15 +267,14 @@ func checkMCP(r *Report, root string) {
 // seamark does not own is named and never touched.
 func checkSkills(r *Report, root string) {
 	states := skills.Inspect(root)
+	detail := skills.Details(states)
 
 	var (
-		parts                          []string
 		installed, unreadable, foreign int
 		refresh                        bool
 	)
 
 	for _, s := range states {
-		parts = append(parts, s.Describe())
 		foreign += s.Foreign
 
 		switch {
@@ -286,8 +285,6 @@ func checkSkills(r *Report, root string) {
 			refresh = refresh || s.NeedsRefresh()
 		}
 	}
-
-	detail := strings.Join(parts, " · ")
 
 	// A foreign directory outranks "not installed": `seamark init
 	// --skills` never replaces it, so the fix must say what to do first.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
@@ -274,7 +275,7 @@ func isSeamarkMCP(v any) bool {
 	}
 
 	cmd, _ := server["command"].(string)
-	if strings.TrimSuffix(filepath.Base(cmd), ".exe") != "seamark" {
+	if !hooks.IsSeamarkBinary(cmd) {
 		return false
 	}
 
@@ -774,7 +775,7 @@ func ApplyCodex(w io.Writer, root string, p *CodexPlan, printOnly bool) error {
 	case printOnly:
 		verb = "would update"
 	case !p.Exists:
-		verb = "wrote  "
+		verb = "wrote"
 	}
 
 	var parts []string
@@ -789,7 +790,7 @@ func ApplyCodex(w io.Writer, root string, p *CodexPlan, printOnly bool) error {
 
 	detail := strings.Join(parts, "; ")
 
-	fmt.Fprintf(w, "  %s %s (%s%s)\n", verb, CodexConfig, detail, kept)
+	fmt.Fprintf(w, "  %-7s %s (%s%s)\n", verb, CodexConfig, detail, kept)
 
 	return nil
 }

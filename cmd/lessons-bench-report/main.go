@@ -36,13 +36,5 @@ func run(claimsPath, outPath string, inputs []string) error {
 		return err
 	}
 
-	content := []byte(report.Markdown())
-
-	if outPath == "-" {
-		_, err = os.Stdout.Write(content)
-
-		return err
-	}
-
-	return bench.WriteAtomic(outPath, content)
+	return bench.WriteReport(outPath, []byte(report.Markdown()))
 }

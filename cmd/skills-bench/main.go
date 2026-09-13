@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -133,7 +132,7 @@ func run(opts options) error {
 		return err
 	}
 
-	abs, err := resolveBinary(opts.seamarkBin)
+	abs, err := bench.ResolveSeamarkBinary(opts.seamarkBin)
 	if err != nil {
 		return err
 	}
@@ -441,24 +440,6 @@ func refuseMixedRows(path string, data []byte, activation bool) error {
 	}
 
 	return nil
-}
-
-func resolveBinary(configured string) (string, error) {
-	bin := configured
-	if bin == "" {
-		bin = filepath.Join("bin", "seamark")
-	}
-
-	abs, err := filepath.Abs(bin)
-	if err != nil {
-		return "", err
-	}
-
-	if _, err := os.Stat(abs); err != nil {
-		return "", fmt.Errorf("seamark binary not found at %s — run `make build` first (or pass -seamark)", abs)
-	}
-
-	return abs, nil
 }
 
 // generateFixture writes one fixture for a manual session, such as the Codex

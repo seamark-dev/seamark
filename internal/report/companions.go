@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
 	"path"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -37,15 +35,21 @@ const maxCompanions = 6
 // trace and the skills read the label, so it is one string.
 const CompanionsTitle = "history suggests also reviewing"
 
-// companionSet is the set of files a companion is measured against: the
-// planned files or the diff's files, with their directories.
+// checkCompanionsTitle is the check variant: the diff, not a plan, is the
+// set the companions are measured against.
+const checkCompanionsTitle = CompanionsTitle + "  (usually changes with the diff's files, absent from this diff)"
+
+// companionSet is the set of files a companion is measured against (the
+// planned files or the diff's files, with their directories) and the
+// partners noted so far, keyed by file with the strongest evidence seen.
 type companionSet struct {
 	files map[string]bool
 	dirs  map[string]bool
+	found map[string]companion
 }
 
-func newCompanionSet(files []string) companionSet {
-	set := companionSet{files: map[string]bool{}, dirs: map[string]bool{}}
+func newCompanionSet(files []string) *companionSet {
+	set := &companionSet{files: map[string]bool{}, dirs: map[string]bool{}, found: map[string]companion{}}
 
 	for _, f := range files {
 		set.files[f] = true
@@ -57,17 +61,17 @@ func newCompanionSet(files []string) companionSet {
 
 // note records partner p of set file `file` unless p is in the set,
 // keeping the strongest evidence seen for it across the set.
-func (s companionSet) note(companions map[string]companion, file string, p store.CoChangePartner) {
+func (s *companionSet) note(file string, p store.CoChangePartner) {
 	if s.files[p.File] {
 		return
 	}
 
-	c, seen := companions[p.File]
+	c, seen := s.found[p.File]
 	if seen && (p.Together < c.together || (p.Together == c.together && p.Lift <= c.lift)) {
 		return
 	}
 
-	companions[p.File] = companion{
+	s.found[p.File] = companion{
 		file: p.File, with: file, together: p.Together, lift: p.Lift,
 		outside: !s.dirs[path.Dir(p.File)],
 	}
@@ -77,27 +81,24 @@ func (s companionSet) note(companions map[string]companion, file string, p store
 // list's cap plus one per set file, because the set's own files are
 // filtered out afterwards and a large diff would otherwise hide every
 // unplanned partner behind its own files.
-func (s companionSet) partnerLimit() int {
+func (s *companionSet) partnerLimit() int {
 	return maxCompanions + len(s.files)
 }
 
-// collectCompanions gathers the partners of every indexed file in set that
-// the set itself leaves out.
-func collectCompanions(st *store.Store, set companionSet, indexed []string) (map[string]companion, error) {
-	companions := map[string]companion{}
-
+// collect notes the partners of every indexed set file.
+func (s *companionSet) collect(st *store.Store, indexed []string) error {
 	for _, file := range indexed {
-		partners, err := st.CoChangePartners(file, 1.0, set.partnerLimit())
+		partners, err := st.CoChangePartners(file, 1.0, s.partnerLimit())
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		for _, p := range partners {
-			set.note(companions, file, p)
+			s.note(file, p)
 		}
 	}
 
-	return companions, nil
+	return nil
 }
 
 // rankCompanions orders partners by shared commits, then lift, then the
@@ -132,11 +133,11 @@ func rankCompanions(companions map[string]companion) []companion {
 	return list
 }
 
-// companionReasonBudget bounds the git work behind one closing list. The
-// list prints on every change_set and check call, so the whole list shares
-// one deadline instead of paying a full timeout per partner; a slow history
-// then costs one budget, not six.
-const companionReasonBudget = 5 * time.Second
+// historyBudget bounds the git work behind one list of partners: the why
+// report's partner list and the closing companions list. Both print on
+// every call, so the whole list shares one deadline instead of paying a
+// full timeout per partner; a slow history then costs one budget, not six.
+const historyBudget = 5 * time.Second
 
 // printCompanions writes the closing list: one line of numbers per partner
 // and, when history has them, one line of reasons. A bare file name was
@@ -166,9 +167,10 @@ func printCompanions(w io.Writer, st *store.Store, root, title string, companion
 }
 
 // partnerFunctions names, for each listed partner, the functions the shared
-// commits touched in it; the result is indexed like list. Every git call in
-// the list runs concurrently under one deadline: the set files are scanned
-// once each, then every partner is diffed over its set file's commits only.
+// commits touched in it; the result is indexed like list. Every git call
+// runs concurrently under one deadline. Several partners usually anchor on
+// the same set file, and its commit list is the expensive part, so each
+// set file is scanned once and its partners are diffed over those commits.
 // Without a repository root there is no git to ask, so every entry is nil.
 func partnerFunctions(root string, list []companion) [][]string {
 	funcs := make([][]string, len(list))
@@ -176,47 +178,38 @@ func partnerFunctions(root string, list []companion) [][]string {
 		return funcs
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), companionReasonBudget)
+	ctx, cancel := context.WithTimeout(context.Background(), historyBudget)
 	defer cancel()
 
-	// One scan per distinct set file: several partners usually anchor on
-	// the same planned file, and its commit list is the expensive part.
-	// The anchors are listed before the scans start, so no goroutine
-	// writes the map while another ranges over it.
-	shared := map[string]map[string]bool{}
-	for _, c := range list {
-		shared[c.with] = nil
+	byAnchor := map[string][]int{}
+	for i, c := range list {
+		byAnchor[c.with] = append(byAnchor[c.with], i)
 	}
 
-	anchors := slices.Sorted(maps.Keys(shared))
-
-	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	for _, with := range anchors {
+	for with, partners := range byAnchor {
 		wg.Add(1)
 
-		go func(with string) {
+		go func() {
 			defer wg.Done()
 
 			commits := history.FileCommits(ctx, root, with)
 
-			mu.Lock()
-			shared[with] = commits
-			mu.Unlock()
-		}(with)
-	}
+			var diffs sync.WaitGroup
 
-	wg.Wait()
+			for _, i := range partners {
+				diffs.Add(1)
 
-	for i, c := range list {
-		wg.Add(1)
+				go func() {
+					defer diffs.Done()
 
-		go func(i int, c companion) {
-			defer wg.Done()
+					funcs[i] = history.PartnerFunctions(ctx, root, list[i].file, commits, 3)
+				}()
+			}
 
-			funcs[i] = history.PartnerFunctions(ctx, root, c.file, shared[c.with], 3)
-		}(i, c)
+			diffs.Wait()
+		}()
 	}
 
 	wg.Wait()
@@ -242,13 +235,18 @@ func companionReason(st *store.Store, c companion, funcs []string) string {
 	return strings.Join(parts, " · ")
 }
 
+// latestFixWindow is how many recent decisions latestFix reads: the same
+// window the why report lists decisions from, so a fix old enough to drop
+// off that list stops being quoted as a reason here too.
+const latestFixWindow = 20
+
 // latestFix returns the most recent correction recorded on file, or nil.
 // A fix on a companion right after a change to its partner is the trace a
 // forgotten companion leaves in history, which is why it is quoted here. A
 // commit the fix miner classifies wins over a newer revert: a fix subject
 // says what the rule is, a revert subject only names what was withdrawn.
 func latestFix(st *store.Store, file string) *model.Decision {
-	decisions, err := st.DecisionsForFile(file, 20)
+	decisions, err := st.DecisionsForFile(file, latestFixWindow)
 	if err != nil {
 		return nil
 	}
@@ -260,12 +258,17 @@ func latestFix(st *store.Store, file string) *model.Decision {
 
 		// The classifier reports a revert subject as a correction too, so
 		// the kind and the classification are read together.
-		switch source := fixes.Classify(d.Title, d.Body); {
-		case d.Kind == model.DecisionRevert || source == model.SourceRevert:
+		source := fixes.Classify(d.Title, d.Body)
+
+		if d.Kind == model.DecisionRevert || source == model.SourceRevert {
 			if revert == nil {
 				revert = d
 			}
-		case source != "":
+
+			continue
+		}
+
+		if source != "" {
 			return d
 		}
 	}
@@ -273,31 +276,14 @@ func latestFix(st *store.Store, file string) *model.Decision {
 	return revert
 }
 
-// isFix reports whether a decision is a correction: a revert, or a commit
-// the fix miner classifies as a fix from its title or body. One rule
-// serves the fix-density line, the heat colours, and the companion reason.
-func isFix(d model.Decision) bool {
-	return d.Kind == model.DecisionRevert || fixes.Classify(d.Title, d.Body) != ""
-}
-
 // shortRef abbreviates a commit hash the way git log does; other refs
 // (a PR number, an ADR path, however long) stay whole.
 func shortRef(ref string) string {
-	if len(ref) >= 40 && isHex(ref) {
+	if len(ref) >= 40 && strings.Trim(ref, "0123456789abcdefABCDEF") == "" {
 		return ref[:7]
 	}
 
 	return ref
-}
-
-func isHex(value string) bool {
-	for _, r := range value {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
-			return false
-		}
-	}
-
-	return value != ""
 }
 
 // CheckCompanions prints, after a gate verdict, the files history says
@@ -317,10 +303,6 @@ func CheckCompanions(w io.Writer, st *store.Store, root string, files []string) 
 
 	for _, f := range files {
 		name, ok := asIndexedFile(st, root, f)
-		if !ok {
-			name = strings.TrimPrefix(path.Clean(strings.ReplaceAll(f, "\\", "/")), "./")
-		}
-
 		names = append(names, name)
 
 		if ok {
@@ -328,11 +310,11 @@ func CheckCompanions(w io.Writer, st *store.Store, root string, files []string) 
 		}
 	}
 
-	companions, err := collectCompanions(st, newCompanionSet(names), indexed)
-	if err != nil || len(companions) == 0 {
+	set := newCompanionSet(names)
+	if err := set.collect(st, indexed); err != nil || len(set.found) == 0 {
 		return
 	}
 
 	fmt.Fprintln(w)
-	printCompanions(w, st, root, CompanionsTitle+"  (usually changes with the diff's files, absent from this diff)", companions)
+	printCompanions(w, st, root, checkCompanionsTitle, set.found)
 }

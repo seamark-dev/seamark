@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -427,7 +428,7 @@ func assessWorkflowClaims(claims []WorkflowClaim, cohorts []WorkflowCohort) []Wo
 	assessments := make([]WorkflowAssessment, 0, len(claims))
 
 	for _, claim := range claims {
-		shared := assessClaims([]Claim{claim.shadow()}, shadows)[0]
+		shared := assessClaim(claim.shadow(), shadows)
 		assessment := WorkflowAssessment{
 			ID: claim.ID, Definition: claim, Status: shared.Status, Reason: shared.Reason,
 			QualifyingInstances: shared.QualifyingInstances, MeanEffect: shared.MeanEffect,
@@ -607,14 +608,7 @@ func assessActivation(criteria ActivationCriteria, stats ActivationStats, missin
 		reasons = append(reasons, "no valid session for prompt(s) "+strings.Join(missing, ", "))
 	}
 
-	names := make([]string, 0, len(criteria.MinimumRecall))
-	for name := range criteria.MinimumRecall {
-		names = append(names, name)
-	}
-
-	sort.Strings(names)
-
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(criteria.MinimumRecall)) {
 		minimum := criteria.MinimumRecall[name]
 		recall, ok := stats.Recall[name].Value()
 

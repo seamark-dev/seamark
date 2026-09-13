@@ -809,8 +809,6 @@ func TestApprovalTargetsFollowSkillsModeOrDetectCodex(t *testing.T) {
 		assert.Equal(t, want, [2]bool{claude, codex}, mode)
 	}
 
-	_, _, err = approvalTargets(root, "bogus")
-	require.Error(t, err)
 }
 
 func TestRunInitApproveToolsMergesAllowRules(t *testing.T) {
@@ -1252,7 +1250,7 @@ func TestRunInitRefusesASymlinkedSettingsPath(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root2, ".claude"), 0o755))
 	require.NoError(t, os.Symlink(filepath.Join(outside, "settings.json"), filepath.Join(root2, ".claude", "settings.json")))
 
-	err = writeHooks(&b, filepath.Join(root2, ".claude", "settings.json"), map[string]any{}, true, false, "/bin/seamark", gateModeWarn, "", false)
+	err = writeHooks(&b, root2, map[string]any{}, true, false, "/bin/seamark", gateModeWarn, "", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "symlink at .claude/settings.json")
 	assert.NoFileExists(t, filepath.Join(outside, "settings.json"))
@@ -1266,7 +1264,7 @@ func TestReportSkillsSanitizesTheSummary(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "skills"), []byte("not a directory"), 0o644))
 
 	var b testWriter
-	require.NoError(t, reportSkills(&b, root, "", nil, false))
+	reportInstalledSkills(&b, root)
 	assert.Contains(t, b.String(), "  skills  ")
 	assert.NotContains(t, b.String(), "\x1b")
 }

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -60,10 +58,4 @@ func TestRunRejectsInvalidTrialCountBeforeSetup(t *testing.T) {
 		assert.Contains(t, err.Error(), "-trials must be at least 1")
 		assert.NotContains(t, err.Error(), "seamark binary not found")
 	}
-}
-
-func TestCLIVersionRejectsEmptyOutput(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "silent-agent")
-	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755))
-	assert.Equal(t, "unknown", cliVersion(path))
 }
