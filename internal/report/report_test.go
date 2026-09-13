@@ -1120,4 +1120,10 @@ func TestChangeSetSanitizesCompanionFileNames(t *testing.T) {
 	require.NoError(t, ChangeSet(&b, st, root, []string{"server/schema.py"}))
 	assert.Contains(t, b.String(), "web/[2Jgen.ts")
 	assert.NotContains(t, b.String(), "\x1b")
+
+	// The "not in the index" line echoes tool input, so it is washed too.
+	b.Reset()
+	require.NoError(t, ChangeSet(&b, st, root, []string{"web/\x1b[2Jnew.ts"}))
+	assert.Contains(t, b.String(), "web/[2Jnew.ts: not in the index")
+	assert.NotContains(t, b.String(), "\x1b")
 }

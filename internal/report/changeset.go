@@ -23,8 +23,9 @@ func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error 
 	for _, f := range files {
 		name, ok := asIndexedFile(st, root, f)
 		if !ok {
-			// Report it, so a typo never reads as "no data".
-			fmt.Fprintf(w, "%s: not in the index (new file, or run `seamark index`)\n\n", name)
+			// Report it, so a typo never reads as "no data". The name is
+			// tool input, so it is sanitized like every path on this surface.
+			fmt.Fprintf(w, "%s: not in the index (new file, or run `seamark index`)\n\n", render.Sanitize(name))
 		}
 
 		// Lessons and the companion set need only a path: a brand-new file
