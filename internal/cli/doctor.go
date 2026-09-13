@@ -18,7 +18,7 @@ func newDoctorCmd(opts *options) *cobra.Command {
 		Long: `Runs read-only checks over everything seamark needs to function —
 git, the index database (schema and SQLite integrity), policy and
 effect-catalogue compilation, Claude Code hook wiring, the distillation
-agent, gh, and MCP registration — and prints an exact corrective action
+agent, gh, MCP registration, the agent skills, and the tool approvals — and prints an exact corrective action
 for anything broken. Nothing is changed, and nothing touches the
 network. Exit code 1 when any check fails.
 

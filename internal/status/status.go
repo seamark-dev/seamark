@@ -11,18 +11,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/agent"
+	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
+	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -84,6 +87,17 @@ type Status struct {
 	// GatePolicyError carries a policy file that fails to load — a state
 	// that changes every hook decision.
 	GatePolicyError string `json:"gate_policy_error,omitempty"`
+
+	// Skills is the agent-skills state per client directory. A stale copy
+	// after an upgrade must be visible here, beside the hook and MCP
+	// state, because a client would load text that no longer matches the
+	// binary's tool surface.
+	Skills []skills.ClientState `json:"skills,omitempty"`
+
+	// Approvals is the tool-approval configuration per client: whether
+	// the seamark MCP tools can run without prompts. Project
+	// configuration only; user or managed policy can still prompt.
+	Approvals []approve.ClientApproval `json:"approvals,omitempty"`
 }
 
 // Gather assembles the health report from the store and the workspace.
@@ -173,6 +187,11 @@ func Gather(st *store.Store, root string) (*Status, error) {
 		s.GateHookError = hookErr.Error()
 	}
 
+	// Inspect never fails: an unreadable directory is recorded on its
+	// client record, and status describes it.
+	s.Skills = skills.Inspect(root)
+	s.Approvals = approve.Inspect(root)
+
 	return s, nil
 }
 
@@ -254,6 +273,39 @@ func Print(w io.Writer, s *Status) {
 	}
 
 	printGate(w, s)
+	printSkills(w, s)
+	printApprovals(w, s)
+}
+
+// printApprovals renders the tool-approval line beside the skills line.
+// Not configured states the command, because approval is opt-in; a
+// registration without approvals is partial, so it is spelled out with
+// the re-run hint, like a partial, conflicting, or unreadable one.
+func printApprovals(w io.Writer, s *Status) {
+	for _, c := range s.Approvals {
+		if c.State() != approve.StateNotConfigured {
+			fmt.Fprintf(w, "approvals      %s\n", render.Sanitize(approve.Summary(s.Approvals)))
+
+			return
+		}
+	}
+
+	fmt.Fprintf(w, "approvals      not configured (`seamark init --approve-tools`)\n")
+}
+
+// printSkills renders the agent-skills line beside the gate line. Not
+// installed states the command, because skills are opt-in; a stale,
+// foreign, or unreadable directory is spelled out, because a client
+// would otherwise load text that no longer matches this binary, or
+// `seamark init --skills` would not install what the reader expects.
+func printSkills(w io.Writer, s *Status) {
+	if slices.ContainsFunc(s.Skills, skills.ClientState.Notable) {
+		fmt.Fprintf(w, "skills         %s\n", render.Sanitize(skills.Summary(s.Skills)))
+
+		return
+	}
+
+	fmt.Fprintf(w, "skills         not installed (`seamark init --skills`)\n")
 }
 
 // printGate renders the effective gate behaviour. A broken policy means

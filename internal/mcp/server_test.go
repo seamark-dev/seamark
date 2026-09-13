@@ -5,11 +5,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/approve"
+	"github.com/seamark-dev/seamark/internal/skills"
 )
 
 func writeFixture(t *testing.T) string {
@@ -122,11 +126,21 @@ func TestLifecycleAndTools(t *testing.T) {
 		ServerInfo      struct {
 			Name string `json:"name"`
 		} `json:"serverInfo"`
+		Instructions string `json:"instructions"`
 	}
 	require.Nil(t, resps["1"].Error)
 	require.NoError(t, json.Unmarshal(resps["1"].Result, &init))
 	assert.Equal(t, "seamark", init.ServerInfo.Name)
 	assert.Equal(t, "2025-03-26", init.ProtocolVersion)
+
+	// The instructions state judgment rules, not a ritual. Each phrase is
+	// one rule the agent-skills specification requires: change_set
+	// before the edit, orient only when unfamiliar, check before
+	// completion over a diff that includes new files, co-change as
+	// usually, absence of evidence as unknown.
+	for _, phrase := range []string{"change_set", "before", "check", "git diff HEAD skips", "only when", "usually", "never means safe"} {
+		assert.Contains(t, init.Instructions, phrase)
+	}
 
 	// The notification produced no response.
 	assert.Len(t, resps, 7)
@@ -272,6 +286,23 @@ func TestResourcesAndPrompts(t *testing.T) {
 
 	require.Nil(t, resps["5"].Error)
 	assert.Contains(t, string(resps["5"].Result), "orient")
+
+	// The onboard prompt follows the same rules as the instructions:
+	// orient is conditional, change_set precedes the edit, and check
+	// precedes the completion report over a diff that includes new files.
+	var prompt struct {
+		Messages []struct {
+			Content struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	require.NoError(t, json.Unmarshal(resps["5"].Result, &prompt))
+	require.Len(t, prompt.Messages, 1)
+
+	for _, phrase := range []string{"change_set", "check", "git diff HEAD skips", "only when"} {
+		assert.Contains(t, prompt.Messages[0].Content.Text, phrase)
+	}
 }
 
 func TestFreshnessSelfRepair(t *testing.T) {
@@ -296,4 +327,83 @@ func TestFreshnessSelfRepair(t *testing.T) {
 	text, isErr := toolText(t, resps["1"])
 	require.False(t, isErr)
 	assert.Contains(t, text, "extra", "new symbol must be answerable after self-repair")
+}
+
+// section returns the body text under one "## " heading, up to the next.
+func section(body, heading string) string {
+	i := strings.Index(body, heading)
+	if i < 0 {
+		return ""
+	}
+
+	rest := body[i+len(heading):]
+	if j := strings.Index(rest, "\n## "); j >= 0 {
+		rest = rest[:j]
+	}
+
+	return rest
+}
+
+// TestSkillsNameOnlyRealTools pins the skill text to the tool surface. A
+// renamed or removed tool fails here before a client pre-approves a name
+// that no longer exists, or a workflow tells an agent to call one.
+func TestSkillsNameOnlyRealTools(t *testing.T) {
+	var tools []string
+	for _, d := range toolDefs {
+		tools = append(tools, d["name"].(string))
+	}
+
+	// The workflow each skill must state, per the agent-skills spec:
+	// understand orients and explains, plan measures blast radius before
+	// the edit, review checks the diff.
+	required := map[string][]string{
+		"seamark-understand-repo": {"orient", "why", "expand"},
+		"seamark-plan-change":     {"change_set", "why", "expand"},
+		"seamark-review-change":   {"check", "why"},
+	}
+
+	grant := regexp.MustCompile(`mcp__seamark__([a-z_]+)`)
+
+	names, err := skills.Names()
+	require.NoError(t, err)
+	require.Len(t, names, len(required), "every shipped skill declares the tools its workflow must name")
+
+	for _, name := range names {
+		want, ok := required[name]
+		require.True(t, ok, "%s: add its required tools to this test", name)
+
+		files, err := skills.Files(name)
+		require.NoError(t, err)
+
+		fm, body, err := skills.ParseFrontmatter(files[skills.SkillFile])
+		require.NoError(t, err)
+
+		// The grant names exactly the tool surface: a sixth tool or a
+		// dropped one must update the skills in the same change.
+		var granted []string
+		for _, m := range grant.FindAllStringSubmatch(fm.AllowedTools, -1) {
+			granted = append(granted, m[1])
+		}
+
+		assert.ElementsMatch(t, tools, granted, "%s: allowed-tools must grant each MCP tool once", name)
+
+		workflow := section(body, "## Workflow")
+		require.NotEmpty(t, workflow, "%s: no Workflow section", name)
+
+		for _, tool := range want {
+			assert.Contains(t, workflow, "`"+tool+"`", "%s: the workflow must name the %s tool", name, tool)
+		}
+	}
+}
+
+// TestApproveToolsMatchToolDefs pins the approval package's copy of the
+// tool list to the served surface, in definition order: the two cannot
+// import each other, so a sixth tool must land in both in one change.
+func TestApproveToolsMatchToolDefs(t *testing.T) {
+	var names []string
+	for _, d := range toolDefs {
+		names = append(names, d["name"].(string))
+	}
+
+	assert.Equal(t, approve.Tools, names)
 }

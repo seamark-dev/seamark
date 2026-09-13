@@ -1,0 +1,64 @@
+# Activation evaluation prompt set (spec R-14).
+#
+# Each prompt runs once in a fresh skills-arm session on the
+# python-ts-schema-sync-cochange-v1 fixture (a small Python API with a
+# generated TypeScript client). `expect` names the skill that should load,
+# or `none` for a prompt every skill must leave alone. `prepare: naive`
+# applies the fixture's task-complete-but-invariant-breaking patch first, so
+# a review prompt sees a real diff. The pass criteria live in
+# bench/workflow-claims.yaml and are frozen before the cohort.
+schema_version: 1
+instance: python-ts-schema-sync-cochange-v1
+
+prompts:
+  - id: understand-response-pipeline
+    prompt: Explain how a workspace API response is produced in this repository, from the domain object to the JSON the web client reads, and which parts of the code decide its shape.
+    expect: seamark-understand-repo
+    note: Substantive, cross-module explanation of an unfamiliar codebase; the understand skill's core case.
+
+  - id: understand-web-client
+    prompt: Give me an orientation of this codebase. What are the main modules, which files change together most often, and what should I read first before changing the API?
+    expect: seamark-understand-repo
+    note: Explicit orientation request naming history questions only the index answers.
+
+  - id: plan-billing-field
+    prompt: Add each workspace's billing currency to the GET /api/workspaces/{id} response as billingCurrency, sourced from Workspace.billing_currency, and make sure every consumer of that response keeps working. Plan the change before editing.
+    expect: seamark-plan-change
+    note: Multi-file change across the API and its client; the plan skill's core case.
+
+  - id: plan-rename-region
+    prompt: Rename the region field of the workspace summary response to location across the backend, its tests, and whatever consumes the response.
+    expect: seamark-plan-change
+    note: A rename that spans files and an unfamiliar area; the companion client is the trap.
+
+  - id: review-before-commit
+    prompt: I added billingCurrency to the workspace summary response in server/schema.py and server/presenters.py. Am I missing anything before I commit?
+    expect: seamark-review-change
+    prepare: naive
+    note: The review skill's exact trigger phrase, on a real diff that forgot the generated client.
+
+  - id: review-double-check
+    prompt: Double-check the uncommitted change in this working tree for anything the tests would not catch, then tell me whether it is safe to commit.
+    expect: seamark-review-change
+    prepare: naive
+    note: Review of an existing diff without naming the files; the skill must recognize the intent.
+
+  - id: typo-readme
+    prompt: In README.md, change "public schema descriptions" to "public schema definitions". Nothing else.
+    expect: none
+    note: One-word wording fix in a document; the typo case, which no skill should answer.
+
+  - id: comment-pagination
+    prompt: Add a one-line comment above page_window in server/pagination.py saying that the page size is clamped to the range 1 to 100.
+    expect: none
+    note: A comment edit in one named file; the comment case.
+
+  - id: symbol-lookup
+    prompt: What does page_window in server/pagination.py return for page=0 and size=500? Just answer, do not change anything.
+    expect: none
+    note: A pinpoint question about one known symbol; a direct read answers it.
+
+  - id: rename-local-variable
+    prompt: In server/search.py, rename the local variable needle to normalized_query. Do not touch any other file.
+    expect: none
+    note: A one-line rename in a named file; a one-file change in a known area.

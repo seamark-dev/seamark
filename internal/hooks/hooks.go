@@ -74,12 +74,18 @@ func OwnedBySeamark(cmd string, markers []string) bool {
 			continue
 		}
 
-		base := filepath.Base(strings.Trim(rest, "'"))
-
-		return strings.TrimSuffix(base, ".exe") == "seamark"
+		return IsSeamarkBinary(strings.Trim(rest, "'"))
 	}
 
 	return false
+}
+
+// IsSeamarkBinary reports whether a command path names the seamark
+// binary: exact basename "seamark", tolerating the Windows suffix. The
+// hook owner, the Claude Code registration, and the Codex registration
+// all use this one rule, so they agree on what is seamark's.
+func IsSeamarkBinary(command string) bool {
+	return strings.TrimSuffix(filepath.Base(command), ".exe") == "seamark"
 }
 
 // InstalledGateMode reports the mode of an OPERATIONAL gate hook in a

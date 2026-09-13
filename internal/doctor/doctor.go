@@ -1,14 +1,13 @@
 // Package doctor diagnoses the seamark installation: binary, git, the
 // index database's schema and integrity, policy and effect-catalogue
-// compilation, hook wiring, agent and gh availability, and gitignore
-// sanity. Every check is read-only and offline — doctor reports exact
+// compilation, hook wiring, agent and gh availability, agent skills,
+// tool approvals, and gitignore sanity. Every check is read-only and offline — doctor reports exact
 // corrective actions and changes nothing. Semantic health (coverage,
 // confidence, freshness) is `seamark status`'s job; doctor asks whether
 // seamark can run at all.
 package doctor
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,10 +18,12 @@ import (
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/agent"
+	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/effects"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/render"
+	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -86,6 +87,8 @@ func Run(root, dbPath, version string) *Report {
 	checkAgent(r, root)
 	checkGH(r)
 	checkMCP(r, root)
+	checkSkills(r, root)
+	checkApprovals(r, root)
 	checkGitignore(r, root)
 
 	return r
@@ -236,35 +239,120 @@ func checkGH(r *Report) {
 }
 
 func checkMCP(r *Report, root string) {
-	data, err := os.ReadFile(filepath.Join(root, ".mcp.json"))
-	if err != nil {
+	// The same lookup init and the approvals check use, so one report
+	// never names two different servers for one file.
+	reg, err := approve.ClaudeRegistration(root)
+
+	switch {
+	case err != nil && !reg.Exists:
+		r.add("mcp", StateWarn, ".mcp.json cannot be read: "+err.Error(), "fix the file")
+	case err != nil:
+		r.add("mcp", StateWarn, "unparseable: "+err.Error(), "fix the JSON")
+	case !reg.Exists:
 		r.add("mcp", StateInfo, "no project .mcp.json — MCP clients may be registered elsewhere",
 			"to register for Claude Code: `claude mcp add seamark -- seamark mcp`")
-		return
+	case reg.Server != "":
+		r.add("mcp", StateOK, fmt.Sprintf("registered in .mcp.json as %q", reg.Server), "")
+	default:
+		r.add("mcp", StateInfo, ".mcp.json exists but registers no seamark server",
+			"`claude mcp add seamark -- seamark mcp` to serve the index to agents")
 	}
+}
 
-	var cfg struct {
-		Servers map[string]struct {
-			Command string `json:"command"`
-		} `json:"mcpServers"`
-	}
+// checkSkills reports the agent skills per client directory. Not
+// installed is a fact, not a fault: skills are opt-in until the workflow
+// evaluation decides otherwise. A stale or missing managed copy is a
+// warning, because a client would load text that no longer matches this
+// binary's tool surface. A directory under a seamark skill name that
+// seamark does not own is named and never touched.
+func checkSkills(r *Report, root string) {
+	states := skills.Inspect(root)
+	detail := skills.Details(states)
 
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		r.add("mcp", StateWarn, ".mcp.json is unparseable: "+err.Error(), "fix the JSON")
-		return
-	}
+	var (
+		installed, unreadable, foreign int
+		refresh                        bool
+	)
 
-	for name, srv := range cfg.Servers {
-		// Same basename rule as hooks.OwnedBySeamark: exact "seamark",
-		// tolerating the Windows .exe suffix.
-		if strings.TrimSuffix(filepath.Base(srv.Command), ".exe") == "seamark" {
-			r.add("mcp", StateOK, fmt.Sprintf("registered in .mcp.json as %q", name), "")
-			return
+	for _, s := range states {
+		foreign += s.Foreign
+
+		switch {
+		case s.Err != "":
+			unreadable++
+		case s.Installed():
+			installed++
+			refresh = refresh || s.NeedsRefresh()
 		}
 	}
 
-	r.add("mcp", StateInfo, ".mcp.json exists but registers no seamark server",
-		"`claude mcp add seamark -- seamark mcp` to serve the index to agents")
+	// A foreign directory outranks "not installed": `seamark init
+	// --skills` never replaces it, so the fix must say what to do first.
+	switch {
+	case unreadable > 0:
+		r.add("skills", StateWarn, detail,
+			"make the skill directory readable, then re-run `seamark init --skills`")
+	case refresh:
+		r.add("skills", StateWarn, detail,
+			"re-run `seamark init --skills` to refresh the managed skills")
+	case foreign > 0:
+		r.add("skills", StateInfo, detail,
+			"a directory under a seamark skill name is not seamark's; rename or remove it, then run `seamark init --skills` to install the shipped skill")
+	case installed == 0:
+		r.add("skills", StateInfo, "agent skills not installed ("+detail+")",
+			"run `seamark init --skills` to add the seamark agent skills for Claude Code and Codex")
+	default:
+		r.add("skills", StateOK, detail, "")
+	}
+}
+
+// checkApprovals reports whether the project configuration lets the
+// seamark MCP tools run without prompts: Claude Code allow rules and
+// Codex per-tool approvals. Not configured is a fact, because approval
+// is opt-in. Partial, conflicting, and unreadable configuration each
+// get their own action. The detail names project configuration only:
+// user-level and managed client policy can still prompt on top.
+func checkApprovals(r *Report, root string) {
+	states := approve.Inspect(root)
+
+	var (
+		parts                                     []string
+		unreadable, conflicting, partial, current int
+	)
+
+	for _, s := range states {
+		parts = append(parts, s.Describe())
+
+		switch s.State() {
+		case approve.StateUnreadable:
+			unreadable++
+		case approve.StateConflicting:
+			conflicting++
+		case approve.StatePartial:
+			partial++
+		case approve.StateCurrent:
+			current++
+		}
+	}
+
+	detail := strings.Join(parts, " · ")
+
+	switch {
+	case unreadable > 0:
+		r.add("approvals", StateWarn, detail,
+			"fix the file, then re-run `seamark init --approve-tools`")
+	case conflicting > 0:
+		r.add("approvals", StateWarn, detail,
+			"seamark leaves explicit settings alone; edit the file by hand if the seamark tools should be approved")
+	case partial > 0:
+		r.add("approvals", StateWarn, detail,
+			"re-run `seamark init --approve-tools` to add the missing entries")
+	case current == 0:
+		r.add("approvals", StateInfo, "tool approvals not configured ("+detail+")",
+			"run `seamark init --approve-tools` so the seamark tools run without prompts; project configuration only — user or managed policy can still prompt")
+	default:
+		r.add("approvals", StateOK, detail+" (project configuration; user or managed policy can still prompt)", "")
+	}
 }
 
 // checkGitignore verifies the policy-as-code overlays are not ignored:

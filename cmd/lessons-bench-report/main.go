@@ -5,9 +5,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/seamark-dev/seamark/internal/bench"
 )
@@ -24,7 +22,7 @@ func main() {
 }
 
 func run(claimsPath, outPath string, inputs []string) error {
-	if err := rejectOutputCollision(outPath, append([]string{claimsPath}, inputs...)); err != nil {
+	if err := bench.RejectOutputCollision(outPath, append([]string{claimsPath}, inputs...)); err != nil {
 		return err
 	}
 
@@ -38,90 +36,5 @@ func run(claimsPath, outPath string, inputs []string) error {
 		return err
 	}
 
-	content := []byte(report.Markdown())
-
-	if outPath == "-" {
-		_, err = os.Stdout.Write(content)
-
-		return err
-	}
-
-	return writeAtomic(outPath, content)
-}
-
-func rejectOutputCollision(outPath string, protected []string) error {
-	if outPath == "-" {
-		return nil
-	}
-
-	outAbs, err := filepath.Abs(outPath)
-	if err != nil {
-		return err
-	}
-
-	outInfo, outStatErr := os.Stat(outAbs)
-	if outStatErr != nil && !os.IsNotExist(outStatErr) {
-		return outStatErr
-	}
-
-	for _, path := range protected {
-		protectedAbs, err := filepath.Abs(path)
-		if err != nil {
-			return err
-		}
-
-		if outAbs == protectedAbs {
-			return fmt.Errorf("report output would overwrite source evidence: %s", path)
-		}
-
-		if outStatErr == nil {
-			protectedInfo, err := os.Stat(protectedAbs)
-			if err != nil {
-				return err
-			}
-
-			if os.SameFile(outInfo, protectedInfo) {
-				return fmt.Errorf("report output aliases source evidence: %s", path)
-			}
-		}
-	}
-
-	return nil
-}
-
-func writeAtomic(path string, content []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-
-	tmp, err := os.CreateTemp(dir, ".lessons-bench-report-*")
-	if err != nil {
-		return err
-	}
-
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-
-	if n, err := tmp.Write(content); err != nil {
-		_ = tmp.Close()
-
-		return err
-	} else if n != len(content) {
-		_ = tmp.Close()
-
-		return io.ErrShortWrite
-	}
-
-	if err := tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-
-		return err
-	}
-
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-
-	return os.Rename(tmpPath, path)
+	return bench.WriteReport(outPath, []byte(report.Markdown()))
 }

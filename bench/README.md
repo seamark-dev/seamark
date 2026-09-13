@@ -5,6 +5,11 @@ synthetic fixtures or an exact pinned public-repository commit. Source code is
 never pasted into the task prompt: the agent receives the frozen task and
 reads the repository through its normal filesystem tools.
 
+The skills workflow benchmark (see [Skills workflow
+benchmark](#skills-workflow-benchmark) below) shares these fixtures, judges,
+checks, and preflight plumbing, but never a row file, a claim registry, or a
+fingerprint with the lessons benchmark.
+
 ## Safe run sequence
 
 Prepare the public OpenTelemetry-Go source once. This explicit step is the only
@@ -456,6 +461,344 @@ the same model/runtime, with enough repetitions to estimate turns, context,
 and cost. Until that evidence exists, no delivery-efficiency claim is made.
 Delivery policy is part of the fingerprint, so `always` and
 `once-per-context` are reported as distinct cohorts rather than being pooled.
+
+## Skills workflow benchmark
+
+The workflow benchmark asks a different question with the same discipline:
+does installing the seamark agent skills change what a headless agent does
+on a companion-file task, compared with the seamark MCP server and its tool
+approvals alone? It reuses the lessons fixtures, judges, checks, and
+preflight, and shares none of the lessons evidence: it has its own command
+(`cmd/skills-bench`), arms, row schema (`workflow-result-v1.schema.json`),
+claim registry (`workflow-claims.yaml`), fingerprint, and report. The
+lessons harness sources, arms, claims, rows, and reports are byte-identical
+before and after this experiment.
+
+### Arms
+
+Both arms connect the seamark MCP server from the binary installed inside
+the trial, index the fixture before the session, and approve the five MCP
+tools in `.claude/settings.json` exactly as `seamark init --approve-tools`
+does. They get the lessons sandbox block unchanged, no hook, no lesson file,
+and no `.mcp.json`. Both arms also switch off Claude Code's own built-in
+skills (`disableBundledSkills: true`, plus a `skillOverrides` entry for the
+`doctor` skill, which ignores the global switch): the CLI ships skills such
+as `code-review` and `verify` that the `Skill` tool would otherwise expose in
+the skills arm alone. The validator reads only the seamark catalogue from
+the init record: the skills arm must list every shipped skill and the
+MCP-only arm none. A built-in that still slips past the overrides is the
+same in both arms and does not discard a paid session.
+
+- `mcp-only`: nothing else. The `Skill` tool is not exposed.
+- `mcp-skills`: the three managed skills under `.claude/skills/`, the
+  `Skill` tool, and the three `Skill(...)` allow rules.
+
+The agent command is the lessons adapter without `--disable-slash-commands`
+(that flag would hide project skills), with `--tools` extended by the five
+`mcp__seamark__<tool>` names plus `Skill` for the skills arm, and with the
+trial's `--mcp-config <json> --settings <trial>/.claude/settings.json
+--strict-mcp-config` appended by the runner in that order, because
+`--mcp-config` is variadic and the boolean flag stops it from swallowing the
+task prompt that follows. The `--settings` flag loads the trial's own
+settings file a second time, explicitly: Claude Code ignores the
+`permissions.allow` rules of a project settings file in a workspace nobody
+has trusted (it says so on stderr), and a fresh trial directory is never
+trusted. The first cohort attempt ran without it, and every seamark call in
+all twelve sessions was refused; the rows looked valid because the refusal
+is a tool result, not an init fact. Now the result record's
+`permission_denials` are read by name, and a refused seamark tool or `Skill`
+tool invalidates the row. Both arms see the same `change_set` and `check`
+output, companions with their reasons included; the skills decide only
+whether and how the agent asks. The
+assumption that `--tools` accepts those names and that the init record lists
+them is checked by the first calibration trial, not assumed.
+
+### Instances
+
+The lessons fixtures never commit the trigger file with its companion twice,
+so co-change mining (which needs two shared commits) finds no pair and
+`change_set` cannot name the companion. The workflow instances are co-change
+variants that end at the same tree as their base and differ only in history:
+
+| Instance | Trigger | Companion |
+| --- | --- | --- |
+| `python-ts-schema-sync-cochange-v1` | `server/schema.py` | `web/src/api/generated.ts` |
+| `python-cache-version-cochange-v1` | `server/presenters.py` | `server/cache.py` |
+| `go-export-registry-cochange-v1` | `internal/export/preview.go` | `internal/worker/registry.go` |
+
+Each variant writes twelve commits: four that change the trigger and the
+companion together (a feature added, a field exposed and later withdrawn,
+another feature), two that add the tests for those changes on their own,
+the backend-only mistake and its fix commit, and three unrelated commits so
+the window is not only the pair. It ends at exactly the base fixture's
+tree, so the base task, judges, patches, and checks apply unchanged. The
+histories were reworked after the first cohort: they had carried the pair
+in exactly two commits, the mining floor, which put the companion at the
+bottom of every co-change list, tied with or below the test files the agent
+edits anyway, and the agents read it as noise. Now the companion shares
+four commits with the trigger at lift 1.9, above every file the task does
+not plan; preflight and the fixture tests enforce that ordering against the
+naive patch's files. The cache-version fix commit also says what it fixes
+(`fix: version the summary cache namespace so shape changes evict old
+entries`), because that subject is what `change_set` quotes as the
+companion's reason.
+
+`python-ts-schema-sync-cochange-v1` is a discoverability control as much as
+a treatment instance: its Makefile has a `sync-api` target and the generated
+client says `DO NOT EDIT` in its first line, so an agent that greps for the
+new field finds the companion without history. In the first cohort the
+MCP-only arm reached 4/5 that way. The variant cannot drop those files
+without leaving the base tree, so the instance stays and its result reads
+as "no harm", not as headroom. The pinned OpenTelemetry task
+is not a workflow instance: its prepared checkout is a single-commit clone
+with no history, so no co-change pair can exist in it and the co-change gate
+refuses it. A public-repository workflow instance would need a deeper clone
+in the preparation step.
+
+### What a row proves
+
+Every row records the init facts (tools, MCP servers with their status,
+skills, plugins), the verdicts and checks, the usage, and a trace read from
+the agent's own tool calls, never from its prose: whether `change_set` ran
+before the first edit and with which files; whether its result named the
+companion the agent had not put in the call; whether a `check` result
+listed the companion under `history suggests also reviewing`; whether the
+agent opened the companion (Read, Edit, Write, or MultiEdit) after either
+tool named it, the step that decided the outcome in the first cohort;
+whether `why` followed that companion; whether `check` ran after the last
+edit and what its verdict line said; which skills activated; and the
+seamark-call and edit counts. Edits
+made through Bash are invisible to the trace; the patch stays the record of
+what changed.
+
+A row is invalid when the init record lacks the arm's exact tool set, the
+`seamark` MCP server in the connected state, or (skills arm) exactly the
+three skills; when it lists a plugin; when the model differs from the
+requested one; when the agent was refused a seamark tool or the `Skill` tool
+(`denied_tools` keeps every refused name; a refused `WebFetch` stays a
+measured outcome); when the session ended without a structured result
+before its deadline; or when the operator's interrupt landed while a
+repository check ran and the check failed, because a killed check reports a
+plain failure the verdict cannot tell from a real one (`cancelled during
+repository checks`; a check set that passed before the signal keeps its
+row). Provider errors stop the run before the next paid session, as in the
+lessons harness. Only rows with `valid` and `pair_valid` enter the tallies.
+`companion_named_by_change_set` reads the planned files the way an edit's
+`file_path` is read, so a plan that names the companion by its absolute path
+inside the trial is the agent's own plan, not a suggestion.
+
+### Preflight
+
+`make skills-bench-preflight` spends no tokens. Beyond the lessons gates on
+the shared instance, it indexes a fresh fixture with the built binary and
+requires `seamark why <trigger>` to list the companion under "usually changed
+with" with at least two shared commits; sends one `initialize` request to
+`seamark mcp` and requires the reply to name the server `seamark`; and wires
+both arms into fresh copies, asserting the allow rules, the sandbox block,
+the managed skills only in the skills arm, and no hook, lesson, or
+`.mcp.json` anywhere. Every failure names its gate.
+
+### Safe run sequence
+
+1. `make skills-bench-preflight`.
+2. One MCP-only trial on one instance with a small budget. Inspect the
+   transcript's init record (`tools`, `mcp_servers`, `skills`) and the
+   tool-use shapes. If they differ from what the runner expects, fix the
+   adapter first; it is one function, `bench.ClaudeArgv`.
+3. One paired trial. Confirm the skills arm shows a `Skill` activation and a
+   `change_set` call, and the MCP-only arm shows neither skill.
+4. One activation calibration with a small `-max-turns`.
+5. Write `bench/workflow-claims.yaml` from that calibration pair and commit
+   it before the cohort. Until it exists, `skills-bench` runs in calibration
+   mode; `skills-bench-report` needs it.
+6. Five pairs per instance, one instance at a time, with identical budget
+   and timeout across arms; then the activation set; then the report.
+
+Calibration, with artifacts kept out of `bench/`:
+
+```sh
+make skills-bench BENCH_FLAGS='-instance python-ts-schema-sync-cochange-v1 -arm mcp-only -trials 1 -model claude-haiku-4-5-20251001 -effort medium -max-budget-usd 0.25 -timeout 10m -out /tmp/skills-calibration-v1.jsonl -transcripts /tmp/skills-calibration-v1'
+make skills-activation BENCH_FLAGS='-model claude-haiku-4-5-20251001 -effort medium -max-budget-usd 0.10 -max-turns 8 -out /tmp/skills-activation-v1.jsonl -transcripts /tmp/skills-activation-v1'
+```
+
+Cohort and report:
+
+```sh
+make skills-bench BENCH_FLAGS='-instance python-ts-schema-sync-cochange-v1 -arm both -trials 5 -model claude-haiku-4-5-20251001 -effort medium -max-budget-usd 0.25 -timeout 10m'
+make skills-activation BENCH_FLAGS='-model claude-haiku-4-5-20251001 -effort medium -max-budget-usd 0.10 -max-turns 8'
+make skills-bench-report BENCH_RESULTS='bench/workflow-results-v1.jsonl' BENCH_REPORT_FLAGS='-activation bench/activation-results-v1.jsonl -out bench/skills-report-v1.md'
+```
+
+Each cohort gets its own numbered files (`-out bench/workflow-results-vN.jsonl`,
+`bench/activation-results-vN.jsonl`, `bench/skills-report-vN.md`), so a
+committed cohort's rows are never appended to.
+
+`-generate <dir>` writes one fixture without any wiring, for a manual
+session such as the Codex checklist.
+
+### Frozen claim and criteria
+
+`workflow-claims.yaml` follows the lessons registry's shape with one
+comparison, `mcp-skills_vs_mcp-only`; the same threshold fields; an optional
+list of recorded process metrics (`change_set_before_first_edit_rate`,
+`companion_named_rate`, `companion_named_by_check_rate`,
+`companion_opened_rate`, `why_followed_companion_rate`,
+`check_after_last_edit_rate`) that never gate the verdict; and an
+`activation` block with a `minimum_recall` per skill and a
+`maximum_false_activation`. The assessment rule is the lessons rule applied
+to the workflow cohorts: minimum valid pairs per instance, mean and worst
+per-instance effect on the invariant-pass rate among task-complete trials,
+harmful task interference, the pinned model and effort, and a clean Seamark
+build. A failing claim names every threshold it missed.
+
+```yaml
+schema_version: 1
+claims:
+  - id: skills-companion-workflow
+    claim: MCP + skills preserves the companion-file invariant more often than the MCP server alone.
+    primary_metric: invariant_pass_rate_among_task_complete
+    comparison: mcp-skills_vs_mcp-only
+    direction: higher
+    required_model: claude-haiku-4-5-20251001
+    required_effort: medium
+    require_clean_seamark: true
+    minimum_effect: 0.30
+    minimum_instance_effect: 0.0
+    maximum_harmful_interference: 0.05
+    minimum_instances: 3
+    minimum_valid_pairs_per_instance: 5
+    instances:
+      - python-ts-schema-sync-cochange-v1
+      - python-cache-version-cochange-v1
+      - go-export-registry-cochange-v1
+    process_metrics:
+      - change_set_before_first_edit_rate
+      - check_after_last_edit_rate
+activation:
+  minimum_recall:
+    seamark-understand-repo: 0.8
+    seamark-plan-change: 0.8
+    seamark-review-change: 0.8
+  maximum_false_activation: 0.25
+```
+
+The block above shows the shape. The committed file carries the numbers
+chosen from the calibration pair, and it is never edited after a cohort
+starts.
+
+### Activation evaluation
+
+`make skills-activation` replays `bench/activation/prompts.yaml`: one fresh
+skills-arm session per prompt on the instance the file names (the shipped
+set targets `python-ts-schema-sync-cochange-v1`, whose files its prompts
+name; another `-instance` is refused), capped by `-max-turns`. Each prompt
+expects one skill or `none`; a review prompt may ask for the naive patch
+first, so it sees a real diff. The set carries task-shaped prompts beside
+the friendly ones: the cohort task verbatim, with "keep the change minimal",
+a second field in the same shape, and a hand-over question that never says
+review or commit. Each skill has five should-activate prompts, so the frozen
+0.8 recall bar tolerates one missed session per skill; two passes on a
+four-prompt set each failed on a single flip in a different place. The first
+cohort passed a ten-prompt set at 100% recall while the task itself
+activated the plan skill in 7 of 15 sessions; the activation rate that
+matters is the one under the task's wording. Rows go to `bench/activation-results-v1.jsonl`,
+never into a workflow file, and record the activated skills, the hit flag,
+and the usage. The turn cap is part of the fingerprint, and the report
+refuses to pool activation rows from different fingerprints, prompt sets,
+models, or caps. The report reads the manifest too (`-prompts`, default
+`bench/activation/prompts.yaml`), refuses rows measured against another
+manifest, and treats a run without a valid session for every prompt as
+insufficient evidence: a run that stopped early cannot pass on the prompts
+it reached. It gives recall per skill on its should-activate prompts and the
+false-activation rate on the should-not prompts against the frozen criteria,
+counts should-activate sessions that also loaded another skill, and lists
+every prompt's outcome. Reaching `--max-turns` is a measured outcome, not an
+infrastructure failure. An activation row follows the skills-arm session
+rules, the refused-tool rule included: a `Skill` call the harness refused
+would otherwise count as recall, so the row is invalid instead
+(`denied_tools` keeps the names). `skills-bench` refuses to append to a
+results file the strict reader would reject, so a corrupt or foreign line is
+found before any session is paid for; an empty file is as safe as a missing
+one. An interrupted session is discarded rather than recorded.
+Codex activation is recorded by hand in
+`bench/activation/codex-checklist.md`.
+
+### First workflow cohort
+
+The first cohort ran on 2026-09-05 with Seamark `v0.5.4-14-g8f26e70`,
+Claude Haiku 4.5 at medium effort, and five valid pairs per instance; every
+row was valid and no seamark call was refused:
+
+| Instance | MCP + skills invariant | MCP-only invariant | Effect | Approx. 95% interval | Mean context skills/only |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `python-ts-schema-sync-cochange-v1` | 4/5 | 4/5 | +0 pp | -45 to +45 pp | 367k / 237k |
+| `python-cache-version-cochange-v1` | 0/5 | 0/5 | +0 pp | -43 to +43 pp | 243k / 232k |
+| `go-export-registry-cochange-v1` | 1/5 | 0/5 | +20 pp | -26 to +62 pp | 316k / 217k |
+
+The mean effect of +6.7 pp fails the frozen +30 pp claim; all 30 sessions
+completed the task. The activation set passed at 2/2 recall per skill and
+0/4 false activations. The raw rows and the generated assessment are in
+[`workflow-results-v1.jsonl`](workflow-results-v1.jsonl),
+[`activation-results-v1.jsonl`](activation-results-v1.jsonl), and
+[`skills-report-v1.md`](skills-report-v1.md). The activation rows were
+measured against the ten-prompt manifest of that day, kept as
+[`activation/prompts-cohort1.yaml`](activation/prompts-cohort1.yaml); pass
+it with `-prompts` to re-render that report, because the report refuses
+rows measured against another manifest.
+
+The transcripts locate the loss in a chain. The plan skill activated in
+7 of 15 skills-arm sessions; the task says "keep the change minimal" and
+the activation prompts did not. When it activated, `change_set` named the
+companion every time, but as the weakest line, two of six commits at lift
+1.3 below the test files, and the agents opened it in 6 of 7 sessions and
+acted on it in 5. Nobody called `why` on the companion in any of the 30
+sessions, although `why` is where the fix commit that explains it lives.
+`check` ran in 5 sessions and could not name the companion, because it had
+no co-change section. The MCP-only arm solved schema-sync 4/5 through the
+Makefile alone. Those findings are why the fixtures, the skills, the
+activation set, `change_set`, and `check` changed before the second cohort;
+that cohort runs on a new fingerprint and a new claim registry, and this
+one stays as the baseline it measured.
+
+### Second workflow cohort
+
+The second cohort ran on 2026-09-05 with Seamark `v0.5.4-18-g802295a`
+(commit `802295a`), Claude Haiku 4.5 at medium effort, and five valid pairs
+per instance; every row was valid, no seamark call was refused, and the
+whole cohort cost $2.66:
+
+| Instance | MCP + skills invariant | MCP-only invariant | Effect | Approx. 95% interval | Mean context skills/only | Cost skills/only |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `python-ts-schema-sync-cochange-v1` | 4/5 | 1/5 | +60 pp | 0 to +83 pp | 471k / 209k | $0.55 / $0.31 |
+| `python-cache-version-cochange-v1` | 4/5 | 0/5 | +80 pp | +19 to +96 pp | 440k / 227k | $0.52 / $0.32 |
+| `go-export-registry-cochange-v1` | 4/5 | 0/5 | +80 pp | +19 to +96 pp | 491k / 286k | $0.58 / $0.37 |
+
+The mean effect of +73.3 pp and the worst instance at +60 pp pass the frozen
+claim; all 30 sessions completed the task. The activation gate, run once on
+the same commit before the cohort with the nineteen-prompt set, passed at
+5/5 recall per skill and 0/4 false activations. The raw rows and the
+generated assessment are in
+[`workflow-results-v2.jsonl`](workflow-results-v2.jsonl),
+[`activation-results-v2.jsonl`](activation-results-v2.jsonl), and
+[`skills-report-v2.md`](skills-report-v2.md).
+
+The process rates show what changed between the cohorts. The plan skill
+activated in 15/15 skills-arm sessions (7/15 before), `change_set` ran
+before the first edit in 15/15 (7/15), the companion was opened after being
+named in 14/15, and `check` ran after the last edit in 14/15 (5/15). The
+cache-version instance isolates the skills' contribution from the
+product changes: the MCP-only agents also ran `change_set` first in all
+five sessions and saw `server/cache.py` with its fix subject on the reason
+line, yet opened it in none; the skills arm opened it in five and bumped
+the namespace in four. Nobody called `why` on the companion in any of the
+30 sessions; the reason line made that hop unnecessary.
+
+The cost is real and stated beside the effect: the skills arm processed
+about twice the context per session, 200k to 260k tokens more, and cost
+about 70% more. The skills therefore stay opt-in. This is controlled
+synthetic evidence under one model, effort, and runtime; the fixtures were
+built to carry the pair, so it shows that the skills act on evidence that
+exists, not that every repository has it.
 
 ## Artifact policy
 

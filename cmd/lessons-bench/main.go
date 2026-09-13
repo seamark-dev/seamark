@@ -14,10 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -119,18 +116,9 @@ func run(opts options) error {
 			bench.HookDeliveryAlways, bench.HookDeliveryOncePerContext)
 	}
 
-	bin := opts.seamarkBin
-	if bin == "" {
-		bin = filepath.Join("bin", "seamark")
-	}
-
-	abs, err := filepath.Abs(bin)
+	abs, err := bench.ResolveSeamarkBinary(opts.seamarkBin)
 	if err != nil {
 		return err
-	}
-
-	if _, err := os.Stat(abs); err != nil {
-		return fmt.Errorf("seamark binary not found at %s — run `make build` first (or pass -seamark)", abs)
 	}
 
 	argv, managed, err := agentCommand(opts)
@@ -138,7 +126,7 @@ func run(opts options) error {
 		return err
 	}
 
-	agentVersion := cliVersion(argv[0])
+	agentVersion := bench.CommandVersion(argv[0], "--version")
 	seamarkSHA, err := bench.FileSHA256(abs)
 	if err != nil {
 		return fmt.Errorf("hash seamark binary: %w", err)
@@ -146,7 +134,7 @@ func run(opts options) error {
 
 	runtimeID := opts.runtimeID
 	if runtimeID == "" {
-		runtimeID = localRuntimeID(agentVersion, instance)
+		runtimeID = bench.LocalRuntimeID(agentVersion, instance.Checks)
 	}
 
 	cfg := bench.RunConfig{
@@ -160,7 +148,7 @@ func run(opts options) error {
 		TranscriptDir:           opts.transcripts,
 		Keep:                    opts.keep,
 		PrepareIndex:            true,
-		Version:                 seamarkVersion(abs),
+		Version:                 bench.CommandVersion(abs, "version"),
 		SeamarkSHA:              seamarkSHA,
 		AgentVersion:            agentVersion,
 		Model:                   opts.model,
@@ -280,7 +268,7 @@ func agentCommand(opts options) (argv []string, managed bool, err error) {
 		return argv, false, nil
 	}
 
-	if !exactModelID(opts.model) {
+	if !bench.ExactModelID(opts.model) {
 		return nil, false, fmt.Errorf("-model must be an exact model ID, not an alias (got %q)", opts.model)
 	}
 
@@ -306,23 +294,6 @@ func agentCommand(opts options) (argv []string, managed bool, err error) {
 		"--include-hook-events",
 		"--verbose",
 	}, true, nil
-}
-
-func exactModelID(model string) bool {
-	if model == "" {
-		return false
-	}
-
-	if strings.Contains(strings.ToLower(model), "latest") {
-		return false
-	}
-
-	switch strings.ToLower(model) {
-	case "default", "opus", "sonnet", "haiku", "fable":
-		return false
-	default:
-		return strings.HasPrefix(model, "claude-")
-	}
 }
 
 // parseArms maps the -arm flag to the arms to run.
@@ -360,64 +331,4 @@ func costEstimate(out, fingerprint string, sessions int) string {
 
 	return fmt.Sprintf("~$%.2f for %d sessions (from %d matching rows: mean %dk context processed, $%.2f per trial)",
 		float64(sessions)*meanCost, sessions, rows, meanIn/1000, meanCost)
-}
-
-func localRuntimeID(agentVersion string, instance bench.Instance) string {
-	parts := []string{
-		"claude-native-sandbox-v2",
-		runtime.GOOS + "/" + runtime.GOARCH,
-		"agent=" + agentVersion,
-	}
-
-	seen := make(map[string]bool)
-
-	for _, check := range instance.Checks {
-		if seen[check.Name] {
-			continue
-		}
-		seen[check.Name] = true
-
-		versionArgs := []string{"--version"}
-		if check.Name == "go" {
-			versionArgs = []string{"version"}
-		}
-		version := commandVersion(check.Name, versionArgs...)
-		parts = append(parts, check.Name+"="+version)
-	}
-
-	return strings.Join(parts, ";")
-}
-
-func commandVersion(name string, args ...string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.WaitDelay = 2 * time.Second
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "unknown"
-	}
-
-	output := strings.TrimSpace(string(out))
-	if output == "" {
-		return "unknown"
-	}
-
-	line, _, _ := strings.Cut(output, "\n")
-
-	return line
-}
-
-// cliVersion asks the agent binary for its version, so rows record
-// the exact CLI that ran the trials. Best-effort: "unknown" when the
-// binary has no --version.
-func cliVersion(bin string) string {
-	return commandVersion(bin, "--version")
-}
-
-// seamarkVersion asks the binary itself, so rows record the exact
-// build that served the hook arm.
-func seamarkVersion(bin string) string {
-	return commandVersion(bin, "version")
 }

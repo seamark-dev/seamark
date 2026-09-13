@@ -3,10 +3,10 @@ package report
 import (
 	"fmt"
 	"io"
-	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -17,53 +17,49 @@ import (
 // the change can ultimately reach. This is the pre-edit question — "what
 // am I about to forget?" — answered from evidence, not vibes.
 func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error {
-	inSet := map[string]bool{}
-	resolved := make([]string, 0, len(files))
-	lessonFiles := make([]string, 0, len(files))
+	names := make([]string, 0, len(files))
+	indexed := make([]string, 0, len(files))
 
 	for _, f := range files {
 		name, ok := asIndexedFile(st, root, f)
 		if !ok {
-			// Normalize anyway so the companion aggregation can still
-			// exclude it; report it so a typo never reads as "no data".
-			name = strings.TrimPrefix(filepath.ToSlash(f), "./")
-			fmt.Fprintf(w, "%s: not in the index (new file, or run `seamark index`)\n\n", name)
+			// Report it, so a typo never reads as "no data". The name is
+			// tool input, so it is sanitized like every path on this surface.
+			fmt.Fprintf(w, "%s: not in the index (new file, or run `seamark index`)\n\n", render.Sanitize(name))
 		}
 
-		inSet[name] = true
-
-		// Lessons need only a path: a brand-new file in a pinned region
-		// deserves its guidance MOST — it has no history to learn from.
-		// Co-change and exposure need the index, so resolved stays the
-		// gate for those.
-		lessonFiles = append(lessonFiles, name)
+		// Lessons and the companion set need only a path: a brand-new file
+		// in a pinned region deserves its guidance MOST, and a new file the
+		// agent listed is never suggested back to it. Co-change and
+		// exposure need the index, so indexed stays the gate for those.
+		names = append(names, name)
 
 		if ok {
-			resolved = append(resolved, name)
+			indexed = append(indexed, name)
 		}
 	}
 
-	// companions accumulates partner files across the whole set, keyed by
-	// strongest evidence, so the closing suggestion is deduplicated.
-	companions := map[string]companion{}
+	set := newCompanionSet(names)
 
-	for _, file := range resolved {
+	for _, file := range indexed {
 		fmt.Fprintf(w, "%s\n", file)
 
-		partners, err := st.CoChangePartners(file, 1.0, 6)
+		// More partners are fetched than printed: the per-file lines stay
+		// six, while the closing list must see past the planned files.
+		partners, err := st.CoChangePartners(file, 1.0, set.partnerLimit())
 		if err != nil {
 			return err
 		}
 
-		for _, p := range partners {
+		for _, p := range partners[:min(len(partners), maxCompanions)] {
+			// Partner names come from git history, where control
+			// characters are legal, so they are sanitized before the terminal.
 			fmt.Fprintf(w, "  usually changes with  %-46s %2d/%d commits, lift %.1f\n",
-				p.File, p.Together, p.Total, p.Lift)
+				render.Sanitize(p.File), p.Together, p.Total, p.Lift)
+		}
 
-			if !inSet[p.File] {
-				if c, ok := companions[p.File]; !ok || p.Together > c.together {
-					companions[p.File] = companion{p.Together, p.Lift}
-				}
-			}
+		for _, p := range partners {
+			set.note(file, p)
 		}
 
 		if err := exposureLines(w, st, file); err != nil {
@@ -73,7 +69,7 @@ func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error 
 		fmt.Fprintln(w)
 	}
 
-	suggestCompanions(w, companions)
+	printCompanions(w, st, root, CompanionsTitle, set.found)
 
 	// The repository's memory, at the moment it matters (RFC-002 §8):
 	// the pins and recurring lessons governing the files about to
@@ -85,13 +81,13 @@ func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error 
 		cfg = reviews.DefaultConfig()
 	}
 
-	lessons, trimmed, err := LessonsForFiles(st, cfg, lessonFiles, cfg.ChangeSetBudget())
+	lessons, trimmed, err := LessonsForFiles(st, cfg, names, cfg.ChangeSetBudget())
 	if err == nil && len(lessons) > 0 {
 		PrintLessonBlock(w,
 			"lessons for this change  (regions map to the files above; avoid repeating these)",
 			lessons, trimmed)
 
-		_ = reviews.RecordFiringSurface(root, "change_set", lessonFiles, "", lessons)
+		_ = reviews.RecordFiringSurface(root, "change_set", names, "", lessons)
 	}
 
 	return nil
@@ -173,46 +169,4 @@ func exposureLines(w io.Writer, st *store.Store, file string) error {
 	}
 
 	return nil
-}
-
-// companion carries the strongest co-change evidence seen for a partner
-// file outside the change set.
-type companion struct {
-	together int
-	lift     float64
-}
-
-func suggestCompanions(w io.Writer, companions map[string]companion) {
-	if len(companions) == 0 {
-		return
-	}
-
-	type ranked struct {
-		file     string
-		together int
-		lift     float64
-	}
-
-	list := make([]ranked, 0, len(companions))
-	for f, c := range companions {
-		list = append(list, ranked{f, c.together, c.lift})
-	}
-
-	sort.Slice(list, func(i, j int) bool {
-		if list[i].together != list[j].together {
-			return list[i].together > list[j].together
-		}
-
-		return list[i].file < list[j].file
-	})
-
-	if len(list) > 6 {
-		list = list[:6]
-	}
-
-	fmt.Fprintf(w, "history suggests also reviewing\n")
-
-	for _, r := range list {
-		fmt.Fprintf(w, "  %-50s %d shared commits, lift %.1f\n", r.file, r.together, r.lift)
-	}
 }

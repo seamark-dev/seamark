@@ -206,16 +206,9 @@ func (s *Server) initialize(params json.RawMessage) any {
 			"prompts":   map[string]any{},
 		},
 		"serverInfo": map[string]any{"name": "seamark", "version": s.version},
-		// The mental model here came verbatim from an agent's post-session
-		// self-review: encode it up front instead of letting every agent
-		// re-derive it.
-		"instructions": "seamark answers orientation, risk, and history questions about this repo: " +
-			"orient once before the first edit, why for unfamiliar code, change_set before " +
-			"a multi-file edit, check on a diff before committing, expand to read any ref a " +
-			"report returned. Answers are always current (the index self-repairs on every call) " +
-			"and empirical (co-change means usually, not must). For pinpoint lookups of a " +
-			"known file or symbol, direct reads are cheaper — use seamark before the edit, " +
-			"direct tools for the edit itself.",
+		// The text lives in defs.go beside the onboard prompt: the two
+		// state the same rules and change together.
+		"instructions": serverInstructions,
 	}
 }
 
@@ -372,7 +365,13 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (string, error){
 
 			var b bytes.Buffer
 			report.Decision(&b, decision)
-			report.CheckAdvisory(&b, st, s.root, gate.ChangedPaths(p.Diff))
+
+			// Companions before lessons: the forgotten file is the omission
+			// a review most often misses, and the lessons block is budgeted
+			// and may be long.
+			changed := gate.ChangedPaths(p.Diff)
+			report.CheckCompanions(&b, st, s.root, changed)
+			report.CheckAdvisory(&b, st, s.root, changed)
 
 			return b.String(), nil
 		})

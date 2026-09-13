@@ -6,13 +6,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/skills"
 )
 
 // Gate hook modes — shared with the status surfaces via internal/hooks,
@@ -24,8 +27,10 @@ const (
 
 func newInitCmd(opts *options) *cobra.Command {
 	var (
-		printOnly bool
-		gateMode  string
+		printOnly    bool
+		gateMode     string
+		skillsMode   string
+		approveTools bool
 	)
 
 	cmd := &cobra.Command{
@@ -40,6 +45,14 @@ func newInitCmd(opts *options) *cobra.Command {
   - wires Claude Code hooks into .claude/settings.json: the command gate
     on Bash, the review-lessons reminder on edits, and a PostCompact
     delivery reset — merged into any existing hooks, and safe to re-run
+  - with --skills, installs the seamark agent skills (procedures for
+    understanding, planning, and reviewing with the seamark tools) into
+    .claude/skills and, when an .agents/ directory exists, .agents/skills;
+    --skills=claude, --skills=codex, or --skills=all overrides the
+    detection. A directory carrying seamark's ownership marker is
+    refreshed on re-run; any other directory of the same name is left
+    untouched. Without --skills nothing is installed and init prints
+    how to install them.
 
 A first init never blocks anything: it installs the gate hook in warn
 mode, which reports verdicts and always lets the command through.
@@ -57,12 +70,44 @@ enforcement is never added or removed implicitly. Every run ends with a
 "gate" line stating the effective behaviour, derived from the installed
 hook and the policy file actually on disk.
 
+--approve-tools configures the clients so the five seamark MCP tools run
+without permission prompts. For Claude Code it merges exact allow rules
+for the tools and the three seamark skills into .claude/settings.json; a
+skill's own allowed-tools grant lasts one turn and, in the version tested
+(2.1.257), applied only when the skill was invoked by name. For Codex it
+appends to .codex/config.toml: the "seamark mcp" registration when none
+exists and approval_mode = "approve" for exactly the five tools, never a
+server-wide default. Existing values, comments, and explicit restrictive
+settings stay; conflicts are reported, not replaced. The rules are spelled
+with the server name .mcp.json registers, so a server added under another
+name is approved under that name. Which clients: Claude Code unless
+--skills=codex; Codex when --skills names it (codex or all) or, without an
+explicit client, when a .codex/ directory exists; --skills=claude is
+Claude Code only. One setup command:
+
+  seamark init --skills --approve-tools
+
 Use --print to preview every change without writing anything.`,
-		Args: cobra.NoArgs,
+		// init takes no positional arguments. The one likely mistake,
+		// "--skills codex", parses as the bare flag plus a stray word
+		// because the flag has an optional value; name the = form instead
+		// of cobra's "unknown command".
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 && slices.Contains(skills.Modes, args[0]) {
+				return fmt.Errorf("init: --skills takes its value with =, as in --skills=%s", args[0])
+			}
+
+			return cobra.NoArgs(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if gateMode != "" && gateMode != gateModeWarn && gateMode != gateModeEnforce {
 				return fmt.Errorf("init: --gate-mode must be %s or %s, got %q",
 					gateModeWarn, gateModeEnforce, gateMode)
+			}
+
+			if skillsMode != "" && !slices.Contains(skills.Modes, skillsMode) {
+				return fmt.Errorf("init: --skills must be one of %s, got %q",
+					strings.Join(skills.Modes, ", "), skillsMode)
 			}
 
 			root, err := index.ResolveRoot(opts.workspace)
@@ -72,7 +117,7 @@ Use --print to preview every change without writing anything.`,
 
 			bin := seamarkPath()
 
-			return runInit(cmd.OutOrStdout(), root, bin, gateMode, printOnly)
+			return runInit(cmd.OutOrStdout(), root, bin, gateMode, printOnly, skillsMode, approveTools)
 		},
 	}
 
@@ -80,6 +125,15 @@ Use --print to preview every change without writing anything.`,
 	cmd.Flags().StringVar(&gateMode, "gate-mode", "",
 		"gate hook mode: warn (report, never block) or enforce (blocking verdicts exit 2); "+
 			"omitted keeps the installed mode (warn on first init)")
+	cmd.Flags().StringVar(&skillsMode, "skills", "",
+		"install the seamark agent skills: auto (.claude/skills, plus .agents/skills when .agents/ exists), "+
+			"claude, codex, or all; a bare --skills means auto, other values need the = form (--skills=codex)")
+	// A bare --skills means auto; pflag then needs the = form for explicit
+	// values, which the help text and README both state.
+	cmd.Flags().Lookup("skills").NoOptDefVal = skills.ModeAuto
+	cmd.Flags().BoolVar(&approveTools, "approve-tools", false,
+		"let the seamark MCP tools run without prompts: Claude Code allow rules in .claude/settings.json, "+
+			"Codex per-tool approvals in .codex/config.toml (additive; never removes a setting)")
 
 	return cmd
 }
@@ -127,15 +181,21 @@ func stableInstallPath(path string) string {
 	return opt
 }
 
-func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
+// runInit writes the scaffolds and the hooks, then the opt-in extras.
+// skillsMode is one of skills.Modes, or empty for "not requested";
+// approveTools merges the Claude Code allow rules and, when Codex is a
+// target, appends the Codex approvals.
+func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode string, approveTools bool) error {
 	// 0. Load, validate and merge .claude/settings.json BEFORE touching
 	// anything: a malformed or wrong-shaped file must abort init before
 	// the scaffold writes, never halfway through them.
-	settingsPath := filepath.Join(root, ".claude", "settings.json")
-
-	settings, err := loadSettings(settingsPath)
-	if err != nil {
+	if err := refuseSettingsLink(root); err != nil {
 		return err
+	}
+
+	settings, err := hooks.ReadSettings(root)
+	if err != nil {
+		return fmt.Errorf("%w (fix or move it, then re-run)", err)
 	}
 
 	gateMode = resolveGateMode(settings, gateMode)
@@ -147,7 +207,60 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
 
 	hooksChanged, err := mergeHooks(settings, bin, gateMode)
 	if err != nil {
-		return fmt.Errorf("%s: %w", settingsPath, err)
+		return fmt.Errorf("%s: %w", approve.ClaudeSettings, err)
+	}
+
+	// The clients the approvals address, read once: --approve-tools
+	// configures them, and --skills without it notes what they lack.
+	claude, codex, err := approvalTargets(root, skillsMode)
+	if err != nil {
+		return fmt.Errorf("init: %w", err)
+	}
+
+	// --approve-tools merges into the same in-memory settings, before any
+	// write, for the same reason: a wrong-typed permissions field must
+	// abort here, and the file is written once, below, with the hooks.
+	// The Codex plan runs here too, so malformed TOML or a linked path
+	// aborts before the first scaffold lands.
+	var (
+		claudePlan *approve.ClaudePlan
+		codexPlan  *approve.CodexPlan
+	)
+
+	approveClaude, approveCodex := approveTools && claude, approveTools && codex
+
+	if approveClaude {
+		if claudePlan, err = planClaude(root, settings); err != nil {
+			return err
+		}
+
+		if err := mergeAllow(settings, claudePlan); err != nil {
+			return fmt.Errorf("%s: %w", approve.ClaudeSettings, err)
+		}
+	}
+
+	if approveCodex {
+		if codexPlan, err = approve.PlanCodex(root); err != nil {
+			return err
+		}
+	}
+
+	// Resolve the skills targets once and plan the install here too, so
+	// a client directory that cannot be read aborts before the first
+	// scaffold lands.
+	var (
+		skillsTargets []skills.Target
+		skillsPlan    []skills.Entry
+	)
+
+	if skillsMode != "" {
+		if skillsTargets, err = skills.Targets(root, skillsMode); err != nil {
+			return fmt.Errorf("init: %w", err)
+		}
+
+		if skillsPlan, err = skills.Plan(root, skillsTargets); err != nil {
+			return err
+		}
 	}
 
 	verb := "wrote"
@@ -188,8 +301,46 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
 	}
 
 	// 3. Claude Code hooks — validated and merged above, write-only here.
-	if err := writeHooks(w, settingsPath, settings, hooksChanged, bin, gateMode, previous, printOnly); err != nil {
+	// The allow rules ride in the same write, so the file lands once.
+	permissionsChanged := approveClaude && len(claudePlan.Missing) > 0
+
+	if err := writeHooks(w, root, settings, hooksChanged, permissionsChanged, bin, gateMode, previous, printOnly); err != nil {
 		return err
+	}
+
+	if approveClaude {
+		printApproved(w, claudePlan, printOnly)
+	}
+
+	// 3a. Codex approvals: append-only, planned above.
+	if approveCodex {
+		if err := approve.ApplyCodex(w, root, codexPlan, printOnly); err != nil {
+			return err
+		}
+	}
+
+	// 3b. Agent skills: opt-in, planned above, write-only here. Without
+	// the flag the line says what is installed, or how to install.
+	if skillsMode == "" {
+		reportInstalledSkills(w, root)
+	} else {
+		if err := skills.Apply(w, root, skillsPlan, printOnly); err != nil {
+			return err
+		}
+
+		// Note what this run left unapproved: every client the skills
+		// reached that --approve-tools did not. With a bare --skills that
+		// is Codex when .agents/ exists without .codex/, because the two
+		// artifacts are detected by different directories.
+		skillsClaude, skillsCodex := skillsClients(skillsTargets)
+
+		if skillsClaude && !approveClaude {
+			noteMissingClaude(w, root, settings)
+		}
+
+		if skillsCodex && !approveCodex {
+			noteMissingCodex(w, root)
+		}
 	}
 
 	// 4. Report the EFFECTIVE blocking behaviour, derived from the hook
@@ -232,24 +383,21 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool) error {
 	return nil
 }
 
-// loadSettings reads and parses a .claude/settings.json. An absent file
-// is an empty map; an unparseable one is a loud error with remediation —
-// raised before init writes anything, so a broken file cannot leave the
-// repository half-initialized.
-func loadSettings(path string) (map[string]any, error) {
-	settings := map[string]any{}
-
-	data, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(data, &settings); err != nil {
-			return nil, fmt.Errorf("%s: %w (fix or move it, then re-run)", path, err)
-		}
-	case !os.IsNotExist(err):
-		return nil, err
+// refuseSettingsLink rejects a symbolic link at .claude or at
+// .claude/settings.json, the same rule the skills and Codex writers
+// apply: a link committed in a cloned repository must never redirect a
+// read or a write outside the tree.
+func refuseSettingsLink(root string) error {
+	link, err := skills.SymlinkIn(root, approve.ClaudeSettings)
+	if err != nil {
+		return err
 	}
 
-	return settings, nil
+	if link != "" {
+		return fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", approve.ClaudeSettings, link)
+	}
+
+	return nil
 }
 
 // resolveGateMode turns the --gate-mode flag into the mode to install.
@@ -411,21 +559,21 @@ func hookSpecs(gateMode string) []hookSpec {
 // writeHooks persists the already-merged settings and reports what
 // happened. All parsing and validation runs earlier in runInit, before
 // any file is written — this function only serializes and narrates.
-func writeHooks(w io.Writer, path string, settings map[string]any, changed bool,
+// permissionsChanged persists the file even when no hook changed,
+// because the allow-rule merge into the same settings did; the line then
+// says the file was updated for its permissions, so no line calls a
+// rewritten file kept.
+func writeHooks(w io.Writer, root string, settings map[string]any, changed, permissionsChanged bool,
 	bin, gateMode, previous string, printOnly bool) error {
-	if !changed {
-		fmt.Fprintf(w, "  kept    .claude/settings.json (seamark hooks already wired)\n")
-		printHookCommands(w, bin, gateMode)
+	if (changed || permissionsChanged) && !printOnly {
+		// Checked again right before the write: the tree may have changed
+		// since the load, and a link must never redirect the write.
+		if err := refuseSettingsLink(root); err != nil {
+			return err
+		}
 
-		return nil
-	}
+		path := filepath.Join(root, filepath.FromSlash(approve.ClaudeSettings))
 
-	verb := "updated"
-	if printOnly {
-		verb = "would update"
-	}
-
-	if !printOnly {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
@@ -440,7 +588,22 @@ func writeHooks(w io.Writer, path string, settings map[string]any, changed bool,
 		}
 	}
 
-	fmt.Fprintf(w, "  %s .claude/settings.json (gate + lessons + context reset hooks)\n", verb)
+	if !changed && !permissionsChanged {
+		fmt.Fprintf(w, "  kept    .claude/settings.json (seamark hooks already wired)\n")
+	} else {
+		verb, reason := "updated", "gate + lessons + context reset hooks"
+
+		if printOnly {
+			verb = "would update"
+		}
+
+		if !changed {
+			reason = "permissions; seamark hooks already wired"
+		}
+
+		fmt.Fprintf(w, "  %s .claude/settings.json (%s)\n", verb, reason)
+	}
+
 	printHookCommands(w, bin, gateMode)
 
 	// The note states only what changed — the hook flag; whether anything

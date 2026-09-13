@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -397,20 +396,8 @@ func readRowsStrict(path string) ([]Row, string, error) {
 		}
 
 		var row Row
-		decoder := json.NewDecoder(strings.NewReader(line))
-		decoder.DisallowUnknownFields()
-
-		if err := decoder.Decode(&row); err != nil {
+		if err := decodeJSONLRow(line, &row); err != nil {
 			return nil, "", fmt.Errorf("%s:%d: %w", path, lineNumber, err)
-		}
-
-		var trailing json.RawMessage
-		if err := decoder.Decode(&trailing); err != io.EOF {
-			if err == nil {
-				err = fmt.Errorf("multiple JSON values")
-			}
-
-			return nil, "", fmt.Errorf("%s:%d: trailing content: %w", path, lineNumber, err)
 		}
 
 		if err := ValidateResultRow(row); err != nil {
@@ -606,122 +593,121 @@ func assessClaims(claims []Claim, cohorts []CohortReport) []ClaimAssessment {
 	assessments := make([]ClaimAssessment, 0, len(claims))
 
 	for _, claim := range claims {
-		assessment := ClaimAssessment{ID: claim.ID, Definition: claim, Status: "insufficient evidence"}
-		allowed := make(map[string]bool, len(claim.Instances))
-
-		for _, id := range claim.Instances {
-			allowed[id] = true
-		}
-
-		selected := make(map[string]CohortReport)
-		ambiguous := false
-		excludedByConditions := 0
-
-		for _, cohort := range cohorts {
-			if !allowed[cohort.Instance] {
-				continue
-			}
-
-			if !cohortMatchesClaimConditions(cohort, claim) {
-				excludedByConditions++
-
-				continue
-			}
-
-			if cohort.ValidPairs < claim.MinimumValidPairsPerInstance {
-				continue
-			}
-
-			if _, exists := selected[cohort.Instance]; exists {
-				ambiguous = true
-				continue
-			}
-
-			selected[cohort.Instance] = cohort
-		}
-
-		if ambiguous {
-			assessment.Reason = "multiple qualifying fingerprints exist for an instance; select an explicit result set"
-			assessments = append(assessments, assessment)
-
-			continue
-		}
-
-		assessment.QualifyingInstances = len(selected)
-		if len(selected) < claim.MinimumInstances {
-			assessment.Reason = fmt.Sprintf(
-				"%d/%d independent instances have at least %d valid pairs",
-				len(selected), claim.MinimumInstances, claim.MinimumValidPairsPerInstance,
-			)
-
-			if excludedByConditions > 0 {
-				assessment.Reason += fmt.Sprintf(
-					"; %d cohort(s) violate frozen model, effort, or clean-build conditions",
-					excludedByConditions,
-				)
-			}
-
-			assessments = append(assessments, assessment)
-
-			continue
-		}
-
-		if claim.Comparison == comparisonDifferenceInDiffs {
-			assessments = append(assessments, assessDifferenceInDifferences(claim, assessment, selected))
-
-			continue
-		}
-
-		var (
-			effectTotal    float64
-			harmful, pairs int
-		)
-		invalidEffect := false
-		worstEffect := 1.0
-
-		for _, instanceID := range claim.Instances {
-			cohort, ok := selected[instanceID]
-			if !ok {
-				continue
-			}
-
-			effect, ok := cohort.Effect()
-			if !ok {
-				invalidEffect = true
-				break
-			}
-
-			effectTotal += effect
-			worstEffect = min(worstEffect, effect)
-			harmful += cohort.HarmfulPairs
-			pairs += cohort.ValidPairs
-		}
-
-		if invalidEffect || pairs == 0 {
-			assessment.Reason = "a qualifying cohort has no task-complete result in one arm"
-			assessments = append(assessments, assessment)
-
-			continue
-		}
-
-		assessment.MeanEffect = effectTotal / float64(len(selected))
-		assessment.WorstInstanceEffect = worstEffect
-		assessment.HarmfulInterference = float64(harmful) / float64(pairs)
-
-		if assessment.MeanEffect >= claim.MinimumEffect &&
-			assessment.WorstInstanceEffect >= claim.MinimumInstanceEffect &&
-			assessment.HarmfulInterference <= claim.MaximumHarmfulInterference {
-			assessment.Status = "passes frozen threshold"
-			assessment.Reason = "mean effect, per-instance effect, and harmful-interference thresholds pass"
-		} else {
-			assessment.Status = "does not pass frozen threshold"
-			assessment.Reason = "mean effect, per-instance effect, or harmful-interference threshold failed"
-		}
-
-		assessments = append(assessments, assessment)
+		assessments = append(assessments, assessClaim(claim, cohorts))
 	}
 
 	return assessments
+}
+
+// assessClaim judges one claim against the cohorts: which instances
+// qualify, and whether the frozen thresholds pass. The workflow report
+// judges its claims through the same function.
+func assessClaim(claim Claim, cohorts []CohortReport) ClaimAssessment {
+	assessment := ClaimAssessment{ID: claim.ID, Definition: claim, Status: "insufficient evidence"}
+	allowed := make(map[string]bool, len(claim.Instances))
+
+	for _, id := range claim.Instances {
+		allowed[id] = true
+	}
+
+	selected := make(map[string]CohortReport)
+	ambiguous := false
+	excludedByConditions := 0
+
+	for _, cohort := range cohorts {
+		if !allowed[cohort.Instance] {
+			continue
+		}
+
+		if !cohortMatchesClaimConditions(cohort, claim) {
+			excludedByConditions++
+
+			continue
+		}
+
+		if cohort.ValidPairs < claim.MinimumValidPairsPerInstance {
+			continue
+		}
+
+		if _, exists := selected[cohort.Instance]; exists {
+			ambiguous = true
+			continue
+		}
+
+		selected[cohort.Instance] = cohort
+	}
+
+	if ambiguous {
+		assessment.Reason = "multiple qualifying fingerprints exist for an instance; select an explicit result set"
+		return assessment
+	}
+
+	assessment.QualifyingInstances = len(selected)
+	if len(selected) < claim.MinimumInstances {
+		assessment.Reason = fmt.Sprintf(
+			"%d/%d independent instances have at least %d valid pairs",
+			len(selected), claim.MinimumInstances, claim.MinimumValidPairsPerInstance,
+		)
+
+		if excludedByConditions > 0 {
+			assessment.Reason += fmt.Sprintf(
+				"; %d cohort(s) violate frozen model, effort, or clean-build conditions",
+				excludedByConditions,
+			)
+		}
+
+		return assessment
+	}
+
+	if claim.Comparison == comparisonDifferenceInDiffs {
+		return assessDifferenceInDifferences(claim, assessment, selected)
+	}
+
+	var (
+		effectTotal    float64
+		harmful, pairs int
+	)
+	invalidEffect := false
+	worstEffect := 1.0
+
+	for _, instanceID := range claim.Instances {
+		cohort, ok := selected[instanceID]
+		if !ok {
+			continue
+		}
+
+		effect, ok := cohort.Effect()
+		if !ok {
+			invalidEffect = true
+			break
+		}
+
+		effectTotal += effect
+		worstEffect = min(worstEffect, effect)
+		harmful += cohort.HarmfulPairs
+		pairs += cohort.ValidPairs
+	}
+
+	if invalidEffect || pairs == 0 {
+		assessment.Reason = "a qualifying cohort has no task-complete result in one arm"
+		return assessment
+	}
+
+	assessment.MeanEffect = effectTotal / float64(len(selected))
+	assessment.WorstInstanceEffect = worstEffect
+	assessment.HarmfulInterference = float64(harmful) / float64(pairs)
+
+	if assessment.MeanEffect >= claim.MinimumEffect &&
+		assessment.WorstInstanceEffect >= claim.MinimumInstanceEffect &&
+		assessment.HarmfulInterference <= claim.MaximumHarmfulInterference {
+		assessment.Status = "passes frozen threshold"
+		assessment.Reason = "mean effect, per-instance effect, and harmful-interference thresholds pass"
+	} else {
+		assessment.Status = "does not pass frozen threshold"
+		assessment.Reason = "mean effect, per-instance effect, or harmful-interference threshold failed"
+	}
+
+	return assessment
 }
 
 // assessDifferenceInDifferences judges a scoped factorial claim. It subtracts

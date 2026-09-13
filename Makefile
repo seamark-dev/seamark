@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -42,7 +42,7 @@ lint: ## Static analysis (config in .golangci.yml)
 	golangci-lint run ./...
 
 fmt: ## Format all Go sources
-	gofmt -w cmd internal
+	gofmt -w cmd internal embed.go
 
 tidy: ## Sync go.mod/go.sum (-e: the tree-sitter grammar module's test files
 	# reference a package that does not exist; plain tidy errors on it)
@@ -70,6 +70,14 @@ release-archive: build ## Package a versioned archive for this platform into ./d
 smoke: build ## End-to-end smoke test of the built binary in a fresh fixture repo
 	scripts/release-smoke.sh $(BINARY)
 
+# Local use only: the Go tests under internal/skills are the CI check for
+# the skills tree; this runs the client's own validator on top of them.
+skills-validate: ## Validate skills/ with Claude Code's validator (needs the claude CLI)
+	@command -v claude >/dev/null 2>&1 || { \
+		echo 'skills-validate: the claude CLI is not on PATH; install Claude Code (https://code.claude.com) to run it' >&2; \
+		exit 1; }
+	claude plugin validate --strict skills/
+
 lessons-bench: build ## Controlled headless agent experiment (costs tokens; BENCH_FLAGS=-dry-run first)
 	go run ./cmd/lessons-bench $(BENCH_FLAGS)
 
@@ -83,6 +91,21 @@ lessons-bench-preflight: build ## Validate every benchmark fixture without buyin
 
 lessons-bench-report: ## Render selected JSONL evidence (BENCH_RESULTS="bench/file.jsonl ..."; stdout by default)
 	go run ./cmd/lessons-bench-report -claims bench/claims.yaml $(BENCH_REPORT_FLAGS) $(BENCH_RESULTS)
+
+# The skills workflow experiment shares the lessons fixtures and plumbing but
+# never a row file, a claim registry, or a fingerprint with the lessons
+# benchmark; see bench/README.md, "Skills workflow benchmark".
+skills-bench: build ## Paired MCP-only vs MCP + skills experiment (costs tokens; BENCH_FLAGS=-dry-run first)
+	go run ./cmd/skills-bench $(BENCH_FLAGS)
+
+skills-bench-preflight: build ## Validate every workflow fixture, its co-change pair, MCP, and arm wiring without buying agent sessions
+	go run ./cmd/skills-bench -instance all -preflight-only -agent "$$(command -v true)" $(BENCH_FLAGS)
+
+skills-bench-report: ## Render workflow JSONL evidence (BENCH_RESULTS="bench/file.jsonl ..."; BENCH_REPORT_FLAGS='-activation bench/activation-results-v1.jsonl')
+	go run ./cmd/skills-bench-report -claims bench/workflow-claims.yaml $(BENCH_REPORT_FLAGS) $(BENCH_RESULTS)
+
+skills-activation: build ## Replay the activation prompt set, one skills-arm session per prompt (costs tokens)
+	go run ./cmd/skills-bench -activation bench/activation/prompts.yaml $(BENCH_FLAGS)
 
 clean: ## Remove build artifacts and the local index
 	rm -rf bin dist .seamark

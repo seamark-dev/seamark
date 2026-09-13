@@ -5,6 +5,7 @@
 package report
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -56,9 +57,15 @@ func Why(w io.Writer, st *store.Store, root, query string) error {
 
 // asIndexedFile reports whether query names a file the index knows, trying
 // the query as-given and relative to the workspace root (so paths pasted
-// from a subdirectory shell still resolve).
+// from a subdirectory shell still resolve). On a miss it still returns one
+// name, so a caller can print or exclude the file by it. A plain path
+// keeps the agent's spelling, which is repository-relative by convention
+// whatever the process's working directory; an absolute or explicitly
+// relative path ("./", "../") is meant from the shell, so its resolved
+// form is the name the index would use.
 func asIndexedFile(st *store.Store, root, query string) (string, bool) {
-	candidates := []string{strings.TrimPrefix(filepath.ToSlash(query), "./")}
+	slashed := filepath.ToSlash(query)
+	candidates := []string{strings.TrimPrefix(slashed, "./")}
 
 	if abs, err := filepath.Abs(query); err == nil {
 		if rel, err := filepath.Rel(root, abs); err == nil && !strings.HasPrefix(rel, "..") {
@@ -75,7 +82,12 @@ func asIndexedFile(st *store.Store, root, query string) (string, bool) {
 		}
 	}
 
-	return "", false
+	fromShell := filepath.IsAbs(query) || strings.HasPrefix(slashed, "./") || strings.HasPrefix(slashed, "../")
+	if fromShell && len(candidates) > 1 {
+		return candidates[1], false
+	}
+
+	return candidates[0], false
 }
 
 func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, sym model.Symbol) error {
@@ -159,17 +171,20 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 		// that the shared commits actually touched — a factual report from
 		// git's hunk headers, not a statistical claim. Best-effort: skipped
 		// when there is no git repo or root.
+		ctx, cancel := context.WithTimeout(context.Background(), historyBudget)
+		defer cancel()
+
 		root, _ := st.GetMeta("repo_root")
 		var shared map[string]bool
 		if root != "" {
-			shared = history.FileCommits(root, file)
+			shared = history.FileCommits(ctx, root, file)
 		}
 
 		for _, p := range partners {
 			fmt.Fprintf(w, "  %2d/%-3d commits  lift %-5.1f %s",
 				p.Together, p.Total, p.Lift, p.File)
 
-			if funcs := history.PartnerFunctions(root, p.File, shared, 3); len(funcs) > 0 {
+			if funcs := history.PartnerFunctions(ctx, root, p.File, shared, 3); len(funcs) > 0 {
 				fmt.Fprintf(w, "  · mostly %s", render.Sanitize(strings.Join(funcs, ", ")))
 			}
 
@@ -237,12 +252,18 @@ func FixCount(decisions []model.Decision) int {
 		// Body too, not just the title: mining classifies on both, and
 		// a "harden worker" commit whose body says "Fixes #12" is a
 		// fix finding — the density must count the same commits.
-		if d.Kind == model.DecisionRevert || fixes.Classify(d.Title, d.Body) != "" {
+		if isFix(d) {
 			n++
 		}
 	}
 
 	return n
+}
+
+// isFix reports whether a decision is a correction: a revert, or a commit
+// the fix miner classifies as a fix from its title or body.
+func isFix(d model.Decision) bool {
+	return d.Kind == model.DecisionRevert || fixes.Classify(d.Title, d.Body) != ""
 }
 
 // annotationSuffix renders a lesson's surface-time annotation for

@@ -1,0 +1,114 @@
+# Activation evaluation prompt set (spec R-14).
+#
+# Each prompt runs once in a fresh skills-arm session on the
+# python-ts-schema-sync-cochange-v1 fixture (a small Python API with a
+# generated TypeScript client). `expect` names the skill that should load,
+# or `none` for a prompt every skill must leave alone. `prepare: naive`
+# applies the fixture's task-complete-but-invariant-breaking patch first, so
+# a review prompt sees a real diff. Each skill has five should-activate
+# prompts, so the frozen 0.8 recall bar tolerates one missed session per
+# skill; two passes on a four-prompt set each failed on a single flip. The
+# pass criteria live in bench/workflow-claims.yaml.
+schema_version: 1
+instance: python-ts-schema-sync-cochange-v1
+
+prompts:
+  - id: understand-response-pipeline
+    prompt: Explain how a workspace API response is produced in this repository, from the domain object to the JSON the web client reads, and which parts of the code decide its shape.
+    expect: seamark-understand-repo
+    note: Substantive, cross-module explanation of an unfamiliar codebase; the understand skill's core case.
+
+  - id: understand-web-client
+    prompt: Give me an orientation of this codebase. What are the main modules, which files change together most often, and what should I read first before changing the API?
+    expect: seamark-understand-repo
+    note: Explicit orientation request naming history questions only the index answers.
+
+  - id: understand-sync-mechanism
+    prompt: Walk me through how the TypeScript client stays in sync with the Python schema in this repository, and what has gone wrong with that in the past.
+    expect: seamark-understand-repo
+    note: An explanation that needs the decision trail; the fix commit is the answer.
+
+  - id: understand-load-bearing
+    prompt: I am new to this codebase. Which symbols in server/ carry the most callers, and which recent commits explain the current shape of the workspace summary API?
+    expect: seamark-understand-repo
+    note: Newcomer orientation phrased as callers and commits; only the index answers both.
+
+  - id: understand-cochange-hubs
+    prompt: Which files in this repository never change alone, and why? I want to know before I touch the API layer.
+    expect: seamark-understand-repo
+    note: A co-change question about the whole repository, stated before any change.
+
+  - id: plan-billing-field
+    prompt: Add each workspace's billing currency to the GET /api/workspaces/{id} response as billingCurrency, sourced from Workspace.billing_currency, and make sure every consumer of that response keeps working. Plan the change before editing.
+    expect: seamark-plan-change
+    note: Multi-file change across the API and its client; the plan skill's core case.
+
+  - id: plan-rename-region
+    prompt: Rename the region field of the workspace summary response to location across the backend, its tests, and whatever consumes the response.
+    expect: seamark-plan-change
+    note: A rename that spans files and an unfamiliar area; the companion client is the trap.
+
+  - id: plan-task-minimal
+    prompt: Expose each workspace's billing currency in `GET /api/workspaces/{id}` responses. Return it as `billingCurrency`, sourced from `Workspace.billing_currency`. Keep the change minimal and add or update tests as appropriate.
+    expect: seamark-plan-change
+    note: The cohort task verbatim, with "keep the change minimal"; the first cohort activated the plan skill in fewer than half of these sessions.
+
+  - id: plan-task-owner
+    prompt: Add the workspace owner id to the workspace summary API response as ownerId, from Workspace.owner_id. Keep it small, and update tests if needed.
+    expect: seamark-plan-change
+    note: Task-shaped phrasing with a different existing field and a softer "keep it small"; the same multi-file shape. An earlier version named a field the domain model does not have, and the agent spent its turns searching for it.
+
+  - id: plan-fix-missing-region
+    prompt: The web client shows "undefined" when a workspace summary arrives without a region. Fix this end to end, backend and client, and keep the change minimal.
+    expect: seamark-plan-change
+    note: A fix that spans the API and its consumer, with the minimal wording; the plan skill's fix case.
+
+  - id: review-before-commit
+    prompt: I added billingCurrency to the workspace summary response in server/schema.py and server/presenters.py. Am I missing anything before I commit?
+    expect: seamark-review-change
+    prepare: naive
+    note: The review skill's exact trigger phrase, on a real diff that forgot the generated client.
+
+  - id: review-double-check
+    prompt: Double-check the uncommitted change in this working tree for anything the tests would not catch, then tell me whether it is safe to commit.
+    expect: seamark-review-change
+    prepare: naive
+    note: Review of an existing diff without naming the files; the skill must recognize the intent.
+
+  - id: review-task-handover
+    prompt: The billingCurrency change is done and the backend tests pass. Anything else before I hand it over? Keep the answer short.
+    expect: seamark-review-change
+    prepare: naive
+    note: A hand-over question in task language, without "review" or "commit"; the diff still lacks the generated client.
+
+  - id: review-before-pr
+    prompt: Before I open the pull request, review the current uncommitted change to the workspace summary API for anything the reviewers of this repository usually catch.
+    expect: seamark-review-change
+    prepare: naive
+    note: A pull-request review request that names recurring reviewer feedback; the lessons and the companion are both in play.
+
+  - id: review-what-breaks
+    prompt: I think the workspace summary change is complete. What would break that the tests do not cover? Keep it brief.
+    expect: seamark-review-change
+    prepare: naive
+    note: A completeness question in task language; the answer is the stale generated client.
+
+  - id: typo-readme
+    prompt: In README.md, change "public schema descriptions" to "public schema definitions". Nothing else.
+    expect: none
+    note: One-word wording fix in a document; the typo case, which no skill should answer.
+
+  - id: comment-pagination
+    prompt: Add a one-line comment above page_window in server/pagination.py saying that the page size is clamped to the range 1 to 100.
+    expect: none
+    note: A comment edit in one named file; the comment case.
+
+  - id: symbol-lookup
+    prompt: What does page_window in server/pagination.py return for page=0 and size=500? Just answer, do not change anything.
+    expect: none
+    note: A pinpoint question about one known symbol; a direct read answers it.
+
+  - id: rename-local-variable
+    prompt: In server/search.py, rename the local variable needle to normalized_query. Do not touch any other file.
+    expect: none
+    note: A one-line rename in a named file; a one-file change in a known area.

@@ -6,6 +6,111 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## v0.6.0 — 2026-09-05
+
+- **The MCP server states judgment rules, not a ritual.** The `initialize`
+  instructions and the `onboard` prompt now say when each tool earns its
+  cost: `change_set` before editing more than one file or an unfamiliar area,
+  `why` for a load-bearing symbol, `orient` only when the area is unfamiliar,
+  `check` on the diff (new files staged first) before reporting completion,
+  `expand` only for a needed ref. Co-change means "usually", and missing or
+  unindexed evidence never means safe.
+- **Agent skills, opt-in.** Three Agent Skills (`seamark-understand-repo`,
+  `seamark-plan-change`, `seamark-review-change`) ship inside the binary and
+  install with `seamark init --skills` into `.claude/skills/` and, when
+  `.agents/` exists, `.agents/skills/`. The installer refreshes only
+  directories that carry seamark's ownership marker, never writes through a
+  symlink, and previews with `--print`. `seamark doctor` and `seamark status`
+  report installed, stale, foreign, and unreadable copies; the release smoke
+  proves the embedded tree ships; `make skills-validate` runs Claude Code's
+  validator locally.
+- **`seamark init --approve-tools`.** Merges exact Claude Code allow rules
+  for the five MCP tools and the three skills into `.claude/settings.json`,
+  because a skill's own `allowed-tools` grant lasts one turn and, in the
+  Claude Code version tested (2.1.257), applied only when the user invoked
+  the skill by name, although the documentation says it covers both. For
+  Codex it appends the `seamark mcp` registration and `approval_mode =
+  "approve"` for exactly the five tools to `.codex/config.toml`, preserving
+  every existing byte and reporting conflicts instead of replacing them.
+  Additive, idempotent, previewable with `--print`, and independent of
+  `--skills`. `seamark doctor` and `seamark status` report both clients'
+  approval configuration. The Claude Code rules are spelled with the server
+  name `.mcp.json` registers, a server-wide `mcp__seamark` rule counts for
+  every tool, and a rule under `permissions.deny` or `permissions.ask` is a
+  reported conflict, never counted as approved. Codex approvals follow the
+  `.codex/` directory or an explicit `--skills=codex`, with or without
+  `--skills`; a `[mcp_servers.seamark]` table left without its `command`
+  is completed in place instead of being reported as another command,
+  unless it carries an explicit setting such as `enabled = false`; a
+  header-shaped line inside a nested array no longer hides an inline
+  server table from the layout check; a registration with zero approvals
+  is partial for both clients, with the re-run hint; and an unparseable
+  `.mcp.json` is reported on the approvals line, because the server name
+  in it spells every rule.
+- **`check` names the companions the diff left out.** After the verdict,
+  `check` (MCP tool and `seamark check`) prints `history suggests also
+  reviewing`: the files that usually change with the diff's files and that
+  the diff leaves untouched. The first skills cohort showed that a review
+  pass could not catch a forgotten companion because nothing in `check`
+  looked at co-change; now the omission history can see is on the screen
+  where the review happens.
+- **Companions come with their reason.** In `change_set` and `check`, each
+  suggested partner carries the planned file it shares the most commits
+  with and, when history has them, the functions those commits touched
+  there and the latest fix recorded on it (`last fix here: <subject>
+  (<commit>)`). Ties on shared commits and lift break in favour of the
+  partner outside the planned files' directories, the one a plan forgets.
+  A bare file name at lift 1.3 was the weakest line on the screen in the
+  first cohort; the reason is what makes it a question the agent answers.
+  The reasons are computed for the whole list at once under one five-second
+  budget, and git diffs only the commits the two files share (`git log
+  --no-walk --stdin`), so a lockfile or a generated client with thousands
+  of commits no longer costs a full timeout per partner on every
+  `change_set` and `check` call.
+- **Skills grant the CLI fallback they describe.** `allowed-tools` now
+  includes `Bash(seamark lessons --region *)`, the command the reference
+  names in place of `expand lessons:<dir>` when the MCP tools are absent; a
+  test pins every `seamark` command in a skill body to a grant.
+- **Skills rewritten around the cohort's failure points.** The plan skill
+  names the task shapes it covers, says that a request for a minimal change
+  does not switch it off, and turns "follow every surprise" into a rule
+  with an output: open or `why` every partner under `history suggests also
+  reviewing` and exclude one only by naming what the shared commits changed
+  there. The review skill answers the companions `check` lists. The
+  understand skill no longer claims requests to change something, because
+  it raced the plan skill for the cohort task on a fresh repository and won
+  a quarter of the time. The command-line fallback moved into the shared
+  reference as one table, so the skills are shorter.
+- **Skills workflow benchmark harness.** `make skills-bench` runs the paired
+  experiment the skills were waiting for: an MCP-only arm against an MCP +
+  skills arm on co-change variants of the lessons fixtures, whose history
+  carries the trigger and companion files together, with the lessons judges,
+  sandbox, and preflight discipline. Rows record what the transcript proves
+  (`change_set` before the first edit, the companion named and followed,
+  `check` after the last edit, activations, calls, cost) in their own schema
+  and file. `make skills-activation` replays a checked-in prompt set and
+  records which skill loaded. `make skills-bench-report` assesses the frozen
+  `bench/workflow-claims.yaml`, which is committed after calibration and
+  before the cohort. Both arms switch off Claude Code's built-in skills, so
+  a row proves that only the seamark skills were loaded, and the runner
+  passes the trial's settings file with `--settings`, because Claude Code
+  ignores project allow rules in an untrusted workspace; a refused seamark
+  or `Skill` call now invalidates the row. The lessons harness
+  sources, arms, claims, rows, and reports are unchanged.
+- **The skills preserve the companion-file invariant.** The second cohort
+  (2026-09-05, Claude Haiku 4.5 at medium effort, five valid pairs on each
+  of three co-change instances, $2.66) passed the frozen claim: MCP + skills
+  preserved the owner invariant in 12/15 task-complete sessions versus
+  1/15 for the MCP server alone, +60/+80/+80 percentage points per instance
+  and +73 on average against the frozen +30, with intervals of 0 to +83 and
+  +19 to +96, all 30 tasks completed, and no refused tool call. The first
+  cohort on the unrevised harness had measured +6.7 points. The activation
+  set passed at 5/5 recall per skill and 0/4 false activations. The cost
+  is visible: the skills arm processed about twice the context per
+  session. The skills stay opt-in (`seamark init --skills`), because that
+  spend is the user's to accept; the report is
+  [`bench/skills-report-v2.md`](bench/skills-report-v2.md).
+
 ## v0.5.3 — 2026-08-28
 
 This patch makes the benchmark and its test suite reliable on macOS. It does

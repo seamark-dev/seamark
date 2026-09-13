@@ -7,11 +7,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/approve"
+	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -39,6 +42,18 @@ func fixtureRoot(t *testing.T) (root, dbPath string) {
 	require.NoError(t, st.Close())
 
 	return root, dbPath
+}
+
+// stubAgent puts an executable named after the default agent CLI on
+// PATH for the test. A report-wide "no warnings" assertion must not
+// depend on whether the machine running the tests has Claude Code
+// installed: CI does not, a developer's laptop usually does.
+func stubAgent(t *testing.T) {
+	t.Helper()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // byName indexes a report's checks.
@@ -202,4 +217,244 @@ func TestPrintAndJSON(t *testing.T) {
 	var back Report
 	require.NoError(t, json.Unmarshal(data, &back))
 	assert.Equal(t, r, &back, "the report must survive the JSON round trip")
+}
+
+// installSkills writes the shipped skills into one client directory of
+// the fixture, the way `seamark init --skills=<client>` would.
+func installSkills(t *testing.T, root, mode string) {
+	t.Helper()
+
+	targets, err := skills.Targets(root, mode)
+	require.NoError(t, err)
+	require.NoError(t, skills.Install(&bytes.Buffer{}, root, targets, false))
+}
+
+func TestRunReportsSkillsNotInstalled(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateInfo, checks["skills"].State, "opt-in skills are a fact, not a fault")
+	assert.Contains(t, checks["skills"].Detail, "not installed")
+	assert.Contains(t, checks["skills"].Fix, "seamark init --skills")
+}
+
+func TestRunReportsSkillsInstalled(t *testing.T) {
+	stubAgent(t)
+
+	root, dbPath := fixtureRoot(t)
+	installSkills(t, root, skills.ModeClaude)
+
+	r := Run(root, dbPath, "test")
+	checks := byName(r)
+
+	assert.Equal(t, StateOK, checks["skills"].State, checks["skills"].Detail)
+	assert.Contains(t, checks["skills"].Detail, "claude 3/3 current")
+	assert.Contains(t, checks["skills"].Detail, "codex not installed")
+	assert.Empty(t, checks["skills"].Fix)
+	assert.Zero(t, r.Warns, "%+v", r.Checks)
+}
+
+func TestRunDetectsStaleSkills(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	installSkills(t, root, skills.ModeClaude)
+
+	// A managed copy whose body drifted, as after a seamark upgrade.
+	skillMD := filepath.Join(root, ".claude", "skills", "seamark-plan-change", "SKILL.md")
+	require.NoError(t, os.WriteFile(skillMD,
+		[]byte("---\nname: seamark-plan-change\nmetadata:\n  seamark: managed\n---\nold body\n"), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateWarn, checks["skills"].State)
+	assert.Contains(t, checks["skills"].Detail, "1 stale")
+	assert.Contains(t, checks["skills"].Fix, "seamark init --skills")
+}
+
+func TestRunIgnoresForeignSkillDir(t *testing.T) {
+	stubAgent(t)
+
+	root, dbPath := fixtureRoot(t)
+
+	// The user's own skill under a shipped name, nothing else installed:
+	// named, never a warning, never touched.
+	dir := filepath.Join(root, ".claude", "skills", "seamark-plan-change")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
+		[]byte("---\nname: seamark-plan-change\ndescription: mine\n---\nMine.\n"), 0o644))
+
+	r := Run(root, dbPath, "test")
+	checks := byName(r)
+
+	assert.Equal(t, StateInfo, checks["skills"].State)
+	assert.Contains(t, checks["skills"].Detail, "1 not managed")
+	assert.Contains(t, checks["skills"].Fix, "rename or remove",
+		"init --skills alone cannot replace the directory, so the fix must say so first")
+	assert.Contains(t, checks["skills"].Fix, "seamark init --skills")
+	assert.Zero(t, r.Warns, "%+v", r.Checks)
+
+	// Beside a complete managed install, the foreign directory is still
+	// only information, with the corrective choice spelled out.
+	installSkills(t, root, skills.ModeCodex)
+
+	checks = byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateInfo, checks["skills"].State)
+	assert.Contains(t, checks["skills"].Detail, "codex 3/3 current")
+	assert.Contains(t, checks["skills"].Fix, "not seamark's")
+}
+
+func TestRunWarnsOnUnreadableSkillDir(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "skills"), []byte("oops"), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateWarn, checks["skills"].State)
+	assert.Contains(t, checks["skills"].Detail, "codex unreadable")
+}
+
+// approveClaude writes the eight Claude Code allow rules into the fixture.
+func approveClaude(t *testing.T, root string) {
+	t.Helper()
+
+	rules, err := approve.ClaudeRules()
+	require.NoError(t, err)
+
+	quoted := make([]string, 0, len(rules))
+	for _, r := range rules {
+		quoted = append(quoted, `"`+r+`"`)
+	}
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":[`+strings.Join(quoted, ",")+`]}}`), 0o644))
+}
+
+func TestRunReportsApprovalsNotConfigured(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateInfo, checks["approvals"].State, "opt-in approvals are a fact, not a fault")
+	assert.Contains(t, checks["approvals"].Detail, "not configured")
+	assert.Contains(t, checks["approvals"].Fix, "seamark init --approve-tools")
+	assert.Contains(t, checks["approvals"].Fix, "user or managed policy")
+}
+
+func TestRunReportsApprovalsConfigured(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	approveClaude(t, root)
+
+	p, err := approve.PlanCodex(root)
+	require.NoError(t, err)
+	require.NoError(t, approve.ApplyCodex(&bytes.Buffer{}, root, p, false))
+
+	r := Run(root, dbPath, "test")
+	checks := byName(r)
+
+	assert.Equal(t, StateOK, checks["approvals"].State, checks["approvals"].Detail)
+	assert.Contains(t, checks["approvals"].Detail, "claude 8/8 rules")
+	assert.Contains(t, checks["approvals"].Detail, "codex registered as \"seamark\", 5/5 tools approved")
+	assert.Contains(t, checks["approvals"].Detail, "project configuration")
+}
+
+func TestRunDetectsPartialApprovals(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":["mcp__seamark__orient"]}}`), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateWarn, checks["approvals"].State)
+	assert.Contains(t, checks["approvals"].Detail, "claude 1/8 rules")
+	assert.Contains(t, checks["approvals"].Fix, "seamark init --approve-tools")
+}
+
+func TestRunReportsConflictingAndUnreadableApprovals(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"),
+		[]byte("[mcp_servers.seamark]\ncommand = \"seamark\"\nargs = [\"mcp\"]\n\n[mcp_servers.seamark.tools.why]\napproval_mode = \"prompt\"\n"), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateWarn, checks["approvals"].State)
+	assert.Contains(t, checks["approvals"].Detail, "tools.why.approval_mode = \"prompt\"")
+	assert.Contains(t, checks["approvals"].Fix, "by hand")
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"), []byte("not toml [\n"), 0o644))
+
+	checks = byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateWarn, checks["approvals"].State)
+	assert.Contains(t, checks["approvals"].Detail, "codex unreadable")
+}
+
+func TestRunReportsDisabledCodexServerAsConflict(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"),
+		[]byte("[mcp_servers.seamark]\ncommand = \"seamark\"\nargs = [\"mcp\"]\nenabled = false\n\n[mcp_servers.seamark.tools.why]\napproval_mode = \"approve\"\n"), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateWarn, checks["approvals"].State, "a disabled server must not read as approved")
+	assert.Contains(t, checks["approvals"].Detail, "enabled = false")
+}
+
+func TestRunWarnsOnARegistrationWithoutApprovals(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+
+	// Codex registered, nothing approved: every Codex call prompts, so
+	// the re-run hint is due even when Claude Code is complete.
+	approveClaude(t, root)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"),
+		[]byte("[mcp_servers.seamark]\ncommand = \"seamark\"\nargs = [\"mcp\"]\n"), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateWarn, checks["approvals"].State, checks["approvals"].Detail)
+	assert.Contains(t, checks["approvals"].Detail, `codex registered as "seamark", 0/5 tools approved`)
+	assert.Contains(t, checks["approvals"].Fix, "seamark init --approve-tools")
+
+	// A denied Claude Code rule is a conflict doctor warns about, not an
+	// approval it counts.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"permissions":{"allow":["mcp__seamark__check"],"deny":["mcp__seamark__check"]}}`), 0o644))
+
+	checks = byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateWarn, checks["approvals"].State)
+	assert.Contains(t, checks["approvals"].Detail, "permissions.deny lists mcp__seamark__check")
+}
+
+func TestRunNamesTheBrokenMCPConfigOnBothLines(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	approveClaude(t, root)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mcp.json"), []byte("{not json"), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	// The server name in the file spells every rule, so the approvals
+	// count is unknowable until the file parses; both lines say so.
+	assert.Equal(t, StateWarn, checks["mcp"].State)
+	assert.Contains(t, checks["mcp"].Detail, "unparseable")
+	assert.Equal(t, StateWarn, checks["approvals"].State)
+	assert.Contains(t, checks["approvals"].Detail, "claude unreadable (.mcp.json")
+}
+
+func TestRunNamesTheSameServerOnBothLines(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".mcp.json"),
+		[]byte(`{"mcpServers":{"zz":{"command":"seamark"},"sm":{"command":"seamark"}}}`), 0o644))
+
+	for i := 0; i < 10; i++ {
+		checks := byName(Run(root, dbPath, "test"))
+
+		assert.Equal(t, StateOK, checks["mcp"].State)
+		assert.Contains(t, checks["mcp"].Detail, `registered in .mcp.json as "sm"`, "name order, never map order")
+		assert.Contains(t, checks["approvals"].Detail, `for server "sm"`)
+	}
 }
