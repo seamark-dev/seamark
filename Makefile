@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -37,6 +37,17 @@ test: ## Run all tests
 
 test-race: ## Run all tests with the race detector
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race ./...
+
+# The agent-integration slice: the registry and adapter packages in full,
+# plus the focused init/hook/gate/agent/state cases the integration work
+# must keep passing. Credential-free and offline; native Codex checks are
+# separate operator targets.
+AGENTS_TEST_PKGS := ./internal/integration/... ./internal/agent/...
+AGENTS_TEST_RUN  := 'Test(RunInit|InitDefault|InitGateMode|LessonsHook|GateHook|HookBudgets|HookDelivery|ResetHookDelivery|ApproveTools|Reminder|LessonsForFiles|MergeHooks|ResolveGateMode|ApprovalTargets)'
+
+agents-test: ## Run the agent-integration contract and characterization tests
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(AGENTS_TEST_PKGS)
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./internal/cli ./internal/reviews ./internal/report ./internal/mcp -run $(AGENTS_TEST_RUN)
 
 lint: ## Static analysis (config in .golangci.yml)
 	golangci-lint run ./...

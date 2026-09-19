@@ -125,3 +125,35 @@ func TestHookDeliveryStateDoesNotWaitOnConcurrentLease(t *testing.T) {
 	_, err = BeginHookDelivery(root, "session-two", lessons)
 	require.Error(t, err, "lock contention must return so the hook can fail open")
 }
+
+// TestHookDeliveryStateFailsOpenOnAUnknownVersion freezes what this
+// binary does when a newer writer has moved the state file to another
+// version: the lease is refused, so the caller falls back to repeated
+// delivery, and the newer file is left untouched. The state-key change
+// planned for receiving-context suppression relies on both halves.
+func TestHookDeliveryStateFailsOpenOnAUnknownVersion(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".seamark")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	target := filepath.Join(dir, deliveryStateFile)
+	future := []byte(`{"version":2,"sessions":{}}` + "\n")
+	require.NoError(t, os.WriteFile(target, future, 0o600))
+
+	lessons := []model.Lesson{{ClusterKey: "k", Region: "a", Symptom: "s", Occurrences: 1}}
+
+	_, err := BeginHookDelivery(root, "session", lessons)
+	require.Error(t, err, "an unsupported version refuses the lease so advice repeats instead of hiding")
+	assert.Contains(t, err.Error(), "unsupported delivery state version 2")
+
+	after, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, future, after, "an older writer must not overwrite a newer state file")
+
+	// A reset is equally hands-off: no state is rewritten for a version
+	// this binary does not understand.
+	_ = ResetHookDelivery(root, "session")
+	after, err = os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, future, after)
+}

@@ -1,0 +1,14 @@
+{
+  "session_id": "thr_synthetic_0001",
+  "transcript_path": null,
+  "cwd": "/workspace/repo",
+  "hook_event_name": "PreToolUse",
+  "model": "synthetic-model",
+  "permission_mode": "default",
+  "turn_id": "turn_synthetic_0001",
+  "tool_name": "apply_patch",
+  "tool_use_id": "call_synthetic_0004",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Update File: internal/api/old_name.go\n*** Move to: internal/api/new_name.go\n@@ package api\n-// old\n+// new\n*** End Patch\n"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "session_id": "thr_synthetic_0001",
+  "transcript_path": null,
+  "cwd": "/workspace/repo",
+  "hook_event_name": "PreToolUse",
+  "model": "synthetic-model",
+  "permission_mode": "default",
+  "turn_id": "turn_synthetic_0001",
+  "tool_name": "apply_patch",
+  "tool_use_id": "call_synthetic_0005",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Add File: hello.txt\n+Hello world\n*** Update File: src/app.py\n*** Move to: src/main.py\n@@ def greet():\n-print(\"Hi\")\n+print(\"Hello, world!\")\n*** Delete File: obsolete.txt\n*** End Patch\n"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "session_id": "thr_synthetic_0001",
+  "transcript_path": null,
+  "cwd": "/workspace/repo",
+  "hook_event_name": "PreToolUse",
+  "model": "synthetic-model",
+  "permission_mode": "default",
+  "turn_id": "turn_synthetic_0001",
+  "tool_name": "apply_patch",
+  "tool_use_id": "call_synthetic_0010",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Update File: README.md\n@@\n-old last line\n+new last line\n*** End of File\n*** End Patch\n"
+  }
+}

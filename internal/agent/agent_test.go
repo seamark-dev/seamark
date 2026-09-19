@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,4 +140,55 @@ func TestLoadConfigSharesFileWithIndexSection(t *testing.T) {
 		[]byte("agent: [broken\n"), 0o644))
 	_, err = LoadConfig(root)
 	require.Error(t, err)
+}
+
+// TestInvokeInheritsTheCallerWorkingDirectory freezes the legacy custom
+// argv behavior the registry-aware resolver must keep: the process runs
+// where seamark runs, not in the repository root.
+func TestInvokeInheritsTheCallerWorkingDirectory(t *testing.T) {
+	here, err := os.Getwd()
+	require.NoError(t, err)
+
+	out, err := fake("cat >/dev/null; pwd").Invoke(context.Background(), "x")
+	require.NoError(t, err)
+
+	got, err := filepath.EvalSymlinks(strings.TrimSpace(out))
+	require.NoError(t, err)
+	want, err := filepath.EvalSymlinks(here)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+// TestResolveNeedsNoBinary freezes the disclosure contract: Resolve
+// reports the exact argv without PATH, so a dry run works on a machine
+// without the client, while New fails fast on the missing binary.
+func TestResolveNeedsNoBinary(t *testing.T) {
+	cfg := &Config{}
+	cfg.Agent.Argv = []string{"definitely-not-a-binary-xyz", "--flag"}
+
+	name, argv, err := Resolve(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, "custom", name)
+	assert.Equal(t, []string{"definitely-not-a-binary-xyz", "--flag"}, argv)
+
+	_, err = New(cfg)
+	require.Error(t, err)
+
+	name, argv, err = Resolve(&Config{})
+	require.NoError(t, err)
+	assert.Equal(t, "claude", name)
+	assert.Equal(t, ClaudeCommand().Argv, argv, "the default preset and the shared helper agree")
+}
+
+func TestCommandSpecValidate(t *testing.T) {
+	require.NoError(t, ClaudeCommand().Validate())
+	assert.Equal(t, "claude", ClaudeCommand().Name)
+
+	assert.Error(t, CommandSpec{Argv: []string{"x"}}.Validate(), "a name is required for provenance")
+	assert.Error(t, CommandSpec{Name: "n"}.Validate(), "an executable is required")
+	assert.Error(t, CommandSpec{Name: "n", Argv: []string{""}}.Validate(), "an empty executable is rejected")
+
+	spec := ClaudeCommand()
+	spec.Argv[0] = "mutated"
+	assert.Equal(t, "claude", ClaudeCommand().Argv[0], "each call returns its own copy")
 }

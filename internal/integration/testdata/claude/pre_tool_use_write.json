@@ -1,0 +1,13 @@
+{
+  "session_id": "synthetic-claude-session-0001",
+  "transcript_path": "/home/user/.claude/projects/-workspace-repo/synthetic-claude-session-0001.jsonl",
+  "cwd": "/workspace/repo",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Write",
+  "tool_use_id": "toolu_synthetic_0002",
+  "tool_input": {
+    "file_path": "/workspace/repo/docs/new-page.md",
+    "content": "# New page\n"
+  }
+}

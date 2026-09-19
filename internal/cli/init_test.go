@@ -1268,3 +1268,130 @@ func TestReportSkillsSanitizesTheSummary(t *testing.T) {
 	assert.Contains(t, b.String(), "  skills  ")
 	assert.NotContains(t, b.String(), "\x1b")
 }
+
+// TestRunInitLegacySelectionMatrix freezes which artifacts the
+// no-selector init forms write. The explicit `--client` path added by
+// the agent-integrations work translates each legacy form into
+// per-client intent; this matrix is what that translation must
+// reproduce exactly, including the deliberate asymmetries: Claude hooks
+// are always installed, `--skills=codex` still wires Claude hooks, a
+// bare --skills detects skills by .agents/ but approvals by .codex/.
+func TestRunInitLegacySelectionMatrix(t *testing.T) {
+	type artifacts struct {
+		claudeSkills, agentsSkills, claudePerms, codexConfig bool
+	}
+
+	cases := []struct {
+		name         string
+		skillsMode   string
+		approveTools bool
+		agentsDir    bool
+		codexDir     bool
+		want         artifacts
+	}{
+		{name: "default", want: artifacts{}},
+		{name: "default with .codex present", codexDir: true, want: artifacts{}},
+		{name: "approve-tools claude only", approveTools: true, want: artifacts{claudePerms: true}},
+		{name: "approve-tools detects .codex", approveTools: true, codexDir: true,
+			want: artifacts{claudePerms: true, codexConfig: true}},
+		{name: "bare skills without .agents", skillsMode: skills.ModeAuto, want: artifacts{claudeSkills: true}},
+		{name: "bare skills with .agents", skillsMode: skills.ModeAuto, agentsDir: true,
+			want: artifacts{claudeSkills: true, agentsSkills: true}},
+		{name: "bare skills with .agents and approve-tools but no .codex", skillsMode: skills.ModeAuto,
+			agentsDir: true, approveTools: true,
+			want: artifacts{claudeSkills: true, agentsSkills: true, claudePerms: true}},
+		{name: "bare skills with .codex and approve-tools but no .agents", skillsMode: skills.ModeAuto,
+			codexDir: true, approveTools: true,
+			want: artifacts{claudeSkills: true, claudePerms: true, codexConfig: true}},
+		{name: "skills=claude", skillsMode: skills.ModeClaude, agentsDir: true, codexDir: true,
+			approveTools: true, want: artifacts{claudeSkills: true, claudePerms: true}},
+		{name: "skills=codex", skillsMode: skills.ModeCodex, want: artifacts{agentsSkills: true}},
+		{name: "skills=codex with approve-tools", skillsMode: skills.ModeCodex, approveTools: true,
+			want: artifacts{agentsSkills: true, codexConfig: true}},
+		{name: "skills=all with approve-tools", skillsMode: skills.ModeAll, approveTools: true,
+			want: artifacts{claudeSkills: true, agentsSkills: true, claudePerms: true, codexConfig: true}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+
+			if tc.agentsDir {
+				require.NoError(t, os.Mkdir(filepath.Join(root, ".agents"), 0o755))
+			}
+
+			if tc.codexDir {
+				require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
+			}
+
+			var b testWriter
+			require.NoError(t, runInit(&b, root, "/bin/seamark", "", false, tc.skillsMode, tc.approveTools))
+
+			// Claude hooks are installed by every legacy form, even the
+			// Codex-only skills selection.
+			settings := readSettings(t, root)
+			assert.Len(t, commands(t, settings), 2, "gate and lessons hooks")
+			assert.Len(t, commandsForEvent(t, settings, "PostCompact"), 1)
+
+			_, hasPerms := settings["permissions"]
+
+			got := artifacts{
+				claudeSkills: dirExists(filepath.Join(root, ".claude", "skills", "seamark-plan-change")),
+				agentsSkills: dirExists(filepath.Join(root, ".agents", "skills", "seamark-plan-change")),
+				claudePerms:  hasPerms,
+				codexConfig:  fileExists(filepath.Join(root, ".codex", "config.toml")),
+			}
+			assert.Equal(t, tc.want, got)
+
+			// The same form is idempotent: a second run keeps every
+			// artifact and adds none.
+			var again testWriter
+			require.NoError(t, runInit(&again, root, "/bin/seamark", "", false, tc.skillsMode, tc.approveTools))
+			assert.Len(t, commands(t, readSettings(t, root)), 2, "re-run must not duplicate hooks")
+			assert.NotContains(t, again.String(), "wrote  .claude/skills", "skills are kept on re-run")
+		})
+	}
+}
+
+// TestRunInitGateModePrecedence freezes the effective-mode rule: an
+// explicit flag wins, otherwise the installed hook's mode is kept, and a
+// first install is warn. The policy file on disk is reported beside it
+// but never changes which hook is installed.
+func TestRunInitGateModePrecedence(t *testing.T) {
+	root := t.TempDir()
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", "", false, "", false))
+	assert.Equal(t, gateModeWarn, installedGateMode(readSettings(t, root)), "first install is warn")
+
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeEnforce, false, "", false))
+	assert.Equal(t, gateModeEnforce, installedGateMode(readSettings(t, root)), "the flag wins")
+
+	require.NoError(t, runInit(&b, root, "/bin/seamark", "", false, "", false))
+	assert.Equal(t, gateModeEnforce, installedGateMode(readSettings(t, root)), "no flag keeps the installed mode")
+
+	// A kept enforce policy under a warn hook is reported as enforce,
+	// because the hook follows the policy file when no flag is baked in.
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, "", false))
+	assert.Equal(t, gateModeWarn, installedGateMode(readSettings(t, root)))
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"),
+		[]byte("mode: enforce\nrules: []\n"), 0o644))
+
+	var last testWriter
+	require.NoError(t, runInit(&last, root, "/bin/seamark", "", false, "", false))
+	assert.Equal(t, gateModeWarn, installedGateMode(readSettings(t, root)), "the policy never rewrites the hook")
+	assert.Contains(t, last.String(), "gate    enforce — the kept .seamark/policy.yaml sets mode: enforce")
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+
+	return err == nil && info.IsDir()
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+
+	return err == nil && info.Mode().IsRegular()
+}

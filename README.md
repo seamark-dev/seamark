@@ -906,6 +906,7 @@ make lint     # golangci-lint
 make index    # self-index this repo
 make smoke    # end-to-end run of the built binary in a fixture repo
 make skills-validate   # Claude Code's strict validator over skills/ (local; needs the claude CLI)
+make agents-test       # agent-integration contract + characterization tests (offline, credential-free)
 ```
 
 Contributions that need no Go at all: the effect catalogue and default
