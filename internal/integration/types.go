@@ -65,6 +65,10 @@ var Capabilities = []Capability{
 // the operations are metadata, not one interface per operation. The
 // field names match the ClientSetup intents they answer.
 type SetupSupport struct {
+	// Hooks means the adapter can install the client's lifecycle hooks.
+	// It is a setup operation, not a capability: the codecs that handle
+	// the hook events are declared through Edits, Commands, and Resets.
+	Hooks bool
 	// RegisterMCP means the adapter can register the seamark MCP server.
 	RegisterMCP bool
 	// ApproveTools means the adapter can add the exact per-tool grants.
@@ -510,6 +514,27 @@ type SetupRequest struct {
 	Root    string
 	Binary  string
 	Clients []ClientSetup
+	// Common lists the client-independent documents of the run, such as
+	// the .seamark scaffolds and the .gitignore entries. The caller owns
+	// their content; the coordinator guards, plans, and writes them with
+	// the client documents, so one preflight covers every write.
+	Common []Document
+}
+
+// Document is one client-independent file of a setup run. Compose
+// receives the current bytes and returns the bytes the run leaves. When
+// it returns the input unchanged, the coordinator keeps the file. Compose
+// must be pure: the coordinator may call it for a preview.
+type Document struct {
+	// Path is repository-relative and slash-separated.
+	Path string
+	// Compose returns the complete file. exists is false for an absent
+	// file; existing is then nil.
+	Compose func(existing []byte, exists bool) ([]byte, error)
+	// Detail says what the write adds, for narration. KeptDetail says
+	// why an unchanged file needs nothing.
+	Detail     string
+	KeptDetail string
 }
 
 // FileGuard records the observed state of one input file, so apply can
@@ -524,17 +549,35 @@ type FileGuard struct {
 // FileWrite is one composed native document to write, with every
 // client that contributed to it.
 type FileWrite struct {
-	Path      string
-	After     []byte
+	Path  string
+	After []byte
+	// Mode is the permission for a new file. An existing file keeps its
+	// own permission. Zero means 0644.
 	Mode      fs.FileMode
 	Consumers []string
+	// Detail says what the write adds, for narration. It must never hold
+	// file content: a preview must not print native configuration.
+	Detail string
 }
 
-// ClientPlan is one client's read guards, composed writes, and
-// findings. A native document appears once in Writes.
+// FileKeep is one document the plan inspected and leaves unchanged, so
+// the result can say "kept" with the reason.
+type FileKeep struct {
+	Path      string
+	Consumers []string
+	// Detail says why nothing changes, for narration.
+	Detail string
+}
+
+// ClientPlan is one client's read guards, composed writes, kept
+// documents, and findings. A native document appears once in Writes or
+// once in Kept, never in both, and every such document has a guard in
+// Reads. A file that was only read, for example to find a registration
+// name, has a guard and no other entry.
 type ClientPlan struct {
 	Reads    []FileGuard
 	Writes   []FileWrite
+	Kept     []FileKeep
 	Findings []Finding
 }
 
@@ -545,11 +588,29 @@ type SkillDestination struct {
 	Consumers []string
 }
 
-// SetupPlan is the complete, validated plan for one setup run.
+// SkillGuard records the observed state of one skill directory: a
+// digest of everything a refresh can overwrite. The plan entry's
+// classification is not enough, because an edited stale copy is still
+// stale.
+type SkillGuard struct {
+	// Rel is the skill directory, repository-relative.
+	Rel    string
+	Digest [32]byte
+}
+
+// SetupPlan is the complete, validated plan for one setup run. It is
+// also the preview: it holds every change and nothing was written.
 type SetupPlan struct {
-	Reads        []FileGuard
-	Writes       []FileWrite
-	Skills       []skills.Entry
+	// Root is the workspace the plan was made for.
+	Root string
+	// Reads guards every input. Its order is the document order of the
+	// run: common documents first, then each client in registry order.
+	Reads  []FileGuard
+	Writes []FileWrite
+	Kept   []FileKeep
+	Skills []skills.Entry
+	// SkillGuards is parallel to Skills: one guard per entry.
+	SkillGuards  []SkillGuard
 	Destinations []SkillDestination
 	Findings     []Finding
 }

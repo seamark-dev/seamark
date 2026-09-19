@@ -12,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/effects"
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -23,12 +24,12 @@ func commands(t *testing.T, settings map[string]any) []string {
 func commandsForEvent(t *testing.T, settings map[string]any, event string) []string {
 	t.Helper()
 
-	hooks, _ := settings["hooks"].(map[string]any)
-	events, _ := hooks[event].([]any)
+	hookMap, _ := settings["hooks"].(map[string]any)
+	events, _ := hookMap[event].([]any)
 
 	var out []string
 
-	forEachCommand(events, func(_ map[string]any, cmd string) {
+	hooks.ForEachCommand(events, func(_ string, _ map[string]any, cmd string) {
 		out = append(out, cmd)
 	})
 
@@ -124,8 +125,8 @@ func TestMergeHooksPreservesExisting(t *testing.T) {
 
 	assert.Equal(t, "opus", settings["model"], "unrelated settings untouched")
 
-	hooks := settings["hooks"].(map[string]any)
-	assert.NotNil(t, hooks["Stop"], "other hook events untouched")
+	hookMap := settings["hooks"].(map[string]any)
+	assert.NotNil(t, hookMap["Stop"], "other hook events untouched")
 	assert.Equal(t, []string{"/bin/seamark lessons --hook-reset"},
 		commandsForEvent(t, settings, "PostCompact"))
 }

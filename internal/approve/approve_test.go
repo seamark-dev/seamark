@@ -884,7 +884,7 @@ func TestClaudeRegistrationDerivesTheServerName(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
 		[]byte(`{"permissions":{"allow":["mcp__seamark__orient","mcp__sm"]}}`), 0o644))
 
-	c := inspectClaude(root)
+	c := InspectClaude(root)
 	assert.Equal(t, "sm", c.Registered)
 	assert.Equal(t, 5, c.Approved)
 	assert.Equal(t, StatePartial, c.State())
@@ -934,7 +934,7 @@ func TestInspectClaudeReportsABrokenMCPConfig(t *testing.T) {
 	// The server name in .mcp.json spells every rule, so a file that
 	// cannot be read makes the count unknowable; status has no other
 	// check that reads it.
-	c := inspectClaude(root)
+	c := InspectClaude(root)
 	assert.Equal(t, StateUnreadable, c.State())
 	assert.Contains(t, c.Err, ".mcp.json")
 	assert.Equal(t, 0, c.Approved, "8 rules under a guessed name must not read as current")
@@ -1012,7 +1012,7 @@ func TestPlanCodexAppendsTheHeaderWhenOnlySubTablesRemain(t *testing.T) {
 
 	// Not registered yet, but the approvals are real: inspection says
 	// so instead of calling the file current.
-	c := inspectCodex(root)
+	c := InspectCodex(root)
 	assert.Equal(t, "", c.Registered)
 	assert.Equal(t, 1, c.Approved)
 	assert.Equal(t, StatePartial, c.State())

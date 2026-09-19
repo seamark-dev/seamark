@@ -40,9 +40,11 @@ test-race: ## Run all tests with the race detector
 
 # The agent-integration slice: the registry and adapter packages in full,
 # plus the focused init/hook/gate/agent/state cases the integration work
-# must keep passing. Credential-free and offline; native Codex checks are
-# separate operator targets.
-AGENTS_TEST_PKGS := ./internal/integration/... ./internal/agent/...
+# must keep passing. The hooks, approve, and skills packages run in full
+# too: the setup adapters compose their merges, and the coordinator
+# applies and guards the skill directories. Credential-free and offline;
+# native Codex checks are separate operator targets.
+AGENTS_TEST_PKGS := ./internal/integration/... ./internal/agent/... ./internal/hooks/... ./internal/approve/... ./internal/skills/...
 AGENTS_TEST_RUN  := 'Test(RunInit|InitDefault|InitGateMode|LessonsHook|GateHook|HookBudgets|HookDelivery|ResetHookDelivery|ApproveTools|Reminder|LessonsForFiles|MergeHooks|ResolveGateMode|ApprovalTargets)'
 
 agents-test: ## Run the agent-integration contract and characterization tests

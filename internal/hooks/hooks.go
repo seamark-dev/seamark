@@ -2,6 +2,8 @@
 // spelled in .claude/settings.json: the marker strings, the ownership
 // rule, and gate-mode detection live here once — init writes hooks,
 // status reads them, and two copies of the matching logic would drift.
+// The merge that installs the hooks lives here too (merge.go), so init
+// and the client setup adapters share one implementation.
 package hooks
 
 import (
@@ -165,9 +167,37 @@ func ReadSettings(root string) (map[string]any, error) {
 		return nil, err
 	}
 
-	settings := map[string]any{}
-	if err := json.Unmarshal(data, &settings); err != nil {
+	return ParseSettings(data)
+}
+
+// ParseSettings decodes the bytes of .claude/settings.json. The setup
+// planner reads the file once under a guard and parses those same
+// bytes, so the plan and its guard always describe one file state. An
+// empty file is malformed JSON, as it always was; only a missing file
+// is an empty map, and the caller decides that.
+func ParseSettings(data []byte) (map[string]any, error) {
+	settings, err := ParseDocument(data)
+	if err != nil {
 		return nil, fmt.Errorf(".claude/settings.json: %w", err)
+	}
+
+	return settings, nil
+}
+
+// ParseDocument decodes one JSON hook document without naming a file
+// in the error, so a caller that reads another file, such as
+// .claude/settings.local.json, can name the right one. A top-level
+// null is an empty document: it holds nothing, and a nil map would
+// panic on the first merge.
+func ParseDocument(data []byte) (map[string]any, error) {
+	settings := map[string]any{}
+
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return nil, err
+	}
+
+	if settings == nil {
+		settings = map[string]any{}
 	}
 
 	return settings, nil

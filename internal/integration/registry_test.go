@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -126,11 +127,16 @@ func TestSkillDirsAreCopiedAtEveryRegistryBoundary(t *testing.T) {
 func TestAbsentCapabilitiesReportUnsupported(t *testing.T) {
 	codex, _ := Builtin().Lookup(CodexID)
 
-	// Codex declares only its skill directory so far.
-	assert.Equal(t, []Capability{CapabilitySkills}, codex.Declared())
+	// Codex declares its skill directory and its setup adapter so far.
+	// The lifecycle codecs and the invocation preset are still absent.
+	declared := []Capability{
+		CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants,
+	}
+	assert.Equal(t, declared, codex.Declared())
+	assert.False(t, codex.SetupOps.Hooks, "codex hook installation waits for its native evidence")
 
 	for _, capability := range Capabilities {
-		if capability == CapabilitySkills {
+		if slices.Contains(declared, capability) {
 			continue
 		}
 
@@ -185,6 +191,7 @@ func TestSetupOperationsAreDeclaredIndependently(t *testing.T) {
 
 func TestSetupOperationsNeedAnAdapter(t *testing.T) {
 	for _, ops := range []SetupSupport{
+		{Hooks: true},
 		{RegisterMCP: true},
 		{ApproveTools: true},
 		{RegisterMCP: true, ApproveTools: true},
@@ -284,7 +291,9 @@ func TestUnsupportedCapabilityCannotClaimSuccess(t *testing.T) {
 func TestClaudeInvocationIsPureAndReusesThePreset(t *testing.T) {
 	claude, _ := Builtin().Lookup(ClaudeID)
 	require.True(t, claude.Supports(CapabilityInvocation))
-	assert.Equal(t, []Capability{CapabilitySkills, CapabilityInvocation}, claude.Declared())
+	assert.Equal(t, []Capability{
+		CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants, CapabilityInvocation,
+	}, claude.Declared())
 
 	spec, err := claude.Invocation(t.TempDir())
 	require.NoError(t, err)

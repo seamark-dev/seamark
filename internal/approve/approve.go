@@ -263,6 +263,38 @@ func PlanClaude(settings map[string]any, server string) (*ClaudePlan, error) {
 	return p, nil
 }
 
+// MergeAllow appends the rules the plan reports missing to
+// permissions.allow, in order. Existing entries, the user's or ours,
+// stay in place. A rule the plan lists as a conflict is never appended:
+// an allow entry cannot override a deny or ask entry, so adding one
+// would only claim what is not so. A present-but-wrong-typed field is
+// an error, not an overwrite, like the hooks merge: setup never clobbers
+// the user's data. init and the Claude Code setup adapter share this
+// merge.
+func MergeAllow(settings map[string]any, plan *ClaudePlan) error {
+	perms, err := hooks.ChildMap(settings, "permissions")
+	if err != nil {
+		return err
+	}
+
+	allow, err := hooks.ChildSlice(perms, "allow")
+	if err != nil {
+		return err
+	}
+
+	if len(plan.Missing) == 0 {
+		return nil
+	}
+
+	for _, r := range plan.Missing {
+		allow = append(allow, r)
+	}
+
+	perms["allow"] = allow
+
+	return nil
+}
+
 // covering returns the entry of one permission list that covers the
 // rule: the rule itself, the server-wide rule for a tool rule, or a
 // wildcard entry the rule matches. The lists differ on wildcards. A
@@ -417,10 +449,12 @@ func KeptSuffix(conflicts []string) string {
 // are recorded on the client, never returned: status must describe a
 // broken setup, not fail on it.
 func Inspect(root string) []ClientApproval {
-	return []ClientApproval{inspectClaude(root), inspectCodex(root)}
+	return []ClientApproval{InspectClaude(root), InspectCodex(root)}
 }
 
-func inspectClaude(root string) ClientApproval {
+// InspectClaude reports the Claude Code approval configuration alone,
+// for a caller that addresses one client, such as its setup adapter.
+func InspectClaude(root string) ClientApproval {
 	c := ClientApproval{Client: ClientClaude, Path: ClaudeSettings}
 
 	// A broken .mcp.json is this record's fault to report: the server

@@ -3,7 +3,6 @@ package integration
 import (
 	"errors"
 	"fmt"
-	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -63,11 +62,8 @@ func validateClient(c Client) error {
 		return fmt.Errorf("client %q: name is empty", c.ID)
 	}
 
-	// A clean relative path leaves the repository only as ".." or with a
-	// "../" prefix, so these two checks cover every escape.
 	for _, dir := range c.SkillDirs {
-		if dir == "" || path.Clean(dir) != dir || path.IsAbs(dir) ||
-			dir == "." || dir == ".." || strings.HasPrefix(dir, "../") {
+		if !isCleanRel(dir) {
 			return fmt.Errorf("client %q: skill dir %q is not a clean repository-relative path", c.ID, dir)
 		}
 	}

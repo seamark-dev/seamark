@@ -234,7 +234,7 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 			return err
 		}
 
-		if err := mergeAllow(settings, claudePlan); err != nil {
+		if err := approve.MergeAllow(settings, claudePlan); err != nil {
 			return fmt.Errorf("%s: %w", approve.ClaudeSettings, err)
 		}
 	}
@@ -517,45 +517,6 @@ func ensureGitignore(w io.Writer, root string, printOnly bool) error {
 	return nil
 }
 
-// hookSpec is one Claude Code hook seamark installs.
-type hookSpec struct {
-	event   string
-	matcher string
-	// marker is the command's argument tail (everything after the binary
-	// path). It is matched as a suffix — with the joining space — to
-	// recognize an existing seamark hook across path changes, without
-	// clobbering an unrelated command that merely contains the same text.
-	marker string
-	// legacy lists older marker spellings of the same hook: recognized
-	// like marker but rewritten to it, so re-running init migrates an
-	// existing install instead of adding a duplicate hook beside it.
-	legacy  []string
-	status  string
-	timeout int
-}
-
-// gateMarker is the shared marker rule (see internal/hooks).
-func gateMarker(gateMode string) string { return hooks.GateMarker(gateMode) }
-
-// hookSpecs returns the hooks init installs for a gate mode. The opposite
-// mode's marker is listed as legacy, so switching modes rewrites the
-// existing gate hook in place.
-func hookSpecs(gateMode string) []hookSpec {
-	other := gateModeEnforce
-	if gateMode == gateModeEnforce {
-		other = gateModeWarn
-	}
-
-	return []hookSpec{
-		{"PreToolUse", "Bash", gateMarker(gateMode), []string{gateMarker(other)},
-			"seamark gate: classifying command", 15},
-		{"PreToolUse", "Edit|Write|MultiEdit", hooks.LessonsMarker, nil,
-			"seamark: checking review lessons", 10},
-		{"PostCompact", "", hooks.LessonsResetMarker, nil,
-			"seamark: resetting lesson delivery", 10},
-	}
-}
-
 // writeHooks persists the already-merged settings and reports what
 // happened. All parsing and validation runs earlier in runInit, before
 // any file is written — this function only serializes and narrates.
@@ -625,13 +586,13 @@ func writeHooks(w io.Writer, root string, settings map[string]any, changed, perm
 // printHookCommands lists the exact hook command lines: what runs on
 // which tool must never require opening settings.json to find out.
 func printHookCommands(w io.Writer, bin, gateMode string) {
-	for _, spec := range hookSpecs(gateMode) {
-		where := spec.event
-		if spec.matcher != "" {
-			where += " " + spec.matcher
+	for _, spec := range hooks.ClaudeSpecs(gateMode) {
+		where := spec.Event
+		if spec.Matcher != "" {
+			where += " " + spec.Matcher
 		}
 
-		fmt.Fprintf(w, "          %-30s %s %s\n", where, shellQuote(bin), spec.marker)
+		fmt.Fprintf(w, "          %-30s %s\n", where, spec.Command(bin))
 	}
 }
 
@@ -640,117 +601,9 @@ func installedGateMode(settings map[string]any) string {
 	return hooks.InstalledGateMode(settings)
 }
 
-// mergeHooks adds seamark's hooks into an existing settings
-// map, preserving every other hook and updating (never duplicating) a
-// seamark hook already present. Returns whether anything changed. It
-// errors rather than silently overwriting a present-but-wrong-typed
-// hooks/PreToolUse field — the same loud handling loadSettings gives
-// malformed JSON.
+// mergeHooks installs the Claude Code hooks for a gate mode. The merge
+// itself is shared (see internal/hooks), because the client setup
+// adapter composes the same document.
 func mergeHooks(settings map[string]any, bin, gateMode string) (changed bool, err error) {
-	hookMap, err := childMap(settings, "hooks")
-	if err != nil {
-		return false, err
-	}
-
-	for _, spec := range hookSpecs(gateMode) {
-		eventHooks, err := childSlice(hookMap, spec.event)
-		if err != nil {
-			return false, err
-		}
-
-		want := shellQuote(bin) + " " + spec.marker
-
-		found, updated := applyExisting(eventHooks, append([]string{spec.marker}, spec.legacy...), want)
-		if found {
-			changed = changed || updated
-			continue
-		}
-
-		entry := map[string]any{
-			"hooks": []any{map[string]any{
-				"type":          "command",
-				"command":       want,
-				"timeout":       spec.timeout,
-				"statusMessage": spec.status,
-			}},
-		}
-		if spec.matcher != "" {
-			entry["matcher"] = spec.matcher
-		}
-
-		eventHooks = append(eventHooks, entry)
-		hookMap[spec.event] = eventHooks
-		changed = true
-	}
-
-	return changed, nil
-}
-
-// applyExisting rewrites seamark's own hook command to want if present,
-// recognized by hooks.OwnedBySeamark, so an unrelated command that
-// merely contains or ends with the marker text is left alone. Reports
-// whether such a hook existed and whether it changed.
-func applyExisting(pre []any, markers []string, want string) (found, updated bool) {
-	forEachCommand(pre, func(h map[string]any, cmd string) {
-		if !hooks.OwnedBySeamark(cmd, markers) {
-			return
-		}
-
-		found = true
-
-		if cmd != want {
-			h["command"] = want
-			updated = true
-		}
-	})
-
-	return found, updated
-}
-
-// shellQuote single-quotes a path that a shell would otherwise split or
-// interpret; a clean path is returned as-is. Claude Code runs hook
-// commands through a shell, so a binary path with spaces must be quoted.
-func shellQuote(s string) string {
-	if !strings.ContainsAny(s, " \t\"'\\$`(){}[]*?&|;<>#~") {
-		return s
-	}
-
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// forEachCommand is the shared traversal (see internal/hooks); init's
-// callers do not need the matcher.
-func forEachCommand(pre []any, fn func(h map[string]any, cmd string)) {
-	hooks.ForEachCommand(pre, func(_ string, h map[string]any, cmd string) { fn(h, cmd) })
-}
-
-// childMap returns m[key] as a map, creating it in place if absent. A
-// present-but-wrong-typed value is an error, not a silent overwrite —
-// clobbering the user's data to install a hook is exactly what init must
-// never do.
-func childMap(m map[string]any, key string) (map[string]any, error) {
-	switch v := m[key].(type) {
-	case map[string]any:
-		return v, nil
-	case nil:
-		child := map[string]any{}
-		m[key] = child
-
-		return child, nil
-	default:
-		return nil, fmt.Errorf("%q is present but not an object; refusing to overwrite it", key)
-	}
-}
-
-// childSlice returns m[key] as a slice, nil if absent, or an error if
-// present with the wrong type (same reasoning as childMap).
-func childSlice(m map[string]any, key string) ([]any, error) {
-	switch v := m[key].(type) {
-	case []any:
-		return v, nil
-	case nil:
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("%q is present but not an array; refusing to overwrite it", key)
-	}
+	return hooks.Merge(settings, bin, hooks.ClaudeSpecs(gateMode))
 }

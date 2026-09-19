@@ -65,37 +65,6 @@ func skillsClients(targets []skills.Target) (claude, codex bool) {
 	return claude, codex
 }
 
-// mergeAllow appends the rules the plan reports missing to
-// permissions.allow, in order. Existing entries, the user's or ours,
-// stay in place. A rule the plan lists as a conflict is never appended:
-// an allow entry cannot override a deny or ask entry, so adding one
-// would only claim what is not so. A present-but-wrong-typed field is
-// an error, not an overwrite, like the hooks merge: init never clobbers
-// the user's data.
-func mergeAllow(settings map[string]any, plan *approve.ClaudePlan) error {
-	perms, err := childMap(settings, "permissions")
-	if err != nil {
-		return err
-	}
-
-	allow, err := childSlice(perms, "allow")
-	if err != nil {
-		return err
-	}
-
-	if len(plan.Missing) == 0 {
-		return nil
-	}
-
-	for _, r := range plan.Missing {
-		allow = append(allow, r)
-	}
-
-	perms["allow"] = allow
-
-	return nil
-}
-
 // printApproved narrates the Claude Code allow-rule merge in init's
 // vocabulary and lists every rule it added: what a repository
 // pre-approves must never require opening settings.json to find out.
