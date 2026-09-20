@@ -654,6 +654,41 @@ Codex must trust the repository for these settings to apply. Seamark
 preserves your existing settings and reports any conflicting restrictions.
 Your personal or organization settings may still require approval.
 
+**Set up one agent by name**
+
+`--client` selects the agents to set up, by name. It may repeat:
+
+```bash
+seamark init --client codex --skills --approve-tools --print   # preview
+seamark init --client codex --skills --approve-tools
+seamark init --client claude --client codex --skills --approve-tools
+```
+
+Each selected agent gets what seamark supports for it: its hooks and its
+MCP server registration (`.mcp.json` for Claude Code, `.codex/config.toml`
+for Codex). `--skills` and `--approve-tools` stay opt-in and apply to the
+selected agents. A registration alone approves nothing. An agent that is
+not selected is never read or written, so a broken file of another agent
+cannot stop the run, and a shared `.agents/skills` directory is never
+taken as proof that Codex is set up. A skill directory that two selected
+agents share is written once.
+
+With `--client claude`, init also looks at `.claude/settings.local.json`.
+The shared `.claude/settings.json` always gets every hook, because it is
+the file your team commits. A seamark hook that your personal file also
+runs is reported as running twice, so you can remove the personal copy.
+An init without `--client` never reads that file.
+
+What an agent does not support yet is reported in the output. Codex hook
+installation is one such case today: `--client codex` registers the
+server, installs the skills, and approves the tools, and it says that
+the lifecycle hooks were skipped. Setup never trusts a project for you;
+Codex reads `.codex/config.toml` only after you accept its trust prompt.
+
+Without `--client`, `seamark init` behaves exactly as before. With it,
+use a bare `--skills`; the valued forms (`--skills=codex` and the others)
+belong to the form without `--client`.
+
 Codex can choose the appropriate skill when you ask it to explore
 unfamiliar code, implement a change, or review your work. You can also
 name a skill directly:

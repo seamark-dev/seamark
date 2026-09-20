@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/effects"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -34,6 +36,37 @@ func commandsForEvent(t *testing.T, settings map[string]any, event string) []str
 	})
 
 	return out
+}
+
+// mergeHooks installs the Claude Code hooks for a gate mode, the merge
+// init runs through the setup adapter.
+func mergeHooks(settings map[string]any, bin, gateMode string) (bool, error) {
+	return hooks.Merge(settings, bin, hooks.ClaudeSpecs(gateMode))
+}
+
+// installedGateMode is the shared detection rule (see internal/hooks).
+func installedGateMode(settings map[string]any) string {
+	return hooks.InstalledGateMode(settings)
+}
+
+// ensureGitignore plans and applies the .gitignore document alone,
+// through the same coordinator init uses, and narrates like init.
+func ensureGitignore(w io.Writer, root string, printOnly bool) error {
+	docs := commonDocuments(gateModeWarn)
+
+	plan, err := integration.PlanSetup(integration.Builtin(), integration.SetupRequest{
+		Root: root, Common: docs[len(docs)-1:],
+	})
+	if err != nil {
+		return err
+	}
+
+	_, err = integration.ApplySetup(plan, integration.ApplyOptions{
+		Preview: printOnly,
+		Observe: func(op integration.OpResult) { narrateOp(w, op) },
+	})
+
+	return err
 }
 
 func mustMerge(t *testing.T, settings map[string]any, bin, gateMode string) bool {
@@ -412,10 +445,10 @@ func TestResolveGateMode(t *testing.T) {
 		}},
 	}}}
 
-	assert.Equal(t, gateModeWarn, resolveGateMode(map[string]any{}, ""))
-	assert.Equal(t, gateModeEnforce, resolveGateMode(map[string]any{}, gateModeEnforce))
-	assert.Equal(t, gateModeEnforce, resolveGateMode(installed, ""))
-	assert.Equal(t, gateModeWarn, resolveGateMode(installed, gateModeWarn))
+	assert.Equal(t, gateModeWarn, resolveGateMode("", ""))
+	assert.Equal(t, gateModeEnforce, resolveGateMode("", gateModeEnforce))
+	assert.Equal(t, gateModeEnforce, resolveGateMode(installedGateMode(installed), ""))
+	assert.Equal(t, gateModeWarn, resolveGateMode(installedGateMode(installed), gateModeWarn))
 }
 
 func TestRunInitShowsHookCommandsWhenKept(t *testing.T) {
@@ -786,32 +819,6 @@ func allowRules(t *testing.T, root string) []string {
 	return rules
 }
 
-func TestApprovalTargetsFollowSkillsModeOrDetectCodex(t *testing.T) {
-	root := t.TempDir()
-
-	claude, codex, err := approvalTargets(root, "")
-	require.NoError(t, err)
-	assert.True(t, claude)
-	assert.False(t, codex, "no .codex/ directory, no Codex configuration")
-
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
-	claude, codex, err = approvalTargets(root, "")
-	require.NoError(t, err)
-	assert.True(t, claude)
-	assert.True(t, codex)
-
-	for mode, want := range map[string][2]bool{
-		skills.ModeClaude: {true, false},
-		skills.ModeCodex:  {false, true},
-		skills.ModeAll:    {true, true},
-	} {
-		claude, codex, err = approvalTargets(root, mode)
-		require.NoError(t, err, mode)
-		assert.Equal(t, want, [2]bool{claude, codex}, mode)
-	}
-
-}
-
 func TestRunInitApproveToolsMergesAllowRules(t *testing.T) {
 	root := t.TempDir()
 
@@ -987,38 +994,6 @@ func TestRunInitSkillsCodexNotesMissingApproval(t *testing.T) {
 	assert.NotContains(t, later.String(), "not registered")
 }
 
-func TestApprovalTargetsUseOneRuleWithAndWithoutSkills(t *testing.T) {
-	// .codex/ without .agents/: the documented one-liner must configure
-	// Codex, whichever way the skills target was detected.
-	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
-
-	for _, mode := range []string{"", skills.ModeAuto} {
-		claude, codex, err := approvalTargets(root, mode)
-		require.NoError(t, err, mode)
-		assert.True(t, claude, mode)
-		assert.True(t, codex, mode)
-	}
-
-	// .agents/ without .codex/: skills go to Codex, approvals do not,
-	// unless --skills names Codex.
-	agents := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(agents, ".agents"), 0o755))
-
-	_, codex, err := approvalTargets(agents, skills.ModeAuto)
-	require.NoError(t, err)
-	assert.False(t, codex, "auto detection never creates .codex/")
-
-	_, codex, err = approvalTargets(agents, skills.ModeAll)
-	require.NoError(t, err)
-	assert.True(t, codex)
-
-	claude, codex, err := approvalTargets(root, skills.ModeClaude)
-	require.NoError(t, err)
-	assert.True(t, claude)
-	assert.False(t, codex, "an explicit client narrows the set even with .codex/ present")
-}
-
 func TestRunInitSkillsApproveToolsConfiguresCodexByItsDirectory(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
@@ -1185,23 +1160,6 @@ func TestRunInitSkillsCountsRulesBehindAServerWideDeny(t *testing.T) {
 	assert.Contains(t, b.String(), "keep 5 seamark rules from being approved (permissions.deny lists mcp__seamark)")
 }
 
-func TestApprovalTargetsReportAnUnreadableCodexDirectory(t *testing.T) {
-	// A .codex/ that cannot be read is not the same as no .codex/: the
-	// error surfaces before init writes anything.
-	if os.Geteuid() == 0 {
-		t.Skip("root reads every directory")
-	}
-
-	root := filepath.Join(t.TempDir(), "repo")
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
-	require.NoError(t, os.Chmod(root, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
-
-	_, _, err := approvalTargets(root, "")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, os.ErrPermission)
-}
-
 func TestRunInitSkillsCodexNotesKeptExplicitSettings(t *testing.T) {
 	// Nothing missing, nothing to register, but an inline table keeps
 	// the approvals from being written: the note must still say so, as
@@ -1245,16 +1203,9 @@ func TestRunInitRefusesASymlinkedSettingsPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, entries, "nothing may be written through the link")
 
-	// The write-time check stands on its own, for a link that appears
-	// after the plan was made.
-	root2 := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root2, ".claude"), 0o755))
-	require.NoError(t, os.Symlink(filepath.Join(outside, "settings.json"), filepath.Join(root2, ".claude", "settings.json")))
-
-	err = writeHooks(&b, root2, map[string]any{}, true, false, "/bin/seamark", gateModeWarn, "", false)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "symlink at .claude/settings.json")
-	assert.NoFileExists(t, filepath.Join(outside, "settings.json"))
+	// The write-time check for a link that appears after the plan is the
+	// setup coordinator's: see the integration package, which checks each
+	// guard again right before its write.
 }
 
 func TestReportSkillsSanitizesTheSummary(t *testing.T) {

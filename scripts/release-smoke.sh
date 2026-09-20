@@ -61,6 +61,10 @@ expect "would write"    "$BIN" init --skills --print
 # then absent, and `doctor` keeps reporting them as not configured.
 expect "would approve 8" "$BIN" init --approve-tools --print
 expect "approved 5 tools" "$BIN" init --skills=codex --approve-tools --print
+# Explicit client selection: registration without grants, and the honest
+# report that Codex hook installation is not supported yet.
+expect "registered seamark mcp)" "$BIN" init --client codex --print
+expect "hooks are not supported" "$BIN" init --client codex --print
 expect symbols          "$BIN" index
 expect orientation      "$BIN" orient
 expect helper           "$BIN" why helper

@@ -1,101 +1,92 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/approve"
-	"github.com/seamark-dev/seamark/internal/skills"
+	"github.com/seamark-dev/seamark/internal/hooks"
+	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/render"
 )
 
-// approvalTargets names the clients --approve-tools configures, by one
-// rule whether or not --skills is given. skillsMode is one of
-// skills.Modes or empty; the command validates it. Claude Code is a
-// target unless --skills=codex. Codex is a target when --skills names it (codex or
-// all), or, without an explicit client, when a .codex/ directory exists,
-// because that is where its configuration lives; --skills=claude means
-// Claude only. A bare --skills detects the skills target by .agents/ and
-// the approvals target by .codex/, each by the place its own artifact
-// lives; init notes the gap when only one exists. Before this rule,
-// --skills --approve-tools skipped a repository with .codex/ and no
-// .agents/, right after the documentation promised the one-liner would
-// configure it.
-func approvalTargets(root, skillsMode string) (claude, codex bool, err error) {
-	claude = skillsMode != skills.ModeCodex
-
-	switch skillsMode {
-	case skills.ModeClaude:
-		return claude, false, nil
-	case skills.ModeCodex, skills.ModeAll:
-		return claude, true, nil
-	}
-
-	// A missing .codex/ means no Codex configuration. Any other stat
-	// error is reported before init writes anything, because a directory
-	// that cannot be read must not be silently treated as absent.
-	info, err := os.Stat(filepath.Join(root, ".codex"))
-	if errors.Is(err, os.ErrNotExist) {
-		return claude, false, nil
-	}
-
-	if err != nil {
-		return false, false, err
-	}
-
-	return claude, info.IsDir(), nil
+// legacyNotes prints the client-dependent lines of a run without
+// --client. The run addresses the two first clients by the rules it
+// always had, so these lines name them, in the words init always used.
+type legacyNotes struct {
+	skillsRequested bool
 }
 
-// skillsClients reports which clients the resolved skills targets
-// install into, so the approvals note can name the ones this run did
-// not approve. The targets are resolved once in runInit.
-func skillsClients(targets []skills.Target) (claude, codex bool) {
-	for _, t := range targets {
-		switch t.Client {
-		case skills.ModeClaude:
-			claude = true
-		case skills.ModeCodex:
-			codex = true
+// showInfo is false: a run without --client keeps its historical output.
+func (legacyNotes) showInfo() bool { return false }
+
+// afterSetup prints the skills line, or notes what the skills install
+// left unapproved: every client the skills reached that --approve-tools
+// did not. With a bare --skills that is Codex when .agents/ exists
+// without .codex/, because the two artifacts are detected by different
+// directories.
+func (n legacyNotes) afterSetup(run initRun, setups []integration.ClientSetup) {
+	if !n.skillsRequested {
+		reportInstalledSkills(run.w, run.root)
+
+		return
+	}
+
+	for _, s := range setups {
+		if !s.Skills || s.ApproveTools {
+			continue
+		}
+
+		switch s.ClientID {
+		case integration.ClaudeID:
+			// The file as it is on disk now. The permissions in it are
+			// what the note counts, and no hook merge changes them.
+			if settings, err := hooks.ReadSettings(run.root); err == nil {
+				noteMissingClaude(run.w, run.root, settings)
+			}
+		case integration.CodexID:
+			noteMissingCodex(run.w, run.root)
 		}
 	}
-
-	return claude, codex
 }
 
-// printApproved narrates the Claude Code allow-rule merge in init's
-// vocabulary and lists every rule it added: what a repository
-// pre-approves must never require opening settings.json to find out.
-// Explicit deny or ask entries are named as kept, like the Codex line
-// does, so the user learns why a tool still prompts.
-func printApproved(w io.Writer, plan *approve.ClaudePlan, printOnly bool) {
-	kept := approve.KeptSuffix(plan.Conflicts)
+// selectedNotes prints the client-dependent lines of a run with
+// --client. It names no client: every line comes from the registry and
+// from each adapter's own inspection.
+type selectedNotes struct {
+	reg             *integration.Registry
+	skillsRequested bool
+}
 
-	if len(plan.Missing) == 0 && kept != "" {
-		// Nothing to add is not everything approved: the kept entries are
-		// exactly the rules that still prompt.
-		fmt.Fprintf(w, "  kept    .claude/settings.json permissions (nothing to add%s)\n", kept)
+// showInfo is true: an explicit selection reports partial support.
+func (selectedNotes) showInfo() bool { return true }
 
-		return
-	}
-
-	if len(plan.Missing) == 0 {
-		fmt.Fprintf(w, "  kept    .claude/settings.json permissions (seamark tools and skills already approved)\n")
+// afterSetup prints the skills line for the selected destinations, or
+// notes each selected client whose tools the run left unapproved.
+func (n selectedNotes) afterSetup(run initRun, setups []integration.ClientSetup) {
+	if !n.skillsRequested {
+		reportSelectedSkills(run.w, run.root, n.reg, setups)
 
 		return
 	}
 
-	verb := "approved"
-	if printOnly {
-		verb = "would approve"
-	}
+	for _, s := range setups {
+		client, ok := n.reg.Lookup(s.ClientID)
+		if !ok || s.ApproveTools || !client.SetupOps.ApproveTools {
+			continue
+		}
 
-	fmt.Fprintf(w, "  %s %d Claude Code allow rules in .claude/settings.json (seamark MCP tools + skills%s)\n", verb, len(plan.Missing), kept)
+		for _, entry := range client.Setup.Inspect(run.root).Capabilities {
+			if entry.Capability != integration.CapabilityToolGrants || entry.State == integration.StateCurrent {
+				continue
+			}
 
-	for _, r := range plan.Missing {
-		fmt.Fprintf(w, "          %s\n", r)
+			// The detail already names the client ("claude 0/8 rules").
+			fmt.Fprintf(run.w, "  note    %s; the client can prompt for the seamark tools —\n"+
+				"          `seamark init --client %s --approve-tools` adds the approvals (additive; --print previews)\n",
+				render.Sanitize(entry.Detail), client.ID)
+		}
 	}
 }
 
@@ -148,19 +139,6 @@ func noteMissingClaude(w io.Writer, root string, settings map[string]any) {
 			"          Claude Code prompts for those — edit the file by hand if they should run without prompts\n",
 			plural(plan.Conflicting(), "seamark rule"), kept)
 	}
-}
-
-// planClaude reads the server name .mcp.json registers and classifies
-// the rules against the settings. The name decides how every tool rule
-// is spelled, so init and the note use the same lookup as doctor and
-// status.
-func planClaude(root string, settings map[string]any) (*approve.ClaudePlan, error) {
-	reg, err := approve.ClaudeRegistration(root)
-	if err != nil {
-		return nil, err
-	}
-
-	return approve.PlanClaude(settings, reg.ServerName())
 }
 
 // noteMissingCodex prints the note for a Codex skills install without

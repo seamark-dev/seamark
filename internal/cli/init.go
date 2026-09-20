@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,10 +10,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -29,8 +29,9 @@ func newInitCmd(opts *options) *cobra.Command {
 	var (
 		printOnly    bool
 		gateMode     string
-		skillsMode   string
+		skillsOpt    skillsFlag
 		approveTools bool
+		clients      []string
 	)
 
 	cmd := &cobra.Command{
@@ -87,6 +88,20 @@ Claude Code only. One setup command:
 
   seamark init --skills --approve-tools
 
+--client selects the agents to set up, by name, and may repeat:
+
+  seamark init --client codex --skills --approve-tools
+  seamark init --client claude --client codex
+
+Each selected client gets what seamark supports for it: its hooks and
+its MCP server registration. --skills and --approve-tools stay opt-in
+and apply to the selected clients; a registration alone approves
+nothing. A client that is not selected is never read or written, so a
+broken file of another agent cannot stop the run. What a client does
+not support yet is reported, not skipped silently. Without --client,
+init behaves exactly as before. --client takes a bare --skills only:
+--skills=codex and the other values belong to the form without --client.
+
 Use --print to preview every change without writing anything.`,
 		// init takes no positional arguments. The one likely mistake,
 		// "--skills codex", parses as the bare flag plus a stray word
@@ -105,9 +120,16 @@ Use --print to preview every change without writing anything.`,
 					gateModeWarn, gateModeEnforce, gateMode)
 			}
 
-			if skillsMode != "" && !slices.Contains(skills.Modes, skillsMode) {
+			if skillsOpt.mode != "" && !slices.Contains(skills.Modes, skillsOpt.mode) {
 				return fmt.Errorf("init: --skills must be one of %s, got %q",
-					strings.Join(skills.Modes, ", "), skillsMode)
+					strings.Join(skills.Modes, ", "), skillsOpt.mode)
+			}
+
+			// Two selection rules in one run have no single meaning, so the
+			// combination is refused with the unambiguous spelling.
+			if len(clients) > 0 && skillsOpt.mode != "" {
+				return fmt.Errorf("init: --skills=%s cannot be combined with --client; %s",
+					skillsOpt.mode, clientSkillsReplacement(skillsOpt.mode))
 			}
 
 			root, err := index.ResolveRoot(opts.workspace)
@@ -115,9 +137,16 @@ Use --print to preview every change without writing anything.`,
 				return err
 			}
 
-			bin := seamarkPath()
+			run := initRun{
+				w: cmd.OutOrStdout(), root: root, bin: seamarkPath(),
+				gateMode: gateMode, printOnly: printOnly, approveTools: approveTools,
+			}
 
-			return runInit(cmd.OutOrStdout(), root, bin, gateMode, printOnly, skillsMode, approveTools)
+			if len(clients) > 0 {
+				return runInitClients(run, clients, skillsOpt.requested)
+			}
+
+			return runInit(run.w, run.root, run.bin, gateMode, printOnly, skillsOpt.legacyMode(), approveTools)
 		},
 	}
 
@@ -125,17 +154,84 @@ Use --print to preview every change without writing anything.`,
 	cmd.Flags().StringVar(&gateMode, "gate-mode", "",
 		"gate hook mode: warn (report, never block) or enforce (blocking verdicts exit 2); "+
 			"omitted keeps the installed mode (warn on first init)")
-	cmd.Flags().StringVar(&skillsMode, "skills", "",
+	cmd.Flags().Var(&skillsOpt, "skills",
 		"install the seamark agent skills: auto (.claude/skills, plus .agents/skills when .agents/ exists), "+
-			"claude, codex, or all; a bare --skills means auto, other values need the = form (--skills=codex)")
-	// A bare --skills means auto; pflag then needs the = form for explicit
+			"claude, codex, or all; a bare --skills means auto, other values need the = form (--skills=codex); "+
+			"with --client, a bare --skills installs for the selected clients")
+	// A bare --skills is allowed; pflag then needs the = form for explicit
 	// values, which the help text and README both state.
-	cmd.Flags().Lookup("skills").NoOptDefVal = skills.ModeAuto
+	cmd.Flags().Lookup("skills").NoOptDefVal = bareSkills
 	cmd.Flags().BoolVar(&approveTools, "approve-tools", false,
 		"let the seamark MCP tools run without prompts: Claude Code allow rules in .claude/settings.json, "+
 			"Codex per-tool approvals in .codex/config.toml (additive; never removes a setting)")
+	cmd.Flags().StringArrayVar(&clients, "client", nil,
+		"set up this agent only ("+strings.Join(integration.Builtin().IDs(), ", ")+"); repeat the flag for several. "+
+			"Omitted keeps the detection init always used")
 
 	return cmd
+}
+
+// bareSkills is the value pflag hands to the flag for a bare --skills.
+const bareSkills = "true"
+
+// skillsFlag is the value of --skills. It records whether the flag was
+// given bare or with an explicit mode. A plain string flag cannot: pflag
+// sets a bare flag to its no-option default, so a bare --skills and
+// --skills=auto would both read "auto". The difference matters with
+// --client, which accepts only the bare form.
+type skillsFlag struct {
+	// requested is true when the flag was given in any form.
+	requested bool
+	// mode is the explicit value; empty for a bare flag.
+	mode string
+}
+
+// Set records one occurrence of the flag. The flag reads like a boolean
+// with optional modes: a bare --skills and --skills=true both ask for
+// the skills with no mode named. An empty value and "false" ask for
+// nothing, as an empty value always did, so a script that passes an
+// unset variable installs nothing.
+func (f *skillsFlag) Set(value string) error {
+	switch value {
+	case bareSkills:
+		f.requested, f.mode = true, ""
+	case "", "false":
+		f.requested, f.mode = false, ""
+	default:
+		f.requested, f.mode = true, value
+	}
+
+	return nil
+}
+
+// String renders the value for pflag.
+func (f *skillsFlag) String() string { return f.mode }
+
+// Type is "bool" so the help prints the flag without a value
+// placeholder: the bare form is the common one, and the usage text
+// names the = form for the values.
+func (*skillsFlag) Type() string { return "bool" }
+
+// legacyMode returns the install mode for a run without --client: the
+// explicit mode, auto for a bare flag, or empty when not requested.
+func (f *skillsFlag) legacyMode() string {
+	if f.requested && f.mode == "" {
+		return skills.ModeAuto
+	}
+
+	return f.mode
+}
+
+// clientSkillsReplacement names the --client spelling of a --skills mode.
+func clientSkillsReplacement(mode string) string {
+	switch mode {
+	case skills.ModeClaude, skills.ModeCodex:
+		return fmt.Sprintf("use --client %s --skills", mode)
+	case skills.ModeAll:
+		return "use --client claude --client codex --skills"
+	default:
+		return "a bare --skills installs the skills for the selected clients"
+	}
 }
 
 // seamarkPath resolves the absolute path of the running binary, so the
@@ -181,94 +277,187 @@ func stableInstallPath(path string) string {
 	return opt
 }
 
-// runInit writes the scaffolds and the hooks, then the opt-in extras.
-// skillsMode is one of skills.Modes, or empty for "not requested";
-// approveTools merges the Claude Code allow rules and, when Codex is a
-// target, appends the Codex approvals.
+// initRun carries what every init form shares.
+type initRun struct {
+	w         io.Writer
+	root, bin string
+	// gateMode is the --gate-mode flag; empty keeps the installed mode.
+	gateMode     string
+	printOnly    bool
+	approveTools bool
+}
+
+// runInit is an init run without --client. skillsMode is one of
+// skills.Modes, or empty for "not requested". The run is translated
+// into the per-client intent it always had and then takes the same path
+// as an explicit selection, so there is one implementation of setup.
 func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode string, approveTools bool) error {
-	// 0. Load, validate and merge .claude/settings.json BEFORE touching
-	// anything: a malformed or wrong-shaped file must abort init before
-	// the scaffold writes, never halfway through them.
-	if err := refuseSettingsLink(root); err != nil {
-		return err
-	}
-
-	settings, err := hooks.ReadSettings(root)
-	if err != nil {
-		return fmt.Errorf("%w (fix or move it, then re-run)", err)
-	}
-
-	gateMode = resolveGateMode(settings, gateMode)
-
-	// Remember the pre-merge gate mode: silently dropping enforcement on
-	// a re-init would be as bad as silently installing it, so a mode
-	// change on an existing hook is reported loudly by writeHooks.
-	previous := installedGateMode(settings)
-
-	hooksChanged, err := mergeHooks(settings, bin, gateMode)
-	if err != nil {
-		return fmt.Errorf("%s: %w", approve.ClaudeSettings, err)
-	}
-
-	// The clients the approvals address, read once: --approve-tools
-	// configures them, and --skills without it notes what they lack.
-	claude, codex, err := approvalTargets(root, skillsMode)
+	setups, err := integration.LegacySetups(root, skillsMode, approveTools, gateMode)
 	if err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
 
-	// --approve-tools merges into the same in-memory settings, before any
-	// write, for the same reason: a wrong-typed permissions field must
-	// abort here, and the file is written once, below, with the hooks.
-	// The Codex plan runs here too, so malformed TOML or a linked path
-	// aborts before the first scaffold lands.
-	var (
-		claudePlan *approve.ClaudePlan
-		codexPlan  *approve.CodexPlan
-	)
+	run := initRun{w: w, root: root, bin: bin, gateMode: gateMode, printOnly: printOnly, approveTools: approveTools}
 
-	approveClaude, approveCodex := approveTools && claude, approveTools && codex
+	return applyInit(run, integration.Builtin(), setups, legacyNotes{skillsRequested: skillsMode != ""})
+}
 
-	if approveClaude {
-		if claudePlan, err = planClaude(root, settings); err != nil {
-			return err
-		}
+// runInitClients is an init run with --client.
+func runInitClients(run initRun, clients []string, installSkills bool) error {
+	reg := integration.Builtin()
 
-		if err := approve.MergeAllow(settings, claudePlan); err != nil {
-			return fmt.Errorf("%s: %w", approve.ClaudeSettings, err)
-		}
+	setups, err := integration.ExplicitSetups(reg, clients, installSkills, run.approveTools, run.gateMode)
+	if err != nil {
+		return fmt.Errorf("init: %w", err)
 	}
 
-	if approveCodex {
-		if codexPlan, err = approve.PlanCodex(root); err != nil {
-			return err
-		}
+	return applyInit(run, reg, setups, selectedNotes{reg: reg, skillsRequested: installSkills})
+}
+
+// initNotes prints the lines that depend on how the clients were
+// selected. The setup itself does not: both forms plan and apply the
+// same way.
+type initNotes interface {
+	// afterSetup prints the skills line or the missing-approval notes.
+	afterSetup(run initRun, setups []integration.ClientSetup)
+	// showInfo reports whether informational findings are printed.
+	showInfo() bool
+}
+
+// applyInit plans the whole run, applies it, and narrates. Everything
+// is read and validated before the first write: a malformed or
+// wrong-shaped file of a selected client aborts init with the tree
+// untouched, never halfway through the scaffolds.
+func applyInit(run initRun, reg *integration.Registry, setups []integration.ClientSetup, notes initNotes) error {
+	w := run.w
+
+	// The gate mode of the run: the flag, else what is installed, else
+	// warn. The policy scaffold and the gate line both need it.
+	hookClients := integration.HookClients(reg, setups)
+	gateMode := resolveGateMode(integration.InstalledGateMode(reg, run.root, hookClients), run.gateMode)
+
+	plan, err := integration.PlanSetup(reg, integration.SetupRequest{
+		Root: run.root, Binary: run.bin, Clients: setups, Common: commonDocuments(gateMode),
+	})
+	if err != nil {
+		return err
 	}
 
-	// Resolve the skills targets once and plan the install here too, so
-	// a client directory that cannot be read aborts before the first
-	// scaffold lands.
-	var (
-		skillsTargets []skills.Target
-		skillsPlan    []skills.Entry
-	)
-
-	if skillsMode != "" {
-		if skillsTargets, err = skills.Targets(root, skillsMode); err != nil {
-			return fmt.Errorf("init: %w", err)
-		}
-
-		if skillsPlan, err = skills.Plan(root, skillsTargets); err != nil {
-			return err
-		}
+	_, err = integration.ApplySetup(plan, integration.ApplyOptions{
+		Preview:   run.printOnly,
+		Observe:   func(op integration.OpResult) { narrateOp(w, op) },
+		SkillsLog: w,
+	})
+	if err != nil {
+		return err
 	}
 
-	verb := "wrote"
-	if printOnly {
+	notes.afterSetup(run, setups)
+	printFindings(w, plan.Findings, notes.showInfo())
+
+	if len(hookClients) == 0 {
+		// The flag configures gate hooks. Without one it reaches only the
+		// policy scaffold, and the user must learn that here.
+		if run.gateMode != "" {
+			fmt.Fprintf(w, "  note    --gate-mode %s configures no hook in this run: no selected client has a gate hook yet;\n"+
+				"          only a new .seamark/policy.yaml carries the mode\n", run.gateMode)
+		}
+
+		printNoGateHook(w, run.root, gateMode)
+	} else {
+		printGateLine(w, run.root, gateMode, plan.GateHooks)
+	}
+
+	fmt.Fprintf(w, "\nnext: `seamark index` to build the graph, "+
+		"`seamark index --reviews` for reviews + fixes, "+
+		"or `seamark index --fixes-only` for local fixes\n")
+
+	if run.printOnly {
+		fmt.Fprintf(w, "(nothing was written — --print)\n")
+	}
+
+	return nil
+}
+
+// narrateOp prints one finished operation. A planner's own narrator
+// wins, because only the planner knows what it composed. The skill
+// installer prints its own lines through the skills log, so a skill
+// directory is narrated here only when it has no such line: after a
+// failure.
+func narrateOp(w io.Writer, op integration.OpResult) {
+	switch op.Status {
+	case integration.OpFailed:
+		fmt.Fprintf(w, "  failed  %s (%s)\n", op.Path, render.Sanitize(fmt.Sprint(op.Err)))
+
+		return
+	case integration.OpNotAttempted:
+		fmt.Fprintf(w, "  skipped %s (not attempted: an earlier write failed)\n", op.Path)
+
+		return
+	}
+
+	if op.Kind == integration.OpSkill {
+		return
+	}
+
+	if op.Narrate != nil {
+		op.Narrate(w, op.Status)
+
+		return
+	}
+
+	verb := "kept"
+
+	switch {
+	case op.Status == integration.OpPlanned && op.Created:
 		verb = "would write"
+	case op.Status == integration.OpPlanned:
+		verb = "would update"
+	case op.Status == integration.OpApplied && op.Created:
+		verb = "wrote"
+	case op.Status == integration.OpApplied:
+		verb = "updated"
 	}
 
-	// 1. Config scaffolds — never clobber an existing file.
+	if op.Detail == "" {
+		fmt.Fprintf(w, "  %-7s %s\n", verb, op.Path)
+
+		return
+	}
+
+	fmt.Fprintf(w, "  %-7s %s (%s)\n", verb, op.Path, render.Sanitize(op.Detail))
+}
+
+// printFindings prints what the plan found and no narrator line shows.
+// A warning is always printed. An informational finding is printed for
+// an explicit selection only: a run without --client keeps the output
+// it always had.
+func printFindings(w io.Writer, findings []integration.Finding, showInfo bool) {
+	for _, f := range findings {
+		if f.Level == integration.FindingInfo && !showInfo {
+			continue
+		}
+
+		reason := render.Sanitize(f.Reason)
+		if f.Path != "" {
+			reason = f.Path + ": " + reason
+		}
+
+		fmt.Fprintf(w, "  note    %s\n", reason)
+
+		if f.Action != "" {
+			fmt.Fprintf(w, "          %s\n", render.Sanitize(f.Action))
+		}
+	}
+}
+
+// commonDocuments returns the client-independent files of an init run:
+// the three .seamark scaffolds and the .gitignore carve-outs. The setup
+// coordinator guards and writes them with the client documents, so one
+// preflight covers every write.
+func commonDocuments(gateMode string) []integration.Document {
+	var docs []integration.Document
+
 	for _, f := range []struct {
 		rel, body string
 	}{
@@ -276,81 +465,86 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 		{".seamark/lessons.yaml", starterLessons},
 		{".seamark/config.yaml", starterConfig},
 	} {
-		path := filepath.Join(root, filepath.FromSlash(f.rel))
-		if _, err := os.Stat(path); err == nil {
-			fmt.Fprintf(w, "  kept    %s (already present)\n", f.rel)
-			continue
-		}
+		docs = append(docs, integration.Document{
+			Path:       f.rel,
+			CreateOnly: true,
+			Detail:     "starter",
+			KeptDetail: "already present",
+			// A scaffold is a starter. An existing file is never clobbered.
+			Compose: func(existing []byte, exists bool) ([]byte, error) {
+				if exists {
+					return existing, nil
+				}
 
-		if !printOnly {
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				return err
+				return []byte(f.body), nil
+			},
+			Narrate: func(w io.Writer, status integration.OpStatus) {
+				switch status {
+				case integration.OpKept:
+					fmt.Fprintf(w, "  kept    %s (already present)\n", f.rel)
+				case integration.OpPlanned:
+					fmt.Fprintf(w, "  would write  %s\n", f.rel)
+				default:
+					fmt.Fprintf(w, "  wrote  %s\n", f.rel)
+				}
+			},
+		})
+	}
+
+	return append(docs, integration.Document{
+		Path:       ".gitignore",
+		Detail:     "seamark carve-outs",
+		KeptDetail: "seamark carve-outs already present",
+		Compose:    composeGitignore,
+		Narrate: func(w io.Writer, status integration.OpStatus) {
+			switch status {
+			case integration.OpKept:
+				fmt.Fprintf(w, "  kept    .gitignore (seamark carve-outs already present)\n")
+			case integration.OpPlanned:
+				fmt.Fprintf(w, "  would update .gitignore (seamark carve-outs)\n")
+			default:
+				fmt.Fprintf(w, "  updated .gitignore (seamark carve-outs)\n")
 			}
+		},
+	})
+}
 
-			if err := os.WriteFile(path, []byte(f.body), 0o644); err != nil {
-				return err
-			}
-		}
-
-		fmt.Fprintf(w, "  %s  %s\n", verb, f.rel)
-	}
-
-	// 2. .gitignore carve-outs.
-	if err := ensureGitignore(w, root, printOnly); err != nil {
-		return err
-	}
-
-	// 3. Claude Code hooks — validated and merged above, write-only here.
-	// The allow rules ride in the same write, so the file lands once.
-	permissionsChanged := approveClaude && len(claudePlan.Missing) > 0
-
-	if err := writeHooks(w, root, settings, hooksChanged, permissionsChanged, bin, gateMode, previous, printOnly); err != nil {
-		return err
-	}
-
-	if approveClaude {
-		printApproved(w, claudePlan, printOnly)
-	}
-
-	// 3a. Codex approvals: append-only, planned above.
-	if approveCodex {
-		if err := approve.ApplyCodex(w, root, codexPlan, printOnly); err != nil {
-			return err
-		}
-	}
-
-	// 3b. Agent skills: opt-in, planned above, write-only here. Without
-	// the flag the line says what is installed, or how to install.
-	if skillsMode == "" {
-		reportInstalledSkills(w, root)
-	} else {
-		if err := skills.Apply(w, root, skillsPlan, printOnly); err != nil {
-			return err
-		}
-
-		// Note what this run left unapproved: every client the skills
-		// reached that --approve-tools did not. With a bare --skills that
-		// is Codex when .agents/ exists without .codex/, because the two
-		// artifacts are detected by different directories.
-		skillsClaude, skillsCodex := skillsClients(skillsTargets)
-
-		if skillsClaude && !approveClaude {
-			noteMissingClaude(w, root, settings)
-		}
-
-		if skillsCodex && !approveCodex {
-			noteMissingCodex(w, root)
-		}
-	}
-
-	// 4. Report the EFFECTIVE blocking behaviour, derived from the hook
-	// AND the policy file actually on disk — not from the flag alone: a
-	// kept policy.yaml can carry a different mode than the hook, and
-	// claiming "nothing blocks" while a kept `mode: enforce` still blocks
-	// would repeat the exact trust bug this command exists to prevent.
+// printGateLine reports the EFFECTIVE blocking behaviour, derived from
+// the hook AND the policy file actually on disk — not from the flag
+// alone: a kept policy.yaml can carry a different mode than the hook,
+// and claiming "nothing blocks" while a kept `mode: enforce` still
+// blocks would repeat the exact trust bug this command exists to
+// prevent.
+//
+// The same rule covers a gate hook in another source, such as the
+// user's local settings file. Setup leaves that hook as it is, so it
+// still runs: when it enforces, the run blocks whatever the mode of the
+// hook setup manages.
+func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.GateHook) {
 	policyMode, policyErr := policyFileMode(root, gateMode)
 
+	var enforcing []string
+
+	for _, hook := range gateHooks {
+		if !hook.Managed && hook.Mode == gateModeEnforce && !slices.Contains(enforcing, hook.Path) {
+			enforcing = append(enforcing, hook.Path)
+		}
+	}
+
 	switch {
+	case gateMode != gateModeEnforce && len(enforcing) > 0 && policyErr != nil:
+		fmt.Fprintf(w, "  gate    enforce — %s runs its own gate hook with --enforce, and .seamark/policy.yaml\n"+
+			"          failed to load (%v); that hook fails closed: EVERY hooked command blocks until the\n"+
+			"          policy is fixed. The hook setup manages is in warn mode\n", strings.Join(enforcing, ", "), policyErr)
+	case gateMode != gateModeEnforce && len(enforcing) > 0:
+		fmt.Fprintf(w, "  gate    enforce — %s runs its own gate hook with --enforce: deny/require_approval\n"+
+			"          verdicts exit 2 and block, although the hook setup manages is in warn mode. Setup never\n"+
+			"          edits that file; remove its gate hook to stop blocking\n", strings.Join(enforcing, ", "))
+
+		if policyMode == gateModeEnforce {
+			fmt.Fprintf(w, "          note: the kept .seamark/policy.yaml also sets mode: enforce, so the managed hook blocks\n"+
+				"          too; both must change to stop blocking\n")
+		}
 	case policyErr != nil && gateMode == gateModeEnforce:
 		fmt.Fprintf(w, "  gate    enforce — but .seamark/policy.yaml failed to load (%v);\n"+
 			"          the hook fails closed: EVERY hooked command blocks until the policy is fixed\n", policyErr)
@@ -371,45 +565,34 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 	default:
 		fmt.Fprintf(w, "  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n")
 	}
-
-	fmt.Fprintf(w, "\nnext: `seamark index` to build the graph, "+
-		"`seamark index --reviews` for reviews + fixes, "+
-		"or `seamark index --fixes-only` for local fixes\n")
-
-	if printOnly {
-		fmt.Fprintf(w, "(nothing was written — --print)\n")
-	}
-
-	return nil
 }
 
-// refuseSettingsLink rejects a symbolic link at .claude or at
-// .claude/settings.json, the same rule the skills and Codex writers
-// apply: a link committed in a cloned repository must never redirect a
-// read or a write outside the tree.
-func refuseSettingsLink(root string) error {
-	link, err := skills.SymlinkIn(root, approve.ClaudeSettings)
+// printNoGateHook is the gate line of a run that installs no gate hook,
+// because no selected client supports one yet. The line must not
+// describe a hook that does not exist; the policy file still governs the
+// plain commands.
+func printNoGateHook(w io.Writer, root, gateMode string) {
+	policyMode, err := policyFileMode(root, gateMode)
 	if err != nil {
-		return err
+		fmt.Fprintf(w, "  gate    no gate hook for the selected clients; .seamark/policy.yaml failed to load (%v)\n", err)
+
+		return
 	}
 
-	if link != "" {
-		return fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", approve.ClaudeSettings, link)
-	}
-
-	return nil
+	fmt.Fprintf(w, "  gate    no gate hook for the selected clients — .seamark/policy.yaml (mode: %s) governs\n"+
+		"          plain `seamark gate` and `seamark check` runs\n", policyMode)
 }
 
-// resolveGateMode turns the --gate-mode flag into the mode to install.
+// resolveGateMode turns the --gate-mode flag into the mode of the run.
 // An empty flag keeps what a previous init installed (warn on the first
 // run): enforcement must never be added — or removed — implicitly.
-func resolveGateMode(settings map[string]any, requested string) string {
+func resolveGateMode(installed, requested string) string {
 	if requested != "" {
 		return requested
 	}
 
-	if mode := installedGateMode(settings); mode != "" {
-		return mode
+	if installed != "" {
+		return installed
 	}
 
 	return gateModeWarn
@@ -459,16 +642,14 @@ func carveoutLines() []string {
 	return lines
 }
 
-func ensureGitignore(w io.Writer, root string, printOnly bool) error {
-	path := filepath.Join(root, ".gitignore")
-
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
+// composeGitignore returns .gitignore with the seamark carve-outs. A
+// file that holds them all returns unchanged. No carve-outs at all gets
+// the commented block; an older block grows just its missing lines.
+// Appending at the end keeps every `!` re-include after `.seamark/*`,
+// the order gitignore precedence needs.
+func composeGitignore(existing []byte, _ bool) ([]byte, error) {
 	present := map[string]bool{}
-	for _, ln := range strings.Split(string(data), "\n") {
+	for _, ln := range strings.Split(string(existing), "\n") {
 		present[strings.TrimSpace(ln)] = true
 	}
 
@@ -483,127 +664,13 @@ func ensureGitignore(w io.Writer, root string, printOnly bool) error {
 	}
 
 	if len(missing) == 0 {
-		fmt.Fprintf(w, "  kept    .gitignore (seamark carve-outs already present)\n")
-		return nil
+		return existing, nil
 	}
 
-	// No carve-outs at all gets the commented block; an older block grows
-	// just its missing lines. Appending at the end keeps every `!`
-	// re-include after `.seamark/*`, the order gitignore precedence needs.
 	block := gitignoreBlock
 	if len(missing) < len(lines) {
 		block = "\n" + strings.Join(missing, "\n") + "\n"
 	}
 
-	verb := "updated"
-	if printOnly {
-		verb = "would update"
-	}
-
-	if !printOnly {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = f.Close() }()
-
-		if _, err := f.WriteString(block); err != nil {
-			return err
-		}
-	}
-
-	fmt.Fprintf(w, "  %s .gitignore (seamark carve-outs)\n", verb)
-
-	return nil
-}
-
-// writeHooks persists the already-merged settings and reports what
-// happened. All parsing and validation runs earlier in runInit, before
-// any file is written — this function only serializes and narrates.
-// permissionsChanged persists the file even when no hook changed,
-// because the allow-rule merge into the same settings did; the line then
-// says the file was updated for its permissions, so no line calls a
-// rewritten file kept.
-func writeHooks(w io.Writer, root string, settings map[string]any, changed, permissionsChanged bool,
-	bin, gateMode, previous string, printOnly bool) error {
-	if (changed || permissionsChanged) && !printOnly {
-		// Checked again right before the write: the tree may have changed
-		// since the load, and a link must never redirect the write.
-		if err := refuseSettingsLink(root); err != nil {
-			return err
-		}
-
-		path := filepath.Join(root, filepath.FromSlash(approve.ClaudeSettings))
-
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
-		}
-
-		out, err := json.MarshalIndent(settings, "", "  ")
-		if err != nil {
-			return err
-		}
-
-		if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
-			return err
-		}
-	}
-
-	if !changed && !permissionsChanged {
-		fmt.Fprintf(w, "  kept    .claude/settings.json (seamark hooks already wired)\n")
-	} else {
-		verb, reason := "updated", "gate + lessons + context reset hooks"
-
-		if printOnly {
-			verb = "would update"
-		}
-
-		if !changed {
-			reason = "permissions; seamark hooks already wired"
-		}
-
-		fmt.Fprintf(w, "  %s .claude/settings.json (%s)\n", verb, reason)
-	}
-
-	printHookCommands(w, bin, gateMode)
-
-	// The note states only what changed — the hook flag; whether anything
-	// still blocks is the effective-mode line's job (a kept enforce
-	// policy blocks regardless of the flag).
-	if previous == gateModeEnforce && gateMode == gateModeWarn {
-		removed := "removed"
-		if printOnly {
-			removed = "would remove"
-		}
-
-		fmt.Fprintf(w, "  note    %s --enforce from the gate hook: the hook follows .seamark/policy.yaml\n"+
-			"          instead — re-run with --gate-mode enforce to restore the baked-in flag\n", removed)
-	}
-
-	return nil
-}
-
-// printHookCommands lists the exact hook command lines: what runs on
-// which tool must never require opening settings.json to find out.
-func printHookCommands(w io.Writer, bin, gateMode string) {
-	for _, spec := range hooks.ClaudeSpecs(gateMode) {
-		where := spec.Event
-		if spec.Matcher != "" {
-			where += " " + spec.Matcher
-		}
-
-		fmt.Fprintf(w, "          %-30s %s\n", where, spec.Command(bin))
-	}
-}
-
-// installedGateMode is the shared detection rule (see internal/hooks).
-func installedGateMode(settings map[string]any) string {
-	return hooks.InstalledGateMode(settings)
-}
-
-// mergeHooks installs the Claude Code hooks for a gate mode. The merge
-// itself is shared (see internal/hooks), because the client setup
-// adapter composes the same document.
-func mergeHooks(settings map[string]any, bin, gateMode string) (changed bool, err error) {
-	return hooks.Merge(settings, bin, hooks.ClaudeSpecs(gateMode))
+	return append(slices.Clone(existing), block...), nil
 }

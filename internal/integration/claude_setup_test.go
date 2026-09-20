@@ -1,7 +1,9 @@
 package integration
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -12,11 +14,12 @@ import (
 	"github.com/seamark-dev/seamark/internal/hooks"
 )
 
-// planClaude runs the Claude Code adapter alone.
+// planClaude runs the Claude Code adapter alone, with the intent of an
+// explicit selection: the other hook sources are checked.
 func planClaude(t *testing.T, root string, req ClientSetup) ClientPlan {
 	t.Helper()
 
-	req.ClientID = ClaudeID
+	req.ClientID, req.CheckHookSources = ClaudeID, true
 
 	plan, err := claudeSetup{}.Plan(root, testBinary, req)
 	require.NoError(t, err)
@@ -41,6 +44,47 @@ func writeFor(t *testing.T, plan ClientPlan, rel string) map[string]any {
 	require.Failf(t, "no write", "the plan does not write %s", rel)
 
 	return nil
+}
+
+// narrated runs the narrator of one planned document and returns its
+// lines, the way init prints them after the write.
+func narrated(t *testing.T, plan ClientPlan, rel string, status OpStatus) string {
+	t.Helper()
+
+	var out bytes.Buffer
+
+	for _, w := range plan.Writes {
+		if w.Path == rel {
+			require.NotNil(t, w.Narrate, "%s has no narrator", rel)
+			w.Narrate(&out, status)
+
+			return out.String()
+		}
+	}
+
+	for _, k := range plan.Kept {
+		if k.Path == rel {
+			require.NotNil(t, k.Narrate, "%s has no narrator", rel)
+			k.Narrate(&out, OpKept)
+
+			return out.String()
+		}
+	}
+
+	require.Failf(t, "not planned", "the plan neither writes nor keeps %s", rel)
+
+	return ""
+}
+
+// keptDetails maps each kept document to its detail.
+func keptDetails(plan ClientPlan) map[string]string {
+	out := map[string]string{}
+
+	for _, k := range plan.Kept {
+		out[k.Path] = k.Detail
+	}
+
+	return out
 }
 
 func findingReasons(plan ClientPlan, level FindingLevel) []string {
@@ -103,7 +147,8 @@ func TestClaudeHooksAndGrantsShareOneWrite(t *testing.T) {
 
 	// The three hooks are present, in warn mode on a first install.
 	for _, spec := range hooks.ClaudeSpecs(hooks.ModeWarn) {
-		assert.True(t, hooks.Installed(settings, spec), spec.Marker)
+		covered, _ := hooks.Covered(settings, spec, hooks.ClaudeMatcher)
+		assert.Equal(t, spec.Tools(), covered, spec.Marker)
 	}
 
 	assert.Equal(t, hooks.ModeWarn, hooks.InstalledGateMode(settings))
@@ -114,9 +159,20 @@ func TestClaudeHooksAndGrantsShareOneWrite(t *testing.T) {
 	assert.True(t, allow["mcp__seamark__orient"])
 	assert.False(t, allow["mcp__seamark__expand"], "an allow rule cannot override a deny entry")
 
-	warnings := findingReasons(plan, FindingWarning)
-	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "permissions.deny lists mcp__seamark__expand")
+	// The kept entry is named on the allow-rule line, in init's words,
+	// so it needs no separate finding.
+	assert.Empty(t, findingReasons(plan, FindingWarning))
+
+	lines := narrated(t, plan, approve.ClaudeSettings, OpApplied)
+	assert.Contains(t, lines, "  updated .claude/settings.json (gate + lessons + context reset hooks)\n")
+	assert.Contains(t, lines, "          PreToolUse Bash                "+testBinary+" gate --hook\n")
+	assert.Contains(t, lines, "  approved 7 Claude Code allow rules in .claude/settings.json "+
+		"(seamark MCP tools + skills; kept explicit settings: permissions.deny lists mcp__seamark__expand)\n")
+	assert.Contains(t, lines, "          mcp__seamark__orient\n")
+
+	preview := narrated(t, plan, approve.ClaudeSettings, OpPlanned)
+	assert.Contains(t, preview, "  would update .claude/settings.json")
+	assert.Contains(t, preview, "  would approve 7 Claude Code allow rules")
 
 	// .mcp.json was read for the server name only: guarded, not written.
 	// The absent local file is guarded too, so its creation is noticed.
@@ -190,7 +246,11 @@ func TestClaudeGateModeIsNeverChangedImplicitly(t *testing.T) {
 	// No mode in the request keeps the installed enforcement.
 	kept := planClaude(t, root, ClientSetup{Hooks: true})
 	assert.Empty(t, kept.Writes)
-	assert.Equal(t, []FileKeep{{Path: approve.ClaudeSettings, Detail: "nothing to add"}}, kept.Kept)
+	assert.Equal(t, map[string]string{approve.ClaudeSettings: "nothing to add"}, keptDetails(kept))
+	assert.Contains(t, narrated(t, kept, approve.ClaudeSettings, OpKept),
+		"  kept    .claude/settings.json (seamark hooks already wired)\n")
+	assert.Contains(t, narrated(t, kept, approve.ClaudeSettings, OpKept), testBinary+" gate --enforce --hook",
+		"a kept file still lists the exact hook commands")
 
 	// An explicit warn rewrites the hook in place and says what it removes.
 	warn := planClaude(t, root, ClientSetup{Hooks: true, GateMode: hooks.ModeWarn})
@@ -200,12 +260,14 @@ func TestClaudeGateModeIsNeverChangedImplicitly(t *testing.T) {
 	pre := settings["hooks"].(map[string]any)["PreToolUse"].([]any)
 	assert.Len(t, pre, 2, "the gate hook is rewritten, not duplicated")
 
-	warnings := findingReasons(warn, FindingWarning)
-	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "removes --enforce")
+	// The narrator reports the removed flag, in init's words.
+	assert.Empty(t, findingReasons(warn, FindingWarning))
+	assert.Contains(t, narrated(t, warn, approve.ClaudeSettings, OpApplied),
+		"  note    removed --enforce from the gate hook: the hook follows .seamark/policy.yaml\n")
+	assert.Contains(t, narrated(t, warn, approve.ClaudeSettings, OpPlanned), "  note    would remove --enforce")
 }
 
-func TestClaudeSkipsAHookTheLocalSettingsAlreadyRun(t *testing.T) {
+func TestClaudeInstallsEveryHookAndReportsTheLocalDuplicate(t *testing.T) {
 	root := t.TempDir()
 	writeRel(t, root, claudeLocalSettings, `{"hooks":{"PreToolUse":[
   {"matcher":"Bash","hooks":[{"type":"command","command":"/home/me/bin/seamark gate --enforce --hook"}]}
@@ -214,15 +276,33 @@ func TestClaudeSkipsAHookTheLocalSettingsAlreadyRun(t *testing.T) {
 	plan := planClaude(t, root, ClientSetup{Hooks: true})
 	settings := writeFor(t, plan, approve.ClaudeSettings)
 
-	assert.Empty(t, hooks.InstalledGateMode(settings), "no second gate handler beside the local one")
-	assert.True(t, hooks.LessonsHookInstalled(settings), "the other hooks are still installed")
+	// The shared file is the one the team commits. It gets every hook,
+	// whatever the personal file of the person who ran setup holds.
+	assert.Equal(t, hooks.ModeWarn, hooks.InstalledGateMode(settings))
+	assert.True(t, hooks.LessonsHookInstalled(settings))
 
 	warnings := findingReasons(plan, FindingWarning)
 	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], claudeLocalSettings+": already runs `/home/me/bin/seamark gate --enforce --hook`",
+	assert.Contains(t, warnings[0], claudeLocalSettings+": runs `/home/me/bin/seamark gate --enforce --hook`",
 		"the finding quotes the command the local file really runs")
+	assert.Contains(t, warnings[0], "so it runs twice for Bash")
+	assert.Contains(t, warnings[0], "the local copy runs in another gate mode, and both apply",
+		"a local --enforce still blocks under the shared warn hook")
 
-	assert.Contains(t, guardPaths(plan), claudeLocalSettings, "the duplicate source is a guarded input")
+	assert.Contains(t, guardPaths(plan), claudeLocalSettings, "the other hook source is a guarded input")
+
+	// Both gate hooks reach the caller, each with its own mode, so the
+	// gate summary can say that the run still blocks.
+	assert.Equal(t, []GateHook{
+		{Path: approve.ClaudeSettings, Mode: hooks.ModeWarn, Managed: true},
+		{Path: claudeLocalSettings, Mode: hooks.ModeEnforce},
+	}, plan.GateHooks)
+
+	full := mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: []ClientSetup{
+		{ClientID: ClaudeID, Hooks: true, CheckHookSources: true},
+	}})
+	require.Len(t, full.GateHooks, 2)
+	assert.Equal(t, ClaudeID, full.GateHooks[1].ClientID, "the coordinator names the client")
 
 	for _, w := range plan.Writes {
 		assert.NotEqual(t, claudeLocalSettings, w.Path, "the user's local file is never written")
@@ -253,7 +333,7 @@ func TestClaudeStillUpdatesAnOwnedHookTheLocalFileDuplicates(t *testing.T) {
 	assert.Contains(t, warnings[0], "so it runs twice")
 }
 
-func TestClaudeInstallsTheHookForTheToolsTheLocalFileDoesNotCover(t *testing.T) {
+func TestClaudeReportsTheDuplicateOnEveryRunUntilItIsRemoved(t *testing.T) {
 	root := t.TempDir()
 	writeRel(t, root, claudeLocalSettings, `{"hooks":{"PreToolUse":[
   {"matcher":"Edit","hooks":[{"type":"command","command":"/home/me/bin/seamark lessons --hook"}]}
@@ -262,42 +342,36 @@ func TestClaudeInstallsTheHookForTheToolsTheLocalFileDoesNotCover(t *testing.T) 
 	lessons := hooks.ClaudeSpecs(hooks.ModeWarn)[1]
 
 	plan := planClaude(t, root, ClientSetup{Hooks: true})
-	settings := writeFor(t, plan, approve.ClaudeSettings)
 
-	// A local hook for Edit alone must not leave Write without lessons.
-	covered, _ := hooks.Covered(settings, lessons, hooks.ClaudeMatcher)
-	assert.Equal(t, []string{"Write", "MultiEdit"}, covered, "only the uncovered tools are added, so Edit does not run twice")
+	covered, _ := hooks.Covered(writeFor(t, plan, approve.ClaudeSettings), lessons, hooks.ClaudeMatcher)
+	assert.Equal(t, lessons.Tools(), covered, "the shared hook keeps its full matcher")
 
-	warnings := findingReasons(plan, FindingWarning)
-	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "for Edit; setup adds the hook to .claude/settings.json for Write, MultiEdit only")
-
-	// The result is complete and stable: a second run adds nothing and
-	// has nothing to report.
 	_, err := ApplySetup(mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: []ClientSetup{
-		{ClientID: ClaudeID, Hooks: true},
+		{ClientID: ClaudeID, Hooks: true, CheckHookSources: true},
 	}}), ApplyOptions{})
 	require.NoError(t, err)
 
+	// The file is complete, so a second run writes nothing. The duplicate
+	// is still there, so the run still says so.
 	again := planClaude(t, root, ClientSetup{Hooks: true})
 	assert.Empty(t, again.Writes)
-	assert.Empty(t, findingReasons(again, FindingWarning))
+
+	warnings := findingReasons(again, FindingWarning)
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "so it runs twice for Edit")
+	assert.NotContains(t, warnings[0], "another gate mode")
 }
 
 func TestClaudeReadsTheLocalMatcherByClaudeCodesRules(t *testing.T) {
 	lessons := hooks.ClaudeSpecs(hooks.ModeWarn)[1]
 
-	for matcher, tc := range map[string]struct {
-		added []string
-		note  string
-	}{
+	for matcher, twice := range map[string]string{
 		// A comma list names exact tools.
-		"Edit, Write": {[]string{"MultiEdit"}, "for Edit, Write; setup adds the hook to .claude/settings.json for MultiEdit only"},
+		"Edit, Write": "so it runs twice for Edit, Write",
 		// An unanchored expression: Edit$ fires for MultiEdit too.
-		"Edit$": {[]string{"Write"}, "for Edit, MultiEdit; setup adds the hook to .claude/settings.json for Write only"},
-		// Every tool is covered: nothing is added.
-		"Edit|Write|MultiEdit": {nil, "setup does not add a second copy"},
-		"Write|Edit$":          {nil, "setup does not add a second copy"},
+		"Edit$":                "so it runs twice for Edit, MultiEdit",
+		"Edit|Write|MultiEdit": "so it runs twice for Edit, Write, MultiEdit",
+		"*":                    "so it runs twice for Edit, Write, MultiEdit",
 	} {
 		t.Run(matcher, func(t *testing.T) {
 			root := t.TempDir()
@@ -312,11 +386,11 @@ func TestClaudeReadsTheLocalMatcherByClaudeCodesRules(t *testing.T) {
 			plan := planClaude(t, root, ClientSetup{Hooks: true})
 
 			covered, _ := hooks.Covered(writeFor(t, plan, approve.ClaudeSettings), lessons, hooks.ClaudeMatcher)
-			assert.Equal(t, tc.added, covered, "no tool runs the handler twice, and no tool is left without one")
+			assert.Equal(t, lessons.Tools(), covered, "the shared hook never depends on the local file")
 
 			warnings := findingReasons(plan, FindingWarning)
 			require.Len(t, warnings, 1)
-			assert.Contains(t, warnings[0], tc.note)
+			assert.Contains(t, warnings[0], twice)
 		})
 	}
 }
@@ -345,7 +419,7 @@ func TestALocalFileCreatedAfterThePlanMakesItStale(t *testing.T) {
 	root := t.TempDir()
 
 	plan := mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: []ClientSetup{
-		{ClientID: ClaudeID, Hooks: true},
+		{ClientID: ClaudeID, Hooks: true, CheckHookSources: true},
 	}})
 
 	// The planned shared gate hook would now be a second gate handler.
@@ -356,6 +430,67 @@ func TestALocalFileCreatedAfterThePlanMakesItStale(t *testing.T) {
 	_, err := ApplySetup(plan, ApplyOptions{})
 	require.ErrorIs(t, err, ErrStalePlan)
 	assert.NoFileExists(t, filepath.Join(root, ".claude", "settings.json"))
+}
+
+func TestClaudeWithoutTheSourceCheckNeverReadsTheLocalFile(t *testing.T) {
+	// The intent of an init run without --client. That form never read
+	// the local file, and the file is personal: the shared settings that
+	// the team commits must not depend on who ran init.
+	root := t.TempDir()
+	writeRel(t, root, claudeLocalSettings, `{"hooks":{"PreToolUse":[
+  {"matcher":"Bash","hooks":[{"type":"command","command":"/home/me/bin/seamark gate --enforce --hook"}]},
+  {"matcher":"Edit","hooks":[{"type":"command","command":"/home/me/bin/seamark lessons --hook"}]}
+]}}`)
+
+	plan, err := claudeSetup{}.Plan(root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true})
+	require.NoError(t, err)
+
+	settings := writeFor(t, plan, approve.ClaudeSettings)
+
+	for _, spec := range hooks.ClaudeSpecs(hooks.ModeWarn) {
+		covered, _ := hooks.Covered(settings, spec, hooks.ClaudeMatcher)
+		assert.Equal(t, spec.Tools(), covered, "%s: every hook, for every tool", spec.Marker)
+	}
+
+	assert.Empty(t, plan.Findings)
+	assert.Equal(t, []string{approve.ClaudeSettings}, guardPaths(plan), "the local file is not an input of this run")
+	assert.Equal(t, []GateHook{{Path: approve.ClaudeSettings, Mode: hooks.ModeWarn, Managed: true}}, plan.GateHooks)
+
+	// A broken local file is none of this run's business either.
+	writeRel(t, root, claudeLocalSettings, "{ broken")
+
+	_, err = claudeSetup{}.Plan(root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true})
+	require.NoError(t, err)
+}
+
+func TestClaudeReadsAnInputThroughALinkAndNeverWritesThroughOne(t *testing.T) {
+	outside := t.TempDir()
+	writeRel(t, outside, "mcp.json", `{"mcpServers":{"sm":{"command":"/opt/seamark","args":["mcp"]}}}`)
+	writeRel(t, outside, "empty.json", `{"mcpServers":{}}`)
+
+	// Grants only: .mcp.json names the server and is never written, so a
+	// link is read through, as init always did.
+	root := t.TempDir()
+	require.NoError(t, os.Symlink(filepath.Join(outside, "mcp.json"), filepath.Join(root, ".mcp.json")))
+
+	plan := planClaude(t, root, ClientSetup{ApproveTools: true})
+	assert.True(t, approve.AllowSet(writeFor(t, plan, approve.ClaudeSettings))["mcp__sm__orient"])
+
+	// The registration is kept when the linked file already holds it.
+	full := mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: []ClientSetup{
+		{ClientID: ClaudeID, RegisterMCP: true},
+	}})
+	assert.Empty(t, full.Writes)
+
+	// A registration that would be written through the link is refused.
+	linked := t.TempDir()
+	require.NoError(t, os.Symlink(filepath.Join(outside, "empty.json"), filepath.Join(linked, ".mcp.json")))
+
+	_, err := PlanSetup(Builtin(), SetupRequest{Root: linked, Binary: testBinary, Clients: []ClientSetup{
+		{ClientID: ClaudeID, RegisterMCP: true},
+	}})
+	require.ErrorContains(t, err, ".mcp.json: symlink at .mcp.json")
+	assert.Equal(t, `{"mcpServers":{}}`, readRel(t, outside, "empty.json"))
 }
 
 func TestClaudeIgnoresALocalEntryThatNeverFires(t *testing.T) {

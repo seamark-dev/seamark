@@ -14,6 +14,7 @@ package integration
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"slices"
 	"strings"
@@ -449,7 +450,12 @@ func (i CapabilityInspection) Validate() error {
 type Inspection struct {
 	ClientID     string
 	Capabilities []CapabilityInspection
-	Findings     []Finding
+	// GateMode is the mode of the installed command-gate hook: warn,
+	// enforce, or empty when the client has no operational gate hook or
+	// its document cannot be read. It is the installed hook mode only.
+	// The repository policy file can still enforce on top of a warn hook.
+	GateMode string
+	Findings []Finding
 }
 
 // FindingLevel grades a finding for presentation.
@@ -506,6 +512,11 @@ type ClientSetup struct {
 	ApproveTools bool
 	// GateMode is warn or enforce; empty preserves the installed mode.
 	GateMode string
+	// CheckHookSources makes the adapter inspect the client's other hook
+	// sources for seamark handlers. An init run without --client leaves
+	// it off: that form never read those files, and it must stay as it
+	// was.
+	CheckHookSources bool
 }
 
 // SetupRequest is one complete setup run. Selection is resolved once,
@@ -521,6 +532,14 @@ type SetupRequest struct {
 	Common []Document
 }
 
+// Narrator prints the lines for one finished operation in init's
+// vocabulary. The status is kept, planned (a preview), or applied; the
+// caller prints failed and not-attempted operations itself. An adapter
+// supplies a narrator when its document needs more than one generic
+// line, for example the list of hook commands. The text lives with the
+// adapter, because only the adapter knows what it composed.
+type Narrator func(w io.Writer, status OpStatus)
+
 // Document is one client-independent file of a setup run. Compose
 // receives the current bytes and returns the bytes the run leaves. When
 // it returns the input unchanged, the coordinator keeps the file. Compose
@@ -528,6 +547,9 @@ type SetupRequest struct {
 type Document struct {
 	// Path is repository-relative and slash-separated.
 	Path string
+	// CreateOnly marks a starter file. An existing path is kept without a
+	// read, whatever it is; Compose then only supplies the new content.
+	CreateOnly bool
 	// Compose returns the complete file. exists is false for an absent
 	// file; existing is then nil.
 	Compose func(existing []byte, exists bool) ([]byte, error)
@@ -535,13 +557,40 @@ type Document struct {
 	// why an unchanged file needs nothing.
 	Detail     string
 	KeptDetail string
+	// Narrate replaces the generic line when set.
+	Narrate Narrator
 }
+
+// GuardKind names how much of a file a guard observes. The kinds exist
+// because the files of a setup run differ in what setup may do to them.
+type GuardKind int
+
+// The guard kinds.
+const (
+	// GuardDocument guards a native document that setup owns and may
+	// rewrite. No component of its path may be a symbolic link, for the
+	// read too: a link committed in a cloned repository must never
+	// redirect a read or a write of a client's configuration.
+	GuardDocument GuardKind = iota
+	// GuardInput guards a file that setup reads and at most extends, such
+	// as a registration file it only takes a name from. The read may
+	// follow a link. A write through a link is still refused.
+	GuardInput
+	// GuardPresence guards a create-only file by its existence alone. An
+	// existing file is kept whatever it is, even when it cannot be read,
+	// because setup never looks inside a file it must not clobber.
+	GuardPresence
+)
 
 // FileGuard records the observed state of one input file, so apply can
 // detect a change between plan and write and abort as stale.
 type FileGuard struct {
 	Path   string
+	Kind   GuardKind
 	Exists bool
+	// Linked is the first component of the path that is a symbolic link,
+	// or empty. Setup never writes a linked path.
+	Linked string
 	SHA256 [32]byte
 	Mode   fs.FileMode
 }
@@ -558,6 +607,8 @@ type FileWrite struct {
 	// Detail says what the write adds, for narration. It must never hold
 	// file content: a preview must not print native configuration.
 	Detail string
+	// Narrate replaces the generic line when set.
+	Narrate Narrator
 }
 
 // FileKeep is one document the plan inspected and leaves unchanged, so
@@ -567,6 +618,26 @@ type FileKeep struct {
 	Consumers []string
 	// Detail says why nothing changes, for narration.
 	Detail string
+	// Narrate replaces the generic line when set.
+	Narrate Narrator
+}
+
+// GateHook is one command-gate hook that the client really runs after
+// the plan is applied. A plan lists every one it knows: the hook setup
+// manages, and a hook in another source that setup found and left as it
+// is. The caller's gate summary reads the list, because one enforcing
+// hook blocks whatever the managed hook's mode says, and a summary that
+// names only the managed mode would then be false.
+type GateHook struct {
+	// ClientID is filled by the coordinator.
+	ClientID string
+	// Path is the document that holds the hook, repository-relative.
+	Path string
+	// Mode is warn or enforce.
+	Mode string
+	// Managed is true for the hook setup installs and updates. False
+	// means another source, which setup never edits.
+	Managed bool
 }
 
 // ClientPlan is one client's read guards, composed writes, kept
@@ -575,10 +646,11 @@ type FileKeep struct {
 // Reads. A file that was only read, for example to find a registration
 // name, has a guard and no other entry.
 type ClientPlan struct {
-	Reads    []FileGuard
-	Writes   []FileWrite
-	Kept     []FileKeep
-	Findings []Finding
+	Reads     []FileGuard
+	Writes    []FileWrite
+	Kept      []FileKeep
+	GateHooks []GateHook
+	Findings  []Finding
 }
 
 // SkillDestination is one skill directory and every selected client
@@ -612,5 +684,7 @@ type SetupPlan struct {
 	// SkillGuards is parallel to Skills: one guard per entry.
 	SkillGuards  []SkillGuard
 	Destinations []SkillDestination
-	Findings     []Finding
+	// GateHooks lists the gate hooks the selected clients run after apply.
+	GateHooks []GateHook
+	Findings  []Finding
 }

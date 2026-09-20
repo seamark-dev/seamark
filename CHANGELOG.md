@@ -6,6 +6,45 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## Unreleased
+
+- **`seamark init --client <name>`.** Selects the agents to set up, by
+  name, and may repeat (`--client claude --client codex`). Each selected
+  agent gets what seamark supports for it: its hooks and its MCP server
+  registration, with `--skills` and `--approve-tools` still opt-in. For
+  Claude Code the registration is a `seamark` entry in `.mcp.json`; for
+  Codex it is the `[mcp_servers.seamark]` table without any approval. An
+  agent that is not selected is never read or written, a shared
+  `.agents/skills` directory never counts as a configured Codex, and a
+  skill directory that two selected agents share is written once. What an
+  agent does not support yet is reported (Codex hook installation today),
+  and native trust stays the user's decision. Without `--client`, init
+  output and written files are unchanged. `--client` takes a bare
+  `--skills` only.
+- **One setup path.** Both init forms now plan every file before the first
+  write and apply through one coordinator: a changed input stops the run
+  with "run the command again" instead of applying a stale plan, files are
+  replaced through a temporary file, and a failed write reports what
+  landed and what did not. A re-run converges.
+- **No write through a symbolic link, for the scaffolds too.** init still
+  reads `.gitignore` through a link and still keeps an existing
+  `.seamark/*.yaml` whatever it is. It now refuses to create a scaffold,
+  or to extend `.gitignore`, when a component of the path is a symbolic
+  link, the rule the client files already followed: a link committed in a
+  cloned repository must not redirect a write outside the tree. A
+  repository that links `.seamark/` elsewhere and lacks a starter file
+  must create that file by hand.
+- **`--client` looks at every hook source.** With `--client claude`, a
+  seamark hook that `.claude/settings.local.json` also runs is reported
+  as running twice, with the tools it overlaps on and a differing gate
+  mode named. The shared `.claude/settings.json` always gets every hook:
+  it is the file a team commits, so it never depends on the personal file
+  of whoever ran init. An init without `--client` never reads the local
+  file, as before.
+- **`--skills` reads like a boolean with modes.** `--skills=true` equals a
+  bare `--skills`, and `--skills=false` or an empty value installs
+  nothing.
+
 ## v0.6.0 — 2026-09-05
 
 - **The MCP server states judgment rules, not a ritual.** The `initialize`

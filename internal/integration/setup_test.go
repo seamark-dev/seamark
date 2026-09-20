@@ -895,6 +895,57 @@ func TestCommonDocuments(t *testing.T) {
 	require.ErrorContains(t, err, "no compose function")
 }
 
+func TestACreateOnlyDocumentIsGuardedByItsPresenceAlone(t *testing.T) {
+	// A starter file is never clobbered and never read, whatever is at
+	// its path and whatever its compose function would return.
+	always := Document{
+		Path: ".seamark/lessons.yaml", CreateOnly: true, KeptDetail: "already present",
+		Compose: func([]byte, bool) ([]byte, error) { return []byte("fresh template\n"), nil },
+	}
+
+	for name, arrange := range map[string]func(t *testing.T, root string){
+		"a file with other content": func(t *testing.T, root string) { writeRel(t, root, always.Path, "mine\n") },
+		"a directory": func(t *testing.T, root string) {
+			require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark", "lessons.yaml"), 0o755))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			arrange(t, root)
+
+			plan := mustPlan(t, Builtin(), SetupRequest{Root: root, Common: []Document{always}})
+			assert.Empty(t, plan.Writes)
+			assert.Equal(t, []FileKeep{{Path: always.Path, Detail: "already present"}}, plan.Kept)
+			assert.Equal(t, GuardPresence, plan.Reads[0].Kind)
+		})
+	}
+
+	// Absent: it is created, and its later appearance makes the plan stale.
+	root := t.TempDir()
+	plan := mustPlan(t, Builtin(), SetupRequest{Root: root, Common: []Document{always}})
+	require.Len(t, plan.Writes, 1)
+
+	writeRel(t, root, always.Path, "appeared after the plan\n")
+
+	_, err := ApplySetup(plan, ApplyOptions{})
+	require.ErrorIs(t, err, ErrStalePlan)
+	assert.Equal(t, "appeared after the plan\n", readRel(t, root, always.Path))
+
+	// An absent starter below a linked directory is refused: the create
+	// would go through the link.
+	outside, linked := t.TempDir(), t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(linked, ".seamark")))
+
+	_, err = PlanSetup(Builtin(), SetupRequest{Root: linked, Common: []Document{always}})
+	require.ErrorContains(t, err, "symlink at .seamark")
+
+	// An existing starter below the same link is kept, as it always was.
+	writeRel(t, outside, "lessons.yaml", "theirs\n")
+
+	kept := mustPlan(t, Builtin(), SetupRequest{Root: linked, Common: []Document{always}})
+	assert.Empty(t, kept.Writes)
+}
+
 func TestAnExistingFileKeepsItsPermission(t *testing.T) {
 	root := t.TempDir()
 	writeRel(t, root, ".claude/settings.json", "{}")

@@ -123,18 +123,6 @@ func Merge(settings map[string]any, bin string, specs []Spec) (changed bool, err
 	return changed, nil
 }
 
-// Installed reports whether a parsed hook document holds a seamark
-// command for the spec, under any matcher. It is the rule Merge uses to
-// find the entry it updates, so "installed" here means "Merge rewrites
-// it in place and adds nothing".
-func Installed(settings map[string]any, spec Spec) bool {
-	found := false
-
-	forEachSpecCommand(settings, spec, func(string, map[string]any, string) { found = true })
-
-	return found
-}
-
 // MatcherRule reports whether an installed matcher fires for one tool.
 // The rule is the client's, not seamark's: each client documents its own
 // matcher syntax, so the caller passes the rule of the client that reads
@@ -144,12 +132,13 @@ type MatcherRule func(matcher, tool string) bool
 // Covered returns the spec's tools that the document really runs a
 // seamark handler for, and the first such command. An entry counts only
 // when the client runs it: a "command"-typed hook whose matcher fires
-// for the tool. It is stricter than Installed on purpose. Setup uses it
-// to find a second hook source that already runs the handler, and an
-// entry that never fires is not a duplicate.
+// for the tool. Merge is wider on purpose: it rewrites the owned entry
+// under any matcher. Setup uses Covered to report a second hook source
+// that runs the same handler, and an entry that never fires is not a
+// duplicate.
 //
-// Coverage is per tool. A local hook for Edit alone does not run for
-// Write, so the caller must still install the handler for Write.
+// Coverage is per tool, so the report can name exactly the tools that
+// two sources both handle, and the tools that no source handles.
 func Covered(settings map[string]any, spec Spec, fires MatcherRule) (tools []string, command string) {
 	forEachSpecCommand(settings, spec, func(matcher string, h map[string]any, cmd string) {
 		if t, _ := h["type"].(string); t != "command" {
@@ -170,6 +159,34 @@ func Covered(settings map[string]any, spec Spec, fires MatcherRule) (tools []str
 	})
 
 	return tools, command
+}
+
+// EffectiveGateMode returns the mode of the gate hooks that the client
+// really runs from one document: enforce when any of them enforces, else
+// warn, else "" when none runs. Enforce wins, because one enforcing hook
+// blocks whatever the other hooks do. The caller passes the gate spec of
+// either mode; the spec's markers cover both.
+func EffectiveGateMode(settings map[string]any, gate Spec, fires MatcherRule) string {
+	mode := ""
+
+	forEachSpecCommand(settings, gate, func(matcher string, h map[string]any, cmd string) {
+		if t, _ := h["type"].(string); t != "command" {
+			return
+		}
+
+		if !slices.ContainsFunc(gate.Tools(), func(tool string) bool { return tool == "" || fires(matcher, tool) }) {
+			return
+		}
+
+		switch {
+		case OwnedBySeamark(cmd, []string{GateMarker(ModeEnforce)}):
+			mode = ModeEnforce
+		case mode == "":
+			mode = ModeWarn
+		}
+	})
+
+	return mode
 }
 
 // forEachSpecCommand visits every seamark-owned command of the spec's

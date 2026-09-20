@@ -2,6 +2,7 @@ package integration
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/approve"
@@ -36,9 +37,13 @@ func (codexSetup) Plan(root, _ string, req ClientSetup) (ClientPlan, error) {
 
 	plan := ClientPlan{Reads: []FileGuard{guard}}
 
+	// The line init has always printed for this file. It names the
+	// explicit settings that were kept, so they need no finding.
+	narrate := func(w io.Writer, status OpStatus) { approve.NarrateCodex(w, config, status == OpPlanned) }
+
 	if config.Changed() {
 		plan.Writes = append(plan.Writes, FileWrite{
-			Path: approve.CodexConfig, After: config.Document(data), Detail: codexWriteDetail(config),
+			Path: approve.CodexConfig, After: config.Document(data), Detail: codexWriteDetail(config), Narrate: narrate,
 		})
 
 		// Codex reads the project layer only after the user trusts the
@@ -50,16 +55,7 @@ func (codexSetup) Plan(root, _ string, req ClientSetup) (ClientPlan, error) {
 			Action: "open the project in Codex and accept its trust prompt",
 		})
 	} else {
-		plan.Kept = append(plan.Kept, FileKeep{Path: approve.CodexConfig, Detail: codexKeptDetail(config)})
-	}
-
-	if len(config.Conflicts) > 0 {
-		plan.Findings = append(plan.Findings, Finding{
-			Level:  FindingWarning,
-			Path:   approve.CodexConfig,
-			Reason: "explicit settings kept: " + render.Sanitize(strings.Join(config.Conflicts, "; ")),
-			Action: "edit the file by hand if seamark must be registered or approved",
-		})
+		plan.Kept = append(plan.Kept, FileKeep{Path: approve.CodexConfig, Detail: codexKeptDetail(config), Narrate: narrate})
 	}
 
 	// A tool table needs the server table it belongs to. Without the

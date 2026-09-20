@@ -485,9 +485,18 @@ func (c ClientState) Notable() bool {
 // on the client instead of failing the call: status must never fail
 // because one directory is unreadable.
 func Inspect(root string) []ClientState {
+	return InspectTargets(root, []Target{claudeTarget, codexTarget})
+}
+
+// InspectTargets reports the given skill directories. A caller that
+// selected its clients explicitly passes their destinations, so the
+// report covers what the run addresses and nothing else. The target's
+// client label is printed as given; a shared directory names every
+// client that reads it.
+func InspectTargets(root string, targets []Target) []ClientState {
 	var states []ClientState
 
-	for _, t := range []Target{claudeTarget, codexTarget} {
+	for _, t := range targets {
 		s := ClientState{Client: t.Client, Dir: t.Dir}
 
 		entries, err := Plan(root, []Target{t})

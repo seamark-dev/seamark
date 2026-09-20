@@ -45,7 +45,7 @@ test-race: ## Run all tests with the race detector
 # applies and guards the skill directories. Credential-free and offline;
 # native Codex checks are separate operator targets.
 AGENTS_TEST_PKGS := ./internal/integration/... ./internal/agent/... ./internal/hooks/... ./internal/approve/... ./internal/skills/...
-AGENTS_TEST_RUN  := 'Test(RunInit|InitDefault|InitGateMode|LessonsHook|GateHook|HookBudgets|HookDelivery|ResetHookDelivery|ApproveTools|Reminder|LessonsForFiles|MergeHooks|ResolveGateMode|ApprovalTargets)'
+AGENTS_TEST_RUN  := 'Test(RunInit|InitClient|InitDefault|InitGateMode|LessonsHook|GateHook|HookBudgets|HookDelivery|ResetHookDelivery|ApproveTools|Reminder|LessonsForFiles|MergeHooks|ResolveGateMode)'
 
 agents-test: ## Run the agent-integration contract and characterization tests
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(AGENTS_TEST_PKGS)

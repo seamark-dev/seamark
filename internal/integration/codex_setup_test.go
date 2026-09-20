@@ -73,10 +73,14 @@ approval_mode = "prompt"
 	assert.Equal(t, "approved 3 tools: orient, change_set, check", plan.Writes[0].Detail)
 	assert.Contains(t, string(plan.Writes[0].After), "approval_mode = \"prompt\"", "the restriction stays")
 
-	warnings := findingReasons(plan, FindingWarning)
-	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "disabled_tools lists expand")
-	assert.Contains(t, warnings[0], `tools.why.approval_mode = "prompt"`)
+	// The kept settings are named on the file's own line, in init's words.
+	assert.Empty(t, findingReasons(plan, FindingWarning))
+
+	line := narrated(t, plan, approve.CodexConfig, OpApplied)
+	assert.Contains(t, line, "  updated .codex/config.toml (approved 3 tools: orient, change_set, check; kept explicit settings: ")
+	assert.Contains(t, line, "disabled_tools lists expand")
+	assert.Contains(t, line, `tools.why.approval_mode = "prompt"`)
+	assert.Contains(t, narrated(t, plan, approve.CodexConfig, OpPlanned), "  would update .codex/config.toml")
 }
 
 func TestCodexForeignRegistrationIsKept(t *testing.T) {
@@ -86,11 +90,9 @@ func TestCodexForeignRegistrationIsKept(t *testing.T) {
 	plan := planCodex(t, root, ClientSetup{RegisterMCP: true, ApproveTools: true})
 
 	assert.Empty(t, plan.Writes, "a foreign registration is never replaced")
-	assert.Equal(t, []FileKeep{{Path: approve.CodexConfig, Detail: "seamark not registered"}}, plan.Kept)
-
-	warnings := findingReasons(plan, FindingWarning)
-	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "runs another command")
+	assert.Equal(t, map[string]string{approve.CodexConfig: "seamark not registered"}, keptDetails(plan))
+	assert.Contains(t, narrated(t, plan, approve.CodexConfig, OpKept),
+		"  kept    .codex/config.toml (seamark not registered; kept explicit settings: mcp_servers.seamark runs another command")
 }
 
 func TestCodexGrantsAloneNeedARegistration(t *testing.T) {

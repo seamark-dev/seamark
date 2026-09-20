@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/skills"
@@ -52,15 +53,41 @@ func isCleanRel(rel string) bool {
 		rel != "." && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
-// ReadGuarded reads one input document and records its observed state.
-// Adapters plan from the returned bytes, so a plan and its guard always
-// describe the same file state. A missing file is not an error: the
-// guard records the absence, and a later creation makes the plan stale.
+// linkRefusal is the error for a path that a symbolic link redirects.
+func linkRefusal(rel, link string) error {
+	return fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", rel, link)
+}
+
+// ReadGuarded reads one native document that setup owns and records
+// its observed state. Adapters plan from the returned bytes, so a plan
+// and its guard always describe the same file state. A missing file is
+// not an error: the guard records the absence, and a later creation
+// makes the plan stale.
 //
 // It rejects a symbolic link at any path component and a path that is
 // not a regular file. A link committed in a cloned repository must
-// never redirect a read or a write outside the tree.
+// never redirect a read or a write of a client's configuration.
 func ReadGuarded(root, rel string) (FileGuard, []byte, error) {
+	guard, data, err := ReadInput(root, rel)
+	if err != nil {
+		return FileGuard{}, nil, err
+	}
+
+	if guard.Linked != "" {
+		return FileGuard{}, nil, linkRefusal(rel, guard.Linked)
+	}
+
+	guard.Kind = GuardDocument
+
+	return guard, data, nil
+}
+
+// ReadInput reads a file that setup only reads, or at most extends. The
+// read may follow a symbolic link, as it always did for such files: a
+// registration file that links elsewhere still names the server. The
+// guard records the link, and the coordinator refuses every write to a
+// linked path, so a link can never redirect a write.
+func ReadInput(root, rel string) (FileGuard, []byte, error) {
 	if !isCleanRel(rel) {
 		return FileGuard{}, nil, fmt.Errorf("%q is not a clean repository-relative path", rel)
 	}
@@ -70,15 +97,12 @@ func ReadGuarded(root, rel string) (FileGuard, []byte, error) {
 		return FileGuard{}, nil, err
 	}
 
-	if link != "" {
-		return FileGuard{}, nil, fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", rel, link)
-	}
-
+	guard := FileGuard{Path: rel, Kind: GuardInput, Linked: link}
 	abs := filepath.Join(root, filepath.FromSlash(rel))
 
-	info, err := os.Lstat(abs)
+	info, err := os.Stat(abs)
 	if errors.Is(err, os.ErrNotExist) {
-		return FileGuard{Path: rel}, nil, nil
+		return guard, nil, nil
 	}
 
 	if err != nil {
@@ -94,13 +118,66 @@ func ReadGuarded(root, rel string) (FileGuard, []byte, error) {
 		return FileGuard{}, nil, fmt.Errorf("%s: %w", rel, err)
 	}
 
-	return FileGuard{Path: rel, Exists: true, SHA256: sha256.Sum256(data), Mode: info.Mode().Perm()}, data, nil
+	guard.Exists, guard.SHA256, guard.Mode = true, sha256.Sum256(data), info.Mode().Perm()
+
+	return guard, data, nil
+}
+
+// StatGuarded observes a create-only file by its existence alone. An
+// existing path is kept whatever it is: a directory, an unreadable
+// file, or a link. Setup never looks inside a file it must not clobber.
+// An absent path is about to be created, so no component of it may be a
+// link.
+func StatGuarded(root, rel string) (FileGuard, error) {
+	if !isCleanRel(rel) {
+		return FileGuard{}, fmt.Errorf("%q is not a clean repository-relative path", rel)
+	}
+
+	guard := FileGuard{Path: rel, Kind: GuardPresence}
+
+	_, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel)))
+
+	switch {
+	case err == nil:
+		guard.Exists = true
+
+		return guard, nil
+	case !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR):
+		return FileGuard{}, fmt.Errorf("%s: %w", rel, err)
+	}
+
+	link, err := skills.SymlinkIn(root, rel)
+	if err != nil {
+		return FileGuard{}, err
+	}
+
+	if link != "" {
+		return FileGuard{}, linkRefusal(rel, link)
+	}
+
+	return guard, nil
+}
+
+// observe reads the guarded path again, by the rule of the guard's kind.
+func observe(root string, g FileGuard) (FileGuard, error) {
+	switch g.Kind {
+	case GuardInput:
+		now, _, err := ReadInput(root, g.Path)
+
+		return now, err
+	case GuardPresence:
+		return StatGuarded(root, g.Path)
+	default:
+		now, _, err := ReadGuarded(root, g.Path)
+
+		return now, err
+	}
 }
 
 // verifyGuard observes the guarded file again and compares. A changed
 // file, a new link, and a changed file type all make the plan stale.
 func verifyGuard(root string, g FileGuard) error {
-	now, _, err := ReadGuarded(root, g.Path)
+	now, err := observe(root, g)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrStalePlan, err)
 	}
@@ -160,9 +237,11 @@ func PlanSetup(reg *Registry, req SetupRequest) (*SetupPlan, error) {
 			continue
 		}
 
+		// The error is returned as the adapter wrote it. It already names
+		// the document, and init has always shown it without a client name.
 		clientPlan, err := client.Setup.Plan(req.Root, req.Binary, effective)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", client.ID, err)
+			return nil, err
 		}
 
 		if err := b.addClient(client.ID, clientPlan); err != nil {
@@ -172,7 +251,7 @@ func PlanSetup(reg *Registry, req SetupRequest) (*SetupPlan, error) {
 
 	b.plan.Destinations = SkillDestinations(skillClients)
 
-	if b.plan.Skills, err = skills.Plan(req.Root, skillTargets(b.plan.Destinations)); err != nil {
+	if b.plan.Skills, err = skills.Plan(req.Root, SkillTargets(b.plan.Destinations)); err != nil {
 		return nil, err
 	}
 
@@ -255,9 +334,9 @@ func supportedIntent(c Client, intent ClientSetup) (ClientSetup, []Finding) {
 	return intent, findings
 }
 
-// skillTargets converts destinations into installer targets. The
+// SkillTargets converts destinations into installer targets. The
 // client label is for narration only, so it names every consumer.
-func skillTargets(dests []SkillDestination) []skills.Target {
+func SkillTargets(dests []SkillDestination) []skills.Target {
 	targets := make([]skills.Target, 0, len(dests))
 
 	for _, d := range dests {
@@ -279,9 +358,31 @@ func (b *planBuilder) addCommon(doc Document) error {
 		return fmt.Errorf("setup: common document %q has no compose function", doc.Path)
 	}
 
-	guard, existing, err := ReadGuarded(b.plan.Root, doc.Path)
+	// A common document is never a client's configuration. A starter file
+	// is guarded by its existence alone, and any other common document may
+	// be read through a link; the coordinator still refuses to write one.
+	var (
+		guard    FileGuard
+		existing []byte
+		err      error
+	)
+
+	if doc.CreateOnly {
+		guard, err = StatGuarded(b.plan.Root, doc.Path)
+	} else {
+		guard, existing, err = ReadInput(b.plan.Root, doc.Path)
+	}
+
 	if err != nil {
 		return err
+	}
+
+	part := ClientPlan{Reads: []FileGuard{guard}}
+
+	if doc.CreateOnly && guard.Exists {
+		part.Kept = []FileKeep{{Path: doc.Path, Detail: doc.KeptDetail, Narrate: doc.Narrate}}
+
+		return b.addClient("", part)
 	}
 
 	after, err := doc.Compose(existing, guard.Exists)
@@ -289,12 +390,10 @@ func (b *planBuilder) addCommon(doc Document) error {
 		return fmt.Errorf("%s: %w", doc.Path, err)
 	}
 
-	part := ClientPlan{Reads: []FileGuard{guard}}
-
 	if guard.Exists && bytes.Equal(after, existing) {
-		part.Kept = []FileKeep{{Path: doc.Path, Detail: doc.KeptDetail}}
+		part.Kept = []FileKeep{{Path: doc.Path, Detail: doc.KeptDetail, Narrate: doc.Narrate}}
 	} else {
-		part.Writes = []FileWrite{{Path: doc.Path, After: after, Detail: doc.Detail}}
+		part.Writes = []FileWrite{{Path: doc.Path, After: after, Detail: doc.Detail, Narrate: doc.Narrate}}
 	}
 
 	return b.addClient("", part)
@@ -319,6 +418,11 @@ func (b *planBuilder) addClient(consumer string, part ClientPlan) error {
 		if err := b.addKeep(consumer, keep); err != nil {
 			return err
 		}
+	}
+
+	for _, hook := range part.GateHooks {
+		hook.ClientID = consumer
+		b.plan.GateHooks = append(b.plan.GateHooks, hook)
 	}
 
 	b.plan.Findings = append(b.plan.Findings, part.Findings...)
@@ -351,8 +455,14 @@ func (b *planBuilder) addGuard(guard FileGuard) error {
 // cannot be checked again before apply, so it is a broken adapter, not
 // a runtime state.
 func (b *planBuilder) addWrite(consumer string, write FileWrite) error {
-	if b.guardIndex(write.Path) < 0 {
+	i := b.guardIndex(write.Path)
+	if i < 0 {
 		return fmt.Errorf("setup: write to %q has no read guard", write.Path)
+	}
+
+	// A read may follow a link; a write never does.
+	if guard := b.plan.Reads[i]; guard.Linked != "" {
+		return linkRefusal(write.Path, guard.Linked)
 	}
 
 	write.Consumers = withConsumer(write.Consumers, consumer)
@@ -365,6 +475,8 @@ func (b *planBuilder) addWrite(consumer string, write FileWrite) error {
 				strings.Join(prior.Consumers, "+"), strings.Join(write.Consumers, "+"), write.Path)
 		}
 
+		// The first planner's narrator stays. Both planners composed the
+		// same bytes, so either one describes the write.
 		for _, c := range write.Consumers {
 			prior.Consumers = withConsumer(prior.Consumers, c)
 		}
@@ -476,6 +588,9 @@ type OpResult struct {
 	Created   bool
 	Detail    string
 	Consumers []string
+	// Narrate is the planner's narrator for the operation; nil when the
+	// generic line is enough.
+	Narrate Narrator
 	// Err is the cause of OpFailed; nil otherwise.
 	Err error
 }
@@ -521,9 +636,18 @@ func ApplySetup(plan *SetupPlan, opts ApplyOptions) (SetupResult, error) {
 		}
 	}
 
+	// stop ends the run after a failure. Every write that did not run is
+	// reported too, so the caller can say what did not land, not only what
+	// failed.
 	stop := func(err error) (SetupResult, error) {
-		markNotAttempted(result.Ops)
-		markNotAttempted(result.Skills)
+		for _, ops := range [][]OpResult{result.Ops, result.Skills} {
+			for i := range ops {
+				if ops[i].Status == OpPlanned {
+					ops[i].Status = OpNotAttempted
+					report(ops[i])
+				}
+			}
+		}
 
 		return result, err
 	}
@@ -589,7 +713,9 @@ func plannedOps(plan *SetupPlan) []OpResult {
 	for _, guard := range plan.Reads {
 		for _, k := range plan.Kept {
 			if k.Path == guard.Path {
-				ops = append(ops, OpResult{Path: k.Path, Status: OpKept, Detail: k.Detail, Consumers: k.Consumers})
+				ops = append(ops, OpResult{
+					Path: k.Path, Status: OpKept, Detail: k.Detail, Consumers: k.Consumers, Narrate: k.Narrate,
+				})
 			}
 		}
 
@@ -597,7 +723,7 @@ func plannedOps(plan *SetupPlan) []OpResult {
 			if w.Path == guard.Path {
 				ops = append(ops, OpResult{
 					Path: w.Path, Status: OpPlanned, Created: !guard.Exists,
-					Detail: w.Detail, Consumers: w.Consumers,
+					Detail: w.Detail, Consumers: w.Consumers, Narrate: w.Narrate,
 				})
 			}
 		}
@@ -636,16 +762,6 @@ func plannedSkillOps(plan *SetupPlan) []OpResult {
 	}
 
 	return ops
-}
-
-// markNotAttempted marks every write that is still only planned. A kept
-// path stays kept: nothing was going to happen to it.
-func markNotAttempted(ops []OpResult) {
-	for i := range ops {
-		if ops[i].Status == OpPlanned {
-			ops[i].Status = OpNotAttempted
-		}
-	}
 }
 
 // verifyPlan checks every input of the plan against the tree.

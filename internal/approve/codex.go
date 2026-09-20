@@ -802,20 +802,7 @@ func splitInlineAssignment(line string) (key string, inline bool) {
 // again right before the write, because the plan may be older than the
 // tree.
 func ApplyCodex(w io.Writer, root string, p *CodexPlan, printOnly bool) error {
-	kept := KeptSuffix(p.Conflicts)
-
-	if p.block == "" && p.insert == "" {
-		if p.Registered {
-			fmt.Fprintf(w, "  kept    %s (seamark registered as %q; %d/%d tools approved%s)\n",
-				CodexConfig, p.Server, len(p.Approved), len(Tools), kept)
-		} else {
-			fmt.Fprintf(w, "  kept    %s (seamark not registered%s)\n", CodexConfig, kept)
-		}
-
-		return nil
-	}
-
-	if !printOnly {
+	if p.Changed() && !printOnly {
 		if link, err := skills.SymlinkIn(root, CodexConfig); err != nil {
 			return err
 		} else if link != "" {
@@ -831,6 +818,28 @@ func ApplyCodex(w io.Writer, root string, p *CodexPlan, printOnly bool) error {
 		if err := writeCodexPlan(path, p); err != nil {
 			return fmt.Errorf("%s: %w", CodexConfig, err)
 		}
+	}
+
+	NarrateCodex(w, p, printOnly)
+
+	return nil
+}
+
+// NarrateCodex prints the line for one Codex plan in init's vocabulary.
+// ApplyCodex and the Codex setup adapter share it, so the file reads
+// the same whichever path wrote it.
+func NarrateCodex(w io.Writer, p *CodexPlan, printOnly bool) {
+	kept := KeptSuffix(p.Conflicts)
+
+	if !p.Changed() {
+		if p.Registered {
+			fmt.Fprintf(w, "  kept    %s (seamark registered as %q; %d/%d tools approved%s)\n",
+				CodexConfig, p.Server, len(p.Approved), len(Tools), kept)
+		} else {
+			fmt.Fprintf(w, "  kept    %s (seamark not registered%s)\n", CodexConfig, kept)
+		}
+
+		return
 	}
 
 	verb := "updated"
@@ -854,11 +863,7 @@ func ApplyCodex(w io.Writer, root string, p *CodexPlan, printOnly bool) error {
 		parts = append(parts, fmt.Sprintf("approved %d tools: %s", len(p.Missing), strings.Join(p.Missing, ", ")))
 	}
 
-	detail := strings.Join(parts, "; ")
-
-	fmt.Fprintf(w, "  %-7s %s (%s%s)\n", verb, CodexConfig, detail, kept)
-
-	return nil
+	fmt.Fprintf(w, "  %-7s %s (%s%s)\n", verb, CodexConfig, strings.Join(parts, "; "), kept)
 }
 
 // writeCodexPlan appends the block, or rewrites the file with the insert

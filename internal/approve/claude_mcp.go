@@ -3,9 +3,7 @@ package approve
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"slices"
 
@@ -107,11 +105,20 @@ func PlanClaudeMCP(data []byte, exists bool) (*ClaudeMCPPlan, error) {
 	return p, nil
 }
 
-// decodeMCPConfig parses the file as exactly one JSON object. Content
-// after the first value makes the file malformed: the rewrite would
-// drop it, and ClaudeRegistration rejects such a file too. A top-level
-// null is an empty object, because it holds nothing to preserve.
+// decodeMCPConfig parses the file as exactly one JSON object. The
+// syntax check is json.Unmarshal, the same call ClaudeRegistration
+// makes, so both report a syntax error in the same words, and content
+// after the first value is malformed for both: the rewrite would drop
+// it. A wrong-typed field is reported by PlanClaudeMCP in its own
+// words, which name the field. A top-level null is an empty object, because it holds nothing to
+// preserve.
 func decodeMCPConfig(data []byte) (map[string]any, error) {
+	var probe any
+
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return nil, fmt.Errorf("%s: %w", MCPConfig, err)
+	}
+
 	// UseNumber keeps a large integer in a foreign entry exact across the
 	// rewrite; a float64 would round it.
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -121,10 +128,6 @@ func decodeMCPConfig(data []byte) (map[string]any, error) {
 
 	if err := dec.Decode(&doc); err != nil {
 		return nil, fmt.Errorf("%s: %w", MCPConfig, err)
-	}
-
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("%s: unexpected content after the JSON object", MCPConfig)
 	}
 
 	if doc == nil {

@@ -54,28 +54,6 @@ func TestMergeWithNoSpecsChangesNothing(t *testing.T) {
 	assert.Equal(t, "opus", settings["model"])
 }
 
-func TestInstalledFindsTheHandlerInEitherGateMode(t *testing.T) {
-	settings := map[string]any{}
-
-	_, err := Merge(settings, "/bin/seamark", ClaudeSpecs(ModeEnforce))
-	require.NoError(t, err)
-
-	// The warn spec lists the enforce marker as legacy, so a handler
-	// installed in the other mode still counts as the same handler.
-	for _, spec := range ClaudeSpecs(ModeWarn) {
-		assert.True(t, Installed(settings, spec), spec.Marker)
-	}
-
-	assert.False(t, Installed(map[string]any{}, ClaudeSpecs(ModeWarn)[0]))
-
-	foreign := map[string]any{"hooks": map[string]any{"PreToolUse": []any{
-		map[string]any{"matcher": "Bash", "hooks": []any{
-			map[string]any{"type": "command", "command": "/usr/bin/company-security gate --hook"},
-		}},
-	}}}
-	assert.False(t, Installed(foreign, ClaudeSpecs(ModeWarn)[0]), "another tool's hook is not seamark's")
-}
-
 func TestShellQuote(t *testing.T) {
 	assert.Equal(t, "/usr/local/bin/seamark", ShellQuote("/usr/local/bin/seamark"))
 	assert.Equal(t, "'/Apps/My Tools/seamark'", ShellQuote("/Apps/My Tools/seamark"))
@@ -136,9 +114,11 @@ func TestCoveredCountsOnlyAHookTheClientRuns(t *testing.T) {
 		}
 	}
 
-	// Installed is the wider rule Merge uses: it finds the owned entry
-	// under any matcher, because Merge rewrites that entry in place.
-	assert.True(t, Installed(hookDoc("command", "/bin/seamark gate --hook", "Edit"), gate))
+	// The warn spec lists the enforce marker as legacy, so a handler
+	// installed in the other gate mode still counts as the same handler.
+	tools, cmd := Covered(hookDoc("command", "/bin/seamark gate --enforce --hook", "Bash"), gate, ClaudeMatcher)
+	assert.Equal(t, []string{"Bash"}, tools)
+	assert.Equal(t, "/bin/seamark gate --enforce --hook", cmd)
 }
 
 func TestCoverageIsPerTool(t *testing.T) {
@@ -210,5 +190,31 @@ func TestClaudeMatcherFollowsTheDocumentedRules(t *testing.T) {
 		}
 
 		assert.Equal(t, want, got, "matcher %q", matcher)
+	}
+}
+
+func TestEffectiveGateModeLetsEnforceWin(t *testing.T) {
+	gate := ClaudeSpecs(ModeWarn)[0]
+
+	both := hookDoc("command", "/bin/seamark gate --hook", "Bash")
+	entries := both["hooks"].(map[string]any)["PreToolUse"].([]any)
+	both["hooks"].(map[string]any)["PreToolUse"] = append(entries,
+		hookDoc("command", "/opt/seamark gate --enforce --hook", "Bash, Edit")["hooks"].(map[string]any)["PreToolUse"].([]any)...)
+
+	for name, tc := range map[string]struct {
+		settings map[string]any
+		want     string
+	}{
+		"warn":                     {hookDoc("command", "/bin/seamark gate --hook", "Bash"), ModeWarn},
+		"enforce":                  {hookDoc("command", "/bin/seamark gate --enforce --hook", "*"), ModeEnforce},
+		"one of two enforces":      {both, ModeEnforce},
+		"enforce that never fires": {hookDoc("command", "/bin/seamark gate --enforce --hook", "Edit"), ""},
+		"enforce of another type":  {hookDoc("prompt", "/bin/seamark gate --enforce --hook", "Bash"), ""},
+		"another tool's gate":      {hookDoc("command", "/bin/company-security gate --enforce --hook", "Bash"), ""},
+		"no document":              {nil, ""},
+	} {
+		// The spec of either mode finds the hook of both modes.
+		assert.Equal(t, tc.want, EffectiveGateMode(tc.settings, gate, ClaudeMatcher), name)
+		assert.Equal(t, tc.want, EffectiveGateMode(tc.settings, ClaudeSpecs(ModeEnforce)[0], ClaudeMatcher), name)
 	}
 }
