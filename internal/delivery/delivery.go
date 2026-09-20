@@ -30,6 +30,9 @@ type Request struct {
 	// the CLI selection and never from the hook payload, so a payload
 	// cannot claim the state of another client.
 	ClientID string
+	// Mechanism is the adapter's name for the native path of the advice.
+	// The firing log records it beside the client.
+	Mechanism string
 	// Event is the decoded native event. Event.Context is the receiving
 	// context; nil keeps suppression off.
 	Event integration.EditEvent
@@ -235,35 +238,50 @@ type ResetRequest struct {
 
 // Reset starts a new delivery generation for the receiving context of
 // the event, so its lessons can be emitted once again. An event that
-// names no resettable context resets nothing. Reset never creates
-// state: it is a no-op until once-per-context delivery has been used.
+// names no resettable context resets nothing: a missing identity must
+// not reset an unrelated context. Reset never creates state: it is a
+// no-op until once-per-context delivery has been used.
 func Reset(req ResetRequest) error {
-	if req.Event.Context.ID == "" || !req.Event.Context.Resettable {
+	if !req.Event.Context.Resettable {
 		return nil
 	}
 
-	return reviews.ResetHookDelivery(req.Root, req.Event.Context.ID)
+	return reviews.ResetContextDelivery(req.Root, deliveryContext(req.ClientID, &req.Event.Context))
+}
+
+// deliveryContext maps the client and its receiving context to the
+// identity of the suppression state and the firing log. The client ID
+// is part of the identity, so two clients that report one session
+// string never share a state entry. A nil receiving context gives an
+// identity that the state functions refuse.
+func deliveryContext(clientID string, receiving *integration.ReceivingContext) reviews.DeliveryContext {
+	if receiving == nil {
+		return reviews.DeliveryContext{ClientID: clientID}
+	}
+
+	return reviews.DeliveryContext{ClientID: clientID, ReceiverID: receiving.ID}
 }
 
 // beginLease opens the once-per-context lease when the configuration
 // and the event allow suppression. A nil lease means repeated delivery,
-// and the Suppression value says why. This function is the only place
-// that maps a receiving context to the suppression state.
+// and the Suppression value says why. Suppression needs a receiver that
+// the client names and can reset. A parent session id is not a receiver:
+// it hides advice from a subagent that never got it.
 func beginLease(req Request, cfg *reviews.Config, lessons []model.Lesson) (*reviews.HookDeliveryLease, Suppression) {
 	if cfg.HookDelivery() != reviews.HookDeliveryOncePerContext {
 		return nil, SuppressionOff
 	}
 
-	receiver := req.Event.Context
+	receiving := req.Event.Context
 
 	switch {
-	case receiver == nil || receiver.ID == "":
+	case receiving == nil || receiving.ID == "":
 		return nil, SuppressionNoContext
-	case !receiver.Resettable:
+	case !receiving.Resettable:
 		return nil, SuppressionNotResettable
 	}
 
-	lease, err := reviews.BeginHookDelivery(req.Root, receiver.ID, lessons)
+	lease, err := reviews.BeginContextDelivery(req.Root, deliveryContext(req.ClientID, receiving), lessons)
 	if err != nil {
 		// The state is an optimization, never permission to hide advice.
 		return nil, SuppressionStateUnavailable
@@ -275,10 +293,16 @@ func beginLease(req Request, cfg *reviews.Config, lessons []model.Lesson) (*revi
 // record appends one firing record for the event. It is best effort:
 // the result only sets AuditFailed.
 func (o *Outcome) record(req Request, lessons []model.Lesson, status reviews.DeliveryStatus, contextBytes int) {
+	// The log gets the receiving context whenever the client names one,
+	// also when suppression is off. It gets no context otherwise: the log
+	// never holds an identity that the client did not report.
+	receiving := deliveryContext(req.ClientID, req.Event.Context)
+
 	err := reviews.RecordHookDeliveryFiles(req.Root, o.Files, req.Event.NativeTool, lessons,
 		reviews.HookDelivery{
 			Status: status, SessionID: req.Event.SessionID, MatchID: req.Event.MatchID,
 			Generation: o.Generation, ContextBytes: contextBytes,
+			ClientID: req.ClientID, Mechanism: req.Mechanism, ReceiverID: receiving.ReceiverID,
 		})
 	if err != nil {
 		o.AuditFailed = true

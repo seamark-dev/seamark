@@ -620,6 +620,47 @@ func TestLessonsHookOncePerContextResetsAfterCompaction(t *testing.T) {
 	assert.Equal(t, reviews.DeliveryInjected, firings[2].Delivery)
 }
 
+func TestLessonsHookOncePerContextNeverHidesAdviceFromASubagent(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	seedLesson(t, root, "a.go", "RUF001", 4)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("threshold: 2\nhook_delivery: once-per-context\n"), 0o644))
+
+	file := filepath.Join(root, "a.go")
+	parent := `{"session_id":"session-one","tool_name":"Edit","tool_input":{"file_path":"` + file + `"}}`
+	child := `{"session_id":"session-one","agent_id":"agent-7","agent_type":"Explore",` +
+		`"tool_name":"Edit","tool_input":{"file_path":"` + file + `"}}`
+
+	hook := func(payload string) string {
+		t.Helper()
+
+		out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+		require.NoError(t, err)
+
+		return strings.TrimSpace(out)
+	}
+
+	assert.Contains(t, hook(parent), "RUF001")
+	assert.Empty(t, hook(parent), "the parent context has the lesson")
+
+	// The subagent reports the parent session and its own agent_id. Its
+	// context window never got the lesson, and no reset event reaches it.
+	assert.Contains(t, hook(child), "RUF001")
+	assert.Contains(t, hook(child), "RUF001", "a subagent gets repeated delivery")
+
+	// A reset that fires inside the subagent does not reach the parent.
+	_, _, err = runIn(t, `{"session_id":"session-one","agent_id":"agent-7"}`,
+		"-C", root, "lessons", "--hook-reset")
+	require.NoError(t, err)
+	assert.Empty(t, hook(parent))
+
+	_, _, err = runIn(t, `{"session_id":"session-one"}`, "-C", root, "lessons", "--hook-reset")
+	require.NoError(t, err)
+	assert.Contains(t, hook(parent), "RUF001")
+}
+
 func TestLessonsHookAlwaysRemainsTheDefault(t *testing.T) {
 	root := writeFixture(t)
 	_, err := run(t, "-C", root, "index")
@@ -1724,12 +1765,17 @@ func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
 	assert.Len(t, firings[0].SessionSHA, 64)
 	assert.NotEqual(t, "session-to-hash", firings[0].SessionSHA)
 	assert.Equal(t, len(response.HookSpecificOutput.AdditionalContext), firings[0].ContextBytes)
+	assert.Equal(t, "claude", firings[0].Client, "a hook without a client selector is the Claude Code hook")
+	assert.Equal(t, "pre-tool-use-context", firings[0].Mechanism)
+	assert.Len(t, firings[0].ContextSHA, 64)
+	assert.NotEqual(t, firings[0].SessionSHA, firings[0].ContextSHA)
 
 	// --stats surfaces the fired lesson and the never-fired decay candidate.
 	out, err := run(t, "-C", root, "lessons", "--stats")
 	require.NoError(t, err)
 	assert.Contains(t, out, "RUF001", "the fired lesson is surfaced")
 	assert.Contains(t, out, "hook delivery — instrumented: 1 injected (0 repeated)")
+	assert.Contains(t, out, "  claude via pre-tool-use-context: 1 injected (0 repeated), 0 suppressed")
 	assert.Contains(t, out, "never fired", "the unedited-region lesson is a decay candidate")
 	assert.Contains(t, out, "E501")
 }

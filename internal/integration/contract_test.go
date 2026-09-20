@@ -32,6 +32,8 @@ func (fakeEdits) EncodeAdvice(text string) (HookReply, error) {
 	return HookReply{Stdout: []byte(text)}, nil
 }
 
+func (fakeEdits) AdviceMechanism() string { return "fake-stdout" }
+
 // fakeCommands is a minimal command codec used only to prove the
 // negative assertions: the third client deliberately omits it.
 type fakeCommands struct{}
@@ -166,6 +168,9 @@ func checkClientContract(t *testing.T, c Client) {
 		reply, err := c.Edits.EncodeAdvice("advice")
 		require.NoError(t, err, "%s: advice encoding", c.ID)
 		assert.Zero(t, reply.ExitCode, "%s: advice is always nonblocking", c.ID)
+
+		// The firing log stores the name, so it follows the ID rule.
+		assert.Regexp(t, clientIDPattern, c.Edits.AdviceMechanism(), "%s: mechanism name", c.ID)
 	}
 }
 

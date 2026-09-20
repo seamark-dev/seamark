@@ -68,6 +68,13 @@ func validateClient(c Client) error {
 		}
 	}
 
+	// The firing log stores the mechanism name, so a bad name must fail
+	// here and not in a log that a user already has.
+	if c.Edits != nil && !clientIDPattern.MatchString(c.Edits.AdviceMechanism()) {
+		return fmt.Errorf("client %q: advice mechanism %q: must match %s",
+			c.ID, c.Edits.AdviceMechanism(), clientIDPattern)
+	}
+
 	// A declared operation without an adapter is a broken descriptor, not
 	// an unsupported operation: nothing could plan the declared work.
 	if c.Setup == nil && c.SetupOps != (SetupSupport{}) {

@@ -3,6 +3,7 @@ package reviews
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -261,6 +262,168 @@ func TestSummarizeMeasuresRepeatedHookDeliveryWithinSession(t *testing.T) {
 		"only the second delivery contains no lesson new to its session")
 	assert.Zero(t, s.SuppressedHookFirings)
 	assert.Equal(t, 2110, s.HookContextBytes)
+}
+
+func TestRecordHookDeliveryAttributesTheClientAndTheReceiver(t *testing.T) {
+	root := t.TempDir()
+	lessons := []model.Lesson{{Region: "api", Symptom: "Keep the generated client synchronized."}}
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "provider-receiver-secret"}
+
+	require.NoError(t, RecordHookDeliveryFiles(root, []string{"api/a.go"}, "Edit", lessons, HookDelivery{
+		Status: DeliveryInjected, SessionID: "provider-session-secret", ContextBytes: 90,
+		ClientID: "claude", Mechanism: "pre-tool-use-context", ReceiverID: dc.ReceiverID,
+	}))
+
+	// A client that names no receiver gets no digest.
+	require.NoError(t, RecordHookDeliveryFiles(root, []string{"api/a.go"}, "apply_patch", lessons, HookDelivery{
+		Status: DeliveryInjected, SessionID: "provider-session-secret", ContextBytes: 90,
+		ClientID: "codex", Mechanism: "pre-tool-use-context",
+	}))
+
+	// A receiver without a client is half an identity: no digest either.
+	require.NoError(t, RecordHookDeliveryFiles(root, []string{"api/a.go"}, "Edit", lessons, HookDelivery{
+		Status: DeliveryInjected, ContextBytes: 90, ReceiverID: "provider-receiver-secret",
+	}))
+
+	// No attribution writes the record shape of the earlier versions.
+	require.NoError(t, RecordHookDelivery(root, "api/a.go", "Edit", lessons, HookDelivery{
+		Status: DeliveryInjected, SessionID: "provider-session-secret", ContextBytes: 90,
+	}))
+
+	firings, err := ReadFirings(root)
+	require.NoError(t, err)
+	require.Len(t, firings, 4)
+	assert.Empty(t, firings[3].ContextSHA)
+
+	assert.Equal(t, "claude", firings[0].Client)
+	assert.Equal(t, "pre-tool-use-context", firings[0].Mechanism)
+	assert.Equal(t, contextDigest(root, dc), firings[0].ContextSHA)
+	assert.NotEqual(t, firings[0].SessionSHA, firings[0].ContextSHA)
+
+	assert.Equal(t, "codex", firings[1].Client)
+	assert.Empty(t, firings[1].ContextSHA, "the log never holds an identity that the client did not report")
+	assert.Equal(t, firings[0].SessionSHA, firings[1].SessionSHA,
+		"the session digest keeps its meaning: it does not include the client")
+
+	assert.Empty(t, firings[2].Client)
+	assert.Empty(t, firings[2].Mechanism)
+	assert.Empty(t, firings[2].ContextSHA)
+
+	raw, err := os.ReadFile(filepath.Join(root, ".seamark", auditFile))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "provider-receiver-secret")
+	assert.NotContains(t, string(raw), "provider-session-secret")
+
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	assert.NotContains(t, lines[2], `"client":`, "an unattributed record adds no key")
+	assert.NotContains(t, lines[2], `"mechanism":`)
+	assert.NotContains(t, lines[2], `"context_sha256":`)
+}
+
+func TestSummarizeGroupsHookDeliveryByRecordedClient(t *testing.T) {
+	lesson := FiredLesson{Region: "api", Symptom: "synchronize generated client"}
+	hook := func(client, receiver string, status DeliveryStatus, contextBytes int) Firing {
+		f := Firing{File: "api/a.py", Delivery: status, SessionSHA: "one-session-string", Generation: 1,
+			ContextBytes: contextBytes, Fired: []FiredLesson{lesson}, Client: client, ContextSHA: receiver}
+		if client != "" {
+			f.Mechanism = "pre-tool-use-context"
+		}
+
+		return f
+	}
+
+	older := func() Firing {
+		f := hook("", "", DeliveryInjected, 100)
+		f.SessionSHA = "an-older-session"
+
+		return f
+	}
+
+	firings := []Firing{
+		// Records older than the attribution: one without a delivery
+		// status, and two instrumented records of another session.
+		{File: "api/a.py", Fired: []FiredLesson{lesson}},
+		older(),
+		older(),
+		// Two clients report the same session string.
+		hook("claude", "claude-receiver", DeliveryInjected, 200),
+		hook("claude", "claude-receiver", DeliveryInjected, 200),
+		hook("claude", "claude-receiver", DeliverySuppressedRepeat, 0),
+		hook("codex", "", DeliveryInjected, 300),
+		// Another surface never counts as hook delivery.
+		{Surface: "check", Files: []string{"api/a.py", "db/b.py"}, Fired: []FiredLesson{lesson}},
+	}
+
+	s := Summarize(firings, nil)
+
+	assert.Equal(t, 5, s.InstrumentedHookFirings)
+	assert.Equal(t, 2, s.RepeatedHookFirings)
+	assert.Equal(t, 1, s.SuppressedHookFirings)
+	assert.Equal(t, 900, s.HookContextBytes)
+
+	assert.Equal(t, []HookAttribution{
+		{Client: "claude", Mechanism: "pre-tool-use-context", Injected: 2, Repeated: 1, Suppressed: 1, ContextBytes: 400},
+		{Client: "codex", Mechanism: "pre-tool-use-context", Injected: 1, ContextBytes: 300},
+		{Injected: 2, Repeated: 1, ContextBytes: 200},
+	}, s.HookByClient, "named clients first, then the records that name no client")
+
+	var injected, repeated, suppressed, contextBytes int
+	for _, tally := range s.HookByClient {
+		injected += tally.Injected
+		repeated += tally.Repeated
+		suppressed += tally.Suppressed
+		contextBytes += tally.ContextBytes
+	}
+
+	assert.Equal(t, []int{s.InstrumentedHookFirings, s.RepeatedHookFirings, s.SuppressedHookFirings, s.HookContextBytes},
+		[]int{injected, repeated, suppressed, contextBytes}, "the split adds up to the totals")
+
+	// The first codex delivery is not a repeat of the claude delivery,
+	// although both records carry one session digest.
+	assert.Zero(t, s.HookByClient[1].Repeated)
+
+	// A log without any client keeps the summary it always had.
+	assert.Empty(t, Summarize(firings[:3], nil).HookByClient)
+
+	// A mechanism without a client attributes nothing: one shared tally.
+	stray := hook("", "", DeliveryInjected, 50)
+	stray.Mechanism = "pre-tool-use-context"
+	assert.Len(t, Summarize(append(firings, stray), nil).HookByClient, 3)
+}
+
+func TestSummarizeKeepsReceiverBoundariesAcrossTheAttributionUpgrade(t *testing.T) {
+	// A record that names no client says nothing about the receiver. An
+	// attributed record must never count as a repeat because of it.
+	lesson := FiredLesson{Region: "api", Symptom: "synchronize generated client"}
+	record := func(client, contextSHA string, generation uint64) Firing {
+		return Firing{File: "api/a.py", Delivery: DeliveryInjected, SessionSHA: "one-session", Generation: generation,
+			ContextBytes: 100, Fired: []FiredLesson{lesson}, Client: client, ContextSHA: contextSHA}
+	}
+
+	legacy := record("", "", 1)
+
+	cases := []struct {
+		name    string
+		firings []Firing
+		want    int
+	}{
+		{"a subagent of the session is another receiver",
+			[]Firing{legacy, record("claude", "subagent-context", 1)}, 0},
+		{"another client reports the same session string",
+			[]Firing{legacy, record("codex", "", 1)}, 0},
+		{"version 2 restarts the generation, so generation 1 is a later window",
+			[]Firing{legacy, record("", "", 2), record("claude", "session-context", 1)}, 0},
+		{"the same receiver after the upgrade does not join the older record",
+			[]Firing{legacy, record("claude", "session-context", 1)}, 0},
+		{"records of one receiver still join each other",
+			[]Firing{legacy, legacy, record("claude", "session-context", 1), record("claude", "session-context", 1)}, 2},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, Summarize(tc.firings, nil).RepeatedHookFirings)
+		})
+	}
 }
 
 func TestExposureSurvivesCosmeticPinEdits(t *testing.T) {

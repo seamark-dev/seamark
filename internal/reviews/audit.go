@@ -85,6 +85,16 @@ type Firing struct {
 	MatchSHA     string         `json:"match_sha256,omitempty"`
 	Generation   uint64         `json:"context_generation,omitempty"`
 	ContextBytes int            `json:"context_bytes,omitempty"`
+	// Client and Mechanism attribute an edit-hook record: which client
+	// the hook served, and the native path the advice takes to the agent.
+	// A record without them is older than the attribution. Its client is
+	// unknown, and no reader may assign one.
+	Client    string `json:"client,omitempty"`
+	Mechanism string `json:"mechanism,omitempty"`
+	// ContextSHA is the digest of the receiving context, present when the
+	// client identifies one. A session can hold several receiving
+	// contexts, so SessionSHA alone does not say who got the advice.
+	ContextSHA string `json:"context_sha256,omitempty"`
 }
 
 // Delivered reports whether the record represents context that reached the
@@ -102,6 +112,14 @@ type HookDelivery struct {
 	MatchID      string
 	Generation   uint64
 	ContextBytes int
+	// ClientID and Mechanism are the attribution of the record. Empty
+	// values write the record shape that predates the attribution.
+	ClientID  string
+	Mechanism string
+	// ReceiverID is the client's identity of the receiving context, or
+	// empty when the client names none. Only a digest of ClientID and
+	// ReceiverID reaches the log, and only when both are present.
+	ReceiverID string
 }
 
 // RecordFiringSurface appends a firing record to
@@ -173,6 +191,12 @@ func RecordHookDeliveryFiles(root string, files []string, tool string, lessons [
 	}
 
 	rec.Generation = delivery.Generation
+	rec.Client = delivery.ClientID
+	rec.Mechanism = delivery.Mechanism
+
+	if dc := (DeliveryContext{ClientID: delivery.ClientID, ReceiverID: delivery.ReceiverID}); dc.valid() {
+		rec.ContextSHA = contextDigest(root, dc)
+	}
 
 	return appendFiring(root, rec)
 }
@@ -315,6 +339,23 @@ type Summary struct {
 	RepeatedHookFirings     int
 	SuppressedHookFirings   int
 	HookContextBytes        int
+	// HookByClient splits the four numbers above by recorded attribution.
+	// It is empty when no record names a client, so a log older than the
+	// attribution renders as before.
+	HookByClient []HookAttribution
+}
+
+// HookAttribution is the instrumented edit-hook tally of one recorded
+// client and mechanism. Empty Client and Mechanism collect the records
+// that name no client. Those records stay unattributed: a reader must
+// not assign a historical record to a client.
+type HookAttribution struct {
+	Client       string
+	Mechanism    string
+	Injected     int
+	Repeated     int
+	Suppressed   int
+	ContextBytes int
 }
 
 // Summarize aggregates firings and cross-references the currently-
@@ -323,10 +364,39 @@ type Summary struct {
 func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 	type key struct{ region, symptom string }
 
+	// contextKey is the digest of the receiving context when the record
+	// has one, and the session digest otherwise. client keeps two clients
+	// apart when they report the same session string.
 	type sessionLessonKey struct {
-		session    string
+		client     string
+		contextKey string
 		generation uint64
 		lesson     FiredLesson
+	}
+
+	type attributionKey struct{ client, mechanism string }
+
+	byClient := map[attributionKey]*HookAttribution{}
+	attributed := false
+
+	attribution := func(fr Firing) *HookAttribution {
+		k := attributionKey{fr.Client, fr.Mechanism}
+
+		// A mechanism without a client attributes nothing. All records
+		// that name no client share one tally.
+		if fr.Client == "" {
+			k.mechanism = ""
+		}
+
+		if byClient[k] == nil {
+			byClient[k] = &HookAttribution{Client: k.client, Mechanism: k.mechanism}
+		}
+
+		if fr.Client != "" {
+			attributed = true
+		}
+
+		return byClient[k]
 	}
 
 	count := map[key]*Fired{}
@@ -354,6 +424,7 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 		isSuppressed := fr.Surface == "" && fr.Delivery == DeliverySuppressedRepeat
 		if isSuppressed {
 			suppressed++
+			attribution(fr).Suppressed++
 		}
 
 		for _, fl := range fr.Fired {
@@ -383,14 +454,28 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 		}
 
 		if surface == "hook" && fr.Delivery == DeliveryInjected {
-			instrumented++
-			contextBytes += fr.ContextBytes
+			tally := attribution(fr)
 
-			if fr.SessionSHA != "" && len(fr.Fired) > 0 {
+			instrumented++
+			tally.Injected++
+			contextBytes += fr.ContextBytes
+			tally.ContextBytes += fr.ContextBytes
+
+			contextKey := fr.ContextSHA
+			if contextKey == "" {
+				contextKey = fr.SessionSHA
+			}
+
+			if contextKey != "" && len(fr.Fired) > 0 {
 				allRepeated := true
 
+				// A record joins only records of its own client and context
+				// key. It never joins a record that names no client: that
+				// record says nothing about the receiver, and its generation
+				// belongs to another numbering. The first attributed delivery
+				// of a live session therefore counts as new.
 				for _, lesson := range fr.Fired {
-					key := sessionLessonKey{fr.SessionSHA, fr.Generation, lesson.canonicalIdentity()}
+					key := sessionLessonKey{fr.Client, contextKey, fr.Generation, lesson.canonicalIdentity()}
 					if !seenSessionLessons[key] {
 						allRepeated = false
 						seenSessionLessons[key] = true
@@ -399,6 +484,7 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 
 				if allRepeated {
 					repeated++
+					tally.Repeated++
 				}
 			}
 		}
@@ -451,6 +537,28 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 		}
 	}
 
+	var hookByClient []HookAttribution
+
+	if attributed {
+		for _, tally := range byClient {
+			hookByClient = append(hookByClient, *tally)
+		}
+
+		// Named clients first in name order, then the unattributed rest.
+		sort.Slice(hookByClient, func(i, j int) bool {
+			a, b := hookByClient[i], hookByClient[j]
+			if (a.Client == "") != (b.Client == "") {
+				return b.Client == ""
+			}
+
+			if a.Client != b.Client {
+				return a.Client < b.Client
+			}
+
+			return a.Mechanism < b.Mechanism
+		})
+	}
+
 	return Summary{
 		Total:                   delivered,
 		BySurface:               bySurface,
@@ -461,6 +569,7 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 		RepeatedHookFirings:     repeated,
 		SuppressedHookFirings:   suppressed,
 		HookContextBytes:        contextBytes,
+		HookByClient:            hookByClient,
 	}
 }
 

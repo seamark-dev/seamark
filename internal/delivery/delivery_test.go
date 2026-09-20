@@ -228,6 +228,190 @@ func TestDeliverSuppressesOnlyAfterEmissionAndResets(t *testing.T) {
 	}, statuses)
 }
 
+func TestDeliverSeparatesReceivingContextsAndClients(t *testing.T) {
+	root := workspace(t)
+	st := lessonStore(t, root)
+	cfg := pinnedConfig(reviews.HookDeliveryOncePerContext)
+
+	// deliver runs one event and returns its status.
+	deliver := func(clientID string, event integration.EditEvent) Outcome {
+		t.Helper()
+
+		out, err := Deliver(context.Background(), st,
+			Request{Root: root, ClientID: clientID, Mechanism: "fake-stdout", Event: event, Config: cfg},
+			func(string) error { return nil })
+		require.NoError(t, err)
+
+		return out
+	}
+
+	parent := editEvent(root, "session-1", true, "api/handler.go")
+
+	assert.Equal(t, StatusEmitted, deliver("claude", parent).Status)
+	assert.Equal(t, StatusSuppressed, deliver("claude", parent).Status)
+
+	// A subagent with its own identity shares the parent session id. The
+	// parent's emission must not hide the subagent's first reminder.
+	child := editEvent(root, "session-1", true, "api/handler.go")
+	child.Context = &integration.ReceivingContext{ID: "session-1/agent-7", Resettable: true}
+
+	assert.Equal(t, StatusEmitted, deliver("claude", child).Status, "the child is another receiver")
+	assert.Equal(t, StatusSuppressed, deliver("claude", child).Status)
+
+	// A subagent without an identity reports the parent session only.
+	// The adapter then gives no context, and delivery repeats.
+	anonymous := editEvent(root, "session-1", true, "api/handler.go")
+	anonymous.Context = nil
+
+	for range 2 {
+		out := deliver("claude", anonymous)
+		assert.Equal(t, StatusEmitted, out.Status)
+		assert.Equal(t, SuppressionNoContext, out.Suppression)
+	}
+
+	// Another client reports the identical session string.
+	assert.Equal(t, StatusEmitted, deliver("fake", parent).Status, "one session string, two clients, two receivers")
+	assert.Equal(t, StatusSuppressed, deliver("fake", parent).Status)
+
+	// A reset reaches one receiver of one client.
+	require.NoError(t, Reset(ResetRequest{Root: root, ClientID: "claude",
+		Event: integration.ResetEvent{Context: *parent.Context}}))
+
+	again := deliver("claude", parent)
+	assert.Equal(t, StatusEmitted, again.Status)
+	assert.Equal(t, uint64(2), again.Generation)
+	assert.Equal(t, StatusSuppressed, deliver("claude", child).Status, "the child keeps its generation")
+	assert.Equal(t, StatusSuppressed, deliver("fake", parent).Status, "the other client keeps its generation")
+
+	// The log tells the receivers apart, and the session digest keeps
+	// its old meaning: equal for every record of the session string.
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+
+	receivers := map[string]bool{}
+	sessions := map[string]bool{}
+
+	for _, f := range firings {
+		sessions[f.SessionSHA] = true
+
+		if f.ContextSHA != "" {
+			receivers[f.Client+" "+f.ContextSHA] = true
+		}
+
+		assert.Equal(t, "fake-stdout", f.Mechanism)
+		assert.Contains(t, []string{"claude", "fake"}, f.Client)
+	}
+
+	assert.Len(t, sessions, 1)
+	assert.Len(t, receivers, 3, "parent, child, and the other client's parent")
+}
+
+func TestDeliverEmitsAgainWhenTheLessonTextChanges(t *testing.T) {
+	// The delivered set holds content digests. A reworded note is another
+	// reminder, so the same context gets it once more.
+	root := workspace(t)
+	st := lessonStore(t, root)
+	cfg := pinnedConfig(reviews.HookDeliveryOncePerContext)
+	req := Request{Root: root, ClientID: integration.ClaudeID, Config: cfg,
+		Event: editEvent(root, "session-1", true, "api/handler.go")}
+
+	var got capture
+
+	_, err := Deliver(context.Background(), st, req, got.emit)
+	require.NoError(t, err)
+
+	cfg.Pin[0].Note = "Validate request payloads at the edge, and reject unknown fields."
+
+	revised, err := Deliver(context.Background(), st, req, got.emit)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, revised.Emitted, "only the revised pin is new to the context")
+	assert.Equal(t, 1, revised.Suppressed)
+	assert.Contains(t, got.advice[1], "reject unknown fields")
+	assert.NotContains(t, got.advice[1], "RUF001")
+}
+
+func TestLegacyClientIsTheClaudeRegistryID(t *testing.T) {
+	// The session-keyed entry points of the reviews package keep the
+	// name of the client they always served.
+	assert.Equal(t, integration.ClaudeID, reviews.LegacyClientID)
+}
+
+func TestDeliverRepeatsInsideAClaudeSubagentAndNeverResetsTheParent(t *testing.T) {
+	// End to end with the native fixtures: the parent session and a
+	// subagent that reports the same session id.
+	root := workspace(t)
+	st := lessonStore(t, root)
+	cfg := pinnedConfig(reviews.HookDeliveryOncePerContext)
+
+	claude, ok := integration.Builtin().Lookup(integration.ClaudeID)
+	require.True(t, ok)
+
+	fixture := func(name string) []byte {
+		t.Helper()
+
+		raw, err := os.ReadFile(filepath.Join("..", "integration", "testdata", "claude", name))
+		require.NoError(t, err)
+
+		payload := strings.ReplaceAll(string(raw), "/workspace/repo", root)
+
+		return []byte(strings.ReplaceAll(payload, "internal/api/", "api/"))
+	}
+
+	deliver := func(name string) Outcome {
+		t.Helper()
+
+		event, err := claude.Edits.DecodeEdit(fixture(name))
+		require.NoError(t, err)
+
+		out, err := Deliver(context.Background(), st, Request{Root: root, ClientID: claude.ID,
+			Mechanism: claude.Edits.AdviceMechanism(), Event: event, Config: cfg}, func(string) error { return nil })
+		require.NoError(t, err)
+
+		return out
+	}
+
+	reset := func(name string) {
+		t.Helper()
+
+		event, err := claude.Resets.DecodeReset(fixture(name))
+		require.NoError(t, err)
+		require.NoError(t, Reset(ResetRequest{Root: root, ClientID: claude.ID, Event: event}))
+	}
+
+	assert.Equal(t, StatusEmitted, deliver("pre_tool_use_edit.json").Status)
+	assert.Equal(t, StatusSuppressed, deliver("pre_tool_use_edit.json").Status)
+
+	// The parent already has the lesson. The subagent does not, and it
+	// has no reset event, so it gets the advice on every edit.
+	for range 2 {
+		out := deliver("pre_tool_use_edit_subagent.json")
+		assert.Equal(t, StatusEmitted, out.Status)
+		assert.Equal(t, SuppressionNotResettable, out.Suppression)
+	}
+
+	// A reset that names the subagent must not reach the parent.
+	reset("post_compact_subagent.json")
+	assert.Equal(t, StatusSuppressed, deliver("pre_tool_use_edit.json").Status)
+
+	reset("post_compact.json")
+	assert.Equal(t, StatusEmitted, deliver("pre_tool_use_edit.json").Status)
+
+	// The log holds one session digest and two context digests.
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+
+	sessions, contexts := map[string]bool{}, map[string]bool{}
+	for _, f := range firings {
+		sessions[f.SessionSHA] = true
+		contexts[f.ContextSHA] = true
+	}
+
+	assert.Len(t, sessions, 1)
+	assert.Len(t, contexts, 2)
+	assert.NotContains(t, contexts, "")
+}
+
 func TestDeliverKeepsAdviceEligibleWhenTheReplyFails(t *testing.T) {
 	root := workspace(t)
 	st := lessonStore(t, root)
@@ -457,17 +641,43 @@ func TestDeliverReportsALookupFailureAsAPlainError(t *testing.T) {
 func TestResetIgnoresAnEventWithoutAResettableContext(t *testing.T) {
 	root := workspace(t)
 
-	for _, receiver := range []integration.ReceivingContext{
+	for _, receiving := range []integration.ReceivingContext{
 		{},
 		{ID: "session-1"},
 		{ID: "session-1", Resettable: true},
 	} {
 		require.NoError(t, Reset(ResetRequest{Root: root, ClientID: "fake",
-			Event: integration.ResetEvent{Context: receiver}}))
+			Event: integration.ResetEvent{Context: receiving}}))
 	}
 
 	assert.NoDirExists(t, filepath.Join(root, ".seamark"),
 		"a reset never creates state that delivery has not used")
+
+	// With state on disk, an event that names no resettable context, or
+	// a request without a client, must leave every entry as it is.
+	st := lessonStore(t, root)
+	req := Request{Root: root, ClientID: "fake", Config: pinnedConfig(reviews.HookDeliveryOncePerContext),
+		Event: editEvent(root, "session-1", true, "api/handler.go")}
+
+	_, err := Deliver(context.Background(), st, req, func(string) error { return nil })
+	require.NoError(t, err)
+
+	path := filepath.Join(root, ".seamark", "lessons-hook-state.json")
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	for _, reset := range []ResetRequest{
+		{Root: root, ClientID: "fake", Event: integration.ResetEvent{Context: integration.ReceivingContext{Resettable: true}}},
+		{Root: root, ClientID: "fake", Event: integration.ResetEvent{Context: integration.ReceivingContext{ID: "session-1"}}},
+		{Root: root, Event: integration.ResetEvent{Context: integration.ReceivingContext{ID: "session-1", Resettable: true}}},
+		{Root: root},
+	} {
+		require.NoError(t, Reset(reset))
+	}
+
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "a missing identity resets no unrelated context")
 }
 
 func TestPackageStartsNoInference(t *testing.T) {

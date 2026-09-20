@@ -44,11 +44,50 @@ func TestClaudeEditsDecodeTheNativeFixtures(t *testing.T) {
 			assert.Equal(t, "synthetic-claude-session-0001", event.SessionID)
 			assert.Equal(t, "/workspace/repo", event.CWD)
 
-			// The session is the receiving context of the session-keyed
-			// hook, and PostCompact reports the same id.
+			// The main conversation is the session, and PostCompact
+			// reports the same id, so the context is resettable.
 			require.NotNil(t, event.Context)
-			assert.Equal(t, ReceivingContext{ID: "synthetic-claude-session-0001", Resettable: true}, *event.Context)
+			assert.Equal(t, ReceivingContext{ID: "29:synthetic-claude-session-0001", Resettable: true}, *event.Context)
 		})
+	}
+}
+
+func TestClaudeEditsGiveASubagentItsOwnReceivingContext(t *testing.T) {
+	parent, err := claudeEdits{}.DecodeEdit(claudeFixture(t, "pre_tool_use_edit.json"))
+	require.NoError(t, err)
+
+	child, err := claudeEdits{}.DecodeEdit(claudeFixture(t, "pre_tool_use_edit_subagent.json"))
+	require.NoError(t, err)
+
+	assert.Equal(t, parent.SessionID, child.SessionID, "the fixture subagent reports the parent session")
+	assert.Equal(t, parent.Paths, child.Paths)
+
+	// The subagent has its own context window. A lesson that the parent
+	// got is not in that window, so the receivers must differ.
+	require.NotNil(t, child.Context)
+	assert.Equal(t, "29:synthetic-claude-session-000120:synthetic-agent-0007", child.Context.ID)
+	assert.NotEqual(t, parent.Context.ID, child.Context.ID)
+	assert.False(t, child.Context.Resettable,
+		"no documented reset event reaches a subagent, so suppression stays off there")
+
+	// An agent id without a session names no receiver at all.
+	orphan, err := claudeEdits{}.DecodeEdit([]byte(`{"agent_id":"a1","tool_input":{"file_path":"a.go"}}`))
+	require.NoError(t, err)
+	assert.Nil(t, orphan.Context)
+}
+
+func TestReceiverIDKeepsPartListsApart(t *testing.T) {
+	// The identifiers are client input. No choice of bytes in one part
+	// may produce the ID of another part list.
+	ids := map[string][]string{}
+
+	for _, parts := range [][]string{
+		{"abc"}, {"abc", ""}, {"", "abc"}, {"ab", "c"}, {"a", "bc"}, {"abc", "xy"},
+		{"abc2:xy"}, {"3:abc"}, {"3:abc2:xy"}, {"abc\x00xy"}, {"abc", "\x00xy"}, {"abc/xy"}, {"abc", "/xy"},
+	} {
+		id := receiverID(parts...)
+		assert.NotContains(t, ids, id, "%q and %q share the ID %q", ids[id], parts, id)
+		ids[id] = parts
 	}
 }
 
@@ -81,17 +120,31 @@ func TestClaudeEditsEncodeTheHistoricalReply(t *testing.T) {
 	assert.Equal(t, want, string(reply.Stdout))
 	assert.Empty(t, reply.Stderr)
 	assert.Zero(t, reply.ExitCode, "advice never blocks the edit")
+	assert.Equal(t, "pre-tool-use-context", claudeEdits{}.AdviceMechanism(),
+		"the firing log holds this name, so a rename splits the statistics")
 }
 
 func TestClaudeResetsDecodeTheCompactedContext(t *testing.T) {
 	event, err := claudeResets{}.DecodeReset(claudeFixture(t, "post_compact.json"))
 	require.NoError(t, err)
-	assert.Equal(t, ReceivingContext{ID: "synthetic-claude-session-0001", Resettable: true}, event.Context)
+	assert.Equal(t, ReceivingContext{ID: "29:synthetic-claude-session-0001", Resettable: true}, event.Context)
 
 	// The reset names the context that the edit event names.
 	edit, err := claudeEdits{}.DecodeEdit(claudeFixture(t, "pre_tool_use_edit.json"))
 	require.NoError(t, err)
 	assert.Equal(t, *edit.Context, event.Context)
+
+	// A reset inside a subagent names the subagent, by the rule of the
+	// edit decoder. It is not the parent, and it is not resettable.
+	childReset, err := claudeResets{}.DecodeReset(claudeFixture(t, "post_compact_subagent.json"))
+	require.NoError(t, err)
+
+	childEdit, err := claudeEdits{}.DecodeEdit(claudeFixture(t, "pre_tool_use_edit_subagent.json"))
+	require.NoError(t, err)
+
+	assert.Equal(t, *childEdit.Context, childReset.Context)
+	assert.NotEqual(t, event.Context.ID, childReset.Context.ID, "a child reset never names the parent")
+	assert.False(t, childReset.Context.Resettable)
 
 	// No session id is valid and resets nothing.
 	event, err = claudeResets{}.DecodeReset([]byte(`{}`))

@@ -50,7 +50,8 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   Claude Code adapter in front of it: the adapter translates the native
   event and reply, and the service owns selection, once-per-context
   state, emission order, and the firing log. For a Claude Code edit the
-  reminder, the state, and the log are byte-identical to before. The
+  reminder is byte-identical to before; the two entries below change the
+  state file and add fields to the log. The
   service already handles one edit operation on several files under one
   budget (`pin_budget` pins, eight lessons in total) with one log record;
   no shipped agent sends such an event yet. Three edge cases change on
@@ -67,6 +68,30 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   - The hook no longer creates `.seamark/index.db` in a workspace that was
     never indexed. The pins of `lessons.yaml` are still delivered there.
     A database that exists and cannot be opened still means no reminder.
+
+- **Suppression follows the receiving context.** `hook_delivery:
+  once-per-context` now keys its state by the client and the receiving
+  context that the client's adapter reports, not by the session string
+  alone. Two clients that report one session string no longer share an
+  entry, and a client that cannot name the receiver or has no reset event
+  for it gets repeated delivery. For Claude Code the main conversation is
+  still the session. An edit inside a subagent (the event carries
+  `agent_id`) is now its own context, and it has no reset event, so a
+  subagent gets the reminder on every matching edit. Before, a lesson that
+  the parent conversation already got could stay hidden from its subagent.
+  `.seamark/lessons-hook-state.json` moves to version 2. A version 1 file
+  reads as empty, so each lesson already delivered can be shown once more
+  per context after the upgrade. An older seamark that meets a version 2
+  file delivers every reminder and leaves the file alone; after a
+  rollback, delete the file to get suppression back.
+- **The firing log names the client.** New edit-hook records carry `client`,
+  `mechanism`, and `context_sha256` (a repository-scoped digest, never the
+  raw identifier). `seamark lessons --stats` adds one line per recorded
+  client under the hook-delivery line; records that name no client are
+  listed as such and are never assigned to one. Existing fields keep their
+  meaning, and an older log renders as before. Repeat counts never join a
+  record that names a client with one that does not, so the first reminder
+  after the upgrade counts as new in a session that was already running.
 
 ## v0.6.0 — 2026-09-05
 

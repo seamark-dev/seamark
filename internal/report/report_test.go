@@ -748,6 +748,34 @@ func TestPrintOutcomesOrdersActionableFirst(t *testing.T) {
 	assert.Zero(t, sb.Len())
 }
 
+func TestPrintFiringSummarySplitsHookDeliveryByRecordedClient(t *testing.T) {
+	summary := reviews.Summary{
+		Total: 3, BySurface: map[string]int{"hook": 3}, Files: 1,
+		InstrumentedHookFirings: 3, RepeatedHookFirings: 1, SuppressedHookFirings: 1, HookContextBytes: 700,
+		HookByClient: []reviews.HookAttribution{
+			{Client: "claude", Mechanism: "pre-tool-use-context", Injected: 2, Repeated: 1, Suppressed: 1, ContextBytes: 400},
+			{Client: "co\x1b[2Jdex", Injected: 0},
+			{Injected: 1, ContextBytes: 300},
+		},
+	}
+
+	var out strings.Builder
+	PrintFiringSummary(&out, summary)
+
+	assert.Contains(t, out.String(),
+		"hook delivery — instrumented: 3 injected (1 repeated), 1 suppressed; context: 700 bytes\n"+
+			"  claude via pre-tool-use-context: 2 injected (1 repeated), 1 suppressed; context: 400 bytes\n"+
+			"  co[2Jdex: 0 injected (0 repeated), 0 suppressed; context: 0 bytes\n"+
+			"  no client recorded: 1 injected (0 repeated), 0 suppressed; context: 300 bytes\n\n")
+	assert.NotContains(t, out.String(), "\x1b")
+
+	// No recorded client: the block is the single line it always was.
+	summary.HookByClient = nil
+	out.Reset()
+	PrintFiringSummary(&out, summary)
+	assert.Contains(t, out.String(), "context: 700 bytes\n\nmost surfaced")
+}
+
 func TestPrintFiringSummaryReportsSuppressionOnlyHistory(t *testing.T) {
 	var out strings.Builder
 	PrintFiringSummary(&out, reviews.Summary{SuppressedHookFirings: 3})

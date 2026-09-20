@@ -175,9 +175,16 @@ type SetupAdapter interface {
 // EditHooks translates a client's edit lifecycle. DecodeEdit turns one
 // native payload into the complete set of affected paths; EncodeAdvice
 // turns rendered advisory text into the native, nonblocking reply.
+//
+// AdviceMechanism names the native path that EncodeAdvice uses to reach
+// the agent, for example "pre-tool-use-context". The firing log records
+// it beside the client, so statistics can tell two delivery paths
+// apart. The name is a short constant: lowercase letters, digits, and
+// hyphens. It names the path only and claims nothing about attention.
 type EditHooks interface {
 	DecodeEdit(payload []byte) (EditEvent, error)
 	EncodeAdvice(text string) (HookReply, error)
+	AdviceMechanism() string
 }
 
 // CommandHooks translates a client's shell-command lifecycle for the

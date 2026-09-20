@@ -817,9 +817,27 @@ func printHookDeliverySummary(w io.Writer, s reviews.Summary) {
 	}
 
 	fmt.Fprintf(w, "hook delivery — instrumented: %d injected (%d repeated), "+
-		"%d suppressed; context: %d bytes\n\n",
+		"%d suppressed; context: %d bytes\n",
 		s.InstrumentedHookFirings, s.RepeatedHookFirings,
 		s.SuppressedHookFirings, s.HookContextBytes)
+
+	// One line per recorded client. A record without a client stays
+	// unattributed: an older record does not say which client wrote it.
+	for _, tally := range s.HookByClient {
+		label := "no client recorded"
+		if tally.Client != "" {
+			label = render.Sanitize(tally.Client)
+
+			if tally.Mechanism != "" {
+				label += " via " + render.Sanitize(tally.Mechanism)
+			}
+		}
+
+		fmt.Fprintf(w, "  %s: %d injected (%d repeated), %d suppressed; context: %d bytes\n",
+			label, tally.Injected, tally.Repeated, tally.Suppressed, tally.ContextBytes)
+	}
+
+	fmt.Fprintln(w)
 }
 
 // firingDate trims an RFC3339 timestamp to its date for compact display.

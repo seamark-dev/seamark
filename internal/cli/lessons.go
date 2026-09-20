@@ -1258,7 +1258,8 @@ func runLessonsHook(cmd *cobra.Command, opts *options) error {
 	}
 
 	_, err = delivery.Deliver(cmd.Context(), st, delivery.Request{
-		Root: root, ClientID: client.ID, Event: event, Config: loadLessonsConfig(root),
+		Root: root, ClientID: client.ID, Mechanism: client.Edits.AdviceMechanism(),
+		Event: event, Config: loadLessonsConfig(root),
 	}, emit)
 
 	// Only a failed reply is the hook's own failure. A failed lookup

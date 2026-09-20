@@ -144,9 +144,28 @@ not require re-running init.
 
 The optimization is deliberately fail-open: missing session identity, corrupt
 local state, or a state-lock failure causes normal injection rather than
-silently hiding a lesson. Only repository-scoped session and lesson digests
-are stored in the gitignored `.seamark/lessons-hook-state.json`; entries expire
-after 24 hours.
+silently hiding a lesson. Only repository-scoped digests of the receiving
+context and of the lessons are stored in the gitignored
+`.seamark/lessons-hook-state.json`; entries expire after 24 hours.
+
+A receiving context is the client plus the conversation that the client's
+adapter reports as the receiver. Two clients that report the same session
+string are two contexts, and a reminder shown to one never hides it from the
+other. A client that cannot name the receiver, or has no reset event for it,
+gets repeated delivery instead of suppression. For Claude Code the main
+conversation is the session, and `PostCompact` resets it. An edit inside a
+subagent carries `agent_id` and is its own context: the subagent's context
+window never saw what the parent got. No reset event is documented for a
+subagent, so a subagent gets repeated delivery, and a reset that fires inside
+it never resets the parent.
+
+The state file carries a version. This release writes version 2. It reads a
+version 1 file as empty, because a session-keyed entry does not say which
+context got the reminder; the cost is that each lesson already delivered can
+be shown once more per context after the upgrade. An older seamark that meets
+a version 2 file delivers every reminder and leaves the file alone, and this
+seamark does the same with a version it does not know. After a rollback to an
+older seamark, delete the file to get suppression back.
 
 ## The ledger: lessons --list
 
@@ -447,7 +466,16 @@ audit log. Edit-hook records also carry the rendered context byte count,
 delivery status, context generation, and repository-scoped SHA-256 digests of
 the provider session and tool-use match; raw provider identifiers are never
 persisted or made correlatable across repositories. These fields make repeated
-delivery and opt-in suppression measurable. `seamark lessons --stats` turns
+delivery and opt-in suppression measurable. Current records also name the
+`client`, the `mechanism` that carries the reminder (`pre-tool-use-context`
+for Claude Code), and a digest of the receiving context when the client
+reports one. A record written before these fields existed names no client, and
+the statistics keep it that way instead of guessing: a repeat is counted only
+among records of one client and one receiving context, never across the
+records from before and after these fields. An edit operation on
+several files is one record with every path and one byte total. A record says
+that a reminder was emitted, never that the agent followed it.
+`seamark lessons --stats` turns
 the log into which lessons actually reach agents, split by surface (a
 `change_set` plan and a CI `check` are exposure, not edits reminded), and which
 *would* surface but never have (a lesson whose region no edit touches is a
@@ -463,6 +491,8 @@ $ seamark lessons --stats
 lesson firings — 128 hook reminders, 31 change_set, 12 check — across 24 files
 
 hook delivery — instrumented: 128 injected (84 repeated), 0 suppressed; context: 57344 bytes
+  claude via pre-tool-use-context: 96 injected (61 repeated), 0 suppressed; context: 43008 bytes
+  no client recorded: 32 injected (23 repeated), 0 suppressed; context: 14336 bytes
 
 most surfaced
   ×41  scripts                                  last 2026-07-26  E702

@@ -48,7 +48,25 @@ func TestNewRegistryRejectsInvalidDescriptors(t *testing.T) {
 		_, err := NewRegistry(Client{ID: "dirs", Name: "Dirs", SkillDirs: []string{dir}})
 		assert.Error(t, err, "skill dir %q must be rejected", dir)
 	}
+
+	// The firing log stores the mechanism name, so it follows the ID rule.
+	for _, mechanism := range []string{"", "Pre Tool Use", "with\nnewline"} {
+		_, err := NewRegistry(Client{ID: "edits", Name: "Edits", Edits: namedEdits{mechanism: mechanism}})
+		assert.Error(t, err, "mechanism %q must be rejected", mechanism)
+	}
+
+	_, err = NewRegistry(Client{ID: "edits", Name: "Edits", Edits: namedEdits{mechanism: "stdout-text"}})
+	require.NoError(t, err)
 }
+
+// namedEdits is an edit codec that only names its mechanism.
+type namedEdits struct {
+	fakeEdits
+
+	mechanism string
+}
+
+func (n namedEdits) AdviceMechanism() string { return n.mechanism }
 
 func TestSelectDeduplicatesAndFollowsRegistryOrder(t *testing.T) {
 	r := Builtin()

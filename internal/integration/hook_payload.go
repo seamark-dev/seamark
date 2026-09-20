@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // MaxHookPayload bounds one native hook payload in bytes. The cap
@@ -31,4 +32,20 @@ func ReadHookPayload(r io.Reader) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+// receiverID builds the ID of a receiving context from the native
+// identifiers that name it, for example a session and a subagent. Each
+// part carries its length. The identifiers are client input and can
+// hold any byte, so a separator alone lets two different part lists
+// give one ID. With the lengths, a one-part ID never equals a two-part
+// ID, and a child context never gets the ID of its parent.
+func receiverID(parts ...string) string {
+	var id strings.Builder
+
+	for _, part := range parts {
+		fmt.Fprintf(&id, "%d:%s", len(part), part)
+	}
+
+	return id.String()
 }
