@@ -412,6 +412,89 @@ func TestDeliverRepeatsInsideAClaudeSubagentAndNeverResetsTheParent(t *testing.T
 	assert.NotContains(t, contexts, "")
 }
 
+func TestDeliverGivesEquivalentEventsOfTwoClientsTheSameAdvice(t *testing.T) {
+	// One file, edited through Claude Code and through a Codex patch. The
+	// clients differ in the payload only, so the advice must be equal.
+	root := workspace(t)
+	st := lessonStore(t, root)
+	cfg := pinnedConfig(reviews.HookDeliveryAlways)
+	reg := integration.Builtin()
+
+	advise := func(clientID string, payload []byte) (string, Outcome) {
+		t.Helper()
+
+		client, ok := reg.Lookup(clientID)
+		require.True(t, ok)
+
+		event, err := client.Edits.DecodeEdit(payload)
+		require.NoError(t, err)
+
+		var got capture
+
+		out, err := Deliver(context.Background(), st, Request{Root: root, ClientID: client.ID,
+			Mechanism: client.Edits.AdviceMechanism(), Event: event, Config: cfg}, got.emit)
+		require.NoError(t, err)
+		require.Len(t, got.advice, 1)
+
+		return got.advice[0], out
+	}
+
+	fixture := func(dir, name string) []byte {
+		t.Helper()
+
+		raw, err := os.ReadFile(filepath.Join("..", "integration", "testdata", dir, name))
+		require.NoError(t, err)
+
+		// The fixture workspace is a placeholder. Point it at the test
+		// root and at the region the lessons cover, also in a nested cwd.
+		payload := strings.ReplaceAll(string(raw), "/workspace/repo", root)
+
+		return []byte(strings.ReplaceAll(payload, "internal/api", "api"))
+	}
+
+	claudeAdvice, _ := advise(integration.ClaudeID, fixture("claude", "pre_tool_use_edit.json"))
+	codexAdvice, codexOut := advise(integration.CodexID, fixture("codex", "pre_tool_use_apply_patch_update.json"))
+
+	assert.Equal(t, claudeAdvice, codexAdvice)
+	assert.Equal(t, SuppressionOff, codexOut.Suppression)
+
+	// A patch that names the file twice is the same single-file event.
+	repeated, out := advise(integration.CodexID, fixture("codex", "pre_tool_use_apply_patch_repeated.json"))
+	assert.Equal(t, claudeAdvice, repeated)
+	assert.Equal(t, []string{"api/handler.go"}, out.Files)
+
+	// A nested event directory, end to end. This fixture keeps its own
+	// depth: "../../docs" leaves the workspace from a shallower directory.
+	raw, err := os.ReadFile(filepath.Join("..", "integration", "testdata", "codex", "pre_tool_use_apply_patch_nested_cwd.json"))
+	require.NoError(t, err)
+
+	cfg.Pin = append(cfg.Pin, reviews.PinRule{Rule: "docs-voice", Region: "docs", Note: "Write in the present tense."})
+
+	_, nested := advise(integration.CodexID, []byte(strings.ReplaceAll(string(raw), "/workspace/repo", root)))
+	assert.Equal(t, []string{"internal/api/handler.go", "docs/from-nested.md"}, nested.Files)
+
+	// Codex names no receiver. Under once-per-context the advice repeats,
+	// the outcome says why, and no state appears.
+	cfg.Delivery = reviews.HookDeliveryOncePerContext
+
+	for range 2 {
+		_, out := advise(integration.CodexID, fixture("codex", "pre_tool_use_apply_patch_update.json"))
+		assert.Equal(t, StatusEmitted, out.Status)
+		assert.Equal(t, SuppressionNoContext, out.Suppression)
+	}
+
+	assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-hook-state.json"))
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+
+	last := firings[len(firings)-1]
+	assert.Equal(t, integration.CodexID, last.Client)
+	assert.Equal(t, "apply_patch", last.Tool)
+	assert.Len(t, last.SessionSHA, 64)
+	assert.Empty(t, last.ContextSHA, "the log holds no identity that the client did not report")
+}
+
 func TestDeliverKeepsAdviceEligibleWhenTheReplyFails(t *testing.T) {
 	root := workspace(t)
 	st := lessonStore(t, root)

@@ -76,14 +76,23 @@ func TestInitClientCodexTouchesOnlyCommonAndCodexArtifacts(t *testing.T) {
 	preview := initClients(t, root, true, true, true, "", "codex")
 	assert.Equal(t, []string{".claude/settings.json"}, files(t, root), "--print writes nothing")
 	assert.Contains(t, preview, "would write .codex/config.toml (registered seamark mcp; approved 5 tools")
+	assert.Contains(t, preview, "would write .codex/hooks.json (lessons hook)")
 	assert.Contains(t, preview, "(nothing was written — --print)")
 
 	out := initClients(t, root, false, true, true, "", "codex")
 	assert.Contains(t, out, "  wrote   .codex/config.toml (registered seamark mcp; approved 5 tools: orient, why, change_set, check, expand)")
 	assert.Contains(t, out, "  wrote  .agents/skills/seamark-plan-change")
 
-	// Partial support and native trust are reported, not hidden.
-	assert.Contains(t, out, "note    Codex: lifecycle hooks are not supported by this integration; skipped")
+	// The lesson hook, with the exact command that Codex runs. No reset
+	// hook: a Codex reset clears nothing, and each hook costs a review.
+	assert.Contains(t, out, "  wrote   .codex/hooks.json (lessons hook)")
+	assert.Contains(t, out, "          PreToolUse apply_patch         /bin/seamark lessons --hook --client codex")
+	assert.NotContains(t, out, "--hook-reset --client codex")
+
+	// Native trust and the delivery limit are reported, not hidden. Codex
+	// gets no gate hook yet, so the run prints no gate mode for it.
+	assert.Contains(t, out, "Codex runs a project hook only after the user reviews and trusts it")
+	assert.Contains(t, out, "`hook_delivery: once-per-context` does not apply")
 	assert.Contains(t, out, "setup never grants trust")
 	assert.Contains(t, out, "gate    no gate hook for the selected clients")
 	assert.NotContains(t, out, "only the Claude hook enforces")
@@ -97,6 +106,7 @@ func TestInitClientCodexTouchesOnlyCommonAndCodexArtifacts(t *testing.T) {
 	before := snapshot(t, root)
 	again := initClients(t, root, false, true, true, "", "codex")
 	assert.Contains(t, again, `kept    .codex/config.toml (seamark registered as "seamark"; 5/5 tools approved)`)
+	assert.Contains(t, again, "kept    .codex/hooks.json (seamark hooks already wired)")
 	assert.Contains(t, again, "kept    .agents/skills/seamark-plan-change (current)")
 	assert.Equal(t, before, snapshot(t, root))
 }
@@ -121,6 +131,19 @@ func TestInitClientRegistersWithoutGrants(t *testing.T) {
 	assert.Contains(t, out, `  wrote   .mcp.json (registered seamark mcp as "seamark")`)
 	assert.Contains(t, out, "skills  not installed — add --skills to install the seamark agent skills (.claude/skills, .agents/skills)")
 	assert.Contains(t, out, "gate    warn — verdicts are reported")
+
+	// The gate line describes Claude Code only, and the run says so: a
+	// Codex shell command is not gated, whatever the mode reads.
+	ungated := "  note    Codex has no command gate hook yet: the gate line above does not cover its shell commands"
+	assert.Contains(t, out, ungated)
+	assert.Less(t, strings.Index(out, "gate    warn"), strings.Index(out, ungated))
+
+	enforced := initClients(t, t.TempDir(), false, false, false, "enforce", "claude", "codex")
+	assert.Contains(t, enforced, "gate    enforce")
+	assert.Contains(t, enforced, ungated, "an enforce line must never read as covering Codex")
+
+	claudeOnly := initClients(t, t.TempDir(), false, false, false, "", "claude")
+	assert.NotContains(t, claudeOnly, "no command gate hook", "every selected client is gated")
 
 	reversed := t.TempDir()
 	assert.Equal(t, out, initClients(t, reversed, false, false, false, "", "claude", "codex", "claude"),

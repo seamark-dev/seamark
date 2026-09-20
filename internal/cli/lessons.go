@@ -35,6 +35,7 @@ func newLessonsCmd(opts *options) *cobra.Command {
 		region          string
 		hookMode        bool
 		hookReset       bool
+		hookClient      string
 		list            bool
 		stats           bool
 		distillRun      bool
@@ -97,8 +98,10 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    the drift in --proposals for --retarget. Composes
                    with --dry-run. Rows keep their answer — with
                    paths or without — so re-running is free.
-  --hook           read a Claude Code PreToolUse payload from stdin and emit
-                   the edited file's lessons as additionalContext
+  --hook           read an agent's edit-hook payload from stdin and emit the
+                   lessons of the edited files as additionalContext. The
+                   payload is a Claude Code PreToolUse event; with
+                   --client codex it is a Codex apply_patch event.
 
 --hook is read-only and offline: no network, no re-indexing, silent when
 a file has no lessons.`,
@@ -146,6 +149,14 @@ a file has no lessons.`,
 					"--retarget, --distill, or --extract-triggers — run it before or after")
 			}
 
+			// --client selects the native event format of a hook run. The
+			// inference agent of --distill is a separate setting, agent.cli.
+			// A user can take one for the other, so the error names both.
+			if hookClient != "" && !hookMode && !hookReset {
+				return fmt.Errorf("--client applies to --hook and --hook-reset only; " +
+					"the agent that --distill runs is agent.cli in .seamark/config.yaml")
+			}
+
 			// `--apply p1, p2` is natural typing; the shell splits the
 			// spaced list into positional args, so fold them back in.
 			if len(args) > 0 && decisions == 0 {
@@ -156,9 +167,9 @@ a file has no lessons.`,
 
 			switch {
 			case hookMode:
-				return runLessonsHook(cmd, opts)
+				return runLessonsHook(cmd, opts, hookClient)
 			case hookReset:
-				return runLessonsHookReset(cmd, opts)
+				return runLessonsHookReset(cmd, opts, hookClient)
 			case strings.TrimSpace(applyIDs) != "":
 				return runLessonsApply(cmd, opts, applyIDs+","+extra)
 			case strings.TrimSpace(dismissIDs) != "":
@@ -201,10 +212,13 @@ a file has no lessons.`,
 	cmd.Flags().StringVar(&region, "region", "", "narrow --list or --distill to a directory's area")
 	cmd.Flags().BoolVar(&stats, "stats", false, "summarize the firing log: what surfaced, what never fires")
 	cmd.Flags().BoolVar(&hookMode, "hook", false,
-		"read a PreToolUse JSON payload from stdin and emit lessons as additionalContext")
+		"read an agent's edit-hook JSON payload from stdin and emit lessons as additionalContext")
 	cmd.Flags().BoolVar(&hookReset, "hook-reset", false,
-		"read a PostCompact JSON payload from stdin and reset once-per-context delivery")
+		"read an agent's context-reset JSON payload from stdin and reset once-per-context delivery")
 	_ = cmd.Flags().MarkHidden("hook-reset")
+	cmd.Flags().StringVar(&hookClient, "client", "",
+		"with --hook: the agent whose hook event to read ("+strings.Join(integration.Builtin().IDs(), ", ")+
+			"); without it the event is a Claude Code event")
 	cmd.Flags().BoolVar(&distillRun, "distill", false,
 		"distill recurring patterns from raw findings into proposed pins (needs the agent CLI)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
@@ -1218,9 +1232,9 @@ func runLessonsList(cmd *cobra.Command, opts *options, region string) error {
 // The command only connects the parts. The client adapter decodes the
 // native event and encodes the reply, and the delivery service owns
 // selection, suppression, emission order, and the firing log.
-func runLessonsHook(cmd *cobra.Command, opts *options) error {
-	client := lessonsHookClient()
-	if client.Edits == nil {
+func runLessonsHook(cmd *cobra.Command, opts *options, clientID string) error {
+	client, ok := lessonsHookClient(cmd, clientID)
+	if !ok || client.Edits == nil {
 		return nil
 	}
 
@@ -1275,9 +1289,9 @@ func runLessonsHook(cmd *cobra.Command, opts *options) error {
 // runLessonsHookReset implements the context-reset lifecycle hook
 // (Claude Code PostCompact). It is silent and best-effort: compaction
 // must proceed even if local state is unavailable.
-func runLessonsHookReset(cmd *cobra.Command, opts *options) error {
-	client := lessonsHookClient()
-	if client.Resets == nil {
+func runLessonsHookReset(cmd *cobra.Command, opts *options, clientID string) error {
+	client, ok := lessonsHookClient(cmd, clientID)
+	if !ok || client.Resets == nil {
 		return nil
 	}
 
@@ -1301,14 +1315,28 @@ func runLessonsHookReset(cmd *cobra.Command, opts *options) error {
 	return nil
 }
 
-// lessonsHookClient returns the client whose native events the hook
-// commands translate. The hook commands carry no client selector yet,
-// and a command without a selector keeps Claude Code semantics, because
-// every installed Claude hook runs exactly that command.
-func lessonsHookClient() integration.Client {
-	client, _ := integration.Builtin().Lookup(integration.ClaudeID)
+// lessonsHookClient returns the client whose native events a hook run
+// translates. The ID comes from the installed hook command, never from
+// the payload, so a payload cannot claim the state of another client.
+// A command without --client keeps Claude Code semantics, because every
+// installed Claude Code hook runs exactly that command.
+//
+// An unknown ID is a broken hook command. The run says so on stderr and
+// still exits 0: a hook must never fail the edit it watches.
+func lessonsHookClient(cmd *cobra.Command, clientID string) (integration.Client, bool) {
+	if clientID == "" {
+		clientID = integration.ClaudeID
+	}
 
-	return client
+	registry := integration.Builtin()
+
+	client, ok := registry.Lookup(clientID)
+	if !ok {
+		fmt.Fprintf(cmd.ErrOrStderr(), "seamark: unknown hook client %q (known: %s); no lessons delivered\n",
+			render.Sanitize(clientID), strings.Join(registry.IDs(), ", "))
+	}
+
+	return client, ok
 }
 
 // runLessonsStats prints the firing-log summary: which lessons actually

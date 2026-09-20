@@ -41,6 +41,14 @@ func TestFixturesAreWellFormedAndLabeled(t *testing.T) {
 			require.NoError(t, json.Unmarshal(data, &doc), "%s/%s", client, e.Name())
 
 			switch {
+			case strings.HasSuffix(e.Name(), "_oracle.json"):
+				// Recorded results of a native tool, not a payload. The file
+				// says how the results were made.
+				provenance, _ := doc["provenance"].(string)
+				assert.NotEmpty(t, provenance, "%s/%s: an oracle file states its provenance", client, e.Name())
+
+				cases, _ := doc["cases"].([]any)
+				assert.NotEmpty(t, cases, "%s/%s: an oracle file holds cases", client, e.Name())
 			case strings.HasPrefix(e.Name(), "hooks."):
 				_, ok := doc["hooks"].(map[string]any)
 				assert.True(t, ok, "%s/%s: a hook configuration carries a hooks object", client, e.Name())

@@ -270,6 +270,8 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 		plan.GateHooks = append(plan.GateHooks, GateHook{Path: approve.ClaudeSettings, Mode: mode, Managed: true})
 	}
 
+	reportClaudeWrappers(plan, settings, specs)
+
 	if req.CheckHookSources {
 		local := readLocalHooks(plan, root)
 
@@ -284,6 +286,46 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 	narration.specs, narration.gateMode, narration.previous = specs, gateMode, previous
 
 	return nil
+}
+
+// reportClaudeWrappers names each command in the shared settings that
+// runs a seamark hook through a wrapper, a shell condition, or a
+// redirect. Setup does not own such a command: it keeps the command as
+// it is, and it still installs the managed hook, because the shared file
+// always gets every hook. The handler then runs twice, and the user
+// decides which copy stays. A wrapped gate hook keeps its own mode, so
+// the gate line of the run must know it.
+func reportClaudeWrappers(plan *ClientPlan, settings map[string]any, specs []hooks.Spec) {
+	for i, spec := range specs {
+		for _, wrapped := range hooks.Wrapped(settings, spec) {
+			effect := "the seamark hook runs twice"
+			if !wrapped.Certain {
+				effect = "when that command runs the seamark hook, the hook runs twice"
+			}
+
+			plan.Findings = append(plan.Findings, Finding{
+				Level: FindingWarning,
+				Path:  approve.ClaudeSettings,
+				Reason: fmt.Sprintf("%s also has `%s`, which setup does not manage and did not change; %s",
+					spec.Event, render.Sanitize(wrapped.Command), effect),
+				Action: "remove one of the two hooks",
+			})
+
+			// The gate spec is the first one, by the order of ClaudeSpecs. An
+			// uncertain wrapper counts too: a gate line that says "nothing
+			// blocks" while a wrapped gate blocks is the worse error.
+			if i != 0 {
+				continue
+			}
+
+			mode := hooks.ModeWarn
+			if hooks.SeamarkHookUse(wrapped.Command, []string{hooks.GateMarker(hooks.ModeEnforce)}) != hooks.HookNotRun {
+				mode = hooks.ModeEnforce
+			}
+
+			plan.GateHooks = append(plan.GateHooks, GateHook{Path: approve.ClaudeSettings, Mode: mode})
+		}
+	}
 }
 
 // readLocalHooks reads the user's local settings file, the second hook

@@ -7,8 +7,11 @@
 package hooks
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,11 +67,15 @@ func ForEachCommand(pre []any, fn func(matcher string, h map[string]any, cmd str
 }
 
 // OwnedBySeamark reports whether cmd is one of seamark's own hook
-// commands: a marker suffix AND a binary whose basename is exactly
-// seamark (allowing the Windows .exe suffix). The binary check keeps the
-// marker from claiming someone else's hook — `company-security gate
-// --hook` (or a lookalike such as `seamark2`) must never be treated as
-// ours.
+// commands: exactly one shell word that names the seamark binary, then
+// a marker, and nothing else. Setup rewrites a command it owns, so the
+// rule must be strict in both directions.
+//
+// The binary check keeps the marker from claiming someone else's hook:
+// `company-security gate --hook` (or a lookalike such as `seamark2`)
+// is not ours. The one-word check keeps setup from destroying a wrapper:
+// `/opt/wrapper /usr/local/bin/seamark gate --hook` ends like our command,
+// and a rewrite to the bare command removes the wrapper without a word.
 func OwnedBySeamark(cmd string, markers []string) bool {
 	for _, marker := range markers {
 		rest, ok := strings.CutSuffix(cmd, " "+marker)
@@ -76,10 +83,39 @@ func OwnedBySeamark(cmd string, markers []string) bool {
 			continue
 		}
 
-		return IsSeamarkBinary(strings.Trim(rest, "'"))
+		binary, ok := shellWord(rest)
+
+		return ok && IsSeamarkBinary(binary)
 	}
 
 	return false
+}
+
+// shellWord returns the value of s when s is exactly one shell word in
+// a form that ShellQuote writes: a plain word without a character that a
+// shell interprets, or one single-quoted string. Anything else, such as
+// two words or a double-quoted string, is not one word that setup knows.
+func shellWord(s string) (string, bool) {
+	if s == "" {
+		return "", false
+	}
+
+	if !strings.ContainsAny(s, shellSpecial) {
+		return s, true
+	}
+
+	if len(s) < 2 || s[0] != '\'' || s[len(s)-1] != '\'' {
+		return "", false
+	}
+
+	// Inside the quotes, ShellQuote writes a quote character as '\''.
+	// Any other quote character ends the string early: more than one word.
+	inner := strings.ReplaceAll(s[1:len(s)-1], `'\''`, "\x00")
+	if strings.ContainsRune(inner, '\'') {
+		return "", false
+	}
+
+	return strings.ReplaceAll(inner, "\x00", "'"), true
 }
 
 // IsSeamarkBinary reports whether a command path names the seamark
@@ -128,6 +164,15 @@ const LessonsMarker = "lessons --hook"
 // LessonsResetMarker is the PostCompact hook that starts a new lesson
 // delivery generation for the provider session.
 const LessonsResetMarker = "lessons --hook-reset"
+
+// The Codex hook commands name their client. A hook command without
+// --client keeps Claude Code semantics, because every installed Claude
+// hook runs exactly that command. Each marker matches as a suffix, so a
+// Claude marker never claims a Codex command and the reverse.
+const (
+	CodexLessonsMarker      = "lessons --hook --client codex"
+	CodexLessonsResetMarker = "lessons --hook-reset --client codex"
+)
 
 // LessonsHookInstalled reports whether seamark's edit-lessons hook is
 // operational in a parsed settings map: a "command"-typed hook under a
@@ -201,6 +246,53 @@ func ParseDocument(data []byte) (map[string]any, error) {
 	}
 
 	return settings, nil
+}
+
+// ParseDocumentExact is ParseDocument for a document that setup writes
+// back. It keeps every number as written: the default decoder reads a
+// number as a float64, which rounds an integer above 2^53 and turns 1.0
+// into 1. FormatDocumentExact is the matching encoder.
+//
+// The Claude Code settings keep ParseDocument and their own encoder,
+// because a file that init wrote before must stay byte-stable.
+func ParseDocumentExact(data []byte) (map[string]any, error) {
+	document := map[string]any{}
+
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+
+	if err := decoder.Decode(&document); err != nil {
+		return nil, err
+	}
+
+	// One document per file. A second value is a broken file.
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("unexpected content after the JSON document")
+	}
+
+	if document == nil {
+		document = map[string]any{}
+	}
+
+	return document, nil
+}
+
+// FormatDocumentExact encodes a hook document with two-space indent and
+// a final newline. It does not escape &, <, and >: a hook command such
+// as "a && b" is the user's text, and "a \u0026\u0026 b" is hard to read
+// and to review.
+func FormatDocumentExact(document map[string]any) ([]byte, error) {
+	var out bytes.Buffer
+
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+
+	if err := encoder.Encode(document); err != nil {
+		return nil, err
+	}
+
+	return out.Bytes(), nil
 }
 
 // InstalledGateModeAt reads <root>/.claude/settings.json and reports the

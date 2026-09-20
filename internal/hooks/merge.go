@@ -77,6 +77,70 @@ func ClaudeSpecs(gateMode string) []Spec {
 	}
 }
 
+// CodexSpecs returns the hooks that setup installs into Codex. Codex
+// reports every file edit as the apply_patch tool. Its matcher is a
+// regular expression, and "apply_patch" also matches the documented
+// aliases Edit and Write. The timeout is seconds, as in Claude Code.
+// The command gate joins the list with its own slice.
+//
+// The list holds no context-reset hook. A Codex edit event names no
+// receiver, so a reset has nothing to clear. A hook without an effect
+// still costs the user a trust review and one process for each
+// compaction. The reset command and its decoder exist, and the hook
+// joins the list when a reset has an observable effect.
+func CodexSpecs() []Spec {
+	return []Spec{
+		{
+			Event: "PreToolUse", Matcher: "apply_patch",
+			Marker: CodexLessonsMarker,
+			Status: "seamark: checking review lessons", Timeout: 10,
+		},
+	}
+}
+
+// WrappedCommand is a hook command that setup does not own and that
+// runs, or can run, a seamark hook.
+type WrappedCommand struct {
+	Command string
+	// Certain is true when the shell executes the seamark hook, and
+	// false when another program gets the seamark command as arguments.
+	Certain bool
+}
+
+// Wrapped returns the commands of a parsed hook document that run the
+// hook of the spec, or can run it, and are not seamark's own command:
+// a wrapper, a shell condition, a redirect. Merge does not touch such a
+// command. A caller that adds the spec beside it makes the hook run
+// twice. A command that only prints the hook text is not in the result.
+func Wrapped(settings map[string]any, spec Spec) []WrappedCommand {
+	var out []WrappedCommand
+
+	hookMap, _ := settings["hooks"].(map[string]any)
+	eventHooks, _ := hookMap[spec.Event].([]any)
+
+	ForEachCommand(eventHooks, func(_ string, _ map[string]any, cmd string) {
+		if OwnedBySeamark(cmd, spec.Markers()) {
+			return
+		}
+
+		if use := SeamarkHookUse(cmd, spec.Markers()); use != HookNotRun {
+			out = append(out, WrappedCommand{Command: cmd, Certain: use == HookRuns})
+		}
+	})
+
+	return out
+}
+
+// Owned reports whether the document holds seamark's own command for
+// the spec, in any entry of the spec's event.
+func Owned(settings map[string]any, spec Spec) bool {
+	found := false
+
+	forEachSpecCommand(settings, spec, func(string, map[string]any, string) { found = true })
+
+	return found
+}
+
 // Merge adds the hooks into a parsed hook document. It keeps every
 // other hook, and it updates a seamark hook that is already present,
 // so a re-run never adds a duplicate. It reports whether the document
@@ -259,11 +323,16 @@ func applyExisting(eventHooks []any, markers []string, want string) (found, upda
 	return found, updated
 }
 
+// shellSpecial lists the characters that make a shell split or
+// interpret a word. ShellQuote and the ownership rule share the list,
+// so setup recognizes exactly the commands that it writes.
+const shellSpecial = " \t\"'\\$`(){}[]*?&|;<>#~"
+
 // ShellQuote single-quotes a path that a shell would split or
 // interpret. A clean path returns unchanged. Clients run hook commands
 // through a shell, so a binary path with spaces needs the quotes.
 func ShellQuote(s string) string {
-	if !strings.ContainsAny(s, " \t\"'\\$`(){}[]*?&|;<>#~") {
+	if !strings.ContainsAny(s, shellSpecial) {
 		return s
 	}
 

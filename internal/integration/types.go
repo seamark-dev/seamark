@@ -70,6 +70,10 @@ type SetupSupport struct {
 	// It is a setup operation, not a capability: the codecs that handle
 	// the hook events are declared through Edits, Commands, and Resets.
 	Hooks bool
+	// GateHook means the installed hooks include the command gate, so a
+	// gate mode applies to the client. A client can install lesson hooks
+	// and no gate hook, and init must then print no gate mode for it.
+	GateHook bool
 	// RegisterMCP means the adapter can register the seamark MCP server.
 	RegisterMCP bool
 	// ApproveTools means the adapter can add the exact per-tool grants.

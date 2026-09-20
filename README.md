@@ -679,11 +679,31 @@ the file your team commits. A seamark hook that your personal file also
 runs is reported as running twice, so you can remove the personal copy.
 An init without `--client` never reads that file.
 
-What an agent does not support yet is reported in the output. Codex hook
-installation is one such case today: `--client codex` registers the
-server, installs the skills, and approves the tools, and it says that
-the lifecycle hooks were skipped. Setup never trusts a project for you;
-Codex reads `.codex/config.toml` only after you accept its trust prompt.
+With `--client codex`, init registers the server in `.codex/config.toml`
+and writes the lesson hook into `.codex/hooks.json`: a `PreToolUse` hook
+on `apply_patch`, which is how Codex reports every file edit. One patch is
+one reminder under one budget, whatever the number of files in it; a move
+counts at both ends. Other hooks in the file stay. Setup keeps one handler
+per hook: when a command it does not manage already executes the seamark
+hook — behind a shell condition, `env`, `timeout`, or `sh -c` in
+`hooks.json`, or inline under `[hooks]` in `config.toml` — setup installs
+no second handler and says where the hook runs. Setup reads such a command
+the way a shell does, so a hook that only prints the seamark command
+(`echo '…seamark lessons --hook --client codex'`) is not a handler. When it
+cannot tell — an unknown program that gets the seamark command as its
+arguments — it installs the managed hook and names that command, because a
+missing hook costs more than a repeated reminder. No context-reset hook is installed, because a Codex reset has nothing
+to clear (see below). The Codex command gate is not installed yet. A Codex-only run prints no gate mode,
+and a run with Claude Code and Codex says that its gate line does not cover
+Codex shell commands. What an agent does not support yet is reported in
+the output.
+
+Setup never trusts a project for you. Codex reads `.codex/` only after
+you accept its trust prompt, and it runs a project hook only after you
+review it with `/hooks`; a changed hook needs a new review. Codex hook
+events do not say which agent or subagent receives a reminder, so
+`hook_delivery: once-per-context` does not apply to Codex: reminders
+repeat, within the hook budget.
 
 Without `--client`, `seamark init` behaves exactly as before. With it,
 use a bare `--skills`; the valued forms (`--skills=codex` and the others)

@@ -18,6 +18,17 @@ const MaxHookPayload = 1 << 20
 // without an error. Advice callers treat both as "say nothing".
 var ErrMalformedEvent = errors.New("malformed hook event")
 
+// ErrNotApplicable reports a well-formed event that the codec does not
+// translate, for example a shell event given to an edit codec. The
+// event is not broken: the hook has nothing to do with it.
+var ErrNotApplicable = errors.New("hook event not applicable")
+
+// ErrUnsupportedGrammar reports an edit event whose body uses a form
+// that the codec does not know. The codec then knows no complete set of
+// paths. It must not report the paths it did read: a smaller set looks
+// like complete coverage and is not.
+var ErrUnsupportedGrammar = errors.New("unsupported edit grammar")
+
 // ReadHookPayload reads one native hook payload under the size cap. An
 // oversized payload is an error and never a truncated prefix: a codec
 // must not decode a part of an event as the complete event.

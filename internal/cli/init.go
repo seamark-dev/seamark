@@ -333,7 +333,7 @@ func applyInit(run initRun, reg *integration.Registry, setups []integration.Clie
 
 	// The gate mode of the run: the flag, else what is installed, else
 	// warn. The policy scaffold and the gate line both need it.
-	hookClients := integration.HookClients(reg, setups)
+	hookClients := integration.GateHookClients(reg, setups)
 	gateMode := resolveGateMode(integration.InstalledGateMode(reg, run.root, hookClients), run.gateMode)
 
 	plan, err := integration.PlanSetup(reg, integration.SetupRequest{
@@ -366,6 +366,12 @@ func applyInit(run initRun, reg *integration.Registry, setups []integration.Clie
 		printNoGateHook(w, run.root, gateMode)
 	} else {
 		printGateLine(w, run.root, gateMode, plan.GateHooks)
+
+		// The gate line describes the clients with a gate hook. A selected
+		// client without one must not look covered by it.
+		for _, name := range integration.UngatedHookClients(reg, setups) {
+			fmt.Fprintf(w, "  note    %s has no command gate hook yet: the gate line above does not cover its shell commands\n", name)
+		}
 	}
 
 	fmt.Fprintf(w, "\nnext: `seamark index` to build the graph, "+
@@ -516,8 +522,9 @@ func commonDocuments(gateMode string) []integration.Document {
 // blocks would repeat the exact trust bug this command exists to
 // prevent.
 //
-// The same rule covers a gate hook in another source, such as the
-// user's local settings file. Setup leaves that hook as it is, so it
+// The same rule covers a gate hook that setup does not manage: one in
+// another source, such as the user's local settings file, or a wrapped
+// command in the shared file. Setup leaves that hook as it is, so it
 // still runs: when it enforces, the run blocks whatever the mode of the
 // hook setup manages.
 func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.GateHook) {
@@ -539,7 +546,7 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 	case gateMode != gateModeEnforce && len(enforcing) > 0:
 		fmt.Fprintf(w, "  gate    enforce — %s runs its own gate hook with --enforce: deny/require_approval\n"+
 			"          verdicts exit 2 and block, although the hook setup manages is in warn mode. Setup never\n"+
-			"          edits that file; remove its gate hook to stop blocking\n", strings.Join(enforcing, ", "))
+			"          edits a gate hook it does not manage; remove that hook to stop blocking\n", strings.Join(enforcing, ", "))
 
 		if policyMode == gateModeEnforce {
 			fmt.Fprintf(w, "          note: the kept .seamark/policy.yaml also sets mode: enforce, so the managed hook blocks\n"+

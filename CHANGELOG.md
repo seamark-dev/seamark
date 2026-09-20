@@ -17,7 +17,7 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   agent that is not selected is never read or written, a shared
   `.agents/skills` directory never counts as a configured Codex, and a
   skill directory that two selected agents share is written once. What an
-  agent does not support yet is reported (Codex hook installation today),
+  agent does not support yet is reported (the Codex command gate today),
   and native trust stays the user's decision. Without `--client`, init
   output and written files are unchanged. `--client` takes a bare
   `--skills` only.
@@ -92,6 +92,44 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   meaning, and an older log renders as before. Repeat counts never join a
   record that names a client with one that does not, so the first reminder
   after the upgrade counts as new in a session that was already running.
+
+- **Codex lesson hook.** `seamark init --client codex` now writes
+  `.codex/hooks.json`: a `PreToolUse` hook on `apply_patch` that runs
+  `seamark lessons --hook --client codex`. The
+  hook reads the patch text for its complete file set (add, update,
+  delete, and both ends of a move) and never runs it; a patch it cannot
+  read completely gets no reminder instead of a guessed one. One patch is
+  one reminder under the hook budget and one log record. Other hooks in
+  the file stay. Setup keeps one handler per hook: when a command in
+  `hooks.json` or inline `[hooks]` in `.codex/config.toml` already executes
+  the seamark hook, setup installs no second handler and names that
+  definition. It reads a hook command the way a shell does, so a command
+  that only prints the seamark command is no handler; when another program
+  gets the seamark command as arguments and setup cannot tell, it installs
+  the managed hook and names the command. No context-reset hook is installed: a Codex reset has nothing
+  to clear, and a hook without an effect still costs a trust review.
+  Codex must still be
+  told to trust the project and the hooks (`/hooks`), and setup says so.
+  Codex events name no receiving context, so `once-per-context` does not
+  apply there and reminders repeat. `lessons --hook` and `--hook-reset`
+  take `--client`; without it the event is a Claude Code event, as before.
+  The patch reader follows the parser of codex-cli 0.154.0 and is tested
+  against what that parser did with forty patch texts, offline. A patch
+  that names an environment (`*** Environment ID:`) gets no reminder until
+  a live capture shows where its paths are rooted. The Codex command gate
+  follows separately; a run that also selects Claude Code says that its
+  gate line does not cover Codex shell commands. Nothing here has run in a
+  live Codex session yet.
+
+- **Setup no longer takes a wrapped hook for its own.** A hook command such
+  as `/opt/wrapper /usr/local/bin/seamark gate --hook`, or a shell condition
+  in front of the seamark path, ends like seamark's own command. Setup
+  rewrote it to the bare command and the wrapper was gone, without a word.
+  Setup now owns only a command that is one seamark executable plus its
+  arguments. It keeps any other form as written and reports it. In
+  `.claude/settings.json` the managed hook is still added, the report says
+  that the handler runs twice, and a wrapped gate hook that enforces shows
+  in the gate line of the run.
 
 ## v0.6.0 — 2026-09-05
 

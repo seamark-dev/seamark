@@ -145,13 +145,16 @@ func TestSkillDirsAreCopiedAtEveryRegistryBoundary(t *testing.T) {
 func TestAbsentCapabilitiesReportUnsupported(t *testing.T) {
 	codex, _ := Builtin().Lookup(CodexID)
 
-	// Codex declares its skill directory and its setup adapter so far.
-	// The lifecycle codecs and the invocation preset are still absent.
+	// Codex declares its skill directory, its setup adapter, and the
+	// lesson hook codecs. The command codec and the invocation preset are
+	// still absent.
 	declared := []Capability{
 		CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants,
+		CapabilityEdits, CapabilityResets,
 	}
 	assert.Equal(t, declared, codex.Declared())
-	assert.False(t, codex.SetupOps.Hooks, "codex hook installation waits for its native evidence")
+	assert.True(t, codex.SetupOps.Hooks, "codex installs the lesson hooks")
+	assert.False(t, codex.SetupOps.GateHook, "the codex command gate waits for its own slice")
 
 	for _, capability := range Capabilities {
 		if slices.Contains(declared, capability) {

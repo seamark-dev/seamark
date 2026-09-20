@@ -20,7 +20,7 @@ func claudeClient() Client {
 		Name:      "Claude Code",
 		SkillDirs: []string{skills.ClaudeDir},
 		Setup:     claudeSetup{},
-		SetupOps:  SetupSupport{Hooks: true, RegisterMCP: true, ApproveTools: true},
+		SetupOps:  SetupSupport{Hooks: true, GateHook: true, RegisterMCP: true, ApproveTools: true},
 		Edits:     claudeEdits{},
 		Resets:    claudeResets{},
 		Invocation: func(string) (agent.CommandSpec, error) {

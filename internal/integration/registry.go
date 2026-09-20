@@ -75,6 +75,10 @@ func validateClient(c Client) error {
 			c.ID, c.Edits.AdviceMechanism(), clientIDPattern)
 	}
 
+	if c.SetupOps.GateHook && !c.SetupOps.Hooks {
+		return fmt.Errorf("client %q: a gate hook is declared without hook installation", c.ID)
+	}
+
 	// A declared operation without an adapter is a broken descriptor, not
 	// an unsupported operation: nothing could plan the declared work.
 	if c.Setup == nil && c.SetupOps != (SetupSupport{}) {

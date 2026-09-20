@@ -137,20 +137,37 @@ func legacyApprovalTargets(root, skillsMode string) (claude, codex bool, err err
 	return claude, info.IsDir(), nil
 }
 
-// HookClients returns the IDs of the requested clients whose hooks
-// setup can install, in the given order. init reads the installed gate
-// mode from them, and it says so when the list is empty: a gate line
-// must never describe a hook that no selected client has.
-func HookClients(reg *Registry, setups []ClientSetup) []string {
+// GateHookClients returns the IDs of the requested clients for which
+// setup installs a command gate hook, in the given order. init reads
+// the installed gate mode from them, and it says so when the list is
+// empty: a gate line must never describe a hook that no selected client
+// has. A client with lesson hooks and no gate hook is not in the list.
+func GateHookClients(reg *Registry, setups []ClientSetup) []string {
 	var ids []string
 
 	for _, s := range setups {
-		if c, ok := reg.Lookup(s.ClientID); ok && s.Hooks && c.SetupOps.Hooks {
+		if c, ok := reg.Lookup(s.ClientID); ok && s.Hooks && c.SetupOps.GateHook {
 			ids = append(ids, c.ID)
 		}
 	}
 
 	return ids
+}
+
+// UngatedHookClients returns the names of the requested clients that
+// get hooks and no command gate hook, in the given order. When another
+// selected client has a gate hook, the gate line of the run describes
+// that client only, and init must name the clients it does not cover.
+func UngatedHookClients(reg *Registry, setups []ClientSetup) []string {
+	var names []string
+
+	for _, s := range setups {
+		if c, ok := reg.Lookup(s.ClientID); ok && s.Hooks && c.SetupOps.Hooks && !c.SetupOps.GateHook {
+			names = append(names, c.Name)
+		}
+	}
+
+	return names
 }
 
 // InstalledGateMode returns the first installed gate-hook mode among

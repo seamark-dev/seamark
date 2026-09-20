@@ -1,0 +1,304 @@
+{
+  "provenance": "Each patch was applied offline by codex-cli 0.154.0 (the binary run under the name apply_patch, no model, no credentials) in a scratch directory on 2026-09-20. accepted = exit status 0. touched = the paths of its 'A/M/D <path>' report; a move reports its destination only.",
+  "cases": [
+    {
+      "name": "01_plain_update",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "a.txt"
+      ]
+    },
+    {
+      "name": "02_trailing_space_update_hdr",
+      "patch": "*** Begin Patch\n*** Update File: a.txt \n@@\n-x\n+y\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "a.txt"
+      ]
+    },
+    {
+      "name": "03_trailing_tab_delete_hdr",
+      "patch": "*** Begin Patch\n*** Delete File: b.txt\t\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "b.txt"
+      ]
+    },
+    {
+      "name": "04_leading_space_first_hdr",
+      "patch": "*** Begin Patch\n  *** Delete File: b.txt\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "b.txt"
+      ]
+    },
+    {
+      "name": "05_leading_space_hdr_after_add",
+      "patch": "*** Begin Patch\n*** Add File: n.txt\n+hi\n  *** Delete File: b.txt\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "n.txt",
+        "b.txt"
+      ]
+    },
+    {
+      "name": "06_leading_space_hdr_after_delete",
+      "patch": "*** Begin Patch\n*** Delete File: c.txt\n  *** Delete File: b.txt\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "c.txt",
+        "b.txt"
+      ]
+    },
+    {
+      "name": "07_ctx_line_looks_like_hdr_in_update",
+      "patch": "*** Begin Patch\n*** Update File: h.txt\n@@\n *** Delete File: b.txt\n-x\n+y\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "h.txt"
+      ]
+    },
+    {
+      "name": "08_crlf",
+      "patch": "*** Begin Patch\r\n*** Update File: a.txt\r\n@@\r\n-x\r\n+y\r\n*** Delete File: b.txt\r\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "a.txt",
+        "b.txt"
+      ]
+    },
+    {
+      "name": "09_begin_trailing_spaces",
+      "patch": "*** Begin Patch  \n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "a.txt"
+      ]
+    },
+    {
+      "name": "10_heredoc",
+      "patch": "<<'EOF'\n*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch\nEOF\n",
+      "accepted": true,
+      "touched": [
+        "a.txt"
+      ]
+    },
+    {
+      "name": "11_env_id_second",
+      "patch": "*** Begin Patch\n*** Environment ID: env1\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "a.txt"
+      ]
+    },
+    {
+      "name": "12_env_id_nospace",
+      "patch": "*** Begin Patch\n*** Environment ID:env1\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "a.txt"
+      ]
+    },
+    {
+      "name": "13_env_id_after_hunk",
+      "patch": "*** Begin Patch\n*** Delete File: b.txt\n*** Environment ID: env1\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "14_add_zero_lines_then_delete",
+      "patch": "*** Begin Patch\n*** Add File: n.txt\n*** Delete File: b.txt\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "n.txt",
+        "b.txt"
+      ]
+    },
+    {
+      "name": "15_add_with_empty_line",
+      "patch": "*** Begin Patch\n*** Add File: n.txt\n+a\n\n+b\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "16_move_after_context",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n*** Move to: m.txt\n-x\n+y\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "17_eof_directly_after_hdr",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n*** End of File\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "18_two_patches",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch\n*** Begin Patch\n*** Delete File: b.txt\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "19_hdr_text_in_add_content",
+      "patch": "*** Begin Patch\n*** Add File: n.txt\n+*** Delete File: b.txt\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "n.txt"
+      ]
+    },
+    {
+      "name": "20_hdr_inside_update_lines",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n*** Delete File: b.txt\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "a.txt",
+        "b.txt"
+      ]
+    },
+    {
+      "name": "21_move_trailing_space",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n*** Move to: m.txt  \n@@\n-x\n+y\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "m.txt"
+      ]
+    },
+    {
+      "name": "22_unicode_name",
+      "patch": "*** Begin Patch\n*** Add File: déjà/文件.txt\n+x\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "déjà/文件.txt"
+      ]
+    },
+    {
+      "name": "23_blank_after_delete",
+      "patch": "*** Begin Patch\n*** Delete File: b.txt\n\n*** Delete File: c.txt\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "24_blank_in_update_then_hdr",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n\n*** Delete File: b.txt\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "a.txt",
+        "b.txt"
+      ]
+    },
+    {
+      "name": "25_end_leading_spaces",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n  *** End Patch",
+      "accepted": true,
+      "touched": [
+        "a.txt"
+      ]
+    },
+    {
+      "name": "26_update_no_chunks",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "27_lowercase_hdr",
+      "patch": "*** Begin Patch\n*** delete file: b.txt\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "28_add_name_only_spaces",
+      "patch": "*** Begin Patch\n*** Add File:   \n+x\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "29_move_valid",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n*** Move to: sub/m.txt\n@@\n-x\n+y\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "sub/m.txt"
+      ]
+    },
+    {
+      "name": "30_ws_only_line_in_update",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n   \n*** Delete File: b.txt\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "31_tab_hdr_in_update",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n\t*** Delete File: b.txt\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "32_nbsp_leading_hdr_after_add",
+      "patch": "*** Begin Patch\n*** Add File: n.txt\n+hi\n *** Delete File: b.txt\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "n.txt",
+        "b.txt"
+      ]
+    },
+    {
+      "name": "33_leading_blank_lines",
+      "patch": "\n\n*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch\n\n",
+      "accepted": true,
+      "touched": [
+        "a.txt"
+      ]
+    },
+    {
+      "name": "34_double_cr",
+      "patch": "*** Begin Patch\n*** Delete File: b.txt\r\r\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "b.txt"
+      ]
+    },
+    {
+      "name": "35_at_at_nospace",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@foo\n-x\n+y\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "36_update_without_atat",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n-x\n+y\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "a.txt"
+      ]
+    },
+    {
+      "name": "37_trailing_space_add_hdr",
+      "patch": "*** Begin Patch\n*** Add File: n.txt  \n+hi\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        "n.txt"
+      ]
+    },
+    {
+      "name": "38_leading_space_in_name",
+      "patch": "*** Begin Patch\n*** Add File:  lead.txt\n+hi\n*** End Patch",
+      "accepted": true,
+      "touched": [
+        " lead.txt"
+      ]
+    },
+    {
+      "name": "39_star_no_space",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n***Delete File: b.txt\n*** End Patch",
+      "accepted": false,
+      "touched": []
+    },
+    {
+      "name": "40_end_patch_trailing_text_after",
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch\ngarbage",
+      "accepted": false,
+      "touched": []
+    }
+  ]
+}

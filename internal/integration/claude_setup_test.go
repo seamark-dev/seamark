@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -589,4 +590,37 @@ func TestClaudeInspection(t *testing.T) {
 	assert.Equal(t, map[Capability]CapabilityState{
 		CapabilityMCPRegistration: StateUnreadable, CapabilityToolGrants: StateUnreadable,
 	}, state(broken))
+}
+
+func TestClaudeKeepsAWrappedHookAndReportsIt(t *testing.T) {
+	// The wrapper ends like seamark's own command. Setup used to take it
+	// for its own and rewrote it to the bare command, without a word.
+	root := t.TempDir()
+	wrapped := "test -x /usr/local/bin/seamark && /usr/local/bin/seamark gate --enforce --hook"
+	writeRel(t, root, ".claude/settings.json", `{"hooks": {"PreToolUse": [
+  {"matcher": "Bash", "hooks": [{"type": "command", "command": "`+wrapped+`"}]}
+]}}`)
+
+	plan, err := claudeSetup{}.Plan(root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true})
+	require.NoError(t, err)
+
+	require.Len(t, plan.Writes, 1)
+
+	// The settings encoder writes "&" as an escape. The value is the same.
+	after := strings.ReplaceAll(string(plan.Writes[0].After), `\u0026`, "&")
+	assert.Contains(t, after, wrapped, "the wrapper stays as the user wrote it")
+	assert.Contains(t, after, testBinary+" gate --hook", "the shared file still gets every managed hook")
+
+	warnings := findingReasons(plan, FindingWarning)
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], wrapped)
+	assert.Contains(t, warnings[0], "did not change")
+	assert.Contains(t, warnings[0], "runs twice")
+
+	// The wrapped gate enforces, whatever mode the managed hook has. The
+	// gate line of the run reads the modes from here.
+	assert.ElementsMatch(t, []GateHook{
+		{Path: ".claude/settings.json", Mode: "warn", Managed: true},
+		{Path: ".claude/settings.json", Mode: "enforce"},
+	}, plan.GateHooks)
 }

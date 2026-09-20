@@ -24,18 +24,6 @@
           }
         ]
       }
-    ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/usr/local/bin/seamark lessons --hook-reset --client codex",
-            "timeout": 10,
-            "statusMessage": "seamark: resetting lesson delivery"
-          }
-        ]
-      }
     ]
   }
 }

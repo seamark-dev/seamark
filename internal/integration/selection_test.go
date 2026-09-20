@@ -221,14 +221,14 @@ func TestGateModeComesFromTheSelectedHookClients(t *testing.T) {
 
 	both, err := ExplicitSetups(reg, []string{ClaudeID, CodexID}, false, false, "")
 	require.NoError(t, err)
-	assert.Equal(t, []string{ClaudeID}, HookClients(reg, both), "Codex hook installation is not supported yet")
-	assert.Equal(t, "enforce", InstalledGateMode(reg, root, HookClients(reg, both)))
+	assert.Equal(t, []string{ClaudeID}, GateHookClients(reg, both), "Codex installs lesson hooks and no gate hook yet")
+	assert.Equal(t, "enforce", InstalledGateMode(reg, root, GateHookClients(reg, both)))
 
 	// A Codex-only selection reads no Claude Code file, so it sees no mode.
 	codexOnly, err := ExplicitSetups(reg, []string{CodexID}, false, false, "")
 	require.NoError(t, err)
-	assert.Empty(t, HookClients(reg, codexOnly))
-	assert.Empty(t, InstalledGateMode(reg, root, HookClients(reg, codexOnly)))
+	assert.Empty(t, GateHookClients(reg, codexOnly))
+	assert.Empty(t, InstalledGateMode(reg, root, GateHookClients(reg, codexOnly)))
 
 	// A settings file that cannot be read reports no mode; the plan then
 	// reports the error itself.

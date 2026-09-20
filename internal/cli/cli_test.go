@@ -661,6 +661,145 @@ func TestLessonsHookOncePerContextNeverHidesAdviceFromASubagent(t *testing.T) {
 	assert.Contains(t, hook(parent), "RUF001")
 }
 
+func TestLessonsHookClientCodexAdvisesOnAWholePatch(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"hook_delivery: once-per-context\npin_budget: 1\npin:\n"+
+			"  - {rule: on-api, region: api, note: \"a1\"}\n  - {rule: on-db, region: db, note: \"d1\"}\n"), 0o644))
+
+	patch := "*** Begin Patch\n*** Update File: api/handler.go\n*** Move to: db/handler.go\n@@\n-x\n+y\n" +
+		"*** Add File: ../outside.go\n+z\n*** End Patch\n"
+	payload, err := json.Marshal(map[string]any{
+		"session_id": "thr_1", "cwd": root, "hook_event_name": "PreToolUse", "tool_name": "apply_patch",
+		"tool_use_id": "call_1", "tool_input": map[string]any{"command": patch},
+	})
+	require.NoError(t, err)
+
+	var hook struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+
+	// Codex names no receiver, so the advice repeats under once-per-context.
+	for range 2 {
+		out, _, err := runIn(t, string(payload), "-C", root, "lessons", "--hook", "--client", "codex")
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal([]byte(out), &hook))
+
+		assert.Equal(t, "PreToolUse", hook.HookSpecificOutput.HookEventName)
+
+		advice := hook.HookSpecificOutput.AdditionalContext
+		assert.Contains(t, advice, "2 files (api/handler.go, db/handler.go)", "the move counts at both ends")
+		assert.Contains(t, advice, "+1 more pins", "one budget for the whole patch")
+		assert.NotContains(t, advice, "outside.go")
+	}
+
+	assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-hook-state.json"))
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+	require.Len(t, firings, 2)
+	assert.Equal(t, "codex", firings[0].Client)
+	assert.Equal(t, "apply_patch", firings[0].Tool)
+	assert.Equal(t, []string{"api/handler.go", "db/handler.go"}, firings[0].Files)
+	assert.Empty(t, firings[0].ContextSHA)
+
+	stats, err := run(t, "-C", root, "lessons", "--stats")
+	require.NoError(t, err)
+	assert.Contains(t, stats, "  codex via pre-tool-use-context: 2 injected")
+
+	// A move that leaves the workspace still counts at its source.
+	moveOut, err := json.Marshal(map[string]any{
+		"session_id": "thr_1", "cwd": root, "hook_event_name": "PreToolUse", "tool_name": "apply_patch",
+		"tool_input": map[string]any{"command": "*** Begin Patch\n*** Update File: api/handler.go\n" +
+			"*** Move to: /tmp/elsewhere/handler.go\n@@\n-x\n+y\n*** End Patch\n"},
+	})
+	require.NoError(t, err)
+
+	out, _, err := runIn(t, string(moveOut), "-C", root, "lessons", "--hook", "--client", "codex")
+	require.NoError(t, err)
+	assert.Contains(t, out, "review lessons for api/handler.go", "the inside end of the move gets its advice")
+	assert.NotContains(t, out, "elsewhere")
+}
+
+func TestLessonsHookClientCodexStaysQuietOnWhatItCannotRead(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("pin:\n  - {rule: wide-one, region: \"*\", note: \"w1\"}\n"), 0o644))
+
+	event := func(tool, command string) string {
+		payload, err := json.Marshal(map[string]any{
+			"session_id": "thr_1", "cwd": root, "hook_event_name": "PreToolUse",
+			"tool_name": tool, "tool_input": map[string]any{"command": command},
+		})
+		require.NoError(t, err)
+
+		return string(payload)
+	}
+
+	oversized := event("apply_patch", "*** Begin Patch\n*** Add File: a.go\n+"+strings.Repeat("x", 1<<20)+"\n*** End Patch\n")
+
+	for name, payload := range map[string]string{
+		"oversized payload": oversized,
+		"truncated patch":   event("apply_patch", "*** Begin Patch\n*** Update File: a.go\n@@\n-x\n"),
+		"unknown header":    event("apply_patch", "*** Begin Patch\n*** Copy File: a.go\n*** End Patch\n"),
+		"shell event":       event("Bash", "*** Begin Patch\n*** Delete File: a.go\n*** End Patch\n"),
+		"only outside":      event("apply_patch", "*** Begin Patch\n*** Delete File: /etc/hosts\n*** End Patch\n"),
+		"a Claude payload":  `{"tool_name":"Edit","tool_input":{"file_path":"` + filepath.Join(root, "a.go") + `"}}`,
+		"invalid JSON":      "{not json",
+		"nothing on stdin":  "",
+	} {
+		out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook", "--client", "codex")
+		require.NoError(t, err, "%s: a lessons hook never fails the edit", name)
+		assert.Empty(t, strings.TrimSpace(out), "%s: no guessed advice", name)
+	}
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+	assert.Empty(t, firings)
+
+	// The reset hook runs and changes nothing: no Codex state exists.
+	_, _, err = runIn(t, `{"session_id":"thr_1","hook_event_name":"PostCompact","trigger":"auto"}`,
+		"-C", root, "lessons", "--hook-reset", "--client", "codex")
+	require.NoError(t, err)
+	assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-hook-state.json"))
+}
+
+func TestLessonsHookClientSelectorRules(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	seedLesson(t, root, "a.go", "RUF001", 4)
+
+	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` + filepath.Join(root, "a.go") + `"}}`
+
+	// No selector and the explicit Claude selector are the same hook.
+	plain, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	named, _, err := runIn(t, payload, "-C", root, "lessons", "--hook", "--client", "claude")
+	require.NoError(t, err)
+	assert.Equal(t, plain, named)
+	assert.Contains(t, plain, "RUF001")
+
+	// An unknown client is a broken hook command: say so, never block.
+	out, stderr, err := runIn(t, payload, "-C", root, "lessons", "--hook", "--client", "nope")
+	require.NoError(t, err)
+	assert.Empty(t, strings.TrimSpace(out))
+	assert.Contains(t, stderr, `unknown hook client "nope" (known: claude, codex)`)
+
+	// The selector belongs to hook mode. Inference has its own setting.
+	_, err = run(t, "-C", root, "lessons", "--list", "--client", "codex")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--client applies to --hook and --hook-reset only")
+	assert.Contains(t, err.Error(), "agent.cli")
+}
+
 func TestLessonsHookAlwaysRemainsTheDefault(t *testing.T) {
 	root := writeFixture(t)
 	_, err := run(t, "-C", root, "index")

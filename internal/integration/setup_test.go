@@ -168,6 +168,7 @@ func TestPlanAndPreviewWriteNothing(t *testing.T) {
 		".claude/settings.json planned",
 		".mcp.json planned",
 		".codex/config.toml planned",
+		".codex/hooks.json planned",
 	}, seen)
 
 	for _, op := range result.Ops {
@@ -199,7 +200,7 @@ func TestApplyConvergesAndASecondRunChangesNothing(t *testing.T) {
 
 	second := mustPlan(t, Builtin(), req)
 	assert.Empty(t, second.Writes, "a repeated setup plans no write")
-	assert.Len(t, second.Kept, 4)
+	assert.Len(t, second.Kept, 5)
 
 	for _, entry := range second.Skills {
 		assert.Equal(t, skills.Current, entry.State, entry.Rel)
@@ -292,8 +293,8 @@ func TestUnsupportedIntentsAreInformationNotErrors(t *testing.T) {
 	require.NoError(t, err)
 
 	plan := mustPlan(t, reg, SetupRequest{Root: root, Binary: testBinary, Clients: []ClientSetup{
-		{ClientID: CodexID, Hooks: true, RegisterMCP: true, GateMode: "enforce"},
-		{ClientID: thirdID, RegisterMCP: true},
+		{ClientID: CodexID, RegisterMCP: true, GateMode: "enforce"},
+		{ClientID: thirdID, Hooks: true, RegisterMCP: true},
 		{ClientID: "invoker", Skills: true, ApproveTools: true},
 	}})
 
@@ -306,7 +307,7 @@ func TestUnsupportedIntentsAreInformationNotErrors(t *testing.T) {
 	}
 
 	assert.Equal(t, []string{
-		"Codex: lifecycle hooks are not supported by this integration; skipped",
+		"Fake Agent: lifecycle hooks are not supported by this integration; skipped",
 		"Fake Agent: MCP registration is not supported by this integration; skipped",
 		"Invoker: skills are not supported by this integration; skipped",
 		"Invoker: tool grants are not supported by this integration; skipped",
@@ -736,6 +737,7 @@ func TestAPartialFailureIsReportedAndARerunConverges(t *testing.T) {
 		".claude/settings.json": OpApplied,
 		".mcp.json":             OpApplied,
 		".codex/config.toml":    OpFailed,
+		".codex/hooks.json":     OpNotAttempted,
 	}, statuses, "the result names what landed and what did not")
 
 	for _, op := range result.Skills {
@@ -752,7 +754,7 @@ func TestAPartialFailureIsReportedAndARerunConverges(t *testing.T) {
 
 	for _, op := range result.Ops {
 		want := OpKept
-		if op.Path == ".codex/config.toml" {
+		if strings.HasPrefix(op.Path, ".codex/") {
 			want = OpApplied
 		}
 
