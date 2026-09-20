@@ -45,6 +45,29 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   bare `--skills`, and `--skills=false` or an empty value installs
   nothing.
 
+- **One delivery path for the edit hook.** `lessons --hook` and
+  `lessons --hook-reset` now run through a shared delivery service with a
+  Claude Code adapter in front of it: the adapter translates the native
+  event and reply, and the service owns selection, once-per-context
+  state, emission order, and the firing log. For a Claude Code edit the
+  reminder, the state, and the log are byte-identical to before. The
+  service already handles one edit operation on several files under one
+  budget (`pin_budget` pins, eight lessons in total) with one log record;
+  no shipped agent sends such an event yet. Three edge cases change on
+  purpose:
+  - A file outside the workspace gets no reminder. It used to receive
+    the repo-wide (`*`) pins, and its absolute path went to the log. The
+    workspace root itself and a path behind an unreadable directory
+    count as outside.
+  - A relative `file_path` resolves against the event's `cwd`, and a
+    path behind a symbolic link resolves to the real file. A link that
+    leaves the workspace gets no reminder. A workspace reached through a
+    link (`/tmp` on macOS) now gets its real lessons; it used to get the
+    repo-wide pins only.
+  - The hook no longer creates `.seamark/index.db` in a workspace that was
+    never indexed. The pins of `lessons.yaml` are still delivered there.
+    A database that exists and cannot be opened still means no reminder.
+
 ## v0.6.0 — 2026-09-05
 
 - **The MCP server states judgment rules, not a ritual.** The `initialize`

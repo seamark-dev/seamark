@@ -292,7 +292,8 @@ func TestClaudeInvocationIsPureAndReusesThePreset(t *testing.T) {
 	claude, _ := Builtin().Lookup(ClaudeID)
 	require.True(t, claude.Supports(CapabilityInvocation))
 	assert.Equal(t, []Capability{
-		CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants, CapabilityInvocation,
+		CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants,
+		CapabilityEdits, CapabilityResets, CapabilityInvocation,
 	}, claude.Declared())
 
 	spec, err := claude.Invocation(t.TempDir())

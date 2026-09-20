@@ -68,8 +68,9 @@ type Firing struct {
 	// writer before change_set and check joined).
 	Surface string `json:"surface,omitempty"`
 	// File carries a single-file firing (the hook); Files a multi-file
-	// one (change_set, check) — individually, so distinct-file counts
-	// stay meaningful whatever order a diff lists them in.
+	// one (change_set, check, a multi-file edit hook) — individually, so
+	// distinct-file counts stay meaningful whatever order a diff lists
+	// them in.
 	File  string        `json:"file,omitempty"`
 	Files []string      `json:"files,omitempty"`
 	Tool  string        `json:"tool,omitempty"`
@@ -129,6 +130,16 @@ func RecordFiring(root, file, tool string, lessons []model.Lesson) error {
 // RecordFiring for callers and historical tests that intentionally exercise
 // the legacy on-disk shape.
 func RecordHookDelivery(root, file, tool string, lessons []model.Lesson, delivery HookDelivery) error {
+	return RecordHookDeliveryFiles(root, []string{file}, tool, lessons, delivery)
+}
+
+// RecordHookDeliveryFiles is RecordHookDelivery for one edit operation
+// that touches several files. One operation is one record with one
+// context-byte total, so statistics never count an injection once per
+// file. A single file keeps the single-file record shape byte for byte.
+func RecordHookDeliveryFiles(root string, files []string, tool string, lessons []model.Lesson,
+	delivery HookDelivery,
+) error {
 	if delivery.ContextBytes < 0 {
 		return fmt.Errorf("hook delivery context bytes cannot be negative")
 	}
@@ -145,7 +156,7 @@ func RecordHookDelivery(root, file, tool string, lessons []model.Lesson, deliver
 		return fmt.Errorf("unknown hook delivery status %q", delivery.Status)
 	}
 
-	rec, ok := newFiring("", []string{file}, tool, lessons)
+	rec, ok := newFiring("", files, tool, lessons)
 	if !ok {
 		return nil
 	}

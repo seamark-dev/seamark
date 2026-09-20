@@ -9,10 +9,11 @@ import (
 const ClaudeID = "claude"
 
 // claudeClient describes Claude Code. The setup adapter plans the
-// hooks, the allow rules, and the MCP registration. The lifecycle
-// codecs join the descriptor in later slices; the invocation capability
-// reuses the existing one-shot preset so the compatibility resolver and
-// the registry cannot disagree about the command.
+// hooks, the allow rules, and the MCP registration. The edit and reset
+// codecs translate the lessons hook events; the command codec joins the
+// descriptor with the gate slice. The invocation capability reuses the
+// existing one-shot preset so the compatibility resolver and the
+// registry cannot disagree about the command.
 func claudeClient() Client {
 	return Client{
 		ID:        ClaudeID,
@@ -20,6 +21,8 @@ func claudeClient() Client {
 		SkillDirs: []string{skills.ClaudeDir},
 		Setup:     claudeSetup{},
 		SetupOps:  SetupSupport{Hooks: true, RegisterMCP: true, ApproveTools: true},
+		Edits:     claudeEdits{},
+		Resets:    claudeResets{},
 		Invocation: func(string) (agent.CommandSpec, error) {
 			// Dir stays empty: the legacy preset inherits the caller's
 			// working directory, and this slice preserves that.

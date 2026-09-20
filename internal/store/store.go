@@ -69,10 +69,25 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: create index dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dsn(path,
-		"_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"))
+	return openSchema(dsn(path,
+		"_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"), path)
+}
+
+// OpenMemory opens an empty index in memory and writes no file. The
+// lessons hook uses it when the workspace has no database. Pins come
+// from lessons.yaml and need no mined data. A hook must not create an
+// index as a side effect. The single connection of a Store keeps the
+// in-memory database alive until Close.
+func OpenMemory() (*Store, error) {
+	return openSchema("file::memory:?_pragma=busy_timeout(5000)", "in-memory index")
+}
+
+// openSchema opens the database behind a DSN and applies the schema and
+// the version rules. name labels the database in an open error.
+func openSchema(dataSource, name string) (*Store, error) {
+	db, err := sql.Open("sqlite", dataSource)
 	if err != nil {
-		return nil, fmt.Errorf("store: open %s: %w", path, err)
+		return nil, fmt.Errorf("store: open %s: %w", name, err)
 	}
 
 	// The index has a single writer and local readers; one connection avoids

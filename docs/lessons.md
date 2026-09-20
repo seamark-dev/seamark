@@ -420,7 +420,11 @@ pins wording one theme never spend two slots:
   `+N more` pointer for the rest) plus the file's recurring mined
   lessons. Offline, silent when there is nothing to say. With opt-in
   `hook_delivery: once-per-context`, already-delivered lessons stay silent
-  until Claude Code compacts the current session.
+  until Claude Code compacts the current session. Only files inside the
+  workspace count: a path outside it, or behind a symbolic link that
+  leaves it, gets no reminder. A new file counts by its path. Without an
+  index the hook still delivers the pins of `lessons.yaml`, and it never
+  creates a database.
 - **`change_set` (MCP)**: before a multi-file edit, the union of the
   files' lessons under `change_budget` (default 6) — merged by
   identity, ranked by confidence across the whole set, regions shown as

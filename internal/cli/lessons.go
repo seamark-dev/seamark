@@ -1,9 +1,10 @@
 package cli
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,8 +16,10 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/confidence"
+	"github.com/seamark-dev/seamark/internal/delivery"
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/redact"
@@ -181,7 +184,7 @@ a file has no lessons.`,
 				}
 				defer func() { _ = st.Close() }()
 
-				lessons, _, err := lessonsForFile(st, root, file, false)
+				lessons, err := lessonsForFile(st, root, file)
 				if err != nil {
 					return err
 				}
@@ -1208,106 +1211,82 @@ func runLessonsList(cmd *cobra.Command, opts *options, region string) error {
 	return nil
 }
 
-// runLessonsHook implements the PreToolUse path. It must never fail the
+// runLessonsHook implements the edit-hook path. It must never fail the
 // tool it guards: any error (no index, unreadable payload) yields empty
 // output and exit 0, so a missing seamark index can't block edits.
+//
+// The command only connects the parts. The client adapter decodes the
+// native event and encodes the reply, and the delivery service owns
+// selection, suppression, emission order, and the firing log.
 func runLessonsHook(cmd *cobra.Command, opts *options) error {
-	input, err := readHookInput(cmd.InOrStdin())
-	if err != nil || input.File == "" {
+	client := lessonsHookClient()
+	if client.Edits == nil {
+		return nil
+	}
+
+	payload, err := integration.ReadHookPayload(cmd.InOrStdin())
+	if err != nil {
 		return nil // nothing to say; never block the edit
 	}
 
-	st, root, err := openIndexQuiet(opts)
+	event, err := client.Edits.DecodeEdit(payload)
+	if err != nil || len(event.Paths) == 0 {
+		return nil
+	}
+
+	st, root, err := openHookIndex(opts)
 	if err != nil {
 		return nil
 	}
 	defer func() { _ = st.Close() }()
 
-	cfg := loadLessonsConfig(root)
-	lessons, morePins, err := lessonsForFileConfig(st, cfg, root, input.File, true)
-	if err != nil || len(lessons) == 0 {
-		return nil
+	if event.CWD == "" {
+		// A client that sends no working directory sends paths relative
+		// to the hook process, which is how the hook always read them.
+		event.CWD, _ = os.Getwd()
 	}
 
-	if cfg.HookDelivery() == reviews.HookDeliveryOncePerContext && input.SessionID != "" {
-		lease, stateErr := reviews.BeginHookDelivery(root, input.SessionID, lessons)
-		if stateErr == nil {
-			defer func() { _ = lease.Close() }()
-
-			selected := lease.Inject()
-			if len(selected) == 0 {
-				suppressed, generation := lease.Suppressed(), lease.Generation()
-				_ = lease.Close()
-				recordHookDelivery(root, input, suppressed,
-					reviews.DeliverySuppressedRepeat, generation, 0)
-
-				return nil
-			}
-
-			contextBytes, err := emitLessonsHook(cmd.OutOrStdout(), root, input.File, selected, morePins)
-			if err != nil {
-				return err
-			}
-
-			// Output has already reached the provider. A state write failure must
-			// fail open for later edits, not turn this successful hook into a block.
-			_ = lease.Commit()
-			_ = lease.Close()
-
-			recordHookDelivery(root, input, selected, reviews.DeliveryInjected,
-				lease.Generation(), contextBytes)
-			recordHookDelivery(root, input, lease.Suppressed(),
-				reviews.DeliverySuppressedRepeat, lease.Generation(), 0)
-
-			return nil
+	emit := func(advice string) error {
+		reply, err := client.Edits.EncodeAdvice(advice)
+		if err != nil {
+			return err
 		}
-		// State is advisory. Corruption, lock failure, or an unsupported
-		// platform degrades to the original always-inject behavior below.
-	}
 
-	contextBytes, err := emitLessonsHook(cmd.OutOrStdout(), root, input.File, lessons, morePins)
-	if err != nil {
+		_, err = cmd.OutOrStdout().Write(reply.Stdout)
+
 		return err
 	}
 
-	recordHookDelivery(root, input, lessons, reviews.DeliveryInjected, 0, contextBytes)
+	_, err = delivery.Deliver(cmd.Context(), st, delivery.Request{
+		Root: root, ClientID: client.ID, Event: event, Config: loadLessonsConfig(root),
+	}, emit)
+
+	// Only a failed reply is the hook's own failure. A failed lookup
+	// stays quiet: the advice is optional and the edit is not.
+	var emitErr *delivery.EmitError
+	if errors.As(err, &emitErr) {
+		return emitErr.Err
+	}
 
 	return nil
 }
 
-func emitLessonsHook(w io.Writer, root, file string, lessons []model.Lesson, morePins int) (int, error) {
-	var b strings.Builder
-	_ = report.PrintLessonReminder(&b, toRepoRel(root, file), lessons, morePins)
-
-	out := hookOutput{}
-	out.HookSpecificOutput.HookEventName = "PreToolUse"
-	out.HookSpecificOutput.AdditionalContext = b.String()
-
-	// Emit the verdict FIRST so the edit's go-ahead never waits on the
-	// audit write; then record best-effort — a slow or failed append must
-	// neither delay nor block the edit.
-	if err := json.NewEncoder(w).Encode(out); err != nil {
-		return 0, err
+// runLessonsHookReset implements the context-reset lifecycle hook
+// (Claude Code PostCompact). It is silent and best-effort: compaction
+// must proceed even if local state is unavailable.
+func runLessonsHookReset(cmd *cobra.Command, opts *options) error {
+	client := lessonsHookClient()
+	if client.Resets == nil {
+		return nil
 	}
 
-	return b.Len(), nil
-}
+	payload, err := integration.ReadHookPayload(cmd.InOrStdin())
+	if err != nil {
+		return nil
+	}
 
-func recordHookDelivery(root string, input lessonsHookInput, lessons []model.Lesson,
-	status reviews.DeliveryStatus, generation uint64, contextBytes int,
-) {
-	_ = reviews.RecordHookDelivery(root, toRepoRel(root, input.File), input.Tool, lessons,
-		reviews.HookDelivery{
-			Status: status, SessionID: input.SessionID, MatchID: input.MatchID,
-			Generation: generation, ContextBytes: contextBytes,
-		})
-}
-
-// runLessonsHookReset implements the PostCompact lifecycle hook. It is silent
-// and best-effort: compaction must proceed even if local state is unavailable.
-func runLessonsHookReset(cmd *cobra.Command, opts *options) error {
-	input, err := readHookLifecycleInput(cmd.InOrStdin())
-	if err != nil || input.SessionID == "" {
+	event, err := client.Resets.DecodeReset(payload)
+	if err != nil {
 		return nil
 	}
 
@@ -1316,9 +1295,19 @@ func runLessonsHookReset(cmd *cobra.Command, opts *options) error {
 		return nil
 	}
 
-	_ = reviews.ResetHookDelivery(root, input.SessionID)
+	_ = delivery.Reset(delivery.ResetRequest{Root: root, ClientID: client.ID, Event: event})
 
 	return nil
+}
+
+// lessonsHookClient returns the client whose native events the hook
+// commands translate. The hook commands carry no client selector yet,
+// and a command without a selector keeps Claude Code semantics, because
+// every installed Claude hook runs exactly that command.
+func lessonsHookClient() integration.Client {
+	client, _ := integration.Builtin().Lookup(integration.ClaudeID)
+
+	return client
 }
 
 // runLessonsStats prints the firing-log summary: which lessons actually
@@ -1380,76 +1369,12 @@ func gatherAppliedOutcomes(st *store.Store, root string, applied []model.Proposa
 	return cfg, firings, readings, nil
 }
 
-// hookOutput is the PreToolUse response shape: additionalContext is
-// injected into the agent's context without blocking the tool.
-type hookOutput struct {
-	HookSpecificOutput struct {
-		HookEventName     string `json:"hookEventName"`
-		AdditionalContext string `json:"additionalContext"`
-	} `json:"hookSpecificOutput"`
-}
-
-type lessonsHookInput struct {
-	File      string
-	Tool      string
-	SessionID string
-	MatchID   string
-}
-
-type lessonsHookLifecycleInput struct {
-	SessionID string
-}
-
-// readHookInput extracts the edit and session identity from a PreToolUse
-// payload (Edit, Write, and MultiEdit all carry file_path).
-func readHookInput(r io.Reader) (lessonsHookInput, error) {
-	data, err := io.ReadAll(io.LimitReader(r, 1<<20))
-	if err != nil {
-		return lessonsHookInput{}, err
-	}
-
-	var payload struct {
-		SessionID string `json:"session_id"`
-		ToolUseID string `json:"tool_use_id"`
-		ToolName  string `json:"tool_name"`
-		ToolInput struct {
-			FilePath string `json:"file_path"`
-		} `json:"tool_input"`
-	}
-
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return lessonsHookInput{}, err
-	}
-
-	return lessonsHookInput{
-		File: payload.ToolInput.FilePath, Tool: payload.ToolName,
-		SessionID: payload.SessionID, MatchID: payload.ToolUseID,
-	}, nil
-}
-
-func readHookLifecycleInput(r io.Reader) (lessonsHookLifecycleInput, error) {
-	data, err := io.ReadAll(io.LimitReader(r, 1<<20))
-	if err != nil {
-		return lessonsHookLifecycleInput{}, err
-	}
-
-	var payload struct {
-		SessionID string `json:"session_id"`
-	}
-
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return lessonsHookLifecycleInput{}, err
-	}
-
-	return lessonsHookLifecycleInput{SessionID: payload.SessionID}, nil
-}
-
 // lessonsForFile normalizes path to repo-relative and returns the
-// config-filtered lessons for its area. ambient applies the pin budget:
-// the hook is an injection the agent never asked for, so it is capped;
-// the --file view is a deliberate question and gets everything.
-func lessonsForFile(st *store.Store, root, path string, ambient bool) ([]model.Lesson, int, error) {
-	return lessonsForFileConfig(st, loadLessonsConfig(root), root, path, ambient)
+// config-filtered lessons for its area. The --file view is a deliberate
+// question, so it gets every pin. The edit hook is an injection the
+// agent never asked for; the delivery service applies its budget.
+func lessonsForFile(st *store.Store, root, path string) ([]model.Lesson, error) {
+	return report.LessonsForScope(st, loadLessonsConfig(root), toRepoRel(root, path), 8)
 }
 
 func loadLessonsConfig(root string) *reviews.Config {
@@ -1459,19 +1384,6 @@ func loadLessonsConfig(root string) *reviews.Config {
 	}
 
 	return cfg
-}
-
-func lessonsForFileConfig(st *store.Store, cfg *reviews.Config, root, path string,
-	ambient bool,
-) ([]model.Lesson, int, error) {
-	rel := toRepoRel(root, path)
-
-	budget := 0
-	if ambient {
-		budget = cfg.HookPinBudget()
-	}
-
-	return report.LessonsForScopeBudget(st, cfg, rel, 8, budget)
 }
 
 // toRepoRel converts an absolute or ./-prefixed path to the repo-relative
@@ -1486,9 +1398,14 @@ func toRepoRel(root, path string) string {
 	return strings.TrimPrefix(filepath.ToSlash(path), "./")
 }
 
-// openIndexQuiet opens the index without the staleness warning openIndex
-// would print — the hook must emit only its JSON on stdout.
-func openIndexQuiet(opts *options) (*store.Store, string, error) {
+// openHookIndex opens the index for a hook. It prints no staleness
+// warning, because the hook must emit only its reply on stdout.
+//
+// A workspace without a database gets an empty in-memory index.
+// store.Open would create the file, and a hook must leave no index
+// behind. The pins of lessons.yaml need no mined data, so a clone that
+// was never indexed still gets them.
+func openHookIndex(opts *options) (*store.Store, string, error) {
 	root, err := index.ResolveRoot(opts.workspace)
 	if err != nil {
 		return nil, "", err
@@ -1497,6 +1414,12 @@ func openIndexQuiet(opts *options) (*store.Store, string, error) {
 	dbPath := opts.dbPath
 	if dbPath == "" {
 		dbPath = store.DefaultPath(root)
+	}
+
+	if _, err := os.Stat(dbPath); errors.Is(err, fs.ErrNotExist) {
+		st, err := store.OpenMemory()
+
+		return st, root, err
 	}
 
 	st, err := store.Open(dbPath)

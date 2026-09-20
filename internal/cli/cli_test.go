@@ -635,6 +635,84 @@ func TestLessonsHookAlwaysRemainsTheDefault(t *testing.T) {
 	}
 }
 
+func TestLessonsHookWithoutAnIndexDeliversPinsAndCreatesNoDatabase(t *testing.T) {
+	// A fresh clone has the committed lessons.yaml and no index. The
+	// hook still delivers the pins, and it leaves no database behind.
+	root := writeFixture(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("pin:\n  - {rule: wide-one, region: \"*\", note: \"w1\"}\n"), 0o644))
+
+	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` + filepath.Join(root, "a.go") + `"}}`
+
+	out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Contains(t, out, "wide-one")
+	assert.NoFileExists(t, store.DefaultPath(root), "a hook never creates an index")
+}
+
+func TestLessonsHookIgnoresAFileOutsideTheWorkspace(t *testing.T) {
+	// Lessons belong to the repository. An edit elsewhere gets no advice,
+	// not even a repo-wide pin, and no path outside reaches the log.
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("pin:\n  - {rule: wide-one, region: \"*\", note: \"w1\"}\n"), 0o644))
+
+	outside := filepath.Join(t.TempDir(), "notes.md")
+	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` + outside + `"}}`
+
+	out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Empty(t, strings.TrimSpace(out))
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+	assert.Empty(t, firings)
+}
+
+func TestLessonsHookAppliesAParentStepAfterTheLink(t *testing.T) {
+	// <root>/link points at an external directory. "link/../target.go"
+	// is a file next to that directory, not <root>/target.go.
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("pin:\n  - {rule: wide-one, region: \"*\", note: \"w1\"}\n"), 0o644))
+
+	external := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(external, "nested"), 0o755))
+	require.NoError(t, os.Symlink(filepath.Join(external, "nested"), filepath.Join(root, "link")))
+
+	for _, target := range []string{"target.go", "absent/target.go"} {
+		payload := `{"tool_name":"Write","tool_input":{"file_path":"` + root + `/link/../` + target + `"}}`
+
+		out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+		require.NoError(t, err)
+		assert.Empty(t, strings.TrimSpace(out), "%s is outside the workspace", target)
+	}
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+	assert.Empty(t, firings, "an external edit never reaches the log as a workspace file")
+}
+
+func TestLessonsHookResolvesARelativePathAgainstTheEventDirectory(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	seedLesson(t, root, "sub", "RUF001", 4)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
+
+	payload := `{"cwd":"` + filepath.Join(root, "sub") + `","tool_name":"Write","tool_input":{"file_path":"new.go"}}`
+
+	out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Contains(t, out, "review lessons for sub/new.go")
+	assert.Contains(t, out, "RUF001")
+}
+
 func TestLessonsList(t *testing.T) {
 	root := writeFixture(t)
 
@@ -1631,7 +1709,11 @@ func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
 		filepath.Join(root, "a.go") + `"}}`
 	hookJSON, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
 	require.NoError(t, err)
-	var response hookOutput
+	var response struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
 	require.NoError(t, json.Unmarshal([]byte(hookJSON), &response))
 
 	firings, err := reviews.ReadFirings(root)

@@ -85,6 +85,34 @@ func TestRecordHookDeliveryHashesSessionAndMeasuresContext(t *testing.T) {
 		"the same provider session cannot be correlated across repository logs")
 }
 
+func TestRecordHookDeliveryFilesKeepsPathsAndOneContextTotal(t *testing.T) {
+	root := t.TempDir()
+	lessons := []model.Lesson{{Region: "api", Symptom: "Keep the generated client synchronized."}}
+
+	// One operation on two files is one record with one byte total.
+	require.NoError(t, RecordHookDeliveryFiles(root, []string{"api/a.go", "db/b.go"}, "apply_patch",
+		lessons, HookDelivery{Status: DeliveryInjected, SessionID: "s", ContextBytes: 120}))
+
+	// One file keeps the single-file shape that older readers expect.
+	require.NoError(t, RecordHookDeliveryFiles(root, []string{"api/a.go"}, "Edit",
+		lessons, HookDelivery{Status: DeliveryInjected, SessionID: "s", ContextBytes: 80}))
+
+	firings, err := ReadFirings(root)
+	require.NoError(t, err)
+	require.Len(t, firings, 2)
+
+	assert.Empty(t, firings[0].File)
+	assert.Equal(t, []string{"api/a.go", "db/b.go"}, firings[0].Files)
+	assert.Equal(t, 120, firings[0].ContextBytes)
+	assert.Empty(t, firings[0].Surface, "an edit-hook record names no surface")
+
+	assert.Equal(t, "api/a.go", firings[1].File)
+	assert.Empty(t, firings[1].Files)
+
+	summary := Summarize(firings, nil)
+	assert.Equal(t, 2, summary.Files, "distinct files count once across both records")
+}
+
 func TestRecordHookDeliveryValidatesMetadataWithoutLessons(t *testing.T) {
 	root := t.TempDir()
 	tests := []HookDelivery{
