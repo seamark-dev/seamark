@@ -83,11 +83,13 @@ func ClaudeSpecs(gateMode string) []Spec {
 // aliases Edit and Write. The timeout is seconds, as in Claude Code.
 // The command gate joins the list with its own slice.
 //
-// The list holds no context-reset hook. A Codex edit event names no
-// receiver, so a reset has nothing to clear. A hook without an effect
-// still costs the user a trust review and one process for each
-// compaction. The reset command and its decoder exist, and the hook
-// joins the list when a reset has an observable effect.
+// The list holds no context-reset hook. The Codex edit decoder reads
+// no receiver yet: the event names one, but the reset of a subagent is
+// unverified, so suppression stays off by policy and a reset has
+// nothing to clear. A hook without an effect still costs the user a
+// trust review and one process for each compaction. The reset command
+// and its decoder exist, and the hook joins the list when the edit
+// decoder names a receiver with a verified reset.
 func CodexSpecs() []Spec {
 	return []Spec{
 		{

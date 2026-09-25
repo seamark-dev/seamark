@@ -162,12 +162,14 @@ func planCodexHooks(plan *ClientPlan, root, binary string, config *codexConfigRe
 		narrateCodexHooks(w, binary, managed, codexHooksChange{changed: changed, created: !guard.Exists}, status == OpPlanned)
 	}
 
-	// The adapter cannot identify who receives a Codex reminder, so the
-	// once-per-context mode has no effect there. Say so once, at setup.
+	// The adapter reads no receiver from a Codex event yet. The event
+	// names one, but the reset of a subagent is unverified. The
+	// once-per-context mode therefore has no effect there. Say so once,
+	// at setup.
 	plan.Findings = append(plan.Findings, Finding{
 		Level: FindingInfo,
 		Path:  codexHooksFile,
-		Reason: "Codex edit events name no receiving context (a subagent reports its parent session), " +
+		Reason: "the Codex adapter reads no receiving context yet (the reset of a subagent is unverified), " +
 			"so `hook_delivery: once-per-context` does not apply: reminders repeat, within the hook budget",
 	})
 

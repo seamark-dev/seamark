@@ -1,0 +1,16 @@
+{
+  "session_id": "thr_synthetic_0001",
+  "turn_id": "turn_synthetic_0003",
+  "agent_id": "agent_synthetic_0001",
+  "agent_type": "worker",
+  "transcript_path": null,
+  "cwd": "/workspace/repo",
+  "hook_event_name": "PreToolUse",
+  "model": "synthetic-model",
+  "permission_mode": "default",
+  "tool_name": "apply_patch",
+  "tool_use_id": "call_synthetic_0012",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Update File: /workspace/repo/src/child.txt\n@@\n-child before\n+child one\n*** End Patch"
+  }
+}

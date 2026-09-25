@@ -72,7 +72,8 @@ const (
 	// SuppressionActive means the lease selected the lessons to emit.
 	SuppressionActive Suppression = "active"
 	// SuppressionNoContext means the adapter identified no receiving
-	// context, for example a subagent that reports its parent session.
+	// context, for example an event without a session id, or a client
+	// whose adapter reads no receiver yet.
 	SuppressionNoContext Suppression = "no-receiving-context"
 	// SuppressionNotResettable means no reset event reaches the context.
 	// Suppressed advice would then stay hidden after a compaction.

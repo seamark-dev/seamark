@@ -208,8 +208,9 @@ type ResetHooks interface {
 
 // ReceivingContext identifies the conversation that can see injected
 // advice. It is the actual receiver, not merely a shared parent
-// session: a subagent that reports its parent's session id has no
-// receiving context of its own, and suppression must stay off for it.
+// session: a subagent reports the session id of its parent, and that
+// id alone is not a context of its own. An adapter that cannot name
+// the actual receiver leaves the context nil, and suppression stays off.
 type ReceivingContext struct {
 	// ID is the client-native identity, kept in memory only. Persisted
 	// state stores a repository-scoped digest, never the raw value.

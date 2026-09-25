@@ -157,7 +157,10 @@ conversation is the session, and `PostCompact` resets it. An edit inside a
 subagent carries `agent_id` and is its own context: the subagent's context
 window never saw what the parent got. No reset event is documented for a
 subagent, so a subagent gets repeated delivery, and a reset that fires inside
-it never resets the parent.
+it never resets the parent. For Codex the adapter reads no receiver yet. A
+Codex edit event names a subagent by `agent_id` too, but only a manual
+compaction of the parent has been verified natively, so Codex reminders
+repeat until a native check establishes the reset of each receiver.
 
 The state file carries a version. This release writes version 2. It reads a
 version 1 file as empty, because a session-keyed entry does not say which
@@ -450,8 +453,9 @@ pins wording one theme never spend two slots:
   without running anything. The whole patch gets one reminder under the
   same budget, each line tagged with its region. A patch the hook cannot
   read completely gets no reminder rather than a guessed one, and Codex
-  reminders always repeat: its events do not say which agent or subagent
-  receives them.
+  reminders always repeat: the adapter does not read which agent or
+  subagent receives them yet, because a reset inside a subagent is
+  unverified.
 - **`change_set` (MCP)**: before a multi-file edit, the union of the
   files' lessons under `change_budget` (default 6) — merged by
   identity, ranked by confidence across the whole set, regions shown as

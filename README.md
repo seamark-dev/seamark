@@ -700,10 +700,11 @@ the output.
 
 Setup never trusts a project for you. Codex reads `.codex/` only after
 you accept its trust prompt, and it runs a project hook only after you
-review it with `/hooks`; a changed hook needs a new review. Codex hook
-events do not say which agent or subagent receives a reminder, so
-`hook_delivery: once-per-context` does not apply to Codex: reminders
-repeat, within the hook budget.
+review it with `/hooks`; a changed hook needs a new review. The Codex
+adapter does not read who receives a reminder yet (a Codex edit event
+names a subagent by `agent_id`, but a reset inside a subagent is
+unverified), so `hook_delivery: once-per-context` does not apply to
+Codex: reminders repeat, within the hook budget.
 
 Without `--client`, `seamark init` behaves exactly as before. With it,
 use a bare `--skills`; the valued forms (`--skills=codex` and the others)

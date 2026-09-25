@@ -56,11 +56,17 @@ type codexAdvice struct {
 // parses the patch text and never runs it. An event of another tool
 // gives ErrNotApplicable.
 //
-// The event carries no receiving context. Codex documents that a
-// subagent hook reports the session id of its parent. PreToolUse names
-// no subagent. The session id therefore does not say who gets the
-// advice. Suppression stays off, and the advice repeats. The session id
-// still reaches the firing log as a digest.
+// The decoder reads no receiving context yet, so suppression stays off
+// and the advice repeats. This is a policy, not a limit of the event. A
+// native run of codex-cli 0.154.0 showed that an edit inside a subagent
+// carries agent_id and agent_type with the session id of its parent. A
+// parent edit carries no agent_id. The event therefore names its
+// receiver. Only a manual compaction of the parent was observed. An
+// automatic compaction, a compaction inside a subagent, and nested
+// subagents are unverified. A receiver needs a verified reset policy,
+// so this decoder and DecodeReset change together when a native check
+// establishes one. The session id still reaches the firing log as a
+// digest.
 func (codexEdits) DecodeEdit(payload []byte) (EditEvent, error) {
 	var native struct {
 		SessionID string `json:"session_id"`
@@ -119,11 +125,13 @@ func (codexEdits) EncodeAdvice(text string) (HookReply, error) {
 func (codexEdits) AdviceMechanism() string { return codexAdviceMechanism }
 
 // DecodeReset reads a PostCompact event. The result names no context:
-// a Codex edit event names no receiver, so no suppression state exists
-// for a Codex context, and a reset has nothing to clear. The installed
-// hook still runs this decoder. When a native check establishes a
-// receiver identity, the edit decoder and this decoder change together
-// and the installed hook stays as it is.
+// DecodeEdit reads no receiver yet, so no suppression state exists for
+// a Codex context, and a reset has nothing to clear. Setup installs no
+// PostCompact hook for Codex, because a hook without an effect still
+// costs a trust review. The command `lessons --hook-reset --client
+// codex` still runs this decoder, so a hook that a user wires stays
+// valid. When a native check establishes the reset policy of each
+// receiver, the edit decoder and this decoder change together.
 func (codexResets) DecodeReset(payload []byte) (ResetEvent, error) {
 	var native struct {
 		Event string `json:"hook_event_name"`

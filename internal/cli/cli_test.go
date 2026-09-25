@@ -684,7 +684,8 @@ func TestLessonsHookClientCodexAdvisesOnAWholePatch(t *testing.T) {
 		} `json:"hookSpecificOutput"`
 	}
 
-	// Codex names no receiver, so the advice repeats under once-per-context.
+	// The Codex adapter reads no receiver yet, so the advice repeats under
+	// once-per-context.
 	for range 2 {
 		out, _, err := runIn(t, string(payload), "-C", root, "lessons", "--hook", "--client", "codex")
 		require.NoError(t, err)

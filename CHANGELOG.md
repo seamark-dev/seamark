@@ -110,8 +110,10 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   to clear, and a hook without an effect still costs a trust review.
   Codex must still be
   told to trust the project and the hooks (`/hooks`), and setup says so.
-  Codex events name no receiving context, so `once-per-context` does not
-  apply there and reminders repeat. `lessons --hook` and `--hook-reset`
+  The adapter reads no receiving context from a Codex event yet (the
+  event names a subagent by `agent_id`, but a reset inside a subagent is
+  unverified), so `once-per-context` does not apply there and reminders
+  repeat. `lessons --hook` and `--hook-reset`
   take `--client`; without it the event is a Claude Code event, as before.
   The patch reader follows the parser of codex-cli 0.154.0 and is tested
   against what that parser did with forty patch texts, offline. A patch

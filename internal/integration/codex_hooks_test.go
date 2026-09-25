@@ -75,11 +75,37 @@ func TestCodexEditsDecodeTheCompletePathSet(t *testing.T) {
 			assert.Equal(t, "thr_synthetic_0001", event.SessionID, "the session still joins the log records")
 			assert.NotEmpty(t, event.MatchID)
 
-			// A subagent hook reports the session id of its parent, so the
-			// session does not say who gets the advice.
+			// The decoder reads no receiver yet: the reset of a subagent is
+			// unverified, so suppression stays off by policy.
 			assert.Nil(t, event.Context, "no receiving context means suppression stays off")
 		})
 	}
+}
+
+func TestCodexEditsReadNoReceiverFromASubagentEdit(t *testing.T) {
+	// A native run of codex-cli 0.154.0 showed that an edit inside a
+	// subagent carries agent_id and agent_type with the parent session id.
+	// The decoder reads no receiver from it yet: the reset of a subagent
+	// is unverified, so suppression stays off by policy. The test pins
+	// that the identity is in the event and left unread, so a receiver
+	// change starts from this fixture and not from a guess.
+	payload := codexFixture(t, "pre_tool_use_apply_patch_subagent.json")
+
+	var identity struct {
+		AgentID   string `json:"agent_id"`
+		AgentType string `json:"agent_type"`
+	}
+
+	require.NoError(t, json.Unmarshal(payload, &identity))
+	require.NotEmpty(t, identity.AgentID, "the fixture carries the subagent identity")
+	require.NotEmpty(t, identity.AgentType)
+
+	event, err := codexEdits{}.DecodeEdit(payload)
+	require.NoError(t, err)
+
+	assert.Equal(t, "thr_synthetic_0001", event.SessionID, "a subagent edit reports the parent session")
+	assert.Equal(t, []string{"/workspace/repo/src/child.txt"}, event.Paths, "the model wrote an absolute path")
+	assert.Nil(t, event.Context, "no receiver is read until a native check verifies the reset of a subagent")
 }
 
 func TestCodexEditsNeverReportAPartialPathSet(t *testing.T) {
@@ -203,7 +229,7 @@ func TestCodexResetsNameNoContext(t *testing.T) {
 	event, err := codexResets{}.DecodeReset(codexFixture(t, "post_compact.json"))
 	require.NoError(t, err)
 	assert.Equal(t, ResetEvent{}, event,
-		"a Codex edit names no receiver, so no state exists that a reset can clear")
+		"the edit decoder reads no receiver yet, so no state exists that a reset can clear")
 
 	// Only the installed event is a reset. The session start that follows
 	// a compaction is another event, and setup installs no hook for it.

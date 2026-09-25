@@ -473,8 +473,8 @@ func TestDeliverGivesEquivalentEventsOfTwoClientsTheSameAdvice(t *testing.T) {
 	_, nested := advise(integration.CodexID, []byte(strings.ReplaceAll(string(raw), "/workspace/repo", root)))
 	assert.Equal(t, []string{"internal/api/handler.go", "docs/from-nested.md"}, nested.Files)
 
-	// Codex names no receiver. Under once-per-context the advice repeats,
-	// the outcome says why, and no state appears.
+	// The Codex adapter reads no receiver yet. Under once-per-context the
+	// advice repeats, the outcome says why, and no state appears.
 	cfg.Delivery = reviews.HookDeliveryOncePerContext
 
 	for range 2 {
