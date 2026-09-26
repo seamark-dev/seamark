@@ -142,32 +142,31 @@ func TestSkillDirsAreCopiedAtEveryRegistryBoundary(t *testing.T) {
 	}
 }
 
-func TestAbsentCapabilitiesReportUnsupported(t *testing.T) {
+func TestCodexDeclaresEveryCapability(t *testing.T) {
 	codex, _ := Builtin().Lookup(CodexID)
 
-	// Codex declares its skill directory, its setup adapter, and the
-	// lifecycle codecs. The invocation preset is still absent.
-	declared := []Capability{
-		CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants,
-		CapabilityEdits, CapabilityCommands, CapabilityResets,
-	}
-	assert.Equal(t, declared, codex.Declared())
+	assert.Equal(t, Capabilities, codex.Declared())
 	assert.True(t, codex.SetupOps.Hooks, "codex installs the lesson hooks")
 	assert.True(t, codex.SetupOps.GateHook, "codex installs the command gate hook")
 
+	assert.False(t, codex.Supports(Capability("telepathy")), "an unknown capability is never supported")
+}
+
+func TestAbsentCapabilitiesReportUnsupported(t *testing.T) {
+	// Supports and Require agree on undeclared capabilities.
+	c := invocationOnlyClient()
+
 	for _, capability := range Capabilities {
-		if slices.Contains(declared, capability) {
+		if slices.Contains(c.Declared(), capability) {
 			continue
 		}
 
-		assert.False(t, codex.Supports(capability), "codex declares no %s yet", capability)
+		assert.False(t, c.Supports(capability))
 
-		err := codex.Require(capability)
+		err := c.Require(capability)
 		require.ErrorIs(t, err, ErrUnsupported)
 		assert.Contains(t, err.Error(), string(capability))
 	}
-
-	assert.False(t, codex.Supports(Capability("telepathy")), "an unknown capability is never supported")
 }
 
 func TestSetupOperationsAreDeclaredIndependently(t *testing.T) {

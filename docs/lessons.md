@@ -202,7 +202,8 @@ review, never self-add it.
 Exact clustering can't see that ten differently-worded findings are one
 mistake. `seamark lessons --distill` can: it batches the raw findings
 into candidate groups and asks **your own agent CLI** (`claude` by
-default — seamark holds no API keys) to name what recurs, as proposed
+default, `codex` with `agent.cli: codex`, or any command line under
+`agent.argv` — seamark holds no API keys) to name what recurs, as proposed
 pins. It is an optional accelerator, nothing more: every entry it drafts
 is one you could write by hand in the same file, and repos without an
 agent CLI (or without the appetite for tokens) simply skip it.

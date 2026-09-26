@@ -186,6 +186,36 @@ func TestRunDetectsMissingAgentBinary(t *testing.T) {
 	assert.Contains(t, checks["agent"].Detail, "no-such-agent-binary-xyz")
 }
 
+func TestRunResolvesTheCodexAgentThroughTheRegistry(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  cli: codex\n"), 0o644))
+
+	// Report Codex as missing when it is absent from PATH.
+	t.Setenv("PATH", t.TempDir())
+
+	checks := byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateWarn, checks["agent"].State)
+	assert.Contains(t, checks["agent"].Detail, `"codex" not found on PATH`)
+
+	// Finding Codex on PATH is enough; it need not run successfully.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nexit 1\n"), 0o755))
+	t.Setenv("PATH", dir)
+
+	checks = byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateOK, checks["agent"].State)
+	assert.Contains(t, checks["agent"].Detail, "codex on PATH")
+
+	// Unknown-client errors list valid choices.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  cli: hal9000\n"), 0o644))
+
+	checks = byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateWarn, checks["agent"].State)
+	assert.Contains(t, checks["agent"].Detail, "known: claude, codex")
+}
+
 func TestRunGitignoreUndeterminedOutsideGit(t *testing.T) {
 	// No git repository: ignore status cannot be determined, and an
 	// undetermined status must never masquerade as a clean OK.

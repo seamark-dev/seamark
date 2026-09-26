@@ -22,6 +22,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/effects"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
@@ -210,20 +211,22 @@ func checkAgent(r *Report, root string) {
 		return
 	}
 
-	_, argv, err := agent.Resolve(cfg)
+	// Resolve the lesson consumers' command and check PATH without running it.
+	spec, err := integration.Builtin().ResolveInvocation(cfg, root)
 	if err != nil {
 		r.add("agent", StateWarn, err.Error(),
 			"fix the agent section of .seamark/config.yaml — distillation is unavailable until then")
 		return
 	}
 
-	if _, err := exec.LookPath(argv[0]); err != nil {
-		r.add("agent", StateWarn, fmt.Sprintf("agent CLI %q not found on PATH", argv[0]),
-			"install it, or point agent.argv in .seamark/config.yaml at a CLI you have — only `lessons --distill` needs it")
+	if _, err := exec.LookPath(spec.Argv[0]); err != nil {
+		r.add("agent", StateWarn, fmt.Sprintf("agent CLI %q not found on PATH", spec.Argv[0]),
+			"install it, or point agent.argv in .seamark/config.yaml at a CLI you have — "+
+				"only `lessons --distill` and `lessons --extract-triggers` need it")
 		return
 	}
 
-	r.add("agent", StateOK, fmt.Sprintf("%s on PATH (used only by `lessons --distill`)", argv[0]), "")
+	r.add("agent", StateOK, fmt.Sprintf("%s on PATH (used only by `lessons --distill` and `--extract-triggers`)", spec.Argv[0]), "")
 }
 
 func checkGH(r *Report) {

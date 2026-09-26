@@ -121,6 +121,26 @@ func TestGatherReportsBrokenPolicy(t *testing.T) {
 	assert.Contains(t, b.String(), "POLICY BROKEN")
 }
 
+func TestGatherResolvesTheCodexAgentThroughTheRegistry(t *testing.T) {
+	st, root := seededStore(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  cli: codex\n"), 0o644))
+
+	s, err := Gather(st, root)
+	require.NoError(t, err)
+	assert.Contains(t, s.DistillAgent, "codex exec --ephemeral --sandbox read-only -C ")
+	assert.Contains(t, s.DistillAgent, "features.hooks=false")
+
+	// Unresolvable clients leave the command field empty.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  cli: hal9000\n"), 0o644))
+
+	s, err = Gather(st, root)
+	require.NoError(t, err)
+	assert.Empty(t, s.DistillAgent)
+}
+
 func TestGatherSanitizesAgentArgv(t *testing.T) {
 	st, root := seededStore(t)
 

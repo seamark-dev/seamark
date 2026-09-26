@@ -751,11 +751,9 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		return err
 	}
 
-	// The config must resolve for every run — an unknown preset is a
-	// broken configuration, not something a dry run may paper over. But
-	// a dry run needs no invoker: disclosure works with the binary
-	// missing from PATH.
-	_, agentArgv, err := agent.Resolve(acfg)
+	// Validate config even for dry runs, which need no installed CLI.
+	// Use one spec for both command disclosure and invocation.
+	spec, err := integration.Builtin().ResolveInvocation(acfg, root)
 	if err != nil {
 		return fmt.Errorf("distill unavailable: %w", err)
 	}
@@ -763,7 +761,7 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 	var inv agent.Invoker
 
 	if !dryRun {
-		if inv, err = agent.New(acfg); err != nil {
+		if inv, err = agent.NewCommand(spec); err != nil {
 			return fmt.Errorf("distill unavailable: %w", err)
 		}
 	}
@@ -799,7 +797,7 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		Region: region,
 		Limit:  limit,
 		Pins:   pins,
-		Agent:  agentArgv,
+		Agent:  spec.Argv,
 		Root:   root,
 		DryRun: dryRun,
 		Logf: func(format string, args ...any) {
@@ -980,7 +978,7 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 		return err
 	}
 
-	_, agentArgv, err := agent.Resolve(acfg)
+	spec, err := integration.Builtin().ResolveInvocation(acfg, root)
 	if err != nil {
 		return fmt.Errorf("extraction unavailable: %w", err)
 	}
@@ -988,7 +986,7 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 	var inv agent.Invoker
 
 	if !dryRun {
-		if inv, err = agent.New(acfg); err != nil {
+		if inv, err = agent.NewCommand(spec); err != nil {
 			return fmt.Errorf("extraction unavailable: %w", err)
 		}
 	}
@@ -1061,7 +1059,7 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 	eopts := distill.ExtractOptions{
 		Root:   root,
 		DryRun: dryRun,
-		Agent:  agentArgv,
+		Agent:  spec.Argv,
 		OnPreflight: func(pf distill.ExtractPreflight) {
 			// The same scrubbing printPreflight applies: the disclosure
 			// must not leak a credential embedded in config.yaml, nor

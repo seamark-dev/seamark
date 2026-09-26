@@ -78,6 +78,20 @@ seamark lessons --distill --dry-run   # the full disclosure, nothing sent
 The dry run prints metadata only — never finding bodies — and works
 even when the agent CLI is not installed.
 
+With `agent.cli: codex`, the command is `codex exec` with `--ephemeral`
+(no session files), `--sandbox read-only` (model-generated commands cannot
+write), `-C <root>` (your workspace, also the process directory),
+`--skip-git-repo-check`, `--ignore-rules` (no user or project execpolicy
+`.rules` file: Codex runs a command such a rule allows outside the
+sandbox, which would void the read-only promise), `-c
+features.hooks=false` (seamark's own hooks do not run inside the
+inference run), and `-` (the prompt on stdin). Your `~/.codex/config.toml`
+still loads: it holds the login, the model, and the provider. Codex
+loads `AGENTS.md` and the other project instructions of the workspace in
+that run, so more than the prompt reaches inference; the reply is the
+final agent message on stdout. Authentication is the saved Codex login or
+`CODEX_API_KEY`; seamark holds neither.
+
 `lessons --extract-triggers` sends a smaller slice through the same
 agent CLI: per already-distilled proposal, its rule label, its note
 (model-written text you reviewed at apply time), the repo-relative

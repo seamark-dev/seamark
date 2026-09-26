@@ -121,6 +121,19 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   a live capture shows where its paths are rooted. A native run of
   codex-cli 0.154.0 (2026-09-21) observed the lesson hook end to end on
   the recorded surface.
+- **`agent.cli: codex`.** Both inference consumers, `lessons --distill`
+  and `lessons --extract-triggers`, can run Codex: `codex exec --ephemeral
+  --sandbox read-only -C <root> --skip-git-repo-check --ignore-rules -c
+  features.hooks=false -`, the prompt on stdin, the final message as the
+  reply, proposals marked `codex/…` in provenance. `--ignore-rules` keeps
+  an inherited execpolicy allow rule from lifting a command out of the
+  read-only sandbox. A failed Codex run reports the error after its
+  version banner, not the banner alone. The command is resolved
+  through the client registry, so `--dry-run`, `doctor`, and `status`
+  disclose it without the binary and never start it; a missing binary is
+  an error before any work. `agent.argv` still wins and keeps the caller's
+  working directory; `claude` stays the default. The preset has not run
+  in a live Codex session yet.
 - **The Codex command gate.** `seamark init --client codex` also writes a
   `PreToolUse` hook on Codex's `Bash` tool that runs
   `seamark gate --hook --client codex`. It is the same gate: warn until

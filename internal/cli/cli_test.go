@@ -1017,6 +1017,80 @@ func TestLessonsDistillDryRun(t *testing.T) {
 	require.Error(t, err, "an empty custom executable must be rejected")
 }
 
+func TestLessonsDistillWithTheCodexClient(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "person", Body: "Reset pooled state before reuse."},
+		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "person", Body: "Pooled state must be reset on reuse."},
+	}))
+	require.NoError(t, st.Close())
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  cli: codex\n"), 0o644))
+
+	// Dry runs show the full command even without Codex installed.
+	t.Setenv("PATH", t.TempDir())
+
+	out, err := run(t, "-C", root, "lessons", "--distill", "--dry-run")
+	require.NoError(t, err)
+	assert.Contains(t, out, "codex exec --ephemeral --sandbox read-only -C ")
+	assert.Contains(t, out, "--skip-git-repo-check --ignore-rules -c features.hooks=false -")
+	assert.Contains(t, out, "nothing was sent")
+
+	// Both consumers report a missing executable before starting work.
+	_, err = run(t, "-C", root, "lessons", "--distill")
+	require.ErrorContains(t, err, `distill unavailable: agent cli "codex" not found on PATH`)
+
+	_, err = run(t, "-C", root, "lessons", "--extract-triggers")
+	require.ErrorContains(t, err, `extraction unavailable: agent cli "codex" not found on PATH`)
+
+	// A fake Codex captures argv and returns a proposal to check provenance.
+	bin := t.TempDir()
+	seen := filepath.Join(root, "codex-argv")
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\n"+
+		"printf '%s\\n' \"$@\" > "+seen+"\n"+
+		"cat >/dev/null\n"+
+		`echo '{"patterns":[{"rule":"pooled-state-reset","note":"Reset pooled state before reuse.","finding_ids":[11,12],"trigger_paths":[]}]}'`+"\n"), 0o755))
+	t.Setenv("PATH", bin)
+
+	_, err = run(t, "-C", root, "lessons", "--distill")
+	require.NoError(t, err)
+
+	argv := strings.Split(strings.TrimSpace(string(mustRead(t, root, "codex-argv"))), "\n")
+	assert.Equal(t, []string{"exec", "--ephemeral", "--sandbox", "read-only", "-C", root,
+		"--skip-git-repo-check", "--ignore-rules", "-c", "features.hooks=false", "-"}, argv)
+
+	st, err = store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	pending, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.True(t, strings.HasPrefix(pending[0].Agent, "codex/"), "provenance names the client: %s", pending[0].Agent)
+	require.NoError(t, st.Close())
+
+	// An extraction dry run shows the same command without invoking Codex.
+	st, err = store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "s-open", Rule: "open-question", Region: "api", Note: "n", Members: []int64{11},
+		Agent: "claude/v3", Status: model.ProposalProposed,
+	}))
+	require.NoError(t, st.Close())
+	require.NoError(t, os.Remove(seen))
+
+	out, err = run(t, "-C", root, "lessons", "--extract-triggers", "--dry-run")
+	require.NoError(t, err)
+	assert.Contains(t, out, "codex exec --ephemeral --sandbox read-only -C ")
+	assert.NoFileExists(t, seen, "a dry run starts no process")
+}
+
 func TestDistillPreflightShowsRelevantFixPathsAndAdaptiveCap(t *testing.T) {
 	var out bytes.Buffer
 

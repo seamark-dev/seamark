@@ -885,8 +885,23 @@ distill:
   #              paste; flip to true to let them edit lessons.yaml
 agent:
   cli: claude # the agent CLI --distill pipes findings through (the default)
+  # cli: codex                    # …or Codex: `codex exec --ephemeral --sandbox read-only
+  #                                 -C <root> --skip-git-repo-check --ignore-rules
+  #                                 -c features.hooks=false -`
   # argv: ["my-llm", "--stdin"]   # …or a custom command line
 ```
+
+`agent.cli` names the agent that runs inference for `lessons --distill`
+and `lessons --extract-triggers`; it is a separate choice from the agents
+`seamark init --client` sets up, and no other command starts it. `codex`
+runs Codex non-interactively in a read-only sandbox, in your workspace,
+without session files, without your execpolicy `.rules` files (an
+allowed command would otherwise run outside the sandbox), with seamark's
+own hooks off inside the run, and reads the prompt from stdin; it
+authenticates with your saved Codex login or `CODEX_API_KEY`. Codex loads `AGENTS.md` and other project
+instructions in that run, so more than the prompt reaches inference. The
+preset has not been exercised in a live Codex run yet; `--dry-run` shows
+the exact command either way.
 
 History mining has two flags on `seamark index` itself: `--max-commits`
 bounds the git window (default 5000) and `--max-files-per-commit`

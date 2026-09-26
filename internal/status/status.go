@@ -22,6 +22,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -165,11 +166,11 @@ func Gather(st *store.Store, root string) (*Status, error) {
 	// Integration state, all read-only and failure-tolerant: status must
 	// describe a broken setup, not fail on it.
 	if acfg, err := agent.LoadConfig(root); err == nil {
-		if _, argv, err := agent.Resolve(acfg); err == nil {
+		if spec, err := integration.Builtin().ResolveInvocation(acfg, root); err == nil {
 			// Repository-controlled text headed for terminals and MCP
 			// clients: strip control sequences, scrub secret-shaped
 			// values — same treatment as the distill preflight.
-			s.DistillAgent = render.Sanitize(redact.Secrets(strings.Join(argv, " ")))
+			s.DistillAgent = render.Sanitize(redact.Secrets(strings.Join(spec.Argv, " ")))
 		}
 	}
 

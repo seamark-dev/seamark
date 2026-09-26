@@ -38,15 +38,11 @@ test: ## Run all tests
 test-race: ## Run all tests with the race detector
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race ./...
 
-# The agent-integration slice: the registry and adapter packages in full,
-# plus the focused init/hook/gate/agent/state cases the integration work
-# must keep passing. The hooks, approve, skills, and gate packages run in
-# full too: the setup adapters compose their merges, the coordinator
-# applies and guards the skill directories, and every client hook shares
-# the gate's command orchestration. Credential-free and offline; native
-# Codex checks are separate operator targets.
-AGENTS_TEST_PKGS := ./internal/integration/... ./internal/agent/... ./internal/hooks/... ./internal/approve/... ./internal/skills/... ./internal/delivery/... ./internal/gate/...
-AGENTS_TEST_RUN  := 'Test(RunInit|InitClient|InitDefault|InitGateMode|LessonsHook|GateHook|HookBudgets|HookDelivery|RecordHookDelivery|ResetHookDelivery|ContextDelivery|Summarize|PrintFiringSummary|ApproveTools|Reminder|LessonsForFiles|MergeHooks|ResolveGateMode)'
+# Run integration and supporting packages in full, plus focused tests
+# for setup, hooks, gates, state, and lesson inference in other packages.
+# These tests run offline without credentials; native Codex checks are separate.
+AGENTS_TEST_PKGS := ./internal/integration/... ./internal/agent/... ./internal/hooks/... ./internal/approve/... ./internal/skills/... ./internal/delivery/... ./internal/gate/... ./internal/doctor/... ./internal/status/...
+AGENTS_TEST_RUN  := 'Test(RunInit|InitClient|InitDefault|InitGateMode|LessonsHook|GateHook|HookBudgets|HookDelivery|RecordHookDelivery|ResetHookDelivery|ContextDelivery|Summarize|PrintFiringSummary|ApproveTools|Reminder|LessonsForFiles|MergeHooks|ResolveGateMode|LessonsDistill|LessonsExtractTriggers|ExtractTriggers)'
 
 agents-test: ## Run the agent-integration contract and characterization tests
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(AGENTS_TEST_PKGS)
