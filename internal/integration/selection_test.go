@@ -221,17 +221,41 @@ func TestGateModeComesFromTheSelectedHookClients(t *testing.T) {
 
 	both, err := ExplicitSetups(reg, []string{ClaudeID, CodexID}, false, false, "")
 	require.NoError(t, err)
-	assert.Equal(t, []string{ClaudeID}, GateHookClients(reg, both), "Codex installs lesson hooks and no gate hook yet")
+	assert.Equal(t, []string{ClaudeID, CodexID}, GateHookClients(reg, both), "both clients install a gate hook")
+	assert.Empty(t, UngatedHookClients(reg, both))
 	assert.Equal(t, "enforce", InstalledGateMode(reg, root, GateHookClients(reg, both)))
 
 	// A Codex-only selection reads no Claude Code file, so it sees no mode.
 	codexOnly, err := ExplicitSetups(reg, []string{CodexID}, false, false, "")
 	require.NoError(t, err)
-	assert.Empty(t, GateHookClients(reg, codexOnly))
+	assert.Equal(t, []string{CodexID}, GateHookClients(reg, codexOnly))
 	assert.Empty(t, InstalledGateMode(reg, root, GateHookClients(reg, codexOnly)))
+
+	// Enforce wins across clients: a warn Codex hook beside the enforce
+	// Claude Code hook gives enforce, whatever the order of the IDs.
+	_, err = ApplySetup(mustPlan(t, reg, SetupRequest{Root: root, Binary: testBinary, Clients: []ClientSetup{
+		{ClientID: CodexID, Hooks: true, GateMode: "warn"},
+	}}), ApplyOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "warn", InstalledGateMode(reg, root, []string{CodexID}))
+	assert.Equal(t, "enforce", InstalledGateMode(reg, root, []string{CodexID, ClaudeID}))
 
 	// A settings file that cannot be read reports no mode; the plan then
 	// reports the error itself.
 	writeRel(t, root, ".claude/settings.json", "{ broken")
 	assert.Empty(t, InstalledGateMode(reg, root, []string{ClaudeID}))
+	assert.Equal(t, "warn", InstalledGateMode(reg, root, []string{ClaudeID, CodexID}))
+}
+
+func TestUngatedHookClientsNamesAHooksOnlyClient(t *testing.T) {
+	hooksOnly := Client{ID: "hooksonly", Name: "Hooks Only", Setup: fakeSetup{}, SetupOps: SetupSupport{Hooks: true}}
+
+	reg, err := NewRegistry(append(Builtin().Clients(), hooksOnly)...)
+	require.NoError(t, err)
+
+	setups, err := ExplicitSetups(reg, []string{"hooksonly", CodexID}, false, false, "")
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{CodexID}, GateHookClients(reg, setups))
+	assert.Equal(t, []string{"Hooks Only"}, UngatedHookClients(reg, setups))
 }

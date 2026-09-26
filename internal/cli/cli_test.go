@@ -2011,11 +2011,97 @@ func TestGateHookModeFailsClosed(t *testing.T) {
 
 	_, _, err = runIn(t, `{"tool_input":{}}`, "-C", root, "gate", "--enforce", "--hook")
 	assert.ErrorIs(t, err, gate.ErrBlocked, "empty command must fail closed")
+	assert.EqualError(t, err, "blocked by policy: empty command")
 
 	// Without enforcement the same failures surface as plain errors.
 	_, _, err = runIn(t, "{not json", "-C", root, "gate", "--hook")
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, gate.ErrBlocked)
+
+	// A broken policy under explicit enforcement blocks; an installed
+	// warn hook over an enforcing policy blocks a verdict and lets a
+	// failure before the policy loads through.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte("mode: [broken\n"), 0o644))
+
+	_, _, err = runIn(t, `{"tool_input":{"command":"ls"}}`, "-C", root, "gate", "--enforce", "--hook")
+	assert.ErrorIs(t, err, gate.ErrBlocked, "a broken policy must fail closed under --enforce")
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(starterPolicyFor(gateModeEnforce)), 0o644))
+
+	payload := `{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}`
+	_, _, err = runIn(t, payload, "-C", root, "gate", "--hook")
+	assert.ErrorIs(t, err, gate.ErrBlocked, "the policy file's enforce mode blocks through a warn hook")
+
+	_, _, err = runIn(t, "{not json", "-C", root, "gate", "--hook")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, gate.ErrBlocked, "before the policy loads only --enforce fails closed")
+}
+
+func TestGateHookClientCodex(t *testing.T) {
+	root := writeFixture(t)
+	fixture := func(name string) string {
+		data, err := os.ReadFile(filepath.Join("..", "integration", "testdata", "codex", name))
+		require.NoError(t, err)
+
+		return string(data)
+	}
+
+	// A Codex Bash event: the same verdicts as a Claude Code event, the
+	// same exit protocol.
+	_, _, err := runIn(t, fixture("pre_tool_use_bash.json"), "-C", root, "gate", "--enforce", "--hook", "--client", "codex")
+	require.ErrorIs(t, err, gate.ErrBlocked, "force-push to main must block")
+	assert.Contains(t, err.Error(), "blocked by policy: ")
+
+	out, _, err := runIn(t, fixture("pre_tool_use_bash.json"), "-C", root, "gate", "--hook", "--client", "codex")
+	require.NoError(t, err, "warn mode reports and never blocks")
+	assert.Contains(t, out, "deny")
+	assert.Contains(t, out, "mode: warn")
+
+	out, _, err = runIn(t, `{"tool_name":"Bash","tool_input":{"command":"ls -la"}}`,
+		"-C", root, "gate", "--enforce", "--hook", "--client", "codex")
+	require.NoError(t, err)
+	assert.Contains(t, out, "allow")
+
+	// The verdicts are audited like every other gate run.
+	assert.FileExists(t, filepath.Join(root, ".seamark", "audit.jsonl"))
+
+	// A patch is never read as a shell command: an apply_patch event
+	// that reaches the gate is not applicable. Under enforcement that
+	// blocks and names the tool; under warn it is a plain error.
+	_, _, err = runIn(t, fixture("pre_tool_use_apply_patch_multi.json"), "-C", root, "gate", "--enforce", "--hook", "--client", "codex")
+	require.ErrorIs(t, err, gate.ErrBlocked)
+	assert.Contains(t, err.Error(), `tool "apply_patch" is not Bash`)
+
+	_, _, err = runIn(t, fixture("pre_tool_use_apply_patch_multi.json"), "-C", root, "gate", "--hook", "--client", "codex")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, gate.ErrBlocked)
+
+	// A Bash event without a command is malformed and fails closed.
+	_, _, err = runIn(t, `{"tool_name":"Bash","tool_input":{}}`, "-C", root, "gate", "--enforce", "--hook", "--client", "codex")
+	assert.ErrorIs(t, err, gate.ErrBlocked)
+}
+
+func TestGateHookClientSelectorRules(t *testing.T) {
+	root := writeFixture(t)
+
+	// An unknown client is a broken hook command: an error, and a block
+	// under enforcement.
+	_, _, err := runIn(t, `{"tool_input":{"command":"ls"}}`, "-C", root, "gate", "--hook", "--client", "gemini")
+	require.ErrorContains(t, err, `unknown hook client "gemini" (known: claude, codex)`)
+	assert.NotErrorIs(t, err, gate.ErrBlocked)
+
+	_, _, err = runIn(t, `{"tool_input":{"command":"ls"}}`, "-C", root, "gate", "--enforce", "--hook", "--client", "gemini")
+	assert.ErrorIs(t, err, gate.ErrBlocked)
+
+	// --client belongs to --hook.
+	_, _, err = runIn(t, "", "-C", root, "gate", "--client", "codex", "--command", "ls")
+	require.ErrorContains(t, err, "--client applies to --hook only")
+
+	// --client claude is the default spelled out.
+	out, _, err := runIn(t, `{"tool_input":{"command":"ls -la"}}`, "-C", root, "gate", "--hook", "--client", "claude")
+	require.NoError(t, err)
+	assert.Contains(t, out, "allow")
 }
 
 // TestInitDefaultCannotBlock is the end-to-end trust-contract test: a

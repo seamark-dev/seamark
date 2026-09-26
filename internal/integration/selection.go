@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -170,24 +171,32 @@ func UngatedHookClients(reg *Registry, setups []ClientSetup) []string {
 	return names
 }
 
-// InstalledGateMode returns the first installed gate-hook mode among
-// the clients, or "" when none has a gate hook. It reads through each
-// adapter's offline inspection, so an unselected client is never read.
+// InstalledGateMode returns the installed gate-hook mode of the
+// clients: enforce when any of them enforces, else warn when any has a
+// gate hook, else "". It reads through each adapter's offline
+// inspection, so an unselected client is never read.
 //
-// One mode for the run is enough while one client installs a gate hook.
-// When a second client does, their modes can differ, and the callers
-// must then report each client's mode instead of this one value.
+// Enforce wins because one enforcing hook blocks whatever the others
+// do: the run's policy scaffold and gate line must never read weaker
+// than an installed hook. Each adapter still keeps its own installed
+// mode when no mode is requested, so a client can run a warn hook in
+// an enforce run; init names such a hook beside the gate line.
 func InstalledGateMode(reg *Registry, root string, clientIDs []string) string {
+	installed := ""
+
 	for _, id := range clientIDs {
 		c, ok := reg.Lookup(id)
 		if !ok || c.Setup == nil {
 			continue
 		}
 
-		if mode := c.Setup.Inspect(root).GateMode; mode != "" {
-			return mode
+		switch c.Setup.Inspect(root).GateMode {
+		case hooks.ModeEnforce:
+			return hooks.ModeEnforce
+		case hooks.ModeWarn:
+			installed = hooks.ModeWarn
 		}
 	}
 
-	return ""
+	return installed
 }

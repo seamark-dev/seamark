@@ -146,15 +146,14 @@ func TestAbsentCapabilitiesReportUnsupported(t *testing.T) {
 	codex, _ := Builtin().Lookup(CodexID)
 
 	// Codex declares its skill directory, its setup adapter, and the
-	// lesson hook codecs. The command codec and the invocation preset are
-	// still absent.
+	// lifecycle codecs. The invocation preset is still absent.
 	declared := []Capability{
 		CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants,
-		CapabilityEdits, CapabilityResets,
+		CapabilityEdits, CapabilityCommands, CapabilityResets,
 	}
 	assert.Equal(t, declared, codex.Declared())
 	assert.True(t, codex.SetupOps.Hooks, "codex installs the lesson hooks")
-	assert.False(t, codex.SetupOps.GateHook, "the codex command gate waits for its own slice")
+	assert.True(t, codex.SetupOps.GateHook, "codex installs the command gate hook")
 
 	for _, capability := range Capabilities {
 		if slices.Contains(declared, capability) {
@@ -314,7 +313,7 @@ func TestClaudeInvocationIsPureAndReusesThePreset(t *testing.T) {
 	require.True(t, claude.Supports(CapabilityInvocation))
 	assert.Equal(t, []Capability{
 		CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants,
-		CapabilityEdits, CapabilityResets, CapabilityInvocation,
+		CapabilityEdits, CapabilityCommands, CapabilityResets, CapabilityInvocation,
 	}, claude.Declared())
 
 	spec, err := claude.Invocation(t.TempDir())

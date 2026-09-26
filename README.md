@@ -468,14 +468,18 @@ require_approval:
 
 `seamark init` wires the gate into `.claude/settings.json` as a
 PreToolUse hook on Bash (`seamark gate --hook` — the payload is read
-natively, no jq). By default the hook follows `policy.yaml`'s mode
-(warn), so **a first install never blocks a command**. Opting in with
-`seamark init --gate-mode enforce` bakes `--enforce` into the hook:
-deny/require_approval verdicts exit 2 and block, and the gate **fails
-closed** — a malformed payload, a broken policy file, or an internal
-error blocks the command instead of silently allowing it. Re-running
-`init` without `--gate-mode` keeps whatever mode is installed, and every
-run ends with a `gate` line stating the effective behavior.
+natively, no jq). `seamark init --client codex` wires the same gate into
+`.codex/hooks.json` as a PreToolUse hook on Codex's `Bash` tool
+(`seamark gate --hook --client codex`). By default the hook follows
+`policy.yaml`'s mode (warn), so **a first install never blocks a
+command**. Opting in with `seamark init --gate-mode enforce` bakes
+`--enforce` into the hook: deny/require_approval verdicts exit 2 and
+block, and the gate **fails closed** — a malformed payload, a broken
+policy file, or an internal error blocks the command instead of silently
+allowing it. Re-running `init` without `--gate-mode` keeps whatever mode
+each selected client has installed, and every run ends with a `gate`
+line stating the effective behavior; a selected client whose hook still
+runs without the flag is named under that line.
 
 The same init also wires the edit-time lessons hook and a silent
 `PostCompact` reset. The reset matters only when `.seamark/lessons.yaml` opts
@@ -680,23 +684,37 @@ runs is reported as running twice, so you can remove the personal copy.
 An init without `--client` never reads that file.
 
 With `--client codex`, init registers the server in `.codex/config.toml`
-and writes the lesson hook into `.codex/hooks.json`: a `PreToolUse` hook
-on `apply_patch`, which is how Codex reports every file edit. One patch is
+and writes the gate and lesson hooks into `.codex/hooks.json`: a
+`PreToolUse` hook on `Bash`, the Codex shell tool, which runs
+`seamark gate --hook --client codex`, and a `PreToolUse` hook on
+`apply_patch`, which is how Codex reports every file edit. The gate hook
+follows the same rules as the Claude Code one: warn until you opt in with
+`--gate-mode enforce`, exit 2 with the reason on stderr to block, fail
+closed under `--enforce`. A patch never reaches the gate as a shell
+command: an `apply_patch` event that a widened matcher sends to the gate
+is refused, and under `--enforce` that refusal blocks and names the tool.
+A `require_approval` verdict blocks like a deny under enforcement, because
+Codex parses a native "ask" reply and does not support it yet. One patch is
 one reminder under one budget, whatever the number of files in it; a move
 counts at both ends. Other hooks in the file stay. Setup keeps one handler
 per hook: when a command it does not manage already executes the seamark
 hook — behind a shell condition, `env`, `timeout`, or `sh -c` in
 `hooks.json`, or inline under `[hooks]` in `config.toml` — setup installs
-no second handler and says where the hook runs. Setup reads such a command
+no second handler and says where the hook runs. Such a command counts only
+where Codex runs it for the hook's tool: a gate command under another
+event, or under a matcher that never fires for `Bash`, gates no shell
+command, so setup names it and installs the managed hook. The gate line of
+the run comes from the hooks the run leaves: an unmanaged gate hook that
+enforces shows there, and one that runs without `--enforce` when you asked
+for enforce is named, because setup edits no hook it does not manage. Setup
+reads such a command
 the way a shell does, so a hook that only prints the seamark command
 (`echo '…seamark lessons --hook --client codex'`) is not a handler. When it
 cannot tell — an unknown program that gets the seamark command as its
 arguments — it installs the managed hook and names that command, because a
-missing hook costs more than a repeated reminder. No context-reset hook is installed, because a Codex reset has nothing
-to clear (see below). The Codex command gate is not installed yet. A Codex-only run prints no gate mode,
-and a run with Claude Code and Codex says that its gate line does not cover
-Codex shell commands. What an agent does not support yet is reported in
-the output.
+missing hook costs more than a repeated reminder. No context-reset hook is
+installed, because a Codex reset has nothing to clear (see below). What an
+agent does not support yet is reported in the output.
 
 Setup never trusts a project for you. Codex reads `.codex/` only after
 you accept its trust prompt, and it runs a project hook only after you

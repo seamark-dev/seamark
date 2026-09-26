@@ -219,29 +219,103 @@ func TestEffectiveGateModeLetsEnforceWin(t *testing.T) {
 	}
 }
 
-func TestCodexSpecsInstallTheLessonHooksOnly(t *testing.T) {
+func TestFiresFollowsTheSpecToolsAndTheClientRule(t *testing.T) {
+	gate := CodexSpecs(ModeWarn)[0]
+	assert.True(t, Fires(gate, "Bash", CodexMatcher))
+	assert.True(t, Fires(gate, "", CodexMatcher), "no matcher fires for every tool")
+	assert.False(t, Fires(gate, "apply_patch", CodexMatcher), "a matcher of another tool never fires for Bash")
+
+	lessons := ClaudeSpecs(ModeWarn)[1]
+	assert.True(t, Fires(lessons, "Write", ClaudeMatcher), "one of the spec's tools is enough")
+	assert.False(t, Fires(lessons, "Bash", ClaudeMatcher))
+
+	reset := ClaudeSpecs(ModeWarn)[2]
+	assert.True(t, Fires(reset, "anything", ClaudeMatcher), "an event without a matcher fires for every entry")
+}
+
+func TestEffectiveGateModeReadsTheCodexMarkers(t *testing.T) {
+	codex := CodexSpecs(ModeWarn)[0]
+
+	for name, tc := range map[string]struct {
+		settings map[string]any
+		want     string
+	}{
+		"warn":                   {hookDoc("command", "/bin/seamark gate --hook --client codex", "Bash"), ModeWarn},
+		"enforce":                {hookDoc("command", "/bin/seamark gate --enforce --hook --client codex", "Bash"), ModeEnforce},
+		"enforce under a regexp": {hookDoc("command", "/bin/seamark gate --enforce --hook --client codex", "^Bash$"), ModeEnforce},
+		"a Claude Code gate":     {hookDoc("command", "/bin/seamark gate --enforce --hook", "Bash"), ""},
+		"never fires":            {hookDoc("command", "/bin/seamark gate --enforce --hook --client codex", "apply_patch"), ""},
+	} {
+		assert.Equal(t, tc.want, EffectiveGateMode(tc.settings, codex, CodexMatcher), name)
+		assert.Equal(t, tc.want, EffectiveGateMode(tc.settings, CodexSpecs(ModeEnforce)[0], CodexMatcher), name)
+	}
+
+	// The Claude Code reader stays Claude-specific: a Codex gate in a
+	// Claude Code file is not a hook that Claude Code setup manages.
+	assert.Empty(t, InstalledGateMode(hookDoc("command", "/bin/seamark gate --enforce --hook --client codex", "Bash")))
+}
+
+func TestCodexSpecsInstallTheGateAndLessonHooks(t *testing.T) {
 	settings := map[string]any{}
 
-	changed, err := Merge(settings, "/usr/local/bin/seamark", CodexSpecs())
+	changed, err := Merge(settings, "/usr/local/bin/seamark", CodexSpecs(ModeWarn))
 	require.NoError(t, err)
 	assert.True(t, changed)
 
 	hookMap := settings["hooks"].(map[string]any)
-	require.Len(t, hookMap["PreToolUse"], 1, "the command gate is not part of the lesson slice")
+	require.Len(t, hookMap["PreToolUse"], 2, "the gate hook and the lessons hook")
 	assert.NotContains(t, hookMap, "PostCompact",
 		"a Codex reset clears nothing today, and setup installs no hook without an effect")
 
-	entry := hookMap["PreToolUse"].([]any)[0].(map[string]any)
-	assert.Equal(t, "apply_patch", entry["matcher"], "Codex reports every file edit as apply_patch")
+	gate := hookMap["PreToolUse"].([]any)[0].(map[string]any)
+	assert.Equal(t, "Bash", gate["matcher"], "Codex names its shell tool Bash")
 
-	handler := entry["hooks"].([]any)[0].(map[string]any)
+	handler := gate["hooks"].([]any)[0].(map[string]any)
+	assert.Equal(t, "/usr/local/bin/seamark gate --hook --client codex", handler["command"])
+	assert.Equal(t, 15, handler["timeout"], "seconds, as Codex reads the field")
+
+	lessons := hookMap["PreToolUse"].([]any)[1].(map[string]any)
+	assert.Equal(t, "apply_patch", lessons["matcher"], "Codex reports every file edit as apply_patch")
+
+	handler = lessons["hooks"].([]any)[0].(map[string]any)
 	assert.Equal(t, "/usr/local/bin/seamark lessons --hook --client codex", handler["command"])
-	assert.Equal(t, 10, handler["timeout"], "seconds, as Codex reads the field")
+	assert.Equal(t, 10, handler["timeout"])
 
 	// A second merge finds its own hooks.
-	changed, err = Merge(settings, "/usr/local/bin/seamark", CodexSpecs())
+	changed, err = Merge(settings, "/usr/local/bin/seamark", CodexSpecs(ModeWarn))
 	require.NoError(t, err)
 	assert.False(t, changed)
+
+	// A mode switch rewrites the gate hook in place: the opposite marker
+	// is legacy, so no second gate entry appears.
+	changed, err = Merge(settings, "/usr/local/bin/seamark", CodexSpecs(ModeEnforce))
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Equal(t, []string{
+		"/usr/local/bin/seamark gate --enforce --hook --client codex",
+		"/usr/local/bin/seamark lessons --hook --client codex",
+	}, commandsOf(settings, "PreToolUse"))
+
+	assert.Equal(t, "gate", CodexSpecs(ModeEnforce)[0].Name, "the gate spec comes first, as in ClaudeSpecs")
+	assert.Equal(t, "gate", ClaudeSpecs(ModeEnforce)[0].Name)
+}
+
+func TestCodexMatcherFollowsTheDocumentedRules(t *testing.T) {
+	for name, tc := range map[string]struct {
+		matcher, tool string
+		want          bool
+	}{
+		"exact name":          {"Bash", "Bash", true},
+		"another name":        {"Bash", "apply_patch", false},
+		"empty matches all":   {"", "Bash", true},
+		"star matches all":    {"*", "Bash", true},
+		"alternation":         {"Bash|apply_patch", "Bash", true},
+		"anchored":            {"^apply_patch$", "apply_patch", true},
+		"unanchored search":   {"ash", "Bash", true},
+		"a broken expression": {"(", "Bash", false},
+	} {
+		assert.Equal(t, tc.want, CodexMatcher(tc.matcher, tc.tool), name)
+	}
 }
 
 func TestClaudeAndCodexMarkersNeverClaimEachOther(t *testing.T) {
@@ -249,8 +323,9 @@ func TestClaudeAndCodexMarkersNeverClaimEachOther(t *testing.T) {
 	// commands of both. A marker matches as a suffix, so the shorter
 	// Claude marker must not own the longer Codex command.
 	// The Codex reset command exists although setup does not install it.
-	claude := ClaudeSpecs(ModeWarn)
-	codex := append(CodexSpecs(), Spec{Event: "PostCompact", Marker: CodexLessonsResetMarker})
+	claude := append(ClaudeSpecs(ModeWarn), ClaudeSpecs(ModeEnforce)[0])
+	codex := append(CodexSpecs(ModeWarn), CodexSpecs(ModeEnforce)[0],
+		Spec{Event: "PostCompact", Marker: CodexLessonsResetMarker})
 
 	for _, c := range claude {
 		for _, x := range codex {
@@ -263,6 +338,7 @@ func TestClaudeAndCodexMarkersNeverClaimEachOther(t *testing.T) {
 
 	// One document with both sets converges for both.
 	settings := map[string]any{}
+	claude, codex = ClaudeSpecs(ModeWarn), CodexSpecs(ModeWarn)
 
 	_, err := Merge(settings, "/bin/seamark", claude)
 	require.NoError(t, err)
@@ -275,11 +351,11 @@ func TestClaudeAndCodexMarkersNeverClaimEachOther(t *testing.T) {
 		assert.False(t, changed)
 	}
 
-	assert.Len(t, settings["hooks"].(map[string]any)["PreToolUse"], 3)
+	assert.Len(t, settings["hooks"].(map[string]any)["PreToolUse"], 4, "two gate hooks and two lessons hooks")
 }
 
 func TestWrappedFindsASeamarkHookBehindAnotherCommand(t *testing.T) {
-	lessons := CodexSpecs()[0]
+	lessons := CodexSpecs(ModeWarn)[1]
 
 	settings := map[string]any{"hooks": map[string]any{"PreToolUse": []any{
 		map[string]any{"matcher": "apply_patch", "hooks": []any{
@@ -293,9 +369,9 @@ func TestWrappedFindsASeamarkHookBehindAnotherCommand(t *testing.T) {
 
 	assert.Equal(t, []WrappedCommand{
 		// An unknown program with the seamark command as its arguments.
-		{Command: "/opt/wrap.sh seamark lessons --hook --client codex"},
+		{Command: "/opt/wrap.sh seamark lessons --hook --client codex", Matcher: "apply_patch", Type: "command"},
 		// A shell script that executes the seamark command.
-		{Command: "sh -c 'seamark lessons --hook --client codex >> /tmp/log'", Certain: true},
+		{Command: "sh -c 'seamark lessons --hook --client codex >> /tmp/log'", Certain: true, Matcher: "apply_patch", Type: "command"},
 	}, Wrapped(settings, lessons),
 		"the owned hook, the lookalike binary, and the unrelated hook run no seamark hook through a wrapper")
 
@@ -350,11 +426,12 @@ func TestMergeKeepsAWrappedCommandAsItIs(t *testing.T) {
 		map[string]any{"matcher": "apply_patch", "hooks": []any{map[string]any{"type": "command", "command": wrapped}}},
 	}}}
 
-	_, err := Merge(settings, "/usr/local/bin/seamark", CodexSpecs())
+	_, err := Merge(settings, "/usr/local/bin/seamark", CodexSpecs(ModeWarn))
 	require.NoError(t, err)
 
 	assert.Contains(t, commandsOf(settings, "PreToolUse"), wrapped, "the wrapper survives the merge")
-	assert.Equal(t, []WrappedCommand{{Command: wrapped}}, Wrapped(settings, CodexSpecs()[0]))
+	assert.Equal(t, []WrappedCommand{{Command: wrapped, Matcher: "apply_patch", Type: "command"}},
+		Wrapped(settings, CodexSpecs(ModeWarn)[1]))
 
 	// The same holds for the Claude Code gate hook.
 	gate := "test -x /usr/local/bin/seamark && /usr/local/bin/seamark gate --enforce --hook"

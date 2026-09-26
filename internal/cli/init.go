@@ -530,47 +530,111 @@ func commonDocuments(gateMode string) []integration.Document {
 func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.GateHook) {
 	policyMode, policyErr := policyFileMode(root, gateMode)
 
-	var enforcing []string
+	// The summary comes from the hooks the run leaves, never from the
+	// mode it asked for: a hook setup does not manage keeps its own mode,
+	// and the managed hook is left out when such a hook already runs.
+	var (
+		managed        *integration.GateHook
+		managedEnforce bool
+		enforcing      []string // the unmanaged hooks that enforce
+	)
 
-	for _, hook := range gateHooks {
-		if !hook.Managed && hook.Mode == gateModeEnforce && !slices.Contains(enforcing, hook.Path) {
+	for i, hook := range gateHooks {
+		if hook.Managed && managed == nil {
+			managed = &gateHooks[i]
+		}
+
+		switch {
+		case hook.Mode != gateModeEnforce:
+		case hook.Managed:
+			managedEnforce = true
+		case !slices.Contains(enforcing, hook.Path):
 			enforcing = append(enforcing, hook.Path)
 		}
 	}
 
+	// What the managed hook does beside an unmanaged enforcing one.
+	beside, besideSentence := "; setup installed no gate hook of its own beside it", "Setup installed no gate hook of its own beside it"
+	if managed != nil {
+		beside, besideSentence = ", although the hook setup manages is in warn mode", "The hook setup manages is in warn mode"
+	}
+
 	switch {
-	case gateMode != gateModeEnforce && len(enforcing) > 0 && policyErr != nil:
+	case len(gateHooks) == 0:
+		// A gated client whose gate hook never fires: an owned entry under
+		// another matcher, which setup does not rewrite. The coverage
+		// finding names it.
+		if policyErr != nil {
+			fmt.Fprintf(w, "  gate    no gate hook runs for shell commands; .seamark/policy.yaml failed to load (%v)\n", policyErr)
+		} else {
+			fmt.Fprintf(w, "  gate    no gate hook runs for shell commands — .seamark/policy.yaml (mode: %s) governs\n"+
+				"          plain `seamark gate` and `seamark check` runs\n", policyMode)
+		}
+	case !managedEnforce && len(enforcing) > 0 && policyErr != nil:
 		fmt.Fprintf(w, "  gate    enforce — %s runs its own gate hook with --enforce, and .seamark/policy.yaml\n"+
 			"          failed to load (%v); that hook fails closed: EVERY hooked command blocks until the\n"+
-			"          policy is fixed. The hook setup manages is in warn mode\n", strings.Join(enforcing, ", "), policyErr)
-	case gateMode != gateModeEnforce && len(enforcing) > 0:
+			"          policy is fixed. %s\n", strings.Join(enforcing, ", "), policyErr, besideSentence)
+	case !managedEnforce && len(enforcing) > 0:
 		fmt.Fprintf(w, "  gate    enforce — %s runs its own gate hook with --enforce: deny/require_approval\n"+
-			"          verdicts exit 2 and block, although the hook setup manages is in warn mode. Setup never\n"+
-			"          edits a gate hook it does not manage; remove that hook to stop blocking\n", strings.Join(enforcing, ", "))
+			"          verdicts exit 2 and block%s. Setup never\n"+
+			"          edits a gate hook it does not manage; remove that hook to stop blocking\n", strings.Join(enforcing, ", "), beside)
 
 		if policyMode == gateModeEnforce {
-			fmt.Fprintf(w, "          note: the kept .seamark/policy.yaml also sets mode: enforce, so the managed hook blocks\n"+
+			fmt.Fprintf(w, "          note: the kept .seamark/policy.yaml also sets mode: enforce, so every gate hook blocks\n"+
 				"          too; both must change to stop blocking\n")
 		}
-	case policyErr != nil && gateMode == gateModeEnforce:
+	case policyErr != nil && managedEnforce:
 		fmt.Fprintf(w, "  gate    enforce — but .seamark/policy.yaml failed to load (%v);\n"+
 			"          the hook fails closed: EVERY hooked command blocks until the policy is fixed\n", policyErr)
 	case policyErr != nil:
 		fmt.Fprintf(w, "  gate    warn — .seamark/policy.yaml failed to load (%v);\n"+
 			"          the hook reports the error and fails open\n", policyErr)
-	case gateMode == gateModeEnforce:
+	case managedEnforce:
 		fmt.Fprintf(w, "  gate    enforce — deny/require_approval verdicts exit 2 and block; gate failures fail closed\n")
 
 		if policyMode != gateModeEnforce {
 			fmt.Fprintf(w, "          note: the kept .seamark/policy.yaml says mode: %s — it still governs plain\n"+
-				"          `seamark gate` and `seamark check` runs; only the Claude hook enforces\n", policyMode)
+				"          `seamark gate` and `seamark check` runs; only a gate hook with --enforce blocks\n", policyMode)
 		}
 	case policyMode == gateModeEnforce:
 		fmt.Fprintf(w, "  gate    enforce — the kept .seamark/policy.yaml sets mode: enforce and the hook\n"+
 			"          follows it: deny/require_approval verdicts exit 2 and block; edit policy.yaml\n"+
 			"          to stop blocking\n")
+	case gateMode == gateModeEnforce:
+		// The run asked for enforce and no hook of the run carries it. The
+		// notes below name each hook and why.
+		fmt.Fprintf(w, "  gate    warn — verdicts are reported, nothing blocks; --gate-mode enforce reached no gate hook of this run\n")
 	default:
 		fmt.Fprintf(w, "  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n")
+	}
+
+	printGateModeNotes(w, gateMode, gateHooks)
+}
+
+// printGateModeNotes names each gate hook that runs without --enforce
+// in a run whose mode is enforce, and why. A managed hook of another
+// selected client keeps its installed mode when no mode is requested. A
+// hook setup does not manage never gets the flag: setup edits no such
+// hook, and it installs no managed hook beside one that certainly runs.
+// The gate line above must not read as covering either. A warn run
+// needs no note: an enforcing hook it leaves is the gate line itself.
+func printGateModeNotes(w io.Writer, gateMode string, gateHooks []integration.GateHook) {
+	if gateMode != gateModeEnforce {
+		return
+	}
+
+	for _, hook := range gateHooks {
+		switch {
+		case hook.Mode != gateModeWarn:
+		case hook.Managed:
+			fmt.Fprintf(w, "  note    %s runs its gate hook without --enforce: that hook follows .seamark/policy.yaml\n"+
+				"          instead; re-run with --gate-mode enforce to bake the flag into every selected client's gate hook\n",
+				hook.Path)
+		default:
+			fmt.Fprintf(w, "  note    %s runs a gate hook without --enforce that setup does not manage: --gate-mode enforce\n"+
+				"          does not reach it, and that hook follows .seamark/policy.yaml; edit it, or remove it and re-run\n"+
+				"          to let setup manage the gate\n", hook.Path)
+		}
 	}
 }
 

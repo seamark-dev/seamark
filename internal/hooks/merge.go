@@ -12,6 +12,10 @@ import (
 // an event name that maps to entries, each with a matcher and a list of
 // command hooks.
 type Spec struct {
+	// Name is the short name of the hook for narration: "gate",
+	// "lessons", or "context reset". A file line names what it wrote
+	// from the specs it merged, so the name lives with the spec.
+	Name string
 	// Event is the native event name, for example "PreToolUse".
 	Event string
 	// Matcher is the native tool matcher. Empty means the event has none.
@@ -60,16 +64,19 @@ func ClaudeSpecs(gateMode string) []Spec {
 
 	return []Spec{
 		{
+			Name:  "gate",
 			Event: "PreToolUse", Matcher: "Bash",
 			Marker: GateMarker(gateMode), Legacy: []string{GateMarker(other)},
 			Status: "seamark gate: classifying command", Timeout: 15,
 		},
 		{
+			Name:  "lessons",
 			Event: "PreToolUse", Matcher: "Edit|Write|MultiEdit",
 			Marker: LessonsMarker,
 			Status: "seamark: checking review lessons", Timeout: 10,
 		},
 		{
+			Name:   "context reset",
 			Event:  "PostCompact",
 			Marker: LessonsResetMarker,
 			Status: "seamark: resetting lesson delivery", Timeout: 10,
@@ -77,11 +84,14 @@ func ClaudeSpecs(gateMode string) []Spec {
 	}
 }
 
-// CodexSpecs returns the hooks that setup installs into Codex. Codex
-// reports every file edit as the apply_patch tool. Its matcher is a
-// regular expression, and "apply_patch" also matches the documented
-// aliases Edit and Write. The timeout is seconds, as in Claude Code.
-// The command gate joins the list with its own slice.
+// CodexSpecs returns the hooks that setup installs into Codex for a
+// gate mode. The gate hook comes first, as in ClaudeSpecs, so a caller
+// finds it at index 0. Codex names its shell tool Bash in the event and
+// in the matcher; the opposite mode's marker is listed as legacy, so a
+// mode switch rewrites the existing gate hook in place. Codex reports
+// every file edit as the apply_patch tool. A matcher is a regular
+// expression, and "apply_patch" also matches the documented aliases
+// Edit and Write. The timeout is seconds, as in Claude Code.
 //
 // The list holds no context-reset hook. The Codex edit decoder reads
 // no receiver yet: the event names one, but the reset of a subagent is
@@ -90,9 +100,21 @@ func ClaudeSpecs(gateMode string) []Spec {
 // trust review and one process for each compaction. The reset command
 // and its decoder exist, and the hook joins the list when the edit
 // decoder names a receiver with a verified reset.
-func CodexSpecs() []Spec {
+func CodexSpecs(gateMode string) []Spec {
+	other := ModeEnforce
+	if gateMode == ModeEnforce {
+		other = ModeWarn
+	}
+
 	return []Spec{
 		{
+			Name:  "gate",
+			Event: "PreToolUse", Matcher: "Bash",
+			Marker: CodexGateMarker(gateMode), Legacy: []string{CodexGateMarker(other)},
+			Status: "seamark gate: classifying command", Timeout: 15,
+		},
+		{
+			Name:  "lessons",
 			Event: "PreToolUse", Matcher: "apply_patch",
 			Marker: CodexLessonsMarker,
 			Status: "seamark: checking review lessons", Timeout: 10,
@@ -101,12 +123,17 @@ func CodexSpecs() []Spec {
 }
 
 // WrappedCommand is a hook command that setup does not own and that
-// runs, or can run, a seamark hook.
+// runs, or can run, a seamark hook. Matcher and Type are the entry's,
+// so a caller can tell whether the client runs the command for the
+// tools of the hook: a wrapper under another matcher runs nothing for
+// them, and it must not count as a handler.
 type WrappedCommand struct {
 	Command string
 	// Certain is true when the shell executes the seamark hook, and
 	// false when another program gets the seamark command as arguments.
 	Certain bool
+	Matcher string
+	Type    string
 }
 
 // Wrapped returns the commands of a parsed hook document that run the
@@ -120,17 +147,46 @@ func Wrapped(settings map[string]any, spec Spec) []WrappedCommand {
 	hookMap, _ := settings["hooks"].(map[string]any)
 	eventHooks, _ := hookMap[spec.Event].([]any)
 
-	ForEachCommand(eventHooks, func(_ string, _ map[string]any, cmd string) {
+	ForEachCommand(eventHooks, func(matcher string, h map[string]any, cmd string) {
 		if OwnedBySeamark(cmd, spec.Markers()) {
 			return
 		}
 
 		if use := SeamarkHookUse(cmd, spec.Markers()); use != HookNotRun {
-			out = append(out, WrappedCommand{Command: cmd, Certain: use == HookRuns})
+			hookType, _ := h["type"].(string)
+			out = append(out, WrappedCommand{Command: cmd, Certain: use == HookRuns, Matcher: matcher, Type: hookType})
 		}
 	})
 
 	return out
+}
+
+// ManagedRuns reports whether the client runs the managed command of
+// the spec, spec.Command(bin), for a tool of the spec: a "command"-typed
+// entry with exactly that command under a matcher that fires. The check
+// names the command that Merge wrote, so it holds for any binary path,
+// also one whose basename OwnedBySeamark does not accept. An entry that
+// Merge kept under a matcher that never fires is not a running hook.
+func ManagedRuns(settings map[string]any, spec Spec, bin string, fires MatcherRule) bool {
+	hookMap, _ := settings["hooks"].(map[string]any)
+	eventHooks, _ := hookMap[spec.Event].([]any)
+	want := spec.Command(bin)
+	runs := false
+
+	ForEachCommand(eventHooks, func(matcher string, h map[string]any, cmd string) {
+		if t, _ := h["type"].(string); t == "command" && cmd == want && Fires(spec, matcher, fires) {
+			runs = true
+		}
+	})
+
+	return runs
+}
+
+// Fires reports whether an entry with the matcher runs for a tool of
+// the spec under the client's rule. An event without a matcher fires
+// for every entry.
+func Fires(spec Spec, matcher string, fires MatcherRule) bool {
+	return slices.ContainsFunc(spec.Tools(), func(tool string) bool { return tool == "" || fires(matcher, tool) })
 }
 
 // Owned reports whether the document holds seamark's own command for
@@ -231,7 +287,8 @@ func Covered(settings map[string]any, spec Spec, fires MatcherRule) (tools []str
 // really runs from one document: enforce when any of them enforces, else
 // warn, else "" when none runs. Enforce wins, because one enforcing hook
 // blocks whatever the other hooks do. The caller passes the gate spec of
-// either mode; the spec's markers cover both.
+// either mode and of either client; the spec's markers cover both modes,
+// and the mode is read from the marker that owns the command.
 func EffectiveGateMode(settings map[string]any, gate Spec, fires MatcherRule) string {
 	mode := ""
 
@@ -240,12 +297,12 @@ func EffectiveGateMode(settings map[string]any, gate Spec, fires MatcherRule) st
 			return
 		}
 
-		if !slices.ContainsFunc(gate.Tools(), func(tool string) bool { return tool == "" || fires(matcher, tool) }) {
+		if !Fires(gate, matcher, fires) {
 			return
 		}
 
 		switch {
-		case OwnedBySeamark(cmd, []string{GateMarker(ModeEnforce)}):
+		case ownedGateMode(cmd, gate) == ModeEnforce:
 			mode = ModeEnforce
 		case mode == "":
 			mode = ModeWarn
@@ -253,6 +310,19 @@ func EffectiveGateMode(settings map[string]any, gate Spec, fires MatcherRule) st
 	})
 
 	return mode
+}
+
+// ownedGateMode returns the mode of a seamark-owned gate command: the
+// mode of the spec's marker that owns it. A command that no marker of
+// the spec owns gives "".
+func ownedGateMode(cmd string, gate Spec) string {
+	for _, marker := range gate.Markers() {
+		if OwnedBySeamark(cmd, []string{marker}) {
+			return gateMarkerMode(marker)
+		}
+	}
+
+	return ""
 }
 
 // forEachSpecCommand visits every seamark-owned command of the spec's
@@ -297,6 +367,29 @@ func ClaudeMatcher(matcher, tool string) bool {
 		names := strings.FieldsFunc(matcher, func(r rune) bool { return r == '|' || r == ',' })
 
 		return slices.ContainsFunc(names, func(name string) bool { return strings.TrimSpace(name) == tool })
+	}
+
+	pattern, err := regexp.Compile(matcher)
+
+	return err == nil && pattern.MatchString(tool)
+}
+
+// CodexMatcher is Codex's documented matcher rule (hooks reference,
+// consulted 2026-09-26):
+//
+//   - "*", an empty matcher, and an omitted matcher fire for every tool.
+//   - Any other matcher is a regular expression. The reference shows
+//     "^apply_patch$" as an example, so a pattern is unanchored unless
+//     it anchors itself.
+//
+// Codex also matches "Edit" and "Write" as aliases of apply_patch. The
+// rule does not model the aliases: setup reads it for the gate hook on
+// Bash, which has none. A pattern that Go cannot compile covers nothing
+// here, by the rule of ClaudeMatcher. No native run has exercised a
+// matcher other than the exact names that setup writes.
+func CodexMatcher(matcher, tool string) bool {
+	if matcher == "" || matcher == "*" {
+		return true
 	}
 
 	pattern, err := regexp.Compile(matcher)

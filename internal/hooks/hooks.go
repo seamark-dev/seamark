@@ -174,6 +174,31 @@ const (
 	CodexLessonsResetMarker = "lessons --hook-reset --client codex"
 )
 
+// codexClientSelector is the argument that names Codex in a hook command.
+const codexClientSelector = " --client codex"
+
+// CodexGateMarker returns the Codex gate hook's argument tail for a
+// mode. It is the Claude Code marker plus the client selector, so the
+// mode rule of GateMarker holds for every client: a gate marker starts
+// with GateMarker(mode), and the selector follows.
+func CodexGateMarker(mode string) string {
+	return GateMarker(mode) + codexClientSelector
+}
+
+// gateMarkerMode returns the mode that a gate marker bakes in. Every
+// gate marker starts with GateMarker(mode); a client selector can
+// follow. A marker of another hook gives "".
+func gateMarkerMode(marker string) string {
+	for _, mode := range []string{ModeEnforce, ModeWarn} {
+		prefix := GateMarker(mode)
+		if marker == prefix || strings.HasPrefix(marker, prefix+" ") {
+			return mode
+		}
+	}
+
+	return ""
+}
+
 // LessonsHookInstalled reports whether seamark's edit-lessons hook is
 // operational in a parsed settings map: a "command"-typed hook under a
 // matcher covering Edit tools.

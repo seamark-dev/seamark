@@ -17,8 +17,8 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   agent that is not selected is never read or written, a shared
   `.agents/skills` directory never counts as a configured Codex, and a
   skill directory that two selected agents share is written once. What an
-  agent does not support yet is reported (the Codex command gate today),
-  and native trust stays the user's decision. Without `--client`, init
+  agent does not support yet is reported, and native trust stays the
+  user's decision. Without `--client`, init
   output and written files are unchanged. `--client` takes a bare
   `--skills` only.
 - **One setup path.** Both init forms now plan every file before the first
@@ -118,10 +118,29 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   The patch reader follows the parser of codex-cli 0.154.0 and is tested
   against what that parser did with forty patch texts, offline. A patch
   that names an environment (`*** Environment ID:`) gets no reminder until
-  a live capture shows where its paths are rooted. The Codex command gate
-  follows separately; a run that also selects Claude Code says that its
-  gate line does not cover Codex shell commands. Nothing here has run in a
-  live Codex session yet.
+  a live capture shows where its paths are rooted. A native run of
+  codex-cli 0.154.0 (2026-09-21) observed the lesson hook end to end on
+  the recorded surface.
+- **The Codex command gate.** `seamark init --client codex` also writes a
+  `PreToolUse` hook on Codex's `Bash` tool that runs
+  `seamark gate --hook --client codex`. It is the same gate: warn until
+  `--gate-mode enforce`, exit 2 with the reason on stderr to block, fail
+  closed under `--enforce` on a malformed payload or a broken policy, and
+  the policy file's own `mode: enforce` blocks through a warn hook. A
+  Codex `apply_patch` event that a widened matcher sends to the gate is
+  refused and never parsed as a shell command; under `--enforce` the
+  refusal blocks and names the tool. A `require_approval` verdict blocks
+  like a deny, because Codex parses a native "ask" reply and does not
+  support it yet. Without `--gate-mode`, each selected client keeps its
+  own installed mode; the run's gate line takes enforce when any selected
+  client's hook enforces, and names a selected hook that still runs
+  without the flag, also one setup does not manage. A hook definition
+  counts as a handler only where the client runs it for the hook's tool:
+  a gate command under another event, or under a matcher that never fires
+  for `Bash`, no longer stops the install of the managed gate hook. The
+  plain `seamark gate --command` and the Claude Code hook are unchanged.
+  The generated Codex hook has not blocked a command in a live session
+  yet.
 
 - **Setup no longer takes a wrapped hook for its own.** A hook command such
   as `/opt/wrapper /usr/local/bin/seamark gate --hook`, or a shell condition

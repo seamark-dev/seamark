@@ -192,9 +192,13 @@ type EditHooks interface {
 }
 
 // CommandHooks translates a client's shell-command lifecycle for the
-// gate. EncodeFailure renders a gate failure in the native blocking
-// form when the client needs one; the caller decides whether the mode
-// requires blocking.
+// gate. DecodeCommand turns one native payload into the shell text;
+// ErrNotApplicable names an event of another tool, which the gate
+// never evaluates. EncodeDecision renders a decision: a reply with a
+// nonzero ExitCode blocks the tool with Stderr as the reason, and
+// `seamark gate` then exits 2 for every client. EncodeFailure renders
+// a gate failure in the native blocking form; the caller decides
+// whether the mode requires blocking.
 type CommandHooks interface {
 	DecodeCommand(payload []byte) (CommandEvent, error)
 	EncodeDecision(decision *gate.Decision) (HookReply, error)

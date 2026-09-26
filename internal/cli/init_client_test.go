@@ -76,26 +76,29 @@ func TestInitClientCodexTouchesOnlyCommonAndCodexArtifacts(t *testing.T) {
 	preview := initClients(t, root, true, true, true, "", "codex")
 	assert.Equal(t, []string{".claude/settings.json"}, files(t, root), "--print writes nothing")
 	assert.Contains(t, preview, "would write .codex/config.toml (registered seamark mcp; approved 5 tools")
-	assert.Contains(t, preview, "would write .codex/hooks.json (lessons hook)")
+	assert.Contains(t, preview, "would write .codex/hooks.json (gate + lessons hooks)")
 	assert.Contains(t, preview, "(nothing was written — --print)")
 
 	out := initClients(t, root, false, true, true, "", "codex")
 	assert.Contains(t, out, "  wrote   .codex/config.toml (registered seamark mcp; approved 5 tools: orient, why, change_set, check, expand)")
 	assert.Contains(t, out, "  wrote  .agents/skills/seamark-plan-change")
 
-	// The lesson hook, with the exact command that Codex runs. No reset
-	// hook: a Codex reset clears nothing, and each hook costs a review.
-	assert.Contains(t, out, "  wrote   .codex/hooks.json (lessons hook)")
+	// The gate and lesson hooks, with the exact commands that Codex runs.
+	// No reset hook: a Codex reset clears nothing, and each hook costs a
+	// review.
+	assert.Contains(t, out, "  wrote   .codex/hooks.json (gate + lessons hooks)")
+	assert.Contains(t, out, "          PreToolUse Bash                /bin/seamark gate --hook --client codex")
 	assert.Contains(t, out, "          PreToolUse apply_patch         /bin/seamark lessons --hook --client codex")
 	assert.NotContains(t, out, "--hook-reset --client codex")
 
-	// Native trust and the delivery limit are reported, not hidden. Codex
-	// gets no gate hook yet, so the run prints no gate mode for it.
+	// Native trust and the delivery limit are reported, not hidden. The
+	// gate line describes the Codex hook: a first install never blocks.
 	assert.Contains(t, out, "Codex runs a project hook only after the user reviews and trusts it")
 	assert.Contains(t, out, "`hook_delivery: once-per-context` does not apply")
 	assert.Contains(t, out, "setup never grants trust")
-	assert.Contains(t, out, "gate    no gate hook for the selected clients")
-	assert.NotContains(t, out, "only the Claude hook enforces")
+	assert.Contains(t, out, "gate    warn — verdicts are reported, nothing blocks")
+	assert.NotContains(t, out, "no gate hook for the selected clients")
+	assert.NotContains(t, out, "only a gate hook with --enforce blocks")
 
 	assert.Equal(t, "{ broken", string(mustRead(t, root, ".claude/settings.json")), "the unselected client's file is untouched")
 	assert.NoFileExists(t, filepath.Join(root, ".mcp.json"))
@@ -132,18 +135,18 @@ func TestInitClientRegistersWithoutGrants(t *testing.T) {
 	assert.Contains(t, out, "skills  not installed — add --skills to install the seamark agent skills (.claude/skills, .agents/skills)")
 	assert.Contains(t, out, "gate    warn — verdicts are reported")
 
-	// The gate line describes Claude Code only, and the run says so: a
-	// Codex shell command is not gated, whatever the mode reads.
-	ungated := "  note    Codex has no command gate hook yet: the gate line above does not cover its shell commands"
-	assert.Contains(t, out, ungated)
-	assert.Less(t, strings.Index(out, "gate    warn"), strings.Index(out, ungated))
+	// Both clients run a gate hook, so the gate line covers both and no
+	// client is named as ungated.
+	assert.NotContains(t, out, "no command gate hook")
+	assert.Contains(t, out, "/bin/seamark gate --hook")
+	assert.Contains(t, out, "/bin/seamark gate --hook --client codex")
 
-	enforced := initClients(t, t.TempDir(), false, false, false, "enforce", "claude", "codex")
-	assert.Contains(t, enforced, "gate    enforce")
-	assert.Contains(t, enforced, ungated, "an enforce line must never read as covering Codex")
-
-	claudeOnly := initClients(t, t.TempDir(), false, false, false, "", "claude")
-	assert.NotContains(t, claudeOnly, "no command gate hook", "every selected client is gated")
+	enforcedRoot := t.TempDir()
+	enforced := initClients(t, enforcedRoot, false, false, false, "enforce", "claude", "codex")
+	assert.Contains(t, enforced, "gate    enforce — deny/require_approval verdicts exit 2 and block")
+	assert.NotContains(t, enforced, "without --enforce", "--gate-mode enforce reaches every selected client's hook")
+	assert.Contains(t, string(mustRead(t, enforcedRoot, ".codex/hooks.json")), "gate --enforce --hook --client codex")
+	assert.Contains(t, string(mustRead(t, enforcedRoot, ".claude/settings.json")), "gate --enforce --hook")
 
 	reversed := t.TempDir()
 	assert.Equal(t, out, initClients(t, reversed, false, false, false, "", "claude", "codex", "claude"),
@@ -221,12 +224,108 @@ func TestInitClientKeepsTheInstalledGateMode(t *testing.T) {
 	assert.Equal(t, starterPolicyFor(gateModeWarn), string(mustRead(t, root, ".seamark/policy.yaml")))
 }
 
-func TestInitClientGateModeWithoutAGateHookSaysSo(t *testing.T) {
-	out := initClients(t, t.TempDir(), false, false, false, gateModeEnforce, "codex")
+func TestInitClientNamesAManagedHookThatKeepsWarn(t *testing.T) {
+	// Claude Code was set up with enforce. A later run adds Codex with
+	// no --gate-mode: the run's mode is enforce, the new Codex hook is
+	// warn, and the gate line must not read as covering Codex.
+	root := t.TempDir()
+	initClients(t, root, false, false, false, gateModeEnforce, "claude")
 
+	out := initClients(t, root, false, false, false, "", "claude", "codex")
+	assert.Contains(t, out, "gate    enforce — deny/require_approval verdicts exit 2 and block")
+	assert.Contains(t, out, "  note    .codex/hooks.json runs its gate hook without --enforce: that hook follows .seamark/policy.yaml")
+	assert.Contains(t, string(mustRead(t, root, ".codex/hooks.json")), "gate --hook --client codex\"")
+	assert.Contains(t, string(mustRead(t, root, ".claude/settings.json")), "gate --enforce --hook")
+
+	// The reverse order: Codex enforces, Claude Code is added without a
+	// mode. Enforce wins for the run, and the Claude Code hook is named.
+	reversed := t.TempDir()
+	initClients(t, reversed, false, false, false, gateModeEnforce, "codex")
+
+	out = initClients(t, reversed, false, false, false, "", "codex", "claude")
+	assert.Contains(t, out, "gate    enforce")
+	assert.Contains(t, out, "  note    .claude/settings.json runs its gate hook without --enforce")
+
+	// An explicit mode reaches every selected hook, and the note goes.
+	out = initClients(t, reversed, false, false, false, gateModeEnforce, "codex", "claude")
+	assert.NotContains(t, out, "without --enforce")
+}
+
+func TestInitClientReportsAnUnmanagedWarnGateUnderEnforce(t *testing.T) {
+	// A gate hook that setup does not manage runs without --enforce,
+	// certainly, so setup installs no second gate hook. The run asked
+	// for enforce; the summary must say what the retained hook does,
+	// and the retained hook must agree with it.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(starterPolicyFor(gateModeWarn)), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "hooks.json"), []byte(
+		`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"env /opt/bin/seamark gate --hook --client codex"}]}]}}`), 0o644))
+
+	out := initClients(t, root, false, false, false, gateModeEnforce, "codex")
+
+	assert.Contains(t, out, "  gate    warn — verdicts are reported, nothing blocks; --gate-mode enforce reached no gate hook of this run")
+	assert.Contains(t, out, "  note    .codex/hooks.json runs a gate hook without --enforce that setup does not manage: --gate-mode enforce")
+	assert.NotContains(t, out, "gate    enforce")
+	assert.NotContains(t, string(mustRead(t, root, ".codex/hooks.json")), "--enforce", "setup edits no hook it does not manage")
+
+	// The retained hook, run as Codex runs it: a deny is reported and
+	// nothing blocks, as the summary says.
+	payload := `{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}`
+	stdout, _, err := runIn(t, payload, "-C", root, "gate", "--hook", "--client", "codex")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "deny")
+	assert.Contains(t, stdout, "mode: warn")
+}
+
+// hooksOnlySetup is a test-only adapter that declares lifecycle hooks
+// and no command gate, the shape of a client whose gate is not built.
+type hooksOnlySetup struct{}
+
+func (hooksOnlySetup) Inspect(string) integration.Inspection {
+	return integration.Inspection{ClientID: "hooksonly"}
+}
+
+func (hooksOnlySetup) Plan(string, string, integration.ClientSetup) (integration.ClientPlan, error) {
+	return integration.ClientPlan{}, nil
+}
+
+func TestInitClientGateModeWithoutAGateHookSaysSo(t *testing.T) {
+	reg, err := integration.NewRegistry(integration.Client{
+		ID: "hooksonly", Name: "Hooks Only", Setup: hooksOnlySetup{}, SetupOps: integration.SetupSupport{Hooks: true},
+	})
+	require.NoError(t, err)
+
+	setups, err := integration.ExplicitSetups(reg, []string{"hooksonly"}, false, false, gateModeEnforce)
+	require.NoError(t, err)
+
+	var b testWriter
+
+	run := initRun{w: &b, root: t.TempDir(), bin: "/bin/seamark", gateMode: gateModeEnforce}
+	require.NoError(t, applyInit(run, reg, setups, selectedNotes{reg: reg}))
+
+	out := b.String()
 	assert.Contains(t, out, "note    --gate-mode enforce configures no hook in this run")
 	assert.Contains(t, out, "gate    no gate hook for the selected clients")
 	assert.NotContains(t, out, "gate    enforce")
+
+	// Beside a gated client, the ungated one is named.
+	reg, err = integration.NewRegistry(append(integration.Builtin().Clients(), integration.Client{
+		ID: "hooksonly", Name: "Hooks Only", Setup: hooksOnlySetup{}, SetupOps: integration.SetupSupport{Hooks: true},
+	})...)
+	require.NoError(t, err)
+
+	setups, err = integration.ExplicitSetups(reg, []string{"hooksonly", "codex"}, false, false, "")
+	require.NoError(t, err)
+
+	b = testWriter{}
+	run = initRun{w: &b, root: t.TempDir(), bin: "/bin/seamark"}
+	require.NoError(t, applyInit(run, reg, setups, selectedNotes{reg: reg}))
+
+	out = b.String()
+	assert.Contains(t, out, "gate    warn — verdicts are reported")
+	assert.Contains(t, out, "  note    Hooks Only has no command gate hook yet: the gate line above does not cover its shell commands")
 }
 
 func TestInitClientSharedDestinationIsWrittenOnce(t *testing.T) {

@@ -262,12 +262,13 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 	}
 
 	// The gate hooks the client runs after this plan: the managed one,
-	// and one in the local file when the run looked there. The local hook
-	// is reported with its own mode, never changed.
+	// when the merge left it under a matcher that fires for Bash, and one
+	// in the local file when the run looked there. The local hook is
+	// reported with its own mode, never changed.
 	gate := specs[0]
 
-	if mode := hooks.EffectiveGateMode(settings, gate, hooks.ClaudeMatcher); mode != "" {
-		plan.GateHooks = append(plan.GateHooks, GateHook{Path: approve.ClaudeSettings, Mode: mode, Managed: true})
+	if hooks.ManagedRuns(settings, gate, narration.binary, hooks.ClaudeMatcher) {
+		plan.GateHooks = append(plan.GateHooks, GateHook{Path: approve.ClaudeSettings, Mode: gateMode, Managed: true})
 	}
 
 	reportClaudeWrappers(plan, settings, specs)
@@ -313,8 +314,9 @@ func reportClaudeWrappers(plan *ClientPlan, settings map[string]any, specs []hoo
 
 			// The gate spec is the first one, by the order of ClaudeSpecs. An
 			// uncertain wrapper counts too: a gate line that says "nothing
-			// blocks" while a wrapped gate blocks is the worse error.
-			if i != 0 {
+			// blocks" while a wrapped gate blocks is the worse error. A
+			// wrapper that Claude Code never runs for Bash gates nothing.
+			if i != 0 || wrapped.Type != "command" || !hooks.Fires(spec, wrapped.Matcher, hooks.ClaudeMatcher) {
 				continue
 			}
 
