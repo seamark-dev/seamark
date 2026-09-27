@@ -42,7 +42,7 @@ test-race: ## Run all tests with the race detector
 # for setup, hooks, gates, state, and lesson inference in other packages.
 # These tests run offline without credentials; native Codex checks are separate.
 AGENTS_TEST_PKGS := ./internal/integration/... ./internal/agent/... ./internal/hooks/... ./internal/approve/... ./internal/skills/... ./internal/delivery/... ./internal/gate/... ./internal/doctor/... ./internal/status/...
-AGENTS_TEST_RUN  := 'Test(RunInit|InitClient|InitDefault|InitGateMode|LessonsHook|GateHook|HookBudgets|HookDelivery|RecordHookDelivery|ResetHookDelivery|ContextDelivery|Summarize|PrintFiringSummary|ApproveTools|Reminder|LessonsForFiles|MergeHooks|ResolveGateMode|LessonsDistill|LessonsExtractTriggers|ExtractTriggers)'
+AGENTS_TEST_RUN  := 'Test(RunInit|InitClient|InitDefault|InitGateMode|ReportSkills|LessonsHook|GateHook|HookBudgets|HookDelivery|RecordHookDelivery|ResetHookDelivery|ContextDelivery|Summarize|PrintFiringSummary|ApproveTools|Reminder|LessonsForFiles|MergeHooks|ResolveGateMode|LessonsDistill|LessonsExtractTriggers|ExtractTriggers|ResourcesAndPrompts)'
 
 agents-test: ## Run the agent-integration contract and characterization tests
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(AGENTS_TEST_PKGS)

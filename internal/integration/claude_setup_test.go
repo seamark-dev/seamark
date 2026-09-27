@@ -284,10 +284,10 @@ func TestClaudeInstallsEveryHookAndReportsTheLocalDuplicate(t *testing.T) {
 
 	warnings := findingReasons(plan, FindingWarning)
 	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], claudeLocalSettings+": runs `/home/me/bin/seamark gate --enforce --hook`",
+	assert.Contains(t, warnings[0], claudeLocalSettings+": also runs `/home/me/bin/seamark gate --enforce --hook` for Bash",
 		"the finding quotes the command the local file really runs")
-	assert.Contains(t, warnings[0], "so it runs twice for Bash")
-	assert.Contains(t, warnings[0], "the local copy runs in another gate mode, and both apply",
+	assert.Contains(t, warnings[0], "so the hook runs twice")
+	assert.Contains(t, warnings[0], "runs in enforce mode, and both apply",
 		"a local --enforce still blocks under the shared warn hook")
 
 	assert.Contains(t, guardPaths(plan), claudeLocalSettings, "the other hook source is a guarded input")
@@ -331,7 +331,7 @@ func TestClaudeStillUpdatesAnOwnedHookTheLocalFileDuplicates(t *testing.T) {
 	warnings := findingReasons(plan, FindingWarning)
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "runs `/home/me/bin/seamark gate --hook`")
-	assert.Contains(t, warnings[0], "so it runs twice")
+	assert.Contains(t, warnings[0], "so the hook runs twice")
 }
 
 func TestClaudeReportsTheDuplicateOnEveryRunUntilItIsRemoved(t *testing.T) {
@@ -359,8 +359,8 @@ func TestClaudeReportsTheDuplicateOnEveryRunUntilItIsRemoved(t *testing.T) {
 
 	warnings := findingReasons(again, FindingWarning)
 	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "so it runs twice for Edit")
-	assert.NotContains(t, warnings[0], "another gate mode")
+	assert.Contains(t, warnings[0], "for Edit; the managed lessons hook runs too, so the hook runs twice")
+	assert.NotContains(t, warnings[0], "and both apply")
 }
 
 func TestClaudeReadsTheLocalMatcherByClaudeCodesRules(t *testing.T) {
@@ -368,11 +368,11 @@ func TestClaudeReadsTheLocalMatcherByClaudeCodesRules(t *testing.T) {
 
 	for matcher, twice := range map[string]string{
 		// A comma list names exact tools.
-		"Edit, Write": "so it runs twice for Edit, Write",
+		"Edit, Write": "for Edit, Write; the managed lessons hook runs too",
 		// An unanchored expression: Edit$ fires for MultiEdit too.
-		"Edit$":                "so it runs twice for Edit, MultiEdit",
-		"Edit|Write|MultiEdit": "so it runs twice for Edit, Write, MultiEdit",
-		"*":                    "so it runs twice for Edit, Write, MultiEdit",
+		"Edit$":                "for Edit, MultiEdit; the managed lessons hook runs too",
+		"Edit|Write|MultiEdit": "for Edit, Write, MultiEdit; the managed lessons hook runs too",
+		"*":                    "for Edit, Write, MultiEdit; the managed lessons hook runs too",
 	} {
 		t.Run(matcher, func(t *testing.T) {
 			root := t.TempDir()
@@ -554,7 +554,12 @@ func TestClaudeInspection(t *testing.T) {
 		for _, entry := range (claudeSetup{}).Inspect(root).Capabilities {
 			require.NoError(t, entry.Validate())
 			assert.Equal(t, TrustUnknown, entry.Trust, "setup never reports trust it cannot read")
-			assert.NotEqual(t, VerificationVerified, entry.Verification.Level)
+			assert.Equal(t, VerificationUnverified, entry.Verification.Level, "%s: no recorded native check", entry.Capability)
+
+			if entry.Capability == CapabilitySkills {
+				// Evidence only: the registry fills the directory state.
+				continue
+			}
 
 			out[entry.Capability] = entry.State
 		}
@@ -562,10 +567,15 @@ func TestClaudeInspection(t *testing.T) {
 		return out
 	}
 
-	root := t.TempDir()
-	assert.Equal(t, map[Capability]CapabilityState{
+	// The adapter reports its native documents: the registration, the
+	// grants, and the three hooks. The registry adds the skills entry.
+	absent := map[Capability]CapabilityState{
 		CapabilityMCPRegistration: StateAbsent, CapabilityToolGrants: StateAbsent,
-	}, state(root))
+		CapabilityEdits: StateAbsent, CapabilityCommands: StateAbsent, CapabilityResets: StateAbsent,
+	}
+
+	root := t.TempDir()
+	assert.Equal(t, absent, state(root))
 
 	_, err := ApplySetup(mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: []ClientSetup{
 		{ClientID: ClaudeID, RegisterMCP: true},
@@ -573,6 +583,7 @@ func TestClaudeInspection(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[Capability]CapabilityState{
 		CapabilityMCPRegistration: StateCurrent, CapabilityToolGrants: StatePartial,
+		CapabilityEdits: StateAbsent, CapabilityCommands: StateAbsent, CapabilityResets: StateAbsent,
 	}, state(root), "a registration alone approves nothing")
 
 	_, err = ApplySetup(mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: []ClientSetup{
@@ -589,7 +600,8 @@ func TestClaudeInspection(t *testing.T) {
 	writeRel(t, broken, ".mcp.json", "{")
 	assert.Equal(t, map[Capability]CapabilityState{
 		CapabilityMCPRegistration: StateUnreadable, CapabilityToolGrants: StateUnreadable,
-	}, state(broken))
+		CapabilityEdits: StateAbsent, CapabilityCommands: StateAbsent, CapabilityResets: StateAbsent,
+	}, state(broken), "a broken .mcp.json says nothing about the hooks")
 }
 
 func TestClaudeKeepsAWrappedHookAndReportsIt(t *testing.T) {
@@ -614,8 +626,9 @@ func TestClaudeKeepsAWrappedHookAndReportsIt(t *testing.T) {
 	warnings := findingReasons(plan, FindingWarning)
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], wrapped)
-	assert.Contains(t, warnings[0], "did not change")
+	assert.Contains(t, warnings[0], "the managed gate hook runs too")
 	assert.Contains(t, warnings[0], "runs twice")
+	assert.Contains(t, warnings[0], "runs in enforce mode, and both apply")
 
 	// The wrapped gate enforces, whatever mode the managed hook has. The
 	// gate line of the run reads the modes from here.

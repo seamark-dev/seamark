@@ -8,6 +8,46 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **One account of every agent across `init`, `doctor`, and `status`.**
+  The three commands now read one registry inspection per client:
+  skills, MCP registration, tool grants, and the edit, gate, and reset
+  hooks, each with its configuration state (absent, current, partial,
+  conflict, unreadable), the project trust seamark can read, and the
+  recorded native evidence (verified on a named version and surface,
+  pending, or not natively verified). `status --json` adds a `clients`
+  array with those typed fields by name and a `distill_client` field
+  naming the invoker; every existing field keeps its meaning.
+  `status` prints a `clients` block (hooks and registration per client,
+  the native evidence, and each limitation the adapter reports, such as
+  Codex trust that seamark cannot read and reminders that repeat), and
+  its `gate` line covers every client with a gate hook: an enforcing
+  Codex hook beside a warn Claude Code hook reads "enforce for codex …
+  the claude hook follows policy mode warn". `doctor` reports `hooks`,
+  `mcp`, `skills`, and `approvals` per client on the same lines as
+  before, prints one line per client with the evidence and limitations
+  (`[features] hooks = false` in `.codex/config.toml` is a warning:
+  the installed hooks never run), names the invoker on the `agent`
+  line, and takes every corrective command from the adapter that
+  installs the artifact. A skill directory two clients share is one
+  entry that names both consumers everywhere. `seamark init --help`
+  lists what seamark supports for each client from the same
+  descriptors. Hook evidence is one model for setup and inspection:
+  every definition of a hook, owned or wrapped, in the shared file, the
+  personal `.claude/settings.local.json`, or the inline Codex
+  `[hooks]`, with the tools the agent runs it for, whether the shell
+  certainly runs it, and its gate mode; a hook that covers some tools
+  is partial wherever it lives, and the action names the file that
+  holds it; a wrapped enforcing gate in the personal file enforces, a
+  wrapper that runs both modes enforces, and a managed warn hook beside
+  an enforcing inline hook reads as enforce everywhere
+  (`managed_gate_mode` keeps what setup owns). `init --client claude`
+  reports a tool as uncovered only when no definition in either file
+  runs the hook for it. A credential inside a hook command is redacted
+  before it reaches a detail, a finding, JSON, or the MCP resource.
+  `init --client codex` warns when `[features] hooks = false` turns
+  the hooks it installs off, and repeats the trust note for kept hooks.
+  Inspection stays offline and read-only: no client binary runs and no
+  login starts.
 - **`seamark init --client <name>`.** Selects the agents to set up, by
   name, and may repeat (`--client claude --client codex`). Each selected
   agent gets what seamark supports for it: its hooks and its MCP server

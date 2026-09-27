@@ -61,6 +61,16 @@ var Capabilities = []Capability{
 	CapabilityEdits, CapabilityCommands, CapabilityResets, CapabilityInvocation,
 }
 
+// ConfiguredCapabilities lists the capabilities that have project
+// configuration an inspection can classify, in presentation order.
+// Setup is the umbrella for the three setup operations, and invocation
+// has no project document: the invoker resolver reports it. Both are
+// declared, never configured.
+var ConfiguredCapabilities = []Capability{
+	CapabilitySkills, CapabilityMCPRegistration, CapabilityToolGrants,
+	CapabilityEdits, CapabilityCommands, CapabilityResets,
+}
+
 // SetupSupport declares which optional setup operations the client's
 // SetupAdapter can plan. One adapter composes all native documents, so
 // the operations are metadata, not one interface per operation. The
@@ -69,16 +79,20 @@ type SetupSupport struct {
 	// Hooks means the adapter can install the client's lifecycle hooks.
 	// It is a setup operation, not a capability: the codecs that handle
 	// the hook events are declared through Edits, Commands, and Resets.
-	Hooks bool
+	Hooks bool `json:"hooks"`
 	// GateHook means the installed hooks include the command gate, so a
 	// gate mode applies to the client. A client can install lesson hooks
 	// and no gate hook, and init must then print no gate mode for it.
-	GateHook bool
+	GateHook bool `json:"gate_hook"`
+	// ResetHook means the installed hooks include the context reset. A
+	// client whose reset has no observable effect installs none, and
+	// diagnostics must then not call the absent hook missing.
+	ResetHook bool `json:"reset_hook"`
 	// RegisterMCP means the adapter can register the seamark MCP server.
-	RegisterMCP bool
+	RegisterMCP bool `json:"register_mcp"`
 	// ApproveTools means the adapter can add the exact per-tool grants.
 	// It is independent of RegisterMCP.
-	ApproveTools bool
+	ApproveTools bool `json:"approve_tools"`
 }
 
 // Client describes one coding agent. Built-in descriptors are assembled
@@ -295,22 +309,25 @@ const (
 	StateUnreadable
 )
 
+// capabilityStateNames are the JSON and narration names, by value.
+var capabilityStateNames = []string{"absent", "current", "partial", "conflict", "unreadable"}
+
 // String names a state for narration and test output.
 func (s CapabilityState) String() string {
-	switch s {
-	case StateAbsent:
-		return "absent"
-	case StateCurrent:
-		return "current"
-	case StatePartial:
-		return "partial"
-	case StateConflict:
-		return "conflict"
-	case StateUnreadable:
-		return "unreadable"
-	default:
-		return "unknown"
-	}
+	return enumName(capabilityStateNames, int(s))
+}
+
+// MarshalText writes the name, so JSON consumers read "current", not 1.
+func (s CapabilityState) MarshalText() ([]byte, error) {
+	return []byte(s.String()), nil
+}
+
+// UnmarshalText reads a name written by MarshalText.
+func (s *CapabilityState) UnmarshalText(text []byte) error {
+	v, err := enumValue(capabilityStateNames, "capability state", text)
+	*s = CapabilityState(v)
+
+	return err
 }
 
 // TrustState classifies whether the user trusts the current project's
@@ -328,18 +345,25 @@ const (
 	TrustEstablished
 )
 
+// trustStateNames are the JSON and narration names, by value.
+var trustStateNames = []string{"unknown", "pending", "established"}
+
 // String names a trust state for narration and test output.
 func (s TrustState) String() string {
-	switch s {
-	case TrustUnknown:
-		return "unknown"
-	case TrustPending:
-		return "pending"
-	case TrustEstablished:
-		return "established"
-	default:
-		return "unknown"
-	}
+	return enumName(trustStateNames, int(s))
+}
+
+// MarshalText writes the name, so JSON consumers read "pending", not 1.
+func (s TrustState) MarshalText() ([]byte, error) {
+	return []byte(s.String()), nil
+}
+
+// UnmarshalText reads a name written by MarshalText.
+func (s *TrustState) UnmarshalText(text []byte) error {
+	v, err := enumValue(trustStateNames, "trust state", text)
+	*s = TrustState(v)
+
+	return err
 }
 
 // Verification classifies native compatibility evidence for a
@@ -359,20 +383,25 @@ const (
 	VerificationVerified
 )
 
+// verificationNames are the JSON and narration names, by value.
+var verificationNames = []string{"unknown", "unverified", "pending", "verified"}
+
 // String names a verification level for narration and test output.
 func (v Verification) String() string {
-	switch v {
-	case VerificationUnknown:
-		return "unknown"
-	case VerificationUnverified:
-		return "unverified"
-	case VerificationPending:
-		return "pending"
-	case VerificationVerified:
-		return "verified"
-	default:
-		return "unknown"
-	}
+	return enumName(verificationNames, int(v))
+}
+
+// MarshalText writes the name, so JSON consumers read "verified", not 3.
+func (v Verification) MarshalText() ([]byte, error) {
+	return []byte(v.String()), nil
+}
+
+// UnmarshalText reads a name written by MarshalText.
+func (v *Verification) UnmarshalText(text []byte) error {
+	n, err := enumValue(verificationNames, "verification", text)
+	*v = Verification(n)
+
+	return err
 }
 
 // VerificationEvidence is the native compatibility evidence for one
@@ -381,12 +410,12 @@ func (v Verification) String() string {
 // operational; TrustState reports project trust separately. The zero
 // value means unknown.
 type VerificationEvidence struct {
-	Level Verification
+	Level Verification `json:"level"`
 	// ClientVersion is the client version the recorded check ran against.
-	ClientVersion string
+	ClientVersion string `json:"client_version,omitempty"`
 	// Surface names the native surface the check exercised, for example
 	// "PreToolUse apply_patch".
-	Surface string
+	Surface string `json:"surface,omitempty"`
 }
 
 // VerifiedEvidence builds evidence at VerificationVerified. It rejects
@@ -424,18 +453,27 @@ func (e VerificationEvidence) Validate() error {
 // Supported, State, Trust, and Verification are independent dimensions:
 // a current configuration can have unknown trust, and verified
 // compatibility says nothing about this project's trust.
+//
+// The JSON names are part of `seamark status --json`; they are additive
+// and must stay stable.
 type CapabilityInspection struct {
-	Capability Capability
+	Capability Capability `json:"capability"`
 	// Supported is whether the descriptor declares the capability.
-	Supported bool
-	State     CapabilityState
+	Supported bool            `json:"supported"`
+	State     CapabilityState `json:"state"`
 	// Trust is the project's native trust state for this capability.
-	Trust TrustState
+	Trust TrustState `json:"trust"`
 	// Verification is the native compatibility evidence.
-	Verification VerificationEvidence
+	Verification VerificationEvidence `json:"verification"`
 	// Detail is a bounded, sanitized explanation for narration. It is
 	// supplemental: consumers must read the typed fields, never parse it.
-	Detail string
+	// It never names the client: the consumer adds the client label.
+	Detail string `json:"detail,omitempty"`
+	// Action is the command or edit that changes the state, from the
+	// same adapter knowledge that installs the artifact; empty when
+	// nothing needs to change. init, doctor, and status print it as
+	// the corrective action, so the three never disagree on the fix.
+	Action string `json:"action,omitempty"`
 }
 
 // Validate checks one capability inspection. It rejects incomplete
@@ -462,16 +500,41 @@ func (i CapabilityInspection) Validate() error {
 	return nil
 }
 
-// Inspection is the offline, read-only view of one client's setup.
+// Inspection is the offline, read-only view of one client's setup. An
+// adapter reports the capabilities it configures; Registry.Inspect
+// completes the view with the name, the declared capabilities, the
+// setup operations, and the shared skill destinations, in the order of
+// ConfiguredCapabilities. Narration reads the typed fields only: an
+// absent hook is missing when Setup says setup installs it, and absent
+// by design otherwise.
 type Inspection struct {
-	ClientID     string
-	Capabilities []CapabilityInspection
-	// GateMode is the mode of the installed command-gate hook: warn,
-	// enforce, or empty when the client has no operational gate hook or
-	// its document cannot be read. It is the installed hook mode only.
-	// The repository policy file can still enforce on top of a warn hook.
-	GateMode string
-	Findings []Finding
+	ClientID string `json:"client"`
+	// Name is the display name, filled by the registry.
+	Name string `json:"name,omitempty"`
+	// Declared lists every capability the descriptor declares, filled by
+	// the registry. It covers the capabilities without project
+	// configuration too (setup, invocation), which Capabilities omits.
+	Declared []Capability `json:"declared,omitempty"`
+	// Setup is what setup installs for the client, filled by the
+	// registry, so narration can tell a missing hook from one that setup
+	// never installs.
+	Setup        SetupSupport           `json:"setup"`
+	Capabilities []CapabilityInspection `json:"capabilities"`
+	// GateMode is the mode the client's gate hooks run in, from every
+	// definition that certainly runs one, managed or not: enforce when
+	// any enforces, warn when any runs, empty when none runs or the
+	// document cannot be read. One enforcing definition blocks whatever
+	// the managed hook says. The repository policy file can still
+	// enforce on top of a warn hook.
+	GateMode string `json:"gate_mode,omitempty"`
+	// ManagedGateMode is the mode of the hook setup manages, or empty.
+	// Setup keeps it when no mode is requested; it never reads a mode
+	// from a definition it does not own.
+	ManagedGateMode string `json:"managed_gate_mode,omitempty"`
+	// Findings name the limitations and the duplicate handlers the
+	// adapter sees: trust it cannot read, a receiving context it does not
+	// identify, a second source that runs the same hook.
+	Findings []Finding `json:"findings,omitempty"`
 }
 
 // FindingLevel grades a finding for presentation.
@@ -487,30 +550,61 @@ const (
 	FindingError
 )
 
+// findingLevelNames are the JSON and narration names, by value.
+var findingLevelNames = []string{"info", "warning", "error"}
+
 // String names a level for narration and test output.
 func (l FindingLevel) String() string {
-	switch l {
-	case FindingInfo:
-		return "info"
-	case FindingWarning:
-		return "warning"
-	case FindingError:
-		return "error"
-	default:
+	return enumName(findingLevelNames, int(l))
+}
+
+// MarshalText writes the name, so JSON consumers read "warning", not 1.
+func (l FindingLevel) MarshalText() ([]byte, error) {
+	return []byte(l.String()), nil
+}
+
+// UnmarshalText reads a name written by MarshalText.
+func (l *FindingLevel) UnmarshalText(text []byte) error {
+	v, err := enumValue(findingLevelNames, "finding level", text)
+	*l = FindingLevel(v)
+
+	return err
+}
+
+// enumName returns the name of an enum value, or "unknown" for a value
+// outside the table. The typed enums share it, so every one of them
+// names an unknown value the same way.
+func enumName(names []string, v int) string {
+	if v < 0 || v >= len(names) {
 		return "unknown"
 	}
+
+	return names[v]
+}
+
+// enumValue returns the value of an enum name. It rejects "unknown" for
+// an enum whose table does not hold it, and every other name outside
+// the table: a JSON document from a newer binary must fail to decode,
+// not decode to the zero value in silence.
+func enumValue(names []string, kind string, text []byte) (int, error) {
+	i := slices.Index(names, string(text))
+	if i < 0 {
+		return 0, fmt.Errorf("unknown %s %q", kind, text)
+	}
+
+	return i, nil
 }
 
 // Finding is one structured observation with its corrective action, so
 // init, doctor, and status can narrate the same fact the same way.
 type Finding struct {
-	Level FindingLevel
+	Level FindingLevel `json:"level"`
 	// Path is the repository-relative document the finding is about.
-	Path   string
-	Reason string
+	Path   string `json:"path,omitempty"`
+	Reason string `json:"reason"`
 	// Action is the command or edit that resolves the finding; empty
 	// when nothing needs to change.
-	Action string
+	Action string `json:"action,omitempty"`
 }
 
 // ClientSetup is the per-client intent of one setup run. Legacy init

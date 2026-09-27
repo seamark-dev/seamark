@@ -173,8 +173,10 @@ func UngatedHookClients(reg *Registry, setups []ClientSetup) []string {
 
 // InstalledGateMode returns the installed gate-hook mode of the
 // clients: enforce when any of them enforces, else warn when any has a
-// gate hook, else "". It reads through each adapter's offline
-// inspection, so an unselected client is never read.
+// gate hook, else "". It reads the managed hook of each client through
+// the adapter's offline inspection, so an unselected client is never
+// read, and a definition setup does not own never sets the mode of the
+// run; the gate line names such a definition by its own mode.
 //
 // Enforce wins because one enforcing hook blocks whatever the others
 // do: the run's policy scaffold and gate line must never read weaker
@@ -190,7 +192,7 @@ func InstalledGateMode(reg *Registry, root string, clientIDs []string) string {
 			continue
 		}
 
-		switch c.Setup.Inspect(root).GateMode {
+		switch c.Setup.Inspect(root).ManagedGateMode {
 		case hooks.ModeEnforce:
 			return hooks.ModeEnforce
 		case hooks.ModeWarn:

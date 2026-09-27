@@ -99,10 +99,29 @@ type Status struct {
 	// the seamark MCP tools can run without prompts. Project
 	// configuration only; user or managed policy can still prompt.
 	Approvals []approve.ClientApproval `json:"approvals,omitempty"`
+
+	// DistillClient names the invoker DistillAgent resolves to: a
+	// registered client ("claude", "codex") or "custom" for agent.argv.
+	// The invoker is configured apart from the clients that are set up,
+	// so a reader must not infer it from Clients.
+	DistillClient string `json:"distill_client,omitempty"`
+
+	// Clients is the per-client integration view, in registry order:
+	// which capabilities each client declares, the configuration state
+	// of each, the project trust seamark can read, the native
+	// compatibility evidence, and the limitations the adapter reports.
+	// Additive: the fields above keep their Claude Code meaning.
+	Clients []integration.Inspection `json:"clients,omitempty"`
 }
 
 // Gather assembles the health report from the store and the workspace.
 func Gather(st *store.Store, root string) (*Status, error) {
+	return gather(integration.Builtin(), st, root)
+}
+
+// gather is Gather over one registry, so a test can hand it a registry
+// with a fake client and check the client-neutral rendering.
+func gather(reg *integration.Registry, st *store.Store, root string) (*Status, error) {
 	// Unknown until a recorded fingerprint proves otherwise: a non-git
 	// workspace has no change signal, and unknown must not read as
 	// current.
@@ -166,11 +185,12 @@ func Gather(st *store.Store, root string) (*Status, error) {
 	// Integration state, all read-only and failure-tolerant: status must
 	// describe a broken setup, not fail on it.
 	if acfg, err := agent.LoadConfig(root); err == nil {
-		if spec, err := integration.Builtin().ResolveInvocation(acfg, root); err == nil {
+		if spec, err := reg.ResolveInvocation(acfg, root); err == nil {
 			// Repository-controlled text headed for terminals and MCP
 			// clients: strip control sequences, scrub secret-shaped
 			// values — same treatment as the distill preflight.
 			s.DistillAgent = render.Sanitize(redact.Secrets(strings.Join(spec.Argv, " ")))
+			s.DistillClient = spec.Name
 		}
 	}
 
@@ -189,9 +209,12 @@ func Gather(st *store.Store, root string) (*Status, error) {
 	}
 
 	// Inspect never fails: an unreadable directory is recorded on its
-	// client record, and status describes it.
-	s.Skills = skills.Inspect(root)
+	// client record, and status describes it. The skills list and the
+	// per-client view come from one registry inspection, so the two
+	// cannot disagree; the approvals list keeps its legacy shape.
+	s.Skills = reg.InspectSkills(root)
 	s.Approvals = approve.Inspect(root)
+	s.Clients = reg.Inspect(root)
 
 	return s, nil
 }
@@ -267,8 +290,8 @@ func Print(w io.Writer, s *Status) {
 	}
 
 	if s.DistillAgent != "" {
-		fmt.Fprintf(w, "distillation   %s — external data processing when run (see `lessons --distill --dry-run`)\n",
-			s.DistillAgent)
+		fmt.Fprintf(w, "distillation   %s (invoker %s) — external data processing when run (see `lessons --distill --dry-run`)\n",
+			s.DistillAgent, s.DistillClient)
 	} else {
 		fmt.Fprintf(w, "distillation   agent config missing or invalid\n")
 	}
@@ -276,6 +299,50 @@ func Print(w io.Writer, s *Status) {
 	printGate(w, s)
 	printSkills(w, s)
 	printApprovals(w, s)
+	printClients(w, s)
+}
+
+// printClients renders the per-client block: one line per client with
+// its hooks and its MCP registration, then the native evidence for
+// what is installed and each limitation the adapter reports. The
+// skills and approvals lines above already cover those two per client.
+// A client with nothing installed still gets its line, so a reader
+// sees which clients exist and that they are not set up; a client with
+// nothing installed gets no evidence or limitation lines, because an
+// absent optional capability is not a broken installation.
+func printClients(w io.Writer, s *Status) {
+	label := "clients"
+
+	for _, insp := range s.Clients {
+		mcp, _ := insp.Entry(integration.CapabilityMCPRegistration)
+
+		registration := "MCP registration " + mcp.Describe()
+		if mcp.State == integration.StateCurrent {
+			registration = mcp.Describe()
+		}
+
+		fmt.Fprintf(w, "%-14s %-7s %s; %s\n", label, insp.ClientID,
+			render.Sanitize(insp.DescribeHooks()), render.Sanitize(registration))
+
+		label = ""
+
+		if evidence := insp.DescribeVerification(); evidence != "" {
+			fmt.Fprintf(w, "%-14s %-7s %s\n", "", insp.ClientID, render.Sanitize(evidence))
+		}
+
+		for _, finding := range insp.Findings {
+			reason := finding.Reason
+			if finding.Path != "" {
+				reason = finding.Path + ": " + reason
+			}
+
+			if finding.Action != "" {
+				reason += " — " + finding.Action
+			}
+
+			fmt.Fprintf(w, "%-14s %-7s %s: %s\n", "", insp.ClientID, finding.Level, render.Sanitize(reason))
+		}
+	}
 }
 
 // printApprovals renders the tool-approval line beside the skills line.
@@ -309,45 +376,103 @@ func printSkills(w io.Writer, s *Status) {
 	fmt.Fprintf(w, "skills         not installed (`seamark init --skills`)\n")
 }
 
+// gateHooks summarizes the gate hooks of every client from the
+// per-client view: the clients that enforce, the clients with a warn
+// hook, and the clients whose hook document cannot be read. The legacy
+// Claude Code fields stay in the JSON; the text reads the broader view,
+// because a Codex gate hook blocks a Codex command whatever
+// .claude/settings.json says.
+type gateHooks struct {
+	enforce, warn, unreadable []string
+}
+
+// summarizeGateHooks reads every client's gate hook state.
+func summarizeGateHooks(s *Status) gateHooks {
+	var g gateHooks
+
+	for _, insp := range s.Clients {
+		commands, ok := insp.Entry(integration.CapabilityCommands)
+		if !ok || !commands.Supported {
+			continue
+		}
+
+		switch {
+		case commands.State == integration.StateUnreadable:
+			g.unreadable = append(g.unreadable, insp.ClientID+": "+commands.Detail)
+		case insp.GateMode == hooks.ModeEnforce:
+			g.enforce = append(g.enforce, insp.ClientID)
+		case insp.GateMode == hooks.ModeWarn:
+			g.warn = append(g.warn, insp.ClientID)
+		}
+	}
+
+	// A status built without the per-client view (an older JSON
+	// document) still has the legacy fields.
+	if len(s.Clients) == 0 {
+		switch {
+		case s.GateHookError != "":
+			g.unreadable = append(g.unreadable, "claude: "+s.GateHookError)
+		case s.GateHookMode == hooks.ModeEnforce:
+			g.enforce = append(g.enforce, "claude")
+		case s.GateHookMode == hooks.ModeWarn:
+			g.warn = append(g.warn, "claude")
+		}
+	}
+
+	return g
+}
+
 // printGate renders the effective gate behaviour. A broken policy means
 // different things under different hooks — an enforce hook fails closed,
 // a warn hook fails open — and the difference is the whole point of
-// reporting it.
+// reporting it. The line covers every client with a gate hook; the
+// installed hook mode and the policy mode are named apart, because a
+// warn hook still follows an enforcing policy file.
 func printGate(w io.Writer, s *Status) {
+	g := summarizeGateHooks(s)
+	names := func(ids []string) string { return strings.Join(ids, ", ") }
+
 	if s.GatePolicyError != "" {
 		switch {
-		case s.GateHookMode == hooks.ModeEnforce:
+		case len(g.enforce) > 0:
 			fmt.Fprintf(w, "gate           POLICY BROKEN (%s)\n"+
-				"               the enforce hook FAILS CLOSED: every hooked command blocks until the policy is fixed\n",
-				s.GatePolicyError)
-		case s.GateHookMode == hooks.ModeWarn:
+				"               the enforce hook FAILS CLOSED (%s): every hooked command blocks until the policy is fixed\n",
+				s.GatePolicyError, names(g.enforce))
+		case len(g.warn) > 0:
 			fmt.Fprintf(w, "gate           POLICY BROKEN (%s)\n"+
-				"               the warn hook fails open: nothing blocks, and nothing is being checked\n",
-				s.GatePolicyError)
-		case s.GateHookError != "":
+				"               the warn hook fails open (%s): nothing blocks, and nothing is being checked\n",
+				s.GatePolicyError, names(g.warn))
+		case len(g.unreadable) > 0:
 			// Broken policy AND unreadable hook config: the effective
 			// behaviour is unknown, not "no hook".
 			fmt.Fprintf(w, "gate           POLICY BROKEN (%s)\n"+
 				"               hook configuration UNREADABLE (%s) — effective behaviour unknown\n",
-				s.GatePolicyError, s.GateHookError)
+				s.GatePolicyError, render.Sanitize(names(g.unreadable)))
 		default:
-			fmt.Fprintf(w, "gate           POLICY BROKEN (%s); no operational Claude hook\n", s.GatePolicyError)
+			fmt.Fprintf(w, "gate           POLICY BROKEN (%s); no operational gate hook\n", s.GatePolicyError)
 		}
 
 		return
 	}
 
 	switch {
-	case s.GateHookError != "":
+	case len(g.unreadable) > 0 && len(g.enforce)+len(g.warn) == 0:
 		fmt.Fprintf(w, "gate           policy mode %s; hook configuration UNREADABLE (%s)\n",
-			s.GatePolicyMode, s.GateHookError)
-	case s.GateHookMode == "":
-		fmt.Fprintf(w, "gate           policy mode %s; no Claude hook installed (`seamark init`)\n",
+			s.GatePolicyMode, render.Sanitize(names(g.unreadable)))
+	case len(g.enforce)+len(g.warn) == 0:
+		fmt.Fprintf(w, "gate           policy mode %s; no gate hook installed (`seamark init`, or `seamark init --client <name>`)\n",
 			s.GatePolicyMode)
-	case s.GateHookMode == hooks.ModeEnforce:
-		fmt.Fprintf(w, "gate           enforce (hook carries --enforce; blocking verdicts exit 2)\n")
+	case len(g.enforce) > 0 && len(g.warn) > 0:
+		fmt.Fprintf(w, "gate           enforce for %s (hook carries --enforce; blocking verdicts exit 2); "+
+			"the %s hook follows policy mode %s\n", names(g.enforce), names(g.warn), s.GatePolicyMode)
+	case len(g.enforce) > 0:
+		fmt.Fprintf(w, "gate           enforce (%s hook carries --enforce; blocking verdicts exit 2)\n", names(g.enforce))
 	default:
-		fmt.Fprintf(w, "gate           hook installed; policy mode %s governs\n", s.GatePolicyMode)
+		fmt.Fprintf(w, "gate           hook installed (%s); policy mode %s governs\n", names(g.warn), s.GatePolicyMode)
+	}
+
+	if len(g.unreadable) > 0 && len(g.enforce)+len(g.warn) > 0 {
+		fmt.Fprintf(w, "               hook configuration UNREADABLE for %s\n", render.Sanitize(names(g.unreadable)))
 	}
 }
 

@@ -185,6 +185,13 @@ func CodexGateMarker(mode string) string {
 	return GateMarker(mode) + codexClientSelector
 }
 
+// GateMarkerMode returns the mode that a gate marker bakes in, or ""
+// for the marker of another hook. Inspection reads the mode of a hook
+// definition through it, whatever wraps the command.
+func GateMarkerMode(marker string) string {
+	return gateMarkerMode(marker)
+}
+
 // gateMarkerMode returns the mode that a gate marker bakes in. Every
 // gate marker starts with GateMarker(mode); a client selector can
 // follow. A marker of another hook gives "".

@@ -22,8 +22,10 @@ const skillsHint = "  skills  not installed — seamark init --skills adds the s
 // given: a summary of what is installed, so a plain re-run never claims
 // "not installed" over skills an earlier run wrote, or over a directory
 // that `seamark init --skills` would refuse to touch; else the hint.
-func reportInstalledSkills(w io.Writer, root string) {
-	states := skills.Inspect(root)
+// The destinations come from the registry, labelled by every client
+// that reads them, the same list doctor and status print.
+func reportInstalledSkills(w io.Writer, root string, reg *integration.Registry) {
+	states := reg.InspectSkills(root)
 
 	if slices.ContainsFunc(states, skills.ClientState.Notable) {
 		fmt.Fprintf(w, "  skills  %s\n", render.Sanitize(skills.Summary(states)))

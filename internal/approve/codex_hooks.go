@@ -87,6 +87,29 @@ func CodexInlineHookEntries(data []byte) (entries []InlineHook, present bool, er
 	return entries, true, nil
 }
 
+// CodexHooksDisabled reports whether .codex/config.toml turns hooks off:
+// `[features] hooks = false`, or its deprecated alias `codex_hooks`.
+// Codex then runs no hook from any source, so an installed seamark hook
+// is inert. The function reads the project file only; the user-level
+// file can carry the flag as well, and the caller must say so.
+func CodexHooksDisabled(data []byte) (bool, error) {
+	cfg := map[string]any{}
+
+	if _, err := toml.Decode(string(data), &cfg); err != nil {
+		return false, fmt.Errorf("%s: %w", CodexConfig, err)
+	}
+
+	features, _ := cfg["features"].(map[string]any)
+
+	for _, key := range []string{"hooks", "codex_hooks"} {
+		if enabled, ok := features[key].(bool); ok && !enabled {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // inlineEntries reads the hooks of one event. The documented layout is
 // an array of entries, each with an optional matcher and a hooks array
 // of typed commands; a hook read from it is Known. Any other layout is

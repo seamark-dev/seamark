@@ -15,6 +15,7 @@ import (
 // --client. The run addresses the two first clients by the rules it
 // always had, so these lines name them, in the words init always used.
 type legacyNotes struct {
+	reg             *integration.Registry
 	skillsRequested bool
 }
 
@@ -28,7 +29,7 @@ func (legacyNotes) showInfo() bool { return false }
 // directories.
 func (n legacyNotes) afterSetup(run initRun, setups []integration.ClientSetup) {
 	if !n.skillsRequested {
-		reportInstalledSkills(run.w, run.root)
+		reportInstalledSkills(run.w, run.root, n.reg)
 
 		return
 	}
@@ -82,10 +83,11 @@ func (n selectedNotes) afterSetup(run initRun, setups []integration.ClientSetup)
 				continue
 			}
 
-			// The detail already names the client ("claude 0/8 rules").
-			fmt.Fprintf(run.w, "  note    %s; the client can prompt for the seamark tools —\n"+
+			// The detail names the state ("0/8 rules"); the line adds the
+			// client, as doctor and status do.
+			fmt.Fprintf(run.w, "  note    %s %s; the client can prompt for the seamark tools —\n"+
 				"          `seamark init --client %s --approve-tools` adds the approvals (additive; --print previews)\n",
-				render.Sanitize(entry.Detail), client.ID)
+				client.ID, render.Sanitize(entry.Detail), client.ID)
 		}
 	}
 }

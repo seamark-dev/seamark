@@ -803,10 +803,25 @@ symbols        1221, 2931 edges — call resolution 71% qualified · 24% same-pa
 effects        83 direct-sink symbols, 692 by propagation
 history        3814 decisions; evidence median age 74d (oldest 1042d)
 reviews        3 lessons from 120 review findings; last mined 9d ago
-distillation   claude -p — external data processing when run (see `lessons --distill --dry-run`)
-gate           hook installed; policy mode warn governs
+distillation   claude -p (invoker claude) — external data processing when run (see `lessons --distill --dry-run`)
+gate           hook installed (claude); policy mode warn governs
 skills         claude 3/3 current · codex not installed
+approvals      claude 8/8 rules · codex not registered
+clients        claude  gate (warn) + lessons hooks installed; registered in .mcp.json as "seamark"
+               claude  skills, mcp-registration, tool-grants, edits, commands, resets: not natively verified
+               codex   no hooks installed; MCP registration not registered
 ```
+
+The `clients` block is the per-agent view: which hooks and which MCP
+registration each agent has, the native evidence behind them (a
+recorded check on a named version and surface, a pending check, or
+none), and every limitation the adapter reports, such as Codex hook
+trust that seamark cannot read, or reminders that repeat because the
+adapter identifies no receiving context. `--json` carries the same
+facts as a `clients` array with typed, named states. The `gate` line
+covers every agent with a gate hook and names the installed hook mode
+apart from the policy mode, because a warn hook still follows an
+enforcing policy file.
 
 Every safety-sensitive answer needs this context: **"no effects found"
 from a half-parsed index is not "no effects."** The same honesty runs
@@ -823,10 +838,15 @@ seamark doctor          # read-only, offline; exit 1 when a check fails
 
 `doctor` verifies everything seamark needs to run — git, the index
 database (schema version and SQLite integrity), policy and
-effect-catalogue compilation, Claude Code hook wiring, the distillation
-agent, `gh`, MCP registration, the agent skills, and that the policy-as-code
-overlays are not accidentally gitignored — and prints an exact corrective action for
-anything broken, changing nothing itself.
+effect-catalogue compilation, the hook wiring of every agent, the
+distillation agent, `gh`, MCP registration, the agent skills, the tool
+approvals, and that the policy-as-code overlays are not accidentally
+gitignored — and prints an exact corrective action for anything broken,
+changing nothing itself. `init`, `doctor`, and `status` read one
+inspection per agent, so they never disagree about what is set up; a
+line named after an agent carries its native evidence and limitations,
+and its corrective command comes from the same adapter that installs
+the artifact.
 
 ## Durable state: the index is not a throwaway cache
 

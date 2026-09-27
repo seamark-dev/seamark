@@ -119,8 +119,20 @@ func TestCodexInspection(t *testing.T) {
 		for _, entry := range (codexSetup{}).Inspect(root).Capabilities {
 			require.NoError(t, entry.Validate())
 			assert.Equal(t, TrustUnknown, entry.Trust, "trust cannot be read offline")
-			assert.Equal(t, VerificationPending, entry.Verification.Level,
-				"the native check is defined and has not run")
+
+			switch entry.Capability {
+			case CapabilityMCPRegistration, CapabilityToolGrants, CapabilityCommands, CapabilityResets:
+				assert.Equal(t, VerificationPending, entry.Verification.Level,
+					"%s: the native check is defined and has not run", entry.Capability)
+			default:
+				assert.Equal(t, VerificationVerified, entry.Verification.Level,
+					"%s: the compatibility record holds a native run", entry.Capability)
+			}
+
+			if entry.Capability == CapabilitySkills {
+				// Evidence only: the registry fills the directory state.
+				continue
+			}
 
 			out[entry.Capability] = entry.State
 		}
@@ -128,10 +140,19 @@ func TestCodexInspection(t *testing.T) {
 		return out
 	}
 
-	root := t.TempDir()
-	assert.Equal(t, map[Capability]CapabilityState{
+	// The adapter reports its native documents and the three hooks; the
+	// reset hook is absent by design and says why.
+	absent := map[Capability]CapabilityState{
 		CapabilityMCPRegistration: StateAbsent, CapabilityToolGrants: StateAbsent,
-	}, state(root))
+		CapabilityEdits: StateAbsent, CapabilityCommands: StateAbsent, CapabilityResets: StateAbsent,
+	}
+
+	root := t.TempDir()
+	assert.Equal(t, absent, state(root))
+
+	resets, ok := codexSetup{}.Inspect(root).Entry(CapabilityResets)
+	require.True(t, ok)
+	assert.Contains(t, resets.Detail, "no reset hook is installed", "absent by design carries its reason")
 
 	apply := func(intent ClientSetup) {
 		intent.ClientID = CodexID
@@ -143,6 +164,7 @@ func TestCodexInspection(t *testing.T) {
 	apply(ClientSetup{RegisterMCP: true})
 	assert.Equal(t, map[Capability]CapabilityState{
 		CapabilityMCPRegistration: StateCurrent, CapabilityToolGrants: StatePartial,
+		CapabilityEdits: StateAbsent, CapabilityCommands: StateAbsent, CapabilityResets: StateAbsent,
 	}, state(root), "a registration alone approves nothing")
 
 	apply(ClientSetup{RegisterMCP: true, ApproveTools: true})
@@ -156,5 +178,6 @@ func TestCodexInspection(t *testing.T) {
 	writeRel(t, broken, ".codex/config.toml", "[mcp_servers\n")
 	assert.Equal(t, map[Capability]CapabilityState{
 		CapabilityMCPRegistration: StateUnreadable, CapabilityToolGrants: StateUnreadable,
-	}, state(broken))
+		CapabilityEdits: StateAbsent, CapabilityCommands: StateAbsent, CapabilityResets: StateAbsent,
+	}, state(broken), "a broken config.toml says nothing about hooks.json")
 }

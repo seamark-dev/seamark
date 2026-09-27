@@ -271,63 +271,45 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 		plan.GateHooks = append(plan.GateHooks, GateHook{Path: approve.ClaudeSettings, Mode: gateMode, Managed: true})
 	}
 
-	reportClaudeWrappers(plan, settings, specs)
+	// After the merge the shared file holds the managed hooks. Every
+	// other definition of a hook, wrapped in the shared file or anywhere
+	// in the personal file, is the same evidence inspection reads: setup
+	// reports it with its tools and its mode, and never edits it. The
+	// local file is read only when the run looks at every hook source.
+	var local map[string]any
 
 	if req.CheckHookSources {
-		local := readLocalHooks(plan, root)
+		local = readLocalHooks(plan, root)
+	}
 
-		if mode := hooks.EffectiveGateMode(local, gate, hooks.ClaudeMatcher); mode != "" {
-			plan.GateHooks = append(plan.GateHooks, GateHook{Path: claudeLocalSettings, Mode: mode})
+	for i, spec := range specs {
+		sources := documentSources(&plan.Findings, settings, hooks.ClaudeMatcher, approve.ClaudeSettings, spec, true)
+
+		if req.CheckHookSources {
+			sources = append(sources, documentSources(&plan.Findings, local, hooks.ClaudeMatcher, claudeLocalSettings, spec, false)...)
 		}
 
-		reportCoverage(plan, settings, local, specs)
+		// The gate hooks the client runs from definitions setup does not
+		// manage, each with its own mode. An uncertain one counts too: a
+		// gate line that says "nothing blocks" while a wrapped gate blocks
+		// is the worse error.
+		if i == 0 {
+			for _, source := range unmanagedSources(sources) {
+				plan.GateHooks = append(plan.GateHooks, GateHook{Path: source.path, Mode: source.mode})
+			}
+		}
+
+		sourceFindings(&plan.Findings, spec, sources)
+
+		if req.CheckHookSources {
+			reportMissingCoverage(plan, spec, sources)
+		}
 	}
 
 	narration.hooks, narration.hooksChanged = true, changed
 	narration.specs, narration.gateMode, narration.previous = specs, gateMode, previous
 
 	return nil
-}
-
-// reportClaudeWrappers names each command in the shared settings that
-// runs a seamark hook through a wrapper, a shell condition, or a
-// redirect. Setup does not own such a command: it keeps the command as
-// it is, and it still installs the managed hook, because the shared file
-// always gets every hook. The handler then runs twice, and the user
-// decides which copy stays. A wrapped gate hook keeps its own mode, so
-// the gate line of the run must know it.
-func reportClaudeWrappers(plan *ClientPlan, settings map[string]any, specs []hooks.Spec) {
-	for i, spec := range specs {
-		for _, wrapped := range hooks.Wrapped(settings, spec) {
-			effect := "the seamark hook runs twice"
-			if !wrapped.Certain {
-				effect = "when that command runs the seamark hook, the hook runs twice"
-			}
-
-			plan.Findings = append(plan.Findings, Finding{
-				Level: FindingWarning,
-				Path:  approve.ClaudeSettings,
-				Reason: fmt.Sprintf("%s also has `%s`, which setup does not manage and did not change; %s",
-					spec.Event, render.Sanitize(wrapped.Command), effect),
-				Action: "remove one of the two hooks",
-			})
-
-			// The gate spec is the first one, by the order of ClaudeSpecs. An
-			// uncertain wrapper counts too: a gate line that says "nothing
-			// blocks" while a wrapped gate blocks is the worse error. A
-			// wrapper that Claude Code never runs for Bash gates nothing.
-			if i != 0 || wrapped.Type != "command" || !hooks.Fires(spec, wrapped.Matcher, hooks.ClaudeMatcher) {
-				continue
-			}
-
-			mode := hooks.ModeWarn
-			if hooks.SeamarkHookUse(wrapped.Command, []string{hooks.GateMarker(hooks.ModeEnforce)}) != hooks.HookNotRun {
-				mode = hooks.ModeEnforce
-			}
-
-			plan.GateHooks = append(plan.GateHooks, GateHook{Path: approve.ClaudeSettings, Mode: mode})
-		}
-	}
 }
 
 // readLocalHooks reads the user's local settings file, the second hook
@@ -370,59 +352,36 @@ func readLocalHooks(plan *ClientPlan, root string) map[string]any {
 	return local
 }
 
-// reportCoverage names, after the merge, each tool that two sources run
-// the same handler for, and each tool that no source runs it for.
-// Claude Code runs the matching hooks of every source, so a handler in
-// both files delivers each lesson twice and evaluates each command
-// twice; the user removes the personal copy. Setup never rewrites the
-// matcher of an existing entry, because a narrow matcher can be the
-// user's choice. So it cannot always complete the coverage, and then it
-// must say so instead of reporting a complete install.
-func reportCoverage(plan *ClientPlan, settings, local map[string]any, specs []hooks.Spec) {
-	for _, spec := range specs {
-		shared, _ := hooks.Covered(settings, spec, hooks.ClaudeMatcher)
-		personal, running := hooks.Covered(local, spec, hooks.ClaudeMatcher)
+// reportMissingCoverage names, after the merge, each tool that no
+// source certainly runs the handler for, from the same evidence
+// inspection reads: a wrapper or a personal definition that covers a
+// tool covers it. Setup never rewrites the matcher of an existing
+// entry, because a narrow matcher can be the user's choice. So it
+// cannot always complete the coverage, and then it must say so instead
+// of reporting a complete install. A tool that only an uncertain
+// definition covers is reported by sourceFindings, not here.
+func reportMissingCoverage(plan *ClientPlan, spec hooks.Spec, sources []hookSource) {
+	covered := coveredTools(spec, sources, func(hookSource) bool { return true })
 
-		var twice, missing []string
+	var missing []string
 
-		for _, tool := range spec.Tools() {
-			switch inShared, inLocal := slices.Contains(shared, tool), slices.Contains(personal, tool); {
-			case inShared && inLocal:
-				twice = append(twice, toolName(tool))
-			case !inShared && !inLocal:
-				missing = append(missing, toolName(tool))
-			}
-		}
-
-		if len(twice) > 0 {
-			reason := fmt.Sprintf("runs `%s`, and %s runs the same handler, so it runs twice for %s",
-				render.Sanitize(running), approve.ClaudeSettings, strings.Join(twice, ", "))
-
-			// The local copy can carry another gate mode. Both hooks run, so
-			// a local --enforce still blocks under a shared warn hook. The
-			// plan's GateHooks carry that to the caller's gate summary.
-			if !strings.HasSuffix(running, " "+spec.Marker) {
-				reason += "; the local copy runs in another gate mode, and both apply"
-			}
-
-			plan.Findings = append(plan.Findings, Finding{
-				Level:  FindingWarning,
-				Path:   claudeLocalSettings,
-				Reason: reason,
-				Action: "remove the hook from the local file; the shared file is the one setup manages",
-			})
-		}
-
-		if len(missing) > 0 {
-			plan.Findings = append(plan.Findings, Finding{
-				Level: FindingWarning,
-				Path:  approve.ClaudeSettings,
-				Reason: fmt.Sprintf("no hook runs `seamark %s` for %s; setup does not change the matcher of an existing hook",
-					spec.Marker, strings.Join(missing, ", ")),
-				Action: fmt.Sprintf("set the hook's matcher to %q", spec.Matcher),
-			})
+	for _, tool := range spec.Tools() {
+		if !slices.Contains(covered, tool) {
+			missing = append(missing, toolName(tool))
 		}
 	}
+
+	if len(missing) == 0 {
+		return
+	}
+
+	plan.Findings = append(plan.Findings, Finding{
+		Level: FindingWarning,
+		Path:  approve.ClaudeSettings,
+		Reason: fmt.Sprintf("no hook runs `seamark %s` for %s; setup does not change the matcher of an existing hook",
+			spec.Marker, strings.Join(missing, ", ")),
+		Action: fmt.Sprintf("set the hook's matcher to %q", spec.Matcher),
+	})
 }
 
 // toolName names a tool for a finding. The empty tool stands for an
@@ -496,31 +455,82 @@ func planClaudeRegistration(plan *ClientPlan, mcp *approve.ClaudeMCPPlan) error 
 func (claudeSetup) Inspect(root string) Inspection {
 	evidence := VerificationEvidence{Level: VerificationUnverified}
 
+	hookEntries, gateMode, managedGateMode, findings := inspectClaudeHooks(root, evidence)
+
+	// The skills entry carries evidence only; the registry fills the
+	// directory state.
+	skillsEvidence := CapabilityInspection{Capability: CapabilitySkills, Supported: true, Verification: evidence}
+
 	return Inspection{
 		ClientID: ClaudeID,
-		Capabilities: []CapabilityInspection{
+		Capabilities: append([]CapabilityInspection{
+			skillsEvidence,
 			inspectClaudeRegistration(root, evidence),
 			inspectGrants(approve.InspectClaude(root), evidence),
-		},
-		GateMode: installedClaudeGateMode(root),
+		}, hookEntries...),
+		GateMode:        gateMode,
+		ManagedGateMode: managedGateMode,
+		Findings:        findings,
 	}
 }
 
-// installedClaudeGateMode reads the gate hook mode under the same path
-// rules as setup: a linked or unreadable settings file reports no mode
-// here, and the setup plan then reports the error itself.
-func installedClaudeGateMode(root string) string {
+// inspectClaudeHooks classifies the lifecycle hooks from the shared
+// settings and the personal local file, from one kind of evidence for
+// both: every definition of each hook, owned or wrapped, with the tools
+// the client runs it for. Setup manages the shared file only; a
+// definition in the local file is a running hook that setup does not
+// manage, and a handler in both files is reported as running twice.
+// Claude Code records no per-hook trust that seamark could read, so
+// trust stays unknown and no finding names it.
+func inspectClaudeHooks(root string, evidence VerificationEvidence) (entries []CapabilityInspection, gateMode, managedGateMode string, findings []Finding) {
+	edits := CapabilityInspection{Capability: CapabilityEdits, Supported: true, Verification: evidence}
+	commands := CapabilityInspection{Capability: CapabilityCommands, Supported: true, Verification: evidence}
+	resets := CapabilityInspection{Capability: CapabilityResets, Supported: true, Verification: evidence}
+
+	// The order of ClaudeSpecs: the gate hook first, then the lessons
+	// hook, then the context reset.
+	all := []*CapabilityInspection{&commands, &edits, &resets}
+
+	collect := func() []CapabilityInspection { return []CapabilityInspection{edits, commands, resets} }
+
 	guard, data, err := ReadGuarded(root, approve.ClaudeSettings)
-	if err != nil || !guard.Exists {
-		return ""
-	}
-
-	settings, err := hooks.ParseSettings(data)
 	if err != nil {
-		return ""
+		unreadableHooks(all, approve.ClaudeSettings, err)
+
+		return collect(), "", "", nil
 	}
 
-	return hooks.InstalledGateMode(settings)
+	settings := map[string]any{}
+
+	if guard.Exists {
+		if settings, err = hooks.ParseSettings(data); err != nil {
+			unreadableHooks(all, approve.ClaudeSettings, err)
+
+			return collect(), "", "", nil
+		}
+	}
+
+	// The local file is an input: a file that cannot be read is
+	// reported and does not make the shared file's hooks unknown.
+	var scratch ClientPlan
+
+	local := readLocalHooks(&scratch, root)
+	findings = scratch.Findings
+
+	for i, spec := range hooks.ClaudeSpecs(hooks.ModeWarn) {
+		sources := documentSources(&findings, settings, hooks.ClaudeMatcher, approve.ClaudeSettings, spec, true)
+		sources = append(sources, documentSources(&findings, local, hooks.ClaudeMatcher, claudeLocalSettings, spec, false)...)
+
+		classifyHook(all[i], spec, sources)
+		sourceFindings(&findings, spec, sources)
+
+		if i == 0 {
+			gateMode = hookMode(sources)
+			managedGateMode = hookMode(managedSources(sources))
+		}
+	}
+
+	return collect(), gateMode, managedGateMode, findings
 }
 
 // inspectClaudeRegistration classifies .mcp.json with the planner's own
@@ -530,7 +540,8 @@ func inspectClaudeRegistration(root string, evidence VerificationEvidence) Capab
 
 	guard, data, err := ReadGuarded(root, approve.MCPConfig)
 	if err != nil {
-		entry.State, entry.Detail = StateUnreadable, render.Sanitize(err.Error())
+		entry.State, entry.Detail = StateUnreadable, unreadableDetail(err)
+		entry.Action = registrationAction(ClaudeID, StateUnreadable)
 
 		return entry
 	}
@@ -539,14 +550,17 @@ func inspectClaudeRegistration(root string, evidence VerificationEvidence) Capab
 
 	switch {
 	case err != nil:
-		entry.State, entry.Detail = StateUnreadable, render.Sanitize(err.Error())
+		entry.State, entry.Detail = StateUnreadable, unreadableDetail(err)
 	case mcp.Registered:
-		entry.State, entry.Detail = StateCurrent, fmt.Sprintf("registered as %q", render.Sanitize(mcp.Server))
+		entry.State = StateCurrent
+		entry.Detail = fmt.Sprintf("registered in %s as %q", approve.MCPConfig, render.Sanitize(mcp.Server))
 	case len(mcp.Conflicts) > 0:
 		entry.State, entry.Detail = StateConflict, render.Sanitize(strings.Join(mcp.Conflicts, "; "))
 	default:
 		entry.State = StateAbsent
 	}
+
+	entry.Action = registrationAction(ClaudeID, entry.State)
 
 	return entry
 }

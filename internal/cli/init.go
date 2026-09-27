@@ -165,7 +165,7 @@ Use --print to preview every change without writing anything.`,
 		"let the seamark MCP tools run without prompts: Claude Code allow rules in .claude/settings.json, "+
 			"Codex per-tool approvals in .codex/config.toml (additive; never removes a setting)")
 	cmd.Flags().StringArrayVar(&clients, "client", nil,
-		"set up this agent only ("+strings.Join(integration.Builtin().IDs(), ", ")+"); repeat the flag for several. "+
+		"set up this agent only ("+clientSupport(integration.Builtin())+"); repeat the flag for several. "+
 			"Omitted keeps the detection init always used")
 
 	return cmd
@@ -173,6 +173,19 @@ Use --print to preview every change without writing anything.`,
 
 // bareSkills is the value pflag hands to the flag for a bare --skills.
 const bareSkills = "true"
+
+// clientSupport lists each registered client with what seamark
+// supports for it, from the descriptor, so the help text and the
+// diagnostics make one support claim: "claude: skills, hooks, …".
+func clientSupport(reg *integration.Registry) string {
+	var parts []string
+
+	for _, c := range reg.Clients() {
+		parts = append(parts, c.ID+": "+c.DescribeSupport())
+	}
+
+	return strings.Join(parts, "; ")
+}
 
 // skillsFlag is the value of --skills. It records whether the flag was
 // given bare or with an explicit mode. A plain string flag cannot: pflag
@@ -298,8 +311,9 @@ func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode
 	}
 
 	run := initRun{w: w, root: root, bin: bin, gateMode: gateMode, printOnly: printOnly, approveTools: approveTools}
+	reg := integration.Builtin()
 
-	return applyInit(run, integration.Builtin(), setups, legacyNotes{skillsRequested: skillsMode != ""})
+	return applyInit(run, reg, setups, legacyNotes{reg: reg, skillsRequested: skillsMode != ""})
 }
 
 // runInitClients is an init run with --client.

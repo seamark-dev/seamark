@@ -280,6 +280,8 @@ func TestResourcesAndPrompts(t *testing.T) {
 	require.Len(t, read.Contents, 1)
 	assert.Contains(t, read.Contents[0].Text, "symbols")
 	assert.Contains(t, read.Contents[0].Text, "gate")
+	assert.Contains(t, read.Contents[0].Text, "clients        claude", "the per-client view is served too")
+	assert.Contains(t, read.Contents[0].Text, "codex")
 
 	require.Nil(t, resps["4"].Error)
 	assert.Contains(t, string(resps["4"].Result), "onboard")

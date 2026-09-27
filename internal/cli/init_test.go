@@ -15,6 +15,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -1216,7 +1217,7 @@ func TestReportSkillsSanitizesTheSummary(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "skills"), []byte("not a directory"), 0o644))
 
 	var b testWriter
-	reportInstalledSkills(&b, root)
+	reportInstalledSkills(&b, root, integration.Builtin())
 	assert.Contains(t, b.String(), "  skills  ")
 	assert.NotContains(t, b.String(), "\x1b")
 }
@@ -1346,4 +1347,16 @@ func fileExists(path string) bool {
 	info, err := os.Stat(path)
 
 	return err == nil && info.Mode().IsRegular()
+}
+
+func TestReportSkillsLabelsASharedDestinationForEveryConsumer(t *testing.T) {
+	// The skills line comes from the registry: a directory two clients
+	// read is one entry that names both, the same line doctor and
+	// status print.
+	root := t.TempDir()
+	require.NoError(t, inspecttest.Named("shared skills").Write(root))
+
+	var b testWriter
+	reportInstalledSkills(&b, root, inspecttest.Registry())
+	assert.Equal(t, "  skills  claude not installed · codex+shared 3/3 current\n", b.String())
 }

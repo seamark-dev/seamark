@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -532,4 +535,63 @@ func TestInitClientGateSummaryIgnoresALocalWarnHook(t *testing.T) {
 
 	out := initClients(t, root, false, false, false, "", "claude")
 	assert.Contains(t, out, "gate    warn — verdicts are reported, nothing blocks")
+}
+
+// TestInitClientFollowsTheInspectionMatrix runs the explicit init form
+// over the shared fixture matrix: every limitation the inspection
+// reports for a built-in client, init reports too, in its own output,
+// and a credential in a hook command never reaches it.
+func TestInitClientFollowsTheInspectionMatrix(t *testing.T) {
+	for _, f := range inspecttest.Fixtures() {
+		if _, builtin := integration.Builtin().Lookup(f.Client); !builtin {
+			continue
+		}
+
+		t.Run(f.Name, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, f.Write(root))
+
+			// A native document the inspection cannot read stops init before
+			// any write; the error names the file, as the inspection does.
+			if slices.Contains(slices.Collect(maps.Values(f.States)), integration.StateUnreadable) {
+				var b testWriter
+				run := initRun{w: &b, root: root, bin: "/bin/seamark", printOnly: true}
+				err := runInitClients(run, []string{f.Client}, false)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "fix or move it")
+
+				return
+			}
+
+			out := initClients(t, root, true, false, false, "", f.Client)
+
+			expected := f.Findings
+			if f.InitFindings != nil {
+				expected = f.InitFindings
+			}
+
+			for _, reason := range expected {
+				assert.Contains(t, out, reason)
+			}
+
+			for _, secret := range f.Absent {
+				assert.NotContains(t, out, secret)
+			}
+
+			if f.Skills != "" {
+				assert.Contains(t, out, f.Skills)
+			}
+		})
+	}
+}
+
+func TestInitClientWarnsWhenCodexHooksAreTurnedOff(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, inspecttest.Named("disabled").Write(root))
+
+	// Setup would install hooks that never run: the run says so, as a
+	// warning, before the gate line promises verdicts.
+	out := initClients(t, root, false, false, false, "", integration.CodexID)
+	assert.Contains(t, out, "note    .codex/config.toml: [features] hooks = false turns every Codex hook off")
+	assert.Contains(t, out, "set [features] hooks = true")
 }

@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/approve"
+	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
@@ -103,7 +106,9 @@ func TestPrintSurfacesTheUncomfortableParts(t *testing.T) {
 	assert.Contains(t, out, "invisible to every answer")
 	assert.Contains(t, out, "freshness unknown", "no fingerprint must not read as current")
 	assert.Contains(t, out, "external data processing", "distillation privacy state is stated")
-	assert.Contains(t, out, "no Claude hook installed")
+	assert.Contains(t, out, "no gate hook installed")
+	assert.Contains(t, out, "clients        claude  no hooks installed; MCP registration not registered")
+	assert.Contains(t, out, "               codex   no hooks installed; MCP registration not registered")
 }
 
 func TestGatherReportsBrokenPolicy(t *testing.T) {
@@ -386,4 +391,167 @@ func TestPrintSkillsSanitizesTheSummary(t *testing.T) {
 	assert.Contains(t, b.String(), "skills         ")
 	assert.Contains(t, b.String(), "boom")
 	assert.NotContains(t, b.String(), "\x1b")
+}
+
+// gatherFixture writes one matrix fixture into the seeded workspace and
+// gathers status over the matrix registry.
+func gatherFixture(t *testing.T, f inspecttest.Fixture) (s *Status, out string) {
+	t.Helper()
+
+	st, root := seededStore(t)
+	require.NoError(t, f.Write(root))
+
+	s, err := gather(inspecttest.Registry(), st, root)
+	require.NoError(t, err, "status must describe a broken setup, not fail on it")
+
+	var b bytes.Buffer
+	Print(&b, s)
+
+	return s, b.String()
+}
+
+func TestGatherFollowsTheInspectionMatrix(t *testing.T) {
+	// One fixture matrix for init, doctor, and status: the per-client
+	// view carries the typed states, and the text carries the words
+	// every consumer prints for them.
+	for _, f := range inspecttest.Fixtures() {
+		t.Run(f.Name, func(t *testing.T) {
+			s, out := gatherFixture(t, f)
+
+			i := slices.IndexFunc(s.Clients, func(insp integration.Inspection) bool { return insp.ClientID == f.Client })
+			require.GreaterOrEqual(t, i, 0)
+			insp := s.Clients[i]
+
+			for capability, want := range f.States {
+				entry, ok := insp.Entry(capability)
+				require.True(t, ok)
+				assert.Equal(t, want, entry.State, "%s", capability)
+			}
+
+			assert.Equal(t, f.GateMode, insp.GateMode)
+
+			// The client line prints the hooks and the registration; the
+			// skills and approvals lines print the rest per client.
+			for _, word := range f.Words {
+				assert.Contains(t, out, word)
+			}
+
+			if f.Skills != "" {
+				assert.Contains(t, out, f.Skills)
+			}
+
+			for _, reason := range f.Findings {
+				assert.Contains(t, out, reason, "a limitation the adapter reports is printed")
+			}
+
+			if f.Invoker != "" {
+				assert.Equal(t, f.Invoker, s.DistillClient)
+				assert.Contains(t, out, "(invoker "+f.Invoker+")")
+			}
+
+			for _, secret := range f.Absent {
+				assert.NotContains(t, out, secret, "a credential in a hook command never reaches the text")
+			}
+
+			// The JSON view carries the same typed fields, by name.
+			data, err := json.Marshal(s)
+			require.NoError(t, err)
+
+			var back Status
+			require.NoError(t, json.Unmarshal(data, &back))
+			assert.Equal(t, s, &back)
+			assert.Contains(t, string(data), `"clients":[`)
+			assert.Contains(t, string(data), `"declared":[`)
+
+			for _, secret := range f.Absent {
+				assert.NotContains(t, string(data), secret, "a credential in a hook command never reaches JSON")
+			}
+		})
+	}
+}
+
+func TestPrintGateReadsTheEffectiveModeOfEveryCodexSource(t *testing.T) {
+	s, out := gatherFixture(t, inspecttest.Named("inline enforce"))
+
+	i := slices.IndexFunc(s.Clients, func(insp integration.Inspection) bool { return insp.ClientID == integration.CodexID })
+	require.GreaterOrEqual(t, i, 0)
+	assert.Equal(t, "enforce", s.Clients[i].GateMode)
+	assert.Equal(t, "warn", s.Clients[i].ManagedGateMode)
+	assert.Contains(t, out, "gate           enforce (codex hook carries --enforce; blocking verdicts exit 2)")
+}
+
+func TestPrintGateCoversEveryClientWithAGateHook(t *testing.T) {
+	st, root := seededStore(t)
+
+	// A Codex gate hook alone: the gate line must not say "no hook".
+	require.NoError(t, inspecttest.Named("pending trust").Write(root))
+
+	s, err := gather(inspecttest.Registry(), st, root)
+	require.NoError(t, err)
+	assert.Empty(t, s.GateHookMode, "the legacy field stays Claude Code's")
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.Contains(t, b.String(), "gate           hook installed (codex); policy mode warn governs")
+
+	// Mixed modes: an enforcing Codex hook beside a warn Claude Code hook
+	// names both, because one enforcing hook blocks whatever the other
+	// says.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "hooks.json"),
+		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[`+
+			`{"type":"command","command":"`+inspecttest.Binary+` gate --enforce --hook --client codex"}]}]}}`), 0o644))
+	require.NoError(t, inspecttest.Named("current").Write(root))
+
+	s, err = gather(inspecttest.Registry(), st, root)
+	require.NoError(t, err)
+	assert.Equal(t, "warn", s.GateHookMode)
+
+	b.Reset()
+	Print(&b, s)
+	assert.Contains(t, b.String(), "gate           enforce for codex (hook carries --enforce; blocking verdicts exit 2); "+
+		"the claude hook follows policy mode warn")
+
+	// A broken policy under the enforcing hook names the client that
+	// fails closed.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte("mode: [broken\n"), 0o644))
+
+	s, err = gather(inspecttest.Registry(), st, root)
+	require.NoError(t, err)
+
+	b.Reset()
+	Print(&b, s)
+	assert.Contains(t, b.String(), "FAILS CLOSED (codex)")
+}
+
+func TestPrintClientsSanitizesAdapterText(t *testing.T) {
+	// Adapter details and findings carry repository bytes (paths,
+	// commands); the status lines must not carry terminal escapes.
+	s := &Status{Clients: []integration.Inspection{{
+		ClientID: "codex",
+		Capabilities: []integration.CapabilityInspection{
+			{Capability: integration.CapabilityMCPRegistration, Supported: true,
+				State: integration.StateUnreadable, Detail: "unreadable (\x1b[2Jboom)"},
+			{Capability: integration.CapabilityEdits, Supported: true, State: integration.StateCurrent, Detail: "lessons hook installed"},
+			{Capability: integration.CapabilityCommands, Supported: true},
+		},
+		Findings: []integration.Finding{{Level: integration.FindingWarning, Reason: "runs \x1b]0;forged\x07 twice"}},
+	}}}
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.Contains(t, b.String(), "boom")
+	assert.Contains(t, b.String(), "warning: runs")
+	assert.NotContains(t, b.String(), "\x1b")
+}
+
+func TestPrintGateReadsTheLegacyFieldsWithoutClients(t *testing.T) {
+	// A status decoded from an older JSON document has no per-client
+	// view; the gate line then falls back to the Claude Code fields.
+	var b bytes.Buffer
+	Print(&b, &Status{GatePolicyMode: "warn", GateHookMode: "enforce"})
+	assert.Contains(t, b.String(), "gate           enforce (claude hook carries --enforce")
+
+	b.Reset()
+	Print(&b, &Status{GatePolicyMode: "warn", GateHookError: "boom"})
+	assert.Contains(t, b.String(), "UNREADABLE (claude: boom)")
 }

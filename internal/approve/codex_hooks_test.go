@@ -91,3 +91,24 @@ command = "/opt/flat.sh"
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/opt/a.sh", "/opt/b.sh"}, commands)
 }
+
+func TestCodexHooksDisabledReadsTheFeatureFlag(t *testing.T) {
+	cases := map[string]bool{
+		"":                                         false,
+		"[features]\nhooks = true\n":               false,
+		"[features]\nhooks = false\n":              true,
+		"[features]\ncodex_hooks = false\n":        true,
+		"[features]\nhooks = \"false\"\n":          false, // not a boolean: Codex rejects it; not a disabled flag
+		"[mcp_servers.seamark]\ncommand = \"x\"\n": false,
+	}
+
+	for data, want := range cases {
+		got, err := CodexHooksDisabled([]byte(data))
+		require.NoError(t, err, data)
+		assert.Equal(t, want, got, data)
+	}
+
+	_, err := CodexHooksDisabled([]byte("[features\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), CodexConfig)
+}
