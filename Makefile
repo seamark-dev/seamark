@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test agents-native-check agents-native-smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -47,6 +47,23 @@ AGENTS_TEST_RUN  := 'Test(RunInit|InitClient|InitDefault|InitGateMode|ReportSkil
 agents-test: ## Run the agent-integration contract and characterization tests
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(AGENTS_TEST_PKGS)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./internal/cli ./internal/reviews ./internal/report ./internal/mcp -run $(AGENTS_TEST_RUN)
+
+# Native checks run against the installed client CLI (CLIENT=codex or
+# claude) and are separate from agents-test because they need the client
+# on PATH. `check` is offline: no model, no credentials, a scratch client
+# home; the Go tests it starts with are gated by SEAMARK_NATIVE_CLIENT and
+# skip under plain `go test`. `smoke` runs one bounded distillation with
+# the operator's own login, so it costs tokens and refuses to start
+# without a verified login. A blocked check exits 3, never 0: missing
+# evidence is not a pass. See docs/agent-integrations.md.
+CLIENT ?= codex
+
+agents-native-check: build ## Offline checks against the installed $(CLIENT) CLI: version, exec surface, patch oracle, sandbox, generated setup
+	SEAMARK_NATIVE_CLIENT=$(CLIENT) CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -v -run '^TestNative' ./internal/integration
+	scripts/agent-integration-smoke.sh check $(CLIENT) $(BINARY)
+
+agents-native-smoke: build ## One bounded distillation through the installed $(CLIENT) CLI (costs tokens; needs your own login)
+	scripts/agent-integration-smoke.sh smoke $(CLIENT) $(BINARY)
 
 lint: ## Static analysis (config in .golangci.yml)
 	golangci-lint run ./...

@@ -75,4 +75,29 @@ expect skills           "$BIN" status
 expect schema_version   "$BIN" status --json
 "$BIN" doctor           || fail "doctor (a fresh fixture must pass)"
 
+# Generated configuration: the Codex setup is applied for real (hooks
+# and registration, no skills, no grants), and the hook commands it
+# wrote must run as written. A credential-shaped value in the
+# environment must reach no generated file. `doctor` must still pass:
+# a registration without grants is reported, never failed.
+CANARY=sk-release-smoke-canary-3c1b7a
+OPENAI_API_KEY=$CANARY CODEX_API_KEY=$CANARY ANTHROPIC_API_KEY=$CANARY \
+    "$BIN" init --client codex >/dev/null || fail "init --client codex"
+[ -f .codex/hooks.json ]  || fail "init --client codex (no .codex/hooks.json)"
+[ -f .codex/config.toml ] || fail "init --client codex (no .codex/config.toml)"
+grep -q -- "$CANARY" .codex/hooks.json .codex/config.toml .claude/settings.json .seamark/config.yaml 2>/dev/null \
+    && fail "a credential from the environment reached a generated file"
+GATE_CMD=$(grep -o '"[^"]*seamark gate --hook --client codex"' .codex/hooks.json | head -1 | tr -d '"')
+[ -n "$GATE_CMD" ] || fail "init --client codex (no gate hook command in .codex/hooks.json)"
+printf '{"session_id":"smoke","cwd":"%s","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"call_smoke_1","tool_input":{"command":"ls -la"}}' "$TMP" \
+    | sh -c "$GATE_CMD" || fail "generated Codex gate hook ($GATE_CMD)"
+LESSONS_CMD=$(grep -o '"[^"]*seamark lessons --hook --client codex"' .codex/hooks.json | head -1 | tr -d '"')
+[ -n "$LESSONS_CMD" ] || fail "init --client codex (no lessons hook command in .codex/hooks.json)"
+printf '{"session_id":"smoke","cwd":"%s","hook_event_name":"PreToolUse","tool_name":"apply_patch","tool_use_id":"call_smoke_2","tool_input":{"command":"*** Begin Patch\\n*** Add File: docs/new.md\\n+hello\\n*** End Patch\\n"}}' "$TMP" \
+    | sh -c "$LESSONS_CMD" || fail "generated Codex lessons hook ($LESSONS_CMD)"
+expect "codex gate (warn) + lessons hooks installed" "$BIN" doctor
+expect "gate (warn) + lessons hooks installed" "$BIN" status
+expect '"client": "codex"'  "$BIN" status --json
+"$BIN" doctor           || fail "doctor (a registration without grants is reported, not failed)"
+
 echo "smoke: ok ($("$BIN" version))"

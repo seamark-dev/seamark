@@ -203,10 +203,12 @@ Exact clustering can't see that ten differently-worded findings are one
 mistake. `seamark lessons --distill` can: it batches the raw findings
 into candidate groups and asks **your own agent CLI** (`claude` by
 default, `codex` with `agent.cli: codex`, or any command line under
-`agent.argv` — seamark holds no API keys) to name what recurs, as proposed
-pins. It is an optional accelerator, nothing more: every entry it drafts
-is one you could write by hand in the same file, and repos without an
-agent CLI (or without the appetite for tokens) simply skip it.
+`agent.argv`) to name recurring patterns and propose pins. Seamark holds
+no API keys. See [inference setup and authentication](agent-integrations.md#choose-an-agent-for-inference)
+for selecting Codex or using API-key billing. `agent.argv` takes precedence
+over `agent.cli`; installing Codex hooks does not select Codex for inference.
+Distillation is optional: you can write the same entries by hand without
+an agent CLI or a paid model call.
 
 The
 [OpenTelemetry histogram-reset case study](case-studies/opentelemetry-histogram-reset.md)

@@ -8,6 +8,18 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **Agent setup guide and reusable compatibility checks.**
+  [docs/agent-integrations.md](docs/agent-integrations.md) explains Codex
+  setup and trust, optional skills and tool grants, selecting a CLI for
+  inference, API-key authentication, removal, and adding a new adapter.
+  `make agents-native-check CLIENT=codex` checks the installed CLI without
+  a model: flags, patch parsing, sandbox behavior, final output, provider
+  errors, and generated MCP configuration. `make smoke` now checks the
+  generated Codex hook commands in CI. Documentation tests check command
+  and flag names. `make agents-native-smoke CLIENT=codex` runs one
+  bounded distillation with the operator's own login. It passed on
+  codex-cli 0.157.0 with GPT-6 Luna / low reasoning; the guide records
+  its scope and the remaining native verification gaps.
 - **One account of every agent across `init`, `doctor`, and `status`.**
   The three commands now read one registry inspection per client:
   skills, MCP registration, tool grants, and the edit, gate, and reset

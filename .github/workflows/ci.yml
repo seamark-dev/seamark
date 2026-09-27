@@ -43,6 +43,13 @@ jobs:
       - name: Build
         run: make build
 
+      # The end-to-end smoke covers what unit tests cannot: the built
+      # binary, in a fresh repository, writing the agent configuration
+      # and running the hook commands it wrote. It needs no agent CLI
+      # and no credentials.
+      - name: Smoke
+        run: make smoke
+
   lint:
     name: lint
     runs-on: ubuntu-latest

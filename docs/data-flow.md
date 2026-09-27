@@ -106,7 +106,7 @@ delivery scopes; evidence coverage is the fallback when none verify.
 
 | Command | Network | Sends data to another process/model | Writes repo-local state | Modifies committed files | Can block | Needs credentials |
 |---|---|---|---|---|---|---|
-| `init` | no | no | `.seamark/` scaffolds, `.claude/settings.json` | `.gitignore`, scaffolded YAML (meant to be committed) | no | no |
+| `init` | no | no | `.seamark/` scaffolds; per selected agent `.claude/settings.json`, `.mcp.json`, `.codex/hooks.json`, `.codex/config.toml`, the skill directories | `.gitignore`, scaffolded YAML (meant to be committed) | no | no |
 | `index` | only `--reviews`, via `gh` | no | `index.db` | no | no | `gh` auth for `--reviews` |
 | `why` / `orient` | no | no | no | no | no | no |
 | `lessons` | no | `--distill` and `--extract-triggers`: your agent CLI | proposals, trigger paths in `index.db`; firing log | `lessons.yaml`, only via `--apply`/`--prune`/`--retarget` with `distill.write` | no | the agent CLI's own |

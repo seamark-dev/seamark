@@ -14,12 +14,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark"
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/skills"
@@ -2604,4 +2606,77 @@ func TestBlockedCheckStillPrintsAdvisoryLessons(t *testing.T) {
 	assert.Contains(t, stdout, "advisory — recurring lessons for touched files")
 	assert.Contains(t, stdout, "scripts-guidance",
 		"a new, unindexed file in a pinned region receives its lesson even on a blocked check")
+}
+
+// TestAgentIntegrationsGuideNamesRealCommands is the docs-drift check
+// for docs/agent-integrations.md: every `seamark <command>` it shows
+// names a shipped command, every `--flag` on such a line exists on
+// that command, and every `make <target>` it names is a Makefile
+// target. The guide is what a contributor follows, so a renamed flag
+// must fail here, not in their terminal.
+func TestAgentIntegrationsGuideNamesRealCommands(t *testing.T) {
+	guide, err := os.ReadFile(filepath.Join("..", "..", "docs", "agent-integrations.md"))
+	require.NoError(t, err)
+
+	makefile, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	require.NoError(t, err)
+
+	root := New()
+	commands := map[string]*cobra.Command{}
+
+	for _, c := range root.Commands() {
+		commands[c.Name()] = c
+	}
+
+	// Only code is checked: fenced blocks and inline spans. Prose such
+	// as "how seamark connects" is not a command line.
+	code := regexp.MustCompile("(?s)```[a-z]*\n(.*?)```|`([^`\n]+)`")
+	// A command line is `seamark <command> [args]`, ending at a newline,
+	// a pipe, or a comment.
+	line := regexp.MustCompile("seamark ([a-z-]+)([^\n|#]*)")
+	flag := regexp.MustCompile(`(^|\s)(--?[a-zA-Z][a-zA-Z-]*)`)
+	target := regexp.MustCompile("`make ([a-z-]+)")
+	checked := 0
+
+	var snippets []string
+
+	for _, m := range code.FindAllStringSubmatch(string(guide), -1) {
+		snippets = append(snippets, m[1]+m[2])
+	}
+
+	require.NotEmpty(t, snippets)
+
+	for _, m := range line.FindAllStringSubmatch(strings.Join(snippets, "\n"), -1) {
+		name, rest := m[1], m[2]
+
+		c, ok := commands[name]
+		require.True(t, ok, "the guide names `seamark %s`, which is not a command", name)
+
+		for _, f := range flag.FindAllStringSubmatch(rest, -1) {
+			spelled := strings.TrimLeft(f[2], "-")
+			checked++
+
+			defined := c.Flags().Lookup(spelled) != nil || c.InheritedFlags().Lookup(spelled) != nil
+			if len(f[2]) == 2 {
+				defined = c.Flags().ShorthandLookup(spelled) != nil || c.InheritedFlags().ShorthandLookup(spelled) != nil
+			}
+
+			assert.True(t, defined, "the guide shows `seamark %s %s`, which is not a flag of %s", name, f[2], name)
+		}
+	}
+
+	for _, m := range target.FindAllStringSubmatch(string(guide), -1) {
+		checked++
+		assert.Regexp(t, "(?m)^"+regexp.QuoteMeta(m[1])+":", string(makefile),
+			"the guide names `make %s`, which is not a Makefile target", m[1])
+	}
+
+	// The per-agent table must name every shipped client by its ID, so a
+	// new registration cannot ship undocumented.
+	for _, id := range integration.Builtin().IDs() {
+		checked++
+		assert.Contains(t, string(guide), "--client "+id, "the guide shows no `--client %s` example", id)
+	}
+
+	assert.Greater(t, checked, 10, "the guide must show commands, flags, and targets for this test to mean anything")
 }

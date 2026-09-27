@@ -728,6 +728,12 @@ Without `--client`, `seamark init` behaves exactly as before. With it,
 use a bare `--skills`; the valued forms (`--skills=codex` and the others)
 belong to the form without `--client`.
 
+For a shorter setup walkthrough, see the
+[agent integration guide](docs/agent-integrations.md). It covers Codex
+trust, optional skills and tool grants, inference authentication,
+troubleshooting, and removing an integration. Contributors can also use
+it to add an agent adapter.
+
 Codex can choose the appropriate skill when you ask it to explore
 unfamiliar code, implement a change, or review your work. You can also
 name a skill directly:
@@ -920,8 +926,16 @@ allowed command would otherwise run outside the sandbox), with seamark's
 own hooks off inside the run, and reads the prompt from stdin; it
 authenticates with your saved Codex login or `CODEX_API_KEY`. Codex loads `AGENTS.md` and other project
 instructions in that run, so more than the prompt reaches inference. The
-preset has not been exercised in a live Codex run yet; `--dry-run` shows
-the exact command either way.
+preset has been checked with a scripted provider on codex-cli 0.157.0:
+the final reply reaches stdout, provider failures return a nonzero exit,
+and inherited command-allow rules do not permit workspace writes. A
+real-model distillation smoke also passed on 2026-09-27 using GPT-6 Luna
+with low reasoning. It produced a proposal with Codex provenance; trigger
+extraction was dry-run only, and trusted-hook isolation remains unverified.
+`--dry-run` shows the preset command.
+See [inference setup and authentication](docs/agent-integrations.md#choose-an-agent-for-inference)
+to select a preset or use API-key billing. `agent.argv` overrides
+`agent.cli`, and `init --client codex` does not change the inference agent.
 
 History mining has two flags on `seamark index` itself: `--max-commits`
 bounds the git window (default 5000) and `--max-files-per-commit`
@@ -1016,7 +1030,13 @@ make index    # self-index this repo
 make smoke    # end-to-end run of the built binary in a fixture repo
 make skills-validate   # Claude Code's strict validator over skills/ (local; needs the claude CLI)
 make agents-test       # agent-integration contract + characterization tests (offline, credential-free)
+make agents-native-check CLIENT=codex   # the installed agent CLI, offline: version, preset flags, sandbox, generated setup
+make agents-native-smoke CLIENT=codex   # one bounded distillation with your own login (costs tokens)
 ```
+
+Adding a coding agent is one descriptor and one registration;
+[docs/agent-integrations.md](docs/agent-integrations.md) is the
+contributor guide.
 
 Contributions that need no Go at all: the effect catalogue and default
 policy are plain YAML — adding sinks for your framework is a
