@@ -100,9 +100,10 @@ SBOMs, and an npm install are the next distribution milestone.
   login. The Go checks report test results; the shell script reports
   `ok`, `FAIL`, or `blocked`. Both return a nonzero status when evidence
   is missing or a check fails. The offline check ran on codex-cli
-  0.157.0 on 2026-09-27: every check ok, including the forty-case
-  `apply_patch` oracle recorded on 0.154.0. The paid smoke passed on the
-  same date with GPT-6 Luna / low reasoning: 10 ok, 0 failed, 0 blocked.
+  0.157.0 (2026-09-27) and 0.157.1 (2026-09-28): every check ok,
+  including the forty-case `apply_patch` oracle recorded on 0.154.0. The
+  paid smoke passed on 2026-09-27 on 0.157.0 with GPT-6 Luna / low
+  reasoning: 10 ok, 0 failed, 0 blocked.
   A temporary wrapper added only model and reasoning flags to the preset;
   the run used `SEAMARK_ALLOW_DIRTY=1` with the tested diff saved alongside
   the commit. Trigger extraction was dry-run only; trusted-hook isolation,

@@ -16,7 +16,10 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   a model: flags, patch parsing, sandbox behavior, final output, provider
   errors, and generated MCP configuration. `make smoke` now checks the
   generated Codex hook commands in CI. Documentation tests check command
-  and flag names. `make agents-native-smoke CLIENT=codex` runs one
+  and flag names. The contract tests take the test-only third client
+  through the real setup coordinator, the shared delivery service, the
+  gate helpers, the inspection, and the distillation pipeline, so a
+  contributed adapter is proven against the engines it will run in. `make agents-native-smoke CLIENT=codex` runs one
   bounded distillation with the operator's own login. It passed on
   codex-cli 0.157.0 with GPT-6 Luna / low reasoning; the guide records
   its scope and the remaining native verification gaps.
