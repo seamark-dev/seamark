@@ -6,6 +6,26 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## Unreleased
+
+- **Experimental workspace console: `seamark tui`.** One full-screen
+  console for a workspace: Overview (index, navigation, lesson, and guard
+  cards, an attention list that separates actionable, optional,
+  unsupported, and unknown states, and an explicit index build with
+  phase progress), Doctor (every check with its fix), a first-run guide, Integrations (Claude Code and Codex with configuration,
+  trust, and native evidence kept apart; setup and repair through a
+  previewed shared setup plan with a readable diff), and Lessons
+  (pending, applied, and dismissed proposals with state and region
+  filters, previewed apply and dismiss, and delivery statistics). Opening
+  and browsing never write; the console never records lesson delivery,
+  fetches reviews, or starts an agent. Apply keeps `distill.write`: with
+  the gate off the console shows the YAML block instead. A partial apply
+  is reported exactly, and a ledger-only reconciliation replaces a
+  duplicate-producing retry. Noninteractive runs print the plain
+  commands. The shared setup scaffold, proposal decisions, and delivery
+  statistics moved into `internal/scaffold`, `internal/proposals`, and
+  `internal/lessonstats`; CLI output is unchanged.
+
 ## v0.7.0 — 2026-10-03
 
 - **A clearer introduction and first-use workflow for AI coding agents.**

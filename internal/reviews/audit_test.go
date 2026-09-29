@@ -466,3 +466,49 @@ func TestExposureSurvivesCosmeticPinEdits(t *testing.T) {
 	_, ok = exposure[PinIdentity(reworded)]
 	assert.False(t, ok)
 }
+
+func TestAuditLogPathIsTheReaderAndWriterLocation(t *testing.T) {
+	root := t.TempDir()
+
+	assert.Equal(t, filepath.Join(root, ".seamark", "lessons-audit.jsonl"), AuditLogPath(root))
+
+	// The writer creates the file at exactly this path.
+	require.NoError(t, RecordFiring(root, "a.py", "Edit", []model.Lesson{
+		{Region: "api", Symptom: "E501"},
+	}))
+
+	_, err := os.Stat(AuditLogPath(root))
+	require.NoError(t, err)
+}
+
+func TestReadFiringsCountedReportsSkippedLines(t *testing.T) {
+	root := t.TempDir()
+
+	// A missing log reports no records and no skipped lines.
+	firings, skipped, err := ReadFiringsCounted(root)
+	require.NoError(t, err)
+	assert.Empty(t, firings)
+	assert.Zero(t, skipped)
+
+	// One bad JSON line, one over-long line, and one blank line: the
+	// first two count as skipped, the blank line is not a record.
+	var buf []byte
+	buf = append(buf, []byte("not json\n\n")...)
+	buf = append(buf, make([]byte, maxAuditLine+1)...)
+	buf = append(buf, '\n')
+	buf = append(buf, []byte(`{"file":"a.py","tool":"Edit","fired":[]}`+"\n")...)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(AuditLogPath(root), buf, 0o644))
+
+	firings, skipped, err = ReadFiringsCounted(root)
+	require.NoError(t, err)
+	require.Len(t, firings, 1)
+	assert.Equal(t, "a.py", firings[0].File)
+	assert.Equal(t, 2, skipped)
+
+	// ReadFirings keeps its contract: the same records, no count.
+	plain, err := ReadFirings(root)
+	require.NoError(t, err)
+	assert.Equal(t, firings, plain)
+}

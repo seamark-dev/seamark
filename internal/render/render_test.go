@@ -23,3 +23,9 @@ func TestTruncate(t *testing.T) {
 	assert.Equal(t, "", Truncate("anything", 0), "zero budget must not panic")
 	assert.Equal(t, "", Truncate("anything", -1))
 }
+
+func TestSanitizeBlockKeepsLinesAndStripsControls(t *testing.T) {
+	in := "line one\n\tline two\x1b[31m red\x07\r\u009b2J\u202eevil\u2066x\u2069\x7f"
+
+	assert.Equal(t, "line one\n\tline two[31m red2Jevilx", SanitizeBlock(in))
+}

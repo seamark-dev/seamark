@@ -33,3 +33,25 @@ func Truncate(s string, n int) string {
 
 	return string(runes[:n-1]) + "…"
 }
+
+// SanitizeBlock strips control characters from multi-line untrusted
+// text but keeps newlines and tabs. It also strips C1 controls and
+// bidirectional overrides, which can reorder or hide terminal text.
+func SanitizeBlock(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\t':
+			return r
+		case r < 0x20 || r == 0x7f:
+			return -1
+		case r >= 0x80 && r <= 0x9f:
+			// C1 controls: U+009B is a one-byte CSI on some terminals.
+			return -1
+		case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+			// Bidirectional overrides and isolates reorder display text.
+			return -1
+		}
+
+		return r
+	}, s)
+}

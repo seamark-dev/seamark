@@ -145,6 +145,11 @@ Your configured hooks deliver matching reminders during supported edits.
 
 [Learning guide: review, tune, dismiss, and update lessons →](docs/lessons.md)
 
+`seamark tui` (experimental) opens a full-screen console for one workspace:
+index state, agent integrations, proposal decisions, delivery statistics,
+and doctor checks. Browsing never writes; every change starts from a
+preview that names its exact effects. [Workspace console →](docs/tui.md)
+
 ## Agent skills
 
 [Agent skills](https://agentskills.io) give your AI coding agent instructions
@@ -238,6 +243,7 @@ YAML can be committed separately. [Configuration and backups →](docs/configura
 - [Installation and first use](docs/getting-started.md)
 - [AI coding agent setup and compatibility](docs/agent-integrations.md)
 - [Lessons and proposals](docs/lessons.md)
+- [Workspace console (experimental)](docs/tui.md)
 - [Repository history and code analysis](docs/repository-history.md)
 - [Configuration and local state](docs/configuration.md)
 - [Data flow](docs/data-flow.md) and [trust boundaries](docs/threat-model.md)

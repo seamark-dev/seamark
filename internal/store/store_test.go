@@ -792,3 +792,52 @@ func TestFindingsRoundTripAndSwap(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got, "old findings gone after replace")
 }
+
+func TestFindingsByIDsReturnsFullFindings(t *testing.T) {
+	s := openTestStore(t)
+
+	findings := []model.Finding{
+		{
+			ID: 11, LessonKey: "api\x00E501", Path: "api/a.py", Paths: []string{"api/a.py", "api/b.py"},
+			PR: 7, Reviewer: "coderabbit", Body: "line too long, wrap it", URL: "u1", CreatedAt: 80,
+			Source: model.SourceReview,
+		},
+		{
+			ID: 12, LessonKey: "api\x00E501", Path: "api/b.py", PR: 8,
+			Reviewer: "person", Body: "wrap this line", URL: "u2", CreatedAt: 90,
+			Source: model.SourceReview,
+		},
+	}
+	require.NoError(t, s.ReplaceLessons(nil, findings))
+
+	// Duplicate ids collapse, and a missing id is absent: the caller
+	// labels it as evidence that aged out.
+	got, err := s.FindingsByIDs([]int64{12, 11, 12, 99})
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]model.Finding{11: findings[0], 12: findings[1]}, got)
+
+	got, err = s.FindingsByIDs(nil)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestFindingsByIDsSpansChunks(t *testing.T) {
+	s := openTestStore(t)
+
+	// More ids than one chunk holds: every row must come back.
+	var findings []model.Finding
+
+	var ids []int64
+
+	for i := int64(1); i <= 1203; i++ {
+		findings = append(findings, model.Finding{ID: i, Path: "a.go", Body: "b"})
+		ids = append(ids, i)
+	}
+
+	require.NoError(t, s.ReplaceLessons(nil, findings))
+
+	got, err := s.FindingsByIDs(ids)
+	require.NoError(t, err)
+	assert.Len(t, got, 1203)
+	assert.Equal(t, "b", got[1203].Body)
+}

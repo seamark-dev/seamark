@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test agents-native-check agents-native-smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test tui-test tui-capture agents-native-check agents-native-smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -64,6 +64,24 @@ agents-native-check: build ## Offline checks against the installed $(CLIENT) CLI
 
 agents-native-smoke: build ## One bounded distillation through the installed $(CLIENT) CLI (costs tokens; needs your own login)
 	scripts/agent-integration-smoke.sh smoke $(CLIENT) $(BINARY)
+
+# The console tests run offline against fixtures and a scripted service
+# fake. They cover the shell, the three destinations, the terminal
+# lifecycle through tui.Run, the shared services the console and the CLI
+# both call, and the CLI entry point.
+TUI_TEST_PKGS := ./internal/tui/... ./internal/workspace/... ./internal/scaffold/... ./internal/proposals/... ./internal/lessonstats/...
+
+tui-test: ## Run the workspace console tests (shell, screens, shared decision services, CLI parity)
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(TUI_TEST_PKGS)
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./internal/cli -run 'Test(TUI|Lessons|RunInit|InitClient)'
+
+# Captures are plain-text renders of representative console states at
+# several terminal sizes, for the visual review (they stay local).
+TUI_CAPTURE_DIR ?= rfc/validation/tui-mvp/captures
+
+tui-capture: ## Render representative console states into $(TUI_CAPTURE_DIR) for visual review
+	mkdir -p "$(TUI_CAPTURE_DIR)"
+	SEAMARK_TUI_CAPTURE_DIR="$(abspath $(TUI_CAPTURE_DIR))" CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -run '^TestCapture' ./internal/tui
 
 lint: ## Static analysis (config in .golangci.yml)
 	golangci-lint run ./...

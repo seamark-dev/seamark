@@ -10,18 +10,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/seamark-dev/seamark/internal/agent"
-	"github.com/seamark-dev/seamark/internal/confidence"
 	"github.com/seamark-dev/seamark/internal/delivery"
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/model"
-	"github.com/seamark-dev/seamark/internal/outcome"
+	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
@@ -594,7 +592,7 @@ func runLessonsProposals(cmd *cobra.Command, opts *options) error {
 		}
 	}
 
-	health, err := proposalHealth(st, root, append(states[0], states[1]...))
+	health, err := proposals.Health(st, root, append(states[0], states[1]...))
 	if err != nil {
 		return err
 	}
@@ -605,133 +603,6 @@ func runLessonsProposals(cmd *cobra.Command, opts *options) error {
 		distill.Clusters(states[1]), health)
 
 	return nil
-}
-
-// proposalHealth re-judges proposals under TODAY'S rules (RFC-002 §7):
-// confidence tier over living evidence, the prompt era when the row
-// predates the recurrence rules, and the regions current inference
-// would assign. Purely derived — recomputed on every ask, stored
-// nowhere, acted on only by explicit commands.
-func proposalHealth(st *store.Store, root string, ps []model.Proposal) (map[int64]report.ProposalHealth, error) {
-	if len(ps) == 0 {
-		return nil, nil
-	}
-
-	cfg, err := reviews.LoadConfig(root)
-	if err != nil {
-		return nil, fmt.Errorf("lessons proposalHealth: reading .seamark/lessons.yaml: %w", err)
-	}
-
-	var cited []int64
-
-	for _, p := range ps {
-		cited = append(cited, p.Members...)
-	}
-
-	meta, err := st.FindingsMetaByIDs(cited)
-	if err != nil {
-		return nil, err
-	}
-
-	advisories, err := distill.AuditScopes(st, cfg, root, ps, meta)
-	if err != nil {
-		return nil, fmt.Errorf("lessons proposalHealth: auditing scopes: %w", err)
-	}
-
-	now := time.Now()
-	out := make(map[int64]report.ProposalHealth, len(ps))
-	var appliedPs []model.Proposal
-
-	for _, p := range ps {
-		tier, facts := confidence.Assess(p, meta, root, now)
-
-		h := report.ProposalHealth{Tier: tier.String(), Facts: facts.Line()}
-
-		if adv, ok := advisories[p.ID]; ok {
-			h.Scope = adv.Line()
-		}
-
-		if strings.HasSuffix(p.Agent, "/v1") {
-			h.Era = "distilled under prompt v1, before the same-PR-counts-once rule"
-		}
-
-		// The liveness rule every applied-pin surface uses: a row whose
-		// pin left lessons.yaml delivers nothing, so region advice is
-		// suppressed and the state is named instead.
-		if p.Status == model.ProposalApplied {
-			if _, live := cfg.FindPin(reviews.NewPinKey(p.Rule, p.Region, p.Regions)); !live {
-				h.Pruned = true
-			}
-		}
-
-		var living []model.Finding
-
-		for _, id := range p.Members {
-			if f, ok := meta[id]; ok {
-				living = append(living, f)
-			}
-		}
-
-		if len(living) > 0 && !h.Pruned {
-			// One recompute for every "regions now" reader: verified
-			// trigger scopes when available, evidence coverage otherwise.
-			recomputed, facts, err := distill.RecomputeRegions(st, root, p, living)
-			if err != nil {
-				return nil, err
-			}
-
-			if !regionSetsEqual(recomputed, p.RegionSet()) {
-				h.Retarget = strings.Join(recomputed, ", ")
-				if h.Retarget == "" {
-					h.Retarget = "*"
-				}
-			}
-
-			// A blocked trigger produces no drift and no advisory —
-			// without this line, a confirmed delivery miss is
-			// invisible everywhere after the extraction summary.
-			for _, f := range facts {
-				if line := f.BlockedLine(); line != "" {
-					if h.Blocked != "" {
-						h.Blocked += "; "
-					}
-
-					h.Blocked += line
-				}
-			}
-		}
-
-		if p.Status == model.ProposalApplied {
-			appliedPs = append(appliedPs, p)
-		}
-
-		out[p.ID] = h
-	}
-
-	// Passive-loop verdicts for the applied subset. Pins
-	// Gather cannot measure get no Outcome, and the printer renders
-	// nothing for them.
-	if len(appliedPs) > 0 {
-		_, _, readings, err := gatherAppliedOutcomes(st, root, appliedPs)
-		if err != nil {
-			return nil, err
-		}
-
-		for id, r := range readings {
-			h := out[id]
-			h.Outcome = r.Line()
-			h.Escalate = r.Verdict == outcome.VerdictNotLanding
-			out[id] = h
-		}
-	}
-
-	return out, nil
-}
-
-// regionSetsEqual compares two region sets order-insensitively, the
-// same equivalence the pin identity uses.
-func regionSetsEqual(a, b []string) bool {
-	return reviews.NewPinKey("x", "", a) == reviews.NewPinKey("x", "", b)
 }
 
 // runLessonsDistill executes the plan half of Tier 2: read new evidence
@@ -1356,7 +1227,7 @@ func runLessonsStats(cmd *cobra.Command, opts *options) error {
 		return fmt.Errorf("failed to fetch applied proposals: %w", err)
 	}
 
-	cfg, firings, readings, err := gatherAppliedOutcomes(st, root, applied)
+	cfg, firings, readings, err := proposals.AppliedOutcomes(st, root, applied)
 	if err != nil {
 		return err
 	}
@@ -1369,31 +1240,6 @@ func runLessonsStats(cmd *cobra.Command, opts *options) error {
 	report.PrintOutcomes(cmd.OutOrStdout(), applied, readings)
 
 	return nil
-}
-
-// gatherAppliedOutcomes is the shared evidence boundary for user-facing
-// outcome surfaces. A malformed lessons configuration must fail consistently:
-// silently substituting defaults would judge firings against rules the agent
-// never received.
-func gatherAppliedOutcomes(st *store.Store, root string, applied []model.Proposal) (
-	*reviews.Config, []reviews.Firing, map[int64]outcome.Reading, error,
-) {
-	cfg, err := reviews.LoadConfig(root)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to load lessons config: %w", err)
-	}
-
-	firings, err := reviews.ReadFirings(root)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to read firing log: %w", err)
-	}
-
-	readings, err := outcome.Gather(st, cfg, applied, firings)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to gather applied proposal outcomes: %w", err)
-	}
-
-	return cfg, firings, readings, nil
 }
 
 // lessonsForFile normalizes path to repo-relative and returns the
@@ -1527,7 +1373,7 @@ func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
 			return err
 		}
 
-		if regionSetsEqual(regions, p.RegionSet()) {
+		if proposals.RegionSetsEqual(regions, p.RegionSet()) {
 			fmt.Fprintf(out, "  p%-4d %s — regions already current\n", p.ID, render.Sanitize(p.Rule))
 
 			continue

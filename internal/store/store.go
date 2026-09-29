@@ -1058,6 +1058,42 @@ func (s *Store) FindingsMetaByIDs(ids []int64) (map[int64]model.Finding, error) 
 	return out, nil
 }
 
+// FindingsByIDs returns the full cited findings, bodies included, keyed
+// by id. The proposal detail view needs the review text, and a missing
+// id means the finding aged out of the index. Duplicate ids are fine.
+func (s *Store) FindingsByIDs(ids []int64) (map[int64]model.Finding, error) {
+	seen := make(map[int64]bool, len(ids))
+	unique := make([]any, 0, len(ids))
+
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+		}
+	}
+
+	out := make(map[int64]model.Finding, len(unique))
+
+	err := s.chunked(
+		`SELECT `+findingCols+` FROM finding WHERE id IN (%s)`, unique,
+		func(rows *sql.Rows) error {
+			f, err := scanFinding(rows)
+			if err != nil {
+				return err
+			}
+
+			out[f.ID] = f
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
 // chunked runs an IN-list query against args in slices of 500 — SQLite
 // bounds bound-parameter counts, and one giant list would fail exactly
 // on the large repositories that need the query most. query must be a
@@ -1134,24 +1170,35 @@ func scanFindings(rows *sql.Rows) ([]model.Finding, error) {
 	var out []model.Finding
 
 	for rows.Next() {
-		var f model.Finding
-
-		var paths string
-
-		err := rows.Scan(&f.ID, &f.LessonKey, &f.Path, &f.PR,
-			&f.Reviewer, &f.Body, &f.URL, &f.CreatedAt, &f.Source, &paths)
+		f, err := scanFinding(rows)
 		if err != nil {
 			return nil, err
-		}
-
-		if f.Paths, err = decodeStrings(paths); err != nil {
-			return nil, fmt.Errorf("store: finding %d paths: %w", f.ID, err)
 		}
 
 		out = append(out, f)
 	}
 
 	return out, rows.Err()
+}
+
+// scanFinding reads the current row in findingCols order. The list and
+// the chunked readers share it, so the column order has one owner.
+func scanFinding(rows *sql.Rows) (model.Finding, error) {
+	var f model.Finding
+
+	var paths string
+
+	err := rows.Scan(&f.ID, &f.LessonKey, &f.Path, &f.PR,
+		&f.Reviewer, &f.Body, &f.URL, &f.CreatedAt, &f.Source, &paths)
+	if err != nil {
+		return model.Finding{}, err
+	}
+
+	if f.Paths, err = decodeStrings(paths); err != nil {
+		return model.Finding{}, fmt.Errorf("store: finding %d paths: %w", f.ID, err)
+	}
+
+	return f, nil
 }
 
 // InsertEffect stores one effect tag on a symbol. origin is "direct" for
