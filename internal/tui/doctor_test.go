@@ -163,7 +163,11 @@ func TestDoctorTabMovesFocusBetweenPanes(t *testing.T) {
 	h.press("down")
 	assert.Equal(t, 1, d.list.cursor)
 
-	h.press("enter", "esc")
+	// The policy check has no in-app workflow, so enter focuses its detail.
+	h.press("end", "enter")
+	require.True(t, d.focusDetail)
+
+	h.press("esc")
 	assert.False(t, d.focusDetail, "esc gives the focus back to the list")
 }
 
@@ -296,7 +300,10 @@ func TestDoctorFramesFitAtEverySize(t *testing.T) {
 
 		assertFrame(t, h.view(), w, hgt)
 
-		h.press("down", "down", "enter")
+		// The policy check has no in-app workflow, so enter stays in the
+		// Doctor and shows or focuses the detail.
+		h.press("end", "enter")
+		require.Equal(t, destDoctor, h.m.active)
 		assertFrame(t, h.view(), w, hgt)
 	}
 }

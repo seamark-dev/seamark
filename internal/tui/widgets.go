@@ -537,6 +537,146 @@ func (t *Theme) command(s string) string {
 	return t.Code.Render(oneLine(s))
 }
 
+// scrollState is the vertical position of one scrollable text. It is
+// the scroll type of Lessons under a shared name, so every modal and
+// pane scrolls the same way.
+type scrollState = lesScroll
+
+// radio renders one choice of a single-choice list, for example
+// "(●) codex". The glyph shows the choice without color.
+func (t *Theme) radio(on bool, label string) string {
+	if on {
+		return t.Accent.Render(t.Glyphs.RadioOn) + " " + t.Body.Render(oneLine(label))
+	}
+
+	return t.Muted.Render(t.Glyphs.RadioOff) + " " + t.Muted.Render(oneLine(label))
+}
+
+// effect is one WILL line of a preview: its glyph, the glyph tone, and
+// the text.
+type effect struct {
+	glyph string
+	tone  Tone
+	text  string
+}
+
+// effectLines renders the WILL and WON'T sections of a preview. A WON'T
+// line is as explicit as a WILL line, because a reader must see what
+// stays.
+func (t *Theme) effectLines(will []effect, wont []string, w int) []string {
+	var out []string
+
+	if len(will) > 0 {
+		out = append(out, "", t.Heading.Render("WILL"))
+
+		for _, e := range will {
+			out = append(out, propIndent(t.ToneStyle(e.tone).Render(e.glyph)+" ",
+				propLines(t.Body, e.text, w-2))...)
+		}
+	}
+
+	if len(wont) > 0 {
+		out = append(out, "", t.Heading.Render("WON'T"))
+
+		for _, text := range wont {
+			out = append(out, propIndent(t.Faint.Render(t.Glyphs.Sep)+" ", propLines(t.Muted, text, w-2))...)
+		}
+	}
+
+	return out
+}
+
+// phaseState is the progress of one step of a long operation.
+type phaseState int
+
+const (
+	phasePending phaseState = iota
+	phaseActive
+	phaseDone
+	phaseSkipped
+	phaseFailed
+	phaseStopped
+)
+
+// phaseRow is one step line: the label, a note such as a count, and
+// the state.
+type phaseRow struct {
+	label string
+	note  string
+	state phaseState
+}
+
+// phaseRows renders each step with its state glyph, for example
+// "✓ Scan files        1,204 files". The labels share one column. The
+// skipped, failed and stopped states also show a word, because failed
+// and stopped share the glyph "!" and must differ without color.
+func (t *Theme) phaseRows(rows []phaseRow, tick, w int) []string {
+	g := t.Glyphs
+
+	labelW := 0
+	for _, r := range rows {
+		labelW = max(labelW, width(r.label))
+	}
+
+	lines := make([]string, 0, len(rows))
+
+	for _, r := range rows {
+		var glyph, word string
+
+		style := t.Body
+
+		switch r.state {
+		case phaseActive:
+			glyph = t.Accent.Render(t.spinnerFrame(tick))
+		case phaseDone:
+			glyph = t.Success.Render(g.OK)
+		case phaseSkipped:
+			glyph, style, word = t.Faint.Render(g.Info), t.Faint, "skipped"
+		case phaseFailed:
+			glyph, word = t.Failure.Render(g.Fail), "failed"
+		case phaseStopped:
+			glyph, word = t.Attention.Render(g.Warn), "stopped"
+		default:
+			glyph, style = t.Faint.Render(g.Info), t.Muted
+		}
+
+		lines = append(lines, truncate(glyph+" "+style.Render(padRight(r.label, labelW))+"  "+
+			t.Muted.Render(joinNote(word, r.note)), w, g.Ellipsis))
+	}
+
+	return lines
+}
+
+// joinNote joins two notes of one line with a comma. An empty note
+// adds nothing.
+func joinNote(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	default:
+		return a + ", " + b
+	}
+}
+
+// activityLines renders the last keep diagnostic lines, each redacted,
+// sanitized and cut to w cells. A long run keeps its detail area this
+// small, so raw process output never takes over the screen. keep <= 0
+// keeps every line.
+func (t *Theme) activityLines(lines []string, keep, w int) []string {
+	if keep > 0 && len(lines) > keep {
+		lines = lines[len(lines)-keep:]
+	}
+
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		out = append(out, t.Muted.Render(truncate(diag(l), w, t.Glyphs.Ellipsis)))
+	}
+
+	return out
+}
+
 // spinnerFrame returns the activity glyph for a tick count.
 func (t *Theme) spinnerFrame(tick int) string {
 	frames := t.Glyphs.Spinner

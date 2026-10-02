@@ -8,6 +8,42 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **Console learning workflow and settings (`seamark tui`,
+  experimental).** Lessons gains Evidence and Run. An evidence refresh
+  (local fixes, or GitHub reviews plus local fixes) starts from a
+  preview that names the repository, the review window, the network use,
+  and the stored data it replaces; each source ends as refreshed, empty,
+  unavailable, failed, stopped, or not attempted, and a failed or
+  stopped fetch keeps the stored reviews. A failed fetch names its cause
+  (`gh` login, rate limit, or fetch error) and the next step. A
+  distillation starts from a scope (region, 10 groups by default, "all"
+  only by choice) and a read-only plan that lists the agent command, the
+  groups and their evidence, the estimated prompt size, the skipped
+  signatures, and the stale pending proposals it removes. `y` runs
+  exactly that plan after a revalidation, with per-group progress, a
+  stop that starts no new group and cancels the running agent call with
+  its whole process group (also on a quit or a closed terminal), and a
+  result that opens the generated proposals; no pin is applied. `[` and
+  `]` show the earlier runs of the session, read-only. A new Settings
+  destination (`5`) edits `agent.cli`, `distill.write`,
+  `reviews.window_days`, `index.generated`, and `index.exclude` through
+  a diff preview and a guarded single-file write that keeps comments,
+  unknown keys, and the file mode; a custom `agent.argv` stays
+  read-only, and a quit with an unsaved draft asks first. Overview and
+  Doctor link blocked steps to Evidence, Run, and the exact Settings
+  group. The shared `internal/learning` and `internal/settings` services
+  and the plan and execute steps of `internal/distill` serve the
+  console; `seamark index --fixes-only`, `seamark index --reviews`, and
+  `seamark lessons --distill` keep their output, pinned by new golden
+  tests, except for the dry-run fix below. See [docs/tui.md](docs/tui.md).
+- **`lessons --distill --dry-run` now previews the real run.** A real
+  run first prunes pending proposals whose evidence group is gone, and
+  that prune changes the coverage order and the primer. The dry run
+  skipped it, so with such proposals it could list other groups and other
+  prompt sizes than the run sent, also under the default limit of 10.
+  The dry run now models the prune without deleting anything,
+  lists the same groups as the real run, and names the proposals the
+  real run prunes first.
 - **Experimental workspace console: `seamark tui`.** One full-screen
   console for a workspace: Overview (index, navigation, lesson, and guard
   cards, an attention list that separates actionable, optional,
@@ -17,8 +53,8 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   previewed shared setup plan with a readable diff), and Lessons
   (pending, applied, and dismissed proposals with state and region
   filters, previewed apply and dismiss, and delivery statistics). Opening
-  and browsing never write; the console never records lesson delivery,
-  fetches reviews, or starts an agent. Apply keeps `distill.write`: with
+  and browsing never write, record lesson delivery, fetch reviews, or
+  start an agent. Apply keeps `distill.write`: with
   the gate off the console shows the YAML block instead. A partial apply
   is reported exactly, and a ledger-only reconciliation replaces a
   duplicate-producing retry. Noninteractive runs print the plain

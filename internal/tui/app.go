@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -11,7 +12,8 @@ import (
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
-// destination is one of the four stable top-level views.
+// destination is one of the five stable top-level views. A new
+// destination goes last, so the number keys of the others never change.
 type destination int
 
 const (
@@ -19,6 +21,7 @@ const (
 	destIntegrations
 	destLessons
 	destDoctor
+	destSettings
 	destCount
 )
 
@@ -62,6 +65,34 @@ type bannerScreen interface {
 	banner(w int) (line string, ok bool)
 }
 
+// shortTitler is an optional screen method: a short tab label for a
+// terminal that is too narrow for the full tab row. The help keeps the
+// full title, because it has room for it.
+type shortTitler interface {
+	shortTitle() string
+}
+
+// leaveGuard is an optional screen method. The shell asks it before it
+// opens another destination, because a screen with an unsaved draft
+// asks the user first. ok=false keeps the current destination; the
+// screen then shows its own question and later sends a navigateMsg.
+type leaveGuard interface {
+	leave(next destination, intent string) (cmd tea.Cmd, ok bool)
+}
+
+// intentShower is an optional screen method. It reports whether the
+// screen shows the view that intent opens, for example the Run sub-view
+// for "run". The notice row then leaves out its hint to that view,
+// because the user sees the view already (design map §6).
+type intentShower interface {
+	showsIntent(intent string) bool
+}
+
+// tabShortOrder is the order in which the tab labels abbreviate. The
+// longest label goes first, so the row keeps as many full names as it
+// can.
+var tabShortOrder = []destination{destIntegrations, destSettings, destOverview}
+
 // chromeHeight is the header, the tab bar, the tab rule, the notice row
 // and the footer.
 const chromeHeight = 5
@@ -83,6 +114,12 @@ type model struct {
 	quitAfter   bool
 	quitting    bool
 
+	// exitBy is the deadline of a confirmed stop-and-exit; zero when no
+	// such exit waits. exitSeq drops the timer of an exit that the user
+	// cancelled.
+	exitBy  time.Time
+	exitSeq int
+
 	toast    toastMsg
 	toastSeq int
 	ticking  bool
@@ -101,15 +138,22 @@ type freshMsg struct {
 // clearToastMsg expires a status line message.
 type clearToastMsg struct{ seq int }
 
-// newModel builds the shell over the services.
+// exitDeadlineMsg ends the wait of a confirmed stop-and-exit. The
+// console then exits even when the stopped work has not ended yet.
+type exitDeadlineMsg struct{ seq int }
+
+// newModel builds the shell over the services. The root context is
+// the background context until Run replaces it with a context that it
+// cancels at exit.
 func newModel(svc Services, theme *Theme) *model {
-	st := &state{svc: svc, theme: theme}
+	st := &state{svc: svc, theme: theme, ctx: context.Background()}
 
 	m := &model{st: st}
 	m.screens[destOverview] = newOverview(st)
 	m.screens[destIntegrations] = newIntegrations(st)
 	m.screens[destLessons] = newLessons(st)
 	m.screens[destDoctor] = newDoctor(st)
+	m.screens[destSettings] = newSettings(st)
 
 	return m
 }
@@ -204,9 +248,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case mutationDoneMsg:
 		m.st.mutation = ""
+		m.st.run = nil
 
-		// The quit question applies only to running work. The dialog
-		// closes, so the result of the work becomes visible.
+		// The running-work question ends with the work. The dialog
+		// closes, so the result of the work becomes visible. A later
+		// quit asks again when a Settings draft remains.
 		m.quitConfirm = false
 
 		if m.quitAfter {
@@ -218,6 +264,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.broadcast(msg)
 
 		return m, cmd
+
+	case exitDeadlineMsg:
+		// The stopped work did not end in time. The console exits now;
+		// Run spends the rest of the same budget on the wait.
+		if msg.seq == m.exitSeq && m.quitAfter {
+			m.quitting = true
+
+			return m, tea.Quit
+		}
+
+		return m, nil
 
 	case tickMsg:
 		m.st.tick++
@@ -269,10 +326,21 @@ func (m *model) tickCmd() tea.Cmd {
 	return after(120*time.Millisecond, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
-// goTo switches the destination and forwards the intent.
+// goTo switches the destination and forwards the intent. A screen with
+// a leave guard can keep the user on it; the help closes either way, so
+// the question of the guard is visible.
 func (m *model) goTo(dest destination, intent string) tea.Cmd {
-	m.active = dest
 	m.help = false
+
+	if dest != m.active {
+		if g, ok := m.screens[m.active].(leaveGuard); ok {
+			if cmd, ok := g.leave(dest, intent); !ok {
+				return cmd
+			}
+		}
+	}
+
+	m.active = dest
 
 	return m.screens[dest].open(intent)
 }
@@ -325,6 +393,8 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.goTo(destLessons, "")
 	case key.Matches(msg, gkeys.Doctor):
 		return m.goTo(destDoctor, "")
+	case key.Matches(msg, gkeys.Settings):
+		return m.goTo(destSettings, "")
 	case key.Matches(msg, gkeys.Refresh):
 		return tea.Batch(m.st.load(allSections...), m.startTick(),
 			toast(ToneNeutral, "Reading the current state from disk. Nothing is rebuilt or fetched."))
@@ -334,9 +404,12 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 // requestQuit quits at once when idle. While a mutation runs it asks
-// first, because the running work cannot stop safely.
+// first: most work cannot stop safely, and stoppable work needs a stop
+// before the exit. An unsaved Settings draft also asks first, because
+// the quit discards it. The running work takes precedence: its question
+// then also names the draft.
 func (m *model) requestQuit() tea.Cmd {
-	if m.st.busy() {
+	if m.st.busy() || m.settingsDrafts() != "" {
 		m.quitConfirm = true
 
 		return nil
@@ -349,10 +422,16 @@ func (m *model) requestQuit() tea.Cmd {
 
 // quitDialogKey answers the quit question. A yes with no running work
 // quits at once: a latched quitAfter would otherwise exit the console
-// after a later, unrelated mutation and hide its result.
+// after a later, unrelated mutation and hide its result. A yes during
+// stoppable work also stops it and starts the bounded exit wait.
+//
+// A second ctrl+c also means yes, because users press it again to
+// insist on the exit. The footer names it, so the advertised quit key
+// acts. q does nothing here: a shortcut must not act through a
+// confirmation, and a repeated q must not stop costly work.
 func (m *model) quitDialogKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
-	case key.Matches(msg, nkeys.Enter), msg.String() == "y":
+	case key.Matches(msg, nkeys.Enter, gkeys.Interrupt), msg.String() == "y":
 		m.quitConfirm = false
 
 		if !m.st.busy() {
@@ -363,13 +442,45 @@ func (m *model) quitDialogKey(msg tea.KeyMsg) tea.Cmd {
 
 		m.quitAfter = true
 
+		if m.st.requestStop() {
+			note := toast(ToneAttention, "Stopping the running work. Seamark exits when it ends.")
+
+			// A repeated yes keeps the first deadline, so the exit wait
+			// never grows past exitWait.
+			if !m.exitBy.IsZero() {
+				return note
+			}
+
+			m.exitSeq++
+			m.exitBy = time.Now().Add(exitWait)
+			seq := m.exitSeq
+
+			return tea.Batch(note, after(exitWait, func(time.Time) tea.Msg { return exitDeadlineMsg{seq: seq} }))
+		}
+
 		return toast(ToneAttention, "Seamark exits when "+m.st.mutation+" finishes.")
 	case key.Matches(msg, nkeys.Back), msg.String() == "n":
+		// A requested stop stays in effect, because the work cannot
+		// continue safely after a cancel. esc cancels only the exit.
 		m.quitConfirm = false
 		m.quitAfter = false
+		m.exitBy = time.Time{}
+		m.exitSeq++
 	}
 
 	return nil
+}
+
+// settingsDrafts names the unsaved drafts of the Settings groups, for
+// example "Inference has 1 unsaved change: agent.cli.", or returns ""
+// when no group holds a draft.
+func (m *model) settingsDrafts() string {
+	s, ok := m.screens[destSettings].(*settingsScreen)
+	if !ok || s.draftTotal() == 0 {
+		return ""
+	}
+
+	return s.leaveText()
 }
 
 // cramped reports a known terminal size below the supported minimum.
@@ -484,7 +595,10 @@ func (m *model) frame(w, h int) string {
 		body = fit(scr.view(w, bodyH), w, bodyH)
 	}
 
-	top := strings.Join([]string{m.header(w), m.tabs(w), m.tabRule(w), m.notice(w), body}, "\n")
+	// The tab row and the tab rule share one abbreviation choice, or the
+	// heavy rule would no longer sit under the active label.
+	short := m.tabShort(w)
+	top := strings.Join([]string{m.header(w), m.tabs(w, short), m.tabRule(w, short), m.notice(w), body}, "\n")
 
 	if block, ok := m.modalBlock(w, h-1); ok {
 		top = m.st.theme.overlay(top, block, w, h-1)
@@ -601,10 +715,15 @@ func ageSince(unix int64) string {
 }
 
 // tabSegment returns the tab label of destination i without styles, and
-// its styled form. The two have the same width.
-func (m *model) tabSegment(i int) (plain, styled string) {
+// its styled form. The two have the same width. short selects the short
+// label of a screen that has one.
+func (m *model) tabSegment(i int, short bool) (plain, styled string) {
 	t := m.st.theme
 	name := m.screens[i].title()
+
+	if st, ok := m.screens[i].(shortTitler); ok && short {
+		name = st.shortTitle()
+	}
 
 	// The first-run guide disables the tabs, so they show no count, as
 	// in the 1a design.
@@ -641,12 +760,53 @@ func (m *model) tabSegment(i int) (plain, styled string) {
 	return plain, styled + " "
 }
 
-// tabs renders "  1 Overview 5   2 Integrations   3 Lessons 6   4 Doctor".
-func (m *model) tabs(w int) string {
+// tabShort returns the tabs that show their short label at width w. It
+// abbreviates in tabShortOrder until the row fits, and it keeps every
+// full label when the row fits already. tabs clips a row that still
+// does not fit.
+func (m *model) tabShort(w int) [destCount]bool {
+	var (
+		short      [destCount]bool
+		full, abbr [destCount]int
+	)
+
+	// Each segment takes one leading space, as tabs writes it.
+	total := 0
+
+	for i := range m.screens {
+		plain, _ := m.tabSegment(i, false)
+		full[i] = 1 + width(plain)
+		abbr[i] = full[i]
+
+		if _, ok := m.screens[i].(shortTitler); ok {
+			plain, _ = m.tabSegment(i, true)
+			abbr[i] = 1 + width(plain)
+		}
+
+		total += full[i]
+	}
+
+	for _, d := range tabShortOrder {
+		if total <= w {
+			break
+		}
+
+		if abbr[d] < full[d] {
+			short[d] = true
+			total += abbr[d] - full[d]
+		}
+	}
+
+	return short
+}
+
+// tabs renders the tab row with the labels that short selects, for
+// example "  1 Overview 5   2 Integ   3 Lessons 6".
+func (m *model) tabs(w int, short [destCount]bool) string {
 	var b strings.Builder
 
 	for i := range m.screens {
-		_, styled := m.tabSegment(i)
+		_, styled := m.tabSegment(i, short[i])
 		b.WriteString(" " + styled)
 	}
 
@@ -654,8 +814,9 @@ func (m *model) tabs(w int) string {
 }
 
 // tabRule underlines the active tab with the heavy rule glyph, so the
-// active destination is visible without color.
-func (m *model) tabRule(w int) string {
+// active destination is visible without color. It takes the same short
+// labels as tabs, so the segment widths match.
+func (m *model) tabRule(w int, short [destCount]bool) string {
 	t := m.st.theme
 	g := t.Glyphs
 
@@ -664,7 +825,7 @@ func (m *model) tabRule(w int) string {
 	used := 0
 
 	for i := range m.screens {
-		plain, _ := m.tabSegment(i)
+		plain, _ := m.tabSegment(i, short[i])
 		segW := width(plain)
 
 		b.WriteString(t.Rule.Render(g.RuleLight))
@@ -685,17 +846,25 @@ func (m *model) tabRule(w int) string {
 	return truncate(b.String(), w, "")
 }
 
-// notice renders the row under the tabs: the latest message, else the
-// running work, else a screen banner such as the stale index, else a
-// blank spacer line.
+// notice renders the row under the tabs. It shows the first item that
+// applies, in this order:
+//   - a stoppable run;
+//   - the latest message;
+//   - the running work;
+//   - a screen banner, for example the stale index;
+//   - a blank spacer line.
 func (m *model) notice(w int) string {
 	t := m.st.theme
+
+	if m.st.run != nil {
+		return m.runNotice(m.st.run, w)
+	}
 
 	var line string
 
 	switch {
 	case m.toast.text != "":
-		line = " " + t.ToneStyle(m.toast.tone).Render(t.ToneGlyph(m.toast.tone)) + " " + t.Body.Render(oneLine(m.toast.text))
+		line = m.toastLine()
 	case m.st.busy():
 		line = " " + t.Accent.Render(t.spinnerFrame(m.st.tick)) + " " + t.Body.Render(m.st.mutation)
 	case m.st.loading():
@@ -711,11 +880,21 @@ func (m *model) notice(w int) string {
 	return fit(truncate(line, w, t.Glyphs.Ellipsis), w, 1)
 }
 
+// toastLine renders the current message with its tone glyph.
+func (m *model) toastLine() string {
+	t := m.st.theme
+
+	return " " + t.ToneStyle(m.toast.tone).Render(t.ToneGlyph(m.toast.tone)) + " " + t.Body.Render(oneLine(m.toast.text))
+}
+
 // latestSnapshot returns the newest load time over all sources.
 func (m *model) latestSnapshot() time.Time {
 	var at time.Time
 
-	for _, t := range []time.Time{m.st.doctor.at, m.st.index.at, m.st.integrations.at, m.st.ledger.at, m.st.stats.at} {
+	for _, t := range []time.Time{
+		m.st.doctor.at, m.st.index.at, m.st.integrations.at, m.st.ledger.at, m.st.stats.at,
+		m.st.learning.at, m.st.settings.at,
+	} {
 		if t.After(at) {
 			at = t
 		}
@@ -733,7 +912,7 @@ func (m *model) footer(w int) string {
 
 	switch {
 	case m.quitConfirm:
-		local = []key.Binding{withHelp(nkeys.Enter, "enter", "exit after completion"), withHelp(nkeys.Back, "esc", "keep working")}
+		_, _, local = m.quitCopy(false)
 	case m.help:
 		local = []key.Binding{withHelp(nkeys.Back, "esc", "close")}
 
@@ -747,9 +926,20 @@ func (m *model) footer(w int) string {
 	}
 
 	// An overlay or a capturing screen receives the global keys itself,
-	// so their hints would be wrong there. The quit key stays visible.
-	global := []key.Binding{gkeys.Quit}
-	if !m.help && !m.quitConfirm && m.welcome == nil && !m.screens[m.active].capturing() {
+	// so their hints would be wrong there. A way to quit stays visible.
+	// A capturing screen takes q as text or ignores it. So its footer
+	// names ctrl+c, which always reaches the shell. The quit question
+	// also ignores q and takes ctrl+c as its yes, see quitDialogKey.
+	var global []key.Binding
+
+	switch {
+	case m.quitConfirm:
+		global = []key.Binding{gkeys.Interrupt}
+	case m.help || m.welcome != nil:
+		global = []key.Binding{gkeys.Quit}
+	case m.screens[m.active].capturing():
+		global = []key.Binding{gkeys.Interrupt}
+	default:
 		global = []key.Binding{gkeys.Refresh, gkeys.Help, gkeys.Quit}
 	}
 
@@ -824,10 +1014,14 @@ func (m *model) tooSmall(w, h int) string {
 
 	switch {
 	case m.quitConfirm:
-		msg = t.Title.Render(wrap("Exit after the running operation?", textW)) + "\n\n" +
-			t.Body.Render(wrap(m.st.mutation+" is running and cannot stop safely. "+
-				"Completed changes remain either way.", textW)) + "\n\n" +
-			keyRows([2]string{"enter", "exit after completion"}, [2]string{"esc", "keep working"})
+		title, body, acts := m.quitCopy(true)
+
+		rows := make([][2]string, 0, len(acts))
+		for _, a := range acts {
+			rows = append(rows, [2]string{a.Help().Key, a.Help().Desc})
+		}
+
+		msg = t.Title.Render(wrap(title, textW)) + "\n\n" + t.Body.Render(wrap(body, textW)) + "\n\n" + keyRows(rows...)
 	case m.help:
 		msg = t.Title.Render("Keys at this size") + "\n\n" +
 			keyRows([2]string{"q", "quit"}, [2]string{"ctrl+c", "quit"}, [2]string{"?", "close help"}) + "\n\n" +
@@ -845,21 +1039,19 @@ func (m *model) tooSmall(w, h int) string {
 	return fit(lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, msg), w, h)
 }
 
+// quitView renders the quit question as a modal of at most 64 cells.
 func (m *model) quitView(w, h int) string {
 	t := m.st.theme
 	bw := min(w-4, 64)
 	inner := boxInner(bw)
+	title, body, acts := m.quitCopy(false)
 
-	lines := strings.Split(t.Body.Render(wrap(m.st.mutation+" is running. It cannot stop safely at this point, "+
-		"so Seamark can exit when it finishes. Already completed changes remain either way.", inner)), "\n")
-
-	lines = append(lines, "", t.hints([]key.Binding{
-		withHelp(nkeys.Enter, "enter", "exit after completion"), withHelp(nkeys.Back, "esc", "keep working"),
-	}))
+	lines := strings.Split(t.Body.Render(wrap(body, inner)), "\n")
+	lines = append(lines, "", t.hints(acts))
 
 	return t.box(boxOpts{
 		W: bw, H: min(h, len(lines)+2), Focus: true, Fill: true, Lines: lines,
-		Title: t.Title.Render("Exit after the running operation?"),
+		Title: t.Title.Render(title),
 	})
 }
 
@@ -927,7 +1119,7 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 		bindings []key.Binding
 	}{
 		{"GLOBAL", []key.Binding{
-			withHelp(gkeys.Overview, "1–4", "jump to tab"), withHelp(nkeys.Next, "tab", "switch pane"),
+			withHelp(gkeys.Overview, "1–5", "jump to tab"), withHelp(nkeys.Next, "tab", "switch pane"),
 			gkeys.Refresh, withHelp(gkeys.Help, "?", "this help"), gkeys.Quit,
 		}},
 		{"MOVE", []key.Binding{
@@ -983,11 +1175,15 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 	rows = append(rows, "", t.Heading.Render("PLAIN COMMANDS"))
 
 	for _, c := range []string{"seamark doctor", "seamark status", "seamark index",
-		"seamark init --client <claude|codex>", "seamark lessons --proposals", "seamark lessons --stats"} {
+		"seamark index --fixes-only", "seamark index --reviews", "seamark init --client <claude|codex>",
+		"seamark lessons --proposals", "seamark lessons --stats", "seamark lessons --distill --dry-run"} {
 		rows = append(rows, t.command(c))
 	}
 
-	rows = append(rows, "", t.Rule.Render(strings.Repeat(t.Glyphs.RuleLight, inner)))
+	// The settings live in one file. The help names it, because an
+	// editor is the route for every key that Settings does not show.
+	rows = append(rows, t.command(settingsFile)+"  "+t.Faint.Render("settings file"),
+		"", t.Rule.Render(strings.Repeat(t.Glyphs.RuleLight, inner)))
 	rows = append(rows, strings.Split(t.Faint.Render(wrap("Every key that writes a file asks first. "+
 		"Nothing changes before you confirm with y.", inner)), "\n")...)
 

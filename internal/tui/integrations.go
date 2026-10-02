@@ -72,6 +72,9 @@ func newIntegrations(st *state) *integrations {
 
 func (s *integrations) title() string { return "Integrations" }
 
+// shortTitle is the tab label on a narrow terminal.
+func (s *integrations) shortTitle() string { return "Integ" }
+
 // capturing is true only while the setup wizard applies a plan, because
 // that write cannot stop safely. On the other steps the global keys act,
 // and the screen keeps the wizard, so a switch loses no choice.
@@ -193,9 +196,11 @@ func (s *integrations) update(msg tea.Msg) tea.Cmd {
 
 // applied frees the mutation slot and reloads the sources the setup
 // changed. It loads through the state directly, not through refresh,
-// so the result can wait for this exact inspection generation.
+// so the result can wait for this exact inspection generation. A setup
+// can create the starter config.yaml, so the settings and the evidence
+// view reload too.
 func (s *integrations) applied(msg setupAppliedMsg) tea.Cmd {
-	load := s.st.load(secIntegrations, secDoctor)
+	load := s.st.load(secIntegrations, secDoctor, secSettings, secLearning)
 	gen := s.st.gens[secIntegrations]
 
 	if s.wizard != nil {

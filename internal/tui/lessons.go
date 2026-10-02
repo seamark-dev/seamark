@@ -9,28 +9,35 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/seamark-dev/seamark/internal/distill"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
 )
 
-// lesSub is the visible sub-view of the Lessons destination.
+// lesSub is the visible sub-view of the Lessons destination. A new
+// sub-view goes last, so the zero value keeps Proposals as the landing
+// view.
 type lesSub int
 
 const (
 	lesProposals lesSub = iota
 	lesStats
+	lesEvidence
+	lesRun
 )
 
 // lesKeys are the Lessons bindings. The package values stay enabled,
 // because key.Matches ignores a disabled binding; keys() returns
 // copies that carry the current availability for the footer.
 var lesKeys = struct {
-	Proposals, Stats                   key.Binding
+	Proposals, Stats, Evidence, Run    key.Binding
 	Clear, State, Region, Open         key.Binding
 	Apply, Dismiss, Reconcile, Confirm key.Binding
 }{
 	Proposals: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "proposals")),
 	Stats:     key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "stats")),
+	Evidence:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "evidence")),
+	Run:       key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "run")),
 	Clear:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "clear selection")),
 	State:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "state filter")),
 	Region:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "region filter")),
@@ -41,17 +48,42 @@ var lesKeys = struct {
 	Confirm:   key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "confirm")),
 }
 
-// lessons is the Lessons destination. It holds two sub-views: the
-// proposal decisions and the delivery statistics.
+// lesPane is one sub-view of Lessons. A sub-view with an overlay also
+// implements modalScreen.
+type lesPane interface {
+	update(msg tea.Msg) tea.Cmd
+	view(w, h int) string
+	keys() []key.Binding
+	capturing() bool
+}
+
+// lessons is the Lessons destination. It holds four sub-views: the
+// proposal decisions, the delivery statistics, the evidence sources,
+// and the runs of this session.
 type lessons struct {
 	st    *state
 	sub   lesSub
 	props *propView
 	stats *statsView
+	evid  *evidenceView
+	runv  *runView
+
+	// active reports that Lessons is the destination on screen. The
+	// shell calls open when Lessons opens and leave when another
+	// destination opens.
+	active bool
 }
 
 func newLessons(st *state) *lessons {
-	return &lessons{st: st, props: newPropView(st), stats: newStatsView(st)}
+	s := &lessons{
+		st: st, props: newPropView(st), stats: newStatsView(st),
+		evid: newEvidenceView(st), runv: newRunView(st),
+	}
+
+	// The cursor note of a refresh concerns the visible list only.
+	s.props.visible = func() bool { return s.active && s.sub == lesProposals }
+
+	return s
 }
 
 func (s *lessons) title() string { return "Lessons" }
@@ -67,10 +99,36 @@ func (s *lessons) tabCount() string {
 	return itoa(n)
 }
 
+// pane returns the visible sub-view.
+func (s *lessons) pane() lesPane {
+	switch s.sub {
+	case lesStats:
+		return s.stats
+	case lesEvidence:
+		return s.evid
+	case lesRun:
+		return s.runv
+	default:
+		return s.props
+	}
+}
+
+// runShown reports whether Lessons offers the Run sub-view and its key u.
+// That is true after the first stoppable run of the session, or while
+// the Run sub-view holds its own work, for example a distillation
+// draft. Before that, the sub-view would have nothing to show.
+func (s *lessons) runShown() bool {
+	return s.st.lastRunKind != runNone || s.runv.present()
+}
+
 // open selects the sub-view that an intent names. The "proposals"
 // intent also shows pending proposals, because Overview links here
-// from its pending count. Unknown intents keep the current view.
+// from its pending count. "distill" opens the scope step of a new
+// distillation, "run" the run detail, and "proposals:run" the
+// proposals of the last run. Unknown intents keep the current view.
 func (s *lessons) open(intent string) tea.Cmd {
+	s.active = true
+
 	switch intent {
 	case "proposals":
 		s.sub = lesProposals
@@ -78,86 +136,150 @@ func (s *lessons) open(intent string) tea.Cmd {
 		return s.props.showPending()
 	case "stats":
 		s.sub = lesStats
+	case "evidence":
+		s.sub = lesEvidence
+	case "distill":
+		// A new draft shows the Proposals region filter as a labelled
+		// prefill, never as a hidden run scope.
+		s.runv.region = s.props.region
+		cmd := s.runv.prepare()
+		if s.runShown() {
+			s.sub = lesRun
+		}
+
+		return cmd
+	case "run":
+		if s.runShown() {
+			s.sub = lesRun
+			s.runv.showCurrent()
+		}
+	case "proposals:run":
+		s.sub = lesProposals
+		ids, label, at := s.runv.generated()
+
+		return s.props.showRun(ids, label, at)
 	}
 
 	return nil
 }
 
-// update routes a message. Every non-key message reaches both
-// sub-views, so background results land even in the hidden one. Key
-// messages reach the visible sub-view only.
+// leave implements leaveGuard. Lessons never keeps the user; it only
+// records that it is no longer on screen, so a refresh does not report
+// a cursor change in a list that nobody sees.
+func (s *lessons) leave(destination, string) (tea.Cmd, bool) {
+	s.active = false
+
+	return nil, true
+}
+
+// showsIntent reports whether the visible sub-view is the one that
+// intent opens. The shell asks it, because the notice row leaves out
+// the hint to the run home on that sub-view.
+func (s *lessons) showsIntent(intent string) bool {
+	switch intent {
+	case "proposals":
+		return s.sub == lesProposals
+	case "proposals:run":
+		return s.sub == lesProposals && s.props.run != nil
+	case "stats":
+		return s.sub == lesStats
+	case "evidence":
+		return s.sub == lesEvidence
+	case "run", "distill":
+		return s.sub == lesRun
+	}
+
+	return false
+}
+
+// update routes a message. Every non-key message reaches every
+// sub-view, so background results land even in a hidden one. Key
+// messages reach the visible sub-view only, after the sub-view switch
+// keys, which act while the visible sub-view does not capture.
 func (s *lessons) update(msg tea.Msg) tea.Cmd {
 	km, isKey := msg.(tea.KeyMsg)
 	if !isKey {
-		return tea.Batch(s.props.update(msg), s.stats.update(msg))
+		return tea.Batch(s.props.update(msg), s.stats.update(msg), s.evid.update(msg), s.runv.update(msg))
 	}
 
-	if s.sub == lesStats {
-		if !s.stats.capturing() && key.Matches(km, lesKeys.Proposals) {
+	pane := s.pane()
+
+	if !pane.capturing() {
+		switch {
+		case key.Matches(km, lesKeys.Proposals):
 			s.sub = lesProposals
 
 			return nil
+		case key.Matches(km, lesKeys.Stats):
+			s.sub = lesStats
+
+			return nil
+		case key.Matches(km, lesKeys.Evidence):
+			s.sub = lesEvidence
+
+			return nil
+		case key.Matches(km, lesKeys.Run) && s.runShown():
+			// u keeps the record on view, so a look at the proposals of
+			// an earlier run returns to that run.
+			s.sub = lesRun
+
+			return nil
 		}
-
-		return s.stats.update(msg)
 	}
 
-	if !s.props.capturing() && key.Matches(km, lesKeys.Stats) {
-		s.sub = lesStats
-
-		return nil
-	}
-
-	return s.props.update(msg)
+	return pane.update(msg)
 }
 
 // view renders the sub-view line and the visible sub-view under it.
 func (s *lessons) view(w, h int) string {
-	head := s.subTabs(w)
-
-	if s.sub == lesStats {
-		return head + "\n" + s.stats.view(w, h-1)
-	}
-
-	return head + "\n" + s.props.view(w, h-1)
+	return s.subTabs(w) + "\n" + s.pane().view(w, h-1)
 }
 
-// modal returns the open decision of the Proposals sub-view. The shell
-// dims the frame under it, so the preview reads as a separate layer.
+// modal returns the open overlay of the visible sub-view. The shell
+// dims the frame under it, so a preview reads as a separate layer.
 func (s *lessons) modal(w, h int) (string, bool) {
-	if s.sub != lesProposals {
-		return "", false
+	if ms, ok := s.pane().(modalScreen); ok {
+		return ms.modal(w, h)
 	}
 
-	return s.props.modal(w, h)
+	return "", false
 }
 
-// keys returns the visible sub-view's keys and the switch key. The
-// switch key is hidden while the sub-view captures input. On Stats the
-// switch key comes first, as in the 1a footer.
+// keys returns the visible sub-view's keys and every switch key that
+// works there. The help lists these keys, and "? help" must lead to
+// every key. The switch keys are hidden while the sub-view captures
+// input. On Stats the Proposals key comes first, as in the 1a footer.
+// The other switch keys go last, because a narrow footer drops hints
+// from the end, so the compact footers keep their 1a hints. Evidence and
+// Run name their own first switch keys, because their footers differ by
+// state.
 func (s *lessons) keys() []key.Binding {
-	if s.sub == lesStats {
-		if s.stats.capturing() {
-			return s.stats.keys()
-		}
-
-		return append([]key.Binding{lesKeys.Proposals}, s.stats.keys()...)
+	if s.pane().capturing() {
+		return s.pane().keys()
 	}
 
-	ks := s.props.keys()
-	if !s.props.capturing() {
-		ks = append(ks, lesKeys.Stats)
+	// u works only while Lessons offers the Run sub-view.
+	var run []key.Binding
+	if s.runShown() {
+		run = []key.Binding{lesKeys.Run}
 	}
 
-	return ks
+	switch s.sub {
+	case lesStats:
+		ks := append([]key.Binding{lesKeys.Proposals}, s.stats.keys()...)
+
+		return append(append(ks, lesKeys.Evidence), run...)
+	case lesEvidence:
+		return append(s.evid.keys(), run...)
+	case lesRun:
+		return s.runv.keys()
+	}
+
+	return append(append(s.props.keys(), lesKeys.Stats, lesKeys.Evidence), run...)
 }
 
 func (s *lessons) capturing() bool {
-	if s.sub == lesStats {
-		return s.stats.capturing()
-	}
-
-	return s.props.capturing()
+	return s.pane().capturing()
 }
 
 // propState is the proposal state filter.
@@ -301,6 +423,13 @@ type propView struct {
 	// last apply preview or a partial apply reported. The footer offers
 	// c only for them, because c records existing pins only.
 	pinned map[int64]bool
+	// run holds the proposals of one run of this session for the run
+	// filter; nil without a run filter.
+	run *propRunFilter
+	// visible reports that the list is on screen. A refresh reports a
+	// lost cursor row only then, because the note names the list that
+	// the user sees. nil means always visible.
+	visible func() bool
 
 	dec *propDecision
 	seq int
@@ -358,7 +487,7 @@ func (p *propView) rows() []domain.Proposal {
 	var out []domain.Proposal
 
 	for _, pr := range p.stateRows() {
-		if proposals.MatchesRegion(pr, p.region) {
+		if proposals.MatchesRegion(pr, p.region) && p.inRun(pr.ID) {
 			out = append(out, pr)
 		}
 	}
@@ -394,8 +523,12 @@ func (p *propView) current(rows []domain.Proposal) (domain.Proposal, bool) {
 }
 
 // syncCursorID records the proposal under the cursor, so a refresh can
-// find the same proposal again by identity.
+// find the same proposal again by identity. An empty list records no
+// proposal. Else a refresh would report the last lost row again and
+// again, because it never comes back.
 func (p *propView) syncCursorID(rows []domain.Proposal) {
+	p.cursorID = 0
+
 	if cur, ok := p.current(rows); ok {
 		p.cursorID = cur.ID
 	}
@@ -456,12 +589,14 @@ func (p *propView) targets() (ids []int64, implicit bool) {
 
 // showPending switches to the pending state filter, for the Overview
 // link. A switch is a filter change, so it clears the selection too.
+// The link means every pending proposal, so it also ends a run filter.
 func (p *propView) showPending() tea.Cmd {
-	if p.filter == propPending || p.dec != nil || p.editing {
+	if (p.filter == propPending && p.run == nil) || p.dec != nil || p.editing {
 		return nil
 	}
 
 	p.filter = propPending
+	p.run = nil
 
 	return p.filterChanged()
 }
@@ -487,6 +622,16 @@ func (p *propView) update(msg tea.Msg) tea.Cmd {
 		return p.previewed(msg)
 	case propCommitMsg:
 		return p.committedMsg(msg)
+	case settingsSavedMsg:
+		return p.settingsSaved(msg)
+	case distEventMsg:
+		// The cleanup of a run removes the stale pending proposals that
+		// the plan named, and the user confirmed the plan.
+		if msg.ev.Kind == distill.EventCleanupDone {
+			p.markActed(msg.rec.cleanupIDs())
+		}
+	case distCleanedMsg:
+		p.markActed(msg.rec.cleanupIDs())
 	}
 
 	return nil
@@ -512,6 +657,11 @@ func (p *propView) browseKey(msg tea.KeyMsg) tea.Cmd {
 			p.focusDetail = true
 		}
 	case key.Matches(msg, nkeys.Back):
+		// esc first leaves the detail, then ends a run filter.
+		if !p.focusDetail && p.run != nil {
+			return p.clearRun()
+		}
+
 		p.focusDetail = false
 	case key.Matches(msg, nkeys.Toggle):
 		p.toggle(rows)
@@ -522,14 +672,18 @@ func (p *propView) browseKey(msg tea.KeyMsg) tea.Cmd {
 			return toast(ToneNeutral, "Selection cleared.")
 		}
 	case key.Matches(msg, lesKeys.State):
+		// Every other filter ends the run filter, so the list never
+		// mixes a run with another narrowing unseen.
+		p.run = nil
 		p.filter = (p.filter + 1) % propStateCount
 
 		return p.filterChanged()
 	case key.Matches(msg, lesKeys.Region):
+		cmd := p.clearRun()
 		p.editing = true
 		p.input.set(p.region)
 
-		return nil
+		return cmd
 	case key.Matches(msg, lesKeys.Apply):
 		return p.startDecision(proposals.ActionApply)
 	case key.Matches(msg, lesKeys.Dismiss):
@@ -707,10 +861,34 @@ const propInputLimit = 256
 // propInput is a minimal single-line text input for the region filter.
 // bubbles/textinput needs a clipboard module that the build does not
 // carry, and a path filter needs only typing, deletion and cursor
-// movement.
+// movement. The optional fields let other forms reuse it; their zero
+// values keep the region filter behaviour.
 type propInput struct {
 	runes []rune
 	pos   int
+
+	// placeholder is the faint hint of an empty input. "" keeps the
+	// region filter hint.
+	placeholder string
+	// limit bounds the value in runes. 0 keeps propInputLimit.
+	limit int
+	// accept filters typed runes, for example digits only for a day
+	// count. nil accepts every rune that the sanitizer keeps.
+	accept func(rune) bool
+}
+
+// maxRunes returns the length bound of the value.
+func (in *propInput) maxRunes() int {
+	if in.limit > 0 {
+		return in.limit
+	}
+
+	return propInputLimit
+}
+
+// accepts reports whether the accept filter lets r into the value.
+func (in *propInput) accepts(r rune) bool {
+	return in.accept == nil || in.accept(r)
 }
 
 // set replaces the value and puts the cursor at its end.
@@ -726,12 +904,13 @@ func (in *propInput) value() string {
 
 // key applies one key press. The sanitizer rejects control and
 // direction characters, so the filter bar cannot print an escape
-// sequence or reorder text.
+// sequence or reorder text. The length bound and the accept filter
+// drop further runes.
 func (in *propInput) key(msg tea.KeyMsg) {
 	switch msg.Type {
 	case tea.KeyRunes, tea.KeySpace:
 		for _, r := range msg.Runes {
-			if s := string(r); oneLine(s) != s || len(in.runes) >= propInputLimit {
+			if s := string(r); oneLine(s) != s || len(in.runes) >= in.maxRunes() || !in.accepts(r) {
 				continue
 			}
 
@@ -768,7 +947,12 @@ func (in *propInput) key(msg tea.KeyMsg) {
 // path, but an underscore is common there.
 func (in *propInput) view(t *Theme) string {
 	if len(in.runes) == 0 {
-		return t.Accent.Render("_") + t.Faint.Render(" path, for example internal/api")
+		hint := in.placeholder
+		if hint == "" {
+			hint = "path, for example internal/api"
+		}
+
+		return t.Accent.Render("_") + t.Faint.Render(" "+oneLine(hint))
 	}
 
 	before := t.Body.Render(string(in.runes[:in.pos]))
@@ -814,7 +998,7 @@ func (p *propView) reconcile() tea.Cmd {
 		}
 	}
 
-	var left, outside []int64
+	var left, outside, outsideRun []int64
 
 	for _, id := range p.selectedIDs() {
 		pr, ok := pending[id]
@@ -829,6 +1013,9 @@ func (p *propView) reconcile() tea.Cmd {
 		case !proposals.MatchesRegion(pr, p.region):
 			delete(p.selected, id)
 			outside = append(outside, id)
+		case !p.inRun(id):
+			delete(p.selected, id)
+			outsideRun = append(outsideRun, id)
 		}
 	}
 
@@ -842,13 +1029,18 @@ func (p *propView) reconcile() tea.Cmd {
 		notes = append(notes, propIDList(outside)+" left the selection: outside the region filter")
 	}
 
+	if len(outsideRun) > 0 {
+		notes = append(notes, propIDList(outsideRun)+" left the selection: outside the run filter")
+	}
+
 	rows := p.rows()
 	gone := p.cursorID
 
 	if gone == 0 {
-		// The first snapshot: nothing was under the cursor yet.
+		// Nothing was under the cursor yet: the first snapshot, or an
+		// empty list.
 		p.syncCursorID(rows)
-	} else if found := p.relocate(rows, true); !found && !p.acted[gone] {
+	} else if found := p.relocate(rows, true); !found && !p.acted[gone] && p.shown() {
 		note := propID(gone) + " left this list"
 		if cur, ok := p.current(rows); ok {
 			note += "; the cursor moved to " + propID(cur.ID)
@@ -864,6 +1056,22 @@ func (p *propView) reconcile() tea.Cmd {
 	}
 
 	return toast(ToneAttention, strings.Join(notes, "; "))
+}
+
+// shown reports that the list is on screen.
+func (p *propView) shown() bool {
+	return p.visible == nil || p.visible()
+}
+
+// markActed records IDs that the console itself removes or moves. The
+// next refresh does not report them as lost, because the user confirmed
+// the change.
+func (p *propView) markActed(ids []int64) {
+	for _, id := range ids {
+		delete(p.selected, id)
+		delete(p.pinned, id)
+		p.acted[id] = true
+	}
 }
 
 // propIDList renders IDs in the ledger's pN form.
@@ -1091,11 +1299,7 @@ func (p *propView) committedMsg(msg propCommitMsg) tea.Cmd {
 	// Decided proposals leave the selection now, so the refresh does
 	// not report them as lost. Not moved IDs stay selected for the
 	// ledger-only reconciliation.
-	for _, id := range msg.res.Moved {
-		delete(p.selected, id)
-		delete(p.pinned, id)
-		p.acted[id] = true
-	}
+	p.markActed(msg.res.Moved)
 
 	// After a pin write without a file error, the not moved proposals
 	// have their pins. Only a ledger-only record completes them.
@@ -1197,7 +1401,12 @@ func (p *propView) keys() []key.Binding {
 	open := withHelp(lesKeys.Open, "o", openLabel)
 	open.SetEnabled(hasLink)
 
-	return []key.Binding{sel, apply, dismiss, p.paneKey(hasRow), withHelp(lesKeys.State, "f", "state"),
+	// esc ends a run filter once the detail pane has given back the
+	// focus, so the footer names it only then.
+	allRuns := withHelp(nkeys.Back, "esc", "all proposals")
+	allRuns.SetEnabled(p.run != nil && !p.focusDetail)
+
+	return []key.Binding{sel, apply, dismiss, p.paneKey(hasRow), allRuns, withHelp(lesKeys.State, "f", "state"),
 		withHelp(lesKeys.Region, "/", "region"), open, clearSel, reconcile}
 }
 

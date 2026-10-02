@@ -29,10 +29,16 @@ The same information and actions are available as plain commands:
   seamark status                      semantic health of the index
   seamark index                       build or refresh the local index
   seamark init --client <claude|codex>  set up an integration (--print previews)
+  seamark index --fixes-only          collect evidence from local fix commits
+  seamark index --reviews             also fetch GitHub reviews through gh
+  seamark lessons --distill --dry-run  plan a distillation (drop --dry-run to run it)
   seamark lessons --proposals         review pending proposals
   seamark lessons --apply <ids>       apply proposals (needs distill.write)
   seamark lessons --dismiss <ids>     dismiss proposals
   seamark lessons --stats             lesson delivery statistics
+
+Settings live in .seamark/config.yaml: agent.cli, distill.write,
+reviews.window_days, index.generated, and index.exclude.
 `
 
 func newTUICmd(opts *options) *cobra.Command {
@@ -42,10 +48,12 @@ func newTUICmd(opts *options) *cobra.Command {
 		Use:   "tui",
 		Short: "Open the interactive workspace console (experimental)",
 		Long: `Open an interactive console for one workspace: diagnostics, index
-state, Claude and Codex integrations, proposal decisions, and lesson
-delivery statistics. Opening and browsing never write; every change goes
-through a preview that you confirm. Experimental: the plain commands stay
-the stable interface.`,
+state, Claude and Codex integrations, the learning workflow (evidence from
+local fixes and GitHub reviews, distillation with a reviewed plan, and
+proposal decisions), lesson delivery statistics, and the settings that
+these workflows read. Opening and browsing never write; every change,
+fetch, and agent run goes through a preview that you confirm.
+Experimental: the plain commands stay the stable interface.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// An invalid workspace fails here, before full-screen mode,

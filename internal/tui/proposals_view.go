@@ -29,8 +29,11 @@ const (
 	propSummaryN = 3  // the most lines of one finding summary
 )
 
-// subTabs renders " Proposals   Stats   p / s" with the write gate at
-// the right. The active sub-view is in the accent color and bold.
+// subTabs renders " Proposals   Stats   Evidence   Run   p / s / e / u"
+// with the write gate at the right. The active sub-view is in the
+// accent color and bold. Run and u show only while runShown. A narrow
+// line drops the key hint before the gate, because the gate decides
+// what apply does.
 func (s *lessons) subTabs(w int) string {
 	t := s.st.theme
 
@@ -42,15 +45,28 @@ func (s *lessons) subTabs(w int) string {
 		return t.Muted.Render(label)
 	}
 
-	left := " " + tab("Proposals", s.sub == lesProposals) + "   " + tab("Stats", s.sub == lesStats)
+	left := " " + tab("Proposals", s.sub == lesProposals) + "   " + tab("Stats", s.sub == lesStats) +
+		"   " + tab("Evidence", s.sub == lesEvidence)
+	hint := "p / s / e"
 
-	if !s.capturing() {
-		left += "   " + t.Faint.Render("p / s")
+	if s.runShown() {
+		left += "   " + tab("Run", s.sub == lesRun)
+		hint += " / u"
 	}
 
 	right := s.props.gateLabel()
+
+	// The hint and the gate label are both faint, so the hint keeps the
+	// same three-cell gap before the gate as after the tabs. Else they
+	// read as one phrase, for example "p / s / e distill.write off".
+	gap := 0
 	if right != "" {
 		right += " "
+		gap = 3
+	}
+
+	if !s.capturing() && width(left)+3+width(hint)+gap+width(right) <= w {
+		left += "   " + t.Faint.Render(hint)
 	}
 
 	if width(left)+width(right) > w {
@@ -147,6 +163,12 @@ func (p *propView) filterBar(w int) []string {
 	}
 
 	rest := t.Faint.Render("region") + " " + region
+
+	// The run filter shows as its own chip, so a list limited to one run
+	// never looks like the whole pending list.
+	if p.run != nil {
+		rest += "     " + p.runChip()
+	}
 
 	if n := len(p.selected); n > 0 && p.filter == propPending {
 		rest += "     " + t.Marked.Render(itoa(n)+" selected")
@@ -934,6 +956,10 @@ func (p *propView) emptyBox(w, h int) string {
 	var m propMessage
 
 	switch {
+	case p.run != nil:
+		// The run filter comes first: its proposals may be decided or
+		// still loading, and "no proposals yet" would be false.
+		m = p.runMessage(l)
 	case total == 0:
 		agent := "the configured agent"
 		if a := p.distillAgent(); a != "" {

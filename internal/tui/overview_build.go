@@ -30,17 +30,6 @@ var ovPhases = []ovPhase{
 	{id: "write", label: "Write the index"},
 }
 
-// ovPhaseState is the progress of one phase.
-type ovPhaseState int
-
-const (
-	ovPhasePending ovPhaseState = iota
-	ovPhaseActive
-	ovPhaseDone
-	ovPhaseSkipped
-	ovPhaseFailed
-)
-
 // ovEventBuffer bounds the queue between the build and the event loop.
 // The event loop drains it continuously; the bound keeps a stalled
 // view from holding an unbounded backlog.
@@ -64,7 +53,7 @@ type ovBuild struct {
 	finished time.Time
 	running  bool
 
-	phases     [5]ovPhaseState
+	phases     [5]phaseState
 	seen       [5]bool
 	files      int
 	parseDone  int
@@ -103,7 +92,7 @@ func ovPhaseIndex(id string) int {
 // newOvBuild starts the progress record with the prepare step active.
 func newOvBuild(id int, force bool, now time.Time) *ovBuild {
 	b := &ovBuild{id: id, force: force, started: now, running: true, ch: make(chan tea.Msg, ovEventBuffer)}
-	b.phases[0], b.seen[0] = ovPhaseActive, true
+	b.phases[0], b.seen[0] = phaseActive, true
 
 	return b
 }
@@ -131,14 +120,14 @@ func (b *ovBuild) apply(ev IndexEvent) {
 	for i := 0; i < idx; i++ {
 		switch {
 		case b.seen[i]:
-			b.phases[i] = ovPhaseDone
+			b.phases[i] = phaseDone
 		default:
-			b.phases[i] = ovPhaseSkipped
+			b.phases[i] = phaseSkipped
 		}
 	}
 
 	b.seen[idx] = true
-	b.phases[idx] = ovPhaseActive
+	b.phases[idx] = phaseActive
 
 	switch ev.Phase {
 	case "scan":
@@ -148,7 +137,7 @@ func (b *ovBuild) apply(ev IndexEvent) {
 	}
 
 	if ev.Total > 0 && ev.Done >= ev.Total {
-		b.phases[idx] = ovPhaseDone
+		b.phases[idx] = phaseDone
 	}
 }
 
@@ -160,13 +149,13 @@ func (b *ovBuild) finish(sum *index.Summary, err error, now time.Time) {
 
 	for i := range b.phases {
 		switch {
-		case err != nil && b.phases[i] == ovPhaseActive:
-			b.phases[i] = ovPhaseFailed
+		case err != nil && b.phases[i] == phaseActive:
+			b.phases[i] = phaseFailed
 		case err != nil:
 		case b.seen[i]:
-			b.phases[i] = ovPhaseDone
+			b.phases[i] = phaseDone
 		default:
-			b.phases[i] = ovPhaseSkipped
+			b.phases[i] = phaseSkipped
 		}
 	}
 }
@@ -311,7 +300,9 @@ func (o *overview) onBuildDone(msg ovBuildDoneMsg) tea.Cmd {
 		note = toast(ToneFailure, "Index build failed: "+errText(msg.err))
 	}
 
-	return tea.Batch(mutationDone, refresh(secIndex, secDoctor, secLedger, secStats), note)
+	// The evidence view shows the index state and reads its counts
+	// from the index, so it reloads too.
+	return tea.Batch(mutationDone, refresh(secIndex, secDoctor, secLedger, secStats, secLearning), note)
 }
 
 // ovModalW is the widest build modal. It keeps the lines of the modal
@@ -481,55 +472,23 @@ func (o *overview) progressBody(w int) []string {
 // parse phases have real counts; the others show a state, never a
 // percentage.
 func (o *overview) phaseList(w int) []string {
-	t := o.st.theme
 	b := o.build
-
-	labelW := 0
-	for _, p := range ovPhases {
-		labelW = max(labelW, width(p.label))
-	}
-
-	lines := make([]string, 0, len(ovPhases))
+	rows := make([]phaseRow, len(ovPhases))
 
 	for i, p := range ovPhases {
-		var glyph, note string
-
-		style := t.Body
-
-		switch b.phases[i] {
-		case ovPhaseActive:
-			glyph = t.Accent.Render(t.spinnerFrame(o.st.tick))
-		case ovPhaseDone:
-			glyph = t.Success.Render(t.Glyphs.OK)
-		case ovPhaseSkipped:
-			glyph, style, note = t.Faint.Render(t.Glyphs.Info), t.Faint, "skipped"
-		case ovPhaseFailed:
-			glyph, note = t.Failure.Render(t.Glyphs.Fail), "failed"
-		default:
-			glyph, style = t.Faint.Render(t.Glyphs.Info), t.Muted
-		}
+		note := ""
 
 		switch {
 		case p.id == "scan" && b.seen[i]:
-			note = joinNote(note, ovPlural(b.files, "file", "files"))
+			note = ovPlural(b.files, "file", "files")
 		case p.id == "parse" && b.parseTotal > 0:
-			note = joinNote(note, ovNum(b.parseDone)+" / "+ovNum(b.parseTotal))
+			note = ovNum(b.parseDone) + " / " + ovNum(b.parseTotal)
 		}
 
-		lines = append(lines, truncate(glyph+" "+style.Render(padRight(p.label, labelW))+"  "+t.Muted.Render(note),
-			w, t.Glyphs.Ellipsis))
+		rows[i] = phaseRow{label: p.label, note: note, state: b.phases[i]}
 	}
 
-	return lines
-}
-
-// joinNote joins two phase notes.
-func joinNote(a, b string) string {
-	if a == "" {
-		return b
-	}
-
-	return a + ", " + b
+	return o.st.theme.phaseRows(rows, o.st.tick, w)
 }
 
 // logLines renders the recent warnings of the engine log under their
@@ -543,11 +502,8 @@ func (o *overview) logLines(w int) []string {
 	}
 
 	lines := []string{"", t.Heading.Render("RECENT WARNINGS")}
-	for _, l := range b.logs {
-		lines = append(lines, t.Muted.Render(truncate(diag(l), w, t.Glyphs.Ellipsis)))
-	}
 
-	return lines
+	return append(lines, t.activityLines(b.logs, ovLogKeep, w)...)
 }
 
 // resultBody renders a finished build from the fields of its summary. A

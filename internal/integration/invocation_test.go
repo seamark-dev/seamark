@@ -129,3 +129,14 @@ func TestResolveInvocationNamesWhatWouldResolve(t *testing.T) {
 	assert.Equal(t, root, spec.Dir)
 	assert.Equal(t, filepath.Clean(root), spec.Dir)
 }
+
+func TestDefaultInvocationIDIsWhatAnAbsentKeyResolvesTo(t *testing.T) {
+	// The settings editor shows this constant as the default preset, so
+	// it must equal what an empty agent.cli really resolves to.
+	reg := Builtin()
+
+	spec, err := reg.ResolveInvocation(&agent.Config{}, t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, DefaultInvocationID, spec.Name)
+	assert.Contains(t, reg.InvocationIDs(), DefaultInvocationID)
+}

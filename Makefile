@@ -65,19 +65,35 @@ agents-native-check: build ## Offline checks against the installed $(CLIENT) CLI
 agents-native-smoke: build ## One bounded distillation through the installed $(CLIENT) CLI (costs tokens; needs your own login)
 	scripts/agent-integration-smoke.sh smoke $(CLIENT) $(BINARY)
 
-# The console tests run offline against fixtures and a scripted service
-# fake. They cover the shell, the three destinations, the terminal
-# lifecycle through tui.Run, the shared services the console and the CLI
-# both call, and the CLI entry point.
-TUI_TEST_PKGS := ./internal/tui/... ./internal/workspace/... ./internal/scaffold/... ./internal/proposals/... ./internal/lessonstats/...
+# The console tests run offline against fixtures, a scripted service
+# fake, a fake gh, and a fake agent. They cover the shell, the five
+# destinations, the terminal lifecycle through tui.Run, the shared
+# services that the console and the CLI both call, and the CLI entry
+# point. No test contacts GitHub or runs a paid model. The shared
+# services are setup (integration), proposals, statistics (lessonstats),
+# settings, evidence refresh (learning, index, reviews, store), and
+# distillation (learning, distill, agent). The index tests take about
+# 25 s. They stay, because index holds the refresh engine and its stop
+# guarantees, and a regression there must fail this target.
+TUI_TEST_PKGS := ./internal/tui/... ./internal/workspace/... ./internal/scaffold/... ./internal/proposals/... ./internal/lessonstats/... \
+	./internal/settings/... ./internal/learning/... ./internal/distill/... ./internal/reviews/... \
+	./internal/index/... ./internal/store/... ./internal/agent/... ./internal/integration/...
 
-tui-test: ## Run the workspace console tests (shell, screens, shared decision services, CLI parity)
+# TUI_CLI_PARITY selects the CLI tests that pin the output of the
+# commands behind the console: the console entry point, lessons (with
+# the distillation golden tests), init, and the evidence refresh of
+# `seamark index --fixes-only` and `--reviews`.
+TUI_CLI_PARITY := Test(TUI|Lessons|RunInit|InitClient|IndexFixesOnly|IndexReviews)
+
+tui-test: ## Run the workspace console tests (shell, screens, shared services, CLI parity)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(TUI_TEST_PKGS)
-	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./internal/cli -run 'Test(TUI|Lessons|RunInit|InitClient)'
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./internal/cli -run '$(TUI_CLI_PARITY)'
 
 # Captures are plain-text renders of representative console states at
-# several terminal sizes, for the visual review (they stay local).
-TUI_CAPTURE_DIR ?= rfc/validation/tui-mvp/captures
+# several terminal sizes, for the visual review (they stay local). The
+# default directory holds the Phase 2 set; the MVP set stays in
+# rfc/validation/tui-mvp/captures.
+TUI_CAPTURE_DIR ?= rfc/validation/tui-phase-2/captures
 
 tui-capture: ## Render representative console states into $(TUI_CAPTURE_DIR) for visual review
 	mkdir -p "$(TUI_CAPTURE_DIR)"

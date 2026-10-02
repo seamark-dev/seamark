@@ -122,16 +122,19 @@ func (o *overview) attention() []ovItem {
 	index := o.indexItems()
 	integ := o.integrationItems()
 	props := o.proposalItems()
+	learn := o.learningItems()
 
 	covered := map[string]bool{}
 
-	for _, it := range append(append([]ovItem(nil), index...), integ...) {
-		if it.group == ovActionable && it.area != "" {
-			covered[it.area] = true
+	for _, group := range [][]ovItem{index, integ, learn} {
+		for _, it := range group {
+			if it.group == ovActionable && it.area != "" {
+				covered[it.area] = true
+			}
 		}
 	}
 
-	items := make([]ovItem, 0, len(index)+len(integ)+len(props)+16)
+	items := make([]ovItem, 0, len(index)+len(integ)+len(props)+len(learn)+16)
 
 	// The summary item exists only where the cards collapse into one
 	// line, so every card fact stays reachable there. It waits for every
@@ -145,6 +148,7 @@ func (o *overview) attention() []ovItem {
 	items = append(items, o.doctorAttention(covered)...)
 	items = append(items, integ...)
 	items = append(items, props...)
+	items = append(items, learn...)
 
 	// A stable sort keeps the source order inside one group and puts
 	// broken states before other actionable items.
@@ -930,7 +934,7 @@ func (o *overview) doctorAttention(covered map[string]bool) []ovItem {
 			key:   "doctor:" + itoa(i) + ":" + c.Name,
 			group: ovActionable, tone: tone, badge: c.State,
 			title: c.Name + ": " + c.Detail, head: "Doctor check: " + c.Name, source: "seamark doctor",
-			body: []string{c.Detail}, fix: c.Fix, act: o.doctorAction(c),
+			body: []string{c.Detail}, fix: c.Fix, act: checkAction(o.st, c),
 		})
 	}
 
@@ -953,35 +957,6 @@ func ovDoctorTone(state string) Tone {
 	default:
 		return ToneUnknown
 	}
-}
-
-// doctorAction maps a doctor check name to a known workflow. The name
-// is a stable identifier; the detail text is never read.
-func (o *overview) doctorAction(c doctor.Check) ovAction {
-	if c.State == doctor.StateOK {
-		return ovAction{}
-	}
-
-	switch c.Name {
-	case "index":
-		if o.st.index.loaded && o.st.index.value.Probe.State == workspace.IndexNewer {
-			return ovAction{}
-		}
-
-		return ovBuildAction
-	case "hooks", "mcp", "approvals":
-		return ovNav(destIntegrations, "setup", "open setup")
-	case "skills":
-		return ovNav(destIntegrations, "", "open Integrations")
-	}
-
-	for _, insp := range o.st.integrations.value {
-		if insp.ClientID == c.Name {
-			return ovNav(destIntegrations, "client:"+c.Name, "inspect "+ovClientName(insp))
-		}
-	}
-
-	return ovAction{}
 }
 
 // ovPlural renders a count with the singular or plural phrase.

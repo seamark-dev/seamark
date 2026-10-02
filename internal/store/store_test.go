@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -539,6 +541,39 @@ func TestDistilledSignatureMemory(t *testing.T) {
 	assert.Equal(t, map[string]bool{"abc123": true, "def456": true}, sigs)
 }
 
+func TestDistilledCountIncludesGroupsWithoutProposals(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+
+	s, err := Open(path)
+	require.NoError(t, err)
+
+	n, err := s.DistilledCount()
+	require.NoError(t, err)
+	assert.Zero(t, n)
+
+	require.NoError(t, s.MarkDistilled("abc123", "v2/pkg", 100))
+	require.NoError(t, s.MarkDistilled("abc123", "v2/pkg", 200), "a new mark updates the one record")
+
+	// A group whose run saved no proposal still gets its record, so the
+	// count tells that a distillation ran while the ledger stays empty.
+	_, err = s.SaveDistilledGroup("def456", "", 300, nil)
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+
+	ro, err := OpenReadOnly(path)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = ro.Close() })
+
+	n, err = ro.DistilledCount()
+	require.NoError(t, err)
+	assert.Equal(t, 2, n, "a read-only open counts the records")
+
+	proposals, err := ro.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	assert.Empty(t, proposals, "no proposal backs the records")
+}
+
 func TestProposalLifecycle(t *testing.T) {
 	s := openTestStore(t)
 
@@ -605,6 +640,42 @@ func TestReplaceFixFindingsTouchesOnlyFixSources(t *testing.T) {
 	assert.Equal(t, map[int64]string{
 		1: model.SourceReview, 6: "ci:failure", 9: model.SourceFixConventional,
 	}, left, "every fix-mined source is swapped; other providers' findings survive")
+}
+
+func TestReplaceFixFindingsStampsInTheSameTransaction(t *testing.T) {
+	s := openTestStore(t)
+
+	before := time.Now().Unix()
+
+	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
+		{ID: 1, Path: "a.go", Body: "fix", Source: model.SourceFixConventional},
+	}))
+
+	stamp, err := s.GetMeta(MetaFixesMinedAt)
+	require.NoError(t, err)
+
+	at, err := strconv.ParseInt(stamp, 10, 64)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, at, before, "a successful swap stamps the mine time")
+
+	// A failed swap rolls back the rows and the stamp together: two rows
+	// with one primary key make the insert fail inside the transaction.
+	require.NoError(t, s.SetMeta(MetaFixesMinedAt, "1000"))
+
+	err = s.ReplaceFixFindings([]model.Finding{
+		{ID: 2, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
+		{ID: 2, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
+	})
+	require.Error(t, err)
+
+	stamp, err = s.GetMeta(MetaFixesMinedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "1000", stamp, "a rolled-back swap keeps the old stamp")
+
+	got, err := s.AllFindings()
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, int64(1), got[0].ID, "a rolled-back swap keeps the old rows")
 }
 
 func TestSaveDistilledGroupIsAtomic(t *testing.T) {

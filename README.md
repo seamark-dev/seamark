@@ -146,9 +146,11 @@ Your configured hooks deliver matching reminders during supported edits.
 [Learning guide: review, tune, dismiss, and update lessons →](docs/lessons.md)
 
 `seamark tui` (experimental) opens a full-screen console for one workspace:
-index state, agent integrations, proposal decisions, delivery statistics,
-and doctor checks. Browsing never writes; every change starts from a
-preview that names its exact effects. [Workspace console →](docs/tui.md)
+index state, agent integrations, evidence refresh, distillation runs that
+you can stop, proposal decisions, delivery statistics, focused settings,
+and doctor checks. Browsing never writes; every change, fetch, and agent
+run starts from a preview that names its exact effects.
+[Workspace console →](docs/tui.md)
 
 ## Agent skills
 

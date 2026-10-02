@@ -80,6 +80,9 @@ func newOverview(st *state) *overview { return &overview{st: st} }
 // title is the destination name in the tab bar.
 func (o *overview) title() string { return "Overview" }
 
+// shortTitle is the tab label on a narrow terminal.
+func (o *overview) shortTitle() string { return "Over" }
+
 // open accepts the build intent, which opens the build confirmation at
 // once. Every other intent opens the Overview normally.
 func (o *overview) open(intent string) tea.Cmd {
@@ -421,7 +424,9 @@ func (o *overview) move(delta int, rows []ovRow, items []ovItem) {
 }
 
 // pendingSources names the attention sources that have not loaded
-// yet. The doctor line states its own loading state.
+// yet. Every source of an attention item is here, because the tab count
+// and the summary item wait for all of them. The doctor line states its
+// own loading state.
 func (o *overview) pendingSources() []string {
 	var names []string
 
@@ -431,6 +436,20 @@ func (o *overview) pendingSources() []string {
 
 	if !o.st.integrations.loaded && o.st.integrations.err == nil {
 		names = append(names, "inspecting the integrations")
+	}
+
+	// The learning items read the ledger, the stored evidence, and the
+	// settings. Each source loads in parallel with the others.
+	if !o.st.ledger.loaded && o.st.ledger.err == nil {
+		names = append(names, "reading the decision ledger")
+	}
+
+	if !o.st.learning.loaded && o.st.learning.err == nil {
+		names = append(names, "reading the evidence store")
+	}
+
+	if !o.st.settings.loaded && o.st.settings.err == nil {
+		names = append(names, "reading the settings")
 	}
 
 	return names

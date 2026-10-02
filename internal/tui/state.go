@@ -1,15 +1,19 @@
 package tui
 
 import (
+	"context"
 	"errors"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -24,11 +28,18 @@ const (
 	secIntegrations
 	secLedger
 	secStats
+	// secLearning is the stored evidence of the Evidence view.
+	secLearning
+	// secSettings is the focused settings of the Settings destination.
+	secSettings
 	secCount
 )
 
-// allSections lists every source for a full view refresh.
-var allSections = []sectionKind{secDoctor, secIndex, secIntegrations, secLedger, secStats}
+// allSections lists every source for a full view refresh. Every loader
+// only reads: none fetches, runs an agent, or writes.
+var allSections = []sectionKind{
+	secDoctor, secIndex, secIntegrations, secLedger, secStats, secLearning, secSettings,
+}
 
 // section is the last snapshot of one source. After a failed reload the
 // previous value stays visible and is marked stale.
@@ -68,6 +79,8 @@ type state struct {
 	integrations section[[]integration.Inspection]
 	ledger       section[*proposals.Ledger]
 	stats        section[lessonstats.Snapshot]
+	learning     section[learning.Snapshot]
+	settings     section[*settings.Snapshot]
 
 	// gens drops out-of-order results: only the newest load of a
 	// source may replace its snapshot.
@@ -75,6 +88,22 @@ type state struct {
 
 	// mutation names the running mutation; "" when idle.
 	mutation string
+	// run describes the running mutation when it can stop; nil for
+	// work that cannot stop safely, and when idle. The notice row and
+	// the quit question read it, because the user can hide the owning
+	// screen.
+	run *runNote
+	// lastRunKind is the kind of the latest stoppable run of this
+	// session; runNone before the first one. The screen that starts a
+	// run sets it, and Lessons offers the Run sub-view from then on.
+	lastRunKind runKind
+
+	// ctx is the root context of the session. Stoppable work derives its
+	// context from it, and Run cancels it at exit.
+	ctx context.Context
+	// work counts the stoppable workers, so Run can wait for them at
+	// exit and no gh or agent child outlives the console.
+	work workerSet
 
 	// tick drives the activity glyph while work runs.
 	tick int
@@ -131,6 +160,18 @@ type refreshMsg struct {
 // Screens send it from their own result handlers.
 type mutationDoneMsg struct{}
 
+// settingsSavedMsg tells every screen that one settings group was saved.
+// The Settings destination broadcasts it after a successful save. A
+// screen then drops each preview that the group binds, because the
+// user reviewed it under the old values. For example, a distillation
+// preview binds the inference group.
+type settingsSavedMsg struct {
+	group settings.Group
+	// at is the end of the save. A snapshot older than at still shows
+	// the old values.
+	at time.Time
+}
+
 // tickMsg advances the activity glyph.
 type tickMsg struct{}
 
@@ -169,10 +210,181 @@ func (s *state) busy() bool {
 	return s.mutation != ""
 }
 
+// runKind names the kind of a stoppable run.
+type runKind int
+
+const (
+	runNone runKind = iota
+	// runEvidence is an evidence refresh from local fixes or reviews.
+	runEvidence
+	// runDistill is a distillation run of the configured agent.
+	runDistill
+)
+
+// runNote is the shared record of a running stoppable operation. The
+// owning screen updates it; the shell renders it in the notice row and
+// asks to stop it before an exit.
+type runNote struct {
+	// verb names the operation, for example "Distilling".
+	verb string
+	// detail is a short fact, for example the region. The notice row
+	// sanitizes it.
+	detail string
+	// done and total count the finished units. total is 0 when the
+	// denominator is unknown; the notice row then shows no count.
+	done, total int
+	// started is the start time for the elapsed time.
+	started time.Time
+	// stop cancels the context of the work.
+	stop context.CancelFunc
+	// stopping is true after a stop request, until the work ends.
+	stopping bool
+	// home opens the run detail, for example Lessons › Run.
+	home navigateMsg
+}
+
+// beginRun claims the single mutation slot for work that can stop, and
+// records the run. It returns false while another mutation runs, like
+// begin. A zero start time becomes the current time.
+func (s *state) beginRun(name string, n runNote) bool {
+	if !s.begin(name) {
+		return false
+	}
+
+	if n.started.IsZero() {
+		n.started = time.Now()
+	}
+
+	s.run = &n
+
+	return true
+}
+
+// updateRun changes the running record, for example after a progress
+// event. It does nothing when no stoppable run exists, so a late event
+// after the end cannot bring the record back.
+func (s *state) updateRun(fn func(*runNote)) {
+	if s.run != nil {
+		fn(s.run)
+	}
+}
+
+// stoppable reports running work that can stop.
+func (s *state) stoppable() bool {
+	return s.run != nil && s.run.stop != nil
+}
+
+// requestStop asks the running work to stop. It cancels the context of
+// the work once and reports false when no stoppable work runs. The run
+// stays in the slot until the work ends, because the work decides when
+// it is safe to end.
+func (s *state) requestStop() bool {
+	if !s.stoppable() {
+		return false
+	}
+
+	if !s.run.stopping {
+		s.run.stopping = true
+		s.run.stop()
+	}
+
+	return true
+}
+
+// runContext returns a context for new stoppable work and its cancel
+// function. It derives from the root context, so an exit also stops
+// the work. A state without a root context, for example in a test,
+// uses the background context.
+func (s *state) runContext() (context.Context, context.CancelFunc) {
+	root := s.ctx
+	if root == nil {
+		root = context.Background()
+	}
+
+	return context.WithCancel(root)
+}
+
+// goWork returns a command that runs fn as registered stoppable work.
+// Run waits for registered work at exit. After that wait began, the
+// command does not run fn and returns nil, because no new external work
+// may start during an exit.
+func (s *state) goWork(fn func() tea.Msg) tea.Cmd {
+	w := &s.work
+
+	return func() tea.Msg {
+		if !w.start() {
+			return nil
+		}
+
+		defer w.done()
+
+		return fn()
+	}
+}
+
+// workerSet counts the running stoppable workers. Its zero value is
+// ready to use.
+type workerSet struct {
+	mu     sync.Mutex
+	wg     sync.WaitGroup
+	closed bool
+}
+
+// start registers one worker. It reports false after wait began. The
+// lock orders every Add before the Wait, as sync.WaitGroup requires.
+func (w *workerSet) start() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.closed {
+		return false
+	}
+
+	w.wg.Add(1)
+
+	return true
+}
+
+// done unregisters one worker.
+func (w *workerSet) done() {
+	w.wg.Done()
+}
+
+// wait refuses new workers and waits at most d for the registered ones.
+// It reports whether all of them ended.
+func (w *workerSet) wait(d time.Duration) bool {
+	w.mu.Lock()
+	w.closed = true
+	w.mu.Unlock()
+
+	ended := make(chan struct{})
+
+	go func() {
+		w.wg.Wait()
+		close(ended)
+	}()
+
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ended:
+		return true
+	case <-timer.C:
+		// Work that ended at the same moment still counts as ended.
+		select {
+		case <-ended:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
 // loading reports any source that is loading.
 func (s *state) loading() bool {
 	return s.doctor.loading || s.index.loading || s.integrations.loading ||
-		s.ledger.loading || s.stats.loading
+		s.ledger.loading || s.stats.loading || s.learning.loading || s.settings.loading
 }
 
 // load starts background loads of the named sources.
@@ -218,6 +430,21 @@ func (s *state) load(kinds ...sectionKind) tea.Cmd {
 
 				return loadedMsg{kind: k, gen: gen, value: v, err: statsReloadErr(v, good), at: time.Now()}
 			})
+		case secLearning:
+			s.learning.loading = true
+			good := s.learning.loaded && s.learning.value.CountsErr == nil
+			cmds = append(cmds, func() tea.Msg {
+				v := svc.Learning()
+
+				return loadedMsg{kind: k, gen: gen, value: v, err: learningReloadErr(v, good), at: time.Now()}
+			})
+		case secSettings:
+			s.settings.loading = true
+			cmds = append(cmds, func() tea.Msg {
+				v, err := svc.Settings()
+
+				return loadedMsg{kind: k, gen: gen, value: v, err: err, at: time.Now()}
+			})
 		}
 	}
 
@@ -255,6 +482,18 @@ func statsReloadErr(v lessonstats.Snapshot, good bool) error {
 	return v.LogErr
 }
 
+// learningReloadErr returns the evidence count read failure of a ready
+// index when good reports an earlier snapshot with readable counts. A
+// new probe state is new information, as for the index, so it always
+// replaces the snapshot.
+func learningReloadErr(v learning.Snapshot, good bool) error {
+	if !good || v.Probe.State != workspace.IndexReady {
+		return nil
+	}
+
+	return v.CountsErr
+}
+
 // store records a load result unless a newer load of the same source
 // started meanwhile.
 func (s *state) store(msg loadedMsg) bool {
@@ -278,6 +517,12 @@ func (s *state) store(msg loadedMsg) bool {
 	case secStats:
 		v, _ := msg.value.(lessonstats.Snapshot)
 		s.stats.set(v, msg.err, msg.at)
+	case secLearning:
+		v, _ := msg.value.(learning.Snapshot)
+		s.learning.set(v, msg.err, msg.at)
+	case secSettings:
+		v, _ := msg.value.(*settings.Snapshot)
+		s.settings.set(v, msg.err, msg.at)
 	}
 
 	return true

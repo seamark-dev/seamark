@@ -752,7 +752,7 @@ func TestStatsInTheLessonsDestination(t *testing.T) {
 
 	frame := h.view()
 	assertFrame(t, frame, 120, 40)
-	assert.Contains(t, frame, " Proposals   Stats   p / s")
+	assert.Contains(t, frame, " Proposals   Stats   Evidence   p / s / e")
 	assert.Contains(t, frame, "╭─ Lessons ")
 	assert.Contains(t, frame, "╭─ Delivery · last 14 days")
 	assert.Contains(t, frame, "p proposals   tab pane   f period")

@@ -93,7 +93,7 @@ func TestFirstRunShowsTheThreeStepsOfTheDesign(t *testing.T) {
 	assert.Len(t, []rune(strings.TrimSpace(top)), 76)
 
 	// The tabs are disabled: no active rule and no tab count.
-	assert.Equal(t, "  1 Overview   2 Integrations   3 Lessons   4 Doctor", strings.TrimRight(lines[1], " "))
+	assert.Equal(t, "  1 Overview   2 Integrations   3 Lessons   4 Doctor   5 Settings", strings.TrimRight(lines[1], " "))
 	assert.NotContains(t, lines[2], "━", "no tab is active while the guide shows")
 
 	footer := shellAFooter(frame)

@@ -17,15 +17,6 @@ import (
 // waits, and the commit results. Every preview states what WILL and
 // what WON'T change, and nothing is written before y.
 
-// Modal geometry: 80 cells at the 120-column design size, wider on a
-// wide terminal so long YAML lines fold less.
-const (
-	lesModalMinW = 80
-	// lesModalMargin keeps one dimmed row above and below the modal, so
-	// the user still sees the screen that opened it.
-	lesModalMargin = 2
-)
-
 // lesModal is the content of one modal: the border labels, the body
 // that scrolls, and the actions that the bottom row names.
 type lesModal struct {
@@ -36,40 +27,18 @@ type lesModal struct {
 }
 
 // modal renders the open decision as a box for the shell to place on
-// the dimmed frame. It records the scroll bounds of the body, because
-// the key handler cannot know the rendered height.
+// the dimmed frame. The body wraps to the modal width, and the modal
+// keeps the scroll position of the decision.
 func (p *propView) modal(w, h int) (string, bool) {
 	d := p.dec
 	if d == nil {
 		return "", false
 	}
 
-	t := p.st.theme
-	mw := min(w-4, max(lesModalMinW, w*2/3))
-	inner := boxInner(mw)
-	m := p.modalContent(d, inner)
+	m := p.modalContent(d, modalBodyWidth(modalMinW, w))
 
-	var tail []string
-	if len(m.actions) > 0 {
-		tail = []string{"", t.Rule.Render(strings.Repeat(t.Glyphs.RuleLight, inner)), t.hints(m.actions)}
-	}
-
-	window := min(len(m.body), max(1, h-lesModalMargin-2-len(tail)))
-	d.scroll.page = window
-	d.scroll.last = max(0, len(m.body)-window)
-	d.scroll.by(0)
-
-	lines := append(append([]string{}, m.body[d.scroll.off:d.scroll.off+window]...), tail...)
-
-	var foot string
-	if d.scroll.scrolls() {
-		foot = propRange(t, d.scroll.off, d.scroll.off+window, len(m.body))
-	}
-
-	return t.box(boxOpts{
-		W: mw, H: len(lines) + 2, Focus: true, Fill: true, Lines: lines,
-		Title: m.title, Right: m.right, Foot: foot,
-	}), true
+	return p.st.theme.modal(modalOpts{Title: m.title, Right: m.right, Body: m.body, Actions: m.actions},
+		&d.scroll, w, h), true
 }
 
 // modalContent builds the modal of the current decision stage.
@@ -219,40 +188,6 @@ func (p *propView) previewRows(pv *proposals.Preview, w int) []string {
 	return lines
 }
 
-// propEffect is one WILL line: its glyph, the glyph tone, and the text.
-type propEffect struct {
-	glyph string
-	tone  Tone
-	text  string
-}
-
-// effectLines renders the WILL and WON'T sections. A WON'T line is as
-// explicit as a WILL line, because a reader must see what stays.
-func (p *propView) effectLines(will []propEffect, wont []string, w int) []string {
-	t := p.st.theme
-
-	var out []string
-
-	if len(will) > 0 {
-		out = append(out, "", t.Heading.Render("WILL"))
-
-		for _, e := range will {
-			out = append(out, propIndent(t.ToneStyle(e.tone).Render(e.glyph)+" ",
-				propLines(t.Body, e.text, w-2))...)
-		}
-	}
-
-	if len(wont) > 0 {
-		out = append(out, "", t.Heading.Render("WON'T"))
-
-		for _, text := range wont {
-			out = append(out, propIndent(t.Faint.Render(t.Glyphs.Sep)+" ", propLines(t.Muted, text, w-2))...)
-		}
-	}
-
-	return out
-}
-
 // applyModal renders the apply preview. With the gate off it is the
 // YAML modal: the block to copy and no write. With existing pins it
 // offers only the ledger-only record.
@@ -288,7 +223,7 @@ func (p *propView) applyModal(d *propDecision, w int) lesModal {
 	switch {
 	case len(pv.AlreadyPinned) > 0:
 		pinned := propIDList(pv.AlreadyPinned)
-		m.body = append(m.body, p.effectLines(nil, []string{
+		m.body = append(m.body, p.st.theme.effectLines(nil, []string{
 			"write " + target + ": pins already exist for " + pinned,
 			"change the ledger until you press c to record " + pinned + " as applied",
 		}, w)...)
@@ -298,7 +233,7 @@ func (p *propView) applyModal(d *propDecision, w int) lesModal {
 			file += " (the file is created)"
 		}
 
-		m.body = append(m.body, p.effectLines([]propEffect{
+		m.body = append(m.body, p.st.theme.effectLines([]effect{
 			{glyph: t.Glyphs.Add, tone: ToneSuccess, text: "add " + propPlural(n, "pin", "pins") + " under pin: in " + file},
 			{glyph: t.Glyphs.Add, tone: ToneSuccess, text: "record " + ids + " as applied in the ledger (pending" +
 				arrow + "applied)"},
@@ -520,9 +455,12 @@ func (p *propView) previewLead(d *propDecision, target string, w int) []string {
 			propLines(t.Body, "Copy this block under pin: in the pin file by hand. Enabling distill.write does "+
 				"not change this. The proposals stay pending. Nothing was changed.", w)...)
 	case !pv.Write:
+		// Every a reads the gate again, so a new preview is enough after
+		// a change; a refresh with r is not needed.
 		return propLines(t.Muted, "distill.write is off in .seamark/config.yaml, so nothing is written. Copy this "+
-			"block under pin: in "+target+" to apply it by hand, or enable distill.write, refresh with r, and "+
-			"apply here. The proposals stay pending. Nothing was changed.", w)
+			"block under pin: in "+target+" to apply it by hand, or turn on distill.write in Settings "+
+			t.Glyphs.Arrow+" Pin writing (5), then press a again for a new preview. The proposals stay pending. "+
+			"Nothing was changed.", w)
 	default:
 		return propLines(t.Body, "Seamark adds the pin block below under pin: in "+target+", then records the "+
 			"proposals as applied. distill.write is on. Nothing changes before you press y.", w)
@@ -586,7 +524,7 @@ func (p *propView) dismissModal(d *propDecision, w int) lesModal {
 	}
 
 	arrow := " " + t.Glyphs.Arrow + " "
-	m.body = append(m.body, p.effectLines([]propEffect{
+	m.body = append(m.body, p.st.theme.effectLines([]effect{
 		{glyph: t.Glyphs.Del, tone: ToneFailure, text: "move " + propIDList(propProposalIDs(pv.Proposals)) +
 			" to dismissed in the ledger (pending" + arrow + "dismissed)"},
 		{glyph: t.Glyphs.Del, tone: ToneFailure, text: "remember the decision for the same evidence"},
@@ -619,7 +557,7 @@ func (p *propView) reconcileModal(d *propDecision, w int) lesModal {
 	}
 
 	arrow := " " + t.Glyphs.Arrow + " "
-	m.body = append(m.body, p.effectLines([]propEffect{
+	m.body = append(m.body, p.st.theme.effectLines([]effect{
 		{glyph: t.Glyphs.Add, tone: ToneSuccess, text: "record " + propIDList(propProposalIDs(pv.Proposals)) +
 			" as applied in the ledger (pending" + arrow + "applied)"},
 	}, []string{"change " + target + ": the pins already exist", "write anything before you press y"}, w)...)

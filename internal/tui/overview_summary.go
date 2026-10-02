@@ -6,6 +6,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/status"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -339,7 +340,71 @@ func (o *overview) learnFacts() [][2]string {
 		rows = append(rows, [2]string{"Lessons", why})
 	}
 
+	if v, ok := o.evidenceFact(); ok {
+		rows = append(rows, [2]string{"Evidence", v})
+	}
+
+	if v, ok := o.pinWriteFact(); ok {
+		rows = append(rows, [2]string{"Pin writing", v})
+	}
+
 	return append(rows, [2]string{"Lessons hook", o.clientListFact(ovLessonsHookClients, "none configured")})
+}
+
+// evidenceFact renders the stored findings by source for the LEARN
+// facts. ok is false while the evidence has not loaded, or without a
+// ready index, because the index facts already explain that. A failed
+// count read is unknown, never zero.
+func (o *overview) evidenceFact() (string, bool) {
+	t := o.st.theme
+	sec := &o.st.learning
+
+	if !sec.loaded || sec.value.Probe.State != workspace.IndexReady {
+		return "", false
+	}
+
+	v := sec.value
+	if v.CountsErr != nil {
+		return t.Unknown.Render("unknown: " + errText(v.CountsErr)), true
+	}
+
+	text := t.Body.Render(ovPlural(v.FixFindings, "fix finding", "fix findings")) + t.Muted.Render(o.dot()) +
+		t.Body.Render(ovPlural(v.ReviewFindings, "review finding", "review findings"))
+
+	if sec.stale() {
+		text += " " + o.staleNote(sec.err)
+	}
+
+	return text, true
+}
+
+// pinWriteFact renders the effective distill.write gate from the
+// settings snapshot. ok is false while the settings have not loaded. An
+// unreadable distill section is unknown, because the gate then does not
+// open.
+func (o *overview) pinWriteFact() (string, bool) {
+	t := o.st.theme
+	sec := &o.st.settings
+
+	if !sec.loaded || sec.value == nil {
+		return "", false
+	}
+
+	snap := sec.value
+
+	if err := snap.ReaderErrs[settings.ReaderDistill]; err != nil {
+		return t.Unknown.Render("unknown: " + errText(err)), true
+	}
+
+	if snap.Distill == nil {
+		return t.Unknown.Render("unknown"), true
+	}
+
+	if snap.Distill.Distill.Write {
+		return t.Body.Render("on") + t.Muted.Render(o.dot()+"apply writes pins after its preview"), true
+	}
+
+	return t.Body.Render("off") + t.Muted.Render(o.dot()+"apply shows the YAML block"), true
 }
 
 // guardFacts lists the policy mode, its rules and its load result, then

@@ -326,10 +326,11 @@ func TestShellAFooterDropsWholeHintsInOverlays(t *testing.T) {
 
 	footer := shellAFooter(h.view())
 	assert.NotContains(t, footer, "? help", "a capturing screen receives ? itself")
-	assert.Contains(t, footer, "q quit", "quit stays visible")
+	assert.NotContains(t, footer, " q quit", "a capturing screen takes q as text or ignores it")
+	assert.Contains(t, footer, "ctrl+c quit", "the interrupt key that always quits stays visible")
 	assert.Contains(t, footer, "…")
 
-	local, _, found := strings.Cut(footer, "q quit")
+	local, _, found := strings.Cut(footer, "ctrl+c quit")
 	require.True(t, found)
 	shellAWholeHints(t, local, bindings)
 }

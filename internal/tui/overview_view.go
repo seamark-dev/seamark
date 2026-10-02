@@ -249,6 +249,8 @@ func ovDestName(d destination) string {
 		return "Lessons"
 	case destDoctor:
 		return "Doctor"
+	case destSettings:
+		return "Settings"
 	default:
 		return "Overview"
 	}

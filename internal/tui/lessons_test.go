@@ -819,7 +819,7 @@ func TestLessonsSubViewsAndIntents(t *testing.T) {
 	h := lesOpen(t, f, 120, 32)
 	les := h.m.screens[destLessons].(*lessons)
 
-	assert.Contains(t, h.view(), "Proposals   Stats   p / s")
+	assert.Contains(t, h.view(), "Proposals   Stats   Evidence   p / s / e")
 
 	h.press("s")
 	assert.Equal(t, lesStats, les.sub)

@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -120,6 +121,80 @@ func (t *Theme) boxBottom(foot string, w int, bc lipgloss.Style) string {
 	fill := max(0, w-3-width(ft))
 
 	return bc.Render(g.CornerBL+strings.Repeat(g.RuleLight, fill)) + ft + bc.Render(g.RuleLight+g.CornerBR)
+}
+
+// Modal geometry: 80 cells at the 120-column design size, wider on a
+// wide terminal so long lines fold less.
+const (
+	modalMinW = 80
+	// modalMargin keeps one dimmed row above and below the modal, so
+	// the user still sees the screen that opened it.
+	modalMargin = 2
+)
+
+// modalOpts is the content of one modal: the border labels, the body
+// that scrolls, and the actions that the bottom row names.
+type modalOpts struct {
+	Title, Right string
+	Body         []string
+	// Actions are the keys under the rule at the bottom. The row stays
+	// visible while the body scrolls.
+	Actions []key.Binding
+	// MinW is the narrowest modal on a wide terminal; 0 selects
+	// modalMinW. A small terminal still gets a narrower modal.
+	MinW int
+}
+
+// modalWidth returns the outer width of a modal in a w-wide area.
+func modalWidth(minW, w int) int {
+	if minW <= 0 {
+		minW = modalMinW
+	}
+
+	return min(w-4, max(minW, w*2/3))
+}
+
+// modalBodyWidth returns the width of the body lines of a modal in a
+// w-wide area. A caller wraps the body to this width, so the box shows
+// each line whole.
+func modalBodyWidth(minW, w int) int {
+	return boxInner(modalWidth(minW, w))
+}
+
+// modal renders the modal of the 1a design. It draws a filled box with
+// an accent border, a body that scrolls in sc, and the actions under a
+// rule. It records the scroll bounds in sc, because a key handler
+// cannot know the rendered height. The shell dims the frame and
+// centers the block.
+func (t *Theme) modal(o modalOpts, sc *scrollState, w, h int) string {
+	if sc == nil {
+		sc = &scrollState{}
+	}
+
+	mw := modalWidth(o.MinW, w)
+	inner := boxInner(mw)
+
+	var tail []string
+	if len(o.Actions) > 0 {
+		tail = []string{"", t.Rule.Render(strings.Repeat(t.Glyphs.RuleLight, inner)), t.hints(o.Actions)}
+	}
+
+	window := min(len(o.Body), max(1, h-modalMargin-2-len(tail)))
+	sc.page = window
+	sc.last = max(0, len(o.Body)-window)
+	sc.by(0)
+
+	lines := append(append([]string{}, o.Body[sc.off:sc.off+window]...), tail...)
+
+	var foot string
+	if sc.scrolls() {
+		foot = propRange(t, sc.off, sc.off+window, len(o.Body))
+	}
+
+	return t.box(boxOpts{
+		W: mw, H: len(lines) + 2, Focus: true, Fill: true, Lines: lines,
+		Title: o.Title, Right: o.Right, Foot: foot,
+	})
 }
 
 // card renders a summary card: a short box whose title is a dim

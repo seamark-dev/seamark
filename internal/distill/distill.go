@@ -40,8 +40,9 @@ const promptVersion = "v6"
 const maxKnownLabels = 40
 
 // perGroupTimeout bounds one agent invocation. A 40-finding batch is
-// worth minutes; a hung CLI is not.
-const perGroupTimeout = 4 * time.Minute
+// worth minutes; a hung CLI is not. It is a variable only so that tests
+// can observe a timeout without waiting minutes.
+var perGroupTimeout = 4 * time.Minute
 
 const (
 	// promptBodyBudget preserves the old worst-case body budget: a
@@ -143,6 +144,10 @@ type Result struct {
 	GroupsFailed  int // agent or parse errors (not marked; retried next run)
 	GroupsPending int // new groups left unread (limit or region filter)
 	PrunedStale   int // pending proposals dropped because their group changed
+	// StalePending lists the IDs of the stale pending proposals that a
+	// real run prunes first. Only a dry run fills it, because it plans
+	// as if they were gone but must not delete them.
+	StalePending []int64
 	// PromptChars/ReplyChars meter the run's agent traffic — the basis
 	// for the ~token estimate shown to the user. Failed groups count
 	// too: their cost was paid.
@@ -160,6 +165,13 @@ type Result struct {
 // validate what comes back, and persist the survivors as proposals. It
 // never touches .seamark/lessons.yaml — applying is a separate, operator
 // decision.
+//
+// Run is the CLI entry. It plans and executes in one call. It shares the
+// planning step of NewPlan and the Execute step of a reviewed run. A
+// legacy adapter turns the typed events into the callback strings that
+// the CLI prints. A real run prunes stale pending proposals during
+// planning, at the point where it always did. A dry run models that
+// prune, so its preflight names the groups that the real run sends.
 func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoker, opts Options) (*Result, error) {
 	start := time.Now()
 
@@ -168,273 +180,112 @@ func Run(ctx context.Context, st *store.Store, grouper Grouper, inv agent.Invoke
 		logf = func(string, ...any) {}
 	}
 
-	findings, err := st.AllFindings()
+	// A dry run must not mutate anything, so it lists the stale rows and
+	// plans without them instead of deleting them.
+	mode := cleanupPrune
+	if opts.DryRun {
+		mode = cleanupModel
+	}
+
+	plan, pruned, err := buildPlan(st, grouper, PlanOptions{
+		Region: opts.Region,
+		Limit:  opts.Limit,
+		Pins:   opts.Pins,
+		Spec:   agent.CommandSpec{Argv: opts.Agent},
+		Root:   opts.Root,
+	}, mode)
 	if err != nil {
 		return nil, err
-	}
-
-	if opts.Region != "" {
-		regional := findings[:0]
-		for _, finding := range findings {
-			if withinRegion(opts.Region, finding.Path) {
-				regional = append(regional, finding)
-			}
-		}
-
-		findings = regional
-	}
-
-	groups := grouper.Group(findings)
-
-	live := make(map[string]bool, len(groups))
-	for _, g := range groups {
-		live[g.Signature] = true
-	}
-
-	// A scoped corpus says nothing about proposals elsewhere. Preserve
-	// their signatures so pruning cannot mistake "outside this run" for
-	// "its evidence disappeared". Proposals inside the scope still face
-	// the current regional group set and are pruned normally when stale.
-	if opts.Region != "" {
-		corpus := make(map[int64]struct{}, len(findings))
-		for _, finding := range findings {
-			corpus[finding.ID] = struct{}{}
-		}
-
-		pending, err := st.Proposals(model.ProposalProposed)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, proposal := range pending {
-			if !proposalMembersInCorpus(proposal, corpus) {
-				live[proposal.Signature] = true
-			}
-		}
-	}
-
-	res := &Result{GroupsTotal: len(groups)}
-
-	// A dry run must not mutate anything — pruning included.
-	if !opts.DryRun {
-		if res.PrunedStale, err = st.PruneStaleProposals(live); err != nil {
-			return nil, err
-		}
-	}
-
-	done, err := st.DistilledSignatures()
-	if err != nil {
-		return nil, err
-	}
-
-	known, cited, err := knownPatterns(st, opts.Pins)
-	if err != nil {
-		return nil, err
-	}
-
-	// Read the least-covered evidence first. Nothing is filtered — a
-	// budgeted run simply spends its calls where no pattern has been
-	// drawn yet, instead of in whatever order the grouper emitted.
-	orderByCoverage(groups, cited)
-
-	// Selection first, execution after: the split is what makes an
-	// honest preflight possible — the disclosure names exactly the
-	// groups the loop below would send.
-	var planned []Group
-
-	for _, g := range groups {
-		switch {
-		case done[g.Signature]:
-			res.GroupsSkipped++
-		case opts.Limit > 0 && len(planned) >= opts.Limit:
-			res.GroupsPending++
-		default:
-			planned = append(planned, g)
-		}
 	}
 
 	if opts.OnPreflight != nil {
-		pf := Preflight{Agent: opts.Agent}
-
-		for _, g := range planned {
-			bodyCap := promptBodyCapFor(len(g.Findings))
-			chars := len(buildPrompt(g, known.Labels(g.Region, maxKnownLabels)))
-			plan := GroupPlan{
-				Signature: g.Signature,
-				Region:    g.Region, Findings: len(g.Findings), PromptChars: chars,
-				BodyCap: bodyCap,
-			}
-
-			for _, finding := range g.Findings {
-				paths, _ := promptFindingEvidence(finding, bodyCap)
-				plan.Evidence = append(plan.Evidence, FindingPlan{
-					ID: finding.ID, Source: sourceLabel(finding.Source),
-					PR: finding.PR, Path: finding.Path, Paths: paths,
-				})
-			}
-
-			pf.Groups = append(pf.Groups, plan)
-			pf.PromptChars += chars
-			pf.Findings += len(g.Findings)
-			pf.BodyCap = max(pf.BodyCap, bodyCap)
-		}
-
-		opts.OnPreflight(pf)
+		opts.OnPreflight(plan.Preflight)
 	}
 
 	if opts.DryRun {
-		res.GroupsPending += len(planned)
-		res.Duration = time.Since(start)
+		stale := make([]int64, 0, len(plan.Cleanup))
+		for _, p := range plan.Cleanup {
+			stale = append(stale, p.ID)
+		}
 
-		return res, nil
+		return &Result{
+			GroupsTotal:   plan.Total,
+			GroupsSkipped: len(plan.Skipped),
+			GroupsPending: len(plan.Deferred) + len(plan.Groups),
+			StalePending:  stale,
+			Duration:      time.Since(start),
+		}, nil
 	}
 
-	for _, g := range planned {
-		desc := fmt.Sprintf("%d findings (%s, %s)", len(g.Findings), regionLabel(g.Region), g.Signature)
+	x, err := Execute(ctx, st, inv, plan, ExecuteOptions{
+		Progress:    legacyProgress(opts, logf),
+		SkipCleanup: true,
+	})
 
-		if opts.OnGroupStart != nil {
-			opts.OnGroupStart(desc)
-		} else {
-			logf("distilling %s", desc)
-		}
+	res := x.Result
+	res.PrunedStale = pruned
 
-		began := time.Now()
+	// The result rides along with a store error: earlier groups were
+	// saved and marked, and the caller must be able to say so instead
+	// of implying the whole run was lost. Duration stays unset then.
+	if err != nil {
+		res.Duration = 0
 
-		proposals, sent, received, err := distillGroup(ctx, inv, g,
-			known.Labels(g.Region, maxKnownLabels))
-		res.PromptChars += sent
-		res.ReplyChars += received
+		return &res, err
+	}
 
-		if err != nil {
-			// Not marked: a transient agent failure must not burn the
-			// group's one chance. The next run retries it.
-			if opts.OnGroupDone != nil {
-				opts.OnGroupDone(fmt.Sprintf("failed: %v (retried next run)", err))
+	res.Duration = time.Since(start)
+
+	return &res, nil
+}
+
+// legacyProgress turns typed events into the Options callbacks and log
+// lines that Run always produced, with the same text and order. The CLI
+// prints them, so they must not change.
+func legacyProgress(opts Options, logf func(string, ...any)) func(Event) {
+	return func(ev Event) {
+		switch ev.Kind {
+		case EventGroupStarted:
+			desc := fmt.Sprintf("%d findings (%s, %s)", ev.Group.Findings, regionLabel(ev.Group.Region), ev.Group.Signature)
+
+			if opts.OnGroupStart != nil {
+				opts.OnGroupStart(desc)
 			} else {
-				logf("warn: group %s: %v", g.Signature, err)
+				logf("distilling %s", desc)
 			}
-
-			res.GroupsFailed++
-
-			continue
+		case EventDuplicate:
+			// Always a log line, even while callbacks drive a spinner.
+			logf("  skipped %s — restates %s", ev.Dup.Rule, ev.Dup.Of)
+		case EventGroupFinished:
+			legacyOutcome(opts, logf, ev.Outcome)
 		}
+	}
+}
 
-		// Drop what is already captured. Groups are read independently,
-		// so a repo-wide mistake surfaces in several of them; without
-		// this the pin file fills with the same lesson under new names.
-		fresh := proposals[:0]
-
-		for _, p := range proposals {
-			if of, dup := known.Restated(p); dup {
-				logf("  skipped %s — restates %s", p.Rule, of)
-				res.Duplicates++
-
-				continue
-			}
-
-			// Known immediately, so two groups in one run cannot both
-			// propose it either.
-			known.Add(p)
-			fresh = append(fresh, p)
-		}
-
-		// The remaining trigger rungs: existence in the working tree,
-		// then direct-evidence or co-change confirmation, which may
-		// replace broad evidence coverage with a precise delivery scope.
-		for i := range fresh {
-			p := &fresh[i]
-
-			// Every v5 proposal carries an explicit trigger answer. The
-			// stamp keeps the backfill from re-purchasing it.
-			p.TriggerChecked = time.Now().Unix()
-			p.TriggerPromptVersion = TriggerPromptVersion
-
-			p.TriggerPaths = validateTriggerPaths(opts.Root, p.TriggerPaths)
-			if len(p.TriggerPaths) == 0 {
-				continue
-			}
-
-			var cited []model.Finding
-
-			for _, id := range p.Members {
-				if f, ok := memberFinding(g, id); ok {
-					cited = append(cited, f)
-				}
-			}
-
-			// The result rides along with a store error: earlier groups
-			// were saved and marked, and the caller must be able to say
-			// so instead of implying the whole run was lost.
-			regions, _, err := RecomputeRegions(st, opts.Root, *p, cited)
-			if err != nil {
-				return res, err
-			}
-
-			p.Regions = regions
-			p.Region = ""
-
-			if len(regions) > 0 {
-				p.Region = regions[0]
-			}
-		}
-
-		// One transaction for the proposals and the signature mark:
-		// partial persistence would either duplicate proposals on the
-		// retry or silently discard what a paid agent call found. The
-		// outcome is announced only after it is real.
-		saved, err := st.SaveDistilledGroup(g.Signature, g.Region, time.Now().Unix(), fresh)
-		if err != nil {
-			return res, err
-		}
-
+// legacyOutcome reports one finished group the legacy way. A store
+// failure reports nothing here: Run returns its error instead.
+func legacyOutcome(opts Options, logf func(string, ...any), o *GroupOutcome) {
+	switch {
+	case o.Status == GroupCompleted:
+		// The outcome is announced only after it is real.
 		outcome := fmt.Sprintf("%s, ~%s tokens sent / ~%s back, %d proposal(s)",
-			time.Since(began).Round(time.Second), estTokens(sent), estTokens(received), len(saved))
+			o.Finished.Sub(o.Started).Round(time.Second), estTokens(o.PromptChars), estTokens(o.ReplyChars),
+			len(o.Proposals))
 
 		if opts.OnGroupDone != nil {
 			opts.OnGroupDone(outcome)
 		} else {
 			logf("  %s", outcome)
 		}
-
-		res.Proposals = append(res.Proposals, saved...)
-		res.GroupsRead++
-	}
-
-	res.Duration = time.Since(start)
-
-	return res, nil
-}
-
-// knownPatterns collects everything already captured: the workspace's
-// pins plus every stored proposal, whatever its status. A dismissed
-// proposal counts — the user said no, and re-proposing it under a new
-// name would relitigate a decision.
-// It also returns the findings those proposals cited — the exact
-// evidence a pattern has already been drawn from, which is what makes
-// coverage ordering deterministic rather than a guess.
-func knownPatterns(st *store.Store, pins []model.Proposal) (*Known, map[int64]bool, error) {
-	known := NewKnown(pins)
-	cited := map[int64]bool{}
-
-	for _, status := range []string{
-		model.ProposalProposed, model.ProposalApplied,
-		model.ProposalDismissed, model.ProposalSuperseded,
-	} {
-		stored, err := st.Proposals(status)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		for _, p := range stored {
-			known.Add(p)
-
-			for _, id := range p.Members {
-				cited[id] = true
-			}
+	case (o.Status == GroupFailed && o.Failure != FailStore) || o.Status == GroupCancelled:
+		// Not marked: a transient agent failure must not burn the
+		// group's one chance. The next run retries it.
+		if opts.OnGroupDone != nil {
+			opts.OnGroupDone(fmt.Sprintf("failed: %v (retried next run)", o.Err))
+		} else {
+			logf("warn: group %s: %v", o.Plan.Signature, o.Err)
 		}
 	}
-
-	return known, cited, nil
 }
 
 // orderByCoverage sorts groups so the least-mined evidence is read
@@ -480,26 +331,6 @@ func memberFinding(g Group, id int64) (model.Finding, bool) {
 	}
 
 	return model.Finding{}, false
-}
-
-// distillGroup sends one group to the agent and validates the reply,
-// reporting the traffic sizes either way — cost is paid on failure too.
-func distillGroup(ctx context.Context, inv agent.Invoker, g Group,
-	knownLabels []string,
-) (proposals []model.Proposal, sent, received int, err error) {
-	ctx, cancel := context.WithTimeout(ctx, perGroupTimeout)
-	defer cancel()
-
-	prompt := buildPrompt(g, knownLabels)
-
-	reply, err := inv.Invoke(ctx, prompt)
-	if err != nil {
-		return nil, len(prompt), len(reply), err
-	}
-
-	proposals, err = parseReply(reply, g, inv.Name())
-
-	return proposals, len(prompt), len(reply), err
 }
 
 // CostNote renders what the run cost: estimated tokens both ways and

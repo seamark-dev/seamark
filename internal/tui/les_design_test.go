@@ -65,7 +65,7 @@ func TestLessonsDesignLayoutAt120Columns(t *testing.T) {
 	// Row 5 holds the sub-tabs and the gate; row 6 the filter line.
 	tabs, _, found := strings.Cut(lines[4], "distill")
 	require.True(t, found, lines[4])
-	assert.Equal(t, " Proposals   Stats   p / s", strings.TrimRight(tabs, " "))
+	assert.Equal(t, " Proposals   Stats   Evidence   p / s / e", strings.TrimRight(tabs, " "))
 	assert.True(t, strings.HasSuffix(strings.TrimRight(lines[4], " "), "distill.write off"))
 	assert.Equal(t, " state [pending 3] applied 1  dismissed 1     region all", strings.TrimRight(lines[5], " "))
 

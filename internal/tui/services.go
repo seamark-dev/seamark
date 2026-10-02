@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,13 +11,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/seamark-dev/seamark/internal/agent"
+	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/scaffold"
+	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/status"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/workspace"
@@ -70,6 +76,35 @@ type Services interface {
 	PreviewDecision(action proposals.Action, ids []int64) (*proposals.Preview, error)
 	// CommitDecision revalidates and applies a reviewed decision.
 	CommitDecision(p *proposals.Preview) (proposals.Result, error)
+
+	// Learning reads the stored evidence, the review target, and the
+	// review window. It runs local git only; it never fetches or writes.
+	Learning() learning.Snapshot
+	// Settings reads the focused settings of the configuration file.
+	// The error reports invalid arguments only; a file problem is data
+	// in the snapshot.
+	Settings() (*settings.Snapshot, error)
+
+	// PlanEvidence previews an evidence refresh in mode. It fetches
+	// nothing and writes nothing.
+	PlanEvidence(mode index.SourceMode) (*learning.Plan, error)
+	// RunEvidence runs exactly the reviewed plan. A stop through ctx
+	// ends the GitHub fetch; progress runs on the worker goroutine.
+	RunEvidence(ctx context.Context, p *learning.Plan, progress func(index.RefreshEvent)) (learning.Outcome, error)
+	// PlanDistill previews a distillation. It never runs the agent and
+	// never writes.
+	PlanDistill(req learning.DistillRequest) (*learning.DistillPreview, error)
+	// RunDistill runs exactly the reviewed preview. A stop through ctx
+	// starts no new group; progress runs on the worker goroutine.
+	RunDistill(ctx context.Context, p *learning.DistillPreview, progress func(distill.Event)) (*distill.Execution, error)
+	// CleanupPending removes the stale pending proposals of a
+	// cleanup-only preview. It runs no agent.
+	CleanupPending(p *learning.DistillPreview) (int, error)
+	// PlanSettings plans a guarded patch of one settings group. It
+	// writes nothing.
+	PlanSettings(snap *settings.Snapshot, edits []settings.Edit) (*settings.Plan, error)
+	// SaveSettings writes exactly the reviewed plan, or reports it stale.
+	SaveSettings(p *settings.Plan) (settings.Result, error)
 }
 
 // IndexView is the index section of the Overview: the probe, and the
@@ -131,16 +166,42 @@ type engine struct {
 	version string
 	binary  string
 	reg     *integration.Registry
+	deps    engineDeps
 
 	// mu serializes mutations. The shell already refuses a second
-	// mutation; this lock keeps the engine safe on its own.
+	// mutation; this lock keeps the engine safe on its own. A mutation
+	// takes it with TryLock, so a second one fails with ErrBusy and
+	// never waits behind a long run.
 	mu sync.Mutex
+}
+
+// engineDeps are the external boundaries of the engine. Tests replace
+// them, so no engine test contacts GitHub or runs a paid agent. A zero
+// field selects the production boundary.
+type engineDeps struct {
+	// fetch reads the GitHub review comments; nil runs gh.
+	fetch reviews.FetchFunc
+	// invoke sends the distillation prompts; nil runs the command of
+	// the reviewed preview.
+	invoke agent.Invoker
+	// now reads the clock; nil reads the system clock.
+	now func() time.Time
 }
 
 // NewServices binds the shared engines to one resolved workspace.
 // binary is the seamark path that hook commands use.
 func NewServices(ws workspace.Workspace, version, binary string) Services {
-	return &engine{ws: ws, version: version, binary: binary, reg: integration.Builtin()}
+	return newEngine(ws, version, binary, engineDeps{})
+}
+
+// newEngine builds the engine with explicit boundaries. NewServices
+// passes the production boundaries; tests pass fakes.
+func newEngine(ws workspace.Workspace, version, binary string, deps engineDeps) *engine {
+	if deps.now == nil {
+		deps.now = time.Now
+	}
+
+	return &engine{ws: ws, version: version, binary: binary, reg: integration.Builtin(), deps: deps}
 }
 
 func (e *engine) Root() string    { return e.ws.Root }
@@ -246,7 +307,7 @@ func (e *engine) Ledger() (*proposals.Ledger, error) {
 	}
 	defer func() { _ = st.Close() }()
 
-	return proposals.Load(st, probe.Root, time.Now())
+	return proposals.Load(st, probe.Root, e.deps.now())
 }
 
 func (e *engine) Stats() lessonstats.Snapshot {
@@ -264,16 +325,26 @@ func (e *engine) Stats() lessonstats.Snapshot {
 // openRead opens the index read-only. The probe keeps the effective
 // root even on failure, so callers can still read root-level files.
 func (e *engine) openRead() (*store.Store, workspace.IndexProbe, error) {
-	probe := workspace.Probe(e.ws)
-	if probe.Root == "" {
-		probe.Root = e.ws.Root
-	}
+	probe := e.probe()
 
 	if !probe.State.Readable() {
 		return nil, probe, fmt.Errorf("%w (%s)", ErrNoLedger, probe.State)
 	}
 
 	return workspace.OpenReadOnly(e.ws)
+}
+
+// probe classifies the index and fills in the effective root. The
+// root is the root that the index records, else the workspace root.
+// The ledger, the learning services and the CLI read the index against
+// this root, so every console view reads the same files.
+func (e *engine) probe() workspace.IndexProbe {
+	probe := workspace.Probe(e.ws)
+	if probe.Root == "" {
+		probe.Root = e.ws.Root
+	}
+
+	return probe
 }
 
 func (e *engine) PlanSetup(setups []integration.ClientSetup) (*SetupPreview, error) {
@@ -289,7 +360,7 @@ func (e *engine) PlanSetup(setups []integration.ClientSetup) (*SetupPreview, err
 		Plan:      plan,
 		Writes:    integration.PreviewWrites(plan),
 		GateMode:  gateMode,
-		PlannedAt: time.Now(),
+		PlannedAt: e.deps.now(),
 	}, nil
 }
 

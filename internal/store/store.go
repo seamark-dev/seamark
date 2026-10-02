@@ -475,7 +475,8 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding)
 }
 
 // ReplaceFixFindings atomically swaps the fix-derived findings — their
-// own lifecycle, independent of the review set.
+// own lifecycle, independent of the review set — and stamps
+// MetaFixesMinedAt in the same transaction.
 func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -501,6 +502,19 @@ func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
 		if err := insertFinding(tx, &findings[i]); err != nil {
 			return err
 		}
+	}
+
+	// Stamp the mine time in the same transaction, as ReplaceLessons
+	// does. A crash between two writes would leave fresh rows with an old
+	// stamp, and the outcome loop trusts the stamp.
+	_, err = tx.Exec(
+		`INSERT INTO meta (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		MetaFixesMinedAt,
+		fmt.Sprint(time.Now().Unix()),
+	)
+	if err != nil {
+		return fmt.Errorf("store: stamp fix mine: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -609,6 +623,19 @@ func (s *Store) DistilledSignatures() (map[string]bool, error) {
 	}
 
 	return out, rows.Err()
+}
+
+// DistilledCount counts the recorded evidence-group signatures. A group
+// gets its record also when its run saves no proposal. So a read-only
+// caller can tell that a distillation ran when the proposal ledger is empty.
+func (s *Store) DistilledCount() (int, error) {
+	var n int
+
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM distilled`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count distilled groups: %w", err)
+	}
+
+	return n, nil
 }
 
 // proposalCols is the column list every proposal query selects, in

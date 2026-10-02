@@ -71,7 +71,9 @@ const frMutation = "Creating the Seamark config"
 
 // frRefreshKinds are the sources that the shared documents change: the
 // policy feeds the doctor checks, the Guard card and the integrations.
-var frRefreshKinds = []sectionKind{secDoctor, secIndex, secIntegrations}
+// The starter config.yaml feeds the settings and the review window of
+// the evidence view.
+var frRefreshKinds = []sectionKind{secDoctor, secIndex, secIntegrations, secSettings, secLearning}
 
 // frKeys are the bindings of the guide.
 var frKeys = struct {

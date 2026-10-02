@@ -8,12 +8,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/seamark-dev/seamark/internal/doctor"
+	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // doctorView is the Doctor destination: one row per check of `seamark
 // doctor` and the detail of the selected check. It reads the shared
 // doctor snapshot only. It shows each fix as text and never runs it,
 // because a fix comes from diagnostics that can quote repository data.
+// A check with a known workflow opens it with enter, through the same
+// mapping as the Overview attention list.
 type doctorView struct {
 	st *state
 
@@ -147,18 +151,19 @@ func (d *doctorView) update(msg tea.Msg) tea.Cmd {
 			d.selectWanted()
 		}
 	case tea.KeyMsg:
-		d.key(msg)
+		return d.key(msg)
 	}
 
 	return nil
 }
 
-// key moves the selection, the focus or the detail scroll. No key of
-// this view calls a service.
-func (d *doctorView) key(msg tea.KeyMsg) {
+// key moves the selection, the focus or the detail scroll, or opens the
+// workflow of the selected check. No key of this view calls a service:
+// a workflow opens in its own destination, which previews any change.
+func (d *doctorView) key(msg tea.KeyMsg) tea.Cmd {
 	n := len(d.checks())
 	if n == 0 {
-		return
+		return nil
 	}
 
 	switch {
@@ -167,11 +172,7 @@ func (d *doctorView) key(msg tea.KeyMsg) {
 			d.focusDetail = !d.focusDetail
 		}
 	case key.Matches(msg, nkeys.Enter):
-		if d.narrow() {
-			d.detailShown = true
-		} else {
-			d.focusDetail = true
-		}
+		return d.enter()
 	case key.Matches(msg, nkeys.Back):
 		d.detailShown = false
 		d.focusDetail = false
@@ -196,6 +197,106 @@ func (d *doctorView) key(msg tea.KeyMsg) {
 	case key.Matches(msg, nkeys.Bottom):
 		d.moveTo(n - 1)
 	}
+
+	return nil
+}
+
+// enter follows the Overview rule. In the narrow list it shows the
+// detail. Otherwise it opens the workflow of the selected check, or
+// focuses the detail when no workflow exists.
+func (d *doctorView) enter() tea.Cmd {
+	if d.narrow() && !d.detailShown {
+		d.detailShown = true
+
+		return nil
+	}
+
+	if act := d.action(); act.kind != ovActNone {
+		return docOpenAction(act)
+	}
+
+	if !d.narrow() {
+		d.focusDetail = true
+	}
+
+	return nil
+}
+
+// selected returns the selected check; ok is false without a check.
+func (d *doctorView) selected() (doctor.Check, bool) {
+	checks := d.checks()
+	if len(checks) == 0 {
+		return doctor.Check{}, false
+	}
+
+	return checks[max(0, min(d.list.cursor, len(checks)-1))], true
+}
+
+// action returns the workflow of the selected check, or no action.
+func (d *doctorView) action() ovAction {
+	c, ok := d.selected()
+	if !ok {
+		return ovAction{}
+	}
+
+	return checkAction(d.st, c)
+}
+
+// docOpenAction opens the workflow of an action. The build confirmation
+// belongs to the Overview, so a build action opens it there; the build
+// still waits for the confirmation.
+func docOpenAction(act ovAction) tea.Cmd {
+	switch act.kind {
+	case ovActNavigate:
+		return navigate(act.dest, act.intent)
+	case ovActBuild:
+		return navigate(destOverview, ovIntentBuild)
+	default:
+		return nil
+	}
+}
+
+// checkAction maps a doctor check to a known in-app workflow. The
+// Overview attention list and the Doctor tab share it, so a check opens
+// the same workflow from both. The check name is a stable identifier;
+// the detail text is never read, because diagnostic wording is not a
+// contract. An ok check needs no workflow.
+func checkAction(st *state, c doctor.Check) ovAction {
+	if c.State == doctor.StateOK {
+		return ovAction{}
+	}
+
+	switch c.Name {
+	case "index":
+		// Seamark never rebuilds a newer database, so the check offers
+		// no build.
+		if st.index.loaded && st.index.value.Probe.State == workspace.IndexNewer {
+			return ovAction{}
+		}
+
+		return ovBuildAction
+	case "hooks", "mcp", "approvals":
+		return ovNav(destIntegrations, "setup", "open setup")
+	case "skills":
+		return ovNav(destIntegrations, "", "open Integrations")
+	case "agent":
+		// The check warns about the agent section of config.yaml, an
+		// unresolved preset, or a missing executable. The inference group
+		// edits all three causes.
+		return ovSettingsLink(settings.GroupInference)
+	case "gh":
+		// gh serves only the review fetch. Evidence shows the gh state and
+		// also offers the local-fix refresh, which needs no gh.
+		return ovEvidenceLink("open Evidence")
+	}
+
+	for _, insp := range st.integrations.value {
+		if insp.ClientID == c.Name {
+			return ovNav(destIntegrations, "client:"+c.Name, "inspect "+ovClientName(insp))
+		}
+	}
+
+	return ovAction{}
 }
 
 // moveTo selects row i and shows its detail from the top.
@@ -217,17 +318,35 @@ func (d *doctorView) keys() []key.Binding {
 		return nil
 	}
 
+	// The enter hint names the workflow only when one exists. Without
+	// one, enter keeps its detail role, so the footer never promises a
+	// workflow that does not exist.
+	act := d.action()
+	open := docKeys.Open
+
+	if act.kind != ovActNone {
+		open = withHelp(nkeys.Enter, "enter", act.label)
+	}
+
 	switch {
 	case d.narrow() && d.detailShown:
 		// esc comes first: at the minimum width the footer has room for
 		// one hint, and esc is the only way back to the list.
+		if act.kind != ovActNone {
+			return []key.Binding{docKeys.Back, open, docKeys.Scroll}
+		}
+
 		return []key.Binding{docKeys.Back, docKeys.Scroll}
 	case d.narrow():
 		return []key.Binding{docKeys.Move, docKeys.Open}
 	case d.focusDetail:
+		if act.kind != ovActNone {
+			return []key.Binding{docKeys.Scroll, open, docKeys.Pane, docKeys.Back}
+		}
+
 		return []key.Binding{docKeys.Scroll, docKeys.Pane, docKeys.Back}
 	default:
-		return []key.Binding{docKeys.Move, docKeys.Open, docKeys.Pane, docKeys.Page}
+		return []key.Binding{docKeys.Move, open, docKeys.Pane, docKeys.Page}
 	}
 }
 
@@ -427,6 +546,13 @@ func (d *doctorView) detailLines(c doctor.Check, inner int) []string {
 		lines = append(lines, strings.Split(t.Body.Render(wrap(detail, inner)), "\n")...)
 	} else {
 		lines = append(lines, t.Faint.Render("The check reports no detail."))
+	}
+
+	// NEXT names the in-app workflow, as in the Overview detail. It
+	// shows only when a workflow exists.
+	if act := checkAction(d.st, c); act.kind != ovActNone {
+		lines = append(lines, "", t.Heading.Render("NEXT"),
+			t.Key.Render("enter")+" "+t.Body.Render(act.label))
 	}
 
 	lines = append(lines, "", t.Heading.Render("FIX"))

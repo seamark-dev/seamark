@@ -6,11 +6,16 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/url"
+	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
+	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -32,8 +37,24 @@ type Options struct {
 // Run starts the full-screen console and blocks until it exits. Bubble
 // Tea restores the terminal on a normal exit, an error and a panic. The
 // lifecycle tests check this through the escape sequences in Out.
+//
+// Run owns the root context of the session. After the program ends, Run
+// cancels that context and waits a bounded time for stoppable work.
+// This applies to a quit, an error and a signal. A cancelled agent run
+// stops its whole process group, and gh runs as one process, so no
+// child outlives the console. A stuck child cannot hold the exit.
+//
+// Bubble Tea ends the program on SIGINT and SIGTERM. Run also turns
+// SIGHUP into a quit, because the agent runs in its own process group:
+// a closed terminal does not reach it, and the Go default for SIGHUP
+// ends seamark without the cleanup. A SIGKILL to seamark still cannot
+// clean up.
 func Run(opts Options) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	m := newModel(opts.Services, newTheme(opts.ASCII))
+	m.st.ctx = ctx
 	m.st.copyText = func(text string) error { return writeClipboard(opts.Out, text) }
 	m.st.openURL = openBrowser
 
@@ -43,7 +64,28 @@ func Run(opts Options) error {
 		tea.WithOutput(opts.Out),
 	)
 
+	// A hangup quits through the program, like SIGTERM. The quit message
+	// skips the quit question, so the console always ends, and the
+	// cleanup below then stops the work.
+	hangup := make(chan os.Signal, 1)
+	signal.Notify(hangup, syscall.SIGHUP)
+	defer signal.Stop(hangup)
+
+	ended := make(chan struct{})
+	defer close(ended)
+
+	go func() {
+		select {
+		case <-hangup:
+			p.Quit()
+		case <-ended:
+		}
+	}()
+
 	_, err := p.Run()
+
+	// The event loop has ended, so reading the model is safe here.
+	m.stopWork(cancel, time.Now())
 
 	return err
 }

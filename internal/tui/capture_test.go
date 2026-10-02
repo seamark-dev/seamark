@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/doctor"
@@ -15,6 +17,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -158,7 +161,34 @@ func captureScenes() []captureScene {
 			h.m.st.begin("Building the index")
 			h.press("q")
 		}},
+		{name: "27-run-notice", fake: ovPopulated, drive: captureRun},
+		{name: "28-run-notice-toast", fake: ovPopulated, drive: func(h *harness) {
+			captureRun(h)
+			h.press("5")
+			h.send(toastMsg{tone: ToneSuccess, text: "Reading the current state from disk."})
+		}},
+		{name: "29-stop-and-exit", fake: ovPopulated, drive: func(h *harness) {
+			captureRun(h)
+			h.press("3", "q")
+		}},
+		{name: "30-run-stopping", fake: ovPopulated, drive: func(h *harness) {
+			captureRun(h)
+			h.press("q", "enter")
+		}},
 	}
+}
+
+// captureRun starts a stoppable distillation record of 10 groups, as
+// the distillation screen does. The run starts a fixed 134 seconds
+// before now, so the captures stay stable.
+func captureRun(h *harness) {
+	_, cancel := h.m.st.runContext()
+
+	h.m.st.beginRun("Distilling proposals", runNote{
+		verb: "Distilling", detail: "internal/api", done: 3, total: 10, stop: cancel,
+		started: time.Now().Add(-134 * time.Second), home: navigateMsg{dest: destLessons, intent: "run"},
+	})
+	h.m.st.lastRunKind = runDistill
 }
 
 // captureFresh is a fresh workspace with two agents on PATH and a plan
@@ -202,14 +232,25 @@ func captureDoctor() *fakeServices {
 // scene at every capture size into SEAMARK_TUI_CAPTURE_DIR, for the
 // maintainer visual review. Without the variable it only checks that
 // every frame fits its terminal. `make tui-capture` sets it.
+//
+// A scene without its own settings gets the snapshot of a workspace
+// with no configuration file. The engine always returns a snapshot or
+// an error, and a fake that returns neither shows a settings error that
+// the product never shows.
 func TestCaptureRepresentativeStates(t *testing.T) {
 	dir := os.Getenv("SEAMARK_TUI_CAPTURE_DIR")
+	snap := captureSettings(t)
 
 	for _, sc := range captureScenes() {
 		for _, size := range captureSizes {
 			w, h := size[0], size[1]
 
-			hs := &harness{t: t, m: newModel(sc.fake(), newTheme(sc.ascii))}
+			f := sc.fake()
+			if f.settings == nil && f.settingsErr == nil {
+				f.settings = snap
+			}
+
+			hs := &harness{t: t, m: newModel(f, newTheme(sc.ascii))}
 			hs.run(hs.m.Init())
 			hs.send(teaSize(w, h))
 
@@ -220,6 +261,10 @@ func TestCaptureRepresentativeStates(t *testing.T) {
 			frame := hs.view()
 			assertFrame(t, frame, w, h)
 
+			// No shell scene shows a settings failure. The Settings
+			// scenes of Phase 2 cover the real failure states.
+			assert.NotContains(t, frame, "Settings are not readable", "scene %s at %dx%d", sc.name, w, h)
+
 			if dir == "" {
 				continue
 			}
@@ -228,6 +273,24 @@ func TestCaptureRepresentativeStates(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(frame+"\n"), 0o644))
 		}
 	}
+}
+
+// captureSettings returns the settings snapshot of a workspace with no
+// configuration file. The workspace is "repo" under a temporary home,
+// so preset commands read "-C ~/repo" and the frames stay stable.
+func captureSettings(t *testing.T) *settings.Snapshot {
+	t.Helper()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	root := filepath.Join(home, "repo")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+
+	snap, err := settings.Inspect(root, integration.Builtin())
+	require.NoError(t, err)
+
+	return snap
 }
 
 // teaSize builds a window size message.

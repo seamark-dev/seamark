@@ -28,16 +28,24 @@ type Config struct {
 // contract as the other section readers: absent file means defaults,
 // malformed file is loud.
 func LoadConfig(root string) (*Config, error) {
-	cfg := &Config{}
-
 	data, err := os.ReadFile(filepath.Join(root, ".seamark", "config.yaml"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return cfg, nil
+			return &Config{}, nil
 		}
 
 		return nil, err
 	}
+
+	return ParseConfig(data)
+}
+
+// ParseConfig decodes the distill section from the bytes of config.yaml.
+// LoadConfig calls it, so both entry points report the same error text.
+// The settings editor calls it to validate planned bytes before a write.
+// Empty input yields the defaults, the same as an absent file.
+func ParseConfig(data []byte) (*Config, error) {
+	cfg := &Config{}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("distill config: %w", err)

@@ -769,11 +769,11 @@ func TestOverviewProgressShowsParseCountAndSkippedPhases(t *testing.T) {
 
 	// A workspace outside git sends no history events.
 	o.update(ovBuildEventMsg{id: 1, ev: IndexEvent{Phase: "write", Done: 0, Total: 0}})
-	assert.Equal(t, ovPhaseSkipped, o.build.phases[ovPhaseIndex("history")])
-	assert.Equal(t, ovPhaseDone, o.build.phases[ovPhaseIndex("parse")], "a later phase closes the earlier one")
+	assert.Equal(t, phaseSkipped, o.build.phases[ovPhaseIndex("history")])
+	assert.Equal(t, phaseDone, o.build.phases[ovPhaseIndex("parse")], "a later phase closes the earlier one")
 
 	o.build.finish(nil, errors.New("boom"), time.Now())
-	assert.Equal(t, ovPhaseFailed, o.build.phases[ovPhaseIndex("write")])
+	assert.Equal(t, phaseFailed, o.build.phases[ovPhaseIndex("write")])
 }
 
 func TestOverviewControlSequencesRenderInert(t *testing.T) {

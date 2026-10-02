@@ -41,6 +41,7 @@ type Glyphs struct {
 	Cursor, Check, Uncheck, Locked, Kept, Bullet, Arrow, Sep, Ellipsis string
 	Dash, OK, Warn, Fail, Info, Unknown, Unsupported, Focus            string
 	Dot, Hollow                                                        string
+	RadioOn, RadioOff                                                  string
 
 	RuleLight, RuleHeavy, Vertical string
 	CornerTL, CornerTR, CornerBL   string
@@ -59,6 +60,7 @@ var unicodeGlyphs = Glyphs{
 	Bullet: "·", Arrow: "›", Sep: "·", Ellipsis: "…", Dash: "—",
 	OK: "✓", Warn: "!", Fail: "!", Info: "·", Unknown: "?", Unsupported: "◌", Focus: "▌",
 	Dot: "●", Hollow: "○",
+	RadioOn: "(●)", RadioOff: "( )",
 	RuleLight: "─", RuleHeavy: "━", Vertical: "│",
 	CornerTL: "╭", CornerTR: "╮", CornerBL: "╰", CornerBR: "╯",
 	BarFull: "█", BarEmpty: "░",
@@ -73,6 +75,7 @@ var asciiGlyphs = Glyphs{
 	Bullet: "-", Arrow: ">", Sep: "/", Ellipsis: "...", Dash: "-",
 	OK: "+", Warn: "!", Fail: "!", Info: "-", Unknown: "?", Unsupported: "~", Focus: "#",
 	Dot: "*", Hollow: "o",
+	RadioOn: "(*)", RadioOff: "( )",
 	RuleLight: "-", RuleHeavy: "=", Vertical: "|",
 	CornerTL: "+", CornerTR: "+", CornerBL: "+", CornerBR: "+",
 	BarFull: "#", BarEmpty: ".",

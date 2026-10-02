@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,11 +15,14 @@ import (
 	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/settings"
 )
 
 // TestMain fixes the color profile and disables timers, so views are
@@ -32,8 +37,9 @@ func TestMain(m *testing.M) {
 }
 
 // fakeServices is a scripted Services for screen tests. Read methods
-// return the fields; mutation methods call the function fields and
-// record the call, so a test can prove that browsing never mutates.
+// return the fields and count the call in reads. Plan, preview and
+// mutation methods call the function fields and record the call in
+// calls, so a test can prove that browsing never plans or mutates.
 type fakeServices struct {
 	mu sync.Mutex
 
@@ -57,8 +63,27 @@ type fakeServices struct {
 	previewDecision func(proposals.Action, []int64) (*proposals.Preview, error)
 	commitDecision  func(*proposals.Preview) (proposals.Result, error)
 
+	// learning is the evidence snapshot. The zero value reads as an
+	// absent index, so a view shows no counts.
+	learning learning.Snapshot
+	// settings is the settings snapshot; fakeSettingsSnapshot builds a
+	// real one. nil with a nil settingsErr means no configuration read.
+	settings    *settings.Snapshot
+	settingsErr error
+
+	planEvidence   func(index.SourceMode) (*learning.Plan, error)
+	runEvidence    func(context.Context, *learning.Plan, func(index.RefreshEvent)) (learning.Outcome, error)
+	planDistill    func(learning.DistillRequest) (*learning.DistillPreview, error)
+	runDistill     func(context.Context, *learning.DistillPreview, func(distill.Event)) (*distill.Execution, error)
+	cleanupPending func(*learning.DistillPreview) (int, error)
+	planSettings   func(*settings.Snapshot, []settings.Edit) (*settings.Plan, error)
+	saveSettings   func(*settings.Plan) (settings.Result, error)
+
 	// calls records every plan, preview and mutation call by name.
 	calls []string
+	// reads counts the read calls of the Phase 2 sources by name. Reads
+	// stay out of calls, because every view refresh makes them.
+	reads map[string]int
 }
 
 func newFake() *fakeServices {
@@ -84,6 +109,42 @@ func (f *fakeServices) called() []string {
 	defer f.mu.Unlock()
 
 	return append([]string(nil), f.calls...)
+}
+
+// count records one read call by name.
+func (f *fakeServices) count(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.reads == nil {
+		f.reads = map[string]int{}
+	}
+
+	f.reads[name]++
+}
+
+// readCount returns how often the named read ran.
+func (f *fakeServices) readCount(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.reads[name]
+}
+
+// callCount returns how often the named plan or mutation ran.
+func (f *fakeServices) callCount(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	n := 0
+
+	for _, c := range f.calls {
+		if c == name {
+			n++
+		}
+	}
+
+	return n
 }
 
 func (f *fakeServices) Root() string                           { return f.root }
@@ -146,6 +207,116 @@ func (f *fakeServices) CommitDecision(p *proposals.Preview) (proposals.Result, e
 	}
 
 	return f.commitDecision(p)
+}
+
+func (f *fakeServices) Learning() learning.Snapshot {
+	f.count("Learning")
+
+	return f.learning
+}
+
+func (f *fakeServices) Settings() (*settings.Snapshot, error) {
+	f.count("Settings")
+
+	return f.settings, f.settingsErr
+}
+
+func (f *fakeServices) PlanEvidence(mode index.SourceMode) (*learning.Plan, error) {
+	f.record("PlanEvidence:" + mode.String())
+
+	if f.planEvidence == nil {
+		return &learning.Plan{Mode: mode, PlannedAt: time.Now()}, nil
+	}
+
+	return f.planEvidence(mode)
+}
+
+func (f *fakeServices) RunEvidence(ctx context.Context, p *learning.Plan,
+	progress func(index.RefreshEvent),
+) (learning.Outcome, error) {
+	f.record("RunEvidence")
+
+	// The default run attempts no source and leaves the evidence as the
+	// learning field describes it.
+	if f.runEvidence == nil {
+		none := index.SourceOutcome{State: index.SourceNotAttempted}
+
+		return learning.Outcome{Fixes: none, Reviews: none, After: f.learning, FinishedAt: time.Now()}, nil
+	}
+
+	return f.runEvidence(ctx, p, progress)
+}
+
+func (f *fakeServices) PlanDistill(req learning.DistillRequest) (*learning.DistillPreview, error) {
+	f.record("PlanDistill")
+
+	if f.planDistill == nil {
+		return &learning.DistillPreview{Request: req, Plan: &distill.Plan{}, PlannedAt: time.Now()}, nil
+	}
+
+	return f.planDistill(req)
+}
+
+func (f *fakeServices) RunDistill(ctx context.Context, p *learning.DistillPreview,
+	progress func(distill.Event),
+) (*distill.Execution, error) {
+	f.record("RunDistill")
+
+	if f.runDistill == nil {
+		return &distill.Execution{}, nil
+	}
+
+	return f.runDistill(ctx, p, progress)
+}
+
+func (f *fakeServices) CleanupPending(p *learning.DistillPreview) (int, error) {
+	f.record("CleanupPending")
+
+	if f.cleanupPending == nil {
+		return 0, nil
+	}
+
+	return f.cleanupPending(p)
+}
+
+func (f *fakeServices) PlanSettings(snap *settings.Snapshot, edits []settings.Edit) (*settings.Plan, error) {
+	f.record("PlanSettings")
+
+	if f.planSettings == nil {
+		return &settings.Plan{Snapshot: snap, Edits: edits, NoOp: true}, nil
+	}
+
+	return f.planSettings(snap, edits)
+}
+
+func (f *fakeServices) SaveSettings(p *settings.Plan) (settings.Result, error) {
+	f.record("SaveSettings")
+
+	if f.saveSettings == nil {
+		return settings.Result{}, nil
+	}
+
+	return f.saveSettings(p)
+}
+
+// fakeSettingsSnapshot inspects a temporary workspace whose config.yaml
+// holds content, with the shared reader, so a screen test sees a real
+// snapshot. An empty content leaves the file absent.
+func fakeSettingsSnapshot(t *testing.T, content string) *settings.Snapshot {
+	t.Helper()
+
+	root := t.TempDir()
+
+	if content != "" {
+		path := filepath.Join(root, filepath.FromSlash(settings.File))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	}
+
+	snap, err := settings.Inspect(root, integration.Builtin())
+	require.NoError(t, err)
+
+	return snap
 }
 
 // harness drives the root model synchronously: it runs every command

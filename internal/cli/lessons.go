@@ -223,7 +223,7 @@ a file has no lessons.`,
 		"with --distill or --extract-triggers: show what would be sent to the agent (sizes, cost) without sending anything")
 	cmd.Flags().BoolVar(&proposalList, "proposals", false,
 		"show the distillation ledger: pending, applied, and dismissed proposals (no agent calls)")
-	cmd.Flags().IntVar(&limit, "limit", 10,
+	cmd.Flags().IntVar(&limit, "limit", distill.DefaultGroupLimit,
 		"max new groups one --distill run sends to the agent (0 = all)")
 	cmd.Flags().StringVar(&applyIDs, "apply", "",
 		"apply proposals as pins by id or range (p3,p7 or p1..p9); writes lessons.yaml only with distill.write in config")
@@ -655,19 +655,10 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		lcfg = reviews.DefaultConfig()
 	}
 
-	pins := make([]model.Proposal, 0, len(lcfg.Pin))
-	for _, p := range lcfg.Pin {
-		// AllRegions resolves the union once at the boundary, so a
-		// hand-written pin carrying both keys governs everywhere it says.
-		pins = append(pins, model.Proposal{
-			Rule: p.Rule, Note: p.Note, Region: p.Region, Regions: p.AllRegions(),
-		})
-	}
-
 	dopts := distill.Options{
 		Region: region,
 		Limit:  limit,
-		Pins:   pins,
+		Pins:   distill.PinsFromConfig(lcfg),
 		Agent:  spec.Argv,
 		Root:   root,
 		DryRun: dryRun,
@@ -710,6 +701,19 @@ func runLessonsDistill(cmd *cobra.Command, opts *options, region string, limit i
 		fmt.Fprintf(cmd.OutOrStdout(),
 			"\n(dry run — nothing was sent; %d group(s) remain unread; drop --dry-run to distill)\n",
 			res.GroupsPending)
+
+		// The preflight above already leaves these rows out. Naming them
+		// shows the one write that the real run makes before its first call.
+		if len(res.StalePending) > 0 {
+			ids := make([]string, len(res.StalePending))
+			for i, id := range res.StalePending {
+				ids[i] = fmt.Sprintf("p%d", id)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(),
+				"(a real run first prunes %d stale pending proposal(s) whose evidence group is gone: %s)\n",
+				len(ids), strings.Join(ids, ", "))
+		}
 
 		return nil
 	}
