@@ -68,13 +68,22 @@ func ExplicitSetups(reg *Registry, ids []string, installSkills, approveTools boo
 // Codex is left out when the run asks nothing of it, so its files are
 // never read.
 func LegacySetups(root, skillsMode string, approveTools bool, gateMode string) ([]ClientSetup, error) {
-	grantClaude, grantCodex, err := legacyApprovalTargets(root, skillsMode)
-	if err != nil {
-		return nil, err
+	// The approval targets are detected only when the run grants tools.
+	// The detection stats .codex/, and a plain init must never read a
+	// Codex path: an unreadable one there would stop the Claude Code
+	// setup of a run that asked nothing of Codex.
+	var grantClaude, grantCodex bool
+
+	if approveTools {
+		var err error
+
+		if grantClaude, grantCodex, err = legacyApprovalTargets(root, skillsMode); err != nil {
+			return nil, err
+		}
 	}
 
-	claude := ClientSetup{ClientID: ClaudeID, Hooks: true, GateMode: gateMode, ApproveTools: approveTools && grantClaude}
-	codex := ClientSetup{ClientID: CodexID, RegisterMCP: approveTools && grantCodex, ApproveTools: approveTools && grantCodex}
+	claude := ClientSetup{ClientID: ClaudeID, Hooks: true, GateMode: gateMode, ApproveTools: grantClaude}
+	codex := ClientSetup{ClientID: CodexID, RegisterMCP: grantCodex, ApproveTools: grantCodex}
 
 	if skillsMode != "" {
 		targets, err := skills.Targets(root, skillsMode)

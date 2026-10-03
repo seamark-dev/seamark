@@ -190,14 +190,14 @@ check_mode() {
     # The commands as written in the hooks file: an absolute binary path
     # and the client flag. Each must run as written on a native-shaped
     # payload and never block a harmless command.
-    GATE_CMD=$(grep -o '"[^"]*seamark gate --hook --client '"$CLIENT"'"' "$HOOKS_FILE" 2>/dev/null | head -1 | tr -d '"' || true)
-    LESSONS_CMD=$(grep -o '"[^"]*seamark lessons --hook --client '"$CLIENT"'"' "$HOOKS_FILE" 2>/dev/null | head -1 | tr -d '"' || true)
+    GATE_CMD=$(grep -o '"[^"]* gate --hook --client '"$CLIENT"'"' "$HOOKS_FILE" 2>/dev/null | head -1 | tr -d '"' || true)
+    LESSONS_CMD=$(grep -o '"[^"]* lessons --hook --client '"$CLIENT"'"' "$HOOKS_FILE" 2>/dev/null | head -1 | tr -d '"' || true)
 
     if [ "$CLIENT" = claude ]; then
         # Claude Code hooks carry no --client flag: the bare command is the
         # Claude Code form.
-        GATE_CMD=$(grep -o '"[^"]*seamark gate --hook"' "$HOOKS_FILE" | head -1 | tr -d '"' || true)
-        LESSONS_CMD=$(grep -o '"[^"]*seamark lessons --hook"' "$HOOKS_FILE" | head -1 | tr -d '"' || true)
+        GATE_CMD=$(grep -o '"[^"]* gate --hook"' "$HOOKS_FILE" | head -1 | tr -d '"' || true)
+        LESSONS_CMD=$(grep -o '"[^"]* lessons --hook"' "$HOOKS_FILE" | head -1 | tr -d '"' || true)
     fi
 
     if [ -n "$GATE_CMD" ]; then

@@ -91,6 +91,23 @@ func TestLegacyApprovalTargetsReportAnUnreadableCodexDirectory(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrPermission)
 }
 
+func TestLegacySetupsReadNoCodexPathWithoutApproveTools(t *testing.T) {
+	// A .codex that cannot be stat'ed (a link to itself) must not stop
+	// a plain init: the run asks nothing of Codex, so no Codex path is
+	// read. With --approve-tools the same path is reported, as before.
+	root := t.TempDir()
+	require.NoError(t, os.Symlink(".codex", filepath.Join(root, ".codex")))
+
+	setups, err := LegacySetups(root, "", false, "")
+	require.NoError(t, err)
+	require.Len(t, setups, 1)
+	assert.Equal(t, ClaudeID, setups[0].ClientID)
+	assert.False(t, setups[0].ApproveTools)
+
+	_, err = LegacySetups(root, "", true, "")
+	require.Error(t, err)
+}
+
 func TestLegacySetupsKeepTheGranularIntent(t *testing.T) {
 	claude := func(skills, grants bool) ClientSetup {
 		return ClientSetup{ClientID: ClaudeID, Hooks: true, Skills: skills, ApproveTools: grants}
