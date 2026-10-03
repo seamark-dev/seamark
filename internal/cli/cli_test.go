@@ -2322,47 +2322,57 @@ func TestReportWithoutIndexFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "no index found")
 }
 
-// TestReadmeCoversEveryCommand is the docs-drift check: every shipped
-// command is mentioned in the README, and no shipped command is
-// labelled planned or coming soon. The RFC's rule: no shipped command
-// may be presented as future work.
-func TestReadmeCoversEveryCommand(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
-	require.NoError(t, err)
+// TestUserDocsCoverEveryCommand keeps every shipped command documented while
+// letting the README focus on onboarding. Reference-only surfaces, such as the
+// experimental editor server, belong in focused user guides.
+func TestUserDocsCoverEveryCommand(t *testing.T) {
+	paths := []string{
+		"README.md",
+		"docs/getting-started.md",
+		"docs/agent-integrations.md",
+		"docs/lessons.md",
+		"docs/repository-history.md",
+		"docs/configuration.md",
+		"docs/policies.md",
+		"docs/editors.md",
+	}
+	var docs strings.Builder
 
-	readme := string(data)
+	for _, path := range paths {
+		data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(path)))
+		require.NoError(t, err)
+		docs.Write(data)
+		docs.WriteString("\n\n")
+	}
 
+	text := docs.String()
 	for _, c := range New().Commands() {
 		name := c.Name()
 		if name == "help" || name == "completion" || name == "version" {
 			continue // cobra plumbing, not product surface
 		}
 
-		assert.Contains(t, readme, "seamark "+name,
-			"README must document `seamark %s` (or retire the command)", name)
+		assert.Contains(t, text, "seamark "+name,
+			"user documentation must cover `seamark %s` (or retire the command)", name)
 
 		for _, label := range []string{"planned", "soon"} {
 			re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(name) + `[^\n]{0,40}\(` + label + `\)`)
-			assert.False(t, re.MatchString(readme),
-				"README labels shipped command %q as (%s)", name, label)
+			assert.False(t, re.MatchString(text),
+				"user documentation labels shipped command %q as (%s)", name, label)
 		}
 
-		// The roadmap paragraph must not name a shipped command either —
-		// "Planned next: … seamark doctor" would otherwise stay green
-		// after doctor ships.
-		if i := strings.Index(readme, "Planned next"); i >= 0 {
-			para := readme[i:]
-			if j := strings.Index(para, "\n\n"); j >= 0 {
-				para = para[:j]
+		// A roadmap may describe extensions, but must not list an existing
+		// command as future work.
+		for _, para := range strings.Split(text, "\n\n") {
+			if strings.Contains(para, "Planned next") {
+				assert.NotContains(t, para, "seamark "+name,
+					"the roadmap still lists shipped command %q as planned", name)
 			}
-
-			assert.NotContains(t, para, "seamark "+name,
-				"the roadmap paragraph still lists shipped command %q as planned", name)
 		}
 	}
 }
 
-// TestSkillsNameOnlyRealCommands mirrors TestReadmeCoversEveryCommand
+// TestSkillsNameOnlyRealCommands mirrors TestUserDocsCoverEveryCommand
 // for the embedded skill text: every backticked `seamark <command>` and
 // every Bash(seamark <command> ...) grant must name a shipped command, or
 // an agent on the CLI fallback follows a command that no longer exists.
@@ -2608,15 +2618,22 @@ func TestBlockedCheckStillPrintsAdvisoryLessons(t *testing.T) {
 		"a new, unindexed file in a pinned region receives its lesson even on a blocked check")
 }
 
-// TestAgentIntegrationsGuideNamesRealCommands is the docs-drift check
-// for docs/agent-integrations.md: every `seamark <command>` it shows
+// TestOnboardingGuidesNameRealCommands is the docs-drift check
+// for the README, getting-started, and agent-integrations guides: each command
 // names a shipped command, every `--flag` on such a line exists on
 // that command, and every `make <target>` it names is a Makefile
 // target. The guide is what a contributor follows, so a renamed flag
 // must fail here, not in their terminal.
-func TestAgentIntegrationsGuideNamesRealCommands(t *testing.T) {
+func TestOnboardingGuidesNameRealCommands(t *testing.T) {
 	guide, err := os.ReadFile(filepath.Join("..", "..", "docs", "agent-integrations.md"))
 	require.NoError(t, err)
+
+	for _, path := range []string{"README.md", "docs/getting-started.md"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(path)))
+		require.NoError(t, err)
+		guide = append(guide, '\n')
+		guide = append(guide, data...)
+	}
 
 	makefile, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
 	require.NoError(t, err)

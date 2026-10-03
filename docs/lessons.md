@@ -1,9 +1,29 @@
-# The learning pipeline, in depth
+# Lessons and proposals
 
-How seamark turns review history into rules agents actually follow —
-the full detail behind the README's short version. The vocabulary used
-here is defined once in the README and holds everywhere: **finding →
-lesson → proposal → pin**.
+Seamark learns from repository history to help AI coding agents avoid repeating
+mistakes. This guide explains the evidence, proposal review, and reminder
+settings behind the [first learning workflow](../README.md#learn-from-your-repository).
+Lessons are advice; they do not guarantee that an AI coding agent follows them.
+
+## From feedback to reminders
+
+| Term | Meaning |
+| --- | --- |
+| Finding | One observation from a review comment or fix commit, with its source. |
+| Lesson | A recurring pattern in findings for a file or code area. |
+| Proposal | A candidate lesson drafted by your AI agent CLI, awaiting your review. |
+| Pin | A lesson you accepted or wrote by hand in `.seamark/lessons.yaml`. |
+
+Mining collects evidence. Optional distillation asks your AI agent CLI to
+turn findings into proposals. You review the wording, evidence, and scope
+before accepting a proposal. Hooks deliver relevant lessons and pins during
+supported edits; MCP tools also include them in repository answers.
+
+`seamark lessons --apply p1` prints a YAML block by default. Paste it under
+`pin:` in `.seamark/lessons.yaml`, or enable `distill.write` in
+`.seamark/config.yaml` before applying to let Seamark edit the file and record
+the decision. In print-only mode, the proposal stays pending. See
+[configuration](configuration.md) for the setting and durable-state backups.
 
 ## What gets mined, and what deliberately does not
 
@@ -117,7 +137,7 @@ everything; only the ambient injection is capped.
 Choose one `hook_delivery` value in `.seamark/lessons.yaml`. Omitting the key
 is equivalent to `always`.
 
-To repeat matching lessons after every edit:
+To deliver matching lessons on every supported edit:
 
 ```yaml
 # Default: maximize reminder visibility.

@@ -1,4 +1,7 @@
-# Agent integrations
+# AI coding agent integrations
+
+This guide targets **v0.7.0 or newer**. See
+[installation](getting-started.md) to install or upgrade Seamark.
 
 Seamark connects to Claude Code and Codex in three ways:
 
@@ -43,13 +46,15 @@ seamark init --client codex --skills --approve-tools
 Tool grants do not grant project or hook trust. Setup preserves explicit
 restrictions already in your Codex configuration and reports conflicts.
 The command gate defaults to warning on a new install; see the
-[README's policy instructions](../README.md#journey-3-guard-agent-commands) to configure enforcement.
+[experimental policy guide](policies.md) to configure enforcement.
 
 For Claude Code, use `seamark init --client claude --skills`. To configure
 both agents, use `seamark init --client claude --client codex --skills`.
-Without `--client`, the older setup behavior remains available; see the
-[README](../README.md). With `--client`, use bare `--skills`, not
-`--skills=codex`.
+Without `--client`, the older setup behavior remains available: plain
+`seamark init` configures Claude Code hooks; the valued `--skills=claude`,
+`--skills=codex`, and `--skills=all` forms select skill installation targets
+and retain the legacy setup behavior. Use explicit `--client` for new setups.
+With `--client`, use bare `--skills`, not `--skills=codex`.
 
 ### Check the setup
 
@@ -407,6 +412,6 @@ MCP approval behavior, and trusted-hook isolation need separate checks.
    credential-shaped; the checks grep for the canary they set, not for
    every possible secret.
 5. Update the per-agent table above, `docs/STATUS.md`, the README's
-   setup section, and `CHANGELOG.md`. `TestReadmeCoversEveryCommand`
-   and `TestAgentIntegrationsGuideNamesRealCommands` check the command
+   setup section, and `CHANGELOG.md`. `TestUserDocsCoverEveryCommand`
+   and `TestOnboardingGuidesNameRealCommands` check the command
    names and flags in the documentation against the CLI.

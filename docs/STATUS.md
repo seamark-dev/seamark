@@ -1,6 +1,9 @@
 # Production status
 
-The concise, current state of seamark — what each capability profile can
+This page describes **v0.7.0**, released on 2026-10-03.
+See [Distribution](#distribution) for installation and release details.
+
+The current state of Seamark — what each capability profile can
 be trusted with today. Design history and engineering narrative live in
 [PLAN.md](PLAN.md); this page only says what is true now.
 
@@ -8,7 +11,7 @@ Seamark's surface splits into three capability profiles with different
 maturity. They share one binary and one index; they do not share one
 trust level.
 
-## Navigate — stable
+## Navigate — core queries working
 
 Local indexing, history mining, orientation, and the read surfaces.
 
@@ -17,7 +20,7 @@ Local indexing, history mining, orientation, and the read surfaces.
 | Indexer (Go, TypeScript/TSX/JS, Python) | working; parse cache, self-repairing freshness |
 | History layer (co-change, decisions, fix density) | working; needs git history to be useful |
 | `why`, `orient`, `change_set` | working (CLI + MCP; `change_set` is MCP-only) |
-| LSP server (hover, lenses, omission diagnostics) | working; editor setup is manual ([editors.md](editors.md)) |
+| LSP server (hover, lenses, omission diagnostics) | **experimental**; implementation retained, manual editor setup, not a current development priority ([editors.md](editors.md)) |
 | HTML report | working |
 | MCP server | working; five tools + `orient`/`status` resources + `onboard` prompt |
 | Schema versioning, durable-state export/import | working |
@@ -25,7 +28,7 @@ Local indexing, history mining, orientation, and the read surfaces.
 | Agent skills (`skills/`, embedded; `init --skills`) | working; opt-in; installs into `.claude/skills` and `.agents/skills`, reported by `status`/`doctor`; `init --approve-tools` writes the Claude Code allow rules and the Codex per-tool approvals the model-driven path needs, reported by `status`/`doctor`; the second paired cohort (2026-09-05, Haiku 4.5, 15 pairs) passed the frozen claim at +73 pp mean invariant lift (12/15 vs 1/15) at about twice the context per session; the skills stay opt-in so the spend is the user's decision ([bench/skills-report-v2.md](../bench/skills-report-v2.md)) |
 | Skills workflow benchmark (`make skills-bench`, MCP-only vs MCP + skills; `make skills-activation`) | two cohorts ran 2026-09-05: the first found no effect and its transcripts drove the fixture, skill, `change_set`, and `check` revisions; the second passed the frozen claim; own rows, claims, fingerprint, and report, none shared with the lessons benchmark ([bench/README.md](../bench/README.md)); the 2026-09-08 review fixes moved the fingerprint without changing what was measured: the skills tree differs from the measured one only in the `lessons --region` grant, and `check`/`change_set` only in how fast the companion reasons are computed, so no cohort was re-run |
 
-Known limits are documented in the README's *Honest limits*: syntactic
+Known limits are documented in [Repository history and code analysis](repository-history.md#honest-limits): syntactic
 resolution with labeled confidence, no scope tracking, conservative
 Python DB tagging.
 
@@ -49,7 +52,10 @@ Review mining, fix mining, lessons, distillation, pins.
 | Once-per-context hook delivery (`hook_delivery` in `lessons.yaml`) | working; opt-in, digest-only local state, fails open; needs one `seamark init` re-run for the `PostCompact` hook |
 | Lessons benchmark (`make lessons-bench`, paired headless sessions, frozen claim registry) | working; accepted synthetic and pinned OpenTelemetry-Go cohorts; operator-run and spends provider tokens; protocol and evidence in [bench/README.md](../bench/README.md) |
 
-## Guard — warn mode ready; enforcement is beta
+## Guard — experimental
+
+Policies are experimental and awaiting refinement. Existing command and diff
+checks remain available; see the [policy guide](policies.md).
 
 Command gate, diff check, audit, hooks.
 
@@ -57,9 +63,9 @@ Command gate, diff check, audit, hooks.
 |---|---|
 | Command classification (shell parser, wrappers, interpreter payloads, dynamic detection) | working |
 | Diff blast radius with coverage uncertainty (`unindexed_files`) | working |
-| Warn mode (report, never block) | ready — the recommended deployment |
+| Warn mode (report, never block) | working; use this mode when evaluating experimental policies |
 | Secret-safe audit log (hashed by default, 0600, rotation, flock) | working |
-| Enforce mode (exit 2, fail closed) | works, **beta**: an agent that can edit `policy.yaml` or `.claude/settings.json` can weaken it ([threat-model.md](threat-model.md)) |
+| Enforce mode (exit 2, fail closed) | **experimental**: an agent that can edit `policy.yaml` or `.claude/settings.json` can weaken it ([threat-model.md](threat-model.md)) |
 | Real approvals (`require_approval` with out-of-band approval tokens) | **not built** — today a require_approval verdict simply blocks under enforce |
 | Policy integrity (pinned policy outside agent reach) | **not built** |
 
@@ -68,9 +74,11 @@ agents inside real isolation regardless.
 
 ## Distribution
 
-Latest published release: [v0.5.4](https://github.com/seamark-dev/seamark/releases/tag/v0.5.4)
-(2026-08-28). The next release, v0.6.0, is not yet published; it adds the
-three opt-in agent skills and their benchmark. Every release
+Current release: [v0.7.0](https://github.com/seamark-dev/seamark/releases/tag/v0.7.0)
+(2026-10-03). It adds the
+shared AI coding agent integration framework, explicit `--client` setup,
+Codex lesson hooks and inference, and consistent integration diagnostics.
+The [changelog](../CHANGELOG.md) records the full release scope. Every release
 ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
 (`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
@@ -82,6 +90,13 @@ bottles for Apple Silicon macOS and x86_64 Linux from
 other platforms build from source automatically. The tap README
 documents the bottle release runbook. Artifact signing,
 SBOMs, and an npm install are the next distribution milestone.
+
+## Direction
+
+The current focus is lessons and proposals, MCP tools, and agent skills.
+Unified hook management across AI coding agents is planned beyond v0.7.0,
+building on the shared integration framework. Policy refinement remains
+future work; editor integrations remain experimental.
 
 ## Verification
 

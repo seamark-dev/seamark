@@ -6,7 +6,19 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
-## Unreleased
+## v0.7.0 — 2026-10-03
+
+- **A clearer introduction and first-use workflow for AI coding agents.**
+  The README now leads with learning from repository history to help AI
+  coding agents stop repeating mistakes. It highlights lessons and proposals,
+  MCP tools, and agent skills; shows explicit Claude Code and Codex setup;
+  and explains how to review and install a first lesson. Reference details
+  now live in focused installation, configuration, repository-history, and
+  policy guides. The setup examples target v0.7.0 and newer.
+- **Feature maturity and direction made explicit.** Policies are marked
+  experimental and awaiting refinement. Editor integrations remain in the
+  codebase and are documented as experimental, without README promotion.
+  Unified hook management is identified as future work beyond v0.7.0.
 
 - **Agent setup guide and reusable compatibility checks.**
   [docs/agent-integrations.md](docs/agent-integrations.md) explains Codex
@@ -220,7 +232,7 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   that the handler runs twice, and a wrapped gate hook that enforces shows
   in the gate line of the run.
 
-## v0.6.0 — 2026-09-05
+## v0.6.0 — 2026-09-13
 
 - **The MCP server states judgment rules, not a ritual.** The `initialize`
   instructions and the `onboard` prompt now say when each tool earns its

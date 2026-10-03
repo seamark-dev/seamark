@@ -1,4 +1,9 @@
-# Running seamark in your editor
+# Editor integrations (experimental)
+
+Editor integrations are experimental. The LSP server and the Neovim and
+VS Code examples remain available, but they are not a current development
+priority. Seamark's main focus is lessons, MCP tools, and skills for AI coding
+agents. See [AI coding agent setup](agent-integrations.md) for that workflow.
 
 Seamark runs as a *secondary* language server alongside your language's
 own (gopls, pyright, ts_ls, …). It serves three things from the index:
