@@ -19,9 +19,10 @@ import (
 const runKeep = 4
 
 // runRecord is one run of this session in the Run sub-view: a
-// distillation from its scope step to its result, or an evidence
-// refresh. The owning workflow implements it in its own file. The Run
-// sub-view holds the record, shows it, and routes messages to it.
+// distillation from its scope step to its result, an evidence refresh,
+// or a trigger extraction. The owning workflow implements it in its own
+// file. The Run sub-view holds the record, shows it, and routes messages
+// to it.
 type runRecord interface {
 	// active reports work that runs now. The Run sub-view never
 	// replaces an active record, because its progress must stay
@@ -90,8 +91,9 @@ func openRun(rec runRecord, show bool) tea.Cmd {
 
 // closeRunMsg asks the Run sub-view to drop a draft, for example a
 // distillation scope that the user closes. The newest earlier record
-// then shows again. The view keeps a record that did work, because its
-// result belongs to the session list.
+// becomes current again, and Lessons returns to the sub-view that opened
+// the draft (lessons.runDropped). The view keeps a record that did work,
+// because its result belongs to the session list.
 type closeRunMsg struct {
 	rec runRecord
 }
@@ -294,15 +296,25 @@ func (v *runView) drop(rec runRecord) {
 }
 
 // update routes a message. openRunMsg and closeRunMsg change the
-// record. Every other message goes to the current record: keys arrive
-// only while the view is visible, because Lessons sends keys to the
-// visible sub-view only. Earlier records hold finished work, so they get
-// no messages; [ and ] show them, and they get only the keys that
+// record, and openExtractMsg opens a trigger extraction record like an
+// openRunMsg. Every other message goes to the current record: keys
+// arrive only while the view is visible, because Lessons sends keys to
+// the visible sub-view only. Earlier records hold finished work, so they
+// get no messages; [ and ] show them, and they get only the keys that
 // browseKey passes.
 func (v *runView) update(msg tea.Msg) tea.Cmd {
 	switch m := msg.(type) {
 	case openRunMsg:
 		return v.accept(m)
+	case openExtractMsg:
+		// The record is a draft that reads nothing until the view
+		// accepts it, so a refused request costs no read. The flag
+		// goes on before the first render, so the review names the
+		// cursor row from its first frame.
+		rec := newExtractRecord(v.st, m.req)
+		rec.cursor = m.cursor
+
+		return v.accept(openRunMsg{rec: rec, show: true})
 	case closeRunMsg:
 		v.drop(m.rec)
 
@@ -388,7 +400,7 @@ func (v *runView) shownIDs() []int64 {
 // switch keys lead to the views that start a run.
 func (v *runView) keys() []key.Binding {
 	if v.cur == nil {
-		return []key.Binding{lesKeys.Proposals, lesKeys.Stats, lesKeys.Evidence}
+		return []key.Binding{lesKeys.Proposals, lesKeys.Pins, lesKeys.Stats, lesKeys.Evidence}
 	}
 
 	if v.capturing() {
@@ -409,7 +421,7 @@ func (v *runView) keys() []key.Binding {
 	later := runKeys.Later
 	later.SetEnabled(v.back > 0)
 
-	return append(ks, later, earlier, lesKeys.Proposals, lesKeys.Evidence, lesKeys.Stats)
+	return append(ks, later, earlier, lesKeys.Proposals, lesKeys.Pins, lesKeys.Evidence, lesKeys.Stats)
 }
 
 // browseKeys names the keys of an earlier record: enter for its
@@ -478,7 +490,7 @@ func (v *runView) view(w, h int) string {
 	t := v.st.theme
 
 	if v.browsing() {
-		rows := strings.SplitN(v.shown().view(w, h), "\n", 3)
+		rows := strings.SplitN(v.browseView(w, h), "\n", 3)
 		if len(rows) == 3 {
 			rows[1] = v.browseLine(w)
 		}
@@ -491,13 +503,36 @@ func (v *runView) view(w, h int) string {
 	}
 
 	o := boxOpts{W: w, H: max(4, h-3), Focus: true, Title: t.Title.Render("Run")}
-	next := t.hints([]key.Binding{withHelp(lesKeys.Evidence, "e", "open Evidence")})
+	next := t.hints([]key.Binding{
+		withHelp(lesKeys.Evidence, "e", "open Evidence"), withHelp(lesKeys.Pins, "m", "open Pins"),
+	})
 
+	// The extraction key comes from its binding, so the text names the
+	// key that Pins and Proposals bind.
 	box := integBoxed(t, o, ToneNeutral, "No run in this session",
-		"Refresh the evidence or prepare a distillation from Evidence. The progress and the result of the "+
-			"last "+itoa(runKeep+1)+" runs show here until Seamark exits, and [ and ] step through them.", next)
+		"Refresh the evidence or prepare a distillation from Evidence, or extract trigger information with "+
+			extractKey.Help().Key+" in Pins or Proposals. The progress and the result of the last "+itoa(runKeep+1)+
+			" runs show here until Seamark exits, and [ and ] step through them.", next)
 
 	return strings.Join([]string{"", "", box}, "\n")
+}
+
+// runReadOnly is an optional runRecord method. It renders the record as
+// an earlier run. browseKey passes an earlier record only the movement
+// keys, so such a view leaves out the keys that would start or plan
+// work, for example enter and n on an extraction result.
+type runReadOnly interface {
+	readOnlyView(w, h int) string
+}
+
+// browseView renders the earlier record on view. A record without a
+// read-only form renders as usual.
+func (v *runView) browseView(w, h int) string {
+	if r, ok := v.shown().(runReadOnly); ok {
+		return r.readOnlyView(w, h)
+	}
+
+	return v.shown().view(w, h)
 }
 
 // browseLine names the earlier record on view and the key back to the
@@ -608,20 +643,30 @@ func (p *propView) runMessage(l *proposals.Ledger) propMessage {
 		}
 	}
 
-	var applied, dismissed, missing int
+	var applied, dismissed, superseded, missing int
 
 	for id := range p.run.ids {
+		has := func(pr domain.Proposal) bool { return pr.ID == id }
+
 		switch {
-		case slices.ContainsFunc(l.Applied, func(pr domain.Proposal) bool { return pr.ID == id }):
+		case slices.ContainsFunc(l.Applied, has):
 			applied++
-		case slices.ContainsFunc(l.Dismissed, func(pr domain.Proposal) bool { return pr.ID == id }):
+		case slices.ContainsFunc(l.Dismissed, has):
 			dismissed++
-		case !slices.ContainsFunc(l.Pending, func(pr domain.Proposal) bool { return pr.ID == id }):
+		case slices.ContainsFunc(l.Superseded, has):
+			// A prune supersedes an applied proposal. The row stays in the
+			// ledger as history, so it is not missing.
+			superseded++
+		case !slices.ContainsFunc(l.Pending, has):
 			missing++
 		}
 	}
 
 	facts := []string{itoa(applied) + " applied", itoa(dismissed) + " dismissed"}
+	if superseded > 0 {
+		facts = append(facts, itoa(superseded)+" superseded")
+	}
+
 	if missing > 0 {
 		facts = append(facts, itoa(missing)+" no longer in the ledger")
 	}

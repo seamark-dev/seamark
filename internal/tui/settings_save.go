@@ -228,8 +228,9 @@ func (s *settingsScreen) saveDone(msg settingsSaveDoneMsg) tea.Cmd {
 		s.saved = &settingsSaveNote{group: msg.group, at: msg.at}
 
 		// Every save changes the index fingerprint, so the index and
-		// Doctor read again. The evidence view shows the review window.
-		kinds := []sectionKind{secSettings, secDoctor, secIndex, secLearning}
+		// Doctor read again. The evidence view shows the review window,
+		// and the pin readings depend on the index state.
+		kinds := []sectionKind{secSettings, secDoctor, secIndex, secLearning, secPins}
 		if msg.group == settings.GroupPinWrite {
 			// The ledger snapshot carries the write gate.
 			kinds = append(kinds, secLedger)
@@ -591,7 +592,7 @@ func (s *settingsScreen) changeRows(p *settings.Plan, w int) []string {
 			next = "removed"
 		}
 
-		out = append(out, s.arrowRow(string(e.Field), settingsStored(before), next, labelW, w)...)
+		out = append(out, s.st.theme.arrowRow(string(e.Field), settingsStored(before), next, labelW, w)...)
 	}
 
 	return out
@@ -609,7 +610,7 @@ func (s *settingsScreen) effectiveRows(p *settings.Plan, w int) []string {
 			continue
 		}
 
-		out = append(out, s.arrowRow(string(before.Field), oneLine(before.Effective), oneLine(after.Effective),
+		out = append(out, s.st.theme.arrowRow(string(before.Field), oneLine(before.Effective), oneLine(after.Effective),
 			labelW, w)...)
 	}
 
@@ -625,21 +626,6 @@ func (s *settingsScreen) changeLabelW(p *settings.Plan) int {
 	}
 
 	return w + 2
-}
-
-// arrowRow renders "label  old › new". The old value uses the muted
-// style, and the new value uses the plain style. A row that does not
-// fit wraps in one style, because no style may cross a line end.
-func (s *settingsScreen) arrowRow(label, old, next string, labelW, w int) []string {
-	t := s.st.theme
-	arrow := " " + t.Glyphs.Arrow + " "
-
-	if labelW+width(old+arrow+next) <= w {
-		return []string{t.Muted.Render(padRight(label, labelW)) + t.Muted.Render(old) + t.Faint.Render(arrow) +
-			t.Body.Render(next)}
-	}
-
-	return integLabeled(t, label, labelW, old+arrow+next, t.Body, w)
 }
 
 // willLines lists what the save changes in the file.
@@ -700,7 +686,7 @@ func (s *settingsScreen) wontLines(g settings.Group) []string {
 	case settings.GroupInference:
 		out = append(out, "run a model, log in, or change the Claude Code or Codex files")
 	case settings.GroupPinWrite:
-		out = append(out, "apply a pending proposal: a new proposal preview offers the write")
+		out = append(out, "write a pin: a new apply, retarget or prune preview offers the write")
 	case settings.GroupEvidence:
 		out = append(out, "fetch reviews or change the stored findings")
 	case settings.GroupIndexing:

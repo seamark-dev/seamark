@@ -296,7 +296,7 @@ func (d *distRecord) summaryBox(w, h int, focused bool) string {
 
 	o := boxOpts{W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Distillation", true), Right: d.stateLabel()}
 
-	return d.scrollBox(o, body, nil, &d.run.summary, [2]int{-1, -1}, false)
+	return d.st.theme.scrollBox(o, body, nil, &d.run.summary, [2]int{-1, -1}, false)
 }
 
 // progressLines renders the running summary (design map §6).
@@ -440,24 +440,40 @@ func (d *distRecord) duplicatesText() string {
 	return text
 }
 
-// usageText renders the estimated agent traffic of the finished calls.
-// The engine meters characters; the tokens are its estimate.
+// usageText renders the estimated agent traffic. The engine meters
+// characters; the tokens are its estimate. A finished call meters its
+// prompt and its reply. The prompt of the group that sends is already
+// with the agent, so its planned size counts as sent before the reply.
 func (d *distRecord) usageText() string {
 	t := d.st.theme
 
 	sent, back := 0, 0
 
-	for _, o := range d.outcomes() {
+	outs := d.outcomes()
+	for _, o := range outs {
 		sent += o.PromptChars
 		back += o.ReplyChars
 	}
 
-	if sent == 0 {
-		return t.Muted.Render("no agent traffic yet")
+	pending, k := 0, d.run.sending
+	if d.step == distRunning && k >= 0 && k < len(outs) {
+		pending = outs[k].Plan.PromptChars
 	}
 
-	text := t.Body.Render(distTokens(sent)+" tokens sent "+t.Glyphs.Sep+" "+distTokens(back)+" received") + " " +
-		t.Faint.Render("(estimated)")
+	switch {
+	case sent == 0 && pending == 0:
+		return t.Muted.Render("no agent traffic yet")
+	case sent == 0:
+		return t.Body.Render(distTokens(pending)+" tokens sent to group "+itoa(k+1)) + " " +
+			t.Faint.Render("(estimated)") + t.Muted.Render("; reply pending")
+	}
+
+	text := t.Body.Render(distTokens(sent+pending)+" tokens sent "+t.Glyphs.Sep+" "+distTokens(back)+" received") +
+		" " + t.Faint.Render("(estimated)")
+
+	if pending > 0 {
+		text += t.Muted.Render("; group " + itoa(k+1) + " reply pending")
+	}
 
 	if d.step == distResult {
 		text += t.Muted.Render(" " + t.Glyphs.Sep + " " + runElapsed(d.run.ended.Sub(d.run.started)))
@@ -607,7 +623,7 @@ func (d *distRecord) runGroupsBox(w, h int, focused bool) string {
 		W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Groups", focused), Right: t.Muted.Render(right),
 	}
 
-	return d.scrollBox(o, body, nil, &d.run.groups, keep, d.run.follow)
+	return d.st.theme.scrollBox(o, body, nil, &d.run.groups, keep, d.run.follow)
 }
 
 // runGroupLines renders the group table. find adds the findings column,
@@ -806,7 +822,7 @@ func (d *distRecord) compactBox(w, h int) string {
 
 	o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Distillation", true), Right: d.stateLabel()}
 
-	return d.pinnedBox(o, head, body, nil, &r.groups, keep, follow)
+	return d.st.theme.pinnedBox(o, head, body, nil, &r.groups, keep, follow)
 }
 
 // shortStopNote is the one-line stop note of the compact box. The stop

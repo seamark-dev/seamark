@@ -1,12 +1,12 @@
 package tui
 
 import (
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/distill"
+	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/settings"
 )
 
@@ -126,52 +126,6 @@ func (d *distRecord) facts(compact bool) string {
 	return strings.Join(parts, "     ")
 }
 
-// scrollBox renders body lines in a box that scrolls in sc, with the
-// tail lines always visible under the body. When follow is set, the
-// window moves so that the lines keep[0] to keep[1] show, for example
-// the cursor group and its evidence. A box that scrolls shows its
-// position in the bottom border.
-func (d *distRecord) scrollBox(o boxOpts, body, tail []string, sc *scrollState, keep [2]int, follow bool) string {
-	return d.pinnedBox(o, nil, body, tail, sc, keep, follow)
-}
-
-// pinnedBox is scrollBox with head lines that stay above the body, for
-// example the headline of a run. Only the body scrolls, and keep counts
-// body lines.
-func (d *distRecord) pinnedBox(o boxOpts, head, body, tail []string, sc *scrollState, keep [2]int, follow bool) string {
-	rows := boxRows(o.H)
-	fixed := len(head) + len(tail)
-
-	window := len(body)
-	if len(body)+fixed > rows {
-		window = max(1, rows-fixed)
-	}
-
-	sc.page = window
-	sc.last = max(0, len(body)-window)
-
-	if follow && keep[0] >= 0 {
-		if keep[1] >= sc.off+window {
-			sc.off = keep[1] - window + 1
-		}
-
-		if keep[0] < sc.off {
-			sc.off = keep[0]
-		}
-	}
-
-	sc.by(0)
-
-	end := min(len(body), sc.off+window)
-	o.Lines = append(append(slices.Clone(head), body[sc.off:end]...), tail...)
-
-	if sc.scrolls() && o.Foot == "" {
-		o.Foot = propRange(d.st.theme, sc.off, end, len(body))
-	}
-
-	return d.st.theme.box(o)
-}
-
 // scopeView renders the form and its explanation: two boxes in the wide
 // layout, one box in the compact layout. The compact box names the key
 // that shows the full explanation.
@@ -182,7 +136,7 @@ func (d *distRecord) scopeView(w, h int) string {
 		if d.form.about {
 			o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "About this run", true)}
 
-			return d.scrollBox(o, d.aboutLines(boxInner(w)), nil, &d.form.aboutSc, [2]int{-1, -1}, false)
+			return d.st.theme.scrollBox(o, d.aboutLines(boxInner(w)), nil, &d.form.aboutSc, [2]int{-1, -1}, false)
 		}
 
 		return d.formBox(w, h, true)
@@ -228,7 +182,7 @@ func (d *distRecord) formBox(w, h int, compact bool) string {
 		Right: t.Attention.Render("draft"),
 	}
 
-	return d.scrollBox(o, body, tail, &d.form.sc, keep, true)
+	return d.st.theme.scrollBox(o, body, tail, &d.form.sc, keep, true)
 }
 
 // formLines renders the field rows. It returns the line range of the
@@ -435,8 +389,19 @@ func (d *distRecord) aboutLines(w int) []string {
 
 // distArgv renders an agent command line for display. Arguments can
 // hold tokens, so the helper redacts them before it sanitizes the text.
+// A secret-shaped value that holds shell syntax stays visible. It is
+// code that runs after y, and "[REDACTED]" would hide it behind a word
+// that reads as a safety measure.
 func distArgv(argv []string) string {
-	return diag(strings.Join(argv, " "))
+	return oneLine(redact.SecretsExcept(strings.Join(argv, " "), shellActive))
+}
+
+// shellActive reports text that a shell runs or redirects: a command
+// substitution, a backquote, a command separator, a pipe, a redirection
+// or a line break. A password that holds such a character then shows
+// too; the trade-off favors the code that runs.
+func shellActive(s string) bool {
+	return strings.Contains(s, "$(") || strings.ContainsAny(s, "`;|&<>\n\r")
 }
 
 // distAgentKind names where the agent command comes from: a registered

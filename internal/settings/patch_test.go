@@ -678,8 +678,8 @@ func TestActivationNotesPerGroup(t *testing.T) {
 		when string
 		note string
 	}{
-		{Edit{Field: AgentCLI, String: "codex"}, "next prepared distillation", "Claude and Codex integration files do not change."},
-		{Edit{Field: DistillWrite, Bool: true}, "next proposal preview", "Saving applies no proposal; a new proposal preview is necessary."},
+		{Edit{Field: AgentCLI, String: "codex"}, "next distillation or trigger extraction", "Claude and Codex integration files do not change."},
+		{Edit{Field: DistillWrite, Bool: true}, "next apply, retarget or prune preview", "Saving writes no pin; only a new preview offers the write."},
 		{Edit{Field: ReviewWindow, Days: 30}, "next confirmed evidence refresh", "The newest 200 review comments are always kept."},
 		{Edit{Field: IndexGenerated, Bool: true}, "next explicit index build", "Nothing is scanned or removed until the build."},
 	}

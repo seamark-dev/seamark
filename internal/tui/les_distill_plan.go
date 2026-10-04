@@ -148,7 +148,7 @@ func (d *distRecord) planBox(w, h int, focused bool) string {
 		Right: t.Muted.Render(propPlural(len(p.Plan.Groups), "group", "groups")),
 	}
 
-	return d.scrollBox(o, body, tail, &d.plan.notes, [2]int{-1, -1}, false)
+	return d.st.theme.scrollBox(o, body, tail, &d.plan.notes, [2]int{-1, -1}, false)
 }
 
 // planFacts renders the key facts of the plan. Every count comes from
@@ -175,28 +175,29 @@ func (d *distRecord) planFacts(w int) []string {
 	// The value wraps in its column, so the kind needs no cut here.
 	agent := distAgentText(t, p.Invocation.Argv, distAgentKind(p.Invocation.Name, !d.plan.preset), 0)
 
-	rows = append(rows, [2]string{"Agent", agent}, [2]string{"Runs in", d.runsIn()})
+	runsIn := runsInText(t, p.Invocation.Dir, d.plan.cwd, p.RepoRoot)
+	rows = append(rows, [2]string{"Agent", agent}, [2]string{"Runs in", runsIn})
 
 	return propKV(t, rows, w)
 }
 
-// runsIn names the directory where the agent process starts. A preset
-// without its own directory inherits the directory of the console,
-// which can differ from the repository root (seamark -C).
-func (d *distRecord) runsIn() string {
-	t := d.st.theme
-	p := d.plan.preview
-
+// runsInText names the directory where an agent process starts: dir is
+// the directory of the invocation, cwd the directory of the console,
+// and root the repository root. A preset without its own directory
+// inherits the directory of the console, which can differ from the
+// repository root (seamark -C). The distillation and the extraction
+// reviews share it, so both disclose the directory the same way.
+func runsInText(t *Theme, dir, cwd, root string) string {
 	switch {
-	case p.Invocation.Dir != "":
-		return t.Body.Render(oneLine(displayPath(p.Invocation.Dir)))
-	case d.plan.cwd == "":
+	case dir != "":
+		return t.Body.Render(oneLine(displayPath(dir)))
+	case cwd == "":
 		return t.Muted.Render("the directory of the console, not known")
-	case d.plan.cwd != p.RepoRoot:
-		return t.Body.Render(oneLine(displayPath(d.plan.cwd))) + " " +
+	case cwd != root:
+		return t.Body.Render(oneLine(displayPath(cwd))) + " " +
 			t.Attention.Render("(the console directory, not the repository root)")
 	default:
-		return t.Body.Render(oneLine(displayPath(d.plan.cwd)))
+		return t.Body.Render(oneLine(displayPath(cwd)))
 	}
 }
 
@@ -296,7 +297,7 @@ func (d *distRecord) groupsBox(w, h int, focused bool) string {
 		Right: t.Faint.Render("engine order"),
 	}
 
-	return d.scrollBox(o, body, nil, &d.plan.groups, keep, d.plan.follow)
+	return d.st.theme.scrollBox(o, body, nil, &d.plan.groups, keep, d.plan.follow)
 }
 
 // groupLines renders the group rows, the evidence rows under each group,
@@ -451,7 +452,7 @@ func (d *distRecord) nothingBox(w, h int) string {
 		Right: t.Success.Render(g.OK + " nothing to do"),
 	}
 
-	return d.scrollBox(o, lines, nil, &d.plan.notes, [2]int{-1, -1}, false)
+	return d.st.theme.scrollBox(o, lines, nil, &d.plan.notes, [2]int{-1, -1}, false)
 }
 
 // nothingReason tells why no group is eligible: no findings in scope,

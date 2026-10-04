@@ -294,7 +294,7 @@ func (v *evidenceView) done(msg evDoneMsg) tea.Cmd {
 
 	r.finish(msg.out, msg.err, time.Now())
 
-	return tea.Batch(mutationDone, refresh(secLearning, secLedger, secIndex, secStats, secDoctor), r.toast())
+	return tea.Batch(mutationDone, refresh(secLearning, secLedger, secIndex, secStats, secDoctor, secPins), r.toast())
 }
 
 // apply records one progress event. The engine sends no event when it

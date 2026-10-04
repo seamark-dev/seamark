@@ -198,9 +198,10 @@ func (s *integrations) update(msg tea.Msg) tea.Cmd {
 // changed. It loads through the state directly, not through refresh,
 // so the result can wait for this exact inspection generation. A setup
 // can create the starter config.yaml, so the settings and the evidence
-// view reload too.
+// view reload too. It can also create the starter lessons.yaml, so the
+// Pins sub-view reloads and stops reporting a missing pin file.
 func (s *integrations) applied(msg setupAppliedMsg) tea.Cmd {
-	load := s.st.load(secIntegrations, secDoctor, secSettings, secLearning)
+	load := s.st.load(secIntegrations, secDoctor, secSettings, secLearning, secPins)
 	gen := s.st.gens[secIntegrations]
 
 	if s.wizard != nil {

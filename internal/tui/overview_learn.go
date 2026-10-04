@@ -103,6 +103,8 @@ func (o *overview) runItem() (ovItem, bool) {
 		name = "Distillation"
 	case runEvidence:
 		name = "Evidence refresh"
+	case runExtract:
+		name = "Trigger extraction"
 	}
 
 	state := "running"
@@ -386,7 +388,9 @@ func (o *overview) evidenceItem() (ovItem, bool) {
 		return ovItem{}, false
 	}
 
-	if len(l.value.Pending)+len(l.value.Applied)+len(l.value.Dismissed) > 0 {
+	// Superseded rows count too: a prune of every applied pin leaves only
+	// them, and Proposals › f still shows them, so the ledger is not empty.
+	if len(l.value.Pending)+len(l.value.Applied)+len(l.value.Dismissed)+len(l.value.Superseded) > 0 {
 		return ovItem{}, false
 	}
 

@@ -223,7 +223,7 @@ func TestLessonsDetailShowsEvidenceAdvisoriesAndReadOnlyState(t *testing.T) {
 
 	frame := h.view()
 	detail := lesFixDetail(h)
-	assert.Contains(t, detail, "RULE Check every error returned by the store before you use the value.")
+	assert.Contains(t, detail, "NOTE Check every error returned by the store before you use the value.")
 	assert.Contains(t, detail, "Regions internal/api")
 	assert.Contains(t, detail, "Agent claude/v2 · created 2026-09-20")
 	assert.Contains(t, frame, "PR #45 · coderabbit · internal/api/handler.go")
@@ -304,9 +304,10 @@ func TestLessonsStateFilterClearsSelectionVisibly(t *testing.T) {
 	assert.Contains(t, frame, "wrap-sql-errors")
 	assert.NotContains(t, frame, "check-nil-errors")
 
-	// A change without a selection says nothing about the selection.
-	h.press("f", "f")
-	assert.Contains(t, h.view(), "state [pending 3] applied 1  dismissed 1")
+	// A change without a selection says nothing about the selection. The
+	// cycle passes the dismissed and the superseded history (Phase 3).
+	h.press("f", "f", "f")
+	assert.Contains(t, h.view(), "state [pending 3] applied 1  dismissed 1  superseded 0")
 }
 
 func TestLessonsSpaceOnReadOnlyRowDoesNothing(t *testing.T) {
@@ -601,15 +602,15 @@ func TestLessonsStaleCommitAsksForANewPreview(t *testing.T) {
 
 	frame := h.view()
 	assert.Contains(t, frame, "Nothing changed")
-	assert.Contains(t, lesModalText(t, h), "Something changed since the preview — review again.")
+	assert.Contains(t, lesModalText(t, h), "Something changed since the preview — preview again.")
 	assert.Contains(t, lesModalText(t, h), "p1 changed")
-	assert.Contains(t, lesModalText(t, h), "enter review again esc close")
+	assert.Contains(t, lesModalText(t, h), "enter preview again esc close")
 	assert.NotContains(t, frame, "Applied")
 	assert.False(t, h.m.st.busy())
 
 	h.press("enter")
 	assert.Equal(t, []string{"PreviewDecision:apply", "CommitDecision:apply", "PreviewDecision:apply"}, f.called(),
-		"review again builds a new preview and never repeats the commit")
+		"preview again builds a new preview and never repeats the commit")
 	assert.Contains(t, h.view(), "Apply p1")
 }
 
@@ -618,8 +619,10 @@ func TestLessonsCommitRefusalsHaveClearMessages(t *testing.T) {
 		err  error
 		want string
 	}{
-		{proposals.ErrWriteDisabled, "distill.write is off, so nothing was written"},
-		{fmt.Errorf("%w: p1", proposals.ErrNeedsReconcile), "a blind apply would duplicate them"},
+		// The sentences name the enter action by its label, "preview
+		// again", as the Pins results do.
+		{proposals.ErrWriteDisabled, "distill.write is off, so nothing was written. Preview again to get the YAML block."},
+		{fmt.Errorf("%w: p1", proposals.ErrNeedsReconcile), "a blind apply would duplicate them. Preview again and press c"},
 		{proposals.ErrNothingSelected, "No pending proposal was selected."},
 		{ErrBusy, "Another operation is running"},
 	} {
@@ -797,8 +800,9 @@ func TestLessonsEmptyAndUnavailableStates(t *testing.T) {
 	assert.Contains(t, h.view(), "No dismissed proposals")
 	assert.Contains(t, lesBoxFlat(h.view()), "Press f to show another state.")
 
-	// A failed reload keeps the last snapshot and marks it stale.
-	h.press("f")
+	// A failed reload keeps the last snapshot and marks it stale. Two
+	// presses pass the superseded history back to pending (Phase 3).
+	h.press("f", "f")
 
 	f.ledgerErr = errors.New("database is locked")
 	h.press("r")
@@ -819,7 +823,7 @@ func TestLessonsSubViewsAndIntents(t *testing.T) {
 	h := lesOpen(t, f, 120, 32)
 	les := h.m.screens[destLessons].(*lessons)
 
-	assert.Contains(t, h.view(), "Proposals   Stats   Evidence   p / s / e")
+	assert.Contains(t, h.view(), "Proposals   Pins   Stats   Evidence   p / m / s / e")
 
 	h.press("s")
 	assert.Equal(t, lesStats, les.sub)

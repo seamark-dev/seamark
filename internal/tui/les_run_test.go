@@ -98,9 +98,10 @@ func TestRunViewEmptyStateNamesWhereARunStarts(t *testing.T) {
 	frame := h.view()
 	assert.Contains(t, frame, "╭─ Run ")
 	assert.Contains(t, frame, "No run in this session")
-	assert.Contains(t, lesFlat(frame), "Refresh the evidence or prepare a distillation from Evidence.")
-	assert.Contains(t, frame, "e open Evidence")
-	assert.Contains(t, shellAFooter(frame), "p proposals   s stats   e evidence")
+	assert.Contains(t, lesBoxFlat(frame), "Refresh the evidence or prepare a distillation from Evidence, or "+
+		"extract trigger information with t in Pins or Proposals.")
+	assert.Contains(t, frame, "e open Evidence   m open Pins")
+	assert.Contains(t, shellAFooter(frame), "p proposals   m pins   s stats   e evidence")
 	assert.False(t, les.capturing())
 
 	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 20}} {
@@ -111,6 +112,9 @@ func TestRunViewEmptyStateNamesWhereARunStarts(t *testing.T) {
 
 	h.press("e")
 	assert.Equal(t, lesEvidence, les.sub, "the named key works")
+
+	h.press("u", "m")
+	assert.Equal(t, lesPins, les.sub, "the second named key works")
 	assert.Empty(t, f.called(), "the empty state reads and writes nothing")
 }
 
@@ -124,7 +128,7 @@ func TestRunViewOpensARecordFromAnotherDestination(t *testing.T) {
 	assert.Equal(t, destLessons, h.m.active, "show opens Lessons")
 	assert.Equal(t, lesRun, les.sub, "show opens the Run sub-view")
 	assert.Contains(t, h.view(), "╭─ Fake run ")
-	assert.Contains(t, lesSubTabs(h), "Run   p / s / e / u", "a record offers the Run tab")
+	assert.Contains(t, lesSubTabs(h), "Run   p / m / s / e / u", "a record offers the Run tab")
 
 	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 20}} {
 		h.resize(size[0], size[1])
@@ -216,7 +220,7 @@ func TestRunViewRoutesKeysAndMessagesToTheRecord(t *testing.T) {
 	rec.bindings = []key.Binding{stop}
 	h.send(openRunMsg{rec: rec, show: true})
 
-	assert.True(t, strings.HasPrefix(strings.TrimSpace(shellAFooter(h.view())), "x stop   p proposals   e evidence"),
+	assert.True(t, strings.HasPrefix(strings.TrimSpace(shellAFooter(h.view())), "x stop   p proposals   m pins   e evidence"),
 		shellAFooter(h.view()))
 
 	h.press("x")

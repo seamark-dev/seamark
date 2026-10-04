@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/lipgloss"
@@ -179,21 +181,68 @@ func (t *Theme) kv(rows [][2]string, w int) string {
 }
 
 // hints renders key bindings as "key action" pairs for the footer.
+//
+// Consecutive unavailable entries (see unavailable) form one faint group
+// that starts with the word n/a, for example "n/a: w retarget, v
+// compare". The word carries the state without color. One word for the
+// group costs fewer cells than one word for each key.
 func (t *Theme) hints(bindings []key.Binding) string {
-	var parts []string
+	return t.hintRow(bindings, false)
+}
+
+// shortHints renders the hints as hints does, but each n/a group shows
+// only its keys, for example "n/a: w t v". A footer that cannot hold
+// every hint uses it, so the unavailable keys stay in view at a cost of
+// two cells for each key.
+func (t *Theme) shortHints(bindings []key.Binding) string {
+	return t.hintRow(bindings, true)
+}
+
+// hintRow renders the hints, with or without the actions of the n/a
+// groups.
+func (t *Theme) hintRow(bindings []key.Binding, short bool) string {
+	var parts, off []string
+
+	// The labelled group separates its entries with commas, because each
+	// entry has two words. The short group has only keys, so spaces are
+	// enough.
+	sep := ", "
+	if short {
+		sep = " "
+	}
+
+	// flush closes the current group of unavailable entries.
+	flush := func() {
+		if len(off) > 0 {
+			parts = append(parts, t.Faint.Render(unavailableWord+": "+strings.Join(off, sep)))
+			off = nil
+		}
+	}
 
 	for _, b := range bindings {
-		if !b.Enabled() {
+		if !listed(b) {
 			continue
 		}
 
 		h := b.Help()
-		if h.Key == "" {
+
+		if isUnavailable(b) {
+			entry := t.keyLabel(h.Key)
+			if !short {
+				entry += " " + h.Desc
+			}
+
+			off = append(off, entry)
+
 			continue
 		}
 
+		flush()
+
 		parts = append(parts, t.Key.Render(t.keyLabel(h.Key))+" "+t.Muted.Render(h.Desc))
 	}
+
+	flush()
 
 	// Three spaces between hints, as in the 1a footer, so a key never
 	// reads as the label of its neighbour.
@@ -584,6 +633,306 @@ func (t *Theme) effectLines(will []effect, wont []string, w int) []string {
 	}
 
 	return out
+}
+
+// arrowRow renders "label  old › new". The old value uses the muted
+// style, and the new value uses the plain style. A row that does not
+// fit wraps in one style, because no style may cross a line end. The
+// caller sanitizes old and next, because they can hold file text.
+func (t *Theme) arrowRow(label, old, next string, labelW, w int) []string {
+	arrow := " " + t.Glyphs.Arrow + " "
+
+	if labelW+width(old+arrow+next) <= w {
+		return []string{t.Muted.Render(padRight(label, labelW)) + t.Muted.Render(old) + t.Faint.Render(arrow) +
+			t.Body.Render(next)}
+	}
+
+	return integLabeled(t, label, labelW, old+arrow+next, t.Body, w)
+}
+
+// pairMinW is the narrowest width that shows a pair as two columns. Each
+// column then keeps at least 34 cells, which holds a short note line;
+// a narrower column would break most words.
+const pairMinW = 72
+
+// pairGap is the divider between the two columns of a pair.
+const pairGap = 3
+
+// pairWidth returns the width that each side of a pair has at w cells:
+// the left column when two columns fit, else the whole width, because
+// the sides then stack. A caller wraps its lines to this width.
+func pairWidth(w int) int {
+	if w >= pairMinW {
+		return (w - pairGap) / 2
+	}
+
+	return w
+}
+
+// pair renders two blocks for a comparison, for example the live pin
+// and its recorded proposal. At pairMinW cells and wider the blocks
+// stand side by side under their heads, with a vertical rule between
+// them. A narrower width stacks them with a blank row between, because
+// two narrow columns would break most words. lh and rh are the styled
+// heads; l and r are styled lines that the caller sanitized and wrapped
+// to pairWidth(w). pair clips a longer line, so no column overflows.
+func (t *Theme) pair(lh, rh string, l, r []string, w int) []string {
+	ell := t.Glyphs.Ellipsis
+
+	if w < pairMinW {
+		out := []string{truncate(lh, w, ell)}
+
+		for _, line := range l {
+			out = append(out, truncate(line, w, ell))
+		}
+
+		out = append(out, "", truncate(rh, w, ell))
+
+		for _, line := range r {
+			out = append(out, truncate(line, w, ell))
+		}
+
+		return out
+	}
+
+	lw := pairWidth(w)
+	rw := w - pairGap - lw
+	div := t.Rule.Render(" " + t.Glyphs.Vertical + " ")
+
+	left := append([]string{lh}, l...)
+	right := append([]string{rh}, r...)
+	out := make([]string, 0, max(len(left), len(right)))
+
+	for i := range max(len(left), len(right)) {
+		var a, b string
+
+		if i < len(left) {
+			a = left[i]
+		}
+
+		if i < len(right) {
+			b = right[i]
+		}
+
+		out = append(out, padRight(truncate(a, lw, ell), lw)+div+truncate(b, rw, ell))
+	}
+
+	return out
+}
+
+// The words of a region delta. Each row carries one, so the change
+// reads without color and without the sign glyph.
+const (
+	deltaAdded   = "added"
+	deltaRemoved = "removed"
+	deltaKept    = "kept"
+	// deltaRepoWide names an empty region set, which delivers a pin to
+	// every path.
+	deltaRepoWide = "repository-wide"
+)
+
+// deltaRow is one row of a region delta: the sign, the region, and the
+// word. An empty region stands for the repository-wide set.
+type deltaRow struct {
+	sign, region, word string
+	tone               Tone
+}
+
+// regionDelta renders the change from the region set before to the set
+// after as explicit rows, for example:
+//
+//	− internal/store       removed
+//	+ internal/store/sql   added
+//	  internal/api         kept
+//
+// Removed rows come first, then added rows, then kept rows. A kept row
+// has no glyph, like a context line of a diff: the OK and Info glyphs
+// read as "+" and "-" in ASCII and would turn a kept region into a
+// change. An empty set is repository-wide. A long region wraps after a
+// '/', and every row of it keeps its sign; a continuation row indents
+// its text. regionDelta sanitizes the regions, because they come from
+// the pin file or from a model.
+func (t *Theme) regionDelta(before, after []string, w int) []string {
+	g := t.Glyphs
+	was, now := deltaSet(before), deltaSet(after)
+
+	var rows []deltaRow
+
+	for _, r := range was {
+		if !slices.Contains(now, r) {
+			rows = append(rows, deltaRow{sign: g.Del, region: r, word: deltaRemoved, tone: ToneFailure})
+		}
+	}
+
+	for _, r := range now {
+		if !slices.Contains(was, r) {
+			rows = append(rows, deltaRow{sign: g.Add, region: r, word: deltaAdded, tone: ToneSuccess})
+		}
+	}
+
+	for _, r := range was {
+		if slices.Contains(now, r) {
+			rows = append(rows, deltaRow{sign: " ", region: r, word: deltaKept, tone: ToneNeutral})
+		}
+	}
+
+	// The region column takes the longest region that fits beside the
+	// sign and the longest word, so the words share one column.
+	wordW := width(deltaRemoved)
+	room := max(1, w-2-3-wordW)
+
+	regW := 0
+	for _, r := range rows {
+		regW = max(regW, width(deltaLabel(r.region)))
+	}
+
+	regW = min(regW, room)
+
+	out := make([]string, 0, len(rows))
+
+	for _, r := range rows {
+		out = append(out, t.deltaLines(r, regW)...)
+	}
+
+	return out
+}
+
+// deltaIndent is the extra indent of a continuation row of a wrapped
+// region. Without it, a continuation reads as one more region of the
+// delta.
+const deltaIndent = 2
+
+// deltaLines renders one delta row. A region wider than regW wraps
+// after a '/' (deltaWrap). The continuation rows repeat the sign, so a
+// removed path reads as removed on every row. They indent the text by
+// deltaIndent and carry no word, so only the first row reads as a
+// region.
+func (t *Theme) deltaLines(r deltaRow, regW int) []string {
+	sign := t.ToneStyle(r.tone).Render(r.sign)
+
+	// Only an added region reads in the body style: it is what the
+	// change delivers. The word of a kept row stays faint.
+	text, word := t.Muted, t.ToneStyle(r.tone)
+	if r.tone == ToneSuccess && r.region != "" {
+		text = t.Body
+	}
+
+	if r.tone == ToneNeutral {
+		word = t.Faint
+	}
+
+	segs := deltaWrap(deltaLabel(r.region), regW, max(1, regW-deltaIndent))
+	out := make([]string, 0, len(segs))
+	indent := strings.Repeat(" ", deltaIndent)
+
+	for i, seg := range segs {
+		if i == 0 {
+			out = append(out, sign+" "+text.Render(padRight(seg, regW))+"   "+word.Render(r.word))
+
+			continue
+		}
+
+		out = append(out, sign+" "+indent+text.Render(seg))
+	}
+
+	return out
+}
+
+// deltaWrap breaks a region into rows of at most first cells, then rest
+// cells. It breaks after a '/' or a space, so each row ends at a path
+// boundary and no row starts with a fragment of a directory name. Only a
+// single part that is wider than its row breaks at the cell limit,
+// because no row may overflow the column.
+func deltaWrap(region string, first, rest int) []string {
+	if width(region) <= first {
+		return []string{region}
+	}
+
+	var (
+		rows []string
+		cur  string
+	)
+
+	limit := first
+
+	for _, part := range deltaParts(region) {
+		if cur != "" && width(cur)+width(part) > limit {
+			rows = append(rows, cur)
+			cur, limit = "", rest
+		}
+
+		for cur == "" && width(part) > limit {
+			head := truncate(part, limit, "")
+			if head == "" {
+				// A wide character does not fit a one-cell row; it
+				// takes the row alone, so the loop always moves on.
+				_, size := utf8.DecodeRuneInString(part)
+				head = part[:size]
+			}
+
+			rows = append(rows, head)
+			part, limit = part[len(head):], rest
+		}
+
+		cur += part
+	}
+
+	if cur != "" {
+		rows = append(rows, cur)
+	}
+
+	return rows
+}
+
+// deltaParts splits a region after each '/' and each space, so the
+// parts joined again give the region. Both separators are ASCII, so a
+// byte scan never cuts a multi-byte character.
+func deltaParts(region string) []string {
+	var parts []string
+
+	start := 0
+
+	for i := range len(region) {
+		if region[i] == '/' || region[i] == ' ' {
+			parts = append(parts, region[start:i+1])
+			start = i + 1
+		}
+	}
+
+	if start < len(region) {
+		parts = append(parts, region[start:])
+	}
+
+	return parts
+}
+
+// deltaSet returns the sanitized regions of set in their order, without
+// repeats and without empty entries. An empty set gives the one empty
+// region that stands for the repository-wide set, so a move to or from
+// it shows as a change.
+func deltaSet(set []string) []string {
+	out := make([]string, 0, len(set))
+
+	for _, r := range set {
+		if r = oneLine(r); r != "" && !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+
+	if len(out) == 0 {
+		return []string{""}
+	}
+
+	return out
+}
+
+// deltaLabel returns the shown text of a delta region.
+func deltaLabel(region string) string {
+	if region == "" {
+		return deltaRepoWide
+	}
+
+	return region
 }
 
 // phaseState is the progress of one step of a long operation.

@@ -109,8 +109,9 @@ func TestLessonsFixApplyLabelFollowsTheGate(t *testing.T) {
 }
 
 // TestLessonsFixRecordAppliedShownOnlyForKnownPins covers finding 31:
-// the footer offers c only for a target whose pin a preview found. The
-// key keeps working for a pin that a hand edit added.
+// the footer offers c only when every target has a pin that a preview
+// found. Without one, the press shows the reason and opens no preview
+// (user decision of 2026-10-04). r reads a pin that a hand edit added.
 func TestLessonsFixRecordAppliedShownOnlyForKnownPins(t *testing.T) {
 	f := newFake()
 	f.ledger = lesLedger()
@@ -136,25 +137,46 @@ func TestLessonsFixRecordAppliedShownOnlyForKnownPins(t *testing.T) {
 	h := lesOpen(t, f, 120, 60)
 	assert.False(t, lesFixBinding(t, h, "c").Enabled(), "no pin is known yet")
 
+	// The help names every Proposals action (user decision of
+	// 2026-10-04). It lists c only as unavailable, so it does not offer
+	// a record that fails for a missing pin.
 	h.press("?")
-	assert.NotContains(t, h.view(), "record applied")
+
+	on, off := helpParts(h)
+	assert.NotContains(t, on, "record applied")
+	assert.Contains(t, off, "c n/a record applied")
 	h.press("esc")
 
-	// The key still works, but it is not advertised.
+	// The press follows the help: it names the reason and opens nothing.
 	h.press("c")
-	assert.Equal(t, []string{"PreviewDecision:reconcile"}, f.called())
-	h.press("esc")
+	assert.Empty(t, f.called(), "c without a known pin asks for no preview")
+	assert.Nil(t, lesProps(h).dec)
+	assert.Equal(t, "No record applied: no pin in .seamark/lessons.yaml carries p1 yet. Press r after you edit the "+
+		"file.", h.m.toast.text)
 
 	// An apply preview finds the pin of p1.
 	h.press("a", "esc")
+	assert.Equal(t, []string{"PreviewDecision:apply"}, f.called())
 	assert.True(t, lesFixBinding(t, h, "c").Enabled(), "the cursor row has a known pin")
 	assert.Contains(t, lesFixDetail(h), "A pin for p1 already exists in .seamark/lessons.yaml. Press c to record it")
 
 	h.press("down")
 	assert.False(t, lesFixBinding(t, h, "c").Enabled(), "p2 has no known pin")
 
-	// A selection that includes p1 shows c again.
+	// A selection needs a known pin for every mark: the record refuses
+	// the whole selection when one pin is missing. So p1 and p2 hide c,
+	// and the press counts the marks without a pin.
 	h.press("up", "space", "down", "space")
+	assert.False(t, lesFixBinding(t, h, "c").Enabled(), "p2 has no known pin")
+
+	h.press("c")
+	assert.Equal(t, []string{"PreviewDecision:apply"}, f.called(), "c asks for no preview")
+	assert.Equal(t, "No record applied: 1 of 2 marked proposals has no pin in .seamark/lessons.yaml yet. Press r "+
+		"after you edit the file.", h.m.toast.text)
+
+	// p1 alone shows c again.
+	h.press("space")
+	require.Equal(t, []int64{1}, lesProps(h).selectedIDs())
 	assert.True(t, lesFixBinding(t, h, "c").Enabled())
 
 	// A new apply preview that finds no pin clears the hint.

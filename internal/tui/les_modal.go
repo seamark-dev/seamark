@@ -253,7 +253,7 @@ func (p *propView) applyModal(d *propDecision, w int) lesModal {
 		return m
 	}
 
-	yamlLines, numbered, pins := p.yamlLines(block, w)
+	yamlLines, numbered, pins := yamlBlockLines(t, block, w)
 	m.right = t.Muted.Render(propPlural(numbered, "line", "lines"))
 	m.body = append(m.body, "")
 	m.body = append(m.body, yamlLines...)
@@ -323,16 +323,16 @@ func propYAMLKeyEnd(s string) int {
 	return -1
 }
 
-// yamlLines numbers the pin block for the modal: line numbers faint,
+// yamlBlockLines numbers a pin block for a modal: line numbers faint,
 // comments faint, keys in the info color, values in the body color.
 // The block loses its common indent, as in the 1a design, so a comment
 // line fits the 80-cell modal. Long notes fold where YAML allows it. A
 // line that cannot fold, for example a long comment, wraps on the
-// screen only: its continuation has no number, and c copies
-// Preview.YAML unchanged. It returns the lines, the count of numbered
-// lines, and the fold result.
-func (p *propView) yamlLines(block string, w int) (out []string, numbered int, pins propPinBlock) {
-	t := p.st.theme
+// screen only: its continuation has no number, and a copy takes the
+// block unchanged. It returns the lines, the count of numbered lines,
+// and the fold result. The apply preview and the Phase 3 pin previews
+// share it, so every pin block reads the same way.
+func yamlBlockLines(t *Theme, block string, w int) (out []string, numbered int, pins propPinBlock) {
 	src := propDedent(multiLine(block))
 
 	numW := 2
@@ -604,7 +604,7 @@ func (p *propView) resultModal(d *propDecision, w int) lesModal {
 
 	actions := []key.Binding{withHelp(nkeys.Enter, "enter", "close")}
 	if d.reviewAgain() {
-		actions = []key.Binding{withHelp(nkeys.Enter, "enter", "review again"), withHelp(nkeys.Back, "esc", "close")}
+		actions = []key.Binding{withHelp(nkeys.Enter, "enter", "preview again"), withHelp(nkeys.Back, "esc", "close")}
 	}
 
 	if d.err != nil {
@@ -740,12 +740,12 @@ func (p *propView) resultFacts(a proposals.Action, res proposals.Result) [][2]st
 func propRefusal(err error, t *Theme) string {
 	switch {
 	case errors.Is(err, proposals.ErrStale):
-		return "Something changed since the preview" + propDash(t) + "review again."
+		return "Something changed since the preview" + propDash(t) + "preview again."
 	case errors.Is(err, proposals.ErrWriteDisabled):
-		return "distill.write is off, so nothing was written. Review again to get the YAML block."
+		return "distill.write is off, so nothing was written. Preview again to get the YAML block."
 	case errors.Is(err, proposals.ErrNeedsReconcile):
 		return "Pins for the selected proposals already exist, so a blind apply would duplicate them. " +
-			"Review again and press c to record them as applied (ledger only)."
+			"Preview again and press c to record them as applied (ledger only)."
 	case errors.Is(err, proposals.ErrNothingSelected):
 		return "No pending proposal was selected."
 	case errors.Is(err, ErrBusy):

@@ -23,7 +23,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/maintain"
 	domain "github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/settings"
@@ -450,6 +452,9 @@ func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
 	agent := &engAgent{}
 	e := engNew(ws, engineDeps{fetch: fetch.fetch, invoke: agent})
 
+	// A pin without a proposal gives the maintenance read an entry.
+	engWrite(t, ws, pinfile.File, "pin:\n  - rule: keep-docs-current\n    note: Keep the docs current.\n")
+
 	preview, err := e.PlanDistill(learning.DistillRequest{})
 	require.NoError(t, err)
 
@@ -467,9 +472,15 @@ func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
 	var (
 		errs      = map[string]error{}
 		nested    *distill.Execution
+		nestedExt *distill.ExtractExecution
 		readErr   error
 		readPlan  *settings.Plan
 		readCount int
+		pins      *maintain.Inspection
+		maintPlan *maintain.Plan
+		maintErr  error
+		extPlan   *learning.ExtractPreview
+		extErr    error
 	)
 
 	agent.fn = func(_ context.Context, prompt string) (string, error) {
@@ -479,10 +490,18 @@ func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
 		_, errs["SaveSettings"] = e.SaveSettings(setPlan)
 		_, errs["BuildIndex"] = e.BuildIndex(false, func(IndexEvent) {})
 		_, errs["CommitDecision"] = e.CommitDecision(&proposals.Preview{Action: proposals.ActionDismiss})
+		_, errs["CommitMaintenance"] = e.CommitMaintenance(&maintain.Plan{Action: maintain.ActionPrune})
+		_, errs["CommitRecovery"] = e.CommitRecovery(&maintain.Plan{Action: maintain.ActionPrune})
+		nestedExt, errs["RunExtract"] = e.RunExtract(context.Background(), &learning.ExtractPreview{}, nil)
 
 		// Reads take no lock, so the views stay responsive.
 		readPlan, readErr = e.PlanSettings(set, []settings.Edit{{Field: settings.DistillWrite, Bool: true}})
 		readCount = e.Learning().ReviewFindings
+		pins = e.Pins()
+		maintPlan, maintErr = e.PlanMaintenance(maintain.Request{
+			Action: maintain.ActionPrune, Refs: []pinfile.EntryRef{pins.Pins[0].Entry.Ref()}, Cursor: true,
+		})
+		extPlan, extErr = e.PlanExtract(learning.ExtractRequest{})
 
 		return engReply(prompt), nil
 	}
@@ -495,13 +514,21 @@ func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
 		require.ErrorIs(t, err, ErrBusy, name)
 	}
 
-	assert.Len(t, errs, 6)
+	assert.Len(t, errs, 9)
 	assert.Nil(t, nested, "a refused run returns no execution")
-	assert.Equal(t, 1, agent.count(), "the refused run starts no agent call")
+	assert.Nil(t, nestedExt, "a refused extraction returns no execution")
+	assert.Equal(t, 1, agent.count(), "the refused runs start no agent call")
 	assert.Empty(t, fetch.called(), "the refused refresh never fetches")
 	require.NoError(t, readErr)
 	assert.NotNil(t, readPlan)
 	assert.Equal(t, 2, readCount)
+
+	require.Len(t, pins.Pins, 1, "the Pins read works during the run")
+	require.NoError(t, maintErr)
+	require.Len(t, maintPlan.Items, 1, "a maintenance plan works during the run")
+	assert.Equal(t, maintain.ItemBlocked, maintPlan.Items[0].Status, "a pin without a proposal stays read-only")
+	require.NoError(t, extErr)
+	assert.True(t, extPlan.NoOp(), "an extraction plan works during the run")
 
 	// The run changed only the database; the refused save changed no file.
 	after := engTree(t, ws.Root)
@@ -544,14 +571,53 @@ func TestEngineMutationsReleaseTheLockOnEveryPath(t *testing.T) {
 	require.Error(t, err)
 	engUnlocked(t, e)
 
+	// Each maintenance and extraction mutation refuses a missing or an
+	// unusable plan, and frees the lock on that path too.
+	_, err = e.CommitMaintenance(nil)
+	require.ErrorIs(t, err, errNoPlan)
+	engUnlocked(t, e)
+
+	_, err = e.CommitMaintenance(&maintain.Plan{Action: maintain.ActionPrune})
+	require.Error(t, err, "a plan that was never confirmable never commits")
+	engUnlocked(t, e)
+
+	_, err = e.CommitRecovery(nil)
+	require.ErrorIs(t, err, errNoPlan)
+	engUnlocked(t, e)
+
+	_, err = e.CommitRecovery(&maintain.Plan{Action: maintain.ActionPrune})
+	require.Error(t, err, "a plan without a recovery proof never commits")
+	engUnlocked(t, e)
+
+	ext, err := e.RunExtract(context.Background(), nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, ext)
+	engUnlocked(t, e)
+
+	noop, err := e.PlanExtract(learning.ExtractRequest{})
+	require.NoError(t, err)
+
+	ext, err = e.RunExtract(context.Background(), noop, nil)
+	require.ErrorIs(t, err, learning.ErrNothingToExtract)
+	assert.Nil(t, ext)
+	assert.Zero(t, agent.count())
+	engUnlocked(t, e)
+
 	e.mu.Lock()
 	x, err = e.RunDistill(context.Background(), preview, nil)
 	_, cleanErr := e.CleanupPending(preview)
+	_, maintErr := e.CommitMaintenance(&maintain.Plan{Action: maintain.ActionRetarget})
+	_, recoverErr := e.CommitRecovery(&maintain.Plan{Action: maintain.ActionRetarget})
+	ext, extErr := e.RunExtract(context.Background(), noop, nil)
 	e.mu.Unlock()
 
 	require.ErrorIs(t, err, ErrBusy)
 	require.ErrorIs(t, cleanErr, ErrBusy)
+	require.ErrorIs(t, maintErr, ErrBusy)
+	require.ErrorIs(t, recoverErr, ErrBusy)
+	require.ErrorIs(t, extErr, ErrBusy)
 	assert.Nil(t, x)
+	assert.Nil(t, ext)
 }
 
 func TestEngineCleansUpACleanupOnlyPreview(t *testing.T) {

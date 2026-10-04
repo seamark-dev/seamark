@@ -20,11 +20,14 @@ import (
 // equivalent commands instead of escape sequences.
 var errNotInteractive = errors.New("seamark tui needs an interactive terminal")
 
-// tuiGuidance lists the plain commands behind every console action.
+// tuiGuidance lists the plain commands behind every console action. The
+// CLI forms of retarget, prune and trigger extraction act differently
+// from the console, so the text calls them the closest actions and names
+// the difference that can lose a hand edit.
 const tuiGuidance = `seamark tui is an interactive, full-screen console (experimental).
 This session has no interactive terminal, so it did not start.
 
-The same information and actions are available as plain commands:
+The same information and the closest actions are available as plain commands:
   seamark doctor                      installation health
   seamark status                      semantic health of the index
   seamark index                       build or refresh the local index
@@ -32,10 +35,17 @@ The same information and actions are available as plain commands:
   seamark index --fixes-only          collect evidence from local fix commits
   seamark index --reviews             also fetch GitHub reviews through gh
   seamark lessons --distill --dry-run  plan a distillation (drop --dry-run to run it)
-  seamark lessons --proposals         review pending proposals
+  seamark lessons --proposals         review the proposal ledger
   seamark lessons --apply <ids>       apply proposals (needs distill.write)
   seamark lessons --dismiss <ids>     dismiss proposals
+  seamark lessons --retarget <ids>    set applied pins to the computed regions (needs distill.write)
+  seamark lessons --prune <ids>       remove applied pins (needs distill.write)
+  seamark lessons --extract-triggers --dry-run  plan a trigger backfill of every
+                                      eligible proposal (drop --dry-run to run it)
   seamark lessons --stats             lesson delivery statistics
+
+The CLI retarget rewrites the whole entry from its proposal; the console
+changes only the regions. See docs/tui.md.
 
 Settings live in .seamark/config.yaml: agent.cli, distill.write,
 reviews.window_days, index.generated, and index.exclude.
@@ -49,11 +59,13 @@ func newTUICmd(opts *options) *cobra.Command {
 		Short: "Open the interactive workspace console (experimental)",
 		Long: `Open an interactive console for one workspace: diagnostics, index
 state, Claude and Codex integrations, the learning workflow (evidence from
-local fixes and GitHub reviews, distillation with a reviewed plan, and
-proposal decisions), lesson delivery statistics, and the settings that
-these workflows read. Opening and browsing never write; every change,
-fetch, and agent run goes through a preview that you confirm.
-Experimental: the plain commands stay the stable interface.`,
+local fixes and GitHub reviews, distillation with a reviewed plan,
+proposal decisions, the installed pins with a previewed retarget or
+prune, and trigger extraction for selected proposals), lesson delivery
+statistics, and the settings that these workflows read. Opening and
+browsing never write; every change, fetch, and agent run goes through a
+preview that you confirm. Experimental: the plain commands stay the
+stable interface.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// An invalid workspace fails here, before full-screen mode,

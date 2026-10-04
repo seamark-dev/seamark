@@ -51,6 +51,167 @@ func TestMatchesRegion(t *testing.T) {
 	}
 }
 
+// legacyMatchesRegion is a verbatim copy of MatchesRegion before it
+// delegated to MatchesRegionSet. TestMatchesRegionKeepsItsResults
+// compares the two, so the refactor provably changes no result.
+func legacyMatchesRegion(p model.Proposal, filter string) bool {
+	filter = strings.Trim(strings.TrimSpace(filter), "/")
+	if filter == "" {
+		return true
+	}
+
+	set := p.RegionSet()
+	if len(set) == 0 {
+		return true
+	}
+
+	for _, r := range set {
+		r = strings.Trim(strings.TrimSpace(r), "/")
+
+		if reviews.RegionMatches(filter, r) || reviews.RegionMatches(r, filter) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func TestMatchesRegionKeepsItsResults(t *testing.T) {
+	ps := []model.Proposal{
+		{},
+		{Region: "*"},
+		{Region: "api"},
+		{Region: "api/v1"},
+		{Region: "api/"},
+		{Region: "apix"},
+		{Region: " "},
+		{Region: "web", Regions: []string{"web", "api/v1"}},
+		{Region: "x", Regions: []string{"a", "b"}},
+		{Region: "api", Regions: []string{"*", "api"}},
+		{Region: "api", Regions: []string{"", "api"}},
+		{Regions: []string{" ", "docs"}},
+	}
+
+	filters := []string{"", " ", "/", "*", "api", "api/", "/api/", " api ", "api/v1",
+		"api/v1/handlers", "apix", "web", "docs", "a", "deep/path"}
+
+	for _, p := range ps {
+		for _, filter := range filters {
+			assert.Equal(t, legacyMatchesRegion(p, filter), MatchesRegion(p, filter),
+				"region %q regions %q filter %q", p.Region, p.Regions, filter)
+		}
+	}
+}
+
+func TestMatchesRegionSet(t *testing.T) {
+	// A pin with a "*" entry and a region is delivered to that region
+	// only: AllRegions drops the "*". A repo-wide pin has no regions.
+	starAndAPI := reviews.PinRule{Rule: "r", Region: "*", Regions: []string{"api"}}.AllRegions()
+	repoWidePin := reviews.PinRule{Rule: "r", Region: "*"}.AllRegions()
+
+	tests := []struct {
+		name   string
+		set    []string
+		filter string
+		want   bool
+	}{
+		{"empty filter matches all", []string{"api"}, "", true},
+		{"blank filter matches all", []string{"api"}, " / ", true},
+		{"empty set is repo-wide", nil, "deep/path", true},
+		{"a repo-wide pin matches any filter", repoWidePin, "web", true},
+		{"a star entry beside a region keeps the pin scoped", starAndAPI, "web", false},
+		{"the scoped pin still matches its region", starAndAPI, "api/v1", true},
+		{"exact region", []string{"api"}, "api", true},
+		{"filter above the region", []string{"api/v1"}, "api", true},
+		{"filter below the region", []string{"api"}, "api/v1/handlers", true},
+		{"prefix without a boundary", []string{"api"}, "apix", false},
+		{"region prefix without a boundary", []string{"apix"}, "api", false},
+		{"trailing slash in the set", []string{"api/"}, "api", true},
+		{"slashes and spaces in the filter", []string{"api/v1"}, " /api/ ", true},
+		{"any listed region", []string{"web", "api/v1"}, "api", true},
+		{"no listed region", []string{"web", "api/v1"}, "docs", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, MatchesRegionSet(tt.set, tt.filter))
+		})
+	}
+}
+
+func TestMatchesText(t *testing.T) {
+	const (
+		rule = "Reset-Pooled-State"
+		note = "Reset the pooled connection before reuse; see api/pool.go."
+	)
+
+	tests := []struct {
+		name string
+		q    string
+		want bool
+	}{
+		{"empty query matches all", "", true},
+		{"blank query matches all", "   ", true},
+		{"rule ignores case", "pooled-state", true},
+		{"note ignores case", "CONNECTION BEFORE", true},
+		{"a path in the note", "api/pool.go", true},
+		{"surrounding spaces are ignored", "  reuse  ", true},
+		{"inner spaces count", "the  pooled", false},
+		{"no match", "migration", false},
+		{"no match across rule and note", "state reset", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, MatchesText(rule, note, tt.q))
+		})
+	}
+
+	assert.True(t, MatchesText("École-Rule", "", "école"), "non-ASCII letters ignore case too")
+	assert.False(t, MatchesText("", "", "x"), "empty text matches only a blank query")
+}
+
+func TestLoadReadsSupersededHistory(t *testing.T) {
+	f := newFixture(t, true)
+
+	// Finding 3 is cited only by a superseded proposal. Its history view
+	// still needs the evidence.
+	cited := model.Finding{
+		ID: 3, LessonKey: "api\x00retry", Path: "api/retry.go", PR: 9,
+		Reviewer: "person", Body: "retry with a bound", URL: "u3", CreatedAt: 90,
+		Source: model.SourceReview,
+	}
+	require.NoError(t, f.st.ReplaceLessons(nil, []model.Finding{cited}))
+
+	// The ledger records no prune time, so the names show only the insert
+	// order, and the insert order gives the IDs.
+	applied := f.propose("kept", "Kept.", model.ProposalApplied, "api")
+	first := f.propose("superseded-first", "One.", model.ProposalSuperseded, "api")
+	second := f.propose("superseded-second", "Two.", model.ProposalSuperseded, "web")
+
+	only := model.Proposal{
+		Signature: "sig-only", Rule: "only-cites-three", Note: "Three.", Members: []int64{3},
+		Status: model.ProposalSuperseded, CreatedAt: 1700000000,
+	}
+	require.NoError(t, f.st.InsertProposal(&only))
+
+	ls, err := Load(f.st, f.root, time.Unix(1700000000, 0))
+	require.NoError(t, err)
+
+	assert.Equal(t, []int64{first.ID, second.ID, only.ID}, ids(ls.Superseded), "ascending ID order")
+	assert.Equal(t, []int64{applied.ID}, ids(ls.Applied), "superseded rows are not applied")
+	assert.Empty(t, ls.Pending)
+	assert.Empty(t, ls.Dismissed)
+
+	require.NoError(t, ls.HealthErr)
+	assert.Len(t, ls.Health, 1, "only the applied row carries an advisory")
+	assert.Contains(t, ls.Health, applied.ID)
+
+	require.NoError(t, ls.EvidenceErr)
+	assert.Equal(t, map[int64]model.Finding{3: cited}, ls.Evidence,
+		"a superseded row's citation is loaded")
+}
+
 func TestLoadOrdersByIDAndKeepsSourceErrors(t *testing.T) {
 	f := newFixture(t, true)
 

@@ -107,6 +107,20 @@ func previewWrite(plan *SetupPlan, write FileWrite) WritePreview {
 	return preview
 }
 
+// UnifiedDiff renders the display diff between two versions of the file
+// at rel, with the same redaction and sanitizing as PreviewWrites. A
+// planner calls it when its write is blocked, for example by a link, so
+// the user still sees the exact change. Added and removed count the
+// changed lines. The diff is for display only; never apply it.
+func UnifiedDiff(rel string, before, after []byte) (diff string, added, removed int) {
+	old, next := newDiffSide(rel, before), newDiffSide(rel, after)
+
+	diff = unifiedDiff(rel, old, next)
+	added, removed = changedLines(old.lines, next.lines)
+
+	return diff, added, removed
+}
+
 // observeContent reads a guarded file by the rule of its guard kind and
 // returns the observed guard with the content. It follows the same rules
 // as observe, which apply uses. A create-only file is observed by its

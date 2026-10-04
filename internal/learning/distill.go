@@ -142,7 +142,7 @@ func PlanDistill(ws workspace.Workspace, reg *integration.Registry, req DistillR
 
 	probe := workspace.Probe(ws)
 	if probe.State != workspace.IndexReady {
-		return nil, distNotReady(probe)
+		return nil, distNotReady(ErrDistillNotReady, probe)
 	}
 
 	root := probe.Root
@@ -156,10 +156,14 @@ func PlanDistill(ws workspace.Workspace, reg *integration.Registry, req DistillR
 		reg = integration.Builtin()
 	}
 
-	in, err := distReadInputs(reg, root)
+	in, err := distReadInputs(reg, root, func(path string, err error) error {
+		return &DistillConfigError{Path: path, Err: err}
+	})
 	if err != nil {
 		return nil, err
 	}
+
+	b := in.bind(distill.ErrStale, root, ws.DBPath)
 
 	st, now, err := workspace.OpenReadOnly(ws)
 	if err != nil {
@@ -184,7 +188,7 @@ func PlanDistill(ws workspace.Workspace, reg *integration.Registry, req DistillR
 
 	// The bound files must be the files the plan read. A write during
 	// planning would leave the preview describing neither version.
-	if err := distCheckFiles(root, in.configGuard, in.lessonsGuard); err != nil {
+	if err := distCheckFiles(b); err != nil {
 		return nil, err
 	}
 
@@ -192,11 +196,11 @@ func PlanDistill(ws workspace.Workspace, reg *integration.Registry, req DistillR
 		Request:    req,
 		Plan:       plan,
 		Region:     region,
-		Invocation: in.spec,
-		Config:     in.configGuard,
-		Lessons:    in.lessonsGuard,
-		RepoRoot:   root,
-		DBPath:     ws.DBPath,
+		Invocation: b.invocation,
+		Config:     b.config,
+		Lessons:    b.lessons,
+		RepoRoot:   b.repoRoot,
+		DBPath:     b.dbPath,
 		PlannedAt:  plan.PlannedAt,
 	}
 
@@ -237,7 +241,9 @@ func RunDistill(ctx context.Context, ws workspace.Workspace, reg *integration.Re
 		return nil, ErrNothingToDistill
 	}
 
-	if err := distCheckInputs(ws, p); err != nil {
+	b := p.binding()
+
+	if err := distCheckInputs(ws, b); err != nil {
 		return nil, err
 	}
 
@@ -245,7 +251,7 @@ func RunDistill(ctx context.Context, ws workspace.Workspace, reg *integration.Re
 		reg = integration.Builtin()
 	}
 
-	if err := distCheckInvocation(reg, p); err != nil {
+	if err := distCheckInvocation(reg, b); err != nil {
 		return nil, err
 	}
 
@@ -270,7 +276,7 @@ func RunDistill(ctx context.Context, ws workspace.Workspace, reg *integration.Re
 
 	return distill.Execute(ctx, st, inv, p.Plan, distill.ExecuteOptions{
 		Progress:   progress,
-		Revalidate: func() error { return distCheckInputs(ws, p) },
+		Revalidate: func() error { return distCheckInputs(ws, b) },
 		Boundary:   true,
 	})
 }
@@ -290,7 +296,7 @@ func CleanupPending(ws workspace.Workspace, p *DistillPreview) (int, error) {
 		return 0, ErrNotCleanupOnly
 	}
 
-	if err := distCheckWorkspace(ws, p); err != nil {
+	if err := distCheckWorkspace(ws, p.binding()); err != nil {
 		return 0, err
 	}
 
@@ -312,6 +318,10 @@ func CleanupPending(ws workspace.Workspace, p *DistillPreview) (int, error) {
 	return x.Removed, nil
 }
 
+// The helpers below serve every console preview that starts an agent:
+// distillation and trigger extraction. Both bind the same inputs, so
+// both refuse a changed input in the same way.
+
 // distInputs are the configuration inputs of one preview.
 type distInputs struct {
 	spec         agent.CommandSpec
@@ -322,61 +332,104 @@ type distInputs struct {
 
 // distReadInputs observes both files, then reads them with the shared
 // readers. Every reader error blocks the preview: a paid run must not
-// fall back to defaults that the user did not review.
-func distReadInputs(reg *integration.Registry, root string) (distInputs, error) {
+// fall back to defaults that the user did not review. fault turns a
+// reader error into the typed configuration error of the preview kind.
+// It receives the repository-relative path of the file to repair.
+func distReadInputs(reg *integration.Registry, root string,
+	fault func(path string, err error) error,
+) (distInputs, error) {
 	var in distInputs
 
 	var err error
 
 	if in.configGuard, _, err = integration.ReadInput(root, distConfigFile); err != nil {
-		return in, &DistillConfigError{Path: distConfigFile, Err: err}
+		return in, fault(distConfigFile, err)
 	}
 
 	if in.lessonsGuard, _, err = integration.ReadInput(root, distLessonsFile); err != nil {
-		return in, &DistillConfigError{Path: distLessonsFile, Err: err}
+		return in, fault(distLessonsFile, err)
 	}
 
 	acfg, err := agent.LoadConfig(root)
 	if err != nil {
-		return in, &DistillConfigError{Path: distConfigFile, Err: err}
+		return in, fault(distConfigFile, err)
 	}
 
 	if in.spec, err = reg.ResolveInvocation(acfg, root); err != nil {
-		return in, &DistillConfigError{Path: distConfigFile, Err: err}
+		return in, fault(distConfigFile, err)
 	}
 
 	if in.lessons, err = reviews.LoadConfig(root); err != nil {
-		return in, &DistillConfigError{Path: distLessonsFile, Err: err}
+		return in, fault(distLessonsFile, err)
 	}
 
 	return in, nil
 }
 
+// inputBinding is what a preview binds before an agent run: the
+// workspace identity, both configuration files, and the resolved agent
+// command. A run compares each part again before it starts work.
+type inputBinding struct {
+	// stale is the sentinel that every check error wraps. Each preview
+	// kind passes its own, so the message names the right inputs.
+	stale      error
+	repoRoot   string
+	dbPath     string
+	invocation agent.CommandSpec
+	config     integration.FileGuard
+	lessons    integration.FileGuard
+}
+
+// bind returns the binding of the inputs, read under root, for a
+// preview of the database at dbPath.
+func (in distInputs) bind(stale error, root, dbPath string) inputBinding {
+	return inputBinding{
+		stale:      stale,
+		repoRoot:   root,
+		dbPath:     dbPath,
+		invocation: in.spec,
+		config:     in.configGuard,
+		lessons:    in.lessonsGuard,
+	}
+}
+
+// binding returns what the distillation preview binds.
+func (p *DistillPreview) binding() inputBinding {
+	return inputBinding{
+		stale:      distill.ErrStale,
+		repoRoot:   p.RepoRoot,
+		dbPath:     p.DBPath,
+		invocation: p.Invocation,
+		config:     p.Config,
+		lessons:    p.Lessons,
+	}
+}
+
 // distCheckInputs checks the workspace identity and both bound files.
-// RunDistill calls it before the start and before each group.
-func distCheckInputs(ws workspace.Workspace, p *DistillPreview) error {
-	if err := distCheckWorkspace(ws, p); err != nil {
+// A run calls it before the start and before each unit of work.
+func distCheckInputs(ws workspace.Workspace, b inputBinding) error {
+	if err := distCheckWorkspace(ws, b); err != nil {
 		return err
 	}
 
-	return distCheckFiles(p.RepoRoot, p.Config, p.Lessons)
+	return distCheckFiles(b)
 }
 
 // distCheckWorkspace compares the database path, the index state, and
-// the recorded root with the preview.
-func distCheckWorkspace(ws workspace.Workspace, p *DistillPreview) error {
-	if ws.DBPath != p.DBPath {
-		return fmt.Errorf("%w: the workspace database changed from %s to %s", distill.ErrStale, p.DBPath, ws.DBPath)
+// the recorded root with the binding.
+func distCheckWorkspace(ws workspace.Workspace, b inputBinding) error {
+	if ws.DBPath != b.dbPath {
+		return fmt.Errorf("%w: the workspace database changed from %s to %s", b.stale, b.dbPath, ws.DBPath)
 	}
 
 	probe := workspace.Probe(ws)
 
 	if probe.State != workspace.IndexReady {
-		return fmt.Errorf("%w: the index is %s now", distill.ErrStale, probe.State)
+		return fmt.Errorf("%w: the index is %s now", b.stale, probe.State)
 	}
 
-	if probe.Root != p.RepoRoot {
-		return fmt.Errorf("%w: the index now records the root %s", distill.ErrStale, distSafe(probe.Root))
+	if probe.Root != b.repoRoot {
+		return fmt.Errorf("%w: the index now records the root %s", b.stale, distSafe(probe.Root))
 	}
 
 	return nil
@@ -384,15 +437,15 @@ func distCheckWorkspace(ws workspace.Workspace, p *DistillPreview) error {
 
 // distCheckFiles observes both files again and compares them with the
 // guards: content, existence, mode, and symbolic links all count.
-func distCheckFiles(root string, config, lessons integration.FileGuard) error {
-	for _, want := range []integration.FileGuard{config, lessons} {
-		now, _, err := integration.ReadInput(root, want.Path)
+func distCheckFiles(b inputBinding) error {
+	for _, want := range []integration.FileGuard{b.config, b.lessons} {
+		now, _, err := integration.ReadInput(b.repoRoot, want.Path)
 		if err != nil {
-			return fmt.Errorf("%w: %s: %w", distill.ErrStale, want.Path, err)
+			return fmt.Errorf("%w: %s: %w", b.stale, want.Path, err)
 		}
 
 		if now != want {
-			return fmt.Errorf("%w: %s changed since the preview", distill.ErrStale, want.Path)
+			return fmt.Errorf("%w: %s changed since the preview", b.stale, want.Path)
 		}
 	}
 
@@ -401,21 +454,23 @@ func distCheckFiles(root string, config, lessons integration.FileGuard) error {
 
 // distCheckInvocation resolves the agent again and compares it with the
 // previewed command. The run must never switch agents silently.
-func distCheckInvocation(reg *integration.Registry, p *DistillPreview) error {
-	acfg, err := agent.LoadConfig(p.RepoRoot)
+func distCheckInvocation(reg *integration.Registry, b inputBinding) error {
+	acfg, err := agent.LoadConfig(b.repoRoot)
 	if err != nil {
-		return fmt.Errorf("%w: %s: %w", distill.ErrStale, distConfigFile, err)
+		return fmt.Errorf("%w: %s: %w", b.stale, distConfigFile, err)
 	}
 
-	spec, err := reg.ResolveInvocation(acfg, p.RepoRoot)
+	spec, err := reg.ResolveInvocation(acfg, b.repoRoot)
 	if err != nil {
-		return fmt.Errorf("%w: %s: %w", distill.ErrStale, distConfigFile, err)
+		return fmt.Errorf("%w: %s: %w", b.stale, distConfigFile, err)
 	}
 
-	same := spec.Name == p.Invocation.Name && slices.Equal(spec.Argv, p.Invocation.Argv) &&
-		spec.Dir == p.Invocation.Dir && spec.Diagnostic == p.Invocation.Diagnostic
+	want := b.invocation
+
+	same := spec.Name == want.Name && slices.Equal(spec.Argv, want.Argv) &&
+		spec.Dir == want.Dir && spec.Diagnostic == want.Diagnostic
 	if !same {
-		return fmt.Errorf("%w: the agent command changed since the preview", distill.ErrStale)
+		return fmt.Errorf("%w: the agent command changed since the preview", b.stale)
 	}
 
 	return nil
@@ -439,13 +494,14 @@ func distLimit(req DistillRequest) (int, error) {
 	}
 }
 
-// distNotReady describes an index that cannot serve a plan.
-func distNotReady(probe workspace.IndexProbe) error {
+// distNotReady describes an index that cannot serve a plan. sentinel
+// is the not-ready error of the preview kind.
+func distNotReady(sentinel error, probe workspace.IndexProbe) error {
 	if probe.Err != nil {
-		return fmt.Errorf("%w: index database %s is %s: %w", ErrDistillNotReady, probe.Path, probe.State, probe.Err)
+		return fmt.Errorf("%w: index database %s is %s: %w", sentinel, probe.Path, probe.State, probe.Err)
 	}
 
-	return fmt.Errorf("%w: index database %s is %s: build the index first", ErrDistillNotReady, probe.Path, probe.State)
+	return fmt.Errorf("%w: index database %s is %s: build the index first", sentinel, probe.Path, probe.State)
 }
 
 // distSafe makes repository-controlled text safe to display: secrets

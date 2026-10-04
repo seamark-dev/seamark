@@ -54,12 +54,6 @@ func ParseConfig(data []byte) (*Config, error) {
 	return cfg, nil
 }
 
-// provenanceMarker identifies a comment seamark wrote above a pin it
-// applied. Pruning removes only comments carrying it — anything else
-// above an entry is the user's prose, and deleting that is exactly the
-// work RemovePins exists to protect.
-const provenanceMarker = "seamark lessons --distill"
-
 // RenderPins renders proposals as ready-to-paste pin entries, each with
 // its provenance comment. The YAML values are marshaled, not
 // hand-quoted — a note containing quotes or colons must not be able to
@@ -87,7 +81,7 @@ func RenderPins(ps []model.Proposal) (string, error) {
 		}
 
 		fmt.Fprintf(&b, "  # distilled by %s from %d findings (%s, p%d)\n",
-			p.Agent, len(p.Members), provenanceMarker, p.ID)
+			p.Agent, len(p.Members), reviews.ProvenanceMarker, p.ID)
 
 		for line := range strings.SplitSeq(strings.TrimRight(string(entry), "\n"), "\n") {
 			fmt.Fprintf(&b, "  %s\n", line)
@@ -292,7 +286,7 @@ func pinEntryRule(line string) (string, bool) {
 func isProvenanceComment(line string) bool {
 	trimmed := strings.TrimSpace(line)
 
-	return strings.HasPrefix(trimmed, "#") && strings.Contains(trimmed, provenanceMarker)
+	return strings.HasPrefix(trimmed, "#") && strings.Contains(trimmed, reviews.ProvenanceMarker)
 }
 
 // entryRegion reads the region off a pin entry's continuation lines;

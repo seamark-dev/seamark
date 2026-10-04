@@ -193,7 +193,7 @@ func (v *evidenceView) keys() []key.Binding {
 		return v.previewKeys()
 	}
 
-	switches := []key.Binding{lesKeys.Proposals, lesKeys.Stats}
+	switches := []key.Binding{lesKeys.Proposals, lesKeys.Pins, lesKeys.Stats}
 
 	snap, ready := v.snapshot()
 	if !ready {

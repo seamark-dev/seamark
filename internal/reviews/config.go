@@ -191,6 +191,12 @@ func DefaultConfig() *Config {
 // presentation, not contract.
 var ErrLessonsConfig = errors.New("lessons config")
 
+// ProvenanceMarker identifies a comment line that seamark writes above a
+// pin it applies. A prune removes only comments that carry it, because
+// any other comment above an entry is the user's text. The renderer and
+// every pin editor share this one value, so the two cannot drift apart.
+const ProvenanceMarker = "seamark lessons --distill"
+
 // LoadConfig reads <root>/.seamark/lessons.yaml. A missing file is not
 // an error — it means "defaults". A malformed file IS an error: silently
 // ignoring a typo'd mute would surface noise the user asked to hide.
@@ -198,16 +204,25 @@ var ErrLessonsConfig = errors.New("lessons config")
 // DefaultConfig on error rather than failing the whole report. Every
 // error carries ErrLessonsConfig.
 func LoadConfig(root string) (*Config, error) {
-	cfg := DefaultConfig()
-
 	data, err := os.ReadFile(filepath.Join(root, ".seamark", "lessons.yaml"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return cfg, nil
+			return DefaultConfig(), nil
 		}
 
 		return nil, fmt.Errorf("%w: %w", ErrLessonsConfig, err)
 	}
+
+	return ParseConfig(data)
+}
+
+// ParseConfig decodes the bytes of .seamark/lessons.yaml by the rules of
+// LoadConfig, and LoadConfig calls it. A caller that guards a file by
+// its hash parses exactly the hashed bytes, and a pin editor checks a
+// candidate file before it writes. Empty input yields the defaults, the
+// same as an absent file. Every error carries ErrLessonsConfig.
+func ParseConfig(data []byte) (*Config, error) {
+	cfg := DefaultConfig()
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrLessonsConfig, err)

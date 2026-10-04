@@ -811,7 +811,7 @@ func (d *distRecord) done(msg distDoneMsg) tea.Cmd {
 		return nil
 	}
 
-	reload := refresh(secLedger, secStats, secIndex, secLearning)
+	reload := refresh(secLedger, secStats, secIndex, secLearning, secPins)
 
 	// The shell clears its run record after this message, so the stop
 	// request of the quit question is read now.
@@ -950,7 +950,7 @@ func (d *distRecord) cleanedUp(msg distCleanedMsg) tea.Cmd {
 		note = toast(ToneFailure, "The cleanup removed nothing: "+errText(msg.err))
 	}
 
-	return tea.Batch(mutationDone, refresh(secLedger, secStats, secLearning), note)
+	return tea.Batch(mutationDone, refresh(secLedger, secStats, secLearning, secPins), note)
 }
 
 // settingsSaved drops a plan that a settings save made out of date. The

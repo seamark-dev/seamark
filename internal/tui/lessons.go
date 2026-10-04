@@ -10,13 +10,16 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/distill"
+	"github.com/seamark-dev/seamark/internal/learning"
 	domain "github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
 )
 
 // lesSub is the visible sub-view of the Lessons destination. A new
 // sub-view goes last, so the zero value keeps Proposals as the landing
-// view.
+// view. The order of the constants is not the tab order: subTabs sets
+// that.
 type lesSub int
 
 const (
@@ -24,17 +27,22 @@ const (
 	lesStats
 	lesEvidence
 	lesRun
+	// lesPins lists the installed pins of .seamark/lessons.yaml.
+	lesPins
 )
 
 // lesKeys are the Lessons bindings. The package values stay enabled,
 // because key.Matches ignores a disabled binding; keys() returns
 // copies that carry the current availability for the footer.
 var lesKeys = struct {
-	Proposals, Stats, Evidence, Run    key.Binding
-	Clear, State, Region, Open         key.Binding
-	Apply, Dismiss, Reconcile, Confirm key.Binding
+	Proposals, Pins, Stats, Evidence, Run key.Binding
+	Clear, State, Region, Open            key.Binding
+	Apply, Dismiss, Reconcile, Confirm    key.Binding
 }{
 	Proposals: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "proposals")),
+	// m switches to Pins in every sub-view that does not capture, so no
+	// sub-view may use the letter for its own keys.
+	Pins:      key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "pins")),
 	Stats:     key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "stats")),
 	Evidence:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "evidence")),
 	Run:       key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "run")),
@@ -57,13 +65,14 @@ type lesPane interface {
 	capturing() bool
 }
 
-// lessons is the Lessons destination. It holds four sub-views: the
-// proposal decisions, the delivery statistics, the evidence sources,
-// and the runs of this session.
+// lessons is the Lessons destination. It holds five sub-views: the
+// proposal decisions, the installed pins, the delivery statistics, the
+// evidence sources, and the runs of this session.
 type lessons struct {
 	st    *state
 	sub   lesSub
 	props *propView
+	pins  *pinsView
 	stats *statsView
 	evid  *evidenceView
 	runv  *runView
@@ -72,16 +81,29 @@ type lessons struct {
 	// shell calls open when Lessons opens and leave when another
 	// destination opens.
 	active bool
+
+	// from is the sub-view that asked for the current Run record, for
+	// example Pins for an extraction review. esc on a review drops the
+	// record, and the user then returns to that sub-view.
+	from runOrigin
+}
+
+// runOrigin names the sub-view that opened a Run record. A zero value
+// names no record.
+type runOrigin struct {
+	rec runRecord
+	sub lesSub
 }
 
 func newLessons(st *state) *lessons {
 	s := &lessons{
-		st: st, props: newPropView(st), stats: newStatsView(st),
+		st: st, props: newPropView(st), pins: newPinsView(st), stats: newStatsView(st),
 		evid: newEvidenceView(st), runv: newRunView(st),
 	}
 
 	// The cursor note of a refresh concerns the visible list only.
 	s.props.visible = func() bool { return s.active && s.sub == lesProposals }
+	s.pins.visible = func() bool { return s.active && s.sub == lesPins }
 
 	return s
 }
@@ -102,6 +124,8 @@ func (s *lessons) tabCount() string {
 // pane returns the visible sub-view.
 func (s *lessons) pane() lesPane {
 	switch s.sub {
+	case lesPins:
+		return s.pins
 	case lesStats:
 		return s.stats
 	case lesEvidence:
@@ -123,9 +147,10 @@ func (s *lessons) runShown() bool {
 
 // open selects the sub-view that an intent names. The "proposals"
 // intent also shows pending proposals, because Overview links here
-// from its pending count. "distill" opens the scope step of a new
-// distillation, "run" the run detail, and "proposals:run" the
-// proposals of the last run. Unknown intents keep the current view.
+// from its pending count. "pins" opens the installed pins, "distill"
+// the scope step of a new distillation, "run" the run detail, and
+// "proposals:run" the proposals of the last run. Unknown intents keep
+// the current view.
 func (s *lessons) open(intent string) tea.Cmd {
 	s.active = true
 
@@ -134,6 +159,8 @@ func (s *lessons) open(intent string) tea.Cmd {
 		s.sub = lesProposals
 
 		return s.props.showPending()
+	case "pins":
+		s.sub = lesPins
 	case "stats":
 		s.sub = lesStats
 	case "evidence":
@@ -181,6 +208,8 @@ func (s *lessons) showsIntent(intent string) bool {
 		return s.sub == lesProposals
 	case "proposals:run":
 		return s.sub == lesProposals && s.props.run != nil
+	case "pins":
+		return s.sub == lesPins
 	case "stats":
 		return s.sub == lesStats
 	case "evidence":
@@ -195,11 +224,42 @@ func (s *lessons) showsIntent(intent string) bool {
 // update routes a message. Every non-key message reaches every
 // sub-view, so background results land even in a hidden one. Key
 // messages reach the visible sub-view only, after the sub-view switch
-// keys, which act while the visible sub-view does not capture.
+// keys, which act while the visible sub-view does not capture. A
+// maintenance preview opens over Pins, and a link to a pin shows its
+// entry, so Pins shows for both; the Run sub-view opens an extraction
+// record itself (openExtractMsg). A dropped draft returns the view to
+// the sub-view that opened it (runDropped), so the visible sub-view
+// always has its tab.
 func (s *lessons) update(msg tea.Msg) tea.Cmd {
 	km, isKey := msg.(tea.KeyMsg)
 	if !isKey {
-		return tea.Batch(s.props.update(msg), s.stats.update(msg), s.evid.update(msg), s.runv.update(msg))
+		// The run records change inside the fan-out, so the checks of
+		// the Run sub-view compare the state before and after it.
+		cur, sub := s.runv.cur, s.sub
+		dropped := false
+
+		switch m := msg.(type) {
+		case openMaintMsg, focusPinMsg:
+			s.sub = lesPins
+		case closeRunMsg:
+			dropped = m.rec != nil && m.rec == cur && isDraft(m.rec)
+		}
+
+		cmd := tea.Batch(s.props.update(msg), s.pins.update(msg), s.stats.update(msg), s.evid.update(msg),
+			s.runv.update(msg))
+
+		switch m := msg.(type) {
+		case openRunMsg, openExtractMsg:
+			if s.runv.cur != cur {
+				s.from = runOrigin{rec: s.runv.cur, sub: s.originOf(sub)}
+			}
+		case closeRunMsg:
+			if dropped {
+				s.runDropped(m.rec)
+			}
+		}
+
+		return cmd
 	}
 
 	pane := s.pane()
@@ -208,6 +268,10 @@ func (s *lessons) update(msg tea.Msg) tea.Cmd {
 		switch {
 		case key.Matches(km, lesKeys.Proposals):
 			s.sub = lesProposals
+
+			return nil
+		case key.Matches(km, lesKeys.Pins):
+			s.sub = lesPins
 
 			return nil
 		case key.Matches(km, lesKeys.Stats):
@@ -230,6 +294,45 @@ func (s *lessons) update(msg tea.Msg) tea.Cmd {
 	return pane.update(msg)
 }
 
+// originOf returns the sub-view to return to when the record that sub
+// asked for closes as a draft. A request from the Run sub-view, for
+// example a review of the remaining targets, keeps the origin of the
+// record before it.
+func (s *lessons) originOf(sub lesSub) lesSub {
+	switch {
+	case sub != lesRun:
+		return sub
+	case s.from.rec != nil:
+		return s.from.sub
+	default:
+		return lesProposals
+	}
+}
+
+// runDropped keeps a tab under the visible sub-view after the Run
+// sub-view dropped the draft rec. A dropped draft returns to the
+// sub-view that asked for it, for example Pins for an extraction review.
+// Any other dropped draft that leaves no record hides the Run tab, so
+// the view moves to Proposals instead of a sub-view that the tab line
+// does not list. A distillation scope also navigates to Evidence itself.
+func (s *lessons) runDropped(rec runRecord) {
+	from := s.from
+	if from.rec == rec {
+		s.from = runOrigin{}
+	}
+
+	if s.sub != lesRun {
+		return
+	}
+
+	switch {
+	case from.rec == rec:
+		s.sub = from.sub
+	case !s.runShown():
+		s.sub = lesProposals
+	}
+}
+
 // view renders the sub-view line and the visible sub-view under it.
 func (s *lessons) view(w, h int) string {
 	return s.subTabs(w) + "\n" + s.pane().view(w, h-1)
@@ -249,10 +352,10 @@ func (s *lessons) modal(w, h int) (string, bool) {
 // works there. The help lists these keys, and "? help" must lead to
 // every key. The switch keys are hidden while the sub-view captures
 // input. On Stats the Proposals key comes first, as in the 1a footer.
-// The other switch keys go last, because a narrow footer drops hints
-// from the end, so the compact footers keep their 1a hints. Evidence and
-// Run name their own first switch keys, because their footers differ by
-// state.
+// The other switch keys go last, in tab order, because a narrow footer
+// drops hints from the end, so the compact footers keep their 1a hints.
+// Evidence and Run name their own first switch keys, because their
+// footers differ by state.
 func (s *lessons) keys() []key.Binding {
 	if s.pane().capturing() {
 		return s.pane().keys()
@@ -265,17 +368,55 @@ func (s *lessons) keys() []key.Binding {
 	}
 
 	switch s.sub {
+	case lesPins:
+		return slices.Concat(s.pins.keys(), []key.Binding{lesKeys.Proposals, lesKeys.Stats, lesKeys.Evidence}, run)
 	case lesStats:
 		ks := append([]key.Binding{lesKeys.Proposals}, s.stats.keys()...)
 
-		return append(append(ks, lesKeys.Evidence), run...)
+		return append(append(ks, lesKeys.Pins, lesKeys.Evidence), run...)
 	case lesEvidence:
 		return append(s.evid.keys(), run...)
 	case lesRun:
 		return s.runv.keys()
 	}
 
-	return append(append(s.props.keys(), lesKeys.Stats, lesKeys.Evidence), run...)
+	return append(append(s.props.keys(), lesKeys.Pins, lesKeys.Stats, lesKeys.Evidence), run...)
+}
+
+// helpKeys returns the keys that the help lists for Lessons: the keys of
+// the visible sub-view, then every switch key in tab order. The footer
+// leaves out the switch key of the visible sub-view, because it changes
+// nothing there. The help lists it anyway, so it names the key of every
+// sub-view (user report of 2026-10-04: in Pins the help had no m). Pins
+// and Proposals also list their unavailable keys, marked n/a.
+func (s *lessons) helpKeys() []key.Binding {
+	if s.pane().capturing() {
+		return s.keys()
+	}
+
+	switches := []key.Binding{lesKeys.Proposals, lesKeys.Pins, lesKeys.Stats, lesKeys.Evidence}
+	if s.runShown() {
+		switches = append(switches, lesKeys.Run)
+	}
+
+	own := s.keys()
+
+	switch s.sub {
+	case lesPins:
+		own = s.pins.helpKeys()
+	case lesProposals:
+		own = s.props.helpKeys()
+	}
+
+	// isSwitch matches the package bindings by value, because keys()
+	// appends them without a change.
+	isSwitch := func(b key.Binding) bool {
+		return slices.ContainsFunc(switches, func(sw key.Binding) bool {
+			return sw.Help() == b.Help() && slices.Equal(sw.Keys(), b.Keys())
+		})
+	}
+
+	return append(slices.DeleteFunc(slices.Clone(own), isSwitch), switches...)
 }
 
 func (s *lessons) capturing() bool {
@@ -289,6 +430,10 @@ const (
 	propPending propState = iota
 	propApplied
 	propDismissed
+	// propSuperseded is the read-only history of proposals whose pins a
+	// prune removed. f reaches it last, so the decision states come
+	// first.
+	propSuperseded
 	propStateCount
 )
 
@@ -299,6 +444,8 @@ func (f propState) label() string {
 		return "applied"
 	case propDismissed:
 		return "dismissed"
+	case propSuperseded:
+		return "superseded"
 	default:
 		return "pending"
 	}
@@ -420,8 +567,10 @@ type propView struct {
 	// does not report them as lost, because the user decided them.
 	acted map[int64]bool
 	// pinned holds pending IDs whose pins exist in the pin file, as the
-	// last apply preview or a partial apply reported. The footer offers
-	// c only for them, because c records existing pins only.
+	// last apply preview or a partial apply reported. A newer Pins
+	// inspection removes a hint that it contradicts (dropPinHints). c
+	// works only for these IDs and for the pending matches of the Pins
+	// inspection (hasPin), because c records existing pins only.
 	pinned map[int64]bool
 	// run holds the proposals of one run of this session for the run
 	// filter; nil without a run filter.
@@ -470,11 +619,18 @@ func (p *propView) stateRows() []domain.Proposal {
 		return nil
 	}
 
-	switch p.filter {
+	return propStateRows(l, p.filter)
+}
+
+// propStateRows returns the proposals of one state of the ledger.
+func propStateRows(l *proposals.Ledger, f propState) []domain.Proposal {
+	switch f {
 	case propApplied:
 		return l.Applied
 	case propDismissed:
 		return l.Dismissed
+	case propSuperseded:
+		return l.Superseded
 	default:
 		return l.Pending
 	}
@@ -615,13 +771,22 @@ func (p *propView) update(msg tea.Msg) tea.Cmd {
 	case loadedMsg:
 		// A failed reload keeps the previous snapshot, so only a new
 		// snapshot needs reconciliation.
-		if msg.kind == secLedger && msg.err == nil {
+		if msg.err != nil {
+			return nil
+		}
+
+		switch msg.kind {
+		case secLedger:
 			return p.reconcile()
+		case secPins:
+			p.dropPinHints()
 		}
 	case propPreviewMsg:
 		return p.previewed(msg)
 	case propCommitMsg:
 		return p.committedMsg(msg)
+	case focusProposalMsg:
+		return p.focus(msg.id)
 	case settingsSavedMsg:
 		return p.settingsSaved(msg)
 	case distEventMsg:
@@ -689,7 +854,9 @@ func (p *propView) browseKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, lesKeys.Dismiss):
 		return p.startDecision(proposals.ActionDismiss)
 	case key.Matches(msg, lesKeys.Reconcile):
-		return p.startDecision(proposals.ActionReconcile)
+		return p.startRecord()
+	case key.Matches(msg, extractKey):
+		return p.startExtract()
 	case key.Matches(msg, lesKeys.Open):
 		return p.openLink(rows)
 	case p.showsDetail(rows) && p.detailKey(msg):
@@ -1091,13 +1258,62 @@ func (p *propView) startDecision(a proposals.Action) tea.Cmd {
 	ids, implicit := p.targets()
 	if len(ids) == 0 {
 		if p.filter != propPending {
-			return toast(ToneNeutral, "Applied and dismissed proposals are read-only. Press f to show pending ones.")
+			return toast(ToneNeutral, "Applied, dismissed and superseded proposals are read-only. Press f to show "+
+				"pending ones.")
 		}
 
 		return nil
 	}
 
 	return p.preview(a, ids, implicit)
+}
+
+// startRecord asks for the ledger-only preview that records the targets
+// as applied. A target without a known pin gets a toast with the reason
+// and no preview, so c never opens what the footer hides and the help
+// marks n/a (user decision of 2026-10-04). A read-only row keeps the
+// toast of startDecision.
+func (p *propView) startRecord() tea.Cmd {
+	ids, _ := p.targets()
+	if len(ids) == 0 || p.hasPinned(ids) {
+		return p.startDecision(proposals.ActionReconcile)
+	}
+
+	return toast(ToneNeutral, p.noPinText(ids))
+}
+
+// noPinText says why c records nothing. The console knows a pin only from
+// its last read of the pin file. After a good read, the text names r:
+// only an edit of the file since that read can add the pin. With marks,
+// the text counts the marked rows without a known pin, because a list of
+// IDs can be too long for the notice row.
+func (p *propView) noPinText(ids []int64) string {
+	// Without a good read, the console must not say that the file has no
+	// pin. The Pins state line names the read error, so the text sends
+	// the user there.
+	switch {
+	case !p.st.pins.loaded:
+		return "No record applied: the console has not read " + proposals.LessonsFile + " yet. Press r to read it."
+	case !pinLinksKnown(p.st.pins.value):
+		return "No record applied: the pin file or the ledger could not be read; m (Pins) names the error. " +
+			"Press r after you fix it."
+	}
+
+	const next = " yet. Press r after you edit the file."
+
+	if len(p.selected) == 0 {
+		return "No record applied: no pin in " + proposals.LessonsFile + " carries " + propID(ids[0]) + next
+	}
+
+	n := p.unpinned(ids)
+
+	verb := " have"
+	if n == 1 {
+		verb = " has"
+	}
+
+	return "No record applied: " + strconv.Itoa(n) + " of " + propPlural(len(ids), "marked proposal",
+		"marked proposals") + verb + " no pin in " + proposals.LessonsFile + next
 }
 
 // preview opens the preparing modal and starts the preview read.
@@ -1152,6 +1368,31 @@ func (p *propView) notePins(pv *proposals.Preview, err error) {
 
 	for _, id := range pv.AlreadyPinned {
 		p.pinned[id] = true
+	}
+}
+
+// dropPinHints removes the pin hints that a new Pins inspection
+// contradicts. The inspection is the newer read of the pin file, so a pin
+// that it does not find is gone, for example after a hand edit and r.
+// Without this step, c opens a record preview that the record refuses.
+// A partial apply keeps its hints, because its refresh reads the written
+// pins as pending matches.
+func (p *propView) dropPinHints() {
+	in := p.st.pins.value
+
+	// An inspection without a read of the pin file or the ledger knows no
+	// link, so it cannot contradict a hint.
+	if !p.st.pins.loaded || !pinLinksKnown(in) {
+		return
+	}
+
+	// A row that the inspection does not list keeps its hint. The
+	// inspection then read the ledger at another time than the list, so
+	// it says nothing about the pin of the row.
+	for id := range p.pinned {
+		if link, listed := in.Links.ByProposal[id]; listed && link != pinfile.LinkPendingMatch {
+			delete(p.pinned, id)
+		}
 	}
 }
 
@@ -1317,7 +1558,7 @@ func (p *propView) committedMsg(msg propCommitMsg) tea.Cmd {
 		d.scroll = lesScroll{}
 	}
 
-	return tea.Batch(mutationDone, refresh(secLedger, secStats, secIndex))
+	return tea.Batch(mutationDone, refresh(secLedger, secStats, secIndex, secPins))
 }
 
 // reviewAgain reports a refusal that a new preview can resolve.
@@ -1348,7 +1589,8 @@ func (p *propView) resultKey(msg tea.KeyMsg) tea.Cmd {
 
 // keys returns the bindings of the current state. Unavailable actions
 // are disabled, so they vanish from the footer; the detail pane
-// explains why. The order follows the 1a footer.
+// explains why, and the help marks them n/a (see helpKeys). The order
+// follows the 1a footer.
 func (p *propView) keys() []key.Binding {
 	if p.editing {
 		return []key.Binding{withHelp(nkeys.Enter, "enter", "apply filter"), withHelp(nkeys.Back, "esc", "cancel")}
@@ -1358,6 +1600,31 @@ func (p *propView) keys() []key.Binding {
 		return p.decisionKeys(d)
 	}
 
+	return p.listKeys("clear")
+}
+
+// helpKeys returns every key of the list for the help. Each key that
+// does not work now is an unavailable entry. So the help names every
+// Proposals action and marks the unavailable ones n/a. The user decided
+// this on 2026-10-04 for the help only: the footer keeps the keys of
+// Phase 2, so it uses keys(). esc is the one exception: the help lists
+// it only with a run filter (see listKeys). An overlay or the region
+// input keeps its own keys.
+func (p *propView) helpKeys() []key.Binding {
+	if p.capturing() {
+		return p.keys()
+	}
+
+	// The help also lists x when nothing is selected. So its label names
+	// what x clears; the footer keeps the short label of Phase 2.
+	return listAll(p.listKeys("clear selection"))
+}
+
+// listKeys returns the bindings of the list. Each binding carries its
+// availability for the cursor row, the selection, and the filters.
+// clearLabel is the action text of x, because the footer and the help
+// describe x differently.
+func (p *propView) listKeys(clearLabel string) []key.Binding {
 	rows := p.rows()
 	cur, hasRow := p.current(rows)
 	ids, _ := p.targets()
@@ -1378,12 +1645,18 @@ func (p *propView) keys() []key.Binding {
 	dismiss := withHelp(lesKeys.Dismiss, "d", "dismiss")
 	dismiss.SetEnabled(len(ids) > 0)
 
-	clearSel := withHelp(lesKeys.Clear, "x", "clear")
+	// t shows only when a target has an open question, so the footer
+	// never offers an extraction that the review would refuse.
+	extract := extractKey
+	extract.SetEnabled(p.canExtract())
+
+	clearSel := withHelp(lesKeys.Clear, "x", clearLabel)
 	clearSel.SetEnabled(len(p.selected) > 0)
 
-	// c stays bound for every target, because a pin can also come from
-	// a hand edit. The footer shows it only for known existing pins, so
-	// it does not invite a record that fails for a missing pin.
+	// c works only when every target has a known existing pin, because
+	// the record refuses a target without its pin. The press follows the
+	// same rule (see startRecord), so the footer, the help, and the key
+	// cannot disagree.
 	reconcile := withHelp(lesKeys.Reconcile, "c", "record applied")
 	reconcile.SetEnabled(p.hasPinned(ids))
 
@@ -1401,13 +1674,25 @@ func (p *propView) keys() []key.Binding {
 	open := withHelp(lesKeys.Open, "o", openLabel)
 	open.SetEnabled(hasLink)
 
-	// esc ends a run filter once the detail pane has given back the
-	// focus, so the footer names it only then.
-	allRuns := withHelp(nkeys.Back, "esc", "all proposals")
-	allRuns.SetEnabled(p.run != nil && !p.focusDetail)
+	out := []key.Binding{sel, apply, dismiss, p.paneKey(hasRow)}
 
-	return []key.Binding{sel, apply, dismiss, p.paneKey(hasRow), allRuns, withHelp(lesKeys.State, "f", "state"),
-		withHelp(lesKeys.Region, "/", "region"), open, clearSel, reconcile}
+	// esc ends a run filter once the detail pane has given back the
+	// focus, so the footer names it only then. Without a run filter, esc
+	// has nothing to end. So the list leaves it out, and the help does
+	// not list it as n/a (user decision of 2026-10-04). The footer drops
+	// a disabled key anyway, so it does not change.
+	if p.run != nil {
+		allRuns := withHelp(nkeys.Back, "esc", "all proposals")
+		allRuns.SetEnabled(!p.focusDetail)
+
+		out = append(out, allRuns)
+	}
+
+	// t follows f and /, because a narrow footer drops hints from the
+	// end. So the 120-column footer keeps the keys of the 1a layout, and
+	// the help still lists t.
+	return append(out, withHelp(lesKeys.State, "f", "state"), withHelp(lesKeys.Region, "/", "region"), extract,
+		open, clearSel, reconcile)
 }
 
 // paneKey names the key that changes the visible or focused pane.
@@ -1429,9 +1714,163 @@ func (p *propView) paneKey(hasRow bool) key.Binding {
 	}
 }
 
-// hasPinned reports whether any of ids has a known existing pin.
+// hasPinned reports whether ids is not empty and every one of them has a
+// known existing pin. The ledger-only record refuses the whole selection
+// when one pin is missing, so one known pin is not enough.
 func (p *propView) hasPinned(ids []int64) bool {
-	return slices.ContainsFunc(ids, func(id int64) bool { return p.pinned[id] })
+	return len(ids) > 0 && p.unpinned(ids) == 0
+}
+
+// unpinned counts the IDs of ids without a known existing pin.
+func (p *propView) unpinned(ids []int64) int {
+	n := 0
+
+	for _, id := range ids {
+		if !p.hasPin(id) {
+			n++
+		}
+	}
+
+	return n
+}
+
+// hasPin reports whether pending proposal id has a known existing pin.
+// The pinned set knows only what a preview or a partial apply reported.
+// The Pins inspection also knows a pending match before any preview, so
+// the hint and c show on the first visit, as the Pins route says (D-4).
+func (p *propView) hasPin(id int64) bool {
+	if p.pinned[id] {
+		return true
+	}
+
+	link, known := extLink(p.st, id)
+
+	return known && link == pinfile.LinkPendingMatch
+}
+
+// extractTargets returns the proposals that t asks about: the marked
+// pending rows, or the cursor row of the pending or the applied list
+// when nothing is marked. Dismissed and superseded rows have no
+// question to ask, so they give no target.
+func (p *propView) extractTargets() []domain.Proposal {
+	rows := p.rows()
+
+	switch p.filter {
+	case propPending:
+		if len(p.selected) > 0 {
+			var out []domain.Proposal
+
+			for _, pr := range rows {
+				if p.selected[pr.ID] {
+					out = append(out, pr)
+				}
+			}
+
+			return out
+		}
+	case propApplied:
+	default:
+		return nil
+	}
+
+	if cur, ok := p.current(rows); ok {
+		return []domain.Proposal{cur}
+	}
+
+	return nil
+}
+
+// extractMarked reports that the marked rows are the targets of t. Else
+// the cursor row stands in for an empty selection (contracts D-15).
+func (p *propView) extractMarked() bool {
+	return p.filter == propPending && len(p.selected) > 0
+}
+
+// canExtract reports a target whose trigger question the console can
+// ask, so t shows in the footer.
+func (p *propView) canExtract() bool {
+	return slices.ContainsFunc(p.extractTargets(), func(pr domain.Proposal) bool {
+		ok, _ := extQuestion(p.st, p.ledger(), pr)
+
+		return ok
+	})
+}
+
+// startExtract opens the trigger extraction review of the targets. The
+// request keeps the whole selection, because the review lists every
+// target that it does not ask, with its reason. A target set without an
+// open question opens nothing; the toast says why.
+func (p *propView) startExtract() tea.Cmd {
+	targets := p.extractTargets()
+	if len(targets) == 0 {
+		if p.filter == propDismissed || p.filter == propSuperseded {
+			return toast(ToneNeutral, "Dismissed and superseded proposals have no trigger question to ask.")
+		}
+
+		return nil
+	}
+
+	if !p.canExtract() {
+		_, why := extQuestion(p.st, p.ledger(), targets[0])
+		if len(targets) == 1 {
+			return toast(ToneNeutral, "Nothing to extract for "+propID(targets[0].ID)+": "+why+".")
+		}
+
+		return toast(ToneNeutral, "No selected proposal has an open trigger question; "+propID(targets[0].ID)+": "+
+			why+".")
+	}
+
+	ids := make([]int64, len(targets))
+	for i, pr := range targets {
+		ids[i] = pr.ID
+	}
+
+	// Without marks the cursor row is the target, and the review must
+	// say so (contracts D-15).
+	return openExtract(learning.ExtractRequest{IDs: ids}, !p.extractMarked())
+}
+
+// focus shows proposal id in the list of its state, for a link from an
+// extraction result. It ends a run filter and a region filter that hide
+// the row. Such a change clears the selection with its note, as every
+// filter change does. Without the row in the snapshot, nothing changes.
+func (p *propView) focus(id int64) tea.Cmd {
+	l := p.ledger()
+	if l == nil || p.dec != nil || p.editing {
+		return nil
+	}
+
+	for f := propPending; f < propStateCount; f++ {
+		rows := propStateRows(l, f)
+
+		i := slices.IndexFunc(rows, func(pr domain.Proposal) bool { return pr.ID == id })
+		if i < 0 {
+			continue
+		}
+
+		changed := p.filter != f || p.run != nil || !proposals.MatchesRegion(rows[i], p.region)
+
+		p.filter, p.run = f, nil
+
+		if !proposals.MatchesRegion(rows[i], p.region) {
+			p.region = ""
+		}
+
+		p.cursorID = id
+		p.focusDetail = false
+
+		// The list changes only with a filter, so only then does the
+		// selection go, with its note. Else the cursor moves alone.
+		if changed {
+			return p.filterChanged()
+		}
+
+		p.relocate(p.rows(), false)
+
+		return nil
+	}
+
+	return nil
 }
 
 // decisionKeys returns the footer bindings of one decision stage. The
@@ -1447,7 +1886,7 @@ func (p *propView) decisionKeys(d *propDecision) []key.Binding {
 		return nil
 	case propStageResult:
 		if d.reviewAgain() {
-			return []key.Binding{withHelp(nkeys.Enter, "enter", "review again"), withHelp(nkeys.Back, "esc", "close"),
+			return []key.Binding{withHelp(nkeys.Enter, "enter", "preview again"), withHelp(nkeys.Back, "esc", "close"),
 				scroll}
 		}
 

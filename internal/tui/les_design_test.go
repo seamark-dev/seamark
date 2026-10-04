@@ -65,9 +65,11 @@ func TestLessonsDesignLayoutAt120Columns(t *testing.T) {
 	// Row 5 holds the sub-tabs and the gate; row 6 the filter line.
 	tabs, _, found := strings.Cut(lines[4], "distill")
 	require.True(t, found, lines[4])
-	assert.Equal(t, " Proposals   Stats   Evidence   p / s / e", strings.TrimRight(tabs, " "))
+	assert.Equal(t, " Proposals   Pins   Stats   Evidence   p / m / s / e", strings.TrimRight(tabs, " "))
 	assert.True(t, strings.HasSuffix(strings.TrimRight(lines[4], " "), "distill.write off"))
-	assert.Equal(t, " state [pending 3] applied 1  dismissed 1     region all", strings.TrimRight(lines[5], " "))
+	// Phase 3 adds the superseded history as the last state.
+	assert.Equal(t, " state [pending 3] applied 1  dismissed 1  superseded 0     region all",
+		strings.TrimRight(lines[5], " "))
 
 	// Row 8 opens both boxes: 62 cells, one gap, 57 cells.
 	top := lines[7]
@@ -78,7 +80,9 @@ func TestLessonsDesignLayoutAt120Columns(t *testing.T) {
 
 	// The column header and a row follow the 1a column widths.
 	assert.True(t, strings.HasPrefix(lines[8], "│       ID  RULE                      REGION    CITED TIER   │ │"), lines[8])
-	assert.Contains(t, lines[9], "│ › [ ] p1  check-nil-errors          internal/…  2   strong │")
+	// A long region keeps its last path component, as in the Pins list
+	// (Phase 3 review fix), so the rows stay distinct.
+	assert.Contains(t, lines[9], "│ › [ ] p1  check-nil-errors          …/api       2   strong │")
 	assert.Contains(t, frame, "tab detail")
 	assert.Contains(t, frame, "a YAML")
 }

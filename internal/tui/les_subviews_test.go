@@ -23,12 +23,12 @@ func TestLessonsEvidenceSubView(t *testing.T) {
 
 	h.press("e")
 	require.Equal(t, lesEvidence, les.sub)
-	assert.True(t, strings.HasPrefix(lesSubTabs(h), " Proposals   Stats   Evidence   p / s / e "), lesSubTabs(h))
+	assert.True(t, strings.HasPrefix(lesSubTabs(h), " Proposals   Pins   Stats   Evidence   p / m / s / e "), lesSubTabs(h))
 
 	lines := strings.Split(h.view(), "\n")
 	assert.True(t, strings.HasPrefix(lines[7], "╭─ Evidence sources "), "the box starts on the row of the other boxes")
 	assert.Contains(t, h.view(), "seamark index --fixes-only")
-	assert.Contains(t, shellAFooter(h.view()), "p proposals   s stats")
+	assert.Contains(t, shellAFooter(h.view()), "p proposals   m pins   s stats")
 
 	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 20}} {
 		h.resize(size[0], size[1])
@@ -61,7 +61,7 @@ func TestLessonsRunSubViewStaysHiddenUntilARun(t *testing.T) {
 	assert.Equal(t, lesProposals, les.sub, "the run intent keeps the view before the first run")
 
 	h.m.st.lastRunKind = runEvidence
-	assert.True(t, strings.HasPrefix(lesSubTabs(h), " Proposals   Stats   Evidence   Run   p / s / e / u "), lesSubTabs(h))
+	assert.True(t, strings.HasPrefix(lesSubTabs(h), " Proposals   Pins   Stats   Evidence   Run   p / m / s / e / u "), lesSubTabs(h))
 
 	h.press("u")
 	require.Equal(t, lesRun, les.sub)
@@ -75,7 +75,7 @@ func TestLessonsRunSubViewStaysHiddenUntilARun(t *testing.T) {
 
 	// At the minimum width the key hint drops before the write gate.
 	assert.True(t, strings.HasSuffix(lesSubTabs(h), "distill.write on"), lesSubTabs(h))
-	assert.NotContains(t, lesSubTabs(h), "p / s")
+	assert.NotContains(t, lesSubTabs(h), "p / m")
 
 	h.press("2")
 	h.send(navigateMsg{dest: destLessons, intent: "run"})
@@ -90,7 +90,7 @@ func TestLessonsDistillIntentOpensTheRunSubView(t *testing.T) {
 
 	h.send(navigateMsg{dest: destLessons, intent: "distill"})
 	require.Equal(t, lesRun, les.sub, "the scope step lives in the Run sub-view")
-	assert.Contains(t, lesSubTabs(h), "Run   p / s / e / u")
+	assert.Contains(t, lesSubTabs(h), "Run   p / m / s / e / u")
 	assert.Contains(t, h.view(), "Distillation preparation")
 }
 
@@ -126,5 +126,5 @@ func TestLessonsSwitchKeysWaitWhileTheViewCaptures(t *testing.T) {
 	h.typeText("eu")
 	assert.Equal(t, lesProposals, les.sub, "the region input receives e and u")
 	assert.Equal(t, "eu", les.props.input.value())
-	assert.NotContains(t, lesSubTabs(h), "p / s", "the switch hint hides while the view captures")
+	assert.NotContains(t, lesSubTabs(h), "p / m", "the switch hint hides while the view captures")
 }

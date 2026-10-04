@@ -8,6 +8,57 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **Console pin maintenance (`seamark tui`, experimental).** Lessons
+  gains Pins (`m`): the entries of `.seamark/lessons.yaml` in file order,
+  each linked to the proposal ledger by rule and region set or marked as
+  no proposal, pending, duplicate, ambiguous, or link unknown, with the
+  live and the recorded note, derived evidence, scope, trigger, outcome,
+  and delivery readings, a read-only comparison of similar pins, and
+  read-only lists of applied proposals whose pin is not present and of
+  superseded proposals. The help always lists the Pins action keys
+  `w`, `-`, `t`, and `v`, and the footer does from 120 columns; a key
+  that the targets cannot use reads `n/a`, and its press names the
+  reason first and opens nothing. In Proposals, `?` lists every action
+  too and marks with `n/a` the actions that the cursor row, the
+  selection, or the filters cannot use; the Proposals footer is
+  unchanged. `c` (record applied) opens its preview only when every
+  target has a known pin; otherwise one line gives the reason. A pin
+  file that cannot be read never reads as an empty list. A retarget (`w`) or a prune (`-`) of a pin with exactly one
+  linked proposal starts from a preview with the region change or the
+  removed entry, the ledger change, and the file diff; `y` writes only
+  with `distill.write` on and after a fresh plan matches the preview. The
+  edit changes only the reviewed lines (a retarget keeps the live note,
+  comments, unknown keys, and the entry position), blocks unsupported
+  YAML layouts, and replaces the file atomically before a guarded ledger
+  transaction. A failed ledger step restores the file only over the
+  bytes it wrote, reports file, ledger, and restore outcomes on separate
+  rows, and can offer a ledger-only completion that holds for the session
+  only. A trigger extraction (`t` in Pins or Proposals) asks the agent
+  about the selected eligible proposals only, from a review of the
+  batches, the sent data, and the estimated usage; it runs stoppable
+  batches, saves each answer with a guard, counts an omitted proposal as
+  a negative answer, and never changes an applied pin's scope. In the
+  console, the end of each agent call also ends the agent's process
+  group, so a process that the agent leaves in it does not outlive the
+  call. In a copied checkout whose index still records the original
+  repository, Pins turns retarget and prune off and names both pin
+  files. Proposals adds the superseded state. The new `internal/pinfile`,
+  `internal/maintain`, and `internal/yamledit` packages serve the
+  console; `seamark lessons --prune`, `--retarget`, and
+  `--extract-triggers` keep their output, pinned by new golden tests.
+  One prompt change applies to the CLI and the console: the extraction
+  prompt indents every continuation line of a multi-line rule or note,
+  so a recorded note cannot forge another item. A prompt whose fields
+  each fit on one line stays byte-identical. See
+  [docs/tui.md](docs/tui.md).
+- **Guarded writes refuse a file that this user cannot write.** `seamark
+  init`, the console setup, the Settings editor, and the console pin
+  writes replace a file through a temporary file and a rename. A rename
+  needs write access to the directory only, so a file that an access
+  control list protected was replaced and lost the list. The setup
+  engine now asks the system whether this user can write the file, and
+  it refuses such a file with "this user cannot write the file; seamark
+  does not replace it", as a plain write fails on it.
 - **Console learning workflow and settings (`seamark tui`,
   experimental).** Lessons gains Evidence and Run. An evidence refresh
   (local fixes, or GitHub reviews plus local fixes) starts from a

@@ -29,6 +29,14 @@ func TestTUIWithoutTerminalPrintsPlainGuidance(t *testing.T) {
 	assert.Contains(t, out, "seamark doctor")
 	assert.Contains(t, out, "seamark init --client")
 	assert.Contains(t, out, "seamark lessons --proposals")
+
+	// The pin maintenance of the console has CLI routes too. The text
+	// names the difference of the CLI retarget, because it can lose a
+	// hand-edited note.
+	assert.Contains(t, out, "seamark lessons --retarget <ids>")
+	assert.Contains(t, out, "seamark lessons --prune <ids>")
+	assert.Contains(t, out, "seamark lessons --extract-triggers --dry-run")
+	assert.Contains(t, out, "The CLI retarget rewrites the whole entry")
 	assert.NotContains(t, out, "\x1b", "plain guidance carries no escape sequence")
 	assert.Equal(t, before, snapshot(t, root), "a refused launch writes nothing")
 }

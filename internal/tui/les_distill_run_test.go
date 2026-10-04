@@ -572,6 +572,14 @@ func TestProposalsRunFilterWaitsForANewerLedger(t *testing.T) {
 	assert.Contains(t, flat, "No pending proposals from run 14:05")
 	assert.Contains(t, flat, "1 no longer in the ledger")
 	assert.Contains(t, flat, "Press esc to show every pending proposal.")
+
+	// A prune keeps the row as superseded history, so it is not missing.
+	f.ledger.Superseded = append(f.ledger.Superseded, domain.Proposal{ID: 9, Rule: "new-rule", Status: domain.ProposalSuperseded})
+	h.send(loadedMsg{kind: secLedger, gen: h.m.st.gens[secLedger], value: f.ledger, at: end.Add(3 * time.Second)})
+
+	flat = lesBoxFlat(h.view())
+	assert.Contains(t, flat, "0 applied, 0 dismissed, 1 superseded.")
+	assert.NotContains(t, flat, "no longer in the ledger")
 }
 
 func TestProposalsRunFilterReconcilesTheSelection(t *testing.T) {

@@ -93,7 +93,7 @@ func TestSettingsSaveNeedsYFromThePreview(t *testing.T) {
 	assert.False(t, probe.saved[0].at.IsZero())
 
 	frame = h.view()
-	assert.Contains(t, frame, "Configuration updated: agent.cli. It takes effect at the next prepared distillation.")
+	assert.Contains(t, frame, "Configuration updated: agent.cli. It takes effect at the next distillation or trigger extraction.")
 	assert.NotEmpty(t, settingsLine(frame, "agent.cli", "codex", "config.yaml"), "the saved value has no draft marker")
 	assert.Contains(t, settingsBox(frame, "Settings"), "Saved Inference at "+probe.saved[0].at.Format("15:04:05")+
 		". The index reads as stale until the next index build.")
@@ -159,7 +159,7 @@ func TestSettingsReturnToDefaultRemovesTheKey(t *testing.T) {
 	flat := settingsBox(h.view(), "Save")
 	assert.Contains(t, flat, "distill.write true › removed")
 	assert.Contains(t, flat, "− remove distill.write; the default off applies")
-	assert.Contains(t, flat, "apply a pending proposal: a new proposal preview offers the write")
+	assert.Contains(t, flat, "write a pin: a new apply, retarget or prune preview offers the write")
 
 	h.press("y")
 	assert.Equal(t, "distill:\n  # pins need a review first\nindex:\n  generated: true\n", settingsBytes(t, svc),
@@ -575,7 +575,7 @@ func TestSettingsCLIResetWithTheArgvRemovalAppliesTheDefault(t *testing.T) {
 	h.press("y")
 	assert.Equal(t, "", strings.TrimSpace(settingsBytes(t, svc)), "both keys go")
 	assert.Contains(t, h.view(), "Configuration updated: agent.cli, agent.argv. They take effect at the next "+
-		"prepared distillation.")
+		"distillation or trigger extraction.")
 }
 
 func TestSettingsSaveReloadsDiagnosticsAndStartsNoWork(t *testing.T) {
@@ -591,12 +591,12 @@ func TestSettingsSaveReloadsDiagnosticsAndStartsNoWork(t *testing.T) {
 	}{
 		{
 			name: "inference", intent: "group:inference", keys: []string{"enter", "down", "space", "enter"},
-			when: "agent.cli: at the next prepared distillation.",
+			when: "agent.cli: at the next distillation or trigger extraction.",
 		},
 		{
 			name: "pin writing", content: "distill:\n  write: false\n", intent: "group:pinwrite",
 			keys: []string{"enter", "down", "space", "enter"},
-			when: "distill.write: at the next proposal preview.", ledger: true,
+			when: "distill.write: at the next apply, retarget or prune preview.", ledger: true,
 		},
 		{
 			name: "evidence", intent: "group:evidence", keys: []string{"enter", "down", "down", "space", "enter"},

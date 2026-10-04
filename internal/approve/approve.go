@@ -584,5 +584,12 @@ func ReadRegular(root, rel string) ([]byte, fs.FileMode, error) {
 // the tree. Every reader of such a document reports the link with these
 // words.
 func LinkRefusal(rel, link string) error {
-	return fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", rel, link)
+	return fmt.Errorf("%s: %s", rel, LinkReason(link))
+}
+
+// LinkReason is the reason the engine never writes through the link at
+// link. LinkRefusal and the setup engine's write refusal share it, so the
+// text cannot drift between the surfaces that show it.
+func LinkReason(link string) string {
+	return fmt.Sprintf("symlink at %s; seamark writes only real paths inside the repository", link)
 }

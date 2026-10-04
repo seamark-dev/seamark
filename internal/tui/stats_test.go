@@ -348,7 +348,8 @@ func TestStatsLessonsBoxShowsSourcesProposalsAndRegions(t *testing.T) {
 
 	body := statsLessons(v, snap, 56)
 	assert.Equal(t, "71", statsLast(t, body, "review-mined"))
-	assert.Equal(t, "12", statsLast(t, body, "manual pins"))
+	assert.Equal(t, "12", statsLast(t, body, "pins"))
+	assert.NotContains(t, body, "manual", "a pin in lessons.yaml does not prove that a person wrote it (D-4)")
 	assert.Contains(t, statsFlat(body), "9 more mined lessons are below the threshold or muted, so no surface shows them.")
 	assert.Equal(t, "3", statsLast(t, body, "pending"))
 	assert.Equal(t, "1", statsLast(t, body, "applied"))
@@ -752,7 +753,7 @@ func TestStatsInTheLessonsDestination(t *testing.T) {
 
 	frame := h.view()
 	assertFrame(t, frame, 120, 40)
-	assert.Contains(t, frame, " Proposals   Stats   Evidence   p / s / e")
+	assert.Contains(t, frame, " Proposals   Pins   Stats   Evidence   p / m / s / e")
 	assert.Contains(t, frame, "╭─ Lessons ")
 	assert.Contains(t, frame, "╭─ Delivery · last 14 days")
 	assert.Contains(t, frame, "p proposals   tab pane   f period")

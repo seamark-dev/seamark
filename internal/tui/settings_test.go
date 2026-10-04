@@ -206,7 +206,10 @@ func TestSettingsListShowsEveryFieldWithItsSource(t *testing.T) {
 	flat := settingsBox(frame, "agent.cli")
 	for _, want := range []string{
 		"VALUE", "Stored codex", "Default claude", "Effective codex", "Source .seamark/config.yaml, line 3",
-		"Runs codex exec", "TAKES EFFECT", "At the next prepared distillation.", "CHOOSE",
+		"Runs codex exec", "TAKES EFFECT", "At the next prepared distillation or trigger extraction.", "CHOOSE",
+		// Trigger extraction runs the same resolved command, so the
+		// texts name it too.
+		"Selects the preset command that distillation and trigger extraction run.",
 	} {
 		assert.Contains(t, flat, want)
 	}

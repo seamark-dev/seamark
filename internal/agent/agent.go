@@ -114,8 +114,9 @@ func New(cfg *Config) (Invoker, error) {
 // reaches, such as the full-screen console in raw mode. Each run starts
 // the client in a new process group. Cancellation then kills the whole
 // group, so a wrapper script or a launcher cannot leave its model call
-// running. The commands keep NewCommand: a terminal interrupt stops them
-// only while the client shares their process group.
+// running. The end of each run kills the group too, so no descendant
+// outlives the call. The commands keep NewCommand: a terminal interrupt
+// stops them only while the client shares their process group.
 //
 // The new group is not the foreground group of the terminal, so no
 // terminal signal reaches the client, a hangup included. The caller
@@ -145,7 +146,7 @@ type cliInvoker struct {
 	// diagnostic selects the output included in errors.
 	diagnostic Diagnostic
 	// ownGroup starts each run in a new process group and kills that
-	// group on cancellation (NewGroupCommand).
+	// group on cancellation and at the end of the run (NewGroupCommand).
 	ownGroup bool
 }
 
@@ -214,7 +215,7 @@ func (c *cliInvoker) Invoke(ctx context.Context, prompt string) (string, error) 
 	cmd.Stdout = out
 	cmd.Stderr = errb
 
-	if err := cmd.Run(); err != nil {
+	if err := c.run(ctx, cmd); err != nil {
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("agent %s: %w", c.name, ctx.Err())
 		}
@@ -237,6 +238,42 @@ func (c *cliInvoker) Invoke(ctx context.Context, prompt string) (string, error) 
 	}
 
 	return out.String(), nil
+}
+
+// run runs cmd to its end. For NewGroupCommand it also ends the process
+// group of the client. exec cancels only while the client runs, so a
+// descendant that holds stdout after the client exits would ignore a
+// stop for up to waitDelay. A watch kills the group when ctx ends before
+// Wait returns. A descendant that closed its pipes never delays Wait, so
+// a last kill ends the group after every run, whatever its outcome.
+func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
+	if !c.ownGroup {
+		return cmd.Run()
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	waited := make(chan struct{})
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			// An error means that the group is gone already.
+			_ = killGroup(cmd)
+		case <-waited:
+		}
+	}()
+
+	err := cmd.Wait()
+	close(waited)
+
+	// The group is empty after a clean exit, and then the kill fails with
+	// nothing to report.
+	_ = killGroup(cmd)
+
+	return err
 }
 
 // diagnostic selects the first non-empty line or the last few, in order,

@@ -12,6 +12,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
+	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/workspace"
@@ -32,13 +33,17 @@ const (
 	secLearning
 	// secSettings is the focused settings of the Settings destination.
 	secSettings
+	// secPins is the inspection of the installed pins of Lessons › Pins.
+	// It reads without an index, so it is a source of its own and never
+	// rides on the ledger.
+	secPins
 	secCount
 )
 
 // allSections lists every source for a full view refresh. Every loader
 // only reads: none fetches, runs an agent, or writes.
 var allSections = []sectionKind{
-	secDoctor, secIndex, secIntegrations, secLedger, secStats, secLearning, secSettings,
+	secDoctor, secIndex, secIntegrations, secLedger, secStats, secLearning, secSettings, secPins,
 }
 
 // section is the last snapshot of one source. After a failed reload the
@@ -81,6 +86,7 @@ type state struct {
 	stats        section[lessonstats.Snapshot]
 	learning     section[learning.Snapshot]
 	settings     section[*settings.Snapshot]
+	pins         section[*maintain.Inspection]
 
 	// gens drops out-of-order results: only the newest load of a
 	// source may replace its snapshot.
@@ -219,6 +225,8 @@ const (
 	runEvidence
 	// runDistill is a distillation run of the configured agent.
 	runDistill
+	// runExtract is a trigger extraction run of the configured agent.
+	runExtract
 )
 
 // runNote is the shared record of a running stoppable operation. The
@@ -304,10 +312,11 @@ func (s *state) runContext() (context.Context, context.CancelFunc) {
 	return context.WithCancel(root)
 }
 
-// goWork returns a command that runs fn as registered stoppable work.
-// Run waits for registered work at exit. After that wait began, the
-// command does not run fn and returns nil, because no new external work
-// may start during an exit.
+// goWork returns a command that runs fn as registered work: a
+// stoppable run, or a short write that must not be cut, such as a
+// maintenance commit. Run waits for registered work at exit. After that
+// wait began, the command does not run fn and returns nil, because no
+// new external work may start during an exit.
 func (s *state) goWork(fn func() tea.Msg) tea.Cmd {
 	w := &s.work
 
@@ -322,7 +331,48 @@ func (s *state) goWork(fn func() tea.Msg) tea.Cmd {
 	}
 }
 
-// workerSet counts the running stoppable workers. Its zero value is
+// beginWork claims the mutation slot for short work that cannot stop,
+// for example a maintenance commit, and returns fn as registered work.
+// Run waits for registered work at exit, so a signal exit never ends
+// the console between a pin file write and its ledger update (D-21).
+// It returns false and no command while another mutation runs. fn
+// returns the result message, and its handler frees the slot with
+// mutationDone.
+func (s *state) beginWork(name string, fn func() tea.Msg) (tea.Cmd, bool) {
+	if !s.begin(name) {
+		return nil, false
+	}
+
+	return s.goWork(fn), true
+}
+
+// startRun claims the mutation slot for stoppable work of kind, records
+// the run note n, and returns fn as registered work. fn gets the run
+// context: a stop request and the exit cancel it, and it ends when fn
+// returns. Lessons offers the Run sub-view from then on. It returns false
+// and no command while another mutation runs, and then cancels the
+// unused context. The note gets its stop function here, so every run
+// stops the same way.
+func (s *state) startRun(kind runKind, name string, n runNote, fn func(ctx context.Context) tea.Msg) (tea.Cmd, bool) {
+	ctx, cancel := s.runContext()
+	n.stop = cancel
+
+	if !s.beginRun(name, n) {
+		cancel()
+
+		return nil, false
+	}
+
+	s.lastRunKind = kind
+
+	return s.goWork(func() tea.Msg {
+		defer cancel()
+
+		return fn(ctx)
+	}), true
+}
+
+// workerSet counts the running registered workers. Its zero value is
 // ready to use.
 type workerSet struct {
 	mu     sync.Mutex
@@ -384,7 +434,7 @@ func (w *workerSet) wait(d time.Duration) bool {
 // loading reports any source that is loading.
 func (s *state) loading() bool {
 	return s.doctor.loading || s.index.loading || s.integrations.loading ||
-		s.ledger.loading || s.stats.loading || s.learning.loading || s.settings.loading
+		s.ledger.loading || s.stats.loading || s.learning.loading || s.settings.loading || s.pins.loading
 }
 
 // load starts background loads of the named sources.
@@ -444,6 +494,15 @@ func (s *state) load(kinds ...sectionKind) tea.Cmd {
 				v, err := svc.Settings()
 
 				return loadedMsg{kind: k, gen: gen, value: v, err: err, at: time.Now()}
+			})
+		case secPins:
+			// The inspection holds its own file, ledger and reading
+			// failures. A changed or broken pin file is new information,
+			// not a failed read, so every inspection replaces the last one
+			// and the view never shows an old list as current (D-5).
+			s.pins.loading = true
+			cmds = append(cmds, func() tea.Msg {
+				return loadedMsg{kind: k, gen: gen, value: svc.Pins(), at: time.Now()}
 			})
 		}
 	}
@@ -523,6 +582,9 @@ func (s *state) store(msg loadedMsg) bool {
 	case secSettings:
 		v, _ := msg.value.(*settings.Snapshot)
 		s.settings.set(v, msg.err, msg.at)
+	case secPins:
+		v, _ := msg.value.(*maintain.Inspection)
+		s.pins.set(v, msg.err, msg.at)
 	}
 
 	return true

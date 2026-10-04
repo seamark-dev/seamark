@@ -2,6 +2,7 @@ package tui
 
 import (
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -140,6 +141,14 @@ type modalOpts struct {
 	// Actions are the keys under the rule at the bottom. The row stays
 	// visible while the body scrolls.
 	Actions []key.Binding
+	// Tail is the scope summary of a confirmation, for example "Removes 1
+	// pin · p16 › superseded". It stays under the rule, above the
+	// actions, and never scrolls, so the minimum layout still shows what
+	// y confirms. The caller wraps each line to modalBodyWidth; the box
+	// clips a longer line. A summary taller than the area keeps its first
+	// lines, so the actions and the border stay (capTail). Nil keeps the
+	// layout without a summary.
+	Tail []string
 	// MinW is the narrowest modal on a wide terminal; 0 selects
 	// modalMinW. A small terminal still gets a narrower modal.
 	MinW int
@@ -174,9 +183,23 @@ func (t *Theme) modal(o modalOpts, sc *scrollState, w, h int) string {
 	mw := modalWidth(o.MinW, w)
 	inner := boxInner(mw)
 
+	// The rule separates the body that scrolls from the rows that stay:
+	// the scope summary, then the actions.
 	var tail []string
+	if len(o.Actions) > 0 || len(o.Tail) > 0 {
+		// The two border rows, one body row, the blank row, the rule and
+		// the actions row must fit, so the summary gets the rest.
+		room := h - modalMargin - 2 - 1 - 2
+		if len(o.Actions) > 0 {
+			room--
+		}
+
+		tail = append([]string{"", t.Rule.Render(strings.Repeat(t.Glyphs.RuleLight, inner))},
+			t.capTail(o.Tail, room, inner)...)
+	}
+
 	if len(o.Actions) > 0 {
-		tail = []string{"", t.Rule.Render(strings.Repeat(t.Glyphs.RuleLight, inner)), t.hints(o.Actions)}
+		tail = append(tail, t.hints(o.Actions))
 	}
 
 	window := min(len(o.Body), max(1, h-modalMargin-2-len(tail)))
@@ -195,6 +218,71 @@ func (t *Theme) modal(o modalOpts, sc *scrollState, w, h int) string {
 		W: mw, H: len(lines) + 2, Focus: true, Fill: true, Lines: lines,
 		Title: o.Title, Right: o.Right, Foot: foot,
 	})
+}
+
+// capTail keeps at most n lines of a modal scope summary in inner cells.
+// The summary never scrolls, so a long one would push the actions and
+// the bottom border out of the area. A cut summary ends its last kept
+// line with the ellipsis, so the user sees that it goes on. The modal
+// keeps at least one line, because the summary names what y confirms.
+func (t *Theme) capTail(lines []string, n, inner int) []string {
+	if len(lines) <= n {
+		return lines
+	}
+
+	n = max(1, n)
+	kept := slices.Clone(lines[:n])
+	ell := t.Glyphs.Ellipsis
+	kept[n-1] = truncate(kept[n-1], max(0, inner-width(ell)-1), "") + " " + ell
+
+	return kept
+}
+
+// scrollBox renders body lines in a box that scrolls in sc, with the
+// tail lines always visible under the body. When follow is set, the
+// window moves so that the lines keep[0] to keep[1] show, for example
+// the cursor group and its evidence. A box that scrolls shows its
+// position in the bottom border.
+func (t *Theme) scrollBox(o boxOpts, body, tail []string, sc *scrollState, keep [2]int, follow bool) string {
+	return t.pinnedBox(o, nil, body, tail, sc, keep, follow)
+}
+
+// pinnedBox is scrollBox with head lines that stay above the body, for
+// example the headline of a run. Only the body scrolls, and keep counts
+// body lines. The distillation record, the extraction record and the
+// Pins view share it, so every scrolling box keeps the same rules.
+func (t *Theme) pinnedBox(o boxOpts, head, body, tail []string, sc *scrollState, keep [2]int, follow bool) string {
+	rows := boxRows(o.H)
+	fixed := len(head) + len(tail)
+
+	window := len(body)
+	if len(body)+fixed > rows {
+		window = max(1, rows-fixed)
+	}
+
+	sc.page = window
+	sc.last = max(0, len(body)-window)
+
+	if follow && keep[0] >= 0 {
+		if keep[1] >= sc.off+window {
+			sc.off = keep[1] - window + 1
+		}
+
+		if keep[0] < sc.off {
+			sc.off = keep[0]
+		}
+	}
+
+	sc.by(0)
+
+	end := min(len(body), sc.off+window)
+	o.Lines = append(append(slices.Clone(head), body[sc.off:end]...), tail...)
+
+	if sc.scrolls() && o.Foot == "" {
+		o.Foot = propRange(t, sc.off, end, len(body))
+	}
+
+	return t.box(o)
 }
 
 // card renders a summary card: a short box whose title is a dim

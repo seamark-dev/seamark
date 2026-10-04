@@ -21,8 +21,11 @@ import (
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
+	"github.com/seamark-dev/seamark/internal/maintain"
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // TestMain fixes the color profile and disables timers, so views are
@@ -78,6 +81,17 @@ type fakeServices struct {
 	cleanupPending func(*learning.DistillPreview) (int, error)
 	planSettings   func(*settings.Snapshot, []settings.Edit) (*settings.Plan, error)
 	saveSettings   func(*settings.Plan) (settings.Result, error)
+
+	// pins is the inspection of the installed pins. nil reads as an
+	// absent pin file over an empty ledger (fakePins).
+	pins *maintain.Inspection
+
+	planMaintenance   func(maintain.Request) (*maintain.Plan, error)
+	commitMaintenance func(*maintain.Plan) (maintain.Result, error)
+	planRecovery      func(*maintain.Recovery) (*maintain.Plan, error)
+	commitRecovery    func(*maintain.Plan) (maintain.Result, error)
+	planExtract       func(learning.ExtractRequest) (*learning.ExtractPreview, error)
+	runExtract        func(context.Context, *learning.ExtractPreview, func(distill.ExtractEvent)) (*distill.ExtractExecution, error)
 
 	// calls records every plan, preview and mutation call by name.
 	calls []string
@@ -297,6 +311,103 @@ func (f *fakeServices) SaveSettings(p *settings.Plan) (settings.Result, error) {
 	}
 
 	return f.saveSettings(p)
+}
+
+func (f *fakeServices) Pins() *maintain.Inspection {
+	f.count("Pins")
+
+	if f.pins == nil {
+		return fakePins()
+	}
+
+	return f.pins
+}
+
+func (f *fakeServices) PlanMaintenance(req maintain.Request) (*maintain.Plan, error) {
+	f.record("PlanMaintenance:" + req.Action.String())
+
+	if f.planMaintenance == nil {
+		return &maintain.Plan{Action: req.Action, Request: req, PlannedAt: time.Now()}, nil
+	}
+
+	return f.planMaintenance(req)
+}
+
+func (f *fakeServices) CommitMaintenance(p *maintain.Plan) (maintain.Result, error) {
+	f.record("CommitMaintenance:" + fakeAction(p))
+
+	if f.commitMaintenance == nil {
+		return maintResult(p), nil
+	}
+
+	return f.commitMaintenance(p)
+}
+
+func (f *fakeServices) PlanRecovery(r *maintain.Recovery) (*maintain.Plan, error) {
+	action := maintain.Action(0)
+	if r != nil {
+		action = r.Action
+	}
+
+	f.record("PlanRecovery:" + action.String())
+
+	if f.planRecovery == nil {
+		return &maintain.Plan{Action: action, Recovery: r, PlannedAt: time.Now()}, nil
+	}
+
+	return f.planRecovery(r)
+}
+
+func (f *fakeServices) CommitRecovery(p *maintain.Plan) (maintain.Result, error) {
+	f.record("CommitRecovery:" + fakeAction(p))
+
+	if f.commitRecovery == nil {
+		return maintResult(p), nil
+	}
+
+	return f.commitRecovery(p)
+}
+
+func (f *fakeServices) PlanExtract(req learning.ExtractRequest) (*learning.ExtractPreview, error) {
+	f.record("PlanExtract")
+
+	if f.planExtract == nil {
+		return &learning.ExtractPreview{Request: req, Plan: &distill.ExtractPlan{}, PlannedAt: time.Now()}, nil
+	}
+
+	return f.planExtract(req)
+}
+
+func (f *fakeServices) RunExtract(ctx context.Context, p *learning.ExtractPreview,
+	progress func(distill.ExtractEvent),
+) (*distill.ExtractExecution, error) {
+	f.record("RunExtract")
+
+	if f.runExtract == nil {
+		return &distill.ExtractExecution{}, nil
+	}
+
+	return f.runExtract(ctx, p, progress)
+}
+
+// fakeAction names the action of a maintenance plan for the call record.
+func fakeAction(p *maintain.Plan) string {
+	if p == nil {
+		return "none"
+	}
+
+	return p.Action.String()
+}
+
+// fakePins is the inspection of an absent pin file over an empty ledger:
+// no entry, no superseded history, and every link known.
+func fakePins() *maintain.Inspection {
+	doc := &pinfile.Document{}
+
+	return &maintain.Inspection{
+		Doc: doc, Links: pinfile.Classify(doc, nil, nil, nil),
+		Index: workspace.IndexProbe{State: workspace.IndexReady, Root: "/work/repo"},
+	}
 }
 
 // fakeSettingsSnapshot inspects a temporary workspace whose config.yaml

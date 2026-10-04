@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -86,6 +87,14 @@ type leaveGuard interface {
 // because the user sees the view already (design map §6).
 type intentShower interface {
 	showsIntent(intent string) bool
+}
+
+// helpKeyer is an optional screen method: the keys that the help lists,
+// when they differ from the footer keys. The footer has room for the
+// keys that act now; the help has room for every key of the screen,
+// also the unavailable entries.
+type helpKeyer interface {
+	helpKeys() []key.Binding
 }
 
 // tabShortOrder is the order in which the tab labels abbreviate. The
@@ -893,7 +902,7 @@ func (m *model) latestSnapshot() time.Time {
 
 	for _, t := range []time.Time{
 		m.st.doctor.at, m.st.index.at, m.st.integrations.at, m.st.ledger.at, m.st.stats.at,
-		m.st.learning.at, m.st.settings.at,
+		m.st.learning.at, m.st.settings.at, m.st.pins.at,
 	} {
 		if t.After(at) {
 			at = t
@@ -944,51 +953,75 @@ func (m *model) footer(w int) string {
 	}
 
 	right := t.hints(global)
+
+	clock := ""
 	if at := m.latestSnapshot(); !at.IsZero() {
-		right += "   " + t.Faint.Render(at.Format("15:04:05"))
+		clock = "   " + t.Faint.Render(at.Format("15:04:05"))
 	}
 
-	right += " "
-
 	// The global hints always stay: "? help" leads to every key, so the
-	// local hints give way first.
-	left := " " + m.footerHints(local, w-width(right)-4)
+	// local hints give way first. The room keeps one cell at each edge
+	// and three cells between the two sides, as between two hints.
+	left, kept := m.footerHints(local, w-width(right+clock)-5)
 
-	return spread(left, right, w)
+	// The n/a entries must stay in view (user decision of 2026-10-04:
+	// "Always list, mark unavailable"). So the clock gives way when the
+	// room cuts an n/a entry and the line without the clock keeps them
+	// all. Other footers have no n/a entry and always keep the clock.
+	if !kept && clock != "" {
+		if line, ok := m.footerHints(local, w-width(right)-5); ok {
+			left, clock = line, ""
+		}
+	}
+
+	return spread(" "+left, right+clock+" ", w)
 }
 
 // footerHints renders the leading hints that fit in room cells. It
 // drops whole hints from the end and marks the cut with an ellipsis, so
-// no hint breaks in the middle of a word.
-func (m *model) footerHints(bindings []key.Binding, room int) string {
+// no hint breaks in the middle of a word. It also reports whether the
+// line keeps every n/a entry of bindings.
+//
+// The n/a groups keep their actions only when every hint fits. A cut
+// line shows them by their keys ("n/a: w t v"). The unavailable keys
+// then take fewer cells, so more keys that work stay in view.
+func (m *model) footerHints(bindings []key.Binding, room int) (line string, kept bool) {
 	t := m.st.theme
 
 	var shown []key.Binding
 
+	// An unavailable entry is a hint too, so a cut can end inside its
+	// n/a group.
 	for _, b := range bindings {
-		if b.Enabled() && b.Help().Key != "" {
+		if listed(b) {
 			shown = append(shown, b)
 		}
 	}
 
+	if line := t.hints(shown); width(line) <= room {
+		return line, true
+	}
+
 	for n := len(shown); n > 0; n-- {
-		line := t.hints(shown[:n])
+		line := t.shortHints(shown[:n])
 		if n < len(shown) {
 			line += t.Faint.Render("  " + t.Glyphs.Ellipsis)
 		}
 
 		if width(line) <= room {
-			return line
+			return line, !slices.ContainsFunc(shown[n:], isUnavailable)
 		}
 	}
+
+	kept = !slices.ContainsFunc(shown, isUnavailable)
 
 	// No hint fits: the ellipsis still says that keys exist, and "? help"
 	// at the right lists them.
 	if len(shown) > 0 && room >= width(t.Glyphs.Ellipsis) {
-		return t.Faint.Render(t.Glyphs.Ellipsis)
+		return t.Faint.Render(t.Glyphs.Ellipsis), kept
 	}
 
-	return ""
+	return "", kept
 }
 
 // tooSmall replaces the console below the minimum size. It shows only
@@ -1096,38 +1129,74 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 	bw, bh := m.helpBox(w, h)
 	inner := boxInner(bw)
 
-	entry := func(b key.Binding) string {
-		hp := b.Help()
+	// keyCell pads a key label to the key column. A label can be wider
+	// than the column, so one space always stays before the action.
+	keyCell := func(k string) string {
+		label := t.keyLabel(k)
 
-		return t.Key.Render(padRight(t.keyLabel(hp.Key), helpKeyW)) + t.Muted.Render(hp.Desc)
+		return padRight(label, max(helpKeyW, width(label)+1))
 	}
 
-	enabled := func(bindings []key.Binding) []key.Binding {
-		var out []key.Binding
+	// entries renders the listed bindings of a group, one per row. The
+	// keys that work come first. The unavailable entries follow under
+	// one faint label row that explains the word n/a. Each unavailable
+	// row also has the word after its key ("w n/a"). NO_COLOR removes the
+	// faint style, and the help scrolls past the label row, so only the
+	// word on the row itself tells that the key does not act now.
+	entries := func(bindings []key.Binding) []string {
+		var on, off []string
 
 		for _, b := range bindings {
-			if b.Enabled() && b.Help().Key != "" {
-				out = append(out, b)
+			if !listed(b) {
+				continue
 			}
+
+			hp := b.Help()
+
+			if isUnavailable(b) {
+				off = append(off, t.Faint.Render(keyCell(hp.Key+" "+unavailableWord)+hp.Desc))
+
+				continue
+			}
+
+			on = append(on, t.Key.Render(keyCell(hp.Key))+t.Muted.Render(hp.Desc))
 		}
 
-		return out
+		if len(off) == 0 {
+			return on
+		}
+
+		return append(append(on, t.Faint.Render(unavailableWord+": not available now")), off...)
+	}
+
+	scr := m.screens[m.active]
+
+	screenKeys := scr.keys()
+	if hk, ok := scr.(helpKeyer); ok {
+		screenKeys = hk.helpKeys()
+	}
+
+	// The ASCII words of "↑↓" are wider than the key column. So the ASCII
+	// help uses a short form, and every action starts in the same column.
+	moveKeys := "↑↓  j k"
+	if t.ASCII {
+		moveKeys = "up/dn j k"
 	}
 
 	groups := []struct {
-		title    string
-		bindings []key.Binding
+		title string
+		rows  []string
 	}{
-		{"GLOBAL", []key.Binding{
+		{"GLOBAL", entries([]key.Binding{
 			withHelp(gkeys.Overview, "1–5", "jump to tab"), withHelp(nkeys.Next, "tab", "switch pane"),
 			gkeys.Refresh, withHelp(gkeys.Help, "?", "this help"), gkeys.Quit,
-		}},
-		{"MOVE", []key.Binding{
-			withHelp(nkeys.Down, "↑↓  j k", "move"), withHelp(nkeys.Top, "g  G", "top / bottom"),
+		})},
+		{"MOVE", entries([]key.Binding{
+			withHelp(nkeys.Down, moveKeys, "move"), withHelp(nkeys.Top, "g  G", "top / bottom"),
 			withHelp(nkeys.Enter, "enter", "open"), withHelp(nkeys.Back, "esc", "back / close"),
 			withHelp(nkeys.PageDown, "pgup pgdn", "scroll detail"),
-		}},
-		{strings.ToUpper(m.screens[m.active].title()), enabled(m.screens[m.active].keys())},
+		})},
+		{strings.ToUpper(scr.title()), entries(screenKeys)},
 	}
 
 	if inner >= 3*helpColW {
@@ -1141,7 +1210,7 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 
 		depth := 0
 		for _, g := range groups {
-			depth = max(depth, len(g.bindings))
+			depth = max(depth, len(g.rows))
 		}
 
 		for r := 0; r < depth; r++ {
@@ -1149,8 +1218,8 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 
 			for _, g := range groups {
 				c := ""
-				if r < len(g.bindings) {
-					c = entry(g.bindings[r])
+				if r < len(g.rows) {
+					c = g.rows[r]
 				}
 
 				line += padRight(truncate(c, helpColW-1, t.Glyphs.Ellipsis), helpColW)
@@ -1165,20 +1234,12 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 			}
 
 			rows = append(rows, t.Heading.Render(g.title))
-
-			for _, b := range g.bindings {
-				rows = append(rows, entry(b))
-			}
+			rows = append(rows, g.rows...)
 		}
 	}
 
 	rows = append(rows, "", t.Heading.Render("PLAIN COMMANDS"))
-
-	for _, c := range []string{"seamark doctor", "seamark status", "seamark index",
-		"seamark index --fixes-only", "seamark index --reviews", "seamark init --client <claude|codex>",
-		"seamark lessons --proposals", "seamark lessons --stats", "seamark lessons --distill --dry-run"} {
-		rows = append(rows, t.command(c))
-	}
+	rows = append(rows, helpCommandRows(t, inner)...)
 
 	// The settings live in one file. The help names it, because an
 	// editor is the route for every key that Settings does not show.
@@ -1190,4 +1251,57 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 	window = max(1, boxRows(bh))
 
 	return rows, min(window, len(rows))
+}
+
+// helpCommands are the plain routes of the console actions, in reading
+// order. Related routes stand in pairs, because the wide help shows two
+// routes on one row. The CLI forms of retarget, prune and trigger
+// extraction act differently from the console; docs/tui.md names the
+// differences.
+var helpCommands = []string{
+	"seamark doctor", "seamark status",
+	"seamark index", "seamark index --fixes-only",
+	"seamark index --reviews", "seamark init --client <claude|codex>",
+	"seamark lessons --proposals", "seamark lessons --stats",
+	"seamark lessons --distill --dry-run", "seamark lessons --extract-triggers --dry-run",
+	"seamark lessons --retarget <ids>", "seamark lessons --prune <ids>",
+}
+
+// helpCommandGap is the space between the two route columns.
+const helpCommandGap = 3
+
+// helpCommandRows renders the plain routes in inner cells. Two routes
+// share a row when both columns fit, so the wide help stays short. At
+// the reference size, the whole help of a short screen then fits without
+// a scroll. A narrower help shows one route on each row.
+func helpCommandRows(t *Theme, inner int) []string {
+	longest := 0
+
+	for _, c := range helpCommands {
+		longest = max(longest, width(c))
+	}
+
+	colW := longest + helpCommandGap
+
+	var rows []string
+
+	if colW+longest > inner {
+		for _, c := range helpCommands {
+			rows = append(rows, t.command(c))
+		}
+
+		return rows
+	}
+
+	for i := 0; i < len(helpCommands); i += 2 {
+		row := t.command(helpCommands[i])
+
+		if i+1 < len(helpCommands) {
+			row = padRight(row, colW) + t.command(helpCommands[i+1])
+		}
+
+		rows = append(rows, row)
+	}
+
+	return rows
 }

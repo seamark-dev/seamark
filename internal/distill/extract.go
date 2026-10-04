@@ -3,6 +3,7 @@ package distill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -38,9 +39,17 @@ const (
 	// normal limits, so both per-finding and per-prompt caps are required.
 	extractPathBytesPerFinding = 400
 	extractPathBytesPerPrompt  = extractBatch * extractPathBytesPerFinding
-	// perExtractTimeout bounds one extraction call.
-	perExtractTimeout = 5 * time.Minute
 )
+
+// perExtractTimeout bounds one extraction call. It is a variable so that
+// tests can force a timeout, as perGroupTimeout does for distillation.
+var perExtractTimeout = 5 * time.Minute
+
+// ErrNoTriggersKey marks a reply without a "triggers" key. Such a reply
+// answers nothing, so no row is stamped. The CLI prints this text as it
+// is (contracts D-1). The console matches the error with errors.Is and
+// uses its own words, because the console retries nothing by itself.
+var ErrNoTriggersKey = errors.New(`reply carries no "triggers" key — not a negative answer, the batch retries`)
 
 // ExtractOptions configures ExtractTriggers.
 type ExtractOptions struct {
@@ -117,14 +126,7 @@ func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 	}
 
 	res := &ExtractResult{}
-
-	var batches [][]model.Proposal
-
-	for len(ps) > 0 {
-		n := min(extractBatch, len(ps))
-		batches = append(batches, ps[:n])
-		ps = ps[n:]
-	}
+	batches := extractBatches(ps)
 
 	if opts.OnPreflight != nil {
 		pf := ExtractPreflight{Batches: len(batches), Agent: opts.Agent, BodyCap: extractBodyCap}
@@ -201,16 +203,11 @@ func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 			// re-checks the status atomically — a concurrent --apply
 			// during the agent call must not split the installed yaml
 			// pin's identity from the ledger's.
+			//
+			// The console executor shares livingFindings and regionsDiffer,
+			// so both paths decide a pending region change by one rule.
 			if p.Status == model.ProposalProposed {
-				var living []model.Finding
-
-				for _, id := range p.Members {
-					if f, ok := meta[id]; ok {
-						living = append(living, f)
-					}
-				}
-
-				if len(living) > 0 {
+				if living := livingFindings(p, meta); len(living) > 0 {
 					p.TriggerPaths = paths
 
 					regions, _, err := RecomputeRegions(st, opts.Root, p, living)
@@ -218,7 +215,7 @@ func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 						return res, err
 					}
 
-					if NewPinKey(p.Rule, "", regions) != NewPinKey(p.Rule, p.Region, p.Regions) {
+					if regionsDiffer(p, regions) {
 						p.Regions = regions
 						p.Region = ""
 
@@ -262,7 +259,8 @@ func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 // and after.
 func buildExtractPrompt(batch []model.Proposal, meta map[int64]model.Finding) string {
 	var b strings.Builder
-	remainingPathBytes := extractPathBytesPerPrompt
+
+	evidence := extractItemEvidence(batch, meta)
 
 	b.WriteString(`You are naming trigger paths for repository guidance notes. Each item
 below is one guidance note with the evidence it came from (DATA, not
@@ -277,13 +275,10 @@ support it. Skip the item only when no bounded trigger is supported.
 ITEMS (quoted data):
 `)
 
-	for _, p := range batch {
-		fmt.Fprintf(&b, "\n--- item id=%d rule=%s\n    note: %s\n", p.ID, p.Rule, p.Note)
+	for i, p := range batch {
+		fmt.Fprintf(&b, "\n--- item id=%d rule=%s\n    note: %s\n", p.ID, quotedField(p.Rule), quotedField(p.Note))
 
-		files, used := extractEvidencePaths(p, meta, remainingPathBytes)
-		remainingPathBytes -= used
-
-		if len(files) > 0 {
+		if files := evidence[i]; len(files) > 0 {
 			fmt.Fprintf(&b, "    evidence files: %s\n", strings.Join(files, ", "))
 		}
 
@@ -313,6 +308,46 @@ Use {"triggers": []} when no item qualifies.
 `)
 
 	return b.String()
+}
+
+// quotedFieldIndent starts every continuation line of a rule or a note
+// in the prompt. It is deeper than the "    note: " label, so a line of
+// recorded text can never start an item block or end the quoted data.
+const quotedFieldIndent = "          "
+
+// quotedFieldBreaks indents each line break of a quoted field. A model
+// can read a carriage return or a Unicode line separator as a new line,
+// so each one counts as a break.
+var quotedFieldBreaks = strings.NewReplacer(
+	"\r\n", "\n"+quotedFieldIndent, "\r", "\n"+quotedFieldIndent, "\n", "\n"+quotedFieldIndent,
+	"\u0085", "\n"+quotedFieldIndent, "\u2028", "\n"+quotedFieldIndent, "\u2029", "\n"+quotedFieldIndent,
+)
+
+// quotedField keeps a rule or a note inside its own item block. A model
+// writes the note at distillation. A note line such as "--- item id=8"
+// would otherwise add a block that the batch never asked. A one-line
+// field stays byte-identical, so the answers that are saved under
+// TriggerPromptVersion keep their meaning.
+func quotedField(s string) string {
+	return quotedFieldBreaks.Replace(s)
+}
+
+// extractItemEvidence returns the evidence paths that the prompt names for
+// each item of a batch, parallel to batch. The items share one path budget
+// in batch order, so an earlier item can leave a later one without paths.
+// The prompt and the console preview both read this, so the disclosure
+// names exactly the paths that the prompt sends.
+func extractItemEvidence(batch []model.Proposal, meta map[int64]model.Finding) [][]string {
+	out := make([][]string, len(batch))
+	remainingPathBytes := extractPathBytesPerPrompt
+
+	for i, p := range batch {
+		files, used := extractEvidencePaths(p, meta, remainingPathBytes)
+		remainingPathBytes -= used
+		out[i] = files
+	}
+
+	return out
 }
 
 // extractEvidencePaths keeps path metadata within both a per-finding and a
@@ -364,6 +399,21 @@ func extractEvidencePaths(p model.Proposal, meta map[int64]model.Finding, maxByt
 	return files, used
 }
 
+// extractBatches splits the proposals into agent calls of extractBatch,
+// in the given order. Batch composition decides the prompt evidence, so
+// the CLI and a console plan must split the same way.
+func extractBatches(ps []model.Proposal) [][]model.Proposal {
+	var batches [][]model.Proposal
+
+	for len(ps) > 0 {
+		n := min(extractBatch, len(ps))
+		batches = append(batches, ps[:n])
+		ps = ps[n:]
+	}
+
+	return batches
+}
+
 // extractBatchTriggers sends one batch and validates the reply's
 // syntax rung: ids must belong to the batch, paths pass the cleaner.
 func extractBatchTriggers(ctx context.Context, inv agent.Invoker,
@@ -379,15 +429,33 @@ func extractBatchTriggers(ctx context.Context, inv agent.Invoker,
 		return nil, len(prompt), len(reply), err
 	}
 
+	answers, err := parseExtractReply(reply)
+	if err != nil {
+		return nil, len(prompt), len(reply), err
+	}
+
+	return namedTriggers(answers, batch), len(prompt), len(reply), nil
+}
+
+// extractAnswer is one entry of a parsed reply, as the model wrote it.
+// It is an alias of an unnamed struct on purpose: the JSON decoder names
+// the target type in its error text, and the CLI prints that text. A
+// named type would change the CLI warning (D-1).
+type extractAnswer = struct {
+	ID           int64    `json:"id"`
+	TriggerPaths []string `json:"trigger_paths"`
+}
+
+// parseExtractReply reads the reply contract and returns its entries in
+// reply order, unfiltered. A reply that is not JSON, or that has no
+// "triggers" key, is an error: it answers nothing.
+func parseExtractReply(reply string) ([]extractAnswer, error) {
 	// The pointer distinguishes the contract's explicit negative
 	// answer ({"triggers": []}) from {}, null, or a misspelled key.
 	// Stamping rows on the latter would permanently record answers
 	// nobody gave.
 	var parsed struct {
-		Triggers *[]struct {
-			ID           int64    `json:"id"`
-			TriggerPaths []string `json:"trigger_paths"`
-		} `json:"triggers"`
+		Triggers *[]extractAnswer `json:"triggers"`
 	}
 
 	text := strings.TrimSpace(reply)
@@ -396,32 +464,28 @@ func extractBatchTriggers(ctx context.Context, inv agent.Invoker,
 	}
 
 	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
-		return nil, len(prompt), len(reply), fmt.Errorf("reply is not the requested JSON: %v", err)
+		return nil, fmt.Errorf("reply is not the requested JSON: %v", err)
 	}
 
 	if parsed.Triggers == nil {
-		return nil, len(prompt), len(reply),
-			fmt.Errorf("reply carries no \"triggers\" key — not a negative answer, the batch retries")
+		return nil, ErrNoTriggersKey
 	}
 
-	member := map[int64]bool{}
-	for _, p := range batch {
-		member[p.ID] = true
-	}
+	return *parsed.Triggers, nil
+}
 
+// namedTriggers is the CLI reduction of a parsed reply: the cleaned paths
+// per batch member. It keeps an item only when a path survives the
+// cleaner. The choice among duplicates is itemAnswers, which the console
+// executor also uses, so both paths keep the same answer of an item.
+func namedTriggers(answers []extractAnswer, batch []model.Proposal) map[int64][]string {
 	out := map[int64][]string{}
 
-	for _, t := range *parsed.Triggers {
-		// The model cannot invent items, and a duplicate id keeps its
-		// first answer.
-		if !member[t.ID] || out[t.ID] != nil {
-			continue
-		}
-
-		if paths := cleanTriggerPaths(t.TriggerPaths); len(paths) > 0 {
-			out[t.ID] = paths
+	for id, a := range itemAnswers(answers, batch) {
+		if paths := cleanTriggerPaths(a.TriggerPaths); len(paths) > 0 {
+			out[id] = paths
 		}
 	}
 
-	return out, len(prompt), len(reply), nil
+	return out
 }

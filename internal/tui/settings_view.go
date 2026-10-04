@@ -33,21 +33,24 @@ const (
 
 // settingsDescriptions says what each field controls.
 var settingsDescriptions = map[settings.Field]string{
-	settings.AgentCLI:       "Selects the preset command that distillation runs.",
+	settings.AgentCLI:       "Selects the preset command that distillation and trigger extraction run.",
 	settings.AgentArgv:      "A custom command that replaces the agent.cli preset.",
-	settings.DistillWrite:   "Lets reviewed proposal actions write pins.",
+	settings.DistillWrite:   "Lets a reviewed apply, retarget or prune write pins.",
 	settings.ReviewWindow:   "How old a mined review comment may be.",
 	settings.IndexGenerated: `Files with a "Code generated ... DO NOT EDIT." header.`,
 	settings.IndexExclude:   "Globs that the index build skips, on top of .gitignore and the built-in skip directories.",
 }
 
 // settingsTakesEffect says when a saved group takes effect. A save
-// never starts that work itself (spec R-13).
+// never starts that work itself (spec R-13). The pin-write text names
+// all three previews, because the Pins retarget and prune read the same
+// gate as the proposal apply (D-14). The inference text names trigger
+// extraction, because it runs the same resolved command as distillation.
 var settingsTakesEffect = map[settings.Group]string{
-	settings.GroupInference: "At the next prepared distillation. Saving does not run a model, does not " +
-		"authenticate and does not change the Claude Code or Codex integration files.",
-	settings.GroupPinWrite: "At the next proposal preview. Saving applies nothing; a new proposal preview " +
-		"then offers the write.",
+	settings.GroupInference: "At the next prepared distillation or trigger extraction. Saving does not run a " +
+		"model, does not authenticate and does not change the Claude Code or Codex integration files.",
+	settings.GroupPinWrite: "At the next apply, retarget or prune preview. Saving writes no pin; a new " +
+		"preview then offers the write.",
 	settings.GroupEvidence: "At the next confirmed evidence refresh. The stored findings stay until a refresh " +
 		"succeeds.",
 	settings.GroupIndexing: "At the next index build. Saving does not scan, delete or rebuild anything. " +
@@ -789,7 +792,7 @@ func (s *settingsScreen) explanation(f settings.Field) string {
 		return "No custom command is set. A custom command goes in " + settingsFile + " by hand; the console " +
 			"does not write one."
 	case settings.DistillWrite:
-		return "Saving on applies nothing; a new proposal preview then offers the write."
+		return "Saving on writes no pin; a new apply, retarget or prune preview then offers the write."
 	case settings.ReviewWindow:
 		return "The window is not a strict cutoff."
 	case settings.IndexGenerated:

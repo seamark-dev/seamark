@@ -1,14 +1,16 @@
 // Package proposals is the service layer for the proposal decision
-// ledger. It has a read-only ledger view, region filtering, evidence
-// health, and previewed decisions with revalidation.
+// ledger. It has a read-only ledger view, region and text filtering,
+// evidence health, and previewed decisions with revalidation.
 //
 // The CLI and the console share only the evidence helpers: Health,
 // AppliedOutcomes and RegionSetsEqual. Both surfaces therefore judge
 // proposal health, lesson outcomes and region sets by one set of rules.
 //
-// Only the console uses the ledger view (Load, MatchesRegion) and the
-// decision flow (PreviewApply, PreviewDismiss, PreviewReconcile,
-// Commit). The CLI commands `lessons --apply` and `lessons --dismiss`
+// Only the console uses the ledger view (Load, MatchesRegion,
+// MatchesRegionSet, MatchesText) and the decision flow (PreviewApply,
+// PreviewDismiss, PreviewReconcile, Commit).
+//
+// The CLI commands `lessons --apply` and `lessons --dismiss`
 // keep their own path in internal/cli, so their output stays unchanged.
 // That path renders and writes pins through the same distill functions.
 // Unlike Commit, it does not refuse proposals whose pins already exist.
@@ -36,6 +38,10 @@ type Ledger struct {
 	// Pending, Applied and Dismissed hold the proposals by state, in
 	// ascending ID order.
 	Pending, Applied, Dismissed []model.Proposal
+	// Superseded holds the proposals whose pins a prune removed, in
+	// ascending ID order. They are read-only history: no decision can
+	// change them, so Health does not cover them.
+	Superseded []model.Proposal
 	// Health holds evidence-health advisories by proposal ID.
 	Health map[int64]report.ProposalHealth
 	// HealthErr holds the advisory failure; Health is then empty.
@@ -67,6 +73,7 @@ func Load(st *store.Store, root string, now time.Time) (*Ledger, error) {
 		{model.ProposalProposed, &ls.Pending},
 		{model.ProposalApplied, &ls.Applied},
 		{model.ProposalDismissed, &ls.Dismissed},
+		{model.ProposalSuperseded, &ls.Superseded},
 	} {
 		ps, err := st.Proposals(state.status)
 		if err != nil {
@@ -78,7 +85,8 @@ func Load(st *store.Store, root string, now time.Time) (*Ledger, error) {
 	}
 
 	// The advisories cover the same rows as `lessons --proposals`:
-	// dismissed rows carry no decision that an advisory can change.
+	// dismissed and superseded rows carry no decision that an advisory
+	// can change.
 	ls.Health, ls.HealthErr = Health(st, root, append(append([]model.Proposal{}, ls.Pending...), ls.Applied...))
 	if ls.HealthErr != nil {
 		ls.Health = nil
@@ -86,7 +94,9 @@ func Load(st *store.Store, root string, now time.Time) (*Ledger, error) {
 
 	var cited []int64
 
-	for _, group := range [][]model.Proposal{ls.Pending, ls.Applied, ls.Dismissed} {
+	// Superseded rows keep their evidence, so the history view can show
+	// why the pin existed.
+	for _, group := range [][]model.Proposal{ls.Pending, ls.Applied, ls.Dismissed, ls.Superseded} {
 		for _, p := range group {
 			cited = append(cited, p.Members...)
 		}
@@ -109,18 +119,27 @@ func Load(st *store.Store, root string, now time.Time) (*Ledger, error) {
 // directions. A repo-wide proposal matches every filter, and an empty
 // filter matches every proposal.
 func MatchesRegion(p model.Proposal, filter string) bool {
+	return MatchesRegionSet(p.RegionSet(), filter)
+}
+
+// MatchesRegionSet reports whether a region set applies to the
+// repository-relative path scope filter. It is MatchesRegion for a set
+// that is not a proposal, such as the regions of a pin. It matches on
+// path-component boundaries in both directions. An empty filter matches
+// every set.
+//
+// set must be an effective set: model.Proposal.RegionSet or
+// reviews.PinRule.AllRegions. A nil or empty set is repo-wide and
+// matches every filter. Only those readers apply the delivery rules for
+// a "*" or a blank entry, so raw pin entries can give a wrong answer.
+func MatchesRegionSet(set []string, filter string) bool {
 	filter = strings.Trim(strings.TrimSpace(filter), "/")
-	if filter == "" {
+	if filter == "" || len(set) == 0 {
 		return true
 	}
 
-	set := p.RegionSet()
-	if len(set) == 0 {
-		return true
-	}
-
-	// Both directions: a filter inside a region selects the proposal
-	// that covers it, and a region inside the filter is part of it.
+	// Both directions: a filter inside a region selects the set that
+	// covers it, and a region inside the filter is part of it.
 	for _, r := range set {
 		r = strings.Trim(strings.TrimSpace(r), "/")
 
@@ -130,6 +149,20 @@ func MatchesRegion(p model.Proposal, filter string) bool {
 	}
 
 	return false
+}
+
+// MatchesText reports whether the text query q occurs in rule or in
+// note. The match ignores case, and the query ignores surrounding
+// spaces, because a typed search often carries a stray space. A blank
+// query matches everything. The caller passes the text it shows, for
+// example the live rule and note of a pin.
+func MatchesText(rule, note, q string) bool {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return true
+	}
+
+	return strings.Contains(strings.ToLower(rule), q) || strings.Contains(strings.ToLower(note), q)
 }
 
 // sortByID orders proposals by ascending ID in place.

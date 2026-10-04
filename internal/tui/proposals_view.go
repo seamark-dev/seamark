@@ -29,30 +29,16 @@ const (
 	propSummaryN = 3  // the most lines of one finding summary
 )
 
-// subTabs renders " Proposals   Stats   Evidence   Run   p / s / e / u"
-// with the write gate at the right. The active sub-view is in the
-// accent color and bold. Run and u show only while runShown. A narrow
-// line drops the key hint before the gate, because the gate decides
-// what apply does.
+// subTabs renders " Proposals   Pins   Stats   Evidence   Run   p / m /
+// s / e / u" with the write gate at the right. The active sub-view is in
+// the accent color and bold. Run and u show only while runShown. A
+// narrow line first takes shorter labels and gaps (lesTabRungs) to keep
+// the key hint, then drops the hint. The hint names m, the one switch
+// key that is not the first letter of its tab, and a narrow footer drops
+// the switch keys first. The gate decides what apply does, so it must
+// stay on the line at the minimum width.
 func (s *lessons) subTabs(w int) string {
 	t := s.st.theme
-
-	tab := func(label string, on bool) string {
-		if on {
-			return t.TabActive.Render(label)
-		}
-
-		return t.Muted.Render(label)
-	}
-
-	left := " " + tab("Proposals", s.sub == lesProposals) + "   " + tab("Stats", s.sub == lesStats) +
-		"   " + tab("Evidence", s.sub == lesEvidence)
-	hint := "p / s / e"
-
-	if s.runShown() {
-		left += "   " + tab("Run", s.sub == lesRun)
-		hint += " / u"
-	}
 
 	right := s.props.gateLabel()
 
@@ -65,8 +51,29 @@ func (s *lessons) subTabs(w int) string {
 		gap = 3
 	}
 
-	if !s.capturing() && width(left)+3+width(hint)+gap+width(right) <= w {
-		left += "   " + t.Faint.Render(hint)
+	hint := "p / m / s / e"
+	if s.runShown() {
+		hint += " / u"
+	}
+
+	// A capturing sub-view takes the letters as text, so it shows no
+	// hint.
+	if !s.capturing() {
+		for _, rung := range lesTabRungs {
+			left := s.tabLine(rung) + "   " + t.Faint.Render(hint)
+			if width(left)+gap+width(right) <= w {
+				return spread(left, right, w)
+			}
+		}
+	}
+
+	var left string
+
+	for _, rung := range lesTabRungs {
+		left = s.tabLine(rung)
+		if width(left)+gap+width(right) <= w {
+			break
+		}
 	}
 
 	if width(left)+width(right) > w {
@@ -74,6 +81,50 @@ func (s *lessons) subTabs(w int) string {
 	}
 
 	return spread(left, right, w)
+}
+
+// lesTabRung is one step of the sub-view line: the labels of Proposals
+// and Evidence, and the gap between two tabs.
+type lesTabRung struct {
+	proposals, evidence, gap string
+}
+
+// lesTabRungs are the sub-view lines from the widest to the narrowest.
+// subTabs takes the first one that leaves three cells before the gate,
+// first with the key hint and then without it. At 80 columns with the
+// Run tab, the full labels keep the hint only with two-cell gaps (78
+// cells with "distill.write on"). At 60 columns, the short labels with
+// two-cell gaps leave room for the 27 cells of an unreadable gate. The
+// short labels follow the abbreviated destination tabs, for example
+// "Integ".
+var lesTabRungs = []lesTabRung{
+	{proposals: "Proposals", evidence: "Evidence", gap: "   "},
+	{proposals: "Proposals", evidence: "Evidence", gap: "  "},
+	{proposals: "Props", evidence: "Evid", gap: "   "},
+	{proposals: "Props", evidence: "Evid", gap: "  "},
+}
+
+// tabLine renders the tabs of one rung in the tab order Proposals, Pins,
+// Stats, Evidence, Run.
+func (s *lessons) tabLine(r lesTabRung) string {
+	t := s.st.theme
+
+	tab := func(label string, on bool) string {
+		if on {
+			return t.TabActive.Render(label)
+		}
+
+		return t.Muted.Render(label)
+	}
+
+	line := " " + tab(r.proposals, s.sub == lesProposals) + r.gap + tab("Pins", s.sub == lesPins) +
+		r.gap + tab("Stats", s.sub == lesStats) + r.gap + tab(r.evidence, s.sub == lesEvidence)
+
+	if s.runShown() {
+		line += r.gap + tab("Run", s.sub == lesRun)
+	}
+
+	return line
 }
 
 // gateLabel shows the distill.write gate, because it decides whether
@@ -186,14 +237,7 @@ func (p *propView) filterBar(w int) []string {
 
 // propCount returns the number of proposals in one state.
 func propCount(l *proposals.Ledger, f propState) int {
-	switch f {
-	case propApplied:
-		return len(l.Applied)
-	case propDismissed:
-		return len(l.Dismissed)
-	default:
-		return len(l.Pending)
-	}
+	return len(propStateRows(l, f))
 }
 
 // listTitle names the list box after the state filter, for example
@@ -387,8 +431,16 @@ func (c propCols) row(t *Theme, pr domain.Proposal, marked, cursor bool, tier st
 		check = t.Marked.Render(t.Glyphs.Check)
 	}
 
-	return t.cols(c.cells(marker, check, t.Muted.Render(propID(pr.ID)), rule.Render(oneLine(pr.Rule)),
-		t.Muted.Render(propRegionLabel(pr)), t.Body.Render("  "+itoa(len(pr.Members))), t.Muted.Render(tier))...)
+	// The rule and the region stop one cell short of their columns, so a
+	// full cell keeps a gap before the next column. A long region keeps
+	// its last path components, as in the Pins list, because a cut from
+	// the right makes every "internal/..." region look the same.
+	ell := t.Glyphs.Ellipsis
+	ruleText := truncate(oneLine(pr.Rule), max(1, c.ruleW-1), ell)
+	region := pinPathCell(propRegionLabel(pr), max(1, c.regW-1), ell)
+
+	return t.cols(c.cells(marker, check, t.Muted.Render(propID(pr.ID)), rule.Render(ruleText),
+		t.Muted.Render(region), t.Body.Render("  "+itoa(len(pr.Members))), t.Muted.Render(tier))...)
 }
 
 // propID renders a proposal ID in the ledger's pN form.
@@ -522,8 +574,10 @@ func (p *propView) detailLines(pr domain.Proposal, w int) []string {
 	t := p.st.theme
 	l := p.ledger()
 
+	// The head names the rule; this section holds the note, so its
+	// heading says NOTE, as the Pins detail does.
 	out := p.headLines(pr, w)
-	out = append(out, "", t.Heading.Render("RULE"))
+	out = append(out, "", t.Heading.Render("NOTE"))
 
 	if strings.TrimSpace(pr.Note) == "" {
 		out = append(out, t.Muted.Render("No note is recorded."))
@@ -568,6 +622,10 @@ func (p *propView) headLines(pr domain.Proposal, w int) []string {
 		parts = append(parts, t.Success.Render(g.Dot+" applied"))
 	case propDismissed:
 		parts = append(parts, t.Muted.Render(g.Dot+" dismissed"))
+	case propSuperseded:
+		// The hollow glyph matches the superseded rows of Pins, so one
+		// history state looks the same in both sub-views.
+		parts = append(parts, t.Muted.Render(g.Hollow+" superseded"))
 	default:
 		parts = append(parts, t.Attention.Render(g.Dot+" pending"))
 
@@ -800,7 +858,7 @@ func (p *propView) advisoryLines(pr domain.Proposal, l *proposals.Ledger, w int)
 
 	h, ok := l.Health[pr.ID]
 	if !ok {
-		if p.filter == propDismissed {
+		if p.filter == propDismissed || p.filter == propSuperseded {
 			return append([]string{head}, propLines(t.Muted, "Advisories cover pending and applied proposals only.", w)...)
 		}
 
@@ -858,7 +916,9 @@ func (p *propView) advisoryLines(pr domain.Proposal, l *proposals.Ledger, w int)
 }
 
 // decisionLines explains what the user can decide about this proposal,
-// and why read-only rows have no actions.
+// and why read-only rows have no actions. An applied row points to
+// Lessons › Pins, where its installed pin can be retargeted or pruned
+// after a preview.
 func (p *propView) decisionLines(pr domain.Proposal, l *proposals.Ledger, w int) []string {
 	t := p.st.theme
 	out := []string{t.Heading.Render("DECISION")}
@@ -866,12 +926,14 @@ func (p *propView) decisionLines(pr domain.Proposal, l *proposals.Ledger, w int)
 	switch p.filter {
 	case propApplied:
 		out = append(out, propLines(t.Muted, "Applied proposals are read-only here, and the console has no undo. "+
-			"Pin edits, pruning and retargeting stay on the CLI:", w)...)
+			appliedPinText(p.st, pr.ID), w)...)
 
-		return append(out, t.command("seamark lessons --help"))
+		return append(out, p.extractLines(pr, l, w)...)
 	case propDismissed:
 		return append(out, propLines(t.Muted, "Dismissed proposals are read-only, and the console has no undo. "+
 			"The decision is remembered: the same evidence does not come back.", w)...)
+	case propSuperseded:
+		return append(out, propLines(t.Muted, "Superseded: its pin was pruned. Read-only; not restorable here.", w)...)
 	}
 
 	apply := "a previews an apply"
@@ -892,12 +954,44 @@ func (p *propView) decisionLines(pr domain.Proposal, l *proposals.Ledger, w int)
 		out = append(out, propLines(t.Muted, "distill.write is off: a shows the YAML block to copy and changes nothing.", w)...)
 	}
 
-	if p.pinned[pr.ID] {
+	if p.hasPin(pr.ID) {
 		out = append(out, propNote(t, ToneAttention, "A pin for "+propID(pr.ID)+" already exists in "+
 			proposals.LessonsFile+". Press c to record it as applied (ledger only); the pin file stays unchanged.", w)...)
 	}
 
-	return out
+	return append(out, p.extractLines(pr, l, w)...)
+}
+
+// extractLines tells whether t can ask the trigger question of the
+// proposal, and why not when it cannot. A closed question shows its
+// reason, so a missing t in the footer has an explanation. Marked rows
+// replace the cursor row as the targets of t, so the line then speaks
+// of the marked rows, as the a and d line does.
+func (p *propView) extractLines(pr domain.Proposal, l *proposals.Ledger, w int) []string {
+	t := p.st.theme
+
+	if p.extractMarked() {
+		targets := p.extractTargets()
+
+		if !p.canExtract() && len(targets) > 0 {
+			_, why := extQuestion(p.st, l, targets[0])
+
+			return propLines(t.Muted, "Trigger question: no selected proposal has an open question; "+
+				propID(targets[0].ID)+": "+why+".", w)
+		}
+
+		return propLines(t.Body, "t asks the agent about the "+propPlural(len(targets), "selected proposal",
+			"selected proposals")+" (trigger extraction). The review lists the ones that it does not ask; "+
+			"nothing is sent before y.", w)
+	}
+
+	ok, why := extQuestion(p.st, l, pr)
+	if !ok {
+		return propLines(t.Muted, "Trigger question: "+why+".", w)
+	}
+
+	return propLines(t.Body, "t asks the agent where its mistake occurs (trigger extraction). The review shows "+
+		"the batches and the usage first; nothing is sent before y.", w)
 }
 
 // propGateOff reports a write gate that is known to be off. An unread
@@ -950,7 +1044,7 @@ func (p *propView) emptyBox(w, h int) string {
 		l = &proposals.Ledger{}
 	}
 
-	total := len(l.Pending) + len(l.Applied) + len(l.Dismissed)
+	total := len(l.Pending) + len(l.Applied) + len(l.Dismissed) + len(l.Superseded)
 	g := t.Glyphs
 
 	var m propMessage
@@ -990,7 +1084,7 @@ func (p *propView) emptyBox(w, h int) string {
 
 		m = propMessage{
 			head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No "+label+" proposals")},
-			body: "The ledger holds " + strings.Join(others, " and ") + " proposals. Press f to show another state.",
+			body: "The ledger holds " + propJoin(others) + " proposals. Press f to show another state.",
 		}
 	default:
 		n := len(p.stateRows())
@@ -1003,6 +1097,16 @@ func (p *propView) emptyBox(w, h int) string {
 	}
 
 	return p.messageBox(t.Title.Render(p.listTitle()), t.Muted.Render("0"), m, w, h)
+}
+
+// propJoin joins words as a list for a sentence: "a", "a and b", or
+// "a, b and c".
+func propJoin(words []string) string {
+	if len(words) < 2 {
+		return strings.Join(words, "")
+	}
+
+	return strings.Join(words[:len(words)-1], ", ") + " and " + words[len(words)-1]
 }
 
 // morePending returns the facts and the commands under "No pending

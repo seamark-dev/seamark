@@ -116,3 +116,103 @@ func TestGroupCommandCancellationKillsTheDescendants(t *testing.T) {
 		return errors.Is(syscall.Kill(descendant, 0), syscall.ESRCH)
 	}, 5*time.Second, 20*time.Millisecond, "the descendant %d outlives the stop", descendant)
 }
+
+// Security review: exec cancels only while the client runs. A descendant
+// that kept stdout open after the client exited ignored a stop, and its
+// work went on.
+func TestGroupCommandStopKillsADescendantAfterTheClientExits(t *testing.T) {
+	dir := t.TempDir()
+	mark := filepath.Join(dir, "mark")
+
+	// The client replies and exits at once. Its descendant inherits
+	// stdout, so Wait still waits for it.
+	script := `cat >/dev/null; ( sleep 1; touch "$1/mark" ) & echo $$ > "$1/leader"; echo '{"triggers":[]}'`
+
+	inv, err := NewGroupCommand(CommandSpec{Name: "fake", Argv: []string{"sh", "-c", script, "sh", dir}})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type result struct {
+		out string
+		err error
+	}
+
+	done := make(chan result, 1)
+
+	go func() {
+		out, err := inv.Invoke(ctx, "x")
+		done <- result{out, err}
+	}()
+
+	var leader int
+
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(filepath.Join(dir, "leader"))
+		if err != nil {
+			return false
+		}
+
+		leader, err = strconv.Atoi(strings.TrimSpace(string(data)))
+
+		return err == nil && errors.Is(syscall.Kill(leader, 0), syscall.ESRCH)
+	}, 5*time.Second, 10*time.Millisecond, "the client exits")
+
+	start := time.Now()
+
+	cancel()
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err, "the client exited before the stop, so its reply stands")
+		assert.Contains(t, r.out, `{"triggers":[]}`)
+	case <-time.After(waitDelay):
+		require.FailNow(t, "the stop did not end the descendant that holds stdout")
+	}
+
+	assert.Less(t, time.Since(start), time.Second, "the stop ends the run before the descendant would finish")
+
+	time.Sleep(1500 * time.Millisecond)
+	assert.NoFileExists(t, mark, "the descendant outlived the stop")
+}
+
+// Security review: a descendant that closed its pipes never delayed
+// Wait, so it went on after a call that succeeded.
+func TestGroupCommandEndsADetachedDescendantAfterTheCall(t *testing.T) {
+	dir := t.TempDir()
+	mark := filepath.Join(dir, "mark")
+
+	script := `cat >/dev/null; ( sleep 1; touch "$1/mark" ) >/dev/null 2>&1 </dev/null & echo '{"triggers":[]}'`
+
+	inv, err := NewGroupCommand(CommandSpec{Name: "fake", Argv: []string{"sh", "-c", script, "sh", dir}})
+	require.NoError(t, err)
+
+	out, err := inv.Invoke(context.Background(), "x")
+	require.NoError(t, err)
+	assert.Contains(t, out, `{"triggers":[]}`)
+
+	time.Sleep(1500 * time.Millisecond)
+	assert.NoFileExists(t, mark, "the detached descendant outlived the call")
+}
+
+func TestCommandKeepsADetachedDescendantOfTheCaller(t *testing.T) {
+	// NewCommand shares the process group of the caller, so it never
+	// kills a group. The CLI keeps its behavior (contracts D-1).
+	dir := t.TempDir()
+	mark := filepath.Join(dir, "mark")
+
+	script := `cat >/dev/null; ( sleep 0.2; touch "$1/mark" ) >/dev/null 2>&1 </dev/null & echo ok`
+
+	inv, err := NewCommand(CommandSpec{Name: "fake", Argv: []string{"sh", "-c", script, "sh", dir}})
+	require.NoError(t, err)
+
+	_, err = inv.Invoke(context.Background(), "x")
+	require.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		_, err := os.Stat(mark)
+
+		return err == nil
+	}, 5*time.Second, 20*time.Millisecond)
+}

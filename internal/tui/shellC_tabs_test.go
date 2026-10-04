@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -109,6 +111,50 @@ func TestShellCHelpNamesThePhaseTwoCommands(t *testing.T) {
 		".seamark/config.yaml  settings file",
 	} {
 		assert.Contains(t, frame, c)
+	}
+}
+
+func TestShellCHelpNamesThePinMaintenanceCommands(t *testing.T) {
+	// The wide help pairs related routes on one row, so the help of a
+	// short screen still fits at the reference size without a scroll.
+	h, _ := shellAStub(t, 120, 40, shellAKeys(3))
+
+	h.press("?")
+
+	frame := h.view()
+	assertFrame(t, frame, 120, 40)
+	assert.NotRegexp(t, `\d+–\d+ of \d+`, frame, "the whole help fits at 120x40, so it shows no scroll position")
+	assert.Contains(t, frame, "Every key that writes a file asks first.")
+
+	for _, pair := range [][2]string{
+		{"seamark lessons --distill --dry-run", "seamark lessons --extract-triggers --dry-run"},
+		{"seamark lessons --retarget <ids>", "seamark lessons --prune <ids>"},
+	} {
+		assert.Regexp(t, regexp.QuoteMeta(pair[0])+" +"+regexp.QuoteMeta(pair[1]), frame,
+			"a related route stands beside its pair")
+	}
+
+	// The help of an 80-column terminal has no room for two columns, so
+	// each route takes its own row.
+	bw, _ := h.m.helpBox(80, 24)
+	rows := helpCommandRows(h.m.st.theme, boxInner(bw))
+	require.Len(t, rows, len(helpCommands))
+
+	for i, row := range rows {
+		assert.Equal(t, helpCommands[i], ansi.Strip(row))
+	}
+
+	// The wide rows hold every route once, in reading order: the left
+	// route at the start of a row, its pair at the end.
+	bw, _ = h.m.helpBox(120, 40)
+	wide := helpCommandRows(h.m.st.theme, boxInner(bw))
+	require.Len(t, wide, (len(helpCommands)+1)/2)
+
+	for i, row := range wide {
+		text := ansi.Strip(row)
+
+		assert.True(t, strings.HasPrefix(text, helpCommands[2*i]+" "), "row %d: %q", i, text)
+		assert.True(t, strings.HasSuffix(text, " "+helpCommands[2*i+1]), "row %d: %q", i, text)
 	}
 }
 

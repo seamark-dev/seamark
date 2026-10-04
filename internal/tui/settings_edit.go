@@ -111,9 +111,11 @@ func (s *settingsScreen) choices(f settings.Field) []settingsChoice {
 			{kind: settingsChoiceRemoveArgv, label: "remove", note: "agent.cli takes effect"},
 		}
 	case settings.DistillWrite:
+		// The notes name no action, because the apply, the retarget and
+		// the prune read the same gate (D-14).
 		return []settingsChoice{
-			{kind: settingsChoiceBool, label: "off", note: "apply shows the YAML block only", def: true},
-			{kind: settingsChoiceBool, label: "on", note: "apply writes pins after its own preview", on: true},
+			{kind: settingsChoiceBool, label: "off", note: "previews show the change only", def: true},
+			{kind: settingsChoiceBool, label: "on", note: "y in a preview writes the pins", on: true},
 		}
 	case settings.ReviewWindow:
 		return []settingsChoice{

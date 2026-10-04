@@ -229,9 +229,12 @@ func (s *statsView) lessonLines(v lessonstats.Snapshot, w int) []string {
 	if c == nil {
 		out = append(out, s.unknown(v.LessonsErr, "The lesson counts are not available.", w)...)
 	} else {
+		// The label says "pins", not "manual pins". The count includes
+		// the pins applied from proposals, and a pin does not prove that
+		// a person wrote it (Pins, D-4).
 		bars := s.bars(18, w, max(c.Mined, c.Pins))
 		out = append(out, bars.row("review-mined", c.Mined, c.Active(), statsInfo),
-			bars.row("manual pins", c.Pins, c.Active(), statsInfo))
+			bars.row("pins", c.Pins, c.Active(), statsInfo))
 
 		switch {
 		case c.Inactive == 1:

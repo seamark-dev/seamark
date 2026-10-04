@@ -889,8 +889,7 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 		}
 
 		for _, p := range ps {
-			if len(p.TriggerPaths) > 0 ||
-				(p.TriggerChecked > 0 && p.TriggerPromptVersion >= distill.TriggerPromptVersion) {
+			if open, _ := distill.TriggerQuestionOpen(p); !open {
 				continue
 			}
 

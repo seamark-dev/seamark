@@ -40,23 +40,24 @@ func TestLessonsHelpListsEverySwitchKeyThatWorks(t *testing.T) {
 	les := h.m.screens[destLessons].(*lessons)
 
 	// Before the first run, u does nothing, so no list names it.
-	assert.Subset(t, lesHelpKeys(les), []string{"s", "e"})
+	assert.Subset(t, lesHelpKeys(les), []string{"m", "s", "e"})
 	assert.NotContains(t, lesHelpKeys(les), "u")
 
 	h.send(openRunMsg{rec: runRec(h, "Evidence refresh")})
 	require.True(t, les.runShown())
 
-	names := map[string]string{"p": "p proposals", "s": "s stats", "e": "e evidence", "u": "u run"}
+	names := map[string]string{"p": "p proposals", "m": "m pins", "s": "s stats", "e": "e evidence", "u": "u run"}
 
 	for _, c := range []struct {
 		key  string
 		sub  lesSub
 		want []string
 	}{
-		{"p", lesProposals, []string{"s", "e", "u"}},
-		{"s", lesStats, []string{"p", "e", "u"}},
-		{"e", lesEvidence, []string{"p", "s", "u"}},
-		{"u", lesRun, []string{"p", "s", "e"}},
+		{"p", lesProposals, []string{"m", "s", "e", "u"}},
+		{"m", lesPins, []string{"p", "s", "e", "u"}},
+		{"s", lesStats, []string{"p", "m", "e", "u"}},
+		{"e", lesEvidence, []string{"p", "m", "s", "u"}},
+		{"u", lesRun, []string{"p", "m", "s", "e"}},
 	} {
 		h.press(c.key)
 		require.Equal(t, c.sub, les.sub)
@@ -94,19 +95,19 @@ func TestLessonsSubTabsKeepTheGapBeforeTheGate(t *testing.T) {
 	// faint gate never read as one phrase.
 	line := lesSubTabs(h)
 	assert.True(t, strings.HasSuffix(line, "distill.write off"), line)
-	assert.NotContains(t, line, "p / s / e", line)
+	assert.NotContains(t, line, "p / m / s / e", line)
 
 	// A wider line keeps the hint with at least three cells before the gate.
 	for _, w := range []int{61, 64, 80, 120} {
 		h.resize(w, 24)
 
 		line = lesSubTabs(h)
-		if strings.Contains(line, "p / s / e") {
-			assert.Regexp(t, regexp.MustCompile(`p / s / e {3,}distill\.write off$`), line, "width %d", w)
+		if strings.Contains(line, "p / m / s / e") {
+			assert.Regexp(t, regexp.MustCompile(`p / m / s / e {3,}distill\.write off$`), line, "width %d", w)
 		}
 	}
 
-	assert.Contains(t, lesSubTabs(h), "p / s / e", "a wide line shows the hint")
+	assert.Contains(t, lesSubTabs(h), "p / m / s / e", "a wide line shows the hint")
 }
 
 // lesOneProposal is a ledger with one pending proposal, p1.

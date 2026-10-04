@@ -54,6 +54,34 @@ func isCleanRel(rel string) bool {
 		rel != "." && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
+// readOnlyReason is the reason the engine never replaces a file without
+// the owner write bit.
+func readOnlyReason(mode fs.FileMode) string {
+	return fmt.Sprintf("the file is read-only (%s); seamark does not replace it", mode)
+}
+
+// deniedReason is the reason the engine never replaces a file that this
+// user may not write. The mode can show the owner write bit, so the text
+// does not quote it.
+const deniedReason = "this user cannot write the file; seamark does not replace it"
+
+// WriteRefusal returns the reason the engine refuses to replace the file
+// that guard observed, or an empty string. An editor that reads a file
+// itself uses it to show the refusal before it plans a write. The engine
+// and the editors share these texts, so they cannot drift apart.
+func WriteRefusal(guard FileGuard) string {
+	switch {
+	case guard.Linked != "":
+		return approve.LinkReason(guard.Linked)
+	case guard.Exists && guard.Mode&0o200 == 0:
+		return readOnlyReason(guard.Mode)
+	case guard.Exists && guard.Denied:
+		return deniedReason
+	}
+
+	return ""
+}
+
 // ReadGuarded reads one native document that setup owns and records
 // its observed state. Adapters plan from the returned bytes, so a plan
 // and its guard always describe the same file state. A missing file is
@@ -135,6 +163,7 @@ func ReadInput(root, rel string) (FileGuard, []byte, error) {
 	}
 
 	guard.Exists, guard.SHA256, guard.Mode = true, sha256.Sum256(data), mode.Perm()
+	guard.Denied = writeDenied(filepath.Join(root, filepath.FromSlash(rel)))
 
 	return guard, data, nil
 }
@@ -904,10 +933,12 @@ func applyWrite(plan *SetupPlan, rel string, written map[string]bool) error {
 		return replaceFile(target, write.After, mode, false)
 	}
 
-	// The rename would replace a file the user made read-only. A plain
-	// write fails on such a file, and setup must respect that choice too.
-	if guard.Mode&0o200 == 0 {
-		return fmt.Errorf("the file is read-only (%s); seamark does not replace it", guard.Mode)
+	// The rename needs write access to the directory only. So it would
+	// replace a read-only file, or a file that an access control list or
+	// another owner protects. A plain write fails on such a file, and
+	// setup must respect that choice too. addWrite already refused a link.
+	if reason := WriteRefusal(guard); reason != "" {
+		return errors.New(reason)
 	}
 
 	return replaceFile(target, write.After, guard.Mode, true)

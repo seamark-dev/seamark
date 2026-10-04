@@ -71,19 +71,25 @@ agents-native-smoke: build ## One bounded distillation through the installed $(C
 # services that the console and the CLI both call, and the CLI entry
 # point. No test contacts GitHub or runs a paid model. The shared
 # services are setup (integration), proposals, statistics (lessonstats),
-# settings, evidence refresh (learning, index, reviews, store), and
-# distillation (learning, distill, agent). The index tests take about
+# settings, evidence refresh (learning, index, reviews, store),
+# distillation (learning, distill, agent), and lesson maintenance: YAML
+# splicing (yamledit), pin file editing (pinfile), retarget and prune
+# (maintain), outcome readings (outcome), and trigger extraction
+# (learning, distill). The index tests take about
 # 25 s. They stay, because index holds the refresh engine and its stop
 # guarantees, and a regression there must fail this target.
 TUI_TEST_PKGS := ./internal/tui/... ./internal/workspace/... ./internal/scaffold/... ./internal/proposals/... ./internal/lessonstats/... \
 	./internal/settings/... ./internal/learning/... ./internal/distill/... ./internal/reviews/... \
-	./internal/index/... ./internal/store/... ./internal/agent/... ./internal/integration/...
+	./internal/index/... ./internal/store/... ./internal/agent/... ./internal/integration/... \
+	./internal/yamledit/... ./internal/pinfile/... ./internal/maintain/... ./internal/outcome/...
 
 # TUI_CLI_PARITY selects the CLI tests that pin the output of the
 # commands behind the console: the console entry point, lessons (with
-# the distillation golden tests), init, and the evidence refresh of
-# `seamark index --fixes-only` and `--reviews`.
-TUI_CLI_PARITY := Test(TUI|Lessons|RunInit|InitClient|IndexFixesOnly|IndexReviews)
+# the distillation and maintenance golden tests), init, the evidence
+# refresh of `seamark index --fixes-only` and `--reviews`, and the older
+# retarget, extraction and ledger tests that the console's shared
+# engines must keep green.
+TUI_CLI_PARITY := Test(TUI|Lessons|RunInit|InitClient|IndexFixesOnly|IndexReviews|RecommendScope|RetargetKeeps|ExtractSummary|SelectionParsing|Ledger(Shows|Names)|PlanAnnotations)
 
 tui-test: ## Run the workspace console tests (shell, screens, shared services, CLI parity)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(TUI_TEST_PKGS)
@@ -91,9 +97,10 @@ tui-test: ## Run the workspace console tests (shell, screens, shared services, C
 
 # Captures are plain-text renders of representative console states at
 # several terminal sizes, for the visual review (they stay local). The
-# default directory holds the Phase 2 set; the MVP set stays in
-# rfc/validation/tui-mvp/captures.
-TUI_CAPTURE_DIR ?= rfc/validation/tui-phase-2/captures
+# default directory holds the Phase 3 set, which also renders every
+# earlier scene; the MVP and Phase 2 sets stay in
+# rfc/validation/tui-mvp/captures and rfc/validation/tui-phase-2/captures.
+TUI_CAPTURE_DIR ?= rfc/validation/tui-phase-3/captures
 
 tui-capture: ## Render representative console states into $(TUI_CAPTURE_DIR) for visual review
 	mkdir -p "$(TUI_CAPTURE_DIR)"

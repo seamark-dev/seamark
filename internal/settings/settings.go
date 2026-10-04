@@ -12,7 +12,6 @@
 package settings
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -31,6 +30,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/yamledit"
 )
 
 // File is the shared configuration document, relative to the root.
@@ -225,7 +225,7 @@ type Snapshot struct {
 	// crlf is true when the file uses CRLF line breaks.
 	crlf bool
 	// doc is the parsed file; nil when the file cannot be parsed.
-	doc *document
+	doc *yamledit.Doc
 	// issues holds the per-section problems, keyed by section name.
 	issues map[string]*BlockedError
 }
@@ -299,7 +299,7 @@ func (s *Snapshot) Editable(g Group) error {
 	if err := s.ReaderErrs[reader]; err != nil {
 		return &BlockedError{
 			Reason: fmt.Sprintf("the %s reader rejects the file: %s", reader, displayText(err.Error())),
-			Line:   yamlErrorLine(err),
+			Line:   yamledit.ErrorLine(err),
 		}
 	}
 
@@ -347,18 +347,22 @@ func Inspect(root string, reg *integration.Registry) (*Snapshot, error) {
 
 	snap.Guard = guard
 
-	var gate *BlockedError
+	var issue *yamledit.Issue
 
-	snap.data, snap.crlf, gate = normalizeBreaks(raw)
+	snap.data, snap.crlf, issue = yamledit.NormalizeBreaks(raw)
+	gate := blockedError(issue)
 
 	r := read(abs, reg, snap.data)
 	snap.apply(r)
 
+	// The engine owns the refusal of a link and of a file that this user
+	// cannot write. The view shows the same reason before the user asks
+	// for a write.
+	refusal := integration.WriteRefusal(guard)
+
 	switch {
-	case guard.Linked != "":
-		snap.block(&BlockedError{Reason: fmt.Sprintf("symlink at %s; seamark writes only real paths inside the repository", guard.Linked)})
-	case guard.Exists && guard.Mode&0o200 == 0:
-		snap.block(&BlockedError{Reason: fmt.Sprintf("the file is read-only (%s); seamark does not replace it", guard.Mode)})
+	case refusal != "":
+		snap.block(&BlockedError{Reason: refusal})
 	case gate != nil:
 		snap.block(gate)
 	case r.blocked != nil:
@@ -386,35 +390,16 @@ func (s *Snapshot) apply(r reading) {
 
 	if r.doc != nil {
 		for _, name := range ownedSections {
-			if issue := r.doc.sectionIssue(name); issue != nil {
+			if issue := sectionIssue(r.doc, name); issue != nil {
 				s.issues[name] = issue
 			}
 		}
 	}
 }
 
-// normalizeBreaks converts CRLF text to LF for editing. Mixed line
-// breaks block the edit, because a splice could not keep both forms.
-func normalizeBreaks(raw []byte) (data []byte, crlf bool, blocked *BlockedError) {
-	pairs := bytes.Count(raw, []byte("\r\n"))
-	if pairs == 0 {
-		if i := bytes.IndexByte(raw, '\r'); i >= 0 {
-			return raw, false, &BlockedError{Reason: "the file uses bare CR line breaks", Line: bytes.Count(raw[:i], []byte("\n")) + 1}
-		}
-
-		return raw, false, nil
-	}
-
-	if pairs != bytes.Count(raw, []byte("\n")) || pairs != bytes.Count(raw, []byte("\r")) {
-		return raw, false, &BlockedError{Reason: "the file mixes CRLF and LF line breaks"}
-	}
-
-	return bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n")), true, nil
-}
-
 // reading is the result of every reader on one version of the file.
 type reading struct {
-	doc     *document
+	doc     *yamledit.Doc
 	blocked *BlockedError
 
 	agent      *agent.Config
@@ -465,12 +450,12 @@ func (r reading) stored(f Field) (Stored, bool) {
 		return Stored{}, false
 	}
 
-	k, v := r.doc.child(f.section(), f.key())
+	k, v := r.doc.Child(f.section(), f.key())
 	if k == nil {
 		return Stored{}, false
 	}
 
-	return Stored{Present: true, Raw: rawText(v), Line: k.Line}, !isNull(v)
+	return Stored{Present: true, Raw: rawText(v), Line: k.Line}, !yamledit.IsNull(v)
 }
 
 // rawText renders a stored value for display. Repository-controlled text

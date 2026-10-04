@@ -18,6 +18,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/yamledit"
 )
 
 // Edit is one field change of a draft. Reset removes the key, so the
@@ -76,10 +77,12 @@ type Plan struct {
 	NoOp bool
 }
 
-// Activation text: when a field takes effect (spec R-13).
+// Activation text: when a field takes effect (spec R-13). The pin-write
+// gate names all three previews, because the proposal apply and the Pins
+// retarget and prune read the same gate.
 const (
-	whenDistillation = "next prepared distillation"
-	whenPreview      = "next proposal preview"
+	whenDistillation = "next distillation or trigger extraction"
+	whenPreview      = "next apply, retarget or prune preview"
 	whenEvidence     = "next confirmed evidence refresh"
 	whenIndexBuild   = "next explicit index build"
 )
@@ -395,7 +398,7 @@ func refusal(reason string) error {
 }
 
 // applyEdit splices one edit into the document text.
-func applyEdit(doc *document, e Edit) ([]byte, error) {
+func applyEdit(doc *yamledit.Doc, e Edit) ([]byte, error) {
 	section, key := e.Field.section(), e.Field.key()
 
 	if e.isReset() {
@@ -439,17 +442,17 @@ func spaces(n int) string {
 
 // setScalar sets one scalar field. An existing value is replaced on its
 // own line, and a comment after it stays.
-func setScalar(doc *document, section, key string, value any) ([]byte, error) {
+func setScalar(doc *yamledit.Doc, section, key string, value any) ([]byte, error) {
 	text, err := encodeScalar(value)
 	if err != nil {
 		return nil, err
 	}
 
-	if sk, _, _ := doc.section(section); sk == nil {
+	if sk, _, _ := doc.Section(section); sk == nil {
 		return appendSection(doc, section, []string{key + ": " + text}), nil
 	}
 
-	k, v := doc.child(section, key)
+	k, v := doc.Child(section, key)
 	if k == nil {
 		return insertChild(doc, section, []string{key + ": " + text}), nil
 	}
@@ -458,37 +461,37 @@ func setScalar(doc *document, section, key string, value any) ([]byte, error) {
 		return nil, err
 	}
 
-	lines := slices.Clone(doc.lines)
+	lines := slices.Clone(doc.Lines)
 	line := lines[k.Line-1]
 
 	// The node column is at the tag when the value has one. The tag goes
 	// with the old value, because the new value is canonical.
-	start := doc.offset(k.Line, v.Column)
-	token := skipProperties(line, start)
+	start := doc.Offset(k.Line, v.Column)
+	token := yamledit.SkipProperties(line, start)
 
 	// An empty value ("cli:" or a bare tag) has no token: the value goes
 	// after the colon, and the rest of the line keeps only its comment.
 	if token == len(line) || line[token] == '#' {
-		lines[k.Line-1] = strings.TrimRight(line[:start], " \t") + " " + text + trailingComment(line, start)
+		lines[k.Line-1] = strings.TrimRight(line[:start], " \t") + " " + text + yamledit.TrailingComment(line, start)
 
-		return joinLines(lines, doc.finalEOL), nil
+		return yamledit.JoinLines(lines, doc.FinalEOL), nil
 	}
 
-	end, ok := tokenEnd(line, token, v.Style)
+	end, ok := yamledit.TokenEnd(line, token, v.Style)
 	if !ok {
 		return nil, &BlockedError{Reason: "the value of " + section + "." + key + " spans several lines", Line: k.Line}
 	}
 
 	lines[k.Line-1] = line[:start] + text + line[end:]
 
-	return joinLines(lines, doc.finalEOL), nil
+	return yamledit.JoinLines(lines, doc.FinalEOL), nil
 }
 
 // singleLine refuses a scalar value that is not a single token on its
 // key line. The node tree has no end position, so a value that spans
 // lines has no safe splice. The lines of a multi-line quoted or block
 // value count as content here, also when they start with "#".
-func singleLine(doc *document, section, key string, k, v *yaml.Node) error {
+func singleLine(doc *yamledit.Doc, section, key string, k, v *yaml.Node) error {
 	field := section + "." + key
 
 	switch {
@@ -496,7 +499,7 @@ func singleLine(doc *document, section, key string, k, v *yaml.Node) error {
 		return &BlockedError{Reason: field + " does not hold a single value", Line: k.Line}
 	case v.Line != k.Line:
 		return &BlockedError{Reason: "the value of " + field + " starts on its own line", Line: k.Line}
-	case len(doc.contentLines(k.Line+1, doc.childEnd(section, key))) > 0:
+	case len(doc.ContentLines(k.Line+1, doc.ChildEnd(section, key))) > 0:
 		return &BlockedError{Reason: "the value of " + field + " spans several lines", Line: k.Line}
 	}
 
@@ -507,7 +510,7 @@ func singleLine(doc *document, section, key string, k, v *yaml.Node) error {
 // new items follow in block style, and comment lines of the old list
 // stay after the items: the starter file keeps its commented example.
 // An item that stays keeps its old line, with its trailing comment.
-func setList(doc *document, section, key string, items []string) ([]byte, error) {
+func setList(doc *yamledit.Doc, section, key string, items []string) ([]byte, error) {
 	encoded := make([]string, 0, len(items))
 
 	for _, item := range items {
@@ -528,52 +531,52 @@ func setList(doc *document, section, key string, items []string) ([]byte, error)
 		return out
 	}
 
-	if sk, _, _ := doc.section(section); sk == nil {
+	if sk, _, _ := doc.Section(section); sk == nil {
 		return appendSection(doc, section, fresh()), nil
 	}
 
-	k, v := doc.child(section, key)
+	k, v := doc.Child(section, key)
 	if k == nil {
 		return insertChild(doc, section, fresh()), nil
 	}
 
 	field := section + "." + key
-	end := doc.childEnd(section, key)
+	end := doc.ChildEnd(section, key)
 
 	if err := listShape(doc, field, k, v, end); err != nil {
 		return nil, err
 	}
 
-	lines := slices.Clone(doc.lines)
+	lines := slices.Clone(doc.Lines)
 	keyLine := lines[k.Line-1]
 
 	// A value on the key line (a flow list, a null, or a tag) moves below
 	// it. The comment after a flow list starts after its "]".
 	if v.Line == k.Line {
-		start := doc.offset(k.Line, v.Column)
+		start := doc.Offset(k.Line, v.Column)
 		rest := start
 
 		if v.Kind == yaml.SequenceNode && v.Style&yaml.FlowStyle != 0 {
 			var ok bool
-			if rest, ok = doc.flowEnd(v); !ok {
+			if rest, ok = doc.FlowEnd(v); !ok {
 				return nil, &BlockedError{Reason: "the flow list of " + field + " has no safe splice", Line: k.Line}
 			}
 		}
 
-		keyLine = strings.TrimRight(keyLine[:start], " \t") + trailingComment(keyLine, rest)
+		keyLine = strings.TrimRight(keyLine[:start], " \t") + yamledit.TrailingComment(keyLine, rest)
 	}
 
 	block := append([]string{keyLine}, listItems(doc, k, v, items, encoded)...)
 
 	for n := k.Line + 1; n <= end; n++ {
-		if doc.comment(n) {
+		if doc.Comment(n) {
 			block = append(block, lines[n-1])
 		}
 	}
 
 	lines = slices.Replace(lines, k.Line-1, end, block...)
 
-	return joinLines(lines, doc.finalEOL), nil
+	return yamledit.JoinLines(lines, doc.FinalEOL), nil
 }
 
 // listItems returns the item lines of a new list. An item that was in
@@ -581,14 +584,14 @@ func setList(doc *document, section, key string, items []string) ([]byte, error)
 // comment stay. Only a string item stays verbatim: other text, such as
 // 5, reads as another type, so it gets the new text and its old comment.
 // A removed item goes with its comment.
-func listItems(doc *document, k, v *yaml.Node, items, encoded []string) []string {
+func listItems(doc *yamledit.Doc, k, v *yaml.Node, items, encoded []string) []string {
 	indent := k.Column - 1 + 2
 	old := map[string][]*yaml.Node{}
 
 	if v.Kind == yaml.SequenceNode && v.Style&yaml.FlowStyle == 0 && len(v.Content) > 0 {
 		// The first item line gives the dash column; the node column is
 		// at a tag when the list has one.
-		indent = leadingSpaces(doc.lines[v.Content[0].Line-1])
+		indent = yamledit.LeadingSpaces(doc.Lines[v.Content[0].Line-1])
 
 		for _, item := range v.Content {
 			old[item.Value] = append(old[item.Value], item)
@@ -613,28 +616,28 @@ func listItems(doc *document, k, v *yaml.Node, items, encoded []string) []string
 
 // keptItem returns the line of an old item that stays in the list. line
 // is the freshly encoded line, for an item that is not a string.
-func keptItem(doc *document, item *yaml.Node, line string) string {
-	old := doc.lines[item.Line-1]
+func keptItem(doc *yamledit.Doc, item *yaml.Node, line string) string {
+	old := doc.Lines[item.Line-1]
 
 	if item.ShortTag() == "!!str" {
 		return old
 	}
 
-	end, ok := tokenEnd(old, skipProperties(old, doc.offset(item.Line, item.Column)), item.Style)
+	end, ok := yamledit.TokenEnd(old, yamledit.SkipProperties(old, doc.Offset(item.Line, item.Column)), item.Style)
 	if !ok {
 		return line
 	}
 
-	return line + trailingComment(old, end)
+	return line + yamledit.TrailingComment(old, end)
 }
 
 // listShape refuses a list value that has no safe splice: a list that
 // spans lines in flow style, or an item that spans lines.
-func listShape(doc *document, field string, k, v *yaml.Node, end int) error {
-	content := doc.contentLines(k.Line+1, end)
+func listShape(doc *yamledit.Doc, field string, k, v *yaml.Node, end int) error {
+	content := doc.ContentLines(k.Line+1, end)
 
 	switch {
-	case isNull(v):
+	case yamledit.IsNull(v):
 		if len(content) > 0 {
 			return &BlockedError{Reason: "the value of " + field + " spans several lines", Line: k.Line}
 		}
@@ -674,9 +677,9 @@ func indentAll(lines []string, n int) []string {
 // lines get the indentation of the other children, or two spaces more
 // than the section key. A null token on the section line ("agent: ~")
 // goes away, because a mapping follows now.
-func insertChild(doc *document, section string, child []string) []byte {
-	sk, sv, idx := doc.section(section)
-	lines := slices.Clone(doc.lines)
+func insertChild(doc *yamledit.Doc, section string, child []string) []byte {
+	sk, sv, idx := doc.Section(section)
+	lines := slices.Clone(doc.Lines)
 
 	indent := sk.Column - 1 + 2
 	if sv.Kind == yaml.MappingNode && len(sv.Content) > 0 {
@@ -686,69 +689,69 @@ func insertChild(doc *document, section string, child []string) []byte {
 	// A null token ("~", "null", or a bare "!!null" tag) holds no quote,
 	// so the comment search can start at the token itself. A line with
 	// no token and no tag stays as it is.
-	if isNull(sv) && sv.Line == sk.Line && (sv.Value != "" || sv.Style&yaml.TaggedStyle != 0) {
+	if yamledit.IsNull(sv) && sv.Line == sk.Line && (sv.Value != "" || sv.Style&yaml.TaggedStyle != 0) {
 		line := lines[sk.Line-1]
-		start := doc.offset(sk.Line, sv.Column)
-		lines[sk.Line-1] = strings.TrimRight(line[:start], " \t") + trailingComment(line, start)
+		start := doc.Offset(sk.Line, sv.Column)
+		lines[sk.Line-1] = strings.TrimRight(line[:start], " \t") + yamledit.TrailingComment(line, start)
 	}
 
-	end := doc.sectionEnd(idx)
+	end := doc.SectionEnd(idx)
 	lines = slices.Insert(lines, end, indentAll(child, indent)...)
 
-	return joinLines(lines, doc.finalEOL)
+	return yamledit.JoinLines(lines, doc.FinalEOL)
 }
 
 // appendSection adds a new section at the end of the document content,
 // after a blank line. The indentation follows the existing top-level
 // keys. Text after a "..." end marker is not read, so the section goes
 // before the marker.
-func appendSection(doc *document, section string, child []string) []byte {
-	lines := slices.Clone(doc.lines)
+func appendSection(doc *yamledit.Doc, section string, child []string) []byte {
+	lines := slices.Clone(doc.Lines)
 
 	indent := 0
-	if doc.root != nil {
-		indent = doc.root.Content[0].Column - 1
+	if doc.Root != nil {
+		indent = doc.Root.Content[0].Column - 1
 	}
 
-	pos := doc.limit - 1
+	pos := doc.Limit - 1
 
 	var block []string
-	if pos > 0 && !isBlank(lines[pos-1]) {
+	if pos > 0 && !yamledit.IsBlank(lines[pos-1]) {
 		block = append(block, "")
 	}
 
 	block = append(block, spaces(indent)+section+":")
 	block = append(block, indentAll(child, indent+2)...)
 
-	finalEOL := doc.finalEOL || pos == len(lines)
+	finalEOL := doc.FinalEOL || pos == len(lines)
 	lines = slices.Insert(lines, pos, block...)
 
-	return joinLines(lines, finalEOL)
+	return yamledit.JoinLines(lines, finalEOL)
 }
 
 // removeKey deletes one field. Its comment lines stay, because they are
 // the user's prose. The lines of a multi-line value are value text, also
 // when they start with "#", so they go. A section left without keys and
 // without comments goes too.
-func removeKey(doc *document, section, key string) ([]byte, error) {
-	k, _ := doc.child(section, key)
+func removeKey(doc *yamledit.Doc, section, key string) ([]byte, error) {
+	k, _ := doc.Child(section, key)
 	if k == nil {
-		return joinLines(doc.lines, doc.finalEOL), nil
+		return yamledit.JoinLines(doc.Lines, doc.FinalEOL), nil
 	}
 
-	end := doc.childEnd(section, key)
-	lines := slices.Clone(doc.lines)
+	end := doc.ChildEnd(section, key)
+	lines := slices.Clone(doc.Lines)
 
 	var keep []string
 
 	for n := k.Line + 1; n <= end; n++ {
-		if doc.comment(n) {
+		if doc.Comment(n) {
 			keep = append(keep, lines[n-1])
 		}
 	}
 
 	lines = slices.Replace(lines, k.Line-1, end, keep...)
-	data := joinLines(lines, doc.finalEOL)
+	data := yamledit.JoinLines(lines, doc.FinalEOL)
 
 	after, blocked := parseDocument(data)
 	if blocked != nil {
@@ -761,35 +764,35 @@ func removeKey(doc *document, section, key string) ([]byte, error) {
 // removeEmptySection deletes a section that holds no key and no comment.
 // A comment directly above, on, or inside the section keeps it as a bare
 // "section:" line, which the readers decode as the defaults.
-func removeEmptySection(doc *document, section string) []byte {
-	sk, sv, idx := doc.section(section)
-	if sk == nil || !isNull(sv) {
-		return joinLines(doc.lines, doc.finalEOL)
+func removeEmptySection(doc *yamledit.Doc, section string) []byte {
+	sk, sv, idx := doc.Section(section)
+	if sk == nil || !yamledit.IsNull(sv) {
+		return yamledit.JoinLines(doc.Lines, doc.FinalEOL)
 	}
 
-	end := doc.sectionEnd(idx)
+	end := doc.SectionEnd(idx)
 
-	commented := doc.hasComment(sk.Line+1, end) ||
-		commentStart(doc.lines[sk.Line-1], 0) < len(doc.lines[sk.Line-1]) ||
-		(sk.Line > 1 && doc.comment(sk.Line-1))
+	commented := doc.HasComment(sk.Line+1, end) ||
+		yamledit.CommentStart(doc.Lines[sk.Line-1], 0) < len(doc.Lines[sk.Line-1]) ||
+		(sk.Line > 1 && doc.Comment(sk.Line-1))
 
 	if commented {
-		return joinLines(doc.lines, doc.finalEOL)
+		return yamledit.JoinLines(doc.Lines, doc.FinalEOL)
 	}
 
-	lines := slices.Delete(slices.Clone(doc.lines), sk.Line-1, end)
+	lines := slices.Delete(slices.Clone(doc.Lines), sk.Line-1, end)
 
 	// Keep one blank line between the neighbours, not two.
 	at := sk.Line - 1
 
 	switch {
-	case at < len(lines) && isBlank(lines[at]) && (at == 0 || isBlank(lines[at-1])):
+	case at < len(lines) && yamledit.IsBlank(lines[at]) && (at == 0 || yamledit.IsBlank(lines[at-1])):
 		lines = slices.Delete(lines, at, at+1)
-	case at == len(lines) && at > 0 && isBlank(lines[at-1]):
+	case at == len(lines) && at > 0 && yamledit.IsBlank(lines[at-1]):
 		lines = slices.Delete(lines, at-1, at)
 	}
 
-	return joinLines(lines, doc.finalEOL)
+	return yamledit.JoinLines(lines, doc.FinalEOL)
 }
 
 // verify is the safety net under the splice rules. It proves that only
@@ -832,22 +835,22 @@ func verify(snap *Snapshot, reg *integration.Registry, group Group, edits []Edit
 // sameOtherSections requires every other top-level entry to be equal in
 // order and structure. Comments and positions are not compared: a new
 // neighbour can move a comment between nodes without changing a value.
-func sameOtherSections(before, after *document, section string) error {
-	others := func(doc *document) (pairs [][2]*yaml.Node, pos int) {
+func sameOtherSections(before, after *yamledit.Doc, section string) error {
+	others := func(doc *yamledit.Doc) (pairs [][2]*yaml.Node, pos int) {
 		pos = -1
 
-		if doc.root == nil {
+		if doc.Root == nil {
 			return nil, pos
 		}
 
-		for i := 0; i < len(doc.root.Content); i += 2 {
-			if doc.root.Content[i].Value == section {
+		for i := 0; i < len(doc.Root.Content); i += 2 {
+			if doc.Root.Content[i].Value == section {
 				pos = len(pairs)
 
 				continue
 			}
 
-			pairs = append(pairs, [2]*yaml.Node{doc.root.Content[i], doc.root.Content[i+1]})
+			pairs = append(pairs, [2]*yaml.Node{doc.Root.Content[i], doc.Root.Content[i+1]})
 		}
 
 		return pairs, pos
@@ -861,7 +864,7 @@ func sameOtherSections(before, after *document, section string) error {
 	}
 
 	for i := range was {
-		if !nodeEqual(was[i][0], now[i][0]) || !nodeEqual(was[i][1], now[i][1]) {
+		if !yamledit.NodeEqual(was[i][0], now[i][0]) || !yamledit.NodeEqual(was[i][1], now[i][1]) {
 			return refusal(fmt.Sprintf("the %s section changed", was[i][0].Value))
 		}
 	}
@@ -873,26 +876,10 @@ func sameOtherSections(before, after *document, section string) error {
 	return nil
 }
 
-// nodeEqual compares two node trees by value, tag, style, and anchors.
-func nodeEqual(a, b *yaml.Node) bool {
-	if a.Kind != b.Kind || a.Tag != b.Tag || a.Value != b.Value || a.Anchor != b.Anchor ||
-		a.Style != b.Style || len(a.Content) != len(b.Content) {
-		return false
-	}
-
-	for i := range a.Content {
-		if !nodeEqual(a.Content[i], b.Content[i]) {
-			return false
-		}
-	}
-
-	return true
-}
-
 // intendedSection requires the edited section to equal the section as
 // it was with the edits applied in memory. Unknown keys of the section
 // must survive, and no other key may change.
-func intendedSection(before, after *document, section string, edits []Edit) error {
+func intendedSection(before, after *yamledit.Doc, section string, edits []Edit) error {
 	want, err := sectionMap(before, section)
 	if err != nil {
 		return refusal(err.Error())
@@ -949,13 +936,13 @@ func intendedSection(before, after *document, section string, edits []Edit) erro
 // sectionMap decodes one section, or returns nil when it is absent or
 // null. Owned sections hold no duplicate key and no alias, so the
 // decode is exact.
-func sectionMap(doc *document, section string) (map[string]any, error) {
-	if doc.root == nil {
+func sectionMap(doc *yamledit.Doc, section string) (map[string]any, error) {
+	if doc.Root == nil {
 		return nil, nil
 	}
 
-	_, v, _ := doc.section(section)
-	if v == nil || isNull(v) {
+	_, v, _ := doc.Section(section)
+	if v == nil || yamledit.IsNull(v) {
 		return nil, nil
 	}
 
@@ -982,7 +969,7 @@ func activation(snap *Snapshot, group Group, edits []Edit) []Activation {
 			a.When = whenDistillation
 			a.Notes = []string{
 				"Claude and Codex integration files do not change.",
-				"An open distillation preview must be prepared again.",
+				"An open distillation preview or trigger extraction review must be prepared again.",
 				"Saving runs no agent and checks no login.",
 			}
 
@@ -996,7 +983,7 @@ func activation(snap *Snapshot, group Group, edits []Edit) []Activation {
 		case GroupPinWrite:
 			a.When = whenPreview
 			a.Notes = []string{
-				"Saving applies no proposal; a new proposal preview is necessary.",
+				"Saving writes no pin; only a new preview offers the write.",
 				"The setting also governs seamark lessons --apply, --prune, and --retarget.",
 			}
 		case GroupEvidence:

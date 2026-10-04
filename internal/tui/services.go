@@ -19,6 +19,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
+	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/scaffold"
@@ -105,6 +106,29 @@ type Services interface {
 	PlanSettings(snap *settings.Snapshot, edits []settings.Edit) (*settings.Plan, error)
 	// SaveSettings writes exactly the reviewed plan, or reports it stale.
 	SaveSettings(p *settings.Plan) (settings.Result, error)
+
+	// Pins reads the installed pins of .seamark/lessons.yaml and relates
+	// them to the ledger. It needs no index and never fails: a file or
+	// ledger problem is data in the inspection. It writes nothing.
+	Pins() *maintain.Inspection
+	// PlanMaintenance plans a retarget or a prune of the selected pins.
+	// It writes nothing.
+	PlanMaintenance(req maintain.Request) (*maintain.Plan, error)
+	// CommitMaintenance revalidates and commits exactly the reviewed plan.
+	CommitMaintenance(p *maintain.Plan) (maintain.Result, error)
+	// PlanRecovery plans the ledger-only completion of a partial
+	// maintenance operation of this session. It writes nothing.
+	PlanRecovery(r *maintain.Recovery) (*maintain.Plan, error)
+	// CommitRecovery revalidates the recovery proof and completes the
+	// ledger update. It never writes the pin file.
+	CommitRecovery(p *maintain.Plan) (maintain.Result, error)
+	// PlanExtract previews a trigger extraction of the selected
+	// proposals. It never runs the agent and never writes.
+	PlanExtract(req learning.ExtractRequest) (*learning.ExtractPreview, error)
+	// RunExtract runs exactly the reviewed preview. A stop through ctx
+	// starts no new batch; progress runs on the worker goroutine.
+	RunExtract(ctx context.Context, p *learning.ExtractPreview,
+		progress func(distill.ExtractEvent)) (*distill.ExtractExecution, error)
 }
 
 // IndexView is the index section of the Overview: the probe, and the
@@ -181,8 +205,8 @@ type engine struct {
 type engineDeps struct {
 	// fetch reads the GitHub review comments; nil runs gh.
 	fetch reviews.FetchFunc
-	// invoke sends the distillation prompts; nil runs the command of
-	// the reviewed preview.
+	// invoke sends the distillation and the trigger extraction prompts;
+	// nil runs the command of the reviewed preview.
 	invoke agent.Invoker
 	// now reads the clock; nil reads the system clock.
 	now func() time.Time
