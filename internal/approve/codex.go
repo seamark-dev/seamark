@@ -91,14 +91,17 @@ type CodexOptions struct {
 // decoded keys, so a layout that appending cannot extend is reported
 // instead of written. It plans the registration and the approvals
 // together, which is what `init --approve-tools` always meant.
+//
+// It also rejects a path that is not a regular file, as setup does. A
+// read of a FIFO blocks, and doctor and status must not hang on one.
 func PlanCodex(root string) (*CodexPlan, error) {
 	if link, err := skills.SymlinkIn(root, CodexConfig); err != nil {
 		return nil, err
 	} else if link != "" {
-		return nil, fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", CodexConfig, link)
+		return nil, LinkRefusal(CodexConfig, link)
 	}
 
-	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(CodexConfig)))
+	data, _, err := ReadRegular(root, CodexConfig)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%s: %w", CodexConfig, err)
 	}
@@ -806,7 +809,7 @@ func ApplyCodex(w io.Writer, root string, p *CodexPlan, printOnly bool) error {
 		if link, err := skills.SymlinkIn(root, CodexConfig); err != nil {
 			return err
 		} else if link != "" {
-			return fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", CodexConfig, link)
+			return LinkRefusal(CodexConfig, link)
 		}
 
 		path := filepath.Join(root, filepath.FromSlash(CodexConfig))

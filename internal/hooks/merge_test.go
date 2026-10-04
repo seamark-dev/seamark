@@ -28,29 +28,29 @@ func TestMergeInstallsAnySpecListOnce(t *testing.T) {
 	}
 	settings := map[string]any{}
 
-	changed, err := Merge(settings, "/bin/seamark", specs)
+	merged, err := Merge(settings, "/bin/seamark", specs)
 	require.NoError(t, err)
-	assert.True(t, changed)
+	assert.True(t, merged.Changed)
 	assert.Equal(t, []string{"/bin/seamark lessons --hook --client codex"}, commandsOf(settings, "PreToolUse"))
 	assert.Equal(t, []string{"/bin/seamark lessons --hook-reset --client codex"}, commandsOf(settings, "PostCompact"))
 
-	changed, err = Merge(settings, "/bin/seamark", specs)
+	merged, err = Merge(settings, "/bin/seamark", specs)
 	require.NoError(t, err)
-	assert.False(t, changed, "a second merge changes nothing")
+	assert.False(t, merged.Changed, "a second merge changes nothing")
 
 	// A moved binary rewrites the owned command in place.
-	changed, err = Merge(settings, "/opt/my tools/seamark", specs)
+	merged, err = Merge(settings, "/opt/my tools/seamark", specs)
 	require.NoError(t, err)
-	assert.True(t, changed)
+	assert.True(t, merged.Changed)
 	assert.Equal(t, []string{"'/opt/my tools/seamark' lessons --hook --client codex"}, commandsOf(settings, "PreToolUse"))
 }
 
 func TestMergeWithNoSpecsChangesNothing(t *testing.T) {
 	settings := map[string]any{"model": "opus"}
 
-	changed, err := Merge(settings, "/bin/seamark", nil)
+	merged, err := Merge(settings, "/bin/seamark", nil)
 	require.NoError(t, err)
-	assert.False(t, changed)
+	assert.False(t, merged.Changed)
 	assert.Equal(t, "opus", settings["model"])
 }
 
@@ -148,9 +148,9 @@ func TestParseDocumentReadsNullAsAnEmptyDocument(t *testing.T) {
 	settings, err := ParseDocument([]byte("null"))
 	require.NoError(t, err)
 
-	changed, err := Merge(settings, "/bin/seamark", ClaudeSpecs(ModeWarn))
+	merged, err := Merge(settings, "/bin/seamark", ClaudeSpecs(ModeWarn))
 	require.NoError(t, err, "a nil map would panic here")
-	assert.True(t, changed)
+	assert.True(t, merged.Changed)
 
 	_, err = ParseDocument([]byte("{ broken"))
 	require.Error(t, err)
@@ -258,9 +258,9 @@ func TestEffectiveGateModeReadsTheCodexMarkers(t *testing.T) {
 func TestCodexSpecsInstallTheGateAndLessonHooks(t *testing.T) {
 	settings := map[string]any{}
 
-	changed, err := Merge(settings, "/usr/local/bin/seamark", CodexSpecs(ModeWarn))
+	merged, err := Merge(settings, "/usr/local/bin/seamark", CodexSpecs(ModeWarn))
 	require.NoError(t, err)
-	assert.True(t, changed)
+	assert.True(t, merged.Changed)
 
 	hookMap := settings["hooks"].(map[string]any)
 	require.Len(t, hookMap["PreToolUse"], 2, "the gate hook and the lessons hook")
@@ -282,15 +282,15 @@ func TestCodexSpecsInstallTheGateAndLessonHooks(t *testing.T) {
 	assert.Equal(t, 10, handler["timeout"])
 
 	// A second merge finds its own hooks.
-	changed, err = Merge(settings, "/usr/local/bin/seamark", CodexSpecs(ModeWarn))
+	merged, err = Merge(settings, "/usr/local/bin/seamark", CodexSpecs(ModeWarn))
 	require.NoError(t, err)
-	assert.False(t, changed)
+	assert.False(t, merged.Changed)
 
 	// A mode switch rewrites the gate hook in place: the opposite marker
 	// is legacy, so no second gate entry appears.
-	changed, err = Merge(settings, "/usr/local/bin/seamark", CodexSpecs(ModeEnforce))
+	merged, err = Merge(settings, "/usr/local/bin/seamark", CodexSpecs(ModeEnforce))
 	require.NoError(t, err)
-	assert.True(t, changed)
+	assert.True(t, merged.Changed)
 	assert.Equal(t, []string{
 		"/usr/local/bin/seamark gate --enforce --hook --client codex",
 		"/usr/local/bin/seamark lessons --hook --client codex",
@@ -346,38 +346,12 @@ func TestClaudeAndCodexMarkersNeverClaimEachOther(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, specs := range [][]Spec{claude, codex} {
-		changed, err := Merge(settings, "/bin/seamark", specs)
+		merged, err := Merge(settings, "/bin/seamark", specs)
 		require.NoError(t, err)
-		assert.False(t, changed)
+		assert.False(t, merged.Changed)
 	}
 
 	assert.Len(t, settings["hooks"].(map[string]any)["PreToolUse"], 4, "two gate hooks and two lessons hooks")
-}
-
-func TestWrappedFindsASeamarkHookBehindAnotherCommand(t *testing.T) {
-	lessons := CodexSpecs(ModeWarn)[1]
-
-	settings := map[string]any{"hooks": map[string]any{"PreToolUse": []any{
-		map[string]any{"matcher": "apply_patch", "hooks": []any{
-			map[string]any{"type": "command", "command": "/bin/seamark lessons --hook --client codex"},
-			map[string]any{"type": "command", "command": "/opt/wrap.sh seamark lessons --hook --client codex"},
-			map[string]any{"type": "command", "command": "sh -c 'seamark lessons --hook --client codex >> /tmp/log'"},
-			map[string]any{"type": "command", "command": "/opt/seamark2 lessons --hook --client codex"},
-			map[string]any{"type": "command", "command": "/opt/audit.sh"},
-		}},
-	}}}
-
-	assert.Equal(t, []WrappedCommand{
-		// An unknown program with the seamark command as its arguments.
-		{Command: "/opt/wrap.sh seamark lessons --hook --client codex", Matcher: "apply_patch", Type: "command"},
-		// A shell script that executes the seamark command.
-		{Command: "sh -c 'seamark lessons --hook --client codex >> /tmp/log'", Certain: true, Matcher: "apply_patch", Type: "command"},
-	}, Wrapped(settings, lessons),
-		"the owned hook, the lookalike binary, and the unrelated hook run no seamark hook through a wrapper")
-
-	assert.Empty(t, Wrapped(map[string]any{}, lessons))
-	assert.Empty(t, Wrapped(settings, Spec{Event: "PostCompact", Marker: CodexLessonsResetMarker}),
-		"another event holds no wrapper")
 }
 
 func TestOwnershipNeedsOneStandaloneSeamarkWord(t *testing.T) {
@@ -430,8 +404,8 @@ func TestMergeKeepsAWrappedCommandAsItIs(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, commandsOf(settings, "PreToolUse"), wrapped, "the wrapper survives the merge")
-	assert.Equal(t, []WrappedCommand{{Command: wrapped, Matcher: "apply_patch", Type: "command"}},
-		Wrapped(settings, CodexSpecs(ModeWarn)[1]))
+	assert.Equal(t, HookMayRun, SeamarkHookUse(wrapped, CodexSpecs(ModeWarn)[1].Markers()),
+		"the wrapper can still run the hook, so setup must report it")
 
 	// The same holds for the Claude Code gate hook.
 	gate := "test -x /usr/local/bin/seamark && /usr/local/bin/seamark gate --enforce --hook"
@@ -445,70 +419,4 @@ func TestMergeKeepsAWrappedCommandAsItIs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, commandsOf(claude, "PreToolUse"), gate)
 	assert.Equal(t, ModeWarn, InstalledGateMode(claude), "the managed hook is the one that was added")
-}
-
-func TestSeamarkHookUseFollowsExecutionAndQuoting(t *testing.T) {
-	codex := []string{CodexLessonsMarker}
-	full := "/usr/local/bin/seamark " + CodexLessonsMarker
-
-	cases := []struct {
-		name string
-		cmd  string
-		want HookUse
-	}{
-		// The reported defect: the full command as printed text. One quoted
-		// word is one argument of echo, and nothing executes it.
-		{"echo with the command in single quotes", "echo '" + full + "'", HookNotRun},
-		{"echo with the command in double quotes", `echo "` + full + `"`, HookNotRun},
-		{"printf with the command as its format", "printf '%s\\n' '" + full + "'", HookNotRun},
-		{"a quoted command inside a longer text", `logger "would run: ` + full + ` (disabled)"`, HookNotRun},
-		{"a comment-like note in an argument", "true '" + full + "'", HookNotRun},
-		{"the marker text without a binary", `echo "` + CodexLessonsMarker + `"`, HookNotRun},
-		{"a lookalike binary", "/opt/seamark2 " + CodexLessonsMarker, HookNotRun},
-		{"another seamark hook", "/usr/local/bin/seamark lessons --hook", HookNotRun},
-		{"the reset hook", "/usr/local/bin/seamark lessons --hook-reset --client codex", HookNotRun},
-		{"more arguments than the hook has", full + " --verbose", HookNotRun},
-		{"nothing", "", HookNotRun},
-
-		// The shell executes the seamark command.
-		{"the bare command", full, HookRuns},
-		{"a quoted binary path", "'/opt/my tools/seamark' " + CodexLessonsMarker, HookRuns},
-		{"a double-quoted binary path", `"/opt/my tools/seamark" ` + CodexLessonsMarker, HookRuns},
-		{"a shell condition", "test -x /usr/local/bin/seamark && " + full, HookRuns},
-		{"a command list", "cd /repo; " + full, HookRuns},
-		{"a fallback", full + " || true", HookRuns},
-		{"redirects", full + " >> /tmp/log 2>&1", HookRuns},
-		{"a redirect with an attached target", full + " 2>/dev/null", HookRuns},
-		{"an environment assignment", "SEAMARK_DEBUG=1 " + full, HookRuns},
-		{"env", "env SEAMARK_DEBUG=1 " + full, HookRuns},
-		{"timeout", "timeout 5 " + full, HookRuns},
-		{"a subshell", "(cd /repo && " + full + ")", HookRuns},
-		{"a pipeline", full + " | tee /tmp/log", HookRuns},
-		{"sh -c with the command as the script", "sh -c '" + full + "'", HookRuns},
-		{"bash -lc with a redirect inside", `bash -lc "` + full + ` >> /tmp/log"`, HookRuns},
-		{"escaped spaces in the binary path", `/opt/my\ tools/seamark ` + CodexLessonsMarker, HookRuns},
-
-		// Another program gets the seamark command as its arguments. A
-		// wrapper runs them, and echo prints them: the words do not say.
-		{"an unknown wrapper", "/opt/wrapper " + full, HookMayRun},
-		{"echo without quotes", "echo " + full, HookMayRun},
-		{"a substitution the reader does not follow", "$(which seamark) " + CodexLessonsMarker + "; " + full, HookMayRun},
-		{"an unclosed quote around real words", "/opt/wrapper " + full + " '", HookMayRun},
-
-		// An echo inside a script is still an echo.
-		{"sh -c that only prints", `sh -c "echo '` + full + `'"`, HookNotRun},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, SeamarkHookUse(tc.cmd, codex), tc.cmd)
-		})
-	}
-
-	// One marker is a prefix of another. The Claude Code marker must not
-	// match inside the Codex command or the reset command.
-	claude := []string{LessonsMarker}
-	assert.Equal(t, HookNotRun, SeamarkHookUse(full, claude))
-	assert.Equal(t, HookNotRun, SeamarkHookUse("/bin/seamark lessons --hook-reset", claude))
-	assert.Equal(t, HookRuns, SeamarkHookUse("sh -c '/bin/seamark lessons --hook'", claude))
 }

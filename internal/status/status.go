@@ -20,7 +20,6 @@ import (
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/gate"
-	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/model"
@@ -77,13 +76,15 @@ type Status struct {
 	// controlled config and flows to terminals and MCP clients.
 	DistillAgent string `json:"distill_agent,omitempty"`
 
-	// GatePolicyMode is policy.yaml's mode; GateHookMode is what the
-	// installed Claude hook does ("" = no operational hook). They can
-	// differ, and the difference is exactly what a reader needs to see.
+	// GatePolicyMode is the mode of policy.yaml. GateHookMode is the mode
+	// of the Claude Code gate hook that setup manages, or "" when none
+	// runs. The two can differ, and a reader must see the difference.
+	// Both hook fields come from the reader of the Claude Code inspection,
+	// so they agree with the Claude Code entry of Clients.
 	GatePolicyMode string `json:"gate_policy_mode"`
 	GateHookMode   string `json:"gate_hook_mode,omitempty"`
-	// GateHookError reports a hook configuration that cannot be read —
-	// which is not the same finding as "no hook installed".
+	// GateHookError names a hook document that cannot be read. That is
+	// not the same finding as "no hook installed".
 	GateHookError string `json:"gate_hook_error,omitempty"`
 	// GatePolicyError carries a policy file that fails to load — a state
 	// that changes every hook decision.
@@ -201,13 +202,6 @@ func gather(reg *integration.Registry, st *store.Store, root string) (*Status, e
 		s.GatePolicyMode = policy.Mode
 	}
 
-	mode, hookErr := hooks.InstalledGateModeAt(root)
-	s.GateHookMode = mode
-
-	if hookErr != nil {
-		s.GateHookError = hookErr.Error()
-	}
-
 	// Inspect never fails: an unreadable directory is recorded on its
 	// client record, and status describes it. The skills list and the
 	// per-client view come from one registry inspection, so the two
@@ -215,6 +209,15 @@ func gather(reg *integration.Registry, st *store.Store, root string) (*Status, e
 	s.Skills = reg.InspectSkills(root)
 	s.Approvals = approve.Inspect(root)
 	s.Clients = reg.Inspect(root)
+
+	// The legacy fields repeat the Claude Code inspection, so one read of
+	// the document serves both views and they cannot disagree. The error
+	// field keeps the reason of a file that cannot be read, sanitized by
+	// the inspection.
+	if i := slices.IndexFunc(s.Clients, func(insp integration.Inspection) bool { return insp.ClientID == integration.ClaudeID }); i >= 0 {
+		s.GateHookMode = s.Clients[i].ManagedGateMode
+		s.GateHookError = s.Clients[i].HookDocumentError
+	}
 
 	return s, nil
 }
@@ -376,46 +379,18 @@ func printSkills(w io.Writer, s *Status) {
 	fmt.Fprintf(w, "skills         not installed (`seamark init --skills`)\n")
 }
 
-// gateHooks summarizes the gate hooks of every client from the
-// per-client view: the clients that enforce, the clients with a warn
-// hook, and the clients whose hook document cannot be read. The legacy
-// Claude Code fields stay in the JSON; the text reads the broader view,
-// because a Codex gate hook blocks a Codex command whatever
-// .claude/settings.json says.
-type gateHooks struct {
-	enforce, warn, unreadable []string
-}
+// summarizeGateHooks groups every client's gate hooks by what they do
+// with a blocking verdict, by the rule init uses. A status built
+// without the per-client view (an older JSON document) still has the
+// legacy Claude Code fields, so the summary reads those then.
+func summarizeGateHooks(s *Status) integration.GateSummary {
+	g := integration.SummarizeInspections(s.Clients)
 
-// summarizeGateHooks reads every client's gate hook state.
-func summarizeGateHooks(s *Status) gateHooks {
-	var g gateHooks
-
-	for _, insp := range s.Clients {
-		commands, ok := insp.Entry(integration.CapabilityCommands)
-		if !ok || !commands.Supported {
-			continue
-		}
-
-		switch {
-		case commands.State == integration.StateUnreadable:
-			g.unreadable = append(g.unreadable, insp.ClientID+": "+commands.Detail)
-		case insp.GateMode == hooks.ModeEnforce:
-			g.enforce = append(g.enforce, insp.ClientID)
-		case insp.GateMode == hooks.ModeWarn:
-			g.warn = append(g.warn, insp.ClientID)
-		}
-	}
-
-	// A status built without the per-client view (an older JSON
-	// document) still has the legacy fields.
 	if len(s.Clients) == 0 {
-		switch {
-		case s.GateHookError != "":
-			g.unreadable = append(g.unreadable, "claude: "+s.GateHookError)
-		case s.GateHookMode == hooks.ModeEnforce:
-			g.enforce = append(g.enforce, "claude")
-		case s.GateHookMode == hooks.ModeWarn:
-			g.warn = append(g.warn, "claude")
+		if s.GateHookError != "" {
+			g.AddUnreadable("claude: " + s.GateHookError)
+		} else {
+			g.Add("claude", s.GateHookMode)
 		}
 	}
 
@@ -427,27 +402,34 @@ func summarizeGateHooks(s *Status) gateHooks {
 // a warn hook fails open — and the difference is the whole point of
 // reporting it. The line covers every client with a gate hook; the
 // installed hook mode and the policy mode are named apart, because a
-// warn hook still follows an enforcing policy file.
+// warn hook still follows an enforcing policy file. The legacy Claude
+// Code fields stay in the JSON. The text reads the broader view, because
+// a Codex gate hook blocks a Codex command whatever .claude/settings.json
+// says.
 func printGate(w io.Writer, s *Status) {
 	g := summarizeGateHooks(s)
 	names := func(ids []string) string { return strings.Join(ids, ", ") }
 
 	if s.GatePolicyError != "" {
-		switch {
-		case len(g.enforce) > 0:
+		switch g.Effect() {
+		case integration.GateEffectBlocks:
 			fmt.Fprintf(w, "gate           POLICY BROKEN (%s)\n"+
 				"               the enforce hook FAILS CLOSED (%s): every hooked command blocks until the policy is fixed\n",
-				s.GatePolicyError, names(g.enforce))
-		case len(g.warn) > 0:
+				s.GatePolicyError, names(g.Enforce))
+		case integration.GateEffectFollowsPolicy:
 			fmt.Fprintf(w, "gate           POLICY BROKEN (%s)\n"+
 				"               the warn hook fails open (%s): nothing blocks, and nothing is being checked\n",
-				s.GatePolicyError, names(g.warn))
-		case len(g.unreadable) > 0:
-			// Broken policy AND unreadable hook config: the effective
-			// behaviour is unknown, not "no hook".
+				s.GatePolicyError, names(g.Warn))
+		case integration.GateEffectReportOnly:
 			fmt.Fprintf(w, "gate           POLICY BROKEN (%s)\n"+
-				"               hook configuration UNREADABLE (%s) — effective behaviour unknown\n",
-				s.GatePolicyError, render.Sanitize(names(g.unreadable)))
+				"               the report-only hook discards its exit status (%s): nothing blocks, and nothing is being checked\n",
+				s.GatePolicyError, names(g.ReportOnly))
+		case integration.GateEffectUnknown:
+			// Broken policy AND an unknown hook: the effective behaviour is
+			// unknown, not "no hook".
+			fmt.Fprintf(w, "gate           POLICY BROKEN (%s)\n"+
+				"               %s — effective behaviour unknown\n",
+				s.GatePolicyError, unknownGate(g))
 		default:
 			fmt.Fprintf(w, "gate           POLICY BROKEN (%s); no operational gate hook\n", s.GatePolicyError)
 		}
@@ -455,25 +437,64 @@ func printGate(w io.Writer, s *Status) {
 		return
 	}
 
-	switch {
-	case len(g.unreadable) > 0 && len(g.enforce)+len(g.warn) == 0:
-		fmt.Fprintf(w, "gate           policy mode %s; hook configuration UNREADABLE (%s)\n",
-			s.GatePolicyMode, render.Sanitize(names(g.unreadable)))
-	case len(g.enforce)+len(g.warn) == 0:
+	switch g.Effect() {
+	case integration.GateEffectUnknown:
+		fmt.Fprintf(w, "gate           policy mode %s; %s\n", s.GatePolicyMode, unknownGate(g))
+	case integration.GateEffectNone:
 		fmt.Fprintf(w, "gate           policy mode %s; no gate hook installed (`seamark init`, or `seamark init --client <name>`)\n",
 			s.GatePolicyMode)
-	case len(g.enforce) > 0 && len(g.warn) > 0:
-		fmt.Fprintf(w, "gate           enforce for %s (hook carries --enforce; blocking verdicts exit 2); "+
-			"the %s hook follows policy mode %s\n", names(g.enforce), names(g.warn), s.GatePolicyMode)
-	case len(g.enforce) > 0:
-		fmt.Fprintf(w, "gate           enforce (%s hook carries --enforce; blocking verdicts exit 2)\n", names(g.enforce))
-	default:
-		fmt.Fprintf(w, "gate           hook installed (%s); policy mode %s governs\n", names(g.warn), s.GatePolicyMode)
+	case integration.GateEffectReportOnly:
+		// A verdict blocks only by exit status 2, so the policy mode cannot
+		// make such a hook block.
+		fmt.Fprintf(w, "gate           report-only (%s hook discards its exit status); nothing blocks, whatever policy mode %s says\n",
+			names(g.ReportOnly), s.GatePolicyMode)
+	case integration.GateEffectBlocks:
+		if len(g.Warn) > 0 {
+			fmt.Fprintf(w, "gate           enforce for %s (hook carries --enforce; blocking verdicts exit 2); "+
+				"the %s hook follows policy mode %s\n", names(g.Enforce), names(g.Warn), s.GatePolicyMode)
+		} else {
+			fmt.Fprintf(w, "gate           enforce (%s hook carries --enforce; blocking verdicts exit 2)\n", names(g.Enforce))
+		}
+	case integration.GateEffectFollowsPolicy:
+		fmt.Fprintf(w, "gate           hook installed (%s); policy mode %s governs\n", names(g.Warn), s.GatePolicyMode)
 	}
 
-	if len(g.unreadable) > 0 && len(g.enforce)+len(g.warn) > 0 {
-		fmt.Fprintf(w, "               hook configuration UNREADABLE for %s\n", render.Sanitize(names(g.unreadable)))
+	if len(g.ReportOnly) > 0 && g.Effect() > integration.GateEffectReportOnly {
+		fmt.Fprintf(w, "               the %s hook discards its exit status, so it never blocks\n", names(g.ReportOnly))
 	}
+
+	// The unknown line above already names an unreadable document and a
+	// definition that may run a gate.
+	if g.Effect() > integration.GateEffectUnknown {
+		if len(g.Unreadable) > 0 {
+			fmt.Fprintf(w, "               hook configuration UNREADABLE for %s\n", render.Sanitize(names(g.Unreadable)))
+		}
+
+		if len(g.Possible) > 0 {
+			fmt.Fprintf(w, "               a definition of %s may also run a gate hook; seamark cannot tell what it does\n",
+				names(g.Possible))
+		}
+	}
+}
+
+// unknownGate names why the effect of the gate hooks is unknown. The
+// reason is a hook document that cannot be read, a definition that may
+// run a gate, or both. The words stay apart, because the fixes differ.
+// One needs a readable file, the other a definition that runs the gate
+// directly.
+func unknownGate(g integration.GateSummary) string {
+	var parts []string
+
+	if len(g.Unreadable) > 0 {
+		parts = append(parts, "hook configuration UNREADABLE ("+render.Sanitize(strings.Join(g.Unreadable, ", "))+")")
+	}
+
+	if len(g.Possible) > 0 {
+		parts = append(parts, "a definition of "+strings.Join(g.Possible, ", ")+
+			" may run a gate hook; seamark cannot tell what it does, so nothing is known to block")
+	}
+
+	return strings.Join(parts, "; ")
 }
 
 // originSummary renders the call-edge confidence distribution as

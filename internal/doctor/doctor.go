@@ -223,7 +223,7 @@ func checkHooks(r *Report, inspections []integration.Inspection) {
 			actions = append(actions, firstAction(edits, commands))
 		case gateHook != lessons && edits.Supported && commands.Supported:
 			state = StateWarn
-			actions = append(actions, "re-run `seamark init --client "+insp.ClientID+"` to restore the missing hook")
+			actions = append(actions, restoreAction(insp.ClientID, edits, commands, gateHook))
 		}
 
 		if gateHook || lessons {
@@ -239,6 +239,23 @@ func checkHooks(r *Report, inspections []integration.Inspection) {
 	}
 
 	r.add("hooks", state, strings.Join(parts, " · "), strings.Join(compact(actions), "; "))
+}
+
+// restoreAction returns the fix for a client with one of its two hooks.
+// The adapter names the command that installs the missing hook in this
+// workspace, because a linked document can stop the explicit setup. The
+// generic re-run serves an adapter that names no command.
+func restoreAction(clientID string, edits, commands integration.CapabilityInspection, gateHook bool) string {
+	missing := commands
+	if gateHook {
+		missing = edits
+	}
+
+	if missing.Action != "" {
+		return missing.Action
+	}
+
+	return "re-run `seamark init --client " + clientID + "` to restore the missing hook"
 }
 
 // firstAction returns the first corrective action among entries.

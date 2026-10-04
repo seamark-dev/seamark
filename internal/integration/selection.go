@@ -68,10 +68,10 @@ func ExplicitSetups(reg *Registry, ids []string, installSkills, approveTools boo
 // Codex is left out when the run asks nothing of it, so its files are
 // never read.
 func LegacySetups(root, skillsMode string, approveTools bool, gateMode string) ([]ClientSetup, error) {
-	// The approval targets are detected only when the run grants tools.
-	// The detection stats .codex/, and a plain init must never read a
-	// Codex path: an unreadable one there would stop the Claude Code
-	// setup of a run that asked nothing of Codex.
+	// The run detects the approval targets only when it grants tools.
+	// The detection calls stat on .codex/. A plain init asks nothing of
+	// Codex, so it must not touch a Codex path. A broken Codex path then
+	// cannot stop the Claude Code setup.
 	var grantClaude, grantCodex bool
 
 	if approveTools {
@@ -182,10 +182,12 @@ func UngatedHookClients(reg *Registry, setups []ClientSetup) []string {
 
 // InstalledGateMode returns the installed gate-hook mode of the
 // clients: enforce when any of them enforces, else warn when any has a
-// gate hook, else "". It reads the managed hook of each client through
-// the adapter's offline inspection, so an unselected client is never
-// read, and a definition setup does not own never sets the mode of the
-// run; the gate line names such a definition by its own mode.
+// gate hook, else "". It reads only the managed hook document of each
+// given client, through the adapter's ManagedGateMode. It never reads
+// an unselected client. The plan reads every other document after
+// this, so a full inspection here reads them twice. A definition that
+// setup does not own never sets the mode of the run. The gate line
+// names such a definition by its own mode.
 //
 // Enforce wins because one enforcing hook blocks whatever the others
 // do: the run's policy scaffold and gate line must never read weaker
@@ -201,7 +203,7 @@ func InstalledGateMode(reg *Registry, root string, clientIDs []string) string {
 			continue
 		}
 
-		switch c.Setup.Inspect(root).ManagedGateMode {
+		switch c.Setup.ManagedGateMode(root) {
 		case hooks.ModeEnforce:
 			return hooks.ModeEnforce
 		case hooks.ModeWarn:

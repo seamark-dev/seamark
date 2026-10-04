@@ -226,11 +226,11 @@ func registrationAction(clientID string, state CapabilityState) string {
 }
 
 // hookSource is one definition of a seamark hook in one of the client's
-// sources, with the evidence classification needs: the tools the client
-// runs it for, whether the shell certainly runs the hook, whether setup
-// manages the definition, and for a gate hook its mode. Classification
-// and narration follow from these fields; no consumer reads them back
-// from prose.
+// sources, with the evidence classification needs. The evidence is the
+// tools the client runs it for and whether the shell certainly runs the
+// hook. It is also whether setup manages the definition, and for a gate
+// hook its mode. Classification and narration follow from these fields;
+// no consumer reads them back from prose.
 type hookSource struct {
 	// path is the document that holds the definition, for narration.
 	path    string
@@ -239,8 +239,10 @@ type hookSource struct {
 	// a "command"-typed entry under a matcher that fires. Empty when the
 	// client never runs it for the spec's tools.
 	tools []string
-	// certain is true when the shell executes the seamark hook, and
-	// false when another program gets the seamark command as arguments.
+	// certain is true when hooks.SeamarkHookUse answers HookRuns: the
+	// shell executes the seamark hook each time. It is false for
+	// HookMayRun, for example when another program gets the seamark
+	// command as arguments.
 	certain bool
 	// managed is true for the definition setup installs and updates.
 	managed bool
@@ -296,13 +298,61 @@ func markerMode(spec hooks.Spec, runs func(marker string) bool) string {
 	return mode
 }
 
+// wrappedGateMode reads the gate mode of a command that setup does not
+// own, from one reading of the command for the spec's markers. asked
+// is the mode of the gate markers that the command runs, and mode is
+// what the command does with them. A gate verdict blocks only by exit
+// status 2, so a marker counts only when the shell can pass that status
+// to the client. When no run of the gate can pass it, the hook still
+// runs and reports, and mode is GateModeReportOnly. A hook other than
+// the gate gives "" for both.
+func wrappedGateMode(spec hooks.Spec, reading hooks.HookReading) (mode, asked string) {
+	asked = markerMode(spec, func(marker string) bool { return reading.UseFor(marker) != hooks.HookNotRun })
+	mode = markerMode(spec, reading.StatusPassesFor)
+
+	if mode == "" && asked != "" {
+		mode = GateModeReportOnly
+	}
+
+	return mode, asked
+}
+
+// discardsStatusFinding names a definition that runs the gate and
+// discards its exit status, for example with "|| true", "&", or "| cat".
+// mode and asked come from wrappedGateMode. The finding is a warning
+// whatever the definition asked for. With --enforce, the user asked for
+// blocking and gets none. Without it, an enforcing policy file blocks
+// nothing either, and doctor prints warnings only, so an information
+// finding would leave the user to believe that the policy is active.
+// Setup never edits the definition, so the action says what to change.
+func discardsStatusFinding(path, command, mode, asked string) Finding {
+	finding := Finding{
+		Level: FindingWarning,
+		Path:  path,
+		Reason: fmt.Sprintf("has `%s`, which discards the exit status of the seamark gate hook, "+
+			"so no verdict blocks, whatever --enforce or .seamark/policy.yaml says", describeCommand(command)),
+		Action: "run the seamark gate as the last command of that definition, in the foreground, " +
+			"so its exit status 2 reaches the client",
+	}
+
+	// The command can also run a warn gate whose status passes. That run
+	// still blocks under an enforcing policy file.
+	if mode == hooks.ModeWarn {
+		finding.Reason = fmt.Sprintf("has `%s`, which discards the exit status of the seamark gate hook with --enforce, "+
+			"so a verdict blocks only when .seamark/policy.yaml enforces", describeCommand(command))
+	}
+
+	return finding
+}
+
 // documentSources lists every definition of the spec's hook in one hook
-// document: the owned commands, which setup manages when the document
-// is the managed one, and the wrapped commands, which setup never
-// manages. Each source keeps the tools the client runs it for. A
-// definition the client never runs for the spec's tools (another type,
-// or a matcher that never fires) is named in an info finding and has no
-// tools, so it counts for nothing.
+// document. The owned commands are such definitions, and setup manages
+// them when the document is the managed one. The wrapped commands are
+// such definitions too, and setup never manages them. Each source keeps
+// the tools the client runs it for. A definition the client never runs
+// for the spec's tools has another type, or a matcher that never fires.
+// It is named in an info finding and has no tools, so it counts for
+// nothing.
 func documentSources(findings *[]Finding, document map[string]any, fires hooks.MatcherRule, path string, spec hooks.Spec, managed bool) []hookSource {
 	var sources []hookSource
 
@@ -311,17 +361,21 @@ func documentSources(findings *[]Finding, document map[string]any, fires hooks.M
 
 	hooks.ForEachCommand(eventHooks, func(matcher string, h map[string]any, cmd string) {
 		source := hookSource{path: path, command: cmd}
+		// asked is the gate mode of the markers that the command runs. A
+		// wrapper that discards the exit status gets another mode.
+		asked := ""
 
-		switch use := hooks.SeamarkHookUse(cmd, spec.Markers()); {
-		case hooks.OwnedBySeamark(cmd, spec.Markers()):
+		// An owned command needs no parse: ownership is a text rule. Any
+		// other command is read once, and the reading answers every
+		// question about it.
+		if hooks.OwnedBySeamark(cmd, spec.Markers()) {
 			source.certain, source.managed = true, managed
 			source.mode = markerMode(spec, func(marker string) bool { return hooks.OwnedBySeamark(cmd, []string{marker}) })
-		case use != hooks.HookNotRun:
-			source.certain = use == hooks.HookRuns
-			source.mode = markerMode(spec, func(marker string) bool {
-				return hooks.SeamarkHookUse(cmd, []string{marker}) != hooks.HookNotRun
-			})
-		default:
+			asked = source.mode
+		} else if reading := hooks.ReadHook(cmd, spec.Markers()); reading.Use() != hooks.HookNotRun {
+			source.certain = reading.Use() == hooks.HookRuns
+			source.mode, asked = wrappedGateMode(spec, reading)
+		} else {
 			return
 		}
 
@@ -333,6 +387,12 @@ func documentSources(findings *[]Finding, document map[string]any, fires hooks.M
 			*findings = append(*findings, neverFiresFinding(path, cmd, spec.Event, matcher, spec))
 
 			return
+		}
+
+		// A definition that never fires gates nothing, so only a running
+		// one gets the finding about its exit status.
+		if source.mode != asked {
+			*findings = append(*findings, discardsStatusFinding(path, cmd, source.mode, asked))
 		}
 
 		sources = append(sources, source)
@@ -385,48 +445,78 @@ func coveredTools(spec hooks.Spec, sources []hookSource, keep func(hookSource) b
 	return tools
 }
 
-// hookMode returns the gate mode of the sources that certainly run the
-// hook: enforce when any enforces, warn when any runs, else "". One
-// enforcing definition blocks whatever the others say.
-func hookMode(sources []hookSource) string {
+// hookMode returns the gate mode of the sources that pass keep. It is
+// enforce when any of them enforces. It is warn when any of them
+// follows the policy file. It is GateModeReportOnly when each of them
+// discards its exit status, and "" without such a source. One enforcing
+// definition blocks whatever the others say. A warn definition blocks
+// when the policy file enforces.
+//
+// The callers keep the certain sources apart from the uncertain ones. A
+// source that only can run the gate must not count as one that does. An
+// "echo" with the gate command as its arguments blocks nothing. It must
+// not count as nothing either, because a wrapper with the same words
+// blocks. So the uncertain sources get a mode of their own, and every
+// consumer names it as possible.
+func hookMode(sources []hookSource, keep func(hookSource) bool) string {
 	mode := ""
 
 	for _, s := range sources {
-		if !s.certain || s.mode == "" {
+		if s.mode == "" || !keep(s) {
 			continue
 		}
 
-		if s.mode == hooks.ModeEnforce {
+		switch s.mode {
+		case hooks.ModeEnforce:
 			return hooks.ModeEnforce
+		case hooks.ModeWarn:
+			mode = hooks.ModeWarn
+		default:
+			if mode == "" {
+				mode = s.mode
+			}
 		}
-
-		mode = hooks.ModeWarn
 	}
 
 	return mode
 }
 
+// certainSource keeps the sources that certainly run the hook.
+func certainSource(s hookSource) bool { return s.certain }
+
+// uncertainSource keeps the sources that only can run the hook.
+func uncertainSource(s hookSource) bool { return !s.certain }
+
+// anySource keeps every source.
+func anySource(hookSource) bool { return true }
+
 // missingTools lists the spec's tools that no certain source covers.
 func missingTools(spec hooks.Spec, sources []hookSource) []string {
-	certain := coveredTools(spec, sources, func(s hookSource) bool { return s.certain })
+	certain := coveredTools(spec, sources, certainSource)
 
 	return slices.DeleteFunc(slices.Clone(spec.Tools()), func(tool string) bool { return slices.Contains(certain, tool) })
 }
 
 // classifyHook fills one hook entry from its sources. The tools that
-// certain sources cover decide the state: all of the spec's tools make
-// the hook current, some make it partial, and the action then names the
+// certain sources cover decide the state. All of the spec's tools make
+// the hook current, and some make it partial. The action then names the
 // matcher and the document that holds the hook, because setup never
 // rewrites the matcher of an existing entry. Without a certain source,
 // an uncertain one makes the hook partial, and nothing makes it absent.
 // The detail names the mode of a gate hook and the source of a hook
-// setup does not manage.
+// setup does not manage. The mode is that of the certain sources, or of
+// the uncertain ones when only those exist and the detail says "may".
 func classifyHook(entry *CapabilityInspection, spec hooks.Spec, sources []hookSource) {
-	certain := coveredTools(spec, sources, func(s hookSource) bool { return s.certain })
-	possible := coveredTools(spec, sources, func(s hookSource) bool { return !s.certain })
+	certain := coveredTools(spec, sources, certainSource)
+	possible := coveredTools(spec, sources, uncertainSource)
 	name := spec.Name + " hook"
 
-	if mode := hookMode(sources); mode != "" {
+	mode := hookMode(sources, certainSource)
+	if mode == "" {
+		mode = hookMode(sources, uncertainSource)
+	}
+
+	if mode != "" {
 		name += " (" + mode + ")"
 	}
 
@@ -480,8 +570,8 @@ func sourcePaths(sources []hookSource, certainOnly bool) string {
 // reason never starts with the path: every consumer prefixes it.
 func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) {
 	managed := managedSources(sources)
-	managedTools := coveredTools(spec, managed, func(s hookSource) bool { return s.certain })
-	managedMode := hookMode(managed)
+	managedTools := coveredTools(spec, managed, certainSource)
+	managedMode := hookMode(managed, anySource)
 
 	for _, s := range unmanagedSources(sources) {
 		command := describeCommand(s.command)
@@ -540,12 +630,14 @@ func toolNames(tools []string) []string {
 
 // neverFiresFinding names a definition the client never runs for the
 // spec's tools. Setup and inspection share it, so both say it alike.
+// Path names the document that holds the definition. The reason does
+// not repeat it, because every consumer prints the path first.
 func neverFiresFinding(path, command, event, matcher string, spec hooks.Spec) Finding {
 	return Finding{
 		Level: FindingInfo,
 		Path:  path,
-		Reason: fmt.Sprintf("%s has `%s` under %s %q, which never runs for %s %s; it is not a handler of that hook",
-			path, describeCommand(command), event, render.Sanitize(matcher), spec.Event, strings.Join(toolNames(spec.Tools()), ", ")),
+		Reason: fmt.Sprintf("has `%s` under %s %q, which never runs for %s %s; it is not a handler of that hook",
+			describeCommand(command), event, render.Sanitize(matcher), spec.Event, strings.Join(toolNames(spec.Tools()), ", ")),
 	}
 }
 
@@ -557,6 +649,38 @@ func unreadableHooks(entries []*CapabilityInspection, path string, err error) {
 		entry.State = StateUnreadable
 		entry.Detail = unreadableDetail(err)
 		entry.Action = "fix or move " + path + ", then re-run setup"
+	}
+}
+
+// linkActions gives each unreadable entry of a linked document the
+// action that can clear it. documents maps a capability to the owned
+// document that holds it. Setup never writes an owned document through
+// a symbolic link, so "re-run setup" alone cannot clear that state.
+func linkActions(root string, entries []CapabilityInspection, documents map[Capability]string) {
+	for i := range entries {
+		path, ok := documents[entries[i].Capability]
+		if !ok || entries[i].State != StateUnreadable {
+			continue
+		}
+
+		// A failed check keeps the generic action, which still names the
+		// document.
+		if link, err := skills.SymlinkIn(root, path); err == nil && link != "" {
+			entries[i].Action = fmt.Sprintf("replace the symlink at %s with the real file or directory, then re-run setup; "+
+				"setup never writes %s through a link", link, path)
+		}
+	}
+}
+
+// restoreHooks gives each absent hook entry an action that installs the
+// missing hook in this workspace. Doctor prints the action for a client
+// that runs only some of its hooks. capabilities names the hooks that
+// setup installs.
+func restoreHooks(entries []CapabilityInspection, action string, capabilities ...Capability) {
+	for i := range entries {
+		if entries[i].State == StateAbsent && slices.Contains(capabilities, entries[i].Capability) {
+			entries[i].Action = action
+		}
 	}
 }
 

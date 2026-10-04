@@ -185,6 +185,14 @@ func (c Client) clone() Client {
 type SetupAdapter interface {
 	// Inspect reports the current configuration state without writing.
 	Inspect(root string) Inspection
+	// ManagedGateMode returns the mode of the gate hook that setup
+	// manages: warn, enforce, or "" when none runs or the adapter has no
+	// gate hook. It reads the managed hook document alone. init calls it
+	// before it plans, and the plan reads every document again, so a full
+	// Inspect here doubles the reads. The value must equal Inspect's
+	// ManagedGateMode and the mode that Plan keeps, so the adapter reads
+	// all three through one helper.
+	ManagedGateMode(root string) string
 	// Plan composes every edit to the client's native documents for one
 	// request. Each native document appears at most once in Writes.
 	Plan(root, binary string, request ClientSetup) (ClientPlan, error)
@@ -521,16 +529,31 @@ type Inspection struct {
 	Setup        SetupSupport           `json:"setup"`
 	Capabilities []CapabilityInspection `json:"capabilities"`
 	// GateMode is the mode the client's gate hooks run in, from every
-	// definition that certainly runs one, managed or not: enforce when
-	// any enforces, warn when any runs, empty when none runs or the
-	// document cannot be read. One enforcing definition blocks whatever
-	// the managed hook says. The repository policy file can still
-	// enforce on top of a warn hook.
+	// definition that certainly runs one, managed or not. It is enforce
+	// when any enforces, and warn when any follows the policy file. It is
+	// GateModeReportOnly when each one discards its exit status. It is
+	// empty when none runs or the document cannot be read. One enforcing
+	// definition blocks whatever the managed hook says. The repository
+	// policy file can still enforce on top of a warn hook, and never on
+	// top of a report-only one.
 	GateMode string `json:"gate_mode,omitempty"`
+	// PossibleGateMode is the mode of the definitions that can run a
+	// gate hook, by the rule of GateMode. The reader cannot tell whether
+	// they do. It is empty without such a definition. A reader must not
+	// take it for GateMode. A gate that may enforce is not one that
+	// enforces, and not one that never blocks.
+	PossibleGateMode string `json:"possible_gate_mode,omitempty"`
 	// ManagedGateMode is the mode of the hook setup manages, or empty.
 	// Setup keeps it when no mode is requested; it never reads a mode
 	// from a definition it does not own.
 	ManagedGateMode string `json:"managed_gate_mode,omitempty"`
+	// HookDocumentError is the reason when the hook document that setup
+	// manages cannot be read, and empty otherwise. The reason names the
+	// document and is sanitized. The hook entries carry the same reason
+	// in their detail, after the word "unreadable". Status repeats it in
+	// its legacy gate_hook_error field, so no consumer reads it back from
+	// the detail.
+	HookDocumentError string `json:"hook_document_error,omitempty"`
 	// Findings name the limitations and the duplicate handlers the
 	// adapter sees: trust it cannot read, a receiving context it does not
 	// identify, a second source that runs the same hook.
@@ -732,6 +755,13 @@ type FileKeep struct {
 	Narrate Narrator
 }
 
+// GateModeReportOnly is the mode of a gate hook whose definition
+// discards the exit status of the hook, for example with "|| true" or
+// "&". The hook runs and reports its verdicts. A verdict blocks only by
+// exit status 2, so none blocks, whatever --enforce or the policy file
+// says. Only a definition that setup does not manage has this mode.
+const GateModeReportOnly = "report-only"
+
 // GateHook is one command-gate hook that the client really runs after
 // the plan is applied. A plan lists every one it knows: the hook setup
 // manages, and a hook in another source that setup found and left as it
@@ -743,11 +773,17 @@ type GateHook struct {
 	ClientID string
 	// Path is the document that holds the hook, repository-relative.
 	Path string
-	// Mode is warn or enforce.
+	// Mode is warn, enforce, or GateModeReportOnly. Only a hook that
+	// setup does not manage can be report-only.
 	Mode string
 	// Managed is true for the hook setup installs and updates. False
 	// means another source, which setup never edits.
 	Managed bool
+	// Uncertain is true when the reader cannot tell whether the
+	// definition runs the gate. For example, another program gets the
+	// gate command as its arguments. Mode is then the mode the
+	// definition has when it runs.
+	Uncertain bool
 }
 
 // ClientPlan is one client's read guards, composed writes, kept

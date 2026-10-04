@@ -32,7 +32,10 @@ usage() {
 MODE=$1
 CLIENT=$2
 [ -x "$3" ] || usage
-BIN=$(cd "$(dirname "$3")" && pwd)/$(basename "$3")
+
+# The shared helpers sit beside this script.
+. "$(dirname "$0")/smoke-lib.sh"
+resolve_binary "$3"
 
 case "$MODE" in
     check|smoke) ;;
@@ -44,10 +47,13 @@ case "$CLIENT" in
     *) echo "$0: unknown client \"$CLIENT\" (known: claude, codex)" >&2; exit 2 ;;
 esac
 
-# The client executable and the files setup writes for it.
+# The client executable, the files setup writes for it, and the client
+# flag at the end of its hook markers. Claude Code hooks carry no
+# --client flag, because a hook command without the flag reads a
+# Claude Code event.
 case "$CLIENT" in
-    claude) CLI=claude; HOOKS_FILE=.claude/settings.json; REGISTRATION_FILE=.mcp.json ;;
-    codex)  CLI=codex;  HOOKS_FILE=.codex/hooks.json;     REGISTRATION_FILE=.codex/config.toml ;;
+    claude) CLI=claude; HOOKS_FILE=.claude/settings.json; REGISTRATION_FILE=.mcp.json;          HOOK_FLAG= ;;
+    codex)  CLI=codex;  HOOKS_FILE=.codex/hooks.json;     REGISTRATION_FILE=.codex/config.toml; HOOK_FLAG=" --client codex" ;;
 esac
 
 SEAMARK_REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -55,6 +61,9 @@ SEAMARK_REPO=$(cd "$(dirname "$0")/.." && pwd)
 OK=0
 FAILED=0
 BLOCKED=0
+# summary sets SUMMARIZED. The exit trap reads it, so a run that already
+# printed its summary does not print a second one.
+SUMMARIZED=
 
 ok()      { OK=$((OK + 1));           echo "  ok       $1"; }
 fail()    { FAILED=$((FAILED + 1));   echo "  FAIL     $1" >&2; }
@@ -62,6 +71,8 @@ blocked() { BLOCKED=$((BLOCKED + 1)); echo "  blocked  $1"; }
 
 # expect <label> <needle> <cmd...>: ok when the command exits zero AND
 # prints the needle. Never `cmd | grep`: a pipeline's status is grep's.
+# The output stays in $out, so the next check can read it without a
+# second run.
 expect() {
     label=$1
     needle=$2
@@ -72,6 +83,25 @@ expect() {
             ok "$label"
         else
             fail "$label (output lacks \"$needle\")"
+        fi
+    else
+        fail "$label (exit status $?: $(printf '%s\n' "$out" | tail -1))"
+    fi
+}
+
+# expect_lacks <label> <needle> <cmd...>: ok when the command exits
+# zero AND never prints the needle. A failed command can stop before
+# the line that holds the needle, so its output proves nothing.
+expect_lacks() {
+    label=$1
+    needle=$2
+    shift 2
+
+    if out=$("$@" 2>&1); then
+        if printf '%s\n' "$out" | grep -q -- "$needle"; then
+            fail "$label (\"$needle\" found)"
+        else
+            ok "$label"
         fi
     else
         fail "$label (exit status $?: $(printf '%s\n' "$out" | tail -1))"
@@ -91,7 +121,27 @@ absent() {
     fi
 }
 
+# snapshot: prints a checksum line for every file in the repository
+# outside .git, in path order. Two snapshots differ when a file is
+# added, removed, or changed.
+snapshot() {
+    find . -path ./.git -prune -o -type f -exec cksum {} + | sort -k 3
+}
+
+# changed_since <snapshot-file>: prints on one line each path whose
+# checksum line differs from the saved snapshot, and each file that is
+# newer than the snapshot file. Setup writes a new file and renames it
+# over the old one. So a rewrite with the same bytes or a new mode also
+# gives the file a new modification time.
+changed_since() {
+    {
+        snapshot | diff "$1" - | sed -n 's|^[<>] [0-9]* [0-9]* \./||p'
+        find . -path ./.git -prune -o -type f -newer "$1" -print | sed 's|^\./||'
+    } | sort -u | paste -s -d ' ' -
+}
+
 summary() {
+    SUMMARIZED=1
     echo
     echo "agent-integration $MODE ($CLIENT): $OK ok, $FAILED failed, $BLOCKED blocked"
 
@@ -123,8 +173,23 @@ fi
 echo "  date      $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo
 
+# Under set -e, a failed command outside the checks stops the script,
+# for example a fixture step. The exit trap then reports a blocked
+# check, because the later checks produce no evidence. It also prints
+# the summary, so every run ends with a result.
+TMP=
+finish() {
+    status=$?
+    [ -z "$TMP" ] || rm -rf "$TMP"
+
+    if [ -z "$SUMMARIZED" ]; then
+        blocked "the run stopped: a command outside the checks failed (exit status $status)"
+        summary
+    fi
+}
+trap finish EXIT
+
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
 
 # Codex keeps login, rules, and trust under CODEX_HOME. A scratch home
 # keeps every run away from the user's records; the smoke mode needs
@@ -171,36 +236,38 @@ check_mode() {
     [ -f "$HOOKS_FILE" ] && ok "$HOOKS_FILE written" || fail "$HOOKS_FILE missing"
     [ -f "$REGISTRATION_FILE" ] && ok "$REGISTRATION_FILE written" || fail "$REGISTRATION_FILE missing"
 
+    # Idempotence: a second init changes no file and narrates no write.
+    # The narrators start a write line with "wrote", "updated", or
+    # "approved", and note a removed hook flag with "removed". The
+    # snapshot and the file times also catch a write that no line names.
+    snapshot > "$TMP/before-second-init"
     expect "second init keeps every file" "kept" "$BIN" init --client "$CLIENT" --skills --approve-tools
-    if "$BIN" init --client "$CLIENT" --skills --approve-tools 2>&1 | grep -q "wrote"; then
-        fail "second init wrote a file again (not idempotent)"
+    write_line=$(printf '%s\n' "$out" | grep -E '^ +(note +)?(wrote|updated|approved|removed) ' | head -1 | sed 's/^ *//')
+    changed=$(changed_since "$TMP/before-second-init")
+
+    if [ -n "$write_line" ]; then
+        fail "second init narrates a write: $write_line"
     else
-        ok "second init writes nothing"
+        ok "second init narrates no write"
+    fi
+
+    if [ -n "$changed" ]; then
+        fail "second init changed files: $changed"
+    else
+        ok "second init changes no file"
     fi
 
     absent "no credential in the generated files" "$CANARY" "$HOOKS_FILE" "$REGISTRATION_FILE" .seamark/config.yaml
-    out=$("$BIN" init --client "$CLIENT" --skills --approve-tools --print 2>&1; "$BIN" doctor 2>&1; "$BIN" status --json 2>&1 || true)
-    if printf '%s' "$out" | grep -q -- "$CANARY"; then
-        fail "a credential reached the setup or diagnostic output"
-    else
-        ok "no credential in the setup, doctor, or status output"
-    fi
+    # One check per command. Under set -e, a failed command inside one
+    # shared substitution stops the script before it prints a result.
+    expect_lacks "no credential in the init --print output" "$CANARY" \
+        "$BIN" init --client "$CLIENT" --skills --approve-tools --print
 
     echo "generated hook commands"
-    # The commands as written in the hooks file: an absolute binary path
-    # and the client flag. Each must run as written on a native-shaped
-    # payload and never block a harmless command.
-    GATE_CMD=$(grep -o '"[^"]* gate --hook --client '"$CLIENT"'"' "$HOOKS_FILE" 2>/dev/null | head -1 | tr -d '"' || true)
-    LESSONS_CMD=$(grep -o '"[^"]* lessons --hook --client '"$CLIENT"'"' "$HOOKS_FILE" 2>/dev/null | head -1 | tr -d '"' || true)
-
-    if [ "$CLIENT" = claude ]; then
-        # Claude Code hooks carry no --client flag: the bare command is the
-        # Claude Code form.
-        GATE_CMD=$(grep -o '"[^"]* gate --hook"' "$HOOKS_FILE" | head -1 | tr -d '"' || true)
-        LESSONS_CMD=$(grep -o '"[^"]* lessons --hook"' "$HOOKS_FILE" | head -1 | tr -d '"' || true)
-    fi
-
-    if [ -n "$GATE_CMD" ]; then
+    # Each command must be the exact command setup writes for BIN: its
+    # absolute path, then the marker. Each must run as written on a
+    # native-shaped payload and never block a harmless command.
+    if GATE_CMD=$(hook_command "$HOOKS_FILE" "gate --hook$HOOK_FLAG"); then
         payload=$(printf '{"session_id":"native-check","cwd":"%s","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"call_native_1","tool_input":{"command":"ls -la"}}' "$REPO")
         if printf '%s' "$payload" | sh -c "$GATE_CMD" >/dev/null 2>&1; then
             ok "gate hook runs as written and lets a harmless command through"
@@ -208,10 +275,10 @@ check_mode() {
             fail "gate hook command failed: $GATE_CMD"
         fi
     else
-        fail "no gate hook command found in $HOOKS_FILE"
+        fail "no gate hook command for $BIN in $HOOKS_FILE"
     fi
 
-    if [ -n "$LESSONS_CMD" ]; then
+    if LESSONS_CMD=$(hook_command "$HOOKS_FILE" "lessons --hook$HOOK_FLAG"); then
         case "$CLIENT" in
             codex)  edit='{"tool_name":"apply_patch","tool_input":{"command":"*** Begin Patch\n*** Add File: docs/new.md\n+hello\n*** End Patch\n"}}' ;;
             claude) edit='{"tool_name":"Write","tool_input":{"file_path":"docs/new.md","content":"hello"}}' ;;
@@ -223,7 +290,7 @@ check_mode() {
             fail "lessons hook command failed: $LESSONS_CMD"
         fi
     else
-        fail "no lessons hook command found in $HOOKS_FILE"
+        fail "no lessons hook command for $BIN in $HOOKS_FILE"
     fi
 
     echo "offline diagnostics"
@@ -232,6 +299,11 @@ check_mode() {
     expect "doctor names the $CLIENT hooks" "$CLIENT gate (warn) + lessons hooks installed" "$BIN" doctor
     expect "status names the $CLIENT registration" "$CLIENT" "$BIN" status
     expect "status --json carries the clients array" '"clients"' "$BIN" status --json
+    # Status exits non-zero without an index, so its leak check runs
+    # after `index`. The doctor leak check runs here too, next to the
+    # other doctor checks.
+    expect_lacks "no credential in the doctor output" "$CANARY" "$BIN" doctor
+    expect_lacks "no credential in the status --json output" "$CANARY" "$BIN" status --json
 
     if [ "$CLIENT" = codex ]; then
         echo "native registration"
@@ -351,7 +423,10 @@ GO
     mv pkg/store/cache.go.new pkg/store/cache.go
     git commit -qam "fix: reset every stats field, not only the total"
 
-    "$BIN" init --client "$CLIENT" >/dev/null
+    # Every later step needs the setup. A failed init, or any failed
+    # check before it, stops the run here, so that it spends no tokens.
+    expect "init --client $CLIENT" "" "$BIN" init --client "$CLIENT"
+    [ "$FAILED" -eq 0 ] || summary
     printf 'agent:\n  cli: %s\n' "$CLIENT" >> .seamark/config.yaml
     expect "index --fixes-only mines the fix commits" "3 findings" "$BIN" index --fixes-only
     git add -A

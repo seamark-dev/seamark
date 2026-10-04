@@ -126,36 +126,18 @@ func IsSeamarkBinary(command string) bool {
 	return strings.TrimSuffix(filepath.Base(command), ".exe") == "seamark"
 }
 
-// InstalledGateMode reports the mode of an OPERATIONAL gate hook in a
-// parsed settings map: enforce, warn, or "" when none is present. A gate
-// command only counts when wired the way Claude Code will actually run
-// it — a "command"-typed hook whose matcher covers Bash; the same
-// command under another matcher never fires on shell commands and must
-// not report as installed.
+// InstalledGateMode reports the mode of seamark's own gate hook in a
+// parsed .claude/settings.json: enforce, warn, or "" when none runs. A
+// gate command counts only when Claude Code runs it for Bash: a
+// "command"-typed hook under a matcher that fires by ClaudeMatcher.
+// Enforce wins, because one enforcing hook blocks whatever the others do.
+//
+// Setup, inspection, and status read the mode through this one rule. A
+// re-run therefore keeps the mode that doctor and status report. The
+// rule must be ClaudeMatcher: a substring test for "Bash" misses "*", an
+// empty matcher, and an expression such as "Ba.*".
 func InstalledGateMode(settings map[string]any) string {
-	hooks, _ := settings["hooks"].(map[string]any)
-	pre, _ := hooks["PreToolUse"].([]any)
-
-	mode := ""
-
-	ForEachCommand(pre, func(matcher string, h map[string]any, cmd string) {
-		if !strings.Contains(matcher, "Bash") {
-			return
-		}
-
-		if t, _ := h["type"].(string); t != "command" {
-			return
-		}
-
-		switch {
-		case OwnedBySeamark(cmd, []string{GateMarker(ModeEnforce)}):
-			mode = ModeEnforce
-		case OwnedBySeamark(cmd, []string{GateMarker(ModeWarn)}):
-			mode = ModeWarn
-		}
-	})
-
-	return mode
+	return EffectiveGateMode(settings, ClaudeSpecs(ModeWarn)[0], ClaudeMatcher)
 }
 
 // LessonsMarker is the edit-lessons hook's argument tail.
@@ -204,32 +186,6 @@ func gateMarkerMode(marker string) string {
 	}
 
 	return ""
-}
-
-// LessonsHookInstalled reports whether seamark's edit-lessons hook is
-// operational in a parsed settings map: a "command"-typed hook under a
-// matcher covering Edit tools.
-func LessonsHookInstalled(settings map[string]any) bool {
-	hooks, _ := settings["hooks"].(map[string]any)
-	pre, _ := hooks["PreToolUse"].([]any)
-
-	found := false
-
-	ForEachCommand(pre, func(matcher string, h map[string]any, cmd string) {
-		if !strings.Contains(matcher, "Edit") {
-			return
-		}
-
-		if t, _ := h["type"].(string); t != "command" {
-			return
-		}
-
-		if OwnedBySeamark(cmd, []string{LessonsMarker}) {
-			found = true
-		}
-	})
-
-	return found
 }
 
 // ReadSettings loads <root>/.claude/settings.json; a missing file is an
@@ -325,18 +281,4 @@ func FormatDocumentExact(document map[string]any) ([]byte, error) {
 	}
 
 	return out.Bytes(), nil
-}
-
-// InstalledGateModeAt reads <root>/.claude/settings.json and reports the
-// installed gate-hook mode; "" with a nil error when the file is absent
-// or simply carries no seamark gate hook. An unreadable or unparseable
-// file is an error — "your hook configuration cannot be read" and "no
-// hook installed" are different findings and must not be conflated.
-func InstalledGateModeAt(root string) (string, error) {
-	settings, err := ReadSettings(root)
-	if err != nil {
-		return "", err
-	}
-
-	return InstalledGateMode(settings), nil
 }

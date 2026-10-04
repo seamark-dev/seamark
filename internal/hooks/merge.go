@@ -122,45 +122,6 @@ func CodexSpecs(gateMode string) []Spec {
 	}
 }
 
-// WrappedCommand is a hook command that setup does not own and that
-// runs, or can run, a seamark hook. Matcher and Type are the entry's,
-// so a caller can tell whether the client runs the command for the
-// tools of the hook: a wrapper under another matcher runs nothing for
-// them, and it must not count as a handler.
-type WrappedCommand struct {
-	Command string
-	// Certain is true when the shell executes the seamark hook, and
-	// false when another program gets the seamark command as arguments.
-	Certain bool
-	Matcher string
-	Type    string
-}
-
-// Wrapped returns the commands of a parsed hook document that run the
-// hook of the spec, or can run it, and are not seamark's own command:
-// a wrapper, a shell condition, a redirect. Merge does not touch such a
-// command. A caller that adds the spec beside it makes the hook run
-// twice. A command that only prints the hook text is not in the result.
-func Wrapped(settings map[string]any, spec Spec) []WrappedCommand {
-	var out []WrappedCommand
-
-	hookMap, _ := settings["hooks"].(map[string]any)
-	eventHooks, _ := hookMap[spec.Event].([]any)
-
-	ForEachCommand(eventHooks, func(matcher string, h map[string]any, cmd string) {
-		if OwnedBySeamark(cmd, spec.Markers()) {
-			return
-		}
-
-		if use := SeamarkHookUse(cmd, spec.Markers()); use != HookNotRun {
-			hookType, _ := h["type"].(string)
-			out = append(out, WrappedCommand{Command: cmd, Certain: use == HookRuns, Matcher: matcher, Type: hookType})
-		}
-	})
-
-	return out
-}
-
 // ManagedRuns reports whether the client runs the managed command of
 // the spec, spec.Command(bin), for a tool of the spec: a "command"-typed
 // entry with exactly that command under a matcher that fires. The check
@@ -199,28 +160,62 @@ func Owned(settings map[string]any, spec Spec) bool {
 	return found
 }
 
+// Merged reports what Merge did to a document. The narration of a
+// setup run reads it, so the narration describes the rewrite that
+// Merge made, not one that the narrator works out again.
+type Merged struct {
+	// Changed is true when the document changed.
+	Changed bool
+	// Rewritten lists each owned command that Merge replaced, in
+	// document order.
+	Rewritten []Rewrite
+}
+
+// Rewrite is one owned command that Merge replaced with the command of
+// a spec.
+type Rewrite struct {
+	// From is the command as the document held it.
+	From string
+	// To is the command that Merge wrote in its place.
+	To string
+}
+
+// RemovesEnforce reports whether a rewrite replaced a command with the
+// enforce marker by one without it. Setup narrates such a rewrite,
+// because a plain re-run can remove a flag that the user wrote. The
+// caller passes the enforce marker of its client.
+func (m Merged) RemovesEnforce(enforceMarker string) bool {
+	return slices.ContainsFunc(m.Rewritten, func(r Rewrite) bool {
+		return OwnedBySeamark(r.From, []string{enforceMarker}) && !OwnedBySeamark(r.To, []string{enforceMarker})
+	})
+}
+
 // Merge adds the hooks into a parsed hook document. It keeps every
 // other hook, and it updates a seamark hook that is already present,
 // so a re-run never adds a duplicate. It reports whether the document
-// changed. A "hooks" field or an event field with the wrong type is an
-// error: init must never overwrite the user's data to install a hook.
-func Merge(settings map[string]any, bin string, specs []Spec) (changed bool, err error) {
+// changed and which owned commands it rewrote. A "hooks" field or an
+// event field with the wrong type is an error: init must never
+// overwrite the user's data to install a hook.
+func Merge(settings map[string]any, bin string, specs []Spec) (Merged, error) {
+	var merged Merged
+
 	hookMap, err := ChildMap(settings, "hooks")
 	if err != nil {
-		return false, err
+		return Merged{}, err
 	}
 
 	for _, spec := range specs {
 		eventHooks, err := ChildSlice(hookMap, spec.Event)
 		if err != nil {
-			return false, err
+			return Merged{}, err
 		}
 
 		want := spec.Command(bin)
 
-		found, updated := applyExisting(eventHooks, spec.Markers(), want)
+		found, rewritten := applyExisting(eventHooks, spec.Markers(), want)
 		if found {
-			changed = changed || updated
+			merged.Changed = merged.Changed || len(rewritten) > 0
+			merged.Rewritten = append(merged.Rewritten, rewritten...)
 
 			continue
 		}
@@ -239,10 +234,10 @@ func Merge(settings map[string]any, bin string, specs []Spec) (changed bool, err
 
 		eventHooks = append(eventHooks, entry)
 		hookMap[spec.Event] = eventHooks
-		changed = true
+		merged.Changed = true
 	}
 
-	return changed, nil
+	return merged, nil
 }
 
 // MatcherRule reports whether an installed matcher fires for one tool.
@@ -400,8 +395,9 @@ func CodexMatcher(matcher, tool string) bool {
 // applyExisting rewrites seamark's own hook command to want when it is
 // present. OwnedBySeamark recognizes the command, so an unrelated
 // command that only contains or ends with the marker text stays as it
-// is. It reports whether such a hook exists and whether it changed.
-func applyExisting(eventHooks []any, markers []string, want string) (found, updated bool) {
+// is. It reports whether such a hook exists and each command it
+// rewrote.
+func applyExisting(eventHooks []any, markers []string, want string) (found bool, rewritten []Rewrite) {
 	ForEachCommand(eventHooks, func(_ string, h map[string]any, cmd string) {
 		if !OwnedBySeamark(cmd, markers) {
 			return
@@ -411,11 +407,11 @@ func applyExisting(eventHooks []any, markers []string, want string) (found, upda
 
 		if cmd != want {
 			h["command"] = want
-			updated = true
+			rewritten = append(rewritten, Rewrite{From: cmd, To: want})
 		}
 	})
 
-	return found, updated
+	return found, rewritten
 }
 
 // shellSpecial lists the characters that make a shell split or

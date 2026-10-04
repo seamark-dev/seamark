@@ -11,3 +11,8 @@ const ThirdID = thirdID
 
 // ThirdClient returns the test-only third client descriptor.
 var ThirdClient = thirdClient
+
+// RepeatedPathReasons returns each finding that names a path where the
+// consumer prints one already. The matrix tests in the external package
+// apply the same rule.
+var RepeatedPathReasons = repeatedPathReasons

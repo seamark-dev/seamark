@@ -69,6 +69,9 @@ type docSetup struct{ path, body string }
 
 func (docSetup) Inspect(string) Inspection { return Inspection{} }
 
+// ManagedGateMode is empty: the adapter installs no gate hook.
+func (docSetup) ManagedGateMode(string) string { return "" }
+
 func (d docSetup) Plan(root, _ string, _ ClientSetup) (ClientPlan, error) {
 	guard, existing, err := ReadGuarded(root, d.path)
 	if err != nil {
@@ -118,6 +121,7 @@ func mustPlan(t *testing.T, reg *Registry, req SetupRequest) *SetupPlan {
 
 	plan, err := PlanSetup(reg, req)
 	require.NoError(t, err)
+	assert.Empty(t, repeatedPathReasons(plan.Findings), "a finding names its path once")
 
 	return plan
 }
@@ -663,46 +667,13 @@ func TestAForeignSkillThatIsNotADirectoryIsKept(t *testing.T) {
 	}
 }
 
-func TestSymlinksNeverRedirectAReadOrAWrite(t *testing.T) {
-	outside := t.TempDir()
-	writeRel(t, outside, "settings.json", "{}")
-	writeRel(t, outside, "config.toml", "")
+func TestANonRegularFileIsRefused(t *testing.T) {
+	// The link cases are in setup_unix_test.go.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".mcp.json"), 0o755))
 
-	t.Run("ancestor directory", func(t *testing.T) {
-		root := t.TempDir()
-		require.NoError(t, os.Symlink(outside, filepath.Join(root, ".claude")))
-
-		_, err := PlanSetup(Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: []ClientSetup{fullIntent(ClaudeID)}})
-		require.ErrorContains(t, err, "symlink at .claude")
-	})
-
-	t.Run("destination file", func(t *testing.T) {
-		root := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
-		require.NoError(t, os.Symlink(filepath.Join(outside, "config.toml"), filepath.Join(root, ".codex", "config.toml")))
-
-		_, err := PlanSetup(Builtin(), SetupRequest{Root: root, Clients: []ClientSetup{fullIntent(CodexID)}})
-		require.ErrorContains(t, err, "symlink at .codex/config.toml")
-	})
-
-	t.Run("link created after the plan", func(t *testing.T) {
-		root := t.TempDir()
-		plan := mustPlan(t, Builtin(), SetupRequest{Root: root, Clients: []ClientSetup{{ClientID: CodexID, RegisterMCP: true}}})
-
-		require.NoError(t, os.Symlink(outside, filepath.Join(root, ".codex")))
-
-		_, err := ApplySetup(plan, ApplyOptions{})
-		require.ErrorIs(t, err, ErrStalePlan)
-		assert.Empty(t, readRel(t, outside, "config.toml"), "the write never follows the link")
-	})
-
-	t.Run("not a regular file", func(t *testing.T) {
-		root := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(root, ".mcp.json"), 0o755))
-
-		_, err := PlanSetup(Builtin(), SetupRequest{Root: root, Clients: []ClientSetup{{ClientID: ClaudeID, RegisterMCP: true}}})
-		require.ErrorContains(t, err, "not a regular file")
-	})
+	_, err := PlanSetup(Builtin(), SetupRequest{Root: root, Clients: []ClientSetup{{ClientID: ClaudeID, RegisterMCP: true}}})
+	require.ErrorContains(t, err, "not a regular file")
 }
 
 func TestAPartialFailureIsReportedAndARerunConverges(t *testing.T) {
@@ -840,6 +811,9 @@ type unguardedSetup struct{}
 
 func (unguardedSetup) Inspect(string) Inspection { return Inspection{} }
 
+// ManagedGateMode is empty: the adapter installs no gate hook.
+func (unguardedSetup) ManagedGateMode(string) string { return "" }
+
 func (unguardedSetup) Plan(string, string, ClientSetup) (ClientPlan, error) {
 	return ClientPlan{Writes: []FileWrite{{Path: "blind.txt", After: []byte("x")}}}, nil
 }
@@ -897,13 +871,20 @@ func TestCommonDocuments(t *testing.T) {
 	require.ErrorContains(t, err, "no compose function")
 }
 
-func TestACreateOnlyDocumentIsGuardedByItsPresenceAlone(t *testing.T) {
-	// A starter file is never clobbered and never read, whatever is at
-	// its path and whatever its compose function would return.
-	always := Document{
+// lessonsStarter is a create-only document whose compose function always
+// returns a template.
+func lessonsStarter() Document {
+	return Document{
 		Path: ".seamark/lessons.yaml", CreateOnly: true, KeptDetail: "already present",
 		Compose: func([]byte, bool) ([]byte, error) { return []byte("fresh template\n"), nil },
 	}
+}
+
+func TestACreateOnlyDocumentIsGuardedByItsPresenceAlone(t *testing.T) {
+	// Setup never overwrites or reads a starter file, whatever is at its
+	// path and whatever its compose function would return. The link cases
+	// are in setup_unix_test.go, because os.Symlink needs unix.
+	always := lessonsStarter()
 
 	for name, arrange := range map[string]func(t *testing.T, root string){
 		"a file with other content": func(t *testing.T, root string) { writeRel(t, root, always.Path, "mine\n") },
@@ -932,20 +913,6 @@ func TestACreateOnlyDocumentIsGuardedByItsPresenceAlone(t *testing.T) {
 	_, err := ApplySetup(plan, ApplyOptions{})
 	require.ErrorIs(t, err, ErrStalePlan)
 	assert.Equal(t, "appeared after the plan\n", readRel(t, root, always.Path))
-
-	// An absent starter below a linked directory is refused: the create
-	// would go through the link.
-	outside, linked := t.TempDir(), t.TempDir()
-	require.NoError(t, os.Symlink(outside, filepath.Join(linked, ".seamark")))
-
-	_, err = PlanSetup(Builtin(), SetupRequest{Root: linked, Common: []Document{always}})
-	require.ErrorContains(t, err, "symlink at .seamark")
-
-	// An existing starter below the same link is kept, as it always was.
-	writeRel(t, outside, "lessons.yaml", "theirs\n")
-
-	kept := mustPlan(t, Builtin(), SetupRequest{Root: linked, Common: []Document{always}})
-	assert.Empty(t, kept.Writes)
 }
 
 func TestAnExistingFileKeepsItsPermission(t *testing.T) {

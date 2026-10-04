@@ -66,7 +66,20 @@ policy file, or an internal error blocks the command instead of silently
 allowing it. Re-running `init` without `--gate-mode` keeps whatever mode
 each selected client has installed, and every run ends with a `gate`
 line stating the effective behavior; a selected client whose hook still
-runs without the flag is named under that line.
+runs without the flag is named under that line. A verdict blocks only by
+exit status 2, so a gate hook that you wrap yourself must pass that
+status on. A wrapper that discards it (`… || true`, `… ; echo done`,
+`… | cat`) reads as `report-only`: that hook reports its verdicts, and
+none of them blocks, whatever `--enforce` or `policy.yaml` says. A gate
+in the background (`… &`) discards its exit status too. The shell does
+not wait for it, so it counts as a hook that may run, and setup
+installs the managed gate hook beside it. A hook that only may run, for
+example one that another program gets as its arguments, never makes
+the `gate` line say `enforce`: the line names it as a definition that
+may run a gate, and nothing is known to block. An explicit `--gate-mode`
+also installs the managed gate hook beside a wrapped gate that cannot
+deliver the mode you asked for, such as a `report-only` one, and warns
+that the hook then runs twice.
 
 Setup also wires the edit-time lessons hook. Claude Code gets a silent
 `PostCompact` reset for `hook_delivery: once-per-context`; Codex reminders

@@ -35,6 +35,103 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   bounded distillation with the operator's own login. It passed on
   codex-cli 0.157.0 with GPT-6 Luna / low reasoning; the guide records
   its scope and the remaining native verification gaps.
+- **One shell parser.** The hook reader that decides whether a hook
+  command runs a seamark hook now parses the command with
+  `mvdan.cc/sh`, the parser the command gate has always used, instead
+  of a parser of its own. The rules about hooks are unchanged: the
+  exit-status walk, the shell options, the wrappers, and the forms the
+  shells read in different ways. The reader bounds the words and the
+  nesting of a command before the parser sees it, because a hook
+  command from a repository file is untrusted input. One answer changed
+  to match bash: `((` at the start of a command is an arithmetic
+  command in bash and zsh and nested subshells in dash, so a hook
+  written that way may run and setup installs the managed hook beside
+  it. The reader also knows more forms: `false` is the one command
+  that always fails, so a hook after `false &&` may run and a hook after
+  `false ||` runs; `command -v` only prints; `eval`, `env -S`, and
+  `busybox` run what follows them; zsh `setopt pipefail` and bash
+  `shopt -so pipefail` count like `set -o pipefail`; a brace expansion
+  makes the words unreliable; a copied or closed standard input
+  (`<&3`, `<&-`) replaces the client's payload; and a pipeline in the
+  background discards its exit status. `init` and `status` now
+  classify the gate hooks of a workspace by one shared rule
+  (`integration.GateSummary`) and differ only in their words: an
+  unreadable hook document outranks a report-only hook, because the
+  document can hold an enforcing gate. The words of the setup narration
+  live apart from the plans that they describe. The guide lists every
+  legacy path beside its replacement, the tests that pin it, and the
+  condition for its removal.
+- **The shell reader follows the status more exactly, and the gate
+  line says only what it knows.** A pipeline that `&&` or `||` skips
+  now leaves the status as it is, so `false && x && seamark gate …`
+  reads as a hook that may run, not as one that runs. The status model
+  decides what fails before `&&` and `||`, so `(false)`, `{ false; }`,
+  `(exit 1)`, `eval false`, `/bin/false`, and `command false` count
+  like `false`. An `exit` or an
+  `exec` before `&&` ends the shell, so the hook after it may run. Any
+  redirection of descriptor 0 (`0>/dev/null`, `0>&-`) replaces the
+  client payload, and an unquoted glob (`/opt/*/seamark`) makes the
+  words unreliable, so both read as a hook that may run. A `sh -c`
+  script that joins `"$0"` or `"$@"` with its operands is read together
+  with them. The reader bounds the eval chain and the length of a
+  command line, so a crafted hook command can no longer slow `doctor`
+  and `status` for seconds. A wrapped gate that discards its exit
+  status is now always a warning, because doctor prints warnings only
+  and an enforcing policy file blocks nothing through such a hook. Only
+  `timeout` takes a number as its first operand: `env 5 …` runs the
+  program `5`, and `busybox seamark …` names no applet, so both read as
+  a hook that may run. `env -S` puts its split words in front of the
+  remaining arguments, so `env -S '… seamark gate' --hook` runs the
+  hook. Under `pipefail`, a later command that fails takes the status
+  from the hook, so `seamark gate … | false` is report-only. `eval`
+  runs its script with the options of the shell around it, so
+  `set -o pipefail; eval 'seamark gate … | cat'` blocks. A definition
+  that may run the gate, such as `echo seamark gate --enforce --hook`,
+  no longer makes `init`, `doctor`, or `status` say `enforce`: the
+  inspection reports its mode as `possible_gate_mode`, the gate line
+  names the definition as one that may run a gate, and nothing is
+  known to block. A run with an explicit `--gate-mode` now installs the
+  managed Codex gate hook beside a definition that certainly runs the
+  gate but cannot deliver the mode asked for (a report-only one, or a
+  warn one under a request for enforce), and warns that the hook runs
+  twice; a run without a mode still installs no second handler. Every
+  reader of a client document opens the path without blocking and
+  checks the open file, so a FIFO put in place between a check and a
+  read can no longer hang `doctor` or `status`. `status` fills its
+  legacy `gate_hook_mode` and `gate_hook_error` fields from the Claude
+  Code entry of `clients`, so one read serves both views, and each
+  client entry carries the reason of an unreadable hook document as
+  `hook_document_error`. The reason names the document once by its
+  repository path, for a parse error and for a read error alike
+  (`.claude/settings.json: permission denied`); `gate_hook_error` used
+  to hold the operating system's text with the absolute path.
+- **Setup reads what a wrapped hook really runs.** The hook reader now
+  parses lists, AND-OR lists, pipelines, subshells, and brace groups, and
+  follows the exit status of the hook through each of them. A wrapper
+  such as `bash --norc -c …`, `/usr/bin/env bash -c …`, `{ cd /repo;
+  seamark gate … ; }`, or a gate command with a trailing `# comment`
+  counts as a running gate. In `.codex/hooks.json` setup then adds no
+  second gate beside it; in `.claude/settings.json` setup still adds the
+  managed hook and reports that the hook runs twice. A wrapped gate
+  whose exit status the shell discards (`|| true`, `; …`, `| cat`) can
+  never block, whatever `--enforce` or the policy mode says: inspection
+  and `status` report it as `report-only`, setup reports a finding that
+  says what to change, and for Codex the `init` gate line reads
+  `report-only` too. A hook after `||`, in the background, with another
+  input than the client payload, inside `if`, `for`, or `case`, behind a
+  redirection that the shells read in different ways (`&>`, `>&file`),
+  or in a command too long or too deeply nested for the reader counts
+  as one that may run, so setup installs the managed hook beside it and
+  names the command. A gate in the background also gets the finding
+  that its exit status is discarded.
+- **A re-run keeps an enforcing Claude Code gate under every matcher
+  that fires.** A plain `seamark init` used to rewrite a seamark
+  `--enforce` gate under a `*`, an empty, or an expression matcher to
+  warn, without a word. It now keeps `--enforce`, and `status` and
+  `doctor` read that hook as enforce. `status`'s `gate_hook_mode` and
+  the Claude Code approvals record now refuse a linked
+  `.claude/settings.json`, as `init` and `doctor` do, and name the link
+  in `gate_hook_error` and in the record's `error`.
 - **One account of every agent across `init`, `doctor`, and `status`.**
   The three commands now read one registry inspection per client:
   skills, MCP registration, tool grants, and the edit, gate, and reset
@@ -64,8 +161,9 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   `[hooks]`, with the tools the agent runs it for, whether the shell
   certainly runs it, and its gate mode; a hook that covers some tools
   is partial wherever it lives, and the action names the file that
-  holds it; a wrapped enforcing gate in the personal file enforces, a
-  wrapper that runs both modes enforces, and a managed warn hook beside
+  holds it; a wrapped enforcing gate in the personal file enforces
+  unless it discards its exit status, a wrapper that runs both modes
+  enforces, and a managed warn hook beside
   an enforcing inline hook reads as enforce everywhere
   (`managed_gate_mode` keeps what setup owns). `init --client claude`
   reports a tool as uncovered only when no definition in either file

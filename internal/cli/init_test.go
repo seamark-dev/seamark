@@ -42,7 +42,9 @@ func commandsForEvent(t *testing.T, settings map[string]any, event string) []str
 // mergeHooks installs the Claude Code hooks for a gate mode, the merge
 // init runs through the setup adapter.
 func mergeHooks(settings map[string]any, bin, gateMode string) (bool, error) {
-	return hooks.Merge(settings, bin, hooks.ClaudeSpecs(gateMode))
+	merged, err := hooks.Merge(settings, bin, hooks.ClaudeSpecs(gateMode))
+
+	return merged.Changed, err
 }
 
 // installedGateMode is the shared detection rule (see internal/hooks).
@@ -524,6 +526,27 @@ func TestRunInitDefaultKeepsInstalledEnforce(t *testing.T) {
 	assert.Contains(t, cmds, "/bin/seamark gate --enforce --hook", "enforce survives a plain re-init")
 	assert.Contains(t, b.String(), "gate    enforce")
 	assert.NotContains(t, b.String(), "note    ", "nothing changed mode, nothing to warn about")
+}
+
+func TestRunInitDefaultKeepsEnforceUnderAStarMatcher(t *testing.T) {
+	// A "*" matcher fires for Bash, so the enforce hook below runs. A
+	// plain init must keep --enforce in the hook and write an enforce
+	// policy file, because enforcement changes only on request.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"), []byte(
+		`{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/bin/seamark gate --enforce --hook"}]}]}}`),
+		0o644))
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", "", false, "", false))
+
+	cmds := commands(t, readSettings(t, root))
+	assert.Contains(t, cmds, "/bin/seamark gate --enforce --hook", "enforce survives a plain re-init")
+	assert.NotContains(t, cmds, "/bin/seamark gate --hook")
+	assert.Contains(t, b.String(), "gate    enforce")
+	assert.NotContains(t, b.String(), "removed --enforce")
+	assert.Equal(t, starterPolicyFor(gateModeEnforce), string(mustRead(t, root, ".seamark/policy.yaml")))
 }
 
 func TestRunInitLeavesForeignGateHookAlone(t *testing.T) {

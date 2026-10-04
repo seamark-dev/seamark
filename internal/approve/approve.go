@@ -11,12 +11,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -114,9 +117,10 @@ func (r Registration) ServerName() string {
 // the Windows suffix. Several matches prefer the conventional name, then
 // the first in name order, so repeated runs agree. A missing file is not
 // an error; an unparseable one is, because a rule prefix guessed from a
-// broken file would be reported as current while every call prompts.
+// broken file would be reported as current while every call prompts. A
+// path that is not a regular file is an error too, as it is in setup.
 func ClaudeRegistration(root string) (Registration, error) {
-	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(MCPConfig)))
+	data, _, err := ReadRegular(root, MCPConfig)
 	if errors.Is(err, os.ErrNotExist) {
 		return Registration{}, nil
 	}
@@ -457,6 +461,19 @@ func Inspect(root string) []ClientApproval {
 func InspectClaude(root string) ClientApproval {
 	c := ClientApproval{Client: ClientClaude, Path: ClaudeSettings}
 
+	// Setup owns the settings file, so its plan refuses a link there,
+	// before it reads .mcp.json. The record follows that rule and that
+	// order, so status and init agree on a linked file.
+	if link, err := skills.SymlinkIn(root, ClaudeSettings); err != nil || link != "" {
+		if err == nil {
+			err = LinkRefusal(ClaudeSettings, link)
+		}
+
+		c.Err = render.Sanitize(err.Error())
+
+		return c
+	}
+
 	// A broken .mcp.json is this record's fault to report: the server
 	// name in it spells every rule, and status has no other check that
 	// reads the file. Counting under a guessed name would say current
@@ -470,11 +487,22 @@ func InspectClaude(root string) ClientApproval {
 
 	c.Registered = reg.Server
 
-	settings, err := hooks.ReadSettings(root)
-	if err != nil {
-		c.Err = render.Sanitize(err.Error())
+	settings := map[string]any{}
+
+	data, _, err := ReadRegular(root, ClaudeSettings)
+
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		c.Err = render.Sanitize(fmt.Sprintf("%s: %v", ClaudeSettings, err))
 
 		return c
+	default:
+		if settings, err = hooks.ParseSettings(data); err != nil {
+			c.Err = render.Sanitize(err.Error())
+
+			return c
+		}
 	}
 
 	p, err := PlanClaude(settings, reg.ServerName())
@@ -512,4 +540,49 @@ func Summary(states []ClientApproval) string {
 	}
 
 	return line
+}
+
+// ReadRegular reads a client document below root, the rule every reader
+// of a client document follows: the setup readers of the integration
+// package and the records here. It follows a link, and it refuses a
+// path that is not a regular file. A missing file gives an error that
+// matches os.ErrNotExist. The mode is the file's, for a guard.
+//
+// A read of a FIFO blocks until a writer opens it, so doctor and status
+// would hang where init refuses the file. The function opens the path
+// without blocking and checks the type of the open file. A check of
+// the path before the open leaves a gap: the path can become a FIFO
+// between the check and the open. The flag changes nothing for a
+// regular file.
+func ReadRegular(root, rel string) ([]byte, fs.FileMode, error) {
+	abs := filepath.Join(root, filepath.FromSlash(rel))
+
+	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if !info.Mode().IsRegular() {
+		return nil, 0, errors.New("not a regular file")
+	}
+
+	data, err := io.ReadAll(f)
+
+	return data, info.Mode(), err
+}
+
+// LinkRefusal is the error for a client document that setup writes and
+// that is a symbolic link. Setup never writes through a link: a link
+// committed in a cloned repository must not redirect a write outside
+// the tree. Every reader of such a document reports the link with these
+// words.
+func LinkRefusal(rel, link string) error {
+	return fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", rel, link)
 }

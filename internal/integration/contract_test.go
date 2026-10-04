@@ -56,6 +56,9 @@ type fakeSetup struct{ inspection Inspection }
 
 func (f fakeSetup) Inspect(string) Inspection { return f.inspection }
 
+// ManagedGateMode repeats the inspection, as the contract requires.
+func (f fakeSetup) ManagedGateMode(string) string { return f.inspection.ManagedGateMode }
+
 func (fakeSetup) Plan(string, string, ClientSetup) (ClientPlan, error) {
 	return ClientPlan{}, nil
 }
@@ -125,14 +128,17 @@ func checkCapabilityViewsAgree(t *testing.T, c Client) {
 	}
 }
 
-// checkInspectionContract checks an adapter's offline inspection: it
-// names its client, every entry is valid, and Supported repeats the
-// descriptor. Incomplete verified evidence fails here.
+// checkInspectionContract checks an adapter's offline inspection. The
+// inspection names its client, every entry is valid, and Supported
+// repeats the descriptor. The narrow read of the gate mode agrees with
+// the full one. Incomplete verified evidence fails here.
 func checkInspectionContract(t *testing.T, c Client) {
 	t.Helper()
 
-	inspection := c.Setup.Inspect(t.TempDir())
+	root := t.TempDir()
+	inspection := c.Setup.Inspect(root)
 	assert.Equal(t, c.ID, inspection.ClientID)
+	assert.Equal(t, inspection.ManagedGateMode, c.Setup.ManagedGateMode(root), "%s: managed gate mode", c.ID)
 
 	for _, entry := range inspection.Capabilities {
 		require.NoError(t, entry.Validate(), "%s: inspection", c.ID)

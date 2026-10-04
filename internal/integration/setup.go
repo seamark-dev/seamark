@@ -28,6 +28,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
@@ -53,11 +54,6 @@ func isCleanRel(rel string) bool {
 		rel != "." && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
-// linkRefusal is the error for a path that a symbolic link redirects.
-func linkRefusal(rel, link string) error {
-	return fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", rel, link)
-}
-
 // ReadGuarded reads one native document that setup owns and records
 // its observed state. Adapters plan from the returned bytes, so a plan
 // and its guard always describe the same file state. A missing file is
@@ -74,12 +70,34 @@ func ReadGuarded(root, rel string) (FileGuard, []byte, error) {
 	}
 
 	if guard.Linked != "" {
-		return FileGuard{}, nil, linkRefusal(rel, guard.Linked)
+		return FileGuard{}, nil, approve.LinkRefusal(rel, guard.Linked)
 	}
 
 	guard.Kind = GuardDocument
 
 	return guard, data, nil
+}
+
+// readOwnedDocument reads and parses one hook document that setup owns,
+// with the parser of its client. Plan, Inspect, and ManagedGateMode of
+// a client all read the document here, so they cannot disagree about
+// it. The reader refuses a link, and a missing file is an empty
+// document. The guard of a file that does not parse records the file,
+// so the plan can tell a parse error from a read error. A parse error
+// does not name the file, so the caller names it.
+func readOwnedDocument(root, rel string, parse func([]byte) (map[string]any, error)) (FileGuard, map[string]any, error) {
+	guard, data, err := ReadGuarded(root, rel)
+	if err != nil {
+		return FileGuard{}, nil, err
+	}
+
+	if !guard.Exists {
+		return guard, map[string]any{}, nil
+	}
+
+	document, err := parse(data)
+
+	return guard, document, err
 }
 
 // ReadInput reads a file that setup only reads, or at most extends. The
@@ -98,29 +116,40 @@ func ReadInput(root, rel string) (FileGuard, []byte, error) {
 	}
 
 	guard := FileGuard{Path: rel, Kind: GuardInput, Linked: link}
-	abs := filepath.Join(root, filepath.FromSlash(rel))
 
-	info, err := os.Stat(abs)
+	data, mode, err := approve.ReadRegular(root, rel)
 	if errors.Is(err, os.ErrNotExist) {
 		return guard, nil, nil
 	}
 
 	if err != nil {
+		// The reason names the document once, by its repository path. An
+		// error of the file system names the absolute path, so only its
+		// cause is kept, and the cause stays wrapped for errors.Is.
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			err = pathErr.Err
+		}
+
 		return FileGuard{}, nil, fmt.Errorf("%s: %w", rel, err)
 	}
 
-	if !info.Mode().IsRegular() {
-		return FileGuard{}, nil, fmt.Errorf("%s: not a regular file", rel)
-	}
-
-	data, err := os.ReadFile(abs)
-	if err != nil {
-		return FileGuard{}, nil, fmt.Errorf("%s: %w", rel, err)
-	}
-
-	guard.Exists, guard.SHA256, guard.Mode = true, sha256.Sum256(data), info.Mode().Perm()
+	guard.Exists, guard.SHA256, guard.Mode = true, sha256.Sum256(data), mode.Perm()
 
 	return guard, data, nil
+}
+
+// readReason is the reason of a finding about the file rel that the
+// plan cannot read or parse. Every consumer prints the path before the
+// reason, so the reason drops rel in front of err. An error of the file
+// system names the absolute path again, so only its cause stays.
+func readReason(rel string, err error) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err.Error()
+	}
+
+	return strings.TrimPrefix(err.Error(), rel+": ")
 }
 
 // StatGuarded observes a create-only file by its existence alone. An
@@ -152,7 +181,7 @@ func StatGuarded(root, rel string) (FileGuard, error) {
 	}
 
 	if link != "" {
-		return FileGuard{}, linkRefusal(rel, link)
+		return FileGuard{}, approve.LinkRefusal(rel, link)
 	}
 
 	return guard, nil
@@ -462,7 +491,7 @@ func (b *planBuilder) addWrite(consumer string, write FileWrite) error {
 
 	// A read may follow a link; a write never does.
 	if guard := b.plan.Reads[i]; guard.Linked != "" {
-		return linkRefusal(write.Path, guard.Linked)
+		return approve.LinkRefusal(write.Path, guard.Linked)
 	}
 
 	write.Consumers = withConsumer(write.Consumers, consumer)

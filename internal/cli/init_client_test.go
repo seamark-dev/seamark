@@ -256,22 +256,32 @@ func TestInitClientNamesAManagedHookThatKeepsWarn(t *testing.T) {
 
 func TestInitClientReportsAnUnmanagedWarnGateUnderEnforce(t *testing.T) {
 	// A gate hook that setup does not manage runs without --enforce,
-	// certainly, so setup installs no second gate hook. The run asked
-	// for enforce; the summary must say what the retained hook does,
-	// and the retained hook must agree with it.
-	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(starterPolicyFor(gateModeWarn)), 0o644))
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "hooks.json"), []byte(
-		`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"env /opt/bin/seamark gate --hook --client codex"}]}]}}`), 0o644))
+	// certainly. A run without a mode installs no second gate hook. A
+	// run that asks for enforce installs the managed enforce hook beside
+	// it. A run that leaves nothing able to block must not look like one
+	// that honored the request. Both runs name the retained hook and what
+	// it does.
+	unmanaged := "env /opt/bin/seamark gate --hook --client codex"
+	workspace := func(t *testing.T) string {
+		t.Helper()
 
-	out := initClients(t, root, false, false, false, gateModeEnforce, "codex")
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(starterPolicyFor(gateModeWarn)), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "hooks.json"), []byte(
+			`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"`+unmanaged+`"}]}]}}`), 0o644))
 
-	assert.Contains(t, out, "  gate    warn — verdicts are reported, nothing blocks; --gate-mode enforce reached no gate hook of this run")
-	assert.Contains(t, out, "  note    .codex/hooks.json runs a gate hook without --enforce that setup does not manage: --gate-mode enforce")
+		return root
+	}
+
+	root := workspace(t)
+	out := initClients(t, root, false, false, false, "", "codex")
+
+	assert.Contains(t, out, "  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)")
+	assert.Contains(t, out, "installed no second handler")
 	assert.NotContains(t, out, "gate    enforce")
-	assert.NotContains(t, string(mustRead(t, root, ".codex/hooks.json")), "--enforce", "setup edits no hook it does not manage")
+	assert.NotContains(t, string(mustRead(t, root, ".codex/hooks.json")), `"command": "/bin/seamark gate`, "no second gate handler")
 
 	// The retained hook, run as Codex runs it: a deny is reported and
 	// nothing blocks, as the summary says.
@@ -280,6 +290,135 @@ func TestInitClientReportsAnUnmanagedWarnGateUnderEnforce(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "deny")
 	assert.Contains(t, stdout, "mode: warn")
+
+	// The reported defect: --gate-mode enforce installed nothing here, and
+	// the run ended with no hook able to block.
+	root = workspace(t)
+	out = initClients(t, root, false, false, false, gateModeEnforce, "codex")
+
+	assert.Contains(t, out, "gate    enforce — deny/require_approval verdicts exit 2 and block")
+	assert.Contains(t, out, "  note    .codex/hooks.json runs a gate hook without --enforce that setup does not manage: --gate-mode enforce")
+	assert.Contains(t, out, "  note    .codex/hooks.json: already runs the seamark gate hook: `"+unmanaged+"`, in warn mode; "+
+		"the run asked for enforce mode, so setup installed the managed handler too, and the hook runs twice")
+
+	after := string(mustRead(t, root, ".codex/hooks.json"))
+	assert.Contains(t, after, unmanaged, "setup edits no hook it does not manage")
+	assert.Contains(t, after, "gate --enforce --hook --client codex\"", "the managed enforce hook is installed beside it")
+}
+
+func TestInitClientGateLineReadsWhatAWrappedGateDoes(t *testing.T) {
+	// Wrapped gates that setup does not manage. The gate line must say
+	// what each one does when Codex runs it.
+	codexHooks := func(t *testing.T, command string) string {
+		t.Helper()
+
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "hooks.json"), []byte(
+			`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"`+command+`"}]}]}}`), 0o644))
+
+		return root
+	}
+
+	discarding := "/opt/bin/seamark gate --enforce --hook --client codex || true"
+	reportOnly := "  gate    report-only — the gate hook in .codex/hooks.json discards its exit status"
+
+	// "|| true" discards the exit status, so no verdict blocks.
+	root := codexHooks(t, discarding)
+
+	out := initClients(t, root, false, false, false, "", "codex")
+	assert.Contains(t, out, reportOnly)
+	assert.NotContains(t, out, "gate    enforce")
+	assert.NotContains(t, out, "exit 2 and block")
+	assert.NotContains(t, out, "opt in: --gate-mode enforce", "no flag reaches a hook that setup does not manage")
+	assert.Contains(t, out, "  note    .codex/hooks.json: has `"+discarding+"`, "+
+		"which discards the exit status of the seamark gate hook, so no verdict blocks")
+
+	// The reported defect: an enforcing policy file does not make that
+	// hook block either, and the hook has --enforce.
+	t.Run("a kept enforcing policy", func(t *testing.T) {
+		root := codexHooks(t, discarding)
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(starterPolicyFor(gateModeEnforce)), 0o644))
+
+		out := initClients(t, root, false, false, false, "", "codex")
+		assert.Contains(t, out, reportOnly)
+		assert.NotContains(t, out, "exit 2 and block")
+		assert.NotContains(t, out, "without --enforce")
+		assert.NotContains(t, out, "reached no gate hook")
+		assert.Equal(t, gateModeEnforce, policyModeOf(t, root))
+	})
+
+	// A run that asks for enforce gets a hook that enforces: the managed
+	// hook goes in beside the one that discards its exit status, and the
+	// findings name both facts.
+	t.Run("a new enforcing policy", func(t *testing.T) {
+		root := codexHooks(t, discarding)
+
+		out := initClients(t, root, false, false, false, gateModeEnforce, "codex")
+		assert.Contains(t, out, "gate    enforce — deny/require_approval verdicts exit 2 and block")
+		assert.NotContains(t, out, reportOnly)
+		assert.Contains(t, out, "  note    .codex/hooks.json: already runs the seamark gate hook: `"+discarding+"`, which discards its exit status; "+
+			"the run asked for enforce mode, so setup installed the managed handler too, and the hook runs twice")
+		assert.Contains(t, out, "  note    .codex/hooks.json: has `"+discarding+"`, which discards the exit status of the seamark gate hook")
+		assert.Contains(t, string(mustRead(t, root, ".codex/hooks.json")), "/seamark gate --enforce --hook --client codex\"")
+		assert.Equal(t, gateModeEnforce, policyModeOf(t, root))
+	})
+
+	// The same wrapper without --enforce follows no policy either.
+	root = codexHooks(t, "/opt/bin/seamark gate --hook --client codex || true")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(starterPolicyFor(gateModeEnforce)), 0o644))
+
+	out = initClients(t, root, false, false, false, "", "codex")
+	assert.Contains(t, out, reportOnly)
+	assert.NotContains(t, out, "exit 2 and block")
+
+	// A long option before -c, and an exec prefix in front of the shell:
+	// the wrapper enforces, and setup adds no second gate hook beside it.
+	for _, command := range []string{
+		"bash --norc -c '/opt/bin/seamark gate --enforce --hook --client codex'",
+		"/usr/bin/env bash --norc -c '/opt/bin/seamark gate --enforce --hook --client codex'",
+		"{ cd /repo; /opt/bin/seamark gate --enforce --hook --client codex; }",
+	} {
+		root := codexHooks(t, command)
+
+		out := initClients(t, root, false, false, false, "", "codex")
+		assert.Contains(t, out, "  gate    enforce — .codex/hooks.json runs its own gate hook with --enforce", command)
+		assert.NotContains(t, out, "nothing blocks", command)
+		assert.NotContains(t, out, "discards the exit status", command)
+		assert.Equal(t, 1, strings.Count(string(mustRead(t, root, ".codex/hooks.json")), " gate "), "one gate hook: %s", command)
+	}
+}
+
+func TestInitClientGateLineNamesAGateThatMayRunAsPossible(t *testing.T) {
+	// The reported defect: an unknown program with the gate command as
+	// its arguments made the gate line say "enforce", as if the wrapper
+	// certainly ran the gate. The reader cannot tell what the program
+	// does, so the line names the managed hook and a note names the
+	// definition that may also run a gate.
+	printed := "/opt/bin/hook-runner /opt/bin/seamark gate --enforce --hook"
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"), []byte(
+		`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"`+printed+`"}]}]}}`), 0o644))
+
+	out := initClients(t, root, false, false, false, "", "claude")
+	assert.Contains(t, out, "  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)")
+	assert.Contains(t, out, "  note    .claude/settings.json holds a definition that may also run a gate hook; setup cannot tell what it does")
+	assert.Contains(t, out, "  note    .claude/settings.json: has `"+printed+"`, which can run the seamark gate hook; setup cannot tell")
+	assert.NotContains(t, out, "runs its own gate hook with --enforce")
+	assert.NotContains(t, out, "gate    enforce")
+}
+
+// policyModeOf reads the mode of the policy file in root.
+func policyModeOf(t *testing.T, root string) string {
+	t.Helper()
+
+	mode, err := policyFileMode(root, "")
+	require.NoError(t, err)
+
+	return mode
 }
 
 // hooksOnlySetup is a test-only adapter that declares lifecycle hooks
@@ -289,6 +428,9 @@ type hooksOnlySetup struct{}
 func (hooksOnlySetup) Inspect(string) integration.Inspection {
 	return integration.Inspection{ClientID: "hooksonly"}
 }
+
+// ManagedGateMode is empty: the adapter installs no gate hook.
+func (hooksOnlySetup) ManagedGateMode(string) string { return "" }
 
 func (hooksOnlySetup) Plan(string, string, integration.ClientSetup) (integration.ClientPlan, error) {
 	return integration.ClientPlan{}, nil
@@ -564,6 +706,15 @@ func TestInitClientFollowsTheInspectionMatrix(t *testing.T) {
 			}
 
 			out := initClients(t, root, true, false, false, "", f.Client)
+
+			// A plain re-run keeps the mode of the managed gate hook.
+			if f.ManagedGateMode != "" {
+				assert.NotContains(t, out, "remove --enforce")
+			}
+
+			if f.ManagedGateMode == "enforce" {
+				assert.Contains(t, out, "/bin/seamark gate --enforce --hook")
+			}
 
 			expected := f.Findings
 			if f.InitFindings != nil {

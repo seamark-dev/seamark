@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"strings"
 
@@ -35,19 +34,17 @@ func (claudeSetup) Plan(root, binary string, req ClientSetup) (ClientPlan, error
 	)
 
 	if req.Hooks || req.ApproveTools {
-		guard, data, err := ReadGuarded(root, approve.ClaudeSettings)
-		if err != nil {
+		guard, parsed, err := readClaudeSettings(root)
+
+		switch {
+		case err != nil && guard.Exists:
+			return ClientPlan{}, fmt.Errorf("%w (fix or move it, then re-run)", err)
+		case err != nil:
 			return ClientPlan{}, err
 		}
 
 		plan.Reads = append(plan.Reads, guard)
-		settings = map[string]any{}
-
-		if guard.Exists {
-			if settings, err = hooks.ParseSettings(data); err != nil {
-				return ClientPlan{}, fmt.Errorf("%w (fix or move it, then re-run)", err)
-			}
-		}
+		settings = parsed
 	}
 
 	if req.Hooks {
@@ -98,103 +95,6 @@ func (claudeSetup) Plan(root, binary string, req ClientSetup) (ClientPlan, error
 	return plan, nil
 }
 
-// claudeNarration holds what the settings.json lines report. The
-// adapter fills it while it plans, and the narrator reads it after the
-// write, so the lines describe exactly what was composed.
-type claudeNarration struct {
-	binary string
-	// hooks is true when the hooks were requested. specs lists the hooks
-	// setup manages in this run, gateMode the mode they run in, and
-	// previous the gate mode that was installed before.
-	hooks        bool
-	hooksChanged bool
-	specs        []hooks.Spec
-	gateMode     string
-	previous     string
-	// grants is the allow-rule plan; nil when none was requested.
-	grants *approve.ClaudePlan
-}
-
-// changed reports whether the document is written.
-func (n *claudeNarration) changed() bool {
-	return n.hooksChanged || (n.grants != nil && len(n.grants.Missing) > 0)
-}
-
-// narrate prints the settings.json lines in the words init has always
-// used: the hooks line with the exact hook commands, the note when
-// enforcement leaves the hook, and the allow-rule lines.
-func (n *claudeNarration) narrate(w io.Writer, status OpStatus) {
-	preview := status == OpPlanned
-
-	if n.hooks {
-		switch {
-		case !n.changed():
-			fmt.Fprintf(w, "  kept    %s (seamark hooks already wired)\n", approve.ClaudeSettings)
-		case n.hooksChanged:
-			fmt.Fprintf(w, "  %s %s (gate + lessons + context reset hooks)\n", verb("updated", "would update", preview), approve.ClaudeSettings)
-		default:
-			fmt.Fprintf(w, "  %s %s (permissions; seamark hooks already wired)\n", verb("updated", "would update", preview), approve.ClaudeSettings)
-		}
-
-		// The exact hook commands: what runs on which tool must never
-		// require opening settings.json to find out.
-		for _, spec := range n.specs {
-			where := spec.Event
-			if spec.Matcher != "" {
-				where += " " + spec.Matcher
-			}
-
-			fmt.Fprintf(w, "          %-30s %s\n", where, spec.Command(n.binary))
-		}
-
-		// The note states only what changed, the hook flag. Whether
-		// anything still blocks is the effective-mode line's job: a kept
-		// enforce policy blocks whatever the flag says.
-		if n.previous == hooks.ModeEnforce && n.gateMode == hooks.ModeWarn {
-			fmt.Fprintf(w, "  note    %s --enforce from the gate hook: the hook follows .seamark/policy.yaml\n"+
-				"          instead — re-run with --gate-mode enforce to restore the baked-in flag\n",
-				verb("removed", "would remove", preview))
-		}
-	}
-
-	if n.grants != nil {
-		n.narrateGrants(w, preview)
-	}
-}
-
-// narrateGrants lists every allow rule the run added: what a repository
-// pre-approves must never require opening settings.json to find out.
-// Explicit deny or ask entries are named as kept, like the Codex line
-// does, so the user learns why a tool still prompts.
-func (n *claudeNarration) narrateGrants(w io.Writer, preview bool) {
-	kept := approve.KeptSuffix(n.grants.Conflicts)
-
-	switch {
-	case len(n.grants.Missing) == 0 && kept != "":
-		// Nothing to add is not everything approved: the kept entries are
-		// exactly the rules that still prompt.
-		fmt.Fprintf(w, "  kept    %s permissions (nothing to add%s)\n", approve.ClaudeSettings, kept)
-	case len(n.grants.Missing) == 0:
-		fmt.Fprintf(w, "  kept    %s permissions (seamark tools and skills already approved)\n", approve.ClaudeSettings)
-	default:
-		fmt.Fprintf(w, "  %s %d Claude Code allow rules in %s (seamark MCP tools + skills%s)\n",
-			verb("approved", "would approve", preview), len(n.grants.Missing), approve.ClaudeSettings, kept)
-
-		for _, rule := range n.grants.Missing {
-			fmt.Fprintf(w, "          %s\n", rule)
-		}
-	}
-}
-
-// verb picks the preview form of a narration verb.
-func verb(applied, preview string, isPreview bool) string {
-	if isPreview {
-		return preview
-	}
-
-	return applied
-}
-
 // finishClaudeSettings records the settings.json write, or the keep.
 func finishClaudeSettings(plan *ClientPlan, narration *claudeNarration, settings map[string]any) error {
 	if !narration.changed() {
@@ -234,6 +134,8 @@ func finishClaudeSettings(plan *ClientPlan, narration *claudeNarration, settings
 // An empty gate mode keeps the installed mode, and warn on a first
 // install: enforcement must never be added or removed without an
 // explicit request. The narrator reports a removed --enforce flag.
+// hooks.InstalledGateMode reads the installed mode for Plan, Inspect,
+// and ManagedGateMode, so a re-run keeps the mode that doctor reports.
 func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, req ClientSetup, settings map[string]any) error {
 	if narration.binary == "" {
 		return errors.New("setup: the seamark binary path is empty")
@@ -256,7 +158,7 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 	// ran setup.
 	specs := hooks.ClaudeSpecs(gateMode)
 
-	changed, err := hooks.Merge(settings, narration.binary, specs)
+	merged, err := hooks.Merge(settings, narration.binary, specs)
 	if err != nil {
 		return fmt.Errorf("%s: %w", approve.ClaudeSettings, err)
 	}
@@ -290,12 +192,13 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 		}
 
 		// The gate hooks the client runs from definitions setup does not
-		// manage, each with its own mode. An uncertain one counts too: a
-		// gate line that says "nothing blocks" while a wrapped gate blocks
-		// is the worse error.
+		// manage, each with its own mode. An uncertain one is listed too,
+		// marked as such. A gate line that says "nothing blocks" while a
+		// wrapped gate blocks is the worse error. One that says "enforce"
+		// for an echo is wrong too.
 		if i == 0 {
 			for _, source := range unmanagedSources(sources) {
-				plan.GateHooks = append(plan.GateHooks, GateHook{Path: source.path, Mode: source.mode})
+				plan.GateHooks = append(plan.GateHooks, GateHook{Path: source.path, Mode: source.mode, Uncertain: !source.certain})
 			}
 		}
 
@@ -306,8 +209,12 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 		}
 	}
 
-	narration.hooks, narration.hooksChanged = true, changed
-	narration.specs, narration.gateMode, narration.previous = specs, gateMode, previous
+	// Merge rewrites every owned gate command, also one under a matcher
+	// that never fires. The installed mode counts only a command that
+	// fires, so a plain re-run can remove a flag that the user wrote. The
+	// narrator reports the removal that Merge made.
+	narration.hooks, narration.hooksChanged = true, merged.Changed
+	narration.specs, narration.removedEnforce = specs, merged.RemovesEnforce(hooks.GateMarker(hooks.ModeEnforce))
 
 	return nil
 }
@@ -320,11 +227,11 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 // cannot be read is reported and does not stop setup, because setup does
 // not own that file.
 func readLocalHooks(plan *ClientPlan, root string) map[string]any {
-	skipped := func(reason string) map[string]any {
+	skipped := func(err error) map[string]any {
 		plan.Findings = append(plan.Findings, Finding{
 			Level:  FindingWarning,
 			Path:   claudeLocalSettings,
-			Reason: "not checked for duplicate seamark hooks: " + render.Sanitize(reason),
+			Reason: "not checked for duplicate seamark hooks: " + render.Sanitize(readReason(claudeLocalSettings, err)),
 			Action: "fix the file, then run the command again",
 		})
 
@@ -335,7 +242,7 @@ func readLocalHooks(plan *ClientPlan, root string) map[string]any {
 	// directory.
 	guard, data, err := ReadInput(root, claudeLocalSettings)
 	if err != nil {
-		return skipped(err.Error())
+		return skipped(err)
 	}
 
 	plan.Reads = append(plan.Reads, guard)
@@ -346,7 +253,7 @@ func readLocalHooks(plan *ClientPlan, root string) map[string]any {
 
 	local, err := hooks.ParseDocument(data)
 	if err != nil {
-		return skipped(err.Error())
+		return skipped(err)
 	}
 
 	return local
@@ -455,34 +362,67 @@ func planClaudeRegistration(plan *ClientPlan, mcp *approve.ClaudeMCPPlan) error 
 func (claudeSetup) Inspect(root string) Inspection {
 	evidence := VerificationEvidence{Level: VerificationUnverified}
 
-	hookEntries, gateMode, managedGateMode, findings := inspectClaudeHooks(root, evidence)
+	hookEntries, gate, findings := inspectClaudeHooks(root, evidence)
 
 	// The skills entry carries evidence only; the registry fills the
 	// directory state.
 	skillsEvidence := CapabilityInspection{Capability: CapabilitySkills, Supported: true, Verification: evidence}
 
-	return Inspection{
-		ClientID: ClaudeID,
-		Capabilities: append([]CapabilityInspection{
-			skillsEvidence,
-			inspectClaudeRegistration(root, evidence),
-			inspectGrants(approve.InspectClaude(root), evidence),
-		}, hookEntries...),
-		GateMode:        gateMode,
-		ManagedGateMode: managedGateMode,
-		Findings:        findings,
+	registration, stops := inspectClaudeRegistration(root, evidence)
+	capabilities := append([]CapabilityInspection{
+		skillsEvidence,
+		registration,
+		inspectGrants(approve.InspectClaude(root), evidence),
+	}, hookEntries...)
+
+	// The hooks and the grants share .claude/settings.json, a document
+	// that setup owns.
+	linkActions(root, capabilities, map[Capability]string{
+		CapabilityToolGrants: approve.ClaudeSettings, CapabilityEdits: approve.ClaudeSettings,
+		CapabilityCommands: approve.ClaudeSettings, CapabilityResets: approve.ClaudeSettings,
+	})
+
+	// The explicit setup also plans .mcp.json, so it can stop there. The
+	// plain form of init never reads .mcp.json, so it installs a missing
+	// hook in that state.
+	restore := "run `seamark init --client claude` to install the missing hook"
+	if stops {
+		restore = "run `seamark init` to install the missing hook: the plain form never reads .mcp.json, " +
+			"where `seamark init --client claude` stops"
 	}
+
+	restoreHooks(capabilities, restore, CapabilityEdits, CapabilityCommands, CapabilityResets)
+
+	return Inspection{
+		ClientID:          ClaudeID,
+		Capabilities:      capabilities,
+		GateMode:          gate.mode,
+		PossibleGateMode:  gate.possible,
+		ManagedGateMode:   gate.managed,
+		HookDocumentError: gate.err,
+		Findings:          findings,
+	}
+}
+
+// gateInspection is what an inspection learns about the gate hooks of
+// one client. mode is the mode of the definitions that certainly run
+// the gate, and possible the mode of the ones that may run it. managed
+// is the mode of the managed hook. err is the reason when the managed
+// document cannot be read, sanitized: it reaches terminals and MCP
+// clients as it is.
+type gateInspection struct {
+	mode, possible, managed, err string
 }
 
 // inspectClaudeHooks classifies the lifecycle hooks from the shared
 // settings and the personal local file, from one kind of evidence for
-// both: every definition of each hook, owned or wrapped, with the tools
-// the client runs it for. Setup manages the shared file only; a
-// definition in the local file is a running hook that setup does not
-// manage, and a handler in both files is reported as running twice.
-// Claude Code records no per-hook trust that seamark could read, so
-// trust stays unknown and no finding names it.
-func inspectClaudeHooks(root string, evidence VerificationEvidence) (entries []CapabilityInspection, gateMode, managedGateMode string, findings []Finding) {
+// both. The evidence is every definition of each hook, owned or
+// wrapped, with the tools the client runs it for. Setup manages the
+// shared file only. A definition in the local file is a running hook
+// that setup does not manage, and a handler in both files is reported
+// as running twice. Claude Code records no per-hook trust that seamark
+// could read, so trust stays unknown and no finding names it.
+func inspectClaudeHooks(root string, evidence VerificationEvidence) (entries []CapabilityInspection, gate gateInspection, findings []Finding) {
 	edits := CapabilityInspection{Capability: CapabilityEdits, Supported: true, Verification: evidence}
 	commands := CapabilityInspection{Capability: CapabilityCommands, Supported: true, Verification: evidence}
 	resets := CapabilityInspection{Capability: CapabilityResets, Supported: true, Verification: evidence}
@@ -493,21 +433,11 @@ func inspectClaudeHooks(root string, evidence VerificationEvidence) (entries []C
 
 	collect := func() []CapabilityInspection { return []CapabilityInspection{edits, commands, resets} }
 
-	guard, data, err := ReadGuarded(root, approve.ClaudeSettings)
+	_, settings, err := readClaudeSettings(root)
 	if err != nil {
 		unreadableHooks(all, approve.ClaudeSettings, err)
 
-		return collect(), "", "", nil
-	}
-
-	settings := map[string]any{}
-
-	if guard.Exists {
-		if settings, err = hooks.ParseSettings(data); err != nil {
-			unreadableHooks(all, approve.ClaudeSettings, err)
-
-			return collect(), "", "", nil
-		}
+		return collect(), gateInspection{err: render.Sanitize(err.Error())}, nil
 	}
 
 	// The local file is an input: a file that cannot be read is
@@ -525,25 +455,47 @@ func inspectClaudeHooks(root string, evidence VerificationEvidence) (entries []C
 		sourceFindings(&findings, spec, sources)
 
 		if i == 0 {
-			gateMode = hookMode(sources)
-			managedGateMode = hookMode(managedSources(sources))
+			gate.mode, gate.possible = hookMode(sources, certainSource), hookMode(sources, uncertainSource)
 		}
 	}
 
-	return collect(), gateMode, managedGateMode, findings
+	gate.managed = hooks.InstalledGateMode(settings)
+
+	return collect(), gate, findings
+}
+
+// ManagedGateMode reads the mode of the managed gate hook from
+// .claude/settings.json alone, by the rule that Plan and Inspect use. A
+// file that cannot be read gives "": the plan then reports the error.
+func (claudeSetup) ManagedGateMode(root string) string {
+	_, settings, err := readClaudeSettings(root)
+	if err != nil {
+		return ""
+	}
+
+	return hooks.InstalledGateMode(settings)
+}
+
+// readClaudeSettings reads and parses .claude/settings.json, by the
+// rule of readOwnedDocument.
+func readClaudeSettings(root string) (FileGuard, map[string]any, error) {
+	return readOwnedDocument(root, approve.ClaudeSettings, hooks.ParseSettings)
 }
 
 // inspectClaudeRegistration classifies .mcp.json with the planner's own
-// rules, so inspection and setup cannot disagree about a conflict.
-func inspectClaudeRegistration(root string, evidence VerificationEvidence) CapabilityInspection {
-	entry := CapabilityInspection{Capability: CapabilityMCPRegistration, Supported: true, Verification: evidence}
+// rules and reader, so inspection and setup cannot disagree. The file is
+// an input: the read follows a link, as the plan's read does. stops is
+// true when the explicit setup of Claude Code stops at the file. The
+// plan then cannot read the file, or it must write through a link.
+func inspectClaudeRegistration(root string, evidence VerificationEvidence) (entry CapabilityInspection, stops bool) {
+	entry = CapabilityInspection{Capability: CapabilityMCPRegistration, Supported: true, Verification: evidence}
 
-	guard, data, err := ReadGuarded(root, approve.MCPConfig)
+	guard, data, err := ReadInput(root, approve.MCPConfig)
 	if err != nil {
 		entry.State, entry.Detail = StateUnreadable, unreadableDetail(err)
 		entry.Action = registrationAction(ClaudeID, StateUnreadable)
 
-		return entry
+		return entry, true
 	}
 
 	mcp, err := approve.PlanClaudeMCP(data, guard.Exists)
@@ -561,6 +513,25 @@ func inspectClaudeRegistration(root string, evidence VerificationEvidence) Capab
 	}
 
 	entry.Action = registrationAction(ClaudeID, entry.State)
+	linked := guard.Linked != "" && (entry.State == StateAbsent || entry.State == StateUnreadable)
 
-	return entry
+	if linked {
+		entry.Action = linkedRegistrationAction(guard.Linked, entry.State)
+	}
+
+	return entry, linked || entry.State == StateUnreadable
+}
+
+// linkedRegistrationAction is the corrective action for a linked
+// .mcp.json that does not register seamark. A re-run of init cannot
+// clear the state, because setup never writes through a link. A file
+// that the plan cannot parse needs a fix before the registration.
+func linkedRegistrationAction(link string, state CapabilityState) string {
+	change := "register seamark in the file it points to"
+	if state == StateUnreadable {
+		change = "fix the file it points to and register seamark there"
+	}
+
+	return "setup never writes through the symlink at " + link + ": " + change +
+		", or replace the link with the real file and run `seamark init --client claude`"
 }

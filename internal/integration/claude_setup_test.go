@@ -24,6 +24,7 @@ func planClaude(t *testing.T, root string, req ClientSetup) ClientPlan {
 
 	plan, err := claudeSetup{}.Plan(root, testBinary, req)
 	require.NoError(t, err)
+	assert.Empty(t, repeatedPathReasons(plan.Findings), "a finding names its path once")
 
 	return plan
 }
@@ -98,6 +99,23 @@ func findingReasons(plan ClientPlan, level FindingLevel) []string {
 	}
 
 	return out
+}
+
+// The owned gate commands of the test binary, in both modes.
+var (
+	enforceGateCommand = testBinary + " " + hooks.GateMarker(hooks.ModeEnforce)
+	warnGateCommand    = testBinary + " " + hooks.GateMarker(hooks.ModeWarn)
+)
+
+// hookEntry returns one PreToolUse entry with a command under matcher.
+func hookEntry(matcher, command string) string {
+	return `{"matcher":"` + matcher + `","hooks":[{"type":"command","command":"` + command + `"}]}`
+}
+
+// bashHook returns a hook document with one command under the Bash
+// matcher. Claude Code and Codex share the shape.
+func bashHook(command string) string {
+	return `{"hooks":{"PreToolUse":[` + hookEntry("Bash", command) + `]}}`
 }
 
 // commandsIn flattens the hook commands under one event.
@@ -268,6 +286,87 @@ func TestClaudeGateModeIsNeverChangedImplicitly(t *testing.T) {
 	assert.Contains(t, narrated(t, warn, approve.ClaudeSettings, OpPlanned), "  note    would remove --enforce")
 }
 
+// enforceLayouts are settings files whose owned gate hook enforces and
+// fires for Bash under Claude Code's matcher rule. A substring test for
+// "Bash" misses the star, empty, omitted, and expression matchers. A
+// rule where the last command wins reads the layout with two gates as
+// warn.
+func enforceLayouts() map[string]string {
+	enforce, warn := enforceGateCommand, warnGateCommand
+
+	document := func(entries ...string) string {
+		return `{"hooks":{"PreToolUse":[` + strings.Join(entries, ",") + `]}}`
+	}
+
+	return map[string]string{
+		"star matcher":             document(hookEntry("*", enforce)),
+		"empty matcher":            document(hookEntry("", enforce)),
+		"omitted matcher":          document(`{"hooks":[{"type":"command","command":"` + enforce + `"}]}`),
+		"regular expression":       document(hookEntry("Ba.*", enforce)),
+		"anchored expression":      document(hookEntry("^Bash$", enforce)),
+		"name list":                document(hookEntry("Bash|Edit", enforce)),
+		"enforce first, warn last": document(hookEntry("Bash", enforce), hookEntry("Bash", warn)),
+	}
+}
+
+func TestClaudeReRunKeepsEnforceUnderEveryFiringMatcher(t *testing.T) {
+	// The plan reads the installed mode by the rule that inspection uses.
+	// A plain re-run must never remove --enforce. Only an explicit warn
+	// removes it, and the narrator then says so.
+	enforce, warn := enforceGateCommand, warnGateCommand
+
+	for name, body := range enforceLayouts() {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeRel(t, root, approve.ClaudeSettings, body)
+
+			// The three readers of the managed mode give one answer.
+			assert.Equal(t, hooks.ModeEnforce, claudeSetup{}.Inspect(root).ManagedGateMode)
+			assert.Equal(t, hooks.ModeEnforce, claudeSetup{}.ManagedGateMode(root))
+
+			plain := planClaude(t, root, ClientSetup{Hooks: true})
+			commands := commandsIn(writeFor(t, plain, approve.ClaudeSettings), "PreToolUse")
+			assert.Contains(t, commands, enforce)
+			assert.NotContains(t, commands, warn, "a plain re-run keeps --enforce")
+			assert.NotContains(t, narrated(t, plain, approve.ClaudeSettings, OpApplied), "--enforce from the gate hook")
+
+			// An explicit warn still removes the flag, and the narrator says so.
+			downgrade := planClaude(t, root, ClientSetup{Hooks: true, GateMode: hooks.ModeWarn})
+			commands = commandsIn(writeFor(t, downgrade, approve.ClaudeSettings), "PreToolUse")
+			assert.Contains(t, commands, warn)
+			assert.NotContains(t, commands, enforce)
+			assert.Contains(t, narrated(t, downgrade, approve.ClaudeSettings, OpApplied),
+				"  note    removed --enforce from the gate hook")
+		})
+	}
+}
+
+func TestClaudeReRunReportsAnEnforceFlagThatTheMergeRemoves(t *testing.T) {
+	// These owned gate commands never fire for Bash, so the installed mode
+	// is warn or none, and a plain re-run writes warn. Merge rewrites every
+	// owned command, also one under a matcher that never fires. The user
+	// wrote that --enforce, so the narrator must report its removal.
+	enforce, warn := enforceGateCommand, warnGateCommand
+
+	for name, entries := range map[string]string{
+		"a permission rule":         hookEntry("Bash(git:*)", enforce),
+		"another tool name":         hookEntry("BashOutput", enforce),
+		"an edit matcher":           hookEntry("Edit", enforce),
+		"beside a firing warn hook": hookEntry("BashOutput", enforce) + "," + hookEntry("Bash", warn),
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeRel(t, root, approve.ClaudeSettings, `{"hooks":{"PreToolUse":[`+entries+`]}}`)
+			assert.NotEqual(t, hooks.ModeEnforce, claudeSetup{}.ManagedGateMode(root), "no enforcing gate fires")
+
+			plan := planClaude(t, root, ClientSetup{Hooks: true})
+			assert.NotContains(t, commandsIn(writeFor(t, plan, approve.ClaudeSettings), "PreToolUse"), enforce)
+			assert.Contains(t, narrated(t, plan, approve.ClaudeSettings, OpApplied),
+				"  note    removed --enforce from the gate hook")
+		})
+	}
+}
+
 func TestClaudeInstallsEveryHookAndReportsTheLocalDuplicate(t *testing.T) {
 	root := t.TempDir()
 	writeRel(t, root, claudeLocalSettings, `{"hooks":{"PreToolUse":[
@@ -280,7 +379,8 @@ func TestClaudeInstallsEveryHookAndReportsTheLocalDuplicate(t *testing.T) {
 	// The shared file is the one the team commits. It gets every hook,
 	// whatever the personal file of the person who ran setup holds.
 	assert.Equal(t, hooks.ModeWarn, hooks.InstalledGateMode(settings))
-	assert.True(t, hooks.LessonsHookInstalled(settings))
+	assert.True(t, hooks.ManagedRuns(settings, hooks.ClaudeSpecs(hooks.ModeWarn)[1], testBinary, hooks.ClaudeMatcher),
+		"the managed lessons hook fires for the edit tools")
 
 	warnings := findingReasons(plan, FindingWarning)
 	require.Len(t, warnings, 1)
@@ -464,36 +564,6 @@ func TestClaudeWithoutTheSourceCheckNeverReadsTheLocalFile(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestClaudeReadsAnInputThroughALinkAndNeverWritesThroughOne(t *testing.T) {
-	outside := t.TempDir()
-	writeRel(t, outside, "mcp.json", `{"mcpServers":{"sm":{"command":"/opt/seamark","args":["mcp"]}}}`)
-	writeRel(t, outside, "empty.json", `{"mcpServers":{}}`)
-
-	// Grants only: .mcp.json names the server and is never written, so a
-	// link is read through, as init always did.
-	root := t.TempDir()
-	require.NoError(t, os.Symlink(filepath.Join(outside, "mcp.json"), filepath.Join(root, ".mcp.json")))
-
-	plan := planClaude(t, root, ClientSetup{ApproveTools: true})
-	assert.True(t, approve.AllowSet(writeFor(t, plan, approve.ClaudeSettings))["mcp__sm__orient"])
-
-	// The registration is kept when the linked file already holds it.
-	full := mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: []ClientSetup{
-		{ClientID: ClaudeID, RegisterMCP: true},
-	}})
-	assert.Empty(t, full.Writes)
-
-	// A registration that would be written through the link is refused.
-	linked := t.TempDir()
-	require.NoError(t, os.Symlink(filepath.Join(outside, "empty.json"), filepath.Join(linked, ".mcp.json")))
-
-	_, err := PlanSetup(Builtin(), SetupRequest{Root: linked, Binary: testBinary, Clients: []ClientSetup{
-		{ClientID: ClaudeID, RegisterMCP: true},
-	}})
-	require.ErrorContains(t, err, ".mcp.json: symlink at .mcp.json")
-	assert.Equal(t, `{"mcpServers":{}}`, readRel(t, outside, "empty.json"))
-}
-
 func TestClaudeIgnoresALocalEntryThatNeverFires(t *testing.T) {
 	// A gate command under an Edit matcher, or with another hook type,
 	// never runs on a shell command. It is not a duplicate.
@@ -525,6 +595,18 @@ func TestClaudeSetupContinuesPastABrokenLocalFile(t *testing.T) {
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], claudeLocalSettings+": not checked for duplicate seamark hooks")
 	assert.NotContains(t, warnings[0], approve.ClaudeSettings+":", "the finding must not blame the shared file")
+}
+
+func TestClaudeSetupNamesALocalFileThatItCannotReadOnce(t *testing.T) {
+	// The read error starts with the path, and the consumer prints the
+	// path before the reason already.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, filepath.FromSlash(claudeLocalSettings)), 0o755))
+
+	plan := planClaude(t, root, ClientSetup{Hooks: true})
+
+	assert.Equal(t, []string{claudeLocalSettings + ": not checked for duplicate seamark hooks: not a regular file"},
+		findingReasons(plan, FindingWarning))
 }
 
 func TestClaudePlanRejectsWrongTypedFields(t *testing.T) {
@@ -636,4 +718,107 @@ func TestClaudeKeepsAWrappedHookAndReportsIt(t *testing.T) {
 		{Path: ".claude/settings.json", Mode: "warn", Managed: true},
 		{Path: ".claude/settings.json", Mode: "enforce"},
 	}, plan.GateHooks)
+}
+
+func TestClaudeReadsTheShellOptionsOfAWrappedGate(t *testing.T) {
+	// The reported defect: "--norc" holds the letter c, so the reader took
+	// it for -c. The reader saw no gate in the enforcing wrapper. The run
+	// then reported only the managed warn gate, and nothing about the
+	// second one.
+	root := t.TempDir()
+	wrapped := "bash --norc -c '/usr/local/bin/seamark gate --enforce --hook'"
+	writeRel(t, root, ".claude/settings.json", bashHook(wrapped))
+
+	plan := planClaude(t, root, ClientSetup{Hooks: true})
+
+	assert.ElementsMatch(t, []GateHook{
+		{Path: ".claude/settings.json", Mode: "warn", Managed: true},
+		{Path: ".claude/settings.json", Mode: "enforce"},
+	}, plan.GateHooks)
+
+	warnings := findingReasons(plan, FindingWarning)
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "runs twice")
+	assert.Contains(t, warnings[0], "runs in enforce mode, and both apply")
+
+	insp := claudeSetup{}.Inspect(root)
+	commands, _ := insp.Entry(CapabilityCommands)
+	assert.Equal(t, "gate hook (enforce) runs from .claude/settings.json (not managed by setup)", commands.Detail)
+	assert.Equal(t, "enforce", insp.GateMode)
+}
+
+func TestClaudeGateThatMayRunIsPossibleNotInstalled(t *testing.T) {
+	// The reported defect: "echo seamark gate --enforce --hook" made the
+	// inspection say "enforce". The reader cannot tell what an unknown
+	// program does with the gate command, so the gate is one that may
+	// run, with the mode it has when it runs, and nothing is known to
+	// block.
+	root := t.TempDir()
+	printed := "echo /usr/local/bin/seamark gate --enforce --hook"
+	writeRel(t, root, ".claude/settings.json", bashHook(printed))
+
+	plan := planClaude(t, root, ClientSetup{Hooks: true})
+
+	assert.ElementsMatch(t, []GateHook{
+		{Path: ".claude/settings.json", Mode: "warn", Managed: true},
+		{Path: ".claude/settings.json", Mode: "enforce", Uncertain: true},
+	}, plan.GateHooks)
+	assert.Equal(t, GateSummary{Warn: []string{".claude/settings.json"}, Possible: []string{".claude/settings.json"}},
+		SummarizeGateHooks(plan.GateHooks))
+
+	warnings := findingReasons(plan, FindingWarning)
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "setup cannot tell")
+
+	insp := claudeSetup{}.Inspect(root)
+	commands, _ := insp.Entry(CapabilityCommands)
+	assert.Equal(t, StatePartial, commands.State)
+	assert.Equal(t, "gate hook (enforce) may run from .claude/settings.json: `"+printed+"`", commands.Detail)
+	assert.Empty(t, insp.GateMode, "no definition certainly runs the gate")
+	assert.Equal(t, "enforce", insp.PossibleGateMode)
+	assert.Equal(t, GateSummary{Possible: []string{ClaudeID}}, SummarizeInspections([]Inspection{insp}))
+	assert.Equal(t, "gate hook installed (mode unknown); "+commands.Detail, insp.DescribeHooks())
+}
+
+func TestClaudeWrappedGateThatDiscardsItsExitStatusIsReportOnly(t *testing.T) {
+	// "|| true" makes the command exit 0, whatever the gate returns, so
+	// no verdict blocks. The gate line must not say "enforce", and a
+	// finding says what to change.
+	root := t.TempDir()
+	wrapped := "/usr/local/bin/seamark gate --enforce --hook || true"
+	writeRel(t, root, ".claude/settings.json", bashHook(wrapped))
+
+	plan := planClaude(t, root, ClientSetup{Hooks: true})
+
+	assert.ElementsMatch(t, []GateHook{
+		{Path: ".claude/settings.json", Mode: "warn", Managed: true},
+		{Path: ".claude/settings.json", Mode: GateModeReportOnly},
+	}, plan.GateHooks)
+
+	discards := findingsWith(plan.Findings, "discards the exit status")
+	require.Len(t, discards, 1)
+	assert.Equal(t, FindingWarning, discards[0].Level)
+	assert.Equal(t, ".claude/settings.json", discards[0].Path)
+	assert.True(t, strings.HasPrefix(discards[0].Reason, "has `"+wrapped+"`"), "the reason never starts with the path")
+	assert.NotContains(t, strings.Join(findingReasons(plan, FindingWarning), "\n"), "enforce mode",
+		"the duplicate warning names no enforcing mode")
+
+	// Inspection of the wrapper alone reads report-only and repeats the
+	// finding.
+	insp := claudeSetup{}.Inspect(root)
+	commands, _ := insp.Entry(CapabilityCommands)
+	assert.Equal(t, "gate hook (report-only) runs from .claude/settings.json (not managed by setup)", commands.Detail)
+	assert.Equal(t, GateModeReportOnly, insp.GateMode)
+	assert.Len(t, findingsWith(insp.Findings, "discards the exit status"), 1)
+
+	// The personal file gets the same reading.
+	root = t.TempDir()
+	writeRel(t, root, claudeLocalSettings, bashHook(wrapped))
+
+	plan = planClaude(t, root, ClientSetup{Hooks: true})
+	assert.Contains(t, plan.GateHooks, GateHook{Path: claudeLocalSettings, Mode: GateModeReportOnly})
+
+	discards = findingsWith(plan.Findings, "discards the exit status")
+	require.Len(t, discards, 1)
+	assert.Equal(t, claudeLocalSettings, discards[0].Path)
 }

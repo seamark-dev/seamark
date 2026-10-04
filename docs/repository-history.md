@@ -95,7 +95,9 @@ adapter identifies no receiving context. `--json` carries the same
 facts as a `clients` array with typed, named states. The `gate` line
 covers every agent with a gate hook and names the installed hook mode
 apart from the policy mode, because a warn hook still follows an
-enforcing policy file.
+enforcing policy file. A wrapped gate hook that certainly runs and
+whose exit status the wrapper discards (`… || true`) reads
+`report-only`: no policy mode makes it block.
 
 Every safety-sensitive answer needs this context: **"no effects found"
 from a half-parsed index is not "no effects."** The same honesty runs

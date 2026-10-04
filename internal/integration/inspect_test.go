@@ -67,6 +67,8 @@ func TestInspectMatrix(t *testing.T) {
 			}
 
 			assert.Equal(t, f.GateMode, insp.GateMode)
+			assert.Equal(t, f.PossibleGateMode, insp.PossibleGateMode)
+			assert.Equal(t, f.ManagedGateMode, insp.ManagedGateMode)
 
 			var reasons []string
 			for _, finding := range insp.Findings {
@@ -77,6 +79,8 @@ func TestInspectMatrix(t *testing.T) {
 				assert.True(t, slices.ContainsFunc(reasons, func(r string) bool { return strings.Contains(r, want) }),
 					"finding %q among %q", want, reasons)
 			}
+
+			assert.Empty(t, integration.RepeatedPathReasons(insp.Findings), "a finding names its path once")
 
 			rendered := inspecttest.Rendered(insp)
 			for _, word := range f.Words {
@@ -97,6 +101,61 @@ func TestInspectMatrix(t *testing.T) {
 				assert.Contains(t, skills.Details(inspecttest.Registry().InspectSkills(root)), f.Skills)
 			}
 		})
+	}
+}
+
+func TestEveryFindingNamesItsPathOnceAcrossTheMatrix(t *testing.T) {
+	// Every consumer prints "<Path>: <Reason>". The rule holds for the
+	// inspection of every client and for the full setup plan of every
+	// built-in client, in every state of the matrix. A state that stops
+	// the plan has no plan findings to check, so the test counts the
+	// plans it checks.
+	reg := inspecttest.Registry()
+	planned := map[string]int{}
+
+	for _, f := range inspecttest.Fixtures() {
+		root := t.TempDir()
+		require.NoError(t, f.Write(root))
+
+		for _, insp := range reg.Inspect(root) {
+			assert.Empty(t, integration.RepeatedPathReasons(insp.Findings), "%s: %s inspection", f.Name, insp.ClientID)
+		}
+
+		for _, id := range integration.Builtin().IDs() {
+			setups, err := integration.ExplicitSetups(reg, []string{id}, true, true, "")
+			require.NoError(t, err)
+
+			plan, err := integration.PlanSetup(reg, integration.SetupRequest{Root: root, Binary: inspecttest.Binary, Clients: setups})
+			if err == nil {
+				planned[id]++
+				assert.Empty(t, integration.RepeatedPathReasons(plan.Findings), "%s: %s plan", f.Name, id)
+			}
+		}
+	}
+
+	for _, id := range integration.Builtin().IDs() {
+		assert.Positive(t, planned[id], "the matrix checks at least one plan of %s", id)
+	}
+}
+
+func TestManagedGateModeAgreesWithTheInspectionAcrossTheMatrix(t *testing.T) {
+	// init reads the gate mode through the narrow method, and doctor and
+	// status read the inspection. The two must give one answer for every
+	// client in every state of the matrix.
+	reg := inspecttest.Registry()
+
+	for _, f := range inspecttest.Fixtures() {
+		root := t.TempDir()
+		require.NoError(t, f.Write(root))
+
+		for _, insp := range reg.Inspect(root) {
+			client, ok := reg.Lookup(insp.ClientID)
+			require.True(t, ok)
+
+			if client.Setup != nil {
+				assert.Equal(t, insp.ManagedGateMode, client.Setup.ManagedGateMode(root), "%s: %s", f.Name, insp.ClientID)
+			}
+		}
 	}
 }
 

@@ -37,8 +37,15 @@ type Fixture struct {
 	Client string
 	// States are the expected states of the named capabilities.
 	States map[integration.Capability]integration.CapabilityState
-	// GateMode is the expected installed gate mode of the client.
+	// GateMode is the expected installed gate mode of the client, from
+	// the definitions that certainly run the gate.
 	GateMode string
+	// PossibleGateMode is the expected mode of the definitions that may
+	// run the gate, or "" without such a definition.
+	PossibleGateMode string
+	// ManagedGateMode is the expected mode of the gate hook that setup
+	// manages, or "" when none runs. A plain re-run of setup keeps it.
+	ManagedGateMode string
 	// Findings are substrings that the client's finding reasons must
 	// contain, one finding per entry.
 	Findings []string
@@ -123,6 +130,9 @@ func (sharedSetup) Inspect(string) integration.Inspection {
 	}
 }
 
+// ManagedGateMode is empty: the shared client installs no gate hook.
+func (sharedSetup) ManagedGateMode(string) string { return "" }
+
 func (sharedSetup) Plan(string, string, integration.ClientSetup) (integration.ClientPlan, error) {
 	return integration.ClientPlan{}, nil
 }
@@ -157,13 +167,21 @@ func Named(name string) Fixture {
 // hook command; no consumer may print it.
 const Secret = "sk-live-1234567890abcdef"
 
-// Fixtures returns the matrix. The names follow the plan's list:
-// absent, current, partial, foreign, malformed, restricted, pending
-// trust, unknown verification, shared skills, missing invoker, plus the
-// limitations the adapters report: hooks turned off, a handler that
-// runs twice, a wrapped handler in the personal file, an enforcing
-// inline handler beside the managed warn hook, and a wrapper that
-// carries a credential.
+// Fixtures returns the matrix. The names follow the plan's list of
+// states: absent, current, partial, foreign, malformed, restricted,
+// pending trust, unknown verification, shared skills, and missing
+// invoker. The other fixtures hold the limitations that the adapters
+// report:
+//
+//   - hooks turned off;
+//   - a handler that runs twice;
+//   - a wrapped handler in the personal file;
+//   - an enforcing inline handler beside the managed warn hook;
+//   - a gate command under a matcher that never fires;
+//   - a wrapper that carries a credential.
+//
+// Two managed gate hooks enforce. One is under a "*" matcher, which a
+// substring test for "Bash" misses. The other is the Codex hook.
 func Fixtures() []Fixture {
 	return []Fixture{
 		{
@@ -186,7 +204,7 @@ func Fixtures() []Fixture {
 				integration.CapabilityToolGrants: integration.StateCurrent, integration.CapabilityEdits: integration.StateCurrent,
 				integration.CapabilityCommands: integration.StateCurrent, integration.CapabilityResets: integration.StateCurrent,
 			},
-			GateMode: "warn",
+			GateMode: "warn", ManagedGateMode: "warn",
 			Words: []string{
 				"gate (warn) + lessons hooks installed", `registered in .mcp.json as "seamark"`, "8/8 rules", "3/3 current",
 			},
@@ -255,7 +273,7 @@ func Fixtures() []Fixture {
 				integration.CapabilityEdits: integration.StateCurrent, integration.CapabilityCommands: integration.StateCurrent,
 				integration.CapabilityResets: integration.StateAbsent,
 			},
-			GateMode: "warn",
+			GateMode: "warn", ManagedGateMode: "warn",
 			Findings: []string{"reviews and trusts it", "once-per-context"},
 			Words:    []string{"gate (warn) + lessons hooks installed"},
 		},
@@ -299,7 +317,7 @@ func Fixtures() []Fixture {
 			States: map[integration.Capability]integration.CapabilityState{
 				integration.CapabilityEdits: integration.StateCurrent, integration.CapabilityCommands: integration.StateCurrent,
 			},
-			GateMode: "warn",
+			GateMode: "warn", ManagedGateMode: "warn",
 			Findings: []string{"turns every Codex hook off"},
 			Words:    []string{"gate (warn) + lessons hooks installed"},
 		},
@@ -317,7 +335,7 @@ func Fixtures() []Fixture {
 			States: map[integration.Capability]integration.CapabilityState{
 				integration.CapabilityEdits: integration.StateCurrent, integration.CapabilityCommands: integration.StateCurrent,
 			},
-			GateMode: "warn",
+			GateMode: "warn", ManagedGateMode: "warn",
 			Findings: []string{"runs twice"},
 			Words:    []string{"gate (warn) + lessons hooks installed"},
 		},
@@ -354,8 +372,52 @@ func Fixtures() []Fixture {
 			States: map[integration.Capability]integration.CapabilityState{
 				integration.CapabilityEdits: integration.StateCurrent, integration.CapabilityCommands: integration.StateCurrent,
 			},
-			GateMode: "enforce",
+			GateMode: "enforce", ManagedGateMode: "warn",
 			Findings: []string{"runs twice"},
+			Words:    []string{"gate (enforce) + lessons hooks installed"},
+		},
+		{
+			// seamark's own gate command under a matcher that never fires for
+			// Bash: it gates nothing, and the finding says why.
+			Name: "never fires",
+			Write: func(root string) error {
+				return write(root, ".claude/settings.json", `{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[`+
+					`{"type":"command","command":"`+Binary+` gate --enforce --hook"}]}]}}`)
+			},
+			Client: integration.ClaudeID,
+			States: map[integration.Capability]integration.CapabilityState{
+				integration.CapabilityEdits: integration.StateAbsent, integration.CapabilityCommands: integration.StateAbsent,
+			},
+			Findings: []string{`under PreToolUse "Edit", which never runs for PreToolUse Bash`},
+			Words:    []string{"no hooks installed"},
+		},
+		{
+			// seamark's own enforcing gate under a "*" matcher. Claude Code
+			// runs it for Bash, so a plain re-run must keep --enforce.
+			Name: "star enforce",
+			Write: func(root string) error {
+				return write(root, ".claude/settings.json", `{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[`+
+					`{"type":"command","command":"`+Binary+` gate --enforce --hook"}]}]}}`)
+			},
+			Client: integration.ClaudeID,
+			States: map[integration.Capability]integration.CapabilityState{
+				integration.CapabilityEdits: integration.StateAbsent, integration.CapabilityCommands: integration.StateCurrent,
+			},
+			GateMode: "enforce", ManagedGateMode: "enforce",
+			Words: []string{"gate hook installed (enforce), lessons hook missing"},
+		},
+		{
+			// The managed Codex gate hook, installed with --enforce.
+			Name: "codex enforce",
+			Write: func(root string) error {
+				return apply(root, integration.ClientSetup{ClientID: integration.CodexID, Hooks: true, GateMode: "enforce"})
+			},
+			Client: integration.CodexID,
+			States: map[integration.Capability]integration.CapabilityState{
+				integration.CapabilityEdits: integration.StateCurrent, integration.CapabilityCommands: integration.StateCurrent,
+			},
+			GateMode: "enforce", ManagedGateMode: "enforce",
+			Findings: []string{"reviews and trusts it", "once-per-context"},
 			Words:    []string{"gate (enforce) + lessons hooks installed"},
 		},
 		{
@@ -370,9 +432,12 @@ func Fixtures() []Fixture {
 			States: map[integration.Capability]integration.CapabilityState{
 				integration.CapabilityCommands: integration.StatePartial,
 			},
-			Findings: []string{"can run the seamark gate hook"},
-			Words:    []string{"gate hook may run from .claude/settings.json"},
-			Absent:   []string{Secret},
+			// A source that can run the gate gives no installed mode. Its
+			// mode is possible, and the client's own line says "may run".
+			PossibleGateMode: "warn",
+			Findings:         []string{"can run the seamark gate hook"},
+			Words:            []string{"gate hook (warn) may run from .claude/settings.json"},
+			Absent:           []string{Secret},
 		},
 	}
 }

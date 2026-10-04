@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -18,6 +19,7 @@ func planCodex(t *testing.T, root string, req ClientSetup) ClientPlan {
 
 	plan, err := codexSetup{}.Plan(root, testBinary, req)
 	require.NoError(t, err)
+	assert.Empty(t, repeatedPathReasons(plan.Findings), "a finding names its path once")
 
 	return plan
 }
@@ -180,4 +182,27 @@ func TestCodexInspection(t *testing.T) {
 		CapabilityMCPRegistration: StateUnreadable, CapabilityToolGrants: StateUnreadable,
 		CapabilityEdits: StateAbsent, CapabilityCommands: StateAbsent, CapabilityResets: StateAbsent,
 	}, state(broken), "a broken config.toml says nothing about hooks.json")
+}
+
+func TestCodexParseErrorNamesTheHookDocumentOnce(t *testing.T) {
+	// The reader names .codex/hooks.json in a parse error, as the Claude
+	// Code parser names its file, so every reason about a hook document
+	// reads alike. The plan adds its advice and no second name.
+	root := t.TempDir()
+	writeRel(t, root, ".codex/hooks.json", "{not json")
+
+	insp := codexSetup{}.Inspect(root)
+	assert.True(t, strings.HasPrefix(insp.HookDocumentError, ".codex/hooks.json: "), insp.HookDocumentError)
+	assert.Equal(t, 1, strings.Count(insp.HookDocumentError, ".codex/hooks.json"))
+
+	commands, ok := insp.Entry(CapabilityCommands)
+	require.True(t, ok)
+	assert.Equal(t, StateUnreadable, commands.State)
+	assert.Equal(t, "unreadable ("+insp.HookDocumentError+")", commands.Detail)
+
+	_, err := codexSetup{}.Plan(root, testBinary, ClientSetup{ClientID: CodexID, Hooks: true})
+	require.Error(t, err)
+	assert.True(t, strings.HasPrefix(err.Error(), ".codex/hooks.json: "), err.Error())
+	assert.Equal(t, 1, strings.Count(err.Error(), ".codex/hooks.json"))
+	assert.Contains(t, err.Error(), "fix or move it, then re-run")
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -225,7 +226,11 @@ func TestGatherReportsUnreadableHookConfig(t *testing.T) {
 
 	s, err := Gather(st, root)
 	require.NoError(t, err)
-	assert.NotEmpty(t, s.GateHookError)
+
+	// The JSON field holds the bare reason, in the format of earlier
+	// versions. The word "unreadable" belongs to the per-client detail.
+	assert.True(t, strings.HasPrefix(s.GateHookError, ".claude/settings.json: invalid character"), s.GateHookError)
+	assert.Empty(t, s.GateHookMode)
 
 	var b bytes.Buffer
 	Print(&b, s)
@@ -429,6 +434,15 @@ func TestGatherFollowsTheInspectionMatrix(t *testing.T) {
 			}
 
 			assert.Equal(t, f.GateMode, insp.GateMode)
+			assert.Equal(t, f.PossibleGateMode, insp.PossibleGateMode)
+			assert.Equal(t, f.ManagedGateMode, insp.ManagedGateMode)
+
+			// The legacy fields describe the Claude Code hook alone, from
+			// the same inspection.
+			if f.Client == integration.ClaudeID {
+				assert.Equal(t, f.ManagedGateMode, s.GateHookMode)
+				assert.Equal(t, insp.HookDocumentError, s.GateHookError)
+			}
 
 			// The client line prints the hooks and the registration; the
 			// skills and approvals lines print the rest per client.
@@ -523,6 +537,74 @@ func TestPrintGateCoversEveryClientWithAGateHook(t *testing.T) {
 	assert.Contains(t, b.String(), "FAILS CLOSED (codex)")
 }
 
+func TestPrintGateNamesAHookThatDiscardsItsExitStatus(t *testing.T) {
+	// The reported defect: a wrapper with "|| true" read as a warn hook,
+	// and the line said that an enforcing policy governs it. A verdict
+	// blocks only by exit status 2, so no policy makes that hook block.
+	st, root := seededStore(t)
+
+	require.NoError(t, inspecttest.Named("pending trust").Write(root))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "hooks.json"),
+		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[`+
+			`{"type":"command","command":"`+inspecttest.Binary+` gate --enforce --hook --client codex || true"}]}]}}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte("mode: enforce\n"), 0o644))
+
+	s, err := gather(inspecttest.Registry(), st, root)
+	require.NoError(t, err)
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.Contains(t, b.String(), "gate           report-only (codex hook discards its exit status); "+
+		"nothing blocks, whatever policy mode enforce says")
+	assert.NotContains(t, b.String(), "governs")
+	assert.Contains(t, b.String(), "codex   gate hook installed (report-only)")
+
+	// Beside a warn hook, the policy governs that one, and the line names
+	// the hook that never blocks.
+	inspection := func(id, mode string) integration.Inspection {
+		return integration.Inspection{ClientID: id, GateMode: mode, Capabilities: []integration.CapabilityInspection{
+			{Capability: integration.CapabilityCommands, Supported: true, State: integration.StateCurrent},
+		}}
+	}
+
+	b.Reset()
+	Print(&b, &Status{GatePolicyMode: "enforce", Clients: []integration.Inspection{
+		inspection("claude", "warn"), inspection("codex", integration.GateModeReportOnly),
+	}})
+	assert.Contains(t, b.String(), "gate           hook installed (claude); policy mode enforce governs\n"+
+		"               the codex hook discards its exit status, so it never blocks")
+
+	// A broken policy changes nothing for such a hook: it never blocks.
+	b.Reset()
+	Print(&b, &Status{GatePolicyError: "boom", Clients: []integration.Inspection{inspection("codex", integration.GateModeReportOnly)}})
+	assert.Contains(t, b.String(), "the report-only hook discards its exit status (codex): nothing blocks")
+	assert.NotContains(t, b.String(), "no operational gate hook")
+
+	// The reported defect: a definition that may run the gate, such as
+	// an echo with the gate command as its arguments, made the line say
+	// "enforce". Nothing is known to block, and the line says so.
+	possible := inspection("claude", "")
+	possible.PossibleGateMode = "enforce"
+
+	b.Reset()
+	Print(&b, &Status{GatePolicyMode: "warn", Clients: []integration.Inspection{possible}})
+	assert.Contains(t, b.String(), "gate           policy mode warn; a definition of claude may run a gate hook; "+
+		"seamark cannot tell what it does, so nothing is known to block")
+	assert.NotContains(t, b.String(), "carries --enforce")
+
+	// Beside a hook that certainly runs, the possible one is a note.
+	b.Reset()
+	Print(&b, &Status{GatePolicyMode: "warn", Clients: []integration.Inspection{possible, inspection("codex", "warn")}})
+	assert.Contains(t, b.String(), "gate           hook installed (codex); policy mode warn governs\n"+
+		"               a definition of claude may also run a gate hook; seamark cannot tell what it does")
+
+	// A broken policy and a possible gate: the behaviour is unknown.
+	b.Reset()
+	Print(&b, &Status{GatePolicyError: "boom", Clients: []integration.Inspection{possible}})
+	assert.Contains(t, b.String(), "POLICY BROKEN (boom)\n               a definition of claude may run a gate hook")
+	assert.Contains(t, b.String(), "effective behaviour unknown")
+}
+
 func TestPrintClientsSanitizesAdapterText(t *testing.T) {
 	// Adapter details and findings carry repository bytes (paths,
 	// commands); the status lines must not carry terminal escapes.
@@ -544,6 +626,35 @@ func TestPrintClientsSanitizesAdapterText(t *testing.T) {
 	assert.NotContains(t, b.String(), "\x1b")
 }
 
+func TestPrintGateNeverSaysNothingBlocksBesideAnUnreadableDocument(t *testing.T) {
+	// A report-only Claude Code hook beside an unreadable Codex hook
+	// document: the Codex document can hold an enforcing gate, so the
+	// line reports the unknown, not "nothing blocks".
+	inspection := func(id, mode string, state integration.CapabilityState, detail string) integration.Inspection {
+		return integration.Inspection{ClientID: id, GateMode: mode, Capabilities: []integration.CapabilityInspection{
+			{Capability: integration.CapabilityCommands, Supported: true, State: state, Detail: detail},
+		}}
+	}
+
+	var b bytes.Buffer
+	Print(&b, &Status{GatePolicyMode: "warn", Clients: []integration.Inspection{
+		inspection("claude", integration.GateModeReportOnly, integration.StateCurrent, ""),
+		inspection("codex", "", integration.StateUnreadable, "unreadable: boom"),
+	}})
+	assert.Contains(t, b.String(), "gate           policy mode warn; hook configuration UNREADABLE (codex: unreadable: boom)")
+	assert.Contains(t, b.String(), "the claude hook discards its exit status, so it never blocks")
+	assert.NotContains(t, b.String(), "nothing blocks")
+	assert.Equal(t, 1, strings.Count(b.String(), "UNREADABLE"), "the unknown is named once")
+
+	b.Reset()
+	Print(&b, &Status{GatePolicyError: "boom", Clients: []integration.Inspection{
+		inspection("claude", integration.GateModeReportOnly, integration.StateCurrent, ""),
+		inspection("codex", "", integration.StateUnreadable, "unreadable: boom"),
+	}})
+	assert.Contains(t, b.String(), "effective behaviour unknown")
+	assert.NotContains(t, b.String(), "nothing blocks")
+}
+
 func TestPrintGateReadsTheLegacyFieldsWithoutClients(t *testing.T) {
 	// A status decoded from an older JSON document has no per-client
 	// view; the gate line then falls back to the Claude Code fields.
@@ -554,4 +665,45 @@ func TestPrintGateReadsTheLegacyFieldsWithoutClients(t *testing.T) {
 	b.Reset()
 	Print(&b, &Status{GatePolicyMode: "warn", GateHookError: "boom"})
 	assert.Contains(t, b.String(), "UNREADABLE (claude: boom)")
+}
+
+func TestGatherReadsTheClaudeManagedGateModeByTheInspectionRule(t *testing.T) {
+	// The legacy gate fields and the per-client view read one rule: the
+	// gate hook fires for Bash under Claude Code's matcher rule, and
+	// enforce wins. The integration tests hold the full layout list.
+	enforce := inspecttest.Binary + " gate --enforce --hook"
+	warn := inspecttest.Binary + " gate --hook"
+
+	entry := func(matcher, command string) string {
+		return `{"matcher":"` + matcher + `","hooks":[{"type":"command","command":"` + command + `"}]}`
+	}
+
+	for name, entries := range map[string]string{
+		"star matcher":             entry("*", enforce),
+		"empty matcher":            entry("", enforce),
+		"regular expression":       entry("Ba.*", enforce),
+		"name list":                entry("Bash|Edit", enforce),
+		"enforce first, warn last": entry("Bash", enforce) + "," + entry("Bash", warn),
+	} {
+		t.Run(name, func(t *testing.T) {
+			st, root := seededStore(t)
+			require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+				[]byte(`{"hooks":{"PreToolUse":[`+entries+`]}}`), 0o644))
+
+			s, err := gather(inspecttest.Registry(), st, root)
+			require.NoError(t, err)
+			assert.Equal(t, "enforce", s.GateHookMode)
+			assert.Empty(t, s.GateHookError)
+
+			i := slices.IndexFunc(s.Clients, func(insp integration.Inspection) bool { return insp.ClientID == integration.ClaudeID })
+			require.GreaterOrEqual(t, i, 0)
+			assert.Equal(t, "enforce", s.Clients[i].GateMode)
+			assert.Equal(t, "enforce", s.Clients[i].ManagedGateMode)
+
+			var b bytes.Buffer
+			Print(&b, s)
+			assert.Contains(t, b.String(), "gate           enforce (claude hook carries --enforce; blocking verdicts exit 2)")
+		})
+	}
 }

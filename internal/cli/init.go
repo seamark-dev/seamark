@@ -547,6 +547,9 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 	// The summary comes from the hooks the run leaves, never from the
 	// mode it asked for: a hook setup does not manage keeps its own mode,
 	// and the managed hook is left out when such a hook already runs.
+	// The groups and the effect come from the rule status uses too.
+	summary := integration.SummarizeGateHooks(gateHooks)
+
 	var (
 		managed        *integration.GateHook
 		managedEnforce bool
@@ -558,8 +561,10 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 			managed = &gateHooks[i]
 		}
 
+		// A hook that may run enforces nothing for certain. The summary
+		// lists it as possible, and a note below names it.
 		switch {
-		case hook.Mode != gateModeEnforce:
+		case hook.Mode != gateModeEnforce || hook.Uncertain:
 		case hook.Managed:
 			managedEnforce = true
 		case !slices.Contains(enforcing, hook.Path):
@@ -573,8 +578,8 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		beside, besideSentence = ", although the hook setup manages is in warn mode", "The hook setup manages is in warn mode"
 	}
 
-	switch {
-	case len(gateHooks) == 0:
+	switch effect := summary.Effect(); {
+	case effect == integration.GateEffectNone:
 		// A gated client whose gate hook never fires: an owned entry under
 		// another matcher, which setup does not rewrite. The coverage
 		// finding names it.
@@ -584,11 +589,22 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 			fmt.Fprintf(w, "  gate    no gate hook runs for shell commands — .seamark/policy.yaml (mode: %s) governs\n"+
 				"          plain `seamark gate` and `seamark check` runs\n", policyMode)
 		}
-	case !managedEnforce && len(enforcing) > 0 && policyErr != nil:
+	case effect == integration.GateEffectUnknown:
+		// No hook of the run certainly runs a gate, and a definition may.
+		// The plan never holds an unreadable document, so the possible
+		// definitions are the whole reason.
+		fmt.Fprintf(w, "  gate    unknown — %s holds a definition that may run a gate hook, and setup cannot tell what\n"+
+			"          it does; run the seamark gate directly in that definition, or remove it and re-run\n",
+			strings.Join(summary.Possible, ", "))
+
+		if policyErr != nil {
+			fmt.Fprintf(w, "          note: .seamark/policy.yaml also failed to load (%v)\n", policyErr)
+		}
+	case effect == integration.GateEffectBlocks && !managedEnforce && policyErr != nil:
 		fmt.Fprintf(w, "  gate    enforce — %s runs its own gate hook with --enforce, and .seamark/policy.yaml\n"+
 			"          failed to load (%v); that hook fails closed: EVERY hooked command blocks until the\n"+
 			"          policy is fixed. %s\n", strings.Join(enforcing, ", "), policyErr, besideSentence)
-	case !managedEnforce && len(enforcing) > 0:
+	case effect == integration.GateEffectBlocks && !managedEnforce:
 		fmt.Fprintf(w, "  gate    enforce — %s runs its own gate hook with --enforce: deny/require_approval\n"+
 			"          verdicts exit 2 and block%s. Setup never\n"+
 			"          edits a gate hook it does not manage; remove that hook to stop blocking\n", strings.Join(enforcing, ", "), beside)
@@ -596,6 +612,17 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		if policyMode == gateModeEnforce {
 			fmt.Fprintf(w, "          note: the kept .seamark/policy.yaml also sets mode: enforce, so every gate hook blocks\n"+
 				"          too; both must change to stop blocking\n")
+		}
+	case effect == integration.GateEffectReportOnly:
+		// Every gate hook of the run discards its exit status. No mode and
+		// no policy makes it block, so the line must not name one.
+		fmt.Fprintf(w, "  gate    report-only — the gate hook in %s discards its exit status: verdicts\n"+
+			"          are reported, nothing blocks, whatever --enforce or .seamark/policy.yaml says. Setup never\n"+
+			"          edits a gate hook it does not manage; run the gate last in that hook, or remove it and re-run\n",
+			strings.Join(summary.ReportOnly, ", "))
+
+		if policyErr != nil {
+			fmt.Fprintf(w, "          note: .seamark/policy.yaml also failed to load (%v)\n", policyErr)
 		}
 	case policyErr != nil && managedEnforce:
 		fmt.Fprintf(w, "  gate    enforce — but .seamark/policy.yaml failed to load (%v);\n"+
@@ -622,6 +649,12 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		fmt.Fprintf(w, "  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n")
 	}
 
+	// The unknown line above already names the possible definitions.
+	if len(summary.Possible) > 0 && summary.Effect() > integration.GateEffectUnknown {
+		fmt.Fprintf(w, "  note    %s holds a definition that may also run a gate hook; setup cannot tell what it does\n",
+			strings.Join(summary.Possible, ", "))
+	}
+
 	printGateModeNotes(w, gateMode, gateHooks)
 }
 
@@ -638,8 +671,10 @@ func printGateModeNotes(w io.Writer, gateMode string, gateHooks []integration.Ga
 	}
 
 	for _, hook := range gateHooks {
+		// The note above names a hook that may run; its mode is not known
+		// to apply.
 		switch {
-		case hook.Mode != gateModeWarn:
+		case hook.Mode != gateModeWarn || hook.Uncertain:
 		case hook.Managed:
 			fmt.Fprintf(w, "  note    %s runs its gate hook without --enforce: that hook follows .seamark/policy.yaml\n"+
 				"          instead; re-run with --gate-mode enforce to bake the flag into every selected client's gate hook\n",

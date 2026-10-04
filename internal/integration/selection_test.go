@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -89,23 +90,6 @@ func TestLegacyApprovalTargetsReportAnUnreadableCodexDirectory(t *testing.T) {
 	_, _, err := legacyApprovalTargets(root, "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, os.ErrPermission)
-}
-
-func TestLegacySetupsReadNoCodexPathWithoutApproveTools(t *testing.T) {
-	// A .codex that cannot be stat'ed (a link to itself) must not stop
-	// a plain init: the run asks nothing of Codex, so no Codex path is
-	// read. With --approve-tools the same path is reported, as before.
-	root := t.TempDir()
-	require.NoError(t, os.Symlink(".codex", filepath.Join(root, ".codex")))
-
-	setups, err := LegacySetups(root, "", false, "")
-	require.NoError(t, err)
-	require.Len(t, setups, 1)
-	assert.Equal(t, ClaudeID, setups[0].ClientID)
-	assert.False(t, setups[0].ApproveTools)
-
-	_, err = LegacySetups(root, "", true, "")
-	require.Error(t, err)
 }
 
 func TestLegacySetupsKeepTheGranularIntent(t *testing.T) {
@@ -275,4 +259,41 @@ func TestUngatedHookClientsNamesAHooksOnlyClient(t *testing.T) {
 
 	assert.Equal(t, []string{CodexID}, GateHookClients(reg, setups))
 	assert.Equal(t, []string{"Hooks Only"}, UngatedHookClients(reg, setups))
+}
+
+// narrowSetup is a setup adapter whose full inspection fails the test.
+// It proves that the gate mode read of init uses ManagedGateMode alone.
+type narrowSetup struct {
+	t    *testing.T
+	mode string
+}
+
+// Inspect fails the test, because a full inspection reads every
+// document of the client, and init reads the gate mode before it plans.
+func (s narrowSetup) Inspect(string) Inspection {
+	s.t.Error("the gate mode read ran a full inspection")
+
+	return Inspection{}
+}
+
+func (s narrowSetup) ManagedGateMode(string) string { return s.mode }
+
+func (narrowSetup) Plan(string, string, ClientSetup) (ClientPlan, error) {
+	return ClientPlan{}, nil
+}
+
+func TestInstalledGateModeRunsNoFullInspection(t *testing.T) {
+	client := func(id, mode string) Client {
+		return Client{
+			ID: id, Name: id, Setup: narrowSetup{t: t, mode: mode},
+			SetupOps: SetupSupport{Hooks: true, GateHook: true},
+		}
+	}
+
+	reg, err := NewRegistry(client("first", hooks.ModeWarn), client("second", hooks.ModeEnforce), client("third", ""))
+	require.NoError(t, err)
+
+	assert.Equal(t, hooks.ModeWarn, InstalledGateMode(reg, t.TempDir(), []string{"first", "third"}))
+	assert.Equal(t, hooks.ModeEnforce, InstalledGateMode(reg, t.TempDir(), []string{"first", "second"}), "enforce wins")
+	assert.Empty(t, InstalledGateMode(reg, t.TempDir(), []string{"third"}))
 }

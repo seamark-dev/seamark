@@ -2,13 +2,14 @@ package integration
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/hooks"
 )
 
 // seamarkHookEntries returns, per event, the hook entries of a parsed
@@ -118,6 +119,30 @@ func TestCodexGateHookKeepsTheInstalledMode(t *testing.T) {
 	assert.Empty(t, codexSetup{}.Inspect(t.TempDir()).GateMode)
 }
 
+func TestCodexReRunReportsAnEnforceFlagThatTheMergeRemoves(t *testing.T) {
+	// The owned enforce gate never fires for Bash, so a plain re-run
+	// writes warn. Merge rewrites the owned command in place, and the
+	// narrator must report the removed flag.
+	enforce := testBinary + " " + hooks.CodexGateMarker(hooks.ModeEnforce)
+
+	for name, matcher := range map[string]string{"a pattern that needs more text": "Bash(git:*)", "an edit matcher": "apply_patch"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeRel(t, root, codexHooksFile, `{"hooks": {"PreToolUse": [{"matcher": "`+matcher+`", "hooks": [`+
+				`{"type": "command", "command": "`+enforce+`"}]}]}}`)
+			assert.Empty(t, codexSetup{}.ManagedGateMode(root), "no gate fires")
+
+			plan := planCodex(t, root, ClientSetup{Hooks: true})
+			require.Len(t, plan.Writes, 1)
+			assert.NotContains(t, string(plan.Writes[0].After), "--enforce")
+
+			var narrated strings.Builder
+			plan.Writes[0].Narrate(&narrated, OpApplied)
+			assert.Contains(t, narrated.String(), "  note    removed --enforce from the Codex gate hook")
+		})
+	}
+}
+
 func TestCodexGateHookInAnotherSourceKeepsItsOwnMode(t *testing.T) {
 	// A wrapped enforcing gate in hooks.json: setup does not own it,
 	// installs no second gate handler, and reports its mode so the
@@ -155,6 +180,224 @@ func TestCodexGateHookInAnotherSourceKeepsItsOwnMode(t *testing.T) {
 		{Path: ".codex/hooks.json", Mode: "enforce", Managed: true},
 	}, plan.GateHooks)
 	assert.Contains(t, strings.Join(findingReasons(plan, FindingWarning), "\n"), "the hook runs twice")
+}
+
+// findingsWith returns the findings whose reason contains text.
+func findingsWith(findings []Finding, text string) []Finding {
+	var out []Finding
+
+	for _, f := range findings {
+		if strings.Contains(f.Reason, text) {
+			out = append(out, f)
+		}
+	}
+
+	return out
+}
+
+func TestCodexGateHookReadsTheShellOptionsOfAWrapper(t *testing.T) {
+	// The reported defect: "--norc" holds the letter c, so the reader took
+	// it for -c and read "-c" as the script. A comment added words to the
+	// gate arguments. The reader saw no gate in either wrapper. Setup then
+	// added a warn gate beside the enforcing one, so the client gated each
+	// command twice. The gate line also said that nothing blocks.
+	for name, command := range map[string]string{
+		"a long option before -c":       "bash --norc -c '/usr/local/bin/seamark gate --enforce --hook --client codex'",
+		"a comment after the gate":      "/usr/local/bin/seamark gate --enforce --hook --client codex # team gate",
+		"an expansion in the comment":   "/usr/local/bin/seamark gate --enforce --hook --client codex # see $HOME/gate.md",
+		"env in front of the shell":     "/usr/bin/env bash --norc -c '/usr/local/bin/seamark gate --enforce --hook --client codex'",
+		"exec in front of the shell":    "exec sh -c '/usr/local/bin/seamark gate --enforce --hook --client codex'",
+		"a brace group":                 "{ cd /repo; /usr/local/bin/seamark gate --enforce --hook --client codex; }",
+		"a brace group as the fallback": "/usr/local/bin/seamark gate --enforce --hook --client codex || { echo failed >&2; exit 2; }",
+		"a guard before a brace group":  "cd /repo && { /usr/local/bin/seamark gate --enforce --hook --client codex; } 2>>/tmp/gate.log",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeRel(t, root, ".codex/hooks.json", bashHook(command))
+
+			plan := planCodex(t, root, ClientSetup{Hooks: true})
+
+			require.Len(t, plan.Writes, 1)
+			assert.Equal(t, "lessons hook", plan.Writes[0].Detail, "no second gate handler")
+			assert.Equal(t, []GateHook{{Path: ".codex/hooks.json", Mode: "enforce"}}, plan.GateHooks)
+
+			warnings := findingReasons(plan, FindingWarning)
+			require.Len(t, warnings, 1)
+			assert.Contains(t, warnings[0], "installed no second handler")
+
+			insp := codexSetup{}.Inspect(root)
+			commands, _ := insp.Entry(CapabilityCommands)
+			assert.Equal(t, StateCurrent, commands.State)
+			assert.Equal(t, "gate hook (enforce) runs from .codex/hooks.json (not managed by setup)", commands.Detail)
+			assert.Equal(t, "enforce", insp.GateMode)
+		})
+	}
+}
+
+func TestCodexGateHookThatDiscardsItsExitStatusIsReportOnly(t *testing.T) {
+	// The reported defect: "|| true" makes the command exit 0, whatever
+	// the gate returns. A verdict blocks only by exit status 2, so neither
+	// --enforce nor an enforcing policy file blocks anything. Setup and
+	// inspection said "enforce".
+	command := "/usr/local/bin/seamark gate --enforce --hook --client codex || true"
+
+	t.Run("in hooks.json", func(t *testing.T) {
+		root := t.TempDir()
+		writeRel(t, root, ".codex/hooks.json", bashHook(command))
+
+		plan := planCodex(t, root, ClientSetup{Hooks: true})
+
+		// The wrapper still runs the gate, so setup adds no second handler.
+		require.Len(t, plan.Writes, 1)
+		assert.Equal(t, "lessons hook", plan.Writes[0].Detail)
+		assert.Equal(t, []GateHook{{Path: ".codex/hooks.json", Mode: GateModeReportOnly}}, plan.GateHooks)
+
+		discards := findingsWith(plan.Findings, "discards the exit status")
+		require.Len(t, discards, 1)
+		assert.Equal(t, FindingWarning, discards[0].Level)
+		assert.Equal(t, ".codex/hooks.json", discards[0].Path)
+		assert.True(t, strings.HasPrefix(discards[0].Reason, "has `"+command+"`"), "the reason never starts with the path")
+		assert.Contains(t, discards[0].Reason, "no verdict blocks, whatever --enforce or .seamark/policy.yaml says")
+		assert.Contains(t, discards[0].Action, "last command")
+
+		insp := codexSetup{}.Inspect(root)
+		commands, _ := insp.Entry(CapabilityCommands)
+		assert.Equal(t, "gate hook (report-only) runs from .codex/hooks.json (not managed by setup)", commands.Detail)
+		assert.Equal(t, GateModeReportOnly, insp.GateMode)
+		assert.Len(t, findingsWith(insp.Findings, "discards the exit status"), 1)
+	})
+
+	t.Run("inline in config.toml", func(t *testing.T) {
+		root := t.TempDir()
+		writeRel(t, root, ".codex/config.toml",
+			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \""+command+"\"\n")
+
+		plan := planCodex(t, root, ClientSetup{Hooks: true})
+		assert.Equal(t, []GateHook{{Path: ".codex/config.toml [hooks]", Mode: GateModeReportOnly}}, plan.GateHooks)
+
+		discards := findingsWith(plan.Findings, "discards the exit status")
+		require.Len(t, discards, 1)
+		assert.Equal(t, ".codex/config.toml [hooks]", discards[0].Path)
+	})
+
+	t.Run("without --enforce", func(t *testing.T) {
+		// Only an enforcing policy file could make the hook block. The
+		// wrapper takes that away too, and a warning says so: doctor
+		// prints warnings only, and a user with an enforcing policy file
+		// must learn that nothing blocks.
+		root := t.TempDir()
+		writeRel(t, root, ".codex/hooks.json", bashHook("/usr/local/bin/seamark gate --hook --client codex || true"))
+
+		plan := planCodex(t, root, ClientSetup{Hooks: true})
+		assert.Equal(t, []GateHook{{Path: ".codex/hooks.json", Mode: GateModeReportOnly}}, plan.GateHooks)
+
+		discards := findingsWith(plan.Findings, "discards the exit status")
+		require.Len(t, discards, 1)
+		assert.Equal(t, FindingWarning, discards[0].Level, "a gate that never blocks is a warning whatever it asked for")
+	})
+
+	t.Run("a warn gate after the discarded one", func(t *testing.T) {
+		// The warn gate still follows the policy file.
+		root := t.TempDir()
+		writeRel(t, root, ".codex/hooks.json", bashHook(command+"; /usr/local/bin/seamark gate --hook --client codex"))
+
+		plan := planCodex(t, root, ClientSetup{Hooks: true})
+		assert.Equal(t, []GateHook{{Path: ".codex/hooks.json", Mode: "warn"}}, plan.GateHooks)
+
+		discards := findingsWith(plan.Findings, "discards the exit status")
+		require.Len(t, discards, 1)
+		assert.Equal(t, FindingWarning, discards[0].Level)
+		assert.Contains(t, discards[0].Reason, "a verdict blocks only when .seamark/policy.yaml enforces")
+	})
+
+	t.Run("a definition that never runs for Bash", func(t *testing.T) {
+		// It gates nothing. It gets the finding of that fact, and no second
+		// one about its exit status.
+		root := t.TempDir()
+		writeRel(t, root, ".codex/hooks.json", `{"hooks":{"PreToolUse":[`+hookEntry("apply_patch", command)+`]}}`)
+
+		plan := planCodex(t, root, ClientSetup{Hooks: true})
+		assert.Empty(t, findingsWith(plan.Findings, "discards the exit status"))
+	})
+
+	// A wrapper that keeps the exit status still enforces. The reader
+	// does not read an "if", so that gate is listed as one that may run.
+	for name, tc := range map[string]struct {
+		kept      string
+		uncertain bool
+	}{
+		"an exit with status 2": {"/usr/local/bin/seamark gate --enforce --hook --client codex || exit 2", false},
+		"an if":                 {"if command -v seamark >/dev/null; then /usr/local/bin/seamark gate --enforce --hook --client codex; fi", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeRel(t, root, ".codex/hooks.json", bashHook(tc.kept))
+
+			plan := planCodex(t, root, ClientSetup{Hooks: true})
+			assert.Contains(t, plan.GateHooks, GateHook{Path: ".codex/hooks.json", Mode: "enforce", Uncertain: tc.uncertain})
+			assert.Empty(t, findingsWith(plan.Findings, "discards the exit status"))
+		})
+	}
+}
+
+func TestCodexExplicitGateModeInstallsTheManagedGateBesideOneThatCannotDeliverIt(t *testing.T) {
+	// The reported defect: `--gate-mode enforce` with one existing gate,
+	// `… || true`, installed nothing and left nothing able to block. A
+	// run that asks for a mode gets a gate hook of that mode. A certain
+	// definition that delivers the mode, or a stronger one, still makes
+	// the managed hook needless.
+	gate := func(mode string) string { return "timeout 5 /usr/local/bin/seamark " + hooks.CodexGateMarker(mode) }
+
+	for name, tc := range map[string]struct {
+		existing  string
+		asked     string
+		installed bool
+	}{
+		"report-only under a request for enforce": {gate(hooks.ModeEnforce) + " || true", hooks.ModeEnforce, true},
+		"report-only under a request for warn":    {gate(hooks.ModeWarn) + " || true", hooks.ModeWarn, true},
+		"warn under a request for enforce":        {gate(hooks.ModeWarn), hooks.ModeEnforce, true},
+		"warn under a request for warn":           {gate(hooks.ModeWarn), hooks.ModeWarn, false},
+		"enforce under a request for enforce":     {gate(hooks.ModeEnforce), hooks.ModeEnforce, false},
+		"enforce under a request for warn":        {gate(hooks.ModeEnforce), hooks.ModeWarn, false},
+		"report-only without a request":           {gate(hooks.ModeEnforce) + " || true", "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeRel(t, root, ".codex/hooks.json", bashHook(tc.existing))
+
+			plan := planCodex(t, root, ClientSetup{Hooks: true, GateMode: tc.asked})
+			require.Len(t, plan.Writes, 1)
+
+			after := string(plan.Writes[0].After)
+			assert.Contains(t, after, tc.existing, "setup edits no hook it does not manage")
+
+			managed := slices.ContainsFunc(plan.GateHooks, func(h GateHook) bool { return h.Managed })
+			assert.Equal(t, tc.installed, managed)
+
+			if !tc.installed {
+				assert.Equal(t, "lessons hook", plan.Writes[0].Detail)
+				assert.NotContains(t, after, `"command": "`+testBinary+` gate `, "no second gate handler")
+				assert.Contains(t, strings.Join(findingReasons(plan, FindingWarning), "\n"), "installed no second handler")
+
+				return
+			}
+
+			assert.Equal(t, "gate + lessons hooks", plan.Writes[0].Detail)
+			assert.Contains(t, after, testBinary+" "+hooks.CodexGateMarker(tc.asked))
+			assert.Contains(t, plan.GateHooks, GateHook{Path: ".codex/hooks.json", Mode: tc.asked, Managed: true})
+
+			twice := findingsWith(plan.Findings, "the run asked for "+tc.asked+" mode, so setup installed the managed handler too")
+			require.Len(t, twice, 1)
+			assert.Equal(t, FindingWarning, twice[0].Level)
+			assert.Contains(t, twice[0].Reason, "the hook runs twice")
+
+			if strings.HasSuffix(tc.existing, "|| true") {
+				assert.Contains(t, twice[0].Reason, "which discards its exit status")
+			} else {
+				assert.Contains(t, twice[0].Reason, "in warn mode")
+			}
+		})
+	}
 }
 
 func TestCodexHooksKeepForeignHooksAndConverge(t *testing.T) {
@@ -244,18 +487,9 @@ func TestCodexHooksStopOnADocumentTheyCannotOwn(t *testing.T) {
 		})
 	}
 
-	// A link is refused: setup writes no document through a link.
-	root := t.TempDir()
-	target := filepath.Join(t.TempDir(), "hooks.json")
-	require.NoError(t, os.WriteFile(target, []byte("{}"), 0o644))
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
-	require.NoError(t, os.Symlink(target, filepath.Join(root, ".codex", "hooks.json")))
-
-	_, err := codexSetup{}.Plan(root, testBinary, ClientSetup{ClientID: CodexID, Hooks: true})
-	require.Error(t, err)
-
-	// An empty binary path is a broken request.
-	_, err = codexSetup{}.Plan(t.TempDir(), "", ClientSetup{ClientID: CodexID, Hooks: true})
+	// An empty binary path is a broken request. The test of a linked
+	// document is in setup_unix_test.go.
+	_, err := codexSetup{}.Plan(t.TempDir(), "", ClientSetup{ClientID: CodexID, Hooks: true})
 	require.Error(t, err)
 }
 
@@ -283,11 +517,11 @@ command = "/usr/local/bin/seamark lessons --hook --client codex"
 		source  string
 	}{
 		{"an exec prefix in hooks.json", "timeout 5 /usr/local/bin/seamark lessons --hook --client codex", "",
-			".codex/hooks.json already runs the seamark hook"},
+			".codex/hooks.json: already runs the seamark hook"},
 		{"a shell condition in hooks.json",
 			"test -x /usr/local/bin/seamark && /usr/local/bin/seamark lessons --hook --client codex", "",
-			".codex/hooks.json already runs the seamark hook"},
-		{"an inline hook in config.toml", "", inline, ".codex/config.toml [hooks] already runs the seamark hook"},
+			".codex/hooks.json: already runs the seamark hook"},
+		{"an inline hook in config.toml", "", inline, ".codex/config.toml [hooks]: already runs the seamark hook"},
 	}
 
 	for _, tc := range cases {
@@ -381,11 +615,13 @@ func TestCodexHooksInstallWhenTheHookTextIsOnlyPrinted(t *testing.T) {
 func TestCodexHooksInstallBesideACommandThatOnlyCanRunTheHook(t *testing.T) {
 	// An unknown program gets the seamark command as its arguments. A
 	// wrapper runs them and echo prints them, and the words do not say
-	// which. Setup installs the managed hook, because a missing hook costs
-	// more than a repeated reminder, and it names the command.
+	// which. A fallback after "||" runs the hook only when the command
+	// before it fails. Setup installs the managed hook, because a missing
+	// hook costs more than a repeated reminder, and it names the command.
 	for _, command := range []string{
 		"/opt/wrapper /usr/local/bin/seamark lessons --hook --client codex",
 		"echo /usr/local/bin/seamark lessons --hook --client codex",
+		"/opt/team-lessons || /usr/local/bin/seamark lessons --hook --client codex",
 	} {
 		root := t.TempDir()
 		writeRel(t, root, ".codex/hooks.json",
@@ -563,9 +799,9 @@ func TestCodexGateHookIgnoresADefinitionThatNeverFires(t *testing.T) {
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "setup cannot tell")
 	assert.Equal(t, []GateHook{
-		{Path: ".codex/config.toml [hooks]", Mode: "enforce"},
+		{Path: ".codex/config.toml [hooks]", Mode: "enforce", Uncertain: true},
 		{Path: ".codex/hooks.json", Mode: "warn", Managed: true},
-	}, plan.GateHooks, "an uncertain enforcing source still reaches the gate line")
+	}, plan.GateHooks, "an uncertain enforcing source reaches the gate line as one that may run")
 
 	// An inline gate that Codex does run for Bash still stops the
 	// managed gate hook: the coverage check is not weaker than before.
@@ -576,4 +812,30 @@ func TestCodexGateHookIgnoresADefinitionThatNeverFires(t *testing.T) {
 	require.Len(t, plan.Writes, 1)
 	assert.Equal(t, "lessons hook", plan.Writes[0].Detail)
 	assert.Equal(t, []GateHook{{Path: ".codex/config.toml [hooks]", Mode: "enforce"}}, plan.GateHooks)
+}
+
+func TestCodexUncertainSourceBesideACertainOneSaysNoHandlerWasInstalled(t *testing.T) {
+	// The reported defect: the finding for an uncertain inline entry said
+	// "so it installed the managed handler" while a certain wrapper in
+	// hooks.json made setup omit that handler.
+	root := t.TempDir()
+	gate := "/usr/local/bin/seamark gate --hook --client codex"
+
+	writeRel(t, root, ".codex/hooks.json", `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[`+
+		`{"type":"command","command":"sh -c '`+gate+`'"}]}]}}`)
+	writeRel(t, root, ".codex/config.toml", "[hooks.PreToolUse]\ncommand = \""+gate+"\"\n")
+
+	plan := planCodex(t, root, ClientSetup{Hooks: true})
+
+	// Only the lessons hook is written: the certain wrapper runs the gate.
+	require.Len(t, plan.Writes, 1)
+	assert.Equal(t, "lessons hook", plan.Writes[0].Detail)
+
+	// One warning per definition: the certain wrapper, then the uncertain
+	// inline entry, which must not claim a handler that was never added.
+	warnings := findingReasons(plan, FindingWarning)
+	require.Len(t, warnings, 2)
+	assert.Contains(t, warnings[0], "setup does not manage that definition, so it installed no second handler")
+	assert.Contains(t, warnings[1], "setup cannot tell, and it installed no handler of its own")
+	assert.NotContains(t, strings.Join(warnings, "\n"), "so it installed the managed handler")
 }
