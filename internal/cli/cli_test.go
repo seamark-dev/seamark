@@ -14,12 +14,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark"
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/skills"
@@ -620,6 +622,187 @@ func TestLessonsHookOncePerContextResetsAfterCompaction(t *testing.T) {
 	assert.Equal(t, reviews.DeliveryInjected, firings[2].Delivery)
 }
 
+func TestLessonsHookOncePerContextNeverHidesAdviceFromASubagent(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	seedLesson(t, root, "a.go", "RUF001", 4)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("threshold: 2\nhook_delivery: once-per-context\n"), 0o644))
+
+	file := filepath.Join(root, "a.go")
+	parent := `{"session_id":"session-one","tool_name":"Edit","tool_input":{"file_path":"` + file + `"}}`
+	child := `{"session_id":"session-one","agent_id":"agent-7","agent_type":"Explore",` +
+		`"tool_name":"Edit","tool_input":{"file_path":"` + file + `"}}`
+
+	hook := func(payload string) string {
+		t.Helper()
+
+		out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+		require.NoError(t, err)
+
+		return strings.TrimSpace(out)
+	}
+
+	assert.Contains(t, hook(parent), "RUF001")
+	assert.Empty(t, hook(parent), "the parent context has the lesson")
+
+	// The subagent reports the parent session and its own agent_id. Its
+	// context window never got the lesson, and no reset event reaches it.
+	assert.Contains(t, hook(child), "RUF001")
+	assert.Contains(t, hook(child), "RUF001", "a subagent gets repeated delivery")
+
+	// A reset that fires inside the subagent does not reach the parent.
+	_, _, err = runIn(t, `{"session_id":"session-one","agent_id":"agent-7"}`,
+		"-C", root, "lessons", "--hook-reset")
+	require.NoError(t, err)
+	assert.Empty(t, hook(parent))
+
+	_, _, err = runIn(t, `{"session_id":"session-one"}`, "-C", root, "lessons", "--hook-reset")
+	require.NoError(t, err)
+	assert.Contains(t, hook(parent), "RUF001")
+}
+
+func TestLessonsHookClientCodexAdvisesOnAWholePatch(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"hook_delivery: once-per-context\npin_budget: 1\npin:\n"+
+			"  - {rule: on-api, region: api, note: \"a1\"}\n  - {rule: on-db, region: db, note: \"d1\"}\n"), 0o644))
+
+	patch := "*** Begin Patch\n*** Update File: api/handler.go\n*** Move to: db/handler.go\n@@\n-x\n+y\n" +
+		"*** Add File: ../outside.go\n+z\n*** End Patch\n"
+	payload, err := json.Marshal(map[string]any{
+		"session_id": "thr_1", "cwd": root, "hook_event_name": "PreToolUse", "tool_name": "apply_patch",
+		"tool_use_id": "call_1", "tool_input": map[string]any{"command": patch},
+	})
+	require.NoError(t, err)
+
+	var hook struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+
+	// The Codex adapter reads no receiver yet, so the advice repeats under
+	// once-per-context.
+	for range 2 {
+		out, _, err := runIn(t, string(payload), "-C", root, "lessons", "--hook", "--client", "codex")
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal([]byte(out), &hook))
+
+		assert.Equal(t, "PreToolUse", hook.HookSpecificOutput.HookEventName)
+
+		advice := hook.HookSpecificOutput.AdditionalContext
+		assert.Contains(t, advice, "2 files (api/handler.go, db/handler.go)", "the move counts at both ends")
+		assert.Contains(t, advice, "+1 more pins", "one budget for the whole patch")
+		assert.NotContains(t, advice, "outside.go")
+	}
+
+	assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-hook-state.json"))
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+	require.Len(t, firings, 2)
+	assert.Equal(t, "codex", firings[0].Client)
+	assert.Equal(t, "apply_patch", firings[0].Tool)
+	assert.Equal(t, []string{"api/handler.go", "db/handler.go"}, firings[0].Files)
+	assert.Empty(t, firings[0].ContextSHA)
+
+	stats, err := run(t, "-C", root, "lessons", "--stats")
+	require.NoError(t, err)
+	assert.Contains(t, stats, "  codex via pre-tool-use-context: 2 injected")
+
+	// A move that leaves the workspace still counts at its source.
+	moveOut, err := json.Marshal(map[string]any{
+		"session_id": "thr_1", "cwd": root, "hook_event_name": "PreToolUse", "tool_name": "apply_patch",
+		"tool_input": map[string]any{"command": "*** Begin Patch\n*** Update File: api/handler.go\n" +
+			"*** Move to: /tmp/elsewhere/handler.go\n@@\n-x\n+y\n*** End Patch\n"},
+	})
+	require.NoError(t, err)
+
+	out, _, err := runIn(t, string(moveOut), "-C", root, "lessons", "--hook", "--client", "codex")
+	require.NoError(t, err)
+	assert.Contains(t, out, "review lessons for api/handler.go", "the inside end of the move gets its advice")
+	assert.NotContains(t, out, "elsewhere")
+}
+
+func TestLessonsHookClientCodexStaysQuietOnWhatItCannotRead(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("pin:\n  - {rule: wide-one, region: \"*\", note: \"w1\"}\n"), 0o644))
+
+	event := func(tool, command string) string {
+		payload, err := json.Marshal(map[string]any{
+			"session_id": "thr_1", "cwd": root, "hook_event_name": "PreToolUse",
+			"tool_name": tool, "tool_input": map[string]any{"command": command},
+		})
+		require.NoError(t, err)
+
+		return string(payload)
+	}
+
+	oversized := event("apply_patch", "*** Begin Patch\n*** Add File: a.go\n+"+strings.Repeat("x", 1<<20)+"\n*** End Patch\n")
+
+	for name, payload := range map[string]string{
+		"oversized payload": oversized,
+		"truncated patch":   event("apply_patch", "*** Begin Patch\n*** Update File: a.go\n@@\n-x\n"),
+		"unknown header":    event("apply_patch", "*** Begin Patch\n*** Copy File: a.go\n*** End Patch\n"),
+		"shell event":       event("Bash", "*** Begin Patch\n*** Delete File: a.go\n*** End Patch\n"),
+		"only outside":      event("apply_patch", "*** Begin Patch\n*** Delete File: /etc/hosts\n*** End Patch\n"),
+		"a Claude payload":  `{"tool_name":"Edit","tool_input":{"file_path":"` + filepath.Join(root, "a.go") + `"}}`,
+		"invalid JSON":      "{not json",
+		"nothing on stdin":  "",
+	} {
+		out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook", "--client", "codex")
+		require.NoError(t, err, "%s: a lessons hook never fails the edit", name)
+		assert.Empty(t, strings.TrimSpace(out), "%s: no guessed advice", name)
+	}
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+	assert.Empty(t, firings)
+
+	// The reset hook runs and changes nothing: no Codex state exists.
+	_, _, err = runIn(t, `{"session_id":"thr_1","hook_event_name":"PostCompact","trigger":"auto"}`,
+		"-C", root, "lessons", "--hook-reset", "--client", "codex")
+	require.NoError(t, err)
+	assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-hook-state.json"))
+}
+
+func TestLessonsHookClientSelectorRules(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	seedLesson(t, root, "a.go", "RUF001", 4)
+
+	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` + filepath.Join(root, "a.go") + `"}}`
+
+	// No selector and the explicit Claude selector are the same hook.
+	plain, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	named, _, err := runIn(t, payload, "-C", root, "lessons", "--hook", "--client", "claude")
+	require.NoError(t, err)
+	assert.Equal(t, plain, named)
+	assert.Contains(t, plain, "RUF001")
+
+	// An unknown client is a broken hook command: say so, never block.
+	out, stderr, err := runIn(t, payload, "-C", root, "lessons", "--hook", "--client", "nope")
+	require.NoError(t, err)
+	assert.Empty(t, strings.TrimSpace(out))
+	assert.Contains(t, stderr, `unknown hook client "nope" (known: claude, codex)`)
+
+	// The selector belongs to hook mode. Inference has its own setting.
+	_, err = run(t, "-C", root, "lessons", "--list", "--client", "codex")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--client applies to --hook and --hook-reset only")
+	assert.Contains(t, err.Error(), "agent.cli")
+}
+
 func TestLessonsHookAlwaysRemainsTheDefault(t *testing.T) {
 	root := writeFixture(t)
 	_, err := run(t, "-C", root, "index")
@@ -633,6 +816,84 @@ func TestLessonsHookAlwaysRemainsTheDefault(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, out, "RUF001")
 	}
+}
+
+func TestLessonsHookWithoutAnIndexDeliversPinsAndCreatesNoDatabase(t *testing.T) {
+	// A fresh clone has the committed lessons.yaml and no index. The
+	// hook still delivers the pins, and it leaves no database behind.
+	root := writeFixture(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("pin:\n  - {rule: wide-one, region: \"*\", note: \"w1\"}\n"), 0o644))
+
+	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` + filepath.Join(root, "a.go") + `"}}`
+
+	out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Contains(t, out, "wide-one")
+	assert.NoFileExists(t, store.DefaultPath(root), "a hook never creates an index")
+}
+
+func TestLessonsHookIgnoresAFileOutsideTheWorkspace(t *testing.T) {
+	// Lessons belong to the repository. An edit elsewhere gets no advice,
+	// not even a repo-wide pin, and no path outside reaches the log.
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("pin:\n  - {rule: wide-one, region: \"*\", note: \"w1\"}\n"), 0o644))
+
+	outside := filepath.Join(t.TempDir(), "notes.md")
+	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` + outside + `"}}`
+
+	out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Empty(t, strings.TrimSpace(out))
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+	assert.Empty(t, firings)
+}
+
+func TestLessonsHookAppliesAParentStepAfterTheLink(t *testing.T) {
+	// <root>/link points at an external directory. "link/../target.go"
+	// is a file next to that directory, not <root>/target.go.
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+		[]byte("pin:\n  - {rule: wide-one, region: \"*\", note: \"w1\"}\n"), 0o644))
+
+	external := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(external, "nested"), 0o755))
+	require.NoError(t, os.Symlink(filepath.Join(external, "nested"), filepath.Join(root, "link")))
+
+	for _, target := range []string{"target.go", "absent/target.go"} {
+		payload := `{"tool_name":"Write","tool_input":{"file_path":"` + root + `/link/../` + target + `"}}`
+
+		out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+		require.NoError(t, err)
+		assert.Empty(t, strings.TrimSpace(out), "%s is outside the workspace", target)
+	}
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+	assert.Empty(t, firings, "an external edit never reaches the log as a workspace file")
+}
+
+func TestLessonsHookResolvesARelativePathAgainstTheEventDirectory(t *testing.T) {
+	root := writeFixture(t)
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	seedLesson(t, root, "sub", "RUF001", 4)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
+
+	payload := `{"cwd":"` + filepath.Join(root, "sub") + `","tool_name":"Write","tool_input":{"file_path":"new.go"}}`
+
+	out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+	assert.Contains(t, out, "review lessons for sub/new.go")
+	assert.Contains(t, out, "RUF001")
 }
 
 func TestLessonsList(t *testing.T) {
@@ -756,6 +1017,80 @@ func TestLessonsDistillDryRun(t *testing.T) {
 
 	_, err = run(t, "-C", root, "lessons", "--distill", "--dry-run")
 	require.Error(t, err, "an empty custom executable must be rejected")
+}
+
+func TestLessonsDistillWithTheCodexClient(t *testing.T) {
+	root := writeFixture(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 11, LessonKey: "k", Path: "api/a.go", PR: 1, Reviewer: "person", Body: "Reset pooled state before reuse."},
+		{ID: 12, LessonKey: "k", Path: "api/b.go", PR: 2, Reviewer: "person", Body: "Pooled state must be reset on reuse."},
+	}))
+	require.NoError(t, st.Close())
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  cli: codex\n"), 0o644))
+
+	// Dry runs show the full command even without Codex installed.
+	t.Setenv("PATH", t.TempDir())
+
+	out, err := run(t, "-C", root, "lessons", "--distill", "--dry-run")
+	require.NoError(t, err)
+	assert.Contains(t, out, "codex exec --ephemeral --sandbox read-only -C ")
+	assert.Contains(t, out, "--skip-git-repo-check --ignore-rules -c features.hooks=false -")
+	assert.Contains(t, out, "nothing was sent")
+
+	// Both consumers report a missing executable before starting work.
+	_, err = run(t, "-C", root, "lessons", "--distill")
+	require.ErrorContains(t, err, `distill unavailable: agent cli "codex" not found on PATH`)
+
+	_, err = run(t, "-C", root, "lessons", "--extract-triggers")
+	require.ErrorContains(t, err, `extraction unavailable: agent cli "codex" not found on PATH`)
+
+	// A fake Codex captures argv and returns a proposal to check provenance.
+	bin := t.TempDir()
+	seen := filepath.Join(root, "codex-argv")
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\n"+
+		"printf '%s\\n' \"$@\" > "+seen+"\n"+
+		"cat >/dev/null\n"+
+		`echo '{"patterns":[{"rule":"pooled-state-reset","note":"Reset pooled state before reuse.","finding_ids":[11,12],"trigger_paths":[]}]}'`+"\n"), 0o755))
+	t.Setenv("PATH", bin)
+
+	_, err = run(t, "-C", root, "lessons", "--distill")
+	require.NoError(t, err)
+
+	argv := strings.Split(strings.TrimSpace(string(mustRead(t, root, "codex-argv"))), "\n")
+	assert.Equal(t, []string{"exec", "--ephemeral", "--sandbox", "read-only", "-C", root,
+		"--skip-git-repo-check", "--ignore-rules", "-c", "features.hooks=false", "-"}, argv)
+
+	st, err = store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	pending, err := st.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.True(t, strings.HasPrefix(pending[0].Agent, "codex/"), "provenance names the client: %s", pending[0].Agent)
+	require.NoError(t, st.Close())
+
+	// An extraction dry run shows the same command without invoking Codex.
+	st, err = store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "s-open", Rule: "open-question", Region: "api", Note: "n", Members: []int64{11},
+		Agent: "claude/v3", Status: model.ProposalProposed,
+	}))
+	require.NoError(t, st.Close())
+	require.NoError(t, os.Remove(seen))
+
+	out, err = run(t, "-C", root, "lessons", "--extract-triggers", "--dry-run")
+	require.NoError(t, err)
+	assert.Contains(t, out, "codex exec --ephemeral --sandbox read-only -C ")
+	assert.NoFileExists(t, seen, "a dry run starts no process")
 }
 
 func TestDistillPreflightShowsRelevantFixPathsAndAdaptiveCap(t *testing.T) {
@@ -1631,7 +1966,11 @@ func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
 		filepath.Join(root, "a.go") + `"}}`
 	hookJSON, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
 	require.NoError(t, err)
-	var response hookOutput
+	var response struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
 	require.NoError(t, json.Unmarshal([]byte(hookJSON), &response))
 
 	firings, err := reviews.ReadFirings(root)
@@ -1642,12 +1981,17 @@ func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
 	assert.Len(t, firings[0].SessionSHA, 64)
 	assert.NotEqual(t, "session-to-hash", firings[0].SessionSHA)
 	assert.Equal(t, len(response.HookSpecificOutput.AdditionalContext), firings[0].ContextBytes)
+	assert.Equal(t, "claude", firings[0].Client, "a hook without a client selector is the Claude Code hook")
+	assert.Equal(t, "pre-tool-use-context", firings[0].Mechanism)
+	assert.Len(t, firings[0].ContextSHA, 64)
+	assert.NotEqual(t, firings[0].SessionSHA, firings[0].ContextSHA)
 
 	// --stats surfaces the fired lesson and the never-fired decay candidate.
 	out, err := run(t, "-C", root, "lessons", "--stats")
 	require.NoError(t, err)
 	assert.Contains(t, out, "RUF001", "the fired lesson is surfaced")
 	assert.Contains(t, out, "hook delivery — instrumented: 1 injected (0 repeated)")
+	assert.Contains(t, out, "  claude via pre-tool-use-context: 1 injected (0 repeated), 0 suppressed")
 	assert.Contains(t, out, "never fired", "the unedited-region lesson is a decay candidate")
 	assert.Contains(t, out, "E501")
 }
@@ -1743,11 +2087,97 @@ func TestGateHookModeFailsClosed(t *testing.T) {
 
 	_, _, err = runIn(t, `{"tool_input":{}}`, "-C", root, "gate", "--enforce", "--hook")
 	assert.ErrorIs(t, err, gate.ErrBlocked, "empty command must fail closed")
+	assert.EqualError(t, err, "blocked by policy: empty command")
 
 	// Without enforcement the same failures surface as plain errors.
 	_, _, err = runIn(t, "{not json", "-C", root, "gate", "--hook")
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, gate.ErrBlocked)
+
+	// A broken policy under explicit enforcement blocks; an installed
+	// warn hook over an enforcing policy blocks a verdict and lets a
+	// failure before the policy loads through.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte("mode: [broken\n"), 0o644))
+
+	_, _, err = runIn(t, `{"tool_input":{"command":"ls"}}`, "-C", root, "gate", "--enforce", "--hook")
+	assert.ErrorIs(t, err, gate.ErrBlocked, "a broken policy must fail closed under --enforce")
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(starterPolicyFor(gateModeEnforce)), 0o644))
+
+	payload := `{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}`
+	_, _, err = runIn(t, payload, "-C", root, "gate", "--hook")
+	assert.ErrorIs(t, err, gate.ErrBlocked, "the policy file's enforce mode blocks through a warn hook")
+
+	_, _, err = runIn(t, "{not json", "-C", root, "gate", "--hook")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, gate.ErrBlocked, "before the policy loads only --enforce fails closed")
+}
+
+func TestGateHookClientCodex(t *testing.T) {
+	root := writeFixture(t)
+	fixture := func(name string) string {
+		data, err := os.ReadFile(filepath.Join("..", "integration", "testdata", "codex", name))
+		require.NoError(t, err)
+
+		return string(data)
+	}
+
+	// A Codex Bash event: the same verdicts as a Claude Code event, the
+	// same exit protocol.
+	_, _, err := runIn(t, fixture("pre_tool_use_bash.json"), "-C", root, "gate", "--enforce", "--hook", "--client", "codex")
+	require.ErrorIs(t, err, gate.ErrBlocked, "force-push to main must block")
+	assert.Contains(t, err.Error(), "blocked by policy: ")
+
+	out, _, err := runIn(t, fixture("pre_tool_use_bash.json"), "-C", root, "gate", "--hook", "--client", "codex")
+	require.NoError(t, err, "warn mode reports and never blocks")
+	assert.Contains(t, out, "deny")
+	assert.Contains(t, out, "mode: warn")
+
+	out, _, err = runIn(t, `{"tool_name":"Bash","tool_input":{"command":"ls -la"}}`,
+		"-C", root, "gate", "--enforce", "--hook", "--client", "codex")
+	require.NoError(t, err)
+	assert.Contains(t, out, "allow")
+
+	// The verdicts are audited like every other gate run.
+	assert.FileExists(t, filepath.Join(root, ".seamark", "audit.jsonl"))
+
+	// A patch is never read as a shell command: an apply_patch event
+	// that reaches the gate is not applicable. Under enforcement that
+	// blocks and names the tool; under warn it is a plain error.
+	_, _, err = runIn(t, fixture("pre_tool_use_apply_patch_multi.json"), "-C", root, "gate", "--enforce", "--hook", "--client", "codex")
+	require.ErrorIs(t, err, gate.ErrBlocked)
+	assert.Contains(t, err.Error(), `tool "apply_patch" is not Bash`)
+
+	_, _, err = runIn(t, fixture("pre_tool_use_apply_patch_multi.json"), "-C", root, "gate", "--hook", "--client", "codex")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, gate.ErrBlocked)
+
+	// A Bash event without a command is malformed and fails closed.
+	_, _, err = runIn(t, `{"tool_name":"Bash","tool_input":{}}`, "-C", root, "gate", "--enforce", "--hook", "--client", "codex")
+	assert.ErrorIs(t, err, gate.ErrBlocked)
+}
+
+func TestGateHookClientSelectorRules(t *testing.T) {
+	root := writeFixture(t)
+
+	// An unknown client is a broken hook command: an error, and a block
+	// under enforcement.
+	_, _, err := runIn(t, `{"tool_input":{"command":"ls"}}`, "-C", root, "gate", "--hook", "--client", "gemini")
+	require.ErrorContains(t, err, `unknown hook client "gemini" (known: claude, codex)`)
+	assert.NotErrorIs(t, err, gate.ErrBlocked)
+
+	_, _, err = runIn(t, `{"tool_input":{"command":"ls"}}`, "-C", root, "gate", "--enforce", "--hook", "--client", "gemini")
+	assert.ErrorIs(t, err, gate.ErrBlocked)
+
+	// --client belongs to --hook.
+	_, _, err = runIn(t, "", "-C", root, "gate", "--client", "codex", "--command", "ls")
+	require.ErrorContains(t, err, "--client applies to --hook only")
+
+	// --client claude is the default spelled out.
+	out, _, err := runIn(t, `{"tool_input":{"command":"ls -la"}}`, "-C", root, "gate", "--hook", "--client", "claude")
+	require.NoError(t, err)
+	assert.Contains(t, out, "allow")
 }
 
 // TestInitDefaultCannotBlock is the end-to-end trust-contract test: a
@@ -1892,47 +2322,57 @@ func TestReportWithoutIndexFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "no index found")
 }
 
-// TestReadmeCoversEveryCommand is the docs-drift check: every shipped
-// command is mentioned in the README, and no shipped command is
-// labelled planned or coming soon. The RFC's rule: no shipped command
-// may be presented as future work.
-func TestReadmeCoversEveryCommand(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
-	require.NoError(t, err)
+// TestUserDocsCoverEveryCommand keeps every shipped command documented while
+// letting the README focus on onboarding. Reference-only surfaces, such as the
+// experimental editor server, belong in focused user guides.
+func TestUserDocsCoverEveryCommand(t *testing.T) {
+	paths := []string{
+		"README.md",
+		"docs/getting-started.md",
+		"docs/agent-integrations.md",
+		"docs/lessons.md",
+		"docs/repository-history.md",
+		"docs/configuration.md",
+		"docs/policies.md",
+		"docs/editors.md",
+	}
+	var docs strings.Builder
 
-	readme := string(data)
+	for _, path := range paths {
+		data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(path)))
+		require.NoError(t, err)
+		docs.Write(data)
+		docs.WriteString("\n\n")
+	}
 
+	text := docs.String()
 	for _, c := range New().Commands() {
 		name := c.Name()
 		if name == "help" || name == "completion" || name == "version" {
 			continue // cobra plumbing, not product surface
 		}
 
-		assert.Contains(t, readme, "seamark "+name,
-			"README must document `seamark %s` (or retire the command)", name)
+		assert.Contains(t, text, "seamark "+name,
+			"user documentation must cover `seamark %s` (or retire the command)", name)
 
 		for _, label := range []string{"planned", "soon"} {
 			re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(name) + `[^\n]{0,40}\(` + label + `\)`)
-			assert.False(t, re.MatchString(readme),
-				"README labels shipped command %q as (%s)", name, label)
+			assert.False(t, re.MatchString(text),
+				"user documentation labels shipped command %q as (%s)", name, label)
 		}
 
-		// The roadmap paragraph must not name a shipped command either —
-		// "Planned next: … seamark doctor" would otherwise stay green
-		// after doctor ships.
-		if i := strings.Index(readme, "Planned next"); i >= 0 {
-			para := readme[i:]
-			if j := strings.Index(para, "\n\n"); j >= 0 {
-				para = para[:j]
+		// A roadmap may describe extensions, but must not list an existing
+		// command as future work.
+		for _, para := range strings.Split(text, "\n\n") {
+			if strings.Contains(para, "Planned next") {
+				assert.NotContains(t, para, "seamark "+name,
+					"the roadmap still lists shipped command %q as planned", name)
 			}
-
-			assert.NotContains(t, para, "seamark "+name,
-				"the roadmap paragraph still lists shipped command %q as planned", name)
 		}
 	}
 }
 
-// TestSkillsNameOnlyRealCommands mirrors TestReadmeCoversEveryCommand
+// TestSkillsNameOnlyRealCommands mirrors TestUserDocsCoverEveryCommand
 // for the embedded skill text: every backticked `seamark <command>` and
 // every Bash(seamark <command> ...) grant must name a shipped command, or
 // an agent on the CLI fallback follows a command that no longer exists.
@@ -2176,4 +2616,84 @@ func TestBlockedCheckStillPrintsAdvisoryLessons(t *testing.T) {
 	assert.Contains(t, stdout, "advisory — recurring lessons for touched files")
 	assert.Contains(t, stdout, "scripts-guidance",
 		"a new, unindexed file in a pinned region receives its lesson even on a blocked check")
+}
+
+// TestOnboardingGuidesNameRealCommands is the docs-drift check
+// for the README, getting-started, and agent-integrations guides: each command
+// names a shipped command, every `--flag` on such a line exists on
+// that command, and every `make <target>` it names is a Makefile
+// target. The guide is what a contributor follows, so a renamed flag
+// must fail here, not in their terminal.
+func TestOnboardingGuidesNameRealCommands(t *testing.T) {
+	guide, err := os.ReadFile(filepath.Join("..", "..", "docs", "agent-integrations.md"))
+	require.NoError(t, err)
+
+	for _, path := range []string{"README.md", "docs/getting-started.md"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(path)))
+		require.NoError(t, err)
+		guide = append(guide, '\n')
+		guide = append(guide, data...)
+	}
+
+	makefile, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	require.NoError(t, err)
+
+	root := New()
+	commands := map[string]*cobra.Command{}
+
+	for _, c := range root.Commands() {
+		commands[c.Name()] = c
+	}
+
+	// Only code is checked: fenced blocks and inline spans. Prose such
+	// as "how seamark connects" is not a command line.
+	code := regexp.MustCompile("(?s)```[a-z]*\n(.*?)```|`([^`\n]+)`")
+	// A command line is `seamark <command> [args]`, ending at a newline,
+	// a pipe, or a comment.
+	line := regexp.MustCompile("seamark ([a-z-]+)([^\n|#]*)")
+	flag := regexp.MustCompile(`(^|\s)(--?[a-zA-Z][a-zA-Z-]*)`)
+	target := regexp.MustCompile("`make ([a-z-]+)")
+	checked := 0
+
+	var snippets []string
+
+	for _, m := range code.FindAllStringSubmatch(string(guide), -1) {
+		snippets = append(snippets, m[1]+m[2])
+	}
+
+	require.NotEmpty(t, snippets)
+
+	for _, m := range line.FindAllStringSubmatch(strings.Join(snippets, "\n"), -1) {
+		name, rest := m[1], m[2]
+
+		c, ok := commands[name]
+		require.True(t, ok, "the guide names `seamark %s`, which is not a command", name)
+
+		for _, f := range flag.FindAllStringSubmatch(rest, -1) {
+			spelled := strings.TrimLeft(f[2], "-")
+			checked++
+
+			defined := c.Flags().Lookup(spelled) != nil || c.InheritedFlags().Lookup(spelled) != nil
+			if len(f[2]) == 2 {
+				defined = c.Flags().ShorthandLookup(spelled) != nil || c.InheritedFlags().ShorthandLookup(spelled) != nil
+			}
+
+			assert.True(t, defined, "the guide shows `seamark %s %s`, which is not a flag of %s", name, f[2], name)
+		}
+	}
+
+	for _, m := range target.FindAllStringSubmatch(string(guide), -1) {
+		checked++
+		assert.Regexp(t, "(?m)^"+regexp.QuoteMeta(m[1])+":", string(makefile),
+			"the guide names `make %s`, which is not a Makefile target", m[1])
+	}
+
+	// The per-agent table must name every shipped client by its ID, so a
+	// new registration cannot ship undocumented.
+	for _, id := range integration.Builtin().IDs() {
+		checked++
+		assert.Contains(t, string(guide), "--client "+id, "the guide shows no `--client %s` example", id)
+	}
+
+	assert.Greater(t, checked, 10, "the guide must show commands, flags, and targets for this test to mean anything")
 }

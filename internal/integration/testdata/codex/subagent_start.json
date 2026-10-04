@@ -1,0 +1,11 @@
+{
+  "session_id": "thr_synthetic_0001",
+  "transcript_path": null,
+  "cwd": "/workspace/repo",
+  "hook_event_name": "SubagentStart",
+  "model": "synthetic-model",
+  "permission_mode": "default",
+  "turn_id": "turn_synthetic_0001",
+  "agent_id": "agent_synthetic_0001",
+  "agent_type": "worker"
+}

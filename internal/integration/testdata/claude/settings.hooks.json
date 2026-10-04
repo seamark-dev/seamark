@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/seamark gate --hook",
+            "timeout": 15,
+            "statusMessage": "seamark gate: classifying command"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/seamark lessons --hook",
+            "timeout": 10,
+            "statusMessage": "seamark: checking review lessons"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/seamark lessons --hook-reset",
+            "timeout": 10,
+            "statusMessage": "seamark: resetting lesson delivery"
+          }
+        ]
+      }
+    ]
+  }
+}

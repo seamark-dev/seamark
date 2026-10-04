@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -379,6 +380,36 @@ func TestOpenPathWithURISpecialChars(t *testing.T) {
 		require.NoError(t, s.Close())
 		assert.FileExists(t, path, "db must be created at the exact requested path")
 	}
+}
+
+func TestOpenMemoryIsEmptyQueryableAndLeavesNoFile(t *testing.T) {
+	// The lessons hook reads pins through an empty index when the
+	// workspace has none. The working directory must stay untouched.
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	s, err := OpenMemory()
+	require.NoError(t, err)
+
+	lessons, err := s.LessonsForFile("api/handler.go", 1, 100)
+	require.NoError(t, err)
+	assert.Empty(t, lessons)
+
+	applied, err := s.Proposals(model.ProposalApplied)
+	require.NoError(t, err)
+	assert.Empty(t, applied)
+
+	// The single connection keeps the database alive between calls.
+	require.NoError(t, s.SetMeta("k", "v"))
+	v, err := s.GetMeta("k")
+	require.NoError(t, err)
+	assert.Equal(t, "v", v)
+
+	require.NoError(t, s.Close())
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "an in-memory index writes no file")
 }
 
 func TestFindSymbolsFTSRankOrder(t *testing.T) {

@@ -26,7 +26,7 @@ optional.
 | Trigger backfill (`lessons --extract-triggers`) | proposal notes + evidence paths and one excerpt each | your agent CLI's stdin → its model service | via the agent CLI | validated trigger paths + answered-question stamps in `index.db` |
 | Pin apply (`lessons --apply`) | your decision | `.seamark/lessons.yaml` (committed file; only with `distill.write`) | none | yes |
 | Gate hook (`gate --hook`) | the agent's proposed command | verdict on stdout/exit code; `.seamark/audit.jsonl` | none | audit entries |
-| Edit hook (`lessons --hook`) | edited file path and provider session ID | lesson reminders on stdout | none | firing log plus optional local, digest-only once-per-context state |
+| Edit hook (`lessons --hook`, for Codex `lessons --hook --client codex`) | edited file paths and provider session ID; for Codex the `apply_patch` text, which is parsed for paths and never run | lesson reminders on stdout | none | firing log plus optional local, digest-only once-per-context state |
 | Diff check (`seamark check`) | a unified diff | verdict; audit entry; index self-repair | none | audit entries, refreshed index |
 | MCP server (`seamark mcp`) | `index.db` | the connected agent client, per request (stdio) | none | index self-repair |
 | LSP server (`seamark lsp`) | source tree, `index.db` | your editor (stdio) | none | refreshed index |
@@ -78,6 +78,20 @@ seamark lessons --distill --dry-run   # the full disclosure, nothing sent
 The dry run prints metadata only — never finding bodies — and works
 even when the agent CLI is not installed.
 
+With `agent.cli: codex`, the command is `codex exec` with `--ephemeral`
+(no session files), `--sandbox read-only` (model-generated commands cannot
+write), `-C <root>` (your workspace, also the process directory),
+`--skip-git-repo-check`, `--ignore-rules` (no user or project execpolicy
+`.rules` file: Codex runs a command such a rule allows outside the
+sandbox, which would void the read-only promise), `-c
+features.hooks=false` (seamark's own hooks do not run inside the
+inference run), and `-` (the prompt on stdin). Your `~/.codex/config.toml`
+still loads: it holds the login, the model, and the provider. Codex
+loads `AGENTS.md` and the other project instructions of the workspace in
+that run, so more than the prompt reaches inference; the reply is the
+final agent message on stdout. Authentication is the saved Codex login or
+`CODEX_API_KEY`; seamark holds neither.
+
 `lessons --extract-triggers` sends a smaller slice through the same
 agent CLI: per already-distilled proposal, its rule label, its note
 (model-written text you reviewed at apply time), the repo-relative
@@ -92,7 +106,7 @@ delivery scopes; evidence coverage is the fallback when none verify.
 
 | Command | Network | Sends data to another process/model | Writes repo-local state | Modifies committed files | Can block | Needs credentials |
 |---|---|---|---|---|---|---|
-| `init` | no | no | `.seamark/` scaffolds, `.claude/settings.json` | `.gitignore`, scaffolded YAML (meant to be committed) | no | no |
+| `init` | no | no | `.seamark/` scaffolds; per selected agent `.claude/settings.json`, `.mcp.json`, `.codex/hooks.json`, `.codex/config.toml`, the skill directories | `.gitignore`, scaffolded YAML (meant to be committed) | no | no |
 | `index` | only `--reviews`, via `gh` | no | `index.db` | no | no | `gh` auth for `--reviews` |
 | `why` / `orient` | no | no | no | no | no | no |
 | `lessons` | no | `--distill` and `--extract-triggers`: your agent CLI | proposals, trigger paths in `index.db`; firing log | `lessons.yaml`, only via `--apply`/`--prune`/`--retarget` with `distill.write` | no | the agent CLI's own |

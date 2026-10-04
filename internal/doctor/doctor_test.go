@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/approve"
+	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -184,6 +185,36 @@ func TestRunDetectsMissingAgentBinary(t *testing.T) {
 
 	assert.Equal(t, StateWarn, checks["agent"].State)
 	assert.Contains(t, checks["agent"].Detail, "no-such-agent-binary-xyz")
+}
+
+func TestRunResolvesTheCodexAgentThroughTheRegistry(t *testing.T) {
+	root, dbPath := fixtureRoot(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  cli: codex\n"), 0o644))
+
+	// Report Codex as missing when it is absent from PATH.
+	t.Setenv("PATH", t.TempDir())
+
+	checks := byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateWarn, checks["agent"].State)
+	assert.Contains(t, checks["agent"].Detail, `"codex" not found on PATH`)
+
+	// Finding Codex on PATH is enough; it need not run successfully.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nexit 1\n"), 0o755))
+	t.Setenv("PATH", dir)
+
+	checks = byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateOK, checks["agent"].State)
+	assert.Contains(t, checks["agent"].Detail, "codex on PATH")
+
+	// Unknown-client errors list valid choices.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"),
+		[]byte("agent:\n  cli: hal9000\n"), 0o644))
+
+	checks = byName(Run(root, dbPath, "test"))
+	assert.Equal(t, StateWarn, checks["agent"].State)
+	assert.Contains(t, checks["agent"].Detail, "known: claude, codex")
 }
 
 func TestRunGitignoreUndeterminedOutsideGit(t *testing.T) {
@@ -440,7 +471,7 @@ func TestRunNamesTheBrokenMCPConfigOnBothLines(t *testing.T) {
 	// The server name in the file spells every rule, so the approvals
 	// count is unknowable until the file parses; both lines say so.
 	assert.Equal(t, StateWarn, checks["mcp"].State)
-	assert.Contains(t, checks["mcp"].Detail, "unparseable")
+	assert.Contains(t, checks["mcp"].Detail, "claude unreadable (.mcp.json")
 	assert.Equal(t, StateWarn, checks["approvals"].State)
 	assert.Contains(t, checks["approvals"].Detail, "claude unreadable (.mcp.json")
 }
@@ -457,4 +488,131 @@ func TestRunNamesTheSameServerOnBothLines(t *testing.T) {
 		assert.Contains(t, checks["mcp"].Detail, `registered in .mcp.json as "sm"`, "name order, never map order")
 		assert.Contains(t, checks["approvals"].Detail, `for server "sm"`)
 	}
+}
+
+// runFixture writes one matrix fixture into a healthy workspace and
+// runs doctor over the matrix registry.
+func runFixture(t *testing.T, f inspecttest.Fixture) (report *Report, checks map[string]Check) {
+	t.Helper()
+
+	stubAgent(t)
+
+	root, dbPath := fixtureRoot(t)
+	require.NoError(t, f.Write(root))
+
+	r := run(inspecttest.Registry(), root, dbPath, "test")
+
+	return r, byName(r)
+}
+
+func TestRunFollowsTheInspectionMatrix(t *testing.T) {
+	// One fixture matrix for init, doctor, and status: every word the
+	// client's state renders to appears on doctor's topical lines, and
+	// every limitation the adapter reports appears on the client's line.
+	for _, f := range inspecttest.Fixtures() {
+		t.Run(f.Name, func(t *testing.T) {
+			r, checks := runFixture(t, f)
+			assert.Zero(t, r.Fails, "%+v", r.Checks)
+
+			topical := checks["hooks"].Detail + " · " + checks["mcp"].Detail + " · " +
+				checks["approvals"].Detail + " · " + checks["skills"].Detail
+
+			for _, word := range f.Words {
+				assert.Contains(t, topical, word)
+			}
+
+			if f.Skills != "" {
+				assert.Contains(t, checks["skills"].Detail, f.Skills)
+			}
+
+			client, ok := checks[f.Client]
+			for _, reason := range f.Findings {
+				require.True(t, ok, "a client with a limitation gets its own line")
+				assert.Contains(t, client.Detail, reason)
+			}
+
+			if f.InvokerMissing {
+				assert.Equal(t, StateWarn, checks["agent"].State)
+				assert.Contains(t, checks["agent"].Detail, "invoker "+f.Invoker)
+			}
+
+			var b bytes.Buffer
+			Print(&b, r)
+
+			for _, secret := range f.Absent {
+				assert.NotContains(t, b.String(), secret, "a credential in a hook command never reaches the report")
+			}
+		})
+	}
+}
+
+func TestRunReportsTheEffectiveGateModeAcrossSources(t *testing.T) {
+	// A managed warn hook beside an enforcing inline hook: the hooks
+	// line reports enforce, as init's gate line does, because the
+	// enforcing definition blocks whatever the managed one says.
+	_, checks := runFixture(t, inspecttest.Named("inline enforce"))
+	assert.Contains(t, checks["hooks"].Detail, "codex gate (enforce) + lessons hooks installed")
+	assert.Equal(t, StateWarn, checks["codex"].State, "the duplicate handler is a warning")
+	assert.Contains(t, checks["codex"].Detail, "runs twice")
+
+	// A wrapped enforcing gate in the personal Claude Code file alone.
+	_, checks = runFixture(t, inspecttest.Named("local wrapper"))
+	assert.Contains(t, checks["hooks"].Detail, "claude gate hook installed (enforce), lessons hook missing")
+	assert.Contains(t, checks["claude"].Detail, ".claude/settings.local.json: runs the seamark gate hook")
+}
+
+func TestRunNamesTheCodexLimitationsOnItsOwnLine(t *testing.T) {
+	_, checks := runFixture(t, inspecttest.Named("pending trust"))
+
+	// The topical line covers both clients; the client line carries the
+	// native evidence and the limitations, as facts, with the trust
+	// instruction as the action.
+	assert.Equal(t, StateOK, checks["hooks"].State, checks["hooks"].Detail)
+	assert.Contains(t, checks["hooks"].Detail, "claude no hooks installed · codex gate (warn) + lessons hooks installed")
+
+	codex := checks["codex"]
+	assert.Equal(t, StateInfo, codex.State)
+	assert.Contains(t, codex.Detail, "edits: natively verified on codex-cli 0.154.0 (PreToolUse apply_patch)")
+	assert.Contains(t, codex.Detail, "commands: native check pending (PreToolUse Bash)")
+	assert.Contains(t, codex.Detail, ".codex/hooks.json: Codex runs a project hook only after the user reviews and trusts it")
+	assert.Contains(t, codex.Detail, "once-per-context")
+	assert.Equal(t, "open the project in Codex and review the hooks with /hooks", codex.Fix)
+
+	// Hooks turned off in the project configuration is a warning: the
+	// installed hooks never run.
+	_, checks = runFixture(t, inspecttest.Named("disabled"))
+	assert.Equal(t, StateWarn, checks["codex"].State)
+	assert.Contains(t, checks["codex"].Detail, "turns every Codex hook off")
+	assert.Contains(t, checks["codex"].Fix, "hooks = true")
+}
+
+func TestRunWarnsOnAHalfInstalledClient(t *testing.T) {
+	// Codex with the lessons hook and no gate hook: the hooks line warns
+	// and names the client command that restores the missing half.
+	_, checks := runFixture(t, inspecttest.Named("partial"))
+
+	assert.Equal(t, StateWarn, checks["hooks"].State)
+	assert.Contains(t, checks["hooks"].Detail, "codex lessons hook installed, gate hook missing")
+	assert.Contains(t, checks["hooks"].Fix, "seamark init --client codex")
+
+	// The unmanaged personal handler beside the managed one: the client
+	// line warns that the hook runs twice.
+	_, checks = runFixture(t, inspecttest.Named("duplicate"))
+	assert.Equal(t, StateWarn, checks["claude"].State)
+	assert.Contains(t, checks["claude"].Detail, "runs twice")
+}
+
+func TestRunSkipsTheClientLineWhenNothingIsInstalled(t *testing.T) {
+	_, checks := runFixture(t, inspecttest.Named("absent"))
+
+	_, claude := checks["claude"]
+	_, codex := checks["codex"]
+	assert.False(t, claude, "nothing installed, nothing to report")
+	assert.False(t, codex)
+
+	// The shared client always has its limitation to report.
+	shared, ok := checks["shared"]
+	require.True(t, ok)
+	assert.Equal(t, StateInfo, shared.State)
+	assert.Contains(t, shared.Detail, "waits for the user to approve")
 }

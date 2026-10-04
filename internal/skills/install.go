@@ -2,6 +2,7 @@ package skills
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // Install modes for Targets. Auto is what a bare --skills means: Claude
@@ -232,7 +234,10 @@ func classify(root string, e *Entry) error {
 // SymlinkIn walks rel down from root one component at a time and
 // returns the first component that is a symbolic link, or "" when none
 // is. The walk stops at the first missing component, because nothing
-// below it exists yet. Every path seamark reads or writes under a client
+// below it exists yet. A component below a regular file is missing in
+// the same sense: the file is reported by the caller's own read, and a
+// foreign skill directory that holds such a file must stay a kept
+// foreign entry, not a failed run. Every path seamark reads or writes under a client
 // directory passes this check, so a link committed in a cloned
 // repository can never redirect a refresh outside the tree.
 func SymlinkIn(root, rel string) (string, error) {
@@ -244,7 +249,7 @@ func SymlinkIn(root, rel string) (string, error) {
 		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(prefix)))
 
 		switch {
-		case errors.Is(err, os.ErrNotExist):
+		case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
 			return "", nil
 		case err != nil:
 			return "", fmt.Errorf("%s: %w", prefix, err)
@@ -265,27 +270,133 @@ func SymlinkIn(root, rel string) (string, error) {
 // the set because the plan is recomputed from disk.
 func Apply(w io.Writer, root string, entries []Entry, printOnly bool) error {
 	for _, e := range entries {
-		switch e.State {
-		case Current:
-			fmt.Fprintf(w, "  kept    %s (current)\n", e.Rel)
-		case Foreign:
-			fmt.Fprintf(w, "  kept    %s (not managed by seamark: %s)\n", e.Rel, e.Reason)
-		case Absent, Stale:
-			if !printOnly {
-				if err := writeSkill(root, e); err != nil {
-					return err
-				}
-			}
-
-			if e.State == Absent {
-				fmt.Fprintf(w, "  %s  %s\n", previewVerb("wrote", "would write", printOnly), e.Rel)
-			} else {
-				fmt.Fprintf(w, "  %s %s (refreshed managed copy)\n", previewVerb("updated", "would update", printOnly), e.Rel)
-			}
+		if err := ApplyEntry(w, root, e, printOnly); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// ApplyEntry executes one entry of a plan and narrates its line. The
+// setup coordinator calls it per entry, so it can check the entry's
+// guard right before the write and report one result per directory.
+func ApplyEntry(w io.Writer, root string, e Entry, printOnly bool) error {
+	switch e.State {
+	case Current:
+		fmt.Fprintf(w, "  kept    %s (current)\n", e.Rel)
+	case Foreign:
+		fmt.Fprintf(w, "  kept    %s (not managed by seamark: %s)\n", e.Rel, e.Reason)
+	case Absent, Stale:
+		if !printOnly {
+			if err := writeSkill(root, e); err != nil {
+				return err
+			}
+		}
+
+		if e.State == Absent {
+			fmt.Fprintf(w, "  %s  %s\n", previewVerb("wrote", "would write", printOnly), e.Rel)
+		} else {
+			fmt.Fprintf(w, "  %s %s (refreshed managed copy)\n", previewVerb("updated", "would update", printOnly), e.Rel)
+		}
+	}
+
+	return nil
+}
+
+// Writes reports whether applying the entry writes files.
+func (e Entry) Writes() bool {
+	return e.State == Absent || e.State == Stale
+}
+
+// Check classifies the entry's directory again and returns the entry as
+// the tree shows it now. A caller compares it with the planned entry to
+// learn whether ownership or freshness changed since the plan.
+func Check(root string, e Entry) (Entry, error) {
+	now := Entry{Name: e.Name, Rel: e.Rel}
+
+	if err := classify(root, &now); err != nil {
+		return Entry{}, err
+	}
+
+	return now, nil
+}
+
+// Snapshot returns a digest of everything a refresh of the entry can
+// overwrite: the directory's type and, for each shipped file, its type
+// and content. The classification alone is not a guard. A stale copy
+// that the user edits again is still stale, and a refresh would then
+// destroy an edit that no plan ever saw. Files the user added beside
+// the shipped ones are not part of the digest, because a refresh never
+// touches them.
+//
+// A path that is not a directory has no children to read. That is a
+// state to record, never an error: a regular file with a skill's name
+// is a foreign entry that setup keeps, and the guard must not turn it
+// into a failed run.
+func Snapshot(root string, e Entry) ([sha256.Size]byte, error) {
+	var zero [sha256.Size]byte
+
+	shipped, err := Files(e.Name)
+	if err != nil {
+		return zero, err
+	}
+
+	h := sha256.New()
+
+	isDir, err := recordPath(h, root, e.Rel)
+	if err != nil {
+		return zero, err
+	}
+
+	if isDir {
+		for _, rel := range slices.Sorted(maps.Keys(shipped)) {
+			if _, err := recordPath(h, root, path.Join(e.Rel, rel)); err != nil {
+				return zero, err
+			}
+		}
+	}
+
+	return [sha256.Size]byte(h.Sum(nil)), nil
+}
+
+// recordPath hashes one path: its type, then its content when it is a
+// regular file. It uses Lstat, so a link is recorded as a link. A path
+// below a parent that is not a directory is recorded as unreachable. It
+// reports whether the path is a directory.
+func recordPath(h io.Writer, root, rel string) (isDir bool, err error) {
+	abs := filepath.Join(root, filepath.FromSlash(rel))
+
+	info, err := os.Lstat(abs)
+
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		fmt.Fprintf(h, "%s\x00absent\x00", rel)
+
+		return false, nil
+	case errors.Is(err, syscall.ENOTDIR):
+		fmt.Fprintf(h, "%s\x00unreachable\x00", rel)
+
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("%s: %w", rel, err)
+	}
+
+	fmt.Fprintf(h, "%s\x00%s\x00", rel, info.Mode().Type())
+
+	if !info.Mode().IsRegular() {
+		return info.IsDir(), nil
+	}
+
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", rel, err)
+	}
+
+	sum := sha256.Sum256(data)
+	fmt.Fprintf(h, "%x\x00", sum)
+
+	return false, nil
 }
 
 // Install plans and applies in one call for callers that need no gap
@@ -374,9 +485,18 @@ func (c ClientState) Notable() bool {
 // on the client instead of failing the call: status must never fail
 // because one directory is unreadable.
 func Inspect(root string) []ClientState {
+	return InspectTargets(root, []Target{claudeTarget, codexTarget})
+}
+
+// InspectTargets reports the given skill directories. A caller that
+// selected its clients explicitly passes their destinations, so the
+// report covers what the run addresses and nothing else. The target's
+// client label is printed as given; a shared directory names every
+// client that reads it.
+func InspectTargets(root string, targets []Target) []ClientState {
 	var states []ClientState
 
-	for _, t := range []Target{claudeTarget, codexTarget} {
+	for _, t := range targets {
 		s := ClientState{Client: t.Client, Dir: t.Dir}
 
 		entries, err := Plan(root, []Target{t})

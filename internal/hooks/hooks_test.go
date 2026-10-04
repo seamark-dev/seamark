@@ -1,12 +1,9 @@
 package hooks
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestOwnedBySeamark(t *testing.T) {
@@ -29,52 +26,53 @@ func TestOwnedBySeamark(t *testing.T) {
 	}
 }
 
-func TestInstalledGateModeAt(t *testing.T) {
-	root := t.TempDir()
+func TestInstalledGateModeFollowsClaudeCodeMatchers(t *testing.T) {
+	assert.Empty(t, InstalledGateMode(map[string]any{}), "no settings, no hook")
 
-	// Absent settings: no hook, no error.
-	mode, err := InstalledGateModeAt(root)
-	require.NoError(t, err)
-	assert.Empty(t, mode)
+	doc := func(entries ...map[string]any) map[string]any {
+		pre := make([]any, 0, len(entries))
+		for _, e := range entries {
+			pre = append(pre, e)
+		}
 
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
-	path := filepath.Join(root, ".claude", "settings.json")
-
-	// Unparseable settings are an ERROR, not "no hook": the two findings
-	// must never be conflated.
-	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o644))
-	mode, err = InstalledGateModeAt(root)
-	require.Error(t, err)
-	assert.Empty(t, mode)
-
-	write := func(matcher, hookType, cmd string) {
-		require.NoError(t, os.WriteFile(path, []byte(
-			`{"hooks":{"PreToolUse":[{"matcher":"`+matcher+`","hooks":[`+
-				`{"type":"`+hookType+`","command":"`+cmd+`"}]}]}}`), 0o644))
+		return map[string]any{"hooks": map[string]any{"PreToolUse": pre}}
 	}
 
-	mustMode := func(want string) {
-		t.Helper()
-
-		mode, err := InstalledGateModeAt(root)
-		require.NoError(t, err)
-		assert.Equal(t, want, mode)
+	entry := func(matcher, hookType, cmd string) map[string]any {
+		return map[string]any{"matcher": matcher, "hooks": []any{map[string]any{"type": hookType, "command": cmd}}}
 	}
 
-	write("Bash", "command", "/usr/bin/company-security gate --enforce --hook")
-	mustMode("") // a foreign hook must not read as ours
+	const (
+		enforce = "/bin/seamark gate --enforce --hook"
+		warn    = "/bin/seamark gate --hook"
+	)
 
-	write("Bash", "command", "/bin/seamark gate --hook")
-	mustMode(ModeWarn)
+	for name, tc := range map[string]struct {
+		settings map[string]any
+		want     string
+	}{
+		"a foreign hook is not ours": {doc(entry("Bash", "command", "/usr/bin/company-security gate --enforce --hook")), ""},
+		"warn":                       {doc(entry("Bash", "command", warn)), ModeWarn},
+		"enforce":                    {doc(entry("Bash", "command", enforce)), ModeEnforce},
+		// A gate command that Claude Code never runs for Bash is not an
+		// operational gate hook.
+		"an Edit matcher":       {doc(entry("Edit", "command", enforce)), ""},
+		"another hook type":     {doc(entry("Bash", "notify", enforce)), ""},
+		"a longer exact name":   {doc(entry("Bashful", "command", enforce)), ""},
+		"a star matcher":        {doc(entry("*", "command", enforce)), ModeEnforce},
+		"an empty matcher":      {doc(entry("", "command", enforce)), ModeEnforce},
+		"a regular expression":  {doc(entry("Ba.*", "command", enforce)), ModeEnforce},
+		"an anchored pattern":   {doc(entry("^Bash$", "command", enforce)), ModeEnforce},
+		"a name list":           {doc(entry("Bash|Edit", "command", enforce)), ModeEnforce},
+		"enforce wins, first":   {doc(entry("Bash", "command", enforce), entry("Bash", "command", warn)), ModeEnforce},
+		"enforce wins, last":    {doc(entry("Bash", "command", warn), entry("Bash", "command", enforce)), ModeEnforce},
+		"a non-firing enforcer": {doc(entry("Edit", "command", enforce), entry("Bash", "command", warn)), ModeWarn},
+	} {
+		assert.Equal(t, tc.want, InstalledGateMode(tc.settings), name)
+	}
 
-	write("Bash", "command", "/bin/seamark gate --enforce --hook")
-	mustMode(ModeEnforce)
-
-	// A gate command that Claude Code would never fire on Bash commands
-	// is not an operational gate hook.
-	write("Edit", "command", "/bin/seamark gate --enforce --hook")
-	mustMode("")
-
-	write("Bash", "notify", "/bin/seamark gate --enforce --hook")
-	mustMode("")
+	omitted := map[string]any{"hooks": map[string]any{"PreToolUse": []any{
+		map[string]any{"hooks": []any{map[string]any{"type": "command", "command": enforce}}},
+	}}}
+	assert.Equal(t, ModeEnforce, InstalledGateMode(omitted), "an omitted matcher fires for every tool")
 }

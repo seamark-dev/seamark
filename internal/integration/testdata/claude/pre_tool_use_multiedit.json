@@ -1,0 +1,16 @@
+{
+  "session_id": "synthetic-claude-session-0001",
+  "transcript_path": "/home/user/.claude/projects/-workspace-repo/synthetic-claude-session-0001.jsonl",
+  "cwd": "/workspace/repo",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "MultiEdit",
+  "tool_use_id": "toolu_synthetic_0003",
+  "tool_input": {
+    "file_path": "/workspace/repo/internal/api/handler.go",
+    "edits": [
+      {"old_string": "a", "new_string": "b"},
+      {"old_string": "c", "new_string": "d"}
+    ]
+  }
+}

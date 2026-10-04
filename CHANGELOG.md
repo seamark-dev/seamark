@@ -6,7 +6,331 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
-## v0.6.0 — 2026-09-05
+## v0.7.0 — 2026-10-03
+
+- **A clearer introduction and first-use workflow for AI coding agents.**
+  The README now leads with learning from repository history to help AI
+  coding agents stop repeating mistakes. It highlights lessons and proposals,
+  MCP tools, and agent skills; shows explicit Claude Code and Codex setup;
+  and explains how to review and install a first lesson. Reference details
+  now live in focused installation, configuration, repository-history, and
+  policy guides. The setup examples target v0.7.0 and newer.
+- **Feature maturity and direction made explicit.** Policies are marked
+  experimental and awaiting refinement. Editor integrations remain in the
+  codebase and are documented as experimental, without README promotion.
+  Unified hook management is identified as future work beyond v0.7.0.
+
+- **Agent setup guide and reusable compatibility checks.**
+  [docs/agent-integrations.md](docs/agent-integrations.md) explains Codex
+  setup and trust, optional skills and tool grants, selecting a CLI for
+  inference, API-key authentication, removal, and adding a new adapter.
+  `make agents-native-check CLIENT=codex` checks the installed CLI without
+  a model: flags, patch parsing, sandbox behavior, final output, provider
+  errors, and generated MCP configuration. `make smoke` now checks the
+  generated Codex hook commands in CI. Documentation tests check command
+  and flag names. The contract tests take the test-only third client
+  through the real setup coordinator, the shared delivery service, the
+  gate helpers, the inspection, and the distillation pipeline, so a
+  contributed adapter is proven against the engines it will run in. `make agents-native-smoke CLIENT=codex` runs one
+  bounded distillation with the operator's own login. It passed on
+  codex-cli 0.157.0 with GPT-6 Luna / low reasoning; the guide records
+  its scope and the remaining native verification gaps.
+- **One shell parser.** The hook reader that decides whether a hook
+  command runs a seamark hook now parses the command with
+  `mvdan.cc/sh`, the parser the command gate has always used, instead
+  of a parser of its own. The rules about hooks are unchanged: the
+  exit-status walk, the shell options, the wrappers, and the forms the
+  shells read in different ways. The reader bounds the words and the
+  nesting of a command before the parser sees it, because a hook
+  command from a repository file is untrusted input. One answer changed
+  to match bash: `((` at the start of a command is an arithmetic
+  command in bash and zsh and nested subshells in dash, so a hook
+  written that way may run and setup installs the managed hook beside
+  it. The reader also knows more forms: `false` is the one command
+  that always fails, so a hook after `false &&` may run and a hook after
+  `false ||` runs; `command -v` only prints; `eval`, `env -S`, and
+  `busybox` run what follows them; zsh `setopt pipefail` and bash
+  `shopt -so pipefail` count like `set -o pipefail`; a brace expansion
+  makes the words unreliable; a copied or closed standard input
+  (`<&3`, `<&-`) replaces the client's payload; and a pipeline in the
+  background discards its exit status. `init` and `status` now
+  classify the gate hooks of a workspace by one shared rule
+  (`integration.GateSummary`) and differ only in their words: an
+  unreadable hook document outranks a report-only hook, because the
+  document can hold an enforcing gate. The words of the setup narration
+  live apart from the plans that they describe. The guide lists every
+  legacy path beside its replacement, the tests that pin it, and the
+  condition for its removal.
+- **The shell reader follows the status more exactly, and the gate
+  line says only what it knows.** A pipeline that `&&` or `||` skips
+  now leaves the status as it is, so `false && x && seamark gate …`
+  reads as a hook that may run, not as one that runs. The status model
+  decides what fails before `&&` and `||`, so `(false)`, `{ false; }`,
+  `(exit 1)`, `eval false`, `/bin/false`, and `command false` count
+  like `false`. An `exit` or an
+  `exec` before `&&` ends the shell, so the hook after it may run. Any
+  redirection of descriptor 0 (`0>/dev/null`, `0>&-`) replaces the
+  client payload, and an unquoted glob (`/opt/*/seamark`) makes the
+  words unreliable, so both read as a hook that may run. A `sh -c`
+  script that joins `"$0"` or `"$@"` with its operands is read together
+  with them. The reader bounds the eval chain and the length of a
+  command line, so a crafted hook command can no longer slow `doctor`
+  and `status` for seconds. A wrapped gate that discards its exit
+  status is now always a warning, because doctor prints warnings only
+  and an enforcing policy file blocks nothing through such a hook. Only
+  `timeout` takes a number as its first operand: `env 5 …` runs the
+  program `5`, and `busybox seamark …` names no applet, so both read as
+  a hook that may run. `env -S` puts its split words in front of the
+  remaining arguments, so `env -S '… seamark gate' --hook` runs the
+  hook. Under `pipefail`, a later command that fails takes the status
+  from the hook, so `seamark gate … | false` is report-only. `eval`
+  runs its script with the options of the shell around it, so
+  `set -o pipefail; eval 'seamark gate … | cat'` blocks. A definition
+  that may run the gate, such as `echo seamark gate --enforce --hook`,
+  no longer makes `init`, `doctor`, or `status` say `enforce`: the
+  inspection reports its mode as `possible_gate_mode`, the gate line
+  names the definition as one that may run a gate, and nothing is
+  known to block. A run with an explicit `--gate-mode` now installs the
+  managed Codex gate hook beside a definition that certainly runs the
+  gate but cannot deliver the mode asked for (a report-only one, or a
+  warn one under a request for enforce), and warns that the hook runs
+  twice; a run without a mode still installs no second handler. Every
+  reader of a client document opens the path without blocking and
+  checks the open file, so a FIFO put in place between a check and a
+  read can no longer hang `doctor` or `status`. `status` fills its
+  legacy `gate_hook_mode` and `gate_hook_error` fields from the Claude
+  Code entry of `clients`, so one read serves both views, and each
+  client entry carries the reason of an unreadable hook document as
+  `hook_document_error`. The reason names the document once by its
+  repository path, for a parse error and for a read error alike
+  (`.claude/settings.json: permission denied`); `gate_hook_error` used
+  to hold the operating system's text with the absolute path.
+- **Setup reads what a wrapped hook really runs.** The hook reader now
+  parses lists, AND-OR lists, pipelines, subshells, and brace groups, and
+  follows the exit status of the hook through each of them. A wrapper
+  such as `bash --norc -c …`, `/usr/bin/env bash -c …`, `{ cd /repo;
+  seamark gate … ; }`, or a gate command with a trailing `# comment`
+  counts as a running gate. In `.codex/hooks.json` setup then adds no
+  second gate beside it; in `.claude/settings.json` setup still adds the
+  managed hook and reports that the hook runs twice. A wrapped gate
+  whose exit status the shell discards (`|| true`, `; …`, `| cat`) can
+  never block, whatever `--enforce` or the policy mode says: inspection
+  and `status` report it as `report-only`, setup reports a finding that
+  says what to change, and for Codex the `init` gate line reads
+  `report-only` too. A hook after `||`, in the background, with another
+  input than the client payload, inside `if`, `for`, or `case`, behind a
+  redirection that the shells read in different ways (`&>`, `>&file`),
+  or in a command too long or too deeply nested for the reader counts
+  as one that may run, so setup installs the managed hook beside it and
+  names the command. A gate in the background also gets the finding
+  that its exit status is discarded.
+- **A re-run keeps an enforcing Claude Code gate under every matcher
+  that fires.** A plain `seamark init` used to rewrite a seamark
+  `--enforce` gate under a `*`, an empty, or an expression matcher to
+  warn, without a word. It now keeps `--enforce`, and `status` and
+  `doctor` read that hook as enforce. `status`'s `gate_hook_mode` and
+  the Claude Code approvals record now refuse a linked
+  `.claude/settings.json`, as `init` and `doctor` do, and name the link
+  in `gate_hook_error` and in the record's `error`.
+- **One account of every agent across `init`, `doctor`, and `status`.**
+  The three commands now read one registry inspection per client:
+  skills, MCP registration, tool grants, and the edit, gate, and reset
+  hooks, each with its configuration state (absent, current, partial,
+  conflict, unreadable), the project trust seamark can read, and the
+  recorded native evidence (verified on a named version and surface,
+  pending, or not natively verified). `status --json` adds a `clients`
+  array with those typed fields by name and a `distill_client` field
+  naming the invoker; every existing field keeps its meaning.
+  `status` prints a `clients` block (hooks and registration per client,
+  the native evidence, and each limitation the adapter reports, such as
+  Codex trust that seamark cannot read and reminders that repeat), and
+  its `gate` line covers every client with a gate hook: an enforcing
+  Codex hook beside a warn Claude Code hook reads "enforce for codex …
+  the claude hook follows policy mode warn". `doctor` reports `hooks`,
+  `mcp`, `skills`, and `approvals` per client on the same lines as
+  before, prints one line per client with the evidence and limitations
+  (`[features] hooks = false` in `.codex/config.toml` is a warning:
+  the installed hooks never run), names the invoker on the `agent`
+  line, and takes every corrective command from the adapter that
+  installs the artifact. A skill directory two clients share is one
+  entry that names both consumers everywhere. `seamark init --help`
+  lists what seamark supports for each client from the same
+  descriptors. Hook evidence is one model for setup and inspection:
+  every definition of a hook, owned or wrapped, in the shared file, the
+  personal `.claude/settings.local.json`, or the inline Codex
+  `[hooks]`, with the tools the agent runs it for, whether the shell
+  certainly runs it, and its gate mode; a hook that covers some tools
+  is partial wherever it lives, and the action names the file that
+  holds it; a wrapped enforcing gate in the personal file enforces
+  unless it discards its exit status, a wrapper that runs both modes
+  enforces, and a managed warn hook beside
+  an enforcing inline hook reads as enforce everywhere
+  (`managed_gate_mode` keeps what setup owns). `init --client claude`
+  reports a tool as uncovered only when no definition in either file
+  runs the hook for it. A credential inside a hook command is redacted
+  before it reaches a detail, a finding, JSON, or the MCP resource.
+  `init --client codex` warns when `[features] hooks = false` turns
+  the hooks it installs off, and repeats the trust note for kept hooks.
+  Inspection stays offline and read-only: no client binary runs and no
+  login starts.
+- **`seamark init --client <name>`.** Selects the agents to set up, by
+  name, and may repeat (`--client claude --client codex`). Each selected
+  agent gets what seamark supports for it: its hooks and its MCP server
+  registration, with `--skills` and `--approve-tools` still opt-in. For
+  Claude Code the registration is a `seamark` entry in `.mcp.json`; for
+  Codex it is the `[mcp_servers.seamark]` table without any approval. An
+  agent that is not selected is never read or written, a shared
+  `.agents/skills` directory never counts as a configured Codex, and a
+  skill directory that two selected agents share is written once. What an
+  agent does not support yet is reported, and native trust stays the
+  user's decision. Without `--client`, init
+  output and written files are unchanged. `--client` takes a bare
+  `--skills` only.
+- **One setup path.** Both init forms now plan every file before the first
+  write and apply through one coordinator: a changed input stops the run
+  with "run the command again" instead of applying a stale plan, files are
+  replaced through a temporary file, and a failed write reports what
+  landed and what did not. A re-run converges.
+- **No write through a symbolic link, for the scaffolds too.** init still
+  reads `.gitignore` through a link and still keeps an existing
+  `.seamark/*.yaml` whatever it is. It now refuses to create a scaffold,
+  or to extend `.gitignore`, when a component of the path is a symbolic
+  link, the rule the client files already followed: a link committed in a
+  cloned repository must not redirect a write outside the tree. A
+  repository that links `.seamark/` elsewhere and lacks a starter file
+  must create that file by hand.
+- **`--client` looks at every hook source.** With `--client claude`, a
+  seamark hook that `.claude/settings.local.json` also runs is reported
+  as running twice, with the tools it overlaps on and a differing gate
+  mode named. The shared `.claude/settings.json` always gets every hook:
+  it is the file a team commits, so it never depends on the personal file
+  of whoever ran init. An init without `--client` never reads the local
+  file, as before.
+- **`--skills` reads like a boolean with modes.** `--skills=true` equals a
+  bare `--skills`, and `--skills=false` or an empty value installs
+  nothing.
+
+- **One delivery path for the edit hook.** `lessons --hook` and
+  `lessons --hook-reset` now run through a shared delivery service with a
+  Claude Code adapter in front of it: the adapter translates the native
+  event and reply, and the service owns selection, once-per-context
+  state, emission order, and the firing log. For a Claude Code edit the
+  reminder is byte-identical to before; the two entries below change the
+  state file and add fields to the log. The
+  service already handles one edit operation on several files under one
+  budget (`pin_budget` pins, eight lessons in total) with one log record;
+  no shipped agent sends such an event yet. Three edge cases change on
+  purpose:
+  - A file outside the workspace gets no reminder. It used to receive
+    the repo-wide (`*`) pins, and its absolute path went to the log. The
+    workspace root itself and a path behind an unreadable directory
+    count as outside.
+  - A relative `file_path` resolves against the event's `cwd`, and a
+    path behind a symbolic link resolves to the real file. A link that
+    leaves the workspace gets no reminder. A workspace reached through a
+    link (`/tmp` on macOS) now gets its real lessons; it used to get the
+    repo-wide pins only.
+  - The hook no longer creates `.seamark/index.db` in a workspace that was
+    never indexed. The pins of `lessons.yaml` are still delivered there.
+    A database that exists and cannot be opened still means no reminder.
+
+- **Suppression follows the receiving context.** `hook_delivery:
+  once-per-context` now keys its state by the client and the receiving
+  context that the client's adapter reports, not by the session string
+  alone. Two clients that report one session string no longer share an
+  entry, and a client that cannot name the receiver or has no reset event
+  for it gets repeated delivery. For Claude Code the main conversation is
+  still the session. An edit inside a subagent (the event carries
+  `agent_id`) is now its own context, and it has no reset event, so a
+  subagent gets the reminder on every matching edit. Before, a lesson that
+  the parent conversation already got could stay hidden from its subagent.
+  `.seamark/lessons-hook-state.json` moves to version 2. A version 1 file
+  reads as empty, so each lesson already delivered can be shown once more
+  per context after the upgrade. An older seamark that meets a version 2
+  file delivers every reminder and leaves the file alone; after a
+  rollback, delete the file to get suppression back.
+- **The firing log names the client.** New edit-hook records carry `client`,
+  `mechanism`, and `context_sha256` (a repository-scoped digest, never the
+  raw identifier). `seamark lessons --stats` adds one line per recorded
+  client under the hook-delivery line; records that name no client are
+  listed as such and are never assigned to one. Existing fields keep their
+  meaning, and an older log renders as before. Repeat counts never join a
+  record that names a client with one that does not, so the first reminder
+  after the upgrade counts as new in a session that was already running.
+
+- **Codex lesson hook.** `seamark init --client codex` now writes
+  `.codex/hooks.json`: a `PreToolUse` hook on `apply_patch` that runs
+  `seamark lessons --hook --client codex`. The
+  hook reads the patch text for its complete file set (add, update,
+  delete, and both ends of a move) and never runs it; a patch it cannot
+  read completely gets no reminder instead of a guessed one. One patch is
+  one reminder under the hook budget and one log record. Other hooks in
+  the file stay. Setup keeps one handler per hook: when a command in
+  `hooks.json` or inline `[hooks]` in `.codex/config.toml` already executes
+  the seamark hook, setup installs no second handler and names that
+  definition. It reads a hook command the way a shell does, so a command
+  that only prints the seamark command is no handler; when another program
+  gets the seamark command as arguments and setup cannot tell, it installs
+  the managed hook and names the command. No context-reset hook is installed: a Codex reset has nothing
+  to clear, and a hook without an effect still costs a trust review.
+  Codex must still be
+  told to trust the project and the hooks (`/hooks`), and setup says so.
+  The adapter reads no receiving context from a Codex event yet (the
+  event names a subagent by `agent_id`, but a reset inside a subagent is
+  unverified), so `once-per-context` does not apply there and reminders
+  repeat. `lessons --hook` and `--hook-reset`
+  take `--client`; without it the event is a Claude Code event, as before.
+  The patch reader follows the parser of codex-cli 0.154.0 and is tested
+  against what that parser did with forty patch texts, offline. A patch
+  that names an environment (`*** Environment ID:`) gets no reminder until
+  a live capture shows where its paths are rooted. A native run of
+  codex-cli 0.154.0 (2026-09-21) observed the lesson hook end to end on
+  the recorded surface.
+- **`agent.cli: codex`.** Both inference consumers, `lessons --distill`
+  and `lessons --extract-triggers`, can run Codex: `codex exec --ephemeral
+  --sandbox read-only -C <root> --skip-git-repo-check --ignore-rules -c
+  features.hooks=false -`, the prompt on stdin, the final message as the
+  reply, proposals marked `codex/…` in provenance. `--ignore-rules` keeps
+  an inherited execpolicy allow rule from lifting a command out of the
+  read-only sandbox. A failed Codex run reports the error after its
+  version banner, not the banner alone. The command is resolved
+  through the client registry, so `--dry-run`, `doctor`, and `status`
+  disclose it without the binary and never start it; a missing binary is
+  an error before any work. `agent.argv` still wins and keeps the caller's
+  working directory; `claude` stays the default. The preset has not run
+  in a live Codex session yet.
+- **The Codex command gate.** `seamark init --client codex` also writes a
+  `PreToolUse` hook on Codex's `Bash` tool that runs
+  `seamark gate --hook --client codex`. It is the same gate: warn until
+  `--gate-mode enforce`, exit 2 with the reason on stderr to block, fail
+  closed under `--enforce` on a malformed payload or a broken policy, and
+  the policy file's own `mode: enforce` blocks through a warn hook. A
+  Codex `apply_patch` event that a widened matcher sends to the gate is
+  refused and never parsed as a shell command; under `--enforce` the
+  refusal blocks and names the tool. A `require_approval` verdict blocks
+  like a deny, because Codex parses a native "ask" reply and does not
+  support it yet. Without `--gate-mode`, each selected client keeps its
+  own installed mode; the run's gate line takes enforce when any selected
+  client's hook enforces, and names a selected hook that still runs
+  without the flag, also one setup does not manage. A hook definition
+  counts as a handler only where the client runs it for the hook's tool:
+  a gate command under another event, or under a matcher that never fires
+  for `Bash`, no longer stops the install of the managed gate hook. The
+  plain `seamark gate --command` and the Claude Code hook are unchanged.
+  The generated Codex hook has not blocked a command in a live session
+  yet.
+
+- **Setup no longer takes a wrapped hook for its own.** A hook command such
+  as `/opt/wrapper /usr/local/bin/seamark gate --hook`, or a shell condition
+  in front of the seamark path, ends like seamark's own command. Setup
+  rewrote it to the bare command and the wrapper was gone, without a word.
+  Setup now owns only a command that is one seamark executable plus its
+  arguments. It keeps any other form as written and reports it. In
+  `.claude/settings.json` the managed hook is still added, the report says
+  that the handler runs twice, and a wrapped gate hook that enforces shows
+  in the gate line of the run.
+
+## v0.6.0 — 2026-09-13
 
 - **The MCP server states judgment rules, not a ritual.** The `initialize`
   instructions and the `onboard` prompt now say when each tool earns its

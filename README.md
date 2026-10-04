@@ -1,917 +1,264 @@
 <p align="center">
-  <img src="assets/seamark-banner-2560.png" alt="Seamark — the safe channel and the hazard" width="720">
+  <img src="assets/seamark-banner-2560.png" alt="Seamark — learn from repository history" width="720">
 </p>
 
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
-  <a href="go.mod"><img src="https://img.shields.io/badge/go-%E2%89%A51.25-00ADD8.svg" alt="Go"></a>
-  <a href="#get-started"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg" alt="Platform"></a>
+# Seamark
+
+**Stop your AI coding agent from repeating the same mistakes.**
+
+Your repository already contains lessons from past bugs, fixes, and code
+reviews. Seamark brings those lessons into your AI coding agent's next change.
+
+Review proposed lessons, keep the ones that matter, and let Seamark remind
+your agent when it edits relevant code. MCP tools and agent skills also help
+it understand past decisions and find related files that may need updating.
+
+[Get started](#get-started) · [Learn from your repository](#learn-from-your-repository) · [Agent skills](#agent-skills) · [Documentation](#documentation)
+
+<p>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 license"></a>
+  <a href="docs/getting-started.md"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg" alt="macOS and Linux"></a>
 </p>
 
-**Repository history and code blast radius for your editor, agents, and CI.**
+## Why Seamark?
 
-Seamark finds which files change together, explains unusual code, and shows
-which code paths can reach a database write, a process spawn, or production
-infrastructure. It provides editor diagnostics, answers `why` on the CLI, and
-checks agent commands against your rules. The rules are machine checks, not
-paragraphs in a prompt.
-**Mistakes get caught instead of explained.**
+You fix a bug. A reviewer explains the mistake. In the next session, your AI
+coding agent makes it again. The correction is in your history, but it never
+reaches the agent when it matters.
 
-> A _seamark_ is a navigational marker that shows both the safe channel
-> and the hazard.
+Seamark helps you put that knowledge to work:
 
-- [Why seamark?](#why-seamark)
-- [Get started](#get-started)
-- [The mental model](#the-mental-model)
-- [Journey 1: understand an unfamiliar repository](#journey-1-understand-an-unfamiliar-repository)
-- [Journey 2: stop repeating review mistakes](#journey-2-stop-repeating-review-mistakes)
-- [Journey 3: guard agent commands](#journey-3-guard-agent-commands)
-- [Surfaces: editor, agents, maintainers](#surfaces-editor-agents-maintainers)
-- [How much can the answers be trusted?](#how-much-can-the-answers-be-trusted)
-- [Durable state](#durable-state-the-index-is-not-a-throwaway-cache)
-- [Configuration](#configuration)
-- [How it works](#how-it-works)
-- [Honest limits](#honest-limits)
-- [Status & roadmap](#status--roadmap)
+- **Learn from your own repository.** Turn past fixes and code review feedback
+  into proposed lessons, with links back to the evidence. You decide what to keep.
+- **Bring lessons to the next edit.** Hooks deliver relevant reminders when
+  your AI coding agent edits matching files, including in a new session.
+- **Find changes that belong together.** Use Git history to spot a generated
+  client, another implementation, or a test that often changes with your code.
+- **Keep the knowledge with your project.** Accepted lessons live in a YAML
+  file you can review and commit. Seamark has built-in integrations for
+  Claude Code and Codex, with a shared framework for adding more AI coding agents.
 
-## Why seamark?
-
-Most code-graph tools use the same design: parse symbols, store a graph, and
-save tokens. Three problems remain:
-
-| Problem                                                                                             | What seamark does about it                                                                                         |
-| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| The graph knows _what_ the code is, not _why_                                                       | Mines git history: empirical co-change (with lift), the commit trail per region, revert markers                    |
-| Agents repeat mistakes; the fix is a prompt paragraph that costs tokens every turn and gets ignored | Rules are **checks**, evaluated at edit/run time; they cost nothing until violated                                 |
-| Agents cause real damage and the guardrails are regex denylists                                     | A real shell parser + effect classification + policy over your declared environment, with an append-only audit log |
-
-On a production monorepo with 831 files and 447 commits, Seamark built the full
-Python, TypeScript, and Go index in **~3s**. Its strongest signal was a manually
-synchronized Python↔TypeScript schema contract: 38 shared commits with lift
-6.6. Language servers cannot detect this history signal, but Seamark reported
-it as a save-time diagnostic. Seamark also found 598 symbols that could reach
-a sink such as a database write, process spawn, or network egress.
-
-Every result in the index is **falsifiable** and traceable to a parse, commit,
-or policy file. Seamark does not store LLM-generated "insights." The index is
-local. Seamark requires no account or API key and sends no telemetry.
+For example, a reviewer may have explained that changing a backend schema
+also requires regenerating the frontend client. Seamark can propose a lesson
+from that feedback and deliver the accepted reminder when the agent edits the
+relevant code again. You do not have to remember to repeat the correction in
+every task prompt.
 
 ## Get started
 
+These instructions are for **v0.7.0 or newer**.
+
+Install the latest published version on macOS or Linux:
+
 ```bash
 brew install seamark-dev/tap/seamark
+seamark version
+```
 
+Open a repository with Git history and choose **one** setup command:
+
+```bash
 cd your-project
-seamark init        # scaffold config + wire the Claude Code agent hooks
-seamark index       # parse + mine history + propagate effects (~seconds)
-seamark orient      # map the repo: hubs, load-bearing symbols, decisions
+
+# Claude Code
+seamark init --client claude --skills --approve-tools
+
+# Codex
+seamark init --client codex --skills --approve-tools
 ```
 
-The [tap](https://github.com/seamark-dev/homebrew-tap) ships pre-built
-bottles for Apple Silicon macOS and x86_64 Linux; other platforms
-(including Intel macOS, Homebrew Tier 3) build from source
-automatically. Shell completions install with
-the formula. `seamark why <symbol-or-file>` then answers the first real
-question about any unfamiliar code.
+This connects Seamark's MCP tools, installs the three agent skills, and sets
+up lesson and command hooks. `--approve-tools` adds tool permissions while
+preserving existing restrictions. New repositories start with command checks
+in warn mode; they do not block commands. Existing policy settings are preserved.
 
-### Other install routes
-
-Tagged [releases](https://github.com/seamark-dev/seamark/releases) attach
-smoke-tested archives for macOS and Linux (amd64/arm64) with SHA-256
-checksums:
+Build the index and check the setup:
 
 ```bash
-sha256sum -c --ignore-missing SHA256SUMS   # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
-tar -xzf seamark_*.tar.gz
-mkdir -p ~/.local/bin
-install seamark_*/seamark ~/.local/bin/
+seamark index
+seamark doctor
 ```
 
-A matching checksum verifies the archive against the published `SHA256SUMS`.
-This verifies integrity, not publisher identity. Artifact signing is not yet
-available ([docs/STATUS.md](docs/STATUS.md)).
+Open or restart your AI coding agent in the repository. In Codex, accept the
+project trust prompt if you trust the repository, then review the Seamark
+hooks with `/hooks` in the Codex CLI. Tool permissions do not grant hook trust.
+See [agent setup](docs/agent-integrations.md) for compatibility and troubleshooting.
 
-Or build from source — Go ≥ 1.25 and a C compiler (tree-sitter uses
-CGO):
+Try asking:
+
+> Use Seamark to explain this repository's main areas and recent decisions.
+> Which files often change together?
+
+You should get an overview based on your code and Git history. You can also
+run `seamark orient` yourself. Lesson reminders start when there are relevant
+lessons to deliver; the next section shows how to collect them.
+
+[Other installation options and setup help →](docs/getting-started.md)
+
+## Learn from your repository
+
+The learning workflow is simple:
+
+**Past fixes and reviews → proposed lessons → your review → reminders during edits.**
+
+Start with fixes from local Git history:
 
 ```bash
-git clone https://github.com/seamark-dev/seamark && cd seamark
-make install        # builds and installs to ~/.local/bin/seamark
+seamark index --fixes-only
+seamark lessons --list
 ```
 
-Both of these routes install to `~/.local/bin`; make sure that directory
-is on your `PATH`. The Homebrew route handles `PATH` on its own.
+To include GitHub pull-request review comments, use `seamark index --reviews`
+instead. That requires the GitHub CLI (`gh`) authenticated for the repository.
+A new repository or one with little relevant feedback may have few findings.
+You can also [write a lesson by hand](docs/lessons.md#tuning-what-surfaces-lessonsyaml).
 
-`seamark init` is optional. It performs the one-time setup without overwriting
-existing files. It writes starter `.seamark/policy.yaml`,
-`.seamark/lessons.yaml`, and `.seamark/config.yaml`; adds the `.gitignore`
-exceptions; and merges the gate and review-lesson hooks into
-`.claude/settings.json`. Existing hooks remain unchanged, so you can safely run
-the command again. Pass `--print` to preview each change. A fresh install with
-the starter warn policy **never blocks anything**. An existing `enforce` policy
-remains in force. Enabling enforcement is a separate, explicit action
-([Journey 3](#journey-3-guard-agent-commands)).
-
-Optional [agent skills](#agent-skills) help your coding agent decide when
-to use Seamark. See the installation examples for Claude Code and Codex below.
-
-The graph and your proposal decisions are in one SQLite database under
-`.seamark/`, beside the audit logs and generated reports. Git ignores these
-files but keeps the reviewed YAML overlays. After you decide on proposals, the
-database is _not_ a temporary cache. See
-[Durable state](#durable-state-the-index-is-not-a-throwaway-cache).
-
-## The mental model
-
-Five nouns cover the learning pipeline, used with exactly these meanings
-everywhere — CLI help, docs, and report alike:
-
-```text
-review comment or fix commit         what a reviewer (or a fix) said, once
-        ↓  mined by `seamark index --reviews` or `--fixes-only`
-finding      one raw observation, kept verbatim with its provenance
-        ↓  clustered on recurrence (≥2)
-lesson       a pattern recurring across findings in a region — review-
-             or fix-derived alike
-        ↓  distilled by your agent CLI (optional) — or written by hand
-proposal     a candidate rule awaiting YOUR decision
-        ↓  `lessons --apply`  (a dismissal sticks until its evidence changes)
-pin          an accepted rule, surfaced to agents at edit time
-```
-
-And five more for the risk layer:
-
-| Term         | Meaning                                                                                            |
-| ------------ | -------------------------------------------------------------------------------------------------- |
-| **effect**   | an observable capability — `db:write`, `proc:exec`, `net:egress`, `infra:mutate`                   |
-| **sink**     | an API or command that _directly_ produces an effect; everything else reaches effects transitively |
-| **decision** | one historical record: a commit, PR, or revert mined from git                                      |
-| **region**   | a file-or-directory scope that lessons, pins, and policy attach to                                 |
-| **coupling** | empirical co-change measured from history — "usually travels with", never "depends on"             |
-
-## Journey 1: understand an unfamiliar repository
-
-_Five minutes from clone to knowing where the bodies are buried._
+To turn findings into proposed lessons, Seamark can use your installed AI
+coding agent CLI. Claude Code is the default. For Codex, set `agent.cli: codex`
+in `.seamark/config.yaml` as shown in the
+[inference setup guide](docs/agent-integrations.md#choose-an-agent-for-inference).
+This is separate from choosing an agent during `init`.
 
 ```bash
-seamark index       # ~seconds; parse + mine history + propagate effects
-seamark orient      # the one-screen overview
+seamark lessons --distill --dry-run   # preview the command and estimated input
+seamark lessons --distill --limit 1   # process one group through your AI agent CLI
+seamark lessons --proposals          # review the proposed lessons and evidence
 ```
 
-`orient` shows scale, module layout, the most-called production API,
-the change hubs (files whose edits rarely travel alone), and the recent
-decision trail. Then interrogate anything that looks load-bearing:
-
-```text
-$ seamark why gate.EvalCommand
-internal/gate.EvalCommand  (function)
-  defined  internal/gate/gate.go:136
-  sig      func EvalCommand(p *Policy, catalog *effects.Catalog, root, commandLine string) (*Decision, error)
-  effects  proc:exec [depth 1]
-
-callers (4)
-  [qualified]     internal/cli.newGateCmd                      internal/cli/gate.go:21
-  (+3 in tests)
-
-calls (8)  — 3 resolved by name match only
-  [unique-name]   internal/effects.Catalog.MatchCommand        internal/effects/effects.go:140
-  [same-package]  internal/gate.gitPush                        internal/gate/gate.go:388
-  ...
-
-usually changed with  (empirical, lift > 1 means beyond chance)
-   6/58  commits  lift 4.1   internal/effects/effects.go  · mostly MatchCommand, Load
-recent decisions
-  2026-07-26  ...  Implement Python parser
-```
-
-Read it top to bottom: this function _can ultimately spawn a process_
-(one hop away), here is its production surface (test callers collapse to
-a count instead of burying it), and here is the commit trail. Every call
-edge declares how it was derived (`[qualified]`, `[same-package]`,
-`[same-class]`, or the low-confidence `[unique-name]`), so you always
-know how much to trust an edge. The `usually changed with` lines carry
-**function grain**: `· mostly …` names the functions git's hunk headers
-show actually moved in the shared commits — a factual report, not a
-statistical claim. On a repo with real history, this section is where
-the surprises live.
-
-### Languages
-
-| Language                      |  Symbols & calls   | Effect sinks | Notes                                                      |
-| ----------------------------- | :----------------: | :----------: | ---------------------------------------------------------- |
-| Go                            |         ✓          |      ✓       | multi-module monorepos supported                           |
-| TypeScript / TSX / JavaScript |         ✓          |      ✓       | ES-module resolution, cross-file named imports             |
-| Python                        |         ✓          |      ✓       | relative imports, `__init__` packages, self/cls resolution |
-| SQL, HCL                      | history layer only |   planned    | co-change needs no parser                                  |
-
-The history layer (co-change, decisions) is language-agnostic — it works
-on every file git tracks.
-
-## Journey 2: stop repeating review mistakes
-
-_Ten minutes to make the last hundred code reviews teach your agents._
-
-Agents repeat mistakes. Review threads contain the correction, but the lesson
-does not persist after the session. It can appear once from CodeRabbit, once
-from Copilot, and once from a tired reviewer. Mine it instead:
+Lesson generation uses your agent's model access and may incur usage charges.
+It does not install anything automatically. Review a proposal's wording,
+evidence, and file scope, then choose its ID:
 
 ```bash
-seamark index --reviews    # review comments via your gh CLI + fix commits from local git
-seamark index --fixes-only # fix commits only; local git, deterministic and offline
+seamark lessons --apply p1           # replace p1 with an ID you reviewed
 ```
 
-Use `--fixes-only` for a pinned historical checkout or a run that must not use
-live GitHub data. It refreshes the local-fix source without fetching or
-deleting the existing review corpus. Use a fresh index when the experiment
-must contain only fixes.
+By default, this prints a YAML block. Paste it under `pin:` in
+`.seamark/lessons.yaml` and commit that file to share the lesson. To let
+`--apply` write the file and record the decision for you, enable
+[`distill.write`](docs/configuration.md#configuration) first.
 
-Seamark shows recurring feedback for the relevant region through the same
-`seamark why` and `seamark orient` commands that an agent already calls. It
-does not add tokens to every turn or add content to `CLAUDE.md`. For example,
-from a private monorepo:
+Inspect what applies to a file with `seamark lessons --file path/to/file`.
+Your configured hooks deliver matching reminders during supported edits.
+`seamark report --open` opens a local report of proposals and accepted lessons;
+`seamark lessons --stats` shows which reminders have been delivered.
 
-```text
-$ seamark why scripts/fetcher.py
-...
-reviewers keep flagging  (recurring across pull requests)
-  ×2     scripts     [copilot]     this script hard-codes a postgres url including credentials
-  ×2     scripts     [coderabbit]  RUF003
-```
+[Learning guide: review, tune, dismiss, and update lessons →](docs/lessons.md)
 
-Lint codes are the shallow end. The one-off comments the recurrence
-threshold hides are often the most valuable, and the ledger keeps them
-for the distiller and for you:
+## Agent skills
 
-```text
-$ seamark lessons --list
-  ×1   core/session_calendar.py      [coderabbit]  loader is stricter on the go side than here — drift risk
-  ×1   ingestor/cmd/ingestor/run.go  [coderabbit]  do not invalidate the live archive before its replacement succeeds
-  …
-```
-
-A Python↔Go session calendar quietly drifting apart, an archive
-invalidated before its replacement exists — each said exactly once,
-each a production incident wearing a review comment. `seamark lessons
---distill` is how they become permanent: it batches the raw findings
-through **your own agent CLI** (a full disclosure prints first;
-`--dry-run` prints it and sends nothing — the exact payload is
-documented in [docs/data-flow.md](docs/data-flow.md)) into proposed
-pins — every proposal cites its evidence, nothing lands without your
-explicit `--apply`, and a dismissal sticks until its evidence changes.
-
-That drift-risk one-off, distilled together with a "regenerate the
-frontend schema after this change" comment from `api/schemas.py`, is now
-this applied pin in the monorepo's `lessons.yaml` — two review
-remarks that became the repo's contract-synchronization rule:
-
-```yaml
-- rule: keep-parallel-implementations-consistent
-  region: api
-  regions: [api, core]
-  note: "When two runtimes or call sites share a contract, mirror validation
-    strictness and regenerate derived artifacts: run make sync-api after
-    schemas.py changes, and keep the Go/Python seed loaders equally
-    fail-fast."
-  # distilled by claude/v2 from 2 findings (seamark lessons --distill, p60)
-```
-
-The fallback region set is computed from the cited evidence, never
-guessed: a theme living in `api` AND `core` says exactly that instead of
-claiming the whole repo. A verified trigger can narrow that fallback to
-the exact edit surface where the mistake is introduced. (Measured on
-the two development corpora, evidence-coverage regions cut repo-wide
-`*` pins from 35 of 65 to 3.)
-
-More pins the two repos distilled and applied:
-
-- **recompute-derived-fields-with-source** — _"When a write changes
-  inputs to derived columns (net_pnl, dedup_hash, avg price), recompute
-  and persist them in the same transaction as the source update; never
-  leave derived state stale or split across commits."_
-- **no-parquet-for-live-session** — _"Never read the historical 1m
-  parquet archive for today's/live session data — it lacks live-session
-  bars and mixes historical with live."_
-- **unsubscribe-on-every-exit-path** (`v2/pkg/engine/resolve`) —
-  _"Every subscription termination path must also unsubscribe, not just
-  close the writer; closing alone leaves the sub registered in
-  triggers, skewing counters and leaking resources."_
-- **copy-shared-mutable-data** (`v2/pkg/engine`) — _"Clone
-  caller-supplied maps/headers and copy byte slices from pooled or
-  datasource-owned buffers before storing or mutating them; aliasing
-  reusable backing arrays causes cross-request races and corruption."_
-
-None of that is lint. Those are the house rules a senior reviewer
-carries in their head — extracted from this repo's own history, scoped
-to the region they came from, and injected exactly when an agent is
-about to edit there. That injection is the edit hook `seamark init`
-wires: one local index read per edit, silent for files with no lessons.
-(Proven: a headless agent given a plain edit task with no mention of
-seamark still named every flagged rule.)
-
-Every distilled pin also carries a live **confidence tier** — strong /
-fair / weak, computed on each read from what its citations still
-support: distinct events, review+fix corroboration, recency, and
-whether the cited files still exist. Weak pins lose injection-budget
-slots to strong ones and are tagged when they do surface; nothing is
-stored, nothing is model-scored.
-
-The whole lifecycle is `seamark lessons`, one flag per decision:
-
-| Flag              | What it does                                                                                                                                                  |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--file <path>`   | the lessons that would fire when editing one file — the hook's view, uncapped                                                                                 |
-| `--list` / `--region <dir>` | the raw ledger, one-offs included, with copy-paste config syntax                                                                                    |
-| `--distill`       | batch new findings through your agent CLI into proposed pins; already-distilled evidence is never paid for twice (`--region`, `--limit`, `--dry-run` budget it; a preflight always discloses first) |
-| `--proposals`     | the decision ledger, free: pending/applied/dismissed, each with its confidence facts, its prompt-era note, its outcome verdict (applied pins), and the regions today's inference would assign |
-| `--apply p3,p7`   | pin chosen proposals (ranges work: `p1..p9`); writes `lessons.yaml` only with `distill.write`, else prints the block to paste                                 |
-| `--dismiss p2`    | record a no — the same evidence is never re-proposed                                                                                                          |
-| `--prune p16,p45` | retire pins that restate another (the ledger names the clusters); the theme stays pinned by its survivor                                                      |
-| `--retarget p3`   | update an applied pin to the regions current inference supports — verified trigger scopes when available, evidence coverage otherwise; ordinary failures roll `lessons.yaml` back, and if a hard crash leaves the file ahead of the ledger, the next run detects and repairs exactly that |
-| `--extract-triggers` | ask your agent CLI where each already-pinned mistake is MADE (see below); every answer is verified, answered proposals are never re-paid, and `--dry-run` discloses first |
-| `--stats`         | the firing log: which lessons actually reach agents (split by surface: hook / change_set / check), which never fire — the decay signal — and per-pin outcomes: did the mistake recur after the pin started firing (working / not landing / untested) |
-| `--hook`          | the PreToolUse entry point `seamark init` wires; offline, silent when a file has no lessons                                                                   |
-
-Evidence tells Seamark where a problem was observed or repaired. A
-**trigger path** tells it where an author can introduce the mistake.
-Those can differ: a "regenerate the client" finding may live on the
-generated TypeScript file, while the omission begins in the backend
-model. Distillation must answer the trigger question for every proposed
-pattern. Each named path must parse and exist in the working tree, then
-it is accepted when it is an exact cited production path, the immediate
-parent of one, or co-change history confirms it against the cited evidence.
-Verified triggers become the precise delivery scopes—even a single file—while
-evidence coverage remains the fallback if none verify. Unverified names
-never move delivery. The `--proposals` ledger and HTML report show the
-current scope, and `--retarget` applies it explicitly to an installed
-pin. `--extract-triggers` asks the same question for proposals distilled
-before trigger extraction existed. When that semantic question changes,
-legacy negative answers are re-asked once; existing positive trigger paths
-are left alone.
-
-A clean matched benchmark of this exact failure mode measured a +100
-percentage-point difference-in-differences effect across five pairs per scope:
-the trigger-scoped lesson preserved the invariant 5/5 versus 0/5 without the
-hook, while the repair-scoped control was 3/5 in both arms and never fired.
-This is controlled synthetic evidence under one pinned model/runtime, not
-external validation; see the
-[full report](bench/trigger-scope-report-v7.md).
-
-A second matched benchmark reproduced the mechanism on an exact historical
-OpenTelemetry-Go commit. Trigger-scoped delivery preserved the parallel
-histogram-reset invariant 5/5 versus 0/5 without the hook; the repair-scoped
-control was 1/5 versus 0/5. The resulting +80 percentage-point
-difference-in-differences effect passed its precommitted +40-point threshold,
-and all 20 sessions completed the visible task. This is public-repository
-evidence for one pinned task and runtime—not a claim that every repository or
-model benefits. The step-by-step
-[OpenTelemetry case study](docs/case-studies/opentelemetry-histogram-reset.md)
-connects historical learning, maintainer acceptance, hook delivery, and the
-audit trail. Its reusable evidence rules are in the
-[case-study protocol](docs/case-studies/protocol.md). See the
-[full report](bench/otel-report-v7.md) and
-[benchmark runbook](bench/README.md#pinned-public-repository-calibration) for
-the independent paired evidence.
-
-Mined text is scrubbed of secret-shaped values (connection strings,
-tokens) before it is stored — a credential a reviewer quoted once must
-not be re-broadcast into agent context on every edit — and review
-evidence has a shelf life: two years by default, with the newest 200
-comments always kept so slow repositories stay covered.
-
-A committed `.seamark/lessons.yaml` tunes what surfaces — `mute` kills
-noise, `pin` forces what must never be ignored (single `region` or a
-`regions: [api, db]` set), `threshold` sets the recurrence bar,
-`pin_budget` caps the hook's injection (default 3), `change_budget` the
-`change_set` block (default 6), and `hook_delivery` controls whether a
-matching lesson repeats during the current agent context.
-
-### Choose how often hook lessons repeat
-
-Choose one of these settings in `.seamark/lessons.yaml`. If the key is
-omitted, Seamark uses `always`.
-
-Use the default when every matching edit should receive the reminder:
-
-```yaml
-# Repeat matching lessons after every edit (default).
-hook_delivery: always
-```
-
-Use the opt-in mode to reduce repeated context when an agent edits the same
-area several times:
-
-```yaml
-# Deliver each lesson once, then allow it again after context compaction.
-hook_delivery: once-per-context
-```
-
-`once-per-context` suppresses only lessons already delivered in the current
-agent context—the conversation content the model can still see. The
-`seamark init` command installs the `PostCompact` reset that lets those lessons
-return after Claude Code compacts old context. After upgrading Seamark, run
-`seamark init` once to install or refresh these hooks; changing the setting
-later does not require running init again. If the session identity or local
-state is unavailable, Seamark fails open and delivers the lesson normally.
-
-See [Hook delivery modes](docs/lessons.md#hook-delivery-modes) for the state,
-privacy, and lifecycle details. `seamark report` renders the whole decision
-queue as one self-contained HTML page. The full pipeline —
-mining heuristics, fix-commit classification, region inference,
-confidence tiers, distillation economics, near-duplicate pruning, the
-firing stats, and the outcome loop that answers whether pins actually
-change behavior — is documented in [docs/lessons.md](docs/lessons.md).
-
-## Journey 3: guard agent commands
-
-_Run warn-mode for a week; then decide if anything should actually block._
-
-`seamark gate` classifies a shell command's effects and evaluates your
-policy **before the command runs** — built for agent pre-execution hooks
-and CI:
-
-```bash
-$ KUBECONFIG=~/.kube/prod.yaml seamark gate --command "terraform apply -auto-approve"
-verdict  deny (mode: warn)
-effects  [infra:mutate]
-  [deny] no-prod-infra-mutation: production infrastructure mutation requires maintainer action
-```
-
-What makes it more than a denylist:
-
-- **A real shell parser** (`mvdan.cc/sh`) — every command in pipelines,
-  `&&`-chains, and `$(substitutions)` is classified; unparseable input
-  fails closed.
-- **Indirection is detected, not missed** — `$TOOL apply` cannot be
-  classified, so it is flagged as _dynamic_ and policy decides; this is
-  exactly the trick that walks through regex denylists.
-- **Wrappers unwrap** — `sudo -E env FOO=bar kubectl delete` classifies
-  as kubectl.
-- **Subcommand-aware** — `terraform plan` passes, `terraform apply` does
-  not; an argument merely _named_ "apply" does not trigger.
-- **Environment-aware** — `env.is_prod` derives from the variables you
-  declare (`KUBECONFIG`, `DATABASE_URL`, …) and your prod markers.
-
-Policy is CEL over `effect`, `command`, `env`, and `diff`, in
-`.seamark/policy.yaml`:
-
-```yaml
-mode: warn # report only; flip to "enforce" when the rules have earned trust
-deny:
-  - id: no-prod-infra-mutation
-    when: 'effect.contains("infra:mutate") && env.is_prod'
-    message: production infrastructure mutation requires maintainer action
-require_approval:
-  - id: prod-db-write
-    when: 'effect.contains("db:write") && env.is_prod'
-    message: database write against a production environment
-```
-
-`seamark init` wires the gate into `.claude/settings.json` as a
-PreToolUse hook on Bash (`seamark gate --hook` — the payload is read
-natively, no jq). By default the hook follows `policy.yaml`'s mode
-(warn), so **a first install never blocks a command**. Opting in with
-`seamark init --gate-mode enforce` bakes `--enforce` into the hook:
-deny/require_approval verdicts exit 2 and block, and the gate **fails
-closed** — a malformed payload, a broken policy file, or an internal
-error blocks the command instead of silently allowing it. Re-running
-`init` without `--gate-mode` keeps whatever mode is installed, and every
-run ends with a `gate` line stating the effective behavior.
-
-The same init also wires the edit-time lessons hook and a silent
-`PostCompact` reset. The reset matters only when `.seamark/lessons.yaml` opts
-into `hook_delivery: once-per-context`; default `always` delivery is unchanged.
-
-The agent sees the denial reason and corrects course; you see every
-decision in `.seamark/audit.jsonl` — an append-only trail of what your
-agents attempted, when, and why it was allowed or blocked. The log is
-secret-safe by default: entries store the normalized command names, a
-SHA-256 of the input, the verdict, and the policy hash — never the raw
-command line, which frequently carries tokens, passwords, and connection
-strings. It is created `0600` and rotated by size and age (one previous
-generation kept; entries expire after 30 days). To also persist the
-input line, opt in via `policy.yaml`:
-
-```yaml
-audit:
-  raw: true
-```
-
-Raw inputs are scrubbed of secret-shaped patterns best-effort — treat
-such a log as sensitive.
-
-### Blast radius of a diff
-
-```bash
-git diff | seamark check          # or: seamark check   (uses git diff HEAD)
-```
-
-Changed lines map to symbols; symbols carry transitively-propagated
-effect tags; the union is what the change can _ultimately_ reach — even
-when the edited function never touches a sink itself. Policy rules over
-`diff.effects` gate merges the same way `gate` gates commands, and
-`diff.unindexed_files` exposes coverage blind spots to your rules —
-changed files the index cannot attribute never silently read as safe.
-The text output also appends the recurring lessons governing the
-touched files — clearly marked advisory, never part of the verdict,
-printed even when the verdict blocks (a deny is exactly when they
-matter). `--json` stays verdict-shaped; `--enforce` makes blocking
-verdicts exit 2.
-
-What Guard can and cannot defend against is stated plainly in
-[docs/threat-model.md](docs/threat-model.md): it is a defense-in-depth
-policy layer, not a sandbox.
-
-## Surfaces: editor, agents, maintainers
-
-**Editor** — `seamark lsp` is a secondary language server that runs
-_alongside_ gopls, pyright, or tsserver. It adds information they cannot see:
-effect reach and co-change partners in hover text, caller counts in code
-lenses, and save-time omission diagnostics (_"usually changed together, not
-in this change: src/api/schema.ts — 38/58 commits, lift 6.6"_). The thresholds
-are conservative because users disable noisy diagnostics. See
-[docs/editors.md](docs/editors.md) and the ready-made configurations in
-[editors/](editors/).
-
-**Agents** — `seamark mcp` provides the Model Context Protocol over standard
-input and output. It provides five tools, not forty. Tool definitions return
-to the model on every turn, so a large server can use more tokens than it
-saves:
-
-| Tool         | Answers                                                                                                                                       |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `orient`     | one-screen repo overview: modules, most-called API, change hubs, recent decisions                                                             |
-| `why`        | everything about a symbol or file: callers with confidence, co-change, commits, the lessons that govern it                                    |
-| `change_set` | pre-edit: what history says changes together with your planned files, plus the budgeted lessons governing them (new files included)           |
-| `check`      | a diff's reachable effects and the policy verdict, with the touched files' lessons as a marked advisory                                       |
-| `expand`     | progressive disclosure: turn any ref a report returned into its content — source lines, or `lessons:<dir>` for an area's raw review findings  |
-
-Register it in Claude Code by dropping an `.mcp.json` at the repo root
-(this repository ships one):
-
-```json
-{ "mcpServers": { "seamark": { "command": "seamark", "args": ["mcp"] } } }
-```
-
-Every tool call checks the workspace fingerprint and re-indexes when something
-changed. Answers do not come from a stale graph. The server also exposes
-`seamark://orient` and `seamark://status` as resources. It provides usage
-guidance: check related files before editing several files or unfamiliar code,
-review the diff before finishing, and request a repository overview only when
-the code is unfamiliar. The optional skills below expand this guidance into
-task-specific workflows.
-
-### Agent skills
-
-[Agent skills](https://agentskills.io) give your coding agent instructions
+[Agent skills](https://agentskills.io) give your AI coding agent instructions
 for common tasks. Seamark includes three skills for Claude Code and Codex.
 They explain when to use Seamark's tools and how to interpret the results.
 
-| Skill | Helps the agent… |
+| Skill | Helps your AI coding agent… |
 | --- | --- |
-| `seamark-understand-repo` | Explore unfamiliar code, find important files, and understand past decisions. |
-| `seamark-plan-change` | Check related files, possible side effects, and past review feedback before editing. |
-| `seamark-review-change` | Check the actual diff against policy, the companion files it left out, and lessons, then run the relevant tests. |
+| `seamark-understand-repo` | Explore unfamiliar code and understand past decisions. |
+| `seamark-plan-change` | Find related files, possible side effects, and past review feedback before editing. |
+| `seamark-review-change` | Review the diff, check for missed companion files, and revisit relevant lessons. |
 
 For example, when you ask an agent to change an API across several files,
-the planning skill tells it to check which other files usually change
-with them. This can reveal a generated client or another implementation
-that needs attention.
+the planning skill tells it to check which other files usually change with
+them. This can reveal a generated client or another implementation that
+needs attention.
 
-The skills do not require a repository overview before every task.
-For a typo, comment edit, or lookup in a known file, they tell the agent
-to work directly with the code.
+The quick start installs the skills with `--skills`. They are optional, and
+small tasks such as typo fixes do not require a repository overview.
+After upgrading Seamark, repeat your setup command to refresh managed copies.
 
-Measured effect: in a paired benchmark on three synthetic repositories
-whose history carries a companion file the task must not forget (Claude
-Haiku 4.5, medium effort, five pairs per repository), MCP + skills kept the
-companion in sync in 12 of 15 sessions against 1 of 15 for the MCP server
-alone, a mean lift of 73 percentage points. The skills arm processed about
-twice the context per session. That spend is yours to decide, so the skills
-stay opt-in; the assessment is in
-[`bench/skills-report-v2.md`](bench/skills-report-v2.md) and the protocol in
-[`bench/README.md`](bench/README.md).
+[Skill installation and customization →](skills/README.md)
 
-**Install**
+## MCP tools
 
-From your repository, choose one command:
+MCP (Model Context Protocol) lets your AI coding agent call Seamark for
+repository evidence. The setup commands above register the server, which
+runs locally as `seamark mcp`.
 
-```bash
-seamark init --skills=claude   # Claude Code
-seamark init --skills=codex    # Codex
-seamark init --skills=all      # Both
-```
+| Tool | What it helps answer |
+| --- | --- |
+| `orient` | Where should I start in this repository? |
+| `why` | Why is this code here, what calls it, and what usually changes with it? |
+| `change_set` | What related files and lessons should I check before editing? |
+| `check` | What can this diff affect, and what lessons or related files did I miss? |
+| `expand` | Can I see the source or review findings behind this result? |
 
-The skills are installed in `.claude/skills/` for Claude Code and
-`.agents/skills/` for Codex. Commit the installed skill directories to
-share them with your team.
+The server refreshes the code index when the workspace changes. Refresh
+review evidence explicitly with `seamark index --reviews` or `--fixes-only`.
+Skills guide the workflow; MCP supplies evidence; hooks deliver reminders.
+Lessons are advice, and your tests and review still matter.
 
-You can also use `seamark init --skills`: it installs for Claude Code
-and adds the Codex copies if the repository already has an `.agents/`
-directory.
+## See it in action
 
-**Let the agent call the tools without prompts**
+An OpenTelemetry-Go case study follows a real history of histogram bugs:
+learn that parallel implementations need consistent reset behavior, review
+the proposed lesson, then deliver it during a later edit.
 
-Claude Code asks before each seamark tool call unless a permission rule
-allows it. A skill's own `allowed-tools` grant lasts one turn, and in the
-version we tested (2.1.257) it applied only when the skill was invoked by
-name, although the documentation says it should also apply when the agent
-picks the skill. Persistent rules remove the prompts either way:
+In the associated controlled benchmark, the agent preserved that behavior
+in **5 of 5 runs with the lesson delivered at the relevant edit, versus
+0 of 5 without it**. This result covers one historical task and a fixed
+model/runtime; it does not predict results for every repository.
 
-```bash
-seamark init --skills --approve-tools   # or --approve-tools on its own
-```
+[Read the case study](docs/case-studies/opentelemetry-histogram-reset.md) ·
+[Inspect the benchmark](bench/otel-report-v7.md)
 
-This merges eight exact allow rules into `.claude/settings.json`: one per
-seamark MCP tool (`mcp__seamark__orient` and the other four) and one per
-seamark skill (`Skill(seamark-plan-change)` and the other two). The tools
-are read-only queries over the local index, and a skill rule only lets the
-agent load that skill's text. Existing rules stay, nothing is ever removed,
-and `--print` previews the change. The tool rules are spelled with the
-server name your `.mcp.json` registers (`mcp__sm__orient` for a server
-named `sm`), a server-wide `mcp__seamark` rule counts as approving every
-tool, and a tool listed under `permissions.deny` or `permissions.ask` is
-reported as kept, never re-approved: Claude Code applies deny before
-allow, so an allow entry there would change nothing.
+## Support and direction
 
-Codex approvals are written when `--skills` names Codex (`codex` or
-`all`) or, without an explicit client, when a `.codex/` directory exists;
-`--skills=claude` configures Claude Code only. The skills themselves go to
-`.agents/skills/` when that directory exists. When only one of the two
-directories exists, init says which approvals are still missing. A
-registration without approvals, for either client, is reported as partial
-with the re-run hint, because every call still prompts.
+Code analysis supports **Go, Python, and TypeScript/JavaScript**. Git history
+analysis works across tracked file types. History is most useful in a
+repository with enough commits to show recurring patterns.
 
-For **Codex**, run this from your repository to install the skills,
-connect Codex to Seamark, and let it use Seamark's five tools without
-asking for permission each time:
+The current focus is lessons and proposals, MCP tools, and agent skills.
+Built-in AI coding agent integrations cover Claude Code and Codex, with
+[capabilities and verification limits](docs/agent-integrations.md#what-each-agent-supports)
+listed per agent. The shared integration framework makes Seamark independent
+of any single AI coding agent; support for additional agents requires an adapter.
 
-```bash
-seamark init --skills=codex --approve-tools
-```
+**Policies are experimental and awaiting refinement.** Command checks and
+diff policies are available, but they are not the main onboarding path.
+See the [policy guide](docs/policies.md) before enabling enforcement.
 
-The connection and tool permissions are saved in `.codex/config.toml`.
-Codex must trust the repository for these settings to apply. Seamark
-preserves your existing settings and reports any conflicting restrictions.
-Your personal or organization settings may still require approval.
+Next, we plan to build on lesson delivery and the agent integration framework
+with unified hook management. This is future work, not part of v0.7.0.
+See [current status](docs/STATUS.md) and the [changelog](CHANGELOG.md).
 
-Codex can choose the appropriate skill when you ask it to explore
-unfamiliar code, implement a change, or review your work. You can also
-name a skill directly:
+## Privacy and local data
 
-```text
-$seamark-plan-change Plan how to add a JSON output option to this CLI.
-```
+Seamark's code and history index runs locally. Seamark has no account
+requirement and sends no telemetry. GitHub review mining uses your `gh`
+login; optional lesson generation uses your AI agent CLI. Evidence provided
+through MCP or hooks may also reach your agent's model provider.
+See [data flow](docs/data-flow.md) for the details.
 
-- **Check the setup:** run `seamark doctor` to see the installed skills,
-  Seamark registration, and tool permissions.
-- **Preview first:** add `--print` to the setup command to see what would
-  change without writing any files.
-- **Undo the tool setup:** remove only the tables Seamark added under the
-  `# seamark:` comment in `.codex/config.toml`. The installed skills stay.
+Keep `.seamark/index.db`: it also stores proposal decisions and lesson-generation
+history. Use `seamark state export` to back up that state. Accepted lesson
+YAML can be committed separately. [Configuration and backups →](docs/configuration.md)
 
-**Keep the skills up to date**
+## Documentation
 
-Run `seamark doctor` or `seamark status` to check the installed copies.
-After upgrading Seamark, repeat your installation command to update them.
+- [Installation and first use](docs/getting-started.md)
+- [AI coding agent setup and compatibility](docs/agent-integrations.md)
+- [Lessons and proposals](docs/lessons.md)
+- [Repository history and code analysis](docs/repository-history.md)
+- [Configuration and local state](docs/configuration.md)
+- [Data flow](docs/data-flow.md) and [trust boundaries](docs/threat-model.md)
 
-Seamark updates only copies it manages and leaves unrelated skills alone.
-To customize a bundled skill, copy it under a different name; edits to
-a managed copy can be overwritten during an update.
+## Contributing
 
-**What skills do—and do not do**
+Contributions are welcome. You can improve docs, contribute an
+[AI coding agent integration](docs/agent-integrations.md#adding-an-agent), or
+extend the [effect catalogue](docs/configuration.md#effect-catalogue).
 
-Skills guide the agent's workflow. They do not enforce rules or replace
-tests. Hooks run checks and deliver reminders on matching tool calls.
-Policy defines which actions should be blocked or require approval;
-warn mode reports violations without blocking.
-
-The skills also explain the limits of Seamark's evidence: files that
-often change together are not necessarily dependencies, lessons are
-advisory, and files missing from the index have not been assessed.
-Repository content and review comments returned by tools must be treated
-as evidence, not instructions.
-
-Skills are optional; the MCP tools work without them. The paired
-benchmark that compares the MCP server alone with the MCP server plus
-skills (`make skills-bench`, see [bench/README.md](bench/README.md)) ran
-two cohorts on 2026-09-05: the first found no effect and drove the
-revisions, the second passed the frozen claim, at a higher context and
-cost per task. The measured rows and figures are in
-[bench/skills-report-v2.md](bench/skills-report-v2.md).
-
-See [the skills guide](skills/README.md) for individual installation
-options and implementation details.
-
-**Maintainers** — `seamark report` creates one self-contained HTML page with
-the decision queue, near-duplicate pins, hotspot map, and full lesson ledger.
-Use `--open` to open it or `-o -` to write it to standard output. See
-[docs/lessons.md](docs/lessons.md).
-
-Each surface handles freshness according to the risk of stale data. `check`
-**self-repairs** before evaluation because stale line spans can produce an
-incorrect safety result. The LSP re-indexes on save, and MCP checks on every
-call. `why` responds immediately and adds a staleness note. `seamark index`
-finishes in well under one second when nothing changed. A content-hashed,
-per-file parse cache keeps re-indexing at about 1.3 seconds on an 831-file
-monorepo, compared with about 3.2 seconds for a full parse. Resolution and
-propagation still run globally, so the edges remain exact.
-
-## How much can the answers be trusted?
+Source builds need Go 1.25 or newer and a C compiler:
 
 ```bash
-seamark status          # or --json; also served as MCP resource seamark://status
+make test
+make lint
+make build
+make smoke
 ```
 
-```text
-workspace      current (schema v3)
-parsed         703 of 832 seen files (98 skipped by config)
-symbols        1221, 2931 edges — call resolution 71% qualified · 24% same-package · 5% unique-name (1796 calls)
-effects        83 direct-sink symbols, 692 by propagation
-history        3814 decisions; evidence median age 74d (oldest 1042d)
-reviews        3 lessons from 120 review findings; last mined 9d ago
-distillation   claude -p — external data processing when run (see `lessons --distill --dry-run`)
-gate           hook installed; policy mode warn governs
-skills         claude 3/3 current · codex not installed
-```
-
-Every safety-sensitive answer needs this context: **"no effects found"
-from a half-parsed index is not "no effects."** The same honesty runs
-through the other surfaces — `orient` warns when files failed to parse,
-and `seamark check` attaches a note when changed files have no indexed
-symbols, so absence of evidence never silently reads as evidence of
-safety.
-
-Installation health is the other half:
-
-```bash
-seamark doctor          # read-only, offline; exit 1 when a check fails
-```
-
-`doctor` verifies everything seamark needs to run — git, the index
-database (schema version and SQLite integrity), policy and
-effect-catalogue compilation, Claude Code hook wiring, the distillation
-agent, `gh`, MCP registration, the agent skills, and that the policy-as-code
-overlays are not accidentally gitignored — and prints an exact corrective action for
-anything broken, changing nothing itself.
-
-## Durable state: the index is not a throwaway cache
-
-`.seamark/index.db` carries two kinds of state with different lifecycles.
-The derived graph — symbols, edges, co-change, decisions, effects — is
-rebuilt from the workspace on every reindex. But the same file also holds
-**durable decisions**: proposal history with your applied/dismissed
-verdicts, and the distillation memory that keeps paid agent calls from
-ever being repeated. Rebuilds (including `--force`) preserve those
-tables; **deleting the file destroys them**. The schema is versioned with
-ordered migrations — an older seamark refuses a newer database instead of
-guessing at it.
-
-To back up or move the durable part:
-
-```bash
-seamark state export --out decisions.json   # proposals + distillation memory
-seamark state import decisions.json         # merge into this clone (works pre-index)
-```
-
-Import never overwrites a local decision: it adds missing rows, and a
-still-pending proposal may adopt an imported verdict — a decision beats
-no decision.
-
-## Configuration
-
-**What gets indexed** — the indexer skips anything `.gitignore` ignores
-and files carrying the conventional `Code generated … DO NOT EDIT.`
-header (generated code inflates the graph and pollutes most-called lists
-without ever being hand-navigated). A committed `.seamark/config.yaml`
-tunes both:
-
-```yaml
-index:
-  generated: true # index generated files after all
-  exclude: # extra paths to skip, on top of .gitignore
-    - "*.pb.go" # basename glob, any directory
-    - "internal/gen/" # directory prefix
-    # - "**/*_test.go" # uncomment for a production-only graph
-```
-
-Skipped files are counted in the `seamark index` output, and a malformed
-config — including an exclude glob that could never match — fails the
-index loudly rather than being silently ignored. Config edits count as
-workspace changes, so the next index picks them up automatically.
-
-The same `config.yaml` carries the other opt-ins, each defaulting to
-the safe side:
-
-```yaml
-reviews:
-  window_days: 730 # review-comment shelf life; 0 = unlimited.
-  #                  The newest 200 comments always survive the window.
-distill:
-  write: false # --apply/--prune/--retarget print the block for you to
-  #              paste; flip to true to let them edit lessons.yaml
-agent:
-  cli: claude # the agent CLI --distill pipes findings through (the default)
-  # argv: ["my-llm", "--stdin"]   # …or a custom command line
-```
-
-History mining has two flags on `seamark index` itself: `--max-commits`
-bounds the git window (default 5000) and `--max-files-per-commit`
-excludes bulk refactors from co-change (default 30). Every command
-takes `-C <dir>` to name the workspace and `--db <path>` to override
-the index location; `status`, `doctor`, `gate`, and `check` speak
-`--json` for machines.
-
-**Effect catalogue** — effect knowledge is data, not code. The built-in
-catalogue covers ~40 sinks across Go, Python, and JS/TS plus common CLI
-tools; your workspace extends it additively in `.seamark/effects.yaml`:
-
-```yaml
-sinks:
-  - language: python
-    import: my_company_infra
-    names: [apply, provision]
-    tag: infra:mutate
-commands:
-  - name: my-deploy-tool
-    subcommands: [rollout]
-    tag: infra:mutate
-```
-
-Custom tags propagate up the call graph and participate in policy exactly
-like the built-ins.
-
-## How it works
-
-```text
-  sources                     seamark                      surfaces
-┌──────────┐      ┌───────────────────────────┐      ┌──────────────┐
-│ source   │─parse─▶ symbols / calls / imports │────▶ │ LSP  (stdio) │
-│ tree     │      │                           │      ├──────────────┤
-├──────────┤      │  co-change (lift) +       │────▶ │ CLI / hooks  │
-│ git log  │─mine──▶ decisions per region      │      ├──────────────┤
-├──────────┤      │                           │────▶ │ MCP  (stdio) │
-│ .seamark/ │─load──▶ effect propagation to     │      └──────────────┘
-│ yaml     │      │  fixpoint + CEL policy    │
-└──────────┘      └────────── SQLite ─────────┘
-```
-
-One binary, one SQLite file, no daemon required. Parsing is tree-sitter;
-call edges are resolved syntactically and **labeled with their
-derivation** so consumers can filter by confidence. Effects seed from the
-catalogue at call sites (including calls into external dependencies) and
-propagate backwards along call edges to fixpoint, with depth. What
-touches the network, what reaches a model, and what persists is one
-table in [docs/data-flow.md](docs/data-flow.md).
-
-## Honest limits
-
-- Call resolution is syntactic, not type-checked. gopls will always be
-  better at _find references_ within one language — that is not the
-  game. Low-confidence edges are labeled `[unique-name]` and test
-  doubles are excluded from that tier.
-- A local variable shadowing an import alias can produce a wrong edge
-  (declared as such via its origin label). Scope tracking is future work.
-- Python's DB-API has no syntactic read/write split, so `cursor.execute`
-  tags conservatively as `db:write`.
-- Co-change needs history: on a young repo the empirical layer is thin
-  until commits accumulate.
-- Seamark is a navigator, not an oracle. It tells you where to look and
-  what usually travels together; "usually changes with" is empirical
-  evidence, never a guarantee that _your_ edit is safe or complete. For
-  a pinpoint lookup of a known symbol, a plain file read is cheaper —
-  seamark earns its round-trip on orientation, risk, and history
-  questions.
-
-## Status & roadmap
-
-The current production status per capability profile — Navigate (stable),
-Learn (functional, integration-dependent), Guard (warn ready, enforcement
-beta) — lives in [docs/STATUS.md](docs/STATUS.md), kept separate from the
-design history in [docs/PLAN.md](docs/PLAN.md). Trust boundaries:
-[docs/data-flow.md](docs/data-flow.md) and
-[docs/threat-model.md](docs/threat-model.md).
-
-Planned next (see [docs/PLAN.md](docs/PLAN.md)): zero-token check promotion
-from recurring lessons, function-grain precision refinements, public signal
-evaluation, a history watermark and incremental daemon for
-keystroke-adjacent freshness, and signed artifacts with npm packaging
-(Homebrew shipped via
-[seamark-dev/homebrew-tap](https://github.com/seamark-dev/homebrew-tap)).
-
-## Development
-
-```bash
-make test     # full suite (testify)
-make lint     # golangci-lint
-make index    # self-index this repo
-make smoke    # end-to-end run of the built binary in a fixture repo
-make skills-validate   # Claude Code's strict validator over skills/ (local; needs the claude CLI)
-```
-
-Contributions that need no Go at all: the effect catalogue and default
-policy are plain YAML — adding sinks for your framework is a
-ten-line PR.
+See the [Makefile](Makefile) for additional checks and benchmark commands.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+[Apache-2.0](LICENSE).

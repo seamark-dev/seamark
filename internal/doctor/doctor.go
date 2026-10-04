@@ -15,13 +15,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/agent"
-	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/effects"
 	"github.com/seamark-dev/seamark/internal/gate"
-	"github.com/seamark-dev/seamark/internal/hooks"
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
@@ -75,6 +75,12 @@ func (r *Report) add(name, state, detail, fix string) {
 // Run executes every check against the workspace root. dbPath is the
 // resolved index location; version identifies the binary.
 func Run(root, dbPath, version string) *Report {
+	return run(integration.Builtin(), root, dbPath, version)
+}
+
+// run is Run over one registry, so a test can hand it a registry with
+// a fake client and check the client-neutral rendering.
+func run(reg *integration.Registry, root, dbPath, version string) *Report {
 	r := &Report{}
 
 	r.add("binary", StateOK, fmt.Sprintf("seamark %s (%s/%s)", version, runtime.GOOS, runtime.GOARCH), "")
@@ -83,12 +89,18 @@ func Run(root, dbPath, version string) *Report {
 	checkIndex(r, dbPath)
 	checkPolicy(r, root)
 	checkEffects(r, root)
-	checkHooks(r, root)
-	checkAgent(r, root)
+
+	// One inspection feeds every integration line, so the lines cannot
+	// disagree with each other or with init and status.
+	inspections := reg.Inspect(root)
+
+	checkHooks(r, inspections)
+	checkAgent(r, reg, root)
 	checkGH(r)
-	checkMCP(r, root)
-	checkSkills(r, root)
-	checkApprovals(r, root)
+	checkMCP(r, inspections)
+	checkSkills(r, reg.InspectSkills(root), inspections)
+	checkApprovals(r, inspections)
+	checkClients(r, inspections)
 	checkGitignore(r, root)
 
 	return r
@@ -176,33 +188,106 @@ func checkEffects(r *Report, root string) {
 	r.add("effects", StateOK, "catalogue loads", "")
 }
 
-func checkHooks(r *Report, root string) {
-	settings, err := hooks.ReadSettings(root)
-	if err != nil {
-		r.add("hooks", StateFail, err.Error(),
-			"fix or move .claude/settings.json, then re-run `seamark init`")
+// checkHooks reports the lifecycle hooks of every client on one line,
+// in registry order, from the shared inspection. Absent is a fact: a
+// client is set up on request. A hook document that cannot be read, a
+// hook the client runs for some tools only, or a client with one of its
+// two hooks is a warning, because the user expects the other half.
+func checkHooks(r *Report, inspections []integration.Inspection) {
+	var (
+		parts   []string
+		actions []string
+		state   = StateOK
+		present int
+	)
+
+	for _, insp := range inspections {
+		edits, _ := insp.Entry(integration.CapabilityEdits)
+		commands, _ := insp.Entry(integration.CapabilityCommands)
+
+		if !edits.Supported && !commands.Supported {
+			continue
+		}
+
+		parts = append(parts, insp.ClientID+" "+insp.DescribeHooks())
+
+		gateHook := commands.Supported && commands.State != integration.StateAbsent
+		lessons := edits.Supported && edits.State != integration.StateAbsent
+
+		switch {
+		case edits.State == integration.StateUnreadable, commands.State == integration.StateUnreadable:
+			state = StateWarn
+			actions = append(actions, firstAction(edits, commands))
+		case edits.State == integration.StatePartial, commands.State == integration.StatePartial:
+			state = StateWarn
+			actions = append(actions, firstAction(edits, commands))
+		case gateHook != lessons && edits.Supported && commands.Supported:
+			state = StateWarn
+			actions = append(actions, restoreAction(insp.ClientID, edits, commands, gateHook))
+		}
+
+		if gateHook || lessons {
+			present++
+		}
+	}
+
+	if present == 0 && state == StateOK {
+		r.add("hooks", StateInfo, strings.Join(parts, " · "),
+			"run `seamark init` to wire the Claude Code gate and lessons hooks; `seamark init --client codex` for Codex")
+
 		return
 	}
 
-	gateMode := hooks.InstalledGateMode(settings)
-	lessons := hooks.LessonsHookInstalled(settings)
-
-	switch {
-	case gateMode == "" && !lessons:
-		r.add("hooks", StateInfo, "no Claude Code hooks installed",
-			"run `seamark init` to wire the gate and lessons hooks")
-	case gateMode == "":
-		r.add("hooks", StateWarn, "lessons hook installed, gate hook missing",
-			"re-run `seamark init` to restore the gate hook")
-	case !lessons:
-		r.add("hooks", StateWarn, fmt.Sprintf("gate hook installed (%s), lessons hook missing", gateMode),
-			"re-run `seamark init` to restore the lessons hook")
-	default:
-		r.add("hooks", StateOK, fmt.Sprintf("gate (%s) + lessons hooks installed", gateMode), "")
-	}
+	r.add("hooks", state, strings.Join(parts, " · "), strings.Join(compact(actions), "; "))
 }
 
-func checkAgent(r *Report, root string) {
+// restoreAction returns the fix for a client with one of its two hooks.
+// The adapter names the command that installs the missing hook in this
+// workspace, because a linked document can stop the explicit setup. The
+// generic re-run serves an adapter that names no command.
+func restoreAction(clientID string, edits, commands integration.CapabilityInspection, gateHook bool) string {
+	missing := commands
+	if gateHook {
+		missing = edits
+	}
+
+	if missing.Action != "" {
+		return missing.Action
+	}
+
+	return "re-run `seamark init --client " + clientID + "` to restore the missing hook"
+}
+
+// firstAction returns the first corrective action among entries.
+func firstAction(entries ...integration.CapabilityInspection) string {
+	for _, entry := range entries {
+		if entry.Action != "" {
+			return entry.Action
+		}
+	}
+
+	return ""
+}
+
+// compact drops empty and repeated strings, keeping the first order.
+func compact(items []string) []string {
+	var out []string
+
+	for _, item := range items {
+		if item != "" && !slices.Contains(out, item) {
+			out = append(out, item)
+		}
+	}
+
+	return out
+}
+
+// checkAgent reports the inference invoker: the client agent.cli
+// selects, resolved through the registry, and whether its executable
+// is on PATH. The invoker is configured apart from the clients that are
+// set up, so the line names it; nothing here starts the client or a
+// login.
+func checkAgent(r *Report, reg *integration.Registry, root string) {
 	cfg, err := agent.LoadConfig(root)
 	if err != nil {
 		r.add("agent", StateWarn, err.Error(),
@@ -210,20 +295,23 @@ func checkAgent(r *Report, root string) {
 		return
 	}
 
-	_, argv, err := agent.Resolve(cfg)
+	// Resolve the lesson consumers' command and check PATH without running it.
+	spec, err := reg.ResolveInvocation(cfg, root)
 	if err != nil {
 		r.add("agent", StateWarn, err.Error(),
 			"fix the agent section of .seamark/config.yaml — distillation is unavailable until then")
 		return
 	}
 
-	if _, err := exec.LookPath(argv[0]); err != nil {
-		r.add("agent", StateWarn, fmt.Sprintf("agent CLI %q not found on PATH", argv[0]),
-			"install it, or point agent.argv in .seamark/config.yaml at a CLI you have — only `lessons --distill` needs it")
+	if _, err := exec.LookPath(spec.Argv[0]); err != nil {
+		r.add("agent", StateWarn, fmt.Sprintf("agent CLI %q not found on PATH (invoker %s)", spec.Argv[0], spec.Name),
+			"install it, or point agent.argv in .seamark/config.yaml at a CLI you have — "+
+				"only `lessons --distill` and `lessons --extract-triggers` need it")
 		return
 	}
 
-	r.add("agent", StateOK, fmt.Sprintf("%s on PATH (used only by `lessons --distill`)", argv[0]), "")
+	r.add("agent", StateOK, fmt.Sprintf("%s on PATH (invoker %s; used only by `lessons --distill` and `--extract-triggers`)",
+		spec.Argv[0], spec.Name), "")
 }
 
 func checkGH(r *Report) {
@@ -238,99 +326,143 @@ func checkGH(r *Report) {
 	r.add("gh", StateOK, "gh on PATH (auth not probed — run `gh auth status`)", "")
 }
 
-func checkMCP(r *Report, root string) {
-	// The same lookup init and the approvals check use, so one report
-	// never names two different servers for one file.
-	reg, err := approve.ClaudeRegistration(root)
-
-	switch {
-	case err != nil && !reg.Exists:
-		r.add("mcp", StateWarn, ".mcp.json cannot be read: "+err.Error(), "fix the file")
-	case err != nil:
-		r.add("mcp", StateWarn, "unparseable: "+err.Error(), "fix the JSON")
-	case !reg.Exists:
-		r.add("mcp", StateInfo, "no project .mcp.json — MCP clients may be registered elsewhere",
-			"to register for Claude Code: `claude mcp add seamark -- seamark mcp`")
-	case reg.Server != "":
-		r.add("mcp", StateOK, fmt.Sprintf("registered in .mcp.json as %q", reg.Server), "")
-	default:
-		r.add("mcp", StateInfo, ".mcp.json exists but registers no seamark server",
-			"`claude mcp add seamark -- seamark mcp` to serve the index to agents")
-	}
-}
-
-// checkSkills reports the agent skills per client directory. Not
-// installed is a fact, not a fault: skills are opt-in until the workflow
-// evaluation decides otherwise. A stale or missing managed copy is a
-// warning, because a client would load text that no longer matches this
-// binary's tool surface. A directory under a seamark skill name that
-// seamark does not own is named and never touched.
-func checkSkills(r *Report, root string) {
-	states := skills.Inspect(root)
-	detail := skills.Details(states)
-
+// checkMCP reports the seamark MCP registration of every client that
+// can hold one, from the shared inspection. Not registered is a fact:
+// registration is part of explicit client setup, and the fix names the
+// command for each client that lacks it. A file that cannot be read or
+// a foreign registration under the seamark name is a warning.
+func checkMCP(r *Report, inspections []integration.Inspection) {
 	var (
-		installed, unreadable, foreign int
-		refresh                        bool
+		parts, actions []string
+		state          = StateOK
+		registered     int
 	)
 
-	for _, s := range states {
-		foreign += s.Foreign
+	for _, insp := range inspections {
+		entry, ok := insp.Entry(integration.CapabilityMCPRegistration)
+		if !ok || !entry.Supported {
+			continue
+		}
 
-		switch {
-		case s.Err != "":
-			unreadable++
-		case s.Installed():
-			installed++
-			refresh = refresh || s.NeedsRefresh()
+		parts = append(parts, insp.ClientID+" "+entry.Describe())
+
+		switch entry.State {
+		case integration.StateUnreadable, integration.StateConflict:
+			state = StateWarn
+			actions = append(actions, entry.Action)
+		case integration.StateCurrent:
+			registered++
+		default:
+			actions = append(actions, entry.Action)
 		}
 	}
 
-	// A foreign directory outranks "not installed": `seamark init
-	// --skills` never replaces it, so the fix must say what to do first.
-	switch {
-	case unreadable > 0:
-		r.add("skills", StateWarn, detail,
-			"make the skill directory readable, then re-run `seamark init --skills`")
-	case refresh:
-		r.add("skills", StateWarn, detail,
-			"re-run `seamark init --skills` to refresh the managed skills")
-	case foreign > 0:
-		r.add("skills", StateInfo, detail,
-			"a directory under a seamark skill name is not seamark's; rename or remove it, then run `seamark init --skills` to install the shipped skill")
-	case installed == 0:
+	if state == StateOK && registered == 0 {
+		state = StateInfo
+	}
+
+	if state == StateOK {
+		actions = nil
+	}
+
+	r.add("mcp", state, strings.Join(parts, " · "), strings.Join(compact(actions), "; "))
+}
+
+// checkSkills reports the agent skills per destination, labelled by
+// every client that reads it. Not installed is a fact, not a fault:
+// skills are opt-in until the workflow evaluation decides otherwise. A
+// stale or missing managed copy is a warning, because a client would
+// load text that no longer matches this binary's tool surface. A
+// directory under a seamark skill name that seamark does not own is
+// named and never touched. The verdict comes from the per-client
+// entries of the inspection, the action from the same entries.
+func checkSkills(r *Report, states []skills.ClientState, inspections []integration.Inspection) {
+	detail := skills.Details(states)
+	worst := integration.StateAbsent
+	action := ""
+
+	// Unreadable outranks partial outranks conflict: a foreign directory
+	// beside a stale copy still needs the refresh first.
+	rank := map[integration.CapabilityState]int{
+		integration.StateAbsent: 0, integration.StateCurrent: 1, integration.StateConflict: 2,
+		integration.StatePartial: 3, integration.StateUnreadable: 4,
+	}
+
+	for _, insp := range inspections {
+		entry, ok := insp.Entry(integration.CapabilitySkills)
+		if !ok || !entry.Supported {
+			continue
+		}
+
+		// The action follows the worst entry; among equals the first
+		// with an action speaks.
+		if rank[entry.State] > rank[worst] || (rank[entry.State] == rank[worst] && action == "") {
+			worst, action = entry.State, entry.Action
+		}
+	}
+
+	switch worst {
+	case integration.StateUnreadable, integration.StatePartial:
+		r.add("skills", StateWarn, detail, action)
+	case integration.StateConflict:
+		// A foreign directory outranks "not installed": `seamark init
+		// --skills` never replaces it, so the fix must say what to do first.
+		r.add("skills", StateInfo, detail, action)
+	case integration.StateAbsent:
 		r.add("skills", StateInfo, "agent skills not installed ("+detail+")",
-			"run `seamark init --skills` to add the seamark agent skills for Claude Code and Codex")
+			action+" for "+strings.Join(clientNames(inspections), " and "))
 	default:
 		r.add("skills", StateOK, detail, "")
 	}
 }
 
-// checkApprovals reports whether the project configuration lets the
-// seamark MCP tools run without prompts: Claude Code allow rules and
-// Codex per-tool approvals. Not configured is a fact, because approval
-// is opt-in. Partial, conflicting, and unreadable configuration each
-// get their own action. The detail names project configuration only:
-// user-level and managed client policy can still prompt on top.
-func checkApprovals(r *Report, root string) {
-	states := approve.Inspect(root)
+// clientNames lists the display names of the clients that read skills.
+func clientNames(inspections []integration.Inspection) []string {
+	var names []string
 
+	for _, insp := range inspections {
+		if entry, ok := insp.Entry(integration.CapabilitySkills); ok && entry.Supported {
+			names = append(names, insp.Name)
+		}
+	}
+
+	return names
+}
+
+// checkApprovals reports whether the project configuration lets the
+// seamark MCP tools run without prompts, per client, from the shared
+// inspection. Not configured is a fact, because approval is opt-in.
+// Partial, conflicting, and unreadable configuration each get their
+// own action, the adapter's. The detail names project configuration
+// only: user-level and managed client policy can still prompt.
+func checkApprovals(r *Report, inspections []integration.Inspection) {
 	var (
-		parts                                     []string
-		unreadable, conflicting, partial, current int
+		parts   []string
+		worst   = integration.StateAbsent
+		action  string
+		current int
 	)
 
-	for _, s := range states {
-		parts = append(parts, s.Describe())
+	rank := map[integration.CapabilityState]int{
+		integration.StateAbsent: 0, integration.StateCurrent: 1, integration.StatePartial: 2,
+		integration.StateConflict: 3, integration.StateUnreadable: 4,
+	}
 
-		switch s.State() {
-		case approve.StateUnreadable:
-			unreadable++
-		case approve.StateConflicting:
-			conflicting++
-		case approve.StatePartial:
-			partial++
-		case approve.StateCurrent:
+	for _, insp := range inspections {
+		entry, ok := insp.Entry(integration.CapabilityToolGrants)
+		if !ok || !entry.Supported {
+			continue
+		}
+
+		parts = append(parts, insp.ClientID+" "+entry.Describe())
+
+		// The action follows the worst entry; among equals the first
+		// with an action speaks.
+		if rank[entry.State] > rank[worst] || (rank[entry.State] == rank[worst] && action == "") {
+			worst, action = entry.State, entry.Action
+		}
+
+		if entry.State == integration.StateCurrent {
 			current++
 		}
 	}
@@ -338,20 +470,61 @@ func checkApprovals(r *Report, root string) {
 	detail := strings.Join(parts, " · ")
 
 	switch {
-	case unreadable > 0:
-		r.add("approvals", StateWarn, detail,
-			"fix the file, then re-run `seamark init --approve-tools`")
-	case conflicting > 0:
-		r.add("approvals", StateWarn, detail,
-			"seamark leaves explicit settings alone; edit the file by hand if the seamark tools should be approved")
-	case partial > 0:
-		r.add("approvals", StateWarn, detail,
-			"re-run `seamark init --approve-tools` to add the missing entries")
+	case worst == integration.StateUnreadable, worst == integration.StateConflict, worst == integration.StatePartial:
+		r.add("approvals", StateWarn, detail, action)
 	case current == 0:
-		r.add("approvals", StateInfo, "tool approvals not configured ("+detail+")",
-			"run `seamark init --approve-tools` so the seamark tools run without prompts; project configuration only — user or managed policy can still prompt")
+		r.add("approvals", StateInfo, "tool approvals not configured ("+detail+")", action)
 	default:
 		r.add("approvals", StateOK, detail+" (project configuration; user or managed policy can still prompt)", "")
+	}
+}
+
+// checkClients prints one line per client that has something to say
+// beyond the topical lines: the limitations its adapter reports (trust
+// it cannot read, a receiving context it does not identify, a handler
+// that runs twice, hooks turned off) and the native evidence for what
+// is installed. A warning finding makes the line a warning; evidence
+// and informational findings are facts. A client with nothing
+// installed and nothing to report gets no line: an absent optional
+// capability is not a broken installation.
+func checkClients(r *Report, inspections []integration.Inspection) {
+	for _, insp := range inspections {
+		var (
+			parts []string
+			state = StateInfo
+			fix   string
+		)
+
+		if evidence := insp.DescribeVerification(); evidence != "" {
+			parts = append(parts, evidence)
+		}
+
+		for _, finding := range insp.Findings {
+			reason := finding.Reason
+			if finding.Path != "" {
+				reason = finding.Path + ": " + reason
+			}
+
+			parts = append(parts, reason)
+
+			// A warning's action outranks an informational one: the fix
+			// line must name what stops the warning.
+			if finding.Level == integration.FindingWarning {
+				if state != StateWarn && finding.Action != "" {
+					fix = finding.Action
+				}
+
+				state = StateWarn
+			} else if fix == "" && finding.Action != "" {
+				fix = finding.Action
+			}
+		}
+
+		if len(parts) == 0 {
+			continue
+		}
+
+		r.add(insp.ClientID, state, strings.Join(parts, "; "), fix)
 	}
 }
 

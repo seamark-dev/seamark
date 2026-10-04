@@ -14,22 +14,60 @@ import (
 )
 
 const (
-	deliveryStateVersion  = 1
+	// deliveryStateVersion 2 keys the state by client and receiving
+	// context. The key of version 1 is the provider session alone. Two
+	// clients, or a parent agent and its subagent, can report one session
+	// string, and they then share one version 1 entry.
+	deliveryStateVersion  = 2
 	deliveryStateTTL      = 24 * time.Hour
 	deliveryStateFile     = "lessons-hook-state.json"
 	deliveryLockFile      = "lessons-hook-state.lock"
 	maxDeliveryStateBytes = 1 << 20
 )
 
-type deliveryState struct {
-	Version  int                             `json:"version"`
-	Sessions map[string]deliverySessionState `json:"sessions"`
+// LegacyClientID is the client of the session-keyed entry points
+// BeginHookDelivery and ResetHookDelivery. Claude Code was the only
+// client when those entry points were the API, so they keep its name.
+// The receiver of those entry points is the raw session string. A
+// client adapter builds its own receiver ID, so an adapter and these
+// entry points do not share a state entry.
+const LegacyClientID = "claude"
+
+// DeliveryContext identifies the conversation that receives advice:
+// the client, and the client's own identity of the receiver. The state
+// and the firing log store a repository-scoped digest, never ReceiverID.
+type DeliveryContext struct {
+	// ClientID is the registry ID of the client. It separates two
+	// clients that report the same receiver string.
+	ClientID string
+	// ReceiverID is the actual receiver, not merely a parent session.
+	ReceiverID string
 }
 
-type deliverySessionState struct {
+// valid reports whether the context names a client and a receiver. A
+// partial identity must never select state: it can name another context.
+func (c DeliveryContext) valid() bool {
+	return c.ClientID != "" && c.ReceiverID != ""
+}
+
+type deliveryState struct {
+	Version  int                             `json:"version"`
+	Contexts map[string]deliveryContextState `json:"contexts"`
+}
+
+type deliveryContextState struct {
 	Generation uint64          `json:"generation"`
 	UpdatedAt  time.Time       `json:"updated_at"`
 	Delivered  map[string]bool `json:"delivered"`
+}
+
+// deliveryStateFileShape is what a state file can hold on disk. The
+// sessions key belongs to version 1. The reader accepts the key and
+// ignores its entries, and no writer of this version emits it.
+type deliveryStateFileShape struct {
+	Version  int                             `json:"version"`
+	Contexts map[string]deliveryContextState `json:"contexts"`
+	Sessions map[string]json.RawMessage      `json:"sessions"`
 }
 
 // HookDeliveryLease is a locked selection of lessons not yet delivered in
@@ -40,23 +78,33 @@ type HookDeliveryLease struct {
 	dir        string
 	lock       *os.File
 	state      deliveryState
-	sessionSHA string
-	session    deliverySessionState
+	contextSHA string
+	context    deliveryContextState
 	inject     []model.Lesson
 	suppressed []model.Lesson
 	injectSHA  []string
 	committed  bool
 }
 
-// BeginHookDelivery selects lessons for once-per-context delivery and keeps
+// BeginHookDelivery is BeginContextDelivery for the session-keyed Claude
+// Code hook: the session is the receiver and the client is LegacyClientID.
+func BeginHookDelivery(root, sessionID string, lessons []model.Lesson) (*HookDeliveryLease, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("hook delivery session id is empty")
+	}
+
+	return BeginContextDelivery(root, DeliveryContext{ClientID: LegacyClientID, ReceiverID: sessionID}, lessons)
+}
+
+// BeginContextDelivery selects lessons for once-per-context delivery and keeps
 // the state lock until Commit or Close. State leasing is supported on Unix,
 // the platforms Seamark currently releases for. Other platforms return an
 // error so callers inject normally instead of relying on unsafe, unlocked
 // read-modify-write state. Callers must always fail open on any error: this
 // state is an optimization, never permission to hide advice.
-func BeginHookDelivery(root, sessionID string, lessons []model.Lesson) (*HookDeliveryLease, error) {
-	if sessionID == "" {
-		return nil, fmt.Errorf("hook delivery session id is empty")
+func BeginContextDelivery(root string, dc DeliveryContext, lessons []model.Lesson) (*HookDeliveryLease, error) {
+	if !dc.valid() {
+		return nil, fmt.Errorf("hook delivery context names no client or no receiver")
 	}
 
 	dir, lock, err := openDeliveryState(root)
@@ -75,19 +123,19 @@ func BeginHookDelivery(root, sessionID string, lessons []model.Lesson) (*HookDel
 	now := time.Now().UTC()
 	pruneDeliveryState(&state, now)
 
-	sessionSHA := sessionDigest(root, sessionID)
-	session := state.Sessions[sessionSHA]
+	contextSHA := contextDigest(root, dc)
+	current := state.Contexts[contextSHA]
 
-	if session.Generation == 0 {
-		session.Generation = 1
+	if current.Generation == 0 {
+		current.Generation = 1
 	}
 
-	if session.Delivered == nil {
-		session.Delivered = make(map[string]bool)
+	if current.Delivered == nil {
+		current.Delivered = make(map[string]bool)
 	}
 
 	lease := &HookDeliveryLease{
-		dir: dir, lock: lock, state: state, sessionSHA: sessionSHA, session: session,
+		dir: dir, lock: lock, state: state, contextSHA: contextSHA, context: current,
 	}
 
 	pending := make(map[string]bool, len(lessons))
@@ -95,7 +143,7 @@ func BeginHookDelivery(root, sessionID string, lessons []model.Lesson) (*HookDel
 	for _, lesson := range lessons {
 		digest := lessonDeliveryDigest(lesson)
 
-		if session.Delivered[digest] || pending[digest] {
+		if current.Delivered[digest] || pending[digest] {
 			lease.suppressed = append(lease.suppressed, lesson)
 			continue
 		}
@@ -119,9 +167,9 @@ func (l *HookDeliveryLease) Suppressed() []model.Lesson {
 }
 
 // Generation identifies the current provider context window for audit and
-// benchmark diagnostics. It advances after every PostCompact reset.
+// benchmark diagnostics. It advances after every context reset.
 func (l *HookDeliveryLease) Generation() uint64 {
-	return l.session.Generation
+	return l.context.Generation
 }
 
 // Commit marks the selected lessons delivered. It is intentionally separate
@@ -133,11 +181,11 @@ func (l *HookDeliveryLease) Commit() error {
 	}
 
 	for _, digest := range l.injectSHA {
-		l.session.Delivered[digest] = true
+		l.context.Delivered[digest] = true
 	}
 
-	l.session.UpdatedAt = time.Now().UTC()
-	l.state.Sessions[l.sessionSHA] = l.session
+	l.context.UpdatedAt = time.Now().UTC()
+	l.state.Contexts[l.contextSHA] = l.context
 
 	if err := writeDeliveryState(filepath.Join(l.dir, deliveryStateFile), l.state); err != nil {
 		return err
@@ -164,11 +212,23 @@ func (l *HookDeliveryLease) Close() error {
 	return closeErr
 }
 
-// ResetHookDelivery advances a session's context generation and clears its
-// delivered lesson set. Claude Code's PostCompact hook calls this so lessons
-// may be injected once again after old context has been summarized away.
+// ResetHookDelivery is ResetContextDelivery for the session-keyed Claude
+// Code hook. An empty session resets nothing.
 func ResetHookDelivery(root, sessionID string) error {
 	if sessionID == "" {
+		return nil
+	}
+
+	return ResetContextDelivery(root, DeliveryContext{ClientID: LegacyClientID, ReceiverID: sessionID})
+}
+
+// ResetContextDelivery advances a receiving context's generation and clears
+// its delivered lesson set. A client's context-reset hook calls this after the
+// client summarizes old context, so the lessons can reach the agent again. A
+// context that names no client or no receiver resets nothing: a partial
+// identity must not reset an unrelated context.
+func ResetContextDelivery(root string, dc DeliveryContext) error {
+	if !dc.valid() {
 		return nil
 	}
 	// Do not create state merely because init installs the lifecycle hook. A
@@ -193,17 +253,17 @@ func ResetHookDelivery(root, sessionID string) error {
 
 	now := time.Now().UTC()
 	pruneDeliveryState(&state, now)
-	key := sessionDigest(root, sessionID)
-	session := state.Sessions[key]
-	session.Generation++
+	key := contextDigest(root, dc)
+	current := state.Contexts[key]
+	current.Generation++
 
-	if session.Generation == 0 {
-		session.Generation = 1
+	if current.Generation == 0 {
+		current.Generation = 1
 	}
 
-	session.UpdatedAt = now
-	session.Delivered = make(map[string]bool)
-	state.Sessions[key] = session
+	current.UpdatedAt = now
+	current.Delivered = make(map[string]bool)
+	state.Contexts[key] = current
 
 	return writeDeliveryState(path, state)
 }
@@ -248,11 +308,18 @@ func openDeliveryState(root string) (string, *os.File, error) {
 	return dir, lock, nil
 }
 
+// readDeliveryState loads the state file. It accepts two versions.
+// Version 2 is the current shape. Version 1 reads as an empty state.
+// A version 1 entry names a provider session, not a receiving context.
+// An extra reminder is better than advice hidden from a context that
+// never got it. The next state write replaces the file with version 2.
+// Any other version is an error, so the caller delivers repeatedly and
+// this binary never overwrites a file of a newer version.
 func readDeliveryState(path string) (deliveryState, error) {
-	state := deliveryState{Version: deliveryStateVersion, Sessions: make(map[string]deliverySessionState)}
+	empty := deliveryState{Version: deliveryStateVersion, Contexts: make(map[string]deliveryContextState)}
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
-		return state, nil
+		return empty, nil
 	}
 	if err != nil {
 		return deliveryState{}, err
@@ -275,16 +342,22 @@ func readDeliveryState(path string) (deliveryState, error) {
 	decoder := json.NewDecoder(io.LimitReader(f, maxDeliveryStateBytes+1))
 	decoder.DisallowUnknownFields()
 
-	if err := decoder.Decode(&state); err != nil {
+	var onDisk deliveryStateFileShape
+	if err := decoder.Decode(&onDisk); err != nil {
 		return deliveryState{}, fmt.Errorf("decode delivery state: %w", err)
 	}
 
-	if state.Version != deliveryStateVersion {
-		return deliveryState{}, fmt.Errorf("unsupported delivery state version %d", state.Version)
-	}
+	state := empty
 
-	if state.Sessions == nil {
-		state.Sessions = make(map[string]deliverySessionState)
+	switch onDisk.Version {
+	case deliveryStateVersion:
+		if onDisk.Contexts != nil {
+			state.Contexts = onDisk.Contexts
+		}
+	case 1:
+		// Discard the session-keyed entries; see the function comment.
+	default:
+		return deliveryState{}, fmt.Errorf("unsupported delivery state version %d", onDisk.Version)
 	}
 
 	var extra any
@@ -340,9 +413,9 @@ func writeDeliveryState(path string, state deliveryState) error {
 }
 
 func pruneDeliveryState(state *deliveryState, now time.Time) {
-	for key, session := range state.Sessions {
-		if session.UpdatedAt.IsZero() || now.Sub(session.UpdatedAt) > deliveryStateTTL {
-			delete(state.Sessions, key)
+	for key, entry := range state.Contexts {
+		if entry.UpdatedAt.IsZero() || now.Sub(entry.UpdatedAt) > deliveryStateTTL {
+			delete(state.Contexts, key)
 		}
 	}
 }
@@ -354,4 +427,20 @@ func lessonDeliveryDigest(lesson model.Lesson) string {
 
 func sessionDigest(root, sessionID string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(root+"\x00"+sessionID)))
+}
+
+// contextDigest is the on-disk identity of a receiving context. The
+// root makes the digest useless for correlation across repositories.
+// The leading label keeps the digest apart from sessionDigest, so a
+// version 2 key never equals a version 1 key. Each part carries its
+// length. A receiver string is client input and can hold any byte.
+// With a plain separator, two different identities can give one digest.
+func contextDigest(root string, dc DeliveryContext) string {
+	h := sha256.New()
+
+	for _, part := range []string{"context", root, dc.ClientID, dc.ReceiverID} {
+		fmt.Fprintf(h, "%d:%s", len(part), part)
+	}
+
+	return fmt.Sprintf("%x", h.Sum(nil))
 }

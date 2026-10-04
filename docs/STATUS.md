@@ -1,6 +1,9 @@
 # Production status
 
-The concise, current state of seamark — what each capability profile can
+This page describes **v0.7.0**, released on 2026-10-03.
+See [Distribution](#distribution) for installation and release details.
+
+The current state of Seamark — what each capability profile can
 be trusted with today. Design history and engineering narrative live in
 [PLAN.md](PLAN.md); this page only says what is true now.
 
@@ -8,7 +11,7 @@ Seamark's surface splits into three capability profiles with different
 maturity. They share one binary and one index; they do not share one
 trust level.
 
-## Navigate — stable
+## Navigate — core queries working
 
 Local indexing, history mining, orientation, and the read surfaces.
 
@@ -17,15 +20,15 @@ Local indexing, history mining, orientation, and the read surfaces.
 | Indexer (Go, TypeScript/TSX/JS, Python) | working; parse cache, self-repairing freshness |
 | History layer (co-change, decisions, fix density) | working; needs git history to be useful |
 | `why`, `orient`, `change_set` | working (CLI + MCP; `change_set` is MCP-only) |
-| LSP server (hover, lenses, omission diagnostics) | working; editor setup is manual ([editors.md](editors.md)) |
+| LSP server (hover, lenses, omission diagnostics) | **experimental**; implementation retained, manual editor setup, not a current development priority ([editors.md](editors.md)) |
 | HTML report | working |
 | MCP server | working; five tools + `orient`/`status` resources + `onboard` prompt |
 | Schema versioning, durable-state export/import | working |
-| Health: `seamark status`, `seamark doctor` | working |
+| Health: `seamark status`, `seamark doctor` | working; both read one registry inspection per agent (capability support, configuration state, readable trust, recorded native evidence, limitations), the same view `init` uses; `status --json` adds the additive `clients` array and `distill_client` |
 | Agent skills (`skills/`, embedded; `init --skills`) | working; opt-in; installs into `.claude/skills` and `.agents/skills`, reported by `status`/`doctor`; `init --approve-tools` writes the Claude Code allow rules and the Codex per-tool approvals the model-driven path needs, reported by `status`/`doctor`; the second paired cohort (2026-09-05, Haiku 4.5, 15 pairs) passed the frozen claim at +73 pp mean invariant lift (12/15 vs 1/15) at about twice the context per session; the skills stay opt-in so the spend is the user's decision ([bench/skills-report-v2.md](../bench/skills-report-v2.md)) |
 | Skills workflow benchmark (`make skills-bench`, MCP-only vs MCP + skills; `make skills-activation`) | two cohorts ran 2026-09-05: the first found no effect and its transcripts drove the fixture, skill, `change_set`, and `check` revisions; the second passed the frozen claim; own rows, claims, fingerprint, and report, none shared with the lessons benchmark ([bench/README.md](../bench/README.md)); the 2026-09-08 review fixes moved the fingerprint without changing what was measured: the skills tree differs from the measured one only in the `lessons --region` grant, and `check`/`change_set` only in how fast the companion reasons are computed, so no cohort was re-run |
 
-Known limits are documented in the README's *Honest limits*: syntactic
+Known limits are documented in [Repository history and code analysis](repository-history.md#honest-limits): syntactic
 resolution with labeled confidence, no scope tracking, conservative
 Python DB tagging.
 
@@ -42,10 +45,17 @@ Review mining, fix mining, lessons, distillation, pins.
 | Distillation (plan/apply, dedup memory, preflight disclosure, `--dry-run`) | working; requires your own agent CLI; sends finding text to it ([data-flow.md](data-flow.md)) |
 | Trigger paths (extraction at distill time, `--extract-triggers` backfill, scope advisory in the ledger/report/plan) | working; every named path is verified against the tree and direct evidence or co-change history before it becomes a precise delivery scope; evidence coverage is the fallback; answered proposals are never re-paid |
 | Passive outcome loop (per-pin `working` / `not landing` / `untested` verdicts in `--stats`, the ledger, and the HTML report) | working; deterministic, recomputed on read, honesty-gated on activity and mining freshness |
+| Codex lesson hook (`seamark init --client codex` → `.codex/hooks.json`, `lessons --hook --client codex`) | working on the recorded surface: a native run of codex-cli 0.154.0 (2026-09-21) observed real `apply_patch` and `Bash` envelopes, one multi-file lesson per patch, model-visible context injection, repeated parent and child delivery, and the native trust flow; trust stays with the user; reminders always repeat (the event names a subagent, but a reset inside one is unverified); no reset hook |
+| Codex inference (`agent.cli: codex` for `lessons --distill` and `--extract-triggers`) | implemented: `codex exec --ephemeral --sandbox read-only -C <root> --skip-git-repo-check --ignore-rules -c features.hooks=false -`, prompt on stdin, final message on stdout, Codex provenance on proposals; `--ignore-rules` because an inherited execpolicy allow rule lets a command run outside the sandbox; the resolver is pure, so `--dry-run`, `doctor`, and `status` disclose the command without the binary; tested against fake processes (stdin, working directory, cancellation, bounded output, nonzero exit); the reusable native check (`make agents-native-check CLIENT=codex`, a scripted loopback provider on the installed CLI, no model) observed on codex-cli 0.157.0 (2026-09-27): the final message on stdout, exit 1 with the provider's reason on a 401, a refused `touch` under an allow rule with the workspace byte-identical, and the same rule writing the file without `--ignore-rules`; the real-model smoke also passed on 2026-09-27 with GPT-6 Luna / low reasoning and the operator's saved login: one group produced a proposal with Codex provenance, 10 checks passed; trigger extraction was dry-run only, and trusted-hook isolation remains unverified |
+| Agent integrations (registry of clients, `seamark init --client <name>`, adapters for Claude Code and Codex) | working; adding an agent is one descriptor and one registration ([agent-integrations.md](agent-integrations.md)); contract tests register a test-only third client; `make agents-test` (offline, part of `make test`), `make smoke` (generated configuration and hook commands, part of CI), `make agents-native-check CLIENT=codex` (installed CLI, no model: version and preset flags, the patch oracle on the installed version, the sandbox, `codex mcp list` reading the generated registration from a scratch home), `make agents-native-smoke CLIENT=codex` (one bounded distillation with the operator's login); blocked native checks return a nonzero status and provide no compatibility evidence; pay-per-token inference goes through the agent CLI's own API-key login, documented, with no seamark credential store |
+| Codex command gate (`gate --hook --client codex`, installed by `seamark init --client codex` on the `Bash` tool) | implemented and tested against synthetic `Bash` payloads shaped from the hooks reference and from the native capture above; same warn/enforce rules, exit-2 block, and fail-closed behavior as the Claude Code hook; a patch is never evaluated as a command; **not yet verified in a native Codex run**: that the generated hook blocks a command in a live session, and which other Codex tools run shell commands, are unobserved; a `require_approval` verdict blocks like a deny (Codex parses a native "ask" and does not support it) |
 | Once-per-context hook delivery (`hook_delivery` in `lessons.yaml`) | working; opt-in, digest-only local state, fails open; needs one `seamark init` re-run for the `PostCompact` hook |
 | Lessons benchmark (`make lessons-bench`, paired headless sessions, frozen claim registry) | working; accepted synthetic and pinned OpenTelemetry-Go cohorts; operator-run and spends provider tokens; protocol and evidence in [bench/README.md](../bench/README.md) |
 
-## Guard — warn mode ready; enforcement is beta
+## Guard — experimental
+
+Policies are experimental and awaiting refinement. Existing command and diff
+checks remain available; see the [policy guide](policies.md).
 
 Command gate, diff check, audit, hooks.
 
@@ -53,9 +63,9 @@ Command gate, diff check, audit, hooks.
 |---|---|
 | Command classification (shell parser, wrappers, interpreter payloads, dynamic detection) | working |
 | Diff blast radius with coverage uncertainty (`unindexed_files`) | working |
-| Warn mode (report, never block) | ready — the recommended deployment |
+| Warn mode (report, never block) | working; use this mode when evaluating experimental policies |
 | Secret-safe audit log (hashed by default, 0600, rotation, flock) | working |
-| Enforce mode (exit 2, fail closed) | works, **beta**: an agent that can edit `policy.yaml` or `.claude/settings.json` can weaken it ([threat-model.md](threat-model.md)) |
+| Enforce mode (exit 2, fail closed) | **experimental**: an agent that can edit `policy.yaml` or `.claude/settings.json` can weaken it ([threat-model.md](threat-model.md)) |
 | Real approvals (`require_approval` with out-of-band approval tokens) | **not built** — today a require_approval verdict simply blocks under enforce |
 | Policy integrity (pinned policy outside agent reach) | **not built** |
 
@@ -64,9 +74,11 @@ agents inside real isolation regardless.
 
 ## Distribution
 
-Latest published release: [v0.5.4](https://github.com/seamark-dev/seamark/releases/tag/v0.5.4)
-(2026-08-28). The next release, v0.6.0, is not yet published; it adds the
-three opt-in agent skills and their benchmark. Every release
+Current release: [v0.7.0](https://github.com/seamark-dev/seamark/releases/tag/v0.7.0)
+(2026-10-03). It adds the
+shared AI coding agent integration framework, explicit `--client` setup,
+Codex lesson hooks and inference, and consistent integration diagnostics.
+The [changelog](../CHANGELOG.md) records the full release scope. Every release
 ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
 (`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
@@ -79,11 +91,38 @@ other platforms build from source automatically. The tap README
 documents the bottle release runbook. Artifact signing,
 SBOMs, and an npm install are the next distribution milestone.
 
+## Direction
+
+The current focus is lessons and proposals, MCP tools, and agent skills.
+Unified hook management across AI coding agents is planned beyond v0.7.0,
+building on the shared integration framework. Policy refinement remains
+future work; editor integrations remain experimental.
+
 ## Verification
 
-- CI: full test suite + lint on every change; regression tests pin the
-  trust baseline (non-blocking default init, audit redaction, durable
-  state surviving rebuilds, docs-command drift).
+- CI: full test suite + lint on every change, plus the end-to-end
+  smoke of the built binary (generated agent configuration and the hook
+  commands it wrote, in a fresh repository, without an agent CLI or a
+  credential); regression tests pin the trust baseline (non-blocking
+  default init, audit redaction, durable state surviving rebuilds,
+  docs-command drift, and the command names, flags, and Makefile targets
+  the agent-integrations guide shows).
+- Native agent checks are separate, reusable Makefile targets
+  ([agent-integrations.md](agent-integrations.md)): `make
+  agents-native-check CLIENT=codex` runs offline against the installed
+  CLI from a scratch client home, `make agents-native-smoke
+  CLIENT=codex` runs one bounded distillation with the operator's own
+  login. The Go checks report test results; the shell script reports
+  `ok`, `FAIL`, or `blocked`. Both return a nonzero status when evidence
+  is missing or a check fails. The offline check ran on codex-cli
+  0.157.0 (2026-09-27) and 0.157.1 (2026-09-28): every check ok,
+  including the forty-case `apply_patch` oracle recorded on 0.154.0. The
+  paid smoke passed on 2026-09-27 on 0.157.0 with GPT-6 Luna / low
+  reasoning: 10 ok, 0 failed, 0 blocked.
+  A temporary wrapper added only model and reasoning flags to the preset;
+  the run used `SEAMARK_ALLOW_DIRTY=1` with the tested diff saved alongside
+  the commit. Trigger extraction was dry-run only; trusted-hook isolation,
+  live gate blocking, and native MCP approval behavior remain pending.
 - The first clean synthetic lessons release cohort meets the frozen controlled
   threshold across three independent fixtures and five paired trials each:
   hook-on preserved the owner invariant in 15/15 task-complete runs versus

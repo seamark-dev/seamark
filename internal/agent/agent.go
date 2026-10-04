@@ -6,10 +6,9 @@
 // mining. An absent or failing CLI degrades to an error the caller
 // surfaces as a note, never a broken feature.
 //
-// The adapter layer keeps every caller agnostic: nothing outside this
-// package knows which agent is configured. "claude" is the first
-// preset; other agent CLIs arrive either as presets here or, today,
-// through the custom argv escape hatch in the config.
+// Callers use a shared Invoker interface. This package provides the
+// Claude preset; internal/integration registers other clients through
+// CommandSpec. Custom argv supports additional CLIs.
 package agent
 
 import (
@@ -20,8 +19,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/seamark-dev/seamark/internal/render"
 )
 
 // Invoker runs one prompted task against the configured agent CLI.
@@ -78,55 +80,49 @@ func LoadConfig(root string) (*Config, error) {
 	return cfg, nil
 }
 
-// Resolve maps the config to the exact argv it would run, erroring on
-// an unknown preset or an empty custom command — but without requiring
-// the binary on PATH, so the pre-flight disclosure works even when the
-// CLI is missing. The returned name identifies the adapter for
-// provenance.
+// Resolve wraps ResolveCommand for callers that need a provenance name
+// and argv. It validates configuration without checking PATH.
 func Resolve(cfg *Config) (name string, argv []string, err error) {
-	if len(cfg.Agent.Argv) > 0 {
-		if cfg.Agent.Argv[0] == "" {
-			return "", nil, fmt.Errorf("agent.argv must start with a command")
-		}
-
-		return "custom", cfg.Agent.Argv, nil
+	spec, err := ResolveCommand(cfg)
+	if err != nil {
+		return "", nil, err
 	}
 
-	name = cfg.Agent.CLI
-	if name == "" {
-		name = "claude"
-	}
-
-	preset, ok := presets[name]
-	if !ok {
-		return "", nil, fmt.Errorf("unknown agent cli %q (known: %s; or set agent.argv)",
-			name, strings.Join(presetNames(), ", "))
-	}
-
-	return name, preset, nil
+	return spec.Name, spec.Argv, nil
 }
 
-// New resolves the configured agent into an Invoker. It fails fast —
-// unknown preset, empty custom argv, or a binary not on PATH — so the
-// caller can say "distill unavailable: …" before any work is done.
+// New wraps ResolveCommand and NewCommand for this package's presets.
+// Invalid configuration or a missing executable fails before invocation.
 func New(cfg *Config) (Invoker, error) {
-	name, argv, err := Resolve(cfg)
+	spec, err := ResolveCommand(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := exec.LookPath(argv[0]); err != nil {
-		return nil, fmt.Errorf("agent cli %q not found on PATH", argv[0])
-	}
-
-	return &cliInvoker{name: name, argv: argv}, nil
+	return NewCommand(spec)
 }
 
 // cliInvoker shells out to an agent CLI in one-shot mode.
 type cliInvoker struct {
 	name string
 	argv []string
+	// dir defaults to the caller's working directory.
+	dir string
+	// diagnostic selects the output included in errors.
+	diagnostic Diagnostic
 }
+
+// Keep CLI errors short enough to display as notes.
+const (
+	diagnosticTailLines = 3
+	maxDiagnostic       = 400
+)
+
+// waitDelay bounds pipe cleanup after exit or cancellation, even when
+// descendants keep pipes open. Cancellation kills only the client;
+// it shares the caller's process group so terminal interrupts still reach it.
+// Tests can shorten this delay.
+var waitDelay = 5 * time.Second
 
 func (c *cliInvoker) Name() string { return c.name }
 
@@ -161,10 +157,12 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 
 func (b *boundedBuffer) String() string { return b.buf.String() }
 
-// Invoke runs the CLI with prompt on stdin. Stdin (not an argument)
-// keeps large prompts off the process table and clear of argv limits.
+// Invoke sends the prompt on stdin to avoid argv limits and process-table
+// exposure. Cancellation kills the client; waitDelay bounds pipe cleanup.
 func (c *cliInvoker) Invoke(ctx context.Context, prompt string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.argv[0], c.argv[1:]...)
+	cmd.Dir = c.dir
+	cmd.WaitDelay = waitDelay
 	cmd.Stdin = strings.NewReader(prompt)
 
 	out := &boundedBuffer{max: maxStdout}
@@ -177,16 +175,12 @@ func (c *cliInvoker) Invoke(ctx context.Context, prompt string) (string, error) 
 			return "", fmt.Errorf("agent %s: %w", c.name, ctx.Err())
 		}
 
-		msg := strings.TrimSpace(errb.String())
+		msg := diagnostic(errb.String(), c.diagnostic)
 		if msg == "" {
 			// Some CLIs put the complaint on stdout in pipe mode —
 			// claude -p reports usage limits and auth errors there.
 			// Without this, the user sees a bare exit status.
-			msg = strings.TrimSpace(out.String())
-		}
-
-		if i := strings.IndexByte(msg, '\n'); i > 0 {
-			msg = msg[:i] // first line carries the point; CLIs get chatty
+			msg = diagnostic(out.String(), c.diagnostic)
 		}
 
 		if msg == "" {
@@ -199,6 +193,34 @@ func (c *cliInvoker) Invoke(ctx context.Context, prompt string) (string, error) 
 	}
 
 	return out.String(), nil
+}
+
+// diagnostic selects the first non-empty line or the last few, in order,
+// then sanitizes and truncates the text for terminal display.
+// Blank output returns an empty string.
+func diagnostic(output string, rule Diagnostic) string {
+	var lines []string
+
+	for _, line := range strings.Split(output, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+
+	if len(lines) == 0 {
+		return ""
+	}
+
+	switch rule {
+	case DiagnosticTail:
+		if len(lines) > diagnosticTailLines {
+			lines = lines[len(lines)-diagnosticTailLines:]
+		}
+	default:
+		lines = lines[:1]
+	}
+
+	return render.Truncate(render.Sanitize(strings.Join(lines, " | ")), maxDiagnostic)
 }
 
 func presetNames() []string {

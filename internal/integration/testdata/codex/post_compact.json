@@ -1,0 +1,9 @@
+{
+  "session_id": "thr_synthetic_0001",
+  "turn_id": "turn_synthetic_0004",
+  "transcript_path": null,
+  "cwd": "/workspace/repo",
+  "hook_event_name": "PostCompact",
+  "model": "synthetic-model",
+  "trigger": "auto"
+}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,9 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/effects"
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/hooks"
+	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -23,16 +27,49 @@ func commands(t *testing.T, settings map[string]any) []string {
 func commandsForEvent(t *testing.T, settings map[string]any, event string) []string {
 	t.Helper()
 
-	hooks, _ := settings["hooks"].(map[string]any)
-	events, _ := hooks[event].([]any)
+	hookMap, _ := settings["hooks"].(map[string]any)
+	events, _ := hookMap[event].([]any)
 
 	var out []string
 
-	forEachCommand(events, func(_ map[string]any, cmd string) {
+	hooks.ForEachCommand(events, func(_ string, _ map[string]any, cmd string) {
 		out = append(out, cmd)
 	})
 
 	return out
+}
+
+// mergeHooks installs the Claude Code hooks for a gate mode, the merge
+// init runs through the setup adapter.
+func mergeHooks(settings map[string]any, bin, gateMode string) (bool, error) {
+	merged, err := hooks.Merge(settings, bin, hooks.ClaudeSpecs(gateMode))
+
+	return merged.Changed, err
+}
+
+// installedGateMode is the shared detection rule (see internal/hooks).
+func installedGateMode(settings map[string]any) string {
+	return hooks.InstalledGateMode(settings)
+}
+
+// ensureGitignore plans and applies the .gitignore document alone,
+// through the same coordinator init uses, and narrates like init.
+func ensureGitignore(w io.Writer, root string, printOnly bool) error {
+	docs := commonDocuments(gateModeWarn)
+
+	plan, err := integration.PlanSetup(integration.Builtin(), integration.SetupRequest{
+		Root: root, Common: docs[len(docs)-1:],
+	})
+	if err != nil {
+		return err
+	}
+
+	_, err = integration.ApplySetup(plan, integration.ApplyOptions{
+		Preview: printOnly,
+		Observe: func(op integration.OpResult) { narrateOp(w, op) },
+	})
+
+	return err
 }
 
 func mustMerge(t *testing.T, settings map[string]any, bin, gateMode string) bool {
@@ -124,8 +161,8 @@ func TestMergeHooksPreservesExisting(t *testing.T) {
 
 	assert.Equal(t, "opus", settings["model"], "unrelated settings untouched")
 
-	hooks := settings["hooks"].(map[string]any)
-	assert.NotNil(t, hooks["Stop"], "other hook events untouched")
+	hookMap := settings["hooks"].(map[string]any)
+	assert.NotNil(t, hookMap["Stop"], "other hook events untouched")
 	assert.Equal(t, []string{"/bin/seamark lessons --hook-reset"},
 		commandsForEvent(t, settings, "PostCompact"))
 }
@@ -411,10 +448,10 @@ func TestResolveGateMode(t *testing.T) {
 		}},
 	}}}
 
-	assert.Equal(t, gateModeWarn, resolveGateMode(map[string]any{}, ""))
-	assert.Equal(t, gateModeEnforce, resolveGateMode(map[string]any{}, gateModeEnforce))
-	assert.Equal(t, gateModeEnforce, resolveGateMode(installed, ""))
-	assert.Equal(t, gateModeWarn, resolveGateMode(installed, gateModeWarn))
+	assert.Equal(t, gateModeWarn, resolveGateMode("", ""))
+	assert.Equal(t, gateModeEnforce, resolveGateMode("", gateModeEnforce))
+	assert.Equal(t, gateModeEnforce, resolveGateMode(installedGateMode(installed), ""))
+	assert.Equal(t, gateModeWarn, resolveGateMode(installedGateMode(installed), gateModeWarn))
 }
 
 func TestRunInitShowsHookCommandsWhenKept(t *testing.T) {
@@ -489,6 +526,27 @@ func TestRunInitDefaultKeepsInstalledEnforce(t *testing.T) {
 	assert.Contains(t, cmds, "/bin/seamark gate --enforce --hook", "enforce survives a plain re-init")
 	assert.Contains(t, b.String(), "gate    enforce")
 	assert.NotContains(t, b.String(), "note    ", "nothing changed mode, nothing to warn about")
+}
+
+func TestRunInitDefaultKeepsEnforceUnderAStarMatcher(t *testing.T) {
+	// A "*" matcher fires for Bash, so the enforce hook below runs. A
+	// plain init must keep --enforce in the hook and write an enforce
+	// policy file, because enforcement changes only on request.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"), []byte(
+		`{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/bin/seamark gate --enforce --hook"}]}]}}`),
+		0o644))
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", "", false, "", false))
+
+	cmds := commands(t, readSettings(t, root))
+	assert.Contains(t, cmds, "/bin/seamark gate --enforce --hook", "enforce survives a plain re-init")
+	assert.NotContains(t, cmds, "/bin/seamark gate --hook")
+	assert.Contains(t, b.String(), "gate    enforce")
+	assert.NotContains(t, b.String(), "removed --enforce")
+	assert.Equal(t, starterPolicyFor(gateModeEnforce), string(mustRead(t, root, ".seamark/policy.yaml")))
 }
 
 func TestRunInitLeavesForeignGateHookAlone(t *testing.T) {
@@ -785,32 +843,6 @@ func allowRules(t *testing.T, root string) []string {
 	return rules
 }
 
-func TestApprovalTargetsFollowSkillsModeOrDetectCodex(t *testing.T) {
-	root := t.TempDir()
-
-	claude, codex, err := approvalTargets(root, "")
-	require.NoError(t, err)
-	assert.True(t, claude)
-	assert.False(t, codex, "no .codex/ directory, no Codex configuration")
-
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
-	claude, codex, err = approvalTargets(root, "")
-	require.NoError(t, err)
-	assert.True(t, claude)
-	assert.True(t, codex)
-
-	for mode, want := range map[string][2]bool{
-		skills.ModeClaude: {true, false},
-		skills.ModeCodex:  {false, true},
-		skills.ModeAll:    {true, true},
-	} {
-		claude, codex, err = approvalTargets(root, mode)
-		require.NoError(t, err, mode)
-		assert.Equal(t, want, [2]bool{claude, codex}, mode)
-	}
-
-}
-
 func TestRunInitApproveToolsMergesAllowRules(t *testing.T) {
 	root := t.TempDir()
 
@@ -986,38 +1018,6 @@ func TestRunInitSkillsCodexNotesMissingApproval(t *testing.T) {
 	assert.NotContains(t, later.String(), "not registered")
 }
 
-func TestApprovalTargetsUseOneRuleWithAndWithoutSkills(t *testing.T) {
-	// .codex/ without .agents/: the documented one-liner must configure
-	// Codex, whichever way the skills target was detected.
-	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
-
-	for _, mode := range []string{"", skills.ModeAuto} {
-		claude, codex, err := approvalTargets(root, mode)
-		require.NoError(t, err, mode)
-		assert.True(t, claude, mode)
-		assert.True(t, codex, mode)
-	}
-
-	// .agents/ without .codex/: skills go to Codex, approvals do not,
-	// unless --skills names Codex.
-	agents := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(agents, ".agents"), 0o755))
-
-	_, codex, err := approvalTargets(agents, skills.ModeAuto)
-	require.NoError(t, err)
-	assert.False(t, codex, "auto detection never creates .codex/")
-
-	_, codex, err = approvalTargets(agents, skills.ModeAll)
-	require.NoError(t, err)
-	assert.True(t, codex)
-
-	claude, codex, err := approvalTargets(root, skills.ModeClaude)
-	require.NoError(t, err)
-	assert.True(t, claude)
-	assert.False(t, codex, "an explicit client narrows the set even with .codex/ present")
-}
-
 func TestRunInitSkillsApproveToolsConfiguresCodexByItsDirectory(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
@@ -1184,23 +1184,6 @@ func TestRunInitSkillsCountsRulesBehindAServerWideDeny(t *testing.T) {
 	assert.Contains(t, b.String(), "keep 5 seamark rules from being approved (permissions.deny lists mcp__seamark)")
 }
 
-func TestApprovalTargetsReportAnUnreadableCodexDirectory(t *testing.T) {
-	// A .codex/ that cannot be read is not the same as no .codex/: the
-	// error surfaces before init writes anything.
-	if os.Geteuid() == 0 {
-		t.Skip("root reads every directory")
-	}
-
-	root := filepath.Join(t.TempDir(), "repo")
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
-	require.NoError(t, os.Chmod(root, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
-
-	_, _, err := approvalTargets(root, "")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, os.ErrPermission)
-}
-
 func TestRunInitSkillsCodexNotesKeptExplicitSettings(t *testing.T) {
 	// Nothing missing, nothing to register, but an inline table keeps
 	// the approvals from being written: the note must still say so, as
@@ -1244,16 +1227,9 @@ func TestRunInitRefusesASymlinkedSettingsPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, entries, "nothing may be written through the link")
 
-	// The write-time check stands on its own, for a link that appears
-	// after the plan was made.
-	root2 := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root2, ".claude"), 0o755))
-	require.NoError(t, os.Symlink(filepath.Join(outside, "settings.json"), filepath.Join(root2, ".claude", "settings.json")))
-
-	err = writeHooks(&b, root2, map[string]any{}, true, false, "/bin/seamark", gateModeWarn, "", false)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "symlink at .claude/settings.json")
-	assert.NoFileExists(t, filepath.Join(outside, "settings.json"))
+	// The write-time check for a link that appears after the plan is the
+	// setup coordinator's: see the integration package, which checks each
+	// guard again right before its write.
 }
 
 func TestReportSkillsSanitizesTheSummary(t *testing.T) {
@@ -1264,7 +1240,146 @@ func TestReportSkillsSanitizesTheSummary(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "skills"), []byte("not a directory"), 0o644))
 
 	var b testWriter
-	reportInstalledSkills(&b, root)
+	reportInstalledSkills(&b, root, integration.Builtin())
 	assert.Contains(t, b.String(), "  skills  ")
 	assert.NotContains(t, b.String(), "\x1b")
+}
+
+// TestRunInitLegacySelectionMatrix freezes which artifacts the
+// no-selector init forms write. The explicit `--client` path added by
+// the agent-integrations work translates each legacy form into
+// per-client intent; this matrix is what that translation must
+// reproduce exactly, including the deliberate asymmetries: Claude hooks
+// are always installed, `--skills=codex` still wires Claude hooks, a
+// bare --skills detects skills by .agents/ but approvals by .codex/.
+func TestRunInitLegacySelectionMatrix(t *testing.T) {
+	type artifacts struct {
+		claudeSkills, agentsSkills, claudePerms, codexConfig bool
+	}
+
+	cases := []struct {
+		name         string
+		skillsMode   string
+		approveTools bool
+		agentsDir    bool
+		codexDir     bool
+		want         artifacts
+	}{
+		{name: "default", want: artifacts{}},
+		{name: "default with .codex present", codexDir: true, want: artifacts{}},
+		{name: "approve-tools claude only", approveTools: true, want: artifacts{claudePerms: true}},
+		{name: "approve-tools detects .codex", approveTools: true, codexDir: true,
+			want: artifacts{claudePerms: true, codexConfig: true}},
+		{name: "bare skills without .agents", skillsMode: skills.ModeAuto, want: artifacts{claudeSkills: true}},
+		{name: "bare skills with .agents", skillsMode: skills.ModeAuto, agentsDir: true,
+			want: artifacts{claudeSkills: true, agentsSkills: true}},
+		{name: "bare skills with .agents and approve-tools but no .codex", skillsMode: skills.ModeAuto,
+			agentsDir: true, approveTools: true,
+			want: artifacts{claudeSkills: true, agentsSkills: true, claudePerms: true}},
+		{name: "bare skills with .codex and approve-tools but no .agents", skillsMode: skills.ModeAuto,
+			codexDir: true, approveTools: true,
+			want: artifacts{claudeSkills: true, claudePerms: true, codexConfig: true}},
+		{name: "skills=claude", skillsMode: skills.ModeClaude, agentsDir: true, codexDir: true,
+			approveTools: true, want: artifacts{claudeSkills: true, claudePerms: true}},
+		{name: "skills=codex", skillsMode: skills.ModeCodex, want: artifacts{agentsSkills: true}},
+		{name: "skills=codex with approve-tools", skillsMode: skills.ModeCodex, approveTools: true,
+			want: artifacts{agentsSkills: true, codexConfig: true}},
+		{name: "skills=all with approve-tools", skillsMode: skills.ModeAll, approveTools: true,
+			want: artifacts{claudeSkills: true, agentsSkills: true, claudePerms: true, codexConfig: true}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+
+			if tc.agentsDir {
+				require.NoError(t, os.Mkdir(filepath.Join(root, ".agents"), 0o755))
+			}
+
+			if tc.codexDir {
+				require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
+			}
+
+			var b testWriter
+			require.NoError(t, runInit(&b, root, "/bin/seamark", "", false, tc.skillsMode, tc.approveTools))
+
+			// Claude hooks are installed by every legacy form, even the
+			// Codex-only skills selection.
+			settings := readSettings(t, root)
+			assert.Len(t, commands(t, settings), 2, "gate and lessons hooks")
+			assert.Len(t, commandsForEvent(t, settings, "PostCompact"), 1)
+
+			_, hasPerms := settings["permissions"]
+
+			got := artifacts{
+				claudeSkills: dirExists(filepath.Join(root, ".claude", "skills", "seamark-plan-change")),
+				agentsSkills: dirExists(filepath.Join(root, ".agents", "skills", "seamark-plan-change")),
+				claudePerms:  hasPerms,
+				codexConfig:  fileExists(filepath.Join(root, ".codex", "config.toml")),
+			}
+			assert.Equal(t, tc.want, got)
+
+			// The same form is idempotent: a second run keeps every
+			// artifact and adds none.
+			var again testWriter
+			require.NoError(t, runInit(&again, root, "/bin/seamark", "", false, tc.skillsMode, tc.approveTools))
+			assert.Len(t, commands(t, readSettings(t, root)), 2, "re-run must not duplicate hooks")
+			assert.NotContains(t, again.String(), "wrote  .claude/skills", "skills are kept on re-run")
+		})
+	}
+}
+
+// TestRunInitGateModePrecedence freezes the effective-mode rule: an
+// explicit flag wins, otherwise the installed hook's mode is kept, and a
+// first install is warn. The policy file on disk is reported beside it
+// but never changes which hook is installed.
+func TestRunInitGateModePrecedence(t *testing.T) {
+	root := t.TempDir()
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", "", false, "", false))
+	assert.Equal(t, gateModeWarn, installedGateMode(readSettings(t, root)), "first install is warn")
+
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeEnforce, false, "", false))
+	assert.Equal(t, gateModeEnforce, installedGateMode(readSettings(t, root)), "the flag wins")
+
+	require.NoError(t, runInit(&b, root, "/bin/seamark", "", false, "", false))
+	assert.Equal(t, gateModeEnforce, installedGateMode(readSettings(t, root)), "no flag keeps the installed mode")
+
+	// A kept enforce policy under a warn hook is reported as enforce,
+	// because the hook follows the policy file when no flag is baked in.
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, "", false))
+	assert.Equal(t, gateModeWarn, installedGateMode(readSettings(t, root)))
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"),
+		[]byte("mode: enforce\nrules: []\n"), 0o644))
+
+	var last testWriter
+	require.NoError(t, runInit(&last, root, "/bin/seamark", "", false, "", false))
+	assert.Equal(t, gateModeWarn, installedGateMode(readSettings(t, root)), "the policy never rewrites the hook")
+	assert.Contains(t, last.String(), "gate    enforce — the kept .seamark/policy.yaml sets mode: enforce")
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+
+	return err == nil && info.IsDir()
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+
+	return err == nil && info.Mode().IsRegular()
+}
+
+func TestReportSkillsLabelsASharedDestinationForEveryConsumer(t *testing.T) {
+	// The skills line comes from the registry: a directory two clients
+	// read is one entry that names both, the same line doctor and
+	// status print.
+	root := t.TempDir()
+	require.NoError(t, inspecttest.Named("shared skills").Write(root))
+
+	var b testWriter
+	reportInstalledSkills(&b, root, inspecttest.Registry())
+	assert.Equal(t, "  skills  claude not installed · codex+shared 3/3 current\n", b.String())
 }

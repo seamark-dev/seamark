@@ -10,9 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/seamark-dev/seamark/internal/effects"
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/store"
@@ -22,6 +23,7 @@ func newGateCmd(opts *options) *cobra.Command {
 	var (
 		commandLine string
 		hookMode    bool
+		hookClient  string
 		enforce     bool
 		asJSON      bool
 	)
@@ -33,62 +35,36 @@ func newGateCmd(opts *options) *cobra.Command {
 substitutions included, variable indirection detected), classifies it
 against the effect catalogue, and evaluates .seamark/policy.yaml over the
 declared environment. Designed for agent PreToolUse hooks and CI: in
-enforce mode a deny/approval verdict exits with code 2.`,
+enforce mode a deny/approval verdict exits with code 2.
+
+With --hook the command reads the agent's PreToolUse JSON payload from
+stdin. Without --client it is a Claude Code event; with --client codex it
+is a Codex Bash event.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Under enforcement, the gate's OWN failures must block too: a
-			// security hook that fails open on a malformed payload or a
-			// broken policy is itself a bypass.
-			enforced := enforce
-			failClosed := func(err error) error {
-				if enforced {
-					return fmt.Errorf("%w: %v", gate.ErrBlocked, err)
-				}
-
-				return err
+			// --client selects the native event format of a hook run and
+			// has no meaning for a command given on the command line.
+			if hookClient != "" && !hookMode {
+				return errors.New("--client applies to --hook only")
 			}
 
+			// Under enforcement, the gate's OWN failures must block too: a
+			// security hook that fails open on a malformed payload or a
+			// broken policy is itself a bypass. Before the policy loads only
+			// the explicit flag enforces; gate.Decide applies the policy's
+			// own mode after.
 			root, err := index.ResolveRoot(opts.workspace)
 			if err != nil {
-				return failClosed(err)
+				return gate.FailClosed(err, enforce)
 			}
 
 			if hookMode {
-				payload, err := readHookCommand(cmd.InOrStdin())
-				if err != nil {
-					return failClosed(err)
-				}
-
-				commandLine = payload
+				return runGateHook(cmd, root, hookClient, enforce, asJSON)
 			}
 
-			if strings.TrimSpace(commandLine) == "" {
-				return failClosed(errors.New("empty command"))
-			}
-
-			policy, err := gate.LoadPolicy(root)
+			decision, err := gate.Decide(gate.CommandRequest{Root: root, Command: commandLine, Enforce: enforce}, auditWarning(cmd))
 			if err != nil {
-				return failClosed(err)
-			}
-
-			if enforce {
-				policy.Mode = "enforce"
-			}
-
-			enforced = policy.Mode == "enforce"
-
-			catalog, err := effects.Load(root)
-			if err != nil {
-				return failClosed(err)
-			}
-
-			decision, err := gate.EvalCommand(policy, catalog, root, commandLine)
-			if err != nil {
-				return failClosed(err)
-			}
-
-			if err := gate.Audit(root, "gate", commandLine, policy, decision); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "seamark: audit log: %v\n", err)
+				return err
 			}
 
 			return renderDecision(cmd.OutOrStdout(), decision, asJSON)
@@ -97,33 +73,131 @@ enforce mode a deny/approval verdict exits with code 2.`,
 
 	cmd.Flags().StringVar(&commandLine, "command", "", "the shell command to evaluate")
 	cmd.Flags().BoolVar(&hookMode, "hook", false,
-		"read a Claude Code PreToolUse JSON payload from stdin (replaces --command; no jq needed)")
+		"read an agent's PreToolUse JSON payload from stdin (replaces --command; no jq needed)")
+	cmd.Flags().StringVar(&hookClient, "client", "",
+		"with --hook: the agent whose hook event to read ("+strings.Join(integration.Builtin().IDs(), ", ")+
+			"); without it the event is a Claude Code event")
 	cmd.Flags().BoolVar(&enforce, "enforce", false, "override policy mode: block on deny/approval verdicts")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
 
 	return cmd
 }
 
-// readHookCommand extracts tool_input.command from a PreToolUse hook
-// payload — natively, so a missing jq can never collapse the command to
-// an empty string and fail open.
-func readHookCommand(r io.Reader) (string, error) {
-	data, err := io.ReadAll(io.LimitReader(r, 1<<20))
+// runGateHook is the PreToolUse path. The client adapter decodes the
+// native event and encodes the reply; the gate decides. The verdict is
+// still printed as the plain command prints it: both clients ignore
+// plain text on stdout at exit 0, and a person who runs the hook by
+// hand sees what the agent's hook saw.
+//
+// A failure before the policy loads blocks under --enforce only, in the
+// client's own form. A failure that gate.Decide blocks is translated
+// the same way; any other failure is a plain error, and the command
+// proceeds.
+func runGateHook(cmd *cobra.Command, root, clientID string, enforce, asJSON bool) error {
+	client, err := gateHookClient(clientID)
 	if err != nil {
-		return "", err
+		return gate.FailClosed(err, enforce)
 	}
 
-	var payload struct {
-		ToolInput struct {
-			Command string `json:"command"`
-		} `json:"tool_input"`
+	fail := func(err error) error {
+		if !enforce {
+			return err
+		}
+
+		return hookReply(cmd, client.Commands.EncodeFailure(err))
 	}
 
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return "", fmt.Errorf("hook payload: %w", err)
+	payload, err := integration.ReadHookPayload(cmd.InOrStdin())
+	if err != nil {
+		return fail(err)
 	}
 
-	return payload.ToolInput.Command, nil
+	event, err := client.Commands.DecodeCommand(payload)
+	if err != nil {
+		return fail(err)
+	}
+
+	decision, err := gate.Decide(gate.CommandRequest{Root: root, Command: event.Command, Enforce: enforce}, auditWarning(cmd))
+	if err != nil {
+		var blocked *gate.Blocked
+		if errors.As(err, &blocked) {
+			return hookReply(cmd, client.Commands.EncodeFailure(blocked.Cause))
+		}
+
+		return err
+	}
+
+	if err := printDecision(cmd.OutOrStdout(), decision, asJSON); err != nil {
+		return err
+	}
+
+	reply, err := client.Commands.EncodeDecision(decision)
+	if err != nil {
+		// The adapter could not say what it decided. Under enforcement
+		// that is the gate's own failure and blocks.
+		return gate.FailClosed(err, decision.Mode == hooks.ModeEnforce)
+	}
+
+	return hookReply(cmd, reply)
+}
+
+// gateHookClient returns the client whose native events a gate hook
+// run translates. The ID comes from the installed hook command, never
+// from the payload, so a payload cannot choose its decoder. A command
+// without --client keeps Claude Code semantics, because every installed
+// Claude Code hook runs exactly that command.
+//
+// An unknown ID, or a client without a command codec, is a broken hook
+// command. Unlike the lessons hook, the gate reports it as an error: a
+// gate that runs nothing must not look like a gate that allowed.
+func gateHookClient(clientID string) (integration.Client, error) {
+	if clientID == "" {
+		clientID = integration.ClaudeID
+	}
+
+	registry := integration.Builtin()
+
+	client, ok := registry.Lookup(clientID)
+	if !ok {
+		return integration.Client{}, fmt.Errorf("unknown hook client %q (known: %s)",
+			render.Sanitize(clientID), strings.Join(registry.IDs(), ", "))
+	}
+
+	if err := client.Require(integration.CapabilityCommands); err != nil {
+		return integration.Client{}, err
+	}
+
+	return client, nil
+}
+
+// hookReply writes the client's reply. A blocking reply travels as a
+// gate.Blocked error with the reason as its cause: Execute prints it
+// after "seamark:" on stderr, where both clients read the reason, and
+// maps it to exit 2, the code both clients read as a block.
+func hookReply(cmd *cobra.Command, reply integration.HookReply) error {
+	if _, err := cmd.OutOrStdout().Write(reply.Stdout); err != nil {
+		return err
+	}
+
+	if reply.ExitCode == 0 {
+		_, err := cmd.ErrOrStderr().Write(reply.Stderr)
+
+		return err
+	}
+
+	if reason := strings.TrimSpace(string(reply.Stderr)); reason != "" {
+		return &gate.Blocked{Cause: errors.New(reason)}
+	}
+
+	return &gate.Blocked{}
+}
+
+// auditWarning reports a failed audit append on stderr. The audit is
+// best effort: a full disk must not change a verdict.
+func auditWarning(cmd *cobra.Command) func(error) {
+	return func(err error) {
+		fmt.Fprintf(cmd.ErrOrStderr(), "seamark: audit log: %v\n", err)
+	}
 }
 
 func newCheckCmd(opts *options) *cobra.Command {
@@ -254,15 +328,23 @@ func isTerminal(f *os.File) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// renderDecision prints the verdict and returns gate.ErrBlocked when the
-// decision must stop the caller (mapped to exit code 2 by Execute).
-func renderDecision(w io.Writer, d *gate.Decision, asJSON bool) error {
+// printDecision prints the verdict in the human or the JSON form.
+func printDecision(w io.Writer, d *gate.Decision, asJSON bool) error {
 	if asJSON {
-		if err := json.NewEncoder(w).Encode(d); err != nil {
-			return err
-		}
-	} else {
-		report.Decision(w, d)
+		return json.NewEncoder(w).Encode(d)
+	}
+
+	report.Decision(w, d)
+
+	return nil
+}
+
+// renderDecision prints the verdict and returns a gate.Blocked error
+// when the decision must stop the caller (mapped to exit code 2 by
+// Execute).
+func renderDecision(w io.Writer, d *gate.Decision, asJSON bool) error {
+	if err := printDecision(w, d, asJSON); err != nil {
+		return err
 	}
 
 	if d.Blocking() {
@@ -274,7 +356,7 @@ func renderDecision(w io.Writer, d *gate.Decision, asJSON bool) error {
 			reasons = append(reasons, render.Sanitize(m.Message))
 		}
 
-		return fmt.Errorf("%w: %s", gate.ErrBlocked, strings.Join(reasons, "; "))
+		return &gate.Blocked{Cause: errors.New(strings.Join(reasons, "; "))}
 	}
 
 	return nil

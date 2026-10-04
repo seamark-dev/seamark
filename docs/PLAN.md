@@ -487,6 +487,11 @@ internal/fixes/         fix-transition mining
 internal/distill/       proposal generation, validation, and deduplication
 internal/lsp/           editor protocol surface
 internal/mcp/           agent tool, resource, and prompt surface
+internal/integration/   client registry, per-agent adapters, setup planning,
+                        inspection (docs/agent-integrations.md)
+internal/delivery/      shared lesson delivery: select → suppress → emit →
+                        commit → audit, behind every agent's edit hook
+internal/agent/         one-shot agent CLI invocation for distillation
 internal/report/        shared orientation and explanation rendering
 internal/htmlreport/    deterministic maintainer audit report
 internal/store/         SQLite (modernc, pure Go) schema + queries + FTS5
@@ -516,6 +521,8 @@ Schema notes (deviations from the RFC sketch, all additive):
 | 2026-09-03 | Agent skills: three intent-named skills (`seamark-understand-repo`, `seamark-plan-change`, `seamark-review-change`) embedded in the binary and installed opt-in by `seamark init --skills`, each carrying the same interpretation reference. The MCP `initialize` instructions and `onboard` prompt state the same judgment rules instead of a ritual. Default-on installation waits for a paired MCP-only versus MCP + skills benchmark run by a separate runner, so the lessons benchmark's fingerprint stays untouched; plugins ship no hooks until `doctor` can detect a hook installed twice. |
 | 2026-09-05 | First skills cohort (Haiku 4.5, 15 pairs) found no invariant effect at +6.7 pp against the frozen +30 pp, with all process metrics moving; the skills stay opt-in. The transcripts showed the companion was the weakest co-change line and `check` could not name it, so the fixtures now carry the pair in four commits above every unplanned file, `change_set` and `check` print each suggested partner with its reason (`last fix here`), the skills treat a partner as a question that needs a named answer, and the activation set carries the task's own wording. The second cohort runs on a new fingerprint and claim registry. |
 | 2026-09-05 | Second skills cohort passes the frozen claim: 12/15 vs 1/15 invariant preservation, +73 pp mean, worst instance +60 pp, all tasks complete, activation 5/5 per skill. The skills stay opt-in in v0.6.0: the skills arm processes about twice the context per session, and that spend is the user's to accept, not a default. |
+| 2026-09-27 | Agent integrations are a registry of client descriptors with small optional capabilities (`internal/integration`) over shared engines (`internal/delivery` for lesson delivery; the existing selection, policy, and proposal code unchanged). Adding an agent is one descriptor and one registration; the contract tests keep a test-only third client to prove it. Codex is the second production client: skills, MCP registration, exact tool grants, the `apply_patch` lesson hook, the `Bash` gate hook, and the `codex exec` preset. Native evidence is recorded per version and surface and never inferred: reusable Makefile targets separate the offline check on the installed CLI (`agents-native-check`, scratch client home, scripted loopback provider) from the paid smoke (`agents-native-smoke`, operator login), and a blocked check is never a pass. Pay-per-token inference stays behind the agent CLI's own API-key login; seamark adds no credential store, model API, or billing code. Benchmark runners and evidence are untouched. |
+| 2026-10-04 | One shell parser for the module: the hook reader parses hook commands with `mvdan.cc/sh` and keeps only its own exit-status walk; the hand-written parser was retired. The gate summary (`integration.GateSummary`) is the one rule `init` and `status` classify gate hooks by. Every legacy path (plain `init`, the agent presets, the bare hook commands, the legacy status fields, the version 1 hook state) is listed in `docs/agent-integrations.md` with its replacement, the tests that pin it, and the condition for its removal. |
 
 ## Open questions carried from the RFC
 

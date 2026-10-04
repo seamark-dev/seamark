@@ -1,9 +1,29 @@
-# The learning pipeline, in depth
+# Lessons and proposals
 
-How seamark turns review history into rules agents actually follow —
-the full detail behind the README's short version. The vocabulary used
-here is defined once in the README and holds everywhere: **finding →
-lesson → proposal → pin**.
+Seamark learns from repository history to help AI coding agents avoid repeating
+mistakes. This guide explains the evidence, proposal review, and reminder
+settings behind the [first learning workflow](../README.md#learn-from-your-repository).
+Lessons are advice; they do not guarantee that an AI coding agent follows them.
+
+## From feedback to reminders
+
+| Term | Meaning |
+| --- | --- |
+| Finding | One observation from a review comment or fix commit, with its source. |
+| Lesson | A recurring pattern in findings for a file or code area. |
+| Proposal | A candidate lesson drafted by your AI agent CLI, awaiting your review. |
+| Pin | A lesson you accepted or wrote by hand in `.seamark/lessons.yaml`. |
+
+Mining collects evidence. Optional distillation asks your AI agent CLI to
+turn findings into proposals. You review the wording, evidence, and scope
+before accepting a proposal. Hooks deliver relevant lessons and pins during
+supported edits; MCP tools also include them in repository answers.
+
+`seamark lessons --apply p1` prints a YAML block by default. Paste it under
+`pin:` in `.seamark/lessons.yaml`, or enable `distill.write` in
+`.seamark/config.yaml` before applying to let Seamark edit the file and record
+the decision. In print-only mode, the proposal stays pending. See
+[configuration](configuration.md) for the setting and durable-state backups.
 
 ## What gets mined, and what deliberately does not
 
@@ -117,7 +137,7 @@ everything; only the ambient injection is capped.
 Choose one `hook_delivery` value in `.seamark/lessons.yaml`. Omitting the key
 is equivalent to `always`.
 
-To repeat matching lessons after every edit:
+To deliver matching lessons on every supported edit:
 
 ```yaml
 # Default: maximize reminder visibility.
@@ -144,9 +164,31 @@ not require re-running init.
 
 The optimization is deliberately fail-open: missing session identity, corrupt
 local state, or a state-lock failure causes normal injection rather than
-silently hiding a lesson. Only repository-scoped session and lesson digests
-are stored in the gitignored `.seamark/lessons-hook-state.json`; entries expire
-after 24 hours.
+silently hiding a lesson. Only repository-scoped digests of the receiving
+context and of the lessons are stored in the gitignored
+`.seamark/lessons-hook-state.json`; entries expire after 24 hours.
+
+A receiving context is the client plus the conversation that the client's
+adapter reports as the receiver. Two clients that report the same session
+string are two contexts, and a reminder shown to one never hides it from the
+other. A client that cannot name the receiver, or has no reset event for it,
+gets repeated delivery instead of suppression. For Claude Code the main
+conversation is the session, and `PostCompact` resets it. An edit inside a
+subagent carries `agent_id` and is its own context: the subagent's context
+window never saw what the parent got. No reset event is documented for a
+subagent, so a subagent gets repeated delivery, and a reset that fires inside
+it never resets the parent. For Codex the adapter reads no receiver yet. A
+Codex edit event names a subagent by `agent_id` too, but only a manual
+compaction of the parent has been verified natively, so Codex reminders
+repeat until a native check establishes the reset of each receiver.
+
+The state file carries a version. This release writes version 2. It reads a
+version 1 file as empty, because a session-keyed entry does not say which
+context got the reminder; the cost is that each lesson already delivered can
+be shown once more per context after the upgrade. An older seamark that meets
+a version 2 file delivers every reminder and leaves the file alone, and this
+seamark does the same with a version it does not know. After a rollback to an
+older seamark, delete the file to get suppression back.
 
 ## The ledger: lessons --list
 
@@ -180,10 +222,13 @@ review, never self-add it.
 Exact clustering can't see that ten differently-worded findings are one
 mistake. `seamark lessons --distill` can: it batches the raw findings
 into candidate groups and asks **your own agent CLI** (`claude` by
-default — seamark holds no API keys) to name what recurs, as proposed
-pins. It is an optional accelerator, nothing more: every entry it drafts
-is one you could write by hand in the same file, and repos without an
-agent CLI (or without the appetite for tokens) simply skip it.
+default, `codex` with `agent.cli: codex`, or any command line under
+`agent.argv`) to name recurring patterns and propose pins. Seamark holds
+no API keys. See [inference setup and authentication](agent-integrations.md#choose-an-agent-for-inference)
+for selecting Codex or using API-key billing. `agent.argv` takes precedence
+over `agent.cli`; installing Codex hooks does not select Codex for inference.
+Distillation is optional: you can write the same entries by hand without
+an agent CLI or a paid model call.
 
 The
 [OpenTelemetry histogram-reset case study](case-studies/opentelemetry-histogram-reset.md)
@@ -420,7 +465,20 @@ pins wording one theme never spend two slots:
   `+N more` pointer for the rest) plus the file's recurring mined
   lessons. Offline, silent when there is nothing to say. With opt-in
   `hook_delivery: once-per-context`, already-delivered lessons stay silent
-  until Claude Code compacts the current session.
+  until Claude Code compacts the current session. Only files inside the
+  workspace count: a path outside it, or behind a symbolic link that
+  leaves it, gets no reminder. A new file counts by its path. Without an
+  index the hook still delivers the pins of `lessons.yaml`, and it never
+  creates a database. For Codex (`lessons --hook --client codex`, wired by
+  `seamark init --client codex`) the unit is the patch, not the file:
+  Codex reports every edit as one `apply_patch`, and the hook reads its
+  complete file set — adds, updates, deletes, and both ends of a move —
+  without running anything. The whole patch gets one reminder under the
+  same budget, each line tagged with its region. A patch the hook cannot
+  read completely gets no reminder rather than a guessed one, and Codex
+  reminders always repeat: the adapter does not read which agent or
+  subagent receives them yet, because a reset inside a subagent is
+  unverified.
 - **`change_set` (MCP)**: before a multi-file edit, the union of the
   files' lessons under `change_budget` (default 6) — merged by
   identity, ranked by confidence across the whole set, regions shown as
@@ -443,7 +501,16 @@ audit log. Edit-hook records also carry the rendered context byte count,
 delivery status, context generation, and repository-scoped SHA-256 digests of
 the provider session and tool-use match; raw provider identifiers are never
 persisted or made correlatable across repositories. These fields make repeated
-delivery and opt-in suppression measurable. `seamark lessons --stats` turns
+delivery and opt-in suppression measurable. Current records also name the
+`client`, the `mechanism` that carries the reminder (`pre-tool-use-context`
+for Claude Code), and a digest of the receiving context when the client
+reports one. A record written before these fields existed names no client, and
+the statistics keep it that way instead of guessing: a repeat is counted only
+among records of one client and one receiving context, never across the
+records from before and after these fields. An edit operation on
+several files is one record with every path and one byte total. A record says
+that a reminder was emitted, never that the agent followed it.
+`seamark lessons --stats` turns
 the log into which lessons actually reach agents, split by surface (a
 `change_set` plan and a CI `check` are exposure, not edits reminded), and which
 *would* surface but never have (a lesson whose region no edit touches is a
@@ -459,6 +526,8 @@ $ seamark lessons --stats
 lesson firings — 128 hook reminders, 31 change_set, 12 check — across 24 files
 
 hook delivery — instrumented: 128 injected (84 repeated), 0 suppressed; context: 57344 bytes
+  claude via pre-tool-use-context: 96 injected (61 repeated), 0 suppressed; context: 43008 bytes
+  no client recorded: 32 injected (23 repeated), 0 suppressed; context: 14336 bytes
 
 most surfaced
   ×41  scripts                                  last 2026-07-26  E702

@@ -62,6 +62,22 @@ type CodexPlan struct {
 	insert     string
 	insertAt   int
 	insertKeys []string
+	// approve records CodexOptions.Approve. It selects the comment that
+	// introduces the appended block, so the comment names the command
+	// that really added the tables.
+	approve bool
+}
+
+// CodexOptions selects what a Codex plan may add to the file. The two
+// operations are separate because registration does not imply approval:
+// explicit client setup registers the server, and the grants stay an
+// opt-in.
+type CodexOptions struct {
+	// Register adds the `seamark mcp` registration when none exists.
+	Register bool
+	// Approve adds approval_mode = "approve" for each tool that has no
+	// approval and no explicit restriction.
+	Approve bool
 }
 
 // PlanCodex inspects .codex/config.toml without writing. It rejects a
@@ -73,21 +89,37 @@ type CodexPlan struct {
 // because a person put it there. The appended block is validated by
 // parsing the would-be file, and inline tables are detected from the
 // decoded keys, so a layout that appending cannot extend is reported
-// instead of written.
+// instead of written. It plans the registration and the approvals
+// together, which is what `init --approve-tools` always meant.
+//
+// It also rejects a path that is not a regular file, as setup does. A
+// read of a FIFO blocks, and doctor and status must not hang on one.
 func PlanCodex(root string) (*CodexPlan, error) {
 	if link, err := skills.SymlinkIn(root, CodexConfig); err != nil {
 		return nil, err
 	} else if link != "" {
-		return nil, fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", CodexConfig, link)
+		return nil, LinkRefusal(CodexConfig, link)
 	}
 
-	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(CodexConfig)))
-
-	p := &CodexPlan{Exists: err == nil}
-
+	data, _, err := ReadRegular(root, CodexConfig)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%s: %w", CodexConfig, err)
 	}
+
+	return PlanCodexData(data, err == nil, CodexOptions{Register: true, Approve: true})
+}
+
+// PlanCodexData plans from bytes the caller already read. The setup
+// coordinator reads the file once under a guard and plans from those
+// same bytes, so the plan and the guard describe one file state. exists
+// is false when the file is absent; data is then ignored. The path
+// checks (symbolic links, file type) are the caller's job.
+func PlanCodexData(data []byte, exists bool, opts CodexOptions) (*CodexPlan, error) {
+	if !exists {
+		data = nil
+	}
+
+	p := &CodexPlan{Exists: exists, approve: opts.Approve}
 
 	cfg := map[string]any{}
 
@@ -125,6 +157,8 @@ func PlanCodex(root string) (*CodexPlan, error) {
 		p.Missing = slices.Clone(Tools)
 	}
 
+	p.limit(opts)
+
 	if p.Register || len(p.Missing) > 0 {
 		// TOML closes an inline table: a [table] header cannot extend it
 		// later, and Codex's parser enforces that even where this one
@@ -146,6 +180,21 @@ func PlanCodex(root string) (*CodexPlan, error) {
 	}
 
 	return p, nil
+}
+
+// limit removes the additions the options do not allow. Without
+// Approve no tool table is added. Without Register a missing
+// registration stays missing, and the approvals go with it, because a
+// tool table needs the server table it belongs to.
+func (p *CodexPlan) limit(opts CodexOptions) {
+	if !opts.Approve {
+		p.Missing = nil
+	}
+
+	if !opts.Register && p.Register {
+		p.Server, p.Register, p.Missing = "", false, nil
+		p.insertAt, p.insertKeys = 0, nil
+	}
 }
 
 // serversTable returns mcp_servers as a table, an empty table when
@@ -249,6 +298,22 @@ func (p *CodexPlan) wouldBe(existing []byte) []byte {
 	out = append(out, existing[p.insertAt:]...)
 
 	return append(out, p.block...)
+}
+
+// Changed reports whether the plan adds anything to the file.
+func (p *CodexPlan) Changed() bool {
+	return p.block != "" || p.insert != ""
+}
+
+// Document returns the complete file as the plan leaves it. existing
+// must be the bytes the plan was made from, because the insert offset
+// refers to them; the setup coordinator's guard enforces that.
+func (p *CodexPlan) Document(existing []byte) []byte {
+	if !p.Exists {
+		existing = nil
+	}
+
+	return p.wouldBe(existing)
 }
 
 // registration returns the name of the server that runs `seamark mcp`,
@@ -445,7 +510,11 @@ func renderBlock(p *CodexPlan, existing []byte) (insert, block string) {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("# seamark: added by `seamark init --approve-tools`; remove these tables to undo.\n")
+	if p.approve {
+		b.WriteString("# seamark: added by `seamark init --approve-tools`; remove these tables to undo.\n")
+	} else {
+		b.WriteString("# seamark: added by `seamark init`; remove this table to undo.\n")
+	}
 
 	if appendsHeader {
 		fmt.Fprintf(&b, "[mcp_servers.%s]\ncommand = \"seamark\"\nargs = [\"mcp\"]\n", key)
@@ -736,24 +805,11 @@ func splitInlineAssignment(line string) (key string, inline bool) {
 // again right before the write, because the plan may be older than the
 // tree.
 func ApplyCodex(w io.Writer, root string, p *CodexPlan, printOnly bool) error {
-	kept := KeptSuffix(p.Conflicts)
-
-	if p.block == "" && p.insert == "" {
-		if p.Registered {
-			fmt.Fprintf(w, "  kept    %s (seamark registered as %q; %d/%d tools approved%s)\n",
-				CodexConfig, p.Server, len(p.Approved), len(Tools), kept)
-		} else {
-			fmt.Fprintf(w, "  kept    %s (seamark not registered%s)\n", CodexConfig, kept)
-		}
-
-		return nil
-	}
-
-	if !printOnly {
+	if p.Changed() && !printOnly {
 		if link, err := skills.SymlinkIn(root, CodexConfig); err != nil {
 			return err
 		} else if link != "" {
-			return fmt.Errorf("%s: symlink at %s; seamark writes only real paths inside the repository", CodexConfig, link)
+			return LinkRefusal(CodexConfig, link)
 		}
 
 		path := filepath.Join(root, filepath.FromSlash(CodexConfig))
@@ -765,6 +821,28 @@ func ApplyCodex(w io.Writer, root string, p *CodexPlan, printOnly bool) error {
 		if err := writeCodexPlan(path, p); err != nil {
 			return fmt.Errorf("%s: %w", CodexConfig, err)
 		}
+	}
+
+	NarrateCodex(w, p, printOnly)
+
+	return nil
+}
+
+// NarrateCodex prints the line for one Codex plan in init's vocabulary.
+// ApplyCodex and the Codex setup adapter share it, so the file reads
+// the same whichever path wrote it.
+func NarrateCodex(w io.Writer, p *CodexPlan, printOnly bool) {
+	kept := KeptSuffix(p.Conflicts)
+
+	if !p.Changed() {
+		if p.Registered {
+			fmt.Fprintf(w, "  kept    %s (seamark registered as %q; %d/%d tools approved%s)\n",
+				CodexConfig, p.Server, len(p.Approved), len(Tools), kept)
+		} else {
+			fmt.Fprintf(w, "  kept    %s (seamark not registered%s)\n", CodexConfig, kept)
+		}
+
+		return
 	}
 
 	verb := "updated"
@@ -788,11 +866,7 @@ func ApplyCodex(w io.Writer, root string, p *CodexPlan, printOnly bool) error {
 		parts = append(parts, fmt.Sprintf("approved %d tools: %s", len(p.Missing), strings.Join(p.Missing, ", ")))
 	}
 
-	detail := strings.Join(parts, "; ")
-
-	fmt.Fprintf(w, "  %-7s %s (%s%s)\n", verb, CodexConfig, detail, kept)
-
-	return nil
+	fmt.Fprintf(w, "  %-7s %s (%s%s)\n", verb, CodexConfig, strings.Join(parts, "; "), kept)
 }
 
 // writeCodexPlan appends the block, or rewrites the file with the insert
@@ -828,7 +902,9 @@ func writeCodexPlan(path string, p *CodexPlan) error {
 	return os.WriteFile(path, p.wouldBe(existing), 0o644)
 }
 
-func inspectCodex(root string) ClientApproval {
+// InspectCodex reports the Codex approval configuration alone, for a
+// caller that addresses one client, such as its setup adapter.
+func InspectCodex(root string) ClientApproval {
 	c := ClientApproval{Client: ClientCodex, Path: CodexConfig, Total: len(Tools)}
 
 	p, err := PlanCodex(root)

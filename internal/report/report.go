@@ -451,59 +451,123 @@ func confidenceAnnotator(st *store.Store, applied []model.Proposal, ambient bool
 // Lines show regions, never triggering files: the caller supplied the
 // file list, and a region is exactly the mapping back onto it.
 func LessonsForFiles(st *store.Store, cfg *reviews.Config, files []string, budget int) ([]model.Lesson, int, error) {
-	applied, err := st.Proposals(model.ProposalApplied)
+	merged, err := unionForFiles(st, cfg, files, true)
 	if err != nil {
 		return nil, 0, err
+	}
+
+	pins, trimmed := reviews.CollapseRestated(merged.pins)
+
+	union := make([]model.Lesson, 0, len(pins)+len(merged.mined))
+
+	for _, sp := range pins {
+		union = append(union, sp.Lesson())
+	}
+
+	union = append(union, merged.mined...)
+
+	if budget > 0 && len(union) > budget {
+		trimmed += len(union) - budget
+		union = union[:budget]
+	}
+
+	return union, trimmed, nil
+}
+
+// fileUnion is the lesson material for a set of files before any
+// budget applies. Each multi-file surface applies its own budget rule
+// to the same union, so the surfaces cannot disagree about selection.
+type fileUnion struct {
+	// pins holds each pin identity once, ranked across the whole set.
+	// unionForFiles collapses no restatement: each caller has its own
+	// collapse rule. LessonsForFiles reads this list.
+	pins []reviews.SurfacedPin
+	// everyPin is pins plus the pins that repeat an identity inside
+	// lessons.yaml. The single-file selector keeps such a repeat, so the
+	// edit hook reads this list to select the same lessons.
+	everyPin []reviews.SurfacedPin
+	// mined holds the mined lessons that clear the surfacing bar, one
+	// per cluster, in first-file order.
+	mined []model.Lesson
+}
+
+// pinSlot identifies one lessons.yaml pin across the files of a union.
+// A pin identity can occur twice in lessons.yaml, for example with two
+// notes. ordinal counts the earlier pins of the same identity in one
+// file's list. Equal identities share rank and depth, so the stable
+// order of SurfacePins gives one pin the same ordinal for every file.
+type pinSlot struct {
+	key     reviews.PinKey
+	ordinal int
+}
+
+// unionForFiles merges the pins and the mined lessons of several files.
+// ambient selects the annotation style of confidenceAnnotator.
+func unionForFiles(st *store.Store, cfg *reviews.Config, files []string, ambient bool) (fileUnion, error) {
+	applied, err := st.Proposals(model.ProposalApplied)
+	if err != nil {
+		return fileUnion{}, err
 	}
 
 	covered, err := coveredClusters(st, cfg, applied)
 	if err != nil {
-		return nil, 0, err
+		return fileUnion{}, err
 	}
 
-	annotate, err := confidenceAnnotator(st, applied, true)
+	annotate, err := confidenceAnnotator(st, applied, ambient)
 	if err != nil {
-		return nil, 0, err
+		return fileUnion{}, err
 	}
 
-	// Pins: union by identity, keeping each pin's best appearance
+	// Pins: union by slot, keeping each pin's best appearance
 	// (highest rank, then deepest match) across the files.
-	best := map[reviews.PinKey]reviews.SurfacedPin{}
+	best := map[pinSlot]reviews.SurfacedPin{}
 
-	var order []reviews.PinKey
+	var order []pinSlot
 
 	for _, f := range files {
+		seen := map[reviews.PinKey]int{}
+
 		for _, sp := range cfg.SurfacePins(f, annotate) {
 			key := reviews.NewPinKey(sp.Pin.Rule, sp.Pin.Region, sp.Pin.Regions)
+			slot := pinSlot{key: key, ordinal: seen[key]}
+			seen[key]++
 
-			cur, ok := best[key]
+			cur, ok := best[slot]
 			if !ok {
-				best[key] = sp
-				order = append(order, key)
+				best[slot] = sp
+				order = append(order, slot)
 
 				continue
 			}
 
 			if sp.Rank > cur.Rank || (sp.Rank == cur.Rank && sp.Depth > cur.Depth) {
-				best[key] = sp
+				best[slot] = sp
 			}
 		}
 	}
 
-	pins := make([]reviews.SurfacedPin, 0, len(order))
-	for _, key := range order {
-		pins = append(pins, best[key])
-	}
-
-	sort.SliceStable(pins, func(i, j int) bool {
-		if pins[i].Rank != pins[j].Rank {
-			return pins[i].Rank > pins[j].Rank
+	// Stable: a stable sort of the full list and a filter afterwards
+	// give the order that a sort of the filtered list gives.
+	sort.SliceStable(order, func(i, j int) bool {
+		a, b := best[order[i]], best[order[j]]
+		if a.Rank != b.Rank {
+			return a.Rank > b.Rank
 		}
 
-		return pins[i].Depth > pins[j].Depth
+		return a.Depth > b.Depth
 	})
 
-	pins, trimmed := reviews.CollapseRestated(pins)
+	pins := make([]reviews.SurfacedPin, 0, len(order))
+	everyPin := make([]reviews.SurfacedPin, 0, len(order))
+
+	for _, slot := range order {
+		everyPin = append(everyPin, best[slot])
+
+		if slot.ordinal == 0 {
+			pins = append(pins, best[slot])
+		}
+	}
 
 	// Mined recurrence: per-file query, deduplicated by cluster,
 	// filtered exactly as the single-file surface filters.
@@ -514,7 +578,7 @@ func LessonsForFiles(st *store.Store, cfg *reviews.Config, files []string, budge
 	for _, f := range files {
 		ls, err := st.LessonsForFile(f, 1, 100)
 		if err != nil {
-			return nil, 0, err
+			return fileUnion{}, err
 		}
 
 		for _, l := range ls {
@@ -527,20 +591,7 @@ func LessonsForFiles(st *store.Store, cfg *reviews.Config, files []string, budge
 		}
 	}
 
-	union := make([]model.Lesson, 0, len(pins)+len(mined))
-
-	for _, sp := range pins {
-		union = append(union, sp.Lesson())
-	}
-
-	union = append(union, mined...)
-
-	if budget > 0 && len(union) > budget {
-		trimmed += len(union) - budget
-		union = union[:budget]
-	}
-
-	return union, trimmed, nil
+	return fileUnion{pins: pins, everyPin: everyPin, mined: mined}, nil
 }
 
 // PrintLessonBlock renders a compact lesson list for multi-file
@@ -766,9 +817,27 @@ func printHookDeliverySummary(w io.Writer, s reviews.Summary) {
 	}
 
 	fmt.Fprintf(w, "hook delivery — instrumented: %d injected (%d repeated), "+
-		"%d suppressed; context: %d bytes\n\n",
+		"%d suppressed; context: %d bytes\n",
 		s.InstrumentedHookFirings, s.RepeatedHookFirings,
 		s.SuppressedHookFirings, s.HookContextBytes)
+
+	// One line per recorded client. A record without a client stays
+	// unattributed: an older record does not say which client wrote it.
+	for _, tally := range s.HookByClient {
+		label := "no client recorded"
+		if tally.Client != "" {
+			label = render.Sanitize(tally.Client)
+
+			if tally.Mechanism != "" {
+				label += " via " + render.Sanitize(tally.Mechanism)
+			}
+		}
+
+		fmt.Fprintf(w, "  %s: %d injected (%d repeated), %d suppressed; context: %d bytes\n",
+			label, tally.Injected, tally.Repeated, tally.Suppressed, tally.ContextBytes)
+	}
+
+	fmt.Fprintln(w)
 }
 
 // firingDate trims an RFC3339 timestamp to its date for compact display.

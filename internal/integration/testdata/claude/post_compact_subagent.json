@@ -1,0 +1,9 @@
+{
+  "session_id": "synthetic-claude-session-0001",
+  "transcript_path": "/home/user/.claude/projects/-workspace-repo/synthetic-claude-session-0001.jsonl",
+  "cwd": "/workspace/repo",
+  "hook_event_name": "PostCompact",
+  "agent_id": "synthetic-agent-0007",
+  "agent_type": "Explore",
+  "trigger": "auto"
+}
