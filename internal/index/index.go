@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -61,8 +62,11 @@ type Summary struct {
 	DBPath string
 	// Skipped is true when the workspace fingerprint matched the index
 	// and nothing was rebuilt.
-	Skipped     bool
-	FilesSeen   int // files listed in the workspace
+	Skipped bool
+	// FilesSeen counts the listed files that exist in the working tree.
+	// A deleted path and a path outside a sparse checkout are not in it,
+	// because no file exists to see.
+	FilesSeen   int
 	FilesParsed int // files a language extractor handled
 	// FilesReparsed counts files actually run through tree-sitter this
 	// pass; the rest were served from the parse cache. Equals FilesParsed
@@ -71,6 +75,12 @@ type Summary struct {
 	// FilesSkipped counts supported files dropped by config — generated
 	// (default) or an exclude glob.
 	FilesSkipped int
+	// FilesDeleted counts the tracked paths that git status shows as
+	// deleted and not staged, also a file that a directory replaces.
+	// They are not parse errors, because no bytes exist to parse. A path
+	// outside a sparse checkout is not deleted, as in git status. Outside
+	// git it is always 0.
+	FilesDeleted int
 	ParseErrors  int
 	HistoryMined bool
 	// HistorySkipNote says why the history layer is absent when
@@ -109,7 +119,7 @@ func Run(opts Options) (*Summary, error) {
 		}
 	}
 
-	files, err := listFiles(root)
+	files, deleted, err := listFiles(root)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +162,7 @@ func Run(opts Options) (*Summary, error) {
 
 	progress("scan", len(files), len(files))
 
-	sum := &Summary{Root: root, DBPath: dbPath, FilesSeen: len(files)}
+	sum := &Summary{Root: root, DBPath: dbPath, FilesSeen: len(files), FilesDeleted: len(deleted)}
 
 	var results []*parse.FileResult
 
@@ -177,6 +187,9 @@ func Run(opts Options) (*Summary, error) {
 			continue
 		}
 
+		// Every read failure stays a parse error, also a missing file.
+		// Only the git listing proves a deletion. A file can vanish
+		// during the run, or be a link to a missing target.
 		src, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
 			logf("warn: read %s: %v", rel, err)
@@ -288,6 +301,7 @@ func Run(opts Options) (*Summary, error) {
 		"files_seen":    sum.FilesSeen,
 		"files_parsed":  sum.FilesParsed,
 		"files_skipped": sum.FilesSkipped,
+		"files_deleted": sum.FilesDeleted,
 		"parse_errors":  sum.ParseErrors,
 	})
 	if err != nil {
@@ -1150,31 +1164,16 @@ var skipDirs = map[string]bool{
 
 // listFiles returns repo-relative candidate paths. Inside git it trusts
 // `git ls-files` (tracked + unignored untracked) so .gitignore is honored;
-// otherwise it walks the tree with conservative skips.
-func listFiles(root string) ([]string, error) {
+// otherwise it walks the tree with conservative skips. deleted lists the
+// tracked paths that git status shows as deleted and not staged. files
+// leaves them out, because nothing exists to parse. A walk finds no such
+// path.
+func listFiles(root string) (files, deleted []string, err error) {
 	if history.IsRepo(root) {
-		cmd := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-		cmd.Dir = root
-
-		out, err := cmd.Output()
-		if err != nil {
-			return nil, fmt.Errorf("index: git ls-files: %w", err)
-		}
-
-		var files []string
-
-		for f := range strings.SplitSeq(string(out), "\x00") {
-			if f != "" && !underSkippedDir(f) {
-				files = append(files, f)
-			}
-		}
-
-		return files, nil
+		return gitFiles(root)
 	}
 
-	var files []string
-
-	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -1199,10 +1198,96 @@ func listFiles(root string) ([]string, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("index: walk %s: %w", root, err)
+		return nil, nil, fmt.Errorf("index: walk %s: %w", root, err)
 	}
 
-	return files, nil
+	return files, nil, nil
+}
+
+// gitFiles lists the workspace through git. The cached list keeps a
+// tracked path after its file is deleted, until the deletion is staged.
+// git diff-files finds these paths, so files leaves them out and
+// deleted returns them.
+//
+// diff-files uses the deletion test of git status. A file that a
+// directory replaces is deleted. A path that git cannot lstat for a
+// different reason, such as a denied permission, is not deleted. It
+// stays in files, so the read reports it as a parse error.
+func gitFiles(root string) (files, deleted []string, err error) {
+	// -t tags each path, so the loop below can find skip-worktree
+	// entries. The tag is one letter and a space before the path.
+	listed, err := gitRecords(root, "ls-files", "-z", "-t", "--cached", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// --relative gives paths relative to root, as ls-files does.
+	// --no-renames keeps each deletion a deletion, also when an added
+	// path has the same content.
+	gone, err := gitRecords(root, "diff-files", "-z", "--name-only", "--relative", "--no-renames", "--diff-filter=D")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	isGone := make(map[string]bool, len(gone))
+
+	for _, f := range gone {
+		if !underSkippedDir(f) {
+			isGone[f] = true
+			deleted = append(deleted, f)
+		}
+	}
+
+	for _, rec := range listed {
+		tag, f, ok := strings.Cut(rec, " ")
+		if !ok || underSkippedDir(f) || isGone[f] {
+			continue
+		}
+
+		// A sparse checkout keeps skip-worktree paths out of the
+		// working tree on purpose, and diff-files ignores them. So a
+		// missing one is not deleted and not a file to parse. A
+		// skip-worktree file that exists stays in files.
+		if tag == "S" && missingFile(root, f) {
+			continue
+		}
+
+		files = append(files, f)
+	}
+
+	return files, deleted, nil
+}
+
+// missingFile reports whether rel has no working-tree entry. Only
+// fs.ErrNotExist means missing. Any other lstat error keeps the path,
+// so the read reports the real problem as a parse error.
+func missingFile(root, rel string) bool {
+	_, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
+
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// gitRecords runs one git command with -z output in root. It returns
+// the NUL-separated records without the empty last one. The -z form
+// keeps paths with special characters unquoted.
+func gitRecords(root string, args ...string) ([]string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("index: git %s: %w", args[0], err)
+	}
+
+	var records []string
+
+	for rec := range strings.SplitSeq(string(out), "\x00") {
+		if rec != "" {
+			records = append(records, rec)
+		}
+	}
+
+	return records, nil
 }
 
 func underSkippedDir(rel string) bool {

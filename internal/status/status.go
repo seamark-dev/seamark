@@ -37,7 +37,11 @@ type Coverage struct {
 	FilesSeen    int  `json:"files_seen,omitempty"`
 	FilesParsed  int  `json:"files_parsed,omitempty"`
 	FilesSkipped int  `json:"files_skipped,omitempty"`
-	ParseErrors  int  `json:"parse_errors"`
+	// FilesDeleted counts the tracked paths that git status shows as
+	// deleted and not staged. It is not a parse error. An index from
+	// before this field reads 0.
+	FilesDeleted int `json:"files_deleted"`
+	ParseErrors  int `json:"parse_errors"`
 }
 
 // Freshness states: whether the index still matches the workspace.
@@ -244,6 +248,16 @@ func Print(w io.Writer, s *Status) {
 	default:
 		fmt.Fprintf(w, "parsed         %d of %d seen files (%d skipped by config)\n",
 			s.Coverage.FilesParsed, s.Coverage.FilesSeen, s.Coverage.FilesSkipped)
+	}
+
+	// A deleted path is a state of the working tree. The index misses
+	// no file, so the line is a plain note, not an error. It has its own
+	// label, so it does not read as part of the parse-error lines.
+	switch n := s.Coverage.FilesDeleted; {
+	case n == 1:
+		fmt.Fprintf(w, "deleted        1 tracked file in the working tree (deletion not staged)\n")
+	case n > 1:
+		fmt.Fprintf(w, "deleted        %d tracked files in the working tree (deletions not staged)\n", n)
 	}
 
 	fmt.Fprintf(w, "symbols        %d, %d edges — call resolution %s\n",

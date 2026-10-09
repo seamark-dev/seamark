@@ -75,7 +75,13 @@ narrow Pins footer can leave it out (see Lessons › Pins, Action keys).
   (symbols, edges, decisions), LEARN (pending proposals, lessons, review
   mining, distill agent), and GUARD (policy mode and rule counts, gate
   hooks). Missing data says why; it never shows as zero. A stale index adds
-  a banner with `b rebuild now`.
+  a banner with `b rebuild now`. When git tracks files that the working
+  tree no longer has and the deletions are not staged, INDEX adds a muted
+  line such as `47 deleted, not staged`. These paths are not parse errors:
+  the index leaves them out. The Optional group adds one item with the
+  count, and its Next section shows
+  `git diff-files --name-only --diff-filter=D`, the command that lists
+  the paths.
 - **Attention**: actionable problems, optional additions, unsupported
   capabilities, and unknown evidence stay in separate groups. No overall
   score. Below them: one line per client and a doctor summary. In a narrow

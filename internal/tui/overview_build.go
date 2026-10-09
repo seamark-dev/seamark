@@ -553,17 +553,28 @@ func (o *overview) resultBody(w int) []string {
 
 	sep := " " + t.Glyphs.Sep + " "
 
-	body := []string{t.Badge(ToneSuccess, "Index built"), ""}
-	body = append(body, strings.Split(t.kv([][2]string{
+	facts := [][2]string{
 		{"Files", ovNum(s.FilesSeen) + " seen" + sep + ovNum(s.FilesParsed) + " parsed" + sep +
 			ovNum(s.FilesReparsed) + " reparsed" + sep + ovNum(s.FilesSkipped) + " skipped"},
 		{"Parse errors", parseErrs},
+	}
+
+	// Deleted paths are not in the seen count and are not parse errors,
+	// so the row names them apart, and only when they exist.
+	if s.FilesDeleted > 0 {
+		facts = append(facts, [2]string{"Deleted", ovPlural(s.FilesDeleted, "tracked file", "tracked files") + ", not staged"})
+	}
+
+	facts = append(facts, [][2]string{
 		{"Symbols", ovNum(s.Stats.Symbols)},
 		{"Edges", ovNum(s.Stats.Edges)},
 		{"History", history},
 		{"Decisions", ovNum(s.Stats.Decisions)},
 		{"Database", oneLine(db)},
-	}, w), "\n")...)
+	}...)
+
+	body := []string{t.Badge(ToneSuccess, "Index built"), ""}
+	body = append(body, strings.Split(t.kv(facts, w), "\n")...)
 	body = append(body, o.logLines(w)...)
 
 	return append(append(body, ""), after...)

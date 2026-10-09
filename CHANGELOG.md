@@ -8,6 +8,30 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **A deletion that is not staged is no longer a parse error.** Git
+  keeps a tracked path in its cached list after the file is deleted,
+  until the deletion is staged. `seamark index` read such a path, failed,
+  printed `warn: read <path>: open …: no such file or directory`, and
+  counted a parse error, so `seamark status` reported `47 PARSE ERRORS:
+  those files are invisible to every answer` for 47 renamed files. The
+  index now gets the deleted paths from `git diff-files`, with the same
+  test that `git status` uses, and counts them apart. A file that a
+  directory replaces is deleted too. `seamark index` prints `files    634
+  seen (47 deleted in the working tree), 535 parsed` and no warning for
+  them. `seamark status` adds the line `deleted        47 tracked files
+  in the working tree (deletions not staged)` after the `parsed` lines,
+  and `status --json` adds `coverage.files_deleted` (an index built
+  before reads 0). The seen count no longer includes these paths. In the
+  console, the INDEX card adds a muted `47 deleted, not staged` line, and
+  the Optional group adds one item that names the count and shows
+  `git diff-files --name-only --diff-filter=D` as the command that lists
+  the paths. A path that git cannot check is not deleted, for example a
+  file in a directory without search permission: its read fails, and it
+  stays a parse error, as any other read failure does. A path outside a
+  sparse checkout is left out without a count, as `git status` shows no
+  change for it; before, it was a parse error too. The next build drops
+  the symbols and the parse-cache rows of a deleted path, as for a file
+  that is gone from git.
 - **`seamark lessons` runs on the console's engines.** `--apply`,
   `--dismiss`, `--retarget`, `--prune`, `--extract-triggers`, and
   `--stats` now run on the same engines as `seamark tui`, so the CLI and

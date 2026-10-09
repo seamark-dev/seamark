@@ -25,6 +25,12 @@ config — including an exclude glob that could never match — fails the
 index loudly rather than being silently ignored. Config edits count as
 workspace changes, so the next index picks them up automatically.
 
+The indexer also leaves out a tracked file that is deleted in the working
+tree while the deletion is not staged. `seamark index` and
+`seamark status` count these paths apart from parse errors. A path
+outside a sparse checkout is left out without a count, because
+`git status` shows no change for it either.
+
 The same `config.yaml` carries the other opt-ins, each defaulting to
 the safe side:
 

@@ -133,7 +133,8 @@ func (o *overview) staleLines(err error, w int) []string {
 }
 
 // indexCard summarizes the index: the freshness at the right, then the
-// coverage, the parse errors and the age of the last build.
+// coverage, the parse errors, the deleted paths when any exist, and the
+// age of the last build.
 func (o *overview) indexCard(w int) ovCard {
 	t := o.st.theme
 	sec := &o.st.index
@@ -193,6 +194,14 @@ func (o *overview) readyIndexCard(v IndexView, w int) (right string, lines []str
 			parsed+" "+t.Muted.Render("of "+seen+" files parsed"),
 			parsed+t.Muted.Render("/"+seen+" files parsed"),
 			parsed+t.Muted.Render("/"+seen+" parsed")), errs)
+
+		// A deleted path is a state of the working tree, not an error,
+		// so the count keeps the muted style of "no parse errors".
+		if n := s.Coverage.FilesDeleted; n > 0 {
+			lines = append(lines, t.Muted.Render(ovFit(w,
+				ovNum(n)+" deleted, not staged",
+				ovNum(n)+" deleted")))
+		}
 	} else {
 		lines = append(lines, t.Unknown.Render("coverage unknown"), t.Unknown.Render("parse errors unknown"))
 	}

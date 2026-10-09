@@ -386,6 +386,49 @@ func TestStatusReportsHealth(t *testing.T) {
 	assert.Contains(t, out, "STALE")
 }
 
+func TestIndexAndStatusNameUnstagedDeletions(t *testing.T) {
+	root := writeFixture(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "b.go"),
+		[]byte("package main\n\nfunc gone() {}\n"), 0o644))
+	gitify(t, root)
+
+	// The deletion stays unstaged, so git still tracks b.go.
+	require.NoError(t, os.Remove(filepath.Join(root, "b.go")))
+
+	out, stderr, err := runErr(t, "-C", root, "index")
+	require.NoError(t, err)
+	assert.Contains(t, out, "  files    2 seen (1 deleted in the working tree), 1 parsed\n",
+		"the note sits beside the seen count, and no error count follows")
+	assert.NotContains(t, stderr, "warn: read", "a deleted path gets no read warning")
+
+	out, err = run(t, "-C", root, "status")
+	require.NoError(t, err)
+	assert.Contains(t, out, "parsed         1 of 2 seen files (0 skipped by config)\n"+
+		"deleted        1 tracked file in the working tree (deletion not staged)\n")
+	assert.NotContains(t, out, "PARSE ERRORS")
+
+	out, err = run(t, "-C", root, "status", "--json")
+	require.NoError(t, err)
+
+	var s struct {
+		Coverage struct {
+			FilesDeleted int `json:"files_deleted"`
+			ParseErrors  int `json:"parse_errors"`
+		} `json:"coverage"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &s))
+	assert.Equal(t, 1, s.Coverage.FilesDeleted)
+	assert.Zero(t, s.Coverage.ParseErrors)
+
+	// A clean tree has no note.
+	clean := writeFixture(t)
+	gitify(t, clean)
+
+	out, err = run(t, "-C", clean, "index")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "deleted in the working tree")
+}
+
 func TestStatusWithoutIndexFails(t *testing.T) {
 	root := writeFixture(t)
 

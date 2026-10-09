@@ -273,8 +273,9 @@ func (o *overview) indexFacts() [][2]string {
 	return rows
 }
 
-// coverageFacts lists the parsed, seen and skipped files and the parse
-// errors. An older index without coverage says unknown, never zero.
+// coverageFacts lists the parsed, seen and skipped files, the parse
+// errors, and the deleted paths when any exist. An older index without
+// coverage says unknown, never zero.
 func (o *overview) coverageFacts(c status.Coverage) [][2]string {
 	t := o.st.theme
 
@@ -287,11 +288,19 @@ func (o *overview) coverageFacts(c status.Coverage) [][2]string {
 		errs = t.Attention.Render(ovNum(c.ParseErrors))
 	}
 
-	return [][2]string{
+	rows := [][2]string{
 		{"Files", t.Body.Render(ovNum(c.FilesParsed) + " of " + ovNum(c.FilesSeen) + " parsed, " +
 			ovNum(c.FilesSkipped) + " skipped")},
 		{"Parse errors", errs},
 	}
+
+	// The row exists only with a count, as the INDEX card line does.
+	if c.FilesDeleted > 0 {
+		rows = append(rows, [2]string{"Deleted", t.Body.Render(
+			ovPlural(c.FilesDeleted, "tracked file", "tracked files") + ", not staged")})
+	}
+
+	return rows
 }
 
 // navigateFacts lists the code graph size and the decisions mined from

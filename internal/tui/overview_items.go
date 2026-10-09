@@ -92,8 +92,9 @@ type ovItem struct {
 	// own headings.
 	body     []string
 	sections []ovSection
-	// fix is the corrective CLI text. The console shows it as
-	// selectable text and never runs it.
+	// fix is the CLI text of the next step: a command that corrects the
+	// state, or a command that shows what to correct. The console shows
+	// it as selectable text and never runs it.
 	fix string
 	act ovAction
 	// area names the doctor check that the item overlaps, so the
@@ -307,7 +308,7 @@ func ovHealthFailedItem(err error) ovItem {
 }
 
 // healthItems classifies a ready index: a failed health read, then
-// freshness, coverage and parse errors.
+// freshness, coverage, parse errors and deleted paths.
 func (o *overview) healthItems(v IndexView) []ovItem {
 	s := v.Status
 	if s == nil {
@@ -372,7 +373,32 @@ func (o *overview) healthItems(v IndexView) []ovItem {
 		})
 	}
 
+	if n := s.Coverage.FilesDeleted; n > 0 {
+		items = append(items, ovDeletedItem(n))
+	}
+
 	return items
+}
+
+// ovDeletedItem reports tracked paths that have no working-tree file.
+// The item is Optional, not Action, because the index misses no file:
+// nothing exists to parse. Only the user knows whether to keep the
+// deletions.
+func ovDeletedItem(n int) ovItem {
+	return ovItem{
+		key: "index:deleted", group: ovOptional, tone: ToneNeutral, badge: "not staged",
+		title: ovPlural(n, "tracked file", "tracked files") + " deleted in the working tree", source: "index coverage",
+		body: []string{
+			"Git tracks " + ovPlural(n, "path", "paths") + " that the working tree no longer has. The " +
+				ovWord(n, "deletion is", "deletions are") + " not staged.",
+			"The index leaves " + ovWord(n, "this path", "these paths") + " out, and " +
+				ovWord(n, "it is not a parse error", "they are not parse errors") + ". Stage the " +
+				ovWord(n, "deletion", "deletions") + " or restore the " + ovWord(n, "file", "files") +
+				". After either step, the next build no longer reports " + ovWord(n, "it", "them") + ".",
+			"The command below lists " + ovWord(n, "the path", "the paths") + ". It uses the same test as the index.",
+		},
+		fix: "git diff-files --name-only --diff-filter=D",
+	}
 }
 
 // doctorFix returns the Fix of the first named doctor check that has
