@@ -17,7 +17,7 @@ import (
 // This file holds the evidence refresh run (design map §6 to §8). It
 // starts the run from a confirmed preview and runs the worker. It
 // records the typed progress, the stop and the result in Lessons › Run.
-// les_evidence_run_view.go renders the record. The run holds the
+// evidence_run_view.go renders the record. The run holds the
 // single mutation slot from y until its result arrives.
 
 // evEventBuffer bounds the queue between the worker and the event loop.

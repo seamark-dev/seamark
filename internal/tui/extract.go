@@ -19,8 +19,8 @@ import (
 
 // This file holds the trigger extraction record of Lessons › Run. It
 // keeps the record, the messages and the keys. Its commands plan, run
-// and stop. les_extract_view.go renders the Preview step, the run and
-// the result. les_agent.go holds the steps, the Preview step state, the
+// and stop. extract_view.go renders the Preview step, the run and
+// the result. run_agent.go holds the steps, the Preview step state, the
 // run state and the helpers that the record shares with the
 // distillation record. So a paid run reads and stops the same way in
 // both workflows.
@@ -118,7 +118,7 @@ func (r *extRecord) opened() tea.Cmd {
 }
 
 // The messages of a trigger extraction: a preview result, a progress
-// event, and the end of a run. les_agent.go explains their fields. A
+// event, and the end of a run. run_agent.go explains their fields. A
 // preview result leaves cwd empty, because the preview names its own
 // directory.
 type (

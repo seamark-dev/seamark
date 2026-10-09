@@ -15,7 +15,7 @@ import (
 // This file holds the Lessons → Evidence sub-view (design map §2). It
 // shows the two evidence sources and the actions that start from them.
 // It also shows the states that block these actions. The refresh preview lives in
-// les_evidence_preview.go and the run record in les_evidence_run.go.
+// evidence_preview.go and the run record in evidence_run.go.
 // Browsing here reads the learning snapshot only: it never plans,
 // fetches or writes.
 

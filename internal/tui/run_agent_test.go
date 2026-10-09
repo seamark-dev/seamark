@@ -19,7 +19,7 @@ import (
 // records (distillation and trigger extraction) share, and the places
 // where the two records differ on purpose. The shared code must keep
 // every difference, so each test names the difference that it guards.
-// The last tests cover the shared helpers of les_agent.go one by one.
+// The last tests cover the shared helpers of run_agent.go one by one.
 
 // agentClosed is a closed queue: a wait on it ends at once, so an event
 // sent by a test does not block the harness. The tests of both records

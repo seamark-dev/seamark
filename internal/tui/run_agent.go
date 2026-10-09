@@ -16,8 +16,8 @@ import (
 
 // This file holds the parts that the two agent run records share. An
 // agent run record is a paid run of the configured agent in Lessons ›
-// Run: a distillation (les_distill.go) or a trigger extraction
-// (les_extract.go). Both records read a preview, start only on y, run
+// Run: a distillation (distill.go) or a trigger extraction
+// (extract.go). Both records read a preview, start only on y, run
 // under the mutation slot, and can stop. The shared parts are the steps,
 // the Preview step state, the run state and the messages. They also
 // include the worker, the keys, the verdict shape, the unit counts, the
@@ -32,7 +32,7 @@ import (
 // than 400 more lines. The control flow core → hook → core is also
 // harder to follow than two parallel files.
 //
-// The evidence refresh record (les_evidence_run.go) is a different
+// The evidence refresh record (evidence_run.go) is a different
 // machine without a Preview step or units. It shares only the stop
 // question, the state label and the activity log.
 

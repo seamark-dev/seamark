@@ -18,11 +18,11 @@ import (
 
 // This file holds the distillation record of Lessons › Run. It keeps
 // the record, the scope form and the messages. Its commands plan, run,
-// stop and clean up. les_agent.go holds the steps, the Preview step
+// stop and clean up. run_agent.go holds the steps, the Preview step
 // state, the run state and the helpers that the record shares with the
-// trigger extraction record. les_distill_keys.go handles the keys. The
-// views live in les_distill_scope.go (scope form), les_distill_plan.go
-// (Preview step) and les_distill_run.go (run progress and result).
+// trigger extraction record. distill_keys.go handles the keys. The
+// views live in distill_scope.go (scope form), distill_plan.go
+// (Preview step) and distill_run.go (run progress and result).
 
 // distLimitOpt is the group limit choice of the scope form.
 type distLimitOpt int
@@ -293,7 +293,7 @@ func (d *distRecord) opened() tea.Cmd {
 }
 
 // The messages of a distillation: a plan result, a progress event, and
-// the end of a run. les_agent.go explains their fields.
+// the end of a run. run_agent.go explains their fields.
 type (
 	distPlannedMsg = agentPlannedMsg[learning.DistillPreview]
 	distEventMsg   = agentEventMsg[distill.Event]

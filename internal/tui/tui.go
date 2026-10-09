@@ -1,8 +1,3 @@
-// Package tui is the experimental `seamark tui` workspace console. It is
-// a presentation layer over the shared engines: it reads doctor, status,
-// integration, proposal and delivery state through typed services, and
-// every write goes through a reviewed preview. It adds no business rule
-// and no settings store of its own.
 package tui
 
 import (

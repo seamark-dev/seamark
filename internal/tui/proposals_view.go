@@ -16,10 +16,10 @@ import (
 
 // This file renders the Lessons destination in the 1a layout: the
 // sub-view line, the filter line, the list box and the detail box. The
-// decision modals live in les_modal.go; the state and the key handling
-// live in lessons.go, and the decision stages in previewflow.go. The box
-// frames, the cursor and the filter line format live in listpane.go,
-// because Pins shares them.
+// decision modals live in proposals_modal.go; the state and the key
+// handling live in proposals.go, and the decision stages in
+// previewflow.go. The box frames, the cursor and the filter line format
+// live in listpane.go, because Pins shares them.
 
 // Pane geometry of the 1a Lessons screen at 120 columns: a list box of
 // 62 cells, one cell of gap, and a detail box of 57 cells.

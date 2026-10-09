@@ -17,7 +17,7 @@ import (
 // This file renders a trigger extraction record: the Preview step (the
 // preflight of a paid run), the run, the result, and the stop question.
 // It reuses the distillation vocabulary and the shared parts of
-// les_agent.go, so both paid runs read alike.
+// run_agent.go, so both paid runs read alike.
 // Every proposal text, path, reason and error comes from a file, the
 // ledger or a model, so each one is sanitized where it is rendered.
 

@@ -13,7 +13,7 @@ import (
 // This file renders the evidence run record: the stop question, the
 // verdict of a result, its sentences and guidance, and the boxes of
 // Lessons › Run. The state and the keys of the record live in
-// les_evidence_run.go.
+// evidence_run.go.
 
 // modal implements runRecord: the stop question, at most 64 cells wide
 // like the quit question.

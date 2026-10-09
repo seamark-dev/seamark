@@ -16,10 +16,10 @@ import (
 //     installed pins and sends openMaintMsg and openExtractMsg.
 //   - pins_modal.go: the retarget and prune preview (maintModal,
 //     newMaintModal). The Pins sub-view hosts it through maintHost.
-//   - les_extract.go: the trigger extraction record (extRecord,
+//   - extract.go: the trigger extraction record (extRecord,
 //     newExtractRecord). The Run sub-view opens it for openExtractMsg.
 //
-// The shell side stays here and in lessons.go, les_run.go and state.go,
+// The shell side stays here and in lessons.go, run.go and state.go,
 // so each screen changes only its own files. The messages carry typed
 // requests, never list positions, because a plan binds to the entries as
 // the user reviewed them (contracts D-15).
