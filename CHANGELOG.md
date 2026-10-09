@@ -8,51 +8,209 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
-- **`lessons --apply` adds no duplicate or unlinked pins.** `seamark
-  lessons --apply` and `--dismiss` now run on the decision flow of the
-  console (preview, then a commit that checks the preview again). They
-  keep the CLI selection, the workspace root, and the output of every
-  other case, pinned by golden tests. Apply never adds a second entry
-  with the same rule and region set. A selected proposal whose pin
-  `.seamark/lessons.yaml` already holds is recorded as applied without a
-  write, under a new `recorded N proposal(s) as applied without a new
-  pin` line; with `distill.write` off, the printed block leaves it out
-  and names it. Apply refuses two selected proposals with one rule and
-  region set, with the gate on or off: `p1 and p2 share rule and
-  regions; apply one and dismiss the other`. Before, it wrote (or
-  printed) one entry for each proposal; Pins read the two entries as
-  `duplicate pin` and blocked retarget, prune, and trigger extraction
-  for them. One entry for both does not help: two applied proposals
-  would record it, and Pins blocks such an entry as `ambiguous`. Apply
-  also refuses a proposal whose stored region fields disagree, with the
-  error that the console's record-as-applied gives (`the stored region
-  fields of the selected proposals disagree: p1; resolve them by hand or
-  dismiss them`). Before, it wrote or printed a pin with the rendered
-  regions, which no reader links to that proposal. Both refusals exit 1,
-  write nothing, and print nothing on stdout; the commit checks both
-  again. The console apply gets the same fix: its preview fails with the
-  same text and a hint, and `y` writes nothing. The console's record as
-  applied (`c`) refuses two proposals with one rule and region set too:
-  before, it recorded both, and Pins then read their entry as
-  `ambiguous`. When several pending proposals match one pin, Pins now
-  asks to record one of them and dismiss the others.
-  Apply now reads the pin file strictly before it writes or prints: a
-  symbolic link at the pin file path (with the gate on) or a pin file
-  that the lessons reader rejects stops apply with that error, where the
-  CLI wrote through the link, wrote into the rejected file, or printed
-  the block. After a ledger failure that follows the pin write, the error
-  names the `--apply` rerun for every selected proposal that is still
-  pending, also one whose pin was already in the file. The rerun records
-  them without a second entry.
-- **`lessons --stats` reads through the console's statistics reader.**
-  `seamark lessons --stats` now gets its data from `internal/lessonstats`,
-  the reader of the console's Stats view, and reads the firing log once.
-  Both measure pin outcomes with `proposals.MeasureOutcomes`, the step
-  that the proposal health also uses. The output, the error texts, and
-  the order of the errors stay the same, pinned by new golden tests. One
-  difference: `most surfaced` rows that tie on matches, deliveries, and
-  the last firing time now print by region, then symptom; before, their
-  order could change from one run to the next.
+- **`seamark lessons` runs on the console's engines.** `--apply`,
+  `--dismiss`, `--retarget`, `--prune`, `--extract-triggers`, and
+  `--stats` now run on the same engines as `seamark tui`, so the CLI and
+  the console write, check, and refuse in the same way. Both surfaces
+  link a proposal to a pin by its rule and stored region fields, so they
+  name the same pin. The commands keep their flags, the selection by
+  proposal ID, the workspace root, the `distill.write` gate, and the
+  output of their common cases, pinned by golden tests. Each change below
+  replaces a defect that those tests pinned before:
+  - Apply (also the console apply), retarget, and prune edit
+    `.seamark/lessons.yaml` with the pin file editor of the console's
+    Pins view. The editor proves the result before the write: the file
+    loads, every other setting and pin stays, and no line outside the
+    edit changes. It replaces the file atomically and keeps the file
+    mode. A read-only pin file fails with `the pin file cannot be
+    replaced: the file is read-only (-r--r--r--); seamark does not
+    replace it` (before, `open <root>/.seamark/lessons.yaml: permission
+    denied`). With the gate on, a symbolic link at the pin file path
+    fails retarget and prune with `the pin file cannot be replaced:
+    symlink at .seamark/lessons.yaml; seamark writes only real paths
+    inside the repository`; before, they wrote through the link into its
+    target. With the gate off, the by-hand answer of retarget and prune
+    for a read-only or linked pin file ends with the refusal, for
+    example `(the proposals stay applied; with distill.write on, prune
+    still refuses this file: symlink at …)`. Before, it ended with
+    `enable distill.write to let prune edit the file`.
+  - Apply adds the pins at the head of the `pin:` list, and on the common
+    layouts the file bytes stay the same. A CRLF file gets CRLF line
+    breaks in the new lines too; before, apply wrote LF lines into it.
+    The new lines follow the indentation of the list, and a comment on
+    the `pin:` line is allowed. Before, such files failed with `refusing
+    to write: edited lessons.yaml would not parse: …` or `lessons.yaml has
+    a flow-style pin section; add the entries by hand`. A new `pin:`
+    section goes before a `...` end marker. Before, apply put the pins
+    where no reader reads them (after the end marker, in a second YAML
+    document, or under a second `pin:` key after an indented top level)
+    and still recorded the proposals as applied. A file with more than
+    one YAML document or with mixed line breaks now fails with
+    `lessons.yaml cannot take the new pins safely: <reason>; add the
+    entries by hand`. `pin: ~` fails with `lessons.yaml has a pin section
+    that is not a plain block list; add the entries by hand`. The
+    trailing blank lines of a file without a `pin:` section stay, and an
+    empty file gets no blank first line. When the file changes between
+    the check and the write, apply writes nothing and fails with `the
+    ledger, the pin file, or the write gate changed since the preview:
+    .seamark/lessons.yaml changed after the preview`.
+  - Apply and dismiss run on the decision flow of the console: a preview,
+    then a commit that checks the preview again. Apply never adds a
+    second entry with the same rule and region set. A selected proposal
+    whose pin `.seamark/lessons.yaml` already holds is recorded as
+    applied without a write, under a new `recorded N proposal(s) as
+    applied without a new pin` line; with `distill.write` off, the
+    printed block leaves it out and names it. Apply refuses two selected
+    proposals with one rule and region set, with the gate on or off: `p1
+    and p2 share rule and regions; apply one and dismiss the other`.
+    Before, it wrote (or printed) one entry for each proposal; Pins read
+    the two entries as `duplicate pin` and blocked retarget, prune, and
+    trigger extraction for them. One entry for both does not help: two
+    applied proposals would record it, and Pins blocks such an entry as
+    `ambiguous`. Apply also refuses a proposal whose stored region fields
+    disagree, with the error that the console's record-as-applied gives
+    (`the stored region fields of the selected proposals disagree: p1;
+    resolve them by hand or dismiss them`). Before, it wrote or printed a
+    pin with the rendered regions, which no reader links to that
+    proposal. Both refusals exit 1, write nothing, and print nothing on
+    stdout; the commit checks both again.
+  - Apply refuses a proposal whose rule and region set an applied
+    proposal already has, with the gate on or off: `p1 is already
+    applied with this rule and regions; dismiss p2`. With several rule
+    and region sets, each part names its proposals, for example `p2 is
+    already applied with the rule and regions of p4; p1 is already
+    applied with the rule and regions of p5; dismiss p4 and p5`. Before,
+    apply recorded such a proposal as applied without a write when the
+    file held the pin (with the gate off, it printed `already holds the
+    pins of p2 — nothing to paste`), and otherwise wrote or printed a pin
+    for it. Two applied proposals then recorded one pin, and Pins blocked
+    retarget, prune, and trigger extraction for it as `ambiguous: several
+    applied proposals`. The refusal comes before the record of an
+    existing pin. A pin that no applied proposal records, for example a
+    hand-written one, is still recorded without a write. The refusal
+    exits 1, writes nothing, and prints nothing on stdout. The commit
+    checks it again, so a proposal that another writer applies after the
+    preview stops the commit as stale. The console apply and record as
+    applied (`c`) give the same refusal, with a hint to dismiss the
+    proposal. When the console's ledger snapshot already shows the
+    applied proposal, `a` and `c` read `n/a` for that row, and their
+    press gives the reason and opens nothing. `d` dismisses every mark,
+    so with other marks the reason says to unmark them first.
+  - Apply reads the pin file strictly before it writes or prints: a
+    symbolic link at the pin file path (with the gate on) or a pin file
+    that the lessons reader rejects stops apply with that error. Before,
+    apply wrote through the link, wrote into the rejected file, or
+    printed the block. After a ledger failure that follows the pin write,
+    the error names the `--apply` rerun for every selected proposal that
+    is still pending, also one whose pin was already in the file. The
+    rerun records them without a second entry.
+  - The console apply gets the same fixes: its preview fails with the
+    same text and a hint, and `y` writes nothing. The console's record as
+    applied (`c`) refuses two proposals with one rule and region set too:
+    before, it recorded both, and Pins then read their entry as
+    `ambiguous`. When several pending proposals match one pin, Pins now
+    asks to record one of them and dismiss the others.
+  - Retarget changes only the `region` and `regions` lines of the entry,
+    in place. Before, it removed the entry and added the stored proposal
+    at the head of `pin:`, so a hand-edited note, the rule spelling,
+    unknown keys, and the position of the entry were lost.
+  - With `distill.write` off, retarget prints `change the regions of
+    these pins in .seamark/lessons.yaml by hand:`, the new regions of
+    each proposal, and the file diff. Before, it printed `replace these
+    pins …` with the stored pin block: a paste overwrote hand edits, and
+    the block offered pins that were not in the file.
+  - Retarget refuses a rule and region set that another pin or applied
+    proposal already has (`the target key is already in use: …`).
+    Before, it wrote a second entry with that key. Retarget no longer
+    moves only the ledger when the file already holds the new key
+    (`(N pin(s) were already retargeted in lessons.yaml; only the ledger
+    moved)`), because that proves no ownership; it reports the proposal
+    as not found.
+  - Prune removes only the selected entry. Two entries with one rule and
+    region set leave the proposal as it is, with `ambiguous: duplicate
+    pins; resolve it in .seamark/lessons.yaml or in the ledger first`.
+    Before, prune removed every such entry and could leave the other
+    proposal applied without a pin. A proposal whose stored region fields
+    disagree gets `ambiguous: stored region fields disagree; …`; before,
+    prune removed the entry of its raw fields.
+  - Each proposal that a retarget or a prune leaves gets one line with
+    its reason: `not found in lessons.yaml; left untouched`, `regions
+    already current`, `evidence aged out; …`, or the reason of the
+    engine. Prune ends with `no pins pruned` when nothing changed.
+    Before, prune listed absent proposals under `pruned 0 pin(s) …` and
+    counted them in `(N were not found in the file and keep their applied
+    status)`, a line that its arithmetic could drop. Prune now sanitizes
+    the rule text; before, it printed terminal control bytes raw.
+  - Retarget and prune accept every layout of the console editor: items
+    at any indent, keys in any order, blank lines inside an entry.
+    Before, some layouts were not found and some were refused.
+  - Retarget and prune also refuse what the console editor blocks for
+    the whole file, for example CRLF line breaks or more than one YAML
+    document. Each pin of such a file gets `the entry cannot be edited
+    safely: <reason>` (for example `the file uses CRLF line breaks`),
+    and nothing changes. Apply keeps writing CRLF files. For prune this
+    is a new limit: before, it edited such files. Retarget wrote LF
+    lines into a CRLF file before.
+    With `distill.write` off, both still print the change to make by
+    hand, without a diff. The last line names the refusal, for example
+    `(the proposals stay applied; with distill.write on, prune still
+    refuses this file: the file uses CRLF line breaks)`.
+  - A ledger failure after a retarget or prune file write puts the file
+    back only over the bytes that seamark wrote: `prune aborted,
+    lessons.yaml restored: store: supersede p2: …` (before, prune left the
+    pin removed and returned the raw store error) and `retarget aborted,
+    lessons.yaml restored: store: retarget p1: …` (before, `store: update
+    proposal 1 regions: …`, also after a failed restore). When the file
+    is not restored, the error names the state and the way back:
+    `retarget incomplete: reconciliation required: …: <error> — undo the
+    change to .seamark/lessons.yaml (`git diff .seamark/lessons.yaml`
+    shows it) and run `seamark lessons --retarget p1` again`.
+  - A malformed lessons.yaml fails retarget with `… fix it before
+    retargeting: …` (before, `… before pruning: …`). A pin file that
+    the lessons reader rejects now fails retarget and prune
+    (`lessons.yaml does not parse; fix it before pruning: lessons
+    config: …`); before, they edited it. A malformed config.yaml fails a
+    retarget or a prune only when a selected pin can change; before,
+    prune failed also when no selected pin was in the file.
+  - `--extract-triggers` runs the plan, the row checks, and the guarded
+    save of the console's trigger extraction. Its selection (also
+    proposals whose evidence aged out and applied proposals with
+    duplicate pins), its batches, its prompt, and the output of a run
+    without a conflict stay. A proposal that another command applies,
+    dismisses, retargets, or answers during its agent call keeps its
+    state, and its answer is not saved. Stderr names it: `conflict: p1
+    changed during the agent call — its answer was not saved and p1 is
+    left unchanged`. The summary counts it as `1 conflict(s) not saved`,
+    not as stored. Before, the answer landed on the changed row, and the
+    summary said `1 stored`.
+  - A change stops the extraction, and no further batch is sent. Before
+    each batch the run checks its proposals and their living evidence
+    again. Stderr names the cause and what was left out, for example
+    `extraction stopped: p12 is applied now — 9 proposal(s) not sent and
+    left unchanged; re-running resumes`, and the summary adds `9 not
+    sent`. Before, the CLI checked nothing and sent every batch.
+  - The extraction saves the paths, the stamp, and the new regions of a
+    pending proposal in one transaction. A failed save writes none of
+    them and fails with `store: save trigger answer of p2: …`. Before,
+    the regions were written first, so a failed stamp left the proposal
+    with new regions and an open question; the error was `store: update
+    proposal 2 trigger paths: …`.
+  - The extraction prompt of both surfaces indents every continuation
+    line of a multi-line rule or note, so a recorded note cannot forge
+    another item. A prompt whose fields each fit on one line stays
+    byte-identical.
+  - `--stats` reads the firing log once, through the reader of the
+    console's Stats view, and measures pin outcomes as the proposal
+    health does. The output, the error texts, and the order of the
+    errors stay the same. One difference: `most surfaced` rows that tie
+    on matches, deliveries, and the last firing time now print by region,
+    then symptom; before, their order could change from one run to the
+    next.
+
+  One rule stays: in a copied checkout whose index still records the
+  original repository, these commands read and write the files of that
+  recorded root, as before. The console's Pins view refuses retarget and
+  prune there; the root rule of the CLI is an open decision.
 - **Console pin maintenance (`seamark tui`, experimental).** Lessons
   gains Pins (`m`): the entries of `.seamark/lessons.yaml` in file order,
   each linked to the proposal ledger by rule and region set or marked as
@@ -89,25 +247,17 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   repository, Pins turns retarget and prune off and names both pin
   files. Proposals adds the superseded state. Pins, maintenance, and
   extraction link a proposal to a pin by its rule and stored region
-  fields (`reviews.ProposalKey`), the key that `seamark lessons` uses,
-  so the console and the CLI name the same pin. A proposal whose stored
+  fields, the key that `seamark lessons` uses. A proposal whose stored
   region fields disagree reads `ambiguous row` in Pins, also without an
   entry of its key, and both apply and the ledger-only "record as
-  applied" (`c`) refuse it. The new
-  `internal/pinfile`, `internal/maintain`, and `internal/yamledit`
-  packages serve the console; `seamark lessons --prune`, `--retarget`, and
-  `--extract-triggers` keep their output, pinned by new golden tests.
-  `--extract-triggers` now runs on the console's extraction plan and
-  execute steps with the store checks and the guarded save turned off,
-  so the proposals it asks, its output, and its ledger writes do not
-  change. One prompt change applies to the CLI and the console: the
-  extraction prompt indents every continuation line of a multi-line rule
-  or note, so a recorded note cannot forge another item. A prompt whose
-  fields each fit on one line stays byte-identical. See
+  applied" (`c`) refuse it. The new `internal/pinfile`,
+  `internal/maintain`, and `internal/yamledit` packages serve the
+  console and `seamark lessons` (see the entry above). See
   [docs/tui.md](docs/tui.md).
 - **Guarded writes refuse a file that this user cannot write.** `seamark
-  init`, the console setup, the Settings editor, and the console pin
-  writes replace a file through a temporary file and a rename. A rename
+  init`, the console setup, the Settings editor, and the pin writes of
+  the console and of `seamark lessons` replace a file through a
+  temporary file and a rename. A rename
   needs write access to the directory only, so a file that an access
   control list protected was replaced and lost the list. The setup
   engine now asks the system whether this user can write the file, and
@@ -136,9 +286,10 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   unknown keys, and the file mode; a custom `agent.argv` stays
   read-only, and a quit with an unsaved draft asks first. Overview and
   Doctor link blocked steps to Evidence, Run, and the exact Settings
-  group. The shared `internal/learning` and `internal/settings` services
-  and the plan and execute steps of `internal/distill` serve the
-  console; `seamark index --fixes-only`, `seamark index --reviews`, and
+  group. The console-only `internal/learning` and `internal/settings`
+  services serve the console on top of the plan and execute steps of
+  `internal/distill`; the CLI imports neither service.
+  `seamark index --fixes-only`, `seamark index --reviews`, and
   `seamark lessons --distill` keep their output, pinned by new golden
   tests, except for the dry-run fix below. See [docs/tui.md](docs/tui.md).
 - **`lessons --distill --dry-run` now previews the real run.** A real
@@ -165,7 +316,7 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   duplicate-producing retry. Noninteractive runs print the plain
   commands. The shared setup scaffold, proposal decisions, and delivery
   statistics moved into `internal/scaffold`, `internal/proposals`, and
-  `internal/lessonstats`; CLI output is unchanged.
+  `internal/lessonstats`; that move left the CLI output unchanged.
 
 ## v0.7.0 — 2026-10-03
 

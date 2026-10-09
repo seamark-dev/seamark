@@ -119,10 +119,7 @@ func TestRecoveryIsRefusedWithoutProof(t *testing.T) {
 		},
 		{
 			name: "the row changed", reason: "p1: " + reasonRowChanged,
-			mutate: func(t *testing.T, f *fixture) {
-				_, err := f.st.SupersedeProposals([]int64{1})
-				require.NoError(t, err)
-			},
+			mutate: func(t *testing.T, f *fixture) { f.supersede(1) },
 		},
 		{
 			name: "the pin file cannot be read", reason: reasonFileUnread,
@@ -187,11 +184,8 @@ func TestRecoveryChecksEachItemOnItsOwn(t *testing.T) {
 			reasons: []string{reasonTargetGone, ""},
 		},
 		{
-			name: "only the guard-empty-datasets row changed",
-			mutate: func(t *testing.T, f *fixture) {
-				_, err := f.st.SupersedeProposals([]int64{1})
-				require.NoError(t, err)
-			},
+			name:    "only the guard-empty-datasets row changed",
+			mutate:  func(t *testing.T, f *fixture) { f.supersede(1) },
 			reasons: []string{"", "p1: " + reasonRowChanged},
 		},
 	}

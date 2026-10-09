@@ -622,21 +622,21 @@ func (p *propView) runChip() string {
 // runMessage explains a run filter without a visible row. A ledger older
 // than the run cannot show the proposals yet. Else the message counts
 // the states of the run proposals and names the key that clears it.
-func (p *propView) runMessage(l *proposals.Ledger) propMessage {
+func (p *propView) runMessage(l *proposals.Ledger) paneMessage {
 	t := p.st.theme
 	g := t.Glyphs
 	label := oneLine(p.run.label)
 
 	if p.runBehind() {
 		if sec := &p.st.ledger; !sec.loading && sec.err != nil {
-			return propMessage{
+			return paneMessage{
 				head: []string{t.Attention.Render(g.Warn) + " " + t.Title.Render("The ledger is older than "+label)},
 				body: "The last ledger read failed: " + errText(sec.err) + ". Press r to read it again. " +
 					"Press esc to show every pending proposal.",
 			}
 		}
 
-		return propMessage{
+		return paneMessage{
 			head: []string{t.Accent.Render(t.spinnerFrame(p.st.tick)) + " " +
 				t.Title.Render("Reading the proposals of "+label+g.Ellipsis)},
 			body: "The ledger snapshot is older than the run, so it cannot show them yet. Press r if this stays.",
@@ -671,7 +671,7 @@ func (p *propView) runMessage(l *proposals.Ledger) propMessage {
 		facts = append(facts, itoa(missing)+" no longer in the ledger")
 	}
 
-	return propMessage{
+	return paneMessage{
 		head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No pending proposals from "+label)},
 		body: "Of its " + propPlural(len(p.run.ids), "proposal", "proposals") + ", " + strings.Join(facts, ", ") +
 			". Press esc to show every pending proposal.",

@@ -1253,9 +1253,9 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 
 // helpCommands are the plain routes of the console actions, in reading
 // order. Related routes stand in pairs, because the wide help shows two
-// routes on one row. The CLI forms of retarget, prune and trigger
-// extraction act differently from the console; docs/tui.md names the
-// differences.
+// routes on one row. Each write command shares the engine of its console
+// action. The CLI trigger extraction asks more proposals than the
+// console; docs/tui.md names the difference.
 var helpCommands = []string{
 	"seamark doctor", "seamark status",
 	"seamark index", "seamark index --fixes-only",

@@ -371,6 +371,11 @@ excerpt — a preflight discloses the cost, `--dry-run` stops there).
 Every answer records the semantic question version, "no trigger" included, so
 re-running is free. A changed question re-asks legacy negative answers once
 without disturbing existing positive trigger paths.
+Each answer saves its paths, its stamp, and a pending scope change together,
+and only while the proposal is still as the run read it. A proposal that
+another command applies, dismisses, retargets, or answers meanwhile keeps
+its state: stderr names it (`conflict: p1 changed during the agent call — …`),
+the run sends no further batch, and re-running resumes.
 Pending proposals adopt their verified trigger scopes in place; applied pins
 only store the triggers and surface a `regions now:` drift line —
 delivery of an installed pin never changes without an explicit
@@ -422,14 +427,22 @@ the recomputed regions (lessons.yaml and the ledger together)
 
 `--retarget` is the upgrade path for pins distilled before region sets
 or trigger extraction existed. "Regions now" is one shared recompute:
-verified trigger scopes when available, evidence coverage otherwise. On
-any ordinary failure the two halves move **together or not at all**: the ledger updates in one transaction, and if either the
-file write or that transaction fails, lessons.yaml is restored to its
-original bytes. The one exception is a hard crash in the narrow window
-between the file write and the ledger transaction — the file can then
-be ahead of the ledger, and the next `--retarget` detects exactly that
-state and repairs it with a ledger-only update. Re-running is always
-safe: "regions already current" is the steady state.
+verified trigger scopes when available, evidence coverage otherwise.
+Retarget runs on the engine of the console's Pins view: it changes only
+the `region` and `regions` lines of each entry, in place, so the rule
+spelling, a hand-edited note, comments, unknown keys, and the position
+of the entry stay. The file is replaced atomically first; the ledger
+rows then update in one transaction that checks each row again. When
+the ledger update fails, seamark puts the earlier file back, but only
+while the file still holds exactly the bytes that it wrote, and the
+error says `lessons.yaml restored` only after that restore succeeded.
+Otherwise the error names the state and the way back: undo the change
+(`git diff .seamark/lessons.yaml` shows it) and run the same command
+again. A hard crash between the two writes leaves the file ahead of the
+ledger. Seamark does not guess that the moved pin is its own, so the
+next `--retarget` reports the proposal as not found; restore the earlier
+lines and run it again. Re-running is otherwise safe: "regions already
+current" is the steady state.
 
 The same ledger also flags near-duplicate clusters among applied pins
 and hands you the `--prune` command to retire the redundant entries —
@@ -446,19 +459,44 @@ only after tree and evidence/history validation. Nothing reaches
 through an explicit `--apply` of explicit ids. Even then, seamark edits
 the file itself only if `config.yaml` opts in (`distill: {write: true}`)
 — otherwise apply prints the pin block for you to paste. Applied entries
-are inserted under your existing `pin:` section with provenance
-comments; everything hand-written stays byte-for-byte. Apply never adds
+are inserted at the head of your existing `pin:` list, at the
+indentation of that list, with provenance comments; everything
+hand-written stays byte-for-byte. Without a `pin:` section, apply adds
+one at the end of the file (before a `...` end marker). The write uses
+the console's pin file editor: it proves the result first (the file
+still loads, every other setting and pin is unchanged), replaces the
+file atomically, keeps its mode and its CRLF line breaks, and refuses a
+symbolic link, a read-only file, a flow-style `pin: []`, more than one
+YAML document, and mixed line breaks, with the reason. Apply never adds
 a second entry with the same rule and region set: a proposal whose pin
 the file already holds is recorded as applied without a write (left out
 of the printed block). Apply refuses two selected proposals with one
 rule and region set (`p1 and p2 share rule and regions; apply one and
 dismiss the other`), because the console's Pins view blocks a pin that
-two applied proposals record. It also refuses a proposal whose stored
+two applied proposals record. For the same reason, it refuses a
+proposal whose rule and region set an applied proposal already has
+(`p1 is already applied with this rule and regions; dismiss p2`), also
+when the file holds that pin. So the record without a write covers
+only a pin that no applied proposal records, for example a
+hand-written one. It also refuses a proposal whose stored
 region fields disagree: the pin that it would write has other regions
 than the stored ones, so no reader links that pin to it. `--prune` and
-`--retarget` obey the same write gate, remove or replace each entry
-with its provenance comment and nothing else, and refuse to write at
-all unless the result still parses with every other pin intact.
+`--retarget` obey the same write gate and use the same editor. Prune
+removes the selected entry and the seamark provenance comment that
+names its proposal, and nothing else; retarget changes only the region
+keys of the entry. Both leave a proposal that they cannot change as it
+is and print why: a pin not in the file, two entries with the same rule
+and region set (remove the duplicate by hand first), stored region
+fields that disagree, or a target rule and region set that another pin
+or proposal already has. They refuse a symbolic link and a read-only
+file at the pin file path, as apply does. They leave every pin of a
+file that the editor blocks as a whole, for example a file with more
+than one YAML document or, unlike apply, a file with CRLF line breaks
+(the layout table in [tui.md](tui.md) lists these files). With the
+write gate off, they still print the change to make by hand for such a
+file, without a diff. Their last line then names the refusal that the
+gate cannot lift, also for a link or a read-only file. They write only
+a result that still loads with every other pin intact.
 
 ## The moment of change: hook, change_set, check
 

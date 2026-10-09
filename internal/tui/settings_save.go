@@ -21,14 +21,11 @@ import (
 // settingsFlow is the state of one preview and save. The embedded flow
 // holds the stage and the previewed plan. flowClosed shows no modal, and
 // flowResult explains a save that wrote nothing. A successful save
-// closes the flow and shows a toast instead.
+// closes the flow and shows a toast instead. The request generation
+// lives on the screen, because each review is a new flow value.
 type settingsFlow struct {
 	previewFlow[settings.Plan]
 
-	// seq identifies the request. A plan that arrives after esc has an
-	// old seq, and the screen drops it. A new flow value takes the seq
-	// of the old one, so the tickets keep growing.
-	seq   generation
 	group settings.Group
 	// res and saveErr are the outcome of a save that wrote nothing.
 	res     settings.Result
@@ -110,9 +107,9 @@ func (s *settingsScreen) review(g settings.Group) tea.Cmd {
 
 	snap, edits := s.snap(), s.groupEdits(g)
 	s.excludeErrs = nil
-	s.flow = settingsFlow{seq: s.flow.seq, group: g}
+	s.flow = settingsFlow{group: g}
 	s.flow.startRead()
-	seq := s.flow.seq.start()
+	seq := s.seq.start()
 
 	var svc Settings = s.st.svc
 
@@ -126,7 +123,7 @@ func (s *settingsScreen) review(g settings.Group) tea.Cmd {
 // planned opens the preview of a plan. A stale file reads again at
 // once, so the next s plans against the file as it is now.
 func (s *settingsScreen) planned(msg settingsPlannedMsg) tea.Cmd {
-	if !s.flow.readDone(s.flow.seq.current(msg.seq), msg.plan, msg.err, "the planner returned no plan") {
+	if !s.flow.readDone(s.seq.current(msg.seq), msg.plan, msg.err, "the planner returned no plan") {
 		return nil
 	}
 
@@ -198,7 +195,7 @@ func (s *settingsScreen) saveDone(msg settingsSaveDoneMsg) tea.Cmd {
 
 	if err == nil {
 		s.dropDraft(msg.group)
-		s.flow = settingsFlow{seq: s.flow.seq}
+		s.flow = settingsFlow{}
 		s.saved = &settingsSaveNote{group: msg.group, at: msg.at}
 
 		// Every save changes the index fingerprint, so the index and
@@ -267,8 +264,8 @@ func settingsSavedText(p *settings.Plan) string {
 
 // closeFlow closes the preview or the result. Nothing is written.
 func (s *settingsScreen) closeFlow() {
-	s.flow = settingsFlow{seq: s.flow.seq}
-	s.flow.seq.cancel()
+	s.flow = settingsFlow{}
+	s.seq.cancel()
 }
 
 // flowKey handles the keys of the preview and the result.

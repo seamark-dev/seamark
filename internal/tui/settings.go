@@ -113,6 +113,10 @@ type settingsScreen struct {
 
 	// flow is the preview and save of one group.
 	flow settingsFlow
+	// seq drops the plan of a review that the user closed. A plan that
+	// arrives after esc has an old ticket. The field lives here, so a new
+	// flow value never resets the tickets.
+	seq generation
 	// prompt is the open question about a draft, or nil.
 	prompt *settingsPrompt
 	// passLeave lets the next departure through the leave guard, after

@@ -16,6 +16,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // areaFindings builds two findings per directory. Every body holds words
@@ -93,7 +94,7 @@ func fileDigest(t *testing.T, path string) [32]byte {
 
 func TestNewPlanWritesNothingAndWorksReadOnly(t *testing.T) {
 	st, path := openFileStore(t, threeAreas)
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "gone", Rule: "stale-pending", Note: "Stale guidance.",
 		Members: []int64{11, 12}, Status: model.ProposalProposed,
 	}))
@@ -122,7 +123,7 @@ func TestNewPlanMatchesTheRealRunSelection(t *testing.T) {
 	// selects what a real run sends (api/x). A plan that kept the stale
 	// row would select web instead.
 	st := openSeeded(t, []model.Finding{threeAreas[0], threeAreas[1], threeAreas[4], threeAreas[5]})
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "gone", Rule: "stale-pending", Note: "Stale guidance.",
 		Members: []int64{11, 12}, Status: model.ProposalProposed,
 	}))
@@ -160,7 +161,7 @@ func TestNewPlanReportsSkippedDeferredAndCorpus(t *testing.T) {
 	require.Len(t, all.Groups, 3)
 
 	// Mark the first group as read, then plan one group only.
-	require.NoError(t, st.MarkDistilled(all.Groups[0].Group.Signature, "", 1))
+	require.NoError(t, storetest.MarkDistilled(st, all.Groups[0].Group.Signature, "", 1))
 
 	p, err := NewPlan(st, NewLexicalGrouper(), PlanOptions{Limit: 1})
 	require.NoError(t, err)
@@ -191,11 +192,11 @@ func TestNewPlanRegionalCleanupMatchesTheRegionalPrune(t *testing.T) {
 
 	// Evidence outside the corpus keeps a proposal; evidence wholly
 	// inside it with a vanished group does not.
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "partial", Rule: "partial-rule", Note: "n", Members: []int64{1, 90},
 		Status: model.ProposalProposed,
 	}))
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "gone", Rule: "stale-rule", Note: "n", Members: []int64{1, 2},
 		Status: model.ProposalProposed,
 	}))
@@ -241,20 +242,24 @@ func TestPlanRevalidateNamesEachChangedInput(t *testing.T) {
 	require.NoError(t, st.ReplaceLessons(nil, edited))
 	require.NoError(t, web.Revalidate(st))
 
-	// A decision or a new proposal changes the ledger.
+	// A decision or a new proposal changes the ledger. The seed also
+	// records the fixture mark. That mark exists before the plan, so the
+	// seed changes the ledger only, and the error names no other input.
+	require.NoError(t, storetest.MarkDistilled(st, storetest.FixtureMark, "", 0))
+
 	p = plan("")
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "other", Rule: "new-rule", Note: "n", Members: []int64{21, 22},
 		Status: model.ProposalDismissed,
 	}))
 
 	err = p.Revalidate(st)
 	require.ErrorIs(t, err, ErrStale)
-	assert.Contains(t, err.Error(), "the proposal ledger changed")
+	assert.EqualError(t, err, ErrStale.Error()+": the proposal ledger changed")
 
 	// Another writer records a group, and the corpus changes as well.
 	p = plan("")
-	require.NoError(t, st.MarkDistilled(p.Groups[0].Group.Signature, "", 1))
+	require.NoError(t, storetest.MarkDistilled(st, p.Groups[0].Group.Signature, "", 1))
 	require.NoError(t, st.ReplaceLessons(nil, findings))
 
 	err = p.Revalidate(st)

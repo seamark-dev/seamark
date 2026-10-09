@@ -134,11 +134,11 @@ func (r *extRecord) facts(compact bool) string {
 	case r.step == stepPreparing:
 		facts = append(facts, fact{"", "planning" + t.Glyphs.Ellipsis})
 	case r.step == stepRunning:
-		facts = append(facts, fact{"started", distClock(r.run.started)})
+		facts = append(facts, fact{"started", agentClock(r.run.started)})
 	case r.step == stepResult:
-		facts = append(facts, fact{"finished", distClock(r.run.ended)})
+		facts = append(facts, fact{"finished", agentClock(r.run.ended)})
 	case r.prev.preview != nil && !r.prev.preview.PlannedAt.IsZero():
-		facts = append(facts, fact{"planned", distClock(r.prev.preview.PlannedAt)})
+		facts = append(facts, fact{"planned", agentClock(r.prev.preview.PlannedAt)})
 	}
 
 	parts := make([]string, 0, len(facts))
@@ -179,7 +179,7 @@ func (r *extRecord) previewView(w, h int) string {
 	}
 
 	if r.st.wide() {
-		leftW := max(34, setupSplit(w, distPlanW))
+		leftW := max(34, setupSplit(w, agentPlanW))
 
 		return hjoin(1, r.planBox(leftW, h, pl.planFocus), r.itemsBox(w-leftW-1, h, !pl.planFocus, false))
 	}
@@ -332,7 +332,7 @@ func (r *extRecord) planFacts(w int) []string {
 		unit = " proposal"
 	}
 
-	agent := distAgentText(t, p.Invocation.Argv, distAgentKind(p.Invocation.Name, !r.prev.preset), 0)
+	agent := agentText(t, p.Invocation.Argv, agentKind(p.Invocation.Name, !r.prev.preset), 0)
 
 	selected := t.Body.Render(itoa(len(pl.IDs())) + " eligible of " + itoa(r.selected()))
 	if r.cursor {
@@ -344,7 +344,7 @@ func (r *extRecord) planFacts(w int) []string {
 		{"Selected", selected},
 		{"Batches", t.Body.Render(propPlural(len(pl.Batches), "batch", "batches") + ": " + strings.Join(sizes, " + ") +
 			unit)},
-		{"Prompt", t.Body.Render(distTokens(pl.Preflight.PromptChars)+" tokens") + " " + t.Faint.Render("(estimated)")},
+		{"Prompt", t.Body.Render(agentTokens(pl.Preflight.PromptChars)+" tokens") + " " + t.Faint.Render("(estimated)")},
 		{"Agent", agent},
 		{"Runs in", runsInText(t, p.Invocation.Dir, p.WorkDir, p.RepoRoot)},
 	}
@@ -674,7 +674,7 @@ func (r *extRecord) itemLines(w int, focused bool) (lines []string, keep [2]int)
 		head := extKeepFrom(bi, len(lines))
 
 		lines = append(lines, integHeading(t, "Batch "+itoa(bi+1))+t.Faint.Render("  "+
-			propPlural(len(b.Proposals), "proposal", "proposals")+countSep(t)+distTokens(b.PromptChars)+
+			propPlural(len(b.Proposals), "proposal", "proposals")+countSep(t)+agentTokens(b.PromptChars)+
 			" tokens (estimated)"))
 
 		for j, pr := range b.Proposals {
@@ -1423,7 +1423,7 @@ func (r *extRecord) phases() []phaseRow {
 	case run.checked:
 		check.state, check.note = phaseDone, "no change since the preview"
 	case run.stopped:
-		check.state, check.note = phaseStopped, distStopWords(run.stopWhy)
+		check.state, check.note = phaseStopped, agentStopWords(run.stopWhy)
 	}
 
 	ask := phaseRow{label: "Ask the agent", note: itoa(run.finished) + " of " + propPlural(n, "batch", "batches") +
@@ -1548,11 +1548,11 @@ func (r *extRecord) usageText() string {
 	case sent == 0 && pending == 0:
 		return t.Muted.Render("no agent traffic yet")
 	case sent == 0:
-		return t.Body.Render(distTokens(pending)+" tokens sent to batch "+itoa(k+1)) + " " +
+		return t.Body.Render(agentTokens(pending)+" tokens sent to batch "+itoa(k+1)) + " " +
 			t.Faint.Render("(estimated)") + t.Muted.Render("; reply pending")
 	}
 
-	text := t.Body.Render(distTokens(sent+pending)+" tokens sent"+sep+distTokens(back)+" received") + " " +
+	text := t.Body.Render(agentTokens(sent+pending)+" tokens sent"+sep+agentTokens(back)+" received") + " " +
 		t.Faint.Render("(estimated)")
 
 	if pending > 0 {
@@ -1644,7 +1644,7 @@ func (r *extRecord) happened() [][2]string {
 	case r.run.internal:
 		rows = append(rows, [2]string{"Stop", t.Failure.Render("internal error")})
 	case x.Stop != distill.StopNone && !extLastBatchConflict(x, c):
-		rows = append(rows, [2]string{"Stop", t.Attention.Render(distStopWords(x.Stop))})
+		rows = append(rows, [2]string{"Stop", t.Attention.Render(agentStopWords(x.Stop))})
 	}
 
 	return rows
@@ -1726,7 +1726,7 @@ func (r *extRecord) byOutcome() [][2]string {
 	if len(kinds) > 0 {
 		parts := make([]string, len(kinds))
 		for i, k := range kinds {
-			parts[i] = propIDList(failed[k]) + " (" + distFailWords(k) + ")"
+			parts[i] = propIDList(failed[k]) + " (" + agentFailWords(k) + ")"
 		}
 
 		rows = append(rows, [2]string{"Failed", t.Body.Render(strings.Join(parts, "; "))})
@@ -1830,10 +1830,10 @@ func (r *extRecord) runItemLines(w int, focused bool) (lines []string, keep [2]i
 		stateW = max(stateW, width(extStatusWord(r.itemStatus(item)))+1)
 	}
 
-	outW := max(extOutcomeMin, w-2-distGlyphW-idW-stateW)
+	outW := max(extOutcomeMin, w-2-agentGlyphW-idW-stateW)
 
 	row := func(marker, glyph, id, state, outcome string) string {
-		return integRow(t, cell(marker, 2), cell(glyph, distGlyphW), cell(id, idW), cell(state, stateW),
+		return integRow(t, cell(marker, 2), cell(glyph, agentGlyphW), cell(id, idW), cell(state, stateW),
 			cell(outcome, outW))
 	}
 
@@ -1910,7 +1910,7 @@ func (r *extRecord) batchState(bi int, b distill.ExtractBatchOutcome) string {
 	case b.Status == distill.BatchCompleted:
 		return sep + t.Success.Render("completed")
 	case b.Status == distill.BatchFailed:
-		return sep + t.Failure.Render("failed: "+distFailWords(b.Failure))
+		return sep + t.Failure.Render("failed: "+agentFailWords(b.Failure))
 	case b.Status == distill.BatchCancelled:
 		return sep + t.Attention.Render("cancelled")
 	case r.step == stepRunning && bi == r.run.sending:
@@ -1957,7 +1957,7 @@ func (r *extRecord) outcomeCell(bi int, item distill.ExtractItemOutcome) (glyph,
 	case distill.ExtractConflict:
 		return t.Attention.Render(g.Warn), t.Attention.Render("conflict: not saved"), ""
 	case distill.ExtractFailed:
-		return t.Failure.Render(g.Fail), t.Failure.Render("failed: " + distFailWords(item.Failure)), ""
+		return t.Failure.Render(g.Fail), t.Failure.Render("failed: " + agentFailWords(item.Failure)), ""
 	case distill.ExtractCancelled:
 		return t.Attention.Render(g.Warn), t.Attention.Render("cancelled"), ""
 	}
@@ -2110,7 +2110,7 @@ func (r *extRecord) itemNote(bi int, item distill.ExtractItemOutcome) string {
 
 		return "conflict: " + extStaleText(item.Err) + ". A new preview decides whether it can be asked."
 	case distill.ExtractFailed:
-		text := "failed: " + distFailWords(item.Failure) + ": " + extFailText(item.Err) + ". "
+		text := "failed: " + agentFailWords(item.Failure) + ": " + extFailText(item.Err) + ". "
 		if closed {
 			return text + closedText
 		}
@@ -2295,7 +2295,7 @@ func extBatchWords(b distill.ExtractBatchOutcome) string {
 
 		return text
 	case distill.BatchFailed:
-		return "failed: " + distFailWords(b.Failure)
+		return "failed: " + agentFailWords(b.Failure)
 	case distill.BatchCancelled:
 		return "cancelled"
 	default:

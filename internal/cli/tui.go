@@ -21,9 +21,12 @@ import (
 var errNotInteractive = errors.New("seamark tui needs an interactive terminal")
 
 // tuiGuidance lists the plain commands behind every console action. The
-// CLI forms of retarget, prune and trigger extraction act differently
-// from the console, so the text calls them the closest actions and names
-// the difference that can lose a hand edit.
+// CLI selects by proposal ID, and its trigger extraction asks every
+// eligible proposal. So the text calls the commands the closest actions.
+// Each write command shares the engine of its console action. Apply and
+// dismiss share the decision flow. Retarget and prune share the pin
+// maintenance. The trigger extraction shares the executor and the
+// guarded save. So the text names no other difference.
 const tuiGuidance = `seamark tui is an interactive, full-screen console (experimental).
 This session has no interactive terminal, so it did not start.
 
@@ -43,9 +46,6 @@ The same information and the closest actions are available as plain commands:
   seamark lessons --extract-triggers --dry-run  plan a trigger backfill of every
                                       eligible proposal (drop --dry-run to run it)
   seamark lessons --stats             lesson delivery statistics
-
-The CLI retarget rewrites the whole entry from its proposal; the console
-changes only the regions. See docs/tui.md.
 
 Settings live in .seamark/config.yaml: agent.cli, distill.write,
 reviews.window_days, index.generated, and index.exclude.

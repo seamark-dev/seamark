@@ -515,7 +515,7 @@ func TestExtractUsageCountsThePromptThatIsWithTheAgent(t *testing.T) {
 
 	extSend(h, rec, extStartedEv(rec, 0))
 
-	first := distTokens(p.Plan.Batches[0].PromptChars)
+	first := agentTokens(p.Plan.Batches[0].PromptChars)
 	assert.Equal(t, first+" tokens sent to batch 1 (estimated); reply pending", rec.usageText())
 	assert.NotContains(t, h.view(), "no agent traffic yet")
 
@@ -525,8 +525,8 @@ func TestExtractUsageCountsThePromptThatIsWithTheAgent(t *testing.T) {
 	extSend(h, rec, extDoneEv(rec, 0, b))
 	extSend(h, rec, extStartedEv(rec, 1))
 
-	sent := distTokens(b.PromptChars + p.Plan.Batches[1].PromptChars)
-	assert.Equal(t, sent+" tokens sent · "+distTokens(b.ReplyChars)+" received (estimated); batch 2 reply pending",
+	sent := agentTokens(b.PromptChars + p.Plan.Batches[1].PromptChars)
+	assert.Equal(t, sent+" tokens sent · "+agentTokens(b.ReplyChars)+" received (estimated); batch 2 reply pending",
 		rec.usageText())
 }
 

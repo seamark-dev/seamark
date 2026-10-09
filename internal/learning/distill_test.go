@@ -23,6 +23,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -207,7 +208,7 @@ func distSeed(t *testing.T, ws workspace.Workspace, ps ...model.Proposal) {
 	defer func() { _ = st.Close() }()
 
 	for i := range ps {
-		require.NoError(t, st.InsertProposal(&ps[i]))
+		require.NoError(t, storetest.InsertProposal(st, &ps[i]))
 	}
 }
 
@@ -361,7 +362,7 @@ func TestNoOpAndCleanupOnlyPreviewsStartNoAgent(t *testing.T) {
 
 	st, err := store.Open(ws.DBPath)
 	require.NoError(t, err)
-	require.NoError(t, st.MarkDistilled(first.Plan.Groups[0].Group.Signature, "", 1))
+	require.NoError(t, storetest.MarkDistilled(st, first.Plan.Groups[0].Group.Signature, "", 1))
 	require.NoError(t, st.Close())
 
 	p := distPlan(t, ws, DistillRequest{})
@@ -499,7 +500,7 @@ func TestRunDistillRejectsChangedInputs(t *testing.T) {
 		{"signatures", func(t *testing.T, ws workspace.Workspace, p *DistillPreview) workspace.Workspace {
 			st, err := store.Open(ws.DBPath)
 			require.NoError(t, err)
-			require.NoError(t, st.MarkDistilled(p.Plan.Groups[1].Group.Signature, "", 1))
+			require.NoError(t, storetest.MarkDistilled(st, p.Plan.Groups[1].Group.Signature, "", 1))
 			require.NoError(t, st.Close())
 
 			return ws
@@ -528,9 +529,23 @@ func TestRunDistillRejectsChangedInputs(t *testing.T) {
 		}, "the workspace database changed"},
 	}
 
+	// The plan names each changed input of the store snapshot. Each case
+	// changes one input, so the error names no other one.
+	snapshot := []string{"the findings in scope changed", "the proposal ledger changed",
+		"the distilled signatures changed"}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ws, marker := distWorkspace(t, distAreaFindings("a", "b"))
+
+			// The seed of the decisions case also records the fixture
+			// mark. That mark exists before the plan, so the seed changes
+			// the ledger only.
+			st, err := store.Open(ws.DBPath)
+			require.NoError(t, err)
+			require.NoError(t, storetest.MarkDistilled(st, storetest.FixtureMark, "", 0))
+			require.NoError(t, st.Close())
+
 			p := distPlan(t, ws, DistillRequest{})
 
 			runWS := tc.change(t, ws, p)
@@ -539,6 +554,12 @@ func TestRunDistillRejectsChangedInputs(t *testing.T) {
 			x, err := RunDistill(context.Background(), runWS, nil, p, agent, nil)
 			require.ErrorIs(t, err, distill.ErrStale)
 			assert.Contains(t, err.Error(), tc.reason)
+
+			for _, other := range snapshot {
+				if other != tc.reason {
+					assert.NotContains(t, err.Error(), other)
+				}
+			}
 			assert.Nil(t, x, "a refused run returns no execution")
 			assert.Empty(t, agent.called(), "execution rejects changed intent before any call")
 			assert.NoFileExists(t, marker)

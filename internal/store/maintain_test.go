@@ -320,8 +320,7 @@ func TestGuardedWritesMissChangedRows(t *testing.T) {
 		mutate func(t *testing.T, s *Store, p model.Proposal)
 	}{
 		{"superseded by another writer", func(t *testing.T, s *Store, p model.Proposal) {
-			_, err := s.SupersedeProposals([]int64{p.ID})
-			require.NoError(t, err)
+			require.NoError(t, s.SupersedeExact([]RowGuard{NewRowGuard(p)}))
 		}},
 		{"dismissed", func(t *testing.T, s *Store, p model.Proposal) {
 			execSQL(t, s, `UPDATE proposal SET status = 'dismissed' WHERE id = ?`, p.ID)
@@ -329,9 +328,10 @@ func TestGuardedWritesMissChangedRows(t *testing.T) {
 		{"pending again", func(t *testing.T, s *Store, p model.Proposal) {
 			execSQL(t, s, `UPDATE proposal SET status = 'proposed' WHERE id = ?`, p.ID)
 		}},
-		{"retargeted by the CLI", func(t *testing.T, s *Store, p model.Proposal) {
-			p.Region, p.Regions = "scripts", []string{"scripts"}
-			require.NoError(t, s.UpdateProposalRegionsBatch([]model.Proposal{p}))
+		{"retargeted by another writer", func(t *testing.T, s *Store, p model.Proposal) {
+			require.NoError(t, s.RetargetApplied([]RegionChange{
+				{Guard: NewRowGuard(p), Region: "scripts", Regions: []string{"scripts"}},
+			}))
 		}},
 		{"region field changed alone", func(t *testing.T, s *Store, p model.Proposal) {
 			execSQL(t, s, `UPDATE proposal SET region = 'web' WHERE id = ?`, p.ID)
@@ -807,10 +807,17 @@ func TestSaveTriggerAnswerReasksAnObsoleteNegative(t *testing.T) {
 	s := openTestStore(t)
 
 	row := ledgerProposal(t, s, "row", model.ProposalApplied, "api")
-	require.NoError(t, s.UpdateProposalTriggers(row.ID, nil, 100, 1))
+
+	old := answerFor(row)
+	old.CheckedAt, old.Version = 100, 1
+
+	saved, err := s.SaveTriggerAnswer(old)
+	require.NoError(t, err)
+	require.True(t, saved)
+
 	row = proposalRow(t, s, row.ID)
 
-	saved, err := s.SaveTriggerAnswer(answerFor(row, "api/a.go"))
+	saved, err = s.SaveTriggerAnswer(answerFor(row, "api/a.go"))
 	require.NoError(t, err)
 	require.True(t, saved)
 
@@ -837,8 +844,7 @@ func TestSaveTriggerAnswerRefusesChangedRows(t *testing.T) {
 			require.NoError(t, err)
 		}},
 		{"superseded during the call", model.ProposalApplied, func(t *testing.T, s *Store, p model.Proposal) {
-			_, err := s.SupersedeProposals([]int64{p.ID})
-			require.NoError(t, err)
+			require.NoError(t, s.SupersedeExact([]RowGuard{NewRowGuard(p)}))
 		}},
 		{"deleted by a cleanup", model.ProposalProposed, func(t *testing.T, s *Store, p model.Proposal) {
 			_, err := s.DeletePendingProposals([]int64{p.ID})
@@ -851,16 +857,20 @@ func TestSaveTriggerAnswerRefusesChangedRows(t *testing.T) {
 			require.Equal(t, p.ID, reused.ID)
 		}},
 		{"pending regions changed", model.ProposalProposed, func(t *testing.T, s *Store, p model.Proposal) {
-			p.Region, p.Regions = "docs", []string{"docs"}
-			_, err := s.UpdateProposalRegionsIfPending(p)
-			require.NoError(t, err)
+			execSQL(t, s, `UPDATE proposal SET region = 'docs', regions = '["docs"]' WHERE id = ?`, p.ID)
 		}},
 		{"applied row retargeted", model.ProposalApplied, func(t *testing.T, s *Store, p model.Proposal) {
-			p.Region, p.Regions = "docs", []string{"docs"}
-			require.NoError(t, s.UpdateProposalRegionsBatch([]model.Proposal{p}))
+			require.NoError(t, s.RetargetApplied([]RegionChange{
+				{Guard: NewRowGuard(p), Region: "docs", Regions: []string{"docs"}},
+			}))
 		}},
 		{"stamped by another extraction", model.ProposalProposed, func(t *testing.T, s *Store, p model.Proposal) {
-			require.NoError(t, s.UpdateProposalTriggers(p.ID, nil, 50, 3))
+			other := answerFor(p)
+			other.CheckedAt = 50
+
+			saved, err := s.SaveTriggerAnswer(other)
+			require.NoError(t, err)
+			require.True(t, saved)
 		}},
 		{"prompt version changed alone", model.ProposalApplied, func(t *testing.T, s *Store, p model.Proposal) {
 			execSQL(t, s, `UPDATE proposal SET trigger_prompt_version = 2 WHERE id = ?`, p.ID)

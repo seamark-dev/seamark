@@ -22,7 +22,8 @@ import (
 // path. The CLI calls ExtractTriggers, which freezes the rows that the
 // CLI selected and runs ExecuteExtract in one call. So both paths share
 // the batching, the prompt builder, the reply parser, the path
-// validation and the executor. The CLI keeps its own selection (D-1).
+// validation and the executor. The CLI keeps its own, wider selection
+// until a separate decision moves it to the console selection.
 
 // ErrExtractRoot reports a plan without a workspace root. The existence
 // rung needs the root: without it no named path is verified, and every
@@ -129,7 +130,8 @@ type ExtractPlan struct {
 	Snapshot   ExtractSnapshot
 	// Preflight is the disclosure total. Its BodyCap is 0, because the
 	// plan reads finding metadata only and sends no finding text. The
-	// CLI disclosure of ExtractTriggers keeps its excerpt cap (D-1).
+	// CLI disclosure of ExtractTriggers keeps its excerpt cap, because
+	// its goldens pin that text (A0 defect D4).
 	Preflight ExtractPreflight
 	PlannedAt time.Time
 }

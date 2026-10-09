@@ -1118,9 +1118,10 @@ func (p *pinsView) triggerValues(pin *maintain.Pin, tr maintain.TriggerReading, 
 
 // pinTriggerFact words a confirmed trigger that sets no region, from the
 // fields of distill.TriggerFact. The shared BlockedLine always ends with
-// a hand edit route, and the CLI keeps that text (D-1). The console
-// offers w for the same change, so its own words name the hand edit
-// only when route is set.
+// a hand edit route, because the CLI plan, the CLI ledger and the HTML
+// report print it, and none of them offers the change. The console
+// offers w for it, so its own words name the hand edit only when route
+// is set.
 func pinTriggerFact(f distill.TriggerFact, route bool) string {
 	why := "directly cited by the evidence"
 	if !f.Direct {
@@ -1474,7 +1475,7 @@ func (p *pinsView) propDetail(pr domain.Proposal, w int) []string {
 func (p *pinsView) loadingBox(w, h int) string {
 	t := p.st.theme
 
-	return t.messageBox(t.Title.Render("Installed pins"), "", propMessage{
+	return t.messageBox(t.Title.Render("Installed pins"), "", paneMessage{
 		head: []string{t.Accent.Render(t.spinnerFrame(p.st.tick)) + " " + t.Title.Render("Reading the pin file"+t.Glyphs.Ellipsis)},
 		body: "Seamark reads " + pinfile.File + " and relates it to the proposal ledger. Nothing is written.",
 	}, w, h)
@@ -1492,32 +1493,32 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 	routes := []string{t.Key.Render("p") + t.Muted.Render(" open Proposals   ") + t.Key.Render("e") +
 		t.Muted.Render(" open Evidence")}
 
-	var m propMessage
+	var m paneMessage
 
 	switch {
 	case p.filter == pinInstalled && in.DocErr != nil:
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Failure.Render(g.Fail) + " " + t.Title.Render("The pin file could not be read")},
 			body: errText(in.DocErr) + "\n\nNo pin is listed, and none is shown as removed. The other views " +
 				"stay usable. Press r to read the file again.",
 		}
 		count = t.Muted.Render("?")
 	case p.filter == pinInstalled && in.Doc.Unreadable() && len(in.Pins) == 0:
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Attention.Render(g.Warn) + " " + t.Title.Render("The pin file could not be read")},
 			body: pinUnreadableText(in.Doc) + ".\n\nSeamark lists no pin, because it could not read the list. " +
 				"That is not an empty list: no pin is shown as removed. Fix the file, then press r.",
 		}
 		count = t.Muted.Render("?")
 	case p.filter == pinInstalled && len(in.Pins) == 0 && !in.Doc.Guard.Exists && len(in.Doc.Bytes) == 0:
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No pin file yet")},
 			body: pinfile.File + " does not exist, so no pin is installed. Pins come from applied proposals: " +
 				"review proposals in Proposals, or collect evidence in Evidence first.",
 			next: routes,
 		}
 	case p.filter == pinInstalled && len(in.Pins) == 0:
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No pins in "+pinfile.File)},
 			body: "The file has no pin entry. Apply a proposal in Proposals to add one.",
 			next: routes,
@@ -1528,14 +1529,14 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 			reason = errText(in.Links.NotPresentErr) + "."
 		}
 
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Unknown.Render(g.Unknown) + " " + t.Title.Render("Unknown which pins are missing")},
 			body: reason + " Seamark never reads an error as a missing pin.",
 		}
 		p.unknownRoute(in, &m)
 		count = t.Muted.Render("?")
 	case p.filter == pinSuperseded && in.LedgerErr != nil:
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Unknown.Render(g.Unknown) + " " + t.Title.Render("The history is unknown")},
 			body: "The superseded proposals could not be read: " + pinReason(in.LedgerErr.Error()) + ".",
 		}
@@ -1544,12 +1545,12 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 	case p.region != "" || p.text != "":
 		m = p.filterMessage()
 	case p.filter == pinNotPresent:
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Success.Render(g.OK) + " " + t.Title.Render("Every applied proposal has its pin")},
 			body: "Each applied proposal matches one entry of " + pinfile.File + " by rule and regions.",
 		}
 	default:
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No superseded proposals")},
 			body: "A confirmed prune moves the proposals of the removed pins here. The history is read-only.",
 		}
@@ -1563,7 +1564,7 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 // unreadable pin file needs a fix; any other error may pass on a new
 // read. The installed pins stay listed, so f leads back to them. The
 // routes go in the next lines, because a short box clips the body first.
-func (p *pinsView) unknownRoute(in *maintain.Inspection, m *propMessage) {
+func (p *pinsView) unknownRoute(in *maintain.Inspection, m *paneMessage) {
 	t := p.st.theme
 	key := func(k string) string { return t.Key.Render(k) }
 
@@ -1584,7 +1585,7 @@ func (p *pinsView) unknownRoute(in *maintain.Inspection, m *propMessage) {
 }
 
 // filterMessage explains a filter that hides every row.
-func (p *pinsView) filterMessage() propMessage {
+func (p *pinsView) filterMessage() paneMessage {
 	t := p.st.theme
 
 	var what []string
@@ -1602,7 +1603,7 @@ func (p *pinsView) filterMessage() propMessage {
 		noun = p.filter.label() + " proposals"
 	}
 
-	return propMessage{
+	return paneMessage{
 		head: []string{t.Muted.Render(t.Glyphs.Info) + " " + t.Title.Render("No "+noun+" match "+strings.Join(what, " and "))},
 		body: "Press / or z and submit an empty value to show every row.",
 	}

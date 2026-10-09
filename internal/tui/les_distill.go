@@ -625,7 +625,7 @@ func (d *distRecord) event(msg distEventMsg) {
 	case distill.EventStopped:
 		r.stopped, r.stopWhy = true, ev.Stop
 		r.sending = -1
-		r.log(msg.at, "run ended early: "+distStopWords(ev.Stop))
+		r.log(msg.at, "run ended early: "+agentStopWords(ev.Stop))
 	}
 }
 
@@ -954,7 +954,7 @@ func distOutcomeWords(o distill.GroupOutcome) string {
 			return "saved: 0 proposals"
 		}
 	case distill.GroupFailed:
-		return "failed: " + distFailWords(o.Failure)
+		return "failed: " + agentFailWords(o.Failure)
 	case distill.GroupCancelled:
 		return "cancelled"
 	case distill.GroupSkipped:
@@ -962,40 +962,4 @@ func distOutcomeWords(o distill.GroupOutcome) string {
 	default:
 		return "not attempted"
 	}
-}
-
-// distFailWords names a failure kind for a reader.
-func distFailWords(k distill.FailureKind) string {
-	switch k {
-	case distill.FailAgent:
-		return "agent error"
-	case distill.FailTimeout:
-		return "timeout"
-	case distill.FailInvalidReply:
-		return "invalid reply"
-	case distill.FailStore:
-		return "store error"
-	default:
-		return k.String()
-	}
-}
-
-// distStopWords names why a run ended before its last group.
-func distStopWords(r distill.StopReason) string {
-	switch r {
-	case distill.StopCancelled:
-		return "stopped by you"
-	case distill.StopConflict:
-		return "an input changed"
-	case distill.StopStoreError:
-		return "store error"
-	default:
-		return r.String()
-	}
-}
-
-// distTokens renders an estimated token count of chars characters with
-// the engine's own estimate, so the console and the CLI agree.
-func distTokens(chars int) string {
-	return "~" + distill.Preflight{PromptChars: chars}.Tokens()
 }

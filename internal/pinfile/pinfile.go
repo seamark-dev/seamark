@@ -1,8 +1,11 @@
 // Package pinfile reads, classifies, and edits the pin list of
-// .seamark/lessons.yaml for the console. A pin is a current entry of that
-// list. The file is the authority for the installed guidance, and the
-// proposal ledger is the authority for recorded decisions. This package
-// relates the two and never repairs one from the other.
+// .seamark/lessons.yaml. The console uses it for every pin edit. The
+// shared apply of internal/proposals uses it for the CLI and for the
+// console, and so do the retarget and the prune of internal/maintain. A
+// pin is a current entry of that list. The file is the authority for
+// the installed guidance, and the proposal ledger is the authority for
+// recorded decisions. This package relates the two and never repairs
+// one from the other.
 //
 // A read has two layers. The listing decodes the pin items of the first
 // YAML document, so the console shows the installed guidance even when
@@ -16,9 +19,12 @@
 // loads, keeps the other settings, and changes only the reviewed
 // entries. The line check states the D-7 and D-8 line rules again
 // without the span code that built the splices; verify.go names its one
-// exception. Prepare and Apply write the candidate through the guarded
-// setup engine (integration Route A). Restore puts the old bytes back
-// only while the file still holds the written bytes.
+// exception. PlanAppend computes the candidate for an apply: the new
+// entries go in at the head of the list, and every existing line stays.
+// It also proves its candidate before it returns it. Prepare,
+// PrepareAppend, and Apply write a candidate through the guarded setup
+// engine (integration Route A). Restore puts the old bytes back only
+// while the file still holds the written bytes.
 //
 // The package reads the ledger rows that the caller passes in. It does
 // not open the store, and it never writes the ledger.

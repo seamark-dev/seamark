@@ -16,7 +16,8 @@ const accessWrite = 0x2
 // at abs. The engine replaces a file by rename, and a rename needs write
 // access to the directory only. The mode bits do not show an access
 // control list or another owner, so the engine asks access(2). It applies
-// the rules of the open of a plain write, as the CLI pin writes do.
+// the rules of the open of a plain write, so the engine refuses a file
+// that a plain write would also fail on.
 // access(2) checks the real user ID; seamark never runs setuid, so that
 // ID is the effective one.
 //

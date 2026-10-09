@@ -725,7 +725,7 @@ func (p *propView) browseKey(msg tea.KeyMsg) tea.Cmd {
 
 		return cmd
 	case key.Matches(msg, lesKeys.Apply):
-		return p.startDecision(proposals.ActionApply)
+		return p.startApply()
 	case key.Matches(msg, lesKeys.Dismiss):
 		return p.startDecision(proposals.ActionDismiss)
 	case key.Matches(msg, lesKeys.Reconcile):
@@ -966,30 +966,56 @@ func (p *propView) startDecision(a proposals.Action) tea.Cmd {
 	return p.preview(a, ids, implicit)
 }
 
+// startApply asks for the apply preview of the targets. A target whose
+// pin key an applied proposal records gets a toast with the reason and no
+// preview, so a never opens what the footer hides and the help marks n/a.
+// A read-only row keeps the toast of startDecision.
+func (p *propView) startApply() tea.Cmd {
+	ids, _ := p.targets()
+	if taken := p.appliedKeyRefusal(ids); taken != nil {
+		return toast(ToneNeutral, "No apply: "+appliedKeyNotice(taken, ids))
+	}
+
+	return p.startDecision(proposals.ActionApply)
+}
+
 // startRecord asks for the ledger-only preview that records the targets
-// as applied. A target without a known pin gets a toast with the reason
-// and no preview, so c never opens what the footer hides and the help
-// marks n/a (user decision of 2026-10-04). A read-only row keeps the
+// as applied. A target that the record refuses gets a toast with the
+// reason and no preview, so c never opens what the footer hides and the
+// help marks n/a (user decision of 2026-10-04). A read-only row keeps the
 // toast of startDecision.
 func (p *propView) startRecord() tea.Cmd {
 	ids, _ := p.targets()
-	if len(ids) == 0 || p.hasPinned(ids) {
+	if len(ids) == 0 || p.canRecord(ids) {
 		return p.startDecision(proposals.ActionReconcile)
 	}
 
-	return toast(ToneNeutral, p.noPinText(ids))
+	return toast(ToneNeutral, p.noRecordText(ids))
 }
 
-// noPinText says why c records nothing. The console knows a pin only from
-// its last read of the pin file. After a good read, the text names r:
-// only an edit of the file since that read can add the pin. With marks,
-// the text counts the marked rows without a known pin, because a list of
-// IDs can be too long for the notice row. A row whose region fields
-// disagree needs no read of the file, because the record refuses it.
-func (p *propView) noPinText(ids []int64) string {
+// canRecord reports targets that c can record as applied: each target has
+// a known existing pin, and no applied proposal records the pin key of a
+// target.
+func (p *propView) canRecord(ids []int64) bool {
+	return p.hasPinned(ids) && p.appliedKeyRefusal(ids) == nil
+}
+
+// noRecordText says why c records nothing. The reasons follow the order of
+// the checks of the record preview. The console knows a pin only from its
+// last read of the pin file. After a good read, the text names r: only an
+// edit of the file since that read can add the pin. With marks, the text
+// counts the marked rows without a known pin, because a list of IDs can be
+// too long for the notice row. A row whose region fields disagree, or whose
+// pin key an applied proposal records, needs no read of the file, because
+// the record refuses it.
+func (p *propView) noRecordText(ids []int64) string {
 	if i := slices.IndexFunc(ids, p.fieldsDisagree); i >= 0 {
 		return "No record applied: the stored region fields of " + propID(ids[i]) +
 			" disagree, so no pin is proven to be its own."
+	}
+
+	if taken := p.appliedKeyRefusal(ids); taken != nil {
+		return "No record applied: " + appliedKeyNotice(taken, ids)
 	}
 
 	// Without a good read, the console must not say that the file has no
@@ -1333,8 +1359,11 @@ func (p *propView) listKeys(clearLabel string) []key.Binding {
 		applyLabel = "YAML"
 	}
 
+	// a does not work for a target whose pin key an applied proposal
+	// records, because the preview refuses it. The press follows the same
+	// rule (see startApply).
 	apply := withHelp(lesKeys.Apply, "a", applyLabel)
-	apply.SetEnabled(len(ids) > 0)
+	apply.SetEnabled(len(ids) > 0 && p.appliedKeyRefusal(ids) == nil)
 
 	dismiss := withHelp(lesKeys.Dismiss, "d", "dismiss")
 	dismiss.SetEnabled(len(ids) > 0)
@@ -1347,12 +1376,12 @@ func (p *propView) listKeys(clearLabel string) []key.Binding {
 	clearSel := withHelp(lesKeys.Clear, "x", clearLabel)
 	clearSel.SetEnabled(len(p.selected) > 0)
 
-	// c works only when every target has a known existing pin, because
-	// the record refuses a target without its pin. The press follows the
-	// same rule (see startRecord), so the footer, the help, and the key
-	// cannot disagree.
+	// c works only when every target has a known existing pin and no
+	// applied proposal records the pin key of a target, because the record
+	// refuses both. The press follows the same rule (see startRecord), so
+	// the footer, the help, and the key cannot disagree.
 	reconcile := withHelp(lesKeys.Reconcile, "c", "record applied")
-	reconcile.SetEnabled(p.hasPinned(ids))
+	reconcile.SetEnabled(p.canRecord(ids))
 
 	openLabel := "open PR"
 
@@ -1443,6 +1472,74 @@ func (p *propView) fieldsDisagree(id int64) bool {
 	i := slices.IndexFunc(l.Pending, func(pr domain.Proposal) bool { return pr.ID == id })
 
 	return i >= 0 && !pinfile.FieldsAgree(l.Pending[i])
+}
+
+// appliedKeyRefusal returns the refusal that the apply and the record
+// preview give when an applied proposal records the pin key of a pending
+// row of ids, or nil. It applies the rule of the preview
+// (proposals.CheckAppliedKeys) to the ledger snapshot, so a and c read
+// n/a before a press. The preview checks the ledger again, so it still
+// refuses when the snapshot is old.
+//
+// A row whose region fields disagree does not take part: the preview
+// refuses it first, with another reason.
+func (p *propView) appliedKeyRefusal(ids []int64) *proposals.AppliedKeyError {
+	l := p.ledger()
+	if l == nil || len(l.Applied) == 0 || len(ids) == 0 {
+		return nil
+	}
+
+	// The snapshot holds the pending rows in ID order, as the check needs.
+	var rows []domain.Proposal
+
+	for _, pr := range l.Pending {
+		if slices.Contains(ids, pr.ID) && pinfile.FieldsAgree(pr) {
+			rows = append(rows, pr)
+		}
+	}
+
+	return proposals.CheckAppliedKeys(l.Applied, rows)
+}
+
+// appliedKeyText gives the reason of a and c for an applied key refusal
+// of the targets ids, for the detail pane. It uses the text of the
+// preview refusal, for example "p4 is already applied with this rule and
+// regions; dismiss p1", so the console and the CLI name the same
+// proposals. It adds the key of the dismiss.
+//
+// d dismisses every target. So when the marks also hold rows that the
+// refusal does not name, the text tells the user to unmark those rows
+// first. Else d also dismisses rows that apply can take.
+func appliedKeyText(taken *proposals.AppliedKeyError, ids []int64) string {
+	if len(taken.Pending()) == len(ids) {
+		return taken.Error() + " with d."
+	}
+
+	return taken.Error() + " with d after you unmark the other proposals."
+}
+
+// appliedKeyNotice gives the one-line reason of a and c for an applied
+// key refusal of the targets ids. The notice row cuts a line at the
+// terminal width. A refusal of several keys names each refused ID twice,
+// so the line then counts the rows, as noRecordText does. The detail
+// pane gives the full text (appliedKeyText).
+func appliedKeyNotice(taken *proposals.AppliedKeyError, ids []int64) string {
+	if len(taken.Groups) < 2 {
+		return appliedKeyText(taken, ids)
+	}
+
+	// Each group holds at least one refused row, so two groups refuse at
+	// least two marked rows. The plural form is then always correct.
+	const which = " have the rule and regions of applied proposals; "
+
+	refused := len(taken.Pending())
+	if refused == len(ids) {
+		return strconv.Itoa(refused) + " marked proposals" + which + "dismiss them with d."
+	}
+
+	// The step needs the IDs, and the line has no room for them.
+	return strconv.Itoa(refused) + " of " + strconv.Itoa(len(ids)) + " marked proposals" + which +
+		"the detail names them."
 }
 
 // extractTargets returns the proposals that t asks about: the marked

@@ -280,18 +280,11 @@ func TestCommitRefusesStalePlans(t *testing.T) {
 		},
 		{
 			name: "the row superseded elsewhere", action: ActionRetarget, reason: "the ledger rows changed",
-			mutate: func(f *fixture) {
-				_, err := f.st.SupersedeProposals([]int64{1})
-				require.NoError(f.t, err)
-			},
+			mutate: func(f *fixture) { f.supersede(1) },
 		},
 		{
-			name: "the row retargeted by the CLI", action: ActionRetarget, reason: "the ledger rows changed",
-			mutate: func(f *fixture) {
-				require.NoError(f.t, f.st.UpdateProposalRegionsBatch([]model.Proposal{
-					{ID: 1, Region: "lib", Regions: []string{"lib"}},
-				}))
-			},
+			name: "the row retargeted elsewhere", action: ActionRetarget, reason: "the ledger rows changed",
+			mutate: func(f *fixture) { f.retargetRow(1, "lib") },
 		},
 		{
 			name: "the gate turned off", action: ActionRetarget, reason: "distill.write changed",
@@ -310,15 +303,22 @@ func TestCommitRefusesStalePlans(t *testing.T) {
 		{
 			name: "the trigger question was answered", action: ActionRetarget, reason: "the evidence or the index changed",
 			mutate: func(f *fixture) {
-				require.NoError(f.t, f.st.UpdateProposalTriggers(1, nil, 1_700_000_000, 3))
+				// An extraction run answers the question of p1 through the
+				// guarded save, as the CLI and the console do.
+				rows, err := f.st.ProposalsWithIDs([]int64{1})
+				require.NoError(f.t, err)
+				require.Len(f.t, rows, 1)
+
+				saved, err := f.st.SaveTriggerAnswer(store.TriggerAnswer{
+					Guard: store.NewRowGuard(rows[0]), CheckedAt: 1_700_000_000, Version: 3,
+				})
+				require.NoError(f.t, err)
+				require.True(f.t, saved)
 			},
 		},
 		{
 			name: "the row superseded before a prune", action: ActionPrune, reason: "the ledger rows changed",
-			mutate: func(f *fixture) {
-				_, err := f.st.SupersedeProposals([]int64{1})
-				require.NoError(f.t, err)
-			},
+			mutate: func(f *fixture) { f.supersede(1) },
 		},
 	}
 
@@ -355,11 +355,8 @@ func TestCommitRefusesStalePlans(t *testing.T) {
 			{
 				// The preview named the api pin as the retained alternative.
 				// It is no longer linked, so the reviewed claim is false.
-				name: "the retained partner superseded",
-				mutate: func(f *fixture) {
-					_, err := f.st.SupersedeProposals([]int64{2})
-					require.NoError(f.t, err)
-				},
+				name:   "the retained partner superseded",
+				mutate: func(f *fixture) { f.supersede(2) },
 			},
 		}
 
@@ -627,10 +624,7 @@ func TestCommitDoesNotRestoreRowsInAnotherState(t *testing.T) {
 	files := &fileSeam{}
 	deps := f.deps()
 	deps.Files = files
-	deps.Ledger = &ledgerSeam{Store: f.st, before: func() {
-		_, err := f.st.SupersedeProposals([]int64{1})
-		require.NoError(t, err)
-	}}
+	deps.Ledger = &ledgerSeam{Store: f.st, before: func() { f.supersede(1) }}
 
 	res, err := Commit(deps, p)
 	require.NoError(t, err)

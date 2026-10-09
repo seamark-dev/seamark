@@ -19,6 +19,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -118,7 +119,7 @@ func (f *fixture) propose(ps ...model.Proposal) []model.Proposal {
 	f.t.Helper()
 
 	for i := range ps {
-		require.NoError(f.t, f.st.InsertProposal(&ps[i]))
+		require.NoError(f.t, storetest.InsertProposal(f.st, &ps[i]))
 	}
 
 	return ps
@@ -273,6 +274,34 @@ func (f *fixture) fire(pin reviews.PinRule, ts string) {
 	_, err = fh.Write(append(data, '\n'))
 	require.NoError(f.t, err)
 	require.NoError(f.t, fh.Close())
+}
+
+// row returns the current ledger row of the proposal id.
+func (f *fixture) row(id int64) model.Proposal {
+	f.t.Helper()
+
+	rows, err := f.st.ProposalsWithIDs([]int64{id})
+	require.NoError(f.t, err)
+	require.Len(f.t, rows, 1, "p%d", id)
+
+	return rows[0]
+}
+
+// supersede supersedes the applied row id as another writer does. A
+// prune of the CLI or of a second console writes through the same
+// guarded writer.
+func (f *fixture) supersede(id int64) {
+	f.t.Helper()
+	require.NoError(f.t, f.st.SupersedeExact([]store.RowGuard{store.NewRowGuard(f.row(id))}))
+}
+
+// retargetRow moves the applied row id to one region as another
+// writer's retarget does.
+func (f *fixture) retargetRow(id int64, region string) {
+	f.t.Helper()
+	require.NoError(f.t, f.st.RetargetApplied([]store.RegionChange{
+		{Guard: store.NewRowGuard(f.row(id)), Region: region, Regions: []string{region}},
+	}))
 }
 
 // failUpdates installs a database trigger that aborts every update of

@@ -12,7 +12,36 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
+
+// storedInputs stores findings and returns the rows of ps and the
+// metadata of their members, both read from the store. The CLI reads
+// them this way, and the executor compares them with the store before
+// each batch. So a test passes stored values, not the literals it built.
+func storedInputs(t *testing.T, st *store.Store, findings []model.Finding,
+	ps ...model.Proposal,
+) (rows []model.Proposal, meta map[int64]model.Finding) {
+	t.Helper()
+
+	require.NoError(t, st.ReplaceLessons(nil, findings))
+
+	rows = make([]model.Proposal, len(ps))
+
+	for i, p := range ps {
+		got, err := st.ProposalsWithIDs([]int64{p.ID})
+		require.NoError(t, err)
+		require.Len(t, got, 1, "p%d is stored", p.ID)
+
+		rows[i] = got[0]
+	}
+
+	meta, err := st.FindingsMetaByIDs(memberIDs(rows))
+	require.NoError(t, err)
+
+	return rows, meta
+}
 
 func TestExtractTriggersStoresAndRetargetsPending(t *testing.T) {
 	root := scopeRoot(t, "api/schemas.py", "web/src/api/schema.ts")
@@ -23,10 +52,10 @@ func TestExtractTriggersStoresAndRetargetsPending(t *testing.T) {
 	applied := model.Proposal{Signature: "s2", Rule: "schema-sync-applied", Region: "web/src/api",
 		Note: "n", Members: []int64{1}, Status: model.ProposalApplied}
 
-	require.NoError(t, st.InsertProposal(&pending))
-	require.NoError(t, st.InsertProposal(&applied))
+	require.NoError(t, storetest.InsertProposal(st, &pending))
+	require.NoError(t, storetest.InsertProposal(st, &applied))
 
-	meta := map[int64]model.Finding{1: reviewFinding(1, "web/src/api/schema.ts")}
+	ps, meta := storedInputs(t, st, []model.Finding{reviewFinding(1, "web/src/api/schema.ts")}, pending, applied)
 
 	// The ghost path fails the existence rung; item 999 is not in the
 	// batch and must be ignored.
@@ -38,8 +67,7 @@ func TestExtractTriggersStoresAndRetargetsPending(t *testing.T) {
 			pending.ID, applied.ID), nil
 	}}
 
-	res, err := ExtractTriggers(context.Background(), st, fake,
-		[]model.Proposal{pending, applied}, meta, ExtractOptions{Root: root})
+	res, err := ExtractTriggers(context.Background(), st, fake, ps, meta, ExtractOptions{Root: root})
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, res.Examined)
@@ -71,26 +99,25 @@ func TestExtractTriggersStoresAndRetargetsPending(t *testing.T) {
 }
 
 func TestExtractTriggersResumesAfterInterruption(t *testing.T) {
-	// The interrupted state: a run died between the region write and
-	// the trigger write, so the row carries the trigger scope but no
-	// triggers — and the idempotency filter therefore repeats it. The
-	// resumed run must store the triggers WITHOUT a second retarget.
+	// Seamark before the guarded save wrote the regions and the stamp in
+	// two statements. A run that died between them left the trigger scope
+	// without triggers, so the next run asks the row again. That run must
+	// store the triggers without a second retarget.
 	root := scopeRoot(t, "api/schemas.py", "web/src/api/schema.ts")
 	st := scopeStore(t, cochange("web/src/api/schema.ts", "api/schemas.py", 38, 6.6))
 
 	p := model.Proposal{Signature: "s1", Rule: "schema-sync", Region: "api/schemas.py",
 		Regions: []string{"api/schemas.py"}, Note: "n", Members: []int64{1},
 		Status: model.ProposalProposed}
-	require.NoError(t, st.InsertProposal(&p))
+	require.NoError(t, storetest.InsertProposal(st, &p))
 
-	meta := map[int64]model.Finding{1: reviewFinding(1, "web/src/api/schema.ts")}
+	ps, meta := storedInputs(t, st, []model.Finding{reviewFinding(1, "web/src/api/schema.ts")}, p)
 
 	fake := &fakeAgent{fn: func(string) (string, error) {
 		return fmt.Sprintf(`{"triggers": [{"id": %d, "trigger_paths": ["api/schemas.py"]}]}`, p.ID), nil
 	}}
 
-	res, err := ExtractTriggers(context.Background(), st, fake,
-		[]model.Proposal{p}, meta, ExtractOptions{Root: root})
+	res, err := ExtractTriggers(context.Background(), st, fake, ps, meta, ExtractOptions{Root: root})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res.Stored, "the pair completes")
@@ -115,7 +142,7 @@ func TestExtractTriggersReportsBatchProgress(t *testing.T) {
 	for i := range 12 {
 		p := model.Proposal{Signature: fmt.Sprintf("s%d", i), Rule: fmt.Sprintf("r%d", i),
 			Note: "n", Members: []int64{1}, Status: model.ProposalProposed}
-		require.NoError(t, st.InsertProposal(&p))
+		require.NoError(t, storetest.InsertProposal(st, &p))
 		ps = append(ps, p)
 	}
 
@@ -146,7 +173,7 @@ func TestExtractTriggersDryRunSendsNothing(t *testing.T) {
 
 	p := model.Proposal{Signature: "s1", Rule: "r", Note: "n",
 		Members: []int64{1}, Status: model.ProposalProposed}
-	require.NoError(t, st.InsertProposal(&p))
+	require.NoError(t, storetest.InsertProposal(st, &p))
 
 	fake := &fakeAgent{fn: func(string) (string, error) {
 		return "", errors.New("must not be called")
@@ -227,7 +254,7 @@ func TestExtractTriggersRejectsAnswerlessReplies(t *testing.T) {
 
 			p := model.Proposal{Signature: "s1", Rule: "r", Note: "n",
 				Members: []int64{1}, Status: model.ProposalProposed}
-			require.NoError(t, st.InsertProposal(&p))
+			require.NoError(t, storetest.InsertProposal(st, &p))
 
 			fake := &fakeAgent{fn: func(string) (string, error) { return reply, nil }}
 
@@ -245,23 +272,23 @@ func TestExtractTriggersRejectsAnswerlessReplies(t *testing.T) {
 }
 
 func TestExtractTriggersNegativeAnswerRestoresWidening(t *testing.T) {
-	// The orphaned state: an earlier run widened the regions, died
-	// before the trigger write, and now the model names nothing. The
-	// row must not stay widened with no stored trigger explaining it.
+	// The orphaned state: a run of Seamark before the guarded save widened
+	// the regions and died before the trigger write. Now the model names
+	// nothing. The row must not stay widened with no stored trigger
+	// explaining it.
 	root := scopeRoot(t, "web/src/api/schema.ts")
 	st := scopeStore(t)
 
 	p := model.Proposal{Signature: "s1", Rule: "schema-sync", Region: "web/src/api",
 		Regions: []string{"web/src/api", "api"}, Note: "n", Members: []int64{1},
 		Status: model.ProposalProposed}
-	require.NoError(t, st.InsertProposal(&p))
+	require.NoError(t, storetest.InsertProposal(st, &p))
 
-	meta := map[int64]model.Finding{1: reviewFinding(1, "web/src/api/schema.ts")}
+	ps, meta := storedInputs(t, st, []model.Finding{reviewFinding(1, "web/src/api/schema.ts")}, p)
 
 	fake := &fakeAgent{fn: func(string) (string, error) { return `{"triggers": []}`, nil }}
 
-	res, err := ExtractTriggers(context.Background(), st, fake,
-		[]model.Proposal{p}, meta, ExtractOptions{Root: root})
+	res, err := ExtractTriggers(context.Background(), st, fake, ps, meta, ExtractOptions{Root: root})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res.Retargeted, "the unexplained widening is restored")
@@ -274,44 +301,6 @@ func TestExtractTriggersNegativeAnswerRestoresWidening(t *testing.T) {
 	assert.Positive(t, rows[0].TriggerChecked, "the negative answer is stamped")
 }
 
-func TestExtractTriggersRespectsConcurrentApply(t *testing.T) {
-	// The row was 'proposed' when extraction fetched it; another
-	// command applied it during the agent call. The stale-status
-	// region write must not land: the installed yaml pin and the
-	// ledger would carry different identities.
-	root := scopeRoot(t, "api/schemas.py", "web/src/api/schema.ts")
-	st := scopeStore(t, cochange("web/src/api/schema.ts", "api/schemas.py", 38, 6.6))
-
-	p := model.Proposal{Signature: "s1", Rule: "schema-sync", Region: "web/src/api",
-		Note: "n", Members: []int64{1}, Status: model.ProposalProposed}
-	require.NoError(t, st.InsertProposal(&p))
-
-	meta := map[int64]model.Finding{1: reviewFinding(1, "web/src/api/schema.ts")}
-
-	// The concurrent apply happens while the "agent" is thinking.
-	fake := &fakeAgent{fn: func(string) (string, error) {
-		if _, err := st.SetProposalStatus([]int64{p.ID}, model.ProposalApplied); err != nil {
-			return "", err
-		}
-
-		return fmt.Sprintf(`{"triggers": [{"id": %d, "trigger_paths": ["api/schemas.py"]}]}`, p.ID), nil
-	}}
-
-	res, err := ExtractTriggers(context.Background(), st, fake,
-		[]model.Proposal{p}, meta, ExtractOptions{Root: root})
-	require.NoError(t, err)
-
-	assert.Zero(t, res.Retargeted, "the stale-status write must not land")
-
-	rows, err := st.Proposals(model.ProposalApplied)
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "web/src/api", rows[0].Region, "the applied identity is untouched")
-	assert.Empty(t, rows[0].Regions)
-	assert.Equal(t, []string{"api/schemas.py"}, rows[0].TriggerPaths,
-		"triggers still store — they do not change identity")
-}
-
 func TestExtractTriggersReturnsPartialResultOnStoreError(t *testing.T) {
 	// A store failure mid-run must not discard the counters: the CLI
 	// reports what completed, and stamped rows stay done.
@@ -320,9 +309,9 @@ func TestExtractTriggersReturnsPartialResultOnStoreError(t *testing.T) {
 
 	p := model.Proposal{Signature: "s1", Rule: "r", Region: "web/src/api",
 		Note: "n", Members: []int64{1}, Status: model.ProposalProposed}
-	require.NoError(t, st.InsertProposal(&p))
+	require.NoError(t, storetest.InsertProposal(st, &p))
 
-	meta := map[int64]model.Finding{1: reviewFinding(1, "web/src/api/schema.ts")}
+	ps, meta := storedInputs(t, st, []model.Finding{reviewFinding(1, "web/src/api/schema.ts")}, p)
 
 	fake := &fakeAgent{fn: func(string) (string, error) {
 		_ = st.Close() // the store dies while the agent is thinking
@@ -330,8 +319,7 @@ func TestExtractTriggersReturnsPartialResultOnStoreError(t *testing.T) {
 		return fmt.Sprintf(`{"triggers": [{"id": %d, "trigger_paths": ["api/schemas.py"]}]}`, p.ID), nil
 	}}
 
-	res, err := ExtractTriggers(context.Background(), st, fake,
-		[]model.Proposal{p}, meta, ExtractOptions{Root: root})
+	res, err := ExtractTriggers(context.Background(), st, fake, ps, meta, ExtractOptions{Root: root})
 
 	require.Error(t, err)
 	require.NotNil(t, res, "the partial result rides along with the error")
@@ -344,7 +332,7 @@ func TestExtractTriggersFailedBatchIsRetryable(t *testing.T) {
 
 	p := model.Proposal{Signature: "s1", Rule: "r", Note: "n",
 		Members: []int64{1}, Status: model.ProposalProposed}
-	require.NoError(t, st.InsertProposal(&p))
+	require.NoError(t, storetest.InsertProposal(st, &p))
 
 	fake := &fakeAgent{fn: func(string) (string, error) {
 		return "", errors.New("agent down")

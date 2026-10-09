@@ -3,10 +3,8 @@ package tui
 import (
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/seamark-dev/seamark/internal/distill"
-	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/settings"
 )
 
@@ -96,11 +94,11 @@ func (d *distRecord) facts(compact bool) string {
 	case d.step == stepPreparing:
 		facts = append(facts, fact{"", "planning" + t.Glyphs.Ellipsis})
 	case d.step == stepRunning:
-		facts = append(facts, fact{"started", distClock(d.run.started)})
+		facts = append(facts, fact{"started", agentClock(d.run.started)})
 	case d.step == stepResult:
-		facts = append(facts, fact{"finished", distClock(d.run.ended)})
+		facts = append(facts, fact{"finished", agentClock(d.run.ended)})
 	case d.prev.preview != nil && !d.prev.preview.PlannedAt.IsZero():
-		facts = append(facts, fact{"planned", distClock(d.prev.preview.PlannedAt)})
+		facts = append(facts, fact{"planned", agentClock(d.prev.preview.PlannedAt)})
 	}
 
 	parts := make([]string, 0, len(facts))
@@ -338,12 +336,12 @@ func (d *distRecord) agentRows(w int) (agent, dir string) {
 
 	// A long command line needs the row, so the Settings hint gives way
 	// first. Then the command line is cut before the kind.
-	kind := distAgentKind(snap.Invocation.Name, custom)
+	kind := agentKind(snap.Invocation.Name, custom)
 	room := w - 2 - distLabelW
 
-	agent = distAgentText(t, snap.Invocation.Argv, kind, 0) + hint
+	agent = agentText(t, snap.Invocation.Argv, kind, 0) + hint
 	if width(agent) > room {
-		agent = distAgentText(t, snap.Invocation.Argv, kind, room)
+		agent = agentText(t, snap.Invocation.Argv, kind, room)
 	}
 
 	if snap.Invocation.Dir != "" {
@@ -380,51 +378,4 @@ func (d *distRecord) aboutLines(w int) []string {
 		"No agent call happens.")
 
 	return out
-}
-
-// distArgv renders an agent command line for display. Arguments can
-// hold tokens, so the helper redacts them before it sanitizes the text.
-// A secret-shaped value that holds shell syntax stays visible. It is
-// code that runs after y, and "[REDACTED]" would hide it behind a word
-// that reads as a safety measure.
-func distArgv(argv []string) string {
-	return oneLine(redact.SecretsExcept(strings.Join(argv, " "), shellActive))
-}
-
-// shellActive reports text that a shell runs or redirects: a command
-// substitution, a backquote, a command separator, a pipe, a redirection
-// or a line break. A password that holds such a character then shows
-// too; the trade-off favors the code that runs.
-func shellActive(s string) bool {
-	return strings.Contains(s, "$(") || strings.ContainsAny(s, "`;|&<>\n\r")
-}
-
-// distAgentKind names where the agent command comes from: a registered
-// preset by its name, or the custom agent.argv of the configuration.
-func distAgentKind(name string, custom bool) string {
-	if custom {
-		return "custom agent.argv"
-	}
-
-	return "preset " + oneLine(name)
-}
-
-// distAgentText renders the agent as "<argv> · <kind>" (design map §4
-// and §5). The Scope and the Review steps share it, so one agent reads
-// the same on both. room > 0 cuts a long command line before the kind,
-// so the kind always shows; room <= 0 leaves the cut to the caller.
-func distAgentText(t *Theme, argv []string, kind string, room int) string {
-	tail := " " + t.Glyphs.Sep + " " + kind
-	cmd := distArgv(argv)
-
-	if room > 0 && width(cmd)+width(tail) > room {
-		cmd = truncate(cmd, max(1, room-width(tail)), t.Glyphs.Ellipsis)
-	}
-
-	return t.Body.Render(cmd) + t.Muted.Render(tail)
-}
-
-// distClock renders a time of day for the facts and the activity lines.
-func distClock(at time.Time) string {
-	return at.Format("15:04:05")
 }

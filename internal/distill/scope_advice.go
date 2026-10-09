@@ -10,11 +10,11 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// The scope advice of an applied proposal. It is the planning half of
-// `seamark lessons --retarget` (runLessonsRetarget in
-// internal/cli/lessons.go) as a typed value, so the console reads the
-// same recommendation that the CLI acts on. The CLI keeps its own loop
-// (decision D-1); a parity test in internal/cli proves that both agree.
+// The scope advice of an applied proposal: the region set that a
+// retarget writes, as a typed value. The retarget planner of
+// internal/maintain reads it for `seamark lessons --retarget` and for the
+// console's Pins view, so both surfaces act on one recommendation. The
+// Pins readings show the same advice before any retarget.
 
 // ScopeKind classifies the scope that today's inference computes for a
 // proposal against the scope that the proposal records.
@@ -72,12 +72,12 @@ type ScopeAdvice struct {
 // that confirms triggers lives in the index, so no advice exists without it.
 var errScopeNoIndex = errors.New("distill: scope advice needs the index")
 
-// RecommendScope computes the scope that the retarget planner of the CLI
-// computes for p: no living finding gives ScopeNoEvidence; otherwise
-// RecomputeRegions gives the set, and a set equal to p.RegionSet() under
-// the pin-key equivalence gives ScopeCurrent. living holds the cited
-// findings that are still in the index. It writes nothing; it reads the
-// store (co-change history) and the working tree under root.
+// RecommendScope computes the scope that a retarget writes for p. No
+// living finding gives ScopeNoEvidence. Otherwise RecomputeRegions gives
+// the set. A set equal to p.RegionSet() under the pin-key equivalence
+// gives ScopeCurrent. living holds the cited findings that are still in
+// the index. It writes nothing; it reads the store (co-change history)
+// and the working tree under root.
 func RecommendScope(st *store.Store, root string, p model.Proposal, living []model.Finding) (ScopeAdvice, error) {
 	if len(living) == 0 {
 		return ScopeAdvice{Kind: ScopeNoEvidence}, nil
@@ -95,8 +95,9 @@ func RecommendScope(st *store.Store, root string, p model.Proposal, living []mod
 	advice := ScopeAdvice{Kind: ScopeCurrent, Regions: regions, Facts: facts, RepoWide: len(regions) == 0}
 	current := p.RegionSet()
 
-	// The CLI compares with proposals.RegionSetsEqual. That package
-	// imports this one, so the same pin-key equivalence is spelled here.
+	// The health advisory of internal/proposals compares with the same
+	// pin-key equivalence. That package imports this one, so the rule is
+	// spelled here too.
 	if reviews.NewPinKey("x", "", regions) == reviews.NewPinKey("x", "", current) {
 		return advice, nil
 	}

@@ -625,21 +625,6 @@ func (s *Store) AllFindings() ([]model.Finding, error) {
 	return scanFindings(rows)
 }
 
-// MarkDistilled records that a candidate group's evidence set has been
-// read by the distiller, so the same signature is never paid for again.
-func (s *Store) MarkDistilled(signature, region string, at int64) error {
-	_, err := s.db.Exec(
-		`INSERT INTO distilled (signature, region, at) VALUES (?, ?, ?)
-		 ON CONFLICT (signature) DO UPDATE SET region = excluded.region, at = excluded.at`,
-		signature, region, at,
-	)
-	if err != nil {
-		return fmt.Errorf("store: mark distilled %s: %w", signature, err)
-	}
-
-	return nil
-}
-
 // DistilledSignatures returns the evidence sets already processed.
 func (s *Store) DistilledSignatures() (map[string]bool, error) {
 	rows, err := s.db.Query(`SELECT signature FROM distilled`)
@@ -680,11 +665,6 @@ func (s *Store) DistilledCount() (int, error) {
 // scanProposals order.
 const proposalCols = `id, signature, rule, region, regions, trigger_paths, trigger_checked_at,
 trigger_prompt_version, note, members, agent, status, created_at`
-
-// InsertProposal stores one distilled proposal and returns its id.
-func (s *Store) InsertProposal(p *model.Proposal) error {
-	return insertProposal(s.db, p)
-}
 
 // execer is the slice of database/sql shared by *sql.DB and *sql.Tx.
 type execer interface {
@@ -843,13 +823,6 @@ func (s *Store) SetProposalStatus(ids []int64, to string) (int, error) {
 	return s.transition(ids, model.ProposalProposed, to)
 }
 
-// SupersedeProposals retires applied proposals whose pin was pruned as
-// a restatement of another. Only 'applied' rows move: superseding
-// something never applied would be meaningless.
-func (s *Store) SupersedeProposals(ids []int64) (int, error) {
-	return s.transition(ids, model.ProposalApplied, model.ProposalSuperseded)
-}
-
 func (s *Store) transition(ids []int64, from, to string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -990,90 +963,6 @@ func (s *Store) ClusterCitation(ids []int64) (map[string]ClusterCited, error) {
 	}
 
 	return out, nil
-}
-
-// UpdateProposalTriggers stores one proposal's validated trigger
-// paths and stamps when the question was answered — an empty answer
-// is an answer, and must not be re-purchased. Regions are written
-// separately: pending rows retarget in the same extraction run,
-// applied pins only through the explicit --retarget — an installed
-// pin's delivery never changes without the user.
-func (s *Store) UpdateProposalTriggers(id int64, paths []string, checkedAt int64, promptVersion int) error {
-	if len(paths) > model.MaxTriggerPaths {
-		return fmt.Errorf("store: proposal %d has %d trigger paths; maximum is %d",
-			id, len(paths), model.MaxTriggerPaths)
-	}
-
-	triggers, err := encodeStrings(paths)
-	if err != nil {
-		return fmt.Errorf("store: encode proposal trigger paths: %w", err)
-	}
-
-	if _, err := s.db.Exec(`UPDATE proposal SET trigger_paths = ?, trigger_checked_at = ?,
-		trigger_prompt_version = ? WHERE id = ?`, triggers, checkedAt, promptVersion, id); err != nil {
-		return fmt.Errorf("store: update proposal %d trigger paths: %w", id, err)
-	}
-
-	return nil
-}
-
-// UpdateProposalRegionsIfPending rewrites one proposal's regions only
-// while it is still 'proposed', atomically. Extraction re-checks the
-// status at write time: a proposal applied by a concurrent command
-// during the agent call must keep the identity its yaml pin was
-// installed with, or liveness, pruning, and outcomes all reason from
-// a split identity.
-func (s *Store) UpdateProposalRegionsIfPending(p model.Proposal) (bool, error) {
-	encoded, err := encodeStrings(p.Regions)
-	if err != nil {
-		return false, fmt.Errorf("store: encode proposal regions: %w", err)
-	}
-
-	res, err := s.db.Exec(
-		`UPDATE proposal SET region = ?, regions = ? WHERE id = ? AND status = ?`,
-		p.Region, encoded, p.ID, model.ProposalProposed,
-	)
-	if err != nil {
-		return false, fmt.Errorf("store: update proposal %d regions: %w", p.ID, err)
-	}
-
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-
-	return n > 0, nil
-}
-
-// UpdateProposalRegionsBatch rewrites the region sets of the given
-// proposals in ONE transaction — the ledger half of retarget is
-// all-or-nothing, so a mid-batch failure can never leave some pins
-// retargeted in the database and others not while the file already
-// carries every new identity.
-func (s *Store) UpdateProposalRegionsBatch(ps []model.Proposal) error {
-	if len(ps) == 0 {
-		return nil
-	}
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("store: begin region update: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }() // no-op after Commit
-
-	for _, p := range ps {
-		encoded, err := encodeStrings(p.Regions)
-		if err != nil {
-			return fmt.Errorf("store: encode proposal regions: %w", err)
-		}
-
-		if _, err := tx.Exec(`UPDATE proposal SET region = ?, regions = ? WHERE id = ?`,
-			p.Region, encoded, p.ID); err != nil {
-			return fmt.Errorf("store: update proposal %d regions: %w", p.ID, err)
-		}
-	}
-
-	return tx.Commit()
 }
 
 // FindingsMetaByIDs returns the cited findings' metadata — everything

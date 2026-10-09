@@ -13,8 +13,10 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // handLessons is a pin file with user content that every apply must
@@ -100,7 +102,7 @@ func (f *fixture) propose(rule, note, status string, regions ...string) model.Pr
 		p.Regions = regions
 	}
 
-	require.NoError(f.t, f.st.InsertProposal(&p))
+	require.NoError(f.t, storetest.InsertProposal(f.st, &p))
 
 	return p
 }
@@ -231,31 +233,25 @@ func TestApplyWithGateOffPreviewsYAMLAndCommitsNothing(t *testing.T) {
 	assert.Nil(t, f.lessons())
 }
 
-func TestApplyWithGateOnWritesWhatApplyPinsWrites(t *testing.T) {
-	// Two identical workspaces: one takes the commit, the other a plain
-	// distill.ApplyPins call with the same rows. With one key for each
-	// row, the commit writes the same bytes as ApplyPins. The CLI goldens
-	// pin the bytes of `seamark lessons --apply`, which also runs Commit.
-	console, direct := newFixture(t, true), newFixture(t, true)
+func TestApplyWithGateOnWritesTheBlockUnderThePinKey(t *testing.T) {
+	// The commit adds the rendered block at the head of the list, right
+	// under the pin: line, and keeps every hand-written line. The CLI
+	// goldens pin the same bytes for `seamark lessons --apply`, which
+	// also runs Commit.
+	f := newFixture(t, true)
+	f.writeLessons(handLessons)
 
-	var ids []int64
-
-	for _, f := range []*fixture{console, direct} {
-		f.writeLessons(handLessons)
-
-		ids = ids[:0]
-		ids = append(ids,
-			f.propose("pooled-state-reset", "Reset pooled state: on every reuse.", model.ProposalProposed, "api").ID,
-			f.propose("wrap-errors", "Wrap errors with the operation name.", model.ProposalProposed, "web", "api").ID,
-		)
+	ids := []int64{
+		f.propose("pooled-state-reset", "Reset pooled state: on every reuse.", model.ProposalProposed, "api").ID,
+		f.propose("wrap-errors", "Wrap errors with the operation name.", model.ProposalProposed, "web", "api").ID,
 	}
 
-	pv, err := PreviewApply(console.st, console.root, ids)
+	pv, err := PreviewApply(f.st, f.root, ids)
 	require.NoError(t, err)
 	assert.True(t, pv.Write)
 	assert.True(t, pv.Lessons.Exists)
 
-	res, err := Commit(console.st, console.root, pv)
+	res, err := Commit(f.st, f.root, pv)
 	require.NoError(t, err)
 	assert.True(t, res.FileWritten)
 	require.NoError(t, res.FileErr)
@@ -264,21 +260,19 @@ func TestApplyWithGateOnWritesWhatApplyPinsWrites(t *testing.T) {
 	assert.Empty(t, res.NotMoved)
 	assert.False(t, res.Partial())
 
-	ps, err := direct.st.ProposalsByIDs(ids)
+	block, err := distill.RenderPins(pv.Proposals)
 	require.NoError(t, err)
-	require.NoError(t, distill.ApplyPins(direct.root, ps))
+	assert.Equal(t, strings.Replace(handLessons, "pin:\n", "pin:\n"+block, 1), string(f.lessons()),
+		"the block goes under pin:, and the user pin follows it")
 
-	assert.Equal(t, string(direct.lessons()), string(console.lessons()), "byte-identical pin file")
-	assert.Contains(t, string(console.lessons()), "rule: hand-written", "user pins survive")
+	assert.Empty(t, f.pending(ids...), "the ledger records the decision")
 
-	assert.Empty(t, console.pending(ids...), "the ledger records the decision")
-
-	applied, err := console.st.Proposals(model.ProposalApplied)
+	applied, err := f.st.Proposals(model.ProposalApplied)
 	require.NoError(t, err)
 	assert.Len(t, applied, 2)
 
 	// The written pins load through the real reader under their keys.
-	cfg, err := reviews.LoadConfig(console.root)
+	cfg, err := reviews.LoadConfig(f.root)
 	require.NoError(t, err)
 
 	for _, p := range pv.Proposals {
@@ -336,8 +330,15 @@ func TestCommitRejectsStaleInputs(t *testing.T) {
 		{
 			name: "regions retargeted",
 			change: func(f *fixture, ids []int64) Ledgerer {
-				ok, err := f.st.UpdateProposalRegionsIfPending(model.Proposal{
-					ID: ids[0], Region: "web", Regions: []string{"web", "api"},
+				// A trigger extraction retargets a pending row through the
+				// guarded save, as the CLI and the console do.
+				rows, err := f.st.ProposalsWithIDs(ids[:1])
+				require.NoError(t, err)
+				require.Len(t, rows, 1)
+
+				ok, err := f.st.SaveTriggerAnswer(store.TriggerAnswer{
+					Guard: store.NewRowGuard(rows[0]), CheckedAt: 1_700_000_000, Version: 3,
+					SetRegions: true, Region: "web", Regions: []string{"web", "api"},
 				})
 				require.NoError(t, err)
 				require.True(t, ok)
@@ -515,7 +516,7 @@ func TestReconcileRefusesARowWhoseRegionFieldsDisagree(t *testing.T) {
 
 			p := model.Proposal{Signature: "sig-odd", Rule: "odd-fields", Region: "api", Regions: []string{"*"},
 				Note: "Odd.", Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalProposed}
-			require.NoError(t, f.st.InsertProposal(&p))
+			require.NoError(t, storetest.InsertProposal(f.st, &p))
 
 			_, err := PreviewReconcile(f.st, f.root, []int64{p.ID})
 			require.ErrorIs(t, err, ErrFieldsDisagree)
@@ -602,7 +603,7 @@ func TestCommitReportsRowsDecidedDuringTheWrite(t *testing.T) {
 func TestPinWriteFailureLeavesTheLedgerAlone(t *testing.T) {
 	f := newFixture(t, true)
 
-	// A flow-style pin section is a file that ApplyPins cannot edit
+	// A flow-style pin section is a file that the append cannot edit
 	// safely. It fails before it writes a byte.
 	const flow = "pin: []\n"
 	f.writeLessons(flow)
@@ -621,6 +622,146 @@ func TestPinWriteFailureLeavesTheLedgerAlone(t *testing.T) {
 	assert.False(t, res.Partial())
 	assert.Equal(t, flow, string(f.lessons()))
 	assert.Equal(t, []int64{p.ID}, f.pending(p.ID))
+}
+
+func TestApplyCreatesAMissingPinFile(t *testing.T) {
+	// The first apply of a workspace creates the pin file with a header
+	// comment, as the CLI always did.
+	f := newFixture(t, true)
+	p := f.propose("pooled-state-reset", "Reset pooled state.", model.ProposalProposed, "api")
+
+	pv, err := PreviewApply(f.st, f.root, []int64{p.ID})
+	require.NoError(t, err)
+	require.False(t, pv.Lessons.Exists)
+
+	res, err := Commit(f.st, f.root, pv)
+	require.NoError(t, err)
+	require.NoError(t, res.FileErr)
+	assert.True(t, res.FileWritten)
+	assert.Equal(t, []int64{p.ID}, res.Moved)
+
+	assert.Equal(t, "# Review-lesson tuning (see `seamark lessons --list`).\n\npin:\n"+pv.YAML, string(f.lessons()))
+	assert.Empty(t, f.pending(p.ID))
+}
+
+func TestApplyFollowsTheIndentationOfTheList(t *testing.T) {
+	// The CLI used to insert two-space entries above a list at another
+	// column. The result did not parse, so the apply failed. The append
+	// moves the new lines to the column of the list.
+	f := newFixture(t, true)
+	f.writeLessons("pin:\n    - rule: hand-written\n      region: web\n      note: Keep this one.\n")
+
+	p := f.propose("pooled-state-reset", "Reset pooled state.", model.ProposalProposed, "api")
+
+	pv, err := PreviewApply(f.st, f.root, []int64{p.ID})
+	require.NoError(t, err)
+
+	res, err := Commit(f.st, f.root, pv)
+	require.NoError(t, err)
+	require.NoError(t, res.FileErr)
+
+	assert.Equal(t, "pin:\n"+
+		"    # distilled by claude/v2 from 2 findings (seamark lessons --distill, p1)\n"+
+		"    - rule: pooled-state-reset\n"+
+		"      region: api\n"+
+		"      note: Reset pooled state.\n"+
+		"    - rule: hand-written\n      region: web\n      note: Keep this one.\n", string(f.lessons()))
+	assert.Empty(t, f.pending(p.ID))
+}
+
+func TestApplyKeepsAReadOnlyPinFile(t *testing.T) {
+	// The CLI used to fail in os.WriteFile with "permission denied". The
+	// guarded write refuses the file before the write and names the mode.
+	f := newFixture(t, true)
+	f.writeLessons(handLessons)
+	require.NoError(t, os.Chmod(f.lessonsPath(), 0o444))
+
+	p := f.propose("pooled-state-reset", "Reset pooled state.", model.ProposalProposed, "api")
+
+	pv, err := PreviewApply(f.st, f.root, []int64{p.ID})
+	require.NoError(t, err)
+
+	res, err := Commit(f.st, f.root, pv)
+	require.NoError(t, err)
+	require.ErrorIs(t, res.FileErr, pinfile.ErrNotWritable)
+	assert.Equal(t, "the pin file cannot be replaced: the file is read-only (-r--r--r--); seamark does not replace it",
+		res.FileErr.Error())
+	assert.False(t, res.FileWritten)
+	assert.Equal(t, []int64{p.ID}, res.NotMoved)
+	assert.Equal(t, handLessons, string(f.lessons()))
+	assert.Equal(t, []int64{p.ID}, f.pending(p.ID))
+}
+
+func TestAppendPinsBindsToThePreviewedFile(t *testing.T) {
+	// Commit compares the file with the preview before it calls
+	// appendPins. appendPins compares again on its own read, so a change
+	// in between writes nothing; Commit then reports ErrStale.
+	f := newFixture(t, true)
+	f.writeLessons(handLessons)
+
+	p := f.propose("pooled-state-reset", "Reset pooled state.", model.ProposalProposed, "api")
+
+	pv, err := PreviewApply(f.st, f.root, []int64{p.ID})
+	require.NoError(t, err)
+
+	const other = "pin:\n  - rule: other writer\n    note: Later.\n"
+	f.writeLessons(other)
+
+	err = appendPins(f.root, pv.Lessons, pv.YAML)
+	require.ErrorIs(t, err, pinfile.ErrStale)
+	assert.Equal(t, other, string(f.lessons()))
+
+	// A file that appears after a preview of an absent file is stale too.
+	g := newFixture(t, true)
+	q := g.propose("pooled-state-reset", "Reset pooled state.", model.ProposalProposed, "api")
+
+	pv, err = PreviewApply(g.st, g.root, []int64{q.ID})
+	require.NoError(t, err)
+
+	g.writeLessons(other)
+
+	err = appendPins(g.root, pv.Lessons, pv.YAML)
+	require.ErrorIs(t, err, pinfile.ErrStale)
+	assert.Equal(t, other, string(g.lessons()))
+}
+
+// The guarded write checks the file again after appendPins reads it.
+// Another writer that changes the file in between makes the write
+// refuse with pinfile.ErrStale, and nothing is written. Commit reports
+// that as ErrStale, so the caller previews again. It is not a failed
+// write: the result names no file error and no row left behind.
+func TestCommitApplyReportsAStaleGuardedWriteAsStale(t *testing.T) {
+	f := newFixture(t, true)
+	f.writeLessons(handLessons)
+
+	p := f.propose("pooled-state-reset", "Reset pooled state.", model.ProposalProposed, "api")
+
+	pv, err := PreviewApply(f.st, f.root, []int64{p.ID})
+	require.NoError(t, err)
+
+	const other = "pin:\n  - rule: other writer\n    note: Later.\n"
+
+	read := readPinFile
+	t.Cleanup(func() { readPinFile = read })
+
+	readPinFile = func(root string) (*pinfile.Document, error) {
+		d, err := read(root)
+		f.writeLessons(other)
+
+		return d, err
+	}
+
+	res, err := Commit(f.st, f.root, pv)
+	require.ErrorIs(t, err, ErrStale)
+	assert.Equal(t, "the ledger, the pin file, or the write gate changed since the preview: "+
+		".seamark/lessons.yaml changed after the preview", err.Error())
+	require.NoError(t, res.FileErr)
+	assert.False(t, res.FileWritten)
+	assert.Empty(t, res.NotMoved)
+	assert.Empty(t, res.Moved)
+
+	assert.Equal(t, other, string(f.lessons()), "the other writer's bytes stay")
+	assert.Equal(t, []int64{p.ID}, f.pending(p.ID), "the proposal stays pending")
 }
 
 // linkLessons replaces the pin file with a symbolic link to a
@@ -796,7 +937,7 @@ func (f *fixture) proposeAs(signature, rule, note string, regions ...string) mod
 		p.Regions = nil
 	}
 
-	require.NoError(f.t, f.st.InsertProposal(&p))
+	require.NoError(f.t, storetest.InsertProposal(f.st, &p))
 
 	return p
 }
@@ -987,7 +1128,7 @@ func TestApplyRefusesARowWhoseRegionFieldsDisagree(t *testing.T) {
 			ok := f.propose("wrap-errors", "Wrap errors.", model.ProposalProposed, "api")
 			odd := model.Proposal{Signature: "sig-odd", Rule: "odd-fields", Region: "api", Regions: []string{"*"},
 				Note: "Odd.", Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalProposed}
-			require.NoError(t, f.st.InsertProposal(&odd))
+			require.NoError(t, storetest.InsertProposal(f.st, &odd))
 
 			pv, err := PreviewApply(f.st, f.root, []int64{ok.ID, odd.ID})
 			require.ErrorIs(t, err, ErrFieldsDisagree)

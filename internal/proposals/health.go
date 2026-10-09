@@ -26,6 +26,11 @@ func Health(st *store.Store, root string, ps []model.Proposal) (map[int64]report
 		return nil, nil
 	}
 
+	// Health reads the pin file once. The scope audit, the liveness
+	// rule and the outcome step use this one config, so they judge one
+	// version of the file. A malformed config is an error. Health never
+	// falls back to defaults, because defaults would judge firings
+	// against rules the agent never received.
 	cfg, err := reviews.LoadConfig(root)
 	if err != nil {
 		return nil, fmt.Errorf("lessons proposalHealth: reading .seamark/lessons.yaml: %w", err)
@@ -89,7 +94,7 @@ func Health(st *store.Store, root string, ps []model.Proposal) (map[int64]report
 				return nil, err
 			}
 
-			if !RegionSetsEqual(recomputed, p.RegionSet()) {
+			if !regionSetsEqual(recomputed, p.RegionSet()) {
 				h.Retarget = strings.Join(recomputed, ", ")
 				if h.Retarget == "" {
 					h.Retarget = "*"
@@ -121,7 +126,7 @@ func Health(st *store.Store, root string, ps []model.Proposal) (map[int64]report
 	// Gather cannot measure get no Outcome, and the printer renders
 	// nothing for them.
 	if len(appliedPs) > 0 {
-		readings, err := appliedOutcomes(st, root, appliedPs)
+		readings, err := appliedOutcomes(st, root, cfg, appliedPs)
 		if err != nil {
 			return nil, err
 		}
@@ -137,28 +142,23 @@ func Health(st *store.Store, root string, ps []model.Proposal) (map[int64]report
 	return out, nil
 }
 
-// RegionSetsEqual compares two region sets order-insensitively, the
-// same equivalence the pin identity uses. The health advisory and the
-// CLI retarget share it, so both call the same sets equal.
-func RegionSetsEqual(a, b []string) bool {
+// regionSetsEqual compares two region sets order-insensitively, the
+// same equivalence the pin identity uses. distill.RecommendScope, the
+// scope advice of the retarget, spells the same rule, so the health
+// advisory and a retarget call the same sets equal.
+func regionSetsEqual(a, b []string) bool {
 	return reviews.NewPinKey("x", "", a) == reviews.NewPinKey("x", "", b)
 }
 
-// appliedOutcomes loads the lessons config and the firing log and
-// measures the applied pins with MeasureOutcomes. Health is its only
-// caller and needs only the readings, so it returns no config and no
-// firings. A malformed config is an error; it never falls back to
-// defaults, because defaults would judge firings against rules the
-// agent never received. It moved from internal/cli, and the error
-// texts stay as the CLI printed them.
-func appliedOutcomes(st *store.Store, root string, applied []model.Proposal) (
+// appliedOutcomes reads the firing log and measures the applied pins
+// with MeasureOutcomes. Health is its only caller and needs only the
+// readings, so it returns no firings. cfg is the config that Health
+// read. A second read would add only an error for a file that changes
+// between the two reads. It moved from internal/cli, and the error text
+// stays as the CLI printed it.
+func appliedOutcomes(st *store.Store, root string, cfg *reviews.Config, applied []model.Proposal) (
 	map[int64]outcome.Reading, error,
 ) {
-	cfg, err := reviews.LoadConfig(root)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load lessons config: %w", err)
-	}
-
 	firings, err := reviews.ReadFirings(root)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read firing log: %w", err)

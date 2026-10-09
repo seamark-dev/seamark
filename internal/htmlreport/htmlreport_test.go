@@ -18,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // clock is the fixed generation time every test renders at, so a page
@@ -101,7 +102,7 @@ func seed(t *testing.T) (st *store.Store, root string) {
 	pending := model.Proposal{Signature: "sig-a", Rule: "ascii-quotes", Region: "api",
 		Note: "Write quotes as ASCII in api/.", Members: []int64{11, 12},
 		Agent: "claude/v3", Status: model.ProposalProposed}
-	require.NoError(t, st.InsertProposal(&pending))
+	require.NoError(t, storetest.InsertProposal(st, &pending))
 
 	// Two applied pins saying the same thing, which the duplicate audit
 	// must notice.
@@ -109,7 +110,7 @@ func seed(t *testing.T) (st *store.Store, root string) {
 		p := model.Proposal{Signature: "sig-" + rule, Rule: rule, Region: "api",
 			Note:    "Wrap returned errors with context describing the failed operation.",
 			Members: []int64{21}, Agent: "claude/v3", Status: model.ProposalProposed}
-		require.NoError(t, st.InsertProposal(&p))
+		require.NoError(t, storetest.InsertProposal(st, &p))
 
 		_, err := st.SetProposalStatus([]int64{p.ID}, model.ProposalApplied)
 		require.NoError(t, err)
@@ -249,7 +250,7 @@ func TestAgedOutEvidenceIsNotReportedAsNoEvidence(t *testing.T) {
 		Note:    "Guidance distilled before the window moved on.",
 		Members: []int64{900, 901, 902}, Agent: "claude/v3",
 		Status: model.ProposalProposed}
-	require.NoError(t, st.InsertProposal(&old))
+	require.NoError(t, storetest.InsertProposal(st, &old))
 
 	_, err := st.SetProposalStatus([]int64{old.ID}, model.ProposalApplied)
 	require.NoError(t, err)
@@ -285,7 +286,7 @@ func TestPartlyAgedEvidenceSaysHowMuchSurvives(t *testing.T) {
 	p := model.Proposal{Signature: "half", Rule: "half-gone", Region: "api",
 		Note: "Half its evidence is still here.", Members: []int64{11, 999},
 		Agent: "claude/v3", Status: model.ProposalProposed}
-	require.NoError(t, st.InsertProposal(&p))
+	require.NoError(t, storetest.InsertProposal(st, &p))
 
 	r, err := Build(st, root, clock)
 	require.NoError(t, err)
@@ -478,7 +479,7 @@ func TestUntrustedTextNeverBecomesMarkup(t *testing.T) {
 	p := model.Proposal{Signature: "evil", Rule: payload, Region: "api",
 		Note: "</p>" + payload, Members: []int64{31}, Agent: payload,
 		Status: model.ProposalProposed}
-	require.NoError(t, st.InsertProposal(&p))
+	require.NoError(t, storetest.InsertProposal(st, &p))
 
 	page := renderPage(t, st, root)
 
@@ -499,7 +500,7 @@ func TestControlCharactersAreStrippedButLineBreaksSurvive(t *testing.T) {
 
 	p := model.Proposal{Signature: "esc", Rule: "r", Region: "api", Note: "n",
 		Members: []int64{41}, Agent: "claude/v3", Status: model.ProposalProposed}
-	require.NoError(t, st.InsertProposal(&p))
+	require.NoError(t, storetest.InsertProposal(st, &p))
 
 	page := renderPage(t, st, root)
 
@@ -541,7 +542,7 @@ func TestTruncationIsAlwaysDeclared(t *testing.T) {
 	for range maxCards + 3 {
 		p := model.Proposal{Signature: "s", Rule: "r", Region: "api", Note: "n",
 			Agent: "claude/v3", Status: model.ProposalProposed}
-		require.NoError(t, st.InsertProposal(&p))
+		require.NoError(t, storetest.InsertProposal(st, &p))
 	}
 
 	page := renderPage(t, st, root)
@@ -690,7 +691,7 @@ func TestReportShowsPinOutcome(t *testing.T) {
 			Body: "api boundary unguarded again", CreatedAt: now.Add(time.Hour).Unix(), Source: "review"},
 	}))
 
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "s1", Rule: "boundary-guard", Region: "api", Note: "Guard it.",
 		Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalApplied,
 	}))
@@ -731,7 +732,7 @@ func TestReportKeepsTheOutcomeErrorText(t *testing.T) {
 			Body: "guard the api boundary", CreatedAt: 1, Source: "review"},
 	}))
 
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "s1", Rule: "boundary-guard", Region: "api", Note: "Guard it.",
 		Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalApplied,
 	}))
@@ -791,7 +792,7 @@ func TestReportShowsScopeAdvisory(t *testing.T) {
 			CreatedAt: time.Now().Unix(), Source: "review"},
 	}))
 
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "s1", Rule: "regenerate-web-schema", Region: "web/src/api",
 		Note: "Edit api/schemas.py first.", Members: []int64{1},
 		Agent: "claude/v3", Status: model.ProposalApplied,
@@ -840,7 +841,7 @@ func TestReportShowsBlockedTrigger(t *testing.T) {
 		{ID: 3, Path: "internal/b.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
 	}))
 
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "s1", Rule: "capped-pin", Region: "web/src/api",
 		Regions:      []string{"web/src/api", "cmd", "internal"},
 		TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: time.Now().Unix(),

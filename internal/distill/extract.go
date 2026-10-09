@@ -50,8 +50,9 @@ var perExtractTimeout = 5 * time.Minute
 
 // ErrNoTriggersKey marks a reply without a "triggers" key. Such a reply
 // answers nothing, so no row is stamped. The CLI prints this text as it
-// is (contracts D-1). The console matches the error with errors.Is and
-// uses its own words, because the console retries nothing by itself.
+// is, and its golden tests pin it. The console matches the error with
+// errors.Is and uses its own words, because the console retries nothing
+// by itself.
 var ErrNoTriggersKey = errors.New(`reply carries no "triggers" key — not a negative answer, the batch retries`)
 
 // ExtractOptions configures ExtractTriggers.
@@ -100,9 +101,16 @@ type ExtractResult struct {
 	// miscounts pending rows whose regions did not change.
 	AppliedStored int
 	BatchesFailed int // batches lost to agent or parse errors (retryable)
-	PromptChars   int
-	ReplyChars    int
-	Duration      time.Duration
+	// Conflicts counts the proposals that another writer changed during
+	// their agent call. The run discarded their answers and wrote nothing
+	// to them.
+	Conflicts int
+	// Unattempted counts the proposals that a stop left unsent. The run
+	// wrote nothing to them, so a later run can ask them.
+	Unattempted int
+	PromptChars int
+	ReplyChars  int
+	Duration    time.Duration
 }
 
 // TokensSent estimates the run's prompt traffic for the summary line.
@@ -125,9 +133,15 @@ func (r ExtractResult) TokensBack() string { return estTokens(r.ReplyChars) }
 // of a reviewed extraction. A legacy adapter turns the typed events into
 // the callback strings that the CLI prints. The plan asks every given
 // row in the given order. It does not apply the console exclusions,
-// such as aged-out evidence or a duplicate pin. The CLI keeps its wider
-// set until it converges (D-1, A0 defects D5 and D6). Boundary stays
-// off, so the CLI keeps its unguarded writes too (A0 defect D14).
+// such as aged-out evidence or a duplicate pin. The CLI keeps this wider
+// set until a separate decision moves it to the console selection (A0
+// defects D5 and D6).
+//
+// The executor checks the rows before each batch and saves each answer
+// with the row's guard, as in the console. A row that another writer
+// changed is a conflict, not an error: the run leaves the row unchanged
+// and stops. Before, the CLI stamped such a row anyway (A0 defect D14).
+// The counters and the conflict lines report it.
 func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 	ps []model.Proposal, meta map[int64]model.Finding, opts ExtractOptions,
 ) (*ExtractResult, error) {
@@ -147,7 +161,8 @@ func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 
 	if opts.OnPreflight != nil {
 		// The CLI disclosure keeps the excerpt cap although the CLI
-		// sends finding metadata only (D-1, A0 defect D4).
+		// sends finding metadata only. The goldens pin this text until a
+		// separate decision fixes it (A0 defect D4).
 		pf := plan.Preflight
 		pf.BodyCap = extractBodyCap
 
@@ -180,9 +195,16 @@ func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 }
 
 // legacyExtractProgress turns typed events into the ExtractOptions
-// callbacks and log lines that ExtractTriggers always produced, with the
-// same text and order. The CLI prints them, so they must not change.
+// callbacks and log lines that the CLI prints. A run without a conflict
+// keeps the text and order of the earlier CLI loop, because scripts can
+// read them. A conflict adds the lines of logExtractConflicts and
+// logExtractConflictStop.
 func legacyExtractProgress(opts ExtractOptions, logf func(string, ...any), plan *ExtractPlan) func(ExtractEvent) {
+	// afterCall records a conflict during an agent call. The stop that
+	// follows it then needs no cause of its own, because the conflict
+	// lines name the proposals.
+	afterCall := false
+
 	return func(ev ExtractEvent) {
 		switch ev.Kind {
 		case ExtractBatchStarted:
@@ -196,8 +218,80 @@ func legacyExtractProgress(opts ExtractOptions, logf func(string, ...any), plan 
 			}
 		case ExtractBatchDone:
 			legacyExtractOutcome(opts, logf, ev.Batch)
+
+			if logExtractConflicts(logf, ev.Batch) {
+				afterCall = true
+			}
+		case ExtractStopped:
+			if ev.Stop == StopConflict {
+				logExtractConflictStop(logf, plan, ev, afterCall)
+			}
 		}
 	}
+}
+
+// logExtractConflicts prints one line for each item of b that changed
+// during the agent call. It reports whether it printed a line. The line
+// names the proposal and says that the run did not write to it, so the
+// summary count never reads as a stored answer.
+func logExtractConflicts(logf func(string, ...any), b *ExtractBatchOutcome) bool {
+	printed := false
+
+	for _, item := range b.Items {
+		if item.Status != ExtractConflict {
+			continue
+		}
+
+		id := item.Proposal.ID
+		logf("conflict: p%d changed during the agent call — its answer was not saved and p%d is left unchanged", id, id)
+
+		printed = true
+	}
+
+	return printed
+}
+
+// logExtractConflictStop reports a conflict stop that leaves proposals
+// unsent. It names the cause, the number of unsent proposals, and the
+// next step. A conflict in the last batch leaves nothing unsent, so it
+// prints nothing. After a conflict during an agent call, the cause is
+// the active writer. Before a batch, the cause is the change that the
+// row check found, such as "p12 is applied now".
+func logExtractConflictStop(logf func(string, ...any), plan *ExtractPlan, ev ExtractEvent, afterCall bool) {
+	unsent := 0
+
+	for _, b := range plan.Batches[min(ev.Index, len(plan.Batches)):] {
+		unsent += len(b.Proposals)
+	}
+
+	if unsent == 0 {
+		return
+	}
+
+	cause := "another writer is active"
+	if !afterCall {
+		cause = extractStaleCause(ev.Err)
+	}
+
+	logf("extraction stopped: %s — %d proposal(s) not sent and left unchanged; re-running resumes", cause, unsent)
+}
+
+// extractStaleCause returns the changes that a stale error names,
+// without the sentinel text. Another error keeps its whole text.
+func extractStaleCause(err error) string {
+	if err == nil {
+		return "an input changed"
+	}
+
+	text := err.Error()
+
+	if errors.Is(err, ErrExtractStale) {
+		if cause, ok := strings.CutPrefix(text, ErrExtractStale.Error()+": "); ok && cause != "" {
+			return cause
+		}
+	}
+
+	return text
 }
 
 // legacyExtractOutcome reports one finished batch the legacy way. A
@@ -392,7 +486,7 @@ func extractBatches(ps []model.Proposal) [][]model.Proposal {
 // extractAnswer is one entry of a parsed reply, as the model wrote it.
 // It is an alias of an unnamed struct on purpose: the JSON decoder names
 // the target type in its error text, and the CLI prints that text. A
-// named type would change the CLI warning (D-1).
+// named type would change the CLI warning that the goldens pin.
 type extractAnswer = struct {
 	ID           int64    `json:"id"`
 	TriggerPaths []string `json:"trigger_paths"`

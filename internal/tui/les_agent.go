@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/redact"
 )
 
 // This file holds the parts that the two agent run records share. An
@@ -19,7 +21,9 @@ import (
 // under the mutation slot, and can stop. The shared parts are the steps,
 // the Preview step state, the run state and the messages. They also
 // include the worker, the keys, the verdict shape, the unit counts, the
-// activity log and the stop question.
+// activity log and the stop question. Both records render the agent,
+// the clock, the token counts, the failures and the stops with the same
+// helpers, so one fact reads the same in both.
 //
 // The records stay two types with their own methods. The methods differ
 // in the words of each workflow and in fields of the engine types, and
@@ -107,6 +111,15 @@ const agentWarnTTL = 15 * time.Second
 // trail. The facts give way to the trail down to this width, so every
 // supported terminal shows the step (design map §4).
 const agentFactsMin = 20
+
+// agentPlanW is the width of the Plan pane of a review at the 120-column
+// design size. It is wider than the Setup plan, because the notes of a
+// paid run are longer and must show without scrolling where possible.
+const agentPlanW = 50
+
+// agentGlyphW is the width of the glyph column in the unit rows of a run
+// and a result.
+const agentGlyphW = 3
 
 // agentKeys are the letter keys that both agent run records bind. The
 // records keep the letters of their own workflow in distKeys and
@@ -403,6 +416,90 @@ func countSep(t *Theme) string {
 	return " " + t.Glyphs.Sep + " "
 }
 
+// agentTokens renders an estimated token count of chars characters with
+// the engine's own estimate, so the console and the CLI agree.
+func agentTokens(chars int) string {
+	return "~" + distill.Preflight{PromptChars: chars}.Tokens()
+}
+
+// agentFailWords names a failure kind for a reader. A failed group and a
+// failed batch carry the same kinds.
+func agentFailWords(k distill.FailureKind) string {
+	switch k {
+	case distill.FailAgent:
+		return "agent error"
+	case distill.FailTimeout:
+		return "timeout"
+	case distill.FailInvalidReply:
+		return "invalid reply"
+	case distill.FailStore:
+		return "store error"
+	default:
+		return k.String()
+	}
+}
+
+// agentStopWords names why a run ended before its last unit.
+func agentStopWords(r distill.StopReason) string {
+	switch r {
+	case distill.StopCancelled:
+		return "stopped by you"
+	case distill.StopConflict:
+		return "an input changed"
+	case distill.StopStoreError:
+		return "store error"
+	default:
+		return r.String()
+	}
+}
+
+// agentClock renders a time of day for the facts and the activity lines.
+func agentClock(at time.Time) string {
+	return at.Format("15:04:05")
+}
+
+// agentKind names where the agent command comes from: a registered
+// preset by its name, or the custom agent.argv of the configuration.
+func agentKind(name string, custom bool) string {
+	if custom {
+		return "custom agent.argv"
+	}
+
+	return "preset " + oneLine(name)
+}
+
+// agentText renders the agent as "<argv> · <kind>" (design map §4 and
+// §5). Every step that names the agent uses it, so one agent reads the
+// same in both records. room > 0 cuts a long command line before the
+// kind, so the kind always shows; room <= 0 leaves the cut to the caller.
+func agentText(t *Theme, argv []string, kind string, room int) string {
+	tail := " " + t.Glyphs.Sep + " " + kind
+	cmd := agentArgv(argv)
+
+	if room > 0 && width(cmd)+width(tail) > room {
+		cmd = truncate(cmd, max(1, room-width(tail)), t.Glyphs.Ellipsis)
+	}
+
+	return t.Body.Render(cmd) + t.Muted.Render(tail)
+}
+
+// agentArgv renders an agent command line for display. Arguments can
+// hold tokens, so the helper redacts them before it sanitizes the text.
+// A secret-shaped value that holds shell syntax stays visible. It is
+// code that runs after y, and "[REDACTED]" would hide it behind a word
+// that reads as a safety measure.
+func agentArgv(argv []string) string {
+	return oneLine(redact.SecretsExcept(strings.Join(argv, " "), shellActive))
+}
+
+// shellActive reports text that a shell runs or redirects: a command
+// substitution, a backquote, a command separator, a pipe, a redirection
+// or a line break. A password that holds such a character then shows
+// too; the trade-off favors the code that runs.
+func shellActive(s string) bool {
+	return strings.Contains(s, "$(") || strings.ContainsAny(s, "`;|&<>\n\r")
+}
+
 // isPreset reports a registered preset command, not a custom
 // agent.argv. It reads the preset list, so only a plan command calls
 // it, never View or Update.
@@ -414,7 +511,7 @@ func isPreset(name string) bool {
 // last keep lines. The lines hold typed facts only, never agent output,
 // so a raw reply never reaches the screen.
 func appendActivity(lines []string, at time.Time, text string, keep int) []string {
-	lines = append(lines, distClock(at)+"  "+text)
+	lines = append(lines, agentClock(at)+"  "+text)
 
 	if len(lines) > keep {
 		lines = lines[len(lines)-keep:]

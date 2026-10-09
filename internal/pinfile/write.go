@@ -6,7 +6,8 @@ package pinfile
 // bytes. The engine then checks the guard again right before the write,
 // refuses a link and a file that this user cannot write, keeps the mode,
 // and replaces the file by rename, so a failure never leaves a
-// half-written file.
+// half-written file. Prepare writes a retarget or a prune. PrepareAppend
+// writes an apply, and it also creates an absent file.
 
 import (
 	"crypto/sha256"
@@ -34,19 +35,38 @@ type Prepared struct {
 // expect: the mode and the link state of the moment of the write come
 // from the new observation, and the engine checks them itself. A file
 // that changed returns ErrStale. A link or a file that this user cannot
-// write returns ErrNotWritable. Bytes that the lessons reader rejects are refused, because
-// the edit hook would then drop every pin without a word.
+// write returns ErrNotWritable. Bytes that the lessons reader rejects
+// are refused, because the edit hook would then drop every pin without a
+// word. An absent file returns ErrStale: a retarget or a prune edits an
+// entry, so it needs the file.
 func Prepare(reg *integration.Registry, root string, expect integration.FileGuard, after []byte) (*Prepared, error) {
 	if !expect.Exists {
 		return nil, fail(ErrStale, "the pin file does not exist")
 	}
 
+	return prepare(reg, root, expect, after, "update pins")
+}
+
+// PrepareAppend plans the write of a candidate from PlanAppend. It
+// follows the rules of Prepare, with one difference: when expect
+// observed no file, the write creates it. The first apply of a workspace
+// creates the pin file, as the CLI always did. The file must then still
+// be absent at the write, so the write never replaces a file that
+// another writer created.
+func PrepareAppend(reg *integration.Registry, root string, expect integration.FileGuard, after []byte) (*Prepared, error) {
+	return prepare(reg, root, expect, after, "add pins")
+}
+
+// prepare plans the guarded write of after. The file must still exist
+// as expect observed it, with the same SHA-256, or be absent as expect
+// observed it.
+func prepare(reg *integration.Registry, root string, expect integration.FileGuard, after []byte, detail string) (*Prepared, error) {
 	if _, err := reviews.ParseConfig(after); err != nil {
 		return nil, fmt.Errorf("%w: the candidate does not load: %w", ErrUnverified, err)
 	}
 
-	setup, err := guardedWrite(reg, root, "update pins", after, func(existing []byte, exists bool) error {
-		if !exists || sha256.Sum256(existing) != expect.SHA256 {
+	setup, err := guardedWrite(reg, root, detail, after, func(existing []byte, exists bool) error {
+		if exists != expect.Exists || (exists && sha256.Sum256(existing) != expect.SHA256) {
 			return fail(ErrStale, "the file changed after the plan")
 		}
 

@@ -16,7 +16,6 @@ import (
 
 // Column widths of the Groups pane of the run and the result.
 const (
-	distGlyphW   = 3
 	distRunIdxW  = 3
 	distRunFindW = 6
 	// distOutcomeMin is the narrowest outcome column; the region column
@@ -318,7 +317,7 @@ func (d *distRecord) phases() []phaseRow {
 	case r.checked:
 		check.state, check.note = phaseDone, "no change since the preview"
 	case r.stopped:
-		check.state, check.note = phaseStopped, distStopWords(r.stopWhy)
+		check.state, check.note = phaseStopped, agentStopWords(r.stopWhy)
 	}
 
 	rows := []phaseRow{check}
@@ -438,11 +437,11 @@ func (d *distRecord) usageText() string {
 	case sent == 0 && pending == 0:
 		return t.Muted.Render("no agent traffic yet")
 	case sent == 0:
-		return t.Body.Render(distTokens(pending)+" tokens sent to group "+itoa(k+1)) + " " +
+		return t.Body.Render(agentTokens(pending)+" tokens sent to group "+itoa(k+1)) + " " +
 			t.Faint.Render("(estimated)") + t.Muted.Render("; reply pending")
 	}
 
-	text := t.Body.Render(distTokens(sent+pending)+" tokens sent "+t.Glyphs.Sep+" "+distTokens(back)+" received") +
+	text := t.Body.Render(agentTokens(sent+pending)+" tokens sent "+t.Glyphs.Sep+" "+agentTokens(back)+" received") +
 		" " + t.Faint.Render("(estimated)")
 
 	if pending > 0 {
@@ -508,7 +507,7 @@ func (d *distRecord) happened() [][2]string {
 	case d.run.internal:
 		rows = append(rows, [2]string{"Stop", t.Failure.Render("internal error")})
 	case x.Stop != distill.StopNone:
-		rows = append(rows, [2]string{"Stop", t.Attention.Render(distStopWords(x.Stop))})
+		rows = append(rows, [2]string{"Stop", t.Attention.Render(agentStopWords(x.Stop))})
 	}
 
 	return rows
@@ -598,11 +597,11 @@ func (d *distRecord) runGroupLines(w int, focused, find bool) (lines []string, k
 		findW = distRunFindW
 	}
 
-	outW := max(distOutcomeMin, (w-2-distGlyphW-distRunIdxW-findW)/2)
-	regW := max(6, w-2-distGlyphW-distRunIdxW-findW-outW)
+	outW := max(distOutcomeMin, (w-2-agentGlyphW-distRunIdxW-findW)/2)
+	regW := max(6, w-2-agentGlyphW-distRunIdxW-findW-outW)
 
 	cells := func(marker, glyph, idx, region, found, outcome string) string {
-		cs := []colCell{cell(marker, 2), cell(glyph, distGlyphW), cell(idx, distRunIdxW), cell(region, regW)}
+		cs := []colCell{cell(marker, 2), cell(glyph, agentGlyphW), cell(idx, distRunIdxW), cell(region, regW)}
 		if find {
 			cs = append(cs, cell(found, findW))
 		}
@@ -662,7 +661,7 @@ func (d *distRecord) outcomeCell(i int, o distill.GroupOutcome) (glyph, words st
 
 		return t.Success.Render(g.OK), t.Body.Render(text)
 	case distill.GroupFailed:
-		return t.Failure.Render(g.Fail), t.Failure.Render("failed: " + distFailWords(o.Failure))
+		return t.Failure.Render(g.Fail), t.Failure.Render("failed: " + agentFailWords(o.Failure))
 	case distill.GroupCancelled:
 		return t.Attention.Render(g.Warn), t.Attention.Render("cancelled")
 	case distill.GroupSkipped:
@@ -710,7 +709,7 @@ func (d *distRecord) groupDetail(w int) []string {
 
 	switch o.Status {
 	case distill.GroupFailed:
-		lines = append(lines, propNote(t, ToneFailure, "failed: "+distFailWords(o.Failure)+": "+errText(o.Err)+
+		lines = append(lines, propNote(t, ToneFailure, "failed: "+agentFailWords(o.Failure)+": "+errText(o.Err)+
 			". The group has no signature, so a new plan can include it.", w)...)
 	case distill.GroupCancelled:
 		lines = append(lines, propNote(t, ToneAttention, "cancelled before its result was saved, so it stays "+

@@ -59,7 +59,7 @@ func planOne(t *testing.T, before, rule string, edit Edit) (string, error) {
 	return string(c.After), nil
 }
 
-// emitted is the layout that distill.RenderPins and ApplyPins write,
+// emitted is the layout that distill.RenderPins and an apply write,
 // with a block note that holds a "#" line and a blank line.
 const emitted = "# Review-lesson tuning (see `seamark lessons --list`).\n" + `threshold: 3
 mute:
@@ -347,6 +347,13 @@ func TestPruneGoldens(t *testing.T) {
 		{"no final line break", "pin:\n  - rule: a\n  - rule: b", "b", nil, func(t *testing.T, s string) string {
 			return "pin:\n  - rule: a"
 		}},
+		// A mute item has the same "- rule:" shape as a pin. The prune
+		// binds the entry of the pin list, so the mute of the same name
+		// stays.
+		{"a mute with the same rule stays", "mute:\n  - rule: shared\n\npin:\n  - rule: shared\n    region: api\n    note: n\n",
+			"shared", nil, func(t *testing.T, s string) string {
+				return "mute:\n  - rule: shared\n\npin:\n"
+			}},
 	}
 
 	for _, tc := range cases {

@@ -15,7 +15,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 func TestMatchesRegion(t *testing.T) {
@@ -193,7 +195,7 @@ func TestLoadReadsSupersededHistory(t *testing.T) {
 		Signature: "sig-only", Rule: "only-cites-three", Note: "Three.", Members: []int64{3},
 		Status: model.ProposalSuperseded, CreatedAt: 1700000000,
 	}
-	require.NoError(t, f.st.InsertProposal(&only))
+	require.NoError(t, storetest.InsertProposal(f.st, &only))
 
 	ls, err := Load(f.st, f.root, time.Unix(1700000000, 0))
 	require.NoError(t, err)
@@ -290,9 +292,19 @@ func TestHealthIsTheCLIAdvisory(t *testing.T) {
 	assert.Contains(t, err.Error(), "lessons proposalHealth: reading .seamark/lessons.yaml",
 		"the CLI error text is unchanged")
 
-	_, err = appliedOutcomes(f.st, f.root, nil)
-	require.ErrorIs(t, err, reviews.ErrLessonsConfig)
-	assert.Contains(t, err.Error(), "failed to load lessons config")
+	// The outcome step measures with the config that Health read. It does
+	// not read the pin file again, so the malformed file on disk does not
+	// fail it. Its old "failed to load lessons config" error came only
+	// from a file that changed between the two reads.
+	cfg, err := reviews.ParseConfig([]byte("pin:\n  - rule: r\n    region: api\n"))
+	require.NoError(t, err)
+
+	applied := []model.Proposal{{ID: 1, Rule: "r", Region: "api", Members: []int64{1}, Status: model.ProposalApplied}}
+
+	readings, err := appliedOutcomes(f.st, f.root, cfg, applied)
+	require.NoError(t, err)
+	require.Contains(t, readings, int64(1), "the pin from the passed config is live")
+	assert.Equal(t, "untested — never fired", readings[1].Line())
 }
 
 func TestMeasureOutcomesKeepsTheCLIErrorText(t *testing.T) {
@@ -308,10 +320,141 @@ func TestMeasureOutcomesKeepsTheCLIErrorText(t *testing.T) {
 	assert.True(t, strings.HasPrefix(err.Error(), "failed to gather applied proposal outcomes: "), err.Error())
 }
 
+// TestHealthErrorsKeepTheirTextAndOrder freezes every Health error that
+// a test can force, with its exact text. It also freezes which error
+// wins when two sources fail. The test came before the single read of
+// lessons.yaml, so it proves that the single read keeps both.
+func TestHealthErrorsKeepTheirTextAndOrder(t *testing.T) {
+	pending := []model.Proposal{{ID: 1, Rule: "waiting", Members: []int64{1}, Status: model.ProposalProposed}}
+	applied := []model.Proposal{{ID: 2, Rule: "applied", Members: []int64{1}, Status: model.ProposalApplied}}
+
+	const (
+		malformed   = "pin: [\n"
+		badDelivery = "hook_delivery: sometimes\n"
+		configErr   = "lessons proposalHealth: reading .seamark/lessons.yaml: lessons config: "
+		yamlErr     = configErr + "yaml: line 1: did not find expected node content"
+		storeErr    = "sql: database is closed"
+		logErr      = "failed to read firing log: read <root>/.seamark/lessons-audit.jsonl: is a directory"
+	)
+
+	tests := []struct {
+		name string
+		// lessons is the pin file content. An empty value leaves the
+		// file absent, which means the default config.
+		lessons string
+		// lessonsDir puts a directory at the pin file path, so the read
+		// of the pin file fails.
+		lessonsDir bool
+		// logDir puts a directory at the firing log path, so the read of
+		// the firing log fails.
+		logDir bool
+		// closed closes the store, so every index read fails.
+		closed bool
+		ps     []model.Proposal
+		// want is the exact error text with the root path as <root>. An
+		// empty value means no error.
+		want string
+	}{
+		{name: "malformed pin file", lessons: malformed, ps: pending, want: yamlErr},
+		{name: "invalid hook_delivery", lessons: badDelivery, ps: applied,
+			want: configErr + `hook_delivery must be "always" or "once-per-context", got "sometimes"`},
+		{name: "unreadable pin file", lessonsDir: true, ps: applied,
+			want: configErr + "read <root>/.seamark/lessons.yaml: is a directory"},
+		{name: "closed store", closed: true, ps: applied, want: storeErr},
+		{name: "unreadable firing log", logDir: true, ps: applied, want: logErr},
+		{name: "unreadable firing log without applied rows", logDir: true, ps: pending},
+		{name: "the pin file error wins over the store", lessons: malformed, closed: true, ps: applied,
+			want: yamlErr},
+		{name: "the pin file error wins over the firing log", lessons: malformed, logDir: true, ps: applied,
+			want: yamlErr},
+		{name: "the store error wins over the firing log", closed: true, logDir: true, ps: applied,
+			want: storeErr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, true)
+
+			if tt.lessons != "" {
+				f.writeLessons(tt.lessons)
+			}
+
+			if tt.lessonsDir {
+				require.NoError(t, os.Mkdir(f.lessonsPath(), 0o755))
+			}
+
+			if tt.logDir {
+				require.NoError(t, os.Mkdir(reviews.AuditLogPath(f.root), 0o755))
+			}
+
+			if tt.closed {
+				require.NoError(t, f.st.Close())
+			}
+
+			h, err := Health(f.st, f.root, tt.ps)
+
+			if tt.want == "" {
+				require.NoError(t, err)
+				assert.Len(t, h, len(tt.ps))
+
+				return
+			}
+
+			require.Error(t, err)
+			assert.Nil(t, h)
+			assert.Equal(t, tt.want, strings.ReplaceAll(err.Error(), f.root, "<root>"))
+		})
+	}
+}
+
+// TestHealthMeasuresAppliedPinsWithTheLivePinFile freezes the full
+// Health output for applied rows. The outcome step must find each pin in
+// the pin file that Health read. The live note, not the stored note,
+// joins the pin to its firings.
+func TestHealthMeasuresAppliedPinsWithTheLivePinFile(t *testing.T) {
+	f := newFixture(t, true)
+
+	f.writeLessons(`pin:
+  - rule: fired-pin
+    region: api
+    note: Live wording.
+  - rule: quiet-pin
+    region: web
+    note: Never fired.
+`)
+
+	fired := f.propose("fired-pin", "Stored wording.", model.ProposalApplied, "api")
+	quiet := f.propose("quiet-pin", "Never fired.", model.ProposalApplied, "web")
+	gone := f.propose("gone-pin", "Pruned.", model.ProposalApplied, "docs")
+	waiting := f.propose("waiting", "Pending.", model.ProposalProposed, "api")
+
+	live := reviews.PinRule{Rule: "fired-pin", Region: "api", Note: "Live wording."}
+	require.NoError(t, reviews.RecordFiring(f.root, "api/handler.go", "Edit",
+		[]model.Lesson{reviews.SurfacedPin{Pin: live}.Lesson()}))
+
+	h, err := Health(f.st, f.root, []model.Proposal{fired, quiet, gone, waiting})
+	require.NoError(t, err)
+
+	// The store holds no findings, so every row has the same tier and
+	// facts. The outcome lines carry the difference.
+	const (
+		tier  = "weak"
+		facts = "evidence aged out of the store"
+	)
+
+	assert.Equal(t, map[int64]report.ProposalHealth{
+		fired.ID: {Tier: tier, Facts: facts,
+			Outcome: "untested — citations aged out of the mining window (fired 1×)"},
+		quiet.ID:   {Tier: tier, Facts: facts, Outcome: "untested — never fired"},
+		gone.ID:    {Tier: tier, Facts: facts, Pruned: true},
+		waiting.ID: {Tier: tier, Facts: facts},
+	}, h)
+}
+
 func TestRegionSetsEqualIgnoresOrder(t *testing.T) {
-	assert.True(t, RegionSetsEqual([]string{"api", "web"}, []string{"web/", "api"}))
-	assert.True(t, RegionSetsEqual(nil, []string{"*"}), "both are repo-wide")
-	assert.False(t, RegionSetsEqual([]string{"api"}, []string{"api", "web"}))
+	assert.True(t, regionSetsEqual([]string{"api", "web"}, []string{"web/", "api"}))
+	assert.True(t, regionSetsEqual(nil, []string{"*"}), "both are repo-wide")
+	assert.False(t, regionSetsEqual([]string{"api"}, []string{"api", "web"}))
 }
 
 // ids returns the proposal IDs in order.
@@ -330,7 +473,7 @@ func TestPackageDocNamesWhatTheCLIShares(t *testing.T) {
 	// the doc claims a parity that the code does not have.
 	assert.Equal(t, []string{
 		"Commit", "ErrNothingSelected", "Health", "Ledgerer", "Preview", "PreviewApply",
-		"PreviewDismiss", "PreviewReconcile", "RegionSetsEqual", "Result",
+		"PreviewDismiss", "PreviewReconcile", "Result",
 	}, exportsUsedIn(t, "cli"))
 
 	// `lessons --stats` and the console's Stats view measure outcomes
@@ -343,7 +486,7 @@ func TestPackageDocNamesWhatTheCLIShares(t *testing.T) {
 
 	// The doc wraps lines, so the check joins them first.
 	doc := strings.Join(strings.Fields(file.Doc.Text()), " ")
-	assert.Contains(t, doc, "share the evidence helpers (Health and RegionSetsEqual)")
+	assert.Contains(t, doc, "share the evidence helper Health")
 	assert.Contains(t, doc, "the decision flow (PreviewApply, PreviewDismiss, PreviewReconcile, Commit, "+
 		"with their Ledgerer, Preview, Result and ErrNothingSelected)")
 	assert.Contains(t, doc, "use MeasureOutcomes through internal/lessonstats")

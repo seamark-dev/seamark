@@ -12,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // ctxAgent scripts Invoke with the call context, so a test can block
@@ -373,7 +374,7 @@ func TestExecuteKeepsAReplyThatArrivedBeforeTheStop(t *testing.T) {
 
 func TestExecuteStartsNothingAfterAnEarlyStop(t *testing.T) {
 	st := openSeeded(t, areaFindings("a", "b"))
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "gone", Rule: "stale", Note: "n", Members: []int64{21, 22}, Status: model.ProposalProposed,
 	}))
 
@@ -565,7 +566,7 @@ func TestExecuteStopDuringTheStartChecksSkipsTheCleanup(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			st := openSeeded(t, areaFindings(tc.dirs...))
-			require.NoError(t, st.InsertProposal(&model.Proposal{
+			require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 				Signature: "gone", Rule: "stale", Note: "n", Members: []int64{1, 2}, Status: model.ProposalProposed,
 			}))
 
@@ -613,7 +614,7 @@ func TestExecuteStopsWhenAnotherWriterRecordsTheNextGroup(t *testing.T) {
 
 	agent := &ctxAgent{fn: func(context.Context, string) (string, error) {
 		// Another process distills the second planned group meanwhile.
-		require.NoError(t, st.MarkDistilled(p.Groups[1].Group.Signature, "", 1))
+		require.NoError(t, storetest.MarkDistilled(st, p.Groups[1].Group.Signature, "", 1))
 
 		return `{"patterns":[]}`, nil
 	}}
@@ -667,7 +668,7 @@ func TestExecuteRefusesAGroupRecordedDuringItsOwnCall(t *testing.T) {
 	p := planAll(t, st, nil)
 
 	agent := &ctxAgent{fn: func(_ context.Context, prompt string) (string, error) {
-		require.NoError(t, st.MarkDistilled(p.Groups[0].Group.Signature, "", 1))
+		require.NoError(t, storetest.MarkDistilled(st, p.Groups[0].Group.Signature, "", 1))
 
 		id := firstID(prompt)
 
@@ -720,14 +721,14 @@ func TestExecuteStopsOnACallerConflict(t *testing.T) {
 
 func TestExecuteRejectsAStalePlanBeforeAnyWrite(t *testing.T) {
 	st := openSeeded(t, areaFindings("a"))
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "gone", Rule: "stale", Note: "n", Members: []int64{21, 22}, Status: model.ProposalProposed,
 	}))
 
 	p := planAll(t, st, nil)
 
 	// A decision after the plan changes the ledger.
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "other", Rule: "decided", Note: "n", Members: []int64{90, 91}, Status: model.ProposalDismissed,
 	}))
 
@@ -748,7 +749,7 @@ func TestExecuteRejectsAStalePlanBeforeAnyWrite(t *testing.T) {
 
 func TestExecuteCleanupDeletesOnlyPlannedRows(t *testing.T) {
 	st := openSeeded(t, nil)
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "gone", Rule: "planned", Note: "n", Members: []int64{1, 2}, Status: model.ProposalProposed,
 	}))
 
@@ -757,7 +758,7 @@ func TestExecuteCleanupDeletesOnlyPlannedRows(t *testing.T) {
 	require.Len(t, p.Cleanup, 1)
 
 	// Another writer adds a row with a stale signature after the plan.
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "gone-too", Rule: "later", Note: "n", Members: []int64{3, 4}, Status: model.ProposalProposed,
 	}))
 
@@ -781,7 +782,7 @@ func TestExecuteCleanupDeletesOnlyPlannedRows(t *testing.T) {
 
 func TestExecuteNeedsAPlanAndAnInvoker(t *testing.T) {
 	st := openSeeded(t, areaFindings("a"))
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "gone", Rule: "stale", Note: "n", Members: []int64{1, 2}, Status: model.ProposalProposed,
 	}))
 

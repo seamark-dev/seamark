@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -78,9 +78,11 @@ func Resolve(dir, dbFlag string) (Workspace, error) {
 // workspace in their own words and print --db as the user wrote it.
 // It returns the resolver error unchanged for the same reason.
 func Locate(dir, dbFlag string) (Workspace, error) {
-	// ResolveRoot is the resolver that index.Run uses. The same rule
-	// makes every reader find the database that an index build writes.
-	root, err := index.ResolveRoot(dir)
+	// history.ResolveRoot is the resolver that index.Run uses. The same
+	// rule makes every reader find the database that an index build
+	// writes. It lives in history, so this package does not import index
+	// and its cgo parsers.
+	root, err := history.ResolveRoot(dir)
 	if err != nil {
 		return Workspace{}, err
 	}

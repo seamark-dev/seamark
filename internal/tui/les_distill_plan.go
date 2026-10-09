@@ -24,10 +24,6 @@ const (
 	distTokW  = 15
 	// distEvPad indents the evidence rows under their group.
 	distEvPad = 6
-	// distPlanW is the Plan pane at the 120-column design size. It is
-	// wider than the Setup plan, because the notes of a paid run are
-	// longer and must show without scrolling where possible.
-	distPlanW = 50
 	// distIDMinW is the narrowest finding ID column: "#" and five digits
 	// with a gap. Longer IDs widen the column.
 	distIDMinW = 7
@@ -56,7 +52,7 @@ func (d *distRecord) previewView(w, h int) string {
 	}
 
 	if d.st.wide() {
-		leftW := max(34, setupSplit(w, distPlanW))
+		leftW := max(34, setupSplit(w, agentPlanW))
 
 		return hjoin(1, d.planBox(leftW, h, pl.planFocus), d.groupsBox(w-leftW-1, h, !pl.planFocus))
 	}
@@ -163,7 +159,7 @@ func (d *distRecord) planFacts(w int) []string {
 	rows := [][2]string{
 		{"Groups", t.Body.Render(itoa(len(pl.Groups)) + " of " + itoa(eligible) + " eligible")},
 		{"Findings", t.Body.Render(itoa(pl.Preflight.Findings))},
-		{"Prompt", t.Body.Render(distTokens(pl.Preflight.PromptChars)+" tokens") + " " + t.Faint.Render("(estimated)")},
+		{"Prompt", t.Body.Render(agentTokens(pl.Preflight.PromptChars)+" tokens") + " " + t.Faint.Render("(estimated)")},
 		{"Skipped", t.Body.Render(propPlural(len(pl.Skipped), "group", "groups") + " already distilled")},
 	}
 
@@ -173,7 +169,7 @@ func (d *distRecord) planFacts(w int) []string {
 	}
 
 	// The value wraps in its column, so the kind needs no cut here.
-	agent := distAgentText(t, p.Invocation.Argv, distAgentKind(p.Invocation.Name, !d.prev.preset), 0)
+	agent := agentText(t, p.Invocation.Argv, agentKind(p.Invocation.Name, !d.prev.preset), 0)
 
 	runsIn := runsInText(t, p.Invocation.Dir, d.prev.cwd, p.RepoRoot)
 	rows = append(rows, [2]string{"Agent", agent}, [2]string{"Runs in", runsIn})
@@ -323,7 +319,7 @@ func (d *distRecord) groupLines(w int, focused bool) (lines []string, keep [2]in
 		row := integRow(t, cell(marker, 2), cell(t.Muted.Render(padLeft(itoa(i+1), distIdxW-1)), distIdxW),
 			cell(region.Render(distRegionLabel(g.Region)), regW),
 			cell(t.Body.Render(padLeft(itoa(g.Findings), distFindW-1)), distFindW),
-			cell(t.Body.Render("  "+distTokens(g.PromptChars)), distTokW))
+			cell(t.Body.Render("  "+agentTokens(g.PromptChars)), distTokW))
 
 		if cursor && focused {
 			row = t.highlight(row, w, bgSel)

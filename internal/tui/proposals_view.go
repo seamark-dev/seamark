@@ -838,7 +838,26 @@ func (p *propView) decisionLines(pr domain.Proposal, l *proposals.Ledger, w int)
 		out = append(out, propLines(t.Muted, "distill.write is off: a shows the YAML block to copy and changes nothing.", w)...)
 	}
 
-	if p.hasPin(pr.ID) {
+	// The applied key note comes first: the preview refuses that row before
+	// it looks for a pin, so the pin note would offer a c that is n/a. The
+	// note checks the targets, because a and c act on the marks when there
+	// are any. So it explains each n/a of a and c in the help.
+	ids, implicit := p.targets()
+
+	which := "the selection"
+	if implicit {
+		which = propID(pr.ID)
+	}
+
+	switch taken := p.appliedKeyRefusal(ids); {
+	case taken != nil:
+		out = append(out, propNote(t, ToneAttention, "a and c do not work for "+which+": Pins blocks a pin "+
+			"that two applied proposals record. "+appliedKeyText(taken, ids), w)...)
+	case p.appliedKeyRefusal([]int64{pr.ID}) != nil:
+		// The marks do not hold this row, so a and c do not act on it.
+		// The pin note must still not offer c for a row that the record
+		// refuses.
+	case p.hasPin(pr.ID):
 		out = append(out, propNote(t, ToneAttention, "A pin for "+propID(pr.ID)+" already exists in "+
 			proposals.LessonsFile+". Press c to record it as applied (ledger only); the pin file stays unchanged.", w)...)
 	}
@@ -890,23 +909,23 @@ func (p *propView) unavailableBox(err error, w, h int) string {
 	t := p.st.theme
 	inner := min(boxInner(w), 72)
 
-	var m propMessage
+	var m paneMessage
 
 	switch {
 	case err == nil:
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Accent.Render(t.spinnerFrame(p.st.tick)) + " " + t.Title.Render("Reading the proposal ledger"+t.Glyphs.Ellipsis)},
 			body: "Proposals, their evidence and their advisories load from the index. Nothing is written.",
 		}
 	case errors.Is(err, ErrNoLedger):
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Attention.Render(t.Glyphs.Warn) + " " + t.Title.Render("No index yet")},
 			body: "Proposals live in the index database, and this workspace has no readable index. " +
 				"Build it from Overview (press 1, then b), or run this command in a shell:",
 			next: append([]string{t.command("seamark index")}, propLines(t.Faint, errText(err), inner)...),
 		}
 	default:
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Failure.Render(t.Glyphs.Fail) + " " + t.Title.Render("The proposal ledger could not be read")},
 			body: errText(err) + "\n\nThe other views stay usable. Press r to read the ledger again.",
 		}
@@ -931,7 +950,7 @@ func (p *propView) emptyBox(w, h int) string {
 	total := len(l.Pending) + len(l.Applied) + len(l.Dismissed) + len(l.Superseded)
 	g := t.Glyphs
 
-	var m propMessage
+	var m paneMessage
 
 	switch {
 	case p.run != nil:
@@ -944,7 +963,7 @@ func (p *propView) emptyBox(w, h int) string {
 			agent += " (" + a + ")"
 		}
 
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No proposals yet")},
 			body: "Proposals come from review evidence in two CLI steps. The first command fetches review comments " +
 				"through gh. The second invokes " + agent + " to distill the evidence into proposals. " +
@@ -952,7 +971,7 @@ func (p *propView) emptyBox(w, h int) string {
 			next: []string{t.command("seamark index --reviews"), t.command("seamark lessons --distill")},
 		}
 	case p.filter == propPending && len(l.Pending) == 0:
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Success.Render(g.OK) + " " + t.Title.Render("No pending proposals")},
 			body: "Every distilled proposal has been applied or dismissed.",
 			next: p.morePending(),
@@ -966,14 +985,14 @@ func (p *propView) emptyBox(w, h int) string {
 			}
 		}
 
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No "+label+" proposals")},
 			body: "The ledger holds " + propJoin(others) + " proposals. Press f to show another state.",
 		}
 	default:
 		n := len(p.stateRows())
 
-		m = propMessage{
+		m = paneMessage{
 			head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No "+label+" proposals match region "+oneLine(p.region))},
 			body: propPlural(n, label+" proposal is", label+" proposals are") + " outside this region. " +
 				"Press / and submit an empty filter to show every region.",
@@ -1031,54 +1050,6 @@ func (p *propView) distillAgent() string {
 	return diag(sec.value.Status.DistillAgent)
 }
 
-// propMessage is a centered message: a styled head, a plain body that
-// wraps, and styled next-step lines.
-type propMessage struct {
-	head []string
-	body string
-	next []string
-}
-
-// messageBox renders a full-width box with a centered message. When the
-// box is too short, the body gives up lines first, so the head and the
-// next action stay visible. The empty states of Proposals and Pins use
-// it, so both sub-views read alike.
-func (t *Theme) messageBox(title, right string, m propMessage, w, h int) string {
-	inner := boxInner(w)
-	rows := boxRows(h)
-	textW := min(inner, 72)
-
-	var body []string
-	if m.body != "" {
-		body = strings.Split(wrap(m.body, textW), "\n")
-	}
-
-	gap := 1
-	if len(m.head)+len(body)+len(m.next)+2 > rows {
-		gap = 0
-	}
-
-	if room := rows - len(m.head) - len(m.next) - 2*gap; len(body) > room {
-		body = clipWithEllipsis(body, max(0, room), textW, t.Glyphs.Ellipsis)
-	}
-
-	lines := joinLineBlocks(gap, m.head, t.mutedLines(body), m.next)
-	if len(lines) > rows {
-		lines = lines[:rows]
-	}
-
-	out := make([]string, 0, rows)
-	for range max(0, (rows-len(lines))*2/5) {
-		out = append(out, "")
-	}
-
-	for _, l := range lines {
-		out = append(out, strings.Repeat(" ", max(0, (inner-width(l))/2))+l)
-	}
-
-	return t.box(boxOpts{W: w, H: h, Title: title, Right: right, Focus: true, Lines: out})
-}
-
 // propPinBlock is the display form of a pin block. It never replaces
 // Preview.YAML, because Commit compares that exact string to detect a
 // stale preview.
@@ -1096,9 +1067,10 @@ type propPinBlock struct {
 
 // propFoldPins fits a rendered pin block into w cells. A pane clips a
 // wider line, and a terminal selection then copies a cut note. It
-// folds only note lines: RemovePins and the pin readers read the rule,
-// region and comment lines one line at a time. The folded block must
-// parse to the same value as the source; else the source lines stay.
+// folds only note lines. The pin file editor blocks a rule or a region
+// that spans several lines, and it reads a provenance comment as one
+// line. The folded block must parse to the same value as the source;
+// else the source lines stay.
 func propFoldPins(block string, w int) propPinBlock {
 	src := strings.Split(strings.TrimRight(block, "\n"), "\n")
 	out := propFoldLines(src, w)

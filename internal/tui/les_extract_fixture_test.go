@@ -285,7 +285,7 @@ func extStartHeld(t *testing.T, h *harness) *extRecord {
 
 // extSend delivers one progress event to the held record.
 func extSend(h *harness, rec *extRecord, ev distill.ExtractEvent) {
-	h.send(extEventMsg{rec: rec, ch: distClosed(), ev: ev, at: time.Now()})
+	h.send(extEventMsg{rec: rec, ch: agentClosed(), ev: ev, at: time.Now()})
 }
 
 // extStartedEv builds the start event of batch i.

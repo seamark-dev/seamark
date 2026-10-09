@@ -755,6 +755,6 @@ func TestDistillUsageCountsThePromptThatIsWithTheAgent(t *testing.T) {
 
 	distSend(h, rec, distStarted(rec, 0))
 
-	first := distTokens(rec.prev.preview.Plan.Preflight.Groups[0].PromptChars)
+	first := agentTokens(rec.prev.preview.Plan.Preflight.Groups[0].PromptChars)
 	assert.Equal(t, first+" tokens sent to group 1 (estimated); reply pending", rec.usageText())
 }

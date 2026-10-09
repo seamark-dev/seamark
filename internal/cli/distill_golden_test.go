@@ -13,6 +13,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // These golden tests pin the full stdout and stderr of `lessons --distill`
@@ -119,7 +120,7 @@ func goldenSeedProposals(t *testing.T, root string, ps ...model.Proposal) {
 	defer func() { _ = st.Close() }()
 
 	for i := range ps {
-		require.NoError(t, st.InsertProposal(&ps[i]))
+		require.NoError(t, storetest.InsertProposal(st, &ps[i]))
 	}
 }
 

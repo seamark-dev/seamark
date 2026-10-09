@@ -380,7 +380,7 @@ func (r *extRecord) event(msg extEventMsg) {
 	case distill.ExtractStopped:
 		run.stopped, run.stopWhy = true, ev.Stop
 		run.sending = -1
-		run.log(msg.at, "run ended early: "+distStopWords(ev.Stop))
+		run.log(msg.at, "run ended early: "+agentStopWords(ev.Stop))
 	}
 }
 
@@ -1097,7 +1097,7 @@ func extQuestion(st *state, l *proposals.Ledger, p domain.Proposal) (open bool, 
 		case p.Status == domain.ProposalApplied && link != pinfile.LinkLinked:
 			return false, link.Reason()
 		case p.Status == domain.ProposalProposed && link == pinfile.LinkPendingMatch:
-			return false, "a pin already carries it; record it as applied first"
+			return false, "a pin already carries it" + pendingMatchStep(l, p)
 		}
 	}
 
@@ -1110,6 +1110,24 @@ func extQuestion(st *state, l *proposals.Ledger, p domain.Proposal) (open bool, 
 	}
 
 	return true, reason.String()
+}
+
+// pendingMatchStep gives the next step for pending row p, whose pin is
+// already in the pin file. The usual step is the record with c. The
+// record refuses a row whose pin key an applied proposal records
+// (proposals.CheckAppliedKeys), and c is n/a for it. So the step then is
+// the dismiss of the preview refusal. The text names no key, because d
+// acts on the marks, and the DECISION section gives the key for them.
+func pendingMatchStep(l *proposals.Ledger, p domain.Proposal) string {
+	if l != nil {
+		// The caller checks that the region fields of p agree, as the
+		// check needs.
+		if taken := proposals.CheckAppliedKeys(l.Applied, []domain.Proposal{p}); taken != nil {
+			return ", and " + taken.Error()
+		}
+	}
+
+	return "; record it as applied first"
 }
 
 // appliedPinText tells where the pin of applied proposal id is, for the

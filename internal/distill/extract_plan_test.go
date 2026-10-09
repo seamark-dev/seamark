@@ -15,6 +15,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // extractFindings are the indexed findings of the extraction fixture.
@@ -61,7 +62,7 @@ func newExtractWorkspace(t *testing.T) *extractWorkspace {
 func (w *extractWorkspace) add(t *testing.T, p model.Proposal) model.Proposal {
 	t.Helper()
 
-	require.NoError(t, w.st.InsertProposal(&p))
+	require.NoError(t, storetest.InsertProposal(w.st, &p))
 
 	return p
 }
@@ -105,6 +106,32 @@ func (w *extractWorkspace) exec(t *testing.T, query string, args ...any) {
 
 	_, err = db.Exec(query, args...)
 	require.NoError(t, err)
+}
+
+// answerElsewhere stores a trigger answer for row id through the guarded
+// save, as another extraction run does. The answer closes the question
+// under the current prompt version.
+func (w *extractWorkspace) answerElsewhere(t *testing.T, id int64, checkedAt int64, paths ...string) {
+	t.Helper()
+
+	row := w.row(t, id)
+
+	saved, err := w.st.SaveTriggerAnswer(store.TriggerAnswer{
+		Guard:        store.NewRowGuard(row),
+		PriorChecked: row.TriggerChecked, PriorVersion: row.TriggerPromptVersion, PriorPaths: row.TriggerPaths,
+		Paths: paths, CheckedAt: checkedAt, Version: TriggerPromptVersion,
+	})
+	require.NoError(t, err)
+	require.True(t, saved, "p%d takes the answer", id)
+}
+
+// moveRegions changes only the region fields of row id, through a second
+// connection. The guarded save changes the regions together with the
+// trigger stamp, so the test writes the columns as a hand edit would.
+func (w *extractWorkspace) moveRegions(t *testing.T, id int64, region string) {
+	t.Helper()
+
+	w.exec(t, `UPDATE proposal SET region = ?, regions = json_array(?) WHERE id = ?`, region, region, id)
 }
 
 // plan plans ids against the fixture's root and store.
@@ -372,12 +399,10 @@ func TestExtractPlanRevalidateNamesChangedInputs(t *testing.T) {
 			require.NoError(t, err)
 		}, "p%d is dismissed now"},
 		{"answered by another writer", func(t *testing.T, w *extractWorkspace, p model.Proposal) {
-			require.NoError(t, w.st.UpdateProposalTriggers(p.ID, nil, 200, TriggerPromptVersion))
+			w.answerElsewhere(t, p.ID, 200)
 		}, "the trigger answer of p%d changed"},
 		{"regions", func(t *testing.T, w *extractWorkspace, p model.Proposal) {
-			p.Region, p.Regions = "api", []string{"api"}
-			_, err := w.st.UpdateProposalRegionsIfPending(p)
-			require.NoError(t, err)
+			w.moveRegions(t, p.ID, "api")
 		}, "the regions of p%d changed"},
 		{"note", func(t *testing.T, w *extractWorkspace, p model.Proposal) {
 			w.exec(t, `UPDATE proposal SET note = 'edited' WHERE id = ?`, p.ID)

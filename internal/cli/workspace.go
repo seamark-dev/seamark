@@ -41,9 +41,23 @@ func resolveWorkspace(opts *options) (workspace.Workspace, error) {
 // directory. A copied workspace thus reads the original repository
 // (A0 defect D15, kept as is).
 func openIndex(opts *options) (*store.Store, string, error) {
-	ws, err := resolveWorkspace(opts)
+	st, p, err := openIndexProbe(opts)
 	if err != nil {
 		return nil, "", err
+	}
+
+	return st, p.Root, nil
+}
+
+// openIndexProbe is openIndex with the whole probe of the index. The
+// probe root is the root that openIndex returns. Pin maintenance needs
+// the probe, because its plan binds the index run (IndexedAt).
+func openIndexProbe(opts *options) (*store.Store, workspace.IndexProbe, error) {
+	var none workspace.IndexProbe
+
+	ws, err := resolveWorkspace(opts)
+	if err != nil {
+		return nil, none, err
 	}
 
 	// The probe classifies the database without a write, so a missing
@@ -52,13 +66,13 @@ func openIndex(opts *options) (*store.Store, string, error) {
 
 	switch p.State {
 	case workspace.IndexAbsent:
-		return nil, "", errNoIndex
+		return nil, none, errNoIndex
 	case workspace.IndexUnreadable:
 		// Probe calls a stat failure other than "not exist" unreadable.
 		// These commands report any stat failure as a missing index, so
 		// this second stat keeps their message.
 		if _, err := os.Stat(ws.DBPath); err != nil {
-			return nil, "", errNoIndex
+			return nil, none, errNoIndex
 		}
 	}
 
@@ -66,7 +80,7 @@ func openIndex(opts *options) (*store.Store, string, error) {
 	// database it returns the error that these commands print.
 	st, err := store.Open(ws.DBPath)
 	if err != nil {
-		return nil, "", err
+		return nil, none, err
 	}
 
 	// The probe reads the meta only with the supported schema. After
@@ -81,8 +95,8 @@ func openIndex(opts *options) (*store.Store, string, error) {
 	if p.State != workspace.IndexReady {
 		_ = st.Close()
 
-		return nil, "", errNoIndex
+		return nil, none, errNoIndex
 	}
 
-	return st, p.Root, nil
+	return st, p, nil
 }

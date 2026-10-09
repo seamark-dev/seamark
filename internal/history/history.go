@@ -1,6 +1,8 @@
 // Package history mines the git log into the history layer of the graph:
 // commits become Decision rows, and file co-occurrence across commits becomes
-// CoChange pairs with lift.
+// CoChange pairs with lift. It also holds the git probes that other
+// packages call, IsRepo and ResolveRoot. They live here because this
+// package imports only model, so any package can import it.
 //
 // It shells out to git rather than using a Go git implementation: git is
 // always present where a repo is, and `git log --numstat` is far faster than

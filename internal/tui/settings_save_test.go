@@ -465,6 +465,30 @@ func TestSettingsEscWhilePreparingDropsThePlan(t *testing.T) {
 	settingsNoWrites(t, svc)
 }
 
+// Each review is a new flow value, and the generation lives on the
+// screen. So the tickets keep growing, and a late plan of a closed
+// review cannot open the preview of the next review.
+func TestSettingsLatePlanOfAnEarlierReviewIsDropped(t *testing.T) {
+	svc := settingsFake(t, "distill:\n  write: false\n")
+	h := settingsOpen(t, svc, 120, 40)
+	scr := settingsScr(h)
+
+	h.send(navigateMsg{dest: destSettings, intent: "group:pinwrite"})
+	h.press("enter", "down", "space", "enter")
+
+	first := scr.review(settings.GroupPinWrite)
+	h.press("esc")
+	require.Equal(t, flowClosed, scr.flow.stage)
+
+	second := scr.review(settings.GroupPinWrite)
+	h.send(first())
+	assert.Equal(t, flowPreparing, scr.flow.stage, "the plan of the closed review opens no preview")
+
+	h.send(second())
+	assert.Equal(t, flowPreview, scr.flow.stage, "the plan of the open review opens the preview")
+	settingsNoWrites(t, svc)
+}
+
 func TestSettingsNoOpPlanDropsTheDraft(t *testing.T) {
 	svc := settingsFake(t, "distill:\n  write: false\n")
 	svc.planSettings = func(snap *settings.Snapshot, edits []settings.Edit) (*settings.Plan, error) {

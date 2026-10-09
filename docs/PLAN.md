@@ -479,7 +479,8 @@ internal/cli/           init, index, why/orient, lessons, gate/check, state,
                         doctor/status, report, LSP, and MCP commands
 internal/index/         orchestrator: walk → parse → resolve → store + history
 internal/parse/         Go, TypeScript/JavaScript, and Python extractors
-internal/history/       git log miner: co-change pairs + decision rows
+internal/history/       git log miner: co-change pairs + decision rows; the
+                        repository root rule (git top level)
 internal/effects/       sink matching and transitive effect propagation
 internal/gate/          command/diff policy, classification, and safe audit
 internal/reviews/       review ingestion and finding normalization

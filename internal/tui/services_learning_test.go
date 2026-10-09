@@ -30,6 +30,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -625,7 +626,7 @@ func TestEngineCleansUpACleanupOnlyPreview(t *testing.T) {
 
 	st, err := store.Open(ws.DBPath)
 	require.NoError(t, err)
-	require.NoError(t, st.InsertProposal(&domain.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &domain.Proposal{
 		Signature: "gone", Rule: "stale", Note: "n", Members: []int64{1, 2}, Status: domain.ProposalProposed,
 	}))
 	require.NoError(t, st.Close())

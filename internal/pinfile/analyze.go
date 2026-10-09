@@ -32,9 +32,11 @@ var provenanceRe = regexp.MustCompile(`, p(\d+)\)$`)
 
 // analysis is one read of the file bytes.
 type analysis struct {
-	// lines and finalEOL are the LF text of the file.
+	// lines and finalEOL are the LF text of the file. crlf is true when
+	// the file uses CRLF line breaks; an append writes them back.
 	lines    []string
 	finalEOL bool
+	crlf     bool
 	// doc is the parsed document for edits. It is nil when the
 	// structural gate of yamledit refuses the text.
 	doc *yamledit.Doc
@@ -75,6 +77,7 @@ func analyze(raw []byte) *analysis {
 
 	data, crlf, breaks := yamledit.NormalizeBreaks(raw)
 	a.lines, a.finalEOL = yamledit.SplitLines(string(data))
+	a.crlf = crlf
 
 	// The readers parse the raw bytes, so the reader error is about them.
 	cfg, err := reviews.ParseConfig(raw)

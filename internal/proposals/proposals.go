@@ -2,12 +2,14 @@
 // ledger. It has a read-only ledger view, region and text filtering,
 // evidence health, and previewed decisions with revalidation.
 //
-// The CLI and the console share the evidence helpers (Health and
-// RegionSetsEqual). They also share the decision flow (PreviewApply,
-// PreviewDismiss, PreviewReconcile, Commit, with their Ledgerer,
-// Preview, Result and ErrNothingSelected). Both surfaces thus judge
-// proposal health by one set of rules. `lessons --apply` and `lessons
-// --dismiss` write the same pins and ledger states as the console.
+// The CLI and the console share the evidence helper Health. They also
+// share the decision flow (PreviewApply, PreviewDismiss,
+// PreviewReconcile, Commit, with their Ledgerer, Preview, Result and
+// ErrNothingSelected). Both surfaces thus judge proposal health by one
+// set of rules. `lessons --apply` and `lessons
+// --dismiss` write the same pins and ledger states as the console. An
+// apply writes the pin file through internal/pinfile, the guarded editor
+// of the console's Pins view.
 //
 // MeasureOutcomes measures the applied pins. Health uses it after it
 // reads the lessons config and the firing log. `lessons --stats` and

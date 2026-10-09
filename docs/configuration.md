@@ -33,8 +33,9 @@ reviews:
   window_days: 730 # review-comment shelf life; 0 = unlimited.
   #                  The newest 200 comments always survive the window.
 distill:
-  write: false # --apply/--prune/--retarget print the block for you to
-  #              paste; flip to true to let them edit lessons.yaml
+  write: false # --apply prints the block for you to paste, and
+  #              --prune/--retarget print the change to make by hand;
+  #              flip to true to let them edit lessons.yaml
 agent:
   cli: claude # the agent CLI --distill pipes findings through (the default)
   # cli: codex # use Codex for lesson generation

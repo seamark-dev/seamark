@@ -74,6 +74,10 @@ var (
 	// more proposals that share one pin key. A *SharedKeyError carries
 	// their IDs and matches this error.
 	ErrSharedKey = errors.New("selected proposals share rule and regions")
+	// ErrAppliedKey reports an apply or reconcile selection with a
+	// proposal whose pin key an applied proposal already records. An
+	// *AppliedKeyError carries the IDs and matches this error.
+	ErrAppliedKey = errors.New("selected proposals have the rule and regions of an applied proposal")
 )
 
 // SharedKeyError reports the selected proposals that share one pin key.
@@ -149,6 +153,161 @@ func sharedKeys(ps []model.Proposal) error {
 	return &SharedKeyError{Groups: groups}
 }
 
+// AppliedKeyError reports the selected pending proposals whose pin key
+// an applied proposal already records. Pins blocks a pin that two
+// applied proposals record, so an apply must never record a second
+// applied row for one key. Apply and reconcile refuse such a row, also
+// when the pin file does not hold the pin: a new pin with that key is
+// blocked in the same way.
+type AppliedKeyError struct {
+	// Groups holds one group for each refused key. The groups are in the
+	// order of their lowest pending ID.
+	Groups []AppliedKeyGroup
+}
+
+// AppliedKeyGroup names the proposals of one refused pin key.
+type AppliedKeyGroup struct {
+	// Applied holds the IDs of the applied proposals with the key, in ID
+	// order. An old ledger can hold more than one.
+	Applied []int64
+	// Pending holds the IDs of the selected pending proposals with the
+	// key, in ID order.
+	Pending []int64
+}
+
+// Error names the applied proposals and the pending proposals to
+// dismiss, for example "p1 is already applied with this rule and
+// regions; dismiss p3". With several keys, each group names the pending
+// proposals whose rule and regions it means, because "this" is then
+// unclear.
+func (e *AppliedKeyError) Error() string {
+	if len(e.Groups) == 0 {
+		return ErrAppliedKey.Error()
+	}
+
+	parts := make([]string, len(e.Groups))
+	for i, g := range e.Groups {
+		verb := " is"
+		if len(g.Applied) > 1 {
+			verb = " are"
+		}
+
+		which := "this rule and regions"
+		if len(e.Groups) > 1 {
+			which = "the rule and regions of " + proseList(g.Pending)
+		}
+
+		parts[i] = proseList(g.Applied) + verb + " already applied with " + which
+	}
+
+	return strings.Join(parts, "; ") + "; dismiss " + proseList(e.Pending())
+}
+
+// Is matches ErrAppliedKey, so a caller can test the kind with
+// errors.Is and read the IDs with errors.As.
+func (e *AppliedKeyError) Is(target error) bool {
+	return target == ErrAppliedKey
+}
+
+// Pending returns the IDs of the refused pending proposals of every
+// group, in ID order. The caller dismisses them.
+func (e *AppliedKeyError) Pending() []int64 {
+	var out []int64
+	for _, g := range e.Groups {
+		out = append(out, g.Pending...)
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
+// Applied returns the IDs of the applied proposals of every group, in
+// ID order. A row has one key, so no ID is in two groups.
+func (e *AppliedKeyError) Applied() []int64 {
+	var out []int64
+	for _, g := range e.Groups {
+		out = append(out, g.Applied...)
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
+// appliedKeys reads the applied proposals and returns the refusal of
+// CheckAppliedKeys as an error, or nil. ps must be in ID order, with
+// agreeing region fields.
+func appliedKeys(ls Ledgerer, ps []model.Proposal) error {
+	applied, err := ls.Proposals(model.ProposalApplied)
+	if err != nil {
+		return fmt.Errorf("read the applied proposals: %w", err)
+	}
+
+	// A nil *AppliedKeyError in an error value is not a nil error, so
+	// the check returns an untyped nil here.
+	if taken := CheckAppliedKeys(applied, ps); taken != nil {
+		return taken
+	}
+
+	return nil
+}
+
+// CheckAppliedKeys returns an *AppliedKeyError for the proposals of ps
+// whose pin key a row of applied records, or nil. ps must be in ID
+// order, with agreeing region fields. It links an applied row by
+// reviews.ProposalKey, because Pins counts the applied rows of a key
+// with that key. It reads nothing, so the console can apply the rule of
+// the preview to its ledger snapshot.
+func CheckAppliedKeys(applied, ps []model.Proposal) *AppliedKeyError {
+	byKey := make(map[reviews.PinKey][]int64, len(applied))
+	for _, a := range applied {
+		key := reviews.ProposalKey(a)
+		byKey[key] = append(byKey[key], a.ID)
+	}
+
+	var groups []AppliedKeyGroup
+
+	at := map[reviews.PinKey]int{}
+
+	for _, p := range ps {
+		key := pinKey(p)
+
+		ids, ok := byKey[key]
+		if !ok {
+			continue
+		}
+
+		i, seen := at[key]
+		if !seen {
+			i = len(groups)
+			at[key] = i
+			groups = append(groups, AppliedKeyGroup{Applied: slices.Sorted(slices.Values(ids))})
+		}
+
+		groups[i].Pending = append(groups[i].Pending, p.ID)
+	}
+
+	if len(groups) == 0 {
+		return nil
+	}
+
+	return &AppliedKeyError{Groups: groups}
+}
+
+// recheckAppliedKeys runs appliedKeys again at commit time. The
+// fingerprints cover only the selected rows, so another writer can apply
+// a proposal with a selected key after the preview. Such a refusal also
+// matches ErrStale, because a new preview then names it.
+func recheckAppliedKeys(ls Ledgerer, ps []model.Proposal) error {
+	err := appliedKeys(ls, ps)
+	if errors.Is(err, ErrAppliedKey) {
+		return fmt.Errorf("%w: %w", ErrStale, err)
+	}
+
+	return err
+}
+
 // Fingerprint is the identity of one proposal at preview time. IDs can
 // be reused after a prune, so the ID alone is not enough.
 type Fingerprint struct {
@@ -196,7 +355,8 @@ type Preview struct {
 	Ineligible []int64
 	// Write is the distill.write gate at preview time (apply only).
 	Write bool
-	// YAML is the pin block that apply inserts under `pin:`.
+	// YAML is the pin block that apply inserts at the head of the
+	// `pin:` list.
 	YAML string
 	// Target is the pin file path relative to the root.
 	Target string
@@ -207,7 +367,9 @@ type Preview struct {
 	// preview writes nothing, so the failure does not stop the YAML
 	// block; Lessons is then zero and Commit refuses the preview.
 	LessonsErr error
-	// AlreadyPinned holds selected IDs whose pin already exists.
+	// AlreadyPinned holds selected IDs whose pin already exists. No
+	// applied proposal records such a pin, because the preview refuses
+	// that case first (ErrAppliedKey).
 	AlreadyPinned []int64
 }
 
@@ -225,15 +387,26 @@ func (pv *Preview) ids() []int64 {
 // implements it; tests inject failures through it.
 type Ledgerer interface {
 	ProposalsByIDs(ids []int64) ([]model.Proposal, error)
+	// Proposals returns the rows of one status. Apply and reconcile read
+	// the applied rows, because Pins blocks a pin key that more than one
+	// applied row records.
+	Proposals(status string) ([]model.Proposal, error)
 	SetProposalStatus(ids []int64, to string) (int, error)
 }
 
 // PreviewApply validates the selection and describes the pin change.
-// It writes nothing. It refuses two kinds of selection, with the gate on
-// or off, because each gives a pin that Pins blocks at once. The first
-// kind holds a proposal whose region fields disagree: no reader links
-// the pin that its apply writes. The second holds proposals that share
-// one pin key (ErrSharedKey).
+// It writes nothing. It refuses three kinds of selection, with the gate
+// on or off, because each gives a pin that Pins blocks at once. The
+// first kind holds a proposal whose region fields disagree: no reader
+// links the pin that its apply writes. The second holds a proposal whose
+// pin key an applied proposal records (ErrAppliedKey). The third holds
+// proposals that share one pin key (ErrSharedKey).
+//
+// The applied key check runs before the shared key check. Its advice
+// (dismiss) is final, and the apply of one row of a shared group meets
+// it again. It also runs before the pin file read. So the pin of an
+// applied proposal never reaches AlreadyPinned, which the CLI records
+// as applied without a write.
 func PreviewApply(ls Ledgerer, root string, ids []int64) (*Preview, error) {
 	pv, err := previewSelection(ls, ActionApply, ids)
 	if err != nil {
@@ -244,6 +417,10 @@ func PreviewApply(ls Ledgerer, root string, ids []int64) (*Preview, error) {
 		return nil, fmt.Errorf("%w: %s; resolve them by hand or dismiss them", ErrFieldsDisagree, idList(odd))
 	}
 
+	if err := appliedKeys(ls, pv.Proposals); err != nil {
+		return nil, err
+	}
+
 	if err := sharedKeys(pv.Proposals); err != nil {
 		return nil, err
 	}
@@ -252,8 +429,8 @@ func PreviewApply(ls Ledgerer, root string, ids []int64) (*Preview, error) {
 		return nil, err
 	}
 
-	// The block is what the CLI prints with the gate off and what
-	// ApplyPins inserts with the gate on: one renderer for both. Every
+	// The block is what the CLI prints with the gate off and what the
+	// commit inserts with the gate on: one renderer for both. Every
 	// selected proposal has its own key, so the block holds one entry
 	// for each of them.
 	pv.YAML, err = distill.RenderPins(pv.Proposals)
@@ -275,8 +452,11 @@ func PreviewDismiss(ls Ledgerer, ids []int64) (*Preview, error) {
 // applied. It writes nothing. It refuses a proposal whose region fields
 // disagree, as Pins and extraction do: the pin check reads the rendered
 // key, and every other reader links the row by another key. It also
-// refuses proposals that share one pin key (ErrSharedKey), as apply
-// does: two applied proposals that record one pin make Pins block it.
+// refuses a proposal whose pin key an applied proposal records
+// (ErrAppliedKey) and proposals that share one pin key (ErrSharedKey),
+// as apply does: two applied proposals that record one pin make Pins
+// block it. The applied key check runs before the pin check, so a pin
+// of an applied proposal never reads as the pin of the selected one.
 func PreviewReconcile(ls Ledgerer, root string, ids []int64) (*Preview, error) {
 	pv, err := previewSelection(ls, ActionReconcile, ids)
 	if err != nil {
@@ -285,6 +465,10 @@ func PreviewReconcile(ls Ledgerer, root string, ids []int64) (*Preview, error) {
 
 	if odd := disagreeing(pv.Proposals); len(odd) > 0 {
 		return nil, fmt.Errorf("%w: %s; resolve them by hand or dismiss them", ErrFieldsDisagree, idList(odd))
+	}
+
+	if err := appliedKeys(ls, pv.Proposals); err != nil {
+		return nil, err
 	}
 
 	if err := sharedKeys(pv.Proposals); err != nil {
@@ -475,7 +659,8 @@ func Commit(ls Ledgerer, root string, pv *Preview) (Result, error) {
 // commitApply writes the pins and then records them as applied. The
 // order is the CLI order: a failed status write leaves a visible pin
 // in the file diff, while the other order could mark a pin applied
-// that never reached the file.
+// that never reached the file. The pin write goes through
+// internal/pinfile, as every pin edit of the console does.
 func commitApply(ls Ledgerer, root string, pv *Preview) (Result, error) {
 	res := Result{Action: ActionApply}
 
@@ -501,6 +686,10 @@ func commitApply(ls Ledgerer, root string, pv *Preview) (Result, error) {
 	if odd := disagreeing(ps); len(odd) > 0 {
 		return res, fmt.Errorf("%w: the region fields of %s changed after the preview: %w",
 			ErrStale, idList(odd), ErrFieldsDisagree)
+	}
+
+	if err := recheckAppliedKeys(ls, ps); err != nil {
+		return res, err
 	}
 
 	// The fingerprint holds the rule and the region set, so a preview of
@@ -530,7 +719,9 @@ func commitApply(ls Ledgerer, root string, pv *Preview) (Result, error) {
 
 	// The fingerprint omits the provenance comment inputs (agent and
 	// member count). Comparing the rendered block proves that the file
-	// receives exactly the previewed text.
+	// receives exactly the previewed entries. The write moves the lines
+	// to the indentation of the list; pinfile proves that the move keeps
+	// every value.
 	block, err := distill.RenderPins(ps)
 	if err != nil {
 		return res, err
@@ -551,10 +742,16 @@ func commitApply(ls Ledgerer, root string, pv *Preview) (Result, error) {
 	}
 
 	// Writing starts here. From now on, every outcome goes into res and
-	// the error stays nil.
+	// the error stays nil. A stale refusal of the guarded write is the one
+	// exception: that write changed nothing, so the caller previews again.
 	ids := pv.ids()
 
-	if err := distill.ApplyPins(root, ps); err != nil {
+	err = appendPins(root, pv.Lessons, block)
+
+	switch {
+	case errors.Is(err, pinfile.ErrStale):
+		return res, fmt.Errorf("%w: %s changed after the preview", ErrStale, LessonsFile)
+	case err != nil:
 		res.FileErr = err
 		res.NotMoved = ids
 		res.FileWritten = fileChanged(root, pv.Lessons, &res)
@@ -568,8 +765,45 @@ func commitApply(ls Ledgerer, root string, pv *Preview) (Result, error) {
 	return res, nil
 }
 
-// fileChanged reports whether a failed pin write still changed the
-// file, for example a write that stopped after truncation. When the
+// readPinFile reads the pin file for appendPins. It is a variable, so a
+// test can change the file between this read and the guarded write.
+var readPinFile = pinfile.Read
+
+// appendPins adds the pin block at the head of the pin list. It writes
+// through internal/pinfile, the guarded write of Pins. That write
+// refuses a link and a file that this user cannot write. It keeps the
+// file mode and replaces the file by rename. The write binds to the
+// previewed file state; another state returns pinfile.ErrStale and
+// writes nothing.
+func appendPins(root string, before FileObservation, block string) error {
+	d, err := readPinFile(root)
+	if err != nil {
+		return err
+	}
+
+	if d.Guard.Exists != before.Exists || d.Guard.SHA256 != before.SHA256 {
+		return fmt.Errorf("%w: the file changed after the preview", pinfile.ErrStale)
+	}
+
+	after, err := pinfile.PlanAppend(d, block)
+	if err != nil {
+		return err
+	}
+
+	// The write names no client, so the registry only satisfies the setup
+	// engine. The built-in registry is the one that the console passes.
+	p, err := pinfile.PrepareAppend(integration.Builtin(), root, d.Guard, after)
+	if err != nil {
+		return err
+	}
+
+	return p.Apply()
+}
+
+// fileChanged reports whether the pin file differs from the preview
+// after a failed pin write. The guarded write replaces the file by
+// rename, so its own failure leaves the old bytes. The check still runs,
+// because the file is not verified until it is read again. When the
 // file cannot be read again, it reports true and adds the read error:
 // the console must never claim an untouched file it did not verify.
 func fileChanged(root string, before FileObservation, res *Result) bool {
@@ -585,8 +819,9 @@ func fileChanged(root string, before FileObservation, res *Result) bool {
 }
 
 // commitReconcile records pending proposals as applied when their pins
-// are still in the pin file, their region fields still agree, and no two
-// of them share a pin key. It writes only the ledger.
+// are still in the pin file, their region fields still agree, no applied
+// proposal records their pin keys, and no two of them share a pin key.
+// It writes only the ledger.
 func commitReconcile(ls Ledgerer, root string, pv *Preview) (Result, error) {
 	res := Result{Action: ActionReconcile}
 
@@ -600,6 +835,10 @@ func commitReconcile(ls Ledgerer, root string, pv *Preview) (Result, error) {
 	if odd := disagreeing(ps); len(odd) > 0 {
 		return res, fmt.Errorf("%w: the region fields of %s changed after the preview: %w",
 			ErrStale, idList(odd), ErrFieldsDisagree)
+	}
+
+	if err := recheckAppliedKeys(ls, ps); err != nil {
+		return res, err
 	}
 
 	// A preview of PreviewReconcile passes this check again, because the

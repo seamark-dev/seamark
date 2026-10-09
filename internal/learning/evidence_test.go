@@ -22,6 +22,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -202,7 +203,7 @@ func TestInspectCountsDistilledGroupsWithoutProposals(t *testing.T) {
 	// only the records tell that a distillation ran.
 	st, err := store.Open(ws.DBPath)
 	require.NoError(t, err)
-	require.NoError(t, st.MarkDistilled("sig-a", "a.go", 100))
+	require.NoError(t, storetest.MarkDistilled(st, "sig-a", "a.go", 100))
 	_, err = st.SaveDistilledGroup("sig-b", "", 200, nil)
 	require.NoError(t, err)
 	require.NoError(t, st.Close())

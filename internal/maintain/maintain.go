@@ -1,7 +1,9 @@
 // Package maintain inspects the installed pins and maintains the
-// proposal-linked ones for the console: a retarget changes the regions
-// of a pin to the scope that today's evidence computes, and a prune
-// removes a pin and marks its proposal superseded.
+// proposal-linked ones for the console and the CLI. A retarget changes
+// the regions of a pin to the scope that today's evidence computes. A
+// prune removes a pin and marks its proposal superseded. The CLI commits
+// right after it plans, and it keeps no Recovery, because it has no
+// session.
 //
 // Two stores hold the state, and no transaction spans both. The pin file
 // .seamark/lessons.yaml is the authority for the installed guidance. The

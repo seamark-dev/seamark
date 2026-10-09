@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/agent"
@@ -278,19 +277,10 @@ func distStartHeld(t *testing.T, h *harness) *distRecord {
 	return rec
 }
 
-// distClosed is a closed queue: a wait on it ends at once, so an event
-// sent by a test does not block the harness.
-func distClosed() <-chan tea.Msg {
-	ch := make(chan tea.Msg)
-	close(ch)
-
-	return ch
-}
-
 // distSend delivers one progress event to the held record. The event
 // time is now, so the activity lines agree with the start time.
 func distSend(h *harness, rec *distRecord, ev distill.Event) {
-	h.send(distEventMsg{rec: rec, ch: distClosed(), ev: ev, at: time.Now()})
+	h.send(distEventMsg{rec: rec, ch: agentClosed(), ev: ev, at: time.Now()})
 }
 
 // distStarted builds the start event of group i, as the engine sends it.

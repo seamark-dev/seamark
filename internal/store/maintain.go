@@ -12,11 +12,11 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 )
 
-// This file holds the store half of console lesson maintenance (retarget
-// and prune) and of console trigger extraction. The console plans from a
-// read-only store and writes later, after a review or an agent call. In
-// that gap the CLI or another console can decide, retarget or delete a
-// row. SQLite can also give a deleted row's ID to a new row, because the
+// This file holds the store half of lesson maintenance (retarget and
+// prune) and of trigger extraction. A plan reads the store, and its
+// write comes later, after a review or an agent call. In that gap
+// another command or console can decide, retarget or delete a row.
+// SQLite can also give a deleted row's ID to a new row, because the
 // proposal table has no AUTOINCREMENT. So each write here binds to the
 // row as the plan saw it. A guard holds the planned values, and the
 // write happens only while the row still holds them.
@@ -26,12 +26,11 @@ import (
 // JSON text would miss a row whose stored text spells the same list
 // differently.
 //
-// The CLI writers (UpdateProposalTriggers, UpdateProposalRegionsIfPending,
-// UpdateProposalRegionsBatch, SupersedeProposals) stay unchanged. The CLI
-// extraction runs the console executor without its guards. That path
-// still writes with UpdateProposalRegionsIfPending and then
-// UpdateProposalTriggers, because the CLI goldens pin those two writes.
-// ProposalsByIDs stays pending-only, because the console decision flow
+// The CLI and the console share these writers. Retarget and prune write
+// through internal/maintain, and trigger extraction saves each answer
+// with SaveTriggerAnswer. So on both surfaces, maintenance and trigger
+// extraction change no planned row without its guard. ProposalsByIDs
+// stays pending-only, because the decision flow of internal/proposals
 // relies on that filter.
 
 // ErrGuard reports that a guarded write found a row that differs from
@@ -180,8 +179,7 @@ func (s *Store) RetargetApplied(changes []RegionChange) error {
 // SupersedeExact moves applied proposals to superseded in one
 // transaction. Every row must still be applied and match its guard. When
 // any row misses, it changes no row and returns a *GuardError that names
-// each missed row. SupersedeProposals stays for the CLI, which guards by
-// status only.
+// each missed row.
 func (s *Store) SupersedeExact(guards []RowGuard) error {
 	if len(guards) == 0 {
 		return nil

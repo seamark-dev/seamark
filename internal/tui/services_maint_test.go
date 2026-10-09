@@ -18,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -51,13 +52,13 @@ func maintWorkspace(t *testing.T, write bool) (ws workspace.Workspace, linked do
 		Signature: "sig-close", Rule: "close-db-handles", Region: "api", Note: "Close the handle on every error path.",
 		Members: []int64{21, 22}, Status: domain.ProposalApplied,
 	}
-	require.NoError(t, st.InsertProposal(&linked))
+	require.NoError(t, storetest.InsertProposal(st, &linked))
 
 	old := domain.Proposal{
 		Signature: "sig-old", Rule: "retired-rule", Note: "An old rule.", Members: []int64{99},
 		Status: domain.ProposalSuperseded,
 	}
-	require.NoError(t, st.InsertProposal(&old))
+	require.NoError(t, storetest.InsertProposal(st, &old))
 	require.NoError(t, st.Close())
 
 	engWrite(t, ws, pinfile.File, maintPins)
@@ -237,7 +238,7 @@ func TestEnginePlansAndRunsAnExtraction(t *testing.T) {
 		Signature: "sig-ext", Rule: "close-db-handles", Region: "api", Note: "Close the handle.",
 		Members: []int64{21, 22}, Status: domain.ProposalProposed,
 	}
-	require.NoError(t, st.InsertProposal(&pending))
+	require.NoError(t, storetest.InsertProposal(st, &pending))
 	require.NoError(t, st.Close())
 
 	var prompts []string

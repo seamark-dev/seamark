@@ -19,15 +19,22 @@ import (
 )
 
 // These golden tests pin the full stdout and stderr of `lessons --prune`,
-// `lessons --retarget` and `lessons --extract-triggers` before Phase 3
-// shares their planning with the console (decision D-1). Each test also
+// `lessons --retarget` and `lessons --extract-triggers`. Each test also
 // pins the durable state that a command leaves: the lessons.yaml bytes,
 // the file mode, and the ledger rows. Only wall-clock durations, stamp
 // times and the temporary root path are normalized.
 //
-// Some goldens pin known CLI defects on purpose, and a comment names
-// each one. The console must not copy them. A fix is a separate decision
-// that updates the golden in the same change.
+// Prune and retarget run on the engine of the console's Pins view
+// (internal/maintain with internal/pinfile). The trigger extraction runs
+// the executor and the guarded save of the console. These goldens first
+// froze the earlier CLI loops; each golden that a move changed names the
+// defect of the A0 report (§7) that it replaces. Some goldens still pin
+// known CLI defects on purpose. These are the wider selection and the
+// texts of the CLI extraction (A0 D4 to D7). The root of a copied
+// checkout is one too (A0 D15). Each waits for its own decision, and a
+// comment names each one.
+// The console must not copy them. A fix updates the golden in the same
+// change.
 
 // maintainGateOn is the config that lets prune and retarget edit
 // lessons.yaml.
@@ -326,12 +333,14 @@ func TestLessonsPruneGoldenGateOff(t *testing.T) {
 	root := pruneGoldenWorkspace(t)
 
 	// Without the gate, prune prints a manual instruction and changes
-	// nothing. The list names every selected row in ID order.
+	// nothing. The list names the ready rows in ID order. A0 D8: the
+	// list named every selected row, also p3, whose identity two entries
+	// carry. The line above the instruction now says why p3 is left.
 	stdout, stderr := goldenRun(t, root, "lessons", "--prune", "p3,p1")
-	assert.Equal(t, `distill.write is off in .seamark/config.yaml — remove these pins from .seamark/lessons.yaml by hand:
+	assert.Equal(t, `  p3    dup-guidance — ambiguous: duplicate pins; resolve it in .seamark/lessons.yaml or in the ledger first
+distill.write is off in .seamark/config.yaml — remove these pins from .seamark/lessons.yaml by hand:
 
   p1    retire-me
-  p3    dup-guidance
 
 (the proposals stay applied; enable distill.write to let prune edit the file)
 `, stdout)
@@ -428,60 +437,41 @@ func TestLessonsPruneGoldenDuplicateEntries(t *testing.T) {
 	root := pruneGoldenWorkspace(t)
 	maintainWriteConfig(t, root, maintainGateOn)
 
-	// Defect (D-1, kept): one selected row removes every entry with its
-	// identity, so the count says 2 pins for one found row, and the
-	// not-found line for p5 is missing because 2 is not less than 2.
+	// A0 D8: one selected row removed every entry with its identity. The
+	// count said 2 pins for one found row, the not-found line for p5 was
+	// missing, and p4 stayed applied without a pin. Now two entries with
+	// one identity block the prune, as in the console, and each left row
+	// gets its own line.
 	stdout, stderr := goldenRun(t, root, "lessons", "--prune", "p3,p5")
-	assert.Equal(t, `pruned 2 pin(s) from .seamark/lessons.yaml, 1 proposal(s) marked superseded — review the diff and commit it
-  p3    dup-guidance
-  p5    absent-pin
+	assert.Equal(t, `  p3    dup-guidance — ambiguous: duplicate pins; resolve it in .seamark/lessons.yaml or in the ledger first
+  p5    absent-pin — not found in lessons.yaml; left untouched
+no pins pruned
 `, stdout)
 	assert.Empty(t, stderr)
 
 	content, _ := maintainLessons(t, root)
-	assert.Equal(t, `# Review-lesson tuning (see `+"`seamark lessons --list`"+`).
-threshold: 3
+	assert.Equal(t, pruneGoldenLessons, content)
+	assert.Equal(t, pruneGoldenLedger, maintainLedger(t, root, 0))
 
-pin:
-  # Team guidance: keep these short.
-  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p1)
-  - rule: retire-me
-    region: scripts
-    note: Retire this restatement.
-  - rule: retire-me
-    region: web
-    note: The same rule in another region stays.
-  # my own note about the multi-area pin
-  - rule: multi-area
-    region: api
-    regions: [api, db]
-    note: One theme in two places.
-
-mute:
-  - rule: noisy-rule
-`, content)
-
-	// Defect (D-1, kept): p4 shares the identity of p3. It stays applied
-	// although no entry carries it any more.
-	assert.Equal(t, pruneGoldenSuperseded(3), maintainLedger(t, root, 0))
-
-	// Its own prune now finds nothing and leaves it applied for good.
+	// The other row of the identity gets the same answer.
 	stdout, stderr = goldenRun(t, root, "lessons", "--prune", "p4")
-	assert.Equal(t, `pruned 0 pin(s) from .seamark/lessons.yaml, 0 proposal(s) marked superseded — review the diff and commit it
-  p4    dup-guidance
-(1 were not found in the file and keep their applied status)
+	assert.Equal(t, `  p4    dup-guidance — ambiguous: duplicate pins; resolve it in .seamark/lessons.yaml or in the ledger first
+no pins pruned
 `, stdout)
 	assert.Empty(t, stderr)
-	assert.Equal(t, pruneGoldenSuperseded(3), maintainLedger(t, root, 0))
+	assert.Equal(t, pruneGoldenLedger, maintainLedger(t, root, 0))
 }
 
 func TestLessonsPruneGoldenNotFound(t *testing.T) {
 	root := pruneGoldenWorkspace(t)
 	maintainWriteConfig(t, root, maintainGateOn)
 
-	notFound := `pruned 0 pin(s) from .seamark/lessons.yaml, 0 proposal(s) marked superseded — review the diff and commit it
-  p5    absent-pin
-(1 were not found in the file and keep their applied status)
+	// A0 D8: prune counted the absent rows in one line under a "pruned 0
+	// pin(s)" summary. The line was "(1 were not found in the file and
+	// keep their applied status)". Its arithmetic could drop that line.
+	// Each absent row now gets its own line, as retarget prints it.
+	notFound := `  p5    absent-pin — not found in lessons.yaml; left untouched
+no pins pruned
 `
 
 	// An absent entry is not an error: the row keeps its applied status,
@@ -503,6 +493,15 @@ func TestLessonsPruneGoldenNotFound(t *testing.T) {
 	assert.Empty(t, stderr)
 	assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons.yaml"))
 	assert.Equal(t, pruneGoldenLedger, maintainLedger(t, root, 0))
+
+	// The gate decides only a change, as for retarget. Before, prune read
+	// the gate first, so a malformed config.yaml failed a run that could
+	// change no pin. The refusal golden shows the error of a run that can.
+	maintainWriteConfig(t, root, "distill: [\n")
+
+	stdout, stderr = goldenRun(t, root, "lessons", "--prune", "p5")
+	assert.Equal(t, notFound, stdout)
+	assert.Empty(t, stderr)
 }
 
 func TestLessonsPruneGoldenRefusals(t *testing.T) {
@@ -531,6 +530,13 @@ func TestLessonsPruneGoldenRefusals(t *testing.T) {
 			want: "distill config: yaml: line 1: did not find expected node content"},
 		{name: "malformed lessons", config: maintainGateOn, lessons: "pin: [\n", args: []string{"--prune", "p1"},
 			want: "lessons.yaml does not parse; fix it before pruning: yaml: line 1: did not find expected node content"},
+		// Before: prune parsed the YAML only, so it edited a file that the
+		// lessons reader rejects. The edit hook drops every pin of such a
+		// file, so the pin file editor refuses it.
+		{name: "lessons the reader rejects", config: maintainGateOn,
+			lessons: "hook_delivery: sometimes\n" + pruneGoldenLessons, args: []string{"--prune", "p1"},
+			want: "lessons.yaml does not parse; fix it before pruning: lessons config: hook_delivery must be " +
+				"\"always\" or \"once-per-context\", got \"sometimes\""},
 	}
 
 	for _, tc := range cases {
@@ -556,115 +562,216 @@ func TestLessonsPruneGoldenRefusals(t *testing.T) {
 	}
 }
 
+// A copied checkout keeps the index of the original, and that index
+// records the original root (A0 D15, open for a decision). The shared
+// engine has no root check of its own: the console refuses the case in
+// its service layer, before a commit. So the CLI prune still changes
+// the pin file of the recorded root and the ledger of the copy. It did
+// the same before the move to the shared engine.
+func TestLessonsPruneGoldenCopiedWorkspace(t *testing.T) {
+	original := pruneGoldenWorkspace(t)
+	maintainWriteConfig(t, original, maintainGateOn)
+
+	copied := filepath.Join(t.TempDir(), "copy")
+	require.NoError(t, os.CopyFS(copied, os.DirFS(original)))
+	maintainWriteLessons(t, copied, "pin: []\n", 0o644)
+
+	stdout, stderr := goldenRun(t, copied, "lessons", "--prune", "p2")
+	assert.Equal(t, `pruned 1 pin(s) from .seamark/lessons.yaml, 1 proposal(s) marked superseded — review the diff and commit it
+  p2    retire-me
+`, stdout)
+	assert.Empty(t, stderr)
+
+	// D15: the file of the original loses the pin, and the ledger of the
+	// copy records the prune.
+	got, _ := maintainLessons(t, original)
+	assert.Equal(t, strings.Replace(pruneGoldenLessons, `  - rule: retire-me
+    region: web
+    note: The same rule in another region stays.
+`, "", 1), got)
+	assert.Equal(t, pruneGoldenLedger, maintainLedger(t, original, 0))
+
+	got, _ = maintainLessons(t, copied)
+	assert.Equal(t, "pin: []\n", got)
+	assert.Equal(t, pruneGoldenSuperseded(2), maintainLedger(t, copied, 0))
+}
+
 func TestLessonsPruneGoldenLedgerFailure(t *testing.T) {
 	root := pruneGoldenWorkspace(t)
 	maintainWriteConfig(t, root, maintainGateOn)
 	maintainFailUpdates(t, root, "status")
 
-	// Defect (D-1, kept): the file write comes first and nothing undoes
-	// it. The raw store error leaves the row applied without its pin.
+	// A0 D10: the file write came first and nothing undid it. The raw
+	// store error left the row applied without its pin, and a rerun
+	// reported it as not found for good. Now the commit puts the file
+	// back, because it still holds the written bytes, and says so.
 	stdout, stderr, errText := maintainRunErr(t, root, "lessons", "--prune", "p2")
 	assert.Empty(t, stdout)
 	assert.Empty(t, stderr)
-	assert.Equal(t, "constraint failed: injected ledger failure (1811)", errText)
+	assert.Equal(t, "prune aborted, lessons.yaml restored: store: supersede p2: "+
+		"constraint failed: injected ledger failure (1811)", errText)
 
-	content, _ := maintainLessons(t, root)
+	content, mode := maintainLessons(t, root)
+	assert.Equal(t, pruneGoldenLessons, content)
+	assert.Equal(t, os.FileMode(0o640), mode, "the restore keeps the mode of the file")
+	assert.Equal(t, pruneGoldenLedger, maintainLedger(t, root, 0))
+
+	// A rerun finds the entry again and completes the prune.
+	maintainHealUpdates(t, root, "status")
+
+	stdout, stderr = goldenRun(t, root, "lessons", "--prune", "p2")
+	assert.Equal(t, `pruned 1 pin(s) from .seamark/lessons.yaml, 1 proposal(s) marked superseded — review the diff and commit it
+  p2    retire-me
+`, stdout)
+	assert.Empty(t, stderr)
+
+	content, _ = maintainLessons(t, root)
 	assert.Equal(t, strings.Replace(pruneGoldenLessons, `  - rule: retire-me
     region: web
     note: The same rule in another region stays.
 `, "", 1), content)
-	assert.Equal(t, pruneGoldenLedger, maintainLedger(t, root, 0))
-
-	// A rerun finds no entry, so the row stays applied for good.
-	maintainHealUpdates(t, root, "status")
-
-	stdout, stderr = goldenRun(t, root, "lessons", "--prune", "p2")
-	assert.Equal(t, `pruned 0 pin(s) from .seamark/lessons.yaml, 0 proposal(s) marked superseded — review the diff and commit it
-  p2    retire-me
-(1 were not found in the file and keep their applied status)
-`, stdout)
-	assert.Empty(t, stderr)
-	assert.Equal(t, pruneGoldenLedger, maintainLedger(t, root, 0))
+	assert.Equal(t, pruneGoldenSuperseded(2), maintainLedger(t, root, 0))
 }
 
-func TestLessonsPruneGoldenPrintsRuleTextRaw(t *testing.T) {
+func TestLessonsPruneGoldenSanitizesRuleText(t *testing.T) {
 	root := maintainWorkspace(t, nil)
 	goldenSeedProposals(t, root, model.Proposal{Signature: "s1", Rule: "red\x1b[31m-alert\a", Region: "api",
 		Note: "Hostile rule text.", Members: []int64{99}, Agent: "claude/v6", Status: model.ProposalApplied})
 
-	// Defect (D-1, kept): prune prints the rule without sanitizing, so
-	// terminal control bytes reach the terminal in both branches.
+	// The YAML escapes \e and \a give the entry the same rule bytes as the
+	// ledger row, so the entry links to p1.
+	maintainWriteLessons(t, root, "pin:\n  - rule: \"red\\e[31m-alert\\a\"\n    region: api\n    note: Hostile rule text.\n", 0o644)
+
+	// A0 D9: prune printed the rule without sanitizing, so terminal
+	// control bytes reached the terminal in both branches. Now prune
+	// sanitizes it as retarget does.
 	stdout, stderr := goldenRun(t, root, "lessons", "--prune", "p1")
 	assert.Equal(t, "distill.write is off in .seamark/config.yaml — remove these pins from .seamark/lessons.yaml by hand:\n\n"+
-		"  p1    red\x1b[31m-alert\a\n\n"+
+		"  p1    red[31m-alert\n\n"+
 		"(the proposals stay applied; enable distill.write to let prune edit the file)\n", stdout)
 	assert.Empty(t, stderr)
 
 	maintainWriteConfig(t, root, maintainGateOn)
-
-	stdout, stderr = goldenRun(t, root, "lessons", "--prune", "p1")
-	assert.Equal(t, "pruned 0 pin(s) from .seamark/lessons.yaml, 0 proposal(s) marked superseded — review the diff and commit it\n"+
-		"  p1    red\x1b[31m-alert\a\n"+
-		"(1 were not found in the file and keep their applied status)\n", stdout)
-	assert.Empty(t, stderr)
 
 	// Retarget sanitizes the same field.
 	stdout, stderr = goldenRun(t, root, "lessons", "--retarget", "p1")
 	assert.Equal(t, "  p1    red[31m-alert — evidence aged out; nothing to recompute from (prune instead?)\n"+
 		"nothing to retarget\n", stdout)
 	assert.Empty(t, stderr)
+
+	stdout, stderr = goldenRun(t, root, "lessons", "--prune", "p1")
+	assert.Equal(t, "pruned 1 pin(s) from .seamark/lessons.yaml, 1 proposal(s) marked superseded — review the diff and commit it\n"+
+		"  p1    red[31m-alert\n", stdout)
+	assert.Empty(t, stderr)
+
+	// A row without an entry gets the same sanitized rule.
+	goldenSeedProposals(t, root, model.Proposal{Signature: "s2", Rule: "blue\x1b[34m-alert", Region: "db",
+		Note: "No entry.", Members: []int64{98}, Agent: "claude/v6", Status: model.ProposalApplied})
+
+	stdout, stderr = goldenRun(t, root, "lessons", "--prune", "p2")
+	assert.Equal(t, "  p2    blue[34m-alert — not found in lessons.yaml; left untouched\nno pins pruned\n", stdout)
+	assert.Empty(t, stderr)
 }
 
 func TestLessonsPruneGoldenLayouts(t *testing.T) {
-	root := maintainWorkspace(t, nil)
-	maintainWriteConfig(t, root, maintainGateOn)
-	goldenSeedProposals(t, root, model.Proposal{Signature: "s1", Rule: "x", Region: "api",
-		Note: "X.", Members: []int64{1}, Agent: "claude/v6", Status: model.ProposalApplied})
-
-	notFound := "pruned 0 pin(s) from .seamark/lessons.yaml, 0 proposal(s) marked superseded — review the diff and commit it\n" +
-		"  p1    x\n" +
-		"(1 were not found in the file and keep their applied status)\n"
-
-	// The prune engine scans lines. It finds an entry only as a
-	// "  - rule:" line with four-space bodies. Other valid layouts are
-	// not found without an error, or they are refused.
+	// A0 §7 quirk: the line scanner of the old CLI prune (distill.RemovePins,
+	// now deleted) found an entry only as a "  - rule:" line with
+	// four-space bodies. Other valid layouts were not found without an
+	// error, or they were refused. The pin file editor of the console
+	// reads the YAML structure, so each layout now loses exactly the
+	// selected entry. Each case names what the earlier prune did.
 	cases := []struct {
 		name    string
 		lessons string
-		stdout  string
-		err     string
+		want    string
 	}{
-		{name: "items at column zero", stdout: notFound,
-			lessons: "pin:\n- rule: x\n  region: api\n  note: X.\n"},
-		{name: "rule not the first key", stdout: notFound,
-			lessons: "pin:\n  - note: X.\n    rule: x\n    region: api\n"},
-		{name: "items at four spaces",
+		{name: "items at column zero", // before: not found
+			lessons: "pin:\n- rule: x\n  region: api\n  note: X.\n",
+			want:    "pin:\n"},
+		{name: "rule not the first key", // before: not found
+			lessons: "pin:\n  - note: X.\n    rule: x\n    region: api\n",
+			want:    "pin:\n"},
+		{name: "items at four spaces", // before: "refusing to write: pruning would have changed pin y @ web"
 			lessons: "pin:\n    - rule: x\n      region: api\n      note: X.\n    - rule: y\n      region: web\n      note: Y.\n",
-			err:     "refusing to write: pruning would have changed pin y @ web"},
-		{name: "blank line inside the entry",
+			want:    "pin:\n    - rule: y\n      region: web\n      note: Y.\n"},
+		{name: "blank line inside the entry", // before: "refusing to write: pruned lessons.yaml would not parse: …"
 			lessons: "pin:\n  - rule: x\n    region: api\n\n    note: X.\n  - rule: y\n    region: web\n    note: Y.\n",
-			err:     "refusing to write: pruned lessons.yaml would not parse: yaml: line 3: did not find expected key"},
+			want:    "pin:\n  - rule: y\n    region: web\n    note: Y.\n"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			root := maintainWorkspace(t, nil)
+			maintainWriteConfig(t, root, maintainGateOn)
+			goldenSeedProposals(t, root, model.Proposal{Signature: "s1", Rule: "x", Region: "api",
+				Note: "X.", Members: []int64{1}, Agent: "claude/v6", Status: model.ProposalApplied})
 			maintainWriteLessons(t, root, tc.lessons, 0o644)
 
-			if tc.err == "" {
-				stdout, stderr := goldenRun(t, root, "lessons", "--prune", "p1")
-				assert.Equal(t, tc.stdout, stdout)
-				assert.Empty(t, stderr)
-			} else {
-				stdout, stderr, errText := maintainRunErr(t, root, "lessons", "--prune", "p1")
-				assert.Empty(t, stdout)
-				assert.Empty(t, stderr)
-				assert.Equal(t, tc.err, errText)
-			}
+			stdout, stderr := goldenRun(t, root, "lessons", "--prune", "p1")
+			assert.Equal(t, "pruned 1 pin(s) from .seamark/lessons.yaml, 1 proposal(s) marked superseded — "+
+				"review the diff and commit it\n  p1    x\n", stdout)
+			assert.Empty(t, stderr)
 
 			content, _ := maintainLessons(t, root)
-			assert.Equal(t, tc.lessons, content, "the file stays byte-identical")
-			assert.Equal(t, `p1 applied    "x" region="api" regions=[] triggers=[] checked=0 v0 note="X."
+			assert.Equal(t, tc.want, content)
+			assert.Equal(t, `p1 superseded "x" region="api" regions=[] triggers=[] checked=0 v0 note="X."
 `, maintainLedger(t, root, 0))
+		})
+	}
+}
+
+// maintainCRLF returns text with CRLF line breaks.
+func maintainCRLF(text string) string {
+	return strings.ReplaceAll(text, "\n", "\r\n")
+}
+
+func TestLessonsPruneGoldenFileTheEditorRefuses(t *testing.T) {
+	// The pin file editor of the console refuses some files as a whole,
+	// for example CRLF line breaks or more than one YAML document. Prune
+	// then leaves each row of such a file with the reason of the editor.
+	// With distill.write off, prune writes nothing, so it still lists the
+	// pins to remove by hand. Its last line then says that the gate does
+	// not help. Before, the old line scanner edited such a file: a CRLF
+	// file kept its line breaks, and the second document stayed.
+	cases := []struct {
+		name    string
+		lessons string
+		reason  string
+	}{
+		{name: "CRLF line breaks", lessons: maintainCRLF(pruneGoldenLessons),
+			reason: "the file uses CRLF line breaks"},
+		{name: "two YAML documents", lessons: pruneGoldenLessons + "---\nthreshold: 2\n",
+			reason: "the file holds more than one YAML document (line 27)"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := pruneGoldenWorkspace(t)
+			maintainWriteLessons(t, root, tc.lessons, 0o640)
+
+			stdout, stderr := goldenRun(t, root, "lessons", "--prune", "p1,p5")
+			assert.Equal(t, `  p5    absent-pin — not found in lessons.yaml; left untouched
+distill.write is off in .seamark/config.yaml — remove these pins from .seamark/lessons.yaml by hand:
+
+  p1    retire-me
+
+(the proposals stay applied; with distill.write on, prune still refuses this file: `+tc.reason+`)
+`, stdout)
+			assert.Empty(t, stderr)
+
+			maintainWriteConfig(t, root, maintainGateOn)
+
+			stdout, stderr = goldenRun(t, root, "lessons", "--prune", "p1,p5")
+			assert.Equal(t, `  p1    retire-me — the entry cannot be edited safely: `+tc.reason+`
+  p5    absent-pin — not found in lessons.yaml; left untouched
+no pins pruned
+`, stdout)
+			assert.Empty(t, stderr)
+
+			content, mode := maintainLessons(t, root)
+			assert.Equal(t, tc.lessons, content)
+			assert.Equal(t, os.FileMode(0o640), mode)
+			assert.Equal(t, pruneGoldenLedger, maintainLedger(t, root, 0))
 		})
 	}
 }
@@ -694,22 +801,20 @@ func TestLessonsPruneGoldenUsesRawKeyFields(t *testing.T) {
 	maintainWriteConfig(t, root, maintainGateOn)
 	goldenSeedProposals(t, root, maintainRawKeyProposal)
 
-	// The CLI keys a row by its raw Region and Regions fields, so prune
-	// removes the api entry and keeps the entry that RenderPins wrote.
-	// The console keys by RegionSet instead (D-3).
+	// A0 D-3: prune keyed the row by its raw Region and Regions fields.
+	// It removed the api entry and kept the '*' entry that the apply of
+	// the row wrote (RenderPins reads RegionSet). A row whose stored
+	// region fields disagree now blocks, as in the console, because no
+	// link to either entry can be proven (pinfile.FieldsAgree).
 	stdout, stderr := goldenRun(t, root, "lessons", "--prune", "p1")
-	assert.Equal(t, `pruned 1 pin(s) from .seamark/lessons.yaml, 1 proposal(s) marked superseded — review the diff and commit it
-  p1    wild-set
+	assert.Equal(t, `  p1    wild-set — ambiguous: stored region fields disagree; resolve it in .seamark/lessons.yaml or in the ledger first
+no pins pruned
 `, stdout)
 	assert.Empty(t, stderr)
 
 	content, _ := maintainLessons(t, root)
-	assert.Equal(t, `pin:
-  - rule: wild-set
-    region: '*'
-    note: The entry that RenderPins writes.
-`, content)
-	assert.Equal(t, `p1 superseded "wild-set" region="api" regions=["*" "api"] triggers=[] checked=0 v0 note="Stored note."
+	assert.Equal(t, maintainRawKeyLessons, content)
+	assert.Equal(t, `p1 applied    "wild-set" region="api" regions=["*" "api"] triggers=[] checked=0 v0 note="Stored note."
 `, maintainLedger(t, root, 0))
 }
 
@@ -811,29 +916,42 @@ const retargetGoldenPlanLines = `  p2    already-current — regions already cur
 func TestLessonsRetargetGoldenGateOff(t *testing.T) {
 	root := retargetGoldenWorkspace(t, retargetGoldenLessons)
 
-	// Defect (D-1, kept): the manual block renders the stored rows, so
-	// it shows the stored note instead of the live one, and it offers p4
-	// although no entry carries it.
+	// A0 D13: the manual block rendered the stored rows. It showed the
+	// stored note instead of the live one, so a paste overwrote the hand
+	// edits. It also offered p4, whose pin is not in the file. Now p4
+	// gets its not-found line, and the instruction shows the new regions
+	// with the diff of the planned file.
 	stdout, stderr := goldenRun(t, root, "lessons", "--retarget", "p1..p6")
-	assert.Equal(t, retargetGoldenPlanLines+`distill.write is off in .seamark/config.yaml — replace these pins in .seamark/lessons.yaml by hand:
+	assert.Equal(t, retargetGoldenPlanLines+`  p4    missing-pin — not found in lessons.yaml; left untouched
+distill.write is off in .seamark/config.yaml — change the regions of these pins in .seamark/lessons.yaml by hand:
 
-  # distilled by claude/v1 from 2 findings (seamark lessons --distill, p1)
-  - rule: guard-empty-datasets
-    region: scripts
-    note: Guard datasets for emptiness before reductions.
-  # distilled by claude/v4 from 2 findings (seamark lessons --distill, p4)
-  - rule: missing-pin
-    region: scripts
-    note: No entry carries this pin.
-  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p5)
-  - rule: two-areas
-    region: api
-    regions: [api, db]
-    note: Two areas.
-  # distilled by claude/v6 from 4 findings (seamark lessons --distill, p6)
-  - rule: scattered
-    region: '*'
-    note: Scattered evidence.
+  p1    guard-empty-datasets → scripts
+  p5    two-areas → api, db
+  p6    scattered → *
+
+--- a/.seamark/lessons.yaml
++++ b/.seamark/lessons.yaml
+@@ -6,7 +6,7 @@
+     note: A hand-written pin without a ledger row.
+   # my own comment about the datasets pin
+   - rule: Guard-Empty-Datasets
+-    region: '*'
++    region: scripts
+     note: HAND EDITED live note that must survive.
+     extra_field: unknown
+   - rule: already-current
+@@ -18,9 +18,10 @@
+   # distilled by claude/v6 from 2 findings (seamark lessons --distill, p5)
+   - rule: two-areas
+     region: api
++    regions: [api, db]
+     note: Two areas.
+   - rule: scattered
+-    region: a
++    region: '*'
+     note: Scattered evidence.
+ 
+ mute:
 
 (nothing was changed; enable distill.write to let retarget edit the file and the ledger together)
 `, stdout)
@@ -858,38 +976,38 @@ retargeted 3 pin(s) — review the lessons.yaml diff and commit it
 `, stdout)
 	assert.Empty(t, stderr)
 
-	// Defect (D-1, kept): retarget removes each entry and inserts the
-	// stored row again at the head of the list. The live note, the rule
-	// spelling and the unknown key of p1 are lost; the entries move; the
-	// user comment now sits above another pin; new provenance comments
-	// appear. The console patches region keys in place instead (D-7).
+	// A0 D1: retarget removed each entry and inserted the stored row
+	// again at the head of the list. It lost the live note, the rule
+	// spelling and the unknown key of p1. The entries moved, the user
+	// comment then sat above another pin, and new provenance comments
+	// appeared. Now only the region keys change, in place, as in the
+	// console (D-7).
 	content, mode := maintainLessons(t, root)
 	assert.Equal(t, `# Review-lesson tuning (see `+"`seamark lessons --list`"+`).
 
 pin:
-  # distilled by claude/v1 from 2 findings (seamark lessons --distill, p1)
-  - rule: guard-empty-datasets
-    region: scripts
-    note: Guard datasets for emptiness before reductions.
-  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p5)
-  - rule: two-areas
-    region: api
-    regions: [api, db]
-    note: Two areas.
-  # distilled by claude/v6 from 4 findings (seamark lessons --distill, p6)
-  - rule: scattered
-    region: '*'
-    note: Scattered evidence.
   - rule: keep-me
     region: web
     note: A hand-written pin without a ledger row.
   # my own comment about the datasets pin
+  - rule: Guard-Empty-Datasets
+    region: scripts
+    note: HAND EDITED live note that must survive.
+    extra_field: unknown
   - rule: already-current
     region: scripts
     note: Already current.
   - rule: aged-out
     region: scripts
     note: Its evidence aged out.
+  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p5)
+  - rule: two-areas
+    region: api
+    regions: [api, db]
+    note: Two areas.
+  - rule: scattered
+    region: '*'
+    note: Scattered evidence.
 
 mute:
   - rule: noisy-rule
@@ -936,40 +1054,33 @@ func TestLessonsRetargetGoldenNothingToRetarget(t *testing.T) {
 }
 
 // retargetGoldenMovedLessons already carries the new identity of p1 and
-// not the old one, as a crash between the file write and the ledger
-// write of an earlier retarget leaves it.
+// not the old one. A crash between the file write and the ledger write
+// of an earlier retarget leaves this state, and so does a hand edit.
 const retargetGoldenMovedLessons = `pin:
   - rule: guard-empty-datasets
     region: scripts
     note: Already moved by hand.
 `
 
-// retargetGoldenMovedLedger is retargetGoldenLedger after p1 moved to
-// [scripts].
-func retargetGoldenMovedLedger() string {
-	return strings.Replace(retargetGoldenLedger,
-		`p1 applied    "guard-empty-datasets" region="" regions=[]`,
-		`p1 applied    "guard-empty-datasets" region="scripts" regions=["scripts"]`, 1)
-}
-
 func TestLessonsRetargetGoldenLedgerOnly(t *testing.T) {
 	root := retargetGoldenWorkspace(t, retargetGoldenMovedLessons)
 	maintainWriteConfig(t, root, maintainGateOn)
 
-	// Defect (D-1, kept): "new key present, old key absent" proves no
-	// ownership, and the summary asks for a diff review although the
-	// file did not change.
+	// A0 D12: retarget moved only the ledger when the new key was present
+	// and the old key absent. That proves no ownership: a person can
+	// write the same pin. Its summary also asked for a diff review
+	// although the file did not change. Now p1 has no linked entry, so
+	// it is left as not found and nothing changes.
 	stdout, stderr := goldenRun(t, root, "lessons", "--retarget", "p1")
-	assert.Equal(t, `  p1    guard-empty-datasets → scripts
-(1 pin(s) were already retargeted in lessons.yaml; only the ledger moved)
-retargeted 1 pin(s) — review the lessons.yaml diff and commit it
+	assert.Equal(t, `  p1    guard-empty-datasets — not found in lessons.yaml; left untouched
+no pins retargeted
 `, stdout)
 	assert.Empty(t, stderr)
 
 	content, mode := maintainLessons(t, root)
 	assert.Equal(t, retargetGoldenMovedLessons, content)
 	assert.Equal(t, os.FileMode(0o600), mode)
-	assert.Equal(t, retargetGoldenMovedLedger(), maintainLedger(t, root, 0))
+	assert.Equal(t, retargetGoldenLedger, maintainLedger(t, root, 0))
 }
 
 func TestLessonsRetargetGoldenLedgerOnlyFailure(t *testing.T) {
@@ -977,13 +1088,14 @@ func TestLessonsRetargetGoldenLedgerOnlyFailure(t *testing.T) {
 	maintainWriteConfig(t, root, maintainGateOn)
 	maintainFailUpdates(t, root, "region")
 
-	// Defect (D-1, kept): the ledger-only path never edits the file, but
-	// a ledger failure still rewrites it and claims "restored".
-	stdout, stderr, errText := maintainRunErr(t, root, "lessons", "--retarget", "p1")
-	assert.Empty(t, stdout)
+	// A0 D3c: the ledger-only path never edited the file, but a ledger
+	// failure still rewrote it and claimed "lessons.yaml restored". Now
+	// the run has no ledger-only path, so it writes nothing to fail.
+	stdout, stderr := goldenRun(t, root, "lessons", "--retarget", "p1")
+	assert.Equal(t, `  p1    guard-empty-datasets — not found in lessons.yaml; left untouched
+no pins retargeted
+`, stdout)
 	assert.Empty(t, stderr)
-	assert.Equal(t, "retarget aborted, lessons.yaml restored: store: update proposal 1 regions: "+
-		"constraint failed: injected ledger failure (1811)", errText)
 
 	content, mode := maintainLessons(t, root)
 	assert.Equal(t, retargetGoldenMovedLessons, content)
@@ -1004,25 +1116,18 @@ func TestLessonsRetargetGoldenTargetCollision(t *testing.T) {
 	root := retargetGoldenWorkspace(t, lessons)
 	maintainWriteConfig(t, root, maintainGateOn)
 
+	// A0 D11: no collision check existed, so retarget left two entries
+	// with one identity. Now the planner refuses the target key, and
+	// nothing changes.
 	stdout, stderr := goldenRun(t, root, "lessons", "--retarget", "p1")
-	assert.Equal(t, `  p1    guard-empty-datasets → scripts
-retargeted 1 pin(s) — review the lessons.yaml diff and commit it
+	assert.Equal(t, `  p1    guard-empty-datasets — the target key is already in use: another pin already carries the key guard-empty-datasets @ scripts
+no pins retargeted
 `, stdout)
 	assert.Empty(t, stderr)
 
-	// Defect (D-1, kept): no collision check exists, so the file now has
-	// two entries with one identity.
 	content, _ := maintainLessons(t, root)
-	assert.Equal(t, `pin:
-  # distilled by claude/v1 from 2 findings (seamark lessons --distill, p1)
-  - rule: guard-empty-datasets
-    region: scripts
-    note: Guard datasets for emptiness before reductions.
-  - rule: guard-empty-datasets
-    region: scripts
-    note: An unrelated pin with the target identity.
-`, content)
-	assert.Equal(t, retargetGoldenMovedLedger(), maintainLedger(t, root, 0))
+	assert.Equal(t, lessons, content)
+	assert.Equal(t, retargetGoldenLedger, maintainLedger(t, root, 0))
 }
 
 func TestLessonsRetargetGoldenLedgerFailure(t *testing.T) {
@@ -1030,15 +1135,18 @@ func TestLessonsRetargetGoldenLedgerFailure(t *testing.T) {
 	maintainWriteConfig(t, root, maintainGateOn)
 	maintainFailUpdates(t, root, "region")
 
-	// The file is written twice and then restored, because the ledger
-	// update fails. The restore succeeds here. Defect (D-1, kept): the
-	// error claims "restored" even when the restore fails, and the
-	// restore overwrites any change made after the capture.
+	// The file is written once and then restored, because the ledger
+	// update fails. A0 D3a and D3b: the earlier restore claimed
+	// "restored" also after a failed restore, and it wrote over a change
+	// made after its capture. Now "restored" means that the restore
+	// wrote, and the restore writes only over the bytes that the run
+	// wrote (TestLessonsMaintainPartialCommitNamesTheWayBack covers the
+	// other case). The store text comes from the guarded ledger writer.
 	stdout, stderr, errText := maintainRunErr(t, root, "lessons", "--retarget", "p1..p6")
 	assert.Equal(t, retargetGoldenPlanLines+
 		"  p4    missing-pin — not found in lessons.yaml; left untouched\n", stdout)
 	assert.Empty(t, stderr)
-	assert.Equal(t, "retarget aborted, lessons.yaml restored: store: update proposal 1 regions: "+
+	assert.Equal(t, "retarget aborted, lessons.yaml restored: store: retarget p1: "+
 		"constraint failed: injected ledger failure (1811)", errText)
 
 	content, mode := maintainLessons(t, root)
@@ -1063,10 +1171,16 @@ func TestLessonsRetargetGoldenRefusals(t *testing.T) {
 			want: "p9 is not applied (see `seamark lessons --proposals`)"},
 		{name: "reversed range", args: []string{"--retarget", "p6..p1"},
 			want: "range p6..p1 is reversed"},
-		// The error names pruning, because retarget removes the old
-		// entry through the prune engine.
+		// A0 §7 quirk: the error named pruning, because retarget removed
+		// the old entry through the prune engine.
 		{name: "malformed lessons", config: maintainGateOn, lessons: "pin: [\n", args: []string{"--retarget", "p1"},
-			want: "lessons.yaml does not parse; fix it before pruning: yaml: line 1: did not find expected node content"},
+			want: "lessons.yaml does not parse; fix it before retargeting: yaml: line 1: did not find expected node content"},
+		// Before: retarget edited a file that the lessons reader rejects,
+		// as prune did.
+		{name: "lessons the reader rejects", config: maintainGateOn,
+			lessons: "hook_delivery: sometimes\n" + retargetGoldenLessons, args: []string{"--retarget", "p1"},
+			want: "lessons.yaml does not parse; fix it before retargeting: lessons config: hook_delivery must be " +
+				"\"always\" or \"once-per-context\", got \"sometimes\""},
 	}
 
 	for _, tc := range cases {
@@ -1090,6 +1204,45 @@ func TestLessonsRetargetGoldenRefusals(t *testing.T) {
 			assert.Equal(t, retargetGoldenLedger, maintainLedger(t, root, 0))
 		})
 	}
+}
+
+func TestLessonsRetargetGoldenFileTheEditorRefuses(t *testing.T) {
+	root := retargetGoldenWorkspace(t, maintainCRLF(retargetGoldenLessons))
+
+	// The pin file editor of the console refuses a CRLF file as a whole.
+	// With distill.write off, retarget writes nothing, so it still lists
+	// the new regions of each pin. The editor plans no candidate for such
+	// a file, so no diff follows. The last line says that the gate does
+	// not help. Before, the instruction was the stored pin block (A0 D13).
+	stdout, stderr := goldenRun(t, root, "lessons", "--retarget", "p1..p6")
+	assert.Equal(t, retargetGoldenPlanLines+`  p4    missing-pin — not found in lessons.yaml; left untouched
+distill.write is off in .seamark/config.yaml — change the regions of these pins in .seamark/lessons.yaml by hand:
+
+  p1    guard-empty-datasets → scripts
+  p5    two-areas → api, db
+  p6    scattered → *
+
+(nothing was changed; with distill.write on, retarget still refuses this file: the file uses CRLF line breaks)
+`, stdout)
+	assert.Empty(t, stderr)
+
+	// With the gate on, each pin that would change gets the reason of
+	// the editor, and nothing changes. Before, retarget wrote LF lines
+	// into the CRLF file, so the file then mixed CRLF and LF.
+	maintainWriteConfig(t, root, maintainGateOn)
+
+	const refused = " — the entry cannot be edited safely: the file uses CRLF line breaks\n"
+
+	stdout, stderr = goldenRun(t, root, "lessons", "--retarget", "p1..p6")
+	assert.Equal(t, "  p1    guard-empty-datasets"+refused+retargetGoldenPlanLines+
+		"  p4    missing-pin — not found in lessons.yaml; left untouched\n"+
+		"  p5    two-areas"+refused+"  p6    scattered"+refused+"no pins retargeted\n", stdout)
+	assert.Empty(t, stderr)
+
+	content, mode := maintainLessons(t, root)
+	assert.Equal(t, maintainCRLF(retargetGoldenLessons), content)
+	assert.Equal(t, os.FileMode(0o600), mode)
+	assert.Equal(t, retargetGoldenLedger, maintainLedger(t, root, 0))
 }
 
 // --- lessons --extract-triggers -----------------------------------------
@@ -1177,7 +1330,7 @@ func extractGoldenWorkspace(t *testing.T) string {
 const extractGoldenSkipped = "1 applied row(s) skipped — their pins are not in .seamark/lessons.yaml, " +
 	"so there is no delivery to retarget\n"
 
-// extractGoldenPreflight is the preflight of the matrix. Defect (D-1,
+// extractGoldenPreflight is the preflight of the matrix. Defect (A0 D4,
 // kept): it promises one excerpt, but the CLI reads finding metadata
 // without bodies, so no excerpt is sent.
 const extractGoldenPreflight = `extraction preflight — 5 proposal(s) in 1 batch(es), ~319 tokens to sh <root>/agent.sh
@@ -1258,16 +1411,18 @@ applied pins with new triggers show their current delivery scopes in `+"`lessons
   <dur>, 3 of 5 named trigger paths
 `, stderr)
 
-	// Defects (D-1, kept): the prompt carries no excerpt line; p6 is
-	// asked with its stored note, not the live one; p5 is sent without
-	// living evidence; p8 is sent although two entries carry its pin.
+	// This golden keeps known defects; the file header says why. The
+	// prompt carries no excerpt line (A0 D4). p6 is asked with its stored
+	// note, not the live one. p5 is sent without living evidence (A0 D5).
+	// p8 is sent although two entries carry its pin (A0 D6).
 	assert.Equal(t, extractGoldenPrompt, maintainPrompts(t, capture))
 
-	// Defects (D-1, kept): p5 is stamped as answered although it had no
-	// evidence, and p8 is stamped as a negative answer although the
-	// model named a path; neither is asked again. The pending p1 narrows
-	// to its trigger; the applied p6 stores its trigger and keeps its
-	// regions until an explicit retarget.
+	// The ledger keeps known defects too (see the file header). p5 is
+	// stamped as answered although it had no evidence (A0 D5). p8 is
+	// stamped as a negative answer although the model named a path (A0
+	// D7). Neither is asked again. The pending p1 narrows to its trigger.
+	// The applied p6 stores its trigger and keeps its regions until an
+	// explicit retarget.
 	assert.Equal(t, `p1 proposed   "never-asked" region="api/h.go" regions=["api/h.go"] triggers=["api/h.go"] checked=<now> v3 note="Never asked."
 p2 proposed   "current-negative" region="api" regions=[] triggers=[] checked=1000 v3 note="Answered no under the current question."
 p3 proposed   "legacy-negative" region="api" regions=[] triggers=[] checked=<now> v3 note="Answered no under an older question."
@@ -1479,28 +1634,34 @@ func TestLessonsExtractTriggersGoldenStoreError(t *testing.T) {
   each item sends its rule, note, evidence paths, and one excerpt (capped 400 chars)
 `
 
-	// The pending scope of p2 is written first, and its stamp fails. The
+	// The guarded save of p2 fails. It writes the paths, the stamp and
+	// the pending scope in one transaction, so p2 keeps every field. The
 	// run stops with the partial result on stderr.
+	//
+	// Replaced defect: the extraction writes were not atomic. A0 pins it
+	// as "region write first, stamp fails". The CLI wrote the pending
+	// scope of p2 first and its stamp second. So the failed stamp left p2
+	// at region="api/h.go" without an answer. The error was "store:
+	// update proposal 2 trigger paths: …".
 	stdout, stderr, errText := maintainRunErr(t, root, "lessons", "--extract-triggers")
 	assert.Equal(t, twoPreflight, stdout)
 	assert.Equal(t, `extracting batch 1/1 — 2 proposal(s)
   <dur>, 1 of 2 named trigger paths
 extraction stopped after 2 examined, 0 stored — answered rows are stamped; re-running resumes
 `, stderr)
-	assert.Equal(t, "store: update proposal 2 trigger paths: constraint failed: injected ledger failure (1811)", errText)
-	assert.Equal(t, `p1 proposed   "rule-01" region="api" regions=[] triggers=[] checked=0 v0 note="Note 1."
-p2 proposed   "rule-02" region="api/h.go" regions=["api/h.go"] triggers=[] checked=0 v0 note="Note 2."
-`, maintainLedger(t, root, 0))
+	assert.Equal(t, "store: save trigger answer of p2: constraint failed: injected ledger failure (1811)", errText)
+	assert.Equal(t, extractGoldenPendingLedger(2, "0", 0), maintainLedger(t, root, 0))
 
-	// The next run asks again and finishes the pair without a second
-	// scope change.
+	// The next run asks again and writes the scope with the answer.
+	// Before, the scope was already written, so this run printed
+	// "0 pending retargeted".
 	maintainHealUpdates(t, root, "trigger_checked_at")
 
 	since := time.Now().Unix()
 
 	stdout, stderr = goldenRun(t, root, "lessons", "--extract-triggers")
 	assert.Equal(t, twoPreflight+`
-extracted — 2 examined, 1 named triggers, 1 stored, 0 pending retargeted; ~247 tokens sent / ~13 back
+extracted — 2 examined, 1 named triggers, 1 stored, 1 pending retargeted; ~247 tokens sent / ~13 back
 `, stdout)
 	assert.Equal(t, `extracting batch 1/1 — 2 proposal(s)
   <dur>, 1 of 2 named trigger paths
@@ -1511,9 +1672,10 @@ p2 proposed   "rule-02" region="api/h.go" regions=["api/h.go"] triggers=["api/h.
 }
 
 // TestMaintainGoldenHelperProcess is a helper, not a test. The fake
-// agent of TestLessonsExtractTriggersGoldenRowAppliedDuringCall runs
-// this test binary again to apply one row while the CLI waits for the
-// reply. Without its environment it returns at once.
+// agents of TestLessonsExtractTriggersGoldenRowAppliedDuringCall and
+// TestLessonsExtractTriggersGoldenConflictStopsTheRun run this test
+// binary again to apply one row while the CLI waits for the reply.
+// Without its environment it returns at once.
 func TestMaintainGoldenHelperProcess(t *testing.T) {
 	db := os.Getenv("SEAMARK_GOLDEN_APPLY_DB")
 	if db == "" {
@@ -1541,26 +1703,123 @@ func TestLessonsExtractTriggersGoldenRowAppliedDuringCall(t *testing.T) {
 
 	// The agent applies p1 through a second process and then names a
 	// cited file for it.
-	step := "SEAMARK_GOLDEN_APPLY_DB=" + maintainShellQuote(store.DefaultPath(root)) + " SEAMARK_GOLDEN_APPLY_ID=1 " +
-		maintainShellQuote(exe) + " -test.run='^TestMaintainGoldenHelperProcess$' >/dev/null 2>&1 || exit 7\n" +
-		maintainReplyStep
-	capture := maintainAgent(t, root, step)
+	capture := maintainAgent(t, root, maintainApplyStep(t, root, exe, 1))
 	maintainReply(t, capture, `{"triggers":[{"id":1,"trigger_paths":["api/h.go"]}]}`)
 
 	since := time.Now().Unix()
 
-	// The status guard keeps the applied scope. The stamp has no guard,
-	// so the trigger still lands on the applied row. The summary counts
-	// the row by its status at the start, so the applied hint is absent.
+	// The guarded save refuses the changed row, so p1 keeps every field
+	// and its question stays open. A conflict line names p1, and the
+	// summary counts the answer as not saved.
+	//
+	// Replaced defect (A0 D14): the stamp had no guard, so the trigger
+	// landed on the now-applied row. The summary said "1 stored" and
+	// counted the row by its status at the start, so the applied hint
+	// was absent.
 	stdout, stderr := goldenRun(t, root, "lessons", "--extract-triggers")
 	assert.Equal(t, extractGoldenOnePreflight+`
-extracted — 1 examined, 1 named triggers, 1 stored, 0 pending retargeted; ~226 tokens sent / ~13 back
+extracted — 1 examined, 1 named triggers, 0 stored, 0 pending retargeted, 1 conflict(s) not saved; ~226 tokens sent / ~13 back
 `, stdout)
 	assert.Equal(t, `extracting batch 1/1 — 1 proposal(s)
   <dur>, 1 of 1 named trigger paths
+conflict: p1 changed during the agent call — its answer was not saved and p1 is left unchanged
 `, stderr)
-	assert.Equal(t, `p1 applied    "rule-01" region="api" regions=[] triggers=["api/h.go"] checked=<now> v3 note="Note 1."
+	assert.Equal(t, `p1 applied    "rule-01" region="api" regions=[] triggers=[] checked=0 v0 note="Note 1."
 `, maintainLedger(t, root, since))
+}
+
+// maintainApplyStep is a fake agent step that applies row id through
+// TestMaintainGoldenHelperProcess and then prints the test reply. The
+// second process writes as another seamark command would. Only the first
+// call applies the row, so a later call fails only when the run is wrong.
+func maintainApplyStep(t *testing.T, root, exe string, id int64) string {
+	t.Helper()
+
+	return `if [ ! -e "$capture/applied" ]; then ` +
+		"SEAMARK_GOLDEN_APPLY_DB=" + maintainShellQuote(store.DefaultPath(root)) +
+		" SEAMARK_GOLDEN_APPLY_ID=" + strconv.FormatInt(id, 10) + " " +
+		maintainShellQuote(exe) + " -test.run='^TestMaintainGoldenHelperProcess$' >/dev/null 2>&1 || exit 7; " +
+		`touch "$capture/applied"; fi` + "\n" + maintainReplyStep
+}
+
+func TestLessonsExtractTriggersGoldenConflictStopsTheRun(t *testing.T) {
+	exe, err := os.Executable()
+	require.NoError(t, err)
+
+	// Eleven pending rows make two batches: p11 to p2, then p1. In the
+	// first call a second process applies one row. A row of the first
+	// batch is a conflict at its save. A row of the second batch fails
+	// the check before that batch. Either way the run stops, and p1 is
+	// not sent.
+	//
+	// Replaced defect (A0 D14, also between batches): the CLI ran no row
+	// check and no guarded save. It sent both batches, stamped the
+	// applied row, and printed "extracted — 11 examined, …" with no
+	// conflict.
+	cases := []struct {
+		name    string
+		applied int64
+		stderr  string
+		summary string
+	}{
+		{
+			name: "a row of the running batch", applied: 2,
+			stderr: "conflict: p2 changed during the agent call — its answer was not saved and p2 is left unchanged\n" +
+				"extraction stopped: another writer is active — 1 proposal(s) not sent and left unchanged; re-running resumes\n",
+			summary: "extracted — 10 examined, 0 named triggers, 0 stored, 0 pending retargeted, " +
+				"1 conflict(s) not saved, 1 not sent; ~418 tokens sent / ~4 back\n",
+		},
+		{
+			name: "a row of the next batch", applied: 1,
+			stderr: "extraction stopped: p1 is applied now — 1 proposal(s) not sent and left unchanged; " +
+				"re-running resumes\n",
+			summary: "extracted — 10 examined, 0 named triggers, 0 stored, 0 pending retargeted, " +
+				"1 not sent; ~418 tokens sent / ~4 back\n",
+		},
+	}
+
+	// conflictLedger renders the ledger after a stop: the applied row and
+	// the unsent p1 keep every field, and every other row is stamped.
+	conflictLedger := func(applied int64) string {
+		var b strings.Builder
+
+		for i := int64(1); i <= 11; i++ {
+			status, checked, version := "proposed  ", "<now>", 3
+			if i == applied {
+				status = "applied   "
+			}
+
+			if i == applied || i == 1 {
+				checked, version = "0", 0
+			}
+
+			fmt.Fprintf(&b, "p%d %s \"rule-%02d\" region=\"api\" regions=[] triggers=[] checked=%s v%d note=\"Note %d.\"\n",
+				i, status, i, checked, version, i)
+		}
+
+		return b.String()
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := extractGoldenPending(t, 11)
+			capture := maintainAgent(t, root, maintainApplyStep(t, root, exe, tc.applied))
+			maintainReply(t, capture, `{"triggers": []}`)
+
+			since := time.Now().Unix()
+
+			stdout, stderr := goldenRun(t, root, "lessons", "--extract-triggers")
+			assert.Equal(t, `extraction preflight — 11 proposal(s) in 2 batch(es), ~644 tokens to sh <root>/agent.sh
+  each item sends its rule, note, evidence paths, and one excerpt (capped 400 chars)
+
+`+tc.summary, stdout)
+			assert.Equal(t, "extracting batch 1/2 — 10 proposal(s)\n  <dur>, 0 of 10 named trigger paths\n"+tc.stderr, stderr)
+			assert.Equal(t, 1, strings.Count(maintainPrompts(t, capture), "=== end of prompt"),
+				"the second batch is not sent")
+
+			assert.Equal(t, conflictLedger(tc.applied), maintainLedger(t, root, since))
+		})
+	}
 }
 
 func TestLessonsExtractTriggersGoldenUsesRawKeyFields(t *testing.T) {

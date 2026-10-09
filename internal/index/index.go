@@ -1134,25 +1134,11 @@ func statInto(h io.Writer, p string, budget *int) {
 	})
 }
 
-// ResolveRoot widens to the git toplevel when inside a repository.
+// ResolveRoot widens to the git toplevel when inside a repository. It is
+// history.ResolveRoot. The name stays here, because Run applies this
+// rule, and the CLI and the LSP server call it by this name.
 func ResolveRoot(root string) (string, error) {
-	if root == "" {
-		root = "."
-	}
-
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	cmd.Dir = abs
-
-	if out, err := cmd.Output(); err == nil {
-		return strings.TrimSpace(string(out)), nil
-	}
-
-	return abs, nil
+	return history.ResolveRoot(root)
 }
 
 // skipDirs are never worth parsing: dependencies, outputs, fixtures, and

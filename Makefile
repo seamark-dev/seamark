@@ -67,32 +67,35 @@ agents-native-smoke: build ## One bounded distillation through the installed $(C
 
 # The console tests run offline against fixtures, a scripted service
 # fake, a fake gh, and a fake agent. They cover the shell, the five
-# destinations, the terminal lifecycle through tui.Run, the shared
-# services that the console and the CLI both call, and the CLI entry
-# point. No test contacts GitHub or runs a paid model. The shared
-# services are setup (integration), proposals, statistics (lessonstats),
-# settings, evidence refresh (learning, index, reviews, store),
-# distillation (learning, distill, agent), and lesson maintenance: YAML
-# splicing (yamledit), pin file editing (pinfile), retarget and prune
-# (maintain), outcome readings (outcome), and trigger extraction
-# (learning, distill). The index tests take about
-# 25 s. They stay, because index holds the refresh engine and its stop
-# guarantees, and a regression there must fail this target.
-TUI_TEST_PKGS := ./internal/tui/... ./internal/workspace/... ./internal/scaffold/... ./internal/proposals/... ./internal/lessonstats/... \
+# destinations, the terminal lifecycle through tui.Run, the services
+# behind the console, and the CLI entry point. No test contacts GitHub
+# or runs a paid model. The services are the workspace and its root
+# rule (workspace, history), setup (integration), proposals, statistics
+# (lessonstats), settings, evidence refresh (learning, index, reviews,
+# store), distillation (learning, distill, agent), and lesson
+# maintenance: YAML splicing (yamledit), pin file editing (pinfile),
+# retarget and prune (maintain), outcome readings (outcome), and trigger
+# extraction (learning, distill). The CLI does not call learning,
+# because learning holds console-only policy. It calls the engines under
+# learning. The index tests take about 25 s. They stay, because index
+# holds the refresh engine and its stop guarantees, and a regression
+# there must fail this target.
+TUI_TEST_PKGS := ./internal/tui/... ./internal/workspace/... ./internal/history/... ./internal/scaffold/... ./internal/proposals/... ./internal/lessonstats/... \
 	./internal/settings/... ./internal/learning/... ./internal/distill/... ./internal/reviews/... \
 	./internal/index/... ./internal/store/... ./internal/agent/... ./internal/integration/... \
 	./internal/yamledit/... ./internal/pinfile/... ./internal/maintain/... ./internal/outcome/...
 
 # TUI_CLI_PARITY selects the CLI tests that pin the output of the
 # commands behind the console: the console entry point, lessons (with
-# the distillation and maintenance golden tests), init, the evidence
-# refresh of `seamark index --fixes-only` and `--reviews`, and the older
-# retarget, extraction and ledger tests that the console's shared
-# engines must keep green. CLIWorkspace pins how the commands find and
-# open the index through internal/workspace.
-TUI_CLI_PARITY := Test(TUI|Lessons|RunInit|InitClient|IndexFixesOnly|IndexReviews|RecommendScope|RetargetKeeps|ExtractSummary|SelectionParsing|Ledger(Shows|Names)|PlanAnnotations|CLIWorkspace)
+# the apply, dismiss, distillation, maintenance, extraction and stats
+# golden tests), init, the evidence refresh of `seamark index
+# --fixes-only` and `--reviews`, and the older retarget, extraction and
+# ledger tests. These commands run on the engines of the console, so a
+# change to an engine must keep both surfaces green. CLIWorkspace pins
+# how the commands find and open the index through internal/workspace.
+TUI_CLI_PARITY := Test(TUI|Lessons|RunInit|InitClient|IndexFixesOnly|IndexReviews|RetargetKeeps|ExtractSummary|SelectionParsing|Ledger(Shows|Names)|PlanAnnotations|CLIWorkspace)
 
-tui-test: ## Run the workspace console tests (shell, screens, shared services, CLI parity)
+tui-test: ## Run the workspace console tests (shell, screens, shared engines, CLI goldens)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(TUI_TEST_PKGS)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./internal/cli -run '$(TUI_CLI_PARITY)'
 

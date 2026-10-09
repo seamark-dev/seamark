@@ -792,7 +792,12 @@ func TestProposalTriggerPathsRoundTrip(t *testing.T) {
 	assert.Equal(t, int64(1700000000), got[1].TriggerChecked)
 
 	// The negative answer: no paths, but the question is settled.
-	require.NoError(t, s.UpdateProposalTriggers(got[0].ID, nil, 1700000500, 2))
+	negative := answerFor(got[0])
+	negative.CheckedAt, negative.Version = 1700000500, 2
+
+	saved, err := s.SaveTriggerAnswer(negative)
+	require.NoError(t, err)
+	require.True(t, saved)
 
 	got, err = s.Proposals(model.ProposalProposed)
 	require.NoError(t, err)

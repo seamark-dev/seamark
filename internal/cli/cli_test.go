@@ -28,6 +28,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // run executes the CLI with args against a fresh command tree, returning
@@ -142,7 +143,7 @@ func TestStateExportImportRoundTrip(t *testing.T) {
 	// Plant a durable decision behind the CLI's back.
 	st, err := store.Open(filepath.Join(root, ".seamark", "index.db"))
 	require.NoError(t, err)
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "sig-1", Rule: "keep-ascii", Note: "ascii only",
 		Status: model.ProposalDismissed, CreatedAt: 1700000000,
 	}))
@@ -1082,7 +1083,7 @@ func TestLessonsDistillWithTheCodexClient(t *testing.T) {
 	// An extraction dry run shows the same command without invoking Codex.
 	st, err = store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "s-open", Rule: "open-question", Region: "api", Note: "n", Members: []int64{11},
 		Agent: "claude/v3", Status: model.ProposalProposed,
 	}))
@@ -1265,7 +1266,7 @@ func TestLessonsProposalsLedger(t *testing.T) {
 		{Signature: "s3", Rule: "dismissed-one", Region: "web", Note: "n",
 			Members: []int64{5, 6}, Agent: "claude/v2", Status: model.ProposalDismissed},
 	} {
-		require.NoError(t, st.InsertProposal(&p))
+		require.NoError(t, storetest.InsertProposal(st, &p))
 	}
 
 	require.NoError(t, st.Close())
@@ -1304,7 +1305,7 @@ func TestLessonsProposalsLedgerShowsOutcome(t *testing.T) {
 			Body: "api boundary unguarded again", CreatedAt: now.Add(time.Hour).Unix(), Source: "review"},
 	}))
 
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "s1", Rule: "boundary-guard", Region: "api", Note: "Guard it.",
 		Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalApplied,
 	}))
@@ -1382,7 +1383,7 @@ func TestLessonsProposalsLedgerShowsScopeAdvisory(t *testing.T) {
 			Note: "Sync the client.", Members: []int64{1},
 			Agent: "claude/v3", Status: model.ProposalApplied},
 	} {
-		require.NoError(t, st.InsertProposal(&p))
+		require.NoError(t, storetest.InsertProposal(st, &p))
 	}
 
 	require.NoError(t, st.Close())
@@ -1450,7 +1451,7 @@ func TestLessonsExtractTriggersBackfill(t *testing.T) {
 			Note: "n", Members: []int64{1},
 			Agent: "claude/v3", Status: model.ProposalApplied},
 	} {
-		require.NoError(t, st.InsertProposal(&p))
+		require.NoError(t, storetest.InsertProposal(st, &p))
 	}
 
 	require.NoError(t, st.Close())
@@ -1520,7 +1521,7 @@ func TestLessonsExtractTriggersBackfill(t *testing.T) {
 		Note: "n", Members: []int64{1}, Agent: "claude/v4",
 		Status: model.ProposalProposed, TriggerChecked: time.Now().Unix(),
 	}
-	require.NoError(t, st.InsertProposal(&legacy))
+	require.NoError(t, storetest.InsertProposal(st, &legacy))
 	require.NoError(t, st.Close())
 	require.NoError(t, os.WriteFile(replyPath,
 		[]byte(fmt.Sprintf(`{"triggers":[{"id":%d,"trigger_paths":[]}]}`, legacy.ID)), 0o644))
@@ -1604,7 +1605,7 @@ func TestRetargetKeepsStoredTriggerScope(t *testing.T) {
 			TriggerPaths: []string{"api/schemas.py"},
 			Note:         "n", Members: []int64{1}, Agent: "claude/v4", Status: model.ProposalApplied},
 	} {
-		require.NoError(t, st.InsertProposal(&p))
+		require.NoError(t, storetest.InsertProposal(st, &p))
 	}
 
 	require.NoError(t, st.Close())
@@ -1663,7 +1664,7 @@ func TestLedgerShowsBlockedTrigger(t *testing.T) {
 		{ID: 3, Path: "internal/b.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
 	}))
 
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "s1", Rule: "capped-pin", Region: "web/src/api",
 		Regions:      []string{"web/src/api", "cmd", "internal"},
 		TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: time.Now().Unix(),
@@ -1704,7 +1705,7 @@ func TestLedgerNamesPrunedPinsInsteadOfAdvising(t *testing.T) {
 
 	// Stored region disagrees with coverage, so the pin WOULD drift —
 	// but no lessons.yaml carries it.
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "s1", Rule: "hand-pruned", Region: "api",
 		Note: "n", Members: []int64{1},
 		Agent: "claude/v4", Status: model.ProposalApplied,
@@ -1729,7 +1730,7 @@ func TestExtractSummarySaysAttemptedOnFailure(t *testing.T) {
 
 	st, err := store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "s1", Rule: "r", Region: "api", Note: "n",
 		Members: []int64{1}, Agent: "claude/v4", Status: model.ProposalProposed,
 	}))
@@ -1788,7 +1789,7 @@ func TestLessonsPruneRetiresRestatements(t *testing.T) {
 			Note:    "Route deferred events through one bounded queue so backpressure cannot amplify goroutines.",
 			Members: []int64{6, 7}, Agent: "claude/v2", Status: model.ProposalApplied},
 	} {
-		require.NoError(t, st.InsertProposal(&p))
+		require.NoError(t, storetest.InsertProposal(st, &p))
 	}
 
 	require.NoError(t, st.Close())

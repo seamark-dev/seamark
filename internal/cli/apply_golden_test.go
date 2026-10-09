@@ -24,6 +24,8 @@ import (
 // console does. The Phase 3 trials found two apply defects, which the
 // A0 report records as D15 and D16. D16 is fixed in the shared flow: a
 // selection with a repeated key is refused, and its golden pins that.
+// A proposal with the key of an applied proposal is refused for the same
+// reason, and TestLessonsApplyGoldenAppliedKey pins that.
 // D15 stays open: the CLI keeps its root resolution, and its golden pins
 // the defect until a decision.
 
@@ -441,6 +443,108 @@ func TestLessonsApplyGoldenExistingPinGateOff(t *testing.T) {
 	assert.Equal(t, before, maintainLedger(t, root, 0))
 }
 
+// applyGoldenAppliedLessons holds the pin of the applied p1 of
+// applyGoldenAppliedKey after the hand-written entry.
+const applyGoldenAppliedLessons = applyGoldenLessons + `  - rule: first-rule
+    region: api
+    note: The applied pin.
+`
+
+// applyGoldenAppliedKey seeds applied p1 (first-rule @ api) and two
+// pending rows. p2 has the rule and regions of p1, as a later
+// distillation of new evidence can give. p3 has the key of the
+// hand-written entry, which no applied row records.
+func applyGoldenAppliedKey(t *testing.T, root string) {
+	t.Helper()
+
+	applied := applyGoldenRow("s1", "first-rule", "api", "The applied pin.")
+	applied.Status = model.ProposalApplied
+
+	goldenSeedProposals(t, root, applied,
+		applyGoldenRow("s2", "first-rule", "api", "A later reading of the same rule."),
+		applyGoldenRow("s3", "hand-written", "web", "A proposal for the hand-written pin."),
+	)
+}
+
+// Applied key (fixed): p2 has the rule and regions of applied p1. With
+// the pin in the file, apply used to record p2 as applied next to p1
+// (gate on) or to print that the file already held its pin (gate off).
+// Without the pin, it wrote or printed a pin that both rows record. Pins
+// blocks a pin that two applied proposals record, so by reviewer
+// decision apply refuses p2 with the gate on or off. The refusal wins
+// over the record of an existing pin, so p3 waits too.
+func TestLessonsApplyGoldenAppliedKey(t *testing.T) {
+	tests := []struct {
+		name, gateCfg, lessons string
+	}{
+		{name: "gate off", gateCfg: "distill:\n  write: false\n", lessons: applyGoldenAppliedLessons},
+		{name: "gate on", gateCfg: maintainGateOn, lessons: applyGoldenAppliedLessons},
+		{name: "gate off, the pin of p1 left the file", gateCfg: "distill:\n  write: false\n", lessons: applyGoldenLessons},
+		{name: "gate on, the pin of p1 left the file", gateCfg: maintainGateOn, lessons: applyGoldenLessons},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := maintainWorkspace(t, nil)
+			maintainWriteConfig(t, root, tt.gateCfg)
+			maintainWriteLessons(t, root, tt.lessons, 0o644)
+			applyGoldenAppliedKey(t, root)
+
+			before := maintainLedger(t, root, 0)
+
+			stdout, stderr, err := runErr(t, "-C", root, "lessons", "--apply", "p2,p3")
+			require.ErrorIs(t, err, proposals.ErrAppliedKey)
+			assert.NotErrorIs(t, err, gate.ErrBlocked, "exit code 1, not the policy exit code 2")
+			assert.Equal(t, "p1 is already applied with this rule and regions; dismiss p2", err.Error())
+			assert.Empty(t, stdout, "no block to paste and no applied line")
+			assert.Empty(t, stderr)
+
+			got, _ := maintainLessons(t, root)
+			assert.Equal(t, tt.lessons, got, "the pin file is unchanged")
+			assert.Equal(t, before, maintainLedger(t, root, 0), "p2 and p3 stay pending")
+		})
+	}
+}
+
+// The advised next step of the applied key refusal: dismiss p2. A pin
+// that no applied row records keeps the old handling, so the apply of
+// p3 then records it as applied without a write. Each entry ends with
+// one applied row, so Pins links both.
+func TestLessonsApplyGoldenAppliedKeyNextStep(t *testing.T) {
+	root := maintainWorkspace(t, nil)
+	maintainWriteConfig(t, root, maintainGateOn)
+	maintainWriteLessons(t, root, applyGoldenAppliedLessons, 0o644)
+	applyGoldenAppliedKey(t, root)
+
+	goldenRun(t, root, "lessons", "--dismiss", "p2")
+
+	stdout, stderr := goldenRun(t, root, "lessons", "--apply", "p3")
+
+	assert.Equal(t, "recorded 1 proposal(s) as applied without a new pin — .seamark/lessons.yaml already holds a pin "+
+		"with the same rule and regions\n"+
+		"  p3    hand-written\n", stdout)
+	assert.Empty(t, stderr)
+
+	got, _ := maintainLessons(t, root)
+	assert.Equal(t, applyGoldenAppliedLessons, got)
+
+	doc, err := pinfile.Read(root)
+	require.NoError(t, err)
+
+	st, err := store.OpenReadOnly(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	applied, err := st.Proposals(model.ProposalApplied)
+	require.NoError(t, err)
+
+	links := pinfile.Classify(doc, applied, nil, nil)
+	require.Len(t, links.Entries, 2)
+	assert.Equal(t, pinfile.LinkLinked, links.Entries[0].Link, "hand-written links p3")
+	assert.Equal(t, pinfile.LinkLinked, links.Entries[1].Link, "first-rule links p1")
+}
+
 // The shared flow reads the pin file strictly, as the console does. A
 // symbolic link at the pin file path used to receive the gate-on write.
 // A malformed pin file used to get the block or a write. Both now stop
@@ -484,6 +588,159 @@ func TestLessonsApplyGoldenRefusesUnsafePinFiles(t *testing.T) {
 
 			got, _ := maintainLessons(t, root)
 			assert.Equal(t, "hook_delivery: sometimes\n", got)
+		})
+	}
+}
+
+// applyGoldenFirstEntry is the pin block of p1 in applyGoldenTwoRows,
+// with pad in place of the indentation of the list.
+func applyGoldenFirstEntry(pad string) string {
+	return pad + "# distilled by claude/v6 from 2 findings (seamark lessons --distill, p1)\n" +
+		pad + "- rule: first-rule\n" +
+		pad + "  region: api\n" +
+		pad + "  note: The first pending pin.\n"
+}
+
+// The gate-on apply writes through the pin file editor of the console
+// (pinfile.PlanAppend and the guarded write). The common layouts keep
+// their bytes; the goldens above pin them. These layouts changed. Each
+// case names what the old CLI writer, distill.ApplyPins, did before.
+// That writer is deleted now; git history keeps it.
+func TestLessonsApplyGoldenPinFileLayouts(t *testing.T) {
+	const (
+		hand = "  - rule: hand-written\n    region: web\n    note: A person wrote this pin.\n"
+		deep = "    - rule: hand-written\n      region: web\n      note: A person wrote this pin.\n"
+	)
+
+	applied := "applied 1 pin(s) to .seamark/lessons.yaml — review the diff and commit it\n  p1    first-rule\n"
+
+	tests := []struct {
+		name    string
+		before  string
+		absent  bool
+		mode    os.FileMode
+		wantErr string
+		want    string
+	}{
+		{
+			// Unchanged: the first apply creates the file with a header.
+			name:   "absent pin file",
+			absent: true,
+			want:   "# Review-lesson tuning (see `seamark lessons --list`).\n\npin:\n" + applyGoldenFirstEntry("  "),
+		},
+		{
+			// Unchanged: the refusal keeps its text.
+			name:    "flow list",
+			before:  "pin: []\n",
+			wantErr: "lessons.yaml has a flow-style pin section; add the entries by hand",
+		},
+		{
+			// Before: "open <root>/.seamark/lessons.yaml: permission denied"
+			// from os.WriteFile.
+			name:    "read-only pin file",
+			before:  applyGoldenLessons,
+			mode:    0o444,
+			wantErr: "the pin file cannot be replaced: the file is read-only (-r--r--r--); seamark does not replace it",
+		},
+		{
+			// Before: LF lines went into the CRLF file, and Pins then
+			// blocked the file for its mixed line breaks.
+			name:   "CRLF pin file",
+			before: strings.ReplaceAll(applyGoldenLessons, "\n", "\r\n"),
+			want:   strings.ReplaceAll("threshold: 3\n\npin:\n"+applyGoldenFirstEntry("  ")+hand, "\n", "\r\n"),
+		},
+		{
+			// Before: "refusing to write: edited lessons.yaml would not
+			// parse: yaml: line 4: did not find expected key". The
+			// two-space entries did not fit the list.
+			name:   "list at column 4",
+			before: "threshold: 3\n\npin:\n" + deep,
+			want:   "threshold: 3\n\npin:\n" + applyGoldenFirstEntry("    ") + deep,
+		},
+		{
+			// Before: "lessons.yaml has a flow-style pin section; add the
+			// entries by hand". A comment is not a flow list.
+			name:   "comment on the pin line",
+			before: "pin: # my pins\n" + hand,
+			want:   "pin: # my pins\n" + applyGoldenFirstEntry("  ") + hand,
+		},
+		{
+			// Before: the new section went after the end marker. No reader
+			// read it, but the ledger recorded p1 as applied.
+			name:   "document end marker",
+			before: "threshold: 2\n...\n",
+			want:   "threshold: 2\n\npin:\n" + applyGoldenFirstEntry("  ") + "...\n",
+		},
+		{
+			// Before: a second pin key at column 0 after the indented
+			// mapping. No reader read it, but the ledger recorded p1.
+			name:   "indented top level",
+			before: "  threshold: 3\n  pin:\n" + deep,
+			want:   "  threshold: 3\n  pin:\n" + applyGoldenFirstEntry("    ") + deep,
+		},
+		{
+			// Before: the new section went into the second document. No
+			// reader read it, but the ledger recorded p1 as applied.
+			name:   "two documents",
+			before: "threshold: 2\n---\nmute: []\n",
+			wantErr: "lessons.yaml cannot take the new pins safely: the file holds more than one YAML document " +
+				"(line 2); add the entries by hand",
+		},
+		{
+			// Before: the apply added LF lines to the mixed file.
+			name:    "mixed line breaks",
+			before:  "threshold: 3\r\npin:\n" + hand,
+			wantErr: "lessons.yaml cannot take the new pins safely: the file mixes CRLF and LF line breaks; add the entries by hand",
+		},
+		{
+			// Before: "lessons.yaml has a flow-style pin section; add the
+			// entries by hand", which named the wrong layout.
+			name:    "null token",
+			before:  "threshold: 3\npin: ~\n",
+			wantErr: "lessons.yaml has a pin section that is not a plain block list; add the entries by hand",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := maintainWorkspace(t, nil)
+			maintainWriteConfig(t, root, maintainGateOn)
+
+			mode := tt.mode
+			if mode == 0 {
+				mode = 0o644
+			}
+
+			if !tt.absent {
+				maintainWriteLessons(t, root, tt.before, mode)
+			}
+
+			applyGoldenTwoRows(t, root)
+
+			stdout, stderr, err := runErr(t, "-C", root, "lessons", "--apply", "p1")
+			assert.Empty(t, stderr)
+
+			got, gotMode := maintainLessons(t, root)
+
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.NotErrorIs(t, err, gate.ErrBlocked, "exit code 1, not the policy exit code 2")
+				assert.Equal(t, tt.wantErr, err.Error())
+				assert.Empty(t, stdout)
+				assert.Equal(t, tt.before, got, "the pin file is unchanged")
+				assert.Contains(t, maintainLedger(t, root, 0), `p1 proposed   "first-rule"`)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, applied, stdout)
+			assert.Equal(t, tt.want, got)
+			assert.Contains(t, maintainLedger(t, root, 0), `p1 applied    "first-rule"`)
+
+			if !tt.absent {
+				assert.Equal(t, mode, gotMode, "the write keeps the file mode")
+			}
 		})
 	}
 }

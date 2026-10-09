@@ -13,15 +13,18 @@ import (
 	"github.com/seamark-dev/seamark/internal/proposals"
 )
 
-// lesRows is a read-only ledger over fixed pending rows. It lets a test
-// run the real preview checks of internal/proposals behind the fake
-// services, so the console shows the exact refusal text of the engine.
-type lesRows []domain.Proposal
+// lesRows is a read-only ledger over the rows of a console ledger. It
+// lets a test run the real preview checks of internal/proposals behind
+// the fake services, so the console shows the exact refusal text of the
+// engine.
+type lesRows struct{ l *proposals.Ledger }
 
+// ProposalsByIDs returns the pending rows with the IDs, as the store
+// does: the decision flow selects pending rows only.
 func (r lesRows) ProposalsByIDs(ids []int64) ([]domain.Proposal, error) {
 	var out []domain.Proposal
 
-	for _, p := range r {
+	for _, p := range r.l.Pending {
 		if slices.Contains(ids, p.ID) {
 			out = append(out, p)
 		}
@@ -30,14 +33,29 @@ func (r lesRows) ProposalsByIDs(ids []int64) ([]domain.Proposal, error) {
 	return out, nil
 }
 
+// Proposals returns the rows of one status. The previews read the
+// applied rows, so a test can give a pending row the key of one.
+func (r lesRows) Proposals(status string) ([]domain.Proposal, error) {
+	switch status {
+	case domain.ProposalProposed:
+		return slices.Clone(r.l.Pending), nil
+	case domain.ProposalApplied:
+		return slices.Clone(r.l.Applied), nil
+	case domain.ProposalDismissed:
+		return slices.Clone(r.l.Dismissed), nil
+	default:
+		return slices.Clone(r.l.Superseded), nil
+	}
+}
+
 func (r lesRows) SetProposalStatus([]int64, string) (int, error) {
 	return 0, errors.New("the test ledger is read-only")
 }
 
 // lesEnginePreview returns a fake preview function that runs the real
-// apply and record previews over the pending rows of l. Their selection
-// checks run before any read of the pin file, so the refusals under test
-// need no workspace on disk.
+// apply and record previews over the rows of l. Their selection checks
+// run before any read of the pin file, so the refusals under test need
+// no workspace on disk.
 func lesEnginePreview(t *testing.T, l *proposals.Ledger) func(proposals.Action, []int64) (*proposals.Preview, error) {
 	t.Helper()
 
@@ -46,11 +64,11 @@ func lesEnginePreview(t *testing.T, l *proposals.Ledger) func(proposals.Action, 
 	return func(a proposals.Action, ids []int64) (*proposals.Preview, error) {
 		switch a {
 		case proposals.ActionReconcile:
-			return proposals.PreviewReconcile(lesRows(l.Pending), root, ids)
+			return proposals.PreviewReconcile(lesRows{l}, root, ids)
 		case proposals.ActionDismiss:
-			return proposals.PreviewDismiss(lesRows(l.Pending), ids)
+			return proposals.PreviewDismiss(lesRows{l}, ids)
 		default:
-			return proposals.PreviewApply(lesRows(l.Pending), root, ids)
+			return proposals.PreviewApply(lesRows{l}, root, ids)
 		}
 	}
 }

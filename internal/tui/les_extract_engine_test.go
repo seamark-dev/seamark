@@ -11,6 +11,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/learning"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // TestExtractRecordRunsTheRealEngine drives the record over the real
@@ -28,7 +29,7 @@ func TestExtractRecordRunsTheRealEngine(t *testing.T) {
 		Signature: "sig-ext", Rule: "close-db-handles", Region: "api", Note: "Close the handle.",
 		Members: []int64{21, 22}, Status: domain.ProposalProposed,
 	}
-	require.NoError(t, st.InsertProposal(&row))
+	require.NoError(t, storetest.InsertProposal(st, &row))
 	require.NoError(t, st.Close())
 
 	var prompts []string

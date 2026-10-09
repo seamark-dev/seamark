@@ -16,6 +16,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // newWorkspace resolves a fresh temporary directory with default paths.
@@ -354,7 +355,7 @@ func TestProbeNotIndexedDatabaseWithDecisions(t *testing.T) {
 	ws := newWorkspace(t)
 
 	st := openFresh(t, ws)
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "sig-1",
 		Rule:      "check-errors",
 		Note:      "Check every error.",

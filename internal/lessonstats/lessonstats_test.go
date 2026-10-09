@@ -13,6 +13,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 var (
@@ -273,7 +274,7 @@ func TestGatherListsAppliedProposalsByID(t *testing.T) {
 			Signature: rule, Rule: rule, Region: "api", Note: "n",
 			Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalApplied,
 		}
-		require.NoError(t, st.InsertProposal(&p))
+		require.NoError(t, storetest.InsertProposal(st, &p))
 	}
 
 	snap := Gather(st, root)
@@ -417,7 +418,7 @@ func TestGatherMeasuresTheNewestPinFirst(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	for _, pin := range pins {
-		require.NoError(t, st.InsertProposal(&model.Proposal{
+		require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 			Signature: pin.Rule, Rule: pin.Rule, Region: pin.Region, Note: pin.Note,
 			Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalApplied,
 		}))

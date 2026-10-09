@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // These tests characterize ExtractTriggers before its pure helpers were
@@ -30,7 +31,7 @@ func TestExtractTriggersTranscriptIsStable(t *testing.T) {
 	for i := range 12 {
 		p := model.Proposal{Signature: fmt.Sprintf("s%d", i), Rule: fmt.Sprintf("r%d", i),
 			Note: "n", Members: []int64{int64(i + 1)}, Status: model.ProposalProposed}
-		require.NoError(t, st.InsertProposal(&p))
+		require.NoError(t, storetest.InsertProposal(st, &p))
 		ps = append(ps, p)
 	}
 
@@ -117,7 +118,7 @@ func TestExtractTriggersCallbacksReplaceLogLines(t *testing.T) {
 
 	p := model.Proposal{Signature: "s1", Rule: "r", Note: "n",
 		Members: []int64{1}, Status: model.ProposalProposed}
-	require.NoError(t, st.InsertProposal(&p))
+	require.NoError(t, storetest.InsertProposal(st, &p))
 
 	fake := &fakeAgent{fn: func(string) (string, error) { return "not json", nil }}
 

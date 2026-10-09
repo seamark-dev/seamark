@@ -49,7 +49,8 @@ func TestQuotedFieldKeepsAOneLineFieldByteIdentical(t *testing.T) {
 }
 
 // Trial step 17: the console must tell a reply without a "triggers" key
-// apart, while the CLI prints the same words as before (contracts D-1).
+// apart, while the CLI prints the same words as before, as its goldens
+// pin them.
 func TestParseExtractReplyMarksAMissingTriggersKey(t *testing.T) {
 	for _, reply := range []string{`{}`, `{"triggers": null}`, `{"trigger": []}`} {
 		_, err := parseExtractReply(reply)

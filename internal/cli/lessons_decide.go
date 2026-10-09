@@ -167,7 +167,9 @@ func printPinBlock(out io.Writer, pv *proposals.Preview) error {
 
 // applyPins commits a gate-on apply. A proposal whose pin is already in
 // the pin file gets no second entry: a ledger-only reconcile records it
-// as applied. The other proposals are written and recorded. The write
+// as applied. PreviewApply refuses a pin that an applied proposal
+// records, so such a pin has no applied row, for example a hand-written
+// entry. The other proposals are written and recorded. The write
 // comes first, so the first output line stays the "applied" line. ls is
 // the ledger; tests inject a failing one through it.
 func applyPins(out io.Writer, ls proposals.Ledgerer, root string, pv *proposals.Preview) error {

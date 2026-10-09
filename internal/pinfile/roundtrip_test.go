@@ -1,9 +1,10 @@
 package pinfile_test
 
-// Round trips with the real writers. The CLI writes pins with
-// distill.ApplyPins and removes them with distill.RemovePins, and
-// `seamark init` writes the starter file. The console editor must read
-// what they write and undo an apply byte for byte.
+// Round trips with the real writers. An apply, from the CLI or the
+// console, writes pins through PlanAppend, and `seamark init` writes the
+// starter file. The editor must read what they write and undo an apply
+// byte for byte. The CLI and the console retarget and prune through
+// this editor too, so one round trip covers both surfaces.
 
 import (
 	"os"
@@ -72,6 +73,25 @@ func pins(t *testing.T, root string) string {
 	return string(data)
 }
 
+// apply writes the pins of rows as an apply does: internal/proposals
+// renders the block, plans the append, and writes it through the guard.
+func apply(t *testing.T, root string, rows []model.Proposal) {
+	t.Helper()
+
+	block, err := distill.RenderPins(rows)
+	require.NoError(t, err)
+
+	d, err := pinfile.Read(root)
+	require.NoError(t, err)
+
+	after, err := pinfile.PlanAppend(d, block)
+	require.NoError(t, err)
+
+	p, err := pinfile.PrepareAppend(integration.Builtin(), root, d.Guard, after)
+	require.NoError(t, err)
+	require.NoError(t, p.Apply())
+}
+
 // commit plans the edits on the file under root and writes the change.
 func commit(t *testing.T, root string, edits func(d *pinfile.Document) []pinfile.Edit) *pinfile.Change {
 	t.Helper()
@@ -106,14 +126,14 @@ func TestRenderPinsRoundTrip(t *testing.T) {
 
 	root := rootWith(t, seed)
 	rows := applied()
-	require.NoError(t, distill.ApplyPins(root, rows))
+	apply(t, root, rows)
 
 	d, err := pinfile.Read(root)
 	require.NoError(t, err)
 	require.Empty(t, d.FileBlock)
 	require.Len(t, d.Entries, len(rows))
 
-	// ApplyPins inserts the block as written, in proposal order.
+	// The apply inserts the block as written, in proposal order.
 	for i, p := range rows {
 		e := d.Entries[i]
 
@@ -135,28 +155,45 @@ func TestRenderPinsRoundTrip(t *testing.T) {
 	assert.Equal(t, seed, pins(t, root))
 }
 
-func TestPruneMatchesRemovePinsOnTheEmittedLayout(t *testing.T) {
-	// On the layout that the CLI writes, the console prune and the CLI
-	// prune remove the same bytes. The console binds the entry, the CLI
-	// removes every entry with the key; with unique keys they agree.
-	rows := applied()
+func TestApplyAddsTheBlockRightUnderThePinKey(t *testing.T) {
+	// An apply adds the rendered block at the head of the list, directly
+	// under the pin: line, and keeps every other line. The CLI wrote
+	// these bytes before the append moved to PlanAppend, so the files of
+	// earlier applies keep their layout.
+	hand := "# My tuning notes.\nthreshold: 3\n\nmute:\n  - rule: E702        # scripts\n\n" +
+		"pin:\n  # Keep scripts ASCII.\n  - rule: RUF001\n    region: scripts\n    note: \"ASCII only\"\n"
 
-	console := rootWith(t, "pin:\n")
-	require.NoError(t, distill.ApplyPins(console, rows))
-
-	cli := rootWith(t, pins(t, console))
-
-	commit(t, console, func(d *pinfile.Document) []pinfile.Edit {
-		e := d.Entries[1]
-
-		return []pinfile.Edit{{Ref: e.Ref(), Delete: true, Provenance: e.ProvenanceIDs}}
-	})
-
-	removed, err := distill.RemovePins(cli, []reviews.PinKey{reviews.NewPinKey("multi", "api", []string{"api", "db"})})
+	block, err := distill.RenderPins(applied())
 	require.NoError(t, err)
-	require.Len(t, removed, 1)
 
-	assert.Equal(t, pins(t, cli), pins(t, console))
+	layouts := []struct{ name, body string }{
+		{name: "starter file", body: starter(t)},
+		{name: "hand-written file", body: hand},
+		{name: "file of an earlier apply", body: pins(t, appliedEarlier(t))},
+	}
+
+	for _, l := range layouts {
+		t.Run(l.name, func(t *testing.T) {
+			root := rootWith(t, l.body)
+			apply(t, root, applied())
+
+			head, rest, ok := strings.Cut(l.body, "\npin:\n")
+			require.True(t, ok, "the layout has a pin: line")
+			assert.Equal(t, head+"\npin:\n"+block+rest, pins(t, root))
+		})
+	}
+}
+
+// appliedEarlier returns a root whose pin file holds the pin of an
+// earlier apply, with a key that applied() does not use.
+func appliedEarlier(t *testing.T) string {
+	t.Helper()
+
+	root := rootWith(t, "threshold: 2\npin:\n")
+	apply(t, root, []model.Proposal{{ID: 9, Rule: "earlier", Region: "web", Note: "An earlier apply.",
+		Agent: "claude/v3", Members: []int64{5}, Status: model.ProposalApplied}})
+
+	return root
 }
 
 func TestTheScaffoldedFileKeepsItsCommentsAroundAnEdit(t *testing.T) {
@@ -167,7 +204,7 @@ func TestTheScaffoldedFileKeepsItsCommentsAroundAnEdit(t *testing.T) {
 	require.Contains(t, body, "# pin_budget: 3\n")
 
 	root := rootWith(t, body)
-	require.NoError(t, distill.ApplyPins(root, applied()[:1]))
+	apply(t, root, applied()[:1])
 
 	withPin := pins(t, root)
 	head, rest, ok := strings.Cut(withPin, "pin:\n")
@@ -209,9 +246,10 @@ func TestTheScaffoldedFileKeepsItsCommentsAroundAnEdit(t *testing.T) {
 }
 
 func TestTheConsoleWriteKeepsTheEditWhereTheUserPutIt(t *testing.T) {
-	// The CLI retarget moves the entry to the head of the list and writes
-	// the stored note. The console retarget keeps the position, the live
-	// note, the rule spelling, the comments, and the unknown keys.
+	// The earlier CLI retarget moved the entry to the head of the list and
+	// wrote the stored note. This editor, now behind both surfaces, keeps
+	// the position, the live note, the rule spelling, the comments, and
+	// the unknown keys.
 	const file = `pin:
   - rule: first
     region: lib
@@ -263,12 +301,12 @@ func linkedByOneKey(t *testing.T, root string, rows []model.Proposal) {
 }
 
 func TestEveryWriterPathWritesThePinOfTheOneKey(t *testing.T) {
-	// The CLI apply (distill.ApplyPins) writes region and a flow regions
+	// The apply (pinfile.PlanAppend) writes region and a flow regions
 	// list. The console retarget (pinfile.Plan) edits those keys in place
 	// and keeps a block list. Each layout must link by the one key.
 	rows := applied()
 	root := rootWith(t, "pin:\n")
-	require.NoError(t, distill.ApplyPins(root, rows))
+	apply(t, root, rows)
 
 	linkedByOneKey(t, root, rows)
 
@@ -320,8 +358,9 @@ func TestEveryReaderLinksARowWithDisagreeingFieldsToOneEntry(t *testing.T) {
 	// The console used to link them by the region set that RenderPins
 	// writes and also by the stored fields; the CLI used the stored
 	// fields only. Now every reader uses reviews.ProposalKey, so the
-	// console list, the CLI liveness check, and the CLI prune name the
-	// same entry: the one with the stored fields.
+	// console list and the CLI liveness check name the same entry: the
+	// one with the stored fields. The link stays ambiguous, so retarget
+	// and prune refuse the row on both surfaces.
 	cases := []struct {
 		name    string
 		region  string
@@ -401,12 +440,6 @@ func TestEveryReaderLinksARowWithDisagreeingFieldsToOneEntry(t *testing.T) {
 			pin, live := cfg.FindPin(key)
 			require.True(t, live)
 			assert.Equal(t, "stored", pin.Note)
-
-			// The CLI prune removes the same entry and keeps the other.
-			removed, err := distill.RemovePins(root, []reviews.PinKey{key})
-			require.NoError(t, err)
-			assert.Equal(t, []reviews.PinKey{key}, removed)
-			assert.Equal(t, "pin:\n"+rendered, pins(t, root))
 		})
 	}
 }

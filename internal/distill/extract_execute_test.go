@@ -104,15 +104,14 @@ func fixedClock(at time.Time) func() time.Time { return func() time.Time { retur
 // stampTime is the fixed stamp of the executor tests.
 var stampTime = time.Unix(1_800_000_000, 0)
 
-// execute runs plan on the console path (Boundary on) with a fixed
-// clock and records the events.
+// execute runs plan with a fixed clock and records the events.
 func execute(ctx context.Context, w *extractWorkspace, inv *extractAgent, plan *ExtractPlan,
 	check func() error,
 ) (*ExtractExecution, *extractEvents, error) {
 	log := &extractEvents{}
 
 	x, err := ExecuteExtract(ctx, w.st, inv, plan, ExtractExecuteOptions{
-		Boundary: true, Check: check, OnEvent: log.record, Now: fixedClock(stampTime),
+		Check: check, OnEvent: log.record, Now: fixedClock(stampTime),
 	})
 
 	return x, log, err
@@ -467,7 +466,6 @@ func TestExecuteExtractStopsBetweenBatches(t *testing.T) {
 	log := &extractEvents{}
 
 	x, err := ExecuteExtract(ctx, w.st, inv, plan, ExtractExecuteOptions{
-		Boundary: true,
 		OnEvent: func(ev ExtractEvent) {
 			log.record(ev)
 
@@ -513,7 +511,6 @@ func TestExecuteExtractStopDuringTheStartEventStartsNoCall(t *testing.T) {
 	log := &extractEvents{}
 
 	x, err := ExecuteExtract(ctx, w.st, inv, plan, ExtractExecuteOptions{
-		Boundary: true,
 		OnEvent: func(ev ExtractEvent) {
 			log.record(ev)
 
@@ -707,8 +704,7 @@ func TestExecuteExtractConflictAtPersist(t *testing.T) {
 		}, status: model.ProposalDismissed},
 		{name: "superseded during the call", applied: true,
 			mutate: func(t *testing.T, w *extractWorkspace, p model.Proposal) {
-				_, err := w.st.SupersedeProposals([]int64{p.ID})
-				require.NoError(t, err)
+				require.NoError(t, w.st.SupersedeExact([]store.RowGuard{store.NewRowGuard(p)}))
 			}, status: model.ProposalSuperseded},
 		{name: "retargeted during the call", applied: true,
 			mutate: func(t *testing.T, w *extractWorkspace, p model.Proposal) {
@@ -717,12 +713,10 @@ func TestExecuteExtractConflictAtPersist(t *testing.T) {
 				}}))
 			}, status: model.ProposalApplied},
 		{name: "pending regions changed during the call", mutate: func(t *testing.T, w *extractWorkspace, p model.Proposal) {
-			p.Region, p.Regions = "api", []string{"api"}
-			_, err := w.st.UpdateProposalRegionsIfPending(p)
-			require.NoError(t, err)
+			w.moveRegions(t, p.ID, "api")
 		}, status: model.ProposalProposed},
 		{name: "answered by another extraction", mutate: func(t *testing.T, w *extractWorkspace, p model.Proposal) {
-			require.NoError(t, w.st.UpdateProposalTriggers(p.ID, []string{"api/handlers.go"}, 5, TriggerPromptVersion))
+			w.answerElsewhere(t, p.ID, 5, "api/handlers.go")
 		}, status: model.ProposalProposed},
 	}
 
@@ -1014,7 +1008,7 @@ func TestExecuteExtractEmptyPlanNeverInvokes(t *testing.T) {
 			assert.Equal(t, StopNone, x.Stop)
 			assert.Zero(t, x.Result.PromptChars)
 
-			nilAgent, err := ExecuteExtract(context.Background(), w.st, nil, plan, ExtractExecuteOptions{Boundary: true})
+			nilAgent, err := ExecuteExtract(context.Background(), w.st, nil, plan, ExtractExecuteOptions{})
 			require.NoError(t, err, "no invoker is needed when nothing runs")
 			assert.Empty(t, nilAgent.Batches)
 		})
@@ -1028,13 +1022,13 @@ func TestExecuteExtractRefusesUnusableCalls(t *testing.T) {
 	p := w.pending(t, "schema-sync", 1)
 	plan := w.plan(t, p.ID)
 
-	x, err := ExecuteExtract(context.Background(), w.st, replyWith(`{"triggers": []}`), nil, ExtractExecuteOptions{Boundary: true})
+	x, err := ExecuteExtract(context.Background(), w.st, replyWith(`{"triggers": []}`), nil, ExtractExecuteOptions{})
 	require.Error(t, err)
 	assert.NotNil(t, x, "the result is never nil")
 
 	inv := replyWith(triggerReply(answerFor(p)))
 
-	x, err = ExecuteExtract(context.Background(), w.st, nil, plan, ExtractExecuteOptions{Boundary: true})
+	x, err = ExecuteExtract(context.Background(), w.st, nil, plan, ExtractExecuteOptions{})
 	require.ErrorIs(t, err, ErrNoInvoker)
 	assert.Equal(t, []int64{p.ID}, x.Unattempted)
 
@@ -1043,7 +1037,7 @@ func TestExecuteExtractRefusesUnusableCalls(t *testing.T) {
 
 	log := &extractEvents{}
 
-	x, err = ExecuteExtract(context.Background(), w.st, inv, &rootless, ExtractExecuteOptions{Boundary: true, OnEvent: log.record})
+	x, err = ExecuteExtract(context.Background(), w.st, inv, &rootless, ExtractExecuteOptions{OnEvent: log.record})
 	require.ErrorIs(t, err, ErrExtractRoot, "an empty root would store every answer as a negative")
 	assert.Empty(t, inv.prompts())
 	assert.Empty(t, log.events)
@@ -1052,7 +1046,7 @@ func TestExecuteExtractRefusesUnusableCalls(t *testing.T) {
 	mismatched := *plan
 	mismatched.Batches = []ExtractBatch{{Proposals: plan.Batches[0].Proposals, Prompt: "x"}}
 
-	_, err = ExecuteExtract(context.Background(), w.st, inv, &mismatched, ExtractExecuteOptions{Boundary: true})
+	_, err = ExecuteExtract(context.Background(), w.st, inv, &mismatched, ExtractExecuteOptions{})
 	require.Error(t, err)
 	assert.Empty(t, inv.prompts())
 	assert.False(t, stamped(t, w, p.ID))
@@ -1069,7 +1063,6 @@ func TestExecuteExtractEventsFollowPersistence(t *testing.T) {
 	log := &extractEvents{}
 
 	x, err := ExecuteExtract(context.Background(), w.st, negativeForAll(plan), plan, ExtractExecuteOptions{
-		Boundary: true,
 		OnEvent: func(ev ExtractEvent) {
 			log.record(ev)
 
@@ -1108,7 +1101,6 @@ func TestExecuteExtractEventsShareNoSliceWithTheRun(t *testing.T) {
 	reply := triggerReply(answerFor(pending, "api/schemas.py"), answerFor(installed, "api/schemas.py"))
 
 	x, err := ExecuteExtract(context.Background(), w.st, replyWith(reply), plan, ExtractExecuteOptions{
-		Boundary: true,
 		OnEvent: func(ev ExtractEvent) {
 			if ev.Kind != ExtractBatchDone {
 				return

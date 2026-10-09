@@ -71,7 +71,9 @@ func extDismiss(t *testing.T, ws workspace.Workspace, ids ...int64) {
 	require.Equal(t, len(ids), n)
 }
 
-// extSupersede supersedes applied rows while a run is in progress.
+// extSupersede supersedes applied rows while a run is in progress. It
+// writes through the guarded writer of a prune, as another seamark
+// command does.
 func extSupersede(t *testing.T, ws workspace.Workspace, ids ...int64) {
 	t.Helper()
 
@@ -80,9 +82,16 @@ func extSupersede(t *testing.T, ws workspace.Workspace, ids ...int64) {
 
 	defer func() { _ = st.Close() }()
 
-	n, err := st.SupersedeProposals(ids)
+	rows, err := st.ProposalsWithIDs(ids)
 	require.NoError(t, err)
-	require.Equal(t, len(ids), n)
+	require.Len(t, rows, len(ids))
+
+	guards := make([]store.RowGuard, len(rows))
+	for i, p := range rows {
+		guards[i] = store.NewRowGuard(p)
+	}
+
+	require.NoError(t, st.SupersedeExact(guards))
 }
 
 func TestRunExtractStoresTheAnswersOfThePreview(t *testing.T) {

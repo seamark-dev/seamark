@@ -14,6 +14,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // These tests characterize the legacy Run callbacks before Run became a
@@ -153,7 +154,7 @@ func TestRunDryRunPlansTheGroupsOfTheRealRun(t *testing.T) {
 		Signature: "gone", Rule: "stale-pending", Note: "Stale guidance.",
 		Members: []int64{11, 12}, Status: model.ProposalProposed,
 	}
-	require.NoError(t, st.InsertProposal(stale))
+	require.NoError(t, storetest.InsertProposal(st, stale))
 
 	var dry Preflight
 

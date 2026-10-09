@@ -198,7 +198,8 @@ func TestGroupCommandEndsADetachedDescendantAfterTheCall(t *testing.T) {
 
 func TestCommandKeepsADetachedDescendantOfTheCaller(t *testing.T) {
 	// NewCommand shares the process group of the caller, so it never
-	// kills a group. The CLI keeps its behavior (contracts D-1).
+	// kills a group. The CLI uses it, so a terminal interrupt reaches the
+	// agent (internal/learning/doc.go names this difference).
 	dir := t.TempDir()
 	mark := filepath.Join(dir, "mark")
 

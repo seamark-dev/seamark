@@ -625,6 +625,15 @@ func TestLessonsCommitRefusalsHaveClearMessages(t *testing.T) {
 		// again", as the Pins results do.
 		{proposals.ErrWriteDisabled, "distill.write is off, so nothing was written. Preview again to get the YAML block."},
 		{fmt.Errorf("%w: p1", proposals.ErrNeedsReconcile), "a blind apply would duplicate them. Preview again and press c"},
+		// A key that another writer applied after the preview is stale:
+		// the new preview names the refusal and its hint.
+		{
+			fmt.Errorf("%w: %w", proposals.ErrStale, &proposals.AppliedKeyError{
+				Groups: []proposals.AppliedKeyGroup{{Applied: []int64{4}, Pending: []int64{1}}},
+			}),
+			"Details: the ledger, the pin file, or the write gate changed since the preview: p4 is already " +
+				"applied with this rule and regions; dismiss p1",
+		},
 		{proposals.ErrNothingSelected, "No pending proposal was selected."},
 		{ErrBusy, "Another operation is running"},
 	} {
@@ -1046,7 +1055,7 @@ func TestLessonsDistillCleanupIsNoOutsideChange(t *testing.T) {
 		send func(h *harness, rec *distRecord)
 	}{
 		{"run cleanup", func(h *harness, rec *distRecord) {
-			h.send(distEventMsg{rec: rec, ch: distClosed(), ev: distill.Event{Kind: distill.EventCleanupDone, Removed: 1}})
+			h.send(distEventMsg{rec: rec, ch: agentClosed(), ev: distill.Event{Kind: distill.EventCleanupDone, Removed: 1}})
 		}},
 		{"cleanup-only plan", func(h *harness, rec *distRecord) {
 			h.send(distCleanedMsg{rec: rec, removed: 1})

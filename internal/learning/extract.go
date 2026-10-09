@@ -23,8 +23,9 @@ import (
 // distillation is. PlanExtract builds a read-only preview of the
 // explicitly selected proposals, and RunExtract sends exactly that
 // preview. The CLI calls distill.ExtractTriggers, which runs the same
-// plan and execute steps with the store checks and the guarded save
-// turned off (D-1). Both paths share the question rule, the batches, the
+// plan and execute steps, with the same store checks and guarded save,
+// over its own wider selection. A separate decision can move the CLI to
+// this selection. Both paths share the question rule, the batches, the
 // prompt builder, and the executor.
 //
 // The console excludes more rows than the CLI. A row is asked only when
@@ -357,7 +358,6 @@ func RunExtract(ctx context.Context, ws workspace.Workspace, reg *integration.Re
 	next := 0
 
 	return distill.ExecuteExtract(ctx, st, inv, p.Plan, distill.ExtractExecuteOptions{
-		Boundary: true,
 		Check: func() error {
 			if err := p.checkInputs(ws); err != nil {
 				return err

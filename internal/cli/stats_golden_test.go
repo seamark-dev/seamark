@@ -15,6 +15,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // These golden tests pin the full output of `lessons --stats`. The
@@ -121,7 +122,7 @@ func statsWorkspace(t *testing.T) string {
 	yaml.WriteString("pin:\n")
 
 	for i, pin := range statsPins {
-		require.NoError(t, st.InsertProposal(&model.Proposal{
+		require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 			Signature: pin.Rule, Rule: pin.Rule, Region: pin.Region, Note: pin.Note,
 			Members: []int64{int64(i + 1)}, Agent: "claude/v2", Status: model.ProposalApplied,
 		}))

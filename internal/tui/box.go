@@ -282,6 +282,54 @@ func (t *Theme) pinnedBox(o boxOpts, head, body, tail []string, sc *scrollState,
 	return t.box(o)
 }
 
+// paneMessage is a centered message: a styled head, a plain body that
+// wraps, and styled next-step lines.
+type paneMessage struct {
+	head []string
+	body string
+	next []string
+}
+
+// messageBox renders a full-width box with a centered message. When the
+// box is too short, the body gives up lines first, so the head and the
+// next action stay visible. The empty states of Proposals and Pins use
+// it, so both sub-views read alike.
+func (t *Theme) messageBox(title, right string, m paneMessage, w, h int) string {
+	inner := boxInner(w)
+	rows := boxRows(h)
+	textW := min(inner, 72)
+
+	var body []string
+	if m.body != "" {
+		body = strings.Split(wrap(m.body, textW), "\n")
+	}
+
+	gap := 1
+	if len(m.head)+len(body)+len(m.next)+2 > rows {
+		gap = 0
+	}
+
+	if room := rows - len(m.head) - len(m.next) - 2*gap; len(body) > room {
+		body = clipWithEllipsis(body, max(0, room), textW, t.Glyphs.Ellipsis)
+	}
+
+	lines := joinLineBlocks(gap, m.head, t.mutedLines(body), m.next)
+	if len(lines) > rows {
+		lines = lines[:rows]
+	}
+
+	out := make([]string, 0, rows)
+	for range max(0, (rows-len(lines))*2/5) {
+		out = append(out, "")
+	}
+
+	for _, l := range lines {
+		out = append(out, strings.Repeat(" ", max(0, (inner-width(l))/2))+l)
+	}
+
+	return t.box(boxOpts{W: w, H: h, Title: title, Right: right, Focus: true, Lines: out})
+}
+
 // card renders a summary card: a short box whose title is a dim
 // upper-case label and whose right label carries the state.
 func (t *Theme) card(w, h int, title, right string, lines []string) string {

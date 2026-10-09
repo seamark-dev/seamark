@@ -565,6 +565,8 @@ func (p *propView) previewErrModal(d *propDecision, w int) modalOpts {
 			hint = "Pins links these proposals by other regions than the ones that their apply writes. So Pins " +
 				"cannot link the new pin to them. Dismiss them with d, or resolve them by hand."
 		}
+	case errors.Is(d.err, proposals.ErrAppliedKey):
+		hint = propAppliedKeyHint(d)
 	case errors.Is(d.err, proposals.ErrSharedKey):
 		hint = propSharedKeyHint(d)
 	case errors.Is(d.err, proposals.ErrNothingSelected):
@@ -598,6 +600,33 @@ func propSharedKeyHint(d *propDecision) string {
 
 	return "Pins blocks a pin that two applied proposals record, so " + step + ". " +
 		pick + " and press " + press + ", then dismiss the others with d."
+}
+
+// propAppliedKeyHint gives the next step after a preview that refused
+// proposals with the pin key of an applied proposal. The step is a
+// dismiss for apply and for the record, because the applied proposal
+// already records that pin. The hint names the IDs of the engine error.
+func propAppliedKeyHint(d *propDecision) string {
+	const lead = "Pins blocks a pin that two applied proposals record, so "
+
+	var taken *proposals.AppliedKeyError
+	if !errors.As(d.err, &taken) || len(taken.Groups) == 0 {
+		return lead + "these proposals cannot become applied. Select them and press d to dismiss them."
+	}
+
+	pending, applied := taken.Pending(), taken.Applied()
+
+	verb, it := " is", "it"
+	if len(applied) > 1 {
+		verb = " are"
+	}
+
+	if len(pending) > 1 {
+		it = "them"
+	}
+
+	return lead + propIDList(pending) + " cannot become applied while " + propIDList(applied) + verb +
+		" applied. Select " + propIDList(pending) + " and press d to dismiss " + it + "."
 }
 
 // resultModal reports what a commit changed. File and ledger outcomes
