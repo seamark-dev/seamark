@@ -2,18 +2,20 @@
 // ledger. It has a read-only ledger view, region and text filtering,
 // evidence health, and previewed decisions with revalidation.
 //
-// The CLI and the console share only the evidence helpers: Health,
-// AppliedOutcomes and RegionSetsEqual. Both surfaces therefore judge
-// proposal health, lesson outcomes and region sets by one set of rules.
+// The CLI and the console share the evidence helpers (Health and
+// RegionSetsEqual). They also share the decision flow (PreviewApply,
+// PreviewDismiss, PreviewReconcile, Commit, with their Ledgerer,
+// Preview, Result and ErrNothingSelected). Both surfaces thus judge
+// proposal health by one set of rules. `lessons --apply` and `lessons
+// --dismiss` write the same pins and ledger states as the console.
+//
+// AppliedOutcomes and MeasureOutcomes measure the applied pins. Health
+// uses AppliedOutcomes. `lessons --stats` and the console's Stats view
+// use MeasureOutcomes through internal/lessonstats, which reads the
+// firing log once for all of its sections.
 //
 // Only the console uses the ledger view (Load, MatchesRegion,
-// MatchesRegionSet, MatchesText) and the decision flow (PreviewApply,
-// PreviewDismiss, PreviewReconcile, Commit).
-//
-// The CLI commands `lessons --apply` and `lessons --dismiss`
-// keep their own path in internal/cli, so their output stays unchanged.
-// That path renders and writes pins through the same distill functions.
-// Unlike Commit, it does not refuse proposals whose pins already exist.
+// MatchesRegionSet, MatchesText).
 package proposals
 
 import (

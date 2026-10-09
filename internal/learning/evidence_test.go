@@ -478,7 +478,7 @@ func TestPlanRefreshBlocksOnAnIndexThatIsNotReady(t *testing.T) {
 		{name: "not indexed", setup: func(t *testing.T, ws workspace.Workspace) {
 			st, err := store.Open(ws.DBPath)
 			require.NoError(t, err)
-			require.NoError(t, st.SetMeta("indexed_at", ""))
+			require.NoError(t, st.SetMeta(store.MetaIndexedAt, ""))
 			require.NoError(t, st.Close())
 		}, state: workspace.IndexNotIndexed},
 	}

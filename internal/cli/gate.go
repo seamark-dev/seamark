@@ -17,6 +17,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 func newGateCmd(opts *options) *cobra.Command {
@@ -215,15 +216,14 @@ reach? Reads the diff from stdin when piped, else runs "git diff HEAD".
 Policy rules over diff.* decide the verdict.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			root, err := index.ResolveRoot(opts.workspace)
+			// Locate does not test the directory. For a missing -C, the
+			// index walk below names the missing path.
+			ws, err := workspace.Locate(opts.workspace, opts.dbPath)
 			if err != nil {
 				return err
 			}
 
-			dbPath := opts.dbPath
-			if dbPath == "" {
-				dbPath = store.DefaultPath(root)
-			}
+			root, dbPath := ws.Root, ws.DBPath
 
 			// A stale index makes blast-radius answers WRONG (line spans
 			// drift); check repairs freshness instead of warning about it.

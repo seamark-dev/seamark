@@ -133,8 +133,8 @@ type planned struct {
 // Plan computes the candidate file for the edits on the bytes of d. It
 // is pure: it parses d.Bytes again and ignores the other fields, so a
 // changed Document cannot redirect an edit. otherApplied holds the
-// ProposalKey of every applied row that is not linked to an edited
-// entry; a retarget to one of them is a collision.
+// reviews.ProposalKey of every applied row that is not linked to an
+// edited entry; a retarget to one of them is a collision.
 //
 // Each edit is verified alone, and then all of them together. Plan
 // returns the change of the edits that pass, and an error that lists an

@@ -167,6 +167,20 @@ func OpenReadOnly(path string) (*Store, error) {
 // Close releases the underlying database handle.
 func (s *Store) Close() error { return s.db.Close() }
 
+// Meta keys that every `seamark index` run writes. All readers and
+// writers use these constants, because a misspelled key reads as an
+// empty value and raises no error.
+const (
+	// MetaIndexedAt holds the time of the last index run in Unix
+	// seconds. An empty value means that no index run completed, for
+	// example after `seamark state import` on a fresh clone.
+	MetaIndexedAt = "indexed_at"
+	// MetaRepoRoot holds the absolute repository root of the last index
+	// run. The commands that open an existing index, the lessons hook,
+	// and the console read the index against this root, not against -C.
+	MetaRepoRoot = "repo_root"
+)
+
 // SetMeta stores an index bookkeeping value (schema version, repo root, …).
 func (s *Store) SetMeta(key, value string) error {
 	_, err := s.db.Exec(

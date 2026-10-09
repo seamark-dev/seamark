@@ -11,14 +11,14 @@
 // it never empties the listing, because an error is not an absence.
 //
 // Classify links each entry to the proposal rows by one canonical key
-// (ProposalKey). Plan computes the complete candidate file for a retarget
-// or a prune and proves it before it returns: the candidate loads, keeps
-// the other settings, and changes only the reviewed entries. The line
-// check states the D-7 and D-8 line rules again without the span code
-// that built the splices; verify.go names its one exception. Prepare and
-// Apply write the candidate through the guarded setup engine
-// (integration Route A). Restore puts the old bytes back only while the
-// file still holds the written bytes.
+// (reviews.ProposalKey). Plan computes the complete candidate file for a
+// retarget or a prune and proves it before it returns: the candidate
+// loads, keeps the other settings, and changes only the reviewed
+// entries. The line check states the D-7 and D-8 line rules again
+// without the span code that built the splices; verify.go names its one
+// exception. Prepare and Apply write the candidate through the guarded
+// setup engine (integration Route A). Restore puts the old bytes back
+// only while the file still holds the written bytes.
 //
 // The package reads the ledger rows that the caller passes in. It does
 // not open the store, and it never writes the ledger.

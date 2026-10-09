@@ -11,6 +11,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -18,9 +19,10 @@ import (
 // NewExtractPlan reads the store and freezes the selected proposals, the
 // batches and their prompts; it writes nothing and calls no agent.
 // ExecuteExtract later sends exactly those prompts. The console uses this
-// path. The CLI keeps ExtractTriggers, which selects, sends and stores in
-// one call. Both paths share the eligibility predicate, the batching,
-// the prompt builder, the reply parser and the path validation.
+// path. The CLI calls ExtractTriggers, which freezes the rows that the
+// CLI selected and runs ExecuteExtract in one call. So both paths share
+// the batching, the prompt builder, the reply parser, the path
+// validation and the executor. The CLI keeps its own selection (D-1).
 
 // ErrExtractRoot reports a plan without a workspace root. The existence
 // rung needs the root: without it no named path is verified, and every
@@ -117,15 +119,17 @@ type ExtractSnapshot struct {
 // ExtractPlan is one frozen extraction run.
 type ExtractPlan struct {
 	Options ExtractPlanOptions
-	// Batches are the agent calls in execution order: pending rows newest
-	// first, then applied rows newest first, as the CLI orders them.
+	// Batches are the agent calls in execution order. NewExtractPlan sends
+	// pending rows newest first, then applied rows newest first, as the
+	// CLI orders them. ExtractTriggers keeps the order of its caller.
 	Batches []ExtractBatch
 	// Ineligible lists the selected proposals that are not asked, in
 	// ascending ID order.
 	Ineligible []ExtractSkip
 	Snapshot   ExtractSnapshot
 	// Preflight is the disclosure total. Its BodyCap is 0, because the
-	// plan reads finding metadata only and sends no finding text.
+	// plan reads finding metadata only and sends no finding text. The
+	// CLI disclosure of ExtractTriggers keeps its excerpt cap (D-1).
 	Preflight ExtractPreflight
 	PlannedAt time.Time
 }
@@ -211,11 +215,21 @@ func NewExtractPlan(st *store.Store, opts ExtractPlanOptions) (*ExtractPlan, err
 	sort.Slice(p.Ineligible, func(i, j int) bool { return p.Ineligible[i].ID < p.Ineligible[j].ID })
 	sort.SliceStable(eligible, func(i, j int) bool { return cliExtractOrder(eligible[i], eligible[j]) < 0 })
 
-	for _, batch := range extractBatches(eligible) {
+	p.freeze(eligible, meta)
+
+	return p, nil
+}
+
+// freeze plans rows as they are, in the given send order: the batches,
+// the prompts, the preflight and the snapshot. It selects nothing and
+// reads no store. NewExtractPlan calls it after its selection, and
+// ExtractTriggers calls it with the rows that the CLI selected.
+func (p *ExtractPlan) freeze(rows []model.Proposal, meta map[int64]model.Finding) {
+	for _, batch := range extractBatches(rows) {
 		p.Batches = append(p.Batches, planBatch(batch, meta))
 	}
 
-	p.Preflight = ExtractPreflight{Batches: len(p.Batches), Agent: opts.Spec.Argv}
+	p.Preflight = ExtractPreflight{Batches: len(p.Batches), Agent: p.Options.Spec.Argv}
 
 	for _, b := range p.Batches {
 		p.Preflight.Proposals += len(b.Proposals)
@@ -224,8 +238,6 @@ func NewExtractPlan(st *store.Store, opts ExtractPlanOptions) (*ExtractPlan, err
 
 	p.Snapshot = snapshotOf(p.Batches)
 	p.PlannedAt = time.Now()
-
-	return p, nil
 }
 
 // Revalidate reads the planned rows and their findings again. It returns
@@ -395,14 +407,14 @@ func describeRowChange(planned, now model.Proposal) string {
 }
 
 // regionsDiffer reports whether a recomputed region set gives row another
-// delivery identity. ExtractTriggers and the console executor both call
-// it, so both paths decide a pending region change the same way.
+// delivery identity. The plan and the executor both call it, so the
+// preview and the run decide a pending region change the same way.
 func regionsDiffer(row model.Proposal, regions []string) bool {
-	return NewPinKey(row.Rule, "", regions) != NewPinKey(row.Rule, row.Region, row.Regions)
+	return reviews.NewPinKey(row.Rule, "", regions) != reviews.ProposalKey(row)
 }
 
 // livingFindings returns the members of row that meta still holds, in
-// member order. ExtractTriggers and the console plan both call it.
+// member order. The plan and its boundary checks both call it.
 func livingFindings(row model.Proposal, meta map[int64]model.Finding) []model.Finding {
 	var living []model.Finding
 

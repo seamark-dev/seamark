@@ -2578,8 +2578,8 @@ func TestLessonsRetargetFlow(t *testing.T) {
 
 	st, err := store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
-	require.NoError(t, st.SetMeta("indexed_at", "1"))
-	require.NoError(t, st.SetMeta("repo_root", root))
+	require.NoError(t, st.SetMeta(store.MetaIndexedAt, "1"))
+	require.NoError(t, st.SetMeta(store.MetaRepoRoot, root))
 
 	// Two independent events in scripts/: recomputed regions [scripts],
 	// but the stored proposal is repo-wide — the pre-region-set shape.

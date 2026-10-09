@@ -26,7 +26,10 @@ const (
 	// TriggerPromptVersion is persisted with an answered trigger question.
 	// Version 3 bounds evidence-path metadata; version 2 permits a directly
 	// cited companion path, while version 1 told the model to omit every
-	// trigger that was also an evidence path.
+	// trigger that was also an evidence path. Version 3 also covers the
+	// indented continuation lines of a multi-line rule or note
+	// (quotedField). A one-line field keeps its bytes, so that change
+	// reopens no stored negative answer and asks no question again.
 	TriggerPromptVersion = 3
 	// extractBatch bounds proposals per agent call: enough to amortize
 	// the prompt frame, small enough that one bad reply loses little.
@@ -113,8 +116,18 @@ func (r ExtractResult) TokensBack() string { return estTokens(r.ReplyChars) }
 // triggers — belongs there) and provides the living-findings map the
 // other surfaces already hold. Batches fail independently: a lost
 // batch is logged and retried on the next run, like a distill group.
-// On a store error the result rides along with it — the counters name
-// what completed before the failure, and stamped rows stay done.
+// On a store error it returns the partial result together with the
+// error. The counters name what completed before the failure, and
+// stamped rows stay done.
+//
+// ExtractTriggers is the CLI entry. It plans and executes in one call.
+// It shares the plan step of NewExtractPlan and the ExecuteExtract step
+// of a reviewed extraction. A legacy adapter turns the typed events into
+// the callback strings that the CLI prints. The plan asks every given
+// row in the given order. It does not apply the console exclusions,
+// such as aged-out evidence or a duplicate pin. The CLI keeps its wider
+// set until it converges (D-1, A0 defects D5 and D6). Boundary stays
+// off, so the CLI keeps its unguarded writes too (A0 defect D14).
 func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 	ps []model.Proposal, meta map[int64]model.Finding, opts ExtractOptions,
 ) (*ExtractResult, error) {
@@ -125,58 +138,76 @@ func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 		logf = func(string, ...any) {}
 	}
 
-	res := &ExtractResult{}
-	batches := extractBatches(ps)
+	plan := &ExtractPlan{Options: ExtractPlanOptions{
+		Root: opts.Root,
+		Spec: agent.CommandSpec{Argv: opts.Agent},
+	}}
+	plan.freeze(ps, meta)
+	plan.Options.IDs = plan.IDs()
 
 	if opts.OnPreflight != nil {
-		pf := ExtractPreflight{Batches: len(batches), Agent: opts.Agent, BodyCap: extractBodyCap}
-
-		for _, b := range batches {
-			pf.Proposals += len(b)
-			pf.PromptChars += len(buildExtractPrompt(b, meta))
-		}
+		// The CLI disclosure keeps the excerpt cap although the CLI
+		// sends finding metadata only (D-1, A0 defect D4).
+		pf := plan.Preflight
+		pf.BodyCap = extractBodyCap
 
 		opts.OnPreflight(pf)
 	}
 
 	if opts.DryRun {
-		res.Duration = time.Since(start)
-
-		return res, nil
+		return &ExtractResult{Duration: time.Since(start)}, nil
 	}
 
-	for i, batch := range batches {
-		desc := fmt.Sprintf("batch %d/%d — %d proposal(s)", i+1, len(batches), len(batch))
+	x, err := ExecuteExtract(ctx, st, inv, plan, ExtractExecuteOptions{
+		OnEvent: legacyExtractProgress(opts, logf, plan),
+	})
 
-		if opts.OnBatchStart != nil {
-			opts.OnBatchStart(desc)
-		} else {
-			logf("extracting %s", desc)
-		}
+	res := x.Result
 
-		began := time.Now()
+	// ExtractTriggers returns the partial result together with a store
+	// error. Earlier answers were stamped, and the caller must say so.
+	// Without the result, the output implies that the whole run was
+	// lost. Duration stays unset then.
+	if err != nil {
+		res.Duration = 0
 
-		named, sent, received, err := extractBatchTriggers(ctx, inv, batch, meta)
-		res.PromptChars += sent
-		res.ReplyChars += received
-		res.Examined += len(batch)
+		return &res, err
+	}
 
-		if err != nil {
-			failure := fmt.Sprintf("failed: %v (retried next run)", err)
+	res.Duration = time.Since(start)
 
-			if opts.OnBatchDone != nil {
-				opts.OnBatchDone(failure)
+	return &res, nil
+}
+
+// legacyExtractProgress turns typed events into the ExtractOptions
+// callbacks and log lines that ExtractTriggers always produced, with the
+// same text and order. The CLI prints them, so they must not change.
+func legacyExtractProgress(opts ExtractOptions, logf func(string, ...any), plan *ExtractPlan) func(ExtractEvent) {
+	return func(ev ExtractEvent) {
+		switch ev.Kind {
+		case ExtractBatchStarted:
+			desc := fmt.Sprintf("batch %d/%d — %d proposal(s)",
+				ev.Index+1, ev.Total, len(plan.Batches[ev.Index].Proposals))
+
+			if opts.OnBatchStart != nil {
+				opts.OnBatchStart(desc)
 			} else {
-				logf("warn: extraction batch %s", failure)
+				logf("extracting %s", desc)
 			}
-
-			res.BatchesFailed++
-
-			continue
+		case ExtractBatchDone:
+			legacyExtractOutcome(opts, logf, ev.Batch)
 		}
+	}
+}
 
+// legacyExtractOutcome reports one finished batch the legacy way. A
+// store failure comes after a valid reply. The CLI loop reported that
+// reply before it stored the answers, so a store failure reports the
+// reply too, and ExtractTriggers then returns the error.
+func legacyExtractOutcome(opts ExtractOptions, logf func(string, ...any), b *ExtractBatchOutcome) {
+	if b.Status == BatchCompleted || (b.Status == BatchFailed && b.Failure == FailStore) {
 		outcome := fmt.Sprintf("%s, %d of %d named trigger paths",
-			time.Since(began).Round(time.Second), len(named), len(batch))
+			b.Finished.Sub(b.Started).Round(time.Second), b.Named, len(b.Items))
 
 		if opts.OnBatchDone != nil {
 			opts.OnBatchDone(outcome)
@@ -184,74 +215,18 @@ func ExtractTriggers(ctx context.Context, st *store.Store, inv agent.Invoker,
 			logf("  %s", outcome)
 		}
 
-		now := time.Now().Unix()
-
-		for _, p := range batch {
-			paths := validateTriggerPaths(opts.Root, named[p.ID])
-			if len(named[p.ID]) > 0 {
-				res.Named++
-			}
-
-			// Pending rows sync their regions to today's inference under
-			// the recorded answer: verified triggers become precise
-			// delivery scopes, while an empty or unverified answer restores
-			// evidence coverage. Applied pins wait for the
-			// explicit --retarget. Regions write FIRST, the stamped
-			// trigger row second: the stamp is the completion marker
-			// the idempotency filter reads, so an interrupted run
-			// repeats this row and finishes the pair. The region write
-			// re-checks the status atomically — a concurrent --apply
-			// during the agent call must not split the installed yaml
-			// pin's identity from the ledger's.
-			//
-			// The console executor shares livingFindings and regionsDiffer,
-			// so both paths decide a pending region change by one rule.
-			if p.Status == model.ProposalProposed {
-				if living := livingFindings(p, meta); len(living) > 0 {
-					p.TriggerPaths = paths
-
-					regions, _, err := RecomputeRegions(st, opts.Root, p, living)
-					if err != nil {
-						return res, err
-					}
-
-					if regionsDiffer(p, regions) {
-						p.Regions = regions
-						p.Region = ""
-
-						if len(regions) > 0 {
-							p.Region = regions[0]
-						}
-
-						changed, err := st.UpdateProposalRegionsIfPending(p)
-						if err != nil {
-							return res, err
-						}
-
-						if changed {
-							res.Retargeted++
-						}
-					}
-				}
-			}
-
-			if err := st.UpdateProposalTriggers(p.ID, paths, now, TriggerPromptVersion); err != nil {
-				return res, err
-			}
-
-			if len(paths) > 0 {
-				res.Stored++
-
-				if p.Status == model.ProposalApplied {
-					res.AppliedStored++
-				}
-			}
-		}
+		return
 	}
 
-	res.Duration = time.Since(start)
+	// A failed or cancelled call is not stamped. The next run asks the
+	// batch again.
+	failure := fmt.Sprintf("failed: %v (retried next run)", b.Err)
 
-	return res, nil
+	if opts.OnBatchDone != nil {
+		opts.OnBatchDone(failure)
+	} else {
+		logf("warn: extraction batch %s", failure)
+	}
 }
 
 // buildExtractPrompt frames one batch. Notes and finding bodies are
@@ -401,7 +376,7 @@ func extractEvidencePaths(p model.Proposal, meta map[int64]model.Finding, maxByt
 
 // extractBatches splits the proposals into agent calls of extractBatch,
 // in the given order. Batch composition decides the prompt evidence, so
-// the CLI and a console plan must split the same way.
+// every plan splits with this one function.
 func extractBatches(ps []model.Proposal) [][]model.Proposal {
 	var batches [][]model.Proposal
 
@@ -412,29 +387,6 @@ func extractBatches(ps []model.Proposal) [][]model.Proposal {
 	}
 
 	return batches
-}
-
-// extractBatchTriggers sends one batch and validates the reply's
-// syntax rung: ids must belong to the batch, paths pass the cleaner.
-func extractBatchTriggers(ctx context.Context, inv agent.Invoker,
-	batch []model.Proposal, meta map[int64]model.Finding,
-) (named map[int64][]string, sent, received int, err error) {
-	ctx, cancel := context.WithTimeout(ctx, perExtractTimeout)
-	defer cancel()
-
-	prompt := buildExtractPrompt(batch, meta)
-
-	reply, err := inv.Invoke(ctx, prompt)
-	if err != nil {
-		return nil, len(prompt), len(reply), err
-	}
-
-	answers, err := parseExtractReply(reply)
-	if err != nil {
-		return nil, len(prompt), len(reply), err
-	}
-
-	return namedTriggers(answers, batch), len(prompt), len(reply), nil
 }
 
 // extractAnswer is one entry of a parsed reply, as the model wrote it.
@@ -474,10 +426,10 @@ func parseExtractReply(reply string) ([]extractAnswer, error) {
 	return *parsed.Triggers, nil
 }
 
-// namedTriggers is the CLI reduction of a parsed reply: the cleaned paths
-// per batch member. It keeps an item only when a path survives the
-// cleaner. The choice among duplicates is itemAnswers, which the console
-// executor also uses, so both paths keep the same answer of an item.
+// namedTriggers reduces a parsed reply to the cleaned paths per batch
+// member. It keeps an item only when a path survives the cleaner. The
+// choice among duplicates is itemAnswers, as for the stored answers.
+// The executor counts its items for ExtractBatchOutcome.Named.
 func namedTriggers(answers []extractAnswer, batch []model.Proposal) map[int64][]string {
 	out := map[int64][]string{}
 

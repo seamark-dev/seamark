@@ -284,7 +284,7 @@ func TestEngineRefusesAMaintenanceCommitForAnotherRepositoryRoot(t *testing.T) {
 	other := t.TempDir()
 	st, err := store.Open(ws.DBPath)
 	require.NoError(t, err)
-	require.NoError(t, st.SetMeta("repo_root", other))
+	require.NoError(t, st.SetMeta(store.MetaRepoRoot, other))
 	require.NoError(t, st.Close())
 
 	before := engTree(t, ws.Root)

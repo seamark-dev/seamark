@@ -26,12 +26,12 @@ Semantic health — coverage, edge confidence, freshness — is
 ` + "`seamark status`" + `'s job; doctor asks whether seamark can run at all.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dbPath, root, err := resolveDBPath(opts)
+			ws, err := resolveWorkspace(opts)
 			if err != nil {
 				return err
 			}
 
-			report := doctor.Run(root, dbPath, version)
+			report := doctor.Run(ws.Root, ws.DBPath, version)
 
 			if asJSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())

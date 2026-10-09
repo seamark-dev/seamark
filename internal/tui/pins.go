@@ -280,9 +280,9 @@ func (p *pinsView) retargetBlock(pin *maintain.Pin) string {
 // applied proposal that has the rule of pin with regions, or "". The
 // clause can end a sentence. The pin file planner refuses such a
 // retarget, because two pins or two proposals would then share one
-// identity (pinfile ErrCollision). The applied rows count in both key
-// forms, as maintain.appliedKeys counts them. Keep the two rules the
-// same, so the key and the planner never disagree.
+// identity (pinfile ErrCollision). An applied row counts by its
+// reviews.ProposalKey, as maintain.appliedKeys counts it. Keep the two
+// rules the same, so the key and the planner never disagree.
 func pinTargetOwner(in *maintain.Inspection, pin *maintain.Pin, regions []string) string {
 	if in == nil {
 		return ""
@@ -296,9 +296,9 @@ func pinTargetOwner(in *maintain.Inspection, pin *maintain.Pin, regions []string
 		}
 	}
 
-	// Each applied row matches an entry or is not present
-	// (pinfile.Classify), so these lists hold every applied row. The own
-	// row of pin is no other owner.
+	// Each applied row matches an entry or is in Links.NotPresent, also a
+	// row with disagreeing fields (pinfile.Classify). So these lists hold
+	// every applied row. The own row of pin is no other owner.
 	own := pinProposalIDs(pin.Link.Applied)
 	rows := [][]domain.Proposal{}
 
@@ -316,7 +316,7 @@ func pinTargetOwner(in *maintain.Inspection, pin *maintain.Pin, regions []string
 				continue
 			}
 
-			if pinfile.ProposalKey(pr) == target || reviews.NewPinKey(pr.Rule, pr.Region, pr.Regions) == target {
+			if reviews.ProposalKey(pr) == target {
 				return "the applied proposal " + propID(pr.ID) + " already records this rule with the computed regions"
 			}
 		}

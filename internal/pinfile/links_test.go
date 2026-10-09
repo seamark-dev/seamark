@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/model"
-	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
 // row returns a proposal row with the given region fields.
@@ -37,24 +36,35 @@ const linkFile = `pin:
     region: '*'
   - rule: older
     region: api
+  - rule: odd
+    region: api
 `
 
-func TestProposalKeyIsTheRenderedRegionSet(t *testing.T) {
-	assert.Equal(t, reviews.NewPinKey("r", "", []string{"api", "db"}), ProposalKey(row(1, "", "R", "api", []string{"api", "db"}, "")))
-	assert.Equal(t, reviews.NewPinKey("r", "api", nil), ProposalKey(row(1, "", "r", "api", nil, "")))
-	assert.Equal(t, reviews.NewPinKey("r", "*", nil), ProposalKey(row(1, "", "r", "", nil, "")))
+func TestFieldsAgreeNamesTheRowsWhosePinHasAnotherKey(t *testing.T) {
+	// Every row shape that the code writes renders the pin of its key.
+	for _, p := range []model.Proposal{
+		row(1, "", "R", "api", []string{"api", "db"}, ""),
+		row(1, "", "r", "api", nil, ""),
+		row(1, "", "r", "api/", nil, ""),
+		row(1, "", "r", "", nil, ""),
+		row(1, "", "r", "*", nil, ""),
+		row(1, "", "r", "", []string{"db", "api"}, ""),
+		row(1, "", "r", "*", []string{"api", "db"}, ""),
+	} {
+		assert.True(t, FieldsAgree(p), "%q %q", p.Region, p.Regions)
+	}
 
-	// A "*" anywhere in Regions makes the set repository-wide, as
-	// RenderPins writes it; the stored key would drop the star instead.
-	odd := row(1, "", "r", "api", []string{"*", "db"}, "")
-	assert.Equal(t, reviews.NewPinKey("r", "*", nil), ProposalKey(odd))
-	assert.NotEqual(t, storedKey(odd), ProposalKey(odd))
-
-	// A Region outside Regions is ignored by the rendered form.
-	apart := row(1, "", "r", "x", []string{"a", "b"}, "")
-	assert.Equal(t, reviews.NewPinKey("r", "", []string{"a", "b"}), ProposalKey(apart))
-	assert.False(t, FieldsAgree(apart))
-	assert.True(t, FieldsAgree(row(1, "", "r", "a", []string{"a", "b"}, "")))
+	// RenderPins writes RegionSet, and the key reads the stored fields.
+	// These rows render a pin with another key, so no link is proven.
+	for _, p := range []model.Proposal{
+		row(1, "", "r", "api", []string{"*", "db"}, ""),
+		row(1, "", "r", "api", []string{"*"}, ""),
+		row(1, "", "r", "api", []string{"", "db"}, ""),
+		row(1, "", "r", "x", []string{"a", "b"}, ""),
+		row(1, "", "r", "api", []string{"/"}, ""),
+	} {
+		assert.False(t, FieldsAgree(p), "%q %q", p.Region, p.Regions)
+	}
 }
 
 func TestClassifyDistinguishesEveryState(t *testing.T) {
@@ -76,10 +86,14 @@ func TestClassifyDistinguishesEveryState(t *testing.T) {
 		row(10, model.ProposalProposed, "waiting", "db", nil, "w"),
 		row(11, model.ProposalProposed, "linked", "api", nil, "again"),
 		row(12, model.ProposalProposed, "future", "lib", nil, "f"),
+		// The fields of 13 and 14 disagree. 13 matches the odd entry by its
+		// key, odd @ api, and 14 matches no entry.
+		row(13, model.ProposalProposed, "odd", "api", []string{"*"}, "o"),
+		row(14, model.ProposalProposed, "lone", "x", []string{"a", "b"}, "l"),
 	}
 	superseded := []model.Proposal{
 		row(20, model.ProposalSuperseded, "linked", "api", nil, "old wording"),
-		// Its ProposalKey is "older @ *", and its stored key is "older @ api".
+		// Its fields disagree. Its key is "older @ api", as for row 9.
 		row(21, model.ProposalSuperseded, "older", "api", []string{"*"}, "old"),
 	}
 
@@ -87,10 +101,15 @@ func TestClassifyDistinguishesEveryState(t *testing.T) {
 
 	require.Len(t, links.Entries, len(d.Entries))
 
+	// Row 5 links by its stored fields, star @ api, as the CLI reads it.
+	// The star entry is the pin that RenderPins writes for row 5, and it
+	// has another key, so it has no linked proposal. A pending row with
+	// disagreeing fields makes its entry ambiguous, because the record of
+	// an existing pin refuses that row.
 	want := map[string]Link{
 		"linked": LinkLinked, "edited": LinkLinked, "manual": LinkNoProposal, "waiting": LinkPendingMatch,
 		"dup": LinkAmbiguousFile, "DUP": LinkAmbiguousFile, "twice": LinkAmbiguousLedger,
-		"star": LinkAmbiguousFields, "older": LinkAmbiguousFields,
+		"star": LinkNoProposal, "older": LinkAmbiguousFields, "odd": LinkAmbiguousFields,
 	}
 
 	for i, e := range d.Entries {
@@ -116,9 +135,11 @@ func TestClassifyDistinguishesEveryState(t *testing.T) {
 	assert.Equal(t, []int64{6}, ids(links.Entries[4].Applied), "both duplicates list the row")
 	assert.Equal(t, []int64{6}, ids(links.Entries[5].Applied))
 	assert.Equal(t, []int64{3, 4}, ids(links.Entries[6].Applied), "an ambiguous entry lists every match")
-	assert.Equal(t, []int64{9}, ids(links.Entries[8].Applied), "a row with disagreeing fields matches by its stored key too")
-	assert.Equal(t, []int64{21}, ids(links.Entries[8].Superseded), "superseded history matches by either key form, as applied rows do")
+	assert.Empty(t, links.Entries[7].Applied, "the rendered pin of a row with disagreeing fields has another key")
+	assert.Equal(t, []int64{9}, ids(links.Entries[8].Applied), "a row with disagreeing fields links by its stored fields")
+	assert.Equal(t, []int64{21}, ids(links.Entries[8].Superseded), "superseded history links by the same key")
 	assert.Equal(t, LinkAmbiguousFields, links.Entries[8].Link, "history never changes the link")
+	assert.Equal(t, []int64{13}, ids(links.Entries[9].Pending), "a pending row with disagreeing fields is listed")
 
 	for i, el := range links.Entries {
 		if i != 0 && i != 8 {
@@ -126,13 +147,19 @@ func TestClassifyDistinguishesEveryState(t *testing.T) {
 		}
 	}
 
+	// Every row with disagreeing fields reads ambiguous, also without an
+	// entry of its key: the pin that its apply wrote can be live under
+	// another key, as for row 5, so its absence is not proven.
 	assert.Equal(t, map[int64]Link{
 		1: LinkLinked, 2: LinkLinked, 3: LinkAmbiguousLedger, 4: LinkAmbiguousLedger, 5: LinkAmbiguousFields,
-		6: LinkAmbiguousFile, 7: LinkNotPresent, 8: LinkNotPresent, 9: LinkAmbiguousFields,
-		10: LinkPendingMatch, 11: LinkPendingMatch, 12: LinkNotPresent,
+		6: LinkAmbiguousFile, 7: LinkNotPresent, 8: LinkAmbiguousFields, 9: LinkAmbiguousFields,
+		10: LinkPendingMatch, 11: LinkPendingMatch, 12: LinkNotPresent, 13: LinkAmbiguousFields,
+		14: LinkAmbiguousFields,
 	}, links.ByProposal)
 
-	assert.Equal(t, []int64{7, 8}, ids(links.NotPresent))
+	// The applied rows without an entry stay listed, so a reader of the
+	// lists still sees every applied row.
+	assert.Equal(t, []int64{5, 7, 8}, ids(links.NotPresent))
 	require.NoError(t, links.NotPresentErr)
 }
 
@@ -148,9 +175,12 @@ func TestClassifyOfAnAbsentFileMakesEveryAppliedRowNotPresent(t *testing.T) {
 }
 
 func TestClassifyNeverTurnsAReadErrorIntoAbsence(t *testing.T) {
+	// Row 4 has disagreeing fields. A read error still reads unknown for
+	// it, because unknown is the more cautious claim.
 	applied := []model.Proposal{
 		row(1, model.ProposalApplied, "a", "api", nil, "n"),
 		row(2, model.ProposalApplied, "gone", "lib", nil, "n"),
+		row(4, model.ProposalApplied, "odd", "x", []string{"a", "b"}, "n"),
 	}
 	pending := []model.Proposal{row(3, model.ProposalProposed, "a", "api", nil, "")}
 
@@ -170,7 +200,8 @@ func TestClassifyNeverTurnsAReadErrorIntoAbsence(t *testing.T) {
 			assert.Nil(t, links.NotPresent, "a read error never lists a row as not present")
 			require.ErrorIs(t, links.NotPresentErr, ErrUnreadable)
 			assert.Equal(t, "unknown: .seamark/lessons.yaml could not be read", links.NotPresentErr.Error())
-			assert.Equal(t, map[int64]Link{1: LinkUnknown, 2: LinkUnknown, 3: LinkUnknown}, links.ByProposal)
+			assert.Equal(t, map[int64]Link{1: LinkUnknown, 2: LinkUnknown, 3: LinkUnknown, 4: LinkUnknown},
+				links.ByProposal)
 
 			for _, el := range links.Entries {
 				assert.Equal(t, LinkUnknown, el.Link)

@@ -22,8 +22,10 @@ import (
 // Trigger extraction in the console is two confirmed steps, as
 // distillation is. PlanExtract builds a read-only preview of the
 // explicitly selected proposals, and RunExtract sends exactly that
-// preview. The CLI keeps its own path, distill.ExtractTriggers. Both
-// paths share the question rule, the batches, and the prompt builder.
+// preview. The CLI calls distill.ExtractTriggers, which runs the same
+// plan and execute steps with the store checks and the guarded save
+// turned off (D-1). Both paths share the question rule, the batches, the
+// prompt builder, and the executor.
 //
 // The console excludes more rows than the CLI. A row is asked only when
 // the pin file and the ledger agree about it: an applied row needs
@@ -355,6 +357,7 @@ func RunExtract(ctx context.Context, ws workspace.Workspace, reg *integration.Re
 	next := 0
 
 	return distill.ExecuteExtract(ctx, st, inv, p.Plan, distill.ExtractExecuteOptions{
+		Boundary: true,
 		Check: func() error {
 			if err := p.checkInputs(ws); err != nil {
 				return err

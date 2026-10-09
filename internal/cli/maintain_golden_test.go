@@ -46,8 +46,8 @@ func maintainWorkspace(t *testing.T, findings []model.Finding, files ...string) 
 
 	st, err := store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
-	require.NoError(t, st.SetMeta("indexed_at", "1"))
-	require.NoError(t, st.SetMeta("repo_root", root))
+	require.NoError(t, st.SetMeta(store.MetaIndexedAt, "1"))
+	require.NoError(t, st.SetMeta(store.MetaRepoRoot, root))
 	require.NoError(t, st.ReplaceLessons(nil, findings))
 	require.NoError(t, st.Close())
 

@@ -608,7 +608,7 @@ func TestFieldsDisagreeMatchesClassify(t *testing.T) {
 			pending := applied
 			pending.ID, pending.Status = 2, model.ProposalProposed
 
-			doc := &pinfile.Document{Entries: []pinfile.Entry{{Rule: "fields", Key: pinfile.ProposalKey(applied)}}}
+			doc := &pinfile.Document{Entries: []pinfile.Entry{{Rule: "fields", Key: reviews.ProposalKey(applied)}}}
 			links := pinfile.Classify(doc, []model.Proposal{applied}, nil, nil)
 			oracle := links.ByProposal[applied.ID] == pinfile.LinkAmbiguousFields
 

@@ -171,15 +171,27 @@ func (p *pinsView) pinLabel(in *maintain.Inspection, pin *maintain.Pin) pinState
 }
 
 // propState returns the label of a history row. A not-present row is a
-// mismatch the user should see; a superseded row is plain history.
-func (p *pinsView) propState() pinState {
+// mismatch the user should see; a superseded row is plain history. A
+// row whose region fields disagree reads "ambiguous row", because the
+// pin that its apply wrote can be live under another key.
+func (p *pinsView) propState(pr domain.Proposal) pinState {
 	t := p.st.theme
 
-	if p.filter == pinSuperseded {
+	switch {
+	case p.filter == pinSuperseded:
 		return pinState{glyph: t.Glyphs.Hollow, style: t.Muted, lead: "superseded"}
+	case pinRowAmbiguous(p.inspection(), pr):
+		return pinToneState(t, ToneAttention, "ambiguous row")
 	}
 
 	return pinToneState(t, ToneAttention, "not present")
+}
+
+// pinRowAmbiguous reports whether the inspection reads the applied row
+// pr as ambiguous, which pinfile.Classify does for a row whose stored
+// region fields disagree.
+func pinRowAmbiguous(in *maintain.Inspection, pr domain.Proposal) bool {
+	return in != nil && in.Links != nil && in.Links.ByProposal[pr.ID] == pinfile.LinkAmbiguousFields
 }
 
 // view renders the filter line, the state line, a blank line and the
@@ -549,7 +561,7 @@ func (p *pinsView) listRow(in *maintain.Inspection, c pinCols, r pinRow, cursor 
 	} else {
 		rule = r.prop.Rule
 		region = pinRegionLabel(r.prop.RegionSet())
-		state = p.propState()
+		state = p.propState(r.prop)
 	}
 
 	check := t.Faint.Render(t.Glyphs.Uncheck)
@@ -1490,7 +1502,7 @@ func (p *pinsView) propDetail(pr domain.Proposal, w int) []string {
 
 	out := p.titleLines(pr.Rule, propID(pr.ID), w)
 
-	status := p.propState().render()
+	status := p.propState(pr).render()
 	if p.filter == pinNotPresent {
 		status += "   " + pinStatusWord(t, pr.Status) + t.Faint.Render(" in the ledger")
 	}
@@ -1524,6 +1536,19 @@ func (p *pinsView) propDetail(pr domain.Proposal, w int) []string {
 			"Its findings and signatures stay in the index.", w)...)
 
 		return out
+	}
+
+	// A row whose fields disagree has no proven absence. The text must
+	// not ask for the regions above, because that pin can already exist.
+	if pinRowAmbiguous(p.inspection(), pr) {
+		out = append(out, t.Heading.Render("AMBIGUOUS"))
+		out = append(out, propLines(t.Body, "The stored region fields of "+propID(pr.ID)+" disagree. No entry of "+
+			pinfile.File+" has its rule with the stored regions, but its apply writes the regions above. So "+
+			"Seamark cannot prove that its pin is gone, and it does not supersede the proposal.", w)...)
+		out = append(out, "")
+
+		return append(out, propLines(t.Muted, "This row is read-only here. Resolve it by hand in "+pinfile.File+
+			" or in the ledger, then press r.", w)...)
 	}
 
 	out = append(out, t.Heading.Render("MISMATCH"))

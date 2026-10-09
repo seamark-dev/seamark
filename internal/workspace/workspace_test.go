@@ -201,6 +201,71 @@ func TestResolveRejectsRegularFile(t *testing.T) {
 	assert.Contains(t, err.Error(), file)
 }
 
+func TestLocateMatchesResolveForADirectory(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not on PATH")
+	}
+
+	dir := t.TempDir()
+	out, err := exec.Command("git", "init", "-q", dir).CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	sub := filepath.Join(dir, "pkg")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+
+	located, err := Locate(sub, "")
+	require.NoError(t, err)
+
+	resolved, err := Resolve(sub, "")
+	require.NoError(t, err)
+
+	assert.Equal(t, resolved, located, "without --db both derive one root and one database path")
+	sameDir(t, dir, located.Root)
+}
+
+func TestLocateEmptyDirMeansCurrentDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	ws, err := Locate("", "")
+	require.NoError(t, err)
+
+	sameDir(t, dir, ws.Root)
+	assert.Equal(t, store.DefaultPath(ws.Root), ws.DBPath)
+}
+
+func TestLocateKeepsARelativeDBFlag(t *testing.T) {
+	dir := t.TempDir()
+	rel := filepath.Join("custom", "x.db")
+
+	ws, err := Locate(dir, rel)
+	require.NoError(t, err)
+
+	assert.Equal(t, rel, ws.DBPath, "the CLI prints --db as the user wrote it")
+	sameDir(t, dir, ws.Root)
+}
+
+func TestLocateAcceptsAMissingDirectory(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+
+	ws, err := Locate(missing, "")
+	require.NoError(t, err, "the CLI reports a missing workspace in its own words")
+
+	assert.Equal(t, missing, ws.Root, "the root falls back to the absolute path")
+	assert.Equal(t, store.DefaultPath(missing), ws.DBPath)
+	assert.NoDirExists(t, missing, "Locate must create nothing")
+}
+
+func TestLocateAcceptsARegularFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file.txt")
+	require.NoError(t, os.WriteFile(file, []byte("x"), 0o644))
+
+	ws, err := Locate(file, "")
+	require.NoError(t, err)
+
+	assert.Equal(t, file, ws.Root)
+}
+
 func TestIndexStateString(t *testing.T) {
 	cases := map[IndexState]string{
 		IndexAbsent:     "absent",
@@ -350,7 +415,7 @@ func TestProbeOlderSchema(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			ws := newWorkspace(t)
-			setMeta(t, ws, map[string]string{"indexed_at": "1700000000"})
+			setMeta(t, ws, map[string]string{store.MetaIndexedAt: "1700000000"})
 			stampSchema(t, ws.DBPath, tc.version)
 
 			p := Probe(ws)
@@ -441,8 +506,8 @@ func TestProbeUsesRecordedRepoRoot(t *testing.T) {
 	ws := newWorkspace(t)
 	recorded := filepath.Join(t.TempDir(), "recorded-root")
 	setMeta(t, ws, map[string]string{
-		"indexed_at": "1700000000",
-		"repo_root":  recorded,
+		store.MetaIndexedAt: "1700000000",
+		store.MetaRepoRoot:  recorded,
 	})
 
 	p := Probe(ws)
@@ -461,7 +526,7 @@ func TestProbeUsesRecordedRepoRoot(t *testing.T) {
 
 func TestProbeReadyWithMalformedIndexTime(t *testing.T) {
 	ws := newWorkspace(t)
-	setMeta(t, ws, map[string]string{"indexed_at": "yesterday"})
+	setMeta(t, ws, map[string]string{store.MetaIndexedAt: "yesterday"})
 
 	p := Probe(ws)
 

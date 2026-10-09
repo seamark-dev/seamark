@@ -51,8 +51,8 @@ func newFixture(t *testing.T, findings []model.Finding, files ...string) *fixtur
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 
-	require.NoError(t, st.SetMeta("indexed_at", fmt.Sprint(fixtureIndexedAt)))
-	require.NoError(t, st.SetMeta("repo_root", root))
+	require.NoError(t, st.SetMeta(store.MetaIndexedAt, fmt.Sprint(fixtureIndexedAt)))
+	require.NoError(t, st.SetMeta(store.MetaRepoRoot, root))
 	require.NoError(t, st.ReplaceLessons(nil, findings))
 
 	for _, rel := range files {

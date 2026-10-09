@@ -540,6 +540,25 @@ func NewPinKey(rule, region string, regions []string) PinKey {
 	return PinKey{Rule: strings.ToLower(strings.TrimSpace(rule)), Region: canonical}
 }
 
+// ProposalKey returns the key of the pin that a proposal row links to.
+// It reads the stored Rule, Region and Regions fields as NewPinKey reads
+// the fields of a pin entry. Every link, liveness check, prune and
+// collision guard calls it, so the CLI and the console link a row to one
+// pin. The CLI golden tests freeze this form, also for rows whose fields
+// disagree, so the console uses it too.
+//
+// distill.RenderPins writes the pin of a row from model.Proposal.RegionSet.
+// For a row with disagreeing fields that pin has another key, and the
+// console marks such a row as ambiguous (pinfile.FieldsAgree). The
+// console decisions read the rendered key (proposals.pinKey) instead,
+// because they ask about the pin that an apply writes. Examples are the
+// apply duplicate check and the record of an existing pin. The record
+// refuses a row whose fields disagree, so for every row that it accepts
+// both keys are equal.
+func ProposalKey(p model.Proposal) PinKey {
+	return NewPinKey(p.Rule, p.Region, p.Regions)
+}
+
 // FindPin returns the pin lessons.yaml currently carries under this
 // identity. Callers use it for liveness checks and to read the live
 // note — the wording the firing log actually saw, which a hand-edit

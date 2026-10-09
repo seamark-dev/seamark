@@ -179,10 +179,22 @@ change clears the selection.
   shows `seamark lessons --apply <ids>`, which prints the same block. A long
   note folds onto indented lines that YAML reads as the same text. With the
   gate on, `y` writes the pins and then records the proposals as applied.
+  Two selected proposals with the same rule and regions get one entry,
+  with the note of the lower ID. The preview names the other proposal
+  under WON'T, and `y` records both as applied. Pins then shows the entry
+  as `ambiguous`, because two applied proposals record it. Retarget,
+  prune, and trigger extraction stay blocked for that entry and for both
+  proposals, so edit that pin by hand. With the gate off, the YAML
+  preview names the other proposal under the block.
+  `seamark lessons --apply` uses the same decision flow, so the CLI
+  writes the same pins.
 - **Open PR** (`o`) opens the pull request of the cited evidence in the
   browser. Only http and https links open.
 - **Existing pins**: when a selected proposal already has its pin, the
   preview names it and writes nothing for it, with the gate on or off.
+  `seamark lessons --apply` also adds no second entry: with the gate on
+  it records such proposals as applied (ledger only), and with the gate
+  off its block leaves them out and names them.
   `c` records such proposals as applied in the ledger only. `c` works,
   and the detail names the pin, only when a pin is known to exist: an
   apply preview or a partial apply found it, or Pins reads the entry as
@@ -199,7 +211,11 @@ change clears the selection.
   When Pins could not read the pin file or the ledger, the line does
   not claim a missing pin: `No record applied: the pin file or the
   ledger could not be read; m (Pins) names the error. Press r after
-  you fix it.`
+  you fix it.` A proposal whose stored region fields disagree has no
+  proven pin, because its apply writes a pin with other regions than
+  the ones that Pins links. `c` stays off for it, its press says so
+  (`No record applied: the stored region fields of p2 disagree, so no
+  pin is proven to be its own.`), and the record refuses it.
 - **Dismiss** (`d`) marks proposals dismissed. The decision is remembered
   for the same evidence; pins stay unchanged. There is no undo.
 - A preview is not an authorization: when the ledger, the pin file, or the
@@ -209,7 +225,9 @@ change clears the selection.
   When the pins were written but the ledger update failed, the result says
   so. Applying again would duplicate the pins, so the console refuses it
   and offers `c`, a ledger-only "record as applied" for proposals whose
-  pins already exist.
+  pins already exist. On the CLI with `distill.write` on, `seamark
+  lessons --apply` with the IDs that the ledger did not record does the
+  same record.
 - **Generated proposals**: after a distillation, the result opens
   Proposals filtered to the IDs that the run saved. The filter is a
   visible chip, not a selection; `f`, `/`, or `esc` clears it.
@@ -241,7 +259,9 @@ change clears the selection.
 because the order decides delivery ties. The pin file is the authority
 for the installed guidance, and the proposal ledger is the authority for
 the recorded decisions. Pins relates the two by rule and region set, and
-it never repairs one from the other. It reads the file without the
+it never repairs one from the other. It reads the rule and the stored
+region fields of a proposal as `seamark lessons` reads them, so both
+name the same pin. It reads the file without the
 index: without a readable ledger the pins stay listed, and every
 relationship reads `link unknown`.
 
@@ -255,10 +275,10 @@ has a glyph and words, so it reads without color:
 | `pN linked` | One entry and one applied proposal pN have this rule and these regions. | `w`, `-`, and `t`, as their rules below allow. |
 | `pN edited` | Linked, but the live note differs from the note that pN recorded. | As linked. Maintenance keeps the live note; an extraction asks about the recorded note. |
 | `no proposal` | No applied or pending proposal has this rule and these regions. That does not prove that a person wrote the pin. | Read-only; edit the file by hand. |
-| `pending pN` | Only a pending proposal matches. | Read-only. Record pN as applied first: Proposals, select it, `c`. |
+| `pending pN` | Only pending proposals match, and their stored region fields agree. | Read-only. Record pN as applied first: Proposals, select it, `c`. |
 | `duplicate pin` | More than one entry of the file has this rule and these regions. | Blocked; remove the duplicates by hand. |
 | `ambiguous` | More than one applied proposal records this pin. | Blocked; edit the pin by hand. |
-| `ambiguous row` | The stored region fields of the matching proposal disagree. | Blocked; edit the pin by hand. |
+| `ambiguous row` | The stored region fields of a matching applied or pending proposal disagree, so its apply writes a pin with other regions. | Blocked; edit the pin by hand. |
 | `link unknown` | The pin file or the ledger could not be read. | Read-only; the state line names the error. |
 
 Attention words follow the relationship, the most urgent first:
@@ -271,7 +291,10 @@ detail shows every word.
 - **Lists**: `f` cycles **installed** (the default), **not present**, and
   **superseded**. Not present lists the applied proposals whose rule and
   regions no entry carries. That is a mismatch: Seamark does not
-  supersede such a proposal or write its pin back. Superseded lists the
+  supersede such a proposal or write its pin back. A proposal whose
+  stored region fields disagree reads `ambiguous row` there, because the
+  pin that its apply wrote can be in the file with other regions, so
+  Seamark cannot prove that its pin is gone. Superseded lists the
   proposals whose pins a confirmed prune removed. Both history lists are
   read-only. The filter line shows the count of each list; a count that
   cannot be known shows `?`, never 0.
@@ -537,7 +560,8 @@ most surfaced lessons. It keeps the delivery totals by surface (hook,
 client recorded" otherwise), suppressed repeats, and eligible lessons never
 recorded as delivered. Delivered means emitted through a recorded surface, not read,
 followed, or effective. The counts cover the retained log; a refresh
-reads a new snapshot.
+reads a new snapshot. `seamark lessons --stats` prints from the same
+reader, so both surfaces count the same records by the same rules.
 
 **Evidence** shows the two evidence sources: local fix commits and GitHub
 reviews. For each source it shows the stored findings, its freshness, and
@@ -893,11 +917,6 @@ other key of `.seamark/config.yaml` is edited by hand.
 - The index freshness covers the whole `.seamark/config.yaml`. After any
   settings save, also of the agent or the review window, the index reads
   as stale until the next build.
-- `seamark lessons --apply` on the CLI does not check for pins that already
-  exist. After a partial apply in the console, record the proposals with
-  `c` in the console instead of applying them again on the CLI. It also
-  writes one entry for each selected row, so two pending rows with the
-  same rule and regions give a duplicate pin, which Pins then blocks.
 - A copied checkout keeps the index of the original repository until it
   is indexed again. That index records the original root. The console
   then works on the files of that root with the database of the copy, as

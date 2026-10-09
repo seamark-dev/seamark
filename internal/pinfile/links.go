@@ -17,25 +17,24 @@ import (
 // never make an applied row look removed.
 var ErrUnreadable = errors.New("unknown: .seamark/lessons.yaml could not be read")
 
-// ProposalKey returns the canonical key of the pin that a proposal row
-// describes. It uses the region set that distill.RenderPins writes, so
-// an applied row and the pin that its apply wrote share one key.
-func ProposalKey(p model.Proposal) reviews.PinKey {
-	return reviews.NewPinKey(p.Rule, "", p.RegionSet())
-}
-
-// storedKey returns the key from the raw stored region fields. The older
-// readers (health, outcome, the CLI) use it.
-func storedKey(p model.Proposal) reviews.PinKey {
-	return reviews.NewPinKey(p.Rule, p.Region, p.Regions)
-}
-
-// FieldsAgree reports whether both key forms of a row are equal. They
-// differ for a row whose Regions holds "*" beside real regions, or whose
-// Region is not in Regions. No link can then be proven. Extraction calls
-// it for pending rows too, so the rule exists only here.
+// FieldsAgree reports whether distill.RenderPins writes the pin that
+// reviews.ProposalKey names for a row. RenderPins writes the region set
+// of model.Proposal.RegionSet, and the key reads the stored fields.
+// Both give one key, except for a row whose fields disagree:
+//
+//   - Regions holds "" or "*" next to a real region in Region or
+//     Regions. RegionSet then gives repository-wide, and the key keeps
+//     the real regions.
+//   - Regions is not empty, and Region names a region that Regions does
+//     not hold. RegionSet ignores Region, and the key adds it.
+//
+// No code path writes such a row, but an old or hand-edited ledger can
+// hold one. No link and no absence can then be proven, so such a row
+// reads LinkAmbiguousFields (Classify). Extraction and the record of an
+// existing pin (proposals.PreviewReconcile) call this predicate too, so
+// the rule exists only here.
 func FieldsAgree(p model.Proposal) bool {
-	return storedKey(p) == ProposalKey(p)
+	return reviews.NewPinKey(p.Rule, "", p.RegionSet()) == reviews.ProposalKey(p)
 }
 
 // Link is the relationship between a pin and the proposal rows. The zero
@@ -53,14 +52,18 @@ const (
 	// does not prove that a person wrote the pin.
 	LinkNoProposal
 	// LinkPendingMatch means that no applied row but a pending row has the
-	// key. The proposal decision route records it as applied.
+	// key, and the region fields of every such pending row agree. The
+	// proposal decision route records it as applied.
 	LinkPendingMatch
 	// LinkAmbiguousFile means that more than one live entry has the key.
 	LinkAmbiguousFile
 	// LinkAmbiguousLedger means that more than one applied row has the key.
 	LinkAmbiguousLedger
-	// LinkAmbiguousFields means that the one matching applied row has
-	// stored region fields that disagree with each other.
+	// LinkAmbiguousFields means that the one matching applied row, or a
+	// matching pending row, has stored region fields that disagree with
+	// each other (FieldsAgree). Such a row reads it too, also when no
+	// entry has its key, because the pin that its apply wrote can be
+	// live under another key.
 	LinkAmbiguousFields
 	// LinkNotPresent means that no live entry has the key of the row. For
 	// a pending row this is the normal state.
@@ -105,7 +108,9 @@ type Links struct {
 	// Entries holds one link per Document.Entries item, in the same order.
 	Entries []EntryLink
 	// NotPresent lists the applied rows that no live entry carries. It is
-	// nil when the file could not be read; NotPresentErr then says so.
+	// nil when the file could not be read; NotPresentErr then says so. A
+	// row whose region fields disagree is listed with the link
+	// LinkAmbiguousFields, so every applied row is in Entries or here.
 	NotPresent    []model.Proposal
 	NotPresentErr error
 	// ByProposal holds the link of each applied and pending row by ID.
@@ -114,11 +119,11 @@ type Links struct {
 }
 
 // Classify links the entries of d to the proposal rows. It is the only
-// place of the link rules. An applied row matches an entry by its
-// ProposalKey, or by its stored key when its region fields disagree, so
-// such a row always shows as ambiguous. A superseded row matches the
-// same way, so its history shows on each entry that a reader of either
-// key form links. A pending row matches by its ProposalKey only.
+// place of the link rules. A row of any status matches the entry whose
+// key is its reviews.ProposalKey. The CLI, health, and outcome readers
+// use the same key, so every surface links a row to the same pin. A row
+// whose region fields disagree reads LinkAmbiguousFields wherever it is
+// listed, so no surface claims a link or an absence for it.
 //
 // A document that Unreadable reports makes every link unknown. The
 // entries that still decode keep their matches for display.
@@ -141,9 +146,9 @@ func Classify(d *Document, applied, pending, superseded []model.Proposal) *Links
 
 	for i, e := range entries {
 		el := EntryLink{
-			Applied:    matching(applied, e.Key, true),
-			Pending:    matching(pending, e.Key, false),
-			Superseded: matching(superseded, e.Key, true),
+			Applied:    matching(applied, e.Key),
+			Pending:    matching(pending, e.Key),
+			Superseded: matching(superseded, e.Key),
 		}
 
 		el.Link = entryLink(count[e.Key], el)
@@ -157,28 +162,30 @@ func Classify(d *Document, applied, pending, superseded []model.Proposal) *Links
 	}
 
 	for _, p := range applied {
-		link := appliedLink(p, links.Entries)
+		i := slices.IndexFunc(links.Entries, func(el EntryLink) bool { return holds(el.Applied, p.ID) })
 
-		if unreadable {
-			link = LinkUnknown
-		} else if link == LinkNotPresent {
+		switch {
+		case unreadable:
+			links.ByProposal[p.ID] = LinkUnknown
+		case i < 0:
 			links.NotPresent = append(links.NotPresent, p)
+			links.ByProposal[p.ID] = rowLink(p, LinkNotPresent)
+		default:
+			links.ByProposal[p.ID] = rowLink(p, links.Entries[i].Link)
 		}
-
-		links.ByProposal[p.ID] = link
 	}
 
 	for _, p := range pending {
 		link := LinkNotPresent
-
-		switch {
-		case unreadable:
-			link = LinkUnknown
-		case slices.ContainsFunc(links.Entries, func(el EntryLink) bool { return holds(el.Pending, p.ID) }):
+		if slices.ContainsFunc(links.Entries, func(el EntryLink) bool { return holds(el.Pending, p.ID) }) {
 			link = LinkPendingMatch
 		}
 
-		links.ByProposal[p.ID] = link
+		if unreadable {
+			link = LinkUnknown
+		}
+
+		links.ByProposal[p.ID] = rowLink(p, link)
 	}
 
 	if unreadable {
@@ -188,14 +195,12 @@ func Classify(d *Document, applied, pending, superseded []model.Proposal) *Links
 	return links
 }
 
-// matching returns the rows that describe the pin with key. With either
-// set, a row with disagreeing region fields also matches by its stored
-// key, so the ambiguity shows on the entry that an older reader links.
-func matching(rows []model.Proposal, key reviews.PinKey, either bool) []model.Proposal {
+// matching returns the rows that link to the pin with key.
+func matching(rows []model.Proposal, key reviews.PinKey) []model.Proposal {
 	var out []model.Proposal
 
 	for _, p := range rows {
-		if ProposalKey(p) == key || (either && storedKey(p) == key) {
+		if reviews.ProposalKey(p) == key {
 			out = append(out, p)
 		}
 	}
@@ -204,7 +209,9 @@ func matching(rows []model.Proposal, key reviews.PinKey, either bool) []model.Pr
 }
 
 // entryLink applies the link rules to one entry. dups is the number of
-// live entries with the key of the entry.
+// live entries with the key of the entry. A pending row with
+// disagreeing region fields makes the entry ambiguous, because the
+// record of an existing pin refuses such a row (FieldsAgree).
 func entryLink(dups int, el EntryLink) Link {
 	switch {
 	case dups > 1:
@@ -215,6 +222,8 @@ func entryLink(dups int, el EntryLink) Link {
 		return LinkAmbiguousFields
 	case len(el.Applied) == 1:
 		return LinkLinked
+	case slices.ContainsFunc(el.Pending, fieldsDisagree):
+		return LinkAmbiguousFields
 	case len(el.Pending) > 0:
 		return LinkPendingMatch
 	}
@@ -222,21 +231,21 @@ func entryLink(dups int, el EntryLink) Link {
 	return LinkNoProposal
 }
 
-// appliedLink returns the link of one applied row. A row that no entry
-// lists is not present. A row with disagreeing region fields is
-// ambiguous wherever it matches; any other row takes the link of its
-// entry.
-func appliedLink(p model.Proposal, entries []EntryLink) Link {
-	i := slices.IndexFunc(entries, func(el EntryLink) bool { return holds(el.Applied, p.ID) })
-
-	switch {
-	case i < 0:
-		return LinkNotPresent
-	case !FieldsAgree(p):
+// rowLink returns the link of one row from the link that its entry, or
+// its absence, gives. A row with disagreeing region fields is ambiguous
+// wherever it is listed. Its apply writes a pin with another key, so a
+// missing entry with its own key does not prove an absence.
+func rowLink(p model.Proposal, link Link) Link {
+	if link != LinkUnknown && !FieldsAgree(p) {
 		return LinkAmbiguousFields
 	}
 
-	return entries[i].Link
+	return link
+}
+
+// fieldsDisagree negates FieldsAgree, for slices.ContainsFunc.
+func fieldsDisagree(p model.Proposal) bool {
+	return !FieldsAgree(p)
 }
 
 // holds reports whether rows has a row with the ID.

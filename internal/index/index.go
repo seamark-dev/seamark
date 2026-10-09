@@ -295,8 +295,8 @@ func Run(opts Options) (*Summary, error) {
 	}
 
 	for k, v := range map[string]string{
-		"repo_root":           root,
-		"indexed_at":          fmt.Sprint(time.Now().Unix()),
+		store.MetaRepoRoot:    root,
+		store.MetaIndexedAt:   fmt.Sprint(time.Now().Unix()),
 		"indexed_state":       WorkspaceState(root),
 		"history_mined":       fmt.Sprint(sum.HistoryMined),
 		"parse_cache_version": parseCacheVersion,
@@ -1023,7 +1023,7 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 		return nil
 	}
 
-	root, _ = st.GetMeta("repo_root")
+	root, _ = st.GetMeta(store.MetaRepoRoot)
 	mined, _ := st.GetMeta("history_mined")
 
 	return &Summary{

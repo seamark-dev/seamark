@@ -149,9 +149,9 @@ pin:
 	path := filepath.Join(root, ".seamark", "lessons.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(original), 0o644))
 
-	removed, err := RemovePins(root, []PinKey{{Rule: "docs-code-drift", Region: "*"}})
+	removed, err := RemovePins(root, []reviews.PinKey{{Rule: "docs-code-drift", Region: "*"}})
 	require.NoError(t, err)
-	assert.Equal(t, []PinKey{{Rule: "docs-code-drift", Region: "*"}}, removed)
+	assert.Equal(t, []reviews.PinKey{{Rule: "docs-code-drift", Region: "*"}}, removed)
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -194,7 +194,7 @@ func TestRemovePinsKeepsCommentsItDidNotWrite(t *testing.T) {
 			"  - rule: bbb\n    region: api\n    note: Second.\n"), 0o644))
 
 	// The first entry: its neighbouring comment is the user's and stays.
-	_, err := RemovePins(root, []PinKey{{Rule: "aaa", Region: "api"}})
+	_, err := RemovePins(root, []reviews.PinKey{{Rule: "aaa", Region: "api"}})
 	require.NoError(t, err)
 
 	data, err := os.ReadFile(path)
@@ -211,7 +211,7 @@ func TestRemovePinsKeepsCommentsItDidNotWrite(t *testing.T) {
 		"the following pin keeps its own provenance comment")
 
 	// The distilled entry: its own provenance comment goes with it.
-	_, err = RemovePins(root, []PinKey{{Rule: "bbb", Region: "api"}})
+	_, err = RemovePins(root, []reviews.PinKey{{Rule: "bbb", Region: "api"}})
 	require.NoError(t, err)
 
 	data, err = os.ReadFile(path)
@@ -233,7 +233,7 @@ func TestRemovePinsLeavesMuteRulesAlone(t *testing.T) {
 		"mute:\n  - rule: shared-name\n\npin:\n  - rule: shared-name\n    region: api\n    note: A pin.\n"),
 		0o644))
 
-	removed, err := RemovePins(root, []PinKey{{Rule: "shared-name", Region: "api"}})
+	removed, err := RemovePins(root, []reviews.PinKey{{Rule: "shared-name", Region: "api"}})
 	require.NoError(t, err)
 	require.Len(t, removed, 1)
 
@@ -256,9 +256,9 @@ func TestRemovePinsDistinguishesRegions(t *testing.T) {
 			"  - rule: dup\n    region: web\n    note: For web.\n"+
 			"  - rule: dup\n    region: \"*\"\n    note: Repo-wide.\n"), 0o644))
 
-	removed, err := RemovePins(root, []PinKey{{Rule: "dup", Region: "web"}})
+	removed, err := RemovePins(root, []reviews.PinKey{{Rule: "dup", Region: "web"}})
 	require.NoError(t, err)
-	require.Equal(t, []PinKey{{Rule: "dup", Region: "web"}}, removed)
+	require.Equal(t, []reviews.PinKey{{Rule: "dup", Region: "web"}}, removed)
 
 	cfg, err := reviews.LoadConfig(root)
 	require.NoError(t, err)
@@ -267,7 +267,7 @@ func TestRemovePinsDistinguishesRegions(t *testing.T) {
 	assert.Equal(t, "*", cfg.Pin[1].Region)
 
 	// An empty region means repo-wide, the form ApplyPins writes as "*".
-	removed, err = RemovePins(root, []PinKey{{Rule: "dup", Region: ""}})
+	removed, err = RemovePins(root, []reviews.PinKey{{Rule: "dup", Region: ""}})
 	require.NoError(t, err)
 	require.Len(t, removed, 1)
 
@@ -282,7 +282,7 @@ func TestRemovePinsHandlesAbsentAndMissingFile(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
 
 	// No file at all: nothing to prune, not an error.
-	removed, err := RemovePins(root, []PinKey{{Rule: "anything"}})
+	removed, err := RemovePins(root, []reviews.PinKey{{Rule: "anything"}})
 	require.NoError(t, err)
 	assert.Empty(t, removed)
 
@@ -291,7 +291,7 @@ func TestRemovePinsHandlesAbsentAndMissingFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(original), 0o644))
 
 	// Already pruned by hand: still not an error, and nothing is written.
-	removed, err = RemovePins(root, []PinKey{{Rule: "gone-already"}})
+	removed, err = RemovePins(root, []reviews.PinKey{{Rule: "gone-already"}})
 	require.NoError(t, err)
 	assert.Empty(t, removed)
 
@@ -308,7 +308,7 @@ func TestRemovePinsRefusesUnparseableFile(t *testing.T) {
 	path := filepath.Join(root, ".seamark", "lessons.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(broken), 0o644))
 
-	_, err := RemovePins(root, []PinKey{{Rule: "x"}})
+	_, err := RemovePins(root, []reviews.PinKey{{Rule: "x"}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fix it before pruning")
 
@@ -329,7 +329,7 @@ func TestRemovePinsRoundTripsWithApply(t *testing.T) {
 
 	require.NoError(t, ApplyPins(root, applyFixture))
 
-	removed, err := RemovePins(root, []PinKey{{Rule: applyFixture[0].Rule, Region: applyFixture[0].Region}})
+	removed, err := RemovePins(root, []reviews.PinKey{{Rule: applyFixture[0].Rule, Region: applyFixture[0].Region}})
 	require.NoError(t, err)
 	require.Len(t, removed, 1)
 
@@ -378,7 +378,7 @@ func TestApplyAndPruneMultiRegionPin(t *testing.T) {
 	assert.Equal(t, []string{"api", "db"}, cfg.Pin[0].AllRegions())
 
 	// Prune by the same identity, regions in a DIFFERENT order.
-	removed, err := RemovePins(root, []PinKey{NewPinKey(p.Rule, "", []string{"db", "api"})})
+	removed, err := RemovePins(root, []reviews.PinKey{reviews.NewPinKey(p.Rule, "", []string{"db", "api"})})
 	require.NoError(t, err)
 	require.Len(t, removed, 1)
 
@@ -407,7 +407,7 @@ func TestPruneParsesBlockStyleRegions(t *testing.T) {
 			"    region: web\n"+
 			"    note: Stays.\n"), 0o644))
 
-	removed, err := RemovePins(root, []PinKey{NewPinKey("validate-at-the-boundary", "", []string{"db", "api"})})
+	removed, err := RemovePins(root, []reviews.PinKey{reviews.NewPinKey("validate-at-the-boundary", "", []string{"db", "api"})})
 	require.NoError(t, err)
 	require.Len(t, removed, 1, "the block-style entry is one identity with the flow form")
 

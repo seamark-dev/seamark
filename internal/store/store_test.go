@@ -447,10 +447,10 @@ func TestFindSymbolsFTSRankOrder(t *testing.T) {
 
 func TestMetaSurvivesRebuild(t *testing.T) {
 	s := openTestStore(t)
-	require.NoError(t, s.SetMeta("repo_root", "/tmp/x"))
+	require.NoError(t, s.SetMeta(MetaRepoRoot, "/tmp/x"))
 	seed(t, s)
 
-	v, err := s.GetMeta("repo_root")
+	v, err := s.GetMeta(MetaRepoRoot)
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/x", v)
 

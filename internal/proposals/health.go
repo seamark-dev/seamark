@@ -68,7 +68,7 @@ func Health(st *store.Store, root string, ps []model.Proposal) (map[int64]report
 		// pin left lessons.yaml delivers nothing, so region advice is
 		// suppressed and the state is named instead.
 		if p.Status == model.ProposalApplied {
-			if _, live := cfg.FindPin(reviews.NewPinKey(p.Rule, p.Region, p.Regions)); !live {
+			if _, live := cfg.FindPin(reviews.ProposalKey(p)); !live {
 				h.Pruned = true
 			}
 		}
@@ -145,11 +145,12 @@ func RegionSetsEqual(a, b []string) bool {
 }
 
 // AppliedOutcomes loads the lessons config and the firing log and
-// measures the applied pins. It is the shared evidence boundary for
-// user-facing outcome surfaces. A malformed config is an error; it
-// never falls back to defaults, because defaults would judge firings
-// against rules the agent never received. It moved from internal/cli,
-// and the error texts stay as the CLI printed them.
+// measures the applied pins with MeasureOutcomes. It is the shared
+// evidence boundary for user-facing outcome surfaces. A malformed
+// config is an error; it never falls back to defaults, because
+// defaults would judge firings against rules the agent never received.
+// It moved from internal/cli, and the error texts stay as the CLI
+// printed them.
 func AppliedOutcomes(st *store.Store, root string, applied []model.Proposal) (
 	*reviews.Config, []reviews.Firing, map[int64]outcome.Reading, error,
 ) {
@@ -163,10 +164,26 @@ func AppliedOutcomes(st *store.Store, root string, applied []model.Proposal) (
 		return nil, nil, nil, fmt.Errorf("failed to read firing log: %w", err)
 	}
 
-	readings, err := outcome.Gather(st, cfg, applied, firings)
+	readings, err := MeasureOutcomes(st, cfg, applied, firings)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to gather applied proposal outcomes: %w", err)
+		return nil, nil, nil, err
 	}
 
 	return cfg, firings, readings, nil
+}
+
+// MeasureOutcomes is the measuring step of AppliedOutcomes. It takes a
+// lessons config and firing records that the caller already read.
+// lessonstats.Gather reads the firing log once for all of its sections.
+// Its delivery counts and its outcomes thus come from the same records.
+// The error text stays as the CLI printed it.
+func MeasureOutcomes(st *store.Store, cfg *reviews.Config, applied []model.Proposal,
+	firings []reviews.Firing,
+) (map[int64]outcome.Reading, error) {
+	readings, err := outcome.Gather(st, cfg, applied, firings)
+	if err != nil {
+		return nil, fmt.Errorf("failed to gather applied proposal outcomes: %w", err)
+	}
+
+	return readings, nil
 }

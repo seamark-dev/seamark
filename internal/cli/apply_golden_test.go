@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,14 +13,17 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// These golden tests pin two `lessons --apply` defects that the Phase 3
-// trials found. The A0 report records them as the D-1 open items D15
-// and D16. Decision D-1 freezes CLI behavior in Phase 3, so the defects
-// stay. A fix is a separate decision that updates these goldens in the
-// same change. The console must not copy either defect.
+// These golden tests pin `lessons --apply` and `lessons --dismiss`. Both
+// run through the shared decision flow of internal/proposals, as the
+// console does. The Phase 3 trials found two apply defects, which the
+// A0 report records as D15 and D16. D16 is fixed in the shared flow, and
+// its golden pins the fixed behavior. D15 stays open: the CLI keeps its
+// root resolution, and its golden pins the defect until a decision.
 
 // applyGoldenLessons is the pin file before an apply. The hand-written
 // entry shows that apply inserts above it and keeps it.
@@ -113,10 +119,13 @@ pin:
 	assert.Contains(t, maintainLedger(t, original, 0), `p2 proposed   "second-rule"`)
 }
 
-// D16: apply writes one entry per selected row and does not compare the
-// keys of the selection. Two pending rows with one canonical key become
-// two entries with that key. The Pins view then classifies both entries
-// as duplicate pins and blocks every action on them.
+// D16 (fixed in part): two rows with one key used to write two entries
+// with that key and print "applied 2 pin(s)". The Pins view then called
+// both entries duplicate pins and blocked every action on them. The
+// shared flow writes one entry for each key, from the lowest ID, and
+// records the other row as applied without a second entry. The block in
+// Pins stays: the one entry is ambiguous, because two applied rows
+// record it.
 func TestLessonsApplyGoldenDuplicateKeySelection(t *testing.T) {
 	root := maintainWorkspace(t, nil)
 	maintainWriteConfig(t, root, maintainGateOn)
@@ -129,8 +138,10 @@ func TestLessonsApplyGoldenDuplicateKeySelection(t *testing.T) {
 
 	stdout, stderr := goldenRun(t, root, "lessons", "--apply", "p1,p2")
 
-	assert.Equal(t, "applied 2 pin(s) to .seamark/lessons.yaml — review the diff and commit it\n"+
+	assert.Equal(t, "applied 1 pin(s) to .seamark/lessons.yaml — review the diff and commit it\n"+
 		"  p1    ttl-monotonic-clock\n"+
+		"recorded 1 proposal(s) as applied without a new pin — .seamark/lessons.yaml already holds a pin "+
+		"with the same rule and regions\n"+
 		"  p2    ttl-monotonic-clock\n", stdout)
 	assert.Empty(t, stderr)
 
@@ -142,10 +153,6 @@ pin:
   - rule: ttl-monotonic-clock
     region: internal/billing
     note: Use the monotonic clock for TTLs.
-  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p2)
-  - rule: ttl-monotonic-clock
-    region: internal/billing
-    note: Compute expiry from a monotonic reading.
   - rule: hand-written
     region: web
     note: A person wrote this pin.
@@ -156,8 +163,10 @@ pin:
 			`p2 applied    "ttl-monotonic-clock" region="internal/billing" regions=[] triggers=[] checked=0 v0 note="Compute expiry from a monotonic reading."`+"\n",
 		maintainLedger(t, root, 0))
 
-	// The consequence in the console: the shared link rules see two live
-	// entries with one key, so both entries are ambiguous.
+	// The shared link rules now see one entry with two applied rows. A
+	// reconcile of the second row gives the same state. The old defect gave
+	// it after a hand removal of one entry. Only LinkLinked allows an
+	// action, so Pins blocks retarget, prune, and trigger extraction here.
 	doc, err := pinfile.Read(root)
 	require.NoError(t, err)
 
@@ -170,10 +179,431 @@ pin:
 	require.NoError(t, err)
 
 	links := pinfile.Classify(doc, applied, nil, nil)
-	require.Len(t, links.Entries, 3)
-	assert.Equal(t, pinfile.LinkAmbiguousFile, links.Entries[0].Link)
-	assert.Equal(t, pinfile.LinkAmbiguousFile, links.Entries[1].Link)
-	assert.Equal(t, pinfile.LinkNoProposal, links.Entries[2].Link)
-	assert.Equal(t, pinfile.LinkAmbiguousFile, links.ByProposal[1])
-	assert.Equal(t, pinfile.LinkAmbiguousFile, links.ByProposal[2])
+	require.Len(t, links.Entries, 2)
+	assert.Equal(t, pinfile.LinkAmbiguousLedger, links.Entries[0].Link)
+	assert.Equal(t, pinfile.LinkNoProposal, links.Entries[1].Link)
+	assert.Equal(t, pinfile.LinkAmbiguousLedger, links.ByProposal[1])
+	assert.Equal(t, pinfile.LinkAmbiguousLedger, links.ByProposal[2])
+	assert.Empty(t, links.NotPresent, "every applied row has its pin in the file")
+}
+
+// D16 with the gate off: the paste block used to hold one entry for
+// each selected row, so a paste duplicated the key. The block now holds
+// one entry for each key and names the row that it leaves out.
+func TestLessonsApplyGoldenDuplicateKeyBlock(t *testing.T) {
+	root := maintainWorkspace(t, nil)
+	maintainWriteLessons(t, root, applyGoldenLessons, 0o644)
+
+	goldenSeedProposals(t, root,
+		applyGoldenRow("s1", "ttl-monotonic-clock", "internal/billing", "Use the monotonic clock for TTLs."),
+		applyGoldenRow("s2", "ttl-monotonic-clock", "internal/billing", "Compute expiry from a monotonic reading."),
+	)
+
+	stdout, stderr := goldenRun(t, root, "lessons", "--apply", "p1,p2")
+
+	assert.Equal(t, "distill.write is off in .seamark/config.yaml — paste under `pin:` in .seamark/lessons.yaml:\n\n"+
+		"  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p1)\n"+
+		"  - rule: ttl-monotonic-clock\n"+
+		"    region: internal/billing\n"+
+		"    note: Use the monotonic clock for TTLs.\n"+
+		"\n(proposals stay pending; enable distill.write to let apply edit the file)\n"+
+		"(p2 left out: a pin above has the same rule and regions)\n", stdout)
+	assert.Empty(t, stderr)
+
+	got, _ := maintainLessons(t, root)
+	assert.Equal(t, applyGoldenLessons, got)
+	assert.Contains(t, maintainLedger(t, root, 0), `p2 proposed   "ttl-monotonic-clock"`)
+}
+
+// applyGoldenTwoRows seeds two pending rows with different keys, the
+// common case that the move to the shared decision flow keeps unchanged.
+func applyGoldenTwoRows(t *testing.T, root string) {
+	t.Helper()
+
+	goldenSeedProposals(t, root,
+		applyGoldenRow("s1", "first-rule", "api", "The first pending pin."),
+		applyGoldenRow("s2", "second-rule", "db", "The second pending pin."),
+	)
+}
+
+// applyGoldenBlock is the pin block of applyGoldenTwoRows.
+const applyGoldenBlock = `  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p1)
+  - rule: first-rule
+    region: api
+    note: The first pending pin.
+  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p2)
+  - rule: second-rule
+    region: db
+    note: The second pending pin.
+`
+
+// applyGoldenGateOff is the gate-off output of applyGoldenTwoRows.
+const applyGoldenGateOff = "distill.write is off in .seamark/config.yaml — paste under `pin:` in .seamark/lessons.yaml:\n\n" +
+	applyGoldenBlock + "\n(proposals stay pending; enable distill.write to let apply edit the file)\n"
+
+// The gate-off output, the file, and the ledger stay byte-identical
+// when apply runs through the shared decision flow.
+func TestLessonsApplyGoldenGateOffPrintsTheBlock(t *testing.T) {
+	root := maintainWorkspace(t, nil)
+	maintainWriteLessons(t, root, applyGoldenLessons, 0o644)
+	applyGoldenTwoRows(t, root)
+
+	before := maintainLedger(t, root, 0)
+
+	stdout, stderr := goldenRun(t, root, "lessons", "--apply", "p1..p2")
+
+	assert.Equal(t, applyGoldenGateOff, stdout)
+	assert.Empty(t, stderr)
+
+	got, _ := maintainLessons(t, root)
+	assert.Equal(t, applyGoldenLessons, got, "the gate-off apply writes nothing")
+	assert.Equal(t, before, maintainLedger(t, root, 0), "the proposals stay pending")
+}
+
+// The gate-on output, the file bytes, its mode, and the ledger stay
+// byte-identical when apply runs through the shared decision flow.
+func TestLessonsApplyGoldenGateOnWritesAndRecords(t *testing.T) {
+	root := maintainWorkspace(t, nil)
+	maintainWriteConfig(t, root, maintainGateOn)
+	maintainWriteLessons(t, root, applyGoldenLessons, 0o600)
+	applyGoldenTwoRows(t, root)
+
+	stdout, stderr := goldenRun(t, root, "lessons", "--apply", "p2,p1")
+
+	assert.Equal(t, "applied 2 pin(s) to .seamark/lessons.yaml — review the diff and commit it\n"+
+		"  p1    first-rule\n"+
+		"  p2    second-rule\n", stdout)
+	assert.Empty(t, stderr)
+
+	got, mode := maintainLessons(t, root)
+	assert.Equal(t, "threshold: 3\n\npin:\n"+applyGoldenBlock+
+		"  - rule: hand-written\n    region: web\n    note: A person wrote this pin.\n", got)
+	assert.Equal(t, os.FileMode(0o600), mode, "the write keeps the file mode")
+
+	assert.Equal(t,
+		`p1 applied    "first-rule" region="api" regions=[] triggers=[] checked=0 v0 note="The first pending pin."`+"\n"+
+			`p2 applied    "second-rule" region="db" regions=[] triggers=[] checked=0 v0 note="The second pending pin."`+"\n",
+		maintainLedger(t, root, 0))
+}
+
+// The dismiss output and the ledger stay byte-identical when dismiss
+// runs through the shared decision flow. The pin file never changes.
+func TestLessonsDismissGolden(t *testing.T) {
+	root := maintainWorkspace(t, nil)
+	maintainWriteConfig(t, root, maintainGateOn)
+	maintainWriteLessons(t, root, applyGoldenLessons, 0o644)
+	applyGoldenTwoRows(t, root)
+
+	stdout, stderr := goldenRun(t, root, "lessons", "--dismiss", "p1..p9")
+
+	assert.Equal(t, "dismissed 2 proposal(s) — remembered; the same evidence will not return\n", stdout)
+	assert.Empty(t, stderr)
+
+	got, _ := maintainLessons(t, root)
+	assert.Equal(t, applyGoldenLessons, got)
+	assert.Equal(t,
+		`p1 dismissed  "first-rule" region="api" regions=[] triggers=[] checked=0 v0 note="The first pending pin."`+"\n"+
+			`p2 dismissed  "second-rule" region="db" regions=[] triggers=[] checked=0 v0 note="The second pending pin."`+"\n",
+		maintainLedger(t, root, 0))
+
+	// The selection errors come from the CLI selection grammar, before
+	// any decision starts. The trailing comma is a pinned quirk (A0 §7).
+	for args, want := range map[string]string{
+		"--apply=p1":      "p1 is not pending (see `seamark lessons --proposals`)",
+		"--dismiss=p1..3": `nothing in "p1..3," is pending (see ` + "`seamark lessons --proposals`)",
+	} {
+		_, _, err := runErr(t, "-C", root, "lessons", args)
+		require.Error(t, err, args)
+		assert.Equal(t, want, err.Error(), args)
+	}
+}
+
+// applyGoldenPinnedLessons already holds the pin of first-rule @ api,
+// with a hand-edited note. Apply must not add a second entry for it.
+const applyGoldenPinnedLessons = applyGoldenLessons + `  - rule: first-rule
+    region: api
+    note: Already here.
+`
+
+// Existing pin, gate on (fixed): apply used to append a second
+// first-rule entry, because it did not check the keys that the file
+// already held. The shared flow records p1 as applied without a write,
+// and writes only p2.
+func TestLessonsApplyGoldenExistingPinIsRecorded(t *testing.T) {
+	root := maintainWorkspace(t, nil)
+	maintainWriteConfig(t, root, maintainGateOn)
+	maintainWriteLessons(t, root, applyGoldenPinnedLessons, 0o644)
+	applyGoldenTwoRows(t, root)
+
+	stdout, stderr := goldenRun(t, root, "lessons", "--apply", "p1,p2")
+
+	assert.Equal(t, "applied 1 pin(s) to .seamark/lessons.yaml — review the diff and commit it\n"+
+		"  p2    second-rule\n"+
+		"recorded 1 proposal(s) as applied without a new pin — .seamark/lessons.yaml already holds a pin "+
+		"with the same rule and regions\n"+
+		"  p1    first-rule\n", stdout)
+	assert.Empty(t, stderr)
+
+	got, _ := maintainLessons(t, root)
+	assert.Equal(t, `threshold: 3
+
+pin:
+  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p2)
+  - rule: second-rule
+    region: db
+    note: The second pending pin.
+  - rule: hand-written
+    region: web
+    note: A person wrote this pin.
+  - rule: first-rule
+    region: api
+    note: Already here.
+`, got, "the hand-edited entry keeps its note, and no second first-rule entry appears")
+
+	assert.Equal(t,
+		`p1 applied    "first-rule" region="api" regions=[] triggers=[] checked=0 v0 note="The first pending pin."`+"\n"+
+			`p2 applied    "second-rule" region="db" regions=[] triggers=[] checked=0 v0 note="The second pending pin."`+"\n",
+		maintainLedger(t, root, 0))
+}
+
+// Every selected pin exists, gate on: the apply writes only the ledger.
+// This is also the rerun after a ledger failure that followed the pin
+// write: it records the pins without a second entry.
+func TestLessonsApplyGoldenOnlyExistingPins(t *testing.T) {
+	root := maintainWorkspace(t, nil)
+	maintainWriteConfig(t, root, maintainGateOn)
+	maintainWriteLessons(t, root, applyGoldenPinnedLessons, 0o644)
+	applyGoldenTwoRows(t, root)
+
+	stdout, stderr := goldenRun(t, root, "lessons", "--apply", "p1")
+
+	assert.Equal(t, "recorded 1 proposal(s) as applied without a new pin — .seamark/lessons.yaml already holds a pin "+
+		"with the same rule and regions\n"+
+		"  p1    first-rule\n", stdout)
+	assert.Empty(t, stderr)
+
+	got, _ := maintainLessons(t, root)
+	assert.Equal(t, applyGoldenPinnedLessons, got)
+	assert.Contains(t, maintainLedger(t, root, 0), `p1 applied    "first-rule"`)
+	assert.Contains(t, maintainLedger(t, root, 0), `p2 proposed   "second-rule"`)
+}
+
+// Existing pins, gate off (fixed): the paste block used to hold them
+// too, so a paste duplicated them. The block now leaves them out and
+// names them. The gate-off apply still writes nothing.
+func TestLessonsApplyGoldenExistingPinGateOff(t *testing.T) {
+	root := maintainWorkspace(t, nil)
+	maintainWriteLessons(t, root, applyGoldenPinnedLessons, 0o644)
+	applyGoldenTwoRows(t, root)
+
+	before := maintainLedger(t, root, 0)
+
+	stdout, stderr := goldenRun(t, root, "lessons", "--apply", "p1,p2")
+
+	assert.Equal(t, "distill.write is off in .seamark/config.yaml — paste under `pin:` in .seamark/lessons.yaml:\n\n"+
+		"  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p2)\n"+
+		"  - rule: second-rule\n"+
+		"    region: db\n"+
+		"    note: The second pending pin.\n"+
+		"\n(proposals stay pending; enable distill.write to let apply edit the file)\n"+
+		"(p1 left out: .seamark/lessons.yaml already holds a pin with the same rule and regions)\n", stdout)
+	assert.Empty(t, stderr)
+
+	stdout, stderr = goldenRun(t, root, "lessons", "--apply", "p1")
+
+	assert.Equal(t, ".seamark/lessons.yaml already holds the pins of p1 — nothing to paste\n"+
+		"(proposals stay pending; enable distill.write to let apply record them as applied)\n", stdout)
+	assert.Empty(t, stderr)
+
+	got, _ := maintainLessons(t, root)
+	assert.Equal(t, applyGoldenPinnedLessons, got)
+	assert.Equal(t, before, maintainLedger(t, root, 0))
+}
+
+// The shared flow reads the pin file strictly, as the console does. A
+// symbolic link at the pin file path used to receive the gate-on write.
+// A malformed pin file used to get the block or a write. Both now stop
+// the apply before any change.
+func TestLessonsApplyGoldenRefusesUnsafePinFiles(t *testing.T) {
+	t.Run("symbolic link with the gate on", func(t *testing.T) {
+		root := maintainWorkspace(t, nil)
+		maintainWriteConfig(t, root, maintainGateOn)
+		applyGoldenTwoRows(t, root)
+
+		elsewhere := filepath.Join(t.TempDir(), "lessons.yaml")
+		require.NoError(t, os.WriteFile(elsewhere, []byte(applyGoldenLessons), 0o644))
+		require.NoError(t, os.Symlink(elsewhere, filepath.Join(root, ".seamark", "lessons.yaml")))
+
+		before := maintainLedger(t, root, 0)
+
+		stdout, _, err := runErr(t, "-C", root, "lessons", "--apply", "p1")
+		require.Error(t, err)
+		assert.Equal(t, ".seamark/lessons.yaml: symlink at .seamark/lessons.yaml; seamark writes only real "+
+			"paths inside the repository", err.Error())
+		assert.Empty(t, stdout)
+
+		data, err := os.ReadFile(elsewhere)
+		require.NoError(t, err)
+		assert.Equal(t, applyGoldenLessons, string(data), "the link target is unchanged")
+		assert.Equal(t, before, maintainLedger(t, root, 0))
+	})
+
+	for _, gate := range []string{"distill:\n  write: false\n", maintainGateOn} {
+		t.Run("malformed pin file, "+strings.TrimSpace(gate), func(t *testing.T) {
+			root := maintainWorkspace(t, nil)
+			maintainWriteConfig(t, root, gate)
+			maintainWriteLessons(t, root, "hook_delivery: sometimes\n", 0o644)
+			applyGoldenTwoRows(t, root)
+
+			stdout, _, err := runErr(t, "-C", root, "lessons", "--apply", "p1")
+			require.ErrorIs(t, err, reviews.ErrLessonsConfig)
+			assert.Equal(t, `lessons config: hook_delivery must be "always" or "once-per-context", got "sometimes"`,
+				err.Error())
+			assert.Empty(t, stdout)
+
+			got, _ := maintainLessons(t, root)
+			assert.Equal(t, "hook_delivery: sometimes\n", got)
+		})
+	}
+}
+
+func TestLessonsApplyFailureMapsTheCommitOutcome(t *testing.T) {
+	busy := errors.New("database is locked")
+
+	tests := []struct {
+		name   string
+		res    proposals.Result
+		pinned []int64
+		want   string
+	}{
+		{
+			name: "success",
+			res:  proposals.Result{FileWritten: true, Moved: []int64{1}},
+		},
+		{
+			name: "race: a row decided elsewhere is not an error, as before the shared flow",
+			res:  proposals.Result{FileWritten: true, Moved: []int64{1}, NotMoved: []int64{2}},
+		},
+		{
+			name: "pin write refused before a change keeps the writer text",
+			res:  proposals.Result{FileErr: errors.New("lessons.yaml has a flow-style pin section"), NotMoved: []int64{1}},
+			want: "lessons.yaml has a flow-style pin section",
+		},
+		{
+			name: "pin write failed after a change",
+			res: proposals.Result{FileWritten: true, FileErr: errors.New("short write"),
+				NotMoved: []int64{1}},
+			want: "short write — .seamark/lessons.yaml may have changed; check it with git diff before you apply again",
+		},
+		{
+			name: "ledger failure after the pin write names the rerun",
+			res: proposals.Result{FileWritten: true, Moved: []int64{1},
+				NotMoved: []int64{2, 3}, LedgerErr: fmt.Errorf("record p2 as applied: %w", busy)},
+			want: "the pins are in .seamark/lessons.yaml, but the ledger update failed: record p2 as applied: " +
+				"database is locked — run `seamark lessons --apply p2,p3` again to record them as applied " +
+				"without a second pin",
+		},
+		{
+			name: "the rerun also names the existing pins that the failure left unrecorded",
+			res: proposals.Result{FileWritten: true, NotMoved: []int64{4},
+				LedgerErr: fmt.Errorf("record p4 as applied: %w", busy)},
+			pinned: []int64{5, 1},
+			want: "the pins are in .seamark/lessons.yaml, but the ledger update failed: record p4 as applied: " +
+				"database is locked — run `seamark lessons --apply p1,p4,p5` again to record them as applied " +
+				"without a second pin",
+		},
+		{
+			name:   "a refused pin write needs no rerun list",
+			res:    proposals.Result{FileErr: errors.New("lessons.yaml has a flow-style pin section"), NotMoved: []int64{2}},
+			pinned: []int64{1},
+			want:   "lessons.yaml has a flow-style pin section",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := applyFailure(tt.res, tt.pinned)
+			if tt.want == "" {
+				require.NoError(t, err)
+
+				return
+			}
+
+			require.Error(t, err)
+			assert.Equal(t, tt.want, err.Error())
+		})
+	}
+}
+
+// statusFailingLedger fails every status write: the injected ledger
+// failure after a successful pin write.
+type statusFailingLedger struct {
+	proposals.Ledgerer
+	err error
+}
+
+func (l statusFailingLedger) SetProposalStatus([]int64, string) (int, error) {
+	return 0, l.err
+}
+
+// A mixed gate-on apply writes the new pins first and records the
+// existing pins after that. A ledger failure after the write skips the
+// record, so the rerun advice names both groups. The advised rerun then
+// records both proposals without a second entry.
+func TestLessonsApplyLedgerFailureNamesTheExistingPins(t *testing.T) {
+	root := maintainWorkspace(t, nil)
+	maintainWriteConfig(t, root, maintainGateOn)
+	maintainWriteLessons(t, root, applyGoldenPinnedLessons, 0o644)
+	applyGoldenTwoRows(t, root)
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	pv, err := proposals.PreviewApply(st, root, []int64{1, 2})
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, pv.AlreadyPinned, "p1 has its pin, p2 is new")
+
+	busy := errors.New("database is locked")
+
+	var out strings.Builder
+
+	err = applyPins(&out, statusFailingLedger{Ledgerer: st, err: busy}, root, pv)
+	require.ErrorIs(t, err, busy)
+	assert.Equal(t, "the pins are in .seamark/lessons.yaml, but the ledger update failed: record p2 as applied: "+
+		"database is locked — run `seamark lessons --apply p1,p2` again to record them as applied "+
+		"without a second pin", err.Error())
+	assert.Empty(t, out.String(), "no line claims an applied pin")
+	require.NoError(t, st.Close())
+
+	written, _ := maintainLessons(t, root)
+	assert.Contains(t, written, "  - rule: second-rule\n", "the p2 pin reached the file")
+	assert.Contains(t, maintainLedger(t, root, 0), `p1 proposed   "first-rule"`)
+	assert.Contains(t, maintainLedger(t, root, 0), `p2 proposed   "second-rule"`)
+
+	stdout, stderr := goldenRun(t, root, "lessons", "--apply", "p1,p2")
+
+	assert.Equal(t, "recorded 2 proposal(s) as applied without a new pin — .seamark/lessons.yaml already holds "+
+		"a pin with the same rule and regions\n"+
+		"  p1    first-rule\n"+
+		"  p2    second-rule\n", stdout)
+	assert.Empty(t, stderr)
+
+	got, _ := maintainLessons(t, root)
+	assert.Equal(t, written, got, "the rerun adds no second entry")
+	assert.Contains(t, maintainLedger(t, root, 0), `p1 applied    "first-rule"`)
+	assert.Contains(t, maintainLedger(t, root, 0), `p2 applied    "second-rule"`)
+}
+
+func TestLessonsDismissFailureNamesWhatMoved(t *testing.T) {
+	busy := errors.New("database is locked")
+
+	require.NoError(t, dismissFailure(proposals.Result{Moved: []int64{1, 2}}))
+
+	err := dismissFailure(proposals.Result{NotMoved: []int64{1, 2}, LedgerErr: busy})
+	require.ErrorIs(t, err, busy)
+	assert.Equal(t, "database is locked", err.Error(), "nothing moved: the store error alone")
+
+	err = dismissFailure(proposals.Result{Moved: []int64{1}, NotMoved: []int64{2, 3}, LedgerErr: busy})
+	require.ErrorIs(t, err, busy)
+	assert.Equal(t, "dismissed p1, but not p2, p3: database is locked", err.Error())
 }

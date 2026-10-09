@@ -316,3 +316,40 @@ func TestNewPinKeyCommaRegionsDoNotCollide(t *testing.T) {
 	// share an identity with the two-region set {a, b}.
 	assert.NotEqual(t, NewPinKey("r", "a,b", nil), NewPinKey("r", "a", []string{"b"}))
 }
+
+func TestProposalKeyIsTheKeyOfAPinWithTheStoredFields(t *testing.T) {
+	// The first five rows are spellings that one key absorbs. The other
+	// rows have disagreeing fields: the console also linked them by the
+	// region set that RenderPins writes. Now each row has one key, and a
+	// pin entry with the same fields has that key.
+	cases := []struct {
+		name, rule, region string
+		regions            []string
+		want               PinKey
+	}{
+		{"rule spelling", " Close-DB ", "api", nil, NewPinKey("close-db", "api", nil)},
+		{"empty region", "r", "", nil, NewPinKey("r", "*", nil)},
+		{"trailing slash", "r", "api/", nil, NewPinKey("r", "api", nil)},
+		{"set order and repeats", "r", "db", []string{"db", "api", "api/"}, NewPinKey("r", "", []string{"api", "db"})},
+		{"star region with a set", "r", "*", []string{"api"}, NewPinKey("r", "api", nil)},
+		{"wildcard next to a real region", "r", "api", []string{"*", "db"}, NewPinKey("r", "", []string{"api", "db"})},
+		{"empty region in the set", "r", "api", []string{"", "db"}, NewPinKey("r", "", []string{"api", "db"})},
+		{"region outside the set", "r", "x", []string{"a", "b"}, NewPinKey("r", "", []string{"a", "b", "x"})},
+		{"set without a real region", "r", "api", []string{"/"}, NewPinKey("r", "api", nil)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := model.Proposal{Rule: tc.rule, Region: tc.region, Regions: tc.regions}
+			key := ProposalKey(p)
+
+			assert.Equal(t, tc.want, key)
+			assert.Equal(t, NewPinKey(tc.rule, tc.region, tc.regions), key, "the CLI form")
+
+			cfg := &Config{Pin: []PinRule{{Rule: tc.rule, Region: tc.region, Regions: tc.regions, Note: "live"}}}
+			pin, live := cfg.FindPin(key)
+			require.True(t, live, "a pin entry with the stored fields has the key")
+			assert.Equal(t, "live", pin.Note)
+		})
+	}
+}

@@ -61,17 +61,17 @@ func livingOf(p model.Proposal, meta map[int64]model.Finding) []model.Finding {
 	return living
 }
 
-// appliedKeys returns both key forms of every applied row outside
-// selected. A retarget to one of these keys would give two proposals one
-// pin. Both key forms count, so an older reader that uses the raw stored
-// key cannot link the new pin to that row either. The plan and the
-// recovery use this one rule, so they agree.
+// appliedKeys returns the reviews.ProposalKey of every applied row
+// outside selected. A retarget to one of these keys would give two
+// proposals one pin. The CLI and every other reader link a row by the
+// same key, so one key per row is enough. The plan and the recovery use
+// this one rule, so they agree.
 func appliedKeys(applied []model.Proposal, selected map[int64]bool) []reviews.PinKey {
 	var keys []reviews.PinKey
 
 	for _, p := range applied {
 		if !selected[p.ID] {
-			keys = append(keys, pinfile.ProposalKey(p), reviews.NewPinKey(p.Rule, p.Region, p.Regions))
+			keys = append(keys, reviews.ProposalKey(p))
 		}
 	}
 

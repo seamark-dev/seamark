@@ -12,12 +12,15 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// ExecuteExtract is the console half of a reviewed extraction. It follows
+// ExecuteExtract is the execute half of a reviewed extraction. It follows
 // the stop contract of Execute: checks before each call, no call after a
 // stop, and a reply that returned before the stop is stored for its whole
-// batch. Each answer is stored with store.SaveTriggerAnswer, which writes
-// the paths, the stamp and a pending region change as one completion
-// marker, and only while the row still matches the plan.
+// batch. The console turns Boundary on. Each answer is then stored with
+// store.SaveTriggerAnswer. It writes the paths, the stamp and a pending
+// region change as one completion marker. It writes only while the row
+// still matches the plan. ExtractTriggers leaves Boundary off, so the
+// CLI stores each answer with the two unguarded writes that it always
+// used.
 
 // ExtractItemStatus is the result class of one planned item.
 type ExtractItemStatus int
@@ -143,6 +146,11 @@ type ExtractBatchOutcome struct {
 	Err error
 	// Items are parallel to the planned batch's proposals.
 	Items []ExtractItemOutcome
+	// Named counts the items whose answer in a valid reply names a path
+	// that the syntax rung accepts. It counts the whole reply before any
+	// write, so a store failure in the batch does not lower it. The CLI
+	// prints it in the batch outcome line, as it did before a write.
+	Named int
 	// PromptChars and ReplyChars meter the agent traffic. They stay 0
 	// when no agent call started for the batch.
 	PromptChars int
@@ -212,6 +220,12 @@ type ExtractExecuteOptions struct {
 	// Now is the clock for the stamps and the batch times. Nil means
 	// time.Now.
 	Now func() time.Time
+	// Boundary turns on three store checks. The full plan revalidation
+	// runs before the first batch. The row and evidence checks run before
+	// each batch. The guarded save refuses a row that another writer
+	// changed. The console sets it. The legacy ExtractTriggers leaves it
+	// off, because the CLI output and writes must not change (D-1).
+	Boundary bool
 }
 
 // ExtractExecution is the typed result of one extraction execution.
@@ -243,6 +257,10 @@ type ExtractExecution struct {
 // because another writer is active (D-20). A stop that ends an agent call
 // cancels its batch; a call that already replied is stored for all its
 // items.
+//
+// Without opts.Boundary, the store comparisons do not run and no answer
+// is a conflict. Each answer then takes the unguarded CLI writes (see
+// saveUnguarded). The context checks and opts.Check still run.
 //
 // It always returns a non-nil *ExtractExecution. The error is non-nil only
 // for a store failure or an unusable call (no plan, no root, no invoker);
@@ -352,15 +370,18 @@ func (e *extractor) usable() error {
 }
 
 // startCheck runs before the first batch: the context, the full plan
-// revalidation, then the caller's checks. It does not check the context
-// again, because batchCheck(0) runs next and checks the context first.
+// revalidation with Boundary on, then the caller's checks. It does not
+// check the context again, because batchCheck(0) runs next and checks the
+// context first.
 func (e *extractor) startCheck() (StopReason, error) {
 	if err := e.ctx.Err(); err != nil {
 		return StopCancelled, err
 	}
 
-	if err := e.plan.Revalidate(e.st); err != nil {
-		return classify(err), err
+	if e.opts.Boundary {
+		if err := e.plan.Revalidate(e.st); err != nil {
+			return classify(err), err
+		}
 	}
 
 	if e.opts.Check != nil {
@@ -373,9 +394,9 @@ func (e *extractor) startCheck() (StopReason, error) {
 }
 
 // batchCheck runs before batch i: the context, the caller's checks, the
-// batch's rows and evidence, and the context again. The second context
-// check catches a stop that arrives during the slower checks, so the
-// batch never starts and stays unattempted.
+// batch's rows and evidence with Boundary on, and the context again. The
+// second context check catches a stop that arrives during the slower
+// checks, so the batch never starts and stays unattempted.
 func (e *extractor) batchCheck(i int) (StopReason, error) {
 	if err := e.ctx.Err(); err != nil {
 		return StopCancelled, err
@@ -387,9 +408,11 @@ func (e *extractor) batchCheck(i int) (StopReason, error) {
 		}
 	}
 
-	b := e.plan.Batches[i]
-	if err := checkExtractItems(e.st, b.Proposals, b.Items); err != nil {
-		return classify(err), err
+	if e.opts.Boundary {
+		b := e.plan.Batches[i]
+		if err := checkExtractItems(e.st, b.Proposals, b.Items); err != nil {
+			return classify(err), err
+		}
 	}
 
 	if err := e.ctx.Err(); err != nil {
@@ -462,13 +485,15 @@ func (e *extractor) runBatch(i int) error {
 // already paid for. An item without an entry in the reply is a negative
 // answer, as in the CLI, because the prompt asks the model to list only
 // the items that qualify (D-19). A store failure fails this item and the
-// unsaved rest of the batch, and stops the run. A conflict stops the run
-// after the whole batch is stored.
+// unsaved rest of the batch, and stops the run. Without Boundary, the
+// failed item can keep the regions of its first write (saveUnguarded). A
+// conflict stops the run after the whole batch is stored.
 func (e *extractor) persist(i int, answers []extractAnswer) error {
 	b := e.plan.Batches[i]
 	out := &e.x.Batches[i]
 	chosen := itemAnswers(answers, b.Proposals)
 	checkedAt := e.now().Unix()
+	out.Named = len(namedTriggers(answers, b.Proposals))
 
 	var conflict error
 
@@ -514,9 +539,10 @@ func (e *extractor) persist(i int, answers []extractAnswer) error {
 }
 
 // answer validates one item's answer, recomputes its regions from the
-// frozen evidence, and stores it with the row's guard. A guard miss is a
-// conflict: the paid answer is discarded rather than written over a row
-// that another writer changed.
+// frozen evidence, and stores it. With Boundary on, it stores the answer
+// with the row's guard. A guard miss is then a conflict: the paid answer
+// is discarded rather than written over a row that another writer
+// changed. With Boundary off, saveUnguarded stores it.
 func (e *extractor) answer(item *ExtractItemOutcome, planned ExtractItem, ans extractAnswer, checkedAt int64) error {
 	row := item.Proposal
 	root := e.plan.Options.Root
@@ -531,9 +557,11 @@ func (e *extractor) answer(item *ExtractItemOutcome, planned ExtractItem, ans ex
 		Paths: item.Valid, CheckedAt: checkedAt, Version: TriggerPromptVersion,
 	}
 
-	var regions []string
-
-	if len(planned.Living) > 0 {
+	// The console shows the trigger facts of every row. The CLI loop
+	// recomputed only a pending row. Without Boundary, an applied row
+	// therefore makes no store read, so it cannot fail where the CLI
+	// never failed.
+	if len(planned.Living) > 0 && (e.opts.Boundary || row.Status == model.ProposalProposed) {
 		asked := row
 		asked.TriggerPaths = item.Valid
 
@@ -547,13 +575,16 @@ func (e *extractor) answer(item *ExtractItemOutcome, planned ExtractItem, ans ex
 		// Only a pending row takes regions here. An installed pin
 		// changes scope only through a reviewed retarget.
 		if row.Status == model.ProposalProposed && regionsDiffer(row, recomputed) {
-			regions = recomputed
 			save.SetRegions, save.Regions = true, recomputed
 
 			if len(recomputed) > 0 {
 				save.Region = recomputed[0]
 			}
 		}
+	}
+
+	if !e.opts.Boundary {
+		return e.saveUnguarded(item, save)
 	}
 
 	saved, err := e.st.SaveTriggerAnswer(save)
@@ -569,24 +600,64 @@ func (e *extractor) answer(item *ExtractItemOutcome, planned ExtractItem, ans ex
 		return nil
 	}
 
-	item.Status = ExtractNegative
-	if len(item.Valid) > 0 {
-		item.Status = ExtractStored
-	}
+	item.Status = answeredStatus(item.Valid)
 
 	if save.SetRegions {
-		item.RegionsAfter = (model.Proposal{Region: save.Region, Regions: regions}).RegionSet()
+		item.RegionsAfter = (model.Proposal{Region: save.Region, Regions: save.Regions}).RegionSet()
 		item.RegionsChanged = true
 	}
 
 	return nil
 }
 
+// saveUnguarded stores one answer with the two writes of the CLI loop, in
+// its order (D-1). The regions of a pending row write first, and only
+// while the row is still pending. A row applied during the agent call
+// thus keeps the identity of its installed pin. The stamped answer
+// writes second and binds no guard, so it also lands on a row that
+// another writer changed. The stamp is the completion marker that the
+// CLI selection reads. A run that stops between the two writes therefore
+// asks the row again and finishes the pair.
+func (e *extractor) saveUnguarded(item *ExtractItemOutcome, save store.TriggerAnswer) error {
+	if save.SetRegions {
+		row := item.Proposal
+		row.Region, row.Regions = save.Region, save.Regions
+
+		changed, err := e.st.UpdateProposalRegionsIfPending(row)
+		if err != nil {
+			return err
+		}
+
+		if changed {
+			item.RegionsAfter = row.RegionSet()
+			item.RegionsChanged = true
+		}
+	}
+
+	if err := e.st.UpdateProposalTriggers(save.Guard.ID, save.Paths, save.CheckedAt, save.Version); err != nil {
+		return err
+	}
+
+	item.Status = answeredStatus(item.Valid)
+
+	return nil
+}
+
+// answeredStatus is the status of a stored answer: stored when a valid
+// path survives, otherwise negative.
+func answeredStatus(valid []string) ExtractItemStatus {
+	if len(valid) > 0 {
+		return ExtractStored
+	}
+
+	return ExtractNegative
+}
+
 // itemAnswers chooses one answer per batch member and drops answers for
 // IDs outside the batch. It keeps the first answer, in reply order, that
 // has a path the syntax rung accepts. Only when no answer of the member
 // has such a path does it keep the member's first answer, a negative one.
-// The CLI uses the same rule (namedTriggers). On both paths, an empty or
+// namedTriggers uses the same rule for the batch count. So an empty or
 // invalid first answer never hides a later answer that names a path.
 func itemAnswers(answers []extractAnswer, batch []model.Proposal) map[int64]extractAnswer {
 	member := make(map[int64]bool, len(batch))

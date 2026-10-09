@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/outcome"
+	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -64,6 +66,29 @@ type Snapshot struct {
 	// Undated counts the delivered records whose time does not parse.
 	// Days cannot place them, so the view says that they are missing.
 	Undated int
+
+	// A section error can hold the failure of one of several sources.
+	// Err must name the first failed source, so these fields keep the
+	// source failures that a section error can hide.
+	minedErr   error
+	appliedErr error
+	configErr  error
+}
+
+// Err returns the first failed source, or nil when every read worked.
+// The order is the mined lessons, the applied proposals, the lessons
+// config, the firing log, and the outcome measurement. `seamark lessons
+// --stats` read its sources in this order before it used Gather, so its
+// error text stays the same. Without an index, Err never returns nil,
+// because the outcomes need the proposal ledger.
+func (s Snapshot) Err() error {
+	for _, err := range []error{s.minedErr, s.appliedErr, s.configErr, s.LogErr, s.OutcomeErr} {
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Gather reads the statistics. st may be nil when no index exists; the
@@ -85,6 +110,8 @@ func gatherAt(st *store.Store, root string, now time.Time) Snapshot {
 		cfgErr = fmt.Errorf("failed to load lessons config: %w", cfgErr)
 	}
 
+	snap.configErr = cfgErr
+
 	// The mined lessons are read once, because the lesson counts and the
 	// eligibility sections both need them.
 	var (
@@ -98,6 +125,8 @@ func gatherAt(st *store.Store, root string, now time.Time) Snapshot {
 			minedErr = fmt.Errorf("failed to fetch mined lessons: %w", minedErr)
 		}
 	}
+
+	snap.minedErr = minedErr
 
 	// The lesson counts do not need the delivery log, so a log failure
 	// does not hide them.
@@ -117,7 +146,7 @@ func gatherAt(st *store.Store, root string, now time.Time) Snapshot {
 		snap.OutcomeErr = snap.LogErr
 
 		if st != nil {
-			snap.Applied, _ = appliedProposals(st)
+			snap.Applied, snap.appliedErr = appliedProposals(st)
 		}
 
 		return snap
@@ -138,7 +167,19 @@ func gatherAt(st *store.Store, root string, now time.Time) Snapshot {
 	}
 
 	snap.Summary, snap.Eligible, snap.EligibleErr = eligibleSummary(mined, minedErr, cfg, cfgErr, firings)
-	snap.Applied, snap.Readings, snap.OutcomeErr = outcomes(st, cfg, cfgErr, firings)
+	snap.Applied, snap.appliedErr = appliedProposals(st)
+
+	switch {
+	case snap.appliedErr != nil:
+		snap.OutcomeErr = snap.appliedErr
+	case cfgErr != nil:
+		snap.OutcomeErr = cfgErr
+	default:
+		// The proposal health measures outcomes with the same function.
+		// Gather gives it the records that it already read, so the
+		// summary and the outcomes come from one read of the log.
+		snap.Readings, snap.OutcomeErr = proposals.MeasureOutcomes(st, cfg, NewestFirst(snap.Applied), firings)
+	}
 
 	return snap
 }
@@ -161,27 +202,6 @@ func eligibleSummary(mined []model.Lesson, minedErr error, cfg *reviews.Config, 
 	return summarize(firings, cfg.Surface(mined, "")), true, nil
 }
 
-// outcomes reads the applied proposals and their recurrence readings.
-func outcomes(st *store.Store, cfg *reviews.Config, cfgErr error,
-	firings []reviews.Firing,
-) ([]model.Proposal, map[int64]outcome.Reading, error) {
-	applied, err := appliedProposals(st)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if cfgErr != nil {
-		return applied, nil, cfgErr
-	}
-
-	readings, err := outcome.Gather(st, cfg, applied, firings)
-	if err != nil {
-		return applied, nil, fmt.Errorf("failed to gather applied proposal outcomes: %w", err)
-	}
-
-	return applied, readings, nil
-}
-
 // appliedProposals returns the applied proposals in ascending ID order.
 func appliedProposals(st *store.Store) ([]model.Proposal, error) {
 	applied, err := st.Proposals(model.ProposalApplied)
@@ -192,6 +212,20 @@ func appliedProposals(st *store.Store) ([]model.Proposal, error) {
 	sort.Slice(applied, func(i, j int) bool { return applied[i].ID < applied[j].ID })
 
 	return applied, nil
+}
+
+// NewestFirst returns a copy of the proposals in descending ID order,
+// the order of the store. `seamark lessons --stats` printed and measured
+// the applied proposals in this order before it used Gather. It still
+// prints in this order. Gather also measures in this order. The
+// measurement stops at the first failed commit count and names that
+// pin, so the command error names the same pin.
+func NewestFirst(applied []model.Proposal) []model.Proposal {
+	out := slices.Clone(applied)
+
+	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
+
+	return out
 }
 
 // summarize runs the existing aggregation and makes the Ranked order

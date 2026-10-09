@@ -248,12 +248,12 @@ func TestNewPlanRetargetRefusesCollisions(t *testing.T) {
 		assert.Contains(t, p.Items[0].Reason, "another pin already carries the key guard-empty-datasets @ scripts")
 	})
 
-	t.Run("an applied row records the target as its raw key only", func(t *testing.T) {
+	t.Run("an applied row with disagreeing fields records the target by its stored fields", func(t *testing.T) {
 		f := retargetFixture(t)
 
-		// The region fields of p7 disagree. Its proposal key is two-areas @
-		// db, and its raw stored key is two-areas @ api, db. An older reader
-		// links a pin by the raw key, so that key counts as taken too.
+		// The region fields of p7 disagree. Its key reads the stored fields,
+		// two-areas @ api, db, as every reader links it. RenderPins would
+		// write two-areas @ db, but no reader links a row by that key.
 		f.propose(model.Proposal{Signature: "s7", Rule: "two-areas", Region: "api", Regions: []string{"db"},
 			Note: "Other.", Members: []int64{3}, Status: model.ProposalApplied})
 
@@ -492,7 +492,10 @@ func TestNewPlanBlocksEntriesWithoutOneLink(t *testing.T) {
 		model.Proposal{Signature: "b", Rule: "two-rows", Region: "lib", Members: []int64{1}, Status: model.ProposalApplied},
 		model.Proposal{Signature: "c", Rule: "two-rows", Region: "lib", Members: []int64{2}, Status: model.ProposalApplied},
 		model.Proposal{Signature: "d", Rule: "pending-one", Region: "api", Members: []int64{1}, Status: model.ProposalProposed},
-		model.Proposal{Signature: "e", Rule: "mixed-fields", Region: "lib", Regions: []string{"web"}, Members: []int64{1},
+		// The stored fields of e give the key mixed-fields @ web, so e links
+		// to the web entry. Its "*" makes RenderPins write a repository-wide
+		// pin instead, so the fields disagree.
+		model.Proposal{Signature: "e", Rule: "mixed-fields", Region: "web", Regions: []string{"*"}, Members: []int64{1},
 			Status: model.ProposalApplied},
 	)
 
@@ -511,6 +514,23 @@ func TestNewPlanBlocksEntriesWithoutOneLink(t *testing.T) {
 
 	assert.Nil(t, p.Change)
 	assert.Empty(t, p.Supersede)
+	assert.False(t, p.Confirmable)
+}
+
+func TestNewPlanBlocksAPendingMatchWhoseRegionFieldsDisagree(t *testing.T) {
+	// The stored fields of the pending row give the key odd-pending @
+	// api, so it matches the entry. Its "*" makes RenderPins write a
+	// repository-wide pin, so the record of an existing pin refuses it.
+	// The plan therefore does not send the user to Proposals › c.
+	f := newFixture(t, retargetFindings)
+	f.write("pin:\n  - rule: odd-pending\n    region: api\n    note: Odd.\n", 0o644)
+	f.propose(model.Proposal{Signature: "a", Rule: "odd-pending", Region: "api", Regions: []string{"*"},
+		Members: []int64{1}, Status: model.ProposalProposed})
+
+	p := f.plan(f.deps(), f.request(ActionPrune, "odd-pending"))
+	require.Len(t, p.Items, 1)
+	assert.Equal(t, ItemBlocked, p.Items[0].Status)
+	assert.Equal(t, "ambiguous: stored region fields disagree; "+reasonLedgerFixes, p.Items[0].Reason)
 	assert.False(t, p.Confirmable)
 }
 

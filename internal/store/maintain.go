@@ -27,7 +27,10 @@ import (
 // differently.
 //
 // The CLI writers (UpdateProposalTriggers, UpdateProposalRegionsIfPending,
-// UpdateProposalRegionsBatch, SupersedeProposals) stay unchanged.
+// UpdateProposalRegionsBatch, SupersedeProposals) stay unchanged. The CLI
+// extraction runs the console executor without its guards. That path
+// still writes with UpdateProposalRegionsIfPending and then
+// UpdateProposalTriggers, because the CLI goldens pin those two writes.
 // ProposalsByIDs stays pending-only, because the console decision flow
 // relies on that filter.
 

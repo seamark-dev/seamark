@@ -1279,8 +1279,14 @@ func (p *propView) startRecord() tea.Cmd {
 // its last read of the pin file. After a good read, the text names r:
 // only an edit of the file since that read can add the pin. With marks,
 // the text counts the marked rows without a known pin, because a list of
-// IDs can be too long for the notice row.
+// IDs can be too long for the notice row. A row whose region fields
+// disagree needs no read of the file, because the record refuses it.
 func (p *propView) noPinText(ids []int64) string {
+	if i := slices.IndexFunc(ids, p.fieldsDisagree); i >= 0 {
+		return "No record applied: the stored region fields of " + propID(ids[i]) +
+			" disagree, so no pin is proven to be its own."
+	}
+
 	// Without a good read, the console must not say that the file has no
 	// pin. The Pins state line names the read error, so the text sends
 	// the user there.
@@ -1731,7 +1737,13 @@ func (p *propView) unpinned(ids []int64) int {
 // The pinned set knows only what a preview or a partial apply reported.
 // The Pins inspection also knows a pending match before any preview, so
 // the hint and c show on the first visit, as the Pins route says (D-4).
+// A row whose region fields disagree has no proven pin, and the record
+// refuses it, so c stays off for it.
 func (p *propView) hasPin(id int64) bool {
+	if p.fieldsDisagree(id) {
+		return false
+	}
+
 	if p.pinned[id] {
 		return true
 	}
@@ -1739,6 +1751,21 @@ func (p *propView) hasPin(id int64) bool {
 	link, known := extLink(p.st, id)
 
 	return known && link == pinfile.LinkPendingMatch
+}
+
+// fieldsDisagree reports whether the ledger snapshot holds pending
+// proposal id with stored region fields that disagree
+// (pinfile.FieldsAgree). The apply preview can still find the pin that
+// its apply writes, so this check also covers the pinned set.
+func (p *propView) fieldsDisagree(id int64) bool {
+	l := p.ledger()
+	if l == nil {
+		return false
+	}
+
+	i := slices.IndexFunc(l.Pending, func(pr domain.Proposal) bool { return pr.ID == id })
+
+	return i >= 0 && !pinfile.FieldsAgree(l.Pending[i])
 }
 
 // extractTargets returns the proposals that t asks about: the marked
@@ -1918,7 +1945,8 @@ func (p *propView) confirmLabel() string {
 	case proposals.ActionReconcile:
 		return "record " + propPlural(n, "proposal", "proposals") + " as applied"
 	default:
-		return "apply " + propPlural(n, "pin", "pins")
+		// Apply writes one entry for each pin key of the selection.
+		return "apply " + propPlural(n-len(d.pv.SharedPin), "pin", "pins")
 	}
 }
 

@@ -8,6 +8,39 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **`lessons --apply` adds no duplicate pins.** `seamark lessons
+  --apply` and `--dismiss` now run on the decision flow of the console
+  (preview, then a commit that checks the preview again). They keep the
+  CLI selection, the workspace root, and the output of every earlier
+  case, pinned by golden tests. Apply never adds a second entry with the
+  same rule and region set. A selected proposal whose pin
+  `.seamark/lessons.yaml` already holds is recorded as applied without a
+  write, under a new `recorded N proposal(s) as applied without a new
+  pin` line; with `distill.write` off, the printed block leaves it out
+  and names it. Two selected proposals with one rule and region set get
+  one entry, from the lower ID, and both are recorded as applied. Pins
+  then shows that entry as `ambiguous`, because two applied proposals
+  record it, and keeps retarget, prune, and trigger extraction blocked
+  for it: edit that pin by hand. The console apply gets the same fix.
+  Its preview counts one pin for each entry and names the proposal
+  without an entry of its own, with the gate on or off.
+  Apply now reads the pin file strictly before it writes or prints: a
+  symbolic link at the pin file path (with the gate on) or a pin file
+  that the lessons reader rejects stops apply with that error, where the
+  CLI wrote through the link, wrote into the rejected file, or printed
+  the block. After a ledger failure that follows the pin write, the error
+  names the `--apply` rerun for every selected proposal that is still
+  pending, also one whose pin was already in the file. The rerun records
+  them without a second entry.
+- **`lessons --stats` reads through the console's statistics reader.**
+  `seamark lessons --stats` now gets its data from `internal/lessonstats`,
+  the reader of the console's Stats view, and reads the firing log once.
+  Both measure pin outcomes with `proposals.MeasureOutcomes`, the step
+  that the proposal health also uses. The output, the error texts, and
+  the order of the errors stay the same, pinned by new golden tests. One
+  difference: `most surfaced` rows that tie on matches, deliveries, and
+  the last firing time now print by region, then symptom; before, their
+  order could change from one run to the next.
 - **Console pin maintenance (`seamark tui`, experimental).** Lessons
   gains Pins (`m`): the entries of `.seamark/lessons.yaml` in file order,
   each linked to the proposal ledger by rule and region set or marked as
@@ -42,14 +75,23 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   group, so a process that the agent leaves in it does not outlive the
   call. In a copied checkout whose index still records the original
   repository, Pins turns retarget and prune off and names both pin
-  files. Proposals adds the superseded state. The new `internal/pinfile`,
-  `internal/maintain`, and `internal/yamledit` packages serve the
-  console; `seamark lessons --prune`, `--retarget`, and
+  files. Proposals adds the superseded state. Pins, maintenance, and
+  extraction link a proposal to a pin by its rule and stored region
+  fields (`reviews.ProposalKey`), the key that `seamark lessons` uses,
+  so the console and the CLI name the same pin. A proposal whose stored
+  region fields disagree reads `ambiguous row` in Pins, also without an
+  entry of its key, and the ledger-only "record as applied" (`c`)
+  refuses it. The new
+  `internal/pinfile`, `internal/maintain`, and `internal/yamledit`
+  packages serve the console; `seamark lessons --prune`, `--retarget`, and
   `--extract-triggers` keep their output, pinned by new golden tests.
-  One prompt change applies to the CLI and the console: the extraction
-  prompt indents every continuation line of a multi-line rule or note,
-  so a recorded note cannot forge another item. A prompt whose fields
-  each fit on one line stays byte-identical. See
+  `--extract-triggers` now runs on the console's extraction plan and
+  execute steps with the store checks and the guarded save turned off,
+  so the proposals it asks, its output, and its ledger writes do not
+  change. One prompt change applies to the CLI and the console: the
+  extraction prompt indents every continuation line of a multi-line rule
+  or note, so a recorded note cannot forge another item. A prompt whose
+  fields each fit on one line stays byte-identical. See
   [docs/tui.md](docs/tui.md).
 - **Guarded writes refuse a file that this user cannot write.** `seamark
   init`, the console setup, the Settings editor, and the console pin

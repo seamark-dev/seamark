@@ -88,8 +88,9 @@ TUI_TEST_PKGS := ./internal/tui/... ./internal/workspace/... ./internal/scaffold
 # the distillation and maintenance golden tests), init, the evidence
 # refresh of `seamark index --fixes-only` and `--reviews`, and the older
 # retarget, extraction and ledger tests that the console's shared
-# engines must keep green.
-TUI_CLI_PARITY := Test(TUI|Lessons|RunInit|InitClient|IndexFixesOnly|IndexReviews|RecommendScope|RetargetKeeps|ExtractSummary|SelectionParsing|Ledger(Shows|Names)|PlanAnnotations)
+# engines must keep green. CLIWorkspace pins how the commands find and
+# open the index through internal/workspace.
+TUI_CLI_PARITY := Test(TUI|Lessons|RunInit|InitClient|IndexFixesOnly|IndexReviews|RecommendScope|RetargetKeeps|ExtractSummary|SelectionParsing|Ledger(Shows|Names)|PlanAnnotations|CLIWorkspace)
 
 tui-test: ## Run the workspace console tests (shell, screens, shared services, CLI parity)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(TUI_TEST_PKGS)

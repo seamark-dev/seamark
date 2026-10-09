@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +17,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/redact"
@@ -25,6 +25,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 func newLessonsCmd(opts *options) *cobra.Command {
@@ -377,74 +378,6 @@ func resolveSelection(candidates []model.Proposal, raw, state string) ([]model.P
 	return out, nil
 }
 
-// runLessonsApply turns chosen proposals into pins. The pins land in
-// .seamark/lessons.yaml only when the workspace opted in via
-// distill.write. Otherwise, it prints the rendered block for manual
-// insertion. In both modes, applying requires an explicit command that
-// names the proposals.
-func runLessonsApply(cmd *cobra.Command, opts *options, raw string) error {
-	st, root, err := openIndex(opts)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = st.Close() }()
-
-	pending, err := st.Proposals(model.ProposalProposed)
-	if err != nil {
-		return err
-	}
-
-	ps, err := resolveSelection(pending, raw, "pending")
-	if err != nil {
-		return err
-	}
-
-	ids := make([]int64, len(ps))
-	for i, p := range ps {
-		ids[i] = p.ID
-	}
-
-	out := cmd.OutOrStdout()
-
-	cfg, err := distill.LoadConfig(root)
-	if err != nil {
-		return err
-	}
-
-	if !cfg.Distill.Write {
-		block, err := distill.RenderPins(ps)
-		if err != nil {
-			return err
-		}
-
-		fmt.Fprintf(out, "distill.write is off in .seamark/config.yaml — paste under `pin:` in .seamark/lessons.yaml:\n\n%s\n", block)
-		fmt.Fprintln(out, "(proposals stay pending; enable distill.write to let apply edit the file)")
-
-		return nil
-	}
-
-	// File first, status second: if the status write fails, the worst
-	// case is a duplicate pin entry on a retried apply — visible in the
-	// yaml diff. The other order could mark a pin applied that never
-	// reached the file, which nothing would ever surface.
-	if err := distill.ApplyPins(root, ps); err != nil {
-		return err
-	}
-
-	applied, err := st.SetProposalStatus(ids, model.ProposalApplied)
-	if err != nil {
-		return err
-	}
-
-	fmt.Fprintf(out, "applied %d pin(s) to .seamark/lessons.yaml — review the diff and commit it\n", applied)
-
-	for _, p := range ps {
-		fmt.Fprintf(out, "  p%-4d %s\n", p.ID, p.Rule)
-	}
-
-	return nil
-}
-
 // runLessonsPrune retires applied pins that restate another. It is not
 // a dismissal: the guidance stays pinned by whichever entry survives,
 // so the proposal becomes "superseded" and the theme is still known to
@@ -470,11 +403,11 @@ func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
 
 	// Rule plus region: the same rule is legitimately pinned in several
 	// areas, and pruning one must not take its namesakes with it.
-	keys := make([]distill.PinKey, len(ps))
+	keys := make([]reviews.PinKey, len(ps))
 	ids := make([]int64, len(ps))
 
 	for i, p := range ps {
-		keys[i] = distill.NewPinKey(p.Rule, p.Region, p.Regions)
+		keys[i] = reviews.ProposalKey(p)
 		ids[i] = p.ID
 	}
 
@@ -506,7 +439,7 @@ func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
 	// must keep its applied status, or the database says "not pinned"
 	// while lessons.yaml still carries the entry — and liveness,
 	// coverage, and the audit all reason from that lie.
-	removedKeys := make(map[distill.PinKey]bool, len(removed))
+	removedKeys := make(map[reviews.PinKey]bool, len(removed))
 	for _, k := range removed {
 		removedKeys[k] = true
 	}
@@ -534,40 +467,6 @@ func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
 	if len(removed) < len(ps) {
 		fmt.Fprintf(out, "(%d were not found in the file and keep their applied status)\n", len(ps)-len(removed))
 	}
-
-	return nil
-}
-
-// runLessonsDismiss records a no on chosen proposals. The signature
-// memory does the rest: the same evidence set is never re-proposed.
-func runLessonsDismiss(cmd *cobra.Command, opts *options, raw string) error {
-	st, _, err := openIndex(opts)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = st.Close() }()
-
-	pending, err := st.Proposals(model.ProposalProposed)
-	if err != nil {
-		return err
-	}
-
-	ps, err := resolveSelection(pending, raw, "pending")
-	if err != nil {
-		return err
-	}
-
-	ids := make([]int64, len(ps))
-	for i, p := range ps {
-		ids[i] = p.ID
-	}
-
-	n, err := st.SetProposalStatus(ids, model.ProposalDismissed)
-	if err != nil {
-		return err
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "dismissed %d proposal(s) — remembered; the same evidence will not return\n", n)
 
 	return nil
 }
@@ -894,7 +793,7 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 			}
 
 			if p.Status == model.ProposalApplied {
-				if _, live := lcfg.FindPin(reviews.NewPinKey(p.Rule, p.Region, p.Regions)); !live {
+				if _, live := lcfg.FindPin(reviews.ProposalKey(p)); !live {
 					pruned++
 
 					continue
@@ -1213,6 +1112,8 @@ func lessonsHookClient(cmd *cobra.Command, clientID string) (integration.Client,
 
 // runLessonsStats prints the firing-log summary: which lessons actually
 // reach agents, and which would surface but never have (decay signal).
+// It reads through lessonstats.Gather, the reader of the console's Stats
+// view, so both surfaces count the same records by the same rules.
 func runLessonsStats(cmd *cobra.Command, opts *options) error {
 	st, root, err := openIndex(opts)
 	if err != nil {
@@ -1220,27 +1121,18 @@ func runLessonsStats(cmd *cobra.Command, opts *options) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	mined, err := st.AllLessons(0)
-	if err != nil {
-		return fmt.Errorf("failed to fetch mined lessons: %w", err)
-	}
-
-	applied, err := st.Proposals(model.ProposalApplied)
-	if err != nil {
-		return fmt.Errorf("failed to fetch applied proposals: %w", err)
-	}
-
-	cfg, firings, readings, err := proposals.AppliedOutcomes(st, root, applied)
-	if err != nil {
+	// The command prints nothing when a source fails, because partial
+	// records would print as low counts. Err names the first failure.
+	snap := lessonstats.Gather(st, root)
+	if err := snap.Err(); err != nil {
 		return err
 	}
 
-	// The set that COULD fire: what the config surfaces repo-wide.
-	surfaced := cfg.Surface(mined, "")
+	report.PrintFiringSummary(cmd.OutOrStdout(), snap.Summary)
 
-	report.PrintFiringSummary(cmd.OutOrStdout(), reviews.Summarize(firings, surfaced))
-
-	report.PrintOutcomes(cmd.OutOrStdout(), applied, readings)
+	// Gather lists the applied proposals by ascending ID for the console.
+	// The command keeps its own order, newest first.
+	report.PrintOutcomes(cmd.OutOrStdout(), lessonstats.NewestFirst(snap.Applied), snap.Readings)
 
 	return nil
 }
@@ -1280,34 +1172,38 @@ func toRepoRel(root, path string) string {
 // A workspace without a database gets an empty in-memory index.
 // store.Open would create the file, and a hook must leave no index
 // behind. The pins of lessons.yaml need no mined data, so a clone that
-// was never indexed still gets them.
+// was never indexed still gets them. For the same reason the hook also
+// reads a database without an index run, which openIndex refuses.
 func openHookIndex(opts *options) (*store.Store, string, error) {
-	root, err := index.ResolveRoot(opts.workspace)
+	// Unlike resolveWorkspace, the hook widens -C to the git top level
+	// also with --db. Locate applies that rule.
+	ws, err := workspace.Locate(opts.workspace, opts.dbPath)
 	if err != nil {
 		return nil, "", err
 	}
 
-	dbPath := opts.dbPath
-	if dbPath == "" {
-		dbPath = store.DefaultPath(root)
-	}
-
-	if _, err := os.Stat(dbPath); errors.Is(err, fs.ErrNotExist) {
+	p := workspace.Probe(ws)
+	if p.State == workspace.IndexAbsent {
 		st, err := store.OpenMemory()
 
-		return st, root, err
+		return st, ws.Root, err
 	}
 
-	st, err := store.Open(dbPath)
+	// store.Open migrates an older schema. Any open error keeps the
+	// hook silent, so the edit goes on without advice.
+	st, err := store.Open(ws.DBPath)
 	if err != nil {
 		return nil, "", err
 	}
 
-	if r, err := st.GetMeta("repo_root"); err == nil && r != "" {
-		root = r
+	// The probe reads the meta only with the supported schema. After
+	// the open the database has that schema, so a second probe reads
+	// it. An unreadable meta leaves p.Root at the workspace root.
+	if !p.State.Readable() {
+		p = workspace.Probe(ws)
 	}
 
-	return st, root, nil
+	return st, p.Root, nil
 }
 
 // runLessonsRetarget updates applied pins to the regions today's
@@ -1350,7 +1246,7 @@ func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
 	// with the updated row ready to write.
 	var (
 		updated []model.Proposal
-		oldKeys []distill.PinKey
+		oldKeys []reviews.PinKey
 	)
 
 	for _, p := range ps {
@@ -1391,7 +1287,7 @@ func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
 		}
 
 		updated = append(updated, next)
-		oldKeys = append(oldKeys, distill.NewPinKey(p.Rule, p.Region, p.Regions))
+		oldKeys = append(oldKeys, reviews.ProposalKey(p))
 	}
 
 	if len(updated) == 0 {
@@ -1426,10 +1322,10 @@ func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
 
 	var fileOps, dbOnly []model.Proposal
 
-	var fileOpKeys []distill.PinKey
+	var fileOpKeys []reviews.PinKey
 
 	for i, p := range updated {
-		newKey := distill.NewPinKey(p.Rule, p.Region, p.Regions)
+		newKey := reviews.ProposalKey(p)
 
 		if lerr == nil && pinKeyLive(lcfg, newKey) && !pinKeyLive(lcfg, oldKeys[i]) {
 			dbOnly = append(dbOnly, p)
@@ -1476,7 +1372,7 @@ func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
 			return err
 		}
 
-		removedSet := make(map[distill.PinKey]bool, len(removed))
+		removedSet := make(map[reviews.PinKey]bool, len(removed))
 		for _, k := range removed {
 			removedSet[k] = true
 		}
@@ -1536,7 +1432,7 @@ func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
 
 // pinKeyLive reports whether lessons.yaml carries a pin with exactly
 // this identity.
-func pinKeyLive(cfg *reviews.Config, key distill.PinKey) bool {
+func pinKeyLive(cfg *reviews.Config, key reviews.PinKey) bool {
 	for _, p := range cfg.Pin {
 		if reviews.NewPinKey(p.Rule, p.Region, p.Regions) == key {
 			return true

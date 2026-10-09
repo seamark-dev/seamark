@@ -1,7 +1,8 @@
 // Package workspace resolves a repository workspace and describes its
 // index database without writing to it. The console (`seamark tui`)
-// uses it because every CLI opener either migrates the database or
-// refuses a database that holds decisions but no index run.
+// reads the index only through it, because the store opener migrates.
+// The CLI commands classify the database with Probe before they open
+// it, so both read the index meta by one rule.
 package workspace
 
 import (
@@ -20,13 +21,6 @@ import (
 // directory. The console checks this before it enters full-screen mode.
 var ErrNotDirectory = errors.New("workspace is not a directory")
 
-// Meta keys that `seamark index` writes. The store keeps them as string
-// literals, so this package repeats them with the same values.
-const (
-	metaIndexedAt = "indexed_at"
-	metaRepoRoot  = "repo_root"
-)
-
 // Workspace is a resolved repository root and its index database path.
 type Workspace struct {
 	// Root is the absolute repository root. It is the git top level
@@ -34,6 +28,7 @@ type Workspace struct {
 	Root string
 	// DBPath is the index database path. It is the --db value when set,
 	// else <Root>/.seamark/index.db, the same path `seamark index` writes.
+	// Resolve makes a --db value absolute; Locate keeps it as given.
 	DBPath string
 }
 
@@ -49,8 +44,8 @@ func Resolve(dir, dbFlag string) (Workspace, error) {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", dir, err)
 	}
 
-	// index.ResolveRoot ignores a missing directory, because git fails
-	// and it falls back to the path. This check makes the error visible.
+	// Locate ignores a missing directory, because git fails and the
+	// root falls back to the path. This check makes the error visible.
 	info, err := os.Stat(abs)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", abs, statCause(err))
@@ -60,22 +55,39 @@ func Resolve(dir, dbFlag string) (Workspace, error) {
 		return Workspace{}, fmt.Errorf("%w: %s", ErrNotDirectory, abs)
 	}
 
-	// ResolveRoot is the resolver that index.Run uses. The same rule
-	// makes the console show the database that an index build writes.
-	root, err := index.ResolveRoot(abs)
+	ws, err := Locate(abs, dbFlag)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", abs, err)
 	}
 
-	dbPath := store.DefaultPath(root)
-
 	// index.Run opens a relative --db against the process directory.
 	// The absolute form names the same file and stays valid in messages.
 	if dbFlag != "" {
-		dbPath, err = filepath.Abs(dbFlag)
+		ws.DBPath, err = filepath.Abs(dbFlag)
 		if err != nil {
 			return Workspace{}, fmt.Errorf("index database %s: %w", dbFlag, err)
 		}
+	}
+
+	return ws, nil
+}
+
+// Locate derives the root and the database path without the checks of
+// Resolve. A missing dir is no error, and a relative dbFlag stays as
+// given. The CLI commands use it, because they report a missing
+// workspace in their own words and print --db as the user wrote it.
+// It returns the resolver error unchanged for the same reason.
+func Locate(dir, dbFlag string) (Workspace, error) {
+	// ResolveRoot is the resolver that index.Run uses. The same rule
+	// makes every reader find the database that an index build writes.
+	root, err := index.ResolveRoot(dir)
+	if err != nil {
+		return Workspace{}, err
+	}
+
+	dbPath := dbFlag
+	if dbPath == "" {
+		dbPath = store.DefaultPath(root)
 	}
 
 	return Workspace{Root: root, DBPath: dbPath}, nil
@@ -150,7 +162,7 @@ type IndexProbe struct {
 	// Supported is the schema version this binary reads.
 	Supported int
 	// Root is the effective repository root. It is the meta repo_root
-	// when the index records one, the same rule the CLI applies.
+	// when the probe reads one, else the workspace root.
 	Root string
 	// IndexedAt is the last index time in Unix seconds; 0 when unknown.
 	IndexedAt int64
@@ -215,24 +227,24 @@ func probeMeta(p IndexProbe) IndexProbe {
 	}
 	defer func() { _ = st.Close() }()
 
-	at, err := st.GetMeta(metaIndexedAt)
+	at, err := st.GetMeta(store.MetaIndexedAt)
 	if err != nil {
-		return unreadable(p, fmt.Errorf("index database %s: read %s: %w", p.Path, metaIndexedAt, err))
+		return unreadable(p, fmt.Errorf("index database %s: read %s: %w", p.Path, store.MetaIndexedAt, err))
 	}
 
-	root, err := st.GetMeta(metaRepoRoot)
+	root, err := st.GetMeta(store.MetaRepoRoot)
 	if err != nil {
-		return unreadable(p, fmt.Errorf("index database %s: read %s: %w", p.Path, metaRepoRoot, err))
+		return unreadable(p, fmt.Errorf("index database %s: read %s: %w", p.Path, store.MetaRepoRoot, err))
 	}
 
-	// The CLI reads the index against the root that the index records.
-	// The same rule keeps the console and the CLI on one root.
+	// The CLI index readers and the console use the root that the index
+	// records, not the -C directory. This probe holds that rule for both.
 	if root != "" {
 		p.Root = root
 	}
 
-	// An empty indexed_at is the same test the CLI openers apply. A
-	// database from `seamark state import` holds decisions only.
+	// An empty indexed_at means that no index run completed. A database
+	// from `seamark state import` holds decisions only.
 	if at == "" {
 		p.State = IndexNotIndexed
 

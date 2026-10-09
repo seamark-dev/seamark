@@ -447,7 +447,11 @@ through an explicit `--apply` of explicit ids. Even then, seamark edits
 the file itself only if `config.yaml` opts in (`distill: {write: true}`)
 — otherwise apply prints the pin block for you to paste. Applied entries
 are inserted under your existing `pin:` section with provenance
-comments; everything hand-written stays byte-for-byte. `--prune` and
+comments; everything hand-written stays byte-for-byte. Apply never adds
+a second entry with the same rule and region set: a proposal whose pin
+the file already holds is recorded as applied without a write (left out
+of the printed block), and two selected proposals with one rule and
+region set get one entry, from the lower ID. `--prune` and
 `--retarget` obey the same write gate, remove or replace each entry
 with its provenance comment and nothing else, and refuse to write at
 all unless the result still parses with every other pin intact.
@@ -519,7 +523,9 @@ instrumented hook records it also reports injected context bytes, repeated
 in-session injections, and suppressed repeats. Per-lesson rankings keep actual
 delivery and matching opportunities separate: after one injection and three
 suppressed edits, a lesson reads `×1 delivered / ×4 matched` rather than looking
-as cold as a lesson that matched only once:
+as cold as a lesson that matched only once. Rows that tie on matches, deliveries,
+and the last firing time print by region, then symptom, so two runs on one log
+print the same order:
 
 ```text
 $ seamark lessons --stats

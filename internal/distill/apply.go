@@ -136,17 +136,6 @@ func ApplyPins(root string, ps []model.Proposal) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-// PinKey aliases the pin identity owned by the reviews package —
-// apply and prune consume it, but the identity of a pin belongs with
-// PinRule, and surfaces (report) must reach it without importing the
-// distiller.
-type PinKey = reviews.PinKey
-
-// NewPinKey re-exports reviews.NewPinKey for the apply/prune callers.
-func NewPinKey(rule, region string, regions []string) PinKey {
-	return reviews.NewPinKey(rule, region, regions)
-}
-
 // RemovePins deletes the named pins from <root>/.seamark/lessons.yaml,
 // with their provenance comments, leaving every other byte alone. It is
 // the inverse of ApplyPins and deliberately more careful: adding a
@@ -154,7 +143,11 @@ func NewPinKey(rule, region string, regions []string) PinKey {
 // destroys work. A pin already absent is not an error (the user may
 // have pruned it by hand); the result must parse AND contain exactly
 // the expected remaining pins, or nothing is written.
-func RemovePins(root string, keys []PinKey) (removed []PinKey, err error) {
+//
+// The identity of a pin belongs with reviews.PinRule, so the keys are
+// reviews.PinKey values. A surface such as report builds them without
+// the distiller.
+func RemovePins(root string, keys []reviews.PinKey) (removed []reviews.PinKey, err error) {
 	path := filepath.Join(root, ".seamark", "lessons.yaml")
 
 	data, err := os.ReadFile(path)
@@ -171,12 +164,12 @@ func RemovePins(root string, keys []PinKey) (removed []PinKey, err error) {
 		return nil, fmt.Errorf("lessons.yaml does not parse; fix it before pruning: %w", err)
 	}
 
-	drop := map[PinKey]bool{}
+	drop := map[reviews.PinKey]bool{}
 	for _, k := range keys {
 		// Heal raw-constructed keys: canonicalization is idempotent on
 		// already-canonical strings, and a bare {Rule, Region: ""} must
 		// mean repo-wide here exactly as it does everywhere else.
-		drop[NewPinKey(k.Rule, k.Region, nil)] = true
+		drop[reviews.NewPinKey(k.Rule, k.Region, nil)] = true
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -209,7 +202,7 @@ func RemovePins(root string, keys []PinKey) (removed []PinKey, err error) {
 
 		body := lines[i+1 : end]
 
-		key := NewPinKey(rule, entryRegion(body), entryRegions(body))
+		key := reviews.NewPinKey(rule, entryRegion(body), entryRegions(body))
 		if !drop[key] {
 			continue
 		}
@@ -290,7 +283,7 @@ func isProvenanceComment(line string) bool {
 }
 
 // entryRegion reads the region off a pin entry's continuation lines;
-// an entry without one is repo-wide (NewPinKey canonicalizes "").
+// an entry without one is repo-wide (reviews.NewPinKey canonicalizes "").
 func entryRegion(body []string) string {
 	for _, line := range body {
 		trimmed := strings.TrimSpace(line)
@@ -374,11 +367,11 @@ func isContinuation(line string) bool {
 // rules are gone, every other pin survives with its note intact, and no
 // other section moved. A textual edit that passes YAML parsing can
 // still have eaten a neighbour — this is what catches that.
-func verifyPruned(before, after *reviews.Config, drop map[PinKey]bool) error {
-	pinNotes := func(cfg *reviews.Config) map[PinKey]string {
-		out := map[PinKey]string{}
+func verifyPruned(before, after *reviews.Config, drop map[reviews.PinKey]bool) error {
+	pinNotes := func(cfg *reviews.Config) map[reviews.PinKey]string {
+		out := map[reviews.PinKey]string{}
 		for _, p := range cfg.Pin {
-			out[NewPinKey(p.Rule, p.Region, p.Regions)] = p.Note
+			out[reviews.NewPinKey(p.Rule, p.Region, p.Regions)] = p.Note
 		}
 
 		return out

@@ -133,7 +133,7 @@ func gather(reg *integration.Registry, st *store.Store, root string) (*Status, e
 		fn  func(v string)
 	}{
 		{"schema_version", func(v string) { s.SchemaVersion = v }},
-		{"indexed_at", func(v string) { s.IndexedAt = parseUnix(v) }},
+		{store.MetaIndexedAt, func(v string) { s.IndexedAt = parseUnix(v) }},
 		{store.MetaReviewsMinedAt, func(v string) { s.ReviewsMinedAt = parseUnix(v) }},
 		{"index_summary", func(v string) {
 			var c Coverage

@@ -53,16 +53,18 @@ func newStateExportCmd(opts *options) *cobra.Command {
 			// database — exporting right after an import-only restore is
 			// legitimate — but it refuses to fabricate a bundle from
 			// nothing.
-			dbPath, root, err := resolveDBPath(opts)
+			ws, err := resolveWorkspace(opts)
 			if err != nil {
 				return err
 			}
 
-			if _, err := os.Stat(dbPath); err != nil {
-				return errors.New("no index found; run `seamark index` first")
+			// Any stat failure counts as a missing database. An existing
+			// database goes to store.Open, which migrates an older schema.
+			if _, err := os.Stat(ws.DBPath); err != nil {
+				return errNoIndex
 			}
 
-			st, err := store.Open(dbPath)
+			st, err := store.Open(ws.DBPath)
 			if err != nil {
 				return err
 			}
@@ -74,7 +76,7 @@ func newStateExportCmd(opts *options) *cobra.Command {
 				return err
 			}
 
-			state.Repo = gitRootCommit(root)
+			state.Repo = gitRootCommit(ws.Root)
 
 			data, err := json.MarshalIndent(state, "", "  ")
 			if err != nil {
@@ -90,7 +92,7 @@ func newStateExportCmd(opts *options) *cobra.Command {
 
 			// The destination must never be the database itself — that
 			// would replace the very data being exported.
-			if samePath(outPath, dbPath) {
+			if samePath(outPath, ws.DBPath) {
 				return fmt.Errorf("state export: --out %s is the index database; choose another path", outPath)
 			}
 
@@ -169,14 +171,14 @@ given.`,
 				return errors.New("state import: trailing data after the state document")
 			}
 
-			dbPath, root, err := resolveDBPath(opts)
+			ws, err := resolveWorkspace(opts)
 			if err != nil {
 				return err
 			}
 
 			// A bundle from another repository would pollute reports and
 			// suppress distillation of unrelated evidence.
-			if local := gitRootCommit(root); !force && state.Repo != "" && local != "" && state.Repo != local {
+			if local := gitRootCommit(ws.Root); !force && state.Repo != "" && local != "" && state.Repo != local {
 				return fmt.Errorf("state import: bundle is from a different repository "+
 					"(root commit %.12s, this repository is %.12s) — pass --force to import anyway",
 					state.Repo, local)
@@ -184,7 +186,7 @@ given.`,
 
 			// Open creates the database when absent: importing into a
 			// fresh clone (before any index run) is the main use case.
-			st, err := store.Open(dbPath)
+			st, err := store.Open(ws.DBPath)
 			if err != nil {
 				return err
 			}
@@ -214,27 +216,6 @@ given.`,
 	cmd.Flags().BoolVar(&force, "force", false, "import a bundle recorded from a different repository")
 
 	return cmd
-}
-
-// resolveDBPath resolves the index location and workspace root without
-// requiring the database to exist yet. openIndex shares it — one
-// resolution rule, not two copies that drift.
-func resolveDBPath(opts *options) (dbPath, root string, err error) {
-	root, err = filepath.Abs(opts.workspace)
-	if err != nil {
-		return "", "", err
-	}
-
-	if opts.dbPath != "" {
-		return opts.dbPath, root, nil
-	}
-
-	// Mirror the indexer: the index lives at the git toplevel.
-	if r, err := gitToplevel(root); err == nil {
-		root = r
-	}
-
-	return store.DefaultPath(root), root, nil
 }
 
 // gitRootCommit identifies the repository by its root commit — stable

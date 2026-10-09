@@ -174,7 +174,7 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 		ctx, cancel := context.WithTimeout(context.Background(), historyBudget)
 		defer cancel()
 
-		root, _ := st.GetMeta("repo_root")
+		root, _ := st.GetMeta(store.MetaRepoRoot)
 		var shared map[string]bool
 		if root != "" {
 			shared = history.FileCommits(ctx, root, file)
@@ -383,7 +383,7 @@ func confidenceAnnotator(st *store.Store, applied []model.Proposal, ambient bool
 	var cited []int64
 
 	for _, p := range applied {
-		byKey[reviews.NewPinKey(p.Rule, p.Region, p.Regions)] = p
+		byKey[reviews.ProposalKey(p)] = p
 		cited = append(cited, p.Members...)
 	}
 
@@ -396,7 +396,7 @@ func confidenceAnnotator(st *store.Store, applied []model.Proposal, ambient bool
 		return nil, err
 	}
 
-	root, _ := st.GetMeta("repo_root")
+	root, _ := st.GetMeta(store.MetaRepoRoot)
 	now := time.Now()
 
 	// Memoized by pin identity: a multi-file surface asks about the
@@ -690,11 +690,11 @@ func coveredClusters(st *store.Store, cfg *reviews.Config, applied []model.Propo
 }
 
 // pinLive reports whether lessons.yaml currently carries a pin with
-// this proposal's rule and region set — the exact identity apply and
-// prune use (reviews.NewPinKey), so liveness can never disagree with
-// what those commands would write or remove.
+// this proposal's rule and region set — the exact identity every reader
+// and prune use (reviews.ProposalKey), so liveness can never disagree
+// with what prune would remove.
 func pinLive(cfg *reviews.Config, proposal model.Proposal) bool {
-	want := reviews.NewPinKey(proposal.Rule, proposal.Region, proposal.Regions)
+	want := reviews.ProposalKey(proposal)
 	_, ok := cfg.FindPin(want)
 
 	return ok

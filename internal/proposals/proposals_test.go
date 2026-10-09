@@ -295,6 +295,19 @@ func TestHealthIsTheCLIAdvisory(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to load lessons config")
 }
 
+func TestMeasureOutcomesKeepsTheCLIErrorText(t *testing.T) {
+	f := newFixture(t, true)
+
+	// A closed store fails the findings read inside the measurement.
+	require.NoError(t, f.st.Close())
+
+	applied := []model.Proposal{{ID: 1, Rule: "r", Members: []int64{1}, Status: model.ProposalApplied}}
+
+	_, err := MeasureOutcomes(f.st, reviews.DefaultConfig(), applied, nil)
+	require.Error(t, err)
+	assert.True(t, strings.HasPrefix(err.Error(), "failed to gather applied proposal outcomes: "), err.Error())
+}
+
 func TestRegionSetsEqualIgnoresOrder(t *testing.T) {
 	assert.True(t, RegionSetsEqual([]string{"api", "web"}, []string{"web/", "api"}))
 	assert.True(t, RegionSetsEqual(nil, []string{"*"}), "both are repo-wide")
@@ -315,7 +328,34 @@ func TestPackageDocNamesWhatTheCLIShares(t *testing.T) {
 	// The package doc tells a reader which rules the two surfaces share.
 	// A CLI change that calls another export must update the doc too, or
 	// the doc claims a parity that the code does not have.
-	sources, err := filepath.Glob(filepath.Join("..", "cli", "*.go"))
+	assert.Equal(t, []string{
+		"Commit", "ErrNothingSelected", "Health", "Ledgerer", "Preview", "PreviewApply",
+		"PreviewDismiss", "PreviewReconcile", "RegionSetsEqual", "Result",
+	}, exportsUsedIn(t, "cli"))
+
+	// `lessons --stats` and the console's Stats view measure outcomes
+	// through internal/lessonstats, as the doc says.
+	assert.Equal(t, []string{"MeasureOutcomes"}, exportsUsedIn(t, "lessonstats"))
+
+	file, err := parser.ParseFile(token.NewFileSet(), "proposals.go", nil, parser.PackageClauseOnly|parser.ParseComments)
+	require.NoError(t, err)
+	require.NotNil(t, file.Doc)
+
+	// The doc wraps lines, so the check joins them first.
+	doc := strings.Join(strings.Fields(file.Doc.Text()), " ")
+	assert.Contains(t, doc, "share the evidence helpers (Health and RegionSetsEqual)")
+	assert.Contains(t, doc, "the decision flow (PreviewApply, PreviewDismiss, PreviewReconcile, Commit, "+
+		"with their Ledgerer, Preview, Result and ErrNothingSelected)")
+	assert.Contains(t, doc, "use MeasureOutcomes through internal/lessonstats")
+	assert.Contains(t, doc, "Only the console uses the ledger view")
+}
+
+// exportsUsedIn returns the sorted, distinct exports of this package
+// that the non-test sources of internal/<pkg> name.
+func exportsUsedIn(t *testing.T, pkg string) []string {
+	t.Helper()
+
+	sources, err := filepath.Glob(filepath.Join("..", pkg, "*.go"))
 	require.NoError(t, err)
 	require.NotEmpty(t, sources)
 
@@ -337,14 +377,6 @@ func TestPackageDocNamesWhatTheCLIShares(t *testing.T) {
 	}
 
 	slices.Sort(used)
-	assert.Equal(t, []string{"AppliedOutcomes", "Health", "RegionSetsEqual"}, slices.Compact(used))
 
-	file, err := parser.ParseFile(token.NewFileSet(), "proposals.go", nil, parser.PackageClauseOnly|parser.ParseComments)
-	require.NoError(t, err)
-	require.NotNil(t, file.Doc)
-
-	doc := file.Doc.Text()
-	assert.Contains(t, doc, "share only the evidence helpers: Health,\nAppliedOutcomes and RegionSetsEqual")
-	assert.Contains(t, doc, "Only the console uses the ledger view")
-	assert.Contains(t, doc, "keep their own path in internal/cli")
+	return slices.Compact(used)
 }
