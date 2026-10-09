@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 
 	"github.com/seamark-dev/seamark/internal/distill"
 	domain "github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file renders a running distillation and its result (design map
@@ -86,14 +88,14 @@ func (d *distRecord) verdict() agentVerdict {
 	case d.run.internal:
 		// Groups can be sent and saved before the error, so the lead
 		// never says that nothing was sent.
-		lead := "The run stopped on an internal error: " + errText(d.run.err) + ". " + saved
+		lead := "The run stopped on an internal error: " + ui.ErrText(d.run.err) + ". " + saved
 		if c.unknown > 0 {
-			lead += " Group " + itoa(d.run.lost+1) + " was sending when the error happened, so its result is not " +
+			lead += " Group " + strconv.Itoa(d.run.lost+1) + " was sending when the error happened, so its result is not " +
 				"known. The Proposals view shows what was saved."
 		}
 
 		return agentVerdict{
-			tone: ToneFailure, word: "failed", head: "Distillation stopped on an internal error",
+			tone: ui.ToneFailure, word: "failed", head: "Distillation stopped on an internal error",
 			lead:  lead + distUnattemptedText(c) + " No pin was applied.",
 			toast: "Distillation stopped on an internal error: " + fresh + ".",
 		}
@@ -104,34 +106,34 @@ func (d *distRecord) verdict() agentVerdict {
 		}
 
 		return agentVerdict{
-			tone: ToneFailure, word: "failed", head: "Distillation stopped on a store error",
-			lead: "A store read or write failed: " + errText(cause) + ". " + saved +
+			tone: ui.ToneFailure, word: "failed", head: "Distillation stopped on a store error",
+			lead: "A store read or write failed: " + ui.ErrText(cause) + ". " + saved +
 				" The remaining groups did not run. No pin was applied.",
 			toast: "Distillation stopped on a store error: " + fresh + ".",
 		}
 	case x.Stop == distill.StopCancelled:
 		return agentVerdict{
-			tone: ToneAttention, word: "stopped", head: "Distillation stopped",
+			tone: ui.ToneAttention, word: "stopped", head: "Distillation stopped",
 			lead:  "You stopped the run. " + saved + distCancelledText(c) + distUnattemptedText(c),
 			toast: "Distillation stopped: " + propPlural(c.completed, "group", "groups") + " saved, " + fresh + ".",
 		}
 	case x.Stop == distill.StopConflict:
 		return agentVerdict{
-			tone: ToneAttention, word: "stopped", head: "Distillation stopped: an input changed",
-			lead: errText(x.StopErr) + ". " + saved + distCancelledText(c) + distUnattemptedText(c) +
+			tone: ui.ToneAttention, word: "stopped", head: "Distillation stopped: an input changed",
+			lead: ui.ErrText(x.StopErr) + ". " + saved + distCancelledText(c) + distUnattemptedText(c) +
 				" Prepare the remaining work for a new plan from the current state.",
 			toast: "Distillation stopped because an input changed: " + fresh + ".",
 		}
 	case c.completed == 0 && c.failed > 0:
 		return agentVerdict{
-			tone: ToneFailure, word: "failed", head: "Distillation failed",
+			tone: ui.ToneFailure, word: "failed", head: "Distillation failed",
 			lead: "Every group failed, so nothing was saved. The failed groups have no signature, so a new plan " +
 				"can include them. No pin was applied.",
 			toast: "Distillation failed: no group was saved.",
 		}
 	case c.failed > 0:
 		return agentVerdict{
-			tone: ToneAttention, word: "partial", head: "Distillation finished with failed groups",
+			tone: ui.ToneAttention, word: "partial", head: "Distillation finished with failed groups",
 			lead: propPlural(c.failed, "group", "groups") + " failed. " + saved + " The failed groups have no " +
 				"signature, so a new plan can include them. No pin was applied.",
 			toast: "Distillation finished with " + propPlural(c.failed, "failed group", "failed groups") + ": " +
@@ -150,7 +152,7 @@ func (d *distRecord) verdict() agentVerdict {
 	}
 
 	return agentVerdict{
-		tone: ToneSuccess, word: "completed", head: "Distillation completed", lead: lead,
+		tone: ui.ToneSuccess, word: "completed", head: "Distillation completed", lead: lead,
 		toast: "Distillation completed: " + fresh + ".",
 	}
 }
@@ -169,7 +171,7 @@ func distCancelledText(c unitCounts) string {
 	case 1:
 		out += " 1 group was cancelled before its result was saved, so it stays eligible."
 	default:
-		out += " " + itoa(c.cancelled) + " groups were cancelled before their results were saved, so they " +
+		out += " " + strconv.Itoa(c.cancelled) + " groups were cancelled before their results were saved, so they " +
 			"stay eligible."
 	}
 
@@ -191,7 +193,7 @@ func (d *distRecord) runView(w, h int) string {
 	if d.st.wide() {
 		leftW := setupSplit(w, 60)
 
-		return hjoin(1, d.summaryBox(leftW, h, d.run.sumFocus), d.runGroupsBox(w-leftW-1, h, !d.run.sumFocus))
+		return ui.Hjoin(1, d.summaryBox(leftW, h, d.run.sumFocus), d.runGroupsBox(w-leftW-1, h, !d.run.sumFocus))
 	}
 
 	if d.run.detail {
@@ -217,7 +219,7 @@ func (d *distRecord) stateLabel() string {
 func (d *distRecord) headline() string {
 	t := d.st.theme
 	g := t.Glyphs
-	spin := t.spinnerFrame(d.st.tick)
+	spin := t.SpinnerFrame(d.st.tick)
 	r := &d.run
 	n := len(r.units)
 
@@ -228,7 +230,7 @@ func (d *distRecord) headline() string {
 	}
 
 	group := func(k int) string {
-		return "group " + itoa(k+1) + " of " + itoa(n) + " " + g.Sep + " " + distRegionLabel(r.units[k].Plan.Region)
+		return "group " + strconv.Itoa(k+1) + " of " + strconv.Itoa(n) + " " + g.Sep + " " + distRegionLabel(r.units[k].Plan.Region)
 	}
 
 	// A stop from the quit question sets no stop group, so the running
@@ -248,8 +250,8 @@ func (d *distRecord) headline() string {
 	case !r.checked:
 		return t.Accent.Render(spin+" ") + t.Title.Render("Checking the plan against the current state")
 	default:
-		return t.Accent.Render(spin+" ") + t.Title.Render("Between groups "+g.Sep+" "+itoa(r.finished)+" of "+
-			itoa(n)+" done")
+		return t.Accent.Render(spin+" ") + t.Title.Render("Between groups "+g.Sep+" "+strconv.Itoa(r.finished)+" of "+
+			strconv.Itoa(n)+" done")
 	}
 }
 
@@ -257,7 +259,7 @@ func (d *distRecord) headline() string {
 // result lead, then the phases or what happened, and the next steps.
 func (d *distRecord) summaryBox(w, h int, focused bool) string {
 	t := d.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 
 	var body []string
 
@@ -267,9 +269,9 @@ func (d *distRecord) summaryBox(w, h int, focused bool) string {
 		body = d.progressLines(inner)
 	}
 
-	o := boxOpts{W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Distillation", true), Right: d.stateLabel()}
+	o := ui.BoxOpts{W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Distillation", true), Right: d.stateLabel()}
 
-	return d.st.theme.scrollBox(o, body, nil, &d.run.summary, [2]int{-1, -1}, false)
+	return d.st.theme.ScrollBox(o, body, nil, &d.run.summary, [2]int{-1, -1}, false)
 }
 
 // progressLines renders the running summary (design map §6).
@@ -285,14 +287,14 @@ func (d *distRecord) progressLines(w int) []string {
 		note = "No new group starts. Seamark waits for the running work to end; the result shows whether the " +
 			"last group was saved before the stop."
 		if r.stopAt >= 0 {
-			note = "Seamark waits for the agent process of group " + itoa(r.stopAt+1) + " to end. No new group " +
-				"starts. The result shows whether group " + itoa(r.stopAt+1) + " was saved before the stop."
+			note = "Seamark waits for the agent process of group " + strconv.Itoa(r.stopAt+1) + " to end. No new group " +
+				"starts. The result shows whether group " + strconv.Itoa(r.stopAt+1) + " was saved before the stop."
 		}
 	}
 
 	lines = append(lines, integLines(t.Muted, note, w)...)
 	lines = append(lines, "", integHeading(t, "Phases"))
-	lines = append(lines, t.phaseRows(d.phases(), d.st.tick, w)...)
+	lines = append(lines, phaseRows(t, d.phases(), d.st.tick, w)...)
 	lines = append(lines, "")
 	lines = append(lines, d.barLines(w)...)
 	lines = append(lines, "", integHeading(t, "Results so far"))
@@ -300,7 +302,7 @@ func (d *distRecord) progressLines(w int) []string {
 
 	if len(r.activity) > 0 {
 		lines = append(lines, "", integHeading(t, "Recent activity"))
-		lines = append(lines, t.activityLines(r.activity, agentActivityKeep, w)...)
+		lines = append(lines, activityLines(t, r.activity, agentActivityKeep, w)...)
 	}
 
 	return lines
@@ -325,13 +327,13 @@ func (d *distRecord) phases() []phaseRow {
 	if ids := distProposalIDs(d.prev.preview.Plan.Cleanup); len(ids) > 0 {
 		clean := phaseRow{label: "Remove stale pending", note: propIDList(ids) + " before the first group"}
 		if d.swept.done {
-			clean.state, clean.note = phaseDone, itoa(d.swept.removed)+" removed: "+propIDList(ids)
+			clean.state, clean.note = phaseDone, strconv.Itoa(d.swept.removed)+" removed: "+propIDList(ids)
 		}
 
 		rows = append(rows, clean)
 	}
 
-	send := phaseRow{label: "Send groups to the agent", note: itoa(r.finished) + " of " + itoa(n) + " done"}
+	send := phaseRow{label: "Send groups to the agent", note: strconv.Itoa(r.finished) + " of " + strconv.Itoa(n) + " done"}
 	if r.checked && !r.stopped {
 		send.state = phaseActive
 	}
@@ -349,12 +351,12 @@ func (d *distRecord) barLines(w int) []string {
 	n := len(d.outcomes())
 	saved := distCount(d.outcomes()).completed
 
-	count := itoa(saved) + " / " + itoa(n)
-	barW := max(4, min(40, w-width(count)-4))
+	count := strconv.Itoa(saved) + " / " + strconv.Itoa(n)
+	barW := max(4, min(40, w-ui.Width(count)-4))
 
 	return []string{
-		t.Heading.Render("GROUPS") + t.Faint.Render("  "+itoa(saved)+" of "+itoa(n)+" saved"),
-		t.bar(saved, n, barW, ToneSuccess) + "    " + t.Muted.Render(count),
+		t.Heading.Render("GROUPS") + t.Faint.Render("  "+strconv.Itoa(saved)+" of "+strconv.Itoa(n)+" saved"),
+		t.Bar(saved, n, barW, ui.ToneSuccess) + "    " + t.Muted.Render(count),
 	}
 }
 
@@ -365,10 +367,10 @@ func (d *distRecord) barLine(w int) string {
 	n := len(d.outcomes())
 	saved := distCount(d.outcomes()).completed
 
-	count := itoa(saved) + " of " + itoa(n) + " saved"
-	barW := max(4, min(40, w-width(count)-4))
+	count := strconv.Itoa(saved) + " of " + strconv.Itoa(n) + " saved"
+	barW := max(4, min(40, w-ui.Width(count)-4))
 
-	return t.bar(saved, n, barW, ToneSuccess) + "    " + t.Muted.Render(count)
+	return t.Bar(saved, n, barW, ui.ToneSuccess) + "    " + t.Muted.Render(count)
 }
 
 // soFar renders the durable results of a running record.
@@ -437,7 +439,7 @@ func (d *distRecord) usageText() string {
 	case sent == 0 && pending == 0:
 		return t.Muted.Render("no agent traffic yet")
 	case sent == 0:
-		return t.Body.Render(agentTokens(pending)+" tokens sent to group "+itoa(k+1)) + " " +
+		return t.Body.Render(agentTokens(pending)+" tokens sent to group "+strconv.Itoa(k+1)) + " " +
 			t.Faint.Render("(estimated)") + t.Muted.Render("; reply pending")
 	}
 
@@ -445,7 +447,7 @@ func (d *distRecord) usageText() string {
 		" " + t.Faint.Render("(estimated)")
 
 	if pending > 0 {
-		text += t.Muted.Render("; group " + itoa(k+1) + " reply pending")
+		text += t.Muted.Render("; group " + strconv.Itoa(k+1) + " reply pending")
 	}
 
 	if d.step == stepResult {
@@ -483,7 +485,7 @@ func (d *distRecord) happened() [][2]string {
 
 	proposals := t.Muted.Render("none")
 	if len(ids) > 0 {
-		proposals = t.Body.Render(itoa(len(ids))+" new, pending: ") + t.Body.Render(propIDList(ids))
+		proposals = t.Body.Render(strconv.Itoa(len(ids))+" new, pending: ") + t.Body.Render(propIDList(ids))
 	}
 
 	rows := [][2]string{
@@ -496,7 +498,7 @@ func (d *distRecord) happened() [][2]string {
 		rows = append(rows, [2]string{"Cleanup", d.cleanupText(c)})
 	}
 
-	signatures := itoa(c.completed) + " recorded"
+	signatures := strconv.Itoa(c.completed) + " recorded"
 	if open := c.failed + c.cancelled + c.unknown; open > 0 {
 		signatures += "; " + propPlural(open, "group without one stays", "groups without one stay") + " eligible"
 	}
@@ -532,7 +534,7 @@ func (d *distRecord) cleanupText(c unitCounts) string {
 		return t.Muted.Render("not run: the run ended before the cleanup")
 	}
 
-	text := itoa(x.Removed) + " of " + itoa(n) + " stale pending removed: " + propIDList(x.CleanupIDs)
+	text := strconv.Itoa(x.Removed) + " of " + strconv.Itoa(n) + " stale pending removed: " + propIDList(x.CleanupIDs)
 	if x.Removed < n {
 		text += "; the others were decided meanwhile"
 	}
@@ -546,7 +548,7 @@ func (d *distRecord) nextLines(w int) []string {
 	t := d.st.theme
 
 	row := func(k, text string) []string {
-		return integHanging(t.Key.Render(padRight(k, 7)), t.Body, text, w)
+		return integHanging(t.Key.Render(ui.PadRight(k, 7)), t.Body, text, w)
 	}
 
 	var lines []string
@@ -564,7 +566,7 @@ func (d *distRecord) nextLines(w int) []string {
 // state, then the detail of the cursor group.
 func (d *distRecord) runGroupsBox(w, h int, focused bool) string {
 	t := d.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 	outs := d.outcomes()
 
 	d.run.cursor = max(0, min(d.run.cursor, len(outs)-1))
@@ -573,16 +575,16 @@ func (d *distRecord) runGroupsBox(w, h int, focused bool) string {
 	body = append(body, "")
 	body = append(body, d.groupDetail(inner)...)
 
-	right := itoa(d.run.finished) + " of " + itoa(len(outs)) + " done"
+	right := strconv.Itoa(d.run.finished) + " of " + strconv.Itoa(len(outs)) + " done"
 	if d.step == stepResult {
-		right = itoa(len(outs)-d.counts().unattempted) + " of " + itoa(len(outs)) + " ran"
+		right = strconv.Itoa(len(outs)-d.counts().unattempted) + " of " + strconv.Itoa(len(outs)) + " ran"
 	}
 
-	o := boxOpts{
+	o := ui.BoxOpts{
 		W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Groups", focused), Right: t.Muted.Render(right),
 	}
 
-	return d.st.theme.scrollBox(o, body, nil, &d.run.list, keep, d.run.follow)
+	return d.st.theme.ScrollBox(o, body, nil, &d.run.list, keep, d.run.follow)
 }
 
 // runGroupLines renders the group table. find adds the findings column,
@@ -601,16 +603,16 @@ func (d *distRecord) runGroupLines(w int, focused, find bool) (lines []string, k
 	regW := max(6, w-2-agentGlyphW-distRunIdxW-findW-outW)
 
 	cells := func(marker, glyph, idx, region, found, outcome string) string {
-		cs := []colCell{cell(marker, 2), cell(glyph, agentGlyphW), cell(idx, distRunIdxW), cell(region, regW)}
+		cs := []ui.ColCell{ui.Cell(marker, 2), ui.Cell(glyph, agentGlyphW), ui.Cell(idx, distRunIdxW), ui.Cell(region, regW)}
 		if find {
-			cs = append(cs, cell(found, findW))
+			cs = append(cs, ui.Cell(found, findW))
 		}
 
-		return integRow(t, append(cs, cell(outcome, outW))...)
+		return integRow(t, append(cs, ui.Cell(outcome, outW))...)
 	}
 
-	lines = []string{t.Faint.Render(cells("", "", padLeft("#", distRunIdxW-1), "Region",
-		padLeft("Find", findW-2), "Outcome"))}
+	lines = []string{t.Faint.Render(cells("", "", ui.PadLeft("#", distRunIdxW-1), "Region",
+		ui.PadLeft("Find", findW-2), "Outcome"))}
 	keep = [2]int{-1, -1}
 
 	for i, o := range outs {
@@ -623,12 +625,12 @@ func (d *distRecord) runGroupLines(w int, focused, find bool) (lines []string, k
 
 		glyph, outcome := d.outcomeCell(i, o)
 
-		row := cells(marker, glyph, t.Muted.Render(padLeft(itoa(i+1), distRunIdxW-1)),
-			region.Render(distRegionLabel(o.Plan.Region)), t.Body.Render(padLeft(itoa(o.Plan.Findings), findW-2)),
+		row := cells(marker, glyph, t.Muted.Render(ui.PadLeft(strconv.Itoa(i+1), distRunIdxW-1)),
+			region.Render(distRegionLabel(o.Plan.Region)), t.Body.Render(ui.PadLeft(strconv.Itoa(o.Plan.Findings), findW-2)),
 			outcome)
 
 		if cursor && focused {
-			row = t.highlight(row, w, bgSel)
+			row = t.Highlight(row, w, ui.BgSel)
 		}
 
 		if cursor {
@@ -672,7 +674,7 @@ func (d *distRecord) outcomeCell(i int, o distill.GroupOutcome) (glyph, words st
 	case i == d.lostGroup():
 		return t.Attention.Render(g.Warn), t.Attention.Render("result unknown")
 	case d.step == stepRunning && i == d.run.sending:
-		return t.Accent.Render(t.spinnerFrame(d.st.tick)), t.Accent.Render("sending" + g.Ellipsis)
+		return t.Accent.Render(t.SpinnerFrame(d.st.tick)), t.Accent.Render("sending" + g.Ellipsis)
 	case d.step == stepRunning:
 		return t.Faint.Render(g.Hollow), t.Faint.Render("waiting")
 	default:
@@ -704,31 +706,31 @@ func (d *distRecord) groupDetail(w int) []string {
 	k := d.run.cursor
 	o := outs[k]
 
-	lines := []string{t.Heading.Render("GROUP "+itoa(k+1)) + t.Muted.Render(" "+t.Glyphs.Sep+" "+
+	lines := []string{t.Heading.Render("GROUP "+strconv.Itoa(k+1)) + t.Muted.Render(" "+t.Glyphs.Sep+" "+
 		distRegionLabel(o.Plan.Region))}
 
 	switch o.Status {
 	case distill.GroupFailed:
-		lines = append(lines, propNote(t, ToneFailure, "failed: "+agentFailWords(o.Failure)+": "+errText(o.Err)+
+		lines = append(lines, propNote(t, ui.ToneFailure, "failed: "+agentFailWords(o.Failure)+": "+ui.ErrText(o.Err)+
 			". The group has no signature, so a new plan can include it.", w)...)
 	case distill.GroupCancelled:
-		lines = append(lines, propNote(t, ToneAttention, "cancelled before its result was saved, so it stays "+
+		lines = append(lines, propNote(t, ui.ToneAttention, "cancelled before its result was saved, so it stays "+
 			"eligible.", w)...)
 	case distill.GroupSkipped:
-		lines = append(lines, propNote(t, ToneNeutral, "skipped: "+errText(o.Err), w)...)
+		lines = append(lines, propNote(t, ui.ToneNeutral, "skipped: "+ui.ErrText(o.Err), w)...)
 	}
 
 	if k == d.lostGroup() {
-		lines = append(lines, propNote(t, ToneAttention, "result unknown: the agent call started, then the run "+
+		lines = append(lines, propNote(t, ui.ToneAttention, "result unknown: the agent call started, then the run "+
 			"stopped on an internal error. The Proposals view shows what was saved.", w)...)
 	}
 
 	for _, p := range o.Proposals {
-		lines = append(lines, integHanging(t.Body.Render(padRight(propID(p.ID), 6)), t.Body, oneLine(p.Rule), w)...)
+		lines = append(lines, integHanging(t.Body.Render(ui.PadRight(propID(p.ID), 6)), t.Body, ui.OneLine(p.Rule), w)...)
 	}
 
 	for _, dup := range o.Duplicates {
-		lines = append(lines, integLines(t.Faint, "dropped "+oneLine(dup.Rule)+": restates "+oneLine(dup.Of), w)...)
+		lines = append(lines, integLines(t.Faint, "dropped "+ui.OneLine(dup.Rule)+": restates "+ui.OneLine(dup.Of), w)...)
 	}
 
 	lines = append(lines, "", integHeading(t, "Evidence"))
@@ -745,7 +747,7 @@ func (d *distRecord) groupDetail(w int) []string {
 // cursor only after a move. tab shows the Groups pane.
 func (d *distRecord) compactBox(w, h int) string {
 	t := d.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 	r := &d.run
 
 	head := []string{d.headline()}
@@ -776,12 +778,12 @@ func (d *distRecord) compactBox(w, h int) string {
 			"automatically.", inner)...)
 	case len(r.activity) > 0:
 		body = append(body, "")
-		body = append(body, t.activityLines(r.activity, 1, inner)...)
+		body = append(body, activityLines(t, r.activity, 1, inner)...)
 	}
 
-	o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Distillation", true), Right: d.stateLabel()}
+	o := ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Distillation", true), Right: d.stateLabel()}
 
-	return d.st.theme.pinnedBox(o, head, body, nil, &r.list, keep, follow)
+	return d.st.theme.PinnedBox(o, head, body, nil, &r.list, keep, follow)
 }
 
 // shortStopNote is the one-line stop note of the compact box. The stop
@@ -789,7 +791,7 @@ func (d *distRecord) compactBox(w, h int) string {
 func (d *distRecord) shortStopNote() string {
 	switch {
 	case d.stopping() && d.run.stopAt >= 0:
-		return "Seamark waits for the agent call of group " + itoa(d.run.stopAt+1) + " to end."
+		return "Seamark waits for the agent call of group " + strconv.Itoa(d.run.stopAt+1) + " to end."
 	case d.stopping():
 		return "Seamark waits for the running work to end."
 	default:
@@ -818,18 +820,18 @@ func (d *distRecord) stopModal(w, h int) string {
 	text := "Seamark starts no new group and ends the run at the next check. Groups saved so far stay " +
 		"saved. Nothing is retried."
 	if k := d.run.sending; k >= 0 {
-		text = "Seamark cancels the agent call of group " + itoa(k+1) + " and starts no new group. Groups saved " +
+		text = "Seamark cancels the agent call of group " + strconv.Itoa(k+1) + " and starts no new group. Groups saved " +
 			"so far stay saved. A provider can still bill the cancelled call. Nothing is retried."
 	}
 
-	return runStopModal(d.st.theme, "Stop the distillation?", text, withHelp(agentKeys.Start, "y", "stop the run"), w, h)
+	return runStopModal(d.st.theme, "Stop the distillation?", text, ui.WithHelp(agentKeys.Start, "y", "stop the run"), w, h)
 }
 
 // cleanModal asks before the stale-pending cleanup. It lists every row,
 // because y removes exactly these rows and nothing else.
 func (d *distRecord) cleanModal(w, h int) string {
 	t := d.st.theme
-	inner := modalBodyWidth(modalMinW, w)
+	inner := ui.ModalBodyWidth(ui.ModalMinW, w)
 	rows := d.prev.preview.Plan.Cleanup
 
 	body := integLines(t.Body, "Seamark deletes these pending proposals. Their evidence group no longer "+
@@ -837,24 +839,24 @@ func (d *distRecord) cleanModal(w, h int) string {
 	body = append(body, "")
 
 	for _, p := range rows {
-		body = append(body, integHanging(t.Attention.Render(padRight(propID(p.ID), 7)), t.Body,
-			oneLine(p.Rule)+" "+t.Glyphs.Sep+" "+propRegionLabel(p), inner)...)
+		body = append(body, integHanging(t.Attention.Render(ui.PadRight(propID(p.ID), 7)), t.Body,
+			ui.OneLine(p.Rule)+" "+t.Glyphs.Sep+" "+propRegionLabel(p), inner)...)
 	}
 
-	body = append(body, t.effectLines(
-		[]effect{{glyph: t.Glyphs.Del, tone: ToneFailure, text: "delete the listed rows that are still pending"}},
+	body = append(body, effectLines(t,
+		[]effect{{glyph: t.Glyphs.Del, tone: ui.ToneFailure, text: "delete the listed rows that are still pending"}},
 		[]string{"call the agent", "change applied pins or lessons.yaml: this is not pin pruning",
 			"delete a row that another writer decided meanwhile"}, inner)...)
 
 	n := len(rows)
 
-	return t.modal(modalOpts{
+	return t.Modal(ui.ModalOpts{
 		Title: t.TabActive.Render("Remove") + t.Body.Render(" "+propPlural(n, "stale pending proposal",
 			"stale pending proposals")+"?"),
 		Body: body,
 		Actions: []key.Binding{
-			withHelp(agentKeys.Start, "y", "remove "+propPlural(n, "proposal", "proposals")),
-			withHelp(nkeys.Back, "esc", "keep them"),
+			ui.WithHelp(agentKeys.Start, "y", "remove "+propPlural(n, "proposal", "proposals")),
+			ui.WithHelp(ui.Nav.Back, "esc", "keep them"),
 		},
 	}, &d.clean.scroll, w, h)
 }

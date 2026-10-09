@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/redact"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file holds the parts that the two agent run records share. An
@@ -165,8 +167,8 @@ type agentPreview[P any] struct {
 	// distillation, or an item of an extraction in send order.
 	cursor int
 	follow bool
-	list   scrollState
-	notes  scrollState
+	list   ui.ScrollState
+	notes  ui.ScrollState
 	// planFocus gives the keys to the Plan pane in the wide layout;
 	// listOpen shows the list pane (Groups or Proposals) in the compact
 	// layout.
@@ -225,8 +227,8 @@ type agentProgress[X, U any] struct {
 	// compact result opens at its top and follows the cursor only after
 	// a move.
 	moved    bool
-	list     scrollState
-	summary  scrollState
+	list     ui.ScrollState
+	summary  ui.ScrollState
 	sumFocus bool
 	// detail shows the list pane in the compact layout.
 	detail bool
@@ -348,7 +350,7 @@ type unitCounts struct {
 // example "3 saved". Every other count shows only when it is not 0.
 // The caller joins the parts with its own separator.
 func (c unitCounts) parts(done string) []string {
-	parts := []string{itoa(c.completed) + " " + done}
+	parts := []string{strconv.Itoa(c.completed) + " " + done}
 
 	for _, p := range []struct {
 		n    int
@@ -358,7 +360,7 @@ func (c unitCounts) parts(done string) []string {
 		{c.unattempted, " not attempted"},
 	} {
 		if p.n > 0 {
-			parts = append(parts, itoa(p.n)+p.word)
+			parts = append(parts, strconv.Itoa(p.n)+p.word)
 		}
 	}
 
@@ -370,7 +372,7 @@ func (c unitCounts) parts(done string) []string {
 // toast. A run with a failed, cancelled or unattempted unit never reads
 // as a success (spec R-8). Each workflow writes its own words.
 type agentVerdict struct {
-	tone  Tone
+	tone  ui.Tone
 	word  string
 	head  string
 	lead  string
@@ -394,9 +396,9 @@ func agentWait(ch <-chan tea.Msg) tea.Cmd {
 // whether the key was one of them.
 func cursorKey(msg tea.KeyMsg, cursor *int, n int) bool {
 	switch {
-	case key.Matches(msg, nkeys.Up):
+	case key.Matches(msg, ui.Nav.Up):
 		*cursor = max(0, *cursor-1)
-	case key.Matches(msg, nkeys.Down):
+	case key.Matches(msg, ui.Nav.Down):
 		*cursor = max(0, min(n-1, *cursor+1))
 	default:
 		return false
@@ -408,7 +410,7 @@ func cursorKey(msg tea.KeyMsg, cursor *int, n int) bool {
 // countSep joins two counts in one line, for example "3 proposals ·
 // ~344 tokens". The ASCII set uses a comma, because its separator "/"
 // makes two counts read as a fraction.
-func countSep(t *Theme) string {
+func countSep(t *ui.Theme) string {
 	if t.ASCII {
 		return ", "
 	}
@@ -465,19 +467,19 @@ func agentKind(name string, custom bool) string {
 		return "custom agent.argv"
 	}
 
-	return "preset " + oneLine(name)
+	return "preset " + ui.OneLine(name)
 }
 
 // agentText renders the agent as "<argv> · <kind>" (design map §4 and
 // §5). Every step that names the agent uses it, so one agent reads the
 // same in both records. room > 0 cuts a long command line before the
 // kind, so the kind always shows; room <= 0 leaves the cut to the caller.
-func agentText(t *Theme, argv []string, kind string, room int) string {
+func agentText(t *ui.Theme, argv []string, kind string, room int) string {
 	tail := " " + t.Glyphs.Sep + " " + kind
 	cmd := agentArgv(argv)
 
-	if room > 0 && width(cmd)+width(tail) > room {
-		cmd = truncate(cmd, max(1, room-width(tail)), t.Glyphs.Ellipsis)
+	if room > 0 && ui.Width(cmd)+ui.Width(tail) > room {
+		cmd = ui.Truncate(cmd, max(1, room-ui.Width(tail)), t.Glyphs.Ellipsis)
 	}
 
 	return t.Body.Render(cmd) + t.Muted.Render(tail)
@@ -489,7 +491,7 @@ func agentText(t *Theme, argv []string, kind string, room int) string {
 // code that runs after y, and "[REDACTED]" would hide it behind a word
 // that reads as a safety measure.
 func agentArgv(argv []string) string {
-	return oneLine(redact.SecretsExcept(strings.Join(argv, " "), shellActive))
+	return ui.OneLine(redact.SecretsExcept(strings.Join(argv, " "), shellActive))
 }
 
 // shellActive reports text that a shell runs or redirects: a command
@@ -524,8 +526,8 @@ func appendActivity(lines []string, at time.Time, text string, keep int) []strin
 // its box border: "stopping…" after a stop request, else the spinner
 // and the elapsed time. The caller shows the verdict badge of a result
 // itself, because only it knows when its result exists.
-func runStateLabel(t *Theme, tick int, stopping bool, started time.Time) string {
-	spin := t.spinnerFrame(tick)
+func runStateLabel(t *ui.Theme, tick int, stopping bool, started time.Time) string {
+	spin := t.SpinnerFrame(tick)
 
 	if stopping {
 		return t.Attention.Render(spin + " stopping" + t.Glyphs.Ellipsis)
@@ -538,13 +540,13 @@ func runStateLabel(t *Theme, tick int, stopping bool, started time.Time) string 
 // the sentences of text, and the two answers. stop is the y answer
 // with its words, for example "stop the run". It is at most 64 cells
 // wide, like the quit question (design map §6).
-func runStopModal(t *Theme, title, text string, stop key.Binding, w, h int) string {
+func runStopModal(t *ui.Theme, title, text string, stop key.Binding, w, h int) string {
 	area := min(w, 68)
 
-	return t.modal(modalOpts{
+	return t.Modal(ui.ModalOpts{
 		Title:   t.Title.Render(title),
-		Body:    integLines(t.Body, text, modalBodyWidth(64, area)),
-		Actions: []key.Binding{stop, withHelp(nkeys.Back, "esc", "keep running")},
+		Body:    integLines(t.Body, text, ui.ModalBodyWidth(64, area)),
+		Actions: []key.Binding{stop, ui.WithHelp(ui.Nav.Back, "esc", "keep running")},
 		MinW:    64,
 	}, nil, area, h)
 }

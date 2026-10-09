@@ -6,6 +6,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The draft model of the Settings destination. A draft holds one
@@ -420,10 +421,10 @@ func (s *settingsScreen) draftValue(e settings.Edit) string {
 		case e.Reset && s.argvStays():
 			return "not set"
 		case e.Reset:
-			return oneLine(st.Default)
+			return ui.OneLine(st.Default)
 		}
 
-		return oneLine(e.String)
+		return ui.OneLine(e.String)
 	case settings.AgentArgv:
 		return "removed"
 	case settings.DistillWrite:
@@ -431,7 +432,7 @@ func (s *settingsScreen) draftValue(e settings.Edit) string {
 	case settings.ReviewWindow:
 		switch {
 		case e.Reset:
-			return oneLine(st.Default)
+			return ui.OneLine(st.Default)
 		case e.Unlimited:
 			return "unlimited"
 		default:
@@ -459,7 +460,7 @@ func (s *settingsScreen) draftDetail(e settings.Edit) string {
 	case e.Reset:
 		return "remove the key; the default " + s.draftValue(e) + " applies"
 	case e.Field == settings.IndexExclude:
-		return oneLine(strings.Join(e.List, ", "))
+		return ui.OneLine(strings.Join(e.List, ", "))
 	case e.Field == settings.ReviewWindow && e.Unlimited:
 		return "unlimited (window_days: 0)"
 	default:
@@ -481,11 +482,11 @@ func (s *settingsScreen) currentValue(f settings.Field) (text string, known bool
 	case settings.AgentCLI:
 		if st.Source == settings.SourceShadowed {
 			// The reader value also covers a key behind an alias, which
-			// the stored state does not find. diag removes secret-shaped
+			// the stored state does not find. ui.Diag removes secret-shaped
 			// values, because a wrong value such as a command can hold a
 			// token. It also removes the C1 controls and bidi overrides.
 			if snap.Agent != nil && snap.Agent.Agent.CLI != "" {
-				return diag(snap.Agent.Agent.CLI), true
+				return ui.Diag(snap.Agent.Agent.CLI), true
 			}
 
 			return "not set", true
@@ -504,5 +505,5 @@ func (s *settingsScreen) currentValue(f settings.Field) (text string, known bool
 		}
 	}
 
-	return oneLine(st.Effective), true
+	return ui.OneLine(st.Effective), true
 }

@@ -3,12 +3,14 @@ package tui
 import (
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -37,7 +39,7 @@ var ovGroupNames = [ovGroupCount]string{"Summary", "Action", "Optional", "Unsupp
 // ovGroupTones are the tones of the group glyphs: "!" for action, "·"
 // for optional, "◌" for unsupported and "?" for unknown. An item with
 // the failure tone keeps it, so a broken state stays red.
-var ovGroupTones = [ovGroupCount]Tone{ToneNeutral, ToneAttention, ToneNeutral, ToneUnsupported, ToneUnknown}
+var ovGroupTones = [ovGroupCount]ui.Tone{ui.ToneNeutral, ui.ToneAttention, ui.ToneNeutral, ui.ToneUnsupported, ui.ToneUnknown}
 
 // ovSection is one titled block of the detail pane, for example EFFECT
 // or ABOUT THE HOOK. The text is raw; the view sanitizes it.
@@ -77,7 +79,7 @@ type ovItem struct {
 	// across refreshes.
 	key   string
 	group ovGroup
-	tone  Tone
+	tone  ui.Tone
 	// badge names the underlying severity or state, for example "warn"
 	// or "partial". Doctor severities stay as doctor reports them.
 	badge string
@@ -183,11 +185,11 @@ func (o *overview) attentionCount() (n int, ok bool) {
 
 // ovToneRank orders items inside a group: broken, then attention, then
 // the rest.
-func ovToneRank(t Tone) int {
+func ovToneRank(t ui.Tone) int {
 	switch t {
-	case ToneFailure:
+	case ui.ToneFailure:
 		return 0
-	case ToneAttention:
+	case ui.ToneAttention:
 		return 1
 	default:
 		return 2
@@ -198,9 +200,9 @@ func ovToneRank(t Tone) int {
 // summary of the collapsed layout keeps one value per card, and this
 // item keeps every card fact reachable there.
 func (o *overview) summaryItem() ovItem {
-	tone, badge := ToneNeutral, "all facts"
+	tone, badge := ui.ToneNeutral, "all facts"
 	if o.summaryStale() {
-		tone, badge = ToneAttention, "stale"
+		tone, badge = ui.ToneAttention, "stale"
 	}
 
 	return ovItem{
@@ -235,13 +237,13 @@ func (o *overview) indexItems() []ovItem {
 		path = o.st.svc.DBPath()
 	}
 
-	schema := "The database uses schema v" + itoa(v.Probe.Schema) + ". This seamark reads v" +
-		itoa(v.Probe.Supported) + "."
+	schema := "The database uses schema v" + strconv.Itoa(v.Probe.Schema) + ". This seamark reads v" +
+		strconv.Itoa(v.Probe.Supported) + "."
 
 	switch v.Probe.State {
 	case workspace.IndexAbsent:
 		return []ovItem{{
-			key: "index:state", group: ovActionable, tone: ToneAttention, badge: "absent",
+			key: "index:state", group: ovActionable, tone: ui.ToneAttention, badge: "absent",
 			title: "No index yet", source: "index database", area: "index",
 			body: []string{
 				"No index database exists at " + path + ".",
@@ -251,17 +253,17 @@ func (o *overview) indexItems() []ovItem {
 		}}
 	case workspace.IndexUnreadable:
 		return []ovItem{{
-			key: "index:state", group: ovActionable, tone: ToneFailure, badge: "unreadable",
+			key: "index:state", group: ovActionable, tone: ui.ToneFailure, badge: "unreadable",
 			title: "Index unreadable", source: "index database", area: "index",
 			body: []string{
 				"The database file at " + path + " exists, but Seamark cannot read it.",
-				"Reason: " + errText(v.Probe.Err),
+				"Reason: " + ui.ErrText(v.Probe.Err),
 			},
 			fix: o.doctorFix("integrity", "index"), act: ovBuildAction,
 		}}
 	case workspace.IndexNewer:
 		return []ovItem{{
-			key: "index:state", group: ovActionable, tone: ToneFailure, badge: "newer schema",
+			key: "index:state", group: ovActionable, tone: ui.ToneFailure, badge: "newer schema",
 			title: "Index written by a newer seamark", source: "index database", area: "index",
 			body: []string{
 				schema,
@@ -270,7 +272,7 @@ func (o *overview) indexItems() []ovItem {
 		}}
 	case workspace.IndexOlder:
 		return []ovItem{{
-			key: "index:state", group: ovActionable, tone: ToneAttention, badge: "older schema",
+			key: "index:state", group: ovActionable, tone: ui.ToneAttention, badge: "older schema",
 			title: "Index needs an upgrade", source: "index database", area: "index",
 			body: []string{
 				schema + " The console opens the index read-only, so it cannot use this database.",
@@ -280,7 +282,7 @@ func (o *overview) indexItems() []ovItem {
 		}}
 	case workspace.IndexNotIndexed:
 		return []ovItem{{
-			key: "index:state", group: ovActionable, tone: ToneAttention, badge: "not indexed",
+			key: "index:state", group: ovActionable, tone: ui.ToneAttention, badge: "not indexed",
 			title: "Index has decisions but no index run", source: "index database", area: "index",
 			body: []string{
 				"The database holds decisions, for example from `seamark state import`, but no index run.",
@@ -297,10 +299,10 @@ func (o *overview) indexItems() []ovItem {
 // no earlier snapshot to show.
 func ovHealthFailedItem(err error) ovItem {
 	return ovItem{
-		key: "index:health", group: ovActionable, tone: ToneFailure, badge: "read failed",
+		key: "index:health", group: ovActionable, tone: ui.ToneFailure, badge: "read failed",
 		title: "Semantic health unreadable", source: "seamark status (read-only)", area: "index",
 		body: []string{
-			"The index is ready, but reading its semantic health failed: " + errText(err),
+			"The index is ready, but reading its semantic health failed: " + ui.ErrText(err),
 			"Refresh the view (r) to read it again. The CLI reads the same data.",
 		},
 		fix: "seamark status",
@@ -326,7 +328,7 @@ func (o *overview) healthItems(v IndexView) []ovItem {
 		}
 
 		items = append(items, ovItem{
-			key: "index:freshness", group: ovActionable, tone: ToneAttention, badge: "stale",
+			key: "index:freshness", group: ovActionable, tone: ui.ToneAttention, badge: "stale",
 			title: "Index is stale", source: source, area: "index",
 			body: []string{
 				"Files changed since the last index run, so answers can miss recent changes.",
@@ -336,7 +338,7 @@ func (o *overview) healthItems(v IndexView) []ovItem {
 		})
 	default:
 		items = append(items, ovItem{
-			key: "index:freshness", group: ovUnknown, tone: ToneUnknown, badge: "unknown",
+			key: "index:freshness", group: ovUnknown, tone: ui.ToneUnknown, badge: "unknown",
 			title: "Index freshness unknown", source: "index freshness",
 			body: []string{
 				"The index records no git fingerprint, for example outside a git repository. " +
@@ -349,7 +351,7 @@ func (o *overview) healthItems(v IndexView) []ovItem {
 
 	if !s.Coverage.Known {
 		items = append(items, ovItem{
-			key: "index:coverage", group: ovUnknown, tone: ToneUnknown, badge: "unknown",
+			key: "index:coverage", group: ovUnknown, tone: ui.ToneUnknown, badge: "unknown",
 			title: "Index coverage unknown", source: "index coverage",
 			body: []string{
 				"An older index did not record its file coverage, so Seamark cannot tell how many files it parsed.",
@@ -362,7 +364,7 @@ func (o *overview) healthItems(v IndexView) []ovItem {
 	if s.Coverage.ParseErrors > 0 {
 		n := s.Coverage.ParseErrors
 		items = append(items, ovItem{
-			key: "index:parse", group: ovActionable, tone: ToneAttention, badge: "parse errors",
+			key: "index:parse", group: ovActionable, tone: ui.ToneAttention, badge: "parse errors",
 			title: ovPlural(n, "file fails", "files fail") + " to parse", source: "index coverage",
 			body: []string{
 				ovPlural(n, "file", "files") + " failed to parse in the last index run. " +
@@ -386,7 +388,7 @@ func (o *overview) healthItems(v IndexView) []ovItem {
 // deletions.
 func ovDeletedItem(n int) ovItem {
 	return ovItem{
-		key: "index:deleted", group: ovOptional, tone: ToneNeutral, badge: "not staged",
+		key: "index:deleted", group: ovOptional, tone: ui.ToneNeutral, badge: "not staged",
 		title: ovPlural(n, "tracked file", "tracked files") + " deleted in the working tree", source: "index coverage",
 		body: []string{
 			"Git tracks " + ovPlural(n, "path", "paths") + " that the working tree no longer has. The " +
@@ -618,7 +620,7 @@ func ovClientItems(insp integration.Inspection, dot string) []ovItem {
 
 	if nothing {
 		items = append(items, ovItem{
-			key: "client:" + id, group: ovOptional, tone: ToneNeutral, badge: "not set up",
+			key: "client:" + id, group: ovOptional, tone: ui.ToneNeutral, badge: "not set up",
 			title: name + dot + "not set up", source: name + dot + "integration",
 			body: []string{
 				name + " has no Seamark configuration in this repository. Setting it up is optional.",
@@ -658,7 +660,7 @@ func ovCapabilityItem(insp integration.Inspection, c integration.CapabilityInspe
 
 	switch {
 	case !c.Supported:
-		it.group, it.tone, it.badge = ovUnsupported, ToneUnsupported, "not supported"
+		it.group, it.tone, it.badge = ovUnsupported, ui.ToneUnsupported, "not supported"
 		it.title = name + dot + short + " not supported"
 		it.body = []string{name + " does not offer this capability, so Seamark cannot configure it."}
 		it.fix = ""
@@ -671,21 +673,21 @@ func ovCapabilityItem(insp integration.Inspection, c integration.CapabilityInspe
 	case c.State == integration.StateAbsent && !ovSetupInstalls(insp, c.Capability):
 		// The client can handle the event, but setup never installs
 		// this hook for it. Nothing is missing and nothing can be added.
-		it.group, it.tone, it.badge = ovUnsupported, ToneUnsupported, "not installed by setup"
+		it.group, it.tone, it.badge = ovUnsupported, ui.ToneUnsupported, "not installed by setup"
 		it.title = name + dot + short + " not installed by setup"
 		it.head = name + dot + label
 		it.body = []string{"Seamark setup does not install the " + label + " for " + name + "."}
 
 		return it, true
 	case c.State == integration.StateAbsent:
-		it.group, it.tone = ovOptional, ToneNeutral
+		it.group, it.tone = ovOptional, ui.ToneNeutral
 		it.title = name + dot + short + " " + ovStateWord(c)
 		it.act = ovNav(destIntegrations, "setup:"+id, "set up "+name)
 	default:
-		it.group, it.tone = ovActionable, ToneAttention
+		it.group, it.tone = ovActionable, ui.ToneAttention
 
 		if c.State == integration.StateUnreadable {
-			it.tone = ToneFailure
+			it.tone = ui.ToneFailure
 		}
 
 		it.title = name + dot + short + " " + c.State.String()
@@ -758,7 +760,7 @@ func ovTrustItems(insp integration.Inspection, dot string) []ovItem {
 
 	if pendingTrust {
 		items = append(items, ovItem{
-			key: "trust-pending:" + id, group: ovActionable, tone: ToneAttention, badge: "trust pending",
+			key: "trust-pending:" + id, group: ovActionable, tone: ui.ToneAttention, badge: "trust pending",
 			title: name + dot + "project trust pending", source: name + dot + "project trust",
 			body: append([]string{
 				name + " waits for the user to review and trust this project's configuration.",
@@ -770,7 +772,7 @@ func ovTrustItems(insp integration.Inspection, dot string) []ovItem {
 
 	if unknownTrust {
 		items = append(items, ovItem{
-			key: "trust:" + id, group: ovUnknown, tone: ToneUnknown, badge: "unknown",
+			key: "trust:" + id, group: ovUnknown, tone: ui.ToneUnknown, badge: "unknown",
 			title: name + dot + "trust not verifiable by Seamark", source: name + dot + "project trust",
 			body: append([]string{
 				"Seamark cannot read whether " + name + " trusts this project's configuration.",
@@ -793,7 +795,7 @@ func ovTrustItems(insp integration.Inspection, dot string) []ovItem {
 		}
 
 		items = append(items, ovItem{
-			key: "evidence:" + id, group: ovUnknown, tone: ToneUnknown, badge: "unknown",
+			key: "evidence:" + id, group: ovUnknown, tone: ui.ToneUnknown, badge: "unknown",
 			title: name + dot + "compatibility evidence incomplete", source: name + dot + "native compatibility evidence",
 			body: body, act: inspect,
 		})
@@ -841,9 +843,9 @@ func ovFindingItems(insp integration.Inspection, dot string) []ovItem {
 			continue
 		}
 
-		tone := ToneAttention
+		tone := ui.ToneAttention
 		if f.Level == integration.FindingError {
-			tone = ToneFailure
+			tone = ui.ToneFailure
 		}
 
 		source := name + dot + "finding"
@@ -852,7 +854,7 @@ func ovFindingItems(insp integration.Inspection, dot string) []ovItem {
 		}
 
 		items = append(items, ovItem{
-			key:   "finding:" + id + ":" + itoa(i) + ":" + f.Path,
+			key:   "finding:" + id + ":" + strconv.Itoa(i) + ":" + f.Path,
 			group: ovActionable, tone: tone, badge: f.Level.String(),
 			title: name + dot + f.Reason, source: source,
 			body: []string{f.Reason + "."},
@@ -882,13 +884,13 @@ func (o *overview) proposalItems() []ovItem {
 		}
 
 		if sec.stale() {
-			body = append(body, "This count is stale: the last read failed ("+errText(sec.err)+").")
+			body = append(body, "This count is stale: the last read failed ("+ui.ErrText(sec.err)+").")
 		}
 
 		// A pending decision is attention, not a failure: it sorts after
 		// broken states, and its glyph is the warn "!" of the group.
 		return []ovItem{{
-			key: "proposals", group: ovActionable, tone: ToneAttention, badge: "pending",
+			key: "proposals", group: ovActionable, tone: ui.ToneAttention, badge: "pending",
 			title: ovPlural(n, "proposal awaits", "proposals await") + " a decision", source: "decision ledger",
 			body: body, fix: "seamark lessons --proposals",
 			act: ovNav(destLessons, "proposals", "review proposals"),
@@ -902,10 +904,10 @@ func (o *overview) proposalItems() []ovItem {
 	}
 
 	return []ovItem{{
-		key: "proposals", group: ovUnknown, tone: ToneUnknown, badge: "unknown",
+		key: "proposals", group: ovUnknown, tone: ui.ToneUnknown, badge: "unknown",
 		title: "Pending proposal count unknown", source: "decision ledger",
 		body: []string{
-			"Reading the decision ledger failed: " + errText(sec.err),
+			"Reading the decision ledger failed: " + ui.ErrText(sec.err),
 			"The count stays unknown until a read works. It is not zero.",
 		},
 		fix: "seamark lessons --proposals",
@@ -957,7 +959,7 @@ func (o *overview) doctorAttention(covered map[string]bool) []ovItem {
 		tone := ovDoctorTone(c.State)
 
 		items = append(items, ovItem{
-			key:   "doctor:" + itoa(i) + ":" + c.Name,
+			key:   "doctor:" + strconv.Itoa(i) + ":" + c.Name,
 			group: ovActionable, tone: tone, badge: c.State,
 			title: c.Name + ": " + c.Detail, head: "Doctor check: " + c.Name, source: "seamark doctor",
 			body: []string{c.Detail}, fix: c.Fix, act: checkAction(o.st, c),
@@ -970,18 +972,18 @@ func (o *overview) doctorAttention(covered map[string]bool) []ovItem {
 // ovDoctorTone maps a doctor state to a tone. Doctor "info" mixes
 // optional, unknown and absent facts, so it stays neutral here; the
 // typed groups make the finer split.
-func ovDoctorTone(state string) Tone {
+func ovDoctorTone(state string) ui.Tone {
 	switch state {
 	case doctor.StateOK:
-		return ToneSuccess
+		return ui.ToneSuccess
 	case doctor.StateWarn:
-		return ToneAttention
+		return ui.ToneAttention
 	case doctor.StateFail:
-		return ToneFailure
+		return ui.ToneFailure
 	case doctor.StateInfo:
-		return ToneNeutral
+		return ui.ToneNeutral
 	default:
-		return ToneUnknown
+		return ui.ToneUnknown
 	}
 }
 
@@ -997,7 +999,7 @@ func ovPlural(n int, one, many string) string {
 // ovNum formats a count with thousands separators, so large index
 // counts stay readable.
 func ovNum(n int) string {
-	s := itoa(n)
+	s := strconv.Itoa(n)
 	neg := strings.HasPrefix(s, "-")
 
 	if neg {

@@ -2,50 +2,20 @@ package tui
 
 import (
 	"slices"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
-// Layout thresholds. A terminal at least wideWidth cells wide shows a
-// list and its detail side by side; a narrower one shows one pane at a
-// time. Below minWidth by minHeight the shell asks for more space.
-// minHeight is 20, because at 16 rows the confirmation dialogs lost
-// their safety notes and the empty states lost their next action.
-const (
-	wideWidth = 100
-	minWidth  = 60
-	minHeight = 20
-)
+// This file holds the domain widgets: the rows and blocks whose name,
+// parameters or fields carry a seamark concept, such as a preview
+// effect, a run phase, a region delta, a setup step or the brand. They
+// draw with the primitives of package ui. They stay here, because ui
+// holds only what names no seamark concept (the ui package doc).
 
-// positionNote returns the plain "a–b of n" position of a scrolled
-// window. first and last are the 1-based visible rows, and total is the
-// row count. Callers add the style and the words around it. The ASCII
-// glyph set gets a plain hyphen, because a view that renders outside
-// the shell skips the frame-wide ASCII swap.
-func (t *Theme) positionNote(first, last, total int) string {
-	dash := "–"
-	if t.ASCII {
-		dash = "-"
-	}
-
-	return itoa(first) + dash + itoa(last) + " of " + itoa(total)
-}
-
-// scrollNote renders the "a–b of n" position of a scrolling window,
-// right-aligned, so hidden rows are never a surprise.
-func (t *Theme) scrollNote(offset, window, n, w int) string {
-	note := t.positionNote(offset+1, min(n, offset+window), n)
-
-	return t.Faint.Render(padLeft(note, w))
-}
-
-// section renders a heading over a body with consistent spacing.
-func (t *Theme) section(title, body string) string {
+// sectionBlock renders a heading over a body with consistent spacing.
+func sectionBlock(t *ui.Theme, title, body string) string {
 	if body == "" {
 		return t.Heading.Render(strings.ToUpper(title))
 	}
@@ -55,11 +25,11 @@ func (t *Theme) section(title, body string) string {
 
 // kv renders aligned label and value rows. Values wrap under their own
 // column, so long paths stay readable.
-func (t *Theme) kv(rows [][2]string, w int) string {
+func kv(t *ui.Theme, rows [][2]string, w int) string {
 	labelW := 0
 
 	for _, r := range rows {
-		labelW = max(labelW, width(r[0]))
+		labelW = max(labelW, ui.Width(r[0]))
 	}
 
 	valueW := max(10, w-labelW-2)
@@ -67,7 +37,7 @@ func (t *Theme) kv(rows [][2]string, w int) string {
 	var b strings.Builder
 
 	for i, r := range rows {
-		lines := strings.Split(wrap(r[1], valueW), "\n")
+		lines := strings.Split(ui.Wrap(r[1], valueW), "\n")
 
 		for j, line := range lines {
 			label := ""
@@ -75,7 +45,7 @@ func (t *Theme) kv(rows [][2]string, w int) string {
 				label = r[0]
 			}
 
-			b.WriteString(t.Muted.Render(padRight(label, labelW)) + "  " + line)
+			b.WriteString(t.Muted.Render(ui.PadRight(label, labelW)) + "  " + line)
 
 			if j < len(lines)-1 {
 				b.WriteString("\n")
@@ -90,292 +60,41 @@ func (t *Theme) kv(rows [][2]string, w int) string {
 	return b.String()
 }
 
-// hints renders key bindings as "key action" pairs for the footer.
-//
-// Consecutive unavailable entries (see unavailable) form one faint group
-// that starts with the word n/a, for example "n/a: w retarget, v
-// compare". The word carries the state without color. One word for the
-// group costs fewer cells than one word for each key.
-func (t *Theme) hints(bindings []key.Binding) string {
-	return t.hintRow(bindings, false)
-}
-
-// shortHints renders the hints as hints does, but each n/a group shows
-// only its keys, for example "n/a: w t v". A footer that cannot hold
-// every hint uses it, so the unavailable keys stay in view at a cost of
-// two cells for each key.
-func (t *Theme) shortHints(bindings []key.Binding) string {
-	return t.hintRow(bindings, true)
-}
-
-// hintRow renders the hints, with or without the actions of the n/a
-// groups.
-func (t *Theme) hintRow(bindings []key.Binding, short bool) string {
-	var parts, off []string
-
-	// The labelled group separates its entries with commas, because each
-	// entry has two words. The short group has only keys, so spaces are
-	// enough.
-	sep := ", "
-	if short {
-		sep = " "
-	}
-
-	// flush closes the current group of unavailable entries.
-	flush := func() {
-		if len(off) > 0 {
-			parts = append(parts, t.Faint.Render(unavailableWord+": "+strings.Join(off, sep)))
-			off = nil
-		}
-	}
-
-	for _, b := range bindings {
-		if !listed(b) {
-			continue
-		}
-
-		h := b.Help()
-
-		if isUnavailable(b) {
-			entry := t.keyLabel(h.Key)
-			if !short {
-				entry += " " + h.Desc
-			}
-
-			off = append(off, entry)
-
-			continue
-		}
-
-		flush()
-
-		parts = append(parts, t.Key.Render(t.keyLabel(h.Key))+" "+t.Muted.Render(h.Desc))
-	}
-
-	flush()
-
-	// Three spaces between hints, as in the 1a footer, so a key never
-	// reads as the label of its neighbour.
-	return strings.Join(parts, "   ")
-}
-
-// asciiKeys spells arrow glyphs in key labels as words for the ASCII
-// glyph set, whose fonts may lack the arrows.
-var asciiKeys = strings.NewReplacer("↑↓", "up/down", "↑/↓", "up/down", "←→", "left/right", "↑", "up", "↓", "down", "←", "left", "→", "right")
-
-// keyLabel returns a key label in the session glyph set.
-func (t *Theme) keyLabel(k string) string {
-	if t.ASCII {
-		return asciiKeys.Replace(k)
-	}
-
-	return k
-}
-
-// dialogMinBox is the narrowest modal box, so the text inside keeps a
-// usable width even in a narrow area.
-const dialogMinBox = 12
-
 // dialogMoreNote tells that the body of a build modal is clipped. The
 // modal does not scroll, so a larger terminal is the only way to show
 // the rest.
-func (t *Theme) dialogMoreNote() string {
+func dialogMoreNote(t *ui.Theme) string {
 	return "more below " + t.Glyphs.Dash + " enlarge the terminal"
 }
 
-// blockLines renders s at w cells and returns its lines, so a caller can
-// count and clip the lines exactly as the box shows them. It returns nil
-// for an empty s.
-func blockLines(s string, w int) []string {
-	if s == "" {
-		return nil
-	}
-
-	return strings.Split(lipgloss.NewStyle().Width(w).Render(s), "\n")
-}
-
-// isBlank reports a line that shows nothing but spaces.
-func isBlank(line string) bool {
-	return strings.TrimSpace(ansi.Strip(line)) == ""
-}
-
-// collapseBlankRuns replaces each run of blank lines with one blank
-// line, and removes blank lines at the start and the end.
-func collapseBlankRuns(lines []string) []string {
-	out := make([]string, 0, len(lines))
-
-	for _, line := range lines {
-		if isBlank(line) && (len(out) == 0 || isBlank(out[len(out)-1])) {
-			continue
-		}
-
-		out = append(out, line)
-	}
-
-	for len(out) > 0 && isBlank(out[len(out)-1]) {
-		out = out[:len(out)-1]
-	}
-
-	return out
-}
-
-// dropBlankLines removes up to n blank lines, the last ones first. The
-// blank lines near the top stay, because they separate the lead text
-// that the reader sees first.
-func dropBlankLines(lines []string, n int) []string {
-	out := append([]string(nil), lines...)
-
-	for i := len(out) - 1; i >= 0 && n > 0; i-- {
-		if isBlank(out[i]) {
-			out = append(out[:i], out[i+1:]...)
-			n--
-		}
-	}
-
-	return out
-}
-
-// action renders one next action with its key, for example
-// "enter Apply". primary=true gives it the prominent style.
-func (t *Theme) action(k, label string, primary bool) string {
-	if primary {
-		return t.Key.Render(k) + " " + t.Button.Render(label)
-	}
-
-	return t.Key.Render(k) + " " + t.Ghost.Render(label)
-}
-
-// empty renders a centered empty or error state: a title, an
-// explanation, and the next valid action.
-//
-// The title and the next action are the most important lines, so they
-// stay visible when the block is taller than h. The body gives up its
-// lines first, and its last kept line ends with an ellipsis. The next
-// action is clipped only when it does not fit next to the title.
-func (t *Theme) empty(tone Tone, title, body, next string, w, h int) string {
-	inner := max(1, min(w-4, 72))
-
-	head := blockLines(t.ToneStyle(tone).Render(t.ToneGlyph(tone))+" "+t.Title.Render(title), inner)
-
-	var text []string
-	if body != "" {
-		text = strings.Split(wrap(body, inner), "\n")
-	}
-
-	act := blockLines(next, inner)
-
-	full := joinLineBlocks(1, head, t.mutedLines(text), act)
-	if len(full) <= h {
-		block := lipgloss.NewStyle().Width(inner).Render(strings.Join(full, "\n"))
-
-		return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, block)
-	}
-
-	act = collapseBlankRuns(act)
-
-	// The blank lines between the parts stay only when at least one
-	// body line fits with them.
-	gap := 1
-	if len(head)+len(act)+2*gap >= h {
-		gap = 0
-	}
-
-	room := h - len(head) - len(act) - 2*gap
-	text = clipWithEllipsis(collapseBlankRuns(text), room, inner, t.Glyphs.Ellipsis)
-
-	lines := joinLineBlocks(gap, head, t.mutedLines(text), act)
-	if len(lines) > h {
-		lines = lines[:max(0, h)]
-	}
-
-	block := lipgloss.NewStyle().Width(inner).Render(strings.Join(lines, "\n"))
-
-	// The compact block fills the area, so it starts at the top.
-	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Top, block)
-}
-
-// mutedLines renders plain body lines in the muted style.
-func (t *Theme) mutedLines(lines []string) []string {
-	out := make([]string, len(lines))
-
-	for i, line := range lines {
-		out[i] = t.Muted.Render(line)
-	}
-
-	return out
-}
-
-// clipWithEllipsis keeps the first n plain lines. When lines are cut,
-// the last kept line ends with the ellipsis, so the cut is visible.
-func clipWithEllipsis(lines []string, n, w int, ellipsis string) []string {
-	if len(lines) <= n {
-		return lines
-	}
-
-	if n <= 0 {
-		return nil
-	}
-
-	out := append([]string(nil), lines[:n]...)
-	last := strings.TrimRight(out[n-1], " ")
-
-	if width(last)+width(ellipsis) > w {
-		last = truncate(last, max(0, w-width(ellipsis)), "")
-	}
-
-	out[n-1] = last + ellipsis
-
-	return out
-}
-
-// joinLineBlocks joins the non-empty line blocks with gap blank lines
-// between them.
-func joinLineBlocks(gap int, blocks ...[]string) []string {
-	var out []string
-
-	for _, b := range blocks {
-		if len(b) == 0 {
-			continue
-		}
-
-		if len(out) > 0 {
-			out = append(out, make([]string, gap)...)
-		}
-
-		out = append(out, b...)
-	}
-
-	return out
-}
-
-// command renders a selectable CLI command or path. It is display text
-// only: the console never runs a command taken from diagnostics.
-func (t *Theme) command(s string) string {
-	return t.Code.Render(oneLine(s))
+// commandText renders a selectable CLI command or path. It is display
+// text only: the console never runs a command taken from diagnostics.
+func commandText(t *ui.Theme, s string) string {
+	return t.Code.Render(ui.OneLine(s))
 }
 
 // radio renders one choice of a single-choice list, for example
 // "(●) codex". The glyph shows the choice without color.
-func (t *Theme) radio(on bool, label string) string {
+func radio(t *ui.Theme, on bool, label string) string {
 	if on {
-		return t.Accent.Render(t.Glyphs.RadioOn) + " " + t.Body.Render(oneLine(label))
+		return t.Accent.Render(t.Glyphs.RadioOn) + " " + t.Body.Render(ui.OneLine(label))
 	}
 
-	return t.Muted.Render(t.Glyphs.RadioOff) + " " + t.Muted.Render(oneLine(label))
+	return t.Muted.Render(t.Glyphs.RadioOff) + " " + t.Muted.Render(ui.OneLine(label))
 }
 
 // effect is one WILL line of a preview: its glyph, the glyph tone, and
 // the text.
 type effect struct {
 	glyph string
-	tone  Tone
+	tone  ui.Tone
 	text  string
 }
 
 // effectLines renders the WILL and WON'T sections of a preview. A WON'T
 // line is as explicit as a WILL line, because a reader must see what
 // stays.
-func (t *Theme) effectLines(will []effect, wont []string, w int) []string {
+func effectLines(t *ui.Theme, will []effect, wont []string, w int) []string {
 	var out []string
 
 	if len(will) > 0 {
@@ -402,11 +121,11 @@ func (t *Theme) effectLines(will []effect, wont []string, w int) []string {
 // style, and the new value uses the plain style. A row that does not
 // fit wraps in one style, because no style may cross a line end. The
 // caller sanitizes old and next, because they can hold file text.
-func (t *Theme) arrowRow(label, old, next string, labelW, w int) []string {
+func arrowRow(t *ui.Theme, label, old, next string, labelW, w int) []string {
 	arrow := " " + t.Glyphs.Arrow + " "
 
-	if labelW+width(old+arrow+next) <= w {
-		return []string{t.Muted.Render(padRight(label, labelW)) + t.Muted.Render(old) + t.Faint.Render(arrow) +
+	if labelW+ui.Width(old+arrow+next) <= w {
+		return []string{t.Muted.Render(ui.PadRight(label, labelW)) + t.Muted.Render(old) + t.Faint.Render(arrow) +
 			t.Body.Render(next)}
 	}
 
@@ -439,20 +158,20 @@ func pairWidth(w int) int {
 // two narrow columns would break most words. lh and rh are the styled
 // heads; l and r are styled lines that the caller sanitized and wrapped
 // to pairWidth(w). pair clips a longer line, so no column overflows.
-func (t *Theme) pair(lh, rh string, l, r []string, w int) []string {
+func pair(t *ui.Theme, lh, rh string, l, r []string, w int) []string {
 	ell := t.Glyphs.Ellipsis
 
 	if w < pairMinW {
-		out := []string{truncate(lh, w, ell)}
+		out := []string{ui.Truncate(lh, w, ell)}
 
 		for _, line := range l {
-			out = append(out, truncate(line, w, ell))
+			out = append(out, ui.Truncate(line, w, ell))
 		}
 
-		out = append(out, "", truncate(rh, w, ell))
+		out = append(out, "", ui.Truncate(rh, w, ell))
 
 		for _, line := range r {
-			out = append(out, truncate(line, w, ell))
+			out = append(out, ui.Truncate(line, w, ell))
 		}
 
 		return out
@@ -477,7 +196,7 @@ func (t *Theme) pair(lh, rh string, l, r []string, w int) []string {
 			b = right[i]
 		}
 
-		out = append(out, padRight(truncate(a, lw, ell), lw)+div+truncate(b, rw, ell))
+		out = append(out, ui.PadRight(ui.Truncate(a, lw, ell), lw)+div+ui.Truncate(b, rw, ell))
 	}
 
 	return out
@@ -498,7 +217,7 @@ const (
 // word. An empty region stands for the repository-wide set.
 type deltaRow struct {
 	sign, region, word string
-	tone               Tone
+	tone               ui.Tone
 }
 
 // regionDelta renders the change from the region set before to the set
@@ -515,7 +234,7 @@ type deltaRow struct {
 // '/', and every row of it keeps its sign; a continuation row indents
 // its text. regionDelta sanitizes the regions, because they come from
 // the pin file or from a model.
-func (t *Theme) regionDelta(before, after []string, w int) []string {
+func regionDelta(t *ui.Theme, before, after []string, w int) []string {
 	g := t.Glyphs
 	was, now := deltaSet(before), deltaSet(after)
 
@@ -523,30 +242,30 @@ func (t *Theme) regionDelta(before, after []string, w int) []string {
 
 	for _, r := range was {
 		if !slices.Contains(now, r) {
-			rows = append(rows, deltaRow{sign: g.Del, region: r, word: deltaRemoved, tone: ToneFailure})
+			rows = append(rows, deltaRow{sign: g.Del, region: r, word: deltaRemoved, tone: ui.ToneFailure})
 		}
 	}
 
 	for _, r := range now {
 		if !slices.Contains(was, r) {
-			rows = append(rows, deltaRow{sign: g.Add, region: r, word: deltaAdded, tone: ToneSuccess})
+			rows = append(rows, deltaRow{sign: g.Add, region: r, word: deltaAdded, tone: ui.ToneSuccess})
 		}
 	}
 
 	for _, r := range was {
 		if slices.Contains(now, r) {
-			rows = append(rows, deltaRow{sign: " ", region: r, word: deltaKept, tone: ToneNeutral})
+			rows = append(rows, deltaRow{sign: " ", region: r, word: deltaKept, tone: ui.ToneNeutral})
 		}
 	}
 
 	// The region column takes the longest region that fits beside the
 	// sign and the longest word, so the words share one column.
-	wordW := width(deltaRemoved)
+	wordW := ui.Width(deltaRemoved)
 	room := max(1, w-2-3-wordW)
 
 	regW := 0
 	for _, r := range rows {
-		regW = max(regW, width(deltaLabel(r.region)))
+		regW = max(regW, ui.Width(deltaLabel(r.region)))
 	}
 
 	regW = min(regW, room)
@@ -554,7 +273,7 @@ func (t *Theme) regionDelta(before, after []string, w int) []string {
 	out := make([]string, 0, len(rows))
 
 	for _, r := range rows {
-		out = append(out, t.deltaLines(r, regW)...)
+		out = append(out, deltaLines(t, r, regW)...)
 	}
 
 	return out
@@ -570,17 +289,17 @@ const deltaIndent = 2
 // removed path reads as removed on every row. They indent the text by
 // deltaIndent and carry no word, so only the first row reads as a
 // region.
-func (t *Theme) deltaLines(r deltaRow, regW int) []string {
+func deltaLines(t *ui.Theme, r deltaRow, regW int) []string {
 	sign := t.ToneStyle(r.tone).Render(r.sign)
 
 	// Only an added region reads in the body style: it is what the
 	// change delivers. The word of a kept row stays faint.
 	text, word := t.Muted, t.ToneStyle(r.tone)
-	if r.tone == ToneSuccess && r.region != "" {
+	if r.tone == ui.ToneSuccess && r.region != "" {
 		text = t.Body
 	}
 
-	if r.tone == ToneNeutral {
+	if r.tone == ui.ToneNeutral {
 		word = t.Faint
 	}
 
@@ -590,7 +309,7 @@ func (t *Theme) deltaLines(r deltaRow, regW int) []string {
 
 	for i, seg := range segs {
 		if i == 0 {
-			out = append(out, sign+" "+text.Render(padRight(seg, regW))+"   "+word.Render(r.word))
+			out = append(out, sign+" "+text.Render(ui.PadRight(seg, regW))+"   "+word.Render(r.word))
 
 			continue
 		}
@@ -607,7 +326,7 @@ func (t *Theme) deltaLines(r deltaRow, regW int) []string {
 // single part that is wider than its row breaks at the cell limit,
 // because no row may overflow the column.
 func deltaWrap(region string, first, rest int) []string {
-	if width(region) <= first {
+	if ui.Width(region) <= first {
 		return []string{region}
 	}
 
@@ -619,13 +338,13 @@ func deltaWrap(region string, first, rest int) []string {
 	limit := first
 
 	for _, part := range deltaParts(region) {
-		if cur != "" && width(cur)+width(part) > limit {
+		if cur != "" && ui.Width(cur)+ui.Width(part) > limit {
 			rows = append(rows, cur)
 			cur, limit = "", rest
 		}
 
-		for cur == "" && width(part) > limit {
-			head := truncate(part, limit, "")
+		for cur == "" && ui.Width(part) > limit {
+			head := ui.Truncate(part, limit, "")
 			if head == "" {
 				// A wide character does not fit a one-cell row; it
 				// takes the row alone, so the loop always moves on.
@@ -677,7 +396,7 @@ func deltaSet(set []string) []string {
 	out := make([]string, 0, len(set))
 
 	for _, r := range set {
-		if r = oneLine(r); r != "" && !slices.Contains(out, r) {
+		if r = ui.OneLine(r); r != "" && !slices.Contains(out, r) {
 			out = append(out, r)
 		}
 	}
@@ -722,12 +441,12 @@ type phaseRow struct {
 // "✓ Scan files        1,204 files". The labels share one column. The
 // skipped, failed and stopped states also show a word, because failed
 // and stopped share the glyph "!" and must differ without color.
-func (t *Theme) phaseRows(rows []phaseRow, tick, w int) []string {
+func phaseRows(t *ui.Theme, rows []phaseRow, tick, w int) []string {
 	g := t.Glyphs
 
 	labelW := 0
 	for _, r := range rows {
-		labelW = max(labelW, width(r.label))
+		labelW = max(labelW, ui.Width(r.label))
 	}
 
 	lines := make([]string, 0, len(rows))
@@ -739,7 +458,7 @@ func (t *Theme) phaseRows(rows []phaseRow, tick, w int) []string {
 
 		switch r.state {
 		case phaseActive:
-			glyph = t.Accent.Render(t.spinnerFrame(tick))
+			glyph = t.Accent.Render(t.SpinnerFrame(tick))
 		case phaseDone:
 			glyph = t.Success.Render(g.OK)
 		case phaseSkipped:
@@ -752,7 +471,7 @@ func (t *Theme) phaseRows(rows []phaseRow, tick, w int) []string {
 			glyph, style = t.Faint.Render(g.Info), t.Muted
 		}
 
-		lines = append(lines, truncate(glyph+" "+style.Render(padRight(r.label, labelW))+"  "+
+		lines = append(lines, ui.Truncate(glyph+" "+style.Render(ui.PadRight(r.label, labelW))+"  "+
 			t.Muted.Render(joinNote(word, r.note)), w, g.Ellipsis))
 	}
 
@@ -776,29 +495,92 @@ func joinNote(a, b string) string {
 // sanitized and cut to w cells. A long run keeps its detail area this
 // small, so raw process output never takes over the screen. keep <= 0
 // keeps every line.
-func (t *Theme) activityLines(lines []string, keep, w int) []string {
+func activityLines(t *ui.Theme, lines []string, keep, w int) []string {
 	if keep > 0 && len(lines) > keep {
 		lines = lines[len(lines)-keep:]
 	}
 
 	out := make([]string, 0, len(lines))
 	for _, l := range lines {
-		out = append(out, t.Muted.Render(truncate(diag(l), w, t.Glyphs.Ellipsis)))
+		out = append(out, t.Muted.Render(ui.Truncate(ui.Diag(l), w, t.Glyphs.Ellipsis)))
 	}
 
 	return out
 }
 
-// spinnerFrame returns the activity glyph for a tick count. The count
-// comes from state.tick, the one injectable tick of the shell, so the
-// console does not use bubbles/spinner (input.go gives the reasons).
-func (t *Theme) spinnerFrame(tick int) string {
-	frames := t.Glyphs.Spinner
-
-	return frames[tick%len(frames)]
+// paneMessage is a centered message: a styled head, a plain body that
+// wraps, and styled next-step lines.
+type paneMessage struct {
+	head []string
+	body string
+	next []string
 }
 
-// itoa formats an int for labels and counts.
-func itoa(n int) string {
-	return strconv.Itoa(n)
+// messageBox renders a full-width box with a centered message. When the
+// box is too short, the body gives up lines first, so the head and the
+// next action stay visible. The empty states of Proposals and Pins use
+// it, so both sub-views read alike.
+func messageBox(t *ui.Theme, title, right string, m paneMessage, w, h int) string {
+	inner := ui.BoxInner(w)
+	rows := ui.BoxRows(h)
+	textW := min(inner, 72)
+
+	var body []string
+	if m.body != "" {
+		body = strings.Split(ui.Wrap(m.body, textW), "\n")
+	}
+
+	gap := 1
+	if len(m.head)+len(body)+len(m.next)+2 > rows {
+		gap = 0
+	}
+
+	if room := rows - len(m.head) - len(m.next) - 2*gap; len(body) > room {
+		body = ui.ClipWithEllipsis(body, max(0, room), textW, t.Glyphs.Ellipsis)
+	}
+
+	lines := ui.JoinLineBlocks(gap, m.head, t.MutedLines(body), m.next)
+	if len(lines) > rows {
+		lines = lines[:rows]
+	}
+
+	out := make([]string, 0, rows)
+	for range max(0, (rows-len(lines))*2/5) {
+		out = append(out, "")
+	}
+
+	for _, l := range lines {
+		out = append(out, strings.Repeat(" ", max(0, (inner-ui.Width(l))/2))+l)
+	}
+
+	return t.Box(ui.BoxOpts{W: w, H: h, Title: title, Right: right, Focus: true, Lines: out})
+}
+
+// stepper renders "✓ Client ── ● Choose ── ○ Review ── ○ Apply": done
+// steps in the success color, the current step in the accent color and
+// the rest faint.
+func stepper(t *ui.Theme, steps []string, current int) string {
+	g := t.Glyphs
+	parts := make([]string, 0, len(steps))
+
+	for i, s := range steps {
+		switch {
+		case i < current:
+			parts = append(parts, t.Success.Render(g.OK+" "+s))
+		case i == current:
+			parts = append(parts, t.TabActive.Render(g.Dot+" "+s))
+		default:
+			parts = append(parts, t.Faint.Render(g.Hollow+" "+s))
+		}
+	}
+
+	return strings.Join(parts, t.Rule.Render(" "+g.RuleLight+g.RuleLight+" "))
+}
+
+// brandText renders the mark "▶┊◀ seamark".
+func brandText(t *ui.Theme) string {
+	g := t.Glyphs
+
+	return t.Brand.Render(g.BrandLeft) + t.BrandMark.Render(g.BrandMid) +
+		t.BrandMark.Bold(true).Render(g.BrandRight) + " " + t.Brand.Render("seamark")
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -121,12 +122,12 @@ func TestDistillScopeLimitRules(t *testing.T) {
 	require.True(t, rec.capturing(), "digits must not switch the destination")
 
 	h.typeText("-5")
-	assert.Equal(t, "5", rec.form.custom.value(), "a negative limit cannot be typed")
+	assert.Equal(t, "5", rec.form.custom.Value(), "a negative limit cannot be typed")
 	assert.Equal(t, destLessons, h.m.active)
 
 	// Zero and empty are invalid: the note shows and enter plans nothing.
 	for _, typed := range []string{"0", ""} {
-		rec.form.custom.set(typed)
+		rec.form.custom.Set(typed)
 		h.press("enter")
 
 		frame := h.view()
@@ -140,9 +141,9 @@ func TestDistillScopeLimitRules(t *testing.T) {
 	}
 
 	h.typeText("1234567")
-	assert.Equal(t, "12345", rec.form.custom.value(), "the input keeps five digits")
+	assert.Equal(t, "12345", rec.form.custom.Value(), "the input keeps five digits")
 
-	rec.form.custom.set("25")
+	rec.form.custom.Set("25")
 	h.press("enter", "enter")
 	require.Len(t, *reqs, 1)
 	assert.Equal(t, learning.DistillRequest{Limit: 25}, (*reqs)[0])
@@ -191,11 +192,11 @@ func TestDistillScopeRegion(t *testing.T) {
 	h.press("/")
 	h.typeText("xyz")
 	h.press("esc")
-	assert.Equal(t, "./internal/api/", rec.form.region.value())
+	assert.Equal(t, "./internal/api/", rec.form.region.Value())
 
 	// A path outside the workspace blocks the plan.
 	h.press("/")
-	rec.form.region.set("../elsewhere")
+	rec.form.region.Set("../elsewhere")
 	h.press("enter")
 
 	frame := h.view()
@@ -211,7 +212,7 @@ func TestDistillScopeRegion(t *testing.T) {
 	}
 
 	h.press("/")
-	rec.form.region.set("internal")
+	rec.form.region.Set("internal")
 	h.press("enter", "enter")
 
 	assert.Equal(t, stepScope, rec.step)
@@ -232,18 +233,18 @@ func TestDistillScopePrefillsOnlyVisibly(t *testing.T) {
 	h.send(navigateMsg{dest: destLessons, intent: "distill"})
 
 	rec := distRecOf(t, h)
-	assert.Equal(t, "internal/api", rec.form.region.value())
+	assert.Equal(t, "internal/api", rec.form.region.Value())
 	assert.Contains(t, h.view(), "prefilled from the Proposals region filter", "the prefill names its source")
 
 	// A changed region is no longer the prefill.
 	h.press("/")
-	rec.form.region.set("internal/cli")
+	rec.form.region.Set("internal/cli")
 	h.press("enter")
 	assert.NotContains(t, h.view(), "prefilled from the Proposals region filter")
 
 	// Without a filter the region is empty.
 	h2 := distOpen(t, distFake(distFullPreview(), distNoRun(t)), 120, 40)
-	assert.Empty(t, distRecOf(t, h2).form.region.value())
+	assert.Empty(t, distRecOf(t, h2).form.region.Value())
 	assert.NotContains(t, h2.view(), "prefilled")
 }
 
@@ -621,7 +622,7 @@ func TestDistillCustomLimitEscRestoresTheChoice(t *testing.T) {
 	h.press("esc")
 
 	assert.Equal(t, distLimitDefault, rec.form.limit, "esc restores the choice from before the edit")
-	assert.Empty(t, rec.form.custom.value())
+	assert.Empty(t, rec.form.custom.Value())
 
 	frame := h.view()
 	assert.Contains(t, frame, "(●) 10 groups (default)")
@@ -637,7 +638,7 @@ func TestDistillCustomLimitEscRestoresTheChoice(t *testing.T) {
 
 	h.press("down", "space", "esc")
 	assert.Equal(t, distLimitDefault, rec.form.limit)
-	assert.Equal(t, "25", rec.form.custom.value(), "esc keeps the typed number from before the edit")
+	assert.Equal(t, "25", rec.form.custom.Value(), "esc keeps the typed number from before the edit")
 
 	h.press("enter")
 	require.Len(t, *reqs, 1)
@@ -728,7 +729,7 @@ func distColorOf(s lipgloss.Style) string {
 func TestDistillBlockedStatesUseTheAttentionColor(t *testing.T) {
 	distWithColors(t)
 
-	theme := newTheme(false)
+	theme := ui.NewTheme(false)
 	attention, failure := distColorOf(theme.Attention), distColorOf(theme.Failure)
 	require.NotEqual(t, attention, failure)
 
@@ -812,13 +813,13 @@ func TestDistillScopeCustomLimitWaitsForInput(t *testing.T) {
 	assert.NotContains(t, frame, "1 groups")
 	assert.NotContains(t, frame, "Enter a whole number above 0.")
 
-	rec.form.custom.set("12")
+	rec.form.custom.Set("12")
 	assert.Contains(t, h.view(), "custom: 12 groups")
 
 	// A plan request with an empty value shows the rule, too.
 	h.press("space", "backspace", "backspace", "esc")
 	rec.form.limit = distLimitCustom
-	rec.form.custom.set("")
+	rec.form.custom.Set("")
 	rec.form.customChecked = false
 	h.press("enter")
 	assert.Contains(t, h.view(), "Enter a whole number above 0.")
@@ -882,7 +883,7 @@ func TestDistillSettleClearsOnlyARecentRefusal(t *testing.T) {
 	rec.warned = time.Now()
 	cleared := rec.settle()
 	require.NotNil(t, cleared)
-	assert.Equal(t, toastMsg{tone: ToneNeutral}, cleared())
+	assert.Equal(t, toastMsg{tone: ui.ToneNeutral}, cleared())
 	assert.Nil(t, rec.settle(), "one clear per refusal")
 }
 
@@ -917,8 +918,8 @@ func TestDistillEvidenceShowsTheFullFindingIDs(t *testing.T) {
 	// The rows keep the file name of the path and fit the evidence width
 	// of the 60, 120 and 80 column layouts.
 	for _, w := range []int{50, 61, 70} {
-		for _, line := range distEvidenceLines(newTheme(false), ev, w+6, 6) {
-			assert.LessOrEqual(t, width(line), w+6)
+		for _, line := range distEvidenceLines(ui.NewTheme(false), ev, w+6, 6) {
+			assert.LessOrEqual(t, ui.Width(line), w+6)
 			assert.True(t, strings.HasSuffix(strings.TrimRight(line, " "), ".go"), line)
 		}
 	}

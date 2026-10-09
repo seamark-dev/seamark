@@ -2,10 +2,13 @@ package tui
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file holds the list and detail pane of the Lessons sub-views
@@ -30,14 +33,14 @@ import (
 // type, and K is the identity of a row. The cursor records the identity
 // and not the position, because a refresh can move every row (D-15).
 type listPane[R any, K comparable] struct {
-	list listState
+	list ui.ListState
 	// cursorID is the identity of the cursor row. The zero K means no
 	// row: before the first snapshot, or in an empty list.
 	cursorID K
 	// focusDetail is the focused pane in the wide layout and the shown
 	// pane in the narrow layout. Resize keeps it.
 	focusDetail bool
-	detail      scrollState
+	detail      ui.ScrollState
 	// detailID is the row of the last detail render. Another row starts
 	// the detail at the top.
 	detailID K
@@ -66,9 +69,9 @@ func (lp *listPane[R, K]) cursorRow(rows []R) (R, bool) {
 		return none, false
 	}
 
-	lp.list.clamp(len(rows), 0)
+	lp.list.Clamp(len(rows), 0)
 
-	return rows[lp.list.cursor], true
+	return rows[lp.list.Cursor], true
 }
 
 // syncCursorID records the identity of the cursor row, so a refresh can
@@ -102,14 +105,14 @@ func (lp *listPane[R, K]) locate(rows []R, id K) (int, bool) {
 // row. It reports whether the identity was found.
 func (lp *listPane[R, K]) relocate(rows []R, keepPosition bool) bool {
 	if i, ok := lp.locate(rows, lp.cursorID); ok {
-		lp.list.cursor = i
+		lp.list.Cursor = i
 		lp.cursorID = lp.ident(rows[i])
 
 		return true
 	}
 
 	if !keepPosition {
-		lp.list.cursor, lp.list.offset = 0, 0
+		lp.list.Cursor, lp.list.Offset = 0, 0
 	}
 
 	lp.syncCursorID(rows)
@@ -144,23 +147,23 @@ func (lp *listPane[R, K]) shown() bool {
 // navKey applies a pane key: tab and shift+tab, enter, esc, a detail
 // scroll key, or a cursor key. It reports whether the key was one. The
 // views call it after their action keys. The letter actions share no
-// key with nkeys (TestListPaneKeysStayApart). Proposals takes esc first
+// key with ui.Nav (TestListPaneKeysStayApart). Proposals takes esc first
 // on purpose: with the focus on the list, esc ends a run filter. So the
 // order of the key switch matters for esc.
 func (lp *listPane[R, K]) navKey(msg tea.KeyMsg, rows []R) bool {
 	switch {
-	case key.Matches(msg, nkeys.Next, nkeys.Prev):
+	case key.Matches(msg, ui.Nav.Next, ui.Nav.Prev):
 		if lp.wide() && len(rows) > 0 {
 			lp.focusDetail = !lp.focusDetail
 		}
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		if len(rows) > 0 {
 			lp.focusDetail = true
 		}
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		lp.focusDetail = false
 	case lp.showsDetail(rows) && lp.detailKey(msg):
-	case lp.list.key(msg, len(rows)):
+	case lp.list.Key(msg, len(rows)):
 		lp.syncCursorID(rows)
 	default:
 		return false
@@ -180,30 +183,30 @@ func (lp *listPane[R, K]) showsDetail(rows []R) bool {
 // movement keys scroll it only while it has focus. It reports whether
 // the key scrolled.
 func (lp *listPane[R, K]) detailKey(msg tea.KeyMsg) bool {
-	paging := key.Matches(msg, nkeys.PageUp, nkeys.PageDown)
+	paging := key.Matches(msg, ui.Nav.PageUp, ui.Nav.PageDown)
 	if !lp.focusDetail && (!lp.wide() || !paging) {
 		return false
 	}
 
-	return lp.detail.key(msg)
+	return lp.detail.Key(msg)
 }
 
 // paneKey names the key that changes the visible or focused pane.
 func (lp *listPane[R, K]) paneKey(hasRow bool) key.Binding {
 	switch {
 	case !hasRow:
-		b := withHelp(nkeys.Enter, "enter", "detail")
+		b := ui.WithHelp(ui.Nav.Enter, "enter", "detail")
 		b.SetEnabled(false)
 
 		return b
 	case lp.wide() && lp.focusDetail:
-		return withHelp(nkeys.Next, "tab", "list")
+		return ui.WithHelp(ui.Nav.Next, "tab", "list")
 	case lp.wide():
-		return withHelp(nkeys.Next, "tab", "detail")
+		return ui.WithHelp(ui.Nav.Next, "tab", "detail")
 	case lp.focusDetail:
-		return withHelp(nkeys.Back, "esc", "back")
+		return ui.WithHelp(ui.Nav.Back, "esc", "back")
 	default:
-		return withHelp(nkeys.Enter, "enter", "detail")
+		return ui.WithHelp(ui.Nav.Enter, "enter", "detail")
 	}
 }
 
@@ -216,7 +219,7 @@ func (lp *listPane[R, K]) split(rows []R, w, h, listW int,
 	list, detail func(rows []R, w, h int, focused bool) string,
 ) string {
 	if lp.wide() {
-		return hjoin(1, list(rows, listW, h, !lp.focusDetail), detail(rows, w-listW-1, h, lp.focusDetail))
+		return ui.Hjoin(1, list(rows, listW, h, !lp.focusDetail), detail(rows, w-listW-1, h, lp.focusDetail))
 	}
 
 	if lp.focusDetail {
@@ -231,22 +234,22 @@ func (lp *listPane[R, K]) split(rows []R, w, h, listW int,
 // background to the cursor row of the focused box. The foot shows the
 // position when the rows overflow. In the narrow layout it says how to
 // open the detail.
-func (lp *listPane[R, K]) renderList(t *Theme, rows []R, w, h int, focused bool, title, header string,
+func (lp *listPane[R, K]) renderList(t *ui.Theme, rows []R, w, h int, focused bool, title, header string,
 	row func(r R, cursor bool) string,
 ) string {
-	inner := boxInner(w)
-	window := max(1, boxRows(h)-1)
-	lp.list.clamp(len(rows), window)
+	inner := ui.BoxInner(w)
+	window := max(1, ui.BoxRows(h)-1)
+	lp.list.Clamp(len(rows), window)
 
 	lines := []string{header}
-	end := min(len(rows), lp.list.offset+window)
+	end := min(len(rows), lp.list.Offset+window)
 
-	for i := lp.list.offset; i < end; i++ {
-		cursor := i == lp.list.cursor
+	for i := lp.list.Offset; i < end; i++ {
+		cursor := i == lp.list.Cursor
 
 		line := row(rows[i], cursor)
 		if cursor && focused {
-			line = t.highlight(line, inner, bgSel)
+			line = t.Highlight(line, inner, ui.BgSel)
 		}
 
 		lines = append(lines, line)
@@ -256,14 +259,14 @@ func (lp *listPane[R, K]) renderList(t *Theme, rows []R, w, h int, focused bool,
 
 	switch {
 	case len(rows) > window:
-		foot = propRange(t, lp.list.offset, end, len(rows))
+		foot = t.RangeNote(lp.list.Offset, end, len(rows))
 	case !lp.wide():
 		foot = t.Faint.Render("enter for detail")
 	}
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: focused, Lines: lines, Foot: foot,
-		Title: boxTitle(t, title, focused), Right: t.Muted.Render(itoa(len(rows))),
+		Title: ui.BoxTitle(t, title, focused), Right: t.Muted.Render(strconv.Itoa(len(rows))),
 	})
 }
 
@@ -271,27 +274,27 @@ func (lp *listPane[R, K]) renderList(t *Theme, rows []R, w, h int, focused bool,
 // The body scrolls inside the box, and another row starts at the top.
 // The caller renders body before this call, so the body never reads a
 // scroll position of another row.
-func (lp *listPane[R, K]) renderDetail(t *Theme, cur R, title string, body []string, w, h int, focused bool) string {
+func (lp *listPane[R, K]) renderDetail(t *ui.Theme, cur R, title string, body []string, w, h int, focused bool) string {
 	if id := lp.ident(cur); lp.detailID != id {
-		lp.detail.off = 0
+		lp.detail.Off = 0
 		lp.detailID = id
 	}
 
-	from, to := lp.detail.fit(len(body), boxRows(h))
+	from, to := lp.detail.Fit(len(body), ui.BoxRows(h))
 	sep := " " + t.Glyphs.Sep + " "
 
 	var foot string
 
 	switch {
-	case lp.detail.off < lp.detail.last:
+	case lp.detail.Off < lp.detail.Last:
 		foot = t.Faint.Render("↓ more" + sep + "pgdn")
-	case lp.detail.off > 0:
+	case lp.detail.Off > 0:
 		foot = t.Faint.Render("↑ more" + sep + "pgup")
 	}
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: focused, Foot: foot,
-		Title: boxTitle(t, title, focused),
+		Title: ui.BoxTitle(t, title, focused),
 		Lines: body[from:to],
 	})
 }
@@ -313,9 +316,9 @@ const (
 // open, so one input serves every field.
 type filterInput struct {
 	editing filterField
-	input   lineInput
+	input   ui.LineInput
 	// textHint is the faint hint of an empty text search. The region
-	// field keeps the hint of lineInput.
+	// field keeps the hint of ui.LineInput.
 	textHint string
 }
 
@@ -323,13 +326,13 @@ type filterInput struct {
 // the hint follows the field.
 func (f *filterInput) startEdit(field filterField, value string) {
 	f.editing = field
-	f.input = lineInput{}
+	f.input = ui.LineInput{}
 
 	if field == filterText {
-		f.input.placeholder = f.textHint
+		f.input.Placeholder = f.textHint
 	}
 
-	f.input.set(value)
+	f.input.Set(value)
 }
 
 // inputKey applies a key to the open field. enter closes the field and
@@ -339,22 +342,22 @@ func (f *filterInput) startEdit(field filterField, value string) {
 // text loses its outer spaces.
 func (f *filterInput) inputKey(msg tea.KeyMsg) (field filterField, value string, done bool) {
 	switch {
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		field = f.editing
 		f.editing = filterNone
 
 		if field == filterText {
-			return field, strings.TrimSpace(f.input.value()), true
+			return field, strings.TrimSpace(f.input.Value()), true
 		}
 
-		return field, propNormalizeRegion(f.input.value()), true
-	case key.Matches(msg, nkeys.Back):
+		return field, propNormalizeRegion(f.input.Value()), true
+	case key.Matches(msg, ui.Nav.Back):
 		f.editing = filterNone
 
 		return filterNone, "", false
 	}
 
-	f.input.key(msg)
+	f.input.Key(msg)
 
 	return filterNone, "", false
 }
@@ -366,22 +369,22 @@ func (f *filterInput) editKeys() []key.Binding {
 		label = "apply search"
 	}
 
-	return []key.Binding{withHelp(nkeys.Enter, "enter", label), withHelp(nkeys.Back, "esc", "cancel")}
+	return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", label), ui.WithHelp(ui.Nav.Back, "esc", "cancel")}
 }
 
 // fieldView renders the value of field on the filter line: the open
 // input, the muted empty word, or the value. A text value shows in
 // quotes, so its outer words read as one search.
-func (f *filterInput) fieldView(t *Theme, field filterField, value, empty string) string {
+func (f *filterInput) fieldView(t *ui.Theme, field filterField, value, empty string) string {
 	switch {
 	case f.editing == field:
-		return f.input.view(t)
+		return f.input.View(t)
 	case value == "":
 		return t.Muted.Render(empty)
 	case field == filterText:
-		return t.Body.Render(`"` + oneLine(value) + `"`)
+		return t.Body.Render(`"` + ui.OneLine(value) + `"`)
 	default:
-		return t.Body.Render(oneLine(value))
+		return t.Body.Render(ui.OneLine(value))
 	}
 }
 
@@ -389,7 +392,7 @@ func (f *filterInput) fieldView(t *Theme, field filterField, value, empty string
 // applied 1  dismissed 0". The active state has brackets as well as the
 // accent, so it stays visible without color. One space separates a
 // bracket from its neighbor, and two spaces separate plain labels.
-func filterChips[F ~int](t *Theme, n, active F, label func(F) string) string {
+func filterChips[F ~int](t *ui.Theme, n, active F, label func(F) string) string {
 	var b strings.Builder
 
 	for f := F(0); f < n; f++ {
@@ -414,13 +417,13 @@ func filterChips[F ~int](t *Theme, n, active F, label func(F) string) string {
 // filterLines joins the states segment and the rest of a filter line
 // with five spaces. A line wider than w becomes two lines, and each one
 // loses its end.
-func filterLines(t *Theme, states, rest string, w int) []string {
-	if one := " " + states + "     " + rest; width(one) <= w {
+func filterLines(t *ui.Theme, states, rest string, w int) []string {
+	if one := " " + states + "     " + rest; ui.Width(one) <= w {
 		return []string{one}
 	}
 
 	return []string{
-		" " + truncate(states, w-1, t.Glyphs.Ellipsis),
-		" " + truncate(rest, w-1, t.Glyphs.Ellipsis),
+		" " + ui.Truncate(states, w-1, t.Glyphs.Ellipsis),
+		" " + ui.Truncate(rest, w-1, t.Glyphs.Ellipsis),
 	}
 }

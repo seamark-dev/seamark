@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -118,7 +120,7 @@ type evRun struct {
 
 	// right is true while the Sources pane has the focus.
 	right  bool
-	scroll [2]scrollState
+	scroll [2]ui.ScrollState
 }
 
 // newEvRun starts the record of run id for plan.
@@ -143,7 +145,7 @@ func (v *evidenceView) start() tea.Cmd {
 	}
 
 	if v.st.busy() {
-		return toast(ToneAttention, "Another operation is running: "+oneLine(v.st.mutation)+
+		return toast(ui.ToneAttention, "Another operation is running: "+ui.OneLine(v.st.mutation)+
 			". The refresh can start after it ends.")
 	}
 
@@ -158,7 +160,7 @@ func (v *evidenceView) start() tea.Cmd {
 	if !v.st.beginRun("Refreshing evidence", note) {
 		cancel()
 
-		return toast(ToneAttention, "Another operation is running: "+oneLine(v.st.mutation))
+		return toast(ui.ToneAttention, "Another operation is running: "+ui.OneLine(v.st.mutation))
 	}
 
 	v.st.lastRunKind = runEvidence
@@ -342,8 +344,8 @@ func (r *evRun) apply(ev index.RefreshEvent, now time.Time) {
 		r.detail(evNameReviews + sep + evBytes(ev.Bytes) + " received")
 	case index.PhaseFetched:
 		r.fetched = true
-		r.note[evPhFetch] = propPlural(ev.Comments, "comment", "comments") + sep + itoa(ev.Kept) + " in the window"
-		r.log(now, propPlural(ev.Comments, "review comment", "review comments")+" fetched, "+itoa(ev.Kept)+
+		r.note[evPhFetch] = propPlural(ev.Comments, "comment", "comments") + sep + strconv.Itoa(ev.Kept) + " in the window"
+		r.log(now, propPlural(ev.Comments, "review comment", "review comments")+" fetched, "+strconv.Itoa(ev.Kept)+
 			" in the window")
 		r.detail(evNameReviews + sep + propPlural(ev.Comments, "comment", "comments") + " fetched")
 	case index.PhaseCluster:
@@ -552,13 +554,13 @@ func (r *evRun) conflict() error {
 // narrow footer.
 func (r *evRun) keys() []key.Binding {
 	if r.confirm {
-		return []key.Binding{withHelp(lesKeys.Confirm, "y", "stop"), withHelp(nkeys.Back, "esc", "keep running")}
+		return []key.Binding{ui.WithHelp(lesKeys.Confirm, "y", "stop"), ui.WithHelp(ui.Nav.Back, "esc", "keep running")}
 	}
 
-	scroll := withHelp(nkeys.Down, "↑↓", "scroll")
-	scroll.SetEnabled(r.scroll[r.pane()].scrolls())
+	scroll := ui.WithHelp(ui.Nav.Down, "↑↓", "scroll")
+	scroll.SetEnabled(r.scroll[r.pane()].Scrolls())
 
-	pane := withHelp(nkeys.Next, "tab", "pane")
+	pane := ui.WithHelp(ui.Nav.Next, "tab", "pane")
 	pane.SetEnabled(r.st.wide())
 
 	if r.running {
@@ -570,9 +572,9 @@ func (r *evRun) keys() []key.Binding {
 
 	// A compact footer has room for a short label only. The NEXT block
 	// in the box keeps the whole sentence.
-	distill := withHelp(nkeys.Enter, "enter", "prepare distillation")
+	distill := ui.WithHelp(ui.Nav.Enter, "enter", "prepare distillation")
 	if !r.st.wide() {
-		distill = withHelp(nkeys.Enter, "enter", "distill")
+		distill = ui.WithHelp(ui.Nav.Enter, "enter", "distill")
 	}
 
 	distill.SetEnabled(r.succeeded() > 0 && r.conflict() == nil)
@@ -604,7 +606,7 @@ func (r *evRun) update(msg tea.Msg) tea.Cmd {
 			r.confirm = false
 
 			return r.stop()
-		case key.Matches(km, nkeys.Back):
+		case key.Matches(km, ui.Nav.Back):
 			r.confirm = false
 		}
 
@@ -616,7 +618,7 @@ func (r *evRun) update(msg tea.Msg) tea.Cmd {
 		if r.running && !r.stopping() {
 			r.confirm = true
 		}
-	case key.Matches(km, nkeys.Enter):
+	case key.Matches(km, ui.Nav.Enter):
 		if !r.running && r.succeeded() > 0 && r.conflict() == nil {
 			return navigate(destLessons, "distill")
 		}
@@ -624,10 +626,10 @@ func (r *evRun) update(msg tea.Msg) tea.Cmd {
 		if !r.running && r.again != nil {
 			return r.again(r.plan.Mode)
 		}
-	case key.Matches(km, nkeys.Next):
+	case key.Matches(km, ui.Nav.Next):
 		r.right = !r.right
 	default:
-		r.scroll[r.pane()].key(km)
+		r.scroll[r.pane()].Key(km)
 	}
 
 	return nil
@@ -643,7 +645,7 @@ func (r *evRun) stop() tea.Cmd {
 	r.stopAsked = true
 
 	if !r.st.requestStop() {
-		return toast(ToneAttention, "The evidence refresh cannot stop at this point.")
+		return toast(ui.ToneAttention, "The evidence refresh cannot stop at this point.")
 	}
 
 	r.log(time.Now(), "stop requested: the run ends at the next safe point")

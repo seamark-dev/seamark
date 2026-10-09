@@ -7,6 +7,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -29,14 +30,14 @@ func (r *evRun) modal(w, h int) (string, bool) {
 			"run. Nothing is retried."
 	}
 
-	return runStopModal(r.st.theme, "Stop the evidence refresh?", text, withHelp(lesKeys.Confirm, "y", "stop the refresh"),
+	return runStopModal(r.st.theme, "Stop the evidence refresh?", text, ui.WithHelp(lesKeys.Confirm, "y", "stop the refresh"),
 		w, h), true
 }
 
 // evVerdict is the summary of a finished run: the tone, the right label
 // of the box and the headline.
 type evVerdict struct {
-	tone  Tone
+	tone  ui.Tone
 	right string
 	head  string
 }
@@ -59,9 +60,9 @@ func (r *evRun) verdict() evVerdict {
 
 	switch {
 	case r.conflict() != nil:
-		return evVerdict{tone: ToneAttention, right: "out of date", head: "The refresh preview is out of date"}
+		return evVerdict{tone: ui.ToneAttention, right: "out of date", head: "The refresh preview is out of date"}
 	case ok == len(sources):
-		return evVerdict{tone: ToneSuccess, right: "refreshed", head: "Evidence refreshed"}
+		return evVerdict{tone: ui.ToneSuccess, right: "refreshed", head: "Evidence refreshed"}
 	case ok > 0:
 		word := "a source that was not attempted"
 
@@ -74,19 +75,19 @@ func (r *evRun) verdict() evVerdict {
 			word = "an unavailable source"
 		}
 
-		return evVerdict{tone: ToneAttention, right: "partial", head: "Evidence refresh finished with " + word}
+		return evVerdict{tone: ui.ToneAttention, right: "partial", head: "Evidence refresh finished with " + word}
 	case r.unexplained():
 		// Only the error explains this result, for example a panic of the
 		// worker. It is a failure, not a refresh that never started.
-		return evVerdict{tone: ToneFailure, right: "failed", head: "Evidence refresh failed"}
+		return evVerdict{tone: ui.ToneFailure, right: "failed", head: "Evidence refresh failed"}
 	case has(index.SourceStopped):
-		return evVerdict{tone: ToneAttention, right: "stopped", head: "Evidence refresh stopped"}
+		return evVerdict{tone: ui.ToneAttention, right: "stopped", head: "Evidence refresh stopped"}
 	case has(index.SourceFailed):
-		return evVerdict{tone: ToneFailure, right: "failed", head: "Evidence refresh failed"}
+		return evVerdict{tone: ui.ToneFailure, right: "failed", head: "Evidence refresh failed"}
 	case has(index.SourceUnavailable):
-		return evVerdict{tone: ToneAttention, right: "unavailable", head: "No evidence source could run"}
+		return evVerdict{tone: ui.ToneAttention, right: "unavailable", head: "No evidence source could run"}
 	default:
-		return evVerdict{tone: ToneAttention, right: "not started", head: "Evidence refresh did not start"}
+		return evVerdict{tone: ui.ToneAttention, right: "not started", head: "Evidence refresh did not start"}
 	}
 }
 
@@ -94,7 +95,7 @@ func (r *evRun) verdict() evVerdict {
 // the attention tone, never the success glyph.
 func (r *evRun) toast() tea.Cmd {
 	v := r.verdict()
-	if v.tone != ToneSuccess {
+	if v.tone != ui.ToneSuccess {
 		return toast(v.tone, v.head+". Lessons "+r.st.theme.Glyphs.Arrow+" Run shows the result.")
 	}
 
@@ -103,7 +104,7 @@ func (r *evRun) toast() tea.Cmd {
 		parts = append(parts, evNameReviews+" "+propPlural(r.out.Reviews.Stored, "finding", "findings"))
 	}
 
-	return toast(ToneSuccess, "Evidence refreshed: "+strings.Join(parts, ", ")+".")
+	return toast(ui.ToneSuccess, "Evidence refreshed: "+strings.Join(parts, ", ")+".")
 }
 
 // kept returns the stored count phrase of a source that kept its
@@ -195,7 +196,7 @@ func (r *evRun) lead() string {
 
 	// The error starts with the ErrConflict text; the lead says that
 	// already, so only the named changes follow.
-	reason := strings.TrimPrefix(errText(c), learning.ErrConflict.Error()+": ")
+	reason := strings.TrimPrefix(ui.ErrText(c), learning.ErrConflict.Error()+": ")
 	text := "The workspace changed after the preview: " + reason + "."
 
 	// A conflict before a write can follow work: the fix source can save
@@ -284,13 +285,13 @@ func evGuidance(o index.SourceOutcome) (text, command string) {
 func (r *evRun) view(w, h int) string {
 	boxH := max(4, h-3)
 
-	if w < wideWidth {
+	if w < ui.WideWidth {
 		return r.contextLine(w) + "\n\n" + r.compactBox(w, boxH)
 	}
 
 	leftW := min(propListW, w*propListW/propDesignW)
 
-	return r.contextLine(w) + "\n\n" + hjoin(1, r.mainBox(leftW, boxH, !r.right), r.sourcesBox(w-leftW-1, boxH, r.right))
+	return r.contextLine(w) + "\n\n" + ui.Hjoin(1, r.mainBox(leftW, boxH, !r.right), r.sourcesBox(w-leftW-1, boxH, r.right))
 }
 
 // contextLine renders the confirmed scope of the run and its start or
@@ -318,11 +319,11 @@ func (r *evRun) contextLine(w int) string {
 		segs = append(segs, seg("finished", r.finished.Format("15:04:05")))
 	}
 
-	for len(segs) > 1 && width(" "+strings.Join(segs, "     ")) > w {
+	for len(segs) > 1 && ui.Width(" "+strings.Join(segs, "     ")) > w {
 		segs = segs[:len(segs)-1]
 	}
 
-	return truncate(" "+strings.Join(segs, "     "), w, t.Glyphs.Ellipsis)
+	return ui.Truncate(" "+strings.Join(segs, "     "), w, t.Glyphs.Ellipsis)
 }
 
 // rightLabel renders the state at the right of the main box. A stop
@@ -342,7 +343,7 @@ func (r *evRun) rightLabel() string {
 // a running refresh, or the verdict of a finished one.
 func (r *evRun) headline() string {
 	t := r.st.theme
-	spin := t.spinnerFrame(r.st.tick)
+	spin := t.SpinnerFrame(r.st.tick)
 
 	if r.stopping() {
 		return t.Attention.Render(spin) + " " + t.Title.Render("Stopping at a safe point")
@@ -402,7 +403,7 @@ func (r *evRun) statusLines(w int, short bool) []string {
 	// slot. The error then repeats it, so only an unexplained error shows.
 	out := propLines(t.Body, r.lead(), w)
 	if r.unexplained() {
-		out = append(out, propLines(t.Muted, "Details: "+errText(r.err), w)...)
+		out = append(out, propLines(t.Muted, "Details: "+ui.ErrText(r.err), w)...)
 	}
 
 	return out
@@ -417,10 +418,10 @@ func (r *evRun) phaseLines(w int) []string {
 
 	rows := make([]phaseRow, 0, last+1)
 	for p := evPhMine; p <= last; p++ {
-		rows = append(rows, phaseRow{label: evPhaseLabels[p], note: oneLine(r.note[p]), state: r.phase[p]})
+		rows = append(rows, phaseRow{label: evPhaseLabels[p], note: ui.OneLine(r.note[p]), state: r.phase[p]})
 	}
 
-	return r.st.theme.phaseRows(rows, r.st.tick, w)
+	return phaseRows(r.st.theme, rows, r.st.tick, w)
 }
 
 // nextLines renders the NEXT block of a result: the keys that start the
@@ -431,7 +432,7 @@ func (r *evRun) nextLines(w int) []string {
 	var out []string
 
 	keyRow := func(k, text string) {
-		out = append(out, truncate(t.Key.Render(padRight(k, 7))+t.Body.Render(text), w, t.Glyphs.Ellipsis))
+		out = append(out, ui.Truncate(t.Key.Render(ui.PadRight(k, 7))+t.Body.Render(text), w, t.Glyphs.Ellipsis))
 	}
 
 	if r.succeeded() > 0 && r.conflict() == nil {
@@ -466,10 +467,10 @@ func (r *evRun) nextLines(w int) []string {
 func (r *evRun) sourceLines(source string, w int) []string {
 	t := r.st.theme
 	g := t.Glyphs
-	name := padRight(evSourceName(source), 16)
+	name := ui.PadRight(evSourceName(source), 16)
 
 	row := func(glyph, word string, facts ...string) []string {
-		out := []string{truncate(glyph+" "+t.Body.Render(name)+" "+word, w, g.Ellipsis)}
+		out := []string{ui.Truncate(glyph+" "+t.Body.Render(name)+" "+word, w, g.Ellipsis)}
 
 		for _, f := range facts {
 			if f != "" {
@@ -498,7 +499,7 @@ func (r *evRun) sourceLines(source string, w int) []string {
 		case reported:
 			o = index.SourceOutcome{State: state}
 		case r.seen[work] || r.seen[save]:
-			return row(t.Accent.Render(t.spinnerFrame(r.st.tick)), t.Accent.Render("running"), r.note[work])
+			return row(t.Accent.Render(t.SpinnerFrame(r.st.tick)), t.Accent.Render("running"), r.note[work])
 		default:
 			return row(t.Faint.Render(g.Hollow), t.Faint.Render("waiting"))
 		}
@@ -532,7 +533,7 @@ func (r *evRun) sourceLines(source string, w int) []string {
 	default:
 		// A source that did not succeed never wrote, so its stored data
 		// stays, also while the run goes on.
-		return row(glyph, word, r.kept(source, "kept", "kept"), diag(o.Reason))
+		return row(glyph, word, r.kept(source, "kept", "kept"), ui.Diag(o.Reason))
 	}
 }
 
@@ -542,7 +543,7 @@ func (r *evRun) confirmedLines(w int) []string {
 	t := r.st.theme
 	p := r.plan
 
-	rows := [][2]string{{"Workspace", oneLine(displayPath(p.Root))}}
+	rows := [][2]string{{"Workspace", ui.OneLine(ui.DisplayPath(p.Root))}}
 
 	if r.reviewMode() {
 		repo, _ := evRepo(p.Repository, p.RepoState)
@@ -567,7 +568,7 @@ func (r *evRun) confirmedLines(w int) []string {
 // the steps, the next keys and the recent activity.
 func (r *evRun) mainBox(w, h int, focused bool) string {
 	t := r.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 
 	body := append([]string{r.headline(), ""}, r.statusLines(inner, false)...)
 	body = append(body, "", t.Heading.Render("PHASES"))
@@ -581,9 +582,9 @@ func (r *evRun) mainBox(w, h int, focused bool) string {
 	}
 
 	body = append(body, "", t.Heading.Render("RECENT ACTIVITY"))
-	body = append(body, t.activityLines(r.activity, evActivityShow, inner)...)
+	body = append(body, activityLines(t, r.activity, evActivityShow, inner)...)
 
-	return r.scrollBox(0, boxOpts{
+	return r.scrollBox(0, ui.BoxOpts{
 		W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Evidence refresh", focused), Right: r.rightLabel(),
 	}, body)
 }
@@ -592,7 +593,7 @@ func (r *evRun) mainBox(w, h int, focused bool) string {
 // its stored data, then the confirmed scope.
 func (r *evRun) sourcesBox(w, h int, focused bool) string {
 	t := r.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 
 	body := []string{t.Heading.Render("SOURCES")}
 	body = append(body, r.sourceLines(index.SourceFixes, inner)...)
@@ -600,14 +601,14 @@ func (r *evRun) sourcesBox(w, h int, focused bool) string {
 	body = append(body, "", t.Heading.Render("CONFIRMED IN THE PREVIEW"))
 	body = append(body, r.confirmedLines(inner)...)
 
-	return r.scrollBox(1, boxOpts{W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Sources", focused)}, body)
+	return r.scrollBox(1, ui.BoxOpts{W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Sources", focused)}, body)
 }
 
 // compactBox renders the whole record in one box that scrolls, for a
 // terminal below the wide width.
 func (r *evRun) compactBox(w, h int) string {
 	t := r.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 
 	body := append([]string{r.headline(), ""}, r.statusLines(inner, true)...)
 	body = append(body, "", t.Heading.Render("PHASES"))
@@ -622,16 +623,16 @@ func (r *evRun) compactBox(w, h int) string {
 	}
 
 	body = append(body, "", t.Heading.Render("RECENT ACTIVITY"))
-	body = append(body, t.activityLines(r.activity, 2, inner)...)
+	body = append(body, activityLines(t, r.activity, 2, inner)...)
 
-	return r.scrollBox(0, boxOpts{
+	return r.scrollBox(0, ui.BoxOpts{
 		W: w, H: h, Focus: true, Title: integPaneTitle(t, "Evidence refresh", true), Right: r.rightLabel(),
 	}, body)
 }
 
 // scrollBox renders body in a box whose text scrolls with the state of
 // pane i. The foot shows the visible range, so hidden lines are never a
-// surprise. The shared Theme.scrollBox keeps the rules of every box.
-func (r *evRun) scrollBox(i int, o boxOpts, body []string) string {
-	return r.st.theme.scrollBox(o, body, nil, &r.scroll[i], [2]int{-1, -1}, false)
+// surprise. The shared ui.Theme.ScrollBox keeps the rules of every box.
+func (r *evRun) scrollBox(i int, o ui.BoxOpts, body []string) string {
+	return r.st.theme.ScrollBox(o, body, nil, &r.scroll[i], [2]int{-1, -1}, false)
 }

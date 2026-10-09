@@ -6,6 +6,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The diff of the review step. Each row has a gutter with the old and
@@ -24,7 +26,7 @@ type setupDiffRow struct {
 // header lines, because the box title already names the file. A line
 // outside a hunk keeps its sign and gets no numbers.
 func setupParseDiff(diff string) []setupDiffRow {
-	text := strings.TrimRight(multiLine(diff), "\n")
+	text := strings.TrimRight(ui.MultiLine(diff), "\n")
 	if text == "" {
 		return nil
 	}
@@ -105,7 +107,7 @@ func setupRangeStart(r string) int {
 // line wraps onto rows with an empty gutter and the same sign, so the
 // review hides no part of a change and every row keeps its sign when
 // color is off. Added and removed rows get a tinted background.
-func setupDiffLines(t *Theme, diff string, w int) []string {
+func setupDiffLines(t *ui.Theme, diff string, w int) []string {
 	rows := setupParseDiff(diff)
 	if len(rows) == 0 {
 		return integLines(t.Muted, "The diff is empty: the file content does not change.", w)
@@ -134,7 +136,7 @@ func setupDiffLines(t *Theme, diff string, w int) []string {
 
 			line := lead + sign + textStyle.Render(piece)
 			if bg >= 0 {
-				line = t.highlight(line, w, bg)
+				line = t.Highlight(line, w, bg)
 			}
 
 			lines = append(lines, line)
@@ -150,20 +152,20 @@ func setupNumber(n, w int) string {
 		return strings.Repeat(" ", w)
 	}
 
-	return padLeft(strconv.Itoa(n), w)
+	return ui.PadLeft(strconv.Itoa(n), w)
 }
 
 // setupSignStyle returns the styled sign column, the text style and the
 // row background of one diff sign. The sign keeps the meaning without
 // color: "+" added, "−" removed, "@" a hunk header.
-func setupSignStyle(t *Theme, sign byte) (signCell string, text lipgloss.Style, bg int) {
+func setupSignStyle(t *ui.Theme, sign byte) (signCell string, text lipgloss.Style, bg int) {
 	g := t.Glyphs
 
 	switch sign {
 	case '+':
-		return t.Success.Render(g.Add) + " ", t.Body, bgAdd
+		return t.Success.Render(g.Add) + " ", t.Body, ui.BgAdd
 	case '-':
-		return t.Failure.Render(g.Del) + " ", t.Body, bgDel
+		return t.Failure.Render(g.Del) + " ", t.Body, ui.BgDel
 	case '@':
 		return t.Info.Render("@") + " ", t.Info, -1
 	case ' ':

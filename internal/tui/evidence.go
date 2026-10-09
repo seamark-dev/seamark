@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -9,6 +10,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -49,7 +51,7 @@ type evidenceView struct {
 	detail bool
 	// detailScroll is the position of the detail text. It resets when
 	// the cursor moves, because each row has its own text.
-	detailScroll scrollState
+	detailScroll ui.ScrollState
 	// listOff is the first list line shown when the list is taller than
 	// its box.
 	listOff int
@@ -114,7 +116,7 @@ func (v *evidenceView) key(msg tea.KeyMsg) tea.Cmd {
 
 	snap, ready := v.snapshot()
 	if !ready {
-		if _, cmd, ok := v.blockedLink(snap); ok && key.Matches(msg, nkeys.Enter) && v.st.learning.loaded {
+		if _, cmd, ok := v.blockedLink(snap); ok && key.Matches(msg, ui.Nav.Enter) && v.st.learning.loaded {
 			return cmd
 		}
 
@@ -122,21 +124,21 @@ func (v *evidenceView) key(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	switch {
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		return v.activate()
-	case key.Matches(msg, nkeys.Next):
+	case key.Matches(msg, ui.Nav.Next):
 		v.detail = !v.detail
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		v.detail = false
 	case v.detail:
-		v.detailScroll.key(msg)
-	case key.Matches(msg, nkeys.Up):
+		v.detailScroll.Key(msg)
+	case key.Matches(msg, ui.Nav.Up):
 		v.move(-1)
-	case key.Matches(msg, nkeys.Down):
+	case key.Matches(msg, ui.Nav.Down):
 		v.move(1)
-	case key.Matches(msg, nkeys.Top):
+	case key.Matches(msg, ui.Nav.Top):
 		v.move(-int(evItemCount))
-	case key.Matches(msg, nkeys.Bottom):
+	case key.Matches(msg, ui.Nav.Bottom):
 		v.move(int(evItemCount))
 	}
 
@@ -148,7 +150,7 @@ func (v *evidenceView) move(delta int) {
 	next := evItem(max(0, min(int(evItemCount)-1, int(v.cursor)+delta)))
 	if next != v.cursor {
 		v.cursor = next
-		v.detailScroll = scrollState{}
+		v.detailScroll = ui.ScrollState{}
 	}
 }
 
@@ -202,19 +204,19 @@ func (v *evidenceView) keys() []key.Binding {
 		// A compact footer has room for a short label only; the box
 		// names the whole route.
 		if !v.st.wide() {
-			link = withHelp(nkeys.Enter, "enter", "Overview")
+			link = ui.WithHelp(ui.Nav.Enter, "enter", "Overview")
 		}
 
 		return append([]key.Binding{link}, switches...)
 	}
 
 	if v.detail {
-		scroll := withHelp(nkeys.Down, "↑↓", "scroll")
-		scroll.SetEnabled(v.detailScroll.scrolls())
+		scroll := ui.WithHelp(ui.Nav.Down, "↑↓", "scroll")
+		scroll.SetEnabled(v.detailScroll.Scrolls())
 
-		back := withHelp(nkeys.Next, "tab", "list")
+		back := ui.WithHelp(ui.Nav.Next, "tab", "list")
 		if !v.st.wide() {
-			back = withHelp(nkeys.Back, "esc", "back")
+			back = ui.WithHelp(ui.Nav.Back, "esc", "back")
 		}
 
 		return append([]key.Binding{scroll, back}, switches...)
@@ -222,10 +224,10 @@ func (v *evidenceView) keys() []key.Binding {
 
 	// A compact list opens the detail with enter, so tab leaves the
 	// footer there and the switch keys keep their room.
-	tab := withHelp(nkeys.Next, "tab", "detail")
+	tab := ui.WithHelp(ui.Nav.Next, "tab", "detail")
 	tab.SetEnabled(v.st.wide())
 
-	return append([]key.Binding{withHelp(nkeys.Down, "↑↓", "move"), withHelp(nkeys.Enter, "enter", "open"), tab},
+	return append([]key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "move"), ui.WithHelp(ui.Nav.Enter, "enter", "open"), tab},
 		switches...)
 }
 
@@ -246,14 +248,14 @@ func (v *evidenceView) body(w, h int) string {
 	sec := &v.st.learning
 
 	if !sec.loaded {
-		o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Evidence sources", true)}
+		o := ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Evidence sources", true)}
 
 		if sec.err != nil {
-			return integBoxed(t, o, ToneFailure, "Could not read the evidence", errText(sec.err),
+			return integBoxed(t, o, ui.ToneFailure, "Could not read the evidence", ui.ErrText(sec.err),
 				t.Muted.Render("Press ")+t.Key.Render("r")+t.Muted.Render(" to read it again."))
 		}
 
-		return integBoxed(t, o, ToneNeutral, "Reading the evidence"+t.Glyphs.Ellipsis,
+		return integBoxed(t, o, ui.ToneNeutral, "Reading the evidence"+t.Glyphs.Ellipsis,
 			"Seamark reads the stored findings, the review window and the origin remote. Nothing is fetched "+
 				"or written.", "")
 	}
@@ -266,7 +268,7 @@ func (v *evidenceView) body(w, h int) string {
 	if v.st.wide() {
 		listW := min(propListW, w*propListW/propDesignW)
 
-		return hjoin(1, v.listBox(snap, listW, h, !v.detail), v.detailBox(snap, w-listW-1, h, v.detail))
+		return ui.Hjoin(1, v.listBox(snap, listW, h, !v.detail), v.detailBox(snap, w-listW-1, h, v.detail))
 	}
 
 	if v.detail {
@@ -285,7 +287,7 @@ func (v *evidenceView) contextLine(w int) string {
 	sec := &v.st.learning
 
 	if sec.stale() {
-		return " " + t.Attention.Render(truncate(t.Glyphs.Warn+" stale: "+errText(sec.err)+
+		return " " + t.Attention.Render(ui.Truncate(t.Glyphs.Warn+" stale: "+ui.ErrText(sec.err)+
 			". Showing the snapshot from "+sec.at.Format("15:04:05")+".", w-1, t.Glyphs.Ellipsis))
 	}
 
@@ -306,9 +308,9 @@ func (v *evidenceView) contextLine(w int) string {
 	}
 
 	segs := []string{
-		seg("findings", itoa(evTotal(snap.Findings)), known),
-		seg("reviews", itoa(snap.ReviewFindings), known),
-		seg("fixes", itoa(snap.FixFindings), known),
+		seg("findings", strconv.Itoa(evTotal(snap.Findings)), known),
+		seg("reviews", strconv.Itoa(snap.ReviewFindings), known),
+		seg("fixes", strconv.Itoa(snap.FixFindings), known),
 	}
 
 	if agent := v.agent(); agent != "" {
@@ -322,23 +324,23 @@ func (v *evidenceView) contextLine(w int) string {
 	}
 
 	// Whole segments drop from the right, so no value is ever cut.
-	for len(segs) > 1 && width(" "+strings.Join(segs, "     ")) > w {
+	for len(segs) > 1 && ui.Width(" "+strings.Join(segs, "     ")) > w {
 		segs = segs[:len(segs)-1]
 	}
 
-	return truncate(" "+strings.Join(segs, "     "), w, t.Glyphs.Ellipsis)
+	return ui.Truncate(" "+strings.Join(segs, "     "), w, t.Glyphs.Ellipsis)
 }
 
 // agent returns the resolved distillation command when the semantic
 // health knows it, else "". The command line can quote a configured
-// value, so diag redacts it.
+// value, so ui.Diag redacts it.
 func (v *evidenceView) agent() string {
 	sec := &v.st.index
 	if !sec.loaded || sec.value.Status == nil {
 		return ""
 	}
 
-	return diag(sec.value.Status.DistillAgent)
+	return ui.Diag(sec.value.Status.DistillAgent)
 }
 
 // blockedLink returns the key and the navigation that repair an index
@@ -350,9 +352,9 @@ func (v *evidenceView) blockedLink(snap learning.Snapshot) (key.Binding, tea.Cmd
 	case workspace.IndexReady:
 		return key.Binding{}, nil, false
 	case workspace.IndexNewer, workspace.IndexUnreadable:
-		return withHelp(nkeys.Enter, "enter", "open Overview"), navigate(destOverview, ""), true
+		return ui.WithHelp(ui.Nav.Enter, "enter", "open Overview"), navigate(destOverview, ""), true
 	default:
-		return withHelp(nkeys.Enter, "enter", "build in Overview"), navigate(destOverview, ovIntentBuild), true
+		return ui.WithHelp(ui.Nav.Enter, "enter", "build in Overview"), navigate(destOverview, ovIntentBuild), true
 	}
 }
 
@@ -361,11 +363,11 @@ func (v *evidenceView) blockedLink(snap learning.Snapshot) (key.Binding, tea.Cmd
 // one, so the box links to the explicit build instead.
 func (v *evidenceView) blockedBox(snap learning.Snapshot, w, h int) string {
 	t := v.st.theme
-	o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Evidence sources", true)}
+	o := ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Evidence sources", true)}
 
 	var title, body string
 
-	cli := t.Faint.Render("or in a shell: ") + t.command("seamark index --fixes-only")
+	cli := t.Faint.Render("or in a shell: ") + commandText(t, "seamark index --fixes-only")
 
 	switch snap.Probe.State {
 	case workspace.IndexNewer:
@@ -375,7 +377,7 @@ func (v *evidenceView) blockedBox(snap learning.Snapshot, w, h int) string {
 		cli = ""
 	case workspace.IndexUnreadable:
 		title = "The index could not be read"
-		body = errText(snap.Probe.Err) + ". A refresh never repairs the index. Overview and Doctor show the details."
+		body = ui.ErrText(snap.Probe.Err) + ". A refresh never repairs the index. Overview and Doctor show the details."
 		cli = ""
 	case workspace.IndexOlder:
 		title = "The index needs a rebuild"
@@ -390,13 +392,13 @@ func (v *evidenceView) blockedBox(snap learning.Snapshot, w, h int) string {
 	}
 
 	link, _, _ := v.blockedLink(snap)
-	next := t.hints([]key.Binding{link})
+	next := t.Hints([]key.Binding{link})
 
 	if cli != "" {
 		next += "\n" + cli
 	}
 
-	return integBoxed(t, o, ToneAttention, title, body, next)
+	return integBoxed(t, o, ui.ToneAttention, title, body, next)
 }
 
 // evLine is one line of the source list. item is the row that owns the
@@ -413,7 +415,7 @@ type evLine struct {
 // actions, and the rule that nothing runs before y.
 func (v *evidenceView) listBox(snap learning.Snapshot, w, h int, focused bool) string {
 	t := v.st.theme
-	inner, rows := boxInner(w), boxRows(h)
+	inner, rows := ui.BoxInner(w), ui.BoxRows(h)
 
 	shown, foot := v.fitList(v.listLines(snap, inner), rows, inner, focused)
 	if foot == "" && !v.st.wide() {
@@ -424,7 +426,7 @@ func (v *evidenceView) listBox(snap learning.Snapshot, w, h int, focused bool) s
 		foot = t.Faint.Render(foot)
 	}
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: focused, Foot: foot, Lines: shown,
 		Title: integPaneTitle(t, "Evidence sources", focused), Right: t.Muted.Render("2"),
 	})
@@ -460,7 +462,7 @@ func (v *evidenceView) listLines(snap learning.Snapshot, w int) []evLine {
 			style = t.Title
 		}
 
-		add(it, 0, spread(style.Render(evItemName(it)), v.actionHint(snap, it)+" ", w-2))
+		add(it, 0, ui.Spread(style.Render(evItemName(it)), v.actionHint(snap, it)+" ", w-2))
 	}
 
 	if v.st.wide() {
@@ -512,7 +514,7 @@ func (v *evidenceView) sourceBadge(fresh evFresh, reviewSource bool) string {
 	t := v.st.theme
 
 	if r := v.run; r != nil && r.running && (!reviewSource || r.plan.Mode == index.SourcesReviewsAndLocal) {
-		return t.Accent.Render(t.spinnerFrame(v.st.tick)) + " " + t.Muted.Render("refreshing"+t.Glyphs.Ellipsis)
+		return t.Accent.Render(t.SpinnerFrame(v.st.tick)) + " " + t.Muted.Render("refreshing"+t.Glyphs.Ellipsis)
 	}
 
 	return fresh.badge(t)
@@ -608,7 +610,7 @@ func (v *evidenceView) fitList(lines []evLine, rows, w int, focused bool) (shown
 
 		text := prefix + l.text
 		if l.item == v.cursor && focused {
-			text = t.highlight(text, w, bgSel)
+			text = t.Highlight(text, w, ui.BgSel)
 		}
 
 		shown = append(shown, text)
@@ -645,19 +647,19 @@ func evItemName(it evItem) string {
 // detailBox renders the detail of the cursor row in a box that scrolls.
 func (v *evidenceView) detailBox(snap learning.Snapshot, w, h int, focused bool) string {
 	t := v.st.theme
-	inner, rows := boxInner(w), boxRows(h)
+	inner, rows := ui.BoxInner(w), ui.BoxRows(h)
 
 	body := v.detailLines(snap, inner)
 
 	sc := &v.detailScroll
-	from, to := sc.fit(len(body), rows)
+	from, to := sc.Fit(len(body), rows)
 
 	var foot string
-	if sc.scrolls() {
-		foot = propRange(t, from, to, len(body))
+	if sc.Scrolls() {
+		foot = t.RangeNote(from, to, len(body))
 	}
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: focused, Foot: foot, Lines: body[from:to],
 		Title: integPaneTitle(t, evItemName(v.cursor), focused),
 	})
@@ -679,7 +681,7 @@ func (v *evidenceView) detailLines(snap learning.Snapshot, w int) []string {
 
 // evHeading renders an upper-case section label with an optional faint
 // count, after a blank line.
-func evHeading(t *Theme, label, count string) []string {
+func evHeading(t *ui.Theme, label, count string) []string {
 	head := t.Heading.Render(label)
 	if count != "" {
 		head += "  " + t.Faint.Render(count)
@@ -690,17 +692,17 @@ func evHeading(t *Theme, label, count string) []string {
 
 // evCountRows renders label and count pairs with the counts right
 // aligned in one column.
-func evCountRows(t *Theme, rows [][2]string, w int) []string {
+func evCountRows(t *ui.Theme, rows [][2]string, w int) []string {
 	labelW, countW := 0, 0
 
 	for _, r := range rows {
-		labelW = max(labelW, width(r[0]))
-		countW = max(countW, width(r[1]))
+		labelW = max(labelW, ui.Width(r[0]))
+		countW = max(countW, ui.Width(r[1]))
 	}
 
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, truncate(t.Muted.Render(padRight(r[0], labelW))+"  "+t.Body.Render(padLeft(r[1], countW)),
+		out = append(out, ui.Truncate(t.Muted.Render(ui.PadRight(r[0], labelW))+"  "+t.Body.Render(ui.PadLeft(r[1], countW)),
 			w, t.Glyphs.Ellipsis))
 	}
 
@@ -712,7 +714,7 @@ func (v *evidenceView) unknownCounts(snap learning.Snapshot, w int) []string {
 	t := v.st.theme
 
 	return integHanging(t.Unknown.Render(t.Glyphs.Unknown+" "), t.Muted,
-		"Unknown: the stored findings could not be read. "+errText(snap.CountsErr), w)
+		"Unknown: the stored findings could not be read. "+ui.ErrText(snap.CountsErr), w)
 }
 
 // fixesDetail renders the local fix source.
@@ -727,7 +729,7 @@ func (v *evidenceView) fixesDetail(snap learning.Snapshot, w int) []string {
 
 	count := ""
 	if known {
-		count = itoa(snap.FixFindings)
+		count = strconv.Itoa(snap.FixFindings)
 	}
 
 	out = append(out, evHeading(t, "FINDINGS", count)...)
@@ -764,14 +766,14 @@ func (v *evidenceView) reviewsDetail(snap learning.Snapshot, w int) []string {
 
 	count := ""
 	if known {
-		count = itoa(snap.ReviewFindings)
+		count = strconv.Itoa(snap.ReviewFindings)
 	}
 
 	out = append(out, evHeading(t, "FINDINGS", count)...)
 
 	if known {
 		out = append(out, evCountRows(t, [][2]string{
-			{"review findings", itoa(snap.ReviewFindings)}, {"review lessons", itoa(snap.Lessons)},
+			{"review findings", strconv.Itoa(snap.ReviewFindings)}, {"review lessons", strconv.Itoa(snap.Lessons)},
 		}, w)...)
 	} else {
 		out = append(out, v.unknownCounts(snap, w)...)
@@ -782,14 +784,14 @@ func (v *evidenceView) reviewsDetail(snap learning.Snapshot, w int) []string {
 	if repo, ok := evRepo(snap.Repository, snap.RepoState); ok {
 		out = append(out, propLines(t.Code, repo, w)...)
 	} else {
-		out = append(out, propNote(t, ToneAttention, repo+". The review source reads unavailable until "+
+		out = append(out, propNote(t, ui.ToneAttention, repo+". The review source reads unavailable until "+
 			"origin names a github.com repository.", w)...)
 	}
 
 	out = append(out, evHeading(t, "ACCESS", "")...)
 
 	if snap.GHPath == "" {
-		out = append(out, propNote(t, ToneAttention, "gh not found on PATH. The review source reads unavailable "+
+		out = append(out, propNote(t, ui.ToneAttention, "gh not found on PATH. The review source reads unavailable "+
 			"until gh is installed and logged in.", w)...)
 	} else {
 		out = append(out, propLines(t.Body, evGH(snap.GHPath), w)...)
@@ -815,7 +817,7 @@ func (v *evidenceView) windowLines(win learning.Window, w int) []string {
 
 	text, ok := evWindow(win)
 	if !ok {
-		out := propNote(t, ToneAttention, ".seamark/config.yaml could not be read: "+errText(win.ConfigErr), w)
+		out := propNote(t, ui.ToneAttention, ".seamark/config.yaml could not be read: "+ui.ErrText(win.ConfigErr), w)
 
 		return append(out, propLines(t.Muted, "A refresh stays blocked until the file reads again. Fix "+
 			"reviews.window_days in Settings (press 5) or in the file "+settingsFile+".", w)...)
@@ -835,7 +837,7 @@ func (v *evidenceView) cliRoute(command string, w int) []string {
 	t := v.st.theme
 
 	out := evHeading(t, "CLI ROUTE", "")
-	out = append(out, t.command(command))
+	out = append(out, commandText(t, command))
 
 	return append(out, propLines(t.Faint, "The CLI route also updates the index first. The console refresh "+
 		"needs a usable index and does not build it.", w)...)
@@ -879,13 +881,13 @@ func (v *evidenceView) refreshDetail(snap learning.Snapshot, w int) []string {
 
 	if note := evReachNote(mode, github, snap.GHPath); note != "" {
 		out = append(out, "")
-		out = append(out, propNote(t, ToneAttention, note, w)...)
+		out = append(out, propNote(t, ui.ToneAttention, note, w)...)
 	}
 
 	if snap.Window.ConfigErr != nil {
 		out = append(out, evHeading(t, "BLOCKED", "")...)
-		out = append(out, propNote(t, ToneAttention, ".seamark/config.yaml could not be read: "+
-			errText(snap.Window.ConfigErr), w)...)
+		out = append(out, propNote(t, ui.ToneAttention, ".seamark/config.yaml could not be read: "+
+			ui.ErrText(snap.Window.ConfigErr), w)...)
 		out = append(out, propLines(t.Muted, "The preview links to Settings "+t.Glyphs.Arrow+" evidence. An "+
 			"editor on "+settingsFile+" fixes it too.", w)...)
 	}
@@ -929,9 +931,9 @@ func (v *evidenceView) distillDetail(snap learning.Snapshot, w int) []string {
 	if snap.CountsErr == nil {
 		out = append(out, evHeading(t, "EVIDENCE NOW", "")...)
 		out = append(out, evCountRows(t, [][2]string{
-			{"findings", itoa(evTotal(snap.Findings))},
-			{"review findings", itoa(snap.ReviewFindings)},
-			{"local fix findings", itoa(snap.FixFindings)},
+			{"findings", strconv.Itoa(evTotal(snap.Findings))},
+			{"review findings", strconv.Itoa(snap.ReviewFindings)},
+			{"local fix findings", strconv.Itoa(snap.FixFindings)},
 		}, w)...)
 	}
 

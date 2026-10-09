@@ -18,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/status"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -332,7 +333,7 @@ func TestOverviewClassifiesCapabilitiesFromTypedData(t *testing.T) {
 
 	resets := ovFind(t, o, "cap:codex:resets")
 	assert.Equal(t, ovUnsupported, resets.group)
-	assert.Equal(t, ToneUnsupported, resets.tone)
+	assert.Equal(t, ui.ToneUnsupported, resets.tone)
 	assert.Equal(t, ovActNone, resets.act.kind)
 
 	unsupported := ovFind(t, o, "cap:shared:commands")
@@ -341,7 +342,7 @@ func TestOverviewClassifiesCapabilitiesFromTypedData(t *testing.T) {
 
 	trust := ovFind(t, o, "trust:codex")
 	assert.Equal(t, ovUnknown, trust.group)
-	assert.Equal(t, ToneUnknown, trust.tone, "unknown evidence is never green")
+	assert.Equal(t, ui.ToneUnknown, trust.tone, "unknown evidence is never green")
 	assert.Contains(t, strings.Join(trust.body, " "), "review the hooks with /hooks",
 		"informational findings explain the trust limit")
 
@@ -700,7 +701,7 @@ func TestOverviewFreshWorkspaceOffersSetupAndBuild(t *testing.T) {
 
 func TestOverviewLoadingStateBeforeFirstLoad(t *testing.T) {
 	f := ovPopulated()
-	m := newModel(f, newTheme(false))
+	m := newModel(f, ui.NewTheme(false))
 
 	// Start the loads without running them, so every source is loading.
 	_ = m.st.load(allSections...)
@@ -746,7 +747,7 @@ func TestOverviewLedgerFailureIsUnknownThenStale(t *testing.T) {
 }
 
 func TestOverviewProgressShowsParseCountAndSkippedPhases(t *testing.T) {
-	st := &state{svc: newFake(), theme: newTheme(false), width: 120, height: 40}
+	st := &state{svc: newFake(), theme: ui.NewTheme(false), width: 120, height: 40}
 	o := newOverview(st)
 
 	o.build = newOvBuild(1, false, time.Now())
@@ -798,7 +799,7 @@ func TestOverviewControlSequencesRenderInert(t *testing.T) {
 func TestOverviewASCIIThemeUsesASCIIGlyphs(t *testing.T) {
 	f := ovPopulated()
 	h := newHarness(t, f, 120, 40)
-	h.m.st.theme = newTheme(true)
+	h.m.st.theme = ui.NewTheme(true)
 
 	o := ovScreen(h)
 

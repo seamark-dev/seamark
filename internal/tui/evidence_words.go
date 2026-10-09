@@ -3,12 +3,14 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file holds the words of the evidence workflow: source names,
@@ -16,7 +18,7 @@ import (
 // outcome words. The Evidence view, the refresh preview and the run
 // record share them, so one state has one word everywhere (design map
 // §9). Text from the repository, git, gh or a reader is untrusted, so
-// these helpers pass it through oneLine or diag.
+// these helpers pass it through ui.OneLine or ui.Diag.
 
 // Source names as the evidence screens show them.
 const (
@@ -55,7 +57,7 @@ func evFindings(n int, known bool) string {
 
 // evFresh is the freshness badge of one source: a tone and a word.
 type evFresh struct {
-	tone Tone
+	tone ui.Tone
 	text string
 }
 
@@ -67,18 +69,18 @@ type evFresh struct {
 func evFreshness(stamp int64, count int, known bool) evFresh {
 	switch {
 	case stamp > 0:
-		return evFresh{tone: ToneSuccess, text: "refreshed " + ageSince(stamp)}
+		return evFresh{tone: ui.ToneSuccess, text: "refreshed " + ageSince(stamp)}
 	case known && count == 0:
-		return evFresh{tone: ToneNeutral, text: "never refreshed"}
+		return evFresh{tone: ui.ToneNeutral, text: "never refreshed"}
 	default:
-		return evFresh{tone: ToneUnknown, text: "last refresh unknown"}
+		return evFresh{tone: ui.ToneUnknown, text: "last refresh unknown"}
 	}
 }
 
 // badge renders the freshness with its glyph. The never state uses the
 // faint info glyph, as design map §9 asks.
-func (f evFresh) badge(t *Theme) string {
-	if f.tone == ToneNeutral {
+func (f evFresh) badge(t *ui.Theme) string {
+	if f.tone == ui.ToneNeutral {
 		return t.Faint.Render(t.Glyphs.Info + " " + f.text)
 	}
 
@@ -141,7 +143,7 @@ func evFloorNote(w learning.Window) string {
 		return ""
 	}
 
-	return "the newest " + itoa(w.Floor) + " comments always stay"
+	return "the newest " + strconv.Itoa(w.Floor) + " comments always stay"
 }
 
 // evRepo renders the GitHub target of the review fetch. It shows the
@@ -150,7 +152,7 @@ func evFloorNote(w learning.Window) string {
 func evRepo(repo reviews.Repository, state reviews.RepositoryState) (text string, ok bool) {
 	switch state {
 	case reviews.RepositoryGitHub:
-		return oneLine(repo.Slug()) + " " + "(remote origin)", true
+		return ui.OneLine(repo.Slug()) + " " + "(remote origin)", true
 	case reviews.RepositoryNoOrigin:
 		return "unavailable: no origin remote", false
 	case reviews.RepositoryNotGitHub:
@@ -164,7 +166,7 @@ func evRepo(repo reviews.Repository, state reviews.RepositoryState) (text string
 func evRepoShort(repo reviews.Repository, state reviews.RepositoryState) string {
 	switch state {
 	case reviews.RepositoryGitHub:
-		return oneLine(repo.Slug())
+		return ui.OneLine(repo.Slug())
 	case reviews.RepositoryNoOrigin:
 		return "no origin remote"
 	case reviews.RepositoryNotGitHub:
@@ -181,12 +183,12 @@ func evGH(path string) string {
 		return "gh not found on PATH"
 	}
 
-	return "gh found on PATH (" + oneLine(path) + ")"
+	return "gh found on PATH (" + ui.OneLine(path) + ")"
 }
 
 // evFixRows returns the fix-mined sources that hold findings, largest
 // first, as label and count pairs. The source names come from the
-// store, so oneLine sanitizes them.
+// store, so ui.OneLine sanitizes them.
 func evFixRows(by map[string]int) [][2]string {
 	type row struct {
 		name string
@@ -197,7 +199,7 @@ func evFixRows(by map[string]int) [][2]string {
 
 	for _, src := range domain.FixMinedSources() {
 		if n := by[src]; n > 0 {
-			rows = append(rows, row{name: oneLine(src), n: n})
+			rows = append(rows, row{name: ui.OneLine(src), n: n})
 		}
 	}
 
@@ -205,7 +207,7 @@ func evFixRows(by map[string]int) [][2]string {
 
 	out := make([][2]string, len(rows))
 	for i, r := range rows {
-		out[i] = [2]string{r.name, itoa(r.n)}
+		out[i] = [2]string{r.name, strconv.Itoa(r.n)}
 	}
 
 	return out
@@ -255,7 +257,7 @@ func evCauseWord(c index.SourceCause) string {
 // and its word. Failed and the attention states share the glyph "!", so
 // the word always differs.
 type evState struct {
-	tone Tone
+	tone ui.Tone
 	word string
 }
 
@@ -265,21 +267,21 @@ func evOutcomeState(o index.SourceOutcome) evState {
 
 	switch o.State {
 	case index.SourceRefreshed:
-		return evState{tone: ToneSuccess, word: "refreshed"}
+		return evState{tone: ui.ToneSuccess, word: "refreshed"}
 	case index.SourceEmpty:
-		return evState{tone: ToneSuccess, word: "empty"}
+		return evState{tone: ui.ToneSuccess, word: "empty"}
 	case index.SourceUnavailable:
-		return evState{tone: ToneAttention, word: joinCause("unavailable", cause)}
+		return evState{tone: ui.ToneAttention, word: joinCause("unavailable", cause)}
 	case index.SourceFailed:
-		return evState{tone: ToneFailure, word: joinCause("failed", cause)}
+		return evState{tone: ui.ToneFailure, word: joinCause("failed", cause)}
 	case index.SourceStopped:
-		return evState{tone: ToneAttention, word: "stopped"}
+		return evState{tone: ui.ToneAttention, word: "stopped"}
 	default:
 		if o.Cause == index.CauseRefused {
-			return evState{tone: ToneAttention, word: "not attempted: refused"}
+			return evState{tone: ui.ToneAttention, word: "not attempted: refused"}
 		}
 
-		return evState{tone: ToneAttention, word: "not attempted"}
+		return evState{tone: ui.ToneAttention, word: "not attempted"}
 	}
 }
 
@@ -304,9 +306,9 @@ func evBytes(n int) string {
 
 	switch {
 	case n < kib:
-		return itoa(n) + " B"
+		return strconv.Itoa(n) + " B"
 	case n < kib*kib:
-		return itoa(n/kib) + " KiB"
+		return strconv.Itoa(n/kib) + " KiB"
 	default:
 		return fmt.Sprintf("%.1f MiB", float64(n)/float64(kib*kib))
 	}

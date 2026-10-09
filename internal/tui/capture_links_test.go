@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // setSettingsSnapshot sets the settings snapshot of a console to a real
@@ -51,7 +52,7 @@ func linksDoctorFake() *fakeServices {
 // the narrow layout, tab in the wide one. In the wide layout enter
 // would open the workflow instead.
 func linksShowDetail(h *harness) {
-	if h.m.st.width < wideWidth {
+	if h.m.st.width < ui.WideWidth {
 		h.press("enter")
 
 		return
@@ -114,7 +115,7 @@ func TestCaptureLinks(t *testing.T) {
 		for _, size := range captureSizes {
 			w, hgt := size[0], size[1]
 
-			h := &harness{t: t, m: newModel(sc.fake(), newTheme(sc.ascii))}
+			h := &harness{t: t, m: newModel(sc.fake(), ui.NewTheme(sc.ascii))}
 			h.run(h.m.Init())
 			h.send(teaSize(w, hgt))
 

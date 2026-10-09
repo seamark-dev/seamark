@@ -8,6 +8,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -195,7 +196,7 @@ func TestCaptureEvidence(t *testing.T) {
 		for _, size := range captureSizes {
 			w, h := size[0], size[1]
 
-			hs := &harness{t: t, m: newModel(sc.fake(), newTheme(sc.ascii))}
+			hs := &harness{t: t, m: newModel(sc.fake(), ui.NewTheme(sc.ascii))}
 			hs.run(hs.m.Init())
 			hs.send(teaSize(w, h))
 

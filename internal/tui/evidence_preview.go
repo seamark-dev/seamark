@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"strconv"
+
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -71,7 +74,7 @@ func (v *evidenceView) closePreview(reason string) tea.Cmd {
 		return nil
 	}
 
-	return toast(ToneAttention, reason)
+	return toast(ui.ToneAttention, reason)
 }
 
 // settingsSaved drops the open preview after any settings save. The
@@ -107,20 +110,20 @@ func (v *evidenceView) previewKey(msg tea.KeyMsg) tea.Cmd {
 	p := v.prev
 
 	switch {
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		return v.closePreview("")
 	case p.stage == flowPreparing:
 		return nil
 	case key.Matches(msg, lesKeys.Confirm):
 		return v.start()
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		if _, cmd, ok := v.previewLink(); ok {
 			v.closePreview("")
 
 			return cmd
 		}
 	default:
-		p.scroll.key(msg)
+		p.scroll.Key(msg)
 	}
 
 	return nil
@@ -153,7 +156,7 @@ func (v *evidenceView) previewLink() (key.Binding, tea.Cmd, bool) {
 	case learning.BlockIndex:
 		return v.blockedLink(learning.Snapshot{Probe: p.preview.Probe})
 	case learning.BlockConfig:
-		return withHelp(nkeys.Enter, "enter", "open Settings "+v.st.theme.Glyphs.Arrow+" evidence"),
+		return ui.WithHelp(ui.Nav.Enter, "enter", "open Settings "+v.st.theme.Glyphs.Arrow+" evidence"),
 			navigate(destSettings, evSettingsIntent), true
 	}
 
@@ -165,11 +168,11 @@ func (v *evidenceView) previewLink() (key.Binding, tea.Cmd, bool) {
 func (v *evidenceView) previewKeys() []key.Binding {
 	p := v.prev
 	if p.stage == flowPreparing {
-		return []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "cancel")}
 	}
 
-	scroll := withHelp(nkeys.Down, "↑↓", "scroll")
-	scroll.SetEnabled(p.scroll.scrolls())
+	scroll := ui.WithHelp(ui.Nav.Down, "↑↓", "scroll")
+	scroll.SetEnabled(p.scroll.Scrolls())
 
 	out := v.previewActions()
 
@@ -181,7 +184,7 @@ func (v *evidenceView) previewActions() []key.Binding {
 	var out []key.Binding
 
 	if v.ready() {
-		start := withHelp(lesKeys.Confirm, "y", "refresh")
+		start := ui.WithHelp(lesKeys.Confirm, "y", "refresh")
 		start.SetEnabled(v.confirmable())
 		out = append(out, start)
 	}
@@ -195,7 +198,7 @@ func (v *evidenceView) previewActions() []key.Binding {
 		back = "cancel"
 	}
 
-	return append(out, withHelp(nkeys.Back, "esc", back))
+	return append(out, ui.WithHelp(ui.Nav.Back, "esc", back))
 }
 
 // modal renders the open preview for the shell, which dims the frame
@@ -205,13 +208,13 @@ func (v *evidenceView) modal(w, h int) (string, bool) {
 		return "", false
 	}
 
-	return v.st.theme.modal(v.previewContent(modalBodyWidth(modalMinW, w)), &v.prev.scroll, w, h), true
+	return v.st.theme.Modal(v.previewContent(ui.ModalBodyWidth(ui.ModalMinW, w)), &v.prev.scroll, w, h), true
 }
 
 // previewContent builds the modal of the current preview stage in w
 // cells. The right border names the mode, and a ready plan names its
 // network use there instead.
-func (v *evidenceView) previewContent(w int) modalOpts {
+func (v *evidenceView) previewContent(w int) ui.ModalOpts {
 	t := v.st.theme
 	p := v.prev
 	mode := t.Muted.Render(evModeTitle(p.mode))
@@ -229,7 +232,7 @@ func (v *evidenceView) previewContent(w int) modalOpts {
 
 		return o
 	case !p.preview.Ready():
-		return modalOpts{Title: t.Attention.Render("Refresh blocked"), Right: mode,
+		return ui.ModalOpts{Title: t.Attention.Render("Refresh blocked"), Right: mode,
 			Body: v.blockedLines(p.preview, w), Actions: v.previewActions()}
 	}
 
@@ -238,7 +241,7 @@ func (v *evidenceView) previewContent(w int) modalOpts {
 		right = t.Attention.Render("network")
 	}
 
-	return modalOpts{
+	return ui.ModalOpts{
 		Title: t.TabActive.Render("Refresh") + " " + t.Body.Render(evModeTitle(p.mode)),
 		Right: right, Body: v.readyLines(p.preview, w), Actions: v.previewActions(),
 	}
@@ -281,10 +284,10 @@ func (v *evidenceView) blockedLines(p *learning.Plan, w int) []string {
 
 	for _, b := range p.Blockers {
 		out = append(out, "")
-		out = append(out, propNote(t, ToneAttention, diag(b.Reason), w)...)
+		out = append(out, propNote(t, ui.ToneAttention, ui.Diag(b.Reason), w)...)
 
 		if b.Path != "" {
-			out = append(out, integHanging(t.Muted.Render("file  "), t.Code, oneLine(displayPath(b.Path)), w)...)
+			out = append(out, integHanging(t.Muted.Render("file  "), t.Code, ui.OneLine(ui.DisplayPath(b.Path)), w)...)
 		}
 
 		switch b.Kind {
@@ -315,7 +318,7 @@ func (v *evidenceView) readyLines(p *learning.Plan, w int) []string {
 	out = append(out, v.previewFacts(p, w)...)
 
 	will, wont, later := evEffects(t, p)
-	out = append(out, t.effectLines(will, wont, w)...)
+	out = append(out, effectLines(t, will, wont, w)...)
 
 	if len(later) > 0 {
 		out = append(out, "", t.Heading.Render("LATER"))
@@ -327,7 +330,7 @@ func (v *evidenceView) readyLines(p *learning.Plan, w int) []string {
 
 	if v.st.busy() {
 		out = append(out, "")
-		out = append(out, propNote(t, ToneAttention, oneLine(v.st.mutation)+" is running. The refresh can "+
+		out = append(out, propNote(t, ui.ToneAttention, ui.OneLine(v.st.mutation)+" is running. The refresh can "+
 			"start after it ends; y is off until then.", w)...)
 	}
 
@@ -398,7 +401,7 @@ func (v *evidenceView) previewFacts(p *learning.Plan, w int) []string {
 	t := v.st.theme
 
 	row := func(label, value string, style lipgloss.Style) []string {
-		return integHanging(t.Muted.Render(padRight(label, evLabelW)), style, value, w)
+		return integHanging(t.Muted.Render(ui.PadRight(label, evLabelW)), style, value, w)
 	}
 
 	db := p.Probe.Path
@@ -406,8 +409,8 @@ func (v *evidenceView) previewFacts(p *learning.Plan, w int) []string {
 		db = p.Workspace.DBPath
 	}
 
-	out := row("Workspace", oneLine(displayPath(p.Root)), t.Code)
-	out = append(out, row("Database", oneLine(displayPath(db)), t.Code)...)
+	out := row("Workspace", ui.OneLine(ui.DisplayPath(p.Root)), t.Code)
+	out = append(out, row("Database", ui.OneLine(ui.DisplayPath(db)), t.Code)...)
 
 	if p.Mode == index.SourcesReviewsAndLocal {
 		if repo, ok := evRepo(p.Repository, p.RepoState); ok {
@@ -437,7 +440,7 @@ func (v *evidenceView) previewFacts(p *learning.Plan, w int) []string {
 	}
 
 	history := "fix commits of the last " + propPlural(p.FixWindowDays, "day", "days") + " reachable from HEAD"
-	if head := oneLine(p.Head); head != "" {
+	if head := ui.OneLine(p.Head); head != "" {
 		history += " " + head[:min(len(head), 7)]
 	} else {
 		history = "no commit yet: the local fix source reads unavailable"
@@ -452,7 +455,7 @@ func (v *evidenceView) previewFacts(p *learning.Plan, w int) []string {
 // LATER lines. The known source and kind pairs get their own words with
 // the current counts. Any other pair keeps the plan text, so a new
 // backend effect never goes missing.
-func evEffects(t *Theme, p *learning.Plan) (will []effect, wont, later []string) {
+func evEffects(t *ui.Theme, p *learning.Plan) (will []effect, wont, later []string) {
 	cur := p.Current
 	known := cur.CountsErr == nil
 	fetches := evFetches(p)
@@ -462,7 +465,7 @@ func evEffects(t *Theme, p *learning.Plan) (will []effect, wont, later []string)
 			return "the stored " + what
 		}
 
-		return "the " + itoa(n) + " stored " + what
+		return "the " + strconv.Itoa(n) + " stored " + what
 	}
 
 	if fetches {
@@ -474,9 +477,9 @@ func evEffects(t *Theme, p *learning.Plan) (will []effect, wont, later []string)
 	for _, e := range p.Affects {
 		switch {
 		case e.Kind == learning.EffectLater:
-			later = append(later, oneLine(e.Text))
+			later = append(later, ui.OneLine(e.Text))
 		case e.Source == index.SourceFixes && e.Kind == learning.EffectReplace:
-			will = append(will, effect{glyph: "~", tone: ToneAttention,
+			will = append(will, effect{glyph: "~", tone: ui.ToneAttention,
 				text: "replace " + stored(cur.FixFindings, "local fix findings") + " with a new mine of the " +
 					"history reachable from HEAD"})
 		case e.Source == index.SourceReviews && e.Kind == learning.EffectReplace && fetches:
@@ -488,8 +491,8 @@ func evEffects(t *Theme, p *learning.Plan) (will []effect, wont, later []string)
 			}
 
 			will = append(will,
-				effect{glyph: t.Glyphs.Add, tone: ToneSuccess, text: fetch},
-				effect{glyph: "~", tone: ToneAttention,
+				effect{glyph: t.Glyphs.Add, tone: ui.ToneSuccess, text: fetch},
+				effect{glyph: "~", tone: ui.ToneAttention,
 					text: "replace the stored review findings and lessons, only after a complete fetch"})
 			wont = append(wont, "keep a partial fetch: a failed, unavailable or stopped fetch keeps "+
 				stored(cur.ReviewFindings, "review findings"))
@@ -503,9 +506,9 @@ func evEffects(t *Theme, p *learning.Plan) (will []effect, wont, later []string)
 		case e.Source == "" && e.Kind == learning.EffectKeep:
 			wont = append(wont, "change proposals, pins or the record of distilled evidence groups")
 		case e.Kind == learning.EffectReplace:
-			will = append(will, effect{glyph: "~", tone: ToneAttention, text: oneLine(e.Text)})
+			will = append(will, effect{glyph: "~", tone: ui.ToneAttention, text: ui.OneLine(e.Text)})
 		default:
-			wont = append(wont, oneLine(e.Text))
+			wont = append(wont, ui.OneLine(e.Text))
 		}
 	}
 

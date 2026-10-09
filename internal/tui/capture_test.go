@@ -18,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -33,7 +34,7 @@ type captureScene struct {
 
 // captureSizes are the terminal sizes of every capture: the 1a design
 // size, the common 80×24, the documented minimum, and a large terminal.
-var captureSizes = [][2]int{{120, 40}, {80, 24}, {minWidth, minHeight}, {200, 50}}
+var captureSizes = [][2]int{{120, 40}, {80, 24}, {ui.MinWidth, ui.MinHeight}, {200, 50}}
 
 // captureDirEnv names the variable that holds the capture directory.
 const captureDirEnv = "SEAMARK_TUI_CAPTURE_DIR"
@@ -207,7 +208,7 @@ func captureScenes() []captureScene {
 		{name: "28-run-notice-toast", fake: ovPopulated, drive: func(h *harness) {
 			captureRun(h)
 			h.press("5")
-			h.send(toastMsg{tone: ToneSuccess, text: "Reading the current state from disk."})
+			h.send(toastMsg{tone: ui.ToneSuccess, text: "Reading the current state from disk."})
 		}},
 		{name: "29-stop-and-exit", fake: ovPopulated, drive: func(h *harness) {
 			captureRun(h)
@@ -250,7 +251,7 @@ func captureStats() lessonstats.Snapshot {
 
 	for i, day := range []string{"2026-07-01", "2026-07-02", "2026-07-02", "2026-07-03", "2026-07-03", "2026-07-03"} {
 		firings = append(firings, reviews.Firing{
-			TS: day + "T10:00:00Z", File: "api/a" + itoa(i) + ".py",
+			TS: day + "T10:00:00Z", File: "api/a" + strconv.Itoa(i) + ".py",
 			Fired: []reviews.FiredLesson{{Region: "api", Symptom: "regenerate the client"}},
 		})
 	}
@@ -292,7 +293,7 @@ func TestCaptureRepresentativeStates(t *testing.T) {
 				f.settings = snap
 			}
 
-			hs := &harness{t: t, m: newModel(f, newTheme(sc.ascii))}
+			hs := &harness{t: t, m: newModel(f, ui.NewTheme(sc.ascii))}
 			hs.run(hs.m.Init())
 			hs.send(teaSize(w, h))
 

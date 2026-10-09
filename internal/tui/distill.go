@@ -14,6 +14,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file holds the distillation record of Lessons › Run. It keeps
@@ -60,7 +61,7 @@ var distGetwd = os.Getwd
 // distForm is the scope draft. It holds typed text only; the form plans
 // nothing before enter.
 type distForm struct {
-	region     lineInput
+	region     ui.LineInput
 	regionWas  string
 	editRegion bool
 	// prefill is the Proposals region filter that filled the region
@@ -72,7 +73,7 @@ type distForm struct {
 	// limitWas is the limit choice before the custom input opened, so
 	// esc in that input restores it.
 	limitWas   distLimitOpt
-	custom     lineInput
+	custom     ui.LineInput
 	customWas  string
 	editCustom bool
 
@@ -82,13 +83,13 @@ type distForm struct {
 	about bool
 	// sc scrolls the form in a short box; aboutSc scrolls the
 	// explanation.
-	sc      scrollState
-	aboutSc scrollState
+	sc      ui.ScrollState
+	aboutSc ui.ScrollState
 
 	// note is a message about the draft, for example a plan that a
 	// settings save dropped. noteTone gives its glyph.
 	note     string
-	noteTone Tone
+	noteTone ui.Tone
 
 	// norm caches the normalized region of the input.
 	norm distNorm
@@ -120,7 +121,7 @@ type distCleanup struct {
 	done    bool
 	removed int
 	err     error
-	scroll  scrollState
+	scroll  ui.ScrollState
 }
 
 // distSwept is the cleanup that a run reports with its cleanup event.
@@ -170,7 +171,7 @@ func newDistillDraft(st *state, prefill string) runRecord {
 	d := newDistRecord(st)
 
 	if region := strings.TrimSpace(prefill); region != "" {
-		d.form.region.set(region)
+		d.form.region.Set(region)
 		d.form.prefill = region
 	}
 
@@ -182,10 +183,10 @@ func newDistillDraft(st *state, prefill string) runRecord {
 func newDistRecord(st *state) *distRecord {
 	d := &distRecord{st: st, run: idleAgentProgress[distill.Execution, distill.GroupOutcome]()}
 
-	d.form.region.placeholder = "empty for everywhere, for example internal/api"
-	d.form.custom.placeholder = "a whole number above 0"
-	d.form.custom.limit = distCustomDigits
-	d.form.custom.accept = func(r rune) bool { return r >= '0' && r <= '9' }
+	d.form.region.Placeholder = "empty for everywhere, for example internal/api"
+	d.form.custom.Placeholder = "a whole number above 0"
+	d.form.custom.Limit = distCustomDigits
+	d.form.custom.Accept = func(r rune) bool { return r >= '0' && r <= '9' }
 
 	return d
 }
@@ -195,7 +196,7 @@ func newDistRecord(st *state) *distRecord {
 // same inputs, a fresh read-only plan, and no start without y.
 func newDistillFrom(st *state, req learning.DistillRequest) *distRecord {
 	d := newDistRecord(st)
-	d.form.region.set(req.RegionInput)
+	d.form.region.Set(req.RegionInput)
 
 	switch {
 	case req.AllGroups:
@@ -203,7 +204,7 @@ func newDistillFrom(st *state, req learning.DistillRequest) *distRecord {
 		d.form.row = distRowAll
 	case req.Limit > 0 && req.Limit != distill.DefaultGroupLimit:
 		d.form.limit = distLimitCustom
-		d.form.custom.set(strconv.Itoa(req.Limit))
+		d.form.custom.Set(strconv.Itoa(req.Limit))
 		d.form.row = distRowCustom
 	default:
 		d.form.row = distRowDefault
@@ -352,13 +353,13 @@ func (d *distRecord) update(msg tea.Msg) tea.Cmd {
 // request returns the scope of the form as a service request, or the
 // reason that the form cannot plan.
 func (d *distRecord) request() (req learning.DistillRequest, reason string) {
-	req = learning.DistillRequest{RegionInput: strings.TrimSpace(d.form.region.value())}
+	req = learning.DistillRequest{RegionInput: strings.TrimSpace(d.form.region.Value())}
 
 	switch d.form.limit {
 	case distLimitAll:
 		req.AllGroups = true
 	case distLimitCustom:
-		n, err := strconv.Atoi(d.form.custom.value())
+		n, err := strconv.Atoi(d.form.custom.Value())
 		if err != nil || n <= 0 {
 			return req, "Enter a whole number above 0."
 		}
@@ -383,7 +384,7 @@ func (d *distRecord) request() (req learning.DistillRequest, reason string) {
 func (d *distRecord) warn(text string) tea.Cmd {
 	d.warned = time.Now()
 
-	return toast(ToneAttention, text)
+	return toast(ui.ToneAttention, text)
 }
 
 // settle clears a recent refusal message of the record after a plan or
@@ -397,7 +398,7 @@ func (d *distRecord) settle() tea.Cmd {
 
 	d.warned = time.Time{}
 
-	return toast(ToneNeutral, "")
+	return toast(ui.ToneNeutral, "")
 }
 
 // startPlan starts the read-only plan of the form. The service reads
@@ -445,11 +446,11 @@ func (d *distRecord) planned(msg distPlannedMsg) tea.Cmd {
 
 	switch {
 	case errors.Is(msg.err, distill.ErrRegionEscapes):
-		d.backToScope(ToneFailure, "The region is outside the workspace. Enter a path inside the repository.")
+		d.backToScope(ui.ToneFailure, "The region is outside the workspace. Enter a path inside the repository.")
 
 		return nil
 	case errors.Is(msg.err, distill.ErrInvalidLimit):
-		d.backToScope(ToneFailure, "The group limit is not valid: "+errText(msg.err))
+		d.backToScope(ui.ToneFailure, "The group limit is not valid: "+ui.ErrText(msg.err))
 
 		return nil
 	}
@@ -480,7 +481,7 @@ func (d *distRecord) dropPlan(req learning.DistillRequest) {
 
 // backToScope returns to the form with a note. It drops the plan, and
 // the cancel drops a late plan result.
-func (d *distRecord) backToScope(tone Tone, note string) {
+func (d *distRecord) backToScope(tone ui.Tone, note string) {
 	d.dropPlan(learning.DistillRequest{})
 	d.prev.seq.cancel()
 	d.step = stepScope
@@ -590,7 +591,7 @@ func (d *distRecord) event(msg distEventMsg) {
 	switch ev.Kind {
 	case distill.EventCleanupDone:
 		r.checked, d.swept = true, distSwept{done: true, removed: ev.Removed}
-		r.log(msg.at, "stale pending proposals removed: "+itoa(ev.Removed))
+		r.log(msg.at, "stale pending proposals removed: "+strconv.Itoa(ev.Removed))
 	case distill.EventGroupStarted:
 		if !r.checked {
 			r.checked = true
@@ -621,7 +622,7 @@ func (d *distRecord) event(msg distEventMsg) {
 				n.total = total
 			}
 		})
-		r.log(msg.at, "group "+itoa(ev.Index+1)+" "+distOutcomeWords(*ev.Outcome))
+		r.log(msg.at, "group "+strconv.Itoa(ev.Index+1)+" "+distOutcomeWords(*ev.Outcome))
 	case distill.EventStopped:
 		r.stopped, r.stopWhy = true, ev.Stop
 		r.sending = -1
@@ -690,7 +691,7 @@ func (d *distRecord) done(msg distDoneMsg) tea.Cmd {
 	// The compact result opens at its top, so the verdict and its lead
 	// show first. The wide Groups pane follows the cursor again.
 	d.run.moved = false
-	d.run.list = scrollState{}
+	d.run.list = ui.ScrollState{}
 
 	v := d.verdict()
 
@@ -729,7 +730,7 @@ func (d *distRecord) stop() tea.Cmd {
 
 	detail := "waiting for the run to end"
 	if k := d.run.stopAt; k >= 0 {
-		detail = "waiting for the agent call of group " + itoa(k+1)
+		detail = "waiting for the agent call of group " + strconv.Itoa(k+1)
 	}
 
 	d.st.updateRun(func(n *runNote) { n.detail = detail })
@@ -780,9 +781,9 @@ func (d *distRecord) cleanedUp(msg distCleanedMsg) tea.Cmd {
 	d.clean.running, d.clean.done = false, true
 	d.clean.removed, d.clean.err = msg.removed, msg.err
 
-	note := toast(ToneSuccess, "Removed "+propPlural(msg.removed, "stale pending proposal", "stale pending proposals")+".")
+	note := toast(ui.ToneSuccess, "Removed "+propPlural(msg.removed, "stale pending proposal", "stale pending proposals")+".")
 	if msg.err != nil {
-		note = toast(ToneFailure, "The cleanup removed nothing: "+errText(msg.err))
+		note = toast(ui.ToneFailure, "The cleanup removed nothing: "+ui.ErrText(msg.err))
 	}
 
 	return tea.Batch(mutationDone, refresh(secLedger, secStats, secLearning, secPins), note)
@@ -802,7 +803,7 @@ func (d *distRecord) settingsSaved(msg settingsSavedMsg) {
 		return
 	}
 
-	d.backToScope(ToneAttention, "Settings changed ("+msg.group.String()+"), so the plan was dropped. "+
+	d.backToScope(ui.ToneAttention, "Settings changed ("+msg.group.String()+"), so the plan was dropped. "+
 		"Press enter to plan again with the saved settings.")
 }
 
@@ -830,7 +831,7 @@ func (d *distRecord) scopeLabel() string {
 
 	region, err := d.region()
 	if err != nil {
-		return oneLine(strings.TrimSpace(d.form.region.value()))
+		return ui.OneLine(strings.TrimSpace(d.form.region.Value()))
 	}
 
 	return distScopeLabel(region)
@@ -841,7 +842,7 @@ func (d *distRecord) scopeLabel() string {
 // when it plans, so this is a preview of the scope, not its authority.
 func (d *distRecord) region() (string, error) {
 	n := &d.form.norm
-	in, root := d.form.region.value(), d.root()
+	in, root := d.form.region.Value(), d.root()
 
 	if !n.ok || n.input != in || n.root != root {
 		region, err := distill.NormalizeRegion(root, in)
@@ -861,11 +862,11 @@ func (d *distRecord) agentBlock() string {
 	}
 
 	if err := snap.ReaderErrs[settings.ReaderAgent]; err != nil {
-		return "The agent configuration is invalid: " + errText(err)
+		return "The agent configuration is invalid: " + ui.ErrText(err)
 	}
 
 	if snap.InvocationErr != nil {
-		return "The agent configuration is invalid: " + errText(snap.InvocationErr)
+		return "The agent configuration is invalid: " + ui.ErrText(snap.InvocationErr)
 	}
 
 	return ""
@@ -886,7 +887,7 @@ func (d *distRecord) settingsSnap() *settings.Snapshot {
 // cause, because "changed since the plan" and "changed since the
 // preview" say the same thing twice.
 func distStaleText(err error) string {
-	text := errText(err)
+	text := ui.ErrText(err)
 
 	if errors.Is(err, distill.ErrStale) {
 		if cause, ok := strings.CutPrefix(text, distill.ErrStale.Error()+": "); ok && cause != "" {
@@ -904,7 +905,7 @@ func distScopeLabel(region string) string {
 		return "everywhere"
 	}
 
-	return oneLine(region)
+	return ui.OneLine(region)
 }
 
 // distScopeIn names a normalized region in a sentence, for example
@@ -914,7 +915,7 @@ func distScopeIn(region string) string {
 		return "in the whole repository"
 	}
 
-	return "in " + oneLine(region)
+	return "in " + ui.OneLine(region)
 }
 
 // distRegionLabel names the region of one evidence group. A group
@@ -925,7 +926,7 @@ func distRegionLabel(region string) string {
 		return "repo-wide"
 	}
 
-	return oneLine(region)
+	return ui.OneLine(region)
 }
 
 // distLimitLabel names the group limit of a request.

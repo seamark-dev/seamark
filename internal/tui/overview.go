@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -51,7 +53,7 @@ type overview struct {
 	// list is the attention list position. selKey keeps the selected
 	// item by identity, so a refresh never moves the cursor to a
 	// different fact.
-	list   listState
+	list   ui.ListState
 	selKey string
 	// listH is the last list height, for page moves.
 	listH int
@@ -108,7 +110,7 @@ func (o *overview) tabCount() string {
 		return ""
 	}
 
-	return itoa(n)
+	return strconv.Itoa(n)
 }
 
 // banner returns the stale-index row for the notice row: a full-width
@@ -132,9 +134,9 @@ func (o *overview) banner(w int) (string, bool) {
 
 	// The banner cuts the message itself, because spread would cut it
 	// with the Unicode ellipsis in the ASCII theme too.
-	left = truncate(left, w-width(right)-1, t.Glyphs.Ellipsis)
+	left = ui.Truncate(left, w-ui.Width(right)-1, t.Glyphs.Ellipsis)
 
-	return t.highlight(spread(left, right, w), w, bgWarn), true
+	return t.Highlight(ui.Spread(left, right, w), w, ui.BgWarn), true
 }
 
 // indexStale reports a ready index whose semantic health says stale.
@@ -216,7 +218,7 @@ func (o *overview) onKey(msg tea.KeyMsg) tea.Cmd {
 		switch {
 		case key.Matches(msg, ovKeys.Build):
 			return o.openBuild()
-		case key.Matches(msg, nkeys.Enter, nkeys.Back) && !o.build.running:
+		case key.Matches(msg, ui.Nav.Enter, ui.Nav.Back) && !o.build.running:
 			o.showBuild = false
 		}
 
@@ -229,7 +231,7 @@ func (o *overview) onKey(msg tea.KeyMsg) tea.Cmd {
 			return navigate(destIntegrations, "setup")
 		case key.Matches(msg, ovKeys.Build):
 			return o.openBuild()
-		case key.Matches(msg, nkeys.Enter):
+		case key.Matches(msg, ui.Nav.Enter):
 			o.freshSeen = true
 		}
 
@@ -256,30 +258,30 @@ func (o *overview) listKey(msg tea.KeyMsg) tea.Cmd {
 		if o.nothingSetUp() {
 			return navigate(destIntegrations, "setup")
 		}
-	case key.Matches(msg, nkeys.Next, nkeys.Prev):
+	case key.Matches(msg, ui.Nav.Next, ui.Nav.Prev):
 		if wide {
 			o.focus = 1 - o.focus
 		}
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		switch {
 		case !wide && o.detailOpen:
 			o.detailOpen = false
 		case wide && o.focus == ovFocusDetail:
 			o.focus = ovFocusList
 		}
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		return o.activate(items, sel, wide)
-	case key.Matches(msg, nkeys.Up):
+	case key.Matches(msg, ui.Nav.Up):
 		o.step(inDetail, -1, rows, items)
-	case key.Matches(msg, nkeys.Down):
+	case key.Matches(msg, ui.Nav.Down):
 		o.step(inDetail, 1, rows, items)
-	case key.Matches(msg, nkeys.PageUp):
+	case key.Matches(msg, ui.Nav.PageUp):
 		o.step(inDetail, -page, rows, items)
-	case key.Matches(msg, nkeys.PageDown):
+	case key.Matches(msg, ui.Nav.PageDown):
 		o.step(inDetail, page, rows, items)
-	case key.Matches(msg, nkeys.Top):
+	case key.Matches(msg, ui.Nav.Top):
 		o.step(inDetail, -ovFar, rows, items)
-	case key.Matches(msg, nkeys.Bottom):
+	case key.Matches(msg, ui.Nav.Bottom):
 		o.step(inDetail, ovFar, rows, items)
 	}
 
@@ -331,11 +333,11 @@ func (o *overview) activate(items []ovItem, sel int, wide bool) tea.Cmd {
 // derived data, so enter may confirm it; esc cancels without a change.
 func (o *overview) confirmKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
-	case key.Matches(msg, nkeys.Enter), msg.String() == "y":
+	case key.Matches(msg, ui.Nav.Enter), msg.String() == "y":
 		return o.startBuild(false)
 	case key.Matches(msg, ovKeys.Force):
 		return o.startBuild(true)
-	case key.Matches(msg, nkeys.Back), msg.String() == "n":
+	case key.Matches(msg, ui.Nav.Back), msg.String() == "n":
 		o.confirm = false
 	}
 
@@ -350,7 +352,7 @@ func (o *overview) sync(rows []ovRow, items []ovItem) int {
 	if o.selKey != "" {
 		for i, r := range rows {
 			if r.kind == ovRowItem && items[r.item].key == o.selKey {
-				o.list.cursor = i
+				o.list.Cursor = i
 
 				return r.item
 			}
@@ -363,7 +365,7 @@ func (o *overview) sync(rows []ovRow, items []ovItem) int {
 		}
 	}
 
-	c := max(0, min(o.list.cursor, len(rows)-1))
+	c := max(0, min(o.list.Cursor, len(rows)-1))
 
 	for i := c; i < len(rows); i++ {
 		if rows[i].kind == ovRowItem {
@@ -384,7 +386,7 @@ func (o *overview) sync(rows []ovRow, items []ovItem) int {
 
 // selectRow puts the cursor on row i and records the item identity.
 func (o *overview) selectRow(i int, rows []ovRow, items []ovItem) int {
-	o.list.cursor = i
+	o.list.Cursor = i
 	o.selKey = items[rows[i].item].key
 
 	return rows[i].item
@@ -403,16 +405,16 @@ func (o *overview) move(delta int, rows []ovRow, items []ovItem) {
 		dir, left = -1, -delta
 	}
 
-	last := o.list.cursor
+	last := o.list.Cursor
 
-	for i := o.list.cursor + dir; i >= 0 && i < len(rows) && left > 0; i += dir {
+	for i := o.list.Cursor + dir; i >= 0 && i < len(rows) && left > 0; i += dir {
 		if rows[i].kind == ovRowItem {
 			last = i
 			left--
 		}
 	}
 
-	if last != o.list.cursor {
+	if last != o.list.Cursor {
 		o.selectRow(last, rows, items)
 		o.detailOff = 0
 	}
@@ -474,13 +476,13 @@ func ovSentence(s string) string {
 func (o *overview) keys() []key.Binding {
 	switch {
 	case o.confirm:
-		return []key.Binding{withHelp(nkeys.Enter, "enter", "build"), ovKeys.Force, withHelp(nkeys.Back, "esc", "cancel")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "build"), ovKeys.Force, ui.WithHelp(ui.Nav.Back, "esc", "cancel")}
 	case o.build != nil && o.showBuild && o.build.running:
 		return nil
 	case o.build != nil && o.showBuild:
-		return []key.Binding{withHelp(nkeys.Enter, "enter", "close"), withHelp(ovKeys.Build, "b", "build again")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "close"), ui.WithHelp(ovKeys.Build, "b", "build again")}
 	case o.freshEmpty():
-		return []key.Binding{withHelp(ovKeys.SetUp, "s", "set up"), ovKeys.Build, withHelp(nkeys.Enter, "enter", "show list")}
+		return []key.Binding{ui.WithHelp(ovKeys.SetUp, "s", "set up"), ovKeys.Build, ui.WithHelp(ui.Nav.Enter, "enter", "show list")}
 	}
 
 	build := ovKeys.Build
@@ -495,11 +497,11 @@ func (o *overview) keys() []key.Binding {
 		if o.detailOpen {
 			// esc comes first: it is the way back to the list, and a
 			// narrow footer drops the last hints first.
-			out := []key.Binding{withHelp(nkeys.Back, "esc", "back"), withHelp(nkeys.Up, move, "scroll")}
+			out := []key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "back"), ui.WithHelp(ui.Nav.Up, move, "scroll")}
 
 			items := o.attention()
 			if sel := o.sync(o.rows(items), items); sel >= 0 && items[sel].act.kind != ovActNone {
-				out = append(out, withHelp(nkeys.Enter, "enter", items[sel].act.label))
+				out = append(out, ui.WithHelp(ui.Nav.Enter, "enter", items[sel].act.label))
 			}
 
 			return out
@@ -507,18 +509,18 @@ func (o *overview) keys() []key.Binding {
 
 		build.SetHelp("b", "build")
 
-		return []key.Binding{withHelp(nkeys.Up, move, "move"), withHelp(nkeys.Enter, "enter", "detail"), build, setUp}
+		return []key.Binding{ui.WithHelp(ui.Nav.Up, move, "move"), ui.WithHelp(ui.Nav.Enter, "enter", "detail"), build, setUp}
 	}
 
 	if o.focus == ovFocusDetail {
 		return []key.Binding{
-			withHelp(nkeys.Up, move, "scroll"), withHelp(nkeys.Next, "tab", "pane"),
-			withHelp(nkeys.Back, "esc", "back"), build, setUp,
+			ui.WithHelp(ui.Nav.Up, move, "scroll"), ui.WithHelp(ui.Nav.Next, "tab", "pane"),
+			ui.WithHelp(ui.Nav.Back, "esc", "back"), build, setUp,
 		}
 	}
 
 	return []key.Binding{
-		withHelp(nkeys.Up, move, "move"), withHelp(nkeys.Enter, "enter", "open"),
-		withHelp(nkeys.Next, "tab", "pane"), build, setUp,
+		ui.WithHelp(ui.Nav.Up, move, "move"), ui.WithHelp(ui.Nav.Enter, "enter", "open"),
+		ui.WithHelp(ui.Nav.Next, "tab", "pane"), build, setUp,
 	}
 }

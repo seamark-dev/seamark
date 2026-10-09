@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file holds the trigger extraction record of Lessons › Run. It
@@ -27,7 +29,7 @@ import (
 
 // extKeys are the letter keys of an extraction record that a
 // distillation does not bind; agentKeys holds the shared letters. The
-// other keys come from nkeys, so every list moves the same way. The
+// other keys come from ui.Nav, so every list moves the same way. The
 // record binds no switch key of Lessons (p, m, s, e, u) and no bracket,
 // because the Run sub-view uses them.
 var extKeys = struct {
@@ -172,7 +174,7 @@ func (r *extRecord) update(msg tea.Msg) tea.Cmd {
 func (r *extRecord) warn(text string) tea.Cmd {
 	r.warned = time.Now()
 
-	return toast(ToneAttention, text)
+	return toast(ui.ToneAttention, text)
 }
 
 // settle clears a recent refusal message of the record after a plan or
@@ -185,7 +187,7 @@ func (r *extRecord) settle() tea.Cmd {
 
 	r.warned = time.Time{}
 
-	return toast(ToneNeutral, "")
+	return toast(ui.ToneNeutral, "")
 }
 
 // startPlan starts the read-only preview of the selection. The service
@@ -359,7 +361,7 @@ func (r *extRecord) event(msg extEventMsg) {
 			run.cursor = r.firstItemOf(ev.Index)
 		}
 
-		detail := "batch " + itoa(ev.Index+1) + " of " + itoa(len(run.units))
+		detail := "batch " + strconv.Itoa(ev.Index+1) + " of " + strconv.Itoa(len(run.units))
 		r.st.updateRun(func(n *runNote) {
 			if !n.stopping {
 				n.detail = detail
@@ -376,7 +378,7 @@ func (r *extRecord) event(msg extEventMsg) {
 		done := r.itemsDone()
 
 		r.st.updateRun(func(n *runNote) { n.done = done })
-		run.log(msg.at, "batch "+itoa(ev.Index+1)+" "+extBatchWords(*ev.Batch))
+		run.log(msg.at, "batch "+strconv.Itoa(ev.Index+1)+" "+extBatchWords(*ev.Batch))
 	case distill.ExtractStopped:
 		run.stopped, run.stopWhy = true, ev.Stop
 		run.sending = -1
@@ -459,7 +461,7 @@ func (r *extRecord) done(msg extDoneMsg) tea.Cmd {
 	// The compact result opens at its top, so the verdict and its lead
 	// show first. The wide Proposals pane follows the cursor again.
 	r.run.moved = false
-	r.run.list = scrollState{}
+	r.run.list = ui.ScrollState{}
 
 	v := r.verdict()
 
@@ -496,7 +498,7 @@ func (r *extRecord) stop() tea.Cmd {
 
 	detail := "waiting for the run to end"
 	if k := r.run.stopAt; k >= 0 {
-		detail = "waiting for the agent call of batch " + itoa(k+1)
+		detail = "waiting for the agent call of batch " + strconv.Itoa(k+1)
 	}
 
 	r.st.updateRun(func(n *runNote) { n.detail = detail })
@@ -752,7 +754,7 @@ func (r *extRecord) agentBlocked() bool {
 func (r *extRecord) key(msg tea.KeyMsg) tea.Cmd {
 	switch r.step {
 	case stepPreparing:
-		if key.Matches(msg, nkeys.Back) {
+		if key.Matches(msg, ui.Nav.Back) {
 			return closeRun(r)
 		}
 	case stepPreview:
@@ -779,13 +781,13 @@ func (r *extRecord) previewKey(msg tea.KeyMsg) tea.Cmd {
 		if to, _, ok := r.blockerLink(); ok {
 			return navigate(to.dest, to.intent)
 		}
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		return closeRun(r)
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		if !r.runnable() {
 			return r.startPlan()
 		}
-	case key.Matches(msg, nkeys.Next, nkeys.Prev):
+	case key.Matches(msg, ui.Nav.Next, ui.Nav.Prev):
 		switch {
 		case !r.hasItems():
 		case r.st.wide():
@@ -824,7 +826,7 @@ func (r *extRecord) previewMove(msg tea.KeyMsg) {
 	pl := &r.prev
 
 	if r.planKeys() {
-		pl.notes.key(msg)
+		pl.notes.Key(msg)
 
 		return
 	}
@@ -835,7 +837,7 @@ func (r *extRecord) previewMove(msg tea.KeyMsg) {
 		return
 	}
 
-	if pl.list.key(msg) {
+	if pl.list.Key(msg) {
 		pl.follow = false
 	}
 }
@@ -848,7 +850,7 @@ func (r *extRecord) runKey(msg tea.KeyMsg) tea.Cmd {
 		switch {
 		case key.Matches(msg, agentKeys.Start):
 			return r.stop()
-		case key.Matches(msg, nkeys.Back):
+		case key.Matches(msg, ui.Nav.Back):
 			run.stopAsk = false
 		}
 
@@ -874,7 +876,7 @@ func (r *extRecord) runKey(msg tea.KeyMsg) tea.Cmd {
 // apply.
 func (r *extRecord) resultKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		if cmd, _, ok := r.link(); ok {
 			return cmd
 		}
@@ -895,7 +897,7 @@ func (r *extRecord) resultKey(msg tea.KeyMsg) tea.Cmd {
 func (r *extRecord) runMove(msg tea.KeyMsg) {
 	run := &r.run
 
-	if key.Matches(msg, nkeys.Next, nkeys.Prev) {
+	if key.Matches(msg, ui.Nav.Next, ui.Nav.Prev) {
 		if r.st.wide() {
 			run.sumFocus = !run.sumFocus
 		} else {
@@ -906,7 +908,7 @@ func (r *extRecord) runMove(msg tea.KeyMsg) {
 	}
 
 	if r.st.wide() && run.sumFocus {
-		run.summary.key(msg)
+		run.summary.Key(msg)
 
 		return
 	}
@@ -917,7 +919,7 @@ func (r *extRecord) runMove(msg tea.KeyMsg) {
 		return
 	}
 
-	if run.list.key(msg) {
+	if run.list.Key(msg) {
 		run.follow = false
 	}
 }
@@ -929,7 +931,7 @@ func (r *extRecord) runMove(msg tea.KeyMsg) {
 func (r *extRecord) keys() []key.Binding {
 	switch r.step {
 	case stepPreparing:
-		return []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "cancel")}
 	case stepPreview:
 		return r.previewKeys()
 	case stepRunning:
@@ -946,29 +948,29 @@ func (r *extRecord) previewKeys() []key.Binding {
 	pl := &r.prev
 
 	if r.runnable() {
-		move, pane := withHelp(nkeys.Down, "↑↓", "proposal"), withHelp(nkeys.Next, "tab", "plan")
+		move, pane := ui.WithHelp(ui.Nav.Down, "↑↓", "proposal"), ui.WithHelp(ui.Nav.Next, "tab", "plan")
 		if r.planKeys() {
-			move, pane = withHelp(nkeys.Down, "↑↓", "scroll"), withHelp(nkeys.Next, "tab", "proposals")
+			move, pane = ui.WithHelp(ui.Nav.Down, "↑↓", "scroll"), ui.WithHelp(ui.Nav.Next, "tab", "proposals")
 		}
 
 		return []key.Binding{
-			withHelp(agentKeys.Start, "y", "start run"), pane, move,
-			withHelp(nkeys.PageDown, "pgup/pgdn", "scroll"), withHelp(nkeys.Back, "esc", "close"),
+			ui.WithHelp(agentKeys.Start, "y", "start run"), pane, move,
+			ui.WithHelp(ui.Nav.PageDown, "pgup/pgdn", "scroll"), ui.WithHelp(ui.Nav.Back, "esc", "close"),
 		}
 	}
 
-	again := withHelp(nkeys.Enter, "enter", "plan again")
+	again := ui.WithHelp(ui.Nav.Enter, "enter", "plan again")
 	if !r.st.wide() {
-		again = withHelp(nkeys.Enter, "enter", "plan")
+		again = ui.WithHelp(ui.Nav.Enter, "enter", "plan")
 	}
 
-	scroll := withHelp(nkeys.Down, "↑↓", "scroll")
-	scroll.SetEnabled(pl.notes.scrolls() || pl.list.scrolls() || r.hasItems())
+	scroll := ui.WithHelp(ui.Nav.Down, "↑↓", "scroll")
+	scroll.SetEnabled(pl.notes.Scrolls() || pl.list.Scrolls() || r.hasItems())
 
-	pane := withHelp(nkeys.Next, "tab", "pane")
+	pane := ui.WithHelp(ui.Nav.Next, "tab", "pane")
 	pane.SetEnabled(r.hasItems())
 
-	return []key.Binding{again, r.linkKey(), pane, scroll, withHelp(nkeys.Back, "esc", "close")}
+	return []key.Binding{again, r.linkKey(), pane, scroll, ui.WithHelp(ui.Nav.Back, "esc", "close")}
 }
 
 // linkKey names the blocker link in the footer; disabled without one. A
@@ -977,16 +979,16 @@ func (r *extRecord) previewKeys() []key.Binding {
 func (r *extRecord) linkKey() key.Binding {
 	to, name, ok := r.blockerLink()
 
-	b := withHelp(agentKeys.Link, "o", "open "+name)
+	b := ui.WithHelp(agentKeys.Link, "o", "open "+name)
 
 	switch {
 	case r.st.wide():
 	case to.dest == destOverview:
-		b = withHelp(agentKeys.Link, "o", "overview")
+		b = ui.WithHelp(agentKeys.Link, "o", "overview")
 	case to.dest == destLessons:
-		b = withHelp(agentKeys.Link, "o", "pins")
+		b = ui.WithHelp(agentKeys.Link, "o", "pins")
 	default:
-		b = withHelp(agentKeys.Link, "o", "settings")
+		b = ui.WithHelp(agentKeys.Link, "o", "settings")
 	}
 
 	b.SetEnabled(ok)
@@ -998,13 +1000,13 @@ func (r *extRecord) linkKey() key.Binding {
 // stop key of a paid run survives a narrow footer.
 func (r *extRecord) runKeys() []key.Binding {
 	if r.run.stopAsk {
-		return []key.Binding{withHelp(agentKeys.Start, "y", "stop the run"), withHelp(nkeys.Back, "esc", "keep running")}
+		return []key.Binding{ui.WithHelp(agentKeys.Start, "y", "stop the run"), ui.WithHelp(ui.Nav.Back, "esc", "keep running")}
 	}
 
-	stop := withHelp(agentKeys.Stop, "x", "stop")
+	stop := ui.WithHelp(agentKeys.Stop, "x", "stop")
 	stop.SetEnabled(!r.stopping())
 
-	return []key.Binding{stop, withHelp(nkeys.Down, "↑↓", "proposal"), r.paneKey()}
+	return []key.Binding{stop, ui.WithHelp(ui.Nav.Down, "↑↓", "proposal"), r.paneKey()}
 }
 
 // resultKeys names the keys of the result. enter shows only when the
@@ -1012,21 +1014,21 @@ func (r *extRecord) runKeys() []key.Binding {
 func (r *extRecord) resultKeys() []key.Binding {
 	_, name, ok := r.link()
 
-	open := withHelp(nkeys.Enter, "enter", "open "+strings.ToLower(extLinkTail(name)))
+	open := ui.WithHelp(ui.Nav.Enter, "enter", "open "+strings.ToLower(extLinkTail(name)))
 	if !r.st.wide() {
-		open = withHelp(nkeys.Enter, "enter", "open")
+		open = ui.WithHelp(ui.Nav.Enter, "enter", "open")
 	}
 
 	open.SetEnabled(ok)
 
-	again := withHelp(extKeys.Remaining, "n", "prepare remaining")
+	again := ui.WithHelp(extKeys.Remaining, "n", "prepare remaining")
 	if !r.st.wide() {
-		again = withHelp(extKeys.Remaining, "n", "remaining")
+		again = ui.WithHelp(extKeys.Remaining, "n", "remaining")
 	}
 
 	again.SetEnabled(len(r.remaining()) > 0)
 
-	return []key.Binding{open, again, withHelp(nkeys.Down, "↑↓", "proposal"), r.paneKey()}
+	return []key.Binding{open, again, ui.WithHelp(ui.Nav.Down, "↑↓", "proposal"), r.paneKey()}
 }
 
 // extLinkTail returns the last part of a place name, for example "Pins"
@@ -1043,11 +1045,11 @@ func extLinkTail(name string) string {
 func (r *extRecord) paneKey() key.Binding {
 	switch {
 	case r.st.wide():
-		return withHelp(nkeys.Next, "tab", "pane")
+		return ui.WithHelp(ui.Nav.Next, "tab", "pane")
 	case r.run.detail:
-		return withHelp(nkeys.Next, "tab", "summary")
+		return ui.WithHelp(ui.Nav.Next, "tab", "summary")
 	default:
-		return withHelp(nkeys.Next, "tab", "proposals")
+		return ui.WithHelp(ui.Nav.Next, "tab", "proposals")
 	}
 }
 
@@ -1055,7 +1057,7 @@ func (r *extRecord) paneKey() key.Binding {
 // distill.ErrExtractStale with its cause. The sentence names only the
 // cause, because the prefix repeats what the console says around it.
 func extStaleText(err error) string {
-	text := errText(err)
+	text := ui.ErrText(err)
 
 	if errors.Is(err, distill.ErrStale) {
 		if cause, ok := strings.CutPrefix(text, distill.ErrExtractStale.Error()+": "); ok && cause != "" {
@@ -1080,7 +1082,7 @@ func extQuestion(st *state, l *proposals.Ledger, p domain.Proposal) (open bool, 
 	case domain.ProposalSuperseded:
 		return false, "superseded"
 	default:
-		return false, "status " + oneLine(p.Status)
+		return false, "status " + ui.OneLine(p.Status)
 	}
 
 	asked, reason := distill.TriggerQuestionOpen(p)

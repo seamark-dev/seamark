@@ -11,6 +11,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the review step of the trigger extraction record: the
@@ -110,10 +111,10 @@ func TestExtractNotReadyKeepsItsLastSentenceAtTheMinimumSize(t *testing.T) {
 			learning.ErrExtractNotReady)
 	}
 
-	h := extOpen(t, f, extPreview(extMixed()), minWidth, minHeight)
+	h := extOpen(t, f, extPreview(extMixed()), ui.MinWidth, ui.MinHeight)
 
 	frame := h.view()
-	assertFrame(t, frame, minWidth, minHeight)
+	assertFrame(t, frame, ui.MinWidth, ui.MinHeight)
 
 	flat := lesBoxFlat(frame)
 	assert.Contains(t, flat, "The index is not ready")
@@ -143,7 +144,7 @@ func TestExtractEmptySelectionListsNoItem(t *testing.T) {
 func TestExtractCompactProposalsPaneKeepsTheScope(t *testing.T) {
 	p := extPreview(extMixed())
 
-	for _, size := range [][2]int{{minWidth, minHeight}, {80, 24}} {
+	for _, size := range [][2]int{{ui.MinWidth, ui.MinHeight}, {80, 24}} {
 		h := extOpen(t, extFake(p, extNoRun(t)), p, size[0], size[1])
 		h.press("tab")
 		require.True(t, extRecOf(t, h).prev.listOpen, "size %v shows the Proposals pane", size)

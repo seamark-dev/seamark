@@ -2,12 +2,15 @@ package tui
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the destination tab row and of the destination names in
@@ -61,7 +64,7 @@ func TestShellTabRuleStaysUnderTheActiveLabel(t *testing.T) {
 		h := newHarness(t, ovPopulated(), w, 24)
 
 		for i := range destCount {
-			h.press(itoa(int(i) + 1))
+			h.press(strconv.Itoa(int(i) + 1))
 			require.Equal(t, i, h.m.active)
 
 			frame := h.view()
@@ -78,7 +81,7 @@ func TestShellTabRuleStaysUnderTheActiveLabel(t *testing.T) {
 			plain, _ := h.m.tabSegment(int(i), h.m.tabShort(w)[i])
 			start, n := heavySegment(rule)
 			require.GreaterOrEqual(t, start, 0, "width %d: the rule marks the active tab", w)
-			assert.Equal(t, width(plain), n, "width %d dest %d: the rule is as wide as the segment", w, i)
+			assert.Equal(t, ui.Width(plain), n, "width %d dest %d: the rule is as wide as the segment", w, i)
 			require.LessOrEqual(t, start+n, len(row))
 			assert.Equal(t, plain, string(row[start:start+n]), "width %d dest %d: the rule sits under the label", w, i)
 		}
@@ -141,7 +144,7 @@ func TestShellHelpNamesThePinMaintenanceCommands(t *testing.T) {
 	// The help of an 80-column terminal has no room for two columns, so
 	// each route takes its own row.
 	bw, _ := h.m.helpBox(80, 24)
-	rows := helpCommandRows(h.m.st.theme, boxInner(bw))
+	rows := helpCommandRows(h.m.st.theme, ui.BoxInner(bw))
 	require.Len(t, rows, len(helpCommands))
 
 	for i, row := range rows {
@@ -151,7 +154,7 @@ func TestShellHelpNamesThePinMaintenanceCommands(t *testing.T) {
 	// The wide rows hold every route once, in reading order: the left
 	// route at the start of a row, its pair at the end.
 	bw, _ = h.m.helpBox(120, 40)
-	wide := helpCommandRows(h.m.st.theme, boxInner(bw))
+	wide := helpCommandRows(h.m.st.theme, ui.BoxInner(bw))
 	require.Len(t, wide, (len(helpCommands)+1)/2)
 
 	for i, row := range wide {

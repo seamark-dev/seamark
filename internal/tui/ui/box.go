@@ -1,4 +1,4 @@
-package tui
+package ui
 
 import (
 	"math"
@@ -10,10 +10,10 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// boxOpts describes one bordered pane of the 1a layout. The title, the
+// BoxOpts describes one bordered pane of the 1a layout. The title, the
 // right label and the footer sit inside the border lines, so a pane
 // spends no content line on its own heading.
-type boxOpts struct {
+type BoxOpts struct {
 	// W and H are the outer size in cells, borders included.
 	W, H int
 	// Title is the styled label at the left of the top border.
@@ -35,21 +35,21 @@ type boxOpts struct {
 	Fill bool
 }
 
-// boxInner returns the content width of a box of outer width w: the two
+// BoxInner returns the content width of a box of outer width w: the two
 // border cells and one cell of padding on each side.
-func boxInner(w int) int {
+func BoxInner(w int) int {
 	return max(1, w-4)
 }
 
-// boxRows returns the content height of a box of outer height h.
-func boxRows(h int) int {
+// BoxRows returns the content height of a box of outer height h.
+func BoxRows(h int) int {
 	return max(0, h-2)
 }
 
-// boxTitle styles a box title: the focused pane in the title style, the
+// BoxTitle styles a box title: the focused pane in the title style, the
 // other panes muted, as in the 1a design. The caller sanitizes the
 // title, because most titles are fixed words.
-func boxTitle(t *Theme, title string, focused bool) string {
+func BoxTitle(t *Theme, title string, focused bool) string {
 	if focused {
 		return t.Title.Render(title)
 	}
@@ -57,8 +57,8 @@ func boxTitle(t *Theme, title string, focused bool) string {
 	return t.Muted.Render(title)
 }
 
-// box renders a bordered pane of exactly W by H cells.
-func (t *Theme) box(o boxOpts) string {
+// Box renders a bordered pane of exactly W by H cells.
+func (t *Theme) Box(o BoxOpts) string {
 	g := t.Glyphs
 	w := max(4, o.W)
 	h := max(2, o.H)
@@ -71,7 +71,7 @@ func (t *Theme) box(o boxOpts) string {
 	out := make([]string, 0, h)
 	out = append(out, t.boxTop(o.Title, o.Right, w, bc))
 
-	inner := boxInner(w)
+	inner := BoxInner(w)
 	v := bc.Render(g.Vertical)
 
 	for i := 0; i < h-2; i++ {
@@ -80,14 +80,14 @@ func (t *Theme) box(o boxOpts) string {
 			line = o.Lines[i]
 		}
 
-		out = append(out, v+" "+padRight(truncate(line, inner, g.Ellipsis), inner)+" "+v)
+		out = append(out, v+" "+PadRight(Truncate(line, inner, g.Ellipsis), inner)+" "+v)
 	}
 
 	out = append(out, t.boxBottom(o.Foot, w, bc))
 
 	if o.Fill {
 		for i, l := range out {
-			out[i] = t.highlight(l, w, bgSurf)
+			out[i] = t.Highlight(l, w, bgSurf)
 		}
 	}
 
@@ -106,16 +106,16 @@ func (t *Theme) boxTop(title, right string, w int, bc lipgloss.Style) string {
 
 	var tt string
 	if title != "" {
-		room := w - 4 - width(rt) - 2
+		room := w - 4 - Width(rt) - 2
 		if room < 1 {
 			rt = ""
 			room = w - 6
 		}
 
-		tt = " " + truncate(title, max(1, room), g.Ellipsis) + " "
+		tt = " " + Truncate(title, max(1, room), g.Ellipsis) + " "
 	}
 
-	fill := max(0, w-3-width(tt)-width(rt)-1)
+	fill := max(0, w-3-Width(tt)-Width(rt)-1)
 
 	return bc.Render(g.CornerTL+g.RuleLight) + tt + bc.Render(strings.Repeat(g.RuleLight, fill)) +
 		rt + bc.Render(g.RuleLight+g.CornerTR)
@@ -127,10 +127,10 @@ func (t *Theme) boxBottom(foot string, w int, bc lipgloss.Style) string {
 
 	var ft string
 	if foot != "" {
-		ft = " " + truncate(foot, max(1, w-6), g.Ellipsis) + " "
+		ft = " " + Truncate(foot, max(1, w-6), g.Ellipsis) + " "
 	}
 
-	fill := max(0, w-3-width(ft))
+	fill := max(0, w-3-Width(ft))
 
 	return bc.Render(g.CornerBL+strings.Repeat(g.RuleLight, fill)) + ft + bc.Render(g.RuleLight+g.CornerBR)
 }
@@ -138,15 +138,15 @@ func (t *Theme) boxBottom(foot string, w int, bc lipgloss.Style) string {
 // Modal geometry: 80 cells at the 120-column design size, wider on a
 // wide terminal so long lines fold less.
 const (
-	modalMinW = 80
+	ModalMinW = 80
 	// modalMargin keeps one dimmed row above and below the modal, so
 	// the user still sees the screen that opened it.
 	modalMargin = 2
 )
 
-// modalOpts is the content of one modal: the border labels, the body
+// ModalOpts is the content of one modal: the border labels, the body
 // that scrolls, and the actions that the bottom row names.
-type modalOpts struct {
+type ModalOpts struct {
 	Title, Right string
 	Body         []string
 	// Actions are the keys under the rule at the bottom. The row stays
@@ -155,44 +155,44 @@ type modalOpts struct {
 	// Tail is the scope summary of a confirmation, for example "Removes 1
 	// pin · p16 › superseded". It stays under the rule, above the
 	// actions, and never scrolls, so the minimum layout still shows what
-	// y confirms. The caller wraps each line to modalBodyWidth; the box
+	// y confirms. The caller wraps each line to ModalBodyWidth; the box
 	// clips a longer line. A summary taller than the area keeps its first
 	// lines, so the actions and the border stay (capTail). Nil keeps the
 	// layout without a summary.
 	Tail []string
 	// MinW is the narrowest modal on a wide terminal; 0 selects
-	// modalMinW. A small terminal still gets a narrower modal.
+	// ModalMinW. A small terminal still gets a narrower modal.
 	MinW int
 }
 
 // modalWidth returns the outer width of a modal in a w-wide area.
 func modalWidth(minW, w int) int {
 	if minW <= 0 {
-		minW = modalMinW
+		minW = ModalMinW
 	}
 
 	return min(w-4, max(minW, w*2/3))
 }
 
-// modalBodyWidth returns the width of the body lines of a modal in a
+// ModalBodyWidth returns the width of the body lines of a modal in a
 // w-wide area. A caller wraps the body to this width, so the box shows
 // each line whole.
-func modalBodyWidth(minW, w int) int {
-	return boxInner(modalWidth(minW, w))
+func ModalBodyWidth(minW, w int) int {
+	return BoxInner(modalWidth(minW, w))
 }
 
-// modal renders the modal of the 1a design. It draws a filled box with
+// Modal renders the modal of the 1a design. It draws a filled box with
 // an accent border, a body that scrolls in sc, and the actions under a
 // rule. It records the scroll bounds in sc, because a key handler
 // cannot know the rendered height. The shell dims the frame and
 // centers the block.
-func (t *Theme) modal(o modalOpts, sc *scrollState, w, h int) string {
+func (t *Theme) Modal(o ModalOpts, sc *ScrollState, w, h int) string {
 	if sc == nil {
-		sc = &scrollState{}
+		sc = &ScrollState{}
 	}
 
 	mw := modalWidth(o.MinW, w)
-	inner := boxInner(mw)
+	inner := BoxInner(mw)
 
 	// The rule separates the body that scrolls from the rows that stay:
 	// the scope summary, then the actions.
@@ -210,19 +210,19 @@ func (t *Theme) modal(o modalOpts, sc *scrollState, w, h int) string {
 	}
 
 	if len(o.Actions) > 0 {
-		tail = append(tail, t.hints(o.Actions))
+		tail = append(tail, t.Hints(o.Actions))
 	}
 
 	window := min(len(o.Body), max(1, h-modalMargin-2-len(tail)))
-	from, to := sc.fit(len(o.Body), window)
+	from, to := sc.Fit(len(o.Body), window)
 	lines := append(append([]string{}, o.Body[from:to]...), tail...)
 
 	var foot string
-	if sc.scrolls() {
-		foot = propRange(t, from, to, len(o.Body))
+	if sc.Scrolls() {
+		foot = t.RangeNote(from, to, len(o.Body))
 	}
 
-	return t.box(boxOpts{
+	return t.Box(BoxOpts{
 		W: mw, H: len(lines) + 2, Focus: true, Fill: true, Lines: lines,
 		Title: o.Title, Right: o.Right, Foot: foot,
 	})
@@ -241,26 +241,26 @@ func (t *Theme) capTail(lines []string, n, inner int) []string {
 	n = max(1, n)
 	kept := slices.Clone(lines[:n])
 	ell := t.Glyphs.Ellipsis
-	kept[n-1] = truncate(kept[n-1], max(0, inner-width(ell)-1), "") + " " + ell
+	kept[n-1] = Truncate(kept[n-1], max(0, inner-Width(ell)-1), "") + " " + ell
 
 	return kept
 }
 
-// scrollBox renders body lines in a box that scrolls in sc, with the
+// ScrollBox renders body lines in a box that scrolls in sc, with the
 // tail lines always visible under the body. When follow is set, the
 // window moves so that the lines keep[0] to keep[1] show, for example
 // the cursor group and its evidence. A box that scrolls shows its
 // position in the bottom border.
-func (t *Theme) scrollBox(o boxOpts, body, tail []string, sc *scrollState, keep [2]int, follow bool) string {
-	return t.pinnedBox(o, nil, body, tail, sc, keep, follow)
+func (t *Theme) ScrollBox(o BoxOpts, body, tail []string, sc *ScrollState, keep [2]int, follow bool) string {
+	return t.PinnedBox(o, nil, body, tail, sc, keep, follow)
 }
 
-// pinnedBox is scrollBox with head lines that stay above the body, for
+// PinnedBox is ScrollBox with head lines that stay above the body, for
 // example the headline of a run. Only the body scrolls, and keep counts
 // body lines. The distillation record, the extraction record and the
 // Pins view share it, so every scrolling box keeps the same rules.
-func (t *Theme) pinnedBox(o boxOpts, head, body, tail []string, sc *scrollState, keep [2]int, follow bool) string {
-	rows := boxRows(o.H)
+func (t *Theme) PinnedBox(o BoxOpts, head, body, tail []string, sc *ScrollState, keep [2]int, follow bool) string {
+	rows := BoxRows(o.H)
 	fixed := len(head) + len(tail)
 
 	window := len(body)
@@ -269,76 +269,28 @@ func (t *Theme) pinnedBox(o boxOpts, head, body, tail []string, sc *scrollState,
 	}
 
 	if follow {
-		sc.reveal(keep[0], keep[1], window)
+		sc.Reveal(keep[0], keep[1], window)
 	}
 
-	from, to := sc.fit(len(body), window)
+	from, to := sc.Fit(len(body), window)
 	o.Lines = append(append(slices.Clone(head), body[from:to]...), tail...)
 
-	if sc.scrolls() && o.Foot == "" {
-		o.Foot = propRange(t, from, to, len(body))
+	if sc.Scrolls() && o.Foot == "" {
+		o.Foot = t.RangeNote(from, to, len(body))
 	}
 
-	return t.box(o)
+	return t.Box(o)
 }
 
-// paneMessage is a centered message: a styled head, a plain body that
-// wraps, and styled next-step lines.
-type paneMessage struct {
-	head []string
-	body string
-	next []string
-}
-
-// messageBox renders a full-width box with a centered message. When the
-// box is too short, the body gives up lines first, so the head and the
-// next action stay visible. The empty states of Proposals and Pins use
-// it, so both sub-views read alike.
-func (t *Theme) messageBox(title, right string, m paneMessage, w, h int) string {
-	inner := boxInner(w)
-	rows := boxRows(h)
-	textW := min(inner, 72)
-
-	var body []string
-	if m.body != "" {
-		body = strings.Split(wrap(m.body, textW), "\n")
-	}
-
-	gap := 1
-	if len(m.head)+len(body)+len(m.next)+2 > rows {
-		gap = 0
-	}
-
-	if room := rows - len(m.head) - len(m.next) - 2*gap; len(body) > room {
-		body = clipWithEllipsis(body, max(0, room), textW, t.Glyphs.Ellipsis)
-	}
-
-	lines := joinLineBlocks(gap, m.head, t.mutedLines(body), m.next)
-	if len(lines) > rows {
-		lines = lines[:rows]
-	}
-
-	out := make([]string, 0, rows)
-	for range max(0, (rows-len(lines))*2/5) {
-		out = append(out, "")
-	}
-
-	for _, l := range lines {
-		out = append(out, strings.Repeat(" ", max(0, (inner-width(l))/2))+l)
-	}
-
-	return t.box(boxOpts{W: w, H: h, Title: title, Right: right, Focus: true, Lines: out})
-}
-
-// card renders a summary card: a short box whose title is a dim
+// Card renders a summary card: a short box whose title is a dim
 // upper-case label and whose right label carries the state.
-func (t *Theme) card(w, h int, title, right string, lines []string) string {
-	return t.box(boxOpts{W: w, H: h, Title: t.Heading.Render(title), Right: right, Lines: lines})
+func (t *Theme) Card(w, h int, title, right string, lines []string) string {
+	return t.Box(BoxOpts{W: w, H: h, Title: t.Heading.Render(title), Right: right, Lines: lines})
 }
 
-// hjoin places rendered blocks side by side with gap cells between
+// Hjoin places rendered blocks side by side with gap cells between
 // them. Blocks of different heights are padded at the bottom.
-func hjoin(gap int, blocks ...string) string {
+func Hjoin(gap int, blocks ...string) string {
 	parts := make([]string, 0, 2*len(blocks))
 
 	for i, b := range blocks {
@@ -352,16 +304,16 @@ func hjoin(gap int, blocks ...string) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 }
 
-// overlay places a rendered block on a dimmed copy of base, centered in
+// Overlay places a rendered block on a dimmed copy of base, centered in
 // w by h cells. The base keeps its text around the block, so the user
 // still sees where the modal came from.
-func (t *Theme) overlay(base, block string, w, h int) string {
-	baseLines := strings.Split(fit(base, w, h), "\n")
+func (t *Theme) Overlay(base, block string, w, h int) string {
+	baseLines := strings.Split(Fit(base, w, h), "\n")
 	blockLines := strings.Split(block, "\n")
 
 	bw := 0
 	for _, l := range blockLines {
-		bw = max(bw, width(l))
+		bw = max(bw, Width(l))
 	}
 
 	bw = min(bw, w)
@@ -380,18 +332,18 @@ func (t *Theme) overlay(base, block string, w, h int) string {
 
 		left := ansi.Truncate(plain, x, "")
 		right := ansi.TruncateLeft(plain, x+bw, "")
-		mid := padRight(truncate(blockLines[i-y], bw, ""), bw)
+		mid := PadRight(Truncate(blockLines[i-y], bw, ""), bw)
 
-		baseLines[i] = t.Rule.Render(padRight(left, x)) + mid + t.Rule.Render(right)
+		baseLines[i] = t.Rule.Render(PadRight(left, x)) + mid + t.Rule.Render(right)
 	}
 
 	return strings.Join(baseLines, "\n")
 }
 
-// bar renders a horizontal bar of w cells: the filled part in the tone
+// Bar renders a horizontal bar of w cells: the filled part in the tone
 // color and the rest in the line color. The count beside it carries the
 // value, so the bar is a visual aid only.
-func (t *Theme) bar(n, total, w int, tone Tone) string {
+func (t *Theme) Bar(n, total, w int, tone Tone) string {
 	if w <= 0 {
 		return ""
 	}
@@ -405,10 +357,10 @@ func (t *Theme) bar(n, total, w int, tone Tone) string {
 		t.Rule.Render(strings.Repeat(t.Glyphs.BarEmpty, w-filled))
 }
 
-// columns renders a column chart of h rows. Each value takes two cells
+// Columns renders a column chart of h rows. Each value takes two cells
 // with a one-cell gap. The top cell of a column uses an eighth-block
 // glyph, so small differences stay visible at a low height.
-func (t *Theme) columns(vals []int, h int, tone Tone) []string {
+func (t *Theme) Columns(vals []int, h int, tone Tone) []string {
 	peak := 0
 	for _, v := range vals {
 		peak = max(peak, v)
@@ -443,56 +395,35 @@ func (t *Theme) columns(vals []int, h int, tone Tone) []string {
 	return rows
 }
 
-// stepper renders "✓ Client ── ● Choose ── ○ Review ── ○ Apply": done
-// steps in the success color, the current step in the accent color and
-// the rest faint.
-func (t *Theme) stepper(steps []string, current int) string {
-	g := t.Glyphs
-	parts := make([]string, 0, len(steps))
-
-	for i, s := range steps {
-		switch {
-		case i < current:
-			parts = append(parts, t.Success.Render(g.OK+" "+s))
-		case i == current:
-			parts = append(parts, t.TabActive.Render(g.Dot+" "+s))
-		default:
-			parts = append(parts, t.Faint.Render(g.Hollow+" "+s))
-		}
-	}
-
-	return strings.Join(parts, t.Rule.Render(" "+g.RuleLight+g.RuleLight+" "))
-}
-
-// spread places left and right text on one line of w cells.
-func spread(left, right string, w int) string {
-	gap := w - width(left) - width(right)
+// Spread places left and right text on one line of w cells.
+func Spread(left, right string, w int) string {
+	gap := w - Width(left) - Width(right)
 	if gap < 1 {
-		return truncate(left, max(0, w-width(right)-1), "…") + " " + right
+		return Truncate(left, max(0, w-Width(right)-1), "…") + " " + right
 	}
 
 	return left + strings.Repeat(" ", gap) + right
 }
 
-// cols lays out cells in fixed-width columns. Each cell is clipped with
+// Cols lays out cells in fixed-width columns. Each cell is clipped with
 // an ellipsis and padded, so a table never wraps a cell.
-func (t *Theme) cols(cells ...colCell) string {
+func (t *Theme) Cols(cells ...ColCell) string {
 	var b strings.Builder
 
 	for _, c := range cells {
-		b.WriteString(padRight(truncate(c.text, c.w, t.Glyphs.Ellipsis), c.w))
+		b.WriteString(PadRight(Truncate(c.Text, c.W, t.Glyphs.Ellipsis), c.W))
 	}
 
 	return b.String()
 }
 
-// colCell is one cell of a fixed-width table row.
-type colCell struct {
-	text string
-	w    int
+// ColCell is one cell of a fixed-width table row.
+type ColCell struct {
+	Text string
+	W    int
 }
 
-// cell builds a colCell.
-func cell(text string, w int) colCell {
-	return colCell{text: text, w: w}
+// Cell builds a ColCell.
+func Cell(text string, w int) ColCell {
+	return ColCell{Text: text, W: w}
 }

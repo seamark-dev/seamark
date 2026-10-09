@@ -16,6 +16,7 @@ import (
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -456,11 +457,11 @@ func maintContent(t *testing.T, h *harness) string {
 	mod := maintHostOf(h).modal
 	require.NotNil(t, mod, "no maintenance preview is open")
 
-	v := mod.content(modalBodyWidth(modalMinW, h.m.st.width))
+	v := mod.content(ui.ModalBodyWidth(ui.ModalMinW, h.m.st.width))
 
 	parts := append([]string{v.Title, v.Right}, v.Body...)
 	parts = append(parts, v.Tail...)
-	parts = append(parts, h.m.st.theme.hints(v.Actions))
+	parts = append(parts, h.m.st.theme.Hints(v.Actions))
 
 	return lesFlat(ansi.Strip(strings.Join(parts, "\n")))
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests in this file cover the setup wizard in short terminals:
@@ -21,7 +22,7 @@ func TestSetupClientStepShowsEveryClientInAShortTerminal(t *testing.T) {
 	f.clients = inspecttest.Registry().Clients()
 	f.integrations = append(integMatrix(), integration.Inspection{ClientID: inspecttest.SharedID, Name: "Shared Agent"})
 
-	for _, size := range [][2]int{{minWidth, minHeight}, {60, 20}} {
+	for _, size := range [][2]int{{ui.MinWidth, ui.MinHeight}, {60, 20}} {
 		h := newHarness(t, f, size[0], size[1])
 		h.press("2")
 		h.send(navigateMsg{dest: destIntegrations, intent: "setup"})
@@ -36,14 +37,14 @@ func TestSetupClientStepShowsEveryClientInAShortTerminal(t *testing.T) {
 }
 
 func TestIntegrationClientListAnnouncesHiddenClients(t *testing.T) {
-	th := newTheme(false)
+	th := ui.NewTheme(false)
 	items := []integItem{
 		{name: "Claude Code", badge: "· not set up", summary: []string{"6 not configured"}},
 		{name: "Codex", badge: "· not set up", summary: []string{"5 not configured"}},
 		{name: "Shared Agent", badge: "· not set up", summary: []string{"1 not configured"}},
 	}
 
-	var l listState
+	var l ui.ListState
 
 	render := func(h int) string {
 		return ansi.Strip(strings.Join(integRenderClients(th, items, &l, 40, h, true), "\n"))
@@ -55,13 +56,13 @@ func TestIntegrationClientListAnnouncesHiddenClients(t *testing.T) {
 	assert.Contains(t, out, "1–1 of 3", "a hidden client is announced")
 	assert.LessOrEqual(t, setupLineCount(out), 4)
 
-	l.cursor = 2
+	l.Cursor = 2
 	out = render(4)
 	assert.Contains(t, out, "Shared Agent", "the cursor item stays visible")
 	assert.Contains(t, out, "3–3 of 3")
 
 	// A list that fits shows no note.
-	l = listState{}
+	l = ui.ListState{}
 	out = render(8)
 	assert.Contains(t, out, "Shared Agent")
 	assert.NotContains(t, out, "of 3")
@@ -78,7 +79,7 @@ func TestSetupChooseDetailsReachableInCompactLayout(t *testing.T) {
 	frame := h.view()
 	assertFrame(t, frame, 60, 20)
 	assert.Contains(t, frame, "press i to read the full text", "a cut explanation names the details key")
-	assert.Contains(t, ansi.Strip(h.m.st.theme.hints(wz.keys())), "i details", "the step lists the details key")
+	assert.Contains(t, ansi.Strip(h.m.st.theme.Hints(wz.keys())), "i details", "the step lists the details key")
 
 	// The footer gives way to the global keys at this width; the help
 	// lists every key of the step.
@@ -93,7 +94,7 @@ func TestSetupChooseDetailsReachableInCompactLayout(t *testing.T) {
 	assertFrame(t, frame, 60, 20)
 	assert.Contains(t, frame, "Details · Tool grants")
 	assert.Contains(t, setupBoxText(frame, 0, 60), "Seamark never grants native trust")
-	assert.Contains(t, ansi.Strip(h.m.st.theme.hints(wz.keys())), "esc choices")
+	assert.Contains(t, ansi.Strip(h.m.st.theme.Hints(wz.keys())), "esc choices")
 
 	// The details box scrolls to the notes at the end.
 	h.press("end")
@@ -108,7 +109,7 @@ func TestSetupChooseDetailsReachableInCompactLayout(t *testing.T) {
 	assert.Contains(t, h.view(), "[ ] Tool grants")
 	assert.Same(t, wz, setupScreen(h).wizard, "esc closes the details, not the wizard")
 	assert.Equal(t, setupStepChoices, wz.step)
-	assert.Equal(t, 3, wz.rows.cursor, "the cursor survives the details pane")
+	assert.Equal(t, 3, wz.rows.Cursor, "the cursor survives the details pane")
 
 	// The details key toggles the pane.
 	h.press("i", "i")
@@ -129,7 +130,7 @@ func TestSetupChooseDetailsFitWhenThereIsRoom(t *testing.T) {
 }
 
 func TestSetupClipKeepsWholeBlocksAndNamesTheKey(t *testing.T) {
-	th := newTheme(false)
+	th := ui.NewTheme(false)
 	block := []string{"one", "two", "three", "four"}
 
 	assert.Equal(t, block, setupClip(th, block, 20, 4))
@@ -176,8 +177,8 @@ func TestSetupWideReviewNotesScrollWithTab(t *testing.T) {
 	h.press("down", "down")
 	assert.Greater(t, wz.planOff, before, "the notes scroll while they have the keys")
 
-	cursor := wz.paths.cursor
+	cursor := wz.paths.Cursor
 	h.press("tab", "down")
 	assert.False(t, wz.notesFocus)
-	assert.NotEqual(t, cursor, wz.paths.cursor, "the files take the keys again")
+	assert.NotEqual(t, cursor, wz.paths.Cursor, "the files take the keys again")
 }

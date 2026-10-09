@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // integFocus names the pane that receives the movement keys.
@@ -52,11 +54,11 @@ type integrations struct {
 	// a copy at construction keeps Services calls out of Update and View.
 	clients []integration.Client
 
-	list  listState
+	list  ui.ListState
 	focus integFocus
 	// detailOpen shows the detail box in the narrow layout.
 	detailOpen bool
-	detail     textPager
+	detail     ui.TextPager
 
 	// pendingClient selects a client when the first inspection arrives,
 	// because an intent can arrive before the snapshot.
@@ -97,7 +99,7 @@ func (s *integrations) open(intent string) tea.Cmd {
 	verb, id, _ := strings.Cut(intent, ":")
 
 	if s.wizard != nil && s.wizard.running() && verb != "" {
-		return toast(ToneAttention, "Setup is applying changes. Wait for the result first.")
+		return toast(ui.ToneAttention, "Setup is applying changes. Wait for the result first.")
 	}
 
 	switch verb {
@@ -132,7 +134,7 @@ func (s *integrations) startSetup(id string, refresh bool) tea.Cmd {
 	if !ok {
 		s.wizard = newSetupWizard(s.st, s.clients)
 
-		return toast(ToneAttention, "Unknown client: "+oneLine(id)+". Choose a client to set up.")
+		return toast(ui.ToneAttention, "Unknown client: "+ui.OneLine(id)+". Choose a client to set up.")
 	}
 
 	s.selectClient(id)
@@ -216,8 +218,8 @@ func (s *integrations) key(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	s.list.clamp(len(insps), 0)
-	sel := insps[s.list.cursor]
+	s.list.Clamp(len(insps), 0)
+	sel := insps[s.list.Cursor]
 
 	switch {
 	case key.Matches(msg, integKeys.Setup):
@@ -227,8 +229,8 @@ func (s *integrations) key(msg tea.KeyMsg) tea.Cmd {
 			return s.startSetup(sel.ClientID, true)
 		}
 
-		return toast(ToneNeutral, oneLine(sel.Name)+" reads no managed skills.")
-	case key.Matches(msg, nkeys.Next, nkeys.Prev):
+		return toast(ui.ToneNeutral, ui.OneLine(sel.Name)+" reads no managed skills.")
+	case key.Matches(msg, ui.Nav.Next, ui.Nav.Prev):
 		if s.st.wide() {
 			s.focus = 1 - s.focus
 		}
@@ -241,17 +243,17 @@ func (s *integrations) key(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	switch {
-	case key.Matches(msg, nkeys.Up):
-		s.list.move(-1, len(insps))
-	case key.Matches(msg, nkeys.Down):
-		s.list.move(1, len(insps))
-	case key.Matches(msg, nkeys.Top):
-		s.list.cursor = 0
-	case key.Matches(msg, nkeys.Bottom):
-		s.list.cursor = len(insps) - 1
-	case key.Matches(msg, nkeys.PageUp, nkeys.PageDown):
-		s.detail.key(msg)
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Up):
+		s.list.Move(-1, len(insps))
+	case key.Matches(msg, ui.Nav.Down):
+		s.list.Move(1, len(insps))
+	case key.Matches(msg, ui.Nav.Top):
+		s.list.Cursor = 0
+	case key.Matches(msg, ui.Nav.Bottom):
+		s.list.Cursor = len(insps) - 1
+	case key.Matches(msg, ui.Nav.PageUp, ui.Nav.PageDown):
+		s.detail.Key(msg)
+	case key.Matches(msg, ui.Nav.Enter):
 		if s.st.wide() {
 			return s.startSetup(sel.ClientID, false)
 		}
@@ -265,13 +267,13 @@ func (s *integrations) key(msg tea.KeyMsg) tea.Cmd {
 // detailKey handles the keys while the detail box has focus.
 func (s *integrations) detailKey(msg tea.KeyMsg, sel integration.Inspection) tea.Cmd {
 	switch {
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		s.detailOpen = false
 		s.focus = integFocusList
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		return s.startSetup(sel.ClientID, false)
 	default:
-		s.detail.key(msg)
+		s.detail.Key(msg)
 	}
 
 	return nil
@@ -297,22 +299,22 @@ func (s *integrations) keys() []key.Binding {
 	}
 
 	skillsKey := integKeys.Skills
-	if c, ok := s.client(insps[min(s.list.cursor, len(insps)-1)].ClientID); !ok || !c.Supports(integration.CapabilitySkills) {
+	if c, ok := s.client(insps[min(s.list.Cursor, len(insps)-1)].ClientID); !ok || !c.Supports(integration.CapabilitySkills) {
 		skillsKey.SetEnabled(false)
 	}
 
 	switch {
 	case s.st.wide() && s.focus == integFocusDetail:
-		return []key.Binding{withHelp(nkeys.Down, "↑↓", "scroll"), withHelp(nkeys.Next, "tab", "clients"),
-			withHelp(nkeys.Enter, "enter", "set up"), skillsKey}
+		return []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "scroll"), ui.WithHelp(ui.Nav.Next, "tab", "clients"),
+			ui.WithHelp(ui.Nav.Enter, "enter", "set up"), skillsKey}
 	case s.st.wide():
-		return []key.Binding{withHelp(nkeys.Down, "↑↓", "move"), withHelp(nkeys.Next, "tab", "details"),
-			withHelp(nkeys.Enter, "enter", "set up"), skillsKey}
+		return []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "move"), ui.WithHelp(ui.Nav.Next, "tab", "details"),
+			ui.WithHelp(ui.Nav.Enter, "enter", "set up"), skillsKey}
 	case s.detailOpen:
-		return []key.Binding{withHelp(nkeys.Down, "↑↓", "scroll"), withHelp(nkeys.Back, "esc", "clients"),
+		return []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "scroll"), ui.WithHelp(ui.Nav.Back, "esc", "clients"),
 			integKeys.Setup, skillsKey}
 	default:
-		return []key.Binding{withHelp(nkeys.Down, "↑↓", "move"), withHelp(nkeys.Enter, "enter", "details"),
+		return []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "move"), ui.WithHelp(ui.Nav.Enter, "enter", "details"),
 			integKeys.Setup, skillsKey}
 	}
 }
@@ -351,7 +353,7 @@ func (s *integrations) selectClient(id string) {
 
 	for i, insp := range insps {
 		if insp.ClientID == id {
-			s.list.cursor = i
+			s.list.Cursor = i
 
 			return
 		}
@@ -371,32 +373,32 @@ func (s *integrations) view(w, h int) string {
 	boxH := max(3, h-1)
 
 	if !sec.loaded {
-		o := boxOpts{W: w, H: boxH, Focus: true, Title: integPaneTitle(t, "Clients", true)}
+		o := ui.BoxOpts{W: w, H: boxH, Focus: true, Title: integPaneTitle(t, "Clients", true)}
 
 		if sec.err != nil {
-			return integBoxed(t, o, ToneFailure, "Could not inspect the integrations", errText(sec.err),
+			return integBoxed(t, o, ui.ToneFailure, "Could not inspect the integrations", ui.ErrText(sec.err),
 				t.Muted.Render("Press ")+t.Key.Render("r")+t.Muted.Render(" to read the files again."))
 		}
 
-		return integBoxed(t, o, ToneNeutral, "Reading integrations"+t.Glyphs.Ellipsis,
+		return integBoxed(t, o, ui.ToneNeutral, "Reading integrations"+t.Glyphs.Ellipsis,
 			"Seamark reads the native configuration files of every registered client. Nothing is written.", "")
 	}
 
 	insps := sec.value
 	if len(insps) == 0 {
-		return integBoxed(t, boxOpts{W: w, H: boxH, Focus: true, Title: integPaneTitle(t, "Clients", true)},
-			ToneNeutral, "No clients registered",
+		return integBoxed(t, ui.BoxOpts{W: w, H: boxH, Focus: true, Title: integPaneTitle(t, "Clients", true)},
+			ui.ToneNeutral, "No clients registered",
 			"This build registers no coding agent clients, so there is nothing to set up.", "")
 	}
 
-	s.list.clamp(len(insps), 0)
-	sel := insps[s.list.cursor]
+	s.list.Clamp(len(insps), 0)
+	sel := insps[s.list.Cursor]
 
-	if w >= wideWidth {
+	if w >= ui.WideWidth {
 		left := s.listBox(insps, integListW, boxH, s.focus == integFocusList)
 		right := s.detailBox(sel, w-integListW-1, boxH, s.focus == integFocusDetail)
 
-		return hjoin(1, left, right)
+		return ui.Hjoin(1, left, right)
 	}
 
 	if s.detailOpen {
@@ -416,10 +418,10 @@ func (s *integrations) listBox(insps []integration.Inspection, w, h int, focused
 		items = append(items, integClientItem(t, insp))
 	}
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: focused,
-		Title: integPaneTitle(t, "Clients", focused), Right: t.Muted.Render(itoa(len(insps))),
-		Lines: integRenderClients(t, items, &s.list, boxInner(w), boxRows(h), focused),
+		Title: integPaneTitle(t, "Clients", focused), Right: t.Muted.Render(strconv.Itoa(len(insps))),
+		Lines: integRenderClients(t, items, &s.list, ui.BoxInner(w), ui.BoxRows(h), focused),
 	})
 }
 
@@ -427,19 +429,19 @@ func (s *integrations) listBox(insps []integration.Inspection, w, h int, focused
 // box, with the scroll position in the bottom border.
 func (s *integrations) detailBox(insp integration.Inspection, w, h int, focused bool) string {
 	t := s.st.theme
-	inner, rows := boxInner(w), boxRows(h)
+	inner, rows := ui.BoxInner(w), ui.BoxRows(h)
 
-	lines := s.detail.lines(insp.ClientID, s.detailLines(insp, inner), inner, rows)
+	lines := s.detail.Lines(insp.ClientID, s.detailLines(insp, inner), inner, rows)
 
 	right := ""
 	if s.st.integrations.stale() {
 		right = t.Attention.Render(t.Glyphs.Warn + " stale")
 	}
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: focused,
 		Title: integPaneTitle(t, integName(s.clientOf(insp), insp), focused), Right: right,
-		Foot: s.detail.foot(t), Lines: lines,
+		Foot: s.detail.Foot(t), Lines: lines,
 	})
 }
 
@@ -463,15 +465,15 @@ type integItem struct {
 // right, then the summary packed into as many lines as it needs, so a
 // client with many states is never cut. current marks the cursor item,
 // whose name is bold.
-func (it integItem) lines(t *Theme, w int, current bool) []string {
+func (it integItem) lines(t *ui.Theme, w int, current bool) []string {
 	style := t.Body
 	if current {
 		style = t.Title
 	}
 
 	badge := it.badge + " "
-	name := style.Render(truncate(it.name, max(1, w-width(badge)-1), t.Glyphs.Ellipsis))
-	out := []string{spread(name, badge, w)}
+	name := style.Render(ui.Truncate(it.name, max(1, w-ui.Width(badge)-1), t.Glyphs.Ellipsis))
+	out := []string{ui.Spread(name, badge, w)}
 
 	sep := " " + t.Glyphs.Sep + " "
 	line := ""
@@ -480,16 +482,16 @@ func (it integItem) lines(t *Theme, w int, current bool) []string {
 		switch {
 		case line == "":
 			line = part
-		case width(line+sep+part) <= w:
+		case ui.Width(line+sep+part) <= w:
 			line += sep + part
 		default:
-			out = append(out, t.Muted.Render(truncate(line, w, t.Glyphs.Ellipsis)))
+			out = append(out, t.Muted.Render(ui.Truncate(line, w, t.Glyphs.Ellipsis)))
 			line = part
 		}
 	}
 
 	if line != "" {
-		out = append(out, t.Muted.Render(truncate(line, w, t.Glyphs.Ellipsis)))
+		out = append(out, t.Muted.Render(ui.Truncate(line, w, t.Glyphs.Ellipsis)))
 	}
 
 	return out
@@ -500,12 +502,12 @@ func (it integItem) lines(t *Theme, w int, current bool) []string {
 // gets the selection background when the list has focus. A list that
 // does not fit gives its last line to a position note, so a hidden
 // client is never a surprise.
-func integRenderClients(t *Theme, items []integItem, l *listState, w, h int, focused bool) []string {
-	l.clamp(len(items), 0)
+func integRenderClients(t *ui.Theme, items []integItem, l *ui.ListState, w, h int, focused bool) []string {
+	l.Clamp(len(items), 0)
 
 	rendered := make([][]string, len(items))
 	for i, it := range items {
-		rendered[i] = it.lines(t, w-2, i == l.cursor)
+		rendered[i] = it.lines(t, w-2, i == l.Cursor)
 	}
 
 	height := func(from, to int) int {
@@ -522,21 +524,21 @@ func integRenderClients(t *Theme, items []integItem, l *listState, w, h int, foc
 		room = h - 1
 	}
 
-	l.offset = min(l.offset, l.cursor)
-	for l.offset < l.cursor && height(l.offset, l.cursor) > room {
-		l.offset++
+	l.Offset = min(l.Offset, l.Cursor)
+	for l.Offset < l.Cursor && height(l.Offset, l.Cursor) > room {
+		l.Offset++
 	}
 
 	var out []string
 
 	shown := 0
 
-	for i := l.offset; i < len(items); i++ {
+	for i := l.Offset; i < len(items); i++ {
 		block := rendered[i]
 
 		// The first item always renders, so the cursor item never
 		// disappears; the box clips a block taller than the window.
-		if i > l.offset {
+		if i > l.Offset {
 			if len(out)+1+len(block) > room {
 				break
 			}
@@ -546,14 +548,14 @@ func integRenderClients(t *Theme, items []integItem, l *listState, w, h int, foc
 
 		for j, line := range block {
 			prefix := "  "
-			if i == l.cursor && j == 0 {
+			if i == l.Cursor && j == 0 {
 				prefix = t.Key.Render(t.Glyphs.Cursor) + " "
 			}
 
 			line = prefix + line
 
-			if i == l.cursor && focused {
-				line = t.highlight(line, w, bgSel)
+			if i == l.Cursor && focused {
+				line = t.Highlight(line, w, ui.BgSel)
 			}
 
 			out = append(out, line)
@@ -563,7 +565,7 @@ func integRenderClients(t *Theme, items []integItem, l *listState, w, h int, foc
 	}
 
 	if room < h {
-		out = append(out, t.scrollNote(l.offset, shown, len(items), w))
+		out = append(out, t.ScrollNote(l.Offset, shown, len(items), w))
 	}
 
 	return out

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -11,12 +12,13 @@ import (
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // ovLayoutSizes are the sizes the 1a design names: the primary size, the
 // common narrow terminal, and the documented minimum.
-var ovLayoutSizes = [][2]int{{120, 40}, {80, 24}, {minWidth, minHeight}}
+var ovLayoutSizes = [][2]int{{120, 40}, {80, 24}, {ui.MinWidth, ui.MinHeight}}
 
 // ovStale is a populated workspace whose index is stale and whose doctor
 // report is clean, so the stale item is the most urgent one.
@@ -73,7 +75,7 @@ func TestOverviewFramesFitAtEverySize(t *testing.T) {
 		for _, size := range ovLayoutSizes {
 			w, hgt := size[0], size[1]
 
-			t.Run(name+" "+itoa(w)+"x"+itoa(hgt), func(t *testing.T) {
+			t.Run(name+" "+strconv.Itoa(w)+"x"+strconv.Itoa(hgt), func(t *testing.T) {
 				f := scene()
 				h := newHarness(t, f, w, hgt)
 
@@ -172,10 +174,10 @@ func TestOverviewStaleIndexShowsTheBanner(t *testing.T) {
 	assert.Contains(t, frame, "! action  stale · index · built 2h ago")
 	assert.Contains(t, frame, "b build the index · same as seamark index")
 
-	banner, ok := o.banner(minWidth)
+	banner, ok := o.banner(ui.MinWidth)
 	require.True(t, ok)
 	assert.Contains(t, banner, "b rebuild now", "the key survives a narrow banner")
-	assert.LessOrEqual(t, width(banner), minWidth)
+	assert.LessOrEqual(t, ui.Width(banner), ui.MinWidth)
 
 	h.press("b")
 	assert.Contains(t, h.view(), "Build the index?", "b opens the rebuild confirmation")
@@ -203,15 +205,15 @@ func TestOverviewTabCountCountsTheAttentionItems(t *testing.T) {
 	}
 
 	require.Positive(t, n)
-	assert.Equal(t, itoa(n), o.tabCount())
+	assert.Equal(t, strconv.Itoa(n), o.tabCount())
 
 	lines := ovLines(h.view())
-	assert.Contains(t, lines[1], "1 Overview "+itoa(n))
-	assert.Contains(t, lines[10], "─ "+itoa(n)+" ─╮", "the Attention box repeats the count")
+	assert.Contains(t, lines[1], "1 Overview "+strconv.Itoa(n))
+	assert.Contains(t, lines[10], "─ "+strconv.Itoa(n)+" ─╮", "the Attention box repeats the count")
 
 	// The narrow layout adds the summary item, but not to the count.
 	h.resize(80, 24)
-	assert.Equal(t, itoa(n), o.tabCount())
+	assert.Equal(t, strconv.Itoa(n), o.tabCount())
 }
 
 func TestOverviewOpenBuildIntentShowsTheConfirmation(t *testing.T) {

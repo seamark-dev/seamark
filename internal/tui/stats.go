@@ -3,6 +3,7 @@ package tui
 import (
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // statsPane names a box of the Stats sub-view.
@@ -55,7 +57,7 @@ const (
 
 // statsInfo is the info color of the bars. ToneUnknown carries the info
 // color; the bars use it for color only, not for an unknown state.
-const statsInfo = ToneUnknown
+const statsInfo = ui.ToneUnknown
 
 // statsView is the Lessons → Stats sub-view: the lesson counts on the
 // left and the delivery of the retained log on the right. It only reads
@@ -65,7 +67,7 @@ type statsView struct {
 
 	focus  statsPane
 	period int // an index into statsPeriods
-	scroll [statsPaneCount]scrollState
+	scroll [statsPaneCount]ui.ScrollState
 }
 
 // newStatsView returns the Stats sub-view over the shared state.
@@ -88,12 +90,12 @@ func (s *statsView) update(msg tea.Msg) tea.Cmd {
 // period, and the movement keys scroll the focused box.
 func (s *statsView) handleKey(msg tea.KeyMsg) {
 	switch {
-	case key.Matches(msg, nkeys.Next, nkeys.Prev):
+	case key.Matches(msg, ui.Nav.Next, ui.Nav.Prev):
 		s.focus = (s.focus + 1) % statsPaneCount
 	case key.Matches(msg, lesKeys.State):
 		s.period = (s.period + 1) % len(statsPeriods)
 	default:
-		s.scroll[s.focus].key(msg)
+		s.scroll[s.focus].Key(msg)
 	}
 }
 
@@ -109,13 +111,13 @@ func (s *statsView) keys() []key.Binding {
 		return nil
 	}
 
-	period := withHelp(lesKeys.State, "f", "period")
+	period := ui.WithHelp(lesKeys.State, "f", "period")
 	period.SetEnabled(s.chartReady(s.st.stats.value))
 
-	scroll := withHelp(nkeys.Down, "↑↓", "scroll")
-	scroll.SetEnabled(s.scroll[s.focus].scrolls())
+	scroll := ui.WithHelp(ui.Nav.Down, "↑↓", "scroll")
+	scroll.SetEnabled(s.scroll[s.focus].Scrolls())
 
-	return []key.Binding{withHelp(nkeys.Next, "tab", "pane"), period, scroll}
+	return []key.Binding{ui.WithHelp(ui.Nav.Next, "tab", "pane"), period, scroll}
 }
 
 // capturing is always false: Stats has no text input and no modal.
@@ -142,18 +144,18 @@ func (s *statsView) view(w, h int) string {
 
 	if !sec.loaded {
 		if sec.err != nil {
-			return t.empty(ToneFailure, "Could not read delivery statistics", errText(sec.err),
+			return t.Empty(ui.ToneFailure, "Could not read delivery statistics", ui.ErrText(sec.err),
 				t.Muted.Render("Press r to refresh the view."), w, h)
 		}
 
-		return t.empty(ToneNeutral, "Reading delivery statistics"+t.Glyphs.Ellipsis,
+		return t.Empty(ui.ToneNeutral, "Reading delivery statistics"+t.Glyphs.Ellipsis,
 			"Stats read the retained delivery log and the lesson configuration. Reading never records a delivery.",
 			"", w, h)
 	}
 
 	head := ""
 	if sec.stale() {
-		head = " " + t.Attention.Render(truncate(t.Glyphs.Warn+" stale: "+errText(sec.err)+
+		head = " " + t.Attention.Render(ui.Truncate(t.Glyphs.Warn+" stale: "+ui.ErrText(sec.err)+
 			". Showing the snapshot from "+sec.at.Format("15:04:05")+".", w-1, t.Glyphs.Ellipsis))
 	}
 
@@ -162,7 +164,7 @@ func (s *statsView) view(w, h int) string {
 
 	// The keys never read the layout, so the render width decides it.
 	// A direct render in a test then needs no terminal size.
-	if w < wideWidth {
+	if w < ui.WideWidth {
 		if s.focus == statsPaneLessons {
 			return head + "\n\n" + s.lessonsBox(v, w, boxH, true)
 		}
@@ -172,16 +174,16 @@ func (s *statsView) view(w, h int) string {
 
 	leftW := min(statsLeftW, w*statsLeftW/statsDesignW)
 
-	return head + "\n\n" + hjoin(1,
+	return head + "\n\n" + ui.Hjoin(1,
 		s.lessonsBox(v, leftW, boxH, s.focus == statsPaneLessons),
 		s.deliveryBox(v, w-leftW-1, boxH, s.focus == statsPaneDelivery))
 }
 
 // scrollBox renders a box whose body scrolls with the state of pane.
 // The footer shows the visible range, so hidden lines are never a
-// surprise. The shared Theme.scrollBox keeps the rules of every box.
-func (s *statsView) scrollBox(pane statsPane, o boxOpts, body []string) string {
-	return s.st.theme.scrollBox(o, body, nil, &s.scroll[pane], [2]int{-1, -1}, false)
+// surprise. The shared ui.Theme.ScrollBox keeps the rules of every box.
+func (s *statsView) scrollBox(pane statsPane, o ui.BoxOpts, body []string) string {
+	return s.st.theme.ScrollBox(o, body, nil, &s.scroll[pane], [2]int{-1, -1}, false)
 }
 
 // lessonsBox renders "Lessons · N active": the active lessons by source,
@@ -191,12 +193,12 @@ func (s *statsView) lessonsBox(v lessonstats.Snapshot, w, h int, focused bool) s
 
 	right := t.Unknown.Render(t.Glyphs.Unknown + " unknown")
 	if v.Lessons != nil {
-		right = t.Muted.Render(itoa(v.Lessons.Active()) + " active")
+		right = t.Muted.Render(strconv.Itoa(v.Lessons.Active()) + " active")
 	}
 
-	return s.scrollBox(statsPaneLessons, boxOpts{
-		W: w, H: h, Focus: focused, Right: right, Title: boxTitle(t, "Lessons", focused),
-	}, s.lessonLines(v, boxInner(w)))
+	return s.scrollBox(statsPaneLessons, ui.BoxOpts{
+		W: w, H: h, Focus: focused, Right: right, Title: ui.BoxTitle(t, "Lessons", focused),
+	}, s.lessonLines(v, ui.BoxInner(w)))
 }
 
 // lessonLines renders the sections of the Lessons box.
@@ -221,7 +223,7 @@ func (s *statsView) lessonLines(v lessonstats.Snapshot, w int) []string {
 			out = append(out, propLines(t.Faint, "1 more mined lesson is below the threshold or muted, so no "+
 				"surface shows it.", w)...)
 		case c.Inactive > 1:
-			out = append(out, propLines(t.Faint, itoa(c.Inactive)+" more mined lessons are below the threshold "+
+			out = append(out, propLines(t.Faint, strconv.Itoa(c.Inactive)+" more mined lessons are below the threshold "+
 				"or muted, so no surface shows them.", w)...)
 		}
 	}
@@ -240,12 +242,12 @@ func (s *statsView) lessonLines(v lessonstats.Snapshot, w int) []string {
 		bars := s.bars(18, w, c.TopRegions[0].Lessons)
 
 		for _, r := range c.TopRegions {
-			label := oneLine(r.Region)
+			label := ui.OneLine(r.Region)
 			if label == "" {
 				label = "repo-wide"
 			}
 
-			out = append(out, bars.row(label, r.Lessons, c.Mined, ToneAccent))
+			out = append(out, bars.row(label, r.Lessons, c.Mined, ui.ToneAccent))
 		}
 
 		out = append(out, propLines(t.Faint, "Active mined lessons by the region they name.", w)...)
@@ -274,13 +276,13 @@ func (s *statsView) proposalLines(w int) []string {
 	bars := s.bars(18, w, max(len(l.Pending), len(l.Applied), len(l.Dismissed)))
 
 	out := []string{
-		bars.row("pending", len(l.Pending), total, ToneAttention),
-		bars.row("applied", len(l.Applied), total, ToneSuccess),
-		bars.row("dismissed", len(l.Dismissed), total, ToneUnsupported),
+		bars.row("pending", len(l.Pending), total, ui.ToneAttention),
+		bars.row("applied", len(l.Applied), total, ui.ToneSuccess),
+		bars.row("dismissed", len(l.Dismissed), total, ui.ToneUnsupported),
 	}
 
 	if sec.stale() {
-		out = append(out, propLines(t.Faint, "From the last good read: "+errText(sec.err), w)...)
+		out = append(out, propLines(t.Faint, "From the last good read: "+ui.ErrText(sec.err), w)...)
 	}
 
 	return out
@@ -288,7 +290,7 @@ func (s *statsView) proposalLines(w int) []string {
 
 // statsBars is the column layout of a group of bar rows.
 type statsBars struct {
-	t      *Theme
+	t      *ui.Theme
 	labelW int
 	barW   int
 	countW int
@@ -297,7 +299,7 @@ type statsBars struct {
 // bars fits bar rows with a label column of labelW cells into w cells.
 // The count column fits the largest count.
 func (s *statsView) bars(labelW, w, largest int) statsBars {
-	countW := max(4, width(itoa(largest))+1)
+	countW := max(4, ui.Width(strconv.Itoa(largest))+1)
 	barW := max(4, min(30, w-labelW-2-countW))
 
 	return statsBars{t: s.st.theme, labelW: labelW, barW: barW, countW: countW}
@@ -305,13 +307,13 @@ func (s *statsView) bars(labelW, w, largest int) statsBars {
 
 // row renders "label  ████░░░░  n". The count carries the value, so the
 // bar is a visual aid only.
-func (b statsBars) row(label string, n, total int, tone Tone) string {
+func (b statsBars) row(label string, n, total int, tone ui.Tone) string {
 	t := b.t
 
-	return t.cols(
-		cell(t.Muted.Render(truncate(label, b.labelW-1, t.Glyphs.Ellipsis)), b.labelW),
-		cell(t.bar(n, total, b.barW, tone), b.barW+2),
-		cell(t.Body.Render(padLeft(itoa(n), b.countW-1)), b.countW),
+	return t.Cols(
+		ui.Cell(t.Muted.Render(ui.Truncate(label, b.labelW-1, t.Glyphs.Ellipsis)), b.labelW),
+		ui.Cell(t.Bar(n, total, b.barW, tone), b.barW+2),
+		ui.Cell(t.Body.Render(ui.PadLeft(strconv.Itoa(n), b.countW-1)), b.countW),
 	)
 }
 
@@ -319,10 +321,10 @@ func (b statsBars) row(label string, n, total int, tone Tone) string {
 func (s *statsView) unknown(err error, fallback string, w int) []string {
 	text := fallback
 	if err != nil {
-		text = "Unknown: " + errText(err)
+		text = "Unknown: " + ui.ErrText(err)
 	}
 
-	return propNote(s.st.theme, ToneUnknown, text, w)
+	return propNote(s.st.theme, ui.ToneUnknown, text, w)
 }
 
 // deliveryBox renders "Delivery · last 14 days": the day chart, the most
@@ -332,12 +334,12 @@ func (s *statsView) deliveryBox(v lessonstats.Snapshot, w, h int, focused bool) 
 
 	title := "Delivery"
 	if s.chartReady(v) {
-		title += " " + t.Glyphs.Sep + " last " + itoa(s.days()) + " days"
+		title += " " + t.Glyphs.Sep + " last " + strconv.Itoa(s.days()) + " days"
 	}
 
-	return s.scrollBox(statsPaneDelivery, boxOpts{
-		W: w, H: h, Focus: focused, Title: boxTitle(t, title, focused),
-	}, s.deliveryLines(v, boxInner(w)))
+	return s.scrollBox(statsPaneDelivery, ui.BoxOpts{
+		W: w, H: h, Focus: focused, Title: ui.BoxTitle(t, title, focused),
+	}, s.deliveryLines(v, ui.BoxInner(w)))
 }
 
 // deliveryLines renders the Delivery box body: the delivery sections of
@@ -381,25 +383,25 @@ func (s *statsView) logStateLines(v lessonstats.Snapshot, w int) []string {
 	t := s.st.theme
 
 	var (
-		tone        Tone
+		tone        ui.Tone
 		title, body string
 		next        string
 	)
 
 	switch {
 	case v.LogErr != nil:
-		tone, title = ToneFailure, "Could not read the delivery log"
-		body = "Could not read the delivery log: " + errText(v.LogErr) +
+		tone, title = ui.ToneFailure, "Could not read the delivery log"
+		body = "Could not read the delivery log: " + ui.ErrText(v.LogErr) +
 			". No counts are shown, because a failed read is not zero delivery."
 		next = "Check access to the file, then press r to refresh."
 	case !v.LogExists:
-		tone, title = ToneNeutral, "No recorded delivery yet"
+		tone, title = ui.ToneNeutral, "No recorded delivery yet"
 		body = "Seamark records a delivery when an agent hook injects a lesson before an edit, and when the " +
 			"MCP change_set or check tools surface lessons. The delivery log does not exist yet. " +
 			"Viewing lessons here never records a delivery."
 		next = "Set up hooks or MCP under Integrations (press 2). After an agent edits files, press r to refresh."
 	default:
-		tone, title = ToneNeutral, "The log exists but holds no records"
+		tone, title = ui.ToneNeutral, "The log exists but holds no records"
 		body = "The delivery log has no readable record yet. Agent hooks and the MCP change_set and check " +
 			"tools add a record when they deliver lessons. Viewing lessons here never records a delivery."
 		next = "After an agent edits files, press r to refresh."
@@ -407,7 +409,7 @@ func (s *statsView) logStateLines(v lessonstats.Snapshot, w int) []string {
 
 	out := []string{t.ToneStyle(tone).Render(t.ToneGlyph(tone)) + " " + t.Title.Render(title)}
 	out = append(out, propLines(t.Muted, body, w)...)
-	out = append(out, "", t.Muted.Render("Delivery log"), t.command(displayPath(v.LogPath)), "")
+	out = append(out, "", t.Muted.Render("Delivery log"), commandText(t, ui.DisplayPath(v.LogPath)), "")
 
 	return append(out, propLines(t.Muted, next, w)...)
 }
@@ -434,15 +436,15 @@ func (s *statsView) chartLines(v lessonstats.Snapshot, w int) []string {
 	}
 
 	if delivered == 0 {
-		out = append(out, propLines(t.Muted, "No record was delivered in the last "+itoa(len(days))+" days.", w)...)
+		out = append(out, propLines(t.Muted, "No record was delivered in the last "+strconv.Itoa(len(days))+" days.", w)...)
 	} else {
 		out = append(out, "")
 		out = append(out, s.columns(days, vals, w)...)
 	}
 
 	sep := " " + t.Glyphs.Sep + " "
-	out = append(out, t.Body.Render(itoa(delivered))+t.Muted.Render(" records delivered"+sep)+
-		t.Body.Render(itoa(hook))+t.Muted.Render(" surfaced on hook"))
+	out = append(out, t.Body.Render(strconv.Itoa(delivered))+t.Muted.Render(" records delivered"+sep)+
+		t.Body.Render(strconv.Itoa(hook))+t.Muted.Render(" surfaced on hook"))
 
 	if v.Undated > 0 {
 		out = append(out, propLines(t.Faint, statsCount(v.Undated, "delivered record")+
@@ -467,7 +469,7 @@ func (s *statsView) columns(days []lessonstats.DayCount, vals []int, w int) []st
 
 	switch {
 	case 3*n <= w:
-		rows = t.columns(vals, statsChartH, ToneAccent)
+		rows = t.Columns(vals, statsChartH, ui.ToneAccent)
 		chartW = 3*n - 1
 	case 2*n <= w:
 		rows = s.narrowColumns(vals, 1)
@@ -481,8 +483,8 @@ func (s *statsView) columns(days []lessonstats.DayCount, vals []int, w int) []st
 	last := days[n-1].Day.Format("Jan 2")
 
 	labels := t.Faint.Render(first)
-	if chartW >= width(first)+width(last)+1 {
-		labels = spread(t.Faint.Render(first), t.Faint.Render(last), chartW)
+	if chartW >= ui.Width(first)+ui.Width(last)+1 {
+		labels = ui.Spread(t.Faint.Render(first), t.Faint.Render(last), chartW)
 	}
 
 	return append(rows, labels)
@@ -560,7 +562,7 @@ func (s *statsView) topLines(ranked []reviews.Fired, w int) []string {
 	bars.barW = min(bars.barW, 16)
 
 	for _, f := range top {
-		out = append(out, bars.row(s.orNone(oneLine(f.Symptom)), f.Count, top[0].Count, ToneAccent))
+		out = append(out, bars.row(s.orNone(ui.OneLine(f.Symptom)), f.Count, top[0].Count, ui.ToneAccent))
 	}
 
 	return out
@@ -578,7 +580,7 @@ func (s *statsView) surfaceLines(sum reviews.Summary, w int) []string {
 	bars := s.bars(18, w, largest)
 
 	for _, surface := range surfaces {
-		label := oneLine(surface)
+		label := ui.OneLine(surface)
 		if surface == "hook" {
 			label = "hook reminders"
 		}
@@ -640,14 +642,14 @@ func (s *statsView) attributionLines(sum reviews.Summary, w int) []string {
 	case sum.HookByClient != nil:
 		out = append(out, s.attributionTable(sum.HookByClient, w)...)
 	case sum.InstrumentedHookFirings+sum.SuppressedHookFirings > 0:
-		out = append(out, propNote(t, ToneUnknown, "No record names a client, so every instrumented hook "+
+		out = append(out, propNote(t, ui.ToneUnknown, "No record names a client, so every instrumented hook "+
 			"record lacks client attribution. Seamark never assigns a client to a record.", w)...)
 	default:
 		out = append(out, propLines(t.Muted, "No instrumented hook record, so no client attribution exists.", w)...)
 	}
 
 	if legacy := statsLegacy(sum); legacy > 0 {
-		out = append(out, propNote(t, ToneUnknown, "Not in this table: "+statsCount(legacy, "legacy hook reminder")+
+		out = append(out, propNote(t, ui.ToneUnknown, "Not in this table: "+statsCount(legacy, "legacy hook reminder")+
 			" with no delivery status and no recorded client.", w)...)
 	}
 
@@ -661,11 +663,11 @@ func (s *statsView) attributionTable(rows []reviews.HookAttribution, w int) []st
 	t := s.st.theme
 	nums := statsGap + statsInjectedW + statsGap + statsRepeatedW + statsGap + statsSuppressW
 
-	clientW, mechW := width("Client"), width("Mechanism")
+	clientW, mechW := ui.Width("Client"), ui.Width("Mechanism")
 
 	for _, r := range rows {
-		clientW = max(clientW, width(statsClient(r)))
-		mechW = max(mechW, width(s.orNone(oneLine(r.Mechanism))))
+		clientW = max(clientW, ui.Width(statsClient(r)))
+		mechW = max(mechW, ui.Width(s.orNone(ui.OneLine(r.Mechanism))))
 	}
 
 	fiveColumns := clientW+statsGap+mechW+nums <= w
@@ -676,18 +678,18 @@ func (s *statsView) attributionTable(rows []reviews.HookAttribution, w int) []st
 	gap := strings.Repeat(" ", statsGap)
 
 	counts := func(inj, rep, sup string) string {
-		return gap + padLeft(inj, statsInjectedW) + gap + padLeft(rep, statsRepeatedW) + gap + padLeft(sup, statsSuppressW)
+		return gap + ui.PadLeft(inj, statsInjectedW) + gap + ui.PadLeft(rep, statsRepeatedW) + gap + ui.PadLeft(sup, statsSuppressW)
 	}
 
-	header := padRight("Client", clientW)
+	header := ui.PadRight("Client", clientW)
 	if fiveColumns {
-		header += gap + padRight("Mechanism", mechW)
+		header += gap + ui.PadRight("Mechanism", mechW)
 	}
 
 	lines := []string{t.Faint.Render(header + counts("Injected", "Repeated", "Suppressed"))}
 
 	for _, r := range rows {
-		client := padRight(truncate(statsClient(r), clientW, t.Glyphs.Ellipsis), clientW)
+		client := ui.PadRight(ui.Truncate(statsClient(r), clientW, t.Glyphs.Ellipsis), clientW)
 
 		style := t.Body
 		if r.Client == "" {
@@ -696,13 +698,13 @@ func (s *statsView) attributionTable(rows []reviews.HookAttribution, w int) []st
 
 		line := style.Render(client)
 		if fiveColumns {
-			line += gap + t.Muted.Render(padRight(s.orNone(oneLine(r.Mechanism)), mechW))
+			line += gap + t.Muted.Render(ui.PadRight(s.orNone(ui.OneLine(r.Mechanism)), mechW))
 		}
 
-		lines = append(lines, line+t.Body.Render(counts(itoa(r.Injected), itoa(r.Repeated), itoa(r.Suppressed))))
+		lines = append(lines, line+t.Body.Render(counts(strconv.Itoa(r.Injected), strconv.Itoa(r.Repeated), strconv.Itoa(r.Suppressed))))
 
 		if !fiveColumns && r.Mechanism != "" {
-			lines = append(lines, t.Muted.Render(truncate("  via "+oneLine(r.Mechanism), w, t.Glyphs.Ellipsis)))
+			lines = append(lines, t.Muted.Render(ui.Truncate("  via "+ui.OneLine(r.Mechanism), w, t.Glyphs.Ellipsis)))
 		}
 	}
 
@@ -713,7 +715,7 @@ func (s *statsView) attributionTable(rows []reviews.HookAttribution, w int) []st
 // and the last recorded match of every lesson in the counted records.
 func (s *statsView) perLessonLines(ranked []reviews.Fired, w int) []string {
 	t := s.st.theme
-	out := []string{t.Heading.Render("PER LESSON") + "  " + t.Faint.Render(itoa(len(ranked)))}
+	out := []string{t.Heading.Render("PER LESSON") + "  " + t.Faint.Render(strconv.Itoa(len(ranked)))}
 
 	if len(ranked) == 0 {
 		return append(out, t.Muted.Render("No lesson appears in the counted records."))
@@ -727,11 +729,11 @@ func (s *statsView) perLessonLines(ranked []reviews.Fired, w int) []string {
 	ell := t.Glyphs.Ellipsis
 
 	for _, f := range ranked {
-		meta := s.orNone(oneLine(f.Region)) + sep + itoa(f.Count) + " delivered" + sep + itoa(f.Matches) +
+		meta := s.orNone(ui.OneLine(f.Region)) + sep + strconv.Itoa(f.Count) + " delivered" + sep + strconv.Itoa(f.Matches) +
 			" matched" + sep + "last " + statsWhen(f.LastTS, false, s.none())
 
-		out = append(out, t.Body.Render(truncate(s.orNone(oneLine(f.Symptom)), w, ell)),
-			"  "+t.Muted.Render(truncate(meta, w-2, ell)))
+		out = append(out, t.Body.Render(ui.Truncate(s.orNone(ui.OneLine(f.Symptom)), w, ell)),
+			"  "+t.Muted.Render(ui.Truncate(meta, w-2, ell)))
 	}
 
 	return out
@@ -744,20 +746,20 @@ func (s *statsView) neverLines(v lessonstats.Snapshot, w int) []string {
 	t := s.st.theme
 
 	if !v.Eligible {
-		reason := errText(v.EligibleErr)
+		reason := ui.ErrText(v.EligibleErr)
 		if reason == "" {
 			reason = "the set of eligible lessons is unavailable"
 		}
 
 		out := []string{t.Heading.Render("NEVER DELIVERED")}
-		out = append(out, propNote(t, ToneUnknown, "Incomplete: "+reason, w)...)
+		out = append(out, propNote(t, ui.ToneUnknown, "Incomplete: "+reason, w)...)
 
 		return append(out, propIndent("  ", propLines(t.Muted, "The delivery counts above do not depend on this "+
 			"list.", w-2))...)
 	}
 
 	never := v.Summary.NeverFired
-	out := []string{t.Heading.Render("NEVER DELIVERED") + "  " + t.Faint.Render(itoa(len(never)))}
+	out := []string{t.Heading.Render("NEVER DELIVERED") + "  " + t.Faint.Render(strconv.Itoa(len(never)))}
 	intro := "Eligible lessons never recorded as delivered on any surface. Pinned lessons are not listed."
 
 	if len(never) == 0 {
@@ -770,12 +772,12 @@ func (s *statsView) neverLines(v lessonstats.Snapshot, w int) []string {
 	ell := t.Glyphs.Ellipsis
 
 	for _, l := range never[:min(statsNeverN, len(never))] {
-		out = append(out, t.Body.Render(truncate(s.orNone(oneLine(l.Symptom)), w, ell)),
-			"  "+t.Muted.Render(truncate(s.orNone(oneLine(l.Region))+sep+statsCount(l.Occurrences, "occurrence"), w-2, ell)))
+		out = append(out, t.Body.Render(ui.Truncate(s.orNone(ui.OneLine(l.Symptom)), w, ell)),
+			"  "+t.Muted.Render(ui.Truncate(s.orNone(ui.OneLine(l.Region))+sep+statsCount(l.Occurrences, "occurrence"), w-2, ell)))
 	}
 
 	if rest := len(never) - statsNeverN; rest > 0 {
-		out = append(out, t.Faint.Render("+"+itoa(rest)+" more"))
+		out = append(out, t.Faint.Render("+"+strconv.Itoa(rest)+" more"))
 	}
 
 	return out
@@ -808,7 +810,7 @@ func (s *statsView) miningLines(w int) []string {
 	out = append(out, propKV(t, [][2]string{{"Last run", last}, {"Findings", statsFindings(st.Findings, t.Glyphs.Sep)}}, w)...)
 
 	if st.ReviewsMinedAt == 0 {
-		out = append(out, t.Muted.Render("Mine review findings with ")+t.command("seamark index --reviews"))
+		out = append(out, t.Muted.Render("Mine review findings with ")+commandText(t, "seamark index --reviews"))
 	}
 
 	return out
@@ -825,7 +827,7 @@ func statsFindings(by map[string]int, sep string) string {
 	var sources []source
 
 	for name, n := range by {
-		sources = append(sources, source{oneLine(name), n})
+		sources = append(sources, source{ui.OneLine(name), n})
 	}
 
 	if len(sources) == 0 {
@@ -842,7 +844,7 @@ func statsFindings(by map[string]int, sep string) string {
 
 	parts := make([]string, len(sources))
 	for i, src := range sources {
-		parts[i] = src.name + " " + itoa(src.n)
+		parts[i] = src.name + " " + strconv.Itoa(src.n)
 	}
 
 	return strings.Join(parts, " "+sep+" ")
@@ -853,8 +855,8 @@ func statsFindings(by map[string]int, sep string) string {
 func (s *statsView) scopeLines(v lessonstats.Snapshot, w int) []string {
 	t := s.st.theme
 
-	text := "Counts cover the retained log " + oneLine(displayPath(v.LogPath)) + " (" + statsCount(v.Records, "record") +
-		"); the chart and its totals cover the last " + itoa(s.days()) + " local days. A refresh reads a new " +
+	text := "Counts cover the retained log " + ui.OneLine(ui.DisplayPath(v.LogPath)) + " (" + statsCount(v.Records, "record") +
+		"); the chart and its totals cover the last " + strconv.Itoa(s.days()) + " local days. A refresh reads a new " +
 		"snapshot; nothing streams."
 
 	if v.Skipped > 0 {
@@ -869,10 +871,10 @@ func (s *statsView) scopeLines(v lessonstats.Snapshot, w int) []string {
 func (s *statsView) countRow(label string, n, level, w int, strong bool) string {
 	t := s.st.theme
 	rowW := min(w, statsRowW)
-	value := itoa(n)
+	value := strconv.Itoa(n)
 
-	label = truncate(strings.Repeat("  ", level)+label, max(1, rowW-width(value)-1), t.Glyphs.Ellipsis)
-	gap := max(1, rowW-width(label)-width(value))
+	label = ui.Truncate(strings.Repeat("  ", level)+label, max(1, rowW-ui.Width(value)-1), t.Glyphs.Ellipsis)
+	gap := max(1, rowW-ui.Width(label)-ui.Width(value))
 
 	labelStyle := t.Body
 	if level > 0 {
@@ -912,7 +914,7 @@ func statsClient(r reviews.HookAttribution) string {
 		return "no client recorded"
 	}
 
-	return oneLine(r.Client)
+	return ui.OneLine(r.Client)
 }
 
 // statsSurfaces returns the surface keys in display order: the three
@@ -942,7 +944,7 @@ func statsWhen(ts string, full bool, none string) string {
 
 	at, err := time.Parse(time.RFC3339, ts)
 	if err != nil {
-		return oneLine(ts)
+		return ui.OneLine(ts)
 	}
 
 	if full {
@@ -958,7 +960,7 @@ func statsCount(n int, noun string) string {
 		return "1 " + noun
 	}
 
-	return itoa(n) + " " + noun + "s"
+	return strconv.Itoa(n) + " " + noun + "s"
 }
 
 // statsWrapWords wraps text at spaces only. A path then stays on one
@@ -973,7 +975,7 @@ func statsWrapWords(text string, w int) string {
 		switch {
 		case line == "":
 			line = word
-		case width(line)+1+width(word) <= w:
+		case ui.Width(line)+1+ui.Width(word) <= w:
 			line += " " + word
 		default:
 			lines = append(lines, line)
@@ -981,5 +983,5 @@ func statsWrapWords(text string, w int) string {
 		}
 	}
 
-	return wrap(strings.Join(append(lines, line), "\n"), w)
+	return ui.Wrap(strings.Join(append(lines, line), "\n"), w)
 }

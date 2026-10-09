@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the Lessons keys: the region cursor without color, the
@@ -47,24 +48,24 @@ func lesFixDetail(h *harness) string {
 // test profile is Ascii, as NO_COLOR selects, so only a glyph can show
 // the cursor inside the text.
 func TestLessonsFixRegionCursorVisibleWithoutColor(t *testing.T) {
-	th := newTheme(false)
+	th := ui.NewTheme(false)
 
-	var in lineInput
+	var in ui.LineInput
 
-	in.set("internal")
-	assert.Equal(t, "internal_", ansi.Strip(in.view(th)), "the end of the text shows an underscore")
+	in.Set("internal")
+	assert.Equal(t, "internal_", ansi.Strip(in.View(th)), "the end of the text shows an underscore")
 
 	for range 3 {
-		in.key(tea.KeyMsg{Type: tea.KeyLeft})
+		in.Key(tea.KeyMsg{Type: tea.KeyLeft})
 	}
 
-	assert.Equal(t, "inter|nal", ansi.Strip(in.view(th)), "the bar marks where typing inserts")
+	assert.Equal(t, "inter|nal", ansi.Strip(in.View(th)), "the bar marks where typing inserts")
 
-	in.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
-	assert.Equal(t, "interX|nal", ansi.Strip(in.view(th)))
+	in.Key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	assert.Equal(t, "interX|nal", ansi.Strip(in.View(th)))
 
-	in.key(tea.KeyMsg{Type: tea.KeyHome})
-	assert.Equal(t, "|interXnal", ansi.Strip(in.view(th)))
+	in.Key(tea.KeyMsg{Type: tea.KeyHome})
+	assert.Equal(t, "|interXnal", ansi.Strip(in.View(th)))
 
 	// The filter bar shows the same glyph.
 	f := newFake()

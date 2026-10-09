@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -154,7 +156,7 @@ type exitDeadlineMsg struct{ seq int }
 // newModel builds the shell over the services. The root context is
 // the background context until Run replaces it with a context that it
 // cancels at exit.
-func newModel(svc Services, theme *Theme) *model {
+func newModel(svc Services, theme *ui.Theme) *model {
 	st := &state{svc: svc, theme: theme, ctx: context.Background()}
 
 	m := &model{st: st}
@@ -212,7 +214,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case freshMsg:
 		if msg.err != nil {
-			return m, toast(ToneAttention, "Could not check for existing setup: "+errText(msg.err))
+			return m, toast(ui.ToneAttention, "Could not check for existing setup: "+ui.ErrText(msg.err))
 		}
 
 		if msg.fresh {
@@ -241,7 +243,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toast = msg
 
 		ttl := 6 * time.Second
-		if msg.tone == ToneFailure || msg.tone == ToneAttention {
+		if msg.tone == ui.ToneFailure || msg.tone == ui.ToneAttention {
 			ttl = 15 * time.Second
 		}
 
@@ -405,7 +407,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.goTo(destSettings, "")
 	case key.Matches(msg, gkeys.Refresh):
 		return tea.Batch(m.st.load(allSections...), m.startTick(),
-			toast(ToneNeutral, "Reading the current state from disk. Nothing is rebuilt or fetched."))
+			toast(ui.ToneNeutral, "Reading the current state from disk. Nothing is rebuilt or fetched."))
 	}
 
 	return scr.update(msg)
@@ -439,7 +441,7 @@ func (m *model) requestQuit() tea.Cmd {
 // confirmation, and a repeated q must not stop costly work.
 func (m *model) quitDialogKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
-	case key.Matches(msg, nkeys.Enter, gkeys.Interrupt), msg.String() == "y":
+	case key.Matches(msg, ui.Nav.Enter, gkeys.Interrupt), msg.String() == "y":
 		m.quitConfirm = false
 
 		if !m.st.busy() {
@@ -451,7 +453,7 @@ func (m *model) quitDialogKey(msg tea.KeyMsg) tea.Cmd {
 		m.quitAfter = true
 
 		if m.st.requestStop() {
-			note := toast(ToneAttention, "Stopping the running work. Seamark exits when it ends.")
+			note := toast(ui.ToneAttention, "Stopping the running work. Seamark exits when it ends.")
 
 			// A repeated yes keeps the first deadline, so the exit wait
 			// never grows past exitWait.
@@ -465,8 +467,8 @@ func (m *model) quitDialogKey(msg tea.KeyMsg) tea.Cmd {
 			return tea.Batch(note, after(exitWait, func(time.Time) tea.Msg { return exitDeadlineMsg{seq: seq} }))
 		}
 
-		return toast(ToneAttention, "Seamark exits when "+m.st.mutation+" finishes.")
-	case key.Matches(msg, nkeys.Back), msg.String() == "n":
+		return toast(ui.ToneAttention, "Seamark exits when "+m.st.mutation+" finishes.")
+	case key.Matches(msg, ui.Nav.Back), msg.String() == "n":
 		// A requested stop stays in effect, because the work cannot
 		// continue safely after a cancel. esc cancels only the exit.
 		m.quitConfirm = false
@@ -495,7 +497,7 @@ func (m *model) settingsDrafts() string {
 func (m *model) cramped() bool {
 	w, h := m.st.width, m.st.height
 
-	return w > 0 && (w < minWidth || h < minHeight)
+	return w > 0 && (w < ui.MinWidth || h < ui.MinHeight)
 }
 
 // crampedKey handles a key while the terminal is below the minimum size.
@@ -516,7 +518,7 @@ func (m *model) crampedKey(msg tea.KeyMsg) tea.Cmd {
 		} else {
 			m.openHelp()
 		}
-	case m.help && key.Matches(msg, nkeys.Back):
+	case m.help && key.Matches(msg, ui.Nav.Back):
 		m.help = false
 	}
 
@@ -532,7 +534,7 @@ func (m *model) openHelp() {
 // helpKey scrolls or closes the help overlay. The offset is clamped
 // before and after the move, so a resize never leaves it out of range.
 func (m *model) helpKey(msg tea.KeyMsg) tea.Cmd {
-	if key.Matches(msg, nkeys.Back, gkeys.Help, gkeys.Quit, nkeys.Enter) {
+	if key.Matches(msg, ui.Nav.Back, gkeys.Help, gkeys.Quit, ui.Nav.Enter) {
 		m.help = false
 
 		return nil
@@ -543,17 +545,17 @@ func (m *model) helpKey(msg tea.KeyMsg) tea.Cmd {
 	off := max(0, min(m.helpOff, last))
 
 	switch {
-	case key.Matches(msg, nkeys.Up):
+	case key.Matches(msg, ui.Nav.Up):
 		off--
-	case key.Matches(msg, nkeys.Down):
+	case key.Matches(msg, ui.Nav.Down):
 		off++
-	case key.Matches(msg, nkeys.PageUp):
+	case key.Matches(msg, ui.Nav.PageUp):
 		off -= window
-	case key.Matches(msg, nkeys.PageDown):
+	case key.Matches(msg, ui.Nav.PageDown):
 		off += window
-	case key.Matches(msg, nkeys.Top):
+	case key.Matches(msg, ui.Nav.Top):
 		off = 0
-	case key.Matches(msg, nkeys.Bottom):
+	case key.Matches(msg, ui.Nav.Bottom):
 		off = last
 	}
 
@@ -584,7 +586,7 @@ func (m *model) View() string {
 
 	// The ASCII glyph set must hold for the whole frame. A screen can
 	// write a Unicode symbol directly, so the shell replaces it last.
-	return m.st.theme.asciiFrame(frame)
+	return m.st.theme.ASCIIFrame(frame)
 }
 
 // frame renders the chrome and the body at a supported size. A modal
@@ -597,9 +599,9 @@ func (m *model) frame(w, h int) string {
 	// is set up yet, so there is no content to dim behind it.
 	var body string
 	if m.welcome != nil {
-		body = fit(m.welcome.view(w, bodyH), w, bodyH)
+		body = ui.Fit(m.welcome.view(w, bodyH), w, bodyH)
 	} else {
-		body = fit(scr.view(w, bodyH), w, bodyH)
+		body = ui.Fit(scr.view(w, bodyH), w, bodyH)
 	}
 
 	// The tab row and the tab rule share one abbreviation choice, or the
@@ -608,7 +610,7 @@ func (m *model) frame(w, h int) string {
 	top := strings.Join([]string{m.header(w), m.tabs(w, short), m.tabRule(w, short), m.notice(w), body}, "\n")
 
 	if block, ok := m.modalBlock(w, h-1); ok {
-		top = m.st.theme.overlay(top, block, w, h-1)
+		top = m.st.theme.Overlay(top, block, w, h-1)
 	}
 
 	return top + "\n" + m.footer(w)
@@ -641,17 +643,17 @@ func (m *model) header(w int) string {
 	t := m.st.theme
 
 	right := m.indexBadge()
-	if w >= wideWidth {
-		right += "   " + t.Faint.Render(oneLine(m.st.svc.Version()))
+	if w >= ui.WideWidth {
+		right += "   " + t.Faint.Render(ui.OneLine(m.st.svc.Version()))
 	}
 
 	right += " "
 
-	brand := " " + t.brand() + "  "
-	room := w - width(brand) - width(right) - 2
-	path := t.Workspace.Render(truncateLeft(oneLine(displayPath(m.st.svc.Root())), max(8, room), t.Glyphs.Ellipsis))
+	brand := " " + brandText(t) + "  "
+	room := w - ui.Width(brand) - ui.Width(right) - 2
+	path := t.Workspace.Render(ui.TruncateLeft(ui.OneLine(ui.DisplayPath(m.st.svc.Root())), max(8, room), t.Glyphs.Ellipsis))
 
-	return spread(brand+path, right, w)
+	return ui.Spread(brand+path, right, w)
 }
 
 // indexBadge summarizes the index for the header: a colored dot and a
@@ -661,13 +663,13 @@ func (m *model) indexBadge() string {
 	g := t.Glyphs
 	sec := &m.st.index
 
-	dot := func(tone Tone, text string) string {
+	dot := func(tone ui.Tone, text string) string {
 		return t.ToneStyle(tone).Render(g.Dot) + " " + t.Muted.Render(text)
 	}
 
 	if !sec.loaded {
 		if sec.err != nil {
-			return dot(ToneFailure, "index unreadable")
+			return dot(ui.ToneFailure, "index unreadable")
 		}
 
 		return t.Faint.Render(g.Hollow + " index " + g.Ellipsis)
@@ -685,16 +687,16 @@ func (m *model) indexBadge() string {
 		return t.Faint.Render(g.Hollow + " no index")
 	case workspace.IndexReady:
 		if v.Status == nil {
-			return dot(ToneUnknown, "index health unknown")
+			return dot(ui.ToneUnknown, "index health unknown")
 		}
 
 		switch v.Status.Freshness {
 		case "current":
-			return dot(ToneSuccess, "index current"+age)
+			return dot(ui.ToneSuccess, "index current"+age)
 		case "stale":
 			return t.Attention.Render(g.Dot + " index stale" + age)
 		default:
-			return dot(ToneUnknown, "index freshness unknown"+age)
+			return dot(ui.ToneUnknown, "index freshness unknown"+age)
 		}
 	case workspace.IndexNotIndexed:
 		return t.Attention.Render(g.Dot + " not indexed")
@@ -713,11 +715,11 @@ func ageSince(unix int64) string {
 	case d < time.Minute:
 		return "just now"
 	case d < time.Hour:
-		return itoa(int(d.Minutes())) + "m ago"
+		return strconv.Itoa(int(d.Minutes())) + "m ago"
 	case d < 48*time.Hour:
-		return itoa(int(d.Hours())) + "h ago"
+		return strconv.Itoa(int(d.Hours())) + "h ago"
 	default:
-		return itoa(int(d.Hours()/24)) + "d ago"
+		return strconv.Itoa(int(d.Hours()/24)) + "d ago"
 	}
 }
 
@@ -739,7 +741,7 @@ func (m *model) tabSegment(i int, short bool) (plain, styled string) {
 		count = tc.tabCount()
 	}
 
-	plain = " " + itoa(i+1) + " " + name
+	plain = " " + strconv.Itoa(i+1) + " " + name
 	if count != "" {
 		plain += " " + count
 	}
@@ -748,17 +750,17 @@ func (m *model) tabSegment(i int, short bool) (plain, styled string) {
 
 	switch {
 	case m.welcome != nil:
-		styled = " " + t.Faint.Render(itoa(i+1)+" "+name)
+		styled = " " + t.Faint.Render(strconv.Itoa(i+1)+" "+name)
 		if count != "" {
 			styled += " " + t.Faint.Render(count)
 		}
 	case destination(i) == m.active:
-		styled = " " + t.TabActive.Render(itoa(i+1)+" "+name)
+		styled = " " + t.TabActive.Render(strconv.Itoa(i+1)+" "+name)
 		if count != "" {
 			styled += " " + t.Accent.Render(count)
 		}
 	default:
-		styled = " " + t.TabNum.Render(itoa(i+1)) + " " + t.TabIdle.Render(name)
+		styled = " " + t.TabNum.Render(strconv.Itoa(i+1)) + " " + t.TabIdle.Render(name)
 		if count != "" {
 			styled += " " + t.Faint.Render(count)
 		}
@@ -782,12 +784,12 @@ func (m *model) tabShort(w int) [destCount]bool {
 
 	for i := range m.screens {
 		plain, _ := m.tabSegment(i, false)
-		full[i] = 1 + width(plain)
+		full[i] = 1 + ui.Width(plain)
 		abbr[i] = full[i]
 
 		if _, ok := m.screens[i].(shortTitler); ok {
 			plain, _ = m.tabSegment(i, true)
-			abbr[i] = 1 + width(plain)
+			abbr[i] = 1 + ui.Width(plain)
 		}
 
 		total += full[i]
@@ -817,7 +819,7 @@ func (m *model) tabs(w int, short [destCount]bool) string {
 		b.WriteString(" " + styled)
 	}
 
-	return truncate(b.String(), w, "")
+	return ui.Truncate(b.String(), w, "")
 }
 
 // tabRule underlines the active tab with the heavy rule glyph, so the
@@ -833,7 +835,7 @@ func (m *model) tabRule(w int, short [destCount]bool) string {
 
 	for i := range m.screens {
 		plain, _ := m.tabSegment(i, short[i])
-		segW := width(plain)
+		segW := ui.Width(plain)
 
 		b.WriteString(t.Rule.Render(g.RuleLight))
 
@@ -850,7 +852,7 @@ func (m *model) tabRule(w int, short [destCount]bool) string {
 		b.WriteString(t.Rule.Render(strings.Repeat(g.RuleLight, rest)))
 	}
 
-	return truncate(b.String(), w, "")
+	return ui.Truncate(b.String(), w, "")
 }
 
 // notice renders the row under the tabs. It shows the first item that
@@ -873,25 +875,25 @@ func (m *model) notice(w int) string {
 	case m.toast.text != "":
 		line = m.toastLine()
 	case m.st.busy():
-		line = " " + t.Accent.Render(t.spinnerFrame(m.st.tick)) + " " + t.Body.Render(m.st.mutation)
+		line = " " + t.Accent.Render(t.SpinnerFrame(m.st.tick)) + " " + t.Body.Render(m.st.mutation)
 	case m.st.loading():
-		line = " " + t.Accent.Render(t.spinnerFrame(m.st.tick)) + " " + t.Muted.Render("Reading the current state"+t.Glyphs.Ellipsis)
+		line = " " + t.Accent.Render(t.SpinnerFrame(m.st.tick)) + " " + t.Muted.Render("Reading the current state"+t.Glyphs.Ellipsis)
 	default:
 		if bs, ok := m.screens[m.active].(bannerScreen); ok && m.welcome == nil {
 			if banner, ok := bs.banner(w); ok {
-				return fit(banner, w, 1)
+				return ui.Fit(banner, w, 1)
 			}
 		}
 	}
 
-	return fit(truncate(line, w, t.Glyphs.Ellipsis), w, 1)
+	return ui.Fit(ui.Truncate(line, w, t.Glyphs.Ellipsis), w, 1)
 }
 
 // toastLine renders the current message with its tone glyph.
 func (m *model) toastLine() string {
 	t := m.st.theme
 
-	return " " + t.ToneStyle(m.toast.tone).Render(t.ToneGlyph(m.toast.tone)) + " " + t.Body.Render(oneLine(m.toast.text))
+	return " " + t.ToneStyle(m.toast.tone).Render(t.ToneGlyph(m.toast.tone)) + " " + t.Body.Render(ui.OneLine(m.toast.text))
 }
 
 // latestSnapshot returns the newest load time over all sources.
@@ -921,10 +923,10 @@ func (m *model) footer(w int) string {
 	case m.quitConfirm:
 		_, _, local = m.quitCopy(false)
 	case m.help:
-		local = []key.Binding{withHelp(nkeys.Back, "esc", "close")}
+		local = []key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "close")}
 
 		if rows, window := m.helpLayout(w, m.st.height-1); len(rows) > window {
-			local = append([]key.Binding{withHelp(nkeys.Down, "↑↓", "scroll")}, local...)
+			local = append([]key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "scroll")}, local...)
 		}
 	case m.welcome != nil:
 		local = m.welcome.keys()
@@ -950,7 +952,7 @@ func (m *model) footer(w int) string {
 		global = []key.Binding{gkeys.Refresh, gkeys.Help, gkeys.Quit}
 	}
 
-	right := t.hints(global)
+	right := t.Hints(global)
 
 	clock := ""
 	if at := m.latestSnapshot(); !at.IsZero() {
@@ -960,19 +962,19 @@ func (m *model) footer(w int) string {
 	// The global hints always stay: "? help" leads to every key, so the
 	// local hints give way first. The room keeps one cell at each edge
 	// and three cells between the two sides, as between two hints.
-	left, kept := m.footerHints(local, w-width(right+clock)-5)
+	left, kept := m.footerHints(local, w-ui.Width(right+clock)-5)
 
 	// The n/a entries must stay in view (user decision of 2026-10-04:
 	// "Always list, mark unavailable"). So the clock gives way when the
 	// room cuts an n/a entry and the line without the clock keeps them
 	// all. Other footers have no n/a entry and always keep the clock.
 	if !kept && clock != "" {
-		if line, ok := m.footerHints(local, w-width(right)-5); ok {
+		if line, ok := m.footerHints(local, w-ui.Width(right)-5); ok {
 			left, clock = line, ""
 		}
 	}
 
-	return spread(" "+left, right+clock+" ", w)
+	return ui.Spread(" "+left, right+clock+" ", w)
 }
 
 // footerHints renders the leading hints that fit in room cells. It
@@ -991,31 +993,31 @@ func (m *model) footerHints(bindings []key.Binding, room int) (line string, kept
 	// An unavailable entry is a hint too, so a cut can end inside its
 	// n/a group.
 	for _, b := range bindings {
-		if listed(b) {
+		if ui.Listed(b) {
 			shown = append(shown, b)
 		}
 	}
 
-	if line := t.hints(shown); width(line) <= room {
+	if line := t.Hints(shown); ui.Width(line) <= room {
 		return line, true
 	}
 
 	for n := len(shown); n > 0; n-- {
-		line := t.shortHints(shown[:n])
+		line := t.ShortHints(shown[:n])
 		if n < len(shown) {
 			line += t.Faint.Render("  " + t.Glyphs.Ellipsis)
 		}
 
-		if width(line) <= room {
-			return line, !slices.ContainsFunc(shown[n:], isUnavailable)
+		if ui.Width(line) <= room {
+			return line, !slices.ContainsFunc(shown[n:], ui.IsUnavailable)
 		}
 	}
 
-	kept = !slices.ContainsFunc(shown, isUnavailable)
+	kept = !slices.ContainsFunc(shown, ui.IsUnavailable)
 
 	// No hint fits: the ellipsis still says that keys exist, and "? help"
 	// at the right lists them.
-	if len(shown) > 0 && room >= width(t.Glyphs.Ellipsis) {
+	if len(shown) > 0 && room >= ui.Width(t.Glyphs.Ellipsis) {
 		return t.Faint.Render(t.Glyphs.Ellipsis), kept
 	}
 
@@ -1035,7 +1037,7 @@ func (m *model) tooSmall(w, h int) string {
 		lines := make([]string, 0, len(rows))
 
 		for _, r := range rows {
-			lines = append(lines, t.Key.Render(padRight(r[0], 7))+" "+t.Muted.Render(r[1]))
+			lines = append(lines, t.Key.Render(ui.PadRight(r[0], 7))+" "+t.Muted.Render(r[1]))
 		}
 
 		return strings.Join(lines, "\n")
@@ -1052,35 +1054,35 @@ func (m *model) tooSmall(w, h int) string {
 			rows = append(rows, [2]string{a.Help().Key, a.Help().Desc})
 		}
 
-		msg = t.Title.Render(wrap(title, textW)) + "\n\n" + t.Body.Render(wrap(body, textW)) + "\n\n" + keyRows(rows...)
+		msg = t.Title.Render(ui.Wrap(title, textW)) + "\n\n" + t.Body.Render(ui.Wrap(body, textW)) + "\n\n" + keyRows(rows...)
 	case m.help:
 		msg = t.Title.Render("Keys at this size") + "\n\n" +
 			keyRows([2]string{"q", "quit"}, [2]string{"ctrl+c", "quit"}, [2]string{"?", "close help"}) + "\n\n" +
-			t.Muted.Render(wrap("Other keys work again at "+itoa(minWidth)+"×"+itoa(minHeight)+
+			t.Muted.Render(ui.Wrap("Other keys work again at "+strconv.Itoa(ui.MinWidth)+"×"+strconv.Itoa(ui.MinHeight)+
 				" cells or more.", textW))
 	default:
 		msg = t.Title.Render("More space needed") + "\n\n" +
-			t.Muted.Render(wrap("Seamark needs at least "+itoa(minWidth)+"×"+itoa(minHeight)+
-				" cells; this terminal is "+itoa(w)+"×"+itoa(h)+". Enlarge the window.", textW)) +
-			"\n\n" + t.hints([]key.Binding{gkeys.Quit, gkeys.Help})
+			t.Muted.Render(ui.Wrap("Seamark needs at least "+strconv.Itoa(ui.MinWidth)+"×"+strconv.Itoa(ui.MinHeight)+
+				" cells; this terminal is "+strconv.Itoa(w)+"×"+strconv.Itoa(h)+". Enlarge the window.", textW)) +
+			"\n\n" + t.Hints([]key.Binding{gkeys.Quit, gkeys.Help})
 	}
 
 	// Place does not shorten a block taller than h, so fit clips it to
 	// the terminal.
-	return fit(lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, msg), w, h)
+	return ui.Fit(lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, msg), w, h)
 }
 
 // quitView renders the quit question as a modal of at most 64 cells.
 func (m *model) quitView(w, h int) string {
 	t := m.st.theme
 	bw := min(w-4, 64)
-	inner := boxInner(bw)
+	inner := ui.BoxInner(bw)
 	title, body, acts := m.quitCopy(false)
 
-	lines := strings.Split(t.Body.Render(wrap(body, inner)), "\n")
-	lines = append(lines, "", t.hints(acts))
+	lines := strings.Split(t.Body.Render(ui.Wrap(body, inner)), "\n")
+	lines = append(lines, "", t.Hints(acts))
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: bw, H: min(h, len(lines)+2), Focus: true, Fill: true, Lines: lines,
 		Title: t.Title.Render(title),
 	})
@@ -1104,12 +1106,12 @@ func (m *model) helpView(w, h int) string {
 
 	foot := ""
 	if len(rows) > window {
-		foot = propRange(t, off, min(len(rows), off+window), len(rows))
+		foot = t.RangeNote(off, min(len(rows), off+window), len(rows))
 	}
 
 	// The modal fits its content, so a short key list leaves no blank
 	// band inside the border.
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: bw, H: min(bh, window+2), Focus: true, Fill: true, Lines: rows[off:min(len(rows), off+window)],
 		Title: t.TabActive.Render("Keys"), Right: t.Muted.Render("? or esc to close"), Foot: foot,
 	})
@@ -1125,14 +1127,14 @@ func (m *model) helpBox(w, h int) (bw, bh int) {
 func (m *model) helpLayout(w, h int) (rows []string, window int) {
 	t := m.st.theme
 	bw, bh := m.helpBox(w, h)
-	inner := boxInner(bw)
+	inner := ui.BoxInner(bw)
 
 	// keyCell pads a key label to the key column. A label can be wider
 	// than the column, so one space always stays before the action.
 	keyCell := func(k string) string {
-		label := t.keyLabel(k)
+		label := t.KeyLabel(k)
 
-		return padRight(label, max(helpKeyW, width(label)+1))
+		return ui.PadRight(label, max(helpKeyW, ui.Width(label)+1))
 	}
 
 	// entries renders the listed bindings of a group, one per row. The
@@ -1145,14 +1147,14 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 		var on, off []string
 
 		for _, b := range bindings {
-			if !listed(b) {
+			if !ui.Listed(b) {
 				continue
 			}
 
 			hp := b.Help()
 
-			if isUnavailable(b) {
-				off = append(off, t.Faint.Render(keyCell(hp.Key+" "+unavailableWord)+hp.Desc))
+			if ui.IsUnavailable(b) {
+				off = append(off, t.Faint.Render(keyCell(hp.Key+" "+ui.UnavailableWord)+hp.Desc))
 
 				continue
 			}
@@ -1164,7 +1166,7 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 			return on
 		}
 
-		return append(append(on, t.Faint.Render(unavailableWord+": not available now")), off...)
+		return append(append(on, t.Faint.Render(ui.UnavailableWord+": not available now")), off...)
 	}
 
 	scr := m.screens[m.active]
@@ -1186,13 +1188,13 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 		rows  []string
 	}{
 		{"GLOBAL", entries([]key.Binding{
-			withHelp(gkeys.Overview, "1–5", "jump to tab"), withHelp(nkeys.Next, "tab", "switch pane"),
-			gkeys.Refresh, withHelp(gkeys.Help, "?", "this help"), gkeys.Quit,
+			ui.WithHelp(gkeys.Overview, "1–5", "jump to tab"), ui.WithHelp(ui.Nav.Next, "tab", "switch pane"),
+			gkeys.Refresh, ui.WithHelp(gkeys.Help, "?", "this help"), gkeys.Quit,
 		})},
 		{"MOVE", entries([]key.Binding{
-			withHelp(nkeys.Down, moveKeys, "move"), withHelp(nkeys.Top, "g  G", "top / bottom"),
-			withHelp(nkeys.Enter, "enter", "open"), withHelp(nkeys.Back, "esc", "back / close"),
-			withHelp(nkeys.PageDown, "pgup pgdn", "scroll detail"),
+			ui.WithHelp(ui.Nav.Down, moveKeys, "move"), ui.WithHelp(ui.Nav.Top, "g  G", "top / bottom"),
+			ui.WithHelp(ui.Nav.Enter, "enter", "open"), ui.WithHelp(ui.Nav.Back, "esc", "back / close"),
+			ui.WithHelp(ui.Nav.PageDown, "pgup pgdn", "scroll detail"),
 		})},
 		{strings.ToUpper(scr.title()), entries(screenKeys)},
 	}
@@ -1201,7 +1203,7 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 		// Three columns, as in the 1a design.
 		header := ""
 		for _, g := range groups {
-			header += padRight(t.Heading.Render(g.title), helpColW)
+			header += ui.PadRight(t.Heading.Render(g.title), helpColW)
 		}
 
 		rows = append(rows, header, "")
@@ -1220,7 +1222,7 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 					c = g.rows[r]
 				}
 
-				line += padRight(truncate(c, helpColW-1, t.Glyphs.Ellipsis), helpColW)
+				line += ui.PadRight(ui.Truncate(c, helpColW-1, t.Glyphs.Ellipsis), helpColW)
 			}
 
 			rows = append(rows, line)
@@ -1241,12 +1243,12 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 
 	// The settings live in one file. The help names it, because an
 	// editor is the route for every key that Settings does not show.
-	rows = append(rows, t.command(settingsFile)+"  "+t.Faint.Render("settings file"),
+	rows = append(rows, commandText(t, settingsFile)+"  "+t.Faint.Render("settings file"),
 		"", t.Rule.Render(strings.Repeat(t.Glyphs.RuleLight, inner)))
-	rows = append(rows, strings.Split(t.Faint.Render(wrap("Every key that writes a file asks first. "+
+	rows = append(rows, strings.Split(t.Faint.Render(ui.Wrap("Every key that writes a file asks first. "+
 		"Nothing changes before you confirm with y.", inner)), "\n")...)
 
-	window = max(1, boxRows(bh))
+	window = max(1, ui.BoxRows(bh))
 
 	return rows, min(window, len(rows))
 }
@@ -1272,11 +1274,11 @@ const helpCommandGap = 3
 // share a row when both columns fit, so the wide help stays short. At
 // the reference size, the whole help of a short screen then fits without
 // a scroll. A narrower help shows one route on each row.
-func helpCommandRows(t *Theme, inner int) []string {
+func helpCommandRows(t *ui.Theme, inner int) []string {
 	longest := 0
 
 	for _, c := range helpCommands {
-		longest = max(longest, width(c))
+		longest = max(longest, ui.Width(c))
 	}
 
 	colW := longest + helpCommandGap
@@ -1285,17 +1287,17 @@ func helpCommandRows(t *Theme, inner int) []string {
 
 	if colW+longest > inner {
 		for _, c := range helpCommands {
-			rows = append(rows, t.command(c))
+			rows = append(rows, commandText(t, c))
 		}
 
 		return rows
 	}
 
 	for i := 0; i < len(helpCommands); i += 2 {
-		row := t.command(helpCommands[i])
+		row := commandText(t, helpCommands[i])
 
 		if i+1 < len(helpCommands) {
-			row = padRight(row, colW) + t.command(helpCommands[i+1])
+			row = ui.PadRight(row, colW) + commandText(t, helpCommands[i+1])
 		}
 
 		rows = append(rows, row)

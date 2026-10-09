@@ -10,6 +10,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The captures of the retarget and prune preview (scenes 80-89, contracts
@@ -178,7 +179,7 @@ func TestCaptureMaint(t *testing.T) {
 
 			f, req := sc.fake(t, fx)
 
-			h := &harness{t: t, m: newModel(f, newTheme(sc.ascii))}
+			h := &harness{t: t, m: newModel(f, ui.NewTheme(sc.ascii))}
 			h.run(h.m.Init())
 			h.send(teaSize(w, hgt))
 			h.press("3", "m")

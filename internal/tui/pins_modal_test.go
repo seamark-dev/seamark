@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/status"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the retarget and prune preview (contracts §3.2, B2-maint).
@@ -36,7 +38,7 @@ func TestMaintRetargetPreviewShowsTheReviewedChange(t *testing.T) {
 	assert.Equal(t, []string{"PlanMaintenance:retarget"}, f.called(), "the preview plans once and commits nothing")
 
 	text := maintContent(t, h)
-	line := itoa(fx.pins[maintWrap].Entry.Line)
+	line := strconv.Itoa(fx.pins[maintWrap].Entry.Line)
 
 	for _, want := range []string{
 		"Retarget p4 · wrap-sql-errors", "narrower",
@@ -104,7 +106,7 @@ func TestMaintRetargetKeepsTheEditedLiveNote(t *testing.T) {
 		assert.Contains(t, text, "The retarget keeps the live note; the recorded note of p9 stays as history.")
 
 		mod := maintHostOf(h).modal
-		body := mod.content(modalBodyWidth(modalMinW, size[0])).Body
+		body := mod.content(ui.ModalBodyWidth(ui.ModalMinW, size[0])).Body
 		side := false
 
 		for _, l := range body {
@@ -285,7 +287,7 @@ func TestMaintPruneNamesWhatLeavesAndWhatStays(t *testing.T) {
 		"close-db-handle-on-error ✓ ready", "Regions internal/db",
 		"Note Close the handle on every error path, also when the query fails.",
 		"Keys unknown key owner (no reader uses it; it leaves with the entry)",
-		"Retained close-db-handles (.seamark/lessons.yaml:" + itoa(fx.pins[maintHandles].Entry.Line) +
+		"Retained close-db-handles (.seamark/lessons.yaml:" + strconv.Itoa(fx.pins[maintHandles].Entry.Line) +
 			" · p12): internal/api, internal/db Close database handles in the same function.",
 		"Advisory: similar wording stays in 1 linked pin. It does not prove the same coverage; compare the notes " +
 			"and the regions.",
@@ -295,7 +297,7 @@ func TestMaintPruneNamesWhatLeavesAndWhatStays(t *testing.T) {
 		"· change other pins, also pins with the same rule in other regions",
 		"· dismiss a proposal, or delete findings, signatures or the firing log",
 		"· promise the same coverage from a similar pin",
-		"DIFF −" + itoa(p.Change.Removed),
+		"DIFF −" + strconv.Itoa(p.Change.Removed),
 		"Prune 1 pin · p16 › superseded · y writes lessons.yaml and the ledger", "y prune 1 pin esc cancel",
 	} {
 		assert.Contains(t, text, want)
@@ -305,7 +307,7 @@ func TestMaintPruneNamesWhatLeavesAndWhatStays(t *testing.T) {
 	assert.NotContains(t, text, "Unknown owner", "the key never reads as an unknown owner")
 
 	// Every label keeps a gap of two cells, also the longest one.
-	body := ansi.Strip(strings.Join(maintHostOf(h).modal.content(modalBodyWidth(modalMinW, 120)).Body, "\n"))
+	body := ansi.Strip(strings.Join(maintHostOf(h).modal.content(ui.ModalBodyWidth(ui.ModalMinW, 120)).Body, "\n"))
 	assert.Contains(t, body, "Retained  close-db-handles")
 	assert.Contains(t, body, "Keys      unknown key owner")
 
@@ -420,7 +422,7 @@ func TestMaintEscLeavesEveryOpenStageWithoutAChange(t *testing.T) {
 	require.Equal(t, flowPreparing, host.modal.stage)
 	assert.Contains(t, maintContent(t, h), "Preparing the retarget preview")
 	assert.Contains(t, maintContent(t, h), "Nothing is written.")
-	assert.Equal(t, "esc cancel", ansi.Strip(h.m.st.theme.hints(host.keys())))
+	assert.Equal(t, "esc cancel", ansi.Strip(h.m.st.theme.Hints(host.keys())))
 
 	h.press("esc")
 	assert.False(t, host.open())
@@ -1019,7 +1021,7 @@ func TestMaintChangedNamesOnlyWrittenEntries(t *testing.T) {
 }
 
 func TestMaintRefusalsSayNothingWasWritten(t *testing.T) {
-	th := newTheme(false)
+	th := ui.NewTheme(false)
 
 	for _, err := range []error{
 		maintain.ErrStale, maintain.ErrWriteDisabled, maintain.ErrNotConfirmable, ErrBusy, ErrNoLedger,
@@ -1095,7 +1097,7 @@ func TestMaintHostileTextStaysInert(t *testing.T) {
 
 		for _, ascii := range []bool{false, true} {
 			for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 20}} {
-				h := &harness{t: t, m: newModel(f, newTheme(ascii))}
+				h := &harness{t: t, m: newModel(f, ui.NewTheme(ascii))}
 				h.run(h.m.Init())
 				h.send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 				h.press("3", "m")
@@ -1107,7 +1109,7 @@ func TestMaintHostileTextStaysInert(t *testing.T) {
 				check := func(stage string) {
 					t.Helper()
 
-					v := mod.content(modalBodyWidth(modalMinW, size[0]))
+					v := mod.content(ui.ModalBodyWidth(ui.ModalMinW, size[0]))
 					all := strings.Join(append(append([]string{v.Title, v.Right}, v.Body...), v.Tail...), "\n") +
 						h.m.View()
 
@@ -1193,7 +1195,7 @@ func TestMaintLayoutsKeepTheScopeVisible(t *testing.T) {
 			frame := h.view()
 			assertFrame(t, frame, size[0], size[1])
 
-			v := maintHostOf(h).modal.content(modalBodyWidth(modalMinW, size[0]))
+			v := maintHostOf(h).modal.content(ui.ModalBodyWidth(ui.ModalMinW, size[0]))
 			require.NotEmpty(t, v.Tail, "%s keeps a scope summary", sc.name)
 
 			first := strings.TrimSpace(ansi.Strip(v.Tail[0]))
@@ -1405,7 +1407,7 @@ func TestMaintBlockScalarNotesHaveNoTrailingBlankRow(t *testing.T) {
 	p.Items[0].Kept[0].Entry.Note = "Close database handles.\nIn the same function.\n"
 
 	h := maintOpen(t, maintFakeOf(fx, p, nil), p.Request, 120, 40)
-	body := maintHostOf(h).modal.content(modalBodyWidth(modalMinW, 120)).Body
+	body := maintHostOf(h).modal.content(ui.ModalBodyWidth(ui.ModalMinW, 120)).Body
 	found := 0
 
 	for i, l := range body {

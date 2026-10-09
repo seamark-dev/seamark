@@ -12,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // settingsRich is a configuration with every owned section, comments
@@ -351,7 +352,7 @@ func TestSettingsASCIIFramesHoldOnlyASCII(t *testing.T) {
 	svc := settingsFake(t, settingsRich)
 
 	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 20}} {
-		h := &harness{t: t, m: newModel(svc, newTheme(true))}
+		h := &harness{t: t, m: newModel(svc, ui.NewTheme(true))}
 		h.run(h.m.Init())
 		h.resize(size[0], size[1])
 		h.press("5", "enter", "down", "space")

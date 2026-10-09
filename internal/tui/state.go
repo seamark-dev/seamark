@@ -15,6 +15,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -123,7 +124,7 @@ func (g *generation) latest() int {
 // snapshots, and the single mutation slot.
 type state struct {
 	svc   Services
-	theme *Theme
+	theme *ui.Theme
 
 	width, height int
 
@@ -185,10 +186,10 @@ func (s *state) copyToClipboard(text string) error {
 // handlers and footers read it, because they have no render width. A
 // screen render can read it too, because the shell renders every screen
 // at the full terminal width. A render that takes an explicit width
-// keeps its own check against wideWidth, because it can draw a sub-box,
+// keeps its own check against ui.WideWidth, because it can draw a sub-box,
 // or a test can call it without a terminal size.
 func (s *state) wide() bool {
-	return s.width >= wideWidth
+	return s.width >= ui.WideWidth
 }
 
 // loadedMsg carries one source's load result back to the event loop.
@@ -211,7 +212,7 @@ type navigateMsg struct {
 
 // toastMsg shows a status line message.
 type toastMsg struct {
-	tone Tone
+	tone ui.Tone
 	text string
 }
 
@@ -241,7 +242,7 @@ type settingsSavedMsg struct {
 type tickMsg struct{}
 
 // toast returns a command that shows a status line message.
-func toast(tone Tone, text string) tea.Cmd {
+func toast(tone ui.Tone, text string) tea.Cmd {
 	return func() tea.Msg { return toastMsg{tone: tone, text: text} }
 }
 

@@ -125,6 +125,6 @@ func TestLessonsSwitchKeysWaitWhileTheViewCaptures(t *testing.T) {
 	h.press("/")
 	h.typeText("eu")
 	assert.Equal(t, lesProposals, les.sub, "the region input receives e and u")
-	assert.Equal(t, "eu", les.props.input.value())
+	assert.Equal(t, "eu", les.props.input.Value())
 	assert.NotContains(t, lesSubTabs(h), "p / m", "the switch hint hides while the view captures")
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/learning"
 	domain "github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // TestCaptureDistillStates writes the distillation scenes (41 to 49) at
@@ -31,7 +32,7 @@ func TestCaptureDistillStates(t *testing.T) {
 			f := sc.fake()
 			f.settings = snap
 
-			hs := &harness{t: t, m: newModel(f, newTheme(sc.ascii))}
+			hs := &harness{t: t, m: newModel(f, ui.NewTheme(sc.ascii))}
 			hs.run(hs.m.Init())
 			hs.send(teaSize(w, h))
 			sc.drive(hs)

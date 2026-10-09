@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // ovPhase is one step of an index build as the progress panel shows it.
@@ -230,11 +231,11 @@ func ovForward(id int, ch chan<- tea.Msg) func(IndexEvent) {
 // or the index is newer than this binary.
 func (o *overview) openBuild() tea.Cmd {
 	if o.st.busy() {
-		return toast(ToneAttention, "Another operation is running: "+o.st.mutation)
+		return toast(ui.ToneAttention, "Another operation is running: "+o.st.mutation)
 	}
 
 	if !o.canBuild() {
-		return toast(ToneAttention, "A newer seamark wrote this index. This binary never rebuilds it.")
+		return toast(ui.ToneAttention, "A newer seamark wrote this index. This binary never rebuilds it.")
 	}
 
 	o.confirm = true
@@ -254,7 +255,7 @@ func (o *overview) startBuild(force bool) tea.Cmd {
 	o.confirm = false
 
 	if !o.st.begin("Building the index") {
-		return toast(ToneAttention, "Another operation is running: "+o.st.mutation)
+		return toast(ui.ToneAttention, "Another operation is running: "+o.st.mutation)
 	}
 
 	b := newOvBuild(o.buildSeq.start(), force, time.Now())
@@ -294,9 +295,9 @@ func (o *overview) onBuildDone(msg ovBuildDoneMsg) tea.Cmd {
 
 	b.finish(msg.summary, msg.err, time.Now())
 
-	note := toast(ToneSuccess, "Index build finished.")
+	note := toast(ui.ToneSuccess, "Index build finished.")
 	if msg.err != nil {
-		note = toast(ToneFailure, "Index build failed: "+errText(msg.err))
+		note = toast(ui.ToneFailure, "Index build failed: "+ui.ErrText(msg.err))
 	}
 
 	// The evidence view shows the index state and reads its counts
@@ -326,10 +327,10 @@ func (o *overview) modal(w, h int) (string, bool) {
 // gives up its last lines and ends with a note that text is hidden.
 func (o *overview) modalBox(title, right string, body []string, hints string, w, h int) string {
 	t := o.st.theme
-	bw := max(dialogMinBox, min(w-4, ovModalW))
-	inner := boxInner(bw)
+	bw := max(ui.DialogMinBox, min(w-4, ovModalW))
+	inner := ui.BoxInner(bw)
 
-	for len(body) > 0 && isBlank(body[len(body)-1]) {
+	for len(body) > 0 && ui.IsBlank(body[len(body)-1]) {
 		body = body[:len(body)-1]
 	}
 
@@ -341,14 +342,14 @@ func (o *overview) modalBox(title, right string, body []string, hints string, w,
 	if room := max(0, h-2-len(tail)); len(body) > room {
 		body = append([]string(nil), body[:room]...)
 		if room > 0 {
-			body[room-1] = t.Faint.Render(truncate(t.dialogMoreNote(), inner, t.Glyphs.Ellipsis))
+			body[room-1] = t.Faint.Render(ui.Truncate(dialogMoreNote(t), inner, t.Glyphs.Ellipsis))
 		}
 	}
 
 	lines := make([]string, 0, len(body)+len(tail))
 	lines = append(append(lines, body...), tail...)
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: bw, H: min(h, len(lines)+2), Title: title, Right: right, Focus: true, Fill: true, Lines: lines,
 	})
 }
@@ -356,13 +357,13 @@ func (o *overview) modalBox(title, right string, body []string, hints string, w,
 // modalInner returns the content width of a build modal in a w-wide
 // area, so callers wrap the body to the width the box shows.
 func modalInner(w int) int {
-	return boxInner(max(dialogMinBox, min(w-4, ovModalW)))
+	return ui.BoxInner(max(ui.DialogMinBox, min(w-4, ovModalW)))
 }
 
 // ovBullet renders a bullet paragraph with a hanging indent.
 func (o *overview) ovBullet(text string, w int) []string {
 	t := o.st.theme
-	lines := ovStyled(t.Body.Render, wrap(text, max(1, w-2)))
+	lines := ovStyled(t.Body.Render, ui.Wrap(text, max(1, w-2)))
 
 	for i := range lines {
 		prefix := "  "
@@ -387,18 +388,18 @@ func (o *overview) confirmModal(w, h int) string {
 		path = o.st.index.value.Probe.Path
 	}
 
-	body := ovStyled(t.Body.Render, wrap("Seamark parses the workspace locally and mines the git history. "+
+	body := ovStyled(t.Body.Render, ui.Wrap("Seamark parses the workspace locally and mines the git history. "+
 		"The build writes:", inner))
-	body = append(body, "  "+t.command(truncateLeft(oneLine(path), inner-2, t.Glyphs.Ellipsis)), "")
+	body = append(body, "  "+commandText(t, ui.TruncateLeft(ui.OneLine(path), inner-2, t.Glyphs.Ellipsis)), "")
 	body = append(body, o.ovBullet("No review fetch, no network call, no inference.", inner)...)
 	body = append(body, o.ovBullet("A build cannot be cancelled once it starts. q then offers to exit after it finishes.",
 		inner)...)
 	body = append(body, "")
-	body = append(body, ovStyled(t.Muted.Render, wrap("Build reuses the parse cache and skips the work when the "+
+	body = append(body, ovStyled(t.Muted.Render, ui.Wrap("Build reuses the parse cache and skips the work when the "+
 		"index is current. Rebuild from scratch reparses every file.", inner))...)
 
-	hints := t.hints([]key.Binding{
-		withHelp(nkeys.Enter, "enter", "build"), ovKeys.Force, withHelp(nkeys.Back, "esc", "cancel"),
+	hints := t.Hints([]key.Binding{
+		ui.WithHelp(ui.Nav.Enter, "enter", "build"), ovKeys.Force, ui.WithHelp(ui.Nav.Back, "esc", "cancel"),
 	})
 
 	return o.modalBox(t.Title.Render("Build the index?"), "", body, hints, w, h)
@@ -432,8 +433,8 @@ func (o *overview) buildModal(w, h int) string {
 
 // resultHints are the keys of a finished build.
 func (o *overview) resultHints() string {
-	return o.st.theme.hints([]key.Binding{
-		withHelp(nkeys.Enter, "enter", "close"), withHelp(ovKeys.Build, "b", "build again"),
+	return o.st.theme.Hints([]key.Binding{
+		ui.WithHelp(ui.Nav.Enter, "enter", "close"), ui.WithHelp(ovKeys.Build, "b", "build again"),
 	})
 }
 
@@ -458,9 +459,9 @@ func (b *ovBuild) elapsed(now time.Time) string {
 func (o *overview) progressBody(w int) []string {
 	t := o.st.theme
 
-	body := []string{t.Accent.Render(t.spinnerFrame(o.st.tick)) + " " + t.Body.Render("Building the index"), ""}
+	body := []string{t.Accent.Render(t.SpinnerFrame(o.st.tick)) + " " + t.Body.Render("Building the index"), ""}
 	body = append(body, ovStyled(t.Attention.Render,
-		wrap("This build cannot be cancelled safely. Press q to exit after it finishes.", w))...)
+		ui.Wrap("This build cannot be cancelled safely. Press q to exit after it finishes.", w))...)
 	body = append(body, "")
 	body = append(body, o.phaseList(w)...)
 
@@ -487,7 +488,7 @@ func (o *overview) phaseList(w int) []string {
 		rows[i] = phaseRow{label: p.label, note: note, state: b.phases[i]}
 	}
 
-	return o.st.theme.phaseRows(rows, o.st.tick, w)
+	return phaseRows(o.st.theme, rows, o.st.tick, w)
 }
 
 // logLines renders the recent warnings of the engine log under their
@@ -502,7 +503,7 @@ func (o *overview) logLines(w int) []string {
 
 	lines := []string{"", t.Heading.Render("RECENT WARNINGS")}
 
-	return append(lines, t.activityLines(b.logs, ovLogKeep, w)...)
+	return append(lines, activityLines(t, b.logs, ovLogKeep, w)...)
 }
 
 // resultBody renders a finished build from the fields of its summary. A
@@ -517,14 +518,14 @@ func (o *overview) resultBody(w int) []string {
 		s = &index.Summary{}
 	}
 
-	after := ovStyled(t.Muted.Render, wrap("The view reloads the index, doctor, proposal and stats sections.", w))
+	after := ovStyled(t.Muted.Render, ui.Wrap("The view reloads the index, doctor, proposal and stats sections.", w))
 
 	if s.Skipped {
-		body := []string{t.Badge(ToneSuccess, "Index already current"), ""}
-		body = append(body, ovStyled(t.Body.Render, wrap("Nothing was rebuilt: the files match the last index run. "+
+		body := []string{t.Badge(ui.ToneSuccess, "Index already current"), ""}
+		body = append(body, ovStyled(t.Body.Render, ui.Wrap("Nothing was rebuilt: the files match the last index run. "+
 			"Press b, then f, to rebuild from scratch.", w))...)
 		body = append(body, "")
-		body = append(body, strings.Split(t.kv([][2]string{
+		body = append(body, strings.Split(kv(t, [][2]string{
 			{"Symbols", ovNum(s.Stats.Symbols)},
 			{"Edges", ovNum(s.Stats.Edges)},
 			{"Decisions", ovNum(s.Stats.Decisions)},
@@ -537,7 +538,7 @@ func (o *overview) resultBody(w int) []string {
 	if !s.HistoryMined {
 		history = "not mined"
 		if s.HistorySkipNote != "" {
-			history += ": " + oneLine(s.HistorySkipNote)
+			history += ": " + ui.OneLine(s.HistorySkipNote)
 		}
 	}
 
@@ -570,11 +571,11 @@ func (o *overview) resultBody(w int) []string {
 		{"Edges", ovNum(s.Stats.Edges)},
 		{"History", history},
 		{"Decisions", ovNum(s.Stats.Decisions)},
-		{"Database", oneLine(db)},
+		{"Database", ui.OneLine(db)},
 	}...)
 
-	body := []string{t.Badge(ToneSuccess, "Index built"), ""}
-	body = append(body, strings.Split(t.kv(facts, w), "\n")...)
+	body := []string{t.Badge(ui.ToneSuccess, "Index built"), ""}
+	body = append(body, strings.Split(kv(t, facts, w), "\n")...)
 	body = append(body, o.logLines(w)...)
 
 	return append(append(body, ""), after...)
@@ -585,13 +586,13 @@ func (o *overview) resultBody(w int) []string {
 func (o *overview) failureBody(w int) []string {
 	t := o.st.theme
 
-	body := []string{t.Badge(ToneFailure, "Index build failed"), "", t.Heading.Render("ERROR")}
-	body = append(body, ovStyled(t.Body.Render, wrap(errText(o.build.err), w))...)
+	body := []string{t.Badge(ui.ToneFailure, "Index build failed"), "", t.Heading.Render("ERROR")}
+	body = append(body, ovStyled(t.Body.Render, ui.Wrap(ui.ErrText(o.build.err), w))...)
 	body = append(body, "")
 	body = append(body, o.phaseList(w)...)
 	body = append(body, o.logLines(w)...)
 	body = append(body, "")
 
-	return append(body, ovStyled(t.Muted.Render, wrap("Refresh view (r) shows what changed; "+
+	return append(body, ovStyled(t.Muted.Render, ui.Wrap("Refresh view (r) shows what changed; "+
 		"nothing retries automatically.", w))...)
 }

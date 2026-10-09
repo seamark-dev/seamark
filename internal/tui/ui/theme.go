@@ -1,4 +1,4 @@
-package tui
+package ui
 
 import (
 	"strings"
@@ -138,10 +138,10 @@ type Theme struct {
 	Ghost  lipgloss.Style // the label of a secondary next action
 }
 
-// newTheme builds the session theme. lipgloss downgrades the colors to
+// NewTheme builds the session theme. lipgloss downgrades the colors to
 // the terminal profile and drops them under NO_COLOR, so the glyphs and
 // labels carry every state on their own.
-func newTheme(ascii bool) *Theme {
+func NewTheme(ascii bool) *Theme {
 	g := unicodeGlyphs
 	if ascii {
 		g = asciiGlyphs
@@ -230,15 +230,15 @@ func (t *Theme) Badge(tone Tone, label string) string {
 // Row backgrounds of the 1a design. The selection spans the full inner
 // width of a pane; diff rows and the stale banner use tinted rows.
 const (
-	bgSel = iota
+	BgSel = iota
 	bgSurf
-	bgWarn
-	bgAdd
-	bgDel
+	BgWarn
+	BgAdd
+	BgDel
 )
 
 var rowBackgrounds = map[int]lipgloss.AdaptiveColor{
-	bgSel: colorSel, bgSurf: colorSurf, bgWarn: colorWarnBg, bgAdd: colorAddBg, bgDel: colorDelBg,
+	BgSel: colorSel, bgSurf: colorSurf, BgWarn: colorWarnBg, BgAdd: colorAddBg, BgDel: colorDelBg,
 }
 
 // backgroundSeq returns the SGR sequence that sets a row background in
@@ -263,11 +263,11 @@ func backgroundSeq(bg int) string {
 	return termenv.CSI + seq + "m"
 }
 
-// highlight paints a background under a rendered row and pads it to w
+// Highlight paints a background under a rendered row and pads it to w
 // cells. The row keeps its own foreground styles: every reset inside it
 // sets the background again, so the fill never breaks at a styled word.
-func (t *Theme) highlight(row string, w, bg int) string {
-	row = padRight(truncate(row, w, t.Glyphs.Ellipsis), w)
+func (t *Theme) Highlight(row string, w, bg int) string {
+	row = PadRight(Truncate(row, w, t.Glyphs.Ellipsis), w)
 
 	seq := backgroundSeq(bg)
 	if seq == "" {
@@ -275,14 +275,6 @@ func (t *Theme) highlight(row string, w, bg int) string {
 	}
 
 	return seq + strings.ReplaceAll(row, "\x1b[0m", "\x1b[0m"+seq) + "\x1b[0m"
-}
-
-// brand renders the mark "▶┊◀ seamark".
-func (t *Theme) brand() string {
-	g := t.Glyphs
-
-	return t.Brand.Render(g.BrandLeft) + t.BrandMark.Render(g.BrandMid) +
-		t.BrandMark.Bold(true).Render(g.BrandRight) + " " + t.Brand.Render("seamark")
 }
 
 // asciiFrameSymbols maps each Unicode symbol that screens write as a
@@ -336,12 +328,12 @@ func dedupePairs(pairs []string) []string {
 	return out
 }
 
-// asciiFrame replaces the known Unicode symbols in a rendered frame
+// ASCIIFrame replaces the known Unicode symbols in a rendered frame
 // when the session uses the ASCII glyph set. It is a safety net for
 // literals that do not come from Glyphs, because a font without these
 // symbols shows a replacement box. Escape sequences are ASCII, so the
 // swap never changes a style.
-func (t *Theme) asciiFrame(s string) string {
+func (t *Theme) ASCIIFrame(s string) string {
 	if !t.ASCII {
 		return s
 	}

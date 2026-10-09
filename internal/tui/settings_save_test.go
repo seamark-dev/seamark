@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 func TestSettingsSaveNeedsYFromThePreview(t *testing.T) {
@@ -43,7 +44,7 @@ func TestSettingsSaveNeedsYFromThePreview(t *testing.T) {
 	// A long temporary path wraps inside the modal, so the check ignores
 	// the spaces of the wrap.
 	assert.Contains(t, strings.ReplaceAll(flat, " ", ""),
-		"File"+displayPath(filepath.Join(svc.root, ".seamark", "config.yaml")), "the preview names the absolute file")
+		"File"+ui.DisplayPath(filepath.Join(svc.root, ".seamark", "config.yaml")), "the preview names the absolute file")
 
 	for _, want := range []string{
 		"Seamark writes 1 change to .seamark/config.yaml.",
@@ -182,7 +183,7 @@ func TestSettingsReviewWindowAcceptsOnlyPositiveDays(t *testing.T) {
 	assert.Contains(t, footerLine(h.view()), "ctrl+c quit")
 
 	h.typeText("q1x")
-	assert.Equal(t, "1", scr.ed.input.value(), "the input takes digits only")
+	assert.Equal(t, "1", scr.ed.input.Value(), "the input takes digits only")
 	assert.False(t, h.quit, "q is text here, not quit")
 
 	h.press("backspace")

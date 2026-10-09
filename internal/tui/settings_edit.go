@@ -11,6 +11,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The field editors. A radio editor changes a scalar field; the list
@@ -32,7 +33,7 @@ type settingsEditor struct {
 	// what the input edits.
 	typing bool
 	target settingsInputTarget
-	input  lineInput
+	input  ui.LineInput
 	// editIdx is the pattern that the input replaces; -1 adds one.
 	editIdx int
 	// inputErr explains why the typed value was not kept.
@@ -95,7 +96,7 @@ func (s *settingsScreen) choices(f settings.Field) []settingsChoice {
 
 		for _, id := range snap.Presets {
 			out = append(out, settingsChoice{
-				kind: settingsChoicePreset, label: oneLine(id), preset: id,
+				kind: settingsChoicePreset, label: ui.OneLine(id), preset: id,
 				note: s.presetCommand(snap.Root, id), def: id == integration.DefaultInvocationID,
 			})
 		}
@@ -119,7 +120,7 @@ func (s *settingsScreen) choices(f settings.Field) []settingsChoice {
 		}
 	case settings.ReviewWindow:
 		return []settingsChoice{
-			{kind: settingsChoiceWindowDefault, label: "default", note: oneLine(st.Default), def: true},
+			{kind: settingsChoiceWindowDefault, label: "default", note: ui.OneLine(st.Default), def: true},
 			{kind: settingsChoiceWindowDays, label: "days", note: "a whole number of days above 0"},
 			{kind: settingsChoiceWindowUnlimited, label: "unlimited", note: "writes window_days: 0"},
 		}
@@ -155,19 +156,19 @@ func (s *settingsScreen) presetCommand(root, id string) string {
 }
 
 // settingsCommand renders a command for display. The workspace root
-// reads as displayPath shows it, so the command fits a narrow pane
-// better. diag redacts and sanitizes the text, because a custom command
+// reads as ui.DisplayPath shows it, so the command fits a narrow pane
+// better. ui.Diag redacts and sanitizes the text, because a custom command
 // comes from the repository.
 func settingsCommand(argv []string, root string) string {
 	out := slices.Clone(argv)
 
 	for i, a := range out {
 		if a == root {
-			out[i] = displayPath(root)
+			out[i] = ui.DisplayPath(root)
 		}
 	}
 
-	return diag(strings.Join(out, " "))
+	return ui.Diag(strings.Join(out, " "))
 }
 
 // selectedChoice returns the index of the option that the draft
@@ -241,7 +242,7 @@ func (s *settingsScreen) editable(f settings.Field) tea.Cmd {
 	}
 
 	if err := snap.Editable(f.Group()); err != nil {
-		return toast(ToneAttention, settingsBlockSentence(settingsGroupTitle(f.Group())+" cannot be edited here", err))
+		return toast(ui.ToneAttention, settingsBlockSentence(settingsGroupTitle(f.Group())+" cannot be edited here", err))
 	}
 
 	return nil
@@ -260,11 +261,11 @@ func (s *settingsScreen) editorKey(msg tea.KeyMsg) tea.Cmd {
 	f := s.field()
 
 	switch {
-	case key.Matches(msg, nkeys.PageUp, nkeys.PageDown):
-		s.detail.key(msg)
+	case key.Matches(msg, ui.Nav.PageUp, ui.Nav.PageDown):
+		s.detail.Key(msg)
 
 		return nil
-	case key.Matches(msg, nkeys.Back, nkeys.Next):
+	case key.Matches(msg, ui.Nav.Back, ui.Nav.Next):
 		s.closeEditor()
 
 		return nil
@@ -277,22 +278,22 @@ func (s *settingsScreen) editorKey(msg tea.KeyMsg) tea.Cmd {
 	cs := s.choices(f)
 
 	switch {
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		s.closeEditor()
 	case len(cs) == 0:
-	case key.Matches(msg, nkeys.Up):
+	case key.Matches(msg, ui.Nav.Up):
 		s.ed.choice = max(0, s.ed.choice-1)
 		s.follow = true
-	case key.Matches(msg, nkeys.Down):
+	case key.Matches(msg, ui.Nav.Down):
 		s.ed.choice = min(len(cs)-1, s.ed.choice+1)
 		s.follow = true
-	case key.Matches(msg, nkeys.Top):
+	case key.Matches(msg, ui.Nav.Top):
 		s.ed.choice = 0
 		s.follow = true
-	case key.Matches(msg, nkeys.Bottom):
+	case key.Matches(msg, ui.Nav.Bottom):
 		s.ed.choice = len(cs) - 1
 		s.follow = true
-	case key.Matches(msg, nkeys.Toggle):
+	case key.Matches(msg, ui.Nav.Toggle):
 		return s.pick(f, cs[max(0, min(s.ed.choice, len(cs)-1))])
 	}
 
@@ -303,30 +304,30 @@ func (s *settingsScreen) editorKey(msg tea.KeyMsg) tea.Cmd {
 // cannot be edited keeps only the keys that move and close, because
 // every edit key would only repeat the refusal.
 func (s *settingsScreen) editorKeys() []key.Binding {
-	move := withHelp(nkeys.Down, "↑↓", "move")
+	move := ui.WithHelp(ui.Nav.Down, "↑↓", "move")
 
 	if s.field() == settings.IndexExclude {
 		if s.blocked() {
-			return []key.Binding{move, withHelp(nkeys.Back, "esc", "done")}
+			return []key.Binding{move, ui.WithHelp(ui.Nav.Back, "esc", "done")}
 		}
 
 		return []key.Binding{
-			move, withHelp(nkeys.Enter, "enter", "edit"), settingsKeys.Add,
-			settingsKeys.Remove, settingsKeys.MoveUp, withHelp(nkeys.Back, "esc", "done"),
+			move, ui.WithHelp(ui.Nav.Enter, "enter", "edit"), settingsKeys.Add,
+			settingsKeys.Remove, settingsKeys.MoveUp, ui.WithHelp(ui.Nav.Back, "esc", "done"),
 		}
 	}
 
 	if len(s.choices(s.field())) == 0 {
-		return []key.Binding{withHelp(nkeys.Back, "esc", "done")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "done")}
 	}
 
 	if s.blocked() {
-		return []key.Binding{move, withHelp(nkeys.Enter, "enter", "done")}
+		return []key.Binding{move, ui.WithHelp(ui.Nav.Enter, "enter", "done")}
 	}
 
 	return []key.Binding{
-		withHelp(nkeys.Down, "↑↓", "choose"), withHelp(nkeys.Toggle, "space", "select"),
-		withHelp(nkeys.Enter, "enter", "done"),
+		ui.WithHelp(ui.Nav.Down, "↑↓", "choose"), ui.WithHelp(ui.Nav.Toggle, "space", "select"),
+		ui.WithHelp(ui.Nav.Enter, "enter", "done"),
 	}
 }
 
@@ -375,7 +376,7 @@ func (s *settingsScreen) pick(f settings.Field, c settingsChoice) tea.Cmd {
 		s.startTyping(settingsInputDays, -1, "")
 
 		if days > 0 {
-			s.ed.input.set(strconv.Itoa(days))
+			s.ed.input.Set(strconv.Itoa(days))
 		}
 	case settingsChoiceWindowUnlimited:
 		s.setEdit(settings.Edit{Field: settings.ReviewWindow, Unlimited: true})
@@ -394,29 +395,29 @@ func (s *settingsScreen) startTyping(target settingsInputTarget, idx int, value 
 
 	switch target {
 	case settingsInputDays:
-		s.ed.input = lineInput{
-			placeholder: "days, for example 180", limit: settingsDaysLimit,
-			accept: func(r rune) bool { return r >= '0' && r <= '9' },
+		s.ed.input = ui.LineInput{
+			Placeholder: "days, for example 180", Limit: settingsDaysLimit,
+			Accept: func(r rune) bool { return r >= '0' && r <= '9' },
 		}
 	default:
 		// The input drops control characters by itself, and the reader
 		// rejects them too. A space can be part of a real file name.
-		s.ed.input = lineInput{placeholder: "pattern, for example *.pb.go"}
+		s.ed.input = ui.LineInput{Placeholder: "pattern, for example *.pb.go"}
 	}
 
-	s.ed.input.set(value)
+	s.ed.input.Set(value)
 }
 
 // typingKey handles the keys of the text input. enter keeps a valid
 // value; esc drops the typed text and keeps the draft as it was.
 func (s *settingsScreen) typingKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		s.ed.typing = false
 		s.ed.inputErr = ""
 
 		return nil
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		if s.ed.target == settingsInputDays {
 			return s.keepDays()
 		}
@@ -424,7 +425,7 @@ func (s *settingsScreen) typingKey(msg tea.KeyMsg) tea.Cmd {
 		return s.keepPattern()
 	}
 
-	s.ed.input.key(msg)
+	s.ed.input.Key(msg)
 	s.ed.inputErr = ""
 
 	return nil
@@ -433,7 +434,7 @@ func (s *settingsScreen) typingKey(msg tea.KeyMsg) tea.Cmd {
 // keepDays records a typed day count. The reader reads 0 as unlimited,
 // so a days choice must be above 0; unlimited is its own choice.
 func (s *settingsScreen) keepDays() tea.Cmd {
-	n, err := strconv.Atoi(s.ed.input.value())
+	n, err := strconv.Atoi(s.ed.input.Value())
 	if err != nil || n <= 0 {
 		s.ed.inputErr = "Enter a whole number of days above 0."
 
@@ -462,22 +463,22 @@ func (s *settingsScreen) listEditorKey(msg tea.KeyMsg) tea.Cmd {
 	s.ed.item = max(0, min(s.ed.item, last))
 
 	switch {
-	case key.Matches(msg, nkeys.Up):
+	case key.Matches(msg, ui.Nav.Up):
 		s.ed.item = max(0, s.ed.item-1)
 		s.follow = true
 
 		return nil
-	case key.Matches(msg, nkeys.Down):
+	case key.Matches(msg, ui.Nav.Down):
 		s.ed.item = min(last, s.ed.item+1)
 		s.follow = true
 
 		return nil
-	case key.Matches(msg, nkeys.Top):
+	case key.Matches(msg, ui.Nav.Top):
 		s.ed.item = 0
 		s.follow = true
 
 		return nil
-	case key.Matches(msg, nkeys.Bottom):
+	case key.Matches(msg, ui.Nav.Bottom):
 		s.ed.item = last
 		s.follow = true
 
@@ -485,7 +486,7 @@ func (s *settingsScreen) listEditorKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	if refusal := s.editable(settings.IndexExclude); refusal != nil {
-		if key.Matches(msg, nkeys.Enter, settingsKeys.Add, settingsKeys.Remove, settingsKeys.MoveUp, settingsKeys.MoveDown) {
+		if key.Matches(msg, ui.Nav.Enter, settingsKeys.Add, settingsKeys.Remove, settingsKeys.MoveUp, settingsKeys.MoveDown) {
 			return refusal
 		}
 
@@ -493,10 +494,10 @@ func (s *settingsScreen) listEditorKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	switch {
-	case key.Matches(msg, settingsKeys.Add), key.Matches(msg, nkeys.Enter) && s.ed.item == n:
+	case key.Matches(msg, settingsKeys.Add), key.Matches(msg, ui.Nav.Enter) && s.ed.item == n:
 		s.ed.item = n
 		s.startTyping(settingsInputPattern, -1, "")
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		s.startTyping(settingsInputPattern, s.ed.item, list[s.ed.item])
 	case key.Matches(msg, settingsKeys.Remove) && s.ed.item < n:
 		s.setExclude(slices.Delete(list, s.ed.item, s.ed.item+1))
@@ -520,7 +521,7 @@ func (s *settingsScreen) listEditorKey(msg tea.KeyMsg) tea.Cmd {
 // rule of the index reader, so the list never holds a pattern that the
 // next build would reject. An empty value keeps the list as it was.
 func (s *settingsScreen) keepPattern() tea.Cmd {
-	p := strings.TrimSpace(s.ed.input.value())
+	p := strings.TrimSpace(s.ed.input.Value())
 	if p == "" {
 		s.ed.typing = false
 
@@ -528,7 +529,7 @@ func (s *settingsScreen) keepPattern() tea.Cmd {
 	}
 
 	if err := index.CheckExclude(p); err != nil {
-		s.ed.inputErr = oneLine(p) + " is not valid: " + errText(err)
+		s.ed.inputErr = ui.OneLine(p) + " is not valid: " + ui.ErrText(err)
 
 		return nil
 	}
@@ -537,7 +538,7 @@ func (s *settingsScreen) keepPattern() tea.Cmd {
 
 	for i, q := range list {
 		if q == p && i != s.ed.editIdx {
-			s.ed.inputErr = oneLine(p) + " is already in the list."
+			s.ed.inputErr = ui.OneLine(p) + " is already in the list."
 
 			return nil
 		}
@@ -574,12 +575,12 @@ func (s *settingsScreen) resetField(f settings.Field) tea.Cmd {
 	if !s.resettable(f) {
 		// A custom command overrides the agent.cli default, so the toast
 		// names the command that stays (spec R-12).
-		then := "the default " + oneLine(st.Default) + " applies"
+		then := "the default " + ui.OneLine(st.Default) + " applies"
 		if f == settings.AgentCLI && s.argvStays() {
 			then = "agent.argv stays in effect"
 		}
 
-		return toast(ToneNeutral, string(f)+" has no key in "+settingsFile+"; "+then+".")
+		return toast(ui.ToneNeutral, string(f)+" has no key in "+settingsFile+"; "+then+".")
 	}
 
 	s.setEdit(settings.Edit{Field: f, Reset: true})

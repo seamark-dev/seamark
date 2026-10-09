@@ -16,6 +16,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the shell side of installed lesson maintenance: the Pins
@@ -98,7 +99,7 @@ func TestLessonsPinsKeyWorksInEverySubView(t *testing.T) {
 	h.press("p", "/")
 	h.typeText("m")
 	assert.Equal(t, lesProposals, les.sub)
-	assert.Equal(t, "m", les.props.input.value())
+	assert.Equal(t, "m", les.props.input.Value())
 	assert.Empty(t, f.called())
 }
 
@@ -124,7 +125,7 @@ func TestLessonsSubTabsKeepTheGateAtEveryWidth(t *testing.T) {
 				h.m.st.lastRunKind = runEvidence
 			}
 
-			for w := minWidth; w <= 120; w++ {
+			for w := ui.MinWidth; w <= 120; w++ {
 				h.resize(w, 24)
 
 				line := lesSubTabs(h)
@@ -132,7 +133,7 @@ func TestLessonsSubTabsKeepTheGateAtEveryWidth(t *testing.T) {
 
 				require.True(t, found, "gate %s, run %t, width %d: %q", g.name, run, w, line)
 				assert.True(t, strings.HasSuffix(line, g.label), "gate %s, run %t, width %d: %q", g.name, run, w, line)
-				assert.LessOrEqual(t, width(line), w)
+				assert.LessOrEqual(t, ui.Width(line), w)
 				assert.True(t, strings.HasSuffix(tabs, "   "), "three cells before the gate at %d: %q", w, line)
 				assert.Contains(t, tabs, "Pins")
 				assert.Equal(t, run, strings.Contains(tabs, "Run"), "width %d: %q", w, line)
@@ -193,7 +194,7 @@ func TestPinsHostileTextStaysInert(t *testing.T) {
 	}
 
 	for _, ascii := range []bool{false, true} {
-		h := &harness{t: t, m: newModel(f, newTheme(ascii))}
+		h := &harness{t: t, m: newModel(f, ui.NewTheme(ascii))}
 		h.run(h.m.Init())
 
 		for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 20}} {
@@ -371,9 +372,9 @@ func TestPinsAndProposalsContextSurvivesARoundTrip(t *testing.T) {
 
 	require.Equal(t, "internal", p.region)
 	require.Equal(t, "e", p.text)
-	require.Positive(t, p.list.cursor, "the cursor left the first row")
+	require.Positive(t, p.list.Cursor, "the cursor left the first row")
 
-	region, text, row, cursor := p.region, p.text, p.list.cursor, p.cursorID
+	region, text, row, cursor := p.region, p.text, p.list.Cursor, p.cursorID
 
 	// Proposals: a cursor row below the first.
 	h.press("p", "down")
@@ -390,7 +391,7 @@ func TestPinsAndProposalsContextSurvivesARoundTrip(t *testing.T) {
 	require.Equal(t, lesPins, les.sub)
 	assert.Equal(t, region, p.region, "the region filter stays")
 	assert.Equal(t, text, p.text, "the text search stays")
-	assert.Equal(t, row, p.list.cursor, "the Pins cursor row stays")
+	assert.Equal(t, row, p.list.Cursor, "the Pins cursor row stays")
 	assert.Equal(t, cursor, p.cursorID, "the Pins cursor names the same pin")
 	assert.Equal(t, int64(2), props.cursorID, "the Proposals cursor stays")
 	assert.Equal(t, reads, f.readCount("Pins"), "a round trip reads the pins only on r or after a change")

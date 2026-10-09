@@ -3,11 +3,13 @@ package tui
 import (
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file renders the Settings destination. The list box shows the
@@ -71,10 +73,10 @@ var settingsForms = [][2]string{
 func (s *settingsScreen) listBox(w, h int, focused bool) string {
 	t := s.st.theme
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: focused,
 		Title: integPaneTitle(t, "Settings", focused), Right: t.Code.Render(settingsFile),
-		Lines: s.listLines(boxInner(w), boxRows(h), focused),
+		Lines: s.listLines(ui.BoxInner(w), ui.BoxRows(h), focused),
 	})
 }
 
@@ -104,16 +106,16 @@ func (s *settingsScreen) listLines(w, rows int, focused bool) []string {
 	// missing. A larger terminal shows the full message.
 	tail = nil
 	if len(items) > 0 {
-		tail = []string{truncate(items[0].row, w, t.Glyphs.Ellipsis)}
+		tail = []string{ui.Truncate(items[0].row, w, t.Glyphs.Ellipsis)}
 	}
 
 	table, cur := s.tableLines(w, false, false, focused)
 	room := max(1, rows-1-len(tail))
 
 	if len(table) > room {
-		s.table.cursor = cur
-		s.table.clamp(len(table), room)
-		table = table[s.table.offset : s.table.offset+room]
+		s.table.Cursor = cur
+		s.table.Clamp(len(table), room)
+		table = table[s.table.Offset : s.table.Offset+room]
 	}
 
 	return append(append(table, rule), tail...)
@@ -129,8 +131,8 @@ func (s *settingsScreen) tableLines(w int, sep, header, focused bool) (lines []s
 	snap := s.snap()
 
 	if header {
-		lines = append(lines, integRow(t, cell("", settingsMarkW), cell(f.Render("Field"), settingsFieldW),
-			cell(f.Render("Value"), settingsValueW), cell(f.Render("Set by"), setW)))
+		lines = append(lines, integRow(t, ui.Cell("", settingsMarkW), ui.Cell(f.Render("Field"), settingsFieldW),
+			ui.Cell(f.Render("Value"), settingsValueW), ui.Cell(f.Render("Set by"), setW)))
 	}
 
 	for i, g := range settingsGroups {
@@ -181,11 +183,11 @@ func (s *settingsScreen) fieldRow(f settings.Field, current, focused bool, w, se
 		name = t.Muted.Render(string(f))
 	}
 
-	row := integRow(t, cell(cursor, settingsMarkW), cell(name, settingsFieldW),
-		cell(s.valueCell(f), settingsValueW), cell(s.setByCell(f), setW))
+	row := integRow(t, ui.Cell(cursor, settingsMarkW), ui.Cell(name, settingsFieldW),
+		ui.Cell(s.valueCell(f), settingsValueW), ui.Cell(s.setByCell(f), setW))
 
 	if current && focused {
-		row = t.highlight(row, w, bgSel)
+		row = t.Highlight(row, w, ui.BgSel)
 	}
 
 	return row
@@ -272,7 +274,7 @@ func (s *settingsScreen) tailItems(w int) []settingsTail {
 	}
 
 	warn := func(text string) {
-		out = append(out, settingsTail{lines: propNote(t, ToneAttention, text, w), row: settingsNoteRow(t, ToneAttention, text)})
+		out = append(out, settingsTail{lines: propNote(t, ui.ToneAttention, text, w), row: settingsNoteRow(t, ui.ToneAttention, text)})
 	}
 
 	switch {
@@ -284,7 +286,7 @@ func (s *settingsScreen) tailItems(w int) []settingsTail {
 
 	if n := s.draftTotal(); n > 0 {
 		if s.st.busy() {
-			warn("Saving waits for the running operation: " + oneLine(s.st.mutation) + ".")
+			warn("Saving waits for the running operation: " + ui.OneLine(s.st.mutation) + ".")
 		}
 
 		out = append(out, s.draftSummary(n, w))
@@ -304,7 +306,7 @@ func (s *settingsScreen) tailItems(w int) []settingsTail {
 	}
 
 	if s.st.settings.stale() {
-		warn("stale: " + errText(s.st.settings.err))
+		warn("stale: " + ui.ErrText(s.st.settings.err))
 	}
 
 	if len(out) == 0 {
@@ -322,7 +324,7 @@ func (s *settingsScreen) blockTail(scope string, err error, w int) settingsTail 
 
 	return settingsTail{
 		lines: s.blockNote(scope, err, w),
-		row:   settingsNoteRow(t, ToneAttention, "Fix "+where+" by hand: "+reason),
+		row:   settingsNoteRow(t, ui.ToneAttention, "Fix "+where+" by hand: "+reason),
 	}
 }
 
@@ -333,7 +335,7 @@ func (s *settingsScreen) blockNote(scope string, err error, w int) []string {
 	t := s.st.theme
 	reason, where := settingsBlock(err)
 
-	out := propNote(t, ToneAttention, scope+" cannot be edited here: "+reason+".", w)
+	out := propNote(t, ui.ToneAttention, scope+" cannot be edited here: "+reason+".", w)
 	out = append(out, integCommandLines(t, where, w)...)
 
 	return append(out, integLines(t.Muted, "Fix the file by hand; the other views stay usable.", w)...)
@@ -341,20 +343,20 @@ func (s *settingsScreen) blockNote(scope string, err error, w int) []string {
 
 // settingsBlock splits a block into its reason and the file location to
 // open, for example ".seamark/config.yaml:3". The reason comes from the
-// file, so diag makes it safe.
+// file, so ui.Diag makes it safe.
 func settingsBlock(err error) (reason, where string) {
 	where = settingsFile
 
 	var b *settings.BlockedError
 	if !errors.As(err, &b) {
-		return strings.TrimSuffix(errText(err), "."), where
+		return strings.TrimSuffix(ui.ErrText(err), "."), where
 	}
 
 	if b.Line > 0 {
-		where += ":" + itoa(b.Line)
+		where += ":" + strconv.Itoa(b.Line)
 	}
 
-	return strings.TrimSuffix(diag(b.Reason), "."), where
+	return strings.TrimSuffix(ui.Diag(b.Reason), "."), where
 }
 
 // settingsBlockSentence renders a block in one sentence for a toast, for
@@ -368,7 +370,7 @@ func settingsBlockSentence(subject string, err error) string {
 
 // settingsNoteRow renders a tone glyph and text in one line, the
 // one-line form of propNote.
-func settingsNoteRow(t *Theme, tone Tone, text string) string {
+func settingsNoteRow(t *ui.Theme, tone ui.Tone, text string) string {
 	style := t.ToneStyle(tone)
 
 	return style.Render(t.ToneGlyph(tone)) + " " + style.Render(text)
@@ -387,7 +389,7 @@ func (s *settingsScreen) draftSummary(n, w int) settingsTail {
 	if len(groups) == 1 {
 		head += settingsGroupTitle(groups[0])
 	} else {
-		head += itoa(len(groups)) + " groups"
+		head += strconv.Itoa(len(groups)) + " groups"
 		hint = " reviews the group under the cursor"
 	}
 
@@ -399,7 +401,7 @@ func (s *settingsScreen) draftSummary(n, w int) settingsTail {
 
 	row := t.Attention.Render(head) + t.Muted.Render(sep) + t.Key.Render("s") + t.Muted.Render(hint)
 
-	if width(head+sep+"s"+hint) <= w {
+	if ui.Width(head+sep+"s"+hint) <= w {
 		return settingsTail{lines: []string{row}, row: row}
 	}
 
@@ -428,7 +430,7 @@ func (s *settingsScreen) draftBlockedSummary(head, sep string, w int) settingsTa
 
 	row := t.Attention.Render(head) + t.Muted.Render(sep+why)
 
-	if width(head+sep+why) <= w {
+	if ui.Width(head+sep+why) <= w {
 		return settingsTail{lines: []string{row}, row: row}
 	}
 
@@ -440,7 +442,7 @@ func (s *settingsScreen) draftBlockedSummary(head, sep string, w int) settingsTa
 // enter. The compact layout shows it alone while it has the keys.
 func (s *settingsScreen) editorBox(w, h int, focused, compact bool) string {
 	t := s.st.theme
-	inner, rows := boxInner(w), boxRows(h)
+	inner, rows := ui.BoxInner(w), ui.BoxRows(h)
 	f := s.field()
 
 	lines, focusAt := s.editorLines(f, inner, focused)
@@ -452,15 +454,15 @@ func (s *settingsScreen) editorBox(w, h int, focused, compact bool) string {
 	// window freely until the next cursor move. While no line has the
 	// cursor, the follow request waits for the next render.
 	if s.follow && focusAt >= 0 {
-		sc.reveal(focusAt, focusAt, window)
+		sc.Reveal(focusAt, focusAt, window)
 		s.follow = false
 	}
 
-	from, to := sc.fit(len(lines), window)
+	from, to := sc.Fit(len(lines), window)
 
 	var foot string
-	if sc.scrolls() {
-		foot = propRange(t, from, to, len(lines))
+	if sc.Scrolls() {
+		foot = t.RangeNote(from, to, len(lines))
 	}
 
 	// A narrow footer can drop esc, so the border names the way back.
@@ -478,7 +480,7 @@ func (s *settingsScreen) editorBox(w, h int, focused, compact bool) string {
 		title += " " + t.Glyphs.Sep + " editing"
 	}
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: focused, Foot: foot,
 		Title: integPaneTitle(t, title, focused), Lines: lines[from:to],
 	})
@@ -495,7 +497,7 @@ func (s *settingsScreen) editorLines(f settings.Field, w int, focused bool) (out
 
 	head := t.Title.Render(string(f))
 	if _, ok := s.drafts[f]; ok {
-		head = spread(head, t.Attention.Render(g.Dot+" draft"), w)
+		head = ui.Spread(head, t.Attention.Render(g.Dot+" draft"), w)
 	}
 
 	out = []string{head}
@@ -509,8 +511,8 @@ func (s *settingsScreen) editorLines(f settings.Field, w int, focused bool) (out
 	if f == settings.AgentCLI && settingsArgvSet(snap) {
 		argv, _ := snap.Field(settings.AgentArgv)
 		out = append(out, "")
-		out = append(out, propNote(t, ToneAttention, "A custom agent.argv overrides the preset:", w)...)
-		out = append(out, integHanging("  ", t.Code, oneLine(argv.Effective), w)...)
+		out = append(out, propNote(t, ui.ToneAttention, "A custom agent.argv overrides the preset:", w)...)
+		out = append(out, integHanging("  ", t.Code, ui.OneLine(argv.Effective), w)...)
 	}
 
 	controls, at := s.controlLines(f, w, focused && s.editing)
@@ -527,7 +529,7 @@ func (s *settingsScreen) editorLines(f settings.Field, w int, focused bool) (out
 
 	explain := integLines(t.Muted, s.explanation(f), w)
 	for _, n := range st.Notes {
-		explain = append(explain, integHanging(t.Faint.Render(g.Sep+" "), t.Muted, oneLine(n), w)...)
+		explain = append(explain, integHanging(t.Faint.Render(g.Sep+" "), t.Muted, ui.OneLine(n), w)...)
 	}
 
 	if len(explain) > 0 {
@@ -559,7 +561,7 @@ func (s *settingsScreen) controlLines(f settings.Field, w int, active bool) (out
 
 	labelW := 0
 	for _, c := range cs {
-		labelW = max(labelW, width(c.label))
+		labelW = max(labelW, ui.Width(c.label))
 	}
 
 	sel := s.selectedChoice(f)
@@ -575,7 +577,7 @@ func (s *settingsScreen) controlLines(f settings.Field, w int, active bool) (out
 		out = append(out, s.choiceRow(c, i == sel, current, labelW, w))
 
 		if c.kind == settingsChoiceWindowDays && s.ed.typing && s.ed.target == settingsInputDays && s.ed.inputErr != "" {
-			out = append(out, propIndent("    ", propNote(t, ToneFailure, s.ed.inputErr, w-4))...)
+			out = append(out, propIndent("    ", propNote(t, ui.ToneFailure, s.ed.inputErr, w-4))...)
 		}
 	}
 
@@ -603,7 +605,7 @@ func (s *settingsScreen) choiceRow(c settingsChoice, on, current bool, labelW, w
 
 	var note string
 	if c.note != "" {
-		note = t.Muted.Render(oneLine(c.note))
+		note = t.Muted.Render(ui.OneLine(c.note))
 	}
 
 	if c.kind == settingsChoiceWindowDays {
@@ -611,7 +613,7 @@ func (s *settingsScreen) choiceRow(c settingsChoice, on, current bool, labelW, w
 
 		switch {
 		case s.ed.typing && s.ed.target == settingsInputDays:
-			note = t.Faint.Render("[") + s.ed.input.view(t) + t.Faint.Render("]")
+			note = t.Faint.Render("[") + s.ed.input.View(t) + t.Faint.Render("]")
 		case on:
 			note = t.Body.Render(settingsDays(days))
 		}
@@ -624,25 +626,25 @@ func (s *settingsScreen) choiceRow(c settingsChoice, on, current bool, labelW, w
 		tag = t.Faint.Render("default")
 	}
 
-	row := mark + t.radio(on, padRight(c.label, labelW))
+	row := mark + radio(t, on, ui.PadRight(c.label, labelW))
 
-	room := w - width(row) - 2
+	room := w - ui.Width(row) - 2
 	if tag != "" {
-		room -= width(tag) + 2
+		room -= ui.Width(tag) + 2
 	}
 
 	if note != "" && room > 0 {
-		row += "  " + truncate(note, room, g.Ellipsis)
+		row += "  " + ui.Truncate(note, room, g.Ellipsis)
 	}
 
 	if tag != "" {
 		row += "  " + tag
 	}
 
-	row = truncate(row, w, g.Ellipsis)
+	row = ui.Truncate(row, w, g.Ellipsis)
 
 	if current {
-		row = t.highlight(row, w, bgSel)
+		row = t.Highlight(row, w, ui.BgSel)
 	}
 
 	return row
@@ -655,7 +657,7 @@ func (s *settingsScreen) patternLines(w int, active bool) (out []string, at int)
 	g := t.Glyphs
 	snap := s.snap()
 	list := s.excludeList(snap)
-	numW := width(itoa(max(1, len(list)+1)))
+	numW := ui.Width(strconv.Itoa(max(1, len(list)+1)))
 	pad := strings.Repeat(" ", settingsMarkW+numW+2)
 
 	// An unknown list has no count: the reader failure is not zero
@@ -664,7 +666,7 @@ func (s *settingsScreen) patternLines(w int, active bool) (out []string, at int)
 
 	head := t.Heading.Render("PATTERNS")
 	if !unknown {
-		head += "  " + t.Faint.Render(itoa(len(list)))
+		head += "  " + t.Faint.Render(strconv.Itoa(len(list)))
 	}
 
 	out = []string{head}
@@ -677,16 +679,16 @@ func (s *settingsScreen) patternLines(w int, active bool) (out []string, at int)
 			at = len(out)
 		}
 
-		line := truncate(mark+t.Faint.Render(padLeft(itoa(n), numW))+"  "+text, w, g.Ellipsis)
+		line := ui.Truncate(mark+t.Faint.Render(ui.PadLeft(strconv.Itoa(n), numW))+"  "+text, w, g.Ellipsis)
 		if current {
-			line = t.highlight(line, w, bgSel)
+			line = t.Highlight(line, w, ui.BgSel)
 		}
 
 		out = append(out, line)
 	}
 
 	failure := func(text string) {
-		out = append(out, propIndent(pad, propNote(t, ToneFailure, text, w-width(pad)))...)
+		out = append(out, propIndent(pad, propNote(t, ui.ToneFailure, text, w-ui.Width(pad)))...)
 	}
 
 	pattern := s.ed.typing && s.ed.target == settingsInputPattern
@@ -694,9 +696,9 @@ func (s *settingsScreen) patternLines(w int, active bool) (out []string, at int)
 	for i, p := range list {
 		typing := pattern && s.ed.editIdx == i
 
-		text := t.Code.Render(oneLine(p))
+		text := t.Code.Render(ui.OneLine(p))
 		if typing {
-			text = s.ed.input.view(t)
+			text = s.ed.input.View(t)
 		}
 
 		row(i+1, text, active && s.ed.item == i)
@@ -712,7 +714,7 @@ func (s *settingsScreen) patternLines(w int, active bool) (out []string, at int)
 	adding := pattern && s.ed.editIdx < 0
 
 	if adding {
-		row(len(list)+1, s.ed.input.view(t), true)
+		row(len(list)+1, s.ed.input.View(t), true)
 
 		if s.ed.inputErr != "" {
 			failure(s.ed.inputErr)
@@ -739,7 +741,7 @@ func (s *settingsScreen) patternLines(w int, active bool) (out []string, at int)
 
 		line := mark + t.Success.Render(g.Add) + " " + t.Faint.Render("add a pattern")
 		if current {
-			line = t.highlight(line, w, bgSel)
+			line = t.Highlight(line, w, ui.BgSel)
 		}
 
 		out = append(out, line)
@@ -748,8 +750,8 @@ func (s *settingsScreen) patternLines(w int, active bool) (out []string, at int)
 	out = append(out, "", t.Heading.Render("FORMS"))
 
 	for _, form := range settingsForms {
-		out = append(out, integRow(t, cell(t.Code.Render(form[0]), settingsFormW),
-			cell(t.Muted.Render(form[1]), max(1, w-settingsFormW))))
+		out = append(out, integRow(t, ui.Cell(t.Code.Render(form[0]), settingsFormW),
+			ui.Cell(t.Muted.Render(form[1]), max(1, w-settingsFormW))))
 	}
 
 	return out, at
@@ -805,58 +807,58 @@ func (s *settingsScreen) valueLines(f settings.Field, st settings.FieldState, w 
 
 	// add renders one row. ToneAccent marks a command, which uses the
 	// code style of paths and commands.
-	add := func(label, value string, tone Tone) {
+	add := func(label, value string, tone ui.Tone) {
 		style := t.ToneStyle(tone)
-		if tone == ToneAccent {
+		if tone == ui.ToneAccent {
 			style = t.Code
 		}
 
 		out = append(out, integLabeled(t, label, settingsLabelW, value, style, w)...)
 	}
 
-	stored, storedTone := "not set", ToneUnsupported
+	stored, storedTone := "not set", ui.ToneUnsupported
 
 	switch {
 	case st.Stored.Present:
-		stored, storedTone = oneLine(st.Stored.Raw), ToneNeutral
+		stored, storedTone = ui.OneLine(st.Stored.Raw), ui.ToneNeutral
 
 		if stored == "" {
 			stored = "(no value)"
 		}
 	case !s.located(st):
 		// A block hides the key, so "not set" could be false.
-		stored, storedTone = "unknown", ToneUnknown
+		stored, storedTone = "unknown", ui.ToneUnknown
 	}
 
 	add("Stored", stored, storedTone)
 
 	if e, ok := s.drafts[f]; ok {
-		add("Draft", s.draftDetail(e), ToneAttention)
+		add("Draft", s.draftDetail(e), ui.ToneAttention)
 	}
 
-	add("Default", oneLine(st.Default), ToneNeutral)
+	add("Default", ui.OneLine(st.Default), ui.ToneNeutral)
 
-	effTone := ToneNeutral
+	effTone := ui.ToneNeutral
 	if st.Err != nil {
-		effTone = ToneFailure
+		effTone = ui.ToneFailure
 	}
 
-	add("Effective", oneLine(st.Effective), effTone)
-	add("Source", s.sourceText(st), ToneNeutral)
+	add("Effective", ui.OneLine(st.Effective), effTone)
+	add("Source", s.sourceText(st), ui.ToneNeutral)
 
 	if f == settings.AgentCLI && snap.InvocationErr == nil && len(snap.Invocation.Argv) > 0 {
-		add("Runs", settingsCommand(snap.Invocation.Argv, snap.Root), ToneAccent)
+		add("Runs", settingsCommand(snap.Invocation.Argv, snap.Root), ui.ToneAccent)
 	}
 
 	if f == settings.ReviewWindow && st.Err == nil {
 		// Unsaved drafts never affect a run, so the next refresh uses
 		// the saved value.
-		add("Next refresh", oneLine(st.Effective)+", the saved value", ToneNeutral)
+		add("Next refresh", ui.OneLine(st.Effective)+", the saved value", ui.ToneNeutral)
 	}
 
 	if st.Err != nil {
 		out = append(out, "")
-		out = append(out, propNote(t, ToneFailure, "Seamark cannot read this value: "+errText(st.Err), w)...)
+		out = append(out, propNote(t, ui.ToneFailure, "Seamark cannot read this value: "+ui.ErrText(st.Err), w)...)
 	}
 
 	return out
@@ -872,9 +874,9 @@ func (s *settingsScreen) sourceText(st settings.FieldState) string {
 	case st.Source == settings.SourceShadowed:
 		return "overridden by agent.argv"
 	case st.Source == settings.SourceFile:
-		return settingsFile + ", line " + itoa(st.Stored.Line)
+		return settingsFile + ", line " + strconv.Itoa(st.Stored.Line)
 	case st.Stored.Present:
-		return "built-in default; the key in line " + itoa(st.Stored.Line) + " has no value"
+		return "built-in default; the key in line " + strconv.Itoa(st.Stored.Line) + " has no value"
 	case !s.located(st):
 		return "unknown while the group is not editable"
 	case !snap.Guard.Exists:

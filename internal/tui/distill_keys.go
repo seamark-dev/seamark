@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file handles the keys of a distillation record and names them in
@@ -15,7 +16,7 @@ import (
 
 // distKeys are the letter keys of a distillation record that an
 // extraction does not bind; agentKeys holds the shared letters. The
-// other keys come from nkeys, so every list moves the same way. The
+// other keys come from ui.Nav, so every list moves the same way. The
 // switch keys of Lessons (p, m, s, e, u) stay free, because Lessons
 // switches its sub-views with them.
 var distKeys = struct {
@@ -33,8 +34,8 @@ func (d *distRecord) key(msg tea.KeyMsg) tea.Cmd {
 	case stepScope:
 		return d.scopeKey(msg)
 	case stepPreparing:
-		if key.Matches(msg, nkeys.Back, distKeys.Back) {
-			d.backToScope(ToneNeutral, "")
+		if key.Matches(msg, ui.Nav.Back, distKeys.Back) {
+			d.backToScope(ui.ToneNeutral, "")
 		}
 	case stepPreview:
 		return d.previewKey(msg)
@@ -67,18 +68,18 @@ func (d *distRecord) scopeKey(msg tea.KeyMsg) tea.Cmd {
 		// limit choice from before it. A cancelled edit changes nothing.
 		// enter ends the edit, so the form now checks the number.
 		switch {
-		case key.Matches(msg, nkeys.Back):
+		case key.Matches(msg, ui.Nav.Back):
 			f.limit = f.limitWas
-		case key.Matches(msg, nkeys.Enter):
+		case key.Matches(msg, ui.Nav.Enter):
 			f.customChecked = true
 		}
 
 		return d.editKey(msg, &f.custom, &f.customWas, &f.editCustom)
 	case f.about:
-		if key.Matches(msg, nkeys.Back, distKeys.About) {
+		if key.Matches(msg, ui.Nav.Back, distKeys.About) {
 			f.about = false
 		} else {
-			f.aboutSc.key(msg)
+			f.aboutSc.Key(msg)
 		}
 
 		return nil
@@ -87,21 +88,21 @@ func (d *distRecord) scopeKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, agentKeys.Link):
 		return d.follow()
-	case key.Matches(msg, nkeys.Up):
+	case key.Matches(msg, ui.Nav.Up):
 		f.row = max(0, f.row-1)
-	case key.Matches(msg, nkeys.Down):
+	case key.Matches(msg, ui.Nav.Down):
 		f.row = min(distRowCount-1, f.row+1)
 	case key.Matches(msg, distKeys.Region):
 		d.editRegion()
-	case key.Matches(msg, nkeys.Toggle):
+	case key.Matches(msg, ui.Nav.Toggle):
 		d.choose()
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		return d.startPlan()
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		return d.close()
 	case key.Matches(msg, distKeys.About):
 		f.about = !d.st.wide()
-		f.aboutSc = scrollState{}
+		f.aboutSc = ui.ScrollState{}
 	}
 
 	return nil
@@ -109,15 +110,15 @@ func (d *distRecord) scopeKey(msg tea.KeyMsg) tea.Cmd {
 
 // editKey handles an open input: enter keeps the value, esc restores
 // the value from before the edit.
-func (d *distRecord) editKey(msg tea.KeyMsg, in *lineInput, was *string, open *bool) tea.Cmd {
+func (d *distRecord) editKey(msg tea.KeyMsg, in *ui.LineInput, was *string, open *bool) tea.Cmd {
 	switch {
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		*open = false
-	case key.Matches(msg, nkeys.Back):
-		in.set(*was)
+	case key.Matches(msg, ui.Nav.Back):
+		in.Set(*was)
 		*open = false
 	default:
-		in.key(msg)
+		in.Key(msg)
 	}
 
 	return nil
@@ -127,7 +128,7 @@ func (d *distRecord) editKey(msg tea.KeyMsg, in *lineInput, was *string, open *b
 func (d *distRecord) editRegion() {
 	f := &d.form
 	f.row = distRowRegion
-	f.regionWas = f.region.value()
+	f.regionWas = f.region.Value()
 	f.editRegion = true
 }
 
@@ -146,7 +147,7 @@ func (d *distRecord) choose() {
 	case distRowCustom:
 		f.limitWas = f.limit
 		f.limit = distLimitCustom
-		f.customWas = f.custom.value()
+		f.customWas = f.custom.Value()
 		f.editCustom = true
 		f.customChecked = false
 	case distRowAll:
@@ -198,14 +199,14 @@ func (d *distRecord) follow() tea.Cmd {
 func (d *distRecord) linkKey() key.Binding {
 	to, name, ok := d.blockerLink()
 
-	b := withHelp(agentKeys.Link, "o", "open "+name)
+	b := ui.WithHelp(agentKeys.Link, "o", "open "+name)
 
 	switch {
 	case d.st.wide():
 	case to.dest == destOverview:
-		b = withHelp(agentKeys.Link, "o", "overview")
+		b = ui.WithHelp(agentKeys.Link, "o", "overview")
 	default:
-		b = withHelp(agentKeys.Link, "o", "settings")
+		b = ui.WithHelp(agentKeys.Link, "o", "settings")
 	}
 
 	b.SetEnabled(ok)
@@ -229,10 +230,10 @@ func (d *distRecord) previewKey(msg tea.KeyMsg) tea.Cmd {
 		switch {
 		case key.Matches(msg, agentKeys.Start):
 			return d.cleanup()
-		case key.Matches(msg, nkeys.Back):
+		case key.Matches(msg, ui.Nav.Back):
 			d.clean.ask = false
 		default:
-			d.clean.scroll.key(msg)
+			d.clean.scroll.Key(msg)
 		}
 
 		return nil
@@ -248,19 +249,19 @@ func (d *distRecord) previewKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, agentKeys.Link):
 		return d.follow()
 	case key.Matches(msg, distKeys.Back):
-		d.backToScope(ToneNeutral, "")
-	case key.Matches(msg, nkeys.Back):
+		d.backToScope(ui.ToneNeutral, "")
+	case key.Matches(msg, ui.Nav.Back):
 		return d.close()
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		if !d.runnable() {
 			return d.startPlan()
 		}
 	case key.Matches(msg, distKeys.Cleanup):
 		if d.cleanable() {
 			d.clean.ask = true
-			d.clean.scroll = scrollState{}
+			d.clean.scroll = ui.ScrollState{}
 		}
-	case key.Matches(msg, nkeys.Next, nkeys.Prev):
+	case key.Matches(msg, ui.Nav.Next, ui.Nav.Prev):
 		switch {
 		case !d.hasGroups():
 		case d.st.wide():
@@ -308,7 +309,7 @@ func (d *distRecord) previewMove(msg tea.KeyMsg) {
 	pl := &d.prev
 
 	if d.planKeys() {
-		pl.notes.key(msg)
+		pl.notes.Key(msg)
 
 		return
 	}
@@ -319,7 +320,7 @@ func (d *distRecord) previewMove(msg tea.KeyMsg) {
 		return
 	}
 
-	if pl.list.key(msg) {
+	if pl.list.Key(msg) {
 		pl.follow = false
 	}
 }
@@ -332,7 +333,7 @@ func (d *distRecord) runKey(msg tea.KeyMsg) tea.Cmd {
 		switch {
 		case key.Matches(msg, agentKeys.Start):
 			return d.stop()
-		case key.Matches(msg, nkeys.Back):
+		case key.Matches(msg, ui.Nav.Back):
 			r.stopAsk = false
 		}
 
@@ -356,13 +357,13 @@ func (d *distRecord) runKey(msg tea.KeyMsg) tea.Cmd {
 // repeats the run.
 func (d *distRecord) resultKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		if len(d.newIDs()) > 0 {
 			return navigate(destLessons, "proposals:run")
 		}
 	case key.Matches(msg, distKeys.Back):
 		return openRun(newDistillFrom(d.st, d.req), true)
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		return navigate(destLessons, "evidence")
 	default:
 		d.runMove(msg)
@@ -376,7 +377,7 @@ func (d *distRecord) resultKey(msg tea.KeyMsg) tea.Cmd {
 func (d *distRecord) runMove(msg tea.KeyMsg) {
 	r := &d.run
 
-	if key.Matches(msg, nkeys.Next, nkeys.Prev) {
+	if key.Matches(msg, ui.Nav.Next, ui.Nav.Prev) {
 		if d.st.wide() {
 			r.sumFocus = !r.sumFocus
 		} else {
@@ -387,7 +388,7 @@ func (d *distRecord) runMove(msg tea.KeyMsg) {
 	}
 
 	if d.st.wide() && r.sumFocus {
-		r.summary.key(msg)
+		r.summary.Key(msg)
 
 		return
 	}
@@ -398,7 +399,7 @@ func (d *distRecord) runMove(msg tea.KeyMsg) {
 		return
 	}
 
-	if r.list.key(msg) {
+	if r.list.Key(msg) {
 		r.follow = false
 	}
 }
@@ -410,7 +411,7 @@ func (d *distRecord) keys() []key.Binding {
 	case stepScope:
 		return d.scopeKeys()
 	case stepPreparing:
-		return []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "cancel")}
 	case stepPreview:
 		return d.previewKeys()
 	case stepRunning:
@@ -428,27 +429,27 @@ func (d *distRecord) scopeKeys() []key.Binding {
 	f := &d.form
 
 	if f.editRegion || f.editCustom {
-		return []key.Binding{withHelp(nkeys.Enter, "enter", "done"), withHelp(nkeys.Back, "esc", "cancel")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "done"), ui.WithHelp(ui.Nav.Back, "esc", "cancel")}
 	}
 
 	if f.about && !d.st.wide() {
-		return []key.Binding{withHelp(distKeys.About, "i", "back to the form")}
+		return []key.Binding{ui.WithHelp(distKeys.About, "i", "back to the form")}
 	}
 
-	plan := withHelp(nkeys.Enter, "enter", "review plan")
+	plan := ui.WithHelp(ui.Nav.Enter, "enter", "review plan")
 	if !d.st.wide() {
-		plan = withHelp(nkeys.Enter, "enter", "plan")
+		plan = ui.WithHelp(ui.Nav.Enter, "enter", "plan")
 	}
 
 	_, reason := d.request()
 	plan.SetEnabled(reason == "")
 
-	about := withHelp(distKeys.About, "i", "about")
+	about := ui.WithHelp(distKeys.About, "i", "about")
 	about.SetEnabled(!d.st.wide())
 
 	return []key.Binding{
-		plan, d.linkKey(), withHelp(nkeys.Down, "↑↓", "move"), withHelp(nkeys.Toggle, "space", "choose"),
-		withHelp(distKeys.Region, "/", "region"), about, withHelp(nkeys.Back, "esc", "close"),
+		plan, d.linkKey(), ui.WithHelp(ui.Nav.Down, "↑↓", "move"), ui.WithHelp(ui.Nav.Toggle, "space", "choose"),
+		ui.WithHelp(distKeys.Region, "/", "region"), about, ui.WithHelp(ui.Nav.Back, "esc", "close"),
 	}
 }
 
@@ -458,38 +459,38 @@ func (d *distRecord) previewKeys() []key.Binding {
 
 	switch {
 	case d.clean.ask:
-		return []key.Binding{withHelp(agentKeys.Start, "y", "remove"), withHelp(nkeys.Back, "esc", "keep")}
+		return []key.Binding{ui.WithHelp(agentKeys.Start, "y", "remove"), ui.WithHelp(ui.Nav.Back, "esc", "keep")}
 	case d.clean.running:
 		return nil
 	case d.runnable():
-		move, pane := withHelp(nkeys.Down, "↑↓", "group"), withHelp(nkeys.Next, "tab", "plan")
+		move, pane := ui.WithHelp(ui.Nav.Down, "↑↓", "group"), ui.WithHelp(ui.Nav.Next, "tab", "plan")
 		if d.planKeys() {
-			move, pane = withHelp(nkeys.Down, "↑↓", "scroll"), withHelp(nkeys.Next, "tab", "groups")
+			move, pane = ui.WithHelp(ui.Nav.Down, "↑↓", "scroll"), ui.WithHelp(ui.Nav.Next, "tab", "groups")
 		}
 
 		// y comes first, so it survives when a narrow footer drops
 		// hints from the end.
 		return []key.Binding{
-			withHelp(agentKeys.Start, "y", "start run"), withHelp(distKeys.Back, "n", "back"), pane, move,
-			withHelp(nkeys.PageDown, "pgup/pgdn", "scroll"), withHelp(nkeys.Back, "esc", "cancel"),
+			ui.WithHelp(agentKeys.Start, "y", "start run"), ui.WithHelp(distKeys.Back, "n", "back"), pane, move,
+			ui.WithHelp(ui.Nav.PageDown, "pgup/pgdn", "scroll"), ui.WithHelp(ui.Nav.Back, "esc", "cancel"),
 		}
 	case d.cleanable():
 		return []key.Binding{
-			withHelp(distKeys.Cleanup, "c", "clean up"), withHelp(distKeys.Back, "n", "back"),
-			withHelp(nkeys.Back, "esc", "close"),
+			ui.WithHelp(distKeys.Cleanup, "c", "clean up"), ui.WithHelp(distKeys.Back, "n", "back"),
+			ui.WithHelp(ui.Nav.Back, "esc", "close"),
 		}
 	}
 
-	scroll := withHelp(nkeys.Down, "↑↓", "scroll")
-	scroll.SetEnabled(pl.notes.scrolls())
+	scroll := ui.WithHelp(ui.Nav.Down, "↑↓", "scroll")
+	scroll.SetEnabled(pl.notes.Scrolls())
 
-	again := withHelp(nkeys.Enter, "enter", "plan again")
+	again := ui.WithHelp(ui.Nav.Enter, "enter", "plan again")
 	if !d.st.wide() {
-		again = withHelp(nkeys.Enter, "enter", "plan")
+		again = ui.WithHelp(ui.Nav.Enter, "enter", "plan")
 	}
 
 	return []key.Binding{
-		again, d.linkKey(), withHelp(distKeys.Back, "n", "back"), withHelp(nkeys.Back, "esc", "close"), scroll,
+		again, d.linkKey(), ui.WithHelp(distKeys.Back, "n", "back"), ui.WithHelp(ui.Nav.Back, "esc", "close"), scroll,
 	}
 }
 
@@ -498,29 +499,29 @@ func (d *distRecord) previewKeys() []key.Binding {
 // one short hint fits (design map §6).
 func (d *distRecord) runKeys() []key.Binding {
 	if d.run.stopAsk {
-		return []key.Binding{withHelp(agentKeys.Start, "y", "stop the run"), withHelp(nkeys.Back, "esc", "keep running")}
+		return []key.Binding{ui.WithHelp(agentKeys.Start, "y", "stop the run"), ui.WithHelp(ui.Nav.Back, "esc", "keep running")}
 	}
 
-	stop := withHelp(agentKeys.Stop, "x", "stop")
+	stop := ui.WithHelp(agentKeys.Stop, "x", "stop")
 	stop.SetEnabled(!d.stopping())
 
-	return []key.Binding{stop, withHelp(nkeys.Down, "↑↓", "group"), d.paneKey()}
+	return []key.Binding{stop, ui.WithHelp(ui.Nav.Down, "↑↓", "group"), d.paneKey()}
 }
 
 // resultKeys names the keys of the result. enter shows only with new
 // proposals to review. A compact footer has room for a short label only;
 // the NEXT block in the box keeps the whole sentence.
 func (d *distRecord) resultKeys() []key.Binding {
-	review := withHelp(nkeys.Enter, "enter", "review proposals")
+	review := ui.WithHelp(ui.Nav.Enter, "enter", "review proposals")
 	if !d.st.wide() {
-		review = withHelp(nkeys.Enter, "enter", "review")
+		review = ui.WithHelp(ui.Nav.Enter, "enter", "review")
 	}
 
 	review.SetEnabled(len(d.newIDs()) > 0)
 
 	return []key.Binding{
-		review, withHelp(distKeys.Back, "n", "plan again"), withHelp(nkeys.Down, "↑↓", "group"), d.paneKey(),
-		withHelp(nkeys.Back, "esc", "close"),
+		review, ui.WithHelp(distKeys.Back, "n", "plan again"), ui.WithHelp(ui.Nav.Down, "↑↓", "group"), d.paneKey(),
+		ui.WithHelp(ui.Nav.Back, "esc", "close"),
 	}
 }
 
@@ -528,10 +529,10 @@ func (d *distRecord) resultKeys() []key.Binding {
 func (d *distRecord) paneKey() key.Binding {
 	switch {
 	case d.st.wide():
-		return withHelp(nkeys.Next, "tab", "pane")
+		return ui.WithHelp(ui.Nav.Next, "tab", "pane")
 	case d.run.detail:
-		return withHelp(nkeys.Next, "tab", "summary")
+		return ui.WithHelp(ui.Nav.Next, "tab", "summary")
 	default:
-		return withHelp(nkeys.Next, "tab", "groups")
+		return ui.WithHelp(ui.Nav.Next, "tab", "groups")
 	}
 }

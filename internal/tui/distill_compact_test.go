@@ -12,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests in this file cover the small layouts of a distillation: the
@@ -28,7 +29,7 @@ func distFooterHead(h *harness) string {
 func distASCIIOpen(t *testing.T, f *fakeServices, w, hh int) *harness {
 	t.Helper()
 
-	h := &harness{t: t, m: newModel(f, newTheme(true))}
+	h := &harness{t: t, m: newModel(f, ui.NewTheme(true))}
 	h.run(h.m.Init())
 	h.send(teaSize(w, hh))
 	h.send(navigateMsg{dest: destLessons, intent: "distill"})
@@ -219,7 +220,7 @@ func TestDistillStopQuestionKeepsTheQuitWidth(t *testing.T) {
 		require.True(t, ok)
 
 		for _, line := range strings.Split(block, "\n") {
-			assert.LessOrEqual(t, width(line), 64, "size %v: the stop question is at most 64 cells wide", size)
+			assert.LessOrEqual(t, ui.Width(line), 64, "size %v: the stop question is at most 64 cells wide", size)
 		}
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // TestCapturePins writes the Pins scenes (70 to 79) at every capture
@@ -31,7 +32,7 @@ func TestCapturePins(t *testing.T) {
 			f := sc.fake()
 			f.settings = snap
 
-			hs := &harness{t: t, m: newModel(f, newTheme(sc.ascii))}
+			hs := &harness{t: t, m: newModel(f, ui.NewTheme(sc.ascii))}
 			hs.run(hs.m.Init())
 			hs.send(teaSize(w, h))
 			hs.press("3", "m")
@@ -79,7 +80,7 @@ func pinsCaptureScenes() []captureScene {
 		return func(h *harness) {
 			pinsCursorTo(h, n)
 
-			if h.m.st.width >= wideWidth {
+			if h.m.st.width >= ui.WideWidth {
 				h.press("tab")
 			} else {
 				h.press("enter")

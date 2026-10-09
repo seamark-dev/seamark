@@ -3,6 +3,7 @@ package tui
 import (
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -16,6 +17,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file holds the state and the key handling of Lessons › Pins. The
@@ -195,13 +197,13 @@ func (p *pinsView) editBlock(pin *maintain.Pin) string {
 	case !pinLinked(pin):
 		return "it has " + pinLinkNoun(pin.Link.Link)
 	case pin.Entry.Block != "":
-		return "the entry cannot be edited safely (" + diag(pin.Entry.Block) + ")"
+		return "the entry cannot be edited safely (" + ui.Diag(pin.Entry.Block) + ")"
 	case in == nil || in.Doc == nil:
 		return "the pin file is not read"
 	case pinsForeignRoot(p.st) != "":
-		return "the index records another repository, " + oneLine(pinsForeignRoot(p.st))
+		return "the index records another repository, " + ui.OneLine(pinsForeignRoot(p.st))
 	case in.Doc.FileBlock != "":
-		return "the pin file cannot be edited (" + diag(in.Doc.FileBlock) + ")"
+		return "the pin file cannot be edited (" + ui.Diag(in.Doc.FileBlock) + ")"
 	}
 
 	return ""
@@ -281,7 +283,7 @@ func pinTargetOwner(in *maintain.Inspection, pin *maintain.Pin, regions []string
 
 	for i := range in.Pins {
 		if e := in.Pins[i].Entry; e.Index != pin.Entry.Index && e.Key == target {
-			return "pin " + itoa(i+1) + pinLineSuffix(e) + " already has this rule with the computed regions"
+			return "pin " + strconv.Itoa(i+1) + pinLineSuffix(e) + " already has this rule with the computed regions"
 		}
 	}
 
@@ -320,7 +322,7 @@ func pinLineSuffix(e pinfile.Entry) string {
 		return ""
 	}
 
-	return " (line " + itoa(e.Line) + ")"
+	return " (line " + strconv.Itoa(e.Line) + ")"
 }
 
 // pinExtractBlock returns why a trigger extraction of pin asks nothing,
@@ -526,13 +528,13 @@ func (p *pinsView) browseKey(msg tea.KeyMsg) tea.Cmd {
 	rows := p.rows()
 
 	switch {
-	case key.Matches(msg, nkeys.Toggle):
+	case key.Matches(msg, ui.Nav.Toggle):
 		p.toggle(rows)
 	case key.Matches(msg, lesKeys.Clear):
 		if len(p.selected) > 0 {
 			p.selected = pinMarks{}
 
-			return toast(ToneNeutral, "Selection cleared.")
+			return toast(ui.ToneNeutral, "Selection cleared.")
 		}
 	case key.Matches(msg, lesKeys.State):
 		if p.inspection() == nil {
@@ -590,7 +592,7 @@ func (p *pinsView) toggle(rows []pinRow) {
 // changed by accident, so the clearing is announced.
 func (p *pinsView) filterChanged() tea.Cmd {
 	if note := p.applyFilter(); note != "" {
-		return toast(ToneAttention, note)
+		return toast(ui.ToneAttention, note)
 	}
 
 	return nil
@@ -602,7 +604,7 @@ func (p *pinsView) filterChanged() tea.Cmd {
 // offset, so the reset stays here and not in listPane.
 func (p *pinsView) applyFilter() string {
 	p.relocate(p.rows(), false)
-	p.detail = scrollState{}
+	p.detail = ui.ScrollState{}
 
 	if len(p.selected) == 0 {
 		return ""
@@ -690,11 +692,11 @@ func (p *pinsView) refusal(action string, block func(*maintain.Pin) string) tea.
 
 	switch {
 	case len(pins) == 0:
-		return toast(ToneNeutral, p.noTarget(action))
+		return toast(ui.ToneNeutral, p.noTarget(action))
 	case cursor:
-		return toast(ToneNeutral, pinRefusal(action, block(pins[0]), p.quoteRule(pins[0].Entry.Rule)))
+		return toast(ui.ToneNeutral, pinRefusal(action, block(pins[0]), p.quoteRule(pins[0].Entry.Rule)))
 	default:
-		return toast(ToneNeutral, pinRefusal(action, block(pins[0]), p.quoteRule(pins[0].Entry.Rule)+", "+
+		return toast(ui.ToneNeutral, pinRefusal(action, block(pins[0]), p.quoteRule(pins[0].Entry.Rule)+", "+
 			pinSelectionNoun(len(pins))))
 	}
 }
@@ -714,7 +716,7 @@ func pinSelectionNoun(n int) string {
 		return "the selected pin"
 	}
 
-	return "the first of " + itoa(n) + " selected pins"
+	return "the first of " + strconv.Itoa(n) + " selected pins"
 }
 
 // requestMaint sends the preview request of action a over the targets. The
@@ -787,12 +789,12 @@ const pinNoteRuleW = 40
 // quoteRule renders a rule in quotes for a sentence, sanitized and cut to
 // a readable length.
 func (p *pinsView) quoteRule(rule string) string {
-	r := oneLine(rule)
+	r := ui.OneLine(rule)
 	if r == "" {
 		r = "(no rule)"
 	}
 
-	return `"` + truncate(r, pinNoteRuleW, p.st.theme.Glyphs.Ellipsis) + `"`
+	return `"` + ui.Truncate(r, pinNoteRuleW, p.st.theme.Glyphs.Ellipsis) + `"`
 }
 
 // noTarget explains in one line why the list offers no target for
@@ -915,7 +917,7 @@ func (p *pinsView) reconcile() tea.Cmd {
 	}
 
 	if len(notes) > 0 {
-		cmds = append(cmds, toast(ToneAttention, strings.Join(notes, "; ")))
+		cmds = append(cmds, toast(ui.ToneAttention, strings.Join(notes, "; ")))
 	}
 
 	return tea.Batch(cmds...)
@@ -1032,7 +1034,7 @@ func (p *pinsView) focus(id int64) tea.Cmd {
 		}
 	}
 
-	return toast(ToneNeutral, "No installed pin links "+propID(id)+" now.")
+	return toast(ui.ToneNeutral, "No installed pin links "+propID(id)+" now.")
 }
 
 // focusRow shows row under filter f and puts the cursor on it. A filter
@@ -1073,7 +1075,7 @@ func (p *pinsView) focusRow(row pinRow, f pinFilter) tea.Cmd {
 		return nil
 	}
 
-	return toast(ToneAttention, strings.Join(notes, "; "))
+	return toast(ui.ToneAttention, strings.Join(notes, "; "))
 }
 
 // keys returns the keys of the open preview, of the focused input or
@@ -1105,7 +1107,7 @@ func (p *pinsView) keys() []key.Binding {
 	rows := p.rows()
 	cur, hasRow := p.cursorRow(rows)
 
-	sel := withHelp(nkeys.Toggle, "space", "select")
+	sel := ui.WithHelp(ui.Nav.Toggle, "space", "select")
 	sel.SetEnabled(hasRow && cur.pin != nil && p.actionable())
 
 	var on, off []key.Binding
@@ -1122,21 +1124,21 @@ func (p *pinsView) keys() []key.Binding {
 		if a.ok {
 			on = append(on, a.b)
 		} else {
-			off = append(off, unavailable(a.b))
+			off = append(off, ui.Unavailable(a.b))
 		}
 	}
 
 	// The label names what x clears, because the help lists x also when
 	// nothing is selected.
-	clearSel := withHelp(lesKeys.Clear, "x", "clear marks")
+	clearSel := ui.WithHelp(lesKeys.Clear, "x", "clear marks")
 	clearSel.SetEnabled(len(p.selected) > 0)
 
 	loaded := in != nil
 
-	show := withHelp(lesKeys.State, "f", "show")
+	show := ui.WithHelp(lesKeys.State, "f", "show")
 	show.SetEnabled(loaded)
 
-	region := withHelp(lesKeys.Region, "/", "region")
+	region := ui.WithHelp(lesKeys.Region, "/", "region")
 	region.SetEnabled(loaded)
 
 	search := pinKeys.Search
@@ -1159,5 +1161,5 @@ func (p *pinsView) helpKeys() []key.Binding {
 		return p.keys()
 	}
 
-	return listAll(p.keys())
+	return ui.ListAll(p.keys())
 }

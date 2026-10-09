@@ -10,6 +10,7 @@ import (
 
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the Proposals list: the region and rule columns, the
@@ -75,14 +76,14 @@ func TestProposalsRuleOfTheColumnWidthKeepsAGap(t *testing.T) {
 	p := lesProps(h)
 	t.Cleanup(func() { assert.Empty(t, f.called()) })
 
-	c := p.columns(p.rows(), boxInner(62))
+	c := p.columns(p.rows(), ui.BoxInner(62))
 	require.Positive(t, c.regW)
 
 	pr := domain.Proposal{ID: 2, Rule: strings.Repeat("r", c.ruleW), Regions: []string{"pkg/retry"}}
 	row := ansi.Strip(c.row(h.m.st.theme, pr, false, false, ""))
 
 	assert.Contains(t, row, "r… pkg/retry", "a full rule keeps one blank cell before the region")
-	assert.Equal(t, width(c.header(h.m.st.theme)), width(row), "the row keeps the column widths")
+	assert.Equal(t, ui.Width(c.header(h.m.st.theme)), ui.Width(row), "the row keeps the column widths")
 }
 
 // Trial finding: Proposals showed a superseded row with the filled dot
@@ -107,7 +108,7 @@ func TestProposalsSupersededUsesTheHollowGlyphOfPins(t *testing.T) {
 func lesOpenTheme(t *testing.T, f *fakeServices, ascii bool) *harness {
 	t.Helper()
 
-	h := &harness{t: t, m: newModel(f, newTheme(ascii))}
+	h := &harness{t: t, m: newModel(f, ui.NewTheme(ascii))}
 	h.run(h.m.Init())
 	h.resize(120, 40)
 	h.press("3")

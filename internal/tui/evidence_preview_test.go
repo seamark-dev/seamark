@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -248,10 +250,10 @@ func TestEvidencePreviewOfAnEngineNoCommitPlan(t *testing.T) {
 	require.Empty(t, plan.Head)
 	require.False(t, plan.Network)
 
-	will, wont, later := evEffects(newTheme(false), plan)
+	will, wont, later := evEffects(ui.NewTheme(false), plan)
 	assert.Empty(t, will, "no source can change evidence")
 	assert.Empty(t, later, "no later effect without a change")
-	assert.Contains(t, wont, "change the "+itoa(plan.Current.FixFindings)+
+	assert.Contains(t, wont, "change the "+strconv.Itoa(plan.Current.FixFindings)+
 		" stored local fix findings: no commit is reachable from HEAD")
 	assert.Contains(t, wont, "change the 2 stored review findings or the review lessons")
 
@@ -264,7 +266,7 @@ func TestEvidencePreviewOfAnEngineNoCommitPlan(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, plan.Network)
 
-	_, _, later = evEffects(newTheme(false), plan)
+	_, _, later = evEffects(ui.NewTheme(false), plan)
 	assert.NotEmpty(t, later, "the fetch can change evidence groups")
 }
 

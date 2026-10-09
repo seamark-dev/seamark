@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // runFake is a scripted run record. It records every message that
@@ -49,13 +51,13 @@ func (r *runFake) modal(w, h int) (string, bool) {
 		return "", false
 	}
 
-	return r.st.theme.modal(modalOpts{Title: r.overlay, Body: []string{"The fake overlay."}}, nil, w, h), true
+	return r.st.theme.Modal(ui.ModalOpts{Title: r.overlay, Body: []string{"The fake overlay."}}, nil, w, h), true
 }
 
 func (r *runFake) view(w, h int) string {
-	o := boxOpts{W: w, H: max(4, h-3), Focus: true, Title: r.st.theme.Title.Render("Fake run")}
+	o := ui.BoxOpts{W: w, H: max(4, h-3), Focus: true, Title: r.st.theme.Title.Render("Fake run")}
 
-	return strings.Join([]string{"", "", integBoxed(r.st.theme, o, ToneNeutral, r.name, "Fake record body.", "")}, "\n")
+	return strings.Join([]string{"", "", integBoxed(r.st.theme, o, ui.ToneNeutral, r.name, "Fake record body.", "")}, "\n")
 }
 
 func (r *runFake) generated() (ids []int64, label string, at time.Time) {
@@ -178,7 +180,7 @@ func TestRunViewKeepsFinishedRecordsAndDropsDrafts(t *testing.T) {
 	var recs []*runFake
 
 	for i := range runKeep + 2 {
-		rec := runRec(h, "Refresh "+itoa(i))
+		rec := runRec(h, "Refresh "+strconv.Itoa(i))
 		recs = append(recs, rec)
 		h.send(openRunMsg{rec: rec})
 	}
@@ -383,8 +385,8 @@ func TestRunViewStepsThroughEarlierRecordsReadOnly(t *testing.T) {
 	older := runRec(h, "Distillation 13:00")
 	older.ids, older.at = []int64{2}, end.Add(-time.Hour)
 	older.bindings = []key.Binding{
-		withHelp(nkeys.Enter, "enter", "review proposals"), withHelp(distKeys.Back, "n", "plan again"),
-		withHelp(nkeys.Down, "↑↓", "group"),
+		ui.WithHelp(ui.Nav.Enter, "enter", "review proposals"), ui.WithHelp(distKeys.Back, "n", "plan again"),
+		ui.WithHelp(ui.Nav.Down, "↑↓", "group"),
 	}
 	h.send(openRunMsg{rec: older})
 

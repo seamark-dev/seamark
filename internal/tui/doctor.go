@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -21,7 +23,7 @@ import (
 type doctorView struct {
 	st *state
 
-	list listState
+	list ui.ListState
 	// detailOff is the first visible line of the detail pane. It goes
 	// back to the top when the selection moves.
 	detailOff int
@@ -39,12 +41,12 @@ type doctorView struct {
 var docKeys = struct {
 	Move, Open, Pane, Scroll, Page, Back key.Binding
 }{
-	Move:   withHelp(nkeys.Down, "↑↓", "move"),
-	Open:   withHelp(nkeys.Enter, "enter", "open"),
-	Pane:   withHelp(nkeys.Next, "tab", "pane"),
-	Scroll: withHelp(nkeys.Down, "↑↓", "scroll"),
-	Page:   withHelp(nkeys.PageDown, "pgup pgdn", "scroll detail"),
-	Back:   withHelp(nkeys.Back, "esc", "back"),
+	Move:   ui.WithHelp(ui.Nav.Down, "↑↓", "move"),
+	Open:   ui.WithHelp(ui.Nav.Enter, "enter", "open"),
+	Pane:   ui.WithHelp(ui.Nav.Next, "tab", "pane"),
+	Scroll: ui.WithHelp(ui.Nav.Down, "↑↓", "scroll"),
+	Page:   ui.WithHelp(ui.Nav.PageDown, "pgup pgdn", "scroll detail"),
+	Back:   ui.WithHelp(ui.Nav.Back, "esc", "back"),
 }
 
 // docStateW is the width of the state column: "! warn" and one space.
@@ -91,7 +93,7 @@ func (d *doctorView) tabCount() string {
 		return ""
 	}
 
-	return itoa(r.Fails + r.Warns)
+	return strconv.Itoa(r.Fails + r.Warns)
 }
 
 // report returns the loaded doctor report, or nil when none is known.
@@ -135,7 +137,7 @@ func (d *doctorView) selectWanted() {
 
 	for i, c := range d.checks() {
 		if c.Name == d.want {
-			d.list.cursor = i
+			d.list.Cursor = i
 			d.detailOff = 0
 			d.want = ""
 
@@ -167,34 +169,34 @@ func (d *doctorView) key(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	switch {
-	case key.Matches(msg, nkeys.Next, nkeys.Prev):
+	case key.Matches(msg, ui.Nav.Next, ui.Nav.Prev):
 		if !d.narrow() {
 			d.focusDetail = !d.focusDetail
 		}
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		return d.enter()
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		d.detailShown = false
 		d.focusDetail = false
-	case key.Matches(msg, nkeys.PageDown):
+	case key.Matches(msg, ui.Nav.PageDown):
 		d.detailOff += 10
-	case key.Matches(msg, nkeys.PageUp):
+	case key.Matches(msg, ui.Nav.PageUp):
 		d.detailOff = max(0, d.detailOff-10)
-	case key.Matches(msg, nkeys.Up):
+	case key.Matches(msg, ui.Nav.Up):
 		if d.detailActive() {
 			d.detailOff = max(0, d.detailOff-1)
 		} else {
-			d.moveTo(d.list.cursor - 1)
+			d.moveTo(d.list.Cursor - 1)
 		}
-	case key.Matches(msg, nkeys.Down):
+	case key.Matches(msg, ui.Nav.Down):
 		if d.detailActive() {
 			d.detailOff++
 		} else {
-			d.moveTo(d.list.cursor + 1)
+			d.moveTo(d.list.Cursor + 1)
 		}
-	case key.Matches(msg, nkeys.Top):
+	case key.Matches(msg, ui.Nav.Top):
 		d.moveTo(0)
-	case key.Matches(msg, nkeys.Bottom):
+	case key.Matches(msg, ui.Nav.Bottom):
 		d.moveTo(n - 1)
 	}
 
@@ -229,7 +231,7 @@ func (d *doctorView) selected() (doctor.Check, bool) {
 		return doctor.Check{}, false
 	}
 
-	return checks[max(0, min(d.list.cursor, len(checks)-1))], true
+	return checks[max(0, min(d.list.Cursor, len(checks)-1))], true
 }
 
 // action returns the workflow of the selected check, or no action.
@@ -304,11 +306,11 @@ func (d *doctorView) moveTo(i int) {
 	n := len(d.checks())
 	i = max(0, min(i, n-1))
 
-	if i != d.list.cursor {
+	if i != d.list.Cursor {
 		d.detailOff = 0
 	}
 
-	d.list.cursor = i
+	d.list.Cursor = i
 }
 
 // keys returns the bindings of the visible state, so the footer never
@@ -325,7 +327,7 @@ func (d *doctorView) keys() []key.Binding {
 	open := docKeys.Open
 
 	if act.kind != ovActNone {
-		open = withHelp(nkeys.Enter, "enter", act.label)
+		open = ui.WithHelp(ui.Nav.Enter, "enter", act.label)
 	}
 
 	switch {
@@ -365,7 +367,7 @@ func (d *doctorView) view(w, h int) string {
 		return d.stateView(w, boxH)
 	}
 
-	if w < wideWidth {
+	if w < ui.WideWidth {
 		if d.detailShown {
 			return d.detailBox(w, boxH, true)
 		}
@@ -375,7 +377,7 @@ func (d *doctorView) view(w, h int) string {
 
 	lw := docListWidth(w)
 
-	return hjoin(1, d.listBox(lw, boxH, !d.focusDetail), d.detailBox(w-lw-1, boxH, d.focusDetail))
+	return ui.Hjoin(1, d.listBox(lw, boxH, !d.focusDetail), d.detailBox(w-lw-1, boxH, d.focusDetail))
 }
 
 // stateView renders the loading, error and unknown states in one box.
@@ -383,32 +385,32 @@ func (d *doctorView) view(w, h int) string {
 func (d *doctorView) stateView(w, h int) string {
 	t := d.st.theme
 	sec := &d.st.doctor
-	inner := boxInner(w)
-	rows := boxRows(h)
+	inner := ui.BoxInner(w)
+	rows := ui.BoxRows(h)
 
-	next := t.Faint.Render("same as ") + t.command("seamark doctor")
+	next := t.Faint.Render("same as ") + commandText(t, "seamark doctor")
 
 	var body string
 
 	switch {
 	case !sec.loaded && sec.err != nil:
-		body = t.empty(ToneFailure, "Could not run the doctor checks", errText(sec.err),
-			t.hints([]key.Binding{withHelp(gkeys.Refresh, "r", "run the checks again")})+"\n"+next, inner, rows)
+		body = t.Empty(ui.ToneFailure, "Could not run the doctor checks", ui.ErrText(sec.err),
+			t.Hints([]key.Binding{ui.WithHelp(gkeys.Refresh, "r", "run the checks again")})+"\n"+next, inner, rows)
 	case !sec.loaded:
-		body = t.empty(ToneNeutral, "Running the doctor checks"+t.Glyphs.Ellipsis,
+		body = t.Empty(ui.ToneNeutral, "Running the doctor checks"+t.Glyphs.Ellipsis,
 			"The checks read the binary, git, the index, the policy, the hooks and the agent tools. "+
 				"They change nothing.", next, inner, rows)
 	case sec.value == nil:
-		body = t.empty(ToneUnknown, "No doctor report",
+		body = t.Empty(ui.ToneUnknown, "No doctor report",
 			"The doctor checks returned no report, so the state of the installation is unknown.",
-			t.hints([]key.Binding{withHelp(gkeys.Refresh, "r", "run the checks again")})+"\n"+next, inner, rows)
+			t.Hints([]key.Binding{ui.WithHelp(gkeys.Refresh, "r", "run the checks again")})+"\n"+next, inner, rows)
 	default:
-		body = t.empty(ToneUnknown, "No doctor checks",
+		body = t.Empty(ui.ToneUnknown, "No doctor checks",
 			"The doctor report lists no check. The state of the installation is unknown, not healthy.",
-			t.hints([]key.Binding{withHelp(gkeys.Refresh, "r", "run the checks again")})+"\n"+next, inner, rows)
+			t.Hints([]key.Binding{ui.WithHelp(gkeys.Refresh, "r", "run the checks again")})+"\n"+next, inner, rows)
 	}
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: true, Lines: strings.Split(body, "\n"),
 		Title: t.Title.Render("Doctor checks"),
 	})
@@ -416,7 +418,7 @@ func (d *doctorView) stateView(w, h int) string {
 
 // docBadge renders a doctor state as a glyph and a word, so the state
 // reads without color: "✓ ok", "· info", "! warn", "! fail".
-func docBadge(t *Theme, state string) string {
+func docBadge(t *ui.Theme, state string) string {
 	g := t.Glyphs
 
 	switch state {
@@ -429,7 +431,7 @@ func docBadge(t *Theme, state string) string {
 	case doctor.StateFail:
 		return t.Failure.Render(g.Fail + " fail")
 	default:
-		return t.Unknown.Render(truncate(g.Unknown+" "+oneLine(state), docStateW-1, g.Ellipsis))
+		return t.Unknown.Render(ui.Truncate(g.Unknown+" "+ui.OneLine(state), docStateW-1, g.Ellipsis))
 	}
 }
 
@@ -445,7 +447,7 @@ func (d *doctorView) summary() string {
 	}
 
 	part := func(state, glyph string, style lipgloss.Style) string {
-		text := glyph + " " + itoa(counts[state]) + " " + state
+		text := glyph + " " + strconv.Itoa(counts[state]) + " " + state
 		if counts[state] == 0 {
 			return t.Faint.Render(text)
 		}
@@ -465,46 +467,46 @@ func (d *doctorView) listBox(w, h int, focus bool) string {
 	t := d.st.theme
 	g := t.Glyphs
 	checks := d.checks()
-	inner := boxInner(w)
-	rows := boxRows(h)
+	inner := ui.BoxInner(w)
+	rows := ui.BoxRows(h)
 
 	var lines []string
 
 	if sec := &d.st.doctor; sec.stale() {
-		lines = append(lines, t.Attention.Render(truncate(g.Warn+" stale: "+errText(sec.err)+" "+g.Sep+" r runs the checks again",
+		lines = append(lines, t.Attention.Render(ui.Truncate(g.Warn+" stale: "+ui.ErrText(sec.err)+" "+g.Sep+" r runs the checks again",
 			inner, g.Ellipsis)))
 	}
 
 	lines = append(lines, d.summary(), "")
 
 	window := max(1, rows-len(lines))
-	d.list.clamp(len(checks), window)
+	d.list.Clamp(len(checks), window)
 
 	nameW := 6
 	for _, c := range checks {
-		nameW = max(nameW, width(oneLine(c.Name)))
+		nameW = max(nameW, ui.Width(ui.OneLine(c.Name)))
 	}
 
 	nameW = min(nameW, max(6, inner/3))
 
-	end := min(len(checks), d.list.offset+window)
-	for i := d.list.offset; i < end; i++ {
-		lines = append(lines, d.row(checks[i], nameW, inner, i == d.list.cursor, focus))
+	end := min(len(checks), d.list.Offset+window)
+	for i := d.list.Offset; i < end; i++ {
+		lines = append(lines, d.row(checks[i], nameW, inner, i == d.list.Cursor, focus))
 	}
 
 	foot := ""
 
 	switch {
 	case len(checks) > window:
-		foot = propRange(t, d.list.offset, end, len(checks))
+		foot = t.RangeNote(d.list.Offset, end, len(checks))
 	case d.narrow():
 		foot = t.Faint.Render("enter for detail")
 	}
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: focus, Lines: lines, Foot: foot,
 		Title: t.Title.Render("Doctor checks"),
-		Right: t.Muted.Render(itoa(len(checks)) + " " + docPlural(len(checks), "check", "checks")),
+		Right: t.Muted.Render(strconv.Itoa(len(checks)) + " " + docPlural(len(checks), "check", "checks")),
 	})
 }
 
@@ -524,11 +526,11 @@ func (d *doctorView) row(c doctor.Check, nameW, inner int, selected, focus bool)
 
 	rest := max(1, inner-2-docStateW-nameW-docNameGap)
 
-	row := t.cols(cell(cursor, 2), cell(docBadge(t, c.State), docStateW), cell(name.Render(oneLine(c.Name)), nameW+docNameGap)) +
-		t.Muted.Render(truncate(diag(c.Detail), rest, g.Ellipsis))
+	row := t.Cols(ui.Cell(cursor, 2), ui.Cell(docBadge(t, c.State), docStateW), ui.Cell(name.Render(ui.OneLine(c.Name)), nameW+docNameGap)) +
+		t.Muted.Render(ui.Truncate(ui.Diag(c.Detail), rest, g.Ellipsis))
 
 	if selected && focus {
-		row = t.highlight(row, inner, bgSel)
+		row = t.Highlight(row, inner, ui.BgSel)
 	}
 
 	return row
@@ -542,8 +544,8 @@ func (d *doctorView) detailLines(c doctor.Check, inner int) []string {
 
 	lines := []string{docBadge(t, c.State) + "  " + t.Faint.Render(docMeaning[c.State]), ""}
 
-	if detail := diag(c.Detail); detail != "" {
-		lines = append(lines, strings.Split(t.Body.Render(wrap(detail, inner)), "\n")...)
+	if detail := ui.Diag(c.Detail); detail != "" {
+		lines = append(lines, strings.Split(t.Body.Render(ui.Wrap(detail, inner)), "\n")...)
 	} else {
 		lines = append(lines, t.Faint.Render("The check reports no detail."))
 	}
@@ -557,13 +559,13 @@ func (d *doctorView) detailLines(c doctor.Check, inner int) []string {
 
 	lines = append(lines, "", t.Heading.Render("FIX"))
 
-	switch fix := diag(c.Fix); {
+	switch fix := ui.Diag(c.Fix); {
 	case fix != "":
-		for _, l := range strings.Split(wrap(fix, inner), "\n") {
-			lines = append(lines, t.command(l))
+		for _, l := range strings.Split(ui.Wrap(fix, inner), "\n") {
+			lines = append(lines, commandText(t, l))
 		}
 
-		lines = append(lines, strings.Split(t.Faint.Render(wrap("Run it in a shell when you choose to. "+
+		lines = append(lines, strings.Split(t.Faint.Render(ui.Wrap("Run it in a shell when you choose to. "+
 			"The console never runs it.", inner)), "\n")...)
 	case c.State == doctor.StateOK || c.State == doctor.StateInfo:
 		lines = append(lines, t.Success.Render("No action needed."))
@@ -580,10 +582,10 @@ func (d *doctorView) detailBox(w, h int, focus bool) string {
 	t := d.st.theme
 	g := t.Glyphs
 	checks := d.checks()
-	inner := boxInner(w)
-	rows := boxRows(h)
+	inner := ui.BoxInner(w)
+	rows := ui.BoxRows(h)
 
-	c := checks[max(0, min(d.list.cursor, len(checks)-1))]
+	c := checks[max(0, min(d.list.Cursor, len(checks)-1))]
 	lines := d.detailLines(c, inner)
 
 	last := max(0, len(lines)-rows)
@@ -598,12 +600,12 @@ func (d *doctorView) detailBox(w, h int, focus bool) string {
 		foot = t.Faint.Render("↑ pgup")
 	}
 
-	title := t.Muted.Render(oneLine(c.Name))
+	title := t.Muted.Render(ui.OneLine(c.Name))
 	if focus {
-		title = t.Title.Render(oneLine(c.Name))
+		title = t.Title.Render(ui.OneLine(c.Name))
 	}
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: focus, Lines: lines[d.detailOff:], Foot: foot, Title: title,
 	})
 }

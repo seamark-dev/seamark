@@ -13,6 +13,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the apply preview of Lessons › Proposals: the folded pin
@@ -87,7 +88,7 @@ func TestLessonsFixPinFoldRoundTrips(t *testing.T) {
 				assert.Equal(t, want, lesFixParse(t, display), "display at %d", w)
 
 				for _, line := range got.lines {
-					if width(line) > w {
+					if ui.Width(line) > w {
 						assert.True(t, got.overflow, "a line wider than %d needs the overflow note: %q", w, line)
 					}
 				}

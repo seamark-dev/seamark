@@ -17,6 +17,7 @@ import (
 	smodel "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -222,13 +223,13 @@ func TestOverviewLinksUnresolvedAgentToInferenceSettings(t *testing.T) {
 func TestOverviewLinksConfigErrorsOpenTheirGroup(t *testing.T) {
 	cases := []struct {
 		name, yaml, key, intent string
-		tone                    Tone
+		tone                    ui.Tone
 	}{
-		{"agent section", "agent:\n  cli: [a, b]\n", "learn:agent", "group:inference", ToneFailure},
-		{"distill section", "distill:\n  write: maybe\n", "learn:config:distill", "group:pinwrite", ToneFailure},
-		{"exclude pattern", "index:\n  exclude:\n    - \"a/**/b\"\n", "learn:config:index", "group:indexing", ToneFailure},
-		{"review window", "reviews:\n  window_days: soon\n", "learn:config:index", "group:evidence", ToneFailure},
-		{"malformed file", "agent: [\n", "learn:config", "group:inference", ToneFailure},
+		{"agent section", "agent:\n  cli: [a, b]\n", "learn:agent", "group:inference", ui.ToneFailure},
+		{"distill section", "distill:\n  write: maybe\n", "learn:config:distill", "group:pinwrite", ui.ToneFailure},
+		{"exclude pattern", "index:\n  exclude:\n    - \"a/**/b\"\n", "learn:config:index", "group:indexing", ui.ToneFailure},
+		{"review window", "reviews:\n  window_days: soon\n", "learn:config:index", "group:evidence", ui.ToneFailure},
+		{"malformed file", "agent: [\n", "learn:config", "group:inference", ui.ToneFailure},
 	}
 
 	for _, tc := range cases {
@@ -367,7 +368,7 @@ func TestOverviewLinksRenderHostileTextInert(t *testing.T) {
 		h := newHarness(t, f, size[0], size[1])
 		ovSelect(t, h, "learn:config:distill")
 
-		if size[0] < wideWidth {
+		if size[0] < ui.WideWidth {
 			h.press("enter")
 		}
 
@@ -379,7 +380,7 @@ func TestOverviewLinksRenderHostileTextInert(t *testing.T) {
 }
 
 func TestOverviewLinksNarrowOpensTheDetailFirst(t *testing.T) {
-	for _, size := range [][2]int{{80, 24}, {minWidth, minHeight}} {
+	for _, size := range [][2]int{{80, 24}, {ui.MinWidth, ui.MinHeight}} {
 		f := ovPopulated()
 		f.learning = ovlEvidence(0, 0)
 
@@ -403,7 +404,7 @@ func TestOverviewLinksNarrowOpensTheDetailFirst(t *testing.T) {
 }
 
 func TestOverviewLinksFramesFitAtEverySize(t *testing.T) {
-	for _, size := range [][2]int{{120, 40}, {200, 50}, {100, 30}, {80, 24}, {minWidth, minHeight}} {
+	for _, size := range [][2]int{{120, 40}, {200, 50}, {100, 30}, {80, 24}, {ui.MinWidth, ui.MinHeight}} {
 		w, hgt := size[0], size[1]
 
 		f := ovPopulated()
@@ -427,7 +428,7 @@ func TestOverviewLinksFramesFitAtEverySize(t *testing.T) {
 }
 
 func TestOverviewLinksSummaryShowsEvidenceAndPinWriting(t *testing.T) {
-	for _, size := range [][2]int{{80, 24}, {minWidth, minHeight}} {
+	for _, size := range [][2]int{{80, 24}, {ui.MinWidth, ui.MinHeight}} {
 		w, hgt := size[0], size[1]
 
 		f := ovPopulated()

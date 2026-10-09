@@ -22,6 +22,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -964,7 +965,7 @@ func TestPinsHostileTextIsInertInEveryView(t *testing.T) {
 		f.pins.Pins[3].Entry.Regions = []string{"internal/\x1b]8;;evil\x07sql"}
 		f.pins.Links.NotPresent[0].Rule = "retired-\x1b[31mguidance"
 
-		h := &harness{t: t, m: newModel(f, newTheme(ascii))}
+		h := &harness{t: t, m: newModel(f, ui.NewTheme(ascii))}
 		h.run(h.m.Init())
 
 		for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 20}} {
@@ -1148,7 +1149,7 @@ func TestPinsCompareStaysOpenWhenThePinsOnlyMove(t *testing.T) {
 }
 
 func TestPinsStateLabelFitsItsColumnWithoutLosingWords(t *testing.T) {
-	theme := newTheme(false)
+	theme := ui.NewTheme(false)
 	ell := theme.Glyphs.Ellipsis
 	s := pinState{glyph: "!", lead: "p9", sep: " ", flags: []string{"blocked", "unknown key", "edited"}}
 

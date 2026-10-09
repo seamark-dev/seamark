@@ -2,12 +2,14 @@ package tui
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The setup wizard follows the shared setup engine: inspect, choose
@@ -153,14 +155,14 @@ type setupWizard struct {
 	// direct is true when the wizard opened with a client, so esc on the
 	// choice step closes the wizard instead of showing the client list.
 	direct bool
-	pick   listState
+	pick   ui.ListState
 
-	rows listState
+	rows ui.ListState
 	// aboutOpen shows the full explanation of the selected addition in
 	// its own scrolling box. A short terminal cannot show it beside or
 	// under the rows.
 	aboutOpen bool
-	about     textPager
+	about     ui.TextPager
 	// choice holds the user's explicit choices. A row without one uses
 	// its default, so late inspection data still gets defaults.
 	choice map[setupIntent]bool
@@ -179,7 +181,7 @@ type setupWizard struct {
 	planErr   error
 	// setups is the request of the current plan; plan again reuses it.
 	setups []integration.ClientSetup
-	paths  listState
+	paths  ui.ListState
 	// pathOpen shows the diff box of the selected path in the narrow
 	// layout.
 	pathOpen bool
@@ -190,7 +192,7 @@ type setupWizard struct {
 	// notes. The notes hold trust and scope findings, so they must stay
 	// reachable at every size.
 	notesFocus bool
-	pager      textPager
+	pager      ui.TextPager
 
 	result *setupOutcome
 	closed bool
@@ -255,7 +257,7 @@ func (wz *setupWizard) planned(msg setupPlannedMsg) {
 
 	wz.preparing = false
 	wz.preview, wz.planErr = msg.preview, msg.err
-	wz.paths = listState{}
+	wz.paths = ui.ListState{}
 	wz.pathOpen = false
 	wz.planOff = 0
 }
@@ -270,7 +272,7 @@ func (wz *setupWizard) finished(msg setupAppliedMsg, gen int) {
 
 	wz.step = setupStepResult
 	wz.result = &setupOutcome{res: msg.result, err: msg.err, gen: gen}
-	wz.pager = textPager{}
+	wz.pager = ui.TextPager{}
 }
 
 // inspection returns the current inspection of the wizard's client.
@@ -488,10 +490,10 @@ func (wz *setupWizard) plan(setups []integration.ClientSetup) tea.Cmd {
 
 	wz.step = setupStepPreview
 	wz.preparing, wz.preview, wz.planErr, wz.setups = true, nil, nil, setups
-	wz.paths = listState{}
+	wz.paths = ui.ListState{}
 	wz.pathOpen = false
 	wz.planOff = 0
-	wz.pager = textPager{}
+	wz.pager = ui.TextPager{}
 	wz.aboutOpen = false
 	wz.hint = ""
 
@@ -523,26 +525,26 @@ func (wz *setupWizard) key(msg tea.KeyMsg) tea.Cmd {
 
 func (wz *setupWizard) clientKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
-	case key.Matches(msg, nkeys.Up):
-		wz.pick.move(-1, len(wz.clients))
-	case key.Matches(msg, nkeys.Down):
-		wz.pick.move(1, len(wz.clients))
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Up):
+		wz.pick.Move(-1, len(wz.clients))
+	case key.Matches(msg, ui.Nav.Down):
+		wz.pick.Move(1, len(wz.clients))
+	case key.Matches(msg, ui.Nav.Enter):
 		if len(wz.clients) > 0 {
-			wz.pick.clamp(len(wz.clients), 0)
+			wz.pick.Clamp(len(wz.clients), 0)
 
 			// Explicit choices belong to one client; another client
 			// starts from its own defaults.
-			if next := wz.clients[wz.pick.cursor]; next.ID != wz.client.ID {
+			if next := wz.clients[wz.pick.Cursor]; next.ID != wz.client.ID {
 				wz.client = next
 				wz.choice = map[setupIntent]bool{}
-				wz.rows = listState{}
+				wz.rows = ui.ListState{}
 				wz.hint = ""
 			}
 
 			wz.step = setupStepChoices
 		}
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		wz.closed = true
 	}
 
@@ -557,20 +559,20 @@ func (wz *setupWizard) choicesKey(msg tea.KeyMsg) tea.Cmd {
 	rows := wz.currentRows()
 
 	switch {
-	case key.Matches(msg, nkeys.Up):
-		wz.rows.move(-1, len(rows))
-	case key.Matches(msg, nkeys.Down):
-		wz.rows.move(1, len(rows))
+	case key.Matches(msg, ui.Nav.Up):
+		wz.rows.Move(-1, len(rows))
+	case key.Matches(msg, ui.Nav.Down):
+		wz.rows.Move(1, len(rows))
 	case key.Matches(msg, setupKeys.Toggle):
 		if len(rows) == 0 {
 			return nil
 		}
 
-		wz.rows.clamp(len(rows), 0)
-		r := rows[wz.rows.cursor]
+		wz.rows.Clamp(len(rows), 0)
+		r := rows[wz.rows.Cursor]
 
 		if !r.selectable() {
-			return toast(ToneNeutral, wz.lockedReason(r))
+			return toast(ui.ToneNeutral, wz.lockedReason(r))
 		}
 
 		wz.choice[r.intent] = !wz.checked(r)
@@ -583,7 +585,7 @@ func (wz *setupWizard) choicesKey(msg tea.KeyMsg) tea.Cmd {
 		}
 
 		return wz.plan(wz.request())
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		if wz.direct {
 			wz.closed = true
 
@@ -599,13 +601,13 @@ func (wz *setupWizard) choicesKey(msg tea.KeyMsg) tea.Cmd {
 // aboutKey handles the keys while the detail box of the selected
 // addition is open. The box only reads, so it takes no action key.
 func (wz *setupWizard) aboutKey(msg tea.KeyMsg) tea.Cmd {
-	if key.Matches(msg, setupKeys.About, nkeys.Back) {
+	if key.Matches(msg, setupKeys.About, ui.Nav.Back) {
 		wz.aboutOpen = false
 
 		return nil
 	}
 
-	wz.about.key(msg)
+	wz.about.Key(msg)
 
 	return nil
 }
@@ -613,7 +615,7 @@ func (wz *setupWizard) aboutKey(msg tea.KeyMsg) tea.Cmd {
 // lockedReason explains why a locked row cannot change.
 func (wz *setupWizard) lockedReason(r setupRow) string {
 	if r.kind == setupRowUnsupported {
-		return setupIntentLabels[r.intent] + " is not supported by " + oneLine(wz.client.Name) + "."
+		return setupIntentLabels[r.intent] + " is not supported by " + ui.OneLine(wz.client.Name) + "."
 	}
 
 	return setupIntentLabels[r.intent] + " is already configured. Setup keeps it; it never uninstalls."
@@ -623,19 +625,19 @@ func (wz *setupWizard) lockedReason(r setupRow) string {
 func (wz *setupWizard) keys() []key.Binding {
 	switch wz.step {
 	case setupStepClient:
-		return []key.Binding{withHelp(nkeys.Down, "↑↓", "move"), withHelp(nkeys.Enter, "enter", "choose"),
-			withHelp(nkeys.Back, "esc", "close")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "move"), ui.WithHelp(ui.Nav.Enter, "enter", "choose"),
+			ui.WithHelp(ui.Nav.Back, "esc", "close")}
 	case setupStepChoices:
 		if wz.aboutOpen {
-			return []key.Binding{withHelp(nkeys.Down, "↑↓", "scroll"), withHelp(nkeys.Back, "esc", "choices")}
+			return []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "scroll"), ui.WithHelp(ui.Nav.Back, "esc", "choices")}
 		}
 
-		back := withHelp(nkeys.Back, "esc", "back")
+		back := ui.WithHelp(ui.Nav.Back, "esc", "back")
 		if wz.direct {
-			back = withHelp(nkeys.Back, "esc", "close")
+			back = ui.WithHelp(ui.Nav.Back, "esc", "close")
 		}
 
-		return []key.Binding{withHelp(nkeys.Down, "↑↓", "move"), setupKeys.Toggle, setupKeys.Continue,
+		return []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "move"), setupKeys.Toggle, setupKeys.Continue,
 			setupKeys.About, back}
 	case setupStepPreview:
 		return wz.previewKeys()
@@ -643,7 +645,7 @@ func (wz *setupWizard) keys() []key.Binding {
 		plan := setupKeys.Plan
 		plan.SetEnabled(wz.result != nil && wz.result.err != nil)
 
-		return []key.Binding{withHelp(nkeys.Down, "↑↓", "scroll"), setupKeys.Done, plan}
+		return []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "scroll"), setupKeys.Done, plan}
 	}
 
 	return nil
@@ -672,7 +674,7 @@ func (wz *setupWizard) stepIndex() int {
 
 // title names the wizard for the notice row.
 func (wz *setupWizard) title() string {
-	name := oneLine(wz.client.Name)
+	name := ui.OneLine(wz.client.Name)
 
 	switch {
 	case wz.forceSkills:
@@ -693,21 +695,21 @@ func (wz *setupWizard) banner(w int) string {
 	current := wz.stepIndex()
 	left := " " + t.Title.Render(wz.title())
 
-	trail := t.stepper(setupStepNames, current)
-	if width(left)+width(trail)+3 > w {
+	trail := stepper(t, setupStepNames, current)
+	if ui.Width(left)+ui.Width(trail)+3 > w {
 		if current < len(setupStepNames) {
 			trail = t.TabActive.Render(g.Dot+" "+setupStepNames[current]) +
-				t.Faint.Render(" "+itoa(current+1)+"/"+itoa(len(setupStepNames)))
+				t.Faint.Render(" "+strconv.Itoa(current+1)+"/"+strconv.Itoa(len(setupStepNames)))
 		} else {
 			trail = t.Success.Render(g.OK + " " + setupStepNames[len(setupStepNames)-1])
 		}
 	}
 
-	if width(left)+width(trail)+3 > w {
-		return truncate(left, w, g.Ellipsis)
+	if ui.Width(left)+ui.Width(trail)+3 > w {
+		return ui.Truncate(left, w, g.Ellipsis)
 	}
 
-	return spread(left, trail+" ", w)
+	return ui.Spread(left, trail+" ", w)
 }
 
 // view renders the current step under a blank line, as in the 1a
@@ -736,7 +738,7 @@ func (wz *setupWizard) view(w, h int) string {
 // setupClip keeps the lines that fit in h lines. A longer list gives
 // its last visible line to a note that names the details key, so a cut
 // explanation always shows the way to the full text.
-func setupClip(t *Theme, lines []string, w, h int) []string {
+func setupClip(t *ui.Theme, lines []string, w, h int) []string {
 	if len(lines) <= h {
 		return lines
 	}
@@ -745,7 +747,7 @@ func setupClip(t *Theme, lines []string, w, h int) []string {
 		return nil
 	}
 
-	note := truncate(t.Muted.Render(t.Glyphs.Ellipsis+" press ")+t.Key.Render("i")+
+	note := ui.Truncate(t.Muted.Render(t.Glyphs.Ellipsis+" press ")+t.Key.Render("i")+
 		t.Muted.Render(" to read the full text"), w, t.Glyphs.Ellipsis)
 
 	return append(slices.Clone(lines[:h-1]), note)
@@ -788,7 +790,7 @@ func setupSharedNote(clients []integration.Client, c integration.Client) string 
 			continue
 		}
 
-		b.WriteString(oneLine(d.Dir) + " is shared by " + integConsumers(clients, d.Consumers) + ". ")
+		b.WriteString(ui.OneLine(d.Dir) + " is shared by " + integConsumers(clients, d.Consumers) + ". ")
 	}
 
 	return b.String()

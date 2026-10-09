@@ -13,6 +13,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -449,7 +450,7 @@ func TestEvidenceHostileTextIsInert(t *testing.T) {
 func TestEvidenceASCIIAndNoColor(t *testing.T) {
 	f := evFake()
 
-	h := &harness{t: t, m: newModel(f, newTheme(true))}
+	h := &harness{t: t, m: newModel(f, ui.NewTheme(true))}
 	h.run(h.m.Init())
 	h.send(teaSize(120, 40))
 	h.press("3", "e")

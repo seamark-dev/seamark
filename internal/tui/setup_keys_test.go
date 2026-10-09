@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests in this file cover the key routing of the setup wizard:
@@ -196,7 +197,7 @@ func TestSetupASCIIThemeRendersOnlyASCII(t *testing.T) {
 	}
 
 	h := newHarness(t, f, 120, 32)
-	h.m.st.theme = newTheme(true)
+	h.m.st.theme = ui.NewTheme(true)
 	h.press("2")
 
 	s := setupScreen(h)
@@ -210,7 +211,7 @@ func TestSetupASCIIThemeRendersOnlyASCII(t *testing.T) {
 		for _, size := range [][2]int{{118, 27}, {58, 13}} {
 			h.m.st.width = size[0]
 
-			text := ansi.Strip(s.view(size[0], size[1])) + "\n" + ansi.Strip(h.m.st.theme.hints(s.keys()))
+			text := ansi.Strip(s.view(size[0], size[1])) + "\n" + ansi.Strip(h.m.st.theme.Hints(s.keys()))
 			if banner, ok := s.banner(size[0]); ok {
 				text += "\n" + ansi.Strip(banner)
 			}

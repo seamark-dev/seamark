@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -10,6 +11,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file renders the decision modals of Lessons → Proposals: the
@@ -27,11 +29,11 @@ func (p *propView) modal(w, h int) (string, bool) {
 		return "", false
 	}
 
-	return p.st.theme.modal(p.modalContent(d, modalBodyWidth(modalMinW, w)), &d.scroll, w, h), true
+	return p.st.theme.Modal(p.modalContent(d, ui.ModalBodyWidth(ui.ModalMinW, w)), &d.scroll, w, h), true
 }
 
 // modalContent builds the modal of the current decision stage.
-func (p *propView) modalContent(d *propDecision, w int) modalOpts {
+func (p *propView) modalContent(d *propDecision, w int) ui.ModalOpts {
 	switch d.stage {
 	case flowPreparing:
 		return flowWaitModal(p.st, "Preparing the "+propVerb(d.action)+" preview",
@@ -85,7 +87,7 @@ func propTarget(pv *proposals.Preview) string {
 
 // propSubject names the previewed proposals for a modal title: the ID
 // and the rule of one proposal, or the IDs and the count of several.
-func propSubject(t *Theme, d *propDecision) string {
+func propSubject(t *ui.Theme, d *propDecision) string {
 	sep := " " + t.Glyphs.Sep + " "
 	ps := d.preview.Proposals
 
@@ -93,7 +95,7 @@ func propSubject(t *Theme, d *propDecision) string {
 	case 0:
 		return propIDList(d.ids)
 	case 1:
-		return propID(ps[0].ID) + sep + oneLine(ps[0].Rule)
+		return propID(ps[0].ID) + sep + ui.OneLine(ps[0].Rule)
 	default:
 		return propIDList(propProposalIDs(ps)) + sep + propPlural(len(ps), "proposal", "proposals")
 	}
@@ -106,14 +108,14 @@ func (p *propView) previewActions() []key.Binding {
 	var out []key.Binding
 
 	if p.confirmable() {
-		out = append(out, withHelp(lesKeys.Confirm, "y", p.confirmLabel()))
+		out = append(out, ui.WithHelp(lesKeys.Confirm, "y", p.confirmLabel()))
 	}
 
 	switch {
 	case len(p.reconcileOffer()) > 0:
-		out = append(out, withHelp(lesKeys.Reconcile, "c", "record as applied (ledger only)"))
+		out = append(out, ui.WithHelp(lesKeys.Reconcile, "c", "record as applied (ledger only)"))
 	case p.copyable():
-		out = append(out, withHelp(lesKeys.Reconcile, "c", "copy to clipboard"))
+		out = append(out, ui.WithHelp(lesKeys.Reconcile, "c", "copy to clipboard"))
 	}
 
 	back := "close"
@@ -121,7 +123,7 @@ func (p *propView) previewActions() []key.Binding {
 		back = "cancel"
 	}
 
-	return append(out, withHelp(nkeys.Back, "esc", back))
+	return append(out, ui.WithHelp(ui.Nav.Back, "esc", back))
 }
 
 // commonLines returns the parts that every preview shares after its
@@ -140,7 +142,7 @@ func (p *propView) commonLines(d *propDecision, why string, w int) []string {
 	}
 
 	if len(pv.Proposals) > 1 {
-		out = append(out, "", t.Heading.Render("SELECTED")+"  "+t.Faint.Render(itoa(len(pv.Proposals))))
+		out = append(out, "", t.Heading.Render("SELECTED")+"  "+t.Faint.Render(strconv.Itoa(len(pv.Proposals))))
 		out = append(out, p.previewRows(pv, w)...)
 	}
 
@@ -158,13 +160,13 @@ func (p *propView) previewRows(pv *proposals.Preview, w int) []string {
 
 	idW := 0
 	for _, pr := range pv.Proposals {
-		idW = max(idW, width(propID(pr.ID)))
+		idW = max(idW, ui.Width(propID(pr.ID)))
 	}
 
 	lines := make([]string, len(pv.Proposals))
 	for i, pr := range pv.Proposals {
-		lines[i] = t.Muted.Render(padRight(propID(pr.ID), idW)) + "  " +
-			t.Body.Render(truncate(oneLine(pr.Rule), max(4, w-idW-2), t.Glyphs.Ellipsis))
+		lines[i] = t.Muted.Render(ui.PadRight(propID(pr.ID), idW)) + "  " +
+			t.Body.Render(ui.Truncate(ui.OneLine(pr.Rule), max(4, w-idW-2), t.Glyphs.Ellipsis))
 	}
 
 	return lines
@@ -173,13 +175,13 @@ func (p *propView) previewRows(pv *proposals.Preview, w int) []string {
 // applyModal renders the apply preview. With the gate off it is the
 // YAML modal: the block to copy and no write. With existing pins it
 // offers only the ledger-only record.
-func (p *propView) applyModal(d *propDecision, w int) modalOpts {
+func (p *propView) applyModal(d *propDecision, w int) ui.ModalOpts {
 	t := p.st.theme
 	pv := d.preview
 	target := propTarget(pv)
 	n := len(pv.Proposals)
 
-	m := modalOpts{Actions: p.previewActions()}
+	m := ui.ModalOpts{Actions: p.previewActions()}
 
 	switch {
 	case n == 0:
@@ -205,7 +207,7 @@ func (p *propView) applyModal(d *propDecision, w int) modalOpts {
 	switch {
 	case len(pv.AlreadyPinned) > 0:
 		pinned := propIDList(pv.AlreadyPinned)
-		m.Body = append(m.Body, p.st.theme.effectLines(nil, []string{
+		m.Body = append(m.Body, effectLines(p.st.theme, nil, []string{
 			"write " + target + ": pins already exist for " + pinned,
 			"change the ledger until you press c to record " + pinned + " as applied",
 		}, w)...)
@@ -215,9 +217,9 @@ func (p *propView) applyModal(d *propDecision, w int) modalOpts {
 			file += " (the file is created)"
 		}
 
-		m.Body = append(m.Body, p.st.theme.effectLines([]effect{
-			{glyph: t.Glyphs.Add, tone: ToneSuccess, text: "add " + propPlural(n, "pin", "pins") + " under pin: in " + file},
-			{glyph: t.Glyphs.Add, tone: ToneSuccess, text: "record " + ids + " as applied in the ledger (pending" +
+		m.Body = append(m.Body, effectLines(p.st.theme, []effect{
+			{glyph: t.Glyphs.Add, tone: ui.ToneSuccess, text: "add " + propPlural(n, "pin", "pins") + " under pin: in " + file},
+			{glyph: t.Glyphs.Add, tone: ui.ToneSuccess, text: "record " + ids + " as applied in the ledger (pending" +
 				arrow + "applied)"},
 		}, []string{"change other pins or other proposals", "write anything before you press y"}, w)...)
 	}
@@ -225,8 +227,8 @@ func (p *propView) applyModal(d *propDecision, w int) modalOpts {
 	block, rest, err := p.shownBlock(pv)
 	if err != nil {
 		m.Body = append(m.Body, "")
-		m.Body = append(m.Body, propNote(t, ToneAttention, "The pin block for "+propIDList(rest)+
-			" could not be rendered: "+errText(err), w)...)
+		m.Body = append(m.Body, propNote(t, ui.ToneAttention, "The pin block for "+propIDList(rest)+
+			" could not be rendered: "+ui.ErrText(err), w)...)
 
 		return m
 	}
@@ -248,7 +250,7 @@ func (p *propView) applyModal(d *propDecision, w int) modalOpts {
 
 	if pins.overflow {
 		m.Body = append(m.Body, "")
-		m.Body = append(m.Body, propNote(t, ToneAttention, "Some lines cannot fold without a change to the YAML. "+
+		m.Body = append(m.Body, propNote(t, ui.ToneAttention, "Some lines cannot fold without a change to the YAML. "+
 			"A line without a number continues the line above on the screen only; c copies the exact block.", w)...)
 	}
 
@@ -256,7 +258,7 @@ func (p *propView) applyModal(d *propDecision, w int) modalOpts {
 		m.Body = append(m.Body, "")
 		m.Body = append(m.Body, propLines(t.Muted, "This command prints the same block in a shell. It changes "+
 			"nothing while distill.write is off:", w)...)
-		m.Body = append(m.Body, t.command("seamark lessons --apply "+propIDArg(rest)))
+		m.Body = append(m.Body, commandText(t, "seamark lessons --apply "+propIDArg(rest)))
 	}
 
 	return m
@@ -314,13 +316,13 @@ func propYAMLKeyEnd(s string) int {
 // block unchanged. It returns the lines, the count of numbered lines,
 // and the fold result. The apply preview and the Phase 3 pin previews
 // share it, so every pin block reads the same way.
-func yamlBlockLines(t *Theme, block string, w int) (out []string, numbered int, pins propPinBlock) {
-	src := propDedent(multiLine(block))
+func yamlBlockLines(t *ui.Theme, block string, w int) (out []string, numbered int, pins propPinBlock) {
+	src := propDedent(ui.MultiLine(block))
 
 	numW := 2
 	pins = propFoldPins(src, max(1, w-numW-2))
 
-	if n := len(itoa(len(pins.lines))); n > numW {
+	if n := len(strconv.Itoa(len(pins.lines))); n > numW {
 		numW = n
 		pins = propFoldPins(src, max(1, w-numW-2))
 	}
@@ -334,12 +336,12 @@ func yamlBlockLines(t *Theme, block string, w int) (out []string, numbered int, 
 
 		// A continuation segment starts two cells deeper, so it reads as
 		// part of the line above.
-		segs := strings.Split(wrap(body, max(1, avail-len(indent)-2)), "\n")
-		if width(line) <= avail {
+		segs := strings.Split(ui.Wrap(body, max(1, avail-len(indent)-2)), "\n")
+		if ui.Width(line) <= avail {
 			segs = []string{body}
 		}
 
-		out = append(out, t.Faint.Render(padLeft(itoa(i+1), numW))+"  "+indent+propYAMLStyle(t, segs[0], pins.cont[i]))
+		out = append(out, t.Faint.Render(ui.PadLeft(strconv.Itoa(i+1), numW))+"  "+indent+propYAMLStyle(t, segs[0], pins.cont[i]))
 
 		for _, seg := range segs[1:] {
 			style := t.Body
@@ -356,7 +358,7 @@ func yamlBlockLines(t *Theme, block string, w int) (out []string, numbered int, 
 
 // propYAMLStyle colors one YAML line without its indent. A folded note
 // continuation carries no key, so it keeps the body color.
-func propYAMLStyle(t *Theme, body string, cont bool) string {
+func propYAMLStyle(t *ui.Theme, body string, cont bool) string {
 	switch {
 	case cont:
 		return t.Body.Render(body)
@@ -419,7 +421,7 @@ func (p *propView) previewLead(d *propDecision, target string, w int) []string {
 
 	switch {
 	case len(pv.Proposals) == 0:
-		return propNote(t, ToneAttention, "None of the requested proposals is still pending, so there is "+
+		return propNote(t, ui.ToneAttention, "None of the requested proposals is still pending, so there is "+
 			"nothing to "+propVerb(d.action)+". Nothing was changed.", w)
 	case d.action == proposals.ActionDismiss:
 		return propLines(t.Body, "Dismissed proposals are remembered: the same evidence will not come back. "+
@@ -433,7 +435,7 @@ func (p *propView) previewLead(d *propDecision, target string, w int) []string {
 		// The gate-off preview still shows the block, but apply can never
 		// write through a linked or unsafe pin file, so enabling the gate
 		// would not help.
-		return append(propNote(t, ToneAttention, "The console cannot write "+target+": "+errText(pv.LessonsErr), w),
+		return append(propNote(t, ui.ToneAttention, "The console cannot write "+target+": "+ui.ErrText(pv.LessonsErr), w),
 			propLines(t.Body, "Copy this block under pin: in the pin file by hand. Enabling distill.write does "+
 				"not change this. The proposals stay pending. Nothing was changed.", w)...)
 	case !pv.Write:
@@ -458,7 +460,7 @@ func (p *propView) pinnedLead(pv *proposals.Preview, target string, w int) []str
 	ids := propIDList(pv.AlreadyPinned)
 	rest := propUnpinned(pv)
 
-	out := propNote(t, ToneAttention, "Pins already exist for "+ids+".", w)
+	out := propNote(t, ui.ToneAttention, "Pins already exist for "+ids+".", w)
 
 	if pv.Write {
 		text := target + " already holds these pins, so a blind apply would duplicate them. Press c to record " +
@@ -485,12 +487,12 @@ func (p *propView) pinnedLead(pv *proposals.Preview, target string, w int) []str
 }
 
 // dismissModal renders the dismiss preview.
-func (p *propView) dismissModal(d *propDecision, w int) modalOpts {
+func (p *propView) dismissModal(d *propDecision, w int) ui.ModalOpts {
 	t := p.st.theme
 	pv := d.preview
 	n := len(pv.Proposals)
 
-	m := modalOpts{Actions: p.previewActions()}
+	m := ui.ModalOpts{Actions: p.previewActions()}
 
 	if n == 0 {
 		m.Title = t.Attention.Render("Nothing to dismiss")
@@ -506,10 +508,10 @@ func (p *propView) dismissModal(d *propDecision, w int) modalOpts {
 	}
 
 	arrow := " " + t.Glyphs.Arrow + " "
-	m.Body = append(m.Body, p.st.theme.effectLines([]effect{
-		{glyph: t.Glyphs.Del, tone: ToneFailure, text: "move " + propIDList(propProposalIDs(pv.Proposals)) +
+	m.Body = append(m.Body, effectLines(p.st.theme, []effect{
+		{glyph: t.Glyphs.Del, tone: ui.ToneFailure, text: "move " + propIDList(propProposalIDs(pv.Proposals)) +
 			" to dismissed in the ledger (pending" + arrow + "dismissed)"},
-		{glyph: t.Glyphs.Del, tone: ToneFailure, text: "remember the decision for the same evidence"},
+		{glyph: t.Glyphs.Del, tone: ui.ToneFailure, text: "remember the decision for the same evidence"},
 	}, []string{"change " + proposals.LessonsFile + ": pins stay unchanged", "write anything before you press y"}, w)...)
 
 	return m
@@ -517,13 +519,13 @@ func (p *propView) dismissModal(d *propDecision, w int) modalOpts {
 
 // reconcileModal renders the record-as-applied preview. It records
 // existing pins in the ledger and never writes the pin file.
-func (p *propView) reconcileModal(d *propDecision, w int) modalOpts {
+func (p *propView) reconcileModal(d *propDecision, w int) ui.ModalOpts {
 	t := p.st.theme
 	pv := d.preview
 	target := propTarget(pv)
 	n := len(pv.Proposals)
 
-	m := modalOpts{Actions: p.previewActions(), Right: t.Muted.Render("ledger only")}
+	m := ui.ModalOpts{Actions: p.previewActions(), Right: t.Muted.Render("ledger only")}
 
 	if n == 0 {
 		m.Title = t.Attention.Render("Nothing to record")
@@ -539,8 +541,8 @@ func (p *propView) reconcileModal(d *propDecision, w int) modalOpts {
 	}
 
 	arrow := " " + t.Glyphs.Arrow + " "
-	m.Body = append(m.Body, p.st.theme.effectLines([]effect{
-		{glyph: t.Glyphs.Add, tone: ToneSuccess, text: "record " + propIDList(propProposalIDs(pv.Proposals)) +
+	m.Body = append(m.Body, effectLines(p.st.theme, []effect{
+		{glyph: t.Glyphs.Add, tone: ui.ToneSuccess, text: "record " + propIDList(propProposalIDs(pv.Proposals)) +
 			" as applied in the ledger (pending" + arrow + "applied)"},
 	}, []string{"change " + target + ": the pins already exist", "write anything before you press y"}, w)...)
 
@@ -549,7 +551,7 @@ func (p *propView) reconcileModal(d *propDecision, w int) modalOpts {
 
 // previewErrModal explains a failed preview. Nothing changed, because a
 // preview only reads.
-func (p *propView) previewErrModal(d *propDecision, w int) modalOpts {
+func (p *propView) previewErrModal(d *propDecision, w int) ui.ModalOpts {
 	var hint string
 
 	switch {
@@ -578,7 +580,7 @@ func (p *propView) previewErrModal(d *propDecision, w int) modalOpts {
 	}
 
 	return previewFailedModal(p.st.theme, "The "+propVerb(d.action)+" preview", d.err, hint, "Nothing was changed.",
-		[]key.Binding{withHelp(nkeys.Back, "esc", "back to the list")}, w)
+		[]key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "back to the list")}, w)
 }
 
 // propSharedKeyHint gives the next step after a preview that refused
@@ -632,30 +634,30 @@ func propAppliedKeyHint(d *propDecision) string {
 // resultModal reports what a commit changed. File and ledger outcomes
 // stay separate, and the title never claims an apply that did not
 // happen. Nothing retries by itself.
-func (p *propView) resultModal(d *propDecision, w int) modalOpts {
+func (p *propView) resultModal(d *propDecision, w int) ui.ModalOpts {
 	t := p.st.theme
 
-	actions := []key.Binding{withHelp(nkeys.Enter, "enter", "close")}
+	actions := []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "close")}
 	if d.reviewAgain() {
-		actions = []key.Binding{withHelp(nkeys.Enter, "enter", "preview again"), withHelp(nkeys.Back, "esc", "close")}
+		actions = []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "preview again"), ui.WithHelp(ui.Nav.Back, "esc", "close")}
 	}
 
 	if d.refusal != nil {
-		body := propNote(t, ToneAttention, propRefusal(d.refusal, t), w)
+		body := propNote(t, ui.ToneAttention, propRefusal(d.refusal, t), w)
 		body = append(body, "")
-		body = append(body, propLines(t.Muted, "Details: "+errText(d.refusal), w)...)
+		body = append(body, propLines(t.Muted, "Details: "+ui.ErrText(d.refusal), w)...)
 
 		if d.reviewAgain() {
 			body = append(body, "")
 			body = append(body, propLines(t.Body, "Press enter to build a new preview from the current state.", w)...)
 		}
 
-		return modalOpts{Title: t.Attention.Render("Nothing changed"), Body: body, Actions: actions}
+		return ui.ModalOpts{Title: t.Attention.Render("Nothing changed"), Body: body, Actions: actions}
 	}
 
 	var (
 		title string
-		tone  Tone
+		tone  ui.Tone
 		lead  string
 	)
 
@@ -671,39 +673,39 @@ func (p *propView) resultModal(d *propDecision, w int) modalOpts {
 	body = append(body, "")
 	body = append(body, propLines(t.Faint, "Nothing is retried automatically.", w)...)
 
-	return modalOpts{Title: t.ToneStyle(tone).Render(title), Body: body, Actions: actions}
+	return ui.ModalOpts{Title: t.ToneStyle(tone).Render(title), Body: body, Actions: actions}
 }
 
 // applyOutcome titles an apply result and states the next safe step.
-func (p *propView) applyOutcome(res proposals.Result) (title string, tone Tone, lead string) {
+func (p *propView) applyOutcome(res proposals.Result) (title string, tone ui.Tone, lead string) {
 	file := proposals.LessonsFile
 
 	switch {
 	case res.FileErr != nil && res.FileWritten:
-		return "Pin file write failed", ToneFailure, "The write to " + file + " failed after it changed the file. " +
+		return "Pin file write failed", ui.ToneFailure, "The write to " + file + " failed after it changed the file. " +
 			"Check the file with git diff before anything else. The ledger was not changed. Do not apply again: " +
 			"that could duplicate pins."
 	case res.FileErr != nil:
-		return "Apply failed", ToneFailure, "The pin file was not changed, and the ledger was not changed."
+		return "Apply failed", ui.ToneFailure, "The pin file was not changed, and the ledger was not changed."
 	case res.Partial():
 		why := "not recorded as applied"
 		if res.LedgerErr != nil {
 			why = "still pending"
 		}
 
-		return "Pins written, ledger incomplete", ToneFailure, "Pins were written to " + file + " but the ledger " +
+		return "Pins written, ledger incomplete", ui.ToneFailure, "Pins were written to " + file + " but the ledger " +
 			"was not fully updated (" + propIDList(res.NotMoved) + " " + why + "). Do not apply again: that would " +
 			"duplicate pins. Keep them selected and press c to record them as applied (ledger only)."
 	case res.FileWritten:
-		return "Applied " + propPlural(len(res.Moved), "pin", "pins"), ToneSuccess, "Wrote the pins to " + file +
+		return "Applied " + propPlural(len(res.Moved), "pin", "pins"), ui.ToneSuccess, "Wrote the pins to " + file +
 			" and recorded " + propIDList(res.Moved) + " as applied. Review the diff and commit it."
 	default:
-		return "Nothing applied", ToneAttention, "No pin was written and no proposal changed."
+		return "Nothing applied", ui.ToneAttention, "No pin was written and no proposal changed."
 	}
 }
 
 // ledgerOutcome titles a dismiss or record-as-applied result.
-func (p *propView) ledgerOutcome(a proposals.Action, res proposals.Result) (title string, tone Tone, lead string) {
+func (p *propView) ledgerOutcome(a proposals.Action, res proposals.Result) (title string, tone ui.Tone, lead string) {
 	done, verb := "dismissed", "Dismiss"
 	if a == proposals.ActionReconcile {
 		done, verb = "recorded as applied", "Recording"
@@ -713,15 +715,15 @@ func (p *propView) ledgerOutcome(a proposals.Action, res proposals.Result) (titl
 
 	switch {
 	case len(res.Moved) == 0 && res.LedgerErr != nil:
-		return verb + " failed", ToneFailure, "No proposal changed: the ledger write failed."
+		return verb + " failed", ui.ToneFailure, "No proposal changed: the ledger write failed."
 	case len(res.Moved) == 0:
-		return "Nothing " + done, ToneAttention, "No proposal changed: none was still pending."
+		return "Nothing " + done, ui.ToneAttention, "No proposal changed: none was still pending."
 	case len(res.NotMoved) > 0 || res.LedgerErr != nil:
-		return itoa(len(res.Moved)) + " of " + itoa(total) + " " + done, ToneAttention,
+		return strconv.Itoa(len(res.Moved)) + " of " + strconv.Itoa(total) + " " + done, ui.ToneAttention,
 			propIDList(res.Moved) + " " + done + "; " + propIDList(res.NotMoved) + " did not change. Pins stay unchanged."
 	default:
 		return strings.ToUpper(done[:1]) + done[1:] + " " + propPlural(len(res.Moved), "proposal", "proposals"),
-			ToneSuccess, propIDList(res.Moved) + " " + done + ". Pins stay unchanged."
+			ui.ToneSuccess, propIDList(res.Moved) + " " + done + ". Pins stay unchanged."
 	}
 }
 
@@ -748,7 +750,7 @@ func (p *propView) resultFacts(a proposals.Action, res proposals.Result) [][2]st
 	}
 
 	if res.FileErr != nil {
-		rows = append(rows, [2]string{"File error", errText(res.FileErr)})
+		rows = append(rows, [2]string{"File error", ui.ErrText(res.FileErr)})
 	}
 
 	if len(res.Moved) > 0 {
@@ -762,7 +764,7 @@ func (p *propView) resultFacts(a proposals.Action, res proposals.Result) [][2]st
 	}
 
 	if res.LedgerErr != nil {
-		rows = append(rows, [2]string{"Ledger error", errText(res.LedgerErr)})
+		rows = append(rows, [2]string{"Ledger error", ui.ErrText(res.LedgerErr)})
 	}
 
 	return rows
@@ -770,7 +772,7 @@ func (p *propView) resultFacts(a proposals.Action, res proposals.Result) [][2]st
 
 // propRefusal maps a commit refusal to a clear message. Every refusal
 // means that nothing changed.
-func propRefusal(err error, t *Theme) string {
+func propRefusal(err error, t *ui.Theme) string {
 	switch {
 	case errors.Is(err, proposals.ErrStale):
 		return "Something changed since the preview" + propDash(t) + "preview again."

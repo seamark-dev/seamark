@@ -16,6 +16,7 @@ import (
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // TestCaptureExtract writes the trigger extraction scenes (90 to 99) at
@@ -34,7 +35,7 @@ func TestCaptureExtract(t *testing.T) {
 			f := sc.fake()
 			f.settings = snap
 
-			hs := &harness{t: t, m: newModel(f, newTheme(sc.ascii))}
+			hs := &harness{t: t, m: newModel(f, ui.NewTheme(sc.ascii))}
 			hs.run(hs.m.Init())
 			hs.send(teaSize(w, h))
 			sc.drive(hs)
@@ -153,7 +154,7 @@ func extCaptureScenes() []captureScene {
 	// movement keys scroll the Plan pane. Its detail does not fit under
 	// the list, so end scrolls to the stacked note pair.
 	detail := func(h *harness) {
-		compact := h.m.st.width < wideWidth
+		compact := h.m.st.width < ui.WideWidth
 		if compact {
 			h.press("tab")
 		}
@@ -175,7 +176,7 @@ func extCaptureScenes() []captureScene {
 		return func(h *harness) {
 			open(o, keys...)(h)
 
-			if h.m.st.width < wideWidth {
+			if h.m.st.width < ui.WideWidth {
 				h.press("tab")
 				h.view()
 				h.press("end")

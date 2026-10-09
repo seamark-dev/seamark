@@ -15,15 +15,17 @@ import (
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // This file renders Lessons › Pins in the 1a layout of Proposals. It
 // draws the filter line, an optional state line, the list box and the
 // detail box. Each value from the pin file, the ledger or a model gets
-// sanitized here, at the leaf (oneLine, multiLine, errText). The file is
-// user text and can hold escape bytes. The box frames and the filter
-// line format come from listpane.go, so Pins and Proposals look alike.
+// sanitized here, at the leaf (ui.OneLine, ui.MultiLine, ui.ErrText).
+// The file is user text and can hold escape bytes. The box frames and
+// the filter line format come from listpane.go, so Pins and Proposals
+// look alike.
 
 // Column widths of the Pins list. The state column holds a label with
 // one attention word, for example "! p12 unknown key". So the list never
@@ -72,28 +74,28 @@ func (s pinState) render() string {
 // detail status line shows every word.
 func (s pinState) fit(w int, ell string) string {
 	full := s.glyph + " " + s.text()
-	if width(full) <= w || len(s.flags) == 0 {
-		return s.style.Render(truncate(full, w, ell))
+	if ui.Width(full) <= w || len(s.flags) == 0 {
+		return s.style.Render(ui.Truncate(full, w, ell))
 	}
 
 	short := s.glyph + " " + s.lead + s.sep + s.flags[0]
 	if more := len(s.flags) - 1; more > 0 {
-		short += " +" + itoa(more)
+		short += " +" + strconv.Itoa(more)
 	}
 
-	if width(short) <= w {
+	if ui.Width(short) <= w {
 		return s.style.Render(short)
 	}
 
-	if count := s.glyph + " " + s.lead + " +" + itoa(len(s.flags)); width(count) <= w {
+	if count := s.glyph + " " + s.lead + " +" + strconv.Itoa(len(s.flags)); ui.Width(count) <= w {
 		return s.style.Render(count)
 	}
 
-	return s.style.Render(truncate(full, w, ell))
+	return s.style.Render(ui.Truncate(full, w, ell))
 }
 
 // pinToneState builds a label in the glyph and the style of a tone.
-func pinToneState(t *Theme, tone Tone, lead string) pinState {
+func pinToneState(t *ui.Theme, tone ui.Tone, lead string) pinState {
 	return pinState{glyph: t.ToneGlyph(tone), style: t.ToneStyle(tone), lead: lead}
 }
 
@@ -105,7 +107,7 @@ func (p *pinsView) pinLabel(in *maintain.Inspection, pin *maintain.Pin) pinState
 	t := p.st.theme
 
 	if !pinLinksKnown(in) {
-		return pinToneState(t, ToneUnknown, "link unknown")
+		return pinToneState(t, ui.ToneUnknown, "link unknown")
 	}
 
 	var flags []string
@@ -125,7 +127,7 @@ func (p *pinsView) pinLabel(in *maintain.Inspection, pin *maintain.Pin) pinState
 	l := pin.Link
 
 	var (
-		tone Tone
+		tone ui.Tone
 		lead string
 	)
 
@@ -133,36 +135,36 @@ func (p *pinsView) pinLabel(in *maintain.Inspection, pin *maintain.Pin) pinState
 	case l.Link == pinfile.LinkLinked && len(l.Applied) != 1:
 		// Classify never gives this; the guard keeps a malformed value
 		// from reading as linked.
-		return pinToneState(t, ToneUnknown, "link unknown")
+		return pinToneState(t, ui.ToneUnknown, "link unknown")
 	case l.Link == pinfile.LinkLinked:
 		if len(flags) == 0 {
-			return pinToneState(t, ToneSuccess, propID(l.Applied[0].ID)+" linked")
+			return pinToneState(t, ui.ToneSuccess, propID(l.Applied[0].ID)+" linked")
 		}
 
-		s := pinToneState(t, ToneAttention, propID(l.Applied[0].ID))
+		s := pinToneState(t, ui.ToneAttention, propID(l.Applied[0].ID))
 		s.sep, s.flags = " ", flags
 
 		return s
 	case l.Link == pinfile.LinkNoProposal:
-		tone, lead = ToneUnknown, "no proposal"
+		tone, lead = ui.ToneUnknown, "no proposal"
 	case l.Link == pinfile.LinkPendingMatch:
-		tone, lead = ToneAttention, "pending"
+		tone, lead = ui.ToneAttention, "pending"
 
 		if len(l.Pending) == 1 {
 			lead += " " + propID(l.Pending[0].ID)
 		}
 	case l.Link == pinfile.LinkAmbiguousFile:
-		tone, lead = ToneAttention, "duplicate pin"
+		tone, lead = ui.ToneAttention, "duplicate pin"
 	case l.Link == pinfile.LinkAmbiguousLedger:
-		tone, lead = ToneAttention, "ambiguous"
+		tone, lead = ui.ToneAttention, "ambiguous"
 	case l.Link == pinfile.LinkAmbiguousFields:
-		tone, lead = ToneAttention, "ambiguous row"
+		tone, lead = ui.ToneAttention, "ambiguous row"
 	default:
-		return pinToneState(t, ToneUnknown, "link unknown")
+		return pinToneState(t, ui.ToneUnknown, "link unknown")
 	}
 
 	if len(flags) > 0 {
-		tone = ToneAttention
+		tone = ui.ToneAttention
 	}
 
 	s := pinToneState(t, tone, lead)
@@ -182,10 +184,10 @@ func (p *pinsView) propState(pr domain.Proposal) pinState {
 	case p.filter == pinSuperseded:
 		return pinState{glyph: t.Glyphs.Hollow, style: t.Muted, lead: "superseded"}
 	case pinRowAmbiguous(p.inspection(), pr):
-		return pinToneState(t, ToneAttention, "ambiguous row")
+		return pinToneState(t, ui.ToneAttention, "ambiguous row")
 	}
 
-	return pinToneState(t, ToneAttention, "not present")
+	return pinToneState(t, ui.ToneAttention, "not present")
 }
 
 // pinRowAmbiguous reports whether the inspection reads the applied row
@@ -230,7 +232,7 @@ func (p *pinsView) filterBar(w int) []string {
 		t.Faint.Render("text") + " " + p.fieldView(t, filterText, p.text, "any")
 
 	if n := len(p.selected); n > 0 && p.filter == pinInstalled {
-		rest += "     " + t.Marked.Render(itoa(n)+" selected")
+		rest += "     " + t.Marked.Render(strconv.Itoa(n)+" selected")
 	}
 
 	return filterLines(t, t.Faint.Render("show")+" "+states, rest, w)
@@ -245,20 +247,20 @@ func pinCount(in *maintain.Inspection, f pinFilter) string {
 			return "?"
 		}
 
-		return itoa(len(in.Links.NotPresent))
+		return strconv.Itoa(len(in.Links.NotPresent))
 	case pinSuperseded:
 		if in.LedgerErr != nil {
 			return "?"
 		}
 
-		return itoa(len(in.Superseded))
+		return strconv.Itoa(len(in.Superseded))
 	default:
 		// An unreadable file with no listed entry is not an empty file.
 		if in.DocErr != nil || (in.Doc.Unreadable() && len(in.Pins) == 0) {
 			return "?"
 		}
 
-		return itoa(len(in.Pins))
+		return strconv.Itoa(len(in.Pins))
 	}
 }
 
@@ -281,20 +283,20 @@ func (p *pinsView) stateLine(w int) string {
 		line = t.Attention.Render(t.Glyphs.Warn + " " + pinUnreadableText(in.Doc) + ". Read-only: no action is offered.")
 	case pinsForeignRoot(p.st) != "":
 		line = t.Attention.Render(t.Glyphs.Warn + " The index records another repository: " +
-			oneLine(pinsForeignRoot(p.st)) + ". Retarget and prune are off.")
+			ui.OneLine(pinsForeignRoot(p.st)) + ". Retarget and prune are off.")
 	case in.LinkErr != nil:
 		line = t.Unknown.Render(t.Glyphs.Unknown + " Relationships are unknown: " + pinReason(in.LinkErr.Error()) + ".")
 	case in.Links == nil:
 		line = t.Unknown.Render(t.Glyphs.Unknown + " Relationships are unknown: the ledger was not read.")
 	case in.Doc.FileBlock != "":
-		line = t.Attention.Render(t.Glyphs.Warn + " The pin file cannot be edited: " + diag(in.Doc.FileBlock) + ".")
+		line = t.Attention.Render(t.Glyphs.Warn + " The pin file cannot be edited: " + ui.Diag(in.Doc.FileBlock) + ".")
 	case in.ReadingsErr != nil:
 		line = t.Unknown.Render(t.Glyphs.Unknown + " Some readings are unknown: " + pinReason(in.ReadingsErr.Error()) + ".")
 	default:
 		return ""
 	}
 
-	return " " + truncate(line, w-1, t.Glyphs.Ellipsis)
+	return " " + ui.Truncate(line, w-1, t.Glyphs.Ellipsis)
 }
 
 // pinUnreadableText describes a pin file that gives no reliable listing,
@@ -315,11 +317,11 @@ func pinUnreadableText(d *pinfile.Document) string {
 
 	text := pinfile.File + " could not be read"
 	if d.ErrLine > 0 {
-		text += " (line " + itoa(d.ErrLine) + ")"
+		text += " (line " + strconv.Itoa(d.ErrLine) + ")"
 	}
 
 	if err != nil {
-		text += ": " + errText(err)
+		text += ": " + ui.ErrText(err)
 	}
 
 	return text
@@ -378,10 +380,10 @@ func (p *pinsView) columns(in *maintain.Inspection, rows []pinRow, w int) pinCol
 	label := 0
 
 	for _, r := range rows {
-		c.numW = max(c.numW, width(pinRowNum(r))+2)
+		c.numW = max(c.numW, ui.Width(pinRowNum(r))+2)
 
 		if r.pin != nil {
-			label = max(label, width(p.pinLabel(in, r.pin).render())+1)
+			label = max(label, ui.Width(p.pinLabel(in, r.pin).render())+1)
 		}
 	}
 
@@ -412,27 +414,27 @@ func (p *pinsView) columns(in *maintain.Inspection, rows []pinRow, w int) pinCol
 // the pN form of a proposal row.
 func pinRowNum(r pinRow) string {
 	if r.pin != nil {
-		return itoa(r.n + 1)
+		return strconv.Itoa(r.n + 1)
 	}
 
 	return propID(r.prop.ID)
 }
 
 // cells returns the row cells in column order.
-func (c pinCols) cells(marker, check, num, rule, region, state string) []colCell {
-	out := []colCell{cell(marker, 2)}
+func (c pinCols) cells(marker, check, num, rule, region, state string) []ui.ColCell {
+	out := []ui.ColCell{ui.Cell(marker, 2)}
 
 	if c.check {
-		out = append(out, cell(check, 4))
+		out = append(out, ui.Cell(check, 4))
 	}
 
-	out = append(out, cell(num, c.numW), cell(rule, c.ruleW))
+	out = append(out, ui.Cell(num, c.numW), ui.Cell(rule, c.ruleW))
 
 	if c.regW > 0 {
-		out = append(out, cell(region, c.regW))
+		out = append(out, ui.Cell(region, c.regW))
 	}
 
-	return append(out, cell(state, c.stateW))
+	return append(out, ui.Cell(state, c.stateW))
 }
 
 // listBox renders the list with its column header. The cursor row has
@@ -442,7 +444,7 @@ func (c pinCols) cells(marker, check, num, rule, region, state string) []colCell
 func (p *pinsView) listBox(rows []pinRow, w, h int, focused bool) string {
 	t := p.st.theme
 	in := p.inspection()
-	c := p.columns(in, rows, boxInner(w))
+	c := p.columns(in, rows, ui.BoxInner(w))
 
 	num := "#"
 	if p.filter != pinInstalled {
@@ -491,7 +493,7 @@ func (p *pinsView) listRow(in *maintain.Inspection, c pinCols, r pinRow, cursor 
 		check = t.Marked.Render(t.Glyphs.Check)
 	}
 
-	ruleText := style.Render(oneLine(rule))
+	ruleText := style.Render(ui.OneLine(rule))
 	if strings.TrimSpace(rule) == "" {
 		ruleText = t.Faint.Render("(no rule)")
 	}
@@ -507,17 +509,17 @@ func (p *pinsView) listRow(in *maintain.Inspection, c pinCols, r pinRow, cursor 
 // its most specific part. A path without a fitting component is cut
 // from the left.
 func pinPathCell(s string, w int, ell string) string {
-	if width(s) <= w {
+	if ui.Width(s) <= w {
 		return s
 	}
 
 	for i := range len(s) {
-		if s[i] == '/' && width(ell)+width(s[i:]) <= w {
+		if s[i] == '/' && ui.Width(ell)+ui.Width(s[i:]) <= w {
 			return ell + s[i:]
 		}
 	}
 
-	return truncateLeft(s, w, ell)
+	return ui.TruncateLeft(s, w, ell)
 }
 
 // pinRegionLabel is the short region label of a list row. A set of
@@ -527,9 +529,9 @@ func pinRegionLabel(set []string) string {
 	case 0:
 		return "repo-wide"
 	case 1:
-		return oneLine(set[0])
+		return ui.OneLine(set[0])
 	default:
-		return itoa(len(set)) + " regions"
+		return strconv.Itoa(len(set)) + " regions"
 	}
 }
 
@@ -539,10 +541,10 @@ func pinRegionLabel(set []string) string {
 func (p *pinsView) detailBox(rows []pinRow, w, h int, focused bool) string {
 	t := p.st.theme
 	cur, _ := p.cursorRow(rows)
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 
 	if cur.pin != nil {
-		return p.renderDetail(t, cur, "Pin "+itoa(cur.n+1), p.pinDetail(p.inspection(), cur, inner), w, h, focused)
+		return p.renderDetail(t, cur, "Pin "+strconv.Itoa(cur.n+1), p.pinDetail(p.inspection(), cur, inner), w, h, focused)
 	}
 
 	return p.renderDetail(t, cur, "Proposal "+propID(cur.prop.ID), p.propDetail(cur.prop, inner), w, h, focused)
@@ -553,13 +555,13 @@ func (p *pinsView) detailBox(rows []pinRow, w, h int, focused bool) string {
 func (p *pinsView) titleLines(rule, tag string, w int) []string {
 	t := p.st.theme
 
-	text := oneLine(rule)
+	text := ui.OneLine(rule)
 	if strings.TrimSpace(text) == "" {
 		text = "(no rule)"
 	}
 
 	out := propLines(t.Title, text, w)
-	if last := len(out) - 1; width(out[last])+2+width(tag) <= w {
+	if last := len(out) - 1; ui.Width(out[last])+2+ui.Width(tag) <= w {
 		out[last] += "  " + t.Faint.Render(tag)
 	} else {
 		out = append(out, t.Faint.Render(tag))
@@ -572,17 +574,17 @@ func (p *pinsView) titleLines(rule, tag string, w int) []string {
 // breaks. A YAML literal block ("note: |") ends with a line break, and
 // the detail would show it as an empty row after the note.
 func pinNoteText(note string) string {
-	return strings.TrimRight(multiLine(note), "\n")
+	return strings.TrimRight(ui.MultiLine(note), "\n")
 }
 
 // pinFact renders a muted label column and value lines that the caller
 // styled and wrapped to the value width.
-func pinFact(t *Theme, label string, values []string) []string {
+func pinFact(t *ui.Theme, label string, values []string) []string {
 	if len(values) == 0 {
 		return nil
 	}
 
-	return propIndent(t.Muted.Render(padRight(label, propLabelW)), values)
+	return propIndent(t.Muted.Render(ui.PadRight(label, propLabelW)), values)
 }
 
 // pinValueW returns the width of a value beside the label column.
@@ -600,7 +602,7 @@ func (p *pinsView) regionValues(set []string, w int) []string {
 
 	out := make([]string, 0, len(set))
 	for _, r := range set {
-		out = append(out, t.Accent.Render(truncate(oneLine(r), w, t.Glyphs.Ellipsis)))
+		out = append(out, t.Accent.Render(ui.Truncate(ui.OneLine(r), w, t.Glyphs.Ellipsis)))
 	}
 
 	return out
@@ -614,7 +616,7 @@ func (p *pinsView) pinDetail(in *maintain.Inspection, r pinRow, w int) []string 
 	pin := r.pin
 	e := pin.Entry
 
-	out := p.titleLines(e.Rule, "pin "+itoa(r.n+1)+" of "+itoa(len(in.Pins)), w)
+	out := p.titleLines(e.Rule, "pin "+strconv.Itoa(r.n+1)+" of "+strconv.Itoa(len(in.Pins)), w)
 
 	parts := []string{p.pinLabel(in, pin).render()}
 
@@ -665,10 +667,10 @@ func (p *pinsView) entryFacts(e pinfile.Entry, w int) []string {
 
 	source := pinfile.File
 	if e.Line > 0 {
-		source += ":" + itoa(e.Line)
+		source += ":" + strconv.Itoa(e.Line)
 	}
 
-	out = append(out, pinFact(t, "Source", []string{t.Muted.Render(truncateLeft(source, vw, t.Glyphs.Ellipsis))})...)
+	out = append(out, pinFact(t, "Source", []string{t.Muted.Render(ui.TruncateLeft(source, vw, t.Glyphs.Ellipsis))})...)
 
 	for i, k := range e.Unknown {
 		label := ""
@@ -676,7 +678,7 @@ func (p *pinsView) entryFacts(e pinfile.Entry, w int) []string {
 			label = "Keys"
 		}
 
-		out = append(out, pinFact(t, label, propLines(t.Attention, "unknown key "+oneLine(k)+" (no reader uses it)", vw))...)
+		out = append(out, pinFact(t, label, propLines(t.Attention, "unknown key "+ui.OneLine(k)+" (no reader uses it)", vw))...)
 	}
 
 	if len(e.ProvenanceIDs) > 0 {
@@ -695,7 +697,7 @@ func (p *pinsView) linkLines(in *maintain.Inspection, pin *maintain.Pin, w int) 
 	out := []string{t.Heading.Render("PROPOSALS")}
 
 	if !pinLinksKnown(in) {
-		out = append(out, propNote(t, ToneUnknown, pinLinkUnknownText(in), w)...)
+		out = append(out, propNote(t, ui.ToneUnknown, pinLinkUnknownText(in), w)...)
 
 		// The reader keeps the matching rows of an entry for display,
 		// but none of them is a proven link while a source is missing.
@@ -725,7 +727,7 @@ func (p *pinsView) linkLines(in *maintain.Inspection, pin *maintain.Pin, w int) 
 		id := propID(l.Applied[0].ID)
 
 		out = append(out, "")
-		out = append(out, propNote(t, ToneAttention, "The live note differs from the note that "+id+
+		out = append(out, propNote(t, ui.ToneAttention, "The live note differs from the note that "+id+
 			" recorded. Maintenance keeps the live note; an extraction asks about the recorded note.", w)...)
 		out = append(out, "", t.Heading.Render("RECORDED NOTE")+"  "+t.Faint.Render(id))
 
@@ -757,10 +759,10 @@ func (p *pinsView) duplicateLines(in *maintain.Inspection, pin *maintain.Pin, w 
 
 		where := pinfile.File
 		if e.Line > 0 {
-			where += ":" + itoa(e.Line)
+			where += ":" + strconv.Itoa(e.Line)
 		}
 
-		out = append(out, truncate(t.Muted.Render("also pin "+itoa(i+1)+sep)+t.Body.Render(where), w, t.Glyphs.Ellipsis))
+		out = append(out, ui.Truncate(t.Muted.Render("also pin "+strconv.Itoa(i+1)+sep)+t.Body.Render(where), w, t.Glyphs.Ellipsis))
 	}
 
 	return out
@@ -812,7 +814,7 @@ func pinLinkUnknownText(in *maintain.Inspection) string {
 // sentence. The readers start an unknown reason with "unknown: ", and a
 // sentence that already says "unknown" would repeat the word.
 func pinReason(reason string) string {
-	return strings.TrimPrefix(diag(reason), "unknown: ")
+	return strings.TrimPrefix(ui.Diag(reason), "unknown: ")
 }
 
 // proposalRow renders one related ledger row: its ID, its state, and
@@ -820,12 +822,12 @@ func pinReason(reason string) string {
 func (p *pinsView) proposalRow(pr domain.Proposal, w int) string {
 	t := p.st.theme
 
-	line := t.Muted.Render(padRight(propID(pr.ID), 5)) + " " + pinStatusWord(t, pr.Status)
+	line := t.Muted.Render(ui.PadRight(propID(pr.ID), 5)) + " " + pinStatusWord(t, pr.Status)
 	if meta := p.agentMeta(pr); meta != "" {
 		line += "   " + t.Faint.Render(meta)
 	}
 
-	return truncate(line, w, t.Glyphs.Ellipsis)
+	return ui.Truncate(line, w, t.Glyphs.Ellipsis)
 }
 
 // agentLine renders the agent and the creation date of a proposal, or
@@ -838,7 +840,7 @@ func (p *pinsView) agentLine(pr domain.Proposal, w int) string {
 		return t.Muted.Render("unknown")
 	}
 
-	return truncate(t.Body.Render(meta), w, t.Glyphs.Ellipsis)
+	return ui.Truncate(t.Body.Render(meta), w, t.Glyphs.Ellipsis)
 }
 
 // agentMeta joins the agent and the creation date of a proposal.
@@ -846,7 +848,7 @@ func (p *pinsView) agentMeta(pr domain.Proposal) string {
 	var meta []string
 
 	if pr.Agent != "" {
-		meta = append(meta, oneLine(pr.Agent))
+		meta = append(meta, ui.OneLine(pr.Agent))
 	}
 
 	if pr.CreatedAt > 0 {
@@ -857,7 +859,7 @@ func (p *pinsView) agentMeta(pr domain.Proposal) string {
 }
 
 // pinStatusWord renders a ledger status as a badge with its word.
-func pinStatusWord(t *Theme, status string) string {
+func pinStatusWord(t *ui.Theme, status string) string {
 	g := t.Glyphs
 
 	switch status {
@@ -870,7 +872,7 @@ func pinStatusWord(t *Theme, status string) string {
 	case domain.ProposalDismissed:
 		return t.Muted.Render(g.Dot + " dismissed")
 	default:
-		return t.Muted.Render(g.Dot + " " + oneLine(status))
+		return t.Muted.Render(g.Dot + " " + ui.OneLine(status))
 	}
 }
 
@@ -930,7 +932,7 @@ func (p *pinsView) unknownValues(reason string, w int) []string {
 
 	// The readers start the reason with "unknown:" or "no reading:", so
 	// it keeps its own words.
-	return propIndent(t.Unknown.Render(t.Glyphs.Unknown)+" ", propLines(t.Muted, diag(reason), max(1, w-2)))
+	return propIndent(t.Unknown.Render(t.Glyphs.Unknown)+" ", propLines(t.Muted, ui.Diag(reason), max(1, w-2)))
 }
 
 // evidenceValues renders the evidence tier and its facts.
@@ -941,7 +943,7 @@ func (p *pinsView) evidenceValues(c maintain.ConfidenceReading, w int) []string 
 		return p.unknownValues(c.Reason, w)
 	}
 
-	return propLines(t.Body, c.Tier.String()+" "+t.Glyphs.Sep+" "+oneLine(c.Facts.Line()), w)
+	return propLines(t.Body, c.Tier.String()+" "+t.Glyphs.Sep+" "+ui.OneLine(c.Facts.Line()), w)
 }
 
 // citationValues renders the citations of the linked proposal: each
@@ -957,7 +959,7 @@ func (p *pinsView) citationValues(pin *maintain.Pin, c maintain.ConfidenceReadin
 	}
 
 	members := pin.Link.Applied[0].Members
-	out := []string{t.Body.Render(itoa(len(c.Living)) + " living of " + itoa(len(members)) + " cited")}
+	out := []string{t.Body.Render(strconv.Itoa(len(c.Living)) + " living of " + strconv.Itoa(len(members)) + " cited")}
 
 	// The comparison reads the whole rows, so a cut at the pane width
 	// never makes two different rows look the same.
@@ -982,7 +984,7 @@ func (p *pinsView) citationValues(pin *maintain.Pin, c maintain.ConfidenceReadin
 
 	for _, id := range members {
 		if !slices.ContainsFunc(c.Living, func(f domain.Finding) bool { return f.ID == id }) {
-			out = append(out, propNote(t, ToneUnknown, "finding "+strconv.FormatInt(id, 10)+
+			out = append(out, propNote(t, ui.ToneUnknown, "finding "+strconv.FormatInt(id, 10)+
 				": no longer in the index (aged out, reverted or removed)", w)...)
 		}
 	}
@@ -1005,13 +1007,13 @@ func (p *pinsView) citationLine(f domain.Finding, withID bool, w int) string {
 	var meta []string
 
 	if f.PR > 0 {
-		meta = append(meta, "PR #"+itoa(f.PR))
+		meta = append(meta, "PR #"+strconv.Itoa(f.PR))
 	} else if f.Source != "" {
-		meta = append(meta, oneLine(f.Source))
+		meta = append(meta, ui.OneLine(f.Source))
 	}
 
 	if f.Reviewer != "" {
-		meta = append(meta, oneLine(f.Reviewer))
+		meta = append(meta, ui.OneLine(f.Reviewer))
 	}
 
 	if f.CreatedAt > 0 {
@@ -1031,17 +1033,17 @@ func (p *pinsView) citationLine(f domain.Finding, withID bool, w int) string {
 
 	if path != "" {
 		if len(f.Paths) > 1 {
-			path += " +" + itoa(len(f.Paths)-1)
+			path += " +" + strconv.Itoa(len(f.Paths)-1)
 		}
 
 		if len(meta) > 0 {
 			line += t.Muted.Render(sep)
 		}
 
-		line += t.Accent.Render(oneLine(path))
+		line += t.Accent.Render(ui.OneLine(path))
 	}
 
-	return truncate(line, w, t.Glyphs.Ellipsis)
+	return ui.Truncate(line, w, t.Glyphs.Ellipsis)
 }
 
 // scopeValues renders the scope advice: current, a change from the live
@@ -1066,12 +1068,12 @@ func (p *pinsView) scopeValues(pin *maintain.Pin, s maintain.ScopeReading, w int
 	}
 
 	out := []string{t.Attention.Render(t.Glyphs.Warn + " would change")}
-	out = append(out, t.regionDelta(pinEntryRegions(pin.Entry), a.Regions, w)...)
+	out = append(out, regionDelta(t, pinEntryRegions(pin.Entry), a.Regions, w)...)
 
 	if a.RepoWide {
-		out = append(out, propNote(t, ToneAttention, "repository-wide: the pin would reach every path", w)...)
+		out = append(out, propNote(t, ui.ToneAttention, "repository-wide: the pin would reach every path", w)...)
 	} else if a.Broader {
-		out = append(out, propNote(t, ToneAttention, "broader: reaches paths that the current regions do not", w)...)
+		out = append(out, propNote(t, ui.ToneAttention, "broader: reaches paths that the current regions do not", w)...)
 	}
 
 	if a.Narrower {
@@ -1100,7 +1102,7 @@ func (p *pinsView) triggerValues(pin *maintain.Pin, tr maintain.TriggerReading, 
 	out := propLines(style, word+" "+t.Glyphs.Sep+" "+tr.State.String(), w)
 
 	for _, path := range pin.Link.Applied[0].TriggerPaths {
-		out = append(out, t.Accent.Render(truncate(oneLine(path), w, t.Glyphs.Ellipsis)))
+		out = append(out, t.Accent.Render(ui.Truncate(ui.OneLine(path), w, t.Glyphs.Ellipsis)))
 	}
 
 	// The hand edit is a route only while the console offers no retarget
@@ -1110,7 +1112,7 @@ func (p *pinsView) triggerValues(pin *maintain.Pin, tr maintain.TriggerReading, 
 	route := p.retargetBlock(pin) != "" && (!s.Known || s.Advice.Kind != distill.ScopeCurrent)
 
 	for _, f := range tr.Blocked {
-		out = append(out, propNote(t, ToneAttention, oneLine(pinTriggerFact(f, route)), w)...)
+		out = append(out, propNote(t, ui.ToneAttention, ui.OneLine(pinTriggerFact(f, route)), w)...)
 	}
 
 	return out
@@ -1125,7 +1127,7 @@ func (p *pinsView) triggerValues(pin *maintain.Pin, tr maintain.TriggerReading, 
 func pinTriggerFact(f distill.TriggerFact, route bool) string {
 	why := "directly cited by the evidence"
 	if !f.Direct {
-		why = "confirmed by co-change (" + itoa(f.Together) + " shared commits)"
+		why = "confirmed by co-change (" + strconv.Itoa(f.Together) + " shared commits)"
 	}
 
 	text := "trigger " + f.Path + " is " + why + ", but it sets no region: "
@@ -1152,16 +1154,16 @@ func (p *pinsView) outcomeValues(o maintain.OutcomeReading, w int) []string {
 		return p.unknownValues(o.Reason, w)
 	}
 
-	tone := ToneUnknown
+	tone := ui.ToneUnknown
 
 	switch o.Reading.Verdict {
 	case outcome.VerdictWorking:
-		tone = ToneSuccess
+		tone = ui.ToneSuccess
 	case outcome.VerdictNotLanding:
-		tone = ToneAttention
+		tone = ui.ToneAttention
 	}
 
-	out := propNote(t, tone, oneLine(o.Reading.Line()), w)
+	out := propNote(t, tone, ui.OneLine(o.Reading.Line()), w)
 
 	return append(out, propLines(t.Faint, "(derived recurrence check; not proof of cause, and not a reason to prune)", w)...)
 }
@@ -1181,14 +1183,14 @@ func (p *pinsView) exposureValues(x maintain.ExposureReading, w int) []string {
 	}
 
 	sep := " " + t.Glyphs.Sep + " "
-	text := "delivered " + itoa(x.Exposure.Count) + "×"
+	text := "delivered " + strconv.Itoa(x.Exposure.Count) + "×"
 
 	if !x.Exposure.First.IsZero() {
 		text += sep + "first " + x.Exposure.First.UTC().Format(time.DateOnly)
 	}
 
 	if x.Exposure.Matches > x.Exposure.Count {
-		text += sep + "matched " + itoa(x.Exposure.Matches) + "×"
+		text += sep + "matched " + strconv.Itoa(x.Exposure.Matches) + "×"
 	}
 
 	return propLines(t.Body, text, w)
@@ -1212,10 +1214,10 @@ func (p *pinsView) similarLines(in *maintain.Inspection, pin *maintain.Pin, w in
 		}
 
 		other := in.Pins[i].Entry
-		lead := t.Muted.Render(padRight("pin "+itoa(i+1), 8))
-		rest := t.Body.Render(oneLine(other.Rule)) + t.Faint.Render("  "+pinRegionLabel(pinEntryRegions(other)))
+		lead := t.Muted.Render(ui.PadRight("pin "+strconv.Itoa(i+1), 8))
+		rest := t.Body.Render(ui.OneLine(other.Rule)) + t.Faint.Render("  "+pinRegionLabel(pinEntryRegions(other)))
 
-		out = append(out, truncate(lead+rest, w, t.Glyphs.Ellipsis))
+		out = append(out, ui.Truncate(lead+rest, w, t.Glyphs.Ellipsis))
 	}
 
 	return append(out, propLines(t.Muted, "v compares them side by side. Similar wording does not mean identical "+
@@ -1245,7 +1247,7 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 	t := p.st.theme
 	out := []string{t.Heading.Render("MAINTENANCE")}
 
-	note := func(tone Tone, text string) {
+	note := func(tone ui.Tone, text string) {
 		out = append(out, propNote(t, tone, text, w)...)
 	}
 
@@ -1253,17 +1255,17 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 
 	switch {
 	case in.Doc.Unreadable():
-		note(ToneAttention, "Read-only: "+pinUnreadableText(in.Doc)+". Fix the file and press r. No action is "+
+		note(ui.ToneAttention, "Read-only: "+pinUnreadableText(in.Doc)+". Fix the file and press r. No action is "+
 			"offered until it reads, and no pin is shown as removed.")
 
 		return out
 	case !pinLinksKnown(in):
-		note(ToneUnknown, pinLinkUnknownText(in))
+		note(ui.ToneUnknown, pinLinkUnknownText(in))
 
 		if in.Index.State != workspace.IndexReady {
 			out = append(out, propLines(t.Muted, "Build the index from Overview (press 1, then b), or run this "+
 				"command in a shell:", w)...)
-			out = append(out, t.command("seamark index"))
+			out = append(out, commandText(t, "seamark index"))
 		}
 
 		return out
@@ -1273,21 +1275,21 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 
 		return out
 	case l.Link == pinfile.LinkPendingMatch:
-		note(ToneAttention, pinPendingMatchText(l.Pending))
+		note(ui.ToneAttention, pinPendingMatchText(l.Pending))
 
 		return out
 	case l.Link == pinfile.LinkAmbiguousFile:
-		note(ToneAttention, "Blocked: remove or change the duplicate entries in "+pinfile.File+
+		note(ui.ToneAttention, "Blocked: remove or change the duplicate entries in "+pinfile.File+
 			" by hand. Maintenance and extraction stay off until one entry remains.")
 
 		return out
 	case l.Link == pinfile.LinkAmbiguousLedger:
-		note(ToneAttention, "Blocked: "+propIDList(pinProposalIDs(l.Applied))+" all record this pin, so no "+
+		note(ui.ToneAttention, "Blocked: "+propIDList(pinProposalIDs(l.Applied))+" all record this pin, so no "+
 			"action can choose one. Edit the pin by hand in "+pinfile.File+".")
 
 		return out
 	case l.Link != pinfile.LinkLinked:
-		note(ToneAttention, "Blocked: "+l.Link.Reason()+". Edit the pin by hand in "+pinfile.File+".")
+		note(ui.ToneAttention, "Blocked: "+l.Link.Reason()+". Edit the pin by hand in "+pinfile.File+".")
 
 		return out
 	case pinsForeignRoot(p.st) != "":
@@ -1295,12 +1297,12 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 
 		return append(out, p.extractLines(pin, w)...)
 	case in.Doc.FileBlock != "":
-		note(ToneAttention, "Retarget and prune are off: the pin file cannot be edited ("+diag(in.Doc.FileBlock)+").")
+		note(ui.ToneAttention, "Retarget and prune are off: the pin file cannot be edited ("+ui.Diag(in.Doc.FileBlock)+").")
 
 		return append(out, p.extractLines(pin, w)...)
 	case pin.Entry.Block != "":
-		note(ToneAttention, "Retarget and prune are off: this entry cannot be edited safely ("+
-			diag(pin.Entry.Block)+"). Edit it by hand in "+pinfile.File+".")
+		note(ui.ToneAttention, "Retarget and prune are off: this entry cannot be edited safely ("+
+			ui.Diag(pin.Entry.Block)+"). Edit it by hand in "+pinfile.File+".")
 
 		return append(out, p.extractLines(pin, w)...)
 	}
@@ -1343,14 +1345,14 @@ func (p *pinsView) foreignLines(w int) []string {
 	t := p.st.theme
 	root := pinsForeignRoot(p.st)
 
-	out := propNote(t, ToneAttention, "Retarget and prune are off: the index of this workspace records another "+
-		"repository, "+oneLine(root)+". A change would write "+oneLine(filepath.Join(root, pinfile.File))+
-		" and the ledger of this workspace, not "+oneLine(filepath.Join(p.st.svc.Root(), pinfile.File))+".", w)
+	out := propNote(t, ui.ToneAttention, "Retarget and prune are off: the index of this workspace records another "+
+		"repository, "+ui.OneLine(root)+". A change would write "+ui.OneLine(filepath.Join(root, pinfile.File))+
+		" and the ledger of this workspace, not "+ui.OneLine(filepath.Join(p.st.svc.Root(), pinfile.File))+".", w)
 
 	out = append(out, propLines(t.Muted, "Build the index of this checkout from Overview (press 1, then b), or "+
 		"run this command here, then press r:", w)...)
 
-	return append(out, t.command("seamark index"))
+	return append(out, commandText(t, "seamark index"))
 }
 
 // extractLines states whether t asks about the trigger question of pin.
@@ -1379,7 +1381,7 @@ func (p *pinsView) gateLines(w int) []string {
 
 	switch {
 	case l.WriteErr != nil:
-		return propNote(t, ToneAttention, "The write gate could not be read: "+errText(l.WriteErr), w)
+		return propNote(t, ui.ToneAttention, "The write gate could not be read: "+ui.ErrText(l.WriteErr), w)
 	case l.Write:
 		return propLines(t.Muted, "distill.write is on: a confirmed retarget or prune writes "+pinfile.File+".", w)
 	default:
@@ -1428,7 +1430,7 @@ func (p *pinsView) propDetail(pr domain.Proposal, w int) []string {
 			label = "Triggers"
 		}
 
-		out = append(out, pinFact(t, label, []string{t.Accent.Render(truncate(oneLine(path), vw, t.Glyphs.Ellipsis))})...)
+		out = append(out, pinFact(t, label, []string{t.Accent.Render(ui.Truncate(ui.OneLine(path), vw, t.Glyphs.Ellipsis))})...)
 	}
 
 	out = append(out, pinFact(t, "Agent", []string{p.agentLine(pr, vw)})...)
@@ -1475,8 +1477,8 @@ func (p *pinsView) propDetail(pr domain.Proposal, w int) []string {
 func (p *pinsView) loadingBox(w, h int) string {
 	t := p.st.theme
 
-	return t.messageBox(t.Title.Render("Installed pins"), "", paneMessage{
-		head: []string{t.Accent.Render(t.spinnerFrame(p.st.tick)) + " " + t.Title.Render("Reading the pin file"+t.Glyphs.Ellipsis)},
+	return messageBox(t, t.Title.Render("Installed pins"), "", paneMessage{
+		head: []string{t.Accent.Render(t.SpinnerFrame(p.st.tick)) + " " + t.Title.Render("Reading the pin file"+t.Glyphs.Ellipsis)},
 		body: "Seamark reads " + pinfile.File + " and relates it to the proposal ledger. Nothing is written.",
 	}, w, h)
 }
@@ -1499,7 +1501,7 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 	case p.filter == pinInstalled && in.DocErr != nil:
 		m = paneMessage{
 			head: []string{t.Failure.Render(g.Fail) + " " + t.Title.Render("The pin file could not be read")},
-			body: errText(in.DocErr) + "\n\nNo pin is listed, and none is shown as removed. The other views " +
+			body: ui.ErrText(in.DocErr) + "\n\nNo pin is listed, and none is shown as removed. The other views " +
 				"stay usable. Press r to read the file again.",
 		}
 		count = t.Muted.Render("?")
@@ -1526,7 +1528,7 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 	case p.filter == pinNotPresent && (in.Links == nil || in.Links.NotPresentErr != nil):
 		reason := pinLinkUnknownText(in)
 		if in.Links != nil {
-			reason = errText(in.Links.NotPresentErr) + "."
+			reason = ui.ErrText(in.Links.NotPresentErr) + "."
 		}
 
 		m = paneMessage{
@@ -1556,7 +1558,7 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 		}
 	}
 
-	return t.messageBox(title, count, m, w, h)
+	return messageBox(t, title, count, m, w, h)
 }
 
 // unknownRoute adds the next valid route to the message of a history
@@ -1572,7 +1574,7 @@ func (p *pinsView) unknownRoute(in *maintain.Inspection, m *paneMessage) {
 	case in.Index.State != workspace.IndexReady:
 		m.next = append(m.next,
 			t.Muted.Render("Press ")+key("1")+t.Muted.Render(", then ")+key("b")+t.Muted.Render(" to build the index, or run:"),
-			t.command("seamark index"))
+			commandText(t, "seamark index"))
 	case in.DocErr != nil || in.Doc.Unreadable():
 		m.next = append(m.next, t.Muted.Render("Fix "+pinfile.File+", then press ")+key("r")+t.Muted.Render("."))
 	default:
@@ -1591,11 +1593,11 @@ func (p *pinsView) filterMessage() paneMessage {
 	var what []string
 
 	if p.region != "" {
-		what = append(what, "region "+oneLine(p.region))
+		what = append(what, "region "+ui.OneLine(p.region))
 	}
 
 	if p.text != "" {
-		what = append(what, `text "`+oneLine(p.text)+`"`)
+		what = append(what, `text "`+ui.OneLine(p.text)+`"`)
 	}
 
 	noun := "pins"

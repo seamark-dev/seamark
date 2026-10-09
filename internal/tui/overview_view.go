@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // ovListW is the width of the Attention box at 120 columns. A wider
@@ -42,7 +44,7 @@ type ovRow struct {
 // Attention and Detail boxes; the narrow layout shows the one-line
 // summary above one box, and enter shows the detail in its place.
 func (o *overview) view(w, h int) string {
-	wide := w >= wideWidth
+	wide := w >= ui.WideWidth
 
 	top, topH := o.summaryLine(w), 1
 	if wide && h >= ovCardsMinBody {
@@ -79,7 +81,7 @@ func (o *overview) view(w, h int) string {
 		it = &items[sel]
 	}
 
-	return head + hjoin(1, left, o.detailBox(it, w-leftW-1, boxH, !listFocus))
+	return head + ui.Hjoin(1, left, o.detailBox(it, w-leftW-1, boxH, !listFocus))
 }
 
 // rows lays out the attention items under their group headings, then
@@ -92,7 +94,7 @@ func (o *overview) rows(items []ovItem) []ovRow {
 	note := func(text string) { rows = append(rows, ovRow{kind: ovRowText, text: text}) }
 
 	for _, p := range o.pendingSources() {
-		note(t.Accent.Render(t.spinnerFrame(o.st.tick)) + " " + t.Muted.Render(p+t.Glyphs.Ellipsis))
+		note(t.Accent.Render(t.SpinnerFrame(o.st.tick)) + " " + t.Muted.Render(p+t.Glyphs.Ellipsis))
 	}
 
 	byGroup := [ovGroupCount][]int{}
@@ -126,10 +128,10 @@ func (o *overview) rows(items []ovItem) []ovRow {
 			style = t.Attention.Bold(true)
 		}
 
-		note(style.Render(strings.ToUpper(ovGroupNames[g])) + "  " + t.Faint.Render(itoa(len(idxs))))
+		note(style.Render(strings.ToUpper(ovGroupNames[g])) + "  " + t.Faint.Render(strconv.Itoa(len(idxs))))
 
 		if empty {
-			note("  " + t.Badge(ToneSuccess, "nothing actionable found"))
+			note("  " + t.Badge(ui.ToneSuccess, "nothing actionable found"))
 		}
 
 		for _, i := range idxs {
@@ -170,9 +172,9 @@ func (o *overview) renderRow(r ovRow, items []ovItem, selected, focused bool, w 
 
 	it := items[r.item]
 
-	marker, title := "  ", t.Body.Render(oneLine(it.title))
+	marker, title := "  ", t.Body.Render(ui.OneLine(it.title))
 	if selected {
-		marker, title = t.Key.Render(t.Glyphs.Cursor)+" ", t.Title.Render(oneLine(it.title))
+		marker, title = t.Key.Render(t.Glyphs.Cursor)+" ", t.Title.Render(ui.OneLine(it.title))
 	}
 
 	left := marker + o.itemGlyph(it) + " " + title
@@ -180,12 +182,12 @@ func (o *overview) renderRow(r ovRow, items []ovItem, selected, focused bool, w 
 	// The hint gives way to the title: a row that cannot hold both keeps
 	// the whole title, and the detail names the next step anyway.
 	line := left
-	if hint := o.rowHint(it); hint != "" && width(left)+width(hint)+2 <= w {
-		line = spread(left, hint+" ", w)
+	if hint := o.rowHint(it); hint != "" && ui.Width(left)+ui.Width(hint)+2 <= w {
+		line = ui.Spread(left, hint+" ", w)
 	}
 
 	if selected && focused {
-		return t.highlight(line, w, bgSel)
+		return t.Highlight(line, w, ui.BgSel)
 	}
 
 	return line
@@ -202,12 +204,12 @@ func (o *overview) itemState(it ovItem) (glyph string, style lipgloss.Style) {
 	switch {
 	case it.group == ovSummary:
 		tone = it.tone
-	case it.tone == ToneFailure:
-		tone = ToneFailure
+	case it.tone == ui.ToneFailure:
+		tone = ui.ToneFailure
 	}
 
 	style = t.ToneStyle(tone)
-	if tone == ToneNeutral {
+	if tone == ui.ToneNeutral {
 		style = t.Muted
 	}
 
@@ -260,7 +262,7 @@ func ovDestName(d destination) string {
 // with the cursor, and the bottom border shows the visible range.
 func (o *overview) listBox(rows []ovRow, items []ovItem, w, h int, focused bool, foot string) string {
 	t := o.st.theme
-	inner, n := boxInner(w), boxRows(h)
+	inner, n := ui.BoxInner(w), ui.BoxRows(h)
 	o.listH = n
 
 	selectable := false
@@ -282,11 +284,11 @@ func (o *overview) listBox(rows []ovRow, items []ovItem, w, h int, focused bool,
 	lines := make([]string, 0, end-off)
 
 	for i := off; i < end; i++ {
-		lines = append(lines, o.renderRow(rows[i], items, selectable && i == o.list.cursor, focused, inner))
+		lines = append(lines, o.renderRow(rows[i], items, selectable && i == o.list.Cursor, focused, inner))
 	}
 
 	if len(rows) > n {
-		pos := propRange(t, off, end, len(rows))
+		pos := t.RangeNote(off, end, len(rows))
 		if foot != "" {
 			pos += t.Faint.Render(" " + t.Glyphs.Sep + " ")
 		}
@@ -296,10 +298,10 @@ func (o *overview) listBox(rows []ovRow, items []ovItem, w, h int, focused bool,
 
 	right := ""
 	if count, ok := o.attentionCount(); ok {
-		right = t.Muted.Render(itoa(count))
+		right = t.Muted.Render(strconv.Itoa(count))
 	}
 
-	return t.box(boxOpts{W: w, H: h, Title: t.Title.Render("Attention"), Right: right, Foot: foot, Focus: focused, Lines: lines})
+	return t.Box(ui.BoxOpts{W: w, H: h, Title: t.Title.Render("Attention"), Right: right, Foot: foot, Focus: focused, Lines: lines})
 }
 
 // listOffset returns the first visible row for a window of n rows. The
@@ -308,7 +310,7 @@ func (o *overview) listBox(rows []ovRow, items []ovItem, w, h int, focused bool,
 // at the top, and on the last item it ends at the bottom, so the notes
 // above and the client and doctor lines below stay reachable.
 func (o *overview) listOffset(rows []ovRow, n int) int {
-	o.list.clamp(len(rows), n)
+	o.list.Clamp(len(rows), n)
 
 	first, last := -1, -1
 
@@ -322,21 +324,21 @@ func (o *overview) listOffset(rows []ovRow, n int) int {
 		}
 	}
 
-	switch o.list.cursor {
+	switch o.list.Cursor {
 	case first:
-		o.list.offset = 0
+		o.list.Offset = 0
 	case last:
-		o.list.offset = max(o.list.offset, len(rows)-n)
+		o.list.Offset = max(o.list.Offset, len(rows)-n)
 	}
 
-	top := o.list.cursor
-	for top > 0 && rows[top-1].kind != ovRowItem && o.list.cursor-top < 2 && o.list.cursor-top+1 < n {
+	top := o.list.Cursor
+	for top > 0 && rows[top-1].kind != ovRowItem && o.list.Cursor-top < 2 && o.list.Cursor-top+1 < n {
 		top--
 	}
 
-	o.list.offset = max(0, min(o.list.offset, top))
+	o.list.Offset = max(0, min(o.list.Offset, top))
 
-	return o.list.offset
+	return o.list.Offset
 }
 
 // clientLines renders one line per client: the configuration glyph, the
@@ -347,7 +349,7 @@ func (o *overview) clientLines() []string {
 
 	if !sec.loaded {
 		if sec.err != nil {
-			return []string{"  " + t.Unknown.Render("clients unknown: "+errText(sec.err))}
+			return []string{"  " + t.Unknown.Render("clients unknown: "+ui.ErrText(sec.err))}
 		}
 
 		return []string{"  " + o.reading("the integrations")}
@@ -359,18 +361,18 @@ func (o *overview) clientLines() []string {
 
 	nameW := 0
 	for _, insp := range sec.value {
-		nameW = max(nameW, width(oneLine(ovClientName(insp))))
+		nameW = max(nameW, ui.Width(ui.OneLine(ovClientName(insp))))
 	}
 
 	lines := make([]string, 0, len(sec.value)+1)
 
 	for _, insp := range sec.value {
 		glyph := t.Faint.Render(t.Glyphs.Hollow)
-		if tone, _ := ovClientState(insp); tone != ToneNeutral {
+		if tone, _ := ovClientState(insp); tone != ui.ToneNeutral {
 			glyph = t.ToneStyle(tone).Render(t.ToneGlyph(tone))
 		}
 
-		lines = append(lines, "  "+glyph+" "+t.Body.Render(padRight(oneLine(ovClientName(insp)), nameW))+"  "+
+		lines = append(lines, "  "+glyph+" "+t.Body.Render(ui.PadRight(ui.OneLine(ovClientName(insp)), nameW))+"  "+
 			o.clientCaps(insp))
 	}
 
@@ -415,7 +417,7 @@ func (o *overview) clientCaps(insp integration.Inspection) string {
 
 		switch {
 		case c.State == integration.StateCurrent && cw.capability == integration.CapabilityCommands:
-			parts = append(parts, t.Muted.Render("gate "+oneLine(ovGateWord(insp, c))))
+			parts = append(parts, t.Muted.Render("gate "+ui.OneLine(ovGateWord(insp, c))))
 		case c.State == integration.StateCurrent:
 			parts = append(parts, t.Muted.Render(cw.word))
 		case c.State == integration.StateUnreadable:
@@ -454,7 +456,7 @@ func (o *overview) doctorRows() []ovRow {
 
 	switch {
 	case !sec.loaded:
-		return []ovRow{text(head), text("  " + t.Accent.Render(t.spinnerFrame(o.st.tick)) + " " +
+		return []ovRow{text(head), text("  " + t.Accent.Render(t.SpinnerFrame(o.st.tick)) + " " +
 			t.Muted.Render("running the doctor checks"+t.Glyphs.Ellipsis))}
 	case sec.value == nil:
 		return []ovRow{text(head), text("  " + t.Unknown.Render("doctor report unavailable"))}
@@ -480,16 +482,16 @@ func (o *overview) doctorCounts(w int) string {
 	ok, info, warn, fail := ovDoctorCounts(o.st.doctor.value)
 
 	parts := []string{
-		t.Success.Render(t.Glyphs.OK + " " + itoa(ok) + " ok"),
-		t.Info.Render(t.Glyphs.Info + " " + itoa(info) + " info"),
+		t.Success.Render(t.Glyphs.OK + " " + strconv.Itoa(ok) + " ok"),
+		t.Info.Render(t.Glyphs.Info + " " + strconv.Itoa(info) + " info"),
 	}
 
 	if warn > 0 {
-		parts = append(parts, t.Attention.Render(t.Glyphs.Warn+" "+itoa(warn)+" warn"))
+		parts = append(parts, t.Attention.Render(t.Glyphs.Warn+" "+strconv.Itoa(warn)+" warn"))
 	}
 
 	if fail > 0 {
-		parts = append(parts, t.Failure.Render(t.Glyphs.Fail+" "+itoa(fail)+" failing"))
+		parts = append(parts, t.Failure.Render(t.Glyphs.Fail+" "+strconv.Itoa(fail)+" failing"))
 	} else {
 		parts = append(parts, t.Faint.Render("0 failing"))
 	}
@@ -507,7 +509,7 @@ func (o *overview) doctorCounts(w int) string {
 // longer than the box scrolls, and the bottom border shows the range.
 func (o *overview) detailBox(it *ovItem, w, h int, focused bool) string {
 	t := o.st.theme
-	inner, n := boxInner(w), boxRows(h)
+	inner, n := ui.BoxInner(w), ui.BoxRows(h)
 
 	title := t.Muted.Render("Detail")
 	if focused {
@@ -522,7 +524,7 @@ func (o *overview) detailBox(it *ovItem, w, h int, focused bool) string {
 			text = "No item to show."
 		}
 
-		lines = strings.Split(t.Muted.Render(wrap(text, inner)), "\n")
+		lines = strings.Split(t.Muted.Render(ui.Wrap(text, inner)), "\n")
 	} else {
 		lines = o.detailLines(*it, inner)
 	}
@@ -532,10 +534,10 @@ func (o *overview) detailBox(it *ovItem, w, h int, focused bool) string {
 
 	foot := ""
 	if len(lines) > n {
-		foot = propRange(t, o.detailOff, end, len(lines))
+		foot = t.RangeNote(o.detailOff, end, len(lines))
 	}
 
-	return t.box(boxOpts{W: w, H: h, Title: title, Foot: foot, Focus: focused, Lines: lines[o.detailOff:end]})
+	return t.Box(ui.BoxOpts{W: w, H: h, Title: title, Foot: foot, Focus: focused, Lines: lines[o.detailOff:end]})
 }
 
 // detailLines renders the title, the status line, the prose, the
@@ -548,20 +550,20 @@ func (o *overview) detailLines(it ovItem, w int) []string {
 		head = it.title
 	}
 
-	lines := ovStyled(t.Title.Render, wrap(oneLine(head), w))
+	lines := ovStyled(t.Title.Render, ui.Wrap(ui.OneLine(head), w))
 	lines = append(lines, o.statusLines(it, w)...)
 
 	for _, p := range it.body {
-		if p = diag(p); p != "" {
+		if p = ui.Diag(p); p != "" {
 			lines = append(lines, "")
-			lines = append(lines, ovStyled(t.Body.Render, wrap(p, w))...)
+			lines = append(lines, ovStyled(t.Body.Render, ui.Wrap(p, w))...)
 		}
 	}
 
 	for _, s := range it.sections {
-		if text := diag(s.text); text != "" {
+		if text := ui.Diag(s.text); text != "" {
 			lines = append(lines, "", t.Heading.Render(strings.ToUpper(s.title)))
-			lines = append(lines, ovStyled(t.Body.Render, wrap(text, w))...)
+			lines = append(lines, ovStyled(t.Body.Render, ui.Wrap(text, w))...)
 		}
 	}
 
@@ -594,7 +596,7 @@ func (o *overview) statusLines(it ovItem, w int) []string {
 
 	word := strings.ToLower(ovGroupNames[it.group])
 	if it.group == ovSummary {
-		word = oneLine(it.badge)
+		word = ui.OneLine(it.badge)
 	}
 
 	glyph, style := o.itemState(it)
@@ -613,8 +615,8 @@ func (o *overview) statusLines(it ovItem, w int) []string {
 		return []string{badge}
 	}
 
-	pad := width(badge) + 2
-	text := wrap(oneLine(strings.Join(meta, " "+t.Glyphs.Sep+" ")), max(10, w-pad))
+	pad := ui.Width(badge) + 2
+	text := ui.Wrap(ui.OneLine(strings.Join(meta, " "+t.Glyphs.Sep+" ")), max(10, w-pad))
 	out := ovStyled(t.Faint.Render, text)
 
 	out[0] = badge + "  " + out[0]
@@ -640,25 +642,25 @@ func (o *overview) nextLines(it ovItem, w int) []string {
 		lines = append(lines, t.Key.Render("enter")+" "+t.Body.Render(it.act.label))
 	}
 
-	fix := diag(it.fix)
+	fix := ui.Diag(it.fix)
 
 	switch {
 	case fix == "":
 	case it.act.kind != ovActNone && strings.HasPrefix(fix, "seamark ") &&
-		width(lines[0])+width(" · same as "+fix) <= w:
+		ui.Width(lines[0])+ui.Width(" · same as "+fix) <= w:
 		// A plain seamark command does what the key does, so it fits
 		// on the key line as the CLI route.
-		lines[0] += t.Faint.Render(" "+t.Glyphs.Sep+" same as ") + t.command(fix)
+		lines[0] += t.Faint.Render(" "+t.Glyphs.Sep+" same as ") + commandText(t, fix)
 	default:
 		intro := "Seamark shows this and never runs it:"
 		if it.act.kind != ovActNone {
 			intro = "Or by hand:"
 		}
 
-		lines = append(lines, ovStyled(t.Faint.Render, wrap(intro, w))...)
+		lines = append(lines, ovStyled(t.Faint.Render, ui.Wrap(intro, w))...)
 
-		for _, l := range strings.Split(wrap(fix, max(10, w-2)), "\n") {
-			lines = append(lines, "  "+t.command(l))
+		for _, l := range strings.Split(ui.Wrap(fix, max(10, w-2)), "\n") {
+			lines = append(lines, "  "+commandText(t, l))
 		}
 	}
 
@@ -673,7 +675,7 @@ func (o *overview) nextLines(it ovItem, w int) []string {
 // inside the Attention box.
 func (o *overview) freshView(w, h int) string {
 	t := o.st.theme
-	inner, n := boxInner(w), boxRows(h)
+	inner, n := ui.BoxInner(w), ui.BoxRows(h)
 
 	body := "Seamark found no index and no agent integration in this workspace. " +
 		"Nothing has been written: opening the console only reads."
@@ -683,12 +685,12 @@ func (o *overview) freshView(w, h int) string {
 	}
 
 	next := strings.Join([]string{
-		t.action("s    ", "Set up an integration", true),
-		t.action("b    ", "Build the index", false),
-		t.action("enter", "Show the attention list", false),
+		t.Action("s    ", "Set up an integration", true),
+		t.Action("b    ", "Build the index", false),
+		t.Action("enter", "Show the attention list", false),
 	}, "\n")
 
-	lines := strings.Split(t.empty(ToneNeutral, "Nothing is set up here yet", body, next, inner, n), "\n")
+	lines := strings.Split(t.Empty(ui.ToneNeutral, "Nothing is set up here yet", body, next, inner, n), "\n")
 
-	return t.box(boxOpts{W: w, H: h, Title: t.Title.Render("Attention"), Focus: true, Lines: lines})
+	return t.Box(ui.BoxOpts{W: w, H: h, Title: t.Title.Render("Attention"), Focus: true, Lines: lines})
 }

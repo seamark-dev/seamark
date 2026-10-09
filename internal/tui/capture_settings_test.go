@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // settingsStarter is a configuration like the one that a team keeps: a
@@ -126,7 +128,7 @@ func TestCaptureSettings(t *testing.T) {
 
 			svc := settingsFakeAt(t, root, sc.content)
 
-			h := &harness{t: t, m: newModel(svc, newTheme(sc.ascii))}
+			h := &harness{t: t, m: newModel(svc, ui.NewTheme(sc.ascii))}
 			h.run(h.m.Init())
 			h.send(teaSize(w, hgt))
 			h.press("5")

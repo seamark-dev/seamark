@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -22,7 +24,7 @@ import (
 // ovSummarySizes are the collapsed layouts, where the summary item must
 // hold every fact: wide but too short for the cards, the common 80×24,
 // and the documented minimum.
-var ovSummarySizes = [][2]int{{110, minHeight}, {80, 24}, {minWidth, minHeight}}
+var ovSummarySizes = [][2]int{{110, ui.MinHeight}, {80, 24}, {ui.MinWidth, ui.MinHeight}}
 
 // ovOpenSummary selects the summary item and opens its detail: enter
 // focuses the Detail box in the wide layout and opens it in the narrow
@@ -67,9 +69,9 @@ func ovReadDetail(t *testing.T, h *harness, w, hgt int) []string {
 			parts := strings.Split(l, "│")
 
 			switch {
-			case w >= wideWidth && len(parts) >= 5:
+			case w >= ui.WideWidth && len(parts) >= 5:
 				out = append(out, parts[3])
-			case w < wideWidth && len(parts) >= 3:
+			case w < ui.WideWidth && len(parts) >= 3:
 				out = append(out, parts[1])
 			}
 		}
@@ -92,7 +94,7 @@ func TestOverviewSummaryItemHoldsEveryFactAtEverySize(t *testing.T) {
 	for _, size := range ovSummarySizes {
 		w, hgt := size[0], size[1]
 
-		t.Run(itoa(w)+"x"+itoa(hgt), func(t *testing.T) {
+		t.Run(strconv.Itoa(w)+"x"+strconv.Itoa(hgt), func(t *testing.T) {
 			f := ovPopulated()
 			h := newHarness(t, f, w, hgt)
 
@@ -155,7 +157,7 @@ func TestOverviewSummaryItemKeepsProblemsFirst(t *testing.T) {
 }
 
 func TestOverviewSummaryItemWaitsForEverySource(t *testing.T) {
-	m := newModel(ovPopulated(), newTheme(false))
+	m := newModel(ovPopulated(), ui.NewTheme(false))
 
 	// Start the loads without running them, so every source is loading.
 	_ = m.st.load(allSections...)
@@ -176,10 +178,10 @@ func TestOverviewSummaryItemShowsIndexFactsWithoutReadyIndex(t *testing.T) {
 		IndexedAt: time.Now().Add(-50 * time.Hour).Unix(),
 	}}
 
-	h := newHarness(t, f, minWidth, minHeight)
+	h := newHarness(t, f, ui.MinWidth, ui.MinHeight)
 	ovOpenSummary(t, h)
 
-	flat := ovFlat(ovReadDetail(t, h, minWidth, minHeight))
+	flat := ovFlat(ovReadDetail(t, h, ui.MinWidth, ui.MinHeight))
 
 	for _, want := range []string{
 		"State ! needs upgrade", "Indexed 2d ago", "Database /work/repo/.seamark/index.db",
@@ -192,7 +194,7 @@ func TestOverviewSummaryItemShowsIndexFactsWithoutReadyIndex(t *testing.T) {
 	f.index = IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent, Path: f.dbPath}}
 	h.press("r")
 
-	flat = ovFlat(ovReadDetail(t, h, minWidth, minHeight))
+	flat = ovFlat(ovReadDetail(t, h, ui.MinWidth, ui.MinHeight))
 	assert.Contains(t, flat, "State ! no index")
 	assert.Contains(t, flat, "Database /work/repo/.seamark/index.db")
 	assert.NotContains(t, flat, "index time unknown", "a missing database has no index time to report")
@@ -214,7 +216,7 @@ func TestOverviewSummaryShowsStaleNoteAfterFailedHealthReload(t *testing.T) {
 		"the one-line summary marks the stale index snapshot")
 
 	summary := ovFind(t, ovScreen(h), ovSummaryKey)
-	assert.Equal(t, ToneAttention, summary.tone)
+	assert.Equal(t, ui.ToneAttention, summary.tone)
 	assert.Equal(t, "stale", summary.badge)
 
 	ovOpenSummary(t, h)
@@ -291,7 +293,7 @@ func TestOverviewSummaryDetailRendersInertAndASCII(t *testing.T) {
 	body := ovDetail(o, ovFind(t, o, ovSummaryKey), 78)
 	assert.NotContains(t, body, "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "the distill command is redacted")
 
-	h.m.st.theme = newTheme(true)
+	h.m.st.theme = ui.NewTheme(true)
 
 	for _, r := range ansi.Strip(ovDetail(o, ovFind(t, o, ovSummaryKey), 78)) {
 		require.Less(t, r, rune(128), "the ASCII theme renders %q in the summary detail", r)
@@ -305,7 +307,7 @@ func TestOverviewDetailHomeAndEndReachBothEndsOfALongDetail(t *testing.T) {
 	f.index = ovReadyIndex(f.root, f.dbPath)
 	f.integrations = []integration.Inspection{ovClaude()}
 
-	h := newHarness(t, f, minWidth, minHeight)
+	h := newHarness(t, f, ui.MinWidth, ui.MinHeight)
 	o := ovScreen(h)
 
 	ovOpenSummary(t, h)

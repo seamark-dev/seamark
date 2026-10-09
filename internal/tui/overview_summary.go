@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -53,12 +55,12 @@ func ovGateHookModes(insps []integration.Inspection) []string {
 
 // ovClientState grades a client's configuration for its glyph. It covers
 // configuration only; trust and evidence have their own items.
-func ovClientState(insp integration.Inspection) (tone Tone, word string) {
+func ovClientState(insp integration.Inspection) (tone ui.Tone, word string) {
 	if ovNothingConfigured(insp) {
-		return ToneNeutral, "not set up"
+		return ui.ToneNeutral, "not set up"
 	}
 
-	tone, word = ToneSuccess, "configured"
+	tone, word = ui.ToneSuccess, "configured"
 
 	for _, c := range insp.Capabilities {
 		if !c.Supported {
@@ -67,15 +69,15 @@ func ovClientState(insp integration.Inspection) (tone Tone, word string) {
 
 		switch c.State {
 		case integration.StateUnreadable:
-			return ToneFailure, "unreadable"
+			return ui.ToneFailure, "unreadable"
 		case integration.StatePartial, integration.StateConflict:
-			tone, word = ToneAttention, "needs attention"
+			tone, word = ui.ToneAttention, "needs attention"
 		}
 	}
 
 	for _, f := range insp.Findings {
-		if f.Level != integration.FindingInfo && tone == ToneSuccess {
-			tone, word = ToneAttention, "needs attention"
+		if f.Level != integration.FindingInfo && tone == ui.ToneSuccess {
+			tone, word = ui.ToneAttention, "needs attention"
 		}
 	}
 
@@ -133,11 +135,11 @@ func ovAge(ts int64, now time.Time) string {
 	case d < time.Minute:
 		return "just now"
 	case d < time.Hour:
-		return itoa(int(d.Minutes())) + "m ago"
+		return strconv.Itoa(int(d.Minutes())) + "m ago"
 	case d < 48*time.Hour:
-		return itoa(int(d.Hours())) + "h ago"
+		return strconv.Itoa(int(d.Hours())) + "h ago"
 	default:
-		return itoa(int(d.Hours()/24)) + "d ago"
+		return strconv.Itoa(int(d.Hours()/24)) + "d ago"
 	}
 }
 
@@ -148,16 +150,16 @@ func ovAge(ts int64, now time.Time) string {
 func (o *overview) summaryDetail(w int) string {
 	t := o.st.theme
 
-	cli := t.Muted.Render(wrap("The CLI prints the same facts:", w)) + "\n  " +
-		t.command("seamark status") + "\n  " + t.command("seamark doctor")
+	cli := t.Muted.Render(ui.Wrap("The CLI prints the same facts:", w)) + "\n  " +
+		commandText(t, "seamark status") + "\n  " + commandText(t, "seamark doctor")
 
-	return joinBlocks(
+	return ui.JoinBlocks(
 		o.summaryStaleNotes(w),
-		t.section("Index", t.kv(o.indexFacts(), w)),
-		t.section("Navigate", t.kv(o.navigateFacts(), w)),
-		t.section("Learn", t.kv(o.learnFacts(), w)),
-		t.section("Guard", t.kv(o.guardFacts(), w)),
-		t.section("Clients", t.kv(o.clientFacts(), w)),
+		sectionBlock(t, "Index", kv(t, o.indexFacts(), w)),
+		sectionBlock(t, "Navigate", kv(t, o.navigateFacts(), w)),
+		sectionBlock(t, "Learn", kv(t, o.learnFacts(), w)),
+		sectionBlock(t, "Guard", kv(t, o.guardFacts(), w)),
+		sectionBlock(t, "Clients", kv(t, o.clientFacts(), w)),
 		cli,
 	)
 }
@@ -181,7 +183,7 @@ func (o *overview) summaryStaleNotes(w int) string {
 			return
 		}
 
-		notes = append(notes, wrap(o.staleNote(err)+t.Muted.Render(". "+what+" come from the read "+
+		notes = append(notes, ui.Wrap(o.staleNote(err)+t.Muted.Render(". "+what+" come from the read "+
 			ovAge(at.Unix(), now)+"; r reads again."), w))
 	}
 
@@ -197,20 +199,20 @@ func (o *overview) summaryStaleNotes(w int) string {
 // semantic health instead.
 func (o *overview) probeState(p workspace.IndexProbe) (badge, note string, ok bool) {
 	t := o.st.theme
-	schema := t.Muted.Render("schema v" + itoa(p.Schema) + ", this seamark reads v" + itoa(p.Supported))
+	schema := t.Muted.Render("schema v" + strconv.Itoa(p.Schema) + ", this seamark reads v" + strconv.Itoa(p.Supported))
 
 	switch p.State {
 	case workspace.IndexAbsent:
-		return t.Badge(ToneAttention, "no index"),
+		return t.Badge(ui.ToneAttention, "no index"),
 			t.Muted.Render("b builds it; nothing is written before you confirm"), true
 	case workspace.IndexUnreadable:
-		return t.Badge(ToneFailure, "unreadable"), t.Muted.Render(errText(p.Err)), true
+		return t.Badge(ui.ToneFailure, "unreadable"), t.Muted.Render(ui.ErrText(p.Err)), true
 	case workspace.IndexNewer:
-		return t.Badge(ToneFailure, "newer schema"), schema, true
+		return t.Badge(ui.ToneFailure, "newer schema"), schema, true
 	case workspace.IndexOlder:
-		return t.Badge(ToneAttention, "needs upgrade"), schema, true
+		return t.Badge(ui.ToneAttention, "needs upgrade"), schema, true
 	case workspace.IndexNotIndexed:
-		return t.Badge(ToneAttention, "not indexed"), t.Muted.Render("decisions only, no index run yet"), true
+		return t.Badge(ui.ToneAttention, "not indexed"), t.Muted.Render("decisions only, no index run yet"), true
 	}
 
 	return "", "", false
@@ -225,9 +227,9 @@ func (o *overview) indexFacts() [][2]string {
 	if !sec.loaded {
 		if sec.err != nil {
 			return [][2]string{
-				{"State", t.Badge(ToneFailure, "read failed")},
-				{"Reason", t.Body.Render(errText(sec.err))},
-				{"Database", t.Body.Render(oneLine(o.st.svc.DBPath()))},
+				{"State", t.Badge(ui.ToneFailure, "read failed")},
+				{"Reason", t.Body.Render(ui.ErrText(sec.err))},
+				{"Database", t.Body.Render(ui.OneLine(o.st.svc.DBPath()))},
 			}
 		}
 
@@ -242,7 +244,7 @@ func (o *overview) indexFacts() [][2]string {
 		path = o.st.svc.DBPath()
 	}
 
-	database := [2]string{"Database", t.Body.Render(oneLine(path))}
+	database := [2]string{"Database", t.Body.Render(ui.OneLine(path))}
 
 	var rows [][2]string
 
@@ -256,8 +258,8 @@ func (o *overview) indexFacts() [][2]string {
 	case ok:
 		rows = append(rows, [2]string{"State", badge + " " + note})
 	case v.Status == nil:
-		rows = append(rows, [2]string{"Health", t.Badge(ToneFailure, "read failed") + " " +
-			t.Body.Render(errText(v.StatusErr))})
+		rows = append(rows, [2]string{"Health", t.Badge(ui.ToneFailure, "read failed") + " " +
+			t.Body.Render(ui.ErrText(v.StatusErr))})
 	default:
 		rows = append(rows, [2]string{"Freshness", o.freshnessBadge(v.Status.Freshness)})
 		rows = append(rows, o.coverageFacts(v.Status.Coverage)...)
@@ -266,8 +268,8 @@ func (o *overview) indexFacts() [][2]string {
 	rows = append(rows, [2]string{"Indexed", o.ageText(v, "")}, database)
 
 	if p.Schema > 0 {
-		rows = append(rows, [2]string{"Schema", t.Body.Render("v" + itoa(p.Schema) +
-			", this seamark reads v" + itoa(p.Supported))})
+		rows = append(rows, [2]string{"Schema", t.Body.Render("v" + strconv.Itoa(p.Schema) +
+			", this seamark reads v" + strconv.Itoa(p.Supported))})
 	}
 
 	return rows
@@ -334,7 +336,7 @@ func (o *overview) learnFacts() [][2]string {
 	if s, why := o.health(); s != nil {
 		distill := t.Unknown.Render("unresolved")
 		if s.DistillClient != "" {
-			distill = t.Muted.Render(oneLine(s.DistillClient))
+			distill = t.Muted.Render(ui.OneLine(s.DistillClient))
 		}
 
 		rows = append(rows,
@@ -343,7 +345,7 @@ func (o *overview) learnFacts() [][2]string {
 			[2]string{"Distill agent", distill})
 
 		if s.DistillAgent != "" {
-			rows = append(rows, [2]string{"Distill command", t.Muted.Render(diag(s.DistillAgent))})
+			rows = append(rows, [2]string{"Distill command", t.Muted.Render(ui.Diag(s.DistillAgent))})
 		}
 	} else {
 		rows = append(rows, [2]string{"Lessons", why})
@@ -374,7 +376,7 @@ func (o *overview) evidenceFact() (string, bool) {
 
 	v := sec.value
 	if v.CountsErr != nil {
-		return t.Unknown.Render("unknown: " + errText(v.CountsErr)), true
+		return t.Unknown.Render("unknown: " + ui.ErrText(v.CountsErr)), true
 	}
 
 	text := t.Body.Render(ovPlural(v.FixFindings, "fix finding", "fix findings")) + t.Muted.Render(o.dot()) +
@@ -402,7 +404,7 @@ func (o *overview) pinWriteFact() (string, bool) {
 	snap := sec.value
 
 	if err := snap.ReaderErrs[settings.ReaderDistill]; err != nil {
-		return t.Unknown.Render("unknown: " + errText(err)), true
+		return t.Unknown.Render("unknown: " + ui.ErrText(err)), true
 	}
 
 	if snap.Distill == nil {
@@ -426,7 +428,7 @@ func (o *overview) guardFacts() [][2]string {
 
 	switch {
 	case !sec.loaded && sec.err != nil:
-		return [][2]string{{"Policy", t.Unknown.Render("unknown: " + errText(sec.err))}, hooks}
+		return [][2]string{{"Policy", t.Unknown.Render("unknown: " + ui.ErrText(sec.err))}, hooks}
 	case !sec.loaded:
 		return [][2]string{{"Policy", o.reading("the policy")}, hooks}
 	}
@@ -435,13 +437,13 @@ func (o *overview) guardFacts() [][2]string {
 
 	switch {
 	case p.Err != nil:
-		return [][2]string{{"Policy", t.Badge(ToneFailure, "error") + " " + t.Body.Render(errText(p.Err))}, hooks}
+		return [][2]string{{"Policy", t.Badge(ui.ToneFailure, "error") + " " + t.Body.Render(ui.ErrText(p.Err))}, hooks}
 	case p.Mode == "":
 		return [][2]string{{"Policy", t.Unknown.Render("unknown")}, hooks}
 	}
 
 	return [][2]string{
-		{"Policy", t.Body.Render("mode " + oneLine(p.Mode) + ", compiles")},
+		{"Policy", t.Body.Render("mode " + ui.OneLine(p.Mode) + ", compiles")},
 		{"Rules", t.Body.Render(ovNum(p.Deny) + " deny, " + ovPlural(p.Approval, "approval rule", "approval rules"))},
 		hooks,
 	}
@@ -462,7 +464,7 @@ func (o *overview) clientListFact(list func([]integration.Inspection) []string, 
 		return t.Muted.Render(none)
 	}
 
-	return t.Body.Render(oneLine(strings.Join(items, ", ")))
+	return t.Body.Render(ui.OneLine(strings.Join(items, ", ")))
 }
 
 // clientFacts lists each client with its configuration state and its
@@ -485,8 +487,8 @@ func (o *overview) clientFacts() [][2]string {
 	for _, insp := range sec.value {
 		tone, word := ovClientState(insp)
 		rows = append(rows, [2]string{
-			oneLine(ovClientName(insp)),
-			t.Badge(tone, word) + dot + t.Muted.Render(oneLine(ovClientBrief(insp, dot))),
+			ui.OneLine(ovClientName(insp)),
+			t.Badge(tone, word) + dot + t.Muted.Render(ui.OneLine(ovClientBrief(insp, dot))),
 		})
 	}
 

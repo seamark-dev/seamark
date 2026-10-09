@@ -2,6 +2,7 @@ package tui
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // runKeep is the number of earlier finished records that the Run
@@ -160,7 +162,7 @@ func (v *runView) prepare() tea.Cmd {
 	v.showCurrent()
 
 	if v.cur != nil && v.cur.active() {
-		return toast(ToneAttention, "A run is in progress: "+oneLine(v.cur.title())+
+		return toast(ui.ToneAttention, "A run is in progress: "+ui.OneLine(v.cur.title())+
 			". Prepare the next distillation after it ends.")
 	}
 
@@ -257,7 +259,7 @@ func (v *runView) accept(msg openRunMsg) tea.Cmd {
 	}
 
 	if v.cur != nil && v.cur != msg.rec && v.cur.active() {
-		return toast(ToneAttention, "A run is in progress: "+oneLine(v.cur.title())+
+		return toast(ui.ToneAttention, "A run is in progress: "+ui.OneLine(v.cur.title())+
 			". Its record stays in Lessons › Run.")
 	}
 
@@ -359,7 +361,7 @@ func (v *runView) stepKey(msg tea.KeyMsg) bool {
 // accepts only these keys and enter, because its other keys plan or
 // start work, and the work of an earlier record would get no messages.
 var runMoveKeys = []key.Binding{
-	nkeys.Up, nkeys.Down, nkeys.PageUp, nkeys.PageDown, nkeys.Top, nkeys.Bottom, nkeys.Next, nkeys.Prev,
+	ui.Nav.Up, ui.Nav.Down, ui.Nav.PageUp, ui.Nav.PageDown, ui.Nav.Top, ui.Nav.Bottom, ui.Nav.Next, ui.Nav.Prev,
 }
 
 // browseKey handles a key while an earlier record shows. The movement
@@ -369,7 +371,7 @@ func (v *runView) browseKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, runMoveKeys...):
 		return v.shown().update(msg)
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		if len(v.shownIDs()) > 0 {
 			return navigate(destLessons, "proposals:run")
 		}
@@ -431,9 +433,9 @@ func (v *runView) browseKeys() []key.Binding {
 	var ks []key.Binding
 
 	if len(v.shownIDs()) > 0 {
-		review := withHelp(nkeys.Enter, "enter", "review proposals")
+		review := ui.WithHelp(ui.Nav.Enter, "enter", "review proposals")
 		if !v.st.wide() {
-			review = withHelp(nkeys.Enter, "enter", "review")
+			review = ui.WithHelp(ui.Nav.Enter, "enter", "review")
 		}
 
 		ks = append(ks, review)
@@ -502,16 +504,16 @@ func (v *runView) view(w, h int) string {
 		return v.cur.view(w, h)
 	}
 
-	o := boxOpts{W: w, H: max(4, h-3), Focus: true, Title: t.Title.Render("Run")}
-	next := t.hints([]key.Binding{
-		withHelp(lesKeys.Evidence, "e", "open Evidence"), withHelp(lesKeys.Pins, "m", "open Pins"),
+	o := ui.BoxOpts{W: w, H: max(4, h-3), Focus: true, Title: t.Title.Render("Run")}
+	next := t.Hints([]key.Binding{
+		ui.WithHelp(lesKeys.Evidence, "e", "open Evidence"), ui.WithHelp(lesKeys.Pins, "m", "open Pins"),
 	})
 
 	// The extraction key comes from its binding, so the text names the
 	// key that Pins and Proposals bind.
-	box := integBoxed(t, o, ToneNeutral, "No run in this session",
+	box := integBoxed(t, o, ui.ToneNeutral, "No run in this session",
 		"Refresh the evidence or prepare a distillation from Evidence, or extract trigger information with "+
-			extractKey.Help().Key+" in Pins or Proposals. The progress and the result of the last "+itoa(runKeep+1)+
+			extractKey.Help().Key+" in Pins or Proposals. The progress and the result of the last "+strconv.Itoa(runKeep+1)+
 			" runs show here until Seamark exits, and [ and ] step through them.", next)
 
 	return strings.Join([]string{"", "", box}, "\n")
@@ -541,10 +543,10 @@ func (v *runView) browseLine(w int) string {
 	t := v.st.theme
 	sep := " " + t.Glyphs.Sep + " "
 
-	line := " " + t.Attention.Render("Earlier run "+itoa(v.back)+" of "+itoa(len(v.past))) +
+	line := " " + t.Attention.Render("Earlier run "+strconv.Itoa(v.back)+" of "+strconv.Itoa(len(v.past))) +
 		t.Muted.Render(sep+"read-only"+sep) + t.Key.Render("]") + t.Muted.Render(" later")
 
-	return truncate(line, w, t.Glyphs.Ellipsis)
+	return ui.Truncate(line, w, t.Glyphs.Ellipsis)
 }
 
 // propRunFilter narrows the proposal list to the proposals that one run
@@ -600,7 +602,7 @@ func (p *propView) clearRun() tea.Cmd {
 	p.run = nil
 	p.relocate(p.rows(), true)
 
-	return toast(ToneNeutral, "Run filter cleared: every pending proposal shows.")
+	return toast(ui.ToneNeutral, "Run filter cleared: every pending proposal shows.")
 }
 
 // runBehind reports a ledger snapshot older than the end of the filtered
@@ -615,7 +617,7 @@ func (p *propView) runBehind() bool {
 func (p *propView) runChip() string {
 	t := p.st.theme
 
-	return t.Accent.Render(oneLine(p.run.label)) +
+	return t.Accent.Render(ui.OneLine(p.run.label)) +
 		t.Muted.Render(" "+t.Glyphs.Sep+" "+propPlural(len(p.run.ids), "proposal", "proposals"))
 }
 
@@ -625,19 +627,19 @@ func (p *propView) runChip() string {
 func (p *propView) runMessage(l *proposals.Ledger) paneMessage {
 	t := p.st.theme
 	g := t.Glyphs
-	label := oneLine(p.run.label)
+	label := ui.OneLine(p.run.label)
 
 	if p.runBehind() {
 		if sec := &p.st.ledger; !sec.loading && sec.err != nil {
 			return paneMessage{
 				head: []string{t.Attention.Render(g.Warn) + " " + t.Title.Render("The ledger is older than "+label)},
-				body: "The last ledger read failed: " + errText(sec.err) + ". Press r to read it again. " +
+				body: "The last ledger read failed: " + ui.ErrText(sec.err) + ". Press r to read it again. " +
 					"Press esc to show every pending proposal.",
 			}
 		}
 
 		return paneMessage{
-			head: []string{t.Accent.Render(t.spinnerFrame(p.st.tick)) + " " +
+			head: []string{t.Accent.Render(t.SpinnerFrame(p.st.tick)) + " " +
 				t.Title.Render("Reading the proposals of "+label+g.Ellipsis)},
 			body: "The ledger snapshot is older than the run, so it cannot show them yet. Press r if this stays.",
 		}
@@ -662,13 +664,13 @@ func (p *propView) runMessage(l *proposals.Ledger) paneMessage {
 		}
 	}
 
-	facts := []string{itoa(applied) + " applied", itoa(dismissed) + " dismissed"}
+	facts := []string{strconv.Itoa(applied) + " applied", strconv.Itoa(dismissed) + " dismissed"}
 	if superseded > 0 {
-		facts = append(facts, itoa(superseded)+" superseded")
+		facts = append(facts, strconv.Itoa(superseded)+" superseded")
 	}
 
 	if missing > 0 {
-		facts = append(facts, itoa(missing)+" no longer in the ledger")
+		facts = append(facts, strconv.Itoa(missing)+" no longer in the ledger")
 	}
 
 	return paneMessage{
@@ -690,6 +692,6 @@ func (p *propView) settingsSaved(msg settingsSavedMsg) tea.Cmd {
 	p.seq.cancel()
 	p.dec = nil
 
-	return toast(ToneAttention, "Pin writing changed in Settings, so the apply preview closed. Press a to "+
+	return toast(ui.ToneAttention, "Pin writing changed in Settings, so the apply preview closed. Press a to "+
 		"preview it again.")
 }

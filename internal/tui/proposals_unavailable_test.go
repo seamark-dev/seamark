@@ -14,6 +14,7 @@ import (
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the Proposals help (user decision of 2026-10-04: "help
@@ -131,7 +132,7 @@ func TestProposalsHelpListsEveryActionAndMarksTheUnavailable(t *testing.T) {
 			assertFrame(t, h.view(), size[0], size[1])
 
 			pane := "enter detail"
-			if size[0] >= wideWidth {
+			if size[0] >= ui.WideWidth {
 				pane = "tab detail"
 			}
 
@@ -216,7 +217,7 @@ func TestProposalsFooterKeepsThePhase2Keys(t *testing.T) {
 
 			footer := footerClock.ReplaceAllString(footerLine(h.view()), "hh:mm:ss")
 			assert.Equal(t, want[st.name][size[0]], footer, "%s at %dx%d", st.name, size[0], size[1])
-			assert.NotContains(t, footer, unavailableWord, "%s at %dx%d", st.name, size[0], size[1])
+			assert.NotContains(t, footer, ui.UnavailableWord, "%s at %dx%d", st.name, size[0], size[1])
 		}
 	}
 }
@@ -275,7 +276,7 @@ func TestProposalsWideFooterKeepsThePhase2LabelOfEveryKey(t *testing.T) {
 		require.True(t, found, "%s: the footer ends with the global keys: %q", st.name, footer)
 
 		assert.Equal(t, want[st.name], strings.TrimRight(left, " "), st.name)
-		assert.NotContains(t, footer, unavailableWord, st.name)
+		assert.NotContains(t, footer, ui.UnavailableWord, st.name)
 	}
 }
 
@@ -336,7 +337,7 @@ func assertRecordRefused(t *testing.T, h *harness, f *fakeServices, toast string
 	t.Helper()
 
 	assert.Equal(t, toast, h.m.toast.text)
-	assert.Equal(t, ToneNeutral, h.m.toast.tone)
+	assert.Equal(t, ui.ToneNeutral, h.m.toast.tone)
 	assert.Empty(t, f.called(), "c without a known pin plans and writes nothing")
 	assert.Nil(t, lesProps(h).dec, "c without a known pin opens no preview")
 	_, modal := h.m.modalBlock(h.m.st.width, h.m.st.height-1)

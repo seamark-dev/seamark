@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests in this file pin the behavior that the two agent run
@@ -261,7 +263,7 @@ func TestAgentRunASCIIUsageSeparators(t *testing.T) {
 	ascii := func(t *testing.T, f *fakeServices) *harness {
 		t.Helper()
 
-		h := &harness{t: t, m: newModel(f, newTheme(true))}
+		h := &harness{t: t, m: newModel(f, ui.NewTheme(true))}
 		h.run(h.m.Init())
 		h.send(teaSize(120, 40))
 
@@ -344,8 +346,8 @@ func TestCursorKeyMovesWithinTheRows(t *testing.T) {
 }
 
 func TestCountSepAvoidsAFractionInASCII(t *testing.T) {
-	assert.Equal(t, ", ", countSep(newTheme(true)))
-	assert.Equal(t, " · ", countSep(newTheme(false)))
+	assert.Equal(t, ", ", countSep(ui.NewTheme(true)))
+	assert.Equal(t, " · ", countSep(ui.NewTheme(false)))
 }
 
 func TestIsPresetKnowsTheRegisteredCommands(t *testing.T) {
@@ -360,14 +362,14 @@ func TestAppendActivityKeepsTheNewestLines(t *testing.T) {
 	var lines []string
 
 	for i := range 6 {
-		lines = appendActivity(lines, at, "line "+itoa(i), 4)
+		lines = appendActivity(lines, at, "line "+strconv.Itoa(i), 4)
 	}
 
 	assert.Equal(t, []string{"09:05:07  line 2", "09:05:07  line 3", "09:05:07  line 4", "09:05:07  line 5"}, lines)
 }
 
 func TestRunStateLabelShowsTheStopRequest(t *testing.T) {
-	th := newTheme(true)
+	th := ui.NewTheme(true)
 	started := time.Now().Add(-75 * time.Second)
 
 	assert.Regexp(t, `^- running / 1m 1[56]s$`, runStateLabel(th, 0, false, started))
@@ -375,8 +377,8 @@ func TestRunStateLabelShowsTheStopRequest(t *testing.T) {
 }
 
 func TestRunStopModalNamesTheAnswers(t *testing.T) {
-	th := newTheme(false)
-	stop := withHelp(agentKeys.Start, "y", "stop the run")
+	th := ui.NewTheme(false)
+	stop := ui.WithHelp(agentKeys.Start, "y", "stop the run")
 
 	modal := runStopModal(th, "Stop the distillation?", "Seamark cancels the agent call of group 2.", stop, 120, 40)
 	flat := lesBoxFlat(modal)
@@ -387,7 +389,7 @@ func TestRunStopModalNamesTheAnswers(t *testing.T) {
 	assert.Contains(t, flat, "esc keep running")
 
 	for _, line := range strings.Split(modal, "\n") {
-		assert.LessOrEqual(t, width(line), 120)
+		assert.LessOrEqual(t, ui.Width(line), 120)
 	}
 }
 
@@ -444,11 +446,11 @@ func TestAgentProgressStartsIdleAndKnowsWhenWorkBegan(t *testing.T) {
 	}
 
 	for i := range agentActivityKeep + 2 {
-		r.log(time.Now(), "event "+itoa(i))
+		r.log(time.Now(), "event "+strconv.Itoa(i))
 	}
 
 	require.Len(t, r.activity, agentActivityKeep, "the log stays bounded")
-	assert.Contains(t, r.activity[agentActivityKeep-1], "event "+itoa(agentActivityKeep+1))
+	assert.Contains(t, r.activity[agentActivityKeep-1], "event "+strconv.Itoa(agentActivityKeep+1))
 }
 
 func TestAgentQueueHoldsEveryEventOfARun(t *testing.T) {
@@ -517,7 +519,7 @@ func TestAgentTextKeepsTheKindWhenItCutsTheCommand(t *testing.T) {
 	assert.Equal(t, "preset claude", agentKind("claude", false))
 	assert.Equal(t, "custom agent.argv", agentKind("claude", true), "a custom command names no preset")
 
-	th := newTheme(true)
+	th := ui.NewTheme(true)
 	argv := []string{"claude", "-p", "--model", "opus"}
 
 	assert.Equal(t, "claude -p --model opus / preset claude", agentText(th, argv, "preset claude", 0))

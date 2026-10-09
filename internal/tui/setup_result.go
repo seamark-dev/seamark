@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The apply step shows the running apply, then one box with the log of
@@ -30,10 +31,10 @@ const (
 // result arrives.
 func (wz *setupWizard) committingView(w, h int) string {
 	t := wz.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 
-	lines := []string{t.Accent.Render(t.spinnerFrame(wz.st.tick)) + " " +
-		t.Title.Render("Applying setup for "+oneLine(wz.client.Name)+t.Glyphs.Ellipsis), ""}
+	lines := []string{t.Accent.Render(t.SpinnerFrame(wz.st.tick)) + " " +
+		t.Title.Render("Applying setup for "+ui.OneLine(wz.client.Name)+t.Glyphs.Ellipsis), ""}
 	lines = append(lines, integLines(t.Muted, "Seamark writes the reviewed files now. This step cannot stop "+
 		"safely, so it runs to the end. The result lists every operation.", inner)...)
 	lines = append(lines, "")
@@ -43,13 +44,13 @@ func (wz *setupWizard) committingView(w, h int) string {
 			continue
 		}
 
-		lines = append(lines, integRow(t, cell(t.Faint.Render(t.Glyphs.Info), setupOpGlyphW),
-			cell(t.Muted.Render(setupEntryNoun(e)), setupOpKindW),
-			cell(t.Body.Render(truncateLeft(oneLine(e.path), max(4, inner-setupOpGlyphW-setupOpKindW), t.Glyphs.Ellipsis)),
+		lines = append(lines, integRow(t, ui.Cell(t.Faint.Render(t.Glyphs.Info), setupOpGlyphW),
+			ui.Cell(t.Muted.Render(setupEntryNoun(e)), setupOpKindW),
+			ui.Cell(t.Body.Render(ui.TruncateLeft(ui.OneLine(e.path), max(4, inner-setupOpGlyphW-setupOpKindW), t.Glyphs.Ellipsis)),
 				max(1, inner-setupOpGlyphW-setupOpKindW))))
 	}
 
-	return t.box(boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Apply", true), Lines: lines})
+	return t.Box(ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Apply", true), Lines: lines})
 }
 
 // setupEntryNoun names what a path row is: a file or a skill.
@@ -72,7 +73,7 @@ func (wz *setupWizard) resultKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, setupKeys.Done):
 		wz.closed = true
 	default:
-		wz.pager.key(msg)
+		wz.pager.Key(msg)
 	}
 
 	return nil
@@ -119,16 +120,16 @@ func (wz *setupWizard) resultView(w, h int) string {
 		return ""
 	}
 
-	inner, rows := boxInner(w), boxRows(h)
-	lines := wz.pager.lines("result", wz.resultLines(inner), inner, rows)
+	inner, rows := ui.BoxInner(w), ui.BoxRows(h)
+	lines := wz.pager.Lines("result", wz.resultLines(inner), inner, rows)
 
-	return t.box(boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Apply", true),
-		Right: setupResultState(t, o), Foot: wz.pager.foot(t), Lines: lines})
+	return t.Box(ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Apply", true),
+		Right: setupResultState(t, o), Foot: wz.pager.Foot(t), Lines: lines})
 }
 
 // setupResultState returns the state word at the right of the Apply box
 // border.
-func setupResultState(t *Theme, o *setupOutcome) string {
+func setupResultState(t *ui.Theme, o *setupOutcome) string {
 	switch {
 	case o.err == nil && len(o.res.Ops)+len(o.res.Skills) == 0:
 		return t.Unknown.Render(t.Glyphs.Unknown + " no operation reported")
@@ -157,7 +158,7 @@ func (wz *setupWizard) resultLines(w int) []string {
 			"to have changed. The remaining steps below come from a new inspection.", w)...)
 	case setupSucceeded(o):
 		lines = append(lines, ok+t.Title.Render("Configuration updated"))
-		lines = append(lines, integLines(t.Muted, "The reviewed files for "+oneLine(wz.client.Name)+" are written. "+
+		lines = append(lines, integLines(t.Muted, "The reviewed files for "+ui.OneLine(wz.client.Name)+" are written. "+
 			"This says nothing about project trust or native evidence; see the remaining steps below.", w)...)
 	case stale && !wrote:
 		lines = append(lines, t.Attention.Render(t.Glyphs.Warn+" ")+t.Title.Render("Setup stopped"))
@@ -165,7 +166,7 @@ func (wz *setupWizard) resultLines(w int) []string {
 		lines = append(lines, integLines(t.Muted, "Press p to plan again from the files as they are now.", w)...)
 	default:
 		lines = append(lines, t.Failure.Render(t.Glyphs.Fail+" ")+t.Title.Render("Setup stopped"))
-		lines = append(lines, integLines(t.Failure, errText(o.err), w)...)
+		lines = append(lines, integLines(t.Failure, ui.ErrText(o.err), w)...)
 		lines = append(lines, integLines(t.Muted, "Seamark does not roll back. Operations marked created or "+
 			"updated stay written, and the operations after the failure did not run. Press p to plan again: "+
 			"a new plan starts from the files as they are.", w)...)
@@ -192,7 +193,7 @@ func (wz *setupWizard) resultLines(w int) []string {
 // the path and the outcome, then the detail and the error. The outcome
 // words come from the typed status: an applied path is "created" or
 // "updated".
-func setupOpLines(t *Theme, clients []integration.Client, ops []integration.OpResult, w int) []string {
+func setupOpLines(t *ui.Theme, clients []integration.Client, ops []integration.OpResult, w int) []string {
 	g := t.Glyphs
 	targetW := max(4, w-setupOpGlyphW-setupOpKindW-setupOpOutcomeW)
 	pad := setupOpGlyphW + setupOpKindW
@@ -225,21 +226,21 @@ func setupOpLines(t *Theme, clients []integration.Client, ops []integration.OpRe
 			glyph, outcome = t.Unknown.Render(g.Unknown), t.Unknown.Render(op.Status.String())
 		}
 
-		lines = append(lines, integRow(t, cell(glyph, setupOpGlyphW), cell(t.Muted.Render(kind), setupOpKindW),
-			cell(t.Body.Render(truncateLeft(oneLine(op.Path), targetW-1, g.Ellipsis)), targetW),
-			cell(outcome, setupOpOutcomeW)))
+		lines = append(lines, integRow(t, ui.Cell(glyph, setupOpGlyphW), ui.Cell(t.Muted.Render(kind), setupOpKindW),
+			ui.Cell(t.Body.Render(ui.TruncateLeft(ui.OneLine(op.Path), targetW-1, g.Ellipsis)), targetW),
+			ui.Cell(outcome, setupOpOutcomeW)))
 
 		var meta []string
 
 		if op.Detail != "" {
-			meta = append(meta, oneLine(op.Detail))
+			meta = append(meta, ui.OneLine(op.Detail))
 		}
 
 		meta = append(meta, integConsumers(clients, op.Consumers))
 		lines = append(lines, integIndent(integLines(t.Muted, strings.Join(meta, " "+g.Sep+" "), max(1, w-pad)), pad)...)
 
 		if op.Err != nil {
-			lines = append(lines, integIndent(integLines(t.Failure, errText(op.Err), max(1, w-pad)), pad)...)
+			lines = append(lines, integIndent(integLines(t.Failure, ui.ErrText(op.Err), max(1, w-pad)), pad)...)
 		}
 	}
 
@@ -311,10 +312,10 @@ func (wz *setupWizard) remainingCaps(insp integration.Inspection, w int) (attent
 		// A requested capability that is still absent is a problem: the
 		// apply did not produce it.
 		if requested && c.State == integration.StateAbsent {
-			word = t.Badge(ToneAttention, "not configured")
+			word = t.Badge(ui.ToneAttention, "not configured")
 		}
 
-		line := t.Body.Render(padRight(integCapLabel(c.Capability), 20)) + word
+		line := t.Body.Render(ui.PadRight(integCapLabel(c.Capability), 20)) + word
 
 		if !requested && c.State != integration.StateAbsent {
 			line += t.Muted.Render(" " + t.Glyphs.Sep + " not part of this setup")
@@ -367,7 +368,7 @@ func setupCapRequested(setups []integration.ClientSetup, c integration.Capabilit
 // and evidence; it cannot establish either.
 func (wz *setupWizard) nativeSteps(insp integration.Inspection, w int) []string {
 	t := wz.st.theme
-	name := oneLine(wz.client.Name)
+	name := ui.OneLine(wz.client.Name)
 
 	var trust []string
 
@@ -396,7 +397,7 @@ func (wz *setupWizard) nativeSteps(insp integration.Inspection, w int) []string 
 	lines = append(lines, "")
 	lines = append(lines, integLabeled(t, "Project trust", 17, trustText+" "+t.Glyphs.Sep+
 		" Seamark reports trust and never grants it", t.Body, w)...)
-	lines = append(lines, integLabeled(t, "Native evidence", 17, oneLine(evidence), t.Body, w)...)
+	lines = append(lines, integLabeled(t, "Native evidence", 17, ui.OneLine(evidence), t.Body, w)...)
 	lines = append(lines, "")
 
 	return append(lines, integLines(t.Muted, "Written configuration does not prove that "+name+" runs the hooks or "+

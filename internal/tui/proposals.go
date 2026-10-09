@@ -14,6 +14,7 @@ import (
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file holds the state and the key handling of Lessons ›
@@ -301,16 +302,16 @@ func (p *propView) browseKey(msg tea.KeyMsg) tea.Cmd {
 	rows := p.rows()
 
 	switch {
-	case key.Matches(msg, nkeys.Back) && !p.focusDetail && p.run != nil:
+	case key.Matches(msg, ui.Nav.Back) && !p.focusDetail && p.run != nil:
 		// esc first leaves the detail, then ends a run filter.
 		return p.clearRun()
-	case key.Matches(msg, nkeys.Toggle):
+	case key.Matches(msg, ui.Nav.Toggle):
 		p.toggle(rows)
 	case key.Matches(msg, lesKeys.Clear):
 		if len(p.selected) > 0 {
 			p.selected = map[int64]bool{}
 
-			return toast(ToneNeutral, "Selection cleared.")
+			return toast(ui.ToneNeutral, "Selection cleared.")
 		}
 	case key.Matches(msg, lesKeys.State):
 		// Every other filter ends the run filter, so the list never
@@ -368,7 +369,7 @@ func (p *propView) filterChanged() tea.Cmd {
 
 	p.selected = map[int64]bool{}
 
-	return toast(ToneAttention, "Selection cleared: filter changed")
+	return toast(ui.ToneAttention, "Selection cleared: filter changed")
 }
 
 // propLink is the first link of a proposal's cited evidence. pr is
@@ -408,21 +409,21 @@ func (p *propView) openLink(rows []domain.Proposal) tea.Cmd {
 
 	link, ok := p.link(cur)
 	if !ok {
-		return toast(ToneNeutral, "No cited finding of "+propID(cur.ID)+" has a link.")
+		return toast(ui.ToneNeutral, "No cited finding of "+propID(cur.ID)+" has a link.")
 	}
 
 	open := p.st.openURL
 
 	return func() tea.Msg {
 		if open == nil {
-			return toastMsg{tone: ToneAttention, text: "This session cannot open a browser. The link is " + oneLine(link.url)}
+			return toastMsg{tone: ui.ToneAttention, text: "This session cannot open a browser. The link is " + ui.OneLine(link.url)}
 		}
 
 		if err := open(link.url); err != nil {
-			return toastMsg{tone: ToneFailure, text: "Could not open " + oneLine(link.url) + ": " + errText(err)}
+			return toastMsg{tone: ui.ToneFailure, text: "Could not open " + ui.OneLine(link.url) + ": " + ui.ErrText(err)}
 		}
 
-		return toastMsg{tone: ToneNeutral, text: "Opened " + oneLine(link.url) + " in the browser."}
+		return toastMsg{tone: ui.ToneNeutral, text: "Opened " + ui.OneLine(link.url) + " in the browser."}
 	}
 }
 
@@ -525,7 +526,7 @@ func (p *propView) reconcile() tea.Cmd {
 		return nil
 	}
 
-	return toast(ToneAttention, strings.Join(notes, "; "))
+	return toast(ui.ToneAttention, strings.Join(notes, "; "))
 }
 
 // markActed records IDs that the console itself removes or moves. The
@@ -556,7 +557,7 @@ func (p *propView) startDecision(a proposals.Action) tea.Cmd {
 	ids, implicit := p.targets()
 	if len(ids) == 0 {
 		if p.filter != propPending {
-			return toast(ToneNeutral, "Applied, dismissed and superseded proposals are read-only. Press f to show "+
+			return toast(ui.ToneNeutral, "Applied, dismissed and superseded proposals are read-only. Press f to show "+
 				"pending ones.")
 		}
 
@@ -573,7 +574,7 @@ func (p *propView) startDecision(a proposals.Action) tea.Cmd {
 func (p *propView) startApply() tea.Cmd {
 	ids, _ := p.targets()
 	if taken := p.appliedKeyRefusal(ids); taken != nil {
-		return toast(ToneNeutral, "No apply: "+appliedKeyNotice(taken, ids))
+		return toast(ui.ToneNeutral, "No apply: "+appliedKeyNotice(taken, ids))
 	}
 
 	return p.startDecision(proposals.ActionApply)
@@ -590,7 +591,7 @@ func (p *propView) startRecord() tea.Cmd {
 		return p.startDecision(proposals.ActionReconcile)
 	}
 
-	return toast(ToneNeutral, p.noRecordText(ids))
+	return toast(ui.ToneNeutral, p.noRecordText(ids))
 }
 
 // canRecord reports targets that c can record as applied: each target has
@@ -723,7 +724,7 @@ func (p *propView) decisionKey(msg tea.KeyMsg) tea.Cmd {
 
 	switch d.stage {
 	case flowPreparing:
-		if key.Matches(msg, nkeys.Back) {
+		if key.Matches(msg, ui.Nav.Back) {
 			// The read may still finish; seq drops its result.
 			p.seq.cancel()
 			p.dec = nil
@@ -745,7 +746,7 @@ func (p *propView) previewKey(msg tea.KeyMsg) tea.Cmd {
 	d := p.dec
 
 	switch {
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		p.dec = nil
 	case key.Matches(msg, lesKeys.Confirm):
 		if p.confirmable() {
@@ -762,7 +763,7 @@ func (p *propView) previewKey(msg tea.KeyMsg) tea.Cmd {
 			return p.copyYAML()
 		}
 	default:
-		d.scroll.key(msg)
+		d.scroll.Key(msg)
 	}
 
 	return nil
@@ -815,10 +816,10 @@ func (p *propView) copyYAML() tea.Cmd {
 
 	return func() tea.Msg {
 		if err := st.copyToClipboard(text); err != nil {
-			return toastMsg{tone: ToneFailure, text: "Could not copy the pin block: " + errText(err)}
+			return toastMsg{tone: ui.ToneFailure, text: "Could not copy the pin block: " + ui.ErrText(err)}
 		}
 
-		return toastMsg{tone: ToneNeutral, text: "Sent to the terminal clipboard (OSC 52)"}
+		return toastMsg{tone: ui.ToneNeutral, text: "Sent to the terminal clipboard (OSC 52)"}
 	}
 }
 
@@ -848,7 +849,7 @@ func (p *propView) commit() tea.Cmd {
 		return propCommitMsg{pv: pv, res: res, err: err}
 	})
 	if !ok {
-		return toast(ToneAttention, "Another operation is running: "+p.st.mutation)
+		return toast(ui.ToneAttention, "Another operation is running: "+p.st.mutation)
 	}
 
 	return cmd
@@ -892,16 +893,16 @@ func (p *propView) resultKey(msg tea.KeyMsg) tea.Cmd {
 	d := p.dec
 
 	switch {
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		if d.reviewAgain() {
 			return p.preview(d.action, d.ids, d.implicit)
 		}
 
 		p.dec = nil
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		p.dec = nil
 	default:
-		d.scroll.key(msg)
+		d.scroll.Key(msg)
 	}
 
 	return nil
@@ -937,7 +938,7 @@ func (p *propView) helpKeys() []key.Binding {
 
 	// The help also lists x when nothing is selected. So its label names
 	// what x clears; the footer keeps the short label of Phase 2.
-	return listAll(p.listKeys("clear selection"))
+	return ui.ListAll(p.listKeys("clear selection"))
 }
 
 // listKeys returns the bindings of the list. Each binding carries its
@@ -949,7 +950,7 @@ func (p *propView) listKeys(clearLabel string) []key.Binding {
 	cur, hasRow := p.cursorRow(rows)
 	ids, _ := p.targets()
 
-	sel := withHelp(nkeys.Toggle, "space", "select")
+	sel := ui.WithHelp(ui.Nav.Toggle, "space", "select")
 	sel.SetEnabled(hasRow && p.filter == propPending)
 
 	// The label follows the gate that the ledger snapshot reports. The
@@ -962,10 +963,10 @@ func (p *propView) listKeys(clearLabel string) []key.Binding {
 	// a does not work for a target whose pin key an applied proposal
 	// records, because the preview refuses it. The press follows the same
 	// rule (see startApply).
-	apply := withHelp(lesKeys.Apply, "a", applyLabel)
+	apply := ui.WithHelp(lesKeys.Apply, "a", applyLabel)
 	apply.SetEnabled(len(ids) > 0 && p.appliedKeyRefusal(ids) == nil)
 
-	dismiss := withHelp(lesKeys.Dismiss, "d", "dismiss")
+	dismiss := ui.WithHelp(lesKeys.Dismiss, "d", "dismiss")
 	dismiss.SetEnabled(len(ids) > 0)
 
 	// t shows only when a target has an open question, so the footer
@@ -973,14 +974,14 @@ func (p *propView) listKeys(clearLabel string) []key.Binding {
 	extract := extractKey
 	extract.SetEnabled(p.canExtract())
 
-	clearSel := withHelp(lesKeys.Clear, "x", clearLabel)
+	clearSel := ui.WithHelp(lesKeys.Clear, "x", clearLabel)
 	clearSel.SetEnabled(len(p.selected) > 0)
 
 	// c works only when every target has a known existing pin and no
 	// applied proposal records the pin key of a target, because the record
 	// refuses both. The press follows the same rule (see startRecord), so
 	// the footer, the help, and the key cannot disagree.
-	reconcile := withHelp(lesKeys.Reconcile, "c", "record applied")
+	reconcile := ui.WithHelp(lesKeys.Reconcile, "c", "record applied")
 	reconcile.SetEnabled(p.canRecord(ids))
 
 	openLabel := "open PR"
@@ -994,7 +995,7 @@ func (p *propView) listKeys(clearLabel string) []key.Binding {
 		openLabel = "open link"
 	}
 
-	open := withHelp(lesKeys.Open, "o", openLabel)
+	open := ui.WithHelp(lesKeys.Open, "o", openLabel)
 	open.SetEnabled(hasLink)
 
 	out := []key.Binding{sel, apply, dismiss, p.paneKey(hasRow)}
@@ -1005,7 +1006,7 @@ func (p *propView) listKeys(clearLabel string) []key.Binding {
 	// not list it as n/a (user decision of 2026-10-04). The footer drops
 	// a disabled key anyway, so it does not change.
 	if p.run != nil {
-		allRuns := withHelp(nkeys.Back, "esc", "all proposals")
+		allRuns := ui.WithHelp(ui.Nav.Back, "esc", "all proposals")
 		allRuns.SetEnabled(!p.focusDetail)
 
 		out = append(out, allRuns)
@@ -1014,7 +1015,7 @@ func (p *propView) listKeys(clearLabel string) []key.Binding {
 	// t follows f and /, because a narrow footer drops hints from the
 	// end. So the 120-column footer keeps the keys of the 1a layout, and
 	// the help still lists t.
-	return append(out, withHelp(lesKeys.State, "f", "state"), withHelp(lesKeys.Region, "/", "region"), extract,
+	return append(out, ui.WithHelp(lesKeys.State, "f", "state"), ui.WithHelp(lesKeys.Region, "/", "region"), extract,
 		open, clearSel, reconcile)
 }
 
@@ -1198,7 +1199,7 @@ func (p *propView) startExtract() tea.Cmd {
 	targets := p.extractTargets()
 	if len(targets) == 0 {
 		if p.filter == propDismissed || p.filter == propSuperseded {
-			return toast(ToneNeutral, "Dismissed and superseded proposals have no trigger question to ask.")
+			return toast(ui.ToneNeutral, "Dismissed and superseded proposals have no trigger question to ask.")
 		}
 
 		return nil
@@ -1207,10 +1208,10 @@ func (p *propView) startExtract() tea.Cmd {
 	if !p.canExtract() {
 		_, why := extQuestion(p.st, p.ledger(), targets[0])
 		if len(targets) == 1 {
-			return toast(ToneNeutral, "Nothing to extract for "+propID(targets[0].ID)+": "+why+".")
+			return toast(ui.ToneNeutral, "Nothing to extract for "+propID(targets[0].ID)+": "+why+".")
 		}
 
-		return toast(ToneNeutral, "No selected proposal has an open trigger question; "+propID(targets[0].ID)+": "+
+		return toast(ui.ToneNeutral, "No selected proposal has an open trigger question; "+propID(targets[0].ID)+": "+
 			why+".")
 	}
 
@@ -1270,34 +1271,34 @@ func (p *propView) focus(id int64) tea.Cmd {
 // decisionKeys returns the footer bindings of one decision stage. The
 // modal shows the same keys with longer labels.
 func (p *propView) decisionKeys(d *propDecision) []key.Binding {
-	scroll := withHelp(nkeys.Down, "↑↓", "scroll")
-	scroll.SetEnabled(d.scroll.scrolls())
+	scroll := ui.WithHelp(ui.Nav.Down, "↑↓", "scroll")
+	scroll.SetEnabled(d.scroll.Scrolls())
 
 	switch d.stage {
 	case flowPreparing:
-		return []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "cancel")}
 	case flowCommitting:
 		return nil
 	case flowResult:
 		if d.reviewAgain() {
-			return []key.Binding{withHelp(nkeys.Enter, "enter", "preview again"), withHelp(nkeys.Back, "esc", "close"),
+			return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "preview again"), ui.WithHelp(ui.Nav.Back, "esc", "close"),
 				scroll}
 		}
 
-		return []key.Binding{withHelp(nkeys.Enter, "enter", "close"), scroll}
+		return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "close"), scroll}
 	}
 
 	var out []key.Binding
 
 	if p.confirmable() {
-		out = append(out, withHelp(lesKeys.Confirm, "y", propConfirmWord(d.action)))
+		out = append(out, ui.WithHelp(lesKeys.Confirm, "y", propConfirmWord(d.action)))
 	}
 
 	switch {
 	case len(p.reconcileOffer()) > 0:
-		out = append(out, withHelp(lesKeys.Reconcile, "c", "record applied"))
+		out = append(out, ui.WithHelp(lesKeys.Reconcile, "c", "record applied"))
 	case p.copyable():
-		out = append(out, withHelp(lesKeys.Reconcile, "c", "copy"))
+		out = append(out, ui.WithHelp(lesKeys.Reconcile, "c", "copy"))
 	}
 
 	back := "close"
@@ -1305,7 +1306,7 @@ func (p *propView) decisionKeys(d *propDecision) []key.Binding {
 		back = "cancel"
 	}
 
-	return append(out, withHelp(nkeys.Back, "esc", back), scroll)
+	return append(out, ui.WithHelp(ui.Nav.Back, "esc", back), scroll)
 }
 
 // confirmLabel names the confirmed action with its count.

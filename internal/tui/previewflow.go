@@ -5,6 +5,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file holds previewFlow, the shared stages of a flow that reads a
@@ -82,7 +84,7 @@ type previewFlow[P any] struct {
 	err     error
 	// scroll is the position of the modal body. Each new stage starts at
 	// the top, except Committing (see startCommit).
-	scroll scrollState
+	scroll ui.ScrollState
 }
 
 // active reports an open flow: any stage except flowClosed.
@@ -96,7 +98,7 @@ func (f *previewFlow[P]) active() bool {
 func (f *previewFlow[P]) startRead() {
 	f.stage = flowPreparing
 	f.preview, f.err = nil, nil
-	f.scroll = scrollState{}
+	f.scroll = ui.ScrollState{}
 }
 
 // readDone shows the result of a preview read and reports whether it
@@ -112,7 +114,7 @@ func (f *previewFlow[P]) readDone(current bool, preview *P, err error, emptyErr 
 
 	f.stage = flowPreview
 	f.preview, f.err = preview, err
-	f.scroll = scrollState{}
+	f.scroll = ui.ScrollState{}
 
 	if preview == nil && err == nil {
 		f.err = errors.New(emptyErr)
@@ -170,7 +172,7 @@ func (f *previewFlow[P]) commitDone() bool {
 func (f *previewFlow[P]) toResult() {
 	f.stage = flowResult
 	f.preview, f.err = nil, nil
-	f.scroll = scrollState{}
+	f.scroll = ui.ScrollState{}
 }
 
 // close ends the flow without a change. The owner also cancels its
@@ -178,23 +180,23 @@ func (f *previewFlow[P]) toResult() {
 func (f *previewFlow[P]) close() {
 	f.stage = flowClosed
 	f.preview, f.err = nil, nil
-	f.scroll = scrollState{}
+	f.scroll = ui.ScrollState{}
 }
 
 // flowWaitModal is the modal of a stage that waits: a preview read or a
 // commit. title names the wait without the ellipsis, and note says what
 // Seamark reads or writes. A read offers esc, so cancel adds it. A
 // commit offers no key, because it cannot stop safely.
-func flowWaitModal(st *state, title, note string, cancel bool, w int) modalOpts {
+func flowWaitModal(st *state, title, note string, cancel bool, w int) ui.ModalOpts {
 	t := st.theme
 
-	o := modalOpts{
-		Title: t.Accent.Render(t.spinnerFrame(st.tick)) + " " + t.Title.Render(title+t.Glyphs.Ellipsis),
+	o := ui.ModalOpts{
+		Title: t.Accent.Render(t.SpinnerFrame(st.tick)) + " " + t.Title.Render(title+t.Glyphs.Ellipsis),
 		Body:  propLines(t.Muted, note, w),
 	}
 
 	if cancel {
-		o.Actions = []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
+		o.Actions = []key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "cancel")}
 	}
 
 	return o
@@ -205,8 +207,8 @@ func flowWaitModal(st *state, title, note string, cancel bool, w int) modalOpts 
 // step, or "" when the cause is the only advice. A read writes nothing.
 // unchanged is the last line. It says in the words of the flow that
 // nothing was written, for example "Nothing was written."
-func previewFailedModal(t *Theme, what string, err error, hint, unchanged string, actions []key.Binding, w int) modalOpts {
-	body := propNote(t, ToneFailure, what+" could not be built: "+errText(err), w)
+func previewFailedModal(t *ui.Theme, what string, err error, hint, unchanged string, actions []key.Binding, w int) ui.ModalOpts {
+	body := propNote(t, ui.ToneFailure, what+" could not be built: "+ui.ErrText(err), w)
 
 	if hint != "" {
 		body = append(body, "")
@@ -216,5 +218,5 @@ func previewFailedModal(t *Theme, what string, err error, hint, unchanged string
 	body = append(body, "")
 	body = append(body, propLines(t.Muted, unchanged, w)...)
 
-	return modalOpts{Title: t.Failure.Render("Preview failed"), Body: body, Actions: actions}
+	return ui.ModalOpts{Title: t.Failure.Render("Preview failed"), Body: body, Actions: actions}
 }

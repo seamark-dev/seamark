@@ -18,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // lesLedger is a ledger with every state, advisories, and evidence
@@ -171,7 +172,7 @@ func TestLessonsWideAndCompactLayouts(t *testing.T) {
 	for _, line := range strings.Split(frame, "\n") {
 		if strings.Contains(line, "Pending proposals") {
 			assert.True(t, strings.HasPrefix(line, "╭─ Pending proposals"), line)
-			assert.Equal(t, 62, width(line[:strings.Index(line, "╮")+len("╮")]), line)
+			assert.Equal(t, 62, ui.Width(line[:strings.Index(line, "╮")+len("╮")]), line)
 		}
 	}
 
@@ -180,14 +181,14 @@ func TestLessonsWideAndCompactLayouts(t *testing.T) {
 	h.press("tab", "down", "down")
 	assert.True(t, lesProps(h).focusDetail)
 	assert.Equal(t, int64(1), lesProps(h).cursorID)
-	assert.Equal(t, 2, lesProps(h).detail.off)
+	assert.Equal(t, 2, lesProps(h).detail.Off)
 
 	// The page keys scroll the detail from the list too, as the hint
 	// under the detail box says.
 	h.press("shift+tab", "pgdown")
 	assert.False(t, lesProps(h).focusDetail)
 	assert.Equal(t, int64(1), lesProps(h).cursorID)
-	assert.Greater(t, lesProps(h).detail.off, 2)
+	assert.Greater(t, lesProps(h).detail.Off, 2)
 	h.press("tab")
 
 	h.press("shift+tab", "down")
@@ -845,7 +846,7 @@ func TestLessonsEmptyAndUnavailableStates(t *testing.T) {
 	assert.Contains(t, frame, "check-nil-errors", "a stale snapshot stays visible")
 
 	// Before the first load the view says what it is reading.
-	v := newPropView(&state{svc: newFake(), theme: newTheme(false)})
+	v := newPropView(&state{svc: newFake(), theme: ui.NewTheme(false)})
 	assert.Contains(t, v.view(100, 20), "Reading the proposal ledger")
 }
 
@@ -879,7 +880,7 @@ func TestLessonsSubViewsAndIntents(t *testing.T) {
 	h.press("/")
 	h.typeText("sp")
 	assert.Equal(t, lesProposals, les.sub)
-	assert.Equal(t, "sp", les.props.input.value())
+	assert.Equal(t, "sp", les.props.input.Value())
 	assert.Empty(t, f.called())
 }
 
@@ -921,7 +922,7 @@ func TestLessonsASCIIThemeUsesNoUnicodeGlyphs(t *testing.T) {
 		return lesPreview(a, ids, true), nil
 	}
 
-	h := &harness{t: t, m: newModel(f, newTheme(true))}
+	h := &harness{t: t, m: newModel(f, ui.NewTheme(true))}
 	h.run(h.m.Init())
 	h.send(tea.WindowSizeMsg{Width: 120, Height: 32})
 	h.press("3")

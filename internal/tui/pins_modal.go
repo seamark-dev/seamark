@@ -8,6 +8,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file holds the flow of the retarget and prune preview of Lessons
@@ -188,7 +189,7 @@ func (m *maintModal) planned(msg maintPlannedMsg) {
 func (m *maintModal) key(msg tea.KeyMsg) tea.Cmd {
 	switch m.stage {
 	case flowPreparing:
-		if key.Matches(msg, nkeys.Back) {
+		if key.Matches(msg, ui.Nav.Back) {
 			// The read may still finish; seq drops its result.
 			m.seq.cancel()
 			m.back()
@@ -222,7 +223,7 @@ func (m *maintModal) back() {
 // commits, and only a confirmable plan.
 func (m *maintModal) previewKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		m.back()
 	case key.Matches(msg, lesKeys.Confirm):
 		// A y during another operation does nothing. The preview already
@@ -239,7 +240,7 @@ func (m *maintModal) previewKey(msg tea.KeyMsg) tea.Cmd {
 			return navigate(destSettings, "group:pinwrite")
 		}
 	default:
-		m.scroll.key(msg)
+		m.scroll.Key(msg)
 	}
 
 	return nil
@@ -254,7 +255,7 @@ func (m *maintModal) resultKey(msg tea.KeyMsg) tea.Cmd {
 		if m.offer != nil {
 			return m.prepareRecovery()
 		}
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		switch {
 		case m.offer != nil:
 			// enter never drops a recovery by accident; esc does.
@@ -263,10 +264,10 @@ func (m *maintModal) resultKey(msg tea.KeyMsg) tea.Cmd {
 		default:
 			m.close()
 		}
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		m.close()
 	default:
-		m.scroll.key(msg)
+		m.scroll.Key(msg)
 	}
 
 	return nil
@@ -321,12 +322,12 @@ func (m *maintModal) commit() tea.Cmd {
 		return maintCommittedMsg{m: m, plan: p, res: res, err: err}
 	}))
 	if !ok {
-		return toast(ToneAttention, "Another operation is running: "+m.st.mutation)
+		return toast(ui.ToneAttention, "Another operation is running: "+m.st.mutation)
 	}
 
 	// The wait starts at the top. startCommit keeps the position, because
 	// the other flows keep it.
-	m.scroll = scrollState{}
+	m.scroll = ui.ScrollState{}
 
 	return cmd
 }
@@ -408,12 +409,12 @@ func (m *maintModal) settingsSaved(msg settingsSavedMsg) tea.Cmd {
 	if m.recovering {
 		m.back()
 
-		return toast(ToneAttention, changed+", so the ledger completion preview closed. Press c to check it again.")
+		return toast(ui.ToneAttention, changed+", so the ledger completion preview closed. Press c to check it again.")
 	}
 
 	m.back()
 
-	return toast(ToneAttention, changed+", so the "+m.req.Action.String()+" preview closed. Press "+
+	return toast(ui.ToneAttention, changed+", so the "+m.req.Action.String()+" preview closed. Press "+
 		maintOpenKey(m.req.Action)+" in Pins to preview it again.")
 }
 
@@ -434,18 +435,18 @@ func (m *maintModal) closed() bool {
 // modal renders the current stage. The scope summary of a preview stays
 // above the actions, so the minimum layout still shows what y confirms.
 func (m *maintModal) modal(w, h int) string {
-	return m.st.theme.modal(m.content(modalBodyWidth(modalMinW, w)), &m.scroll, w, h)
+	return m.st.theme.Modal(m.content(ui.ModalBodyWidth(ui.ModalMinW, w)), &m.scroll, w, h)
 }
 
 // keys returns the footer keys of the current stage. The modal names the
 // same keys with longer labels.
 func (m *maintModal) keys() []key.Binding {
-	scroll := withHelp(nkeys.Down, "↑↓", "scroll")
-	scroll.SetEnabled(m.scroll.scrolls())
+	scroll := ui.WithHelp(ui.Nav.Down, "↑↓", "scroll")
+	scroll.SetEnabled(m.scroll.Scrolls())
 
 	switch m.stage {
 	case flowPreparing:
-		return []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "cancel")}
 	case flowCommitting:
 		return nil
 	case flowResult:
@@ -462,7 +463,7 @@ func (m *maintModal) previewActions(short bool) []key.Binding {
 	var out []key.Binding
 
 	if m.confirmable() {
-		out = append(out, withHelp(lesKeys.Confirm, "y", m.confirmLabel(short)))
+		out = append(out, ui.WithHelp(lesKeys.Confirm, "y", m.confirmLabel(short)))
 	}
 
 	if m.gateOff() {
@@ -471,7 +472,7 @@ func (m *maintModal) previewActions(short bool) []key.Binding {
 			label = "settings"
 		}
 
-		out = append(out, withHelp(maintKeys.Settings, "o", label))
+		out = append(out, ui.WithHelp(maintKeys.Settings, "o", label))
 	}
 
 	back := "close"
@@ -483,7 +484,7 @@ func (m *maintModal) previewActions(short bool) []key.Binding {
 		back = "cancel"
 	}
 
-	return append(out, withHelp(nkeys.Back, "esc", back))
+	return append(out, ui.WithHelp(ui.Nav.Back, "esc", back))
 }
 
 // confirmLabel names what y does, with the count in the modal.
@@ -513,12 +514,12 @@ func (m *maintModal) resultActions(short bool) []key.Binding {
 			label, drop = "complete", "drop"
 		}
 
-		return []key.Binding{withHelp(maintKeys.Complete, "c", label), withHelp(nkeys.Back, "esc", drop)}
+		return []key.Binding{ui.WithHelp(maintKeys.Complete, "c", label), ui.WithHelp(ui.Nav.Back, "esc", drop)}
 	}
 
 	if m.reviewAgain() {
-		return []key.Binding{withHelp(nkeys.Enter, "enter", "preview again"), withHelp(nkeys.Back, "esc", "close")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "preview again"), ui.WithHelp(ui.Nav.Back, "esc", "close")}
 	}
 
-	return []key.Binding{withHelp(nkeys.Enter, "enter", "close")}
+	return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "close")}
 }

@@ -12,6 +12,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the session lifecycle. Run restores the terminal on
@@ -140,7 +142,7 @@ func sessionModel(t *testing.T) (*model, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	m := newModel(newFake(), newTheme(false))
+	m := newModel(newFake(), ui.NewTheme(false))
 	m.st.ctx = ctx
 
 	return m, cancel
@@ -208,7 +210,7 @@ func TestShellExitWaitIsBounded(t *testing.T) {
 }
 
 func TestShellExitBudgetSharesTheDeadline(t *testing.T) {
-	m := newModel(newFake(), newTheme(false))
+	m := newModel(newFake(), ui.NewTheme(false))
 	now := time.Now()
 
 	assert.Equal(t, exitWait, m.exitBudget(now), "a plain exit gets the whole budget")

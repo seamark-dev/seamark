@@ -14,6 +14,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // evStarted confirms a refresh of mode and keeps its worker from
@@ -625,7 +626,7 @@ func TestEvidenceRunHostileTextIsInert(t *testing.T) {
 func TestEvidenceRunASCII(t *testing.T) {
 	f := evFake()
 
-	h := &harness{t: t, m: newModel(f, newTheme(true))}
+	h := &harness{t: t, m: newModel(f, ui.NewTheme(true))}
 	h.run(h.m.Init())
 	h.send(teaSize(120, 40))
 	h.press("3", "e")

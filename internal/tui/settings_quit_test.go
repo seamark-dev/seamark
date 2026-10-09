@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // These tests cover the review fix of the quit with an unsaved Settings
@@ -193,7 +195,7 @@ func TestSettingsQuitAsksAgainAfterTheWorkEnds(t *testing.T) {
 func TestSettingsQuitQuestionFitsTheCrampedScreen(t *testing.T) {
 	h := settingsDraftCodex(t, settingsFake(t, ""))
 
-	w, hgt := minWidth-10, minHeight-2
+	w, hgt := ui.MinWidth-10, ui.MinHeight-2
 	h.resize(w, hgt)
 	h.press("q")
 	require.True(t, h.m.quitConfirm)

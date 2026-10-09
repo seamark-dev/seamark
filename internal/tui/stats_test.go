@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	lessonmodel "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 const statsTestLog = "/work/repo/.seamark/lessons-audit.jsonl"
@@ -126,7 +128,7 @@ func newStatsTest(snap lessonstats.Snapshot, ascii bool) (*statsView, *fakeServi
 	f := newFake()
 	f.stats = snap
 
-	st := &state{svc: f, theme: newTheme(ascii)}
+	st := &state{svc: f, theme: ui.NewTheme(ascii)}
 	st.stats.set(snap, nil, time.Now())
 
 	v := newStatsView(st)
@@ -197,16 +199,16 @@ func TestStatsSummaryMatchesTheAggregation(t *testing.T) {
 
 	body := statsDelivery(v, snap, 80)
 
-	assert.Equal(t, itoa(sum.Total), statsLast(t, body, "Total"))
-	assert.Equal(t, itoa(sum.BySurface["hook"]), statsLast(t, body, "hook reminders"))
-	assert.Equal(t, itoa(sum.BySurface["change_set"]), statsLast(t, body, "change_set"))
-	assert.Equal(t, itoa(sum.BySurface["check"]), statsLast(t, body, "check"))
-	assert.Equal(t, itoa(sum.Files), statsLast(t, body, "Distinct files"))
+	assert.Equal(t, strconv.Itoa(sum.Total), statsLast(t, body, "Total"))
+	assert.Equal(t, strconv.Itoa(sum.BySurface["hook"]), statsLast(t, body, "hook reminders"))
+	assert.Equal(t, strconv.Itoa(sum.BySurface["change_set"]), statsLast(t, body, "change_set"))
+	assert.Equal(t, strconv.Itoa(sum.BySurface["check"]), statsLast(t, body, "check"))
+	assert.Equal(t, strconv.Itoa(sum.Files), statsLast(t, body, "Distinct files"))
 
-	assert.Equal(t, itoa(sum.InstrumentedHookFirings), statsLast(t, body, "Injected"))
-	assert.Equal(t, itoa(sum.RepeatedHookFirings), statsLast(t, body, "repeated within a context"))
-	assert.Equal(t, itoa(sum.SuppressedHookFirings), statsLast(t, body, "Suppressed repeats"))
-	assert.Equal(t, itoa(sum.HookContextBytes), statsLast(t, body, "Context bytes"))
+	assert.Equal(t, strconv.Itoa(sum.InstrumentedHookFirings), statsLast(t, body, "Injected"))
+	assert.Equal(t, strconv.Itoa(sum.RepeatedHookFirings), statsLast(t, body, "repeated within a context"))
+	assert.Equal(t, strconv.Itoa(sum.SuppressedHookFirings), statsLast(t, body, "Suppressed repeats"))
+	assert.Equal(t, strconv.Itoa(sum.HookContextBytes), statsLast(t, body, "Context bytes"))
 
 	// The legacy record has no delivery status: delivered, but not
 	// instrumented, and without a client.
@@ -222,7 +224,7 @@ func TestStatsSummaryMatchesTheAggregation(t *testing.T) {
 		}
 
 		fields := statsFields(t, body, label)
-		assert.Equal(t, []string{itoa(r.Injected), itoa(r.Repeated), itoa(r.Suppressed)}, fields[len(fields)-3:],
+		assert.Equal(t, []string{strconv.Itoa(r.Injected), strconv.Itoa(r.Repeated), strconv.Itoa(r.Suppressed)}, fields[len(fields)-3:],
 			"attribution row %q", label)
 	}
 
@@ -231,10 +233,10 @@ func TestStatsSummaryMatchesTheAggregation(t *testing.T) {
 	// Every lesson keeps its delivered and matched counts and its last
 	// recorded match.
 	flat := statsFlat(body)
-	assert.Contains(t, flat, "PER LESSON "+itoa(len(sum.Ranked)))
+	assert.Contains(t, flat, "PER LESSON "+strconv.Itoa(len(sum.Ranked)))
 
 	for _, r := range sum.Ranked {
-		assert.Contains(t, flat, r.Symptom+" "+r.Region+" · "+itoa(r.Count)+" delivered · "+itoa(r.Matches)+
+		assert.Contains(t, flat, r.Symptom+" "+r.Region+" · "+strconv.Itoa(r.Count)+" delivered · "+strconv.Itoa(r.Matches)+
 			" matched · last "+statsWhen(r.LastTS, false, "—"))
 	}
 
@@ -381,7 +383,7 @@ func TestStatsMostSurfacedRanksByDeliveredRecords(t *testing.T) {
 	var firings []reviews.Firing
 
 	for i, n := range []int{2, 7, 3, 9, 1} {
-		lesson := reviews.FiredLesson{Region: "r", Symptom: "lesson-" + itoa(i)}
+		lesson := reviews.FiredLesson{Region: "r", Symptom: "lesson-" + strconv.Itoa(i)}
 		for range n {
 			firings = append(firings, reviews.Firing{TS: "2026-07-09T10:00:00Z", File: "a.go", Fired: []reviews.FiredLesson{lesson}})
 		}
@@ -445,7 +447,7 @@ func TestStatsAttributionTableFitsANarrowPane(t *testing.T) {
 	body := statsDelivery(v, snap, 50)
 
 	for _, line := range strings.Split(body, "\n") {
-		assert.LessOrEqual(t, width(line), 50, "line %q", line)
+		assert.LessOrEqual(t, ui.Width(line), 50, "line %q", line)
 	}
 
 	// The mechanism moves under the client, and the counts keep their
@@ -549,11 +551,11 @@ func TestStatsShowsIncompleteEligibility(t *testing.T) {
 	assert.NotContains(t, body, "NEVER DELIVERED 0", "an incomplete list is not an empty list")
 
 	// The delivery totals do not need the index.
-	assert.Contains(t, body, "Total "+itoa(snap.Summary.Total))
+	assert.Contains(t, body, "Total "+strconv.Itoa(snap.Summary.Total))
 }
 
 func TestStatsRendersLoadingAndStaleStates(t *testing.T) {
-	st := &state{svc: newFake(), theme: newTheme(false)}
+	st := &state{svc: newFake(), theme: ui.NewTheme(false)}
 	v := newStatsView(st)
 
 	st.stats.loading = true
@@ -584,16 +586,16 @@ func TestStatsLayoutsFitAndScroll(t *testing.T) {
 	// Many lessons make both boxes scroll.
 	for i := range 40 {
 		lesson := reviews.FiredLesson{
-			Region:  "internal/very/long/region/path/number/" + itoa(i),
-			Symptom: "a long normalized review message that needs truncation in the list " + itoa(i),
+			Region:  "internal/very/long/region/path/number/" + strconv.Itoa(i),
+			Symptom: "a long normalized review message that needs truncation in the list " + strconv.Itoa(i),
 		}
-		firings = append(firings, statsHook("2026-07-08T10:00:00Z", "claude", "ctx-"+itoa(i),
+		firings = append(firings, statsHook("2026-07-08T10:00:00Z", "claude", "ctx-"+strconv.Itoa(i),
 			reviews.DeliveryInjected, 50, lesson))
 	}
 
 	surfaced := statsSurfaced()
 	for i := range 20 {
-		surfaced = append(surfaced, lessonmodel.Lesson{Region: "never/" + itoa(i), Symptom: "cold lesson " + itoa(i), Occurrences: 3})
+		surfaced = append(surfaced, lessonmodel.Lesson{Region: "never/" + strconv.Itoa(i), Symptom: "cold lesson " + strconv.Itoa(i), Occurrences: 3})
 	}
 
 	snap := statsSnapshot(firings, surfaced)
@@ -621,8 +623,8 @@ func TestStatsLayoutsFitAndScroll(t *testing.T) {
 	out := statsRender(v, 120, 34)
 	top := strings.Split(out, "\n")[2]
 	assert.True(t, strings.HasPrefix(top, "╭─ Lessons "), top)
-	assert.Equal(t, 60, width(top[:strings.Index(top, "╮")+len("╮")]))
-	assert.Equal(t, 120, width(top))
+	assert.Equal(t, 60, ui.Width(top[:strings.Index(top, "╮")+len("╮")]))
+	assert.Equal(t, 120, ui.Width(top))
 	assert.Regexp(t, `1–29 of [0-9]+ ─╯`, out, "a scrolling box shows its position")
 
 	// tab moves the focus to the Delivery box; end shows the scope note.
@@ -737,7 +739,7 @@ func TestStatsASCIIThemeUsesOnlyASCII(t *testing.T) {
 		}
 	}
 
-	st := &state{svc: newFake(), theme: newTheme(true)}
+	st := &state{svc: newFake(), theme: ui.NewTheme(true)}
 	for _, r := range newStatsView(st).view(120, 34) {
 		require.Less(t, r, rune(0x80), "the loading state is ASCII")
 	}

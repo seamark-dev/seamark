@@ -10,6 +10,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // integClaudeSetup and integCodexSetup mirror the built-in descriptors,
@@ -265,11 +266,11 @@ func TestIntegrationsNarrowLayoutOpensDetailAndReturns(t *testing.T) {
 
 	h.press("esc")
 	assert.Contains(t, h.view(), "Clients")
-	assert.Equal(t, 1, h.m.screens[destIntegrations].(*integrations).list.cursor, "the cursor survives the detail")
+	assert.Equal(t, 1, h.m.screens[destIntegrations].(*integrations).list.Cursor, "the cursor survives the detail")
 
 	h.resize(120, 40)
 	assertFrame(t, h.view(), 120, 40)
-	assert.Equal(t, 1, h.m.screens[destIntegrations].(*integrations).list.cursor, "the cursor survives a resize")
+	assert.Equal(t, 1, h.m.screens[destIntegrations].(*integrations).list.Cursor, "the cursor survives a resize")
 	require.Empty(t, f.called())
 }
 
@@ -309,7 +310,7 @@ func TestIntegrationsSharedResourcesNameConsumers(t *testing.T) {
 	f := newFake()
 	f.clients = inspecttest.Registry().Clients()
 
-	shared := strings.Join(integShared(newTheme(false), f.clients, 80), "\n")
+	shared := strings.Join(integShared(ui.NewTheme(false), f.clients, 80), "\n")
 
 	assert.Contains(t, shared, ".claude/skills")
 	assert.Contains(t, shared, "Claude Code")
@@ -325,7 +326,7 @@ func TestIntegrationsOpenIntents(t *testing.T) {
 	s := h.m.screens[destIntegrations].(*integrations)
 
 	h.send(navigateMsg{dest: destIntegrations, intent: "client:codex"})
-	assert.Equal(t, 1, s.list.cursor)
+	assert.Equal(t, 1, s.list.Cursor)
 	assert.Nil(t, s.wizard)
 
 	h.send(navigateMsg{dest: destIntegrations, intent: "setup"})
@@ -360,7 +361,7 @@ func TestIntegrationsIntentBeforeFirstSnapshot(t *testing.T) {
 	assert.Equal(t, "codex", s.pendingClient)
 
 	h.send(h.m.st.load(secIntegrations)())
-	assert.Equal(t, 1, s.list.cursor)
+	assert.Equal(t, 1, s.list.Cursor)
 	assert.Empty(t, s.pendingClient)
 }
 
@@ -389,7 +390,7 @@ func TestIntegrationsASCIIThemeAvoidsUnicodeGlyphs(t *testing.T) {
 	f.integrations = integMatrix()
 
 	h := newHarness(t, f, 120, 32)
-	h.m.st.theme = newTheme(true)
+	h.m.st.theme = ui.NewTheme(true)
 	h.press("2")
 
 	frame := h.view()
@@ -418,17 +419,17 @@ func TestIntegrationsCountIgnoresResetAbsentByDesign(t *testing.T) {
 	tally := integCount(insp)
 	assert.Equal(t, 5, tally.expected)
 	assert.Equal(t, 1, tally.na)
-	assert.Equal(t, "✓ 5/5 · 1 n/a", ansi.Strip(integBadge(newTheme(false), tally)))
+	assert.Equal(t, "✓ 5/5 · 1 n/a", ansi.Strip(integBadge(ui.NewTheme(false), tally)))
 	assert.Equal(t, []string{"lessons", "MCP", "skills", "grants"}, integSummaryParts(insp, tally))
 
 	// The reset row of the table says why it does not apply.
 	reset := insp.Capabilities[len(insp.Capabilities)-1]
-	assert.Equal(t, "· n/a", ansi.Strip(integConfigCell(newTheme(false), insp, reset)))
+	assert.Equal(t, "· n/a", ansi.Strip(integConfigCell(ui.NewTheme(false), insp, reset)))
 	assert.Equal(t, "not installed by setup", integWhere(insp, reset, "Codex"))
 }
 
 func TestIntegrationsUnsupportedCapabilityIsNotApplicable(t *testing.T) {
-	th := newTheme(false)
+	th := ui.NewTheme(false)
 	insp := integration.Inspection{ClientID: "shared", Name: "Shared Agent"}
 	c := integration.CapabilityInspection{Capability: integration.CapabilityToolGrants}
 

@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file holds the review and the save of one settings group, and
@@ -87,7 +88,7 @@ func (s *settingsScreen) saveBlocked(g settings.Group) string {
 	case snap.Editable(g) != nil:
 		return settingsBlockSentence(settingsGroupTitle(g)+" cannot be saved here", snap.Editable(g))
 	case s.st.busy():
-		return "Saving waits for the running operation: " + oneLine(s.st.mutation) + "."
+		return "Saving waits for the running operation: " + ui.OneLine(s.st.mutation) + "."
 	}
 
 	return ""
@@ -97,9 +98,9 @@ func (s *settingsScreen) saveBlocked(g settings.Group) string {
 // The plan reads the file and writes nothing, so it takes no slot.
 func (s *settingsScreen) review(g settings.Group) tea.Cmd {
 	if reason := s.saveBlocked(g); reason != "" {
-		tone := ToneAttention
+		tone := ui.ToneAttention
 		if s.draftCount(g) == 0 {
-			tone = ToneNeutral
+			tone = ui.ToneNeutral
 		}
 
 		return toast(tone, reason)
@@ -151,7 +152,7 @@ func (s *settingsScreen) markPatternErrors(err error) {
 				s.excludeErrs = map[string]string{}
 			}
 
-			s.excludeErrs[p] = errText(err)
+			s.excludeErrs[p] = ui.ErrText(err)
 		}
 	}
 }
@@ -177,7 +178,7 @@ func (s *settingsScreen) confirm() tea.Cmd {
 		return settingsSaveDoneMsg{group: g, plan: p, res: res, err: err, at: time.Now()}
 	})
 	if !ok {
-		return toast(ToneAttention, "Saving waits for the running operation: "+oneLine(s.st.mutation)+".")
+		return toast(ui.ToneAttention, "Saving waits for the running operation: "+ui.OneLine(s.st.mutation)+".")
 	}
 
 	return cmd
@@ -210,7 +211,7 @@ func (s *settingsScreen) saveDone(msg settingsSaveDoneMsg) tea.Cmd {
 		saved := settingsSavedMsg{group: msg.group, at: msg.at}
 
 		return tea.Batch(mutationDone, refresh(kinds...), func() tea.Msg { return saved },
-			toast(ToneSuccess, settingsSavedText(msg.plan)))
+			toast(ui.ToneSuccess, settingsSavedText(msg.plan)))
 	}
 
 	// No key can leave a running save, so the result needs no stage
@@ -220,7 +221,7 @@ func (s *settingsScreen) saveDone(msg settingsSaveDoneMsg) tea.Cmd {
 
 	// The user can leave during the save, so the notice row also says
 	// that nothing was saved. The result waits in Settings.
-	note := toast(ToneAttention, "Settings were not saved: "+errText(err))
+	note := toast(ui.ToneAttention, "Settings were not saved: "+ui.ErrText(err))
 
 	if errors.Is(err, settings.ErrStale) {
 		return tea.Batch(mutationDone, refresh(secSettings), note)
@@ -272,30 +273,30 @@ func (s *settingsScreen) closeFlow() {
 func (s *settingsScreen) flowKey(msg tea.KeyMsg) tea.Cmd {
 	switch s.flow.stage {
 	case flowPreparing:
-		if key.Matches(msg, nkeys.Back) {
+		if key.Matches(msg, ui.Nav.Back) {
 			s.closeFlow()
 		}
 	case flowPreview:
 		switch {
 		case key.Matches(msg, settingsKeys.Confirm):
 			return s.confirm()
-		case key.Matches(msg, nkeys.Back):
+		case key.Matches(msg, ui.Nav.Back):
 			s.closeFlow()
-		case key.Matches(msg, nkeys.Enter) && s.flow.showsPreview() && s.flow.preview.NoOp:
+		case key.Matches(msg, ui.Nav.Enter) && s.flow.showsPreview() && s.flow.preview.NoOp:
 			s.closeFlow()
 		default:
-			s.flow.scroll.key(msg)
+			s.flow.scroll.Key(msg)
 		}
 	case flowCommitting:
-		s.flow.scroll.key(msg)
+		s.flow.scroll.Key(msg)
 	case flowResult:
-		if key.Matches(msg, nkeys.Enter, nkeys.Back) {
+		if key.Matches(msg, ui.Nav.Enter, ui.Nav.Back) {
 			s.closeFlow()
 
 			return nil
 		}
 
-		s.flow.scroll.key(msg)
+		s.flow.scroll.Key(msg)
 	}
 
 	return nil
@@ -308,18 +309,18 @@ func (s *settingsScreen) flowActions() []key.Binding {
 
 	switch f.stage {
 	case flowPreparing:
-		return []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "cancel")}
 	case flowCommitting:
 		return nil
 	case flowResult:
-		return []key.Binding{withHelp(nkeys.Enter, "enter", "close")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "close")}
 	}
 
 	if f.showsPreview() && f.preview.NoOp {
-		return []key.Binding{withHelp(nkeys.Enter, "enter", "close")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "close")}
 	}
 
-	back := withHelp(nkeys.Back, "esc", "keep editing")
+	back := ui.WithHelp(ui.Nav.Back, "esc", "keep editing")
 	if !s.confirmable() {
 		return []key.Binding{back}
 	}
@@ -329,16 +330,16 @@ func (s *settingsScreen) flowActions() []key.Binding {
 		label = "save and remove agent.argv"
 	}
 
-	return []key.Binding{withHelp(settingsKeys.Confirm, "y", label), back}
+	return []key.Binding{ui.WithHelp(settingsKeys.Confirm, "y", label), back}
 }
 
 // flowView renders the preview or the result as a modal.
 func (s *settingsScreen) flowView(w, h int) string {
-	return s.st.theme.modal(s.flowContent(modalBodyWidth(modalMinW, w)), &s.flow.scroll, w, h)
+	return s.st.theme.Modal(s.flowContent(ui.ModalBodyWidth(ui.ModalMinW, w)), &s.flow.scroll, w, h)
 }
 
 // flowContent builds the modal of the current stage.
-func (s *settingsScreen) flowContent(w int) modalOpts {
+func (s *settingsScreen) flowContent(w int) ui.ModalOpts {
 	t := s.st.theme
 
 	switch s.flow.stage {
@@ -356,7 +357,7 @@ func (s *settingsScreen) flowContent(w int) modalOpts {
 	case s.flow.err != nil:
 		return s.previewErrModal(s.flow.err, w)
 	case s.flow.preview.NoOp:
-		return modalOpts{
+		return ui.ModalOpts{
 			Title: t.Attention.Render("Nothing to save"),
 			Body: propLines(t.Body, "The file already holds these values, so a save would change nothing. "+
 				"The draft of "+settingsGroupTitle(s.flow.group)+" is dropped.", w),
@@ -369,7 +370,7 @@ func (s *settingsScreen) flowContent(w int) modalOpts {
 
 // previewErrModal explains a plan that failed. A plan only reads, so
 // nothing changed, and the draft stays for a new attempt.
-func (s *settingsScreen) previewErrModal(err error, w int) modalOpts {
+func (s *settingsScreen) previewErrModal(err error, w int) ui.ModalOpts {
 	t := s.st.theme
 	acts := s.flowActions()
 
@@ -379,7 +380,7 @@ func (s *settingsScreen) previewErrModal(err error, w int) modalOpts {
 		// the modal names the route and the location once.
 		reason, target := settingsBlock(err)
 
-		body := propNote(t, ToneAttention, "The file cannot be edited safely: "+reason+".", w)
+		body := propNote(t, ui.ToneAttention, "The file cannot be edited safely: "+reason+".", w)
 		body = append(body, "")
 		body = append(body, propLines(t.Body, "The console does not change a file that it cannot edit safely. "+
 			"Open the file at this place and fix it by hand:", w)...)
@@ -387,22 +388,22 @@ func (s *settingsScreen) previewErrModal(err error, w int) modalOpts {
 		body = append(body, "")
 		body = append(body, propLines(t.Muted, "The draft stays. Nothing was written.", w)...)
 
-		return modalOpts{Title: t.Attention.Render("Settings cannot be saved here"), Body: body, Actions: acts}
+		return ui.ModalOpts{Title: t.Attention.Render("Settings cannot be saved here"), Body: body, Actions: acts}
 	case errors.Is(err, settings.ErrStale):
-		body := propNote(t, ToneAttention, "The file changed after Seamark read it, so this preview would show "+
+		body := propNote(t, ui.ToneAttention, "The file changed after Seamark read it, so this preview would show "+
 			"old values.", w)
 		body = append(body, "")
 		body = append(body, propLines(t.Body, s.staleNext("review them against the file as it is now"), w)...)
 		body = append(body, "")
 		body = append(body, propLines(t.Muted, "Nothing was written.", w)...)
 
-		return modalOpts{Title: t.Attention.Render("The file changed"), Body: body, Actions: acts}
+		return ui.ModalOpts{Title: t.Attention.Render("The file changed"), Body: body, Actions: acts}
 	case errors.Is(err, settings.ErrInvalidEdit):
-		body := propNote(t, ToneFailure, errText(err), w)
+		body := propNote(t, ui.ToneFailure, ui.ErrText(err), w)
 		body = append(body, "")
 		body = append(body, propLines(t.Body, "Change the draft and press s again. Nothing was written.", w)...)
 
-		return modalOpts{Title: t.Failure.Render("The draft is not valid"), Body: body, Actions: acts}
+		return ui.ModalOpts{Title: t.Failure.Render("The draft is not valid"), Body: body, Actions: acts}
 	}
 
 	return previewFailedModal(t, "The save preview", err, "", "Nothing was written.", acts, w)
@@ -425,7 +426,7 @@ func (s *settingsScreen) staleNext(then string) string {
 // previewModal renders the diff preview of a plan. It shows the changed
 // values, what the save does and does not do, the exact file diff, and
 // when the change takes effect.
-func (s *settingsScreen) previewModal(p *settings.Plan, w int) modalOpts {
+func (s *settingsScreen) previewModal(p *settings.Plan, w int) ui.ModalOpts {
 	t := s.st.theme
 
 	lead := "Seamark writes " + propPlural(len(p.Edits), "change", "changes") + " to " + settingsFile +
@@ -444,13 +445,13 @@ func (s *settingsScreen) previewModal(p *settings.Plan, w int) modalOpts {
 	// differ from the console root when the index records another root.
 	body = append(body, "")
 	// The workspace directory name can hold control characters, so the
-	// path goes through oneLine like every other path on the screen.
-	body = append(body, integLabeled(t, "File", s.changeLabelW(p), oneLine(displayPath(p.Snapshot.Path)), t.Code, w)...)
+	// path goes through ui.OneLine like every other path on the screen.
+	body = append(body, integLabeled(t, "File", s.changeLabelW(p), ui.OneLine(ui.DisplayPath(p.Snapshot.Path)), t.Code, w)...)
 
 	if s.st.busy() {
 		body = append(body, "")
-		body = append(body, propNote(t, ToneAttention, "Saving waits for the running operation: "+
-			oneLine(s.st.mutation)+". The preview stays open.", w)...)
+		body = append(body, propNote(t, ui.ToneAttention, "Saving waits for the running operation: "+
+			ui.OneLine(s.st.mutation)+". The preview stays open.", w)...)
 	}
 
 	body = append(body, "", t.Heading.Render("CHANGE"))
@@ -464,27 +465,27 @@ func (s *settingsScreen) previewModal(p *settings.Plan, w int) modalOpts {
 	switch {
 	case settingsRemovesArgv(p):
 		body = append(body, "")
-		body = append(body, propNote(t, ToneAttention, "The save removes the custom command agent.argv. "+
+		body = append(body, propNote(t, ui.ToneAttention, "The save removes the custom command agent.argv. "+
 			"Without the removal, agent.cli has no effect, because agent.argv overrides it.", w)...)
 	case settingsKeepsArgv(p):
 		// The spec asks to explain a reset that an override makes
 		// ineffective, so the note tells how to change the command.
 		body = append(body, "")
-		body = append(body, propNote(t, ToneAttention, "agent.argv overrides agent.cli, so this save does not "+
+		body = append(body, propNote(t, ui.ToneAttention, "agent.argv overrides agent.cli, so this save does not "+
 			"change the command that runs. To run a preset, choose it on agent.cli; the preview then removes "+
 			"agent.argv.", w)...)
 	}
 
-	body = append(body, t.effectLines(s.willLines(p), s.wontLines(p.Group), w)...)
+	body = append(body, effectLines(t, s.willLines(p), s.wontLines(p.Group), w)...)
 
-	body = append(body, "", t.Heading.Render("DIFF")+"  "+t.Faint.Render(t.Glyphs.Add+itoa(p.Preview.Added)+
-		" "+t.Glyphs.Del+itoa(p.Preview.Removed)))
+	body = append(body, "", t.Heading.Render("DIFF")+"  "+t.Faint.Render(t.Glyphs.Add+strconv.Itoa(p.Preview.Added)+
+		" "+t.Glyphs.Del+strconv.Itoa(p.Preview.Removed)))
 	body = append(body, setupDiffLines(t, p.Preview.Diff, w)...)
 
 	body = append(body, "", t.Heading.Render("TAKES EFFECT"))
 	body = append(body, s.activationLines(p, w)...)
 
-	return modalOpts{
+	return ui.ModalOpts{
 		Title:   t.TabActive.Render("Save") + " " + t.Body.Render(settingsFile),
 		Right:   right,
 		Body:    body,
@@ -520,7 +521,7 @@ func settingsFieldIn(states []settings.FieldState, f settings.Field) (settings.F
 // "not set" with the default that applies.
 func settingsStored(st settings.FieldState) string {
 	if st.Stored.Present {
-		if raw := oneLine(st.Stored.Raw); raw != "" {
+		if raw := ui.OneLine(st.Stored.Raw); raw != "" {
 			return raw
 		}
 
@@ -531,7 +532,7 @@ func settingsStored(st settings.FieldState) string {
 		return "not set"
 	}
 
-	return "not set (default " + oneLine(st.Default) + ")"
+	return "not set (default " + ui.OneLine(st.Default) + ")"
 }
 
 // changeRows renders "agent.cli   not set (default claude) › codex" for
@@ -550,7 +551,7 @@ func (s *settingsScreen) changeRows(p *settings.Plan, w int) []string {
 			next = "removed"
 		}
 
-		out = append(out, s.st.theme.arrowRow(string(e.Field), settingsStored(before), next, labelW, w)...)
+		out = append(out, arrowRow(s.st.theme, string(e.Field), settingsStored(before), next, labelW, w)...)
 	}
 
 	return out
@@ -568,7 +569,7 @@ func (s *settingsScreen) effectiveRows(p *settings.Plan, w int) []string {
 			continue
 		}
 
-		out = append(out, s.st.theme.arrowRow(string(before.Field), oneLine(before.Effective), oneLine(after.Effective),
+		out = append(out, arrowRow(s.st.theme, string(before.Field), ui.OneLine(before.Effective), ui.OneLine(after.Effective),
 			labelW, w)...)
 	}
 
@@ -580,7 +581,7 @@ func (s *settingsScreen) effectiveRows(p *settings.Plan, w int) []string {
 func (s *settingsScreen) changeLabelW(p *settings.Plan) int {
 	w := 0
 	for _, f := range p.Group.Fields() {
-		w = max(w, width(string(f)))
+		w = max(w, ui.Width(string(f)))
 	}
 
 	return w + 2
@@ -594,7 +595,7 @@ func (s *settingsScreen) willLines(p *settings.Plan) []effect {
 	var out []effect
 
 	if p.Preview.Created {
-		out = append(out, effect{glyph: g.Add, tone: ToneSuccess, text: "create " + settingsFile + " with these keys only"})
+		out = append(out, effect{glyph: g.Add, tone: ui.ToneSuccess, text: "create " + settingsFile + " with these keys only"})
 	}
 
 	for _, e := range p.Edits {
@@ -602,14 +603,14 @@ func (s *settingsScreen) willLines(p *settings.Plan) []effect {
 
 		switch {
 		case e.Field == settings.AgentArgv:
-			out = append(out, effect{glyph: g.Del, tone: ToneFailure, text: "remove agent.argv, the custom command"})
+			out = append(out, effect{glyph: g.Del, tone: ui.ToneFailure, text: "remove agent.argv, the custom command"})
 		case e.Field == settings.AgentCLI && e.Reset && settingsKeepsArgv(p):
-			out = append(out, effect{glyph: g.Del, tone: ToneFailure, text: "remove agent.cli; agent.argv stays in effect"})
+			out = append(out, effect{glyph: g.Del, tone: ui.ToneFailure, text: "remove agent.cli; agent.argv stays in effect"})
 		case e.Reset:
-			out = append(out, effect{glyph: g.Del, tone: ToneFailure, text: "remove " + string(e.Field) +
-				"; the default " + oneLine(before.Default) + " applies"})
+			out = append(out, effect{glyph: g.Del, tone: ui.ToneFailure, text: "remove " + string(e.Field) +
+				"; the default " + ui.OneLine(before.Default) + " applies"})
 		default:
-			out = append(out, effect{glyph: g.Add, tone: ToneSuccess, text: "set " + string(e.Field) + ": " +
+			out = append(out, effect{glyph: g.Add, tone: ui.ToneSuccess, text: "set " + string(e.Field) + ": " +
 				settingsYAMLValue(e)})
 		}
 	}
@@ -621,7 +622,7 @@ func (s *settingsScreen) willLines(p *settings.Plan) []effect {
 func settingsYAMLValue(e settings.Edit) string {
 	switch e.Field {
 	case settings.AgentCLI:
-		return oneLine(e.String)
+		return ui.OneLine(e.String)
 	case settings.DistillWrite, settings.IndexGenerated:
 		return strconv.FormatBool(e.Bool)
 	case settings.ReviewWindow:
@@ -692,7 +693,7 @@ func (s *settingsScreen) activationLines(p *settings.Plan, w int) []string {
 	}
 
 	for _, n := range notes {
-		out = append(out, integHanging(t.Faint.Render(t.Glyphs.Sep+" "), t.Muted, oneLine(n), w)...)
+		out = append(out, integHanging(t.Faint.Render(t.Glyphs.Sep+" "), t.Muted, ui.OneLine(n), w)...)
 	}
 
 	return out
@@ -700,11 +701,11 @@ func (s *settingsScreen) activationLines(p *settings.Plan, w int) []string {
 
 // resultModal explains a save that did not succeed. Every refusal of
 // the settings package leaves the file as it was.
-func (s *settingsScreen) resultModal(w int) modalOpts {
+func (s *settingsScreen) resultModal(w int) ui.ModalOpts {
 	t := s.st.theme
 	err := s.flow.saveErr
 
-	title, tone := "Nothing was saved", ToneAttention
+	title, tone := "Nothing was saved", ui.ToneAttention
 
 	var lead, next string
 
@@ -716,11 +717,11 @@ func (s *settingsScreen) resultModal(w int) modalOpts {
 		lead = "Another operation is running, so the save did not start."
 		next = "The draft stays. Press s again when the operation ends."
 	case s.flow.res.Written:
-		title, tone = "Save incomplete", ToneFailure
+		title, tone = "Save incomplete", ui.ToneFailure
 		lead = "The file was written, then an error occurred."
 		next = "Review " + settingsFile + " with git diff before anything else."
 	default:
-		title, tone = "Save failed", ToneFailure
+		title, tone = "Save failed", ui.ToneFailure
 		lead = "Seamark did not replace the file, so it is unchanged."
 		next = "Fix the cause below, then press s to review the draft again."
 	}
@@ -729,17 +730,17 @@ func (s *settingsScreen) resultModal(w int) modalOpts {
 	body = append(body, "")
 	body = append(body, propLines(t.Body, next, w)...)
 	body = append(body, "")
-	body = append(body, propLines(t.Muted, "Details: "+errText(err), w)...)
+	body = append(body, propLines(t.Muted, "Details: "+ui.ErrText(err), w)...)
 	body = append(body, "")
 	body = append(body, propLines(t.Faint, "Nothing is retried automatically.", w)...)
 
-	return modalOpts{Title: t.ToneStyle(tone).Render(title), Body: body, Actions: s.flowActions()}
+	return ui.ModalOpts{Title: t.ToneStyle(tone).Render(title), Body: body, Actions: s.flowActions()}
 }
 
 // askDiscard opens the question before x drops the draft of g.
 func (s *settingsScreen) askDiscard(g settings.Group) tea.Cmd {
 	if s.draftCount(g) == 0 {
-		return toast(ToneNeutral, settingsGroupTitle(g)+" has no unsaved change.")
+		return toast(ui.ToneNeutral, settingsGroupTitle(g)+" has no unsaved change.")
 	}
 
 	s.prompt = &settingsPrompt{kind: settingsPromptDiscard, group: g}
@@ -758,9 +759,9 @@ func (s *settingsScreen) promptKey(msg tea.KeyMsg) tea.Cmd {
 			s.prompt = nil
 			s.dropDraft(p.group)
 
-			return toast(ToneNeutral, "Discarded the "+settingsGroupTitle(p.group)+" draft. "+settingsFile+
+			return toast(ui.ToneNeutral, "Discarded the "+settingsGroupTitle(p.group)+" draft. "+settingsFile+
 				" is unchanged.")
-		case key.Matches(msg, nkeys.Back):
+		case key.Matches(msg, ui.Nav.Back):
 			s.prompt = nil
 		}
 
@@ -781,7 +782,7 @@ func (s *settingsScreen) promptKey(msg tea.KeyMsg) tea.Cmd {
 		s.passLeave = true
 
 		return navigate(p.next, p.intent)
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		s.prompt = nil
 	}
 
@@ -791,11 +792,11 @@ func (s *settingsScreen) promptKey(msg tea.KeyMsg) tea.Cmd {
 // promptKeys returns the keys of the open question.
 func (s *settingsScreen) promptKeys() []key.Binding {
 	if s.prompt.kind == settingsPromptDiscard {
-		return []key.Binding{withHelp(settingsKeys.DropDrafts, "d", "discard draft"),
-			withHelp(nkeys.Back, "esc", "keep")}
+		return []key.Binding{ui.WithHelp(settingsKeys.DropDrafts, "d", "discard draft"),
+			ui.WithHelp(ui.Nav.Back, "esc", "keep")}
 	}
 
-	return []key.Binding{settingsKeys.Keep, settingsKeys.DropDrafts, withHelp(nkeys.Back, "esc", "stay here")}
+	return []key.Binding{settingsKeys.Keep, settingsKeys.DropDrafts, ui.WithHelp(ui.Nav.Back, "esc", "stay here")}
 }
 
 // promptView renders the open question as a modal of at most 64 cells,
@@ -803,7 +804,7 @@ func (s *settingsScreen) promptKeys() []key.Binding {
 func (s *settingsScreen) promptView(w, h int) string {
 	t := s.st.theme
 	bw := min(w-4, 64)
-	inner := boxInner(bw)
+	inner := ui.BoxInner(bw)
 
 	var title, body string
 
@@ -818,9 +819,9 @@ func (s *settingsScreen) promptView(w, h int) string {
 	}
 
 	lines := integLines(t.Body, body, inner)
-	lines = append(lines, "", t.hints(s.promptKeys()))
+	lines = append(lines, "", t.Hints(s.promptKeys()))
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: bw, H: min(h, len(lines)+2), Focus: true, Fill: true, Lines: lines,
 		Title: t.Title.Render(title),
 	})
@@ -843,5 +844,5 @@ func (s *settingsScreen) leaveText() string {
 		parts = append(parts, settingsGroupTitle(g)+" ("+s.draftFields(g)+")")
 	}
 
-	return itoa(len(groups)) + " groups have unsaved changes: " + strings.Join(parts, ", ") + "."
+	return strconv.Itoa(len(groups)) + " groups have unsaved changes: " + strings.Join(parts, ", ") + "."
 }

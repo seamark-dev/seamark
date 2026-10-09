@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the index build modal. Enter closes a finished result
@@ -97,7 +99,7 @@ func TestOverviewRunningBuildIgnoresEnter(t *testing.T) {
 func TestOverviewModalBoxClipsTheBodyAboveTheHints(t *testing.T) {
 	body := make([]string, 0, 30)
 	for i := range 30 {
-		body = append(body, "body line "+itoa(i+1))
+		body = append(body, "body line "+strconv.Itoa(i+1))
 	}
 
 	for _, tc := range []struct {
@@ -107,17 +109,17 @@ func TestOverviewModalBoxClipsTheBodyAboveTheHints(t *testing.T) {
 		{ascii: false, note: "more below — enlarge the terminal"},
 		{ascii: true, note: "more below - enlarge the terminal"},
 	} {
-		th := newTheme(tc.ascii)
-		o := newOverview(&state{theme: th, width: minWidth, height: minHeight})
-		h := minHeight - chromeHeight
+		th := ui.NewTheme(tc.ascii)
+		o := newOverview(&state{theme: th, width: ui.MinWidth, height: ui.MinHeight})
+		h := ui.MinHeight - chromeHeight
 
-		out := ansi.Strip(o.modalBox("Build the index?", "", body, "enter build   esc cancel", minWidth, h))
+		out := ansi.Strip(o.modalBox("Build the index?", "", body, "enter build   esc cancel", ui.MinWidth, h))
 		lines := strings.Split(out, "\n")
 
 		require.Len(t, lines, h, "ascii %v: the modal fills the area and no more", tc.ascii)
 
 		for _, l := range lines {
-			require.LessOrEqual(t, lipgloss.Width(l), minWidth, "ascii %v: line is too wide: %q", tc.ascii, l)
+			require.LessOrEqual(t, lipgloss.Width(l), ui.MinWidth, "ascii %v: line is too wide: %q", tc.ascii, l)
 		}
 
 		assert.Contains(t, out, "body line 1", "ascii %v: the body keeps its first lines", tc.ascii)
@@ -142,9 +144,9 @@ func TestOverviewModalBoxClipsTheBodyAboveTheHints(t *testing.T) {
 // TestOverviewModalBoxShowsAShortBodyWhole proves the other side of the
 // clip rule: a body that fits shows every line and no clip note.
 func TestOverviewModalBoxShowsAShortBodyWhole(t *testing.T) {
-	o := newOverview(&state{theme: newTheme(false), width: minWidth, height: minHeight})
+	o := newOverview(&state{theme: ui.NewTheme(false), width: ui.MinWidth, height: ui.MinHeight})
 
-	out := ansi.Strip(o.modalBox("Build the index?", "", []string{"one", "two", ""}, "enter build", minWidth, minHeight-chromeHeight))
+	out := ansi.Strip(o.modalBox("Build the index?", "", []string{"one", "two", ""}, "enter build", ui.MinWidth, ui.MinHeight-chromeHeight))
 
 	assert.Contains(t, out, "one")
 	assert.Contains(t, out, "two")

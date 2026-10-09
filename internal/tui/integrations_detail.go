@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The content of the Integrations boxes: the client item of the Clients
@@ -74,7 +76,7 @@ func (c integTally) setUp() bool {
 // example "✓ 6/6" or "! 3/6 · 1 n/a". It is a count of current
 // capabilities, never "connected": configuration is one dimension of
 // three.
-func integBadge(t *Theme, c integTally) string {
+func integBadge(t *ui.Theme, c integTally) string {
 	g := t.Glyphs
 
 	if !c.setUp() {
@@ -82,18 +84,18 @@ func integBadge(t *Theme, c integTally) string {
 	}
 
 	current := c.states[integration.StateCurrent]
-	tone := ToneSuccess
+	tone := ui.ToneSuccess
 
 	switch {
 	case c.states[integration.StateUnreadable]+c.states[integration.StateConflict] > 0:
-		tone = ToneFailure
+		tone = ui.ToneFailure
 	case current < c.expected:
-		tone = ToneAttention
+		tone = ui.ToneAttention
 	}
 
-	badge := t.ToneStyle(tone).Render(t.ToneGlyph(tone) + " " + itoa(current) + "/" + itoa(c.expected))
+	badge := t.ToneStyle(tone).Render(t.ToneGlyph(tone) + " " + strconv.Itoa(current) + "/" + strconv.Itoa(c.expected))
 	if c.na > 0 {
-		badge += t.Faint.Render(" " + g.Sep + " " + itoa(c.na) + " n/a")
+		badge += t.Faint.Render(" " + g.Sep + " " + strconv.Itoa(c.na) + " n/a")
 	}
 
 	return badge
@@ -116,7 +118,7 @@ func integSummaryParts(insp integration.Inspection, c integTally) []string {
 	var parts []string
 
 	if insp.GateMode != "" {
-		parts = append(parts, "gate "+oneLine(insp.GateMode))
+		parts = append(parts, "gate "+ui.OneLine(insp.GateMode))
 	}
 
 	if c.expected > 0 && c.states[integration.StateCurrent] == c.expected {
@@ -142,7 +144,7 @@ func integSummaryParts(insp integration.Inspection, c integTally) []string {
 		{integration.StateAbsent, "not configured"},
 	} {
 		if n := c.states[st.state]; n > 0 {
-			parts = append(parts, itoa(n)+" "+st.label)
+			parts = append(parts, strconv.Itoa(n)+" "+st.label)
 		}
 	}
 
@@ -150,10 +152,10 @@ func integSummaryParts(insp integration.Inspection, c integTally) []string {
 }
 
 // integClientItem builds the list item of one inspected client.
-func integClientItem(t *Theme, insp integration.Inspection) integItem {
+func integClientItem(t *ui.Theme, insp integration.Inspection) integItem {
 	tally := integCount(insp)
 
-	return integItem{name: oneLine(insp.Name), badge: integBadge(t, tally), summary: integSummaryParts(insp, tally)}
+	return integItem{name: ui.OneLine(insp.Name), badge: integBadge(t, tally), summary: integSummaryParts(insp, tally)}
 }
 
 // detailLines renders every section of one client's inspection as box
@@ -165,12 +167,12 @@ func (s *integrations) detailLines(insp integration.Inspection, w int) []string 
 	var out []string
 
 	if support := c.DescribeSupport(); support != "" {
-		out = append(out, integLines(t.Muted, "Supports "+oneLine(support)+".", w)...)
+		out = append(out, integLines(t.Muted, "Supports "+ui.OneLine(support)+".", w)...)
 	}
 
 	if sec := &s.st.integrations; sec.stale() {
 		out = append(out, integHanging(t.Attention.Render(t.Glyphs.Warn+" "), t.Attention,
-			"stale: "+errText(sec.err), w)...)
+			"stale: "+ui.ErrText(sec.err), w)...)
 	}
 
 	out = append(out, "", integHeading(t, "Capabilities"))
@@ -201,7 +203,7 @@ func (s *integrations) detailLines(insp integration.Inspection, w int) []string 
 // integCapTable renders one row per capability with the configuration,
 // the location or detail, the project trust and the native evidence in
 // separate columns. A narrow box moves the detail under the row.
-func integCapTable(t *Theme, insp integration.Inspection, client string, w int) []string {
+func integCapTable(t *ui.Theme, insp integration.Inspection, client string, w int) []string {
 	if len(insp.Capabilities) == 0 {
 		return integLines(t.Muted, "The inspection reports no capabilities.", w)
 	}
@@ -215,12 +217,12 @@ func integCapTable(t *Theme, insp integration.Inspection, client string, w int) 
 	}
 
 	row := func(label, config, where, trust, native string) string {
-		cells := []colCell{cell(label, capW), cell(config, integConfigW)}
+		cells := []ui.ColCell{ui.Cell(label, capW), ui.Cell(config, integConfigW)}
 		if whereW > 0 {
-			cells = append(cells, cell(where, whereW))
+			cells = append(cells, ui.Cell(where, whereW))
 		}
 
-		return integRow(t, append(cells, cell(trust, integTrustW), cell(native, integNativeW))...)
+		return integRow(t, append(cells, ui.Cell(trust, integTrustW), ui.Cell(native, integNativeW))...)
 	}
 
 	f := t.Faint
@@ -233,7 +235,7 @@ func integCapTable(t *Theme, insp integration.Inspection, client string, w int) 
 			t.Muted.Render(where), integTrustCell(t, c), integNativeCell(t, c)))
 
 		if whereW == 0 && where != "" {
-			lines = append(lines, "  "+t.Muted.Render(truncate(where, max(1, w-2), t.Glyphs.Ellipsis)))
+			lines = append(lines, "  "+t.Muted.Render(ui.Truncate(where, max(1, w-2), t.Glyphs.Ellipsis)))
 		}
 	}
 
@@ -244,20 +246,20 @@ func integCapTable(t *Theme, insp integration.Inspection, client string, w int) 
 // the typed inspection. It is display text only: no code reads it back.
 func integWhere(insp integration.Inspection, c integration.CapabilityInspection, client string) string {
 	if !c.Supported {
-		return "not supported by " + oneLine(client)
+		return "not supported by " + ui.OneLine(client)
 	}
 
 	if !integExpected(insp, c) && c.Detail == "" {
 		return "not installed by setup"
 	}
 
-	return oneLine(c.Describe())
+	return ui.OneLine(c.Describe())
 }
 
 // integConfigCell renders the configuration state of one capability.
 // A capability that does not apply shows "n/a"; the glyph tells an
 // unsupported one from one that setup does not install.
-func integConfigCell(t *Theme, insp integration.Inspection, c integration.CapabilityInspection) string {
+func integConfigCell(t *ui.Theme, insp integration.Inspection, c integration.CapabilityInspection) string {
 	g := t.Glyphs
 
 	switch {
@@ -269,13 +271,13 @@ func integConfigCell(t *Theme, insp integration.Inspection, c integration.Capabi
 
 	switch c.State {
 	case integration.StateCurrent:
-		return t.Badge(ToneSuccess, "current")
+		return t.Badge(ui.ToneSuccess, "current")
 	case integration.StatePartial:
-		return t.Badge(ToneAttention, "partial")
+		return t.Badge(ui.ToneAttention, "partial")
 	case integration.StateConflict:
-		return t.Badge(ToneFailure, "conflict")
+		return t.Badge(ui.ToneFailure, "conflict")
 	case integration.StateUnreadable:
-		return t.Badge(ToneFailure, "unreadable")
+		return t.Badge(ui.ToneFailure, "unreadable")
 	default:
 		return t.Muted.Render(g.Info + " absent")
 	}
@@ -283,7 +285,7 @@ func integConfigCell(t *Theme, insp integration.Inspection, c integration.Capabi
 
 // integTrustCell renders the project trust of one capability. Unknown
 // trust is never success: Seamark cannot read most trust records.
-func integTrustCell(t *Theme, c integration.CapabilityInspection) string {
+func integTrustCell(t *ui.Theme, c integration.CapabilityInspection) string {
 	g := t.Glyphs
 
 	if !c.Supported || c.State == integration.StateAbsent {
@@ -292,7 +294,7 @@ func integTrustCell(t *Theme, c integration.CapabilityInspection) string {
 
 	switch c.Trust {
 	case integration.TrustEstablished:
-		return t.Badge(ToneSuccess, "established")
+		return t.Badge(ui.ToneSuccess, "established")
 	case integration.TrustPending:
 		return t.Attention.Render(g.Info + " pending")
 	default:
@@ -304,7 +306,7 @@ func integTrustCell(t *Theme, c integration.CapabilityInspection) string {
 // scope of the evidence, the client version and the surface, is in the
 // note under the table, because the level alone is no claim about other
 // versions.
-func integNativeCell(t *Theme, c integration.CapabilityInspection) string {
+func integNativeCell(t *ui.Theme, c integration.CapabilityInspection) string {
 	g := t.Glyphs
 
 	if !c.Supported {
@@ -313,7 +315,7 @@ func integNativeCell(t *Theme, c integration.CapabilityInspection) string {
 
 	switch c.Verification.Level {
 	case integration.VerificationVerified:
-		return t.Badge(ToneSuccess, "verified")
+		return t.Badge(ui.ToneSuccess, "verified")
 	case integration.VerificationPending:
 		return t.Faint.Render(g.Info + " pending")
 	case integration.VerificationUnverified:
@@ -363,7 +365,7 @@ func integEvidenceNote(insp integration.Inspection) string {
 	case !scoped:
 		parts = append(parts, "No configured capability is natively verified.")
 	case evidence != "":
-		parts = append(parts, "Native evidence: "+oneLine(evidence)+".")
+		parts = append(parts, "Native evidence: "+ui.OneLine(evidence)+".")
 	}
 
 	return strings.Join(parts, " ")
@@ -371,13 +373,13 @@ func integEvidenceNote(insp integration.Inspection) string {
 
 // integGate renders the effective and the managed gate mode. The
 // effective mode covers every gate hook that runs, managed or not.
-func integGate(t *Theme, insp integration.Inspection, w int) []string {
+func integGate(t *ui.Theme, insp integration.Inspection, w int) []string {
 	commands, ok := insp.Entry(integration.CapabilityCommands)
 	if !ok || !commands.Supported {
 		return integLines(t.Muted, "No command gate support.", w)
 	}
 
-	effective := t.Title.Render(oneLine(insp.GateMode)) + t.Muted.Render("  from every gate hook that runs")
+	effective := t.Title.Render(ui.OneLine(insp.GateMode)) + t.Muted.Render("  from every gate hook that runs")
 
 	switch {
 	case commands.State == integration.StateUnreadable:
@@ -388,43 +390,43 @@ func integGate(t *Theme, insp integration.Inspection, w int) []string {
 
 	managed := t.Muted.Render("none")
 	if insp.ManagedGateMode != "" {
-		managed = t.Title.Render(oneLine(insp.ManagedGateMode))
+		managed = t.Title.Render(ui.OneLine(insp.ManagedGateMode))
 	}
 
 	return []string{
-		integRow(t, cell(t.Muted.Render("Effective mode"), integLabelW), cell(effective, max(1, w-integLabelW))),
-		integRow(t, cell(t.Muted.Render("Managed hook"), integLabelW), cell(managed, max(1, w-integLabelW))),
+		integRow(t, ui.Cell(t.Muted.Render("Effective mode"), integLabelW), ui.Cell(effective, max(1, w-integLabelW))),
+		integRow(t, ui.Cell(t.Muted.Render("Managed hook"), integLabelW), ui.Cell(managed, max(1, w-integLabelW))),
 	}
 }
 
 // integShared names every skill destination with its consumers and the
 // Seamark files that every client shares.
-func integShared(t *Theme, clients []integration.Client, w int) []string {
+func integShared(t *ui.Theme, clients []integration.Client, w int) []string {
 	valueW := max(1, w-integLabelW)
 
 	var lines []string
 
 	for _, d := range integration.SkillDestinations(clients) {
-		lines = append(lines, integRow(t, cell(t.Code.Render(oneLine(d.Dir)), integLabelW),
-			cell(t.Body.Render(integConsumers(clients, d.Consumers)), valueW)))
+		lines = append(lines, integRow(t, ui.Cell(t.Code.Render(ui.OneLine(d.Dir)), integLabelW),
+			ui.Cell(t.Body.Render(integConsumers(clients, d.Consumers)), valueW)))
 	}
 
 	shared := t.Body.Render("policy, lessons and config files") +
 		t.Muted.Render(" "+t.Glyphs.Dash+" shared by every client")
 
-	return append(lines, integRow(t, cell(t.Code.Render(".seamark/"), integLabelW), cell(shared, valueW)))
+	return append(lines, integRow(t, ui.Cell(t.Code.Render(".seamark/"), integLabelW), ui.Cell(shared, valueW)))
 }
 
 // integFindings renders findings with their level, reason, path and
 // action. The level word stays beside the glyph, because a warning and
 // an error share the "!" glyph and differ in color only.
-func integFindings(t *Theme, findings []integration.Finding, w int) []string {
+func integFindings(t *ui.Theme, findings []integration.Finding, w int) []string {
 	return integFindingLines(t, findings, w, true)
 }
 
 // integFindingLines renders findings. withPath=false leaves the path
 // line out, for the Plan box, whose rows already name every path.
-func integFindingLines(t *Theme, findings []integration.Finding, w int, withPath bool) []string {
+func integFindingLines(t *ui.Theme, findings []integration.Finding, w int, withPath bool) []string {
 	if len(findings) == 0 {
 		return []string{t.Success.Render(t.Glyphs.OK) + " " + t.Muted.Render("No findings.")}
 	}
@@ -436,29 +438,29 @@ func integFindingLines(t *Theme, findings []integration.Finding, w int, withPath
 			lines = append(lines, "")
 		}
 
-		tone := ToneNeutral
+		tone := ui.ToneNeutral
 
 		switch f.Level {
 		case integration.FindingWarning:
-			tone = ToneAttention
+			tone = ui.ToneAttention
 		case integration.FindingError:
-			tone = ToneFailure
+			tone = ui.ToneFailure
 		}
 
 		glyph := t.ToneGlyph(tone)
-		if tone == ToneNeutral {
+		if tone == ui.ToneNeutral {
 			glyph = t.Glyphs.Info
 		}
 
 		lines = append(lines, integHanging(t.ToneStyle(tone).Render(glyph+" "+f.Level.String()+" "), t.Body,
-			diag(f.Reason), w)...)
+			ui.Diag(f.Reason), w)...)
 
 		if withPath && f.Path != "" {
-			lines = append(lines, "  "+t.Code.Render(truncateLeft(oneLine(f.Path), max(1, w-2), t.Glyphs.Ellipsis)))
+			lines = append(lines, "  "+t.Code.Render(ui.TruncateLeft(ui.OneLine(f.Path), max(1, w-2), t.Glyphs.Ellipsis)))
 		}
 
 		if f.Action != "" {
-			lines = append(lines, integIndent(integCommandLines(t, diag(f.Action), max(1, w-2)), 2)...)
+			lines = append(lines, integIndent(integCommandLines(t, ui.Diag(f.Action), max(1, w-2)), 2)...)
 		}
 	}
 
@@ -468,7 +470,7 @@ func integFindingLines(t *Theme, findings []integration.Finding, w int, withPath
 // integNext lists every capability that setup can configure and that is
 // not current: its full detail and the corrective action. The table
 // clips the detail, so the full text is here.
-func integNext(t *Theme, insp integration.Inspection, w int) []string {
+func integNext(t *ui.Theme, insp integration.Inspection, w int) []string {
 	var lines []string
 
 	labelW := min(integCapW, max(1, w/3))
@@ -479,8 +481,8 @@ func integNext(t *Theme, insp integration.Inspection, w int) []string {
 			continue
 		}
 
-		lead := t.Title.Render(padRight(truncate(integCapLabel(c.Capability), labelW-1, t.Glyphs.Ellipsis), labelW))
-		lines = append(lines, integHanging(lead, t.Muted, oneLine(c.Describe()), w)...)
+		lead := t.Title.Render(ui.PadRight(ui.Truncate(integCapLabel(c.Capability), labelW-1, t.Glyphs.Ellipsis), labelW))
+		lines = append(lines, integHanging(lead, t.Muted, ui.OneLine(c.Describe()), w)...)
 
 		if c.Action != "" {
 			lines = append(lines, integIndent(integCommandLines(t, c.Action, valueW), labelW)...)
@@ -496,26 +498,26 @@ func integCapLabel(c integration.Capability) string {
 		return label
 	}
 
-	return oneLine(string(c))
+	return ui.OneLine(string(c))
 }
 
 // integStateWord renders the configuration state of one capability in
 // the words of the setup result: "✓ current", "! partial" or
 // "· not configured".
-func integStateWord(t *Theme, c integration.CapabilityInspection) string {
+func integStateWord(t *ui.Theme, c integration.CapabilityInspection) string {
 	if !c.Supported {
 		return t.Muted.Render(t.Glyphs.Unsupported + " not supported")
 	}
 
 	switch c.State {
 	case integration.StateCurrent:
-		return t.Badge(ToneSuccess, "current")
+		return t.Badge(ui.ToneSuccess, "current")
 	case integration.StatePartial:
-		return t.Badge(ToneAttention, "partial")
+		return t.Badge(ui.ToneAttention, "partial")
 	case integration.StateConflict:
-		return t.Badge(ToneFailure, "conflict")
+		return t.Badge(ui.ToneFailure, "conflict")
 	case integration.StateUnreadable:
-		return t.Badge(ToneFailure, "unreadable")
+		return t.Badge(ui.ToneFailure, "unreadable")
 	default:
 		return t.Muted.Render(t.Glyphs.Info + " not configured")
 	}
@@ -539,7 +541,7 @@ func integConsumers(clients []integration.Client, ids []string) string {
 			}
 		}
 
-		names = append(names, oneLine(name))
+		names = append(names, ui.OneLine(name))
 	}
 
 	return strings.Join(names, ", ")

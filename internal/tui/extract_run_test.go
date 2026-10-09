@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/learning"
 	domain "github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the run and the result of the trigger extraction record:
@@ -45,7 +47,7 @@ func extResultOf(t *testing.T, opts extPreviewOpts, w, hh int,
 }
 
 func TestExtractCompactListsKeepTheirLabels(t *testing.T) {
-	for _, size := range [][2]int{{80, 24}, {minWidth, minHeight}} {
+	for _, size := range [][2]int{{80, 24}, {ui.MinWidth, ui.MinHeight}} {
 		p := extPreview(extMixed())
 		h := extOpen(t, extFake(p, extNoRun(t)), p, size[0], size[1])
 
@@ -84,7 +86,7 @@ func TestExtractLiveNoteIsAWordNotTheStateGlyph(t *testing.T) {
 
 	// A pane at the minimum width drops the reason column, so the rule of
 	// the edited row stays readable beside the word.
-	h.resize(minWidth, 120)
+	h.resize(ui.MinWidth, 120)
 	assert.Contains(t, lesBoxFlat(h.view()), "p4 applied wrap-sql-errors · note edited")
 	h.resize(80, 120)
 
@@ -102,10 +104,10 @@ func TestExtractLiveNoteIsAWordNotTheStateGlyph(t *testing.T) {
 	assert.NotContains(t, flat, "review the advice against it", "a row without advice gets no advice note")
 
 	// A narrow cell gives up its outcome words first, so the word stays.
-	tm := newTheme(false)
+	tm := ui.NewTheme(false)
 	cut := extWithNote(tm, "negative: 2 paths named, none valid", 24)
 	assert.True(t, strings.HasSuffix(cut, " · note edited"), cut)
-	assert.LessOrEqual(t, width(cut), 24)
+	assert.LessOrEqual(t, ui.Width(cut), 24)
 	assert.Equal(t, "note edited", extWithNote(tm, "stored: 2 paths", 12))
 }
 
@@ -151,7 +153,7 @@ func TestExtractResultCountsNamedPathsAsTheModelWroteThem(t *testing.T) {
 			require.Equal(t, 2, extRecOf(t, h).run.cursor)
 
 			detail := lesBoxFlat(h.view())
-			assert.Contains(t, detail, "Answer "+itoa(c.raw)+" named · 0 valid")
+			assert.Contains(t, detail, "Answer "+strconv.Itoa(c.raw)+" named · 0 valid")
 			assert.Contains(t, detail, c.sentence)
 		})
 	}
@@ -541,7 +543,7 @@ func TestExtractASCIICountsReadAsCounts(t *testing.T) {
 		return extCompletedExec(p), nil
 	}
 
-	h := &harness{t: t, m: newModel(f, newTheme(true))}
+	h := &harness{t: t, m: newModel(f, ui.NewTheme(true))}
 	h.run(h.m.Init())
 	h.send(teaSize(120, 40))
 	h.send(openExtractMsg{req: p.Request})

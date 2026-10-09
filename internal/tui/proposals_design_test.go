@@ -13,6 +13,7 @@ import (
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // lesDesignFake is a ledger with the gate off and a gate-off preview.
@@ -74,9 +75,9 @@ func TestLessonsDesignLayoutAt120Columns(t *testing.T) {
 	// Row 8 opens both boxes: 62 cells, one gap, 57 cells.
 	top := lines[7]
 	assert.True(t, strings.HasPrefix(top, "╭─ Pending proposals"), top)
-	assert.Equal(t, 62, width(top[:strings.Index(top, "╮")+len("╮")]))
+	assert.Equal(t, 62, ui.Width(top[:strings.Index(top, "╮")+len("╮")]))
 	assert.Contains(t, top, "╭─ Proposal p1 ")
-	assert.Equal(t, 120, width(top))
+	assert.Equal(t, 120, ui.Width(top))
 
 	// The column header and a row follow the 1a column widths.
 	assert.True(t, strings.HasPrefix(lines[8], "│       ID  RULE                      REGION    CITED TIER   │ │"), lines[8])
@@ -102,7 +103,7 @@ func TestLessonsDesignNarrowOpensOneBoxAtATime(t *testing.T) {
 	assert.Contains(t, frame, "↓ more · pgdn", "the detail scrolls at this height")
 
 	h.press("pgdown")
-	assert.Positive(t, lesProps(h).detail.off)
+	assert.Positive(t, lesProps(h).detail.Off)
 	assert.Contains(t, h.view(), "more · pg")
 
 	h.press("esc")
@@ -117,7 +118,7 @@ func TestLessonsDesignYAMLModal(t *testing.T) {
 	require.True(t, ok)
 
 	lines := strings.Split(ansi.Strip(block), "\n")
-	assert.Equal(t, 80, width(lines[0]), "the modal is 80 cells wide at 120 columns")
+	assert.Equal(t, 80, ui.Width(lines[0]), "the modal is 80 cells wide at 120 columns")
 	assert.True(t, strings.HasPrefix(lines[0], "╭─ YAML p1 · check-nil-errors "), lines[0])
 	assert.True(t, strings.HasSuffix(lines[0], " 4 lines ─╮"), lines[0])
 
@@ -263,7 +264,7 @@ func TestLessonsDesignNoPendingState(t *testing.T) {
 		if strings.Contains(line, "No pending proposals") {
 			inner := strings.TrimSuffix(strings.TrimPrefix(line, "│"), "│")
 			left := len(inner) - len(strings.TrimLeft(inner, " "))
-			right := width(inner) - width(strings.TrimRight(inner, " "))
+			right := ui.Width(inner) - ui.Width(strings.TrimRight(inner, " "))
 			assert.InDelta(t, left, right, 1, "centered: %q", line)
 		}
 	}
@@ -330,7 +331,7 @@ func TestLessonsDesignSummaryStripsMarkdown(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := lesSummary(tc.body)
 			assert.Equal(t, tc.want, got)
-			assert.Equal(t, len([]rune(got)), width(got), "every rune takes one cell: %q", got)
+			assert.Equal(t, len([]rune(got)), ui.Width(got), "every rune takes one cell: %q", got)
 		})
 	}
 }
@@ -372,7 +373,7 @@ func TestLessonsDesignASCIIModalAndStats(t *testing.T) {
 	f := lesDesignFake(false)
 	f.stats = statsSnapshot(statsMixedFirings(), statsSurfaced())
 
-	h := &harness{t: t, m: newModel(f, newTheme(true))}
+	h := &harness{t: t, m: newModel(f, ui.NewTheme(true))}
 	h.run(h.m.Init())
 	h.resize(120, 40)
 	h.press("3")

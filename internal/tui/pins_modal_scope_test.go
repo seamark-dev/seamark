@@ -4,13 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the pinned scope summary of the maintenance preview. The
@@ -19,34 +19,10 @@ import (
 // review fixes. Each test drives the real model through the harness, so
 // it proves the fix where the user sees it.
 
-// Review fix: the scope summary of a modal never scrolls, so a long one
-// pushed the actions and the bottom border out of the area.
-func TestModalTailKeepsTheActionsAndTheBorder(t *testing.T) {
-	for _, ascii := range []bool{false, true} {
-		th := newTheme(ascii)
-
-		tail := make([]string, 30)
-		for i := range tail {
-			tail[i] = "scope line " + itoa(i+1)
-		}
-
-		o := modalOpts{
-			Title: "Prune", Body: []string{"line 1", "line 2"}, Tail: tail,
-			Actions: []key.Binding{withHelp(nkeys.Back, "esc", "cancel")},
-		}
-
-		// The modal area of a 60×20 frame is 19 rows above the footer.
-		lines := strings.Split(ansi.Strip(th.modal(o, &scrollState{}, 60, 19)), "\n")
-		n := len(lines)
-
-		assert.LessOrEqual(t, n, 19-modalMargin, "the modal keeps its margin")
-		assert.True(t, strings.HasPrefix(lines[n-1], th.Glyphs.CornerBL), "the bottom border stays: %q", lines[n-1])
-		assert.Contains(t, lines[n-2], "esc cancel", "the actions stay last")
-		assert.Contains(t, lines[n-3], th.Glyphs.Ellipsis, "a cut summary says that it goes on")
-		assert.Contains(t, lines[1], "line 1", "one body row stays")
-		assert.Contains(t, strings.Join(lines, "\n"), "scope line 1 ")
-	}
-}
+// maintModalMargin is the margin of ui.Theme.Modal: one dimmed row above
+// and one below the modal. ui keeps the constant unexported, because no
+// screen needs it, so the test states the number.
+const maintModalMargin = 2
 
 // The same overflow end to end: a prune of 151 ledger rows names every
 // row in its scope summary at 60×20.
@@ -71,7 +47,7 @@ func TestMaintPreviewOfAHugePruneKeepsItsActions(t *testing.T) {
 	n := len(lines)
 	g := h.m.st.theme.Glyphs
 
-	assert.LessOrEqual(t, n, 19-modalMargin, "the modal keeps its margin")
+	assert.LessOrEqual(t, n, 19-maintModalMargin, "the modal keeps its margin")
 	assert.True(t, strings.HasPrefix(lines[n-1], g.CornerBL), "the bottom border stays: %q", lines[n-1])
 	assert.Contains(t, lines[n-2], "esc cancel", "the actions stay in the modal")
 	assert.Contains(t, lines[n-2], "y prune")
@@ -95,7 +71,7 @@ func TestMaintPreviewOfAHugePruneKeepsTheScopeClause(t *testing.T) {
 
 		f := maintFakeOf(fx, p, nil)
 		h := maintOpen(t, f, p.Request, 60, 20)
-		h.m.st.theme = newTheme(ascii)
+		h.m.st.theme = ui.NewTheme(ascii)
 		require.True(t, maintHostOf(h).open())
 
 		frame := h.view()
@@ -122,11 +98,11 @@ func TestMaintPreviewOfAHugePruneKeepsTheScopeClause(t *testing.T) {
 
 // C0 item 3: a short ID list stays whole in the summary.
 func TestMaintTailIDListBoundsOnlyALongList(t *testing.T) {
-	th := newTheme(false)
+	th := ui.NewTheme(false)
 
 	assert.Equal(t, "p1, p2, p3", maintTailIDList(th, []int64{1, 2, 3}))
 	assert.Equal(t, "p1, p2, p3, … (+1)", maintTailIDList(th, []int64{1, 2, 3, 4}))
-	assert.Equal(t, "p1, p2, p3, ... (+2)", maintTailIDList(newTheme(true), []int64{1, 2, 3, 4, 5}))
+	assert.Equal(t, "p1, p2, p3, ... (+2)", maintTailIDList(ui.NewTheme(true), []int64{1, 2, 3, 4, 5}))
 	assert.Empty(t, maintTailIDList(th, nil))
 	assert.False(t, strings.Contains(maintTailIDList(th, []int64{7}), ","))
 }

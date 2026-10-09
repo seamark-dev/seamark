@@ -2,6 +2,7 @@ package tui
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -10,6 +11,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file holds the read-only comparison of Lessons › Pins. The key v
@@ -24,7 +26,7 @@ type pinCompare struct {
 	left     pinfile.EntryRef
 	partners []pinfile.EntryRef
 	at       int
-	scroll   scrollState
+	scroll   ui.ScrollState
 }
 
 // openCompare opens the comparison of the cursor pin with its similar
@@ -34,11 +36,11 @@ type pinCompare struct {
 func (p *pinsView) openCompare(rows []pinRow) tea.Cmd {
 	cur, ok := p.cursorRow(rows)
 	if !ok || cur.pin == nil {
-		return toast(ToneNeutral, p.noTarget("comparison"))
+		return toast(ui.ToneNeutral, p.noTarget("comparison"))
 	}
 
 	if why := p.compareBlock(cur.pin); why != "" {
-		return toast(ToneNeutral, pinRefusal("comparison", why, p.quoteRule(cur.pin.Entry.Rule)))
+		return toast(ui.ToneNeutral, pinRefusal("comparison", why, p.quoteRule(cur.pin.Entry.Rule)))
 	}
 
 	p.compare = &pinCompare{left: cur.pin.Entry.Ref(), partners: p.similarRefs(cur.pin)}
@@ -88,15 +90,15 @@ func (p *pinsView) compareKey(msg tea.KeyMsg) tea.Cmd {
 	c := p.compare
 
 	switch {
-	case key.Matches(msg, nkeys.Back), key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Back), key.Matches(msg, ui.Nav.Enter):
 		p.compare = nil
-	case key.Matches(msg, nkeys.Next):
+	case key.Matches(msg, ui.Nav.Next):
 		if len(c.partners) > 1 {
 			c.at = (c.at + 1) % len(c.partners)
-			c.scroll = scrollState{}
+			c.scroll = ui.ScrollState{}
 		}
 	default:
-		c.scroll.key(msg)
+		c.scroll.Key(msg)
 	}
 
 	return nil
@@ -129,13 +131,13 @@ func (p *pinsView) rebindCompare() bool {
 func (p *pinsView) compareKeys() []key.Binding {
 	c := p.compare
 
-	next := withHelp(nkeys.Next, "tab", "next similar pin")
+	next := ui.WithHelp(ui.Nav.Next, "tab", "next similar pin")
 	next.SetEnabled(len(c.partners) > 1)
 
-	scroll := withHelp(nkeys.Down, "↑↓", "scroll")
-	scroll.SetEnabled(c.scroll.scrolls())
+	scroll := ui.WithHelp(ui.Nav.Down, "↑↓", "scroll")
+	scroll.SetEnabled(c.scroll.Scrolls())
 
-	return []key.Binding{next, withHelp(nkeys.Back, "esc", "close"), scroll}
+	return []key.Binding{next, ui.WithHelp(ui.Nav.Back, "esc", "close"), scroll}
 }
 
 // compareModal renders the read-only comparison of two similar pins:
@@ -144,25 +146,25 @@ func (p *pinsView) compareKeys() []key.Binding {
 func (p *pinsView) compareModal(w, h int) string {
 	t := p.st.theme
 	c := p.compare
-	bw := modalBodyWidth(modalMinW, w)
+	bw := ui.ModalBodyWidth(ui.ModalMinW, w)
 
 	left, ln, okL := p.pinByRef(c.left)
 	right, rn, okR := p.pinByRef(c.partners[c.at])
 
-	o := modalOpts{Actions: p.compareKeys()}
+	o := ui.ModalOpts{Actions: p.compareKeys()}
 
 	if len(c.partners) > 1 {
-		o.Right = t.Muted.Render(itoa(c.at+1) + " of " + itoa(len(c.partners)))
+		o.Right = t.Muted.Render(strconv.Itoa(c.at+1) + " of " + strconv.Itoa(len(c.partners)))
 	}
 
 	if !okL || !okR {
 		o.Title = t.TabActive.Render("Compare")
 		o.Body = propLines(t.Muted, "A compared pin changed since the comparison opened. Press esc and open it again.", bw)
 
-		return t.modal(o, &c.scroll, w, h)
+		return t.Modal(o, &c.scroll, w, h)
 	}
 
-	o.Title = t.TabActive.Render("Compare") + " " + t.Body.Render("pin "+itoa(ln+1)+" "+t.Glyphs.Sep+" pin "+itoa(rn+1))
+	o.Title = t.TabActive.Render("Compare") + " " + t.Body.Render("pin "+strconv.Itoa(ln+1)+" "+t.Glyphs.Sep+" pin "+strconv.Itoa(rn+1))
 
 	body := propLines(t.Muted, "Similar wording does not mean identical coverage. Read both pins and compare "+
 		"their regions before you retire either one. This view is read-only and changes nothing.", bw)
@@ -170,7 +172,7 @@ func (p *pinsView) compareModal(w, h int) string {
 	pw := pairWidth(bw)
 
 	body = append(body, "")
-	body = append(body, t.pair(p.compareHead(left, ln, pw), p.compareHead(right, rn, pw),
+	body = append(body, pair(t, p.compareHead(left, ln, pw), p.compareHead(right, rn, pw),
 		p.compareSide(left, pw), p.compareSide(right, pw), bw)...)
 	body = append(body, "", t.Heading.Render("COVERAGE"))
 	body = append(body, p.coverageLines(left, ln, right, rn, bw)...)
@@ -180,7 +182,7 @@ func (p *pinsView) compareModal(w, h int) string {
 
 	o.Body = body
 
-	return t.modal(o, &c.scroll, w, h)
+	return t.Modal(o, &c.scroll, w, h)
 }
 
 // compareHead renders the head of one side: the pin number, its line,
@@ -189,12 +191,12 @@ func (p *pinsView) compareHead(pin *maintain.Pin, n, w int) string {
 	t := p.st.theme
 	sep := " " + t.Glyphs.Sep + " "
 
-	meta := "line " + itoa(pin.Entry.Line)
+	meta := "line " + strconv.Itoa(pin.Entry.Line)
 	if pinLinked(pin) {
 		meta += sep + propID(pin.Link.Applied[0].ID)
 	}
 
-	return truncate(t.Heading.Render("PIN "+itoa(n+1))+"  "+t.Faint.Render(meta), w, t.Glyphs.Ellipsis)
+	return ui.Truncate(t.Heading.Render("PIN "+strconv.Itoa(n+1))+"  "+t.Faint.Render(meta), w, t.Glyphs.Ellipsis)
 }
 
 // compareSide renders one side of the comparison: the live rule, the
@@ -203,7 +205,7 @@ func (p *pinsView) compareSide(pin *maintain.Pin, w int) []string {
 	t := p.st.theme
 	e := pin.Entry
 
-	rule := oneLine(e.Rule)
+	rule := ui.OneLine(e.Rule)
 	if strings.TrimSpace(rule) == "" {
 		rule = "(no rule)"
 	}
@@ -229,16 +231,16 @@ func (p *pinsView) compareSide(pin *maintain.Pin, w int) []string {
 func (p *pinsView) coverageLines(left *maintain.Pin, ln int, right *maintain.Pin, rn int, w int) []string {
 	t := p.st.theme
 	a, b := pinEntryRegions(left.Entry), pinEntryRegions(right.Entry)
-	la, lb := "pin "+itoa(ln+1), "pin "+itoa(rn+1)
+	la, lb := "pin "+strconv.Itoa(ln+1), "pin "+strconv.Itoa(rn+1)
 
 	switch {
 	case len(a) == 0 && len(b) == 0:
 		return propLines(t.Body, "Both pins are repository-wide: each one reaches every path.", w)
 	case len(a) == 0:
-		return propLines(t.Body, "Pin "+itoa(ln+1)+" is repository-wide and reaches every path; "+
+		return propLines(t.Body, "Pin "+strconv.Itoa(ln+1)+" is repository-wide and reaches every path; "+
 			lb+" reaches only "+pinJoin(b)+".", w)
 	case len(b) == 0:
-		return propLines(t.Body, "Pin "+itoa(rn+1)+" is repository-wide and reaches every path; "+
+		return propLines(t.Body, "Pin "+strconv.Itoa(rn+1)+" is repository-wide and reaches every path; "+
 			la+" reaches only "+pinJoin(a)+".", w)
 	}
 
@@ -273,7 +275,7 @@ func (p *pinsView) coverageLines(left *maintain.Pin, ln int, right *maintain.Pin
 func pinCoverage(set, other []string) (only, both []string) {
 	for _, r := range set {
 		if slices.ContainsFunc(other, func(o string) bool { return reviews.RegionMatches(o, r) }) {
-			both = append(both, oneLine(r))
+			both = append(both, ui.OneLine(r))
 
 			continue
 		}
@@ -282,14 +284,14 @@ func pinCoverage(set, other []string) (only, both []string) {
 
 		for _, o := range other {
 			if reviews.RegionMatches(r, o) {
-				inside = append(inside, oneLine(o))
+				inside = append(inside, ui.OneLine(o))
 			}
 		}
 
 		if len(inside) == 0 {
-			only = append(only, oneLine(r))
+			only = append(only, ui.OneLine(r))
 		} else {
-			only = append(only, oneLine(r)+" outside "+strings.Join(inside, ", "))
+			only = append(only, ui.OneLine(r)+" outside "+strings.Join(inside, ", "))
 		}
 	}
 
@@ -313,7 +315,7 @@ func pinUnion(a, b []string) []string {
 func pinJoin(set []string) string {
 	out := make([]string, len(set))
 	for i, r := range set {
-		out[i] = oneLine(r)
+		out[i] = ui.OneLine(r)
 	}
 
 	return strings.Join(out, ", ")

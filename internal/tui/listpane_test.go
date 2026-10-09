@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the list and detail pane of Proposals and Pins. They use
@@ -56,7 +59,7 @@ func TestListPaneReconcileRecordsTheFirstRowOfTheFirstSnapshot(t *testing.T) {
 func TestListPaneReconcileFollowsAMovedRow(t *testing.T) {
 	wide := true
 	lp := newTestPane(&wide)
-	lp.list.cursor = 1
+	lp.list.Cursor = 1
 	lp.syncCursorID(paneRows(1, 2, 3))
 	require.Equal(t, 2, lp.cursorID)
 
@@ -64,21 +67,21 @@ func TestListPaneReconcileFollowsAMovedRow(t *testing.T) {
 
 	assert.False(t, lost)
 	assert.Equal(t, 2, gone)
-	assert.Equal(t, 2, lp.list.cursor, "the cursor moves with its row")
+	assert.Equal(t, 2, lp.list.Cursor, "the cursor moves with its row")
 	assert.Equal(t, 2, lp.cursorID)
 }
 
 func TestListPaneReconcileReportsALostRowAndKeepsThePosition(t *testing.T) {
 	wide := true
 	lp := newTestPane(&wide)
-	lp.list.cursor = 1
+	lp.list.Cursor = 1
 	lp.syncCursorID(paneRows(1, 2, 3))
 
 	gone, lost := lp.reconcileCursor(paneRows(1, 3, 4))
 
 	assert.True(t, lost)
 	assert.Equal(t, 2, gone, "the note names the lost row")
-	assert.Equal(t, 1, lp.list.cursor, "a refresh keeps the position, which shows the neighbor")
+	assert.Equal(t, 1, lp.list.Cursor, "a refresh keeps the position, which shows the neighbor")
 	assert.Equal(t, 3, lp.cursorID, "the cursor records the neighbor")
 }
 
@@ -101,19 +104,19 @@ func TestListPaneFindByContentRecordsTheNewIdentity(t *testing.T) {
 
 	assert.False(t, lost, "the content matches, so the row is the same")
 	assert.Equal(t, 2, gone)
-	assert.Equal(t, 1, lp.list.cursor)
+	assert.Equal(t, 1, lp.list.Cursor)
 	assert.Equal(t, 10, lp.cursorID, "the cursor records the identity of the found row")
 }
 
 func TestListPaneRelocateOnAFilterChangeStartsAtTheTop(t *testing.T) {
 	wide := true
 	lp := newTestPane(&wide)
-	lp.list = listState{cursor: 2, offset: 1}
+	lp.list = ui.ListState{Cursor: 2, Offset: 1}
 	lp.cursorID = 99
 
 	assert.False(t, lp.relocate(paneRows(1, 2, 3, 4), false))
-	assert.Equal(t, 0, lp.list.cursor)
-	assert.Equal(t, 0, lp.list.offset)
+	assert.Equal(t, 0, lp.list.Cursor)
+	assert.Equal(t, 0, lp.list.Offset)
 	assert.Equal(t, 1, lp.cursorID)
 
 	lp.cursorID = 99
@@ -164,28 +167,28 @@ func TestListPaneMovementKeysMoveTheCursorOrScrollTheDetail(t *testing.T) {
 	rows := paneRows(1, 2, 3, 4, 5, 6, 7, 8)
 	wide := true
 	lp := newTestPane(&wide)
-	lp.list.window = 3
-	lp.detail = scrollState{page: 4, last: 10}
+	lp.list.Window = 3
+	lp.detail = ui.ScrollState{Page: 4, Last: 10}
 
 	lp.navKey(keyMsg("down"), rows)
-	assert.Equal(t, 1, lp.list.cursor, "down moves the cursor while the list has focus")
+	assert.Equal(t, 1, lp.list.Cursor, "down moves the cursor while the list has focus")
 	assert.Equal(t, 2, lp.cursorID, "a cursor move records the identity")
-	assert.Zero(t, lp.detail.off)
+	assert.Zero(t, lp.detail.Off)
 
 	lp.navKey(keyMsg("pgdown"), rows)
-	assert.Equal(t, 4, lp.detail.off, "pgdn scrolls the unfocused detail in the wide layout")
-	assert.Equal(t, 1, lp.list.cursor)
+	assert.Equal(t, 4, lp.detail.Off, "pgdn scrolls the unfocused detail in the wide layout")
+	assert.Equal(t, 1, lp.list.Cursor)
 
 	lp.focusDetail = true
 	lp.navKey(keyMsg("down"), rows)
-	assert.Equal(t, 5, lp.detail.off, "down scrolls the focused detail")
-	assert.Equal(t, 1, lp.list.cursor)
+	assert.Equal(t, 5, lp.detail.Off, "down scrolls the focused detail")
+	assert.Equal(t, 1, lp.list.Cursor)
 
 	wide = false
 	lp.focusDetail = false
 	lp.navKey(keyMsg("pgdown"), rows)
-	assert.Equal(t, 5, lp.detail.off, "the narrow list hides the detail")
-	assert.Equal(t, 3, lp.list.cursor, "pgdn pages the list by window-1 rows")
+	assert.Equal(t, 5, lp.detail.Off, "the narrow list hides the detail")
+	assert.Equal(t, 3, lp.list.Cursor, "pgdn pages the list by window-1 rows")
 	assert.Equal(t, 4, lp.cursorID)
 }
 
@@ -245,10 +248,10 @@ func TestListPaneSplitShowsBothPanesOnlyWhenWide(t *testing.T) {
 }
 
 func TestListPaneRenderListWindowAndFoot(t *testing.T) {
-	th := newTheme(true)
+	th := ui.NewTheme(true)
 	wide := true
 	lp := newTestPane(&wide)
-	lp.list.cursor = 5
+	lp.list.Cursor = 5
 
 	var cursorRows []int
 
@@ -257,14 +260,14 @@ func TestListPaneRenderListWindowAndFoot(t *testing.T) {
 			cursorRows = append(cursorRows, r.id)
 		}
 
-		return "row " + itoa(r.id)
+		return "row " + strconv.Itoa(r.id)
 	}
 
 	rows := paneRows(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 	out := ansi.Strip(lp.renderList(th, rows, 40, 6, true, "Items", "HEAD", row))
 
-	assert.Equal(t, 3, lp.list.window, "the header takes one of the four box rows")
-	assert.Equal(t, 3, lp.list.offset, "the window keeps the cursor row")
+	assert.Equal(t, 3, lp.list.Window, "the header takes one of the four box rows")
+	assert.Equal(t, 3, lp.list.Offset, "the window keeps the cursor row")
 	assert.Equal(t, []int{6}, cursorRows, "only the cursor row renders as the cursor")
 	assert.Contains(t, out, "HEAD")
 	assert.Contains(t, out, "row 4")
@@ -285,13 +288,15 @@ func TestListPaneRenderListWindowAndFoot(t *testing.T) {
 func TestListPaneRenderListHighlightsOnlyTheFocusedCursorRow(t *testing.T) {
 	distWithColors(t)
 
-	th := newTheme(false)
-	seq := backgroundSeq(bgSel)
+	th := ui.NewTheme(false)
+	// The highlight of an empty row is the background sequence and the
+	// reset, so the test finds the sequence without a private helper.
+	seq := strings.TrimSuffix(th.Highlight("", 0, ui.BgSel), "\x1b[0m")
 	require.NotEmpty(t, seq)
 
 	wide := true
 	lp := newTestPane(&wide)
-	row := func(r paneRow, _ bool) string { return "row " + itoa(r.id) }
+	row := func(r paneRow, _ bool) string { return "row " + strconv.Itoa(r.id) }
 	rows := paneRows(1, 2)
 
 	focused := lp.renderList(th, rows, 40, 6, true, "Items", "HEAD", row)
@@ -302,45 +307,45 @@ func TestListPaneRenderListHighlightsOnlyTheFocusedCursorRow(t *testing.T) {
 }
 
 func TestListPaneRenderDetailScrollsAndResetsForAnotherRow(t *testing.T) {
-	th := newTheme(false)
+	th := ui.NewTheme(false)
 	wide := true
 	lp := newTestPane(&wide)
 
 	body := make([]string, 12)
 	for i := range body {
-		body[i] = "line " + itoa(i)
+		body[i] = "line " + strconv.Itoa(i)
 	}
 
 	out := ansi.Strip(lp.renderDetail(th, paneRow{id: 1}, "Item 1", body, 40, 6, true))
-	assert.Equal(t, 4, lp.detail.page, "the detail records its page")
-	assert.Equal(t, 8, lp.detail.last, "the detail records its last offset")
+	assert.Equal(t, 4, lp.detail.Page, "the detail records its page")
+	assert.Equal(t, 8, lp.detail.Last, "the detail records its last offset")
 	assert.Contains(t, out, "↓ more · pgdn")
 	assert.Contains(t, out, "line 0")
 
-	lp.detail.off = 8
+	lp.detail.Off = 8
 	out = ansi.Strip(lp.renderDetail(th, paneRow{id: 1}, "Item 1", body, 40, 6, true))
 	assert.Contains(t, out, "↑ more · pgup")
 	assert.Contains(t, out, "line 11")
 
-	lp.detail.off = 3
+	lp.detail.Off = 3
 	lp.renderDetail(th, paneRow{id: 2}, "Item 2", body, 40, 6, true)
-	assert.Zero(t, lp.detail.off, "another row starts at the top")
+	assert.Zero(t, lp.detail.Off, "another row starts at the top")
 	assert.Equal(t, 2, lp.detailID)
 
-	lp.detail.off = 3
+	lp.detail.Off = 3
 	lp.renderDetail(th, paneRow{id: 2}, "Item 2", body, 40, 6, true)
-	assert.Equal(t, 3, lp.detail.off, "the same row keeps its offset")
+	assert.Equal(t, 3, lp.detail.Off, "the same row keeps its offset")
 }
 
 func TestFilterInputHintFollowsTheField(t *testing.T) {
-	th := newTheme(true)
+	th := ui.NewTheme(true)
 	f := filterInput{textHint: "text in the rule"}
 
 	f.startEdit(filterText, "")
-	assert.Contains(t, f.input.view(th), "text in the rule")
+	assert.Contains(t, f.input.View(th), "text in the rule")
 
 	f.startEdit(filterRegion, "")
-	assert.Contains(t, f.input.view(th), "internal/api", "the region field keeps the hint of lineInput")
+	assert.Contains(t, f.input.View(th), "internal/api", "the region field keeps the hint of lineInput")
 }
 
 func TestFilterInputEnterNormalizesTheValue(t *testing.T) {
@@ -376,7 +381,7 @@ func TestFilterInputEscKeepsThePreviousValue(t *testing.T) {
 	_, _, done := f.inputKey(keyMsg("a"))
 	assert.False(t, done, "a typed rune keeps the field open")
 	assert.Equal(t, filterRegion, f.editing)
-	assert.Equal(t, "internala", f.input.value())
+	assert.Equal(t, "internala", f.input.Value())
 
 	_, _, done = f.inputKey(keyMsg("esc"))
 	assert.False(t, done, "esc applies nothing")
@@ -396,7 +401,7 @@ func TestFilterInputEditKeysNameTheField(t *testing.T) {
 }
 
 func TestFilterInputFieldView(t *testing.T) {
-	th := newTheme(true)
+	th := ui.NewTheme(true)
 
 	var f filterInput
 
@@ -412,7 +417,7 @@ func TestFilterInputFieldView(t *testing.T) {
 }
 
 func TestFilterChipsSpacing(t *testing.T) {
-	th := newTheme(true)
+	th := ui.NewTheme(true)
 	label := func(f propState) string { return f.label() }
 
 	assert.Equal(t, "[pending] applied  dismissed  superseded",
@@ -423,11 +428,11 @@ func TestFilterChipsSpacing(t *testing.T) {
 }
 
 func TestFilterLinesBreakOnlyWhenTooWide(t *testing.T) {
-	th := newTheme(true)
+	th := ui.NewTheme(true)
 	one := " state x     region y"
 
-	assert.Equal(t, []string{one}, filterLines(th, "state x", "region y", width(one)))
-	assert.Equal(t, []string{" state x", " region y"}, filterLines(th, "state x", "region y", width(one)-1))
+	assert.Equal(t, []string{one}, filterLines(th, "state x", "region y", ui.Width(one)))
+	assert.Equal(t, []string{" state x", " region y"}, filterLines(th, "state x", "region y", ui.Width(one)-1))
 }
 
 // TestListPaneKeysStayApart guards the key order of the views. Their
@@ -437,12 +442,12 @@ func TestFilterLinesBreakOnlyWhenTooWide(t *testing.T) {
 // tests cover that order.
 func TestListPaneKeysStayApart(t *testing.T) {
 	pane := []key.Binding{
-		nkeys.Up, nkeys.Down, nkeys.PageUp, nkeys.PageDown, nkeys.Top, nkeys.Bottom,
-		nkeys.Enter, nkeys.Back, nkeys.Next, nkeys.Prev,
+		ui.Nav.Up, ui.Nav.Down, ui.Nav.PageUp, ui.Nav.PageDown, ui.Nav.Top, ui.Nav.Bottom,
+		ui.Nav.Enter, ui.Nav.Back, ui.Nav.Next, ui.Nav.Prev,
 	}
 
 	actions := []key.Binding{
-		nkeys.Toggle, extractKey,
+		ui.Nav.Toggle, extractKey,
 		lesKeys.Proposals, lesKeys.Pins, lesKeys.Stats, lesKeys.Evidence, lesKeys.Run,
 		lesKeys.Clear, lesKeys.State, lesKeys.Region, lesKeys.Open,
 		lesKeys.Apply, lesKeys.Dismiss, lesKeys.Reconcile, lesKeys.Confirm,

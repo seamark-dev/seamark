@@ -15,6 +15,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests in this file cover the trigger extraction record. They test
@@ -128,11 +129,11 @@ func TestExtractReviewShowsBothNotesOfALiveEdit(t *testing.T) {
 
 func TestExtractReviewKeepsItsScopeAtTheMinimumSize(t *testing.T) {
 	p := extPreview(extMixed())
-	h := extOpen(t, extFake(p, extNoRun(t)), p, minWidth, minHeight)
+	h := extOpen(t, extFake(p, extNoRun(t)), p, ui.MinWidth, ui.MinHeight)
 
 	check := func(stage string) {
 		frame := h.view()
-		assertFrame(t, frame, minWidth, minHeight)
+		assertFrame(t, frame, ui.MinWidth, ui.MinHeight)
 		assert.Contains(t, frame, "Sends 5 proposals in 1 batch · 4 ineligible", stage)
 		assert.Contains(t, frame, "Nothing is sent until you press y.", stage)
 		assert.True(t, strings.HasPrefix(strings.TrimSpace(footerLine(frame)), "y start run"), stage)
@@ -843,7 +844,7 @@ func TestExtractHostileTextStaysInert(t *testing.T) {
 func TestExtractFramesAreASCIIOnlyAndFit(t *testing.T) {
 	p := extPreview(extThreeBatches())
 
-	h := &harness{t: t, m: newModel(extFake(p, extNoRun(t)), newTheme(true))}
+	h := &harness{t: t, m: newModel(extFake(p, extNoRun(t)), ui.NewTheme(true))}
 	h.run(h.m.Init())
 	h.send(teaSize(120, 40))
 	h.send(openExtractMsg{req: p.Request})

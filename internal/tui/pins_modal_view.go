@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/distill"
@@ -13,6 +14,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/status"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -20,7 +22,7 @@ import (
 // preview states what is selected, the state of every selected pin, the
 // exact file and ledger change, and what WILL and WON'T happen. Every
 // text from the pin file, the ledger, a model or an error passes through
-// oneLine, multiLine or errText here, at the leaf, because the
+// ui.OneLine, ui.MultiLine or ui.ErrText here, at the leaf, because the
 // maintenance engine returns it raw (internal/maintain package doc).
 
 // maintLabelW is the label column of the labelled rows of a preview, for
@@ -31,7 +33,7 @@ const maintLabelW = 10
 // content builds the modal of the current stage in w cells: the border
 // labels, the body that scrolls, the scope summary that stays (Tail),
 // and the actions.
-func (m *maintModal) content(w int) modalOpts {
+func (m *maintModal) content(w int) ui.ModalOpts {
 	switch m.stage {
 	case flowPreparing:
 		return m.preparingView(w)
@@ -52,7 +54,7 @@ func (m *maintModal) content(w int) modalOpts {
 }
 
 // preparingView waits for a plan read. The read writes nothing.
-func (m *maintModal) preparingView(w int) modalOpts {
+func (m *maintModal) preparingView(w int) ui.ModalOpts {
 	what := "the " + m.req.Action.String() + " preview"
 	read := "Seamark reads the pin file, the ledger and the write gate"
 
@@ -69,7 +71,7 @@ func (m *maintModal) preparingView(w int) modalOpts {
 
 // committingView waits for a commit. It offers no key, because the
 // commit cannot stop safely between the file and the ledger.
-func (m *maintModal) committingView(w int) modalOpts {
+func (m *maintModal) committingView(w int) ui.ModalOpts {
 	note := "Seamark checks the plan again, replaces " + pinfile.File + ", then records the ledger. The operation " +
 		"cannot stop safely; the result appears here."
 	if m.recovering {
@@ -82,7 +84,7 @@ func (m *maintModal) committingView(w int) modalOpts {
 
 // planErrView explains a plan read that failed. Nothing changed,
 // because a plan only reads.
-func (m *maintModal) planErrView(w int) modalOpts {
+func (m *maintModal) planErrView(w int) ui.ModalOpts {
 	what := "The " + m.req.Action.String() + " preview"
 	if m.recovering {
 		what = "The ledger completion preview"
@@ -104,14 +106,14 @@ func (m *maintModal) planErrView(w int) modalOpts {
 
 // planView renders a retarget or prune plan: the lead, the blockers,
 // the selected pins, the ledger change, the effects and the diff.
-func (m *maintModal) planView(w int) modalOpts {
+func (m *maintModal) planView(w int) ui.ModalOpts {
 	p := m.preview
 
 	body := m.planLead(w)
 
 	if note := m.staleIndexNote(); note != "" {
 		body = append(body, "")
-		body = append(body, propNote(m.st.theme, ToneAttention, note, w)...)
+		body = append(body, propNote(m.st.theme, ui.ToneAttention, note, w)...)
 	}
 
 	body = append(body, m.planBlockers(w)...)
@@ -120,7 +122,7 @@ func (m *maintModal) planView(w int) modalOpts {
 	body = append(body, m.planEffects(w)...)
 	body = append(body, m.diffLines(w)...)
 
-	return modalOpts{
+	return ui.ModalOpts{
 		Title: m.planTitle(), Right: m.planRight(), Body: body, Tail: m.planTail(w),
 		Actions: m.previewActions(false),
 	}
@@ -171,9 +173,9 @@ func (m *maintModal) planRight() string {
 
 	switch scope := maintScopeLabel(m.preview); {
 	case scope == maintScopeRepoWide || scope == maintScopeBroader:
-		return t.Badge(ToneAttention, scope)
+		return t.Badge(ui.ToneAttention, scope)
 	case !m.preview.Confirmable:
-		return t.Badge(ToneAttention, "preview only")
+		return t.Badge(ui.ToneAttention, "preview only")
 	case scope != "":
 		return t.Muted.Render(scope)
 	}
@@ -242,7 +244,7 @@ func (m *maintModal) planLead(w int) []string {
 
 	if m.st.busy() {
 		out = append(out, "")
-		out = append(out, propNote(t, ToneAttention, m.st.mutation+" is running. y is off until it ends.", w)...)
+		out = append(out, propNote(t, ui.ToneAttention, m.st.mutation+" is running. y is off until it ends.", w)...)
 	}
 
 	return out
@@ -263,15 +265,15 @@ func (m *maintModal) planBlockers(w int) []string {
 
 	note := func(text string) {
 		out = append(out, "")
-		out = append(out, propNote(t, ToneAttention, text, w)...)
+		out = append(out, propNote(t, ui.ToneAttention, text, w)...)
 	}
 
 	open := maintOpenKey(p.Action)
 
 	if m.foreign != "" {
-		note("The index of this workspace records another repository, " + oneLine(m.foreign) + ", so y is off. " +
-			"A commit would write " + oneLine(filepath.Join(m.foreign, pinfile.File)) + " and the ledger of this " +
-			"workspace, not " + oneLine(filepath.Join(m.st.svc.Root(), pinfile.File)) + ". Run seamark index in " +
+		note("The index of this workspace records another repository, " + ui.OneLine(m.foreign) + ", so y is off. " +
+			"A commit would write " + ui.OneLine(filepath.Join(m.foreign, pinfile.File)) + " and the ledger of this " +
+			"workspace, not " + ui.OneLine(filepath.Join(m.st.svc.Root(), pinfile.File)) + ". Run seamark index in " +
 			"this checkout, or build the index from Overview (press 1, then b).")
 	}
 
@@ -282,17 +284,17 @@ func (m *maintModal) planBlockers(w int) []string {
 		note("The cursor row cannot change, so y is off. Press esc, move to another pin in Pins, then press " +
 			open + " again.")
 	case k > 0:
-		note(itoa(k) + " of " + propPlural(len(p.Items), "selected pin", "selected pins") + " cannot change, so " +
+		note(strconv.Itoa(k) + " of " + propPlural(len(p.Items), "selected pin", "selected pins") + " cannot change, so " +
 			"y is off: revise the selection. Unmark them in Pins with space, then press " + open + " again.")
 	}
 
 	if p.FileBlock != "" {
-		note("The console cannot change " + pinfile.File + ": " + oneLine(p.FileBlock) + ". Edit the file by hand.")
+		note("The console cannot change " + pinfile.File + ": " + ui.OneLine(p.FileBlock) + ". Edit the file by hand.")
 	}
 
 	switch {
 	case p.GateErr != nil:
-		note("distill.write cannot be read: " + errText(p.GateErr) + ". Fix " + settingsFile + " first; a reader " +
+		note("distill.write cannot be read: " + ui.ErrText(p.GateErr) + ". Fix " + settingsFile + " first; a reader " +
 			"error never counts as on.")
 	case !p.Write:
 		note("distill.write is off, so this preview changes nothing. Press o for Settings " + t.Glyphs.Arrow +
@@ -301,7 +303,7 @@ func (m *maintModal) planBlockers(w int) []string {
 
 	if len(out) == 0 {
 		for _, b := range p.Blocked {
-			note(ovSentenceEnd(oneLine(b)))
+			note(ovSentenceEnd(ui.OneLine(b)))
 		}
 	}
 
@@ -349,12 +351,12 @@ func (m *maintModal) itemLines(it maintain.PlanItem, w int) []string {
 
 	if it.Pin.Entry.Line == 0 {
 		where, reason := m.goneText(it)
-		out = append(out, t.Faint.Render(truncate(where, w, t.Glyphs.Ellipsis)))
+		out = append(out, t.Faint.Render(ui.Truncate(where, w, t.Glyphs.Ellipsis)))
 
-		return append(out, propNote(t, ToneAttention, reason, w)...)
+		return append(out, propNote(t, ui.ToneAttention, reason, w)...)
 	}
 
-	out = append(out, t.Faint.Render(truncate(maintWhere(t, it), w, t.Glyphs.Ellipsis)))
+	out = append(out, t.Faint.Render(ui.Truncate(maintWhere(t, it), w, t.Glyphs.Ellipsis)))
 
 	switch it.Status {
 	case maintain.ItemReady:
@@ -366,12 +368,12 @@ func (m *maintModal) itemLines(it maintain.PlanItem, w int) []string {
 	case maintain.ItemNoOp:
 		out = append(out, integLabeled(t, "Regions", maintLabelW, maintRegionText(it.From), t.Body, w)...)
 
-		return append(out, propLines(t.Muted, ovSentenceEnd(oneLine(it.Reason)), w)...)
+		return append(out, propLines(t.Muted, ovSentenceEnd(ui.OneLine(it.Reason)), w)...)
 	}
 
 	out = append(out, m.blockedScope(it, w)...)
 
-	return append(out, propNote(t, ToneAttention, ovSentenceEnd(oneLine(it.Reason)), w)...)
+	return append(out, propNote(t, ui.ToneAttention, ovSentenceEnd(ui.OneLine(it.Reason)), w)...)
 }
 
 // blockedScope shows the computed regions of a blocked retarget and the
@@ -387,7 +389,7 @@ func (m *maintModal) blockedScope(it maintain.PlanItem, w int) []string {
 		return nil
 	}
 
-	out := t.regionDelta(it.From, s.Advice.Regions, w)
+	out := regionDelta(t, it.From, s.Advice.Regions, w)
 
 	in := m.st.pins.value
 	if !m.st.pins.loaded {
@@ -412,7 +414,7 @@ func (m *maintModal) goneText(it maintain.PlanItem) (where, reason string) {
 
 	in := m.st.pins.value
 	if !m.st.pins.loaded || in == nil {
-		return changed, ovSentenceEnd(oneLine(it.Reason))
+		return changed, ovSentenceEnd(ui.OneLine(it.Reason))
 	}
 
 	refAt := func(i int) pinfile.EntryRef { return in.Pins[i].Entry.Ref() }
@@ -434,14 +436,14 @@ func (m *maintModal) goneText(it maintain.PlanItem) (where, reason string) {
 func (m *maintModal) retargetItem(it maintain.PlanItem, w int) []string {
 	t := m.st.theme
 
-	out := t.regionDelta(it.From, it.To, w)
+	out := regionDelta(t, it.From, it.To, w)
 
 	switch {
 	case it.RepoWide:
-		out = append(out, propNote(t, ToneAttention, "Repository-wide: the pin reaches every path in the "+
+		out = append(out, propNote(t, ui.ToneAttention, "Repository-wide: the pin reaches every path in the "+
 			"repository, not only the regions that it names now.", w)...)
 	case it.Broader:
-		out = append(out, propNote(t, ToneAttention, "Broader: the new regions reach paths that the current "+
+		out = append(out, propNote(t, ui.ToneAttention, "Broader: the new regions reach paths that the current "+
 			"regions do not.", w)...)
 	case it.Pin.Readings.Scope.Advice.Narrower:
 		out = append(out, propLines(t.Muted, "Narrower: the new regions reach fewer paths than the current regions.",
@@ -454,7 +456,7 @@ func (m *maintModal) retargetItem(it maintain.PlanItem, w int) []string {
 			label = "Why"
 		}
 
-		out = append(out, integLabeled(t, label, maintLabelW, oneLine(maintFactText(it, f)), t.Muted, w)...)
+		out = append(out, integLabeled(t, label, maintLabelW, ui.OneLine(maintFactText(it, f)), t.Muted, w)...)
 	}
 
 	if it.Pin.Link.NoteChanged {
@@ -498,7 +500,7 @@ func (m *maintModal) noteCompare(it maintain.PlanItem, w int) []string {
 	rh := t.Heading.Render("RECORDED") + "  " + t.Faint.Render(id)
 
 	out := []string{""}
-	out = append(out, t.pair(lh, rh, propLines(t.Body, pinNoteText(it.Pin.Entry.Note), pw),
+	out = append(out, pair(t, lh, rh, propLines(t.Body, pinNoteText(it.Pin.Entry.Note), pw),
 		propLines(t.Muted, pinNoteText(recorded), pw), w)...)
 	out = append(out, propLines(t.Muted, "The note was edited after distillation. The retarget keeps the live note; "+
 		"the recorded note of "+id+" stays as history.", w)...)
@@ -530,7 +532,7 @@ func (m *maintModal) pruneItem(it maintain.PlanItem, w int) []string {
 			label = "Keys"
 		}
 
-		out = append(out, integLabeled(t, label, maintLabelW, "unknown key "+oneLine(k)+
+		out = append(out, integLabeled(t, label, maintLabelW, "unknown key "+ui.OneLine(k)+
 			" (no reader uses it; it leaves with the entry)", t.Muted, w)...)
 	}
 
@@ -540,9 +542,9 @@ func (m *maintModal) pruneItem(it maintain.PlanItem, w int) []string {
 // maintKeptLines names the similar pins that stay linked after a prune.
 // They are advice: similar wording does not prove the same coverage. A
 // prune without them is a deliberate retirement (contracts D-23).
-func maintKeptLines(t *Theme, kept []maintain.Pin, w int) []string {
+func maintKeptLines(t *ui.Theme, kept []maintain.Pin, w int) []string {
 	if len(kept) == 0 {
-		return propNote(t, ToneAttention, "No retained equivalent is established; this is a deliberate retirement.", w)
+		return propNote(t, ui.ToneAttention, "No retained equivalent is established; this is a deliberate retirement.", w)
 	}
 
 	var out []string
@@ -553,12 +555,12 @@ func maintKeptLines(t *Theme, kept []maintain.Pin, w int) []string {
 			label = "Retained"
 		}
 
-		where := pinfile.File + ":" + itoa(k.Entry.Line)
+		where := pinfile.File + ":" + strconv.Itoa(k.Entry.Line)
 		if ids := maintAppliedIDs(k.Link.Applied); len(ids) > 0 {
 			where += " " + t.Glyphs.Sep + " " + propIDList(ids)
 		}
 
-		out = append(out, integLabeled(t, label, maintLabelW, oneLine(k.Entry.Rule)+" ("+where+"): "+
+		out = append(out, integLabeled(t, label, maintLabelW, ui.OneLine(k.Entry.Rule)+" ("+where+"): "+
 			maintRegionText(maintEntryRegions(k.Entry)), t.Body, w)...)
 
 		// A rule is often a short slug, and the note holds the guidance.
@@ -580,7 +582,7 @@ func maintKeptLines(t *Theme, kept []maintain.Pin, w int) []string {
 // maintLedgerLines shows each planned ledger row change, for example
 // "p4  internal/store › internal/store/sql". A plan that y cannot
 // confirm labels the section as a preview only.
-func maintLedgerLines(t *Theme, p *maintain.Plan, w int) []string {
+func maintLedgerLines(t *ui.Theme, p *maintain.Plan, w int) []string {
 	type row struct{ id, old, next string }
 
 	var rows []row
@@ -590,7 +592,7 @@ func maintLedgerLines(t *Theme, p *maintain.Plan, w int) []string {
 	}
 
 	for _, g := range p.Supersede {
-		rows = append(rows, row{propID(g.ID), oneLine(g.Status), domain.ProposalSuperseded})
+		rows = append(rows, row{propID(g.ID), ui.OneLine(g.Status), domain.ProposalSuperseded})
 	}
 
 	if len(rows) == 0 {
@@ -604,12 +606,12 @@ func maintLedgerLines(t *Theme, p *maintain.Plan, w int) []string {
 
 	labelW := 0
 	for _, r := range rows {
-		labelW = max(labelW, width(r.id)+2)
+		labelW = max(labelW, ui.Width(r.id)+2)
 	}
 
 	out := []string{"", head}
 	for _, r := range rows {
-		out = append(out, t.arrowRow(r.id, r.old, r.next, labelW, w)...)
+		out = append(out, arrowRow(t, r.id, r.old, r.next, labelW, w)...)
 	}
 
 	if len(p.Retarget) > 0 {
@@ -650,9 +652,9 @@ func (m *maintModal) planEffects(w int) []string {
 			remove += ", with the provenance comments that name " + propIDList(named)
 		}
 
-		return t.effectLines([]effect{
-			{glyph: t.Glyphs.Del, tone: ToneFailure, text: remove},
-			{glyph: t.Glyphs.Del, tone: ToneFailure, text: "move " + ids + " from applied to superseded in the ledger"},
+		return effectLines(t, []effect{
+			{glyph: t.Glyphs.Del, tone: ui.ToneFailure, text: remove},
+			{glyph: t.Glyphs.Del, tone: ui.ToneFailure, text: "move " + ids + " from applied to superseded in the ledger"},
 		}, []string{
 			"change other pins, also pins with the same rule in other regions",
 			"dismiss a proposal, or delete findings, signatures or the firing log",
@@ -662,9 +664,9 @@ func (m *maintModal) planEffects(w int) []string {
 		}, w)
 	}
 
-	return t.effectLines([]effect{
-		{glyph: change, tone: ToneAttention, text: "change the region keys of " + n + " in " + pinfile.File},
-		{glyph: change, tone: ToneAttention, text: "record the new regions of " + ids + " in the ledger"},
+	return effectLines(t, []effect{
+		{glyph: change, tone: ui.ToneAttention, text: "change the region keys of " + n + " in " + pinfile.File},
+		{glyph: change, tone: ui.ToneAttention, text: "record the new regions of " + ids + " in the ledger"},
 	}, []string{
 		"change the rule, the live note, the comments or the position of a pin",
 		"change other pins, mutes or settings in the file",
@@ -766,7 +768,7 @@ func (m *maintModal) planTail(w int) []string {
 	case p.Confirmable && m.st.busy():
 		state = "y waits: another operation is running"
 	case p.Confirmable && stale:
-		return propNote(t, ToneAttention, scope+sep+"y writes lessons.yaml and the ledger", w)
+		return propNote(t, ui.ToneAttention, scope+sep+"y writes lessons.yaml and the ledger", w)
 	case p.Confirmable:
 		return propLines(t.Body, scope+sep+"y writes lessons.yaml and the ledger", w)
 	case m.foreign != "":
@@ -785,7 +787,7 @@ func (m *maintModal) planTail(w int) []string {
 		state = "y is off"
 	}
 
-	return propNote(t, ToneAttention, scope+sep+state, w)
+	return propNote(t, ui.ToneAttention, scope+sep+state, w)
 }
 
 // maintTailIDs is the number of proposal IDs that a pinned tail names.
@@ -796,18 +798,18 @@ const maintTailIDs = 3
 
 // maintTailIDList names at most maintTailIDs proposals and counts the
 // others, for example "p1000, p1001, p1002, … (+148)".
-func maintTailIDList(t *Theme, ids []int64) string {
+func maintTailIDList(t *ui.Theme, ids []int64) string {
 	if len(ids) <= maintTailIDs {
 		return propIDList(ids)
 	}
 
-	return propIDList(ids[:maintTailIDs]) + ", " + t.Glyphs.Ellipsis + " (+" + itoa(len(ids)-maintTailIDs) + ")"
+	return propIDList(ids[:maintTailIDs]) + ", " + t.Glyphs.Ellipsis + " (+" + strconv.Itoa(len(ids)-maintTailIDs) + ")"
 }
 
 // recoveryView renders the ledger-only completion of a partial
 // operation. A fresh read proved the result of this session, or the
 // view says which proof failed.
-func (m *maintModal) recoveryView(w int) modalOpts {
+func (m *maintModal) recoveryView(w int) ui.ModalOpts {
 	t := m.st.theme
 	p := m.preview
 	ids := propIDList(maintLedgerIDs(p))
@@ -838,7 +840,7 @@ func (m *maintModal) recoveryView(w int) modalOpts {
 
 	if p.Confirmable && m.st.busy() {
 		body = append(body, "")
-		body = append(body, propNote(t, ToneAttention, m.st.mutation+" is running. y is off until it ends.", w)...)
+		body = append(body, propNote(t, ui.ToneAttention, m.st.mutation+" is running. y is off until it ends.", w)...)
 	}
 
 	body = append(body, m.recoveryBlockers(w)...)
@@ -855,13 +857,13 @@ func (m *maintModal) recoveryView(w int) modalOpts {
 	body = append(body, maintLedgerLines(t, p, w)...)
 
 	if p.Confirmable {
-		will := effect{glyph: "~", tone: ToneAttention, text: "record the new regions of " + ids + " in the ledger"}
+		will := effect{glyph: "~", tone: ui.ToneAttention, text: "record the new regions of " + ids + " in the ledger"}
 		if p.Action == maintain.ActionPrune {
-			will = effect{glyph: t.Glyphs.Del, tone: ToneFailure, text: "move " + ids +
+			will = effect{glyph: t.Glyphs.Del, tone: ui.ToneFailure, text: "move " + ids +
 				" from applied to superseded in the ledger"}
 		}
 
-		body = append(body, t.effectLines([]effect{will}, []string{
+		body = append(body, effectLines(t, []effect{will}, []string{
 			"change " + pinfile.File, "retry by itself after a failure", "write anything before you press y",
 		}, w)...)
 	}
@@ -872,14 +874,14 @@ func (m *maintModal) recoveryView(w int) modalOpts {
 
 	switch {
 	case gate != "":
-		tail = propNote(t, ToneAttention, "Ledger only"+sep+"y is off: "+gate, w)
+		tail = propNote(t, ui.ToneAttention, "Ledger only"+sep+"y is off: "+gate, w)
 	case !p.Confirmable:
-		tail = propNote(t, ToneAttention, "Ledger only"+sep+"y is off: the result is not proven", w)
+		tail = propNote(t, ui.ToneAttention, "Ledger only"+sep+"y is off: the result is not proven", w)
 	case m.st.busy():
-		tail = propNote(t, ToneAttention, "Ledger only"+sep+"y waits: another operation is running", w)
+		tail = propNote(t, ui.ToneAttention, "Ledger only"+sep+"y waits: another operation is running", w)
 	}
 
-	return modalOpts{
+	return ui.ModalOpts{
 		Title: t.TabActive.Render("Complete") + " " + t.Body.Render("the ledger update"+sep+ids),
 		Right: t.Muted.Render("ledger only"), Body: body, Tail: tail, Actions: m.previewActions(false),
 	}
@@ -900,12 +902,12 @@ func (m *maintModal) recoveryBlockers(w int) []string {
 
 	note := func(text string) {
 		out = append(out, "")
-		out = append(out, propNote(t, ToneAttention, text, w)...)
+		out = append(out, propNote(t, ui.ToneAttention, text, w)...)
 	}
 
 	switch {
 	case p.GateErr != nil:
-		note("distill.write cannot be read: " + errText(p.GateErr) + ". Fix " + settingsFile + " first. esc " +
+		note("distill.write cannot be read: " + ui.ErrText(p.GateErr) + ". Fix " + settingsFile + " first. esc " +
 			"returns to the result, which keeps this offer; press c there to check the proof again.")
 	case !p.Write:
 		note("distill.write is off. Press o for Settings " + t.Glyphs.Arrow + " Pin writing; after a save, press " +
@@ -964,7 +966,7 @@ func (m *maintModal) proofLines(it maintain.PlanItem, w int) []string {
 	out := maintHeadLines(t, maintRule(it), maintItemBadge(t, it.Status, true), w)
 
 	if it.Status != maintain.ItemReady {
-		return append(out, propNote(t, ToneAttention, ovSentenceEnd(oneLine(it.Reason)), w)...)
+		return append(out, propNote(t, ui.ToneAttention, ovSentenceEnd(ui.OneLine(it.Reason)), w)...)
 	}
 
 	proof := "The file holds the reviewed entry, and its earlier regions are gone."
@@ -980,10 +982,10 @@ func (m *maintModal) proofLines(it maintain.PlanItem, w int) []string {
 // did not happen. An offered recovery is named in the lead, the Recovery
 // row and the tail, which also say that esc drops it: the tail stays
 // visible at every size, and the proof cannot come back.
-func (m *maintModal) resultView(w int) modalOpts {
+func (m *maintModal) resultView(w int) ui.ModalOpts {
 	t := m.st.theme
 	o := m.out
-	v := modalOpts{Actions: m.resultActions(false)}
+	v := ui.ModalOpts{Actions: m.resultActions(false)}
 
 	if o.err != nil {
 		return m.refusalView(w)
@@ -1005,13 +1007,13 @@ func (m *maintModal) resultView(w int) modalOpts {
 }
 
 // refusalView reports a commit that wrote nothing.
-func (m *maintModal) refusalView(w int) modalOpts {
+func (m *maintModal) refusalView(w int) ui.ModalOpts {
 	t := m.st.theme
 	o := m.out
 
-	body := propNote(t, ToneAttention, maintRefusal(t, o.err), w)
+	body := propNote(t, ui.ToneAttention, maintRefusal(t, o.err), w)
 	body = append(body, "")
-	body = append(body, propLines(t.Muted, "Details: "+errText(o.err), w)...)
+	body = append(body, propLines(t.Muted, "Details: "+ui.ErrText(o.err), w)...)
 
 	// The title and the tail say "written", not "changed": the lead can
 	// say that something else changed since the preview.
@@ -1032,15 +1034,15 @@ func (m *maintModal) refusalView(w int) modalOpts {
 	body = append(body, "")
 	body = append(body, propLines(t.Faint, "Nothing is retried automatically.", w)...)
 
-	return modalOpts{
+	return ui.ModalOpts{
 		Title: t.Attention.Render("Not written"), Body: body, Actions: m.resultActions(false),
-		Tail: propNote(t, ToneAttention, next, w),
+		Tail: propNote(t, ui.ToneAttention, next, w),
 	}
 }
 
 // maintRefusal maps a commit refusal to one sentence. Every refusal
 // means that nothing was written.
-func maintRefusal(t *Theme, err error) string {
+func maintRefusal(t *ui.Theme, err error) string {
 	switch {
 	case errors.Is(err, maintain.ErrStale):
 		return "Something changed since the preview" + propDash(t) + "preview again. Nothing was written."
@@ -1060,7 +1062,7 @@ func maintRefusal(t *Theme, err error) string {
 
 // outcome titles a commit outcome and states what holds now and the
 // next safe step.
-func (m *maintModal) outcome(o *maintOutcome) (title string, tone Tone, lead string) {
+func (m *maintModal) outcome(o *maintOutcome) (title string, tone ui.Tone, lead string) {
 	res := o.res
 	n := propPlural(len(o.plan.Items), "pin", "pins")
 	ids := propIDList(maintLedgerIDs(o.plan))
@@ -1075,25 +1077,25 @@ func (m *maintModal) outcome(o *maintOutcome) (title string, tone Tone, lead str
 
 	switch {
 	case o.recovery && res.LedgerDone:
-		return "Ledger completed", ToneSuccess, "The ledger now matches the pin file: " + ids + " " + done + "."
+		return "Ledger completed", ui.ToneSuccess, "The ledger now matches the pin file: " + ids + " " + done + "."
 	case o.recovery:
-		return "Ledger update failed again", ToneFailure, "Nothing changed. Press c to check the proof again. esc " +
+		return "Ledger update failed again", ui.ToneFailure, "Nothing changed. Press c to check the proof again. esc " +
 			"drops the completion, and it cannot come back."
 	case res.LedgerDone && len(res.Moved) > 0 && prune:
-		return "Pruned " + n, ToneSuccess, "Removed " + n + " from " + file + " and recorded " +
+		return "Pruned " + n, ui.ToneSuccess, "Removed " + n + " from " + file + " and recorded " +
 			propIDList(res.Moved) + " as superseded. Review the diff and commit it."
 	case res.LedgerDone && len(res.Moved) > 0:
-		return "Retargeted " + n, ToneSuccess, "Wrote the new regions of " + n + " to " + file + " and recorded " +
+		return "Retargeted " + n, ui.ToneSuccess, "Wrote the new regions of " + n + " to " + file + " and recorded " +
 			"them for " + propIDList(res.Moved) + ". Review the diff and commit it."
 	case res.LedgerDone && res.FileErr != nil:
 		// The write reported a failure, and the result cannot tell whether
 		// the file holds the change. So the lead claims no file change.
-		return "Ledger completed elsewhere", ToneAttention, "Another writer already recorded the same ledger " +
+		return "Ledger completed elsewhere", ui.ToneAttention, "Another writer already recorded the same ledger " +
 			"change. The pin file write reported a failure, so Seamark cannot say what the file holds. Check it " +
 			"with git diff " + file + " before you rely on it: commit the change if it is there; else Pins shows " +
 			"the mismatch."
 	case res.LedgerDone:
-		return "Ledger completed elsewhere", ToneAttention, "The pin file changed, and another writer already " +
+		return "Ledger completed elsewhere", ui.ToneAttention, "The pin file changed, and another writer already " +
 			"recorded the same ledger change. Nothing more is needed; review the diff and commit it."
 	case res.Restored:
 		step, row := "pin file write", "File error"
@@ -1101,7 +1103,7 @@ func (m *maintModal) outcome(o *maintOutcome) (title string, tone Tone, lead str
 			step, row = "ledger update", "Ledger error"
 		}
 
-		return "Nothing changed", ToneAttention, "The " + step + " failed, so Seamark put the earlier pin file back. " +
+		return "Nothing changed", ui.ToneAttention, "The " + step + " failed, so Seamark put the earlier pin file back. " +
 			"The pin file and the ledger hold their earlier state. Fix the cause named under " + row + ", then " +
 			"press " + open + " in Pins for a new preview."
 	case res.Partial():
@@ -1116,10 +1118,10 @@ func (m *maintModal) outcome(o *maintOutcome) (title string, tone Tone, lead str
 			lead += " Fix the cause named under File error, then press " + open + " in Pins for a new preview."
 		}
 
-		return "Pin file not written", ToneFailure, lead
+		return "Pin file not written", ui.ToneFailure, lead
 	}
 
-	return "Nothing changed", ToneAttention, "No pin and no proposal changed."
+	return "Nothing changed", ui.ToneAttention, "No pin and no proposal changed."
 }
 
 // maintPartialOutcome titles a commit that changed the pin file, or could
@@ -1127,7 +1129,7 @@ func (m *maintModal) outcome(o *maintOutcome) (title string, tone Tone, lead str
 // recovery, which proves the file change. unread is a failed write that
 // no read confirmed, so its title and lead claim no file change. Without
 // an offer, the lead names both sides and the manual route.
-func maintPartialOutcome(a maintain.Action, ids string, offer, unread bool) (title string, tone Tone, lead string) {
+func maintPartialOutcome(a maintain.Action, ids string, offer, unread bool) (title string, tone ui.Tone, lead string) {
 	verb := "retarget"
 
 	title = "Regions written, ledger incomplete"
@@ -1137,16 +1139,16 @@ func maintPartialOutcome(a maintain.Action, ids string, offer, unread bool) (tit
 
 	switch {
 	case offer:
-		return title, ToneFailure, "The pin file changed, but the ledger update did not complete. Do not " + verb +
+		return title, ui.ToneFailure, "The pin file changed, but the ledger update did not complete. Do not " + verb +
 			" again: the change is already in the file. Press c to preview the ledger-only completion; it checks " +
 			"the file and the rows again before any write. esc drops the completion, and it cannot come back."
 	case unread:
-		return "Pin file state unknown, ledger incomplete", ToneFailure, "The pin file write reported a failure, " +
+		return "Pin file state unknown, ledger incomplete", ui.ToneFailure, "The pin file write reported a failure, " +
 			"and the file could not be read again, so its state is unknown. This operation did not change the " +
 			"ledger. No completion can be proven, so none is offered. " + maintManualRoute(a, ids)
 	}
 
-	return title, ToneFailure, "The pin file changed, but the ledger update did not complete. No completion can " +
+	return title, ui.ToneFailure, "The pin file changed, but the ledger update did not complete. No completion can " +
 		"be proven, so none is offered. " + maintManualRoute(a, ids)
 }
 
@@ -1202,7 +1204,7 @@ func (m *maintModal) resultFacts(o *maintOutcome) [][2]string {
 	}
 
 	if res.Note != "" {
-		rows = append(rows, [2]string{"Note", ovSentenceEnd(oneLine(res.Note))})
+		rows = append(rows, [2]string{"Note", ovSentenceEnd(ui.OneLine(res.Note))})
 	}
 
 	switch {
@@ -1259,7 +1261,7 @@ func (m *maintModal) ledgerFact(o *maintOutcome) (text string, rowsNow bool) {
 // ids, for example "p4 internal/store › internal/store/sql" or "p16 ›
 // superseded". A retarget names its regions, so the result shows the
 // values that the ledger holds now, as the preview LEDGER section did.
-func maintTargetText(t *Theme, p *maintain.Plan, ids []int64) string {
+func maintTargetText(t *ui.Theme, p *maintain.Plan, ids []int64) string {
 	arrow := " " + t.Glyphs.Arrow + " "
 
 	if p.Action == maintain.ActionPrune {
@@ -1287,7 +1289,7 @@ func maintTargetText(t *Theme, p *maintain.Plan, ids []int64) string {
 }
 
 // maintErrText renders an error for a result row. errors.Join breaks its
-// parts with newlines, and oneLine would run them into one clause. So
+// parts with newlines, and ui.OneLine would run them into one clause. So
 // each part of a join ends with "; ", and the user sees where one
 // failure ends and the next starts.
 func maintErrText(err error) string {
@@ -1295,7 +1297,7 @@ func maintErrText(err error) string {
 	texts := make([]string, 0, len(parts))
 
 	for _, e := range parts {
-		texts = append(texts, errText(e))
+		texts = append(texts, ui.ErrText(e))
 	}
 
 	return strings.Join(texts, "; ")
@@ -1340,7 +1342,7 @@ func maintRestoreRow(o *maintOutcome) (string, bool) {
 	case res.Restored:
 		return "done: the earlier pin file is back", true
 	case res.RestoreRefused != "":
-		return "refused: " + oneLine(res.RestoreRefused), true
+		return "refused: " + ui.OneLine(res.RestoreRefused), true
 	case res.RestoreErr != nil:
 		return "failed: " + maintErrText(res.RestoreErr), true
 	case res.Partial():
@@ -1355,7 +1357,7 @@ func maintRestoreRow(o *maintOutcome) (string, bool) {
 // read did not return shows as missing, so a gone row is never hidden.
 func maintObserved(p *maintain.Plan, rows []domain.Proposal) string {
 	row := func(r domain.Proposal) string {
-		return propID(r.ID) + " " + oneLine(r.Status) + ", " + maintRegionText(r.RegionSet())
+		return propID(r.ID) + " " + ui.OneLine(r.Status) + ", " + maintRegionText(r.RegionSet())
 	}
 
 	var parts []string
@@ -1386,7 +1388,7 @@ func maintObserved(p *maintain.Plan, rows []domain.Proposal) string {
 
 // resultTail is the outcome summary under the rule: the file state, the
 // ledger state, and the next key.
-func (m *maintModal) resultTail(o *maintOutcome, tone Tone, w int) []string {
+func (m *maintModal) resultTail(o *maintOutcome, tone ui.Tone, w int) []string {
 	t := m.st.theme
 	res := o.res
 	sep := " " + t.Glyphs.Sep + " "
@@ -1426,11 +1428,11 @@ func (m *maintModal) resultTail(o *maintOutcome, tone Tone, w int) []string {
 
 // maintHeadLines renders an item head: the rule, wrapped so it shows in
 // full, with the state badge at the right of the first line.
-func maintHeadLines(t *Theme, rule, badge string, w int) []string {
-	room := max(4, w-width(badge)-2)
-	segs := strings.Split(wrap(rule, room), "\n")
+func maintHeadLines(t *ui.Theme, rule, badge string, w int) []string {
+	room := max(4, w-ui.Width(badge)-2)
+	segs := strings.Split(ui.Wrap(rule, room), "\n")
 
-	out := []string{spread(t.Title.Render(segs[0]), badge, w)}
+	out := []string{ui.Spread(t.Title.Render(segs[0]), badge, w)}
 	for _, s := range segs[1:] {
 		out = append(out, t.Title.Render(s))
 	}
@@ -1440,28 +1442,28 @@ func maintHeadLines(t *Theme, rule, badge string, w int) []string {
 
 // maintItemBadge is the state of a selected pin as a glyph and a word,
 // so it reads without color. proof selects the words of a completion.
-func maintItemBadge(t *Theme, s maintain.ItemStatus, proof bool) string {
+func maintItemBadge(t *ui.Theme, s maintain.ItemStatus, proof bool) string {
 	switch {
 	case s == maintain.ItemReady && proof:
-		return t.Badge(ToneSuccess, "proven")
+		return t.Badge(ui.ToneSuccess, "proven")
 	case s == maintain.ItemReady:
-		return t.Badge(ToneSuccess, "ready")
+		return t.Badge(ui.ToneSuccess, "ready")
 	case s == maintain.ItemNoOp:
-		return t.Badge(ToneNeutral, "no-op")
+		return t.Badge(ui.ToneNeutral, "no-op")
 	case proof:
-		return t.Badge(ToneAttention, "not proven")
+		return t.Badge(ui.ToneAttention, "not proven")
 	}
 
-	return t.Badge(ToneAttention, "blocked")
+	return t.Badge(ui.ToneAttention, "blocked")
 }
 
 // maintWhere names where a selected pin is and the proposals it links,
 // for example ".seamark/lessons.yaml:12 · linked p4". An entry without a
 // line changed after the review; goneText names it instead.
-func maintWhere(t *Theme, it maintain.PlanItem) string {
+func maintWhere(t *ui.Theme, it maintain.PlanItem) string {
 	e := it.Pin.Entry
 
-	where := pinfile.File + ":" + itoa(e.Line)
+	where := pinfile.File + ":" + strconv.Itoa(e.Line)
 	if ids := maintItemIDs(it); len(ids) > 0 {
 		where += " " + t.Glyphs.Sep + " linked " + propIDList(ids)
 	}
@@ -1473,15 +1475,15 @@ func maintWhere(t *Theme, it maintain.PlanItem) string {
 // since the review has no live content, so the reviewed key names it.
 func maintRule(it maintain.PlanItem) string {
 	if it.Pin.Entry.Rule != "" {
-		return oneLine(it.Pin.Entry.Rule)
+		return ui.OneLine(it.Pin.Entry.Rule)
 	}
 
-	return oneLine(it.Ref.Key.Rule)
+	return ui.OneLine(it.Ref.Key.Rule)
 }
 
 // maintSubject names the selection in a title: the ID and the rule of
 // one pin, or the count of several.
-func maintSubject(t *Theme, items []maintain.PlanItem) string {
+func maintSubject(t *ui.Theme, items []maintain.PlanItem) string {
 	if len(items) != 1 {
 		return propPlural(len(items), "pin", "pins")
 	}
@@ -1547,7 +1549,7 @@ func maintRegionText(set []string) string {
 	parts := make([]string, 0, len(set))
 
 	for _, r := range set {
-		if r = oneLine(r); r != "" {
+		if r = ui.OneLine(r); r != "" {
 			parts = append(parts, r)
 		}
 	}
@@ -1572,15 +1574,15 @@ func maintEntryRegions(e pinfile.Entry) []string {
 
 // maintCounts renders the added and removed line counts of a diff, each
 // with its sign, so the count reads without color.
-func maintCounts(t *Theme, added, removed int) string {
+func maintCounts(t *ui.Theme, added, removed int) string {
 	var parts []string
 
 	if added > 0 {
-		parts = append(parts, t.Success.Render(t.Glyphs.Add+itoa(added)))
+		parts = append(parts, t.Success.Render(t.Glyphs.Add+strconv.Itoa(added)))
 	}
 
 	if removed > 0 {
-		parts = append(parts, t.Failure.Render(t.Glyphs.Del+itoa(removed)))
+		parts = append(parts, t.Failure.Render(t.Glyphs.Del+strconv.Itoa(removed)))
 	}
 
 	if len(parts) == 0 {

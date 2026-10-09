@@ -10,23 +10,16 @@
 // new file joins a group below, so a reader finds a screen by its name.
 // TestDocListsEveryFile fails when a file and this map disagree.
 //
-// Shell: the program, the frame, and the state that every screen reads.
+// Shell: the program, the frame, the state that every screen reads, and
+// the widgets that name a seamark concept.
 //
 //   - doc.go: the package doc and this file map.
 //   - tui.go: Options and Run, the terminal lifecycle and the clipboard.
 //   - app.go: the model, the five destinations, the frame, the overlays.
 //   - app_run.go: the run line, the quit question, the wait at exit.
 //   - state.go: the data sections, the generation tickets, the messages.
-//   - keys.go: the global keys, the movement keys, the n/a key helpers.
-//
-// Drawing primitives: what draws or tracks a position.
-//
-//   - theme.go: Theme, Glyphs and Tone, the colors and the glyph sets.
-//   - box.go: bordered boxes, modals, columns, and the overlay.
-//   - widgets.go: layout thresholds, key hints, rows and notes.
-//   - text.go: the sanitizers, cell widths, wrap and truncate.
-//   - scroll.go: scrollState, textPager and listState.
-//   - input.go: lineInput, the one-line text input.
+//   - keys.go: the global keys of the shell.
+//   - widgets.go: the domain widgets, which draw with package ui.
 //
 // Shared screen types: what several screens embed.
 //
@@ -101,6 +94,11 @@
 //   - services_settings.go: the focused settings reads and patches.
 //
 // # Rules
+//
+// Layers: internal/tui/ui draws and tracks positions without seamark
+// vocabulary, and internal/tui holds the shell and the screens. ui never
+// imports internal/tui, so a primitive cannot reach a screen or the
+// state. The ui package doc states which declaration belongs there.
 //
 // Embedding: a holder never declares a field or a method with the name
 // of a member of an embedded listPane, filterInput or previewFlow. Go

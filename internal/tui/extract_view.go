@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -12,6 +13,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/learning"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file renders a trigger extraction record: the Preview step (the
@@ -79,26 +81,26 @@ func (r *extRecord) view(w, h int) string {
 func (r *extRecord) contextLine(w int) string {
 	t := r.st.theme
 	g := t.Glyphs
-	left := " " + r.facts(w < wideWidth)
+	left := " " + r.facts(w < ui.WideWidth)
 
 	steps, cur := runTrail(false), r.step.stepper(false)
 
-	trail := t.stepper(steps, cur)
-	if width(left)+width(trail)+3 > w {
-		trail = t.TabActive.Render(g.Dot+" "+steps[cur]) + t.Faint.Render(" "+itoa(cur+1)+"/"+itoa(len(steps)))
+	trail := stepper(t, steps, cur)
+	if ui.Width(left)+ui.Width(trail)+3 > w {
+		trail = t.TabActive.Render(g.Dot+" "+steps[cur]) + t.Faint.Render(" "+strconv.Itoa(cur+1)+"/"+strconv.Itoa(len(steps)))
 	}
 
-	room := w - width(trail) - 3
+	room := w - ui.Width(trail) - 3
 
 	switch {
-	case width(left) <= room:
+	case ui.Width(left) <= room:
 	case room >= agentFactsMin:
-		left = truncate(left, room, g.Ellipsis)
+		left = ui.Truncate(left, room, g.Ellipsis)
 	default:
-		return truncate(left, w, g.Ellipsis)
+		return ui.Truncate(left, w, g.Ellipsis)
 	}
 
-	return spread(left, trail+" ", w)
+	return ui.Spread(left, trail+" ", w)
 }
 
 // facts renders the context facts: the selection, the agent and the
@@ -109,7 +111,7 @@ func (r *extRecord) facts(compact bool) string {
 
 	type fact struct{ label, value string }
 
-	n := itoa(r.selected())
+	n := strconv.Itoa(r.selected())
 	if r.cursor {
 		// D-15: a preview names the cursor row that stands in for an
 		// empty selection.
@@ -119,7 +121,7 @@ func (r *extRecord) facts(compact bool) string {
 	facts := []fact{{"selected", n}}
 
 	if compact {
-		facts[0] = fact{"", itoa(r.selected()) + " selected"}
+		facts[0] = fact{"", strconv.Itoa(r.selected()) + " selected"}
 
 		if r.cursor {
 			facts[0].value += " (cursor row)"
@@ -127,7 +129,7 @@ func (r *extRecord) facts(compact bool) string {
 	}
 
 	if p := r.prev.preview; p != nil && r.prev.err == nil {
-		facts = append(facts, fact{"agent", oneLine(p.Invocation.Name)})
+		facts = append(facts, fact{"agent", ui.OneLine(p.Invocation.Name)})
 	}
 
 	switch {
@@ -167,11 +169,11 @@ func (r *extRecord) previewView(w, h int) string {
 
 	switch {
 	case r.step == stepPreparing:
-		o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Plan", true)}
+		o := ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Plan", true)}
 
-		return integBoxed(t, o, ToneNeutral, "Planning the trigger extraction"+t.Glyphs.Ellipsis,
+		return integBoxed(t, o, ui.ToneNeutral, "Planning the trigger extraction"+t.Glyphs.Ellipsis,
 			"Seamark reads the index, the pins and the agent configuration. Nothing is sent or written.",
-			t.hints([]key.Binding{withHelp(nkeys.Back, "esc", "cancel")}))
+			t.Hints([]key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "cancel")}))
 	case pl.err != nil:
 		return r.planErrBox(w, h)
 	case pl.preview.NoOp():
@@ -181,7 +183,7 @@ func (r *extRecord) previewView(w, h int) string {
 	if r.st.wide() {
 		leftW := max(34, setupSplit(w, agentPlanW))
 
-		return hjoin(1, r.planBox(leftW, h, pl.planFocus), r.itemsBox(w-leftW-1, h, !pl.planFocus, false))
+		return ui.Hjoin(1, r.planBox(leftW, h, pl.planFocus), r.itemsBox(w-leftW-1, h, !pl.planFocus, false))
 	}
 
 	// The compact Proposals pane replaces the Plan pane, so it pins the
@@ -199,49 +201,49 @@ func (r *extRecord) previewView(w, h int) string {
 func (r *extRecord) planErrBox(w, h int) string {
 	t := r.st.theme
 	err := r.prev.err
-	o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Plan", true)}
+	o := ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Plan", true)}
 
 	title := "Could not plan the trigger extraction"
-	body := errText(err) + "\n\nNothing was sent or written."
+	body := ui.ErrText(err) + "\n\nNothing was sent or written."
 
 	// A configuration or an index that blocks the plan is a blocked
 	// state, not a failure (design map §9), so it takes the attention
 	// color. Other errors keep the failure color.
-	tone := ToneFailure
+	tone := ui.ToneFailure
 
 	var cfg *learning.ExtractConfigError
 
 	switch {
 	case errors.As(err, &cfg):
-		route := "Edit " + oneLine(cfg.Path) + ", then plan again."
+		route := "Edit " + ui.OneLine(cfg.Path) + ", then plan again."
 
 		switch cfg.Path {
 		case settingsFile:
-			route = "Press o to fix it in Settings, or edit " + oneLine(cfg.Path) + ", then plan again."
+			route = "Press o to fix it in Settings, or edit " + ui.OneLine(cfg.Path) + ", then plan again."
 		case pinfile.File:
-			route = "Edit " + oneLine(cfg.Path) + ", then plan again. Press o to see where Pins fails to read it."
+			route = "Edit " + ui.OneLine(cfg.Path) + ", then plan again. Press o to see where Pins fails to read it."
 		}
 
-		title, tone = "The configuration blocks the plan", ToneAttention
-		body = errText(err) + "\n\nThe console does not fall back to defaults for a paid run. " + route +
+		title, tone = "The configuration blocks the plan", ui.ToneAttention
+		body = ui.ErrText(err) + "\n\nThe console does not fall back to defaults for a paid run. " + route +
 			" Nothing was sent or written."
 	case errors.Is(err, learning.ErrExtractNotReady):
 		// The title says that the index is not ready, so the body shows
 		// only the cause. The minimum layout then keeps the last sentence.
-		cause := errText(err)
+		cause := ui.ErrText(err)
 		if c, ok := strings.CutPrefix(cause, learning.ErrExtractNotReady.Error()+": "); ok && c != "" {
 			cause = c
 		}
 
-		title, tone = "The index is not ready", ToneAttention
+		title, tone = "The index is not ready", ui.ToneAttention
 		body = cause + "\n\nPress o to build it from Overview, then plan again. Nothing was sent or written."
 	case errors.Is(err, distill.ErrStale):
 		title = "The workspace changed while planning"
 		body = extStaleText(err) + "\n\nPlan again to read the current state. Nothing was sent or written."
 	}
 
-	next := t.hints([]key.Binding{
-		withHelp(nkeys.Enter, "enter", "plan again"), r.linkKey(), withHelp(nkeys.Back, "esc", "close"),
+	next := t.Hints([]key.Binding{
+		ui.WithHelp(ui.Nav.Enter, "enter", "plan again"), r.linkKey(), ui.WithHelp(ui.Nav.Back, "esc", "close"),
 	})
 
 	return integBoxed(t, o, tone, title, body, next)
@@ -252,27 +254,27 @@ func (r *extRecord) planErrBox(w, h int) string {
 // The scope summary stays pinned above the start line.
 func (r *extRecord) planBox(w, h int, focused bool) string {
 	t := r.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 	p := r.prev.preview
 
 	// The notes that stop a start come first, so a short box shows them.
 	body := r.planNotes(inner)
 	body = append(body, r.planFacts(inner)...)
-	body = append(body, t.effectLines(r.planWill(), nil, inner)...)
+	body = append(body, effectLines(t, r.planWill(), nil, inner)...)
 	body = append(body, "", integHeading(t, "Sent data"))
 	body = append(body, integLines(t.Body, extSentText, inner)...)
 	body = append(body, "", integHeading(t, "Scope"))
 	body = append(body, r.scopeLines(inner)...)
-	body = append(body, t.effectLines(nil, r.planWont(), inner)...)
+	body = append(body, effectLines(t, nil, r.planWont(), inner)...)
 
 	tail := r.previewTail(inner, len(body), h)
 
-	o := boxOpts{
+	o := ui.BoxOpts{
 		W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Plan", focused),
 		Right: t.Muted.Render(propPlural(len(p.Plan.Batches), "batch", "batches")),
 	}
 
-	return t.scrollBox(o, body, tail, &r.prev.notes, [2]int{-1, -1}, false)
+	return t.ScrollBox(o, body, tail, &r.prev.notes, [2]int{-1, -1}, false)
 }
 
 // scopeSummary is the confirmation scope of the review, for example
@@ -286,7 +288,7 @@ func (r *extRecord) scopeSummary() string {
 		text += " in " + propPlural(b, "batch", "batches")
 	}
 
-	return text + countSep(r.st.theme) + itoa(len(p.Ineligible())) + " ineligible"
+	return text + countSep(r.st.theme) + strconv.Itoa(len(p.Ineligible())) + " ineligible"
 }
 
 // previewTail returns the pinned tail of the Preview step: the scope
@@ -306,7 +308,7 @@ func (r *extRecord) previewTail(inner, bodyRows, h int) []string {
 		tail = append(tail, integLines(t.Muted, "Nothing was sent. Press enter to plan again.", inner)...)
 	}
 
-	if bodyRows+len(tail) > boxRows(h) {
+	if bodyRows+len(tail) > ui.BoxRows(h) {
 		tail = tail[1:]
 	}
 
@@ -322,7 +324,7 @@ func (r *extRecord) planFacts(w int) []string {
 
 	sizes := make([]string, len(pl.Batches))
 	for i, b := range pl.Batches {
-		sizes[i] = itoa(len(b.Proposals))
+		sizes[i] = strconv.Itoa(len(b.Proposals))
 	}
 
 	// The sizes follow a colon, because the separator glyph reads as a
@@ -334,7 +336,7 @@ func (r *extRecord) planFacts(w int) []string {
 
 	agent := agentText(t, p.Invocation.Argv, agentKind(p.Invocation.Name, !r.prev.preset), 0)
 
-	selected := t.Body.Render(itoa(len(pl.IDs())) + " eligible of " + itoa(r.selected()))
+	selected := t.Body.Render(strconv.Itoa(len(pl.IDs())) + " eligible of " + strconv.Itoa(r.selected()))
 	if r.cursor {
 		// The maintenance preview uses the same words (D-15).
 		selected += t.Faint.Render(" " + t.Glyphs.Sep + " the cursor row; no row is marked")
@@ -369,27 +371,27 @@ func (r *extRecord) planNotes(w int) []string {
 				"start Seamark again from an existing directory."
 		}
 
-		out = append(out, propNote(t, ToneAttention, oneLine(b)+advice, w)...)
+		out = append(out, propNote(t, ui.ToneAttention, ui.OneLine(b)+advice, w)...)
 		out = append(out, "")
 	}
 
 	if err := r.prev.stale; err != nil {
-		text := "The run did not start: " + errText(err) + ". Nothing was sent. Press enter to plan again."
+		text := "The run did not start: " + ui.ErrText(err) + ". Nothing was sent. Press enter to plan again."
 
 		var saved extSettingsStale
 
 		switch {
 		case errors.As(err, &saved):
 			// Nobody pressed y, so the note reports no refused start.
-			text = "This preview is out of date: " + errText(err) + ". Nothing was sent. Press enter to plan again."
+			text = "This preview is out of date: " + ui.ErrText(err) + ". Nothing was sent. Press enter to plan again."
 		case errors.Is(err, distill.ErrStale):
 			text = "The preview is out of date: " + extStaleText(err) + ". Nothing was sent. Press enter to plan again."
 		case errors.Is(err, ErrBusy):
-			text = "Another operation holds the index: " + errText(err) + ". Nothing was sent. Press enter to plan " +
+			text = "Another operation holds the index: " + ui.ErrText(err) + ". Nothing was sent. Press enter to plan " +
 				"again when it ends."
 		}
 
-		out = append(out, propNote(t, ToneAttention, text, w)...)
+		out = append(out, propNote(t, ui.ToneAttention, text, w)...)
 		out = append(out, "")
 	}
 
@@ -405,7 +407,7 @@ func (r *extRecord) planWill() []effect {
 	// A custom agent.argv has no preset name, so the effect names the
 	// setting, as the Agent fact does.
 	agent := "the agent"
-	if name := oneLine(p.Invocation.Name); name != "" {
+	if name := ui.OneLine(p.Invocation.Name); name != "" {
 		agent = name
 	}
 
@@ -416,9 +418,9 @@ func (r *extRecord) planWill() []effect {
 	n, b := len(p.Plan.IDs()), len(p.Plan.Batches)
 
 	return []effect{
-		{glyph: g.Add, tone: ToneSuccess, text: "ask " + agent + " about " + propPlural(n, "proposal", "proposals") +
+		{glyph: g.Add, tone: ui.ToneSuccess, text: "ask " + agent + " about " + propPlural(n, "proposal", "proposals") +
 			" in " + propPlural(b, "call", "calls") + ", one per batch, in the order listed"},
-		{glyph: g.Add, tone: ToneSuccess, text: "save each answer and its question stamp when its batch returns"},
+		{glyph: g.Add, tone: ui.ToneSuccess, text: "save each answer and its question stamp when its batch returns"},
 	}
 }
 
@@ -469,7 +471,7 @@ func (r *extRecord) scopeLines(w int) []string {
 			out = append(out, t.Muted.Render("A negative or unconfirmed answer sets:"))
 
 			for _, c := range changes {
-				out = append(out, t.arrowRow(propID(c.id), extRegions(c.from), extRegions(c.to), extIDMinW, w)...)
+				out = append(out, arrowRow(t, propID(c.id), extRegions(c.from), extRegions(c.to), extIDMinW, w)...)
 			}
 		}
 	}
@@ -486,7 +488,7 @@ func (r *extRecord) scopeLines(w int) []string {
 
 	for _, id := range r.liveNoteIDs() {
 		out = append(out, "")
-		out = append(out, propNote(t, ToneAttention, propID(id)+": the live note differs from the recorded note. "+
+		out = append(out, propNote(t, ui.ToneAttention, propID(id)+": the live note differs from the recorded note. "+
 			"The question uses the recorded note.", w)...)
 	}
 
@@ -544,7 +546,7 @@ func extRegions(set []string) string {
 
 	out := make([]string, len(set))
 	for i, s := range set {
-		out[i] = oneLine(s)
+		out[i] = ui.OneLine(s)
 	}
 
 	return strings.Join(out, ", ")
@@ -562,7 +564,7 @@ func (r *extRecord) itemCols(w int) extCols {
 	c := extCols{idW: extIDMinW, reasonW: extReasonW}
 
 	for _, ref := range r.plannedItems() {
-		c.idW = max(c.idW, width(propID(r.plannedRow(ref).ID))+1)
+		c.idW = max(c.idW, ui.Width(propID(r.plannedRow(ref).ID))+1)
 	}
 
 	if w < extReasonMin {
@@ -572,7 +574,7 @@ func (r *extRecord) itemCols(w int) extCols {
 	// The "note edited" word takes room from the rule of its row. A
 	// narrow pane gives that row too little rule, so it drops the reason
 	// column; the detail still shows the reason.
-	if len(r.liveNoteIDs()) > 0 && w-2-c.idW-extStateW-c.reasonW-1-width(extNoteSuffix(r.st.theme)) < extRuleMin {
+	if len(r.liveNoteIDs()) > 0 && w-2-c.idW-extStateW-c.reasonW-1-ui.Width(extNoteSuffix(r.st.theme)) < extRuleMin {
 		c.reasonW = 0
 	}
 
@@ -583,14 +585,14 @@ func (r *extRecord) itemCols(w int) extCols {
 
 // extNoteSuffix is the "note edited" word that follows the text of a
 // table cell.
-func extNoteSuffix(t *Theme) string {
+func extNoteSuffix(t *ui.Theme) string {
 	return t.Attention.Render(" " + t.Glyphs.Sep + " " + extNoteEdited)
 }
 
 // extWithNote appends the "note edited" word to the text of a table cell
 // with room cells. The text gives up its room first, so the word always
 // shows when the cell is narrow.
-func extWithNote(t *Theme, text string, room int) string {
+func extWithNote(t *ui.Theme, text string, room int) string {
 	return extWithTail(t, text, extNoteSuffix(t), t.Attention.Render(extNoteEdited), room)
 }
 
@@ -598,16 +600,16 @@ func extWithNote(t *Theme, text string, room int) string {
 // The text gives up its room first, so the tail always shows when the
 // cell is narrow. A cell that cannot hold four cells of text beside the
 // tail shows short alone.
-func extWithTail(t *Theme, text, tail, short string, room int) string {
-	if room-width(tail) < 4 {
-		return truncate(short, room, t.Glyphs.Ellipsis)
+func extWithTail(t *ui.Theme, text, tail, short string, room int) string {
+	if room-ui.Width(tail) < 4 {
+		return ui.Truncate(short, room, t.Glyphs.Ellipsis)
 	}
 
-	return truncate(text, room-width(tail), t.Glyphs.Ellipsis) + tail
+	return ui.Truncate(text, room-ui.Width(tail), t.Glyphs.Ellipsis) + tail
 }
 
 // extNoteLegendLine explains the "note edited" word under a table.
-func extNoteLegendLine(t *Theme, w int) []string {
+func extNoteLegendLine(t *ui.Theme, w int) []string {
 	return integHanging(t.Attention.Render(extNoteEdited)+t.Faint.Render(": "), t.Faint, extNoteLegend, w)
 }
 
@@ -622,7 +624,7 @@ func (r *extRecord) plannedRow(ref extItemRef) domain.Proposal {
 // Plan pane, for the compact layout that shows this pane alone.
 func (r *extRecord) itemsBox(w, h int, focused, pinned bool) string {
 	t := r.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 	refs := r.plannedItems()
 
 	r.prev.cursor = max(0, min(r.prev.cursor, len(refs)-1))
@@ -639,12 +641,12 @@ func (r *extRecord) itemsBox(w, h int, focused, pinned bool) string {
 		tail = r.previewTail(inner, len(body), h)
 	}
 
-	o := boxOpts{
+	o := ui.BoxOpts{
 		W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Proposals", focused),
 		Right: t.Faint.Render("send order"),
 	}
 
-	return t.scrollBox(o, body, tail, &r.prev.list, keep, r.prev.follow)
+	return t.ScrollBox(o, body, tail, &r.prev.list, keep, r.prev.follow)
 }
 
 // itemLines renders the planned items under their batch and the items
@@ -656,9 +658,9 @@ func (r *extRecord) itemLines(w int, focused bool) (lines []string, keep [2]int)
 	c := r.itemCols(w)
 
 	row := func(marker, id, state, rule, reason string) string {
-		cells := []colCell{cell(marker, 2), cell(id, c.idW), cell(state, extStateW), cell(rule, c.ruleW)}
+		cells := []ui.ColCell{ui.Cell(marker, 2), ui.Cell(id, c.idW), ui.Cell(state, extStateW), ui.Cell(rule, c.ruleW)}
 		if c.reasonW > 0 {
-			cells = append(cells, cell(reason, c.reasonW))
+			cells = append(cells, ui.Cell(reason, c.reasonW))
 		}
 
 		return integRow(t, cells...)
@@ -673,7 +675,7 @@ func (r *extRecord) itemLines(w int, focused bool) (lines []string, keep [2]int)
 		// first batch keeps the column header too (extKeepFrom).
 		head := extKeepFrom(bi, len(lines))
 
-		lines = append(lines, integHeading(t, "Batch "+itoa(bi+1))+t.Faint.Render("  "+
+		lines = append(lines, integHeading(t, "Batch "+strconv.Itoa(bi+1))+t.Faint.Render("  "+
 			propPlural(len(b.Proposals), "proposal", "proposals")+countSep(t)+agentTokens(b.PromptChars)+
 			" tokens (estimated)"))
 
@@ -687,7 +689,7 @@ func (r *extRecord) itemLines(w int, focused bool) (lines []string, keep [2]int)
 
 			// The rule cell is not the last cell, so integRow gives it
 			// one cell less than its width.
-			rule := style.Render(oneLine(pr.Rule))
+			rule := style.Render(ui.OneLine(pr.Rule))
 			if r.liveNote(pr.ID) {
 				rule = extWithNote(t, rule, c.ruleW-1)
 			}
@@ -696,7 +698,7 @@ func (r *extRecord) itemLines(w int, focused bool) (lines []string, keep [2]int)
 				t.Muted.Render(extAskedWord(b.Items[j].Reason)))
 
 			if cursor && focused {
-				line = t.highlight(line, w, bgSel)
+				line = t.Highlight(line, w, ui.BgSel)
 			}
 
 			if cursor {
@@ -748,15 +750,15 @@ func (r *extRecord) notAskedLines(w int) []string {
 
 	idW := extIDMinW
 	for _, s := range skips {
-		idW = max(idW, width(extSkipID(t, s))+1)
+		idW = max(idW, ui.Width(extSkipID(t, s))+1)
 	}
 
 	out := []string{integHeading(t, "Not asked") + t.Faint.Render("  "+propPlural(len(skips), "selected item",
 		"selected items"))}
 
 	for _, s := range skips {
-		out = append(out, integHanging("  "+t.Muted.Render(padRight(extSkipID(t, s), idW)), t.Muted,
-			oneLine(s.Reason), w)...)
+		out = append(out, integHanging("  "+t.Muted.Render(ui.PadRight(extSkipID(t, s), idW)), t.Muted,
+			ui.OneLine(s.Reason), w)...)
 	}
 
 	return out
@@ -764,7 +766,7 @@ func (r *extRecord) notAskedLines(w int) []string {
 
 // extSkipID names a skipped item: its proposal ID, or a dash for a Pins
 // entry without a proposal, whose reason names the entry.
-func extSkipID(t *Theme, s distill.ExtractSkip) string {
+func extSkipID(t *ui.Theme, s distill.ExtractSkip) string {
 	if s.ID == 0 {
 		return t.Glyphs.Dash
 	}
@@ -775,13 +777,13 @@ func extSkipID(t *Theme, s distill.ExtractSkip) string {
 // extStateWord renders the ledger state of a row. A planned row is
 // pending or applied. A result row without a saved answer can show the
 // state that another writer gave it during the run.
-func extStateWord(t *Theme, status string) string {
+func extStateWord(t *ui.Theme, status string) string {
 	return extStateStyle(t, status).Render(extStatusWord(status))
 }
 
 // extStateDot renders the state line of an item detail, for example
 // "● pending".
-func extStateDot(t *Theme, status string) string {
+func extStateDot(t *ui.Theme, status string) string {
 	return extStateStyle(t, status).Render(t.Glyphs.Dot + " " + extStatusWord(status))
 }
 
@@ -797,13 +799,13 @@ func extStatusWord(status string) string {
 	case domain.ProposalSuperseded:
 		return "superseded"
 	default:
-		return oneLine(status)
+		return ui.OneLine(status)
 	}
 }
 
 // extStateStyle returns the style of a ledger status. A dismissed or
 // superseded row has no question to ask, so it is faint.
-func extStateStyle(t *Theme, status string) lipgloss.Style {
+func extStateStyle(t *ui.Theme, status string) lipgloss.Style {
 	switch status {
 	case domain.ProposalApplied:
 		return t.Success
@@ -846,7 +848,7 @@ func (r *extRecord) itemDetail(w int) []string {
 	if len(it.Evidence) > 0 {
 		paths := make([]string, len(it.Evidence))
 		for i, e := range it.Evidence {
-			paths[i] = oneLine(e)
+			paths[i] = ui.OneLine(e)
 		}
 
 		cited = t.Code.Render(strings.Join(paths, ", "))
@@ -861,7 +863,7 @@ func (r *extRecord) itemDetail(w int) []string {
 	}
 
 	out = append(out, propKV(t, [][2]string{
-		{"Question", t.Body.Render(oneLine(it.Reason.String()))},
+		{"Question", t.Body.Render(ui.OneLine(it.Reason.String()))},
 		{"Regions", t.Body.Render(extRegions(pr.RegionSet()))},
 		{"Cited", cited},
 		{"If answered", t.Body.Render(answer)},
@@ -878,8 +880,8 @@ func (r *extRecord) itemHead(pr domain.Proposal, now string, batch, w int) []str
 	t := r.st.theme
 	id := propID(pr.ID)
 
-	out := propLines(t.Title, oneLine(pr.Rule), w)
-	if last := len(out) - 1; width(out[last])+2+width(id) <= w {
+	out := propLines(t.Title, ui.OneLine(pr.Rule), w)
+	if last := len(out) - 1; ui.Width(out[last])+2+ui.Width(id) <= w {
 		out[last] += "  " + t.Faint.Render(id)
 	} else {
 		out = append(out, t.Faint.Render(id))
@@ -890,7 +892,7 @@ func (r *extRecord) itemHead(pr domain.Proposal, now string, batch, w int) []str
 		state = extStateDot(t, now) + t.Faint.Render(" now "+t.Glyphs.Sep+" planned as "+extStatusWord(pr.Status))
 	}
 
-	return append(out, state+"   "+t.Muted.Render("batch "+itoa(batch+1)), "")
+	return append(out, state+"   "+t.Muted.Render("batch "+strconv.Itoa(batch+1)), "")
 }
 
 // noteLines renders the recorded note that the question sends. When the
@@ -916,20 +918,20 @@ func (r *extRecord) noteLines(pr domain.Proposal, w int) []string {
 	if !differs {
 		out := []string{"", integHeading(t, "Recorded note") + t.Faint.Render("  the question sends it")}
 
-		return append(out, note(recorded, func(s string) []string { return propLines(t.Body, multiLine(s), w) })...)
+		return append(out, note(recorded, func(s string) []string { return propLines(t.Body, ui.MultiLine(s), w) })...)
 	}
 
 	pw := pairWidth(w)
 	out := []string{""}
-	out = append(out, t.pair(
+	out = append(out, pair(t,
 		integHeading(t, "Recorded note")+t.Faint.Render("  sent"),
 		integHeading(t, "Live note")+t.Faint.Render("  lessons.yaml, not sent"),
-		note(recorded, func(s string) []string { return propLines(t.Body, multiLine(s), pw) }),
-		note(live, func(s string) []string { return propLines(t.Muted, multiLine(s), pw) }), w)...)
+		note(recorded, func(s string) []string { return propLines(t.Body, ui.MultiLine(s), pw) }),
+		note(live, func(s string) []string { return propLines(t.Muted, ui.MultiLine(s), pw) }), w)...)
 
 	out = append(out, "")
 
-	return append(out, propNote(t, ToneAttention, "The question uses the recorded note. Review any trigger "+
+	return append(out, propNote(t, ui.ToneAttention, "The question uses the recorded note. Review any trigger "+
 		"advice against the live note.", w)...)
 }
 
@@ -937,7 +939,7 @@ func (r *extRecord) noteLines(pr domain.Proposal, w int) []string {
 // every selected item with its reason, and it offers no start.
 func (r *extRecord) nothingBox(w, h int) string {
 	t := r.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 	g := t.Glyphs
 
 	reason := "No selected item has an open trigger question with living evidence, so no agent call can " +
@@ -961,12 +963,12 @@ func (r *extRecord) nothingBox(w, h int) string {
 	tail := []string{integRule(t, inner)}
 	tail = append(tail, integLines(t.Title, r.scopeSummary(), inner)...)
 
-	o := boxOpts{
+	o := ui.BoxOpts{
 		W: w, H: h, Focus: true, Title: integPaneTitle(t, "Trigger extraction", true),
-		Right: t.Badge(ToneNeutral, "nothing to send"),
+		Right: t.Badge(ui.ToneNeutral, "nothing to send"),
 	}
 
-	return t.scrollBox(o, lines, tail, &r.prev.notes, [2]int{-1, -1}, false)
+	return t.ScrollBox(o, lines, tail, &r.prev.notes, [2]int{-1, -1}, false)
 }
 
 // extCounts counts the item outcomes of a run by class. The classes
@@ -1112,7 +1114,7 @@ func (r *extRecord) verdict() agentVerdict {
 
 	saved := propPlural(c.saved(), "answer is", "answers are") + " saved"
 	if c.saved() > 0 {
-		saved += ": " + itoa(c.stored) + " with trigger paths, " + itoa(c.negative) + " negative"
+		saved += ": " + strconv.Itoa(c.stored) + " with trigger paths, " + strconv.Itoa(c.negative) + " negative"
 	}
 
 	saved += "."
@@ -1122,14 +1124,14 @@ func (r *extRecord) verdict() agentVerdict {
 	case r.run.internal:
 		// Answers can be sent and saved before the error, so the lead
 		// never says that nothing was sent.
-		lead := "The run stopped on an internal error: " + errText(r.run.err) + ". " + saved
+		lead := "The run stopped on an internal error: " + ui.ErrText(r.run.err) + ". " + saved
 		if c.unknown > 0 {
-			lead += " Batch " + itoa(r.run.lost+1) + " was sending when the error happened, so its answers are " +
+			lead += " Batch " + strconv.Itoa(r.run.lost+1) + " was sending when the error happened, so its answers are " +
 				"not known. The Proposals view shows what was saved."
 		}
 
 		return agentVerdict{
-			tone: ToneFailure, word: "failed", head: "Trigger extraction stopped on an internal error",
+			tone: ui.ToneFailure, word: "failed", head: "Trigger extraction stopped on an internal error",
 			lead: lead + extUnattemptedText(c), toast: "Trigger extraction stopped on an internal error: " + short + ".",
 		}
 	case x.Stop == distill.StopStoreError || r.run.err != nil:
@@ -1141,14 +1143,14 @@ func (r *extRecord) verdict() agentVerdict {
 		// A store error in the last batch leaves no batch behind, so the
 		// lead counts the proposals that were not attempted, if any.
 		return agentVerdict{
-			tone: ToneFailure, word: "failed", head: "Trigger extraction stopped on a store error",
-			lead: "A store read or write failed: " + errText(cause) + ". " + saved + extOpenText(c, true) +
+			tone: ui.ToneFailure, word: "failed", head: "Trigger extraction stopped on a store error",
+			lead: "A store read or write failed: " + ui.ErrText(cause) + ". " + saved + extOpenText(c, true) +
 				extUnattemptedText(c),
 			toast: "Trigger extraction stopped on a store error: " + short + ".",
 		}
 	case x.Stop == distill.StopCancelled:
 		return agentVerdict{
-			tone: ToneAttention, word: "stopped", head: "Trigger extraction stopped",
+			tone: ui.ToneAttention, word: "stopped", head: "Trigger extraction stopped",
 			lead:  "You stopped the run. " + saved + extOpenText(c, true) + extUnattemptedText(c),
 			toast: "Trigger extraction stopped: " + short + ".",
 		}
@@ -1156,13 +1158,13 @@ func (r *extRecord) verdict() agentVerdict {
 		// The conflict came in the last batch, so no batch was left out.
 		// The run still holds an unsaved answer, so it is no success.
 		return agentVerdict{
-			tone: ToneAttention, word: "partial", head: "Trigger extraction finished with a conflict",
+			tone: ui.ToneAttention, word: "partial", head: "Trigger extraction finished with a conflict",
 			lead:  extConflictLead(x, c) + ". " + saved + extOpenText(c, false),
 			toast: "Trigger extraction finished with a conflict: " + short + ".",
 		}
 	case x.Stop == distill.StopConflict:
 		return agentVerdict{
-			tone: ToneAttention, word: "stopped", head: "Trigger extraction stopped: an input changed",
+			tone: ui.ToneAttention, word: "stopped", head: "Trigger extraction stopped: an input changed",
 			lead: extConflictLead(x, c) + ". " + saved + extOpenText(c, false) + extUnattemptedText(c) +
 				" Prepare the remaining proposals for a new preview from the current state.",
 			toast: "Trigger extraction stopped because an input changed: " + short + ".",
@@ -1174,13 +1176,13 @@ func (r *extRecord) verdict() agentVerdict {
 		}
 
 		return agentVerdict{
-			tone: ToneFailure, word: "failed", head: "Trigger extraction failed",
+			tone: ui.ToneFailure, word: "failed", head: "Trigger extraction failed",
 			lead:  "Every batch failed, so no answer was saved." + stays,
 			toast: "Trigger extraction failed: no answer was saved.",
 		}
 	case c.failed > 0 || c.conflict > 0:
 		return agentVerdict{
-			tone: ToneAttention, word: "partial", head: "Trigger extraction finished with open questions",
+			tone: ui.ToneAttention, word: "partial", head: "Trigger extraction finished with open questions",
 			lead:  saved + extOpenText(c, true),
 			toast: "Trigger extraction finished with open questions: " + short + ".",
 		}
@@ -1192,7 +1194,7 @@ func (r *extRecord) verdict() agentVerdict {
 	}
 
 	return agentVerdict{
-		tone: ToneSuccess, word: "completed", head: "Trigger extraction completed", lead: lead,
+		tone: ui.ToneSuccess, word: "completed", head: "Trigger extraction completed", lead: lead,
 		toast: "Trigger extraction completed: " + short + ".",
 	}
 }
@@ -1212,7 +1214,7 @@ func extConflictLead(x *distill.ExtractExecution, c extCounts) string {
 		return extStaleText(x.StopErr)
 	}
 
-	return itoa(len(c.conflicts)) + " proposals changed during the agent call (" + propIDList(c.conflicts) +
+	return strconv.Itoa(len(c.conflicts)) + " proposals changed during the agent call (" + propIDList(c.conflicts) +
 		"); their answers were not saved"
 }
 
@@ -1226,11 +1228,11 @@ func extOpenText(c extCounts, conflict bool) string {
 	open, closed := c.failed+c.cancelled, c.closedFailed+c.closedCancelled
 
 	if c.failed > 0 {
-		parts = append(parts, itoa(c.failed)+" failed")
+		parts = append(parts, strconv.Itoa(c.failed)+" failed")
 	}
 
 	if conflict && c.conflict > 0 {
-		parts = append(parts, itoa(c.conflict)+" changed during the agent call")
+		parts = append(parts, strconv.Itoa(c.conflict)+" changed during the agent call")
 		open += c.conflict
 		closed += c.closedConflict
 	}
@@ -1239,7 +1241,7 @@ func extOpenText(c extCounts, conflict bool) string {
 	case c.cancelled == 1:
 		parts = append(parts, "1 was cancelled")
 	case c.cancelled > 1:
-		parts = append(parts, itoa(c.cancelled)+" were cancelled")
+		parts = append(parts, strconv.Itoa(c.cancelled)+" were cancelled")
 	}
 
 	if len(parts) == 0 {
@@ -1292,7 +1294,7 @@ func (r *extRecord) runView(w, h int) string {
 	if r.st.wide() {
 		leftW := setupSplit(w, 60)
 
-		return hjoin(1, r.summaryBox(leftW, h, r.run.sumFocus), r.runItemsBox(w-leftW-1, h, !r.run.sumFocus))
+		return ui.Hjoin(1, r.summaryBox(leftW, h, r.run.sumFocus), r.runItemsBox(w-leftW-1, h, !r.run.sumFocus))
 	}
 
 	if r.run.detail {
@@ -1318,7 +1320,7 @@ func (r *extRecord) stateLabel() string {
 func (r *extRecord) headline() string {
 	t := r.st.theme
 	g := t.Glyphs
-	spin := t.spinnerFrame(r.st.tick)
+	spin := t.SpinnerFrame(r.st.tick)
 	run := &r.run
 	n := len(run.units)
 
@@ -1329,7 +1331,7 @@ func (r *extRecord) headline() string {
 	}
 
 	batch := func(k int) string {
-		return "batch " + itoa(k+1) + " of " + itoa(n) + " " + g.Sep + " " +
+		return "batch " + strconv.Itoa(k+1) + " of " + strconv.Itoa(n) + " " + g.Sep + " " +
 			propPlural(len(run.units[k].Items), "proposal", "proposals")
 	}
 
@@ -1350,8 +1352,8 @@ func (r *extRecord) headline() string {
 	case !run.checked:
 		return t.Accent.Render(spin+" ") + t.Title.Render("Checking the plan against the current state")
 	default:
-		return t.Accent.Render(spin+" ") + t.Title.Render("Between batches "+g.Sep+" "+itoa(run.finished)+" of "+
-			itoa(n)+" done")
+		return t.Accent.Render(spin+" ") + t.Title.Render("Between batches "+g.Sep+" "+strconv.Itoa(run.finished)+" of "+
+			strconv.Itoa(n)+" done")
 	}
 }
 
@@ -1359,7 +1361,7 @@ func (r *extRecord) headline() string {
 // result lead, then the phases or what happened, and the next steps.
 func (r *extRecord) summaryBox(w, h int, focused bool) string {
 	t := r.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 
 	var body []string
 
@@ -1369,9 +1371,9 @@ func (r *extRecord) summaryBox(w, h int, focused bool) string {
 		body = r.progressLines(inner)
 	}
 
-	o := boxOpts{W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Trigger extraction", true), Right: r.stateLabel()}
+	o := ui.BoxOpts{W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Trigger extraction", true), Right: r.stateLabel()}
 
-	return t.scrollBox(o, body, nil, &r.run.summary, [2]int{-1, -1}, false)
+	return t.ScrollBox(o, body, nil, &r.run.summary, [2]int{-1, -1}, false)
 }
 
 // progressLines renders the running summary.
@@ -1382,7 +1384,7 @@ func (r *extRecord) progressLines(w int) []string {
 	lines := []string{r.headline(), ""}
 	lines = append(lines, integLines(t.Muted, r.stopNote(), w)...)
 	lines = append(lines, "", integHeading(t, "Phases"))
-	lines = append(lines, t.phaseRows(r.phases(), r.st.tick, w)...)
+	lines = append(lines, phaseRows(t, r.phases(), r.st.tick, w)...)
 	lines = append(lines, "")
 	lines = append(lines, r.barLines(w)...)
 	lines = append(lines, "", integHeading(t, "Results so far"))
@@ -1390,7 +1392,7 @@ func (r *extRecord) progressLines(w int) []string {
 
 	if len(run.activity) > 0 {
 		lines = append(lines, "", integHeading(t, "Recent activity"))
-		lines = append(lines, t.activityLines(run.activity, agentActivityKeep, w)...)
+		lines = append(lines, activityLines(t, run.activity, agentActivityKeep, w)...)
 	}
 
 	return lines
@@ -1400,7 +1402,7 @@ func (r *extRecord) progressLines(w int) []string {
 func (r *extRecord) stopNote() string {
 	switch {
 	case r.stopping() && r.run.stopAt >= 0:
-		k := itoa(r.run.stopAt + 1)
+		k := strconv.Itoa(r.run.stopAt + 1)
 
 		return "Seamark waits for the agent process of batch " + k + " to end. No new batch starts. The result " +
 			"shows whether the answers of batch " + k + " were saved before the stop."
@@ -1426,7 +1428,7 @@ func (r *extRecord) phases() []phaseRow {
 		check.state, check.note = phaseStopped, agentStopWords(run.stopWhy)
 	}
 
-	ask := phaseRow{label: "Ask the agent", note: itoa(run.finished) + " of " + propPlural(n, "batch", "batches") +
+	ask := phaseRow{label: "Ask the agent", note: strconv.Itoa(run.finished) + " of " + propPlural(n, "batch", "batches") +
 		" done"}
 	if run.checked && !run.stopped {
 		ask.state = phaseActive
@@ -1444,12 +1446,12 @@ func (r *extRecord) barLines(w int) []string {
 	t := r.st.theme
 	c := r.counts()
 
-	count := itoa(c.saved()) + " / " + itoa(c.items)
-	barW := max(4, min(40, w-width(count)-4))
+	count := strconv.Itoa(c.saved()) + " / " + strconv.Itoa(c.items)
+	barW := max(4, min(40, w-ui.Width(count)-4))
 
 	return []string{
-		t.Heading.Render("ANSWERS") + t.Faint.Render("  "+itoa(c.saved())+" of "+itoa(c.items)+" saved"),
-		t.bar(c.saved(), c.items, barW, ToneSuccess) + "    " + t.Muted.Render(count),
+		t.Heading.Render("ANSWERS") + t.Faint.Render("  "+strconv.Itoa(c.saved())+" of "+strconv.Itoa(c.items)+" saved"),
+		t.Bar(c.saved(), c.items, barW, ui.ToneSuccess) + "    " + t.Muted.Render(count),
 	}
 }
 
@@ -1459,10 +1461,10 @@ func (r *extRecord) barLine(w int) string {
 	t := r.st.theme
 	c := r.counts()
 
-	count := itoa(c.saved()) + " of " + itoa(c.items) + " saved"
-	barW := max(4, min(40, w-width(count)-4))
+	count := strconv.Itoa(c.saved()) + " of " + strconv.Itoa(c.items) + " saved"
+	barW := max(4, min(40, w-ui.Width(count)-4))
 
-	return t.bar(c.saved(), c.items, barW, ToneSuccess) + "    " + t.Muted.Render(count)
+	return t.Bar(c.saved(), c.items, barW, ui.ToneSuccess) + "    " + t.Muted.Render(count)
 }
 
 // soFar renders the durable results of a running record.
@@ -1472,7 +1474,7 @@ func (r *extRecord) soFar() [][2]string {
 
 	answers := t.Muted.Render("none yet")
 	if c.saved() > 0 {
-		answers = t.Body.Render(itoa(c.stored) + " with trigger paths" + countSep(t) + itoa(c.negative) +
+		answers = t.Body.Render(strconv.Itoa(c.stored) + " with trigger paths" + countSep(t) + strconv.Itoa(c.negative) +
 			" negative")
 	}
 
@@ -1548,7 +1550,7 @@ func (r *extRecord) usageText() string {
 	case sent == 0 && pending == 0:
 		return t.Muted.Render("no agent traffic yet")
 	case sent == 0:
-		return t.Body.Render(agentTokens(pending)+" tokens sent to batch "+itoa(k+1)) + " " +
+		return t.Body.Render(agentTokens(pending)+" tokens sent to batch "+strconv.Itoa(k+1)) + " " +
 			t.Faint.Render("(estimated)") + t.Muted.Render("; reply pending")
 	}
 
@@ -1556,7 +1558,7 @@ func (r *extRecord) usageText() string {
 		t.Faint.Render("(estimated)")
 
 	if pending > 0 {
-		text += t.Muted.Render("; batch " + itoa(k+1) + " reply pending")
+		text += t.Muted.Render("; batch " + strconv.Itoa(k+1) + " reply pending")
 	}
 
 	if r.step == stepResult {
@@ -1620,9 +1622,9 @@ func (r *extRecord) happened() [][2]string {
 
 	answers := t.Muted.Render("none saved")
 	if c.saved() > 0 {
-		text := itoa(c.saved()) + " saved: " + itoa(c.stored) + " with trigger paths, " + itoa(c.negative) + " negative"
+		text := strconv.Itoa(c.saved()) + " saved: " + strconv.Itoa(c.stored) + " with trigger paths, " + strconv.Itoa(c.negative) + " negative"
 		if c.omitted > 0 {
-			text += " (" + itoa(c.omitted) + " omitted from the reply)"
+			text += " (" + strconv.Itoa(c.omitted) + " omitted from the reply)"
 		}
 
 		answers = t.Body.Render(text)
@@ -1632,7 +1634,7 @@ func (r *extRecord) happened() [][2]string {
 		{"Batches", t.Body.Render(strings.Join(c.batches.parts("completed"), countSep(t)))},
 		{"Answers", answers},
 		{"Paths", t.Body.Render("named for " + propPlural(c.named, "proposal", "proposals") + ", valid for " +
-			itoa(c.valid) + ", stored for " + itoa(c.stored))},
+			strconv.Itoa(c.valid) + ", stored for " + strconv.Itoa(c.stored))},
 		{"Pending", r.pendingText(c)},
 		{"Applied", r.appliedText(c)},
 		{"Usage", r.usageText()},
@@ -1741,7 +1743,7 @@ func (r *extRecord) byOutcome() [][2]string {
 	if len(whys) > 0 {
 		parts := make([]string, len(whys))
 		for i, why := range whys {
-			parts[i] = propIDList(closed[why]) + " (" + oneLine(why) + ")"
+			parts[i] = propIDList(closed[why]) + " (" + ui.OneLine(why) + ")"
 		}
 
 		rows = append(rows, [2]string{"Closed now", t.Body.Render(strings.Join(parts, "; "))})
@@ -1760,7 +1762,7 @@ func (r *extRecord) nextLines(w int) []string {
 	t := r.st.theme
 
 	row := func(k, text string) []string {
-		return integHanging(t.Key.Render(padRight(k, 7)), t.Body, text, w)
+		return integHanging(t.Key.Render(ui.PadRight(k, 7)), t.Body, text, w)
 	}
 
 	var lines []string
@@ -1792,7 +1794,7 @@ func (r *extRecord) nextLines(w int) []string {
 // with its state, then the detail of the cursor item.
 func (r *extRecord) runItemsBox(w, h int, focused bool) string {
 	t := r.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 	c := r.counts()
 
 	// The window keeps the cursor row and as much of its detail as fits,
@@ -1802,16 +1804,16 @@ func (r *extRecord) runItemsBox(w, h int, focused bool) string {
 	body = append(body, r.runItemDetail(inner)...)
 	keep[1] = len(body) - 1
 
-	right := itoa(r.run.finished) + " of " + propPlural(len(r.outcomes()), "batch", "batches") + " done"
+	right := strconv.Itoa(r.run.finished) + " of " + propPlural(len(r.outcomes()), "batch", "batches") + " done"
 	if r.step == stepResult {
-		right = itoa(c.asked) + " of " + itoa(c.items) + " asked"
+		right = strconv.Itoa(c.asked) + " of " + strconv.Itoa(c.items) + " asked"
 	}
 
-	o := boxOpts{
+	o := ui.BoxOpts{
 		W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Proposals", focused), Right: t.Muted.Render(right),
 	}
 
-	return t.scrollBox(o, body, nil, &r.run.list, keep, r.run.follow)
+	return t.ScrollBox(o, body, nil, &r.run.list, keep, r.run.follow)
 }
 
 // runItemLines renders the item table by batch. It returns the line
@@ -1826,15 +1828,15 @@ func (r *extRecord) runItemLines(w int, focused bool) (lines []string, keep [2]i
 	idW, stateW := extIDMinW, extStateW
 	for _, ref := range r.runItems() {
 		item := outs[ref.batch].Items[ref.item]
-		idW = max(idW, width(propID(item.Proposal.ID))+1)
-		stateW = max(stateW, width(extStatusWord(r.itemStatus(item)))+1)
+		idW = max(idW, ui.Width(propID(item.Proposal.ID))+1)
+		stateW = max(stateW, ui.Width(extStatusWord(r.itemStatus(item)))+1)
 	}
 
 	outW := max(extOutcomeMin, w-2-agentGlyphW-idW-stateW)
 
 	row := func(marker, glyph, id, state, outcome string) string {
-		return integRow(t, cell(marker, 2), cell(glyph, agentGlyphW), cell(id, idW), cell(state, stateW),
-			cell(outcome, outW))
+		return integRow(t, ui.Cell(marker, 2), ui.Cell(glyph, agentGlyphW), ui.Cell(id, idW), ui.Cell(state, stateW),
+			ui.Cell(outcome, outW))
 	}
 
 	lines = []string{t.Faint.Render(row("", "", "ID", "State", "Outcome"))}
@@ -1844,7 +1846,7 @@ func (r *extRecord) runItemLines(w int, focused bool) (lines []string, keep [2]i
 	for bi, b := range outs {
 		head := extKeepFrom(bi, len(lines))
 
-		lines = append(lines, integHeading(t, "Batch "+itoa(bi+1))+t.Faint.Render("  "+
+		lines = append(lines, integHeading(t, "Batch "+strconv.Itoa(bi+1))+t.Faint.Render("  "+
 			propPlural(len(b.Items), "proposal", "proposals"))+r.batchState(bi, b))
 
 		for j, item := range b.Items {
@@ -1875,7 +1877,7 @@ func (r *extRecord) runItemLines(w int, focused bool) (lines []string, keep [2]i
 				words)
 
 			if cursor && focused {
-				line = t.highlight(line, w, bgSel)
+				line = t.Highlight(line, w, ui.BgSel)
 			}
 
 			if cursor {
@@ -1966,7 +1968,7 @@ func (r *extRecord) outcomeCell(bi int, item distill.ExtractItemOutcome) (glyph,
 	case bi == r.lostBatch():
 		return t.Attention.Render(g.Warn), t.Attention.Render("result unknown"), ""
 	case r.step == stepRunning && bi == r.run.sending:
-		return t.Accent.Render(t.spinnerFrame(r.st.tick)), t.Accent.Render("sending" + g.Ellipsis), ""
+		return t.Accent.Render(t.SpinnerFrame(r.st.tick)), t.Accent.Render("sending" + g.Ellipsis), ""
 	case r.step == stepRunning:
 		return t.Faint.Render(g.Hollow), t.Faint.Render("waiting"), ""
 	default:
@@ -2025,7 +2027,7 @@ func extNegativeNote(item distill.ExtractItemOutcome) string {
 // runItemDetail renders the cursor item of the run or the result. It
 // shows the outcome, the answer counts, the stored paths, the regions
 // and the live-note mark. The cause of a failure can hold agent output,
-// so errText redacts and sanitizes it.
+// so ui.ErrText redacts and sanitizes it.
 func (r *extRecord) runItemDetail(w int) []string {
 	t := r.st.theme
 
@@ -2048,8 +2050,8 @@ func (r *extRecord) runItemDetail(w int) []string {
 	var rows [][2]string
 
 	if extSaved(item) || item.NamedRaw > 0 {
-		rows = append(rows, [2]string{"Answer", t.Body.Render(itoa(item.NamedRaw) + " named" + countSep(t) +
-			itoa(len(item.Valid)) + " valid")})
+		rows = append(rows, [2]string{"Answer", t.Body.Render(strconv.Itoa(item.NamedRaw) + " named" + countSep(t) +
+			strconv.Itoa(len(item.Valid)) + " valid")})
 	}
 
 	for i, f := range extFacts(item) {
@@ -2058,7 +2060,7 @@ func (r *extRecord) runItemDetail(w int) []string {
 			label = "Paths"
 		}
 
-		rows = append(rows, [2]string{label, t.Code.Render(oneLine(f.Path)) + t.Muted.Render(sep+extFactWords(f))})
+		rows = append(rows, [2]string{label, t.Code.Render(ui.OneLine(f.Path)) + t.Muted.Render(sep+extFactWords(f))})
 	}
 
 	if !item.RegionsChanged {
@@ -2069,12 +2071,12 @@ func (r *extRecord) runItemDetail(w int) []string {
 
 	if item.RegionsChanged {
 		out = append(out, "", integHeading(t, "Pending regions")+t.Faint.Render("  changed; Apply is still separate"))
-		out = append(out, t.regionDelta(item.RegionsBefore, item.RegionsAfter, w)...)
+		out = append(out, regionDelta(t, item.RegionsBefore, item.RegionsAfter, w)...)
 	}
 
 	if r.liveNote(pr.ID) {
 		out = append(out, "")
-		out = append(out, propNote(t, ToneAttention, "The live note differs from the recorded note that the question "+
+		out = append(out, propNote(t, ui.ToneAttention, "The live note differs from the recorded note that the question "+
 			"used. Review this advice against the live note in Lessons "+t.Glyphs.Arrow+" Pins.", w)...)
 	}
 
@@ -2094,7 +2096,7 @@ func (r *extRecord) runItemDetail(w int) []string {
 func (r *extRecord) itemNote(bi int, item distill.ExtractItemOutcome) string {
 	why, closed := r.closedNow(item)
 
-	closedText := "Its question is closed now (" + oneLine(why) + "), so a new preview does not ask it."
+	closedText := "Its question is closed now (" + ui.OneLine(why) + "), so a new preview does not ask it."
 
 	switch item.Status {
 	case distill.ExtractStored:
@@ -2145,19 +2147,19 @@ func extFailText(err error) string {
 		return `the reply has no "triggers" key, so it is not a negative answer`
 	}
 
-	return errText(err)
+	return ui.ErrText(err)
 }
 
 // itemTone returns the tone of the outcome note of one item. A negative
 // answer is a completed question, so its note is neutral.
-func (r *extRecord) itemTone(bi int, item distill.ExtractItemOutcome) Tone {
+func (r *extRecord) itemTone(bi int, item distill.ExtractItemOutcome) ui.Tone {
 	switch {
 	case item.Status == distill.ExtractNegative:
-		return ToneNeutral
+		return ui.ToneNeutral
 	case item.Status == distill.ExtractFailed && bi != r.lostBatch():
-		return ToneFailure
+		return ui.ToneFailure
 	default:
-		return ToneAttention
+		return ui.ToneAttention
 	}
 }
 
@@ -2216,7 +2218,7 @@ func extRegionsAfter(item distill.ExtractItemOutcome) string {
 // the item table and the next steps. tab shows the Proposals pane.
 func (r *extRecord) compactBox(w, h int) string {
 	t := r.st.theme
-	inner := boxInner(w)
+	inner := ui.BoxInner(w)
 	run := &r.run
 
 	head := []string{r.headline()}
@@ -2247,12 +2249,12 @@ func (r *extRecord) compactBox(w, h int) string {
 		body = append(body, integLines(t.Faint, extResultFoot, inner)...)
 	case len(run.activity) > 0:
 		body = append(body, "")
-		body = append(body, t.activityLines(run.activity, 1, inner)...)
+		body = append(body, activityLines(t, run.activity, 1, inner)...)
 	}
 
-	o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Trigger extraction", true), Right: r.stateLabel()}
+	o := ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Trigger extraction", true), Right: r.stateLabel()}
 
-	return t.pinnedBox(o, head, body, nil, &run.list, keep, follow)
+	return t.PinnedBox(o, head, body, nil, &run.list, keep, follow)
 }
 
 // shortStopNote is the one-line stop note of the compact box. The stop
@@ -2260,7 +2262,7 @@ func (r *extRecord) compactBox(w, h int) string {
 func (r *extRecord) shortStopNote() string {
 	switch {
 	case r.stopping() && r.run.stopAt >= 0:
-		return "Seamark waits for the agent call of batch " + itoa(r.run.stopAt+1) + " to end."
+		return "Seamark waits for the agent call of batch " + strconv.Itoa(r.run.stopAt+1) + " to end."
 	case r.stopping():
 		return "Seamark waits for the running work to end."
 	default:
@@ -2288,9 +2290,9 @@ func extBatchWords(b distill.ExtractBatchOutcome) string {
 			c.count(item, false)
 		}
 
-		text := "answered: " + itoa(c.stored) + " stored, " + itoa(c.negative) + " negative"
+		text := "answered: " + strconv.Itoa(c.stored) + " stored, " + strconv.Itoa(c.negative) + " negative"
 		if c.conflict > 0 {
-			text += ", " + itoa(c.conflict) + " conflict"
+			text += ", " + strconv.Itoa(c.conflict) + " conflict"
 		}
 
 		return text
@@ -2319,10 +2321,10 @@ func (r *extRecord) stopModal(w, h int) string {
 	text := "Seamark starts no new batch and ends the run at the next check. Answers saved so far stay saved. " +
 		"Nothing is retried."
 	if k := r.run.sending; k >= 0 {
-		text = "Seamark cancels the agent call of batch " + itoa(k+1) + " and starts no new batch. Answers saved " +
+		text = "Seamark cancels the agent call of batch " + strconv.Itoa(k+1) + " and starts no new batch. Answers saved " +
 			"so far stay saved. A provider can still bill the cancelled call. Nothing is retried."
 	}
 
-	return runStopModal(r.st.theme, "Stop the trigger extraction?", text, withHelp(agentKeys.Start, "y", "stop the run"),
+	return runStopModal(r.st.theme, "Stop the trigger extraction?", text, ui.WithHelp(agentKeys.Start, "y", "stop the run"),
 		w, h)
 }

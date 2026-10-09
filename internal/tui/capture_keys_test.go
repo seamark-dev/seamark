@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // TestCaptureKeys writes the help scenes of the key discoverability
@@ -30,7 +32,7 @@ func TestCaptureKeys(t *testing.T) {
 			f := sc.fake()
 			f.settings = snap
 
-			hs := &harness{t: t, m: newModel(f, newTheme(sc.ascii))}
+			hs := &harness{t: t, m: newModel(f, ui.NewTheme(sc.ascii))}
 			hs.run(hs.m.Init())
 			hs.send(teaSize(w, h))
 			sc.drive(hs)

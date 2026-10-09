@@ -2,6 +2,7 @@ package tui
 
 import (
 	"slices"
+	"strconv"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -109,7 +110,7 @@ func (s *lessons) tabCount() string {
 		return ""
 	}
 
-	return itoa(n)
+	return strconv.Itoa(n)
 }
 
 // pane returns the visible sub-view.

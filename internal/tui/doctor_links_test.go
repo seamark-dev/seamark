@@ -8,6 +8,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -29,7 +30,7 @@ func doclReport() *doctor.Report {
 }
 
 func TestDoctorLinksCheckActionMapsStableNames(t *testing.T) {
-	st := &state{svc: newFake(), theme: newTheme(false)}
+	st := &state{svc: newFake(), theme: ui.NewTheme(false)}
 	st.integrations.set([]integration.Inspection{{ClientID: "codex", Name: "Codex"}}, nil, st.integrations.at)
 
 	check := func(name, state string) doctor.Check {
@@ -120,7 +121,7 @@ func TestDoctorLinksFocusedDetailOpensTheWorkflow(t *testing.T) {
 }
 
 func TestDoctorLinksNarrowOpensTheDetailFirst(t *testing.T) {
-	for _, size := range [][2]int{{80, 24}, {minWidth, minHeight}} {
+	for _, size := range [][2]int{{80, 24}, {ui.MinWidth, ui.MinHeight}} {
 		h, _ := docOpen(t, doclReport(), size[0], size[1])
 		stub := ovlRecorder(h, destSettings)
 

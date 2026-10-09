@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the shell chrome. A stub screen controls the key list,
@@ -51,7 +53,7 @@ func stubKeys(n int) []key.Binding {
 
 	for i := range n {
 		k := string(letters[i])
-		out = append(out, key.NewBinding(key.WithKeys(k), key.WithHelp(k, "stub action "+itoa(i+1))))
+		out = append(out, key.NewBinding(key.WithKeys(k), key.WithHelp(k, "stub action "+strconv.Itoa(i+1))))
 	}
 
 	return out
@@ -109,7 +111,7 @@ func pendingLedgerFake() *fakeServices {
 
 func TestCrampedTerminalDropsScreenKeys(t *testing.T) {
 	f := pendingLedgerFake()
-	h := newHarness(t, f, minWidth-10, minHeight-2)
+	h := newHarness(t, f, ui.MinWidth-10, ui.MinHeight-2)
 
 	h.press("3", "space", "d", "y", "enter")
 	assert.Equal(t, destOverview, h.m.active, "a destination key must not act while its view is hidden")
@@ -117,12 +119,12 @@ func TestCrampedTerminalDropsScreenKeys(t *testing.T) {
 	assert.Contains(t, h.view(), "More space needed")
 
 	g := ovPopulated()
-	h2 := newHarness(t, g, minWidth-10, minHeight-2)
+	h2 := newHarness(t, g, ui.MinWidth-10, ui.MinHeight-2)
 
 	h2.press("b", "enter")
 	assert.Empty(t, g.called(), "an index build must not start behind the resize message")
 
-	h3, stub := stubConsole(t, minWidth-10, minHeight-2, stubKeys(2))
+	h3, stub := stubConsole(t, ui.MinWidth-10, ui.MinHeight-2, stubKeys(2))
 	stub.capture = true
 
 	h3.press("a", "enter", "esc", "space", "x")
@@ -137,12 +139,12 @@ func TestCrampedTerminalQuitsFromACapturingScreen(t *testing.T) {
 	h.press("space", "d")
 	require.True(t, h.m.screens[destLessons].capturing(), "the dismiss preview captures keys")
 
-	h.resize(minWidth-10, minHeight-2)
+	h.resize(ui.MinWidth-10, ui.MinHeight-2)
 	h.press("q")
 	assert.True(t, h.quit, "q quits although the hidden screen captures keys")
 	assert.Equal(t, []string{"PreviewDecision:dismiss"}, f.called(), "quitting commits nothing")
 
-	h2, stub := stubConsole(t, minWidth-10, minHeight-2, nil)
+	h2, stub := stubConsole(t, ui.MinWidth-10, ui.MinHeight-2, nil)
 	stub.capture = true
 
 	h2.press("ctrl+c")
@@ -151,7 +153,7 @@ func TestCrampedTerminalQuitsFromACapturingScreen(t *testing.T) {
 }
 
 func TestCrampedTerminalShowsCompactHelp(t *testing.T) {
-	w, hgt := minWidth-10, minHeight-2
+	w, hgt := ui.MinWidth-10, ui.MinHeight-2
 	h := newHarness(t, newFake(), w, hgt)
 
 	h.press("?")
@@ -171,7 +173,7 @@ func TestCrampedTerminalShowsCompactHelp(t *testing.T) {
 }
 
 func TestCrampedTerminalShowsTheQuitQuestion(t *testing.T) {
-	w, hgt := minWidth-10, minHeight-2
+	w, hgt := ui.MinWidth-10, ui.MinHeight-2
 	h := newHarness(t, newFake(), w, hgt)
 	require.True(t, h.m.st.begin("Building the index"))
 
@@ -214,7 +216,7 @@ func TestShellQuitDialogClosesWhenTheMutationEnds(t *testing.T) {
 }
 
 func TestShellQuitDialogKeepsActionLabelsWhole(t *testing.T) {
-	for _, w := range []int{minWidth, 120} {
+	for _, w := range []int{ui.MinWidth, 120} {
 		h := newHarness(t, newFake(), w, 32)
 		require.True(t, h.m.st.begin("Building the index"))
 
@@ -285,7 +287,7 @@ func TestCtrlCLeavesTheFirstRunAndHelp(t *testing.T) {
 func TestShellFooterKeepsGlobalHints(t *testing.T) {
 	bindings := stubKeys(9)
 
-	for _, w := range []int{minWidth, 80, 120} {
+	for _, w := range []int{ui.MinWidth, 80, 120} {
 		h, _ := stubConsole(t, w, 32, bindings)
 
 		frame := h.view()
@@ -311,7 +313,7 @@ func TestShellFooterKeepsGlobalHints(t *testing.T) {
 }
 
 func TestShellFooterOnProposalsKeepsHelpAndQuit(t *testing.T) {
-	for _, size := range [][2]int{{120, 32}, {80, 24}, {minWidth, minHeight}} {
+	for _, size := range [][2]int{{120, 32}, {80, 24}, {ui.MinWidth, ui.MinHeight}} {
 		h := lesOpen(t, pendingLedgerFake(), size[0], size[1])
 
 		frame := h.view()
@@ -325,7 +327,7 @@ func TestShellFooterOnProposalsKeepsHelpAndQuit(t *testing.T) {
 
 func TestShellFooterDropsWholeHintsInOverlays(t *testing.T) {
 	bindings := stubKeys(9)
-	h, stub := stubConsole(t, minWidth, 32, bindings)
+	h, stub := stubConsole(t, ui.MinWidth, 32, bindings)
 	stub.capture = true
 
 	footer := footerLine(h.view())
@@ -340,7 +342,7 @@ func TestShellFooterDropsWholeHintsInOverlays(t *testing.T) {
 }
 
 func TestShellHelpScrollsAndKeepsItsFrame(t *testing.T) {
-	for _, size := range [][2]int{{80, 24}, {minWidth, minHeight}} {
+	for _, size := range [][2]int{{80, 24}, {ui.MinWidth, ui.MinHeight}} {
 		w, hgt := size[0], size[1]
 		h, _ := stubConsole(t, w, hgt, stubKeys(10))
 
@@ -430,7 +432,7 @@ func TestShellHelpOffsetSurvivesAResize(t *testing.T) {
 	h.press("?")
 	require.Equal(t, 0, h.m.helpOff)
 
-	h.resize(minWidth, minHeight)
+	h.resize(ui.MinWidth, ui.MinHeight)
 	h.press("end")
 	require.Positive(t, h.m.helpOff)
 
@@ -455,7 +457,7 @@ func TestShellFirstRunKeepsStepColumns(t *testing.T) {
 		return lipgloss.Width(before)
 	}
 
-	for _, w := range []int{minWidth, 80, 120} {
+	for _, w := range []int{ui.MinWidth, 80, 120} {
 		h := newHarness(t, f, w, 32)
 		frame := h.view()
 		assertFrame(t, frame, w, 32)
@@ -490,14 +492,14 @@ func TestASCIIShellFramesUseNoUnicode(t *testing.T) {
 	}
 
 	start := func(w, hgt int) *harness {
-		hs := &harness{t: t, m: newModel(newFake(), newTheme(true))}
+		hs := &harness{t: t, m: newModel(newFake(), ui.NewTheme(true))}
 		hs.run(hs.m.Init())
 		hs.resize(w, hgt)
 
 		return hs
 	}
 
-	h := start(minWidth-10, minHeight-2)
+	h := start(ui.MinWidth-10, ui.MinHeight-2)
 	asciiOnly(t, h.view())
 
 	h.press("?")
@@ -519,7 +521,7 @@ func TestASCIIShellFramesUseNoUnicode(t *testing.T) {
 	f.agentsOnPath = []string{"claude"}
 	f.planSetup = func([]integration.ClientSetup) (*SetupPreview, error) { return frDocsPreview(), nil }
 
-	h3 := &harness{t: t, m: newModel(f, newTheme(true))}
+	h3 := &harness{t: t, m: newModel(f, ui.NewTheme(true))}
 	h3.run(h3.m.Init())
 	h3.resize(120, 40)
 	asciiOnly(t, h3.view())
@@ -530,7 +532,7 @@ func TestASCIIShellFramesUseNoUnicode(t *testing.T) {
 	g := newFake()
 	g.doctor = docReport()
 
-	h4 := &harness{t: t, m: newModel(g, newTheme(true))}
+	h4 := &harness{t: t, m: newModel(g, ui.NewTheme(true))}
 	h4.run(h4.m.Init())
 	h4.resize(120, 40)
 	h4.press("4")
@@ -549,9 +551,9 @@ func TestShellOverlaysFitAtTheMinimumSize(t *testing.T) {
 	f.fresh = true
 	f.agentsOnPath = []string{"claude", "codex"}
 
-	h := newHarness(t, f, minWidth, minHeight)
+	h := newHarness(t, f, ui.MinWidth, ui.MinHeight)
 	frame := h.view()
-	assertFrame(t, frame, minWidth, minHeight)
+	assertFrame(t, frame, ui.MinWidth, ui.MinHeight)
 	assert.Contains(t, frame, "Set up seamark in this repository")
 	assert.Contains(t, frame, "v read-only view")
 	assert.Contains(t, frame, "3  Connect agents")
@@ -562,7 +564,7 @@ func TestShellOverlaysFitAtTheMinimumSize(t *testing.T) {
 	h.press("q")
 
 	frame = h.view()
-	assertFrame(t, frame, minWidth, minHeight)
+	assertFrame(t, frame, ui.MinWidth, ui.MinHeight)
 	assert.Contains(t, frame, "Exit after the running operation?")
 	assert.Contains(t, frame, "│ enter exit after completion   esc keep working")
 	assert.Contains(t, frame, "╰", "the quit dialog keeps its bottom border")
@@ -608,7 +610,7 @@ func (s *guardScreen) leave(next destination, intent string) (tea.Cmd, bool) {
 
 	s.refused = append(s.refused, navigateMsg{dest: next, intent: intent})
 
-	return toast(ToneAttention, "Keep or discard the draft first."), false
+	return toast(ui.ToneAttention, "Keep or discard the draft first."), false
 }
 
 func TestShellLeaveGuardKeepsTheDestination(t *testing.T) {

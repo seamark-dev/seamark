@@ -1,4 +1,4 @@
-package tui
+package ui
 
 import (
 	"strings"
@@ -13,9 +13,9 @@ import (
 // hyphen, because a view outside the shell skips the ASCII frame swap.
 
 func TestPositionNoteUsesTheDashOfTheGlyphSet(t *testing.T) {
-	assert.Equal(t, "3–12 of 40", newTheme(false).positionNote(3, 12, 40))
-	assert.Equal(t, "3-12 of 40", newTheme(true).positionNote(3, 12, 40))
-	assert.Equal(t, "1–1 of 1", newTheme(false).positionNote(1, 1, 1))
+	assert.Equal(t, "3–12 of 40", NewTheme(false).PositionNote(3, 12, 40))
+	assert.Equal(t, "3-12 of 40", NewTheme(true).PositionNote(3, 12, 40))
+	assert.Equal(t, "1–1 of 1", NewTheme(false).PositionNote(1, 1, 1))
 }
 
 func TestPositionNoteHelpersKeepTheirWords(t *testing.T) {
@@ -26,13 +26,13 @@ func TestPositionNoteHelpersKeepTheirWords(t *testing.T) {
 		{ascii: false, dash: "–"},
 		{ascii: true, dash: "-"},
 	} {
-		th := newTheme(tc.ascii)
+		th := NewTheme(tc.ascii)
 
-		// propRange takes the 0-based first row and the window end.
-		assert.Equal(t, "3"+tc.dash+"12 of 40", ansi.Strip(propRange(th, 2, 12, 40)))
+		// RangeNote takes the 0-based first row and the window end.
+		assert.Equal(t, "3"+tc.dash+"12 of 40", ansi.Strip(th.RangeNote(2, 12, 40)))
 
-		// scrollNote clamps the window to the row count and pads left.
+		// ScrollNote clamps the window to the row count and pads left.
 		// The note "6–7 of 7" has 8 cells, so 16 cells give 8 spaces.
-		assert.Equal(t, strings.Repeat(" ", 8)+"6"+tc.dash+"7 of 7", ansi.Strip(th.scrollNote(5, 4, 7, 16)))
+		assert.Equal(t, strings.Repeat(" ", 8)+"6"+tc.dash+"7 of 7", ansi.Strip(th.ScrollNote(5, 4, 7, 16)))
 	}
 }

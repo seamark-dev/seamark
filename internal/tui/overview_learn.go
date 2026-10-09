@@ -2,10 +2,12 @@ package tui
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -96,7 +98,7 @@ func (o *overview) runItem() (ovItem, bool) {
 		return ovItem{}, false
 	}
 
-	name := oneLine(n.verb)
+	name := ui.OneLine(n.verb)
 
 	switch o.st.lastRunKind {
 	case runDistill:
@@ -116,7 +118,7 @@ func (o *overview) runItem() (ovItem, bool) {
 
 	// A count shows only with a known denominator, as in the notice row.
 	if n.total > 0 {
-		title += o.dot() + itoa(n.done) + " of " + itoa(n.total) + " done"
+		title += o.dot() + strconv.Itoa(n.done) + " of " + strconv.Itoa(n.total) + " done"
 	}
 
 	run := o.lessonsPath("Run")
@@ -130,7 +132,7 @@ func (o *overview) runItem() (ovItem, bool) {
 	}
 
 	return ovItem{
-		key: "learn:run", group: ovOptional, tone: ToneNeutral, badge: state,
+		key: "learn:run", group: ovOptional, tone: ui.ToneNeutral, badge: state,
 		title: title, source: "this session", body: body,
 		act: ovNav(destLessons, ovIntentRun, "open the run"),
 	}, true
@@ -179,11 +181,11 @@ func (o *overview) configItems() []ovItem {
 		return []ovItem{o.readerItem(snap, failing[0])}
 	case snap.InvocationErr != nil:
 		return []ovItem{{
-			key: "learn:agent", group: ovActionable, tone: ToneAttention, badge: "unresolved",
+			key: "learn:agent", group: ovActionable, tone: ui.ToneAttention, badge: "unresolved",
 			title: "Inference agent unresolved", source: settings.File + o.dot() + "agent",
 			area: ovConfigArea,
 			body: []string{
-				"The agent settings do not resolve to a command: " + errText(snap.InvocationErr) + ".",
+				"The agent settings do not resolve to a command: " + ui.ErrText(snap.InvocationErr) + ".",
 				"Distillation needs a resolved agent. The console never substitutes a default agent for a paid run.",
 			},
 			act: ovSettingsLink(settings.GroupInference),
@@ -203,17 +205,17 @@ func (o *overview) configFileItem(snap *settings.Snapshot, failing []ovReader) o
 	fix := "fix " + settings.File + " by hand"
 
 	if ovBlockExplains(snap, failing) {
-		body = append(body, "Reason: "+errText(snap.Blocked))
+		body = append(body, "Reason: "+ui.ErrText(snap.Blocked))
 		fix = ""
 	} else {
 		for _, r := range failing {
-			body = append(body, "The "+r.name+" reader: "+errText(snap.ReaderErrs[r.name]))
+			body = append(body, "The "+r.name+" reader: "+ui.ErrText(snap.ReaderErrs[r.name]))
 		}
 
 		// A read-only or linked file blocks the save for another cause.
 		// The user must fix the reader errors and edit the file by hand.
 		if snap.Blocked != nil {
-			body = append(body, "The file cannot be edited here: "+errText(snap.Blocked))
+			body = append(body, "The file cannot be edited here: "+ui.ErrText(snap.Blocked))
 			fix = ""
 		}
 	}
@@ -222,7 +224,7 @@ func (o *overview) configFileItem(snap *settings.Snapshot, failing []ovReader) o
 		"The console never substitutes defaults for them.")
 
 	it := ovItem{
-		key: "learn:config", group: ovActionable, tone: ToneFailure, badge: "invalid",
+		key: "learn:config", group: ovActionable, tone: ui.ToneFailure, badge: "invalid",
 		title: "Settings file does not load", source: settings.File,
 		body: body, fix: fix,
 		act: ovSettingsLink(failing[0].group),
@@ -268,12 +270,12 @@ func ovBlockExplains(snap *settings.Snapshot, failing []ovReader) bool {
 // readerItem reports one reader that rejects its section.
 func (o *overview) readerItem(snap *settings.Snapshot, r ovReader) ovItem {
 	sep := o.dot()
-	reason := errText(snap.ReaderErrs[r.name])
+	reason := ui.ErrText(snap.ReaderErrs[r.name])
 
 	switch r.name {
 	case settings.ReaderAgent:
 		return ovItem{
-			key: "learn:agent", group: ovActionable, tone: ToneFailure, badge: "invalid",
+			key: "learn:agent", group: ovActionable, tone: ui.ToneFailure, badge: "invalid",
 			title: "Inference settings invalid", source: settings.File + sep + "agent", area: ovConfigArea,
 			body: []string{
 				"The agent section does not load: " + reason,
@@ -284,7 +286,7 @@ func (o *overview) readerItem(snap *settings.Snapshot, r ovReader) ovItem {
 		}
 	case settings.ReaderDistill:
 		return ovItem{
-			key: "learn:config:distill", group: ovActionable, tone: ToneFailure, badge: "invalid",
+			key: "learn:config:distill", group: ovActionable, tone: ui.ToneFailure, badge: "invalid",
 			title: "Pin-write setting invalid", source: settings.File + sep + "distill",
 			body: []string{
 				"The distill section does not load: " + reason,
@@ -295,7 +297,7 @@ func (o *overview) readerItem(snap *settings.Snapshot, r ovReader) ovItem {
 		}
 	default:
 		return ovItem{
-			key: "learn:config:index", group: ovActionable, tone: ToneFailure, badge: "invalid",
+			key: "learn:config:index", group: ovActionable, tone: ui.ToneFailure, badge: "invalid",
 			title: "Index and review settings invalid", source: settings.File + sep + "index, reviews",
 			body: []string{
 				"The index reader rejects the file: " + reason,
@@ -367,7 +369,7 @@ func (o *overview) evidenceItem() (ovItem, bool) {
 
 	if total == 0 && v.Lessons == 0 {
 		return ovItem{
-			key: "learn:evidence", group: ovOptional, tone: ToneNeutral, badge: "no findings",
+			key: "learn:evidence", group: ovOptional, tone: ui.ToneNeutral, badge: "no findings",
 			title: "No evidence collected yet", source: "evidence store",
 			body: []string{
 				"The index stores no finding from local fix commits or GitHub reviews yet. " +
@@ -412,7 +414,7 @@ func (o *overview) distillItem(v learning.Snapshot, total int) ovItem {
 	stored := ovPlural(total, "finding is", "findings are") + " stored: " + ovNum(v.FixFindings) +
 		" from fix commits, " + ovNum(v.ReviewFindings) + " from GitHub reviews. The decision ledger holds no proposal."
 	it := ovItem{
-		key: "learn:distill", group: ovOptional, tone: ToneNeutral, badge: "no proposals",
+		key: "learn:distill", group: ovOptional, tone: ui.ToneNeutral, badge: "no proposals",
 		title:  ovPlural(total, "finding", "findings") + ", no proposals in the ledger",
 		source: "evidence store" + o.dot() + "decision ledger",
 		body: []string{
@@ -470,11 +472,11 @@ func (o *overview) pinWriteItem() (ovItem, bool) {
 
 	// The link stays, because Settings shows the same block in full.
 	if err := snap.Editable(settings.GroupPinWrite); err != nil {
-		route = settingsGroupTitle(settings.GroupPinWrite) + " cannot be edited here: " + errText(err) + "."
+		route = settingsGroupTitle(settings.GroupPinWrite) + " cannot be edited here: " + ui.ErrText(err) + "."
 	}
 
 	return ovItem{
-		key: "learn:pinwrite", group: ovOptional, tone: ToneNeutral, badge: "off",
+		key: "learn:pinwrite", group: ovOptional, tone: ui.ToneNeutral, badge: "off",
 		title: "Pin writing is off", source: settings.File + o.dot() + "distill.write",
 		body: []string{
 			ovPlural(n, "proposal waits", "proposals wait") + " for a decision. " +

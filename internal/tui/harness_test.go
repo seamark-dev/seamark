@@ -25,6 +25,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -455,7 +456,7 @@ type harness struct {
 func newHarness(t *testing.T, svc Services, w, h int) *harness {
 	t.Helper()
 
-	hs := &harness{t: t, m: newModel(svc, newTheme(false))}
+	hs := &harness{t: t, m: newModel(svc, ui.NewTheme(false))}
 	hs.run(hs.m.Init())
 	hs.send(tea.WindowSizeMsg{Width: w, Height: h})
 

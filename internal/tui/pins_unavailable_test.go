@@ -15,6 +15,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the unavailable action keys in Lessons › Pins (user
@@ -32,7 +33,7 @@ func helpParts(h *harness) (on, off string) {
 	rows, _ := h.m.helpLayout(80, h.m.st.height-1)
 	text := lesFlat(ansi.Strip(strings.Join(rows, "\n")))
 	body, _, _ := strings.Cut(text, "PLAIN COMMANDS")
-	on, off, _ = strings.Cut(body, unavailableWord+": not available now")
+	on, off, _ = strings.Cut(body, ui.UnavailableWord+": not available now")
 
 	return on, off
 }
@@ -180,7 +181,7 @@ func TestPinsUnavailableEntriesAreNeverOfferedKeys(t *testing.T) {
 	assert.Equal(t, []string{"space", "-", "tab", "f", "/", "z", "p", "s", "e"}, pinsKeys(h))
 
 	for _, b := range hookLessons(h).keys() {
-		if isUnavailable(b) {
+		if ui.IsUnavailable(b) {
 			assert.False(t, key.Matches(keyMsg(b.Help().Key), b), "an unavailable entry never matches %q", b.Help().Key)
 		}
 	}
@@ -218,8 +219,8 @@ func TestPinsUnavailableMarkerReadsWithoutColor(t *testing.T) {
 	// The ASCII movement label fits the key column, so its action starts
 	// in the same column as every other action.
 	rows, _ := h.m.helpLayout(80, h.m.st.height-1)
-	assert.Contains(t, rows, padRight("up/dn j k", helpKeyW)+"move")
-	assert.Contains(t, rows, padRight("g  G", helpKeyW)+"top / bottom")
+	assert.Contains(t, rows, ui.PadRight("up/dn j k", helpKeyW)+"move")
+	assert.Contains(t, rows, ui.PadRight("g  G", helpKeyW)+"top / bottom")
 }
 
 func TestPinsScrolledHelpMarksEveryUnavailableRow(t *testing.T) {
@@ -264,7 +265,7 @@ func TestPinsScrolledHelpMarksEveryUnavailableRow(t *testing.T) {
 			if strings.Contains(line, action) {
 				shown++
 
-				assert.Contains(t, line, unavailableWord, "the row of %q reads n/a on its own", action)
+				assert.Contains(t, line, ui.UnavailableWord, "the row of %q reads n/a on its own", action)
 			}
 		}
 	}
@@ -276,15 +277,15 @@ func TestHintsRenderTheUnavailableGroupMuted(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI256)
 	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
 
-	th := newTheme(false)
+	th := ui.NewTheme(false)
 
 	hidden := pinKeys.Compare
 	hidden.SetEnabled(false)
 
 	bindings := []key.Binding{
-		pinKeys.Prune, unavailable(pinKeys.Retarget), unavailable(pinKeys.Compare), hidden, lesKeys.State,
+		pinKeys.Prune, ui.Unavailable(pinKeys.Retarget), ui.Unavailable(pinKeys.Compare), hidden, lesKeys.State,
 	}
-	out := th.hints(bindings)
+	out := th.Hints(bindings)
 
 	// The group is faint and has no key style, so it never looks like an
 	// enabled key. The word n/a carries the state without color.
@@ -295,14 +296,14 @@ func TestHintsRenderTheUnavailableGroupMuted(t *testing.T) {
 	assert.Equal(t, "- prune   n/a: w retarget, v compare   f state filter", ansi.Strip(out))
 
 	// The short form keeps the word, the faint style and the keys.
-	short := th.shortHints(bindings)
+	short := th.ShortHints(bindings)
 	assert.Contains(t, short, th.Faint.Render("n/a: w v"))
 	assert.NotContains(t, short, th.Key.Render("w"))
 	assert.Equal(t, "- prune   n/a: w v   f state filter", ansi.Strip(short))
 
 	// A binding that a screen only disables stays hidden, so no other
 	// screen changes.
-	assert.Empty(t, th.hints([]key.Binding{hidden}))
+	assert.Empty(t, th.Hints([]key.Binding{hidden}))
 }
 
 func TestPinsHelpRendersUnavailableRowsMuted(t *testing.T) {
@@ -338,11 +339,11 @@ func TestPinsHelpRendersUnavailableRowsMuted(t *testing.T) {
 	// Pin 1 cannot retarget: its row is faint as a whole, with the word
 	// after the key, and no part of it has the key style.
 	w := row("w")
-	assert.Contains(t, w, th.Faint.Render(padRight("w n/a", helpKeyW)+"retarget"))
+	assert.Contains(t, w, th.Faint.Render(ui.PadRight("w n/a", helpKeyW)+"retarget"))
 	assert.NotContains(t, w, keyStart)
 
 	// Pin 1 can prune: its row keeps the key style.
-	assert.Contains(t, row("-"), th.Key.Render(padRight("-", helpKeyW)))
+	assert.Contains(t, row("-"), th.Key.Render(ui.PadRight("-", helpKeyW)))
 }
 
 func TestPinsUnavailableKeyExplainsAndCallsNothing(t *testing.T) {

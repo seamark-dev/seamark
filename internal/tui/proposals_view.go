@@ -12,6 +12,7 @@ import (
 
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file renders the Lessons destination in the 1a layout: the
@@ -63,8 +64,8 @@ func (s *lessons) subTabs(w int) string {
 	if !s.capturing() {
 		for _, rung := range lesTabRungs {
 			left := s.tabLine(rung) + "   " + t.Faint.Render(hint)
-			if width(left)+gap+width(right) <= w {
-				return spread(left, right, w)
+			if ui.Width(left)+gap+ui.Width(right) <= w {
+				return ui.Spread(left, right, w)
 			}
 		}
 	}
@@ -73,16 +74,16 @@ func (s *lessons) subTabs(w int) string {
 
 	for _, rung := range lesTabRungs {
 		left = s.tabLine(rung)
-		if width(left)+gap+width(right) <= w {
+		if ui.Width(left)+gap+ui.Width(right) <= w {
 			break
 		}
 	}
 
-	if width(left)+width(right) > w {
-		return truncate(left, w, t.Glyphs.Ellipsis)
+	if ui.Width(left)+ui.Width(right) > w {
+		return ui.Truncate(left, w, t.Glyphs.Ellipsis)
 	}
 
-	return spread(left, right, w)
+	return ui.Spread(left, right, w)
 }
 
 // lesTabRung is one step of the sub-view line: the labels of Proposals
@@ -160,7 +161,7 @@ func (p *propView) view(w, h int) string {
 	head := p.filterBar(w)
 
 	if sec := &p.st.ledger; sec.stale() {
-		head = append(head, " "+t.Attention.Render(truncate(t.Glyphs.Warn+" stale: "+errText(sec.err)+
+		head = append(head, " "+t.Attention.Render(ui.Truncate(t.Glyphs.Warn+" stale: "+ui.ErrText(sec.err)+
 			". The list shows the last good snapshot.", w-1, t.Glyphs.Ellipsis)))
 	}
 
@@ -182,7 +183,7 @@ func (p *propView) filterBar(w int) []string {
 			return f.label()
 		}
 
-		return f.label() + " " + itoa(propCount(l, f))
+		return f.label() + " " + strconv.Itoa(propCount(l, f))
 	})
 
 	rest := t.Faint.Render("region") + " " + p.fieldView(t, filterRegion, p.region, "all")
@@ -194,7 +195,7 @@ func (p *propView) filterBar(w int) []string {
 	}
 
 	if n := len(p.selected); n > 0 && p.filter == propPending {
-		rest += "     " + t.Marked.Render(itoa(n)+" selected")
+		rest += "     " + t.Marked.Render(strconv.Itoa(n)+" selected")
 	}
 
 	return filterLines(t, t.Faint.Render("state")+" "+states, rest, w)
@@ -230,19 +231,12 @@ func (p *propView) body(w, h int) string {
 	return p.split(rows, w, h, min(propListW, w*propListW/propDesignW), p.listBox, p.detailBox)
 }
 
-// propRange renders the faint "3–12 of 40" position of a scrolled
-// window. from is the 0-based first row and to the end of the window,
-// as the list offsets give them.
-func propRange(t *Theme, from, to, n int) string {
-	return t.Faint.Render(t.positionNote(from+1, to, n))
-}
-
 // listBox renders the proposal list with its column header. The cursor
 // row has the cursor glyph, and in the focused box a full-width
 // selection background (listPane.renderList).
 func (p *propView) listBox(rows []domain.Proposal, w, h int, focused bool) string {
 	t := p.st.theme
-	cols := p.columns(rows, boxInner(w))
+	cols := p.columns(rows, ui.BoxInner(w))
 
 	return p.renderList(t, rows, w, h, focused, p.listTitle(), cols.header(t),
 		func(pr domain.Proposal, cursor bool) string {
@@ -269,14 +263,14 @@ func (p *propView) columns(rows []domain.Proposal, w int) propCols {
 	c := propCols{check: p.filter == propPending, idW: 4, regW: 10, citedW: 6}
 
 	for _, pr := range rows {
-		c.idW = max(c.idW, width(propID(pr.ID))+2)
+		c.idW = max(c.idW, ui.Width(propID(pr.ID))+2)
 	}
 
 	if l := p.ledger(); l != nil && l.HealthErr == nil && len(l.Health) > 0 {
 		c.tierW = 4
 
 		for _, pr := range rows {
-			c.tierW = max(c.tierW, min(6, width(p.tierOf(pr.ID))))
+			c.tierW = max(c.tierW, min(6, ui.Width(p.tierOf(pr.ID))))
 		}
 	}
 
@@ -302,17 +296,17 @@ func (p *propView) columns(rows []domain.Proposal, w int) propCols {
 }
 
 // cells returns the row cells in column order.
-func (c propCols) cells(marker, check, id, rule, region, cited, tier string) []colCell {
-	out := []colCell{cell(marker, 2)}
+func (c propCols) cells(marker, check, id, rule, region, cited, tier string) []ui.ColCell {
+	out := []ui.ColCell{ui.Cell(marker, 2)}
 
 	if c.check {
-		out = append(out, cell(check, 4))
+		out = append(out, ui.Cell(check, 4))
 	}
 
-	out = append(out, cell(id, c.idW), cell(rule, c.ruleW))
+	out = append(out, ui.Cell(id, c.idW), ui.Cell(rule, c.ruleW))
 
-	for _, opt := range []colCell{cell(region, c.regW), cell(cited, c.citedW), cell(tier, c.tierW)} {
-		if opt.w > 0 {
+	for _, opt := range []ui.ColCell{ui.Cell(region, c.regW), ui.Cell(cited, c.citedW), ui.Cell(tier, c.tierW)} {
+		if opt.W > 0 {
 			out = append(out, opt)
 		}
 	}
@@ -321,13 +315,13 @@ func (c propCols) cells(marker, check, id, rule, region, cited, tier string) []c
 }
 
 // header renders the faint column titles.
-func (c propCols) header(t *Theme) string {
-	return t.Faint.Render(t.cols(c.cells("", "", "ID", "RULE", "REGION", "CITED", "TIER")...))
+func (c propCols) header(t *ui.Theme) string {
+	return t.Faint.Render(t.Cols(c.cells("", "", "ID", "RULE", "REGION", "CITED", "TIER")...))
 }
 
 // row renders one proposal. The cursor row has the cursor glyph and a
 // bold rule; a marked row has the check glyph in the accent color.
-func (c propCols) row(t *Theme, pr domain.Proposal, marked, cursor bool, tier string) string {
+func (c propCols) row(t *ui.Theme, pr domain.Proposal, marked, cursor bool, tier string) string {
 	marker := ""
 	rule := t.Body
 
@@ -346,11 +340,11 @@ func (c propCols) row(t *Theme, pr domain.Proposal, marked, cursor bool, tier st
 	// its last path components, as in the Pins list, because a cut from
 	// the right makes every "internal/..." region look the same.
 	ell := t.Glyphs.Ellipsis
-	ruleText := truncate(oneLine(pr.Rule), max(1, c.ruleW-1), ell)
+	ruleText := ui.Truncate(ui.OneLine(pr.Rule), max(1, c.ruleW-1), ell)
 	region := pinPathCell(propRegionLabel(pr), max(1, c.regW-1), ell)
 
-	return t.cols(c.cells(marker, check, t.Muted.Render(propID(pr.ID)), rule.Render(ruleText),
-		t.Muted.Render(region), t.Body.Render("  "+itoa(len(pr.Members))), t.Muted.Render(tier))...)
+	return t.Cols(c.cells(marker, check, t.Muted.Render(propID(pr.ID)), rule.Render(ruleText),
+		t.Muted.Render(region), t.Body.Render("  "+strconv.Itoa(len(pr.Members))), t.Muted.Render(tier))...)
 }
 
 // propID renders a proposal ID in the ledger's pN form.
@@ -367,9 +361,9 @@ func propRegionLabel(pr domain.Proposal) string {
 	case 0:
 		return "repo-wide"
 	case 1:
-		return oneLine(set[0])
+		return ui.OneLine(set[0])
 	default:
-		return itoa(len(set)) + " regions"
+		return strconv.Itoa(len(set)) + " regions"
 	}
 }
 
@@ -380,7 +374,7 @@ func (p *propView) tierOf(id int64) string {
 		return ""
 	}
 
-	return oneLine(l.Health[id].Tier)
+	return ui.OneLine(l.Health[id].Tier)
 }
 
 // detailBox renders the proposal under the cursor. The body scrolls
@@ -389,11 +383,11 @@ func (p *propView) tierOf(id int64) string {
 func (p *propView) detailBox(rows []domain.Proposal, w, h int, focused bool) string {
 	cur, _ := p.cursorRow(rows)
 
-	return p.renderDetail(p.st.theme, cur, "Proposal "+propID(cur.ID), p.detailLines(cur, boxInner(w)), w, h, focused)
+	return p.renderDetail(p.st.theme, cur, "Proposal "+propID(cur.ID), p.detailLines(cur, ui.BoxInner(w)), w, h, focused)
 }
 
 // propDash returns the dash of the theme's glyph set.
-func propDash(t *Theme) string {
+func propDash(t *ui.Theme) string {
 	if t.ASCII {
 		return " - "
 	}
@@ -403,7 +397,7 @@ func propDash(t *Theme) string {
 
 // propLines wraps text to w cells and styles each line.
 func propLines(style lipgloss.Style, text string, w int) []string {
-	lines := strings.Split(wrap(text, max(1, w)), "\n")
+	lines := strings.Split(ui.Wrap(text, max(1, w)), "\n")
 	for i, l := range lines {
 		lines[i] = style.Render(l)
 	}
@@ -413,9 +407,9 @@ func propLines(style lipgloss.Style, text string, w int) []string {
 
 // propNote renders a tone glyph and wrapped text with a hanging indent.
 // The glyph keeps the tone visible without color.
-func propNote(t *Theme, tone Tone, text string, w int) []string {
+func propNote(t *ui.Theme, tone ui.Tone, text string, w int) []string {
 	style := t.ToneStyle(tone)
-	lines := strings.Split(wrap(text, max(1, w-2)), "\n")
+	lines := strings.Split(ui.Wrap(text, max(1, w-2)), "\n")
 
 	for i, l := range lines {
 		prefix := "  "
@@ -432,7 +426,7 @@ func propNote(t *Theme, tone Tone, text string, w int) []string {
 // propIndent prefixes the first line with lead and the other lines
 // with spaces of the same width.
 func propIndent(lead string, lines []string) []string {
-	pad := strings.Repeat(" ", width(lead))
+	pad := strings.Repeat(" ", ui.Width(lead))
 	out := make([]string, len(lines))
 
 	for i, l := range lines {
@@ -447,8 +441,8 @@ func propIndent(lead string, lines []string) []string {
 }
 
 // propKV renders aligned label and value rows as lines.
-func propKV(t *Theme, rows [][2]string, w int) []string {
-	return strings.Split(t.kv(rows, w), "\n")
+func propKV(t *ui.Theme, rows [][2]string, w int) []string {
+	return strings.Split(kv(t, rows, w), "\n")
 }
 
 // detailLines renders the full proposal: rule and state, the note,
@@ -466,7 +460,7 @@ func (p *propView) detailLines(pr domain.Proposal, w int) []string {
 	if strings.TrimSpace(pr.Note) == "" {
 		out = append(out, t.Muted.Render("No note is recorded."))
 	} else {
-		out = append(out, propLines(t.Body, multiLine(pr.Note), w)...)
+		out = append(out, propLines(t.Body, ui.MultiLine(pr.Note), w)...)
 	}
 
 	out = append(out, "")
@@ -490,8 +484,8 @@ func (p *propView) headLines(pr domain.Proposal, w int) []string {
 	t := p.st.theme
 	id := propID(pr.ID)
 
-	out := propLines(t.Title, oneLine(pr.Rule), w)
-	if last := len(out) - 1; width(out[last])+2+width(id) <= w {
+	out := propLines(t.Title, ui.OneLine(pr.Rule), w)
+	if last := len(out) - 1; ui.Width(out[last])+2+ui.Width(id) <= w {
 		out[last] += "  " + t.Faint.Render(id)
 	} else {
 		out = append(out, t.Faint.Render(id))
@@ -533,7 +527,7 @@ func (p *propView) factLines(pr domain.Proposal, w int) []string {
 	t := p.st.theme
 
 	row := func(label, value string) string {
-		return t.cols(cell(t.Muted.Render(label), propLabelW), cell(value, max(1, w-propLabelW)))
+		return t.Cols(ui.Cell(t.Muted.Render(label), propLabelW), ui.Cell(value, max(1, w-propLabelW)))
 	}
 
 	paths := func(label string, set []string) []string {
@@ -544,7 +538,7 @@ func (p *propView) factLines(pr domain.Proposal, w int) []string {
 				label = ""
 			}
 
-			out[i] = row(label, t.Accent.Render(oneLine(r)))
+			out[i] = row(label, t.Accent.Render(ui.OneLine(r)))
 		}
 
 		return out
@@ -562,7 +556,7 @@ func (p *propView) factLines(pr domain.Proposal, w int) []string {
 
 	agent := t.Muted.Render("unknown")
 	if pr.Agent != "" {
-		agent = t.Body.Render(oneLine(pr.Agent))
+		agent = t.Body.Render(ui.OneLine(pr.Agent))
 	}
 
 	if pr.CreatedAt > 0 {
@@ -595,7 +589,7 @@ func (p *propView) evidenceLines(pr domain.Proposal, l *proposals.Ledger, w int)
 			ids[i] = strconv.FormatInt(id, 10)
 		}
 
-		out = append(out, propNote(t, ToneFailure, "The cited evidence could not be read: "+errText(l.EvidenceErr), w)...)
+		out = append(out, propNote(t, ui.ToneFailure, "The cited evidence could not be read: "+ui.ErrText(l.EvidenceErr), w)...)
 
 		return append(out, propLines(t.Muted, "Cited finding IDs: "+strings.Join(ids, ", "), w)...)
 	}
@@ -605,8 +599,8 @@ func (p *propView) evidenceLines(pr domain.Proposal, l *proposals.Ledger, w int)
 			out = append(out, "")
 		}
 
-		lead := t.Faint.Render(padRight(itoa(i+1), 2)) + " "
-		inner := max(1, w-width(lead))
+		lead := t.Faint.Render(ui.PadRight(strconv.Itoa(i+1), 2)) + " "
+		inner := max(1, w-ui.Width(lead))
 
 		f, ok := domain.Finding{}, false
 		if l != nil {
@@ -614,7 +608,7 @@ func (p *propView) evidenceLines(pr domain.Proposal, l *proposals.Ledger, w int)
 		}
 
 		if !ok {
-			out = append(out, propIndent(lead, propNote(t, ToneUnknown,
+			out = append(out, propIndent(lead, propNote(t, ui.ToneUnknown,
 				"finding "+strconv.FormatInt(id, 10)+": unavailable"+propDash(t)+"aged out of the index", inner))...)
 
 			continue
@@ -659,11 +653,11 @@ func propAge(d time.Duration) string {
 
 	switch {
 	case d < time.Hour:
-		return itoa(int(d.Minutes())) + "m"
+		return strconv.Itoa(int(d.Minutes())) + "m"
 	case d < 48*time.Hour:
-		return itoa(int(d.Hours())) + "h"
+		return strconv.Itoa(int(d.Hours())) + "h"
 	default:
-		return itoa(int(d.Hours()/24)) + "d"
+		return strconv.Itoa(int(d.Hours()/24)) + "d"
 	}
 }
 
@@ -675,10 +669,10 @@ func (p *propView) findingLines(f domain.Finding, w int) []string {
 
 	var out []string
 
-	if summary := oneLine(lesSummary(multiLine(f.Body))); summary == "" {
+	if summary := ui.OneLine(lesSummary(ui.MultiLine(f.Body))); summary == "" {
 		out = append(out, t.Muted.Render("No text is recorded for this finding."))
 	} else {
-		lines := clipWithEllipsis(strings.Split(wrap(summary, w), "\n"), propSummaryN, w, t.Glyphs.Ellipsis)
+		lines := ui.ClipWithEllipsis(strings.Split(ui.Wrap(summary, w), "\n"), propSummaryN, w, t.Glyphs.Ellipsis)
 		for _, l := range lines {
 			out = append(out, t.Title.Render(l))
 		}
@@ -687,15 +681,15 @@ func (p *propView) findingLines(f domain.Finding, w int) []string {
 	var meta []string
 
 	if f.PR > 0 {
-		meta = append(meta, "PR #"+itoa(f.PR))
+		meta = append(meta, "PR #"+strconv.Itoa(f.PR))
 	}
 
 	if f.Reviewer != "" {
-		meta = append(meta, oneLine(f.Reviewer))
+		meta = append(meta, ui.OneLine(f.Reviewer))
 	}
 
 	if f.PR == 0 && f.Source != "" {
-		meta = append(meta, oneLine(f.Source))
+		meta = append(meta, ui.OneLine(f.Source))
 	}
 
 	path := f.Path
@@ -708,18 +702,18 @@ func (p *propView) findingLines(f domain.Finding, w int) []string {
 
 	if path != "" {
 		if len(f.Paths) > 1 {
-			path += " +" + itoa(len(f.Paths)-1)
+			path += " +" + strconv.Itoa(len(f.Paths)-1)
 		}
 
 		if len(meta) > 0 {
 			line += t.Muted.Render(sep)
 		}
 
-		line += t.Accent.Render(oneLine(path))
+		line += t.Accent.Render(ui.OneLine(path))
 	}
 
 	if line != "" {
-		out = append(out, truncate(line, w, t.Glyphs.Ellipsis))
+		out = append(out, ui.Truncate(line, w, t.Glyphs.Ellipsis))
 	}
 
 	return out
@@ -737,7 +731,7 @@ func (p *propView) advisoryLines(pr domain.Proposal, l *proposals.Ledger, w int)
 	head := t.Heading.Render("ADVISORIES")
 
 	if l.HealthErr != nil {
-		return append([]string{head}, propNote(t, ToneAttention, "Advisories are unavailable: "+errText(l.HealthErr), w)...)
+		return append([]string{head}, propNote(t, ui.ToneAttention, "Advisories are unavailable: "+ui.ErrText(l.HealthErr), w)...)
 	}
 
 	h, ok := l.Health[pr.ID]
@@ -752,16 +746,16 @@ func (p *propView) advisoryLines(pr domain.Proposal, l *proposals.Ledger, w int)
 	var rows [][2]string
 
 	if h.Tier != "" {
-		v := oneLine(h.Tier)
+		v := ui.OneLine(h.Tier)
 		if h.Facts != "" {
-			v += " " + t.Glyphs.Sep + " " + oneLine(h.Facts)
+			v += " " + t.Glyphs.Sep + " " + ui.OneLine(h.Facts)
 		}
 
 		rows = append(rows, [2]string{"Evidence", v})
 	}
 
 	if h.Era != "" {
-		rows = append(rows, [2]string{"Era", oneLine(h.Era)})
+		rows = append(rows, [2]string{"Era", ui.OneLine(h.Era)})
 	}
 
 	if h.Pruned {
@@ -770,19 +764,19 @@ func (p *propView) advisoryLines(pr domain.Proposal, l *proposals.Ledger, w int)
 	}
 
 	if h.Retarget != "" {
-		rows = append(rows, [2]string{"Regions now", "today's evidence suggests " + oneLine(h.Retarget)})
+		rows = append(rows, [2]string{"Regions now", "today's evidence suggests " + ui.OneLine(h.Retarget)})
 	}
 
 	if h.Scope != "" {
-		rows = append(rows, [2]string{"Scope", oneLine(h.Scope)})
+		rows = append(rows, [2]string{"Scope", ui.OneLine(h.Scope)})
 	}
 
 	if h.Blocked != "" {
-		rows = append(rows, [2]string{"Blocked", oneLine(h.Blocked)})
+		rows = append(rows, [2]string{"Blocked", ui.OneLine(h.Blocked)})
 	}
 
 	if h.Outcome != "" {
-		rows = append(rows, [2]string{"Outcome", oneLine(h.Outcome) +
+		rows = append(rows, [2]string{"Outcome", ui.OneLine(h.Outcome) +
 			"\n(derived recurrence check, not proof of effectiveness)"})
 	}
 
@@ -793,7 +787,7 @@ func (p *propView) advisoryLines(pr domain.Proposal, l *proposals.Ledger, w int)
 	out := append([]string{head}, propKV(t, rows, w)...)
 
 	if h.Escalate {
-		out = append(out, propNote(t, ToneAttention, "The pin fires and the mistake still recurs.", w)...)
+		out = append(out, propNote(t, ui.ToneAttention, "The pin fires and the mistake still recurs.", w)...)
 	}
 
 	return out
@@ -831,7 +825,7 @@ func (p *propView) decisionLines(pr domain.Proposal, l *proposals.Ledger, w int)
 	switch {
 	case l == nil:
 	case l.WriteErr != nil:
-		out = append(out, propNote(t, ToneAttention, "The write gate could not be read: "+errText(l.WriteErr), w)...)
+		out = append(out, propNote(t, ui.ToneAttention, "The write gate could not be read: "+ui.ErrText(l.WriteErr), w)...)
 	case l.Write:
 		out = append(out, propLines(t.Muted, "distill.write is on: apply writes pins to "+proposals.LessonsFile+".", w)...)
 	default:
@@ -851,14 +845,14 @@ func (p *propView) decisionLines(pr domain.Proposal, l *proposals.Ledger, w int)
 
 	switch taken := p.appliedKeyRefusal(ids); {
 	case taken != nil:
-		out = append(out, propNote(t, ToneAttention, "a and c do not work for "+which+": Pins blocks a pin "+
+		out = append(out, propNote(t, ui.ToneAttention, "a and c do not work for "+which+": Pins blocks a pin "+
 			"that two applied proposals record. "+appliedKeyText(taken, ids), w)...)
 	case p.appliedKeyRefusal([]int64{pr.ID}) != nil:
 		// The marks do not hold this row, so a and c do not act on it.
 		// The pin note must still not offer c for a row that the record
 		// refuses.
 	case p.hasPin(pr.ID):
-		out = append(out, propNote(t, ToneAttention, "A pin for "+propID(pr.ID)+" already exists in "+
+		out = append(out, propNote(t, ui.ToneAttention, "A pin for "+propID(pr.ID)+" already exists in "+
 			proposals.LessonsFile+". Press c to record it as applied (ledger only); the pin file stays unchanged.", w)...)
 	}
 
@@ -907,14 +901,14 @@ func propGateOff(l *proposals.Ledger) bool {
 // is the common case, so it names the build route.
 func (p *propView) unavailableBox(err error, w, h int) string {
 	t := p.st.theme
-	inner := min(boxInner(w), 72)
+	inner := min(ui.BoxInner(w), 72)
 
 	var m paneMessage
 
 	switch {
 	case err == nil:
 		m = paneMessage{
-			head: []string{t.Accent.Render(t.spinnerFrame(p.st.tick)) + " " + t.Title.Render("Reading the proposal ledger"+t.Glyphs.Ellipsis)},
+			head: []string{t.Accent.Render(t.SpinnerFrame(p.st.tick)) + " " + t.Title.Render("Reading the proposal ledger"+t.Glyphs.Ellipsis)},
 			body: "Proposals, their evidence and their advisories load from the index. Nothing is written.",
 		}
 	case errors.Is(err, ErrNoLedger):
@@ -922,16 +916,16 @@ func (p *propView) unavailableBox(err error, w, h int) string {
 			head: []string{t.Attention.Render(t.Glyphs.Warn) + " " + t.Title.Render("No index yet")},
 			body: "Proposals live in the index database, and this workspace has no readable index. " +
 				"Build it from Overview (press 1, then b), or run this command in a shell:",
-			next: append([]string{t.command("seamark index")}, propLines(t.Faint, errText(err), inner)...),
+			next: append([]string{commandText(t, "seamark index")}, propLines(t.Faint, ui.ErrText(err), inner)...),
 		}
 	default:
 		m = paneMessage{
 			head: []string{t.Failure.Render(t.Glyphs.Fail) + " " + t.Title.Render("The proposal ledger could not be read")},
-			body: errText(err) + "\n\nThe other views stay usable. Press r to read the ledger again.",
+			body: ui.ErrText(err) + "\n\nThe other views stay usable. Press r to read the ledger again.",
 		}
 	}
 
-	return t.messageBox(t.Title.Render("Proposals"), "", m, w, h)
+	return messageBox(t, t.Title.Render("Proposals"), "", m, w, h)
 }
 
 // emptyBox explains an empty list: no proposals at all, no pending
@@ -968,7 +962,7 @@ func (p *propView) emptyBox(w, h int) string {
 			body: "Proposals come from review evidence in two CLI steps. The first command fetches review comments " +
 				"through gh. The second invokes " + agent + " to distill the evidence into proposals. " +
 				"Nothing starts from this message; run the commands in a shell when you choose to.",
-			next: []string{t.command("seamark index --reviews"), t.command("seamark lessons --distill")},
+			next: []string{commandText(t, "seamark index --reviews"), commandText(t, "seamark lessons --distill")},
 		}
 	case p.filter == propPending && len(l.Pending) == 0:
 		m = paneMessage{
@@ -981,7 +975,7 @@ func (p *propView) emptyBox(w, h int) string {
 
 		for f := propPending; f < propStateCount; f++ {
 			if f != p.filter {
-				others = append(others, itoa(propCount(l, f))+" "+f.label())
+				others = append(others, strconv.Itoa(propCount(l, f))+" "+f.label())
 			}
 		}
 
@@ -993,13 +987,13 @@ func (p *propView) emptyBox(w, h int) string {
 		n := len(p.stateRows())
 
 		m = paneMessage{
-			head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No "+label+" proposals match region "+oneLine(p.region))},
+			head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No "+label+" proposals match region "+ui.OneLine(p.region))},
 			body: propPlural(n, label+" proposal is", label+" proposals are") + " outside this region. " +
 				"Press / and submit an empty filter to show every region.",
 		}
 	}
 
-	return t.messageBox(t.Title.Render(p.listTitle()), t.Muted.Render("0"), m, w, h)
+	return messageBox(t, t.Title.Render(p.listTitle()), t.Muted.Render("0"), m, w, h)
 }
 
 // propJoin joins words as a list for a sentence: "a", "a and b", or
@@ -1035,8 +1029,8 @@ func (p *propView) morePending() []string {
 	}
 
 	return append(out,
-		t.Faint.Render("run ")+t.command("seamark index --reviews")+t.Faint.Render(" to fetch new review findings,"),
-		t.Faint.Render("then ")+t.command("seamark lessons --distill")+t.Faint.Render(" to propose more"))
+		t.Faint.Render("run ")+commandText(t, "seamark index --reviews")+t.Faint.Render(" to fetch new review findings,"),
+		t.Faint.Render("then ")+commandText(t, "seamark lessons --distill")+t.Faint.Render(" to propose more"))
 }
 
 // distillAgent returns the resolved distill command when the semantic
@@ -1047,7 +1041,7 @@ func (p *propView) distillAgent() string {
 		return ""
 	}
 
-	return diag(sec.value.Status.DistillAgent)
+	return ui.Diag(sec.value.Status.DistillAgent)
 }
 
 // propPinBlock is the display form of a pin block. It never replaces
@@ -1079,7 +1073,7 @@ func propFoldPins(block string, w int) propPinBlock {
 		out = propPinBlock{lines: src, cont: make([]bool, len(src))}
 
 		for _, line := range src {
-			out.overflow = out.overflow || width(line) > w
+			out.overflow = out.overflow || ui.Width(line) > w
 		}
 	}
 
@@ -1092,7 +1086,7 @@ func propFoldLines(src []string, w int) propPinBlock {
 	var out propPinBlock
 
 	for _, line := range src {
-		if width(line) <= w {
+		if ui.Width(line) <= w {
 			out.lines = append(out.lines, line)
 			out.cont = append(out.cont, false)
 
@@ -1144,7 +1138,7 @@ func propFoldNote(line string, w int) ([]string, bool) {
 	var out []string
 
 	for _, word := range words[1:] {
-		if width(cur)+1+width(word) <= w {
+		if ui.Width(cur)+1+ui.Width(word) <= w {
 			cur += " " + word
 
 			continue
@@ -1157,7 +1151,7 @@ func propFoldNote(line string, w int) ([]string, bool) {
 	out = append(out, cur)
 
 	for _, l := range out {
-		if width(l) > w {
+		if ui.Width(l) > w {
 			return nil, false
 		}
 	}

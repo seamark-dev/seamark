@@ -3,10 +3,13 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // This file holds the shell side of stoppable work: the run line of the
@@ -33,7 +36,7 @@ func (m *model) quitCopy(compact bool) (title, body string, acts []key.Binding) 
 		}
 
 		return "Discard the unsaved settings draft and quit?", body,
-			[]key.Binding{withHelp(nkeys.Enter, "enter", "discard and quit"), withHelp(nkeys.Back, "esc", "stay")}
+			[]key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "discard and quit"), ui.WithHelp(ui.Nav.Back, "esc", "stay")}
 	}
 
 	// The exit also loses the drafts, so the full question names them.
@@ -43,7 +46,7 @@ func (m *model) quitCopy(compact bool) (title, body string, acts []key.Binding) 
 		lost = " The exit also discards the unsaved settings draft."
 	}
 
-	keep := withHelp(nkeys.Back, "esc", "keep working")
+	keep := ui.WithHelp(ui.Nav.Back, "esc", "keep working")
 
 	if m.st.stoppable() {
 		body = m.st.mutation + " is running. Seamark stops the external work, waits for it to end, " +
@@ -53,7 +56,7 @@ func (m *model) quitCopy(compact bool) (title, body string, acts []key.Binding) 
 				"Completed work is kept."
 		}
 
-		return "Stop and exit?", body, []key.Binding{withHelp(nkeys.Enter, "enter", "stop and exit"), keep}
+		return "Stop and exit?", body, []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "stop and exit"), keep}
 	}
 
 	body = m.st.mutation + " is running. It cannot stop safely at this point, so Seamark can exit when " +
@@ -63,7 +66,7 @@ func (m *model) quitCopy(compact bool) (title, body string, acts []key.Binding) 
 	}
 
 	return "Exit after the running operation?", body,
-		[]key.Binding{withHelp(nkeys.Enter, "enter", "exit after completion"), keep}
+		[]key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "exit after completion"), keep}
 }
 
 // exitBudget returns how long Run may still wait for stoppable work
@@ -105,14 +108,14 @@ func (m *model) runNotice(n *runNote, w int) string {
 		spin = t.Attention
 	}
 
-	head := spin.Render(t.spinnerFrame(m.st.tick)) + " " + t.Body.Render(oneLine(n.verb))
+	head := spin.Render(t.SpinnerFrame(m.st.tick)) + " " + t.Body.Render(ui.OneLine(n.verb))
 	if n.stopping {
 		head += sep + t.Attention.Render("Stopping"+g.Ellipsis)
 	}
 
 	count := ""
 	if n.total > 0 {
-		count = itoa(n.done) + " of " + itoa(n.total) + " done"
+		count = strconv.Itoa(n.done) + " of " + strconv.Itoa(n.total) + " done"
 	}
 
 	if m.toast.text != "" {
@@ -121,7 +124,7 @@ func (m *model) runNotice(n *runNote, w int) string {
 			chip += sep + t.Muted.Render(count)
 		}
 
-		return fit(spread(m.toastLine(), chip+" ", w), w, 1)
+		return ui.Fit(ui.Spread(m.toastLine(), chip+" ", w), w, 1)
 	}
 
 	facts := make([]string, 0, 3)
@@ -129,7 +132,7 @@ func (m *model) runNotice(n *runNote, w int) string {
 		facts = append(facts, count)
 	}
 
-	if d := oneLine(n.detail); d != "" {
+	if d := ui.OneLine(n.detail); d != "" {
 		facts = append(facts, d)
 	}
 
@@ -147,7 +150,7 @@ func (m *model) runNotice(n *runNote, w int) string {
 		hint = t.Faint.Render(m.runHome(n.home)) + " "
 	}
 
-	return fit(spread(line, hint, w), w, 1)
+	return ui.Fit(ui.Spread(line, hint, w), w, 1)
 }
 
 // showsHome reports whether the active screen shows the run home. An
@@ -189,10 +192,10 @@ func runElapsed(d time.Duration) string {
 
 	switch {
 	case d < time.Minute:
-		return itoa(int(d.Seconds())) + "s"
+		return strconv.Itoa(int(d.Seconds())) + "s"
 	case d < time.Hour:
-		return itoa(int(d.Minutes())) + "m " + fmt.Sprintf("%02d", int(d.Seconds())%60) + "s"
+		return strconv.Itoa(int(d.Minutes())) + "m " + fmt.Sprintf("%02d", int(d.Seconds())%60) + "s"
 	default:
-		return itoa(int(d.Hours())) + "h " + fmt.Sprintf("%02d", int(d.Minutes())%60) + "m"
+		return strconv.Itoa(int(d.Hours())) + "h " + fmt.Sprintf("%02d", int(d.Minutes())%60) + "m"
 	}
 }

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -43,8 +45,8 @@ func (o *overview) cards(w int) [4]ovCard {
 	widths := ovCardWidths(w)
 
 	return [4]ovCard{
-		o.indexCard(boxInner(widths[0])), o.navigateCard(boxInner(widths[1])),
-		o.learnCard(boxInner(widths[2])), o.guardCard(boxInner(widths[3])),
+		o.indexCard(ui.BoxInner(widths[0])), o.navigateCard(ui.BoxInner(widths[1])),
+		o.learnCard(ui.BoxInner(widths[2])), o.guardCard(ui.BoxInner(widths[3])),
 	}
 }
 
@@ -62,10 +64,10 @@ func (o *overview) cardsView(w int) string {
 
 	blocks := make([]string, 0, len(cards))
 	for i, c := range cards {
-		blocks = append(blocks, t.card(widths[i], lines+2, c.title, c.right, c.lines))
+		blocks = append(blocks, t.Card(widths[i], lines+2, c.title, c.right, c.lines))
 	}
 
-	return hjoin(1, blocks...)
+	return ui.Hjoin(1, blocks...)
 }
 
 // cardsHeight returns the rendered height of the cards at w cells.
@@ -83,7 +85,7 @@ func (o *overview) cardsHeight(w int) int {
 // not fit the 1a card width.
 func ovFit(w int, texts ...string) string {
 	for _, s := range texts {
-		if width(s) <= w {
+		if ui.Width(s) <= w {
 			return s
 		}
 	}
@@ -93,7 +95,7 @@ func ovFit(w int, texts ...string) string {
 
 // noteLines wraps a reason onto at most ovNoteLines lines of w cells.
 func (o *overview) noteLines(style lipgloss.Style, text string, w int) []string {
-	lines := clipWithEllipsis(strings.Split(wrap(text, w), "\n"), ovNoteLines, w, o.st.theme.Glyphs.Ellipsis)
+	lines := ui.ClipWithEllipsis(strings.Split(ui.Wrap(text, w), "\n"), ovNoteLines, w, o.st.theme.Glyphs.Ellipsis)
 
 	return ovStyled(style.Render, strings.Join(lines, "\n"))
 }
@@ -119,17 +121,17 @@ func ovWord(n int, one, many string) string {
 func (o *overview) reading(what string) string {
 	t := o.st.theme
 
-	return t.Accent.Render(t.spinnerFrame(o.st.tick)) + " " + t.Muted.Render("reading "+what+t.Glyphs.Ellipsis)
+	return t.Accent.Render(t.SpinnerFrame(o.st.tick)) + " " + t.Muted.Render("reading "+what+t.Glyphs.Ellipsis)
 }
 
 // staleNote renders the stale marker of a section that failed to reload.
 func (o *overview) staleNote(err error) string {
-	return o.st.theme.Attention.Render("stale: " + errText(err))
+	return o.st.theme.Attention.Render("stale: " + ui.ErrText(err))
 }
 
 // staleLines renders the stale marker of a card, wrapped to w cells.
 func (o *overview) staleLines(err error, w int) []string {
-	return o.noteLines(o.st.theme.Attention, "stale: "+errText(err), w)
+	return o.noteLines(o.st.theme.Attention, "stale: "+ui.ErrText(err), w)
 }
 
 // indexCard summarizes the index: the freshness at the right, then the
@@ -142,8 +144,8 @@ func (o *overview) indexCard(w int) ovCard {
 
 	switch {
 	case !sec.loaded && sec.err != nil:
-		c.right = t.Badge(ToneFailure, "read failed")
-		c.lines = o.noteLines(t.Unknown, "health unknown: "+errText(sec.err), w)
+		c.right = t.Badge(ui.ToneFailure, "read failed")
+		c.lines = o.noteLines(t.Unknown, "health unknown: "+ui.ErrText(sec.err), w)
 
 		return c
 	case !sec.loaded:
@@ -176,10 +178,10 @@ func (o *overview) readyIndexCard(v IndexView, w int) (right string, lines []str
 	if s == nil {
 		why := "health unknown"
 		if v.StatusErr != nil {
-			why += ": " + errText(v.StatusErr)
+			why += ": " + ui.ErrText(v.StatusErr)
 		}
 
-		return t.Badge(ToneUnknown, "unknown"), append(o.noteLines(t.Unknown, why, w), o.ageText(v, "indexed "))
+		return t.Badge(ui.ToneUnknown, "unknown"), append(o.noteLines(t.Unknown, why, w), o.ageText(v, "indexed "))
 	}
 
 	if s.Coverage.Known {
@@ -215,7 +217,7 @@ func (o *overview) probeCard(v IndexView, w int) (right string, lines []string) 
 	t := o.st.theme
 	g := t.Glyphs
 	p := v.Probe
-	schema := t.Muted.Render("schema v" + itoa(p.Schema) + " " + g.Sep + " reads v" + itoa(p.Supported))
+	schema := t.Muted.Render("schema v" + strconv.Itoa(p.Schema) + " " + g.Sep + " reads v" + strconv.Itoa(p.Supported))
 
 	switch p.State {
 	case workspace.IndexAbsent:
@@ -225,14 +227,14 @@ func (o *overview) probeCard(v IndexView, w int) (right string, lines []string) 
 			t.Key.Render("b") + " " + t.Muted.Render("build the index"),
 		}
 	case workspace.IndexUnreadable:
-		right = t.Badge(ToneFailure, "unreadable")
-		lines = append([]string{t.Muted.Render("database unreadable")}, o.noteLines(t.Muted, errText(p.Err), w)...)
+		right = t.Badge(ui.ToneFailure, "unreadable")
+		lines = append([]string{t.Muted.Render("database unreadable")}, o.noteLines(t.Muted, ui.ErrText(p.Err), w)...)
 	case workspace.IndexNewer:
-		right, lines = t.Badge(ToneFailure, "newer schema"), []string{t.Muted.Render("from a newer seamark"), schema}
+		right, lines = t.Badge(ui.ToneFailure, "newer schema"), []string{t.Muted.Render("from a newer seamark"), schema}
 	case workspace.IndexOlder:
-		right, lines = t.Badge(ToneAttention, "needs upgrade"), []string{schema, t.Muted.Render("a build migrates it")}
+		right, lines = t.Badge(ui.ToneAttention, "needs upgrade"), []string{schema, t.Muted.Render("a build migrates it")}
 	default:
-		right, lines = t.Badge(ToneAttention, "not indexed"),
+		right, lines = t.Badge(ui.ToneAttention, "not indexed"),
 			[]string{t.Muted.Render("decisions only"), t.Muted.Render("no index run yet")}
 	}
 
@@ -273,7 +275,7 @@ func (o *overview) freshnessBadge(f string) string {
 	tone := ovFreshnessTone(f)
 
 	word := "unknown"
-	if tone != ToneUnknown {
+	if tone != ui.ToneUnknown {
 		word = f
 	}
 
@@ -282,14 +284,14 @@ func (o *overview) freshnessBadge(f string) string {
 
 // ovFreshnessTone maps a freshness word to a tone. Unknown is never
 // green.
-func ovFreshnessTone(f string) Tone {
+func ovFreshnessTone(f string) ui.Tone {
 	switch f {
 	case status.FreshCurrent:
-		return ToneSuccess
+		return ui.ToneSuccess
 	case status.FreshStale:
-		return ToneAttention
+		return ui.ToneAttention
 	default:
-		return ToneUnknown
+		return ui.ToneUnknown
 	}
 }
 
@@ -302,13 +304,13 @@ func (o *overview) healthGap() (s *status.Status, why string, unknown bool) {
 
 	switch {
 	case !sec.loaded && sec.err != nil:
-		return nil, "health unknown: " + errText(sec.err), true
+		return nil, "health unknown: " + ui.ErrText(sec.err), true
 	case !sec.loaded:
 		return nil, "", false
 	case sec.value.Status != nil:
 		return sec.value.Status, "", false
 	case sec.value.Probe.State == workspace.IndexReady && sec.value.StatusErr != nil:
-		return nil, "health unknown: " + errText(sec.value.StatusErr), true
+		return nil, "health unknown: " + ui.ErrText(sec.value.StatusErr), true
 	case sec.value.Probe.State == workspace.IndexReady:
 		return nil, "health unknown", true
 	default:
@@ -385,7 +387,7 @@ func (o *overview) learnCard(w int) ovCard {
 
 	if s, _, _ := o.healthGap(); s != nil {
 		reviews := o.reviewsText(s, "reviews ")
-		if width(reviews) > w {
+		if ui.Width(reviews) > w {
 			reviews = t.Unknown.Render("reviews mined: unknown")
 		}
 
@@ -399,7 +401,7 @@ func (o *overview) learnCard(w int) ovCard {
 	if !sec.loaded && sec.err != nil && !o.indexReadable() {
 		reason := "no readable index"
 		if !ledgerUnavailable(sec.err) {
-			reason = errText(sec.err)
+			reason = ui.ErrText(sec.err)
 		}
 
 		c.lines = append(c.lines, o.noteLines(t.Unknown, "proposals unknown: "+reason, w)...)
@@ -423,7 +425,7 @@ func (o *overview) pendingBadge() string {
 	case n == 0:
 		return t.Muted.Render("none pending")
 	case o.st.ledger.err != nil:
-		return t.Badge(ToneUnknown, "unknown")
+		return t.Badge(ui.ToneUnknown, "unknown")
 	default:
 		return ""
 	}
@@ -453,7 +455,7 @@ func (o *overview) distillText(s *status.Status) string {
 		return t.Unknown.Render("distill agent unresolved")
 	}
 
-	return t.Muted.Render("distill agent") + " " + t.Body.Render(oneLine(s.DistillClient))
+	return t.Muted.Render("distill agent") + " " + t.Body.Render(ui.OneLine(s.DistillClient))
 }
 
 // proposalsText renders the pending proposal count as a phrase. A failed
@@ -481,7 +483,7 @@ func (o *overview) proposalsText() string {
 	case sec.err != nil && ledgerUnavailable(sec.err):
 		return t.Unknown.Render("proposals unknown: no readable index")
 	case sec.err != nil:
-		return t.Unknown.Render("proposals unknown: " + errText(sec.err))
+		return t.Unknown.Render("proposals unknown: " + ui.ErrText(sec.err))
 	default:
 		return o.reading("proposals")
 	}
@@ -500,7 +502,7 @@ func (o *overview) guardCard(w int) ovCard {
 
 	switch {
 	case !sec.loaded && sec.err != nil:
-		c.lines = append([]string{gate}, o.noteLines(t.Unknown, "policy unknown: "+errText(sec.err), w)...)
+		c.lines = append([]string{gate}, o.noteLines(t.Unknown, "policy unknown: "+ui.ErrText(sec.err), w)...)
 
 		return c
 	case !sec.loaded:
@@ -513,15 +515,15 @@ func (o *overview) guardCard(w int) ovCard {
 
 	switch {
 	case p.Err != nil:
-		c.right = t.Badge(ToneFailure, "policy error")
+		c.right = t.Badge(ui.ToneFailure, "policy error")
 		c.lines = append([]string{gate, t.Unknown.Render("rule counts unknown")},
-			o.noteLines(t.Failure, errText(p.Err), w)...)
+			o.noteLines(t.Failure, ui.ErrText(p.Err), w)...)
 
 		return c
 	case p.Mode == "":
 		// A policy that loaded always has a mode, so an empty one means
 		// no policy summary arrived. Its counts are unknown, not zero.
-		c.right = t.Badge(ToneUnknown, "unknown")
+		c.right = t.Badge(ui.ToneUnknown, "unknown")
 		c.lines = []string{gate, t.Unknown.Render("policy unknown")}
 
 		return c
@@ -530,7 +532,7 @@ func (o *overview) guardCard(w int) ovCard {
 	deny, approval := t.Body.Render(ovNum(p.Deny)), t.Body.Render(ovNum(p.Approval))
 	sep := t.Muted.Render(" " + t.Glyphs.Sep + " ")
 
-	c.right = t.Muted.Render("mode") + " " + t.Title.Render(oneLine(p.Mode))
+	c.right = t.Muted.Render("mode") + " " + t.Title.Render(ui.OneLine(p.Mode))
 	c.lines = []string{
 		gate,
 		ovFit(w,
@@ -559,7 +561,7 @@ func (o *overview) gateClientsText(w int) string {
 	}
 
 	return ovFit(w,
-		t.Muted.Render("gate on")+" "+t.Body.Render(oneLine(strings.Join(names, ", "))),
+		t.Muted.Render("gate on")+" "+t.Body.Render(ui.OneLine(strings.Join(names, ", "))),
 		t.Muted.Render("gate on")+" "+t.Body.Render(ovPlural(len(names), "client", "clients")))
 }
 
@@ -592,7 +594,7 @@ func (o *overview) summaryLine(w int) string {
 		t.Heading.Render("GUARD") + " " + o.guardBrief(),
 	}
 
-	return truncate(" "+strings.Join(parts, "   "), w, t.Glyphs.Ellipsis)
+	return ui.Truncate(" "+strings.Join(parts, "   "), w, t.Glyphs.Ellipsis)
 }
 
 // indexBrief is the INDEX value of the summary line: the freshness glyph
@@ -603,9 +605,9 @@ func (o *overview) indexBrief() string {
 
 	switch {
 	case !sec.loaded && sec.err != nil:
-		return t.Badge(ToneFailure, "read failed")
+		return t.Badge(ui.ToneFailure, "read failed")
 	case !sec.loaded:
-		return t.Accent.Render(t.spinnerFrame(o.st.tick))
+		return t.Accent.Render(t.SpinnerFrame(o.st.tick))
 	}
 
 	v := sec.value
@@ -616,7 +618,7 @@ func (o *overview) indexBrief() string {
 	case v.Probe.State != workspace.IndexReady:
 		brief, _ = o.probeCard(v, 0)
 	case s == nil:
-		brief = t.Badge(ToneUnknown, "health unknown")
+		brief = t.Badge(ui.ToneUnknown, "health unknown")
 	case s.Coverage.Known:
 		tone := ovFreshnessTone(s.Freshness)
 		brief = t.ToneStyle(tone).Render(t.ToneGlyph(tone)) + " " +
@@ -639,13 +641,13 @@ func (o *overview) navBrief() string {
 
 	switch {
 	case !sec.loaded && sec.err == nil:
-		return t.Accent.Render(t.spinnerFrame(o.st.tick))
+		return t.Accent.Render(t.SpinnerFrame(o.st.tick))
 	case sec.loaded && sec.value.Status != nil:
 		return t.Body.Render(ovNum(sec.value.Status.Symbols)) + " " + t.Muted.Render("sym")
 	case sec.loaded && sec.value.Probe.State != workspace.IndexReady:
 		return t.Faint.Render("no index")
 	default:
-		return t.Badge(ToneUnknown, "unknown")
+		return t.Badge(ui.ToneUnknown, "unknown")
 	}
 }
 
@@ -655,7 +657,7 @@ func (o *overview) learnBrief() string {
 
 	brief := o.pendingBadge()
 	if brief == "" {
-		brief = t.Accent.Render(t.spinnerFrame(o.st.tick))
+		brief = t.Accent.Render(t.SpinnerFrame(o.st.tick))
 	}
 
 	if o.st.ledger.stale() {
@@ -672,14 +674,14 @@ func (o *overview) guardBrief() string {
 
 	switch {
 	case !sec.loaded && sec.err != nil:
-		return t.Badge(ToneUnknown, "unknown")
+		return t.Badge(ui.ToneUnknown, "unknown")
 	case !sec.loaded:
-		return t.Accent.Render(t.spinnerFrame(o.st.tick))
+		return t.Accent.Render(t.SpinnerFrame(o.st.tick))
 	case sec.value.Policy.Err != nil:
-		return t.Badge(ToneFailure, "policy error")
+		return t.Badge(ui.ToneFailure, "policy error")
 	case sec.value.Policy.Mode == "":
-		return t.Badge(ToneUnknown, "unknown")
+		return t.Badge(ui.ToneUnknown, "unknown")
 	default:
-		return t.Body.Render(oneLine(sec.value.Policy.Mode))
+		return t.Body.Render(ui.OneLine(sec.value.Policy.Mode))
 	}
 }

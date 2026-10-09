@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/doctor"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // docReport has one check of every doctor state. The fail check has a
@@ -138,7 +140,7 @@ func TestDoctorTabCountShowsProblemsOnly(t *testing.T) {
 	assert.NotContains(t, h2.view(), "4 Doctor 0", "a healthy report shows no count")
 
 	// Before the report arrives the count is unknown, not zero.
-	st := &state{svc: newFake(), theme: newTheme(false)}
+	st := &state{svc: newFake(), theme: ui.NewTheme(false)}
 	assert.Empty(t, newDoctor(st).tabCount())
 }
 
@@ -155,13 +157,13 @@ func TestDoctorTabMovesFocusBetweenPanes(t *testing.T) {
 	// With the detail focused, the movement keys scroll it and the
 	// selection stays.
 	h.press("down")
-	assert.Equal(t, 0, d.list.cursor)
+	assert.Equal(t, 0, d.list.Cursor)
 
 	h.press("tab")
 	assert.False(t, d.focusDetail)
 
 	h.press("down")
-	assert.Equal(t, 1, d.list.cursor)
+	assert.Equal(t, 1, d.list.Cursor)
 
 	// The policy check has no in-app workflow, so enter focuses its detail.
 	h.press("end", "enter")
@@ -172,7 +174,7 @@ func TestDoctorTabMovesFocusBetweenPanes(t *testing.T) {
 }
 
 func TestDoctorNarrowOpensTheDetailFullScreen(t *testing.T) {
-	for _, size := range [][2]int{{80, 24}, {minWidth, minHeight}} {
+	for _, size := range [][2]int{{80, 24}, {ui.MinWidth, ui.MinHeight}} {
 		w, hgt := size[0], size[1]
 		h, _ := docOpen(t, docReport(), w, hgt)
 
@@ -193,14 +195,14 @@ func TestDoctorNarrowOpensTheDetailFullScreen(t *testing.T) {
 
 		h.press("esc")
 		assert.Contains(t, h.view(), "Doctor checks", "size %v: esc goes back to the list", size)
-		assert.Equal(t, 3, docView(h).list.cursor, "size %v: the selection stays", size)
+		assert.Equal(t, 3, docView(h).list.Cursor, "size %v: the selection stays", size)
 	}
 }
 
 func TestDoctorScrollsALongList(t *testing.T) {
 	r := &doctor.Report{}
 	for i := range 30 {
-		r.Checks = append(r.Checks, doctor.Check{Name: "check" + itoa(i+1), State: doctor.StateOK, Detail: "fine"})
+		r.Checks = append(r.Checks, doctor.Check{Name: "check" + strconv.Itoa(i+1), State: doctor.StateOK, Detail: "fine"})
 	}
 
 	h, _ := docOpen(t, r, 80, 24)
@@ -221,11 +223,11 @@ func TestDoctorLongDetailScrolls(t *testing.T) {
 	long := strings.Repeat("The check reads a file and reports what it found. ", 20)
 	r := &doctor.Report{Checks: []doctor.Check{{Name: "gitignore", State: doctor.StateWarn, Detail: long, Fix: "add the carve-outs"}}}
 
-	h, _ := docOpen(t, r, minWidth, minHeight)
+	h, _ := docOpen(t, r, ui.MinWidth, ui.MinHeight)
 	h.press("enter")
 
 	frame := h.view()
-	assertFrame(t, frame, minWidth, minHeight)
+	assertFrame(t, frame, ui.MinWidth, ui.MinHeight)
 	assert.Contains(t, frame, "↓ more · pgdn")
 
 	h.press("pgdown", "pgdown", "pgdown", "pgdown", "pgdown")
@@ -236,7 +238,7 @@ func TestDoctorLongDetailScrolls(t *testing.T) {
 }
 
 func TestDoctorStatesAreNeverHealthyWithoutAReport(t *testing.T) {
-	st := &state{svc: newFake(), theme: newTheme(false), width: 120, height: 40}
+	st := &state{svc: newFake(), theme: ui.NewTheme(false), width: 120, height: 40}
 	d := newDoctor(st)
 
 	frame := ansi.Strip(d.view(120, 35))
@@ -264,7 +266,7 @@ func TestDoctorStatesAreNeverHealthyWithoutAReport(t *testing.T) {
 }
 
 func TestDoctorStaleReportKeepsTheChecks(t *testing.T) {
-	st := &state{svc: newFake(), theme: newTheme(false), width: 120, height: 40}
+	st := &state{svc: newFake(), theme: ui.NewTheme(false), width: 120, height: 40}
 	d := newDoctor(st)
 
 	st.doctor.set(docReport(), nil, time.Now())
@@ -294,7 +296,7 @@ func TestDoctorRendersControlSequencesInert(t *testing.T) {
 }
 
 func TestDoctorFramesFitAtEverySize(t *testing.T) {
-	for _, size := range [][2]int{{120, 40}, {200, 50}, {100, 30}, {80, 24}, {minWidth, minHeight}} {
+	for _, size := range [][2]int{{120, 40}, {200, 50}, {100, 30}, {80, 24}, {ui.MinWidth, ui.MinHeight}} {
 		w, hgt := size[0], size[1]
 		h, _ := docOpen(t, docReport(), w, hgt)
 
@@ -329,9 +331,9 @@ func TestDoctorOpenIntentSelectsACheck(t *testing.T) {
 	h := newHarness(t, f, 120, 40)
 	h.send(navigateMsg{dest: destDoctor, intent: "check:policy"})
 
-	assert.Equal(t, 3, docView(h).list.cursor)
+	assert.Equal(t, 3, docView(h).list.Cursor)
 	assert.Contains(t, h.view(), "╭─ policy ")
 
 	h.send(navigateMsg{dest: destDoctor, intent: "check:unknown-name"})
-	assert.Equal(t, 3, docView(h).list.cursor, "an unknown name keeps the selection")
+	assert.Equal(t, 3, docView(h).list.Cursor, "an unknown name keeps the selection")
 }

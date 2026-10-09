@@ -14,6 +14,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -71,7 +72,7 @@ func readyIndex() IndexView {
 // stale, and a first failed load shows its own error.
 func TestStatsReloadFailureKeepsTheSnapshot(t *testing.T) {
 	f := newFake()
-	st := &state{svc: f, theme: newTheme(false)}
+	st := &state{svc: f, theme: ui.NewTheme(false)}
 
 	// A first load has nothing to keep: the failure is the value.
 	f.stats = lessonstats.Snapshot{LogErr: errors.New("permission denied")}
@@ -124,7 +125,7 @@ func TestStatsStaleNoteThroughTheShell(t *testing.T) {
 // health and marks it stale; a new probe state replaces it.
 func TestIndexReloadFailureKeepsTheSnapshot(t *testing.T) {
 	f := newFake()
-	st := &state{svc: f, theme: newTheme(false)}
+	st := &state{svc: f, theme: ui.NewTheme(false)}
 
 	failed := readyIndex()
 	failed.Status, failed.StatusErr = nil, errors.New("database is locked")

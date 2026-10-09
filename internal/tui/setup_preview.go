@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/skills"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The review step shows the plan: every affected path with its change
@@ -182,7 +184,7 @@ func setupPlural(n int, one, many string) string {
 		return "1 " + one
 	}
 
-	return itoa(n) + " " + many
+	return strconv.Itoa(n) + " " + many
 }
 
 // setupCountLabel names the changes of a plan for the Plan box border,
@@ -234,7 +236,7 @@ func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 		}
 
 		return wz.plan(wz.setups)
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, ui.Nav.Back):
 		if !wz.st.wide() && wz.pathOpen {
 			wz.pathOpen = false
 
@@ -256,13 +258,13 @@ func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 	entries := setupEntries(wz.preview)
 
 	if !wz.st.wide() && wz.pathOpen {
-		wz.pager.key(msg)
+		wz.pager.Key(msg)
 
 		return nil
 	}
 
 	if wz.st.wide() {
-		if key.Matches(msg, nkeys.Next, nkeys.Prev) {
+		if key.Matches(msg, ui.Nav.Next, ui.Nav.Prev) {
 			wz.notesFocus = !wz.notesFocus
 
 			return nil
@@ -276,17 +278,17 @@ func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	switch {
-	case key.Matches(msg, nkeys.Up):
-		wz.paths.move(-1, len(entries))
-	case key.Matches(msg, nkeys.Down):
-		wz.paths.move(1, len(entries))
-	case key.Matches(msg, nkeys.Top):
-		wz.paths.cursor = 0
-	case key.Matches(msg, nkeys.Bottom):
-		wz.paths.cursor = max(0, len(entries)-1)
-	case key.Matches(msg, nkeys.PageUp, nkeys.PageDown):
+	case key.Matches(msg, ui.Nav.Up):
+		wz.paths.Move(-1, len(entries))
+	case key.Matches(msg, ui.Nav.Down):
+		wz.paths.Move(1, len(entries))
+	case key.Matches(msg, ui.Nav.Top):
+		wz.paths.Cursor = 0
+	case key.Matches(msg, ui.Nav.Bottom):
+		wz.paths.Cursor = max(0, len(entries)-1)
+	case key.Matches(msg, ui.Nav.PageUp, ui.Nav.PageDown):
 		wz.scrollPlan(msg)
-	case key.Matches(msg, nkeys.Enter):
+	case key.Matches(msg, ui.Nav.Enter):
 		if !wz.st.wide() && len(entries) > 0 {
 			wz.pathOpen = true
 		}
@@ -299,13 +301,13 @@ func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 // the narrow list has no diff box, so the key scrolls the plan notes.
 func (wz *setupWizard) scrollPlan(msg tea.KeyMsg) {
 	if wz.st.wide() {
-		wz.pager.key(msg)
+		wz.pager.Key(msg)
 
 		return
 	}
 
 	step := max(1, (wz.st.height-chromeHeight)/2)
-	if key.Matches(msg, nkeys.PageUp) {
+	if key.Matches(msg, ui.Nav.PageUp) {
 		step = -step
 	}
 
@@ -319,15 +321,15 @@ func (wz *setupWizard) scrollNotes(msg tea.KeyMsg) {
 	page := max(1, (wz.st.height-chromeHeight)/2)
 
 	switch {
-	case key.Matches(msg, nkeys.Up):
+	case key.Matches(msg, ui.Nav.Up):
 		wz.planOff--
-	case key.Matches(msg, nkeys.Down):
+	case key.Matches(msg, ui.Nav.Down):
 		wz.planOff++
-	case key.Matches(msg, nkeys.PageUp):
+	case key.Matches(msg, ui.Nav.PageUp):
 		wz.planOff -= page
-	case key.Matches(msg, nkeys.PageDown):
+	case key.Matches(msg, ui.Nav.PageDown):
 		wz.planOff += page
-	case key.Matches(msg, nkeys.Top):
+	case key.Matches(msg, ui.Nav.Top):
 		wz.planOff = 0
 	}
 
@@ -342,11 +344,11 @@ func (wz *setupWizard) applyKey() tea.Cmd {
 	}
 
 	if reason := setupBlockReason(wz.preview); reason != "" {
-		return toast(ToneAttention, "Apply is blocked. "+reason)
+		return toast(ui.ToneAttention, "Apply is blocked. "+reason)
 	}
 
 	if !wz.canApply() {
-		return toast(ToneNeutral, "Nothing to apply: every selected item is already current.")
+		return toast(ui.ToneNeutral, "Nothing to apply: every selected item is already current.")
 	}
 
 	return wz.apply()
@@ -360,7 +362,7 @@ func (wz *setupWizard) previewKeys() []key.Binding {
 	plan.SetEnabled(!wz.preparing && (wz.planErr != nil || setupBlocked(wz.preview)))
 
 	back := setupKeys.Back
-	cancel := withHelp(nkeys.Back, "esc", "cancel")
+	cancel := ui.WithHelp(ui.Nav.Back, "esc", "cancel")
 
 	if wz.preparing || wz.preview == nil {
 		return []key.Binding{plan, back, cancel}
@@ -368,13 +370,13 @@ func (wz *setupWizard) previewKeys() []key.Binding {
 
 	switch {
 	case wz.st.wide() && wz.notesFocus:
-		return []key.Binding{withHelp(nkeys.Down, "↑↓", "scroll notes"), withHelp(nkeys.Next, "tab", "files"),
+		return []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "scroll notes"), ui.WithHelp(ui.Nav.Next, "tab", "files"),
 			apply, back, cancel, plan}
 	case wz.st.wide():
-		return []key.Binding{withHelp(nkeys.Down, "↑↓", "file"), withHelp(nkeys.PageDown, "pgup/pgdn", "scroll"),
-			apply, back, withHelp(nkeys.Next, "tab", "notes"), cancel, plan}
+		return []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "file"), ui.WithHelp(ui.Nav.PageDown, "pgup/pgdn", "scroll"),
+			apply, back, ui.WithHelp(ui.Nav.Next, "tab", "notes"), cancel, plan}
 	case wz.pathOpen:
-		return []key.Binding{withHelp(nkeys.Down, "↑↓", "scroll"), withHelp(nkeys.Back, "esc", "files"),
+		return []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "scroll"), ui.WithHelp(ui.Nav.Back, "esc", "files"),
 			apply, back, plan}
 	default:
 		shows := "details"
@@ -382,7 +384,7 @@ func (wz *setupWizard) previewKeys() []key.Binding {
 			shows = "diff"
 		}
 
-		return []key.Binding{withHelp(nkeys.Down, "↑↓", "file"), withHelp(nkeys.Enter, "enter", shows),
+		return []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "file"), ui.WithHelp(ui.Nav.Enter, "enter", shows),
 			apply, back, cancel, plan}
 	}
 }
@@ -391,11 +393,11 @@ func (wz *setupWizard) previewKeys() []key.Binding {
 // diff. A write without a preview or with an unreadable file has none.
 func (wz *setupWizard) selectedHasDiff() bool {
 	entries := setupEntries(wz.preview)
-	if wz.paths.cursor < 0 || wz.paths.cursor >= len(entries) {
+	if wz.paths.Cursor < 0 || wz.paths.Cursor >= len(entries) {
 		return false
 	}
 
-	e := entries[wz.paths.cursor]
+	e := entries[wz.paths.Cursor]
 
 	return e.kind == setupEntryWrite && e.write != nil && e.write.Err == nil
 }
@@ -403,7 +405,7 @@ func (wz *setupWizard) selectedHasDiff() bool {
 // previewView renders the Plan box and the diff box side by side in a
 // wide terminal, and one of them at a time in a narrow one.
 func (wz *setupWizard) previewView(w, h int) string {
-	wide := wz.st.wide() && w >= wideWidth
+	wide := wz.st.wide() && w >= ui.WideWidth
 
 	// A plan without a setup plan cannot come from PlanSetup; the box
 	// then says that no plan exists instead of an empty list.
@@ -417,13 +419,13 @@ func (wz *setupWizard) previewView(w, h int) string {
 		return wz.planBox(entries, w, h, true, wide)
 	}
 
-	wz.paths.clamp(len(entries), 0)
-	sel := entries[wz.paths.cursor]
+	wz.paths.Clamp(len(entries), 0)
+	sel := entries[wz.paths.Cursor]
 
 	if wide {
 		leftW := max(34, setupSplit(w, 42))
 
-		return hjoin(1, wz.planBox(entries, leftW, h, true, true), wz.entryBox(sel, w-leftW-1, h, false))
+		return ui.Hjoin(1, wz.planBox(entries, leftW, h, true, true), wz.entryBox(sel, w-leftW-1, h, false))
 	}
 
 	if wz.pathOpen {
@@ -438,19 +440,19 @@ func (wz *setupWizard) previewView(w, h int) string {
 // reads.
 func (wz *setupWizard) planStateBox(w, h int) string {
 	t := wz.st.theme
-	o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Plan", true)}
+	o := ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Plan", true)}
 
 	if wz.preparing {
-		return integBoxed(t, o, ToneNeutral, "Planning the setup"+t.Glyphs.Ellipsis,
-			"Seamark reads the native configuration of "+oneLine(wz.client.Name)+
+		return integBoxed(t, o, ui.ToneNeutral, "Planning the setup"+t.Glyphs.Ellipsis,
+			"Seamark reads the native configuration of "+ui.OneLine(wz.client.Name)+
 				" and composes every change. Nothing is written.",
 			t.Muted.Render("Press ")+t.Key.Render("n")+t.Muted.Render(" to go back to the choices."))
 	}
 
 	err := wz.planErr
 	if err == nil {
-		return integBoxed(t, o, ToneUnknown, "No plan", "The planner returned no plan. Nothing was written.",
-			t.hints([]key.Binding{withHelp(setupKeys.Plan, "p", "plan again"), withHelp(setupKeys.Back, "n", "back")}))
+		return integBoxed(t, o, ui.ToneUnknown, "No plan", "The planner returned no plan. Nothing was written.",
+			t.Hints([]key.Binding{ui.WithHelp(setupKeys.Plan, "p", "plan again"), ui.WithHelp(setupKeys.Back, "n", "back")}))
 	}
 
 	title := "Could not plan the setup"
@@ -466,11 +468,11 @@ func (wz *setupWizard) planStateBox(w, h int) string {
 		next = "Press p to plan again. Nothing was written."
 	}
 
-	inner := min(boxInner(w)-4, 72)
-	body := t.Failure.Render(wrap(errText(err), inner)) + "\n\n" + t.Muted.Render(wrap(next, inner))
+	inner := min(ui.BoxInner(w)-4, 72)
+	body := t.Failure.Render(ui.Wrap(ui.ErrText(err), inner)) + "\n\n" + t.Muted.Render(ui.Wrap(next, inner))
 
-	return integBoxed(t, o, ToneFailure, title, "", body+"\n\n"+t.hints([]key.Binding{
-		withHelp(setupKeys.Plan, "p", "plan again"), withHelp(setupKeys.Back, "n", "back to choices")}))
+	return integBoxed(t, o, ui.ToneFailure, title, "", body+"\n\n"+t.Hints([]key.Binding{
+		ui.WithHelp(setupKeys.Plan, "p", "plan again"), ui.WithHelp(setupKeys.Back, "n", "back to choices")}))
 }
 
 // planBox renders the path rows, then what the plan will and will not
@@ -478,10 +480,10 @@ func (wz *setupWizard) planStateBox(w, h int) string {
 func (wz *setupWizard) planBox(entries []setupEntry, w, h int, focused, wide bool) string {
 	t := wz.st.theme
 
-	return t.box(boxOpts{
+	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Plan", true),
 		Right: t.Muted.Render(setupCountLabel(wz.preview, t.Glyphs.Sep)),
-		Lines: wz.planLines(entries, boxInner(w), boxRows(h), focused, wide),
+		Lines: wz.planLines(entries, ui.BoxInner(w), ui.BoxRows(h), focused, wide),
 	})
 }
 
@@ -536,10 +538,10 @@ func (wz *setupWizard) clipNotes(body []string, avail, w int, wide bool) []strin
 		how = "tab to scroll"
 	}
 
-	note := t.Glyphs.Ellipsis + " notes " + t.positionNote(wz.planOff+1, wz.planOff+shown, len(body)) + " " +
+	note := t.Glyphs.Ellipsis + " notes " + t.PositionNote(wz.planOff+1, wz.planOff+shown, len(body)) + " " +
 		t.Glyphs.Sep + " " + how
 
-	return append(slices.Clone(body[wz.planOff:wz.planOff+shown]), t.Faint.Render(truncate(note, w, t.Glyphs.Ellipsis)))
+	return append(slices.Clone(body[wz.planOff:wz.planOff+shown]), t.Faint.Render(ui.Truncate(note, w, t.Glyphs.Ellipsis)))
 }
 
 // pathRows renders a window of the path rows around the cursor. A list
@@ -556,16 +558,16 @@ func (wz *setupWizard) pathRows(entries []setupEntry, w, window int, focused boo
 		shown = window - 1
 	}
 
-	wz.paths.clamp(len(entries), shown)
+	wz.paths.Clamp(len(entries), shown)
 
 	var lines []string
 
-	for i := wz.paths.offset; i < min(len(entries), wz.paths.offset+shown); i++ {
-		lines = append(lines, wz.pathRow(entries[i], i == wz.paths.cursor, w, focused))
+	for i := wz.paths.Offset; i < min(len(entries), wz.paths.Offset+shown); i++ {
+		lines = append(lines, wz.pathRow(entries[i], i == wz.paths.Cursor, w, focused))
 	}
 
 	if shown < len(entries) {
-		lines = append(lines, t.scrollNote(wz.paths.offset, shown, len(entries), w))
+		lines = append(lines, t.ScrollNote(wz.paths.Offset, shown, len(entries), w))
 	}
 
 	return lines
@@ -593,12 +595,12 @@ func (wz *setupWizard) pathRow(e setupEntry, current bool, w int, focused bool) 
 	}
 
 	right += " "
-	room := max(4, w-width(cursor)-2-width(right)-1)
-	left := cursor + mark + " " + style.Render(truncateLeft(oneLine(e.path), room, t.Glyphs.Ellipsis))
+	room := max(4, w-ui.Width(cursor)-2-ui.Width(right)-1)
+	left := cursor + mark + " " + style.Render(ui.TruncateLeft(ui.OneLine(e.path), room, t.Glyphs.Ellipsis))
 
-	row := spread(left, right, w)
+	row := ui.Spread(left, right, w)
 	if current && focused {
-		row = t.highlight(row, w, bgSel)
+		row = t.Highlight(row, w, ui.BgSel)
 	}
 
 	return row
@@ -606,7 +608,7 @@ func (wz *setupWizard) pathRow(e setupEntry, current bool, w int, focused bool) 
 
 // setupEntryMarks returns the change mark of a path row and the label
 // at its right.
-func setupEntryMarks(t *Theme, e setupEntry) (mark, right string) {
+func setupEntryMarks(t *ui.Theme, e setupEntry) (mark, right string) {
 	g := t.Glyphs
 
 	switch e.kind {
@@ -643,15 +645,15 @@ func setupEntryMarks(t *Theme, e setupEntry) (mark, right string) {
 
 // setupLineCounts renders "+11 −1" for a planned write. A side without
 // a change is left out, as in the design.
-func setupLineCounts(t *Theme, wp *integration.WritePreview) string {
+func setupLineCounts(t *ui.Theme, wp *integration.WritePreview) string {
 	var parts []string
 
 	if wp.Added > 0 {
-		parts = append(parts, t.Success.Render(t.Glyphs.Add+itoa(wp.Added)))
+		parts = append(parts, t.Success.Render(t.Glyphs.Add+strconv.Itoa(wp.Added)))
 	}
 
 	if wp.Removed > 0 {
-		parts = append(parts, t.Failure.Render(t.Glyphs.Del+itoa(wp.Removed)))
+		parts = append(parts, t.Failure.Render(t.Glyphs.Del+strconv.Itoa(wp.Removed)))
 	}
 
 	if len(parts) == 0 {
@@ -719,16 +721,16 @@ func (wz *setupWizard) willLines(entries []setupEntry, w int) []string {
 				sign = added
 			}
 
-			text := oneLine(e.detail)
+			text := ui.OneLine(e.detail)
 			if text == "" {
-				text = "write " + oneLine(e.path)
+				text = "write " + ui.OneLine(e.path)
 			}
 
 			lines = append(lines, integHanging(sign, t.Body, text, w)...)
 		case e.kind == setupEntrySkill && e.skill.State == skills.Absent:
-			lines = append(lines, integHanging(added, t.Body, "install the "+oneLine(e.skill.Name)+" skill", w)...)
+			lines = append(lines, integHanging(added, t.Body, "install the "+ui.OneLine(e.skill.Name)+" skill", w)...)
 		case e.kind == setupEntrySkill && e.skill.State == skills.Stale:
-			lines = append(lines, integHanging(changed, t.Body, "refresh the "+oneLine(e.skill.Name)+" skill", w)...)
+			lines = append(lines, integHanging(changed, t.Body, "refresh the "+ui.OneLine(e.skill.Name)+" skill", w)...)
 		}
 	}
 
@@ -769,7 +771,7 @@ func (wz *setupWizard) wontLines(w int) []string {
 
 	for _, c := range wz.clients {
 		if c.ID != wz.client.ID {
-			others = append(others, oneLine(c.Name))
+			others = append(others, ui.OneLine(c.Name))
 		}
 	}
 
@@ -790,7 +792,7 @@ func (wz *setupWizard) wontLines(w int) []string {
 // each: the mode, the file and who manages it. The list covers unmanaged
 // hooks too, because one enforcing hook blocks whatever the managed hook
 // says. The wizard plans one client, so the line needs no client name.
-func setupGateHookLines(t *Theme, hooks []integration.GateHook, w int) []string {
+func setupGateHookLines(t *ui.Theme, hooks []integration.GateHook, w int) []string {
 	var lines []string
 
 	for _, g := range hooks {
@@ -799,9 +801,9 @@ func setupGateHookLines(t *Theme, hooks []integration.GateHook, w int) []string 
 			owner = " " + t.Glyphs.Sep + " not managed by setup"
 		}
 
-		lead := t.Title.Render(oneLine(g.Mode)) + " "
-		room := max(4, w-width(lead)-width(owner))
-		lines = append(lines, truncate(lead+t.Code.Render(truncateLeft(oneLine(g.Path), room, t.Glyphs.Ellipsis))+
+		lead := t.Title.Render(ui.OneLine(g.Mode)) + " "
+		room := max(4, w-ui.Width(lead)-ui.Width(owner))
+		lines = append(lines, ui.Truncate(lead+t.Code.Render(ui.TruncateLeft(ui.OneLine(g.Path), room, t.Glyphs.Ellipsis))+
 			t.Muted.Render(owner), w, t.Glyphs.Ellipsis))
 	}
 
@@ -839,19 +841,19 @@ func (wz *setupWizard) planFindings(w int) []string {
 // the visible range.
 func (wz *setupWizard) entryBox(e setupEntry, w, h int, focused bool) string {
 	t := wz.st.theme
-	inner, rows := boxInner(w), boxRows(h)
+	inner, rows := ui.BoxInner(w), ui.BoxRows(h)
 
-	lines := wz.pager.lines(itoa(int(e.kind))+":"+e.path, wz.entryLines(e, inner), inner, rows)
+	lines := wz.pager.Lines(strconv.Itoa(int(e.kind))+":"+e.path, wz.entryLines(e, inner), inner, rows)
 
-	return t.box(boxOpts{
-		W: w, H: h, Focus: focused, Foot: wz.pager.span(t), Right: setupPathState(t, e), Lines: lines,
-		Title: t.Title.Render(truncateLeft(oneLine(e.path), max(8, inner-14), t.Glyphs.Ellipsis)),
+	return t.Box(ui.BoxOpts{
+		W: w, H: h, Focus: focused, Foot: wz.pager.Span(t), Right: setupPathState(t, e), Lines: lines,
+		Title: t.Title.Render(ui.TruncateLeft(ui.OneLine(e.path), max(8, inner-14), t.Glyphs.Ellipsis)),
 	})
 }
 
 // setupPathState returns the state word of a path for the diff box
 // border: "new", "modified", "kept" or the problem.
-func setupPathState(t *Theme, e setupEntry) string {
+func setupPathState(t *ui.Theme, e setupEntry) string {
 	switch e.kind {
 	case setupEntryWrite:
 		wp := e.write
@@ -903,7 +905,7 @@ func (wz *setupWizard) writeLines(e setupEntry, w int) []string {
 
 	meta := "Used by " + integConsumers(wz.clients, e.consumers)
 	if e.detail != "" {
-		meta += " " + t.Glyphs.Sep + " " + oneLine(e.detail)
+		meta += " " + t.Glyphs.Sep + " " + ui.OneLine(e.detail)
 	}
 
 	lines := integLines(t.Muted, meta, w)
@@ -915,7 +917,7 @@ func (wz *setupWizard) writeLines(e setupEntry, w int) []string {
 			"No diff is available for this write.", w)...)
 	case wp.Err != nil:
 		lines = append(lines, "")
-		lines = append(lines, integHanging(fail, t.Failure, "The current file cannot be read: "+errText(wp.Err), w)...)
+		lines = append(lines, integHanging(fail, t.Failure, "The current file cannot be read: "+ui.ErrText(wp.Err), w)...)
 
 		return append(lines, integLines(t.Muted, "Apply refuses this plan. Fix the file, then press p to plan again.", w)...)
 	}
@@ -937,7 +939,7 @@ func (wz *setupWizard) keepLines(e setupEntry, w int) []string {
 	lines = append(lines, integLabeled(t, "Used by", 9, integConsumers(wz.clients, e.consumers), t.Body, w)...)
 
 	if e.detail != "" {
-		lines = append(lines, integLabeled(t, "Why", 9, oneLine(e.detail), t.Body, w)...)
+		lines = append(lines, integLabeled(t, "Why", 9, ui.OneLine(e.detail), t.Body, w)...)
 	}
 
 	return lines
@@ -953,10 +955,10 @@ func (wz *setupWizard) skillLines(e setupEntry, w int) []string {
 		skills.Absent:  "install: the directory is new",
 		skills.Stale:   "refresh: rewrites the shipped files and keeps extra files",
 		skills.Current: "kept: the managed copy is current",
-		skills.Foreign: "kept: the directory is not managed by Seamark (" + oneLine(entry.Reason) + ")",
+		skills.Foreign: "kept: the directory is not managed by Seamark (" + ui.OneLine(entry.Reason) + ")",
 	}[entry.State]
 
-	lines := integLabeled(t, "Skill", 9, oneLine(entry.Name), t.Body, w)
+	lines := integLabeled(t, "Skill", 9, ui.OneLine(entry.Name), t.Body, w)
 	lines = append(lines, integLabeled(t, "Change", 9, change, t.Body, w)...)
 	lines = append(lines, integLabeled(t, "Read by", 9, integConsumers(wz.clients, e.consumers), t.Body, w)...)
 
@@ -971,10 +973,10 @@ func (wz *setupWizard) skillLines(e setupEntry, w int) []string {
 // apply claims the mutation slot and applies the reviewed plan. A busy
 // slot keeps the review; nothing starts.
 func (wz *setupWizard) apply() tea.Cmd {
-	name := oneLine(wz.client.Name)
+	name := ui.OneLine(wz.client.Name)
 
 	if !wz.st.begin("Applying setup for " + name) {
-		return toast(ToneAttention, "Another operation is running: "+wz.st.mutation)
+		return toast(ui.ToneAttention, "Another operation is running: "+wz.st.mutation)
 	}
 
 	seq := wz.seq.start()

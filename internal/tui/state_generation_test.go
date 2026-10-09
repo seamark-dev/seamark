@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the shared state helpers: the generation that drops
@@ -82,9 +84,9 @@ func TestStateWideFollowsTheTerminalWidth(t *testing.T) {
 		wide  bool
 	}{
 		{width: 0, wide: false},
-		{width: minWidth, wide: false},
-		{width: wideWidth - 1, wide: false},
-		{width: wideWidth, wide: true},
+		{width: ui.MinWidth, wide: false},
+		{width: ui.WideWidth - 1, wide: false},
+		{width: ui.WideWidth, wide: true},
 		{width: 200, wide: true},
 	} {
 		st := &state{width: tc.width}

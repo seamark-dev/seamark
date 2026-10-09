@@ -14,6 +14,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/learning"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests in this file cover the start, the progress and the stop of
@@ -658,7 +659,7 @@ func TestDistillHostileTextStaysInert(t *testing.T) {
 func TestDistillFramesAreASCIIOnly(t *testing.T) {
 	f := distFake(distFullPreview(), distNoRun(t))
 
-	h := &harness{t: t, m: newModel(f, newTheme(true))}
+	h := &harness{t: t, m: newModel(f, ui.NewTheme(true))}
 	h.run(h.m.Init())
 	h.send(teaSize(120, 40))
 	h.send(navigateMsg{dest: destLessons, intent: "distill"})

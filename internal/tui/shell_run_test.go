@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of the run slot of the shell. One stoppable run holds the
@@ -111,7 +113,7 @@ func TestShellNoticeLeavesOutTheHintOnTheRunHome(t *testing.T) {
 	row := noticeRow(h)
 	assert.Contains(t, row, "Distilling · 3 of 10 done · internal/api · 2m 14s")
 	assert.NotContains(t, row, "›", "the Run view is the run home, so the row names no way to it")
-	assert.LessOrEqual(t, width(row), 120)
+	assert.LessOrEqual(t, ui.Width(row), 120)
 
 	// Every other Lessons sub-view keeps the hint.
 	for _, sub := range []string{"p", "s", "e"} {
@@ -164,12 +166,12 @@ func TestShellToastSharesTheRowWithTheRun(t *testing.T) {
 		h := newHarness(t, newFake(), w, 24)
 		claimDistillRun(t, h)
 
-		h.send(toastMsg{tone: ToneSuccess, text: "Saved."})
+		h.send(toastMsg{tone: ui.ToneSuccess, text: "Saved."})
 
 		row := noticeRow(h)
 		assert.Contains(t, row, "✓ Saved.", "width %d: the message stays", w)
 		assert.Contains(t, row, "Distilling · 3 of 10 done", "width %d: the run stays visible", w)
-		assert.LessOrEqual(t, width(row), w)
+		assert.LessOrEqual(t, ui.Width(row), w)
 	}
 }
 
@@ -181,7 +183,7 @@ func TestShellOtherWorkKeepsItsNotice(t *testing.T) {
 	assert.Contains(t, row, "Building the index")
 	assert.NotContains(t, row, "›", "work that cannot stop has no run detail")
 
-	h.send(toastMsg{tone: ToneNeutral, text: "Reading the current state."})
+	h.send(toastMsg{tone: ui.ToneNeutral, text: "Reading the current state."})
 	assert.NotContains(t, noticeRow(h), "Building the index", "a message takes the row, as before")
 }
 
@@ -258,7 +260,7 @@ func TestShellExitDeadlineBoundsTheWait(t *testing.T) {
 }
 
 func TestCrampedQuitNamesTheStop(t *testing.T) {
-	w, hgt := minWidth-10, minHeight-2
+	w, hgt := ui.MinWidth-10, ui.MinHeight-2
 	h := newHarness(t, newFake(), w, hgt)
 	ctx := claimDistillRun(t, h)
 
@@ -293,7 +295,7 @@ func TestShellFooterNamesCtrlCWhileAScreenCaptures(t *testing.T) {
 // the quit question ignores q, so its footer names ctrl+c, and a second
 // ctrl+c answers yes.
 func TestShellQuitDialogFooterNamesOnlyKeysThatAct(t *testing.T) {
-	for _, w := range []int{minWidth, 120} {
+	for _, w := range []int{ui.MinWidth, 120} {
 		h := newHarness(t, newFake(), w, 32)
 		ctx := claimDistillRun(t, h)
 
@@ -354,13 +356,13 @@ func TestShellRunElapsed(t *testing.T) {
 }
 
 func TestShellRunNoticeAndStopDialogStayASCII(t *testing.T) {
-	for _, size := range [][2]int{{120, 40}, {60, 20}, {minWidth - 10, minHeight - 2}} {
-		h := &harness{t: t, m: newModel(newFake(), newTheme(true))}
+	for _, size := range [][2]int{{120, 40}, {60, 20}, {ui.MinWidth - 10, ui.MinHeight - 2}} {
+		h := &harness{t: t, m: newModel(newFake(), ui.NewTheme(true))}
 		h.run(h.m.Init())
 		h.resize(size[0], size[1])
 		claimDistillRun(t, h)
 
-		h.send(toastMsg{tone: ToneSuccess, text: "Saved."})
+		h.send(toastMsg{tone: ui.ToneSuccess, text: "Saved."})
 		h.press("q")
 
 		frames := []string{h.view()}

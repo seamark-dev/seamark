@@ -15,6 +15,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
 	"github.com/seamark-dev/seamark/internal/skills"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // setupPlanFor returns a scripted preview for the Codex requests of a
@@ -545,8 +546,8 @@ func TestSetupFailureListsFailedAndNotAttempted(t *testing.T) {
 	assert.Contains(t, setupBoxText(frame, 0, 120), "does not roll back")
 	assert.Contains(t, frame, "● Apply", "a failed apply does not mark the last step done")
 
-	table := ansi.Strip(setupOpTable(newTheme(false), f.clients, body.result.res.Ops, 90) + "\n" +
-		setupOpTable(newTheme(false), f.clients, body.result.res.Skills, 90))
+	table := ansi.Strip(setupOpTable(ui.NewTheme(false), f.clients, body.result.res.Ops, 90) + "\n" +
+		setupOpTable(ui.NewTheme(false), f.clients, body.result.res.Skills, 90))
 	assert.NotEmpty(t, setupLineWith(table, "✓ file", ".codex/config.toml", "updated"))
 	assert.NotEmpty(t, setupLineWith(table, "! file", ".codex/hooks.json", "failed"))
 	assert.Contains(t, table, "the file is read-only")
@@ -590,7 +591,7 @@ func TestSetupNarrowReviewOpensTheDiffAndKeepsItOnResize(t *testing.T) {
 	h.resize(120, 32)
 	frame = h.view()
 	assertFrame(t, frame, 120, 32)
-	assert.Equal(t, 1, setupScreen(h).wizard.paths.cursor, "a resize keeps the selected path")
+	assert.Equal(t, 1, setupScreen(h).wizard.paths.Cursor, "a resize keeps the selected path")
 	assert.Contains(t, frame, "{\"hooks\": {}}")
 	assert.Contains(t, frame, "╭─ Plan ─", "the wide review shows both boxes")
 
@@ -642,7 +643,7 @@ func TestSetupPlanNotesScrollInANarrowTerminal(t *testing.T) {
 }
 
 func TestSetupDiffKeepsSignsAndInertContent(t *testing.T) {
-	th := newTheme(false)
+	th := ui.NewTheme(false)
 
 	diff := setupDiff(th, "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old \x1b[31mred\n+new \x1b]0;t\x07line\n same\n", 30)
 	assert.NotContains(t, diff, "\x1b[31m")
@@ -755,12 +756,12 @@ func TestSetupStaleAfterAWriteNeverClaimsNothingWritten(t *testing.T) {
 }
 
 // setupOpTable renders the operation log as one block of w cells.
-func setupOpTable(th *Theme, clients []integration.Client, ops []integration.OpResult, w int) string {
+func setupOpTable(th *ui.Theme, clients []integration.Client, ops []integration.OpResult, w int) string {
 	return strings.Join(setupOpLines(th, clients, ops, w), "\n")
 }
 
 // setupDiff renders a unified diff as one block of w cells.
-func setupDiff(th *Theme, diff string, w int) string {
+func setupDiff(th *ui.Theme, diff string, w int) string {
 	return strings.Join(setupDiffLines(th, diff, w), "\n")
 }
 

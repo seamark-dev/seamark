@@ -9,6 +9,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The tests of previewFlow and its two modals. The host tests of
@@ -28,7 +30,7 @@ func flowAt(stage flowStage) *previewFlow[flowTestPlan] {
 		stage:   stage,
 		preview: &flowTestPlan{name: "old"},
 		err:     errors.New("old failure"),
-		scroll:  scrollState{off: 3, page: 5, last: 9},
+		scroll:  ui.ScrollState{Off: 3, Page: 5, Last: 9},
 	}
 }
 
@@ -50,7 +52,7 @@ func TestPreviewFlowStartReadForgetsThePreview(t *testing.T) {
 	assert.True(t, f.active())
 	assert.Nil(t, f.preview)
 	assert.NoError(t, f.err)
-	assert.Equal(t, scrollState{}, f.scroll, "the read starts at the top")
+	assert.Equal(t, ui.ScrollState{}, f.scroll, "the read starts at the top")
 }
 
 func TestPreviewFlowReadDoneLandsOnlyInPreparing(t *testing.T) {
@@ -67,7 +69,7 @@ func TestPreviewFlowReadDoneLandsOnlyInPreparing(t *testing.T) {
 			assert.Equal(t, flowPreview, f.stage)
 			assert.Same(t, plan, f.preview)
 			assert.NoError(t, f.err)
-			assert.Equal(t, scrollState{}, f.scroll, "the preview starts at the top")
+			assert.Equal(t, ui.ScrollState{}, f.scroll, "the preview starts at the top")
 
 			continue
 		}
@@ -134,7 +136,7 @@ func TestPreviewFlowStartCommitClaimsTheSlot(t *testing.T) {
 	assert.Equal(t, doneMsg{}, cmd(), "the returned command is the commit work")
 	assert.Equal(t, "Saving settings", st.mutation)
 	assert.Equal(t, flowCommitting, f.stage)
-	assert.Equal(t, scrollState{off: 3, page: 5, last: 9}, f.scroll, "the holder decides the scroll position")
+	assert.Equal(t, ui.ScrollState{Off: 3, Page: 5, Last: 9}, f.scroll, "the holder decides the scroll position")
 	assert.NotNil(t, f.preview, "the commit still names the preview")
 
 	busy := &state{mutation: "Pruning 1 pin"}
@@ -159,7 +161,7 @@ func TestPreviewFlowCommitDoneOnlyFromCommitting(t *testing.T) {
 			assert.Equal(t, flowResult, f.stage)
 			assert.Nil(t, f.preview, "the holder keeps the outcome, not the preview")
 			assert.NoError(t, f.err)
-			assert.Equal(t, scrollState{}, f.scroll)
+			assert.Equal(t, ui.ScrollState{}, f.scroll)
 
 			continue
 		}
@@ -176,7 +178,7 @@ func TestPreviewFlowToResultAndCloseForgetThePreview(t *testing.T) {
 	assert.Equal(t, flowResult, f.stage, "toResult has no stage check")
 	assert.Nil(t, f.preview)
 	assert.NoError(t, f.err)
-	assert.Equal(t, scrollState{}, f.scroll)
+	assert.Equal(t, ui.ScrollState{}, f.scroll)
 
 	g := flowAt(flowResult)
 	g.close()
@@ -185,26 +187,26 @@ func TestPreviewFlowToResultAndCloseForgetThePreview(t *testing.T) {
 	assert.False(t, g.active())
 	assert.Nil(t, g.preview)
 	assert.NoError(t, g.err)
-	assert.Equal(t, scrollState{}, g.scroll)
+	assert.Equal(t, ui.ScrollState{}, g.scroll)
 }
 
 func TestFlowWaitModal(t *testing.T) {
 	for _, ascii := range []bool{false, true} {
-		st := &state{theme: newTheme(ascii), tick: 2}
+		st := &state{theme: ui.NewTheme(ascii), tick: 2}
 		th := st.theme
 
 		read := flowWaitModal(st, "Preparing the save preview", "Seamark reads the file. Nothing is written.", true, 60)
 
-		assert.Equal(t, th.spinnerFrame(2)+" Preparing the save preview"+th.Glyphs.Ellipsis, ansi.Strip(read.Title))
+		assert.Equal(t, th.SpinnerFrame(2)+" Preparing the save preview"+th.Glyphs.Ellipsis, ansi.Strip(read.Title))
 		assert.Equal(t, []string{"Seamark reads the file. Nothing is written."}, stripLines(read.Body))
 		require.Len(t, read.Actions, 1, "a read offers esc")
-		assert.Equal(t, nkeys.Back.Keys(), read.Actions[0].Keys())
+		assert.Equal(t, ui.Nav.Back.Keys(), read.Actions[0].Keys())
 		assert.Equal(t, "esc", read.Actions[0].Help().Key)
 		assert.Equal(t, "cancel", read.Actions[0].Help().Desc)
 
 		commit := flowWaitModal(st, "Saving settings", "Seamark writes the file.", false, 60)
 
-		assert.Equal(t, th.spinnerFrame(2)+" Saving settings"+th.Glyphs.Ellipsis, ansi.Strip(commit.Title))
+		assert.Equal(t, th.SpinnerFrame(2)+" Saving settings"+th.Glyphs.Ellipsis, ansi.Strip(commit.Title))
 		assert.Nil(t, commit.Actions, "a commit cannot stop, so it offers no key")
 		assert.Empty(t, commit.Right)
 		assert.Nil(t, commit.Tail)
@@ -212,9 +214,9 @@ func TestFlowWaitModal(t *testing.T) {
 }
 
 func TestPreviewFailedModal(t *testing.T) {
-	th := newTheme(true)
-	actions := []key.Binding{withHelp(nkeys.Back, "esc", "back to the list")}
-	glyph := th.ToneGlyph(ToneFailure)
+	th := ui.NewTheme(true)
+	actions := []key.Binding{ui.WithHelp(ui.Nav.Back, "esc", "back to the list")}
+	glyph := th.ToneGlyph(ui.ToneFailure)
 
 	withHint := previewFailedModal(th, "The apply preview", errors.New("boom"), "Fix the cause.",
 		"Nothing was changed.", actions, 60)

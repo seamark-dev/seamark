@@ -8,6 +8,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // settingsFile is the workspace configuration file, relative to the
@@ -99,10 +100,10 @@ type settingsScreen struct {
 	ed settingsEditor
 	// detail is the scroll position of the editor box. follow asks the
 	// next render to scroll the editor cursor into view.
-	detail scrollState
+	detail ui.ScrollState
 	follow bool
 	// table keeps the list cursor visible when the list does not fit.
-	table listState
+	table ui.ListState
 
 	// drafts holds the unsaved edits by field. A draft lives in this
 	// screen only: nothing saves it on blur, on a tab change or at exit.
@@ -173,7 +174,7 @@ func (s *settingsScreen) moveTo(f settings.Field) {
 		}
 	}
 
-	s.detail = scrollState{}
+	s.detail = ui.ScrollState{}
 }
 
 // field returns the selected field.
@@ -233,18 +234,18 @@ func (s *settingsScreen) listKey(msg tea.KeyMsg) tea.Cmd {
 	before := s.cursor
 
 	switch {
-	case key.Matches(msg, nkeys.Up):
+	case key.Matches(msg, ui.Nav.Up):
 		s.cursor = max(0, s.cursor-1)
-	case key.Matches(msg, nkeys.Down):
+	case key.Matches(msg, ui.Nav.Down):
 		s.cursor = min(n-1, s.cursor+1)
-	case key.Matches(msg, nkeys.Top):
+	case key.Matches(msg, ui.Nav.Top):
 		s.cursor = 0
-	case key.Matches(msg, nkeys.Bottom):
+	case key.Matches(msg, ui.Nav.Bottom):
 		s.cursor = n - 1
-	case key.Matches(msg, nkeys.PageUp, nkeys.PageDown):
+	case key.Matches(msg, ui.Nav.PageUp, ui.Nav.PageDown):
 		// The list has six fields, so the page keys scroll the detail.
-		s.detail.key(msg)
-	case key.Matches(msg, nkeys.Enter, nkeys.Next):
+		s.detail.Key(msg)
+	case key.Matches(msg, ui.Nav.Enter, ui.Nav.Next):
 		return s.openEditor()
 	case key.Matches(msg, settingsKeys.Default):
 		return s.resetField(s.field())
@@ -255,7 +256,7 @@ func (s *settingsScreen) listKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	if s.cursor != before {
-		s.detail = scrollState{}
+		s.detail = ui.ScrollState{}
 	}
 
 	return nil
@@ -291,7 +292,7 @@ func (s *settingsScreen) keys() []key.Binding {
 	case s.flow.active():
 		return s.flowActions()
 	case s.ed.typing:
-		return []key.Binding{withHelp(nkeys.Enter, "enter", "keep"), withHelp(nkeys.Back, "esc", "cancel")}
+		return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "keep"), ui.WithHelp(ui.Nav.Back, "esc", "cancel")}
 	case s.editing:
 		return s.editorKeys()
 	}
@@ -313,10 +314,10 @@ func (s *settingsScreen) keys() []key.Binding {
 	discard := settingsKeys.Discard
 	discard.SetEnabled(s.draftCount(g) > 0)
 
-	out := []key.Binding{withHelp(nkeys.Down, "↑↓", "move"), withHelp(nkeys.Enter, "enter", "edit"), def, save, discard}
+	out := []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "move"), ui.WithHelp(ui.Nav.Enter, "enter", "edit"), def, save, discard}
 
 	if s.st.wide() {
-		out = append(out, withHelp(nkeys.Next, "tab", "detail"))
+		out = append(out, ui.WithHelp(ui.Nav.Next, "tab", "detail"))
 	}
 
 	return out
@@ -373,10 +374,10 @@ func (s *settingsScreen) view(w, h int) string {
 		return s.unreadBox(w, boxH)
 	}
 
-	if w >= wideWidth {
+	if w >= ui.WideWidth {
 		listW := setupSplit(w, settingsListDesignW)
 
-		return hjoin(1, s.listBox(listW, boxH, !s.editing), s.editorBox(w-listW-1, boxH, s.editing, false))
+		return ui.Hjoin(1, s.listBox(listW, boxH, !s.editing), s.editorBox(w-listW-1, boxH, s.editing, false))
 	}
 
 	if s.editing {
@@ -391,19 +392,19 @@ func (s *settingsScreen) view(w, h int) string {
 func (s *settingsScreen) unreadBox(w, h int) string {
 	t := s.st.theme
 	sec := &s.st.settings
-	o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Settings", true), Right: t.Code.Render(settingsFile)}
+	o := ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Settings", true), Right: t.Code.Render(settingsFile)}
 
 	if sec.err != nil || (sec.loaded && sec.value == nil) {
 		body := "Seamark could not read the settings."
 		if sec.err != nil {
-			body = "Seamark could not read the settings: " + errText(sec.err)
+			body = "Seamark could not read the settings: " + ui.ErrText(sec.err)
 		}
 
-		return integBoxed(t, o, ToneFailure, "Settings are not readable", body,
+		return integBoxed(t, o, ui.ToneFailure, "Settings are not readable", body,
 			t.Muted.Render("Press ")+t.Key.Render("r")+t.Muted.Render(" to read them again, or edit ")+
 				t.Code.Render(settingsFile)+t.Muted.Render(" by hand."))
 	}
 
-	return integBoxed(t, o, ToneNeutral, "Reading settings"+t.Glyphs.Ellipsis,
+	return integBoxed(t, o, ui.ToneNeutral, "Reading settings"+t.Glyphs.Ellipsis,
 		"Seamark reads "+settingsFile+" with the shared readers. Nothing is written.", "")
 }

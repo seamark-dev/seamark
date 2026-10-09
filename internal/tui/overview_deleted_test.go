@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // ovDeletedFake is the populated workspace with n tracked paths that
@@ -65,7 +66,7 @@ func TestOverviewDeletedPathsAreOptionalNotAction(t *testing.T) {
 
 	it := ovFind(t, o, "index:deleted")
 	assert.Equal(t, ovOptional, it.group, "a deletion is the user's choice, never an action")
-	assert.Equal(t, ToneNeutral, it.tone)
+	assert.Equal(t, ui.ToneNeutral, it.tone)
 	assert.Equal(t, "not staged", it.badge)
 	assert.Equal(t, "47 tracked files deleted in the working tree", it.title)
 	assert.Equal(t, "git diff-files --name-only --diff-filter=D", it.fix, "the detail shows how to list the paths")

@@ -22,6 +22,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -299,7 +300,7 @@ func TestConsoleFlowPruneOfAMarkedPinKeepsTheCursorByIdentity(t *testing.T) {
 	p := pinsOf(h)
 	assert.Empty(t, p.selected, "the pruned entry leaves the selection")
 	assert.Equal(t, "check-nil-errors", cursorPin(t, h).Entry.Rule, "the cursor follows the pin, not the row")
-	assert.Equal(t, maintNilErrors-1, p.list.cursor)
+	assert.Equal(t, maintNilErrors-1, p.list.Cursor)
 	assertNoLossNote(t, h)
 
 	// The superseded history shows the pruned proposal, read-only.
@@ -717,8 +718,8 @@ func TestConsoleFlowExtractionRunKeepsReadsAndRefusesOtherWrites(t *testing.T) {
 		assert.True(t, maintHostOf(h).open(), "the preview stays for a later y")
 
 		// A resize keeps the preview and the run.
-		h.resize(minWidth, minHeight)
-		assertFrame(t, h.view(), minWidth, minHeight)
+		h.resize(ui.MinWidth, ui.MinHeight)
+		assertFrame(t, h.view(), ui.MinWidth, ui.MinHeight)
 		h.resize(120, 40)
 		require.True(t, maintHostOf(h).open())
 
@@ -799,7 +800,7 @@ func TestConsoleFlowResizeToTheMinimumKeepsTheConfirmAndTheScope(t *testing.T) {
 		frame := h.view()
 		assertFrame(t, frame, h.m.st.width, h.m.st.height)
 
-		v := maintHostOf(h).modal.content(modalBodyWidth(modalMinW, h.m.st.width))
+		v := maintHostOf(h).modal.content(ui.ModalBodyWidth(ui.ModalMinW, h.m.st.width))
 		require.NotEmpty(t, v.Tail)
 		assert.Contains(t, frame, strings.TrimSpace(ansi.Strip(v.Tail[0])))
 		assert.Contains(t, frame, label)
@@ -818,20 +819,20 @@ func TestConsoleFlowResizeToTheMinimumKeepsTheConfirmAndTheScope(t *testing.T) {
 		h.press("w")
 		check(t, h, "y retarget 1 pin")
 
-		h.resize(minWidth, minHeight)
+		h.resize(ui.MinWidth, ui.MinHeight)
 		check(t, h, "y retarget 1 pin")
 
 		h.press("pgdown", "pgdown", "end")
 		check(t, h, "y retarget 1 pin")
 
 		// Below the minimum the preview is hidden, so y never reaches it.
-		h.resize(minWidth-1, minHeight-1)
+		h.resize(ui.MinWidth-1, ui.MinHeight-1)
 		assert.Contains(t, h.view(), "More space needed")
 
 		h.press("y")
 		assert.Nil(t, got, "y never confirms a hidden preview")
 
-		h.resize(minWidth, minHeight)
+		h.resize(ui.MinWidth, ui.MinHeight)
 		check(t, h, "y retarget 1 pin")
 
 		h.press("y")
@@ -851,7 +852,7 @@ func TestConsoleFlowResizeToTheMinimumKeepsTheConfirmAndTheScope(t *testing.T) {
 		pinsCursorTo(h, maintOnError+1)
 
 		h.press("-")
-		h.resize(minWidth, minHeight)
+		h.resize(ui.MinWidth, ui.MinHeight)
 		check(t, h, "y prune 1 pin")
 
 		h.press("end")
@@ -862,13 +863,13 @@ func TestConsoleFlowResizeToTheMinimumKeepsTheConfirmAndTheScope(t *testing.T) {
 	t.Run("extraction review", func(t *testing.T) {
 		h, f, rec, _ := pinsMixedReview(t)
 
-		h.resize(minWidth, minHeight)
+		h.resize(ui.MinWidth, ui.MinHeight)
 
 		for _, keys := range [][]string{nil, {"pgdown", "pgdown", "pgdown"}} {
 			h.press(keys...)
 
 			frame := h.view()
-			assertFrame(t, frame, minWidth, minHeight)
+			assertFrame(t, frame, ui.MinWidth, ui.MinHeight)
 			assert.Contains(t, frame, "Sends 3 proposals in 3 batches · 3 ineligible")
 			assert.Contains(t, frame, "Nothing is sent until you press y.")
 			assert.True(t, strings.HasPrefix(strings.TrimSpace(footerLine(frame)), "y start run"))
@@ -877,7 +878,7 @@ func TestConsoleFlowResizeToTheMinimumKeepsTheConfirmAndTheScope(t *testing.T) {
 		require.True(t, rec.runnable())
 
 		// Below the minimum the review is hidden, so y starts nothing.
-		h.resize(minWidth-1, minHeight-1)
+		h.resize(ui.MinWidth-1, ui.MinHeight-1)
 		h.press("y")
 		assert.Equal(t, stepPreview, rec.step, "y never starts a hidden review")
 		assert.Equal(t, []string{"PlanExtract"}, f.called())

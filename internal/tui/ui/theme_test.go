@@ -1,4 +1,4 @@
-package tui
+package ui
 
 import (
 	"reflect"
@@ -28,12 +28,12 @@ func TestASCIIFrameKeepsTheWidth(t *testing.T) {
 		assert.Less(t, rune(to[0]), rune(128), "replacement of %q", from)
 	}
 
-	th := newTheme(true)
+	th := NewTheme(true)
 	frame := "│ a — b – c … d × e → f ← g ↑ h ↓ │\n" +
 		"› ‹ • · ✓ ✗ ▍ ─ ━ ╭╮╰╯ " + strings.Join(unicodeGlyphs.Spinner, "") + "\n" +
 		"\x1b[1mbold — text\x1b[0m"
 
-	out := th.asciiFrame(frame)
+	out := th.ASCIIFrame(frame)
 
 	in, got := strings.Split(frame, "\n"), strings.Split(out, "\n")
 	require.Len(t, got, len(in))
@@ -47,8 +47,8 @@ func TestASCIIFrameKeepsTheWidth(t *testing.T) {
 	}
 
 	assert.Contains(t, out, "\x1b[1mbold - text\x1b[0m", "escape sequences stay")
-	assert.Equal(t, "60x20 cells", th.asciiFrame("60×20 cells"))
-	assert.Equal(t, "a apply~", th.asciiFrame("a apply…"))
+	assert.Equal(t, "60x20 cells", th.ASCIIFrame("60×20 cells"))
+	assert.Equal(t, "a apply~", th.ASCIIFrame("a apply…"))
 }
 
 // TestASCIIFrameKeepsOtherText proves the scope of the safety net:
@@ -56,10 +56,10 @@ func TestASCIIFrameKeepsTheWidth(t *testing.T) {
 func TestASCIIFrameKeepsOtherText(t *testing.T) {
 	user := "naïve café 日本語 Ελληνικά ü ß €"
 
-	assert.Equal(t, user, newTheme(true).asciiFrame(user))
+	assert.Equal(t, user, NewTheme(true).ASCIIFrame(user))
 
 	unicode := "│ a — b … ✓"
-	assert.Equal(t, unicode, newTheme(false).asciiFrame(unicode), "the Unicode theme changes nothing")
+	assert.Equal(t, unicode, NewTheme(false).ASCIIFrame(unicode), "the Unicode theme changes nothing")
 }
 
 // TestASCIIGlyphsAreDistinct proves finding 28: in the ASCII set,

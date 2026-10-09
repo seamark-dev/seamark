@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // The client and choice steps of the setup wizard. The choice step shows
@@ -35,15 +37,15 @@ func (wz *setupWizard) clientView(w, h int) string {
 	t := wz.st.theme
 
 	if len(wz.clients) == 0 {
-		return integBoxed(t, boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Choose a client", true)},
-			ToneNeutral, "No clients registered",
+		return integBoxed(t, ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Choose a client", true)},
+			ui.ToneNeutral, "No clients registered",
 			"This build registers no coding agent clients, so there is nothing to set up.", "")
 	}
 
 	items := make([]integItem, 0, len(wz.clients))
 
 	for _, c := range wz.clients {
-		item := integItem{name: oneLine(c.Name), badge: t.Unknown.Render(t.Glyphs.Unknown) + " " +
+		item := integItem{name: ui.OneLine(c.Name), badge: t.Unknown.Render(t.Glyphs.Unknown) + " " +
 			t.Muted.Render("reading"), summary: []string{"reading the configuration"}}
 
 		if insp, ok := integFind(wz.st, c.ID); ok {
@@ -53,35 +55,35 @@ func (wz *setupWizard) clientView(w, h int) string {
 		items = append(items, item)
 	}
 
-	wz.pick.clamp(len(items), 0)
-	sel := wz.clients[wz.pick.cursor]
+	wz.pick.Clamp(len(items), 0)
+	sel := wz.clients[wz.pick.Cursor]
 	note := "Setup adds or repairs configuration. It never removes the configuration of another client."
 
-	if w >= wideWidth {
+	if w >= ui.WideWidth {
 		leftW := setupSplit(w, 60)
 		rightW := w - leftW - 1
-		inner := boxInner(rightW)
+		inner := ui.BoxInner(rightW)
 
-		lines := integLines(t.Body, oneLine(sel.Name)+" supports "+oneLine(sel.DescribeSupport())+".", inner)
+		lines := integLines(t.Body, ui.OneLine(sel.Name)+" supports "+ui.OneLine(sel.DescribeSupport())+".", inner)
 		lines = append(lines, "", integHeading(t, "Notes"))
 		lines = append(lines, integLines(t.Muted, note, inner)...)
 
-		left := t.box(boxOpts{W: leftW, H: h, Focus: true, Title: integPaneTitle(t, "Choose a client", true),
-			Right: t.Muted.Render(itoa(len(items))),
-			Lines: integRenderClients(t, items, &wz.pick, boxInner(leftW), boxRows(h), true)})
-		right := t.box(boxOpts{W: rightW, H: h, Title: integPaneTitle(t, sel.Name, false), Lines: lines})
+		left := t.Box(ui.BoxOpts{W: leftW, H: h, Focus: true, Title: integPaneTitle(t, "Choose a client", true),
+			Right: t.Muted.Render(strconv.Itoa(len(items))),
+			Lines: integRenderClients(t, items, &wz.pick, ui.BoxInner(leftW), ui.BoxRows(h), true)})
+		right := t.Box(ui.BoxOpts{W: rightW, H: h, Title: integPaneTitle(t, sel.Name, false), Lines: lines})
 
-		return hjoin(1, left, right)
+		return ui.Hjoin(1, left, right)
 	}
 
 	// The list comes first and may use every row of the box, so each
 	// client stays reachable. A paragraph follows only when it fits
 	// whole, so a short terminal never shows a sentence cut in half.
-	inner, rows := boxInner(w), boxRows(h)
+	inner, rows := ui.BoxInner(w), ui.BoxRows(h)
 	lines := integRenderClients(t, items, &wz.pick, inner, rows, true)
 
 	for _, p := range [][]string{
-		integLines(t.Muted, oneLine(sel.Name)+" supports "+oneLine(sel.DescribeSupport())+".", inner),
+		integLines(t.Muted, ui.OneLine(sel.Name)+" supports "+ui.OneLine(sel.DescribeSupport())+".", inner),
 		integLines(t.Muted, note, inner),
 	} {
 		if len(lines)+1+len(p) > rows {
@@ -91,8 +93,8 @@ func (wz *setupWizard) clientView(w, h int) string {
 		lines = append(append(lines, ""), p...)
 	}
 
-	return t.box(boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Choose a client", true),
-		Right: t.Muted.Render(itoa(len(items))), Lines: lines})
+	return t.Box(ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Choose a client", true),
+		Right: t.Muted.Render(strconv.Itoa(len(items))), Lines: lines})
 }
 
 // choicesView renders the additions with their change and the detail of
@@ -104,59 +106,59 @@ func (wz *setupWizard) choicesView(w, h int) string {
 
 	insp, ok := wz.inspection()
 	if !ok {
-		o := boxOpts{W: w, H: h, Focus: true, Title: title}
+		o := ui.BoxOpts{W: w, H: h, Focus: true, Title: title}
 
 		if err := wz.st.integrations.err; err != nil {
-			return integBoxed(t, o, ToneFailure, "Could not read the current configuration", errText(err),
+			return integBoxed(t, o, ui.ToneFailure, "Could not read the current configuration", ui.ErrText(err),
 				t.Muted.Render("Press ")+t.Key.Render("esc")+t.Muted.Render(" to go back."))
 		}
 
-		return integBoxed(t, o, ToneNeutral, "Reading the current configuration"+t.Glyphs.Ellipsis,
-			"The choices depend on what "+oneLine(wz.client.Name)+" already has. Nothing is written.", "")
+		return integBoxed(t, o, ui.ToneNeutral, "Reading the current configuration"+t.Glyphs.Ellipsis,
+			"The choices depend on what "+ui.OneLine(wz.client.Name)+" already has. Nothing is written.", "")
 	}
 
 	rows := setupRows(wz.client, insp)
-	wz.rows.clamp(len(rows), len(rows))
-	sel := rows[wz.rows.cursor]
+	wz.rows.Clamp(len(rows), len(rows))
+	sel := rows[wz.rows.Cursor]
 
 	if wz.aboutOpen {
 		return wz.aboutBox(sel, insp, w, h)
 	}
 
-	if w >= wideWidth {
+	if w >= ui.WideWidth {
 		leftW := setupSplit(w, 60)
 		rightW := w - leftW - 1
-		inner, boxH := boxInner(rightW), boxRows(h)
+		inner, boxH := ui.BoxInner(rightW), ui.BoxRows(h)
 
-		left := t.box(boxOpts{W: leftW, H: h, Focus: true, Title: title,
-			Lines: wz.choiceLines(rows, boxInner(leftW), true)})
-		right := t.box(boxOpts{W: rightW, H: h, Title: integPaneTitle(t, setupIntentLabels[sel.intent], false),
+		left := t.Box(ui.BoxOpts{W: leftW, H: h, Focus: true, Title: title,
+			Lines: wz.choiceLines(rows, ui.BoxInner(leftW), true)})
+		right := t.Box(ui.BoxOpts{W: rightW, H: h, Title: integPaneTitle(t, setupIntentLabels[sel.intent], false),
 			Lines: setupClip(t, wz.aboutLines(sel, insp, inner), inner, boxH)})
 
-		return hjoin(1, left, right)
+		return ui.Hjoin(1, left, right)
 	}
 
 	// The narrow layout puts the explanation under the rows. It gets the
 	// rows that are left; the details key shows the rest.
-	inner, boxH := boxInner(w), boxRows(h)
+	inner, boxH := ui.BoxInner(w), ui.BoxRows(h)
 	lines := wz.choiceLines(rows, inner, false)
 	lines = append(lines, "")
 	lines = append(lines, setupClip(t, wz.aboutLines(sel, insp, inner), inner, boxH-len(lines))...)
 
-	return t.box(boxOpts{W: w, H: h, Focus: true, Title: title, Lines: lines})
+	return t.Box(ui.BoxOpts{W: w, H: h, Focus: true, Title: title, Lines: lines})
 }
 
 // aboutBox shows the full explanation of one addition in a scrolling
 // box, with the scroll position in the bottom border.
 func (wz *setupWizard) aboutBox(r setupRow, insp integration.Inspection, w, h int) string {
 	t := wz.st.theme
-	inner, rows := boxInner(w), boxRows(h)
+	inner, rows := ui.BoxInner(w), ui.BoxRows(h)
 
-	lines := wz.about.lines("about:"+itoa(int(r.intent)), wz.aboutLines(r, insp, inner), inner, rows)
+	lines := wz.about.Lines("about:"+strconv.Itoa(int(r.intent)), wz.aboutLines(r, insp, inner), inner, rows)
 
-	return t.box(boxOpts{W: w, H: h, Focus: true,
+	return t.Box(ui.BoxOpts{W: w, H: h, Focus: true,
 		Title: integPaneTitle(t, "Details "+t.Glyphs.Sep+" "+setupIntentLabels[r.intent], true),
-		Foot:  wz.about.foot(t), Lines: lines})
+		Foot:  wz.about.Foot(t), Lines: lines})
 }
 
 // choiceLines renders the table of additions, the selection summary,
@@ -167,8 +169,8 @@ func (wz *setupWizard) choiceLines(rows []setupRow, w int, withNote bool) []stri
 	f := t.Faint
 	detailW := max(1, w-setupMarkW-setupItemW-setupChangeW)
 
-	lines := []string{integRow(t, cell("", setupMarkW), cell(f.Render("Item"), setupItemW),
-		cell(f.Render("Change"), setupChangeW), cell(f.Render("Detail"), detailW))}
+	lines := []string{integRow(t, ui.Cell("", setupMarkW), ui.Cell(f.Render("Item"), setupItemW),
+		ui.Cell(f.Render("Change"), setupChangeW), ui.Cell(f.Render("Detail"), detailW))}
 
 	selected, kept, unsupported := 0, 0, 0
 
@@ -182,14 +184,14 @@ func (wz *setupWizard) choiceLines(rows []setupRow, w int, withNote bool) []stri
 			unsupported++
 		}
 
-		lines = append(lines, wz.rowLine(r, i == wz.rows.cursor, w, detailW))
+		lines = append(lines, wz.rowLine(r, i == wz.rows.Cursor, w, detailW))
 	}
 
 	sep := f.Render(" " + t.Glyphs.Sep + " ")
-	summary := t.Body.Render(itoa(selected)+" selected") + sep + t.Muted.Render(itoa(kept)+" kept")
+	summary := t.Body.Render(strconv.Itoa(selected)+" selected") + sep + t.Muted.Render(strconv.Itoa(kept)+" kept")
 
 	if unsupported > 0 {
-		summary += sep + t.Muted.Render(itoa(unsupported)+" not supported")
+		summary += sep + t.Muted.Render(strconv.Itoa(unsupported)+" not supported")
 	}
 
 	lines = append(lines, "", integRule(t, w), summary)
@@ -200,7 +202,7 @@ func (wz *setupWizard) choiceLines(rows []setupRow, w int, withNote bool) []stri
 
 	if wz.st.integrations.stale() {
 		lines = append(lines, integHanging(t.Attention.Render(t.Glyphs.Warn+" "), t.Attention,
-			"stale: "+errText(wz.st.integrations.err), w)...)
+			"stale: "+ui.ErrText(wz.st.integrations.err), w)...)
 	}
 
 	if withNote {
@@ -234,7 +236,7 @@ func (wz *setupWizard) rowLine(r setupRow, current bool, w, detailW int) string 
 		change, detail = t.Success.Render("kept"), t.Faint.Render("already configured")
 	case setupRowUnsupported:
 		mark, item = t.Faint.Render(g.Locked), t.Muted.Render(label)
-		change, detail = t.Faint.Render("n/a"), t.Faint.Render("not supported by "+oneLine(wz.client.Name))
+		change, detail = t.Faint.Render("n/a"), t.Faint.Render("not supported by "+ui.OneLine(wz.client.Name))
 	default:
 		mark, item = g.Uncheck, label
 		change, detail = t.Faint.Render("no change"), t.Muted.Render(setupRowDetail(r))
@@ -252,11 +254,11 @@ func (wz *setupWizard) rowLine(r setupRow, current bool, w, detailW int) string 
 		}
 	}
 
-	row := integRow(t, cell(cursor, setupMarkW), cell(mark+" "+item, setupItemW), cell(change, setupChangeW),
-		cell(detail, detailW))
+	row := integRow(t, ui.Cell(cursor, setupMarkW), ui.Cell(mark+" "+item, setupItemW), ui.Cell(change, setupChangeW),
+		ui.Cell(detail, detailW))
 
 	if current {
-		row = t.highlight(row, w, bgSel)
+		row = t.Highlight(row, w, ui.BgSel)
 	}
 
 	return row
@@ -270,7 +272,7 @@ func setupRowDetail(r setupRow) string {
 		return setupMissingPhrase(r.missing)
 	}
 
-	return oneLine(r.describe)
+	return ui.OneLine(r.describe)
 }
 
 // setupMissingPhrase names the hooks a plan adds, for example
@@ -294,7 +296,7 @@ func (wz *setupWizard) aboutLines(r setupRow, insp integration.Inspection, w int
 	lines := integLines(t.Body, what, w)
 	lines = append(lines, "")
 
-	now := oneLine(r.describe)
+	now := ui.OneLine(r.describe)
 	if now == "" {
 		now = "unknown"
 	}
@@ -310,7 +312,7 @@ func (wz *setupWizard) aboutLines(r setupRow, insp integration.Inspection, w int
 			label = "Dirs"
 		}
 
-		lines = append(lines, integLabeled(t, label, setupLabelW, oneLine(strings.Join(wz.client.SkillDirs, ", ")), t.Code, w)...)
+		lines = append(lines, integLabeled(t, label, setupLabelW, ui.OneLine(strings.Join(wz.client.SkillDirs, ", ")), t.Code, w)...)
 	}
 
 	lines = append(lines, "", integHeading(t, "Notes"))
@@ -328,7 +330,7 @@ func (wz *setupWizard) aboutLines(r setupRow, insp integration.Inspection, w int
 // aboutText returns what an addition does and the note that belongs to
 // it, for example the scope of tool grants.
 func (wz *setupWizard) aboutText(r setupRow, insp integration.Inspection) (what, note string) {
-	name := oneLine(wz.client.Name)
+	name := ui.OneLine(wz.client.Name)
 
 	switch r.intent {
 	case setupMCP:
@@ -340,7 +342,7 @@ func (wz *setupWizard) aboutText(r setupRow, insp integration.Inspection) (what,
 		note = "Installed hooks keep their gate mode"
 
 		if insp.ManagedGateMode != "" {
-			note += " (" + oneLine(insp.ManagedGateMode) + ")"
+			note += " (" + ui.OneLine(insp.ManagedGateMode) + ")"
 		}
 
 		note += ". New hooks use warn. The console never switches to or from enforcement."
@@ -367,7 +369,7 @@ func (wz *setupWizard) afterText(r setupRow) (string, lipgloss.Style) {
 	case r.kind == setupRowKept:
 		return "kept as it is; setup never uninstalls or revokes", t.Muted
 	case r.kind == setupRowUnsupported:
-		return oneLine(wz.client.Name) + " does not support this addition, so setup cannot plan it.", t.Muted
+		return ui.OneLine(wz.client.Name) + " does not support this addition, so setup cannot plan it.", t.Muted
 	case !wz.checked(r):
 		return "unchanged; this row is not selected", t.Muted
 	case r.intent == setupHooks && len(r.missing) > 0:

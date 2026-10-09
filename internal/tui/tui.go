@@ -14,6 +14,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // Options configures one console session.
@@ -48,7 +50,7 @@ func Run(opts Options) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	m := newModel(opts.Services, newTheme(opts.ASCII))
+	m := newModel(opts.Services, ui.NewTheme(opts.ASCII))
 	m.st.ctx = ctx
 	m.st.copyText = func(text string) error { return writeClipboard(opts.Out, text) }
 	m.st.openURL = openBrowser

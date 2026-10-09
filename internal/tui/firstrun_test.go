@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // frDocsPreview is the plan of the shared documents in a fresh repository:
@@ -385,7 +386,7 @@ func TestFirstRunFreshCheckFailureIsANotice(t *testing.T) {
 }
 
 func TestFirstRunFramesFitAtEverySize(t *testing.T) {
-	for _, size := range [][2]int{{120, 40}, {200, 50}, {80, 24}, {minWidth, minHeight}} {
+	for _, size := range [][2]int{{120, 40}, {200, 50}, {80, 24}, {ui.MinWidth, ui.MinHeight}} {
 		w, hgt := size[0], size[1]
 		h := newHarness(t, frFake(nil), w, hgt)
 
@@ -410,7 +411,7 @@ func TestFirstRunFramesFitAtEverySize(t *testing.T) {
 }
 
 func TestFirstRunKeysMatchTheStage(t *testing.T) {
-	fr := &firstRun{st: &state{svc: newFake(), theme: newTheme(false)}}
+	fr := &firstRun{st: &state{svc: newFake(), theme: ui.NewTheme(false)}}
 
 	help := func(bs []key.Binding) []string {
 		var out []string

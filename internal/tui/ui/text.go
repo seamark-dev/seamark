@@ -1,4 +1,4 @@
-package tui
+package ui
 
 import (
 	"os"
@@ -12,43 +12,43 @@ import (
 	"github.com/seamark-dev/seamark/internal/render"
 )
 
-// oneLine makes untrusted text safe for a single terminal line.
+// OneLine makes untrusted text safe for a single terminal line.
 // Repository content, proposal text and file names can hold escape
 // sequences; the sanitizer keeps them inert.
-func oneLine(s string) string {
+func OneLine(s string) string {
 	s = strings.NewReplacer("\r\n", " ", "\n", " ", "\t", " ").Replace(s)
 
 	return render.SanitizeBlock(s)
 }
 
-// multiLine makes untrusted multi-line text safe and keeps its line
+// MultiLine makes untrusted multi-line text safe and keeps its line
 // breaks. Tabs become spaces because they break width arithmetic.
-func multiLine(s string) string {
+func MultiLine(s string) string {
 	return strings.ReplaceAll(render.SanitizeBlock(s), "\t", "    ")
 }
 
-// diag makes a diagnostic safe: it redacts secrets first, because
+// Diag makes a diagnostic safe: it redacts secrets first, because
 // reader errors and native settings can quote tokens.
-func diag(s string) string {
-	return oneLine(redact.Secrets(s))
+func Diag(s string) string {
+	return OneLine(redact.Secrets(s))
 }
 
-// errText returns a safe one-line error message, or "" for nil.
-func errText(err error) string {
+// ErrText returns a safe one-line error message, or "" for nil.
+func ErrText(err error) string {
 	if err == nil {
 		return ""
 	}
 
-	return diag(err.Error())
+	return Diag(err.Error())
 }
 
-// width returns the display width of s in terminal cells.
-func width(s string) int {
+// Width returns the display width of s in terminal cells.
+func Width(s string) int {
 	return lipgloss.Width(s)
 }
 
-// truncate shortens styled or plain text to w cells with an ellipsis.
-func truncate(s string, w int, ellipsis string) string {
+// Truncate shortens styled or plain text to w cells with an ellipsis.
+func Truncate(s string, w int, ellipsis string) string {
 	if w <= 0 {
 		return ""
 	}
@@ -56,25 +56,25 @@ func truncate(s string, w int, ellipsis string) string {
 	return ansi.Truncate(s, w, ellipsis)
 }
 
-// truncateLeft shortens s from the left, which keeps the most specific
+// TruncateLeft shortens s from the left, which keeps the most specific
 // part of a path visible.
-func truncateLeft(s string, w int, ellipsis string) string {
-	if width(s) <= w {
+func TruncateLeft(s string, w int, ellipsis string) string {
+	if Width(s) <= w {
 		return s
 	}
 
-	if w <= width(ellipsis) {
-		return truncate(s, w, "")
+	if w <= Width(ellipsis) {
+		return Truncate(s, w, "")
 	}
 
-	return ellipsis + ansi.TruncateLeft(s, width(s)-w+width(ellipsis), "")
+	return ellipsis + ansi.TruncateLeft(s, Width(s)-w+Width(ellipsis), "")
 }
 
-// wrap word-wraps text to w cells. It breaks a line only at a space,
+// Wrap word-wraps text to w cells. It breaks a line only at a space,
 // so a command, a flag or a path that fits on one line stays whole.
 // ansi.Wrap is not used, because it always breaks after a '-'. Each
 // input line wraps on its own, so existing line breaks stay.
-func wrap(s string, w int) string {
+func Wrap(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
@@ -93,7 +93,7 @@ func wrap(s string, w int) string {
 // A token wider than w starts a new line and breaks at the cell limit,
 // because no line may overflow the pane.
 func wrapLine(line string, w int) string {
-	if width(line) <= w {
+	if Width(line) <= w {
 		return line
 	}
 
@@ -123,7 +123,7 @@ func wrapLine(line string, w int) string {
 			continue
 		}
 
-		ww := width(word)
+		ww := Width(word)
 
 		if curW > 0 && curW+gap+ww > w {
 			flush()
@@ -142,7 +142,7 @@ func wrapLine(line string, w int) string {
 
 			cur.WriteString(last)
 
-			curW, gap = width(last), 0
+			curW, gap = Width(last), 0
 
 			continue
 		}
@@ -162,16 +162,16 @@ func wrapLine(line string, w int) string {
 	return strings.Join(out, "\n")
 }
 
-// fit clips or pads rendered text to exactly w cells by h lines. The
+// Fit clips or pads rendered text to exactly w cells by h lines. The
 // shell needs exact sizes so a pane never pushes the footer away.
-func fit(s string, w, h int) string {
+func Fit(s string, w, h int) string {
 	lines := strings.Split(s, "\n")
 	if len(lines) > h {
 		lines = lines[:h]
 	}
 
 	for i, l := range lines {
-		lines[i] = padRight(truncate(l, w, ""), w)
+		lines[i] = PadRight(Truncate(l, w, ""), w)
 	}
 
 	for len(lines) < h {
@@ -181,27 +181,27 @@ func fit(s string, w, h int) string {
 	return strings.Join(lines, "\n")
 }
 
-// padRight pads s with spaces to w cells.
-func padRight(s string, w int) string {
-	if gap := w - width(s); gap > 0 {
+// PadRight pads s with spaces to w cells.
+func PadRight(s string, w int) string {
+	if gap := w - Width(s); gap > 0 {
 		return s + strings.Repeat(" ", gap)
 	}
 
 	return s
 }
 
-// padLeft pads s on the left to w cells, for right-aligned counts.
-func padLeft(s string, w int) string {
-	if gap := w - width(s); gap > 0 {
+// PadLeft pads s on the left to w cells, for right-aligned counts.
+func PadLeft(s string, w int) string {
+	if gap := w - Width(s); gap > 0 {
 		return strings.Repeat(" ", gap) + s
 	}
 
 	return s
 }
 
-// displayPath shortens an absolute path for the header: the home
+// DisplayPath shortens an absolute path for the header: the home
 // directory becomes "~".
-func displayPath(p string) string {
+func DisplayPath(p string) string {
 	home, err := os.UserHomeDir()
 	if err == nil && home != "" {
 		if rel, err := filepath.Rel(home, p); err == nil && !strings.HasPrefix(rel, "..") {
@@ -212,8 +212,8 @@ func displayPath(p string) string {
 	return p
 }
 
-// joinBlocks joins non-empty blocks with a blank line between them.
-func joinBlocks(blocks ...string) string {
+// JoinBlocks joins non-empty blocks with a blank line between them.
+func JoinBlocks(blocks ...string) string {
 	var out []string
 
 	for _, b := range blocks {
