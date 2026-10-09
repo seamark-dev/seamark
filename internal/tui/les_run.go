@@ -432,7 +432,7 @@ func (v *runView) browseKeys() []key.Binding {
 
 	if len(v.shownIDs()) > 0 {
 		review := withHelp(nkeys.Enter, "enter", "review proposals")
-		if v.st.width < wideWidth {
+		if !v.st.wide() {
 			review = withHelp(nkeys.Enter, "enter", "review")
 		}
 
@@ -691,7 +691,7 @@ func (p *propView) settingsSaved(msg settingsSavedMsg) tea.Cmd {
 		return nil
 	}
 
-	p.seq++
+	p.seq.cancel()
 	p.dec = nil
 
 	return toast(ToneAttention, "Pin writing changed in Settings, so the apply preview closed. Press a to "+

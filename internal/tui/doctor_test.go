@@ -146,11 +146,11 @@ func TestDoctorTabMovesFocusBetweenPanes(t *testing.T) {
 	h, _ := docOpen(t, docReport(), 120, 40)
 	d := docView(h)
 
-	assert.Contains(t, shellAFooter(h.view()), "enter open")
+	assert.Contains(t, footerLine(h.view()), "enter open")
 
 	h.press("tab")
 	assert.True(t, d.focusDetail)
-	assert.Contains(t, shellAFooter(h.view()), "scroll")
+	assert.Contains(t, footerLine(h.view()), "scroll")
 
 	// With the detail focused, the movement keys scroll it and the
 	// selection stays.
@@ -189,7 +189,7 @@ func TestDoctorNarrowOpensTheDetailFullScreen(t *testing.T) {
 		assert.Contains(t, frame, "╭─ policy ", "size %v", size)
 		assert.Contains(t, frame, "FIX", "size %v", size)
 		assert.NotContains(t, frame, "Doctor checks", "size %v", size)
-		assert.Contains(t, shellAFooter(frame), "esc back", "size %v", size)
+		assert.Contains(t, footerLine(frame), "esc back", "size %v", size)
 
 		h.press("esc")
 		assert.Contains(t, h.view(), "Doctor checks", "size %v: esc goes back to the list", size)
@@ -316,7 +316,7 @@ func TestDoctorPaneWidthsFollowTheDesign(t *testing.T) {
 	h, _ := docOpen(t, docReport(), 120, 40)
 	lines := strings.Split(h.view(), "\n")
 
-	top := []rune(lines[shellBLineIndex(lines, "Doctor checks")])
+	top := []rune(lines[lineIndex(lines, "Doctor checks")])
 	assert.Equal(t, 63, slices.Index(top, '╮'), "the list box ends at column 64")
 	assert.Equal(t, 65, slices.Index(top[1:], '╭')+1, "the detail box starts after one gap cell")
 	assert.Equal(t, '╮', top[len(top)-1], "the detail box ends at the last column")

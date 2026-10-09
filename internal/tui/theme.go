@@ -32,14 +32,14 @@ const (
 
 // Glyphs is one glyph set. The Unicode set uses only the single-width
 // symbols of the 1a design, so width arithmetic stays exact. The ASCII
-// set exists for fonts without these symbols. In each set, Focus differs
-// from Cursor, and Sep differs from Vertical, because without color the
-// glyph is the only signal between them.
+// set exists for fonts without these symbols. In each set, Sep differs
+// from Vertical, because without color the glyph is the only signal
+// between them.
 type Glyphs struct {
 	BrandLeft, BrandMid, BrandRight string
 
 	Cursor, Check, Uncheck, Locked, Kept, Bullet, Arrow, Sep, Ellipsis string
-	Dash, OK, Warn, Fail, Info, Unknown, Unsupported, Focus            string
+	Dash, OK, Warn, Fail, Info, Unknown, Unsupported                   string
 	Dot, Hollow                                                        string
 	RadioOn, RadioOff                                                  string
 
@@ -58,7 +58,7 @@ var unicodeGlyphs = Glyphs{
 	BrandLeft: "▶", BrandMid: "┊", BrandRight: "◀",
 	Cursor: "›", Check: "[✓]", Uncheck: "[ ]", Locked: "[-]", Kept: "[=]",
 	Bullet: "·", Arrow: "›", Sep: "·", Ellipsis: "…", Dash: "—",
-	OK: "✓", Warn: "!", Fail: "!", Info: "·", Unknown: "?", Unsupported: "◌", Focus: "▌",
+	OK: "✓", Warn: "!", Fail: "!", Info: "·", Unknown: "?", Unsupported: "◌",
 	Dot: "●", Hollow: "○",
 	RadioOn: "(●)", RadioOff: "( )",
 	RuleLight: "─", RuleHeavy: "━", Vertical: "│",
@@ -73,7 +73,7 @@ var asciiGlyphs = Glyphs{
 	BrandLeft: ">", BrandMid: "|", BrandRight: "<",
 	Cursor: ">", Check: "[x]", Uncheck: "[ ]", Locked: "[-]", Kept: "[=]",
 	Bullet: "-", Arrow: ">", Sep: "/", Ellipsis: "...", Dash: "-",
-	OK: "+", Warn: "!", Fail: "!", Info: "-", Unknown: "?", Unsupported: "~", Focus: "#",
+	OK: "+", Warn: "!", Fail: "!", Info: "-", Unknown: "?", Unsupported: "~",
 	Dot: "*", Hollow: "o",
 	RadioOn: "(*)", RadioOff: "( )",
 	RuleLight: "-", RuleHeavy: "=", Vertical: "|",
@@ -118,16 +118,15 @@ type Theme struct {
 	Rule      lipgloss.Style // unfocused borders, rules, dimmed backdrop
 	RuleOn    lipgloss.Style // focused borders, the active tab rule
 
-	Title    lipgloss.Style // item titles
-	Heading  lipgloss.Style // upper-case section labels
-	Body     lipgloss.Style
-	Muted    lipgloss.Style // secondary text and labels
-	Faint    lipgloss.Style // tertiary text, column headers, hints
-	Accent   lipgloss.Style
-	Key      lipgloss.Style // key names in hints
-	Code     lipgloss.Style // selectable commands and paths
-	Selected lipgloss.Style // plain text on the selection background
-	Marked   lipgloss.Style // multi-selected rows
+	Title   lipgloss.Style // item titles
+	Heading lipgloss.Style // upper-case section labels
+	Body    lipgloss.Style
+	Muted   lipgloss.Style // secondary text and labels
+	Faint   lipgloss.Style // tertiary text, column headers, hints
+	Accent  lipgloss.Style
+	Key     lipgloss.Style // key names in hints
+	Code    lipgloss.Style // selectable commands and paths
+	Marked  lipgloss.Style // multi-selected rows
 
 	Success   lipgloss.Style
 	Attention lipgloss.Style
@@ -135,9 +134,8 @@ type Theme struct {
 	Unknown   lipgloss.Style
 	Info      lipgloss.Style
 
-	Dialog lipgloss.Style
-	Button lipgloss.Style // the primary action in a dialog
-	Ghost  lipgloss.Style // a secondary action in a dialog
+	Button lipgloss.Style // the label of a primary next action
+	Ghost  lipgloss.Style // the label of a secondary next action
 }
 
 // newTheme builds the session theme. lipgloss downgrades the colors to
@@ -147,14 +145,6 @@ func newTheme(ascii bool) *Theme {
 	g := unicodeGlyphs
 	if ascii {
 		g = asciiGlyphs
-	}
-
-	border := lipgloss.RoundedBorder()
-	if ascii {
-		border = lipgloss.Border{
-			Top: "-", Bottom: "-", Left: "|", Right: "|",
-			TopLeft: "+", TopRight: "+", BottomLeft: "+", BottomRight: "+",
-		}
 	}
 
 	fg := lipgloss.NewStyle().Foreground(colorFg)
@@ -172,16 +162,15 @@ func newTheme(ascii bool) *Theme {
 		Rule:      lipgloss.NewStyle().Foreground(colorLine),
 		RuleOn:    lipgloss.NewStyle().Foreground(colorAcc),
 
-		Title:    fg.Bold(true),
-		Heading:  lipgloss.NewStyle().Foreground(colorDim).Bold(true),
-		Body:     fg,
-		Muted:    lipgloss.NewStyle().Foreground(colorDim),
-		Faint:    lipgloss.NewStyle().Foreground(colorFaint),
-		Accent:   lipgloss.NewStyle().Foreground(colorAcc),
-		Key:      lipgloss.NewStyle().Foreground(colorAcc).Bold(true),
-		Code:     lipgloss.NewStyle().Foreground(colorAcc),
-		Selected: fg.Bold(true).Background(colorSel),
-		Marked:   lipgloss.NewStyle().Foreground(colorAcc),
+		Title:   fg.Bold(true),
+		Heading: lipgloss.NewStyle().Foreground(colorDim).Bold(true),
+		Body:    fg,
+		Muted:   lipgloss.NewStyle().Foreground(colorDim),
+		Faint:   lipgloss.NewStyle().Foreground(colorFaint),
+		Accent:  lipgloss.NewStyle().Foreground(colorAcc),
+		Key:     lipgloss.NewStyle().Foreground(colorAcc).Bold(true),
+		Code:    lipgloss.NewStyle().Foreground(colorAcc),
+		Marked:  lipgloss.NewStyle().Foreground(colorAcc),
 
 		Success:   lipgloss.NewStyle().Foreground(colorOk),
 		Attention: lipgloss.NewStyle().Foreground(colorWarn),
@@ -189,7 +178,6 @@ func newTheme(ascii bool) *Theme {
 		Unknown:   lipgloss.NewStyle().Foreground(colorInfo),
 		Info:      lipgloss.NewStyle().Foreground(colorInfo),
 
-		Dialog: lipgloss.NewStyle().Border(border).BorderForeground(colorAcc).Padding(1, 2),
 		Button: lipgloss.NewStyle().Foreground(colorAcc).Bold(true),
 		Ghost:  lipgloss.NewStyle().Foreground(colorDim),
 	}

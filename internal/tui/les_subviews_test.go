@@ -28,7 +28,7 @@ func TestLessonsEvidenceSubView(t *testing.T) {
 	lines := strings.Split(h.view(), "\n")
 	assert.True(t, strings.HasPrefix(lines[7], "╭─ Evidence sources "), "the box starts on the row of the other boxes")
 	assert.Contains(t, h.view(), "seamark index --fixes-only")
-	assert.Contains(t, shellAFooter(h.view()), "p proposals   m pins   s stats")
+	assert.Contains(t, footerLine(h.view()), "p proposals   m pins   s stats")
 
 	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 20}} {
 		h.resize(size[0], size[1])

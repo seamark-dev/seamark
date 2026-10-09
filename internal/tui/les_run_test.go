@@ -101,7 +101,7 @@ func TestRunViewEmptyStateNamesWhereARunStarts(t *testing.T) {
 	assert.Contains(t, lesBoxFlat(frame), "Refresh the evidence or prepare a distillation from Evidence, or "+
 		"extract trigger information with t in Pins or Proposals.")
 	assert.Contains(t, frame, "e open Evidence   m open Pins")
-	assert.Contains(t, shellAFooter(frame), "p proposals   m pins   s stats   e evidence")
+	assert.Contains(t, footerLine(frame), "p proposals   m pins   s stats   e evidence")
 	assert.False(t, les.capturing())
 
 	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 20}} {
@@ -220,8 +220,8 @@ func TestRunViewRoutesKeysAndMessagesToTheRecord(t *testing.T) {
 	rec.bindings = []key.Binding{stop}
 	h.send(openRunMsg{rec: rec, show: true})
 
-	assert.True(t, strings.HasPrefix(strings.TrimSpace(shellAFooter(h.view())), "x stop   p proposals   m pins   e evidence"),
-		shellAFooter(h.view()))
+	assert.True(t, strings.HasPrefix(strings.TrimSpace(footerLine(h.view())), "x stop   p proposals   m pins   e evidence"),
+		footerLine(h.view()))
 
 	h.press("x")
 	assert.Equal(t, []string{"x"}, rec.keysOf(), "the visible record gets its keys")
@@ -266,7 +266,7 @@ func TestRunViewCapturingRecordOwnsTheKeys(t *testing.T) {
 	assert.Equal(t, destLessons, h.m.active)
 	assert.False(t, h.quit)
 
-	footer := shellAFooter(h.view())
+	footer := footerLine(h.view())
 	assert.Contains(t, footer, "ctrl+c quit")
 	assert.NotContains(t, footer, "p proposals", "the switch keys give way while the record captures")
 }
@@ -394,7 +394,7 @@ func TestRunViewStepsThroughEarlierRecordsReadOnly(t *testing.T) {
 	cur.running = true
 
 	require.Equal(t, lesRun, les.sub)
-	assert.Contains(t, shellAFooter(h.view()), "[ earlier run", "the footer offers the earlier record")
+	assert.Contains(t, footerLine(h.view()), "[ earlier run", "the footer offers the earlier record")
 
 	h.press("[")
 	require.Same(t, older, v.shown())
@@ -403,7 +403,7 @@ func TestRunViewStepsThroughEarlierRecordsReadOnly(t *testing.T) {
 	assert.Contains(t, frame, "Earlier run 1 of 1 · read-only · ] later")
 	assert.Contains(t, frame, "Distillation 13:00")
 
-	footer := shellAFooter(frame)
+	footer := footerLine(frame)
 	assert.Contains(t, footer, "enter review proposals")
 	assert.Contains(t, footer, "↑↓ group")
 	assert.Contains(t, footer, "] later run")
@@ -421,7 +421,7 @@ func TestRunViewStepsThroughEarlierRecordsReadOnly(t *testing.T) {
 	for _, size := range [][2]int{{80, 24}, {60, 20}} {
 		h.resize(size[0], size[1])
 
-		footer := shellAFooter(h.view())
+		footer := footerLine(h.view())
 		assert.Contains(t, footer, "enter review", "size %v: the step action leads", size)
 		assert.NotContains(t, footer, "review proposals", "size %v: the short label", size)
 	}
@@ -478,4 +478,27 @@ func TestRunViewNewRecordEndsTheBrowse(t *testing.T) {
 	h.send(openRunMsg{rec: third})
 	assert.Same(t, third, v.shown(), "a new record shows at once")
 	assert.Contains(t, h.view(), "Refresh 3")
+}
+
+// The tests below hold review fixes. Each test drives the real model
+// through the harness, so it proves the fix where the user sees it.
+
+// The shell guard: any dropped draft that leaves no record moves the
+// view off the Run sub-view, so no visible sub-view lacks its tab.
+func TestDroppedDraftNeverLeavesAnUnlistedRunView(t *testing.T) {
+	f := newFake()
+	f.ledger = lesLedger()
+
+	h := lesOpen(t, f, 120, 40)
+	les := hookLessons(h)
+
+	d := newDistillDraft(h.m.st, "")
+	h.send(openRunMsg{rec: d, show: true})
+	require.Equal(t, lesRun, les.sub)
+
+	// Only the close message, without the navigation that a closed
+	// scope step sends with it.
+	h.send(closeRunMsg{rec: d})
+	assert.False(t, les.runShown())
+	assert.Equal(t, lesProposals, les.sub)
 }

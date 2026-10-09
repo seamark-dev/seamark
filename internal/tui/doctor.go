@@ -114,7 +114,7 @@ func (d *doctorView) checks() []doctor.Check {
 
 // narrow reports the single-pane layout of the current terminal.
 func (d *doctorView) narrow() bool {
-	return d.st.width > 0 && d.st.width < wideWidth
+	return d.st.width > 0 && !d.st.wide()
 }
 
 // detailActive reports that the movement keys scroll the detail.
@@ -496,7 +496,7 @@ func (d *doctorView) listBox(w, h int, focus bool) string {
 
 	switch {
 	case len(checks) > window:
-		foot = t.Faint.Render(itoa(d.list.offset+1) + "–" + itoa(end) + " of " + itoa(len(checks)))
+		foot = propRange(t, d.list.offset, end, len(checks))
 	case d.narrow():
 		foot = t.Faint.Render("enter for detail")
 	}

@@ -58,7 +58,7 @@ func frFake(planned *[][]integration.ClientSetup) *fakeServices {
 // frIntentScreen is a stub destination that records the intents it
 // opens with, so a test sees what a first-run step asks for.
 type frIntentScreen struct {
-	shellAScreen
+	stubScreen
 
 	intents []string
 }
@@ -87,16 +87,16 @@ func TestFirstRunShowsTheThreeStepsOfTheDesign(t *testing.T) {
 
 	// The box is 76 cells wide and centered, as in the 1a design.
 	lines := strings.Split(frame, "\n")
-	top := lines[shellBLineIndex(lines, "Set up seamark")]
+	top := lines[lineIndex(lines, "Set up seamark")]
 	assert.Equal(t, 22, strings.Index(top, "╭"), "the box starts at column 22")
-	assert.Equal(t, 12, shellBLineIndex(lines, "Set up seamark"), "the box starts at row 12")
+	assert.Equal(t, 12, lineIndex(lines, "Set up seamark"), "the box starts at row 12")
 	assert.Len(t, []rune(strings.TrimSpace(top)), 76)
 
 	// The tabs are disabled: no active rule and no tab count.
 	assert.Equal(t, "  1 Overview   2 Integrations   3 Lessons   4 Doctor   5 Settings", strings.TrimRight(lines[1], " "))
 	assert.NotContains(t, lines[2], "━", "no tab is active while the guide shows")
 
-	footer := shellAFooter(frame)
+	footer := footerLine(frame)
 	assert.Contains(t, footer, "↑↓ step   enter start")
 	assert.Contains(t, footer, "q quit")
 	assert.NotContains(t, footer, "? help")
@@ -432,4 +432,42 @@ func TestFirstRunKeysMatchTheStage(t *testing.T) {
 
 	fr.stage = frApplying
 	assert.Empty(t, fr.keys())
+}
+
+// The tests below hold review fixes. Each test drives the real model
+// through the harness, so it proves the fix where the user sees it.
+
+// Review fix: a setup and the first-run guide create the starter
+// lessons.yaml, but Pins kept "No pin file yet" until the user pressed r.
+func TestSetupAndFirstRunApplyReloadThePins(t *testing.T) {
+	assert.Contains(t, frRefreshKinds, secPins)
+
+	f := newFake()
+	f.ledger = lesLedger()
+
+	h := lesOpen(t, f, 120, 40)
+	h.press("m")
+	require.Contains(t, h.view(), "No pin file yet")
+
+	// The setup writes the pin file, so the next read finds it.
+	f.pins = pinsInspection()
+	reads := f.readCount("Pins")
+
+	h.send(setupAppliedMsg{})
+	assert.Equal(t, reads+1, f.readCount("Pins"), "a setup apply reads the pins again")
+	assert.NotContains(t, h.view(), "No pin file yet")
+	assert.Contains(t, h.view(), "wrap-sql-errors")
+
+	// The result of the guide reloads the pins without the guide too.
+	h.send(frApplyMsg{res: frAppliedResult()})
+	assert.Equal(t, reads+2, f.readCount("Pins"), "a first-run apply reads the pins again")
+
+	// The guide itself reloads them with its result.
+	g := frFake(nil)
+	hg := newHarness(t, g, 120, 40)
+	require.NotNil(t, hg.m.welcome)
+
+	reads = g.readCount("Pins")
+	hg.send(frApplyMsg{res: frAppliedResult()})
+	assert.Equal(t, reads+1, g.readCount("Pins"), "the guide reads the pins again")
 }

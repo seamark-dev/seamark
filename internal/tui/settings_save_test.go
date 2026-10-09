@@ -55,9 +55,9 @@ func TestSettingsSaveNeedsYFromThePreview(t *testing.T) {
 		assert.Contains(t, flat, want)
 	}
 
-	assert.Contains(t, shellAFooter(frame), "y save")
-	assert.Contains(t, shellAFooter(frame), "esc keep editing")
-	assert.Contains(t, shellAFooter(frame), "ctrl+c quit", "the preview captures the keys")
+	assert.Contains(t, footerLine(frame), "y save")
+	assert.Contains(t, footerLine(frame), "esc keep editing")
+	assert.Contains(t, footerLine(frame), "ctrl+c quit", "the preview captures the keys")
 
 	// The shell does not act on keys that the preview ignores.
 	h.press("enter", "5", "q")
@@ -128,7 +128,7 @@ func TestSettingsCustomCommandRemovalIsExplicit(t *testing.T) {
 		assert.Contains(t, flat, want)
 	}
 
-	assert.Contains(t, shellAFooter(h.view()), "y save and remove agent.argv")
+	assert.Contains(t, footerLine(h.view()), "y save and remove agent.argv")
 
 	h.press("y")
 	require.Equal(t, 1, svc.callCount("SaveSettings"))
@@ -179,7 +179,7 @@ func TestSettingsReviewWindowAcceptsOnlyPositiveDays(t *testing.T) {
 	h.send(navigateMsg{dest: destSettings, intent: "group:evidence"})
 	h.press("enter", "down", "space")
 	require.True(t, scr.capturing(), "the day input captures the keys")
-	assert.Contains(t, shellAFooter(h.view()), "ctrl+c quit")
+	assert.Contains(t, footerLine(h.view()), "ctrl+c quit")
 
 	h.typeText("q1x")
 	assert.Equal(t, "1", scr.ed.input.value(), "the input takes digits only")
@@ -296,7 +296,7 @@ func TestSettingsBlockedFileOffersTheManualRoute(t *testing.T) {
 	assert.Contains(t, flat, "› .seamark/config.yaml:3")
 	assert.Contains(t, flat, "Fix the file by hand; the other views stay usable.")
 	assert.NotContains(t, flat, "not editable here", "the tail explains a file-wide block once")
-	assert.NotContains(t, shellAFooter(frame), "s review save")
+	assert.NotContains(t, footerLine(frame), "s review save")
 
 	h.press("enter", "down", "space")
 	assert.Contains(t, h.view(), "Inference cannot be edited here")
@@ -342,7 +342,7 @@ func TestSettingsPlanOfAStaleFileReadsItAgain(t *testing.T) {
 		"the file; press s to review them against the file as it is now.")
 	assert.Equal(t, 1, settingsScr(h).draftTotal(), "the file does not hold the drafted value, so the draft stays")
 	assert.Greater(t, svc.readCount("Settings"), reads, "a stale plan reads the file again")
-	assert.NotContains(t, shellAFooter(frame), "y save")
+	assert.NotContains(t, footerLine(frame), "y save")
 
 	h.press("y")
 	settingsNoWrites(t, svc)
@@ -415,7 +415,7 @@ func TestSettingsSaveWaitsForARunningOperation(t *testing.T) {
 	frame := h.view()
 	assert.NotEmpty(t, settingsLine(frame, "distill.write", "on", "● draft"))
 	assert.Contains(t, settingsBox(frame, "Settings"), "Saving waits for the running operation: Distilling proposals.")
-	assert.NotContains(t, shellAFooter(frame), "s review save", "s vanishes from the footer")
+	assert.NotContains(t, footerLine(frame), "s review save", "s vanishes from the footer")
 	assert.Contains(t, settingsBox(frame, "Settings"), "1 unsaved change in Pin writing")
 	assert.NotContains(t, settingsBox(frame, "Settings"), "s reviews and saves", "the tail offers no disabled key")
 
@@ -433,7 +433,7 @@ func TestSettingsSaveWaitsForARunningOperation(t *testing.T) {
 	require.True(t, h.m.st.begin("Refreshing evidence"))
 
 	frame = h.view()
-	assert.NotContains(t, shellAFooter(frame), "y save")
+	assert.NotContains(t, footerLine(frame), "y save")
 	assert.Contains(t, settingsBox(frame, "Save"), "Saving waits for the running operation: Refreshing evidence.")
 
 	h.press("y")
@@ -536,8 +536,8 @@ func TestSettingsCLIResetUnderCustomCommandSaysArgvStays(t *testing.T) {
 
 	assert.NotContains(t, flat, "the default claude applies")
 	assert.NotContains(t, flat, "EFFECTIVE", "the effective command does not change")
-	assert.Contains(t, shellAFooter(h.view()), "y save")
-	assert.NotContains(t, shellAFooter(h.view()), "remove agent.argv", "the save keeps agent.argv")
+	assert.Contains(t, footerLine(h.view()), "y save")
+	assert.NotContains(t, footerLine(h.view()), "remove agent.argv", "the save keeps agent.argv")
 
 	h.press("y")
 	assert.Equal(t, "agent:\n  argv: [my-agent, --json]\n", settingsBytes(t, svc))
@@ -634,11 +634,11 @@ func TestSettingsSaveReloadsDiagnosticsAndStartsNoWork(t *testing.T) {
 			// Every save changes the index fingerprint, so Doctor, the
 			// index and the evidence view read again.
 			for _, k := range []sectionKind{secSettings, secDoctor, secIndex, secLearning} {
-				assert.Greater(t, after[k], gens[k], "section %d reloads", k)
+				assert.Greater(t, after[k].latest(), gens[k].latest(), "section %d reloads", k)
 			}
 
 			if tc.ledger {
-				assert.Greater(t, after[secLedger], gens[secLedger], "the ledger reloads for its write gate")
+				assert.Greater(t, after[secLedger].latest(), gens[secLedger].latest(), "the ledger reloads for its write gate")
 			} else {
 				assert.Equal(t, gens[secLedger], after[secLedger], "only pin writing reloads the ledger")
 			}

@@ -216,10 +216,10 @@ func TestSettingsListShowsEveryFieldWithItsSource(t *testing.T) {
 
 	assert.Contains(t, settingsBox(frame, "Settings"),
 		"A change stays a draft until you save it with s and y.")
-	assert.Contains(t, shellAFooter(frame), "enter edit")
-	assert.Contains(t, shellAFooter(frame), "d default")
-	assert.NotContains(t, shellAFooter(frame), "s review save", "no draft, so s is disabled")
-	assert.Contains(t, shellAFooter(frame), "r refresh", "the list does not capture keys")
+	assert.Contains(t, footerLine(frame), "enter edit")
+	assert.Contains(t, footerLine(frame), "d default")
+	assert.NotContains(t, footerLine(frame), "s review save", "no draft, so s is disabled")
+	assert.Contains(t, footerLine(frame), "r refresh", "the list does not capture keys")
 
 	for _, size := range [][2]int{{80, 24}, {60, 20}, {200, 50}} {
 		h.resize(size[0], size[1])
@@ -326,7 +326,7 @@ func TestSettingsCompactLayoutsUseOnePane(t *testing.T) {
 	assertFrame(t, frame, 80, 24)
 	assert.Contains(t, frame, "╭─ agent.cli ")
 	assert.Contains(t, frame, "esc back to the list")
-	assert.Contains(t, shellAFooter(frame), "space select")
+	assert.Contains(t, footerLine(frame), "space select")
 
 	h.press("esc")
 	assert.NotContains(t, h.view(), "esc back to the list")
@@ -408,7 +408,7 @@ func TestSettingsUnreadableSnapshotShowsTheRoute(t *testing.T) {
 // settingsProbe is a stub destination that records the settings saves
 // that the shell broadcasts.
 type settingsProbe struct {
-	shellAScreen
+	stubScreen
 
 	saved []settingsSavedMsg
 }

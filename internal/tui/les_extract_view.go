@@ -178,7 +178,7 @@ func (r *extRecord) reviewView(w, h int) string {
 		return r.nothingBox(w, h)
 	}
 
-	if r.wide() {
+	if r.st.wide() {
 		leftW := max(34, setupSplit(w, distPlanW))
 
 		return hjoin(1, r.planBox(leftW, h, pl.planFocus), r.itemsBox(w-leftW-1, h, !pl.planFocus, false))
@@ -1308,7 +1308,7 @@ func extUnattemptedText(c extCounts) string {
 // runView renders the run or its result: the summary and the proposals
 // side by side, or one of them in the compact layout.
 func (r *extRecord) runView(w, h int) string {
-	if r.wide() {
+	if r.st.wide() {
 		leftW := setupSplit(w, 60)
 
 		return hjoin(1, r.summaryBox(leftW, h, r.run.sumFocus), r.runItemsBox(w-leftW-1, h, !r.run.sumFocus))

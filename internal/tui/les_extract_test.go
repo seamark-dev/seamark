@@ -82,7 +82,7 @@ func TestExtractReviewDisclosesThePreview(t *testing.T) {
 		assert.Contains(t, frame, want)
 	}
 
-	assert.Contains(t, shellAFooter(frame), "y start run")
+	assert.Contains(t, footerLine(frame), "y start run")
 
 	flat := extTallFlat(h)
 	// The prompt builder sends the ID, the rule, the note and the evidence
@@ -135,7 +135,7 @@ func TestExtractReviewKeepsItsScopeAtTheMinimumSize(t *testing.T) {
 		assertFrame(t, frame, minWidth, minHeight)
 		assert.Contains(t, frame, "Sends 5 proposals in 1 batch · 4 ineligible", stage)
 		assert.Contains(t, frame, "Nothing is sent until you press y.", stage)
-		assert.True(t, strings.HasPrefix(strings.TrimSpace(shellAFooter(frame)), "y start run"), stage)
+		assert.True(t, strings.HasPrefix(strings.TrimSpace(footerLine(frame)), "y start run"), stage)
 	}
 
 	check("top")
@@ -185,7 +185,7 @@ func TestExtractReviewOffersNoStartWithoutAnEligibleProposal(t *testing.T) {
 				assert.Contains(t, frame, w)
 			}
 
-			assert.NotContains(t, shellAFooter(frame), "y start", "no y without a confirmable plan")
+			assert.NotContains(t, footerLine(frame), "y start", "no y without a confirmable plan")
 			assert.False(t, extRecOf(t, h).runnable())
 
 			h.press("y")
@@ -193,7 +193,7 @@ func TestExtractReviewOffersNoStartWithoutAnEligibleProposal(t *testing.T) {
 			assert.False(t, h.m.st.busy())
 
 			if c.link != "" {
-				assert.Contains(t, shellAFooter(frame), "o open Settings › Inference")
+				assert.Contains(t, footerLine(frame), "o open Settings › Inference")
 
 				h.press("o")
 				assert.Equal(t, destSettings, h.m.active, "o only navigates")
@@ -243,7 +243,7 @@ func TestExtractPlanErrorsNameTheirRoute(t *testing.T) {
 			assert.Contains(t, frame, c.title)
 			assert.Contains(t, frame, "Nothing was sent or written.")
 			assert.NotContains(t, frame, distill.ErrExtractStale.Error()+":", "the stale prefix is cut")
-			assert.NotContains(t, shellAFooter(h.view()), "y start")
+			assert.NotContains(t, footerLine(h.view()), "y start")
 
 			h.press("y")
 			assert.Zero(t, f.callCount("RunExtract"))
@@ -433,7 +433,7 @@ func TestExtractProgressShowsTypedEvents(t *testing.T) {
 	assert.Contains(t, frame, "waiting")
 	assert.Contains(t, frame, "2 of 5 saved")
 	assert.Contains(t, frame, "(estimated)")
-	assert.Contains(t, shellAFooter(frame), "x stop")
+	assert.Contains(t, footerLine(frame), "x stop")
 	assert.Equal(t, 2, rec.run.cursor, "the cursor follows the batch that runs")
 
 	// The notice row follows the run on every destination.
@@ -459,7 +459,7 @@ func TestExtractStopAsksFirstAndStopsOnce(t *testing.T) {
 	assert.Contains(t, modal, "Stop the trigger extraction?")
 	assert.Contains(t, lesBoxFlat(modal), "cancels the agent call of batch 2")
 	assert.Contains(t, lesBoxFlat(modal), "A provider can still bill the cancelled call.")
-	assert.Contains(t, shellAFooter(h.view()), "y stop the run   esc keep running")
+	assert.Contains(t, footerLine(h.view()), "y stop the run   esc keep running")
 
 	h.press("esc")
 	assert.False(t, rec.run.stopping, "esc keeps the run going")
@@ -473,7 +473,7 @@ func TestExtractStopAsksFirstAndStopsOnce(t *testing.T) {
 	assert.Contains(t, frame, "Stopping")
 	assert.Contains(t, frame, "waiting for the agent call of batch 2")
 	assert.Contains(t, frame, "Stopping after batch 2 of 3")
-	assert.NotContains(t, shellAFooter(frame), "x stop", "x is off while stopping")
+	assert.NotContains(t, footerLine(frame), "x stop", "x is off while stopping")
 
 	h.press("x")
 	assert.False(t, rec.capturing(), "no second stop question")
@@ -605,14 +605,14 @@ func TestExtractResultLinksOnlyNavigate(t *testing.T) {
 
 	// The cursor opens on the conflict p6, which links nothing.
 	require.Equal(t, 3, rec.run.cursor)
-	assert.NotContains(t, shellAFooter(h.view()), "enter open")
+	assert.NotContains(t, footerLine(h.view()), "enter open")
 
 	h.press("enter")
 	assert.Equal(t, lesRun, hookLessons(h).sub, "enter on p6 opens nothing")
 
 	// p4 is applied and stored trigger paths: enter opens its pin.
 	h.press("down")
-	assert.Contains(t, shellAFooter(h.view()), "enter open pins")
+	assert.Contains(t, footerLine(h.view()), "enter open pins")
 	assert.Contains(t, extTallFlat(h), "enter show p4 in Lessons › Pins; a retarget is a separate preview there")
 
 	h.press("enter")
@@ -658,7 +658,7 @@ func TestExtractPrepareRemainingPlansANewPreview(t *testing.T) {
 
 	first := extRecOf(t, h)
 	require.Equal(t, extResult, first.step)
-	assert.Contains(t, shellAFooter(h.view()), "n prepare remaining")
+	assert.Contains(t, footerLine(h.view()), "n prepare remaining")
 
 	h.press("n")
 
@@ -689,7 +689,7 @@ func TestExtractRefusedStartReturnsToTheReview(t *testing.T) {
 	assert.False(t, rec.runnable())
 	assert.Contains(t, h.view(), "The trigger extraction did not start: p21 is applied now.")
 	assert.Contains(t, extTallFlat(h), "The preview is out of date: p21 is applied now. Nothing was sent.")
-	assert.NotContains(t, shellAFooter(h.view()), "y start")
+	assert.NotContains(t, footerLine(h.view()), "y start")
 
 	h.press("enter")
 	assert.Equal(t, 2, f.callCount("PlanExtract"), "only a new preview helps")

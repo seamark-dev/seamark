@@ -132,7 +132,7 @@ func (d *distRecord) facts(compact bool) string {
 func (d *distRecord) scopeView(w, h int) string {
 	t := d.st.theme
 
-	if !d.wide() {
+	if !d.st.wide() {
 		if d.form.about {
 			o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "About this run", true)}
 

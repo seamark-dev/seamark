@@ -316,7 +316,7 @@ func TestSettingsBlockedEditorOffersNoEditKeys(t *testing.T) {
 
 	h.press("enter")
 
-	foot := shellAFooter(h.view())
+	foot := footerLine(h.view())
 	assert.NotContains(t, foot, "space select", "a blocked radio editor selects nothing")
 	assert.Contains(t, foot, "↑↓ move")
 
@@ -324,7 +324,7 @@ func TestSettingsBlockedEditorOffersNoEditKeys(t *testing.T) {
 	h.send(navigateMsg{dest: destSettings, intent: "group:indexing"})
 	h.press("down", "enter")
 
-	foot = shellAFooter(h.view())
+	foot = footerLine(h.view())
 	for _, k := range []string{"a add", "x remove", "K/J reorder", "enter edit"} {
 		assert.NotContains(t, foot, k, "a blocked list editor offers no %s", k)
 	}
@@ -335,6 +335,6 @@ func TestSettingsBlockedEditorOffersNoEditKeys(t *testing.T) {
 	// even when the file holds the key.
 	svc = settingsFake(t, "agent:\n  cli: &c codex\n")
 	h = settingsOpen(t, svc, 120, 40)
-	assert.NotContains(t, shellAFooter(h.view()), "d default")
+	assert.NotContains(t, footerLine(h.view()), "d default")
 	assert.Empty(t, svc.called())
 }

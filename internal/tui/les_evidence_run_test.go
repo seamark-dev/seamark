@@ -140,7 +140,7 @@ func TestEvidenceRunStartsExactlyOnce(t *testing.T) {
 
 	assert.NotContains(t, text, "grouping the comments into lessons", "a done fetch step shows its counts")
 
-	assert.Contains(t, shellAFooter(frame), "enter prepare distillation   n plan again")
+	assert.Contains(t, footerLine(frame), "enter prepare distillation   n plan again")
 
 	// enter opens the scope step of a distillation; it plans nothing.
 	h.press("enter")
@@ -250,7 +250,7 @@ func TestEvidenceRunIsRefusedWhileTheSlotIsBusy(t *testing.T) {
 
 	frame := h.view()
 	assert.False(t, les.evid.confirmable(), "a ready plan is not confirmable while the slot is busy")
-	assert.NotContains(t, shellAFooter(frame), "y refresh", "y is off while the slot is busy")
+	assert.NotContains(t, footerLine(frame), "y refresh", "y is off while the slot is busy")
 	assert.Contains(t, evPreviewText(t, les), "Building the index is running. The refresh can start after it ends")
 
 	h.press("y")
@@ -259,7 +259,7 @@ func TestEvidenceRunIsRefusedWhileTheSlotIsBusy(t *testing.T) {
 	assert.NotNil(t, les.evid.prev, "the preview stays, so the user can start after the build")
 
 	h.send(mutationDoneMsg{})
-	assert.Contains(t, shellAFooter(h.view()), "y refresh", "y is on again once the slot is free")
+	assert.Contains(t, footerLine(h.view()), "y refresh", "y is on again once the slot is free")
 
 	h.press("y")
 	assert.Equal(t, 1, f.callCount("RunEvidence"))
@@ -286,7 +286,7 @@ func TestEvidenceRunShowsProgressAndStops(t *testing.T) {
 		assert.Contains(t, evNotice(frame), "Refreshing evidence · GitHub reviews · 1.5 MiB received")
 		assert.NotContains(t, evNotice(frame), " of ", "a fetch has no known total")
 		assert.Contains(t, frame, "Fetch GitHub reviews · acme/seamark")
-		assert.Contains(t, shellAFooter(frame), "x stop")
+		assert.Contains(t, footerLine(frame), "x stop")
 
 		text := evRecordText(les.evid.run)
 		assert.Contains(t, text, "✓ Mine local fixes")
@@ -297,7 +297,7 @@ func TestEvidenceRunShowsProgressAndStops(t *testing.T) {
 
 		h.press("x")
 		assert.Contains(t, h.view(), "Stop the evidence refresh?")
-		assert.Contains(t, shellAFooter(h.view()), "y stop   esc keep running")
+		assert.Contains(t, footerLine(h.view()), "y stop   esc keep running")
 
 		h.press("esc")
 		require.NoError(t, ctx.Err(), "esc keeps the run going")
@@ -309,7 +309,7 @@ func TestEvidenceRunShowsProgressAndStops(t *testing.T) {
 		assert.Contains(t, evNotice(frame), "Stopping")
 		assert.Contains(t, frame, "stopping")
 		assert.Contains(t, frame, "Stopping at a safe point")
-		assert.NotContains(t, shellAFooter(frame), "x stop", "a second stop is not offered")
+		assert.NotContains(t, footerLine(frame), "x stop", "a second stop is not offered")
 
 		h.press("x")
 		assert.False(t, les.evid.run.confirm)
@@ -388,7 +388,7 @@ func TestEvidenceRunConflictPreparesAgain(t *testing.T) {
 	assertFrame(t, frame, 120, 40)
 	assert.Contains(t, frame, "! out of date")
 	assert.Contains(t, frame, "The refresh preview is out of date")
-	assert.NotContains(t, shellAFooter(frame), "enter prepare", "stale evidence offers no distillation")
+	assert.NotContains(t, footerLine(frame), "enter prepare", "stale evidence offers no distillation")
 
 	text := evRecordText(les.evid.run)
 	assert.Contains(t, text, "The workspace changed after the preview: HEAD moved.")
@@ -573,7 +573,7 @@ func TestEvidenceRunLayoutsAtEverySize(t *testing.T) {
 		assertFrame(t, frame, size[0], size[1])
 		assert.Contains(t, frame, "Evidence refresh")
 		assert.Contains(t, frame, "Mine local fixes")
-		assert.True(t, strings.HasPrefix(strings.TrimSpace(shellAFooter(frame)), "x stop"), shellAFooter(frame))
+		assert.True(t, strings.HasPrefix(strings.TrimSpace(footerLine(frame)), "x stop"), footerLine(frame))
 		assert.Contains(t, evNotice(frame), "Refreshing evidence")
 	}
 
@@ -763,7 +763,7 @@ func TestEvidenceResultFooterKeepsAKeyAtEverySize(t *testing.T) {
 
 				frame := h.view()
 				assertFrame(t, frame, size[0], size[1])
-				assert.Contains(t, shellAFooter(frame), tc.want[size[0]], "size %dx%d", size[0], size[1])
+				assert.Contains(t, footerLine(frame), tc.want[size[0]], "size %dx%d", size[0], size[1])
 			}
 		})
 	}

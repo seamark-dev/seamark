@@ -214,7 +214,7 @@ func TestProposalsFooterKeepsThePhase2Keys(t *testing.T) {
 		for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 20}} {
 			h, _ := propHelpOpen(t, st, size[0], size[1])
 
-			footer := footerClock.ReplaceAllString(shellAFooter(h.view()), "hh:mm:ss")
+			footer := footerClock.ReplaceAllString(footerLine(h.view()), "hh:mm:ss")
 			assert.Equal(t, want[st.name][size[0]], footer, "%s at %dx%d", st.name, size[0], size[1])
 			assert.NotContains(t, footer, unavailableWord, "%s at %dx%d", st.name, size[0], size[1])
 		}
@@ -270,7 +270,7 @@ func TestProposalsWideFooterKeepsThePhase2LabelOfEveryKey(t *testing.T) {
 	for _, st := range propFooterStates() {
 		h, _ := propHelpOpen(t, st, 240, 50)
 
-		footer := footerClock.ReplaceAllString(shellAFooter(h.view()), "hh:mm:ss")
+		footer := footerClock.ReplaceAllString(footerLine(h.view()), "hh:mm:ss")
 		left, found := strings.CutSuffix(footer, right)
 		require.True(t, found, "%s: the footer ends with the global keys: %q", st.name, footer)
 

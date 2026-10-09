@@ -39,11 +39,10 @@ type evPlanMsg struct {
 // plan opens the preparing preview and asks for the plan in the
 // background. The plan is read-only, so it needs no mutation slot.
 func (v *evidenceView) plan(mode index.SourceMode) tea.Cmd {
-	v.seq++
-	seq := v.seq
+	seq := v.seq.start()
 	v.prev = &evPreview{mode: mode, planning: true}
 
-	svc := v.st.svc
+	var svc Learning = v.st.svc
 
 	return func() tea.Msg {
 		p, err := svc.PlanEvidence(mode)
@@ -55,7 +54,7 @@ func (v *evidenceView) plan(mode index.SourceMode) tea.Cmd {
 // planned shows a plan, unless the user closed its preview.
 func (v *evidenceView) planned(msg evPlanMsg) tea.Cmd {
 	p := v.prev
-	if p == nil || msg.seq != v.seq || !p.planning {
+	if p == nil || !v.seq.current(msg.seq) || !p.planning {
 		return nil
 	}
 
@@ -78,7 +77,7 @@ func (v *evidenceView) closePreview(reason string) tea.Cmd {
 		return nil
 	}
 
-	v.seq++
+	v.seq.cancel()
 	v.prev = nil
 
 	if reason == "" {

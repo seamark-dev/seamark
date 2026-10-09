@@ -35,6 +35,46 @@ type captureScene struct {
 // size, the common 80×24, the documented minimum, and a large terminal.
 var captureSizes = [][2]int{{120, 40}, {80, 24}, {minWidth, minHeight}, {200, 50}}
 
+// captureDirEnv names the variable that holds the capture directory.
+const captureDirEnv = "SEAMARK_TUI_CAPTURE_DIR"
+
+// captureDir returns the capture directory, or "" when the variable is
+// unset. The capture tests always run their frame checks, because a
+// frame that does not fit is a defect. Only `make tui-capture` sets the
+// variable and keeps the files for the visual review.
+func captureDir() string {
+	return os.Getenv(captureDirEnv)
+}
+
+// saveCapture writes one frame into dir. It writes nothing when dir is
+// empty, so plain go test checks every frame and leaves no file.
+func saveCapture(t *testing.T, dir, name, frame string) {
+	t.Helper()
+
+	if dir == "" {
+		return
+	}
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(frame+"\n"), 0o644))
+}
+
+// TestSaveCaptureWritesOnlyWithADirectory proves both modes of
+// saveCapture: no directory writes nothing, and a directory receives
+// the frame with a final newline.
+func TestSaveCaptureWritesOnlyWithADirectory(t *testing.T) {
+	saveCapture(t, "", "nowhere.txt", "frame")
+
+	_, err := os.Stat("nowhere.txt")
+	assert.ErrorIs(t, err, os.ErrNotExist, "no directory writes no file")
+
+	dir := t.TempDir()
+	saveCapture(t, dir, "scene.txt", "frame")
+
+	got, err := os.ReadFile(filepath.Join(dir, "scene.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "frame\n", string(got))
+}
+
 func captureScenes() []captureScene {
 	lesApplyFake := func(write bool, commit func(*proposals.Preview) (proposals.Result, error)) func() *fakeServices {
 		return func() *fakeServices {
@@ -213,7 +253,7 @@ func captureStats() lessonstats.Snapshot {
 		})
 	}
 
-	snap := shellBStats()
+	snap := oneRecordStats()
 	snap.Records = len(firings)
 	snap.Summary = reviews.Summarize(firings, nil)
 
@@ -230,15 +270,15 @@ func captureDoctor() *fakeServices {
 
 // TestCaptureRepresentativeStates writes plain-text frames of every
 // scene at every capture size into SEAMARK_TUI_CAPTURE_DIR, for the
-// maintainer visual review. Without the variable it only checks that
-// every frame fits its terminal. `make tui-capture` sets it.
+// maintainer visual review. It also checks that every frame fits its
+// terminal, also without the variable.
 //
 // A scene without its own settings gets the snapshot of a workspace
 // with no configuration file. The engine always returns a snapshot or
 // an error, and a fake that returns neither shows a settings error that
 // the product never shows.
 func TestCaptureRepresentativeStates(t *testing.T) {
-	dir := os.Getenv("SEAMARK_TUI_CAPTURE_DIR")
+	dir := captureDir()
 	snap := captureSettings(t)
 
 	for _, sc := range captureScenes() {
@@ -265,12 +305,8 @@ func TestCaptureRepresentativeStates(t *testing.T) {
 			// scenes of Phase 2 cover the real failure states.
 			assert.NotContains(t, frame, "Settings are not readable", "scene %s at %dx%d", sc.name, w, h)
 
-			if dir == "" {
-				continue
-			}
-
 			name := sc.name + "-" + strconv.Itoa(w) + "x" + strconv.Itoa(h) + ".txt"
-			require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(frame+"\n"), 0o644))
+			saveCapture(t, dir, name, frame)
 		}
 	}
 }

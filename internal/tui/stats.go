@@ -66,9 +66,6 @@ type statsView struct {
 	focus  statsPane
 	period int // an index into statsPeriods
 	scroll [statsPaneCount]lesScroll
-
-	// wide records the last layout for the key handler.
-	wide bool
 }
 
 // newStatsView returns the Stats sub-view over the shared state.
@@ -90,10 +87,6 @@ func (s *statsView) update(msg tea.Msg) tea.Cmd {
 // handleKey applies one key: tab changes the box, f changes the chart
 // period, and the movement keys scroll the focused box.
 func (s *statsView) handleKey(msg tea.KeyMsg) {
-	if s.st.width > 0 {
-		s.wide = s.st.width >= wideWidth
-	}
-
 	switch {
 	case key.Matches(msg, nkeys.Next, nkeys.Prev):
 		s.focus = (s.focus + 1) % statsPaneCount
@@ -146,7 +139,6 @@ func (s *statsView) chartReady(v lessonstats.Snapshot) bool {
 func (s *statsView) view(w, h int) string {
 	t := s.st.theme
 	sec := &s.st.stats
-	s.wide = w >= wideWidth
 
 	if !sec.loaded {
 		if sec.err != nil {
@@ -168,7 +160,9 @@ func (s *statsView) view(w, h int) string {
 	v := sec.value
 	boxH := max(4, h-3)
 
-	if !s.wide {
+	// The keys never read the layout, so the render width decides it.
+	// A direct render in a test then needs no terminal size.
+	if w < wideWidth {
 		if s.focus == statsPaneLessons {
 			return head + "\n\n" + s.lessonsBox(v, w, boxH, true)
 		}

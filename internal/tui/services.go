@@ -39,7 +39,30 @@ var ErrNoLedger = errors.New("no readable index database: proposals live in the 
 // Services is the console's view of the shared engines. Every method is
 // synchronous; the shell calls them from background commands, never
 // from Update or View. Read methods never write.
+//
+// Services embeds one interface per area, and each area matches the
+// screens that use it. A worker that needs one area takes only that
+// area, so its signature shows which engine calls it can make. The
+// split stops at the workers. The shared state keeps the whole
+// Services, because the shell loads sources from several areas. Every
+// screen holds that state, so the compiler does not limit a screen to
+// its own area. A screen narrows the value itself before it starts a
+// worker, for example var svc Learning = d.st.svc.
 type Services interface {
+	Reader
+	Setup
+	Decisions
+	Learning
+	Maintenance
+	Settings
+}
+
+// Reader is the shared read side of the workspace: the paths, the
+// diagnostics, the index, the integrations, the ledger and the delivery
+// statistics. The shell and most screens use it. Its methods never
+// write, so a helper that takes only a Reader cannot change the
+// workspace.
+type Reader interface {
 	// Root returns the effective repository root.
 	Root() string
 	// DBPath returns the index database path.
@@ -66,25 +89,38 @@ type Services interface {
 	Ledger() (*proposals.Ledger, error)
 	// Stats reads the lesson delivery statistics.
 	Stats() lessonstats.Snapshot
+}
 
+// Setup covers the integration setup and the local index build. The
+// first-run flow, the setup wizard and the Overview build use it. These
+// flows install Seamark in the workspace, so they share one area.
+type Setup interface {
 	// PlanSetup plans an integration change. It writes nothing.
 	PlanSetup(setups []integration.ClientSetup) (*SetupPreview, error)
 	// ApplySetup applies exactly the reviewed plan.
 	ApplySetup(p *SetupPreview) (integration.SetupResult, error)
 	// BuildIndex runs a local index build. It cannot be cancelled.
 	BuildIndex(force bool, progress func(IndexEvent)) (*index.Summary, error)
+}
+
+// Decisions covers the proposal decisions: a preview, then a commit of
+// the reviewed preview. Lessons › Proposals uses it.
+type Decisions interface {
 	// PreviewDecision describes a proposal decision. It writes nothing.
 	PreviewDecision(action proposals.Action, ids []int64) (*proposals.Preview, error)
 	// CommitDecision revalidates and applies a reviewed decision.
 	CommitDecision(p *proposals.Preview) (proposals.Result, error)
+}
 
+// Learning covers the learning workflow: the evidence snapshot, the
+// evidence refresh, the distillation, the stale-pending cleanup and the
+// trigger extraction. Lessons › Evidence and Lessons › Run use it. Its
+// runs call GitHub or the agent, so each run takes a context that
+// stops it.
+type Learning interface {
 	// Learning reads the stored evidence, the review target, and the
 	// review window. It runs local git only; it never fetches or writes.
 	Learning() learning.Snapshot
-	// Settings reads the focused settings of the configuration file.
-	// The error reports invalid arguments only; a file problem is data
-	// in the snapshot.
-	Settings() (*settings.Snapshot, error)
 
 	// PlanEvidence previews an evidence refresh in mode. It fetches
 	// nothing and writes nothing.
@@ -101,12 +137,19 @@ type Services interface {
 	// CleanupPending removes the stale pending proposals of a
 	// cleanup-only preview. It runs no agent.
 	CleanupPending(p *learning.DistillPreview) (int, error)
-	// PlanSettings plans a guarded patch of one settings group. It
-	// writes nothing.
-	PlanSettings(snap *settings.Snapshot, edits []settings.Edit) (*settings.Plan, error)
-	// SaveSettings writes exactly the reviewed plan, or reports it stale.
-	SaveSettings(p *settings.Plan) (settings.Result, error)
+	// PlanExtract previews a trigger extraction of the selected
+	// proposals. It never runs the agent and never writes.
+	PlanExtract(req learning.ExtractRequest) (*learning.ExtractPreview, error)
+	// RunExtract runs exactly the reviewed preview. A stop through ctx
+	// starts no new batch; progress runs on the worker goroutine.
+	RunExtract(ctx context.Context, p *learning.ExtractPreview,
+		progress func(distill.ExtractEvent)) (*distill.ExtractExecution, error)
+}
 
+// Maintenance covers the installed pins of .seamark/lessons.yaml: the
+// pin read, the retarget and prune maintenance, and the recovery of a
+// partial operation. Lessons › Pins and its maintenance modal use it.
+type Maintenance interface {
 	// Pins reads the installed pins of .seamark/lessons.yaml and relates
 	// them to the ledger. It needs no index and never fails: a file or
 	// ledger problem is data in the inspection. It writes nothing.
@@ -122,13 +165,20 @@ type Services interface {
 	// CommitRecovery revalidates the recovery proof and completes the
 	// ledger update. It never writes the pin file.
 	CommitRecovery(p *maintain.Plan) (maintain.Result, error)
-	// PlanExtract previews a trigger extraction of the selected
-	// proposals. It never runs the agent and never writes.
-	PlanExtract(req learning.ExtractRequest) (*learning.ExtractPreview, error)
-	// RunExtract runs exactly the reviewed preview. A stop through ctx
-	// starts no new batch; progress runs on the worker goroutine.
-	RunExtract(ctx context.Context, p *learning.ExtractPreview,
-		progress func(distill.ExtractEvent)) (*distill.ExtractExecution, error)
+}
+
+// Settings covers the focused settings of the configuration file: the
+// read, a guarded plan and the save. The Settings screen uses it.
+type Settings interface {
+	// Settings reads the focused settings of the configuration file.
+	// The error reports invalid arguments only; a file problem is data
+	// in the snapshot.
+	Settings() (*settings.Snapshot, error)
+	// PlanSettings plans a guarded patch of one settings group. It
+	// writes nothing.
+	PlanSettings(snap *settings.Snapshot, edits []settings.Edit) (*settings.Plan, error)
+	// SaveSettings writes exactly the reviewed plan, or reports it stale.
+	SaveSettings(p *settings.Plan) (settings.Result, error)
 }
 
 // IndexView is the index section of the Overview: the probe, and the
@@ -198,6 +248,19 @@ type engine struct {
 	// never waits behind a long run.
 	mu sync.Mutex
 }
+
+// The engine is the single production implementation of every area.
+// One assertion per area names the area in the build error when a
+// method signature drifts.
+var (
+	_ Services    = (*engine)(nil)
+	_ Reader      = (*engine)(nil)
+	_ Setup       = (*engine)(nil)
+	_ Decisions   = (*engine)(nil)
+	_ Learning    = (*engine)(nil)
+	_ Maintenance = (*engine)(nil)
+	_ Settings    = (*engine)(nil)
+)
 
 // engineDeps are the external boundaries of the engine. Tests replace
 // them, so no engine test contacts GitHub or runs a paid agent. A zero

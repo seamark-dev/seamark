@@ -96,7 +96,7 @@ type maintModal struct {
 	recovering bool
 	// seq increases with every plan read, so a late result of a read
 	// that the user left never replaces the current stage.
-	seq int
+	seq generation
 
 	// plan and err are the shown preview: the plan, or why it failed.
 	plan *maintain.Plan
@@ -132,12 +132,14 @@ func newMaintModal(st *state, req maintain.Request) (*maintModal, tea.Cmd) {
 // prepare starts the plan read of the request. A new read replaces the
 // shown preview, and seq drops the result of an older read.
 func (m *maintModal) prepare() tea.Cmd {
-	m.seq++
+	seq := m.seq.start()
 	m.stage, m.recovering = maintStagePreparing, false
 	m.plan, m.err = nil, nil
 	m.sc = scrollState{}
 
-	seq, req, svc := m.seq, m.req, m.st.svc
+	req := m.req
+
+	var svc Maintenance = m.st.svc
 
 	return func() tea.Msg {
 		plan, err := svc.PlanMaintenance(req)
@@ -149,12 +151,14 @@ func (m *maintModal) prepare() tea.Cmd {
 // prepareRecovery starts the plan read of the offered recovery. The read
 // checks the proof against a fresh observation and writes nothing.
 func (m *maintModal) prepareRecovery() tea.Cmd {
-	m.seq++
+	seq := m.seq.start()
 	m.stage, m.recovering = maintStagePreparing, true
 	m.plan, m.err = nil, nil
 	m.sc = scrollState{}
 
-	seq, rec, svc := m.seq, m.offer, m.st.svc
+	rec := m.offer
+
+	var svc Maintenance = m.st.svc
 
 	return func() tea.Msg {
 		plan, err := svc.PlanRecovery(rec)
@@ -179,7 +183,7 @@ func (m *maintModal) update(msg tea.Msg) tea.Cmd {
 
 // planned shows a plan read, unless the user left the read.
 func (m *maintModal) planned(msg maintPlannedMsg) {
-	if msg.m != m || msg.seq != m.seq || m.stage != maintStagePreparing {
+	if msg.m != m || !m.seq.current(msg.seq) || m.stage != maintStagePreparing {
 		return
 	}
 
@@ -210,7 +214,7 @@ func (m *maintModal) key(msg tea.KeyMsg) tea.Cmd {
 	case maintStagePreparing:
 		if key.Matches(msg, nkeys.Back) {
 			// The read may still finish; seq drops its result.
-			m.seq++
+			m.seq.cancel()
 			m.back()
 		}
 	case maintStagePreview:
@@ -323,7 +327,9 @@ func (m *maintModal) reviewAgain() bool {
 // commit claims the mutation slot and runs the confirmed plan as
 // registered work, so a signal exit waits for it.
 func (m *maintModal) commit() tea.Cmd {
-	p, recovering, svc := m.plan, m.recovering, m.st.svc
+	p, recovering := m.plan, m.recovering
+
+	var svc Maintenance = m.st.svc
 
 	cmd, ok := m.st.beginWork(maintWorkName(p, recovering), func() tea.Msg {
 		var (
@@ -421,7 +427,7 @@ func (m *maintModal) settingsSaved(msg settingsSavedMsg) tea.Cmd {
 		return nil
 	}
 
-	m.seq++
+	m.seq.cancel()
 
 	changed := "Settings " + m.st.theme.Glyphs.Arrow + " " + msg.group.String() + " changed " + settingsFile
 

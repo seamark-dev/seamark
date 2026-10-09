@@ -286,7 +286,7 @@ func (o *overview) listBox(rows []ovRow, items []ovItem, w, h int, focused bool,
 	}
 
 	if len(rows) > n {
-		pos := o.position(off+1, end, len(rows))
+		pos := propRange(t, off, end, len(rows))
 		if foot != "" {
 			pos += t.Faint.Render(" " + t.Glyphs.Sep + " ")
 		}
@@ -337,18 +337,6 @@ func (o *overview) listOffset(rows []ovRow, n int) int {
 	o.list.offset = max(0, min(o.list.offset, top))
 
 	return o.list.offset
-}
-
-// position renders the "first–last of total" note of a scrolled box.
-func (o *overview) position(first, last, total int) string {
-	t := o.st.theme
-
-	dash := "–"
-	if t.ASCII {
-		dash = "-"
-	}
-
-	return t.Faint.Render(itoa(first) + dash + itoa(last) + " of " + itoa(total))
 }
 
 // clientLines renders one line per client: the configuration glyph, the
@@ -544,7 +532,7 @@ func (o *overview) detailBox(it *ovItem, w, h int, focused bool) string {
 
 	foot := ""
 	if len(lines) > n {
-		foot = o.position(o.detailOff+1, end, len(lines))
+		foot = propRange(t, o.detailOff, end, len(lines))
 	}
 
 	return t.box(boxOpts{W: w, H: h, Title: title, Foot: foot, Focus: focused, Lines: lines[o.detailOff:end]})

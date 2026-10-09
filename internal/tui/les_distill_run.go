@@ -209,7 +209,7 @@ func distUnattemptedText(c distCounts) string {
 // runView renders the run or its result: the summary and the groups side
 // by side, or one of them in the compact layout.
 func (d *distRecord) runView(w, h int) string {
-	if d.wide() {
+	if d.st.wide() {
 		leftW := setupSplit(w, 60)
 
 		return hjoin(1, d.summaryBox(leftW, h, d.run.sumFocus), d.runGroupsBox(w-leftW-1, h, !d.run.sumFocus))

@@ -44,9 +44,9 @@ func TestSettingsLeaveGuardAsksKeepDiscardOrStay(t *testing.T) {
 	frame := h.view()
 	assert.Contains(t, frame, "Leave with an unsaved draft?")
 	assert.Contains(t, settingsBox(frame, "Leave with"), "Inference has 1 unsaved change: agent.cli.")
-	assert.Contains(t, shellAFooter(frame), "k keep draft")
-	assert.Contains(t, shellAFooter(frame), "d discard")
-	assert.Contains(t, shellAFooter(frame), "esc stay here")
+	assert.Contains(t, footerLine(frame), "k keep draft")
+	assert.Contains(t, footerLine(frame), "d discard")
+	assert.Contains(t, footerLine(frame), "esc stay here")
 	assert.True(t, scr.capturing(), "the question captures the keys")
 
 	// esc stays here with the draft.

@@ -106,7 +106,7 @@ func (s *integrations) open(intent string) tea.Cmd {
 		s.wizard = nil
 		s.selectClient(id)
 
-		if !s.wide() {
+		if !s.st.wide() {
 			s.detailOpen = true
 		}
 
@@ -196,13 +196,13 @@ func (s *integrations) update(msg tea.Msg) tea.Cmd {
 
 // applied frees the mutation slot and reloads the sources the setup
 // changed. It loads through the state directly, not through refresh,
-// so the result can wait for this exact inspection generation. A setup
-// can create the starter config.yaml, so the settings and the evidence
-// view reload too. It can also create the starter lessons.yaml, so the
+// so the result can wait for the ticket of this exact inspection load.
+// A setup can create the starter config.yaml, so the settings and the
+// evidence view reload too. It can also create the starter lessons.yaml, so the
 // Pins sub-view reloads and stops reporting a missing pin file.
 func (s *integrations) applied(msg setupAppliedMsg) tea.Cmd {
 	load := s.st.load(secIntegrations, secDoctor, secSettings, secLearning, secPins)
-	gen := s.st.gens[secIntegrations]
+	gen := s.st.gens[secIntegrations].latest()
 
 	if s.wizard != nil {
 		s.wizard.finished(msg, gen)
@@ -230,7 +230,7 @@ func (s *integrations) key(msg tea.KeyMsg) tea.Cmd {
 
 		return toast(ToneNeutral, oneLine(sel.Name)+" reads no managed skills.")
 	case key.Matches(msg, nkeys.Next, nkeys.Prev):
-		if s.wide() {
+		if s.st.wide() {
 			s.focus = 1 - s.focus
 		}
 
@@ -253,7 +253,7 @@ func (s *integrations) key(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, nkeys.PageUp, nkeys.PageDown):
 		s.detail.scroll(msg)
 	case key.Matches(msg, nkeys.Enter):
-		if s.wide() {
+		if s.st.wide() {
 			return s.startSetup(sel.ClientID, false)
 		}
 
@@ -280,17 +280,11 @@ func (s *integrations) detailKey(msg tea.KeyMsg, sel integration.Inspection) tea
 
 // detailShown reports that the movement keys scroll the detail box.
 func (s *integrations) detailShown() bool {
-	if s.wide() {
+	if s.st.wide() {
 		return s.focus == integFocusDetail
 	}
 
 	return s.detailOpen
-}
-
-// wide reports the side-by-side layout. Screens get the full terminal
-// width, so the threshold applies to the terminal width directly.
-func (s *integrations) wide() bool {
-	return s.st.width >= wideWidth
 }
 
 func (s *integrations) keys() []key.Binding {
@@ -309,10 +303,10 @@ func (s *integrations) keys() []key.Binding {
 	}
 
 	switch {
-	case s.wide() && s.focus == integFocusDetail:
+	case s.st.wide() && s.focus == integFocusDetail:
 		return []key.Binding{withHelp(nkeys.Down, "↑↓", "scroll"), withHelp(nkeys.Next, "tab", "clients"),
 			withHelp(nkeys.Enter, "enter", "set up"), skillsKey}
-	case s.wide():
+	case s.st.wide():
 		return []key.Binding{withHelp(nkeys.Down, "↑↓", "move"), withHelp(nkeys.Next, "tab", "details"),
 			withHelp(nkeys.Enter, "enter", "set up"), skillsKey}
 	case s.detailOpen:
@@ -647,15 +641,10 @@ func (p *integPager) span(t *Theme) string {
 		return ""
 	}
 
-	dash := "–"
-	if t.ASCII {
-		dash = "-"
-	}
-
 	first := p.vp.YOffset + 1
 	last := min(total, p.vp.YOffset+p.vp.Height)
 
-	return itoa(first) + dash + itoa(last) + " of " + itoa(total)
+	return t.positionNote(first, last, total)
 }
 
 // foot renders the scroll position for a box border, or "" when all

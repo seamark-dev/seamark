@@ -169,7 +169,7 @@ type setupWizard struct {
 	hint string
 
 	// seq identifies the newest plan or apply request.
-	seq      int
+	seq      generation
 	planning bool
 	preview  *SetupPreview
 	planErr  error
@@ -196,7 +196,8 @@ type setupWizard struct {
 type setupOutcome struct {
 	res integration.SetupResult
 	err error
-	// gen is the inspection generation that reflects the applied files.
+	// gen is the ticket of the inspection load that reflects the
+	// applied files.
 	gen       int
 	inspected bool
 }
@@ -244,7 +245,7 @@ func (wz *setupWizard) inspected(gen int) {
 // result of another wizard is dropped, so a closed wizard's late plan
 // can never become the reviewed plan of a new one.
 func (wz *setupWizard) planned(msg setupPlannedMsg) {
-	if msg.owner != wz || msg.seq != wz.seq || wz.step != setupStepPreview {
+	if msg.owner != wz || !wz.seq.current(msg.seq) || wz.step != setupStepPreview {
 		return
 	}
 
@@ -255,11 +256,11 @@ func (wz *setupWizard) planned(msg setupPlannedMsg) {
 	wz.planOff = 0
 }
 
-// finished stores an apply result and the generation to wait for. A
-// result of another wizard is dropped for the same reason as in
+// finished stores an apply result and the inspection ticket to wait
+// for. A result of another wizard is dropped for the same reason as in
 // planned.
 func (wz *setupWizard) finished(msg setupAppliedMsg, gen int) {
-	if msg.owner != wz || msg.seq != wz.seq {
+	if msg.owner != wz || !wz.seq.current(msg.seq) {
 		return
 	}
 
@@ -479,8 +480,7 @@ func (wz *setupWizard) plan(setups []integration.ClientSetup) tea.Cmd {
 		return nil
 	}
 
-	wz.seq++
-	seq := wz.seq
+	seq := wz.seq.start()
 
 	wz.step = setupStepPreview
 	wz.planning, wz.preview, wz.planErr, wz.setups = true, nil, nil, setups
@@ -491,7 +491,7 @@ func (wz *setupWizard) plan(setups []integration.ClientSetup) tea.Cmd {
 	wz.aboutOpen = false
 	wz.hint = ""
 
-	svc := wz.st.svc
+	var svc Setup = wz.st.svc
 
 	return func() tea.Msg {
 		p, err := svc.PlanSetup(setups)

@@ -52,8 +52,8 @@ func TestEvidencePreviewOpensOnEnterAndEscCallsNothing(t *testing.T) {
 	assertFrame(t, frame, 120, 40)
 	assert.Contains(t, frame, "Refresh local fixes")
 	assert.Contains(t, frame, "local only")
-	assert.Contains(t, shellAFooter(frame), "y refresh   esc cancel")
-	assert.Contains(t, shellAFooter(frame), "ctrl+c quit")
+	assert.Contains(t, footerLine(frame), "y refresh   esc cancel")
+	assert.Contains(t, footerLine(frame), "ctrl+c quit")
 
 	text := evPreviewText(t, les)
 	for _, want := range []string{
@@ -128,7 +128,7 @@ func TestEvidencePreviewDisclosesTheGitHubFetch(t *testing.T) {
 	assert.Contains(t, text, "· change the 118 stored review findings or the review lessons",
 		"the plan binds the origin, so no review write can follow")
 	assert.NotContains(t, text, "+ fetch")
-	assert.Contains(t, shellAFooter(h.view()), "y refresh", "the local source still runs")
+	assert.Contains(t, footerLine(h.view()), "y refresh", "the local source still runs")
 }
 
 // evNoCommitPlan is the plan of a repository without a commit, in the
@@ -183,7 +183,7 @@ func TestEvidencePreviewWithoutACommitPromisesNoFixMine(t *testing.T) {
 		assert.NotContains(t, text, avoid, "no fix mine and no raw plan text")
 	}
 
-	assert.Contains(t, shellAFooter(h.view()), "y refresh", "the plan is ready; the run reads unavailable")
+	assert.Contains(t, footerLine(h.view()), "y refresh", "the plan is ready; the run reads unavailable")
 
 	// The combined refresh still fetches, so only the fix side changes.
 	h.press("esc")
@@ -339,12 +339,12 @@ func TestEvidencePreviewWhilePlanningCanBeCancelled(t *testing.T) {
 	// The test drops the plan command, so the preview stays in its
 	// planning stage, as while the plan reads.
 	_ = les.evid.plan(index.SourcesLocal)
-	seq := les.evid.seq
+	seq := les.evid.seq.last
 
 	frame := h.view()
 	assertFrame(t, frame, 120, 40)
 	assert.Contains(t, frame, "Preparing the refresh preview")
-	assert.Contains(t, shellAFooter(frame), "esc cancel")
+	assert.Contains(t, footerLine(frame), "esc cancel")
 
 	h.press("y")
 	assert.Empty(t, f.called(), "y does nothing before the plan arrives")
@@ -377,8 +377,8 @@ func TestEvidencePreviewShowsBlockersWithTheirRoutes(t *testing.T) {
 	frame := h.view()
 	assertFrame(t, frame, 120, 40)
 	assert.Contains(t, frame, "Refresh blocked")
-	assert.Contains(t, shellAFooter(frame), "enter open Settings › evidence   esc close")
-	assert.NotContains(t, shellAFooter(frame), "y refresh")
+	assert.Contains(t, footerLine(frame), "enter open Settings › evidence   esc close")
+	assert.NotContains(t, footerLine(frame), "y refresh")
 
 	text := evPreviewText(t, les)
 	assert.Contains(t, text, "This refresh cannot start. Nothing was fetched or written.")

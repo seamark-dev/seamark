@@ -79,7 +79,7 @@ func TestPinsFooterListsEveryActionKeyAndMarksTheUnavailable(t *testing.T) {
 			// The reference footer cannot hold every hint, so the n/a group
 			// shows its keys only. The four action keys come first, and tab,
 			// f and / still fit after them.
-			footer := shellAFooter(h.view())
+			footer := footerLine(h.view())
 			assert.True(t, strings.HasPrefix(footer, c.footer), "footer %q", footer)
 			assert.Regexp(t, `\d\d:\d\d:\d\d $`, footer, "the clock stays at the reference size")
 			assert.Empty(t, h.m.toast.text, "browsing shows no refusal")
@@ -88,7 +88,7 @@ func TestPinsFooterListsEveryActionKeyAndMarksTheUnavailable(t *testing.T) {
 
 	// A footer with room for every hint keeps the actions of the group.
 	h := pinsOpen(t, pinsFake(), 200, 50)
-	assert.Contains(t, shellAFooter(h.view()), " space select   - prune   "+
+	assert.Contains(t, footerLine(h.view()), " space select   - prune   "+
 		"n/a: w retarget, t extract triggers, v compare   tab detail   f show")
 }
 
@@ -134,7 +134,7 @@ func TestPinsFooterKeepsTheActionKeysInEveryListAtTheReferenceSize(t *testing.T)
 			for row := 1; row <= l.rows; row++ {
 				pinsCursorTo(h, row)
 
-				footer := shellAFooter(h.view())
+				footer := footerLine(h.view())
 				assert.ElementsMatch(t, []string{"w", "-", "t", "v"}, pinsFooterActions(footer),
 					"%s, row %d, ascii %t: %q", l.name, row, ascii, footer)
 			}
@@ -154,7 +154,7 @@ func TestPinsCompactFooterGivesTheClockToTheUnavailableKeys(t *testing.T) {
 		frame := h.view()
 		assertFrame(t, frame, 80, 24)
 
-		footer := shellAFooter(frame)
+		footer := footerLine(frame)
 		ellipsis := h.m.st.theme.Glyphs.Ellipsis
 		assert.True(t, strings.HasPrefix(footer, " space select   - prune   n/a: w t v  "+ellipsis), "footer %q", footer)
 		assert.NotRegexp(t, `\d\d:\d\d:\d\d`, footer, "ascii %t", ascii)
@@ -165,7 +165,7 @@ func TestPinsCompactFooterGivesTheClockToTheUnavailableKeys(t *testing.T) {
 		// stays, and the footer drops hints from the end as before.
 		pinsCursorTo(h, 2)
 
-		footer = shellAFooter(h.view())
+		footer = footerLine(h.view())
 		assert.True(t, strings.HasPrefix(footer, " space select   w retarget  "+ellipsis), "footer %q", footer)
 		assert.Regexp(t, `\d\d:\d\d:\d\d $`, footer, "ascii %t", ascii)
 	}
@@ -195,7 +195,7 @@ func TestPinsUnavailableMarkerReadsWithoutColor(t *testing.T) {
 	h := lesOpenTheme(t, f, true)
 	h.press("m")
 
-	footer := shellAFooter(h.view())
+	footer := footerLine(h.view())
 	assert.True(t, strings.HasPrefix(footer, " space select   - prune   n/a: w t v   tab detail   f show   / region  ..."),
 		"footer %q", footer)
 
@@ -417,14 +417,14 @@ func TestPinsUnavailableKeysInAListWithoutTarget(t *testing.T) {
 
 	// A history list offers no target. Its list keys lead, because f is
 	// the route back. The n/a group follows them, before the switch keys.
-	footer := shellAFooter(h.view())
+	footer := footerLine(h.view())
 	assert.Contains(t, footer, "tab detail   f show   / region   z search   "+
 		"n/a: w retarget, - prune, t extract triggers, v compare   p proposals   s stats   e evidence")
 
 	// The reference footer keeps the group by its keys.
 	h.resize(120, 40)
-	assert.True(t, strings.HasPrefix(shellAFooter(h.view()),
-		" tab detail   f show   / region   z search   n/a: w - t v   p proposals  …"), shellAFooter(h.view()))
+	assert.True(t, strings.HasPrefix(footerLine(h.view()),
+		" tab detail   f show   / region   z search   n/a: w - t v   p proposals  …"), footerLine(h.view()))
 
 	// The help names the selection key as well, because history rows
 	// cannot be selected.
@@ -539,5 +539,5 @@ func TestLessonsHelpListsEverySwitchKeyInEverySubView(t *testing.T) {
 	// The footer of Proposals is unchanged: its keys and the other switch
 	// keys, without p itself.
 	h.press("p")
-	assert.NotContains(t, shellAFooter(h.view()), "n/a")
+	assert.NotContains(t, footerLine(h.view()), "n/a")
 }

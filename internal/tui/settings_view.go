@@ -86,7 +86,7 @@ func (s *settingsScreen) listLines(w, rows int, focused bool) []string {
 	t := s.st.theme
 	items := s.tailItems(w)
 	rule := integRule(t, w)
-	wide := s.st.width >= wideWidth
+	wide := s.st.wide()
 
 	var tail []string
 	for _, it := range items {

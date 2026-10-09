@@ -76,7 +76,7 @@ var extKeys = struct {
 // extPlan is the read-only preview and its review state.
 type extPlan struct {
 	// seq drops the result of a plan that the record left.
-	seq int
+	seq generation
 
 	preview *learning.ExtractPreview
 	err     error
@@ -218,7 +218,7 @@ func (r *extRecord) capturing() bool { return r.run.stopAsk }
 // opened starts the read-only preview once the Run sub-view accepts the
 // record.
 func (r *extRecord) opened() tea.Cmd {
-	if r.step != extPlanning || r.plan.seq > 0 {
+	if r.step != extPlanning || r.plan.seq.started() {
 		return nil
 	}
 
@@ -321,12 +321,13 @@ func (r *extRecord) settle() tea.Cmd {
 // reads the index, the pins and the configuration; it never runs the
 // agent and never stamps a row.
 func (r *extRecord) startPlan() tea.Cmd {
-	r.plan = extPlan{seq: r.plan.seq + 1}
+	r.plan = extPlan{seq: r.plan.seq}
 	r.step = extPlanning
 
-	seq := r.plan.seq
-	svc := r.st.svc
+	seq := r.plan.seq.start()
 	req := r.req
+
+	var svc Learning = r.st.svc
 
 	return func() tea.Msg {
 		p, err := svc.PlanExtract(req)
@@ -345,7 +346,7 @@ func (r *extRecord) startPlan() tea.Cmd {
 
 // planned shows a preview result.
 func (r *extRecord) planned(msg extPlannedMsg) tea.Cmd {
-	if msg.seq != r.plan.seq || r.step != extPlanning {
+	if !r.plan.seq.current(msg.seq) || r.step != extPlanning {
 		return nil
 	}
 
@@ -417,7 +418,8 @@ func (r *extRecord) start() tea.Cmd {
 	// event per batch, the stop and the end. So the worker never blocks
 	// while nobody reads, as in the synchronous test harness.
 	ch := make(chan tea.Msg, extQueueSize(len(p.Plan.Batches)))
-	svc := r.st.svc
+
+	var svc Learning = r.st.svc
 
 	note := runNote{
 		verb: extractRunVerb, detail: r.batchesText(), total: n,
@@ -469,7 +471,7 @@ func extOutcomes(pl *distill.ExtractPlan) []distill.ExtractBatchOutcome {
 // through ch. It runs in a command goroutine, never in Update. A panic
 // becomes a failed end, so the mutation slot always frees. The end marks
 // the panic, because work can have started before it.
-func extRunWork(ctx context.Context, svc Services, rec *extRecord, p *learning.ExtractPreview, ch chan tea.Msg) {
+func extRunWork(ctx context.Context, svc Learning, rec *extRecord, p *learning.ExtractPreview, ch chan tea.Msg) {
 	defer close(ch)
 
 	var (
@@ -962,7 +964,7 @@ func (r *extRecord) reviewKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, nkeys.Next, nkeys.Prev):
 		switch {
 		case !r.hasItems():
-		case r.wide():
+		case r.st.wide():
 			pl.planFocus = !pl.planFocus
 		default:
 			pl.itemsOpen = !pl.itemsOpen
@@ -986,7 +988,7 @@ func (r *extRecord) planKeys() bool {
 		return true
 	}
 
-	if r.wide() {
+	if r.st.wide() {
 		return r.plan.planFocus
 	}
 
@@ -1070,7 +1072,7 @@ func (r *extRecord) runMove(msg tea.KeyMsg) {
 	run := &r.run
 
 	if key.Matches(msg, nkeys.Next, nkeys.Prev) {
-		if r.wide() {
+		if r.st.wide() {
 			run.sumFocus = !run.sumFocus
 		} else {
 			run.detail = !run.detail
@@ -1079,7 +1081,7 @@ func (r *extRecord) runMove(msg tea.KeyMsg) {
 		return
 	}
 
-	if r.wide() && run.sumFocus {
+	if r.st.wide() && run.sumFocus {
 		run.summary.key(msg)
 
 		return
@@ -1094,12 +1096,6 @@ func (r *extRecord) runMove(msg tea.KeyMsg) {
 	if run.items.key(msg) {
 		run.follow = false
 	}
-}
-
-// wide reports the two-pane layout. The terminal width decides it, as
-// the other Lessons sub-views do.
-func (r *extRecord) wide() bool {
-	return r.st.width >= wideWidth
 }
 
 // keys returns the footer keys of the current step. The Run sub-view
@@ -1137,7 +1133,7 @@ func (r *extRecord) reviewKeys() []key.Binding {
 	}
 
 	again := withHelp(nkeys.Enter, "enter", "plan again")
-	if !r.wide() {
+	if !r.st.wide() {
 		again = withHelp(nkeys.Enter, "enter", "plan")
 	}
 
@@ -1159,7 +1155,7 @@ func (r *extRecord) linkKey() key.Binding {
 	b := withHelp(extKeys.Link, "o", "open "+name)
 
 	switch {
-	case r.wide():
+	case r.st.wide():
 	case to.dest == destOverview:
 		b = withHelp(extKeys.Link, "o", "overview")
 	case to.dest == destLessons:
@@ -1192,14 +1188,14 @@ func (r *extRecord) resultKeys() []key.Binding {
 	_, name, ok := r.link()
 
 	open := withHelp(nkeys.Enter, "enter", "open "+strings.ToLower(extLinkTail(name)))
-	if !r.wide() {
+	if !r.st.wide() {
 		open = withHelp(nkeys.Enter, "enter", "open")
 	}
 
 	open.SetEnabled(ok)
 
 	again := withHelp(extKeys.Remaining, "n", "prepare remaining")
-	if !r.wide() {
+	if !r.st.wide() {
 		again = withHelp(extKeys.Remaining, "n", "remaining")
 	}
 
@@ -1221,7 +1217,7 @@ func extLinkTail(name string) string {
 // paneKey names what tab shows next in the run and result views.
 func (r *extRecord) paneKey() key.Binding {
 	switch {
-	case r.wide():
+	case r.st.wide():
 		return withHelp(nkeys.Next, "tab", "pane")
 	case r.run.detail:
 		return withHelp(nkeys.Next, "tab", "summary")

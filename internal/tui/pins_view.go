@@ -186,8 +186,6 @@ func (p *pinsView) propState() pinState {
 // boxes. The shell pads the last line, which keeps the blank row above
 // the footer.
 func (p *pinsView) view(w, h int) string {
-	p.wide = w >= wideWidth
-
 	head := p.filterBar(w)
 	if line := p.stateLine(w); line != "" {
 		head = append(head, line)
@@ -371,7 +369,7 @@ func (p *pinsView) body(w, h int) string {
 		return p.emptyBox(in, w, h)
 	}
 
-	if p.wide {
+	if p.st.wide() {
 		// Pins has more columns than Proposals, so a wide terminal gives
 		// its list two fifths of the width. The state column can then
 		// show a label with two attention words.
@@ -514,7 +512,7 @@ func (p *pinsView) listBox(in *maintain.Inspection, rows []pinRow, w, h int, foc
 	switch {
 	case len(rows) > window:
 		foot = propRange(t, p.list.offset, end, len(rows))
-	case !p.wide:
+	case !p.st.wide():
 		foot = t.Faint.Render("enter for detail")
 	}
 

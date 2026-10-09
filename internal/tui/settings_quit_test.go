@@ -30,7 +30,7 @@ func TestSettingsQuitWithADraftAsksFirst(t *testing.T) {
 		assertFrame(t, frame, size[0], size[1])
 		assert.Contains(t, frame, "Discard the unsaved settings draft and quit?", "size %v", size)
 
-		footer := shellAFooter(frame)
+		footer := footerLine(frame)
 		assert.Contains(t, footer, "enter discard and quit", "size %v", size)
 		assert.Contains(t, footer, "ctrl+c quit", "size %v: the second ctrl+c answers yes", size)
 		assert.NotContains(t, footer, " q quit", "size %v: q does nothing in the question", size)
@@ -136,7 +136,7 @@ func TestSettingsQuitAsksFromEveryDestinationAndEditor(t *testing.T) {
 
 func TestSettingsQuitRunningWorkKeepsPrecedence(t *testing.T) {
 	h := settingsDraftCodex(t, settingsFake(t, ""))
-	ctx := shellCStartRun(t, h)
+	ctx := claimDistillRun(t, h)
 
 	h.press("q")
 	require.True(t, h.m.quitConfirm)
@@ -157,7 +157,7 @@ func TestSettingsQuitRunningWorkKeepsPrecedence(t *testing.T) {
 
 	// Without a draft, the question of the work keeps its old text.
 	h2 := newHarness(t, newFake(), 120, 32)
-	shellCStartRun(t, h2)
+	claimDistillRun(t, h2)
 
 	_, body, _ = h2.m.quitCopy(false)
 	assert.NotContains(t, body, "settings draft")
@@ -167,7 +167,7 @@ func TestSettingsQuitRunningWorkKeepsPrecedence(t *testing.T) {
 // result of the work shows, and a later quit asks the draft question.
 func TestSettingsQuitAsksAgainAfterTheWorkEnds(t *testing.T) {
 	h := settingsDraftCodex(t, settingsFake(t, ""))
-	ctx := shellCStartRun(t, h)
+	ctx := claimDistillRun(t, h)
 
 	h.press("q")
 	require.True(t, h.m.quitConfirm)

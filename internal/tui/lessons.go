@@ -581,11 +581,10 @@ type propView struct {
 	visible func() bool
 
 	dec *propDecision
-	seq int
+	seq generation
 
-	// wide and listH come from the last render, so key handling uses
-	// the layout that the user sees.
-	wide  bool
+	// listH comes from the last render, so page keys move by the rows
+	// that the user sees.
 	listH int
 }
 
@@ -806,15 +805,9 @@ func (p *propView) update(msg tea.Msg) tea.Cmd {
 func (p *propView) browseKey(msg tea.KeyMsg) tea.Cmd {
 	rows := p.rows()
 
-	// The screen gets the full terminal width, so the terminal size
-	// gives the layout even before the first render.
-	if p.st.width > 0 {
-		p.wide = p.st.width >= wideWidth
-	}
-
 	switch {
 	case key.Matches(msg, nkeys.Next, nkeys.Prev):
-		if p.wide && len(rows) > 0 {
+		if p.st.wide() && len(rows) > 0 {
 			p.focusDetail = !p.focusDetail
 		}
 	case key.Matches(msg, nkeys.Enter):
@@ -870,7 +863,7 @@ func (p *propView) browseKey(msg tea.KeyMsg) tea.Cmd {
 // showsDetail reports a visible detail pane: beside the list in the
 // wide layout, or alone in the narrow layout.
 func (p *propView) showsDetail(rows []domain.Proposal) bool {
-	return len(rows) > 0 && (p.wide || p.focusDetail)
+	return len(rows) > 0 && (p.st.wide() || p.focusDetail)
 }
 
 // detailKey scrolls the detail pane. The page keys always scroll it in
@@ -879,7 +872,7 @@ func (p *propView) showsDetail(rows []domain.Proposal) bool {
 // the key scrolled.
 func (p *propView) detailKey(msg tea.KeyMsg) bool {
 	paging := key.Matches(msg, nkeys.PageUp, nkeys.PageDown)
-	if !p.focusDetail && (!p.wide || !paging) {
+	if !p.focusDetail && (!p.st.wide() || !paging) {
 		return false
 	}
 
@@ -1318,11 +1311,10 @@ func (p *propView) noPinText(ids []int64) string {
 
 // preview opens the preparing modal and starts the preview read.
 func (p *propView) preview(a proposals.Action, ids []int64, implicit bool) tea.Cmd {
-	p.seq++
-	seq := p.seq
+	seq := p.seq.start()
 	p.dec = &propDecision{stage: propStagePreparing, action: a, ids: ids, implicit: implicit}
 
-	svc := p.st.svc
+	var svc Decisions = p.st.svc
 
 	return func() tea.Msg {
 		pv, err := svc.PreviewDecision(a, ids)
@@ -1333,7 +1325,7 @@ func (p *propView) preview(a proposals.Action, ids []int64, implicit bool) tea.C
 
 // previewed shows a preview result, unless the user cancelled it.
 func (p *propView) previewed(msg propPreviewMsg) tea.Cmd {
-	if p.dec == nil || msg.seq != p.seq || p.dec.stage != propStagePreparing {
+	if p.dec == nil || !p.seq.current(msg.seq) || p.dec.stage != propStagePreparing {
 		return nil
 	}
 
@@ -1404,7 +1396,7 @@ func (p *propView) decisionKey(msg tea.KeyMsg) tea.Cmd {
 	case propStagePreparing:
 		if key.Matches(msg, nkeys.Back) {
 			// The read may still finish; seq drops its result.
-			p.seq++
+			p.seq.cancel()
 			p.dec = nil
 		}
 	case propStagePreview:
@@ -1524,7 +1516,8 @@ func (p *propView) commit() tea.Cmd {
 
 	d.stage = propStageCommitting
 	pv := d.pv
-	svc := p.st.svc
+
+	var svc Decisions = p.st.svc
 
 	return func() tea.Msg {
 		res, err := svc.CommitDecision(pv)
@@ -1703,9 +1696,9 @@ func (p *propView) paneKey(hasRow bool) key.Binding {
 		b.SetEnabled(false)
 
 		return b
-	case p.wide && p.focusDetail:
+	case p.st.wide() && p.focusDetail:
 		return withHelp(nkeys.Next, "tab", "list")
-	case p.wide:
+	case p.st.wide():
 		return withHelp(nkeys.Next, "tab", "detail")
 	case p.focusDetail:
 		return withHelp(nkeys.Back, "esc", "back")

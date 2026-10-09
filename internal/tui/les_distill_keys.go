@@ -58,7 +58,7 @@ func (d *distRecord) scopeKey(msg tea.KeyMsg) tea.Cmd {
 	// The wide layout shows the explanation beside the form, so the
 	// compact explanation mode ends there. Else it takes the form keys
 	// while the frame shows the form.
-	if d.wide() {
+	if d.st.wide() {
 		f.about = false
 	}
 
@@ -103,7 +103,7 @@ func (d *distRecord) scopeKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, nkeys.Back):
 		return d.close()
 	case key.Matches(msg, distKeys.About):
-		f.about = !d.wide()
+		f.about = !d.st.wide()
 		f.aboutSc = scrollState{}
 	}
 
@@ -204,7 +204,7 @@ func (d *distRecord) linkKey() key.Binding {
 	b := withHelp(distKeys.Link, "o", "open "+name)
 
 	switch {
-	case d.wide():
+	case d.st.wide():
 	case to.dest == destOverview:
 		b = withHelp(distKeys.Link, "o", "overview")
 	default:
@@ -266,7 +266,7 @@ func (d *distRecord) reviewKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, nkeys.Next, nkeys.Prev):
 		switch {
 		case !d.hasGroups():
-		case d.wide():
+		case d.st.wide():
 			pl.planFocus = !pl.planFocus
 		default:
 			pl.groupsOpen = !pl.groupsOpen
@@ -285,7 +285,7 @@ func (d *distRecord) planKeys() bool {
 		return true
 	}
 
-	if d.wide() {
+	if d.st.wide() {
 		return d.plan.planFocus
 	}
 
@@ -380,7 +380,7 @@ func (d *distRecord) runMove(msg tea.KeyMsg) {
 	r := &d.run
 
 	if key.Matches(msg, nkeys.Next, nkeys.Prev) {
-		if d.wide() {
+		if d.st.wide() {
 			r.sumFocus = !r.sumFocus
 		} else {
 			r.detail = !r.detail
@@ -389,7 +389,7 @@ func (d *distRecord) runMove(msg tea.KeyMsg) {
 		return
 	}
 
-	if d.wide() && r.sumFocus {
+	if d.st.wide() && r.sumFocus {
 		r.summary.key(msg)
 
 		return
@@ -421,12 +421,6 @@ func distCursorKey(msg tea.KeyMsg, cursor *int, n int) bool {
 	return true
 }
 
-// wide reports the two-pane layout. The terminal width decides it, as
-// the other Lessons sub-views do.
-func (d *distRecord) wide() bool {
-	return d.st.width >= wideWidth
-}
-
 // keys returns the footer keys of the current step. The Run sub-view
 // adds the sub-view switch keys while the record does not capture.
 func (d *distRecord) keys() []key.Binding {
@@ -455,12 +449,12 @@ func (d *distRecord) scopeKeys() []key.Binding {
 		return []key.Binding{withHelp(nkeys.Enter, "enter", "done"), withHelp(nkeys.Back, "esc", "cancel")}
 	}
 
-	if f.about && !d.wide() {
+	if f.about && !d.st.wide() {
 		return []key.Binding{withHelp(distKeys.About, "i", "back to the form")}
 	}
 
 	plan := withHelp(nkeys.Enter, "enter", "review plan")
-	if !d.wide() {
+	if !d.st.wide() {
 		plan = withHelp(nkeys.Enter, "enter", "plan")
 	}
 
@@ -468,7 +462,7 @@ func (d *distRecord) scopeKeys() []key.Binding {
 	plan.SetEnabled(reason == "")
 
 	about := withHelp(distKeys.About, "i", "about")
-	about.SetEnabled(!d.wide())
+	about.SetEnabled(!d.st.wide())
 
 	return []key.Binding{
 		plan, d.linkKey(), withHelp(nkeys.Down, "↑↓", "move"), withHelp(nkeys.Toggle, "space", "choose"),
@@ -508,7 +502,7 @@ func (d *distRecord) reviewKeys() []key.Binding {
 	scroll.SetEnabled(pl.notes.scrolls())
 
 	again := withHelp(nkeys.Enter, "enter", "plan again")
-	if !d.wide() {
+	if !d.st.wide() {
 		again = withHelp(nkeys.Enter, "enter", "plan")
 	}
 
@@ -536,7 +530,7 @@ func (d *distRecord) runKeys() []key.Binding {
 // the NEXT block in the box keeps the whole sentence.
 func (d *distRecord) resultKeys() []key.Binding {
 	review := withHelp(nkeys.Enter, "enter", "review proposals")
-	if !d.wide() {
+	if !d.st.wide() {
 		review = withHelp(nkeys.Enter, "enter", "review")
 	}
 
@@ -551,7 +545,7 @@ func (d *distRecord) resultKeys() []key.Binding {
 // paneKey names what tab shows next in the run and result views.
 func (d *distRecord) paneKey() key.Binding {
 	switch {
-	case d.wide():
+	case d.st.wide():
 		return withHelp(nkeys.Next, "tab", "pane")
 	case d.run.detail:
 		return withHelp(nkeys.Next, "tab", "summary")

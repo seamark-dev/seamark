@@ -214,19 +214,14 @@ func (wz *setupWizard) canApply() bool {
 	return writes+skillWrites > 0
 }
 
-// previewWide reports the side-by-side review layout.
-func (wz *setupWizard) previewWide() bool {
-	return wz.st.width >= wideWidth
-}
-
 func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, setupKeys.Apply):
 		return wz.applyKey()
 	case key.Matches(msg, setupKeys.Back):
 		// The draft stays: the choices keep every explicit toggle. The
-		// new seq drops the result of a plan that still runs.
-		wz.seq++
+		// cancel drops the result of a plan that still runs.
+		wz.seq.cancel()
 		wz.planning = false
 		wz.forceSkills = false
 		wz.pathOpen = false
@@ -240,7 +235,7 @@ func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 
 		return wz.plan(wz.setups)
 	case key.Matches(msg, nkeys.Back):
-		if !wz.previewWide() && wz.pathOpen {
+		if !wz.st.wide() && wz.pathOpen {
 			wz.pathOpen = false
 
 			return nil
@@ -248,7 +243,7 @@ func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 
 		// Cancel before apply writes nothing. A closed wizard drops the
 		// result of a plan that still runs.
-		wz.seq++
+		wz.seq.cancel()
 		wz.closed = true
 
 		return nil
@@ -260,13 +255,13 @@ func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 
 	entries := setupEntries(wz.preview)
 
-	if !wz.previewWide() && wz.pathOpen {
+	if !wz.st.wide() && wz.pathOpen {
 		wz.pager.scroll(msg)
 
 		return nil
 	}
 
-	if wz.previewWide() {
+	if wz.st.wide() {
 		if key.Matches(msg, nkeys.Next, nkeys.Prev) {
 			wz.notesFocus = !wz.notesFocus
 
@@ -292,7 +287,7 @@ func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, nkeys.PageUp, nkeys.PageDown):
 		wz.scrollPlan(msg)
 	case key.Matches(msg, nkeys.Enter):
-		if !wz.previewWide() && len(entries) > 0 {
+		if !wz.st.wide() && len(entries) > 0 {
 			wz.pathOpen = true
 		}
 	}
@@ -303,7 +298,7 @@ func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 // scrollPlan applies a page key. The wide layout scrolls the diff box;
 // the narrow list has no diff box, so the key scrolls the plan notes.
 func (wz *setupWizard) scrollPlan(msg tea.KeyMsg) {
-	if wz.previewWide() {
+	if wz.st.wide() {
 		wz.pager.scroll(msg)
 
 		return
@@ -372,10 +367,10 @@ func (wz *setupWizard) previewKeys() []key.Binding {
 	}
 
 	switch {
-	case wz.previewWide() && wz.notesFocus:
+	case wz.st.wide() && wz.notesFocus:
 		return []key.Binding{withHelp(nkeys.Down, "↑↓", "scroll notes"), withHelp(nkeys.Next, "tab", "files"),
 			apply, back, cancel, plan}
-	case wz.previewWide():
+	case wz.st.wide():
 		return []key.Binding{withHelp(nkeys.Down, "↑↓", "file"), withHelp(nkeys.PageDown, "pgup/pgdn", "scroll"),
 			apply, back, withHelp(nkeys.Next, "tab", "notes"), cancel, plan}
 	case wz.pathOpen:
@@ -408,7 +403,7 @@ func (wz *setupWizard) selectedHasDiff() bool {
 // previewView renders the Plan box and the diff box side by side in a
 // wide terminal, and one of them at a time in a narrow one.
 func (wz *setupWizard) previewView(w, h int) string {
-	wide := wz.previewWide() && w >= wideWidth
+	wide := wz.st.wide() && w >= wideWidth
 
 	// A plan without a setup plan cannot come from PlanSetup; the box
 	// then says that no plan exists instead of an empty list.
@@ -532,11 +527,6 @@ func (wz *setupWizard) clipNotes(body []string, avail, w int, wide bool) []strin
 
 	wz.planOff = max(0, min(wz.planOff, len(body)-shown))
 
-	dash := "–"
-	if t.ASCII {
-		dash = "-"
-	}
-
 	how := "pgup/pgdn"
 
 	switch {
@@ -546,8 +536,8 @@ func (wz *setupWizard) clipNotes(body []string, avail, w int, wide bool) []strin
 		how = "tab to scroll"
 	}
 
-	note := t.Glyphs.Ellipsis + " notes " + itoa(wz.planOff+1) + dash + itoa(wz.planOff+shown) + " of " +
-		itoa(len(body)) + " " + t.Glyphs.Sep + " " + how
+	note := t.Glyphs.Ellipsis + " notes " + t.positionNote(wz.planOff+1, wz.planOff+shown, len(body)) + " " +
+		t.Glyphs.Sep + " " + how
 
 	return append(slices.Clone(body[wz.planOff:wz.planOff+shown]), t.Faint.Render(truncate(note, w, t.Glyphs.Ellipsis)))
 }
@@ -992,12 +982,11 @@ func (wz *setupWizard) apply() tea.Cmd {
 		return toast(ToneAttention, "Another operation is running: "+wz.st.mutation)
 	}
 
-	wz.seq++
-	seq := wz.seq
+	seq := wz.seq.start()
 	wz.step = setupStepApplying
-
-	svc := wz.st.svc
 	preview := wz.preview
+
+	var svc Setup = wz.st.svc
 
 	// An empty refresh reloads nothing. The shell then starts the
 	// activity ticker, which a key press alone does not start.

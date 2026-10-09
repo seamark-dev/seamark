@@ -311,7 +311,7 @@ func (s *settingsScreen) keys() []key.Binding {
 
 	out := []key.Binding{withHelp(nkeys.Down, "↑↓", "move"), withHelp(nkeys.Enter, "enter", "edit"), def, save, discard}
 
-	if s.st.width >= wideWidth {
+	if s.st.wide() {
 		out = append(out, withHelp(nkeys.Next, "tab", "detail"))
 	}
 
@@ -334,7 +334,7 @@ func (s *settingsScreen) leave(next destination, intent string) (tea.Cmd, bool) 
 
 	// An open preview binds to this visit. Nothing was written, so it
 	// can go.
-	s.flow = settingsFlow{seq: s.flow.seq + 1}
+	s.closeFlow()
 	s.ed.typing = false
 
 	if s.draftTotal() == 0 {

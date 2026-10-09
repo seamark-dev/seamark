@@ -38,7 +38,7 @@ type settingsFlow struct {
 	stage settingsStage
 	// seq identifies the request. A plan that arrives after esc has an
 	// old seq, and the screen drops it.
-	seq   int
+	seq   generation
 	group settings.Group
 	plan  *settings.Plan
 	// err is the plan failure of the preview stage.
@@ -131,8 +131,10 @@ func (s *settingsScreen) review(g settings.Group) tea.Cmd {
 
 	snap, edits := s.snap(), s.groupEdits(g)
 	s.excludeErrs = nil
-	s.flow = settingsFlow{stage: settingsPlanning, seq: s.flow.seq + 1, group: g}
-	seq, svc := s.flow.seq, s.st.svc
+	s.flow = settingsFlow{stage: settingsPlanning, seq: s.flow.seq, group: g}
+	seq := s.flow.seq.start()
+
+	var svc Settings = s.st.svc
 
 	return func() tea.Msg {
 		p, err := svc.PlanSettings(snap, edits)
@@ -144,7 +146,7 @@ func (s *settingsScreen) review(g settings.Group) tea.Cmd {
 // planned opens the preview of a plan. A stale file reads again at
 // once, so the next s plans against the file as it is now.
 func (s *settingsScreen) planned(msg settingsPlannedMsg) tea.Cmd {
-	if msg.seq != s.flow.seq || s.flow.stage != settingsPlanning {
+	if !s.flow.seq.current(msg.seq) || s.flow.stage != settingsPlanning {
 		return nil
 	}
 
@@ -203,7 +205,9 @@ func (s *settingsScreen) confirm() tea.Cmd {
 	}
 
 	s.flow.stage = settingsSaving
-	p, g, svc := s.flow.plan, s.flow.group, s.st.svc
+	p, g := s.flow.plan, s.flow.group
+
+	var svc Settings = s.st.svc
 
 	return func() tea.Msg {
 		res, err := svc.SaveSettings(p)
@@ -292,7 +296,8 @@ func settingsSavedText(p *settings.Plan) string {
 
 // closeFlow closes the preview or the result. Nothing is written.
 func (s *settingsScreen) closeFlow() {
-	s.flow = settingsFlow{seq: s.flow.seq + 1}
+	s.flow = settingsFlow{seq: s.flow.seq}
+	s.flow.seq.cancel()
 }
 
 // flowKey handles the keys of the preview and the result.

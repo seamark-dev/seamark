@@ -164,11 +164,12 @@ func (v *evidenceView) start() tea.Cmd {
 	v.st.lastRunKind = runEvidence
 	v.closePreview("")
 
-	v.runs++
-	r := newEvRun(v.st, v.runs, plan, v.prepareAgain, time.Now())
+	r := newEvRun(v.st, v.runs.start(), plan, v.prepareAgain, time.Now())
 	v.run = r
 
-	svc, id, ch := v.st.svc, r.id, r.ch
+	id, ch := r.id, r.ch
+
+	var svc Learning = v.st.svc
 
 	work := v.st.goWork(func() tea.Msg {
 		defer cancel()
@@ -196,7 +197,7 @@ func (v *evidenceView) prepareAgain(mode index.SourceMode) tea.Cmd {
 // ch. It runs in a command goroutine, never in Update. A panic becomes an
 // error result, so the mutation slot always frees. The record names that
 // error, because no source reason explains it.
-func evWork(ctx context.Context, svc Services, plan *learning.Plan, id int, ch chan<- tea.Msg) {
+func evWork(ctx context.Context, svc Learning, plan *learning.Plan, id int, ch chan<- tea.Msg) {
 	defer close(ch)
 
 	var (
@@ -561,7 +562,7 @@ func (r *evRun) keys() []key.Binding {
 	scroll.SetEnabled(r.scroll[r.pane()].scrolls())
 
 	pane := withHelp(nkeys.Next, "tab", "pane")
-	pane.SetEnabled(r.st.width >= wideWidth)
+	pane.SetEnabled(r.st.wide())
 
 	if r.running {
 		stop := evKeys.Stop
@@ -573,7 +574,7 @@ func (r *evRun) keys() []key.Binding {
 	// A compact footer has room for a short label only. The NEXT block
 	// in the box keeps the whole sentence.
 	distill := withHelp(nkeys.Enter, "enter", "prepare distillation")
-	if r.st.width < wideWidth {
+	if !r.st.wide() {
 		distill = withHelp(nkeys.Enter, "enter", "distill")
 	}
 
@@ -585,7 +586,7 @@ func (r *evRun) keys() []key.Binding {
 // pane returns the pane that scrolls: the Sources pane when it has the
 // focus in a wide layout, else the main pane.
 func (r *evRun) pane() int {
-	if r.right && r.st.width >= wideWidth {
+	if r.right && r.st.wide() {
 		return 1
 	}
 

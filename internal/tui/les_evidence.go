@@ -53,20 +53,17 @@ type evidenceView struct {
 	// listOff is the first list line shown when the list is taller than
 	// its box.
 	listOff int
-	// wide is the layout of the last frame. Keys read it, because a
-	// key handler does not know the terminal width.
-	wide bool
 
 	// prev is the open refresh preview; nil when no preview is open.
 	prev *evPreview
 	// seq drops the plan of a preview that the user closed.
-	seq int
+	seq generation
 
 	// run is the latest evidence run of this session; nil before one.
 	run *evRun
 	// runs numbers the runs, so a late message of an earlier run never
 	// changes the current one.
-	runs int
+	runs generation
 }
 
 func newEvidenceView(st *state) *evidenceView { return &evidenceView{st: st} }
@@ -204,7 +201,7 @@ func (v *evidenceView) keys() []key.Binding {
 
 		// A compact footer has room for a short label only; the box
 		// names the whole route.
-		if !v.wide {
+		if !v.st.wide() {
 			link = withHelp(nkeys.Enter, "enter", "Overview")
 		}
 
@@ -216,7 +213,7 @@ func (v *evidenceView) keys() []key.Binding {
 		scroll.SetEnabled(v.detailScroll.scrolls())
 
 		back := withHelp(nkeys.Next, "tab", "list")
-		if !v.wide {
+		if !v.st.wide() {
 			back = withHelp(nkeys.Back, "esc", "back")
 		}
 
@@ -226,7 +223,7 @@ func (v *evidenceView) keys() []key.Binding {
 	// A compact list opens the detail with enter, so tab leaves the
 	// footer there and the switch keys keep their room.
 	tab := withHelp(nkeys.Next, "tab", "detail")
-	tab.SetEnabled(v.wide)
+	tab.SetEnabled(v.st.wide())
 
 	return append([]key.Binding{withHelp(nkeys.Down, "↑↓", "move"), withHelp(nkeys.Enter, "enter", "open"), tab},
 		switches...)
@@ -239,8 +236,6 @@ func (v *evidenceView) capturing() bool { return v.prev != nil }
 // view renders the context line, a blank row and the boxes. The last
 // row stays blank above the footer, as in the other sub-views.
 func (v *evidenceView) view(w, h int) string {
-	v.wide = w >= wideWidth
-
 	return v.contextLine(w) + "\n\n" + v.body(w, max(4, h-3))
 }
 
@@ -268,7 +263,7 @@ func (v *evidenceView) body(w, h int) string {
 		return v.blockedBox(snap, w, h)
 	}
 
-	if v.wide {
+	if v.st.wide() {
 		listW := min(propListW, w*propListW/propDesignW)
 
 		return hjoin(1, v.listBox(snap, listW, h, !v.detail), v.detailBox(snap, w-listW-1, h, v.detail))
@@ -421,7 +416,7 @@ func (v *evidenceView) listBox(snap learning.Snapshot, w, h int, focused bool) s
 	inner, rows := boxInner(w), boxRows(h)
 
 	shown, foot := v.fitList(v.listLines(snap, inner), rows, inner, focused)
-	if foot == "" && !v.wide {
+	if foot == "" && !v.st.wide() {
 		foot = "enter for detail"
 	}
 
@@ -452,7 +447,7 @@ func (v *evidenceView) listLines(snap learning.Snapshot, w int) []evLine {
 	add(evReviews, 0, v.sourceItem(snap, evReviews, w)...)
 	add(-1, 2, "")
 
-	if v.wide {
+	if v.st.wide() {
 		add(-1, 3, integRule(t, w))
 	}
 
@@ -468,7 +463,7 @@ func (v *evidenceView) listLines(snap learning.Snapshot, w int) []evLine {
 		add(it, 0, spread(style.Render(evItemName(it)), v.actionHint(snap, it)+" ", w-2))
 	}
 
-	if v.wide {
+	if v.st.wide() {
 		add(-1, 4, "", integRule(t, w))
 		add(-1, 4, propLines(t.Faint, "Every action shows a preview first. Nothing runs, fetches or writes "+
 			"until you press y.", w)...)

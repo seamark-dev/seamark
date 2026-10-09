@@ -127,10 +127,10 @@ type model struct {
 	// such exit waits. exitSeq drops the timer of an exit that the user
 	// cancelled.
 	exitBy  time.Time
-	exitSeq int
+	exitSeq generation
 
 	toast    toastMsg
-	toastSeq int
+	toastSeq generation
 	ticking  bool
 }
 
@@ -170,7 +170,7 @@ func newModel(svc Services, theme *Theme) *model {
 // Init loads every source and runs the first-run check. Nothing here
 // writes: opening the console is inspection only.
 func (m *model) Init() tea.Cmd {
-	svc := m.st.svc
+	var svc Reader = m.st.svc
 
 	return tea.Batch(
 		m.st.load(allSections...),
@@ -237,9 +237,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case toastMsg:
-		m.toastSeq++
+		seq := m.toastSeq.start()
 		m.toast = msg
-		seq := m.toastSeq
 
 		ttl := 6 * time.Second
 		if msg.tone == ToneFailure || msg.tone == ToneAttention {
@@ -249,7 +248,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, after(ttl, func(time.Time) tea.Msg { return clearToastMsg{seq: seq} })
 
 	case clearToastMsg:
-		if msg.seq == m.toastSeq {
+		if m.toastSeq.current(msg.seq) {
 			m.toast = toastMsg{}
 		}
 
@@ -277,7 +276,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case exitDeadlineMsg:
 		// The stopped work did not end in time. The console exits now;
 		// Run spends the rest of the same budget on the wait.
-		if msg.seq == m.exitSeq && m.quitAfter {
+		if m.exitSeq.current(msg.seq) && m.quitAfter {
 			m.quitting = true
 
 			return m, tea.Quit
@@ -460,9 +459,8 @@ func (m *model) quitDialogKey(msg tea.KeyMsg) tea.Cmd {
 				return note
 			}
 
-			m.exitSeq++
+			seq := m.exitSeq.start()
 			m.exitBy = time.Now().Add(exitWait)
-			seq := m.exitSeq
 
 			return tea.Batch(note, after(exitWait, func(time.Time) tea.Msg { return exitDeadlineMsg{seq: seq} }))
 		}
@@ -474,7 +472,7 @@ func (m *model) quitDialogKey(msg tea.KeyMsg) tea.Cmd {
 		m.quitConfirm = false
 		m.quitAfter = false
 		m.exitBy = time.Time{}
-		m.exitSeq++
+		m.exitSeq.cancel()
 	}
 
 	return nil
@@ -1106,7 +1104,7 @@ func (m *model) helpView(w, h int) string {
 
 	foot := ""
 	if len(rows) > window {
-		foot = t.Faint.Render(itoa(off+1) + "–" + itoa(min(len(rows), off+window)) + " of " + itoa(len(rows)))
+		foot = propRange(t, off, min(len(rows), off+window), len(rows))
 	}
 
 	// The modal fits its content, so a short key list leaves no blank

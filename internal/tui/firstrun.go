@@ -116,7 +116,8 @@ func (frApplyMsg) isFirstRunMsg()  {}
 // runs as a command, because Update and View never call a service.
 func (m *model) startFirstRun() tea.Cmd {
 	m.welcome = &firstRun{st: m.st}
-	svc := m.st.svc
+
+	var svc Reader = m.st.svc
 
 	return func() tea.Msg { return frAgentsMsg{ids: svc.AgentsOnPath()} }
 }
@@ -240,7 +241,8 @@ func (fr *firstRun) update(msg firstRunMsg) tea.Cmd {
 func (fr *firstRun) plan() tea.Cmd {
 	fr.stage = frPlanning
 	fr.preview, fr.planErr = nil, nil
-	svc := fr.st.svc
+
+	var svc Setup = fr.st.svc
 
 	return func() tea.Msg {
 		p, err := svc.PlanSetup(nil)
@@ -279,7 +281,9 @@ func (fr *firstRun) apply() tea.Cmd {
 	}
 
 	fr.stage = frApplying
-	svc, p := fr.st.svc, fr.preview
+	p := fr.preview
+
+	var svc Setup = fr.st.svc
 
 	return func() tea.Msg {
 		res, err := svc.ApplySetup(p)

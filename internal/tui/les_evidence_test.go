@@ -152,7 +152,7 @@ func TestEvidenceShowsSourcesAndActions(t *testing.T) {
 	assert.Contains(t, frame, "seamark index --fixes-only")
 	assert.Contains(t, evText(les, 55), "The CLI route also updates the index first.")
 
-	assert.Contains(t, shellAFooter(frame), "↑↓ move   enter open   tab detail   p proposals   m pins   s stats")
+	assert.Contains(t, footerLine(frame), "↑↓ move   enter open   tab detail   p proposals   m pins   s stats")
 	assert.Empty(t, f.called())
 }
 
@@ -359,7 +359,7 @@ func TestEvidenceBlockedStatesLinkToTheBuild(t *testing.T) {
 			assert.True(t, strings.HasPrefix(lines[7], "╭─ Evidence sources "), lines[7])
 			assert.Contains(t, frame, tc.head)
 			assert.NotContains(t, frame, "Refresh local fixes", "a blocked view offers no refresh")
-			assert.Contains(t, shellAFooter(frame), tc.link+"   p proposals   m pins   s stats")
+			assert.Contains(t, footerLine(frame), tc.link+"   p proposals   m pins   s stats")
 
 			if tc.confirm {
 				assert.Contains(t, frame, "seamark index --fixes-only")
@@ -394,7 +394,7 @@ func TestEvidenceCompactLayouts(t *testing.T) {
 	frame = h.view()
 	assertFrame(t, frame, 80, 24)
 	assert.Contains(t, frame, "╭─ Local fixes ")
-	assert.Contains(t, shellAFooter(frame), "esc back")
+	assert.Contains(t, footerLine(frame), "esc back")
 
 	h.press("esc")
 	assert.False(t, les.evid.detail)

@@ -68,7 +68,7 @@ func TestDoctorLinksAgentOpensInferenceSettings(t *testing.T) {
 	stub := ovlRecorder(h, destSettings)
 
 	frame := h.view()
-	assert.Contains(t, shellAFooter(frame), "enter open inference settings", "the footer names the workflow")
+	assert.Contains(t, footerLine(frame), "enter open inference settings", "the footer names the workflow")
 	assert.Contains(t, frame, "NEXT")
 	assert.Contains(t, docRight(frame), "enter open inference settings")
 	assert.Contains(t, docFlat(docRight(frame)), "Run it in a shell when you choose to.", "the fix stays text")
@@ -83,7 +83,7 @@ func TestDoctorLinksGHOpensEvidence(t *testing.T) {
 	h, f := docOpen(t, doclReport(), 120, 40)
 
 	h.press("down")
-	assert.Contains(t, shellAFooter(h.view()), "enter open Evidence", "an info check can still have a workflow")
+	assert.Contains(t, footerLine(h.view()), "enter open Evidence", "an info check can still have a workflow")
 
 	h.press("enter")
 	assert.Equal(t, destLessons, h.m.active)
@@ -97,8 +97,8 @@ func TestDoctorLinksWithoutAWorkflowKeepTheDetailRole(t *testing.T) {
 	h.press("end")
 
 	frame := h.view()
-	assert.Contains(t, shellAFooter(frame), "enter open", "enter still focuses the detail")
-	assert.NotContains(t, shellAFooter(frame), "settings")
+	assert.Contains(t, footerLine(frame), "enter open", "enter still focuses the detail")
+	assert.NotContains(t, footerLine(frame), "settings")
 	assert.NotContains(t, docRight(frame), "NEXT", "no workflow, no NEXT section")
 
 	h.press("enter")
@@ -113,7 +113,7 @@ func TestDoctorLinksFocusedDetailOpensTheWorkflow(t *testing.T) {
 
 	h.press("tab")
 	require.True(t, docView(h).focusDetail)
-	assert.Contains(t, shellAFooter(h.view()), "enter open inference settings")
+	assert.Contains(t, footerLine(h.view()), "enter open inference settings")
 
 	h.press("enter")
 	assert.Equal(t, []string{"group:inference"}, stub.intents)
@@ -130,7 +130,7 @@ func TestDoctorLinksNarrowOpensTheDetailFirst(t *testing.T) {
 		assertFrame(t, frame, size[0], size[1])
 		assert.Equal(t, destDoctor, h.m.active, "size %v: the first enter shows the detail", size)
 		assert.Contains(t, frame, "NEXT", "size %v", size)
-		assert.Contains(t, shellAFooter(frame), "esc back", "size %v: esc stays first", size)
+		assert.Contains(t, footerLine(frame), "esc back", "size %v: esc stays first", size)
 		assert.Empty(t, stub.intents, "size %v", size)
 
 		h.press("enter")

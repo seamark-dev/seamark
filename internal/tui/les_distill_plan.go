@@ -55,7 +55,7 @@ func (d *distRecord) reviewView(w, h int) string {
 		return d.nothingBox(w, h)
 	}
 
-	if d.wide() {
+	if d.st.wide() {
 		leftW := max(34, setupSplit(w, distPlanW))
 
 		return hjoin(1, d.planBox(leftW, h, pl.planFocus), d.groupsBox(w-leftW-1, h, !pl.planFocus))

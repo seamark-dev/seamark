@@ -135,7 +135,7 @@ func TestDistillProgressShowsTypedEvents(t *testing.T) {
 	assert.Contains(t, frame, "2 removed: p4, p7")
 	assert.Contains(t, frame, "no change since the preview")
 	assert.Contains(t, frame, "(estimated)")
-	assert.Contains(t, shellAFooter(frame), "x stop")
+	assert.Contains(t, footerLine(frame), "x stop")
 	assert.Equal(t, 3, rec.run.cursor, "the cursor follows the group that runs")
 
 	// The detail survives navigation.
@@ -169,7 +169,7 @@ func TestDistillStopAsksFirstAndStopsOnce(t *testing.T) {
 	assert.Contains(t, modal, "Stop the distillation?")
 	assert.Contains(t, lesBoxFlat(modal), "cancels the agent call of group 4")
 	assert.Contains(t, lesBoxFlat(modal), "A provider can still bill the cancelled call.")
-	assert.Contains(t, shellAFooter(h.view()), "y stop the run   esc keep running")
+	assert.Contains(t, footerLine(h.view()), "y stop the run   esc keep running")
 
 	h.press("esc")
 	assert.False(t, rec.run.stopping, "esc keeps the run going")
@@ -183,7 +183,7 @@ func TestDistillStopAsksFirstAndStopsOnce(t *testing.T) {
 	assert.Contains(t, frame, "Stopping")
 	assert.Contains(t, frame, "waiting for the agent call of group 4")
 	assert.Contains(t, frame, "Stopping after group 4 of 6")
-	assert.NotContains(t, shellAFooter(frame), "x stop", "x is off while stopping")
+	assert.NotContains(t, footerLine(frame), "x stop", "x is off while stopping")
 
 	h.press("x")
 	assert.False(t, rec.capturing(), "no second stop question")
@@ -363,7 +363,7 @@ func TestDistillRefusedStartReturnsToTheReview(t *testing.T) {
 	assert.False(t, h.m.st.busy())
 	assert.Contains(t, lesBoxFlat(h.view()), "The plan is out of date")
 	assert.Contains(t, lesBoxFlat(h.view()), "lessons.yaml changed since the preview")
-	assert.NotContains(t, shellAFooter(h.view()), "y start run")
+	assert.NotContains(t, footerLine(h.view()), "y start run")
 
 	h.press("y")
 	assert.Len(t, calls, 1, "y never repeats a refused start")
@@ -431,7 +431,7 @@ func TestDistillSettingsSaveDropsTheReadyPlan(t *testing.T) {
 	rec := distRecOf(t, h)
 
 	require.NotNil(t, rec.startPlan())
-	seq := rec.plan.seq
+	seq := rec.plan.seq.last
 	h.send(settingsSavedMsg{group: settings.GroupInference})
 	h.send(distPlannedMsg{rec: rec, seq: seq, preview: distFullPreview()})
 	assert.Equal(t, distScope, rec.step, "a late plan result is ignored")
@@ -444,7 +444,7 @@ func TestDistillSettingsSaveDropsTheReadyPlan(t *testing.T) {
 }
 
 func TestProposalsApplyPreviewClosesOnAPinWriteSave(t *testing.T) {
-	f := shellALedgerFake()
+	f := pendingLedgerFake()
 	h := lesOpen(t, f, 120, 40)
 	props := lesProps(h)
 
@@ -480,7 +480,7 @@ func TestDistillReviewGeneratedProposalsFiltersByTheRunIDs(t *testing.T) {
 
 	h := distOpen(t, f, 120, 40)
 	h.press("enter", "y")
-	require.Contains(t, shellAFooter(h.view()), "enter review proposals")
+	require.Contains(t, footerLine(h.view()), "enter review proposals")
 
 	h.press("enter")
 
@@ -561,12 +561,12 @@ func TestProposalsRunFilterWaitsForANewerLedger(t *testing.T) {
 
 	// A newer ledger holds p9 as pending: the row shows.
 	f.ledger.Pending = append(f.ledger.Pending, domain.Proposal{ID: 9, Rule: "new-rule", Status: domain.ProposalProposed})
-	h.send(loadedMsg{kind: secLedger, gen: h.m.st.gens[secLedger], value: f.ledger, at: end.Add(time.Second)})
+	h.send(loadedMsg{kind: secLedger, gen: h.m.st.gens[secLedger].latest(), value: f.ledger, at: end.Add(time.Second)})
 	assert.Equal(t, []int64{9}, lesRowIDs(props))
 
 	// A newer ledger without it counts it as missing.
 	f.ledger.Pending = f.ledger.Pending[:len(f.ledger.Pending)-1]
-	h.send(loadedMsg{kind: secLedger, gen: h.m.st.gens[secLedger], value: f.ledger, at: end.Add(2 * time.Second)})
+	h.send(loadedMsg{kind: secLedger, gen: h.m.st.gens[secLedger].latest(), value: f.ledger, at: end.Add(2 * time.Second)})
 
 	flat := lesBoxFlat(h.view())
 	assert.Contains(t, flat, "No pending proposals from run 14:05")
@@ -575,7 +575,7 @@ func TestProposalsRunFilterWaitsForANewerLedger(t *testing.T) {
 
 	// A prune keeps the row as superseded history, so it is not missing.
 	f.ledger.Superseded = append(f.ledger.Superseded, domain.Proposal{ID: 9, Rule: "new-rule", Status: domain.ProposalSuperseded})
-	h.send(loadedMsg{kind: secLedger, gen: h.m.st.gens[secLedger], value: f.ledger, at: end.Add(3 * time.Second)})
+	h.send(loadedMsg{kind: secLedger, gen: h.m.st.gens[secLedger].latest(), value: f.ledger, at: end.Add(3 * time.Second)})
 
 	flat = lesBoxFlat(h.view())
 	assert.Contains(t, flat, "0 applied, 0 dismissed, 1 superseded.")
@@ -595,7 +595,7 @@ func TestProposalsRunFilterReconcilesTheSelection(t *testing.T) {
 
 	// The filter narrows to p2 only; the selected p1 leaves it.
 	props.run.ids = map[int64]bool{2: true}
-	h.send(loadedMsg{kind: secLedger, gen: h.m.st.gens[secLedger], value: f.ledger, at: time.Now()})
+	h.send(loadedMsg{kind: secLedger, gen: h.m.st.gens[secLedger].latest(), value: f.ledger, at: time.Now()})
 
 	assert.Empty(t, props.selected, "a hidden row never stays an action target")
 	assert.Contains(t, h.view(), "p1 left the selection: outside the run filter")
@@ -740,4 +740,21 @@ func TestDistillShowsAStopFromTheQuitQuestion(t *testing.T) {
 	h.send(distDoneMsg{rec: rec, exec: distPartialExec(rec.plan.preview), at: time.Now()})
 	assert.Equal(t, distResult, rec.step)
 	assert.True(t, h.quit, "the console exits after the stopped work ends")
+}
+
+// A real-binary trial of the trigger extraction found that the summary
+// said "no agent traffic yet" while the prompt was with the agent. The
+// distillation record counts the prompt that is with the agent too.
+
+func TestDistillUsageCountsThePromptThatIsWithTheAgent(t *testing.T) {
+	f := distFake(distFullPreview(), distNoRun(t))
+	h := distOpen(t, f, 120, 40)
+	rec := distStartHeld(t, h)
+
+	assert.Equal(t, "no agent traffic yet", rec.usageText())
+
+	distSend(h, rec, distStarted(rec, 0))
+
+	first := distTokens(rec.plan.preview.Plan.Preflight.Groups[0].PromptChars)
+	assert.Equal(t, first+" tokens sent to group 1 (estimated); reply pending", rec.usageText())
 }

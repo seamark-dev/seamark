@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/distill"
+	"github.com/seamark-dev/seamark/internal/learning"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/report"
@@ -754,7 +756,7 @@ func TestLessonsPreviewFailureAndCancelledPreview(t *testing.T) {
 	// A preview result that arrives after a cancel is dropped.
 	p := lesProps(h)
 	p.preview(proposals.ActionApply, []int64{1}, true)
-	stale := p.seq
+	stale := p.seq.last
 	h.press("esc")
 	h.send(propPreviewMsg{seq: stale, pv: lesPreview(proposals.ActionApply, []int64{1}, true)})
 	assert.Nil(t, lesProps(h).dec)
@@ -901,4 +903,158 @@ func TestLessonsASCIIThemeUsesNoUnicodeGlyphs(t *testing.T) {
 
 	assert.Contains(t, h.view(), "pending > applied")
 	assert.Contains(t, h.view(), "y apply 1 pin")
+}
+
+// The tests below hold review findings of Lessons: the cursor note of a
+// refresh.
+
+// lesOneProposal is a ledger with one pending proposal, p1.
+func lesOneProposal() *proposals.Ledger {
+	l := lesLedger()
+	l.Pending = l.Pending[:1]
+
+	return l
+}
+
+// lesNoCursorNote reports whether the frame names a lost cursor row.
+func lesNoCursorNote(h *harness) bool {
+	return !strings.Contains(h.view(), "left this list")
+}
+
+func TestLessonsLastDismissedRowIsNotReportedAgain(t *testing.T) {
+	f := newFake()
+	f.ledger = lesOneProposal()
+	f.previewDecision = func(a proposals.Action, ids []int64) (*proposals.Preview, error) {
+		return lesPreview(a, ids, true), nil
+	}
+	f.commitDecision = func(pv *proposals.Preview) (proposals.Result, error) {
+		after := lesOneProposal()
+		after.Dismissed = append(after.Dismissed, after.Pending[0])
+		after.Pending = nil
+		f.ledger = after
+
+		return proposals.Result{Action: pv.Action, Moved: []int64{1}}, nil
+	}
+
+	h := lesOpen(t, f, 120, 32)
+	require.Equal(t, int64(1), lesProps(h).cursorID)
+
+	// The user dismisses the last row; the commit refresh empties the list.
+	h.press("d", "y", "enter")
+	require.Empty(t, lesProps(h).rows())
+	assert.True(t, lesNoCursorNote(h), "the user's own decision is no outside change")
+	assert.Zero(t, lesProps(h).cursorID, "an empty list records no cursor row")
+
+	// Every later refresh stays quiet, on Proposals and on Overview.
+	for range 2 {
+		h.m.toast = toastMsg{}
+		h.press("r")
+		assert.True(t, lesNoCursorNote(h), "a refresh reports a lost row once at most")
+	}
+
+	h.press("1")
+	h.m.toast = toastMsg{}
+	h.press("r")
+	assert.True(t, lesNoCursorNote(h))
+}
+
+func TestLessonsEmptyFilterForgetsTheCursorRow(t *testing.T) {
+	f := newFake()
+	f.ledger = lesLedger()
+	f.ledger.Applied = nil
+
+	h := lesOpen(t, f, 120, 32)
+	h.press("f")
+	require.Equal(t, propApplied, lesProps(h).filter)
+	require.Empty(t, lesProps(h).rows())
+
+	// p1 is still pending, only this filter hides it.
+	for range 2 {
+		h.m.toast = toastMsg{}
+		h.press("r")
+		assert.True(t, lesNoCursorNote(h), "a filter without rows loses no proposal")
+	}
+}
+
+func TestLessonsCursorNoteWaitsForTheVisibleList(t *testing.T) {
+	f := newFake()
+	f.ledger = lesLedger()
+
+	h := lesOpen(t, f, 120, 32)
+	require.Equal(t, int64(1), lesProps(h).cursorID)
+
+	// Another writer dismisses p1 while Overview shows.
+	dismissP1 := func() {
+		next := lesLedger()
+		next.Dismissed = append(next.Dismissed, next.Pending[0])
+		next.Pending = next.Pending[1:]
+		f.ledger = next
+	}
+
+	dismissP1()
+	h.press("1", "r")
+	assert.True(t, lesNoCursorNote(h), "Overview shows no note about a hidden list")
+
+	h.press("3")
+	assert.Equal(t, int64(2), lesProps(h).cursorID, "the cursor still moved to the neighbor")
+
+	// The same holds on another Lessons sub-view.
+	f.ledger = lesLedger()
+	h.press("r", "g")
+	require.Equal(t, int64(1), lesProps(h).cursorID)
+
+	dismissP1()
+	h.m.toast = toastMsg{}
+	h.press("s", "r")
+	assert.True(t, lesNoCursorNote(h), "Stats shows no note about the Proposals cursor")
+
+	// On Proposals the note shows, as before.
+	f.ledger = lesLedger()
+	h.press("p", "r", "g")
+	require.Equal(t, int64(1), lesProps(h).cursorID)
+
+	dismissP1()
+	h.press("r")
+	assert.Contains(t, h.view(), "p1 left this list; the cursor moved to p2")
+}
+
+func TestLessonsDistillCleanupIsNoOutsideChange(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		send func(h *harness, rec *distRecord)
+	}{
+		{"run cleanup", func(h *harness, rec *distRecord) {
+			h.send(distEventMsg{rec: rec, ch: distClosed(), ev: distill.Event{Kind: distill.EventCleanupDone, Removed: 1}})
+		}},
+		{"cleanup-only plan", func(h *harness, rec *distRecord) {
+			h.send(distCleanedMsg{rec: rec, removed: 1})
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFake()
+			f.ledger = lesLedger()
+
+			h := lesOpen(t, f, 120, 32)
+			h.press("space")
+			require.Equal(t, int64(1), lesProps(h).cursorID)
+
+			// The confirmed plan names p1 as a stale pending proposal.
+			rec := newDistRecord(h.m.st)
+			rec.plan.preview = &learning.DistillPreview{Plan: &distill.Plan{
+				Cleanup: []domain.Proposal{{ID: 1, Rule: "check-nil-errors"}},
+			}}
+
+			c.send(h, rec)
+
+			next := lesLedger()
+			next.Pending = next.Pending[1:]
+			f.ledger = next
+
+			h.m.toast = toastMsg{}
+			h.press("r")
+			assert.True(t, lesNoCursorNote(h), "the plan disclosed the removal")
+			assert.NotContains(t, h.view(), "left the selection")
+			assert.Equal(t, int64(2), lesProps(h).cursorID)
+		})
+	}
 }

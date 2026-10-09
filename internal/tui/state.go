@@ -71,6 +71,54 @@ func (s *section[T]) set(v T, err error, at time.Time) {
 	}
 }
 
+// generation issues tickets for background requests. A command carries
+// the ticket of its request, and the result applies only while that
+// ticket is current. Results can arrive out of order, and the user can
+// leave a request before its result arrives. Either result must never
+// replace newer state. The zero value is ready to use.
+//
+// The type carries no request or result value, because every owner
+// stores its result in its own fields and adds its own checks, for
+// example a stage.
+type generation struct {
+	// last is the newest ticket. It only grows, so an old ticket never
+	// becomes current again.
+	last int
+}
+
+// start issues the ticket of a new request. Every earlier ticket goes
+// stale, so only the newest request can apply its result.
+func (g *generation) start() int {
+	g.last++
+
+	return g.last
+}
+
+// cancel makes every issued ticket stale. An owner calls it when the
+// user leaves a request whose result can still arrive.
+func (g *generation) cancel() {
+	g.last++
+}
+
+// current reports whether ticket belongs to the newest request and no
+// cancel followed it.
+func (g *generation) current(ticket int) bool {
+	return ticket == g.last
+}
+
+// started reports whether start or cancel ran at least once. An owner
+// uses it to start its first request only once.
+func (g *generation) started() bool {
+	return g.last > 0
+}
+
+// latest returns the newest ticket. Tickets only grow, so an owner can
+// compare them to order requests. The setup wizard uses it to wait for
+// an inspection load that another call started.
+func (g *generation) latest() int {
+	return g.last
+}
+
 // state is the data every screen shares: the services, the theme, the
 // snapshots, and the single mutation slot.
 type state struct {
@@ -90,7 +138,7 @@ type state struct {
 
 	// gens drops out-of-order results: only the newest load of a
 	// source may replace its snapshot.
-	gens [secCount]int
+	gens [secCount]generation
 
 	// mutation names the running mutation; "" when idle.
 	mutation string
@@ -133,8 +181,19 @@ func (s *state) copyToClipboard(text string) error {
 	return s.copyText(text)
 }
 
+// wide reports the side-by-side layout of the current terminal. Key
+// handlers and footers read it, because they have no render width. A
+// screen render can read it too, because the shell renders every screen
+// at the full terminal width. A render that takes an explicit width
+// keeps its own check against wideWidth, because it can draw a sub-box,
+// or a test can call it without a terminal size.
+func (s *state) wide() bool {
+	return s.width >= wideWidth
+}
+
 // loadedMsg carries one source's load result back to the event loop.
-// Workers never touch the model; they return messages.
+// Workers never touch the model; they return messages. gen is the
+// ticket of the load from state.gens, so store can drop an old result.
 type loadedMsg struct {
 	kind  sectionKind
 	gen   int
@@ -442,8 +501,7 @@ func (s *state) load(kinds ...sectionKind) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(kinds))
 
 	for _, k := range kinds {
-		s.gens[k]++
-		gen := s.gens[k]
+		gen := s.gens[k].start()
 		svc := s.svc
 
 		switch k {
@@ -556,7 +614,7 @@ func learningReloadErr(v learning.Snapshot, good bool) error {
 // store records a load result unless a newer load of the same source
 // started meanwhile.
 func (s *state) store(msg loadedMsg) bool {
-	if msg.gen != s.gens[msg.kind] {
+	if !s.gens[msg.kind].current(msg.gen) {
 		return false
 	}
 

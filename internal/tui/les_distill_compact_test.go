@@ -21,7 +21,7 @@ import (
 
 // distFooterHead returns the first hint of the footer of the frame.
 func distFooterHead(h *harness) string {
-	return strings.TrimSpace(shellAFooter(h.view()))
+	return strings.TrimSpace(footerLine(h.view()))
 }
 
 // distASCIIOpen opens a distillation draft with the ASCII theme.
@@ -130,7 +130,7 @@ func TestDistillCompactStoppingKeepsTheHeadline(t *testing.T) {
 	frame := h.view()
 	assert.Contains(t, frame, "Stopping after group 4 of 6")
 	assert.Contains(t, frame, "Seamark waits for the agent call of group 4 to end.")
-	assert.NotContains(t, shellAFooter(frame), "x stop", "a second stop is not offered")
+	assert.NotContains(t, footerLine(frame), "x stop", "a second stop is not offered")
 }
 
 func TestDistillCompactResultOpensAtTheVerdict(t *testing.T) {

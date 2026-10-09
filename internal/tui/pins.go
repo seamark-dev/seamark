@@ -152,9 +152,8 @@ type pinsView struct {
 	// compare is the open comparison of two similar pins, or nil.
 	compare *pinCompare
 
-	// wide and listH come from the last render, so key handling uses
-	// the layout that the user sees.
-	wide  bool
+	// listH comes from the last render, so page keys move by the rows
+	// that the user sees.
 	listH int
 }
 
@@ -584,15 +583,9 @@ func (p *pinsView) markActed(refs []pinfile.EntryRef) {
 func (p *pinsView) browseKey(msg tea.KeyMsg) tea.Cmd {
 	rows := p.rows()
 
-	// The screen gets the full terminal width, so the terminal size
-	// gives the layout even before the first render.
-	if p.st.width > 0 {
-		p.wide = p.st.width >= wideWidth
-	}
-
 	switch {
 	case key.Matches(msg, nkeys.Next, nkeys.Prev):
-		if p.wide && len(rows) > 0 {
+		if p.st.wide() && len(rows) > 0 {
 			p.focusDetail = !p.focusDetail
 		}
 	case key.Matches(msg, nkeys.Enter):
@@ -644,7 +637,7 @@ func (p *pinsView) browseKey(msg tea.KeyMsg) tea.Cmd {
 // showsDetail reports a visible detail pane: beside the list in the
 // wide layout, or alone in the narrow layout.
 func (p *pinsView) showsDetail(rows []pinRow) bool {
-	return len(rows) > 0 && (p.wide || p.focusDetail)
+	return len(rows) > 0 && (p.st.wide() || p.focusDetail)
 }
 
 // detailKey scrolls the detail pane, as in Proposals. The page keys
@@ -652,7 +645,7 @@ func (p *pinsView) showsDetail(rows []pinRow) bool {
 // only while it has focus. It reports whether the key scrolled.
 func (p *pinsView) detailKey(msg tea.KeyMsg) bool {
 	paging := key.Matches(msg, nkeys.PageUp, nkeys.PageDown)
-	if !p.focusDetail && (!p.wide || !paging) {
+	if !p.focusDetail && (!p.st.wide() || !paging) {
 		return false
 	}
 
@@ -1333,9 +1326,9 @@ func (p *pinsView) paneKey(hasRow bool) key.Binding {
 		b.SetEnabled(false)
 
 		return b
-	case p.wide && p.focusDetail:
+	case p.st.wide() && p.focusDetail:
 		return withHelp(nkeys.Next, "tab", "list")
-	case p.wide:
+	case p.st.wide():
 		return withHelp(nkeys.Next, "tab", "detail")
 	case p.focusDetail:
 		return withHelp(nkeys.Back, "esc", "back")

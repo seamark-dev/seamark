@@ -100,6 +100,19 @@ type fakeServices struct {
 	reads map[string]int
 }
 
+// The fake implements every area, so a test can pass it where a helper
+// takes one area. One assertion per area names the area in the build
+// error when a fake method drifts.
+var (
+	_ Services    = (*fakeServices)(nil)
+	_ Reader      = (*fakeServices)(nil)
+	_ Setup       = (*fakeServices)(nil)
+	_ Decisions   = (*fakeServices)(nil)
+	_ Learning    = (*fakeServices)(nil)
+	_ Maintenance = (*fakeServices)(nil)
+	_ Settings    = (*fakeServices)(nil)
+)
+
 func newFake() *fakeServices {
 	return &fakeServices{
 		root:    "/work/repo",

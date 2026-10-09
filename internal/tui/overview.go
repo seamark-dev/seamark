@@ -67,7 +67,7 @@ type overview struct {
 	// build is the latest index build; showBuild keeps its modal open.
 	build     *ovBuild
 	showBuild bool
-	buildSeq  int
+	buildSeq  generation
 
 	// freshSeen records that the user left the empty first-run state
 	// for the full list. It lasts for this invocation only.
@@ -160,15 +160,10 @@ func (o *overview) update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// wide reports the side-by-side layout of the terminal.
-func (o *overview) wide() bool {
-	return o.st.width >= wideWidth
-}
-
 // collapsed reports the layout where the cards collapse into one line:
 // a narrow terminal, or a wide one too short for the cards.
 func (o *overview) collapsed() bool {
-	return !o.wide() || o.st.height-chromeHeight < ovCardsMinBody
+	return !o.st.wide() || o.st.height-chromeHeight < ovCardsMinBody
 }
 
 // indexNewer reports an index database from a newer seamark.
@@ -249,7 +244,7 @@ func (o *overview) listKey(msg tea.KeyMsg) tea.Cmd {
 	items := o.attention()
 	rows := o.rows(items)
 	sel := o.sync(rows, items)
-	wide := o.wide()
+	wide := o.st.wide()
 	inDetail := (wide && o.focus == ovFocusDetail) || (!wide && o.detailOpen)
 
 	page := max(1, o.listH-1)
@@ -496,7 +491,7 @@ func (o *overview) keys() []key.Binding {
 
 	move := o.moveLabel()
 
-	if !o.wide() {
+	if !o.st.wide() {
 		if o.detailOpen {
 			// esc comes first: it is the way back to the list, and a
 			// narrow footer drops the last hints first.

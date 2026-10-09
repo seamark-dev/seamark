@@ -151,7 +151,7 @@ type distNorm struct {
 // distPlan is the read-only plan and its review state.
 type distPlan struct {
 	// seq drops the result of a plan that the user left.
-	seq int
+	seq generation
 	req learning.DistillRequest
 
 	preview *learning.DistillPreview
@@ -537,12 +537,13 @@ func (d *distRecord) startPlan() tea.Cmd {
 		return d.warn(reason)
 	}
 
-	d.plan = distPlan{seq: d.plan.seq + 1, req: req}
+	d.plan = distPlan{seq: d.plan.seq, req: req}
 	d.form.note = ""
 	d.step = distPlanning
 
-	seq := d.plan.seq
-	svc := d.st.svc
+	seq := d.plan.seq.start()
+
+	var svc Learning = d.st.svc
 
 	return func() tea.Msg {
 		p, err := svc.PlanDistill(req)
@@ -564,7 +565,7 @@ func (d *distRecord) startPlan() tea.Cmd {
 // planned shows a plan result. A region or limit error goes back to the
 // form, because the form holds the value to fix.
 func (d *distRecord) planned(msg distPlannedMsg) tea.Cmd {
-	if msg.seq != d.plan.seq || d.step != distPlanning {
+	if !d.plan.seq.current(msg.seq) || d.step != distPlanning {
 		return nil
 	}
 
@@ -596,9 +597,10 @@ func (d *distRecord) planned(msg distPlannedMsg) tea.Cmd {
 }
 
 // backToScope returns to the form with a note. It drops the plan, and
-// a new sequence number drops a late plan result.
+// the cancel drops a late plan result.
 func (d *distRecord) backToScope(tone Tone, note string) {
-	d.plan = distPlan{seq: d.plan.seq + 1}
+	d.plan = distPlan{seq: d.plan.seq}
+	d.plan.seq.cancel()
 	d.step = distScope
 	d.form.note, d.form.noteTone = note, tone
 }
@@ -654,7 +656,8 @@ func (d *distRecord) start() tea.Cmd {
 	// per group, the cleanup, the stop and the end. So the worker never
 	// blocks while nobody reads, as in the synchronous test harness.
 	ch := make(chan tea.Msg, 2*n+4)
-	svc := d.st.svc
+
+	var svc Learning = d.st.svc
 
 	work := d.st.goWork(func() tea.Msg {
 		defer cancel()
@@ -684,7 +687,7 @@ func distWait(ch <-chan tea.Msg) tea.Cmd {
 // through ch. It runs in a command goroutine, never in Update. A panic
 // becomes a failed end, so the mutation slot always frees. The end
 // marks the panic, because work can have started before it.
-func distRunWork(ctx context.Context, svc Services, rec *distRecord, p *learning.DistillPreview, ch chan tea.Msg) {
+func distRunWork(ctx context.Context, svc Learning, rec *distRecord, p *learning.DistillPreview, ch chan tea.Msg) {
 	defer close(ch)
 
 	var (
@@ -926,7 +929,8 @@ func (d *distRecord) cleanup() tea.Cmd {
 	}
 
 	d.plan.cleaning = true
-	svc := d.st.svc
+
+	var svc Learning = d.st.svc
 
 	return func() tea.Msg {
 		removed, err := svc.CleanupPending(p)

@@ -154,7 +154,6 @@ func (p *propView) gateLabel() string {
 // pads the last line, which keeps the blank row above the footer.
 func (p *propView) view(w, h int) string {
 	t := p.st.theme
-	p.wide = w >= wideWidth
 
 	head := p.filterBar(w)
 
@@ -272,7 +271,7 @@ func (p *propView) body(w, h int) string {
 		return p.emptyBox(w, h)
 	}
 
-	if p.wide {
+	if p.st.wide() {
 		listW := min(propListW, w*propListW/propDesignW)
 
 		return hjoin(1, p.listBox(rows, listW, h, !p.focusDetail),
@@ -286,16 +285,11 @@ func (p *propView) body(w, h int) string {
 	return p.listBox(rows, w, h, true)
 }
 
-// propRange renders the "3–12 of 40" position of a scrolled window.
-// The ASCII glyph set gets a plain hyphen, because a view that renders
-// outside the shell skips the frame-wide ASCII swap.
+// propRange renders the faint "3–12 of 40" position of a scrolled
+// window. from is the 0-based first row and to the end of the window,
+// as the list offsets give them.
 func propRange(t *Theme, from, to, n int) string {
-	dash := "–"
-	if t.ASCII {
-		dash = "-"
-	}
-
-	return t.Faint.Render(itoa(from+1) + dash + itoa(to) + " of " + itoa(n))
+	return t.Faint.Render(t.positionNote(from+1, to, n))
 }
 
 // listBox renders the proposal list with its column header. The cursor
@@ -330,7 +324,7 @@ func (p *propView) listBox(rows []domain.Proposal, w, h int, focused bool) strin
 	switch {
 	case len(rows) > window:
 		foot = propRange(t, p.list.offset, end, len(rows))
-	case !p.wide:
+	case !p.st.wide():
 		foot = t.Faint.Render("enter for detail")
 	}
 

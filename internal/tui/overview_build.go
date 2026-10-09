@@ -176,7 +176,7 @@ func ovWait(ch <-chan tea.Msg) tea.Cmd {
 // ovRunBuild runs the build and streams its events, then the result,
 // through ch. It runs in a command goroutine, never in Update. A panic
 // becomes a failed result, so the mutation slot always frees.
-func ovRunBuild(svc Services, id int, force bool, ch chan<- tea.Msg) {
+func ovRunBuild(svc Setup, id int, force bool, ch chan<- tea.Msg) {
 	defer close(ch)
 
 	var (
@@ -257,12 +257,11 @@ func (o *overview) startBuild(force bool) tea.Cmd {
 		return toast(ToneAttention, "Another operation is running: "+o.st.mutation)
 	}
 
-	o.buildSeq++
-	b := newOvBuild(o.buildSeq, force, time.Now())
+	b := newOvBuild(o.buildSeq.start(), force, time.Now())
 	o.build, o.showBuild = b, true
-
-	svc := o.st.svc
 	ch := b.ch
+
+	var svc Setup = o.st.svc
 
 	run := func() tea.Msg {
 		ovRunBuild(svc, b.id, force, ch)

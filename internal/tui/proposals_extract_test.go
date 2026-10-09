@@ -77,7 +77,7 @@ func TestProposalsSupersededHistoryIsReadOnly(t *testing.T) {
 	assert.Contains(t, propDetailText(h), "Superseded: its pin was pruned. Read-only; not restorable here.")
 	assert.Contains(t, propDetailText(h), "Advisories cover pending and applied proposals only.")
 
-	footer := shellAFooter(frame)
+	footer := footerLine(frame)
 	for _, k := range []string{"space select", "a apply", "d dismiss", "t extract", "c record"} {
 		assert.NotContains(t, footer, k, "a superseded row offers no action")
 	}
@@ -102,7 +102,7 @@ func TestProposalsExtractKeyOpensTheReviewOfTheSelection(t *testing.T) {
 	// footer keeps the keys of the 1a layout and drops t after f and /,
 	// so a wide footer shows it.
 	h.resize(200, 50)
-	assert.Contains(t, shellAFooter(h.view()), "t extract triggers")
+	assert.Contains(t, footerLine(h.view()), "t extract triggers")
 	h.resize(120, 40)
 	assert.Contains(t, propDetailText(h), "t asks the agent where its mistake occurs (trigger extraction).")
 
@@ -146,7 +146,7 @@ func TestProposalsExtractKeyOnAnAppliedRow(t *testing.T) {
 	assert.Contains(t, flat, "The pin of this proposal is in Lessons › Pins (press m), which previews a retarget "+
 		"or a prune of it.")
 	assert.NotContains(t, flat, "stay on the CLI", "the applied row points to Pins now")
-	assert.Contains(t, shellAFooter(h.view()), "t extract triggers")
+	assert.Contains(t, footerLine(h.view()), "t extract triggers")
 
 	h.press("t")
 	require.Len(t, reqs, 1)
@@ -214,7 +214,7 @@ func TestProposalsExtractKeyNeedsAnOpenQuestion(t *testing.T) {
 			h := lesOpen(t, f, 120, 40)
 			h.press(c.keys...)
 
-			assert.NotContains(t, shellAFooter(h.view()), "t extract", "no key without an eligible target")
+			assert.NotContains(t, footerLine(h.view()), "t extract", "no key without an eligible target")
 
 			h.press("t")
 			assert.Empty(t, reqs, "t opens nothing")
@@ -334,7 +334,7 @@ func TestProposalsExtractLineFollowsTheMarks(t *testing.T) {
 	flat := propDetailText(h)
 	assert.Contains(t, flat, "Trigger question: no selected proposal has an open question; p3: no living evidence.")
 	assert.NotContains(t, flat, "t asks the agent where its mistake occurs", "t does not ask about the cursor row")
-	assert.NotContains(t, shellAFooter(h.view()), "t extract")
+	assert.NotContains(t, footerLine(h.view()), "t extract")
 
 	// With an eligible row marked too, t asks about the marked rows.
 	h.press("space")
@@ -347,4 +347,43 @@ func TestProposalsExtractLineFollowsTheMarks(t *testing.T) {
 	h.press("t")
 	require.Len(t, reqs, 1)
 	assert.Equal(t, []int64{1, 3}, reqs[0].IDs)
+}
+
+// The tests below hold review fixes. Each test drives the real model
+// through the harness, so it proves the fix where the user sees it.
+
+// Review fix: t pushed "f state" and "/ region" out of the 1a footer
+// at 120×40. t now follows them, and the help lists it.
+func TestProposalsFooterKeepsTheFilterKeysBeforeExtract(t *testing.T) {
+	var reqs []learning.ExtractRequest
+
+	f := propExtractFake(&reqs)
+	h := lesOpen(t, f, 120, 40)
+	require.True(t, maintHasKey(h, "t"), "the cursor row has an open question")
+
+	assert.Contains(t, footerLine(h.view()), "space select   a apply   d dismiss   tab detail   f state   / region")
+
+	var order []string
+
+	for _, b := range hookLessons(h).keys() {
+		if b.Enabled() {
+			order = append(order, b.Help().Key)
+		}
+	}
+
+	assert.Less(t, indexOf(order, "/"), indexOf(order, "t"), "t follows the filter keys: %v", order)
+
+	h.press("?")
+	assert.Contains(t, h.view(), "extract triggers", "the help still lists t")
+}
+
+// indexOf returns the position of k in keys, or -1.
+func indexOf(keys []string, k string) int {
+	for i, s := range keys {
+		if s == k {
+			return i
+		}
+	}
+
+	return -1
 }

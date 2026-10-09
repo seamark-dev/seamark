@@ -64,74 +64,26 @@ func (l *listState) move(delta, n int) {
 	l.cursor = max(0, min(l.cursor+delta, n-1))
 }
 
-// renderList renders rows in a window of h lines with the cursor row
-// marked by a glyph and the selection style. The glyph keeps the
-// cursor visible without color. focused=false renders the cursor
-// without the highlight, so the active pane stays distinguishable.
-// A list that scrolls gives its last line to a position note, so the
-// window holds h-1 rows and the note never hides the cursor row.
-func (t *Theme) renderList(rows []string, l *listState, w, h int, focused bool) string {
-	window := h
-
-	scrolls := len(rows) > h && h >= 2
-	if scrolls {
-		window = h - 1
-	}
-
-	l.clamp(len(rows), window)
-
-	var b strings.Builder
-
-	end := min(len(rows), l.offset+window)
-
-	for i := l.offset; i < end; i++ {
-		prefix := "  "
-
-		line := truncate(rows[i], w-2, t.Glyphs.Ellipsis)
-
-		if i == l.cursor {
-			prefix = t.Glyphs.Cursor + " "
-
-			if focused {
-				line = t.Selected.Render(padRight(line, w-2))
-			}
-		}
-
-		b.WriteString(prefix + line)
-
-		if i < end-1 {
-			b.WriteString("\n")
-		}
-	}
-
-	if scrolls {
-		b.WriteString("\n" + t.scrollNote(l.offset, window, len(rows), w))
-	}
-
-	return b.String()
-}
-
-// scrollNote renders the "a–b of n" position of a scrolling window,
-// right-aligned, so hidden rows are never a surprise.
-func (t *Theme) scrollNote(offset, window, n, w int) string {
+// positionNote returns the plain "a–b of n" position of a scrolled
+// window. first and last are the 1-based visible rows, and total is the
+// row count. Callers add the style and the words around it. The ASCII
+// glyph set gets a plain hyphen, because a view that renders outside
+// the shell skips the frame-wide ASCII swap.
+func (t *Theme) positionNote(first, last, total int) string {
 	dash := "–"
 	if t.ASCII {
 		dash = "-"
 	}
 
-	note := strconv.Itoa(offset+1) + dash + strconv.Itoa(min(n, offset+window)) + " of " + strconv.Itoa(n)
-
-	return t.Faint.Render(padLeft(note, w))
+	return itoa(first) + dash + itoa(last) + " of " + itoa(total)
 }
 
-// paneTitle renders a pane heading. The focused pane gets the focus
-// glyph as well as the accent color, so focus survives NO_COLOR.
-func (t *Theme) paneTitle(title string, focused bool, w int) string {
-	if focused {
-		return truncate(t.RuleOn.Render(t.Glyphs.Focus)+" "+t.Title.Render(title), w, t.Glyphs.Ellipsis)
-	}
+// scrollNote renders the "a–b of n" position of a scrolling window,
+// right-aligned, so hidden rows are never a surprise.
+func (t *Theme) scrollNote(offset, window, n, w int) string {
+	note := t.positionNote(offset+1, min(n, offset+window), n)
 
-	return truncate("  "+t.Muted.Render(title), w, t.Glyphs.Ellipsis)
+	return t.Faint.Render(padLeft(note, w))
 }
 
 // section renders a heading over a body with consistent spacing.
@@ -262,152 +214,15 @@ func (t *Theme) keyLabel(k string) string {
 	return k
 }
 
-// Dialog geometry. dialogMinBox is the narrowest box, so the text
-// inside keeps a usable width even in a narrow area.
-const (
-	dialogMaxBox = 84
-	dialogMinBox = 12
-	// dialogChrome is the border and the horizontal padding around
-	// the text of a dialog: two border cells and four padding cells.
-	dialogChrome = 6
-)
+// dialogMinBox is the narrowest modal box, so the text inside keeps a
+// usable width even in a narrow area.
+const dialogMinBox = 12
 
-// dialogWidth returns the outer width of a dialog box in a w-wide area.
-// The box keeps two cells of margin on each side, and it is never
-// wider than the area.
-func dialogWidth(w int) int {
-	boxW := min(w-4, max(48, min(dialogMaxBox, w*3/4)))
-
-	return min(w, max(boxW, dialogMinBox))
-}
-
-// dialogInner returns the text width inside a dialog for a w-wide area.
-func dialogInner(w int) int {
-	return max(1, dialogWidth(w)-dialogChrome)
-}
-
-// dialog renders a bordered overlay box centered in w by h. Overlays
-// are the only bordered element, so they read as a separate layer.
-//
-// The title and the action row always stay visible, because the action
-// row names the only keys that leave some dialogs. When the box is
-// taller than h, the dialog first removes the vertical padding and the
-// extra blank lines of the body, then as many other blank body lines as
-// needed. If the box is still too tall, the dialog clips the body and
-// puts a note directly above the action row, so the user knows that
-// text is hidden.
-func (t *Theme) dialog(title, body, actions string, w, h int) string {
-	boxW := dialogWidth(w)
-	inner := dialogInner(w)
-
-	d := dialogBox{
-		head: t.Title.Render(truncate(title, inner, t.Glyphs.Ellipsis)),
-		body: blockLines(body, inner),
-		acts: blockLines(actions, inner),
-		padY: 1,
-		gap:  1,
-	}
-
-	if d.height() > h {
-		d.padY = 0
-		d.body = collapseBlankRuns(d.body)
-	}
-
-	if excess := d.height() - h; excess > 0 {
-		d.body = dropBlankLines(d.body, excess)
-	}
-
-	if d.height() > h {
-		d.clip(t.Faint.Render(truncate(t.dialogMoreNote(), inner, t.Glyphs.Ellipsis)), h)
-	}
-
-	box := t.Dialog.Padding(d.padY, 2).Width(boxW - 2).Render(d.content())
-
-	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, box)
-}
-
-// dialogMoreNote tells that the dialog body is clipped. The dialog does
-// not scroll, so a larger terminal is the only way to show the rest.
+// dialogMoreNote tells that the body of a build modal is clipped. The
+// modal does not scroll, so a larger terminal is the only way to show
+// the rest.
 func (t *Theme) dialogMoreNote() string {
 	return "more below " + t.Glyphs.Dash + " enlarge the terminal"
-}
-
-// dialogBox is the line layout of one dialog: the title, the body, the
-// action row, and the spacing between them. Each part is a list of
-// lines that already fit the text width.
-type dialogBox struct {
-	head string
-	body []string
-	acts []string
-	// note is the clip note. It is empty while the whole body fits.
-	note string
-
-	// padY is the vertical padding inside the border; gap is the count
-	// of blank lines between two parts.
-	padY, gap int
-}
-
-// height returns the rendered box height, the border included.
-func (d *dialogBox) height() int {
-	return len(d.lines()) + 2 + 2*d.padY
-}
-
-// clip keeps the body lines that fit in h rows above the note and the
-// action row. When not even one body line fits, the blank line under
-// the title goes first, so the title and the action row stay on screen
-// as long as the border fits. A dialog without a body hides no text, so
-// it gets no note.
-func (d *dialogBox) clip(note string, h int) {
-	if len(d.body) == 0 {
-		d.gap = 0
-
-		return
-	}
-
-	d.note = note
-
-	// room is h minus the border, the padding, the title, the gap, the
-	// note and the action row.
-	room := func() int {
-		return h - 2 - 2*d.padY - 1 - d.gap - 1 - len(d.acts)
-	}
-
-	if room() < 1 {
-		d.gap = 0
-	}
-
-	d.body = d.body[:min(len(d.body), max(0, room()))]
-}
-
-// lines returns the content lines inside the padding. A clipped box
-// puts the note directly above the action row.
-func (d *dialogBox) lines() []string {
-	out := []string{d.head}
-
-	if len(d.body) > 0 {
-		out = append(out, make([]string, d.gap)...)
-		out = append(out, d.body...)
-	}
-
-	switch {
-	case d.note != "":
-		if len(d.body) == 0 {
-			out = append(out, make([]string, d.gap)...)
-		}
-
-		out = append(out, d.note)
-		out = append(out, d.acts...)
-	case len(d.acts) > 0:
-		out = append(out, make([]string, d.gap)...)
-		out = append(out, d.acts...)
-	}
-
-	return out
-}
-
-// content joins the content lines for the dialog style.
-func (d *dialogBox) content() string {
-	return strings.Join(d.lines(), "\n")
 }
 
 // blockLines renders s at w cells and returns its lines, so a caller can
@@ -462,7 +277,7 @@ func dropBlankLines(lines []string, n int) []string {
 	return out
 }
 
-// action renders one dialog action with its key, for example
+// action renders one next action with its key, for example
 // "enter Apply". primary=true gives it the prominent style.
 func (t *Theme) action(k, label string, primary bool) string {
 	if primary {
@@ -470,11 +285,6 @@ func (t *Theme) action(k, label string, primary bool) string {
 	}
 
 	return t.Key.Render(k) + " " + t.Ghost.Render(label)
-}
-
-// actions joins dialog actions with even spacing.
-func (t *Theme) actions(items ...string) string {
-	return strings.Join(items, "    ")
 }
 
 // empty renders a centered empty or error state: a title, an
