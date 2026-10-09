@@ -305,7 +305,7 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		return nil, err
 	}
 
-	state, _ := st.GetMeta("indexed_state")
+	state, _ := st.GetMeta(store.MetaIndexedState)
 	current := index.WorkspaceState(root)
 
 	r := &Report{

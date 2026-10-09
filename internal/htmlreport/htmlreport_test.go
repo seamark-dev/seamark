@@ -1,6 +1,7 @@
 package htmlreport
 
 import (
+	"database/sql"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -114,7 +115,7 @@ func seed(t *testing.T) (st *store.Store, root string) {
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, st.SetMeta("indexed_state", "abcdef0123456789"))
+	require.NoError(t, st.SetMeta(store.MetaIndexedState, "abcdef0123456789"))
 
 	return st, root
 }
@@ -711,6 +712,53 @@ func TestReportShowsPinOutcome(t *testing.T) {
 	// The stats row carries the aggregate.
 	assert.Contains(t, page, "<b>1</b><span>pins measured</span>")
 	assert.Contains(t, page, "<b>1</b><span>not landing</span>")
+}
+
+// TestReportKeepsTheOutcomeErrorText pins the error of a failed outcome
+// measurement. Build returns the error of outcome.Gather without a
+// prefix, and `seamark report --html` prints it so. The report thus
+// does not use proposals.MeasureOutcomes, which adds a prefix.
+func TestReportKeepsTheOutcomeErrorText(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "index.db")
+
+	st, err := store.Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		{ID: 1, LessonKey: "api\x00boundary", Path: "api/handler.py", PR: 11,
+			Body: "guard the api boundary", CreatedAt: 1, Source: "review"},
+	}))
+
+	require.NoError(t, st.InsertProposal(&model.Proposal{
+		Signature: "s1", Rule: "boundary-guard", Region: "api", Note: "Guard it.",
+		Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalApplied,
+	}))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n  - rule: boundary-guard\n    region: api\n    note: Guard it.\n"), 0o644))
+
+	// An exposed pin makes the outcome engine count the commits.
+	pin := reviews.PinRule{Rule: "boundary-guard", Region: "api", Note: "Guard it."}
+	require.NoError(t, reviews.RecordFiring(root, "api/handler.py", "Edit",
+		[]model.Lesson{reviews.SurfacedPin{Pin: pin}.Lesson()}))
+
+	// Without the commit files, the first commit count fails. The reads
+	// before the measurement do not use this table.
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`DROP TABLE decision_file`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	_, err = Build(st, root, clock)
+	require.Error(t, err)
+	assert.True(t, strings.HasPrefix(err.Error(),
+		"failed to count pre-exposure commits for {boundary-guard api [] Guard it.}: store: count commits touching [api]: "),
+		err.Error())
 }
 
 // TestReportShowsScopeAdvisory wires the trigger-scope audit into the

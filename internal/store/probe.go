@@ -37,7 +37,7 @@ func ProbeVersion(path string) (int, error) {
 
 	var v string
 
-	err = db.QueryRow(`SELECT value FROM meta WHERE key = ?`, schemaVersionKey).Scan(&v)
+	err = db.QueryRow(`SELECT value FROM meta WHERE key = ?`, MetaSchemaVersion).Scan(&v)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}

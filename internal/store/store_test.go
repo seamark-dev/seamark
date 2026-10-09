@@ -459,6 +459,19 @@ func TestMetaSurvivesRebuild(t *testing.T) {
 	assert.Empty(t, missing)
 }
 
+func TestMetaKeysKeepTheStoredNames(t *testing.T) {
+	// Existing databases carry these keys. A renamed constant reads an
+	// existing index as unversioned or never indexed, so the names stay
+	// fixed.
+	assert.Equal(t, []string{
+		"schema_version", "indexed_at", "repo_root", "indexed_state", "history_mined",
+		"index_summary", "parse_cache_version", "fixes_mined_at", "reviews_mined_at",
+	}, []string{
+		MetaSchemaVersion, MetaIndexedAt, MetaRepoRoot, MetaIndexedState, MetaHistoryMined,
+		MetaIndexSummary, MetaParseCacheVersion, MetaFixesMinedAt, MetaReviewsMinedAt,
+	})
+}
+
 func TestLessonReplaceAndQuery(t *testing.T) {
 	s := openTestStore(t)
 

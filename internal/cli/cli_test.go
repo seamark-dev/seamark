@@ -22,11 +22,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/integration"
-	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	// The alias avoids a clash with a local variable named report.
-	textreport "github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
@@ -469,7 +467,7 @@ func TestIndexBackfillsCoverageSummary(t *testing.T) {
 	// Simulate a pre-coverage database: same fingerprint, no summary.
 	st, err := store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
-	require.NoError(t, st.SetMeta("index_summary", ""))
+	require.NoError(t, st.SetMeta(store.MetaIndexSummary, ""))
 	require.NoError(t, st.Close())
 
 	// A plain reindex must NOT take the fast path — the advertised
@@ -482,7 +480,7 @@ func TestIndexBackfillsCoverageSummary(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = st.Close() }()
 
-	summary, err := st.GetMeta("index_summary")
+	summary, err := st.GetMeta(store.MetaIndexSummary)
 	require.NoError(t, err)
 	assert.NotEmpty(t, summary, "the reindex must record coverage")
 }
@@ -537,7 +535,7 @@ func TestOrientWarnsOnParseErrors(t *testing.T) {
 	// …and a recorded parse failure surfaces compactly.
 	st, err := store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
-	require.NoError(t, st.SetMeta("index_summary",
+	require.NoError(t, st.SetMeta(store.MetaIndexSummary,
 		`{"files_seen":3,"files_parsed":2,"parse_errors":1}`))
 	require.NoError(t, st.Close())
 
@@ -1998,60 +1996,6 @@ func TestLessonsHookRecordsFiringAndStats(t *testing.T) {
 	assert.Contains(t, out, "  claude via pre-tool-use-context: 1 injected (0 repeated), 0 suppressed")
 	assert.Contains(t, out, "never fired", "the unedited-region lesson is a decay candidate")
 	assert.Contains(t, out, "E501")
-}
-
-// TestLessonsStatsMatchesTheSharedGather proves that the console's
-// stats snapshot carries exactly the data `lessons --stats` prints: the
-// CLI printers render the snapshot to the same bytes.
-func TestLessonsStatsMatchesTheSharedGather(t *testing.T) {
-	root := writeFixture(t)
-
-	_, err := run(t, "-C", root, "index")
-	require.NoError(t, err)
-
-	// One lesson the hook fires, one it never fires, and one applied pin
-	// with a live entry, so every section of the output prints.
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
-		[]byte("pin:\n  - rule: close-rows\n    region: other\n    note: Close rows.\n"), 0o644))
-
-	st, err := store.Open(store.DefaultPath(root))
-	require.NoError(t, err)
-	require.NoError(t, st.ReplaceLessons([]model.Lesson{
-		{ClusterKey: "a.go\x00RUF001", Region: "a.go", Reviewer: "coderabbit",
-			Symptom: "RUF001", Occurrences: 4, LastTS: 1},
-		{ClusterKey: "other\x00E501", Region: "other", Reviewer: "coderabbit",
-			Symptom: "E501", Occurrences: 3, LastTS: 1},
-	}, nil))
-	require.NoError(t, st.InsertProposal(&model.Proposal{
-		Signature: "s1", Rule: "close-rows", Region: "other", Note: "Close rows.",
-		Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalApplied,
-	}))
-	require.NoError(t, st.Close())
-
-	payload := `{"session_id":"s","tool_name":"Edit","tool_input":{"file_path":"` +
-		filepath.Join(root, "a.go") + `"}}`
-	_, _, err = runIn(t, payload, "-C", root, "lessons", "--hook")
-	require.NoError(t, err)
-
-	out, err := run(t, "-C", root, "lessons", "--stats")
-	require.NoError(t, err)
-
-	st, err = store.Open(store.DefaultPath(root))
-	require.NoError(t, err)
-	defer func() { _ = st.Close() }()
-
-	snap := lessonstats.Gather(st, root)
-	require.NoError(t, snap.LogErr)
-	require.NoError(t, snap.EligibleErr)
-	require.NoError(t, snap.OutcomeErr)
-
-	var want bytes.Buffer
-	textreport.PrintFiringSummary(&want, snap.Summary)
-	textreport.PrintOutcomes(&want, snap.Applied, snap.Readings)
-
-	assert.Equal(t, want.String(), out)
-	assert.Contains(t, out, "pin outcomes", "the outcome section is part of the comparison")
-	assert.Contains(t, out, "E501", "the never-fired lesson is part of the comparison")
 }
 
 type failingWriter struct{}

@@ -450,8 +450,12 @@ are inserted under your existing `pin:` section with provenance
 comments; everything hand-written stays byte-for-byte. Apply never adds
 a second entry with the same rule and region set: a proposal whose pin
 the file already holds is recorded as applied without a write (left out
-of the printed block), and two selected proposals with one rule and
-region set get one entry, from the lower ID. `--prune` and
+of the printed block). Apply refuses two selected proposals with one
+rule and region set (`p1 and p2 share rule and regions; apply one and
+dismiss the other`), because the console's Pins view blocks a pin that
+two applied proposals record. It also refuses a proposal whose stored
+region fields disagree: the pin that it would write has other regions
+than the stored ones, so no reader links that pin to it. `--prune` and
 `--retarget` obey the same write gate, remove or replace each entry
 with its provenance comment and nothing else, and refuse to write at
 all unless the result still parses with every other pin intact.

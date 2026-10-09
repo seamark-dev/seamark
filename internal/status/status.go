@@ -132,17 +132,17 @@ func gather(reg *integration.Registry, st *store.Store, root string) (*Status, e
 		key string
 		fn  func(v string)
 	}{
-		{"schema_version", func(v string) { s.SchemaVersion = v }},
+		{store.MetaSchemaVersion, func(v string) { s.SchemaVersion = v }},
 		{store.MetaIndexedAt, func(v string) { s.IndexedAt = parseUnix(v) }},
 		{store.MetaReviewsMinedAt, func(v string) { s.ReviewsMinedAt = parseUnix(v) }},
-		{"index_summary", func(v string) {
+		{store.MetaIndexSummary, func(v string) {
 			var c Coverage
 			if json.Unmarshal([]byte(v), &c) == nil {
 				c.Known = true
 				s.Coverage = c
 			}
 		}},
-		{"indexed_state", func(v string) {
+		{store.MetaIndexedState, func(v string) {
 			if v == index.WorkspaceState(root) {
 				s.Freshness = FreshCurrent
 			} else {

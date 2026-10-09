@@ -64,12 +64,90 @@ var (
 	// pins are not in the pin file. Reconcile records existing pins
 	// only; a missing pin needs apply.
 	ErrNotPinned = errors.New("no pin exists yet in " + LessonsFile + " for the selected proposals")
-	// ErrFieldsDisagree reports a reconcile selection with proposals whose
-	// stored region fields disagree (pinfile.FieldsAgree). Their apply
-	// writes a pin with another key than the key that every reader links,
-	// so no pin is proven to be theirs.
+	// ErrFieldsDisagree reports an apply or reconcile selection with
+	// proposals whose stored region fields disagree (pinfile.FieldsAgree).
+	// Their apply writes a pin with another key than the key that every
+	// reader links. So no reader links that pin to them, and no existing
+	// pin is proven to be theirs.
 	ErrFieldsDisagree = errors.New("the stored region fields of the selected proposals disagree")
+	// ErrSharedKey reports an apply or reconcile selection with two or
+	// more proposals that share one pin key. A *SharedKeyError carries
+	// their IDs and matches this error.
+	ErrSharedKey = errors.New("selected proposals share rule and regions")
 )
+
+// SharedKeyError reports the selected proposals that share one pin key.
+// Apply and reconcile refuse them: two entries with one key are
+// duplicate pins, and one entry that two applied proposals record is
+// ambiguous. The link rules of internal/pinfile block both, so the
+// console cannot change such a pin.
+type SharedKeyError struct {
+	// Groups holds the IDs of each shared key in ID order. The groups
+	// are in the order of their lowest ID.
+	Groups [][]int64
+}
+
+// Error names each group and the next step, for example "p1 and p2
+// share rule and regions; apply one and dismiss the other". A reconcile
+// is an apply without a pin write, so the same advice fits both.
+func (e *SharedKeyError) Error() string {
+	if len(e.Groups) == 0 {
+		return ErrSharedKey.Error()
+	}
+
+	parts := make([]string, len(e.Groups))
+	for i, g := range e.Groups {
+		parts[i] = proseList(g) + " share rule and regions"
+	}
+
+	advice := "apply one and dismiss the other"
+
+	switch {
+	case len(e.Groups) > 1:
+		advice = "apply one of each group and dismiss the others"
+	case len(e.Groups[0]) > 2:
+		advice = "apply one and dismiss the others"
+	}
+
+	return strings.Join(parts, "; ") + "; " + advice
+}
+
+// Is matches ErrSharedKey, so a caller can test the kind with errors.Is
+// and read the IDs with errors.As.
+func (e *SharedKeyError) Is(target error) bool {
+	return target == ErrSharedKey
+}
+
+// sharedKeys returns a *SharedKeyError for the proposals of ps that
+// share a pin key, or nil. ps must be in ID order, as a preview holds it.
+func sharedKeys(ps []model.Proposal) error {
+	byKey := make(map[reviews.PinKey][]int64, len(ps))
+
+	var order []reviews.PinKey
+
+	for _, p := range ps {
+		key := pinKey(p)
+		if _, seen := byKey[key]; !seen {
+			order = append(order, key)
+		}
+
+		byKey[key] = append(byKey[key], p.ID)
+	}
+
+	var groups [][]int64
+
+	for _, key := range order {
+		if ids := byKey[key]; len(ids) > 1 {
+			groups = append(groups, ids)
+		}
+	}
+
+	if len(groups) == 0 {
+		return nil
+	}
+
+	return &SharedKeyError{Groups: groups}
+}
 
 // Fingerprint is the identity of one proposal at preview time. IDs can
 // be reused after a prune, so the ID alone is not enough.
@@ -131,12 +209,6 @@ type Preview struct {
 	LessonsErr error
 	// AlreadyPinned holds selected IDs whose pin already exists.
 	AlreadyPinned []int64
-	// SharedPin holds selected IDs whose pin key equals the key of a
-	// selected proposal with a lower ID (apply only). Apply writes one
-	// entry for each key and records these proposals as applied with
-	// the rest. Two entries with one key would make both ambiguous for
-	// the link rules of internal/pinfile.
-	SharedPin []int64
 }
 
 // ids returns the eligible IDs in preview order.
@@ -149,40 +221,6 @@ func (pv *Preview) ids() []int64 {
 	return out
 }
 
-// NewEntries returns the previewed proposals whose pins an apply or a
-// manual paste adds. It holds one proposal for each pin key and leaves
-// out the keys that the pin file already holds. A pin block of these
-// proposals never duplicates an entry. With AlreadyPinned empty, that
-// block equals YAML.
-func (pv *Preview) NewEntries() []model.Proposal {
-	rows, _ := firstPerKey(pv.Proposals)
-
-	return slices.DeleteFunc(rows, func(p model.Proposal) bool {
-		return slices.Contains(pv.AlreadyPinned, p.ID)
-	})
-}
-
-// firstPerKey splits proposals in ID order by pin key. rows holds the
-// first proposal of each key, which gives the entry its note and its
-// provenance comment. shared holds the IDs of the other proposals.
-func firstPerKey(ps []model.Proposal) (rows []model.Proposal, shared []int64) {
-	seen := make(map[reviews.PinKey]bool, len(ps))
-
-	for _, p := range ps {
-		key := pinKey(p)
-		if seen[key] {
-			shared = append(shared, p.ID)
-
-			continue
-		}
-
-		seen[key] = true
-		rows = append(rows, p)
-	}
-
-	return rows, shared
-}
-
 // Ledgerer is the ledger access a decision needs. *store.Store
 // implements it; tests inject failures through it.
 type Ledgerer interface {
@@ -191,10 +229,22 @@ type Ledgerer interface {
 }
 
 // PreviewApply validates the selection and describes the pin change.
-// It writes nothing.
+// It writes nothing. It refuses two kinds of selection, with the gate on
+// or off, because each gives a pin that Pins blocks at once. The first
+// kind holds a proposal whose region fields disagree: no reader links
+// the pin that its apply writes. The second holds proposals that share
+// one pin key (ErrSharedKey).
 func PreviewApply(ls Ledgerer, root string, ids []int64) (*Preview, error) {
 	pv, err := previewSelection(ls, ActionApply, ids)
 	if err != nil {
+		return nil, err
+	}
+
+	if odd := disagreeing(pv.Proposals); len(odd) > 0 {
+		return nil, fmt.Errorf("%w: %s; resolve them by hand or dismiss them", ErrFieldsDisagree, idList(odd))
+	}
+
+	if err := sharedKeys(pv.Proposals); err != nil {
 		return nil, err
 	}
 
@@ -203,13 +253,10 @@ func PreviewApply(ls Ledgerer, root string, ids []int64) (*Preview, error) {
 	}
 
 	// The block is what the CLI prints with the gate off and what
-	// ApplyPins inserts with the gate on: one renderer for both. It
-	// holds one entry for each pin key of the selection.
-	var rows []model.Proposal
-
-	rows, pv.SharedPin = firstPerKey(pv.Proposals)
-
-	pv.YAML, err = distill.RenderPins(rows)
+	// ApplyPins inserts with the gate on: one renderer for both. Every
+	// selected proposal has its own key, so the block holds one entry
+	// for each of them.
+	pv.YAML, err = distill.RenderPins(pv.Proposals)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +274,9 @@ func PreviewDismiss(ls Ledgerer, ids []int64) (*Preview, error) {
 // already has its pin and describes the ledger-only transition to
 // applied. It writes nothing. It refuses a proposal whose region fields
 // disagree, as Pins and extraction do: the pin check reads the rendered
-// key, and every other reader links the row by another key.
+// key, and every other reader links the row by another key. It also
+// refuses proposals that share one pin key (ErrSharedKey), as apply
+// does: two applied proposals that record one pin make Pins block it.
 func PreviewReconcile(ls Ledgerer, root string, ids []int64) (*Preview, error) {
 	pv, err := previewSelection(ls, ActionReconcile, ids)
 	if err != nil {
@@ -236,6 +285,10 @@ func PreviewReconcile(ls Ledgerer, root string, ids []int64) (*Preview, error) {
 
 	if odd := disagreeing(pv.Proposals); len(odd) > 0 {
 		return nil, fmt.Errorf("%w: %s; resolve them by hand or dismiss them", ErrFieldsDisagree, idList(odd))
+	}
+
+	if err := sharedKeys(pv.Proposals); err != nil {
+		return nil, err
 	}
 
 	// The gate does not guard a ledger-only change. The preview still
@@ -349,7 +402,8 @@ func alreadyPinned(root string, ps []model.Proposal) ([]int64, error) {
 // uses RegionSet, as RenderPins does: the raw Region and Regions fields
 // diverge when Regions holds "*" next to real entries. The readers of
 // the file link a row by reviews.ProposalKey instead. Both keys are
-// equal unless the fields disagree, and reconcile refuses such a row.
+// equal unless the fields disagree, and apply and reconcile refuse such
+// a row.
 func pinKey(p model.Proposal) reviews.PinKey {
 	return reviews.NewPinKey(p.Rule, "", p.RegionSet())
 }
@@ -442,6 +496,20 @@ func commitApply(ls Ledgerer, root string, pv *Preview) (Result, error) {
 		return res, err
 	}
 
+	// The fingerprint holds RegionSet, not the raw fields. A raw Region
+	// can change without a change of RegionSet, so the check runs again.
+	if odd := disagreeing(ps); len(odd) > 0 {
+		return res, fmt.Errorf("%w: the region fields of %s changed after the preview: %w",
+			ErrStale, idList(odd), ErrFieldsDisagree)
+	}
+
+	// The fingerprint holds the rule and the region set, so a preview of
+	// PreviewApply passes this check again. The check guards a preview
+	// that a caller built in another way.
+	if err := sharedKeys(ps); err != nil {
+		return res, err
+	}
+
 	cfg, err := distill.LoadConfig(root)
 	if err != nil {
 		return res, err
@@ -462,11 +530,8 @@ func commitApply(ls Ledgerer, root string, pv *Preview) (Result, error) {
 
 	// The fingerprint omits the provenance comment inputs (agent and
 	// member count). Comparing the rendered block proves that the file
-	// receives exactly the previewed text. The fingerprint holds the
-	// rule and the regions, so the split by pin key equals the preview.
-	rows, _ := firstPerKey(ps)
-
-	block, err := distill.RenderPins(rows)
+	// receives exactly the previewed text.
+	block, err := distill.RenderPins(ps)
 	if err != nil {
 		return res, err
 	}
@@ -486,12 +551,10 @@ func commitApply(ls Ledgerer, root string, pv *Preview) (Result, error) {
 	}
 
 	// Writing starts here. From now on, every outcome goes into res and
-	// the error stays nil. The file gets one entry for each key. The
-	// ledger records every selected proposal, because each of their keys
-	// is then in the file, as a reconcile requires.
+	// the error stays nil.
 	ids := pv.ids()
 
-	if err := distill.ApplyPins(root, rows); err != nil {
+	if err := distill.ApplyPins(root, ps); err != nil {
 		res.FileErr = err
 		res.NotMoved = ids
 		res.FileWritten = fileChanged(root, pv.Lessons, &res)
@@ -522,8 +585,8 @@ func fileChanged(root string, before FileObservation, res *Result) bool {
 }
 
 // commitReconcile records pending proposals as applied when their pins
-// are still in the pin file and their region fields still agree. It
-// writes only the ledger.
+// are still in the pin file, their region fields still agree, and no two
+// of them share a pin key. It writes only the ledger.
 func commitReconcile(ls Ledgerer, root string, pv *Preview) (Result, error) {
 	res := Result{Action: ActionReconcile}
 
@@ -537,6 +600,13 @@ func commitReconcile(ls Ledgerer, root string, pv *Preview) (Result, error) {
 	if odd := disagreeing(ps); len(odd) > 0 {
 		return res, fmt.Errorf("%w: the region fields of %s changed after the preview: %w",
 			ErrStale, idList(odd), ErrFieldsDisagree)
+	}
+
+	// A preview of PreviewReconcile passes this check again, because the
+	// fingerprint holds the rule and the region set. The check guards a
+	// preview that a caller built in another way, as in commitApply.
+	if err := sharedKeys(ps); err != nil {
+		return res, err
 	}
 
 	pinned, err := alreadyPinned(root, ps)
@@ -650,4 +720,17 @@ func idList(ids []int64) string {
 	}
 
 	return strings.Join(parts, ", ")
+}
+
+// proseList renders two or more IDs as prose: "p1 and p2", or "p1, p2
+// and p5". The refusal of a shared key reads as a sentence, so the last
+// two IDs join with "and".
+func proseList(ids []int64) string {
+	if len(ids) < 2 {
+		return idList(ids)
+	}
+
+	last := len(ids) - 1
+
+	return idList(ids[:last]) + " and " + idList(ids[last:])
 }

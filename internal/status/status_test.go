@@ -63,7 +63,7 @@ func seededStore(t *testing.T) (st *store.Store, root string) {
 			Ref: "abc", TS: 1700000000, Title: "seed"})
 	}))
 
-	require.NoError(t, st.SetMeta("index_summary",
+	require.NoError(t, st.SetMeta(store.MetaIndexSummary,
 		`{"files_seen":10,"files_parsed":8,"files_skipped":1,"parse_errors":1}`))
 
 	return st, root

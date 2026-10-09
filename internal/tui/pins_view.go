@@ -1332,6 +1332,22 @@ func (p *pinsView) similarLines(in *maintain.Inspection, pin *maintain.Pin, w in
 		"coverage, and a similar pin is no reason to prune.", w)...)
 }
 
+// pinPendingMatchText names the route for a pin that only pending
+// proposals match. The record refuses two proposals with one pin key,
+// because two applied proposals that record one pin make Pins block it.
+// So with several matches, the text asks for one record and dismissals.
+func pinPendingMatchText(pending []domain.Proposal) string {
+	ids := propIDList(pinProposalIDs(pending))
+	tail := " The pin stays read-only here until one applied proposal links it."
+
+	if len(pending) < 2 {
+		return "Record " + ids + " as applied first: press p, select it, then press c." + tail
+	}
+
+	return "Record one of " + ids + " as applied first, and dismiss the others: press p, select one and " +
+		"press c, then select the others and press d." + tail
+}
+
 // maintenanceLines names the keys that act on this pin, or why none
 // does and the next valid route. Nothing changes before a preview and
 // its y.
@@ -1367,9 +1383,7 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 
 		return out
 	case l.Link == pinfile.LinkPendingMatch:
-		ids := propIDList(pinProposalIDs(l.Pending))
-		note(ToneAttention, "Record "+ids+" as applied first: press p, select it, then press c. "+
-			"The pin stays read-only here until one applied proposal links it.")
+		note(ToneAttention, pinPendingMatchText(l.Pending))
 
 		return out
 	case l.Link == pinfile.LinkAmbiguousFile:

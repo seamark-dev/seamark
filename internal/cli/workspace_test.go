@@ -91,7 +91,7 @@ func writeUnreadableDB(t *testing.T, path string) {
 // schemaMeta returns the meta value that stamps the supported schema
 // version plus delta.
 func schemaMeta(delta int) map[string]string {
-	return map[string]string{"schema_version": strconv.Itoa(store.SupportedSchema() + delta)}
+	return map[string]string{store.MetaSchemaVersion: strconv.Itoa(store.SupportedSchema() + delta)}
 }
 
 // storeOpenErr returns the error text of store.Open for path. A command

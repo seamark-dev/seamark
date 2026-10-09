@@ -233,20 +233,11 @@ func (p *propView) applyModal(d *propDecision, w int) lesModal {
 			file += " (the file is created)"
 		}
 
-		// A proposal with the rule and regions of a lower ID gets no entry
-		// of its own. The count is thus the entries, not the proposals.
-		wont := []string{"change other pins or other proposals", "write anything before you press y"}
-		if len(pv.SharedPin) > 0 {
-			wont = append([]string{"add a separate pin for " + propIDList(pv.SharedPin) +
-				" (a lower ID has the same rule and regions)"}, wont...)
-		}
-
 		m.body = append(m.body, p.st.theme.effectLines([]effect{
-			{glyph: t.Glyphs.Add, tone: ToneSuccess, text: "add " + propPlural(n-len(pv.SharedPin), "pin", "pins") +
-				" under pin: in " + file},
+			{glyph: t.Glyphs.Add, tone: ToneSuccess, text: "add " + propPlural(n, "pin", "pins") + " under pin: in " + file},
 			{glyph: t.Glyphs.Add, tone: ToneSuccess, text: "record " + ids + " as applied in the ledger (pending" +
 				arrow + "applied)"},
-		}, wont, w)...)
+		}, []string{"change other pins or other proposals", "write anything before you press y"}, w)...)
 	}
 
 	block, rest, err := p.shownBlock(pv)
@@ -280,19 +271,6 @@ func (p *propView) applyModal(d *propDecision, w int) lesModal {
 	}
 
 	if !pv.Write {
-		// The block has no entry for a proposal that shares the key of a
-		// lower ID. The CLI names such a proposal under its block, so the
-		// preview names it too. The lead already names an existing pin.
-		shared := slices.DeleteFunc(slices.Clone(pv.SharedPin), func(id int64) bool {
-			return slices.Contains(pv.AlreadyPinned, id)
-		})
-
-		if len(shared) > 0 {
-			m.body = append(m.body, "")
-			m.body = append(m.body, propLines(t.Muted, propIDList(shared)+" left out: a pin above has the same "+
-				"rule and regions.", w)...)
-		}
-
 		m.body = append(m.body, "")
 		m.body = append(m.body, propLines(t.Muted, "This command prints the same block in a shell. It changes "+
 			"nothing while distill.write is off:", w)...)
@@ -318,9 +296,8 @@ func (p *propView) shownBlock(pv *proposals.Preview) (block string, ids []int64,
 	}
 
 	// This block is for display only. Commit compares Preview.YAML,
-	// which the gate-off preview never commits. NewEntries holds one
-	// entry for each key, so a paste never duplicates a key either.
-	block, err = distill.RenderPins(pv.NewEntries())
+	// which the gate-off preview never commits.
+	block, err = distill.RenderPins(rest)
 
 	return block, propProposalIDs(rest), err
 }
@@ -600,8 +577,16 @@ func (p *propView) previewErrModal(d *propDecision, w int) lesModal {
 		hint = "Record as applied only records pins that already exist in " + proposals.LessonsFile +
 			". Use a to apply proposals whose pins are missing."
 	case errors.Is(d.err, proposals.ErrFieldsDisagree):
+		// The reason differs by action: an apply writes a pin that no
+		// reader links, and a record claims a pin that no reader proves.
 		hint = "Pins links these proposals by other regions than the ones that their apply writes, so no pin " +
 			"is proven to be theirs. Dismiss them with d, or resolve them by hand."
+		if d.action == proposals.ActionApply {
+			hint = "Pins links these proposals by other regions than the ones that their apply writes. So Pins " +
+				"cannot link the new pin to them. Dismiss them with d, or resolve them by hand."
+		}
+	case errors.Is(d.err, proposals.ErrSharedKey):
+		hint = propSharedKeyHint(d)
 	case errors.Is(d.err, proposals.ErrNothingSelected):
 		hint = "Select pending proposals with space first."
 	case errors.Is(d.err, ErrNoLedger):
@@ -620,6 +605,27 @@ func (p *propView) previewErrModal(d *propDecision, w int) lesModal {
 		title: t.Failure.Render("Preview failed"), body: body,
 		actions: []key.Binding{withHelp(nkeys.Back, "esc", "back to the list")},
 	}
+}
+
+// propSharedKeyHint gives the next step after a preview that refused
+// proposals with one pin key. Apply and the record use the same check,
+// so the hint names the key of the refused action. The engine error can
+// name several groups, so the hint asks for one proposal of each group.
+func propSharedKeyHint(d *propDecision) string {
+	which, pick := "one of these proposals", "Select one"
+
+	var shared *proposals.SharedKeyError
+	if errors.As(d.err, &shared) && len(shared.Groups) > 1 {
+		which, pick = "one proposal of each group", "Select one of each group"
+	}
+
+	step, press := "apply only "+which, "a"
+	if d.action == proposals.ActionReconcile {
+		step, press = "record only "+which+" as applied", "c"
+	}
+
+	return "Pins blocks a pin that two applied proposals record, so " + step + ". " +
+		pick + " and press " + press + ", then dismiss the others with d."
 }
 
 // resultModal reports what a commit changed. File and ledger outcomes
@@ -653,12 +659,7 @@ func (p *propView) resultModal(d *propDecision, w int) lesModal {
 	)
 
 	if d.action == proposals.ActionApply {
-		var shared []int64
-		if d.pv != nil {
-			shared = d.pv.SharedPin
-		}
-
-		title, tone, lead = p.applyOutcome(d.res, shared)
+		title, tone, lead = p.applyOutcome(d.res)
 	} else {
 		title, tone, lead = p.ledgerOutcome(d.action, d.res)
 	}
@@ -673,9 +674,7 @@ func (p *propView) resultModal(d *propDecision, w int) lesModal {
 }
 
 // applyOutcome titles an apply result and states the next safe step.
-// shared holds the IDs that the preview recorded without an entry of
-// their own; the title counts only the pins that the write added.
-func (p *propView) applyOutcome(res proposals.Result, shared []int64) (title string, tone Tone, lead string) {
+func (p *propView) applyOutcome(res proposals.Result) (title string, tone Tone, lead string) {
 	file := proposals.LessonsFile
 
 	switch {
@@ -695,15 +694,7 @@ func (p *propView) applyOutcome(res proposals.Result, shared []int64) (title str
 			"was not fully updated (" + propIDList(res.NotMoved) + " " + why + "). Do not apply again: that would " +
 			"duplicate pins. Keep them selected and press c to record them as applied (ledger only)."
 	case res.FileWritten:
-		pins := 0
-
-		for _, id := range res.Moved {
-			if !slices.Contains(shared, id) {
-				pins++
-			}
-		}
-
-		return "Applied " + propPlural(pins, "pin", "pins"), ToneSuccess, "Wrote the pins to " + file +
+		return "Applied " + propPlural(len(res.Moved), "pin", "pins"), ToneSuccess, "Wrote the pins to " + file +
 			" and recorded " + propIDList(res.Moved) + " as applied. Review the diff and commit it."
 	default:
 		return "Nothing applied", ToneAttention, "No pin was written and no proposal changed."

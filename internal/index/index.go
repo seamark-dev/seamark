@@ -295,12 +295,12 @@ func Run(opts Options) (*Summary, error) {
 	}
 
 	for k, v := range map[string]string{
-		store.MetaRepoRoot:    root,
-		store.MetaIndexedAt:   fmt.Sprint(time.Now().Unix()),
-		"indexed_state":       WorkspaceState(root),
-		"history_mined":       fmt.Sprint(sum.HistoryMined),
-		"parse_cache_version": parseCacheVersion,
-		"index_summary":       string(coverage),
+		store.MetaRepoRoot:          root,
+		store.MetaIndexedAt:         fmt.Sprint(time.Now().Unix()),
+		store.MetaIndexedState:      WorkspaceState(root),
+		store.MetaHistoryMined:      fmt.Sprint(sum.HistoryMined),
+		store.MetaParseCacheVersion: parseCacheVersion,
+		store.MetaIndexSummary:      string(coverage),
 	} {
 		if err := st.SetMeta(k, v); err != nil {
 			return nil, err
@@ -334,7 +334,7 @@ func loadParseCache(st *store.Store, force bool, logf func(string, ...any)) map[
 		return empty
 	}
 
-	if v, err := st.GetMeta("parse_cache_version"); err != nil || v != parseCacheVersion {
+	if v, err := st.GetMeta(store.MetaParseCacheVersion); err != nil || v != parseCacheVersion {
 		return empty
 	}
 
@@ -1006,7 +1006,7 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 	}
 	defer func() { _ = st.Close() }() // read-only probe
 
-	indexed, err := st.GetMeta("indexed_state")
+	indexed, err := st.GetMeta(store.MetaIndexedState)
 	if err != nil || indexed != current {
 		return nil
 	}
@@ -1014,7 +1014,7 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 	// A database from before coverage persistence has no index_summary;
 	// skipping would strand it on "coverage unknown" forever, because the
 	// fingerprint still matches. One full pass records it.
-	if summary, err := st.GetMeta("index_summary"); err != nil || summary == "" {
+	if summary, err := st.GetMeta(store.MetaIndexSummary); err != nil || summary == "" {
 		return nil
 	}
 
@@ -1024,7 +1024,7 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 	}
 
 	root, _ = st.GetMeta(store.MetaRepoRoot)
-	mined, _ := st.GetMeta("history_mined")
+	mined, _ := st.GetMeta(store.MetaHistoryMined)
 
 	return &Summary{
 		Root: root, DBPath: dbPath, Skipped: true,

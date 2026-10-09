@@ -8,22 +8,34 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
-- **`lessons --apply` adds no duplicate pins.** `seamark lessons
-  --apply` and `--dismiss` now run on the decision flow of the console
-  (preview, then a commit that checks the preview again). They keep the
-  CLI selection, the workspace root, and the output of every earlier
-  case, pinned by golden tests. Apply never adds a second entry with the
-  same rule and region set. A selected proposal whose pin
+- **`lessons --apply` adds no duplicate or unlinked pins.** `seamark
+  lessons --apply` and `--dismiss` now run on the decision flow of the
+  console (preview, then a commit that checks the preview again). They
+  keep the CLI selection, the workspace root, and the output of every
+  other case, pinned by golden tests. Apply never adds a second entry
+  with the same rule and region set. A selected proposal whose pin
   `.seamark/lessons.yaml` already holds is recorded as applied without a
   write, under a new `recorded N proposal(s) as applied without a new
   pin` line; with `distill.write` off, the printed block leaves it out
-  and names it. Two selected proposals with one rule and region set get
-  one entry, from the lower ID, and both are recorded as applied. Pins
-  then shows that entry as `ambiguous`, because two applied proposals
-  record it, and keeps retarget, prune, and trigger extraction blocked
-  for it: edit that pin by hand. The console apply gets the same fix.
-  Its preview counts one pin for each entry and names the proposal
-  without an entry of its own, with the gate on or off.
+  and names it. Apply refuses two selected proposals with one rule and
+  region set, with the gate on or off: `p1 and p2 share rule and
+  regions; apply one and dismiss the other`. Before, it wrote (or
+  printed) one entry for each proposal; Pins read the two entries as
+  `duplicate pin` and blocked retarget, prune, and trigger extraction
+  for them. One entry for both does not help: two applied proposals
+  would record it, and Pins blocks such an entry as `ambiguous`. Apply
+  also refuses a proposal whose stored region fields disagree, with the
+  error that the console's record-as-applied gives (`the stored region
+  fields of the selected proposals disagree: p1; resolve them by hand or
+  dismiss them`). Before, it wrote or printed a pin with the rendered
+  regions, which no reader links to that proposal. Both refusals exit 1,
+  write nothing, and print nothing on stdout; the commit checks both
+  again. The console apply gets the same fix: its preview fails with the
+  same text and a hint, and `y` writes nothing. The console's record as
+  applied (`c`) refuses two proposals with one rule and region set too:
+  before, it recorded both, and Pins then read their entry as
+  `ambiguous`. When several pending proposals match one pin, Pins now
+  asks to record one of them and dismiss the others.
   Apply now reads the pin file strictly before it writes or prints: a
   symbolic link at the pin file path (with the gate on) or a pin file
   that the lessons reader rejects stops apply with that error, where the
@@ -80,8 +92,8 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   fields (`reviews.ProposalKey`), the key that `seamark lessons` uses,
   so the console and the CLI name the same pin. A proposal whose stored
   region fields disagree reads `ambiguous row` in Pins, also without an
-  entry of its key, and the ledger-only "record as applied" (`c`)
-  refuses it. The new
+  entry of its key, and both apply and the ledger-only "record as
+  applied" (`c`) refuse it. The new
   `internal/pinfile`, `internal/maintain`, and `internal/yamledit`
   packages serve the console; `seamark lessons --prune`, `--retarget`, and
   `--extract-triggers` keep their output, pinned by new golden tests.

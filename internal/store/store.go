@@ -167,6 +167,13 @@ func OpenReadOnly(path string) (*Store, error) {
 // Close releases the underlying database handle.
 func (s *Store) Close() error { return s.db.Close() }
 
+// MetaSchemaVersion is the meta key of the schema version of the
+// database. Open refuses a newer version and writes the current one
+// after the migrations. OpenReadOnly refuses every other version. All
+// readers and writers use this constant, because a misspelled key reads
+// as an unversioned database.
+const MetaSchemaVersion = "schema_version"
+
 // Meta keys that every `seamark index` run writes. All readers and
 // writers use these constants, because a misspelled key reads as an
 // empty value and raises no error.
@@ -179,6 +186,23 @@ const (
 	// run. The commands that open an existing index, the lessons hook,
 	// and the console read the index against this root, not against -C.
 	MetaRepoRoot = "repo_root"
+	// MetaIndexedState holds the workspace fingerprint of the last
+	// index run (index.WorkspaceState). An equal fingerprint lets the
+	// next run skip, and a different one makes the readers report a
+	// stale index.
+	MetaIndexedState = "indexed_state"
+	// MetaHistoryMined holds "true" when the last index run mined the
+	// git history, and "false" when it did not. A skipped run reports
+	// this value again, because it reads no history itself.
+	MetaHistoryMined = "history_mined"
+	// MetaIndexSummary holds the file coverage of the last index run as
+	// a JSON object. `seamark status` and orient report the parser
+	// coverage from it, because the output of the run is gone.
+	MetaIndexSummary = "index_summary"
+	// MetaParseCacheVersion holds the parse cache version of the last
+	// index run. The next run ignores the cached parse results when the
+	// value differs from the version of the binary.
+	MetaParseCacheVersion = "parse_cache_version"
 )
 
 // SetMeta stores an index bookkeeping value (schema version, repo root, …).

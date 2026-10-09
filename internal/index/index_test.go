@@ -1110,7 +1110,7 @@ func TestParseCacheVersionBumpReparses(t *testing.T) {
 	// Simulate a seamark upgrade: a stale cache version forces a reparse.
 	st, err := store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
-	require.NoError(t, st.SetMeta("parse_cache_version", "stale"))
+	require.NoError(t, st.SetMeta(store.MetaParseCacheVersion, "stale"))
 	require.NoError(t, st.Close())
 
 	again, err := Run(Options{Root: root})

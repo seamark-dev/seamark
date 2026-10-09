@@ -121,7 +121,7 @@ func Health(st *store.Store, root string, ps []model.Proposal) (map[int64]report
 	// Gather cannot measure get no Outcome, and the printer renders
 	// nothing for them.
 	if len(appliedPs) > 0 {
-		_, _, readings, err := AppliedOutcomes(st, root, appliedPs)
+		readings, err := appliedOutcomes(st, root, appliedPs)
 		if err != nil {
 			return nil, err
 		}
@@ -144,39 +144,34 @@ func RegionSetsEqual(a, b []string) bool {
 	return reviews.NewPinKey("x", "", a) == reviews.NewPinKey("x", "", b)
 }
 
-// AppliedOutcomes loads the lessons config and the firing log and
-// measures the applied pins with MeasureOutcomes. It is the shared
-// evidence boundary for user-facing outcome surfaces. A malformed
-// config is an error; it never falls back to defaults, because
-// defaults would judge firings against rules the agent never received.
-// It moved from internal/cli, and the error texts stay as the CLI
-// printed them.
-func AppliedOutcomes(st *store.Store, root string, applied []model.Proposal) (
-	*reviews.Config, []reviews.Firing, map[int64]outcome.Reading, error,
+// appliedOutcomes loads the lessons config and the firing log and
+// measures the applied pins with MeasureOutcomes. Health is its only
+// caller and needs only the readings, so it returns no config and no
+// firings. A malformed config is an error; it never falls back to
+// defaults, because defaults would judge firings against rules the
+// agent never received. It moved from internal/cli, and the error
+// texts stay as the CLI printed them.
+func appliedOutcomes(st *store.Store, root string, applied []model.Proposal) (
+	map[int64]outcome.Reading, error,
 ) {
 	cfg, err := reviews.LoadConfig(root)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to load lessons config: %w", err)
+		return nil, fmt.Errorf("failed to load lessons config: %w", err)
 	}
 
 	firings, err := reviews.ReadFirings(root)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to read firing log: %w", err)
+		return nil, fmt.Errorf("failed to read firing log: %w", err)
 	}
 
-	readings, err := MeasureOutcomes(st, cfg, applied, firings)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	return cfg, firings, readings, nil
+	return MeasureOutcomes(st, cfg, applied, firings)
 }
 
-// MeasureOutcomes is the measuring step of AppliedOutcomes. It takes a
-// lessons config and firing records that the caller already read.
-// lessonstats.Gather reads the firing log once for all of its sections.
-// Its delivery counts and its outcomes thus come from the same records.
-// The error text stays as the CLI printed it.
+// MeasureOutcomes measures the applied pins against a lessons config
+// and firing records that the caller already read. Health uses it
+// through appliedOutcomes. lessonstats.Gather reads the firing log once
+// for all of its sections, so its delivery counts and its outcomes come
+// from the same records. The error text stays as the CLI printed it.
 func MeasureOutcomes(st *store.Store, cfg *reviews.Config, applied []model.Proposal,
 	firings []reviews.Firing,
 ) (map[int64]outcome.Reading, error) {

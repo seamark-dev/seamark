@@ -9,10 +9,11 @@
 // proposal health by one set of rules. `lessons --apply` and `lessons
 // --dismiss` write the same pins and ledger states as the console.
 //
-// AppliedOutcomes and MeasureOutcomes measure the applied pins. Health
-// uses AppliedOutcomes. `lessons --stats` and the console's Stats view
-// use MeasureOutcomes through internal/lessonstats, which reads the
-// firing log once for all of its sections.
+// MeasureOutcomes measures the applied pins. Health uses it after it
+// reads the lessons config and the firing log. `lessons --stats` and
+// the console's Stats view use MeasureOutcomes through
+// internal/lessonstats, which reads the firing log once for all of its
+// sections.
 //
 // Only the console uses the ledger view (Load, MatchesRegion,
 // MatchesRegionSet, MatchesText).

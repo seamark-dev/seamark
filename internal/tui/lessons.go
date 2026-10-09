@@ -1755,8 +1755,9 @@ func (p *propView) hasPin(id int64) bool {
 
 // fieldsDisagree reports whether the ledger snapshot holds pending
 // proposal id with stored region fields that disagree
-// (pinfile.FieldsAgree). The apply preview can still find the pin that
-// its apply writes, so this check also covers the pinned set.
+// (pinfile.FieldsAgree). The pinned set can hold a row whose stored
+// fields changed after a preview or a partial apply found its pin, so
+// this check also covers the pinned set.
 func (p *propView) fieldsDisagree(id int64) bool {
 	l := p.ledger()
 	if l == nil {
@@ -1945,8 +1946,7 @@ func (p *propView) confirmLabel() string {
 	case proposals.ActionReconcile:
 		return "record " + propPlural(n, "proposal", "proposals") + " as applied"
 	default:
-		// Apply writes one entry for each pin key of the selection.
-		return "apply " + propPlural(n-len(d.pv.SharedPin), "pin", "pins")
+		return "apply " + propPlural(n, "pin", "pins")
 	}
 }
 

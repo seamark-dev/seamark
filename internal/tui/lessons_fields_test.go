@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -111,26 +110,20 @@ func TestProposalsRecordAppliedIsOffForARowWhoseRegionFieldsDisagree(t *testing.
 }
 
 func TestProposalsRecordRefusalNamesTheRegionFields(t *testing.T) {
-	// The apply preview finds the rendered pin of p1 and offers c. The
-	// record refuses p1, and the modal says why and what helps.
+	// The list read p1 with fields that agree, and a preview found its
+	// pin, so c opens the record preview. Another writer changed the
+	// stored fields of p1 after that read. The record refuses p1, and the
+	// modal says why and what helps.
 	f := newFake()
-	f.ledger = lesDisagreeingLedger()
-	f.previewDecision = func(a proposals.Action, ids []int64) (*proposals.Preview, error) {
-		if a == proposals.ActionReconcile {
-			return nil, fmt.Errorf("%w: p1; resolve them by hand or dismiss them", proposals.ErrFieldsDisagree)
-		}
-
-		pv := lesPreview(a, ids, true)
-		pv.AlreadyPinned = []int64{1}
-
-		return pv, nil
-	}
+	f.ledger = lesLedger()
+	f.previewDecision = lesEnginePreview(t, lesDisagreeingLedger())
 
 	h := lesOpen(t, f, 120, 40)
-	h.press("a", "c")
-	assert.Equal(t, []string{"PreviewDecision:apply", "PreviewDecision:reconcile"}, f.called())
-
 	p := lesProps(h)
+	p.pinned[1] = true
+
+	h.press("c")
+	assert.Equal(t, []string{"PreviewDecision:reconcile"}, f.called())
 	require.NotNil(t, p.dec)
 
 	m := p.modalContent(p.dec, 200)
@@ -139,4 +132,35 @@ func TestProposalsRecordRefusalNamesTheRegionFields(t *testing.T) {
 	assert.Contains(t, body, "Pins links these proposals by other regions than the ones that their apply writes, "+
 		"so no pin is proven to be theirs. Dismiss them with d, or resolve them by hand.")
 	assert.Contains(t, body, "Nothing was changed.")
+}
+
+func TestProposalsApplyRefusesARowWhoseRegionFieldsDisagree(t *testing.T) {
+	// F1: the apply of p1 writes a repository-wide pin, but Pins links
+	// p1 by internal/api. The shared apply refuses p1, so the preview
+	// names the reason and the next step, and y writes nothing.
+	f := newFake()
+	f.ledger = lesDisagreeingLedger()
+	f.previewDecision = lesEnginePreview(t, f.ledger)
+
+	h := lesOpen(t, f, 120, 40)
+	h.press("a")
+
+	frame := h.view()
+	assertFrame(t, frame, 120, 40)
+	assert.Contains(t, frame, "Preview failed")
+
+	p := lesProps(h)
+	require.NotNil(t, p.dec)
+	require.ErrorIs(t, p.dec.err, proposals.ErrFieldsDisagree)
+
+	body := lesModalText(t, h)
+	assert.Contains(t, body, "The apply preview could not be built: the stored region fields of the selected "+
+		"proposals disagree: p1; resolve them by hand or dismiss them")
+	assert.Contains(t, body, "Pins links these proposals by other regions than the ones that their apply writes. "+
+		"So Pins cannot link the new pin to them. Dismiss them with d, or resolve them by hand.")
+	assert.Contains(t, body, "Nothing was changed.")
+	assert.NotContains(t, body, "y apply")
+
+	h.press("y")
+	assert.Equal(t, []string{"PreviewDecision:apply"}, f.called(), "y writes nothing")
 }

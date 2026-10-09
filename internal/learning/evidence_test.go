@@ -455,7 +455,7 @@ func evStampSchema(t *testing.T, path string, version int) {
 	db, err := sql.Open("sqlite", "file:"+path)
 	require.NoError(t, err)
 
-	_, err = db.Exec(`UPDATE meta SET value = ? WHERE key = 'schema_version'`, strconv.Itoa(version))
+	_, err = db.Exec(`UPDATE meta SET value = ? WHERE key = ?`, strconv.Itoa(version), store.MetaSchemaVersion)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 }

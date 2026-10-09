@@ -290,7 +290,7 @@ func TestHealthIsTheCLIAdvisory(t *testing.T) {
 	assert.Contains(t, err.Error(), "lessons proposalHealth: reading .seamark/lessons.yaml",
 		"the CLI error text is unchanged")
 
-	_, _, _, err = AppliedOutcomes(f.st, f.root, nil)
+	_, err = appliedOutcomes(f.st, f.root, nil)
 	require.ErrorIs(t, err, reviews.ErrLessonsConfig)
 	assert.Contains(t, err.Error(), "failed to load lessons config")
 }

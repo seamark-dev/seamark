@@ -7,7 +7,6 @@ package cli
 // output lines; this file maps the shared previews and results to them.
 
 import (
-	"cmp"
 	"fmt"
 	"io"
 	"slices"
@@ -125,20 +124,24 @@ func pendingSelection(st *store.Store, raw string) ([]int64, error) {
 	return proposalIDs(ps), nil
 }
 
-// printPinBlock prints the gate-off answer: the pin block to paste. The
-// block holds one entry for each pin key. It leaves out the keys that
-// the pin file already holds, because a paste of them would duplicate
-// an entry. The gate-off apply never writes the ledger.
+// printPinBlock prints the gate-off answer: the pin block to paste. It
+// leaves out the proposals whose pins the file already holds, because a
+// paste of them would duplicate an entry. The gate-off apply never
+// writes the ledger.
 func printPinBlock(out io.Writer, pv *proposals.Preview) error {
 	block := pv.YAML
 
-	// The preview block holds every key of the selection. A display
-	// block without the existing pins is needed only when there are
-	// some, so the common case prints exactly the preview block.
+	// The preview block holds every selected proposal. A display block
+	// without the existing pins is needed only when there are some, so
+	// the common case prints exactly the preview block.
 	if len(pv.AlreadyPinned) > 0 {
+		rest := slices.DeleteFunc(slices.Clone(pv.Proposals), func(p model.Proposal) bool {
+			return slices.Contains(pv.AlreadyPinned, p.ID)
+		})
+
 		var err error
 
-		if block, err = distill.RenderPins(pv.NewEntries()); err != nil {
+		if block, err = distill.RenderPins(rest); err != nil {
 			return err
 		}
 	}
@@ -159,11 +162,6 @@ func printPinBlock(out io.Writer, pv *proposals.Preview) error {
 			pidList(pv.AlreadyPinned))
 	}
 
-	// A proposal whose key is already in the file is named once, above.
-	if shared := withoutIDs(pv.SharedPin, pv.AlreadyPinned); len(shared) > 0 {
-		fmt.Fprintf(out, "(%s left out: a pin above has the same rule and regions)\n", pidList(shared))
-	}
-
 	return nil
 }
 
@@ -174,54 +172,36 @@ func printPinBlock(out io.Writer, pv *proposals.Preview) error {
 // the ledger; tests inject a failing one through it.
 func applyPins(out io.Writer, ls proposals.Ledgerer, root string, pv *proposals.Preview) error {
 	pinned := pv.AlreadyPinned
-	rest := withoutIDs(proposalIDs(pv.Proposals), pinned)
 
-	// recorded holds the proposals that the ledger records without an
-	// entry of their own; moved counts those that changed state.
-	var (
-		recorded []model.Proposal
-		moved    int
-	)
-
-	if len(rest) > 0 {
-		shared, n, err := writePins(out, ls, root, pv, rest)
-		if err != nil {
+	if rest := withoutIDs(proposalIDs(pv.Proposals), pinned); len(rest) > 0 {
+		if err := writePins(out, ls, root, pv, rest); err != nil {
 			return err
 		}
-
-		recorded, moved = shared, n
 	}
 
-	if len(pinned) > 0 {
-		rpv, err := proposals.PreviewReconcile(ls, root, pinned)
-		if err != nil {
-			return err
-		}
-
-		res, err := proposals.Commit(ls, root, rpv)
-		if err != nil {
-			return err
-		}
-
-		if res.LedgerErr != nil {
-			return fmt.Errorf("%w — run `seamark lessons --apply %s` again to record them as applied",
-				res.LedgerErr, pidArg(res.NotMoved))
-		}
-
-		recorded = append(recorded, rpv.Proposals...)
-		moved += len(res.Moved)
-	}
-
-	if len(recorded) == 0 {
+	if len(pinned) == 0 {
 		return nil
 	}
 
-	slices.SortFunc(recorded, func(a, b model.Proposal) int { return cmp.Compare(a.ID, b.ID) })
+	rpv, err := proposals.PreviewReconcile(ls, root, pinned)
+	if err != nil {
+		return err
+	}
+
+	res, err := proposals.Commit(ls, root, rpv)
+	if err != nil {
+		return err
+	}
+
+	if res.LedgerErr != nil {
+		return fmt.Errorf("%w — run `seamark lessons --apply %s` again to record them as applied",
+			res.LedgerErr, pidArg(res.NotMoved))
+	}
 
 	fmt.Fprintf(out, "recorded %d proposal(s) as applied without a new pin — .seamark/lessons.yaml "+
-		"already holds a pin with the same rule and regions\n", moved)
+		"already holds a pin with the same rule and regions\n", len(res.Moved))
 
-	for _, p := range recorded {
+	for _, p := range rpv.Proposals {
 		fmt.Fprintf(out, "  p%-4d %s\n", p.ID, p.Rule)
 	}
 
@@ -229,12 +209,8 @@ func applyPins(out io.Writer, ls proposals.Ledgerer, root string, pv *proposals.
 }
 
 // writePins writes and records the proposals of ids, none of which has
-// a pin in the file yet, and prints the "applied" lines. It returns the
-// proposals that share the pin of a lower ID. It also returns how many
-// of them the ledger moved. The caller prints them with the reconciled
-// proposals.
-func writePins(out io.Writer, ls proposals.Ledgerer, root string, pv *proposals.Preview,
-	ids []int64) (shared []model.Proposal, moved int, err error) {
+// a pin in the file yet, and prints the "applied" lines.
+func writePins(out io.Writer, ls proposals.Ledgerer, root string, pv *proposals.Preview, ids []int64) error {
 	// The reconcile of the existing pins runs after this write. A failure
 	// here skips it, so the rerun advice must name those proposals too.
 	pinned := pv.AlreadyPinned
@@ -242,38 +218,32 @@ func writePins(out io.Writer, ls proposals.Ledgerer, root string, pv *proposals.
 	// Commit refuses an apply preview with existing pins, so the rest
 	// needs its own preview. Nothing was written since the first one.
 	if len(ids) < len(pv.Proposals) {
+		var err error
+
 		if pv, err = proposals.PreviewApply(ls, root, ids); err != nil {
-			return nil, 0, err
+			return err
 		}
 	}
 
 	res, err := proposals.Commit(ls, root, pv)
 	if err != nil {
-		return nil, 0, err
+		return err
 	}
 
 	if err := applyFailure(res, pinned); err != nil {
-		return nil, 0, err
+		return err
 	}
 
-	written := withoutIDs(res.Moved, pv.SharedPin)
-
-	// The count is the ledger count of the written rows, as before the
-	// shared flow. A row that another writer decided during the commit
-	// stays listed, but is not counted.
-	fmt.Fprintf(out, "applied %d pin(s) to .seamark/lessons.yaml — review the diff and commit it\n", len(written))
+	// The count is the ledger count, as before the shared flow. A row
+	// that another writer decided during the commit stays listed, but is
+	// not counted.
+	fmt.Fprintf(out, "applied %d pin(s) to .seamark/lessons.yaml — review the diff and commit it\n", len(res.Moved))
 
 	for _, p := range pv.Proposals {
-		if slices.Contains(pv.SharedPin, p.ID) {
-			shared = append(shared, p)
-
-			continue
-		}
-
 		fmt.Fprintf(out, "  p%-4d %s\n", p.ID, p.Rule)
 	}
 
-	return shared, len(res.Moved) - len(written), nil
+	return nil
 }
 
 // applyFailure maps the write outcome of an apply commit to the CLI

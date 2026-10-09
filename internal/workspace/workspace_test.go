@@ -394,9 +394,9 @@ func stampSchema(t *testing.T, path string, version int) {
 	require.NoError(t, err)
 
 	if version == 0 {
-		_, err = db.Exec(`DELETE FROM meta WHERE key = 'schema_version'`)
+		_, err = db.Exec(`DELETE FROM meta WHERE key = ?`, store.MetaSchemaVersion)
 	} else {
-		_, err = db.Exec(`UPDATE meta SET value = ? WHERE key = 'schema_version'`, strconv.Itoa(version))
+		_, err = db.Exec(`UPDATE meta SET value = ? WHERE key = ?`, strconv.Itoa(version), store.MetaSchemaVersion)
 	}
 
 	require.NoError(t, err)
@@ -446,7 +446,7 @@ func TestProbeOlderSchema(t *testing.T) {
 func TestProbeNewerSchema(t *testing.T) {
 	ws := newWorkspace(t)
 	newer := store.SupportedSchema() + 1
-	setMeta(t, ws, map[string]string{"schema_version": strconv.Itoa(newer)})
+	setMeta(t, ws, map[string]string{store.MetaSchemaVersion: strconv.Itoa(newer)})
 
 	p := Probe(ws)
 

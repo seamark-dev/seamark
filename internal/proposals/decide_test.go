@@ -801,87 +801,219 @@ func (f *fixture) proposeAs(signature, rule, note string, regions ...string) mod
 	return p
 }
 
-func TestApplyWritesOnePinForEachKey(t *testing.T) {
+func TestApplyRefusesASelectionThatSharesAPinKey(t *testing.T) {
 	// D16: two selected rows with one canonical key used to give two
-	// entries with that key, and the link rules then blocked both. The
-	// rule case and the region order do not change the key.
-	f := newFixture(t, true)
-	f.writeLessons(handLessons)
+	// entries with that key, and the link rules then blocked both. One
+	// entry for both rows reads ambiguous and is blocked too, so apply
+	// refuses the selection. The rule case and the region order do not
+	// change the key.
+	tests := []struct {
+		name    string
+		write   bool
+		lessons string
+	}{
+		{name: "gate on", write: true, lessons: handLessons},
+		{name: "gate off", write: false, lessons: handLessons},
+		{
+			name: "the pin file already holds the key", write: true,
+			lessons: handLessons + "  - rule: ttl-monotonic-clock\n    regions: [api, web]\n    note: By hand.\n",
+		},
+	}
 
-	first := f.proposeAs("s1", "ttl-monotonic-clock", "Use the monotonic clock.", "api", "web")
-	same := f.proposeAs("s2", "TTL-Monotonic-Clock", "Compute expiry from a monotonic reading.", "web", "api")
-	other := f.proposeAs("s3", "wrap-errors", "Wrap errors.", "api")
-	selected := []int64{first.ID, same.ID, other.ID}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, tt.write)
+			f.writeLessons(tt.lessons)
 
-	pv, err := PreviewApply(f.st, f.root, selected)
-	require.NoError(t, err)
+			first := f.proposeAs("s1", "ttl-monotonic-clock", "Use the monotonic clock.", "api", "web")
+			same := f.proposeAs("s2", "TTL-Monotonic-Clock", "Compute expiry from a monotonic reading.", "web", "api")
+			other := f.proposeAs("s3", "wrap-errors", "Wrap errors.", "api")
+			selected := []int64{first.ID, same.ID, other.ID}
 
-	want, err := distill.RenderPins([]model.Proposal{first, other})
-	require.NoError(t, err)
+			pv, err := PreviewApply(f.st, f.root, selected)
+			require.ErrorIs(t, err, ErrSharedKey)
+			assert.Nil(t, pv)
+			assert.Equal(t, "p1 and p2 share rule and regions; apply one and dismiss the other", err.Error())
 
-	assert.Equal(t, []int64{same.ID}, pv.SharedPin, "the higher ID shares the pin of the lower one")
-	assert.Equal(t, want, pv.YAML, "the block holds one entry for each key")
-	assert.Equal(t, []int64{first.ID, other.ID}, ids(pv.NewEntries()))
-	assert.Empty(t, pv.AlreadyPinned)
+			var shared *SharedKeyError
 
-	res, err := Commit(f.st, f.root, pv)
-	require.NoError(t, err)
-	assert.True(t, res.FileWritten)
-	require.NoError(t, res.FileErr)
-	require.NoError(t, res.LedgerErr)
-	assert.Equal(t, selected, res.Moved, "every selected row is recorded as applied")
-	assert.False(t, res.Partial())
+			require.ErrorAs(t, err, &shared)
+			assert.Equal(t, [][]int64{{first.ID, same.ID}}, shared.Groups, "the other key is not named")
 
-	written := string(f.lessons())
-	assert.Equal(t, 1, strings.Count(strings.ToLower(written), "rule: ttl-monotonic-clock"))
-	assert.Contains(t, written, "note: Use the monotonic clock.", "the entry takes the note of the lowest ID")
-	assert.NotContains(t, written, "Compute expiry")
-	assert.Contains(t, written, "rule: hand-written")
+			assert.Equal(t, tt.lessons, string(f.lessons()), "the pin file is unchanged")
+			assert.Equal(t, selected, f.pending(selected...), "the ledger is unchanged")
 
-	// Every applied row now has its key in the file, which is what a
-	// reconcile of the shared row would have required.
-	cfg, err := reviews.LoadConfig(f.root)
-	require.NoError(t, err)
-
-	for _, p := range []model.Proposal{first, same, other} {
-		_, ok := cfg.FindPin(pinKey(p))
-		assert.True(t, ok, "pin for p%d is live", p.ID)
+			// Each row alone is a valid selection.
+			_, err = PreviewApply(f.st, f.root, []int64{first.ID, other.ID})
+			require.NoError(t, err)
+		})
 	}
 }
 
-func TestApplyWithGateOffBlocksOneEntryForEachKey(t *testing.T) {
-	f := newFixture(t, false)
+func TestApplyRefusalNamesEveryRowOfASharedKey(t *testing.T) {
+	f := newFixture(t, true)
+
+	f.proposeAs("s1", "ttl-monotonic-clock", "Use the monotonic clock.", "api")
+	f.proposeAs("s2", "ttl-monotonic-clock", "Compute expiry from a monotonic reading.", "api")
+	f.proposeAs("s3", "wrap-errors", "Wrap errors.", "api")
+	f.proposeAs("s4", "close-handles", "Close handles.", "db")
+	f.proposeAs("s5", "ttl-monotonic-clock", "Never use the wall clock for TTLs.", "api")
+
+	_, err := PreviewApply(f.st, f.root, []int64{1, 2, 3, 4, 5})
+	require.ErrorIs(t, err, ErrSharedKey)
+	assert.Equal(t, "p1, p2 and p5 share rule and regions; apply one and dismiss the others", err.Error())
+}
+
+func TestSharedKeyErrorNamesEachGroup(t *testing.T) {
+	tests := []struct {
+		name   string
+		groups [][]int64
+		want   string
+	}{
+		{
+			name:   "two rows",
+			groups: [][]int64{{1, 2}},
+			want:   "p1 and p2 share rule and regions; apply one and dismiss the other",
+		},
+		{
+			name:   "three rows",
+			groups: [][]int64{{1, 2, 5}},
+			want:   "p1, p2 and p5 share rule and regions; apply one and dismiss the others",
+		},
+		{
+			name:   "two keys",
+			groups: [][]int64{{1, 4}, {2, 3}},
+			want: "p1 and p4 share rule and regions; p2 and p3 share rule and regions; " +
+				"apply one of each group and dismiss the others",
+		},
+		{
+			name: "no group",
+			want: "selected proposals share rule and regions",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &SharedKeyError{Groups: tt.groups}
+
+			assert.Equal(t, tt.want, err.Error())
+			require.ErrorIs(t, err, ErrSharedKey)
+			assert.NotErrorIs(t, err, ErrStale)
+		})
+	}
+}
+
+func TestApplyCommitRefusesAPreviewWithASharedKey(t *testing.T) {
+	// PreviewApply never makes this preview, because the fingerprint
+	// holds the rule and the region set. A caller can build one, so the
+	// commit checks the keys again before it writes.
+	f := newFixture(t, true)
+	f.writeLessons(handLessons)
 
 	first := f.proposeAs("s1", "ttl-monotonic-clock", "Use the monotonic clock.", "api")
 	same := f.proposeAs("s2", "ttl-monotonic-clock", "Compute expiry from a monotonic reading.", "api")
 
-	pv, err := PreviewApply(f.st, f.root, []int64{first.ID, same.ID})
+	pv, err := PreviewApply(f.st, f.root, []int64{first.ID})
 	require.NoError(t, err)
 
-	want, err := distill.RenderPins([]model.Proposal{first})
-	require.NoError(t, err)
-
-	assert.Equal(t, want, pv.YAML, "a paste of the block adds one entry")
-	assert.Equal(t, []int64{same.ID}, pv.SharedPin)
+	pv.Proposals = append(pv.Proposals, same)
+	pv.Prints = append(pv.Prints, fingerprint(same))
 
 	_, err = Commit(f.st, f.root, pv)
-	require.ErrorIs(t, err, ErrWriteDisabled)
-	assert.Nil(t, f.lessons())
+	require.ErrorIs(t, err, ErrSharedKey)
+	assert.Equal(t, "p1 and p2 share rule and regions; apply one and dismiss the other", err.Error())
+	assert.Equal(t, handLessons, string(f.lessons()), "the pin file is unchanged")
+	assert.Equal(t, []int64{first.ID, same.ID}, f.pending(first.ID, same.ID), "the ledger is unchanged")
 }
 
-func TestNewEntriesLeavesOutKeysThatThePinFileHolds(t *testing.T) {
+func TestReconcileRefusesASelectionThatSharesAPinKey(t *testing.T) {
+	// D16 through the record: the pin file holds one entry, and Pins
+	// reads both pending rows as its pending match. A record of both
+	// makes two applied rows record the entry, and Pins then blocks it.
+	// So the record refuses the selection, as apply does.
+	f := newFixture(t, true)
+	lessons := handLessons + "  - rule: ttl-monotonic-clock\n    regions: [api, web]\n    note: By hand.\n"
+	f.writeLessons(lessons)
+
+	first := f.proposeAs("s1", "ttl-monotonic-clock", "Use the monotonic clock.", "api", "web")
+	same := f.proposeAs("s2", "TTL-Monotonic-Clock", "Compute expiry from a monotonic reading.", "web", "api")
+	selected := []int64{first.ID, same.ID}
+
+	pv, err := PreviewReconcile(f.st, f.root, selected)
+	require.ErrorIs(t, err, ErrSharedKey)
+	assert.NotErrorIs(t, err, ErrNotPinned)
+	assert.Nil(t, pv)
+	assert.Equal(t, "p1 and p2 share rule and regions; apply one and dismiss the other", err.Error())
+	assert.Equal(t, lessons, string(f.lessons()), "the pin file is unchanged")
+	assert.Equal(t, selected, f.pending(selected...), "the ledger is unchanged")
+
+	// Each row alone is a valid record.
+	_, err = PreviewReconcile(f.st, f.root, []int64{first.ID})
+	require.NoError(t, err)
+}
+
+func TestReconcileCommitRefusesAPreviewWithASharedKey(t *testing.T) {
+	// PreviewReconcile never makes this preview, because the fingerprint
+	// holds the rule and the region set. A caller can build one, so the
+	// commit checks the keys again before it writes the ledger.
 	f := newFixture(t, false)
 	f.writeLessons(handLessons + "  - rule: ttl-monotonic-clock\n    region: api\n    note: By hand.\n")
 
 	first := f.proposeAs("s1", "ttl-monotonic-clock", "Use the monotonic clock.", "api")
 	same := f.proposeAs("s2", "ttl-monotonic-clock", "Compute expiry from a monotonic reading.", "api")
-	other := f.proposeAs("s3", "wrap-errors", "Wrap errors.", "api")
-	again := f.proposeAs("s4", "wrap-errors", "Wrap every error.", "api")
 
-	pv, err := PreviewApply(f.st, f.root, []int64{first.ID, same.ID, other.ID, again.ID})
+	pv, err := PreviewReconcile(f.st, f.root, []int64{first.ID})
 	require.NoError(t, err)
 
-	assert.Equal(t, []int64{first.ID, same.ID}, pv.AlreadyPinned, "one key covers both rows")
-	assert.Equal(t, []int64{same.ID, again.ID}, pv.SharedPin)
-	assert.Equal(t, []int64{other.ID}, ids(pv.NewEntries()))
+	pv.Proposals = append(pv.Proposals, same)
+	pv.Prints = append(pv.Prints, fingerprint(same))
+
+	res, err := Commit(f.st, f.root, pv)
+	require.ErrorIs(t, err, ErrSharedKey)
+	assert.Equal(t, "p1 and p2 share rule and regions; apply one and dismiss the other", err.Error())
+	assert.Empty(t, res.Moved)
+	assert.Equal(t, []int64{first.ID, same.ID}, f.pending(first.ID, same.ID), "the ledger is unchanged")
+}
+
+func TestApplyRefusesARowWhoseRegionFieldsDisagree(t *testing.T) {
+	// F1: the key of the row reads odd-fields @ api, as every reader
+	// links it, and its apply writes odd-fields @ *. No reader would link
+	// that pin to the row, so apply refuses it with the gate on or off.
+	for _, write := range []bool{true, false} {
+		t.Run(fmt.Sprintf("gate %t", write), func(t *testing.T) {
+			f := newFixture(t, write)
+			f.writeLessons(handLessons)
+
+			ok := f.propose("wrap-errors", "Wrap errors.", model.ProposalProposed, "api")
+			odd := model.Proposal{Signature: "sig-odd", Rule: "odd-fields", Region: "api", Regions: []string{"*"},
+				Note: "Odd.", Members: []int64{1}, Agent: "claude/v2", Status: model.ProposalProposed}
+			require.NoError(t, f.st.InsertProposal(&odd))
+
+			pv, err := PreviewApply(f.st, f.root, []int64{ok.ID, odd.ID})
+			require.ErrorIs(t, err, ErrFieldsDisagree)
+			assert.Nil(t, pv)
+			assert.Equal(t, "the stored region fields of the selected proposals disagree: p2; "+
+				"resolve them by hand or dismiss them", err.Error())
+			assert.Equal(t, handLessons, string(f.lessons()), "the pin file is unchanged")
+			assert.Equal(t, []int64{ok.ID, odd.ID}, f.pending(ok.ID, odd.ID), "the ledger is unchanged")
+		})
+	}
+}
+
+func TestApplyCommitRefusesRegionFieldsThatChangedToDisagree(t *testing.T) {
+	f := newFixture(t, true)
+	f.writeLessons(handLessons)
+
+	p := f.propose("wrap-errors", "Wrap errors.", model.ProposalProposed, "api", "web")
+
+	pv, err := PreviewApply(f.st, f.root, []int64{p.ID})
+	require.NoError(t, err)
+
+	// Region now names a region outside Regions. RegionSet and so the
+	// fingerprint stay the same, but the fields disagree.
+	_, err = Commit(regionLedger{Ledgerer: f.st, region: "lib"}, f.root, pv)
+	require.ErrorIs(t, err, ErrStale)
+	require.ErrorIs(t, err, ErrFieldsDisagree)
+	assert.Equal(t, handLessons, string(f.lessons()), "the pin file is unchanged")
+	assert.Equal(t, []int64{p.ID}, f.pending(p.ID), "the ledger is unchanged")
 }

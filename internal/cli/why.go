@@ -56,7 +56,7 @@ func newOrientCmd(opts *options) *cobra.Command {
 // staleNote warns when the workspace changed since the index was built —
 // answers from a stale graph should never look authoritative.
 func staleNote(w io.Writer, st *store.Store, root string) {
-	indexed, err := st.GetMeta("indexed_state")
+	indexed, err := st.GetMeta(store.MetaIndexedState)
 	if err != nil || indexed == "" {
 		return
 	}

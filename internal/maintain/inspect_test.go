@@ -496,6 +496,13 @@ func TestInspectReadsUnknownWithAReason(t *testing.T) {
 		in := Inspect(f.root, f.st, f.probe(), fixtureNow)
 		require.ErrorContains(t, in.ReadingsErr, "measure the outcomes")
 
+		// The error of outcome.Gather follows the prefix directly. The
+		// inspection thus does not use proposals.MeasureOutcomes, which
+		// adds a second prefix to the console text.
+		assert.Contains(t, in.ReadingsErr.Error(),
+			"measure the outcomes: failed to count pre-exposure commits for {guard-empty scripts [] Guard empty datasets.}: "+
+				"store: count commits touching [scripts]: ")
+
 		for _, i := range linked {
 			r := in.Pins[i].Readings
 

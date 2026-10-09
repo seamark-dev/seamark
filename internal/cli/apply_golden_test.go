@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
@@ -21,9 +22,10 @@ import (
 // These golden tests pin `lessons --apply` and `lessons --dismiss`. Both
 // run through the shared decision flow of internal/proposals, as the
 // console does. The Phase 3 trials found two apply defects, which the
-// A0 report records as D15 and D16. D16 is fixed in the shared flow, and
-// its golden pins the fixed behavior. D15 stays open: the CLI keeps its
-// root resolution, and its golden pins the defect until a decision.
+// A0 report records as D15 and D16. D16 is fixed in the shared flow: a
+// selection with a repeated key is refused, and its golden pins that.
+// D15 stays open: the CLI keeps its root resolution, and its golden pins
+// the defect until a decision.
 
 // applyGoldenLessons is the pin file before an apply. The hand-written
 // entry shows that apply inserts above it and keeps it.
@@ -119,13 +121,13 @@ pin:
 	assert.Contains(t, maintainLedger(t, original, 0), `p2 proposed   "second-rule"`)
 }
 
-// D16 (fixed in part): two rows with one key used to write two entries
-// with that key and print "applied 2 pin(s)". The Pins view then called
-// both entries duplicate pins and blocked every action on them. The
-// shared flow writes one entry for each key, from the lowest ID, and
-// records the other row as applied without a second entry. The block in
-// Pins stays: the one entry is ambiguous, because two applied rows
-// record it.
+// D16: two rows with one key used to write two entries with that key
+// and print "applied 2 pin(s)". The Pins view then called both entries
+// duplicate pins and blocked every action on them. One entry for both
+// rows does not help: two applied rows record it, so Pins reads it as
+// ambiguous and blocks it too. By reviewer decision, the end state is a
+// refusal: apply names the rows and changes nothing. In a shell, the
+// binary prints "seamark: " and the error text on stderr and exits 1.
 func TestLessonsApplyGoldenDuplicateKeySelection(t *testing.T) {
 	root := maintainWorkspace(t, nil)
 	maintainWriteConfig(t, root, maintainGateOn)
@@ -136,37 +138,24 @@ func TestLessonsApplyGoldenDuplicateKeySelection(t *testing.T) {
 		applyGoldenRow("s2", "ttl-monotonic-clock", "internal/billing", "Compute expiry from a monotonic reading."),
 	)
 
-	stdout, stderr := goldenRun(t, root, "lessons", "--apply", "p1,p2")
+	before := maintainLedger(t, root, 0)
 
-	assert.Equal(t, "applied 1 pin(s) to .seamark/lessons.yaml — review the diff and commit it\n"+
-		"  p1    ttl-monotonic-clock\n"+
-		"recorded 1 proposal(s) as applied without a new pin — .seamark/lessons.yaml already holds a pin "+
-		"with the same rule and regions\n"+
-		"  p2    ttl-monotonic-clock\n", stdout)
+	stdout, stderr, err := runErr(t, "-C", root, "lessons", "--apply", "p1,p2")
+	require.ErrorIs(t, err, proposals.ErrSharedKey)
+	assert.NotErrorIs(t, err, gate.ErrBlocked, "exit code 1, not the policy exit code 2")
+	assert.Equal(t, "p1 and p2 share rule and regions; apply one and dismiss the other", err.Error())
+	assert.Empty(t, stdout)
 	assert.Empty(t, stderr)
 
 	got, _ := maintainLessons(t, root)
-	assert.Equal(t, `threshold: 3
+	assert.Equal(t, applyGoldenLessons, got, "the pin file is unchanged")
+	assert.Equal(t, before, maintainLedger(t, root, 0), "both proposals stay pending")
 
-pin:
-  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p1)
-  - rule: ttl-monotonic-clock
-    region: internal/billing
-    note: Use the monotonic clock for TTLs.
-  - rule: hand-written
-    region: web
-    note: A person wrote this pin.
-`, got)
+	// The advised next step gives one entry that one applied row links, so
+	// Pins allows retarget, prune, and trigger extraction on it.
+	goldenRun(t, root, "lessons", "--apply", "p1")
+	goldenRun(t, root, "lessons", "--dismiss", "p2")
 
-	assert.Equal(t,
-		`p1 applied    "ttl-monotonic-clock" region="internal/billing" regions=[] triggers=[] checked=0 v0 note="Use the monotonic clock for TTLs."`+"\n"+
-			`p2 applied    "ttl-monotonic-clock" region="internal/billing" regions=[] triggers=[] checked=0 v0 note="Compute expiry from a monotonic reading."`+"\n",
-		maintainLedger(t, root, 0))
-
-	// The shared link rules now see one entry with two applied rows. A
-	// reconcile of the second row gives the same state. The old defect gave
-	// it after a hand removal of one entry. Only LinkLinked allows an
-	// action, so Pins blocks retarget, prune, and trigger extraction here.
 	doc, err := pinfile.Read(root)
 	require.NoError(t, err)
 
@@ -180,16 +169,14 @@ pin:
 
 	links := pinfile.Classify(doc, applied, nil, nil)
 	require.Len(t, links.Entries, 2)
-	assert.Equal(t, pinfile.LinkAmbiguousLedger, links.Entries[0].Link)
+	assert.Equal(t, pinfile.LinkLinked, links.Entries[0].Link)
 	assert.Equal(t, pinfile.LinkNoProposal, links.Entries[1].Link)
-	assert.Equal(t, pinfile.LinkAmbiguousLedger, links.ByProposal[1])
-	assert.Equal(t, pinfile.LinkAmbiguousLedger, links.ByProposal[2])
-	assert.Empty(t, links.NotPresent, "every applied row has its pin in the file")
+	assert.Equal(t, pinfile.LinkLinked, links.ByProposal[1])
 }
 
 // D16 with the gate off: the paste block used to hold one entry for
-// each selected row, so a paste duplicated the key. The block now holds
-// one entry for each key and names the row that it leaves out.
+// each selected row, so a paste duplicated the key. The gate-off apply
+// now gives the same refusal as the gate-on apply and prints no block.
 func TestLessonsApplyGoldenDuplicateKeyBlock(t *testing.T) {
 	root := maintainWorkspace(t, nil)
 	maintainWriteLessons(t, root, applyGoldenLessons, 0o644)
@@ -199,20 +186,54 @@ func TestLessonsApplyGoldenDuplicateKeyBlock(t *testing.T) {
 		applyGoldenRow("s2", "ttl-monotonic-clock", "internal/billing", "Compute expiry from a monotonic reading."),
 	)
 
-	stdout, stderr := goldenRun(t, root, "lessons", "--apply", "p1,p2")
+	before := maintainLedger(t, root, 0)
 
-	assert.Equal(t, "distill.write is off in .seamark/config.yaml — paste under `pin:` in .seamark/lessons.yaml:\n\n"+
-		"  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p1)\n"+
-		"  - rule: ttl-monotonic-clock\n"+
-		"    region: internal/billing\n"+
-		"    note: Use the monotonic clock for TTLs.\n"+
-		"\n(proposals stay pending; enable distill.write to let apply edit the file)\n"+
-		"(p2 left out: a pin above has the same rule and regions)\n", stdout)
+	stdout, stderr, err := runErr(t, "-C", root, "lessons", "--apply", "p1,p2")
+	require.ErrorIs(t, err, proposals.ErrSharedKey)
+	assert.NotErrorIs(t, err, gate.ErrBlocked, "exit code 1, not the policy exit code 2")
+	assert.Equal(t, "p1 and p2 share rule and regions; apply one and dismiss the other", err.Error())
+	assert.Empty(t, stdout, "no block to paste")
 	assert.Empty(t, stderr)
 
 	got, _ := maintainLessons(t, root)
 	assert.Equal(t, applyGoldenLessons, got)
-	assert.Contains(t, maintainLedger(t, root, 0), `p2 proposed   "ttl-monotonic-clock"`)
+	assert.Equal(t, before, maintainLedger(t, root, 0))
+}
+
+// F1: a row whose stored region fields disagree used to get its pin.
+// Its apply writes the rendered regions, here a repository-wide pin,
+// but every reader links the row by its stored fields, here api. So no
+// reader links that pin to the row, and Pins reads the row as
+// "ambiguous row". By reviewer decision, apply refuses such a row with
+// the gate on or off, before it prints or writes anything.
+func TestLessonsApplyGoldenDisagreeingRegionFields(t *testing.T) {
+	for _, gateCfg := range []string{"distill:\n  write: false\n", maintainGateOn} {
+		t.Run(strings.TrimSpace(gateCfg), func(t *testing.T) {
+			root := maintainWorkspace(t, nil)
+			maintainWriteConfig(t, root, gateCfg)
+			maintainWriteLessons(t, root, applyGoldenLessons, 0o644)
+
+			odd := applyGoldenRow("s1", "odd-fields", "api", "The stored fields disagree.")
+			odd.Regions = []string{"*"}
+
+			goldenSeedProposals(t, root, odd,
+				applyGoldenRow("s2", "second-rule", "db", "The second pending pin."))
+
+			before := maintainLedger(t, root, 0)
+
+			stdout, stderr, err := runErr(t, "-C", root, "lessons", "--apply", "p1,p2")
+			require.ErrorIs(t, err, proposals.ErrFieldsDisagree)
+			assert.NotErrorIs(t, err, gate.ErrBlocked, "exit code 1, not the policy exit code 2")
+			assert.Equal(t, "the stored region fields of the selected proposals disagree: p1; "+
+				"resolve them by hand or dismiss them", err.Error())
+			assert.Empty(t, stdout)
+			assert.Empty(t, stderr)
+
+			got, _ := maintainLessons(t, root)
+			assert.Equal(t, applyGoldenLessons, got, "the pin file is unchanged")
+			assert.Equal(t, before, maintainLedger(t, root, 0), "both proposals stay pending")
+		})
+	}
 }
 
 // applyGoldenTwoRows seeds two pending rows with different keys, the
