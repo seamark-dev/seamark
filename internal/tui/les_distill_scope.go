@@ -18,11 +18,6 @@ import (
 // other field names fit with a gap.
 const distLabelW = 12
 
-// distFactsMin is the narrowest context facts next to the compact step
-// trail. The facts give way to the trail down to this width, so every
-// supported terminal shows the step (design map §4).
-const distFactsMin = 20
-
 // view renders the context line, a blank line and the step. The boxes
 // leave the last row blank above the footer, as the other sub-views do.
 func (d *distRecord) view(w, h int) string {
@@ -31,10 +26,10 @@ func (d *distRecord) view(w, h int) string {
 	var body string
 
 	switch d.step {
-	case distScope:
+	case stepScope:
 		body = d.scopeView(w, boxH)
-	case distPlanning, distReview:
-		body = d.reviewView(w, boxH)
+	case stepPreparing, stepPreview:
+		body = d.previewView(w, boxH)
 	default:
 		body = d.runView(w, boxH)
 	}
@@ -46,24 +41,24 @@ func (d *distRecord) view(w, h int) string {
 // trail at the right. Lessons has no banner row, so the trail sits on
 // the context line. A narrow line keeps only the current step, for
 // example "● Scope 1/4", and cuts the facts to fit it. Only a line too
-// narrow for distFactsMin drops the trail.
+// narrow for agentFactsMin drops the trail.
 func (d *distRecord) contextLine(w int) string {
 	t := d.st.theme
 	g := t.Glyphs
 	left := " " + d.facts(w < wideWidth)
 
-	cur := d.step.stepper()
+	steps, cur := runTrail(true), d.step.stepper(true)
 
-	trail := t.stepper(distSteps, cur)
+	trail := t.stepper(steps, cur)
 	if width(left)+width(trail)+3 > w {
-		trail = t.TabActive.Render(g.Dot+" "+distSteps[cur]) + t.Faint.Render(" "+itoa(cur+1)+"/"+itoa(len(distSteps)))
+		trail = t.TabActive.Render(g.Dot+" "+steps[cur]) + t.Faint.Render(" "+itoa(cur+1)+"/"+itoa(len(steps)))
 	}
 
 	room := w - width(trail) - 3
 
 	switch {
 	case width(left) <= room:
-	case room >= distFactsMin:
+	case room >= agentFactsMin:
 		left = truncate(left, room, g.Ellipsis)
 	default:
 		return truncate(left, w, g.Ellipsis)
@@ -79,7 +74,7 @@ func (d *distRecord) facts(compact bool) string {
 	t := d.st.theme
 	sep := " " + t.Glyphs.Sep + " "
 
-	if d.step == distScope {
+	if d.step == stepScope {
 		// The short form leaves room for the step trail at 60 columns.
 		state := "nothing is planned or sent yet"
 		if compact {
@@ -91,21 +86,21 @@ func (d *distRecord) facts(compact bool) string {
 
 	type fact struct{ label, value string }
 
-	facts := []fact{{"scope", d.scopeLabel()}, {"limit", distLimitLabel(d.plan.req)}}
+	facts := []fact{{"scope", d.scopeLabel()}, {"limit", distLimitLabel(d.req)}}
 
-	if p := d.plan.preview; p != nil && d.plan.err == nil {
+	if p := d.prev.preview; p != nil && d.prev.err == nil {
 		facts = append(facts, fact{"agent", oneLine(p.Invocation.Name)})
 	}
 
 	switch {
-	case d.step == distPlanning:
+	case d.step == stepPreparing:
 		facts = append(facts, fact{"", "planning" + t.Glyphs.Ellipsis})
-	case d.step == distRunning:
+	case d.step == stepRunning:
 		facts = append(facts, fact{"started", distClock(d.run.started)})
-	case d.step == distResult:
+	case d.step == stepResult:
 		facts = append(facts, fact{"finished", distClock(d.run.ended)})
-	case d.plan.preview != nil && !d.plan.preview.PlannedAt.IsZero():
-		facts = append(facts, fact{"planned", distClock(d.plan.preview.PlannedAt)})
+	case d.prev.preview != nil && !d.prev.preview.PlannedAt.IsZero():
+		facts = append(facts, fact{"planned", distClock(d.prev.preview.PlannedAt)})
 	}
 
 	parts := make([]string, 0, len(facts))

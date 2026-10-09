@@ -6,8 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	domain "github.com/seamark-dev/seamark/internal/model"
@@ -30,25 +28,16 @@ import (
 // and "Recorded", with a gap of two cells, so no label touches its value.
 const maintLabelW = 10
 
-// maintView is the content of one stage: the border labels, the body
-// that scrolls, the scope summary that stays, and the actions.
-type maintView struct {
-	title, right string
-	body, tail   []string
-	actions      []key.Binding
-}
-
-// content builds the view of the current stage in w cells.
-func (m *maintModal) content(w int) maintView {
-	t := m.st.theme
-	spin := t.Accent.Render(t.spinnerFrame(m.st.tick)) + " "
-
+// content builds the modal of the current stage in w cells: the border
+// labels, the body that scrolls, the scope summary that stays (Tail),
+// and the actions.
+func (m *maintModal) content(w int) modalOpts {
 	switch m.stage {
-	case maintStagePreparing:
-		return m.preparingView(spin, w)
-	case maintStageCommitting:
-		return m.committingView(spin, w)
-	case maintStageResult:
+	case flowPreparing:
+		return m.preparingView(w)
+	case flowCommitting:
+		return m.committingView(w)
+	case flowResult:
 		return m.resultView(w)
 	}
 
@@ -63,9 +52,7 @@ func (m *maintModal) content(w int) maintView {
 }
 
 // preparingView waits for a plan read. The read writes nothing.
-func (m *maintModal) preparingView(spin string, w int) maintView {
-	t := m.st.theme
-
+func (m *maintModal) preparingView(w int) modalOpts {
 	what := "the " + m.req.Action.String() + " preview"
 	read := "Seamark reads the pin file, the ledger and the write gate"
 
@@ -77,18 +64,12 @@ func (m *maintModal) preparingView(spin string, w int) maintView {
 		read += ", and computes the scope from today's evidence"
 	}
 
-	return maintView{
-		title:   spin + t.Title.Render("Preparing "+what+t.Glyphs.Ellipsis),
-		body:    propLines(t.Muted, read+". Nothing is written.", w),
-		actions: []key.Binding{withHelp(nkeys.Back, "esc", "cancel")},
-	}
+	return flowWaitModal(m.st, "Preparing "+what, read+". Nothing is written.", true, w)
 }
 
 // committingView waits for a commit. It offers no key, because the
 // commit cannot stop safely between the file and the ledger.
-func (m *maintModal) committingView(spin string, w int) maintView {
-	t := m.st.theme
-
+func (m *maintModal) committingView(w int) modalOpts {
 	note := "Seamark checks the plan again, replaces " + pinfile.File + ", then records the ledger. The operation " +
 		"cannot stop safely; the result appears here."
 	if m.recovering {
@@ -96,14 +77,12 @@ func (m *maintModal) committingView(spin string, w int) maintView {
 			"The result appears here."
 	}
 
-	return maintView{title: spin + t.Title.Render(m.st.mutation+t.Glyphs.Ellipsis), body: propLines(t.Muted, note, w)}
+	return flowWaitModal(m.st, m.st.mutation, note, false, w)
 }
 
 // planErrView explains a plan read that failed. Nothing changed,
 // because a plan only reads.
-func (m *maintModal) planErrView(w int) maintView {
-	t := m.st.theme
-
+func (m *maintModal) planErrView(w int) modalOpts {
 	what := "The " + m.req.Action.String() + " preview"
 	if m.recovering {
 		what = "The ledger completion preview"
@@ -120,19 +99,13 @@ func (m *maintModal) planErrView(w int) maintView {
 		hint = "Fix the cause named above, for example a malformed file, then refresh with r and try again."
 	}
 
-	body := propNote(t, ToneFailure, what+" could not be built: "+errText(m.err), w)
-	body = append(body, "")
-	body = append(body, propLines(t.Body, hint, w)...)
-	body = append(body, "")
-	body = append(body, propLines(t.Muted, "Nothing was changed.", w)...)
-
-	return maintView{title: t.Failure.Render("Preview failed"), body: body, actions: m.previewActions(false)}
+	return previewFailedModal(m.st.theme, what, m.err, hint, "Nothing was changed.", m.previewActions(false), w)
 }
 
 // planView renders a retarget or prune plan: the lead, the blockers,
 // the selected pins, the ledger change, the effects and the diff.
-func (m *maintModal) planView(w int) maintView {
-	p := m.plan
+func (m *maintModal) planView(w int) modalOpts {
+	p := m.preview
 
 	body := m.planLead(w)
 
@@ -147,9 +120,9 @@ func (m *maintModal) planView(w int) maintView {
 	body = append(body, m.planEffects(w)...)
 	body = append(body, m.diffLines(w)...)
 
-	return maintView{
-		title: m.planTitle(), right: m.planRight(), body: body, tail: m.planTail(w),
-		actions: m.previewActions(false),
+	return modalOpts{
+		Title: m.planTitle(), Right: m.planRight(), Body: body, Tail: m.planTail(w),
+		Actions: m.previewActions(false),
 	}
 }
 
@@ -159,7 +132,7 @@ func (m *maintModal) planView(w int) maintView {
 // preview says so. The note reads the index state of the header, so
 // both show the same freshness.
 func (m *maintModal) staleIndexNote() string {
-	if m.plan == nil || m.plan.Action != maintain.ActionRetarget || !m.st.index.loaded {
+	if m.preview == nil || m.preview.Action != maintain.ActionRetarget || !m.st.index.loaded {
 		return ""
 	}
 
@@ -183,11 +156,11 @@ func (m *maintModal) planTitle() string {
 	t := m.st.theme
 
 	verb := t.TabActive.Render("Retarget")
-	if m.plan.Action == maintain.ActionPrune {
+	if m.preview.Action == maintain.ActionPrune {
 		verb = t.Failure.Bold(true).Render("Prune")
 	}
 
-	return verb + " " + t.Body.Render(maintSubject(t, m.plan.Items))
+	return verb + " " + t.Body.Render(maintSubject(t, m.preview.Items))
 }
 
 // planRight labels the plan in the border. A broader or repository-wide
@@ -196,16 +169,16 @@ func (m *maintModal) planTitle() string {
 func (m *maintModal) planRight() string {
 	t := m.st.theme
 
-	switch scope := maintScopeLabel(m.plan); {
+	switch scope := maintScopeLabel(m.preview); {
 	case scope == maintScopeRepoWide || scope == maintScopeBroader:
 		return t.Badge(ToneAttention, scope)
-	case !m.plan.Confirmable:
+	case !m.preview.Confirmable:
 		return t.Badge(ToneAttention, "preview only")
 	case scope != "":
 		return t.Muted.Render(scope)
 	}
 
-	return t.Muted.Render(propPlural(len(m.plan.Items), "pin", "pins"))
+	return t.Muted.Render(propPlural(len(m.preview.Items), "pin", "pins"))
 }
 
 // The scope labels of a retarget plan.
@@ -242,7 +215,7 @@ func maintScopeLabel(p *maintain.Plan) string {
 // planLead is the first paragraph: what y does, or that y is off.
 func (m *maintModal) planLead(w int) []string {
 	t := m.st.theme
-	p := m.plan
+	p := m.preview
 
 	if !p.Confirmable {
 		// A plan without a ready pin has no file change, so the lead does
@@ -280,7 +253,7 @@ func (m *maintModal) planLead(w int) []string {
 // that is not confirmable for another reason shows the engine reasons.
 func (m *maintModal) planBlockers(w int) []string {
 	t := m.st.theme
-	p := m.plan
+	p := m.preview
 
 	if p.Confirmable {
 		return nil
@@ -339,7 +312,7 @@ func (m *maintModal) planBlockers(w int) []string {
 // change or its reason.
 func (m *maintModal) selectionLines(w int) []string {
 	t := m.st.theme
-	p := m.plan
+	p := m.preview
 
 	head := t.Heading.Render("SELECTED") + "  " + t.Faint.Render(propPlural(len(p.Items), "pin", "pins"))
 	if p.Request.Cursor {
@@ -385,7 +358,7 @@ func (m *maintModal) itemLines(it maintain.PlanItem, w int) []string {
 
 	switch it.Status {
 	case maintain.ItemReady:
-		if m.plan.Action == maintain.ActionPrune {
+		if m.preview.Action == maintain.ActionPrune {
 			return append(out, m.pruneItem(it, w)...)
 		}
 
@@ -410,7 +383,7 @@ func (m *maintModal) blockedScope(it maintain.PlanItem, w int) []string {
 	t := m.st.theme
 	s := it.Pin.Readings.Scope
 
-	if m.plan.Action != maintain.ActionRetarget || !s.Known || s.Advice.Kind != distill.ScopeChanged {
+	if m.preview.Action != maintain.ActionRetarget || !s.Known || s.Advice.Kind != distill.ScopeChanged {
 		return nil
 	}
 
@@ -650,7 +623,7 @@ func maintLedgerLines(t *Theme, p *maintain.Plan, w int) []string {
 // y cannot confirm has no effects, so it shows none.
 func (m *maintModal) planEffects(w int) []string {
 	t := m.st.theme
-	p := m.plan
+	p := m.preview
 
 	if !p.Confirmable {
 		return nil
@@ -737,7 +710,7 @@ func maintAnyKept(items []maintain.PlanItem) bool {
 // partial plan diffs only its ready pins, and the heading says so.
 func (m *maintModal) diffLines(w int) []string {
 	t := m.st.theme
-	p := m.plan
+	p := m.preview
 	c := p.Change
 
 	if c == nil {
@@ -767,7 +740,7 @@ func (m *maintModal) diffLines(w int) []string {
 // shows them while the body scrolls.
 func (m *maintModal) planTail(w int) []string {
 	t := m.st.theme
-	p := m.plan
+	p := m.preview
 	sep := " " + t.Glyphs.Sep + " "
 
 	scope := "Retarget " + propPlural(len(p.Items), "pin", "pins")
@@ -834,9 +807,9 @@ func maintTailIDList(t *Theme, ids []int64) string {
 // recoveryView renders the ledger-only completion of a partial
 // operation. A fresh read proved the result of this session, or the
 // view says which proof failed.
-func (m *maintModal) recoveryView(w int) maintView {
+func (m *maintModal) recoveryView(w int) modalOpts {
 	t := m.st.theme
-	p := m.plan
+	p := m.preview
 	ids := propIDList(maintLedgerIDs(p))
 	sep := " " + t.Glyphs.Sep + " "
 	gate := maintRecoveryGate(p)
@@ -906,9 +879,9 @@ func (m *maintModal) recoveryView(w int) maintView {
 		tail = propNote(t, ToneAttention, "Ledger only"+sep+"y waits: another operation is running", w)
 	}
 
-	return maintView{
-		title: t.TabActive.Render("Complete") + " " + t.Body.Render("the ledger update"+sep+ids),
-		right: t.Muted.Render("ledger only"), body: body, tail: tail, actions: m.previewActions(false),
+	return modalOpts{
+		Title: t.TabActive.Render("Complete") + " " + t.Body.Render("the ledger update"+sep+ids),
+		Right: t.Muted.Render("ledger only"), Body: body, Tail: tail, Actions: m.previewActions(false),
 	}
 }
 
@@ -917,7 +890,7 @@ func (m *maintModal) recoveryView(w int) maintView {
 // the proof again later in this session.
 func (m *maintModal) recoveryBlockers(w int) []string {
 	t := m.st.theme
-	p := m.plan
+	p := m.preview
 
 	if p.Confirmable {
 		return nil
@@ -995,7 +968,7 @@ func (m *maintModal) proofLines(it maintain.PlanItem, w int) []string {
 	}
 
 	proof := "The file holds the reviewed entry, and its earlier regions are gone."
-	if m.plan.Action == maintain.ActionPrune {
+	if m.preview.Action == maintain.ActionPrune {
 		proof = "The pin is absent from the file, and this session removed it."
 	}
 
@@ -1007,17 +980,17 @@ func (m *maintModal) proofLines(it maintain.PlanItem, w int) []string {
 // did not happen. An offered recovery is named in the lead, the Recovery
 // row and the tail, which also say that esc drops it: the tail stays
 // visible at every size, and the proof cannot come back.
-func (m *maintModal) resultView(w int) maintView {
+func (m *maintModal) resultView(w int) modalOpts {
 	t := m.st.theme
 	o := m.out
-	v := maintView{actions: m.resultActions(false)}
+	v := modalOpts{Actions: m.resultActions(false)}
 
 	if o.err != nil {
 		return m.refusalView(w)
 	}
 
 	title, tone, lead := m.outcome(o)
-	v.title = t.ToneStyle(tone).Render(title)
+	v.Title = t.ToneStyle(tone).Render(title)
 
 	body := propNote(t, tone, lead, w)
 	body = append(body, "", t.Heading.Render("WHAT HAPPENED"))
@@ -1025,14 +998,14 @@ func (m *maintModal) resultView(w int) maintView {
 	body = append(body, "")
 	body = append(body, propLines(t.Faint, "Nothing is retried automatically.", w)...)
 
-	v.body = body
-	v.tail = m.resultTail(o, tone, w)
+	v.Body = body
+	v.Tail = m.resultTail(o, tone, w)
 
 	return v
 }
 
 // refusalView reports a commit that wrote nothing.
-func (m *maintModal) refusalView(w int) maintView {
+func (m *maintModal) refusalView(w int) modalOpts {
 	t := m.st.theme
 	o := m.out
 
@@ -1059,9 +1032,9 @@ func (m *maintModal) refusalView(w int) maintView {
 	body = append(body, "")
 	body = append(body, propLines(t.Faint, "Nothing is retried automatically.", w)...)
 
-	return maintView{
-		title: t.Attention.Render("Not written"), body: body, actions: m.resultActions(false),
-		tail: propNote(t, ToneAttention, next, w),
+	return modalOpts{
+		Title: t.Attention.Render("Not written"), Body: body, Actions: m.resultActions(false),
+		Tail: propNote(t, ToneAttention, next, w),
 	}
 }
 

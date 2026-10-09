@@ -152,11 +152,11 @@ func (wz *setupWizard) aboutBox(r setupRow, insp integration.Inspection, w, h in
 	t := wz.st.theme
 	inner, rows := boxInner(w), boxRows(h)
 
-	content := wz.about.render("about:"+itoa(int(r.intent)), strings.Join(wz.aboutLines(r, insp, inner), "\n"), inner, rows)
+	lines := wz.about.lines("about:"+itoa(int(r.intent)), wz.aboutLines(r, insp, inner), inner, rows)
 
 	return t.box(boxOpts{W: w, H: h, Focus: true,
 		Title: integPaneTitle(t, "Details "+t.Glyphs.Sep+" "+setupIntentLabels[r.intent], true),
-		Foot:  wz.about.foot(t), Lines: strings.Split(content, "\n")})
+		Foot:  wz.about.foot(t), Lines: lines})
 }
 
 // choiceLines renders the table of additions, the selection summary,

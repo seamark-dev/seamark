@@ -93,13 +93,11 @@ func integRule(t *Theme, w int) string {
 }
 
 // integPaneTitle renders a box title. The pane with focus, or the only
-// pane, gets the title style; a secondary pane gets the muted style.
+// pane, gets the title style; a secondary pane gets the muted style. It
+// sanitizes the title, because it can hold a client name from an
+// inspection.
 func integPaneTitle(t *Theme, title string, primary bool) string {
-	if primary {
-		return t.Title.Render(oneLine(title))
-	}
-
-	return t.Muted.Render(oneLine(title))
+	return boxTitle(t, oneLine(title), primary)
 }
 
 // integBoxed renders a centered state block, for example a loading or

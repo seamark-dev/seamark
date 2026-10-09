@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test tui-test tui-capture agents-native-check agents-native-smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test tui-test tui-capture tui-capture-check agents-native-check agents-native-smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -106,6 +106,18 @@ TUI_CAPTURE_DIR ?= rfc/validation/tui-phase-3/captures
 tui-capture: ## Render representative console states into $(TUI_CAPTURE_DIR) for visual review
 	mkdir -p "$(TUI_CAPTURE_DIR)"
 	SEAMARK_TUI_CAPTURE_DIR="$(abspath $(TUI_CAPTURE_DIR))" CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -run '^TestCapture' ./internal/tui
+
+# The capture check proves that a console change keeps every frame. It
+# renders the captures into a new temporary directory and compares them
+# with BASE, after it masks dates, clock times and elapsed durations.
+# It never writes into BASE. A gate needs a BASE rendered from the
+# starting tree on the same day, for example with
+# `make tui-capture TUI_CAPTURE_DIR=<scratch>`. BASE has no default.
+# A plain `make tui-capture` overwrites the default TUI_CAPTURE_DIR, so a
+# check against that directory can compare a render with itself.
+tui-capture-check: ## Render the captures into a temporary directory and compare them with BASE=<dir> (masks dates, times, durations)
+	@[ -n "$(BASE)" ] || { echo "usage: make tui-capture-check BASE=<dir>; render BASE first with make tui-capture TUI_CAPTURE_DIR=<dir>" >&2; exit 2; }
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" scripts/tui-capture-check.sh "$(BASE)"
 
 lint: ## Static analysis (config in .golangci.yml)
 	golangci-lint run ./...

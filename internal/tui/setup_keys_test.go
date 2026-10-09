@@ -98,7 +98,7 @@ func TestSetupOnlyTheApplyStepCapturesGlobalKeys(t *testing.T) {
 	assert.False(t, s.capturing(), "the review has no dialog: it releases the global keys")
 
 	// The apply step cannot stop safely, so it keeps the keys.
-	wz.step = setupStepApplying
+	wz.step = setupStepCommitting
 	assert.True(t, s.capturing())
 	assert.NotContains(t, h.view(), "? help", "the footer hides keys that do not act")
 
@@ -106,7 +106,7 @@ func TestSetupOnlyTheApplyStepCapturesGlobalKeys(t *testing.T) {
 	assert.False(t, h.m.help)
 	assert.Equal(t, destIntegrations, h.m.active)
 	assert.False(t, h.quit)
-	assert.Equal(t, setupStepApplying, wz.step, "no key leaves a running apply")
+	assert.Equal(t, setupStepCommitting, wz.step, "no key leaves a running apply")
 }
 
 func TestSetupEnterNeverApplies(t *testing.T) {

@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -12,7 +11,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/distill"
-	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/learning"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
@@ -20,131 +18,24 @@ import (
 )
 
 // This file holds the trigger extraction record of Lessons › Run. It
-// keeps the steps, the state, the messages and the keys. Its commands
-// plan, run and stop. les_extract_view.go renders the review, the run
-// and the result. The record follows the distillation record, so a
-// paid run reads and stops the same way in both workflows.
+// keeps the record, the messages and the keys. Its commands plan, run
+// and stop. les_extract_view.go renders the Preview step, the run and
+// the result. les_agent.go holds the steps, the Preview step state, the
+// run state and the helpers that the record shares with the
+// distillation record. So a paid run reads and stops the same way in
+// both workflows.
 
-// extStep is the step of one extraction record. The selection of the
-// user is the scope, so the record has no scope step. The record moves
-// forward only on an explicit key, and the paid start needs y.
-type extStep int
-
-const (
-	// extPlanning waits for the read-only preview.
-	extPlanning extStep = iota
-	// extReview shows the preview, its failure, or "nothing to extract".
-	extReview
-	// extRunning runs the reviewed preview.
-	extRunning
-	// extResult shows the outcome of the run.
-	extResult
-)
-
-// extSteps names the steps of the stepper at the right of the context
-// line.
-var extSteps = []string{"Review", "Run", "Result"}
-
-// stepper returns the stepper position of the step.
-func (s extStep) stepper() int {
-	switch s {
-	case extPlanning, extReview:
-		return 0
-	case extRunning:
-		return 1
-	default:
-		return 2
-	}
-}
-
-// extKeys are the letter keys of an extraction record. The other keys
-// come from nkeys, so every list moves the same way. The record binds
-// no switch key of Lessons (p, m, s, e, u) and no bracket, because the
-// Run sub-view uses them.
+// extKeys are the letter keys of an extraction record that a
+// distillation does not bind; agentKeys holds the shared letters. The
+// other keys come from nkeys, so every list moves the same way. The
+// record binds no switch key of Lessons (p, m, s, e, u) and no bracket,
+// because the Run sub-view uses them.
 var extKeys = struct {
-	Start, Stop, Remaining, Link key.Binding
+	Remaining key.Binding
 }{
-	Start: key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "start run")),
-	Stop:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop")),
 	// Remaining prepares a new preview of the open questions. It never
 	// starts work: the new review needs its own y.
 	Remaining: key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "prepare remaining")),
-	// Link opens the place that fixes a blocker. It only navigates.
-	Link: key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open")),
-}
-
-// extPlan is the read-only preview and its review state.
-type extPlan struct {
-	// seq drops the result of a plan that the record left.
-	seq generation
-
-	preview *learning.ExtractPreview
-	err     error
-	// stale is the refusal of a run that did not start, or a settings
-	// save after the preview. Only a new preview helps.
-	stale error
-	// preset is true when the command is a registered preset, not a
-	// custom agent.argv.
-	preset bool
-
-	// cursor is the planned item under the cursor, in send order.
-	cursor int
-	follow bool
-	items  scrollState
-	notes  scrollState
-	// planFocus gives the keys to the Plan pane in the wide layout;
-	// itemsOpen shows the Proposals pane in the compact layout.
-	planFocus bool
-	itemsOpen bool
-}
-
-// extRun is the progress and the outcome of one run.
-type extRun struct {
-	started time.Time
-
-	// batches are parallel to the planned batches. Each item starts as
-	// unattempted and changes with the done event of its batch.
-	batches []distill.ExtractBatchOutcome
-	// finished counts the batches with a done event.
-	finished int
-	// sending is the batch whose agent call runs; -1 when none.
-	sending int
-	// checked reports that the start checks passed: the first batch
-	// event proves it.
-	checked bool
-	stopped *distill.ExtractEvent
-
-	activity []string
-
-	stopAsk  bool
-	stopping bool
-	// stopAt is the batch that ran when the user asked to stop; -1 when
-	// no batch ran.
-	stopAt int
-
-	exec  *distill.ExtractExecution
-	err   error
-	ended time.Time
-	// internal reports a run that ended on an internal error after its
-	// work began. The service sent no final outcome, so the result comes
-	// from the events that arrived.
-	internal bool
-	// lost is the batch whose agent call ran when the internal error
-	// ended the run; -1 when none ran. Its result is not known.
-	lost int
-
-	// cursor is the item under the cursor, in send order.
-	cursor int
-	follow bool
-	// moved is true after the user moved the cursor. Until then the
-	// cursor follows the batch that runs, and the result puts it on the
-	// first item that needs attention.
-	moved    bool
-	items    scrollState
-	summary  scrollState
-	sumFocus bool
-	// detail shows the Proposals pane in the compact layout.
-	detail bool
 }
 
 // extRecord is one trigger extraction of this session, from the review
@@ -166,9 +57,10 @@ type extRecord struct {
 	// key for them.
 	browsed bool
 
-	step extStep
-	plan extPlan
-	run  extRun
+	// step is never stepScope: the selection of the user is the scope.
+	step runStep
+	prev agentPreview[learning.ExtractPreview]
+	run  agentProgress[distill.ExtractExecution, distill.ExtractBatchOutcome]
 
 	// warned is the time of the last refusal message of the record. A
 	// plan or a start that succeeds soon after clears that message.
@@ -179,18 +71,18 @@ type extRecord struct {
 // record plans in opened, when the Run sub-view accepts it, because
 // only the current record gets messages.
 func newExtractRecord(st *state, req learning.ExtractRequest) *extRecord {
-	r := &extRecord{st: st, req: req, step: extPlanning}
-	r.run.sending, r.run.stopAt, r.run.lost = -1, -1, -1
-
-	return r
+	return &extRecord{
+		st: st, req: req, step: stepPreparing,
+		run: idleAgentProgress[distill.ExtractExecution, distill.ExtractBatchOutcome](),
+	}
 }
 
 // active reports work that runs now.
-func (r *extRecord) active() bool { return r.step == extRunning }
+func (r *extRecord) active() bool { return r.step == stepRunning }
 
 // draft reports a record that started no work yet. The Run sub-view
 // drops a replaced draft, so a review leaves no trace in the history.
-func (r *extRecord) draft() bool { return r.step < extRunning }
+func (r *extRecord) draft() bool { return r.step < stepRunning }
 
 // title names the record by the size of its selection.
 func (r *extRecord) title() string {
@@ -218,43 +110,22 @@ func (r *extRecord) capturing() bool { return r.run.stopAsk }
 // opened starts the read-only preview once the Run sub-view accepts the
 // record.
 func (r *extRecord) opened() tea.Cmd {
-	if r.step != extPlanning || r.plan.seq.started() {
+	if r.step != stepPreparing || r.prev.seq.started() {
 		return nil
 	}
 
 	return r.startPlan()
 }
 
-// extPlannedMsg carries a preview result. seq drops the result of a
-// plan that the record left.
-type extPlannedMsg struct {
-	rec     *extRecord
-	seq     int
-	preview *learning.ExtractPreview
-	err     error
-	preset  bool
-}
-
-// extEventMsg carries one typed progress event of a run. ch lets the
-// receiver wait for the next message.
-type extEventMsg struct {
-	rec *extRecord
-	ch  <-chan tea.Msg
-	ev  distill.ExtractEvent
-	at  time.Time
-}
-
-// extDoneMsg carries the end of a run. exec is nil when the service
-// refused the preview before any work, or when the run panicked.
-// panicked tells the two apart, because a panic can come after paid
-// agent calls and saved answers.
-type extDoneMsg struct {
-	rec      *extRecord
-	exec     *distill.ExtractExecution
-	err      error
-	panicked bool
-	at       time.Time
-}
+// The messages of a trigger extraction: a preview result, a progress
+// event, and the end of a run. les_agent.go explains their fields. A
+// preview result leaves cwd empty, because the preview names its own
+// directory.
+type (
+	extPlannedMsg = agentPlannedMsg[learning.ExtractPreview]
+	extEventMsg   = agentEventMsg[distill.ExtractEvent]
+	extDoneMsg    = agentDoneMsg[distill.ExtractExecution]
+)
 
 // focusProposalMsg asks the Proposals sub-view to show proposal id in
 // the list of its state. A result row of an extraction sends it with
@@ -285,7 +156,7 @@ func (r *extRecord) update(msg tea.Msg) tea.Cmd {
 			r.event(msg)
 		}
 
-		return distWait(msg.ch)
+		return agentWait(msg.ch)
 	case extDoneMsg:
 		if msg.rec == r {
 			return r.done(msg)
@@ -308,7 +179,7 @@ func (r *extRecord) warn(text string) tea.Cmd {
 // a start succeeds. An older refusal is gone already, and a clear would
 // remove another message.
 func (r *extRecord) settle() tea.Cmd {
-	if r.warned.IsZero() || time.Since(r.warned) > distWarnTTL {
+	if r.warned.IsZero() || time.Since(r.warned) > agentWarnTTL {
 		return nil
 	}
 
@@ -321,10 +192,10 @@ func (r *extRecord) settle() tea.Cmd {
 // reads the index, the pins and the configuration; it never runs the
 // agent and never stamps a row.
 func (r *extRecord) startPlan() tea.Cmd {
-	r.plan = extPlan{seq: r.plan.seq}
-	r.step = extPlanning
+	r.prev = agentPreview[learning.ExtractPreview]{seq: r.prev.seq}
+	r.step = stepPreparing
 
-	seq := r.plan.seq.start()
+	seq := r.prev.seq.start()
 	req := r.req
 
 	var svc Learning = r.st.svc
@@ -337,7 +208,7 @@ func (r *extRecord) startPlan() tea.Cmd {
 		// The preset list is read here, in the background, because View
 		// and Update do no I/O.
 		if p != nil {
-			msg.preset = slices.Contains(integration.Builtin().InvocationIDs(), p.Invocation.Name)
+			msg.preset = isPreset(p.Invocation.Name)
 		}
 
 		return msg
@@ -346,19 +217,19 @@ func (r *extRecord) startPlan() tea.Cmd {
 
 // planned shows a preview result.
 func (r *extRecord) planned(msg extPlannedMsg) tea.Cmd {
-	if !r.plan.seq.current(msg.seq) || r.step != extPlanning {
+	if !r.prev.seq.current(msg.seq) || r.step != stepPreparing {
 		return nil
 	}
 
-	r.step = extReview
-	r.plan.preview, r.plan.err, r.plan.preset = msg.preview, msg.err, msg.preset
-	r.plan.follow = true
+	r.step = stepPreview
+	r.prev.preview, r.prev.err, r.prev.preset = msg.preview, msg.err, msg.preset
+	r.prev.follow = true
 
 	if msg.err == nil && msg.preview == nil {
-		r.plan.err = errors.New("the planner returned no preview")
+		r.prev.err = errors.New("the planner returned no preview")
 	}
 
-	if r.plan.err != nil {
+	if r.prev.err != nil {
 		return nil
 	}
 
@@ -368,7 +239,7 @@ func (r *extRecord) planned(msg extPlannedMsg) tea.Cmd {
 // plannedItems returns the planned items in send order with their
 // batch.
 func (r *extRecord) plannedItems() []extItemRef {
-	p := r.plan.preview
+	p := r.prev.preview
 	if p == nil || p.Plan == nil {
 		return nil
 	}
@@ -393,9 +264,9 @@ type extItemRef struct {
 // runnable reports a ready preview that y may start: proposals to send,
 // no blocker, and no refusal of an earlier start.
 func (r *extRecord) runnable() bool {
-	p := r.plan.preview
+	p := r.prev.preview
 
-	return r.step == extReview && r.plan.err == nil && r.plan.stale == nil && p != nil && p.Plan != nil &&
+	return r.step == stepPreview && r.prev.err == nil && r.prev.stale == nil && p != nil && p.Plan != nil &&
 		!p.NoOp() && len(p.Blockers) == 0
 }
 
@@ -411,13 +282,10 @@ func (r *extRecord) start() tea.Cmd {
 		return r.warn("Another operation is running: " + r.st.mutation)
 	}
 
-	p := r.plan.preview
+	p := r.prev.preview
 	n := len(p.Plan.IDs())
 
-	// The queue holds every event that must arrive: a start and a done
-	// event per batch, the stop and the end. So the worker never blocks
-	// while nobody reads, as in the synchronous test harness.
-	ch := make(chan tea.Msg, extQueueSize(len(p.Plan.Batches)))
+	ch := agentQueue(len(p.Plan.Batches))
 
 	var svc Learning = r.st.svc
 
@@ -435,19 +303,10 @@ func (r *extRecord) start() tea.Cmd {
 		return r.warn("Another operation is running: " + r.st.mutation)
 	}
 
-	r.step = extRunning
-	r.run = extRun{started: time.Now(), sending: -1, stopAt: -1, lost: -1, follow: true}
-	r.run.batches = extOutcomes(p.Plan)
+	r.step = stepRunning
+	r.run = newAgentProgress[distill.ExtractExecution](extOutcomes(p.Plan))
 
-	return tea.Batch(work, distWait(ch), r.settle())
-}
-
-// extQueueSize returns the size of the event queue of a run of n
-// batches. The engine sends at most 2n+1 events (a start and a done
-// event per batch, one stop), and the worker sends one end message.
-// Three more slots keep a margin, as the distillation queue does.
-func extQueueSize(n int) int {
-	return 2*n + 4
+	return tea.Batch(work, agentWait(ch), r.settle())
 }
 
 // extOutcomes returns the outcomes of a plan before its run: every item
@@ -467,38 +326,20 @@ func extOutcomes(pl *distill.ExtractPlan) []distill.ExtractBatchOutcome {
 	return out
 }
 
-// extRunWork runs the preview and streams its events, then its end,
-// through ch. It runs in a command goroutine, never in Update. A panic
-// becomes a failed end, so the mutation slot always frees. The end marks
-// the panic, because work can have started before it.
+// extRunWork runs the preview with svc and streams its events, then
+// its end, through ch. Every event always arrives, because the queue
+// holds them all. agentWork turns a panic into a failed end.
 func extRunWork(ctx context.Context, svc Learning, rec *extRecord, p *learning.ExtractPreview, ch chan tea.Msg) {
-	defer close(ch)
-
-	var (
-		x        *distill.ExtractExecution
-		err      error
-		panicked bool
-	)
-
-	func() {
-		defer func() {
-			if v := recover(); v != nil {
-				x, panicked = nil, true
-				err = fmt.Errorf("panic: %v", v)
-			}
-		}()
-
-		x, err = svc.RunExtract(ctx, p, func(ev distill.ExtractEvent) {
+	agentWork(rec, ch, func() (*distill.ExtractExecution, error) {
+		return svc.RunExtract(ctx, p, func(ev distill.ExtractEvent) {
 			ch <- extEventMsg{rec: rec, ch: ch, ev: ev, at: time.Now()}
 		})
-	}()
-
-	ch <- extDoneMsg{rec: rec, exec: x, err: err, panicked: panicked, at: time.Now()}
+	})
 }
 
 // event records one progress event of the running record.
 func (r *extRecord) event(msg extEventMsg) {
-	if r.step != extRunning {
+	if r.step != stepRunning {
 		return
 	}
 
@@ -509,7 +350,7 @@ func (r *extRecord) event(msg extEventMsg) {
 	case distill.ExtractBatchStarted:
 		if !run.checked {
 			run.checked = true
-			r.log(msg.at, "plan checked: no change since the preview")
+			run.log(msg.at, "plan checked: no change since the preview")
 		}
 
 		run.sending = ev.Index
@@ -518,29 +359,28 @@ func (r *extRecord) event(msg extEventMsg) {
 			run.cursor = r.firstItemOf(ev.Index)
 		}
 
-		detail := "batch " + itoa(ev.Index+1) + " of " + itoa(len(run.batches))
+		detail := "batch " + itoa(ev.Index+1) + " of " + itoa(len(run.units))
 		r.st.updateRun(func(n *runNote) {
 			if !n.stopping {
 				n.detail = detail
 			}
 		})
 	case distill.ExtractBatchDone:
-		if ev.Batch == nil || ev.Index < 0 || ev.Index >= len(run.batches) {
+		if ev.Batch == nil || ev.Index < 0 || ev.Index >= len(run.units) {
 			return
 		}
 
-		run.batches[ev.Index] = *ev.Batch
+		run.units[ev.Index] = *ev.Batch
 		run.finished++
 		run.sending = -1
 		done := r.itemsDone()
 
 		r.st.updateRun(func(n *runNote) { n.done = done })
-		r.log(msg.at, "batch "+itoa(ev.Index+1)+" "+extBatchWords(*ev.Batch))
+		run.log(msg.at, "batch "+itoa(ev.Index+1)+" "+extBatchWords(*ev.Batch))
 	case distill.ExtractStopped:
-		stopped := ev
-		run.stopped = &stopped
+		run.stopped, run.stopWhy = true, ev.Stop
 		run.sending = -1
-		r.log(msg.at, "run ended early: "+distStopWords(ev.Stop))
+		run.log(msg.at, "run ended early: "+distStopWords(ev.Stop))
 	}
 }
 
@@ -548,7 +388,7 @@ func (r *extRecord) event(msg extEventMsg) {
 func (r *extRecord) itemsDone() int {
 	n := 0
 
-	for _, b := range r.run.batches {
+	for _, b := range r.run.units {
 		if b.Status != distill.BatchUnattempted {
 			n += len(b.Items)
 		}
@@ -562,21 +402,11 @@ func (r *extRecord) itemsDone() int {
 func (r *extRecord) firstItemOf(i int) int {
 	n := 0
 
-	for k := 0; k < i && k < len(r.run.batches); k++ {
-		n += len(r.run.batches[k].Items)
+	for k := 0; k < i && k < len(r.run.units); k++ {
+		n += len(r.run.units[k].Items)
 	}
 
 	return n
-}
-
-// log appends one activity line with its time. The lines hold typed
-// facts only, never agent output, and stay bounded.
-func (r *extRecord) log(at time.Time, line string) {
-	r.run.activity = append(r.run.activity, distClock(at)+"  "+line)
-
-	if len(r.run.activity) > distActivityKeep {
-		r.run.activity = r.run.activity[len(r.run.activity)-distActivityKeep:]
-	}
 }
 
 // done records the end of a run, frees the slot, and reloads the
@@ -585,7 +415,7 @@ func (r *extRecord) log(at time.Time, line string) {
 // helps. A run that ended without a result after its work began shows a
 // failed result from the events, because answers can be saved already.
 func (r *extRecord) done(msg extDoneMsg) tea.Cmd {
-	if r.step != extRunning {
+	if r.step != stepRunning {
 		return nil
 	}
 
@@ -602,22 +432,22 @@ func (r *extRecord) done(msg extDoneMsg) tea.Cmd {
 	case x == nil && (msg.panicked || r.run.began()):
 		x = r.salvage()
 	case x == nil:
-		r.step = extReview
-		r.plan.stale = msg.err
+		r.step = stepPreview
+		r.prev.stale = msg.err
 
-		if r.plan.stale == nil {
-			r.plan.stale = errors.New("the service returned no result")
+		if r.prev.stale == nil {
+			r.prev.stale = errors.New("the service returned no result")
 		}
 
 		return tea.Batch(mutationDone, reload, r.warn("The trigger extraction did not start: "+
-			extStaleText(r.plan.stale)+"."))
+			extStaleText(r.prev.stale)+"."))
 	}
 
 	if r.run.internal && msg.err == nil {
 		msg.err = errors.New("the service returned no result")
 	}
 
-	r.step = extResult
+	r.step = stepResult
 	r.run.exec, r.run.err, r.run.ended = x, msg.err, msg.at
 	r.run.sending = -1
 	r.run.follow = true
@@ -629,17 +459,11 @@ func (r *extRecord) done(msg extDoneMsg) tea.Cmd {
 	// The compact result opens at its top, so the verdict and its lead
 	// show first. The wide Proposals pane follows the cursor again.
 	r.run.moved = false
-	r.run.items = scrollState{}
+	r.run.list = scrollState{}
 
 	v := r.verdict()
 
 	return tea.Batch(mutationDone, reload, toast(v.tone, v.toast))
-}
-
-// began reports that the run passed its start checks: a batch event or
-// a stop event arrived.
-func (run *extRun) began() bool {
-	return run.checked || run.finished > 0 || run.stopped != nil
 }
 
 // salvage builds the result of a run that ended on an internal error
@@ -650,7 +474,7 @@ func (r *extRecord) salvage() *distill.ExtractExecution {
 	run := &r.run
 	run.internal, run.lost = true, run.sending
 
-	return &distill.ExtractExecution{Batches: slices.Clone(run.batches)}
+	return &distill.ExtractExecution{Batches: slices.Clone(run.units)}
 }
 
 // stop asks the running work to stop. The engine starts no new batch and
@@ -659,7 +483,7 @@ func (r *extRecord) salvage() *distill.ExtractExecution {
 func (r *extRecord) stop() tea.Cmd {
 	r.run.stopAsk = false
 
-	if r.step != extRunning || r.stopping() {
+	if r.step != stepRunning || r.stopping() {
 		return nil
 	}
 
@@ -676,7 +500,7 @@ func (r *extRecord) stop() tea.Cmd {
 	}
 
 	r.st.updateRun(func(n *runNote) { n.detail = detail })
-	r.log(time.Now(), "stop requested: "+detail)
+	r.run.log(time.Now(), "stop requested: "+detail)
 
 	return nil
 }
@@ -684,7 +508,7 @@ func (r *extRecord) stop() tea.Cmd {
 // stopping reports a requested stop of the running work: from the stop
 // question here, or from the quit question of the shell.
 func (r *extRecord) stopping() bool {
-	return r.run.stopping || (r.step == extRunning && r.st.run != nil && r.st.run.stopping)
+	return r.run.stopping || (r.step == stepRunning && r.st.run != nil && r.st.run.stopping)
 }
 
 // settingsSaved marks a preview out of date after a settings save. The
@@ -693,11 +517,11 @@ func (r *extRecord) stopping() bool {
 // keeps going: the engine checks the file before each batch and stops
 // with a conflict.
 func (r *extRecord) settingsSaved(msg settingsSavedMsg) {
-	if r.step != extPlanning && r.step != extReview {
+	if r.step != stepPreparing && r.step != stepPreview {
 		return
 	}
 
-	r.plan.stale = extSettingsStale{group: msg.group.String()}
+	r.prev.stale = extSettingsStale{group: msg.group.String()}
 }
 
 // extSettingsStale marks a preview that a settings save made out of
@@ -719,7 +543,7 @@ func (e extSettingsStale) Error() string {
 // the run, because another writer can dismiss or answer a row then.
 // "Prepare remaining" plans exactly these again.
 func (r *extRecord) remaining() []int64 {
-	if r.step != extResult {
+	if r.step != stepResult {
 		return nil
 	}
 
@@ -769,7 +593,7 @@ func (r *extRecord) liveRow(id int64) (row domain.Proposal, ok bool) {
 // answered during the run. An unknown row counts as open, because a new
 // preview checks every rule again.
 func (r *extRecord) closedNow(item distill.ExtractItemOutcome) (why string, closed bool) {
-	if r.step != extResult || extSaved(item) {
+	if r.step != stepResult || extSaved(item) {
 		return "", false
 	}
 
@@ -787,7 +611,7 @@ func (r *extRecord) closedNow(item distill.ExtractItemOutcome) (why string, clos
 // saved answer, when it differs from the planned status. A saved answer
 // passed its guard, so its row had the planned status at the save.
 func (r *extRecord) nowStatus(item distill.ExtractItemOutcome) (status string, changed bool) {
-	if r.step != extResult || extSaved(item) {
+	if r.step != stepResult || extSaved(item) {
 		return "", false
 	}
 
@@ -806,7 +630,7 @@ func (r *extRecord) outcomes() []distill.ExtractBatchOutcome {
 		return r.run.exec.Batches
 	}
 
-	return r.run.batches
+	return r.run.units
 }
 
 // runItems returns the items of the outcomes in send order with their
@@ -856,7 +680,7 @@ func (r *extRecord) cursorItem() (distill.ExtractItemOutcome, int, bool) {
 // a saved answer links to its proposal, whose regions can have changed.
 // The links only navigate: they never start a retarget or an apply.
 func (r *extRecord) link() (cmd tea.Cmd, name string, ok bool) {
-	if r.step != extResult {
+	if r.step != stepResult {
 		return nil, "", false
 	}
 
@@ -883,7 +707,7 @@ func (r *extRecord) link() (cmd tea.Cmd, name string, ok bool) {
 // and its name. ok is false without such a place. The index build
 // opens its own confirmation, so the link never builds anything.
 func (r *extRecord) blockerLink() (to navigateMsg, name string, ok bool) {
-	if r.step != extReview {
+	if r.step != stepPreview {
 		return navigateMsg{}, "", false
 	}
 
@@ -892,7 +716,7 @@ func (r *extRecord) blockerLink() (to navigateMsg, name string, ok bool) {
 
 	var cfg *learning.ExtractConfigError
 
-	switch err := r.plan.err; {
+	switch err := r.prev.err; {
 	case errors.As(err, &cfg) && cfg.Path == settingsFile:
 		return inference, "Settings" + arrow + "Inference", true
 	case errors.As(err, &cfg) && cfg.Path == pinfile.File:
@@ -916,7 +740,7 @@ func (r *extRecord) blockerLink() (to navigateMsg, name string, ok bool) {
 // (learning.ExtractPreview.IsWorkDirBlocker), so the review never
 // matches its text.
 func (r *extRecord) agentBlocked() bool {
-	p := r.plan.preview
+	p := r.prev.preview
 	if p == nil {
 		return false
 	}
@@ -927,31 +751,31 @@ func (r *extRecord) agentBlocked() bool {
 // key routes a key press by step.
 func (r *extRecord) key(msg tea.KeyMsg) tea.Cmd {
 	switch r.step {
-	case extPlanning:
+	case stepPreparing:
 		if key.Matches(msg, nkeys.Back) {
 			return closeRun(r)
 		}
-	case extReview:
-		return r.reviewKey(msg)
-	case extRunning:
+	case stepPreview:
+		return r.previewKey(msg)
+	case stepRunning:
 		return r.runKey(msg)
-	case extResult:
+	case stepResult:
 		return r.resultKey(msg)
 	}
 
 	return nil
 }
 
-// reviewKey handles the review. y starts only a ready preview; enter
-// plans again only when no preview can start. esc drops the review,
-// because it did no work.
-func (r *extRecord) reviewKey(msg tea.KeyMsg) tea.Cmd {
-	pl := &r.plan
+// previewKey handles the Preview step. y starts only a ready preview;
+// enter plans again only when no preview can start. esc drops the
+// record, because it did no work.
+func (r *extRecord) previewKey(msg tea.KeyMsg) tea.Cmd {
+	pl := &r.prev
 
 	switch {
-	case key.Matches(msg, extKeys.Start):
+	case key.Matches(msg, agentKeys.Start):
 		return r.start()
-	case key.Matches(msg, extKeys.Link):
+	case key.Matches(msg, agentKeys.Link):
 		if to, _, ok := r.blockerLink(); ok {
 			return navigate(to.dest, to.intent)
 		}
@@ -967,10 +791,10 @@ func (r *extRecord) reviewKey(msg tea.KeyMsg) tea.Cmd {
 		case r.st.wide():
 			pl.planFocus = !pl.planFocus
 		default:
-			pl.itemsOpen = !pl.itemsOpen
+			pl.listOpen = !pl.listOpen
 		}
 	default:
-		r.reviewMove(msg)
+		r.previewMove(msg)
 	}
 
 	return nil
@@ -978,7 +802,7 @@ func (r *extRecord) reviewKey(msg tea.KeyMsg) tea.Cmd {
 
 // hasItems reports a preview with planned items to review.
 func (r *extRecord) hasItems() bool {
-	return r.plan.err == nil && len(r.plannedItems()) > 0
+	return r.prev.err == nil && len(r.plannedItems()) > 0
 }
 
 // planKeys reports that the movement keys scroll the Plan pane: it has
@@ -989,15 +813,15 @@ func (r *extRecord) planKeys() bool {
 	}
 
 	if r.st.wide() {
-		return r.plan.planFocus
+		return r.prev.planFocus
 	}
 
-	return !r.plan.itemsOpen
+	return !r.prev.listOpen
 }
 
-// reviewMove moves the item cursor or scrolls the focused pane.
-func (r *extRecord) reviewMove(msg tea.KeyMsg) {
-	pl := &r.plan
+// previewMove moves the item cursor or scrolls the focused pane.
+func (r *extRecord) previewMove(msg tea.KeyMsg) {
+	pl := &r.prev
 
 	if r.planKeys() {
 		pl.notes.key(msg)
@@ -1005,13 +829,13 @@ func (r *extRecord) reviewMove(msg tea.KeyMsg) {
 		return
 	}
 
-	if distCursorKey(msg, &pl.cursor, len(r.plannedItems())) {
+	if cursorKey(msg, &pl.cursor, len(r.plannedItems())) {
 		pl.follow = true
 
 		return
 	}
 
-	if pl.items.key(msg) {
+	if pl.list.key(msg) {
 		pl.follow = false
 	}
 }
@@ -1022,7 +846,7 @@ func (r *extRecord) runKey(msg tea.KeyMsg) tea.Cmd {
 
 	if run.stopAsk {
 		switch {
-		case key.Matches(msg, extKeys.Start):
+		case key.Matches(msg, agentKeys.Start):
 			return r.stop()
 		case key.Matches(msg, nkeys.Back):
 			run.stopAsk = false
@@ -1031,7 +855,7 @@ func (r *extRecord) runKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	if key.Matches(msg, extKeys.Stop) {
+	if key.Matches(msg, agentKeys.Stop) {
 		if !r.stopping() {
 			run.stopAsk = true
 		}
@@ -1087,13 +911,13 @@ func (r *extRecord) runMove(msg tea.KeyMsg) {
 		return
 	}
 
-	if distCursorKey(msg, &run.cursor, len(r.runItems())) {
+	if cursorKey(msg, &run.cursor, len(r.runItems())) {
 		run.follow, run.moved = true, true
 
 		return
 	}
 
-	if run.items.key(msg) {
+	if run.list.key(msg) {
 		run.follow = false
 	}
 }
@@ -1104,21 +928,22 @@ func (r *extRecord) runMove(msg tea.KeyMsg) {
 // from the end.
 func (r *extRecord) keys() []key.Binding {
 	switch r.step {
-	case extPlanning:
+	case stepPreparing:
 		return []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
-	case extReview:
-		return r.reviewKeys()
-	case extRunning:
+	case stepPreview:
+		return r.previewKeys()
+	case stepRunning:
 		return r.runKeys()
 	default:
 		return r.resultKeys()
 	}
 }
 
-// reviewKeys names the keys of the review for its state. y shows only
-// for a ready preview, so a blocked or empty preview offers no start.
-func (r *extRecord) reviewKeys() []key.Binding {
-	pl := &r.plan
+// previewKeys names the keys of the Preview step for its state. y shows
+// only for a ready preview, so a blocked or empty preview offers no
+// start.
+func (r *extRecord) previewKeys() []key.Binding {
+	pl := &r.prev
 
 	if r.runnable() {
 		move, pane := withHelp(nkeys.Down, "↑↓", "proposal"), withHelp(nkeys.Next, "tab", "plan")
@@ -1127,7 +952,7 @@ func (r *extRecord) reviewKeys() []key.Binding {
 		}
 
 		return []key.Binding{
-			withHelp(extKeys.Start, "y", "start run"), pane, move,
+			withHelp(agentKeys.Start, "y", "start run"), pane, move,
 			withHelp(nkeys.PageDown, "pgup/pgdn", "scroll"), withHelp(nkeys.Back, "esc", "close"),
 		}
 	}
@@ -1138,7 +963,7 @@ func (r *extRecord) reviewKeys() []key.Binding {
 	}
 
 	scroll := withHelp(nkeys.Down, "↑↓", "scroll")
-	scroll.SetEnabled(pl.notes.scrolls() || pl.items.scrolls() || r.hasItems())
+	scroll.SetEnabled(pl.notes.scrolls() || pl.list.scrolls() || r.hasItems())
 
 	pane := withHelp(nkeys.Next, "tab", "pane")
 	pane.SetEnabled(r.hasItems())
@@ -1152,16 +977,16 @@ func (r *extRecord) reviewKeys() []key.Binding {
 func (r *extRecord) linkKey() key.Binding {
 	to, name, ok := r.blockerLink()
 
-	b := withHelp(extKeys.Link, "o", "open "+name)
+	b := withHelp(agentKeys.Link, "o", "open "+name)
 
 	switch {
 	case r.st.wide():
 	case to.dest == destOverview:
-		b = withHelp(extKeys.Link, "o", "overview")
+		b = withHelp(agentKeys.Link, "o", "overview")
 	case to.dest == destLessons:
-		b = withHelp(extKeys.Link, "o", "pins")
+		b = withHelp(agentKeys.Link, "o", "pins")
 	default:
-		b = withHelp(extKeys.Link, "o", "settings")
+		b = withHelp(agentKeys.Link, "o", "settings")
 	}
 
 	b.SetEnabled(ok)
@@ -1173,10 +998,10 @@ func (r *extRecord) linkKey() key.Binding {
 // stop key of a paid run survives a narrow footer.
 func (r *extRecord) runKeys() []key.Binding {
 	if r.run.stopAsk {
-		return []key.Binding{withHelp(extKeys.Start, "y", "stop the run"), withHelp(nkeys.Back, "esc", "keep running")}
+		return []key.Binding{withHelp(agentKeys.Start, "y", "stop the run"), withHelp(nkeys.Back, "esc", "keep running")}
 	}
 
-	stop := withHelp(extKeys.Stop, "x", "stop")
+	stop := withHelp(agentKeys.Stop, "x", "stop")
 	stop.SetEnabled(!r.stopping())
 
 	return []key.Binding{stop, withHelp(nkeys.Down, "↑↓", "proposal"), r.paneKey()}

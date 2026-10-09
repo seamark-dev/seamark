@@ -40,8 +40,10 @@ const captureDirEnv = "SEAMARK_TUI_CAPTURE_DIR"
 
 // captureDir returns the capture directory, or "" when the variable is
 // unset. The capture tests always run their frame checks, because a
-// frame that does not fit is a defect. Only `make tui-capture` sets the
+// frame that does not fit is a defect. `make tui-capture` sets the
 // variable and keeps the files for the visual review.
+// `make tui-capture-check` sets it to a temporary directory and compares
+// the files with a base set.
 func captureDir() string {
 	return os.Getenv(captureDirEnv)
 }

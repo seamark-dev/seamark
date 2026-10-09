@@ -103,7 +103,7 @@ func TestEvidenceRunStartsExactlyOnce(t *testing.T) {
 	}
 
 	evPress(h, les, evRefreshReviews)
-	preview := les.evid.prev.plan
+	preview := les.evid.prev.preview
 	reads := f.readCount("Learning")
 
 	h.press("y")

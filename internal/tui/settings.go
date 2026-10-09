@@ -181,7 +181,7 @@ func (s *settingsScreen) field() settings.Field {
 // keys. The radio editor does not capture, so the number keys still
 // switch the destination through the leave guard.
 func (s *settingsScreen) capturing() bool {
-	return s.prompt != nil || s.flow.stage != settingsIdle || s.ed.typing
+	return s.prompt != nil || s.flow.active() || s.ed.typing
 }
 
 // update routes the service results, the settings reloads and the keys.
@@ -210,7 +210,7 @@ func (s *settingsScreen) key(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case s.prompt != nil:
 		return s.promptKey(msg)
-	case s.flow.stage != settingsIdle:
+	case s.flow.active():
 		return s.flowKey(msg)
 	case s.snap() == nil:
 		return nil
@@ -284,7 +284,7 @@ func (s *settingsScreen) keys() []key.Binding {
 	switch {
 	case s.prompt != nil:
 		return s.promptKeys()
-	case s.flow.stage != settingsIdle:
+	case s.flow.active():
 		return s.flowActions()
 	case s.ed.typing:
 		return []key.Binding{withHelp(nkeys.Enter, "enter", "keep"), withHelp(nkeys.Back, "esc", "cancel")}
@@ -328,7 +328,7 @@ func (s *settingsScreen) leave(next destination, intent string) (tea.Cmd, bool) 
 		return nil, true
 	}
 
-	if s.flow.stage == settingsSaving {
+	if s.flow.stage == flowCommitting {
 		return nil, true
 	}
 
@@ -352,7 +352,7 @@ func (s *settingsScreen) modal(w, h int) (string, bool) {
 	switch {
 	case s.prompt != nil:
 		return s.promptView(w, h), true
-	case s.flow.stage != settingsIdle:
+	case s.flow.active():
 		return s.flowView(w, h), true
 	}
 

@@ -143,7 +143,7 @@ func TestDistillCompactResultOpensAtTheVerdict(t *testing.T) {
 	h.press("enter", "y")
 
 	rec := distRecOf(t, h)
-	require.Equal(t, distResult, rec.step)
+	require.Equal(t, stepResult, rec.step)
 	require.Equal(t, 3, rec.run.cursor, "the cursor starts on the first open group")
 
 	// The notice row also shows the verdict, so the check reads the box
@@ -187,13 +187,13 @@ func TestDistillBarCountsSavedGroupsOnly(t *testing.T) {
 	}
 
 	// A result has no bar: its table and counts tell each outcome apart.
-	x := distExec(rec.plan.preview, func(gs []distill.GroupOutcome, _ *distill.Execution) {
+	x := distExec(rec.prev.preview, func(gs []distill.GroupOutcome, _ *distill.Execution) {
 		for i := range gs {
 			distFail(&gs[i], distill.FailAgent, errors.New("not logged in"))
 		}
 	})
 	h.send(distDoneMsg{rec: rec, exec: x, at: time.Now()})
-	require.Equal(t, distResult, rec.step)
+	require.Equal(t, stepResult, rec.step)
 
 	bar := h.m.st.theme.Glyphs.BarFull
 
@@ -245,9 +245,9 @@ func TestDistillPanicAfterWorkShowsAFailedResult(t *testing.T) {
 	h.press("enter", "y")
 
 	rec := distRecOf(t, h)
-	require.Equal(t, distResult, rec.step, "work began, so the record shows a result, not the review")
+	require.Equal(t, stepResult, rec.step, "work began, so the record shows a result, not the review")
 	assert.False(t, h.m.st.busy(), "the slot frees")
-	assert.Nil(t, rec.plan.stale)
+	assert.Nil(t, rec.prev.stale)
 
 	ids, _, at := rec.generated()
 	assert.Equal(t, []int64{31, 32}, ids, "the saved proposals stay reviewable")
@@ -286,7 +286,7 @@ func TestDistillPanicBeforeAnyEventNeverClaimsASafeCleanup(t *testing.T) {
 	h.press("enter", "y")
 
 	rec := distRecOf(t, h)
-	require.Equal(t, distResult, rec.step, "a panic is a failed run, never a refused start")
+	require.Equal(t, stepResult, rec.step, "a panic is a failed run, never a refused start")
 	assert.False(t, h.m.st.busy())
 
 	flat := distTallFlat(h)

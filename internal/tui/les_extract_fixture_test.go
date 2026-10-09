@@ -274,11 +274,11 @@ func extStartHeld(t *testing.T, h *harness) *extRecord {
 	t.Helper()
 
 	rec := extRecOf(t, h)
-	require.Equal(t, extReview, rec.step)
+	require.Equal(t, stepPreview, rec.step)
 	require.True(t, rec.runnable())
 
 	require.NotNil(t, rec.start(), "start returns the worker and the wait")
-	require.Equal(t, extRunning, rec.step)
+	require.Equal(t, stepRunning, rec.step)
 
 	return rec
 }
@@ -290,12 +290,12 @@ func extSend(h *harness, rec *extRecord, ev distill.ExtractEvent) {
 
 // extStartedEv builds the start event of batch i.
 func extStartedEv(rec *extRecord, i int) distill.ExtractEvent {
-	return distill.ExtractEvent{Kind: distill.ExtractBatchStarted, Index: i, Total: len(rec.run.batches)}
+	return distill.ExtractEvent{Kind: distill.ExtractBatchStarted, Index: i, Total: len(rec.run.units)}
 }
 
 // extDoneEv builds the done event of batch i with outcome b.
 func extDoneEv(rec *extRecord, i int, b distill.ExtractBatchOutcome) distill.ExtractEvent {
-	return distill.ExtractEvent{Kind: distill.ExtractBatchDone, Index: i, Total: len(rec.run.batches), Batch: &b}
+	return distill.ExtractEvent{Kind: distill.ExtractBatchDone, Index: i, Total: len(rec.run.units), Batch: &b}
 }
 
 // extThreeBatches is the run fixture: the five rows in batches of two,
@@ -314,7 +314,7 @@ func extMidRun(t *testing.T, h *harness) *extRecord {
 
 	rec := extStartHeld(t, h)
 
-	b := rec.run.batches[0]
+	b := rec.run.units[0]
 	extAnswered(&b)
 	extStored(&b.Items[0], "internal/index/schema.go")
 	extNegative(&b.Items[1], true)

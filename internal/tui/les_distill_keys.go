@@ -13,37 +13,34 @@ import (
 // the footer. The paid start and the cleanup take y from a preview,
 // never enter (contracts §3.3).
 
-// distKeys are the letter keys of a distillation record. The other keys
-// come from nkeys, so every list moves the same way. p, s, e and u stay
-// free, because Lessons switches its sub-views with them.
+// distKeys are the letter keys of a distillation record that an
+// extraction does not bind; agentKeys holds the shared letters. The
+// other keys come from nkeys, so every list moves the same way. The
+// switch keys of Lessons (p, m, s, e, u) stay free, because Lessons
+// switches its sub-views with them.
 var distKeys = struct {
-	Region, Start, Back, Stop, Cleanup, About, Link key.Binding
+	Region, Back, Cleanup, About key.Binding
 }{
 	Region:  key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "region")),
-	Start:   key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "start run")),
 	Back:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "back")),
-	Stop:    key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop")),
 	Cleanup: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "clean up")),
 	About:   key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "about")),
-	// Link opens the place that fixes a blocker, for example Settings ›
-	// Inference. It only navigates; the fix stays a separate action.
-	Link: key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open")),
 }
 
 // key routes a key press by step.
 func (d *distRecord) key(msg tea.KeyMsg) tea.Cmd {
 	switch d.step {
-	case distScope:
+	case stepScope:
 		return d.scopeKey(msg)
-	case distPlanning:
+	case stepPreparing:
 		if key.Matches(msg, nkeys.Back, distKeys.Back) {
 			d.backToScope(ToneNeutral, "")
 		}
-	case distReview:
-		return d.reviewKey(msg)
-	case distRunning:
+	case stepPreview:
+		return d.previewKey(msg)
+	case stepRunning:
 		return d.runKey(msg)
-	case distResult:
+	case stepResult:
 		return d.resultKey(msg)
 	}
 
@@ -88,7 +85,7 @@ func (d *distRecord) scopeKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	switch {
-	case key.Matches(msg, distKeys.Link):
+	case key.Matches(msg, agentKeys.Link):
 		return d.follow()
 	case key.Matches(msg, nkeys.Up):
 		f.row = max(0, f.row-1)
@@ -112,7 +109,7 @@ func (d *distRecord) scopeKey(msg tea.KeyMsg) tea.Cmd {
 
 // editKey handles an open input: enter keeps the value, esc restores
 // the value from before the edit.
-func (d *distRecord) editKey(msg tea.KeyMsg, in *propInput, was *string, open *bool) tea.Cmd {
+func (d *distRecord) editKey(msg tea.KeyMsg, in *lineInput, was *string, open *bool) tea.Cmd {
 	switch {
 	case key.Matches(msg, nkeys.Enter):
 		*open = false
@@ -165,19 +162,19 @@ func (d *distRecord) blockerLink() (to navigateMsg, name string, ok bool) {
 	arrow := " " + d.st.theme.Glyphs.Arrow + " "
 
 	switch d.step {
-	case distScope:
+	case stepScope:
 		if d.agentBlock() != "" {
 			return inference, "Settings" + arrow + "Inference", true
 		}
-	case distReview:
+	case stepPreview:
 		var cfg *learning.DistillConfigError
 
-		switch err := d.plan.err; {
+		switch err := d.prev.err; {
 		case errors.As(err, &cfg) && cfg.Path == settingsFile:
 			return inference, "Settings" + arrow + "Inference", true
 		case errors.Is(err, learning.ErrDistillNotReady):
 			return navigateMsg{dest: destOverview, intent: ovIntentBuild}, "Overview" + arrow + "build", true
-		case err == nil && d.plan.preview != nil && len(d.plan.preview.Blockers) > 0:
+		case err == nil && d.prev.preview != nil && len(d.prev.preview.Blockers) > 0:
 			return inference, "Settings" + arrow + "Inference", true
 		}
 	}
@@ -201,14 +198,14 @@ func (d *distRecord) follow() tea.Cmd {
 func (d *distRecord) linkKey() key.Binding {
 	to, name, ok := d.blockerLink()
 
-	b := withHelp(distKeys.Link, "o", "open "+name)
+	b := withHelp(agentKeys.Link, "o", "open "+name)
 
 	switch {
 	case d.st.wide():
 	case to.dest == destOverview:
-		b = withHelp(distKeys.Link, "o", "overview")
+		b = withHelp(agentKeys.Link, "o", "overview")
 	default:
-		b = withHelp(distKeys.Link, "o", "settings")
+		b = withHelp(agentKeys.Link, "o", "settings")
 	}
 
 	b.SetEnabled(ok)
@@ -223,32 +220,32 @@ func (d *distRecord) close() tea.Cmd {
 	return tea.Batch(closeRun(d), navigate(destLessons, "evidence"))
 }
 
-// reviewKey handles the plan review. y starts only a ready preview;
+// previewKey handles the Preview step. y starts only a ready preview;
 // enter plans again only when no preview can start.
-func (d *distRecord) reviewKey(msg tea.KeyMsg) tea.Cmd {
-	pl := &d.plan
+func (d *distRecord) previewKey(msg tea.KeyMsg) tea.Cmd {
+	pl := &d.prev
 
-	if pl.cleanAsk {
+	if d.clean.ask {
 		switch {
-		case key.Matches(msg, distKeys.Start):
+		case key.Matches(msg, agentKeys.Start):
 			return d.cleanup()
 		case key.Matches(msg, nkeys.Back):
-			pl.cleanAsk = false
+			d.clean.ask = false
 		default:
-			pl.cleanSc.key(msg)
+			d.clean.scroll.key(msg)
 		}
 
 		return nil
 	}
 
-	if pl.cleaning {
+	if d.clean.running {
 		return nil
 	}
 
 	switch {
-	case key.Matches(msg, distKeys.Start):
+	case key.Matches(msg, agentKeys.Start):
 		return d.start()
-	case key.Matches(msg, distKeys.Link):
+	case key.Matches(msg, agentKeys.Link):
 		return d.follow()
 	case key.Matches(msg, distKeys.Back):
 		d.backToScope(ToneNeutral, "")
@@ -260,8 +257,8 @@ func (d *distRecord) reviewKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case key.Matches(msg, distKeys.Cleanup):
 		if d.cleanable() {
-			pl.cleanAsk = true
-			pl.cleanSc = scrollState{}
+			d.clean.ask = true
+			d.clean.scroll = scrollState{}
 		}
 	case key.Matches(msg, nkeys.Next, nkeys.Prev):
 		switch {
@@ -269,10 +266,10 @@ func (d *distRecord) reviewKey(msg tea.KeyMsg) tea.Cmd {
 		case d.st.wide():
 			pl.planFocus = !pl.planFocus
 		default:
-			pl.groupsOpen = !pl.groupsOpen
+			pl.listOpen = !pl.listOpen
 		}
 	default:
-		d.reviewMove(msg)
+		d.previewMove(msg)
 	}
 
 	return nil
@@ -286,29 +283,29 @@ func (d *distRecord) planKeys() bool {
 	}
 
 	if d.st.wide() {
-		return d.plan.planFocus
+		return d.prev.planFocus
 	}
 
-	return !d.plan.groupsOpen
+	return !d.prev.listOpen
 }
 
 // cleanable reports a cleanup-only plan whose cleanup did not run yet.
 func (d *distRecord) cleanable() bool {
-	p := d.plan.preview
+	p := d.prev.preview
 
-	return d.plan.err == nil && p != nil && p.CleanupOnly() && !d.plan.cleaned && !d.plan.cleaning
+	return d.prev.err == nil && p != nil && p.CleanupOnly() && !d.clean.done && !d.clean.running
 }
 
 // hasGroups reports a preview with groups to review.
 func (d *distRecord) hasGroups() bool {
-	p := d.plan.preview
+	p := d.prev.preview
 
-	return d.plan.err == nil && p != nil && p.Plan != nil && len(p.Plan.Groups) > 0
+	return d.prev.err == nil && p != nil && p.Plan != nil && len(p.Plan.Groups) > 0
 }
 
-// reviewMove moves the group cursor or scrolls the focused pane.
-func (d *distRecord) reviewMove(msg tea.KeyMsg) {
-	pl := &d.plan
+// previewMove moves the group cursor or scrolls the focused pane.
+func (d *distRecord) previewMove(msg tea.KeyMsg) {
+	pl := &d.prev
 
 	if d.planKeys() {
 		pl.notes.key(msg)
@@ -316,13 +313,13 @@ func (d *distRecord) reviewMove(msg tea.KeyMsg) {
 		return
 	}
 
-	if distCursorKey(msg, &pl.cursor, len(pl.preview.Plan.Groups)) {
+	if cursorKey(msg, &pl.cursor, len(pl.preview.Plan.Groups)) {
 		pl.follow = true
 
 		return
 	}
 
-	if pl.groups.key(msg) {
+	if pl.list.key(msg) {
 		pl.follow = false
 	}
 }
@@ -333,7 +330,7 @@ func (d *distRecord) runKey(msg tea.KeyMsg) tea.Cmd {
 
 	if r.stopAsk {
 		switch {
-		case key.Matches(msg, distKeys.Start):
+		case key.Matches(msg, agentKeys.Start):
 			return d.stop()
 		case key.Matches(msg, nkeys.Back):
 			r.stopAsk = false
@@ -343,7 +340,7 @@ func (d *distRecord) runKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	switch {
-	case key.Matches(msg, distKeys.Stop):
+	case key.Matches(msg, agentKeys.Stop):
 		if !d.stopping() {
 			r.stopAsk = true
 		}
@@ -364,7 +361,7 @@ func (d *distRecord) resultKey(msg tea.KeyMsg) tea.Cmd {
 			return navigate(destLessons, "proposals:run")
 		}
 	case key.Matches(msg, distKeys.Back):
-		return openRun(newDistillFrom(d.st, d.plan.req), true)
+		return openRun(newDistillFrom(d.st, d.req), true)
 	case key.Matches(msg, nkeys.Back):
 		return navigate(destLessons, "evidence")
 	default:
@@ -395,43 +392,28 @@ func (d *distRecord) runMove(msg tea.KeyMsg) {
 		return
 	}
 
-	if distCursorKey(msg, &r.cursor, len(d.outcomes())) {
+	if cursorKey(msg, &r.cursor, len(d.outcomes())) {
 		r.follow, r.moved = true, true
 
 		return
 	}
 
-	if r.groups.key(msg) {
+	if r.list.key(msg) {
 		r.follow = false
 	}
-}
-
-// distCursorKey moves a cursor over n rows with the arrow keys and
-// reports whether the key was one of them.
-func distCursorKey(msg tea.KeyMsg, cursor *int, n int) bool {
-	switch {
-	case key.Matches(msg, nkeys.Up):
-		*cursor = max(0, *cursor-1)
-	case key.Matches(msg, nkeys.Down):
-		*cursor = max(0, min(n-1, *cursor+1))
-	default:
-		return false
-	}
-
-	return true
 }
 
 // keys returns the footer keys of the current step. The Run sub-view
 // adds the sub-view switch keys while the record does not capture.
 func (d *distRecord) keys() []key.Binding {
 	switch d.step {
-	case distScope:
+	case stepScope:
 		return d.scopeKeys()
-	case distPlanning:
+	case stepPreparing:
 		return []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
-	case distReview:
-		return d.reviewKeys()
-	case distRunning:
+	case stepPreview:
+		return d.previewKeys()
+	case stepRunning:
 		return d.runKeys()
 	default:
 		return d.resultKeys()
@@ -470,14 +452,14 @@ func (d *distRecord) scopeKeys() []key.Binding {
 	}
 }
 
-// reviewKeys names the keys of the plan review for its state.
-func (d *distRecord) reviewKeys() []key.Binding {
-	pl := &d.plan
+// previewKeys names the keys of the Preview step for its state.
+func (d *distRecord) previewKeys() []key.Binding {
+	pl := &d.prev
 
 	switch {
-	case pl.cleanAsk:
-		return []key.Binding{withHelp(distKeys.Start, "y", "remove"), withHelp(nkeys.Back, "esc", "keep")}
-	case pl.cleaning:
+	case d.clean.ask:
+		return []key.Binding{withHelp(agentKeys.Start, "y", "remove"), withHelp(nkeys.Back, "esc", "keep")}
+	case d.clean.running:
 		return nil
 	case d.runnable():
 		move, pane := withHelp(nkeys.Down, "↑↓", "group"), withHelp(nkeys.Next, "tab", "plan")
@@ -488,7 +470,7 @@ func (d *distRecord) reviewKeys() []key.Binding {
 		// y comes first, so it survives when a narrow footer drops
 		// hints from the end.
 		return []key.Binding{
-			withHelp(distKeys.Start, "y", "start run"), withHelp(distKeys.Back, "n", "back"), pane, move,
+			withHelp(agentKeys.Start, "y", "start run"), withHelp(distKeys.Back, "n", "back"), pane, move,
 			withHelp(nkeys.PageDown, "pgup/pgdn", "scroll"), withHelp(nkeys.Back, "esc", "cancel"),
 		}
 	case d.cleanable():
@@ -516,10 +498,10 @@ func (d *distRecord) reviewKeys() []key.Binding {
 // one short hint fits (design map §6).
 func (d *distRecord) runKeys() []key.Binding {
 	if d.run.stopAsk {
-		return []key.Binding{withHelp(distKeys.Start, "y", "stop the run"), withHelp(nkeys.Back, "esc", "keep running")}
+		return []key.Binding{withHelp(agentKeys.Start, "y", "stop the run"), withHelp(nkeys.Back, "esc", "keep running")}
 	}
 
-	stop := withHelp(distKeys.Stop, "x", "stop")
+	stop := withHelp(agentKeys.Stop, "x", "stop")
 	stop.SetEnabled(!d.stopping())
 
 	return []key.Binding{stop, withHelp(nkeys.Down, "↑↓", "group"), d.paneKey()}

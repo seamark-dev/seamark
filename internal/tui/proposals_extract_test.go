@@ -40,7 +40,7 @@ func propExtractFake(reqs *[]learning.ExtractRequest) *fakeServices {
 func propDetailText(h *harness) string {
 	p := lesProps(h)
 
-	cur, ok := p.current(p.rows())
+	cur, ok := p.cursorRow(p.rows())
 	if !ok {
 		return ""
 	}
@@ -110,7 +110,7 @@ func TestProposalsExtractKeyOpensTheReviewOfTheSelection(t *testing.T) {
 	require.Len(t, reqs, 1)
 	assert.Equal(t, []int64{1}, reqs[0].IDs)
 	assert.Equal(t, lesRun, hookLessons(h).sub, "the review opens in Lessons › Run")
-	assert.Equal(t, extReview, extRecOf(t, h).step)
+	assert.Equal(t, stepPreview, extRecOf(t, h).step)
 	assert.Zero(t, f.callCount("RunExtract"), "t only previews")
 
 	// Marked rows replace the cursor row, ineligible ones included: the

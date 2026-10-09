@@ -451,80 +451,23 @@ func (f propState) label() string {
 	}
 }
 
-// propStage is the step of a decision modal.
-type propStage int
-
-const (
-	// propStagePreparing waits for the preview.
-	propStagePreparing propStage = iota + 1
-	// propStagePreview shows the preview or its failure.
-	propStagePreview
-	// propStageCommitting waits for the commit. It cannot stop.
-	propStageCommitting
-	// propStageResult shows the commit outcome.
-	propStageResult
-)
-
-// lesScroll is the vertical position of one scrollable text. The view
-// records the page size and the last offset, because the key handler
-// cannot know how tall the rendered text is.
-type lesScroll struct {
-	off  int
-	page int
-	last int
-}
-
-// by moves the position by delta lines inside the recorded bounds.
-func (sc *lesScroll) by(delta int) {
-	sc.off = max(0, min(sc.off+delta, sc.last))
-}
-
-// key applies a movement key and reports whether the key was one.
-func (sc *lesScroll) key(msg tea.KeyMsg) bool {
-	page := max(1, sc.page)
-
-	switch {
-	case key.Matches(msg, nkeys.Up):
-		sc.by(-1)
-	case key.Matches(msg, nkeys.Down):
-		sc.by(1)
-	case key.Matches(msg, nkeys.PageUp):
-		sc.by(-page)
-	case key.Matches(msg, nkeys.PageDown):
-		sc.by(page)
-	case key.Matches(msg, nkeys.Top):
-		sc.off = 0
-	case key.Matches(msg, nkeys.Bottom):
-		sc.off = sc.last
-	default:
-		return false
-	}
-
-	return true
-}
-
-// scrolls reports text that is taller than its window.
-func (sc *lesScroll) scrolls() bool {
-	return sc.last > 0
-}
-
-// propDecision is one decision in progress: the request, the preview,
-// and the commit outcome. It lives only while its modal is open.
+// propDecision is one decision in progress: the request, the preview
+// flow, and the commit outcome. It lives only while its modal is open,
+// so nil closes it and the flow never uses flowClosed.
 type propDecision struct {
-	stage  propStage
+	previewFlow[proposals.Preview]
+
 	action proposals.Action
 	ids    []int64
 	// implicit is true when the cursor row stands in for an empty
 	// selection. The preview says so, because the user did not mark it.
 	implicit bool
 
-	pv  *proposals.Preview
-	err error // the preview failure, or the commit refusal
-
-	committed bool
-	res       proposals.Result
-
-	scroll lesScroll
+	// res and refusal are the outcome of the commit. A refusal means
+	// that nothing was written. It is not the read failure err of the
+	// flow, which the Preview stage shows.
+	res     proposals.Result
+	refusal error
 }
 
 // propPreviewMsg carries a preview result. seq drops the result of a
@@ -543,22 +486,17 @@ type propCommitMsg struct {
 }
 
 // propView is the Lessons → Proposals sub-view: filters, the list, the
-// detail pane, and the decision modals.
+// detail pane, and the decision modals. The embedded listPane holds the
+// cursor, the focus and the detail scroll, and filterInput holds the
+// region input.
 type propView struct {
+	listPane[domain.Proposal, int64]
+	filterInput
+
 	st *state
 
-	filter  propState
-	region  string
-	input   propInput
-	editing bool
-
-	list     listState
-	cursorID int64
-	// focusDetail is the focused pane in the wide layout and the shown
-	// pane in the narrow layout. Resize keeps it.
-	focusDetail bool
-	detail      lesScroll
-	detailID    int64
+	filter propState
+	region string
 
 	// selected holds the multi-selection by proposal ID. IDs survive a
 	// refresh only while the proposal stays pending and visible.
@@ -575,21 +513,22 @@ type propView struct {
 	// run holds the proposals of one run of this session for the run
 	// filter; nil without a run filter.
 	run *propRunFilter
-	// visible reports that the list is on screen. A refresh reports a
-	// lost cursor row only then, because the note names the list that
-	// the user sees. nil means always visible.
-	visible func() bool
 
+	// dec is the open decision modal; nil when no modal is open. seq
+	// drops the preview of a decision that the user left. It lives on
+	// the view, because each decision is a new value.
 	dec *propDecision
 	seq generation
-
-	// listH comes from the last render, so page keys move by the rows
-	// that the user sees.
-	listH int
 }
 
+// newPropView builds the Proposals sub-view over the shared state. The
+// list is always visible until lessons.go sets visible.
 func newPropView(st *state) *propView {
 	return &propView{
+		listPane: listPane[domain.Proposal, int64]{
+			wide:  st.wide,
+			ident: func(pr domain.Proposal) int64 { return pr.ID },
+		},
 		st:       st,
 		selected: map[int64]bool{},
 		acted:    map[int64]bool{},
@@ -599,7 +538,7 @@ func newPropView(st *state) *propView {
 
 // capturing reports the region input or an open decision modal.
 func (p *propView) capturing() bool {
-	return p.editing || p.dec != nil
+	return p.editing != filterNone || p.dec != nil
 }
 
 // ledger returns the current ledger snapshot, or nil.
@@ -666,51 +605,6 @@ func propByID(a, b domain.Proposal) int {
 	}
 }
 
-// current returns the proposal under the cursor.
-func (p *propView) current(rows []domain.Proposal) (domain.Proposal, bool) {
-	if len(rows) == 0 {
-		return domain.Proposal{}, false
-	}
-
-	p.list.clamp(len(rows), 0)
-
-	return rows[p.list.cursor], true
-}
-
-// syncCursorID records the proposal under the cursor, so a refresh can
-// find the same proposal again by identity. An empty list records no
-// proposal. Else a refresh would report the last lost row again and
-// again, because it never comes back.
-func (p *propView) syncCursorID(rows []domain.Proposal) {
-	p.cursorID = 0
-
-	if cur, ok := p.current(rows); ok {
-		p.cursorID = cur.ID
-	}
-}
-
-// relocate puts the cursor on the recorded proposal when it is visible.
-// Else a refresh keeps the cursor position, which shows the neighbor of
-// the lost row, and a filter change starts at the first row. It
-// reports whether the proposal was found.
-func (p *propView) relocate(rows []domain.Proposal, keepPosition bool) bool {
-	for i, pr := range rows {
-		if pr.ID == p.cursorID {
-			p.list.cursor = i
-
-			return true
-		}
-	}
-
-	if !keepPosition {
-		p.list.cursor, p.list.offset = 0, 0
-	}
-
-	p.syncCursorID(rows)
-
-	return false
-}
-
 // selectedIDs returns the selection in ascending order.
 func (p *propView) selectedIDs() []int64 {
 	ids := make([]int64, 0, len(p.selected))
@@ -735,7 +629,7 @@ func (p *propView) targets() (ids []int64, implicit bool) {
 		return p.selectedIDs(), false
 	}
 
-	if cur, ok := p.current(p.rows()); ok {
+	if cur, ok := p.cursorRow(p.rows()); ok {
 		return []int64{cur.ID}, true
 	}
 
@@ -746,7 +640,7 @@ func (p *propView) targets() (ids []int64, implicit bool) {
 // link. A switch is a filter change, so it clears the selection too.
 // The link means every pending proposal, so it also ends a run filter.
 func (p *propView) showPending() tea.Cmd {
-	if (p.filter == propPending && p.run == nil) || p.dec != nil || p.editing {
+	if (p.filter == propPending && p.run == nil) || p.dec != nil || p.editing != filterNone {
 		return nil
 	}
 
@@ -760,7 +654,7 @@ func (p *propView) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case p.editing:
+		case p.editing != filterNone:
 			return p.editKey(msg)
 		case p.dec != nil:
 			return p.decisionKey(msg)
@@ -791,8 +685,8 @@ func (p *propView) update(msg tea.Msg) tea.Cmd {
 	case distEventMsg:
 		// The cleanup of a run removes the stale pending proposals that
 		// the plan named, and the user confirmed the plan.
-		if msg.ev.Kind == distill.EventCleanupDone {
-			p.markActed(msg.rec.cleanupIDs())
+		if d, ok := msg.rec.(*distRecord); ok && msg.ev.Kind == distill.EventCleanupDone {
+			p.markActed(d.cleanupIDs())
 		}
 	case distCleanedMsg:
 		p.markActed(msg.rec.cleanupIDs())
@@ -801,26 +695,15 @@ func (p *propView) update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// browseKey handles keys while no modal and no input has focus.
+// browseKey handles keys while no modal and no input has focus. The
+// pane keys of listPane come last (navKey).
 func (p *propView) browseKey(msg tea.KeyMsg) tea.Cmd {
 	rows := p.rows()
 
 	switch {
-	case key.Matches(msg, nkeys.Next, nkeys.Prev):
-		if p.st.wide() && len(rows) > 0 {
-			p.focusDetail = !p.focusDetail
-		}
-	case key.Matches(msg, nkeys.Enter):
-		if len(rows) > 0 {
-			p.focusDetail = true
-		}
-	case key.Matches(msg, nkeys.Back):
+	case key.Matches(msg, nkeys.Back) && !p.focusDetail && p.run != nil:
 		// esc first leaves the detail, then ends a run filter.
-		if !p.focusDetail && p.run != nil {
-			return p.clearRun()
-		}
-
-		p.focusDetail = false
+		return p.clearRun()
 	case key.Matches(msg, nkeys.Toggle):
 		p.toggle(rows)
 	case key.Matches(msg, lesKeys.Clear):
@@ -838,8 +721,7 @@ func (p *propView) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return p.filterChanged()
 	case key.Matches(msg, lesKeys.Region):
 		cmd := p.clearRun()
-		p.editing = true
-		p.input.set(p.region)
+		p.startEdit(filterRegion, p.region)
 
 		return cmd
 	case key.Matches(msg, lesKeys.Apply):
@@ -852,61 +734,17 @@ func (p *propView) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return p.startExtract()
 	case key.Matches(msg, lesKeys.Open):
 		return p.openLink(rows)
-	case p.showsDetail(rows) && p.detailKey(msg):
 	default:
-		p.moveCursor(msg, rows)
+		p.navKey(msg, rows)
 	}
 
 	return nil
 }
 
-// showsDetail reports a visible detail pane: beside the list in the
-// wide layout, or alone in the narrow layout.
-func (p *propView) showsDetail(rows []domain.Proposal) bool {
-	return len(rows) > 0 && (p.st.wide() || p.focusDetail)
-}
-
-// detailKey scrolls the detail pane. The page keys always scroll it in
-// the wide layout, as the "pgdn" hint under the pane says; the other
-// movement keys scroll it only while it has focus. It reports whether
-// the key scrolled.
-func (p *propView) detailKey(msg tea.KeyMsg) bool {
-	paging := key.Matches(msg, nkeys.PageUp, nkeys.PageDown)
-	if !p.focusDetail && (!p.st.wide() || !paging) {
-		return false
-	}
-
-	return p.detail.key(msg)
-}
-
-// moveCursor moves the list cursor and records the proposal under it.
-func (p *propView) moveCursor(msg tea.KeyMsg, rows []domain.Proposal) {
-	page := max(1, p.listH-1)
-
-	switch {
-	case key.Matches(msg, nkeys.Up):
-		p.list.move(-1, len(rows))
-	case key.Matches(msg, nkeys.Down):
-		p.list.move(1, len(rows))
-	case key.Matches(msg, nkeys.PageUp):
-		p.list.move(-page, len(rows))
-	case key.Matches(msg, nkeys.PageDown):
-		p.list.move(page, len(rows))
-	case key.Matches(msg, nkeys.Top):
-		p.list.move(-len(rows), len(rows))
-	case key.Matches(msg, nkeys.Bottom):
-		p.list.move(len(rows), len(rows))
-	default:
-		return
-	}
-
-	p.syncCursorID(rows)
-}
-
 // toggle marks or unmarks the cursor row. Only pending rows can be
 // selected: applied and dismissed proposals are read-only.
 func (p *propView) toggle(rows []domain.Proposal) {
-	cur, ok := p.current(rows)
+	cur, ok := p.cursorRow(rows)
 	if !ok || p.filter != propPending {
 		return
 	}
@@ -963,7 +801,7 @@ func (p *propView) link(pr domain.Proposal) (propLink, bool) {
 // command, so a slow opener never blocks the view. The toast reports
 // the result.
 func (p *propView) openLink(rows []domain.Proposal) tea.Cmd {
-	cur, ok := p.current(rows)
+	cur, ok := p.cursorRow(rows)
 	if !ok {
 		return nil
 	}
@@ -991,137 +829,14 @@ func (p *propView) openLink(rows []domain.Proposal) tea.Cmd {
 // editKey handles the focused region input. Enter applies the filter,
 // esc restores the previous one.
 func (p *propView) editKey(msg tea.KeyMsg) tea.Cmd {
-	switch {
-	case key.Matches(msg, nkeys.Enter):
-		p.editing = false
-
-		region := propNormalizeRegion(p.input.value())
-		if region == p.region {
-			return nil
-		}
-
-		p.region = region
-
-		return p.filterChanged()
-	case key.Matches(msg, nkeys.Back):
-		p.editing = false
-
+	_, region, done := p.inputKey(msg)
+	if !done || region == p.region {
 		return nil
 	}
 
-	p.input.key(msg)
+	p.region = region
 
-	return nil
-}
-
-// propInputLimit bounds the region filter length. A path scope longer
-// than this is a paste accident, not a filter.
-const propInputLimit = 256
-
-// propInput is a minimal single-line text input for the region filter.
-// bubbles/textinput needs a clipboard module that the build does not
-// carry, and a path filter needs only typing, deletion and cursor
-// movement. The optional fields let other forms reuse it; their zero
-// values keep the region filter behaviour.
-type propInput struct {
-	runes []rune
-	pos   int
-
-	// placeholder is the faint hint of an empty input. "" keeps the
-	// region filter hint.
-	placeholder string
-	// limit bounds the value in runes. 0 keeps propInputLimit.
-	limit int
-	// accept filters typed runes, for example digits only for a day
-	// count. nil accepts every rune that the sanitizer keeps.
-	accept func(rune) bool
-}
-
-// maxRunes returns the length bound of the value.
-func (in *propInput) maxRunes() int {
-	if in.limit > 0 {
-		return in.limit
-	}
-
-	return propInputLimit
-}
-
-// accepts reports whether the accept filter lets r into the value.
-func (in *propInput) accepts(r rune) bool {
-	return in.accept == nil || in.accept(r)
-}
-
-// set replaces the value and puts the cursor at its end.
-func (in *propInput) set(s string) {
-	in.runes = []rune(s)
-	in.pos = len(in.runes)
-}
-
-// value returns the typed text.
-func (in *propInput) value() string {
-	return string(in.runes)
-}
-
-// key applies one key press. The sanitizer rejects control and
-// direction characters, so the filter bar cannot print an escape
-// sequence or reorder text. The length bound and the accept filter
-// drop further runes.
-func (in *propInput) key(msg tea.KeyMsg) {
-	switch msg.Type {
-	case tea.KeyRunes, tea.KeySpace:
-		for _, r := range msg.Runes {
-			if s := string(r); oneLine(s) != s || len(in.runes) >= in.maxRunes() || !in.accepts(r) {
-				continue
-			}
-
-			in.runes = slices.Insert(in.runes, in.pos, r)
-			in.pos++
-		}
-	case tea.KeyBackspace:
-		if in.pos > 0 {
-			in.runes = slices.Delete(in.runes, in.pos-1, in.pos)
-			in.pos--
-		}
-	case tea.KeyDelete:
-		if in.pos < len(in.runes) {
-			in.runes = slices.Delete(in.runes, in.pos, in.pos+1)
-		}
-	case tea.KeyCtrlU:
-		in.runes = in.runes[in.pos:]
-		in.pos = 0
-	case tea.KeyLeft:
-		in.pos = max(0, in.pos-1)
-	case tea.KeyRight:
-		in.pos = min(len(in.runes), in.pos+1)
-	case tea.KeyHome, tea.KeyCtrlA:
-		in.pos = 0
-	case tea.KeyEnd, tea.KeyCtrlE:
-		in.pos = len(in.runes)
-	}
-}
-
-// view renders the value with the cursor as a glyph. NO_COLOR removes
-// every style, reverse video too, so only a glyph stays visible. At the
-// end of the text the cursor is an underscore. Inside the text it is a
-// bar between two characters, where typing inserts. A bar is rare in a
-// path, but an underscore is common there.
-func (in *propInput) view(t *Theme) string {
-	if len(in.runes) == 0 {
-		hint := in.placeholder
-		if hint == "" {
-			hint = "path, for example internal/api"
-		}
-
-		return t.Accent.Render("_") + t.Faint.Render(" "+oneLine(hint))
-	}
-
-	before := t.Body.Render(string(in.runes[:in.pos]))
-
-	if in.pos == len(in.runes) {
-		return before + t.Accent.Render("_")
-	}
-
-	return before + t.Accent.Render("|") + t.Body.Render(string(in.runes[in.pos:]))
+	return p.filterChanged()
 }
 
 // propNormalizeRegion trims a typed region to the repository-relative form
@@ -1194,15 +909,10 @@ func (p *propView) reconcile() tea.Cmd {
 	}
 
 	rows := p.rows()
-	gone := p.cursorID
 
-	if gone == 0 {
-		// Nothing was under the cursor yet: the first snapshot, or an
-		// empty list.
-		p.syncCursorID(rows)
-	} else if found := p.relocate(rows, true); !found && !p.acted[gone] && p.shown() {
+	if gone, lost := p.reconcileCursor(rows); lost && !p.acted[gone] && p.shown() {
 		note := propID(gone) + " left this list"
-		if cur, ok := p.current(rows); ok {
+		if cur, ok := p.cursorRow(rows); ok {
 			note += "; the cursor moved to " + propID(cur.ID)
 		}
 
@@ -1216,11 +926,6 @@ func (p *propView) reconcile() tea.Cmd {
 	}
 
 	return toast(ToneAttention, strings.Join(notes, "; "))
-}
-
-// shown reports that the list is on screen.
-func (p *propView) shown() bool {
-	return p.visible == nil || p.visible()
 }
 
 // markActed records IDs that the console itself removes or moves. The
@@ -1318,7 +1023,8 @@ func (p *propView) noPinText(ids []int64) string {
 // preview opens the preparing modal and starts the preview read.
 func (p *propView) preview(a proposals.Action, ids []int64, implicit bool) tea.Cmd {
 	seq := p.seq.start()
-	p.dec = &propDecision{stage: propStagePreparing, action: a, ids: ids, implicit: implicit}
+	p.dec = &propDecision{action: a, ids: ids, implicit: implicit}
+	p.dec.startRead()
 
 	var svc Decisions = p.st.svc
 
@@ -1331,20 +1037,11 @@ func (p *propView) preview(a proposals.Action, ids []int64, implicit bool) tea.C
 
 // previewed shows a preview result, unless the user cancelled it.
 func (p *propView) previewed(msg propPreviewMsg) tea.Cmd {
-	if p.dec == nil || !p.seq.current(msg.seq) || p.dec.stage != propStagePreparing {
+	if p.dec == nil || !p.dec.readDone(p.seq.current(msg.seq), msg.pv, msg.err, "the preview came back empty") {
 		return nil
 	}
 
-	p.dec.stage = propStagePreview
-	p.dec.pv, p.dec.err = msg.pv, msg.err
-
-	if msg.err == nil && msg.pv == nil {
-		p.dec.err = errors.New("the preview came back empty")
-	}
-
 	p.notePins(msg.pv, msg.err)
-
-	p.dec.scroll = lesScroll{}
 
 	return nil
 }
@@ -1399,17 +1096,17 @@ func (p *propView) decisionKey(msg tea.KeyMsg) tea.Cmd {
 	d := p.dec
 
 	switch d.stage {
-	case propStagePreparing:
+	case flowPreparing:
 		if key.Matches(msg, nkeys.Back) {
 			// The read may still finish; seq drops its result.
 			p.seq.cancel()
 			p.dec = nil
 		}
-	case propStagePreview:
+	case flowPreview:
 		return p.previewKey(msg)
-	case propStageCommitting:
+	case flowCommitting:
 		// The commit cannot stop safely. Keys wait for the result.
-	case propStageResult:
+	case flowResult:
 		return p.resultKey(msg)
 	}
 
@@ -1449,12 +1146,12 @@ func (p *propView) previewKey(msg tea.KeyMsg) tea.Cmd {
 // and for apply an open write gate with no existing pins.
 func (p *propView) confirmable() bool {
 	d := p.dec
-	if d == nil || d.stage != propStagePreview || d.err != nil || d.pv == nil || len(d.pv.Proposals) == 0 {
+	if d == nil || !d.showsPreview() || len(d.preview.Proposals) == 0 {
 		return false
 	}
 
 	if d.action == proposals.ActionApply {
-		return d.pv.Write && len(d.pv.AlreadyPinned) == 0
+		return d.preview.Write && len(d.preview.AlreadyPinned) == 0
 	}
 
 	return true
@@ -1465,11 +1162,11 @@ func (p *propView) confirmable() bool {
 // duplicate pin.
 func (p *propView) reconcileOffer() []int64 {
 	d := p.dec
-	if d == nil || d.stage != propStagePreview || d.err != nil || d.pv == nil || d.action != proposals.ActionApply {
+	if d == nil || !d.showsPreview() || d.action != proposals.ActionApply {
 		return nil
 	}
 
-	return d.pv.AlreadyPinned
+	return d.preview.AlreadyPinned
 }
 
 // copyable reports an apply preview whose pin block c copies. A preview
@@ -1477,9 +1174,8 @@ func (p *propView) reconcileOffer() []int64 {
 func (p *propView) copyable() bool {
 	d := p.dec
 
-	return d != nil && d.stage == propStagePreview && d.err == nil && d.pv != nil &&
-		d.action == proposals.ActionApply && d.pv.YAML != "" && len(d.pv.Proposals) > 0 &&
-		len(d.pv.AlreadyPinned) == 0
+	return d != nil && d.showsPreview() && d.action == proposals.ActionApply && d.preview.YAML != "" &&
+		len(d.preview.Proposals) > 0 && len(d.preview.AlreadyPinned) == 0
 }
 
 // copyYAML sends the exact pin block of the preview to the terminal
@@ -1488,7 +1184,7 @@ func (p *propView) copyable() bool {
 // decides whether it honours the request, so the toast reports the
 // request, not a confirmed copy.
 func (p *propView) copyYAML() tea.Cmd {
-	text := p.dec.pv.YAML
+	text := p.dec.preview.YAML
 	st := p.st
 
 	return func() tea.Msg {
@@ -1503,7 +1199,7 @@ func (p *propView) copyYAML() tea.Cmd {
 // commit claims the mutation slot and runs the reviewed decision.
 func (p *propView) commit() tea.Cmd {
 	d := p.dec
-	n := len(d.pv.Proposals)
+	n := len(d.preview.Proposals)
 
 	var name string
 
@@ -1516,20 +1212,20 @@ func (p *propView) commit() tea.Cmd {
 		name = "Applying " + propPlural(n, "proposal", "proposals")
 	}
 
-	if !p.st.begin(name) {
-		return toast(ToneAttention, "Another operation is running: "+p.st.mutation)
-	}
-
-	d.stage = propStageCommitting
-	pv := d.pv
+	pv := d.preview
 
 	var svc Decisions = p.st.svc
 
-	return func() tea.Msg {
+	cmd, ok := d.startCommit(p.st, name, func() tea.Msg {
 		res, err := svc.CommitDecision(pv)
 
 		return propCommitMsg{pv: pv, res: res, err: err}
+	})
+	if !ok {
+		return toast(ToneAttention, "Another operation is running: "+p.st.mutation)
 	}
+
+	return cmd
 }
 
 // committedMsg shows a commit result. It always frees the mutation
@@ -1550,11 +1246,10 @@ func (p *propView) committedMsg(msg propCommitMsg) tea.Cmd {
 		}
 	}
 
-	if d := p.dec; d != nil && d.stage == propStageCommitting && d.pv == msg.pv {
-		d.stage = propStageResult
-		d.committed = true
-		d.res, d.err = msg.res, msg.err
-		d.scroll = lesScroll{}
+	// The preview check comes first, because commitDone forgets the
+	// preview.
+	if d := p.dec; d != nil && d.preview == msg.pv && d.commitDone() {
+		d.res, d.refusal = msg.res, msg.err
 	}
 
 	return tea.Batch(mutationDone, refresh(secLedger, secStats, secIndex, secPins))
@@ -1562,7 +1257,7 @@ func (p *propView) committedMsg(msg propCommitMsg) tea.Cmd {
 
 // reviewAgain reports a refusal that a new preview can resolve.
 func (d *propDecision) reviewAgain() bool {
-	return d.committed && d.err != nil && !errors.Is(d.err, proposals.ErrNothingSelected)
+	return d.stage == flowResult && d.refusal != nil && !errors.Is(d.refusal, proposals.ErrNothingSelected)
 }
 
 // resultKey handles the result modal. Enter builds a new preview after
@@ -1591,8 +1286,8 @@ func (p *propView) resultKey(msg tea.KeyMsg) tea.Cmd {
 // explains why, and the help marks them n/a (see helpKeys). The order
 // follows the 1a footer.
 func (p *propView) keys() []key.Binding {
-	if p.editing {
-		return []key.Binding{withHelp(nkeys.Enter, "enter", "apply filter"), withHelp(nkeys.Back, "esc", "cancel")}
+	if p.editing != filterNone {
+		return p.editKeys()
 	}
 
 	if d := p.dec; d != nil {
@@ -1625,7 +1320,7 @@ func (p *propView) helpKeys() []key.Binding {
 // describe x differently.
 func (p *propView) listKeys(clearLabel string) []key.Binding {
 	rows := p.rows()
-	cur, hasRow := p.current(rows)
+	cur, hasRow := p.cursorRow(rows)
 	ids, _ := p.targets()
 
 	sel := withHelp(nkeys.Toggle, "space", "select")
@@ -1692,25 +1387,6 @@ func (p *propView) listKeys(clearLabel string) []key.Binding {
 	// the help still lists t.
 	return append(out, withHelp(lesKeys.State, "f", "state"), withHelp(lesKeys.Region, "/", "region"), extract,
 		open, clearSel, reconcile)
-}
-
-// paneKey names the key that changes the visible or focused pane.
-func (p *propView) paneKey(hasRow bool) key.Binding {
-	switch {
-	case !hasRow:
-		b := withHelp(nkeys.Enter, "enter", "detail")
-		b.SetEnabled(false)
-
-		return b
-	case p.st.wide() && p.focusDetail:
-		return withHelp(nkeys.Next, "tab", "list")
-	case p.st.wide():
-		return withHelp(nkeys.Next, "tab", "detail")
-	case p.focusDetail:
-		return withHelp(nkeys.Back, "esc", "back")
-	default:
-		return withHelp(nkeys.Enter, "enter", "detail")
-	}
 }
 
 // hasPinned reports whether ids is not empty and every one of them has a
@@ -1794,7 +1470,7 @@ func (p *propView) extractTargets() []domain.Proposal {
 		return nil
 	}
 
-	if cur, ok := p.current(rows); ok {
+	if cur, ok := p.cursorRow(rows); ok {
 		return []domain.Proposal{cur}
 	}
 
@@ -1857,7 +1533,7 @@ func (p *propView) startExtract() tea.Cmd {
 // filter change does. Without the row in the snapshot, nothing changes.
 func (p *propView) focus(id int64) tea.Cmd {
 	l := p.ledger()
-	if l == nil || p.dec != nil || p.editing {
+	if l == nil || p.dec != nil || p.editing != filterNone {
 		return nil
 	}
 
@@ -1901,11 +1577,11 @@ func (p *propView) decisionKeys(d *propDecision) []key.Binding {
 	scroll.SetEnabled(d.scroll.scrolls())
 
 	switch d.stage {
-	case propStagePreparing:
+	case flowPreparing:
 		return []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
-	case propStageCommitting:
+	case flowCommitting:
 		return nil
-	case propStageResult:
+	case flowResult:
 		if d.reviewAgain() {
 			return []key.Binding{withHelp(nkeys.Enter, "enter", "preview again"), withHelp(nkeys.Back, "esc", "close"),
 				scroll}
@@ -1938,7 +1614,7 @@ func (p *propView) decisionKeys(d *propDecision) []key.Binding {
 // confirmLabel names the confirmed action with its count.
 func (p *propView) confirmLabel() string {
 	d := p.dec
-	n := len(d.pv.Proposals)
+	n := len(d.preview.Proposals)
 
 	switch d.action {
 	case proposals.ActionDismiss:

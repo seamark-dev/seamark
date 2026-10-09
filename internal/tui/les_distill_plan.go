@@ -36,14 +36,14 @@ const (
 	distPathMinW = 12
 )
 
-// reviewView renders the planning wait, a plan failure, the empty plan,
-// or the plan with its groups.
-func (d *distRecord) reviewView(w, h int) string {
+// previewView renders the Preparing wait, a plan failure, the empty
+// plan, or the plan with its groups.
+func (d *distRecord) previewView(w, h int) string {
 	t := d.st.theme
-	pl := &d.plan
+	pl := &d.prev
 
 	switch {
-	case d.step == distPlanning:
+	case d.step == stepPreparing:
 		o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Plan", true)}
 
 		return integBoxed(t, o, ToneNeutral, "Planning the distillation"+t.Glyphs.Ellipsis,
@@ -61,7 +61,7 @@ func (d *distRecord) reviewView(w, h int) string {
 		return hjoin(1, d.planBox(leftW, h, pl.planFocus), d.groupsBox(w-leftW-1, h, !pl.planFocus))
 	}
 
-	if pl.groupsOpen {
+	if pl.listOpen {
 		return d.groupsBox(w, h, true)
 	}
 
@@ -73,7 +73,7 @@ func (d *distRecord) reviewView(w, h int) string {
 // build for an index that is not ready. Nothing was sent or written.
 func (d *distRecord) planErrBox(w, h int) string {
 	t := d.st.theme
-	err := d.plan.err
+	err := d.prev.err
 	o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Plan", true)}
 
 	title := "Could not plan the distillation"
@@ -118,7 +118,7 @@ func (d *distRecord) planErrBox(w, h int) string {
 func (d *distRecord) planBox(w, h int, focused bool) string {
 	t := d.st.theme
 	inner := boxInner(w)
-	p := d.plan.preview
+	p := d.prev.preview
 
 	// The notes that stop a start come first, so a short box shows them.
 	// The data disclosure comes before WON'T, because it matters more.
@@ -148,14 +148,14 @@ func (d *distRecord) planBox(w, h int, focused bool) string {
 		Right: t.Muted.Render(propPlural(len(p.Plan.Groups), "group", "groups")),
 	}
 
-	return d.st.theme.scrollBox(o, body, tail, &d.plan.notes, [2]int{-1, -1}, false)
+	return d.st.theme.scrollBox(o, body, tail, &d.prev.notes, [2]int{-1, -1}, false)
 }
 
 // planFacts renders the key facts of the plan. Every count comes from
 // the engine plan; the prompt size is the engine's estimate.
 func (d *distRecord) planFacts(w int) []string {
 	t := d.st.theme
-	p := d.plan.preview
+	p := d.prev.preview
 	pl := p.Plan
 
 	eligible := len(pl.Groups) + len(pl.Deferred)
@@ -173,9 +173,9 @@ func (d *distRecord) planFacts(w int) []string {
 	}
 
 	// The value wraps in its column, so the kind needs no cut here.
-	agent := distAgentText(t, p.Invocation.Argv, distAgentKind(p.Invocation.Name, !d.plan.preset), 0)
+	agent := distAgentText(t, p.Invocation.Argv, distAgentKind(p.Invocation.Name, !d.prev.preset), 0)
 
-	runsIn := runsInText(t, p.Invocation.Dir, d.plan.cwd, p.RepoRoot)
+	runsIn := runsInText(t, p.Invocation.Dir, d.prev.cwd, p.RepoRoot)
 	rows = append(rows, [2]string{"Agent", agent}, [2]string{"Runs in", runsIn})
 
 	return propKV(t, rows, w)
@@ -210,13 +210,13 @@ func (d *distRecord) planNotes(w int) []string {
 
 	// A blocker stops the start but is not a failure: design map §9
 	// gives it the attention color, as the Evidence view does.
-	for _, b := range d.plan.preview.Blockers {
+	for _, b := range d.prev.preview.Blockers {
 		out = append(out, propNote(t, ToneAttention, oneLine(b)+". Install it, or press o to choose another "+
 			"agent in Settings. Then press enter to plan again.", w)...)
 		out = append(out, "")
 	}
 
-	if err := d.plan.stale; err != nil {
+	if err := d.prev.stale; err != nil {
 		text := "The run did not start: " + errText(err) + ". Nothing was sent. Press enter to plan again."
 		if errors.Is(err, distill.ErrStale) {
 			text = "The plan is out of date: " + distStaleText(err) + ". Nothing was sent. Press enter to plan again."
@@ -233,7 +233,7 @@ func (d *distRecord) planNotes(w int) []string {
 func (d *distRecord) planWill() []effect {
 	t := d.st.theme
 	g := t.Glyphs
-	p := d.plan.preview
+	p := d.prev.preview
 
 	// A custom agent.argv has no preset name, so the effect names the
 	// setting, as the Agent fact does.
@@ -242,7 +242,7 @@ func (d *distRecord) planWill() []effect {
 		agent = name
 	}
 
-	if !d.plan.preset {
+	if !d.prev.preset {
 		agent = "the custom agent.argv command"
 	}
 
@@ -273,7 +273,7 @@ func (d *distRecord) planWont() []string {
 		"retry a failed group by itself",
 	}
 
-	if len(d.plan.preview.Plan.Cleanup) > 0 {
+	if len(d.prev.preview.Plan.Cleanup) > 0 {
 		wont = append(wont, "prune applied pins: the cleanup removes pending proposals only")
 	}
 
@@ -286,9 +286,9 @@ func (d *distRecord) planWont() []string {
 func (d *distRecord) groupsBox(w, h int, focused bool) string {
 	t := d.st.theme
 	inner := boxInner(w)
-	pl := d.plan.preview.Plan
+	pl := d.prev.preview.Plan
 
-	d.plan.cursor = max(0, min(d.plan.cursor, len(pl.Groups)-1))
+	d.prev.cursor = max(0, min(d.prev.cursor, len(pl.Groups)-1))
 
 	body, keep := d.groupLines(inner, focused)
 
@@ -297,14 +297,14 @@ func (d *distRecord) groupsBox(w, h int, focused bool) string {
 		Right: t.Faint.Render("engine order"),
 	}
 
-	return d.st.theme.scrollBox(o, body, nil, &d.plan.groups, keep, d.plan.follow)
+	return d.st.theme.scrollBox(o, body, nil, &d.prev.list, keep, d.prev.follow)
 }
 
 // groupLines renders the group rows, the evidence rows under each group,
 // and the deferred groups. It returns the line range of the cursor group.
 func (d *distRecord) groupLines(w int, focused bool) (lines []string, keep [2]int) {
 	t := d.st.theme
-	pl := d.plan.preview.Plan
+	pl := d.prev.preview.Plan
 	regW := max(8, w-2-distIdxW-distFindW-distTokW)
 
 	lines = []string{t.Faint.Render(integRow(t, cell("", 2), cell(padLeft("#", distIdxW-1), distIdxW),
@@ -312,7 +312,7 @@ func (d *distRecord) groupLines(w int, focused bool) (lines []string, keep [2]in
 	keep = [2]int{-1, -1}
 
 	for i, g := range pl.Preflight.Groups {
-		cursor := i == d.plan.cursor
+		cursor := i == d.prev.cursor
 		start := len(lines)
 
 		marker, region := "", t.Body
@@ -434,7 +434,7 @@ func distFindingPath(f distill.FindingPlan) string {
 func (d *distRecord) nothingBox(w, h int) string {
 	t := d.st.theme
 	inner := boxInner(w)
-	p := d.plan.preview
+	p := d.prev.preview
 	g := t.Glyphs
 
 	lines := []string{t.Success.Render(g.OK+" ") + t.Title.Render("Nothing new to distill"), ""}
@@ -452,14 +452,14 @@ func (d *distRecord) nothingBox(w, h int) string {
 		Right: t.Success.Render(g.OK + " nothing to do"),
 	}
 
-	return d.st.theme.scrollBox(o, lines, nil, &d.plan.notes, [2]int{-1, -1}, false)
+	return d.st.theme.scrollBox(o, lines, nil, &d.prev.notes, [2]int{-1, -1}, false)
 }
 
 // nothingReason tells why no group is eligible: no findings in scope,
 // findings without a group, or every group already recorded. The last
 // case says that a repeated run would send nothing new.
 func (d *distRecord) nothingReason() string {
-	p := d.plan.preview
+	p := d.prev.preview
 	scope := distScopeIn(p.Region)
 
 	if p.Plan == nil {
@@ -486,27 +486,27 @@ func (d *distRecord) nothingReason() string {
 // names every ID, because the user confirms exactly these rows.
 func (d *distRecord) cleanupLines(w int) []string {
 	t := d.st.theme
-	pl := &d.plan
+	pl := &d.prev
 	ids := distProposalIDs(pl.preview.Plan.Cleanup)
 	n := len(ids)
 
 	switch {
-	case pl.cleaning:
+	case d.clean.running:
 		return []string{t.Accent.Render(t.spinnerFrame(d.st.tick)) + " " +
 			t.Title.Render("Removing "+propPlural(n, "stale pending proposal", "stale pending proposals")+t.Glyphs.Ellipsis)}
-	case pl.cleaned && pl.cleanErr != nil:
-		out := propNote(t, ToneFailure, "The cleanup removed nothing: "+errText(pl.cleanErr), w)
+	case d.clean.done && d.clean.err != nil:
+		out := propNote(t, ToneFailure, "The cleanup removed nothing: "+errText(d.clean.err), w)
 
-		if errors.Is(pl.cleanErr, distill.ErrStale) {
+		if errors.Is(d.clean.err, distill.ErrStale) {
 			out = append(out, integIndent(integLines(t.Muted, "The ledger changed since the plan. Press enter "+
 				"to plan again.", w-2), 2)...)
 		}
 
 		return out
-	case pl.cleaned:
-		text := "Removed " + propPlural(pl.removed, "stale pending proposal", "stale pending proposals") +
+	case d.clean.done:
+		text := "Removed " + propPlural(d.clean.removed, "stale pending proposal", "stale pending proposals") +
 			" of " + propIDList(ids) + "."
-		if pl.removed < n {
+		if d.clean.removed < n {
 			text += " The other rows were decided meanwhile, so they stay."
 		}
 

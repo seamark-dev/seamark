@@ -15,14 +15,16 @@ import (
 // durable state: reopening it derives every row from the files on disk.
 // The review is the confirmation: "y" on the review applies the plan.
 
-// setupStep is one step of the setup wizard.
+// setupStep is one step of the setup wizard. The last three steps use
+// the preview words of the console (previewflow.go). The trail labels in
+// setupStepNames stay as they are, because every capture shows them.
 type setupStep int
 
 const (
 	setupStepClient setupStep = iota
 	setupStepChoices
 	setupStepPreview
-	setupStepApplying
+	setupStepCommitting
 	setupStepResult
 )
 
@@ -158,7 +160,7 @@ type setupWizard struct {
 	// its own scrolling box. A short terminal cannot show it beside or
 	// under the rows.
 	aboutOpen bool
-	about     integPager
+	about     textPager
 	// choice holds the user's explicit choices. A row without one uses
 	// its default, so late inspection data still gets defaults.
 	choice map[setupIntent]bool
@@ -169,10 +171,12 @@ type setupWizard struct {
 	hint string
 
 	// seq identifies the newest plan or apply request.
-	seq      generation
-	planning bool
-	preview  *SetupPreview
-	planErr  error
+	seq generation
+	// preparing reports that the plan read runs: the review step shows
+	// the Preparing stage until the result arrives.
+	preparing bool
+	preview   *SetupPreview
+	planErr   error
 	// setups is the request of the current plan; plan again reuses it.
 	setups []integration.ClientSetup
 	paths  listState
@@ -186,7 +190,7 @@ type setupWizard struct {
 	// notes. The notes hold trust and scope findings, so they must stay
 	// reachable at every size.
 	notesFocus bool
-	pager      integPager
+	pager      textPager
 
 	result *setupOutcome
 	closed bool
@@ -226,12 +230,12 @@ func (wz *setupWizard) startRefresh(c integration.Client) tea.Cmd {
 // input and no dialog, so the global keys (help, quit, refresh,
 // destinations) stay available, and the screen keeps the wizard.
 func (wz *setupWizard) capturing() bool {
-	return wz.step == setupStepApplying
+	return wz.step == setupStepCommitting
 }
 
 // running reports an apply in progress.
 func (wz *setupWizard) running() bool {
-	return wz.step == setupStepApplying
+	return wz.step == setupStepCommitting
 }
 
 // inspected marks the reinspection after an apply as arrived.
@@ -249,7 +253,7 @@ func (wz *setupWizard) planned(msg setupPlannedMsg) {
 		return
 	}
 
-	wz.planning = false
+	wz.preparing = false
 	wz.preview, wz.planErr = msg.preview, msg.err
 	wz.paths = listState{}
 	wz.pathOpen = false
@@ -266,7 +270,7 @@ func (wz *setupWizard) finished(msg setupAppliedMsg, gen int) {
 
 	wz.step = setupStepResult
 	wz.result = &setupOutcome{res: msg.result, err: msg.err, gen: gen}
-	wz.pager = integPager{}
+	wz.pager = textPager{}
 }
 
 // inspection returns the current inspection of the wizard's client.
@@ -483,11 +487,11 @@ func (wz *setupWizard) plan(setups []integration.ClientSetup) tea.Cmd {
 	seq := wz.seq.start()
 
 	wz.step = setupStepPreview
-	wz.planning, wz.preview, wz.planErr, wz.setups = true, nil, nil, setups
+	wz.preparing, wz.preview, wz.planErr, wz.setups = true, nil, nil, setups
 	wz.paths = listState{}
 	wz.pathOpen = false
 	wz.planOff = 0
-	wz.pager = integPager{}
+	wz.pager = textPager{}
 	wz.aboutOpen = false
 	wz.hint = ""
 
@@ -601,7 +605,7 @@ func (wz *setupWizard) aboutKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	wz.about.scroll(msg)
+	wz.about.key(msg)
 
 	return nil
 }
@@ -720,8 +724,8 @@ func (wz *setupWizard) view(w, h int) string {
 		body = wz.choicesView(w, boxH)
 	case setupStepPreview:
 		body = wz.previewView(w, boxH)
-	case setupStepApplying:
-		body = wz.applyingView(w, boxH)
+	case setupStepCommitting:
+		body = wz.committingView(w, boxH)
 	case setupStepResult:
 		body = wz.resultView(w, boxH)
 	}

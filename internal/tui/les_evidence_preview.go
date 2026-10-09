@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"errors"
-
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -17,15 +15,13 @@ import (
 // nothing. y in the preview starts the run; esc closes the preview and
 // calls nothing.
 
-// evPreview is one open refresh preview.
+// evPreview is one open refresh preview. It lives only while its modal
+// is open, so nil closes it. Its flow never commits, because y starts a
+// run record: the stage is flowPreparing or flowPreview.
 type evPreview struct {
+	previewFlow[learning.Plan]
+
 	mode index.SourceMode
-	// planning is true until the plan arrives.
-	planning bool
-	plan     *learning.Plan
-	// err is the plan failure; nil otherwise.
-	err    error
-	scroll scrollState
 }
 
 // evPlanMsg carries a refresh plan back to the event loop. seq drops the
@@ -40,7 +36,8 @@ type evPlanMsg struct {
 // background. The plan is read-only, so it needs no mutation slot.
 func (v *evidenceView) plan(mode index.SourceMode) tea.Cmd {
 	seq := v.seq.start()
-	v.prev = &evPreview{mode: mode, planning: true}
+	v.prev = &evPreview{mode: mode}
+	v.prev.startRead()
 
 	var svc Learning = v.st.svc
 
@@ -53,19 +50,9 @@ func (v *evidenceView) plan(mode index.SourceMode) tea.Cmd {
 
 // planned shows a plan, unless the user closed its preview.
 func (v *evidenceView) planned(msg evPlanMsg) tea.Cmd {
-	p := v.prev
-	if p == nil || !v.seq.current(msg.seq) || !p.planning {
-		return nil
+	if v.prev != nil {
+		v.prev.readDone(v.seq.current(msg.seq), msg.plan, msg.err, "the refresh preview came back empty")
 	}
-
-	p.planning = false
-	p.plan, p.err = msg.plan, msg.err
-
-	if p.err == nil && p.plan == nil {
-		p.err = errors.New("the refresh preview came back empty")
-	}
-
-	p.scroll = scrollState{}
 
 	return nil
 }
@@ -101,11 +88,11 @@ func (v *evidenceView) settingsSaved(msg settingsSavedMsg) tea.Cmd {
 // keeps the user from confirming old facts.
 func (v *evidenceView) learningLoaded() tea.Cmd {
 	p, sec := v.prev, &v.st.learning
-	if p == nil || p.planning || p.plan == nil || sec.err != nil || !sec.loaded {
+	if p == nil || p.stage == flowPreparing || p.preview == nil || sec.err != nil || !sec.loaded {
 		return nil
 	}
 
-	if evSameObservation(p.plan.Current, sec.value) {
+	if evSameObservation(p.preview.Current, sec.value) {
 		return nil
 	}
 
@@ -122,7 +109,7 @@ func (v *evidenceView) previewKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, nkeys.Back):
 		return v.closePreview("")
-	case p.planning:
+	case p.stage == flowPreparing:
 		return nil
 	case key.Matches(msg, lesKeys.Confirm):
 		return v.start()
@@ -144,7 +131,7 @@ func (v *evidenceView) previewKey(msg tea.KeyMsg) tea.Cmd {
 func (v *evidenceView) ready() bool {
 	p := v.prev
 
-	return p != nil && !p.planning && p.err == nil && p.plan != nil && p.plan.Ready()
+	return p != nil && p.showsPreview() && p.preview.Ready()
 }
 
 // confirmable reports a ready plan while the mutation slot is free. The
@@ -158,13 +145,13 @@ func (v *evidenceView) confirmable() bool {
 // blocker goes to the evidence group of Settings.
 func (v *evidenceView) previewLink() (key.Binding, tea.Cmd, bool) {
 	p := v.prev
-	if p == nil || p.planning || p.plan == nil || p.plan.Ready() {
+	if p == nil || p.stage == flowPreparing || p.preview == nil || p.preview.Ready() {
 		return key.Binding{}, nil, false
 	}
 
-	switch b := p.plan.Blockers[0]; b.Kind {
+	switch b := p.preview.Blockers[0]; b.Kind {
 	case learning.BlockIndex:
-		return v.blockedLink(learning.Snapshot{Probe: p.plan.Probe})
+		return v.blockedLink(learning.Snapshot{Probe: p.preview.Probe})
 	case learning.BlockConfig:
 		return withHelp(nkeys.Enter, "enter", "open Settings "+v.st.theme.Glyphs.Arrow+" evidence"),
 			navigate(destSettings, evSettingsIntent), true
@@ -177,7 +164,7 @@ func (v *evidenceView) previewLink() (key.Binding, tea.Cmd, bool) {
 // modal actions with shorter labels.
 func (v *evidenceView) previewKeys() []key.Binding {
 	p := v.prev
-	if p.planning {
+	if p.stage == flowPreparing {
 		return []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
 	}
 
@@ -218,49 +205,42 @@ func (v *evidenceView) modal(w, h int) (string, bool) {
 		return "", false
 	}
 
-	m := v.previewContent(modalBodyWidth(modalMinW, w))
-
-	return v.st.theme.modal(modalOpts{Title: m.title, Right: m.right, Body: m.body, Actions: m.actions},
-		&v.prev.scroll, w, h), true
+	return v.st.theme.modal(v.previewContent(modalBodyWidth(modalMinW, w)), &v.prev.scroll, w, h), true
 }
 
 // previewContent builds the modal of the current preview stage in w
-// cells.
-func (v *evidenceView) previewContent(w int) lesModal {
+// cells. The right border names the mode, and a ready plan names its
+// network use there instead.
+func (v *evidenceView) previewContent(w int) modalOpts {
 	t := v.st.theme
 	p := v.prev
 	mode := t.Muted.Render(evModeTitle(p.mode))
 
 	switch {
-	case p.planning:
-		return lesModal{
-			title: t.Accent.Render(t.spinnerFrame(v.st.tick)) + " " +
-				t.Title.Render("Preparing the refresh preview"+t.Glyphs.Ellipsis),
-			right: mode,
-			body: propLines(t.Muted, "Seamark reads the index, "+settingsFile+" and the origin remote. Nothing is "+
-				"fetched or written.", w),
-			actions: []key.Binding{withHelp(nkeys.Back, "esc", "cancel")},
-		}
-	case p.err != nil:
-		body := propNote(t, ToneFailure, "The refresh preview could not be built: "+errText(p.err), w)
-		body = append(body, "")
-		body = append(body, propLines(t.Muted, "Nothing was changed.", w)...)
+	case p.stage == flowPreparing:
+		o := flowWaitModal(v.st, "Preparing the refresh preview", "Seamark reads the index, "+settingsFile+
+			" and the origin remote. Nothing is fetched or written.", true, w)
+		o.Right = mode
 
-		return lesModal{title: t.Failure.Render("Preview failed"), right: mode, body: body,
-			actions: v.previewActions()}
-	case !p.plan.Ready():
-		return lesModal{title: t.Attention.Render("Refresh blocked"), right: mode,
-			body: v.blockedLines(p.plan, w), actions: v.previewActions()}
+		return o
+	case p.err != nil:
+		o := previewFailedModal(t, "The refresh preview", p.err, "", "Nothing was changed.", v.previewActions(), w)
+		o.Right = mode
+
+		return o
+	case !p.preview.Ready():
+		return modalOpts{Title: t.Attention.Render("Refresh blocked"), Right: mode,
+			Body: v.blockedLines(p.preview, w), Actions: v.previewActions()}
 	}
 
 	right := t.Muted.Render("local only")
-	if evFetches(p.plan) {
+	if evFetches(p.preview) {
 		right = t.Attention.Render("network")
 	}
 
-	return lesModal{
-		title: t.TabActive.Render("Refresh") + " " + t.Body.Render(evModeTitle(p.mode)),
-		right: right, body: v.readyLines(p.plan, w), actions: v.previewActions(),
+	return modalOpts{
+		Title: t.TabActive.Render("Refresh") + " " + t.Body.Render(evModeTitle(p.mode)),
+		Right: right, Body: v.readyLines(p.preview, w), Actions: v.previewActions(),
 	}
 }
 

@@ -23,7 +23,8 @@ import (
 // relates each one to the proposal ledger. It plans nothing and writes
 // nothing. The keys w, - and t only send the typed requests of
 // pins_msgs.go, and the preview or the review reads the state again. The
-// rendering lives in pins_view.go.
+// rendering lives in pins_view.go. The cursor, the pane keys and the
+// filter input come from listpane.go, which Proposals shares.
 
 // pinKeys are the bindings that only the Pins sub-view uses. The shared
 // keys (space, x, f, /, t) keep their meaning from Proposals.
@@ -62,15 +63,6 @@ func (f pinFilter) label() string {
 		return "installed"
 	}
 }
-
-// pinEdit names the focused text input of the filter line.
-type pinEdit int
-
-const (
-	pinEditNone pinEdit = iota
-	pinEditRegion
-	pinEditText
-)
 
 // pinRow is one list row: an installed pin, or a proposal row of the
 // history filters.
@@ -113,29 +105,21 @@ func (r pinRow) ident() pinID {
 
 // pinsView is the Lessons › Pins sub-view. It holds the filter line, the
 // list of installed pins or ledger history, the detail pane, and the
-// read-only comparison of two similar pins.
+// read-only comparison of two similar pins. The embedded listPane holds
+// the cursor, the focus and the detail scroll, and filterInput holds the
+// region input and the text search.
 type pinsView struct {
+	listPane[pinRow, pinID]
+	filterInput
+
 	st *state
 
 	// host holds the open maintenance preview (pins_msgs.go).
 	host maintHost
-	// visible reports that the list is on screen. lessons.go sets it, so
-	// a refresh reports a cursor change only in a list the user sees.
-	visible func() bool
 
-	filter  pinFilter
-	region  string
-	text    string
-	input   propInput
-	editing pinEdit
-
-	list   listState
-	cursor pinID
-	// focusDetail is the focused pane in the wide layout and the shown
-	// pane in the narrow layout. Resize keeps it.
-	focusDetail bool
-	detail      lesScroll
-	detailID    pinID
+	filter pinFilter
+	region string
+	text   string
 
 	// selected holds the marked entries by their binding, with the link
 	// that the user saw when marking. A refresh keeps an entry only while
@@ -151,20 +135,25 @@ type pinsView struct {
 
 	// compare is the open comparison of two similar pins, or nil.
 	compare *pinCompare
-
-	// listH comes from the last render, so page keys move by the rows
-	// that the user sees.
-	listH int
 }
 
-// newPinsView builds the Pins sub-view over the shared state.
+// newPinsView builds the Pins sub-view over the shared state. The list
+// counts as hidden until lessons.go sets visible, so a refresh reports a
+// cursor change only in a list that the user sees. A moved pin keeps
+// the cursor by its content (pinFind).
 func newPinsView(st *state) *pinsView {
 	return &pinsView{
-		st:       st,
-		host:     maintHost{st: st},
-		visible:  func() bool { return false },
-		selected: pinMarks{},
-		acted:    map[pinfile.EntryRef]bool{},
+		listPane: listPane[pinRow, pinID]{
+			visible: func() bool { return false },
+			wide:    st.wide,
+			ident:   pinRow.ident,
+			find:    pinFind,
+		},
+		filterInput: filterInput{textHint: "text in the rule or the note"},
+		st:          st,
+		host:        maintHost{st: st},
+		selected:    pinMarks{},
+		acted:       map[pinfile.EntryRef]bool{},
 	}
 }
 
@@ -428,27 +417,6 @@ func (p *pinsView) rows() []pinRow {
 	return out
 }
 
-// current returns the row under the cursor.
-func (p *pinsView) current(rows []pinRow) (pinRow, bool) {
-	if len(rows) == 0 {
-		return pinRow{}, false
-	}
-
-	p.list.clamp(len(rows), 0)
-
-	return rows[p.list.cursor], true
-}
-
-// syncCursor records the identity under the cursor. An empty list
-// records none, so a refresh does not report the same loss again.
-func (p *pinsView) syncCursor(rows []pinRow) {
-	p.cursor = pinID{}
-
-	if cur, ok := p.current(rows); ok {
-		p.cursor = cur.ident()
-	}
-}
-
 // pinFind returns the position of the row with identity id. A proposal
 // row matches by its ID, and a pin by pinMatch.
 func pinFind(rows []pinRow, id pinID) (int, bool) {
@@ -483,36 +451,10 @@ func pinMatch(n int, refAt func(int) pinfile.EntryRef, ref pinfile.EntryRef) (in
 	return at, same == 1
 }
 
-// relocate puts the cursor on the recorded identity when it is visible.
-// Else a refresh keeps the cursor position, which shows the neighbor of
-// the lost row, and a filter change starts at the first row. It reports
-// whether the identity was found.
-func (p *pinsView) relocate(rows []pinRow, keepPosition bool) bool {
-	if i, ok := pinFind(rows, p.cursor); ok {
-		p.list.cursor = i
-		p.cursor = rows[i].ident()
-
-		return true
-	}
-
-	if !keepPosition {
-		p.list.cursor, p.list.offset = 0, 0
-	}
-
-	p.syncCursor(rows)
-
-	return false
-}
-
-// shown reports that the list is on screen.
-func (p *pinsView) shown() bool {
-	return p.visible == nil || p.visible()
-}
-
 // capturing reports an open preview, a focused input, or an open
 // comparison. Each takes every key, so the Lessons switch keys wait.
 func (p *pinsView) capturing() bool {
-	return p.host.open() || p.editing != pinEditNone || p.compare != nil
+	return p.host.open() || p.editing != filterNone || p.compare != nil
 }
 
 // modal returns the open preview or the comparison.
@@ -547,7 +489,7 @@ func (p *pinsView) update(msg tea.Msg) tea.Cmd {
 	switch m := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case p.editing != pinEditNone:
+		case p.editing != filterNone:
 			return tea.Batch(cmd, p.editKey(m))
 		case p.compare != nil:
 			return tea.Batch(cmd, p.compareKey(m))
@@ -579,21 +521,11 @@ func (p *pinsView) markActed(refs []pinfile.EntryRef) {
 }
 
 // browseKey handles keys while no input, comparison or preview has
-// focus.
+// focus. The pane keys of listPane come last (navKey).
 func (p *pinsView) browseKey(msg tea.KeyMsg) tea.Cmd {
 	rows := p.rows()
 
 	switch {
-	case key.Matches(msg, nkeys.Next, nkeys.Prev):
-		if p.st.wide() && len(rows) > 0 {
-			p.focusDetail = !p.focusDetail
-		}
-	case key.Matches(msg, nkeys.Enter):
-		if len(rows) > 0 {
-			p.focusDetail = true
-		}
-	case key.Matches(msg, nkeys.Back):
-		p.focusDetail = false
 	case key.Matches(msg, nkeys.Toggle):
 		p.toggle(rows)
 	case key.Matches(msg, lesKeys.Clear):
@@ -612,11 +544,11 @@ func (p *pinsView) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return p.filterChanged()
 	case key.Matches(msg, lesKeys.Region):
 		if p.inspection() != nil {
-			p.startEdit(pinEditRegion)
+			p.startEdit(filterRegion, p.region)
 		}
 	case key.Matches(msg, pinKeys.Search):
 		if p.inspection() != nil {
-			p.startEdit(pinEditText)
+			p.startEdit(filterText, p.text)
 		}
 	case key.Matches(msg, pinKeys.Compare):
 		return p.openCompare(rows)
@@ -626,54 +558,11 @@ func (p *pinsView) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return p.requestMaint(maintain.ActionPrune)
 	case key.Matches(msg, extractKey):
 		return p.extract()
-	case p.showsDetail(rows) && p.detailKey(msg):
 	default:
-		p.moveCursor(msg, rows)
+		p.navKey(msg, rows)
 	}
 
 	return nil
-}
-
-// showsDetail reports a visible detail pane: beside the list in the
-// wide layout, or alone in the narrow layout.
-func (p *pinsView) showsDetail(rows []pinRow) bool {
-	return len(rows) > 0 && (p.st.wide() || p.focusDetail)
-}
-
-// detailKey scrolls the detail pane, as in Proposals. The page keys
-// always scroll it in the wide layout. The other movement keys scroll it
-// only while it has focus. It reports whether the key scrolled.
-func (p *pinsView) detailKey(msg tea.KeyMsg) bool {
-	paging := key.Matches(msg, nkeys.PageUp, nkeys.PageDown)
-	if !p.focusDetail && (!p.st.wide() || !paging) {
-		return false
-	}
-
-	return p.detail.key(msg)
-}
-
-// moveCursor moves the list cursor and records the identity under it.
-func (p *pinsView) moveCursor(msg tea.KeyMsg, rows []pinRow) {
-	page := max(1, p.listH-1)
-
-	switch {
-	case key.Matches(msg, nkeys.Up):
-		p.list.move(-1, len(rows))
-	case key.Matches(msg, nkeys.Down):
-		p.list.move(1, len(rows))
-	case key.Matches(msg, nkeys.PageUp):
-		p.list.move(-page, len(rows))
-	case key.Matches(msg, nkeys.PageDown):
-		p.list.move(page, len(rows))
-	case key.Matches(msg, nkeys.Top):
-		p.list.move(-len(rows), len(rows))
-	case key.Matches(msg, nkeys.Bottom):
-		p.list.move(len(rows), len(rows))
-	default:
-		return
-	}
-
-	p.syncCursor(rows)
 }
 
 // toggle marks or unmarks the pin under the cursor. Only installed pins
@@ -682,7 +571,7 @@ func (p *pinsView) moveCursor(msg tea.KeyMsg, rows []pinRow) {
 // linked proposal stays allowed, so the preview can name why it is
 // blocked (D-15).
 func (p *pinsView) toggle(rows []pinRow) {
-	cur, ok := p.current(rows)
+	cur, ok := p.cursorRow(rows)
 	if !ok || cur.pin == nil || !p.actionable() {
 		return
 	}
@@ -709,9 +598,11 @@ func (p *pinsView) filterChanged() tea.Cmd {
 
 // applyFilter relocates the cursor after a filter change and clears the
 // selection. It returns the note that announces the clearing, or "".
+// It also starts the detail at the top. Proposals keeps the detail
+// offset, so the reset stays here and not in listPane.
 func (p *pinsView) applyFilter() string {
 	p.relocate(p.rows(), false)
-	p.detail = lesScroll{}
+	p.detail = scrollState{}
 
 	if len(p.selected) == 0 {
 		return ""
@@ -722,58 +613,23 @@ func (p *pinsView) applyFilter() string {
 	return "Selection cleared: filter changed"
 }
 
-// startEdit focuses the region input or the text search with its
-// current value.
-func (p *pinsView) startEdit(e pinEdit) {
-	p.editing = e
-	p.input = propInput{}
-
-	if e == pinEditText {
-		p.input.placeholder = "text in the rule or the note"
-		p.input.set(p.text)
-
-		return
-	}
-
-	p.input.set(p.region)
-}
-
 // editKey handles the focused input. Enter applies the value, esc keeps
 // the previous one.
 func (p *pinsView) editKey(msg tea.KeyMsg) tea.Cmd {
+	field, value, done := p.inputKey(msg)
+
 	switch {
-	case key.Matches(msg, nkeys.Enter):
-		e := p.editing
-		p.editing = pinEditNone
-
-		if e == pinEditText {
-			text := strings.TrimSpace(p.input.value())
-			if text == p.text {
-				return nil
-			}
-
-			p.text = text
-
-			return p.filterChanged()
-		}
-
-		region := propNormalizeRegion(p.input.value())
-		if region == p.region {
-			return nil
-		}
-
-		p.region = region
-
-		return p.filterChanged()
-	case key.Matches(msg, nkeys.Back):
-		p.editing = pinEditNone
-
+	case !done:
+		return nil
+	case field == filterText && value != p.text:
+		p.text = value
+	case field == filterRegion && value != p.region:
+		p.region = value
+	default:
 		return nil
 	}
 
-	p.input.key(msg)
-
-	return nil
+	return p.filterChanged()
 }
 
 // targets returns the pins that an action acts on. These are the marked
@@ -796,7 +652,7 @@ func (p *pinsView) targets() (pins []*maintain.Pin, cursor bool) {
 		return pins, false
 	}
 
-	if cur, ok := p.current(p.rows()); ok && cur.pin != nil {
+	if cur, ok := p.cursorRow(p.rows()); ok && cur.pin != nil {
 		return []*maintain.Pin{cur.pin}, true
 	}
 
@@ -1034,22 +890,15 @@ func (p *pinsView) reconcile() tea.Cmd {
 	notes = append(notes, p.reconcileSelection()...)
 
 	rows := p.rows()
-	gone := p.cursor
 
-	switch {
-	case gone == (pinID{}):
-		// Nothing was under the cursor yet: the first inspection, or an
-		// empty list.
-		p.syncCursor(rows)
-	case p.relocate(rows, true):
-	default:
+	if gone, lost := p.reconcileCursor(rows); lost {
 		gap := pinListGap(in, p.filter)
 
 		switch {
 		case gap != "" && len(rows) == 0:
 			// A read error emptied the list, and its empty state says so.
 			// The identity stays, so the next good read finds the row.
-			p.cursor = gone
+			p.cursorID = gone
 		case p.acted[gone.ref] || !p.shown():
 			// The user caused the change, or the list is not on screen.
 		default:
@@ -1082,7 +931,7 @@ func (p *pinsView) lossNote(gone pinID, gap string, rows []pinRow) string {
 		note = p.pinIDLabel(gone) + " is unknown: " + gap
 	}
 
-	if cur, ok := p.current(rows); ok {
+	if cur, ok := p.cursorRow(rows); ok {
 		note += "; the cursor moved to " + p.pinIDLabel(cur.ident())
 	}
 
@@ -1201,7 +1050,7 @@ func (p *pinsView) focusRow(row pinRow, f pinFilter) tea.Cmd {
 
 	changed := p.filter != f || hidden
 	p.filter = f
-	p.cursor = row.ident()
+	p.cursorID = row.ident()
 
 	if !changed {
 		p.relocate(p.rows(), false)
@@ -1246,20 +1095,15 @@ func (p *pinsView) keys() []key.Binding {
 	}
 
 	switch {
-	case p.editing != pinEditNone:
-		label := "apply filter"
-		if p.editing == pinEditText {
-			label = "apply search"
-		}
-
-		return []key.Binding{withHelp(nkeys.Enter, "enter", label), withHelp(nkeys.Back, "esc", "cancel")}
+	case p.editing != filterNone:
+		return p.editKeys()
 	case p.compare != nil:
 		return p.compareKeys()
 	}
 
 	in := p.inspection()
 	rows := p.rows()
-	cur, hasRow := p.current(rows)
+	cur, hasRow := p.cursorRow(rows)
 
 	sel := withHelp(nkeys.Toggle, "space", "select")
 	sel.SetEnabled(hasRow && cur.pin != nil && p.actionable())
@@ -1316,23 +1160,4 @@ func (p *pinsView) helpKeys() []key.Binding {
 	}
 
 	return listAll(p.keys())
-}
-
-// paneKey names the key that changes the visible or focused pane.
-func (p *pinsView) paneKey(hasRow bool) key.Binding {
-	switch {
-	case !hasRow:
-		b := withHelp(nkeys.Enter, "enter", "detail")
-		b.SetEnabled(false)
-
-		return b
-	case p.st.wide() && p.focusDetail:
-		return withHelp(nkeys.Next, "tab", "list")
-	case p.st.wide():
-		return withHelp(nkeys.Next, "tab", "detail")
-	case p.focusDetail:
-		return withHelp(nkeys.Back, "esc", "back")
-	default:
-		return withHelp(nkeys.Enter, "enter", "detail")
-	}
 }

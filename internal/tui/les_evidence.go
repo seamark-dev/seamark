@@ -650,19 +650,15 @@ func (v *evidenceView) detailBox(snap learning.Snapshot, w, h int, focused bool)
 	body := v.detailLines(snap, inner)
 
 	sc := &v.detailScroll
-	sc.page = rows
-	sc.last = max(0, len(body)-rows)
-	sc.by(0)
-
-	end := min(len(body), sc.off+rows)
+	from, to := sc.fit(len(body), rows)
 
 	var foot string
 	if sc.scrolls() {
-		foot = propRange(t, sc.off, end, len(body))
+		foot = propRange(t, from, to, len(body))
 	}
 
 	return t.box(boxOpts{
-		W: w, H: h, Focus: focused, Foot: foot, Lines: body[sc.off:end],
+		W: w, H: h, Focus: focused, Foot: foot, Lines: body[from:to],
 		Title: integPaneTitle(t, evItemName(v.cursor), focused),
 	})
 }

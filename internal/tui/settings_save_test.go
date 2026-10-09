@@ -446,7 +446,7 @@ func TestSettingsSaveWaitsForARunningOperation(t *testing.T) {
 	assert.Equal(t, "distill:\n  write: true\n", settingsBytes(t, svc))
 }
 
-func TestSettingsEscDuringPlanningDropsThePlan(t *testing.T) {
+func TestSettingsEscWhilePreparingDropsThePlan(t *testing.T) {
 	svc := settingsFake(t, "distill:\n  write: false\n")
 	h := settingsOpen(t, svc, 120, 40)
 	scr := settingsScr(h)
@@ -456,12 +456,12 @@ func TestSettingsEscDuringPlanningDropsThePlan(t *testing.T) {
 
 	// The plan result arrives after esc: the screen drops it.
 	cmd := scr.review(settings.GroupPinWrite)
-	require.Equal(t, settingsPlanning, scr.flow.stage)
+	require.Equal(t, flowPreparing, scr.flow.stage)
 	assert.Contains(t, h.view(), "Preparing the save preview")
 
 	h.press("esc")
 	h.send(cmd())
-	assert.Equal(t, settingsIdle, scr.flow.stage, "a late plan opens no preview")
+	assert.Equal(t, flowClosed, scr.flow.stage, "a late plan opens no preview")
 	settingsNoWrites(t, svc)
 }
 

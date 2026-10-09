@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/integration"
@@ -57,7 +56,7 @@ type integrations struct {
 	focus integFocus
 	// detailOpen shows the detail box in the narrow layout.
 	detailOpen bool
-	detail     integPager
+	detail     textPager
 
 	// pendingClient selects a client when the first inspection arrives,
 	// because an intent can arrive before the snapshot.
@@ -251,7 +250,7 @@ func (s *integrations) key(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, nkeys.Bottom):
 		s.list.cursor = len(insps) - 1
 	case key.Matches(msg, nkeys.PageUp, nkeys.PageDown):
-		s.detail.scroll(msg)
+		s.detail.key(msg)
 	case key.Matches(msg, nkeys.Enter):
 		if s.st.wide() {
 			return s.startSetup(sel.ClientID, false)
@@ -272,7 +271,7 @@ func (s *integrations) detailKey(msg tea.KeyMsg, sel integration.Inspection) tea
 	case key.Matches(msg, nkeys.Enter):
 		return s.startSetup(sel.ClientID, false)
 	default:
-		s.detail.scroll(msg)
+		s.detail.key(msg)
 	}
 
 	return nil
@@ -430,7 +429,7 @@ func (s *integrations) detailBox(insp integration.Inspection, w, h int, focused 
 	t := s.st.theme
 	inner, rows := boxInner(w), boxRows(h)
 
-	content := s.detail.render(insp.ClientID, strings.Join(s.detailLines(insp, inner), "\n"), inner, rows)
+	lines := s.detail.lines(insp.ClientID, s.detailLines(insp, inner), inner, rows)
 
 	right := ""
 	if s.st.integrations.stale() {
@@ -440,7 +439,7 @@ func (s *integrations) detailBox(insp integration.Inspection, w, h int, focused 
 	return t.box(boxOpts{
 		W: w, H: h, Focus: focused,
 		Title: integPaneTitle(t, integName(s.clientOf(insp), insp), focused), Right: right,
-		Foot: s.detail.foot(t), Lines: strings.Split(content, "\n"),
+		Foot: s.detail.foot(t), Lines: lines,
 	})
 }
 
@@ -578,82 +577,4 @@ func integName(c integration.Client, insp integration.Inspection) string {
 	}
 
 	return insp.Name
-}
-
-// integPager scrolls one long text box over bubbles/viewport. It keeps
-// the offset while the content key stays the same, so a refresh keeps
-// the position and a new selection starts at the top.
-type integPager struct {
-	vp  viewport.Model
-	key string
-}
-
-// render sizes the viewport, sets the content and returns the visible
-// window.
-func (p *integPager) render(id, content string, w, h int) string {
-	p.vp.Width, p.vp.Height = max(1, w), max(1, h)
-	p.vp.SetContent(content)
-
-	if id != p.key {
-		p.key = id
-		p.vp.GotoTop()
-	}
-
-	return p.vp.View()
-}
-
-// scroll applies a movement key. It reports whether the key moved.
-func (p *integPager) scroll(msg tea.KeyMsg) bool {
-	switch {
-	case key.Matches(msg, nkeys.Up):
-		p.vp.ScrollUp(1)
-	case key.Matches(msg, nkeys.Down):
-		p.vp.ScrollDown(1)
-	case key.Matches(msg, nkeys.PageUp):
-		p.vp.PageUp()
-	case key.Matches(msg, nkeys.PageDown):
-		p.vp.PageDown()
-	case key.Matches(msg, nkeys.Top):
-		p.vp.GotoTop()
-	case key.Matches(msg, nkeys.Bottom):
-		p.vp.GotoBottom()
-	default:
-		return false
-	}
-
-	return true
-}
-
-// position returns "a–b of n" while the content scrolls, else "".
-func (p *integPager) position(t *Theme) string {
-	if p.vp.TotalLineCount() <= p.vp.Height {
-		return ""
-	}
-
-	return p.span(t)
-}
-
-// span returns "a–b of n" for the visible lines, or "" for no content.
-// The diff box shows it even when every line fits, as in the design.
-func (p *integPager) span(t *Theme) string {
-	total := p.vp.TotalLineCount()
-	if total == 0 {
-		return ""
-	}
-
-	first := p.vp.YOffset + 1
-	last := min(total, p.vp.YOffset+p.vp.Height)
-
-	return t.positionNote(first, last, total)
-}
-
-// foot renders the scroll position for a box border, or "" when all
-// content fits.
-func (p *integPager) foot(t *Theme) string {
-	pos := p.position(t)
-	if pos == "" {
-		return ""
-	}
-
-	return t.Faint.Render(pos)
 }

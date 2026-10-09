@@ -104,7 +104,7 @@ func TestMaintRetargetKeepsTheEditedLiveNote(t *testing.T) {
 		assert.Contains(t, text, "The retarget keeps the live note; the recorded note of p9 stays as history.")
 
 		mod := maintHostOf(h).modal
-		body := mod.content(modalBodyWidth(modalMinW, size[0])).body
+		body := mod.content(modalBodyWidth(modalMinW, size[0])).Body
 		side := false
 
 		for _, l := range body {
@@ -305,7 +305,7 @@ func TestMaintPruneNamesWhatLeavesAndWhatStays(t *testing.T) {
 	assert.NotContains(t, text, "Unknown owner", "the key never reads as an unknown owner")
 
 	// Every label keeps a gap of two cells, also the longest one.
-	body := ansi.Strip(strings.Join(maintHostOf(h).modal.content(modalBodyWidth(modalMinW, 120)).body, "\n"))
+	body := ansi.Strip(strings.Join(maintHostOf(h).modal.content(modalBodyWidth(modalMinW, 120)).Body, "\n"))
 	assert.Contains(t, body, "Retained  close-db-handles")
 	assert.Contains(t, body, "Keys      unknown key owner")
 
@@ -417,7 +417,7 @@ func TestMaintEscLeavesEveryOpenStageWithoutAChange(t *testing.T) {
 	read, consumed := host.route(openMaintMsg{req: p.Request})
 	require.True(t, consumed)
 	require.NotNil(t, read)
-	require.Equal(t, maintStagePreparing, host.modal.stage)
+	require.Equal(t, flowPreparing, host.modal.stage)
 	assert.Contains(t, maintContent(t, h), "Preparing the retarget preview")
 	assert.Contains(t, maintContent(t, h), "Nothing is written.")
 	assert.Equal(t, "esc cancel", ansi.Strip(h.m.st.theme.hints(host.keys())))
@@ -432,7 +432,7 @@ func TestMaintEscLeavesEveryOpenStageWithoutAChange(t *testing.T) {
 	require.True(t, host.open())
 
 	h.press("j", "pgdown", "G", "g")
-	assert.Equal(t, maintStagePreview, host.modal.stage, "movement keys scroll")
+	assert.Equal(t, flowPreview, host.modal.stage, "movement keys scroll")
 
 	h.press("esc")
 	assert.False(t, host.open())
@@ -449,18 +449,18 @@ func TestMaintCommittingWaitsForTheResult(t *testing.T) {
 	mod := maintHostOf(h).modal
 
 	commit := mod.commit()
-	require.Equal(t, maintStageCommitting, mod.stage)
+	require.Equal(t, flowCommitting, mod.stage)
 	assert.Equal(t, "Pruning 1 pin", h.m.st.mutation)
 	assert.Contains(t, maintContent(t, h), "The operation cannot stop safely; the result appears here.")
 	assert.Empty(t, hookLessons(h).keys(), "a commit offers no key")
 
 	h.press("esc", "y", "c", "enter", "o")
-	assert.Equal(t, maintStageCommitting, mod.stage, "keys wait for the result")
+	assert.Equal(t, flowCommitting, mod.stage, "keys wait for the result")
 	assert.True(t, maintHostOf(h).open())
 	assert.Contains(t, h.view(), "Pruning 1 pin")
 
 	h.run(commit)
-	assert.Equal(t, maintStageResult, mod.stage)
+	assert.Equal(t, flowResult, mod.stage)
 	assert.Empty(t, h.m.st.mutation)
 	assert.Equal(t, 1, f.callCount("CommitMaintenance:prune"))
 	assert.Contains(t, maintContent(t, h), "Pruned 1 pin")
@@ -521,7 +521,7 @@ func TestMaintPartialResultOffersOnlyAProvenRecovery(t *testing.T) {
 	assert.True(t, maintHasKey(h, "c"))
 
 	h.press("enter")
-	assert.Equal(t, maintStageResult, maintHostOf(h).modal.stage, "enter never dismisses a recovery")
+	assert.Equal(t, flowResult, maintHostOf(h).modal.stage, "enter never dismisses a recovery")
 
 	h.press("c")
 	require.Same(t, offered, previewed, "c previews the recovery of this result")
@@ -638,13 +638,13 @@ func TestMaintRecoveryPreviewKeepsTheOffer(t *testing.T) {
 	require.True(t, mod.recovering)
 
 	h.press("esc")
-	assert.Equal(t, maintStageResult, mod.stage, "esc returns to the result")
+	assert.Equal(t, flowResult, mod.stage, "esc returns to the result")
 	assert.NotNil(t, mod.offer)
 	assert.True(t, maintHasKey(h, "c"))
 
 	h.press("c")
 	h.send(settingsSavedMsg{group: settings.GroupPinWrite})
-	assert.Equal(t, maintStageResult, mod.stage, "a save returns to the result and keeps the proof")
+	assert.Equal(t, flowResult, mod.stage, "a save returns to the result and keeps the proof")
 	assert.NotNil(t, mod.offer)
 	assert.Contains(t, h.m.toast.text, "so the ledger completion preview closed. Press c to check it again.")
 
@@ -691,7 +691,7 @@ func TestMaintRecoveryPreviewKeepsTheOffer(t *testing.T) {
 
 	h.press("o")
 	assert.Equal(t, destSettings, h.m.active)
-	assert.Equal(t, maintStageResult, mod.stage)
+	assert.Equal(t, flowResult, mod.stage)
 	assert.NotNil(t, mod.offer, "a visit to Settings keeps the proof")
 
 	// A gate that cannot be read names the file fix and keeps the offer.
@@ -792,7 +792,7 @@ func TestMaintStaleResultOffersAFreshPreview(t *testing.T) {
 	assert.Empty(t, h.m.st.mutation, "a refusal frees the slot")
 
 	h.press("enter")
-	assert.Equal(t, maintStagePreview, maintHostOf(h).modal.stage, "enter builds a fresh preview")
+	assert.Equal(t, flowPreview, maintHostOf(h).modal.stage, "enter builds a fresh preview")
 	assert.Equal(t, 2, f.callCount("PlanMaintenance:retarget"))
 	assert.Equal(t, 1, f.callCount("CommitMaintenance:retarget"), "nothing is retried automatically")
 }
@@ -969,7 +969,7 @@ func TestMaintSettingsSaveClosesAPreviewOnly(t *testing.T) {
 
 	h.send(openMaintMsg{req: p.Request})
 	h.press("y")
-	require.Equal(t, maintStageResult, maintHostOf(h).modal.stage)
+	require.Equal(t, flowResult, maintHostOf(h).modal.stage)
 
 	h.send(settingsSavedMsg{group: settings.GroupPinWrite})
 	assert.True(t, maintHostOf(h).open(), "a result stays after a save")
@@ -1108,7 +1108,7 @@ func TestMaintHostileTextStaysInert(t *testing.T) {
 					t.Helper()
 
 					v := mod.content(modalBodyWidth(modalMinW, size[0]))
-					all := strings.Join(append(append([]string{v.title, v.right}, v.body...), v.tail...), "\n") +
+					all := strings.Join(append(append([]string{v.Title, v.Right}, v.Body...), v.Tail...), "\n") +
 						h.m.View()
 
 					for _, bad := range []string{"\x1b", "\x07", "\u009b"} {
@@ -1129,7 +1129,7 @@ func TestMaintHostileTextStaysInert(t *testing.T) {
 
 				// The result, the recovery preview and a refusal hold
 				// engine errors and ledger rows.
-				mod.stage, mod.offer = maintStageResult, recovery
+				mod.stage, mod.offer = flowResult, recovery
 				mod.out = &maintOutcome{plan: p, res: maintain.Result{
 					Action: a, FileWritten: true, FileErr: hostileErr, LedgerErr: hostileErr, RestoreErr: hostileErr,
 					RestoreRefused: "refused " + maintHostile, ObservedErr: nil,
@@ -1144,11 +1144,11 @@ func TestMaintHostileTextStaysInert(t *testing.T) {
 				mod.out.err = hostileErr
 				check("refusal")
 
-				mod.stage, mod.recovering, mod.plan, mod.err = maintStagePreview, true, nil, nil
+				mod.stage, mod.recovering, mod.preview, mod.err = flowPreview, true, nil, nil
 				h.run(mod.prepareRecovery())
 				check("recovery preview")
 
-				mod.recovering, mod.plan, mod.err = false, nil, hostileErr
+				mod.recovering, mod.preview, mod.err = false, nil, hostileErr
 				check("plan failure")
 			}
 		}
@@ -1194,9 +1194,9 @@ func TestMaintLayoutsKeepTheScopeVisible(t *testing.T) {
 			assertFrame(t, frame, size[0], size[1])
 
 			v := maintHostOf(h).modal.content(modalBodyWidth(modalMinW, size[0]))
-			require.NotEmpty(t, v.tail, "%s keeps a scope summary", sc.name)
+			require.NotEmpty(t, v.Tail, "%s keeps a scope summary", sc.name)
 
-			first := strings.TrimSpace(ansi.Strip(v.tail[0]))
+			first := strings.TrimSpace(ansi.Strip(v.Tail[0]))
 			assert.Contains(t, frame, first, "%s at %v shows its scope summary", sc.name, size)
 			assert.Contains(t, frame, sc.label, "%s at %v shows its action", sc.name, size)
 		}
@@ -1405,7 +1405,7 @@ func TestMaintBlockScalarNotesHaveNoTrailingBlankRow(t *testing.T) {
 	p.Items[0].Kept[0].Entry.Note = "Close database handles.\nIn the same function.\n"
 
 	h := maintOpen(t, maintFakeOf(fx, p, nil), p.Request, 120, 40)
-	body := maintHostOf(h).modal.content(modalBodyWidth(modalMinW, 120)).body
+	body := maintHostOf(h).modal.content(modalBodyWidth(modalMinW, 120)).Body
 	found := 0
 
 	for i, l := range body {

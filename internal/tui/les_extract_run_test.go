@@ -39,7 +39,7 @@ func extResultOf(t *testing.T, opts extPreviewOpts, w, hh int,
 
 	h := extOpen(t, f, p, w, hh)
 	h.press("y")
-	require.Equal(t, extResult, extRecOf(t, h).step)
+	require.Equal(t, stepResult, extRecOf(t, h).step)
 
 	return h
 }
@@ -280,7 +280,7 @@ func extRunTo(t *testing.T, f *fakeServices, p *learning.ExtractPreview, w, hh i
 
 	h := extOpen(t, f, p, w, hh)
 	h.press("y")
-	require.Equal(t, extResult, extRecOf(t, h).step)
+	require.Equal(t, stepResult, extRecOf(t, h).step)
 
 	return h
 }
@@ -519,7 +519,7 @@ func TestExtractUsageCountsThePromptThatIsWithTheAgent(t *testing.T) {
 	assert.Equal(t, first+" tokens sent to batch 1 (estimated); reply pending", rec.usageText())
 	assert.NotContains(t, h.view(), "no agent traffic yet")
 
-	b := rec.run.batches[0]
+	b := rec.run.units[0]
 	extAnswered(&b)
 	extStored(&b.Items[0], "internal/index/schema.go")
 	extSend(h, rec, extDoneEv(rec, 0, b))
@@ -562,7 +562,7 @@ func TestExtractASCIICountsReadAsCounts(t *testing.T) {
 	h.resize(120, 40)
 
 	h.press("y")
-	require.Equal(t, extResult, extRecOf(t, h).step)
+	require.Equal(t, stepResult, extRecOf(t, h).step)
 
 	result := extTallFlat(h)
 	assert.Contains(t, result, "tokens sent, ~")

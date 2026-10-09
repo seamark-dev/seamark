@@ -683,11 +683,7 @@ func (p *propView) runMessage(l *proposals.Ledger) propMessage {
 // confirm an effect that the user never saw. A commit that runs stays.
 func (p *propView) settingsSaved(msg settingsSavedMsg) tea.Cmd {
 	d := p.dec
-	if msg.group != settings.GroupPinWrite || d == nil || d.action != proposals.ActionApply {
-		return nil
-	}
-
-	if d.stage != propStagePreparing && d.stage != propStagePreview {
+	if msg.group != settings.GroupPinWrite || d == nil || d.action != proposals.ActionApply || !d.beforeCommit() {
 		return nil
 	}
 

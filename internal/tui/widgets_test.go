@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
@@ -15,9 +14,9 @@ import (
 )
 
 // The tests of the shared widgets: the radio glyphs, the scrolling
-// modal, the phase rows, the activity and effect lines, the input
-// options, and the empty block. Most tests call the widget directly,
-// because many screens draw the same widget.
+// modal, the phase rows, the activity and effect lines, and the empty
+// block. Most tests call the widget directly, because many screens draw
+// the same widget. input_test.go holds the tests of the text input.
 
 func TestRadioGlyphs(t *testing.T) {
 	u := newTheme(false)
@@ -68,6 +67,58 @@ func TestModalScrollsItsBodyAndKeepsTheActions(t *testing.T) {
 	o.MinW = 64
 	assert.Equal(t, 64, width(strings.Split(ansi.Strip(th.modal(o, nil, 90, 20)), "\n")[0]))
 	assert.Equal(t, 76, modalBodyWidth(0, 120), "the body width is the inner width of the box")
+}
+
+func TestStatsAndRunBoxesPageTheirBodyTheSameWay(t *testing.T) {
+	st := &state{theme: newTheme(false)}
+	stats := newStatsView(st)
+	run := &evRun{st: st}
+
+	body := make([]string, 30)
+	for i := range body {
+		body[i] = "line " + itoa(i+1)
+	}
+
+	o := boxOpts{W: 30, H: 10, Title: "Box"}
+
+	render := func() []string {
+		a := stats.scrollBox(statsPaneLessons, o, body)
+		b := run.scrollBox(0, o, body)
+		require.Equal(t, a, b, "the Stats box and the run box render the same frame")
+
+		return strings.Split(ansi.Strip(a), "\n")
+	}
+
+	page := func() {
+		require.True(t, stats.scroll[statsPaneLessons].key(keyMsg("pgdown")))
+		require.True(t, run.scroll[0].key(keyMsg("pgdown")))
+	}
+
+	lines := render()
+	require.Len(t, lines, 10)
+	assert.Contains(t, lines[1], "line 1 ")
+	assert.Contains(t, lines[8], "line 8 ")
+	assert.Contains(t, lines[9], "1–8 of 30")
+
+	page()
+
+	lines = render()
+	assert.Contains(t, lines[1], "line 9 ")
+	assert.Contains(t, lines[9], "9–16 of 30", "a page moves by the 8 rows of the box")
+
+	page()
+	page()
+
+	lines = render()
+	assert.Contains(t, lines[1], "line 23")
+	assert.Contains(t, lines[8], "line 30")
+	assert.Contains(t, lines[9], "23–30 of 30", "the offset stops at the last page")
+
+	// A body that fits shows no position and moves back to the top.
+	lines = strings.Split(ansi.Strip(stats.scrollBox(statsPaneLessons, o, body[:5])), "\n")
+	assert.Contains(t, lines[1], "line 1 ")
+	assert.NotContains(t, lines[9], "of 5")
+	assert.Equal(t, stats.scrollBox(statsPaneLessons, o, body[:5]), run.scrollBox(0, o, body[:5]))
 }
 
 func TestPhaseRows(t *testing.T) {
@@ -129,26 +180,6 @@ func TestEffectLines(t *testing.T) {
 	assert.Equal(t, []string{"", "WILL", "+ write .seamark/config.yaml", "", "WON'T", "· run a model"},
 		strings.Split(ansi.Strip(strings.Join(lines, "\n")), "\n"))
 	assert.Empty(t, th.effectLines(nil, nil, 60))
-}
-
-func TestInputOptions(t *testing.T) {
-	th := newTheme(false)
-
-	var region propInput
-	assert.Equal(t, "_ path, for example internal/api", ansi.Strip(region.view(th)), "zero values keep the region hint")
-
-	days := propInput{
-		placeholder: "days, for example 730",
-		limit:       4,
-		accept:      func(r rune) bool { return r >= '0' && r <= '9' },
-	}
-	assert.Equal(t, "_ days, for example 730", ansi.Strip(days.view(th)))
-
-	days.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("7a3-0x12")})
-	assert.Equal(t, "7301", days.value(), "the filter drops other runes and the limit stops the value")
-
-	region.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("a", propInputLimit+5))})
-	assert.Len(t, region.value(), propInputLimit, "zero values keep the region limit")
 }
 
 // longEmptyBody is an explanation that needs many lines at 58 cells.

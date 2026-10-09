@@ -277,7 +277,7 @@ func TestEvidencePreviewWithoutGHMakesNoOfflinePromise(t *testing.T) {
 	h, les := evOpen(t, f, 120, 40)
 
 	evPress(h, les, evRefreshReviews)
-	plan := les.evid.prev.plan
+	plan := les.evid.prev.preview
 	require.True(t, plan.Network, "a GitHub origin makes the plan a network plan, with or without gh")
 
 	block, ok := les.evid.modal(120, 400)
@@ -332,12 +332,12 @@ func TestEvidencePreviewWithoutGHMakesNoOfflinePromise(t *testing.T) {
 	assert.NotContains(t, text, "Network no")
 }
 
-func TestEvidencePreviewWhilePlanningCanBeCancelled(t *testing.T) {
+func TestEvidencePreviewWhilePreparingCanBeCancelled(t *testing.T) {
 	f := evFake()
 	h, les := evOpen(t, f, 120, 40)
 
 	// The test drops the plan command, so the preview stays in its
-	// planning stage, as while the plan reads.
+	// Preparing stage, as while the plan reads.
 	_ = les.evid.plan(index.SourcesLocal)
 	seq := les.evid.seq.last
 

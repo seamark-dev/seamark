@@ -65,7 +65,7 @@ func TestExtractReviewDisclosesThePreview(t *testing.T) {
 	h := extOpen(t, f, p, 120, 40)
 	rec := extRecOf(t, h)
 
-	require.Equal(t, extReview, rec.step)
+	require.Equal(t, stepPreview, rec.step)
 	assert.Equal(t, []string{"PlanExtract"}, f.called(), "the review plans once and runs nothing")
 	assert.True(t, rec.draft(), "a review did no work")
 	assert.False(t, rec.active())
@@ -110,7 +110,7 @@ func TestExtractReviewShowsBothNotesOfALiveEdit(t *testing.T) {
 	h := extOpen(t, extFake(p, extNoRun(t)), p, 120, 40)
 
 	h.press("down", "down", "down", "down")
-	require.Equal(t, 4, extRecOf(t, h).plan.cursor)
+	require.Equal(t, 4, extRecOf(t, h).prev.cursor)
 
 	// The compact pane shows the detail of the cursor item in one box.
 	h.resize(80, 120)
@@ -281,7 +281,7 @@ func TestExtractStartsExactlyTheReviewedPreviewOnce(t *testing.T) {
 
 	h := extOpen(t, f, p, 120, 40)
 	rec := extRecOf(t, h)
-	reviewed := rec.plan.preview
+	reviewed := rec.prev.preview
 
 	h.press("y", "y", "enter", "y")
 
@@ -290,7 +290,7 @@ func TestExtractStartsExactlyTheReviewedPreviewOnce(t *testing.T) {
 	assert.Equal(t, runExtract, h.m.st.lastRunKind)
 	assert.False(t, h.m.st.busy(), "every terminal path frees the slot")
 	assert.Nil(t, h.m.st.run)
-	assert.Equal(t, extResult, rec.step)
+	assert.Equal(t, stepResult, rec.step)
 	assert.False(t, rec.draft(), "a finished record stays in the session list")
 	assert.Error(t, ctxs[0].Err(), "the worker releases its context when it ends")
 	assert.Equal(t, 1, f.callCount("PlanExtract"), "the start plans nothing again")
@@ -305,7 +305,7 @@ func TestExtractRefusesToStartWhileBusy(t *testing.T) {
 	h.press("y")
 
 	assert.Zero(t, f.callCount("RunExtract"))
-	assert.Equal(t, extReview, extRecOf(t, h).step, "the preview stays ready")
+	assert.Equal(t, stepPreview, extRecOf(t, h).step, "the preview stays ready")
 	assert.Contains(t, h.view(), "Another operation is running: Building the index")
 }
 
@@ -353,12 +353,12 @@ func TestExtractStopsAThreeBatchRunInTheSynchronousHarness(t *testing.T) {
 	h.press("y")
 
 	rec := extRecOf(t, h)
-	require.Equal(t, extResult, rec.step, "the run ended and every queued event arrived")
+	require.Equal(t, stepResult, rec.step, "the run ended and every queued event arrived")
 	assert.Equal(t, 1, f.callCount("RunExtract"))
 	assert.Error(t, seen.Err())
 	assert.Equal(t, 2, rec.run.finished, "both done events arrived")
-	require.NotNil(t, rec.run.stopped)
-	assert.Equal(t, distill.StopCancelled, rec.run.stopped.Stop)
+	require.True(t, rec.run.stopped, "the stop event arrived")
+	assert.Equal(t, distill.StopCancelled, rec.run.stopWhy)
 	assert.True(t, rec.run.checked)
 	assert.False(t, h.m.st.busy())
 	assert.Equal(t, []int64{21, 6, 4}, rec.remaining())
@@ -376,7 +376,7 @@ func TestExtractQueueHoldsEveryEventOfARun(t *testing.T) {
 	// A short queue would block the worker in the harness, so the size
 	// is checked first and the test stops before it can hang.
 	for n := range 20 {
-		require.GreaterOrEqual(t, extQueueSize(n), 2*n+2, "2n+1 engine events and the end message fit")
+		require.GreaterOrEqual(t, cap(agentQueue(n)), 2*n+2, "2n+1 engine events and the end message fit")
 	}
 
 	// A run that sends the most events the engine sends: a start and a
@@ -412,7 +412,7 @@ func TestExtractQueueHoldsEveryEventOfARun(t *testing.T) {
 	h.press("y")
 
 	rec := extRecOf(t, h)
-	assert.Equal(t, extResult, rec.step)
+	assert.Equal(t, stepResult, rec.step)
 	assert.Equal(t, 3, rec.run.finished)
 	assert.Contains(t, extTallFlat(h), "Trigger extraction finished with a conflict")
 }
@@ -478,8 +478,8 @@ func TestExtractStopAsksFirstAndStopsOnce(t *testing.T) {
 	h.press("x")
 	assert.False(t, rec.capturing(), "no second stop question")
 
-	h.send(extDoneMsg{rec: rec, exec: extStoppedExec(rec.plan.preview), at: time.Now()})
-	assert.Equal(t, extResult, rec.step)
+	h.send(extDoneMsg{rec: rec, exec: extStoppedExec(rec.prev.preview), at: time.Now()})
+	assert.Equal(t, stepResult, rec.step)
 	assert.False(t, h.m.st.busy())
 	assert.Contains(t, extTallFlat(h), "Trigger extraction stopped")
 }
@@ -498,8 +498,8 @@ func TestExtractQuitQuestionStopsTheRun(t *testing.T) {
 	assert.True(t, rec.stopping(), "the record shows the stop of the shell")
 	assert.Contains(t, h.view(), "Stopping after batch 2 of 3")
 
-	h.send(extDoneMsg{rec: rec, exec: extStoppedExec(rec.plan.preview), at: time.Now()})
-	assert.Equal(t, extResult, rec.step)
+	h.send(extDoneMsg{rec: rec, exec: extStoppedExec(rec.prev.preview), at: time.Now()})
+	assert.Equal(t, stepResult, rec.step)
 	assert.True(t, h.quit, "the console exits after the stopped work ends")
 }
 
@@ -517,7 +517,7 @@ func TestExtractResultGroupsEveryOutcome(t *testing.T) {
 	h.press("y")
 
 	rec := extRecOf(t, h)
-	require.Equal(t, extResult, rec.step)
+	require.Equal(t, stepResult, rec.step)
 
 	flat := extTallFlat(h)
 	for _, want := range []string{
@@ -657,14 +657,14 @@ func TestExtractPrepareRemainingPlansANewPreview(t *testing.T) {
 	h.press("y")
 
 	first := extRecOf(t, h)
-	require.Equal(t, extResult, first.step)
+	require.Equal(t, stepResult, first.step)
 	assert.Contains(t, footerLine(h.view()), "n prepare remaining")
 
 	h.press("n")
 
 	next := extRecOf(t, h)
 	require.NotSame(t, first, next, "n opens a new record")
-	assert.Equal(t, extReview, next.step, "the new record plans and waits for y")
+	assert.Equal(t, stepPreview, next.step, "the new record plans and waits for y")
 	require.Len(t, reqs, 2)
 	assert.Equal(t, []int64{21, 6, 4}, reqs[1].IDs, "it plans exactly the open questions")
 	assert.Empty(t, reqs[1].Skipped)
@@ -684,7 +684,7 @@ func TestExtractRefusedStartReturnsToTheReview(t *testing.T) {
 	h.press("y")
 
 	rec := extRecOf(t, h)
-	assert.Equal(t, extReview, rec.step)
+	assert.Equal(t, stepPreview, rec.step)
 	assert.False(t, h.m.st.busy())
 	assert.False(t, rec.runnable())
 	assert.Contains(t, h.view(), "The trigger extraction did not start: p21 is applied now.")
@@ -736,7 +736,7 @@ func TestExtractInternalErrorKeepsTheEventsThatArrived(t *testing.T) {
 	h.press("y")
 
 	rec := extRecOf(t, h)
-	require.Equal(t, extResult, rec.step)
+	require.Equal(t, stepResult, rec.step)
 	assert.True(t, rec.run.internal)
 	assert.False(t, h.m.st.busy(), "a panic frees the slot")
 
@@ -877,7 +877,7 @@ func TestExtractFramesAreASCIIOnlyAndFit(t *testing.T) {
 	h.press("y")
 	check("stopping")
 
-	h.send(extDoneMsg{rec: rec, exec: extStoppedExec(rec.plan.preview), at: time.Now()})
+	h.send(extDoneMsg{rec: rec, exec: extStoppedExec(rec.prev.preview), at: time.Now()})
 	check("result")
 	assert.Contains(t, extTallFlat(h), "(estimated)", "an approximate number carries its word in ASCII")
 }

@@ -127,7 +127,7 @@ func TestProposalsRecordRefusalNamesTheRegionFields(t *testing.T) {
 	require.NotNil(t, p.dec)
 
 	m := p.modalContent(p.dec, 200)
-	body := lesFlat(ansi.Strip(strings.Join(m.body, "\n")))
+	body := lesFlat(ansi.Strip(strings.Join(m.Body, "\n")))
 	assert.Contains(t, body, "the stored region fields of the selected proposals disagree: p1")
 	assert.Contains(t, body, "Pins links these proposals by other regions than the ones that their apply writes, "+
 		"so no pin is proven to be theirs. Dismiss them with d, or resolve them by hand.")

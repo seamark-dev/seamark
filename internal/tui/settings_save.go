@@ -18,35 +18,21 @@ import (
 // background and opens the diff preview. Only y in that preview writes,
 // under the mutation slot. The key esc before y changes nothing.
 
-// settingsStage is the step of the preview and save of one group.
-type settingsStage int
-
-const (
-	settingsIdle settingsStage = iota
-	// settingsPlanning waits for the plan of the patch.
-	settingsPlanning
-	// settingsPreview shows the diff, or the reason that there is none.
-	settingsPreview
-	// settingsSaving waits for the write.
-	settingsSaving
-	// settingsResult explains a save that wrote nothing.
-	settingsResult
-)
-
-// settingsFlow is the state of one preview and save.
+// settingsFlow is the state of one preview and save. The embedded flow
+// holds the stage and the previewed plan. flowClosed shows no modal, and
+// flowResult explains a save that wrote nothing. A successful save
+// closes the flow and shows a toast instead.
 type settingsFlow struct {
-	stage settingsStage
+	previewFlow[settings.Plan]
+
 	// seq identifies the request. A plan that arrives after esc has an
-	// old seq, and the screen drops it.
+	// old seq, and the screen drops it. A new flow value takes the seq
+	// of the old one, so the tickets keep growing.
 	seq   generation
 	group settings.Group
-	plan  *settings.Plan
-	// err is the plan failure of the preview stage.
-	err error
 	// res and saveErr are the outcome of a save that wrote nothing.
 	res     settings.Result
 	saveErr error
-	scroll  scrollState
 }
 
 // settingsSaveNote records the last successful save of the session.
@@ -92,13 +78,6 @@ type settingsPrompt struct {
 	group settings.Group
 }
 
-// settingsModal is the content of one modal of the destination.
-type settingsModal struct {
-	title, right string
-	body         []string
-	actions      []key.Binding
-}
-
 // saveBlocked returns the reason that s cannot review group g, or "".
 func (s *settingsScreen) saveBlocked(g settings.Group) string {
 	snap := s.snap()
@@ -131,7 +110,8 @@ func (s *settingsScreen) review(g settings.Group) tea.Cmd {
 
 	snap, edits := s.snap(), s.groupEdits(g)
 	s.excludeErrs = nil
-	s.flow = settingsFlow{stage: settingsPlanning, seq: s.flow.seq, group: g}
+	s.flow = settingsFlow{seq: s.flow.seq, group: g}
+	s.flow.startRead()
 	seq := s.flow.seq.start()
 
 	var svc Settings = s.st.svc
@@ -146,16 +126,8 @@ func (s *settingsScreen) review(g settings.Group) tea.Cmd {
 // planned opens the preview of a plan. A stale file reads again at
 // once, so the next s plans against the file as it is now.
 func (s *settingsScreen) planned(msg settingsPlannedMsg) tea.Cmd {
-	if !s.flow.seq.current(msg.seq) || s.flow.stage != settingsPlanning {
+	if !s.flow.readDone(s.flow.seq.current(msg.seq), msg.plan, msg.err, "the planner returned no plan") {
 		return nil
-	}
-
-	s.flow.stage = settingsPreview
-	s.flow.plan, s.flow.err = msg.plan, msg.err
-	s.flow.scroll = scrollState{}
-
-	if msg.err == nil && msg.plan == nil {
-		s.flow.err = errors.New("the planner returned no plan")
 	}
 
 	switch {
@@ -189,9 +161,7 @@ func (s *settingsScreen) markPatternErrors(err error) {
 
 // confirmable reports a preview that y may save now.
 func (s *settingsScreen) confirmable() bool {
-	f := s.flow
-
-	return f.stage == settingsPreview && f.err == nil && f.plan != nil && !f.plan.NoOp && !s.st.busy()
+	return s.flow.showsPreview() && !s.flow.preview.NoOp && !s.st.busy()
 }
 
 // confirm saves the previewed plan under the mutation slot.
@@ -200,20 +170,20 @@ func (s *settingsScreen) confirm() tea.Cmd {
 		return nil
 	}
 
-	if !s.st.begin("Saving settings") {
-		return toast(ToneAttention, "Saving waits for the running operation: "+oneLine(s.st.mutation)+".")
-	}
-
-	s.flow.stage = settingsSaving
-	p, g := s.flow.plan, s.flow.group
+	p, g := s.flow.preview, s.flow.group
 
 	var svc Settings = s.st.svc
 
-	return func() tea.Msg {
+	cmd, ok := s.flow.startCommit(s.st, "Saving settings", func() tea.Msg {
 		res, err := svc.SaveSettings(p)
 
 		return settingsSaveDoneMsg{group: g, plan: p, res: res, err: err, at: time.Now()}
+	})
+	if !ok {
+		return toast(ToneAttention, "Saving waits for the running operation: "+oneLine(s.st.mutation)+".")
 	}
+
+	return cmd
 }
 
 // saveDone frees the slot and applies the outcome. A success drops the
@@ -246,9 +216,10 @@ func (s *settingsScreen) saveDone(msg settingsSaveDoneMsg) tea.Cmd {
 			toast(ToneSuccess, settingsSavedText(msg.plan)))
 	}
 
-	s.flow.stage = settingsResult
+	// No key can leave a running save, so the result needs no stage
+	// check (commitDone).
+	s.flow.toResult()
 	s.flow.res, s.flow.saveErr = msg.res, err
-	s.flow.scroll = scrollState{}
 
 	// The user can leave during the save, so the notice row also says
 	// that nothing was saved. The result waits in Settings.
@@ -303,24 +274,24 @@ func (s *settingsScreen) closeFlow() {
 // flowKey handles the keys of the preview and the result.
 func (s *settingsScreen) flowKey(msg tea.KeyMsg) tea.Cmd {
 	switch s.flow.stage {
-	case settingsPlanning:
+	case flowPreparing:
 		if key.Matches(msg, nkeys.Back) {
 			s.closeFlow()
 		}
-	case settingsPreview:
+	case flowPreview:
 		switch {
 		case key.Matches(msg, settingsKeys.Confirm):
 			return s.confirm()
 		case key.Matches(msg, nkeys.Back):
 			s.closeFlow()
-		case key.Matches(msg, nkeys.Enter) && s.flow.err == nil && s.flow.plan != nil && s.flow.plan.NoOp:
+		case key.Matches(msg, nkeys.Enter) && s.flow.showsPreview() && s.flow.preview.NoOp:
 			s.closeFlow()
 		default:
 			s.flow.scroll.key(msg)
 		}
-	case settingsSaving:
+	case flowCommitting:
 		s.flow.scroll.key(msg)
-	case settingsResult:
+	case flowResult:
 		if key.Matches(msg, nkeys.Enter, nkeys.Back) {
 			s.closeFlow()
 
@@ -336,18 +307,18 @@ func (s *settingsScreen) flowKey(msg tea.KeyMsg) tea.Cmd {
 // flowActions returns the keys of the preview and the result. The
 // footer shows the same keys as the modal.
 func (s *settingsScreen) flowActions() []key.Binding {
-	f := s.flow
+	f := &s.flow
 
 	switch f.stage {
-	case settingsPlanning:
+	case flowPreparing:
 		return []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
-	case settingsSaving:
+	case flowCommitting:
 		return nil
-	case settingsResult:
+	case flowResult:
 		return []key.Binding{withHelp(nkeys.Enter, "enter", "close")}
 	}
 
-	if f.err == nil && f.plan != nil && f.plan.NoOp {
+	if f.showsPreview() && f.preview.NoOp {
 		return []key.Binding{withHelp(nkeys.Enter, "enter", "close")}
 	}
 
@@ -357,7 +328,7 @@ func (s *settingsScreen) flowActions() []key.Binding {
 	}
 
 	label := "save"
-	if settingsRemovesArgv(f.plan) {
+	if settingsRemovesArgv(f.preview) {
 		label = "save and remove agent.argv"
 	}
 
@@ -366,53 +337,42 @@ func (s *settingsScreen) flowActions() []key.Binding {
 
 // flowView renders the preview or the result as a modal.
 func (s *settingsScreen) flowView(w, h int) string {
-	m := s.flowContent(modalBodyWidth(modalMinW, w))
-
-	return s.st.theme.modal(modalOpts{Title: m.title, Right: m.right, Body: m.body, Actions: m.actions},
-		&s.flow.scroll, w, h)
+	return s.st.theme.modal(s.flowContent(modalBodyWidth(modalMinW, w)), &s.flow.scroll, w, h)
 }
 
 // flowContent builds the modal of the current stage.
-func (s *settingsScreen) flowContent(w int) settingsModal {
+func (s *settingsScreen) flowContent(w int) modalOpts {
 	t := s.st.theme
-	spin := t.Accent.Render(t.spinnerFrame(s.st.tick)) + " "
-	acts := s.flowActions()
 
 	switch s.flow.stage {
-	case settingsPlanning:
-		return settingsModal{
-			title: spin + t.Title.Render("Preparing the save preview"+t.Glyphs.Ellipsis),
-			body: propLines(t.Muted, "Seamark reads "+settingsFile+", applies the draft to a copy and checks "+
-				"the copy with the shared readers. Nothing is written.", w),
-			actions: acts,
-		}
-	case settingsSaving:
-		return settingsModal{
-			title: spin + t.Title.Render("Saving settings"+t.Glyphs.Ellipsis),
-			body:  propLines(t.Muted, "Seamark writes "+settingsFile+". The result appears here.", w),
-		}
-	case settingsResult:
+	case flowPreparing:
+		return flowWaitModal(s.st, "Preparing the save preview", "Seamark reads "+settingsFile+", applies the "+
+			"draft to a copy and checks the copy with the shared readers. Nothing is written.", true, w)
+	case flowCommitting:
+		return flowWaitModal(s.st, "Saving settings", "Seamark writes "+settingsFile+". The result appears here.",
+			false, w)
+	case flowResult:
 		return s.resultModal(w)
 	}
 
 	switch {
 	case s.flow.err != nil:
 		return s.previewErrModal(s.flow.err, w)
-	case s.flow.plan.NoOp:
-		return settingsModal{
-			title: t.Attention.Render("Nothing to save"),
-			body: propLines(t.Body, "The file already holds these values, so a save would change nothing. "+
+	case s.flow.preview.NoOp:
+		return modalOpts{
+			Title: t.Attention.Render("Nothing to save"),
+			Body: propLines(t.Body, "The file already holds these values, so a save would change nothing. "+
 				"The draft of "+settingsGroupTitle(s.flow.group)+" is dropped.", w),
-			actions: acts,
+			Actions: s.flowActions(),
 		}
 	}
 
-	return s.previewModal(s.flow.plan, w)
+	return s.previewModal(s.flow.preview, w)
 }
 
 // previewErrModal explains a plan that failed. A plan only reads, so
 // nothing changed, and the draft stays for a new attempt.
-func (s *settingsScreen) previewErrModal(err error, w int) settingsModal {
+func (s *settingsScreen) previewErrModal(err error, w int) modalOpts {
 	t := s.st.theme
 	acts := s.flowActions()
 
@@ -430,7 +390,7 @@ func (s *settingsScreen) previewErrModal(err error, w int) settingsModal {
 		body = append(body, "")
 		body = append(body, propLines(t.Muted, "The draft stays. Nothing was written.", w)...)
 
-		return settingsModal{title: t.Attention.Render("Settings cannot be saved here"), body: body, actions: acts}
+		return modalOpts{Title: t.Attention.Render("Settings cannot be saved here"), Body: body, Actions: acts}
 	case errors.Is(err, settings.ErrStale):
 		body := propNote(t, ToneAttention, "The file changed after Seamark read it, so this preview would show "+
 			"old values.", w)
@@ -439,20 +399,16 @@ func (s *settingsScreen) previewErrModal(err error, w int) settingsModal {
 		body = append(body, "")
 		body = append(body, propLines(t.Muted, "Nothing was written.", w)...)
 
-		return settingsModal{title: t.Attention.Render("The file changed"), body: body, actions: acts}
+		return modalOpts{Title: t.Attention.Render("The file changed"), Body: body, Actions: acts}
 	case errors.Is(err, settings.ErrInvalidEdit):
 		body := propNote(t, ToneFailure, errText(err), w)
 		body = append(body, "")
 		body = append(body, propLines(t.Body, "Change the draft and press s again. Nothing was written.", w)...)
 
-		return settingsModal{title: t.Failure.Render("The draft is not valid"), body: body, actions: acts}
+		return modalOpts{Title: t.Failure.Render("The draft is not valid"), Body: body, Actions: acts}
 	}
 
-	body := propNote(t, ToneFailure, "The save preview could not be built: "+errText(err), w)
-	body = append(body, "")
-	body = append(body, propLines(t.Muted, "Nothing was written.", w)...)
-
-	return settingsModal{title: t.Failure.Render("Preview failed"), body: body, actions: acts}
+	return previewFailedModal(t, "The save preview", err, "", "Nothing was written.", acts, w)
 }
 
 // staleNext says what happens to the draft after a stale refusal. The
@@ -472,7 +428,7 @@ func (s *settingsScreen) staleNext(then string) string {
 // previewModal renders the diff preview of a plan. It shows the changed
 // values, what the save does and does not do, the exact file diff, and
 // when the change takes effect.
-func (s *settingsScreen) previewModal(p *settings.Plan, w int) settingsModal {
+func (s *settingsScreen) previewModal(p *settings.Plan, w int) modalOpts {
 	t := s.st.theme
 
 	lead := "Seamark writes " + propPlural(len(p.Edits), "change", "changes") + " to " + settingsFile +
@@ -531,11 +487,11 @@ func (s *settingsScreen) previewModal(p *settings.Plan, w int) settingsModal {
 	body = append(body, "", t.Heading.Render("TAKES EFFECT"))
 	body = append(body, s.activationLines(p, w)...)
 
-	return settingsModal{
-		title:   t.TabActive.Render("Save") + " " + t.Body.Render(settingsFile),
-		right:   right,
-		body:    body,
-		actions: s.flowActions(),
+	return modalOpts{
+		Title:   t.TabActive.Render("Save") + " " + t.Body.Render(settingsFile),
+		Right:   right,
+		Body:    body,
+		Actions: s.flowActions(),
 	}
 }
 
@@ -747,7 +703,7 @@ func (s *settingsScreen) activationLines(p *settings.Plan, w int) []string {
 
 // resultModal explains a save that did not succeed. Every refusal of
 // the settings package leaves the file as it was.
-func (s *settingsScreen) resultModal(w int) settingsModal {
+func (s *settingsScreen) resultModal(w int) modalOpts {
 	t := s.st.theme
 	err := s.flow.saveErr
 
@@ -780,7 +736,7 @@ func (s *settingsScreen) resultModal(w int) settingsModal {
 	body = append(body, "")
 	body = append(body, propLines(t.Faint, "Nothing is retried automatically.", w)...)
 
-	return settingsModal{title: t.ToneStyle(tone).Render(title), body: body, actions: s.flowActions()}
+	return modalOpts{Title: t.ToneStyle(tone).Render(title), Body: body, Actions: s.flowActions()}
 }
 
 // askDiscard opens the question before x drops the draft of g.

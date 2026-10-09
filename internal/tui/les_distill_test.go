@@ -106,7 +106,7 @@ func TestDistillScopePlansTheDefaultLimit(t *testing.T) {
 	assert.Equal(t, learning.DistillRequest{Limit: distill.DefaultGroupLimit}, (*reqs)[0],
 		"the default is the CLI default, never all groups")
 	assert.Equal(t, []string{"PlanDistill"}, f.called(), "planning reads only; nothing runs")
-	assert.Equal(t, distReview, distRecOf(t, h).step)
+	assert.Equal(t, stepPreview, distRecOf(t, h).step)
 }
 
 func TestDistillScopeLimitRules(t *testing.T) {
@@ -170,7 +170,7 @@ func TestDistillScopeShowsTheServiceLimitError(t *testing.T) {
 	h.press("enter")
 
 	rec := distRecOf(t, h)
-	assert.Equal(t, distScope, rec.step, "the form holds the value to fix")
+	assert.Equal(t, stepScope, rec.step, "the form holds the value to fix")
 	assert.Contains(t, lesFlat(h.view()), "The group limit is not valid")
 }
 
@@ -214,7 +214,7 @@ func TestDistillScopeRegion(t *testing.T) {
 	rec.form.region.set("internal")
 	h.press("enter", "enter")
 
-	assert.Equal(t, distScope, rec.step)
+	assert.Equal(t, stepScope, rec.step)
 	assert.Equal(t, "The region is outside the workspace. Enter a path inside the repository.", rec.form.note)
 	assert.Contains(t, h.view(), "! The region is outside the workspace. Enter a path")
 }
@@ -604,7 +604,7 @@ func TestDistillAboutModeEndsInTheWideLayout(t *testing.T) {
 
 	h.press("enter")
 	require.Len(t, *reqs, 1, "enter plans from the visible form")
-	assert.Equal(t, distReview, rec.step)
+	assert.Equal(t, stepPreview, rec.step)
 }
 
 func TestDistillCustomLimitEscRestoresTheChoice(t *testing.T) {
@@ -757,7 +757,7 @@ func TestDistillBlockedStatesUseTheAttentionColor(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		rec.plan.err = c.err
+		rec.prev.err = c.err
 
 		box := rec.planErrBox(60, 20)
 		assert.Contains(t, box, c.want, c.name)
@@ -838,7 +838,7 @@ func TestDistillRefusedPlanMessageClearsAfterAPlan(t *testing.T) {
 	h.press("/")
 	h.send(tea.KeyMsg{Type: tea.KeyCtrlU})
 	h.press("enter", "enter")
-	require.Equal(t, distReview, distRecOf(t, h).step)
+	require.Equal(t, stepPreview, distRecOf(t, h).step)
 	assert.Empty(t, h.m.toast.text, "the stale refusal is gone")
 	assert.NotContains(t, h.view(), "outside the workspace")
 }
@@ -876,7 +876,7 @@ func TestDistillSettleClearsOnlyARecentRefusal(t *testing.T) {
 
 	assert.Nil(t, rec.settle(), "no refusal, nothing to clear")
 
-	rec.warned = time.Now().Add(-distWarnTTL - time.Second)
+	rec.warned = time.Now().Add(-agentWarnTTL - time.Second)
 	assert.Nil(t, rec.settle(), "an expired refusal is gone, and a clear would remove a newer message")
 
 	rec.warned = time.Now()

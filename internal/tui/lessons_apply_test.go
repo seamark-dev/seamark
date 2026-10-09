@@ -256,7 +256,7 @@ func TestLessonsFixShowYAMLBlockIsNotClipped(t *testing.T) {
 	// The reviewed preview keeps the exact service YAML for the commit.
 	block, err := distill.RenderPins(pv.Proposals)
 	require.NoError(t, err)
-	assert.Equal(t, block, lesProps(h).dec.pv.YAML)
+	assert.Equal(t, block, lesProps(h).dec.preview.YAML)
 }
 
 // TestLessonsFixShowYAMLExplainsAnUnfoldableLine covers finding 4: a
@@ -342,7 +342,7 @@ func TestLessonsFixGateOffExistingPinsAreNamed(t *testing.T) {
 	assert.NotContains(t, frame, "copy to clipboard", "a copy would paste the existing pin again")
 
 	// The reviewed preview keeps the service YAML for both proposals.
-	assert.Contains(t, lesProps(h).dec.pv.YAML, "check-nil-errors")
+	assert.Contains(t, lesProps(h).dec.preview.YAML, "check-nil-errors")
 
 	// c works with the gate off and records only the existing pin.
 	h.press("c")

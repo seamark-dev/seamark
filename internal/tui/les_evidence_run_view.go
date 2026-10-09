@@ -2,9 +2,7 @@ package tui
 
 import (
 	"strings"
-	"time"
 
-	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/index"
@@ -24,9 +22,6 @@ func (r *evRun) modal(w, h int) (string, bool) {
 		return "", false
 	}
 
-	t := r.st.theme
-	area := min(w, 68)
-
 	text := "Seamark stops the GitHub fetch. Stored reviews stay as they were; a partial fetch is never " +
 		"saved. A local fix phase that is running finishes and saves first. Nothing is retried."
 	if !r.reviewMode() {
@@ -34,14 +29,8 @@ func (r *evRun) modal(w, h int) (string, bool) {
 			"run. Nothing is retried."
 	}
 
-	return t.modal(modalOpts{
-		Title: t.Title.Render("Stop the evidence refresh?"),
-		Body:  propLines(t.Body, text, modalBodyWidth(64, area)),
-		Actions: []key.Binding{
-			withHelp(lesKeys.Confirm, "y", "stop the refresh"), withHelp(nkeys.Back, "esc", "keep running"),
-		},
-		MinW: 64,
-	}, nil, area, h), true
+	return runStopModal(r.st.theme, "Stop the evidence refresh?", text, withHelp(lesKeys.Confirm, "y", "stop the refresh"),
+		w, h), true
 }
 
 // evVerdict is the summary of a finished run: the tone, the right label
@@ -336,21 +325,17 @@ func (r *evRun) contextLine(w int) string {
 	return truncate(" "+strings.Join(segs, "     "), w, t.Glyphs.Ellipsis)
 }
 
-// rightLabel renders the state at the right of the main box.
+// rightLabel renders the state at the right of the main box. A stop
+// request counts only while the worker runs, so the order of the checks
+// does not matter here.
 func (r *evRun) rightLabel() string {
-	t := r.st.theme
-	spin := t.spinnerFrame(r.st.tick)
-
-	switch {
-	case r.stopping():
-		return t.Attention.Render(spin + " stopping" + t.Glyphs.Ellipsis)
-	case r.running:
-		return t.Accent.Render(spin) + " " + t.Muted.Render("running "+t.Glyphs.Sep+" "+runElapsed(time.Since(r.started)))
+	if r.running {
+		return runStateLabel(r.st.theme, r.st.tick, r.stopping(), r.started)
 	}
 
 	v := r.verdict()
 
-	return t.Badge(v.tone, v.right)
+	return r.st.theme.Badge(v.tone, v.right)
 }
 
 // headline renders the first line of the main box: the current step of
@@ -646,22 +631,7 @@ func (r *evRun) compactBox(w, h int) string {
 
 // scrollBox renders body in a box whose text scrolls with the state of
 // pane i. The foot shows the visible range, so hidden lines are never a
-// surprise.
+// surprise. The shared Theme.scrollBox keeps the rules of every box.
 func (r *evRun) scrollBox(i int, o boxOpts, body []string) string {
-	t := r.st.theme
-	sc := &r.scroll[i]
-
-	window := boxRows(o.H)
-	sc.page = window
-	sc.last = max(0, len(body)-window)
-	sc.by(0)
-
-	end := min(len(body), sc.off+window)
-	o.Lines = body[sc.off:end]
-
-	if sc.scrolls() {
-		o.Foot = propRange(t, sc.off, end, len(body))
-	}
-
-	return t.box(o)
+	return r.st.theme.scrollBox(o, body, nil, &r.scroll[i], [2]int{-1, -1}, false)
 }

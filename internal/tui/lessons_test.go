@@ -645,6 +645,28 @@ func TestLessonsCommitRefusalsHaveClearMessages(t *testing.T) {
 	}
 }
 
+// TestPropDecisionKeepsTheReadFailureAndTheRefusalApart checks that only
+// a commit refusal at Result offers a new preview. The err of the flow is
+// the read failure of the Preview stage, and it is never a refusal.
+func TestPropDecisionKeepsTheReadFailureAndTheRefusalApart(t *testing.T) {
+	stale := fmt.Errorf("%w: p1 changed", proposals.ErrStale)
+
+	failed := &propDecision{previewFlow: previewFlow[proposals.Preview]{stage: flowPreview, err: stale}}
+	assert.False(t, failed.reviewAgain(), "a read failure is no refusal")
+
+	refused := &propDecision{previewFlow: previewFlow[proposals.Preview]{stage: flowResult}, refusal: stale}
+	assert.True(t, refused.reviewAgain())
+
+	empty := &propDecision{
+		previewFlow: previewFlow[proposals.Preview]{stage: flowResult},
+		refusal:     proposals.ErrNothingSelected,
+	}
+	assert.False(t, empty.reviewAgain(), "a new preview cannot select proposals")
+
+	applied := &propDecision{previewFlow: previewFlow[proposals.Preview]{stage: flowResult}}
+	assert.False(t, applied.reviewAgain(), "a commit without a refusal has nothing to review")
+}
+
 func TestLessonsAlreadyPinnedOffersLedgerOnlyRecord(t *testing.T) {
 	f := newFake()
 	f.ledger = lesLedger()
@@ -731,7 +753,7 @@ func TestLessonsBusyGuardRejectsASecondMutation(t *testing.T) {
 	assert.Contains(t, h.view(), "Another operation is running: Building the index")
 	assert.Equal(t, []string{"PreviewDecision:apply"}, f.called())
 	require.NotNil(t, lesProps(h).dec)
-	assert.Equal(t, propStagePreview, lesProps(h).dec.stage, "the preview stays open for a later confirmation")
+	assert.Equal(t, flowPreview, lesProps(h).dec.stage, "the preview stays open for a later confirmation")
 }
 
 func TestLessonsPreviewFailureAndCancelledPreview(t *testing.T) {
@@ -1040,7 +1062,7 @@ func TestLessonsDistillCleanupIsNoOutsideChange(t *testing.T) {
 
 			// The confirmed plan names p1 as a stale pending proposal.
 			rec := newDistRecord(h.m.st)
-			rec.plan.preview = &learning.DistillPreview{Plan: &distill.Plan{
+			rec.prev.preview = &learning.DistillPreview{Plan: &distill.Plan{
 				Cleanup: []domain.Proposal{{ID: 1, Rule: "check-nil-errors"}},
 			}}
 

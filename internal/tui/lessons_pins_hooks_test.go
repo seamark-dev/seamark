@@ -373,7 +373,7 @@ func TestPinsAndProposalsContextSurvivesARoundTrip(t *testing.T) {
 	require.Equal(t, "e", p.text)
 	require.Positive(t, p.list.cursor, "the cursor left the first row")
 
-	region, text, row, cursor := p.region, p.text, p.list.cursor, p.cursor
+	region, text, row, cursor := p.region, p.text, p.list.cursor, p.cursorID
 
 	// Proposals: a cursor row below the first.
 	h.press("p", "down")
@@ -391,7 +391,7 @@ func TestPinsAndProposalsContextSurvivesARoundTrip(t *testing.T) {
 	assert.Equal(t, region, p.region, "the region filter stays")
 	assert.Equal(t, text, p.text, "the text search stays")
 	assert.Equal(t, row, p.list.cursor, "the Pins cursor row stays")
-	assert.Equal(t, cursor, p.cursor, "the Pins cursor names the same pin")
+	assert.Equal(t, cursor, p.cursorID, "the Pins cursor names the same pin")
 	assert.Equal(t, int64(2), props.cursorID, "the Proposals cursor stays")
 	assert.Equal(t, reads, f.readCount("Pins"), "a round trip reads the pins only on r or after a change")
 	assert.Empty(t, f.called(), "a round trip plans and writes nothing")

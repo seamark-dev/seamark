@@ -13,9 +13,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/integration"
 )
 
-// frPreview is the plan of the shared documents in a fresh repository:
+// frDocsPreview is the plan of the shared documents in a fresh repository:
 // three new starter files and a changed .gitignore.
-func frPreview() *SetupPreview {
+func frDocsPreview() *SetupPreview {
 	return &SetupPreview{
 		Plan: &integration.SetupPlan{Kept: []integration.FileKeep{}},
 		Writes: []integration.WritePreview{
@@ -27,17 +27,17 @@ func frPreview() *SetupPreview {
 	}
 }
 
-// frApplied reports every write of frPreview as applied.
+// frAppliedResult reports every write of frDocsPreview as applied.
 func frAppliedResult() integration.SetupResult {
 	var ops []integration.OpResult
-	for _, w := range frPreview().Writes {
+	for _, w := range frDocsPreview().Writes {
 		ops = append(ops, integration.OpResult{Path: w.Path, Status: integration.OpApplied, Created: w.Created})
 	}
 
 	return integration.SetupResult{Ops: ops}
 }
 
-// frFake returns a fresh workspace whose plan is frPreview. It records
+// frFake returns a fresh workspace whose plan is frDocsPreview. It records
 // the client list that each plan call receives.
 func frFake(planned *[][]integration.ClientSetup) *fakeServices {
 	f := newFake()
@@ -48,7 +48,7 @@ func frFake(planned *[][]integration.ClientSetup) *fakeServices {
 			*planned = append(*planned, setups)
 		}
 
-		return frPreview(), nil
+		return frDocsPreview(), nil
 	}
 	f.applySetup = func(*SetupPreview) (integration.SetupResult, error) { return frAppliedResult(), nil }
 
@@ -185,7 +185,7 @@ func TestFirstRunDropsALatePlan(t *testing.T) {
 	fr := h.m.welcome
 
 	fr.stage = frSteps
-	h.send(frPlanMsg{preview: frPreview()})
+	h.send(frPlanMsg{preview: frDocsPreview()})
 	assert.Equal(t, frSteps, fr.stage, "a plan after esc is not shown for review")
 }
 
@@ -199,13 +199,13 @@ func TestFirstRunApplyWaitsForTheMutationSlot(t *testing.T) {
 	h.press("y")
 	assert.Equal(t, []string{"PlanSetup"}, f.called(), "a second mutation does not start")
 	assert.Contains(t, h.view(), "Another operation is running: Building the index")
-	assert.Equal(t, frReview, h.m.welcome.stage)
+	assert.Equal(t, frPreview, h.m.welcome.stage)
 }
 
 func TestFirstRunStalePlanCannotApply(t *testing.T) {
 	f := frFake(nil)
 	f.planSetup = func([]integration.ClientSetup) (*SetupPreview, error) {
-		p := frPreview()
+		p := frDocsPreview()
 		p.Writes[3].Stale = true
 
 		return p, nil
@@ -350,10 +350,10 @@ func TestFirstRunQuitDuringTheApplyWaits(t *testing.T) {
 	// still running when q arrives.
 	cmd := h.m.welcome.apply()
 	require.NotNil(t, cmd)
-	require.Equal(t, frApplying, h.m.welcome.stage)
+	require.Equal(t, frCommitting, h.m.welcome.stage)
 
 	h.press("v", "esc", "enter")
-	assert.Equal(t, frApplying, h.m.welcome.stage, "the running write cannot be left")
+	assert.Equal(t, frCommitting, h.m.welcome.stage, "the running write cannot be left")
 
 	h.press("q")
 	assert.False(t, h.quit)
@@ -423,14 +423,14 @@ func TestFirstRunKeysMatchTheStage(t *testing.T) {
 
 	assert.Equal(t, []string{"↑↓ step", "enter start"}, help(fr.keys()))
 
-	fr.stage = frReview
-	fr.preview = frPreview()
+	fr.stage = frPreview
+	fr.preview = frDocsPreview()
 	assert.Equal(t, []string{"y apply", "esc back"}, help(fr.keys()))
 
 	fr.preview = &SetupPreview{Plan: &integration.SetupPlan{}}
 	assert.Equal(t, []string{"esc back"}, help(fr.keys()), "no y without a write")
 
-	fr.stage = frApplying
+	fr.stage = frCommitting
 	assert.Empty(t, fr.keys())
 }
 

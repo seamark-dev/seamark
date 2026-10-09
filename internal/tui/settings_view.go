@@ -447,28 +447,20 @@ func (s *settingsScreen) editorBox(w, h int, focused, compact bool) string {
 
 	sc := &s.detail
 	window := max(1, rows)
-	sc.page, sc.last = window, max(0, len(lines)-window)
 
 	// The editor cursor stays visible after a move. A page key moves the
-	// window freely until the next cursor move.
+	// window freely until the next cursor move. While no line has the
+	// cursor, the follow request waits for the next render.
 	if s.follow && focusAt >= 0 {
-		if focusAt < sc.off {
-			sc.off = focusAt
-		}
-
-		if focusAt >= sc.off+window {
-			sc.off = focusAt - window + 1
-		}
-
+		sc.reveal(focusAt, focusAt, window)
 		s.follow = false
 	}
 
-	sc.by(0)
-	end := min(len(lines), sc.off+window)
+	from, to := sc.fit(len(lines), window)
 
 	var foot string
 	if sc.scrolls() {
-		foot = propRange(t, sc.off, end, len(lines))
+		foot = propRange(t, from, to, len(lines))
 	}
 
 	// A narrow footer can drop esc, so the border names the way back.
@@ -488,7 +480,7 @@ func (s *settingsScreen) editorBox(w, h int, focused, compact bool) string {
 
 	return t.box(boxOpts{
 		W: w, H: h, Focus: focused, Foot: foot,
-		Title: integPaneTitle(t, title, focused), Lines: lines[sc.off:end],
+		Title: integPaneTitle(t, title, focused), Lines: lines[from:to],
 	})
 }
 

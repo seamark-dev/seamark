@@ -56,7 +56,7 @@ func pinsDetail(t *testing.T, h *harness) string {
 	t.Helper()
 
 	p := pinsOf(h)
-	cur, ok := p.current(p.rows())
+	cur, ok := p.cursorRow(p.rows())
 	require.True(t, ok, "the list has a cursor row")
 
 	var lines []string
@@ -569,7 +569,7 @@ func TestPinsRefreshKeepsTheSelectionByIdentity(t *testing.T) {
 	require.Len(t, p.selected, 1)
 	assert.True(t, p.selected.has(next.Pins[3].Entry.Ref()), "the moved pin stays marked under its new binding")
 
-	cur, ok := p.current(p.rows())
+	cur, ok := p.cursorRow(p.rows())
 	require.True(t, ok)
 	assert.Equal(t, "close-db-handles", cur.pin.Entry.Rule, "the cursor follows the pin, not the position")
 	assert.Contains(t, h.view(), `"wrap-sql-errors" left the selection: changed or no longer in the pin file`)
@@ -727,7 +727,7 @@ func TestPinsLinkFocusesThePinWithoutSelecting(t *testing.T) {
 
 	h.run(openPins(14))
 
-	cur, ok := p.current(p.rows())
+	cur, ok := p.cursorRow(p.rows())
 	require.True(t, ok)
 	assert.Equal(t, "close-database-handles", cur.pin.Entry.Rule)
 	assert.Empty(t, p.region)
@@ -755,7 +755,7 @@ func TestPinsLinkBeforeTheFirstReadWaits(t *testing.T) {
 
 	h.press("r")
 
-	cur, ok := p.current(p.rows())
+	cur, ok := p.cursorRow(p.rows())
 	require.True(t, ok)
 	assert.Equal(t, "close-db-handles", cur.pin.Entry.Rule)
 	assert.Zero(t, p.focusID)
@@ -1063,7 +1063,7 @@ func TestPinsUnreadableRefreshNeverReportsTheCursorPinAsGone(t *testing.T) {
 		h.press(c.filter...)
 		pinsCursorTo(h, c.row)
 
-		want := pinsOf(h).cursor
+		want := pinsOf(h).cursorID
 		require.NotEqual(t, pinID{}, want, c.name)
 
 		// A read error empties the list. The rows are unknown, not gone,
@@ -1077,7 +1077,7 @@ func TestPinsUnreadableRefreshNeverReportsTheCursorPinAsGone(t *testing.T) {
 		// The next good read finds the same row again, without a note.
 		f.pins = pinsInspection()
 		h.press("r")
-		assert.Equal(t, want, pinsOf(h).cursor, c.name)
+		assert.Equal(t, want, pinsOf(h).cursorID, c.name)
 		assert.NotContains(t, h.m.toast.text, "left this list", c.name)
 	}
 }
@@ -1447,7 +1447,7 @@ func TestPinsBlockScalarNoteHasNoTrailingBlankRow(t *testing.T) {
 	h := pinsOpen(t, f, 120, 40)
 
 	p := pinsOf(h)
-	cur, ok := p.current(p.rows())
+	cur, ok := p.cursorRow(p.rows())
 	require.True(t, ok)
 
 	lines := p.pinDetail(p.inspection(), cur, 120)

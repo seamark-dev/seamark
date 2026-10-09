@@ -70,7 +70,7 @@ func TestDistillStartsExactlyTheReviewedPreviewOnce(t *testing.T) {
 	h.press("enter")
 
 	rec := distRecOf(t, h)
-	reviewed := rec.plan.preview
+	reviewed := rec.prev.preview
 
 	h.press("y", "y", "enter", "y")
 
@@ -80,7 +80,7 @@ func TestDistillStartsExactlyTheReviewedPreviewOnce(t *testing.T) {
 	assert.Equal(t, runDistill, h.m.st.lastRunKind)
 	assert.False(t, h.m.st.busy(), "every terminal path frees the slot")
 	assert.Nil(t, h.m.st.run)
-	assert.Equal(t, distResult, rec.step)
+	assert.Equal(t, stepResult, rec.step)
 	assert.Error(t, calls[0].ctx.Err(), "the worker releases its context when it ends")
 }
 
@@ -114,7 +114,7 @@ func TestDistillRefusesToStartWhileBusy(t *testing.T) {
 	h.press("y")
 
 	assert.Zero(t, f.callCount("RunDistill"))
-	assert.Equal(t, distReview, distRecOf(t, h).step, "the preview stays ready")
+	assert.Equal(t, stepPreview, distRecOf(t, h).step, "the preview stays ready")
 	assert.Contains(t, h.view(), "Another operation is running: Building the index")
 }
 
@@ -152,7 +152,7 @@ func TestDistillProgressShowsTypedEvents(t *testing.T) {
 	}
 
 	// The activity holds typed facts only, and it stays bounded.
-	assert.LessOrEqual(t, len(rec.run.activity), distActivityKeep)
+	assert.LessOrEqual(t, len(rec.run.activity), agentActivityKeep)
 	assert.Equal(t, []string{"PlanDistill"}, f.called(), "the held run never reached the service")
 }
 
@@ -189,10 +189,10 @@ func TestDistillStopAsksFirstAndStopsOnce(t *testing.T) {
 	assert.False(t, rec.capturing(), "no second stop question")
 
 	// The work ends: the record shows the result it reached.
-	x := distPartialExec(rec.plan.preview)
+	x := distPartialExec(rec.prev.preview)
 	h.send(distDoneMsg{rec: rec, exec: x, at: time.Now()})
 
-	assert.Equal(t, distResult, rec.step)
+	assert.Equal(t, stepResult, rec.step)
 	assert.False(t, h.m.st.busy())
 
 	flat := distTallFlat(h)
@@ -221,7 +221,7 @@ func TestDistillStopCancelsTheRunContext(t *testing.T) {
 	h.press("enter", "y")
 
 	rec := distRecOf(t, h)
-	assert.Equal(t, distResult, rec.step)
+	assert.Equal(t, stepResult, rec.step)
 	assert.Equal(t, 1, f.callCount("RunDistill"))
 	assert.Contains(t, distTallFlat(h), "Distillation stopped")
 }
@@ -320,7 +320,7 @@ func TestDistillEveryOutcomeKindRenders(t *testing.T) {
 			h.press("enter", "y")
 
 			rec := distRecOf(t, h)
-			require.Equal(t, distResult, rec.step)
+			require.Equal(t, stepResult, rec.step)
 			assert.Contains(t, h.view(), c.word)
 
 			flat := distTallFlat(h)
@@ -359,7 +359,7 @@ func TestDistillRefusedStartReturnsToTheReview(t *testing.T) {
 	h.press("enter", "y")
 
 	rec := distRecOf(t, h)
-	require.Equal(t, distReview, rec.step, "a refused start has no result")
+	require.Equal(t, stepPreview, rec.step, "a refused start has no result")
 	assert.False(t, h.m.st.busy())
 	assert.Contains(t, lesBoxFlat(h.view()), "The plan is out of date")
 	assert.Contains(t, lesBoxFlat(h.view()), "lessons.yaml changed since the preview")
@@ -370,7 +370,7 @@ func TestDistillRefusedStartReturnsToTheReview(t *testing.T) {
 
 	h.press("enter")
 	assert.Equal(t, 2, f.callCount("PlanDistill"), "only a new plan helps")
-	assert.Nil(t, rec.plan.stale)
+	assert.Nil(t, rec.prev.stale)
 }
 
 func TestDistillPrepareRemainingWorkPlansAgain(t *testing.T) {
@@ -384,13 +384,13 @@ func TestDistillPrepareRemainingWorkPlansAgain(t *testing.T) {
 	h.press("down", "down", "down", "space", "enter", "y")
 
 	done := distRecOf(t, h)
-	require.Equal(t, distResult, done.step)
+	require.Equal(t, stepResult, done.step)
 
 	h.press("n")
 
 	next := distRecOf(t, h)
 	require.NotSame(t, done, next, "a new record plans the remaining work")
-	assert.Equal(t, distReview, next.step, "the new record plans at once, read-only")
+	assert.Equal(t, stepPreview, next.step, "the new record plans at once, read-only")
 	require.Len(t, *reqs, 2)
 	assert.Equal(t, (*reqs)[0], (*reqs)[1], "the same inputs: the explicit all choice stays explicit")
 	assert.True(t, (*reqs)[1].AllGroups)
@@ -417,7 +417,7 @@ func TestDistillSettingsSaveDropsTheReadyPlan(t *testing.T) {
 
 			h.send(settingsSavedMsg{group: g, at: time.Now()})
 
-			assert.Equal(t, distScope, rec.step, "the reviewed plan binds the old settings")
+			assert.Equal(t, stepScope, rec.step, "the reviewed plan binds the old settings")
 			assert.Contains(t, rec.form.note, "Settings changed ("+g.String()+")")
 
 			h.press("y")
@@ -431,16 +431,16 @@ func TestDistillSettingsSaveDropsTheReadyPlan(t *testing.T) {
 	rec := distRecOf(t, h)
 
 	require.NotNil(t, rec.startPlan())
-	seq := rec.plan.seq.last
+	seq := rec.prev.seq.last
 	h.send(settingsSavedMsg{group: settings.GroupInference})
 	h.send(distPlannedMsg{rec: rec, seq: seq, preview: distFullPreview()})
-	assert.Equal(t, distScope, rec.step, "a late plan result is ignored")
+	assert.Equal(t, stepScope, rec.step, "a late plan result is ignored")
 
 	// A running record keeps going: the engine checks the file itself.
 	h2 := distOpen(t, distFake(distFullPreview(), distNoRun(t)), 120, 40)
 	running := distStartHeld(t, h2)
 	h2.send(settingsSavedMsg{group: settings.GroupInference})
-	assert.Equal(t, distRunning, running.step)
+	assert.Equal(t, stepRunning, running.step)
 }
 
 func TestProposalsApplyPreviewClosesOnAPinWriteSave(t *testing.T) {
@@ -522,7 +522,7 @@ func distRecOfPast(t *testing.T, h *harness) *distRecord {
 	t.Helper()
 
 	for _, rec := range runViewOf(h).records() {
-		if d, ok := rec.(*distRecord); ok && d.step == distResult {
+		if d, ok := rec.(*distRecord); ok && d.step == stepResult {
 			return d
 		}
 	}
@@ -691,7 +691,7 @@ func TestDistillFramesAreASCIIOnly(t *testing.T) {
 	h.press("y")
 	ascii("stopping")
 
-	h.send(distDoneMsg{rec: rec, exec: distPartialExec(rec.plan.preview), at: time.Now()})
+	h.send(distDoneMsg{rec: rec, exec: distPartialExec(rec.prev.preview), at: time.Now()})
 	ascii("result")
 	assert.True(t, strings.Contains(h.view(), "(estimated)"), "an approximate number carries its word in ASCII")
 }
@@ -737,8 +737,8 @@ func TestDistillShowsAStopFromTheQuitQuestion(t *testing.T) {
 	assert.Contains(t, h.view(), "Stopping after group 4 of 6")
 
 	// The end of the work reports the observed outcome and quits.
-	h.send(distDoneMsg{rec: rec, exec: distPartialExec(rec.plan.preview), at: time.Now()})
-	assert.Equal(t, distResult, rec.step)
+	h.send(distDoneMsg{rec: rec, exec: distPartialExec(rec.prev.preview), at: time.Now()})
+	assert.Equal(t, stepResult, rec.step)
 	assert.True(t, h.quit, "the console exits after the stopped work ends")
 }
 
@@ -755,6 +755,6 @@ func TestDistillUsageCountsThePromptThatIsWithTheAgent(t *testing.T) {
 
 	distSend(h, rec, distStarted(rec, 0))
 
-	first := distTokens(rec.plan.preview.Plan.Preflight.Groups[0].PromptChars)
+	first := distTokens(rec.prev.preview.Plan.Preflight.Groups[0].PromptChars)
 	assert.Equal(t, first+" tokens sent to group 1 (estimated); reply pending", rec.usageText())
 }

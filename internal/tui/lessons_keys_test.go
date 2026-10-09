@@ -38,7 +38,7 @@ func lesFixBinding(t *testing.T, h *harness, k string) key.Binding {
 // so a flattened frame would mix the two panes.
 func lesFixDetail(h *harness) string {
 	p := lesProps(h)
-	cur, _ := p.current(p.rows())
+	cur, _ := p.cursorRow(p.rows())
 
 	return lesFlat(ansi.Strip(strings.Join(p.detailLines(cur, 200), "\n")))
 }
@@ -49,7 +49,7 @@ func lesFixDetail(h *harness) string {
 func TestLessonsFixRegionCursorVisibleWithoutColor(t *testing.T) {
 	th := newTheme(false)
 
-	var in propInput
+	var in lineInput
 
 	in.set("internal")
 	assert.Equal(t, "internal_", ansi.Strip(in.view(th)), "the end of the text shows an underscore")

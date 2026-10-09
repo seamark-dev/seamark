@@ -205,7 +205,7 @@ func setupCountLabel(p *SetupPreview, sep string) string {
 // canApply reports a preview that apply may take: planned, not stale,
 // with at least one change.
 func (wz *setupWizard) canApply() bool {
-	if wz.planning || wz.planErr != nil || wz.preview == nil || setupBlocked(wz.preview) {
+	if wz.preparing || wz.planErr != nil || wz.preview == nil || setupBlocked(wz.preview) {
 		return false
 	}
 
@@ -222,14 +222,14 @@ func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 		// The draft stays: the choices keep every explicit toggle. The
 		// cancel drops the result of a plan that still runs.
 		wz.seq.cancel()
-		wz.planning = false
+		wz.preparing = false
 		wz.forceSkills = false
 		wz.pathOpen = false
 		wz.step = setupStepChoices
 
 		return nil
 	case key.Matches(msg, setupKeys.Plan):
-		if wz.planning {
+		if wz.preparing {
 			return nil
 		}
 
@@ -249,14 +249,14 @@ func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	if wz.planning || wz.preview == nil {
+	if wz.preparing || wz.preview == nil {
 		return nil
 	}
 
 	entries := setupEntries(wz.preview)
 
 	if !wz.st.wide() && wz.pathOpen {
-		wz.pager.scroll(msg)
+		wz.pager.key(msg)
 
 		return nil
 	}
@@ -299,7 +299,7 @@ func (wz *setupWizard) previewKey(msg tea.KeyMsg) tea.Cmd {
 // the narrow list has no diff box, so the key scrolls the plan notes.
 func (wz *setupWizard) scrollPlan(msg tea.KeyMsg) {
 	if wz.st.wide() {
-		wz.pager.scroll(msg)
+		wz.pager.key(msg)
 
 		return
 	}
@@ -337,7 +337,7 @@ func (wz *setupWizard) scrollNotes(msg tea.KeyMsg) {
 // applyKey applies the reviewed plan. It never applies a stale plan or
 // a plan without a change; it says why instead.
 func (wz *setupWizard) applyKey() tea.Cmd {
-	if wz.planning || wz.preview == nil || wz.planErr != nil {
+	if wz.preparing || wz.preview == nil || wz.planErr != nil {
 		return nil
 	}
 
@@ -357,12 +357,12 @@ func (wz *setupWizard) previewKeys() []key.Binding {
 	apply.SetEnabled(wz.canApply())
 
 	plan := setupKeys.Plan
-	plan.SetEnabled(!wz.planning && (wz.planErr != nil || setupBlocked(wz.preview)))
+	plan.SetEnabled(!wz.preparing && (wz.planErr != nil || setupBlocked(wz.preview)))
 
 	back := setupKeys.Back
 	cancel := withHelp(nkeys.Back, "esc", "cancel")
 
-	if wz.planning || wz.preview == nil {
+	if wz.preparing || wz.preview == nil {
 		return []key.Binding{plan, back, cancel}
 	}
 
@@ -407,7 +407,7 @@ func (wz *setupWizard) previewView(w, h int) string {
 
 	// A plan without a setup plan cannot come from PlanSetup; the box
 	// then says that no plan exists instead of an empty list.
-	if wz.planning || wz.planErr != nil || wz.preview == nil || wz.preview.Plan == nil {
+	if wz.preparing || wz.planErr != nil || wz.preview == nil || wz.preview.Plan == nil {
 		return wz.planStateBox(w, h)
 	}
 
@@ -440,7 +440,7 @@ func (wz *setupWizard) planStateBox(w, h int) string {
 	t := wz.st.theme
 	o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Plan", true)}
 
-	if wz.planning {
+	if wz.preparing {
 		return integBoxed(t, o, ToneNeutral, "Planning the setup"+t.Glyphs.Ellipsis,
 			"Seamark reads the native configuration of "+oneLine(wz.client.Name)+
 				" and composes every change. Nothing is written.",
@@ -841,15 +841,10 @@ func (wz *setupWizard) entryBox(e setupEntry, w, h int, focused bool) string {
 	t := wz.st.theme
 	inner, rows := boxInner(w), boxRows(h)
 
-	content := wz.pager.render(itoa(int(e.kind))+":"+e.path, strings.Join(wz.entryLines(e, inner), "\n"), inner, rows)
-
-	foot := ""
-	if span := wz.pager.span(t); span != "" {
-		foot = t.Faint.Render(span)
-	}
+	lines := wz.pager.lines(itoa(int(e.kind))+":"+e.path, wz.entryLines(e, inner), inner, rows)
 
 	return t.box(boxOpts{
-		W: w, H: h, Focus: focused, Foot: foot, Right: setupPathState(t, e), Lines: strings.Split(content, "\n"),
+		W: w, H: h, Focus: focused, Foot: wz.pager.span(t), Right: setupPathState(t, e), Lines: lines,
 		Title: t.Title.Render(truncateLeft(oneLine(e.path), max(8, inner-14), t.Glyphs.Ellipsis)),
 	})
 }
@@ -983,7 +978,7 @@ func (wz *setupWizard) apply() tea.Cmd {
 	}
 
 	seq := wz.seq.start()
-	wz.step = setupStepApplying
+	wz.step = setupStepCommitting
 	preview := wz.preview
 
 	var svc Setup = wz.st.svc

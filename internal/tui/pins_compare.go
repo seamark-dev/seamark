@@ -32,7 +32,7 @@ type pinCompare struct {
 // footer lists v as n/a when no comparison exists, so the press then
 // says why in one line, as w, - and t do (see refusal).
 func (p *pinsView) openCompare(rows []pinRow) tea.Cmd {
-	cur, ok := p.current(rows)
+	cur, ok := p.cursorRow(rows)
 	if !ok || cur.pin == nil {
 		return toast(ToneNeutral, p.noTarget("comparison"))
 	}

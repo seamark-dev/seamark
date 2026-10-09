@@ -46,6 +46,17 @@ func boxRows(h int) int {
 	return max(0, h-2)
 }
 
+// boxTitle styles a box title: the focused pane in the title style, the
+// other panes muted, as in the 1a design. The caller sanitizes the
+// title, because most titles are fixed words.
+func boxTitle(t *Theme, title string, focused bool) string {
+	if focused {
+		return t.Title.Render(title)
+	}
+
+	return t.Muted.Render(title)
+}
+
 // box renders a bordered pane of exactly W by H cells.
 func (t *Theme) box(o boxOpts) string {
 	g := t.Glyphs
@@ -203,15 +214,12 @@ func (t *Theme) modal(o modalOpts, sc *scrollState, w, h int) string {
 	}
 
 	window := min(len(o.Body), max(1, h-modalMargin-2-len(tail)))
-	sc.page = window
-	sc.last = max(0, len(o.Body)-window)
-	sc.by(0)
-
-	lines := append(append([]string{}, o.Body[sc.off:sc.off+window]...), tail...)
+	from, to := sc.fit(len(o.Body), window)
+	lines := append(append([]string{}, o.Body[from:to]...), tail...)
 
 	var foot string
 	if sc.scrolls() {
-		foot = propRange(t, sc.off, sc.off+window, len(o.Body))
+		foot = propRange(t, from, to, len(o.Body))
 	}
 
 	return t.box(boxOpts{
@@ -260,26 +268,15 @@ func (t *Theme) pinnedBox(o boxOpts, head, body, tail []string, sc *scrollState,
 		window = max(1, rows-fixed)
 	}
 
-	sc.page = window
-	sc.last = max(0, len(body)-window)
-
-	if follow && keep[0] >= 0 {
-		if keep[1] >= sc.off+window {
-			sc.off = keep[1] - window + 1
-		}
-
-		if keep[0] < sc.off {
-			sc.off = keep[0]
-		}
+	if follow {
+		sc.reveal(keep[0], keep[1], window)
 	}
 
-	sc.by(0)
-
-	end := min(len(body), sc.off+window)
-	o.Lines = append(append(slices.Clone(head), body[sc.off:end]...), tail...)
+	from, to := sc.fit(len(body), window)
+	o.Lines = append(append(slices.Clone(head), body[from:to]...), tail...)
 
 	if sc.scrolls() && o.Foot == "" {
-		o.Foot = propRange(t, sc.off, end, len(body))
+		o.Foot = propRange(t, from, to, len(body))
 	}
 
 	return t.box(o)

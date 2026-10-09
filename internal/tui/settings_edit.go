@@ -32,7 +32,7 @@ type settingsEditor struct {
 	// what the input edits.
 	typing bool
 	target settingsInputTarget
-	input  propInput
+	input  lineInput
 	// editIdx is the pattern that the input replaces; -1 adds one.
 	editIdx int
 	// inputErr explains why the typed value was not kept.
@@ -394,14 +394,14 @@ func (s *settingsScreen) startTyping(target settingsInputTarget, idx int, value 
 
 	switch target {
 	case settingsInputDays:
-		s.ed.input = propInput{
+		s.ed.input = lineInput{
 			placeholder: "days, for example 180", limit: settingsDaysLimit,
 			accept: func(r rune) bool { return r >= '0' && r <= '9' },
 		}
 	default:
 		// The input drops control characters by itself, and the reader
 		// rejects them too. A space can be part of a real file name.
-		s.ed.input = propInput{placeholder: "pattern, for example *.pb.go"}
+		s.ed.input = lineInput{placeholder: "pattern, for example *.pb.go"}
 	}
 
 	s.ed.input.set(value)

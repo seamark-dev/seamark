@@ -17,7 +17,9 @@ import (
 // This file renders the Lessons destination in the 1a layout: the
 // sub-view line, the filter line, the list box and the detail box. The
 // decision modals live in les_modal.go; the state and the key handling
-// live in lessons.go.
+// live in lessons.go, and the decision stages in previewflow.go. The box
+// frames, the cursor and the filter line format live in listpane.go,
+// because Pins shares them.
 
 // Pane geometry of the 1a Lessons screen at 120 columns: a list box of
 // 62 cells, one cell of gap, and a detail box of 57 cells.
@@ -175,44 +177,15 @@ func (p *propView) filterBar(w int) []string {
 	t := p.st.theme
 	l := p.ledger()
 
-	var states strings.Builder
-
-	for f := propPending; f < propStateCount; f++ {
-		label := f.label()
-		if l != nil {
-			label += " " + itoa(propCount(l, f))
+	states := filterChips(t, propStateCount, p.filter, func(f propState) string {
+		if l == nil {
+			return f.label()
 		}
 
-		if f > propPending {
-			// One space beside the brackets, two between plain labels.
-			if f == p.filter || f-1 == p.filter {
-				states.WriteString(" ")
-			} else {
-				states.WriteString("  ")
-			}
-		}
+		return f.label() + " " + itoa(propCount(l, f))
+	})
 
-		if f == p.filter {
-			states.WriteString(t.TabActive.Render("[" + label + "]"))
-		} else {
-			states.WriteString(t.Muted.Render(label))
-		}
-	}
-
-	stateSeg := t.Faint.Render("state") + " " + states.String()
-
-	var region string
-
-	switch {
-	case p.editing:
-		region = p.input.view(t)
-	case p.region == "":
-		region = t.Muted.Render("all")
-	default:
-		region = t.Body.Render(oneLine(p.region))
-	}
-
-	rest := t.Faint.Render("region") + " " + region
+	rest := t.Faint.Render("region") + " " + p.fieldView(t, filterRegion, p.region, "all")
 
 	// The run filter shows as its own chip, so a list limited to one run
 	// never looks like the whole pending list.
@@ -224,14 +197,7 @@ func (p *propView) filterBar(w int) []string {
 		rest += "     " + t.Marked.Render(itoa(n)+" selected")
 	}
 
-	if one := " " + stateSeg + "     " + rest; width(one) <= w {
-		return []string{one}
-	}
-
-	return []string{
-		" " + truncate(stateSeg, w-1, t.Glyphs.Ellipsis),
-		" " + truncate(rest, w-1, t.Glyphs.Ellipsis),
-	}
+	return filterLines(t, t.Faint.Render("state")+" "+states, rest, w)
 }
 
 // propCount returns the number of proposals in one state.
@@ -245,16 +211,6 @@ func (p *propView) listTitle() string {
 	label := p.filter.label()
 
 	return strings.ToUpper(label[:1]) + label[1:] + " proposals"
-}
-
-// propPaneTitle styles a box title: the focused pane in the title style,
-// the other panes muted, as in the 1a design.
-func propPaneTitle(t *Theme, title string, focused bool) string {
-	if focused {
-		return t.Title.Render(title)
-	}
-
-	return t.Muted.Render(title)
 }
 
 // body renders the loading, unavailable and empty states, or the list
@@ -271,18 +227,7 @@ func (p *propView) body(w, h int) string {
 		return p.emptyBox(w, h)
 	}
 
-	if p.st.wide() {
-		listW := min(propListW, w*propListW/propDesignW)
-
-		return hjoin(1, p.listBox(rows, listW, h, !p.focusDetail),
-			p.detailBox(rows, w-listW-1, h, p.focusDetail))
-	}
-
-	if p.focusDetail {
-		return p.detailBox(rows, w, h, true)
-	}
-
-	return p.listBox(rows, w, h, true)
+	return p.split(rows, w, h, min(propListW, w*propListW/propDesignW), p.listBox, p.detailBox)
 }
 
 // propRange renders the faint "3–12 of 40" position of a scrolled
@@ -294,44 +239,15 @@ func propRange(t *Theme, from, to, n int) string {
 
 // listBox renders the proposal list with its column header. The cursor
 // row has the cursor glyph, and in the focused box a full-width
-// selection background.
+// selection background (listPane.renderList).
 func (p *propView) listBox(rows []domain.Proposal, w, h int, focused bool) string {
 	t := p.st.theme
-	inner := boxInner(w)
-	cols := p.columns(rows, inner)
+	cols := p.columns(rows, boxInner(w))
 
-	window := max(1, boxRows(h)-1)
-	p.listH = window
-	p.list.clamp(len(rows), window)
-
-	lines := []string{cols.header(t)}
-	end := min(len(rows), p.list.offset+window)
-
-	for i := p.list.offset; i < end; i++ {
-		pr := rows[i]
-		cursor := i == p.list.cursor
-
-		line := cols.row(t, pr, p.selected[pr.ID], cursor, p.tierOf(pr.ID))
-		if cursor && focused {
-			line = t.highlight(line, inner, bgSel)
-		}
-
-		lines = append(lines, line)
-	}
-
-	var foot string
-
-	switch {
-	case len(rows) > window:
-		foot = propRange(t, p.list.offset, end, len(rows))
-	case !p.st.wide():
-		foot = t.Faint.Render("enter for detail")
-	}
-
-	return t.box(boxOpts{
-		W: w, H: h, Focus: focused, Lines: lines, Foot: foot,
-		Title: propPaneTitle(t, p.listTitle(), focused), Right: t.Muted.Render(itoa(len(rows))),
-	})
+	return p.renderList(t, rows, w, h, focused, p.listTitle(), cols.header(t),
+		func(pr domain.Proposal, cursor bool) string {
+			return cols.row(t, pr, p.selected[pr.ID], cursor, p.tierOf(pr.ID))
+		})
 }
 
 // propCols is the column layout of the proposal list: marker 2, check
@@ -468,38 +384,12 @@ func (p *propView) tierOf(id int64) string {
 }
 
 // detailBox renders the proposal under the cursor. The body scrolls
-// inside the box, and a different proposal starts at the top.
+// inside the box, and a different proposal starts at the top
+// (listPane.renderDetail).
 func (p *propView) detailBox(rows []domain.Proposal, w, h int, focused bool) string {
-	t := p.st.theme
-	cur, _ := p.current(rows)
-	body := p.detailLines(cur, boxInner(w))
+	cur, _ := p.cursorRow(rows)
 
-	if p.detailID != cur.ID {
-		p.detail.off = 0
-		p.detailID = cur.ID
-	}
-
-	window := boxRows(h)
-	p.detail.page = window
-	p.detail.last = max(0, len(body)-window)
-	p.detail.by(0)
-
-	sep := " " + t.Glyphs.Sep + " "
-
-	var foot string
-
-	switch {
-	case p.detail.off < p.detail.last:
-		foot = t.Faint.Render("↓ more" + sep + "pgdn")
-	case p.detail.off > 0:
-		foot = t.Faint.Render("↑ more" + sep + "pgup")
-	}
-
-	return t.box(boxOpts{
-		W: w, H: h, Focus: focused, Foot: foot,
-		Title: propPaneTitle(t, "Proposal "+propID(cur.ID), focused),
-		Lines: body[p.detail.off:min(len(body), p.detail.off+window)],
-	})
+	return p.renderDetail(p.st.theme, cur, "Proposal "+propID(cur.ID), p.detailLines(cur, boxInner(w)), w, h, focused)
 }
 
 // propDash returns the dash of the theme's glyph set.
@@ -1022,7 +912,7 @@ func (p *propView) unavailableBox(err error, w, h int) string {
 		}
 	}
 
-	return p.messageBox(t.Title.Render("Proposals"), "", m, w, h)
+	return t.messageBox(t.Title.Render("Proposals"), "", m, w, h)
 }
 
 // emptyBox explains an empty list: no proposals at all, no pending
@@ -1090,7 +980,7 @@ func (p *propView) emptyBox(w, h int) string {
 		}
 	}
 
-	return p.messageBox(t.Title.Render(p.listTitle()), t.Muted.Render("0"), m, w, h)
+	return t.messageBox(t.Title.Render(p.listTitle()), t.Muted.Render("0"), m, w, h)
 }
 
 // propJoin joins words as a list for a sentence: "a", "a and b", or
@@ -1151,9 +1041,9 @@ type propMessage struct {
 
 // messageBox renders a full-width box with a centered message. When the
 // box is too short, the body gives up lines first, so the head and the
-// next action stay visible.
-func (p *propView) messageBox(title, right string, m propMessage, w, h int) string {
-	t := p.st.theme
+// next action stay visible. The empty states of Proposals and Pins use
+// it, so both sub-views read alike.
+func (t *Theme) messageBox(title, right string, m propMessage, w, h int) string {
 	inner := boxInner(w)
 	rows := boxRows(h)
 	textW := min(inner, 72)

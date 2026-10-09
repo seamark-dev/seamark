@@ -147,7 +147,7 @@ func (v *evidenceView) start() tea.Cmd {
 			". The refresh can start after it ends.")
 	}
 
-	plan := v.prev.plan
+	plan := v.prev.preview
 	ctx, cancel := v.st.runContext()
 
 	note := runNote{
@@ -379,10 +379,7 @@ func (r *evRun) detail(text string) {
 
 // log keeps one activity line with its time, within evActivityKeep.
 func (r *evRun) log(now time.Time, text string) {
-	r.activity = append(r.activity, now.Format("15:04:05")+"  "+text)
-	if len(r.activity) > evActivityKeep {
-		r.activity = r.activity[len(r.activity)-evActivityKeep:]
-	}
+	r.activity = appendActivity(r.activity, now, text, evActivityKeep)
 }
 
 // evSourceName names an engine source for the record.

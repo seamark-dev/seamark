@@ -45,8 +45,8 @@ func TestExtractRecordRunsTheRealEngine(t *testing.T) {
 	h.send(openExtractMsg{req: req})
 
 	rec := extRecOf(t, h)
-	require.Equal(t, extReview, rec.step)
-	require.True(t, rec.runnable(), "the review is ready: %v", rec.plan.err)
+	require.Equal(t, stepPreview, rec.step)
+	require.True(t, rec.runnable(), "the review is ready: %v", rec.prev.err)
 	assert.Contains(t, h.view(), "Sends 1 proposal in 1 batch · 0 ineligible")
 	assert.Zero(t, agent.count(), "the review never invokes the agent")
 	assert.NoFileExists(t, marker, "the configured command never runs")
@@ -54,7 +54,7 @@ func TestExtractRecordRunsTheRealEngine(t *testing.T) {
 
 	h.press("y")
 
-	require.Equal(t, extResult, rec.step)
+	require.Equal(t, stepResult, rec.step)
 	assert.Equal(t, 1, agent.count())
 	require.Len(t, prompts, 1)
 	assert.Contains(t, prompts[0], fmt.Sprintf("id=%d", row.ID))
@@ -74,7 +74,7 @@ func TestExtractRecordRunsTheRealEngine(t *testing.T) {
 
 	next := extRecOf(t, h)
 	require.NotSame(t, rec, next)
-	require.Equal(t, extReview, next.step)
+	require.Equal(t, stepPreview, next.step)
 	assert.False(t, next.runnable())
 	assert.Contains(t, extTallFlat(h), "already answered with trigger paths")
 	assert.Equal(t, 1, agent.count())

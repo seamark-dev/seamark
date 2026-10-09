@@ -111,7 +111,7 @@ func TestSettingsLeaveGuardDropsAnOpenPreview(t *testing.T) {
 
 	h.press("k")
 	assert.Equal(t, destOverview, h.m.active)
-	assert.Equal(t, settingsIdle, scr.flow.stage)
+	assert.Equal(t, flowClosed, scr.flow.stage)
 	assert.Equal(t, "", settingsBytes(t, svc))
 	settingsNoWrites(t, svc)
 }

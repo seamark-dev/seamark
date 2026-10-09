@@ -458,9 +458,9 @@ func maintContent(t *testing.T, h *harness) string {
 
 	v := mod.content(modalBodyWidth(modalMinW, h.m.st.width))
 
-	parts := append([]string{v.title, v.right}, v.body...)
-	parts = append(parts, v.tail...)
-	parts = append(parts, h.m.st.theme.hints(v.actions))
+	parts := append([]string{v.Title, v.Right}, v.Body...)
+	parts = append(parts, v.Tail...)
+	parts = append(parts, h.m.st.theme.hints(v.Actions))
 
 	return lesFlat(ansi.Strip(strings.Join(parts, "\n")))
 }

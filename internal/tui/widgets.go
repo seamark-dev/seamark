@@ -22,48 +22,6 @@ const (
 	minHeight = 20
 )
 
-// listState is the cursor and scroll offset of one list. Screens keep
-// one per list so resize and refresh never reset the position.
-type listState struct {
-	cursor int
-	offset int
-}
-
-// clamp keeps the cursor inside n rows and the cursor row inside a
-// window of h rows.
-func (l *listState) clamp(n, h int) {
-	if n <= 0 {
-		l.cursor, l.offset = 0, 0
-
-		return
-	}
-
-	l.cursor = max(0, min(l.cursor, n-1))
-
-	if h <= 0 {
-		return
-	}
-
-	if l.cursor < l.offset {
-		l.offset = l.cursor
-	}
-
-	if l.cursor >= l.offset+h {
-		l.offset = l.cursor - h + 1
-	}
-
-	l.offset = max(0, min(l.offset, max(0, n-h)))
-}
-
-// move shifts the cursor by delta rows inside n rows.
-func (l *listState) move(delta, n int) {
-	if n == 0 {
-		return
-	}
-
-	l.cursor = max(0, min(l.cursor+delta, n-1))
-}
-
 // positionNote returns the plain "a–b of n" position of a scrolled
 // window. first and last are the 1-based visible rows, and total is the
 // row count. Callers add the style and the words around it. The ASCII
@@ -395,11 +353,6 @@ func joinLineBlocks(gap int, blocks ...[]string) []string {
 func (t *Theme) command(s string) string {
 	return t.Code.Render(oneLine(s))
 }
-
-// scrollState is the vertical position of one scrollable text. It is
-// the scroll type of Lessons under a shared name, so every modal and
-// pane scrolls the same way.
-type scrollState = lesScroll
 
 // radio renders one choice of a single-choice list, for example
 // "(●) codex". The glyph shows the choice without color.
@@ -836,7 +789,9 @@ func (t *Theme) activityLines(lines []string, keep, w int) []string {
 	return out
 }
 
-// spinnerFrame returns the activity glyph for a tick count.
+// spinnerFrame returns the activity glyph for a tick count. The count
+// comes from state.tick, the one injectable tick of the shell, so the
+// console does not use bubbles/spinner (input.go gives the reasons).
 func (t *Theme) spinnerFrame(tick int) string {
 	frames := t.Glyphs.Spinner
 

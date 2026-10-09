@@ -192,7 +192,7 @@ func TestCaptureMaint(t *testing.T) {
 			}
 
 			require.Len(t, pinsOf(h).selected, marked, "scene %s marks the requested pins", sc.name)
-			require.Equal(t, req.Refs[0], pinsOf(h).cursor.ref, "scene %s puts the cursor on its pin", sc.name)
+			require.Equal(t, req.Refs[0], pinsOf(h).cursorID.ref, "scene %s puts the cursor on its pin", sc.name)
 
 			h.send(openMaintMsg{req: req})
 

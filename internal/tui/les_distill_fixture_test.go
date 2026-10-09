@@ -269,11 +269,11 @@ func distStartHeld(t *testing.T, h *harness) *distRecord {
 	h.press("enter")
 
 	rec := distRecOf(t, h)
-	require.Equal(t, distReview, rec.step)
+	require.Equal(t, stepPreview, rec.step)
 	require.True(t, rec.runnable())
 
 	require.NotNil(t, rec.start(), "start returns the worker and the wait")
-	require.Equal(t, distRunning, rec.step)
+	require.Equal(t, stepRunning, rec.step)
 
 	return rec
 }
@@ -295,16 +295,16 @@ func distSend(h *harness, rec *distRecord, ev distill.Event) {
 
 // distStarted builds the start event of group i, as the engine sends it.
 func distStarted(rec *distRecord, i int) distill.Event {
-	g := rec.plan.preview.Plan.Preflight.Groups[i]
+	g := rec.prev.preview.Plan.Preflight.Groups[i]
 
-	return distill.Event{Kind: distill.EventGroupStarted, Index: i, Total: len(rec.run.outcomes), Group: &g}
+	return distill.Event{Kind: distill.EventGroupStarted, Index: i, Total: len(rec.run.units), Group: &g}
 }
 
 // distFinished builds the finish event of group i with outcome o.
 func distFinished(rec *distRecord, i int, o distill.GroupOutcome) distill.Event {
-	o.Plan = rec.plan.preview.Plan.Preflight.Groups[i]
+	o.Plan = rec.prev.preview.Plan.Preflight.Groups[i]
 
-	return distill.Event{Kind: distill.EventGroupFinished, Index: i, Total: len(rec.run.outcomes), Outcome: &o}
+	return distill.Event{Kind: distill.EventGroupFinished, Index: i, Total: len(rec.run.units), Outcome: &o}
 }
 
 // distMidRun drives a held run to "group 4 of 6 sending": the cleanup

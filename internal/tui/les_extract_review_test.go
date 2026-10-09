@@ -43,7 +43,7 @@ func TestExtractReviewNamesTheCursorRow(t *testing.T) {
 
 	rec := extRecOf(t, h)
 	require.True(t, rec.cursor)
-	require.Equal(t, extReview, rec.step)
+	require.Equal(t, stepPreview, rec.step)
 
 	assert.Contains(t, h.view(), "selected 1 (cursor row)")
 	assert.Contains(t, extTallFlat(h), "Selected 1 eligible of 1 · the cursor row; no row is marked")
@@ -146,7 +146,7 @@ func TestExtractCompactProposalsPaneKeepsTheScope(t *testing.T) {
 	for _, size := range [][2]int{{minWidth, minHeight}, {80, 24}} {
 		h := extOpen(t, extFake(p, extNoRun(t)), p, size[0], size[1])
 		h.press("tab")
-		require.True(t, extRecOf(t, h).plan.itemsOpen, "size %v shows the Proposals pane", size)
+		require.True(t, extRecOf(t, h).prev.listOpen, "size %v shows the Proposals pane", size)
 
 		for _, stage := range []string{"top", "scrolled"} {
 			frame := h.view()
@@ -195,7 +195,7 @@ func TestExtractReviewNamesTheCursorRowFromProposals(t *testing.T) {
 	h.press("t")
 	require.Len(t, reqs, 1)
 	assert.Equal(t, []int64{1}, reqs[0].IDs)
-	require.Equal(t, extReview, extRecOf(t, h).step)
+	require.Equal(t, stepPreview, extRecOf(t, h).step)
 	assert.True(t, extRecOf(t, h).cursor)
 	assert.Contains(t, h.view(), "selected 1 (cursor row)")
 	assert.Contains(t, extTallFlat(h), "Selected 1 eligible of 1 · the cursor row; no row is marked")
@@ -278,14 +278,14 @@ func TestExtractPrepareRemainingNamesNoCursorRow(t *testing.T) {
 	h.press("y")
 
 	first := extRecOf(t, h)
-	require.Equal(t, extResult, first.step)
+	require.Equal(t, stepResult, first.step)
 	require.NotEmpty(t, first.remaining())
 
 	h.press("n")
 
 	next := extRecOf(t, h)
 	require.NotSame(t, first, next, "n opens a new review")
-	assert.Equal(t, extReview, next.step)
+	assert.Equal(t, stepPreview, next.step)
 	assert.False(t, next.cursor)
 	assert.NotContains(t, h.view(), "cursor row")
 }

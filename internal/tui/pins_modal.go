@@ -11,11 +11,11 @@ import (
 )
 
 // This file holds the flow of the retarget and prune preview of Lessons
-// › Pins: the stages, the keys, and the commands that plan and commit.
-// pins_modal_view.go renders the stages. The preview follows the
-// decision modal of Proposals: a plan read, a preview, y, a commit that
-// cannot stop, and a result. Nothing is written before y, and nothing
-// is retried automatically.
+// › Pins: the keys, and the commands that plan and commit. The stages
+// come from previewFlow (previewflow.go), and pins_modal_view.go renders
+// them. The preview follows the decision modal of Proposals: a plan
+// read, a preview, y, a commit that cannot stop, and a result. Nothing
+// is written before y, and nothing is retried automatically.
 //
 // A commit can change the pin file and then fail on the ledger. The
 // result can then carry a session recovery (maintain.Recovery). The
@@ -23,20 +23,6 @@ import (
 // new preview with its own y. Only esc on the result drops it, and the
 // texts say so, because the proof does not survive the preview
 // (contracts D-13).
-
-// maintStage is the step of a maintenance preview.
-type maintStage int
-
-const (
-	// maintStagePreparing waits for the plan read.
-	maintStagePreparing maintStage = iota + 1
-	// maintStagePreview shows the plan or its failure.
-	maintStagePreview
-	// maintStageCommitting waits for the commit. It cannot stop safely.
-	maintStageCommitting
-	// maintStageResult shows the commit outcome.
-	maintStageResult
-)
 
 // maintKeys are the preview keys besides y, enter and esc. o opens the
 // write gate in Settings. c previews the ledger-only completion of a
@@ -85,22 +71,24 @@ type maintOutcome struct {
 
 // maintModal is the preview of one retarget or prune request. The Pins
 // sub-view hosts it through maintHost, which gives it every key while
-// it is open and every non-key message.
+// it is open and every non-key message. The embedded flow holds the
+// stage and the shown plan. flowClosed tells the host to drop the
+// preview.
 type maintModal struct {
+	previewFlow[maintain.Plan]
+
 	st  *state
 	req maintain.Request
 
-	stage maintStage
 	// recovering is true while the preview, the commit, or the plan read
 	// concerns the ledger-only completion of offer.
 	recovering bool
 	// seq increases with every plan read, so a late result of a read
-	// that the user left never replaces the current stage.
+	// that the user left never replaces the current stage. Each open
+	// builds a new modal, and its tickets start at 1 again, so a result
+	// also names its modal (maintPlannedMsg.m).
 	seq generation
 
-	// plan and err are the shown preview: the plan, or why it failed.
-	plan *maintain.Plan
-	err  error
 	// foreign is the repository root that the index records when it is
 	// not the workspace root (pinsForeignRoot), as the plan arrived. A
 	// commit would then change the pin file of that root and the ledger
@@ -115,9 +103,6 @@ type maintModal struct {
 	// acted holds the entries that the last commit or recovery changed,
 	// until maintHost takes them (takeActed).
 	acted []pinfile.EntryRef
-
-	sc   scrollState
-	done bool
 }
 
 // newMaintModal opens the preview of req. The returned command reads the
@@ -133,9 +118,8 @@ func newMaintModal(st *state, req maintain.Request) (*maintModal, tea.Cmd) {
 // shown preview, and seq drops the result of an older read.
 func (m *maintModal) prepare() tea.Cmd {
 	seq := m.seq.start()
-	m.stage, m.recovering = maintStagePreparing, false
-	m.plan, m.err = nil, nil
-	m.sc = scrollState{}
+	m.startRead()
+	m.recovering = false
 
 	req := m.req
 
@@ -152,9 +136,8 @@ func (m *maintModal) prepare() tea.Cmd {
 // checks the proof against a fresh observation and writes nothing.
 func (m *maintModal) prepareRecovery() tea.Cmd {
 	seq := m.seq.start()
-	m.stage, m.recovering = maintStagePreparing, true
-	m.plan, m.err = nil, nil
-	m.sc = scrollState{}
+	m.startRead()
+	m.recovering = true
 
 	rec := m.offer
 
@@ -183,45 +166,38 @@ func (m *maintModal) update(msg tea.Msg) tea.Cmd {
 
 // planned shows a plan read, unless the user left the read.
 func (m *maintModal) planned(msg maintPlannedMsg) {
-	if msg.m != m || !m.seq.current(msg.seq) || m.stage != maintStagePreparing {
+	if msg.m != m || !m.readDone(m.seq.current(msg.seq), msg.plan, msg.err, "the preview came back empty") {
 		return
 	}
 
-	m.stage = maintStagePreview
-	m.plan, m.err = msg.plan, msg.err
-	m.sc = scrollState{}
 	m.foreign = ""
-
-	if msg.err == nil && msg.plan == nil {
-		m.err = errors.New("the preview came back empty")
-	}
 
 	// The Pins keys stay off for a foreign root (editBlock). A preview
 	// can still open through enter after a refusal, so the plan itself
 	// loses y. The change goes to a copy, so the plan of the engine stays
 	// as it is. A recovery plan follows a commit of this session and keeps
 	// its proof.
-	if root := pinsForeignRoot(m.st); root != "" && m.plan != nil && !m.recovering {
-		blocked := *m.plan
+	if root := pinsForeignRoot(m.st); root != "" && m.preview != nil && !m.recovering {
+		blocked := *m.preview
 		blocked.Confirmable = false
-		m.plan, m.foreign = &blocked, root
+		m.preview, m.foreign = &blocked, root
 	}
 }
 
 // key handles a key of the current stage.
 func (m *maintModal) key(msg tea.KeyMsg) tea.Cmd {
 	switch m.stage {
-	case maintStagePreparing:
+	case flowPreparing:
 		if key.Matches(msg, nkeys.Back) {
 			// The read may still finish; seq drops its result.
 			m.seq.cancel()
 			m.back()
 		}
-	case maintStagePreview:
+	case flowPreview:
 		return m.previewKey(msg)
-	case maintStageCommitting:
+	case flowCommitting:
 		// The commit cannot stop safely. Keys wait for the result.
-	case maintStageResult:
+	case flowResult:
 		return m.resultKey(msg)
 	}
 
@@ -233,14 +209,13 @@ func (m *maintModal) key(msg tea.KeyMsg) tea.Cmd {
 // closes.
 func (m *maintModal) back() {
 	if m.recovering {
-		m.stage, m.recovering = maintStageResult, false
-		m.plan, m.err = nil, nil
-		m.sc = scrollState{}
+		m.recovering = false
+		m.toResult()
 
 		return
 	}
 
-	m.done = true
+	m.close()
 }
 
 // previewKey handles the preview. esc leaves with no change; only y
@@ -264,7 +239,7 @@ func (m *maintModal) previewKey(msg tea.KeyMsg) tea.Cmd {
 			return navigate(destSettings, "group:pinwrite")
 		}
 	default:
-		m.sc.key(msg)
+		m.scroll.key(msg)
 	}
 
 	return nil
@@ -286,12 +261,12 @@ func (m *maintModal) resultKey(msg tea.KeyMsg) tea.Cmd {
 		case m.reviewAgain():
 			return m.prepare()
 		default:
-			m.done = true
+			m.close()
 		}
 	case key.Matches(msg, nkeys.Back):
-		m.done = true
+		m.close()
 	default:
-		m.sc.key(msg)
+		m.scroll.key(msg)
 	}
 
 	return nil
@@ -300,13 +275,13 @@ func (m *maintModal) resultKey(msg tea.KeyMsg) tea.Cmd {
 // confirmable reports a preview that y commits now: a confirmable plan
 // and a free mutation slot.
 func (m *maintModal) confirmable() bool {
-	return m.stage == maintStagePreview && m.err == nil && m.plan != nil && m.plan.Confirmable && !m.st.busy()
+	return m.showsPreview() && m.preview.Confirmable && !m.st.busy()
 }
 
 // gateOff reports a preview whose only route is the write gate: the plan
 // read distill.write as off, not as unreadable.
 func (m *maintModal) gateOff() bool {
-	return m.stage == maintStagePreview && m.err == nil && m.plan != nil && !m.plan.Write && m.plan.GateErr == nil
+	return m.showsPreview() && !m.preview.Write && m.preview.GateErr == nil
 }
 
 // reviewAgain reports a result that a new preview can resolve: a
@@ -327,11 +302,11 @@ func (m *maintModal) reviewAgain() bool {
 // commit claims the mutation slot and runs the confirmed plan as
 // registered work, so a signal exit waits for it.
 func (m *maintModal) commit() tea.Cmd {
-	p, recovering := m.plan, m.recovering
+	p, recovering := m.preview, m.recovering
 
 	var svc Maintenance = m.st.svc
 
-	cmd, ok := m.st.beginWork(maintWorkName(p, recovering), func() tea.Msg {
+	cmd, ok := m.startCommit(m.st, maintWorkName(p, recovering), m.st.goWork(func() tea.Msg {
 		var (
 			res maintain.Result
 			err error
@@ -344,13 +319,14 @@ func (m *maintModal) commit() tea.Cmd {
 		}
 
 		return maintCommittedMsg{m: m, plan: p, res: res, err: err}
-	})
+	}))
 	if !ok {
 		return toast(ToneAttention, "Another operation is running: "+m.st.mutation)
 	}
 
-	m.stage = maintStageCommitting
-	m.sc = scrollState{}
+	// The wait starts at the top. startCommit keeps the position, because
+	// the other flows keep it.
+	m.scroll = scrollState{}
 
 	return cmd
 }
@@ -373,7 +349,7 @@ func maintWorkName(p *maintain.Plan, recovering bool) string {
 // refusal also means that the state changed. A committing preview never
 // closes, so the outcome always reaches the preview that started it.
 func (m *maintModal) committed(msg maintCommittedMsg) tea.Cmd {
-	if msg.m == m && m.stage == maintStageCommitting {
+	if msg.m == m && m.commitDone() {
 		m.out = &maintOutcome{plan: msg.plan, res: msg.res, err: msg.err, recovery: m.recovering}
 
 		// A refused completion wrote nothing, so its proof can still
@@ -382,9 +358,7 @@ func (m *maintModal) committed(msg maintCommittedMsg) tea.Cmd {
 			m.offer = msg.res.Recovery
 		}
 
-		m.stage, m.recovering = maintStageResult, false
-		m.plan, m.err = nil, nil
-		m.sc = scrollState{}
+		m.recovering = false
 	}
 
 	m.acted = append(m.acted, maintChanged(msg)...)
@@ -423,7 +397,7 @@ func maintChanged(msg maintCommittedMsg) []pinfile.EntryRef {
 // to its result, so the session proof stays available. A commit and a
 // result stay.
 func (m *maintModal) settingsSaved(msg settingsSavedMsg) tea.Cmd {
-	if m.stage != maintStagePreparing && m.stage != maintStagePreview {
+	if !m.beforeCommit() {
 		return nil
 	}
 
@@ -454,31 +428,27 @@ func maintOpenKey(a maintain.Action) string {
 
 // closed reports a preview that the host drops.
 func (m *maintModal) closed() bool {
-	return m.done
+	return !m.active()
 }
 
 // modal renders the current stage. The scope summary of a preview stays
 // above the actions, so the minimum layout still shows what y confirms.
 func (m *maintModal) modal(w, h int) string {
-	v := m.content(modalBodyWidth(modalMinW, w))
-
-	return m.st.theme.modal(modalOpts{
-		Title: v.title, Right: v.right, Body: v.body, Actions: v.actions, Tail: v.tail,
-	}, &m.sc, w, h)
+	return m.st.theme.modal(m.content(modalBodyWidth(modalMinW, w)), &m.scroll, w, h)
 }
 
 // keys returns the footer keys of the current stage. The modal names the
 // same keys with longer labels.
 func (m *maintModal) keys() []key.Binding {
 	scroll := withHelp(nkeys.Down, "↑↓", "scroll")
-	scroll.SetEnabled(m.sc.scrolls())
+	scroll.SetEnabled(m.scroll.scrolls())
 
 	switch m.stage {
-	case maintStagePreparing:
+	case flowPreparing:
 		return []key.Binding{withHelp(nkeys.Back, "esc", "cancel")}
-	case maintStageCommitting:
+	case flowCommitting:
 		return nil
-	case maintStageResult:
+	case flowResult:
 		return append(m.resultActions(true), scroll)
 	}
 
@@ -518,7 +488,7 @@ func (m *maintModal) previewActions(short bool) []key.Binding {
 
 // confirmLabel names what y does, with the count in the modal.
 func (m *maintModal) confirmLabel(short bool) string {
-	n := len(m.plan.Items)
+	n := len(m.preview.Items)
 
 	switch {
 	case m.recovering && short:
@@ -526,9 +496,9 @@ func (m *maintModal) confirmLabel(short bool) string {
 	case m.recovering:
 		return "complete the ledger update"
 	case short:
-		return m.plan.Action.String()
+		return m.preview.Action.String()
 	default:
-		return m.plan.Action.String() + " " + propPlural(n, "pin", "pins")
+		return m.preview.Action.String() + " " + propPlural(n, "pin", "pins")
 	}
 }
 

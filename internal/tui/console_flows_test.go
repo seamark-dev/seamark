@@ -106,7 +106,7 @@ func cursorPin(t *testing.T, h *harness) *maintain.Pin {
 
 	p := pinsOf(h)
 
-	cur, ok := p.current(p.rows())
+	cur, ok := p.cursorRow(p.rows())
 	require.True(t, ok, "the Pins list has a cursor row")
 	require.NotNil(t, cur.pin, "the cursor row is an installed pin")
 
@@ -235,7 +235,7 @@ func TestConsoleFlowRetargetFromPinsRefreshesThePinWithoutALossNote(t *testing.T
 	pin := cursorPin(t, h)
 	assert.Equal(t, "wrap-sql-errors", pin.Entry.Rule)
 	assert.Equal(t, []string{"internal/store/sql"}, pinEntryRegions(pin.Entry))
-	assert.Equal(t, pin.Entry.Ref(), p.cursor.ref, "the cursor binds to the new identity")
+	assert.Equal(t, pin.Entry.Ref(), p.cursorID.ref, "the cursor binds to the new identity")
 	assertNoLossNote(t, h)
 
 	h.press("enter")
@@ -306,7 +306,7 @@ func TestConsoleFlowPruneOfAMarkedPinKeepsTheCursorByIdentity(t *testing.T) {
 	h.press("enter", "f", "f")
 	require.Equal(t, pinSuperseded, p.filter)
 
-	cur, ok := p.current(p.rows())
+	cur, ok := p.cursorRow(p.rows())
 	require.True(t, ok)
 	assert.Equal(t, int64(16), cur.prop.ID)
 	assert.False(t, maintHasKey(h, "space"), "history rows are read-only")
@@ -406,7 +406,7 @@ func extStoppedPinsRun(t *testing.T, hp **harness) func(context.Context, *learni
 
 		// The record runs. x asks first; y stops and cancels the call.
 		rec := extRecOf(t, h)
-		require.Equal(t, extRunning, rec.step)
+		require.Equal(t, stepRunning, rec.step)
 		require.NoError(t, ctx.Err())
 
 		h.press("x")
@@ -458,7 +458,7 @@ func pinsMixedReview(t *testing.T) (*harness, *fakeServices, *extRecord, *[]lear
 	require.Equal(t, lesRun, hookLessons(h).sub)
 
 	rec := extRecOf(t, h)
-	require.Equal(t, extReview, rec.step)
+	require.Equal(t, stepPreview, rec.step)
 
 	return h, f, rec, reqs
 }
@@ -524,7 +524,7 @@ func TestConsoleFlowPinsExtractionStopsAndPreparesTheRemaining(t *testing.T) {
 
 	// y runs; inside the run x and y stop it (extStoppedPinsRun).
 	h.press("y")
-	require.Equal(t, extResult, rec.step)
+	require.Equal(t, stepResult, rec.step)
 
 	// The result names the stop, the cancelled and the unattempted IDs.
 	flat := extTallFlat(h)
@@ -542,7 +542,7 @@ func TestConsoleFlowPinsExtractionStopsAndPreparesTheRemaining(t *testing.T) {
 
 	next := extRecOf(t, h)
 	require.NotSame(t, rec, next)
-	assert.Equal(t, extReview, next.step, "the new record waits for its own y")
+	assert.Equal(t, stepPreview, next.step, "the new record waits for its own y")
 	require.Len(t, *reqs, 2)
 	assert.Equal(t, learning.ExtractRequest{IDs: []int64{9, 12}}, (*reqs)[1])
 	assert.Equal(t, []string{"PlanExtract", "RunExtract", "PlanExtract"}, f.called())
@@ -553,12 +553,12 @@ func TestConsoleFlowExtractionResultLinksToThePinWithoutAPreview(t *testing.T) {
 	p := pinsOf(h)
 	marked := maps.Clone(p.selected)
 
-	cur, ok := p.current(p.rows())
+	cur, ok := p.cursorRow(p.rows())
 	require.True(t, ok)
 	require.Equal(t, "dup-rule", cur.pin.Entry.Rule, "the Pins cursor rests on the last marked pin")
 
 	h.press("y")
-	require.Equal(t, extResult, rec.step)
+	require.Equal(t, stepResult, rec.step)
 
 	// The result opens on the first open question (p9). p4 is applied
 	// and stored a trigger path, so enter on it shows its pin.
@@ -609,7 +609,7 @@ func TestConsoleFlowProposalsExtractionOfAPendingAndAnAppliedRow(t *testing.T) {
 
 	first := extRecOf(t, h)
 	h.press("y")
-	require.Equal(t, extResult, first.step)
+	require.Equal(t, stepResult, first.step)
 	assert.Contains(t, footerLine(h.view()), "enter open proposals")
 
 	h.press("enter")
@@ -630,7 +630,7 @@ func TestConsoleFlowProposalsExtractionOfAPendingAndAnAppliedRow(t *testing.T) {
 	require.NotSame(t, first, second)
 
 	h.press("y")
-	require.Equal(t, extResult, second.step)
+	require.Equal(t, stepResult, second.step)
 	assert.Contains(t, extTallFlat(h), "the pin scope stays", "an applied answer never changes the pin scope")
 	assert.Contains(t, footerLine(h.view()), "enter open pins")
 
@@ -667,7 +667,7 @@ func TestConsoleFlowExtractionRunKeepsReadsAndRefusesOtherWrites(t *testing.T) {
 	// run holds the mutation slot.
 	during := func(ctx context.Context) {
 		require.Equal(t, extractRunName, h.m.st.mutation)
-		require.Equal(t, extRunning, rec.step)
+		require.Equal(t, stepRunning, rec.step)
 
 		// Every destination shows the run in the notice row.
 		for _, d := range []struct {
@@ -749,7 +749,7 @@ func TestConsoleFlowExtractionRunKeepsReadsAndRefusesOtherWrites(t *testing.T) {
 		require.Equal(t, destLessons, h.m.active)
 		require.Equal(t, lesRun, hookLessons(h).sub)
 		assert.Same(t, rec, extRecOf(t, h))
-		assert.Equal(t, extRunning, rec.step)
+		assert.Equal(t, stepRunning, rec.step)
 		require.NoError(t, ctx.Err(), "browsing never stops the run")
 	}
 
@@ -777,7 +777,7 @@ func TestConsoleFlowExtractionRunKeepsReadsAndRefusesOtherWrites(t *testing.T) {
 
 	rec = extRecOf(t, h)
 	h.press("y")
-	require.Equal(t, extResult, rec.step)
+	require.Equal(t, stepResult, rec.step)
 	assert.False(t, h.m.st.busy())
 
 	// After the run, the same preview offers y again.
@@ -800,8 +800,8 @@ func TestConsoleFlowResizeToTheMinimumKeepsTheConfirmAndTheScope(t *testing.T) {
 		assertFrame(t, frame, h.m.st.width, h.m.st.height)
 
 		v := maintHostOf(h).modal.content(modalBodyWidth(modalMinW, h.m.st.width))
-		require.NotEmpty(t, v.tail)
-		assert.Contains(t, frame, strings.TrimSpace(ansi.Strip(v.tail[0])))
+		require.NotEmpty(t, v.Tail)
+		assert.Contains(t, frame, strings.TrimSpace(ansi.Strip(v.Tail[0])))
 		assert.Contains(t, frame, label)
 	}
 
@@ -879,7 +879,7 @@ func TestConsoleFlowResizeToTheMinimumKeepsTheConfirmAndTheScope(t *testing.T) {
 		// Below the minimum the review is hidden, so y starts nothing.
 		h.resize(minWidth-1, minHeight-1)
 		h.press("y")
-		assert.Equal(t, extReview, rec.step, "y never starts a hidden review")
+		assert.Equal(t, stepPreview, rec.step, "y never starts a hidden review")
 		assert.Equal(t, []string{"PlanExtract"}, f.called())
 	})
 }
@@ -908,7 +908,7 @@ func TestConsoleFlowEscAtEveryStageChangesNothing(t *testing.T) {
 				// nothing.
 				escInRead = false
 
-				require.Equal(t, maintStagePreparing, maintHostOf(h).modal.stage)
+				require.Equal(t, flowPreparing, maintHostOf(h).modal.stage)
 				h.press("esc")
 				require.False(t, maintHostOf(h).open())
 			}
@@ -926,7 +926,7 @@ func TestConsoleFlowEscAtEveryStageChangesNothing(t *testing.T) {
 
 			h.press("w")
 			require.True(t, maintHostOf(h).open(), name)
-			require.Equal(t, maintStagePreview, maintHostOf(h).modal.stage, name)
+			require.Equal(t, flowPreview, maintHostOf(h).modal.stage, name)
 
 			h.press("esc")
 			assert.False(t, maintHostOf(h).open(), "%s: esc closes the preview", name)
@@ -952,9 +952,9 @@ func TestConsoleFlowEscAtEveryStageChangesNothing(t *testing.T) {
 			if escInRead {
 				escInRead = false
 
-				require.Equal(t, maintStagePreparing, maintHostOf(h).modal.stage)
+				require.Equal(t, flowPreparing, maintHostOf(h).modal.stage)
 				h.press("esc")
-				require.Equal(t, maintStageResult, maintHostOf(h).modal.stage, "esc returns to the result")
+				require.Equal(t, flowResult, maintHostOf(h).modal.stage, "esc returns to the result")
 			}
 
 			return fx.recoveryPlan(r, true), nil
@@ -962,21 +962,21 @@ func TestConsoleFlowEscAtEveryStageChangesNothing(t *testing.T) {
 
 		h = pinsOpen(t, f, 120, 40)
 		h.press("w", "y")
-		require.Equal(t, maintStageResult, maintHostOf(h).modal.stage)
+		require.Equal(t, flowResult, maintHostOf(h).modal.stage)
 
 		// c, then esc during the recovery read: the result keeps its
 		// offer.
 		h.press("c")
-		require.Equal(t, maintStageResult, maintHostOf(h).modal.stage)
+		require.Equal(t, flowResult, maintHostOf(h).modal.stage)
 		require.NotNil(t, maintHostOf(h).modal.offer)
 
 		// c, then esc on the recovery preview: back to the result.
 		h.press("c")
-		require.Equal(t, maintStagePreview, maintHostOf(h).modal.stage)
+		require.Equal(t, flowPreview, maintHostOf(h).modal.stage)
 		require.True(t, maintHasKey(h, "y"))
 
 		h.press("esc")
-		require.Equal(t, maintStageResult, maintHostOf(h).modal.stage)
+		require.Equal(t, flowResult, maintHostOf(h).modal.stage)
 		require.NotNil(t, maintHostOf(h).modal.offer, "esc on the recovery preview keeps the offer")
 
 		// esc on the result closes it and dismisses the offer.
@@ -1007,7 +1007,7 @@ func TestConsoleFlowEscAtEveryStageChangesNothing(t *testing.T) {
 				escInPlan = false
 
 				h.send(navigateMsg{dest: destLessons, intent: "run"})
-				require.Equal(t, extPlanning, extRecOf(t, h).step)
+				require.Equal(t, stepPreparing, extRecOf(t, h).step)
 				h.press("esc")
 				require.Nil(t, runViewOf(h).cur)
 			}
@@ -1021,7 +1021,7 @@ func TestConsoleFlowEscAtEveryStageChangesNothing(t *testing.T) {
 			// esc while running, and esc on the stop question, keep the
 			// run going.
 			rec := extRecOf(t, h)
-			require.Equal(t, extRunning, rec.step)
+			require.Equal(t, stepRunning, rec.step)
 
 			h.press("esc")
 			require.False(t, rec.capturing())
@@ -1043,7 +1043,7 @@ func TestConsoleFlowEscAtEveryStageChangesNothing(t *testing.T) {
 		assert.Nil(t, runViewOf(h).cur, "esc while planning leaves no record")
 
 		h.send(openExtractMsg{req: p.Request})
-		require.Equal(t, extReview, extRecOf(t, h).step)
+		require.Equal(t, stepPreview, extRecOf(t, h).step)
 
 		h.press("esc")
 		assert.Nil(t, runViewOf(h).cur, "esc drops the review")
@@ -1053,9 +1053,9 @@ func TestConsoleFlowEscAtEveryStageChangesNothing(t *testing.T) {
 		h.press("y")
 
 		rec := extRecOf(t, h)
-		require.Equal(t, extResult, rec.step)
+		require.Equal(t, stepResult, rec.step)
 		assert.NotContains(t, extTallFlat(h), "stopped", "the escaped stop question stopped nothing")
-		assert.Nil(t, rec.run.stopped, "the run ended without a stop")
+		assert.False(t, rec.run.stopped, "the run ended without a stop")
 		assert.False(t, rec.run.stopping)
 		assert.Equal(t, []string{"PlanExtract", "PlanExtract", "PlanExtract", "RunExtract"}, f.called())
 	})
@@ -1116,7 +1116,7 @@ func TestConsoleFlowQuitDuringAMaintenanceCommitWaitsForIt(t *testing.T) {
 
 		h.press("enter")
 		require.False(t, h.quit, "the console waits for the commit")
-		assert.Equal(t, maintStageCommitting, maintHostOf(h).modal.stage)
+		assert.Equal(t, flowCommitting, maintHostOf(h).modal.stage)
 
 		// The commit is registered work, so the exit wait of Run sees it.
 		assert.False(t, h.m.st.work.wait(20*time.Millisecond), "the exit waits for the running commit")
@@ -1164,20 +1164,20 @@ func TestConsoleFlowGateOffDuringARecoveryKeepsTheOfferAndNeedsAFreshCheck(t *te
 
 	h := newHarness(t, svc, 120, 40)
 	h.press("3", "m", "w", "y")
-	require.Equal(t, maintStageResult, maintHostOf(h).modal.stage)
+	require.Equal(t, flowResult, maintHostOf(h).modal.stage)
 	require.NotNil(t, maintHostOf(h).modal.offer, "the partial commit offers a recovery")
 
 	// Another editor turns the gate off; the recovery check shows o.
 	settingsWrite(t, svc.root, "distill:\n  write: false\n")
 	h.press("c")
-	require.Equal(t, maintStagePreview, maintHostOf(h).modal.stage)
+	require.Equal(t, flowPreview, maintHostOf(h).modal.stage)
 	assert.False(t, maintHasKey(h, "y"))
 	require.True(t, maintHasKey(h, "o"))
 
 	// o returns the preview to its result and opens Settings.
 	h.press("o")
 	require.Equal(t, destSettings, h.m.active)
-	require.Equal(t, maintStageResult, maintHostOf(h).modal.stage, "the proof stays with the result")
+	require.Equal(t, flowResult, maintHostOf(h).modal.stage, "the proof stays with the result")
 
 	// Navigation reads nothing (R-13), so Settings still shows the gate
 	// of its last read. r reads the file of the other editor.
@@ -1192,7 +1192,7 @@ func TestConsoleFlowGateOffDuringARecoveryKeepsTheOfferAndNeedsAFreshCheck(t *te
 	h.press("3")
 	require.Equal(t, lesPins, hookLessons(h).sub)
 	require.True(t, maintHostOf(h).open())
-	require.Equal(t, maintStageResult, maintHostOf(h).modal.stage)
+	require.Equal(t, flowResult, maintHostOf(h).modal.stage)
 	require.True(t, maintHasKey(h, "c"))
 
 	h.press("y")
@@ -1230,7 +1230,7 @@ func TestConsoleFlowExtractionReviewOfABrokenPinFileRoutesToPins(t *testing.T) {
 	require.Equal(t, []learning.ExtractRequest{{IDs: []int64{1}}}, reqs)
 
 	rec := extRecOf(t, h)
-	require.Equal(t, extReview, rec.step)
+	require.Equal(t, stepPreview, rec.step)
 	assert.False(t, rec.runnable(), "a configuration error offers no y")
 	assert.NotContains(t, footerLine(h.view()), "y start")
 	assert.Contains(t, lesFlat(h.view()), "yaml: line 4: bad indent")
@@ -1280,7 +1280,7 @@ func TestConsoleFlowExtractionBlockerRoutesToSettingsAndNeedsAFreshPlan(t *testi
 	h.press("3", "t")
 
 	rec := extRecOf(t, h)
-	require.Equal(t, extReview, rec.step)
+	require.Equal(t, stepPreview, rec.step)
 	assert.False(t, rec.runnable(), "a blocker offers no y")
 	assert.Contains(t, footerLine(h.view()), "o open Settings › Inference")
 
@@ -1404,7 +1404,7 @@ func TestConsoleFlowSettingsSaveMakesAReadyExtractionReviewStale(t *testing.T) {
 	h.press("3", "t")
 
 	rec := extRecOf(t, h)
-	reviewed := rec.plan.preview
+	reviewed := rec.prev.preview
 	require.True(t, rec.runnable(), "the review is ready")
 
 	// The review takes no navigation key, so the user can save a setting
@@ -1425,11 +1425,11 @@ func TestConsoleFlowSettingsSaveMakesAReadyExtractionReviewStale(t *testing.T) {
 
 	h.press("enter")
 	require.True(t, rec.runnable())
-	require.NotSame(t, reviewed, rec.plan.preview, "enter plans a fresh preview")
+	require.NotSame(t, reviewed, rec.prev.preview, "enter plans a fresh preview")
 
 	h.press("y")
 	require.Len(t, ran, 1)
-	assert.Same(t, rec.plan.preview, ran[0], "the run gets the fresh preview")
+	assert.Same(t, rec.prev.preview, ran[0], "the run gets the fresh preview")
 	assert.Equal(t, []string{"PlanExtract", "PlanSettings", "SaveSettings", "PlanExtract", "RunExtract"},
 		svc.called())
 }

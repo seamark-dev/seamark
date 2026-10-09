@@ -65,7 +65,7 @@ type statsView struct {
 
 	focus  statsPane
 	period int // an index into statsPeriods
-	scroll [statsPaneCount]lesScroll
+	scroll [statsPaneCount]scrollState
 }
 
 // newStatsView returns the Stats sub-view over the shared state.
@@ -177,25 +177,11 @@ func (s *statsView) view(w, h int) string {
 		s.deliveryBox(v, w-leftW-1, boxH, s.focus == statsPaneDelivery))
 }
 
-// scrollBox renders a box whose body scrolls. The footer shows the
-// visible range, so hidden lines are never a surprise.
+// scrollBox renders a box whose body scrolls with the state of pane.
+// The footer shows the visible range, so hidden lines are never a
+// surprise. The shared Theme.scrollBox keeps the rules of every box.
 func (s *statsView) scrollBox(pane statsPane, o boxOpts, body []string) string {
-	t := s.st.theme
-	sc := &s.scroll[pane]
-
-	window := boxRows(o.H)
-	sc.page = window
-	sc.last = max(0, len(body)-window)
-	sc.by(0)
-
-	end := min(len(body), sc.off+window)
-	o.Lines = body[sc.off:end]
-
-	if sc.scrolls() {
-		o.Foot = propRange(t, sc.off, end, len(body))
-	}
-
-	return t.box(o)
+	return s.st.theme.scrollBox(o, body, nil, &s.scroll[pane], [2]int{-1, -1}, false)
 }
 
 // lessonsBox renders "Lessons · N active": the active lessons by source,
@@ -209,7 +195,7 @@ func (s *statsView) lessonsBox(v lessonstats.Snapshot, w, h int, focused bool) s
 	}
 
 	return s.scrollBox(statsPaneLessons, boxOpts{
-		W: w, H: h, Focus: focused, Right: right, Title: propPaneTitle(t, "Lessons", focused),
+		W: w, H: h, Focus: focused, Right: right, Title: boxTitle(t, "Lessons", focused),
 	}, s.lessonLines(v, boxInner(w)))
 }
 
@@ -350,7 +336,7 @@ func (s *statsView) deliveryBox(v lessonstats.Snapshot, w, h int, focused bool) 
 	}
 
 	return s.scrollBox(statsPaneDelivery, boxOpts{
-		W: w, H: h, Focus: focused, Title: propPaneTitle(t, title, focused),
+		W: w, H: h, Focus: focused, Title: boxTitle(t, title, focused),
 	}, s.deliveryLines(v, boxInner(w)))
 }
 

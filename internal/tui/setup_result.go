@@ -25,10 +25,10 @@ const (
 	setupOpOutcomeW = 14
 )
 
-// applyingView shows the running apply and the paths it writes. The
+// committingView shows the running apply and the paths it writes. The
 // engine reports no progress, so no path gets a state before the
 // result arrives.
-func (wz *setupWizard) applyingView(w, h int) string {
+func (wz *setupWizard) committingView(w, h int) string {
 	t := wz.st.theme
 	inner := boxInner(w)
 
@@ -72,7 +72,7 @@ func (wz *setupWizard) resultKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, setupKeys.Done):
 		wz.closed = true
 	default:
-		wz.pager.scroll(msg)
+		wz.pager.key(msg)
 	}
 
 	return nil
@@ -120,10 +120,10 @@ func (wz *setupWizard) resultView(w, h int) string {
 	}
 
 	inner, rows := boxInner(w), boxRows(h)
-	content := wz.pager.render("result", strings.Join(wz.resultLines(inner), "\n"), inner, rows)
+	lines := wz.pager.lines("result", wz.resultLines(inner), inner, rows)
 
 	return t.box(boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Apply", true),
-		Right: setupResultState(t, o), Foot: wz.pager.foot(t), Lines: strings.Split(content, "\n")})
+		Right: setupResultState(t, o), Foot: wz.pager.foot(t), Lines: lines})
 }
 
 // setupResultState returns the state word at the right of the Apply box

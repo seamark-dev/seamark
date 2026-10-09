@@ -40,17 +40,20 @@ type firstRun struct {
 }
 
 // frStage is the part of the Create config step that the guide shows.
+// The stages use the preview words of the console (previewflow.go). The
+// guide keeps its own stage type, because it reads its plan without a
+// ticket.
 type frStage int
 
 const (
 	// frSteps shows the three steps.
 	frSteps frStage = iota
-	// frPlanning waits for the plan of the shared documents.
-	frPlanning
-	// frReview shows the plan and waits for y.
-	frReview
-	// frApplying waits for the apply of the reviewed plan.
-	frApplying
+	// frPreparing waits for the plan of the shared documents.
+	frPreparing
+	// frPreview shows the plan and waits for y.
+	frPreview
+	// frCommitting waits for the apply of the reviewed plan.
+	frCommitting
 	// frResult shows what the apply wrote.
 	frResult
 )
@@ -150,12 +153,12 @@ func (m *model) welcomeKey(msg tea.KeyMsg) tea.Cmd {
 	switch fr.stage {
 	case frSteps:
 		return m.firstRunStepKey(msg)
-	case frPlanning:
+	case frPreparing:
 		// A late plan after esc is dropped, see update.
 		if key.Matches(msg, frKeys.Back) {
 			fr.stage = frSteps
 		}
-	case frReview:
+	case frPreview:
 		switch {
 		case key.Matches(msg, frKeys.Apply) && fr.canApply():
 			return fr.apply()
@@ -169,7 +172,7 @@ func (m *model) welcomeKey(msg tea.KeyMsg) tea.Cmd {
 		case key.Matches(msg, frKeys.ReadOnly):
 			m.welcome = nil
 		}
-	case frApplying:
+	case frCommitting:
 		// The apply cannot stop safely, so only quit acts here.
 	}
 
@@ -219,11 +222,11 @@ func (fr *firstRun) update(msg firstRunMsg) tea.Cmd {
 	case frPlanMsg:
 		// esc during planning went back to the steps; the plan is then
 		// out of date before anyone reviews it.
-		if fr.stage != frPlanning {
+		if fr.stage != frPreparing {
 			return nil
 		}
 
-		fr.stage = frReview
+		fr.stage = frPreview
 		fr.preview, fr.planErr = msg.preview, msg.err
 	case frApplyMsg:
 		fr.stage = frResult
@@ -239,7 +242,7 @@ func (fr *firstRun) update(msg firstRunMsg) tea.Cmd {
 // plan asks for the plan of the shared Seamark documents only. A nil
 // client list plans no agent file. Planning reads; it writes nothing.
 func (fr *firstRun) plan() tea.Cmd {
-	fr.stage = frPlanning
+	fr.stage = frPreparing
 	fr.preview, fr.planErr = nil, nil
 
 	var svc Setup = fr.st.svc
@@ -280,7 +283,7 @@ func (fr *firstRun) apply() tea.Cmd {
 		return toast(ToneAttention, "Another operation is running: "+fr.st.mutation)
 	}
 
-	fr.stage = frApplying
+	fr.stage = frCommitting
 	p := fr.preview
 
 	var svc Setup = fr.st.svc
@@ -338,9 +341,9 @@ func (fr *firstRun) keys() []key.Binding {
 	switch fr.stage {
 	case frSteps:
 		return []key.Binding{frKeys.Step, frKeys.Start}
-	case frPlanning:
+	case frPreparing:
 		return []key.Binding{frKeys.Back}
-	case frReview:
+	case frPreview:
 		if fr.canApply() {
 			return []key.Binding{frKeys.Apply, frKeys.Back}
 		}
@@ -359,7 +362,7 @@ func (fr *firstRun) boxHints() []key.Binding {
 	switch fr.stage {
 	case frSteps:
 		return []key.Binding{frKeys.Start, frKeys.ReadOnly, gkeys.Quit}
-	case frReview:
+	case frPreview:
 		if fr.canApply() {
 			return []key.Binding{frKeys.Apply, frKeys.Back, gkeys.Quit}
 		}
@@ -367,7 +370,7 @@ func (fr *firstRun) boxHints() []key.Binding {
 		return []key.Binding{frKeys.Back, gkeys.Quit}
 	case frResult:
 		return []key.Binding{frKeys.Steps, frKeys.ReadOnly, gkeys.Quit}
-	case frPlanning:
+	case frPreparing:
 		return []key.Binding{frKeys.Back, gkeys.Quit}
 	default:
 		return []key.Binding{gkeys.Quit}
@@ -386,12 +389,12 @@ func (fr *firstRun) view(w, h int) string {
 	switch fr.stage {
 	case frSteps:
 		body = fr.stepsBody(inner)
-	case frPlanning:
+	case frPreparing:
 		body = []string{fr.stepHead("plan"), "",
 			t.Muted.Render(truncate("Reading the files to plan the shared documents"+t.Glyphs.Ellipsis, inner, t.Glyphs.Ellipsis)), ""}
-	case frReview:
+	case frPreview:
 		body = fr.reviewBody(inner)
-	case frApplying:
+	case frCommitting:
 		body = []string{fr.stepHead("writing"), "",
 			t.Accent.Render(t.spinnerFrame(fr.st.tick)) + " " + t.Body.Render(frMutation+t.Glyphs.Ellipsis),
 			t.Muted.Render(truncate("The write cannot stop safely at this point.", inner, t.Glyphs.Ellipsis)), ""}

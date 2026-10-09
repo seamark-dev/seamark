@@ -267,7 +267,7 @@ func TestCtrlCLeavesTheFirstRunAndHelp(t *testing.T) {
 	// leaves, and nothing is applied.
 	f2 := newFake()
 	f2.fresh = true
-	f2.planSetup = func([]integration.ClientSetup) (*SetupPreview, error) { return frPreview(), nil }
+	f2.planSetup = func([]integration.ClientSetup) (*SetupPreview, error) { return frDocsPreview(), nil }
 
 	h2 := newHarness(t, f2, 120, 32)
 	h2.press("enter")
@@ -517,7 +517,7 @@ func TestASCIIShellFramesUseNoUnicode(t *testing.T) {
 	f := newFake()
 	f.fresh = true
 	f.agentsOnPath = []string{"claude"}
-	f.planSetup = func([]integration.ClientSetup) (*SetupPreview, error) { return frPreview(), nil }
+	f.planSetup = func([]integration.ClientSetup) (*SetupPreview, error) { return frDocsPreview(), nil }
 
 	h3 := &harness{t: t, m: newModel(f, newTheme(true))}
 	h3.run(h3.m.Init())

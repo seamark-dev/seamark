@@ -789,7 +789,7 @@ func setupCloseWithHeldPlan(t *testing.T, h *harness) (tea.Cmd, *setupWizard) {
 
 	h.press("down", "down", "space")
 	held := setupHold(h, "enter")
-	require.True(t, old.planning)
+	require.True(t, old.preparing)
 
 	h.press("esc", "esc")
 	require.Nil(t, setupScreen(h).wizard)
@@ -851,18 +851,18 @@ func TestSetupLatePlanOfClosedWizardArrivesBeforeTheNewPlan(t *testing.T) {
 			wz := setupScreen(h).wizard
 
 			heldNew := setupHold(h, "enter")
-			require.True(t, wz.planning)
+			require.True(t, wz.preparing)
 
 			// The closed wizard's plan arrives while the new one plans.
 			h.run(heldOld)
-			assert.True(t, wz.planning, "a foreign plan does not end the planning")
+			assert.True(t, wz.preparing, "a foreign plan does not end the planning")
 			assert.Nil(t, wz.preview)
 			assert.Contains(t, h.view(), "Planning the setup")
 
 			h.run(heldNew)
 			require.Len(t, *requests, 2)
 			require.NotNil(t, wz.preview)
-			assert.False(t, wz.planning)
+			assert.False(t, wz.preparing)
 			assert.Equal(t, (*requests)[1], wz.preview.Setups, "the preview is the new wizard's own plan")
 			assert.Equal(t, next, wz.preview.Setups[0].ClientID)
 		})

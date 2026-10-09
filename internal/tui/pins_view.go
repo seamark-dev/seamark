@@ -22,7 +22,8 @@ import (
 // draws the filter line, an optional state line, the list box and the
 // detail box. Each value from the pin file, the ledger or a model gets
 // sanitized here, at the leaf (oneLine, multiLine, errText). The file is
-// user text and can hold escape bytes.
+// user text and can hold escape bytes. The box frames and the filter
+// line format come from listpane.go, so Pins and Proposals look alike.
 
 // Column widths of the Pins list. The state column holds a label with
 // one attention word, for example "! p12 unknown key". So the list never
@@ -217,66 +218,22 @@ func (p *pinsView) filterBar(w int) []string {
 	t := p.st.theme
 	in := p.inspection()
 
-	var states strings.Builder
-
-	for f := pinInstalled; f < pinFilterCount; f++ {
-		label := f.label()
-		if in != nil {
-			label += " " + pinCount(in, f)
+	states := filterChips(t, pinFilterCount, p.filter, func(f pinFilter) string {
+		if in == nil {
+			return f.label()
 		}
 
-		if f > pinInstalled {
-			// One space beside the brackets, two between plain labels.
-			if f == p.filter || f-1 == p.filter {
-				states.WriteString(" ")
-			} else {
-				states.WriteString("  ")
-			}
-		}
+		return f.label() + " " + pinCount(in, f)
+	})
 
-		if f == p.filter {
-			states.WriteString(t.TabActive.Render("[" + label + "]"))
-		} else {
-			states.WriteString(t.Muted.Render(label))
-		}
-	}
-
-	showSeg := t.Faint.Render("show") + " " + states.String()
-
-	var region, text string
-
-	switch {
-	case p.editing == pinEditRegion:
-		region = p.input.view(t)
-	case p.region == "":
-		region = t.Muted.Render("all")
-	default:
-		region = t.Body.Render(oneLine(p.region))
-	}
-
-	switch {
-	case p.editing == pinEditText:
-		text = p.input.view(t)
-	case p.text == "":
-		text = t.Muted.Render("any")
-	default:
-		text = t.Body.Render(`"` + oneLine(p.text) + `"`)
-	}
-
-	rest := t.Faint.Render("region") + " " + region + "     " + t.Faint.Render("text") + " " + text
+	rest := t.Faint.Render("region") + " " + p.fieldView(t, filterRegion, p.region, "all") + "     " +
+		t.Faint.Render("text") + " " + p.fieldView(t, filterText, p.text, "any")
 
 	if n := len(p.selected); n > 0 && p.filter == pinInstalled {
 		rest += "     " + t.Marked.Render(itoa(n)+" selected")
 	}
 
-	if one := " " + showSeg + "     " + rest; width(one) <= w {
-		return []string{one}
-	}
-
-	return []string{
-		" " + truncate(showSeg, w-1, t.Glyphs.Ellipsis),
-		" " + truncate(rest, w-1, t.Glyphs.Ellipsis),
-	}
+	return filterLines(t, t.Faint.Render("show")+" "+states, rest, w)
 }
 
 // pinCount renders the row count of filter f, or "?" when the
@@ -381,21 +338,12 @@ func (p *pinsView) body(w, h int) string {
 		return p.emptyBox(in, w, h)
 	}
 
-	if p.st.wide() {
-		// Pins has more columns than Proposals, so a wide terminal gives
-		// its list two fifths of the width. The state column can then
-		// show a label with two attention words.
-		listW := max(min(propListW, w*propListW/propDesignW), w*2/5)
+	// Pins has more columns than Proposals, so a wide terminal gives its
+	// list two fifths of the width. The state column can then show a
+	// label with two attention words.
+	listW := max(min(propListW, w*propListW/propDesignW), w*2/5)
 
-		return hjoin(1, p.listBox(in, rows, listW, h, !p.focusDetail),
-			p.detailBox(in, rows, w-listW-1, h, p.focusDetail))
-	}
-
-	if p.focusDetail {
-		return p.detailBox(in, rows, w, h, true)
-	}
-
-	return p.listBox(in, rows, w, h, true)
+	return p.split(rows, w, h, listW, p.listBox, p.detailBox)
 }
 
 // listTitle names the list box after the filter.
@@ -489,48 +437,22 @@ func (c pinCols) cells(marker, check, num, rule, region, state string) []colCell
 
 // listBox renders the list with its column header. The cursor row has
 // the cursor glyph, and in the focused box a full-width selection
-// background. The rows use integRow, so a clipped cell keeps a gap
-// before the next column.
-func (p *pinsView) listBox(in *maintain.Inspection, rows []pinRow, w, h int, focused bool) string {
+// background (listPane.renderList). The rows use integRow, so a clipped
+// cell keeps a gap before the next column.
+func (p *pinsView) listBox(rows []pinRow, w, h int, focused bool) string {
 	t := p.st.theme
-	inner := boxInner(w)
-	c := p.columns(in, rows, inner)
-
-	window := max(1, boxRows(h)-1)
-	p.listH = window
-	p.list.clamp(len(rows), window)
+	in := p.inspection()
+	c := p.columns(in, rows, boxInner(w))
 
 	num := "#"
 	if p.filter != pinInstalled {
 		num = "ID"
 	}
 
-	lines := []string{t.Faint.Render(integRow(t, c.cells("", "", num, "RULE", "REGIONS", "STATE")...))}
-	end := min(len(rows), p.list.offset+window)
+	header := t.Faint.Render(integRow(t, c.cells("", "", num, "RULE", "REGIONS", "STATE")...))
 
-	for i := p.list.offset; i < end; i++ {
-		cursor := i == p.list.cursor
-
-		line := p.listRow(in, c, rows[i], cursor)
-		if cursor && focused {
-			line = t.highlight(line, inner, bgSel)
-		}
-
-		lines = append(lines, line)
-	}
-
-	var foot string
-
-	switch {
-	case len(rows) > window:
-		foot = propRange(t, p.list.offset, end, len(rows))
-	case !p.st.wide():
-		foot = t.Faint.Render("enter for detail")
-	}
-
-	return t.box(boxOpts{
-		W: w, H: h, Focus: focused, Lines: lines, Foot: foot,
-		Title: propPaneTitle(t, p.listTitle(), focused), Right: t.Muted.Render(itoa(len(rows))),
+	return p.renderList(t, rows, w, h, focused, p.listTitle(), header, func(r pinRow, cursor bool) string {
+		return p.listRow(in, c, r, cursor)
 	})
 }
 
@@ -611,52 +533,19 @@ func pinRegionLabel(set []string) string {
 	}
 }
 
-// detailBox renders the row under the cursor. The body scrolls inside
-// the box, and another row starts at the top.
-func (p *pinsView) detailBox(in *maintain.Inspection, rows []pinRow, w, h int, focused bool) string {
+// detailBox renders the row under the cursor: a pin or a proposal of
+// the history filters. The body scrolls inside the box, and another row
+// starts at the top (listPane.renderDetail).
+func (p *pinsView) detailBox(rows []pinRow, w, h int, focused bool) string {
 	t := p.st.theme
-	cur, _ := p.current(rows)
+	cur, _ := p.cursorRow(rows)
 	inner := boxInner(w)
 
-	var (
-		body  []string
-		title string
-	)
-
 	if cur.pin != nil {
-		body = p.pinDetail(in, cur, inner)
-		title = "Pin " + itoa(cur.n+1)
-	} else {
-		body = p.propDetail(cur.prop, inner)
-		title = "Proposal " + propID(cur.prop.ID)
+		return p.renderDetail(t, cur, "Pin "+itoa(cur.n+1), p.pinDetail(p.inspection(), cur, inner), w, h, focused)
 	}
 
-	if id := cur.ident(); p.detailID != id {
-		p.detail.off = 0
-		p.detailID = id
-	}
-
-	window := boxRows(h)
-	p.detail.page = window
-	p.detail.last = max(0, len(body)-window)
-	p.detail.by(0)
-
-	sep := " " + t.Glyphs.Sep + " "
-
-	var foot string
-
-	switch {
-	case p.detail.off < p.detail.last:
-		foot = t.Faint.Render("↓ more" + sep + "pgdn")
-	case p.detail.off > 0:
-		foot = t.Faint.Render("↑ more" + sep + "pgup")
-	}
-
-	return t.box(boxOpts{
-		W: w, H: h, Focus: focused, Foot: foot,
-		Title: propPaneTitle(t, title, focused),
-		Lines: body[p.detail.off:min(len(body), p.detail.off+window)],
-	})
+	return p.renderDetail(t, cur, "Proposal "+propID(cur.prop.ID), p.propDetail(cur.prop, inner), w, h, focused)
 }
 
 // titleLines renders a rule in the title style with a faint tag after
@@ -1585,16 +1474,10 @@ func (p *pinsView) propDetail(pr domain.Proposal, w int) []string {
 func (p *pinsView) loadingBox(w, h int) string {
 	t := p.st.theme
 
-	return p.messageBox(t.Title.Render("Installed pins"), "", propMessage{
+	return t.messageBox(t.Title.Render("Installed pins"), "", propMessage{
 		head: []string{t.Accent.Render(t.spinnerFrame(p.st.tick)) + " " + t.Title.Render("Reading the pin file"+t.Glyphs.Ellipsis)},
 		body: "Seamark reads " + pinfile.File + " and relates it to the proposal ledger. Nothing is written.",
 	}, w, h)
-}
-
-// messageBox renders a centered message in the layout of the Proposals
-// empty states, so both sub-views read alike. It reads only the theme.
-func (p *pinsView) messageBox(title, right string, m propMessage, w, h int) string {
-	return (&propView{st: p.st}).messageBox(title, right, m, w, h)
 }
 
 // emptyBox explains an empty list. The cause is a file that could not
@@ -1672,7 +1555,7 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 		}
 	}
 
-	return p.messageBox(title, count, m, w, h)
+	return t.messageBox(title, count, m, w, h)
 }
 
 // unknownRoute adds the next valid route to the message of a history

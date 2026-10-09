@@ -2,7 +2,6 @@ package tui
 
 import (
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 
@@ -25,16 +24,9 @@ const (
 	distOutcomeMin = 22
 )
 
-// distCounts counts the group outcomes by status. unknown counts a
-// group whose agent call started before an internal error ended the
-// run; its result is not known.
-type distCounts struct {
-	completed, failed, cancelled, skipped, unattempted, unknown int
-}
-
-// distCount counts outcomes by status.
-func distCount(groups []distill.GroupOutcome) distCounts {
-	var c distCounts
+// distCount counts group outcomes by status.
+func distCount(groups []distill.GroupOutcome) unitCounts {
+	var c unitCounts
 
 	for _, g := range groups {
 		switch g.Status {
@@ -57,7 +49,7 @@ func distCount(groups []distill.GroupOutcome) distCounts {
 // counts counts the group outcomes of the record. The lost group of an
 // internal error has no status, but its call started. So it counts as
 // unknown, never as not attempted.
-func (d *distRecord) counts() distCounts {
+func (d *distRecord) counts() unitCounts {
 	c := distCount(d.outcomes())
 
 	if d.lostGroup() >= 0 {
@@ -80,20 +72,8 @@ func (d *distRecord) lostGroup() int {
 	return k
 }
 
-// distVerdict is the classification of a finished run: the tone and the
-// word of the box label, the headline, the lead text and the toast. A
-// run with a failed, cancelled or unattempted group never reads as a
-// success (spec R-8).
-type distVerdict struct {
-	tone  Tone
-	word  string
-	head  string
-	lead  string
-	toast string
-}
-
 // verdict classifies the finished run from its typed outcome.
-func (d *distRecord) verdict() distVerdict {
+func (d *distRecord) verdict() agentVerdict {
 	x := d.run.exec
 	c := d.counts()
 
@@ -113,7 +93,7 @@ func (d *distRecord) verdict() distVerdict {
 				"known. The Proposals view shows what was saved."
 		}
 
-		return distVerdict{
+		return agentVerdict{
 			tone: ToneFailure, word: "failed", head: "Distillation stopped on an internal error",
 			lead:  lead + distUnattemptedText(c) + " No pin was applied.",
 			toast: "Distillation stopped on an internal error: " + fresh + ".",
@@ -124,34 +104,34 @@ func (d *distRecord) verdict() distVerdict {
 			cause = x.StopErr
 		}
 
-		return distVerdict{
+		return agentVerdict{
 			tone: ToneFailure, word: "failed", head: "Distillation stopped on a store error",
 			lead: "A store read or write failed: " + errText(cause) + ". " + saved +
 				" The remaining groups did not run. No pin was applied.",
 			toast: "Distillation stopped on a store error: " + fresh + ".",
 		}
 	case x.Stop == distill.StopCancelled:
-		return distVerdict{
+		return agentVerdict{
 			tone: ToneAttention, word: "stopped", head: "Distillation stopped",
 			lead:  "You stopped the run. " + saved + distCancelledText(c) + distUnattemptedText(c),
 			toast: "Distillation stopped: " + propPlural(c.completed, "group", "groups") + " saved, " + fresh + ".",
 		}
 	case x.Stop == distill.StopConflict:
-		return distVerdict{
+		return agentVerdict{
 			tone: ToneAttention, word: "stopped", head: "Distillation stopped: an input changed",
 			lead: errText(x.StopErr) + ". " + saved + distCancelledText(c) + distUnattemptedText(c) +
 				" Prepare the remaining work for a new plan from the current state.",
 			toast: "Distillation stopped because an input changed: " + fresh + ".",
 		}
 	case c.completed == 0 && c.failed > 0:
-		return distVerdict{
+		return agentVerdict{
 			tone: ToneFailure, word: "failed", head: "Distillation failed",
 			lead: "Every group failed, so nothing was saved. The failed groups have no signature, so a new plan " +
 				"can include them. No pin was applied.",
 			toast: "Distillation failed: no group was saved.",
 		}
 	case c.failed > 0:
-		return distVerdict{
+		return agentVerdict{
 			tone: ToneAttention, word: "partial", head: "Distillation finished with failed groups",
 			lead: propPlural(c.failed, "group", "groups") + " failed. " + saved + " The failed groups have no " +
 				"signature, so a new plan can include them. No pin was applied.",
@@ -170,7 +150,7 @@ func (d *distRecord) verdict() distVerdict {
 		lead += " The stop came after the last reply, so every group finished."
 	}
 
-	return distVerdict{
+	return agentVerdict{
 		tone: ToneSuccess, word: "completed", head: "Distillation completed", lead: lead,
 		toast: "Distillation completed: " + fresh + ".",
 	}
@@ -178,7 +158,7 @@ func (d *distRecord) verdict() distVerdict {
 
 // distCancelledText tells that failed and cancelled groups stay
 // eligible, because neither has a signature.
-func distCancelledText(c distCounts) string {
+func distCancelledText(c unitCounts) string {
 	var out string
 
 	if c.failed > 0 {
@@ -198,7 +178,7 @@ func distCancelledText(c distCounts) string {
 }
 
 // distUnattemptedText counts the groups that never started.
-func distUnattemptedText(c distCounts) string {
+func distUnattemptedText(c unitCounts) string {
 	if c.unattempted == 0 {
 		return ""
 	}
@@ -222,22 +202,16 @@ func (d *distRecord) runView(w, h int) string {
 	return d.compactBox(w, h)
 }
 
-// stateLabel renders the state at the right of the summary border.
+// stateLabel renders the state at the right of the summary border. The
+// result comes first, because a stop request stays set after the end.
 func (d *distRecord) stateLabel() string {
-	t := d.st.theme
-	g := t.Glyphs
-	spin := t.spinnerFrame(d.st.tick)
-
-	switch {
-	case d.step == distResult:
+	if d.step == stepResult {
 		v := d.verdict()
 
-		return t.Badge(v.tone, v.word)
-	case d.stopping():
-		return t.Attention.Render(spin + " stopping" + g.Ellipsis)
-	default:
-		return t.Accent.Render(spin) + t.Muted.Render(" running "+g.Sep+" "+runElapsed(time.Since(d.run.started)))
+		return d.st.theme.Badge(v.tone, v.word)
 	}
+
+	return runStateLabel(d.st.theme, d.st.tick, d.stopping(), d.run.started)
 }
 
 // headline renders the first line of the summary.
@@ -246,16 +220,16 @@ func (d *distRecord) headline() string {
 	g := t.Glyphs
 	spin := t.spinnerFrame(d.st.tick)
 	r := &d.run
-	n := len(r.outcomes)
+	n := len(r.units)
 
-	if d.step == distResult {
+	if d.step == stepResult {
 		v := d.verdict()
 
 		return t.ToneStyle(v.tone).Render(t.ToneGlyph(v.tone)+" ") + t.Title.Render(v.head)
 	}
 
 	group := func(k int) string {
-		return "group " + itoa(k+1) + " of " + itoa(n) + " " + g.Sep + " " + distRegionLabel(r.outcomes[k].Plan.Region)
+		return "group " + itoa(k+1) + " of " + itoa(n) + " " + g.Sep + " " + distRegionLabel(r.units[k].Plan.Region)
 	}
 
 	// A stop from the quit question sets no stop group, so the running
@@ -288,7 +262,7 @@ func (d *distRecord) summaryBox(w, h int, focused bool) string {
 
 	var body []string
 
-	if d.step == distResult {
+	if d.step == stepResult {
 		body = d.resultLines(inner)
 	} else {
 		body = d.progressLines(inner)
@@ -327,7 +301,7 @@ func (d *distRecord) progressLines(w int) []string {
 
 	if len(r.activity) > 0 {
 		lines = append(lines, "", integHeading(t, "Recent activity"))
-		lines = append(lines, t.activityLines(r.activity, distActivityKeep, w)...)
+		lines = append(lines, t.activityLines(r.activity, agentActivityKeep, w)...)
 	}
 
 	return lines
@@ -336,30 +310,30 @@ func (d *distRecord) progressLines(w int) []string {
 // phases renders the steps of the run from the typed events.
 func (d *distRecord) phases() []phaseRow {
 	r := &d.run
-	n := len(r.outcomes)
+	n := len(r.units)
 
 	check := phaseRow{label: "Check the plan", state: phaseActive}
 
 	switch {
 	case r.checked:
 		check.state, check.note = phaseDone, "no change since the preview"
-	case r.stopped != nil:
-		check.state, check.note = phaseStopped, distStopWords(r.stopped.Stop)
+	case r.stopped:
+		check.state, check.note = phaseStopped, distStopWords(r.stopWhy)
 	}
 
 	rows := []phaseRow{check}
 
-	if ids := distProposalIDs(d.plan.preview.Plan.Cleanup); len(ids) > 0 {
+	if ids := distProposalIDs(d.prev.preview.Plan.Cleanup); len(ids) > 0 {
 		clean := phaseRow{label: "Remove stale pending", note: propIDList(ids) + " before the first group"}
-		if r.cleanup {
-			clean.state, clean.note = phaseDone, itoa(r.removed)+" removed: "+propIDList(ids)
+		if d.swept.done {
+			clean.state, clean.note = phaseDone, itoa(d.swept.removed)+" removed: "+propIDList(ids)
 		}
 
 		rows = append(rows, clean)
 	}
 
 	send := phaseRow{label: "Send groups to the agent", note: itoa(r.finished) + " of " + itoa(n) + " done"}
-	if r.checked && r.stopped == nil {
+	if r.checked && !r.stopped {
 		send.state = phaseActive
 	}
 
@@ -456,7 +430,7 @@ func (d *distRecord) usageText() string {
 	}
 
 	pending, k := 0, d.run.sending
-	if d.step == distRunning && k >= 0 && k < len(outs) {
+	if d.step == stepRunning && k >= 0 && k < len(outs) {
 		pending = outs[k].Plan.PromptChars
 	}
 
@@ -475,7 +449,7 @@ func (d *distRecord) usageText() string {
 		text += t.Muted.Render("; group " + itoa(k+1) + " reply pending")
 	}
 
-	if d.step == distResult {
+	if d.step == stepResult {
 		text += t.Muted.Render(" " + t.Glyphs.Sep + " " + runElapsed(d.run.ended.Sub(d.run.started)))
 	}
 
@@ -506,20 +480,6 @@ func (d *distRecord) happened() [][2]string {
 	c := d.counts()
 	sep := " " + t.Glyphs.Sep + " "
 
-	parts := []string{itoa(c.completed) + " saved"}
-
-	for _, p := range []struct {
-		n    int
-		word string
-	}{
-		{c.failed, " failed"}, {c.cancelled, " cancelled"}, {c.unknown, " result unknown"}, {c.skipped, " skipped"},
-		{c.unattempted, " not attempted"},
-	} {
-		if p.n > 0 {
-			parts = append(parts, itoa(p.n)+p.word)
-		}
-	}
-
 	ids := d.newIDs()
 
 	proposals := t.Muted.Render("none")
@@ -528,7 +488,7 @@ func (d *distRecord) happened() [][2]string {
 	}
 
 	rows := [][2]string{
-		{"Groups", t.Body.Render(strings.Join(parts, sep))},
+		{"Groups", t.Body.Render(strings.Join(c.parts("saved"), sep))},
 		{"Proposals", proposals},
 		{"Duplicates", t.Body.Render(d.duplicatesText())},
 	}
@@ -557,12 +517,12 @@ func (d *distRecord) happened() [][2]string {
 // cleanupText reports the stale-pending cleanup of the run. The engine
 // removes the rows before the first group, so an attempted group proves
 // that the cleanup ran, also when it removed no row.
-func (d *distRecord) cleanupText(c distCounts) string {
+func (d *distRecord) cleanupText(c unitCounts) string {
 	t := d.st.theme
 	x := d.run.exec
 	n := len(x.CleanupIDs)
 
-	ran := d.run.cleanup || x.Removed > 0 || c.unattempted < len(x.Groups)
+	ran := d.swept.done || x.Removed > 0 || c.unattempted < len(x.Groups)
 
 	switch {
 	case !ran && d.run.internal:
@@ -615,7 +575,7 @@ func (d *distRecord) runGroupsBox(w, h int, focused bool) string {
 	body = append(body, d.groupDetail(inner)...)
 
 	right := itoa(d.run.finished) + " of " + itoa(len(outs)) + " done"
-	if d.step == distResult {
+	if d.step == stepResult {
 		right = itoa(len(outs)-d.counts().unattempted) + " of " + itoa(len(outs)) + " ran"
 	}
 
@@ -623,7 +583,7 @@ func (d *distRecord) runGroupsBox(w, h int, focused bool) string {
 		W: w, H: h, Focus: focused, Title: integPaneTitle(t, "Groups", focused), Right: t.Muted.Render(right),
 	}
 
-	return d.st.theme.scrollBox(o, body, nil, &d.run.groups, keep, d.run.follow)
+	return d.st.theme.scrollBox(o, body, nil, &d.run.list, keep, d.run.follow)
 }
 
 // runGroupLines renders the group table. find adds the findings column,
@@ -712,9 +672,9 @@ func (d *distRecord) outcomeCell(i int, o distill.GroupOutcome) (glyph, words st
 	switch {
 	case i == d.lostGroup():
 		return t.Attention.Render(g.Warn), t.Attention.Render("result unknown")
-	case d.step == distRunning && i == d.run.sending:
+	case d.step == stepRunning && i == d.run.sending:
 		return t.Accent.Render(t.spinnerFrame(d.st.tick)), t.Accent.Render("sending" + g.Ellipsis)
-	case d.step == distRunning:
+	case d.step == stepRunning:
 		return t.Faint.Render(g.Hollow), t.Faint.Render("waiting")
 	default:
 		return t.Attention.Render(g.Warn), t.Attention.Render("not attempted")
@@ -793,7 +753,7 @@ func (d *distRecord) compactBox(w, h int) string {
 	body := []string{""}
 	follow := r.follow
 
-	if d.step == distResult {
+	if d.step == stepResult {
 		body = append(body, integLines(t.Body, d.verdict().lead, inner)...)
 		body = append(body, "", integHeading(t, "What happened"))
 		body = append(body, propKV(t, d.happened(), inner)...)
@@ -809,7 +769,7 @@ func (d *distRecord) compactBox(w, h int) string {
 	body = append(body, table...)
 
 	switch {
-	case d.step == distResult:
+	case d.step == stepResult:
 		body = append(body, "", integHeading(t, "Next"))
 		body = append(body, d.nextLines(inner)...)
 		body = append(body, "")
@@ -822,7 +782,7 @@ func (d *distRecord) compactBox(w, h int) string {
 
 	o := boxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Distillation", true), Right: d.stateLabel()}
 
-	return d.st.theme.pinnedBox(o, head, body, nil, &r.groups, keep, follow)
+	return d.st.theme.pinnedBox(o, head, body, nil, &r.list, keep, follow)
 }
 
 // shortStopNote is the one-line stop note of the compact box. The stop
@@ -842,9 +802,9 @@ func (d *distRecord) shortStopNote() string {
 // the cleanup of a cleanup-only plan.
 func (d *distRecord) modal(w, h int) (string, bool) {
 	switch {
-	case d.step == distRunning && d.run.stopAsk:
+	case d.step == stepRunning && d.run.stopAsk:
 		return d.stopModal(w, h), true
-	case d.step == distReview && d.plan.cleanAsk:
+	case d.step == stepPreview && d.clean.ask:
 		return d.cleanModal(w, h), true
 	}
 
@@ -856,26 +816,14 @@ func (d *distRecord) modal(w, h int) (string, bool) {
 // cells wide, like the quit question and the stop question of an
 // evidence refresh (design map §6).
 func (d *distRecord) stopModal(w, h int) string {
-	t := d.st.theme
-	area := min(w, 68)
-	inner := modalBodyWidth(64, area)
-	r := &d.run
-
 	text := "Seamark starts no new group and ends the run at the next check. Groups saved so far stay " +
 		"saved. Nothing is retried."
-	if k := r.sending; k >= 0 {
+	if k := d.run.sending; k >= 0 {
 		text = "Seamark cancels the agent call of group " + itoa(k+1) + " and starts no new group. Groups saved " +
 			"so far stay saved. A provider can still bill the cancelled call. Nothing is retried."
 	}
 
-	return t.modal(modalOpts{
-		Title: t.Title.Render("Stop the distillation?"),
-		Body:  integLines(t.Body, text, inner),
-		Actions: []key.Binding{
-			withHelp(distKeys.Start, "y", "stop the run"), withHelp(nkeys.Back, "esc", "keep running"),
-		},
-		MinW: 64,
-	}, nil, area, h)
+	return runStopModal(d.st.theme, "Stop the distillation?", text, withHelp(agentKeys.Start, "y", "stop the run"), w, h)
 }
 
 // cleanModal asks before the stale-pending cleanup. It lists every row,
@@ -883,7 +831,7 @@ func (d *distRecord) stopModal(w, h int) string {
 func (d *distRecord) cleanModal(w, h int) string {
 	t := d.st.theme
 	inner := modalBodyWidth(modalMinW, w)
-	rows := d.plan.preview.Plan.Cleanup
+	rows := d.prev.preview.Plan.Cleanup
 
 	body := integLines(t.Body, "Seamark deletes these pending proposals. Their evidence group no longer "+
 		"exists, so a distillation would delete them first:", inner)
@@ -906,8 +854,8 @@ func (d *distRecord) cleanModal(w, h int) string {
 			"stale pending proposals")+"?"),
 		Body: body,
 		Actions: []key.Binding{
-			withHelp(distKeys.Start, "y", "remove "+propPlural(n, "proposal", "proposals")),
+			withHelp(agentKeys.Start, "y", "remove "+propPlural(n, "proposal", "proposals")),
 			withHelp(nkeys.Back, "esc", "keep them"),
 		},
-	}, &d.plan.cleanSc, w, h)
+	}, &d.clean.scroll, w, h)
 }
