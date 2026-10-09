@@ -9,6 +9,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -171,7 +172,7 @@ func (o *overview) indexCard(w int) ovCard {
 
 // readyIndexCard renders a ready index. A failed health read says so
 // with its reason; it never shows zero files.
-func (o *overview) readyIndexCard(v IndexView, w int) (right string, lines []string) {
+func (o *overview) readyIndexCard(v services.IndexView, w int) (right string, lines []string) {
 	t := o.st.theme
 	s := v.Status
 
@@ -213,7 +214,7 @@ func (o *overview) readyIndexCard(v IndexView, w int) (right string, lines []str
 
 // probeCard renders an index state other than ready: a short reason and
 // the next step. The attention item of the state holds the full text.
-func (o *overview) probeCard(v IndexView, w int) (right string, lines []string) {
+func (o *overview) probeCard(v services.IndexView, w int) (right string, lines []string) {
 	t := o.st.theme
 	g := t.Glyphs
 	p := v.Probe
@@ -248,7 +249,7 @@ func (o *overview) probeCard(v IndexView, w int) (right string, lines []string) 
 // ovIndexedAt returns the last index time. The status time wins over the
 // probe time, because status reads it from the same snapshot as the
 // other health facts. It returns 0 when neither is known.
-func ovIndexedAt(v IndexView) int64 {
+func ovIndexedAt(v services.IndexView) int64 {
 	if v.Status != nil && v.Status.IndexedAt > 0 {
 		return v.Status.IndexedAt
 	}
@@ -258,7 +259,7 @@ func ovIndexedAt(v IndexView) int64 {
 
 // ageText renders the last index time as an age after prefix, or says
 // that the time is unknown.
-func (o *overview) ageText(v IndexView, prefix string) string {
+func (o *overview) ageText(v services.IndexView, prefix string) string {
 	t := o.st.theme
 
 	at := ovIndexedAt(v)

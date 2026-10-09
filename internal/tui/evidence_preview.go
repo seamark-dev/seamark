@@ -9,6 +9,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -42,7 +43,7 @@ func (v *evidenceView) plan(mode index.SourceMode) tea.Cmd {
 	v.prev = &evPreview{mode: mode}
 	v.prev.startRead()
 
-	var svc Learning = v.st.svc
+	var svc services.Learning = v.st.svc
 
 	return func() tea.Msg {
 		p, err := svc.PlanEvidence(mode)

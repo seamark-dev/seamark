@@ -18,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -636,7 +637,7 @@ func TestLessonsCommitRefusalsHaveClearMessages(t *testing.T) {
 				"applied with this rule and regions; dismiss p1",
 		},
 		{proposals.ErrNothingSelected, "No pending proposal was selected."},
-		{ErrBusy, "Another operation is running"},
+		{services.ErrBusy, "Another operation is running"},
 	} {
 		f := newFake()
 		f.ledger = lesLedger()
@@ -797,7 +798,7 @@ func TestLessonsPreviewFailureAndCancelledPreview(t *testing.T) {
 func TestLessonsEmptyAndUnavailableStates(t *testing.T) {
 	// No readable index: explain where proposals live.
 	f := newFake()
-	f.ledgerErr = fmt.Errorf("%w (absent)", ErrNoLedger)
+	f.ledgerErr = fmt.Errorf("%w (absent)", services.ErrNoLedger)
 
 	h := lesOpen(t, f, 120, 32)
 

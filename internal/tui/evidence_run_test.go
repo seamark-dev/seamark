@@ -14,6 +14,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -480,7 +481,7 @@ func TestEvidenceRunRendersEverySourceState(t *testing.T) {
 		{name: "refused", mode: index.SourcesLocal, out: learning.Outcome{
 			Fixes:   evOutcome(index.SourceNotAttempted, index.CauseRefused, "another operation is running"),
 			Reviews: evOutcome(index.SourceNotAttempted, index.CauseRefused, "another operation is running"),
-		}, err: ErrBusy, want: []string{"! Evidence refresh did not start", "! not started",
+		}, err: services.ErrBusy, want: []string{"! Evidence refresh did not start", "! not started",
 			"! Local fixes not attempted: refused", "another operation is running"},
 			avoid: []string{"Details:"}},
 		{name: "error without a reason", mode: index.SourcesReviewsAndLocal, out: learning.Outcome{

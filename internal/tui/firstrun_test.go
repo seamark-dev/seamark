@@ -11,13 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // frDocsPreview is the plan of the shared documents in a fresh repository:
 // three new starter files and a changed .gitignore.
-func frDocsPreview() *SetupPreview {
-	return &SetupPreview{
+func frDocsPreview() *services.SetupPreview {
+	return &services.SetupPreview{
 		Plan: &integration.SetupPlan{Kept: []integration.FileKeep{}},
 		Writes: []integration.WritePreview{
 			{Path: ".seamark/policy.yaml", Created: true, Added: 40, Detail: "starter"},
@@ -44,14 +45,14 @@ func frFake(planned *[][]integration.ClientSetup) *fakeServices {
 	f := newFake()
 	f.fresh = true
 	f.agentsOnPath = []string{"claude", "codex"}
-	f.planSetup = func(setups []integration.ClientSetup) (*SetupPreview, error) {
+	f.planSetup = func(setups []integration.ClientSetup) (*services.SetupPreview, error) {
 		if planned != nil {
 			*planned = append(*planned, setups)
 		}
 
 		return frDocsPreview(), nil
 	}
-	f.applySetup = func(*SetupPreview) (integration.SetupResult, error) { return frAppliedResult(), nil }
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) { return frAppliedResult(), nil }
 
 	return f
 }
@@ -205,7 +206,7 @@ func TestFirstRunApplyWaitsForTheMutationSlot(t *testing.T) {
 
 func TestFirstRunStalePlanCannotApply(t *testing.T) {
 	f := frFake(nil)
-	f.planSetup = func([]integration.ClientSetup) (*SetupPreview, error) {
+	f.planSetup = func([]integration.ClientSetup) (*services.SetupPreview, error) {
 		p := frDocsPreview()
 		p.Writes[3].Stale = true
 
@@ -241,7 +242,7 @@ func TestFirstRunNothingToWriteOffersNoApply(t *testing.T) {
 
 func TestFirstRunPlanFailureIsShown(t *testing.T) {
 	f := frFake(nil)
-	f.planSetup = func([]integration.ClientSetup) (*SetupPreview, error) {
+	f.planSetup = func([]integration.ClientSetup) (*services.SetupPreview, error) {
 		return nil, errors.New("read .gitignore: permission denied")
 	}
 
@@ -256,7 +257,7 @@ func TestFirstRunPlanFailureIsShown(t *testing.T) {
 
 func TestFirstRunApplyFailureSaysWhatLanded(t *testing.T) {
 	f := frFake(nil)
-	f.applySetup = func(*SetupPreview) (integration.SetupResult, error) {
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
 		return integration.SetupResult{Ops: []integration.OpResult{
 			{Path: ".seamark/policy.yaml", Status: integration.OpApplied, Created: true},
 			{Path: ".seamark/lessons.yaml", Status: integration.OpFailed, Err: errors.New("disk full")},
@@ -282,7 +283,7 @@ func TestFirstRunApplyFailureSaysWhatLanded(t *testing.T) {
 
 func TestFirstRunStalePlanAtApplyWritesNothing(t *testing.T) {
 	f := frFake(nil)
-	f.applySetup = func(*SetupPreview) (integration.SetupResult, error) {
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
 		return integration.SetupResult{}, integration.ErrStalePlan
 	}
 
@@ -428,7 +429,7 @@ func TestFirstRunKeysMatchTheStage(t *testing.T) {
 	fr.preview = frDocsPreview()
 	assert.Equal(t, []string{"y apply", "esc back"}, help(fr.keys()))
 
-	fr.preview = &SetupPreview{Plan: &integration.SetupPlan{}}
+	fr.preview = &services.SetupPreview{Plan: &integration.SetupPlan{}}
 	assert.Equal(t, []string{"esc back"}, help(fr.keys()), "no y without a write")
 
 	fr.stage = frCommitting

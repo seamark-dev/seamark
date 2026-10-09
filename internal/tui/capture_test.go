@@ -18,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -107,7 +108,7 @@ func captureScenes() []captureScene {
 		{name: "01d-first-run-ascii", fake: captureFresh, ascii: true},
 		{name: "02-overview-fresh", fake: func() *fakeServices {
 			f := newFake()
-			f.index = IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent}}
+			f.index = services.IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent}}
 
 			return f
 		}},
@@ -145,7 +146,7 @@ func captureScenes() []captureScene {
 			}},
 		{name: "11-setup-result-failed", fake: func() *fakeServices {
 			f, _ := setupFake()
-			f.applySetup = func(*SetupPreview) (integration.SetupResult, error) {
+			f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
 				return integration.SetupResult{Ops: []integration.OpResult{
 					{Path: ".seamark/policy.yaml", Status: integration.OpApplied, Created: true},
 					{Path: ".codex/config.toml", Status: integration.OpFailed, Err: errors.New("permission denied"), Consumers: []string{"codex"}},
@@ -167,7 +168,7 @@ func captureScenes() []captureScene {
 		{name: "16-dismiss-preview", fake: lesApplyFake(true, nil), drive: func(h *harness) { h.press("3", "space", "d") }},
 		{name: "17-proposals-no-index", fake: func() *fakeServices {
 			f := newFake()
-			f.ledgerErr = ErrNoLedger
+			f.ledgerErr = services.ErrNoLedger
 
 			return f
 		}, drive: func(h *harness) { h.press("3") }},
@@ -238,7 +239,7 @@ func captureRun(h *harness) {
 // of the shared documents.
 func captureFresh() *fakeServices {
 	f := frFake(nil)
-	f.index = IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent}}
+	f.index = services.IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent}}
 
 	return f
 }

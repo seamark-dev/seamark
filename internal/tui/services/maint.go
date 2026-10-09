@@ -1,4 +1,4 @@
-package tui
+package services
 
 import (
 	"context"
@@ -29,11 +29,11 @@ var errNoPlan = errors.New("no reviewed plan")
 func (e *engine) Pins() *maintain.Inspection {
 	st, probe, err := e.openRead()
 	if err != nil {
-		return maintain.Inspect(probe.Root, nil, probe, e.deps.now())
+		return maintain.Inspect(probe.Root, nil, probe, e.deps.Now())
 	}
 	defer func() { _ = st.Close() }()
 
-	return maintain.Inspect(probe.Root, st, probe, e.deps.now())
+	return maintain.Inspect(probe.Root, st, probe, e.deps.Now())
 }
 
 // PlanMaintenance plans a retarget or a prune from a read-only store. It
@@ -129,7 +129,7 @@ func (e *engine) RunExtract(ctx context.Context, p *learning.ExtractPreview,
 	}
 	defer e.mu.Unlock()
 
-	return learning.RunExtract(ctx, e.ws, e.reg, p, e.deps.invoke, progress)
+	return learning.RunExtract(ctx, e.ws, e.reg, p, e.deps.Invoke, progress)
 }
 
 // openWrite opens the index for a short write. A fresh probe gives the
@@ -188,7 +188,7 @@ func sameDir(a, b string) bool {
 // The store is both the reader and the ledger writer, and the pin file
 // writes go through the guarded atomic write of the setup engine.
 func (e *engine) maintDeps(st *store.Store, probe workspace.IndexProbe) maintain.Deps {
-	return maintain.Deps{Root: probe.Root, Reg: e.reg, Reader: st, Probe: probe, Now: e.deps.now}
+	return maintain.Deps{Root: probe.Root, Reg: e.reg, Reader: st, Probe: probe, Now: e.deps.Now}
 }
 
 // maintResult is the result of a commit that did not start. It names the

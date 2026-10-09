@@ -1,4 +1,4 @@
-package tui
+package services
 
 import (
 	"context"
@@ -19,6 +19,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/store/storetest"
+	"github.com/seamark-dev/seamark/internal/tui/services/servicestest"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -38,7 +39,7 @@ const maintPins = "pin:\n" +
 func maintWorkspace(t *testing.T, write bool) (ws workspace.Workspace, linked domain.Proposal) {
 	t.Helper()
 
-	ws, _ = engWorkspace(t, "", "api")
+	ws, _ = servicestest.Workspace(t, "", "api")
 
 	cfg := filepath.Join(ws.Root, filepath.FromSlash(settings.File))
 	data, err := os.ReadFile(cfg)
@@ -61,7 +62,7 @@ func maintWorkspace(t *testing.T, write bool) (ws workspace.Workspace, linked do
 	require.NoError(t, storetest.InsertProposal(st, &old))
 	require.NoError(t, st.Close())
 
-	engWrite(t, ws, pinfile.File, maintPins)
+	servicestest.Write(t, ws, pinfile.File, maintPins)
 
 	return ws, linked
 }
@@ -88,14 +89,14 @@ func maintFile(t *testing.T, ws workspace.Workspace) string {
 
 func TestEnginePinsReadWithoutAnIndex(t *testing.T) {
 	root := t.TempDir()
-	engGit(t, root, "init", "-b", "main")
+	servicestest.Git(t, root, "init", "-b", "main")
 
 	ws, err := workspace.Resolve(root, "")
 	require.NoError(t, err)
-	engWrite(t, ws, pinfile.File, maintPins)
+	servicestest.Write(t, ws, pinfile.File, maintPins)
 
-	before := engTree(t, ws.Root)
-	in := engNew(ws, engineDeps{}).Pins()
+	before := servicestest.Tree(t, ws.Root)
+	in := engNew(ws, Deps{}).Pins()
 
 	require.NotNil(t, in)
 	require.NoError(t, in.DocErr)
@@ -106,17 +107,17 @@ func TestEnginePinsReadWithoutAnIndex(t *testing.T) {
 	assert.Nil(t, in.Links, "no ledger means no known link")
 	require.ErrorIs(t, in.LinkErr, maintain.ErrNoLedger)
 	assert.Equal(t, workspace.IndexAbsent, in.Index.State)
-	assert.Equal(t, engNow, in.At, "the readings use the engine clock")
+	assert.Equal(t, servicestest.Now, in.At, "the readings use the engine clock")
 
-	assert.Equal(t, before, engTree(t, ws.Root), "the read writes nothing")
+	assert.Equal(t, before, servicestest.Tree(t, ws.Root), "the read writes nothing")
 	assert.NoFileExists(t, ws.DBPath, "the read creates no database")
 }
 
 func TestEnginePinsLinkTheLedger(t *testing.T) {
 	ws, linked := maintWorkspace(t, true)
-	e := engNew(ws, engineDeps{})
+	e := engNew(ws, Deps{})
 
-	before := engTree(t, ws.Root)
+	before := servicestest.Tree(t, ws.Root)
 	in := e.Pins()
 
 	require.NotNil(t, in.Links)
@@ -130,21 +131,21 @@ func TestEnginePinsLinkTheLedger(t *testing.T) {
 	require.Len(t, in.Superseded, 1, "the superseded row is history")
 	assert.Equal(t, "retired-rule", in.Superseded[0].Rule)
 
-	assert.Equal(t, before, engTree(t, ws.Root), "the read writes nothing")
+	assert.Equal(t, before, servicestest.Tree(t, ws.Root), "the read writes nothing")
 	engUnlocked(t, e)
 }
 
 func TestEngineCommitsAReviewedPrune(t *testing.T) {
 	ws, linked := maintWorkspace(t, true)
-	e := engNew(ws, engineDeps{})
+	e := engNew(ws, Deps{})
 
-	before := engTree(t, ws.Root)
+	before := servicestest.Tree(t, ws.Root)
 
 	plan, err := e.PlanMaintenance(maintPrune(t, e))
 	require.NoError(t, err)
 	require.True(t, plan.Confirmable, "%v", plan.Blocked)
 	require.NotNil(t, plan.Change)
-	assert.Equal(t, before, engTree(t, ws.Root), "a plan writes nothing")
+	assert.Equal(t, before, servicestest.Tree(t, ws.Root), "a plan writes nothing")
 	engUnlocked(t, e)
 
 	res, err := e.CommitMaintenance(plan)
@@ -165,17 +166,17 @@ func TestEngineCommitsAReviewedPrune(t *testing.T) {
 	assert.Empty(t, ledger.Applied)
 
 	// The same reviewed plan never runs twice: the file changed.
-	again := engTree(t, ws.Root)
+	again := servicestest.Tree(t, ws.Root)
 
 	_, err = e.CommitMaintenance(plan)
 	require.ErrorIs(t, err, maintain.ErrStale)
-	assert.Equal(t, again, engTree(t, ws.Root), "a stale plan writes nothing")
+	assert.Equal(t, again, servicestest.Tree(t, ws.Root), "a stale plan writes nothing")
 	engUnlocked(t, e)
 }
 
 func TestEngineNeverCommitsAGateOffPlan(t *testing.T) {
 	ws, _ := maintWorkspace(t, false)
-	e := engNew(ws, engineDeps{})
+	e := engNew(ws, Deps{})
 
 	plan, err := e.PlanMaintenance(maintPrune(t, e))
 	require.NoError(t, err)
@@ -183,17 +184,17 @@ func TestEngineNeverCommitsAGateOffPlan(t *testing.T) {
 	assert.False(t, plan.Write)
 	require.NotNil(t, plan.Change, "a gate-off plan still shows its change")
 
-	before := engTree(t, ws.Root)
+	before := servicestest.Tree(t, ws.Root)
 
 	_, err = e.CommitMaintenance(plan)
 	require.ErrorIs(t, err, maintain.ErrWriteDisabled)
-	assert.Equal(t, before, engTree(t, ws.Root))
+	assert.Equal(t, before, servicestest.Tree(t, ws.Root))
 	engUnlocked(t, e)
 }
 
 func TestEngineCompletesARecoveryOfThisSession(t *testing.T) {
 	ws, linked := maintWorkspace(t, true)
-	e := engNew(ws, engineDeps{})
+	e := engNew(ws, Deps{})
 
 	plan, err := e.PlanMaintenance(maintPrune(t, e))
 	require.NoError(t, err)
@@ -201,7 +202,7 @@ func TestEngineCompletesARecoveryOfThisSession(t *testing.T) {
 
 	// The reviewed bytes land, but the ledger step does not run: the
 	// partial state that a failed commit of this session leaves.
-	engWrite(t, ws, pinfile.File, string(plan.Change.After))
+	servicestest.Write(t, ws, pinfile.File, string(plan.Change.After))
 
 	r := &maintain.Recovery{
 		Action: plan.Action, Request: plan.Request, Items: plan.Items, Written: sha256.Sum256(plan.Change.After),
@@ -229,7 +230,7 @@ func TestEngineCompletesARecoveryOfThisSession(t *testing.T) {
 }
 
 func TestEnginePlansAndRunsAnExtraction(t *testing.T) {
-	ws, marker := engWorkspace(t, "", "api")
+	ws, marker := servicestest.Workspace(t, "", "api")
 
 	st, err := store.Open(ws.DBPath)
 	require.NoError(t, err)
@@ -243,28 +244,28 @@ func TestEnginePlansAndRunsAnExtraction(t *testing.T) {
 
 	var prompts []string
 
-	agent := &engAgent{fn: func(_ context.Context, prompt string) (string, error) {
+	agent := &servicestest.Agent{Fn: func(_ context.Context, prompt string) (string, error) {
 		prompts = append(prompts, prompt)
 
 		return `{"triggers": []}`, nil
 	}}
-	e := engNew(ws, engineDeps{invoke: agent})
+	e := engNew(ws, Deps{Invoke: agent})
 
-	before := engTree(t, ws.Root)
+	before := servicestest.Tree(t, ws.Root)
 
 	preview, err := e.PlanExtract(learning.ExtractRequest{IDs: []int64{pending.ID}})
 	require.NoError(t, err)
 	require.False(t, preview.NoOp())
 	assert.Equal(t, []int64{pending.ID}, preview.Plan.IDs())
-	assert.Equal(t, before, engTree(t, ws.Root), "a plan writes nothing")
-	assert.Zero(t, agent.count(), "a plan never invokes the agent")
+	assert.Equal(t, before, servicestest.Tree(t, ws.Root), "a plan writes nothing")
+	assert.Zero(t, agent.Count(), "a plan never invokes the agent")
 	engUnlocked(t, e)
 
 	x, err := e.RunExtract(context.Background(), preview, nil)
 	require.NoError(t, err)
 	require.NotNil(t, x)
 
-	assert.Equal(t, 1, agent.count(), "the fake invoker replaces the configured command")
+	assert.Equal(t, 1, agent.Count(), "the fake invoker replaces the configured command")
 	require.Len(t, prompts, 1)
 	assert.True(t, strings.Contains(prompts[0], fmt.Sprintf("id=%d", pending.ID)), prompts[0])
 	assert.Equal(t, []int64{pending.ID}, x.Persisted, "a valid negative answer is stored")
@@ -274,7 +275,7 @@ func TestEnginePlansAndRunsAnExtraction(t *testing.T) {
 
 func TestEngineRefusesAMaintenanceCommitForAnotherRepositoryRoot(t *testing.T) {
 	ws, _ := maintWorkspace(t, true)
-	e := engNew(ws, engineDeps{})
+	e := engNew(ws, Deps{})
 
 	plan, err := e.PlanMaintenance(maintPrune(t, e))
 	require.NoError(t, err)
@@ -288,13 +289,13 @@ func TestEngineRefusesAMaintenanceCommitForAnotherRepositoryRoot(t *testing.T) {
 	require.NoError(t, st.SetMeta(store.MetaRepoRoot, other))
 	require.NoError(t, st.Close())
 
-	before := engTree(t, ws.Root)
+	before := servicestest.Tree(t, ws.Root)
 
 	res, err := e.CommitMaintenance(plan)
 	require.ErrorIs(t, err, errForeignRoot)
 	assert.Contains(t, err.Error(), other)
 	assert.False(t, res.FileWritten)
-	assert.Equal(t, before, engTree(t, ws.Root), "the refusal writes nothing")
+	assert.Equal(t, before, servicestest.Tree(t, ws.Root), "the refusal writes nothing")
 	engUnlocked(t, e)
 
 	_, err = e.CommitRecovery(plan)

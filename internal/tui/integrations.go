@@ -51,7 +51,7 @@ type integrations struct {
 	st *state
 
 	// clients is the registry, read once. The registry is immutable, so
-	// a copy at construction keeps Services calls out of Update and View.
+	// a copy at construction keeps services.All calls out of Update and View.
 	clients []integration.Client
 
 	list  ui.ListState

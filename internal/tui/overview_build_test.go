@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -54,7 +55,7 @@ func TestOverviewBuildResultClosesWithEnter(t *testing.T) {
 
 func TestOverviewBuildResultStillClosesWithEsc(t *testing.T) {
 	f := ovPopulated()
-	f.buildIndex = func(bool, func(IndexEvent)) (*index.Summary, error) {
+	f.buildIndex = func(bool, func(services.IndexEvent)) (*index.Summary, error) {
 		return nil, errors.New("database is locked")
 	}
 
@@ -77,7 +78,7 @@ func TestOverviewRunningBuildIgnoresEnter(t *testing.T) {
 
 	var h *harness
 
-	f.buildIndex = func(bool, func(IndexEvent)) (*index.Summary, error) {
+	f.buildIndex = func(bool, func(services.IndexEvent)) (*index.Summary, error) {
 		h.press("enter")
 		assert.True(t, ovScreen(h).showBuild, "enter never hides a running build")
 		assert.Empty(t, ovScreen(h).keys(), "a running build offers no key")

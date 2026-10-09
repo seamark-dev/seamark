@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -107,7 +108,7 @@ func (r setupRow) selectable() bool {
 type setupPlannedMsg struct {
 	owner   *setupWizard
 	seq     int
-	preview *SetupPreview
+	preview *services.SetupPreview
 	err     error
 }
 
@@ -177,7 +178,7 @@ type setupWizard struct {
 	// preparing reports that the plan read runs: the review step shows
 	// the Preparing stage until the result arrives.
 	preparing bool
-	preview   *SetupPreview
+	preview   *services.SetupPreview
 	planErr   error
 	// setups is the request of the current plan; plan again reuses it.
 	setups []integration.ClientSetup
@@ -497,7 +498,7 @@ func (wz *setupWizard) plan(setups []integration.ClientSetup) tea.Cmd {
 	wz.aboutOpen = false
 	wz.hint = ""
 
-	var svc Setup = wz.st.svc
+	var svc services.Setup = wz.st.svc
 
 	return func() tea.Msg {
 		p, err := svc.PlanSetup(setups)

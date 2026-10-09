@@ -16,6 +16,7 @@ import (
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -200,7 +201,7 @@ func (r *extRecord) startPlan() tea.Cmd {
 	seq := r.prev.seq.start()
 	req := r.req
 
-	var svc Learning = r.st.svc
+	var svc services.Learning = r.st.svc
 
 	return func() tea.Msg {
 		p, err := svc.PlanExtract(req)
@@ -289,7 +290,7 @@ func (r *extRecord) start() tea.Cmd {
 
 	ch := agentQueue(len(p.Plan.Batches))
 
-	var svc Learning = r.st.svc
+	var svc services.Learning = r.st.svc
 
 	note := runNote{
 		verb: extractRunVerb, detail: r.batchesText(), total: n,
@@ -331,7 +332,7 @@ func extOutcomes(pl *distill.ExtractPlan) []distill.ExtractBatchOutcome {
 // extRunWork runs the preview with svc and streams its events, then
 // its end, through ch. Every event always arrives, because the queue
 // holds them all. agentWork turns a panic into a failed end.
-func extRunWork(ctx context.Context, svc Learning, rec *extRecord, p *learning.ExtractPreview, ch chan tea.Msg) {
+func extRunWork(ctx context.Context, svc services.Learning, rec *extRecord, p *learning.ExtractPreview, ch chan tea.Msg) {
 	agentWork(rec, ch, func() (*distill.ExtractExecution, error) {
 		return svc.RunExtract(ctx, p, func(ev distill.ExtractEvent) {
 			ch <- extEventMsg{rec: rec, ch: ch, ev: ev, at: time.Now()}

@@ -13,6 +13,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/learning"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -386,7 +387,7 @@ func (r *extRecord) planNotes(w int) []string {
 			text = "This preview is out of date: " + ui.ErrText(err) + ". Nothing was sent. Press enter to plan again."
 		case errors.Is(err, distill.ErrStale):
 			text = "The preview is out of date: " + extStaleText(err) + ". Nothing was sent. Press enter to plan again."
-		case errors.Is(err, ErrBusy):
+		case errors.Is(err, services.ErrBusy):
 			text = "Another operation holds the index: " + ui.ErrText(err) + ". Nothing was sent. Press enter to plan " +
 				"again when it ends."
 		}

@@ -12,6 +12,7 @@ import (
 
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -911,7 +912,7 @@ func (p *propView) unavailableBox(err error, w, h int) string {
 			head: []string{t.Accent.Render(t.SpinnerFrame(p.st.tick)) + " " + t.Title.Render("Reading the proposal ledger"+t.Glyphs.Ellipsis)},
 			body: "Proposals, their evidence and their advisories load from the index. Nothing is written.",
 		}
-	case errors.Is(err, ErrNoLedger):
+	case errors.Is(err, services.ErrNoLedger):
 		m = paneMessage{
 			head: []string{t.Attention.Render(t.Glyphs.Warn) + " " + t.Title.Render("No index yet")},
 			body: "Proposals live in the index database, and this workspace has no readable index. " +

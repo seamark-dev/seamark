@@ -12,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -171,7 +172,7 @@ func (v *evidenceView) start() tea.Cmd {
 
 	id, ch := r.id, r.ch
 
-	var svc Learning = v.st.svc
+	var svc services.Learning = v.st.svc
 
 	work := v.st.goWork(func() tea.Msg {
 		defer cancel()
@@ -199,7 +200,7 @@ func (v *evidenceView) prepareAgain(mode index.SourceMode) tea.Cmd {
 // ch. It runs in a command goroutine, never in Update. A panic becomes an
 // error result, so the mutation slot always frees. The record names that
 // error, because no source reason explains it.
-func evWork(ctx context.Context, svc Learning, plan *learning.Plan, id int, ch chan<- tea.Msg) {
+func evWork(ctx context.Context, svc services.Learning, plan *learning.Plan, id int, ch chan<- tea.Msg) {
 	defer close(ch)
 
 	var (

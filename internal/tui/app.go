@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -156,7 +157,7 @@ type exitDeadlineMsg struct{ seq int }
 // newModel builds the shell over the services. The root context is
 // the background context until Run replaces it with a context that it
 // cancels at exit.
-func newModel(svc Services, theme *ui.Theme) *model {
+func newModel(svc services.All, theme *ui.Theme) *model {
 	st := &state{svc: svc, theme: theme, ctx: context.Background()}
 
 	m := &model{st: st}
@@ -172,7 +173,7 @@ func newModel(svc Services, theme *ui.Theme) *model {
 // Init loads every source and runs the first-run check. Nothing here
 // writes: opening the console is inspection only.
 func (m *model) Init() tea.Cmd {
-	var svc Reader = m.st.svc
+	var svc services.Reader = m.st.svc
 
 	return tea.Batch(
 		m.st.load(allSections...),

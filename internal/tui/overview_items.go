@@ -10,6 +10,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -311,7 +312,7 @@ func ovHealthFailedItem(err error) ovItem {
 
 // healthItems classifies a ready index: a failed health read, then
 // freshness, coverage, parse errors and deleted paths.
-func (o *overview) healthItems(v IndexView) []ovItem {
+func (o *overview) healthItems(v services.IndexView) []ovItem {
 	s := v.Status
 	if s == nil {
 		return []ovItem{ovHealthFailedItem(v.StatusErr)}
@@ -922,7 +923,7 @@ func (o *overview) indexReadable() bool {
 // ledgerUnavailable reports a ledger failure that comes from a missing
 // or unreadable index, not from the ledger itself.
 func ledgerUnavailable(err error) bool {
-	return errors.Is(err, ErrNoLedger)
+	return errors.Is(err, services.ErrNoLedger)
 }
 
 // doctorAttention lists doctor warnings and failures as actionable. A

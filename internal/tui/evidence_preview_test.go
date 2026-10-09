@@ -17,6 +17,8 @@ import (
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/services"
+	"github.com/seamark-dev/seamark/internal/tui/services/servicestest"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -240,9 +242,9 @@ func TestEvidencePreviewWithoutACommitPromisesNoFixMine(t *testing.T) {
 // evidence groups. The real engine plans it here, so the fixture above
 // cannot drift from the engine rule.
 func TestEvidencePreviewOfAnEngineNoCommitPlan(t *testing.T) {
-	ws, _ := engWorkspace(t, "", "pkg")
-	engGit(t, ws.Root, "checkout", "--orphan", "fresh")
-	e := engNew(ws, engineDeps{fetch: (&engFetch{raw: engPage}).fetch})
+	ws, _ := servicestest.Workspace(t, "", "pkg")
+	servicestest.Git(t, ws.Root, "checkout", "--orphan", "fresh")
+	e := screenEngine(ws, services.Deps{Fetch: (&servicestest.Fetch{Raw: servicestest.Page}).Fetch})
 
 	plan, err := e.PlanEvidence(index.SourcesReviewsAndLocal)
 	require.NoError(t, err)
@@ -258,9 +260,9 @@ func TestEvidencePreviewOfAnEngineNoCommitPlan(t *testing.T) {
 	assert.Contains(t, wont, "change the 2 stored review findings or the review lessons")
 
 	// With an origin, the fetch can still change the review corpus.
-	ws, _ = engWorkspace(t, engOrigin, "pkg")
-	engGit(t, ws.Root, "checkout", "--orphan", "fresh")
-	e = engNew(ws, engineDeps{fetch: (&engFetch{raw: engPage}).fetch})
+	ws, _ = servicestest.Workspace(t, servicestest.Origin, "pkg")
+	servicestest.Git(t, ws.Root, "checkout", "--orphan", "fresh")
+	e = screenEngine(ws, services.Deps{Fetch: (&servicestest.Fetch{Raw: servicestest.Page}).Fetch})
 
 	plan, err = e.PlanEvidence(index.SourcesReviewsAndLocal)
 	require.NoError(t, err)

@@ -5,12 +5,16 @@ import (
 	"io/fs"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/services"
+	"github.com/seamark-dev/seamark/internal/tui/services/servicestest"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // evEngineServices runs the evidence services of a real engine and
@@ -18,7 +22,7 @@ import (
 // could run local tools; this test needs only the learning path.
 type evEngineServices struct {
 	*fakeServices
-	e *engine
+	e services.All
 }
 
 // Learning reads the evidence snapshot of the engine.
@@ -44,10 +48,21 @@ func (s evEngineServices) RunEvidence(ctx context.Context, p *learning.Plan,
 	return s.e.RunEvidence(ctx, p, progress)
 }
 
+// screenEngine builds the production engine over ws with the given
+// boundaries and the test clock, through the same seam as New. A screen
+// test then drives the console over the real engine.
+func screenEngine(ws workspace.Workspace, deps services.Deps) services.All {
+	if deps.Now == nil {
+		deps.Now = func() time.Time { return servicestest.Now }
+	}
+
+	return services.NewWithDeps(ws, "test", "/usr/local/bin/seamark", deps)
+}
+
 func TestEvidenceRefreshWithTheEngine(t *testing.T) {
-	ws, marker := engWorkspace(t, engOrigin)
-	fetch := &engFetch{raw: engPage}
-	svc := evEngineServices{fakeServices: newFake(), e: engNew(ws, engineDeps{fetch: fetch.fetch})}
+	ws, marker := servicestest.Workspace(t, servicestest.Origin)
+	fetch := &servicestest.Fetch{Raw: servicestest.Page}
+	svc := evEngineServices{fakeServices: newFake(), e: screenEngine(ws, services.Deps{Fetch: fetch.Fetch})}
 
 	h := newHarness(t, svc, 120, 40)
 	h.press("3", "e")
@@ -61,7 +76,7 @@ func TestEvidenceRefreshWithTheEngine(t *testing.T) {
 	assert.Contains(t, frame, "╭─ Evidence sources ")
 	assert.Contains(t, frame, "Refresh reviews + local fixes", "a ready index offers the refresh")
 
-	before := engTree(t, ws.Root)
+	before := servicestest.Tree(t, ws.Root)
 
 	// The preview names the target that the fetch uses, and esc leaves
 	// every file as it was.
@@ -69,16 +84,15 @@ func TestEvidenceRefreshWithTheEngine(t *testing.T) {
 	assert.Contains(t, evPreviewText(t, les), "Repository o/r (remote origin)")
 
 	h.press("esc")
-	assert.Equal(t, before, engTree(t, ws.Root), "a preview and its cancel write nothing")
-	assert.Empty(t, fetch.called(), "a preview never fetches")
+	assert.Equal(t, before, servicestest.Tree(t, ws.Root), "a preview and its cancel write nothing")
+	assert.Empty(t, fetch.Called(), "a preview never fetches")
 
 	evPress(h, les, evRefreshReviews)
 	h.press("y")
 
-	assert.Equal(t, []string{"o/r"}, fetch.called(), "y runs the reviewed fetch once")
+	assert.Equal(t, []string{"o/r"}, fetch.Called(), "y runs the reviewed fetch once")
 	assert.Equal(t, lesRun, les.sub)
 	assert.False(t, h.m.st.busy())
-	engUnlocked(t, svc.e)
 
 	text := evRecordText(les.evid.run)
 	assert.Contains(t, text, "✓ Evidence refreshed")

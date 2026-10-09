@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -173,7 +174,7 @@ func TestOverviewSummaryItemWaitsForEverySource(t *testing.T) {
 
 func TestOverviewSummaryItemShowsIndexFactsWithoutReadyIndex(t *testing.T) {
 	f := ovPopulated()
-	f.index = IndexView{Probe: workspace.IndexProbe{
+	f.index = services.IndexView{Probe: workspace.IndexProbe{
 		State: workspace.IndexOlder, Path: f.dbPath, Schema: 4, Supported: 6,
 		IndexedAt: time.Now().Add(-50 * time.Hour).Unix(),
 	}}
@@ -191,7 +192,7 @@ func TestOverviewSummaryItemShowsIndexFactsWithoutReadyIndex(t *testing.T) {
 		assert.Contains(t, flat, want)
 	}
 
-	f.index = IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent, Path: f.dbPath}}
+	f.index = services.IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent, Path: f.dbPath}}
 	h.press("r")
 
 	flat = ovFlat(ovReadDetail(t, h, ui.MinWidth, ui.MinHeight))
@@ -205,7 +206,7 @@ func TestOverviewSummaryShowsStaleNoteAfterFailedHealthReload(t *testing.T) {
 	h := newHarness(t, f, 80, 24)
 
 	// The index stays ready, but the semantic health read now fails.
-	f.index = IndexView{Probe: f.index.Probe, StatusErr: errors.New("database is locked")}
+	f.index = services.IndexView{Probe: f.index.Probe, StatusErr: errors.New("database is locked")}
 	h.press("r")
 
 	require.True(t, h.m.st.index.stale(), "a failed reload keeps the good snapshot")
@@ -235,7 +236,7 @@ func TestOverviewSummaryShowsStaleNoteAfterFailedHealthReload(t *testing.T) {
 
 func TestOverviewSummaryRendersFirstLoadHealthFailure(t *testing.T) {
 	f := ovPopulated()
-	f.index = IndexView{Probe: f.index.Probe, StatusErr: errors.New("open: permission denied")}
+	f.index = services.IndexView{Probe: f.index.Probe, StatusErr: errors.New("open: permission denied")}
 
 	h := newHarness(t, f, 80, 24)
 
@@ -257,8 +258,8 @@ func TestOverviewSummaryRendersFailedFirstLoadWithoutSnapshot(t *testing.T) {
 	h := newHarness(t, ovPopulated(), 80, 24)
 
 	// A section whose first load failed has an error and no snapshot.
-	h.m.st.index = section[IndexView]{}
-	h.m.st.index.set(IndexView{}, errors.New("open: permission denied"), time.Now())
+	h.m.st.index = section[services.IndexView]{}
+	h.m.st.index.set(services.IndexView{}, errors.New("open: permission denied"), time.Now())
 
 	o := ovScreen(h)
 

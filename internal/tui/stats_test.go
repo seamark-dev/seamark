@@ -17,6 +17,7 @@ import (
 	lessonmodel "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -420,7 +421,7 @@ func TestStatsReviewMiningComesFromTheIndexHealth(t *testing.T) {
 	assert.Contains(t, body, "REVIEW MINING Reading the index health…")
 
 	mined := time.Now().Add(-6 * time.Hour)
-	v.st.index.set(IndexView{Status: &status.Status{
+	v.st.index.set(services.IndexView{Status: &status.Status{
 		ReviewsMinedAt: mined.Unix(), Findings: map[string]int{"review": 120, "fix:conventional": 8, "revert": 8},
 	}}, nil, time.Now())
 
@@ -428,13 +429,13 @@ func TestStatsReviewMiningComesFromTheIndexHealth(t *testing.T) {
 	assert.Contains(t, body, "Last run 6h ago ("+mined.Format(time.DateOnly)+")")
 	assert.Contains(t, body, "Findings review 120 · fix:conventional 8 · revert 8")
 
-	v.st.index.set(IndexView{Status: &status.Status{}}, nil, time.Now())
+	v.st.index.set(services.IndexView{Status: &status.Status{}}, nil, time.Now())
 	body = statsFlat(statsDelivery(v, snap, 55))
 	assert.Contains(t, body, "Last run never recorded")
 	assert.Contains(t, body, "Findings none recorded")
 	assert.Contains(t, body, "Mine review findings with seamark index --reviews")
 
-	v.st.index.set(IndexView{StatusErr: errors.New("database is locked")}, nil, time.Now())
+	v.st.index.set(services.IndexView{StatusErr: errors.New("database is locked")}, nil, time.Now())
 	body = statsFlat(statsDelivery(v, snap, 55))
 	assert.Contains(t, body, "REVIEW MINING ? Unknown: database is locked")
 	assert.NotContains(t, body, "Last run never recorded", "an unread health is unknown, not never")
@@ -705,7 +706,7 @@ func TestStatsKeepsControlSequencesInert(t *testing.T) {
 	snap.Lessons.TopRegions = []lessonstats.RegionCount{{Region: "evil\x1b]8;;x\x07", Lessons: 1}}
 
 	v, _ := newStatsTest(snap, false)
-	v.st.index.set(IndexView{Status: &status.Status{Findings: map[string]int{"src\x1b[1m": 2}}}, nil, time.Now())
+	v.st.index.set(services.IndexView{Status: &status.Status{Findings: map[string]int{"src\x1b[1m": 2}}}, nil, time.Now())
 
 	for _, pane := range []statsPane{statsPaneLessons, statsPaneDelivery} {
 		v.focus = pane

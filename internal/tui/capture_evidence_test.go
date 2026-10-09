@@ -8,6 +8,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -54,7 +55,7 @@ func captureEvidenceScenes() []captureScene {
 		{name: "32-evidence-no-index", fake: func() *fakeServices {
 			f := evFake()
 			f.learning = learning.Snapshot{Probe: workspace.IndexProbe{State: workspace.IndexAbsent}}
-			f.index = IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent}}
+			f.index = services.IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent}}
 
 			return f
 		}, drive: func(h *harness) { open(h) }},

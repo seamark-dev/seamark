@@ -25,6 +25,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -40,7 +41,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// fakeServices is a scripted Services for screen tests. Read methods
+// fakeServices is a scripted services.All for screen tests. Read methods
 // return the fields and count the call in reads. Plan, preview and
 // mutation methods call the function fields and record the call in
 // calls, so a test can prove that browsing never plans or mutates.
@@ -53,7 +54,7 @@ type fakeServices struct {
 	freshErr error
 
 	doctor       *doctor.Report
-	index        IndexView
+	index        services.IndexView
 	integrations []integration.Inspection
 	clients      []integration.Client
 	ledger       *proposals.Ledger
@@ -61,9 +62,9 @@ type fakeServices struct {
 	stats        lessonstats.Snapshot
 	agentsOnPath []string
 
-	planSetup       func([]integration.ClientSetup) (*SetupPreview, error)
-	applySetup      func(*SetupPreview) (integration.SetupResult, error)
-	buildIndex      func(bool, func(IndexEvent)) (*index.Summary, error)
+	planSetup       func([]integration.ClientSetup) (*services.SetupPreview, error)
+	applySetup      func(*services.SetupPreview) (integration.SetupResult, error)
+	buildIndex      func(bool, func(services.IndexEvent)) (*index.Summary, error)
 	previewDecision func(proposals.Action, []int64) (*proposals.Preview, error)
 	commitDecision  func(*proposals.Preview) (proposals.Result, error)
 
@@ -105,13 +106,13 @@ type fakeServices struct {
 // takes one area. One assertion per area names the area in the build
 // error when a fake method drifts.
 var (
-	_ Services    = (*fakeServices)(nil)
-	_ Reader      = (*fakeServices)(nil)
-	_ Setup       = (*fakeServices)(nil)
-	_ Decisions   = (*fakeServices)(nil)
-	_ Learning    = (*fakeServices)(nil)
-	_ Maintenance = (*fakeServices)(nil)
-	_ Settings    = (*fakeServices)(nil)
+	_ services.All         = (*fakeServices)(nil)
+	_ services.Reader      = (*fakeServices)(nil)
+	_ services.Setup       = (*fakeServices)(nil)
+	_ services.Decisions   = (*fakeServices)(nil)
+	_ services.Learning    = (*fakeServices)(nil)
+	_ services.Maintenance = (*fakeServices)(nil)
+	_ services.Settings    = (*fakeServices)(nil)
 )
 
 func newFake() *fakeServices {
@@ -180,24 +181,24 @@ func (f *fakeServices) DBPath() string                         { return f.dbPath
 func (f *fakeServices) Version() string                        { return f.version }
 func (f *fakeServices) Fresh() (bool, error)                   { return f.fresh, f.freshErr }
 func (f *fakeServices) Doctor() *doctor.Report                 { return f.doctor }
-func (f *fakeServices) Index() IndexView                       { return f.index }
+func (f *fakeServices) Index() services.IndexView              { return f.index }
 func (f *fakeServices) Integrations() []integration.Inspection { return f.integrations }
 func (f *fakeServices) Clients() []integration.Client          { return f.clients }
 func (f *fakeServices) Ledger() (*proposals.Ledger, error)     { return f.ledger, f.ledgerErr }
 func (f *fakeServices) Stats() lessonstats.Snapshot            { return f.stats }
 func (f *fakeServices) AgentsOnPath() []string                 { return f.agentsOnPath }
 
-func (f *fakeServices) PlanSetup(setups []integration.ClientSetup) (*SetupPreview, error) {
+func (f *fakeServices) PlanSetup(setups []integration.ClientSetup) (*services.SetupPreview, error) {
 	f.record("PlanSetup")
 
 	if f.planSetup == nil {
-		return &SetupPreview{Setups: setups, Plan: &integration.SetupPlan{}}, nil
+		return &services.SetupPreview{Setups: setups, Plan: &integration.SetupPlan{}}, nil
 	}
 
 	return f.planSetup(setups)
 }
 
-func (f *fakeServices) ApplySetup(p *SetupPreview) (integration.SetupResult, error) {
+func (f *fakeServices) ApplySetup(p *services.SetupPreview) (integration.SetupResult, error) {
 	f.record("ApplySetup")
 
 	if f.applySetup == nil {
@@ -207,7 +208,7 @@ func (f *fakeServices) ApplySetup(p *SetupPreview) (integration.SetupResult, err
 	return f.applySetup(p)
 }
 
-func (f *fakeServices) BuildIndex(force bool, progress func(IndexEvent)) (*index.Summary, error) {
+func (f *fakeServices) BuildIndex(force bool, progress func(services.IndexEvent)) (*index.Summary, error) {
 	f.record("BuildIndex")
 
 	if f.buildIndex == nil {
@@ -347,11 +348,22 @@ func (f *fakeServices) PlanMaintenance(req maintain.Request) (*maintain.Plan, er
 	return f.planMaintenance(req)
 }
 
+// fakeMaintResult is the result of a scripted commit: it names the
+// action of the plan, as the engine does for a commit that did not
+// start.
+func fakeMaintResult(p *maintain.Plan) maintain.Result {
+	if p == nil {
+		return maintain.Result{}
+	}
+
+	return maintain.Result{Action: p.Action}
+}
+
 func (f *fakeServices) CommitMaintenance(p *maintain.Plan) (maintain.Result, error) {
 	f.record("CommitMaintenance:" + fakeAction(p))
 
 	if f.commitMaintenance == nil {
-		return maintResult(p), nil
+		return fakeMaintResult(p), nil
 	}
 
 	return f.commitMaintenance(p)
@@ -376,7 +388,7 @@ func (f *fakeServices) CommitRecovery(p *maintain.Plan) (maintain.Result, error)
 	f.record("CommitRecovery:" + fakeAction(p))
 
 	if f.commitRecovery == nil {
-		return maintResult(p), nil
+		return fakeMaintResult(p), nil
 	}
 
 	return f.commitRecovery(p)
@@ -453,7 +465,7 @@ type harness struct {
 }
 
 // newHarness starts a console over svc at w by h cells.
-func newHarness(t *testing.T, svc Services, w, h int) *harness {
+func newHarness(t *testing.T, svc services.All, w, h int) *harness {
 	t.Helper()
 
 	hs := &harness{t: t, m: newModel(svc, ui.NewTheme(false))}

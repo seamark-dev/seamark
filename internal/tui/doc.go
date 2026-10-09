@@ -86,19 +86,17 @@
 //   - settings_view.go: the field list and the editor box.
 //   - firstrun.go: the guide of a fresh workspace.
 //
-// Services: the typed engine adapter behind every screen.
-//
-//   - services.go: the area interfaces and the live engine.
-//   - services_learning.go: evidence, refresh and distillation.
-//   - services_maint.go: Pins, maintenance and trigger extraction.
-//   - services_settings.go: the focused settings reads and patches.
-//
 // # Rules
 //
-// Layers: internal/tui/ui draws and tracks positions without seamark
-// vocabulary, and internal/tui holds the shell and the screens. ui never
-// imports internal/tui, so a primitive cannot reach a screen or the
-// state. The ui package doc states which declaration belongs there.
+// Layers: the console has three packages, and the imports go one way.
+// internal/tui/ui draws and tracks positions without seamark
+// vocabulary. internal/tui/services adapts the engines and returns
+// plain values. internal/tui holds the shell and the screens and
+// imports both. ui never imports services or internal/tui, and services
+// never imports ui, internal/tui, Bubble Tea, Lip Gloss or Bubbles. So a
+// primitive cannot reach a screen, and an engine call cannot carry a
+// screen rule. The guard tests of ui and services check the imports.
+// The ui package doc states which declaration belongs there.
 //
 // Embedding: a holder never declares a field or a method with the name
 // of a member of an embedded listPane, filterInput or previewFlow. Go

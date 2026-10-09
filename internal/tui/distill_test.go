@@ -17,6 +17,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -571,7 +572,7 @@ func TestDistillCleanupShowsAStaleLedger(t *testing.T) {
 
 func TestDistillNotReadyIndexNeverPlansAHiddenBuild(t *testing.T) {
 	f := distFake(distFullPreview(), distNoRun(t))
-	f.index = IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent}}
+	f.index = services.IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent}}
 	f.planDistill = func(learning.DistillRequest) (*learning.DistillPreview, error) {
 		return nil, learning.ErrDistillNotReady
 	}

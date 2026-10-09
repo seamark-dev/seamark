@@ -14,6 +14,7 @@ import (
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -653,7 +654,7 @@ func (p *propView) preview(a proposals.Action, ids []int64, implicit bool) tea.C
 	p.dec = &propDecision{action: a, ids: ids, implicit: implicit}
 	p.dec.startRead()
 
-	var svc Decisions = p.st.svc
+	var svc services.Decisions = p.st.svc
 
 	return func() tea.Msg {
 		pv, err := svc.PreviewDecision(a, ids)
@@ -841,7 +842,7 @@ func (p *propView) commit() tea.Cmd {
 
 	pv := d.preview
 
-	var svc Decisions = p.st.svc
+	var svc services.Decisions = p.st.svc
 
 	cmd, ok := d.startCommit(p.st, name, func() tea.Msg {
 		res, err := svc.CommitDecision(pv)

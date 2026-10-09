@@ -15,13 +15,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // Options configures one console session.
 type Options struct {
 	// Services binds the console to one resolved workspace.
-	Services Services
+	Services services.All
 	// ASCII selects the ASCII glyph set for limited fonts.
 	ASCII bool
 	// In and Out are the terminal streams. In can be any io.Reader:

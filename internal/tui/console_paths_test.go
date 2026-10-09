@@ -23,14 +23,15 @@ import (
 // console packages.
 
 // consolePathSources are the non-test Go sources of the console write
-// paths: the console with its package ui, the maintenance engine, the
-// pin file engine and the console trigger extraction.
+// paths: the console with its packages ui and services, the
+// maintenance engine, the pin file engine and the console trigger
+// extraction.
 func consolePathSources(t *testing.T) []string {
 	t.Helper()
 
 	var files []string
 
-	for _, dir := range []string{".", "ui", "../maintain", "../pinfile"} {
+	for _, dir := range []string{".", "ui", "services", "../maintain", "../pinfile"} {
 		entries, err := os.ReadDir(dir)
 		require.NoError(t, err)
 

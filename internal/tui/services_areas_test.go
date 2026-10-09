@@ -11,10 +11,11 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 )
 
-// The tests in this file drive each command worker through the one
-// Services area that it takes. The fake goes in as that area only, so
+// The tests in this file drive each command worker through the one area
+// of services.All that it takes. The fake goes in as that area only, so
 // the tests prove that the worker needs no other area.
 
 // workerMsgs reads ch until the worker closes it. Every worker closes
@@ -32,26 +33,26 @@ func workerMsgs(ch <-chan tea.Msg) []tea.Msg {
 func TestOvRunBuildTakesTheSetupArea(t *testing.T) {
 	f := newFake()
 	sum := &index.Summary{}
-	f.buildIndex = func(force bool, progress func(IndexEvent)) (*index.Summary, error) {
+	f.buildIndex = func(force bool, progress func(services.IndexEvent)) (*index.Summary, error) {
 		assert.True(t, force)
-		progress(IndexEvent{Phase: "scan", Done: 1, Total: 2})
+		progress(services.IndexEvent{Phase: "scan", Done: 1, Total: 2})
 
 		return sum, nil
 	}
 
-	var area Setup = f
+	var area services.Setup = f
 
 	ch := make(chan tea.Msg, 4)
 	ovRunBuild(area, 7, true, ch)
 
 	msgs := workerMsgs(ch)
 	require.Len(t, msgs, 2)
-	assert.Equal(t, ovBuildEventMsg{id: 7, ev: IndexEvent{Phase: "scan", Done: 1, Total: 2}}, msgs[0])
+	assert.Equal(t, ovBuildEventMsg{id: 7, ev: services.IndexEvent{Phase: "scan", Done: 1, Total: 2}}, msgs[0])
 	assert.Equal(t, ovBuildDoneMsg{id: 7, summary: sum}, msgs[1])
 	assert.Equal(t, []string{"BuildIndex"}, f.called())
 
 	// A panic becomes a failed result, so the mutation slot frees.
-	f.buildIndex = func(bool, func(IndexEvent)) (*index.Summary, error) { panic("kaboom") }
+	f.buildIndex = func(bool, func(services.IndexEvent)) (*index.Summary, error) { panic("kaboom") }
 	ch = make(chan tea.Msg, 4)
 	ovRunBuild(area, 8, false, ch)
 
@@ -75,7 +76,7 @@ func TestEvWorkTakesTheLearningArea(t *testing.T) {
 		return learning.Outcome{}, nil
 	}
 
-	var area Learning = f
+	var area services.Learning = f
 
 	ch := make(chan tea.Msg, 4)
 	evWork(context.Background(), area, plan, 3, ch)
@@ -119,7 +120,7 @@ func TestDistRunWorkTakesTheLearningArea(t *testing.T) {
 		return exec, nil
 	}
 
-	var area Learning = f
+	var area services.Learning = f
 
 	rec := &distRecord{}
 	ch := make(chan tea.Msg, 4)
@@ -171,7 +172,7 @@ func TestExtRunWorkTakesTheLearningArea(t *testing.T) {
 		return exec, nil
 	}
 
-	var area Learning = f
+	var area services.Learning = f
 
 	rec := &extRecord{}
 	ch := make(chan tea.Msg, 4)

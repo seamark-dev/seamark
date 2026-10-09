@@ -8,6 +8,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -124,7 +125,7 @@ func (m *maintModal) prepare() tea.Cmd {
 
 	req := m.req
 
-	var svc Maintenance = m.st.svc
+	var svc services.Maintenance = m.st.svc
 
 	return func() tea.Msg {
 		plan, err := svc.PlanMaintenance(req)
@@ -142,7 +143,7 @@ func (m *maintModal) prepareRecovery() tea.Cmd {
 
 	rec := m.offer
 
-	var svc Maintenance = m.st.svc
+	var svc services.Maintenance = m.st.svc
 
 	return func() tea.Msg {
 		plan, err := svc.PlanRecovery(rec)
@@ -305,7 +306,7 @@ func (m *maintModal) reviewAgain() bool {
 func (m *maintModal) commit() tea.Cmd {
 	p, recovering := m.preview, m.recovering
 
-	var svc Maintenance = m.st.svc
+	var svc services.Maintenance = m.st.svc
 
 	cmd, ok := m.startCommit(m.st, maintWorkName(p, recovering), m.st.goWork(func() tea.Msg {
 		var (

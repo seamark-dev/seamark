@@ -14,6 +14,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/status"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -93,7 +94,7 @@ func (m *maintModal) planErrView(w int) ui.ModalOpts {
 	var hint string
 
 	switch {
-	case errors.Is(m.err, ErrNoLedger), errors.Is(m.err, maintain.ErrNoLedger):
+	case errors.Is(m.err, services.ErrNoLedger), errors.Is(m.err, maintain.ErrNoLedger):
 		hint = "Proposals live in the index database. Build it from Overview (press 1, then b)."
 	case errors.Is(m.err, maintain.ErrNothingSelected):
 		hint = "Select pins with space in Pins first."
@@ -1051,9 +1052,9 @@ func maintRefusal(t *ui.Theme, err error) string {
 			"can authorize a write."
 	case errors.Is(err, maintain.ErrNotConfirmable):
 		return "The preview cannot be confirmed, so nothing was written. Revise the selection and preview again."
-	case errors.Is(err, ErrBusy):
+	case errors.Is(err, services.ErrBusy):
 		return "Another operation is running, so this one did not start."
-	case errors.Is(err, ErrNoLedger), errors.Is(err, maintain.ErrNoLedger):
+	case errors.Is(err, services.ErrNoLedger), errors.Is(err, maintain.ErrNoLedger):
 		return "The index database is not readable, so nothing was changed."
 	default:
 		return "The operation was refused before any write."

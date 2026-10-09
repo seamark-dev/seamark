@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -68,7 +69,7 @@ type ovBuild struct {
 // ovBuildEventMsg carries one progress event to the event loop.
 type ovBuildEventMsg struct {
 	id int
-	ev IndexEvent
+	ev services.IndexEvent
 }
 
 // ovBuildDoneMsg carries the build result. It is the last message on
@@ -101,7 +102,7 @@ func newOvBuild(id int, force bool, now time.Time) *ovBuild {
 // apply records one progress event. An event for a later phase closes
 // the earlier phases, because the engine sends no closing event for a
 // phase it leaves, and on failure it sends none at all.
-func (b *ovBuild) apply(ev IndexEvent) {
+func (b *ovBuild) apply(ev services.IndexEvent) {
 	if ev.Phase == "" {
 		if ev.Log != "" {
 			b.logs = append(b.logs, ev.Log)
@@ -177,7 +178,7 @@ func ovWait(ch <-chan tea.Msg) tea.Cmd {
 // ovRunBuild runs the build and streams its events, then the result,
 // through ch. It runs in a command goroutine, never in Update. A panic
 // becomes a failed result, so the mutation slot always frees.
-func ovRunBuild(svc Setup, id int, force bool, ch chan<- tea.Msg) {
+func ovRunBuild(svc services.Setup, id int, force bool, ch chan<- tea.Msg) {
 	defer close(ch)
 
 	var (
@@ -202,10 +203,10 @@ func ovRunBuild(svc Setup, id int, force bool, ch chan<- tea.Msg) {
 // one intermediate parse event per ovParseThrottle and drops it when
 // the queue is full, so progress never slows the parse. The first and
 // the last parse event and every other event always arrive.
-func ovForward(id int, ch chan<- tea.Msg) func(IndexEvent) {
+func ovForward(id int, ch chan<- tea.Msg) func(services.IndexEvent) {
 	var last time.Time
 
-	return func(ev IndexEvent) {
+	return func(ev services.IndexEvent) {
 		msg := ovBuildEventMsg{id: id, ev: ev}
 
 		if ev.Phase == "parse" && ev.Done > 1 && ev.Done < ev.Total {
@@ -262,7 +263,7 @@ func (o *overview) startBuild(force bool) tea.Cmd {
 	o.build, o.showBuild = b, true
 	ch := b.ch
 
-	var svc Setup = o.st.svc
+	var svc services.Setup = o.st.svc
 
 	run := func() tea.Msg {
 		ovRunBuild(svc, b.id, force, ch)

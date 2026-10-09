@@ -1,4 +1,4 @@
-package tui
+package services
 
 import (
 	"os"
@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/services/servicestest"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -23,8 +24,8 @@ func engConfig(t *testing.T, ws workspace.Workspace) string {
 }
 
 func TestEnginePlansAndSavesOneSettingsGroup(t *testing.T) {
-	ws, _ := engWorkspace(t, "")
-	e := engNew(ws, engineDeps{})
+	ws, _ := servicestest.Workspace(t, "")
+	e := engNew(ws, Deps{})
 	before := engConfig(t, ws)
 
 	snap, err := e.Settings()
@@ -60,8 +61,8 @@ func TestEnginePlansAndSavesOneSettingsGroup(t *testing.T) {
 }
 
 func TestEngineSaveSettingsRefusesWithoutWrite(t *testing.T) {
-	ws, _ := engWorkspace(t, "")
-	e := engNew(ws, engineDeps{})
+	ws, _ := servicestest.Workspace(t, "")
+	e := engNew(ws, Deps{})
 	before := engConfig(t, ws)
 
 	snap, err := e.Settings()
@@ -85,7 +86,7 @@ func TestEngineSaveSettingsRefusesWithoutWrite(t *testing.T) {
 	otherWS, err := workspace.Resolve(other, "")
 	require.NoError(t, err)
 
-	foreignSnap, err := engNew(otherWS, engineDeps{}).Settings()
+	foreignSnap, err := engNew(otherWS, Deps{}).Settings()
 	require.NoError(t, err)
 
 	foreign, err := e.PlanSettings(foreignSnap, []settings.Edit{{Field: settings.ReviewWindow, Days: 30}})
@@ -103,10 +104,10 @@ func TestEngineSaveSettingsRefusesWithoutWrite(t *testing.T) {
 // choice: a console started in another directory with the same database
 // edits the config.yaml that the runs of that index read.
 func TestEngineSettingsUseTheRootThatTheIndexRecords(t *testing.T) {
-	ws, _ := engWorkspace(t, "")
+	ws, _ := servicestest.Workspace(t, "")
 	elsewhere := workspace.Workspace{Root: t.TempDir(), DBPath: ws.DBPath}
 
-	snap, err := engNew(elsewhere, engineDeps{}).Settings()
+	snap, err := engNew(elsewhere, Deps{}).Settings()
 	require.NoError(t, err)
 
 	assert.Equal(t, workspace.Probe(ws).Root, snap.Root)
@@ -115,7 +116,7 @@ func TestEngineSettingsUseTheRootThatTheIndexRecords(t *testing.T) {
 	// Without an index the workspace root applies.
 	fresh := workspace.Workspace{Root: t.TempDir(), DBPath: filepath.Join(t.TempDir(), "index.db")}
 
-	snap, err = engNew(fresh, engineDeps{}).Settings()
+	snap, err = engNew(fresh, Deps{}).Settings()
 	require.NoError(t, err)
 	assert.Equal(t, fresh.Root, snap.Root)
 }

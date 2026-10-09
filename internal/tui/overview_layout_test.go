@@ -12,6 +12,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -57,15 +58,15 @@ func TestOverviewFramesFitAtEverySize(t *testing.T) {
 		"stale":     ovStale,
 		"absent": func() *fakeServices {
 			f := newFake()
-			f.index = IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent, Path: f.dbPath}}
+			f.index = services.IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent, Path: f.dbPath}}
 			f.integrations = []integration.Inspection{ovClaude()}
-			f.ledgerErr = ErrNoLedger
+			f.ledgerErr = services.ErrNoLedger
 
 			return f
 		},
 		"policy error": func() *fakeServices {
 			f := ovPopulated()
-			f.index.Policy = PolicySummary{Err: errors.New("gate: .seamark/policy.yaml: mode must be warn or enforce")}
+			f.index.Policy = services.PolicySummary{Err: errors.New("gate: .seamark/policy.yaml: mode must be warn or enforce")}
 
 			return f
 		},
@@ -289,7 +290,7 @@ func TestOverviewDetailShowsTheDesignSections(t *testing.T) {
 
 func TestOverviewGuardCardShowsThePolicyError(t *testing.T) {
 	f := ovPopulated()
-	f.index.Policy = PolicySummary{Err: errors.New("gate: bad mode")}
+	f.index.Policy = services.PolicySummary{Err: errors.New("gate: bad mode")}
 
 	h := newHarness(t, f, 120, 40)
 
@@ -306,7 +307,7 @@ func TestOverviewGuardCardShowsThePolicyError(t *testing.T) {
 
 func TestOverviewCardsSayWhatIsMissing(t *testing.T) {
 	f := ovPopulated()
-	f.index = IndexView{Probe: f.index.Probe, StatusErr: errors.New("open: permission denied"),
+	f.index = services.IndexView{Probe: f.index.Probe, StatusErr: errors.New("open: permission denied"),
 		Policy: f.index.Policy}
 
 	h := newHarness(t, f, 120, 40)

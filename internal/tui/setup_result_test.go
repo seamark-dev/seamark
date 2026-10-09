@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 )
 
 // The tests in this file cover the groups of the setup result: problems
@@ -20,7 +21,7 @@ func setupResultWith(t *testing.T, states map[integration.Capability]integration
 	t.Helper()
 
 	f, _ := setupFake()
-	f.applySetup = func(*SetupPreview) (integration.SetupResult, error) {
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
 		next := integMatrix()
 		codex := &next[1]
 

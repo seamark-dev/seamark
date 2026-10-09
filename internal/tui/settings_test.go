@@ -12,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -99,7 +100,7 @@ func settingsBytes(t *testing.T, svc *settingsSvc) string {
 }
 
 // settingsOpen starts a console over svc and opens Settings.
-func settingsOpen(t *testing.T, svc Services, w, h int) *harness {
+func settingsOpen(t *testing.T, svc services.All, w, h int) *harness {
 	t.Helper()
 
 	hs := newHarness(t, svc, w, h)

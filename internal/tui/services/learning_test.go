@@ -1,19 +1,8 @@
-package tui
+package services
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"fmt"
-	"io/fs"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"regexp"
-	"strconv"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -27,10 +16,10 @@ import (
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
-	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/store/storetest"
+	"github.com/seamark-dev/seamark/internal/tui/services/servicestest"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -38,146 +27,13 @@ import (
 // workspace. Only the two paid or network boundaries are fakes: the
 // GitHub fetch and the agent invoker.
 
-// engNow is the clock of the engine tests.
-var engNow = time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
-
-// engOrigin is a GitHub origin, so a review refresh has a target.
-const engOrigin = "git@github.com:o/r.git"
-
-// engPage is one gh page with one inline comment on a.go. It clusters
-// into one review lesson.
-const engPage = `[{"id":11,"user":{"login":"rev","type":"User"},` +
-	`"body":"Close the handle on every error path.","path":"a.go","line":3,` +
-	`"html_url":"https://github.com/o/r/pull/1#discussion_r11","created_at":"2026-07-21T10:00:00Z",` +
-	`"pull_request_url":"https://api.github.com/repos/o/r/pulls/1"}]`
-
 // engNew builds the engine over ws with the test clock.
-func engNew(ws workspace.Workspace, deps engineDeps) *engine {
-	if deps.now == nil {
-		deps.now = func() time.Time { return engNow }
+func engNew(ws workspace.Workspace, deps Deps) *engine {
+	if deps.Now == nil {
+		deps.Now = func() time.Time { return servicestest.Now }
 	}
 
 	return newEngine(ws, "test", "/usr/local/bin/seamark", deps)
-}
-
-// engGit runs git in root with a fixed identity. Global config must not
-// leak in, because it can rewrite remotes.
-func engGit(t *testing.T, root string, args ...string) {
-	t.Helper()
-
-	cmd := exec.Command("git", args...)
-	cmd.Dir = root
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
-		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
-
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "git %v\n%s", args, out)
-}
-
-// engWrite writes a repository-relative file of ws.
-func engWrite(t *testing.T, ws workspace.Workspace, rel, content string) {
-	t.Helper()
-
-	path := filepath.Join(ws.Root, filepath.FromSlash(rel))
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
-}
-
-// engFindings builds two review findings per directory with words that
-// no other finding shares, so the grouper makes one group per
-// directory. Directory i gets the IDs 21+2i and 22+2i.
-func engFindings(dirs ...string) []domain.Finding {
-	var out []domain.Finding
-
-	for i, dir := range dirs {
-		for j := range 2 {
-			id := int64(21 + 2*i + j)
-			out = append(out, domain.Finding{
-				ID: id, Path: fmt.Sprintf("%s/f%d.go", dir, id), PR: int(id), Reviewer: "person",
-				Body: fmt.Sprintf("Uniq%dalpha uniq%dbravo uniq%dcharlie.", id, id, id),
-			})
-		}
-	}
-
-	return out
-}
-
-// engWorkspace builds an indexed git workspace with one fix commit, the
-// given origin, and the review findings of engFindings(dirs...). Its
-// config.yaml names an agent command that leaves the returned marker
-// when it runs, so a test can prove that a read never runs the agent.
-func engWorkspace(t *testing.T, origin string, dirs ...string) (ws workspace.Workspace, marker string) {
-	t.Helper()
-
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/eng\n\ngo 1.25\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"),
-		[]byte("package eng\n\n// A returns one.\nfunc A() int { return 1 }\n"), 0o644))
-
-	engGit(t, root, "init", "-b", "main")
-	engGit(t, root, "add", "-A")
-	engGit(t, root, "commit", "-m", "initial")
-
-	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"),
-		[]byte("package eng\n\n// A returns one.\nfunc A() int { return 1 }\n\nfunc resetState() {}\n"), 0o644))
-	engGit(t, root, "add", "-A")
-	engGit(t, root, "commit", "-m", "fix: reset state before reuse (#42)")
-
-	if origin != "" {
-		engGit(t, root, "remote", "add", "origin", origin)
-	}
-
-	ws, err := workspace.Resolve(root, "")
-	require.NoError(t, err)
-
-	_, err = index.Run(index.Options{Root: ws.Root, DBPath: ws.DBPath})
-	require.NoError(t, err)
-
-	st, err := store.Open(ws.DBPath)
-	require.NoError(t, err)
-	require.NoError(t, st.ReplaceLessons(nil, engFindings(dirs...)))
-	require.NoError(t, st.Close())
-
-	marker = filepath.Join(t.TempDir(), "agent-ran")
-	engWrite(t, ws, settings.File, fmt.Sprintf(
-		"agent:\n  argv: [\"sh\", \"-c\", \"touch %s; cat >/dev/null; echo '{\\\"patterns\\\":[]}'\"]\n", marker))
-
-	return ws, marker
-}
-
-// engTree returns the SHA-256 of every file under root, the git
-// directory included. SQLite may create the -wal and -shm side files
-// of a read-only open, so the tree leaves them out; the database file
-// itself stays in.
-func engTree(t *testing.T, root string) map[string]string {
-	t.Helper()
-
-	tree := map[string]string{}
-
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-
-		if strings.HasSuffix(path, "-wal") || strings.HasSuffix(path, "-shm") {
-			return nil
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-
-		sum := sha256.Sum256(data)
-		tree[path] = hex.EncodeToString(sum[:])
-
-		return nil
-	})
-	require.NoError(t, err)
-
-	return tree
 }
 
 // engUnlocked checks that no mutation holds the engine lock.
@@ -188,100 +44,13 @@ func engUnlocked(t *testing.T, e *engine) {
 	e.mu.Unlock()
 }
 
-// engFetch is a scripted GitHub fetch that counts its calls.
-type engFetch struct {
-	mu    sync.Mutex
-	calls []string
-	raw   string
-	err   error
-	// during runs inside the fetch, while the refresh holds the lock.
-	during func()
-}
-
-func (f *engFetch) fetch(_ context.Context, owner, repo string, _ reviews.Options) ([]byte, error) {
-	f.mu.Lock()
-	f.calls = append(f.calls, owner+"/"+repo)
-	f.mu.Unlock()
-
-	if f.during != nil {
-		f.during()
-	}
-
-	if f.err != nil {
-		return nil, f.err
-	}
-
-	return []byte(f.raw), nil
-}
-
-func (f *engFetch) called() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	return append([]string(nil), f.calls...)
-}
-
-// engAgent is a scripted invoker that counts its calls. By default it
-// answers with one proposal that cites the finding IDs of the prompt.
-type engAgent struct {
-	mu    sync.Mutex
-	calls int
-	fn    func(ctx context.Context, prompt string) (string, error)
-}
-
-func (a *engAgent) Invoke(ctx context.Context, prompt string) (string, error) {
-	a.mu.Lock()
-	a.calls++
-	a.mu.Unlock()
-
-	if a.fn != nil {
-		return a.fn(ctx, prompt)
-	}
-
-	return engReply(prompt), nil
-}
-
-func (a *engAgent) Name() string { return "fake" }
-
-func (a *engAgent) count() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	return a.calls
-}
-
-// engPromptID finds the finding IDs of a prompt.
-var engPromptID = regexp.MustCompile(`finding id=(\d+) `)
-
-// engLessons are the distinct replies per group, keyed by the first
-// finding ID. Similar words would make the deduplication drop a group.
-var engLessons = map[int]string{
-	21: `"rule":"close-db-handles","note":"Close the database handle on every error path."`,
-	23: `"rule":"verify-webhook-signatures","note":"Verify webhook signatures before parsing payloads."`,
-}
-
-// engReply answers a prompt with one proposal that cites every finding
-// of the prompt, so the store keeps one pending proposal per group.
-func engReply(prompt string) string {
-	var ids []string
-
-	for _, m := range engPromptID.FindAllStringSubmatch(prompt, -1) {
-		ids = append(ids, m[1])
-	}
-
-	first, _ := strconv.Atoi(ids[0])
-
-	return fmt.Sprintf(`{"patterns":[{%s,"finding_ids":[%s],"trigger_paths":[]}]}`,
-		engLessons[first], strings.Join(ids, ","))
-}
-
 func TestEngineReadsNeverWriteFetchOrInvoke(t *testing.T) {
-	ws, marker := engWorkspace(t, engOrigin, "api", "web")
-	fetch := &engFetch{raw: engPage}
-	agent := &engAgent{}
-	e := engNew(ws, engineDeps{fetch: fetch.fetch, invoke: agent})
+	ws, marker := servicestest.Workspace(t, servicestest.Origin, "api", "web")
+	fetch := &servicestest.Fetch{Raw: servicestest.Page}
+	agent := &servicestest.Agent{}
+	e := engNew(ws, Deps{Fetch: fetch.Fetch, Invoke: agent})
 
-	before := engTree(t, ws.Root)
+	before := servicestest.Tree(t, ws.Root)
 
 	snap := e.Learning()
 	require.NoError(t, snap.CountsErr)
@@ -307,18 +76,18 @@ func TestEngineReadsNeverWriteFetchOrInvoke(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, plan.NoOp)
 
-	assert.Equal(t, before, engTree(t, ws.Root), "reads and plans write nothing")
-	assert.Empty(t, fetch.called(), "reads and plans never fetch")
-	assert.Zero(t, agent.count(), "reads and plans never invoke the agent")
+	assert.Equal(t, before, servicestest.Tree(t, ws.Root), "reads and plans write nothing")
+	assert.Empty(t, fetch.Called(), "reads and plans never fetch")
+	assert.Zero(t, agent.Count(), "reads and plans never invoke the agent")
 	assert.NoFileExists(t, marker, "no configured command runs")
 	engUnlocked(t, e)
 }
 
 func TestEngineRunsTheReviewedEvidencePlan(t *testing.T) {
 	t.Run("reviews and local fixes", func(t *testing.T) {
-		ws, _ := engWorkspace(t, engOrigin)
-		fetch := &engFetch{raw: engPage}
-		e := engNew(ws, engineDeps{fetch: fetch.fetch})
+		ws, _ := servicestest.Workspace(t, servicestest.Origin)
+		fetch := &servicestest.Fetch{Raw: servicestest.Page}
+		e := engNew(ws, Deps{Fetch: fetch.Fetch})
 
 		plan, err := e.PlanEvidence(index.SourcesReviewsAndLocal)
 		require.NoError(t, err)
@@ -329,7 +98,7 @@ func TestEngineRunsTheReviewedEvidencePlan(t *testing.T) {
 		out, err := e.RunEvidence(context.Background(), plan, func(ev index.RefreshEvent) { events = append(events, ev) })
 		require.NoError(t, err)
 
-		assert.Equal(t, []string{"o/r"}, fetch.called(), "the fake fetch replaces gh")
+		assert.Equal(t, []string{"o/r"}, fetch.Called(), "the fake fetch replaces gh")
 		assert.Equal(t, index.SourceRefreshed, out.Fixes.State)
 		assert.Equal(t, index.SourceRefreshed, out.Reviews.State)
 		assert.Equal(t, 1, out.After.Lessons, "the fetched comment is stored as one lesson")
@@ -338,9 +107,9 @@ func TestEngineRunsTheReviewedEvidencePlan(t *testing.T) {
 	})
 
 	t.Run("local fixes only", func(t *testing.T) {
-		ws, _ := engWorkspace(t, engOrigin)
-		fetch := &engFetch{raw: engPage}
-		e := engNew(ws, engineDeps{fetch: fetch.fetch})
+		ws, _ := servicestest.Workspace(t, servicestest.Origin)
+		fetch := &servicestest.Fetch{Raw: servicestest.Page}
+		e := engNew(ws, Deps{Fetch: fetch.Fetch})
 
 		plan, err := e.PlanEvidence(index.SourcesLocal)
 		require.NoError(t, err)
@@ -349,7 +118,7 @@ func TestEngineRunsTheReviewedEvidencePlan(t *testing.T) {
 		out, err := e.RunEvidence(context.Background(), plan, nil)
 		require.NoError(t, err)
 
-		assert.Empty(t, fetch.called(), "a local refresh never fetches")
+		assert.Empty(t, fetch.Called(), "a local refresh never fetches")
 		assert.Equal(t, index.SourceRefreshed, out.Fixes.State)
 		assert.Equal(t, index.SourceNotAttempted, out.Reviews.State)
 		engUnlocked(t, e)
@@ -357,14 +126,14 @@ func TestEngineRunsTheReviewedEvidencePlan(t *testing.T) {
 }
 
 func TestEngineRunEvidenceRefusesWithoutWork(t *testing.T) {
-	ws, _ := engWorkspace(t, engOrigin)
-	fetch := &engFetch{raw: engPage}
-	e := engNew(ws, engineDeps{fetch: fetch.fetch})
+	ws, _ := servicestest.Workspace(t, servicestest.Origin)
+	fetch := &servicestest.Fetch{Raw: servicestest.Page}
+	e := engNew(ws, Deps{Fetch: fetch.Fetch})
 
 	plan, err := e.PlanEvidence(index.SourcesReviewsAndLocal)
 	require.NoError(t, err)
 
-	before := engTree(t, ws.Root)
+	before := servicestest.Tree(t, ws.Root)
 
 	// Another mutation holds the lock.
 	e.mu.Lock()
@@ -375,11 +144,11 @@ func TestEngineRunEvidenceRefusesWithoutWork(t *testing.T) {
 	assert.Equal(t, index.SourceNotAttempted, out.Fixes.State)
 	assert.Equal(t, index.CauseRefused, out.Reviews.Cause)
 	require.ErrorIs(t, out.After.CountsErr, ErrBusy, "a refused run reads unknown counts, not zero counts")
-	assert.Equal(t, engNow, out.FinishedAt)
+	assert.Equal(t, servicestest.Now, out.FinishedAt)
 
 	// A plan of another workspace never runs here.
-	other, _ := engWorkspace(t, engOrigin)
-	foreign, err := engNew(other, engineDeps{}).PlanEvidence(index.SourcesLocal)
+	other, _ := servicestest.Workspace(t, servicestest.Origin)
+	foreign, err := engNew(other, Deps{}).PlanEvidence(index.SourcesLocal)
 	require.NoError(t, err)
 
 	out, err = e.RunEvidence(context.Background(), foreign, nil)
@@ -391,14 +160,14 @@ func TestEngineRunEvidenceRefusesWithoutWork(t *testing.T) {
 	require.Error(t, err, "a run needs a plan")
 	engUnlocked(t, e)
 
-	assert.Empty(t, fetch.called())
-	assert.Equal(t, before, engTree(t, ws.Root), "a refused run writes nothing")
+	assert.Empty(t, fetch.Called())
+	assert.Equal(t, before, servicestest.Tree(t, ws.Root), "a refused run writes nothing")
 }
 
 func TestEngineRunsTheReviewedDistillation(t *testing.T) {
-	ws, marker := engWorkspace(t, "", "api", "web")
-	agent := &engAgent{}
-	e := engNew(ws, engineDeps{invoke: agent})
+	ws, marker := servicestest.Workspace(t, "", "api", "web")
+	agent := &servicestest.Agent{}
+	e := engNew(ws, Deps{Invoke: agent})
 
 	preview, err := e.PlanDistill(learning.DistillRequest{})
 	require.NoError(t, err)
@@ -411,7 +180,7 @@ func TestEngineRunsTheReviewedDistillation(t *testing.T) {
 	require.NotNil(t, x)
 
 	assert.Equal(t, distill.StopNone, x.Stop)
-	assert.Equal(t, 2, agent.count(), "the fake invoker replaces the configured command")
+	assert.Equal(t, 2, agent.Count(), "the fake invoker replaces the configured command")
 	assert.NoFileExists(t, marker, "the configured command never runs")
 	assert.NotEmpty(t, events)
 
@@ -427,8 +196,8 @@ func TestEngineRunsTheReviewedDistillation(t *testing.T) {
 }
 
 func TestEngineRunDistillWithoutAFakeRunsThePreviewedCommand(t *testing.T) {
-	ws, marker := engWorkspace(t, "", "api")
-	e := engNew(ws, engineDeps{})
+	ws, marker := servicestest.Workspace(t, "", "api")
+	e := engNew(ws, Deps{})
 
 	preview, err := e.PlanDistill(learning.DistillRequest{})
 	require.NoError(t, err)
@@ -448,13 +217,13 @@ func TestEngineRunDistillWithoutAFakeRunsThePreviewedCommand(t *testing.T) {
 // mutation fails with ErrBusy and changes nothing, reads still work,
 // and the lock is free again after the run.
 func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
-	ws, _ := engWorkspace(t, engOrigin, "api")
-	fetch := &engFetch{raw: engPage}
-	agent := &engAgent{}
-	e := engNew(ws, engineDeps{fetch: fetch.fetch, invoke: agent})
+	ws, _ := servicestest.Workspace(t, servicestest.Origin, "api")
+	fetch := &servicestest.Fetch{Raw: servicestest.Page}
+	agent := &servicestest.Agent{}
+	e := engNew(ws, Deps{Fetch: fetch.Fetch, Invoke: agent})
 
 	// A pin without a proposal gives the maintenance read an entry.
-	engWrite(t, ws, pinfile.File, "pin:\n  - rule: keep-docs-current\n    note: Keep the docs current.\n")
+	servicestest.Write(t, ws, pinfile.File, "pin:\n  - rule: keep-docs-current\n    note: Keep the docs current.\n")
 
 	preview, err := e.PlanDistill(learning.DistillRequest{})
 	require.NoError(t, err)
@@ -468,7 +237,7 @@ func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
 	setPlan, err := e.PlanSettings(set, []settings.Edit{{Field: settings.DistillWrite, Bool: true}})
 	require.NoError(t, err)
 
-	before := engTree(t, ws.Root)
+	before := servicestest.Tree(t, ws.Root)
 
 	var (
 		errs      = map[string]error{}
@@ -484,7 +253,7 @@ func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
 		extErr    error
 	)
 
-	agent.fn = func(_ context.Context, prompt string) (string, error) {
+	agent.Fn = func(_ context.Context, prompt string) (string, error) {
 		nested, errs["RunDistill"] = e.RunDistill(context.Background(), preview, nil)
 		_, errs["CleanupPending"] = e.CleanupPending(preview)
 		_, errs["RunEvidence"] = e.RunEvidence(context.Background(), evPlan, nil)
@@ -504,7 +273,7 @@ func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
 		})
 		extPlan, extErr = e.PlanExtract(learning.ExtractRequest{})
 
-		return engReply(prompt), nil
+		return servicestest.Reply(prompt), nil
 	}
 
 	x, err := e.RunDistill(context.Background(), preview, nil)
@@ -518,8 +287,8 @@ func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
 	assert.Len(t, errs, 9)
 	assert.Nil(t, nested, "a refused run returns no execution")
 	assert.Nil(t, nestedExt, "a refused extraction returns no execution")
-	assert.Equal(t, 1, agent.count(), "the refused runs start no agent call")
-	assert.Empty(t, fetch.called(), "the refused refresh never fetches")
+	assert.Equal(t, 1, agent.Count(), "the refused runs start no agent call")
+	assert.Empty(t, fetch.Called(), "the refused refresh never fetches")
 	require.NoError(t, readErr)
 	assert.NotNil(t, readPlan)
 	assert.Equal(t, 2, readCount)
@@ -532,7 +301,7 @@ func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
 	assert.True(t, extPlan.NoOp(), "an extraction plan works during the run")
 
 	// The run changed only the database; the refused save changed no file.
-	after := engTree(t, ws.Root)
+	after := servicestest.Tree(t, ws.Root)
 	delete(before, ws.DBPath)
 	delete(after, ws.DBPath)
 	assert.Equal(t, before, after)
@@ -544,9 +313,9 @@ func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
 }
 
 func TestEngineMutationsReleaseTheLockOnEveryPath(t *testing.T) {
-	ws, _ := engWorkspace(t, "", "api")
-	agent := &engAgent{}
-	e := engNew(ws, engineDeps{invoke: agent})
+	ws, _ := servicestest.Workspace(t, "", "api")
+	agent := &servicestest.Agent{}
+	e := engNew(ws, Deps{Invoke: agent})
 
 	preview, err := e.PlanDistill(learning.DistillRequest{})
 	require.NoError(t, err)
@@ -560,12 +329,12 @@ func TestEngineMutationsReleaseTheLockOnEveryPath(t *testing.T) {
 	engUnlocked(t, e)
 
 	// A changed config.yaml makes the preview stale; the run refuses it.
-	engWrite(t, ws, settings.File, "agent:\n  cli: claude\n")
+	servicestest.Write(t, ws, settings.File, "agent:\n  cli: claude\n")
 
 	x, err := e.RunDistill(context.Background(), preview, nil)
 	require.ErrorIs(t, err, distill.ErrStale)
 	assert.Nil(t, x)
-	assert.Zero(t, agent.count())
+	assert.Zero(t, agent.Count())
 	engUnlocked(t, e)
 
 	_, err = e.SaveSettings(nil)
@@ -601,7 +370,7 @@ func TestEngineMutationsReleaseTheLockOnEveryPath(t *testing.T) {
 	ext, err = e.RunExtract(context.Background(), noop, nil)
 	require.ErrorIs(t, err, learning.ErrNothingToExtract)
 	assert.Nil(t, ext)
-	assert.Zero(t, agent.count())
+	assert.Zero(t, agent.Count())
 	engUnlocked(t, e)
 
 	e.mu.Lock()
@@ -622,7 +391,7 @@ func TestEngineMutationsReleaseTheLockOnEveryPath(t *testing.T) {
 }
 
 func TestEngineCleansUpACleanupOnlyPreview(t *testing.T) {
-	ws, _ := engWorkspace(t, "")
+	ws, _ := servicestest.Workspace(t, "")
 
 	st, err := store.Open(ws.DBPath)
 	require.NoError(t, err)
@@ -631,8 +400,8 @@ func TestEngineCleansUpACleanupOnlyPreview(t *testing.T) {
 	}))
 	require.NoError(t, st.Close())
 
-	agent := &engAgent{}
-	e := engNew(ws, engineDeps{invoke: agent})
+	agent := &servicestest.Agent{}
+	e := engNew(ws, Deps{Invoke: agent})
 
 	preview, err := e.PlanDistill(learning.DistillRequest{})
 	require.NoError(t, err)
@@ -641,7 +410,7 @@ func TestEngineCleansUpACleanupOnlyPreview(t *testing.T) {
 	removed, err := e.CleanupPending(preview)
 	require.NoError(t, err)
 	assert.Equal(t, 1, removed)
-	assert.Zero(t, agent.count(), "a cleanup runs no agent")
+	assert.Zero(t, agent.Count(), "a cleanup runs no agent")
 
 	ledger, err := e.Ledger()
 	require.NoError(t, err)
@@ -650,12 +419,12 @@ func TestEngineCleansUpACleanupOnlyPreview(t *testing.T) {
 }
 
 func TestEngineClockSeam(t *testing.T) {
-	e := engNew(workspace.Workspace{Root: t.TempDir()}, engineDeps{})
+	e := engNew(workspace.Workspace{Root: t.TempDir()}, Deps{})
 
 	out := e.refusedOutcome(errors.New("refused"))
-	assert.Equal(t, engNow, out.FinishedAt)
+	assert.Equal(t, servicestest.Now, out.FinishedAt)
 
-	prod := newEngine(workspace.Workspace{Root: t.TempDir()}, "test", "", engineDeps{})
-	require.NotNil(t, prod.deps.now, "a zero clock reads the system clock")
-	assert.WithinDuration(t, time.Now(), prod.deps.now(), time.Minute)
+	prod := newEngine(workspace.Workspace{Root: t.TempDir()}, "test", "", Deps{})
+	require.NotNil(t, prod.deps.Now, "a zero clock reads the system clock")
+	assert.WithinDuration(t, time.Now(), prod.deps.Now(), time.Minute)
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/status"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -138,8 +139,8 @@ func ovDoctorReport() *doctor.Report {
 
 // ovReadyIndex is a ready, current index with semantic health and a
 // compiled policy.
-func ovReadyIndex(root, db string) IndexView {
-	return IndexView{
+func ovReadyIndex(root, db string) services.IndexView {
+	return services.IndexView{
 		Probe: workspace.IndexProbe{
 			State: workspace.IndexReady, Path: db, Schema: 6, Supported: 6, Root: root,
 			IndexedAt: time.Now().Add(-2 * time.Hour).Unix(),
@@ -156,7 +157,7 @@ func ovReadyIndex(root, db string) IndexView {
 			GatePolicyMode: "warn",
 			DistillClient:  "claude",
 		},
-		Policy: PolicySummary{Mode: "warn", Deny: 2, Approval: 3},
+		Policy: services.PolicySummary{Mode: "warn", Deny: 2, Approval: 3},
 	}
 }
 
@@ -384,9 +385,9 @@ func TestOverviewAbsentIndexOffersBuild(t *testing.T) {
 	f.doctor = &doctor.Report{Checks: []doctor.Check{
 		{Name: "index", State: doctor.StateInfo, Detail: "no index database yet", Fix: "run `seamark index` to build it"},
 	}}
-	f.index = IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent, Path: f.dbPath}}
+	f.index = services.IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent, Path: f.dbPath}}
 	f.integrations = []integration.Inspection{ovClaude()}
-	f.ledgerErr = ErrNoLedger
+	f.ledgerErr = services.ErrNoLedger
 
 	h := newHarness(t, f, 120, 40)
 
@@ -417,7 +418,7 @@ func TestOverviewBuildShowsProgressThenResult(t *testing.T) {
 
 	var midBuild string
 
-	f.buildIndex = func(force bool, progress func(IndexEvent)) (*index.Summary, error) {
+	f.buildIndex = func(force bool, progress func(services.IndexEvent)) (*index.Summary, error) {
 		assert.False(t, force)
 
 		// The build runs inside a command, so the model is idle here:
@@ -425,17 +426,17 @@ func TestOverviewBuildShowsProgressThenResult(t *testing.T) {
 		h.press("b")
 		midBuild = h.view()
 
-		progress(IndexEvent{Phase: "scan", Done: 10, Total: 10})
+		progress(services.IndexEvent{Phase: "scan", Done: 10, Total: 10})
 
 		for i := 1; i <= 10; i++ {
-			progress(IndexEvent{Phase: "parse", Done: i, Total: 10})
+			progress(services.IndexEvent{Phase: "parse", Done: i, Total: 10})
 		}
 
-		progress(IndexEvent{Log: "warn: parse a.go: unexpected \x1b[31mtoken"})
-		progress(IndexEvent{Phase: "history", Done: 0, Total: 0})
-		progress(IndexEvent{Phase: "history", Done: 1, Total: 1})
-		progress(IndexEvent{Phase: "write", Done: 0, Total: 0})
-		progress(IndexEvent{Phase: "write", Done: 1, Total: 1})
+		progress(services.IndexEvent{Log: "warn: parse a.go: unexpected \x1b[31mtoken"})
+		progress(services.IndexEvent{Phase: "history", Done: 0, Total: 0})
+		progress(services.IndexEvent{Phase: "history", Done: 1, Total: 1})
+		progress(services.IndexEvent{Phase: "write", Done: 0, Total: 0})
+		progress(services.IndexEvent{Phase: "write", Done: 1, Total: 1})
 
 		// The build wrote a new index; the refresh after it must show it.
 		idx := ovReadyIndex(f.root, f.dbPath)
@@ -492,7 +493,7 @@ func TestOverviewQuitDuringBuildExitsAfterCompletion(t *testing.T) {
 
 	var h *harness
 
-	f.buildIndex = func(_ bool, progress func(IndexEvent)) (*index.Summary, error) {
+	f.buildIndex = func(_ bool, progress func(services.IndexEvent)) (*index.Summary, error) {
 		assert.False(t, ovScreen(h).capturing(), "the progress modal lets q reach the shell")
 
 		h.press("q")
@@ -501,7 +502,7 @@ func TestOverviewQuitDuringBuildExitsAfterCompletion(t *testing.T) {
 		h.press("enter")
 		assert.False(t, h.quit, "q never interrupts a running build")
 
-		progress(IndexEvent{Phase: "scan", Done: 1, Total: 1})
+		progress(services.IndexEvent{Phase: "scan", Done: 1, Total: 1})
 
 		return &index.Summary{}, nil
 	}
@@ -515,7 +516,7 @@ func TestOverviewQuitDuringBuildExitsAfterCompletion(t *testing.T) {
 
 func TestOverviewBuildSkippedReportsAlreadyCurrent(t *testing.T) {
 	f := ovPopulated()
-	f.buildIndex = func(force bool, _ func(IndexEvent)) (*index.Summary, error) {
+	f.buildIndex = func(force bool, _ func(services.IndexEvent)) (*index.Summary, error) {
 		assert.True(t, force, "f starts a rebuild from scratch")
 
 		return &index.Summary{Skipped: true, Stats: store.Stats{Symbols: 7, Edges: 8}}, nil
@@ -533,9 +534,9 @@ func TestOverviewBuildSkippedReportsAlreadyCurrent(t *testing.T) {
 
 func TestOverviewBuildFailureShowsError(t *testing.T) {
 	f := ovPopulated()
-	f.buildIndex = func(_ bool, progress func(IndexEvent)) (*index.Summary, error) {
-		progress(IndexEvent{Phase: "scan", Done: 3, Total: 3})
-		progress(IndexEvent{Phase: "parse", Done: 1, Total: 3})
+	f.buildIndex = func(_ bool, progress func(services.IndexEvent)) (*index.Summary, error) {
+		progress(services.IndexEvent{Phase: "scan", Done: 3, Total: 3})
+		progress(services.IndexEvent{Phase: "parse", Done: 1, Total: 3})
 
 		return nil, errors.New("store: begin rebuild: database is locked")
 	}
@@ -668,14 +669,14 @@ func TestOverviewKeepsSelectionAcrossRefresh(t *testing.T) {
 
 func TestOverviewFreshWorkspaceOffersSetupAndBuild(t *testing.T) {
 	f := newFake()
-	f.index = IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent, Path: f.dbPath}}
+	f.index = services.IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent, Path: f.dbPath}}
 	f.integrations = []integration.Inspection{
 		{ClientID: "claude", Name: "Claude Code", Capabilities: []integration.CapabilityInspection{
 			ovCap(integration.CapabilitySkills, true, integration.StateAbsent),
 			ovCap(integration.CapabilityMCPRegistration, true, integration.StateAbsent),
 		}},
 	}
-	f.ledgerErr = ErrNoLedger
+	f.ledgerErr = services.ErrNoLedger
 
 	h := newHarness(t, f, 120, 40)
 
@@ -753,11 +754,11 @@ func TestOverviewProgressShowsParseCountAndSkippedPhases(t *testing.T) {
 	o.build = newOvBuild(1, false, time.Now())
 	o.showBuild = true
 
-	require.Nil(t, o.update(ovBuildEventMsg{id: 2, ev: IndexEvent{Phase: "scan", Done: 1, Total: 1}}),
+	require.Nil(t, o.update(ovBuildEventMsg{id: 2, ev: services.IndexEvent{Phase: "scan", Done: 1, Total: 1}}),
 		"an event of another build is ignored")
 
-	o.update(ovBuildEventMsg{id: 1, ev: IndexEvent{Phase: "scan", Done: 1240, Total: 1240}})
-	o.update(ovBuildEventMsg{id: 1, ev: IndexEvent{Phase: "parse", Done: 512, Total: 1240}})
+	o.update(ovBuildEventMsg{id: 1, ev: services.IndexEvent{Phase: "scan", Done: 1240, Total: 1240}})
+	o.update(ovBuildEventMsg{id: 1, ev: services.IndexEvent{Phase: "parse", Done: 512, Total: 1240}})
 
 	block, ok := o.modal(120, 39)
 	require.True(t, ok, "a running build shows its progress as a modal")
@@ -769,7 +770,7 @@ func TestOverviewProgressShowsParseCountAndSkippedPhases(t *testing.T) {
 	assert.Empty(t, o.keys(), "a running build offers no key")
 
 	// A workspace outside git sends no history events.
-	o.update(ovBuildEventMsg{id: 1, ev: IndexEvent{Phase: "write", Done: 0, Total: 0}})
+	o.update(ovBuildEventMsg{id: 1, ev: services.IndexEvent{Phase: "write", Done: 0, Total: 0}})
 	assert.Equal(t, phaseSkipped, o.build.phases[ovPhaseIndex("history")])
 	assert.Equal(t, phaseDone, o.build.phases[ovPhaseIndex("parse")], "a later phase closes the earlier one")
 
@@ -782,7 +783,7 @@ func TestOverviewControlSequencesRenderInert(t *testing.T) {
 	f.doctor = &doctor.Report{Checks: []doctor.Check{
 		{Name: "git", State: doctor.StateFail, Detail: "evil \x1b[31mred\x1b]0;title\x07 detail", Fix: "run \x1b[2Jclear"},
 	}, Fails: 1}
-	f.index.Policy = PolicySummary{Err: errors.New("policy \x1b[2Jbroken")}
+	f.index.Policy = services.PolicySummary{Err: errors.New("policy \x1b[2Jbroken")}
 	f.index.Status.DistillClient = "claude\x1b]0;x\x07"
 
 	for _, size := range [][2]int{{120, 40}, {80, 24}} {

@@ -11,6 +11,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -573,7 +574,7 @@ func (p *propView) previewErrModal(d *propDecision, w int) ui.ModalOpts {
 		hint = propSharedKeyHint(d)
 	case errors.Is(d.err, proposals.ErrNothingSelected):
 		hint = "Select pending proposals with space first."
-	case errors.Is(d.err, ErrNoLedger):
+	case errors.Is(d.err, services.ErrNoLedger):
 		hint = "Proposals live in the index database. Build it from Overview (press 1, then b)."
 	default:
 		hint = "Fix the cause named above, for example a malformed file, then refresh with r and try again."
@@ -783,9 +784,9 @@ func propRefusal(err error, t *ui.Theme) string {
 			"Preview again and press c to record them as applied (ledger only)."
 	case errors.Is(err, proposals.ErrNothingSelected):
 		return "No pending proposal was selected."
-	case errors.Is(err, ErrBusy):
+	case errors.Is(err, services.ErrBusy):
 		return "Another operation is running, so this one did not start."
-	case errors.Is(err, ErrNoLedger):
+	case errors.Is(err, services.ErrNoLedger):
 		return "The index database is not readable, so the ledger was not changed."
 	default:
 		return "The decision was refused before any write."

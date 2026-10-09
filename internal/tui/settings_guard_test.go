@@ -8,10 +8,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 )
 
 // settingsDraftCodex opens Settings and drafts agent.cli: codex.
-func settingsDraftCodex(t *testing.T, svc Services) *harness {
+func settingsDraftCodex(t *testing.T, svc services.All) *harness {
 	t.Helper()
 
 	h := settingsOpen(t, svc, 120, 40)

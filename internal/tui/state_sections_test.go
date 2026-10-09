@@ -14,6 +14,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -60,8 +61,8 @@ func oneRecordStats() lessonstats.Snapshot {
 }
 
 // readyIndex is a ready index with semantic health.
-func readyIndex() IndexView {
-	return IndexView{
+func readyIndex() services.IndexView {
+	return services.IndexView{
 		Probe:  workspace.IndexProbe{State: workspace.IndexReady, Path: "/work/repo/.seamark/index.db", Schema: 6, Supported: 6},
 		Status: &status.Status{Freshness: status.FreshCurrent, Symbols: 42},
 	}
@@ -146,7 +147,7 @@ func TestIndexReloadFailureKeepsTheSnapshot(t *testing.T) {
 	require.NotNil(t, st.index.value.Status, "the good semantic health stays")
 
 	// A new probe state is new information, so it replaces the value.
-	f.index = IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent}}
+	f.index = services.IndexView{Probe: workspace.IndexProbe{State: workspace.IndexAbsent}}
 	loadSections(t, st, secIndex)
 	assert.False(t, st.index.stale())
 	assert.Equal(t, workspace.IndexAbsent, st.index.value.Probe.State)

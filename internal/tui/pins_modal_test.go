@@ -21,6 +21,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/status"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -982,7 +983,7 @@ func TestMaintPreviewFailureExplains(t *testing.T) {
 	fx := maintFixture(t)
 	f := maintFakeOf(fx, nil, nil)
 	f.planMaintenance = func(maintain.Request) (*maintain.Plan, error) {
-		return nil, fmt.Errorf("%w (not indexed)", ErrNoLedger)
+		return nil, fmt.Errorf("%w (not indexed)", services.ErrNoLedger)
 	}
 
 	req := maintain.Request{Action: maintain.ActionRetarget, Cursor: true,
@@ -1024,7 +1025,7 @@ func TestMaintRefusalsSayNothingWasWritten(t *testing.T) {
 	th := ui.NewTheme(false)
 
 	for _, err := range []error{
-		maintain.ErrStale, maintain.ErrWriteDisabled, maintain.ErrNotConfirmable, ErrBusy, ErrNoLedger,
+		maintain.ErrStale, maintain.ErrWriteDisabled, maintain.ErrNotConfirmable, services.ErrBusy, services.ErrNoLedger,
 		maintain.ErrNoLedger, errors.New("other"),
 	} {
 		text := maintRefusal(th, fmt.Errorf("wrapped: %w", err))

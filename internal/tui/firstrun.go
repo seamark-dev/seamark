@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -31,7 +32,7 @@ type firstRun struct {
 
 	// preview is the plan of the Create config step; planErr is the
 	// planning failure.
-	preview *SetupPreview
+	preview *services.SetupPreview
 	planErr error
 
 	// result and resultErr are the outcome of the last apply.
@@ -103,7 +104,7 @@ type frAgentsMsg struct{ ids []string }
 
 // frPlanMsg carries the plan of the shared documents.
 type frPlanMsg struct {
-	preview *SetupPreview
+	preview *services.SetupPreview
 	err     error
 }
 
@@ -122,7 +123,7 @@ func (frApplyMsg) isFirstRunMsg()  {}
 func (m *model) startFirstRun() tea.Cmd {
 	m.welcome = &firstRun{st: m.st}
 
-	var svc Reader = m.st.svc
+	var svc services.Reader = m.st.svc
 
 	return func() tea.Msg { return frAgentsMsg{ids: svc.AgentsOnPath()} }
 }
@@ -247,7 +248,7 @@ func (fr *firstRun) plan() tea.Cmd {
 	fr.stage = frPreparing
 	fr.preview, fr.planErr = nil, nil
 
-	var svc Setup = fr.st.svc
+	var svc services.Setup = fr.st.svc
 
 	return func() tea.Msg {
 		p, err := svc.PlanSetup(nil)
@@ -288,7 +289,7 @@ func (fr *firstRun) apply() tea.Cmd {
 	fr.stage = frCommitting
 	p := fr.preview
 
-	var svc Setup = fr.st.svc
+	var svc services.Setup = fr.st.svc
 
 	return func() tea.Msg {
 		res, err := svc.ApplySetup(p)

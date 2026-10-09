@@ -1,4 +1,4 @@
-package tui
+package services
 
 import (
 	"context"
@@ -36,19 +36,19 @@ var ErrBusy = errors.New("another operation is running")
 // ErrNoLedger reports a ledger read without a readable index database.
 var ErrNoLedger = errors.New("no readable index database: proposals live in the index")
 
-// Services is the console's view of the shared engines. Every method is
+// All is the console's view of the shared engines. Every method is
 // synchronous; the shell calls them from background commands, never
 // from Update or View. Read methods never write.
 //
-// Services embeds one interface per area, and each area matches the
-// screens that use it. A worker that needs one area takes only that
-// area, so its signature shows which engine calls it can make. The
-// split stops at the workers. The shared state keeps the whole
-// Services, because the shell loads sources from several areas. Every
-// screen holds that state, so the compiler does not limit a screen to
-// its own area. A screen narrows the value itself before it starts a
-// worker, for example var svc Learning = d.st.svc.
-type Services interface {
+// All embeds one interface per area, and each area matches the screens
+// that use it. A worker that needs one area takes only that area, so
+// its signature shows which engine calls it can make. The split stops
+// at the workers. The shared state keeps the whole All, because the
+// shell loads sources from several areas. Every screen holds that
+// state, so the compiler does not limit a screen to its own area. A
+// screen narrows the value itself before it starts a worker, for
+// example var svc services.Learning = d.st.svc.
+type All interface {
 	Reader
 	Setup
 	Decisions
@@ -234,13 +234,13 @@ type IndexEvent struct {
 	Log string
 }
 
-// engine is the production Services implementation over one workspace.
+// engine is the production All implementation over one workspace.
 type engine struct {
 	ws      workspace.Workspace
 	version string
 	binary  string
 	reg     *integration.Registry
-	deps    engineDeps
+	deps    Deps
 
 	// mu serializes mutations. The shell already refuses a second
 	// mutation; this lock keeps the engine safe on its own. A mutation
@@ -253,7 +253,7 @@ type engine struct {
 // One assertion per area names the area in the build error when a
 // method signature drifts.
 var (
-	_ Services    = (*engine)(nil)
+	_ All         = (*engine)(nil)
 	_ Reader      = (*engine)(nil)
 	_ Setup       = (*engine)(nil)
 	_ Decisions   = (*engine)(nil)
@@ -262,37 +262,50 @@ var (
 	_ Settings    = (*engine)(nil)
 )
 
-// engineDeps are the external boundaries of the engine. Tests replace
-// them, so no engine test contacts GitHub or runs a paid agent. A zero
-// field selects the production boundary.
-type engineDeps struct {
-	// fetch reads the GitHub review comments; nil runs gh.
-	fetch reviews.FetchFunc
-	// invoke sends the distillation and the trigger extraction prompts;
+// Deps are the three external boundaries of the engine: the GitHub
+// fetch, the agent invoker and the clock. Tests replace them, so no
+// engine test contacts GitHub or runs a paid agent, and every time is
+// fixed. A zero field selects the real boundary: gh, the command of the
+// reviewed preview, and time.Now. Deps holds nothing else, because
+// every other input of the engine is a file or the store.
+type Deps struct {
+	// Fetch reads the GitHub review comments; nil runs gh.
+	Fetch reviews.FetchFunc
+	// Invoke sends the distillation and the trigger extraction prompts;
 	// nil runs the command of the reviewed preview.
-	invoke agent.Invoker
-	// now reads the clock; nil reads the system clock.
-	now func() time.Time
+	Invoke agent.Invoker
+	// Now reads the clock; nil reads the system clock.
+	Now func() time.Time
 }
 
-// NewServices binds the shared engines to one resolved workspace.
+// New binds the shared engines to one resolved workspace.
 // binary is the seamark path that hook commands use.
-func NewServices(ws workspace.Workspace, version, binary string) Services {
-	return newEngine(ws, version, binary, engineDeps{})
+func New(ws workspace.Workspace, version, binary string) All {
+	return NewWithDeps(ws, version, binary, Deps{})
 }
 
-// newEngine builds the engine with explicit boundaries. NewServices
-// passes the production boundaries; tests pass fakes.
-func newEngine(ws workspace.Workspace, version, binary string, deps engineDeps) *engine {
-	if deps.now == nil {
-		deps.now = time.Now
+// NewWithDeps binds the shared engines to one resolved workspace with
+// the boundaries of deps. The console tests that drive a screen over the
+// real engine use it, so they replace only the GitHub fetch, the agent
+// and the clock.
+func NewWithDeps(ws workspace.Workspace, version, binary string, deps Deps) All {
+	return newEngine(ws, version, binary, deps)
+}
+
+// newEngine builds the engine with explicit boundaries. New passes the
+// zero Deps, which selects the production boundaries; tests pass fakes.
+func newEngine(ws workspace.Workspace, version, binary string, deps Deps) *engine {
+	if deps.Now == nil {
+		deps.Now = time.Now
 	}
 
 	return &engine{ws: ws, version: version, binary: binary, reg: integration.Builtin(), deps: deps}
 }
 
-func (e *engine) Root() string    { return e.ws.Root }
-func (e *engine) DBPath() string  { return e.ws.DBPath }
+func (e *engine) Root() string { return e.ws.Root }
+
+func (e *engine) DBPath() string { return e.ws.DBPath }
+
 func (e *engine) Version() string { return e.version }
 
 // seamarkDir is the directory of Seamark configuration and state. Any
@@ -394,7 +407,7 @@ func (e *engine) Ledger() (*proposals.Ledger, error) {
 	}
 	defer func() { _ = st.Close() }()
 
-	return proposals.Load(st, probe.Root, e.deps.now())
+	return proposals.Load(st, probe.Root, e.deps.Now())
 }
 
 func (e *engine) Stats() lessonstats.Snapshot {
@@ -447,7 +460,7 @@ func (e *engine) PlanSetup(setups []integration.ClientSetup) (*SetupPreview, err
 		Plan:      plan,
 		Writes:    integration.PreviewWrites(plan),
 		GateMode:  gateMode,
-		PlannedAt: e.deps.now(),
+		PlannedAt: e.deps.Now(),
 	}, nil
 }
 

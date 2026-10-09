@@ -14,6 +14,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -418,7 +419,7 @@ func (d *distRecord) startPlan() tea.Cmd {
 
 	seq := d.prev.seq.start()
 
-	var svc Learning = d.st.svc
+	var svc services.Learning = d.st.svc
 
 	return func() tea.Msg {
 		p, err := svc.PlanDistill(req)
@@ -538,7 +539,7 @@ func (d *distRecord) start() tea.Cmd {
 
 	ch := agentQueue(n)
 
-	var svc Learning = d.st.svc
+	var svc services.Learning = d.st.svc
 
 	work := d.st.goWork(func() tea.Msg {
 		defer cancel()
@@ -553,7 +554,7 @@ func (d *distRecord) start() tea.Cmd {
 
 // distRunWork runs the preview with svc and streams its events, then
 // its end, through ch. agentWork turns a panic into a failed end.
-func distRunWork(ctx context.Context, svc Learning, rec *distRecord, p *learning.DistillPreview, ch chan tea.Msg) {
+func distRunWork(ctx context.Context, svc services.Learning, rec *distRecord, p *learning.DistillPreview, ch chan tea.Msg) {
 	agentWork(rec, ch, func() (*distill.Execution, error) {
 		return svc.RunDistill(ctx, p, distForward(rec, ch))
 	})
@@ -762,7 +763,7 @@ func (d *distRecord) cleanup() tea.Cmd {
 
 	d.clean.running = true
 
-	var svc Learning = d.st.svc
+	var svc services.Learning = d.st.svc
 
 	return func() tea.Msg {
 		removed, err := svc.CleanupPending(p)

@@ -15,6 +15,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -123,13 +124,13 @@ func (g *generation) latest() int {
 // state is the data every screen shares: the services, the theme, the
 // snapshots, and the single mutation slot.
 type state struct {
-	svc   Services
+	svc   services.All
 	theme *ui.Theme
 
 	width, height int
 
 	doctor       section[*doctor.Report]
-	index        section[IndexView]
+	index        section[services.IndexView]
 	integrations section[[]integration.Inspection]
 	ledger       section[*proposals.Ledger]
 	stats        section[lessonstats.Snapshot]
@@ -582,7 +583,7 @@ func (s *state) load(kinds ...sectionKind) tea.Cmd {
 // index when good reports an earlier snapshot with semantic health. A
 // new probe state is new information, not a failed read, so it always
 // replaces the snapshot.
-func indexReloadErr(v IndexView, good bool) error {
+func indexReloadErr(v services.IndexView, good bool) error {
 	if !good || v.Probe.State != workspace.IndexReady {
 		return nil
 	}
@@ -624,7 +625,7 @@ func (s *state) store(msg loadedMsg) bool {
 		v, _ := msg.value.(*doctor.Report)
 		s.doctor.set(v, msg.err, msg.at)
 	case secIndex:
-		v, _ := msg.value.(IndexView)
+		v, _ := msg.value.(services.IndexView)
 		s.index.set(v, msg.err, msg.at)
 	case secIntegrations:
 		v, _ := msg.value.([]integration.Inspection)

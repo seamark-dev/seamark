@@ -12,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/skills"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -45,7 +46,7 @@ type setupEntry struct {
 // document order, the skill writes, then the paths that stay as they
 // are. A no-op path stays visible, because the spec asks for kept and
 // conflicting entries in the preview.
-func setupEntries(p *SetupPreview) []setupEntry {
+func setupEntries(p *services.SetupPreview) []setupEntry {
 	if p == nil || p.Plan == nil {
 		return nil
 	}
@@ -112,7 +113,7 @@ func setupEntries(p *SetupPreview) []setupEntry {
 }
 
 // setupWritePreview returns the preview of one planned write.
-func setupWritePreview(p *SetupPreview, rel string) *integration.WritePreview {
+func setupWritePreview(p *services.SetupPreview, rel string) *integration.WritePreview {
 	for i := range p.Writes {
 		if p.Writes[i].Path == rel {
 			return &p.Writes[i]
@@ -135,12 +136,12 @@ func setupSkillConsumers(plan *integration.SetupPlan, rel string) []string {
 
 // setupBlocked reports a preview that apply would refuse: a file
 // changed after planning, or a current file could not be read.
-func setupBlocked(p *SetupPreview) bool {
+func setupBlocked(p *services.SetupPreview) bool {
 	return setupBlockReason(p) != ""
 }
 
 // setupBlockReason says why apply would refuse the plan, or "".
-func setupBlockReason(p *SetupPreview) string {
+func setupBlockReason(p *services.SetupPreview) string {
 	if p == nil {
 		return ""
 	}
@@ -162,7 +163,7 @@ func setupBlockReason(p *SetupPreview) string {
 
 // setupCounts counts the changes of a plan: document writes, kept
 // documents, skill directories to write and skill directories kept.
-func setupCounts(p *SetupPreview) (writes, kept, skillWrites, skillKept int) {
+func setupCounts(p *services.SetupPreview) (writes, kept, skillWrites, skillKept int) {
 	if p == nil || p.Plan == nil {
 		return 0, 0, 0, 0
 	}
@@ -189,7 +190,7 @@ func setupPlural(n int, one, many string) string {
 
 // setupCountLabel names the changes of a plan for the Plan box border,
 // for example "2 files · 1 skill".
-func setupCountLabel(p *SetupPreview, sep string) string {
+func setupCountLabel(p *services.SetupPreview, sep string) string {
 	writes, _, skillWrites, _ := setupCounts(p)
 
 	switch {
@@ -983,7 +984,7 @@ func (wz *setupWizard) apply() tea.Cmd {
 	wz.step = setupStepCommitting
 	preview := wz.preview
 
-	var svc Setup = wz.st.svc
+	var svc services.Setup = wz.st.svc
 
 	// An empty refresh reloads nothing. The shell then starts the
 	// activity ticker, which a key press alone does not start.

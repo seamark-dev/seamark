@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -112,7 +113,7 @@ func (s *settingsScreen) review(g settings.Group) tea.Cmd {
 	s.flow.startRead()
 	seq := s.seq.start()
 
-	var svc Settings = s.st.svc
+	var svc services.Settings = s.st.svc
 
 	return func() tea.Msg {
 		p, err := svc.PlanSettings(snap, edits)
@@ -170,7 +171,7 @@ func (s *settingsScreen) confirm() tea.Cmd {
 
 	p, g := s.flow.preview, s.flow.group
 
-	var svc Settings = s.st.svc
+	var svc services.Settings = s.st.svc
 
 	cmd, ok := s.flow.startCommit(s.st, "Saving settings", func() tea.Msg {
 		res, err := svc.SaveSettings(p)
@@ -713,7 +714,7 @@ func (s *settingsScreen) resultModal(w int) ui.ModalOpts {
 	case errors.Is(err, settings.ErrStale):
 		lead = "The file changed after the preview, so Seamark did not write it."
 		next = s.staleNext("build a new preview from the file as it is now")
-	case errors.Is(err, ErrBusy):
+	case errors.Is(err, services.ErrBusy):
 		lead = "Another operation is running, so the save did not start."
 		next = "The draft stays. Press s again when the operation ends."
 	case s.flow.res.Written:

@@ -13,6 +13,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -269,7 +270,7 @@ func TestCtrlCLeavesTheFirstRunAndHelp(t *testing.T) {
 	// leaves, and nothing is applied.
 	f2 := newFake()
 	f2.fresh = true
-	f2.planSetup = func([]integration.ClientSetup) (*SetupPreview, error) { return frDocsPreview(), nil }
+	f2.planSetup = func([]integration.ClientSetup) (*services.SetupPreview, error) { return frDocsPreview(), nil }
 
 	h2 := newHarness(t, f2, 120, 32)
 	h2.press("enter")
@@ -519,7 +520,7 @@ func TestASCIIShellFramesUseNoUnicode(t *testing.T) {
 	f := newFake()
 	f.fresh = true
 	f.agentsOnPath = []string{"claude"}
-	f.planSetup = func([]integration.ClientSetup) (*SetupPreview, error) { return frDocsPreview(), nil }
+	f.planSetup = func([]integration.ClientSetup) (*services.SetupPreview, error) { return frDocsPreview(), nil }
 
 	h3 := &harness{t: t, m: newModel(f, ui.NewTheme(true))}
 	h3.run(h3.m.Init())

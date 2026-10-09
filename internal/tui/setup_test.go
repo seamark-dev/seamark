@@ -15,13 +15,14 @@ import (
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
 	"github.com/seamark-dev/seamark/internal/skills"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // setupPlanFor returns a scripted preview for the Codex requests of a
 // test: two writes with a diff, one kept shared file, one skill to
 // install, one foreign skill, a trust finding and one gate hook.
-func setupPlanFor(setups []integration.ClientSetup) *SetupPreview {
+func setupPlanFor(setups []integration.ClientSetup) *services.SetupPreview {
 	plan := &integration.SetupPlan{
 		Root: "/work/repo",
 		Reads: []integration.FileGuard{
@@ -47,7 +48,7 @@ func setupPlanFor(setups []integration.ClientSetup) *SetupPreview {
 		}},
 	}
 
-	return &SetupPreview{
+	return &services.SetupPreview{
 		Setups: setups,
 		Plan:   plan,
 		Writes: []integration.WritePreview{
@@ -74,7 +75,7 @@ func setupFake() (*fakeServices, *[][]integration.ClientSetup) {
 
 	var requests [][]integration.ClientSetup
 
-	f.planSetup = func(setups []integration.ClientSetup) (*SetupPreview, error) {
+	f.planSetup = func(setups []integration.ClientSetup) (*services.SetupPreview, error) {
 		requests = append(requests, setups)
 
 		return setupPlanFor(setups), nil
@@ -144,9 +145,9 @@ func setupLineWith(frame string, parts ...string) string {
 func TestSetupHappyPathAppliesTheReviewedPlan(t *testing.T) {
 	f, requests := setupFake()
 
-	var applied *SetupPreview
+	var applied *services.SetupPreview
 
-	f.applySetup = func(p *SetupPreview) (integration.SetupResult, error) {
+	f.applySetup = func(p *services.SetupPreview) (integration.SetupResult, error) {
 		applied = p
 
 		// The reinspection after apply sees the new files.
@@ -428,7 +429,7 @@ func TestSetupSkillRefreshPlansSkillsOnly(t *testing.T) {
 
 func TestSetupStalePreviewBlocksApply(t *testing.T) {
 	f, _ := setupFake()
-	f.planSetup = func(setups []integration.ClientSetup) (*SetupPreview, error) {
+	f.planSetup = func(setups []integration.ClientSetup) (*services.SetupPreview, error) {
 		p := setupPlanFor(setups)
 		p.Writes[0].Stale = true
 
@@ -456,8 +457,8 @@ func TestSetupStalePreviewBlocksApply(t *testing.T) {
 
 func TestSetupPreviewWithoutAPlanOffersNoApply(t *testing.T) {
 	f, _ := setupFake()
-	f.planSetup = func(setups []integration.ClientSetup) (*SetupPreview, error) {
-		return &SetupPreview{Setups: setups}, nil
+	f.planSetup = func(setups []integration.ClientSetup) (*services.SetupPreview, error) {
+		return &services.SetupPreview{Setups: setups}, nil
 	}
 
 	h := setupOpen(t, f, 120, 32)
@@ -474,7 +475,7 @@ func TestSetupPreviewWithoutAPlanOffersNoApply(t *testing.T) {
 
 func TestSetupPlanErrorShowsTheFullReason(t *testing.T) {
 	f, _ := setupFake()
-	f.planSetup = func([]integration.ClientSetup) (*SetupPreview, error) {
+	f.planSetup = func([]integration.ClientSetup) (*services.SetupPreview, error) {
 		return nil, fmt.Errorf("%w: .codex/config.toml and the MCP planner plan different content", integration.ErrPlanConflict)
 	}
 
@@ -496,7 +497,7 @@ func TestSetupPlanErrorShowsTheFullReason(t *testing.T) {
 
 func TestSetupStaleApplyWritesNothingAndPlansAgain(t *testing.T) {
 	f, _ := setupFake()
-	f.applySetup = func(*SetupPreview) (integration.SetupResult, error) {
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
 		return integration.SetupResult{Ops: []integration.OpResult{
 			{Path: ".codex/config.toml", Status: integration.OpNotAttempted},
 			{Path: ".codex/hooks.json", Status: integration.OpNotAttempted},
@@ -519,7 +520,7 @@ func TestSetupStaleApplyWritesNothingAndPlansAgain(t *testing.T) {
 
 func TestSetupFailureListsFailedAndNotAttempted(t *testing.T) {
 	f, _ := setupFake()
-	f.applySetup = func(*SetupPreview) (integration.SetupResult, error) {
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
 		cause := errors.New("the file is read-only")
 
 		return integration.SetupResult{
@@ -604,7 +605,7 @@ func TestSetupNarrowReviewOpensTheDiffAndKeepsItOnResize(t *testing.T) {
 func TestSetupFramesFitEverySize(t *testing.T) {
 	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 20}} {
 		f, _ := setupFake()
-		f.applySetup = func(*SetupPreview) (integration.SetupResult, error) {
+		f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
 			return integration.SetupResult{Ops: []integration.OpResult{
 				{Path: ".codex/config.toml", Status: integration.OpApplied, Consumers: []string{"codex"}},
 			}}, nil
@@ -682,7 +683,7 @@ func TestSetupParseDiffNumbersEveryHunk(t *testing.T) {
 
 func TestSetupControlSequencesInPlanRenderInert(t *testing.T) {
 	f, _ := setupFake()
-	f.planSetup = func(setups []integration.ClientSetup) (*SetupPreview, error) {
+	f.planSetup = func(setups []integration.ClientSetup) (*services.SetupPreview, error) {
 		p := setupPlanFor(setups)
 		p.Plan.Writes[0].Detail = "adds \x1b[2J registration"
 		p.Plan.Findings[0].Reason = "evil \x1b[31m finding"
@@ -736,7 +737,7 @@ func TestSetupClientStepKeepsChoicesPerClient(t *testing.T) {
 
 func TestSetupStaleAfterAWriteNeverClaimsNothingWritten(t *testing.T) {
 	f, _ := setupFake()
-	f.applySetup = func(*SetupPreview) (integration.SetupResult, error) {
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
 		stale := fmt.Errorf("%w: .codex/hooks.json changed since it was planned; run the command again",
 			integration.ErrStalePlan)
 
@@ -803,9 +804,9 @@ func TestSetupLatePlanOfClosedWizardArrivesAfterTheNewPlan(t *testing.T) {
 		t.Run(next, func(t *testing.T) {
 			f, requests := setupFake()
 
-			var applied *SetupPreview
+			var applied *services.SetupPreview
 
-			f.applySetup = func(p *SetupPreview) (integration.SetupResult, error) {
+			f.applySetup = func(p *services.SetupPreview) (integration.SetupResult, error) {
 				applied = p
 
 				return integration.SetupResult{}, nil

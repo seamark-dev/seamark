@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -212,7 +213,7 @@ func TestEmptyStatesAtTheMinimumSize(t *testing.T) {
 	assert.Contains(t, frame, "seamark lessons --distill")
 
 	f2 := newFake()
-	f2.ledgerErr = ErrNoLedger
+	f2.ledgerErr = services.ErrNoLedger
 
 	h2 := newHarness(t, f2, ui.MinWidth, ui.MinHeight)
 	h2.press("3")

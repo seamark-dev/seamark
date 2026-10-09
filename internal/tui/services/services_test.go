@@ -1,4 +1,4 @@
-package tui
+package services
 
 import (
 	"os"
@@ -22,7 +22,7 @@ func engineFresh(t *testing.T, dir, db string) bool {
 	ws, err := workspace.Resolve(dir, db)
 	require.NoError(t, err)
 
-	fresh, err := NewServices(ws, "test", "/usr/local/bin/seamark").Fresh()
+	fresh, err := New(ws, "test", "/usr/local/bin/seamark").Fresh()
 	require.NoError(t, err)
 
 	return fresh

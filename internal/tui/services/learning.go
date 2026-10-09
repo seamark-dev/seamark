@@ -1,4 +1,4 @@
-package tui
+package services
 
 import (
 	"context"
@@ -46,7 +46,7 @@ func (e *engine) RunEvidence(ctx context.Context, p *learning.Plan,
 		return e.refusedOutcome(errForeignPlan), errForeignPlan
 	}
 
-	return learning.RunRefresh(ctx, p, e.deps.fetch, progress)
+	return learning.RunRefresh(ctx, p, e.deps.Fetch, progress)
 }
 
 // refusedOutcome is the outcome of a refresh that did not start. Both
@@ -57,7 +57,7 @@ func (e *engine) refusedOutcome(err error) learning.Outcome {
 		State: index.SourceNotAttempted, Cause: index.CauseRefused, Reason: err.Error(), Err: err,
 	}
 
-	out := learning.Outcome{Fixes: refused, Reviews: refused, FinishedAt: e.deps.now()}
+	out := learning.Outcome{Fixes: refused, Reviews: refused, FinishedAt: e.deps.Now()}
 	out.After.CountsErr = err
 
 	return out
@@ -82,7 +82,7 @@ func (e *engine) RunDistill(ctx context.Context, p *learning.DistillPreview,
 	}
 	defer e.mu.Unlock()
 
-	return learning.RunDistill(ctx, e.ws, e.reg, p, e.deps.invoke, progress)
+	return learning.RunDistill(ctx, e.ws, e.reg, p, e.deps.Invoke, progress)
 }
 
 // CleanupPending removes the stale pending proposals of a cleanup-only

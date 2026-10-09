@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -151,7 +152,7 @@ func TestSetupReviewKeysNameWhatTheRowShows(t *testing.T) {
 
 func TestSetupReviewUnreadableWriteOffersDetailsNotDiff(t *testing.T) {
 	f, _ := setupFake()
-	f.planSetup = func(setups []integration.ClientSetup) (*SetupPreview, error) {
+	f.planSetup = func(setups []integration.ClientSetup) (*services.SetupPreview, error) {
 		p := setupPlanFor(setups)
 		p.Writes[0].Err = assert.AnError
 		p.Writes[0].Stale = true
@@ -183,14 +184,14 @@ func TestSetupASCIIThemeRendersOnlyASCII(t *testing.T) {
 	codex.Capabilities[3].State = integration.StatePartial // edit lessons hook: a repair row
 	f.integrations = insps
 
-	f.planSetup = func(setups []integration.ClientSetup) (*SetupPreview, error) {
+	f.planSetup = func(setups []integration.ClientSetup) (*services.SetupPreview, error) {
 		p := setupPlanFor(setups)
 		p.Writes[1].Stale = true
 
 		return p, nil
 	}
 
-	f.applySetup = func(*SetupPreview) (integration.SetupResult, error) {
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
 		return integration.SetupResult{Ops: []integration.OpResult{
 			{Path: ".codex/hooks.json", Status: integration.OpApplied, Created: true, Consumers: []string{"codex"}},
 		}}, nil
@@ -251,7 +252,9 @@ func TestSetupASCIIThemeRendersOnlyASCII(t *testing.T) {
 	}
 
 	// The stale plan blocks apply; plan again with a clean plan.
-	f.planSetup = func(setups []integration.ClientSetup) (*SetupPreview, error) { return setupPlanFor(setups), nil }
+	f.planSetup = func(setups []integration.ClientSetup) (*services.SetupPreview, error) {
+		return setupPlanFor(setups), nil
+	}
 
 	h.press("p")
 	require.True(t, s.wizard.canApply())

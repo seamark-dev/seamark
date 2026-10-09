@@ -8,6 +8,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -59,7 +60,7 @@ func TestDoctorLinksCheckActionMapsStableNames(t *testing.T) {
 		assert.Equal(t, tc.want, checkAction(st, tc.check), "%s %s", tc.check.Name, tc.check.State)
 	}
 
-	st.index.set(IndexView{Probe: workspace.IndexProbe{State: workspace.IndexNewer}}, nil, st.index.at)
+	st.index.set(services.IndexView{Probe: workspace.IndexProbe{State: workspace.IndexNewer}}, nil, st.index.at)
 	assert.Equal(t, ovAction{}, checkAction(st, check("index", doctor.StateFail)),
 		"seamark never rebuilds a newer database")
 }
