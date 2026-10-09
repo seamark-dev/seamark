@@ -27,6 +27,10 @@ import (
 // pins_msgs.go, and the preview or the review reads the state again. The
 // rendering lives in pins_view.go. The cursor, the pane keys and the
 // filter input come from listpane.go, which Proposals shares.
+//
+// The view computes no link itself. It shows the links of
+// maintain.Inspect, which applies pinfile.Classify. So Pins and
+// seamark lessons name the same pin for each proposal row.
 
 // pinKeys are the bindings that only the Pins sub-view uses. The shared
 // keys (space, x, f, /, t) keep their meaning from Proposals.
@@ -189,7 +193,8 @@ func pinLinked(pin *maintain.Pin) bool {
 
 // editBlock returns why the file editor cannot change pin, or "" when it
 // can. A retarget and a prune both need a linked pin whose entry and file
-// pass the editing gate (D-4, D-6).
+// pass the editing gate (D-4, D-6). A copied checkout also stops both,
+// because one write would then change two repositories (pinsForeignRoot).
 func (p *pinsView) editBlock(pin *maintain.Pin) string {
 	in := p.inspection()
 
@@ -242,6 +247,10 @@ func pinsForeignRoot(st *state) string {
 // current, an uncomputable or an unknown scope, or for computed regions
 // that another pin or proposal already has. So the key would only open
 // a preview without y.
+//
+// A known scope needs an indexed database, because Inspect computes no
+// scope advice without one. A computable scope needs one living cited
+// finding. Without it the advice is distill.ScopeNoEvidence.
 func (p *pinsView) retargetBlock(pin *maintain.Pin) string {
 	if why := p.editBlock(pin); why != "" {
 		return why
@@ -636,7 +645,9 @@ func (p *pinsView) editKey(msg tea.KeyMsg) tea.Cmd {
 
 // targets returns the pins that an action acts on. These are the marked
 // pins in file order, or the cursor pin when nothing is marked. cursor
-// reports the second case, so the preview can say so (D-15).
+// reports the second case, so the preview can say so (D-15). No case
+// returns every pin of the list. A change to several pins needs marks,
+// so one key press never changes a pin that the user did not choose.
 func (p *pinsView) targets() (pins []*maintain.Pin, cursor bool) {
 	if !p.actionable() {
 		return nil, false

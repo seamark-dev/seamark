@@ -20,6 +20,24 @@ import (
 // It writes only while the row still matches the plan. The console and
 // the CLI (through ExtractTriggers) both run these checks and this save,
 // so another writer never loses a change to an extraction.
+//
+// The answer rules:
+//
+//   - A pending row gets its validated trigger paths and new regions: a
+//     confirmed trigger sets its own region, and a negative or
+//     unconfirmed answer sets the coverage of its evidence. It stays
+//     pending, so an apply stays a separate decision.
+//   - An applied row gets only its trigger paths, as advice. The pin file
+//     and the installed scope never change here; a retarget preview
+//     applies the advice later.
+//   - A row that changed during the agent call is a conflict
+//     (ExtractConflict). Its answer is not saved, because the user
+//     reviewed another state.
+//   - A row missing from a valid reply, an empty list, and a reply with
+//     only invalid paths are negative answers. Each is stamped with the
+//     current question, so it is not asked again. Only a failed call, a
+//     timeout, an unparsable reply or a reply without a "triggers" key
+//     leaves the question open (ErrNoTriggersKey).
 
 // ExtractItemStatus is the result class of one planned item.
 type ExtractItemStatus int

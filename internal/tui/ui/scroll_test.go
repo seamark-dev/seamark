@@ -14,7 +14,7 @@ import (
 // modal, pane and list moves through them.
 
 func TestScrollStateKeysStayInsideTheRecordedBounds(t *testing.T) {
-	sc := ScrollState{Page: 5, Last: 12}
+	sc := ScrollState{page: 5, Last: 12}
 
 	steps := []struct {
 		msg tea.KeyMsg
@@ -69,23 +69,23 @@ func TestScrollStateScrollsOnlyWhenTheTextIsTaller(t *testing.T) {
 func TestListStateClampKeepsTheCursorRowInTheWindow(t *testing.T) {
 	l := ListState{Cursor: 10}
 	l.Clamp(30, 5)
-	assert.Equal(t, ListState{Cursor: 10, Offset: 6, Window: 5}, l, "the window moves down as little as possible")
+	assert.Equal(t, ListState{Cursor: 10, Offset: 6, window: 5}, l, "the window moves down as little as possible")
 
 	l.Cursor = 2
 	l.Clamp(30, 5)
-	assert.Equal(t, ListState{Cursor: 2, Offset: 2, Window: 5}, l, "the window moves up as little as possible")
+	assert.Equal(t, ListState{Cursor: 2, Offset: 2, window: 5}, l, "the window moves up as little as possible")
 
 	l = ListState{Cursor: 20, Offset: 18}
 	l.Clamp(8, 5)
-	assert.Equal(t, ListState{Cursor: 7, Offset: 3, Window: 5}, l, "a shorter list pulls the cursor and the window back")
+	assert.Equal(t, ListState{Cursor: 7, Offset: 3, window: 5}, l, "a shorter list pulls the cursor and the window back")
 
-	l = ListState{Cursor: 9, Offset: 4, Window: 6}
+	l = ListState{Cursor: 9, Offset: 4, window: 6}
 	l.Clamp(5, 0)
-	assert.Equal(t, ListState{Cursor: 4, Offset: 4, Window: 6}, l,
+	assert.Equal(t, ListState{Cursor: 4, Offset: 4, window: 6}, l,
 		"without a window only the cursor moves, and the recorded window stays")
 
 	l.Clamp(0, 5)
-	assert.Equal(t, ListState{Window: 5}, l, "an empty list resets the position")
+	assert.Equal(t, ListState{window: 5}, l, "an empty list resets the position")
 }
 
 func TestListStateMoveStopsAtTheEnds(t *testing.T) {
@@ -147,7 +147,7 @@ func TestScrollStateFitRecordsBoundsAndClamps(t *testing.T) {
 
 	from, to = sc.Fit(30, 8)
 	assert.Equal(t, [2]int{0, 8}, [2]int{from, to})
-	assert.Equal(t, ScrollState{Off: 0, Page: 8, Last: 22}, sc)
+	assert.Equal(t, ScrollState{Off: 0, page: 8, Last: 22}, sc)
 
 	sc.Off = 20
 	from, to = sc.Fit(30, 8)
@@ -158,14 +158,14 @@ func TestScrollStateFitRecordsBoundsAndClamps(t *testing.T) {
 
 	from, to = sc.Fit(12, 0)
 	assert.Equal(t, [2]int{4, 4}, [2]int{from, to}, "a box without rows shows no line")
-	assert.Equal(t, ScrollState{Off: 4, Page: 0, Last: 12}, sc)
+	assert.Equal(t, ScrollState{Off: 4, page: 0, Last: 12}, sc)
 
 	from, to = sc.Fit(0, 8)
 	assert.Equal(t, [2]int{0, 0}, [2]int{from, to}, "an empty text resets the offset")
 
 	from, to = sc.Fit(3, -2)
 	assert.Equal(t, [2]int{0, 0}, [2]int{from, to}, "a negative height counts as no rows")
-	assert.Equal(t, 0, sc.Page)
+	assert.Equal(t, 0, sc.page)
 }
 
 func TestScrollStateRevealKeepsTheRange(t *testing.T) {

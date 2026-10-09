@@ -31,6 +31,16 @@
 // result. The proof lives in memory: after a restart, a bare absence of a
 // pin never supersedes a proposal.
 //
+// No journal records a partial operation, and no general undo exists.
+// So a quit or a restart loses the Recovery. A later session sees only
+// the mismatch, through the link rules of pinfile.Classify. After a
+// retarget, the new entry links no applied proposal, and the applied
+// proposal reads as not present. After a prune, the applied proposal
+// reads as not present. Nothing repairs the mismatch automatically,
+// because the mismatch alone does not prove which writer made it. A
+// repeat of the operation finds no linked pin, and NewPlan blocks it.
+// So a hand edit reconciles the two stores.
+//
 // Many display fields hold text from the pin file, the ledger, or a
 // model. Such text can contain terminal control bytes, so a caller
 // sanitizes it before display. These fields are PlanItem.Reason, From,
@@ -77,10 +87,17 @@ type Action int
 // The operations.
 const (
 	// ActionRetarget changes the regions of linked pins to the computed
-	// scope and updates the region fields of their proposals.
+	// scope and updates the region fields of their proposals. The
+	// proposals stay applied, and their recorded notes stay, because the
+	// guidance stays installed. The pin identity holds the regions. So
+	// the delivery history in the firing log restarts under the new
+	// identity, and a plan note says so.
 	ActionRetarget Action = iota + 1
 	// ActionPrune removes linked pins and moves their proposals from
-	// applied to superseded.
+	// applied to superseded. A prune is a deliberate retirement of
+	// installed guidance. It differs from a dismissal, which decides a
+	// pending proposal. It also differs from the removal of stale pending
+	// proposals in a distillation run, which never touches a pin.
 	ActionPrune
 )
 

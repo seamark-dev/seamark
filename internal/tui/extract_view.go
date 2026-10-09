@@ -184,7 +184,7 @@ func (r *extRecord) previewView(w, h int) string {
 	if r.st.wide() {
 		leftW := max(34, setupSplit(w, agentPlanW))
 
-		return ui.Hjoin(1, r.planBox(leftW, h, pl.planFocus), r.itemsBox(w-leftW-1, h, !pl.planFocus, false))
+		return ui.HJoin(1, r.planBox(leftW, h, pl.planFocus), r.itemsBox(w-leftW-1, h, !pl.planFocus, false))
 	}
 
 	// The compact Proposals pane replaces the Plan pane, so it pins the
@@ -1295,7 +1295,7 @@ func (r *extRecord) runView(w, h int) string {
 	if r.st.wide() {
 		leftW := setupSplit(w, 60)
 
-		return ui.Hjoin(1, r.summaryBox(leftW, h, r.run.sumFocus), r.runItemsBox(w-leftW-1, h, !r.run.sumFocus))
+		return ui.HJoin(1, r.summaryBox(leftW, h, r.run.sumFocus), r.runItemsBox(w-leftW-1, h, !r.run.sumFocus))
 	}
 
 	if r.run.detail {
@@ -2255,7 +2255,7 @@ func (r *extRecord) compactBox(w, h int) string {
 
 	o := ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Trigger extraction", true), Right: r.stateLabel()}
 
-	return t.PinnedBox(o, head, body, nil, &run.list, keep, follow)
+	return t.StickyBox(o, head, body, nil, &run.list, keep, follow)
 }
 
 // shortStopNote is the one-line stop note of the compact box. The stop

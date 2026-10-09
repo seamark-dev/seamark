@@ -15,8 +15,12 @@
 // from the CLI in these points:
 //
 //   - A configuration error blocks a plan, because a paid run must not
-//     use a default that the user did not review. The CLI warns and uses
-//     the defaults for an evidence refresh and a distillation.
+//     use a default that the user did not review. The CLI is lenient in
+//     two cases. index.RefreshReviews warns about a malformed
+//     config.yaml and uses the default review window. `seamark lessons
+//     --distill` warns about a malformed lessons.yaml and runs without
+//     the pins, so it can propose a pinned pattern again. The CLI
+//     trigger extraction refuses both files, as the console does.
 //   - A distillation region must be inside the workspace, because a
 //     mistyped region plans an empty run. The CLI keeps its lenient path
 //     conversion.

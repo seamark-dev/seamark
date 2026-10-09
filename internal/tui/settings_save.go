@@ -19,6 +19,21 @@ import (
 // the questions about a draft. The key s plans the patch in the
 // background and opens the diff preview. Only y in that preview writes,
 // under the mutation slot. The key esc before y changes nothing.
+//
+// The draft rules:
+//
+//   - Each group keeps its own draft, and one save writes one group. The
+//     drafts of other groups stay, because each group has its own diff.
+//   - A draft never saves by itself and never affects a run.
+//   - Leaving Settings with any draft asks: keep the drafts, discard them
+//     all, or stay. A quit with a draft asks before it discards, because
+//     a draft is unsaved work.
+//   - While another mutation runs, drafting works but s waits, and the y
+//     of an open diff waits too, because the console runs one mutation at
+//     a time.
+//   - A save broadcasts settingsSavedMsg, so every screen drops the
+//     previews that the saved group binds. A changed setting needs its
+//     own later run.
 
 // settingsFlow is the state of one preview and save. The embedded flow
 // holds the stage and the previewed plan. flowClosed shows no modal, and

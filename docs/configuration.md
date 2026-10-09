@@ -73,6 +73,25 @@ takes `-C <dir>` to name the workspace and `--db <path>` to override
 the index location; `status`, `doctor`, `gate`, and `check` speak
 `--json` for machines.
 
+### Console settings
+
+The Settings destination of `seamark tui` edits five fields of
+`config.yaml` and shows `agent.argv` read-only. It reads the file with the
+same readers as the CLI. A save writes the file only; each field takes
+effect at the step that reads it next.
+
+| Field | Values | Takes effect |
+| --- | --- | --- |
+| `agent.cli` | a registered preset with a one-shot command (`claude`, `codex`) | at the next prepared distillation or trigger extraction. Saving runs no model, authenticates nothing, and changes no integration file. |
+| `agent.argv` | read-only in the console; a custom command overrides the preset | when the console saves a preset while it is set, the diff shows its removal. The console never writes a custom command. |
+| `distill.write` | off (default) or on | at the next apply, retarget, or prune preview, in the console and for `lessons --apply`, `--prune`, and `--retarget`. Saving writes no pin. A trigger extraction does not read it. |
+| `reviews.window_days` | default, a positive number of days, or unlimited (writes `0`) | at the next evidence refresh. The stored findings stay until then. |
+| `index.generated` | skip (default) or include generated files | at the next index build. |
+| `index.exclude` | an ordered list of globs | at the next index build. Nothing is deleted or scanned at the save. |
+
+`d` in the console returns a field to its default, which removes the key.
+Every other key of `config.yaml` is edited by hand.
+
 ## Effect catalogue
 
 Effect knowledge is data, not code. The built-in

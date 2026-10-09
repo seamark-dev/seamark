@@ -152,8 +152,8 @@ type ModalOpts struct {
 	// Actions are the keys under the rule at the bottom. The row stays
 	// visible while the body scrolls.
 	Actions []key.Binding
-	// Tail is the scope summary of a confirmation, for example "Removes 1
-	// pin · p16 › superseded". It stays under the rule, above the
+	// Tail is the summary of a confirmation, for example "Removes 2
+	// lines from one file". It stays under the rule, above the
 	// actions, and never scrolls, so the minimum layout still shows what
 	// y confirms. The caller wraps each line to ModalBodyWidth; the box
 	// clips a longer line. A summary taller than the area keeps its first
@@ -249,17 +249,17 @@ func (t *Theme) capTail(lines []string, n, inner int) []string {
 // ScrollBox renders body lines in a box that scrolls in sc, with the
 // tail lines always visible under the body. When follow is set, the
 // window moves so that the lines keep[0] to keep[1] show, for example
-// the cursor group and its evidence. A box that scrolls shows its
+// the cursor group and its detail lines. A box that scrolls shows its
 // position in the bottom border.
 func (t *Theme) ScrollBox(o BoxOpts, body, tail []string, sc *ScrollState, keep [2]int, follow bool) string {
-	return t.PinnedBox(o, nil, body, tail, sc, keep, follow)
+	return t.StickyBox(o, nil, body, tail, sc, keep, follow)
 }
 
-// PinnedBox is ScrollBox with head lines that stay above the body, for
-// example the headline of a run. Only the body scrolls, and keep counts
-// body lines. The distillation record, the extraction record and the
-// Pins view share it, so every scrolling box keeps the same rules.
-func (t *Theme) PinnedBox(o BoxOpts, head, body, tail []string, sc *ScrollState, keep [2]int, follow bool) string {
+// StickyBox is ScrollBox with head lines that stay above the body, for
+// example the headline of a long operation. Only the body scrolls, and
+// keep counts body lines. Several screens share it, so every scrolling
+// box keeps the same rules.
+func (t *Theme) StickyBox(o BoxOpts, head, body, tail []string, sc *ScrollState, keep [2]int, follow bool) string {
 	rows := BoxRows(o.H)
 	fixed := len(head) + len(tail)
 
@@ -288,9 +288,9 @@ func (t *Theme) Card(w, h int, title, right string, lines []string) string {
 	return t.Box(BoxOpts{W: w, H: h, Title: t.Heading.Render(title), Right: right, Lines: lines})
 }
 
-// Hjoin places rendered blocks side by side with gap cells between
+// HJoin places rendered blocks side by side with gap cells between
 // them. Blocks of different heights are padded at the bottom.
-func Hjoin(gap int, blocks ...string) string {
+func HJoin(gap int, blocks ...string) string {
 	parts := make([]string, 0, 2*len(blocks))
 
 	for i, b := range blocks {

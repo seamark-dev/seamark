@@ -24,6 +24,28 @@ import (
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
+// This file holds the evidence refresh service: a read-only plan and a
+// confirmed run over the two sources, the local fix commits and the
+// GitHub review comments. Its rules:
+//
+//   - The freshness of a source comes from the mine stamp that the store
+//     records after a saved refresh. Nothing guesses a time, so findings
+//     without a stamp read as an unknown time (the console words live in
+//     evFreshness of internal/tui).
+//   - The local refresh mines the fix commits reachable from HEAD and
+//     makes no network call. The combined refresh mines the local fixes
+//     first, then fetches the review comments through gh (Plan.Network).
+//   - A plan binds the facts that the user reviewed (evObservation). A
+//     change of any of them before the start refuses the run with
+//     ErrConflict.
+//   - Each source ends with its own typed outcome (index.SourceState and
+//     index.SourceCause). A failed, skipped or stopped fetch never
+//     replaces the stored reviews, and a source counts as refreshed only
+//     after its data is saved.
+//   - A stop during the local mine lets that mine finish and save, then
+//     ends the run before any GitHub work. A stop during the fetch
+//     cancels gh and keeps the stored reviews.
+
 // ErrConflict reports that an evidence plan no longer matches the
 // workspace. The user reviewed a different state, so the console asks
 // for a new preview instead of running the old one.
@@ -171,6 +193,8 @@ type Plan struct {
 	// when no commit exists, and for a blocked plan, which reads no git.
 	Head string
 	// Network is true when the refresh runs gh, which contacts GitHub.
+	// Only the combined mode with a GitHub origin sets it. A local
+	// refresh mines git history only, so it makes no network call.
 	Network bool
 	// Current is the stored evidence before the refresh.
 	Current Snapshot
@@ -279,6 +303,12 @@ type Outcome struct {
 // create a missing database or migrate an older one. A nil fetch uses gh. A stop
 // through ctx ends the GitHub fetch, and the stored review corpus then
 // stays; the local fix phase always finishes its write.
+//
+// The two sources succeed or fail on their own. The fix write commits
+// before the fetch starts, so a failed fetch never undoes saved fixes.
+// A fix mine error does not stop the fetch either. A database error in
+// the fix phase is the exception: the engine then stops before any
+// network use, because the review write needs the same database.
 func RunRefresh(ctx context.Context, p *Plan, fetch reviews.FetchFunc,
 	progress func(index.RefreshEvent),
 ) (Outcome, error) {
@@ -376,7 +406,11 @@ func (p *Plan) checkDatabase() error {
 	return nil
 }
 
-// evObservation is the state that a plan binds (decision D-9).
+// evObservation is the state that a plan binds (decision D-9). It holds
+// the repository root, the index database, HEAD, the origin remote,
+// config.yaml, and the two mine stamps. A change of any of them before
+// the start makes the plan stale, because the user confirmed the old
+// facts.
 type evObservation struct {
 	root      string
 	state     workspace.IndexState

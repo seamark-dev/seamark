@@ -55,7 +55,7 @@ func (d *distRecord) previewView(w, h int) string {
 	if d.st.wide() {
 		leftW := max(34, setupSplit(w, agentPlanW))
 
-		return ui.Hjoin(1, d.planBox(leftW, h, pl.planFocus), d.groupsBox(w-leftW-1, h, !pl.planFocus))
+		return ui.HJoin(1, d.planBox(leftW, h, pl.planFocus), d.groupsBox(w-leftW-1, h, !pl.planFocus))
 	}
 
 	if pl.listOpen {

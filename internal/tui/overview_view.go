@@ -81,7 +81,7 @@ func (o *overview) view(w, h int) string {
 		it = &items[sel]
 	}
 
-	return head + ui.Hjoin(1, left, o.detailBox(it, w-leftW-1, boxH, !listFocus))
+	return head + ui.HJoin(1, left, o.detailBox(it, w-leftW-1, boxH, !listFocus))
 }
 
 // rows lays out the attention items under their group headings, then

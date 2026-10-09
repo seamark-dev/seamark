@@ -219,7 +219,7 @@ func (lp *listPane[R, K]) split(rows []R, w, h, listW int,
 	list, detail func(rows []R, w, h int, focused bool) string,
 ) string {
 	if lp.wide() {
-		return ui.Hjoin(1, list(rows, listW, h, !lp.focusDetail), detail(rows, w-listW-1, h, lp.focusDetail))
+		return ui.HJoin(1, list(rows, listW, h, !lp.focusDetail), detail(rows, w-listW-1, h, lp.focusDetail))
 	}
 
 	if lp.focusDetail {

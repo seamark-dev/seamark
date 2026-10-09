@@ -88,7 +88,9 @@ func (f evFresh) badge(t *ui.Theme) string {
 }
 
 // evLastRefresh explains the last refresh time of one source in one
-// sentence, for the detail pane.
+// sentence, for the detail pane. A recorded time shows its age and its
+// date. The list badge has room for the age only, so the detail pane
+// adds the date.
 func evLastRefresh(stamp int64, count int, known bool) string {
 	switch {
 	case stamp > 0:
@@ -225,7 +227,9 @@ func evTotal(by map[string]int) int {
 
 // evCauseWord names a typed source cause in a few words, for "failed:
 // <cause>" and "unavailable: <cause>". The console never parses the
-// reason text for this.
+// reason text for this. The run record still shows the reason text
+// under the word, because it keeps the gh message that the short word
+// leaves out. The engine redacts secrets in that text first.
 func evCauseWord(c index.SourceCause) string {
 	switch c {
 	case index.CauseNoHistory:

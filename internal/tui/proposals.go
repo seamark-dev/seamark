@@ -24,6 +24,12 @@ import (
 // extraction. proposals_view.go renders it, and proposals_modal.go
 // renders the decision modals. The container in lessons.go only hosts
 // the sub-view, so a change to the decisions stays in these files.
+//
+// Only the pending list gives decision targets (targets), because the
+// ledger moves a row only from pending. So on an applied, dismissed or
+// superseded row, space, a, d and c read n/a. A press of a, d or c there
+// opens no preview, and a toast says that the row is read-only. x reads
+// n/a too, because the filter change to that list cleared the marks.
 
 // propState is the proposal state filter.
 type propState int

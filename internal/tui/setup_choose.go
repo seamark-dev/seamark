@@ -73,7 +73,7 @@ func (wz *setupWizard) clientView(w, h int) string {
 			Lines: integRenderClients(t, items, &wz.pick, ui.BoxInner(leftW), ui.BoxRows(h), true)})
 		right := t.Box(ui.BoxOpts{W: rightW, H: h, Title: integPaneTitle(t, sel.Name, false), Lines: lines})
 
-		return ui.Hjoin(1, left, right)
+		return ui.HJoin(1, left, right)
 	}
 
 	// The list comes first and may use every row of the box, so each
@@ -135,7 +135,7 @@ func (wz *setupWizard) choicesView(w, h int) string {
 		right := t.Box(ui.BoxOpts{W: rightW, H: h, Title: integPaneTitle(t, setupIntentLabels[sel.intent], false),
 			Lines: setupClip(t, wz.aboutLines(sel, insp, inner), inner, boxH)})
 
-		return ui.Hjoin(1, left, right)
+		return ui.HJoin(1, left, right)
 	}
 
 	// The narrow layout puts the explanation under the rows. It gets the

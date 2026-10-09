@@ -68,7 +68,7 @@ func (o *overview) cardsView(w int) string {
 		blocks = append(blocks, t.Card(widths[i], lines+2, c.title, c.right, c.lines))
 	}
 
-	return ui.Hjoin(1, blocks...)
+	return ui.HJoin(1, blocks...)
 }
 
 // cardsHeight returns the rendered height of the cards at w cells.

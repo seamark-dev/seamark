@@ -10,9 +10,9 @@
 // without seamark vocabulary. The rule applies to its name, its
 // parameters, its fields and its doc. Seamark vocabulary is, for
 // example, effect, phase, region, proposal, pin, lesson, run,
-// integration, client, setup, policy and brand. A declaration that names
-// such a concept stays in internal/tui, usually in its widgets.go. So the
-// next author can decide a move from the name alone.
+// integration, client, setup, policy, brand and workspace. A declaration
+// that names such a concept stays in internal/tui, usually in its
+// widgets.go. So the next author can decide a move from the name alone.
 //
 // # Imports
 //

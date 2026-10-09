@@ -377,7 +377,7 @@ func (d *doctorView) view(w, h int) string {
 
 	lw := docListWidth(w)
 
-	return ui.Hjoin(1, d.listBox(lw, boxH, !d.focusDetail), d.detailBox(w-lw-1, boxH, d.focusDetail))
+	return ui.HJoin(1, d.listBox(lw, boxH, !d.focusDetail), d.detailBox(w-lw-1, boxH, d.focusDetail))
 }
 
 // stateView renders the loading, error and unknown states in one box.

@@ -193,7 +193,7 @@ func (d *distRecord) runView(w, h int) string {
 	if d.st.wide() {
 		leftW := setupSplit(w, 60)
 
-		return ui.Hjoin(1, d.summaryBox(leftW, h, d.run.sumFocus), d.runGroupsBox(w-leftW-1, h, !d.run.sumFocus))
+		return ui.HJoin(1, d.summaryBox(leftW, h, d.run.sumFocus), d.runGroupsBox(w-leftW-1, h, !d.run.sumFocus))
 	}
 
 	if d.run.detail {
@@ -783,7 +783,7 @@ func (d *distRecord) compactBox(w, h int) string {
 
 	o := ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Distillation", true), Right: d.stateLabel()}
 
-	return d.st.theme.PinnedBox(o, head, body, nil, &r.list, keep, follow)
+	return d.st.theme.StickyBox(o, head, body, nil, &r.list, keep, follow)
 }
 
 // shortStopNote is the one-line stop note of the compact box. The stop

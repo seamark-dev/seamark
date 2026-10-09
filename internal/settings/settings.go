@@ -9,6 +9,16 @@
 // Inspect reads only. PlanPatch computes a guarded diff and writes
 // nothing. Save writes exactly the planned bytes, or refuses with
 // ErrStale when the file changed after it was inspected.
+//
+// A save changes only the lines of one field group. It keeps comments,
+// unknown keys, other sections and the file mode, and it replaces the
+// file atomically. A missing file is created with the planned keys only.
+// A file that the splice cannot change safely returns a BlockedError
+// that names the line to fix by hand: malformed or ambiguous YAML (for
+// example duplicate keys or aliases), a symbolic link, a read-only file,
+// or a file that this user cannot write. The activation texts of the
+// plan say when each field takes effect; docs/configuration.md lists
+// them for the user.
 package settings
 
 import (

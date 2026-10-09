@@ -25,6 +25,31 @@ import (
 // text from the pin file, the ledger, a model or an error passes through
 // ui.OneLine, ui.MultiLine or ui.ErrText here, at the leaf, because the
 // maintenance engine returns it raw (internal/maintain package doc).
+//
+// The preview rules:
+//
+//   - Each selected pin reads ready, no-op or blocked with its reason. y
+//     shows only when every pin is ready, because the console never
+//     processes a subset that the user did not review.
+//   - A retarget shows the removed and added regions per pin, a warning
+//     for a broader or a repository-wide scope, and the live note beside
+//     an edited recorded note. It says that the delivery history restarts,
+//     because the pin identity holds the regions.
+//   - A prune shows the full live note, the regions, the unknown keys that
+//     leave with the entry, and a retained similar pin as advice only.
+//   - The WILL and WON'T lines and the file diff follow. The diff hides
+//     text that looks like a secret; the file gets the exact bytes.
+//   - The scope summary stays in the modal tail at every size, so the
+//     user always sees what y writes. It adds "index stale" for advice
+//     from a stale index, and it says when y waits for another operation.
+//   - With the write gate off the preview reads "preview only" and offers
+//     no y; o opens the pin-writing settings.
+//
+// A result names each effect on its own row: the pin file, the file or
+// ledger error, the ledger, the restore, the rows as read again, and the
+// recovery offer. Its title never claims a change that did not happen.
+// Every result ends with "Nothing is retried automatically.", because the
+// console never repeats a write by itself.
 
 // maintLabelW is the label column of the labelled rows of a preview, for
 // example "Regions   internal/db". It fits the longest labels, "Retained"

@@ -23,6 +23,17 @@ type flowTestPlan struct{ name string }
 // allFlowStages lists every stage, so a truth table covers each one.
 var allFlowStages = []flowStage{flowClosed, flowPreparing, flowPreview, flowCommitting, flowResult}
 
+// flowScroll is a scroll position with an offset: a 14-line body in a
+// window of 5 lines, scrolled to line 3. Fit records the bounds, as a
+// render does.
+func flowScroll() ui.ScrollState {
+	var sc ui.ScrollState
+	sc.Fit(14, 5)
+	sc.Off = 3
+
+	return sc
+}
+
 // flowAt returns a flow in stage with a shown preview, a read failure
 // and a scroll offset. Each test then sees what a call keeps or forgets.
 func flowAt(stage flowStage) *previewFlow[flowTestPlan] {
@@ -30,7 +41,7 @@ func flowAt(stage flowStage) *previewFlow[flowTestPlan] {
 		stage:   stage,
 		preview: &flowTestPlan{name: "old"},
 		err:     errors.New("old failure"),
-		scroll:  ui.ScrollState{Off: 3, Page: 5, Last: 9},
+		scroll:  flowScroll(),
 	}
 }
 
@@ -136,7 +147,7 @@ func TestPreviewFlowStartCommitClaimsTheSlot(t *testing.T) {
 	assert.Equal(t, doneMsg{}, cmd(), "the returned command is the commit work")
 	assert.Equal(t, "Saving settings", st.mutation)
 	assert.Equal(t, flowCommitting, f.stage)
-	assert.Equal(t, ui.ScrollState{Off: 3, Page: 5, Last: 9}, f.scroll, "the holder decides the scroll position")
+	assert.Equal(t, flowScroll(), f.scroll, "the holder decides the scroll position")
 	assert.NotNil(t, f.preview, "the commit still names the preview")
 
 	busy := &state{mutation: "Pruning 1 pin"}

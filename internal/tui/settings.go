@@ -377,7 +377,7 @@ func (s *settingsScreen) view(w, h int) string {
 	if w >= ui.WideWidth {
 		listW := setupSplit(w, settingsListDesignW)
 
-		return ui.Hjoin(1, s.listBox(listW, boxH, !s.editing), s.editorBox(w-listW-1, boxH, s.editing, false))
+		return ui.HJoin(1, s.listBox(listW, boxH, !s.editing), s.editorBox(w-listW-1, boxH, s.editing, false))
 	}
 
 	if s.editing {

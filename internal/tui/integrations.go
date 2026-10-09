@@ -398,7 +398,7 @@ func (s *integrations) view(w, h int) string {
 		left := s.listBox(insps, integListW, boxH, s.focus == integFocusList)
 		right := s.detailBox(sel, w-integListW-1, boxH, s.focus == integFocusDetail)
 
-		return ui.Hjoin(1, left, right)
+		return ui.HJoin(1, left, right)
 	}
 
 	if s.detailOpen {

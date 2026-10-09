@@ -31,8 +31,9 @@ const (
 // result: the pin file reads without error; for a retarget, every target
 // entry is present with exactly the reviewed content, every earlier key
 // is absent, and no other applied row records a target key; for a prune,
-// no pruned key is present; and every ledger row still holds its planned
-// values. It writes nothing.
+// no pruned key is present; every ledger row still holds its planned
+// values; and the write gate is on, because a completion writes the
+// ledger. It writes nothing.
 func PlanRecovery(deps Deps, r *Recovery) (*Plan, error) {
 	if r == nil {
 		return nil, errors.New("maintain: no recovery")

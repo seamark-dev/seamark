@@ -167,8 +167,8 @@ func TestListPaneMovementKeysMoveTheCursorOrScrollTheDetail(t *testing.T) {
 	rows := paneRows(1, 2, 3, 4, 5, 6, 7, 8)
 	wide := true
 	lp := newTestPane(&wide)
-	lp.list.Window = 3
-	lp.detail = ui.ScrollState{Page: 4, Last: 10}
+	lp.list.Clamp(len(rows), 3)
+	lp.detail.Fit(14, 4)
 
 	lp.navKey(keyMsg("down"), rows)
 	assert.Equal(t, 1, lp.list.Cursor, "down moves the cursor while the list has focus")
@@ -266,7 +266,11 @@ func TestListPaneRenderListWindowAndFoot(t *testing.T) {
 	rows := paneRows(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 	out := ansi.Strip(lp.renderList(th, rows, 40, 6, true, "Items", "HEAD", row))
 
-	assert.Equal(t, 3, lp.list.Window, "the header takes one of the four box rows")
+	// A page key moves by the window less one row, so pgdn from the cursor
+	// shows the window that the render recorded.
+	paged := lp.list
+	paged.Key(keyMsg("pgdown"), len(rows))
+	assert.Equal(t, lp.list.Cursor+2, paged.Cursor, "the header takes one of the four box rows")
 	assert.Equal(t, 3, lp.list.Offset, "the window keeps the cursor row")
 	assert.Equal(t, []int{6}, cursorRows, "only the cursor row renders as the cursor")
 	assert.Contains(t, out, "HEAD")
@@ -317,7 +321,9 @@ func TestListPaneRenderDetailScrollsAndResetsForAnotherRow(t *testing.T) {
 	}
 
 	out := ansi.Strip(lp.renderDetail(th, paneRow{id: 1}, "Item 1", body, 40, 6, true))
-	assert.Equal(t, 4, lp.detail.Page, "the detail records its page")
+	paged := lp.detail
+	paged.Key(keyMsg("pgdown"))
+	assert.Equal(t, 4, paged.Off, "the detail records its page")
 	assert.Equal(t, 8, lp.detail.Last, "the detail records its last offset")
 	assert.Contains(t, out, "↓ more · pgdn")
 	assert.Contains(t, out, "line 0")

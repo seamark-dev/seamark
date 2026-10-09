@@ -652,7 +652,7 @@ func (m *model) header(w int) string {
 
 	brand := " " + brandText(t) + "  "
 	room := w - ui.Width(brand) - ui.Width(right) - 2
-	path := t.Workspace.Render(ui.TruncateLeft(ui.OneLine(ui.DisplayPath(m.st.svc.Root())), max(8, room), t.Glyphs.Ellipsis))
+	path := t.Subtitle.Render(ui.TruncateLeft(ui.OneLine(ui.DisplayPath(m.st.svc.Root())), max(8, room), t.Glyphs.Ellipsis))
 
 	return ui.Spread(brand+path, right, w)
 }

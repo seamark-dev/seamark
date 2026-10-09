@@ -13,7 +13,7 @@ import (
 )
 
 // OneLine makes untrusted text safe for a single terminal line.
-// Repository content, proposal text and file names can hold escape
+// Repository content, stored text and file names can hold escape
 // sequences; the sanitizer keeps them inert.
 func OneLine(s string) string {
 	s = strings.NewReplacer("\r\n", " ", "\n", " ", "\t", " ").Replace(s)

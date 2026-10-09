@@ -41,7 +41,7 @@ func TestModalScrollsItsBodyAndKeepsTheActions(t *testing.T) {
 	assert.Contains(t, lines[1], "line 1 ")
 	assert.Contains(t, lines[len(lines)-2], "esc close", "the actions stay under the body")
 	assert.Contains(t, lines[len(lines)-1], "1–13 of 30")
-	assert.Equal(t, 13, sc.Page)
+	assert.Equal(t, 13, sc.page)
 	assert.Equal(t, 17, sc.Last)
 
 	sc.by(100)

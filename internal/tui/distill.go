@@ -25,6 +25,17 @@ import (
 // trigger extraction record. distill_keys.go handles the keys. The
 // views live in distill_scope.go (scope form), distill_plan.go
 // (Preview step) and distill_run.go (run progress and result).
+//
+// The record adds two rules to the rules of package learning:
+//
+//   - A preview blocker, for example an agent command that is not on
+//     PATH, links to Settings › Inference. The fix is another agent or
+//     an install. o only opens that place (blockerLink), because a fix
+//     is always a separate action.
+//   - A run that saves every group without a new proposal is a
+//     completed run, not "Nothing new to distill". The run recorded the
+//     signatures, and an empty plan sends nothing. The words keep the
+//     two apart, so a paid run never reads as no work.
 
 // distLimitOpt is the group limit choice of the scope form.
 type distLimitOpt int
@@ -137,6 +148,11 @@ type distSwept struct {
 // to the result. It implements runRecord, runDraft, runGenerator and
 // runOpener. Planning only reads; the run starts only on y from a
 // ready preview.
+//
+// The record lives in memory only, because the Run sub-view keeps no
+// history after an exit. The store keeps the durable trace of a run:
+// the findings that the plan read, the saved proposals, and the
+// recorded group signatures.
 type distRecord struct {
 	st *state
 

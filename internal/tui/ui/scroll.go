@@ -13,10 +13,10 @@ import (
 // position. The views and box.go draw the lines. This file only picks
 // the visible range and the position note.
 //
-// The run records of distillation and extraction keep a second cursor
-// model on purpose: a cursor row, a follow flag and a ScrollState for
-// PinnedBox. There the arrows move the cursor and the page keys scroll
-// the text, so ListState does not fit them.
+// Some screens keep a second cursor model on purpose: a cursor row, a
+// follow flag and a ScrollState for StickyBox. There the arrows move
+// the cursor and the page keys scroll the text, so ListState does not
+// fit them.
 
 // ScrollState is the vertical position of one scrollable text. The view
 // records the page size and the last offset, because the key handler
@@ -24,7 +24,7 @@ import (
 // share this type, so their texts scroll with the same keys.
 type ScrollState struct {
 	Off  int
-	Page int
+	page int
 	Last int
 }
 
@@ -35,7 +35,7 @@ func (sc *ScrollState) by(delta int) {
 
 // Key applies a movement key and reports whether the key was one.
 func (sc *ScrollState) Key(msg tea.KeyMsg) bool {
-	page := max(1, sc.Page)
+	page := max(1, sc.page)
 
 	switch {
 	case key.Matches(msg, Nav.Up):
@@ -68,7 +68,7 @@ func (sc *ScrollState) Scrolls() bool {
 // that scrolls calls it once per render, so all boxes keep one rule.
 func (sc *ScrollState) Fit(n, h int) (from, to int) {
 	h = max(0, h)
-	sc.Page = h
+	sc.page = h
 	sc.Last = max(0, n-h)
 	sc.by(0)
 
@@ -95,7 +95,7 @@ func (sc *ScrollState) Reveal(top, bottom, h int) {
 }
 
 // TextPager scrolls one long text that a selection picks, for example
-// the inspection of a client or the diff of a planned write. A new id
+// the detail of a list row or the diff of a planned write. A new id
 // starts at the top, because a new selection is a new text. The same id
 // keeps the offset, so a refresh keeps the position.
 //
@@ -127,7 +127,7 @@ func (p *TextPager) Lines(id string, body []string, w, h int) []string {
 
 	h = max(1, h)
 	p.n = len(body)
-	p.sc.Page, p.sc.Last = h, max(0, p.n-h)
+	p.sc.page, p.sc.Last = h, max(0, p.n-h)
 
 	switch {
 	case id != p.id:
@@ -158,14 +158,14 @@ func (p *TextPager) Key(msg tea.KeyMsg) bool {
 }
 
 // Span returns the faint "a–b of n" of the visible lines, also when
-// every line fits, because the diff box of the setup design shows it.
+// every line fits, because a diff box of the 1a design shows it.
 // It returns "" before the first render.
 func (p *TextPager) Span(t *Theme) string {
 	if p.n == 0 {
 		return ""
 	}
 
-	return t.RangeNote(p.sc.Off, min(p.n, p.sc.Off+p.sc.Page), p.n)
+	return t.RangeNote(p.sc.Off, min(p.n, p.sc.Off+p.sc.page), p.n)
 }
 
 // Foot returns span while the text is taller than its window, else "".
@@ -182,9 +182,9 @@ func (p *TextPager) Foot(t *Theme) string {
 type ListState struct {
 	Cursor int
 	Offset int
-	// Window is the row count of the last render. A page key moves by
+	// window is the row count of the last render. A page key moves by
 	// window-1 rows, so one row of the old page stays in view.
-	Window int
+	window int
 }
 
 // Clamp keeps the cursor inside n rows and the cursor row inside a
@@ -193,7 +193,7 @@ type ListState struct {
 // and the recorded window then stays.
 func (l *ListState) Clamp(n, h int) {
 	if h > 0 {
-		l.Window = h
+		l.window = h
 	}
 
 	if n <= 0 {
@@ -232,7 +232,7 @@ func (l *ListState) Move(delta, n int) {
 // whether the key was one. Before the first render the window is 0, so
 // a page key moves one row.
 func (l *ListState) Key(msg tea.KeyMsg, n int) bool {
-	page := max(1, l.Window-1)
+	page := max(1, l.window-1)
 
 	switch {
 	case key.Matches(msg, Nav.Up):

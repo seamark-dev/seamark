@@ -22,11 +22,11 @@ const (
 	ToneAttention
 	// ToneFailure is a broken state or a failed operation.
 	ToneFailure
-	// ToneUnknown is missing evidence. It is never shown as success.
+	// ToneUnknown is missing data. It is never shown as success.
 	ToneUnknown
 	// ToneAccent marks the primary action or the active destination.
 	ToneAccent
-	// ToneUnsupported marks a capability that setup does not provide.
+	// ToneUnsupported marks a capability that the console does not provide.
 	ToneUnsupported
 )
 
@@ -36,7 +36,7 @@ const (
 // from Vertical, because without color the glyph is the only signal
 // between them.
 type Glyphs struct {
-	BrandLeft, BrandMid, BrandRight string
+	HeaderLeft, HeaderMid, HeaderRight string
 
 	Cursor, Check, Uncheck, Locked, Kept, Bullet, Arrow, Sep, Ellipsis string
 	Dash, OK, Warn, Fail, Info, Unknown, Unsupported                   string
@@ -55,7 +55,7 @@ type Glyphs struct {
 }
 
 var unicodeGlyphs = Glyphs{
-	BrandLeft: "▶", BrandMid: "┊", BrandRight: "◀",
+	HeaderLeft: "▶", HeaderMid: "┊", HeaderRight: "◀",
 	Cursor: "›", Check: "[✓]", Uncheck: "[ ]", Locked: "[-]", Kept: "[=]",
 	Bullet: "·", Arrow: "›", Sep: "·", Ellipsis: "…", Dash: "—",
 	OK: "✓", Warn: "!", Fail: "!", Info: "·", Unknown: "?", Unsupported: "◌",
@@ -70,7 +70,7 @@ var unicodeGlyphs = Glyphs{
 }
 
 var asciiGlyphs = Glyphs{
-	BrandLeft: ">", BrandMid: "|", BrandRight: "<",
+	HeaderLeft: ">", HeaderMid: "|", HeaderRight: "<",
 	Cursor: ">", Check: "[x]", Uncheck: "[ ]", Locked: "[-]", Kept: "[=]",
 	Bullet: "-", Arrow: ">", Sep: "/", Ellipsis: "...", Dash: "-",
 	OK: "+", Warn: "!", Fail: "!", Info: "-", Unknown: "?", Unsupported: "~",
@@ -109,14 +109,14 @@ type Theme struct {
 	ASCII  bool
 	Glyphs Glyphs
 
-	Brand     lipgloss.Style // the word seamark and the outer marks
-	BrandMark lipgloss.Style // the channel mark between the wedges
-	Workspace lipgloss.Style
-	TabActive lipgloss.Style
-	TabIdle   lipgloss.Style
-	TabNum    lipgloss.Style
-	Rule      lipgloss.Style // unfocused borders, rules, dimmed backdrop
-	RuleOn    lipgloss.Style // focused borders, the active tab rule
+	Header     lipgloss.Style // the product name and the outer marks
+	HeaderMark lipgloss.Style // the channel mark between the wedges
+	Subtitle   lipgloss.Style
+	TabActive  lipgloss.Style
+	TabIdle    lipgloss.Style
+	TabNum     lipgloss.Style
+	Rule       lipgloss.Style // unfocused borders, rules, dimmed backdrop
+	RuleOn     lipgloss.Style // focused borders, the active tab rule
 
 	Title   lipgloss.Style // item titles
 	Heading lipgloss.Style // upper-case section labels
@@ -153,14 +153,14 @@ func NewTheme(ascii bool) *Theme {
 		ASCII:  ascii,
 		Glyphs: g,
 
-		Brand:     fg.Bold(true),
-		BrandMark: lipgloss.NewStyle().Foreground(colorAcc),
-		Workspace: lipgloss.NewStyle().Foreground(colorDim),
-		TabActive: lipgloss.NewStyle().Foreground(colorAcc).Bold(true),
-		TabIdle:   lipgloss.NewStyle().Foreground(colorDim),
-		TabNum:    lipgloss.NewStyle().Foreground(colorFaint),
-		Rule:      lipgloss.NewStyle().Foreground(colorLine),
-		RuleOn:    lipgloss.NewStyle().Foreground(colorAcc),
+		Header:     fg.Bold(true),
+		HeaderMark: lipgloss.NewStyle().Foreground(colorAcc),
+		Subtitle:   lipgloss.NewStyle().Foreground(colorDim),
+		TabActive:  lipgloss.NewStyle().Foreground(colorAcc).Bold(true),
+		TabIdle:    lipgloss.NewStyle().Foreground(colorDim),
+		TabNum:     lipgloss.NewStyle().Foreground(colorFaint),
+		Rule:       lipgloss.NewStyle().Foreground(colorLine),
+		RuleOn:     lipgloss.NewStyle().Foreground(colorAcc),
 
 		Title:   fg.Bold(true),
 		Heading: lipgloss.NewStyle().Foreground(colorDim).Bold(true),

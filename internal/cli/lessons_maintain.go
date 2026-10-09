@@ -8,6 +8,22 @@ package cli
 // ID, its root resolution, and its output lines. This file maps the
 // selected proposals to pin entries, and it maps the plan and the commit
 // outcome to those lines.
+//
+// The CLI differs from the console in four points, because it has no
+// preview and no session:
+//
+//   - It commits the ready pins of a selection and prints one reason line
+//     for each other proposal. The console asks for a selection in which
+//     every pin is ready.
+//   - With the write gate off it prints the change to make by hand, also
+//     for a file that the editor blocks as a whole; that answer has no
+//     diff. Its last line names a refusal that the gate cannot lift, for
+//     example a CRLF file or a symbolic link.
+//   - A partial result has no recovery offer. The error names the state
+//     and the way back: find the change with git diff, undo it, and run
+//     the same command again.
+//   - In a copied checkout it edits the pin file of the recorded root, as
+//     the other lessons commands do. The console refuses that case.
 
 import (
 	"cmp"

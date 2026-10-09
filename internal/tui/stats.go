@@ -174,7 +174,7 @@ func (s *statsView) view(w, h int) string {
 
 	leftW := min(statsLeftW, w*statsLeftW/statsDesignW)
 
-	return head + "\n\n" + ui.Hjoin(1,
+	return head + "\n\n" + ui.HJoin(1,
 		s.lessonsBox(v, leftW, boxH, s.focus == statsPaneLessons),
 		s.deliveryBox(v, w-leftW-1, boxH, s.focus == statsPaneDelivery))
 }

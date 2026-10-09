@@ -142,7 +142,7 @@ func (d *distRecord) scopeView(w, h int) string {
 		Lines: d.aboutLines(ui.BoxInner(w - leftW - 1)),
 	})
 
-	return ui.Hjoin(1, d.formBox(leftW, h, false), about)
+	return ui.HJoin(1, d.formBox(leftW, h, false), about)
 }
 
 // formBox renders the scope form with the confirmation tail. The compact

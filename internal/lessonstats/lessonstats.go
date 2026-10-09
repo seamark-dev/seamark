@@ -1,6 +1,13 @@
 // Package lessonstats gathers lesson delivery statistics as typed data
 // for `seamark lessons --stats` and the console. It only reads: it never
 // appends a firing record, because viewing a lesson is not delivery.
+//
+// Delivered means emitted through a recorded surface (the hook,
+// change_set or check), not read, followed or effective, because the log
+// records only the emission. The counts cover the retained firing log,
+// and each Gather reads a new snapshot. The pin count of the lessons by
+// source counts every entry of the pin file, also the pins that an apply
+// wrote from proposals, so it does not mean hand-written.
 package lessonstats
 
 import (

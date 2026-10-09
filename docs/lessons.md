@@ -492,7 +492,7 @@ or proposal already has. They refuse a symbolic link and a read-only
 file at the pin file path, as apply does. They leave every pin of a
 file that the editor blocks as a whole, for example a file with more
 than one YAML document or, unlike apply, a file with CRLF line breaks
-(the layout table in [tui.md](tui.md) lists these files). With the
+(the package doc of `internal/pinfile` lists these layouts). With the
 write gate off, they still print the change to make by hand for such a
 file, without a diff. Their last line then names the refusal that the
 gate cannot lift, also for a link or a read-only file. They write only

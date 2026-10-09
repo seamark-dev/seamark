@@ -20,6 +20,11 @@ import (
 // evidence_preview.go and the run record in evidence_run.go.
 // Browsing here reads the learning snapshot only: it never plans,
 // fetches or writes.
+//
+// Each source shows its stored findings, its freshness, and what its
+// refresh needs: git history for local fixes, and a GitHub origin and
+// gh for reviews. The needs show before any preview, so the user can
+// repair a source that would read unavailable.
 
 // evItem is one row of the source list: a source or an action.
 type evItem int
@@ -268,7 +273,7 @@ func (v *evidenceView) body(w, h int) string {
 	if v.st.wide() {
 		listW := min(propListW, w*propListW/propDesignW)
 
-		return ui.Hjoin(1, v.listBox(snap, listW, h, !v.detail), v.detailBox(snap, w-listW-1, h, v.detail))
+		return ui.HJoin(1, v.listBox(snap, listW, h, !v.detail), v.detailBox(snap, w-listW-1, h, v.detail))
 	}
 
 	if v.detail {

@@ -21,33 +21,33 @@ import (
 //     settles. SpinnerFrame and the one tick of the shell stay instead.
 //   - viewport pads its view to its height and cuts a wide line without
 //     an ellipsis. It clamps the offset only past the last line, so a box
-//     that grows shows blank rows. Its default keys b and u clash with the
-//     Overview key b and the Integrations key u. ScrollState, TextPager
-//     and the boxes of box.go stay instead. TextPager still copies the
-//     clamp rule and the hard cut. It replaced a viewport, and the copy
-//     keeps every frame the same.
+//     that grows shows blank rows. Its default keys b and u clash with two
+//     screen keys of the console. ScrollState, TextPager and the boxes of
+//     box.go stay instead. TextPager still copies the clamp rule and the
+//     hard cut. It replaced a viewport, and the copy keeps every frame the
+//     same.
 //   - table truncates a cell without regard to escape sequences, so a
 //     styled cell breaks at the wrong place. It shows the selection by
 //     color only, which NO_COLOR removes. Each view keeps its own column
 //     calculator and the cursor glyph.
 
 // lineInputLimit bounds the value of a LineInput that sets no limit, for
-// example the region filter. A path scope longer than this is a paste
-// accident, not a filter.
+// example a path filter. A path longer than this is a paste accident,
+// not a filter.
 const lineInputLimit = 256
 
-// LineInput is a minimal single-line text input. The Proposals and Pins
-// filter bars, the Settings editor and the Distill scope form use it. A
+// LineInput is a minimal single-line text input. The filter bars, the
+// editors and the forms of the console use it. A
 // filter or a count needs only typing, deletion and cursor movement. The
 // optional fields let each form set its own hint, bound and runes. Their
-// zero values keep the region filter behaviour, because the region filter
+// zero values keep the path filter behaviour, because the path filter
 // was the first user.
 type LineInput struct {
 	runes []rune
 	pos   int
 
 	// Placeholder is the faint hint of an empty input. "" keeps the
-	// region filter hint.
+	// path hint.
 	Placeholder string
 	// Limit bounds the value in runes. 0 keeps lineInputLimit.
 	Limit int

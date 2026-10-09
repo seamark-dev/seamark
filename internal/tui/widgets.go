@@ -581,6 +581,6 @@ func stepper(t *ui.Theme, steps []string, current int) string {
 func brandText(t *ui.Theme) string {
 	g := t.Glyphs
 
-	return t.Brand.Render(g.BrandLeft) + t.BrandMark.Render(g.BrandMid) +
-		t.BrandMark.Bold(true).Render(g.BrandRight) + " " + t.Brand.Render("seamark")
+	return t.Header.Render(g.HeaderLeft) + t.HeaderMark.Render(g.HeaderMid) +
+		t.HeaderMark.Bold(true).Render(g.HeaderRight) + " " + t.Header.Render("seamark")
 }

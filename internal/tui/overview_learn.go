@@ -11,6 +11,29 @@ import (
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
+// This file holds the learning links of the Overview attention list.
+// Each item comes from typed snapshot data, and enter on it opens one
+// view:
+//
+//   - No evidence collected yet (a ready index, no stored finding, no
+//     review lesson): Optional, opens Lessons › Evidence.
+//   - N findings and no proposal in the ledger: Optional, opens the scope
+//     step of a distillation in Lessons › Run.
+//   - N findings, K distilled groups and no proposal: Optional, opens the
+//     same scope step, as a check for new groups.
+//   - An inference agent that does not resolve, or an inference reader
+//     that fails: Action, opens Settings › inference.
+//   - A pin-write, index or review reader that fails: Action, opens the
+//     Settings group of that reader.
+//   - Pin writing off while proposals wait: Optional, never Action, opens
+//     Settings › pin writing.
+//   - A running distillation, evidence refresh or trigger extraction:
+//     Optional, opens Lessons › Run.
+//
+// The functions below state the rule of each item and its why. Two rules
+// hold for all of them: a source that has not loaded adds no item, and no
+// item suggests paid work that ran before or runs now.
+
 // The Lessons intents that the learning links open. Lessons owns their
 // meaning; the Overview and the Doctor only name them.
 const (
@@ -69,6 +92,14 @@ func (o *overview) lessonsPath(sub string) string {
 // and the pin-write gate. Every item comes from a typed field of a
 // loaded snapshot. A source that has not loaded or has failed adds no
 // suggestion, because an unknown count is not zero.
+//
+// Only the items of configItems are actions, and configItems states
+// why. Every other item is optional, because it offers a next step and
+// reports no fault.
+//
+// Every link only opens a view, and no link starts work. A paid run, a
+// network fetch or a write starts only after its own preview, so the
+// user sees the cost and the effect first.
 func (o *overview) learningItems() []ovItem {
 	var items []ovItem
 
@@ -156,6 +187,11 @@ var ovReaders = []ovReader{
 // reader that rejects .seamark/config.yaml, or an inference agent that
 // does not resolve. The console plans strictly: it never falls back to
 // a default for a paid run, so these are actions, not warnings.
+//
+// Each item opens the Settings group of the failing section: inference
+// for the agent reader and an unresolved agent, pin writing for the
+// distill reader, and the group of ovIndexReaderGroup for the index
+// reader.
 func (o *overview) configItems() []ovItem {
 	sec := &o.st.settings
 	if !sec.loaded || sec.value == nil {
@@ -241,7 +277,9 @@ func (o *overview) configFileItem(snap *settings.Snapshot, failing []ovReader) o
 // error of every failing reader. A parse error or an unreadable file
 // fails each reader with the error that the block quotes. The block
 // then replaces the reader lines. A read-only or linked file blocks the
-// save for another cause, so the reader errors must stay visible.
+// save for another cause, so the reader errors must stay visible. Mixed
+// line breaks are such a cause too, because yamledit refuses to edit
+// them.
 func ovBlockExplains(snap *settings.Snapshot, failing []ovReader) bool {
 	if snap.Blocked == nil {
 		return false
@@ -338,6 +376,16 @@ func ovIndexReaderGroup(snap *settings.Snapshot) settings.Group {
 // an empty ledger, it suggests to prepare a distillation. A ledger with
 // any proposal adds no suggestion, because only a plan can tell whether
 // new groups exist.
+//
+// A stored review lesson is collected evidence too. So a store with
+// lessons and no finding gets no suggestion, because "No evidence
+// collected yet" would then be false.
+//
+// The item never suggests a repeat of paid work that ran before or
+// runs now. A distillation sends findings to the inference agent, so a
+// repeated suggestion can spend tokens and add no proposal. The ledger
+// rule above, the record of distilled groups below, and the run checks
+// in the body apply this rule.
 //
 // An empty ledger does not prove that no distillation ran, because a
 // group can end without a proposal. The evidence snapshot counts the

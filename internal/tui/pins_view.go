@@ -103,6 +103,40 @@ func pinToneState(t *ui.Theme, tone ui.Tone, lead string) pinState {
 // the ledger (D-4), then the attention words of the entry. A linked pin
 // leads with its proposal ID, because that ID is what the user looks up.
 // "blocked" comes first, because it tells why w and - are off.
+//
+// Each relationship word names one pinfile.Link, and the Link constant
+// states its meaning. Each word also sets the route that MAINTENANCE
+// gives (maintenanceLines):
+//
+//   - LinkLinked reads "pN linked", or pN with its attention words, for
+//     example "p30 blocked". Only this link can offer w, - and t. Each
+//     key still applies its own rule (editBlock, retargetBlock,
+//     pinExtractBlock).
+//   - "edited" marks a linked pin whose live note differs from the note
+//     that pN recorded. The route stays the linked route. A retarget
+//     changes only the regions, so it keeps the live note. An extraction
+//     reads the proposal row, so it asks about the recorded note.
+//   - LinkNoProposal reads "no proposal". The pin is read-only here, and
+//     the route is a hand edit of the file. The words never claim that
+//     a person wrote the pin, because no row proves it.
+//   - LinkPendingMatch reads "pending pN", or "pending" when several
+//     pending rows match. The pin stays read-only until one of them is
+//     recorded as applied (pinPendingMatchText).
+//   - LinkAmbiguousFile reads "duplicate pin", LinkAmbiguousLedger reads
+//     "ambiguous", and LinkAmbiguousFields reads "ambiguous row". Each
+//     one blocks every action, because no action can choose one entry or
+//     one row. The route is a hand edit of the file.
+//   - Every other case reads "link unknown": the pin file or the ledger
+//     did not read (pinLinksKnown), or the link is LinkUnknown or
+//     malformed. The pin is read-only, and the state line names the
+//     error.
+//
+// The attention words follow the relationship, the most urgent first:
+// "blocked" (the entry cannot be edited safely), "unknown key" (the
+// entry has a key that no reader uses), then "edited". On a linked pin
+// the attention words take the place of "linked", so a space follows
+// pN. A comma follows any other relationship, for example "no proposal,
+// unknown key".
 func (p *pinsView) pinLabel(in *maintain.Inspection, pin *maintain.Pin) pinState {
 	t := p.st.theme
 
@@ -522,8 +556,9 @@ func pinPathCell(s string, w int, ell string) string {
 	return ui.TruncateLeft(s, w, ell)
 }
 
-// pinRegionLabel is the short region label of a list row. A set of
-// several regions shows its size; the detail pane lists them.
+// pinRegionLabel is the short region label of a list row. An empty set
+// reads "repo-wide", because pin delivery reads it as repository-wide. A
+// set of several regions shows its size; the detail pane lists them.
 func pinRegionLabel(set []string) string {
 	switch len(set) {
 	case 0:
@@ -1485,7 +1520,9 @@ func (p *pinsView) loadingBox(w, h int) string {
 
 // emptyBox explains an empty list. The cause is a file that could not
 // be read, no pin file, an empty pin list, a filter that hides every
-// row, or an empty history.
+// row, or an empty history. Without a pin file, or with an empty one,
+// the box offers p and e. Pins come only from applied proposals, and a
+// distillation makes proposals from evidence.
 func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 	t := p.st.theme
 	g := t.Glyphs

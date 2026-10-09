@@ -291,7 +291,7 @@ func (r *evRun) view(w, h int) string {
 
 	leftW := min(propListW, w*propListW/propDesignW)
 
-	return r.contextLine(w) + "\n\n" + ui.Hjoin(1, r.mainBox(leftW, boxH, !r.right), r.sourcesBox(w-leftW-1, boxH, r.right))
+	return r.contextLine(w) + "\n\n" + ui.HJoin(1, r.mainBox(leftW, boxH, !r.right), r.sourcesBox(w-leftW-1, boxH, r.right))
 }
 
 // contextLine renders the confirmed scope of the run and its start or

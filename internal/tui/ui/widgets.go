@@ -52,9 +52,9 @@ func (t *Theme) RangeNote(from, to, n int) string {
 // Hints renders key bindings as "key action" pairs for the footer.
 //
 // Consecutive unavailable entries (see Unavailable) form one faint group
-// that starts with the word n/a, for example "n/a: w retarget, v
-// compare". The word carries the state without color. One word for the
-// group costs fewer cells than one word for each key.
+// that starts with the word n/a, for example "n/a: w write, v view".
+// The word carries the state without color. One word for the group
+// costs fewer cells than one word for each key.
 func (t *Theme) Hints(bindings []key.Binding) string {
 	return t.hintRow(bindings, false)
 }

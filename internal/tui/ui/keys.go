@@ -62,9 +62,8 @@ const unavailableKey = "<unavailable>"
 // as not available now: muted, after the word n/a. The copy is disabled,
 // so every Enabled check reads it as not offered. A screen uses it for a
 // key that the user must find even when the current target cannot use
-// it (user decision of 2026-10-04 for Lessons › Pins). The screen still
-// handles the key press itself, with its package binding, and explains
-// the refusal.
+// it (a user decision of 2026-10-04). The screen still handles the key
+// press itself, with its package binding, and explains the refusal.
 func Unavailable(b key.Binding) key.Binding {
 	h := b.Help()
 

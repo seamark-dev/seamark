@@ -17,6 +17,10 @@ import (
 // additions, review the plan, apply it, then inspect again. It keeps no
 // durable state: reopening it derives every row from the files on disk.
 // The review is the confirmation: "y" on the review applies the plan.
+// While the user chooses or reviews, the global keys keep working and a
+// destination switch keeps the choices, because a look elsewhere must
+// not discard a reviewed selection. Only the running apply captures
+// every key.
 
 // setupStep is one step of the setup wizard. The last three steps use
 // the preview words of the console (previewflow.go). The trail labels in

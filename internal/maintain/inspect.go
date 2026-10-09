@@ -58,7 +58,9 @@ type Pin struct {
 // is known, and an unknown one carries the reason. Missing input is not a
 // negative result. A reading is advice: it never selects or runs an
 // action. A reason can quote a store error, so a caller sanitizes it
-// before display.
+// before display. Confidence, Scope, Trigger and Outcome read the linked
+// proposal, so a pin without exactly one linked proposal has only the
+// Exposure reading.
 type Readings struct {
 	Confidence ConfidenceReading
 	Scope      ScopeReading
@@ -66,7 +68,10 @@ type Readings struct {
 	Outcome    OutcomeReading
 	Exposure   ExposureReading
 	// Similar holds the indexes in Inspection.Pins of the other pins of
-	// the same redundancy cluster.
+	// the same redundancy cluster. Similar wording does not prove the
+	// same coverage, so a similar pin is no reason to prune. A prune
+	// plan decides its items first and then only lists the similar pins
+	// that stay (PlanItem.Kept).
 	Similar []int
 }
 
@@ -79,11 +84,20 @@ type ConfidenceReading struct {
 	Facts  confidence.Facts
 	// Living holds the cited findings that are still in the index. They
 	// are metadata: the finding bodies are not read.
+	//
+	// A cited finding leaves the index when it ages out of the mining
+	// window, when a later commit reverts its fix, or when a re-mine no
+	// longer finds it. The proposal still cites it, but it is not living.
+	// The members of the proposal keep its ID, so a caller can name each
+	// cited finding that Living does not hold.
 	Living []model.Finding
 }
 
 // ScopeReading is the scope that today's evidence computes for the
-// linked proposal (distill.RecommendScope).
+// linked proposal (distill.RecommendScope). It needs an indexed
+// database, because the shared region engine reads the history. Without
+// a living cited finding the advice is distill.ScopeNoEvidence, because
+// missing evidence must never widen a pin.
 type ScopeReading struct {
 	Known  bool
 	Reason string
@@ -91,6 +105,8 @@ type ScopeReading struct {
 }
 
 // TriggerReading is the trigger question state of the linked proposal.
+// The stored trigger paths passed the path checks of the extraction
+// before the store saved them, so the reading shows them as facts.
 type TriggerReading struct {
 	Known  bool
 	Reason string
@@ -104,6 +120,10 @@ type TriggerReading struct {
 }
 
 // OutcomeReading is the passive outcome reading of the linked proposal.
+// It is a derived recurrence check. It counts the mistake events before
+// and after the first delivery, so it shows a correlation and never
+// proves a cause. No plan reads it, so no verdict selects a prune: a
+// working verdict validates the pin (outcome.VerdictWorking).
 type OutcomeReading struct {
 	Known   bool
 	Reason  string
@@ -113,6 +133,13 @@ type OutcomeReading struct {
 // ExposureReading is the delivery history of the live pin identity. It
 // exists for every pin, linked or not, because the firing log keys on
 // the pin text.
+//
+// The identity covers the rule, the note, and the regions
+// (reviews.PinIdentity). A retarget changes the regions, so it starts a
+// new history. The firings of the old regions stay with the old
+// identity. Exposure holds the delivery count and the first delivery.
+// A known reading with Fired false is a fact, not an unknown: the log
+// was read and holds no delivery of this identity.
 type ExposureReading struct {
 	Known    bool
 	Reason   string

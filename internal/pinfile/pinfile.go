@@ -26,6 +26,54 @@
 // engine (integration Route A). Restore puts the old bytes back only
 // while the file still holds the written bytes.
 //
+// # Layouts
+//
+// The editor changes only the layouts whose lines it can splice and
+// prove. Every other layout stays listed and read-only, and the block
+// reason names its line, because an error is not an absence. The rules:
+//
+//   - Supported: the items of a block list under pin: at any consistent
+//     indentation, keys in any order, comments and blank lines between
+//     and inside items, regions as a one-line flow list or as a block
+//     list with one value per line, quoted or plain values, and keys
+//     that no reader uses.
+//   - Blocks the whole file (yamledit and structuralGate): more than one
+//     YAML document, a top level that is not a block mapping, CRLF or
+//     bare CR line breaks, mixed line breaks, text that is not UTF-8, a
+//     tab in the indentation, duplicate keys, a pin value that is not a
+//     block list, a tag or an anchor in the pin section, an alias or a
+//     merge key, an empty item, and a file that the lessons reader
+//     rejects. A splice in such a file cannot prove that it keeps every
+//     other byte.
+//   - Blocks the write, not the plan (Prepare): a symbolic link on the
+//     path, a file without the owner write bit, and a file that this
+//     user cannot write, for example through an access control list.
+//     Route A refuses to replace such a file.
+//   - Blocks one entry (entryBlock, regionsBlock): a flow-style entry,
+//     an alias entry, a rule or region value that is not text or spans
+//     several lines, a flow regions list over several lines, and a block
+//     regions item that is not one value on its own line.
+//   - Blocks a retarget only: a key removal or a move that would drop or
+//     separate a comment, and a region without a safe one-line YAML
+//     form.
+//
+// An apply (PlanAppend) writes CRLF files and keeps their line breaks,
+// so its refusals are narrower than the edit gate. It still refuses a
+// pin value that is not a plain block list, for example pin: [], more
+// than one YAML document, and mixed line breaks.
+//
+// # What an edit keeps
+//
+// A retarget changes only the region and regions lines of each reviewed
+// entry, in place. It can add or remove a regions key, and it writes
+// region: "*" for a repository-wide scope. A prune removes the lines of
+// the entry and the provenance comments directly above it that name its
+// proposal. The rule spelling, the live note, other comments, unknown
+// keys, blank lines, the entry order, other pins, mutes and settings
+// stay. A retarget target that another pin, another selected pin or an
+// applied proposal already has is refused (ErrCollision), because the
+// editor never merges or overwrites pins.
+//
 // The package reads the ledger rows that the caller passes in. It does
 // not open the store, and it never writes the ledger.
 package pinfile

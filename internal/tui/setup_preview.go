@@ -426,7 +426,7 @@ func (wz *setupWizard) previewView(w, h int) string {
 	if wide {
 		leftW := max(34, setupSplit(w, 42))
 
-		return ui.Hjoin(1, wz.planBox(entries, leftW, h, true, true), wz.entryBox(sel, w-leftW-1, h, false))
+		return ui.HJoin(1, wz.planBox(entries, leftW, h, true, true), wz.entryBox(sel, w-leftW-1, h, false))
 	}
 
 	if wz.pathOpen {

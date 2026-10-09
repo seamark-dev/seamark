@@ -26,7 +26,10 @@ type Action int
 const (
 	// ActionApply turns pending proposals into pins.
 	ActionApply Action = iota
-	// ActionDismiss marks pending proposals dismissed.
+	// ActionDismiss marks pending proposals dismissed. It writes only the
+	// ledger, so a pin with the same rule and regions stays in the pin
+	// file. A dismiss rejects a proposal, not an installed pin; a prune
+	// of internal/maintain removes a pin.
 	ActionDismiss
 	// ActionReconcile records pending proposals as applied when their
 	// pins already exist in the pin file. It writes only the ledger, so
@@ -68,7 +71,9 @@ var (
 	// proposals whose stored region fields disagree (pinfile.FieldsAgree).
 	// Their apply writes a pin with another key than the key that every
 	// reader links. So no reader links that pin to them, and no existing
-	// pin is proven to be theirs.
+	// pin is proven to be theirs. The preview refusal asks for a dismiss
+	// or a fix by hand, because no decision of this package changes the
+	// stored region fields.
 	ErrFieldsDisagree = errors.New("the stored region fields of the selected proposals disagree")
 	// ErrSharedKey reports an apply or reconcile selection with two or
 	// more proposals that share one pin key. A *SharedKeyError carries

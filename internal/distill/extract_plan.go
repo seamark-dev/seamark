@@ -24,6 +24,14 @@ import (
 // the batching, the prompt builder, the reply parser, the path
 // validation and the executor. The CLI keeps its own, wider selection
 // until a separate decision moves it to the console selection.
+//
+// The plan asks only eligible rows (extract_eligibility.go): a pending or
+// applied proposal with an open trigger question and at least one living
+// cited finding. An answered question is never asked again, because its
+// stored answer already closes it. The batches hold pending rows first,
+// then applied rows, each newest first, at most extractBatch rows per
+// batch. The order is fixed at plan time, so the review shows the exact
+// batches that a run sends.
 
 // ErrExtractRoot reports a plan without a workspace root. The existence
 // rung needs the root: without it no named path is verified, and every
