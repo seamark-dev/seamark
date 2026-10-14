@@ -99,6 +99,11 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   - A pin rule or region in the file that is longer than 256 characters
     opens read-only, and the form names the length. A long region also
     locks the scope rows.
+- **`seamark init` without `--client` names only the skill directories
+  that a bare `--skills` writes.** Its hint named `.agents/skills` in
+  every repository. A bare `--skills` writes `.agents/skills` only when
+  the repository has an `.agents/` directory. The hint now lists the
+  directories of this repository.
 - **A deletion that is not staged is no longer a parse error.** Git
   keeps a tracked path in its cached list after the file is deleted,
   until the deletion is staged. `seamark index` read such a path, failed,

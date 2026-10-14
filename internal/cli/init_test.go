@@ -672,7 +672,7 @@ func TestRunInitWithoutSkillsPrintsHint(t *testing.T) {
 
 	var b testWriter
 	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, "", false))
-	assert.Contains(t, b.String(), skillsHint)
+	assert.Contains(t, b.String(), skillsHint(root))
 	assert.NoDirExists(t, filepath.Join(root, ".claude", "skills"), "no flag, no install")
 
 	// Once skills are installed, a plain re-run reports them instead of
@@ -728,7 +728,33 @@ func TestRunInitWithoutSkillsNamesForeignDir(t *testing.T) {
 	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, "", false))
 
 	assert.Contains(t, b.String(), "skills  claude not installed, 1 not managed")
-	assert.NotContains(t, b.String(), skillsHint, "the hint would hide the directory init --skills will not touch")
+	assert.NotContains(t, b.String(), skillsHint(root), "the hint would hide the directory init --skills will not touch")
+}
+
+func TestRunInitWithoutSkillsHintNamesOnlyTheDirsABareSkillsWrites(t *testing.T) {
+	// A bare --skills writes .agents/skills only when .agents/ exists
+	// (skills.ModeAuto). The hint names the directories of this
+	// repository, so it never promises a directory the install skips.
+	root := t.TempDir()
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, "", false))
+	assert.Contains(t, b.String(), "adds the seamark agent skills (.claude/skills)\n")
+	assert.NotContains(t, b.String(), ".agents/skills")
+
+	// .codex/ marks a Codex configuration, not a skills directory, so
+	// it does not change the hint.
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
+
+	var codex testWriter
+	require.NoError(t, runInit(&codex, root, "/bin/seamark", gateModeWarn, false, "", false))
+	assert.NotContains(t, codex.String(), ".agents/skills")
+
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".agents"), 0o755))
+
+	var agents testWriter
+	require.NoError(t, runInit(&agents, root, "/bin/seamark", gateModeWarn, false, "", false))
+	assert.Contains(t, agents.String(), "adds the seamark agent skills (.claude/skills, .agents/skills)\n")
 }
 
 // allowRules reads permissions.allow from the fixture's settings file.

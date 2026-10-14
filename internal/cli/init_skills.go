@@ -14,9 +14,21 @@ import (
 // skillsHint is the one line init prints when --skills was not given
 // and no managed skill is installed. Skills stay opt-in until the
 // workflow evaluation decides otherwise, so init says how without
-// doing it.
-const skillsHint = "  skills  not installed — seamark init --skills adds the seamark agent skills " +
-	"(.claude/skills, .agents/skills)\n"
+// doing it. The line names the directories that a bare --skills
+// writes in this repository (skills.AutoTargets): .claude/skills
+// always, and .agents/skills only when .agents/ exists. A fixed list
+// named .agents/skills in every repository, which was false without
+// that directory.
+func skillsHint(root string) string {
+	var dirs []string
+
+	for _, t := range skills.AutoTargets(root) {
+		dirs = append(dirs, t.Dir)
+	}
+
+	return fmt.Sprintf("  skills  not installed — seamark init --skills adds the seamark agent skills (%s)\n",
+		strings.Join(dirs, ", "))
+}
 
 // reportInstalledSkills prints init's skills line when --skills was not
 // given: a summary of what is installed, so a plain re-run never claims
@@ -33,7 +45,7 @@ func reportInstalledSkills(w io.Writer, root string, reg *integration.Registry) 
 		return
 	}
 
-	fmt.Fprint(w, skillsHint)
+	fmt.Fprint(w, skillsHint(root))
 }
 
 // reportSelectedSkills is the skills line of a run with --client and
