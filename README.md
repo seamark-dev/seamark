@@ -20,6 +20,11 @@ it understand past decisions and find related files that may need updating.
   <a href="docs/getting-started.md"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg" alt="macOS and Linux"></a>
 </p>
 
+<p align="center">
+  <img src="assets/seamark-tui-lessons-pins.png" alt="The seamark tui console: Lessons › Pins shows an installed pin with its evidence, citations, outcome, and maintenance routes" width="900">
+</p>
+<p align="center"><em>The workspace console (<code>seamark tui</code>, experimental): an installed pin with its evidence, its outcome, and the routes to maintain it.</em></p>
+
 ## Why Seamark?
 
 You fix a bug. A reviewer explains the mistake. In the next session, your AI
@@ -55,22 +60,29 @@ brew install seamark-dev/tap/seamark
 seamark version
 ```
 
-Open a repository with Git history and choose **one** setup command:
+Open a repository with Git history and set up the AI coding agents you use:
 
 ```bash
 cd your-project
 
 # Claude Code
-seamark init --client claude --skills --approve-tools
+seamark init --client claude --approve-tools
 
 # Codex
-seamark init --client codex --skills --approve-tools
+seamark init --client codex --approve-tools
+
+# Both, in one run
+seamark init --client claude --client codex --approve-tools
 ```
 
-This connects Seamark's MCP tools, installs the three agent skills, and sets
-up lesson and command hooks. `--approve-tools` adds tool permissions while
-preserving existing restrictions. New repositories start with command checks
-in warn mode; they do not block commands. Existing policy settings are preserved.
+This connects Seamark's MCP tools and sets up lesson and command hooks.
+`--approve-tools` adds tool permissions while preserving existing
+restrictions; omit it if you prefer to approve each tool call yourself. New
+repositories start with command checks in warn mode; they do not block
+commands. Existing policy settings are preserved.
+
+The three [agent skills](#agent-skills) are optional. Add `--skills` to your
+setup command, now or later, to install them.
 
 Build the index and check the setup:
 
@@ -101,17 +113,19 @@ The learning workflow is simple:
 
 **Past fixes and reviews → proposed lessons → your review → reminders during edits.**
 
-Start with fixes from local Git history:
+Mine pull-request review comments and fix commits, then list the findings:
 
 ```bash
-seamark index --fixes-only
+seamark index --reviews
 seamark lessons --list
 ```
 
-To include GitHub pull-request review comments, use `seamark index --reviews`
-instead. That requires the GitHub CLI (`gh`) authenticated for the repository.
-A new repository or one with little relevant feedback may have few findings.
-You can also [write a lesson by hand](docs/lessons.md#tuning-what-surfaces-lessonsyaml).
+Review comments come from GitHub through the GitHub CLI (`gh`), authenticated
+for the repository. Without it, the run keeps the fix commits of local Git
+history and reports the reviews as skipped. To stay offline, use
+`seamark index --fixes-only` instead. A new repository or one with little
+relevant feedback may have few findings. You can also
+[write a lesson by hand](docs/lessons.md#tuning-what-surfaces-lessonsyaml).
 
 To turn findings into proposed lessons, Seamark can use your installed AI
 coding agent CLI. Claude Code is the default. For Codex, set `agent.cli: codex`
@@ -173,8 +187,9 @@ the planning skill tells it to check which other files usually change with
 them. This can reveal a generated client or another implementation that
 needs attention.
 
-The quick start installs the skills with `--skills`. They are optional, and
-small tasks such as typo fixes do not require a repository overview.
+Install them by adding `--skills` to your setup command, for example
+`seamark init --client claude --skills`. They are optional, and small tasks
+such as typo fixes do not require a repository overview.
 After upgrading Seamark, repeat your setup command to refresh managed copies.
 
 [Skill installation and customization →](skills/README.md)
