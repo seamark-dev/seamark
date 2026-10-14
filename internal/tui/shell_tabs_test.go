@@ -115,7 +115,7 @@ func TestShellHelpNamesThePhaseTwoCommands(t *testing.T) {
 
 	for _, c := range []string{
 		"seamark index --fixes-only", "seamark index --reviews", "seamark lessons --distill --dry-run",
-		".seamark/config.yaml  settings file",
+		".seamark/config.yaml  settings", ".seamark/lessons.yaml  pins, mutes, lesson delivery",
 	} {
 		assert.Contains(t, frame, c)
 	}

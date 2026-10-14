@@ -12,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -55,6 +56,11 @@ const (
 	statsRowW = 44
 )
 
+// statsMutes opens Settings › Lesson mutes from the line of the mined
+// lessons that no surface shows. A mute or the threshold hides them, and
+// the mutes group lists every mute of the file.
+var statsMutes = key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "lesson mutes"))
+
 // statsInfo is the info color of the bars. ToneUnknown carries the info
 // color; the bars use it for color only, not for an unknown state.
 const statsInfo = ui.ToneUnknown
@@ -80,23 +86,38 @@ func newStatsView(st *state) *statsView {
 // render clamps the scroll positions.
 func (s *statsView) update(msg tea.Msg) tea.Cmd {
 	if km, ok := msg.(tea.KeyMsg); ok && s.st.stats.loaded {
-		s.handleKey(km)
+		return s.handleKey(km)
 	}
 
 	return nil
 }
 
-// handleKey applies one key: tab changes the box, f changes the chart
-// period, and the movement keys scroll the focused box.
-func (s *statsView) handleKey(msg tea.KeyMsg) {
+// handleKey applies one key. tab changes the box, and f changes the
+// chart period. o opens the mutes while lessons are hidden. The movement
+// keys scroll the focused box.
+func (s *statsView) handleKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, ui.Nav.Next, ui.Nav.Prev):
 		s.focus = (s.focus + 1) % statsPaneCount
 	case key.Matches(msg, lesKeys.State):
 		s.period = (s.period + 1) % len(statsPeriods)
+	case key.Matches(msg, statsMutes) && s.hidden() > 0:
+		return navigate(destSettings, ovSettingsIntents[settings.GroupMutes])
 	default:
 		s.scroll[s.focus].Key(msg)
 	}
+
+	return nil
+}
+
+// hidden returns the number of mined lessons that the threshold or a
+// mute hides, or 0 while the counts are unknown.
+func (s *statsView) hidden() int {
+	if c := s.st.stats.value.Lessons; c != nil {
+		return c.Inactive
+	}
+
+	return 0
 }
 
 // days returns the chart window in days.
@@ -117,7 +138,15 @@ func (s *statsView) keys() []key.Binding {
 	scroll := ui.WithHelp(ui.Nav.Down, "↑↓", "scroll")
 	scroll.SetEnabled(s.scroll[s.focus].Scrolls())
 
-	return []key.Binding{ui.WithHelp(ui.Nav.Next, "tab", "pane"), period, scroll}
+	out := []key.Binding{ui.WithHelp(ui.Nav.Next, "tab", "pane"), period, scroll}
+
+	// The key shows only beside the line that it links, so a Stats
+	// screen without hidden lessons keeps its footer.
+	if s.hidden() > 0 {
+		out = append(out, statsMutes)
+	}
+
+	return out
 }
 
 // capturing is always false: Stats has no text input and no modal.
@@ -218,13 +247,17 @@ func (s *statsView) lessonLines(v lessonstats.Snapshot, w int) []string {
 		out = append(out, bars.row("review-mined", c.Mined, c.Active(), statsInfo),
 			bars.row("pins", c.Pins, c.Active(), statsInfo))
 
+		// The line links to the mutes group (contracts §4.3), because a
+		// mute is one of the two reasons.
+		link := " o opens Settings " + t.Glyphs.Arrow + " Lesson mutes."
+
 		switch {
 		case c.Inactive == 1:
 			out = append(out, propLines(t.Faint, "1 more mined lesson is below the threshold or muted, so no "+
-				"surface shows it.", w)...)
+				"surface shows it."+link, w)...)
 		case c.Inactive > 1:
 			out = append(out, propLines(t.Faint, strconv.Itoa(c.Inactive)+" more mined lessons are below the threshold "+
-				"or muted, so no surface shows them.", w)...)
+				"or muted, so no surface shows them."+link, w)...)
 		}
 	}
 

@@ -53,6 +53,24 @@ func TestMuteByRuleAndRegion(t *testing.T) {
 		"F541 muted by rule, E501 muted by region, RUF001 below threshold")
 }
 
+// TestBelowThresholdComparesOccurrencesWithTheThreshold covers finding
+// L5. BelowThreshold is the threshold half of SurfacesMined, and a lesson
+// at the threshold surfaces.
+func TestBelowThresholdComparesOccurrencesWithTheThreshold(t *testing.T) {
+	cfg := &Config{Threshold: 3}
+
+	assert.True(t, cfg.BelowThreshold(model.Lesson{Symptom: "E1", Occurrences: 2}))
+	assert.False(t, cfg.BelowThreshold(model.Lesson{Symptom: "E1", Occurrences: 3}), "a lesson at the threshold surfaces")
+	assert.False(t, cfg.BelowThreshold(model.Lesson{Symptom: "E1", Occurrences: 4}))
+
+	// A mute is the other half of SurfacesMined, not a part of this one.
+	muted := &Config{Threshold: 3, Mute: []MuteRule{{Rule: "E1"}}}
+	lesson := model.Lesson{Symptom: "E1", Occurrences: 5}
+
+	assert.False(t, muted.BelowThreshold(lesson))
+	assert.False(t, muted.SurfacesMined(lesson))
+}
+
 func TestThresholdOverride(t *testing.T) {
 	cfg := &Config{Threshold: 1} // surface even one-offs
 

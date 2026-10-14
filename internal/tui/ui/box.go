@@ -163,6 +163,12 @@ type ModalOpts struct {
 	// MinW is the narrowest modal on a wide terminal; 0 selects
 	// ModalMinW. A small terminal still gets a narrower modal.
 	MinW int
+	// Follow asks the modal to show the body lines Keep[0] to Keep[1],
+	// for example the cursor row of a form. Only the modal knows the
+	// height of its window, so a key handler sets Follow and the next
+	// render scrolls. A negative Keep[0] keeps the position.
+	Follow bool
+	Keep   [2]int
 }
 
 // modalWidth returns the outer width of a modal in a w-wide area.
@@ -214,6 +220,11 @@ func (t *Theme) Modal(o ModalOpts, sc *ScrollState, w, h int) string {
 	}
 
 	window := min(len(o.Body), max(1, h-modalMargin-2-len(tail)))
+
+	if o.Follow {
+		sc.Reveal(o.Keep[0], o.Keep[1], window)
+	}
+
 	from, to := sc.Fit(len(o.Body), window)
 	lines := append(append([]string{}, o.Body[from:to]...), tail...)
 

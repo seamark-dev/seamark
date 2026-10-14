@@ -1023,6 +1023,11 @@ func (m *maintModal) resultView(w int) ui.ModalOpts {
 	body := propNote(t, tone, lead, w)
 	body = append(body, "", t.Heading.Render("WHAT HAPPENED"))
 	body = append(body, propKV(t, m.resultFacts(o), w)...)
+
+	// The write landed, but the reload of the pins failed. The row
+	// says so; the commit never runs again (P4-18).
+	body = append(body, o.check.row(t, w)...)
+
 	body = append(body, "")
 	body = append(body, propLines(t.Faint, "Nothing is retried automatically.", w)...)
 
@@ -1037,7 +1042,7 @@ func (m *maintModal) refusalView(w int) ui.ModalOpts {
 	t := m.st.theme
 	o := m.out
 
-	body := propNote(t, ui.ToneAttention, maintRefusal(t, o.err), w)
+	body := propNote(t, ui.ToneAttention, maintRefusal(t, o.err, "preview", "Revise the selection and preview again."), w)
 	body = append(body, "")
 	body = append(body, propLines(t.Muted, "Details: "+ui.ErrText(o.err), w)...)
 
@@ -1067,18 +1072,24 @@ func (m *maintModal) refusalView(w int) ui.ModalOpts {
 }
 
 // maintRefusal maps a commit refusal to one sentence. Every refusal
-// means that nothing was written.
-func maintRefusal(t *ui.Theme, err error) string {
+// means that nothing was written. noun names what the user confirmed:
+// "preview" in maintenance, "review" for a pin. fix is the next step
+// after a plan that cannot be confirmed, or "". The maintenance commit
+// and the pin commit share it, so one refusal reads alike in both.
+func maintRefusal(t *ui.Theme, err error, noun, fix string) string {
 	switch {
 	case errors.Is(err, maintain.ErrStale):
-		return "Something changed since the preview" + propDash(t) + "preview again. Nothing was written."
+		return "Something changed since the " + noun + propDash(t) + noun + " again. Nothing was written."
 	case errors.Is(err, maintain.ErrWriteDisabled):
-		return "The preview was made while distill.write was off, so nothing was written. Only a new preview " +
-			"can authorize a write."
+		return "The " + noun + " was made while distill.write was off, so nothing was written. Only a new " + noun +
+			" can authorize a write."
 	case errors.Is(err, maintain.ErrNotConfirmable):
-		return "The preview cannot be confirmed, so nothing was written. Revise the selection and preview again."
+		return strings.TrimSpace("The " + noun + " cannot be confirmed, so nothing was written. " + fix)
 	case errors.Is(err, services.ErrBusy):
 		return "Another operation is running, so this one did not start."
+	case errors.Is(err, services.ErrForeignRoot):
+		return "The index records another repository root, so nothing was written. Build the index of this " +
+			"workspace in Overview, then " + noun + " again."
 	case errors.Is(err, services.ErrNoLedger), errors.Is(err, maintain.ErrNoLedger):
 		return "The index database is not readable, so nothing was changed."
 	default:

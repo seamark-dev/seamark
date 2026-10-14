@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
@@ -100,6 +101,41 @@ type helpKeyer interface {
 	helpKeys() []key.Binding
 }
 
+// draftHolder is an optional screen method. A screen with unsaved
+// drafts names the files that the drafts would change. A draft lives
+// only in the session, so the quit question names each file whose
+// draft a quit loses.
+type draftHolder interface {
+	// drafts returns the files of the unsaved drafts, relative to the
+	// workspace root, for example .seamark/lessons.yaml. nil means that
+	// the screen holds no draft.
+	drafts() []string
+	// discardDrafts drops every unsaved draft. The shell calls it when
+	// the console exits after the quit question.
+	discardDrafts()
+}
+
+// contextHelper is an optional screen method: the help of an open form,
+// review, sample or editor. Such a layer captures every key, so the
+// shell asks it before it gives ? to the screen. ok is false while a
+// text field has focus, because ? is then a typed character. ok is also
+// false when the open layer has no help of its own.
+type contextHelper interface {
+	contextHelp() (page helpPage, ok bool)
+}
+
+// helpPage is the help of one open layer. The help overlay shows it in
+// place of the key list of the destination, with the same scroll.
+type helpPage struct {
+	// title names the layer in the overlay title, for example "Pin form".
+	title string
+	// text holds the paragraphs that explain the layer. The overlay
+	// sanitizes and wraps them.
+	text []string
+	// keys are the keys of the layer, listed like the keys of a screen.
+	keys []key.Binding
+}
+
 // tabShortOrder is the order in which the tab labels abbreviate. The
 // longest label goes first, so the row keeps as many full names as it
 // can.
@@ -119,12 +155,18 @@ type model struct {
 	// helpOff is the first visible row of the help body. The help
 	// scrolls, because its key list does not fit a small terminal.
 	helpOff int
+	// page is the help of an open layer (contextHelper) while the help
+	// shows it; nil shows the help of the destination.
+	page *helpPage
 	// welcome is the first-run guide of a fresh workspace; nil hides it.
 	// The tabs fade and the banners stay away while it shows.
 	welcome     *firstRun
 	quitConfirm bool
 	quitAfter   bool
 	quitting    bool
+	// quitNamed holds the draft files that the running-work question
+	// named at its yes. The exit after the work drops only these drafts.
+	quitNamed []string
 
 	// exitBy is the deadline of a confirmed stop-and-exit; zero when no
 	// such exit waits. exitSeq drops the timer of an exit that the user
@@ -211,7 +253,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		cmd := m.broadcast(msg)
 
-		return m, cmd
+		return m, tea.Batch(cmd, m.st.checkRefresh(msg))
 
 	case freshMsg:
 		if msg.err != nil {
@@ -263,13 +305,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// The running-work question ends with the work. The dialog
 		// closes, so the result of the work becomes visible. A later
-		// quit asks again when a Settings draft remains.
+		// quit asks again when a draft remains (draftHolder).
 		m.quitConfirm = false
 
-		if m.quitAfter {
-			m.quitting = true
+		if m.quitAfter && !m.draftsAfterYes() {
+			cmd := m.exit()
 
-			return m, tea.Quit
+			return m, cmd
+		}
+
+		// A draft that started after the yes was never named, so the
+		// exit must not drop it. The draft question asks instead.
+		if m.quitAfter {
+			m.cancelExit()
+			m.quitConfirm = true
 		}
 
 		cmd := m.broadcast(msg)
@@ -280,9 +329,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The stopped work did not end in time. The console exits now;
 		// Run spends the rest of the same budget on the wait.
 		if m.exitSeq.current(msg.seq) && m.quitAfter {
-			m.quitting = true
+			cmd := m.exit()
 
-			return m, tea.Quit
+			return m, cmd
 		}
 
 		return m, nil
@@ -341,7 +390,7 @@ func (m *model) tickCmd() tea.Cmd {
 // a leave guard can keep the user on it; the help closes either way, so
 // the question of the guard is visible.
 func (m *model) goTo(dest destination, intent string) tea.Cmd {
-	m.help = false
+	m.closeHelp()
 
 	if dest != m.active {
 		if g, ok := m.screens[m.active].(leaveGuard); ok {
@@ -384,8 +433,14 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.welcomeKey(msg)
 	}
 
+	// A capturing screen gets every key. Only its ? can open the help of
+	// its open layer, while no text field has focus (contextHelper).
 	scr := m.screens[m.active]
 	if scr.capturing() {
+		if key.Matches(msg, gkeys.Help) && m.openContextHelp(scr) {
+			return nil
+		}
+
 		return scr.update(msg)
 	}
 
@@ -416,16 +471,23 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 // requestQuit quits at once when idle. While a mutation runs it asks
 // first: most work cannot stop safely, and stoppable work needs a stop
-// before the exit. An unsaved Settings draft also asks first, because
-// the quit discards it. The running work takes precedence: its question
-// then also names the draft.
+// before the exit. An unsaved draft of any screen also asks first,
+// because the quit discards it (draftHolder). The running work takes
+// precedence: its question then also names the drafts.
 func (m *model) requestQuit() tea.Cmd {
-	if m.st.busy() || m.settingsDrafts() != "" {
+	if m.st.busy() || len(m.draftFiles()) > 0 {
 		m.quitConfirm = true
 
 		return nil
 	}
 
+	return m.exit()
+}
+
+// exit ends the console. It drops every draft first, as the quit
+// question says, so no screen keeps a draft after the exit decision.
+func (m *model) exit() tea.Cmd {
+	m.discardDrafts()
 	m.quitting = true
 
 	return tea.Quit
@@ -446,12 +508,11 @@ func (m *model) quitDialogKey(msg tea.KeyMsg) tea.Cmd {
 		m.quitConfirm = false
 
 		if !m.st.busy() {
-			m.quitting = true
-
-			return tea.Quit
+			return m.exit()
 		}
 
 		m.quitAfter = true
+		m.quitNamed = m.draftFiles()
 
 		if m.st.requestStop() {
 			note := toast(ui.ToneAttention, "Stopping the running work. Seamark exits when it ends.")
@@ -473,24 +534,25 @@ func (m *model) quitDialogKey(msg tea.KeyMsg) tea.Cmd {
 		// A requested stop stays in effect, because the work cannot
 		// continue safely after a cancel. esc cancels only the exit.
 		m.quitConfirm = false
-		m.quitAfter = false
-		m.exitBy = time.Time{}
-		m.exitSeq.cancel()
+		m.cancelExit()
 	}
 
 	return nil
 }
 
-// settingsDrafts names the unsaved drafts of the Settings groups, for
-// example "Inference has 1 unsaved change: agent.cli.", or returns ""
-// when no group holds a draft.
-func (m *model) settingsDrafts() string {
-	s, ok := m.screens[destSettings].(*settingsScreen)
-	if !ok || s.draftTotal() == 0 {
-		return ""
-	}
+// cancelExit forgets a latched exit and its wait.
+func (m *model) cancelExit() {
+	m.quitAfter = false
+	m.quitNamed = nil
+	m.exitBy = time.Time{}
+	m.exitSeq.cancel()
+}
 
-	return s.leaveText()
+// draftsAfterYes reports a draft file that the running-work question
+// did not name at its yes. The question names files, so a new draft of a
+// named file counts as named.
+func (m *model) draftsAfterYes() bool {
+	return slices.ContainsFunc(m.draftFiles(), func(f string) bool { return !slices.Contains(m.quitNamed, f) })
 }
 
 // cramped reports a known terminal size below the supported minimum.
@@ -515,28 +577,55 @@ func (m *model) crampedKey(msg tea.KeyMsg) tea.Cmd {
 		return m.requestQuit()
 	case key.Matches(msg, gkeys.Help):
 		if m.help {
-			m.help = false
+			m.closeHelp()
 		} else {
 			m.openHelp()
 		}
 	case m.help && key.Matches(msg, ui.Nav.Back):
-		m.help = false
+		m.closeHelp()
 	}
 
 	return nil
 }
 
-// openHelp shows the help overlay from its first row.
+// openHelp shows the help overlay of the destination from its first row.
 func (m *model) openHelp() {
 	m.help = true
 	m.helpOff = 0
+	m.page = nil
+}
+
+// openContextHelp shows the help of the open layer of scr and reports
+// whether the layer has one. The layer keeps its state, so esc on the
+// help returns to it unchanged.
+func (m *model) openContextHelp(scr screen) bool {
+	ch, ok := scr.(contextHelper)
+	if !ok {
+		return false
+	}
+
+	page, ok := ch.contextHelp()
+	if !ok {
+		return false
+	}
+
+	m.openHelp()
+	m.page = &page
+
+	return true
+}
+
+// closeHelp hides the help overlay and forgets the help of a layer.
+func (m *model) closeHelp() {
+	m.help = false
+	m.page = nil
 }
 
 // helpKey scrolls or closes the help overlay. The offset is clamped
 // before and after the move, so a resize never leaves it out of range.
 func (m *model) helpKey(msg tea.KeyMsg) tea.Cmd {
 	if key.Matches(msg, ui.Nav.Back, gkeys.Help, gkeys.Quit, ui.Nav.Enter) {
-		m.help = false
+		m.closeHelp()
 
 		return nil
 	}
@@ -971,6 +1060,23 @@ func (m *model) footer(w int) string {
 	// all. Other footers have no n/a entry and always keep the clock.
 	if !kept && clock != "" {
 		if line, ok := m.footerHints(local, w-ui.Width(right)-5); ok {
+			left, clock, kept = line, "", true
+		}
+	}
+
+	// When even that line cuts an n/a entry, the hints at the end show
+	// by their keys alone, so no key leaves the footer. "? help" names
+	// each action.
+	if !kept {
+		if line, ok := m.footerKeys(local, w-ui.Width(right)-5); ok {
+			left, clock, kept = line, "", true
+		}
+	}
+
+	// At the minimum width not even the keys alone fit. The n/a entries
+	// still stay in view, and the keys that work give way from the end.
+	if !kept {
+		if line, ok := m.footerUnavailableKeys(local, w-ui.Width(right)-5); ok {
 			left, clock = line, ""
 		}
 	}
@@ -989,15 +1095,9 @@ func (m *model) footer(w int) string {
 func (m *model) footerHints(bindings []key.Binding, room int) (line string, kept bool) {
 	t := m.st.theme
 
-	var shown []key.Binding
-
 	// An unavailable entry is a hint too, so a cut can end inside its
 	// n/a group.
-	for _, b := range bindings {
-		if ui.Listed(b) {
-			shown = append(shown, b)
-		}
-	}
+	shown := listedHints(bindings)
 
 	if line := t.Hints(shown); ui.Width(line) <= room {
 		return line, true
@@ -1023,6 +1123,75 @@ func (m *model) footerHints(bindings []key.Binding, room int) (line string, kept
 	}
 
 	return "", kept
+}
+
+// footerKeys renders a leading part of the hints with their actions and
+// the rest by their keys alone. It keeps the longest leading part that
+// fits room, so every key stays in view. It never splits an n/a group,
+// because one group reads as one state. ok is false when not even the
+// keys fit.
+func (m *model) footerKeys(bindings []key.Binding, room int) (line string, ok bool) {
+	t := m.st.theme
+	shown := listedHints(bindings)
+
+	for n := len(shown) - 1; n >= 0; n-- {
+		if n > 0 && ui.IsUnavailable(shown[n-1]) && ui.IsUnavailable(shown[n]) {
+			continue
+		}
+
+		line = t.KeyHints(shown[n:])
+		if n > 0 {
+			line = t.ShortHints(shown[:n]) + "   " + line
+		}
+
+		if ui.Width(line) <= room {
+			return line, true
+		}
+	}
+
+	return "", false
+}
+
+// footerUnavailableKeys renders every hint by its key alone. It removes
+// the hints of the keys that work, from the end, until the line fits
+// room. Every n/a entry stays (user decision of 2026-10-04: "Always
+// list, mark unavailable"). The line has no ellipsis, because at the
+// minimum width its cells would cost a key that must stay. "? help" at
+// the right names every key. ok is false when the n/a entries alone do
+// not fit.
+func (m *model) footerUnavailableKeys(bindings []key.Binding, room int) (line string, ok bool) {
+	t := m.st.theme
+	shown := listedHints(bindings)
+
+	for {
+		if line := t.KeyHints(shown); ui.Width(line) <= room {
+			return line, true
+		}
+
+		i := len(shown) - 1
+		for i >= 0 && ui.IsUnavailable(shown[i]) {
+			i--
+		}
+
+		if i < 0 {
+			return "", false
+		}
+
+		shown = slices.Delete(shown, i, i+1)
+	}
+}
+
+// listedHints returns the bindings that a footer lists.
+func listedHints(bindings []key.Binding) []key.Binding {
+	var shown []key.Binding
+
+	for _, b := range bindings {
+		if ui.Listed(b) {
+			shown = append(shown, b)
+		}
+	}
+
+	return shown
 }
 
 // tooSmall replaces the console below the minimum size. It shows only
@@ -1110,11 +1279,16 @@ func (m *model) helpView(w, h int) string {
 		foot = t.RangeNote(off, min(len(rows), off+window), len(rows))
 	}
 
+	title := "Keys"
+	if m.page != nil {
+		title = ui.OneLine(m.page.title)
+	}
+
 	// The modal fits its content, so a short key list leaves no blank
 	// band inside the border.
 	return t.Box(ui.BoxOpts{
 		W: bw, H: min(bh, window+2), Focus: true, Fill: true, Lines: rows[off:min(len(rows), off+window)],
-		Title: t.TabActive.Render("Keys"), Right: t.Muted.Render("? or esc to close"), Foot: foot,
+		Title: t.TabActive.Render(title), Right: t.Muted.Render("? or esc to close"), Foot: foot,
 	})
 }
 
@@ -1124,11 +1298,31 @@ func (m *model) helpBox(w, h int) (bw, bh int) {
 }
 
 // helpLayout returns the help body as display lines and the number of
-// lines the modal shows at once.
+// lines the modal shows at once. The body is the help of an open layer
+// (page), or the keys of the console.
 func (m *model) helpLayout(w, h int) (rows []string, window int) {
-	t := m.st.theme
 	bw, bh := m.helpBox(w, h)
 	inner := ui.BoxInner(bw)
+
+	if m.page != nil {
+		rows = m.pageRows(inner)
+	} else {
+		rows = m.keyRows(inner)
+	}
+
+	window = max(1, ui.BoxRows(bh))
+
+	return rows, min(window, len(rows))
+}
+
+// helpEntries renders the listed bindings of a group, one per row. The
+// keys that work come first. The unavailable entries follow under one
+// faint label row that explains the word n/a. Each unavailable row also
+// has the word after its key ("w n/a"). NO_COLOR removes the faint
+// style, and the help scrolls past the label row. So only the word on
+// the row itself tells that the key does not act now.
+func (m *model) helpEntries(bindings []key.Binding) []string {
+	t := m.st.theme
 
 	// keyCell pads a key label to the key column. A label can be wider
 	// than the column, so one space always stays before the action.
@@ -1138,37 +1332,64 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 		return ui.PadRight(label, max(helpKeyW, ui.Width(label)+1))
 	}
 
-	// entries renders the listed bindings of a group, one per row. The
-	// keys that work come first. The unavailable entries follow under
-	// one faint label row that explains the word n/a. Each unavailable
-	// row also has the word after its key ("w n/a"). NO_COLOR removes the
-	// faint style, and the help scrolls past the label row, so only the
-	// word on the row itself tells that the key does not act now.
-	entries := func(bindings []key.Binding) []string {
-		var on, off []string
+	var on, off []string
 
-		for _, b := range bindings {
-			if !ui.Listed(b) {
-				continue
-			}
-
-			hp := b.Help()
-
-			if ui.IsUnavailable(b) {
-				off = append(off, t.Faint.Render(keyCell(hp.Key+" "+ui.UnavailableWord)+hp.Desc))
-
-				continue
-			}
-
-			on = append(on, t.Key.Render(keyCell(hp.Key))+t.Muted.Render(hp.Desc))
+	for _, b := range bindings {
+		if !ui.Listed(b) {
+			continue
 		}
 
-		if len(off) == 0 {
-			return on
+		hp := b.Help()
+
+		if ui.IsUnavailable(b) {
+			off = append(off, t.Faint.Render(keyCell(hp.Key+" "+ui.UnavailableWord)+hp.Desc))
+
+			continue
 		}
 
-		return append(append(on, t.Faint.Render(ui.UnavailableWord+": not available now")), off...)
+		on = append(on, t.Key.Render(keyCell(hp.Key))+t.Muted.Render(hp.Desc))
 	}
+
+	if len(off) == 0 {
+		return on
+	}
+
+	return append(append(on, t.Faint.Render(ui.UnavailableWord+": not available now")), off...)
+}
+
+// pageRows renders the help of an open layer in inner cells: its
+// paragraphs, then its keys. The text can quote a value of a file, so
+// it goes through the sanitizer.
+func (m *model) pageRows(inner int) []string {
+	t := m.st.theme
+
+	var rows []string
+
+	for i, p := range m.page.text {
+		if i > 0 {
+			rows = append(rows, "")
+		}
+
+		rows = append(rows, strings.Split(t.Body.Render(ui.Wrap(ui.MultiLine(p), inner)), "\n")...)
+	}
+
+	if keys := m.helpEntries(m.page.keys); len(keys) > 0 {
+		if len(rows) > 0 {
+			rows = append(rows, "")
+		}
+
+		rows = append(rows, t.Heading.Render("KEYS"))
+		rows = append(rows, keys...)
+	}
+
+	return rows
+}
+
+// keyRows renders the keys of the console in inner cells. It shows the
+// global keys, the movement keys and the keys of the destination. Then
+// it shows the plain commands and the files that hold the settings.
+func (m *model) keyRows(inner int) []string {
+	t := m.st.theme
 
 	scr := m.screens[m.active]
 
@@ -1188,17 +1409,19 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 		title string
 		rows  []string
 	}{
-		{"GLOBAL", entries([]key.Binding{
+		{"GLOBAL", m.helpEntries([]key.Binding{
 			ui.WithHelp(gkeys.Overview, "1–5", "jump to tab"), ui.WithHelp(ui.Nav.Next, "tab", "switch pane"),
 			gkeys.Refresh, ui.WithHelp(gkeys.Help, "?", "this help"), gkeys.Quit,
 		})},
-		{"MOVE", entries([]key.Binding{
+		{"MOVE", m.helpEntries([]key.Binding{
 			ui.WithHelp(ui.Nav.Down, moveKeys, "move"), ui.WithHelp(ui.Nav.Top, "g  G", "top / bottom"),
 			ui.WithHelp(ui.Nav.Enter, "enter", "open"), ui.WithHelp(ui.Nav.Back, "esc", "back / close"),
 			ui.WithHelp(ui.Nav.PageDown, "pgup pgdn", "scroll detail"),
 		})},
-		{strings.ToUpper(scr.title()), entries(screenKeys)},
+		{strings.ToUpper(scr.title()), m.helpEntries(screenKeys)},
 	}
+
+	var rows []string
 
 	if inner >= 3*helpColW {
 		// Three columns, as in the 1a design.
@@ -1242,16 +1465,15 @@ func (m *model) helpLayout(w, h int) (rows []string, window int) {
 	rows = append(rows, "", t.Heading.Render("PLAIN COMMANDS"))
 	rows = append(rows, helpCommandRows(t, inner)...)
 
-	// The settings live in one file. The help names it, because an
-	// editor is the route for every key that Settings does not show.
-	rows = append(rows, commandText(t, settingsFile)+"  "+t.Faint.Render("settings file"),
+	// The settings live in two files. The help names both, because an
+	// editor is the route for every key that the console does not show.
+	rows = append(rows, commandText(t, settingsFile)+"  "+t.Faint.Render("settings"),
+		commandText(t, pinfile.File)+"  "+t.Faint.Render("pins, mutes, lesson delivery"),
 		"", t.Rule.Render(strings.Repeat(t.Glyphs.RuleLight, inner)))
 	rows = append(rows, strings.Split(t.Faint.Render(ui.Wrap("Every key that writes a file asks first. "+
 		"Nothing changes before you confirm with y.", inner)), "\n")...)
 
-	window = max(1, ui.BoxRows(bh))
-
-	return rows, min(window, len(rows))
+	return rows
 }
 
 // helpCommands are the plain routes of the console actions, in reading

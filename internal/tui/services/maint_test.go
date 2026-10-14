@@ -292,24 +292,13 @@ func TestEngineRefusesAMaintenanceCommitForAnotherRepositoryRoot(t *testing.T) {
 	before := servicestest.Tree(t, ws.Root)
 
 	res, err := e.CommitMaintenance(plan)
-	require.ErrorIs(t, err, errForeignRoot)
+	require.ErrorIs(t, err, ErrForeignRoot)
 	assert.Contains(t, err.Error(), other)
 	assert.False(t, res.FileWritten)
 	assert.Equal(t, before, servicestest.Tree(t, ws.Root), "the refusal writes nothing")
 	engUnlocked(t, e)
 
 	_, err = e.CommitRecovery(plan)
-	require.ErrorIs(t, err, errForeignRoot, "a recovery completion is refused the same way")
+	require.ErrorIs(t, err, ErrForeignRoot, "a recovery completion is refused the same way")
 	engUnlocked(t, e)
-}
-
-func TestSameDirAcceptsALinkToTheSameDirectory(t *testing.T) {
-	dir := t.TempDir()
-	link := filepath.Join(t.TempDir(), "link")
-	require.NoError(t, os.Symlink(dir, link))
-
-	assert.True(t, sameDir(dir, dir+"/"))
-	assert.True(t, sameDir(link, dir), "a link spelling names the same directory")
-	assert.False(t, sameDir(dir, t.TempDir()))
-	assert.False(t, sameDir(dir, filepath.Join(dir, "missing")))
 }

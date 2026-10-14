@@ -126,6 +126,9 @@ const (
 	reasonCurrent     = "regions already current"
 	reasonRetirement  = "no retained equivalent is established; this is a deliberate retirement"
 	reasonLedgerFixes = "resolve it in .seamark/lessons.yaml or in the ledger first"
+	// routeByHand is the manual route. The maintenance and the authoring
+	// reasons both end with it, so one route has one text.
+	routeByHand = "edit .seamark/lessons.yaml by hand"
 )
 
 // reasonNotPreview is the reason of every reading that a plan does not
@@ -324,13 +327,13 @@ func (pl *planner) blocked(p Pin) string {
 
 		return reason
 	case link == pinfile.LinkNoProposal:
-		return link.Reason() + "; the console changes only proposal-linked pins (edit .seamark/lessons.yaml by hand)"
+		return link.Reason() + "; the console changes only proposal-linked pins (" + routeByHand + ")"
 	case link == pinfile.LinkPendingMatch:
 		return link.Reason() + " (Proposals › c)"
 	case link != pinfile.LinkLinked:
 		return link.Reason() + "; " + reasonLedgerFixes
 	case p.Entry.Block != "":
-		return "cannot edit this entry safely: " + p.Entry.Block + "; edit .seamark/lessons.yaml by hand"
+		return "cannot edit this entry safely: " + p.Entry.Block + "; " + routeByHand
 	}
 
 	return ""
@@ -501,12 +504,8 @@ func (pl *planner) kept() {
 func (pl *planner) finish() {
 	p := pl.plan
 
-	switch {
-	case p.GateErr != nil:
-		p.Blocked = append(p.Blocked, "distill.write cannot be read; fix .seamark/config.yaml first")
-	case !p.Write:
-		p.Blocked = append(p.Blocked, "distill.write is off: this preview changes nothing; turn on "+
-			"Settings › Pin writing and preview again")
+	if b := gateBlocker(p.Write, p.GateErr); b != nil {
+		p.Blocked = append(p.Blocked, b.String())
 	}
 
 	if p.FileBlock != "" {
@@ -555,8 +554,12 @@ func (pl *planner) notes() []string {
 			"a superseded proposal is history; the console does not restore it")
 	}
 
-	return append(notes, "the diff hides text that looks like a secret; the file gets the exact bytes")
+	return append(notes, noteRedacted)
 }
+
+// noteRedacted says that the display diff differs from the written
+// bytes. The maintenance and the authoring previews both show it.
+const noteRedacted = "the diff hides text that looks like a secret; the file gets the exact bytes"
 
 // evidenceDigest hashes the inputs of every scope advice of a plan and
 // the index run that the advice read.

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/seamark-dev/seamark/internal/distill"
+	"github.com/seamark-dev/seamark/internal/doctor"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
@@ -453,4 +455,84 @@ func TestLessonsGateOffApplyNamesTheSettingsRoute(t *testing.T) {
 	text := lesModalText(t, h)
 	assert.Contains(t, text, "turn on distill.write in Settings › Pin writing (5), then press a again for a new preview")
 	assert.NotContains(t, text, "refresh with r", "every a reads the gate again")
+}
+
+// TestApplyReloadsDoctorAndEvidence checks that an apply, which writes
+// lessons.yaml, reloads Doctor and the evidence view, as every pin write
+// does (propRefreshOf, pinWriteRefresh). A first apply can create the
+// pin file, and Doctor checks that file only when it exists. r in a
+// result with a failed reload reads the same sources.
+func TestApplyReloadsDoctorAndEvidence(t *testing.T) {
+	f := pendingLedgerFake()
+	fresh := &doctor.Report{}
+	f.commitDecision = func(pv *proposals.Preview) (proposals.Result, error) {
+		f.doctor = fresh
+
+		return proposals.Result{Action: pv.Action, FileWritten: true, Moved: []int64{1}}, nil
+	}
+
+	h := lesOpen(t, f, 120, 40)
+	good := f.pins
+
+	h.press("space", "a")
+
+	learning := f.readCount("Learning")
+	f.pins = pinsDocErr()
+
+	h.press("y")
+	require.Equal(t, 1, f.callCount("CommitDecision:apply"))
+	require.Contains(t, lesModalText(t, h), refreshFailedRow)
+	assert.Same(t, fresh, h.m.st.doctor.value, "the apply reads Doctor again")
+	assert.Greater(t, f.readCount("Learning"), learning, "the apply reads the evidence again")
+
+	f.pins = good
+	again := &doctor.Report{}
+	f.doctor = again
+	learning = f.readCount("Learning")
+
+	h.press("r")
+	assert.NotContains(t, lesModalText(t, h), refreshFailedRow, "the read succeeds")
+	assert.Same(t, again, h.m.st.doctor.value, "r reads Doctor again")
+	assert.Greater(t, f.readCount("Learning"), learning, "r reads the evidence again")
+	assert.Equal(t, 1, f.callCount("CommitDecision:apply"), "r never applies again")
+}
+
+// TestApplyPlainReloadReadsDoctorAndEvidence checks the reload of an
+// apply that has no watched reload: a refusal, and a write with a file
+// error (Y-2 of the gate 7 recheck). Each one still reads the sources of
+// every pin write (propRefreshOf), because neither outcome proves that
+// the state stayed the same.
+func TestApplyPlainReloadReadsDoctorAndEvidence(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		res  proposals.Result
+		err  error
+	}{
+		{"refused", proposals.Result{Action: proposals.ActionApply},
+			fmt.Errorf("%w: p1 changed", proposals.ErrStale)},
+		{"file error", proposals.Result{Action: proposals.ActionApply, FileWritten: true,
+			FileErr: errors.New("readback failed")}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := pendingLedgerFake()
+			fresh := &doctor.Report{}
+			f.commitDecision = func(*proposals.Preview) (proposals.Result, error) {
+				f.doctor = fresh
+
+				return c.res, c.err
+			}
+
+			h := lesOpen(t, f, 120, 40)
+			h.press("space", "a")
+
+			learning := f.readCount("Learning")
+
+			h.press("y")
+			require.Equal(t, 1, f.callCount("CommitDecision:apply"))
+			require.NotNil(t, lesProps(h).dec)
+			assert.Nil(t, lesProps(h).dec.check, "the outcome takes the plain reload, not the watched one")
+			assert.Same(t, fresh, h.m.st.doctor.value, "the apply reads Doctor again")
+			assert.Greater(t, f.readCount("Learning"), learning, "the apply reads the evidence again")
+		})
+	}
 }

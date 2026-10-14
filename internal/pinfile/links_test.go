@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
 // row returns a proposal row with the given region fields.
@@ -64,6 +65,31 @@ func TestFieldsAgreeNamesTheRowsWhosePinHasAnotherKey(t *testing.T) {
 		row(1, "", "r", "api", []string{"/"}, ""),
 	} {
 		assert.False(t, FieldsAgree(p), "%q %q", p.Region, p.Regions)
+	}
+}
+
+// TestRenderedKeyReadsTheRegionSetOfTheRow covers finding L5. The key
+// is the rule and model.Proposal.RegionSet, the set that RenderPins
+// writes. For a row whose fields disagree, it differs from ProposalKey.
+func TestRenderedKeyReadsTheRegionSetOfTheRow(t *testing.T) {
+	cases := []struct {
+		name  string
+		p     model.Proposal
+		want  reviews.PinKey
+		agree bool
+	}{
+		{"one region", row(1, "", "R", "api/", nil, ""), reviews.PinKey{Rule: "r", Region: "api"}, true},
+		{"a region set", row(1, "", "r", "api", []string{"db", "api"}, ""), reviews.PinKey{Rule: "r", Region: "api\x00db"}, true},
+		{"repository-wide", row(1, "", "r", "*", nil, ""), reviews.PinKey{Rule: "r", Region: "*"}, true},
+		{"a region outside the set", row(1, "", "r", "x", []string{"a", "b"}, ""), reviews.PinKey{Rule: "r", Region: "a\x00b"}, false},
+		{"a star in the set", row(1, "", "r", "api", []string{"*", "db"}, ""), reviews.PinKey{Rule: "r", Region: "*"}, false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, RenderedKey(c.p))
+			assert.Equal(t, c.agree, RenderedKey(c.p) == reviews.ProposalKey(c.p))
+		})
 	}
 }
 

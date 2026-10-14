@@ -23,6 +23,89 @@ func sectionBlock(t *ui.Theme, title, body string) string {
 	return t.Heading.Render(strings.ToUpper(title)) + "\n" + body
 }
 
+// formRow renders one field row of a form with a cursor column. The
+// cursor row has the cursor glyph, a bold label and the selection
+// background; any other row has a muted label. labelW is the label
+// column of the form. The distillation scope form, the pin form and the
+// selection sample share it, so every form marks the cursor row alike.
+// The rows with a cursor go through formRows.
+func formRow(t *ui.Theme, cursor bool, label string, labelW int, value string, w int) string {
+	if cursor {
+		line := t.Key.Render(t.Glyphs.Cursor) + " " + t.Title.Render(ui.PadRight(label, labelW)) + value
+
+		return t.Highlight(line, w, ui.BgSel)
+	}
+
+	return "  " + t.Muted.Render(ui.PadRight(label, labelW)) + value
+}
+
+// pathInput returns the input of one repository path: a region of the
+// pin form or a path of the selection sample. It refuses a paste of
+// several lines and an input past the limit with a notice, so a path
+// never changes silently.
+func pathInput() ui.LineInput {
+	return ui.LineInput{Placeholder: "path, for example internal/api", RefuseMultiline: true, RefuseOverLimit: true}
+}
+
+// keepRowValue puts the typed value of a row input into list, for the
+// regions of the pin form and the paths of the selection sample. at is
+// the row that the input replaces, or -1 for a new row. An empty value
+// removes row at, and an empty new value adds nothing. The value stays
+// as typed. added is the index of a new row, else -1, so the caller can
+// put the cursor on it.
+func keepRowValue(list []string, at int, typed string) (out []string, added int) {
+	empty := strings.TrimSpace(typed) == ""
+
+	switch {
+	case empty && at >= 0:
+		return slices.Delete(list, at, at+1), -1
+	case empty:
+		return list, -1
+	case at >= 0:
+		list[at] = typed
+
+		return list, -1
+	}
+
+	return append(list, typed), len(list)
+}
+
+// formRows collects the rows of a form with the cursor column of
+// formRow. The distillation scope form, the pin form and the selection
+// sample share it, so their rows wrap alike and a short box keeps the
+// cursor row alike.
+type formRows struct {
+	t      *ui.Theme
+	labelW int
+	w      int
+	// cursor is the row that has the cursor.
+	cursor int
+	// lines holds the rendered lines. keep is the line range of the
+	// cursor row, so a short box can keep that row in view.
+	lines []string
+	keep  [2]int
+}
+
+// add renders row r. The first line holds the label and the first value
+// line. The other value lines and the notes go under the value column.
+func (f *formRows) add(r int, label string, value, notes []string) {
+	if r == f.cursor {
+		f.keep = [2]int{len(f.lines), len(f.lines) + len(value) + len(notes) - 1}
+	}
+
+	f.lines = append(f.lines, formRow(f.t, r == f.cursor, label, f.labelW, value[0], f.w))
+
+	pad := strings.Repeat(" ", 2+f.labelW)
+
+	for _, v := range value[1:] {
+		f.lines = append(f.lines, pad+v)
+	}
+
+	for _, n := range notes {
+		f.lines = append(f.lines, pad+n)
+	}
+}
+
 // kv renders aligned label and value rows. Values wrap under their own
 // column, so long paths stay readable.
 func kv(t *ui.Theme, rows [][2]string, w int) string {
@@ -489,6 +572,17 @@ func joinNote(a, b string) string {
 	default:
 		return a + ", " + b
 	}
+}
+
+// joinWords joins words as a list for a sentence: "a", "a and b", or
+// "a, b and c". Every prose list of the console uses it, so the lists
+// read alike.
+func joinWords(words []string) string {
+	if len(words) < 2 {
+		return strings.Join(words, "")
+	}
+
+	return strings.Join(words[:len(words)-1], ", ") + " and " + words[len(words)-1]
 }
 
 // activityLines renders the last keep diagnostic lines, each redacted,

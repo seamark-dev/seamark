@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -69,6 +70,9 @@ type maintOutcome struct {
 	err error
 	// recovery is true for the outcome of a ledger-only completion.
 	recovery bool
+	// check watches the reload after a file write that landed; nil for
+	// every other outcome. The result shows its failure (P4-18).
+	check *refreshCheck
 }
 
 // maintModal is the preview of one retarget or prune request. The Pins
@@ -249,9 +253,17 @@ func (m *maintModal) previewKey(msg tea.KeyMsg) tea.Cmd {
 
 // resultKey handles the result. c previews the offered recovery. enter
 // builds a new preview after a refusal; it never repeats the commit.
-// esc closes, which drops an offered recovery.
+// esc closes, which drops an offered recovery. r reads the sources of
+// the commit again (pinWriteRefresh) while the result shows a failed
+// reload (state.readAgain).
 func (m *maintModal) resultKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
+	case key.Matches(msg, gkeys.Refresh) && m.out != nil && m.out.check.shows():
+		var cmd tea.Cmd
+
+		m.out.check, cmd = m.st.readAgain(m.out.check, pinWriteRefresh...)
+
+		return cmd
 	case key.Matches(msg, maintKeys.Complete):
 		if m.offer != nil {
 			return m.prepareRecovery()
@@ -347,12 +359,21 @@ func maintWorkName(p *maintain.Plan, recovering bool) string {
 }
 
 // committed shows a commit outcome. It always frees the mutation slot
-// and reads the pins, the ledger and the statistics again, because a
-// refusal also means that the state changed. A committing preview never
-// closes, so the outcome always reaches the preview that started it.
+// and reads the sources of pinWriteRefresh again, because a refusal
+// also means that the state changed. A committing preview never closes,
+// so the outcome always reaches the preview that started it.
+//
+// A file write that landed, or that the readback could not check, tells
+// every other preview of lessons.yaml (P4-12). A restored file holds
+// the old bytes again, so it tells nobody. A write that landed without
+// an error also watches the reload, so the result can say that reading
+// the file again failed (P4-18).
 func (m *maintModal) committed(msg maintCommittedMsg) tea.Cmd {
+	reload := refresh(pinWriteRefresh...)
+
 	if msg.m == m && m.commitDone() {
-		m.out = &maintOutcome{plan: msg.plan, res: msg.res, err: msg.err, recovery: m.recovering}
+		out := &maintOutcome{plan: msg.plan, res: msg.res, err: msg.err, recovery: m.recovering}
+		m.out = out
 
 		// A refused completion wrote nothing, so its proof can still
 		// hold. Every other outcome replaces the offer.
@@ -361,11 +382,21 @@ func (m *maintModal) committed(msg maintCommittedMsg) tea.Cmd {
 		}
 
 		m.recovering = false
+
+		if msg.err == nil && msg.res.FileWritten && msg.res.FileErr == nil && !msg.res.Restored {
+			shown := func() bool { return m.stage == flowResult && m.out == out }
+			out.check, reload = m.st.watchRefresh(pinfile.File, shown, pinWriteRefresh...)
+		}
 	}
 
 	m.acted = append(m.acted, maintChanged(msg)...)
 
-	return tea.Batch(mutationDone, refresh(maintRefresh...))
+	cmds := []tea.Cmd{mutationDone, reload}
+	if msg.err == nil && msg.res.FileWritten && !msg.res.Restored {
+		cmds = append(cmds, sendLessonsSaved(time.Now(), "Lessons "+m.st.theme.Glyphs.Arrow+" Pins"))
+	}
+
+	return tea.Batch(cmds...)
 }
 
 // takeActed returns the entries that the last commit or recovery
@@ -395,17 +426,28 @@ func maintChanged(msg maintCommittedMsg) []pinfile.EntryRef {
 }
 
 // settingsSaved drops a preview after a settings save, because the plan
-// read the old write gate (contracts D-14). A recovery preview returns
-// to its result, so the session proof stays available. A commit and a
-// result stay.
+// read the old write gate (contracts D-14).
 func (m *maintModal) settingsSaved(msg settingsSavedMsg) tea.Cmd {
+	return m.closeStale("Settings " + m.st.theme.Glyphs.Arrow + " " + msg.group.String() + " changed " + settingsFile)
+}
+
+// lessonsSaved drops a preview after a write of lessons.yaml
+// (lessonsBound), because the plan read the old pin file.
+func (m *maintModal) lessonsSaved(msg lessonsSavedMsg) tea.Cmd {
+	return m.closeStale(lessonsChanged(msg))
+}
+
+// closeStale drops a preview that a saved file made stale and returns
+// the message that says so. changed names the save, for example
+// "Settings › pin writing changed .seamark/config.yaml". A recovery
+// preview returns to its result, so the session proof stays available.
+// A commit and a result stay.
+func (m *maintModal) closeStale(changed string) tea.Cmd {
 	if !m.beforeCommit() {
 		return nil
 	}
 
 	m.seq.cancel()
-
-	changed := "Settings " + m.st.theme.Glyphs.Arrow + " " + msg.group.String() + " changed " + settingsFile
 
 	if m.recovering {
 		m.back()

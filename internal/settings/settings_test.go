@@ -78,7 +78,7 @@ func readConfig(t *testing.T, root string) string {
 }
 
 // inspect takes a snapshot with the built-in registry.
-func inspect(t *testing.T, root string) *Snapshot {
+func inspect(t testing.TB, root string) *Snapshot {
 	t.Helper()
 
 	snap, err := Inspect(root, integration.Builtin())
@@ -142,6 +142,11 @@ func TestInspectAbsentFileShowsDefaults(t *testing.T) {
 		ReviewWindow:   {"730 days", "730 days"},
 		IndexGenerated: {"skip generated files", "skip generated files"},
 		IndexExclude:   {"none", "none"},
+		Threshold:      {"2", "2"},
+		PinBudget:      {"3", "3"},
+		ChangeBudget:   {"6", "6"},
+		HookDelivery:   {"always", "always"},
+		Mutes:          {"none", "none"},
 	}
 
 	require.Len(t, snap.Fields, len(want))
@@ -154,7 +159,7 @@ func TestInspectAbsentFileShowsDefaults(t *testing.T) {
 		assert.NoError(t, st.Err)
 	}
 
-	for _, g := range []Group{GroupInference, GroupPinWrite, GroupEvidence, GroupIndexing} {
+	for _, g := range []Group{GroupInference, GroupPinWrite, GroupEvidence, GroupIndexing, GroupDelivery, GroupMutes} {
 		assert.NoError(t, snap.Editable(g), "group %s", g)
 	}
 }
@@ -316,6 +321,26 @@ func TestInspectKeepsReaderFailuresPerSection(t *testing.T) {
 
 	assert.NoError(t, snap.Editable(GroupPinWrite))
 	assert.NoError(t, snap.Editable(GroupInference))
+}
+
+// B3 (contracts §4.1, B1 deviation 13): the console checks its reload
+// after a config.yaml save with ReadErr. ReadErr names a failed read of
+// the file only, never a reader that rejects one section.
+func TestInspectNamesAFailedReadApartFromReaderErrors(t *testing.T) {
+	snap := inspect(t, withConfig(t, "reviews:\n  window_days: \"30\"\n"))
+	require.Contains(t, snap.ReaderErrs, ReaderIndex)
+	assert.NoError(t, snap.ReadErr, "a reader error is not a failed read")
+
+	assert.NoError(t, inspect(t, workspace(t, nil)).ReadErr, "an absent file is no failed read")
+
+	// A directory in place of the file fails the read itself.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(configPath(root), 0o755))
+
+	snap = inspect(t, root)
+	require.Error(t, snap.ReadErr)
+	assert.Equal(t, snap.ReadErr, snap.ReaderErrs[ReaderAgent], "every reader fails with the read")
+	assert.NoError(t, snap.Lessons.ReaderErr, "the lessons document stays independent")
 }
 
 func TestInspectDropsNullExcludeItems(t *testing.T) {

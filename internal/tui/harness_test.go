@@ -94,6 +94,15 @@ type fakeServices struct {
 	commitRecovery    func(*maintain.Plan) (maintain.Result, error)
 	planExtract       func(learning.ExtractRequest) (*learning.ExtractPreview, error)
 	runExtract        func(context.Context, *learning.ExtractPreview, func(distill.ExtractEvent)) (*distill.ExtractExecution, error)
+	planAuthor        func(maintain.AuthorRequest) (*maintain.AuthorPlan, error)
+	commitAuthor      func(*maintain.AuthorPlan) (maintain.AuthorResult, error)
+
+	// sample answers a selection sample. nil answers with an unavailable
+	// view, so no test reads an unscripted sample as zero lessons.
+	sample func(services.SampleRequest) services.SampleView
+	// samples records every sample request in call order, so a test can
+	// prove which review bytes a sample sends. Read it under mu.
+	samples []services.SampleRequest
 
 	// calls records every plan, preview and mutation call by name.
 	calls []string
@@ -416,6 +425,54 @@ func (f *fakeServices) RunExtract(ctx context.Context, p *learning.ExtractPrevie
 	return f.runExtract(ctx, p, progress)
 }
 
+func (f *fakeServices) PlanAuthor(req maintain.AuthorRequest) (*maintain.AuthorPlan, error) {
+	f.record("PlanAuthor:" + req.Op.String())
+
+	if f.planAuthor == nil {
+		return &maintain.AuthorPlan{Request: req, Root: f.root}, nil
+	}
+
+	return f.planAuthor(req)
+}
+
+func (f *fakeServices) CommitAuthor(p *maintain.AuthorPlan) (maintain.AuthorResult, error) {
+	op := "none"
+	if p != nil {
+		op = p.Request.Op.String()
+	}
+
+	f.record("CommitAuthor:" + op)
+
+	if f.commitAuthor == nil {
+		return maintain.AuthorResult{}, nil
+	}
+
+	return f.commitAuthor(p)
+}
+
+func (f *fakeServices) Sample(req services.SampleRequest) services.SampleView {
+	f.record("Sample")
+
+	f.mu.Lock()
+	f.samples = append(f.samples, req)
+	f.mu.Unlock()
+
+	if f.sample == nil {
+		return services.SampleView{Surface: req.Surface, Unavailable: "Sample unavailable: no scripted sample."}
+	}
+
+	return f.sample(req)
+}
+
+// sampleRequests returns a copy of the recorded sample requests in call
+// order. A test proves with it which review bytes a sample sent.
+func (f *fakeServices) sampleRequests() []services.SampleRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return append([]services.SampleRequest(nil), f.samples...)
+}
+
 // fakeAction names the action of a maintenance plan for the call record.
 func fakeAction(p *maintain.Plan) string {
 	if p == nil {
@@ -439,7 +496,7 @@ func fakePins() *maintain.Inspection {
 // fakeSettingsSnapshot inspects a temporary workspace whose config.yaml
 // holds content, with the shared reader, so a screen test sees a real
 // snapshot. An empty content leaves the file absent.
-func fakeSettingsSnapshot(t *testing.T, content string) *settings.Snapshot {
+func fakeSettingsSnapshot(t testing.TB, content string) *settings.Snapshot {
 	t.Helper()
 
 	root := t.TempDir()
@@ -457,15 +514,16 @@ func fakeSettingsSnapshot(t *testing.T, content string) *settings.Snapshot {
 }
 
 // harness drives the root model synchronously: it runs every command
-// and feeds the resulting messages back, like the Bubble Tea loop.
+// and feeds the resulting messages back, like the Bubble Tea loop. t is
+// a testing.TB, so the Phase 4 benchmarks drive the same console.
 type harness struct {
-	t    *testing.T
+	t    testing.TB
 	m    *model
 	quit bool
 }
 
 // newHarness starts a console over svc at w by h cells.
-func newHarness(t *testing.T, svc services.All, w, h int) *harness {
+func newHarness(t testing.TB, svc services.All, w, h int) *harness {
 	t.Helper()
 
 	hs := &harness{t: t, m: newModel(svc, ui.NewTheme(false))}
@@ -514,8 +572,9 @@ func (h *harness) run(cmd tea.Cmd) {
 }
 
 // press sends key presses by name: "enter", "esc", "tab", "shift+tab",
-// "up", "down", "left", "right", "space", "pgdown", "pgup", "ctrl+c",
-// or literal runes such as "j" or "?".
+// "up", "down", "left", "right", "space", "pgdown", "pgup", "home",
+// "end", "ctrl+c", "ctrl+j", "alt+enter", "backspace", "delete", or
+// literal runes such as "j" or "?".
 func (h *harness) press(keys ...string) {
 	h.t.Helper()
 
@@ -531,6 +590,14 @@ func (h *harness) typeText(s string) {
 	for _, r := range s {
 		h.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
+}
+
+// paste sends text as one bracketed paste: one key message with every
+// rune and Paste set, as Bubble Tea delivers it. A key binding never
+// matches such a message, so a paste cannot act as a shortcut.
+func (h *harness) paste(text string) {
+	h.t.Helper()
+	h.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text), Paste: true})
 }
 
 // view returns the current frame without escape sequences.
@@ -549,15 +616,19 @@ func keyMsg(k string) tea.KeyMsg {
 		"enter": tea.KeyEnter, "esc": tea.KeyEsc, "tab": tea.KeyTab, "shift+tab": tea.KeyShiftTab,
 		"up": tea.KeyUp, "down": tea.KeyDown, "left": tea.KeyLeft, "right": tea.KeyRight,
 		"pgdown": tea.KeyPgDown, "pgup": tea.KeyPgUp, "home": tea.KeyHome, "end": tea.KeyEnd,
-		"ctrl+c": tea.KeyCtrlC, "backspace": tea.KeyBackspace,
+		"ctrl+c": tea.KeyCtrlC, "backspace": tea.KeyBackspace, "delete": tea.KeyDelete, "ctrl+j": tea.KeyCtrlJ,
 	}
 
 	if t, ok := named[k]; ok {
 		return tea.KeyMsg{Type: t}
 	}
 
-	if k == "space" {
+	// A terminal sends alt+enter as enter with the alt flag.
+	switch k {
+	case "space":
 		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
+	case "alt+enter":
+		return tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
 	}
 
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}

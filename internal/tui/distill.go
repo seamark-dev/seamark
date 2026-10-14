@@ -362,6 +362,8 @@ func (d *distRecord) update(msg tea.Msg) tea.Cmd {
 		}
 	case settingsSavedMsg:
 		d.settingsSaved(msg)
+	case lessonsSavedMsg:
+		return d.lessonsSaved(msg)
 	}
 
 	return nil
@@ -812,16 +814,32 @@ func (d *distRecord) cleanedUp(msg distCleanedMsg) tea.Cmd {
 // record keeps going: the engine checks the file before each group and
 // stops with a conflict.
 func (d *distRecord) settingsSaved(msg settingsSavedMsg) {
-	if d.step != stepPreparing && d.step != stepPreview {
-		return
-	}
-
-	if d.clean.running || d.clean.done {
+	if !d.planOpen() {
 		return
 	}
 
 	d.backToScope(ui.ToneAttention, "Settings changed ("+msg.group.String()+"), so the plan was dropped. "+
 		"Press enter to plan again with the saved settings.")
+}
+
+// lessonsSaved drops a plan after a write of lessons.yaml
+// (lessonsBound). The plan read the installed pins of the old file. The
+// scope form keeps its input, so enter plans again at once.
+func (d *distRecord) lessonsSaved(msg lessonsSavedMsg) tea.Cmd {
+	if !d.planOpen() {
+		return nil
+	}
+
+	d.backToScope(ui.ToneAttention, lessonsChanged(msg)+", so the plan was dropped. Press enter to plan again.")
+
+	return nil
+}
+
+// planOpen reports a plan that a saved file can make stale: a plan that
+// reads or waits for y. A run and a cleanup of stale proposals stay,
+// because the engine checks the files itself.
+func (d *distRecord) planOpen() bool {
+	return (d.step == stepPreparing || d.step == stepPreview) && !d.clean.running && !d.clean.done
 }
 
 // root returns the repository root for the region preview. The index

@@ -31,9 +31,10 @@ var fixtureNow = time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 
 // fixture is one workspace with an index, a pin file, and a write gate.
 // Its store is writable; the tests use it as the reader, as the ledger,
-// and as "another writer".
+// and as "another writer". t is a testing.TB, so the Phase 4 benchmarks
+// build the same fixture.
 type fixture struct {
-	t    *testing.T
+	t    testing.TB
 	root string
 	st   *store.Store
 }
@@ -42,7 +43,7 @@ type fixture struct {
 // metadata and findings, but no tree-sitter run. The write gate is on.
 // Each name in files becomes a small file, because trigger validation
 // reads the working tree.
-func newFixture(t *testing.T, findings []model.Finding, files ...string) *fixture {
+func newFixture(t testing.TB, findings []model.Finding, files ...string) *fixture {
 	t.Helper()
 
 	root := t.TempDir()

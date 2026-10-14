@@ -669,6 +669,61 @@ func TestApplyFollowsTheIndentationOfTheList(t *testing.T) {
 	assert.Empty(t, f.pending(p.ID))
 }
 
+func TestApplyStillWritesFilesThatTheEditGateRefuses(t *testing.T) {
+	// The apply inserts at the head with the zero pinfile.Placement. It
+	// keeps its behavior byte for byte (P4-6). A CRLF file keeps its line
+	// breaks. An empty entry or a tab-led note line does not stop it,
+	// although the authoring of pins refuses such files.
+	tests := []struct {
+		name   string
+		before string
+		want   func(block string) string
+	}{
+		{
+			name:   "CRLF line breaks",
+			before: strings.ReplaceAll(handLessons, "\n", "\r\n"),
+			want: func(block string) string {
+				return strings.ReplaceAll(strings.Replace(handLessons, "pin:\n", "pin:\n"+block, 1), "\n", "\r\n")
+			},
+		},
+		{
+			name:   "an empty entry",
+			before: "pin:\n  -\n  - rule: hand-written\n    note: Keep this one.\n",
+			want: func(block string) string {
+				return "pin:\n" + block + "  -\n  - rule: hand-written\n    note: Keep this one.\n"
+			},
+		},
+		{
+			name:   "a note line that starts with a tab",
+			before: "pin:\n  - rule: hand-written\n    note: |-\n      Keep this one.\n      \tIndented with a tab.\n",
+			want: func(block string) string {
+				return "pin:\n" + block + "  - rule: hand-written\n    note: |-\n      Keep this one.\n      \tIndented with a tab.\n"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			f.writeLessons(tt.before)
+
+			p := f.propose("pooled-state-reset", "Reset pooled state.", model.ProposalProposed, "api")
+
+			pv, err := PreviewApply(f.st, f.root, []int64{p.ID})
+			require.NoError(t, err)
+
+			res, err := Commit(f.st, f.root, pv)
+			require.NoError(t, err)
+			require.NoError(t, res.FileErr)
+			assert.True(t, res.FileWritten)
+			assert.Equal(t, []int64{p.ID}, res.Moved)
+
+			assert.Equal(t, tt.want(pv.YAML), string(f.lessons()))
+			assert.Empty(t, f.pending(p.ID))
+		})
+	}
+}
+
 func TestApplyKeepsAReadOnlyPinFile(t *testing.T) {
 	// The CLI used to fail in os.WriteFile with "permission denied". The
 	// guarded write refuses the file before the write and names the mode.

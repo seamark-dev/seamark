@@ -411,11 +411,13 @@ func (o *overview) pinWriteFact() (string, bool) {
 		return t.Unknown.Render("unknown"), true
 	}
 
+	// The words are the notes of the Settings choices. They name no
+	// action, because every pin write reads this gate (spec R-5).
 	if snap.Distill.Distill.Write {
-		return t.Body.Render("on") + t.Muted.Render(o.dot()+"apply writes pins after its preview"), true
+		return t.Body.Render("on") + t.Muted.Render(o.dot()+settingsPinWriteOnNote), true
 	}
 
-	return t.Body.Render("off") + t.Muted.Render(o.dot()+"apply shows the YAML block"), true
+	return t.Body.Render("off") + t.Muted.Render(o.dot()+settingsPinWriteOffNote), true
 }
 
 // guardFacts lists the policy mode, its rules and its load result, then

@@ -64,22 +64,15 @@ func ParseConfig(data []byte) (*Config, error) {
 // its provenance comment. The YAML values are marshaled, not
 // hand-quoted — a note containing quotes or colons must not be able to
 // corrupt the file.
+//
+// The region keys follow reviews.PinForRegions, the layout that the
+// manual pin renderer (pinfile.RenderPin) also writes. The bytes of this
+// render stay fixed, because the CLI apply goldens pin them.
 func RenderPins(ps []model.Proposal) (string, error) {
 	var b strings.Builder
 
 	for _, p := range ps {
-		pin := reviews.PinRule{Rule: p.Rule, Region: "*", Note: p.Note}
-
-		// Both keys on purpose: `region` carries the first (deepest-
-		// coverage) region for readers that predate sets — narrower
-		// than the `*` they used to get — and `regions` the full set.
-		if set := p.RegionSet(); len(set) > 0 {
-			pin.Region = set[0]
-
-			if len(set) > 1 {
-				pin.Regions = set
-			}
-		}
+		pin := reviews.PinForRegions(p.Rule, p.Note, p.RegionSet())
 
 		entry, err := yaml.Marshal([]reviews.PinRule{pin})
 		if err != nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
@@ -31,9 +32,15 @@ import (
 //   - While another mutation runs, drafting works but s waits, and the y
 //     of an open diff waits too, because the console runs one mutation at
 //     a time.
-//   - A save broadcasts settingsSavedMsg, so every screen drops the
-//     previews that the saved group binds. A changed setting needs its
-//     own later run.
+//   - A save tells every screen about the written file:
+//     settingsSavedMsg for config.yaml, lessonsSavedMsg for lessons.yaml.
+//     Each screen then drops the previews that bind the old file. A
+//     changed setting needs its own later run.
+//   - A save routes on its outcome (contracts P4-18). Written drops the
+//     draft, tells every screen, and reloads; a failed reload shows a
+//     message and never repeats the save. Unknown keeps the draft, tells
+//     every screen, and offers only a new review. NotWritten keeps the
+//     draft and tells nobody.
 
 // settingsFlow is the state of one preview and save. The embedded flow
 // holds the stage and the previewed plan. flowClosed shows no modal, and
@@ -47,6 +54,9 @@ type settingsFlow struct {
 	// res and saveErr are the outcome of a save that wrote nothing.
 	res     settings.Result
 	saveErr error
+	// sample is the open selection sample of a lessons review, or nil.
+	// closeFlow zeroes the flow, so the sample closes with its review.
+	sample *sample
 }
 
 // settingsSaveNote records the last successful save of the session.
@@ -80,6 +90,9 @@ const (
 	settingsPromptLeave settingsPromptKind = iota
 	// settingsPromptDiscard asks before x drops the draft of a group.
 	settingsPromptDiscard
+	// settingsPromptMuteOp asks about the mute draft before a second
+	// mute operation, because one save holds one operation (R-11).
+	settingsPromptMuteOp
 )
 
 // settingsPrompt is an open question about a draft.
@@ -90,6 +103,8 @@ type settingsPrompt struct {
 	intent string
 	// group is the group whose draft x drops.
 	group settings.Group
+	// mute is the second mute operation that waits for the answer.
+	mute settingsMuteAsk
 }
 
 // saveBlocked returns the reason that s cannot review group g, or "".
@@ -102,7 +117,7 @@ func (s *settingsScreen) saveBlocked(g settings.Group) string {
 	case s.draftCount(g) == 0:
 		return settingsGroupTitle(g) + " has no unsaved change."
 	case snap.Editable(g) != nil:
-		return settingsBlockSentence(settingsGroupTitle(g)+" cannot be saved here", snap.Editable(g))
+		return settingsBlockSentence(settingsGroupTitle(g)+" cannot be saved here", snap.Editable(g), g.Document())
 	case s.st.busy():
 		return "Saving waits for the running operation: " + ui.OneLine(s.st.mutation) + "."
 	}
@@ -200,34 +215,38 @@ func (s *settingsScreen) confirm() tea.Cmd {
 	return cmd
 }
 
-// saveDone frees the slot and applies the outcome. A success drops the
-// draft of the group and reloads the sources that the file feeds. It
-// also tells every screen, so a screen drops the previews that bind to
-// the old values.
+// saveDone frees the slot and applies the outcome (P4-18). A save that
+// wrote the file drops the draft of the group and reloads the sources
+// that the file feeds. It watches that reload, so a failed read says
+// "Saved; the refresh failed" without a new save. A written or unknown
+// outcome also tells every screen, so a screen drops the previews that
+// bind the old file.
 func (s *settingsScreen) saveDone(msg settingsSaveDoneMsg) tea.Cmd {
 	err := msg.err
 	if err == nil {
 		err = msg.res.Err
 	}
 
-	if err == nil {
+	file := settingsPlanFile(msg)
+
+	// A write error with the reviewed bytes in the file is a Written
+	// outcome: the readback proved the bytes (settings.SaveWith).
+	if err == nil || msg.res.Outcome == settings.Written {
 		s.dropDraft(msg.group)
 		s.flow = settingsFlow{}
 		s.saved = &settingsSaveNote{group: msg.group, at: msg.at}
 
-		// Every save changes the index fingerprint, so the index and
-		// Doctor read again. The evidence view shows the review window,
-		// and the pin readings depend on the index state.
-		kinds := []sectionKind{secSettings, secDoctor, secIndex, secLearning, secPins}
-		if msg.group == settings.GroupPinWrite {
-			// The ledger snapshot carries the write gate.
-			kinds = append(kinds, secLedger)
+		var reload tea.Cmd
+		s.check, reload = s.st.watchRefresh(file, nil, settingsRefreshKinds(msg.group)...)
+		s.checkGroup = msg.group
+
+		note := toast(ui.ToneSuccess, settingsSavedText(msg.plan))
+		if err != nil {
+			note = toast(ui.ToneAttention, settingsSavedText(msg.plan)+" The write also reported an error: "+
+				ui.ErrText(err))
 		}
 
-		saved := settingsSavedMsg{group: msg.group, at: msg.at}
-
-		return tea.Batch(mutationDone, refresh(kinds...), func() tea.Msg { return saved },
-			toast(ui.ToneSuccess, settingsSavedText(msg.plan)))
+		return tea.Batch(mutationDone, reload, s.savedMsg(msg, file), note)
 	}
 
 	// No key can leave a running save, so the result needs no stage
@@ -239,15 +258,83 @@ func (s *settingsScreen) saveDone(msg settingsSaveDoneMsg) tea.Cmd {
 	// that nothing was saved. The result waits in Settings.
 	note := toast(ui.ToneAttention, "Settings were not saved: "+ui.ErrText(err))
 
-	if errors.Is(err, settings.ErrStale) {
+	switch {
+	case msg.res.Outcome == settings.Unknown:
+		// The file may hold the new bytes, so every preview of it is
+		// stale, and the snapshot reads again. The draft stays.
+		note = toast(ui.ToneAttention, unknownOutcomeText(file))
+
+		return tea.Batch(mutationDone, refresh(secSettings), s.savedMsg(msg, file), note)
+	case errors.Is(err, settings.ErrStale):
 		return tea.Batch(mutationDone, refresh(secSettings), note)
 	}
 
 	return tea.Batch(mutationDone, note)
 }
 
+// settingsRefreshKinds returns the sources that read the file of g, so
+// a save of g reloads them. Every config.yaml save changes the index
+// fingerprint, so the index and Doctor read again. The evidence view
+// shows the review window, and the pin readings depend on the index
+// state. The ledger snapshot carries the write gate. The index
+// fingerprint does not cover lessons.yaml, so a lessons save reloads no
+// index. Doctor, Stats, the evidence view, and Pins read lessons.yaml.
+func settingsRefreshKinds(g settings.Group) []sectionKind {
+	if g.Document() == pinfile.File {
+		return []sectionKind{secSettings, secDoctor, secStats, secLearning, secPins}
+	}
+
+	kinds := []sectionKind{secSettings, secDoctor, secIndex, secLearning, secPins}
+	if g == settings.GroupPinWrite {
+		kinds = append(kinds, secLedger)
+	}
+
+	return kinds
+}
+
+// settingsPlanFile returns the file of a saved plan, relative to the
+// root (settingsPlanDocument). A result without a plan names the
+// document of its group.
+func settingsPlanFile(msg settingsSaveDoneMsg) string {
+	if msg.plan != nil {
+		return settingsPlanDocument(msg.plan)
+	}
+
+	return msg.group.Document()
+}
+
+// settingsPlanDocument returns the file of a plan, relative to the root:
+// settings.Plan.File, or the document of its group for a plan without
+// one. Every text about a plan names this file.
+func settingsPlanDocument(p *settings.Plan) string {
+	if p.File != "" {
+		return p.File
+	}
+
+	return p.Group.Document()
+}
+
+// savedMsg tells every screen about a write of file: settingsSavedMsg
+// for config.yaml, lessonsSavedMsg for lessons.yaml (P4-12). A receiver
+// of one never reads the other file, so each message goes only with its
+// own file.
+func (s *settingsScreen) savedMsg(msg settingsSaveDoneMsg, file string) tea.Cmd {
+	switch file {
+	case settingsFile:
+		saved := settingsSavedMsg{group: msg.group, at: msg.at}
+
+		return func() tea.Msg { return saved }
+	case pinfile.File:
+		return sendLessonsSaved(msg.at, "Settings "+s.st.theme.Glyphs.Arrow+" "+msg.group.String())
+	}
+
+	return nil
+}
+
 // settingsSavedText is the toast of a successful save: what changed,
-// and when it takes effect.
+// and when it takes effect. A lessons save names its fields only: each
+// consumer reads the file at its next run, and the review said which
+// consumers read each field.
 func settingsSavedText(p *settings.Plan) string {
 	if p == nil {
 		return "Configuration updated."
@@ -256,6 +343,10 @@ func settingsSavedText(p *settings.Plan) string {
 	var fields []string
 	for _, e := range p.Edits {
 		fields = append(fields, string(e.Field))
+	}
+
+	if settingsPlanDocument(p) == pinfile.File {
+		return "Lesson settings updated: " + strings.Join(fields, ", ") + "."
 	}
 
 	text := "Configuration updated: " + strings.Join(fields, ", ") + "."
@@ -293,6 +384,10 @@ func (s *settingsScreen) flowKey(msg tea.KeyMsg) tea.Cmd {
 			s.closeFlow()
 		}
 	case flowPreview:
+		if cmd, ok := s.sampleKey(msg); ok {
+			return cmd
+		}
+
 		switch {
 		case key.Matches(msg, settingsKeys.Confirm):
 			return s.confirm()
@@ -318,10 +413,15 @@ func (s *settingsScreen) flowKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// flowActions returns the keys of the preview and the result. The
-// footer shows the same keys as the modal.
+// flowActions returns the keys of the preview and the result, or of
+// the open sample. The footer shows the same keys as the modal. The
+// modal row of a sample leaves out ↑↓ (sample.keys).
 func (s *settingsScreen) flowActions() []key.Binding {
 	f := &s.flow
+
+	if f.sample != nil {
+		return f.sample.keys(false)
+	}
 
 	switch f.stage {
 	case flowPreparing:
@@ -336,17 +436,22 @@ func (s *settingsScreen) flowActions() []key.Binding {
 		return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "close")}
 	}
 
-	back := ui.WithHelp(ui.Nav.Back, "esc", "keep editing")
-	if !s.confirmable() {
-		return []key.Binding{back}
+	var out []key.Binding
+
+	if s.confirmable() {
+		label := "save"
+		if settingsRemovesArgv(f.preview) {
+			label = "save and remove agent.argv"
+		}
+
+		out = append(out, ui.WithHelp(settingsKeys.Confirm, "y", label))
 	}
 
-	label := "save"
-	if settingsRemovesArgv(f.preview) {
-		label = "save and remove agent.argv"
+	if s.samples() {
+		out = append(out, sampleKeys.Open)
 	}
 
-	return []key.Binding{ui.WithHelp(settingsKeys.Confirm, "y", label), back}
+	return append(out, ui.WithHelp(ui.Nav.Back, "esc", "keep editing"))
 }
 
 // flowView renders the preview or the result as a modal.
@@ -358,12 +463,14 @@ func (s *settingsScreen) flowView(w, h int) string {
 func (s *settingsScreen) flowContent(w int) ui.ModalOpts {
 	t := s.st.theme
 
+	file := s.flow.group.Document()
+
 	switch s.flow.stage {
 	case flowPreparing:
-		return flowWaitModal(s.st, "Preparing the save preview", "Seamark reads "+settingsFile+", applies the "+
+		return flowWaitModal(s.st, "Preparing the save preview", "Seamark reads "+file+", applies the "+
 			"draft to a copy and checks the copy with the shared readers. Nothing is written.", true, w)
 	case flowCommitting:
-		return flowWaitModal(s.st, "Saving settings", "Seamark writes "+settingsFile+". The result appears here.",
+		return flowWaitModal(s.st, "Saving settings", "Seamark writes "+file+". The result appears here.",
 			false, w)
 	case flowResult:
 		return s.resultModal(w)
@@ -389,18 +496,27 @@ func (s *settingsScreen) flowContent(w int) ui.ModalOpts {
 func (s *settingsScreen) previewErrModal(err error, w int) ui.ModalOpts {
 	t := s.st.theme
 	acts := s.flowActions()
+	b := settingsBlock(err, s.flow.group.Document())
 
 	switch {
-	case errors.Is(err, settings.ErrBlocked):
+	case b.route != "", errors.Is(err, settings.ErrBlocked):
 		// The reason leaves out the route of BlockedError.Error, because
-		// the modal names the route and the location once.
-		reason, target := settingsBlock(err)
+		// the modal names the route and the location once. A block with a
+		// route of its own has no fault in the file to fix.
+		var body []string
 
-		body := propNote(t, ui.ToneAttention, "The file cannot be edited safely: "+reason+".", w)
-		body = append(body, "")
-		body = append(body, propLines(t.Body, "The console does not change a file that it cannot edit safely. "+
-			"Open the file at this place and fix it by hand:", w)...)
-		body = append(body, integCommandLines(t, target, w)...)
+		if b.route != "" {
+			body = propNote(t, ui.ToneAttention, "The lessons settings cannot be saved here: "+b.reason+".", w)
+			body = append(body, "")
+			body = append(body, propLines(t.Body, b.route, w)...)
+		} else {
+			body = propNote(t, ui.ToneAttention, "The file cannot be edited safely: "+b.reason+".", w)
+			body = append(body, "")
+			body = append(body, propLines(t.Body, "The console does not change a file that it cannot edit safely. "+
+				"Open the file at this place and fix it by hand:", w)...)
+			body = append(body, integCommandLines(t, b.where, w)...)
+		}
+
 		body = append(body, "")
 		body = append(body, propLines(t.Muted, "The draft stays. Nothing was written.", w)...)
 
@@ -444,13 +560,19 @@ func (s *settingsScreen) staleNext(then string) string {
 // when the change takes effect.
 func (s *settingsScreen) previewModal(p *settings.Plan, w int) ui.ModalOpts {
 	t := s.st.theme
+	file := settingsPlanDocument(p)
 
-	lead := "Seamark writes " + propPlural(len(p.Edits), "change", "changes") + " to " + settingsFile +
-		". Other sections, comments and unknown keys stay as they are. Nothing is written before you press y."
+	kept := "Other sections, comments and unknown keys stay as they are."
+	if file == pinfile.File {
+		kept = "The pins, the other keys, comments and unknown keys stay as they are."
+	}
+
+	lead := "Seamark writes " + propPlural(len(p.Edits), "change", "changes") + " to " + file + ". " + kept +
+		" Nothing is written before you press y."
 	right := t.Attention.Render("modified")
 
 	if p.Preview.Created {
-		lead = "Seamark creates " + settingsFile + " with the chosen keys only. Nothing is written before " +
+		lead = "Seamark creates " + file + " with the chosen keys only. Nothing is written before " +
 			"you press y."
 		right = t.Success.Render("new file")
 	}
@@ -462,7 +584,14 @@ func (s *settingsScreen) previewModal(p *settings.Plan, w int) ui.ModalOpts {
 	body = append(body, "")
 	// The workspace directory name can hold control characters, so the
 	// path goes through ui.OneLine like every other path on the screen.
-	body = append(body, integLabeled(t, "File", s.changeLabelW(p), ui.OneLine(ui.DisplayPath(p.Snapshot.Path)), t.Code, w)...)
+	body = append(body, integLabeled(t, "File", s.changeLabelW(p), ui.OneLine(ui.DisplayPath(p.Path())), t.Code, w)...)
+
+	if file == pinfile.File {
+		// The save replaces the file by rename (contracts P4-17), so a
+		// reader must know which metadata stays.
+		body = append(body, propIndent(strings.Repeat(" ", s.changeLabelW(p)),
+			propLines(t.Muted, settingsReplaceText, w-s.changeLabelW(p)))...)
+	}
 
 	if s.st.busy() {
 		body = append(body, "")
@@ -471,7 +600,12 @@ func (s *settingsScreen) previewModal(p *settings.Plan, w int) ui.ModalOpts {
 	}
 
 	body = append(body, "", t.Heading.Render("CHANGE"))
-	body = append(body, s.changeRows(p, w)...)
+
+	if p.Group == settings.GroupMutes {
+		body = append(body, s.muteChangeRows(p, w)...)
+	} else {
+		body = append(body, s.changeRows(p, w)...)
+	}
 
 	if rows := s.effectiveRows(p, w); len(rows) > 0 {
 		body = append(body, "", t.Heading.Render("EFFECTIVE"))
@@ -502,7 +636,7 @@ func (s *settingsScreen) previewModal(p *settings.Plan, w int) ui.ModalOpts {
 	body = append(body, s.activationLines(p, w)...)
 
 	return ui.ModalOpts{
-		Title:   t.TabActive.Render("Save") + " " + t.Body.Render(settingsFile),
+		Title:   t.TabActive.Render("Save") + " " + t.Body.Render(file),
 		Right:   right,
 		Body:    body,
 		Actions: s.flowActions(),
@@ -611,13 +745,16 @@ func (s *settingsScreen) willLines(p *settings.Plan) []effect {
 	var out []effect
 
 	if p.Preview.Created {
-		out = append(out, effect{glyph: g.Add, tone: ui.ToneSuccess, text: "create " + settingsFile + " with these keys only"})
+		out = append(out, effect{glyph: g.Add, tone: ui.ToneSuccess, text: "create " + settingsPlanDocument(p) +
+			" with these keys only"})
 	}
 
 	for _, e := range p.Edits {
 		before, _ := settingsFieldIn(p.Before, e.Field)
 
 		switch {
+		case e.Field == settings.Mutes:
+			out = append(out, s.muteEffect(p, e))
 		case e.Field == settings.AgentArgv:
 			out = append(out, effect{glyph: g.Del, tone: ui.ToneFailure, text: "remove agent.argv, the custom command"})
 		case e.Field == settings.AgentCLI && e.Reset && settingsKeepsArgv(p):
@@ -647,13 +784,21 @@ func settingsYAMLValue(e settings.Edit) string {
 		}
 
 		return strconv.Itoa(e.Days)
-	default:
+	case settings.IndexExclude:
 		return settingsPatterns(len(e.List)) + ", in this order"
+	case settings.Threshold, settings.PinBudget, settings.ChangeBudget:
+		return strconv.Itoa(e.Int)
+	case settings.HookDelivery:
+		return ui.OneLine(e.String)
 	}
+
+	return ""
 }
 
 // wontLines lists what the save leaves alone. A save never starts the
-// work that uses the new value (spec R-13).
+// work that uses the new value (spec R-13). The delivery notes of the
+// plan say what a lessons save never does to hooks, trust and delivery
+// state. So these lines do not repeat them.
 func (s *settingsScreen) wontLines(g settings.Group) []string {
 	out := []string{"change other sections, comments, unknown keys or the file mode"}
 
@@ -661,11 +806,17 @@ func (s *settingsScreen) wontLines(g settings.Group) []string {
 	case settings.GroupInference:
 		out = append(out, "run a model, log in, or change the Claude Code or Codex files")
 	case settings.GroupPinWrite:
-		out = append(out, "write a pin: a new apply, retarget or prune preview offers the write")
+		out = append(out, "write a pin: a new preview offers the write ("+settings.PinWriteScope+")")
 	case settings.GroupEvidence:
 		out = append(out, "fetch reviews or change the stored findings")
 	case settings.GroupIndexing:
 		out = append(out, "scan, remove or index a file")
+	case settings.GroupDelivery, settings.GroupMutes:
+		out = []string{"change the pins, other keys, comments, unknown keys or the file mode"}
+
+		if g == settings.GroupMutes {
+			out = append(out, "mute a pin, or delete a finding, a proposal or the delivery history")
+		}
 	}
 
 	return append(out, "start an index build, an evidence refresh or a distillation")
@@ -698,8 +849,15 @@ func (s *settingsScreen) activationLines(p *settings.Plan, w int) []string {
 		}
 	}
 
+	// A lessons field names its consumers, not one moment, so its line
+	// says what the field affects.
 	for _, when := range whens {
-		out = append(out, propLines(t.Body, strings.Join(fields[when], ", ")+": at the "+when+".", w)...)
+		line := strings.Join(fields[when], ", ") + ": at the " + when + "."
+		if settingsPlanDocument(p) == pinfile.File {
+			line = strings.Join(fields[when], ", ") + " affects " + when + "."
+		}
+
+		out = append(out, propLines(t.Body, line, w)...)
 	}
 
 	for _, n := range p.Notes {
@@ -716,7 +874,8 @@ func (s *settingsScreen) activationLines(p *settings.Plan, w int) []string {
 }
 
 // resultModal explains a save that did not succeed. Every refusal of
-// the settings package leaves the file as it was.
+// the settings package leaves the file as it was. A write with an
+// unknown outcome may have changed it, so its result says so.
 func (s *settingsScreen) resultModal(w int) ui.ModalOpts {
 	t := s.st.theme
 	err := s.flow.saveErr
@@ -732,10 +891,17 @@ func (s *settingsScreen) resultModal(w int) ui.ModalOpts {
 	case errors.Is(err, services.ErrBusy):
 		lead = "Another operation is running, so the save did not start."
 		next = "The draft stays. Press s again when the operation ends."
-	case s.flow.res.Written:
-		title, tone = "Save incomplete", ui.ToneFailure
-		lead = "The file was written, then an error occurred."
-		next = "Review " + settingsFile + " with git diff before anything else."
+	case errors.Is(err, services.ErrForeignRoot):
+		lead = "The index records another repository root, so Seamark did not write " +
+			s.flow.group.Document() + "."
+		next = "The draft stays. " + settingsBlock(err, s.flow.group.Document()).route
+	case s.flow.res.Outcome == settings.Unknown:
+		// The save never runs again by itself; only a new review of the
+		// file as it is now can follow (P4-18).
+		title, tone = "Result unknown", ui.ToneFailure
+		lead = unknownOutcomeText(s.flow.group.Document())
+		next = "The write failed, and Seamark could not read the file again. The draft stays. Press s to " +
+			"review it against the file as it is now."
 	default:
 		title, tone = "Save failed", ui.ToneFailure
 		lead = "Seamark did not replace the file, so it is unchanged."
@@ -769,19 +935,22 @@ func (s *settingsScreen) askDiscard(g settings.Group) tea.Cmd {
 func (s *settingsScreen) promptKey(msg tea.KeyMsg) tea.Cmd {
 	p := s.prompt
 
-	if p.kind == settingsPromptDiscard {
+	switch p.kind {
+	case settingsPromptDiscard:
 		switch {
 		case key.Matches(msg, settingsKeys.DropDrafts, settingsKeys.Confirm):
 			s.prompt = nil
 			s.dropDraft(p.group)
 
-			return toast(ui.ToneNeutral, "Discarded the "+settingsGroupTitle(p.group)+" draft. "+settingsFile+
+			return toast(ui.ToneNeutral, "Discarded the "+settingsGroupTitle(p.group)+" draft. "+p.group.Document()+
 				" is unchanged.")
 		case key.Matches(msg, ui.Nav.Back):
 			s.prompt = nil
 		}
 
 		return nil
+	case settingsPromptMuteOp:
+		return s.muteOpPromptKey(msg)
 	}
 
 	switch {
@@ -792,9 +961,7 @@ func (s *settingsScreen) promptKey(msg tea.KeyMsg) tea.Cmd {
 		return navigate(p.next, p.intent)
 	case key.Matches(msg, settingsKeys.DropDrafts):
 		s.prompt = nil
-		s.drafts = map[settings.Field]settings.Edit{}
-		s.excludeErrs = nil
-		s.closeEditor()
+		s.discardDrafts()
 		s.passLeave = true
 
 		return navigate(p.next, p.intent)
@@ -807,9 +974,12 @@ func (s *settingsScreen) promptKey(msg tea.KeyMsg) tea.Cmd {
 
 // promptKeys returns the keys of the open question.
 func (s *settingsScreen) promptKeys() []key.Binding {
-	if s.prompt.kind == settingsPromptDiscard {
+	switch s.prompt.kind {
+	case settingsPromptDiscard:
 		return []key.Binding{ui.WithHelp(settingsKeys.DropDrafts, "d", "discard draft"),
 			ui.WithHelp(ui.Nav.Back, "esc", "keep")}
+	case settingsPromptMuteOp:
+		return settingsMuteOpKeys()
 	}
 
 	return []key.Binding{settingsKeys.Keep, settingsKeys.DropDrafts, ui.WithHelp(ui.Nav.Back, "esc", "stay here")}
@@ -824,12 +994,15 @@ func (s *settingsScreen) promptView(w, h int) string {
 
 	var title, body string
 
-	if s.prompt.kind == settingsPromptDiscard {
+	switch s.prompt.kind {
+	case settingsPromptDiscard:
 		g := s.prompt.group
 		title = "Discard the " + settingsGroupTitle(g) + " draft?"
 		body = "It holds " + propPlural(s.draftCount(g), "unsaved change", "unsaved changes") + ": " +
 			s.draftFields(g) + ". The file does not change."
-	} else {
+	case settingsPromptMuteOp:
+		title, body = s.muteOpPromptText()
+	default:
 		title = "Leave with an unsaved draft?"
 		body = s.leaveText() + " A draft never saves by itself and never affects a run."
 	}

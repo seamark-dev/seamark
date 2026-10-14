@@ -10,11 +10,18 @@
 # masks that text in both sets before it compares them. Each mask keeps
 # the width of the text, so a change in the column layout still shows.
 #
-# The script prints the file counts and the first unified diffs. The
-# exit status is 0 when every file matches, 1 when a file differs or
+# The script prints the file counts, the names of the files that differ
+# or exist in one set only, and the first unified diffs. It prints the
+# first 10 names of each list; with LIST=1 in the environment it prints
+# every name, so a record of expected differences can name each frame.
+# The exit status is 0 when every file matches, 1 when a file differs or
 # exists in one set only, and 2 for a usage error or a failed render.
 # Works with a plain POSIX shell; needs go and perl on PATH.
 set -eu
+
+# LIST=1 prints every name of each list; any other value keeps the
+# first 10.
+LIST=${LIST:-}
 
 # The number of diffs to print, and the line limit of each diff. A full
 # frame diff of the large size has about 100 lines.
@@ -51,9 +58,10 @@ if ! (cd "$SEAMARK_REPO" && SEAMARK_TUI_CAPTURE_DIR="$TMP/render" go test -count
     exit 2
 fi
 
-# mask_dir <from> <to> <list>: copies every file of from into to, with
-# the volatile text masked, and writes the file names into list. Perl
-# does the masks, because the BSD sed of macOS silently ignores \b.
+# mask_dir <from> <to> <list>: copies every frame (*.txt) of from into
+# to, with the volatile text masked, and writes the file names into
+# list. Perl does the masks, because the BSD sed of macOS silently
+# ignores \b.
 #
 #   2026-10-04  -> YYYY-MM-DD   (a date)
 #   20:40:32    -> HH:MM:SS     (a clock time with seconds)
@@ -64,7 +72,9 @@ fi
 mask_dir() {
     : >"$3"
 
-    for f in "$1"/*; do
+    # Only *.txt files are frames. A capture directory can also hold
+    # notes, such as EXPECTED-DIFFS.md, which are not frames.
+    for f in "$1"/*.txt; do
         [ -f "$f" ] || continue
 
         name=$(basename "$f")
@@ -109,13 +119,19 @@ if [ "$CHANGED" -eq 0 ] && [ "$ONLY_BASE" -eq 0 ] && [ "$ONLY_NEW" -eq 0 ]; then
 fi
 
 # list_names <title> <file>: prints the first names of a list, so a large
-# difference stays readable.
+# difference stays readable. With LIST=1 it prints every name.
 list_names() {
     [ -s "$2" ] || return 0
 
     echo "$1:"
+
+    if [ "$LIST" = 1 ]; then
+        sed 's/^/  /' "$2"
+        return 0
+    fi
+
     head -n 10 "$2" | sed 's/^/  /'
-    [ "$(count "$2")" -le 10 ] || echo "  ..."
+    [ "$(count "$2")" -le 10 ] || echo "  ... (LIST=1 prints every name)"
 }
 
 list_names "only in base" "$TMP/only-base.list"

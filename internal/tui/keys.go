@@ -3,7 +3,10 @@ package tui
 import "github.com/charmbracelet/bubbles/key"
 
 // globalKeys are the shell bindings. They fire only when no text input
-// and no overlay has focus.
+// and no overlay has focus. ctrl+c always reaches the shell. A form or
+// another layer that captures every key can still give ? to the shell.
+// The shell then shows the help of the layer (contextHelper in app.go).
+// That happens only while no text field has focus.
 type globalKeys struct {
 	Overview     key.Binding
 	Integrations key.Binding

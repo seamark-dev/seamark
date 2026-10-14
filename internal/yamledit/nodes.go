@@ -6,6 +6,7 @@ package yamledit
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -111,6 +112,7 @@ func (d *Doc) ContentLines(from, to int) []int {
 }
 
 // HasComment reports whether any line in [from, to] is a comment line.
+// CommentIn also finds a comment after the value text of a line.
 func (d *Doc) HasComment(from, to int) bool {
 	for n := from; n <= to; n++ {
 		if d.Comment(n) {
@@ -119,6 +121,49 @@ func (d *Doc) HasComment(from, to int) bool {
 	}
 
 	return false
+}
+
+// CommentIn reports whether any line in [from, to] holds a comment: a
+// comment line, or a comment after the value text of the line. An editor
+// that deletes or replaces these lines would drop such a comment.
+func (d *Doc) CommentIn(from, to int) bool {
+	for n := from; n <= to; n++ {
+		if d.commentAt(n) < len(d.Lines[n-1]) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// LineComment returns the comment of line n from its "#" to the line
+// end, or an empty string. It finds the comments that CommentIn finds. A
+// verifier compares these texts before and after a splice, because a
+// splice can change the value on a line and keep its comment.
+func (d *Doc) LineComment(n int) string {
+	return d.Lines[n-1][d.commentAt(n):]
+}
+
+// commentAt returns the byte offset where the comment of line n starts,
+// or the line length. The scan starts after the value text of the line.
+// A scan from column 0 reads a quote inside plain text as an opening
+// quote, and a "#" inside a multi-line quoted value as a comment.
+func (d *Doc) commentAt(n int) int {
+	line := d.Lines[n-1]
+
+	if end, ok := d.textEnds[n]; ok {
+		return CommentStart(line, end)
+	}
+
+	if d.Comment(n) {
+		return IndentOf(line)
+	}
+
+	// No scalar starts on this line, and no quoted or block scalar goes
+	// through it. The line thus holds the rest of a multi-line plain
+	// scalar or only indicators, such as a dash. A quote there is text.
+	// So the first "#" after white space starts the comment.
+	return CommentStart(line, plainEnd(line, IndentOf(line), ""))
 }
 
 // SubtreeIssue finds the first alias, anchor, merge key, or duplicate
@@ -182,6 +227,19 @@ func NodeEqual(a, b *yaml.Node) bool {
 	return true
 }
 
+// LastLine returns the last start line of any node in the subtree of n.
+// A multi-line scalar can end below this line, so a caller that needs
+// the last text line scans on from it.
+func LastLine(n *yaml.Node) int {
+	last := n.Line
+
+	for _, c := range n.Content {
+		last = max(last, LastLine(c))
+	}
+
+	return last
+}
+
 // IsNull reports whether a node is a YAML null ("", "~", or "null").
 func IsNull(n *yaml.Node) bool {
 	return n == nil || (n.Kind == yaml.ScalarNode && n.Tag == "!!null")
@@ -221,4 +279,69 @@ func byteOffset(line string, col int) int {
 	}
 
 	return off
+}
+
+// SectionStart returns where a new top-level key goes: before the
+// 0-based line pos (the end of the document content, before a "..."
+// marker), at the column col of the existing top-level keys. lead holds
+// one blank line when the line above pos is not blank, so the new key
+// reads as its own block. The settings and the pin editors append their
+// sections at this one place.
+func (d *Doc) SectionStart() (pos, col int, lead []string) {
+	if d.Root != nil && len(d.Root.Content) > 0 {
+		col = d.Root.Content[0].Column - 1
+	}
+
+	pos = d.Limit - 1
+
+	if pos > 0 && !IsBlank(d.Lines[pos-1]) {
+		lead = []string{""}
+	}
+
+	return pos, col, lead
+}
+
+// PairsExcept returns the key and value nodes of each pair of the
+// mapping m whose key is not in skip, in order. at is the number of such
+// pairs before the first skipped key, or -1 when m has no skipped key.
+// An editor that changes some keys compares the other pairs of the
+// reviewed and the candidate document with SamePairs.
+func PairsExcept(m *yaml.Node, skip ...string) (pairs [][2]*yaml.Node, at int) {
+	at = -1
+
+	if m == nil {
+		return nil, at
+	}
+
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if slices.Contains(skip, m.Content[i].Value) {
+			if at < 0 {
+				at = len(pairs)
+			}
+
+			continue
+		}
+
+		pairs = append(pairs, [2]*yaml.Node{m.Content[i], m.Content[i+1]})
+	}
+
+	return pairs, at
+}
+
+// SamePairs reports whether two lists of pairs hold equal keys and
+// values in the same order, by NodeEqual. When they differ, key names
+// the key of the first pair that differs; it is empty when the counts
+// differ.
+func SamePairs(x, y [][2]*yaml.Node) (key string, same bool) {
+	if len(x) != len(y) {
+		return "", false
+	}
+
+	for i := range x {
+		if !NodeEqual(x[i][0], y[i][0]) || !NodeEqual(x[i][1], y[i][1]) {
+			return x[i][0].Value, false
+		}
+	}
+
+	return "", true
 }

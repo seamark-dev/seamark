@@ -1,12 +1,8 @@
 package tui
 
 import (
-	"os"
-	"path/filepath"
 	"strconv"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
@@ -111,7 +107,7 @@ func settingsCaptureScenes() []settingsScene {
 // TestCaptureRepresentativeStates. It also checks that every frame fits
 // its terminal.
 //
-// The workspace is "repo" under a temporary home, so the preset
+// The workspace of each frame comes from captureRoot, so the preset
 // commands read "-C ~/repo" and the frames stay the same on every run.
 func TestCaptureSettings(t *testing.T) {
 	dir := captureDir()
@@ -120,13 +116,7 @@ func TestCaptureSettings(t *testing.T) {
 		for _, size := range captureSizes {
 			w, hgt := size[0], size[1]
 
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-
-			root := filepath.Join(home, "repo")
-			require.NoError(t, os.MkdirAll(root, 0o755))
-
-			svc := settingsFakeAt(t, root, sc.content)
+			svc := settingsFakeAt(t, captureRoot(t), sc.content)
 
 			h := &harness{t: t, m: newModel(svc, ui.NewTheme(sc.ascii))}
 			h.run(h.m.Init())

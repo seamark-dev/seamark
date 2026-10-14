@@ -15,9 +15,13 @@
 //
 //   - doc.go: the package doc and this file map.
 //   - tui.go: Options and Run, the terminal lifecycle and the clipboard.
-//   - app.go: the model, the five destinations, the frame, the overlays.
-//   - app_run.go: the run line, the quit question, the wait at exit.
+//   - app.go: the model, the five destinations, the frame, the overlays,
+//     the help and the help of an open layer.
+//   - app_run.go: the run line, the quit question and the drafts that it
+//     names, the wait at exit.
 //   - state.go: the data sections, the generation tickets, the messages.
+//   - state_saved.go: the receivers of a saved lessons.yaml, the check
+//     of the reload after a write, and the outcome texts of a write.
 //   - keys.go: the global keys of the shell.
 //   - widgets.go: the domain widgets, which draw with package ui.
 //
@@ -25,6 +29,9 @@
 //
 //   - listpane.go: listPane and filterInput of Proposals and Pins.
 //   - previewflow.go: previewFlow, the stages of a preview and a commit.
+//   - sample.go: the selection sample that a pin, mute or delivery
+//     review opens, its keys and the markers of its two sides.
+//   - sample_view.go: the modal of the selection sample.
 //
 // Overview (destination 1):
 //
@@ -60,6 +67,8 @@
 //   - pins_modal.go: the retarget and prune preview flow.
 //   - pins_modal_view.go: the stages of the retarget and prune preview.
 //   - pins_msgs.go: the typed requests between Pins and the shell.
+//   - pins_author.go: the pin drafts, the pin form and the pin review.
+//   - pins_author_view.go: the pin form and the stages of the review.
 //   - stats.go: Stats, the delivery statistics.
 //   - evidence.go: Evidence, the two sources and their actions.
 //   - evidence_preview.go: the evidence refresh preview.
@@ -81,9 +90,14 @@
 //   - doctor.go: the doctor checks and the detail of one check.
 //   - settings.go: the screen state, the groups and the keys.
 //   - settings_draft.go: the draft, one edit per changed field.
-//   - settings_edit.go: the radio editor and the list editor.
+//   - settings_edit.go: the radio editor, the number input, and the
+//     list editor.
 //   - settings_save.go: the review and the save of one group.
-//   - settings_view.go: the field list and the editor box.
+//   - settings_view.go: the field list, the editor box, and the
+//     numbered rows of the list editors.
+//   - settings_lessons.go: the lesson delivery and lesson mutes groups
+//     of lessons.yaml, the mute editor and its record form.
+//   - settings_lessons_view.go: the views of the lessons groups.
 //   - firstrun.go: the guide of a fresh workspace.
 //
 // # Rules

@@ -263,6 +263,7 @@ func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
 		_, errs["CommitMaintenance"] = e.CommitMaintenance(&maintain.Plan{Action: maintain.ActionPrune})
 		_, errs["CommitRecovery"] = e.CommitRecovery(&maintain.Plan{Action: maintain.ActionPrune})
 		nestedExt, errs["RunExtract"] = e.RunExtract(context.Background(), &learning.ExtractPreview{}, nil)
+		_, errs["CommitAuthor"] = e.CommitAuthor(&maintain.AuthorPlan{})
 
 		// Reads take no lock, so the views stay responsive.
 		readPlan, readErr = e.PlanSettings(set, []settings.Edit{{Field: settings.DistillWrite, Bool: true}})
@@ -284,7 +285,7 @@ func TestEngineRefusesEveryMutationDuringADistillation(t *testing.T) {
 		require.ErrorIs(t, err, ErrBusy, name)
 	}
 
-	assert.Len(t, errs, 9)
+	assert.Len(t, errs, 10)
 	assert.Nil(t, nested, "a refused run returns no execution")
 	assert.Nil(t, nestedExt, "a refused extraction returns no execution")
 	assert.Equal(t, 1, agent.Count(), "the refused runs start no agent call")
@@ -341,6 +342,34 @@ func TestEngineMutationsReleaseTheLockOnEveryPath(t *testing.T) {
 	require.Error(t, err)
 	engUnlocked(t, e)
 
+	// A lessons plan whose file changed is stale; the refused save frees
+	// the lock too.
+	snap, err := e.Settings()
+	require.NoError(t, err)
+
+	lessonsPlan, err := e.PlanSettings(snap, []settings.Edit{{Field: settings.Threshold, Int: 3}})
+	require.NoError(t, err)
+	require.Equal(t, pinfile.File, lessonsPlan.File)
+
+	servicestest.Write(t, ws, pinfile.File, "threshold: 4\n")
+
+	saved, err := e.SaveSettings(lessonsPlan)
+	require.ErrorIs(t, err, settings.ErrStale)
+	assert.Equal(t, settings.NotWritten, saved.Outcome)
+	engUnlocked(t, e)
+
+	// An authoring commit refuses a missing or an unconfirmable plan, and
+	// frees the lock on that path too.
+	authored, err := e.CommitAuthor(nil)
+	require.ErrorIs(t, err, errNoPlan)
+	assert.Equal(t, maintain.NotWritten, authored.Outcome)
+	engUnlocked(t, e)
+
+	authored, err = e.CommitAuthor(&maintain.AuthorPlan{})
+	require.Error(t, err, "a plan that was never confirmable never commits")
+	assert.Equal(t, maintain.NotWritten, authored.Outcome)
+	engUnlocked(t, e)
+
 	// Each maintenance and extraction mutation refuses a missing or an
 	// unusable plan, and frees the lock on that path too.
 	_, err = e.CommitMaintenance(nil)
@@ -379,6 +408,8 @@ func TestEngineMutationsReleaseTheLockOnEveryPath(t *testing.T) {
 	_, maintErr := e.CommitMaintenance(&maintain.Plan{Action: maintain.ActionRetarget})
 	_, recoverErr := e.CommitRecovery(&maintain.Plan{Action: maintain.ActionRetarget})
 	ext, extErr := e.RunExtract(context.Background(), noop, nil)
+	authored, authorErr := e.CommitAuthor(&maintain.AuthorPlan{})
+	saved, saveErr := e.SaveSettings(lessonsPlan)
 	e.mu.Unlock()
 
 	require.ErrorIs(t, err, ErrBusy)
@@ -386,8 +417,13 @@ func TestEngineMutationsReleaseTheLockOnEveryPath(t *testing.T) {
 	require.ErrorIs(t, maintErr, ErrBusy)
 	require.ErrorIs(t, recoverErr, ErrBusy)
 	require.ErrorIs(t, extErr, ErrBusy)
+	require.ErrorIs(t, authorErr, ErrBusy)
+	require.ErrorIs(t, saveErr, ErrBusy)
 	assert.Nil(t, x)
 	assert.Nil(t, ext)
+	assert.Equal(t, maintain.NotWritten, authored.Outcome)
+	assert.Equal(t, snap.Lessons.Path, saved.Path, "a busy lessons save names lessons.yaml")
+	engUnlocked(t, e)
 }
 
 func TestEngineCleansUpACleanupOnlyPreview(t *testing.T) {

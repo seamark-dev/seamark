@@ -17,24 +17,24 @@ import (
 // the change can ultimately reach. This is the pre-edit question — "what
 // am I about to forget?" — answered from evidence, not vibes.
 func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error {
-	names := make([]string, 0, len(files))
-	indexed := make([]string, 0, len(files))
+	names, unindexed := ChangeSetNames(st, root, files)
+	notIndexed := make(map[string]bool, len(unindexed))
 
-	for _, f := range files {
-		name, ok := asIndexedFile(st, root, f)
-		if !ok {
-			// Report it, so a typo never reads as "no data". The name is
-			// tool input, so it is sanitized like every path on this surface.
-			fmt.Fprintf(w, "%s: not in the index (new file, or run `seamark index`)\n\n", render.Sanitize(name))
-		}
+	for _, name := range unindexed {
+		// Report it, so a typo never reads as "no data". The name is
+		// tool input, so it is sanitized like every path on this surface.
+		fmt.Fprintf(w, "%s: not in the index (new file, or run `seamark index`)\n\n", render.Sanitize(name))
 
-		// Lessons and the companion set need only a path: a brand-new file
-		// in a pinned region deserves its guidance MOST, and a new file the
-		// agent listed is never suggested back to it. Co-change and
-		// exposure need the index, so indexed stays the gate for those.
-		names = append(names, name)
+		notIndexed[name] = true
+	}
 
-		if ok {
+	// Co-change and exposure need the index, so indexed stays the gate
+	// for those. asIndexedFile answers from the resolved name alone, so
+	// a name is unindexed for every spelling in the request or for none.
+	indexed := make([]string, 0, len(names))
+
+	for _, name := range names {
+		if !notIndexed[name] {
 			indexed = append(indexed, name)
 		}
 	}
@@ -91,6 +91,31 @@ func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error 
 	}
 
 	return nil
+}
+
+// ChangeSetNames names the files of a change_set request the way the
+// index names them (asIndexedFile). names holds one name per file, in
+// request order. unindexed holds the names that the index does not know,
+// in the same order. A selection sample of the change_set surface names
+// its paths here, so it selects for the same files as ChangeSet.
+func ChangeSetNames(st *store.Store, root string, files []string) (names, unindexed []string) {
+	names = make([]string, 0, len(files))
+
+	for _, f := range files {
+		name, ok := asIndexedFile(st, root, f)
+
+		// Lessons and the companion set need only a path: a brand-new file
+		// in a pinned region deserves its guidance MOST, and a new file the
+		// agent listed is never suggested back to it. So names keeps an
+		// unindexed file too.
+		names = append(names, name)
+
+		if !ok {
+			unindexed = append(unindexed, name)
+		}
+	}
+
+	return names, unindexed
 }
 
 // exposureLines prints who depends on the file's symbols and what the

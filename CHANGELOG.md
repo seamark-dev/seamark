@@ -8,6 +8,97 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **Console pin authoring, lesson settings, and selection sample
+  (`seamark tui`, experimental).** The console now writes manual pins
+  and the lesson settings of `.seamark/lessons.yaml`. See
+  [docs/tui.md](docs/tui.md) and
+  [docs/lessons.md](docs/lessons.md#remove-prune-mute-and-the-other-filters).
+  - Pin authoring: in Lessons › Pins, `n` drafts a new pin, and `i`
+    edits and `d` removes the cursor pin. The form has a one-line rule,
+    a multi-line note, and an explicit scope: repository-wide or a list
+    of regions. It checks each field as you type. The review shows the
+    exact diff, the guidance before and after, whether the delivery
+    identity changes, and every blocker with its route. A new pin goes
+    after the last pin; apply still inserts at the head. A linked pin
+    allows a note edit only: `w` retargets it, and `-` prunes it. A
+    pending, ambiguous, or duplicate link refuses the keys. The writes
+    need `distill.write` and a readable index of this workspace. They
+    write `.seamark/lessons.yaml` only: they never write the ledger or
+    create a proposal row.
+  - Lesson settings: Settings gains Lesson delivery (`threshold`,
+    `pin_budget`, `change_budget`, and `hook_delivery`) and Lesson mutes
+    (the `mute` list). Each field shows its stored, default, and
+    effective value and the surfaces that it affects. A mute save
+    changes one entry, and the editor marks entries that match nothing,
+    duplicates, and overlaps. A lessons save needs neither
+    `distill.write` nor an index, because it writes no pin. Stats links
+    its count of hidden mined lessons to the mutes (`o`).
+  - Selection sample: `s` opens it in a pin review or a lessons Settings
+    review. It runs the selection of the edit hook or of `change_set`
+    for explicit paths, under the saved file and the reviewed candidate.
+    It uses the production selection and one evidence read, and it
+    records nothing. An unavailable sample says why; it never shows zero
+    lessons. `internal/report` now reads the evidence once and selects
+    with one typed fold per surface: one for the hook, and one for
+    `change_set` and `check`. The sample calls the same folds. The
+    selection of the three surfaces is unchanged, and golden tests pin
+    it.
+  - Guarded writes: a pin save plans again just before the write. A
+    lesson settings save checks the file bytes, the file mode, and the
+    hard links again just before the write. A change of the file bytes
+    or the file mode writes nothing. For a pin save, a change of the
+    gate or of the relationship of the pin also writes nothing. The
+    saves refuse a file with CRLF line breaks and a file with more than
+    one hard link. A missing file gets only the saved key. The save keeps the permission bits,
+    not an access control list, extended attributes, or another owner.
+    A result reads written, not written, or unknown, and the console
+    never retries a write. A write of `.seamark/lessons.yaml` closes
+    every open preview that read the old file and keeps its draft.
+  - The YAML editors read an escaped quote in single quotes. YAML
+    writes a quote inside single quotes as two quote characters, as in
+    `'docs/it''s #1'`. The editors of `.seamark/lessons.yaml` and
+    `.seamark/config.yaml` read the ` #1'` after such a pair as a
+    comment. So they refused some edits next to such a value. For
+    example, a retarget (console or `seamark lessons --retarget`) that
+    drops that region was refused for a comment that the line does not
+    hold. The editors now read the pair as one quote.
+  - The pin editor finds a comment after the text of a value. A pin
+    edit that changes or removes the note refuses to drop a comment
+    after the text of a note line. This also holds on a later line of a
+    multi-line note. A retarget (console or `seamark lessons --retarget`) that
+    removes a regions item such as `- rock 'n roll # keep me` now
+    refuses; before, it dropped the comment.
+  - A Settings save of `.seamark/config.yaml` or `.seamark/lessons.yaml`
+    refuses to drop a comment after the text of a value in the same way.
+    A removed key still takes the comment on its own line. So a removal
+    of a mute entry or an exclude pattern with such a comment now
+    refuses with the manual route. Before, the comment went with the
+    entry.
+  - A removal or a reset of the key on line 1 of a settings file keeps
+    its byte-order mark, unless the file becomes empty.
+  - The console inputs drop the direction marks U+200E, U+200F, and
+    U+061C, as they drop U+2028 and U+2029.
+  - The console region check accepts a name such as `a:b`; a drive
+    letter is a letter and `:` before `/`, `\`, or the end. It refuses
+    a `.` path name, which matches no file. The review and the sample
+    count a region under a file, such as `api/h.go/sub`, as no file
+    yet.
+  - At 60×20 the pin form footer keeps `esc close`. While a Pins action
+    key is `n/a`, the Pins footer at 60×20 keeps every action key by its
+    letter.
+  - A reload closes an open pin review whose entry moved or changed, or
+    whose draft changed. After a refused save, `enter` reviews again and
+    follows a moved entry.
+  - With `--db` of another repository, the pin form treats the link of
+    every pin as unknown, because a save needs an index of this
+    workspace.
+  - A new pin, a pin edit, and a pin removal reload Doctor and Evidence.
+  - A retarget, a prune, and an apply of proposals reload them too.
+  - The console inputs drop the separators U+2028 and U+2029, and their
+    notice counts them.
+  - A pin rule or region in the file that is longer than 256 characters
+    opens read-only, and the form names the length. A long region also
+    locks the scope rows.
 - **A deletion that is not staged is no longer a parse error.** Git
   keeps a tracked path in its cached list after the file is deleted,
   until the deletion is staged. `seamark index` read such a path, failed,

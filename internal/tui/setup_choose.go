@@ -283,7 +283,7 @@ func setupMissingPhrase(missing []string) string {
 		noun = " hooks"
 	}
 
-	return "+ " + setupJoinWords(missing) + noun
+	return "+ " + joinWords(missing) + noun
 }
 
 // aboutLines explains the focused addition: what it does, its state now

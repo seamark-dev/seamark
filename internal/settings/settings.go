@@ -1,24 +1,28 @@
-// Package settings reads and edits the focused Seamark settings in
-// .seamark/config.yaml: the inference preset, the pin-write gate, the
-// review window, and the indexing options. Three packages read that one
-// file, each its own section. This package therefore never re-encodes
-// the document. It splices the text of one field group, verifies the
-// result with every reader, and writes it through the guarded setup
-// engine of internal/integration.
+// Package settings reads and edits the focused Seamark settings in two
+// documents. .seamark/config.yaml holds the inference preset, the
+// pin-write gate, the review window, and the indexing options. Three
+// packages read that one file, each its own section.
+// .seamark/lessons.yaml holds the lesson delivery settings and the
+// mutes; the pins in it belong to the pin editors (internal/pinfile).
+// This package therefore never re-encodes a document. It splices the
+// text of one field group, verifies the result with every reader, and
+// writes it through the guarded setup engine of internal/integration.
 //
 // Inspect reads only. PlanPatch computes a guarded diff and writes
 // nothing. Save writes exactly the planned bytes, or refuses with
-// ErrStale when the file changed after it was inspected.
+// ErrStale when the file changed after it was inspected. After a failed
+// write, Save reads the file again and reports the outcome.
 //
-// A save changes only the lines of one field group. It keeps comments,
-// unknown keys, other sections and the file mode, and it replaces the
-// file atomically. A missing file is created with the planned keys only.
-// A file that the splice cannot change safely returns a BlockedError
-// that names the line to fix by hand: malformed or ambiguous YAML (for
-// example duplicate keys or aliases), a symbolic link, a read-only file,
-// or a file that this user cannot write. The activation texts of the
-// plan say when each field takes effect; docs/configuration.md lists
-// them for the user.
+// A save changes only the lines of one field group in one document. It
+// keeps comments, unknown keys, other sections and the file mode, and it
+// replaces the file atomically. A missing file is created with the
+// planned keys only. A file that the splice cannot change safely returns
+// a BlockedError that names the line to fix by hand: malformed or
+// ambiguous YAML (for example duplicate keys or aliases), a symbolic
+// link, a read-only file, or a file that this user cannot write. The two
+// documents are independent: a problem in one never blocks a group of
+// the other. The activation texts of the plan say when each field takes
+// effect; docs/configuration.md lists them for the user.
 package settings
 
 import (
@@ -37,6 +41,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/fixes"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/reviews"
@@ -46,11 +51,13 @@ import (
 // File is the shared configuration document, relative to the root.
 const File = ".seamark/config.yaml"
 
-// Field names one supported setting by its YAML path.
+// Field names one supported setting by its YAML path. A config.yaml
+// field is a "section.key" path. A lessons.yaml field is a top-level key.
 type Field string
 
-// The supported fields. agent.argv is read-only: the only edit is its
-// removal, because authoring a custom command is out of scope.
+// The supported fields of config.yaml. agent.argv is read-only: the only
+// edit is its removal, because authoring a custom command is out of
+// scope.
 const (
 	AgentCLI       Field = "agent.cli"
 	AgentArgv      Field = "agent.argv"
@@ -60,8 +67,36 @@ const (
 	IndexExclude   Field = "index.exclude"
 )
 
-// allFields lists the fields in display order.
-var allFields = []Field{AgentCLI, AgentArgv, DistillWrite, ReviewWindow, IndexGenerated, IndexExclude}
+// The supported fields of lessons.yaml. Each is a top-level key of
+// reviews.Config. Mutes is the mute list; a plan changes one entry of
+// it. The pin list is not a field: the pin editors own it.
+const (
+	Threshold    Field = "threshold"
+	PinBudget    Field = "pin_budget"
+	ChangeBudget Field = "change_budget"
+	HookDelivery Field = "hook_delivery"
+	Mutes        Field = "mute"
+)
+
+// allFields lists the fields in display order: the config.yaml groups
+// first, then lesson delivery, then the mutes.
+var allFields = []Field{
+	AgentCLI, AgentArgv, DistillWrite, ReviewWindow, IndexGenerated, IndexExclude,
+	Threshold, PinBudget, ChangeBudget, HookDelivery, Mutes,
+}
+
+// documentFields lists the fields of one document in display order.
+func documentFields(doc string) []Field {
+	var out []Field
+
+	for _, f := range allFields {
+		if f.Document() == doc {
+			out = append(out, f)
+		}
+	}
+
+	return out
+}
 
 // section returns the top-level key that holds the field.
 func (f Field) section() string {
@@ -77,7 +112,8 @@ func (f Field) key() string {
 	return k
 }
 
-// Group returns the settings group that edits the field.
+// Group returns the settings group that edits the field. An unknown
+// field has no group, so a new field cannot join a form by accident.
 func (f Field) Group() Group {
 	switch f {
 	case AgentCLI, AgentArgv:
@@ -86,30 +122,48 @@ func (f Field) Group() Group {
 		return GroupPinWrite
 	case ReviewWindow:
 		return GroupEvidence
-	default:
+	case IndexGenerated, IndexExclude:
 		return GroupIndexing
+	case Threshold, PinBudget, ChangeBudget, HookDelivery:
+		return GroupDelivery
+	case Mutes:
+		return GroupMutes
+	default:
+		return groupNone
 	}
 }
 
+// Document returns the file that holds the field, relative to the root:
+// File or pinfile.File. An unknown field returns "".
+func (f Field) Document() string {
+	return f.Group().Document()
+}
+
 // Reader returns the name of the reader that owns the field, as used
-// in Snapshot.ReaderErrs.
+// in Snapshot.ReaderErrs. An unknown field returns "".
 func (f Field) Reader() string {
-	switch f.section() {
-	case sectionAgent:
+	switch f {
+	case AgentCLI, AgentArgv:
 		return ReaderAgent
-	case sectionDistill:
+	case DistillWrite:
 		return ReaderDistill
-	default:
+	case ReviewWindow, IndexGenerated, IndexExclude:
 		return ReaderIndex
+	case Threshold, PinBudget, ChangeBudget, HookDelivery, Mutes:
+		return ReaderLessons
+	default:
+		return ""
 	}
 }
 
 // Reader names, the keys of Snapshot.ReaderErrs. The index reader also
-// owns reviews.window_days.
+// owns reviews.window_days. The lessons reader (reviews.ParseConfig)
+// reads lessons.yaml; the other three read config.yaml.
 const (
 	ReaderAgent   = "agent"
 	ReaderDistill = "distill"
 	ReaderIndex   = "index"
+	ReaderLessons = "lessons"
 )
 
 // Group is one settings form. A plan edits exactly one group, so
@@ -126,7 +180,15 @@ const (
 	GroupEvidence
 	// GroupIndexing edits index.generated and index.exclude.
 	GroupIndexing
+	// GroupDelivery edits the four delivery keys of lessons.yaml.
+	GroupDelivery
+	// GroupMutes adds, changes, or removes one mute entry of lessons.yaml.
+	GroupMutes
 )
+
+// groupNone is the group of an unknown field. It has no fields and no
+// document.
+const groupNone Group = -1
 
 // String names the group for display.
 func (g Group) String() string {
@@ -139,8 +201,26 @@ func (g Group) String() string {
 		return "evidence"
 	case GroupIndexing:
 		return "indexing"
+	case GroupDelivery:
+		return "lesson delivery"
+	case GroupMutes:
+		return "lesson mutes"
 	default:
 		return "unknown"
+	}
+}
+
+// Document returns the file that the group edits, relative to the root.
+// The lessons groups edit pinfile.File, the one name of lessons.yaml. An
+// unknown group returns "".
+func (g Group) Document() string {
+	switch g {
+	case GroupInference, GroupPinWrite, GroupEvidence, GroupIndexing:
+		return File
+	case GroupDelivery, GroupMutes:
+		return pinfile.File
+	default:
+		return ""
 	}
 }
 
@@ -157,9 +237,23 @@ func (g Group) Fields() []Field {
 	return out
 }
 
-// section returns the top-level key that holds the group's fields.
+// section returns the config.yaml section that holds the group's
+// fields. The lessons groups edit top-level keys and have no section.
 func (g Group) section() string {
-	return g.Fields()[0].section()
+	switch g {
+	case GroupInference:
+		return sectionAgent
+	case GroupPinWrite:
+		return sectionDistill
+	case GroupEvidence:
+		return sectionReviews
+	case GroupIndexing:
+		return sectionIndex
+	case GroupDelivery, GroupMutes:
+		return ""
+	default:
+		return ""
+	}
 }
 
 // Source says where the effective value of a field comes from.
@@ -201,18 +295,29 @@ type FieldState struct {
 	Err error
 }
 
-// Snapshot is one read-only observation of the settings file.
+// Snapshot is one read-only observation of the two settings files. The
+// fields without a document name describe config.yaml; Lessons describes
+// lessons.yaml.
 type Snapshot struct {
-	// Root is the absolute workspace root; Path is the absolute file.
+	// Root is the absolute workspace root; Path is the absolute
+	// config.yaml file.
 	Root, Path string
-	// Guard is the observation that every plan binds to.
+	// Guard is the observation that every config.yaml plan binds to.
 	Guard integration.FileGuard
-	// Blocked is set when no group can be saved: the file is unreadable,
-	// linked, read-only, or structurally unsafe to edit. BlockedAt is
-	// the 1-based line to open, or 0.
+	// Blocked is set when no config.yaml group can be saved: the file is
+	// unreadable, linked, read-only, or structurally unsafe to edit.
+	// BlockedAt is the 1-based line to open, or 0. It never blocks a
+	// lessons group.
 	Blocked   error
 	BlockedAt int
-	// Fields holds every supported field in display order.
+	// ReadErr is the failure of reading config.yaml itself, before any
+	// reader runs; nil when the read worked or the file is absent. A
+	// reader that rejects the text sets ReaderErrs, not ReadErr. The
+	// console checks its reload after a save with it, because a reader
+	// error of another section does not mean that the read failed.
+	ReadErr error
+	// Fields holds every supported field of both documents in display
+	// order.
 	Fields []FieldState
 	// Presets lists the valid agent.cli values in registry order.
 	Presets []string
@@ -220,8 +325,12 @@ type Snapshot struct {
 	Invocation    agent.CommandSpec
 	InvocationErr error
 	// ReaderErrs holds each reader's failure, keyed by ReaderAgent,
-	// ReaderDistill, or ReaderIndex. A missing key means success.
+	// ReaderDistill, ReaderIndex, or ReaderLessons. A missing key means
+	// success. The ReaderLessons entry is Lessons.ReaderErr, so a lookup
+	// by Field.Reader works for every field.
 	ReaderErrs map[string]error
+	// Lessons is the observation of lessons.yaml. Inspect always sets it.
+	Lessons *LessonsPart
 	// Agent, Distill, and Index are the decoded sections; nil when the
 	// reader failed. The UI seeds its drafts from them.
 	Agent   *agent.Config
@@ -260,15 +369,24 @@ type BlockedError struct {
 	Reason string
 	// Line is the 1-based line in the file, or 0 when unknown.
 	Line int
+	// File is the document to edit by hand, relative to the root. Empty
+	// means config.yaml, the only document of the callers before the
+	// lessons document.
+	File string
 }
 
-// Error names the reason and the line.
+// Error names the reason, the line, and the file.
 func (e *BlockedError) Error() string {
-	if e.Line > 0 {
-		return fmt.Sprintf("%s (line %d); edit %s by hand", e.Reason, e.Line, File)
+	file := e.File
+	if file == "" {
+		file = File
 	}
 
-	return fmt.Sprintf("%s; edit %s by hand", e.Reason, File)
+	if e.Line > 0 {
+		return fmt.Sprintf("%s (line %d); edit %s by hand", e.Reason, e.Line, file)
+	}
+
+	return fmt.Sprintf("%s; edit %s by hand", e.Reason, file)
 }
 
 // Is makes every BlockedError match ErrBlocked.
@@ -287,9 +405,18 @@ func (s *Snapshot) Field(f Field) (FieldState, bool) {
 }
 
 // Editable returns nil when the group can be planned, or the reason it
-// cannot: the global block, a problem in the group's section, or a
-// failing owning reader. The UI shows the reason before a draft starts.
+// cannot. The reason is the block of the group's document, a problem in
+// the group's section, or a failing owning reader. The UI shows the
+// reason before a draft starts. A group checks only its own document, so
+// a problem in one file never blocks a group of the other.
 func (s *Snapshot) Editable(g Group) error {
+	switch g.Document() {
+	case pinfile.File:
+		return s.Lessons.editable(g)
+	case "":
+		return fmt.Errorf("%w: unknown settings group %d", ErrInvalidEdit, int(g))
+	}
+
 	if s.Blocked != nil {
 		return s.Blocked
 	}
@@ -343,27 +470,46 @@ func Inspect(root string, reg *integration.Registry) (*Snapshot, error) {
 		issues:      map[string]*BlockedError{},
 	}
 
+	snap.inspectConfig(reg)
+
+	// The lessons document is read on every path, also when config.yaml
+	// is unreadable: the two documents are independent.
+	var lessonsFields []FieldState
+
+	snap.Lessons, lessonsFields = inspectLessons(abs)
+	snap.Fields = append(snap.Fields, lessonsFields...)
+
+	if snap.Lessons.ReaderErr != nil {
+		snap.ReaderErrs[ReaderLessons] = snap.Lessons.ReaderErr
+	}
+
+	return snap, nil
+}
+
+// inspectConfig reads config.yaml into the snapshot.
+func (s *Snapshot) inspectConfig(reg *integration.Registry) {
 	// ReadInput follows a link for the read, as the readers do, and
 	// records it. The link then blocks every write below.
-	guard, raw, err := integration.ReadInput(abs, File)
+	guard, raw, err := integration.ReadInput(s.Root, File)
 	if err != nil {
 		// Every reader fails on an unreadable file, so every value is
 		// unknown. The fields still carry their defaults for display.
-		snap.apply(reading{agentErr: err, distillErr: err, indexErr: err})
-		snap.block(&BlockedError{Reason: render.Sanitize(err.Error())})
+		s.ReadErr = err
+		s.apply(reading{agentErr: err, distillErr: err, indexErr: err})
+		s.block(&BlockedError{Reason: render.Sanitize(err.Error())})
 
-		return snap, nil
+		return
 	}
 
-	snap.Guard = guard
+	s.Guard = guard
 
 	var issue *yamledit.Issue
 
-	snap.data, snap.crlf, issue = yamledit.NormalizeBreaks(raw)
+	s.data, s.crlf, issue = yamledit.NormalizeBreaks(raw)
 	gate := blockedError(issue)
 
-	r := read(abs, reg, snap.data)
-	snap.apply(r)
+	r := read(s.Root, reg, s.data)
+	s.apply(r)
 
 	// The engine owns the refusal of a link and of a file that this user
 	// cannot write. The view shows the same reason before the user asks
@@ -372,19 +518,45 @@ func Inspect(root string, reg *integration.Registry) (*Snapshot, error) {
 
 	switch {
 	case refusal != "":
-		snap.block(&BlockedError{Reason: refusal})
+		s.block(&BlockedError{Reason: refusal})
 	case gate != nil:
-		snap.block(gate)
+		s.block(gate)
 	case r.blocked != nil:
-		snap.block(r.blocked)
+		s.block(r.blocked)
 	}
-
-	return snap, nil
 }
 
 // block records the global block.
 func (s *Snapshot) block(b *BlockedError) {
 	s.Blocked, s.BlockedAt = b, b.Line
+}
+
+// observed returns the guard and the absolute path of one document of
+// the snapshot. A plan and a save bind to the guard of their own
+// document only, so a change of the other file never makes them stale.
+func (s *Snapshot) observed(file string) (guard integration.FileGuard, path string) {
+	switch {
+	case file == File:
+		return s.Guard, s.Path
+	case file == pinfile.File && s.Lessons != nil:
+		return s.Lessons.Guard, s.Lessons.Path
+	default:
+		return integration.FileGuard{}, ""
+	}
+}
+
+// unchanged returns nil when a fresh observation of one document equals
+// its guard in the snapshot. Otherwise it returns the ErrStale that names
+// the file. A plan asks it, because the patch starts from the snapshot
+// bytes. A no-op save asks it, because it has no engine guard.
+func (s *Snapshot) unchanged(file string) error {
+	guard, _ := s.observed(file)
+
+	if now, _, err := integration.ReadInput(s.Root, file); err != nil || now != guard {
+		return staleError(file)
+	}
+
+	return nil
 }
 
 // apply copies one reading into the snapshot.
@@ -561,11 +733,12 @@ func commandText(argv []string) string {
 	return displayText(strings.Join(argv, " "))
 }
 
-// fields builds the state of every field from one reading.
+// fields builds the state of every config.yaml field from one reading.
 func (r reading) fields(presets []string) []FieldState {
-	out := make([]FieldState, 0, len(allFields))
+	configFields := documentFields(File)
+	out := make([]FieldState, 0, len(configFields))
 
-	for _, f := range allFields {
+	for _, f := range configFields {
 		st := FieldState{Field: f}
 
 		var explicit bool

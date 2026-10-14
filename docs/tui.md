@@ -4,11 +4,17 @@
 Seamark knows about the repository and its agent integrations, and it runs
 the everyday workflows end to end: setting up or repairing an integration,
 collecting review and fix evidence, distilling proposals with the
-inference agent, deciding on those proposals, maintaining the installed
-pins, and editing the settings that these workflows read. Pin maintenance
-covers a retarget or a prune of a proposal-linked pin and a trigger
-extraction for selected proposals. It is experimental. The plain commands
-stay the stable interface, and every console action has a plain route.
+inference agent, deciding on those proposals, maintaining and writing
+the installed pins, and editing the settings that these workflows read.
+Pin maintenance covers a retarget or a prune of a proposal-linked pin and
+a trigger extraction for selected proposals. Pin authoring writes a new
+pin, a pin edit, or a pin removal, and never the proposal ledger.
+Settings also edits the lesson settings of `.seamark/lessons.yaml`: the
+threshold, the budgets, the repetition mode, and the mutes. A selection
+sample shows what a reviewed change does to the lessons of explicit
+paths. It is experimental. The plain commands stay the stable
+interface. Every console write has a plain route: a command, or an edit
+of the file by hand.
 
 ```bash
 seamark tui                 # the enclosing git repository of the cwd
@@ -19,7 +25,7 @@ seamark tui --ascii         # ASCII glyphs for limited fonts
 The console honours `-C/--workspace` and `--db` like every other command.
 An invalid workspace fails before the screen changes. Without an
 interactive terminal (a pipe, CI, `TERM=dumb`) the command prints the
-equivalent plain commands and exits with status 1. `NO_COLOR` turns color
+closest plain commands and exits with status 1. `NO_COLOR` turns color
 off; every state keeps a glyph and a text label, so nothing depends on
 color. The console supports macOS and Linux, like the rest of Seamark. It
 is designed for 120×40: below 100 columns each view shows one pane at a
@@ -40,14 +46,18 @@ guide for this session without writing anything.
   not create or rebuild the index, record lesson delivery, fetch reviews,
   start an agent, save settings, grant trust, or reconcile the pin file
   with the proposal ledger. SQLite may create its `-wal` and `-shm` side
-  files next to an existing database.
+  files next to an existing database. A selection sample only reads: it
+  records no delivery and writes nothing.
 - It never starts network or model work, and never writes a durable
   change, without a preview. The start or the save is always `y` in that
   preview, never `enter`; `esc` before `y` changes nothing. The index
   build keeps its confirmation (`enter` or `y`), because it writes only
   local derived data. A retarget or a prune writes `.seamark/lessons.yaml`
   and the ledger only after `y` in its preview, and only while
-  `distill.write` is on.
+  `distill.write` is on. A new pin, a pin edit, and a pin removal follow
+  the same rule, but they write `.seamark/lessons.yaml` only, never the
+  ledger. A save of a lesson setting writes `.seamark/lessons.yaml` only;
+  it needs neither the gate nor an index, because it writes no pin.
 - It never chains steps. An evidence refresh does not start a
   distillation, a distillation never applies a pin, and a settings save
   runs nothing. A trigger extraction is a separate paid run: it never
@@ -57,10 +67,13 @@ guide for this session without writing anything.
   selectable text.
 - It never retries work, and it runs one mutation at a time.
 - It never changes the policy, the gate mode, or pins outside a reviewed
-  apply, retarget, or prune. It never edits the rule or the note of a
-  pin, and it never retargets or prunes a pin without exactly one linked
-  proposal.
-  Settings edits only the five fields listed in
+  apply, retarget, prune, new pin, pin edit, or pin removal. It never
+  edits the rule of a linked pin. It never sets a scope of your choice
+  on a linked pin: only a retarget changes that scope, to the computed
+  regions. It never removes a linked pin: that is a prune. It never
+  retargets or prunes a pin without exactly one linked proposal.
+  Settings edits only the five fields of `config.yaml` and the five
+  lesson settings listed in
   [Configuration](configuration.md#console-settings); it can remove a
   custom `agent.argv` after a preview, but never writes one.
 
@@ -68,7 +81,9 @@ guide for this session without writing anything.
 
 Press `1`–`5` to switch; `tab` moves between panes; `?` shows every key of
 the current view, and a key that does not work now reads `n/a` with its
-reason. The footer clock is the time of the last refresh.
+reason. The footer clock is the time of the last refresh. A Pins footer
+leaves the clock out when it needs the room to keep an `n/a` key in
+view.
 
 ### 1 Overview
 
@@ -174,14 +189,14 @@ shows the rule, the regions (`repo-wide` for none), and a state label:
 
 | State | Meaning | Route |
 | --- | --- | --- |
-| `pN linked` | One entry and one applied proposal have this rule and regions. | `w`, `-`, `t` |
+| `pN linked` | One entry and one applied proposal have this rule and regions. | `w`, `-`, `t`; `i` edits the note only |
 | `pN edited` | Linked, but the live note differs from the recorded note. | As linked |
-| `no proposal` | No applied or pending proposal has this rule and regions. | Edit by hand |
+| `no proposal` | No applied or pending proposal has this rule and regions. | `i` edit, `d` remove |
 | `pending pN` | Only pending proposals match. | Record one as applied (`c` in Proposals) |
 | `duplicate pin` | Several entries have this rule and regions. | Blocked; edit by hand |
 | `ambiguous` | Several applied proposals record this pin. | Blocked; edit by hand |
 | `ambiguous row` | A matching proposal's stored region fields disagree. | Blocked; edit by hand |
-| `link unknown` | The pin file or the ledger could not be read. | Read-only; the state line names the error |
+| `link unknown` | The pin file or the ledger could not be read. | Maintenance is off, and the state line names the error. With a readable pin file, `i` and `d` still draft; a save needs a readable index of this workspace. |
 
 Attention words follow the relationship, the most urgent first: `blocked`,
 `unknown key`, and `edited` (for example `p30 blocked`).
@@ -208,6 +223,8 @@ Attention words follow the relationship, the most urgent first: `blocked`,
   the regions that change or the note that leaves, WILL and WON'T lines,
   the file diff, and the ledger change. `y` shows only when every pin is ready and
   `distill.write` is on; `o` opens Settings › Pin writing when it is off.
+  The gate covers apply, retarget, prune, and new pins, pin edits, and
+  pin removals in Lessons › Pins.
 - `y` plans again from the current files, rows, gate, and evidence, and
   any difference writes nothing. The commit replaces the pin file
   atomically, then updates the ledger. The two writes are not one
@@ -216,18 +233,91 @@ Attention words follow the relationship, the most urgent first: `blocked`,
 - A file that the editor cannot change safely (for example a symbolic
   link, a read-only file, CRLF line breaks, or an unsupported layout), a
   copied checkout whose index records another root, and a missing index
-  keep the pins listed and turn the edits off; the state line says why.
+  keep the pins listed and turn retarget and prune off; the state line
+  says why.
 
 Plain route: `seamark lessons --retarget <ids>` and `--prune <ids>` use
 the same engine without a preview: they change the ready pins and print a
 reason line for each other proposal.
+
+Pins also writes pins for you. It creates, edits, and removes manual
+pins, which no proposal stands behind, and it edits the note of a
+linked pin ([Lessons](lessons.md#pins-that-a-person-writes)):
+
+- `n` opens the form of a new pin in every state, also without an index.
+  `i` edits and `d` removes the cursor pin; marks are ignored and stay.
+  A pin with no proposal allows every field. A linked pin allows a note
+  edit only: the rule and scope rows are read-only, and `d` reads `n/a`
+  with "use - Prune". A pending, ambiguous, or duplicate pin refuses `i`
+  and `d`, and so do an entry that the editor cannot change safely and
+  an unreadable pin file. The press names the reason and the route.
+- The form has four rows. Rule is one line. Note takes several lines,
+  and `enter` adds a line break. Scope is repository-wide or a list of
+  regions, and a new pin starts with no choice. A region matches that
+  file, or everything under that directory; there are no wildcards. The
+  form checks each field as you type. The fields drop control and
+  direction characters and the line and paragraph separators U+2028
+  and U+2029, and a notice counts what they dropped. The Rule and each
+  Region hold at most 256 characters; see "Versions and limits". The
+  form shows the rendered guidance (pin · regions · rule — note) with
+  the line breaks of the note. The
+  delivery surfaces print it on one line; see "Versions and limits". The
+  form takes every key but `ctrl+c`. `esc` leaves a text field and keeps
+  the text; `esc` on a row closes the form and keeps the draft. Drafts
+  live in this session only: one new-pin draft and one edit draft per
+  pin.
+- `s` reviews the draft, and `d` opens the review of a removal at once.
+  The review shows the operation, the file, the entry, the guidance
+  before and after, the exact diff, and every blocker with its route.
+  It also states the ledger effect: "The proposal ledger does not
+  change." A wording or
+  scope edit says whether the delivery identity changes. A new pin goes
+  after the last pin; apply still inserts at the head. `y` writes only
+  while `distill.write` is on and a readable index records this
+  workspace; `o` opens Settings › Pin writing or the Overview build.
+- `y` plans again from the current file, ledger, and gate. Any
+  difference writes nothing, and the result lists the differences. The
+  save replaces the file: it keeps the permission bits, not an access
+  control list, extended attributes, or another owner. A file with more
+  than one hard link is refused with "replacing this file would break
+  its hard link; edit .seamark/lessons.yaml by hand". A result reads
+  written, not written, or "Result unknown: check
+  .seamark/lessons.yaml"; nothing is retried. When the write landed but
+  the next read of the file failed, the result says so, and `r` reads
+  again.
+- An edit draft follows its entry by its content, never by its
+  position. Without one matching entry, the draft keeps its text and
+  offers only `c` (copy through OSC 52) and `x` (discard).
+- A reload closes an open review before `y` when its entry moved or
+  changed. It also closes the review when the reload changed its draft.
+  The reason is that the plan of the review names the old entry or the
+  old edits. An edit draft stays, and `s` reviews it again; `d` reviews
+  a removal again. After a refused save, `enter` reviews again from the
+  current file and follows a moved entry.
+
+**Selection sample** opens with `s` in a pin review or in the review of
+a lessons Settings group, while the review holds a candidate change. It
+runs the lesson selection of the edit hook
+or of `change_set` (`space` switches) for the paths that you add. It
+runs twice: under the saved file ("Saved configuration") and under the
+reviewed candidate ("This review"). Each item reads `kept`, `kept, wording
+changed`, `added`, or `removed`. A removed item names its reason where
+the selection says it: a mute, the threshold, the coverage of an
+applied pin, a restatement, or a cap. The sample uses
+the production selection and one evidence read, and it records nothing.
+It selects before repeat suppression, and the hook takes its paths from
+the edit, so an agent session can receive less. Without a path or
+without a ready index of this workspace, the sample says why it is
+unavailable; it never shows zero lessons instead.
 
 **Stats** shows the lessons by source, the proposals by state, the top
 regions, and the records delivered per day (`f` changes the period), with
 the most surfaced lessons, the totals by surface (hook, `change_set`,
 `check`) and by client, suppressed repeats, and eligible lessons never
 delivered. Delivered means emitted through a recorded surface, not read or
-followed. Plain route: `seamark lessons --stats`, from the same reader.
+followed. When mined lessons are below the threshold or muted, a line
+counts them, and `o` opens Settings › Lesson mutes. Plain route:
+`seamark lessons --stats`, from the same reader.
 
 **Evidence** shows the two sources: local fix commits and GitHub reviews.
 Each source shows its stored findings, its freshness (`refreshed <age>`,
@@ -281,9 +371,17 @@ Plain route: `seamark lessons --distill` and `seamark lessons
 
 Exact rules: `internal/proposals` (decisions), `internal/pinfile` (pin file
 layouts and edits), `internal/maintain` (readings, retarget, prune,
-recovery), `internal/learning` and `internal/distill` (evidence,
-distillation, trigger extraction), and the headers of
-`internal/tui/proposals.go` and `internal/tui/pins.go` (the console keys).
+recovery, pin authoring), `internal/learning` and `internal/distill`
+(evidence, distillation, trigger extraction), `internal/report` (the
+selection that the sample shares), and the headers of
+`internal/tui/proposals.go`, `internal/tui/pins.go`,
+`internal/tui/pins_author.go`, and `internal/tui/sample.go` (the console
+keys).
+
+Plain route for pin authoring: edit `.seamark/lessons.yaml` by hand;
+`seamark lessons --list` prints the exact rule and region values to
+paste. The sample has no plain command. `seamark lessons --file <path>`
+lists up to 8 lessons of one file, with no pin budget.
 
 ### 4 Doctor
 
@@ -298,26 +396,67 @@ Integrations, and a client check opens that client. Plain route:
 
 ### 5 Settings
 
-The focused settings of `.seamark/config.yaml`, with the stored value, the
-default, and the effective value of each field: `agent.cli`, `agent.argv`
-(read-only), `distill.write`, `reviews.window_days`, `index.generated`,
-and `index.exclude`. [Configuration](configuration.md#console-settings)
-lists their values and when each takes effect.
+The focused settings of two files, with the stored value, the default,
+and the effective value of each field. `.seamark/config.yaml` holds
+`agent.cli`, `agent.argv` (read-only), `distill.write`,
+`reviews.window_days`, `index.generated`, and `index.exclude`.
+`.seamark/lessons.yaml` holds `threshold`, `pin_budget`,
+`change_budget`, `hook_delivery`, and the `mute` list.
+[Configuration](configuration.md#console-settings) lists their values and
+when each takes effect.
 
-- The fields form four groups: inference, pin writing, evidence, and
-  indexing. Each group keeps its own draft, and a draft never saves by
-  itself. `d` returns a field to its default, which removes the key; `x`
+- The fields form six groups: inference, pin writing, evidence,
+  indexing, lesson delivery, and lesson mutes. Each group keeps its own
+  draft, and a draft never saves by itself. `d` returns a field to its
+  default, which removes the key; the mute list has no reset. `x`
   discards the draft of the group under the cursor.
+- Pin writing (`distill.write`) governs apply, retarget, prune, and new
+  pins, pin edits, and pin removals in Lessons › Pins. A save of a lesson
+  setting writes no pin, so the gate does not govern it.
+- A number field of lesson delivery takes the default or a whole number
+  above 0. `enter` refuses a number out of range and keeps the typed
+  text, so you can fix it. The field refuses an eleventh digit as you
+  type.
+  `hook_delivery` takes default, `always`, or `once-per-context`. Its
+  detail states the rule of the engine: a repeat drops only when the
+  edit event names a receiving context with a supported reset. It then
+  quotes the inspection of each client as it is, and points to
+  Integrations and Doctor. It never claims that a client suppresses
+  repeats.
+- `enter` on `mute` opens the mute editor, with one row per entry of the
+  file. A row says "matches nothing", "duplicate of line N", or "flow
+  entry: remove only" where that applies. `a` adds an entry, `enter`
+  changes the cursor entry, `x` removes it, and `esc` closes the editor.
+  An entry with a character that the editor cannot show (a control,
+  direction, or separator character) refuses a change: edit the file
+  by hand. The record form has a Rule and a Region field, checks them
+  as you
+  type, and says which mined lessons the mute hides. A mute never hides
+  a pin: `d` Remove and `-` Prune in Lessons › Pins change pins. A draft
+  holds one mute operation, and a second one asks you to review or
+  discard the first.
 - `s` shows the file diff of the group under the cursor; `y` saves
   exactly that diff, one group per save. A save keeps comments, unknown
-  keys, and other sections, and replaces the file atomically. A file that
-  the editor cannot change safely blocks the save and names the line to
-  fix by hand.
+  keys, and other sections, and replaces the file atomically. A save
+  that removes a whole key removes the comment on the key line too: `d`,
+  `x` on the last exclude pattern, and the `agent.argv` removal of a
+  preset save. A save never drops another comment. The console refuses
+  to remove a mute entry or an exclude pattern with a comment after its
+  text. Remove that entry by hand. A save of
+  `.seamark/lessons.yaml` keeps the permission bits, not an access
+  control list, extended attributes, or another owner. `s` in its review
+  opens the selection sample. A file that the editor cannot
+  change safely blocks the save and names the line to fix by hand. A
+  problem in one file never blocks a group of the other file.
 - Leaving Settings or quitting with a draft asks first. A save drops the
   previews that it invalidates, and every changed setting needs its own
-  later run.
+  later run. A save of `.seamark/lessons.yaml` closes every open preview
+  that read the old file, such as an apply preview or a pin review. The
+  draft of that preview stays. The message names the closed preview and the key
+  that opens it again.
 
-Plain route: edit `.seamark/config.yaml`. Exact rules: `internal/settings`.
+Plain route: edit `.seamark/config.yaml` or `.seamark/lessons.yaml`.
+Exact rules: `internal/settings`.
 
 ## Keys
 
@@ -326,12 +465,17 @@ Plain route: edit `.seamark/config.yaml`. Exact rules: `internal/settings`.
 | Global | `1`–`5` destinations, `r` refresh the view, `?` help, `q` quit |
 | Lessons sub-views | `p` Proposals, `m` Pins, `s` Stats, `e` Evidence, `u` Run |
 | Proposals | `space` select pending rows, `x` clear the selection, `f` state (pending, applied, dismissed, superseded), `/` region, `a` apply, `d` dismiss, `c` record as applied, `o` open the PR, `t` trigger extraction; `?` lists every key, and `n/a` marks a key that the cursor row, the selection, or the filters cannot use; the footer lists only the keys that work |
-| Pins | `↑↓` pins, `tab` detail, `space` mark, `x` clear the marks, `f` list (installed, not present, superseded), `/` region, `z` text search, `v` compare with a similar pin, `w` retarget preview, `-` prune preview, `t` trigger extraction; `?` always lists `w`, `-`, `t`, and `v`, and the footer does from 120 columns; `n/a` marks a key that the targets cannot use (its press names the reason) |
+| Pins | `↑↓` pins, `tab` detail, `space` mark, `x` clear the marks, `f` list (installed, not present, superseded), `/` region, `z` text search, `v` compare with a similar pin, `w` retarget preview, `-` prune preview, `t` trigger extraction, `n` new pin, `i` edit, `d` remove (unlinked; `i` and `d` act on the cursor pin only); `?` always lists `n`, `i`, `d`, `-`, `w`, `t`, and `v`. While one of them reads `n/a`, the footer lists all seven from 60×20. A narrow footer then shows some keys by their letter alone, and at 60×20 the pane, list, and switch keys give way without a marker. When all seven work, a narrow footer cuts keys from the end and shows `…`, as other footers do. At 120 columns `t` and `v` then give way, and at 60×20 only `space select` stays. `n/a` marks a key that the targets cannot use (its press names the reason) |
 | Pins region or search field | `enter` apply, `esc` keep the previous value |
 | Pins comparison | `tab` next similar pin, `↑↓` scroll, `esc`/`enter` close |
 | Retarget or prune preview | `↑↓` scroll, `y` confirm (every pin ready, `distill.write` on, and no other operation running), `o` open Settings › Pin writing (gate off), `esc` cancel |
 | Retarget or prune result | `enter` close, or preview again after a refusal; with a recovery offer: `c` preview the ledger-only completion, `esc` drop it |
 | Ledger completion preview | `y` complete the ledger update, `o` open Settings › Pin writing (gate off), `esc` back to the result |
+| Pin form | `enter` edit the row, `esc` leave a field (keeps the text) or close the form (keeps the draft), `s` review, `a` add a region, `x` remove the region under the cursor, or on another row discard the draft (`d` confirm, `esc` keep), `↑↓` rows, `?` help (no field focused); in the Note field `enter` adds a line break. The footer lists the keys in this order, so `esc close` stays in view at 60×20 |
+| Pin review | `y` confirm, `s` sample (while the review holds a candidate file), `o` open the route of a blocker (Settings › Pin writing or the Overview build), `esc` back to the form (close for a removal), scroll keys |
+| Pin result | `enter` close after a written result; after any other result `enter` reviews again and `esc` goes back; `r` read the file again after a failed read |
+| Orphaned pin draft | `c` copy the draft, `x` discard, `esc` close |
+| Sample | `↑↓` rows, `enter` edit a path, `a` add path, `x` remove path, `space` surface, `esc` back |
 | Evidence | `↑↓` sources and actions, `enter` open the preview of the selected action, `tab` detail |
 | Evidence preview | `y` start, `esc` cancel |
 | Evidence refresh | `x` stop (confirm with `y`); after the end `enter` prepares a distillation, `n` previews the same refresh again |
@@ -342,9 +486,12 @@ Plain route: edit `.seamark/config.yaml`. Exact rules: `internal/settings`.
 | Distillation result | `↑↓` rows, `tab` pane, `enter` review the generated proposals, `n` prepare the remaining work, `esc` close |
 | Extraction result | `↑↓` rows, `tab` pane, `enter` show the cursor proposal in Pins or Proposals, `n` prepare a new review of the open questions |
 | Run, earlier records | `[` earlier run, `]` later run; read-only: `↑↓` rows, `tab` pane, `enter` review the proposals of a distillation |
+| Stats | `tab` pane, `f` period, `↑↓` scroll, `o` open Settings › Lesson mutes (while mined lessons are hidden) |
 | Settings list | `↑↓` move, `enter` edit, `d` return to default, `s` review and save the group under the cursor, `x` discard the draft of that group, `tab` detail |
 | Settings editor | `↑↓` choose, `space` select, `enter`/`esc` done; list editor `a` add, `x` remove, `K`/`J` move |
-| Settings diff | `y` save, `esc` keep editing |
+| Settings mute editor | `a` add, `enter` change, `x` remove, `s` review and save, `esc` done |
+| Mute record form | `tab` next field, `enter` keep, `esc` cancel |
+| Settings diff | `y` save, `s` sample (a lessons.yaml group with a change), `esc` keep editing |
 | Discard question (`x`) | `d` discard the draft of the group, `esc` keep it |
 | Unsaved draft question (leaving Settings) | `k`/`enter` keep the drafts, `d` discard the drafts of every group, `esc` stay |
 | Unsaved draft question (quit) | `enter`/`y` discard the drafts and quit, `esc` stay |
@@ -357,22 +504,35 @@ build the question offers to exit after completion instead. While the
 question is open, the footer shows `ctrl+c quit`: a second `ctrl+c`
 answers yes, so it stops and exits (or exits after completion for a
 build). `q` does nothing there. A retarget or prune commit cannot stop
-safely either: its preview takes every key, and `ctrl+c` asks "Exit after
-the running operation?"; `enter` exits once the commit has ended. A quit
-with an unsaved Settings draft asks first, see Settings.
+safely either, and neither can a pin write. Its preview takes every key,
+and `ctrl+c` asks "Exit after the running operation?". `enter` exits once
+the commit has ended. A quit with an unsaved draft asks first: a pin
+draft, or a Settings draft of either file. When every draft is a
+`.seamark/config.yaml` Settings draft, the question names each group;
+otherwise it names each file whose drafts are lost. `enter` or `y`
+discards the drafts and quits, and `esc` stays.
 
 ## Stays on the CLI
 
-Manual pin authoring and editing (a new pin, the rule or the note, a
-region set of your own choice), mutes, delivery budgets and mode, policy,
-enforcement and effect-catalogue editing, authoring a custom
-`agent.argv`, repository exploration (`orient`, `why`) and diff checks,
-the HTML report, removing or revoking integrations, and more than one
-workspace per session. A pin that the console does not change, for
-example a pin without exactly one linked proposal, is edited in
-`.seamark/lessons.yaml` by hand; `seamark lessons --retarget` and
-`--prune` leave it as it is too. Settings covers five fields; every
-other key of `.seamark/config.yaml` is edited by hand.
+These stay on the CLI or need a hand edit:
+
+- the rule or a scope of your own choice for a linked pin
+- a pin with a pending, ambiguous, or duplicate link
+- the order of the pins
+- more than one pin or one mute per save
+- a mute list in flow style
+- policy, enforcement, and effect-catalogue editing
+- authoring a custom `agent.argv`
+- repository exploration (`orient`, `why`) and diff checks
+- the HTML report
+- removing or revoking integrations
+- more than one workspace per session
+
+Edit a pin that the console does not change in
+`.seamark/lessons.yaml` by hand. `seamark lessons --retarget` and
+`--prune` also leave a pin without exactly one linked proposal as it
+is. Settings covers five fields of `.seamark/config.yaml` and five lesson
+settings of `.seamark/lessons.yaml`; every other key is edited by hand.
 
 ## Versions and limits
 
@@ -399,14 +559,67 @@ other key of `.seamark/config.yaml` is edited by hand.
 - `seamark lessons --extract-triggers` asks every eligible pending and
   applied proposal. The console asks only the selected, eligible
   proposals.
-- The index freshness covers the whole `.seamark/config.yaml`. After any
-  settings save, the index reads as stale until the next build.
+- The index freshness covers the whole `.seamark/config.yaml`. After a
+  save of that file, the index reads as stale until the next build. The
+  freshness does not cover `.seamark/lessons.yaml`, so a lessons save
+  leaves it as it is.
 - A copied checkout keeps the index of the original repository until it
   is indexed again, and the console then works on the files of that
-  root, as the CLI does. Only Pins detects the case and turns retarget and
-  prune off; `seamark lessons --retarget` and `--prune` still edit the
-  pin file of the original repository. Run `seamark index` in the copy
-  before you use it.
+  root, as the CLI does. Pins detects the case and turns retarget and
+  prune off. A pin review names it as a blocker, the lesson settings
+  groups refuse a save, and the sample is unavailable.
+  `seamark lessons --retarget` and `--prune` still edit the pin file of
+  the original repository. Run `seamark index` in the copy before you
+  use it. With `--db` of another repository, retarget and prune stay on,
+  as in the CLI. The pin writes, the lesson settings saves, and the
+  sample refuse in the same way. The pin form then treats the link of
+  every pin as unknown, because the index records another repository.
+  Its review names that root.
+- The new pin, pin edit, pin removal, mute, and delivery saves refuse a
+  `.seamark/lessons.yaml` with CRLF line breaks. They also refuse a file
+  with more than one hard link: "replacing this file would break its
+  hard link; edit .seamark/lessons.yaml by hand". Apply still writes a
+  CRLF file.
+  These saves replace the file: they keep the permission bits, not an
+  access control list, extended attributes, or another owner.
+- A one-line field holds at most 256 characters, counted as Unicode
+  code points (a flag emoji counts 2). The pin Rule, a pin Region, a
+  sample path, and the mute Rule and Region refuse more with a notice.
+  The Pins and Proposals filters, the exclude pattern, and the region of
+  the distillation scope keep the first 256. The note has no limit. A
+  rule or region that you write by hand can be longer; the pin form then
+  opens it read-only and names the length.
+- The edit hook, `change_set`, `check`, `why`, `orient`, and `seamark
+  lessons --file` print a pin on one line. So the lines of a multi-line
+  note join without a space. The pin form, the review, and the Pins
+  detail show the line breaks.
+- A selection sample lists at most the first 8 paths that the hook
+  rejects. It reads at most 100 mined lessons per path, as the hook
+  does. It does not simulate repetition.
+- `make tui-measure` times Lessons › Pins and its engine read, the note
+  field, and the mute editor. It also times the sample, the hook
+  selection, the plans of pins and lesson settings, and the pin save.
+  Its generated files hold up to 5000 pins, 500 mutes, and a note of
+  100000 characters, with up to 50 paths. One run on an Apple M1 Pro
+  (go1.27.1) gave these practical limits. The Pins and Settings frame
+  times leave out the cost of color styling, because their benchmark
+  draws without color.
+  - A Pins frame takes 12.5 ms at 5000 pins, so it stays below one
+    frame at 60 Hz (16 ms). A Pins load with its engine read takes
+    about 7 ms at 500 pins, 26 ms at 2000, and 63 ms at 5000.
+  - A key in the note field and the next frame take less than 3 ms,
+    also with a note of 100000 characters. A Settings frame with 500
+    mutes takes less than 5 ms.
+  - A pin review takes 20–23 ms to plan at 500 pins and 175–202 ms at
+    5000 pins. At 5000 pins, the plan of a new pin allocates 157 MB, and
+    the save after `y` takes about 0.2 s more.
+  - A lesson settings review takes at most 71 ms to plan at 5000 pins.
+  - A sample of 10 paths takes about 20 ms at 500 pins and 55 ms at
+    5000 pins. A sample of 50 paths takes about 0.28 s at 500 pins. The
+    hook selection of those 50 paths takes about 0.13 s by itself.
+
+  The numbers depend on the machine. Run `make tui-measure` to measure
+  yours.
 - One workspace per invocation. No mouse support is needed or provided;
   commands and YAML are plain selectable text. Clipboard copy is an
   optional OSC 52 request that some terminals ignore.

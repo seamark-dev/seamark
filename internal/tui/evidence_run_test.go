@@ -21,7 +21,7 @@ import (
 // evStarted confirms a refresh of mode and keeps its worker from
 // running. The test sends the events and the result itself, so the
 // record stays active between the steps.
-func evStarted(t *testing.T, h *harness, les *lessons, mode index.SourceMode) *evRun {
+func evStarted(t testing.TB, h *harness, les *lessons, mode index.SourceMode) *evRun {
 	t.Helper()
 
 	it := evRefreshLocal

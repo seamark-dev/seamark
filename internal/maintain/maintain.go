@@ -41,12 +41,24 @@
 // repeat of the operation finds no linked pin, and NewPlan blocks it.
 // So a hand edit reconciles the two stores.
 //
-// Many display fields hold text from the pin file, the ledger, or a
-// model. Such text can contain terminal control bytes, so a caller
-// sanitizes it before display. These fields are PlanItem.Reason, From,
-// To, Facts, Kept, and Rows; Plan.Blocked and FileBlock; the Reason of
-// every reading; the error fields of Result; and Recovery.Before and
-// After. Only the texts in the const blocks of this package are fixed.
+// PlanAuthor and CommitAuthor serve the pins that a person writes in the
+// console. The operations are a new pin, an edit or a removal of an
+// unlinked pin, and a note edit of a linked pin. They write the pin file
+// only. They never write the ledger and never build a Recovery, so a
+// failure has only the three outcomes of one file write.
+// The plan also reads the ledger, because the relationship decides which
+// fields can change.
+//
+// Many display fields hold text from the pin file, the ledger, a model,
+// or the person. Such text can contain terminal control bytes, so a
+// caller sanitizes it before display. These fields are PlanItem.Reason,
+// From, To, Facts, Kept, and Rows; Plan.Blocked and FileBlock; the
+// Reason of every reading; the error fields of Result; and
+// Recovery.Before and After. For authoring, they are AuthorPlan.Before,
+// After, Diff, Old, New, the owners, History, and Missing;
+// AuthorBlocker.Text and Route; FieldIssue.Text; StaleError.Differences;
+// and AuthorResult.Err. Only the texts in the const blocks of this
+// package are fixed.
 package maintain
 
 import (
@@ -160,6 +172,15 @@ type Deps struct {
 	Ledger LedgerWriter
 	// Files writes the pin file. Nil uses the guarded pinfile write.
 	Files FileWriter
+	// Author writes the pin file of an authoring commit. Nil uses the
+	// guarded pinfile write. It is separate from Files, because an
+	// authoring commit can create the file and restores nothing.
+	Author AuthorWriter
+	// ForeignRoot is set by the caller when Root is not the root of this
+	// workspace (P4-16). The caller owns the root rule. An authoring plan
+	// then carries a blocker with its text, and CommitAuthor refuses
+	// with it. The maintenance planner ignores it.
+	ForeignRoot error
 	// Probe is a fresh observation of the index. A retarget needs a
 	// ready index, because the scope advice reads its history.
 	Probe workspace.IndexProbe
@@ -188,6 +209,15 @@ func (d Deps) files() FileWriter {
 	}
 
 	return pinWriter{}
+}
+
+// author returns the authoring file boundary of d.
+func (d Deps) author() AuthorWriter {
+	if d.Author != nil {
+		return d.Author
+	}
+
+	return authorWriter{}
 }
 
 // now reads the clock of d.

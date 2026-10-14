@@ -458,6 +458,7 @@ func TestListPaneKeysStayApart(t *testing.T) {
 		lesKeys.Clear, lesKeys.State, lesKeys.Region, lesKeys.Open,
 		lesKeys.Apply, lesKeys.Dismiss, lesKeys.Reconcile, lesKeys.Confirm,
 		pinKeys.Search, pinKeys.Compare, pinKeys.Retarget, pinKeys.Prune,
+		pinKeys.New, pinKeys.Edit, pinKeys.Remove,
 	}
 
 	for _, a := range actions {

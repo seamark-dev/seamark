@@ -2,7 +2,6 @@ package tui
 
 import (
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -70,26 +69,17 @@ func keysCaptureScenes() []captureScene {
 		return f
 	}
 
-	// toLast opens the help and scrolls down one row at a time until the
-	// last row of the screen group is in view. A compact help shows the
-	// n/a rows only after a scroll, and the scene must show them at every
-	// size. One row per step stops with that row at the bottom, so the
-	// window also shows the n/a label and the keys that work above it.
-	toLast := func(last string) func(h *harness) {
-		return func(h *harness) {
-			h.press("3", "?")
-
-			for range 60 {
-				if strings.Contains(h.view(), last) {
-					return
-				}
-
-				h.press("down")
-			}
-		}
+	// helpToLast opens the help and scrolls down one row at a time until
+	// the last row of the screen group is in view. A compact help shows
+	// the n/a rows only after a scroll, and the scene must show them at
+	// every size. One row per step stops with that row at the bottom, so
+	// the window also shows the n/a label and the keys that work above it.
+	helpToLast := func(h *harness) {
+		h.press("3", "?")
+		captureScrollTo(h, "down", "record applied")
 	}
 
 	return []captureScene{
-		{name: "12b-proposals-help", fake: proposalsList, drive: toLast("record applied")},
+		{name: "12b-proposals-help", fake: proposalsList, drive: helpToLast},
 	}
 }

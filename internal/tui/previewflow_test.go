@@ -270,5 +270,5 @@ func stripLines(lines []string) []string {
 func TestPreviewFlowHoldersShadowNothing(t *testing.T) {
 	scanEmbedding(t).assertShadowsNothing(t, "previewFlow",
 		[]string{"stage", "preview", "err", "scroll", "readDone", "close"},
-		[]string{"propDecision", "maintModal", "settingsFlow", "evPreview"})
+		[]string{"propDecision", "maintModal", "settingsFlow", "evPreview", "pinReview"})
 }

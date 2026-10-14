@@ -7,10 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
@@ -160,7 +163,7 @@ func TestSettingsReturnToDefaultRemovesTheKey(t *testing.T) {
 	flat := settingsBox(h.view(), "Save")
 	assert.Contains(t, flat, "distill.write true › removed")
 	assert.Contains(t, flat, "− remove distill.write; the default off applies")
-	assert.Contains(t, flat, "write a pin: a new apply, retarget or prune preview offers the write")
+	assert.Contains(t, flat, "write a pin: a new preview offers the write ("+settings.PinWriteScope+")")
 
 	h.press("y")
 	assert.Equal(t, "distill:\n  # pins need a review first\nindex:\n  generated: true\n", settingsBytes(t, svc),
@@ -204,7 +207,7 @@ func TestSettingsReviewWindowAcceptsOnlyPositiveDays(t *testing.T) {
 	h.press("space")
 	h.typeText("9")
 	h.press("esc")
-	assert.Equal(t, settings.Edit{Field: settings.ReviewWindow, Days: 180}, scr.drafts[settings.ReviewWindow])
+	assert.Equal(t, settings.Edit{Field: settings.ReviewWindow, Days: 180}, scr.edits[settings.ReviewWindow])
 
 	h.press("esc", "s", "y")
 	assert.Equal(t, "reviews:\n  window_days: 180\n", settingsBytes(t, svc), "a missing file gets only the key")
@@ -217,7 +220,7 @@ func TestSettingsReviewWindowAcceptsOnlyPositiveDays(t *testing.T) {
 }
 
 func TestSettingsExcludeListEditor(t *testing.T) {
-	const before = "index:\n  exclude:\n    - \"*.pb.go\" # protobuf output\n"
+	const before = "index:\n  exclude:\n    - \"*.pb.go\"\n"
 
 	svc := settingsFake(t, before)
 	h := settingsOpen(t, svc, 120, 40)
@@ -256,13 +259,36 @@ func TestSettingsExcludeListEditor(t *testing.T) {
 
 	// K moves the last pattern up; x removes the first one.
 	h.press("up", "K", "home", "x")
-	assert.Equal(t, []string{"**/testdata", "internal/gen/"}, scr.drafts[settings.IndexExclude].List)
+	assert.Equal(t, []string{"**/testdata", "internal/gen/"}, scr.edits[settings.IndexExclude].List)
 
 	h.press("esc", "s")
 	assert.Contains(t, settingsBox(h.view(), "Save"), "+ set index.exclude: 2 patterns, in this order")
 
 	h.press("y")
 	assert.Equal(t, "index:\n  exclude:\n    - '**/testdata'\n    - internal/gen/\n", settingsBytes(t, svc))
+}
+
+// The planner refuses to remove an exclude pattern with a comment after
+// its text, because the comment would go with the line. The review then
+// shows the reason and the manual route.
+func TestSettingsExcludeRemovalKeepsAComment(t *testing.T) {
+	const before = "index:\n  exclude:\n    - \"*.pb.go\" # protobuf output\n    - vendor/\n"
+
+	svc := settingsFake(t, before)
+	h := settingsOpen(t, svc, 120, 40)
+
+	h.send(navigateMsg{dest: destSettings, intent: "group:indexing"})
+	h.press("down", "enter", "home", "x", "esc", "s")
+
+	box := settingsBox(h.view(), "Settings cannot be saved here")
+	assert.Contains(t, box, "The file cannot be edited safely: a removed item of index.exclude holds a comment, "+
+		"which the edit would drop.")
+	assert.Contains(t, box, "› .seamark/config.yaml:3")
+	assert.Contains(t, box, "The draft stays. Nothing was written.")
+
+	assert.Equal(t, []string{"vendor/"}, settingsScr(h).edits[settings.IndexExclude].List, "the draft stays")
+	settingsNoWrites(t, svc)
+	assert.Equal(t, before, settingsBytes(t, svc))
 }
 
 func TestSettingsPlanErrorsMarkTheirPattern(t *testing.T) {
@@ -621,7 +647,7 @@ func TestSettingsSaveReloadsDiagnosticsAndStartsNoWork(t *testing.T) {
 		{
 			name: "pin writing", content: "distill:\n  write: false\n", intent: "group:pinwrite",
 			keys: []string{"enter", "down", "space", "enter"},
-			when: "distill.write: at the next apply, retarget or prune preview.", ledger: true,
+			when: "distill.write: at the next pin-write preview: " + settings.PinWriteScope + ".", ledger: true,
 		},
 		{
 			name: "evidence", intent: "group:evidence", keys: []string{"enter", "down", "down", "space", "enter"},
@@ -709,4 +735,159 @@ func TestSettingsStaleModalsFollowTheReloadedDraft(t *testing.T) {
 	assert.Contains(t, flat, "nothing is left to save")
 	assert.NotContains(t, flat, "The draft stays")
 	assert.Equal(t, "distill:\n  write: true # someone else\n", settingsBytes(t, svc))
+}
+
+// The tests of the save routing (contracts §4.1, P4-12, P4-18). Each
+// save tells the screens about its own file. The outcome decides what
+// happens to the draft.
+
+func TestSettingsSaveTellsTheScreensAboutItsOwnFile(t *testing.T) {
+	svc := settingsFake(t, "distill:\n  write: false\n")
+	h := settingsOpen(t, svc, 120, 40)
+	probe := &settingsProbe{}
+	h.m.screens[destDoctor] = probe
+
+	// A config.yaml save sends settingsSavedMsg only.
+	h.send(navigateMsg{dest: destSettings, intent: "group:pinwrite"})
+	h.press("enter", "down", "space", "enter", "s", "y")
+	require.Len(t, probe.saved, 1)
+	assert.Equal(t, settings.GroupPinWrite, probe.saved[0].group)
+	assert.Empty(t, probe.lessons)
+
+	// A lessons.yaml save sends lessonsSavedMsg only. The lessons groups
+	// have no editor yet, so the test puts the draft in place and asks
+	// the real planner for the review.
+	scr := settingsScr(h)
+	scr.edits[settings.Threshold] = settings.Edit{Field: settings.Threshold, Int: 3}
+	h.run(scr.review(settings.GroupDelivery))
+	require.True(t, scr.flow.showsPreview(), "the planner returns a lessons plan")
+	assert.Equal(t, pinfile.File, scr.flow.preview.File)
+
+	h.press("y")
+	require.Len(t, probe.lessons, 1)
+	assert.Equal(t, "Settings › lesson delivery", probe.lessons[0].by)
+	assert.Len(t, probe.saved, 1, "a lessons.yaml save sends no settingsSavedMsg")
+	assert.Zero(t, scr.draftTotal(), "a written save drops the draft")
+
+	data, err := os.ReadFile(filepath.Join(svc.root, filepath.FromSlash(pinfile.File)))
+	require.NoError(t, err)
+	assert.Equal(t, "threshold: 3\n", string(data))
+}
+
+func TestSettingsSaveRoutesItsOutcome(t *testing.T) {
+	failure := errors.New("rename .seamark/x.yaml: input/output error")
+
+	cases := []struct {
+		name           string
+		group          settings.Group
+		edit           settings.Edit
+		res            settings.Result
+		saved, lessons int
+		draftStays     bool
+		toast          string
+	}{
+		{
+			name: "config written", group: settings.GroupPinWrite,
+			edit:  settings.Edit{Field: settings.DistillWrite, Bool: true},
+			res:   settings.Result{Outcome: settings.Written, Written: true},
+			saved: 1, toast: "Configuration updated: distill.write.",
+		},
+		{
+			name: "lessons written", group: settings.GroupDelivery,
+			edit:    settings.Edit{Field: settings.Threshold, Int: 3},
+			res:     settings.Result{Outcome: settings.Written, Written: true},
+			lessons: 1, toast: "Lesson settings updated: threshold.",
+		},
+		{
+			name: "lessons written with an error", group: settings.GroupDelivery,
+			edit:    settings.Edit{Field: settings.Threshold, Int: 3},
+			res:     settings.Result{Outcome: settings.Written, Written: true, Err: failure},
+			lessons: 1, toast: "Lesson settings updated: threshold. The write also reported an error: " + failure.Error(),
+		},
+		{
+			name: "lessons unknown", group: settings.GroupDelivery,
+			edit:    settings.Edit{Field: settings.Threshold, Int: 3},
+			res:     settings.Result{Outcome: settings.Unknown, Err: failure},
+			lessons: 1, draftStays: true, toast: "Result unknown: check .seamark/lessons.yaml.",
+		},
+		{
+			name: "config unknown", group: settings.GroupPinWrite,
+			edit:  settings.Edit{Field: settings.DistillWrite, Bool: true},
+			res:   settings.Result{Outcome: settings.Unknown, Err: failure},
+			saved: 1, draftStays: true, toast: "Result unknown: check .seamark/config.yaml.",
+		},
+		{
+			name: "lessons not written", group: settings.GroupDelivery,
+			edit:       settings.Edit{Field: settings.Threshold, Int: 3},
+			res:        settings.Result{Err: failure},
+			draftStays: true, toast: "Settings were not saved: " + failure.Error(),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := settingsOpen(t, settingsFake(t, ""), 120, 40)
+			probe := &settingsProbe{}
+			h.m.screens[destDoctor] = probe
+
+			// The flow waits for the save, as after y.
+			scr := settingsScr(h)
+			scr.edits[tc.edit.Field] = tc.edit
+			scr.flow = settingsFlow{group: tc.group}
+			scr.flow.stage = flowCommitting
+
+			plan := &settings.Plan{Group: tc.group, File: tc.group.Document(), Edits: []settings.Edit{tc.edit}}
+			h.send(settingsSaveDoneMsg{group: tc.group, plan: plan, res: tc.res, err: tc.res.Err, at: time.Now()})
+
+			assert.Len(t, probe.saved, tc.saved)
+			assert.Len(t, probe.lessons, tc.lessons)
+			assert.Equal(t, tc.draftStays, scr.draftTotal() == 1)
+			assert.Equal(t, tc.toast, h.m.toast.text)
+		})
+	}
+
+	// The result of an unknown outcome offers no new save: enter closes,
+	// and s reviews the draft against the file as it is now.
+	h := settingsOpen(t, settingsFake(t, ""), 120, 40)
+	scr := settingsScr(h)
+	scr.edits[settings.Threshold] = settings.Edit{Field: settings.Threshold, Int: 3}
+	scr.flow = settingsFlow{group: settings.GroupDelivery}
+	scr.flow.stage = flowCommitting
+
+	h.send(settingsSaveDoneMsg{group: settings.GroupDelivery, res: settings.Result{Outcome: settings.Unknown, Err: failure},
+		err: failure, at: time.Now()})
+
+	flat := settingsBox(h.view(), "Result unknown")
+	assert.Contains(t, flat, "Result unknown: check .seamark/lessons.yaml.")
+	assert.Contains(t, flat, "The draft stays. Press s to review it against the file as it is now.")
+	assert.Contains(t, flat, "Nothing is retried automatically.")
+	assert.Equal(t, []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "close")}, scr.flowActions())
+}
+
+func TestSettingsSaveRefreshFailureSaysSavedAndNeverSavesAgain(t *testing.T) {
+	f := newFake()
+	f.settings = fakeSettingsSnapshot(t, "")
+	h := settingsOpen(t, f, 120, 40)
+
+	scr := settingsScr(h)
+	scr.edits[settings.Threshold] = settings.Edit{Field: settings.Threshold, Int: 3}
+	scr.flow = settingsFlow{group: settings.GroupDelivery}
+	scr.flow.stage = flowCommitting
+
+	// The write landed; the next read of the pin file fails. The real
+	// settings read records a reader error for an unreadable file and
+	// returns no error. So the Pins inspection is the signal of
+	// production.
+	f.pins = pinsDocErr()
+
+	plan := &settings.Plan{Group: settings.GroupDelivery, File: pinfile.File}
+	h.send(settingsSaveDoneMsg{group: settings.GroupDelivery, plan: plan,
+		res: settings.Result{Outcome: settings.Written, Written: true}, at: time.Now()})
+
+	assert.Equal(t, "Saved: .seamark/lessons.yaml holds the reviewed bytes. Reading it again failed: open "+
+		".seamark/lessons.yaml: permission denied. Nothing is retried; r reads again.", h.m.toast.text,
+		"the result is closed, so a message carries the failure")
+	assert.Zero(t, scr.draftTotal(), "the save wrote the file, so the draft is gone")
+	assert.False(t, scr.flow.active())
+	assert.Zero(t, f.callCount("SaveSettings"), "a failed reload never saves again")
 }

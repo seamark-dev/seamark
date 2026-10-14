@@ -91,6 +91,11 @@ func TestCommentDetection(t *testing.T) {
 	assert.Equal(t, len("  a: b#c"), CommentStart("  a: b#c", 0), "a hash needs white space before it")
 	assert.Equal(t, 0, CommentStart("# top", 0))
 	assert.Equal(t, 10, CommentStart("  a: it's # c", 0), "a quote inside a word opens no quotes")
+
+	escaped := "  - 'docs/it''s #1'"
+	assert.Equal(t, len(escaped), CommentStart(escaped, 0), "two quotes inside single quotes are one quote")
+	assert.Equal(t, len(escaped)+1, CommentStart(escaped+" # c", 0))
+	assert.Equal(t, 8, CommentStart("  a: '' # c", 0), "an empty quoted value closes")
 	assert.Equal(t, 14, CommentStart("  a: [it's]   # c", 0), "a quote inside a flow item opens no quotes")
 	assert.Equal(t, len("  a: ['x #']"), CommentStart("  a: ['x #']", 0), "a quote after [ opens quotes")
 
@@ -185,8 +190,70 @@ f: >-
 	assert.Equal(t, []int{7, 13}, comments, "only the real comment lines")
 }
 
+// TestCommentInStartsAfterTheValueText covers findings M1 and L1. The
+// comment scan of a line starts after the value text of that line. A
+// scan from column 0 missed the comments of lines 3, 4, 13, and 16,
+// because it read a quote as an opening quote. It also read the "#" of
+// lines 6, 9, 11, 23, and 24 as a comment, although each is value text.
+func TestCommentInStartsAfterTheValueText(t *testing.T) {
+	doc := parsed(t, `a: x
+  more # c1
+b: rock 'n roll # c2
+c: x ''' # c3
+d: 'x
+  # in
+  more' # c4
+e: "x
+  more # in"
+f: |
+  text # in
+g:
+  - rock 'n roll # c5
+  - 'it''s #1'
+h: x
+  'n roll # c6
+i: [a, 'b # in'] # c7
+j: x#y
+k:
+  "z # in" # c8
+l: | # c9
+m: >-
+  # in
+  - [x] # in
+n: [it's] # c10
+# c11
+`)
+
+	var got []int
+
+	for n := 1; n <= len(doc.Lines); n++ {
+		if doc.CommentIn(n, n) {
+			got = append(got, n)
+		}
+	}
+
+	assert.Equal(t, []int{2, 3, 4, 7, 13, 16, 17, 20, 21, 25, 26}, got)
+	assert.True(t, doc.CommentIn(1, 3), "a range holds a comment when one of its lines does")
+	assert.False(t, doc.CommentIn(8, 12), "a hash inside a quoted or a block value is text")
+
+	// LineComment returns the text of each comment that CommentIn finds,
+	// and nothing for the other lines.
+	comments := map[int]string{}
+
+	for n := 1; n <= len(doc.Lines); n++ {
+		if c := doc.LineComment(n); c != "" {
+			comments[n] = c
+		}
+	}
+
+	assert.Equal(t, map[int]string{
+		2: "# c1", 3: "# c2", 4: "# c3", 7: "# c4", 13: "# c5", 16: "# c6", 17: "# c7",
+		20: "# c8", 21: "# c9", 25: "# c10", 26: "# c11",
+	}, comments)
+}
+
 func TestAValueThatTheScanCannotFollowBlocks(t *testing.T) {
-	doc := &Doc{Lines: []string{"a: x"}, valueLines: map[int]bool{}}
+	doc := &Doc{Lines: []string{"a: x"}, valueLines: map[int]bool{}, textEnds: map[int]int{}}
 
 	// The node claims a quoted value, but the text holds none.
 	node := &yaml.Node{Kind: yaml.ScalarNode, Style: yaml.DoubleQuotedStyle, Line: 1, Column: 4}
@@ -196,7 +263,7 @@ func TestAValueThatTheScanCannotFollowBlocks(t *testing.T) {
 	assert.Contains(t, issue.Reason, "cannot find where a multi-line value ends")
 	assert.Equal(t, 1, issue.Line)
 
-	unclosed := &Doc{Lines: []string{`a: "x`, "  y"}, valueLines: map[int]bool{}}
+	unclosed := &Doc{Lines: []string{`a: "x`, "  y"}, valueLines: map[int]bool{}, textEnds: map[int]int{}}
 	require.NotNil(t, unclosed.markScalar(node, 0), "a quote without its closing quote")
 
 	literal := &yaml.Node{Kind: yaml.ScalarNode, Style: yaml.LiteralStyle, Line: 1, Column: 4}

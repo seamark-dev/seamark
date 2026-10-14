@@ -587,14 +587,11 @@ func alreadyPinned(root string, ps []model.Proposal) ([]int64, error) {
 	return out, nil
 }
 
-// pinKey is the identity of the pin that RenderPins writes for p. It
-// uses RegionSet, as RenderPins does: the raw Region and Regions fields
-// diverge when Regions holds "*" next to real entries. The readers of
-// the file link a row by reviews.ProposalKey instead. Both keys are
-// equal unless the fields disagree, and apply and reconcile refuse such
-// a row.
+// pinKey is the identity of the pin that RenderPins writes for p
+// (pinfile.RenderedKey). It can differ from reviews.ProposalKey only when
+// the region fields disagree, and apply and reconcile refuse such a row.
 func pinKey(p model.Proposal) reviews.PinKey {
-	return reviews.NewPinKey(p.Rule, "", p.RegionSet())
+	return pinfile.RenderedKey(p)
 }
 
 // disagreeing returns the IDs of the proposals whose stored region
@@ -774,7 +771,8 @@ func commitApply(ls Ledgerer, root string, pv *Preview) (Result, error) {
 // test can change the file between this read and the guarded write.
 var readPinFile = pinfile.Read
 
-// appendPins adds the pin block at the head of the pin list. It writes
+// appendPins adds the pin block at the head of the pin list, where an
+// apply always put it (pinfile.Placement zero value). It writes
 // through internal/pinfile, the guarded write of Pins. That write
 // refuses a link and a file that this user cannot write. It keeps the
 // file mode and replaces the file by rename. The write binds to the
@@ -790,7 +788,7 @@ func appendPins(root string, before FileObservation, block string) error {
 		return fmt.Errorf("%w: the file changed after the preview", pinfile.ErrStale)
 	}
 
-	after, err := pinfile.PlanAppend(d, block)
+	after, err := pinfile.PlanAppend(d, block, pinfile.Placement{})
 	if err != nil {
 		return err
 	}

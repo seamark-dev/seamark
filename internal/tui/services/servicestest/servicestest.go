@@ -2,7 +2,8 @@
 // production engine of internal/tui/services. The engine tests of that
 // package and the console tests that drive a screen over the real
 // engine share them, so both build the same workspace and the same
-// fakes.
+// fakes. Git, Write, and Workspace take a testing.TB, so the Phase 4
+// benchmarks build the same workspace too.
 //
 // Only two boundaries are fakes: the GitHub fetch (Fetch) and the agent
 // invoker (Agent). Everything else is real: git, the index, the store
@@ -55,7 +56,7 @@ const Page = `[{"id":11,"user":{"login":"rev","type":"User"},` +
 
 // Git runs git in root with a fixed identity. Global config must not
 // leak in, because it can rewrite remotes.
-func Git(t *testing.T, root string, args ...string) {
+func Git(t testing.TB, root string, args ...string) {
 	t.Helper()
 
 	cmd := exec.Command("git", args...)
@@ -70,7 +71,7 @@ func Git(t *testing.T, root string, args ...string) {
 }
 
 // Write writes a repository-relative file of ws.
-func Write(t *testing.T, ws workspace.Workspace, rel, content string) {
+func Write(t testing.TB, ws workspace.Workspace, rel, content string) {
 	t.Helper()
 
 	path := filepath.Join(ws.Root, filepath.FromSlash(rel))
@@ -101,7 +102,7 @@ func findings(dirs ...string) []domain.Finding {
 // given origin, and two review findings per directory of dirs. Its
 // config.yaml names an agent command that leaves the returned marker
 // when it runs, so a test can prove that a read never runs the agent.
-func Workspace(t *testing.T, origin string, dirs ...string) (ws workspace.Workspace, marker string) {
+func Workspace(t testing.TB, origin string, dirs ...string) (ws workspace.Workspace, marker string) {
 	t.Helper()
 
 	root := t.TempDir()

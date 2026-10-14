@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -76,6 +77,26 @@ type propDecision struct {
 	// flow, which the Preview stage shows.
 	res     proposals.Result
 	refusal error
+	// check watches the reload after a pin write that landed; nil for
+	// every other outcome. The result shows its failure (P4-18).
+	check *refreshCheck
+}
+
+// propRefresh lists the sections that a dismiss or a reconcile changes:
+// the ledger, its statistics, the index state, and the Pins inspection.
+// The Pins inspection links each pin to its ledger row.
+var propRefresh = []sectionKind{secLedger, secStats, secIndex, secPins}
+
+// propRefreshOf returns the sections that a commit of action a changes.
+// An apply also writes lessons.yaml, so it reloads the sources of every
+// pin write (pinWriteRefresh). Doctor then sees a pin file that the
+// apply created.
+func propRefreshOf(a proposals.Action) []sectionKind {
+	if a == proposals.ActionApply {
+		return pinWriteRefresh
+	}
+
+	return propRefresh
 }
 
 // propPreviewMsg carries a preview result. seq drops the result of a
@@ -290,6 +311,8 @@ func (p *propView) update(msg tea.Msg) tea.Cmd {
 		return p.focus(msg.id)
 	case settingsSavedMsg:
 		return p.settingsSaved(msg)
+	case lessonsSavedMsg:
+		return p.lessonsSaved(msg)
 	case distEventMsg:
 		// The cleanup of a run removes the stale pending proposals that
 		// the plan named, and the user confirmed the plan.
@@ -814,20 +837,9 @@ func (p *propView) copyable() bool {
 
 // copyYAML sends the exact pin block of the preview to the terminal
 // clipboard (OSC 52). It copies Preview.YAML, not the folded display,
-// so the pasted block is the text that apply would write. The terminal
-// decides whether it honours the request, so the toast reports the
-// request, not a confirmed copy.
+// so the pasted block is the text that apply would write.
 func (p *propView) copyYAML() tea.Cmd {
-	text := p.dec.preview.YAML
-	st := p.st
-
-	return func() tea.Msg {
-		if err := st.copyToClipboard(text); err != nil {
-			return toastMsg{tone: ui.ToneFailure, text: "Could not copy the pin block: " + ui.ErrText(err)}
-		}
-
-		return toastMsg{tone: ui.ToneNeutral, text: "Sent to the terminal clipboard (OSC 52)"}
-	}
+	return clipboardCmd(p.st, p.dec.preview.YAML, "the pin block")
 }
 
 // commit claims the mutation slot and runs the reviewed decision.
@@ -880,13 +892,63 @@ func (p *propView) committedMsg(msg propCommitMsg) tea.Cmd {
 		}
 	}
 
-	// The preview check comes first, because commitDone forgets the
-	// preview.
-	if d := p.dec; d != nil && d.preview == msg.pv && d.commitDone() {
-		d.res, d.refusal = msg.res, msg.err
+	// commit always sends its preview. The guard keeps a message
+	// without one on the ledger sources.
+	kinds := propRefresh
+	if msg.pv != nil {
+		kinds = propRefreshOf(msg.pv.Action)
 	}
 
-	return tea.Batch(mutationDone, refresh(secLedger, secStats, secIndex, secPins))
+	reload := refresh(kinds...)
+
+	// The preview check comes first, because commitDone forgets the
+	// preview. A pin write that landed without an error also watches the
+	// reload, so the result can say that reading the file again failed.
+	if d := p.dec; d != nil && d.preview == msg.pv && d.commitDone() {
+		d.res, d.refusal = msg.res, msg.err
+
+		if msg.err == nil && msg.res.FileWritten && msg.res.FileErr == nil {
+			shown := func() bool { return p.dec == d && d.stage == flowResult }
+			d.check, reload = p.st.watchRefresh(pinfile.File, shown, kinds...)
+		}
+	}
+
+	cmds := []tea.Cmd{mutationDone, reload}
+
+	// A pin write that landed, or that the readback could not check,
+	// makes every other preview of lessons.yaml stale (P4-12). FileWritten
+	// covers both, because fileChanged counts an unread file as changed.
+	// Only an apply writes the pin file, so no other action sets it.
+	if msg.err == nil && msg.res.FileWritten {
+		cmds = append(cmds, sendLessonsSaved(time.Now(), "Lessons "+p.st.theme.Glyphs.Arrow+" Proposals"))
+	}
+
+	return tea.Batch(cmds...)
+}
+
+// lessonsSaved closes an open apply preview after a write of
+// lessons.yaml (lessonsBound). The preview binds the bytes of the file,
+// so its commit would refuse as stale. A commit that runs, a result,
+// and the selection stay.
+func (p *propView) lessonsSaved(msg lessonsSavedMsg) tea.Cmd {
+	return p.closeApply(lessonsChanged(msg))
+}
+
+// closeApply closes an apply preview that reads or waits for y, because
+// a saved file made it stale. changed names the save, for example "Pin
+// writing changed in Settings". A commit that runs, a result, and the
+// selection stay. It returns the message that names the closed preview,
+// or nil.
+func (p *propView) closeApply(changed string) tea.Cmd {
+	d := p.dec
+	if d == nil || d.action != proposals.ActionApply || !d.beforeCommit() {
+		return nil
+	}
+
+	p.seq.cancel()
+	p.dec = nil
+
+	return toast(ui.ToneAttention, changed+", so the apply preview closed. Press a in Proposals to preview it again.")
 }
 
 // reviewAgain reports a refusal that a new preview can resolve.
@@ -895,11 +957,19 @@ func (d *propDecision) reviewAgain() bool {
 }
 
 // resultKey handles the result modal. Enter builds a new preview after
-// a refusal; it never repeats the commit.
+// a refusal; it never repeats the commit. r reads the sources of the
+// commit again (propRefreshOf) while the result shows a failed reload
+// (state.readAgain).
 func (p *propView) resultKey(msg tea.KeyMsg) tea.Cmd {
 	d := p.dec
 
 	switch {
+	case key.Matches(msg, gkeys.Refresh) && d.check.shows():
+		var cmd tea.Cmd
+
+		d.check, cmd = p.st.readAgain(d.check, propRefreshOf(d.action)...)
+
+		return cmd
 	case key.Matches(msg, ui.Nav.Enter):
 		if d.reviewAgain() {
 			return p.preview(d.action, d.ids, d.implicit)

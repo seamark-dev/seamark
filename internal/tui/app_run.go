@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,25 +26,48 @@ const exitWait = 10 * time.Second
 // quitCopy returns the title, the body and the actions of the quit
 // question, so the dialog, the compact screen and the footer agree.
 // compact selects the shorter body of the too-small screen. Without
-// running work, the question is about the unsaved Settings drafts.
+// running work, the question is about the unsaved drafts. When every
+// draft is a Settings draft of config.yaml, the question keeps the
+// words of the Settings drafts, which name each group. Any other draft
+// makes the question name each file whose draft is lost.
+//
+// A reload can drop the last draft while the question is open, for
+// example when the file now holds the drafted value. The question then
+// asks only about the quit, because no draft is lost.
 func (m *model) quitCopy(compact bool) (title, body string, acts []key.Binding) {
-	drafts := m.settingsDrafts()
+	files := m.draftFiles()
+	settingsOnly := slices.Equal(files, []string{settingsFile})
 
 	if !m.st.busy() {
-		body = drafts + " Quitting discards every unsaved change; " + settingsFile + " does not change."
+		if len(files) == 0 {
+			return "Quit Seamark?", "No unsaved draft remains. Quitting changes no file.",
+				[]key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "quit"), ui.WithHelp(ui.Nav.Back, "esc", "stay")}
+		}
+
+		acts = []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "discard and quit"), ui.WithHelp(ui.Nav.Back, "esc", "stay")}
+
+		if !settingsOnly {
+			return "Discard the unsaved drafts and quit?", draftLossText(files), acts
+		}
+
+		body = m.settingsDrafts() + " Quitting discards every unsaved change; " + settingsFile + " does not change."
 		if compact {
 			body = "Quitting discards the unsaved settings draft; " + settingsFile + " does not change."
 		}
 
-		return "Discard the unsaved settings draft and quit?", body,
-			[]key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "discard and quit"), ui.WithHelp(ui.Nav.Back, "esc", "stay")}
+		return "Discard the unsaved settings draft and quit?", body, acts
 	}
 
 	// The exit also loses the drafts, so the full question names them.
 	// The compact screen has no room for more.
 	lost := ""
-	if drafts != "" && !compact {
+
+	switch {
+	case compact || len(files) == 0:
+	case settingsOnly:
 		lost = " The exit also discards the unsaved settings draft."
+	default:
+		lost = " The exit also discards every unsaved draft of " + joinWords(files) + "."
 	}
 
 	keep := ui.WithHelp(ui.Nav.Back, "esc", "keep working")
@@ -67,6 +91,56 @@ func (m *model) quitCopy(compact bool) (title, body string, acts []key.Binding) 
 
 	return "Exit after the running operation?", body,
 		[]key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "exit after completion"), keep}
+}
+
+// draftLossText says which files lose a draft at a quit, for example
+// "Quitting discards every unsaved draft of .seamark/lessons.yaml. The
+// file does not change."
+func draftLossText(files []string) string {
+	rest := " The file does not change."
+	if len(files) > 1 {
+		rest = " The files do not change."
+	}
+
+	return "Quitting discards every unsaved draft of " + joinWords(files) + "." + rest
+}
+
+// draftFiles returns the files of every unsaved draft of the session,
+// sorted and without repeats. Each screen with drafts names its files
+// (draftHolder).
+func (m *model) draftFiles() []string {
+	var files []string
+
+	for _, s := range m.screens {
+		if h, ok := s.(draftHolder); ok {
+			files = append(files, h.drafts()...)
+		}
+	}
+
+	slices.Sort(files)
+
+	return slices.Compact(files)
+}
+
+// discardDrafts drops the drafts of every screen.
+func (m *model) discardDrafts() {
+	for _, s := range m.screens {
+		if h, ok := s.(draftHolder); ok {
+			h.discardDrafts()
+		}
+	}
+}
+
+// settingsDrafts names the unsaved drafts of the Settings groups, for
+// example "Inference has 1 unsaved change: agent.cli.", or returns ""
+// when no group holds a draft.
+func (m *model) settingsDrafts() string {
+	s, ok := m.screens[destSettings].(*settingsScreen)
+	if !ok || s.draftTotal() == 0 {
+		return ""
+	}
+
+	return s.leaveText()
 }
 
 // exitBudget returns how long Run may still wait for stoppable work

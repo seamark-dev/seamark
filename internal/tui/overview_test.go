@@ -220,7 +220,7 @@ func ovFind(t *testing.T, o *overview, key string) ovItem {
 }
 
 // ovSelect moves the cursor down until the selected item has the key.
-func ovSelect(t *testing.T, h *harness, key string) {
+func ovSelect(t testing.TB, h *harness, key string) {
 	t.Helper()
 
 	o := ovScreen(h)

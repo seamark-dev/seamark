@@ -185,20 +185,9 @@ func (d *distRecord) formLines(w int) (lines []string, keep [2]int) {
 	t := d.st.theme
 	f := &d.form
 
-	lines = []string{t.Faint.Render(ui.PadRight("  Field", distLabelW+2) + "Value")}
-	keep = [2]int{-1, -1}
-
-	row := func(r int, label, value string, notes ...string) {
-		if r == f.row {
-			keep = [2]int{len(lines), len(lines) + len(notes)}
-		}
-
-		lines = append(lines, d.formRow(r, label, value, w))
-
-		for _, n := range notes {
-			lines = append(lines, strings.Repeat(" ", distLabelW+2)+n)
-		}
-	}
+	head := t.Faint.Render(ui.PadRight("  Field", distLabelW+2) + "Value")
+	out := formRows{t: t, labelW: distLabelW, w: w, cursor: f.row, lines: []string{head}, keep: [2]int{-1, -1}}
+	row := func(r int, label, value string, notes ...string) { out.add(r, label, []string{value}, notes) }
 
 	row(distRowRegion, "Region", d.regionValue(), d.regionNotes()...)
 	row(distRowDefault, "Limit", radio(t, f.limit == distLimitDefault,
@@ -207,6 +196,7 @@ func (d *distRecord) formLines(w int) (lines []string, keep [2]int) {
 	row(distRowAll, "", radio(t, f.limit == distLimitAll, "All eligible groups"))
 
 	agent, dir := d.agentRows(w)
+	lines, keep = out.lines, out.keep
 	lines = append(lines, d.formRow(-1, "Agent", agent, w), d.formRow(-1, "Runs in", dir, w))
 
 	if f.note != "" {
@@ -217,18 +207,10 @@ func (d *distRecord) formLines(w int) (lines []string, keep [2]int) {
 	return lines, keep
 }
 
-// formRow renders one field row with the cursor column. The cursor row
-// has the cursor glyph, a bold label and the selection background.
+// formRow renders one field row with the cursor column (formRow in
+// widgets.go). r is -1 for a row that the cursor never reaches.
 func (d *distRecord) formRow(r int, label, value string, w int) string {
-	t := d.st.theme
-
-	if r >= 0 && r == d.form.row {
-		line := t.Key.Render(t.Glyphs.Cursor) + " " + t.Title.Render(ui.PadRight(label, distLabelW)) + value
-
-		return t.Highlight(line, w, ui.BgSel)
-	}
-
-	return "  " + t.Muted.Render(ui.PadRight(label, distLabelW)) + value
+	return formRow(d.st.theme, r >= 0 && r == d.form.row, label, distLabelW, value, w)
 }
 
 // regionValue renders the region input or its value. An empty region

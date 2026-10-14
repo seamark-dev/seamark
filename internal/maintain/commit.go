@@ -146,10 +146,18 @@ func Commit(deps Deps, p *Plan) (Result, error) {
 
 // confirmable returns why a plan cannot be committed, or nil.
 func confirmable(p *Plan) error {
+	return confirmRefusal(p.Confirmable, p.Write, p.GateErr)
+}
+
+// confirmRefusal returns why a plan with these facts cannot be
+// committed, or nil. A plan of a gate that reads as off gets
+// ErrWriteDisabled, so the caller can name the gate as the route. The
+// maintenance and the authoring commits share this rule.
+func confirmRefusal(confirmable, write bool, gateErr error) error {
 	switch {
-	case p.Confirmable:
+	case confirmable:
 		return nil
-	case p.GateErr == nil && !p.Write:
+	case gateErr == nil && !write:
 		return ErrWriteDisabled
 	}
 
@@ -176,7 +184,7 @@ func commit(deps Deps, ledger LedgerWriter, q *Plan, res *Result) {
 
 		if rerr != nil {
 			from = fromUnread
-			res.FileErr = errors.Join(err, fmt.Errorf("the file could not be read after the failure: %w", rerr))
+			res.FileErr = readBackFailed(err, rerr)
 		}
 
 		if !res.FileWritten {
@@ -213,15 +221,18 @@ func writeLedger(ledger LedgerWriter, q *Plan) error {
 	return ledger.RetargetApplied(q.Retarget)
 }
 
-// fileHolds reports whether the pin file under root holds the bytes
-// with the SHA-256 written.
-func fileHolds(root string, written [32]byte) (bool, error) {
-	guard, data, err := integration.ReadInput(root, pinfile.File)
-	if err != nil {
-		return false, err
-	}
+// readBackFailed joins the error of a failed write and the error of the
+// read that should observe its outcome. Commit and CommitAuthor share it,
+// so one cause has one text.
+func readBackFailed(err, rerr error) error {
+	return errors.Join(err, fmt.Errorf("the file could not be read after the failure: %w", rerr))
+}
 
-	return guard.Exists && sha256.Sum256(data) == written, nil
+// fileHolds reports whether the pin file under root holds the bytes
+// with the SHA-256 written. integration.Landed owns the readback rule,
+// so every editor reads its outcome the same way.
+func fileHolds(root string, written [32]byte) (bool, error) {
+	return integration.Landed(root, pinfile.File, written)
 }
 
 // origin is the failed step that starts a compensation. It selects the

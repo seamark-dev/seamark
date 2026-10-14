@@ -31,15 +31,28 @@ func readLedger(st *store.Store) (ledgerRows, error) {
 	)
 
 	for i, status := range []string{model.ProposalApplied, model.ProposalProposed, model.ProposalSuperseded} {
-		ps, err := st.Proposals(status)
+		ps, err := readStatus(st, status)
 		if err != nil {
-			return ledgerRows{}, fmt.Errorf("%w: %w", ErrNoLedger, err)
+			return ledgerRows{}, err
 		}
 
-		*dest[i] = slices.SortedFunc(slices.Values(ps), byID)
+		*dest[i] = ps
 	}
 
 	return out, nil
+}
+
+// readStatus reads the rows of one status in ascending ID order. A read
+// failure wraps ErrNoLedger, because the caller must then treat every
+// link as unknown. readLedger and the authoring history use it, so both
+// read the ledger by one rule.
+func readStatus(st *store.Store, status string) ([]model.Proposal, error) {
+	ps, err := st.Proposals(status)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrNoLedger, err)
+	}
+
+	return slices.SortedFunc(slices.Values(ps), byID), nil
 }
 
 // byID orders proposals by ascending ID.

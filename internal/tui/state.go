@@ -164,6 +164,10 @@ type state struct {
 	// tick drives the activity glyph while work runs.
 	tick int
 
+	// checks are the reloads after a write that still wait for a result
+	// (state_saved.go). The shell applies each stored load to them.
+	checks []*refreshCheck
+
 	// copyText sends text to the system clipboard of the terminal. It is
 	// nil when no terminal output exists, for example in tests.
 	copyText func(text string) error
@@ -181,6 +185,20 @@ func (s *state) copyToClipboard(text string) error {
 	}
 
 	return s.copyText(text)
+}
+
+// clipboardCmd returns a command that sends text to the terminal
+// clipboard (OSC 52). what names the text in the failure toast, for
+// example "the draft". The terminal decides whether it honours the
+// request, so the toast names the request, not a confirmed copy.
+func clipboardCmd(st *state, text, what string) tea.Cmd {
+	return func() tea.Msg {
+		if err := st.copyToClipboard(text); err != nil {
+			return toastMsg{tone: ui.ToneFailure, text: "Could not copy " + what + ": " + ui.ErrText(err)}
+		}
+
+		return toastMsg{tone: ui.ToneNeutral, text: "Sent to the terminal clipboard (OSC 52)"}
+	}
 }
 
 // wide reports the side-by-side layout of the current terminal. Key
@@ -237,6 +255,19 @@ type settingsSavedMsg struct {
 	// at is the end of the save. A snapshot older than at still shows
 	// the old values.
 	at time.Time
+}
+
+// lessonsSavedMsg tells every screen that a write changed
+// .seamark/lessons.yaml, or may have changed it: the write had a Written
+// or an Unknown outcome (P4-12). A holder whose preview binds the old
+// bytes closes that preview and keeps its draft (lessonsBound in
+// state_saved.go).
+type lessonsSavedMsg struct {
+	// at is the end of the write.
+	at time.Time
+	// by names the place of the write in the console, for example
+	// "Lessons › Pins". The message about a closed preview quotes it.
+	by string
 }
 
 // tickMsg advances the activity glyph.

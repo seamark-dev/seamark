@@ -494,6 +494,12 @@ func TestPlanRefusesUnsafeEdits(t *testing.T) {
 		{"removing a commented block item", deepLayout, "b", Edit{Regions: nil}, ErrUnsupported, "would drop a comment"},
 		{"removing a block item with a comment", "pin:\n  - rule: s\n    regions:\n      - api\n      - db  # keep\n", "s",
 			Edit{Regions: []string{"web"}}, ErrUnsupported, "would drop a comment"},
+		// Finding L1: the quote in a plain item is text, so the comment
+		// after the item is a comment.
+		{"removing a plain block item with a quote and a comment", "pin:\n  - rule: s\n    regions:\n      - api\n      - rock 'n roll # keep me\n", "s",
+			Edit{Regions: []string{"api"}}, ErrUnsupported, "would drop a comment"},
+		{"removing a regions key whose item holds a quote and a comment", "pin:\n  - rule: s\n    region: api\n    regions:\n      - api\n      - rock 'n roll # keep me\n", "s",
+			Edit{Regions: []string{"api"}}, ErrUnsupported, "would drop a comment"},
 		{"removing a commented regions key on the dash line", "pin:\n  - regions: [api, db]  # mine\n    region: api\n    rule: s\n", "s",
 			Edit{Regions: []string{"web"}}, ErrUnsupported, "would drop a comment"},
 		{"lifting a region key that owns a comment line", "pin:\n  - regions: [api, db]\n    region: api\n      # about api\n    rule: s\n", "s",

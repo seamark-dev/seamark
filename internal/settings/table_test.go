@@ -15,12 +15,16 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
 // The field table tests. The table is allFields, Field.Group,
 // Field.Reader, ownedSections, and the encoders of patch.go. It restates
 // the yaml tags of the reader structs by hand. These tests compare the
 // table with those tags, so a drift fails here and not in a user's file.
+// The config.yaml readers have sections; reviews.Config, the reader of
+// lessons.yaml, has top-level keys only, so it has its own walk.
 
 // readerParsers maps each reader name to the bytes entry point of that
 // reader. The structs that they return carry the yaml tags that the
@@ -128,7 +132,7 @@ func TestFieldTableMatchesTheReaderStructs(t *testing.T) {
 	keys, sections := readerKeys(t)
 
 	t.Run("every field names a key of its reader", func(t *testing.T) {
-		for _, f := range allFields {
+		for _, f := range documentFields(File) {
 			k, ok := keys[string(f)]
 			if !assert.True(t, ok, "%s is not a yaml key of a reader struct", f) {
 				continue
@@ -140,11 +144,25 @@ func TestFieldTableMatchesTheReaderStructs(t *testing.T) {
 
 	t.Run("every key of a reader is a field", func(t *testing.T) {
 		var fields []string
-		for _, f := range allFields {
+		for _, f := range documentFields(File) {
 			fields = append(fields, string(f))
 		}
 
 		assert.ElementsMatch(t, slices.Collect(maps.Keys(keys)), fields)
+	})
+
+	// The pin list is the one key of reviews.Config that is not a field:
+	// the pin editors of internal/pinfile and internal/maintain own it.
+	t.Run("every lessons field is a key of reviews.Config", func(t *testing.T) {
+		var fields []string
+
+		for _, f := range documentFields(pinfile.File) {
+			fields = append(fields, string(f))
+
+			assert.Equal(t, ReaderLessons, f.Reader(), "%s", f)
+		}
+
+		assert.ElementsMatch(t, slices.Collect(maps.Keys(lessonsKeys(t))), append(fields, "pin"))
 	})
 
 	// An owned section gets the structural analysis. A decoded section
@@ -158,6 +176,10 @@ func TestFieldTableMatchesTheReaderStructs(t *testing.T) {
 	// edit one owned section with one reader.
 	t.Run("every group edits one owned section", func(t *testing.T) {
 		for g := Group(0); g.String() != "unknown"; g++ {
+			if g.Document() != File {
+				continue
+			}
+
 			fields := g.Fields()
 			require.NotEmpty(t, fields, "the %s group has no field", g)
 
@@ -170,6 +192,7 @@ func TestFieldTableMatchesTheReaderStructs(t *testing.T) {
 
 		for _, f := range allFields {
 			assert.NotEqual(t, "unknown", f.Group().String(), "%s has no named group", f)
+			assert.NotEmpty(t, f.Document(), "%s has no document", f)
 		}
 	})
 
@@ -189,6 +212,37 @@ func TestFieldTableMatchesTheReaderStructs(t *testing.T) {
 		assert.ElementsMatch(t, slices.Collect(maps.Keys(names)), slices.Collect(maps.Keys(readerParsers)))
 	})
 }
+
+// lessonsKeys maps every key that reviews.ParseConfig decodes to the
+// index of its field in reviews.Config.
+func lessonsKeys(t *testing.T) map[string]int {
+	t.Helper()
+
+	out := map[string]int{}
+	top := reflect.TypeFor[reviews.Config]()
+
+	for i := range top.NumField() {
+		if name := yamlName(t, top.Field(i)); name != "" {
+			out[name] = i
+		}
+	}
+
+	return out
+}
+
+// fullLessons sets every lessons field, so a reset of each delivery key
+// has a key to remove and the view has a stored value to show.
+const fullLessons = `threshold: 3
+pin_budget: 2
+change_budget: 4
+hook_delivery: always
+mute:
+  - rule: E501
+pin:
+  - rule: RUF001
+    region: scripts
+    note: Keep scripts ASCII.
+`
 
 // fullConfig sets every field of the table, so a reset of each field has
 // a key to remove and the view has a stored value to show.
@@ -214,6 +268,11 @@ var settable = map[Field]Edit{
 	ReviewWindow:   {Field: ReviewWindow, Days: 30},
 	IndexGenerated: {Field: IndexGenerated, Bool: true},
 	IndexExclude:   {Field: IndexExclude, List: []string{"*.pb.go"}},
+	Threshold:      {Field: Threshold, Int: 5},
+	PinBudget:      {Field: PinBudget, Int: 4},
+	ChangeBudget:   {Field: ChangeBudget, Int: 9},
+	HookDelivery:   {Field: HookDelivery, String: string(reviews.HookDeliveryOncePerContext)},
+	Mutes:          {Field: Mutes, Mute: &MuteEdit{Op: MuteAdd, Rule: "F541"}},
 }
 
 // readOnly lists the fields whose only edit is their removal.
@@ -268,7 +327,7 @@ func TestEveryFieldHasAnEncoderAndAReader(t *testing.T) {
 		assert.ElementsMatch(t, allFields, listed)
 	})
 
-	for _, f := range allFields {
+	for _, f := range documentFields(File) {
 		k, ok := keys[string(f)]
 		require.True(t, ok, "%s is not a yaml key of a reader struct", f)
 
@@ -306,8 +365,68 @@ func TestEveryFieldHasAnEncoderAndAReader(t *testing.T) {
 		})
 	}
 
+	lessons := lessonsKeys(t)
+
+	for _, f := range documentFields(pinfile.File) {
+		field, ok := lessons[string(f)]
+		require.True(t, ok, "%s is not a yaml key of reviews.Config", f)
+
+		t.Run("set "+string(f), func(t *testing.T) {
+			root := withLessons(t, fullLessons)
+			saveLessons(t, root, settable[f])
+
+			cfg, err := reviews.ParseConfig([]byte(readLessons(t, root)))
+			require.NoError(t, err)
+
+			v := reflect.ValueOf(*cfg).Field(field)
+
+			if f == Mutes {
+				assert.Contains(t, cfg.Mute, reviews.MuteRule{Rule: "F541"})
+
+				return
+			}
+
+			if v.Kind() == reflect.String {
+				assert.Equal(t, settable[f].String, v.String())
+
+				return
+			}
+
+			assert.Equal(t, int64(settable[f].Int), v.Int())
+		})
+
+		t.Run("reset "+string(f), func(t *testing.T) {
+			root := withLessons(t, fullLessons)
+
+			if f == Mutes {
+				_, err := PlanPatch(inspect(t, root), integration.Builtin(), []Edit{{Field: f, Reset: true}})
+				require.ErrorIs(t, err, ErrInvalidEdit, "the mute list has no reset")
+
+				return
+			}
+
+			saveLessons(t, root, Edit{Field: f, Reset: true})
+
+			text := readLessons(t, root)
+
+			key, _, _ := parsed(t, text).Section(string(f))
+			assert.Nil(t, key, "the key is gone")
+
+			cfg, err := reviews.ParseConfig([]byte(text))
+			require.NoError(t, err)
+
+			def, err := reviews.ParseConfig(nil)
+			require.NoError(t, err)
+			assert.Equal(t, reflect.ValueOf(*def).Field(field).Interface(), reflect.ValueOf(*cfg).Field(field).Interface(),
+				"the reader decodes its default")
+		})
+	}
+
 	t.Run("the view reads every field", func(t *testing.T) {
-		snap := inspect(t, withConfig(t, fullConfig))
+		root := withConfig(t, fullConfig)
+		writeLessons(t, root, fullLessons)
+
+		snap := inspect(t, root)
 		require.Len(t, snap.Fields, len(allFields))
 
 		for _, st := range snap.Fields {

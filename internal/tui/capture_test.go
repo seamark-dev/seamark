@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -316,9 +317,21 @@ func TestCaptureRepresentativeStates(t *testing.T) {
 }
 
 // captureSettings returns the settings snapshot of a workspace with no
-// configuration file. The workspace is "repo" under a temporary home,
-// so preset commands read "-C ~/repo" and the frames stay stable.
+// configuration file, in the workspace of captureRoot.
 func captureSettings(t *testing.T) *settings.Snapshot {
+	t.Helper()
+
+	snap, err := settings.Inspect(captureRoot(t), integration.Builtin())
+	require.NoError(t, err)
+
+	return snap
+}
+
+// captureRoot makes the workspace "repo" under a new temporary home and
+// returns its root. The console shows a path under the home as "~/repo",
+// for example in preset commands and in the File row of a save. So the
+// frames stay the same on every run.
+func captureRoot(t *testing.T) string {
 	t.Helper()
 
 	home := t.TempDir()
@@ -327,10 +340,27 @@ func captureSettings(t *testing.T) *settings.Snapshot {
 	root := filepath.Join(home, "repo")
 	require.NoError(t, os.MkdirAll(root, 0o755))
 
-	snap, err := settings.Inspect(root, integration.Builtin())
-	require.NoError(t, err)
+	return root
+}
 
-	return snap
+// captureScrollTo presses key until the frame shows anchor. With a key
+// that scrolls one line, the window stops with the anchor on its last
+// line, so it also shows the text above the anchor. A scroll box learns
+// its page size when it renders, as in the real loop, so each key
+// follows a render. It fails when the anchor never shows, because the
+// frame would then show another part than its scene names.
+func captureScrollTo(h *harness, key, anchor string) {
+	h.t.Helper()
+
+	for range 60 {
+		if strings.Contains(h.view(), anchor) {
+			return
+		}
+
+		h.press(key)
+	}
+
+	require.Contains(h.t, h.view(), anchor, "no position of the window shows the anchor")
 }
 
 // teaSize builds a window size message.

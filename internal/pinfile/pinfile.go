@@ -15,16 +15,21 @@
 //
 // Classify links each entry to the proposal rows by one canonical key
 // (reviews.ProposalKey). Plan computes the complete candidate file for a
-// retarget or a prune and proves it before it returns: the candidate
+// retarget, a prune, or a rewrite of the rule, the note, or the region
+// set. It proves the candidate before it returns it. The candidate
 // loads, keeps the other settings, and changes only the reviewed
 // entries. The line check states the D-7 and D-8 line rules again
 // without the span code that built the splices; verify.go names its one
-// exception. PlanAppend computes the candidate for an apply: the new
-// entries go in at the head of the list, and every existing line stays.
-// It also proves its candidate before it returns it. Prepare,
-// PrepareAppend, and Apply write a candidate through the guarded setup
-// engine (integration Route A). Restore puts the old bytes back only
-// while the file still holds the written bytes.
+// exception. PlanAppend computes the candidate of an append. An apply
+// puts the new entries at the head of the list. A pin that a person
+// writes goes after the last entry. Every existing line stays, and
+// PlanAppend also proves its candidate before it returns it. RenderPin and EncodeNote write the
+// text of an authored pin. KeyOwners and AuthorKeys name what already
+// holds a pin key, for the authoring of pins. RenderedKey is the key of
+// the pin that an apply writes for a row. Prepare, PrepareAppend,
+// and Apply write a candidate through the guarded setup engine
+// (integration Route A). Restore puts the old bytes back only while the
+// file still holds the written bytes.
 //
 // # Layouts
 //
@@ -53,14 +58,19 @@
 //     an alias entry, a rule or region value that is not text or spans
 //     several lines, a flow regions list over several lines, and a block
 //     regions item that is not one value on its own line.
-//   - Blocks a retarget only: a key removal or a move that would drop or
-//     separate a comment, and a region without a safe one-line YAML
-//     form.
+//   - Blocks a retarget or a rewrite only: a key removal or a move that
+//     would drop or separate a comment, a comment line inside the lines
+//     of a note that changes, a note that changes and goes on at a line
+//     that is not deeper than its key, a region without a safe one-line
+//     YAML form, and a rule or a note change of an entry without a rule
+//     key.
 //
-// An apply (PlanAppend) writes CRLF files and keeps their line breaks,
-// so its refusals are narrower than the edit gate. It still refuses a
-// pin value that is not a plain block list, for example pin: [], more
-// than one YAML document, and mixed line breaks.
+// An apply (PlanAppend at the head) writes CRLF files and keeps their
+// line breaks, so its refusals are narrower than the edit gate. It
+// still refuses a pin value that is not a plain block list, for example
+// pin: [], more than one YAML document, and mixed line breaks. An
+// append at the tail follows the edit gate, so a new pin never blocks a
+// later edit of the file.
 //
 // # What an edit keeps
 //
@@ -73,6 +83,12 @@
 // stay. A retarget target that another pin, another selected pin or an
 // applied proposal already has is refused (ErrCollision), because the
 // editor never merges or overwrites pins.
+//
+// A rewrite changes only the lines of the fields whose decoded value
+// changes. These are the rule value on its key line, the region keys as
+// a retarget changes them, and the note key with its value lines. An
+// absent note goes in after the rule key, and an empty note removes
+// the note key. Every other field keeps its text byte for byte.
 //
 // The package reads the ledger rows that the caller passes in. It does
 // not open the store, and it never writes the ledger.

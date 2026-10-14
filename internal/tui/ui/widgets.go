@@ -56,7 +56,7 @@ func (t *Theme) RangeNote(from, to, n int) string {
 // The word carries the state without color. One word for the group
 // costs fewer cells than one word for each key.
 func (t *Theme) Hints(bindings []key.Binding) string {
-	return t.hintRow(bindings, false)
+	return t.hintRow(bindings, hintFull)
 }
 
 // ShortHints renders the hints as Hints does, but each n/a group shows
@@ -64,24 +64,46 @@ func (t *Theme) Hints(bindings []key.Binding) string {
 // every hint uses it, so the unavailable keys stay in view at a cost of
 // two cells for each key.
 func (t *Theme) ShortHints(bindings []key.Binding) string {
-	return t.hintRow(bindings, true)
+	return t.hintRow(bindings, hintShortOff)
 }
 
-// hintRow renders the hints, with or without the actions of the n/a
-// groups.
-func (t *Theme) hintRow(bindings []key.Binding, short bool) string {
-	var parts, off []string
+// KeyHints renders every hint by its key alone, for example
+// "space n i d -   n/a: w t v". A footer uses it as the last step before
+// it cuts an n/a entry, so every key stays in view; the help names the
+// action of each key.
+func (t *Theme) KeyHints(bindings []key.Binding) string {
+	return t.hintRow(bindings, hintKeys)
+}
+
+// hintMode selects how much text hintRow gives each hint.
+type hintMode int
+
+const (
+	hintFull     hintMode = iota // "key action" for every entry
+	hintShortOff                 // n/a groups show only their keys
+	hintKeys                     // every entry shows only its key
+)
+
+// hintRow renders the hints in the given mode.
+func (t *Theme) hintRow(bindings []key.Binding, mode hintMode) string {
+	var parts, on, off []string
 
 	// The labelled group separates its entries with commas, because each
-	// entry has two words. The short group has only keys, so spaces are
-	// enough.
+	// entry has two words. A group of keys has one word for each entry,
+	// so spaces are enough.
 	sep := ", "
-	if short {
+	if mode != hintFull {
 		sep = " "
 	}
 
-	// flush closes the current group of unavailable entries.
+	// flush closes the current group of available keys (keys mode only)
+	// and the current group of unavailable entries.
 	flush := func() {
+		if len(on) > 0 {
+			parts = append(parts, t.Key.Render(strings.Join(on, " ")))
+			on = nil
+		}
+
 		if len(off) > 0 {
 			parts = append(parts, t.Faint.Render(UnavailableWord+": "+strings.Join(off, sep)))
 			off = nil
@@ -96,8 +118,12 @@ func (t *Theme) hintRow(bindings []key.Binding, short bool) string {
 		h := b.Help()
 
 		if IsUnavailable(b) {
+			if len(on) > 0 {
+				flush()
+			}
+
 			entry := t.KeyLabel(h.Key)
-			if !short {
+			if mode == hintFull {
 				entry += " " + h.Desc
 			}
 
@@ -106,7 +132,15 @@ func (t *Theme) hintRow(bindings []key.Binding, short bool) string {
 			continue
 		}
 
-		flush()
+		if len(off) > 0 {
+			flush()
+		}
+
+		if mode == hintKeys {
+			on = append(on, t.KeyLabel(h.Key))
+
+			continue
+		}
 
 		parts = append(parts, t.Key.Render(t.KeyLabel(h.Key))+" "+t.Muted.Render(h.Desc))
 	}

@@ -7,13 +7,16 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
 // settingsFile is the workspace configuration file, relative to the
 // workspace root. The agent, index, review and pin-write readers share
-// this one document.
+// this one document. A text about one group names the document of that
+// group (settings.Group.Document), because the lessons groups edit
+// .seamark/lessons.yaml.
 const settingsFile = settings.File
 
 // settingsFields lists the fields of the Settings list in display order.
@@ -21,12 +24,15 @@ const settingsFile = settings.File
 var settingsFields = []settings.Field{
 	settings.AgentCLI, settings.AgentArgv, settings.DistillWrite,
 	settings.ReviewWindow, settings.IndexGenerated, settings.IndexExclude,
+	settings.Threshold, settings.PinBudget, settings.ChangeBudget, settings.HookDelivery,
+	settings.Mutes,
 }
 
 // settingsGroups lists the save units in display order. One save
 // writes the draft of one group, as the settings package requires.
 var settingsGroups = []settings.Group{
 	settings.GroupInference, settings.GroupPinWrite, settings.GroupEvidence, settings.GroupIndexing,
+	settings.GroupDelivery, settings.GroupMutes,
 }
 
 // settingsIntents maps the group names of an open intent to the groups.
@@ -37,9 +43,12 @@ var settingsIntents = map[string]settings.Group{
 	"pinwrite": settings.GroupPinWrite, "distill": settings.GroupPinWrite,
 	"evidence": settings.GroupEvidence, "reviews": settings.GroupEvidence,
 	"indexing": settings.GroupIndexing, "index": settings.GroupIndexing,
+	"delivery": settings.GroupDelivery, "mutes": settings.GroupMutes, "mute": settings.GroupMutes,
 }
 
 // settingsGroupTitle names a group in prose and in the list headings.
+// Each group has its own case, so a new group never takes the title of
+// another one.
 func settingsGroupTitle(g settings.Group) string {
 	switch g {
 	case settings.GroupInference:
@@ -48,8 +57,14 @@ func settingsGroupTitle(g settings.Group) string {
 		return "Pin writing"
 	case settings.GroupEvidence:
 		return "Evidence"
-	default:
+	case settings.GroupIndexing:
 		return "Indexing"
+	case settings.GroupDelivery:
+		return "Lesson delivery"
+	case settings.GroupMutes:
+		return "Lesson mutes"
+	default:
+		return "Unknown group"
 	}
 }
 
@@ -67,6 +82,7 @@ var settingsKeys = struct {
 	Confirm    key.Binding
 	Keep       key.Binding
 	DropDrafts key.Binding
+	Build      key.Binding
 }{
 	Default:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "default")),
 	Save:       key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "review save")),
@@ -78,6 +94,9 @@ var settingsKeys = struct {
 	Confirm:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "save")),
 	Keep:       key.NewBinding(key.WithKeys("k", "enter"), key.WithHelp("k", "keep draft")),
 	DropDrafts: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "discard")),
+	// Build opens the index build of Overview. It shows only while the
+	// index of another repository blocks the selected lessons group.
+	Build: key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "index build")),
 }
 
 // settingsScreen is the Settings destination: the focused settings of
@@ -105,9 +124,10 @@ type settingsScreen struct {
 	// table keeps the list cursor visible when the list does not fit.
 	table ui.ListState
 
-	// drafts holds the unsaved edits by field. A draft lives in this
-	// screen only: nothing saves it on blur, on a tab change or at exit.
-	drafts map[settings.Field]settings.Edit
+	// edits holds the unsaved edits by field: the drafts of the groups. A
+	// draft lives in this screen only: nothing saves it on blur, on a tab
+	// change or at exit.
+	edits map[settings.Field]settings.Edit
 	// excludeErrs holds the plan errors of exclude patterns, by pattern.
 	// The list editor shows each one under its pattern.
 	excludeErrs map[string]string
@@ -127,6 +147,12 @@ type settingsScreen struct {
 	// saved is the last successful save of this session, or nil. The
 	// list keeps its activation note after the toast expires.
 	saved *settingsSaveNote
+	// check watches the reload after the last save that landed (P4-18).
+	// checkGroup is the group of that save; saved can go before the
+	// check does. After a failed reload, r in the mute editor reads
+	// again through the check, because that editor captures the keys.
+	check      *refreshCheck
+	checkGroup settings.Group
 }
 
 // newSettings builds the Settings destination without drafts. It reads
@@ -135,7 +161,7 @@ func newSettings(st *state) *settingsScreen {
 	return &settingsScreen{
 		st:      st,
 		clients: st.svc.Clients(),
-		drafts:  map[settings.Field]settings.Edit{},
+		edits:   map[settings.Field]settings.Edit{},
 	}
 }
 
@@ -182,14 +208,17 @@ func (s *settingsScreen) field() settings.Field {
 	return settingsFields[max(0, min(s.cursor, len(settingsFields)-1))]
 }
 
-// capturing is true while text input, a modal or a question has the
-// keys. The radio editor does not capture, so the number keys still
-// switch the destination through the leave guard.
+// capturing is true while text input, a modal, a question, or the mute
+// editor has the keys. The radio editor does not capture, so the number
+// keys still switch the destination through the leave guard. The mute
+// editor captures, so its ? opens its own help (contextHelper).
 func (s *settingsScreen) capturing() bool {
-	return s.prompt != nil || s.flow.active() || s.ed.typing
+	return s.prompt != nil || s.flow.active() || s.ed.typing || s.muteEditing()
 }
 
-// update routes the service results, the settings reloads and the keys.
+// update routes the service results, the reloads, the reads of the
+// open selection sample and the keys. A load of the index, the ledger or
+// the pins also reads that sample again.
 func (s *settingsScreen) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case settingsPlannedMsg:
@@ -200,6 +229,18 @@ func (s *settingsScreen) update(msg tea.Msg) tea.Cmd {
 		if msg.kind == secSettings {
 			s.normalize()
 		}
+
+		// A new snapshot of the evidence reads the open sample again.
+		if s.flow.sample != nil {
+			return s.flow.sample.reload(msg)
+		}
+	case sampledMsg:
+		// Only the open sample of the open review takes its read.
+		if s.flow.sample == msg.owner {
+			msg.owner.done(msg)
+		}
+	case lessonsSavedMsg:
+		return s.lessonsSaved(msg)
 	case tea.KeyMsg:
 		return s.key(msg)
 	}
@@ -221,6 +262,8 @@ func (s *settingsScreen) key(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	case s.ed.typing:
 		return s.typingKey(msg)
+	case s.ed.rec != nil:
+		return s.recordKey(msg)
 	case s.editing:
 		return s.editorKey(msg)
 	default:
@@ -253,6 +296,8 @@ func (s *settingsScreen) listKey(msg tea.KeyMsg) tea.Cmd {
 		return s.review(s.field().Group())
 	case key.Matches(msg, settingsKeys.Discard):
 		return s.askDiscard(s.field().Group())
+	case key.Matches(msg, settingsKeys.Build) && s.foreignRoot():
+		return navigate(destOverview, ovIntentBuild)
 	}
 
 	if s.cursor != before {
@@ -293,6 +338,8 @@ func (s *settingsScreen) keys() []key.Binding {
 		return s.flowActions()
 	case s.ed.typing:
 		return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "keep"), ui.WithHelp(ui.Nav.Back, "esc", "cancel")}
+	case s.ed.rec != nil:
+		return s.recordKeys()
 	case s.editing:
 		return s.editorKeys()
 	}
@@ -316,6 +363,10 @@ func (s *settingsScreen) keys() []key.Binding {
 
 	out := []key.Binding{ui.WithHelp(ui.Nav.Down, "↑↓", "move"), ui.WithHelp(ui.Nav.Enter, "enter", "edit"), def, save, discard}
 
+	if s.foreignRoot() {
+		out = append(out, settingsKeys.Build)
+	}
+
 	if s.st.wide() {
 		out = append(out, ui.WithHelp(ui.Nav.Next, "tab", "detail"))
 	}
@@ -338,9 +389,11 @@ func (s *settingsScreen) leave(next destination, intent string) (tea.Cmd, bool) 
 	}
 
 	// An open preview binds to this visit. Nothing was written, so it
-	// can go.
+	// can go. An open mute record form goes too; the draft keeps only
+	// the operations that the user kept.
 	s.closeFlow()
 	s.ed.typing = false
+	s.ed.rec = nil
 
 	if s.draftTotal() == 0 {
 		return nil, true
@@ -352,11 +405,14 @@ func (s *settingsScreen) leave(next destination, intent string) (tea.Cmd, bool) 
 }
 
 // modal returns the open question or the open preview as a block for
-// the shell to place on the dimmed frame.
+// the shell to place on the dimmed frame. An open selection sample takes
+// the place of its preview.
 func (s *settingsScreen) modal(w, h int) (string, bool) {
 	switch {
 	case s.prompt != nil:
 		return s.promptView(w, h), true
+	case s.flow.sample != nil:
+		return s.flow.sample.modal(w, h), true
 	case s.flow.active():
 		return s.flowView(w, h), true
 	}
@@ -388,11 +444,13 @@ func (s *settingsScreen) view(w, h int) string {
 }
 
 // unreadBox renders the state before the first readable snapshot: the
-// read in progress, or its failure with the manual route.
+// read in progress, or its failure with the manual route. The snapshot
+// reads both settings documents, so the texts name both. The title names
+// the file of the cursor group, as the list box does.
 func (s *settingsScreen) unreadBox(w, h int) string {
 	t := s.st.theme
 	sec := &s.st.settings
-	o := ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Settings", true), Right: t.Code.Render(settingsFile)}
+	o := ui.BoxOpts{W: w, H: h, Focus: true, Title: integPaneTitle(t, "Settings", true), Right: t.Code.Render(s.field().Document())}
 
 	if sec.err != nil || (sec.loaded && sec.value == nil) {
 		body := "Seamark could not read the settings."
@@ -402,9 +460,10 @@ func (s *settingsScreen) unreadBox(w, h int) string {
 
 		return integBoxed(t, o, ui.ToneFailure, "Settings are not readable", body,
 			t.Muted.Render("Press ")+t.Key.Render("r")+t.Muted.Render(" to read them again, or edit ")+
-				t.Code.Render(settingsFile)+t.Muted.Render(" by hand."))
+				t.Code.Render(settingsFile)+t.Muted.Render(" or ")+t.Code.Render(pinfile.File)+
+				t.Muted.Render(" by hand."))
 	}
 
 	return integBoxed(t, o, ui.ToneNeutral, "Reading settings"+t.Glyphs.Ellipsis,
-		"Seamark reads "+settingsFile+" with the shared readers. Nothing is written.", "")
+		"Seamark reads "+settingsFile+" and "+pinfile.File+" with the shared readers. Nothing is written.", "")
 }

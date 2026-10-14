@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -368,6 +369,11 @@ func TestSpliceShapes(t *testing.T) {
 			"# who runs\nagent:\n",
 		},
 		{
+			"a comment on the section line keeps a bare section", "agent:  # who runs\n  cli: codex\n",
+			[]Edit{{Field: AgentCLI, Reset: true}},
+			"agent:  # who runs\n",
+		},
+		{
 			"last section goes with its blank line", "a: 1\n\nagent:\n  cli: codex\n",
 			[]Edit{{Field: AgentCLI, Reset: true}},
 			"a: 1\n",
@@ -489,6 +495,26 @@ func TestSpliceShapes(t *testing.T) {
 			[]Edit{{Field: AgentCLI, String: "codex"}},
 			"\ufeff\"agent\":\n  cli: codex\n",
 		},
+		// Finding N1: the removal of the section on line 1 deleted the mark
+		// at the start of that line. The next line now takes the mark.
+		{
+			"byte order mark before a removed first section", "\ufeffagent:\n  cli: claude\ndistill:\n  write: true\n",
+			[]Edit{{Field: AgentCLI, Reset: true}},
+			"\ufeffdistill:\n  write: true\n",
+		},
+		{
+			"byte order mark before a comment line after a removed section",
+			"\ufeffagent:\n  cli: claude\n\n# pin writes\ndistill:\n  write: true\n",
+			[]Edit{{Field: AgentCLI, Reset: true}},
+			"\ufeff# pin writes\ndistill:\n  write: true\n",
+		},
+		// An empty file holds no text to mark, so the mark goes. Every
+		// config reader reads an empty file as the defaults.
+		{
+			"byte order mark and the only section", "\ufeffagent:\n  cli: claude\n",
+			[]Edit{{Field: AgentCLI, Reset: true}},
+			"",
+		},
 	}
 
 	for _, c := range cases {
@@ -520,10 +546,10 @@ func TestExcludeItemsThatStayKeepTheirLines(t *testing.T) {
 			"index:\n  exclude:\n    - b # two\n    - a # one\n",
 		},
 		{
-			"a removed item goes with its comment",
+			"a removed item without a comment goes",
 			"index:\n  exclude:\n    - a # one\n    - b\n",
-			[]string{"c"},
-			"index:\n  exclude:\n    - c\n",
+			[]string{"a", "c"},
+			"index:\n  exclude:\n    - a # one\n    - c\n",
 		},
 		{
 			"an item that is not a string gets new text and keeps its comment",
@@ -547,6 +573,133 @@ func TestExcludeItemsThatStayKeepTheirLines(t *testing.T) {
 			assert.Equal(t, c.after, readConfig(t, root))
 		})
 	}
+}
+
+// TestConfigEditsKeepACommentAfterTheValueText covers the comment scan
+// of the config.yaml splices. A reset deletes the lines below its key
+// line, and a set deletes the line of a removed list item. A comment
+// after the value text of such a line blocks the edit. Before the fix,
+// a reset kept only whole comment lines, and a set dropped the comment
+// of a removed item.
+func TestConfigEditsKeepACommentAfterTheValueText(t *testing.T) {
+	resetCLI := Edit{Field: AgentCLI, Reset: true}
+	resetArgv := Edit{Field: AgentArgv, Reset: true}
+
+	cases := []struct {
+		name, before string
+		edit         Edit
+		line         int
+	}{
+		{"a plain continuation", "agent:\n  cli: cla\n    ude # keep\n", resetCLI, 3},
+		{"a continuation that starts with a quote", "agent:\n  cli: rock\n    'n roll # keep\n", resetCLI, 3},
+		{"a single-quoted continuation", "agent:\n  cli: 'cla\n    ude' # keep\n", resetCLI, 3},
+		{"a double-quoted continuation", "agent:\n  cli: \"cla\n    ude\" # keep\n", resetCLI, 3},
+		{"a value on its own line", "agent:\n  cli:\n    claude\t# keep\n", resetCLI, 3},
+		{"a flow list continuation", "agent:\n  cli: claude\n  argv: [my-llm,\n    --print] # keep\n", resetArgv, 4},
+		{"a block list item", "agent:\n  cli: claude\n  argv:\n    - my-llm # keep\n", resetArgv, 4},
+		{"an exclude reset", "index:\n  exclude:\n    - vendor/  # third-party\n", Edit{Field: IndexExclude, Reset: true}, 3},
+		{"an empty exclude list", "index:\n  exclude:\n    - vendor/  # third-party\n", Edit{Field: IndexExclude, List: []string{}}, 3},
+		{"a set that removes a commented item", "index:\n  exclude:\n    - a # one\n    - b\n",
+			Edit{Field: IndexExclude, List: []string{"b"}}, 3},
+		{"a set that removes a commented item after a quote", "index:\n  exclude:\n    - rock 'n roll # one\n    - b\n",
+			Edit{Field: IndexExclude, List: []string{"b"}}, 3},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := withConfig(t, c.before)
+
+			_, err := PlanPatch(inspect(t, root), integration.Builtin(), []Edit{c.edit})
+			require.ErrorIs(t, err, ErrBlocked)
+			assert.Contains(t, err.Error(), "which the edit would drop")
+			assert.Contains(t, err.Error(), fmt.Sprintf("(line %d); edit .seamark/config.yaml by hand", c.line))
+			assert.Equal(t, c.before, readConfig(t, root))
+		})
+	}
+
+	// A "#" inside quotes, inside a block scalar, or without white space
+	// before it is value text, so these edits still plan. A comment on the
+	// key line of a reset key goes with the key.
+	keeps := []struct {
+		name, before string
+		edit         Edit
+		after        string
+	}{
+		{"a hash inside a single-quoted continuation", "agent:\n  cli: 'cla\n    ude # in'\ndistill:\n  write: true\n",
+			resetCLI, "distill:\n  write: true\n"},
+		{"a hash inside a double-quoted continuation", "agent:\n  cli: \"cla\n    ude # in\"\ndistill:\n  write: true\n",
+			resetCLI, "distill:\n  write: true\n"},
+		{"a hash without white space before it", "agent:\n  cli: cla\n    u#de\ndistill:\n  write: true\n",
+			resetCLI, "distill:\n  write: true\n"},
+		{"a hash inside a block scalar", "agent:\n  cli: |\n    text # in\ndistill:\n  write: true\n",
+			resetCLI, "distill:\n  write: true\n"},
+		{"a hash inside a quoted flow item", "agent:\n  cli: claude\n  argv: [my-llm,\n    '--x # in']\n",
+			resetArgv, "agent:\n  cli: claude\n"},
+		{"a comment on the key line", "agent:\n  cli: claude  # preset\ndistill:\n  write: true\n",
+			resetCLI, "distill:\n  write: true\n"},
+		{"a set that removes an item without a comment", "index:\n  exclude:\n    - a # one\n    - 'b # in'\n",
+			Edit{Field: IndexExclude, List: []string{"a"}}, "index:\n  exclude:\n    - a # one\n"},
+	}
+
+	for _, c := range keeps {
+		t.Run(c.name, func(t *testing.T) {
+			root := withConfig(t, c.before)
+
+			save(t, root, c.edit)
+			assert.Equal(t, c.after, readConfig(t, root))
+		})
+	}
+}
+
+// TestConfigVerifierRefusesALostComment hands the verifier candidates
+// that no plan gives, because the splices refuse first. The verifier
+// must refuse them on its own, so a splice that skips its comment check
+// cannot write. The comment on the key line of a reset key may go.
+func TestConfigVerifierRefusesALostComment(t *testing.T) {
+	resetCLI := []Edit{{Field: AgentCLI, Reset: true}}
+
+	cases := []struct {
+		name, before string
+		edits        []Edit
+		candidate    string
+		reason       string
+	}{
+		{"a reset drops the comment of a continuation", "agent:\n  cli: cla\n    ude # keep\ndistill:\n  write: true\n",
+			resetCLI, "distill:\n  write: true\n", "a comment after a value changed"},
+		{"a set drops the comment of a removed item", "index:\n  exclude:\n    - a # one\n    - b\n",
+			[]Edit{{Field: IndexExclude, List: []string{"b"}}}, "index:\n  exclude:\n    - b\n",
+			"a comment after a value changed"},
+		{"a section removal drops the comment of the section line", "agent:  # who\n  cli: claude\ndistill:\n  write: true\n",
+			resetCLI, "distill:\n  write: true\n", "a comment after a value changed"},
+		{"a section removal drops a comment line", "agent:\n  # about\n  cli: claude\ndistill:\n  write: true\n",
+			resetCLI, "distill:\n  write: true\n", "a comment line changed"},
+		{"a reset drops the byte order mark", "\ufeffagent:\n  cli: claude\ndistill:\n  write: true\n",
+			resetCLI, "distill:\n  write: true\n", "the byte order mark at the start of the file would change"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			snap := inspect(t, withConfig(t, c.before))
+
+			_, err := verify(snap, integration.Builtin(), c.edits[0].Field.Group(), orderEdits(c.edits), []byte(c.candidate))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "refusing to write .seamark/config.yaml: "+c.reason)
+		})
+	}
+
+	t.Run("the comment of a reset key line may go", func(t *testing.T) {
+		snap := inspect(t, withConfig(t, "agent:\n  cli: claude  # preset\ndistill:\n  write: true\n"))
+
+		_, err := verify(snap, integration.Builtin(), GroupInference, resetCLI, []byte("distill:\n  write: true\n"))
+		require.NoError(t, err)
+	})
+
+	t.Run("a marked text compares its lines without the mark", func(t *testing.T) {
+		snap := inspect(t, withConfig(t, "\ufeffagent:\n  cli: claude\n\n# pin writes\ndistill:\n  write: true\n"))
+
+		_, err := verify(snap, integration.Builtin(), GroupInference, resetCLI, []byte("\ufeff# pin writes\ndistill:\n  write: true\n"))
+		require.NoError(t, err)
+	})
 }
 
 func TestAddingAnExcludeShowsOneAddedLine(t *testing.T) {
@@ -679,7 +832,7 @@ func TestActivationNotesPerGroup(t *testing.T) {
 		note string
 	}{
 		{Edit{Field: AgentCLI, String: "codex"}, "next distillation or trigger extraction", "Claude and Codex integration files do not change."},
-		{Edit{Field: DistillWrite, Bool: true}, "next apply, retarget or prune preview", "Saving writes no pin; only a new preview offers the write."},
+		{Edit{Field: DistillWrite, Bool: true}, "next pin-write preview: apply, retarget, prune, and new pins, pin edits, and pin removals in Lessons › Pins", "Saving writes no pin; only a new preview offers the write."},
 		{Edit{Field: ReviewWindow, Days: 30}, "next confirmed evidence refresh", "The newest 200 review comments are always kept."},
 		{Edit{Field: IndexGenerated, Bool: true}, "next explicit index build", "Nothing is scanned or removed until the build."},
 	}

@@ -430,6 +430,24 @@ func TestSaveRejectsAnEmptyPlan(t *testing.T) {
 	_, err := Save(nil)
 	require.Error(t, err)
 
-	_, err = Save(&Plan{Snapshot: inspect(t, t.TempDir())})
-	require.Error(t, err)
+	snap := inspect(t, t.TempDir())
+
+	// A refusal after the plan check reports its cause in Result.Err, as
+	// every other refusal of SaveWith does.
+	res, err := Save(&Plan{Snapshot: snap})
+	require.ErrorContains(t, err, "the plan has no guarded write")
+	assert.Equal(t, err, res.Err)
+	assert.Equal(t, NotWritten, res.Outcome)
+	assert.Equal(t, snap.Path, res.Path)
+
+	root := withLessons(t, richLessons)
+	p := planOf(t, root, Edit{Field: Threshold, Int: 4})
+	p.Setup.Writes = nil
+
+	res, err = Save(p)
+	require.ErrorContains(t, err, "the plan has no guarded write")
+	assert.Equal(t, err, res.Err)
+	assert.Equal(t, NotWritten, res.Outcome)
+	assert.Equal(t, lessonsPath(inspect(t, root).Root), res.Path)
+	assert.Equal(t, richLessons, readLessons(t, root))
 }

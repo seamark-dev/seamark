@@ -258,7 +258,7 @@ func extOpen(t *testing.T, f *fakeServices, p *learning.ExtractPreview, w, h int
 }
 
 // extRecOf returns the extraction record that the Run sub-view shows.
-func extRecOf(t *testing.T, h *harness) *extRecord {
+func extRecOf(t testing.TB, h *harness) *extRecord {
 	t.Helper()
 
 	rec, ok := runViewOf(h).cur.(*extRecord)
@@ -270,7 +270,7 @@ func extRecOf(t *testing.T, h *harness) *extRecord {
 // extStartHeld starts a reviewed run without running its worker, so a
 // test can send progress events one by one. The harness runs commands
 // on one goroutine, so a real worker would finish before any frame.
-func extStartHeld(t *testing.T, h *harness) *extRecord {
+func extStartHeld(t testing.TB, h *harness) *extRecord {
 	t.Helper()
 
 	rec := extRecOf(t, h)
@@ -309,7 +309,7 @@ func extThreeBatches() extPreviewOpts {
 
 // extMidRun drives a held run of extThreeBatches to "batch 2 of 3
 // sending": batch 1 stored one answer and one negative answer.
-func extMidRun(t *testing.T, h *harness) *extRecord {
+func extMidRun(t testing.TB, h *harness) *extRecord {
 	t.Helper()
 
 	rec := extStartHeld(t, h)

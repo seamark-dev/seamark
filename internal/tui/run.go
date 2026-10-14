@@ -684,14 +684,9 @@ func (p *propView) runMessage(l *proposals.Ledger) paneMessage {
 // writing setting. The preview named the old write gate, so a y could
 // confirm an effect that the user never saw. A commit that runs stays.
 func (p *propView) settingsSaved(msg settingsSavedMsg) tea.Cmd {
-	d := p.dec
-	if msg.group != settings.GroupPinWrite || d == nil || d.action != proposals.ActionApply || !d.beforeCommit() {
+	if msg.group != settings.GroupPinWrite {
 		return nil
 	}
 
-	p.seq.cancel()
-	p.dec = nil
-
-	return toast(ui.ToneAttention, "Pin writing changed in Settings, so the apply preview closed. Press a to "+
-		"preview it again.")
+	return p.closeApply("Pin writing changed in Settings")
 }

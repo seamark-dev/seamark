@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/hooks"
@@ -200,7 +199,7 @@ func StatGuarded(root, rel string) (FileGuard, error) {
 		guard.Exists = true
 
 		return guard, nil
-	case !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR):
+	case !absent(err):
 		return FileGuard{}, fmt.Errorf("%s: %w", rel, err)
 	}
 

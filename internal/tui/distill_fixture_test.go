@@ -250,7 +250,7 @@ func distOpen(t *testing.T, f *fakeServices, w, h int) *harness {
 }
 
 // distRecOf returns the distillation record that the Run sub-view shows.
-func distRecOf(t *testing.T, h *harness) *distRecord {
+func distRecOf(t testing.TB, h *harness) *distRecord {
 	t.Helper()
 
 	rec, ok := runViewOf(h).cur.(*distRecord)
@@ -262,7 +262,7 @@ func distRecOf(t *testing.T, h *harness) *distRecord {
 // distStartHeld plans and starts a run without running its worker, so a
 // test can send progress events one by one. The harness runs commands
 // on one goroutine, so a real worker would finish before any frame.
-func distStartHeld(t *testing.T, h *harness) *distRecord {
+func distStartHeld(t testing.TB, h *harness) *distRecord {
 	t.Helper()
 
 	h.press("enter")
@@ -299,7 +299,7 @@ func distFinished(rec *distRecord, i int, o distill.GroupOutcome) distill.Event 
 
 // distMidRun drives a held run to "group 4 of 6 sending": the cleanup
 // is done, three groups finished, one of them with duplicates only.
-func distMidRun(t *testing.T, h *harness) *distRecord {
+func distMidRun(t testing.TB, h *harness) *distRecord {
 	t.Helper()
 
 	rec := distStartHeld(t, h)

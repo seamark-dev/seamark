@@ -15,11 +15,46 @@ import (
 )
 
 // The field editors. A radio editor changes a scalar field; the list
-// editor changes index.exclude. Every change goes into the draft only.
+// editor changes index.exclude. The number input of a radio choice types
+// a day count or a lessons number. The mute editor and its record form
+// are in settings_lessons.go. Every change goes into the draft only.
 
 // settingsDaysLimit bounds the typed day count. Six digits allow more
 // than two thousand years, so no real window needs more.
 const settingsDaysLimit = 6
+
+// settingsNumberLimit bounds a typed lessons number. Ten digits hold
+// every value up to math.MaxInt32, the upper bound of the planner. So
+// settings.CheckNumber refuses a larger value as text, never as a cut.
+const settingsNumberLimit = 10
+
+// The notes of the distill.write choices. They name no action, because
+// every pin write reads the same gate. The Overview fact of pin writing
+// shows the same words, so both views agree.
+const (
+	settingsPinWriteOffNote = "previews show the change only"
+	settingsPinWriteOnNote  = "y in a preview writes the pins"
+)
+
+// settingsDigit accepts the runes of a whole number.
+func settingsDigit(r rune) bool {
+	return r >= '0' && r <= '9'
+}
+
+// settingsNumberInput returns the number input of f. The review window
+// keeps its earlier input. A lessons number refuses an input past the
+// limit visibly (ui.LineInput.RefuseOverLimit). It reports each refused
+// rune, so a typed overflow never turns into a smaller value.
+func settingsNumberInput(f settings.Field) ui.LineInput {
+	if f == settings.ReviewWindow {
+		return ui.LineInput{Placeholder: "days, for example 180", Limit: settingsDaysLimit, Accept: settingsDigit}
+	}
+
+	return ui.LineInput{
+		Placeholder: "a whole number above 0", Limit: settingsNumberLimit, Accept: settingsDigit,
+		RefuseOverLimit: true,
+	}
+}
 
 // settingsEditor is the state of the open editor.
 type settingsEditor struct {
@@ -30,21 +65,27 @@ type settingsEditor struct {
 	item int
 
 	// typing is true while the text input has the keys. target says
-	// what the input edits.
+	// what the input edits. number is the field of a number input.
 	typing bool
 	target settingsInputTarget
+	number settings.Field
 	input  ui.LineInput
 	// editIdx is the pattern that the input replaces; -1 adds one.
 	editIdx int
 	// inputErr explains why the typed value was not kept.
 	inputErr string
+
+	// rec is the open record form of the mute editor, or nil.
+	rec *settingsMuteForm
 }
 
 // settingsInputTarget names the value that the text input edits.
 type settingsInputTarget int
 
 const (
-	settingsInputDays settingsInputTarget = iota
+	// settingsInputNumber types a whole number for the field in
+	// settingsEditor.number: the review window days or a lessons number.
+	settingsInputNumber settingsInputTarget = iota
 	settingsInputPattern
 )
 
@@ -60,6 +101,14 @@ const (
 	settingsChoiceWindowDefault
 	settingsChoiceWindowDays
 	settingsChoiceWindowUnlimited
+	// settingsChoiceLessonsDefault removes a lessons key, so the reader
+	// default applies.
+	settingsChoiceLessonsDefault
+	// settingsChoiceNumber types a positive number for threshold,
+	// pin_budget, or change_budget.
+	settingsChoiceNumber
+	// settingsChoiceMode writes one hook_delivery mode.
+	settingsChoiceMode
 )
 
 // settingsChoice is one option of a radio editor.
@@ -73,6 +122,8 @@ type settingsChoice struct {
 	preset string
 	// on is the value of a boolean choice.
 	on bool
+	// mode is the hook_delivery value of a mode choice.
+	mode string
 }
 
 // choices returns the radio options of a field. The list editor edits
@@ -112,11 +163,11 @@ func (s *settingsScreen) choices(f settings.Field) []settingsChoice {
 			{kind: settingsChoiceRemoveArgv, label: "remove", note: "agent.cli takes effect"},
 		}
 	case settings.DistillWrite:
-		// The notes name no action, because the apply, the retarget and
-		// the prune read the same gate (D-14).
+		// The notes name no action, because every pin write reads the
+		// same gate (settings.PinWriteScope).
 		return []settingsChoice{
-			{kind: settingsChoiceBool, label: "off", note: "previews show the change only", def: true},
-			{kind: settingsChoiceBool, label: "on", note: "y in a preview writes the pins", on: true},
+			{kind: settingsChoiceBool, label: "off", note: settingsPinWriteOffNote, def: true},
+			{kind: settingsChoiceBool, label: "on", note: settingsPinWriteOnNote, on: true},
 		}
 	case settings.ReviewWindow:
 		return []settingsChoice{
@@ -131,6 +182,8 @@ func (s *settingsScreen) choices(f settings.Field) []settingsChoice {
 			{kind: settingsChoiceBool, label: "skip", def: true},
 			{kind: settingsChoiceBool, label: "include", note: "index generated files too", on: true},
 		}
+	case settings.Threshold, settings.PinBudget, settings.ChangeBudget, settings.HookDelivery:
+		return lessonsChoices(f, st)
 	}
 
 	return nil
@@ -194,7 +247,7 @@ func (s *settingsScreen) selectedChoice(f settings.Field) int {
 				return i
 			}
 		case settingsChoiceKeepArgv:
-			if e, ok := s.drafts[settings.AgentArgv]; !ok || !e.Reset {
+			if e, ok := s.edits[settings.AgentArgv]; !ok || !e.Reset {
 				return i
 			}
 		case settingsChoiceRemoveArgv:
@@ -205,6 +258,10 @@ func (s *settingsScreen) selectedChoice(f settings.Field) int {
 			}
 		case settingsChoiceWindowDefault, settingsChoiceWindowDays, settingsChoiceWindowUnlimited:
 			if w, _ := s.windowChoice(snap); w == settingsWindowOf(c.kind) {
+				return i
+			}
+		case settingsChoiceLessonsDefault, settingsChoiceNumber, settingsChoiceMode:
+			if s.lessonsSelects(f, c) {
 				return i
 			}
 		}
@@ -242,7 +299,8 @@ func (s *settingsScreen) editable(f settings.Field) tea.Cmd {
 	}
 
 	if err := snap.Editable(f.Group()); err != nil {
-		return toast(ui.ToneAttention, settingsBlockSentence(settingsGroupTitle(f.Group())+" cannot be edited here", err))
+		return toast(ui.ToneAttention, settingsBlockSentence(settingsGroupTitle(f.Group())+" cannot be edited here", err,
+			f.Document()))
 	}
 
 	return nil
@@ -271,8 +329,11 @@ func (s *settingsScreen) editorKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	if f == settings.IndexExclude {
+	switch f {
+	case settings.IndexExclude:
 		return s.listEditorKey(msg)
+	case settings.Mutes:
+		return s.muteEditorKey(msg)
 	}
 
 	cs := s.choices(f)
@@ -305,6 +366,10 @@ func (s *settingsScreen) editorKey(msg tea.KeyMsg) tea.Cmd {
 // every edit key would only repeat the refusal.
 func (s *settingsScreen) editorKeys() []key.Binding {
 	move := ui.WithHelp(ui.Nav.Down, "↑↓", "move")
+
+	if s.field() == settings.Mutes {
+		return s.muteEditorKeys()
+	}
 
 	if s.field() == settings.IndexExclude {
 		if s.blocked() {
@@ -344,15 +409,15 @@ func (s *settingsScreen) pick(f settings.Field, c settingsChoice) tea.Cmd {
 		// The custom command stays, so a preset in the draft would stay
 		// without effect.
 		s.saved = nil
-		delete(s.drafts, settings.AgentCLI)
-		delete(s.drafts, settings.AgentArgv)
+		delete(s.edits, settings.AgentCLI)
+		delete(s.edits, settings.AgentArgv)
 	case settingsChoicePreset:
 		if settingsArgvSet(snap) {
 			// The preset takes effect only without the custom command, so
 			// the draft removes it, and the preview says so (spec R-12).
 			s.saved = nil
-			s.drafts[settings.AgentCLI] = settings.Edit{Field: settings.AgentCLI, String: c.preset}
-			s.drafts[settings.AgentArgv] = settings.Edit{Field: settings.AgentArgv, Reset: true}
+			s.edits[settings.AgentCLI] = settings.Edit{Field: settings.AgentCLI, String: c.preset}
+			s.edits[settings.AgentArgv] = settings.Edit{Field: settings.AgentArgv, Reset: true}
 
 			return nil
 		}
@@ -360,10 +425,10 @@ func (s *settingsScreen) pick(f settings.Field, c settingsChoice) tea.Cmd {
 		s.setEdit(settings.Edit{Field: settings.AgentCLI, String: c.preset})
 	case settingsChoiceKeepArgv:
 		s.saved = nil
-		delete(s.drafts, settings.AgentArgv)
+		delete(s.edits, settings.AgentArgv)
 
-		if e, ok := s.drafts[settings.AgentCLI]; ok && !e.Reset {
-			delete(s.drafts, settings.AgentCLI)
+		if e, ok := s.edits[settings.AgentCLI]; ok && !e.Reset {
+			delete(s.edits, settings.AgentCLI)
 		}
 	case settingsChoiceRemoveArgv:
 		s.setEdit(settings.Edit{Field: settings.AgentArgv, Reset: true})
@@ -373,32 +438,44 @@ func (s *settingsScreen) pick(f settings.Field, c settingsChoice) tea.Cmd {
 		s.setEdit(settings.Edit{Field: settings.ReviewWindow, Reset: true})
 	case settingsChoiceWindowDays:
 		_, days := s.windowChoice(snap)
-		s.startTyping(settingsInputDays, -1, "")
+		s.startTyping(settingsInputNumber, -1, "")
 
 		if days > 0 {
 			s.ed.input.Set(strconv.Itoa(days))
 		}
 	case settingsChoiceWindowUnlimited:
 		s.setEdit(settings.Edit{Field: settings.ReviewWindow, Unlimited: true})
+	case settingsChoiceLessonsDefault:
+		s.setEdit(settings.Edit{Field: f, Reset: true})
+	case settingsChoiceNumber:
+		s.startTyping(settingsInputNumber, -1, "")
+
+		// A stored value past the bound of the planner does not fit the
+		// input, which would then be read only. The radio row still shows
+		// it, so the input starts empty.
+		if n, ok := s.lessonsNumber(f); ok && settings.CheckNumber(f, n) == nil {
+			s.ed.input.Set(strconv.Itoa(n))
+		}
+	case settingsChoiceMode:
+		s.setEdit(settings.Edit{Field: f, String: c.mode})
 	}
 
 	return nil
 }
 
-// startTyping opens the text input for a day count or a pattern.
+// startTyping opens the text input for a number or a pattern. A number
+// input edits the selected field.
 func (s *settingsScreen) startTyping(target settingsInputTarget, idx int, value string) {
 	s.ed.typing = true
 	s.ed.target = target
+	s.ed.number = s.field()
 	s.ed.editIdx = idx
 	s.ed.inputErr = ""
 	s.follow = true
 
 	switch target {
-	case settingsInputDays:
-		s.ed.input = ui.LineInput{
-			Placeholder: "days, for example 180", Limit: settingsDaysLimit,
-			Accept: func(r rune) bool { return r >= '0' && r <= '9' },
-		}
+	case settingsInputNumber:
+		s.ed.input = settingsNumberInput(s.ed.number)
 	default:
 		// The input drops control characters by itself, and the reader
 		// rejects them too. A space can be part of a real file name.
@@ -418,11 +495,14 @@ func (s *settingsScreen) typingKey(msg tea.KeyMsg) tea.Cmd {
 
 		return nil
 	case key.Matches(msg, ui.Nav.Enter):
-		if s.ed.target == settingsInputDays {
+		switch {
+		case s.ed.target == settingsInputPattern:
+			return s.keepPattern()
+		case s.ed.number == settings.ReviewWindow:
 			return s.keepDays()
 		}
 
-		return s.keepPattern()
+		return s.keepLessonsNumber()
 	}
 
 	s.ed.input.Key(msg)
@@ -561,10 +641,15 @@ func (s *settingsScreen) keepPattern() tea.Cmd {
 // resetField drafts the return of f to its default: the removal of its
 // key. For agent.argv that is the removal of the custom command. When
 // the file has no key, the field only leaves the draft, because setEdit
-// drops a reset of an absent key.
+// drops a reset of an absent key. The mute list has no reset, because
+// the planner changes one entry per save.
 func (s *settingsScreen) resetField(f settings.Field) tea.Cmd {
 	if refusal := s.editable(f); refusal != nil {
 		return refusal
+	}
+
+	if f == settings.Mutes {
+		return toast(ui.ToneNeutral, settingsMuteNoReset)
 	}
 
 	st, ok := s.fieldState(f)
@@ -580,7 +665,7 @@ func (s *settingsScreen) resetField(f settings.Field) tea.Cmd {
 			then = "agent.argv stays in effect"
 		}
 
-		return toast(ui.ToneNeutral, string(f)+" has no key in "+settingsFile+"; "+then+".")
+		return toast(ui.ToneNeutral, string(f)+" has no key in "+f.Document()+"; "+then+".")
 	}
 
 	s.setEdit(settings.Edit{Field: f, Reset: true})

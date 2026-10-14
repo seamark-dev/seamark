@@ -303,8 +303,8 @@ func TestOpenExtractMsgWaitsForAnActiveRun(t *testing.T) {
 }
 
 func TestMutationsRefreshThePins(t *testing.T) {
-	assert.Contains(t, maintRefresh, secPins)
-	assert.Contains(t, maintRefresh, secLedger)
+	assert.Contains(t, pinWriteRefresh, secPins)
+	assert.Contains(t, pinWriteRefresh, secLedger)
 	assert.Contains(t, extractRefresh, secPins)
 	assert.Contains(t, extractRefresh, secLedger)
 	assert.Contains(t, allSections, secPins)

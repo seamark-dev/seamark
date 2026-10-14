@@ -2,13 +2,16 @@ package tui
 
 import (
 	"errors"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -33,26 +36,33 @@ const (
 	settingsFormW = 16
 )
 
-// settingsDescriptions says what each field controls.
+// settingsDescriptions says what each field controls. The pin-write
+// text names the whole scope of the gate (settings.PinWriteScope).
 var settingsDescriptions = map[settings.Field]string{
 	settings.AgentCLI:       "Selects the preset command that distillation and trigger extraction run.",
 	settings.AgentArgv:      "A custom command that replaces the agent.cli preset.",
-	settings.DistillWrite:   "Lets a reviewed apply, retarget or prune write pins.",
+	settings.DistillWrite:   "Lets a reviewed preview write pins: " + settings.PinWriteScope + ".",
 	settings.ReviewWindow:   "How old a mined review comment may be.",
 	settings.IndexGenerated: `Files with a "Code generated ... DO NOT EDIT." header.`,
 	settings.IndexExclude:   "Globs that the index build skips, on top of .gitignore and the built-in skip directories.",
+	settings.Threshold:      "The minimum number of recurrences before a mined lesson surfaces.",
+	settings.PinBudget:      "The most pins that one edit hook injection carries.",
+	settings.ChangeBudget:   "The most lessons that one change_set answer or one check advisory carries.",
+	settings.HookDelivery:   "Whether the edit hook repeats a lesson within one agent context.",
+	settings.Mutes:          "Entries that hide mined lessons by rule, by region, or by both. Pins are never muted.",
 }
 
-// settingsTakesEffect says when a saved group takes effect. A save
-// never starts that work itself (spec R-13). The pin-write text names
-// all three previews, because the Pins retarget and prune read the same
-// gate as the proposal apply (D-14). The inference text names trigger
-// extraction, because it runs the same resolved command as distillation.
+// settingsTakesEffect says when a saved config.yaml group takes effect.
+// A save never starts that work itself (spec R-13). The pin-write text
+// names the whole scope of the gate, because every pin write reads it
+// (D-14, spec R-5). The inference text names trigger extraction, because
+// it runs the same resolved command as distillation. A lessons field
+// shows its own activation instead (settings.Field.Activation).
 var settingsTakesEffect = map[settings.Group]string{
 	settings.GroupInference: "At the next prepared distillation or trigger extraction. Saving does not run a " +
 		"model, does not authenticate and does not change the Claude Code or Codex integration files.",
-	settings.GroupPinWrite: "At the next apply, retarget or prune preview. Saving writes no pin; a new " +
-		"preview then offers the write.",
+	settings.GroupPinWrite: "At the next pin-write preview: " + settings.PinWriteScope + ". Saving writes no " +
+		"pin; a new preview then offers the write.",
 	settings.GroupEvidence: "At the next confirmed evidence refresh. The stored findings stay until a refresh " +
 		"succeeds.",
 	settings.GroupIndexing: "At the next index build. Saving does not scan, delete or rebuild anything. " +
@@ -73,9 +83,11 @@ var settingsForms = [][2]string{
 func (s *settingsScreen) listBox(w, h int, focused bool) string {
 	t := s.st.theme
 
+	// The title names the file of the selected group, so it follows the
+	// cursor from config.yaml to lessons.yaml.
 	return t.Box(ui.BoxOpts{
 		W: w, H: h, Focus: focused,
-		Title: integPaneTitle(t, "Settings", focused), Right: t.Code.Render(settingsFile),
+		Title: integPaneTitle(t, "Settings", focused), Right: t.Code.Render(s.field().Document()),
 		Lines: s.listLines(ui.BoxInner(w), ui.BoxRows(h), focused),
 	})
 }
@@ -135,15 +147,18 @@ func (s *settingsScreen) tableLines(w int, sep, header, focused bool) (lines []s
 			ui.Cell(f.Render("Value"), settingsValueW), ui.Cell(f.Render("Set by"), setW)))
 	}
 
+	// The tail explains only the block of the whole file of the cursor
+	// group. So a block of the other file marks the headings of its
+	// groups, as a block of one group does.
+	cursorDoc := s.field().Document()
+
 	for i, g := range settingsGroups {
 		if i > 0 && sep {
 			lines = append(lines, "")
 		}
 
-		// A block of one group marks its heading. A block of the whole
-		// file marks no heading, because the tail explains it once.
 		heading := integHeading(t, settingsGroupTitle(g))
-		if snap.Blocked == nil && snap.Editable(g) != nil {
+		if snap.Editable(g) != nil && (settingsFileBlock(snap, g) == nil || g.Document() != cursorDoc) {
 			heading += "  " + t.Attention.Render(t.Glyphs.Warn+" not editable here")
 		}
 
@@ -198,7 +213,7 @@ func (s *settingsScreen) fieldRow(f settings.Field, current, focused bool, w, se
 func (s *settingsScreen) valueCell(f settings.Field) string {
 	t := s.st.theme
 
-	if e, ok := s.drafts[f]; ok {
+	if e, ok := s.edits[f]; ok {
 		return t.Attention.Render(s.draftValue(e))
 	}
 
@@ -221,7 +236,7 @@ func (s *settingsScreen) setByCell(f settings.Field) string {
 	t := s.st.theme
 	g := t.Glyphs
 
-	if _, ok := s.drafts[f]; ok {
+	if _, ok := s.edits[f]; ok {
 		return t.Attention.Render(g.Dot + " draft")
 	}
 
@@ -245,7 +260,7 @@ func (s *settingsScreen) setByCell(f settings.Field) string {
 	case f == settings.AgentArgv && !settingsArgvSet(snap):
 		return t.Faint.Render(g.Dash)
 	case st.Source == settings.SourceFile:
-		return t.Faint.Render("config.yaml")
+		return t.Faint.Render(path.Base(f.Document()))
 	default:
 		return t.Faint.Render("default")
 	}
@@ -277,11 +292,13 @@ func (s *settingsScreen) tailItems(w int) []settingsTail {
 		out = append(out, settingsTail{lines: propNote(t, ui.ToneAttention, text, w), row: settingsNoteRow(t, ui.ToneAttention, text)})
 	}
 
-	switch {
-	case snap.Blocked != nil:
-		out = append(out, s.blockTail("The file", snap.Blocked, w))
+	// The block of the file of the selected group comes first. A block
+	// of the other document shows with its own group.
+	switch fileBlock := settingsFileBlock(snap, group); {
+	case fileBlock != nil:
+		out = append(out, s.blockTail("The file", fileBlock, group.Document(), w))
 	case snap.Editable(group) != nil:
-		out = append(out, s.blockTail(settingsGroupTitle(group), snap.Editable(group), w))
+		out = append(out, s.blockTail(settingsGroupTitle(group), snap.Editable(group), group.Document(), w))
 	}
 
 	if n := s.draftTotal(); n > 0 {
@@ -294,15 +311,20 @@ func (s *settingsScreen) tailItems(w int) []settingsTail {
 	}
 
 	if s.saved != nil {
-		text := "Saved " + settingsGroupTitle(s.saved.group) + " at " + s.saved.at.Format("15:04:05") +
-			". The index reads as stale until the next index build."
+		// The index fingerprint covers config.yaml, not lessons.yaml.
+		after := " The index reads as stale until the next index build."
+		if s.saved.group.Document() == pinfile.File {
+			after = " Each consumer reads the file at its next run."
+		}
+
+		text := "Saved " + settingsGroupTitle(s.saved.group) + " at " + s.saved.at.Format("15:04:05") + "." + after
 		lead := t.Success.Render(g.OK + " ")
 
 		out = append(out, settingsTail{lines: integHanging(lead, t.Body, text, w), row: lead + t.Body.Render(text)})
 	}
 
-	if snap.Blocked == nil && !snap.Guard.Exists {
-		plain(t.Faint, "No "+settingsFile+" yet. Saving creates it with the chosen keys.")
+	if settingsFileBlock(snap, group) == nil && !settingsFileExists(snap, group) {
+		plain(t.Faint, "No "+group.Document()+" yet. Saving creates it with the chosen keys.")
 	}
 
 	if s.st.settings.stale() {
@@ -318,54 +340,99 @@ func (s *settingsScreen) tailItems(w int) []settingsTail {
 
 // blockTail renders a block as a tail message. Its one-line form puts
 // the file location first, so the minimum size keeps the place to fix.
-func (s *settingsScreen) blockTail(scope string, err error, w int) settingsTail {
+// doc is the file of the blocked group.
+func (s *settingsScreen) blockTail(scope string, err error, doc string, w int) settingsTail {
 	t := s.st.theme
-	reason, where := settingsBlock(err)
+	b := settingsBlock(err, doc)
+
+	row := "Fix " + b.where + " by hand: " + b.reason
+	if b.route != "" {
+		row = b.reason + ". " + b.route
+	}
 
 	return settingsTail{
-		lines: s.blockNote(scope, err, w),
-		row:   settingsNoteRow(t, ui.ToneAttention, "Fix "+where+" by hand: "+reason),
+		lines: s.blockNote(scope, err, doc, w),
+		row:   settingsNoteRow(t, ui.ToneAttention, row),
 	}
 }
 
 // blockNote renders a block: the reason, the file location to open, and
 // the manual route. The route shows once, because BlockedError.Error
-// adds its own route and the view does not use that text.
-func (s *settingsScreen) blockNote(scope string, err error, w int) []string {
+// adds its own route and the view does not use that text. A block with
+// a route of its own shows that route in place of the location.
+func (s *settingsScreen) blockNote(scope string, err error, doc string, w int) []string {
 	t := s.st.theme
-	reason, where := settingsBlock(err)
+	b := settingsBlock(err, doc)
 
-	out := propNote(t, ui.ToneAttention, scope+" cannot be edited here: "+reason+".", w)
-	out = append(out, integCommandLines(t, where, w)...)
+	out := propNote(t, ui.ToneAttention, scope+" cannot be edited here: "+b.reason+".", w)
+
+	if b.route != "" {
+		return append(out, integLines(t.Muted, b.route, w)...)
+	}
+
+	out = append(out, integCommandLines(t, b.where, w)...)
 
 	return append(out, integLines(t.Muted, "Fix the file by hand; the other views stay usable.", w)...)
 }
 
-// settingsBlock splits a block into its reason and the file location to
-// open, for example ".seamark/config.yaml:3". The reason comes from the
-// file, so ui.Diag makes it safe.
-func settingsBlock(err error) (reason, where string) {
-	where = settingsFile
+// settingsBlocked is a block in the words of the Settings views.
+type settingsBlocked struct {
+	// reason is the cause without a final full stop. It can come from
+	// the file, so ui.Diag makes it safe.
+	reason string
+	// where is the file location to open, for example
+	// ".seamark/config.yaml:3".
+	where string
+	// route is the way out when a fix by hand at where is wrong, or "".
+	// Every view shows this route in place of the fix by hand.
+	route string
+}
+
+// settingsBlock splits a block into its reason, the file location to
+// open, and its own route. doc is the file of the blocked group; a
+// BlockedError that names its file wins. This function is the one owner
+// of the choice of the route.
+func settingsBlock(err error, doc string) settingsBlocked {
+	out := settingsBlocked{where: doc}
+
+	// The index of another repository blocks a lessons group without a
+	// fault in the file. A fix by hand would edit the file of the other
+	// repository, so the route is the index build (P4-16).
+	if errors.Is(err, services.ErrForeignRoot) {
+		out.route = settingsForeignRootRoute
+	}
 
 	var b *settings.BlockedError
 	if !errors.As(err, &b) {
-		return strings.TrimSuffix(ui.ErrText(err), "."), where
+		out.reason = strings.TrimSuffix(ui.ErrText(err), ".")
+
+		return out
+	}
+
+	if b.File != "" {
+		out.where = b.File
 	}
 
 	if b.Line > 0 {
-		where += ":" + strconv.Itoa(b.Line)
+		out.where += ":" + strconv.Itoa(b.Line)
 	}
 
-	return strings.TrimSuffix(ui.Diag(b.Reason), "."), where
+	out.reason = strings.TrimSuffix(ui.Diag(b.Reason), ".")
+
+	return out
 }
 
-// settingsBlockSentence renders a block in one sentence for a toast, for
-// example "Inference cannot be edited here: <reason>; fix
-// .seamark/config.yaml:3 by hand."
-func settingsBlockSentence(subject string, err error) string {
-	reason, where := settingsBlock(err)
+// settingsBlockSentence renders a block in one sentence for a toast. An
+// example is "Inference cannot be edited here: <reason>; fix
+// .seamark/config.yaml:3 by hand." doc is the file of the blocked group.
+func settingsBlockSentence(subject string, err error, doc string) string {
+	b := settingsBlock(err, doc)
 
-	return subject + ": " + reason + "; fix " + where + " by hand."
+	if b.route != "" {
+		return subject + ": " + b.reason + ". " + b.route
+	}
+
+	return subject + ": " + b.reason + "; fix " + b.where + " by hand."
 }
 
 // settingsNoteRow renders a tone glyph and text in one line, the
@@ -445,16 +512,18 @@ func (s *settingsScreen) editorBox(w, h int, focused, compact bool) string {
 	inner, rows := ui.BoxInner(w), ui.BoxRows(h)
 	f := s.field()
 
-	lines, focusAt := s.editorLines(f, inner, focused)
+	lines, focusAt, focusEnd := s.editorLines(f, inner, focused)
 
 	sc := &s.detail
 	window := max(1, rows)
 
 	// The editor cursor stays visible after a move. A page key moves the
 	// window freely until the next cursor move. While no line has the
-	// cursor, the follow request waits for the next render.
+	// cursor, the follow request waits for the next render. The lines up
+	// to focusEnd belong to the cursor, for example the verdicts of the
+	// mute record form; they show when the window has room.
 	if s.follow && focusAt >= 0 {
-		sc.Reveal(focusAt, focusAt, window)
+		sc.Reveal(focusAt, focusEnd, window)
 		s.follow = false
 	}
 
@@ -476,7 +545,7 @@ func (s *settingsScreen) editorBox(w, h int, focused, compact bool) string {
 	}
 
 	title := string(f)
-	if f == settings.IndexExclude && focused {
+	if (f == settings.IndexExclude || f == settings.Mutes) && focused {
 		title += " " + t.Glyphs.Sep + " editing"
 	}
 
@@ -487,16 +556,17 @@ func (s *settingsScreen) editorBox(w, h int, focused, compact bool) string {
 }
 
 // editorLines renders the editor of f and returns the line of its
-// cursor, or -1. The order is the same for every field: the name, the
-// controls, the explanation, the values, and when a save takes effect.
-func (s *settingsScreen) editorLines(f settings.Field, w int, focused bool) (out []string, focusAt int) {
+// cursor, or -1, and the last line that belongs to the cursor. The order
+// is the same for every field: the name, the controls, the explanation,
+// the values, and when a save takes effect.
+func (s *settingsScreen) editorLines(f settings.Field, w int, focused bool) (out []string, focusAt, focusEnd int) {
 	t := s.st.theme
 	g := t.Glyphs
 	snap := s.snap()
 	st, _ := snap.Field(f)
 
 	head := t.Title.Render(string(f))
-	if _, ok := s.drafts[f]; ok {
+	if _, ok := s.edits[f]; ok {
 		head = ui.Spread(head, t.Attention.Render(g.Dot+" draft"), w)
 	}
 
@@ -505,7 +575,7 @@ func (s *settingsScreen) editorLines(f settings.Field, w int, focused bool) (out
 
 	if err := snap.Editable(f.Group()); err != nil {
 		out = append(out, "")
-		out = append(out, s.blockNote(settingsGroupTitle(f.Group()), err, w)...)
+		out = append(out, s.blockNote(settingsGroupTitle(f.Group()), err, f.Document(), w)...)
 	}
 
 	if f == settings.AgentCLI && settingsArgvSet(snap) {
@@ -515,11 +585,11 @@ func (s *settingsScreen) editorLines(f settings.Field, w int, focused bool) (out
 		out = append(out, integHanging("  ", t.Code, ui.OneLine(argv.Effective), w)...)
 	}
 
-	controls, at := s.controlLines(f, w, focused && s.editing)
+	controls, at, end := s.controlLines(f, w, focused && s.editing)
 
-	focusAt = -1
+	focusAt, focusEnd = -1, -1
 	if at >= 0 {
-		focusAt = len(out) + 1 + at
+		focusAt, focusEnd = len(out)+1+at, len(out)+1+end
 	}
 
 	if len(controls) > 0 {
@@ -537,26 +607,42 @@ func (s *settingsScreen) editorLines(f settings.Field, w int, focused bool) (out
 		out = append(out, explain...)
 	}
 
+	if f == settings.HookDelivery {
+		out = append(out, "")
+		out = append(out, s.deliveryModeLines(w)...)
+	}
+
 	out = append(out, "", t.Heading.Render("VALUE"))
 	out = append(out, s.valueLines(f, st, w)...)
 	out = append(out, "", t.Heading.Render("TAKES EFFECT"))
-	out = append(out, integLines(t.Body, settingsTakesEffect[f.Group()], w)...)
 
-	return out, focusAt
+	if f.Document() == pinfile.File {
+		out = append(out, s.lessonsActivationLines(f, w)...)
+	} else {
+		out = append(out, integLines(t.Body, settingsTakesEffect[f.Group()], w)...)
+	}
+
+	return out, focusAt, focusEnd
 }
 
-// controlLines renders the choices of a radio editor, or the pattern
-// list of index.exclude, and returns the line of the cursor, or -1.
-func (s *settingsScreen) controlLines(f settings.Field, w int, active bool) (out []string, at int) {
-	if f == settings.IndexExclude {
-		return s.patternLines(w, active)
+// controlLines renders the choices of a radio editor, the pattern list
+// of index.exclude, or the mute editor. It returns the line of the
+// cursor, or -1, and the last line that belongs to the cursor.
+func (s *settingsScreen) controlLines(f settings.Field, w int, active bool) (out []string, at, end int) {
+	switch f {
+	case settings.IndexExclude:
+		out, at = s.patternLines(w, active)
+
+		return out, at, at
+	case settings.Mutes:
+		return s.muteLines(w, active)
 	}
 
 	t := s.st.theme
 
 	cs := s.choices(f)
 	if len(cs) == 0 {
-		return nil, -1
+		return nil, -1, -1
 	}
 
 	labelW := 0
@@ -576,8 +662,15 @@ func (s *settingsScreen) controlLines(f settings.Field, w int, active bool) (out
 
 		out = append(out, s.choiceRow(c, i == sel, current, labelW, w))
 
-		if c.kind == settingsChoiceWindowDays && s.ed.typing && s.ed.target == settingsInputDays && s.ed.inputErr != "" {
-			out = append(out, propIndent("    ", propNote(t, ui.ToneFailure, s.ed.inputErr, w-4))...)
+		if settingsNumberChoice(c.kind) && s.ed.typing && s.ed.target == settingsInputNumber {
+			if s.ed.inputErr != "" {
+				out = append(out, propIndent("    ", propNote(t, ui.ToneFailure, s.ed.inputErr, w-4))...)
+			}
+
+			// A refused key of the input says why it added nothing.
+			if n := s.ed.input.Notice(); n != "" {
+				out = append(out, propIndent("    ", propNote(t, ui.ToneAttention, n, w-4))...)
+			}
 		}
 	}
 
@@ -587,7 +680,7 @@ func (s *settingsScreen) controlLines(f settings.Field, w int, active bool) (out
 		out = append(out, integLines(t.Muted, "No choice is marked, because the saved value is unknown.", w)...)
 	}
 
-	return out, at
+	return out, at, at
 }
 
 // choiceRow renders one radio option, for example
@@ -608,21 +701,24 @@ func (s *settingsScreen) choiceRow(c settingsChoice, on, current bool, labelW, w
 		note = t.Muted.Render(ui.OneLine(c.note))
 	}
 
-	if c.kind == settingsChoiceWindowDays {
-		_, days := s.windowChoice(snap)
-
+	if settingsNumberChoice(c.kind) {
 		switch {
-		case s.ed.typing && s.ed.target == settingsInputDays:
+		case s.ed.typing && s.ed.target == settingsInputNumber:
 			note = t.Faint.Render("[") + s.ed.input.View(t) + t.Faint.Render("]")
-		case on:
+		case on && c.kind == settingsChoiceWindowDays:
+			_, days := s.windowChoice(snap)
 			note = t.Body.Render(settingsDays(days))
+		case on:
+			if n, ok := s.lessonsNumber(s.field()); ok {
+				note = t.Body.Render(strconv.Itoa(n))
+			}
 		}
 	}
 
-	// The default choice of the review window names itself, so a tag
-	// would repeat its label.
+	// The default choice of the review window and of a lessons field
+	// names itself, so a tag would repeat its label.
 	var tag string
-	if c.def && c.kind != settingsChoiceWindowDefault {
+	if c.def && c.kind != settingsChoiceWindowDefault && c.kind != settingsChoiceLessonsDefault {
 		tag = t.Faint.Render("default")
 	}
 
@@ -654,11 +750,8 @@ func (s *settingsScreen) choiceRow(c settingsChoice, on, current bool, labelW, w
 // of a new or changed pattern, the add row, and the supported forms.
 func (s *settingsScreen) patternLines(w int, active bool) (out []string, at int) {
 	t := s.st.theme
-	g := t.Glyphs
 	snap := s.snap()
 	list := s.excludeList(snap)
-	numW := ui.Width(strconv.Itoa(max(1, len(list)+1)))
-	pad := strings.Repeat(" ", settingsMarkW+numW+2)
 
 	// An unknown list has no count: the reader failure is not zero
 	// patterns.
@@ -669,27 +762,7 @@ func (s *settingsScreen) patternLines(w int, active bool) (out []string, at int)
 		head += "  " + t.Faint.Render(strconv.Itoa(len(list)))
 	}
 
-	out = []string{head}
-	at = -1
-
-	row := func(n int, text string, current bool) {
-		mark := "  "
-		if current {
-			mark = t.Key.Render(g.Cursor) + " "
-			at = len(out)
-		}
-
-		line := ui.Truncate(mark+t.Faint.Render(ui.PadLeft(strconv.Itoa(n), numW))+"  "+text, w, g.Ellipsis)
-		if current {
-			line = t.Highlight(line, w, ui.BgSel)
-		}
-
-		out = append(out, line)
-	}
-
-	failure := func(text string) {
-		out = append(out, propIndent(pad, propNote(t, ui.ToneFailure, text, w-ui.Width(pad)))...)
-	}
+	r := newSettingsListRows(t, w, len(list), head)
 
 	pattern := s.ed.typing && s.ed.target == settingsInputPattern
 
@@ -701,60 +774,116 @@ func (s *settingsScreen) patternLines(w int, active bool) (out []string, at int)
 			text = s.ed.input.View(t)
 		}
 
-		row(i+1, text, active && s.ed.item == i)
+		r.row(i+1, text, active && s.ed.item == i)
 
 		switch {
 		case typing && s.ed.inputErr != "":
-			failure(s.ed.inputErr)
+			r.note(ui.ToneFailure, s.ed.inputErr)
 		case s.excludeErrs[p] != "":
-			failure(s.excludeErrs[p])
+			r.note(ui.ToneFailure, s.excludeErrs[p])
 		}
 	}
 
 	adding := pattern && s.ed.editIdx < 0
 
 	if adding {
-		row(len(list)+1, s.ed.input.View(t), true)
+		r.row(len(list)+1, s.ed.input.View(t), true)
 
 		if s.ed.inputErr != "" {
-			failure(s.ed.inputErr)
+			r.note(ui.ToneFailure, s.ed.inputErr)
 		}
 	}
 
 	switch {
 	case unknown:
-		out = append(out, integLines(t.Muted, "The patterns are unknown: the index reader rejects the file.", w)...)
+		r.out = append(r.out, integLines(t.Muted, "The patterns are unknown: the index reader rejects the file.", w)...)
 	case len(list) == 0 && !adding:
-		out = append(out, integLines(t.Muted, "No patterns: the build skips only .gitignore entries and the "+
+		r.out = append(r.out, integLines(t.Muted, "No patterns: the build skips only .gitignore entries and the "+
 			"built-in skip directories.", w)...)
 	}
 
 	// A blocked list offers no add row, because no draft can change it.
 	if active && !adding && snap.Editable(settings.GroupIndexing) == nil {
-		mark := "  "
-		current := s.ed.item >= len(list)
-
-		if current {
-			mark = t.Key.Render(g.Cursor) + " "
-			at = len(out)
-		}
-
-		line := mark + t.Success.Render(g.Add) + " " + t.Faint.Render("add a pattern")
-		if current {
-			line = t.Highlight(line, w, ui.BgSel)
-		}
-
-		out = append(out, line)
+		r.addRow("add a pattern", s.ed.item >= len(list))
 	}
 
-	out = append(out, "", t.Heading.Render("FORMS"))
+	r.out = append(r.out, "", t.Heading.Render("FORMS"))
 
 	for _, form := range settingsForms {
-		out = append(out, integRow(t, ui.Cell(t.Code.Render(form[0]), settingsFormW),
+		r.out = append(r.out, integRow(t, ui.Cell(t.Code.Render(form[0]), settingsFormW),
 			ui.Cell(t.Muted.Render(form[1]), max(1, w-settingsFormW))))
 	}
 
-	return out, at
+	return r.out, r.at
+}
+
+// settingsListRows builds the numbered rows of a list editor. The
+// exclude patterns and the mute entries share it. So both editors draw
+// a row, a note under a row, and the add row alike.
+type settingsListRows struct {
+	t *ui.Theme
+	w int
+	// numW is the width of the row numbers; count+1 numbers fit, so an
+	// added row keeps the column.
+	numW int
+	out  []string
+	// at is the line of the cursor, or -1.
+	at int
+}
+
+// newSettingsListRows starts the rows of a list of count items under
+// the heading head.
+func newSettingsListRows(t *ui.Theme, w, count int, head string) *settingsListRows {
+	return &settingsListRows{t: t, w: w, numW: ui.Width(strconv.Itoa(max(1, count+1))), out: []string{head}, at: -1}
+}
+
+// pad is the indent of a line under a row: the mark, the number, and
+// two cells.
+func (r *settingsListRows) pad() string {
+	return strings.Repeat(" ", settingsMarkW+r.numW+2)
+}
+
+// row adds the numbered row n. A row that does not fit ends with an
+// ellipsis; a note under it can hold the full text.
+func (r *settingsListRows) row(n int, text string, current bool) {
+	t := r.t
+
+	mark := "  "
+	if current {
+		mark = t.Key.Render(t.Glyphs.Cursor) + " "
+		r.at = len(r.out)
+	}
+
+	line := ui.Truncate(mark+t.Faint.Render(ui.PadLeft(strconv.Itoa(n), r.numW))+"  "+text, r.w, t.Glyphs.Ellipsis)
+	if current {
+		line = t.Highlight(line, r.w, ui.BgSel)
+	}
+
+	r.out = append(r.out, line)
+}
+
+// note adds a wrapped note under the last row, in the tone of its glyph.
+func (r *settingsListRows) note(tone ui.Tone, text string) {
+	pad := r.pad()
+	r.out = append(r.out, propIndent(pad, propNote(r.t, tone, text, r.w-ui.Width(pad)))...)
+}
+
+// addRow adds the row that adds an item, with its label.
+func (r *settingsListRows) addRow(label string, current bool) {
+	t := r.t
+
+	mark := "  "
+	if current {
+		mark = t.Key.Render(t.Glyphs.Cursor) + " "
+		r.at = len(r.out)
+	}
+
+	line := mark + t.Success.Render(t.Glyphs.Add) + " " + t.Faint.Render(label)
+	if current {
+		line = t.Highlight(line, r.w, ui.BgSel)
+	}
+
+	r.out = append(r.out, line)
 }
 
 // explanation returns the console text of a field. The reader notes
@@ -783,15 +912,24 @@ func (s *settingsScreen) explanation(f settings.Field) string {
 			return "Removing the custom command shows in the save preview before anything is written."
 		}
 
-		return "No custom command is set. A custom command goes in " + settingsFile + " by hand; the console " +
+		return "No custom command is set. A custom command goes in " + f.Document() + " by hand; the console " +
 			"does not write one."
 	case settings.DistillWrite:
-		return "Saving on writes no pin; a new apply, retarget or prune preview then offers the write."
+		return "Saving on writes no pin; a new preview then offers the write: " + settings.PinWriteScope + "."
 	case settings.ReviewWindow:
 		return "The window is not a strict cutoff."
 	case settings.IndexGenerated:
 		return "Generated files stay out by default, because protoc, stringer and mockgen output inflates " +
 			"the graph."
+	case settings.Threshold, settings.PinBudget, settings.ChangeBudget, settings.HookDelivery, settings.Mutes:
+		st, _ := snap.Field(f)
+		text := lessonsExplanation(f, st)
+
+		if f == settings.Mutes && !s.muteEditing() {
+			text += " " + muteOpenHelp
+		}
+
+		return text
 	}
 
 	return ""
@@ -832,7 +970,7 @@ func (s *settingsScreen) valueLines(f settings.Field, st settings.FieldState, w 
 
 	add("Stored", stored, storedTone)
 
-	if e, ok := s.drafts[f]; ok {
+	if e, ok := s.edits[f]; ok {
 		add("Draft", s.draftDetail(e), ui.ToneAttention)
 	}
 
@@ -874,13 +1012,13 @@ func (s *settingsScreen) sourceText(st settings.FieldState) string {
 	case st.Source == settings.SourceShadowed:
 		return "overridden by agent.argv"
 	case st.Source == settings.SourceFile:
-		return settingsFile + ", line " + strconv.Itoa(st.Stored.Line)
+		return st.Field.Document() + ", line " + strconv.Itoa(st.Stored.Line)
 	case st.Stored.Present:
 		return "built-in default; the key in line " + strconv.Itoa(st.Stored.Line) + " has no value"
 	case !s.located(st):
 		return "unknown while the group is not editable"
-	case !snap.Guard.Exists:
-		return "built-in default; no " + settingsFile + " yet"
+	case !settingsFileExists(snap, st.Field.Group()):
+		return "built-in default; no " + st.Field.Document() + " yet"
 	default:
 		return "built-in default; no key in the file"
 	}

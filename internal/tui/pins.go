@@ -22,25 +22,33 @@ import (
 
 // This file holds the state and the key handling of Lessons › Pins. The
 // sub-view lists the entries of .seamark/lessons.yaml in file order and
-// relates each one to the proposal ledger. It plans nothing and writes
-// nothing. The keys w, - and t only send the typed requests of
+// relates each one to the proposal ledger. The maintenance keys w, - and
+// t plan and write nothing here: they only send the typed requests of
 // pins_msgs.go, and the preview or the review reads the state again. The
-// rendering lives in pins_view.go. The cursor, the pane keys and the
-// filter input come from listpane.go, which Proposals shares.
+// authoring keys n, i and d open the pin form and the pin review of
+// pins_author.go, which plan and commit through services. The rendering
+// lives in pins_view.go. The cursor, the pane keys and the filter input
+// come from listpane.go, which Proposals shares.
 //
 // The view computes no link itself. It shows the links of
 // maintain.Inspect, which applies pinfile.Classify. So Pins and
 // seamark lessons name the same pin for each proposal row.
 
 // pinKeys are the bindings that only the Pins sub-view uses. The shared
-// keys (space, x, f, /, t) keep their meaning from Proposals.
+// keys (space, x, f, /, t) keep their meaning from Proposals. n, i and
+// d open the authoring of pins_author.go; they act on the cursor row
+// only, never on the marks.
 var pinKeys = struct {
 	Search, Compare, Retarget, Prune key.Binding
+	New, Edit, Remove                key.Binding
 }{
 	Search:   key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "search")),
 	Compare:  key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "compare")),
 	Retarget: key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "retarget")),
 	Prune:    key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "prune")),
+	New:      key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new pin")),
+	Edit:     key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "edit")),
+	Remove:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove")),
 }
 
 // pinFilter is the list filter of the Pins sub-view. The installed pins
@@ -122,6 +130,9 @@ type pinsView struct {
 
 	// host holds the open maintenance preview (pins_msgs.go).
 	host maintHost
+	// author holds the authoring drafts, the open pin form and the open
+	// pin review (pins_author.go).
+	author pinAuthor
 
 	filter pinFilter
 	region string
@@ -158,6 +169,7 @@ func newPinsView(st *state) *pinsView {
 		filterInput: filterInput{textHint: "text in the rule or the note"},
 		st:          st,
 		host:        maintHost{st: st},
+		author:      pinAuthor{edits: map[pinfile.EntryRef]*pinDraft{}},
 		selected:    pinMarks{},
 		acted:       map[pinfile.EntryRef]bool{},
 	}
@@ -165,11 +177,17 @@ func newPinsView(st *state) *pinsView {
 
 // inspection returns the last pin inspection, or nil before the first.
 func (p *pinsView) inspection() *maintain.Inspection {
-	if !p.st.pins.loaded {
+	return p.st.pinInspection()
+}
+
+// pinInspection returns the last pin inspection, or nil before the
+// first. The Pins sub-view and its pin review both read it.
+func (s *state) pinInspection() *maintain.Inspection {
+	if !s.pins.loaded {
 		return nil
 	}
 
-	return p.st.pins.value
+	return s.pins.value
 }
 
 // pinLinksKnown reports an inspection whose every link is known: the pin
@@ -215,26 +233,35 @@ func (p *pinsView) editBlock(pin *maintain.Pin) string {
 }
 
 // pinsForeignRoot returns the repository root that the index records
-// when it is not the workspace root, else "". The maintenance engine
-// reads and writes the pin file under the recorded root, as the CLI
-// does. In a copied checkout that root names the original repository,
-// but the ledger is the database of the copy. So one operation would
-// change two repositories. A --db flag makes another root normal, so
-// the check applies only to the default database path. The comparison
-// does no I/O, because Update and View must not read the disk.
+// when it is not the workspace root, else "". It is the rule of the
+// retarget and the prune. The maintenance engine reads and writes the
+// pin file under the recorded root, as the CLI does. In a copied
+// checkout that root names the original repository, but the ledger is
+// the database of the copy. So one operation would change two
+// repositories. A --db flag makes another root normal, so the check
+// applies only to the default database path (services ownRoot).
 func pinsForeignRoot(st *state) string {
+	if st.svc.DBPath() != store.DefaultPath(st.svc.Root()) {
+		return ""
+	}
+
+	return authorForeignRoot(st)
+}
+
+// authorForeignRoot returns the repository root that the index records
+// when it is not the workspace root, else "". It is the rule of the pin
+// authoring engine, which refuses another root also with --db (services
+// foreignRoot, P4-16). So the form and the engine agree. The comparison
+// does no I/O, because Update and View must not read the disk. So,
+// unlike the engine, it does not resolve a symbolic link.
+func authorForeignRoot(st *state) string {
 	if !st.pins.loaded || st.pins.value == nil {
 		return ""
 	}
 
 	root, ws := st.pins.value.Index.Root, st.svc.Root()
 
-	switch {
-	case root == "" || ws == "":
-		return ""
-	case st.svc.DBPath() != store.DefaultPath(ws):
-		return ""
-	case filepath.Clean(root) == filepath.Clean(ws):
+	if root == "" || ws == "" || filepath.Clean(root) == filepath.Clean(ws) {
 		return ""
 	}
 
@@ -462,14 +489,20 @@ func pinMatch(n int, refAt func(int) pinfile.EntryRef, ref pinfile.EntryRef) (in
 	return at, same == 1
 }
 
-// capturing reports an open preview, a focused input, or an open
-// comparison. Each takes every key, so the Lessons switch keys wait.
+// capturing reports an open pin form or review, an open preview, a
+// focused input, or an open comparison. Each takes every key, so the
+// Lessons switch keys wait.
 func (p *pinsView) capturing() bool {
-	return p.host.open() || p.editing != filterNone || p.compare != nil
+	return p.author.open() || p.host.open() || p.editing != filterNone || p.compare != nil
 }
 
-// modal returns the open preview or the comparison.
+// modal returns the open pin review or discard question, the open
+// preview, or the comparison.
 func (p *pinsView) modal(w, h int) (string, bool) {
+	if view, ok := p.authorModal(w, h); ok {
+		return view, true
+	}
+
 	if p.host.open() {
 		return p.host.view(w, h)
 	}
@@ -481,10 +514,17 @@ func (p *pinsView) modal(w, h int) (string, bool) {
 	return "", false
 }
 
-// update routes msg to the open preview first, as maintHost asks, then
-// handles the keys and the refreshes of the sub-view.
+// update routes msg to the pin authoring first, then to the open
+// preview, as maintHost asks. Then it handles the keys and the
+// refreshes of the sub-view.
 func (p *pinsView) update(msg tea.Msg) tea.Cmd {
+	authored, done := p.authorRoute(msg)
+	if done {
+		return authored
+	}
+
 	cmd, done := p.host.route(msg)
+	cmd = tea.Batch(authored, cmd)
 	p.markActed(p.host.takeActed())
 
 	if done {
@@ -563,6 +603,12 @@ func (p *pinsView) browseKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case key.Matches(msg, pinKeys.Compare):
 		return p.openCompare(rows)
+	case key.Matches(msg, pinKeys.New):
+		return p.newPin()
+	case key.Matches(msg, pinKeys.Edit):
+		return p.editPin()
+	case key.Matches(msg, pinKeys.Remove):
+		return p.removePin()
 	case key.Matches(msg, pinKeys.Retarget):
 		return p.requestMaint(maintain.ActionRetarget)
 	case key.Matches(msg, pinKeys.Prune):
@@ -830,7 +876,13 @@ func (p *pinsView) noTarget(action string) string {
 // pinByRef returns the pin with binding ref in the current inspection,
 // by the rule of pinMatch.
 func (p *pinsView) pinByRef(ref pinfile.EntryRef) (*maintain.Pin, int, bool) {
-	in := p.inspection()
+	return inspectedPin(p.inspection(), ref)
+}
+
+// inspectedPin returns the pin with binding ref in the inspection in,
+// and its position, by the rule of pinMatch. A nil inspection holds no
+// pin.
+func inspectedPin(in *maintain.Inspection, ref pinfile.EntryRef) (*maintain.Pin, int, bool) {
 	if in == nil {
 		return nil, 0, false
 	}
@@ -885,7 +937,9 @@ func pinListGap(in *maintain.Inspection, f pinFilter) string {
 // user did not cause gets a note, because a refresh must never change
 // what an action targets without telling the user.
 func (p *pinsView) reconcile() tea.Cmd {
-	var notes []string
+	// The drafts and the removal review rebind first, so one message
+	// names every change.
+	notes := append(p.rebindDrafts(), p.rebindRemoval()...)
 
 	in := p.inspection()
 
@@ -1089,20 +1143,28 @@ func (p *pinsView) focusRow(row pinRow, f pinFilter) tea.Cmd {
 	return toast(ui.ToneAttention, strings.Join(notes, "; "))
 }
 
-// keys returns the keys of the open preview, of the focused input or
-// the comparison, or of the list.
+// keys returns the keys of the open pin form or review, of the open
+// preview, of the focused input or the comparison, or of the list.
 //
-// The four action keys w, -, t and v always show (user decision of
-// 2026-10-04: "Always list, mark unavailable"). An action that no
-// target can use is an unavailable entry, so the user can still find
-// its key. The press then explains the refusal and opens nothing. The
-// available actions lead and the n/a group follows. A footer that is
-// too narrow for every hint shows the group by its keys only, so the
-// 120-column footer holds every action key and still tab, f and /. A
-// list without a selectable pin offers no target, so its list keys come
-// first and the n/a group follows them: f is the route out of a history
-// list. Lessons adds its switch keys at the end.
+// The action keys always show (user decision of 2026-10-04: "Always
+// list, mark unavailable"). An action that no target can use is an
+// unavailable entry, so the user can still find its key. The press then
+// explains the refusal and opens nothing. The actions keep the order
+// space n i d - w t v (contracts §4.2): the authoring keys first, then
+// the maintenance keys. The available actions lead and the n/a group
+// follows. A footer that is too narrow for every hint shows the n/a
+// group, and then the keys at the end, by their keys only. So the
+// 120-column footer holds every action key while one of them is n/a.
+// With all seven on, it cuts from the end as other footers do, and
+// "? help" lists them. A list without a
+// selectable pin offers no target, so its list keys come first and the
+// n/a group follows them: f is the route out of a history list. Lessons
+// adds its switch keys at the end.
 func (p *pinsView) keys() []key.Binding {
+	if p.author.open() {
+		return p.authorBindings()
+	}
+
 	if p.host.open() {
 		return p.host.keys()
 	}
@@ -1123,18 +1185,30 @@ func (p *pinsView) keys() []key.Binding {
 
 	var on, off []key.Binding
 
+	// target is true when a key acts on the cursor pin or the marks. n
+	// needs no target, because a new pin binds no entry. i without a pin
+	// row opens an orphaned draft (editPin), so it has no target either.
+	target := false
+
+	// t reads "extract" here, as in the help. With two or more keys n/a,
+	// the short label keeps t with its action in the 120-column footer.
 	for _, a := range []struct {
-		b  key.Binding
-		ok bool
+		b          key.Binding
+		ok, target bool
 	}{
-		{pinKeys.Retarget, p.offers(p.retargetBlock)},
-		{pinKeys.Prune, p.offers(p.editBlock)},
-		{extractKey, p.offers(pinExtractBlock)},
-		{pinKeys.Compare, hasRow && cur.pin != nil && p.compareBlock(cur.pin) == ""},
+		{pinKeys.New, true, false},
+		{pinKeys.Edit, p.authorOffers(maintain.AuthorEdit), p.authorRow()},
+		{pinKeys.Remove, p.authorOffers(maintain.AuthorRemove), true},
+		{pinKeys.Prune, p.offers(p.editBlock), true},
+		{pinKeys.Retarget, p.offers(p.retargetBlock), true},
+		{ui.WithHelp(extractKey, "t", "extract"), p.offers(pinExtractBlock), true},
+		{pinKeys.Compare, hasRow && cur.pin != nil && p.compareBlock(cur.pin) == "", true},
 	} {
-		if a.ok {
+		switch {
+		case a.ok:
 			on = append(on, a.b)
-		} else {
+			target = target || a.target
+		default:
 			off = append(off, ui.Unavailable(a.b))
 		}
 	}
@@ -1157,7 +1231,7 @@ func (p *pinsView) keys() []key.Binding {
 
 	list := []key.Binding{p.paneKey(hasRow), show, region, search}
 
-	if sel.Enabled() {
+	if sel.Enabled() || target {
 		return slices.Concat([]key.Binding{sel}, on, off, list, []key.Binding{clearSel})
 	}
 

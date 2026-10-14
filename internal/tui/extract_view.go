@@ -379,7 +379,7 @@ func (r *extRecord) planNotes(w int) []string {
 	if err := r.prev.stale; err != nil {
 		text := "The run did not start: " + ui.ErrText(err) + ". Nothing was sent. Press enter to plan again."
 
-		var saved extSettingsStale
+		var saved extSavedStale
 
 		switch {
 		case errors.As(err, &saved):
@@ -1249,7 +1249,7 @@ func extOpenText(c extCounts, conflict bool) string {
 		return ""
 	}
 
-	return " Of the other proposals, " + propJoin(parts) + "." + extStaysText(open-closed, closed)
+	return " Of the other proposals, " + joinWords(parts) + "." + extStaysText(open-closed, closed)
 }
 
 // extStaysText tells which questions without a saved answer stay open.

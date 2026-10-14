@@ -1062,8 +1062,9 @@ func runLessonsStats(cmd *cobra.Command, opts *options) error {
 
 // lessonsForFile normalizes path to repo-relative and returns the
 // config-filtered lessons for its area. The --file view is a deliberate
-// question, so it gets every pin. The edit hook is an injection the
-// agent never asked for; the delivery service applies its budget.
+// question, so it applies no pin budget and keeps every restatement. It
+// still keeps at most 8 lessons. The edit hook is an injection the agent
+// never asked for; the delivery service applies its budget.
 func lessonsForFile(st *store.Store, root, path string) ([]model.Lesson, error) {
 	return report.LessonsForScope(st, loadLessonsConfig(root), toRepoRel(root, path), 8)
 }

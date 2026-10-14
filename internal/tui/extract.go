@@ -166,6 +166,8 @@ func (r *extRecord) update(msg tea.Msg) tea.Cmd {
 		}
 	case settingsSavedMsg:
 		r.settingsSaved(msg)
+	case lessonsSavedMsg:
+		return r.lessonsSaved(msg)
 	}
 
 	return nil
@@ -520,24 +522,41 @@ func (r *extRecord) stopping() bool {
 // keeps going: the engine checks the file before each batch and stops
 // with a conflict.
 func (r *extRecord) settingsSaved(msg settingsSavedMsg) {
-	if r.step != stepPreparing && r.step != stepPreview {
-		return
+	if r.planOpen() {
+		r.prev.stale = extSavedStale{cause: "Settings changed (" + msg.group.String() + ")"}
 	}
-
-	r.prev.stale = extSettingsStale{group: msg.group.String()}
 }
 
-// extSettingsStale marks a preview that a settings save made out of
-// date. It has its own type, because the review must not report it as
-// a refused start: nobody pressed y.
-type extSettingsStale struct {
-	// group names the saved settings group, for example "inference".
-	group string
+// lessonsSaved marks a preview out of date after a write of lessons.yaml
+// (lessonsBound). The preview read the pin links of the old file. The
+// request stays, so enter plans again.
+func (r *extRecord) lessonsSaved(msg lessonsSavedMsg) tea.Cmd {
+	if r.planOpen() {
+		r.prev.stale = extSavedStale{cause: lessonsChanged(msg)}
+	}
+
+	return nil
+}
+
+// planOpen reports a plan that a saved file can make stale: a plan that
+// reads or waits for y. A running record keeps going, because the
+// engine checks the file before each batch.
+func (r *extRecord) planOpen() bool {
+	return r.step == stepPreparing || r.step == stepPreview
+}
+
+// extSavedStale marks a preview that a saved file made out of date: a
+// settings save or a write of lessons.yaml. It has its own type, because
+// the review must not report it as a refused start: nobody pressed y.
+type extSavedStale struct {
+	// cause names the save in the words of the review, for example
+	// "Settings changed (inference)".
+	cause string
 }
 
 // Error describes the save in the words of the review.
-func (e extSettingsStale) Error() string {
-	return "Settings changed (" + e.group + ")"
+func (e extSavedStale) Error() string {
+	return e.cause
 }
 
 // remaining returns the planned proposals whose question is still open

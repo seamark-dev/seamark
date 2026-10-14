@@ -42,7 +42,7 @@ func maintAppliedRows(f func(rows []domain.Proposal) []domain.Proposal) []domain
 // maintInspectionOf returns the Pins snapshot of a written pin file. The real
 // reader parses the bytes, and the real classifier links them to the
 // ledger rows, so the snapshot is what the engine reads after a commit.
-func maintInspectionOf(t *testing.T, data []byte, applied, superseded []domain.Proposal) *maintain.Inspection {
+func maintInspectionOf(t testing.TB, data []byte, applied, superseded []domain.Proposal) *maintain.Inspection {
 	t.Helper()
 
 	doc := pinfile.Parse(data)

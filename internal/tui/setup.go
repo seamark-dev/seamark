@@ -770,19 +770,7 @@ func setupHookWords(c integration.Client) string {
 		return "lifecycle"
 	}
 
-	return setupJoinWords(names)
-}
-
-// setupJoinWords joins words as "a", "a and b" or "a, b and c".
-func setupJoinWords(words []string) string {
-	switch len(words) {
-	case 0:
-		return ""
-	case 1:
-		return words[0]
-	default:
-		return strings.Join(words[:len(words)-1], ", ") + " and " + words[len(words)-1]
-	}
+	return joinWords(names)
 }
 
 // setupSharedNote names the other consumers of the client's skill

@@ -9,11 +9,9 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/seamark-dev/seamark/internal/confidence"
 	"github.com/seamark-dev/seamark/internal/fixes"
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
@@ -376,69 +374,16 @@ func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, li
 // and adds confidence details. Hooks warn only about weak pins to keep
 // injected context small. Deliberate views show the confidence tier and
 // supporting evidence for every matched pin. Manually created pins have
-// no proposal history and are treated as strong.
+// no proposal history and are treated as strong. It is nil without
+// applied proposals. The multi-file selection uses the same pinAssessor
+// through ReadEvidence, so both selectors rank and annotate alike.
 func confidenceAnnotator(st *store.Store, applied []model.Proposal, ambient bool) (reviews.PinAnnotator, error) {
-	byKey := make(map[reviews.PinKey]model.Proposal, len(applied))
-
-	var cited []int64
-
-	for _, p := range applied {
-		byKey[reviews.ProposalKey(p)] = p
-		cited = append(cited, p.Members...)
-	}
-
-	if len(byKey) == 0 {
-		return nil, nil
-	}
-
-	meta, err := st.FindingsMetaByIDs(cited)
+	assessor, err := newPinAssessor(st, applied, time.Now())
 	if err != nil {
 		return nil, err
 	}
 
-	root, _ := st.GetMeta(store.MetaRepoRoot)
-	now := time.Now()
-
-	// Memoized by pin identity: a multi-file surface asks about the
-	// same pin once per file, and Assess stats cited paths — the disk
-	// must not be probed again for an answer that cannot change within
-	// one request.
-	type verdict struct {
-		rank int
-		note string
-	}
-
-	cache := map[reviews.PinKey]verdict{}
-
-	return func(pin reviews.PinRule) (int, string) {
-		key := reviews.NewPinKey(pin.Rule, pin.Region, pin.Regions)
-
-		if v, ok := cache[key]; ok {
-			return v.rank, v.note
-		}
-
-		p, ok := byKey[key]
-		if !ok {
-			cache[key] = verdict{rank: int(confidence.TierStrong)}
-
-			return int(confidence.TierStrong), ""
-		}
-
-		tier, facts := confidence.Assess(p, meta, root, now)
-
-		v := verdict{rank: int(tier)}
-
-		switch {
-		case ambient && tier == confidence.TierWeak:
-			v.note = "weak evidence: " + facts.Line()
-		case !ambient:
-			v.note = tier.String() + ": " + facts.Line()
-		}
-
-		cache[key] = v
-
-		return v.rank, v.note
-	}, nil
+	return assessor.annotator(ambient), nil
 }
 
 // LessonsForFiles is the multi-file moment-of-change surface (RFC-002
@@ -446,152 +391,55 @@ func confidenceAnnotator(st *store.Store, applied []model.Proposal, ambient bool
 // confidence ACROSS the whole set (a weak pin from the first file must
 // not out-place a strong one from the last), restatements collapsed
 // once globally, mined recurrence appended, all under one budget with
-// an exact held-back count. The shared context — applied proposals,
-// cluster coverage, finding metadata — is loaded once, not per file.
+// an exact held-back count. ReadEvidence loads the shared context —
+// applied proposals, cluster coverage, finding metadata — once, not per
+// file, and changeSetFold applies the budget rule.
 // Lines show regions, never triggering files: the caller supplied the
 // file list, and a region is exactly the mapping back onto it.
 func LessonsForFiles(st *store.Store, cfg *reviews.Config, files []string, budget int) ([]model.Lesson, int, error) {
-	merged, err := unionForFiles(st, cfg, files, true)
+	ev, err := ReadEvidence(st, files, cfg)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	pins, trimmed := reviews.CollapseRestated(merged.pins)
+	sel := ev.changeSetFold(cfg, budget)
 
-	union := make([]model.Lesson, 0, len(pins)+len(merged.mined))
-
-	for _, sp := range pins {
-		union = append(union, sp.Lesson())
-	}
-
-	union = append(union, merged.mined...)
-
-	if budget > 0 && len(union) > budget {
-		trimmed += len(union) - budget
-		union = union[:budget]
-	}
-
-	return union, trimmed, nil
+	return sel.Lessons, sel.HeldBack, nil
 }
 
-// fileUnion is the lesson material for a set of files before any
-// budget applies. Each multi-file surface applies its own budget rule
-// to the same union, so the surfaces cannot disagree about selection.
-type fileUnion struct {
-	// pins holds each pin identity once, ranked across the whole set.
-	// unionForFiles collapses no restatement: each caller has its own
-	// collapse rule. LessonsForFiles reads this list.
-	pins []reviews.SurfacedPin
-	// everyPin is pins plus the pins that repeat an identity inside
-	// lessons.yaml. The single-file selector keeps such a repeat, so the
-	// edit hook reads this list to select the same lessons.
-	everyPin []reviews.SurfacedPin
-	// mined holds the mined lessons that clear the surfacing bar, one
-	// per cluster, in first-file order.
-	mined []model.Lesson
-}
+// changeSetFold is the budget rule of change_set and check. It keeps one
+// pin per identity, collapses restatements, and cuts the pins and then
+// the mined lessons at one budget (0 = no cap). The held-back count is
+// the trimmed count of these surfaces: the collapsed restatements and
+// every lesson above the budget, pin or mined. A repeat of a pin
+// identity is in no list of the Selection and is not part of the count.
+func (ev *Evidence) changeSetFold(cfg *reviews.Config, budget int) Selection {
+	merged := ev.union(cfg, true)
+	sel := Selection{Excluded: merged.excluded}
 
-// pinSlot identifies one lessons.yaml pin across the files of a union.
-// A pin identity can occur twice in lessons.yaml, for example with two
-// notes. ordinal counts the earlier pins of the same identity in one
-// file's list. Equal identities share rank and depth, so the stable
-// order of SurfacePins gives one pin the same ordinal for every file.
-type pinSlot struct {
-	key     reviews.PinKey
-	ordinal int
-}
+	pins, restated := reviews.CollapseRestatedPins(merged.pins)
+	sel.Restated = restated
 
-// unionForFiles merges the pins and the mined lessons of several files.
-// ambient selects the annotation style of confidenceAnnotator.
-func unionForFiles(st *store.Store, cfg *reviews.Config, files []string, ambient bool) (fileUnion, error) {
-	applied, err := st.Proposals(model.ProposalApplied)
-	if err != nil {
-		return fileUnion{}, err
+	// One budget covers pins and mined lessons. The pins come first, and
+	// the mined lessons fill the room that the pins leave.
+	sel.Pins, sel.OverTotal = cutAt(pins, budget)
+
+	sel.Mined = merged.mined
+	if budget > 0 {
+		sel.Mined, sel.MinedOverTotal = splitAt(merged.mined, budget-len(sel.Pins))
 	}
 
-	covered, err := coveredClusters(st, cfg, applied)
-	if err != nil {
-		return fileUnion{}, err
+	sel.HeldBack = len(sel.Restated) + len(sel.OverTotal) + len(sel.MinedOverTotal)
+
+	sel.Lessons = make([]model.Lesson, 0, len(sel.Pins)+len(sel.Mined))
+
+	for _, sp := range sel.Pins {
+		sel.Lessons = append(sel.Lessons, sp.Lesson())
 	}
 
-	annotate, err := confidenceAnnotator(st, applied, ambient)
-	if err != nil {
-		return fileUnion{}, err
-	}
+	sel.Lessons = append(sel.Lessons, sel.Mined...)
 
-	// Pins: union by slot, keeping each pin's best appearance
-	// (highest rank, then deepest match) across the files.
-	best := map[pinSlot]reviews.SurfacedPin{}
-
-	var order []pinSlot
-
-	for _, f := range files {
-		seen := map[reviews.PinKey]int{}
-
-		for _, sp := range cfg.SurfacePins(f, annotate) {
-			key := reviews.NewPinKey(sp.Pin.Rule, sp.Pin.Region, sp.Pin.Regions)
-			slot := pinSlot{key: key, ordinal: seen[key]}
-			seen[key]++
-
-			cur, ok := best[slot]
-			if !ok {
-				best[slot] = sp
-				order = append(order, slot)
-
-				continue
-			}
-
-			if sp.Rank > cur.Rank || (sp.Rank == cur.Rank && sp.Depth > cur.Depth) {
-				best[slot] = sp
-			}
-		}
-	}
-
-	// Stable: a stable sort of the full list and a filter afterwards
-	// give the order that a sort of the filtered list gives.
-	sort.SliceStable(order, func(i, j int) bool {
-		a, b := best[order[i]], best[order[j]]
-		if a.Rank != b.Rank {
-			return a.Rank > b.Rank
-		}
-
-		return a.Depth > b.Depth
-	})
-
-	pins := make([]reviews.SurfacedPin, 0, len(order))
-	everyPin := make([]reviews.SurfacedPin, 0, len(order))
-
-	for _, slot := range order {
-		everyPin = append(everyPin, best[slot])
-
-		if slot.ordinal == 0 {
-			pins = append(pins, best[slot])
-		}
-	}
-
-	// Mined recurrence: per-file query, deduplicated by cluster,
-	// filtered exactly as the single-file surface filters.
-	seenCluster := map[string]bool{}
-
-	var mined []model.Lesson
-
-	for _, f := range files {
-		ls, err := st.LessonsForFile(f, 1, 100)
-		if err != nil {
-			return fileUnion{}, err
-		}
-
-		for _, l := range ls {
-			if seenCluster[l.ClusterKey] || covered[l.ClusterKey] || !cfg.SurfacesMined(l) {
-				continue
-			}
-
-			seenCluster[l.ClusterKey] = true
-			mined = append(mined, l)
-		}
-	}
-
-	return fileUnion{pins: pins, everyPin: everyPin, mined: mined}, nil
+	return sel
 }
 
 // PrintLessonBlock renders a compact lesson list for multi-file
@@ -663,30 +511,12 @@ func CheckAdvisory(w io.Writer, st *store.Store, root string, files []string) {
 // A dismissal never suppresses: it rejects the distilled guidance, not
 // the raw recurrence (mute is the tool for hiding that).
 func coveredClusters(st *store.Store, cfg *reviews.Config, applied []model.Proposal) (map[string]bool, error) {
-	// Coverage is judged PER PIN, never across a union of citations:
-	// pin A citing one half of a cluster and unrelated pin B the other
-	// half captures nothing — neither pin carries the theme, and the
-	// union would suppress an unresolved recurrence.
-	covered := map[string]bool{}
-
-	for _, p := range applied {
-		if !pinLive(cfg, p) || len(p.Members) == 0 {
-			continue
-		}
-
-		counts, err := st.ClusterCitation(p.Members)
-		if err != nil {
-			return nil, err
-		}
-
-		for key, c := range counts {
-			if c.Cited == c.Total {
-				covered[key] = true
-			}
-		}
+	citations, err := readCitations(st, applied, cfg)
+	if err != nil {
+		return nil, err
 	}
 
-	return covered, nil
+	return coveredBy(cfg, applied, citations), nil
 }
 
 // pinLive reports whether lessons.yaml currently carries a pin with

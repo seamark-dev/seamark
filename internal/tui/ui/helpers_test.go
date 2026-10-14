@@ -12,16 +12,25 @@ func keyMsg(k string) tea.KeyMsg {
 		"enter": tea.KeyEnter, "esc": tea.KeyEsc, "tab": tea.KeyTab, "shift+tab": tea.KeyShiftTab,
 		"up": tea.KeyUp, "down": tea.KeyDown, "left": tea.KeyLeft, "right": tea.KeyRight,
 		"pgdown": tea.KeyPgDown, "pgup": tea.KeyPgUp, "home": tea.KeyHome, "end": tea.KeyEnd,
-		"ctrl+c": tea.KeyCtrlC, "backspace": tea.KeyBackspace,
+		"ctrl+c": tea.KeyCtrlC, "backspace": tea.KeyBackspace, "delete": tea.KeyDelete, "ctrl+j": tea.KeyCtrlJ,
 	}
 
 	if t, ok := named[k]; ok {
 		return tea.KeyMsg{Type: t}
 	}
 
-	if k == "space" {
+	switch k {
+	case "space":
 		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
+	case "alt+enter":
+		return tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
 	}
 
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+}
+
+// pasteMsg returns the key message of a bracketed paste of text: one
+// message with every rune, as Bubble Tea delivers it.
+func pasteMsg(text string) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text), Paste: true}
 }

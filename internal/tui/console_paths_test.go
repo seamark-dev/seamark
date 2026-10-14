@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -57,11 +58,12 @@ var consoleBannedCalls = map[string][]string{
 // lines and keep the CLI selection, which the console does not use.
 const consoleBannedImport = "github.com/seamark-dev/seamark/internal/cli"
 
-// consoleBannedRefs returns every reference to a banned function in one
-// parsed file, as "pkg.Func". It resolves the local import names, so an
-// aliased import does not hide a call. A reference without a call, for
-// example a function value, also counts.
-func consoleBannedRefs(file *ast.File) []string {
+// consoleBannedRefs returns every reference in one parsed file to a
+// name that banned lists for its import path, as "pkg.Name". It resolves
+// the local import names, so an aliased import does not hide a call. A
+// reference without a call, for example a function value or a type, also
+// counts.
+func consoleBannedRefs(file *ast.File, banned map[string][]string) []string {
 	local := map[string]string{}
 
 	for _, imp := range file.Imports {
@@ -91,7 +93,7 @@ func consoleBannedRefs(file *ast.File) []string {
 			return true
 		}
 
-		for _, fn := range consoleBannedCalls[local[pkg.Name]] {
+		for _, fn := range banned[local[pkg.Name]] {
 			if sel.Sel.Name == fn {
 				found = append(found, pkg.Name+"."+fn)
 			}
@@ -116,7 +118,7 @@ func TestConsolePathsAvoidTheCLIWrites(t *testing.T) {
 				"%s imports the CLI package (D-2)", name)
 		}
 
-		assert.Empty(t, consoleBannedRefs(file), "%s references a CLI write path (D-2)", name)
+		assert.Empty(t, consoleBannedRefs(file, consoleBannedCalls), "%s references a CLI write path (D-2)", name)
 	}
 }
 
@@ -139,6 +141,102 @@ func f() {
 	file, err := parser.ParseFile(token.NewFileSet(), "x.go", src, parser.ParseComments)
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{"d.ExtractTriggers", "os.WriteFile"}, consoleBannedRefs(file),
+	assert.Equal(t, []string{"d.ExtractTriggers", "os.WriteFile"}, consoleBannedRefs(file, consoleBannedCalls),
 		"an alias does not hide a reference, and a comment is not one")
+}
+
+// R-14: the Phase 4 files style text only through the tones and styles
+// of ui.Theme. Only ui/theme.go holds colors. It pairs a light and a
+// dark value, and the tests fix the ASCII color profile. A color in a
+// screen file skips both, so this guard bans the color constructors of
+// Lip Gloss and termenv, a hex color literal, and an SGR escape literal.
+// It reuses the syntax reader of the D-2 guard, so an alias or a
+// comment does not change the verdict.
+
+// phase4StylePatterns name the non-test sources of Phase 4 (contracts
+// §7, C2), relative to internal/tui.
+var phase4StylePatterns = []string{
+	"pins_author*.go", "settings_lessons*.go", "sample*.go", "state_saved.go", "ui/textarea.go",
+}
+
+// themeBannedColors maps an import path to its color constructors.
+var themeBannedColors = map[string][]string{
+	"github.com/charmbracelet/lipgloss": {"Color", "AdaptiveColor", "CompleteColor", "CompleteAdaptiveColor", "ANSIColor"},
+	"github.com/muesli/termenv":         {"RGBColor", "ANSI256Color", "ANSIColor"},
+}
+
+// rawColor matches a string that is a hex color, such as "#E8B23A", or
+// that holds an SGR escape sequence, such as "\x1b[31m".
+var rawColor = regexp.MustCompile(`^#(?:[0-9A-Fa-f]{3}){1,2}$|\x1b\[[0-9;]*m`)
+
+// rawColorLiterals returns every string literal of a parsed file that
+// rawColor matches, as it stands in the source.
+func rawColorLiterals(file *ast.File) []string {
+	var found []string
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+
+		if s, err := strconv.Unquote(lit.Value); err == nil && rawColor.MatchString(s) {
+			found = append(found, lit.Value)
+		}
+
+		return true
+	})
+
+	return found
+}
+
+func TestPhase4FilesStyleOnlyThroughThemeTones(t *testing.T) {
+	for _, pattern := range phase4StylePatterns {
+		matches, err := filepath.Glob(pattern)
+		require.NoError(t, err)
+
+		var files []string
+
+		for _, name := range matches {
+			if !strings.HasSuffix(name, "_test.go") {
+				files = append(files, name)
+			}
+		}
+
+		require.NotEmpty(t, files, "%s names no source; a moved file keeps its guard only when the pattern follows it", pattern)
+
+		for _, name := range files {
+			file, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.SkipObjectResolution)
+			require.NoError(t, err)
+
+			assert.Empty(t, consoleBannedRefs(file, themeBannedColors), "%s builds a color; use a tone of ui.Theme", name)
+			assert.Empty(t, rawColorLiterals(file), "%s holds a raw color literal; use a tone of ui.Theme", name)
+		}
+	}
+}
+
+func TestThemeToneGuardFindsAliasedColorsAndSkipsComments(t *testing.T) {
+	const src = `package x
+
+import (
+	lg "github.com/charmbracelet/lipgloss"
+)
+
+// lg.Color("#E8B23A") in a comment is no color.
+var (
+	a = lg.Color("205")
+	b = lg.AdaptiveColor{Light: "#fff", Dark: "#000000"}
+	c = "\x1b[31m" + "red"
+	d = lg.NewStyle()
+	e = "#tag"
+)
+`
+
+	file, err := parser.ParseFile(token.NewFileSet(), "x.go", src, parser.ParseComments)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"lg.Color", "lg.AdaptiveColor"}, consoleBannedRefs(file, themeBannedColors),
+		"an alias does not hide a color, and a comment is not one")
+	assert.Equal(t, []string{`"#fff"`, `"#000000"`, `"\x1b[31m"`}, rawColorLiterals(file),
+		"a hex color and an SGR escape count; a style without a color and a plain # text do not")
 }

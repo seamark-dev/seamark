@@ -2,6 +2,7 @@ package tui
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/integration"
@@ -50,8 +51,12 @@ func settingsDecoded(snap *settings.Snapshot, f settings.Field) bool {
 		return snap.Agent != nil
 	case settings.ReaderDistill:
 		return snap.Distill != nil
-	default:
+	case settings.ReaderIndex:
 		return snap.Index != nil
+	case settings.ReaderLessons:
+		return snap.Lessons != nil && snap.Lessons.Config != nil
+	default:
+		return false
 	}
 }
 
@@ -63,7 +68,7 @@ func (s *settingsScreen) valueUnknown(f settings.Field) bool {
 		return true
 	}
 
-	if _, drafted := s.drafts[f]; drafted {
+	if _, drafted := s.edits[f]; drafted {
 		return false
 	}
 
@@ -138,8 +143,12 @@ func settingsRedundant(snap *settings.Snapshot, e settings.Edit) bool {
 		return snap.Index != nil && snap.Index.Index.Generated == e.Bool
 	case settings.IndexExclude:
 		return snap.Index != nil && slices.Equal(snap.Index.Index.Exclude, e.List)
+	case settings.Threshold, settings.PinBudget, settings.ChangeBudget, settings.HookDelivery:
+		return lessonsRedundant(st, e)
 	}
 
+	// A mute operation is never redundant here: the planner decides
+	// whether it changes the file, and the form refuses a duplicate.
 	return false
 }
 
@@ -155,12 +164,12 @@ func (s *settingsScreen) setEdit(e settings.Edit) {
 	s.saved = nil
 
 	if settingsRedundant(snap, e) {
-		delete(s.drafts, e.Field)
+		delete(s.edits, e.Field)
 
 		return
 	}
 
-	s.drafts[e.Field] = e
+	s.edits[e.Field] = e
 }
 
 // normalize drops the edits that a new snapshot makes redundant, for
@@ -171,9 +180,9 @@ func (s *settingsScreen) normalize() {
 		return
 	}
 
-	for f, e := range s.drafts {
+	for f, e := range s.edits {
 		if settingsRedundant(snap, e) {
-			delete(s.drafts, f)
+			delete(s.edits, f)
 		}
 	}
 }
@@ -184,7 +193,7 @@ func (s *settingsScreen) groupEdits(g settings.Group) []settings.Edit {
 	var out []settings.Edit
 
 	for _, f := range g.Fields() {
-		if e, ok := s.drafts[f]; ok {
+		if e, ok := s.edits[f]; ok {
 			out = append(out, e)
 		}
 	}
@@ -199,7 +208,7 @@ func (s *settingsScreen) draftCount(g settings.Group) int {
 
 // draftTotal returns the number of changed fields in every group.
 func (s *settingsScreen) draftTotal() int {
-	return len(s.drafts)
+	return len(s.edits)
 }
 
 // draftGroups returns the groups with a draft, in display order.
@@ -227,16 +236,48 @@ func (s *settingsScreen) draftFields(g settings.Group) string {
 	return strings.Join(names, ", ")
 }
 
+// drafts implements draftHolder: the file of each group with a draft,
+// sorted. The file comes from the document of the group, so a draft of
+// a lessons.yaml group never names config.yaml.
+func (s *settingsScreen) drafts() []string {
+	var files []string
+
+	for f := range s.edits {
+		if doc := f.Group().Document(); doc != "" && !slices.Contains(files, doc) {
+			files = append(files, doc)
+		}
+	}
+
+	slices.Sort(files)
+
+	return files
+}
+
+// discardDrafts implements draftHolder: it drops the drafts of every
+// group and closes the editor. The files do not change.
+func (s *settingsScreen) discardDrafts() {
+	s.edits = map[settings.Field]settings.Edit{}
+	s.excludeErrs = nil
+	s.closeEditor()
+}
+
 // dropDraft removes the draft of g. The file does not change.
 func (s *settingsScreen) dropDraft(g settings.Group) {
 	for _, f := range g.Fields() {
-		delete(s.drafts, f)
+		delete(s.edits, f)
 	}
 
 	s.excludeErrs = nil
 
 	if s.field().Group() == g {
+		// The mute editor keeps its cursor row, so a save or a discard
+		// from the editor leaves the user at the same entry.
+		item := s.ed.item
 		s.ed = settingsEditor{choice: s.currentChoice(s.field())}
+
+		if g == settings.GroupMutes {
+			s.ed.item = item
+		}
 	}
 }
 
@@ -244,11 +285,12 @@ func (s *settingsScreen) dropDraft(g settings.Group) {
 // the key, or the draft changes the field.
 func (s *settingsScreen) resettable(f settings.Field) bool {
 	snap := s.snap()
-	if snap == nil {
+	if snap == nil || f == settings.Mutes {
+		// The mute list has no reset: one save changes one entry.
 		return false
 	}
 
-	if _, drafted := s.drafts[f]; drafted {
+	if _, drafted := s.edits[f]; drafted {
 		return true
 	}
 
@@ -264,7 +306,7 @@ func (s *settingsScreen) argvStays() bool {
 		return false
 	}
 
-	e, ok := s.drafts[settings.AgentArgv]
+	e, ok := s.edits[settings.AgentArgv]
 
 	return !ok || !e.Reset
 }
@@ -276,7 +318,7 @@ func (s *settingsScreen) cliChoice(snap *settings.Snapshot) string {
 		return ""
 	}
 
-	if e, ok := s.drafts[settings.AgentCLI]; ok {
+	if e, ok := s.edits[settings.AgentCLI]; ok {
 		if e.Reset {
 			return integration.DefaultInvocationID
 		}
@@ -304,7 +346,7 @@ const (
 // the day count of a days choice. It follows the reader mapping. No
 // value selects the default; zero and negative values select unlimited.
 func (s *settingsScreen) windowChoice(snap *settings.Snapshot) (choice settingsWindow, days int) {
-	if e, ok := s.drafts[settings.ReviewWindow]; ok {
+	if e, ok := s.edits[settings.ReviewWindow]; ok {
 		switch {
 		case e.Reset:
 			return settingsWindowDefault, 0
@@ -329,7 +371,7 @@ func (s *settingsScreen) windowChoice(snap *settings.Snapshot) (choice settingsW
 // boolChoice returns the value of distill.write or index.generated that
 // the draft selects.
 func (s *settingsScreen) boolChoice(snap *settings.Snapshot, f settings.Field) bool {
-	if e, ok := s.drafts[f]; ok {
+	if e, ok := s.edits[f]; ok {
 		return !e.Reset && e.Bool
 	}
 
@@ -347,7 +389,7 @@ func (s *settingsScreen) boolChoice(snap *settings.Snapshot, f settings.Field) b
 // patterns come from the file, so every caller sanitizes them for
 // display.
 func (s *settingsScreen) excludeList(snap *settings.Snapshot) []string {
-	if e, ok := s.drafts[settings.IndexExclude]; ok {
+	if e, ok := s.edits[settings.IndexExclude]; ok {
 		if e.Reset {
 			return nil
 		}
@@ -440,19 +482,37 @@ func (s *settingsScreen) draftValue(e settings.Edit) string {
 		}
 	case settings.IndexGenerated:
 		return settingsGenerated(!e.Reset && e.Bool)
-	default:
+	case settings.IndexExclude:
 		if e.Reset {
 			return "none"
 		}
 
 		return settingsPatterns(len(e.List))
+	case settings.Threshold, settings.PinBudget, settings.ChangeBudget:
+		if e.Reset {
+			return ui.OneLine(st.Default)
+		}
+
+		return strconv.Itoa(e.Int)
+	case settings.HookDelivery:
+		if e.Reset {
+			return ui.OneLine(st.Default)
+		}
+
+		return ui.OneLine(e.String)
+	case settings.Mutes:
+		return s.muteDraftValue(e)
 	}
+
+	return ""
 }
 
 // draftDetail renders an edit for the Draft row of the detail. A reset
 // names the removal of the key, because that is its exact effect.
 func (s *settingsScreen) draftDetail(e settings.Edit) string {
 	switch {
+	case e.Field == settings.Mutes:
+		return s.muteDraftDetail(e)
 	case e.Field == settings.AgentArgv:
 		return "remove the custom command; the agent.cli preset takes effect"
 	case e.Field == settings.AgentCLI && e.Reset && s.argvStays():

@@ -43,12 +43,17 @@ const handEntry = "  # Keep scripts ASCII.\n" +
 
 // shiftBlock returns appendBlock with its lines at indent spaces.
 func shiftBlock(indent int) string {
+	return shiftLines(appendBlock, indent)
+}
+
+// shiftLines returns the lines of block at indent spaces in place of
+// their two-space indentation.
+func shiftLines(block string, indent int) string {
 	pad := strings.Repeat(" ", indent)
-	lines := strings.SplitAfter(strings.TrimSuffix(appendBlock, "\n"), "\n")
 
 	var b strings.Builder
 
-	for _, l := range lines {
+	for _, l := range strings.SplitAfter(strings.TrimSuffix(block, "\n"), "\n") {
 		b.WriteString(pad + strings.TrimPrefix(l, "  "))
 	}
 
@@ -63,7 +68,7 @@ func planAppendText(t *testing.T, before string) (string, error) {
 	d := Parse([]byte(before))
 	d.Guard.Exists = true
 
-	after, err := PlanAppend(d, appendBlock)
+	after, err := PlanAppend(d, appendBlock, Placement{})
 
 	return string(after), err
 }
@@ -181,15 +186,7 @@ func TestPlanAppendKeepsEveryExistingLine(t *testing.T) {
 
 // shiftEntry returns handEntry with its lines at indent spaces.
 func shiftEntry(indent int) string {
-	pad := strings.Repeat(" ", indent)
-
-	var b strings.Builder
-
-	for _, l := range strings.SplitAfter(strings.TrimSuffix(handEntry, "\n"), "\n") {
-		b.WriteString(pad + strings.TrimPrefix(l, "  "))
-	}
-
-	return b.String() + "\n"
+	return shiftLines(handEntry, indent)
 }
 
 // crlf returns text with CRLF line breaks.
@@ -199,7 +196,7 @@ func crlf(text string) string {
 
 func TestPlanAppendStartsAnAbsentFileWithTheHeader(t *testing.T) {
 	// The bytes are the bytes that the old writer wrote.
-	after, err := PlanAppend(Parse(nil), appendBlock)
+	after, err := PlanAppend(Parse(nil), appendBlock, Placement{})
 	require.NoError(t, err)
 	assert.Equal(t, "# Review-lesson tuning (see `seamark lessons --list`).\n\npin:\n"+appendBlock, string(after))
 
@@ -207,7 +204,7 @@ func TestPlanAppendStartsAnAbsentFileWithTheHeader(t *testing.T) {
 	d := Parse(nil)
 	d.Guard.Exists = true
 
-	after, err = PlanAppend(d, appendBlock)
+	after, err = PlanAppend(d, appendBlock, Placement{})
 	require.NoError(t, err)
 	assert.Equal(t, "pin:\n"+appendBlock, string(after))
 }
@@ -272,13 +269,13 @@ func TestPlanAppendNeedsARenderedBlock(t *testing.T) {
 		"entries that are keys": "  rule: x\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := PlanAppend(Parse([]byte("pin:\n")), block)
+			_, err := PlanAppend(Parse([]byte("pin:\n")), block, Placement{})
 			require.Error(t, err)
 			assert.True(t, strings.HasPrefix(err.Error(), "pinfile: "), err.Error())
 		})
 	}
 
-	_, err := PlanAppend(nil, appendBlock)
+	_, err := PlanAppend(nil, appendBlock, Placement{})
 	require.Error(t, err)
 }
 
@@ -292,7 +289,7 @@ func TestVerifyAppendRefusesEveryOtherChange(t *testing.T) {
 	ins := add.shifted(2)
 	good := "# Notes.\nthreshold: 3\npin:\n" + appendBlock + handEntry
 
-	require.NoError(t, a.verifyAppend([]byte(before), []byte(good), add, 3, ins, true))
+	require.NoError(t, a.verifyAppend([]byte(before), []byte(good), add, 3, ins, true, Placement{}))
 
 	tests := []struct {
 		name string
@@ -350,7 +347,7 @@ func TestVerifyAppendRefusesEveryOtherChange(t *testing.T) {
 				x = tt.add(add)
 			}
 
-			err := a.verifyAppend([]byte(before), []byte(tt.cand), x, 3, ins, true)
+			err := a.verifyAppend([]byte(before), []byte(tt.cand), x, 3, ins, true, Placement{})
 			require.ErrorIs(t, err, ErrUnverified)
 			assert.True(t, strings.HasPrefix(err.Error(), tt.want), err.Error())
 		})
@@ -363,7 +360,7 @@ func TestPrepareAppendCreatesAnAbsentFile(t *testing.T) {
 	d, err := Read(root)
 	require.NoError(t, err)
 
-	after, err := PlanAppend(d, appendBlock)
+	after, err := PlanAppend(d, appendBlock, Placement{})
 	require.NoError(t, err)
 
 	p, err := PrepareAppend(integration.Builtin(), root, d.Guard, after)
@@ -389,7 +386,7 @@ func TestPrepareAppendNeverReplacesAnotherWritersFile(t *testing.T) {
 		d, err := Read(root)
 		require.NoError(t, err)
 
-		after, err := PlanAppend(d, appendBlock)
+		after, err := PlanAppend(d, appendBlock, Placement{})
 		require.NoError(t, err)
 
 		require.NoError(t, os.MkdirAll(filepath.Dir(pinPath(root)), 0o755))
@@ -406,7 +403,7 @@ func TestPrepareAppendNeverReplacesAnotherWritersFile(t *testing.T) {
 		d, err := Read(root)
 		require.NoError(t, err)
 
-		after, err := PlanAppend(d, appendBlock)
+		after, err := PlanAppend(d, appendBlock, Placement{})
 		require.NoError(t, err)
 
 		p, err := PrepareAppend(integration.Builtin(), root, d.Guard, after)
@@ -425,7 +422,7 @@ func TestPrepareAppendNeverReplacesAnotherWritersFile(t *testing.T) {
 		d, err := Read(root)
 		require.NoError(t, err)
 
-		after, err := PlanAppend(d, appendBlock)
+		after, err := PlanAppend(d, appendBlock, Placement{})
 		require.NoError(t, err)
 		require.NoError(t, os.Remove(pinPath(root)))
 
@@ -440,7 +437,7 @@ func TestPrepareAppendNeverReplacesAnotherWritersFile(t *testing.T) {
 		d, err := Read(root)
 		require.NoError(t, err)
 
-		after, err := PlanAppend(d, appendBlock)
+		after, err := PlanAppend(d, appendBlock, Placement{})
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(pinPath(root), []byte(other), 0o644))
 
@@ -457,7 +454,7 @@ func TestPrepareAppendRefusesWhatTheEngineDoesNotReplace(t *testing.T) {
 		d, err := Read(root)
 		require.NoError(t, err)
 
-		after, err := PlanAppend(d, appendBlock)
+		after, err := PlanAppend(d, appendBlock, Placement{})
 		require.NoError(t, err)
 
 		_, err = PrepareAppend(integration.Builtin(), root, d.Guard, after)
@@ -474,11 +471,252 @@ func TestPrepareAppendRefusesWhatTheEngineDoesNotReplace(t *testing.T) {
 		d, err := Read(root)
 		require.NoError(t, err)
 
-		after, err := PlanAppend(d, appendBlock)
+		after, err := PlanAppend(d, appendBlock, Placement{})
 		require.NoError(t, err)
 
 		_, err = PrepareAppend(integration.Builtin(), root, d.Guard, after)
 		require.ErrorIs(t, err, ErrNotWritable)
 		assert.NoFileExists(t, filepath.Join(elsewhere, "lessons.yaml"), "nothing lands behind the link")
 	})
+}
+
+// tailBlock is the text of RenderPin for a manual pin: no provenance
+// comment, each line indented by two spaces.
+const tailBlock = "  - rule: manual\n" +
+	"    region: api\n" +
+	"    note: A person wrote this.\n"
+
+// planTailText plans the tail append of tailBlock to the existing text
+// before and returns the candidate as text.
+func planTailText(t *testing.T, before string) (string, error) {
+	t.Helper()
+
+	d := Parse([]byte(before))
+	d.Guard.Exists = true
+
+	after, err := PlanAppend(d, tailBlock, Placement{Tail: true})
+
+	return string(after), err
+}
+
+func TestPlanAppendAtTheTail(t *testing.T) {
+	tests := []struct {
+		name   string
+		before string
+		want   string
+	}{
+		{
+			name:   "after the last entry and its block note",
+			before: emitted,
+			want:   strings.Replace(emitted, "      last line\npin_budget: 2\n", "      last line\n"+tailBlock+"pin_budget: 2\n", 1),
+		},
+		{
+			name:   "empty pin key",
+			before: "threshold: 2\npin:\n",
+			want:   "threshold: 2\npin:\n" + tailBlock,
+		},
+		{
+			name:   "empty pin key before another key",
+			before: "pin:\nmute:\n  - rule: F541\n",
+			want:   "pin:\n" + tailBlock + "mute:\n  - rule: F541\n",
+		},
+		{
+			// The commented example stays above the new entry, as A2 adds a
+			// mute after the comments of an empty mute key.
+			name:   "comments under an empty pin key",
+			before: "pin:\n  # - rule: RUF001\n  #   note: example\n\n# pin_budget: 3\n",
+			want:   "pin:\n  # - rule: RUF001\n  #   note: example\n" + tailBlock + "\n# pin_budget: 3\n",
+		},
+		{
+			name:   "comments after the list",
+			before: "pin:\n  - rule: a\n    note: n\n  # foot of the list\n\nmute: []\n",
+			want:   "pin:\n  - rule: a\n    note: n\n" + tailBlock + "  # foot of the list\n\nmute: []\n",
+		},
+		{
+			name:   "a deeper comment stays with the last entry",
+			before: "pin:\n  - rule: a\n    note: n\n    # about a\n",
+			want:   "pin:\n  - rule: a\n    note: n\n    # about a\n" + tailBlock,
+		},
+		{
+			name:   "no pin section",
+			before: "threshold: 2\n",
+			want:   "threshold: 2\n\npin:\n" + tailBlock,
+		},
+		{
+			name:   "document end marker",
+			before: "threshold: 2\n...\n# after the end\n",
+			want:   "threshold: 2\n\npin:\n" + tailBlock + "...\n# after the end\n",
+		},
+		{
+			name:   "list at column 4",
+			before: "pin:\n" + shiftEntry(4),
+			want:   "pin:\n" + shiftEntry(4) + shiftLines(tailBlock, 4),
+		},
+		{
+			name:   "list at column 0",
+			before: "pin:\n" + shiftEntry(0),
+			want:   "pin:\n" + shiftEntry(0) + shiftLines(tailBlock, 0),
+		},
+		{
+			name:   "no final line break",
+			before: "pin:\n  - rule: a",
+			want:   "pin:\n  - rule: a\n" + strings.TrimSuffix(tailBlock, "\n"),
+		},
+		{
+			name:   "empty file",
+			before: "",
+			want:   "pin:\n" + tailBlock,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := planTailText(t, tt.before)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+
+			// The new entry reads back last and stays editable.
+			d := Parse([]byte(got))
+			assert.Empty(t, d.FileBlock)
+			require.NotEmpty(t, d.Entries)
+
+			last := d.Entries[len(d.Entries)-1]
+			assert.Equal(t, "manual", last.Rule)
+			assert.Empty(t, last.Block)
+		})
+	}
+}
+
+func TestPlanAppendAtTheTailStartsAnAbsentFileWithThePinKeyAlone(t *testing.T) {
+	// A first save creates only the needed key (P4-9): no header comment.
+	after, err := PlanAppend(Parse(nil), tailBlock, Placement{Tail: true})
+	require.NoError(t, err)
+	assert.Equal(t, "pin:\n"+tailBlock, string(after))
+}
+
+func TestPlanAppendAtTheTailRefusesWhatItCannotKeepEditable(t *testing.T) {
+	tests := []struct {
+		name, before, want string
+	}{
+		{
+			name:   "flow list",
+			before: "pin: []\n",
+			want:   "lessons.yaml cannot take the new pins safely: the pin section is not a block list (line 1); add the entries by hand",
+		},
+		{
+			name:   "null token",
+			before: "pin: ~\n",
+			want:   "lessons.yaml has a pin section that is not a plain block list; add the entries by hand",
+		},
+		{
+			name:   "a last entry that keeps its trailing line breaks",
+			before: "pin:\n  - rule: a\n    note: |+\n      text\n\n",
+			want: "lessons.yaml cannot take the new pins safely: the last pin entry holds a block that keeps its " +
+				"trailing line breaks (|+), and a new entry after it would take them (line 3); add the entries by hand",
+		},
+		{
+			name:   "CRLF line breaks",
+			before: crlf("threshold: 3\npin:\n" + handEntry),
+			want:   "lessons.yaml cannot take the new pins safely: the file uses CRLF line breaks; add the entries by hand",
+		},
+		{
+			name:   "a tab-led note line",
+			before: "pin:\n  - rule: a\n    note: |-\n      a\n      \tb\n",
+			want:   "lessons.yaml cannot take the new pins safely: the file indents a line with a tab (line 5); add the entries by hand",
+		},
+		{
+			name:   "an empty entry",
+			before: "pin:\n  -\n  - rule: a\n",
+			want:   "lessons.yaml cannot take the new pins safely: the pin list holds an empty entry (line 2); add the entries by hand",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := planTailText(t, tt.before)
+			require.ErrorIs(t, err, ErrUnsupported)
+			assert.Equal(t, tt.want, err.Error())
+			assert.Empty(t, got)
+		})
+	}
+}
+
+func TestPlanAppendAtTheTailNeverLocksTheFile(t *testing.T) {
+	// A note line that starts with a tab passes the reader, but the
+	// editing gate then blocks every later edit (trap T1). The tail
+	// append proves the gate on its candidate. An apply keeps its
+	// behavior: closing T1 for it would change the CLI output.
+	const locking = "  - rule: t\n    note: |-\n      a\n      \tb\n"
+
+	d := Parse([]byte("pin:\n"))
+	d.Guard.Exists = true
+
+	_, err := PlanAppend(d, locking, Placement{Tail: true})
+	require.ErrorIs(t, err, ErrUnverified)
+	assert.Equal(t, "refusing to write: edited lessons.yaml would block later edits: the file indents a line with a tab (line 5)", err.Error())
+
+	after, err := PlanAppend(d, locking, Placement{})
+	require.NoError(t, err, "the apply still writes it")
+	assert.Equal(t, "pin:\n"+locking, string(after))
+}
+
+func TestVerifyAppendAtTheTailRefusesAnotherOrder(t *testing.T) {
+	const before = "pin:\n" + handEntry
+
+	a := analyze([]byte(before))
+	add, err := parseBlock(tailBlock)
+	require.NoError(t, err)
+
+	ins := add.shifted(2)
+	tail := Placement{Tail: true}
+	good := before + tailBlock
+
+	require.NoError(t, a.verifyAppend([]byte(before), []byte(good), add, 5, ins, true, tail))
+
+	err = a.verifyAppend([]byte(before), []byte("pin:\n"+tailBlock+handEntry), add, 5, ins, true, tail)
+	require.ErrorIs(t, err, ErrUnverified)
+	assert.Equal(t, "refusing to write: the pin list would differ from the earlier entries followed by the new entries", err.Error())
+
+	other := *add
+	other.pins = []reviews.PinRule{{Rule: "other"}}
+
+	err = a.verifyAppend([]byte(before), []byte(good), &other, 5, ins, true, tail)
+	require.ErrorIs(t, err, ErrUnverified)
+	assert.Equal(t, "refusing to write: the delivered pins would differ from the earlier pins followed by the new pins", err.Error())
+
+	err = a.verifyAppend([]byte(before), []byte(good+"  - rule: t\n    note: |-\n      a\n      \tb\n"), add, 5, ins, true, tail)
+	require.ErrorIs(t, err, ErrUnverified)
+	assert.Contains(t, err.Error(), "would block later edits")
+}
+
+func TestPlanAppendAtTheHeadKeepsTheApplyBehavior(t *testing.T) {
+	// The zero Placement is the apply of the CLI and the console. It
+	// takes the files that the editing gate refuses, as it always did.
+	tests := []struct {
+		name, before, want string
+	}{
+		{
+			name:   "CRLF line breaks",
+			before: crlf("pin:\n" + handEntry),
+			want:   crlf("pin:\n" + appendBlock + handEntry),
+		},
+		{
+			name:   "an empty entry",
+			before: "pin:\n  -\n" + handEntry,
+			want:   "pin:\n" + appendBlock + "  -\n" + handEntry,
+		},
+		{
+			name:   "a tab-led note line",
+			before: "pin:\n  - rule: a\n    note: |-\n      a\n      \tb\n",
+			want:   "pin:\n" + appendBlock + "  - rule: a\n    note: |-\n      a\n      \tb\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := planAppendText(t, tt.before)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

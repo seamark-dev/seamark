@@ -58,8 +58,8 @@ type All interface {
 }
 
 // Reader is the shared read side of the workspace: the paths, the
-// diagnostics, the index, the integrations, the ledger and the delivery
-// statistics. The shell and most screens use it. Its methods never
+// diagnostics, the index, the integrations, the ledger, the statistics,
+// and the sample. The shell and most screens use it. Its methods never
 // write, so a helper that takes only a Reader cannot change the
 // workspace.
 type Reader interface {
@@ -89,6 +89,10 @@ type Reader interface {
 	Ledger() (*proposals.Ledger, error)
 	// Stats reads the lesson delivery statistics.
 	Stats() lessonstats.Snapshot
+	// Sample runs the lesson selection of one surface for explicit
+	// paths under the two lessons.yaml texts of one review. It never
+	// emits, records, or leases delivery, and it never builds the index.
+	Sample(req SampleRequest) SampleView
 }
 
 // Setup covers the integration setup and the local index build. The
@@ -147,8 +151,9 @@ type Learning interface {
 }
 
 // Maintenance covers the installed pins of .seamark/lessons.yaml: the
-// pin read, the retarget and prune maintenance, and the recovery of a
-// partial operation. Lessons › Pins and its maintenance modal use it.
+// pin read, the pin authoring, the retarget and prune maintenance, and
+// the recovery of a partial operation. Lessons › Pins, its authoring
+// form, and its maintenance modal use it.
 type Maintenance interface {
 	// Pins reads the installed pins of .seamark/lessons.yaml and relates
 	// them to the ledger. It needs no index and never fails: a file or
@@ -165,19 +170,29 @@ type Maintenance interface {
 	// CommitRecovery revalidates the recovery proof and completes the
 	// ledger update. It never writes the pin file.
 	CommitRecovery(p *maintain.Plan) (maintain.Result, error)
+	// PlanAuthor plans the create, edit, or removal of one pin. It
+	// writes nothing. A missing ledger or a foreign root is a blocker
+	// of the plan, not an error.
+	PlanAuthor(req maintain.AuthorRequest) (*maintain.AuthorPlan, error)
+	// CommitAuthor revalidates and writes exactly the reviewed pin file
+	// bytes. It never writes the ledger, and it refuses a foreign root
+	// with ErrForeignRoot.
+	CommitAuthor(p *maintain.AuthorPlan) (maintain.AuthorResult, error)
 }
 
-// Settings covers the focused settings of the configuration file: the
-// read, a guarded plan and the save. The Settings screen uses it.
+// Settings covers the focused settings of the two settings documents,
+// config.yaml and lessons.yaml: the read, a guarded plan and the save.
+// The Settings screen uses it.
 type Settings interface {
-	// Settings reads the focused settings of the configuration file.
-	// The error reports invalid arguments only; a file problem is data
-	// in the snapshot.
+	// Settings reads the focused settings of both documents. The error
+	// reports invalid arguments only; a file problem or a foreign root
+	// is data in the snapshot.
 	Settings() (*settings.Snapshot, error)
 	// PlanSettings plans a guarded patch of one settings group. It
 	// writes nothing.
 	PlanSettings(snap *settings.Snapshot, edits []settings.Edit) (*settings.Plan, error)
 	// SaveSettings writes exactly the reviewed plan, or reports it stale.
+	// A lessons save refuses a foreign root with ErrForeignRoot.
 	SaveSettings(p *settings.Plan) (settings.Result, error)
 }
 

@@ -15,6 +15,7 @@ import (
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -116,9 +117,10 @@ func pinToneState(t *ui.Theme, tone ui.Tone, lead string) pinState {
 //     that pN recorded. The route stays the linked route. A retarget
 //     changes only the regions, so it keeps the live note. An extraction
 //     reads the proposal row, so it asks about the recorded note.
-//   - LinkNoProposal reads "no proposal". The pin is read-only here, and
-//     the route is a hand edit of the file. The words never claim that
-//     a person wrote the pin, because no row proves it.
+//   - LinkNoProposal reads "no proposal". i edits the pin and d removes
+//     it (pins_author.go). Retarget, prune and trigger extraction need
+//     a linked proposal. The words never claim that a person wrote the
+//     pin, because no row proves it.
 //   - LinkPendingMatch reads "pending pN", or "pending" when several
 //     pending rows match. The pin stays read-only until one of them is
 //     recorded as applied (pinPendingMatchText).
@@ -128,8 +130,9 @@ func pinToneState(t *ui.Theme, tone ui.Tone, lead string) pinState {
 //     one row. The route is a hand edit of the file.
 //   - Every other case reads "link unknown": the pin file or the ledger
 //     did not read (pinLinksKnown), or the link is LinkUnknown or
-//     malformed. The pin is read-only, and the state line names the
-//     error.
+//     malformed. Maintenance is off, and the state line names the
+//     error. A readable pin file still lets i and d draft and review;
+//     the review names the missing index (P4-8).
 //
 // The attention words follow the relationship, the most urgent first:
 // "blocked" (the entry cannot be edited safely), "unknown key" (the
@@ -233,11 +236,18 @@ func pinRowAmbiguous(in *maintain.Inspection, pr domain.Proposal) bool {
 
 // view renders the filter line, the state line, a blank line and the
 // boxes. The shell pads the last line, which keeps the blank row above
-// the footer.
+// the footer. An open pin form takes the whole area (pins_author_view.go).
 func (p *pinsView) view(w, h int) string {
+	if p.author.form != nil {
+		return p.formView(w, h)
+	}
+
 	head := p.filterBar(w)
-	if line := p.stateLine(w); line != "" {
-		head = append(head, line)
+
+	for _, line := range []string{p.stateLine(w), p.orphanLine(w)} {
+		if line != "" {
+			head = append(head, line)
+		}
 	}
 
 	boxH := max(4, h-len(head)-2)
@@ -329,6 +339,28 @@ func (p *pinsView) stateLine(w int) string {
 	default:
 		return ""
 	}
+
+	return " " + ui.Truncate(line, w-1, t.Glyphs.Ellipsis)
+}
+
+// orphanLine names the orphaned edit drafts and the route to them, or
+// returns "". An orphaned draft has no row that leads to it, so the line
+// names the keys that show it (editPin). It is a line of its own, so the
+// line about a limiting source stays in view.
+func (p *pinsView) orphanLine(w int) string {
+	t := p.st.theme
+	n := len(p.author.orphans)
+
+	if n == 0 {
+		return ""
+	}
+
+	text := "1 edit draft lost its pin: " + pinOrphanRoute + "."
+	if n > 1 {
+		text = strconv.Itoa(n) + " edit drafts lost their pins: press f, then i, to see the first."
+	}
+
+	line := t.Attention.Render(t.Glyphs.Warn + " " + text)
 
 	return " " + ui.Truncate(line, w-1, t.Glyphs.Ellipsis)
 }
@@ -1275,6 +1307,15 @@ func pinPendingMatchText(pending []domain.Proposal) string {
 		"press c, then select the others and press d." + tail
 }
 
+// pinDraftsStill says that the authoring keys work while a save cannot:
+// the relationship is unknown, or the index records another root.
+const pinDraftsStill = "i and d still draft a change; saving needs a readable index of this workspace."
+
+// pinBlockedDrafts says that the authoring keys work while no save can
+// edit the pin file. The review names the block, so y stays off
+// (contracts §4.2).
+const pinBlockedDrafts = "i and d still draft a change and show the review; y stays off."
+
 // maintenanceLines names the keys that act on this pin, or why none
 // does and the next valid route. Nothing changes before a preview and
 // its y.
@@ -1297,6 +1338,12 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 	case !pinLinksKnown(in):
 		note(ui.ToneUnknown, pinLinkUnknownText(in))
 
+		// The authoring keys still draft and review, and the review names
+		// the missing index (contracts §4.2, P4-8).
+		if pin.Entry.Block == "" {
+			out = append(out, propLines(t.Muted, pinDraftsStill, w)...)
+		}
+
 		if in.Index.State != workspace.IndexReady {
 			out = append(out, propLines(t.Muted, "Build the index from Overview (press 1, then b), or run this "+
 				"command in a shell:", w)...)
@@ -1304,9 +1351,35 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 		}
 
 		return out
+	case pinsForeignRoot(p.st) != "" && pin.Entry.Block == "":
+		// The authoring keys treat a foreign root as an unknown
+		// relationship, so they still draft and review (contracts §4.2).
+		out = append(out, p.foreignLines(w)...)
+		out = append(out, propLines(t.Muted, pinDraftsStill, w)...)
+
+		if pinLinked(pin) {
+			out = append(out, p.extractLines(pin, w)...)
+		}
+
+		return out
+	case l.Link == pinfile.LinkNoProposal && pin.Entry.Block == "" && in.Doc.FileBlock != "":
+		// The keys still draft and review, and the review names the block
+		// (contracts §4.2). So the text never promises a write.
+		note(ui.ToneAttention, "The pin file cannot be edited ("+ui.Diag(in.Doc.FileBlock)+"). "+pinBlockedDrafts+
+			" Edit the pin by hand in "+pinfile.File+".")
+
+		return out
+	case l.Link == pinfile.LinkNoProposal && pin.Entry.Block == "":
+		out = append(out, propLines(t.Body, "i edits the rule, the note and the regions of this pin, and d removes "+
+			"it from "+pinfile.File+". Neither changes the ledger. Both act on this pin only, and nothing changes "+
+			"before you confirm with y.", w)...)
+		out = append(out, p.authorRootLines(w)...)
+		out = append(out, propLines(t.Muted, "Retarget, prune and trigger extraction need one linked proposal.", w)...)
+
+		return append(out, p.gateLines(w)...)
 	case l.Link == pinfile.LinkNoProposal:
-		out = append(out, propLines(t.Muted, "Read-only here: the console changes only pins with one linked "+
-			"proposal. Edit "+pinfile.File+" by hand to change this pin.", w)...)
+		note(ui.ToneAttention, "Blocked: this entry cannot be edited safely ("+ui.Diag(pin.Entry.Block)+"). Edit it "+
+			"by hand in "+pinfile.File+".")
 
 		return out
 	case l.Link == pinfile.LinkPendingMatch:
@@ -1332,7 +1405,16 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 
 		return append(out, p.extractLines(pin, w)...)
 	case in.Doc.FileBlock != "":
+		// With --db and another root, the authoring keys treat the
+		// relationship as unknown (authorKnown). So i then opens every
+		// row and d stays on, as for a pin without a proposal.
+		drafts := "i still drafts a note edit and shows the review; y stays off."
+		if authorForeignRoot(p.st) != "" {
+			drafts = pinBlockedDrafts
+		}
+
 		note(ui.ToneAttention, "Retarget and prune are off: the pin file cannot be edited ("+ui.Diag(in.Doc.FileBlock)+").")
+		out = append(out, propLines(t.Muted, drafts, w)...)
 
 		return append(out, p.extractLines(pin, w)...)
 	case pin.Entry.Block != "":
@@ -1358,8 +1440,17 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 		keys += " t prepares a trigger extraction, which writes no pin."
 	}
 
-	out = append(out, propLines(t.Body, keys+" The keys act on the selected pins, or on this pin when nothing "+
-		"is selected. Nothing changes before you confirm with y.", w)...)
+	// A foreign root with --db leaves retarget and prune on, but the
+	// authoring keys treat the relationship as unknown. So i then opens
+	// every row, and the sentence about the note does not apply.
+	edit := " i edits the note of this pin only."
+	if authorForeignRoot(p.st) != "" {
+		edit = ""
+	}
+
+	out = append(out, propLines(t.Body, keys+" These keys act on the selected pins, or on this pin when nothing "+
+		"is selected."+edit+" Nothing changes before you confirm with y.", w)...)
+	out = append(out, p.authorRootLines(w)...)
 
 	if noRetarget != "" {
 		out = append(out, propLines(t.Muted, "No retarget: "+noRetarget+".", w)...)
@@ -1370,6 +1461,19 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 	}
 
 	return append(out, p.gateLines(w)...)
+}
+
+// authorRootLines says that a pin write needs an index of this
+// workspace, while only the authoring rule finds another root. With
+// --db, retarget and prune accept another root (pinsForeignRoot), but
+// the authoring engine refuses it (authorForeignRoot, P4-16). Without
+// --db, foreignLines already says so, and this returns nil.
+func (p *pinsView) authorRootLines(w int) []string {
+	if authorForeignRoot(p.st) == "" || pinsForeignRoot(p.st) != "" {
+		return nil
+	}
+
+	return propLines(p.st.theme.Muted, pinDraftsStill, w)
 }
 
 // foreignLines explains why retarget and prune are off when the index
@@ -1418,7 +1522,10 @@ func (p *pinsView) gateLines(w int) []string {
 	case l.WriteErr != nil:
 		return propNote(t, ui.ToneAttention, "The write gate could not be read: "+ui.ErrText(l.WriteErr), w)
 	case l.Write:
-		return propLines(t.Muted, "distill.write is on: a confirmed retarget or prune writes "+pinfile.File+".", w)
+		// The line names the whole scope of the gate, the one text
+		// that Settings shows (spec R-5).
+		return propLines(t.Muted, "distill.write is on: a confirmed preview writes "+pinfile.File+" ("+
+			settings.PinWriteScope+").", w)
 	default:
 		return propLines(t.Muted, "distill.write is off: a preview shows the change and writes nothing. "+
 			"Settings › Pin writing (5) turns it on.", w)
@@ -1521,16 +1628,16 @@ func (p *pinsView) loadingBox(w, h int) string {
 // emptyBox explains an empty list. The cause is a file that could not
 // be read, no pin file, an empty pin list, a filter that hides every
 // row, or an empty history. Without a pin file, or with an empty one,
-// the box offers p and e. Pins come only from applied proposals, and a
-// distillation makes proposals from evidence.
+// the box offers n, p and e. A pin comes from n or from an applied
+// proposal, and a distillation makes proposals from evidence.
 func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 	t := p.st.theme
 	g := t.Glyphs
 	title := t.Title.Render(p.listTitle())
 	count := t.Muted.Render("0")
 
-	routes := []string{t.Key.Render("p") + t.Muted.Render(" open Proposals   ") + t.Key.Render("e") +
-		t.Muted.Render(" open Evidence")}
+	routes := []string{t.Key.Render("n") + t.Muted.Render(" new pin   ") + t.Key.Render("p") +
+		t.Muted.Render(" open Proposals   ") + t.Key.Render("e") + t.Muted.Render(" open Evidence")}
 
 	var m paneMessage
 
@@ -1552,14 +1659,14 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 	case p.filter == pinInstalled && len(in.Pins) == 0 && !in.Doc.Guard.Exists && len(in.Doc.Bytes) == 0:
 		m = paneMessage{
 			head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No pin file yet")},
-			body: pinfile.File + " does not exist, so no pin is installed. Pins come from applied proposals: " +
-				"review proposals in Proposals, or collect evidence in Evidence first.",
+			body: pinfile.File + " does not exist, so no pin is installed. Press n to write a pin; the review " +
+				"creates the file. Or apply a proposal in Proposals, or collect evidence in Evidence first.",
 			next: routes,
 		}
 	case p.filter == pinInstalled && len(in.Pins) == 0:
 		m = paneMessage{
 			head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No pins in "+pinfile.File)},
-			body: "The file has no pin entry. Apply a proposal in Proposals to add one.",
+			body: "The file has no pin entry. Press n to write one, or apply a proposal in Proposals.",
 			next: routes,
 		}
 	case p.filter == pinNotPresent && (in.Links == nil || in.Links.NotPresentErr != nil):

@@ -55,6 +55,42 @@ func TestModalScrollsItsBodyAndKeepsTheActions(t *testing.T) {
 	assert.Equal(t, 76, ModalBodyWidth(0, 120), "the body width is the inner width of the box")
 }
 
+// A form in a modal moves its cursor below the window. Follow scrolls
+// the body to the kept lines; a modal without Follow keeps its offset.
+func TestModalFollowShowsTheKeptLines(t *testing.T) {
+	th := NewTheme(false)
+
+	body := make([]string, 30)
+	for i := range body {
+		body[i] = "line " + strconv.Itoa(i+1)
+	}
+
+	var sc ScrollState
+
+	o := ModalOpts{Title: "Form", Body: body, Actions: []key.Binding{WithHelp(Nav.Back, "esc", "close")}}
+
+	lines := strings.Split(ansi.Strip(th.Modal(o, &sc, 120, 20)), "\n")
+	assert.Contains(t, lines[len(lines)-1], "1–13 of 30", "a new modal starts at the top")
+
+	o.Follow, o.Keep = true, [2]int{19, 20}
+	lines = strings.Split(ansi.Strip(th.Modal(o, &sc, 120, 20)), "\n")
+	assert.Contains(t, lines[len(lines)-1], "9–21 of 30", "the kept lines end the window")
+	assert.Contains(t, lines[13], "line 21")
+
+	o.Keep = [2]int{2, 2}
+	lines = strings.Split(ansi.Strip(th.Modal(o, &sc, 120, 20)), "\n")
+	assert.Contains(t, lines[1], "line 3 ", "a kept line above the window starts it")
+
+	o.Follow = false
+	o.Keep = [2]int{29, 29}
+	lines = strings.Split(ansi.Strip(th.Modal(o, &sc, 120, 20)), "\n")
+	assert.Contains(t, lines[1], "line 3 ", "without Follow the offset stays")
+
+	o.Follow, o.Keep = true, [2]int{-1, -1}
+	lines = strings.Split(ansi.Strip(th.Modal(o, &sc, 120, 20)), "\n")
+	assert.Contains(t, lines[1], "line 3 ", "a negative range keeps the offset")
+}
+
 func TestModalTailStaysAboveTheActions(t *testing.T) {
 	th := NewTheme(false)
 

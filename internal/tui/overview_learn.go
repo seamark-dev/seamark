@@ -54,6 +54,8 @@ var ovSettingsIntents = map[settings.Group]string{
 	settings.GroupPinWrite:  "group:pinwrite",
 	settings.GroupEvidence:  "group:evidence",
 	settings.GroupIndexing:  "group:indexing",
+	settings.GroupDelivery:  "group:delivery",
+	settings.GroupMutes:     "group:mutes",
 }
 
 // ovSettingsLink returns the action that opens one Settings group. The

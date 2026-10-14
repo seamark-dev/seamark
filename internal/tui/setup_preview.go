@@ -783,7 +783,7 @@ func (wz *setupWizard) wontLines(w int) []string {
 	}
 
 	if len(others) > 0 {
-		lines = append(lines, integHanging(dot, t.Muted, "touch the configuration of "+setupJoinWords(others), w)...)
+		lines = append(lines, integHanging(dot, t.Muted, "touch the configuration of "+joinWords(others), w)...)
 	}
 
 	return append(lines, integHanging(dot, t.Muted, "change agent.cli or agent.argv", w)...)

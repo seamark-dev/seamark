@@ -1,8 +1,9 @@
 // Package ui holds the drawing primitives of the seamark console: the
 // theme, the glyphs and the tones, the boxes, the modals and the overlay,
-// the text helpers, the scroll, pager and list state, the line input, the
-// movement keys and the n/a key helpers. The screens of internal/tui
-// draw with them.
+// the text helpers, the scroll, pager and list state, the line input
+// (input.go), the multi-line text area (textarea.go), the movement keys
+// and the n/a key helpers. The screens of internal/tui draw with them.
+// input.go says why the console adopts no bubbles widget.
 //
 // # What belongs here
 //

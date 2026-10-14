@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,8 +21,9 @@ import (
 
 // The tests of the unavailable action keys in Lessons › Pins (user
 // decision of 2026-10-04: "Always list, mark unavailable"). The footer
-// and the help list w, -, t and v. A key that the target cannot use
-// reads n/a, and its press explains why and calls no service.
+// and the help list n, i, d, -, w, t and v (contracts §4.2). A key that
+// the target cannot use reads n/a, and its press explains why and calls
+// no service.
 
 // helpParts returns the help body of the console on one line, split at
 // the n/a label: the keys that work, then the unavailable keys. The help
@@ -38,13 +40,13 @@ func helpParts(h *harness) (on, off string) {
 	return on, off
 }
 
-// pinsFooterActions returns the action keys among w, -, t and v that a
-// footer names, as a hint or inside its n/a group.
+// pinsFooterActions returns the action keys among n, i, d, w, -, t and
+// v that a footer names, as a hint or inside its n/a group.
 func pinsFooterActions(footer string) []string {
 	var got []string
 
 	for _, f := range strings.Fields(footer) {
-		if slices.Contains([]string{"w", "-", "t", "v"}, f) && !slices.Contains(got, f) {
+		if slices.Contains([]string{"n", "i", "d", "w", "-", "t", "v"}, f) && !slices.Contains(got, f) {
 			got = append(got, f)
 		}
 	}
@@ -63,13 +65,18 @@ func TestPinsFooterListsEveryActionKeyAndMarksTheUnavailable(t *testing.T) {
 		name   string
 		row    int
 		footer string
+		// clock is false when the clock gives way, so the footer keeps
+		// every n/a entry.
+		clock bool
 	}{
 		// The case of the user report: current regions, an answered
 		// trigger question, and no similar pin.
-		{"current scope", 1, " space select   - prune   n/a: w t v   tab detail   f show   / region  …"},
-		{"every action but compare", 2, " space select   w retarget   - prune   t extract triggers   n/a: v  …"},
-		{"similar pin without evidence", 3, " space select   - prune   v compare   n/a: w t   tab detail   f show  …"},
-		{"ambiguous", 9, " space select   n/a: w - t v   tab detail   f show   / region   z search  …"},
+		{"current scope", 1, " space select   n new pin   i edit   - prune   n/a: d w t v   tab detail  …", true},
+		{"every action but compare", 2, " space select   n new pin   i edit   - prune   w retarget   t extract   " +
+			"n/a: d v  …", false},
+		{"similar pin without evidence", 3, " space select   n new pin   i edit   - prune   v compare   n/a: d w t  …",
+			true},
+		{"ambiguous", 9, " space select   n new pin   n/a: i d - w t v   tab detail   f show  …", true},
 	}
 
 	for _, c := range cases {
@@ -78,22 +85,41 @@ func TestPinsFooterListsEveryActionKeyAndMarksTheUnavailable(t *testing.T) {
 			pinsCursorTo(h, c.row)
 
 			// The reference footer cannot hold every hint, so the n/a group
-			// shows its keys only. The four action keys come first, and tab,
-			// f and / still fit after them.
+			// shows its keys only. The seven action keys come first in the
+			// order space n i d - w t v (contracts §4.2).
 			footer := footerLine(h.view())
 			assert.True(t, strings.HasPrefix(footer, c.footer), "footer %q", footer)
-			assert.Regexp(t, `\d\d:\d\d:\d\d $`, footer, "the clock stays at the reference size")
+			assert.ElementsMatch(t, []string{"n", "i", "d", "-", "w", "t", "v"}, pinsFooterActions(footer))
+
+			if c.clock {
+				assert.Regexp(t, `\d\d:\d\d:\d\d $`, footer, "the clock stays at the reference size")
+			} else {
+				assert.NotRegexp(t, `\d\d:\d\d:\d\d`, footer, "the clock gives way to the n/a entries")
+			}
+
 			assert.Empty(t, h.m.toast.text, "browsing shows no refusal")
 		})
 	}
 
 	// A footer with room for every hint keeps the actions of the group.
-	h := pinsOpen(t, pinsFake(), 200, 50)
-	assert.Contains(t, footerLine(h.view()), " space select   - prune   "+
-		"n/a: w retarget, t extract triggers, v compare   tab detail   f show")
+	// The seven action keys need more than 200 columns for that.
+	h := pinsOpen(t, pinsFake(), 240, 50)
+	assert.Contains(t, footerLine(h.view()), " space select   n new pin   i edit   - prune   "+
+		"n/a: d remove, w retarget, t extract, v compare   tab detail   f show")
 }
 
-func TestPinsFooterKeepsTheActionKeysInEveryListAtTheReferenceSize(t *testing.T) {
+// pinsFooterList is one list of Pins whose footer a test reads: the
+// inspection, the keys that show the list, and its number of rows.
+type pinsFooterList struct {
+	name string
+	in   func() *maintain.Inspection
+	keys []string
+	rows int
+}
+
+// pinsFooterLists returns every list of Pins: each filter over a good
+// inspection, and the lists of a file or a ledger that does not read.
+func pinsFooterLists() []pinsFooterList {
 	// unreadable is a pin file that does not parse, so no entry is
 	// listed and no link is known.
 	unreadable := func() *maintain.Inspection {
@@ -106,12 +132,7 @@ func TestPinsFooterKeepsTheActionKeysInEveryListAtTheReferenceSize(t *testing.T)
 		return in
 	}
 
-	lists := []struct {
-		name string
-		in   func() *maintain.Inspection
-		keys []string
-		rows int
-	}{
+	return []pinsFooterList{
 		{"installed", pinsInspection, nil, len(pinsInspection().Pins)},
 		{"not present", pinsInspection, []string{"f"}, 1},
 		{"superseded", pinsInspection, []string{"f", "f"}, 1},
@@ -122,53 +143,83 @@ func TestPinsFooterKeepsTheActionKeysInEveryListAtTheReferenceSize(t *testing.T)
 		{"no pin file", fakePins, nil, 1},
 		{"no pin file, not present", fakePins, []string{"f"}, 1},
 	}
+}
 
+// eachPinsFooter calls check with the footer of every row of every
+// list of Pins, in both glyph sets, at the size w by h.
+func eachPinsFooter(t *testing.T, w, hgt int, check func(footer, where string)) {
 	for _, ascii := range []bool{false, true} {
-		for _, l := range lists {
+		for _, l := range pinsFooterLists() {
 			f := pinsFake()
 			f.pins = l.in()
 
 			h := lesOpenTheme(t, f, ascii)
 			h.press("m")
+			h.resize(w, hgt)
 			h.press(l.keys...)
 
 			for row := 1; row <= l.rows; row++ {
 				pinsCursorTo(h, row)
 
-				footer := footerLine(h.view())
-				assert.ElementsMatch(t, []string{"w", "-", "t", "v"}, pinsFooterActions(footer),
-					"%s, row %d, ascii %t: %q", l.name, row, ascii, footer)
+				frame := h.view()
+				assertFrame(t, frame, w, hgt)
+				check(footerLine(frame), l.name+", row "+strconv.Itoa(row)+", ascii "+strconv.FormatBool(ascii))
 			}
 		}
 	}
 }
 
-func TestPinsCompactFooterGivesTheClockToTheUnavailableKeys(t *testing.T) {
+func TestPinsFooterKeepsTheActionKeysInEveryListAtTheReferenceSize(t *testing.T) {
+	eachPinsFooter(t, 120, 40, func(footer, where string) {
+		assert.ElementsMatch(t, []string{"n", "i", "d", "w", "-", "t", "v"}, pinsFooterActions(footer),
+			"%s: %q", where, footer)
+	})
+}
+
+// TestPinsMinimumFooterKeepsEveryActionKey covers L15 of the gate 7
+// review. At the minimum size even the keys alone do not fit, so the
+// footer gives up the keys that work from the end. Every n/a entry and
+// every action key stay, and the clock gives way. A history list also
+// keeps f, its route back to the installed pins. No rule keeps f: it
+// stays because it fits. So this test guards it.
+func TestPinsMinimumFooterKeepsEveryActionKey(t *testing.T) {
+	eachPinsFooter(t, ui.MinWidth, ui.MinHeight, func(footer, where string) {
+		assert.ElementsMatch(t, []string{"n", "i", "d", "w", "-", "t", "v"}, pinsFooterActions(footer),
+			"%s: %q", where, footer)
+		assert.NotRegexp(t, `\d\d:\d\d:\d\d`, footer, where)
+		assert.Contains(t, footer, "r refresh   ? help   q quit", where)
+
+		if strings.Contains(where, "not present") || strings.HasPrefix(where, "superseded") {
+			assert.Contains(t, strings.Fields(footer), "f", "%s: %q", where, footer)
+		}
+	})
+}
+
+func TestPinsCompactFooterKeepsEveryActionKey(t *testing.T) {
 	for _, ascii := range []bool{false, true} {
 		h := lesOpenTheme(t, pinsFake(), ascii)
 		h.press("m")
 		h.resize(80, 24)
 
-		// The case of the user report at 80x24. The short group needs one
-		// cell more than the clock leaves, so the clock gives way and w, t
-		// and v stay in view.
+		// The case of the user report at 80x24 (decision of 2026-10-04:
+		// "Always list, mark unavailable"). The eight action keys with
+		// their actions do not fit 80 columns. So the footer drops the
+		// clock and shows the hints by their keys alone. The help names
+		// each action (TestPinsHelpListsEveryPinsKeyWithTheMarker).
 		frame := h.view()
 		assertFrame(t, frame, 80, 24)
 
 		footer := footerLine(frame)
-		ellipsis := h.m.st.theme.Glyphs.Ellipsis
-		assert.True(t, strings.HasPrefix(footer, " space select   - prune   n/a: w t v  "+ellipsis), "footer %q", footer)
-		assert.NotRegexp(t, `\d\d:\d\d:\d\d`, footer, "ascii %t", ascii)
+
+		assert.True(t, strings.HasPrefix(footer, " space n i -   n/a: d w t v   "), "footer %q", footer)
+		assert.NotRegexp(t, `\d\d:\d\d:\d\d $`, footer, "ascii %t", ascii)
 		assert.Contains(t, footer, "r refresh   ? help   q quit")
 
-		// Pin 2 has working actions that already fill the room, so the
-		// n/a group cannot fit even without the clock. The clock then
-		// stays, and the footer drops hints from the end as before.
-		pinsCursorTo(h, 2)
+		// With a few more cells, the leading hints get their actions back.
+		h.resize(90, 24)
 
 		footer = footerLine(h.view())
-		assert.True(t, strings.HasPrefix(footer, " space select   w retarget  "+ellipsis), "footer %q", footer)
-		assert.Regexp(t, `\d\d:\d\d:\d\d $`, footer, "ascii %t", ascii)
+		assert.True(t, strings.HasPrefix(footer, " space select   n i -   n/a: d w t v   "), "footer %q", footer)
 	}
 }
 
@@ -178,7 +229,7 @@ func TestPinsUnavailableEntriesAreNeverOfferedKeys(t *testing.T) {
 
 	// An unavailable entry is not an offered key, so every check of the
 	// offered keys still leaves it out.
-	assert.Equal(t, []string{"space", "-", "tab", "f", "/", "z", "p", "s", "e"}, pinsKeys(h))
+	assert.Equal(t, []string{"space", "n", "i", "-", "tab", "f", "/", "z", "p", "s", "e"}, pinsKeys(h))
 
 	for _, b := range hookLessons(h).keys() {
 		if ui.IsUnavailable(b) {
@@ -197,7 +248,7 @@ func TestPinsUnavailableMarkerReadsWithoutColor(t *testing.T) {
 	h.press("m")
 
 	footer := footerLine(h.view())
-	assert.True(t, strings.HasPrefix(footer, " space select   - prune   n/a: w t v   tab detail   f show   / region  ..."),
+	assert.True(t, strings.HasPrefix(footer, " space select   n new pin   i edit   - prune   n/a: d w t v   tab detail  ..."),
 		"footer %q", footer)
 
 	for _, r := range h.view() {
@@ -210,7 +261,7 @@ func TestPinsUnavailableMarkerReadsWithoutColor(t *testing.T) {
 	// row above it.
 	on, off := helpParts(h)
 	assert.Contains(t, on, "- prune")
-	assert.Contains(t, off, "w n/a retarget t n/a extract triggers v n/a compare x n/a clear marks")
+	assert.Contains(t, off, "d n/a remove w n/a retarget t n/a extract v n/a compare x n/a clear marks")
 
 	for _, r := range h.view() {
 		require.Less(t, r, rune(128), "the ASCII help holds %q", r)
@@ -261,7 +312,7 @@ func TestPinsScrolledHelpMarksEveryUnavailableRow(t *testing.T) {
 	shown := 0
 
 	for _, line := range strings.Split(frame, "\n") {
-		for _, action := range []string{"retarget", "extract triggers", "compare", "clear marks"} {
+		for _, action := range []string{"remove", "retarget", "extract", "compare", "clear marks"} {
 			if strings.Contains(line, action) {
 				shown++
 
@@ -416,28 +467,35 @@ func TestPinsUnavailableKeysInAListWithoutTarget(t *testing.T) {
 	h := pinsOpen(t, f, 200, 50)
 	h.press("f")
 
-	// A history list offers no target. Its list keys lead, because f is
-	// the route back. The n/a group follows them, before the switch keys.
+	// A history list offers no target: only n works. Its list keys lead,
+	// because f is the route out of a history list. The n/a group follows
+	// them, before the switch keys.
 	footer := footerLine(h.view())
-	assert.Contains(t, footer, "tab detail   f show   / region   z search   "+
-		"n/a: w retarget, - prune, t extract triggers, v compare   p proposals   s stats   e evidence")
+	assert.Contains(t, footer, " n new pin   tab detail   f show   / region   z search   "+
+		"n/a: i edit, d remove, - prune, w retarget, t extract, v compare   p proposals   s stats   e evidence")
 
 	// The reference footer keeps the group by its keys.
 	h.resize(120, 40)
 	assert.True(t, strings.HasPrefix(footerLine(h.view()),
-		" tab detail   f show   / region   z search   n/a: w - t v   p proposals  …"), footerLine(h.view()))
+		" n new pin   tab detail   f show   / region   z search   n/a: i d - w t v  …"), footerLine(h.view()))
 
 	// The help names the selection key as well, because history rows
 	// cannot be selected.
 	_, off := helpParts(h)
-	assert.Equal(t, "space n/a select w n/a retarget - n/a prune t n/a extract triggers v n/a compare x n/a clear marks",
-		strings.TrimSpace(off))
+	assert.Equal(t, "space n/a select i n/a edit d n/a remove - n/a prune w n/a retarget t n/a extract v n/a compare "+
+		"x n/a clear marks", strings.TrimSpace(off))
 
 	h.press("v")
 	assert.Equal(t, "No comparison in a history list. Press f to show installed pins.", h.m.toast.text)
 
 	h.press("w")
 	assert.Equal(t, "No retarget in a history list. Press f to show installed pins.", h.m.toast.text)
+
+	h.press("i")
+	assert.Equal(t, "No edit in a history list. Press f to show installed pins.", h.m.toast.text)
+
+	h.press("d")
+	assert.Equal(t, "No remove in a history list. Press f to show installed pins.", h.m.toast.text)
 	assert.Empty(t, f.called())
 
 	// Without a readable ledger every link is unknown, so no similar pin
@@ -481,29 +539,30 @@ func TestPinsHelpListsEveryPinsKeyWithTheMarker(t *testing.T) {
 	assert.Contains(t, frame, "w n/a retarget")
 	assert.Contains(t, frame, "m pins")
 
-	// Pin 1 offers select and prune; nothing is selected yet.
+	// Pin 1 is linked: it offers select, new pin, a note edit and prune;
+	// nothing is selected yet. d names Prune for a linked pin.
 	on, off := helpParts(h)
 
 	for _, want := range []string{
-		"space select", "- prune", "tab detail", "f show", "/ region", "z search",
+		"space select", "n new pin", "i edit", "- prune", "tab detail", "f show", "/ region", "z search",
 		"p proposals", "m pins", "s stats", "e evidence",
 	} {
 		assert.Contains(t, on, want)
 	}
 
-	assert.Equal(t, "w n/a retarget t n/a extract triggers v n/a compare x n/a clear marks", strings.TrimSpace(off))
+	assert.Equal(t, "d n/a remove w n/a retarget t n/a extract v n/a compare x n/a clear marks", strings.TrimSpace(off))
 
-	// A selection makes x work, and pin 2 offers every action but v.
+	// A selection makes x work, and pin 2 offers every action but d and v.
 	h.press("esc")
 	pinsCursorTo(h, 2)
 	h.press("space", "?")
 
 	on, off = helpParts(h)
-	for _, want := range []string{"w retarget", "- prune", "t extract triggers", "x clear marks", "m pins"} {
+	for _, want := range []string{"n new pin", "i edit", "w retarget", "- prune", "t extract", "x clear marks", "m pins"} {
 		assert.Contains(t, on, want)
 	}
 
-	assert.Equal(t, "v n/a compare", strings.TrimSpace(off))
+	assert.Equal(t, "d n/a remove v n/a compare", strings.TrimSpace(off))
 
 	// The help lists every key at the compact and minimum sizes too.
 	for _, size := range [][2]int{{80, 24}, {60, 20}} {
@@ -511,13 +570,32 @@ func TestPinsHelpListsEveryPinsKeyWithTheMarker(t *testing.T) {
 		assertFrame(t, h.view(), size[0], size[1])
 
 		on, off = helpParts(h)
-		for _, want := range []string{"space select", "w retarget", "- prune", "t extract triggers", "x clear marks",
-			"f show", "/ region", "z search", "m pins"} {
+		for _, want := range []string{"space select", "n new pin", "i edit", "w retarget", "- prune", "t extract",
+			"x clear marks", "f show", "/ region", "z search", "m pins"} {
 			assert.Contains(t, on, want, "%dx%d", size[0], size[1])
 		}
 
-		assert.Equal(t, "v n/a compare", strings.TrimSpace(off), "%dx%d", size[0], size[1])
+		assert.Equal(t, "d n/a remove v n/a compare", strings.TrimSpace(off), "%dx%d", size[0], size[1])
 	}
+
+	// An unlinked pin offers i and d; a pending pin offers neither.
+	h.resize(120, 40)
+	h.press("esc", "x")
+	pinsCursorTo(h, 5)
+	h.press("?")
+
+	on, off = helpParts(h)
+	assert.Contains(t, on, "i edit")
+	assert.Contains(t, on, "d remove")
+	assert.NotContains(t, off, "i n/a")
+	assert.NotContains(t, off, "d n/a")
+
+	h.press("esc")
+	pinsCursorTo(h, 6)
+	h.press("?")
+
+	_, off = helpParts(h)
+	assert.Contains(t, off, "i n/a edit d n/a remove")
 }
 
 func TestLessonsHelpListsEverySwitchKeyInEverySubView(t *testing.T) {

@@ -64,6 +64,10 @@ type Doc struct {
 	// quoted or block scalar. Such a line can start with "#" and still
 	// be value text, so the comment rules skip it.
 	valueLines map[int]bool
+	// textEnds maps a line to a byte offset after its value text. It
+	// holds the lines where a scalar starts and the lines of multi-line
+	// quoted and block scalars. A comment starts only after this offset.
+	textEnds map[int]int
 	// bom is true when the first line starts with a byte order mark.
 	// yaml.v3 does not count it as a column.
 	bom bool
@@ -168,7 +172,8 @@ func Parse(data []byte) (*Doc, *Issue) {
 		FinalEOL:   finalEOL,
 		Limit:      len(lines) + 1,
 		valueLines: map[int]bool{},
-		bom:        len(lines) > 0 && strings.HasPrefix(lines[0], byteOrderMark),
+		textEnds:   map[int]int{},
+		bom:        len(lines) > 0 && strings.HasPrefix(lines[0], ByteOrderMark),
 	}
 
 	dec := yaml.NewDecoder(bytes.NewReader(data))
@@ -225,8 +230,10 @@ func Parse(data []byte) (*Doc, *Issue) {
 	return doc, nil
 }
 
-// byteOrderMark is the UTF-8 byte order mark.
-const byteOrderMark = "\ufeff"
+// ByteOrderMark is the UTF-8 byte order mark. yaml.v3 skips it at the
+// start of the text. A splice that deletes line 1 also deletes the mark,
+// so an editor that deletes line 1 puts the mark on the new line 1.
+const ByteOrderMark = "\ufeff"
 
 // textIssue refuses text whose lines yaml.v3 counts differently from
 // SplitLines. yaml.v3 also reads UTF-16 and counts CR, NEL (U+0085),
@@ -280,15 +287,16 @@ func lineRange(n *yaml.Node, count int) *Issue {
 func (d *Doc) Offset(n, col int) int {
 	line, skip := d.Lines[n-1], 0
 	if n == 1 && d.bom {
-		skip = len(byteOrderMark)
+		skip = len(ByteOrderMark)
 	}
 
 	return skip + byteOffset(line[skip:], col-1)
 }
 
 // markValues records the lines inside the multi-line quoted and block
-// scalars under n. indent is the indentation of the collection that
-// holds n; a block scalar measures its content against it.
+// scalars under n, and where the text of each scalar ends. indent is the
+// indentation of the collection that holds n; a block scalar measures
+// its content against it.
 func (d *Doc) markValues(n *yaml.Node, indent int) *Issue {
 	switch n.Kind {
 	case yaml.ScalarNode:
@@ -323,8 +331,9 @@ func (d *Doc) BlockIndent(n *yaml.Node) int {
 }
 
 // markScalar records the lines after the first line of one quoted or
-// block scalar. A scalar that the scan cannot follow blocks the edit:
-// the comment rules would be unsafe on its lines.
+// block scalar. It also records where the scalar text ends on each of
+// its lines. A scalar that the scan cannot follow blocks the edit: the
+// comment rules would be unsafe on its lines.
 func (d *Doc) markScalar(n *yaml.Node, indent int) *Issue {
 	var quote byte
 
@@ -334,6 +343,8 @@ func (d *Doc) markScalar(n *yaml.Node, indent int) *Issue {
 	case n.Style&yaml.SingleQuotedStyle != 0:
 		quote = '\''
 	case n.Style&(yaml.LiteralStyle|yaml.FoldedStyle) == 0:
+		d.markPlain(n)
+
 		return nil
 	}
 
@@ -344,17 +355,34 @@ func (d *Doc) markScalar(n *yaml.Node, indent int) *Issue {
 		return lost
 	}
 
-	var last int
+	var last, end int
 
 	switch c := d.Lines[line-1][off]; {
 	case quote != 0:
-		if last, ok = d.closeQuote(line, off, quote); !ok {
+		if last, end, ok = d.closeQuote(line, off, quote); !ok {
 			return lost
 		}
+
+		// An open quote runs to the end of each line before the line of
+		// its closing quote.
+		for l := line; l < last; l++ {
+			d.markEnd(l, len(d.Lines[l-1]))
+		}
+
+		d.markEnd(last, end)
 	case c != '|' && c != '>':
 		return lost
 	default:
 		last = d.blockEnd(line, off, indent)
+
+		// The header ends after its "|" or ">". Its indicators hold no
+		// quote and no "#", so the comment scan can start after the
+		// indicator. Every later line of the scalar is text.
+		d.markEnd(line, off+1)
+
+		for l := line + 1; l <= last; l++ {
+			d.markEnd(l, len(d.Lines[l-1]))
+		}
 	}
 
 	for l := line + 1; l <= last; l++ {
@@ -362,6 +390,34 @@ func (d *Doc) markScalar(n *yaml.Node, indent int) *Issue {
 	}
 
 	return nil
+}
+
+// markPlain records where the text of a plain scalar ends on its first
+// line. plainEnd stops at the first " #" of the line, because a plain
+// scalar cannot hold " #". For a key, that stop can be after the ":" or
+// inside a later quoted value. That value records its own larger end,
+// so the largest end of the line stays before the comment. commentAt
+// reads the later lines of a multi-line plain scalar as plain text.
+func (d *Doc) markPlain(n *yaml.Node) {
+	// An empty value has no text, and valueStart would find the text of
+	// the next token.
+	if n.Value == "" {
+		return
+	}
+
+	line, off, ok := d.valueStart(n)
+	if !ok {
+		return
+	}
+
+	d.markEnd(line, plainEnd(d.Lines[line-1], off, ""))
+}
+
+// markEnd records that value text on line n runs to byte end. A line can
+// hold more than one scalar, such as a key and its value, so the largest
+// end wins.
+func (d *Doc) markEnd(n, end int) {
+	d.textEnds[n] = max(d.textEnds[n], end)
 }
 
 // valueStart returns the line and the byte offset where the text of a
@@ -385,23 +441,23 @@ func (d *Doc) valueStart(n *yaml.Node) (line, off int, ok bool) {
 }
 
 // closeQuote returns the line of the quote that closes the quoted
-// scalar that opens at byte off of line. A "#" inside the quotes is
-// text, on any line.
-func (d *Doc) closeQuote(line, off int, quote byte) (int, bool) {
+// scalar that opens at byte off of line, and the byte offset after that
+// quote. A "#" inside the quotes is text, on any line.
+func (d *Doc) closeQuote(line, off int, quote byte) (last, end int, ok bool) {
 	text := d.Lines[line-1]
 	if off >= len(text) || text[off] != quote {
-		return 0, false
+		return 0, 0, false
 	}
 
 	from := off + 1
 
 	for ; line <= len(d.Lines); line, from = line+1, 0 {
-		if _, ok := scanQuote(d.Lines[line-1], from, quote); ok {
-			return line, true
+		if end, ok := scanQuote(d.Lines[line-1], from, quote); ok {
+			return line, end, true
 		}
 	}
 
-	return 0, false
+	return 0, 0, false
 }
 
 // blockEnd returns the last content line of the block scalar whose

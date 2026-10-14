@@ -234,21 +234,10 @@ func (a *analysis) span(i int) (first, last int, exact bool) {
 		}
 	}
 
-	first, last = n.Line, lastLine(n)
+	first, last = n.Line, yamledit.LastLine(n)
 	last = min(max(last, first), len(a.lines))
 
 	return min(first, last), last, false
-}
-
-// lastLine returns the last start line of any node in the subtree of n.
-func lastLine(n *yaml.Node) int {
-	last := n.Line
-
-	for _, c := range n.Content {
-		last = max(last, lastLine(c))
-	}
-
-	return last
 }
 
 // entry decodes item i, which reads as the mapping m.

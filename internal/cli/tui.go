@@ -21,13 +21,15 @@ import (
 // equivalent commands instead of escape sequences.
 var errNotInteractive = errors.New("seamark tui needs an interactive terminal")
 
-// tuiGuidance lists the plain commands behind every console action. The
+// tuiGuidance lists the closest plain route of each console action. The
 // CLI selects by proposal ID, and its trigger extraction asks every
 // eligible proposal. So the text calls the commands the closest actions.
 // Each write command shares the engine of its console action. Apply and
 // dismiss share the decision flow. Retarget and prune share the pin
 // maintenance. The trigger extraction shares the executor and the
-// guarded save. So the text names no other difference.
+// guarded save. So the text names no other difference. Pin authoring,
+// the lesson settings, and the selection sample have no command. So the
+// text names the files to edit by hand and the views that help.
 const tuiGuidance = `seamark tui is an interactive, full-screen console (experimental).
 This session has no interactive terminal, so it did not start.
 
@@ -47,9 +49,14 @@ The same information and the closest actions are available as plain commands:
   seamark lessons --extract-triggers --dry-run  plan a trigger backfill of every
                                       eligible proposal (drop --dry-run to run it)
   seamark lessons --stats             lesson delivery statistics
+  seamark lessons --list              mined rules and regions to copy into a pin that you write
+  seamark lessons --file <path>       the lessons of one file (closest to the selection sample)
 
 Settings live in .seamark/config.yaml: agent.cli, distill.write,
 reviews.window_days, index.generated, and index.exclude.
+Lesson delivery and mutes live in .seamark/lessons.yaml: threshold,
+pin_budget, change_budget, hook_delivery, and mute.
+Pins that you write live there too, in the pin: list.
 `
 
 func newTUICmd(opts *options) *cobra.Command {
@@ -61,12 +68,15 @@ func newTUICmd(opts *options) *cobra.Command {
 		Long: `Open an interactive console for one workspace: diagnostics, index
 state, Claude and Codex integrations, the learning workflow (evidence from
 local fixes and GitHub reviews, distillation with a reviewed plan,
-proposal decisions, the installed pins with a previewed retarget or
-prune, and trigger extraction for selected proposals), lesson delivery
-statistics, and the settings that these workflows read. Opening and
-browsing never write; every change, fetch, and agent run goes through a
-preview that you confirm. Experimental: the plain commands stay the
-stable interface.`,
+proposal decisions, the installed pins with a previewed retarget, prune,
+new pin, pin edit, or pin removal, and trigger extraction for selected
+proposals), lesson delivery statistics, and the settings that these
+workflows read: .seamark/config.yaml and the lesson delivery and mute
+settings of .seamark/lessons.yaml. A selection sample compares the
+lessons of explicit paths before and after a reviewed change, and it
+records nothing. Opening and browsing never write; every change, fetch,
+and agent run goes through a preview that you confirm. Experimental:
+the plain commands stay the stable interface.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// An invalid workspace fails here, before full-screen mode,

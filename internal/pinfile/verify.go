@@ -6,8 +6,10 @@ package pinfile
 // and D-8 again from the reviewed text and the YAML nodes. It does not
 // use the span code that built the splices (ItemSpan, the key extents,
 // provenanceLines), so a defect there blocks an edit instead of passing
-// it. The insert positions of a retarget are the one exception; see
-// retargetLines.
+// it. The insert positions are the one exception. They are the places
+// after the region keys of a retarget and after the rule key. A region
+// key or an absent note goes in there. See retargetLines and
+// rewriteLines.
 
 import (
 	"errors"
@@ -30,8 +32,8 @@ import (
 //     and in place;
 //  4. the decoded pin items equal the intended change of the reviewed
 //     items, in order, with duplicates and unknown keys;
-//  5. a retargeted entry reads back with its target key, its rule, and
-//     its note, and it is still editable;
+//  5. a retargeted or rewritten entry reads back with its target key and
+//     with the rule and the note of the request. It is still editable;
 //  6. (in collide) a target key is not in use;
 //  7. only the reviewed lines change, and every other line stays
 //     byte-identical and in order.
@@ -111,8 +113,8 @@ func (a *analysis) itemValues() ([]map[string]any, error) {
 }
 
 // intended returns the reviewed pin items with the edits of ps applied
-// in memory: a prune removes an item, and a retarget sets the region
-// keys by the rules of retarget.
+// in memory. A prune removes an item. A retarget sets the region keys by
+// the rules of retarget. A rewrite sets its changed fields.
 func (a *analysis) intended(ps []*planned) ([]map[string]any, error) {
 	items, err := a.itemValues()
 	if err != nil {
@@ -122,13 +124,16 @@ func (a *analysis) intended(ps []*planned) ([]map[string]any, error) {
 	drop := map[int]bool{}
 
 	for _, p := range ps {
-		if p.edit.Delete {
-			drop[p.entry.Index] = true
+		i := p.entry.Index
 
-			continue
+		switch {
+		case p.edit.Delete:
+			drop[i] = true
+		case p.change != nil:
+			items[i] = a.rewritten(items[i], p)
+		default:
+			items[i] = withRegions(items[i], p.edit.Regions)
 		}
-
-		items[p.entry.Index] = withRegions(items[p.entry.Index], p.edit.Regions)
 	}
 
 	out := []map[string]any{}
@@ -187,13 +192,53 @@ func withRegions(m map[string]any, regions []string) map[string]any {
 	return out
 }
 
-// sameTargets checks that each retargeted entry of the candidate b reads
-// back with its target key, its reviewed rule, and its reviewed note,
-// and that it is still editable.
+// rewritten returns a copy of the item m with the changed fields of the
+// rewrite p. These are the region keys by the rules of retarget, the
+// rule, and the note. An empty note removes the note key. A note key on
+// the dash line keeps an empty value instead. dashNote finds that place
+// from the key node and the text before it.
+func (a *analysis) rewritten(m map[string]any, p *planned) map[string]any {
+	ch, out := p.change, maps.Clone(m)
+
+	if ch.Regions != nil {
+		out = withRegions(out, *ch.Regions)
+	}
+
+	if ch.Rule != nil {
+		out["rule"] = *ch.Rule
+	}
+
+	switch {
+	case ch.Note == nil:
+	case *ch.Note != "" || a.dashNote(p.item):
+		out["note"] = *ch.Note
+	default:
+		delete(out, "note")
+	}
+
+	return out
+}
+
+// dashNote reports whether the note key of the item sits on its dash
+// line.
+func (a *analysis) dashNote(it item) bool {
+	k, _, _ := yamledit.Lookup(mapping(it.node), "note")
+
+	return k != nil && a.onDashLine(k)
+}
+
+// sameTargets checks each retargeted or rewritten entry of the candidate
+// b. The entry must read back with its target key and with the rule and
+// the note of the request (requested). It must also stay editable.
 func sameTargets(b *analysis, ps []*planned) error {
 	for _, p := range ps {
 		if p.edit.Delete {
 			continue
+		}
+
+		noun := "a retargeted entry"
+		if p.change != nil {
+			noun = "a rewritten entry"
 		}
 
 		index := p.entry.Index
@@ -206,12 +251,14 @@ func sameTargets(b *analysis, ps []*planned) error {
 
 		k := slices.IndexFunc(b.entries, func(e Entry) bool { return e.Index == index })
 		if k < 0 {
-			return errors.New("a retargeted entry is missing from the candidate")
+			return errors.New(noun + " is missing from the candidate")
 		}
 
+		rule, note := p.requested()
+
 		e := b.entries[k]
-		if e.Key != p.target || e.Rule != p.entry.Rule || e.Note != p.entry.Note || e.Block != "" {
-			return errors.New("a retargeted entry does not read back as its target")
+		if e.Key != p.target || e.Rule != rule || e.Note != note || e.Block != "" {
+			return errors.New(noun + " does not read back as its target")
 		}
 	}
 
@@ -225,8 +272,12 @@ func sameTargets(b *analysis, ps []*planned) error {
 func (a *analysis) sameOutside(b *analysis, ps []*planned) error {
 	for _, p := range ps {
 		check := a.retargetLines
-		if p.edit.Delete {
+
+		switch {
+		case p.edit.Delete:
 			check = a.prunedLines
+		case p.change != nil:
+			check = a.rewriteLines
 		}
 
 		if err := check(p); err != nil {
@@ -357,17 +408,25 @@ func deeper(l string, col int) bool {
 	return !yamledit.IsBlank(l) && yamledit.IndentOf(l) > col
 }
 
-// retargetLines checks the splices of the retarget p against D-7. A
-// splice may change or remove only the line of a region key, the item
+// retargetLines checks the splices of the retarget p against D-7.
+func (a *analysis) retargetLines(p *planned) error {
+	lines, inserts := a.regionLines(p)
+
+	return within(p, lines, inserts)
+}
+
+// regionLines returns the lines that a change of the region keys of p
+// may change or remove. These are the line of a region key, the item
 // lines of a block regions list, and the blank lines between them. These
 // lines come from the YAML nodes.
 //
-// An insertion may go only right after the lines of a region key or
-// after the rule key. These places come from the key extents, as in the
+// inserts holds the lines before which an insertion may go. These are
+// the lines right after the lines of a region key, and the line after
+// the rule key. These places come from the key extents, as in the
 // planner. An insertion removes no line, and checks 3 to 5 prove its
-// value, so a wrong place can only move a key line.
-func (a *analysis) retargetLines(p *planned) error {
-	lines, inserts := map[int]bool{}, map[int]bool{}
+// value. A wrong place can therefore only move a key line.
+func (a *analysis) regionLines(p *planned) (lines, inserts map[int]bool) {
+	lines, inserts = map[int]bool{}, map[int]bool{}
 	stop := p.item.last + 1
 
 	for _, name := range []string{"region", "regions"} {
@@ -379,7 +438,7 @@ func (a *analysis) retargetLines(p *planned) error {
 		lines[k.Line] = true
 
 		if v.Kind == yaml.SequenceNode && v.Style&yaml.FlowStyle == 0 {
-			for n := k.Line; n <= lastLine(v); n++ {
+			for n := k.Line; n <= yamledit.LastLine(v); n++ {
 				lines[n] = lines[n] || yamledit.IsBlank(a.lines[n-1])
 			}
 
@@ -399,6 +458,110 @@ func (a *analysis) retargetLines(p *planned) error {
 		inserts[s.Last+1] = true
 	}
 
+	return lines, inserts
+}
+
+// rewriteLines checks the splices of the rewrite p. Each changed field
+// adds its lines: the rule key line, the region lines of regionLines,
+// and the note lines of noteLines. An absent note may go in only after
+// the rule key, the place that the planner takes from the key extent.
+func (a *analysis) rewriteLines(p *planned) error {
+	ch, m := p.change, mapping(p.item.node)
+	lines, inserts := map[int]bool{}, map[int]bool{}
+
+	if ch.Rule != nil {
+		if k, _, _ := yamledit.Lookup(m, "rule"); k != nil {
+			lines[k.Line] = true
+		}
+	}
+
+	if ch.Regions != nil {
+		l, i := a.regionLines(p)
+		maps.Copy(lines, l)
+		maps.Copy(inserts, i)
+	}
+
+	if ch.Note != nil {
+		l, err := a.noteLines(p)
+		if err != nil {
+			return err
+		}
+
+		maps.Copy(lines, l)
+
+		k, _, _ := yamledit.Lookup(m, "note")
+		if s, ok := a.doc.KeySpan(p.item.node, "rule", p.item.last+1); k == nil && ok {
+			inserts[s.Last+1] = true
+		}
+	}
+
+	return within(p, lines, inserts)
+}
+
+// noteLines returns the lines that a change of the note of p may replace
+// or remove. They come from the nodes and the text. They are the line of
+// the note key and each later line that is blank or deeper than the key
+// column. They stop at the next key of the entry or at the next dash at
+// the item column. Blank lines at the end belong to what follows, so
+// they are left out.
+//
+// A comment below the key line refuses the change, because the planner
+// carries over only the trailing comment of the key line. That is a
+// comment line or a comment after the text of a note line. The check
+// uses Doc.CommentIn, which reads a "#" inside a quoted or a block note
+// as note text.
+func (a *analysis) noteLines(p *planned) (map[int]bool, error) {
+	m := mapping(p.item.node)
+
+	k, _, _ := yamledit.Lookup(m, "note")
+	if k == nil {
+		return nil, nil
+	}
+
+	next := len(a.lines) + 1
+
+	for i := 0; i < len(m.Content); i += 2 {
+		if l := m.Content[i].Line; l > k.Line && l < next {
+			next = l
+		}
+	}
+
+	col, dash := k.Column-1, a.seq.Column-1
+	last := k.Line
+
+	for n := k.Line + 1; n < next; n++ {
+		l := a.lines[n-1]
+
+		if yamledit.DashAt(l, dash) && yamledit.LeadingSpaces(l) == dash {
+			break
+		}
+
+		if yamledit.IsBlank(l) {
+			continue
+		}
+
+		if !deeper(l, col) {
+			break
+		}
+
+		last = n
+	}
+
+	if a.doc.CommentIn(k.Line+1, last) {
+		return nil, fmt.Errorf("the note at line %d holds a comment, which the edit would drop", k.Line)
+	}
+
+	lines := map[int]bool{}
+	for n := k.Line; n <= last; n++ {
+		lines[n] = true
+	}
+
+	return lines, nil
+}
+
+// within checks that each splice of p changes only lines in lines, and
+// that each insertion goes before a line in inserts.
+func within(p *planned, lines, inserts map[int]bool) error {
 	for _, s := range p.splices {
 		if s.to < s.from {
 			if !inserts[s.from] {

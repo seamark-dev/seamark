@@ -92,7 +92,7 @@ func lesPreview(a proposals.Action, ids []int64, write bool) *proposals.Preview 
 }
 
 // lesOpen starts a console on the Lessons destination.
-func lesOpen(t *testing.T, f *fakeServices, w, h int) *harness {
+func lesOpen(t testing.TB, f *fakeServices, w, h int) *harness {
 	t.Helper()
 
 	hs := newHarness(t, f, w, h)

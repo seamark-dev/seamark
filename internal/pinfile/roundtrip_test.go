@@ -84,7 +84,7 @@ func apply(t *testing.T, root string, rows []model.Proposal) {
 	d, err := pinfile.Read(root)
 	require.NoError(t, err)
 
-	after, err := pinfile.PlanAppend(d, block)
+	after, err := pinfile.PlanAppend(d, block, pinfile.Placement{})
 	require.NoError(t, err)
 
 	p, err := pinfile.PrepareAppend(integration.Builtin(), root, d.Guard, after)
@@ -440,6 +440,150 @@ func TestEveryReaderLinksARowWithDisagreeingFieldsToOneEntry(t *testing.T) {
 			pin, live := cfg.FindPin(key)
 			require.True(t, live)
 			assert.Equal(t, "stored", pin.Note)
+		})
+	}
+}
+
+// appendManual writes the pin as a person writes it in the console: the
+// manual render, a tail append, and the guarded write.
+func appendManual(t *testing.T, root string, pin reviews.PinRule) {
+	t.Helper()
+
+	block, err := pinfile.RenderPin(pin)
+	require.NoError(t, err)
+
+	d, err := pinfile.Read(root)
+	require.NoError(t, err)
+
+	after, err := pinfile.PlanAppend(d, block, pinfile.Placement{Tail: true})
+	require.NoError(t, err)
+
+	p, err := pinfile.PrepareAppend(integration.Builtin(), root, d.Guard, after)
+	require.NoError(t, err)
+	require.NoError(t, p.Apply())
+}
+
+func TestAManualPinGoesLastAndStaysEditable(t *testing.T) {
+	// A pin that a person writes goes after the last entry, so the
+	// earlier pins keep their priority. The file stays editable: a note
+	// edit of the new pin works, and its removal gives back the earlier
+	// bytes.
+	pin := reviews.PinForRegions("manual", "First line.\n# not a comment\n\nLast line.", []string{"api", "web"})
+
+	layouts := []struct{ name, body string }{
+		{name: "starter file", body: starter(t)},
+		{name: "file of an earlier apply", body: pins(t, appliedEarlier(t))},
+	}
+
+	for _, l := range layouts {
+		t.Run(l.name, func(t *testing.T) {
+			root := rootWith(t, l.body)
+			appendManual(t, root, pin)
+
+			d, err := pinfile.Read(root)
+			require.NoError(t, err)
+			require.Empty(t, d.FileBlock)
+
+			last := d.Entries[len(d.Entries)-1]
+			assert.Equal(t, pin.Note, last.Note)
+			assert.Equal(t, reviews.NewPinKey("manual", "", []string{"api", "web"}), last.Key)
+			assert.Empty(t, last.ProvenanceIDs)
+
+			cfg, err := reviews.LoadConfig(root)
+			require.NoError(t, err)
+			assert.Equal(t, pin, cfg.Pin[len(cfg.Pin)-1], "the reader delivers the pin last")
+
+			commit(t, root, func(d *pinfile.Document) []pinfile.Edit {
+				note := "Edited."
+				e := d.Entries[len(d.Entries)-1]
+
+				return []pinfile.Edit{{Ref: e.Ref(), Rewrite: &pinfile.Rewrite{Note: &note}}}
+			})
+
+			d, err = pinfile.Read(root)
+			require.NoError(t, err)
+			assert.Equal(t, "Edited.", d.Entries[len(d.Entries)-1].Note)
+
+			commit(t, root, func(d *pinfile.Document) []pinfile.Edit {
+				e := d.Entries[len(d.Entries)-1]
+
+				return []pinfile.Edit{{Ref: e.Ref(), Delete: true, Provenance: e.ProvenanceIDs}}
+			})
+
+			assert.Equal(t, l.body, pins(t, root))
+		})
+	}
+
+	t.Run("an absent file holds the pin key alone", func(t *testing.T) {
+		root := t.TempDir()
+		appendManual(t, root, pin)
+
+		block, err := pinfile.RenderPin(pin)
+		require.NoError(t, err)
+		assert.Equal(t, "pin:\n"+block, pins(t, root))
+	})
+}
+
+func TestAManualPinWithABlankLookingLastLineStaysEditable(t *testing.T) {
+	// YAML reads a note line of only a tab or a Unicode space as text.
+	// The line rules of the editor read it as blank. A manual pin with
+	// such a last line must still take a later append and a note edit.
+	// Its removal must leave no line of it behind.
+	const before = "pin:\n  - rule: earlier\n    note: kept\n"
+
+	render := func(t *testing.T, pin reviews.PinRule) string {
+		t.Helper()
+
+		block, err := pinfile.RenderPin(pin)
+		require.NoError(t, err)
+
+		return block
+	}
+
+	notes := map[string]string{
+		"a tab":                "first line\n\t",
+		"an ideographic space": "first line\n　",
+		"a no-break space":     "first line\n ",
+		"an em space":          "first line\n ",
+	}
+
+	for name, note := range notes {
+		t.Run(name, func(t *testing.T) {
+			root := rootWith(t, before)
+			appendManual(t, root, reviews.PinRule{Rule: "authored", Note: note})
+			appendManual(t, root, reviews.PinRule{Rule: "second", Note: "n"})
+
+			second := render(t, reviews.PinRule{Rule: "second", Note: "n"})
+			authored := func(d *pinfile.Document) pinfile.Entry {
+				for _, e := range d.Entries {
+					if e.Rule == "authored" {
+						return e
+					}
+				}
+
+				require.FailNow(t, "the authored entry is missing")
+
+				return pinfile.Entry{}
+			}
+
+			d, err := pinfile.Read(root)
+			require.NoError(t, err)
+			require.Empty(t, d.FileBlock)
+			assert.Equal(t, note, authored(d).Note)
+
+			commit(t, root, func(d *pinfile.Document) []pinfile.Edit {
+				edited := "Edited."
+
+				return []pinfile.Edit{{Ref: authored(d).Ref(), Rewrite: &pinfile.Rewrite{Note: &edited}}}
+			})
+
+			assert.Equal(t, before+render(t, reviews.PinRule{Rule: "authored", Note: "Edited."})+second, pins(t, root))
+
+			commit(t, root, func(d *pinfile.Document) []pinfile.Edit {
+				return []pinfile.Edit{{Ref: authored(d).Ref(), Delete: true}}
+			})
+
+			assert.Equal(t, before+second, pins(t, root))
 		})
 	}
 }

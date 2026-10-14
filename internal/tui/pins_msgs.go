@@ -90,15 +90,27 @@ const (
 	extractRunVerb = "Extracting triggers"
 )
 
-// The sources that a maintenance commit and an extraction run change.
-// The result handlers refresh them with mutationDone, also after a
-// refusal, because a refusal means that the state changed. A retarget
-// or a prune changes the pin file and the ledger rows; an extraction
-// changes trigger fields and pending regions, which the Pins readings
-// and the proposal health read.
+// The sources that a pin write and an extraction run change. The result
+// handlers reload them with mutationDone, also after a refusal, because
+// a refusal means that the state changed.
+//
+// pinWriteRefresh serves every write of lessons.yaml from Lessons: a
+// retarget, a prune, a pin authoring commit and an apply of proposals.
+// A retarget, a prune and an apply also change ledger rows. An authoring
+// commit and an apply can create the pin file. Doctor checks that file
+// only when it exists, so Doctor reloads after such a write. The
+// evidence view also reloads, as after a lessons save of Settings
+// (settingsRefreshKinds). A retarget and a prune reload Doctor and the
+// evidence view too, because one list keeps every pin writer equal
+// (gate 7, L19).
+//
+// extractRefresh serves an extraction run. It changes trigger fields and
+// pending regions, which the Pins readings and the proposal health read.
+// It never writes a pin, so it does not reload Doctor and the evidence
+// view.
 var (
-	maintRefresh   = []sectionKind{secPins, secLedger, secStats, secIndex}
-	extractRefresh = []sectionKind{secPins, secLedger, secStats, secIndex}
+	pinWriteRefresh = []sectionKind{secPins, secLedger, secStats, secIndex, secDoctor, secLearning}
+	extractRefresh  = []sectionKind{secPins, secLedger, secStats, secIndex}
 )
 
 // maintHost holds the open maintenance preview of the Pins sub-view. The
@@ -130,7 +142,8 @@ func (h *maintHost) open() bool {
 // Other messages also reach the sub-view, because a refresh of the pins
 // concerns both. A settings save goes to maintModal.settingsSaved, so a
 // preview that names the old write gate closes (D-14). A preview that
-// reports closed() after a call leaves the host.
+// reports closed() after a call leaves the host. A write of
+// lessons.yaml goes to maintModal.lessonsSaved for the same reason.
 func (h *maintHost) route(msg tea.Msg) (cmd tea.Cmd, consumed bool) {
 	switch m := msg.(type) {
 	case openMaintMsg:
@@ -156,6 +169,12 @@ func (h *maintHost) route(msg tea.Msg) (cmd tea.Cmd, consumed bool) {
 		}
 
 		return h.after(h.modal.settingsSaved(m)), false
+	case lessonsSavedMsg:
+		if h.modal == nil {
+			return nil, false
+		}
+
+		return h.after(h.modal.lessonsSaved(m)), false
 	}
 
 	if h.modal == nil {

@@ -37,6 +37,16 @@ func TestTUIWithoutTerminalPrintsPlainGuidance(t *testing.T) {
 	assert.Contains(t, out, "seamark lessons --prune <ids>")
 	assert.Contains(t, out, "seamark lessons --extract-triggers --dry-run")
 	assert.NotContains(t, out, "rewrites the whole entry")
+
+	// Pin authoring and the selection sample have no command of their
+	// own. So the text names the closest view of each.
+	assert.Contains(t, out, "seamark lessons --list ")
+	assert.Contains(t, out, "seamark lessons --file <path>")
+	assert.Contains(t, out, "Pins that you write live there too")
+
+	// The console Settings edit both files, so the text names both.
+	assert.Contains(t, out, "Settings live in .seamark/config.yaml")
+	assert.Contains(t, out, "Lesson delivery and mutes live in .seamark/lessons.yaml")
 	assert.NotContains(t, out, "\x1b", "plain guidance carries no escape sequence")
 	assert.Equal(t, before, snapshot(t, root), "a refused launch writes nothing")
 }

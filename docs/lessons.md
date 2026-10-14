@@ -124,13 +124,26 @@ policy.yaml rules (the distiller can draft them, but never has to). Both
 flow through `why`, `orient`, and the edit hook via one path, so they
 never disagree.
 
+The console (`seamark tui`) edits this file too, always through a
+reviewed diff. Settings › Lesson delivery and Lesson mutes change
+`threshold`, `pin_budget`, `change_budget`, `hook_delivery`, and
+`mute`. Lessons › Pins writes manual pins (see "Pins that a person
+writes" below). A save keeps comments, unknown keys, and every
+other entry. A Settings reset removes the key line with its comment.
+A Settings save refuses to remove a mute entry with a comment after
+its text. Two pin writes also delete seamark provenance comments. A
+pin removal deletes those of its own entry. A prune (`-` in Lessons ›
+Pins) deletes those that name its proposal.
+
 Pins are powerful, so their injection cost is budgeted: the edit hook
 carries at most `pin_budget` pins per edit (default 3), ranked by
 evidence confidence first and region specificity second — a weak pin
 must not hold a slot a strong one wants, and among equals a pin on the
 file beats its package beats a repo-wide `*` — with a `+N more` pointer
-for the rest. Deliberate views (`--file`, `why`) always show
-everything; only the ambient injection is capped.
+for the rest. Deliberate views (`--file`, `why`, `orient`) apply no
+pin budget. They keep the first 8 (`--file`) or 6 (`why`, `orient`)
+lessons, with no count of the rest. Only the edit hook has a pin
+budget.
 
 ### Hook delivery modes
 
@@ -454,13 +467,18 @@ pruning is not dismissal.
 The model must cite the finding ids behind every pattern (uncited
 patterns are dropped — it cannot invent evidence), every pattern must
 give an explicit trigger-path answer, and named paths affect delivery
-only after tree and evidence/history validation. Nothing reaches
-`.seamark/lessons.yaml` except
-through an explicit `--apply` of explicit ids. Even then, seamark edits
-the file itself only if `config.yaml` opts in (`distill: {write: true}`)
-— otherwise apply prints the pin block for you to paste. Applied entries
-are inserted at the head of your existing `pin:` list, at the
-indentation of that list, with provenance comments; everything
+only after tree and evidence/history validation. Nothing that the model
+drafts reaches `.seamark/lessons.yaml` without an explicit step. One
+step is an apply of selected proposals (`--apply <ids>`, or `a` in the
+console). The other is a retarget of applied pins to the recomputed
+regions (`--retarget <ids>`, or `w` in the console). A retarget can
+write trigger scopes that the model drafted and seamark verified. Even
+then,
+seamark edits the file itself only if `config.yaml` opts in
+(`distill: {write: true}`) — otherwise apply prints the pin block for
+you to paste. Applied entries are inserted at the head of your
+existing `pin:` list, at the indentation of that list, with provenance
+comments; everything
 hand-written stays byte-for-byte. Without a `pin:` section, apply adds
 one at the end of the file (before a `...` end marker). The write uses
 the console's pin file editor: it proves the result first (the file
@@ -497,6 +515,68 @@ write gate off, they still print the change to make by hand for such a
 file, without a diff. Their last line then names the refusal that the
 gate cannot lift, also for a link or a read-only file. They write only
 a result that still loads with every other pin intact.
+
+### Pins that a person writes
+
+You can write a pin by hand in `.seamark/lessons.yaml` or in the
+console (`seamark tui`, Lessons › Pins). In the console, `n` drafts a
+new pin. `i` edits and `d` removes the pin under the cursor, never the
+marked pins.
+A new pin is manual, and so is a pin that no proposal records: no
+proposal stands behind it. For every pin, the console writes no provenance
+comment, and it never creates, changes, or links a proposal row.
+
+- A new pin goes after the last pin of the `pin:` list. Apply still
+  inserts its pins at the head of the list. So a manual pin never moves
+  the pins before it.
+- A pin that no applied proposal records has no evidence to doubt, so
+  it ranks as strong evidence. Under `pin_budget` it comes before a fair
+  or weak applied pin. The file order decides only among pins with
+  equal rank and specificity.
+- Without a `pin:` key, the console adds one at the end of the file. A
+  missing file gets only the `pin:` key and the new pin.
+- An edit changes only the rule, the note, or the regions that you
+  edit. A removal deletes one entry and the seamark provenance
+  comments directly above it, because they would read as the
+  provenance of the next pin. A free comment above the entry stays.
+  It then reads as the comment of the next pin. Every other line stays
+  byte for byte.
+- A linked pin (one applied proposal records it) allows a note edit
+  only. Its scope changes with `w` (retarget), and its removal is `-`
+  (prune). The proposal keeps its recorded rule, note, and evidence. So
+  Pins shows the pin as `edited`. Trigger extraction still asks about
+  the recorded note.
+- The same `distill.write` gate applies. With the gate off, the review
+  shows the exact diff and writes nothing.
+- A save needs a readable index of this workspace, because the
+  relationship of a pin to the proposals comes from the ledger.
+- Unlike apply, these writes refuse a file with CRLF line breaks and a
+  file with more than one hard link. The route is an edit by hand.
+
+An edit of the wording or the scope can give the pin a new delivery
+identity, and the review says whether it does. A context that already
+saw the old wording can then receive the pin again, also in
+`once-per-context` mode. Earlier deliveries stay recorded under the
+earlier wording and scope; nothing is reset or moved.
+
+### Remove, Prune, Mute, and the other filters
+
+Several actions make a lesson or a pin reach an agent less often. They
+change different things:
+
+| Term | What it does | What it changes |
+| --- | --- | --- |
+| Remove | Deletes one unlinked pin entry from the file. | `.seamark/lessons.yaml` only; the proposal ledger does not change. Console: `d` in Lessons › Pins. |
+| Prune | Removes a linked pin and marks its proposal superseded. | The pin file and the ledger. `seamark lessons --prune <ids>`, or `-` in Lessons › Pins. |
+| Mute | Hides mined lessons from selection; never pins. A rule matches in any case; a region matches that region and every region under it. A region with a trailing "/" (`api/`) matches only the regions under it, not `api` itself. | The `mute:` list. The mined lessons stay in the index, and `lessons --list` marks them `(muted)`. |
+| Threshold | The minimum mined recurrences. Mined lessons only; never pins. | The `threshold:` key. |
+| Budget | A cap on one injection or one answer. `pin_budget` caps the pins of one edit-hook injection (at most 8 lessons in total per edit). `change_budget` caps one `change_set` answer or one `check` advisory. | The budget keys. `--file` and `why` apply no pin budget and keep every restatement. `--file` shows at most 8 lessons and `why` at most 6, with no count of the rest. |
+| Repetition | Once-per-context suppression of repeats in one agent context (`hook_delivery: once-per-context`). Edit hook only. | Delivery state in `.seamark/lessons-hook-state.json`; `change_set`, `check`, `why`, and the CLI views always show their selection. |
+| Sample | The local selection for explicit paths, before suppression, with no record. Console only: `s` in a pin review or a lessons Settings review. | Nothing: no file, no firing record, no delivery state. |
+
+A mute, the threshold, and a budget act when a surface selects lessons,
+so the next read of the file applies them without re-mining. Remove and
+Prune change the pin list itself.
 
 ## The moment of change: hook, change_set, check
 

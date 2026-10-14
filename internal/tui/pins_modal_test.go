@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/distill"
+	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
@@ -1028,7 +1029,7 @@ func TestMaintRefusalsSayNothingWasWritten(t *testing.T) {
 		maintain.ErrStale, maintain.ErrWriteDisabled, maintain.ErrNotConfirmable, services.ErrBusy, services.ErrNoLedger,
 		maintain.ErrNoLedger, errors.New("other"),
 	} {
-		text := maintRefusal(th, fmt.Errorf("wrapped: %w", err))
+		text := maintRefusal(th, fmt.Errorf("wrapped: %w", err), "preview", "Revise the selection and preview again.")
 		assert.Regexp(t, `nothing (was|is) (written|changed)|did not start|refused before any write`,
 			strings.ToLower(text), "%v", err)
 	}
@@ -1424,4 +1425,75 @@ func TestMaintBlockScalarNotesHaveNoTrailingBlankRow(t *testing.T) {
 	}
 
 	assert.Equal(t, 2, found, "the live note and the retained note both show")
+}
+
+// TestMaintCommitReloadsDoctorAndEvidence checks that a retarget and a
+// prune reload Doctor and the evidence view, as every write of
+// lessons.yaml does (pinWriteRefresh). One list serves every pin writer,
+// because separate lists differed before (gate 7, L19). The cases reach
+// the watched reload of a written file and the plain reload of a refusal.
+func TestMaintCommitReloadsDoctorAndEvidence(t *testing.T) {
+	fx := maintFixture(t)
+	stale := fmt.Errorf("%w: the pin file changed", maintain.ErrStale)
+
+	for _, c := range []struct {
+		name string
+		plan *maintain.Plan
+		res  maintain.Result
+		err  error
+	}{
+		{"retarget written", fx.maintNarrow(t, maintPlanOpts{write: true, cursor: true}),
+			maintain.Result{Action: maintain.ActionRetarget, FileWritten: true, LedgerDone: true, Moved: []int64{4}}, nil},
+		{"retarget refused", fx.maintNarrow(t, maintPlanOpts{write: true, cursor: true}),
+			maintain.Result{Action: maintain.ActionRetarget}, stale},
+		{"prune written", fx.maintPrune(t, false),
+			maintain.Result{Action: maintain.ActionPrune, FileWritten: true, LedgerDone: true, Moved: []int64{16}}, nil},
+		{"prune refused", fx.maintPrune(t, false), maintain.Result{Action: maintain.ActionPrune}, stale},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := maintFakeOf(fx, c.plan, nil)
+			fresh := &doctor.Report{}
+			f.commitMaintenance = func(*maintain.Plan) (maintain.Result, error) {
+				f.doctor = fresh
+
+				return c.res, c.err
+			}
+
+			h := maintOpen(t, f, c.plan.Request, 120, 40)
+			learning := f.readCount("Learning")
+
+			h.press("y")
+			require.Equal(t, 1, f.callCount("CommitMaintenance:"+c.plan.Action.String()))
+			assert.Same(t, fresh, h.m.st.doctor.value, "the commit reads Doctor again")
+			assert.Greater(t, f.readCount("Learning"), learning, "the commit reads the evidence again")
+		})
+	}
+}
+
+// TestMaintReadAgainReloadsDoctorAndEvidence checks that r in a result
+// with a failed reload reads the sources of the commit, Doctor and the
+// evidence view too. Gate 7 found that a mutant of this key survived on
+// the authoring side, so each writer tests it.
+func TestMaintReadAgainReloadsDoctorAndEvidence(t *testing.T) {
+	fx := maintFixture(t)
+	p := fx.maintNarrow(t, maintPlanOpts{write: true, cursor: true})
+	f := maintFakeOf(fx, p, nil)
+	h := maintOpen(t, f, p.Request, 120, 40)
+
+	good := f.pins
+	f.pins = pinsDocErr()
+
+	h.press("y")
+	require.Contains(t, maintContent(t, h), refreshFailedRow)
+
+	f.pins = good
+	fresh := &doctor.Report{}
+	f.doctor = fresh
+	learning := f.readCount("Learning")
+
+	h.press("r")
+	assert.NotContains(t, maintContent(t, h), refreshFailedRow, "the read succeeds")
+	assert.Same(t, fresh, h.m.st.doctor.value, "r reads Doctor again")
+	assert.Greater(t, f.readCount("Learning"), learning, "r reads the evidence again")
+	assert.Equal(t, 1, f.callCount("CommitMaintenance:retarget"), "r never commits again")
 }

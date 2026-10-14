@@ -982,7 +982,7 @@ func (p *propView) emptyBox(w, h int) string {
 
 		m = paneMessage{
 			head: []string{t.Muted.Render(g.Info) + " " + t.Title.Render("No "+label+" proposals")},
-			body: "The ledger holds " + propJoin(others) + " proposals. Press f to show another state.",
+			body: "The ledger holds " + joinWords(others) + " proposals. Press f to show another state.",
 		}
 	default:
 		n := len(p.stateRows())
@@ -995,16 +995,6 @@ func (p *propView) emptyBox(w, h int) string {
 	}
 
 	return messageBox(t, t.Title.Render(p.listTitle()), t.Muted.Render("0"), m, w, h)
-}
-
-// propJoin joins words as a list for a sentence: "a", "a and b", or
-// "a, b and c".
-func propJoin(words []string) string {
-	if len(words) < 2 {
-		return strings.Join(words, "")
-	}
-
-	return strings.Join(words[:len(words)-1], ", ") + " and " + words[len(words)-1]
 }
 
 // morePending returns the facts and the commands under "No pending

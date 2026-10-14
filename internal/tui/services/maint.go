@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/learning"
@@ -149,39 +148,6 @@ func (e *engine) openWrite() (*store.Store, workspace.IndexProbe, error) {
 	}
 
 	return st, probe, nil
-}
-
-// errForeignRoot reports an index that records another repository root
-// than the workspace. A maintenance commit refuses it before any write.
-var errForeignRoot = errors.New("the index records another repository root")
-
-// ownRoot refuses a maintenance write when the default database of this
-// workspace records another repository root, as in a copied checkout.
-// The engine writes the pin file under the recorded root and the ledger
-// in this database, so one commit would change two repositories. A --db
-// flag makes another root normal, so the check skips it. The Pins view
-// hides the keys for the same case; this check holds for every caller.
-func (e *engine) ownRoot(probe workspace.IndexProbe) error {
-	if e.ws.DBPath != store.DefaultPath(e.ws.Root) || sameDir(probe.Root, e.ws.Root) {
-		return nil
-	}
-
-	return fmt.Errorf("%w (%s), not this workspace (%s); run seamark index here first",
-		errForeignRoot, probe.Root, e.ws.Root)
-}
-
-// sameDir reports whether two paths name one directory. It compares the
-// clean paths first and then the resolved links, so a link spelling of
-// the same directory is not a foreign root.
-func sameDir(a, b string) bool {
-	if filepath.Clean(a) == filepath.Clean(b) {
-		return true
-	}
-
-	ra, errA := filepath.EvalSymlinks(a)
-	rb, errB := filepath.EvalSymlinks(b)
-
-	return errA == nil && errB == nil && ra == rb
 }
 
 // maintDeps binds the maintenance engine to one store and one probe.

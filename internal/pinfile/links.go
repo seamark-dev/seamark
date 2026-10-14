@@ -34,7 +34,17 @@ var ErrUnreadable = errors.New("unknown: .seamark/lessons.yaml could not be read
 // existing pin (proposals.PreviewReconcile) call this predicate too, so
 // the rule exists only here.
 func FieldsAgree(p model.Proposal) bool {
-	return reviews.NewPinKey(p.Rule, "", p.RegionSet()) == reviews.ProposalKey(p)
+	return RenderedKey(p) == reviews.ProposalKey(p)
+}
+
+// RenderedKey returns the key of the pin that distill.RenderPins writes
+// for the row p: its rule and its region set (model.Proposal.RegionSet).
+// The raw Region and Regions fields can disagree with that set, so the
+// readers of the file link a row by reviews.ProposalKey instead. Both
+// keys are equal when FieldsAgree is true. The apply of internal/proposals
+// uses this key too, so the rule exists only here.
+func RenderedKey(p model.Proposal) reviews.PinKey {
+	return reviews.NewPinKey(p.Rule, "", p.RegionSet())
 }
 
 // Link is the relationship between a pin and the proposal rows. The zero

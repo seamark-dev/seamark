@@ -19,7 +19,7 @@ import (
 
 // seedStore builds a minimal index: one symbol in scripts/task.py plus a
 // set of review lessons, enough to exercise lesson surfacing.
-func seedStore(t *testing.T) (st *store.Store, root string) {
+func seedStore(t testing.TB) (st *store.Store, root string) {
 	t.Helper()
 
 	root = t.TempDir()
@@ -470,6 +470,48 @@ func TestWeakEvidencePinsRankLastAndGetTagged(t *testing.T) {
 
 	assert.Contains(t, all.String(), "weak: 1 event(s)",
 		"deliberate views print the tier with its facts")
+}
+
+func TestSingleFileSelectorAgesPinsFromTheCurrentTime(t *testing.T) {
+	// The single-file selector serves why, the MCP why tool, and
+	// lessons --file. Its deliberate view prints the tier and the facts
+	// of each applied pin. The age counts from the time of the call, so
+	// the strong pin of the fixture reads "newest 10d". The multi-file
+	// goldens show the same text for the same pins.
+	st := goldenStore(t)
+
+	cfg := goldenConfig(
+		reviews.PinRule{Rule: "multi-source-guard", Region: "db", Note: "Close cursors in a finally block."},
+		reviews.PinRule{Rule: "hardcoded-db-credentials", Region: "scripts", Note: "Read credentials from the environment."},
+		reviews.PinRule{Rule: "single-event-guidance", Region: "api", Note: "Distilled from one review exchange."},
+	)
+
+	// Only the strong pin cites findings with a time stamp, so only its
+	// line shows an age. The other lines pin the tier and the dead paths.
+	cases := []struct {
+		file string
+		rule string
+		want string
+	}{
+		{"db/a.go", "multi-source-guard", "strong: 3 event(s), fix+review, newest 10d"},
+		{"scripts/x.py", "hardcoded-db-credentials", "fair: 2 event(s), review, age unknown, 1 cited file(s) deleted"},
+		{"api/b.go", "single-event-guidance", "weak: 1 event(s), review, age unknown, 2 cited file(s) deleted"},
+	}
+
+	for _, tc := range cases {
+		lessons, err := LessonsForScope(st, cfg, tc.file, 6)
+		require.NoError(t, err)
+
+		var annotations []string
+
+		for _, l := range lessons {
+			if l.Reviewer == "pinned" && strings.HasPrefix(l.Symptom, tc.rule+" — ") {
+				annotations = append(annotations, l.Annotation)
+			}
+		}
+
+		assert.Equal(t, []string{tc.want}, annotations, "the pin of %s", tc.file)
+	}
 }
 
 func TestLessonsForFilesUnionsAndBudgets(t *testing.T) {

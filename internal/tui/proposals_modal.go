@@ -671,6 +671,10 @@ func (p *propView) resultModal(d *propDecision, w int) ui.ModalOpts {
 	body := propNote(t, tone, lead, w)
 	body = append(body, "", t.Heading.Render("WHAT HAPPENED"))
 	body = append(body, propKV(t, p.resultFacts(d.action, d.res), w)...)
+
+	// The pins landed, but reading the file again failed (P4-18).
+	body = append(body, d.check.row(t, w)...)
+
 	body = append(body, "")
 	body = append(body, propLines(t.Faint, "Nothing is retried automatically.", w)...)
 

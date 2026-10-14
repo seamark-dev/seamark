@@ -2,16 +2,21 @@ package pinfile
 
 // The planner of pin edits. A retarget changes only the region keys of
 // one entry, in place. A prune deletes the own lines of one entry and
-// its bound provenance lines. The planner splices the reviewed text, so
-// the rule spelling, the note, the comments, the unknown keys, and the
-// entry position stay as the user wrote them.
+// its bound provenance lines. A rewrite sets the rule, the note, or the
+// region set of one entry that a person edits in the console, in place.
+// The planner splices the reviewed text. Every field that the edit does
+// not change stays as the user wrote it. So do the comments, the unknown
+// keys, and the entry position.
 
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"unicode"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/reviews"
@@ -26,7 +31,8 @@ var (
 	// ErrCollision reports a target key that another pin or another
 	// proposal already uses. The planner never merges two pins.
 	ErrCollision = errors.New("the target key is already in use")
-	// ErrNoOp reports a retarget to the current region set.
+	// ErrNoOp reports a retarget to the current region set, or a rewrite
+	// whose fields all decode to their current values.
 	ErrNoOp = errors.New("the edit changes nothing")
 	// ErrUnverified reports a candidate that fails a check after the
 	// splice. The planner then cannot prove that the edit keeps the file.
@@ -51,14 +57,38 @@ type EntryRef struct {
 // Edit is one requested change of one entry.
 type Edit struct {
 	Ref EntryRef
-	// Delete prunes the entry. Regions is then ignored.
+	// Delete prunes the entry. Regions is then ignored, and a Rewrite is
+	// not a valid request.
 	Delete bool
 	// Regions is the new region set of a retarget, in the order of the
 	// region engine. An empty set means repository-wide.
 	Regions []string
 	// Provenance holds the IDs of the proposals linked to the entry. A
 	// prune deletes only the provenance comments that name one of them.
+	// The removal of an unlinked entry passes Entry.ProvenanceIDs, so the
+	// provenance run of the entry goes with it. A run that stays would
+	// read as the provenance of the next entry.
 	Provenance []int64
+	// Rewrite sets fields of the entry in place, for an entry that a
+	// person edits in the console. With Rewrite set, Regions is ignored.
+	Rewrite *Rewrite
+}
+
+// Rewrite holds the new values of an authoring edit. A nil field keeps
+// its text byte for byte, and so does a field whose new value equals
+// its decoded value.
+type Rewrite struct {
+	// Rule is the new rule.
+	Rule *string
+	// Note is the new note. An empty note removes the note key, so the
+	// pin reads as a rule-only reminder. A note key on the dash line
+	// stays as note: "", because another key would have to move onto
+	// the dash line.
+	Note *string
+	// Regions is the new region set, in the order of the user. An empty
+	// set means repository-wide. The region keys change by the rules of
+	// a retarget.
+	Regions *[]string
 }
 
 // Change is a planned and verified candidate file.
@@ -124,17 +154,42 @@ type planned struct {
 	edit  Edit
 	entry Entry
 	item  item
-	// target is the key after a retarget; zero for a prune.
-	target  reviews.PinKey
+	// target is the key after a retarget or a rewrite; zero for a prune.
+	target reviews.PinKey
+	// change holds the fields that a rewrite changes. Every other field
+	// is nil. It is nil for a retarget and a prune. The splices and the
+	// intended values of the verifier both read it, so both describe the
+	// same change.
+	change  *Rewrite
 	splices []splice
 	err     error
+}
+
+// requested returns the rule and the note that the edit p asks for: the
+// fields of its Rewrite, else the fields of the entry. The target key
+// and the read-back check of the verifier use it. They thus follow the
+// request, not the change that the planner derives from it.
+func (p *planned) requested() (rule, note string) {
+	rule, note = p.entry.Rule, p.entry.Note
+
+	if rw := p.edit.Rewrite; rw != nil && rw.Rule != nil {
+		rule = *rw.Rule
+	}
+
+	if rw := p.edit.Rewrite; rw != nil && rw.Note != nil {
+		note = *rw.Note
+	}
+
+	return rule, note
 }
 
 // Plan computes the candidate file for the edits on the bytes of d. It
 // is pure: it parses d.Bytes again and ignores the other fields, so a
 // changed Document cannot redirect an edit. otherApplied holds the
 // reviews.ProposalKey of every applied row that is not linked to an
-// edited entry; a retarget to one of them is a collision.
+// edited entry. A retarget or a rewrite to one of them is a collision.
+// An authoring rewrite passes AuthorKeys, which adds the key of the pin
+// that the apply of a row with disagreeing region fields wrote.
 //
 // Each edit is verified alone, and then all of them together. Plan
 // returns the change of the edits that pass, and an error that lists an
@@ -257,8 +312,12 @@ func (a *analysis) bind(e Edit, repeated bool) *planned {
 		p.err = fail(ErrUnsupported, p.entry.Block)
 	case a.keyCount(p.entry.Key) > 1:
 		p.err = fail(ErrCollision, "another pin carries the same key")
+	case e.Delete && e.Rewrite != nil:
+		p.err = fail(ErrUnsupported, "a removal cannot also rewrite the entry")
 	case e.Delete:
 		p.splices = a.prune(p)
+	case e.Rewrite != nil:
+		p.err = a.rewrite(p)
 	default:
 		p.target = reviews.NewPinKey(p.entry.Rule, "", e.Regions)
 		p.err = validRegions(e.Regions)
@@ -273,6 +332,243 @@ func (a *analysis) bind(e Edit, repeated bool) *planned {
 	}
 
 	return p
+}
+
+// rewrite binds the Rewrite of p. It keeps only the fields whose decoded
+// value changes. An unchanged field thus keeps its text. A rule edit that
+// keeps the key, such as a change of case, is still an edit. The target
+// key takes the fields that the rewrite does not set from the entry. A
+// rewrite without a changed field is ErrNoOp.
+func (a *analysis) rewrite(p *planned) error {
+	ch, err := a.changes(p)
+	if err != nil {
+		return err
+	}
+
+	if ch == (Rewrite{}) {
+		return fail(ErrNoOp, "the fields are already current")
+	}
+
+	rule, _ := p.requested()
+	region, regions := p.entry.Region, p.entry.Regions
+
+	if rw := p.edit.Rewrite; rw.Regions != nil {
+		region, regions = "", *rw.Regions
+	}
+
+	p.change = &ch
+	p.target = reviews.NewPinKey(rule, region, regions)
+	p.splices, err = a.rewriteSplices(p)
+
+	return err
+}
+
+// changes returns the fields of the Rewrite of p whose value changes. A
+// rule or a note changes when its text differs from the decoded value. A
+// region set changes when the region keys that a retarget writes for it
+// decode to other values. A new order of the set is therefore a change.
+func (a *analysis) changes(p *planned) (Rewrite, error) {
+	rw, e := p.edit.Rewrite, p.entry
+
+	var ch Rewrite
+
+	if rw.Rule != nil && *rw.Rule != e.Rule {
+		ch.Rule = rw.Rule
+	}
+
+	if rw.Note != nil && *rw.Note != e.Note {
+		ch.Note = rw.Note
+	}
+
+	if rw.Regions == nil {
+		return ch, nil
+	}
+
+	if err := validRegions(*rw.Regions); err != nil {
+		return ch, err
+	}
+
+	var m map[string]any
+	if err := p.item.node.Decode(&m); err != nil {
+		return ch, fail(ErrUnsupported, "the entry does not decode")
+	}
+
+	if !reflect.DeepEqual(withRegions(m, *rw.Regions), m) {
+		ch.Regions = rw.Regions
+	}
+
+	return ch, nil
+}
+
+// rewriteSplices returns the splices of the changed fields of p. The
+// note splices come first. An absent note and absent region keys both
+// go in after the rule key. spliced keeps the order of two insertions at
+// one line, and the first insertion ends up below. The region keys thus
+// stay above the note, as distill.RenderPins writes them.
+func (a *analysis) rewriteSplices(p *planned) ([]splice, error) {
+	ch := p.change
+
+	var out []splice
+
+	if ch.Note != nil {
+		s, err := a.setNote(p.item, *ch.Note)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, s...)
+	}
+
+	if ch.Rule != nil {
+		rule, ok := a.doc.KeySpan(p.item.node, "rule", p.item.last+1)
+		if !ok {
+			return nil, fail(ErrUnsupported, "the entry has no rule key to change")
+		}
+
+		s, err := a.setScalar(rule, "the rule", *ch.Rule)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, s...)
+	}
+
+	if ch.Regions != nil {
+		s, err := a.retarget(p.item, *ch.Regions)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, s...)
+	}
+
+	return out, nil
+}
+
+// setNote returns the splices that set the note of the item it to note.
+// An absent note goes in after the rule key, at the key indentation. A
+// present note replaces the lines of its key, and its key line keeps
+// the dash, the key, and a trailing comment. An empty note removes the
+// key, but a key on the dash line keeps the dash with note: "".
+//
+// A comment below the key line blocks the edit, because the new value
+// would drop it. That is a comment line or a comment after the text of a
+// note line. Doc.CommentIn starts the scan of each line after its value
+// text, so a "#" inside a quoted or a block note stays note text.
+func (a *analysis) setNote(it item, note string) ([]splice, error) {
+	n, stop := it.node, it.last+1
+
+	s, ok := a.doc.KeySpan(n, "note", stop)
+	if !ok {
+		// changes keeps an empty note only for a note that is present.
+		return a.insertNote(it, note)
+	}
+
+	if a.doc.CommentIn(s.First+1, s.Last) {
+		return nil, fail(ErrUnsupported, "changing the note would drop a comment")
+	}
+
+	// yaml.v3 reads a quoted note that goes on at or left of its key
+	// column. The verifier takes only deeper lines as note lines, so it
+	// would refuse the splice with a reason that names no cause.
+	for _, at := range a.doc.ContentLines(s.First+1, s.Last) {
+		if !deeper(a.lines[at-1], s.Key.Column-1) {
+			return nil, fail(ErrUnsupported, "the note goes on at a line that is not deeper than its key")
+		}
+	}
+
+	line := a.lines[s.First-1]
+	from := a.valueFrom(s)
+	comment := a.keyComment(s, from)
+
+	if note == "" && !a.onDashLine(s.Key) {
+		if comment != "" {
+			return nil, fail(ErrUnsupported, "removing the note would drop the comment of its key line")
+		}
+
+		return []splice{{from: s.First, to: s.Last}}, nil
+	}
+
+	enc, err := EncodeNote(note)
+	if err != nil {
+		return nil, err
+	}
+
+	first, ok := a.doc.ReplaceValue(s, enc[0])
+	if !ok {
+		head := line[:from]
+		if !strings.HasSuffix(head, " ") {
+			head += " "
+		}
+
+		first = head + enc[0] + comment
+	}
+
+	lines := append([]string{first}, noteBlock(len(a.keyPrefix(s.Key)), enc)...)
+
+	return []splice{{from: s.First, to: s.Last, lines: lines}}, nil
+}
+
+// insertNote returns the splice that adds an absent note key after the
+// rule key, at the key indentation of the entry.
+func (a *analysis) insertNote(it item, note string) ([]splice, error) {
+	rule, ok := a.doc.KeySpan(it.node, "rule", it.last+1)
+	if !ok {
+		return nil, fail(ErrUnsupported, "the entry has no rule key to place the note after")
+	}
+
+	enc, err := EncodeNote(note)
+	if err != nil {
+		return nil, err
+	}
+
+	col := a.doc.BlockIndent(it.node)
+	lines := append([]string{strings.Repeat(" ", col) + "note: " + enc[0]}, noteBlock(col, enc)...)
+
+	return []splice{{from: rule.Last + 1, to: rule.Last, lines: lines}}, nil
+}
+
+// keyComment returns the trailing comment of the key line of s, with
+// its spacing, or an empty string. from is the result of valueFrom.
+//
+// An inline value ends at its token end, so the scan starts there. The
+// span already knows where the value ends, so the scan never reads
+// value text as a comment. A quoted or plain value can start on the key
+// line and go on below. It is then still open at the line end, so that
+// key line holds no comment.
+func (a *analysis) keyComment(s yamledit.Span, from int) string {
+	line := a.lines[s.First-1]
+
+	switch {
+	case s.Inline:
+		return yamledit.TrailingComment(line, s.End)
+	case s.Value.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0 || s.Value.Line != s.First:
+		return yamledit.TrailingComment(line, from)
+	}
+
+	return ""
+}
+
+// valueFrom returns the byte offset on the key line of s where the old
+// value starts. That is the value node column when the value starts on
+// the key line, else the place after the colon. The text before it is
+// the dash, the key, and the colon, which a new value keeps. The gate
+// refuses tags and anchors in the pin section, so the node column is
+// the value text.
+func (a *analysis) valueFrom(s yamledit.Span) int {
+	if s.Value.Line == s.First {
+		return a.doc.Offset(s.Value.Line, s.Value.Column)
+	}
+
+	line := a.lines[s.First-1]
+	start := a.doc.Offset(s.Key.Line, s.Key.Column)
+
+	end, ok := yamledit.TokenEnd(line, start, s.Key.Style)
+	if !ok {
+		return len(line)
+	}
+
+	return end + strings.IndexByte(line[end:], ':') + 1
 }
 
 // keyCount returns the number of live entries with key.
@@ -340,7 +636,9 @@ func (a *analysis) candidate(ps []*planned) []byte {
 
 // spliced returns the reviewed lines with the splices of ps applied. The
 // splices of different entries never overlap, so the bottom-up order
-// keeps every line number valid.
+// keeps every line number valid. The sort is stable, so two insertions
+// at one line keep the order of their edit, and the candidate is the
+// same on every call.
 //
 // Two splices can start on the same line, though. An insertion after
 // the last key of one entry starts on the next line, and the deletion of
@@ -356,7 +654,7 @@ func (a *analysis) spliced(ps []*planned) []string {
 		all = append(all, p.splices...)
 	}
 
-	slices.SortFunc(all, func(x, y splice) int {
+	slices.SortStableFunc(all, func(x, y splice) int {
 		if x.from != y.from {
 			return y.from - x.from
 		}
@@ -404,25 +702,22 @@ func (a *analysis) boundProvenance(p *planned) []int {
 }
 
 // retarget returns the splices that set the region keys of the entry to
-// regions. The cases follow the keys that the entry has; the target
-// shape is the one distill.RenderPins writes: region holds the first
-// region or "*", and regions holds the set when it has more than one.
+// regions. The cases follow the keys that the entry has. The target
+// layout is the one of reviews.PinForRegions, which the renderers write.
+// One exception keeps the shape of the entry: an entry with only the
+// regions key keeps that key while the set is not empty.
 func (a *analysis) retarget(it item, regions []string) ([]splice, error) {
 	n, stop := it.node, it.last+1
 	region, hasRegion := a.doc.KeySpan(n, "region", stop)
 	set, hasSet := a.doc.KeySpan(n, "regions", stop)
 	indent := strings.Repeat(" ", a.doc.BlockIndent(n))
-
-	first := "*"
-	if len(regions) > 0 {
-		first = regions[0]
-	}
+	layout := reviews.PinForRegions("", "", regions)
 
 	switch {
-	case hasRegion && hasSet && len(regions) <= 1 && a.onDashLine(set):
-		return a.liftRegion(region, set, first)
+	case hasRegion && hasSet && layout.Regions == nil && a.onDashLine(set.Key):
+		return a.liftRegion(region, set, layout.Region)
 	case hasRegion:
-		out, err := a.setScalar(region, first)
+		out, err := a.setScalar(region, "a region", layout.Region)
 		if err != nil {
 			return nil, err
 		}
@@ -430,19 +725,19 @@ func (a *analysis) retarget(it item, regions []string) ([]splice, error) {
 		var more []splice
 
 		switch {
-		case hasSet && len(regions) > 1:
-			more, err = a.setList(set, regions)
+		case hasSet && layout.Regions != nil:
+			more, err = a.setList(set, layout.Regions)
 		case hasSet:
 			more, err = a.removeKey(set, nil)
-		case len(regions) > 1:
-			more, err = a.insertAfter(region.Last, indent, nil, regions)
+		case layout.Regions != nil:
+			more, err = a.insertAfter(region.Last, indent, nil, layout.Regions)
 		}
 
 		return append(out, more...), err
 	case hasSet && len(regions) > 0:
 		return a.setList(set, regions)
 	case hasSet:
-		text, err := encode(yamledit.BlockScalar("*"))
+		text, err := encode(yamledit.BlockScalar(layout.Region))
 		if err != nil {
 			return nil, err
 		}
@@ -457,23 +752,25 @@ func (a *analysis) retarget(it item, regions []string) ([]splice, error) {
 		return nil, fail(ErrUnsupported, "the entry has no rule key to place the region after")
 	}
 
-	return a.insertAfter(rule.Last, indent, &first, regions)
+	return a.insertAfter(rule.Last, indent, &layout.Region, layout.Regions)
 }
 
-// encode turns an encoder failure into an unsupported edit.
+// encode turns an encoder failure for a region value into an
+// unsupported edit.
 func encode(text string, err error) (string, error) {
 	if err != nil {
-		return "", fail(ErrUnsupported, "a region has no safe single-line YAML text")
+		return "", noText("a region")
 	}
 
 	return text, nil
 }
 
-// setScalar replaces the inline value of s with value.
-func (a *analysis) setScalar(s yamledit.Span, value string) ([]splice, error) {
-	text, err := encode(yamledit.BlockScalar(value))
+// setScalar replaces the inline value of s with value. what names the
+// value in a refusal, such as "the rule".
+func (a *analysis) setScalar(s yamledit.Span, what, value string) ([]splice, error) {
+	text, err := yamledit.BlockScalar(value)
 	if err != nil {
-		return nil, err
+		return nil, noText(what)
 	}
 
 	return a.replaceInline(s, text)
@@ -531,7 +828,7 @@ func (a *analysis) setBlockList(s yamledit.Span, regions []string) ([]splice, er
 		last = end
 
 		if j >= len(regions) {
-			if a.commentIn(first, end) {
+			if a.doc.CommentIn(first, end) {
 				return nil, fail(ErrUnsupported, "removing a regions item would drop a comment")
 			}
 
@@ -587,13 +884,13 @@ func (a *analysis) setBlockList(s yamledit.Span, regions []string) ([]splice, er
 // indentation, so the entry keeps its dash. Case A never removes such a
 // key without a replacement; liftRegion handles it.
 func (a *analysis) removeKey(s yamledit.Span, replacement []string) ([]splice, error) {
-	if a.commentIn(s.First, s.Last) {
+	if a.doc.CommentIn(s.First, s.Last) {
 		return nil, fail(ErrUnsupported, "removing the regions key would drop a comment")
 	}
 
 	lines := slices.Clone(replacement)
-	if len(lines) > 0 && a.onDashLine(s) {
-		lines[0] = a.keyPrefix(s) + strings.TrimLeft(lines[0], " ")
+	if len(lines) > 0 && a.onDashLine(s.Key) {
+		lines[0] = a.keyPrefix(s.Key) + strings.TrimLeft(lines[0], " ")
 	}
 
 	return []splice{{from: s.First, to: s.Last, lines: lines}}, nil
@@ -606,7 +903,7 @@ func (a *analysis) removeKey(s yamledit.Span, replacement []string) ([]splice, e
 // them, the region key moves up; the verifier proves that no value
 // changes.
 func (a *analysis) liftRegion(region, set yamledit.Span, value string) ([]splice, error) {
-	if a.commentIn(set.First, set.Last) {
+	if a.doc.CommentIn(set.First, set.Last) {
 		return nil, fail(ErrUnsupported, "removing the regions key would drop a comment")
 	}
 
@@ -622,7 +919,7 @@ func (a *analysis) liftRegion(region, set yamledit.Span, value string) ([]splice
 	}
 
 	line, ok := a.doc.ReplaceValue(region, text)
-	prefix := a.keyPrefix(set)
+	prefix := a.keyPrefix(set.Key)
 
 	if !ok || yamledit.LeadingSpaces(line) != len(prefix) {
 		return nil, fail(ErrUnsupported, "the region key is not on its own line at the key column")
@@ -634,22 +931,25 @@ func (a *analysis) liftRegion(region, set yamledit.Span, value string) ([]splice
 	}, nil
 }
 
-// keyPrefix returns the text before the key of s on its line: the
-// indentation, and the dash when the key is the first key of the entry.
+// keyPrefix returns the text before the key node k on its line. That is
+// the indentation, and the dash when the key is the first key of the
+// entry.
 // The gate refuses tags and anchors in the pin section, so the key node
 // column is the key text.
-func (a *analysis) keyPrefix(s yamledit.Span) string {
-	return a.lines[s.First-1][:a.doc.Offset(s.Key.Line, s.Key.Column)]
+func (a *analysis) keyPrefix(k *yaml.Node) string {
+	return a.lines[k.Line-1][:a.doc.Offset(k.Line, k.Column)]
 }
 
-// onDashLine reports whether the key of s sits on the dash line.
-func (a *analysis) onDashLine(s yamledit.Span) bool {
-	return !yamledit.IsBlank(a.keyPrefix(s))
+// onDashLine reports whether the key node k sits on the dash line: text
+// other than spaces stands before it on its line. The planner and the
+// verifier both use it. It reads the node and the text, not a span.
+func (a *analysis) onDashLine(k *yaml.Node) bool {
+	return !yamledit.IsBlank(a.keyPrefix(k))
 }
 
-// insertAfter inserts new key lines after line at the key indentation:
-// a region line when first is set, and a flow regions line when the set
-// has more than one region.
+// insertAfter inserts new key lines after line, at the key indentation.
+// It writes a region line when first is set, and a flow regions line
+// when regions is not empty.
 func (a *analysis) insertAfter(line int, indent string, first *string, regions []string) ([]splice, error) {
 	var add []string
 
@@ -662,7 +962,7 @@ func (a *analysis) insertAfter(line int, indent string, first *string, regions [
 		add = append(add, indent+"region: "+text)
 	}
 
-	if len(regions) > 1 {
+	if len(regions) > 0 {
 		text, err := encode(yamledit.FlowList(regions))
 		if err != nil {
 			return nil, err
@@ -672,18 +972,4 @@ func (a *analysis) insertAfter(line int, indent string, first *string, regions [
 	}
 
 	return []splice{{from: line + 1, to: line, lines: add}}, nil
-}
-
-// commentIn reports whether any line in [from, to] holds a comment, as a
-// whole line or after a value.
-func (a *analysis) commentIn(from, to int) bool {
-	for n := from; n <= to; n++ {
-		line := a.lines[n-1]
-
-		if a.doc.Comment(n) || yamledit.CommentStart(line, 0) < len(line) {
-			return true
-		}
-	}
-
-	return false
 }

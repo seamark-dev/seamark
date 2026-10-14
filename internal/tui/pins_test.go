@@ -31,7 +31,7 @@ import (
 // the footer offers, and which service calls happen.
 
 // pinsOpen starts a console on Lessons › Pins.
-func pinsOpen(t *testing.T, f *fakeServices, w, h int) *harness {
+func pinsOpen(t testing.TB, f *fakeServices, w, h int) *harness {
 	t.Helper()
 
 	hs := lesOpen(t, f, w, h)
@@ -127,7 +127,8 @@ func TestPinsDetailOfALinkedPinShowsItsReadings(t *testing.T) {
 		"Outcome ✓ working — flagged 4× in ~12 region-commits before exposure; 0× in 9 since (fired 3×)",
 		"(derived recurrence check; not proof of cause, and not a reason to prune)",
 		"Exposure delivered 3× · first 2026-09-22 · matched 5×",
-		"MAINTENANCE The - key previews a prune. The keys act on the selected pins, or on this pin when nothing is selected.",
+		"MAINTENANCE The - key previews a prune. These keys act on the selected pins, or on this pin when nothing is " +
+			"selected. i edits the note of this pin only.",
 		"Nothing changes before you confirm with y.",
 		"No retarget: its regions are already current.",
 		"No trigger extraction: its trigger paths are already stored.",
@@ -187,8 +188,10 @@ func TestPinsDetailNamesTheRouteOfEveryBlockedPin(t *testing.T) {
 	}{
 		{5, []string{
 			"Keys unknown key regoin (no reader uses it)", "That does not prove a person wrote the pin.",
-			"Read-only here: the console changes only pins with one linked proposal.",
-		}, nil},
+			"i edits the rule, the note and the regions of this pin, and d removes it from .seamark/lessons.yaml. " +
+				"Neither changes the ledger.",
+			"Retarget, prune and trigger extraction need one linked proposal.",
+		}, []string{"i", "d"}},
 		{6, []string{"p3 ● pending", "Record p3 as applied first: press p, select it, then press c."}, nil},
 		{7, []string{
 			"more than one entry of the pin file", "also pin 8 · .seamark/lessons.yaml:33",
@@ -216,7 +219,7 @@ func TestPinsDetailNamesTheRouteOfEveryBlockedPin(t *testing.T) {
 		assert.NotContains(t, keys, "w", "pin %d offers no retarget", c.row)
 		assert.NotContains(t, keys, "-", "pin %d offers no prune", c.row)
 
-		if len(c.extra) == 0 {
+		if !slices.Contains(c.extra, "t") {
 			assert.NotContains(t, keys, "t", "pin %d offers no extraction", c.row)
 		}
 
@@ -890,7 +893,7 @@ func TestPinsCompactLayoutShowsOnePane(t *testing.T) {
 		h.press("enter")
 		assert.Contains(t, h.view(), "╭─ Pin 1 ")
 		assert.NotContains(t, h.view(), "Installed pins")
-		assert.Contains(t, footerLine(h.view()), "space select")
+		assert.True(t, strings.HasPrefix(footerLine(h.view()), " space "), "the select key leads the footer")
 
 		h.press("pgdown", "pgdown")
 		assertFrame(t, h.view(), size[0], size[1])
@@ -1009,7 +1012,7 @@ func TestPinsHelpListsTheKeys(t *testing.T) {
 	h.press("?")
 
 	help := lesFlat(h.view())
-	for _, want := range []string{"space select", "w retarget", "- prune", "t extract triggers", "f show",
+	for _, want := range []string{"space select", "n new pin", "i edit", "w retarget", "- prune", "t extract", "f show",
 		"/ region", "z search", "p proposals", "s stats", "e evidence"} {
 		assert.Contains(t, help, want)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
@@ -77,7 +78,7 @@ func settingsFakeAt(t *testing.T, root, content string) *settingsSvc {
 }
 
 // settingsWrite writes the configuration file of a workspace.
-func settingsWrite(t *testing.T, root, content string) {
+func settingsWrite(t testing.TB, root, content string) {
 	t.Helper()
 
 	path := filepath.Join(root, filepath.FromSlash(settings.File))
@@ -100,7 +101,7 @@ func settingsBytes(t *testing.T, svc *settingsSvc) string {
 }
 
 // settingsOpen starts a console over svc and opens Settings.
-func settingsOpen(t *testing.T, svc services.All, w, h int) *harness {
+func settingsOpen(t testing.TB, svc services.All, w, h int) *harness {
 	t.Helper()
 
 	hs := newHarness(t, svc, w, h)
@@ -333,16 +334,31 @@ func TestSettingsCompactLayoutsUseOnePane(t *testing.T) {
 	h.press("esc")
 	assert.NotContains(t, h.view(), "esc back to the list")
 
-	// The minimum size keeps every field and the first tail line.
+	// The minimum size keeps the selected field and the first tail
+	// line. The list of both documents is longer than the box, so the
+	// table scrolls with the cursor, and every field is reachable.
 	h.resize(60, 20)
-	frame = h.view()
-	assertFrame(t, frame, 60, 20)
 
-	for _, f := range settingsFields {
+	for i, f := range settingsFields {
+		frame = h.view()
+		assertFrame(t, frame, 60, 20)
 		assert.Contains(t, frame, string(f), "the minimum list shows %s", f)
+
+		// The workspace has no lessons.yaml, so the first tail line of a
+		// lessons field says so.
+		tail := "A change stays a draft"
+		if f.Document() == pinfile.File {
+			tail = "No .seamark/lessons.yaml yet."
+		}
+
+		assert.Contains(t, frame, tail, "the first tail line of %s stays", f)
+
+		if i < len(settingsFields)-1 {
+			h.press("down")
+		}
 	}
 
-	h.press("down", "down", "down", "down", "down", "enter")
+	h.press("home", "down", "down", "down", "down", "down", "enter")
 	frame = h.view()
 	assertFrame(t, frame, 60, 20)
 	assert.Contains(t, frame, "PATTERNS")
@@ -380,8 +396,18 @@ func TestSettingsHostileValuesStayInert(t *testing.T) {
 		"index:\n  exclude:\n    - \"\\e[5mblink/\"\n")
 	h := settingsOpen(t, svc, 120, 40)
 
-	for _, keys := range [][]string{nil, {"enter"}, {"esc", "down", "enter"}, {"esc", "end", "enter"}} {
-		h.press(keys...)
+	// The last step opens the exclude list editor: the cursor goes to
+	// the indexing group, and its second field is index.exclude.
+	for _, keys := range [][]string{nil, {"enter"}, {"esc", "down", "enter"}, {"esc", "group:indexing", "down", "enter"}} {
+		for _, k := range keys {
+			if name, ok := strings.CutPrefix(k, "group:"); ok {
+				h.send(navigateMsg{dest: destSettings, intent: "group:" + name})
+
+				continue
+			}
+
+			h.press(k)
+		}
 
 		raw := h.m.View()
 		assert.NotContains(t, raw, "\x1b]0;", "no title sequence from the file")
@@ -401,24 +427,34 @@ func TestSettingsUnreadableSnapshotShowsTheRoute(t *testing.T) {
 	frame := h.view()
 	assertFrame(t, frame, 120, 40)
 	assert.Contains(t, frame, "Settings are not readable")
-	assert.Contains(t, settingsBox(frame, "Settings"), "edit .seamark/config.yaml by hand")
+	assert.Contains(t, settingsBox(frame, "Settings"), "edit .seamark/config.yaml or .seamark/lessons.yaml by hand")
 
 	h.press("enter", "d", "s", "x")
 	assert.Empty(t, f.called(), "no key plans or saves without a snapshot")
+
+	// The first read reads both settings documents, so the wait names
+	// both.
+	h.m.st.settings = section[*settings.Snapshot]{}
+	assert.Contains(t, lesFlat(settingsBox(h.view(), "Settings")), "Seamark reads .seamark/config.yaml and "+
+		".seamark/lessons.yaml with the shared readers.")
 }
 
-// settingsProbe is a stub destination that records the settings saves
-// that the shell broadcasts.
+// settingsProbe is a stub destination that records the saves that the
+// shell broadcasts: the settings saves and the writes of lessons.yaml.
 type settingsProbe struct {
 	stubScreen
 
-	saved []settingsSavedMsg
+	saved   []settingsSavedMsg
+	lessons []lessonsSavedMsg
 }
 
-// update records every settingsSavedMsg.
+// update records every settingsSavedMsg and every lessonsSavedMsg.
 func (p *settingsProbe) update(msg tea.Msg) tea.Cmd {
-	if m, ok := msg.(settingsSavedMsg); ok {
+	switch m := msg.(type) {
+	case settingsSavedMsg:
 		p.saved = append(p.saved, m)
+	case lessonsSavedMsg:
+		p.lessons = append(p.lessons, m)
 	}
 
 	return nil

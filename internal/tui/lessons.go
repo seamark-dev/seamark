@@ -414,3 +414,45 @@ func (s *lessons) helpKeys() []key.Binding {
 func (s *lessons) capturing() bool {
 	return s.pane().capturing()
 }
+
+// panes returns the five sub-views. The draft and help methods ask each
+// of them, because each sub-view keeps its own drafts.
+func (s *lessons) panes() []lesPane {
+	return []lesPane{s.props, s.pins, s.stats, s.evid, s.runv}
+}
+
+// drafts implements draftHolder for the sub-views. A sub-view that
+// holds drafts implements draftHolder itself, and Lessons collects its
+// files, so the quit question names them.
+func (s *lessons) drafts() []string {
+	var files []string
+
+	for _, p := range s.panes() {
+		if h, ok := p.(draftHolder); ok {
+			files = append(files, h.drafts()...)
+		}
+	}
+
+	return files
+}
+
+// discardDrafts implements draftHolder: it drops the drafts of every
+// sub-view that holds drafts.
+func (s *lessons) discardDrafts() {
+	for _, p := range s.panes() {
+		if h, ok := p.(draftHolder); ok {
+			h.discardDrafts()
+		}
+	}
+}
+
+// contextHelp implements contextHelper for the visible sub-view. A
+// sub-view with a form, a review or a sample implements contextHelper
+// itself; the others have no help of their own.
+func (s *lessons) contextHelp() (helpPage, bool) {
+	if h, ok := s.pane().(contextHelper); ok {
+		return h.contextHelp()
+	}
+
+	return helpPage{}, false
+}

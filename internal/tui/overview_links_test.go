@@ -440,7 +440,7 @@ func TestOverviewLinksSummaryShowsEvidenceAndPinWriting(t *testing.T) {
 
 		flat := ovFlat(ovReadDetail(t, h, w, hgt))
 		assert.Contains(t, flat, "Evidence 8 fix findings · 4 review findings", "size %v", size)
-		assert.Contains(t, flat, "Pin writing off · apply shows the YAML block", "size %v", size)
+		assert.Contains(t, flat, "Pin writing off · "+settingsPinWriteOffNote, "size %v", size)
 		assert.Empty(t, f.called(), "size %v", size)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 )
@@ -35,4 +36,19 @@ func TestPositionNoteHelpersKeepTheirWords(t *testing.T) {
 		// The note "6–7 of 7" has 8 cells, so 16 cells give 8 spaces.
 		assert.Equal(t, strings.Repeat(" ", 8)+"6"+tc.dash+"7 of 7", ansi.Strip(th.ScrollNote(5, 4, 7, 16)))
 	}
+}
+
+func TestHintModesKeepEveryKey(t *testing.T) {
+	th := NewTheme(false)
+	b := func(k, desc string) key.Binding { return key.NewBinding(key.WithKeys(k), key.WithHelp(k, desc)) }
+
+	hints := []key.Binding{
+		b("space", "select"), b("n", "new pin"),
+		Unavailable(b("w", "retarget")), Unavailable(b("t", "extract")),
+		b("f", "filter"),
+	}
+
+	assert.Equal(t, "space select   n new pin   n/a: w retarget, t extract   f filter", ansi.Strip(th.Hints(hints)))
+	assert.Equal(t, "space select   n new pin   n/a: w t   f filter", ansi.Strip(th.ShortHints(hints)))
+	assert.Equal(t, "space n   n/a: w t   f", ansi.Strip(th.KeyHints(hints)), "a run of keys reads as one group")
 }

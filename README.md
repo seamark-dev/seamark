@@ -148,10 +148,13 @@ Your configured hooks deliver matching reminders during supported edits.
 `seamark tui` (experimental) opens a full-screen console for one workspace:
 index state, agent integrations, evidence refresh, distillation runs that
 you can stop, proposal decisions, the installed pins with a previewed
-retarget or prune, trigger extraction for the proposals you select,
-delivery statistics, focused settings, and doctor checks. Browsing never
-writes; every change, fetch, and agent run starts from a preview that
-names its exact effects. [Workspace console →](docs/tui.md)
+retarget or prune, manual pins that you create, edit, or remove, trigger
+extraction for the proposals you select, delivery statistics, focused
+settings of `config.yaml` and `lessons.yaml` (threshold, budgets,
+repetition mode, and mutes), a selection sample that compares the
+lessons of explicit paths before and after a reviewed change, and doctor
+checks. Browsing never writes; every change, fetch, and agent run starts
+from a preview that names its exact effects. [Workspace console →](docs/tui.md)
 
 ## Agent skills
 

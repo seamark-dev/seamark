@@ -32,6 +32,31 @@ func TestRadioGlyphs(t *testing.T) {
 	assert.Equal(t, "( ) a b", ansi.Strip(radio(u, false, "a\nb")), "a label stays on one line")
 }
 
+func TestKeepRowValue(t *testing.T) {
+	// The pin form keeps a region and the selection sample keeps a path
+	// with this one rule, so both lists change alike.
+	cases := []struct {
+		name  string
+		at    int
+		typed string
+		want  []string
+		added int
+	}{
+		{name: "a new value goes last", at: -1, typed: "web", want: []string{"api", "cli", "web"}, added: 2},
+		{name: "an empty new value adds nothing", at: -1, typed: "  ", want: []string{"api", "cli"}, added: -1},
+		{name: "an edit replaces its row", at: 0, typed: " internal/api", want: []string{" internal/api", "cli"}, added: -1},
+		{name: "an empty edit removes its row", at: 1, typed: "", want: []string{"api"}, added: -1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, added := keepRowValue([]string{"api", "cli"}, tc.at, tc.typed)
+			assert.Equal(t, tc.want, got, "the value stays as typed")
+			assert.Equal(t, tc.added, added)
+		})
+	}
+}
+
 func TestStatsAndRunBoxesPageTheirBodyTheSameWay(t *testing.T) {
 	st := &state{theme: ui.NewTheme(false)}
 	stats := newStatsView(st)

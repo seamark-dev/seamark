@@ -161,6 +161,8 @@ func (d *Doc) FlowEnd(v *yaml.Node) (int, bool) {
 // outside quotes and after white space. A quote character opens quotes
 // only where a token can start: at from, after white space, or after
 // "[", "{", or ",". Inside a plain word, such as it's, it is text.
+// Inside single quotes, YAML writes a quote as two quote characters, so
+// such a pair does not close the value.
 func CommentStart(line string, from int) int {
 	var quote byte
 
@@ -169,6 +171,8 @@ func CommentStart(line string, from int) int {
 
 		switch {
 		case quote == '"' && c == '\\':
+			i++
+		case quote == '\'' && c == '\'' && i+1 < len(line) && line[i+1] == '\'':
 			i++
 		case quote != 0 && c == quote:
 			quote = 0
