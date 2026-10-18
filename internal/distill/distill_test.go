@@ -13,6 +13,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 	"github.com/seamark-dev/seamark/internal/wording"
 )
 
@@ -335,7 +336,7 @@ func TestRunReadsLeastCoveredGroupsFirst(t *testing.T) {
 	}
 	st := openSeeded(t, findings)
 
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "old", Rule: "guard-nil-map", Note: "Guard nil maps before writing.",
 		Members: []int64{1, 2}, Status: model.ProposalApplied,
 	}))
@@ -474,10 +475,10 @@ func TestRunPrunesStaleProposals(t *testing.T) {
 
 	// A pending proposal from an evidence set that no longer exists,
 	// and a dismissed one — decision memory — with the same fate line.
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "gone", Rule: "stale-pending", Note: "n", Members: []int64{1, 2},
 		Status: model.ProposalProposed}))
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "gone", Rule: "dismissed-memory", Note: "n", Members: []int64{1, 2},
 		Status: model.ProposalDismissed}))
 
@@ -502,7 +503,7 @@ func TestRegionalRunDoesNotPruneProposalsElsewhere(t *testing.T) {
 		{ID: 2, Path: "api/b.go", Body: "Wrap worker failures with operation context."},
 	})
 
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "web-signature", Rule: "web-rule", Region: "web/src",
 		Note: "Keep the web invariant.", Members: []int64{90, 91},
 		Status: model.ProposalProposed,
@@ -526,7 +527,7 @@ func TestRegionalRunDoesNotPruneCrossTreeProposal(t *testing.T) {
 		{ID: 2, Path: "api/b.go", Body: "Wrap worker failures with operation context."},
 	})
 
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "cross-tree-signature", Rule: "cross-tree-rule", Region: "api",
 		Regions: []string{"api", "web"}, Note: "Keep both implementations synchronized.",
 		Members: []int64{90, 91}, Status: model.ProposalProposed,
@@ -550,7 +551,7 @@ func TestRegionalRunPreservesProposalWithEvidenceOutsideCorpus(t *testing.T) {
 		{ID: 2, Path: "api/b.go", Body: "Wrap worker failures with operation context."},
 	})
 
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "partial-signature", Rule: "partial-rule", Region: "api",
 		Note: "Keep both implementations synchronized.", Members: []int64{1, 90},
 		Status: model.ProposalProposed,
@@ -574,7 +575,7 @@ func TestRegionalRunPrunesStaleProposalWhenAllEvidenceIsInCorpus(t *testing.T) {
 		{ID: 2, Path: "api/b.go", Body: "Wrap worker failures with operation context."},
 	})
 
-	require.NoError(t, st.InsertProposal(&model.Proposal{
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
 		Signature: "gone", Rule: "stale-rule", Region: "web",
 		Note: "Stale delivery metadata must not preserve this proposal.", Members: []int64{1, 2},
 		Status: model.ProposalProposed,

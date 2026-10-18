@@ -124,13 +124,26 @@ policy.yaml rules (the distiller can draft them, but never has to). Both
 flow through `why`, `orient`, and the edit hook via one path, so they
 never disagree.
 
+The console (`seamark tui`) edits this file too, always through a
+reviewed diff. Settings › Lesson delivery and Lesson mutes change
+`threshold`, `pin_budget`, `change_budget`, `hook_delivery`, and
+`mute`. Lessons › Pins writes manual pins (see "Pins that a person
+writes" below). A save keeps comments, unknown keys, and every
+other entry. A Settings reset removes the key line with its comment.
+A Settings save refuses to remove a mute entry with a comment after
+its text. Two pin writes also delete seamark provenance comments. A
+pin removal deletes those of its own entry. A prune (`-` in Lessons ›
+Pins) deletes those that name its proposal.
+
 Pins are powerful, so their injection cost is budgeted: the edit hook
 carries at most `pin_budget` pins per edit (default 3), ranked by
 evidence confidence first and region specificity second — a weak pin
 must not hold a slot a strong one wants, and among equals a pin on the
 file beats its package beats a repo-wide `*` — with a `+N more` pointer
-for the rest. Deliberate views (`--file`, `why`) always show
-everything; only the ambient injection is capped.
+for the rest. Deliberate views (`--file`, `why`, `orient`) apply no
+pin budget. They keep the first 8 (`--file`) or 6 (`why`, `orient`)
+lessons, with no count of the rest. Only the edit hook has a pin
+budget.
 
 ### Hook delivery modes
 
@@ -371,6 +384,11 @@ excerpt — a preflight discloses the cost, `--dry-run` stops there).
 Every answer records the semantic question version, "no trigger" included, so
 re-running is free. A changed question re-asks legacy negative answers once
 without disturbing existing positive trigger paths.
+Each answer saves its paths, its stamp, and a pending scope change together,
+and only while the proposal is still as the run read it. A proposal that
+another command applies, dismisses, retargets, or answers meanwhile keeps
+its state: stderr names it (`conflict: p1 changed during the agent call — …`),
+the run sends no further batch, and re-running resumes.
 Pending proposals adopt their verified trigger scopes in place; applied pins
 only store the triggers and surface a `regions now:` drift line —
 delivery of an installed pin never changes without an explicit
@@ -422,14 +440,22 @@ the recomputed regions (lessons.yaml and the ledger together)
 
 `--retarget` is the upgrade path for pins distilled before region sets
 or trigger extraction existed. "Regions now" is one shared recompute:
-verified trigger scopes when available, evidence coverage otherwise. On
-any ordinary failure the two halves move **together or not at all**: the ledger updates in one transaction, and if either the
-file write or that transaction fails, lessons.yaml is restored to its
-original bytes. The one exception is a hard crash in the narrow window
-between the file write and the ledger transaction — the file can then
-be ahead of the ledger, and the next `--retarget` detects exactly that
-state and repairs it with a ledger-only update. Re-running is always
-safe: "regions already current" is the steady state.
+verified trigger scopes when available, evidence coverage otherwise.
+Retarget runs on the engine of the console's Pins view: it changes only
+the `region` and `regions` lines of each entry, in place, so the rule
+spelling, a hand-edited note, comments, unknown keys, and the position
+of the entry stay. The file is replaced atomically first; the ledger
+rows then update in one transaction that checks each row again. When
+the ledger update fails, seamark puts the earlier file back, but only
+while the file still holds exactly the bytes that it wrote, and the
+error says `lessons.yaml restored` only after that restore succeeded.
+Otherwise the error names the state and the way back: undo the change
+(`git diff .seamark/lessons.yaml` shows it) and run the same command
+again. A hard crash between the two writes leaves the file ahead of the
+ledger. Seamark does not guess that the moved pin is its own, so the
+next `--retarget` reports the proposal as not found; restore the earlier
+lines and run it again. Re-running is otherwise safe: "regions already
+current" is the steady state.
 
 The same ledger also flags near-duplicate clusters among applied pins
 and hands you the `--prune` command to retire the redundant entries —
@@ -441,16 +467,116 @@ pruning is not dismissal.
 The model must cite the finding ids behind every pattern (uncited
 patterns are dropped — it cannot invent evidence), every pattern must
 give an explicit trigger-path answer, and named paths affect delivery
-only after tree and evidence/history validation. Nothing reaches
-`.seamark/lessons.yaml` except
-through an explicit `--apply` of explicit ids. Even then, seamark edits
-the file itself only if `config.yaml` opts in (`distill: {write: true}`)
-— otherwise apply prints the pin block for you to paste. Applied entries
-are inserted under your existing `pin:` section with provenance
-comments; everything hand-written stays byte-for-byte. `--prune` and
-`--retarget` obey the same write gate, remove or replace each entry
-with its provenance comment and nothing else, and refuse to write at
-all unless the result still parses with every other pin intact.
+only after tree and evidence/history validation. Nothing that the model
+drafts reaches `.seamark/lessons.yaml` without an explicit step. One
+step is an apply of selected proposals (`--apply <ids>`, or `a` in the
+console). The other is a retarget of applied pins to the recomputed
+regions (`--retarget <ids>`, or `w` in the console). A retarget can
+write trigger scopes that the model drafted and seamark verified. Even
+then,
+seamark edits the file itself only if `config.yaml` opts in
+(`distill: {write: true}`) — otherwise apply prints the pin block for
+you to paste. Applied entries are inserted at the head of your
+existing `pin:` list, at the indentation of that list, with provenance
+comments; everything
+hand-written stays byte-for-byte. Without a `pin:` section, apply adds
+one at the end of the file (before a `...` end marker). The write uses
+the console's pin file editor: it proves the result first (the file
+still loads, every other setting and pin is unchanged), replaces the
+file atomically, keeps its mode and its CRLF line breaks, and refuses a
+symbolic link, a read-only file, a flow-style `pin: []`, more than one
+YAML document, and mixed line breaks, with the reason. Apply never adds
+a second entry with the same rule and region set: a proposal whose pin
+the file already holds is recorded as applied without a write (left out
+of the printed block). Apply refuses two selected proposals with one
+rule and region set (`p1 and p2 share rule and regions; apply one and
+dismiss the other`), because the console's Pins view blocks a pin that
+two applied proposals record. For the same reason, it refuses a
+proposal whose rule and region set an applied proposal already has
+(`p1 is already applied with this rule and regions; dismiss p2`), also
+when the file holds that pin. So the record without a write covers
+only a pin that no applied proposal records, for example a
+hand-written one. It also refuses a proposal whose stored
+region fields disagree: the pin that it would write has other regions
+than the stored ones, so no reader links that pin to it. `--prune` and
+`--retarget` obey the same write gate and use the same editor. Prune
+removes the selected entry and the seamark provenance comment that
+names its proposal, and nothing else; retarget changes only the region
+keys of the entry. Both leave a proposal that they cannot change as it
+is and print why: a pin not in the file, two entries with the same rule
+and region set (remove the duplicate by hand first), stored region
+fields that disagree, or a target rule and region set that another pin
+or proposal already has. They refuse a symbolic link and a read-only
+file at the pin file path, as apply does. They leave every pin of a
+file that the editor blocks as a whole, for example a file with more
+than one YAML document or, unlike apply, a file with CRLF line breaks
+(the package doc of `internal/pinfile` lists these layouts). With the
+write gate off, they still print the change to make by hand for such a
+file, without a diff. Their last line then names the refusal that the
+gate cannot lift, also for a link or a read-only file. They write only
+a result that still loads with every other pin intact.
+
+### Pins that a person writes
+
+You can write a pin by hand in `.seamark/lessons.yaml` or in the
+console (`seamark tui`, Lessons › Pins). In the console, `n` drafts a
+new pin. `i` edits and `d` removes the pin under the cursor, never the
+marked pins.
+A new pin is manual, and so is a pin that no proposal records: no
+proposal stands behind it. For every pin, the console writes no provenance
+comment, and it never creates, changes, or links a proposal row.
+
+- A new pin goes after the last pin of the `pin:` list. Apply still
+  inserts its pins at the head of the list. So a manual pin never moves
+  the pins before it.
+- A pin that no applied proposal records has no evidence to doubt, so
+  it ranks as strong evidence. Under `pin_budget` it comes before a fair
+  or weak applied pin. The file order decides only among pins with
+  equal rank and specificity.
+- Without a `pin:` key, the console adds one at the end of the file. A
+  missing file gets only the `pin:` key and the new pin.
+- An edit changes only the rule, the note, or the regions that you
+  edit. A removal deletes one entry and the seamark provenance
+  comments directly above it, because they would read as the
+  provenance of the next pin. A free comment above the entry stays.
+  It then reads as the comment of the next pin. Every other line stays
+  byte for byte.
+- A linked pin (one applied proposal records it) allows a note edit
+  only. Its scope changes with `w` (retarget), and its removal is `-`
+  (prune). The proposal keeps its recorded rule, note, and evidence. So
+  Pins shows the pin as `edited`. Trigger extraction still asks about
+  the recorded note.
+- The same `distill.write` gate applies. With the gate off, the review
+  shows the exact diff and writes nothing.
+- A save needs a readable index of this workspace, because the
+  relationship of a pin to the proposals comes from the ledger.
+- Unlike apply, these writes refuse a file with CRLF line breaks and a
+  file with more than one hard link. The route is an edit by hand.
+
+An edit of the wording or the scope can give the pin a new delivery
+identity, and the review says whether it does. A context that already
+saw the old wording can then receive the pin again, also in
+`once-per-context` mode. Earlier deliveries stay recorded under the
+earlier wording and scope; nothing is reset or moved.
+
+### Remove, Prune, Mute, and the other filters
+
+Several actions make a lesson or a pin reach an agent less often. They
+change different things:
+
+| Term | What it does | What it changes |
+| --- | --- | --- |
+| Remove | Deletes one unlinked pin entry from the file. | `.seamark/lessons.yaml` only; the proposal ledger does not change. Console: `d` in Lessons › Pins. |
+| Prune | Removes a linked pin and marks its proposal superseded. | The pin file and the ledger. `seamark lessons --prune <ids>`, or `-` in Lessons › Pins. |
+| Mute | Hides mined lessons from selection; never pins. A rule matches in any case; a region matches that region and every region under it. A region with a trailing "/" (`api/`) matches only the regions under it, not `api` itself. | The `mute:` list. The mined lessons stay in the index, and `lessons --list` marks them `(muted)`. |
+| Threshold | The minimum mined recurrences. Mined lessons only; never pins. | The `threshold:` key. |
+| Budget | A cap on one injection or one answer. `pin_budget` caps the pins of one edit-hook injection (at most 8 lessons in total per edit). `change_budget` caps one `change_set` answer or one `check` advisory. | The budget keys. `--file` and `why` apply no pin budget and keep every restatement. `--file` shows at most 8 lessons and `why` at most 6, with no count of the rest. |
+| Repetition | Once-per-context suppression of repeats in one agent context (`hook_delivery: once-per-context`). Edit hook only. | Delivery state in `.seamark/lessons-hook-state.json`; `change_set`, `check`, `why`, and the CLI views always show their selection. |
+| Sample | The local selection for explicit paths, before suppression, with no record. Console only: `s` in a pin review or a lessons Settings review. | Nothing: no file, no firing record, no delivery state. |
+
+A mute, the threshold, and a budget act when a surface selects lessons,
+so the next read of the file applies them without re-mining. Remove and
+Prune change the pin list itself.
 
 ## The moment of change: hook, change_set, check
 
@@ -519,7 +645,9 @@ instrumented hook records it also reports injected context bytes, repeated
 in-session injections, and suppressed repeats. Per-lesson rankings keep actual
 delivery and matching opportunities separate: after one injection and three
 suppressed edits, a lesson reads `×1 delivered / ×4 matched` rather than looking
-as cold as a lesson that matched only once:
+as cold as a lesson that matched only once. Rows that tie on matches, deliveries,
+and the last firing time print by region, then symptom, so two runs on one log
+print the same order:
 
 ```text
 $ seamark lessons --stats

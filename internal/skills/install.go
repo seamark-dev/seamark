@@ -58,17 +58,25 @@ func Targets(root, mode string) ([]Target, error) {
 	case ModeAll:
 		return []Target{claudeTarget, codexTarget}, nil
 	case ModeAuto:
-		targets := []Target{claudeTarget}
-
-		if info, err := os.Stat(filepath.Join(root, ".agents")); err == nil && info.IsDir() {
-			targets = append(targets, codexTarget)
-		}
-
-		return targets, nil
+		return AutoTargets(root), nil
 	default:
 		return nil, fmt.Errorf("skills: unknown install mode %q (accepted: %s)",
 			mode, strings.Join(Modes, ", "))
 	}
+}
+
+// AutoTargets returns the directories that a bare --skills writes:
+// Claude Code always, and Codex when the repository has an .agents/
+// directory. Targets (ModeAuto) and the init hint share it, so the
+// hint names the same directories that the install writes.
+func AutoTargets(root string) []Target {
+	targets := []Target{claudeTarget}
+
+	if info, err := os.Stat(filepath.Join(root, ".agents")); err == nil && info.IsDir() {
+		targets = append(targets, codexTarget)
+	}
+
+	return targets
 }
 
 // State classifies one skill directory on disk.

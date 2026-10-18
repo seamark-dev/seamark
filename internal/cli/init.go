@@ -15,6 +15,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/render"
+	"github.com/seamark-dev/seamark/internal/scaffold"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -138,7 +139,7 @@ Use --print to preview every change without writing anything.`,
 			}
 
 			run := initRun{
-				w: cmd.OutOrStdout(), root: root, bin: seamarkPath(),
+				w: cmd.OutOrStdout(), root: root, bin: scaffold.BinaryPath(),
 				gateMode: gateMode, printOnly: printOnly, approveTools: approveTools,
 			}
 
@@ -247,49 +248,6 @@ func clientSkillsReplacement(mode string) string {
 	}
 }
 
-// seamarkPath resolves the absolute path of the running binary, so the
-// hooks invoke this exact install regardless of the caller's PATH. Falls
-// back to the bare name if resolution fails.
-func seamarkPath() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "seamark"
-	}
-
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
-	}
-
-	return stableInstallPath(exe)
-}
-
-// stableInstallPath maps a versioned Homebrew Cellar path to the keg's
-// stable opt symlink. Homebrew deletes the old Cellar directory on every
-// upgrade, so hooks that keep it break. The opt symlink survives
-// upgrades. Every other path returns unchanged.
-func stableInstallPath(path string) string {
-	prefix, rest, found := strings.Cut(path, "/Cellar/seamark/")
-	if !found {
-		return path
-	}
-
-	// The remainder must be exactly <version>/bin/seamark. A different
-	// layout is not a Homebrew keg of this binary.
-	parts := strings.Split(rest, "/")
-	if len(parts) != 3 || parts[0] == "" || parts[1] != "bin" || parts[2] != "seamark" {
-		return path
-	}
-
-	// Substitute only when the opt symlink really exists, so a broken
-	// or partial install keeps the path that is known to work.
-	opt := filepath.Join(prefix, "opt", "seamark", "bin", "seamark")
-	if _, err := os.Stat(opt); err != nil {
-		return path
-	}
-
-	return opt
-}
-
 // initRun carries what every init form shares.
 type initRun struct {
 	w         io.Writer
@@ -345,14 +303,13 @@ type initNotes interface {
 func applyInit(run initRun, reg *integration.Registry, setups []integration.ClientSetup, notes initNotes) error {
 	w := run.w
 
-	// The gate mode of the run: the flag, else what is installed, else
-	// warn. The policy scaffold and the gate line both need it.
-	hookClients := integration.GateHookClients(reg, setups)
-	gateMode := resolveGateMode(integration.InstalledGateMode(reg, run.root, hookClients), run.gateMode)
+	// The request and the gate mode of the run: the flag, else what is
+	// installed, else warn. The policy scaffold and the gate line both
+	// need the mode.
+	req, gateMode := scaffold.Request(reg, run.root, run.bin, setups, run.gateMode)
+	narrateScaffolds(req.Common)
 
-	plan, err := integration.PlanSetup(reg, integration.SetupRequest{
-		Root: run.root, Binary: run.bin, Clients: setups, Common: commonDocuments(gateMode),
-	})
+	plan, err := integration.PlanSetup(reg, req)
 	if err != nil {
 		return err
 	}
@@ -369,7 +326,7 @@ func applyInit(run initRun, reg *integration.Registry, setups []integration.Clie
 	notes.afterSetup(run, setups)
 	printFindings(w, plan.Findings, notes.showInfo())
 
-	if len(hookClients) == 0 {
+	if len(integration.GateHookClients(reg, setups)) == 0 {
 		// The flag configures gate hooks. Without one it reaches only the
 		// policy scaffold, and the user must learn that here.
 		if run.gateMode != "" {
@@ -448,6 +405,31 @@ func narrateOp(w io.Writer, op integration.OpResult) {
 	fmt.Fprintf(w, "  %-7s %s (%s)\n", verb, op.Path, render.Sanitize(op.Detail))
 }
 
+// narrateScaffolds gives each scaffold document its init narration. The
+// scaffold package holds no prose, so the console and init can describe
+// the same writes in their own words. A written starter line names no
+// detail; the .gitignore lines always name the carve-outs.
+func narrateScaffolds(docs []integration.Document) {
+	for i := range docs {
+		doc := docs[i]
+
+		docs[i].Narrate = func(w io.Writer, status integration.OpStatus) {
+			switch {
+			case status == integration.OpKept:
+				fmt.Fprintf(w, "  kept    %s (%s)\n", doc.Path, doc.KeptDetail)
+			case status == integration.OpPlanned && doc.CreateOnly:
+				fmt.Fprintf(w, "  would write  %s\n", doc.Path)
+			case status == integration.OpPlanned:
+				fmt.Fprintf(w, "  would update %s (%s)\n", doc.Path, doc.Detail)
+			case doc.CreateOnly:
+				fmt.Fprintf(w, "  wrote  %s\n", doc.Path)
+			default:
+				fmt.Fprintf(w, "  updated %s (%s)\n", doc.Path, doc.Detail)
+			}
+		}
+	}
+}
+
 // printFindings prints what the plan found and no narrator line shows.
 // A warning is always printed. An informational finding is printed for
 // an explicit selection only: a run without --client keeps the output
@@ -469,64 +451,6 @@ func printFindings(w io.Writer, findings []integration.Finding, showInfo bool) {
 			fmt.Fprintf(w, "          %s\n", render.Sanitize(f.Action))
 		}
 	}
-}
-
-// commonDocuments returns the client-independent files of an init run:
-// the three .seamark scaffolds and the .gitignore carve-outs. The setup
-// coordinator guards and writes them with the client documents, so one
-// preflight covers every write.
-func commonDocuments(gateMode string) []integration.Document {
-	var docs []integration.Document
-
-	for _, f := range []struct {
-		rel, body string
-	}{
-		{".seamark/policy.yaml", starterPolicyFor(gateMode)},
-		{".seamark/lessons.yaml", starterLessons},
-		{".seamark/config.yaml", starterConfig},
-	} {
-		docs = append(docs, integration.Document{
-			Path:       f.rel,
-			CreateOnly: true,
-			Detail:     "starter",
-			KeptDetail: "already present",
-			// A scaffold is a starter. An existing file is never clobbered.
-			Compose: func(existing []byte, exists bool) ([]byte, error) {
-				if exists {
-					return existing, nil
-				}
-
-				return []byte(f.body), nil
-			},
-			Narrate: func(w io.Writer, status integration.OpStatus) {
-				switch status {
-				case integration.OpKept:
-					fmt.Fprintf(w, "  kept    %s (already present)\n", f.rel)
-				case integration.OpPlanned:
-					fmt.Fprintf(w, "  would write  %s\n", f.rel)
-				default:
-					fmt.Fprintf(w, "  wrote  %s\n", f.rel)
-				}
-			},
-		})
-	}
-
-	return append(docs, integration.Document{
-		Path:       ".gitignore",
-		Detail:     "seamark carve-outs",
-		KeptDetail: "seamark carve-outs already present",
-		Compose:    composeGitignore,
-		Narrate: func(w io.Writer, status integration.OpStatus) {
-			switch status {
-			case integration.OpKept:
-				fmt.Fprintf(w, "  kept    .gitignore (seamark carve-outs already present)\n")
-			case integration.OpPlanned:
-				fmt.Fprintf(w, "  would update .gitignore (seamark carve-outs)\n")
-			default:
-				fmt.Fprintf(w, "  updated .gitignore (seamark carve-outs)\n")
-			}
-		},
-	})
 }
 
 // printGateLine reports the EFFECTIVE blocking behaviour, derived from
@@ -703,21 +627,6 @@ func printNoGateHook(w io.Writer, root, gateMode string) {
 		"          plain `seamark gate` and `seamark check` runs\n", policyMode)
 }
 
-// resolveGateMode turns the --gate-mode flag into the mode of the run.
-// An empty flag keeps what a previous init installed (warn on the first
-// run): enforcement must never be added — or removed — implicitly.
-func resolveGateMode(installed, requested string) string {
-	if requested != "" {
-		return requested
-	}
-
-	if installed != "" {
-		return installed
-	}
-
-	return gateModeWarn
-}
-
 // policyFileMode reads the mode of .seamark/policy.yaml through the real
 // loader. An absent file resolves to fallback: the scaffold that init is
 // writing (or would write, under --print) carries exactly that mode.
@@ -732,65 +641,4 @@ func policyFileMode(root, fallback string) (string, error) {
 	}
 
 	return policy.Mode, nil
-}
-
-// gitignoreBlock is appended verbatim when no carve-outs are present; a
-// .gitignore initialized by an older seamark grows just the lines it is
-// missing.
-const gitignoreBlock = `
-# Seamark: the index and audit log stay local; the policy-as-code
-# overlays belong in review.
-.seamark/*
-!.seamark/policy.yaml
-!.seamark/effects.yaml
-!.seamark/lessons.yaml
-!.seamark/config.yaml
-`
-
-// carveoutLines returns the pattern lines of gitignoreBlock (comments and
-// blanks dropped) — the unit ensureGitignore checks and repairs, so a new
-// overlay file added to the block reaches already-initialized repos too.
-func carveoutLines() []string {
-	var lines []string
-
-	for _, ln := range strings.Split(gitignoreBlock, "\n") {
-		if ln != "" && !strings.HasPrefix(ln, "#") {
-			lines = append(lines, ln)
-		}
-	}
-
-	return lines
-}
-
-// composeGitignore returns .gitignore with the seamark carve-outs. A
-// file that holds them all returns unchanged. No carve-outs at all gets
-// the commented block; an older block grows just its missing lines.
-// Appending at the end keeps every `!` re-include after `.seamark/*`,
-// the order gitignore precedence needs.
-func composeGitignore(existing []byte, _ bool) ([]byte, error) {
-	present := map[string]bool{}
-	for _, ln := range strings.Split(string(existing), "\n") {
-		present[strings.TrimSpace(ln)] = true
-	}
-
-	lines := carveoutLines()
-
-	var missing []string
-
-	for _, ln := range lines {
-		if !present[ln] {
-			missing = append(missing, ln)
-		}
-	}
-
-	if len(missing) == 0 {
-		return existing, nil
-	}
-
-	block := gitignoreBlock
-	if len(missing) < len(lines) {
-		block = "\n" + strings.Join(missing, "\n") + "\n"
-	}
-
-	return append(slices.Clone(existing), block...), nil
 }

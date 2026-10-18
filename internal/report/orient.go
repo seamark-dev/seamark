@@ -34,7 +34,7 @@ func Orient(w io.Writer, st *store.Store, root string) error {
 	// below describes only the code the index can see, and pretending
 	// otherwise would make incomplete answers look authoritative
 	// (RFC-001 §5.2). Details live in `seamark status`.
-	if summary, err := st.GetMeta("index_summary"); err == nil && summary != "" {
+	if summary, err := st.GetMeta(store.MetaIndexSummary); err == nil && summary != "" {
 		var cov struct {
 			ParseErrors int `json:"parse_errors"`
 		}

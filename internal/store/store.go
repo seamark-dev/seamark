@@ -167,6 +167,44 @@ func OpenReadOnly(path string) (*Store, error) {
 // Close releases the underlying database handle.
 func (s *Store) Close() error { return s.db.Close() }
 
+// MetaSchemaVersion is the meta key of the schema version of the
+// database. Open refuses a newer version and writes the current one
+// after the migrations. OpenReadOnly refuses every other version. All
+// readers and writers use this constant, because a misspelled key reads
+// as an unversioned database.
+const MetaSchemaVersion = "schema_version"
+
+// Meta keys that every `seamark index` run writes. All readers and
+// writers use these constants, because a misspelled key reads as an
+// empty value and raises no error.
+const (
+	// MetaIndexedAt holds the time of the last index run in Unix
+	// seconds. An empty value means that no index run completed, for
+	// example after `seamark state import` on a fresh clone.
+	MetaIndexedAt = "indexed_at"
+	// MetaRepoRoot holds the absolute repository root of the last index
+	// run. The commands that open an existing index, the lessons hook,
+	// and the console read the index against this root, not against -C.
+	MetaRepoRoot = "repo_root"
+	// MetaIndexedState holds the workspace fingerprint of the last
+	// index run (index.WorkspaceState). An equal fingerprint lets the
+	// next run skip, and a different one makes the readers report a
+	// stale index.
+	MetaIndexedState = "indexed_state"
+	// MetaHistoryMined holds "true" when the last index run mined the
+	// git history, and "false" when it did not. A skipped run reports
+	// this value again, because it reads no history itself.
+	MetaHistoryMined = "history_mined"
+	// MetaIndexSummary holds the file coverage of the last index run as
+	// a JSON object. `seamark status` and orient report the parser
+	// coverage from it, because the output of the run is gone.
+	MetaIndexSummary = "index_summary"
+	// MetaParseCacheVersion holds the parse cache version of the last
+	// index run. The next run ignores the cached parse results when the
+	// value differs from the version of the binary.
+	MetaParseCacheVersion = "parse_cache_version"
+)
+
 // SetMeta stores an index bookkeeping value (schema version, repo root, …).
 func (s *Store) SetMeta(key, value string) error {
 	_, err := s.db.Exec(
@@ -475,7 +513,8 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding)
 }
 
 // ReplaceFixFindings atomically swaps the fix-derived findings — their
-// own lifecycle, independent of the review set.
+// own lifecycle, independent of the review set — and stamps
+// MetaFixesMinedAt in the same transaction.
 func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -501,6 +540,19 @@ func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
 		if err := insertFinding(tx, &findings[i]); err != nil {
 			return err
 		}
+	}
+
+	// Stamp the mine time in the same transaction, as ReplaceLessons
+	// does. A crash between two writes would leave fresh rows with an old
+	// stamp, and the outcome loop trusts the stamp.
+	_, err = tx.Exec(
+		`INSERT INTO meta (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		MetaFixesMinedAt,
+		fmt.Sprint(time.Now().Unix()),
+	)
+	if err != nil {
+		return fmt.Errorf("store: stamp fix mine: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -573,21 +625,6 @@ func (s *Store) AllFindings() ([]model.Finding, error) {
 	return scanFindings(rows)
 }
 
-// MarkDistilled records that a candidate group's evidence set has been
-// read by the distiller, so the same signature is never paid for again.
-func (s *Store) MarkDistilled(signature, region string, at int64) error {
-	_, err := s.db.Exec(
-		`INSERT INTO distilled (signature, region, at) VALUES (?, ?, ?)
-		 ON CONFLICT (signature) DO UPDATE SET region = excluded.region, at = excluded.at`,
-		signature, region, at,
-	)
-	if err != nil {
-		return fmt.Errorf("store: mark distilled %s: %w", signature, err)
-	}
-
-	return nil
-}
-
 // DistilledSignatures returns the evidence sets already processed.
 func (s *Store) DistilledSignatures() (map[string]bool, error) {
 	rows, err := s.db.Query(`SELECT signature FROM distilled`)
@@ -611,15 +648,23 @@ func (s *Store) DistilledSignatures() (map[string]bool, error) {
 	return out, rows.Err()
 }
 
+// DistilledCount counts the recorded evidence-group signatures. A group
+// gets its record also when its run saves no proposal. So a read-only
+// caller can tell that a distillation ran when the proposal ledger is empty.
+func (s *Store) DistilledCount() (int, error) {
+	var n int
+
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM distilled`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count distilled groups: %w", err)
+	}
+
+	return n, nil
+}
+
 // proposalCols is the column list every proposal query selects, in
 // scanProposals order.
 const proposalCols = `id, signature, rule, region, regions, trigger_paths, trigger_checked_at,
 trigger_prompt_version, note, members, agent, status, created_at`
-
-// InsertProposal stores one distilled proposal and returns its id.
-func (s *Store) InsertProposal(p *model.Proposal) error {
-	return insertProposal(s.db, p)
-}
 
 // execer is the slice of database/sql shared by *sql.DB and *sql.Tx.
 type execer interface {
@@ -778,13 +823,6 @@ func (s *Store) SetProposalStatus(ids []int64, to string) (int, error) {
 	return s.transition(ids, model.ProposalProposed, to)
 }
 
-// SupersedeProposals retires applied proposals whose pin was pruned as
-// a restatement of another. Only 'applied' rows move: superseding
-// something never applied would be meaningless.
-func (s *Store) SupersedeProposals(ids []int64) (int, error) {
-	return s.transition(ids, model.ProposalApplied, model.ProposalSuperseded)
-}
-
 func (s *Store) transition(ids []int64, from, to string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -927,90 +965,6 @@ func (s *Store) ClusterCitation(ids []int64) (map[string]ClusterCited, error) {
 	return out, nil
 }
 
-// UpdateProposalTriggers stores one proposal's validated trigger
-// paths and stamps when the question was answered — an empty answer
-// is an answer, and must not be re-purchased. Regions are written
-// separately: pending rows retarget in the same extraction run,
-// applied pins only through the explicit --retarget — an installed
-// pin's delivery never changes without the user.
-func (s *Store) UpdateProposalTriggers(id int64, paths []string, checkedAt int64, promptVersion int) error {
-	if len(paths) > model.MaxTriggerPaths {
-		return fmt.Errorf("store: proposal %d has %d trigger paths; maximum is %d",
-			id, len(paths), model.MaxTriggerPaths)
-	}
-
-	triggers, err := encodeStrings(paths)
-	if err != nil {
-		return fmt.Errorf("store: encode proposal trigger paths: %w", err)
-	}
-
-	if _, err := s.db.Exec(`UPDATE proposal SET trigger_paths = ?, trigger_checked_at = ?,
-		trigger_prompt_version = ? WHERE id = ?`, triggers, checkedAt, promptVersion, id); err != nil {
-		return fmt.Errorf("store: update proposal %d trigger paths: %w", id, err)
-	}
-
-	return nil
-}
-
-// UpdateProposalRegionsIfPending rewrites one proposal's regions only
-// while it is still 'proposed', atomically. Extraction re-checks the
-// status at write time: a proposal applied by a concurrent command
-// during the agent call must keep the identity its yaml pin was
-// installed with, or liveness, pruning, and outcomes all reason from
-// a split identity.
-func (s *Store) UpdateProposalRegionsIfPending(p model.Proposal) (bool, error) {
-	encoded, err := encodeStrings(p.Regions)
-	if err != nil {
-		return false, fmt.Errorf("store: encode proposal regions: %w", err)
-	}
-
-	res, err := s.db.Exec(
-		`UPDATE proposal SET region = ?, regions = ? WHERE id = ? AND status = ?`,
-		p.Region, encoded, p.ID, model.ProposalProposed,
-	)
-	if err != nil {
-		return false, fmt.Errorf("store: update proposal %d regions: %w", p.ID, err)
-	}
-
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-
-	return n > 0, nil
-}
-
-// UpdateProposalRegionsBatch rewrites the region sets of the given
-// proposals in ONE transaction — the ledger half of retarget is
-// all-or-nothing, so a mid-batch failure can never leave some pins
-// retargeted in the database and others not while the file already
-// carries every new identity.
-func (s *Store) UpdateProposalRegionsBatch(ps []model.Proposal) error {
-	if len(ps) == 0 {
-		return nil
-	}
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("store: begin region update: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }() // no-op after Commit
-
-	for _, p := range ps {
-		encoded, err := encodeStrings(p.Regions)
-		if err != nil {
-			return fmt.Errorf("store: encode proposal regions: %w", err)
-		}
-
-		if _, err := tx.Exec(`UPDATE proposal SET region = ?, regions = ? WHERE id = ?`,
-			p.Region, encoded, p.ID); err != nil {
-			return fmt.Errorf("store: update proposal %d regions: %w", p.ID, err)
-		}
-	}
-
-	return tx.Commit()
-}
-
 // FindingsMetaByIDs returns the cited findings' metadata — everything
 // confidence assessment needs (path, pr, source, timestamps) WITHOUT
 // the bodies, so ambient surfaces can assess pins on every edit
@@ -1046,6 +1000,42 @@ func (s *Store) FindingsMetaByIDs(ids []int64) (map[int64]model.Finding, error) 
 			}
 
 			f.Paths = decoded
+			out[f.ID] = f
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// FindingsByIDs returns the full cited findings, bodies included, keyed
+// by id. The proposal detail view needs the review text, and a missing
+// id means the finding aged out of the index. Duplicate ids are fine.
+func (s *Store) FindingsByIDs(ids []int64) (map[int64]model.Finding, error) {
+	seen := make(map[int64]bool, len(ids))
+	unique := make([]any, 0, len(ids))
+
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+		}
+	}
+
+	out := make(map[int64]model.Finding, len(unique))
+
+	err := s.chunked(
+		`SELECT `+findingCols+` FROM finding WHERE id IN (%s)`, unique,
+		func(rows *sql.Rows) error {
+			f, err := scanFinding(rows)
+			if err != nil {
+				return err
+			}
+
 			out[f.ID] = f
 
 			return nil
@@ -1134,24 +1124,35 @@ func scanFindings(rows *sql.Rows) ([]model.Finding, error) {
 	var out []model.Finding
 
 	for rows.Next() {
-		var f model.Finding
-
-		var paths string
-
-		err := rows.Scan(&f.ID, &f.LessonKey, &f.Path, &f.PR,
-			&f.Reviewer, &f.Body, &f.URL, &f.CreatedAt, &f.Source, &paths)
+		f, err := scanFinding(rows)
 		if err != nil {
 			return nil, err
-		}
-
-		if f.Paths, err = decodeStrings(paths); err != nil {
-			return nil, fmt.Errorf("store: finding %d paths: %w", f.ID, err)
 		}
 
 		out = append(out, f)
 	}
 
 	return out, rows.Err()
+}
+
+// scanFinding reads the current row in findingCols order. The list and
+// the chunked readers share it, so the column order has one owner.
+func scanFinding(rows *sql.Rows) (model.Finding, error) {
+	var f model.Finding
+
+	var paths string
+
+	err := rows.Scan(&f.ID, &f.LessonKey, &f.Path, &f.PR,
+		&f.Reviewer, &f.Body, &f.URL, &f.CreatedAt, &f.Source, &paths)
+	if err != nil {
+		return model.Finding{}, err
+	}
+
+	if f.Paths, err = decodeStrings(paths); err != nil {
+		return model.Finding{}, fmt.Errorf("store: finding %d paths: %w", f.ID, err)
+	}
+
+	return f, nil
 }
 
 // InsertEffect stores one effect tag on a symbol. origin is "direct" for

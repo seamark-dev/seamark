@@ -9,7 +9,10 @@
 // identically, and none of them may import another for it.
 package redact
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // redaction is one secret-shaped pattern and its replacement.
 type redaction struct {
@@ -64,6 +67,35 @@ var redactions = []redaction{
 func Secrets(s string) string {
 	for _, r := range redactions {
 		s = r.re.ReplaceAllString(s, r.replacement)
+	}
+
+	return s
+}
+
+// SecretsExcept scrubs s like Secrets, but it keeps each match for which
+// keep returns true. A display of a command line keeps a value that
+// holds shell syntax. That value is code that runs, and a redaction
+// would hide it from the person who confirms the command.
+func SecretsExcept(s string, keep func(match string) bool) string {
+	for _, r := range redactions {
+		var b strings.Builder
+
+		last := 0
+
+		for _, m := range r.re.FindAllStringSubmatchIndex(s, -1) {
+			b.WriteString(s[last:m[0]])
+
+			if keep(s[m[0]:m[1]]) {
+				b.WriteString(s[m[0]:m[1]])
+			} else {
+				b.Write(r.re.ExpandString(nil, r.replacement, s, m))
+			}
+
+			last = m[1]
+		}
+
+		b.WriteString(s[last:])
+		s = b.String()
 	}
 
 	return s

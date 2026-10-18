@@ -1,6 +1,6 @@
 # Production status
 
-This page describes **v0.7.0**, released on 2026-10-03.
+This page describes **v0.8.0**, released on 2026-10-18.
 See [Distribution](#distribution) for installation and release details.
 
 The current state of Seamark — what each capability profile can
@@ -17,7 +17,7 @@ Local indexing, history mining, orientation, and the read surfaces.
 
 | Capability | State |
 |---|---|
-| Indexer (Go, TypeScript/TSX/JS, Python) | working; parse cache, self-repairing freshness |
+| Indexer (Go, TypeScript/TSX/JS, Python) | working; parse cache, self-repairing freshness; tracked files deleted in the working tree (deletions not staged) are counted apart from parse errors (`status` line `deleted`, `status --json` field `coverage.files_deleted`) |
 | History layer (co-change, decisions, fix density) | working; needs git history to be useful |
 | `why`, `orient`, `change_set` | working (CLI + MCP; `change_set` is MCP-only) |
 | LSP server (hover, lenses, omission diagnostics) | **experimental**; implementation retained, manual editor setup, not a current development priority ([editors.md](editors.md)) |
@@ -25,6 +25,7 @@ Local indexing, history mining, orientation, and the read surfaces.
 | MCP server | working; five tools + `orient`/`status` resources + `onboard` prompt |
 | Schema versioning, durable-state export/import | working |
 | Health: `seamark status`, `seamark doctor` | working; both read one registry inspection per agent (capability support, configuration state, readable trust, recorded native evidence, limitations), the same view `init` uses; `status --json` adds the additive `clients` array and `distill_client` |
+| Workspace console: `seamark tui` | experimental; Overview (index, navigation, lesson, and guard cards, an attention list that links blocked learning steps), Doctor (with links to the in-app fix), a first-run guide, Integrations (Claude Code and Codex setup and repair through the shared setup plan), Lessons (proposal decisions with superseded history, delivery statistics, Evidence: a previewed refresh of local fixes or GitHub reviews with a typed result per source, Pins: the entries of `.seamark/lessons.yaml` with their ledger link and derived readings, a previewed retarget or prune of a proposal-linked pin through a guarded atomic file write and a guarded ledger transaction, with a partial result reported and a session-only recovery, and a previewed create, edit, or removal of a manual pin that writes the pin file only, and Run: a distillation from a scope and a read-only plan, or a trigger extraction for selected proposals, with per-group or per-batch progress and a stop that ends the agent's whole process group), Settings (five fields of `.seamark/config.yaml` and the lesson delivery and mute settings of `.seamark/lessons.yaml` through a diff preview and a guarded single-file write; `agent.argv` stays read-only), a read-only selection sample from a pin or lesson settings review that compares the saved and the reviewed lesson selection for explicit paths; read-only until a previewed action is confirmed; macOS and Linux; the plain commands stay the stable interface ([tui.md](tui.md)) |
 | Agent skills (`skills/`, embedded; `init --skills`) | working; opt-in; installs into `.claude/skills` and `.agents/skills`, reported by `status`/`doctor`; `init --approve-tools` writes the Claude Code allow rules and the Codex per-tool approvals the model-driven path needs, reported by `status`/`doctor`; the second paired cohort (2026-09-05, Haiku 4.5, 15 pairs) passed the frozen claim at +73 pp mean invariant lift (12/15 vs 1/15) at about twice the context per session; the skills stay opt-in so the spend is the user's decision ([bench/skills-report-v2.md](../bench/skills-report-v2.md)) |
 | Skills workflow benchmark (`make skills-bench`, MCP-only vs MCP + skills; `make skills-activation`) | two cohorts ran 2026-09-05: the first found no effect and its transcripts drove the fixture, skill, `change_set`, and `check` revisions; the second passed the frozen claim; own rows, claims, fingerprint, and report, none shared with the lessons benchmark ([bench/README.md](../bench/README.md)); the 2026-09-08 review fixes moved the fingerprint without changing what was measured: the skills tree differs from the measured one only in the `lessons --region` grant, and `check`/`change_set` only in how fast the companion reasons are computed, so no cohort was re-run |
 
@@ -74,11 +75,11 @@ agents inside real isolation regardless.
 
 ## Distribution
 
-Current release: [v0.7.0](https://github.com/seamark-dev/seamark/releases/tag/v0.7.0)
-(2026-10-03). It adds the
-shared AI coding agent integration framework, explicit `--client` setup,
-Codex lesson hooks and inference, and consistent integration diagnostics.
-The [changelog](../CHANGELOG.md) records the full release scope. Every release
+Current release: [v0.8.0](https://github.com/seamark-dev/seamark/releases/tag/v0.8.0)
+(2026-10-18). It adds the experimental workspace console `seamark tui`,
+runs the pin writes and checks of `seamark lessons` on the engines of the
+console, and counts tracked files deleted in the working tree apart from
+parse errors. The [changelog](../CHANGELOG.md) records the full release scope. Every release
 ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
 (`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
@@ -94,8 +95,9 @@ SBOMs, and an npm install are the next distribution milestone.
 ## Direction
 
 The current focus is lessons and proposals, MCP tools, and agent skills.
-Unified hook management across AI coding agents is planned beyond v0.7.0,
-building on the shared integration framework. Policy refinement remains
+The workspace console stays experimental; the plain commands stay the
+stable interface. Unified hook management across AI coding agents is
+planned beyond v0.8.0, building on the shared integration framework. Policy refinement remains
 future work; editor integrations remain experimental.
 
 ## Verification
@@ -106,7 +108,9 @@ future work; editor integrations remain experimental.
   credential); regression tests pin the trust baseline (non-blocking
   default init, audit redaction, durable state surviving rebuilds,
   docs-command drift, and the command names, flags, and Makefile targets
-  the agent-integrations guide shows).
+  the agent-integrations guide shows). Golden tests pin the output of the
+  `seamark lessons` and `seamark index` commands that the console shares,
+  and the lesson selection of the edit hook, `change_set`, and `check`.
 - Native agent checks are separate, reusable Makefile targets
   ([agent-integrations.md](agent-integrations.md)): `make
   agents-native-check CLIENT=codex` runs offline against the installed

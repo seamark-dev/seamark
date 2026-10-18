@@ -76,6 +76,17 @@ func (k *Known) Add(p model.Proposal) {
 	})
 }
 
+// clone returns an independent copy. A plan keeps its known set and
+// every execution learns into its own copy, so one run cannot change
+// what a later run of the same plan knows. A nil set clones to empty.
+func (k *Known) clone() *Known {
+	if k == nil {
+		return &Known{}
+	}
+
+	return &Known{entries: append([]entry(nil), k.entries...)}
+}
+
 // Labels lists the rule names already captured for an area, newest
 // first, at most limit of them. They are fed to the distiller so it can
 // skip what is known and spend the call looking for something else —

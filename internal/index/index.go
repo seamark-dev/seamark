@@ -5,18 +5,22 @@ package index
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +29,8 @@ import (
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/parse"
+	"github.com/seamark-dev/seamark/internal/redact"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -56,8 +62,11 @@ type Summary struct {
 	DBPath string
 	// Skipped is true when the workspace fingerprint matched the index
 	// and nothing was rebuilt.
-	Skipped     bool
-	FilesSeen   int // files listed in the workspace
+	Skipped bool
+	// FilesSeen counts the listed files that exist in the working tree.
+	// A deleted path and a path outside a sparse checkout are not in it,
+	// because no file exists to see.
+	FilesSeen   int
 	FilesParsed int // files a language extractor handled
 	// FilesReparsed counts files actually run through tree-sitter this
 	// pass; the rest were served from the parse cache. Equals FilesParsed
@@ -66,6 +75,12 @@ type Summary struct {
 	// FilesSkipped counts supported files dropped by config — generated
 	// (default) or an exclude glob.
 	FilesSkipped int
+	// FilesDeleted counts the tracked paths that git status shows as
+	// deleted and not staged, also a file that a directory replaces.
+	// They are not parse errors, because no bytes exist to parse. A path
+	// outside a sparse checkout is not deleted, as in git status. Outside
+	// git it is always 0.
+	FilesDeleted int
 	ParseErrors  int
 	HistoryMined bool
 	// HistorySkipNote says why the history layer is absent when
@@ -104,7 +119,7 @@ func Run(opts Options) (*Summary, error) {
 		}
 	}
 
-	files, err := listFiles(root)
+	files, deleted, err := listFiles(root)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +162,7 @@ func Run(opts Options) (*Summary, error) {
 
 	progress("scan", len(files), len(files))
 
-	sum := &Summary{Root: root, DBPath: dbPath, FilesSeen: len(files)}
+	sum := &Summary{Root: root, DBPath: dbPath, FilesSeen: len(files), FilesDeleted: len(deleted)}
 
 	var results []*parse.FileResult
 
@@ -172,6 +187,9 @@ func Run(opts Options) (*Summary, error) {
 			continue
 		}
 
+		// Every read failure stays a parse error, also a missing file.
+		// Only the git listing proves a deletion. A file can vanish
+		// during the run, or be a link to a missing target.
 		src, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
 			logf("warn: read %s: %v", rel, err)
@@ -283,6 +301,7 @@ func Run(opts Options) (*Summary, error) {
 		"files_seen":    sum.FilesSeen,
 		"files_parsed":  sum.FilesParsed,
 		"files_skipped": sum.FilesSkipped,
+		"files_deleted": sum.FilesDeleted,
 		"parse_errors":  sum.ParseErrors,
 	})
 	if err != nil {
@@ -290,12 +309,12 @@ func Run(opts Options) (*Summary, error) {
 	}
 
 	for k, v := range map[string]string{
-		"repo_root":           root,
-		"indexed_at":          fmt.Sprint(time.Now().Unix()),
-		"indexed_state":       WorkspaceState(root),
-		"history_mined":       fmt.Sprint(sum.HistoryMined),
-		"parse_cache_version": parseCacheVersion,
-		"index_summary":       string(coverage),
+		store.MetaRepoRoot:          root,
+		store.MetaIndexedAt:         fmt.Sprint(time.Now().Unix()),
+		store.MetaIndexedState:      WorkspaceState(root),
+		store.MetaHistoryMined:      fmt.Sprint(sum.HistoryMined),
+		store.MetaParseCacheVersion: parseCacheVersion,
+		store.MetaIndexSummary:      string(coverage),
 	} {
 		if err := st.SetMeta(k, v); err != nil {
 			return nil, err
@@ -329,7 +348,7 @@ func loadParseCache(st *store.Store, force bool, logf func(string, ...any)) map[
 		return empty
 	}
 
-	if v, err := st.GetMeta("parse_cache_version"); err != nil || v != parseCacheVersion {
+	if v, err := st.GetMeta(store.MetaParseCacheVersion); err != nil || v != parseCacheVersion {
 		return empty
 	}
 
@@ -373,52 +392,570 @@ func decodeResult(data []byte) (*parse.FileResult, error) {
 	return &r, nil
 }
 
-// RefreshFixes mines and persists only fix commits reachable from the
-// repository's current HEAD. It performs no network access, which makes it the
-// deterministic lesson-source mode for a pinned historical checkout.
-func RefreshFixes(root, dbPath string, logf func(string, ...any)) (int, error) {
+// SourceMode selects the lesson sources that one evidence refresh
+// mines. The two values are exactly the two CLI modes, so the console
+// offers no source combination that the CLI lacks.
+type SourceMode int
+
+const (
+	// SourcesLocal mines only local fix commits (`index --fixes-only`).
+	SourcesLocal SourceMode = iota
+	// SourcesReviewsAndLocal mines local fix commits first and GitHub
+	// review comments second (`index --reviews`).
+	SourcesReviewsAndLocal
+)
+
+// String returns a stable lower-case name for the mode.
+func (m SourceMode) String() string {
+	switch m {
+	case SourcesLocal:
+		return "local"
+	case SourcesReviewsAndLocal:
+		return "reviews-and-local"
+	default:
+		return "SourceMode(" + strconv.Itoa(int(m)) + ")"
+	}
+}
+
+// Source names. BeforePersist and RefreshEvent use them.
+const (
+	SourceFixes   = "fixes"
+	SourceReviews = "reviews"
+)
+
+// SourceState is the typed outcome of one source in one refresh.
+type SourceState string
+
+const (
+	// SourceRefreshed means the source replaced its stored corpus with a
+	// non-empty result and stamped the mine time.
+	SourceRefreshed SourceState = "refreshed"
+	// SourceEmpty means an authoritative empty result replaced the
+	// stored corpus and stamped the mine time.
+	SourceEmpty SourceState = "successful-empty"
+	// SourceUnavailable means the source could not run, for example no
+	// git history, no GitHub origin, or no gh. The stored corpus stays.
+	SourceUnavailable SourceState = "unavailable"
+	// SourceFailed means a fetch, parse, or write error. The stored
+	// corpus stays.
+	SourceFailed SourceState = "failed"
+	// SourceStopped means a stop request ended the source before its
+	// write. The stored corpus stays.
+	SourceStopped SourceState = "stopped"
+	// SourceNotAttempted means the refresh did not start the source.
+	SourceNotAttempted SourceState = "not-attempted"
+)
+
+// SourceCause is the typed cause of a source state. The console picks
+// its guidance from it, for example a gh login for CauseAuth. Reason is
+// display text and not a contract, so callers never parse it.
+type SourceCause int
+
+const (
+	// CauseNone means that no cause applies: the source refreshed, stored
+	// an empty result, or did not start.
+	CauseNone SourceCause = iota
+	// CauseNoHistory means that the fix mine found no git repository, no
+	// commit, or no git.
+	CauseNoHistory
+	// CauseMineFailed means that the local fix mine returned an error.
+	CauseMineFailed
+	// CauseNoRepository means that origin names no GitHub repository.
+	CauseNoRepository
+	// CauseGHMissing means that the gh executable is not on PATH.
+	CauseGHMissing
+	// CauseAuth means that gh reported an authentication problem: no
+	// login, a bad or expired token, or a token without the needed access.
+	CauseAuth
+	// CauseRateLimited means that a GitHub rate limit refused the fetch.
+	// A later refresh can succeed without a new login.
+	CauseRateLimited
+	// CauseFetchFailed means any other fetch error, for example a network
+	// error, a server error, or an unknown repository.
+	CauseFetchFailed
+	// CauseUnreadable means that the fetched reply is not the API JSON.
+	CauseUnreadable
+	// CauseStopped means that a stop request ended the source.
+	CauseStopped
+	// CauseStore means that the index database did not open or did not
+	// accept the write.
+	CauseStore
+	// CauseRefused means that the caller's check refused the work, for
+	// example because the workspace changed after the preview.
+	CauseRefused
+)
+
+// String returns a stable lower-case name for the cause.
+func (c SourceCause) String() string {
+	switch c {
+	case CauseNone:
+		return "none"
+	case CauseNoHistory:
+		return "no-history"
+	case CauseMineFailed:
+		return "mine-failed"
+	case CauseNoRepository:
+		return "no-repository"
+	case CauseGHMissing:
+		return "gh-missing"
+	case CauseAuth:
+		return "auth"
+	case CauseRateLimited:
+		return "rate-limited"
+	case CauseFetchFailed:
+		return "fetch-failed"
+	case CauseUnreadable:
+		return "unreadable"
+	case CauseStopped:
+		return "stopped"
+	case CauseStore:
+		return "store"
+	case CauseRefused:
+		return "refused"
+	default:
+		return "SourceCause(" + strconv.Itoa(int(c)) + ")"
+	}
+}
+
+// SourceOutcome reports what one refresh did to one source.
+type SourceOutcome struct {
+	State SourceState
+	// Cause is the typed cause of a state other than refreshed and
+	// successful-empty; CauseNone otherwise.
+	Cause SourceCause
+	// Stored counts the findings that this refresh stored for the source.
+	Stored int
+	// Lessons counts the stored review lessons; it is 0 for fixes.
+	Lessons int
+	// MinedAt is the mine stamp that this refresh wrote, in Unix
+	// seconds; 0 when it wrote none.
+	MinedAt int64
+	// Reason explains a state other than refreshed in one safe line:
+	// control characters are removed and secrets are redacted.
+	Reason string
+	// Err is the cause, or nil. It is for errors.Is, not for display.
+	Err error
+}
+
+// RefreshPhase names one step of an evidence refresh for typed progress.
+type RefreshPhase int
+
+const (
+	// PhaseMineFixes means the local fix mine starts. It has no progress
+	// count and cannot stop part way.
+	PhaseMineFixes RefreshPhase = iota + 1
+	// PhaseFetchReviews means the GitHub fetch starts.
+	PhaseFetchReviews
+	// PhaseFetchBytes reports the fetched bytes so far. No total exists.
+	PhaseFetchBytes
+	// PhaseFetched reports the parsed and kept comment counts.
+	PhaseFetched
+	// PhaseCluster means the fetched comments are clustered.
+	PhaseCluster
+	// PhasePersist means a source write starts.
+	PhasePersist
+	// PhaseSourceDone reports the final state of one source.
+	PhaseSourceDone
+)
+
+// RefreshEvent is one typed progress event of an evidence refresh.
+type RefreshEvent struct {
+	Phase  RefreshPhase
+	Source string
+	// Repository is the "owner/name" slug for the review phases.
+	Repository string
+	// Bytes is the fetched byte count for PhaseFetchBytes.
+	Bytes int
+	// Comments and Kept carry the counts for PhaseFetched.
+	Comments int
+	Kept     int
+	// State is the source state for PhaseSourceDone.
+	State SourceState
+}
+
+// RefreshRequest configures one evidence refresh.
+type RefreshRequest struct {
+	// Root is the workspace directory; it widens to the git top level.
+	Root string
+	// DBPath overrides the index location (default: <root>/.seamark/index.db).
+	DBPath string
+	// Mode selects the sources.
+	Mode SourceMode
+	// WindowDays is the review window for reviews.Options. The caller
+	// resolves it, because the CLI falls back to the default on a bad
+	// config file and the console blocks instead.
+	WindowDays int
+	// Fetch is the review fetcher; nil means gh.
+	Fetch reviews.FetchFunc
+	// Logf receives the CLI progress lines; nil discards them.
+	Logf func(format string, args ...any)
+	// Progress receives typed events; nil discards them.
+	Progress func(RefreshEvent)
+	// BeforePersist runs before each source opens the store, with the
+	// source name. The console re-probes the database there. It runs
+	// before the open and not only before the write, because store.Open
+	// creates a missing database and migrates an older one. The fix
+	// source runs it for an unmined result too, because its store also
+	// opens then. An error aborts the source before the open: the source
+	// reads stopped for a context error and failed otherwise, and the
+	// refresh returns the error.
+	BeforePersist func(source string) error
+}
+
+// RefreshResult reports one evidence refresh.
+type RefreshResult struct {
+	Fixes   SourceOutcome
+	Reviews SourceOutcome
+	// Review is the raw review mining result. The CLI prints from it.
+	Review reviews.Result
+	// FixCount is the fix finding count that the CLI prints.
+	FixCount int
+}
+
+// RefreshSources mines and persists the lesson sources that req.Mode
+// selects. The order is fixed: mine the fixes, run BeforePersist, open
+// the store, store the fixes, close the store, fetch the reviews with
+// ctx, run BeforePersist, reopen the store, and replace the review
+// corpus. The fix phase runs to its end even
+// after a stop, because the fix mine cannot stop part way; the refresh
+// then stops before any GitHub work. No store handle stays open across
+// the fetch. The error is non-nil only where RefreshFixes and
+// RefreshReviews have always returned one, plus a BeforePersist error.
+func RefreshSources(ctx context.Context, req RefreshRequest) (RefreshResult, error) {
+	return refreshSources(ctx, req, func(string) int { return req.WindowDays })
+}
+
+// refreshSources is RefreshSources with a lazy review window that takes
+// the resolved root. The RefreshReviews wrapper resolves the window only
+// after the fix phase, so its config log line keeps its place in the
+// CLI output.
+func refreshSources(ctx context.Context, req RefreshRequest, window func(root string) int) (RefreshResult, error) {
+	res := RefreshResult{
+		Fixes:   SourceOutcome{State: SourceNotAttempted},
+		Reviews: SourceOutcome{State: SourceNotAttempted},
+	}
+
+	logf := req.Logf
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 
-	root, err := ResolveRoot(root)
-	if err != nil {
-		return 0, err
+	progress := req.Progress
+	if progress == nil {
+		progress = func(RefreshEvent) {}
 	}
 
+	root, err := ResolveRoot(req.Root)
+	if err != nil {
+		return res, err
+	}
+
+	dbPath := req.DBPath
 	if dbPath == "" {
 		dbPath = store.DefaultPath(root)
 	}
 
-	res, err := fixes.Mine(root, fixes.Options{Logf: logf})
-	if err != nil {
-		return 0, err
+	if err := refreshFixPhase(root, dbPath, req, logf, progress, &res); err != nil {
+		return res, err
+	}
+
+	if req.Mode != SourcesReviewsAndLocal {
+		return res, nil
+	}
+
+	// A stop that arrived during the local phase ends the refresh here,
+	// before any network use.
+	if err := ctx.Err(); err != nil {
+		res.Reviews = SourceOutcome{
+			State: SourceStopped, Cause: CauseStopped, Reason: "stopped before the GitHub fetch", Err: err,
+		}
+		progress(RefreshEvent{Phase: PhaseSourceDone, Source: SourceReviews, State: SourceStopped})
+
+		return res, nil
+	}
+
+	err = refreshReviewPhase(ctx, root, dbPath, window(root), req, logf, progress, &res)
+
+	return res, err
+}
+
+// refreshFixPhase mines the fix commits and stores them. A mine error is
+// an error in local mode and a warning in the combined mode, as the two
+// CLI modes have always done. The store opens even for an unmined
+// result, so a database that cannot open stops the refresh before any
+// network use.
+func refreshFixPhase(root, dbPath string, req RefreshRequest, logf func(string, ...any),
+	progress func(RefreshEvent), res *RefreshResult,
+) error {
+	done := func(o SourceOutcome) {
+		res.Fixes = o
+		progress(RefreshEvent{Phase: PhaseSourceDone, Source: SourceFixes, State: o.State})
+	}
+
+	progress(RefreshEvent{Phase: PhaseMineFixes, Source: SourceFixes})
+
+	mined, mineErr := fixes.Mine(root, fixes.Options{Logf: logf})
+	if mineErr != nil {
+		if req.Mode == SourcesLocal {
+			done(failedSource(CauseMineFailed, mineErr))
+
+			return mineErr
+		}
+
+		logf("warn: fix mining failed: %v", mineErr)
+	}
+
+	// The hook runs before the open, because the open can create or
+	// migrate the database that the hook guards.
+	if err := runBeforePersist(req, SourceFixes); err != nil {
+		done(abortedSource(err))
+
+		return err
 	}
 
 	st, err := store.Open(dbPath)
 	if err != nil {
+		done(failedSource(CauseStore, err))
+
+		return err
+	}
+	defer func() { _ = st.Close() }() // the fix write commits or rolls back itself
+
+	switch {
+	case mineErr != nil:
+		done(failedSource(CauseMineFailed, mineErr))
+
+		return nil
+	case !mined.Mined:
+		done(SourceOutcome{
+			State:  SourceUnavailable,
+			Cause:  CauseNoHistory,
+			Reason: "local git history is unavailable: no repository, no commits, or no git",
+		})
+
+		return nil
+	}
+
+	progress(RefreshEvent{Phase: PhasePersist, Source: SourceFixes})
+
+	count, err := persistFixes(st, mined)
+	if err != nil {
+		done(failedSource(CauseStore, err))
+
+		return err
+	}
+
+	res.FixCount = count
+
+	state := SourceRefreshed
+	if count == 0 {
+		state = SourceEmpty
+	}
+
+	done(SourceOutcome{State: state, Stored: count, MinedAt: metaUnix(st, store.MetaFixesMinedAt)})
+
+	return nil
+}
+
+// refreshReviewPhase fetches the review comments and replaces the review
+// corpus after a successful fetch. It opens the store only after the
+// fetch, so no database handle waits on the network.
+func refreshReviewPhase(ctx context.Context, root, dbPath string, windowDays int, req RefreshRequest,
+	logf func(string, ...any), progress func(RefreshEvent), res *RefreshResult,
+) error {
+	done := func(o SourceOutcome) {
+		res.Reviews = o
+		progress(RefreshEvent{Phase: PhaseSourceDone, Source: SourceReviews, State: o.State})
+	}
+
+	mined, err := reviews.MineContext(ctx, root, reviews.Options{
+		Logf: logf, WindowDays: windowDays, Progress: fetchProgress(progress),
+	}, req.Fetch)
+	res.Review = mined
+
+	if err != nil {
+		done(failedSource(CauseFetchFailed, err))
+
+		return err
+	}
+
+	if mined.Note != "" {
+		logf("note: %s", mined.Note)
+	}
+
+	// Reviews swap only when the fetch actually succeeded. A transient
+	// failure (offline, gh logged out, not a GitHub checkout) must never
+	// wipe previously-mined lessons.
+	if !mined.Fetched {
+		done(degradedReviews(mined))
+
+		return nil
+	}
+
+	// The last stop check before the write: a stop after the fetch keeps
+	// the stored corpus. From here the write runs to its commit.
+	if err := ctx.Err(); err != nil {
+		done(SourceOutcome{
+			State: SourceStopped, Cause: CauseStopped,
+			Reason: "stopped before the review corpus was replaced", Err: err,
+		})
+
+		return nil
+	}
+
+	// The hook runs before the open, because the open can create or
+	// migrate the database that the hook guards. The fetch can take
+	// minutes, so the database can change during it.
+	if err := runBeforePersist(req, SourceReviews); err != nil {
+		done(abortedSource(err))
+
+		return err
+	}
+
+	st, err := store.Open(dbPath)
+	if err != nil {
+		done(failedSource(CauseStore, err))
+
+		return err
+	}
+	defer func() { _ = st.Close() }() // ReplaceLessons commits or rolls back itself
+
+	progress(RefreshEvent{Phase: PhasePersist, Source: SourceReviews})
+
+	if err := st.ReplaceLessons(mined.Lessons, mined.Findings); err != nil {
+		done(failedSource(CauseStore, err))
+
+		return err
+	}
+
+	state := SourceRefreshed
+	if len(mined.Lessons) == 0 {
+		state = SourceEmpty
+	}
+
+	done(SourceOutcome{
+		State: state, Stored: len(mined.Findings), Lessons: len(mined.Lessons),
+		MinedAt: metaUnix(st, store.MetaReviewsMinedAt), Reason: safeReason(mined.Note),
+	})
+
+	return nil
+}
+
+// fetchProgress translates the typed review events into refresh events.
+func fetchProgress(progress func(RefreshEvent)) func(reviews.FetchEvent) {
+	phases := map[reviews.FetchStage]RefreshPhase{
+		reviews.StageFetching:   PhaseFetchReviews,
+		reviews.StageBytes:      PhaseFetchBytes,
+		reviews.StageFetched:    PhaseFetched,
+		reviews.StageClustering: PhaseCluster,
+	}
+
+	return func(e reviews.FetchEvent) {
+		progress(RefreshEvent{
+			Phase: phases[e.Stage], Source: SourceReviews, Repository: e.Repository.Slug(),
+			Bytes: e.Bytes, Comments: e.Comments, Kept: e.Kept,
+		})
+	}
+}
+
+// runBeforePersist runs the caller's hook for source, if one is set.
+// The CLI sets none, so its output and order do not change.
+func runBeforePersist(req RefreshRequest, source string) error {
+	if req.BeforePersist == nil {
+		return nil
+	}
+
+	return req.BeforePersist(source)
+}
+
+// degradedReviews maps a review pass that fetched nothing to a source
+// outcome. A missing tool or target is unavailable; an error from a
+// fetch that ran is failed.
+func degradedReviews(mined reviews.Result) SourceOutcome {
+	o := SourceOutcome{State: SourceFailed, Cause: CauseFetchFailed, Reason: safeReason(mined.Note), Err: mined.Err}
+
+	switch mined.Outcome {
+	case reviews.OutcomeNoRepository:
+		o.State, o.Cause = SourceUnavailable, CauseNoRepository
+	case reviews.OutcomeGHMissing:
+		o.State, o.Cause = SourceUnavailable, CauseGHMissing
+	case reviews.OutcomeAuth:
+		o.Cause = CauseAuth
+	case reviews.OutcomeRateLimited:
+		o.Cause = CauseRateLimited
+	case reviews.OutcomeUnreadable:
+		o.Cause = CauseUnreadable
+	case reviews.OutcomeStopped:
+		o.State, o.Cause = SourceStopped, CauseStopped
+	}
+
+	return o
+}
+
+// failedSource is the outcome of a source that an error ended.
+func failedSource(cause SourceCause, err error) SourceOutcome {
+	return SourceOutcome{State: SourceFailed, Cause: cause, Reason: safeReason(err.Error()), Err: err}
+}
+
+// abortedSource is the outcome of a source that BeforePersist refused. A
+// context error is a stop; any other error is a refusal.
+func abortedSource(err error) SourceOutcome {
+	o := failedSource(CauseRefused, err)
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		o.State, o.Cause = SourceStopped, CauseStopped
+	}
+
+	return o
+}
+
+// safeReason makes untrusted text safe for one display line. gh output
+// and store errors can quote tokens and escape sequences, so it redacts
+// secrets, joins the lines, and strips control characters.
+func safeReason(s string) string {
+	return render.SanitizeBlock(strings.Join(strings.Fields(redact.Secrets(s)), " "))
+}
+
+// metaUnix reads a Unix-seconds meta value; 0 when absent or malformed.
+func metaUnix(st *store.Store, key string) int64 {
+	v, err := st.GetMeta(key)
+	if err != nil {
+		return 0
+	}
+
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0
+	}
+
+	return n
+}
+
+// RefreshFixes mines and persists only fix commits reachable from the
+// repository's current HEAD. It performs no network access, which makes it the
+// deterministic lesson-source mode for a pinned historical checkout.
+func RefreshFixes(root, dbPath string, logf func(string, ...any)) (int, error) {
+	res, err := RefreshSources(context.Background(), RefreshRequest{
+		Root: root, DBPath: dbPath, Mode: SourcesLocal, Logf: logf,
+	})
+	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = st.Close() }()
 
-	return persistFixes(st, res)
+	return res.FixCount, nil
 }
 
 // persistFixes swaps one successful local mine into the shared finding
 // corpus. An unmined result preserves existing rows: a missing Git repository
-// must not look like an authoritative empty history.
+// must not look like an authoritative empty history. The store stamps
+// the mine time in the same transaction, because the outcome loop only
+// trusts "no recurrence since exposure" if mining actually ran since.
 func persistFixes(st *store.Store, res fixes.Result) (int, error) {
 	if !res.Mined {
 		return 0, nil
 	}
 
 	if err := st.ReplaceFixFindings(res.Findings); err != nil {
-		return 0, err
-	}
-
-	// The outcome loop only trusts "no recurrence since exposure" if
-	// mining actually ran since.
-	if err := st.SetMeta(store.MetaFixesMinedAt, fmt.Sprint(time.Now().Unix())); err != nil {
 		return 0, err
 	}
 
@@ -437,67 +974,32 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 		logf = func(string, ...any) {}
 	}
 
-	root, err = ResolveRoot(root)
-	if err != nil {
-		return reviews.Result{}, 0, err
-	}
-
-	if dbPath == "" {
-		dbPath = store.DefaultPath(root)
-	}
-
-	// Fix mining first: local, fast, and independent of gh presence.
-	fixRes, err := fixes.Mine(root, fixes.Options{Logf: logf})
-	if err != nil {
-		logf("warn: fix mining failed: %v", err)
-	}
-
-	st, err := store.Open(dbPath)
-	if err != nil {
-		return reviews.Result{}, 0, err
-	}
-	defer func() { _ = st.Close() }()
-
-	// Persisted before the network is touched: the two sources degrade
-	// independently, and a review failure — however it arrives — must
-	// not discard fix findings already mined from local git.
-	if fixCount, err = persistFixes(st, fixRes); err != nil {
-		return reviews.Result{}, 0, err
-	}
-
 	// The window is the only config the review miner takes; a broken
 	// config file must not down the mine — defaults apply, exactly as
 	// every other surface degrades. But degrading silently would hide
 	// the breakage, so it is at least said out loud.
-	windowDays := 0
+	window := func(root string) int {
+		cfg, err := LoadConfig(root)
+		if err != nil {
+			logf("config: %v — review window default applies", err)
 
-	if cfg, err := LoadConfig(root); err == nil {
-		windowDays = cfg.ReviewWindowDays()
-	} else {
-		logf("config: %v — review window default applies", err)
+			return 0
+		}
+
+		return cfg.ReviewWindowDays()
 	}
 
-	res, err = reviews.Mine(root, reviews.Options{Logf: logf, WindowDays: windowDays}, nil)
-	if err != nil {
-		return res, fixCount, err
+	out, err := refreshSources(context.Background(), RefreshRequest{
+		Root: root, DBPath: dbPath, Mode: SourcesReviewsAndLocal, Logf: logf,
+	}, window)
+
+	// A failure in the fix phase has always returned an empty review
+	// result and a zero count.
+	if err != nil && out.Reviews.State == SourceNotAttempted {
+		return reviews.Result{}, 0, err
 	}
 
-	if res.Note != "" {
-		logf("note: %s", res.Note)
-	}
-
-	// Reviews swap only when the fetch actually succeeded. A transient
-	// failure (offline, gh logged out, not a GitHub checkout) must never
-	// wipe previously-mined lessons.
-	if !res.Fetched {
-		return res, fixCount, nil
-	}
-
-	if err := st.ReplaceLessons(res.Lessons, res.Findings); err != nil {
-		return res, fixCount, err
-	}
-
-	return res, fixCount, nil
+	return out.Review, out.FixCount, err
 }
 
 // freshSummary returns a Skipped summary when the index at dbPath was
@@ -518,7 +1020,7 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 	}
 	defer func() { _ = st.Close() }() // read-only probe
 
-	indexed, err := st.GetMeta("indexed_state")
+	indexed, err := st.GetMeta(store.MetaIndexedState)
 	if err != nil || indexed != current {
 		return nil
 	}
@@ -526,7 +1028,7 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 	// A database from before coverage persistence has no index_summary;
 	// skipping would strand it on "coverage unknown" forever, because the
 	// fingerprint still matches. One full pass records it.
-	if summary, err := st.GetMeta("index_summary"); err != nil || summary == "" {
+	if summary, err := st.GetMeta(store.MetaIndexSummary); err != nil || summary == "" {
 		return nil
 	}
 
@@ -535,8 +1037,8 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 		return nil
 	}
 
-	root, _ = st.GetMeta("repo_root")
-	mined, _ := st.GetMeta("history_mined")
+	root, _ = st.GetMeta(store.MetaRepoRoot)
+	mined, _ := st.GetMeta(store.MetaHistoryMined)
 
 	return &Summary{
 		Root: root, DBPath: dbPath, Skipped: true,
@@ -646,25 +1148,11 @@ func statInto(h io.Writer, p string, budget *int) {
 	})
 }
 
-// ResolveRoot widens to the git toplevel when inside a repository.
+// ResolveRoot widens to the git toplevel when inside a repository. It is
+// history.ResolveRoot. The name stays here, because Run applies this
+// rule, and the CLI and the LSP server call it by this name.
 func ResolveRoot(root string) (string, error) {
-	if root == "" {
-		root = "."
-	}
-
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	cmd.Dir = abs
-
-	if out, err := cmd.Output(); err == nil {
-		return strings.TrimSpace(string(out)), nil
-	}
-
-	return abs, nil
+	return history.ResolveRoot(root)
 }
 
 // skipDirs are never worth parsing: dependencies, outputs, fixtures, and
@@ -676,31 +1164,16 @@ var skipDirs = map[string]bool{
 
 // listFiles returns repo-relative candidate paths. Inside git it trusts
 // `git ls-files` (tracked + unignored untracked) so .gitignore is honored;
-// otherwise it walks the tree with conservative skips.
-func listFiles(root string) ([]string, error) {
+// otherwise it walks the tree with conservative skips. deleted lists the
+// tracked paths that git status shows as deleted and not staged. files
+// leaves them out, because nothing exists to parse. A walk finds no such
+// path.
+func listFiles(root string) (files, deleted []string, err error) {
 	if history.IsRepo(root) {
-		cmd := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-		cmd.Dir = root
-
-		out, err := cmd.Output()
-		if err != nil {
-			return nil, fmt.Errorf("index: git ls-files: %w", err)
-		}
-
-		var files []string
-
-		for f := range strings.SplitSeq(string(out), "\x00") {
-			if f != "" && !underSkippedDir(f) {
-				files = append(files, f)
-			}
-		}
-
-		return files, nil
+		return gitFiles(root)
 	}
 
-	var files []string
-
-	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -725,10 +1198,96 @@ func listFiles(root string) ([]string, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("index: walk %s: %w", root, err)
+		return nil, nil, fmt.Errorf("index: walk %s: %w", root, err)
 	}
 
-	return files, nil
+	return files, nil, nil
+}
+
+// gitFiles lists the workspace through git. The cached list keeps a
+// tracked path after its file is deleted, until the deletion is staged.
+// git diff-files finds these paths, so files leaves them out and
+// deleted returns them.
+//
+// diff-files uses the deletion test of git status. A file that a
+// directory replaces is deleted. A path that git cannot lstat for a
+// different reason, such as a denied permission, is not deleted. It
+// stays in files, so the read reports it as a parse error.
+func gitFiles(root string) (files, deleted []string, err error) {
+	// -t tags each path, so the loop below can find skip-worktree
+	// entries. The tag is one letter and a space before the path.
+	listed, err := gitRecords(root, "ls-files", "-z", "-t", "--cached", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// --relative gives paths relative to root, as ls-files does.
+	// --no-renames keeps each deletion a deletion, also when an added
+	// path has the same content.
+	gone, err := gitRecords(root, "diff-files", "-z", "--name-only", "--relative", "--no-renames", "--diff-filter=D")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	isGone := make(map[string]bool, len(gone))
+
+	for _, f := range gone {
+		if !underSkippedDir(f) {
+			isGone[f] = true
+			deleted = append(deleted, f)
+		}
+	}
+
+	for _, rec := range listed {
+		tag, f, ok := strings.Cut(rec, " ")
+		if !ok || underSkippedDir(f) || isGone[f] {
+			continue
+		}
+
+		// A sparse checkout keeps skip-worktree paths out of the
+		// working tree on purpose, and diff-files ignores them. So a
+		// missing one is not deleted and not a file to parse. A
+		// skip-worktree file that exists stays in files.
+		if tag == "S" && missingFile(root, f) {
+			continue
+		}
+
+		files = append(files, f)
+	}
+
+	return files, deleted, nil
+}
+
+// missingFile reports whether rel has no working-tree entry. Only
+// fs.ErrNotExist means missing. Any other lstat error keeps the path,
+// so the read reports the real problem as a parse error.
+func missingFile(root, rel string) bool {
+	_, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
+
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// gitRecords runs one git command with -z output in root. It returns
+// the NUL-separated records without the empty last one. The -z form
+// keeps paths with special characters unquoted.
+func gitRecords(root string, args ...string) ([]string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("index: git %s: %w", args[0], err)
+	}
+
+	var records []string
+
+	for rec := range strings.SplitSeq(string(out), "\x00") {
+		if rec != "" {
+			records = append(records, rec)
+		}
+	}
+
+	return records, nil
 }
 
 func underSkippedDir(rel string) bool {

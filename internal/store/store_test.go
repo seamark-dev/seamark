@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -445,16 +447,29 @@ func TestFindSymbolsFTSRankOrder(t *testing.T) {
 
 func TestMetaSurvivesRebuild(t *testing.T) {
 	s := openTestStore(t)
-	require.NoError(t, s.SetMeta("repo_root", "/tmp/x"))
+	require.NoError(t, s.SetMeta(MetaRepoRoot, "/tmp/x"))
 	seed(t, s)
 
-	v, err := s.GetMeta("repo_root")
+	v, err := s.GetMeta(MetaRepoRoot)
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/x", v)
 
 	missing, err := s.GetMeta("missing")
 	require.NoError(t, err)
 	assert.Empty(t, missing)
+}
+
+func TestMetaKeysKeepTheStoredNames(t *testing.T) {
+	// Existing databases carry these keys. A renamed constant reads an
+	// existing index as unversioned or never indexed, so the names stay
+	// fixed.
+	assert.Equal(t, []string{
+		"schema_version", "indexed_at", "repo_root", "indexed_state", "history_mined",
+		"index_summary", "parse_cache_version", "fixes_mined_at", "reviews_mined_at",
+	}, []string{
+		MetaSchemaVersion, MetaIndexedAt, MetaRepoRoot, MetaIndexedState, MetaHistoryMined,
+		MetaIndexSummary, MetaParseCacheVersion, MetaFixesMinedAt, MetaReviewsMinedAt,
+	})
 }
 
 func TestLessonReplaceAndQuery(t *testing.T) {
@@ -539,6 +554,39 @@ func TestDistilledSignatureMemory(t *testing.T) {
 	assert.Equal(t, map[string]bool{"abc123": true, "def456": true}, sigs)
 }
 
+func TestDistilledCountIncludesGroupsWithoutProposals(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+
+	s, err := Open(path)
+	require.NoError(t, err)
+
+	n, err := s.DistilledCount()
+	require.NoError(t, err)
+	assert.Zero(t, n)
+
+	require.NoError(t, s.MarkDistilled("abc123", "v2/pkg", 100))
+	require.NoError(t, s.MarkDistilled("abc123", "v2/pkg", 200), "a new mark updates the one record")
+
+	// A group whose run saved no proposal still gets its record, so the
+	// count tells that a distillation ran while the ledger stays empty.
+	_, err = s.SaveDistilledGroup("def456", "", 300, nil)
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+
+	ro, err := OpenReadOnly(path)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = ro.Close() })
+
+	n, err = ro.DistilledCount()
+	require.NoError(t, err)
+	assert.Equal(t, 2, n, "a read-only open counts the records")
+
+	proposals, err := ro.Proposals(model.ProposalProposed)
+	require.NoError(t, err)
+	assert.Empty(t, proposals, "no proposal backs the records")
+}
+
 func TestProposalLifecycle(t *testing.T) {
 	s := openTestStore(t)
 
@@ -605,6 +653,42 @@ func TestReplaceFixFindingsTouchesOnlyFixSources(t *testing.T) {
 	assert.Equal(t, map[int64]string{
 		1: model.SourceReview, 6: "ci:failure", 9: model.SourceFixConventional,
 	}, left, "every fix-mined source is swapped; other providers' findings survive")
+}
+
+func TestReplaceFixFindingsStampsInTheSameTransaction(t *testing.T) {
+	s := openTestStore(t)
+
+	before := time.Now().Unix()
+
+	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
+		{ID: 1, Path: "a.go", Body: "fix", Source: model.SourceFixConventional},
+	}))
+
+	stamp, err := s.GetMeta(MetaFixesMinedAt)
+	require.NoError(t, err)
+
+	at, err := strconv.ParseInt(stamp, 10, 64)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, at, before, "a successful swap stamps the mine time")
+
+	// A failed swap rolls back the rows and the stamp together: two rows
+	// with one primary key make the insert fail inside the transaction.
+	require.NoError(t, s.SetMeta(MetaFixesMinedAt, "1000"))
+
+	err = s.ReplaceFixFindings([]model.Finding{
+		{ID: 2, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
+		{ID: 2, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
+	})
+	require.Error(t, err)
+
+	stamp, err = s.GetMeta(MetaFixesMinedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "1000", stamp, "a rolled-back swap keeps the old stamp")
+
+	got, err := s.AllFindings()
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, int64(1), got[0].ID, "a rolled-back swap keeps the old rows")
 }
 
 func TestSaveDistilledGroupIsAtomic(t *testing.T) {
@@ -708,7 +792,12 @@ func TestProposalTriggerPathsRoundTrip(t *testing.T) {
 	assert.Equal(t, int64(1700000000), got[1].TriggerChecked)
 
 	// The negative answer: no paths, but the question is settled.
-	require.NoError(t, s.UpdateProposalTriggers(got[0].ID, nil, 1700000500, 2))
+	negative := answerFor(got[0])
+	negative.CheckedAt, negative.Version = 1700000500, 2
+
+	saved, err := s.SaveTriggerAnswer(negative)
+	require.NoError(t, err)
+	require.True(t, saved)
 
 	got, err = s.Proposals(model.ProposalProposed)
 	require.NoError(t, err)
@@ -791,4 +880,53 @@ func TestFindingsRoundTripAndSwap(t *testing.T) {
 	got, err = s.FindingsForLesson("api\x00E501")
 	require.NoError(t, err)
 	assert.Empty(t, got, "old findings gone after replace")
+}
+
+func TestFindingsByIDsReturnsFullFindings(t *testing.T) {
+	s := openTestStore(t)
+
+	findings := []model.Finding{
+		{
+			ID: 11, LessonKey: "api\x00E501", Path: "api/a.py", Paths: []string{"api/a.py", "api/b.py"},
+			PR: 7, Reviewer: "coderabbit", Body: "line too long, wrap it", URL: "u1", CreatedAt: 80,
+			Source: model.SourceReview,
+		},
+		{
+			ID: 12, LessonKey: "api\x00E501", Path: "api/b.py", PR: 8,
+			Reviewer: "person", Body: "wrap this line", URL: "u2", CreatedAt: 90,
+			Source: model.SourceReview,
+		},
+	}
+	require.NoError(t, s.ReplaceLessons(nil, findings))
+
+	// Duplicate ids collapse, and a missing id is absent: the caller
+	// labels it as evidence that aged out.
+	got, err := s.FindingsByIDs([]int64{12, 11, 12, 99})
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]model.Finding{11: findings[0], 12: findings[1]}, got)
+
+	got, err = s.FindingsByIDs(nil)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestFindingsByIDsSpansChunks(t *testing.T) {
+	s := openTestStore(t)
+
+	// More ids than one chunk holds: every row must come back.
+	var findings []model.Finding
+
+	var ids []int64
+
+	for i := int64(1); i <= 1203; i++ {
+		findings = append(findings, model.Finding{ID: i, Path: "a.go", Body: "b"})
+		ids = append(ids, i)
+	}
+
+	require.NoError(t, s.ReplaceLessons(nil, findings))
+
+	got, err := s.FindingsByIDs(ids)
+	require.NoError(t, err)
+	assert.Len(t, got, 1203)
+	assert.Equal(t, "b", got[1203].Body)
 }

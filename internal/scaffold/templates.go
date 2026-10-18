@@ -1,15 +1,19 @@
-package cli
+package scaffold
 
-import "strings"
+import (
+	"strings"
 
-// Starter files written by `seamark init`. The policy ships with example
-// rules active but in WARN mode by default, so verdicts surface without
-// blocking anything — enforcement is an explicit opt-in
-// (`init --gate-mode enforce`), never something init turns on by itself.
+	"github.com/seamark-dev/seamark/internal/hooks"
+)
 
-// The two spellings of the policy mode line. starterPolicy embeds the
-// warn line; starterPolicyFor swaps in the enforce line, so the swap can
-// never miss (the template literally contains the constant it replaces).
+// Starter files that setup writes. The policy ships with example rules
+// active, but in warn mode: verdicts show and nothing blocks. The user
+// turns on enforcement explicitly (`init --gate-mode enforce`); setup
+// never does it alone.
+
+// The two spellings of the policy mode line. starterPolicy holds the
+// warn line, and StarterPolicy swaps in the enforce line. The swap
+// cannot miss, because the template contains the constant it replaces.
 const (
 	policyModeLineWarn    = `mode: warn   # verdicts are reported, nothing blocks; "enforce" exits 2`
 	policyModeLineEnforce = `mode: enforce   # deny/require_approval verdicts exit 2; "warn" only reports`
@@ -62,12 +66,12 @@ require_approval:
     message: this change can reach infrastructure mutation
 `
 
-// starterPolicyFor returns the policy scaffold for a gate mode. The
-// template is authored in warn; enforce swaps the one mode line, so an
+// StarterPolicy returns the policy scaffold for a gate mode. The
+// template is in warn mode, and enforce swaps the one mode line. Thus
 // `init --gate-mode enforce` writes a policy file that agrees with the
-// hook it installs instead of contradicting it.
-func starterPolicyFor(gateMode string) string {
-	if gateMode != gateModeEnforce {
+// hook it installs.
+func StarterPolicy(gateMode string) string {
+	if gateMode != hooks.ModeEnforce {
 		return starterPolicy
 	}
 

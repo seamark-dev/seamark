@@ -23,7 +23,7 @@ func rawOpen(t *testing.T, path string) (*sql.DB, error) {
 func TestOpenStampsSchemaVersion(t *testing.T) {
 	s := openTestStore(t)
 
-	v, err := s.GetMeta(schemaVersionKey)
+	v, err := s.GetMeta(MetaSchemaVersion)
 	require.NoError(t, err)
 	assert.Equal(t, strconv.Itoa(schemaVersion), v, "a fresh database is stamped with the current version")
 }
@@ -33,7 +33,7 @@ func TestOpenRefusesNewerDatabase(t *testing.T) {
 
 	s, err := Open(path)
 	require.NoError(t, err)
-	require.NoError(t, s.SetMeta(schemaVersionKey, strconv.Itoa(schemaVersion+7)))
+	require.NoError(t, s.SetMeta(MetaSchemaVersion, strconv.Itoa(schemaVersion+7)))
 	require.NoError(t, s.Close())
 
 	// Simulate the newer schema having removed a table this binary's
@@ -64,7 +64,7 @@ func TestOpenRefusesNewerDatabase(t *testing.T) {
 	db, err = rawOpen(t, path)
 	require.NoError(t, err)
 	_, err = db.Exec(`UPDATE meta SET value = ? WHERE key = ?`,
-		strconv.Itoa(schemaVersion), schemaVersionKey)
+		strconv.Itoa(schemaVersion), MetaSchemaVersion)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
@@ -87,7 +87,7 @@ func TestOpenUpgradesVersionOneDatabase(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.Exec(`ALTER TABLE finding DROP COLUMN source`)
 	require.NoError(t, err)
-	_, err = db.Exec(`DELETE FROM meta WHERE key = ?`, schemaVersionKey)
+	_, err = db.Exec(`DELETE FROM meta WHERE key = ?`, MetaSchemaVersion)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
@@ -96,7 +96,7 @@ func TestOpenUpgradesVersionOneDatabase(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
 
-	v, err := s.GetMeta(schemaVersionKey)
+	v, err := s.GetMeta(MetaSchemaVersion)
 	require.NoError(t, err)
 	assert.Equal(t, strconv.Itoa(schemaVersion), v)
 
@@ -123,7 +123,7 @@ func TestOpenStampsPreVersioningDatabase(t *testing.T) {
 
 	db, err := rawOpen(t, path)
 	require.NoError(t, err)
-	_, err = db.Exec(`DELETE FROM meta WHERE key = ?`, schemaVersionKey)
+	_, err = db.Exec(`DELETE FROM meta WHERE key = ?`, MetaSchemaVersion)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
@@ -131,7 +131,7 @@ func TestOpenStampsPreVersioningDatabase(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
 
-	v, err := s.GetMeta(schemaVersionKey)
+	v, err := s.GetMeta(MetaSchemaVersion)
 	require.NoError(t, err)
 	assert.Equal(t, strconv.Itoa(schemaVersion), v)
 }
@@ -162,7 +162,7 @@ func TestMigrationVersionsLegacyTriggerAnswersWithoutRewritingThem(t *testing.T)
 	require.NoError(t, err)
 	_, err = db.Exec(`ALTER TABLE proposal DROP COLUMN trigger_prompt_version`)
 	require.NoError(t, err)
-	_, err = db.Exec(`UPDATE meta SET value = '5' WHERE key = ?`, schemaVersionKey)
+	_, err = db.Exec(`UPDATE meta SET value = '5' WHERE key = ?`, MetaSchemaVersion)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
@@ -193,7 +193,7 @@ func TestOpenUpgradesVersionTwoDatabase(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.Exec(`ALTER TABLE finding DROP COLUMN paths`)
 	require.NoError(t, err)
-	_, err = db.Exec(`UPDATE meta SET value = '2' WHERE key = ?`, schemaVersionKey)
+	_, err = db.Exec(`UPDATE meta SET value = '2' WHERE key = ?`, MetaSchemaVersion)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
@@ -201,7 +201,7 @@ func TestOpenUpgradesVersionTwoDatabase(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
 
-	v, err := s.GetMeta(schemaVersionKey)
+	v, err := s.GetMeta(MetaSchemaVersion)
 	require.NoError(t, err)
 	assert.Equal(t, strconv.Itoa(schemaVersion), v)
 

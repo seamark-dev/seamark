@@ -726,6 +726,11 @@ type FileGuard struct {
 	Linked string
 	SHA256 [32]byte
 	Mode   fs.FileMode
+	// Denied is true when this user may not write the existing file,
+	// although the owner write bit can be set. An access control list or
+	// another owner causes it. A plain write fails on such a file, so
+	// setup never replaces it.
+	Denied bool
 }
 
 // FileWrite is one composed native document to write, with every

@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test agents-native-check agents-native-smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-native-smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -64,6 +64,109 @@ agents-native-check: build ## Offline checks against the installed $(CLIENT) CLI
 
 agents-native-smoke: build ## One bounded distillation through the installed $(CLIENT) CLI (costs tokens; needs your own login)
 	scripts/agent-integration-smoke.sh smoke $(CLIENT) $(BINARY)
+
+# The console tests run offline against fixtures, a scripted service
+# fake, a fake gh, and a fake agent. They cover the shell, the five
+# destinations, the terminal lifecycle through tui.Run, the services
+# behind the console, and the CLI entry point. No test contacts GitHub
+# or runs a paid model. The services are the workspace and its root
+# rule (workspace, history), setup (integration), proposals, statistics
+# (lessonstats), settings, evidence refresh (learning, index, reviews,
+# store), distillation (learning, distill, agent), and lesson
+# maintenance: YAML splicing (yamledit), pin file editing (pinfile),
+# retarget and prune (maintain), outcome readings (outcome), trigger
+# extraction (learning, distill), and the lesson selection sample. The
+# sample selects through the evidence read and the folds in report. It
+# names hook paths with the path rule of delivery. So a change in report
+# or delivery must fail this target too. The CLI does not call learning,
+# because learning holds console-only policy. It calls the engines under
+# learning. The index tests take about 25 s.
+# They stay, because index holds the refresh engine and its stop
+# guarantees, and a regression there must fail this target.
+TUI_TEST_PKGS := ./internal/tui/... ./internal/workspace/... ./internal/history/... ./internal/scaffold/... ./internal/proposals/... ./internal/lessonstats/... \
+	./internal/settings/... ./internal/learning/... ./internal/distill/... ./internal/reviews/... \
+	./internal/index/... ./internal/store/... ./internal/agent/... ./internal/integration/... \
+	./internal/yamledit/... ./internal/pinfile/... ./internal/maintain/... ./internal/outcome/... \
+	./internal/report/... ./internal/delivery/...
+
+# TUI_CLI_PARITY selects the CLI tests that pin the output of the
+# commands behind the console: the console entry point, lessons (with
+# the apply, dismiss, distillation, maintenance, extraction and stats
+# golden tests), init, the evidence refresh of `seamark index
+# --fixes-only` and `--reviews`, and the older retarget, extraction and
+# ledger tests. These commands run on the engines of the console, so a
+# change to an engine must keep both surfaces green. CLIWorkspace pins
+# how the commands find and open the index through internal/workspace.
+TUI_CLI_PARITY := Test(TUI|Lessons|RunInit|InitClient|IndexFixesOnly|IndexReviews|RetargetKeeps|ExtractSummary|SelectionParsing|Ledger(Shows|Names)|PlanAnnotations|CLIWorkspace)
+
+tui-test: ## Run the workspace console tests (shell, screens, shared engines, CLI goldens)
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(TUI_TEST_PKGS)
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./internal/cli -run '$(TUI_CLI_PARITY)'
+
+# The console runs engine work on goroutines (refresh, distillation,
+# saves, the selection sample), so its packages also run under the race
+# detector. Every package of TUI_TEST_PKGS passes under the race
+# detector, so the target runs all of them.
+tui-race: ## Run the workspace console packages with the race detector
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race $(TUI_TEST_PKGS)
+
+# Captures are plain-text renders of representative console states at
+# several terminal sizes, for the visual review (they stay local). The
+# default directory holds the Phase 4 set, which also renders every
+# earlier scene; the MVP, Phase 2 and Phase 3 sets stay in
+# rfc/validation/tui-mvp/captures, rfc/validation/tui-phase-2/captures
+# and rfc/validation/tui-phase-3/captures.
+TUI_CAPTURE_DIR ?= rfc/validation/tui-phase-4/captures
+
+tui-capture: ## Render representative console states into $(TUI_CAPTURE_DIR) for visual review
+	mkdir -p "$(TUI_CAPTURE_DIR)"
+	SEAMARK_TUI_CAPTURE_DIR="$(abspath $(TUI_CAPTURE_DIR))" CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -run '^TestCapture' ./internal/tui
+
+# The capture check proves that a console change keeps every frame. It
+# renders the captures into a new temporary directory and compares them
+# with BASE, after it masks dates, clock times and elapsed durations.
+# It never writes into BASE. A gate needs a BASE rendered from the
+# starting tree on the same day, for example with
+# `make tui-capture TUI_CAPTURE_DIR=<scratch>`. BASE has no default.
+# A plain `make tui-capture` overwrites the default TUI_CAPTURE_DIR, so a
+# check against that directory can compare a render with itself. The
+# script lists the first 10 names of each list; LIST=1 lists every name,
+# for an expected-diffs record that must name each frame.
+tui-capture-check: ## Render the captures into a temporary directory and compare them with BASE=<dir> (masks dates, times, durations; LIST=1 lists every name)
+	@[ -n "$(BASE)" ] || { echo "usage: make tui-capture-check BASE=<dir> [LIST=1]; render BASE first with make tui-capture TUI_CAPTURE_DIR=<dir>" >&2; exit 2; }
+	LIST="$(LIST)" CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" scripts/tui-capture-check.sh "$(BASE)"
+
+# The Phase 4 measurement runs every benchmark named Phase4, each in the
+# package that owns its subject:
+#   tui       Lessons › Pins and the lessons Settings groups
+#   ui        the note field of the pin form
+#   services  the selection sample on the real engine
+#   maintain  pin authoring, and the pin read behind each Pins load
+#   settings  the lessons plan
+#   report    the hook selection
+# The fixtures come from internal/pinfile/pinfiletest. The script writes
+# the raw output into MEASURE_OUT, after the Go version and the machine.
+# It replaces MEASURE_OUT only after every run passes, so a failed or
+# interrupted run keeps the old file. A failed run prints its output on
+# stderr. The script checks the base before the first run, so a bad base
+# stops it before any benchmark runs.
+# limits.md takes its numbers from that file. MEASURE_BASE is the commit
+# before Phase 4. The hook selection also runs on the report sources of
+# that commit, so the file holds before and after (benchstat -col tree).
+# MEASURE_BASE_DIR names a directory of those sources, for a tree
+# without git. MEASURE_BENCHTIME=1x is a smoke run, and its numbers mean
+# nothing. A default run takes about three minutes (Apple M1 Pro).
+MEASURE_OUT       ?= rfc/validation/tui-phase-4/measure.txt
+MEASURE_BENCHTIME ?=
+MEASURE_COUNT     ?= 1
+MEASURE_BASE      ?= 5b02c73
+MEASURE_BASE_DIR  ?=
+MEASURE_PKGS      := ./internal/tui ./internal/tui/ui ./internal/tui/services ./internal/maintain ./internal/settings ./internal/report
+
+tui-measure: ## Run the Phase 4 benchmarks into $(MEASURE_OUT) (MEASURE_BENCHTIME=1x: smoke run only)
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" MEASURE_BENCHTIME="$(MEASURE_BENCHTIME)" MEASURE_COUNT="$(MEASURE_COUNT)" \
+		MEASURE_BASE="$(MEASURE_BASE)" MEASURE_BASE_DIR="$(MEASURE_BASE_DIR)" \
+		scripts/tui-measure.sh "$(MEASURE_OUT)" $(MEASURE_PKGS)
 
 lint: ## Static analysis (config in .golangci.yml)
 	golangci-lint run ./...

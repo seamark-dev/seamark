@@ -11,11 +11,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/seamark-dev/seamark/internal/effects"
-	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
+	"github.com/seamark-dev/seamark/internal/scaffold"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -52,10 +51,17 @@ func installedGateMode(settings map[string]any) string {
 	return hooks.InstalledGateMode(settings)
 }
 
+// starterPolicyFor is the policy scaffold init writes for a gate mode.
+// The tests seed policy files with it, so they follow the real starter.
+func starterPolicyFor(gateMode string) string {
+	return scaffold.StarterPolicy(gateMode)
+}
+
 // ensureGitignore plans and applies the .gitignore document alone,
 // through the same coordinator init uses, and narrates like init.
 func ensureGitignore(w io.Writer, root string, printOnly bool) error {
-	docs := commonDocuments(gateModeWarn)
+	docs := scaffold.Documents(gateModeWarn)
+	narrateScaffolds(docs)
 
 	plan, err := integration.PlanSetup(integration.Builtin(), integration.SetupRequest{
 		Root: root, Common: docs[len(docs)-1:],
@@ -439,21 +445,6 @@ func TestRunInitRejectsMalformedSettings(t *testing.T) {
 	}
 }
 
-func TestResolveGateMode(t *testing.T) {
-	// The explicit flag always wins; otherwise the installed hook's mode
-	// is kept; a fresh install resolves to warn.
-	installed := map[string]any{"hooks": map[string]any{"PreToolUse": []any{
-		map[string]any{"matcher": "Bash", "hooks": []any{
-			map[string]any{"type": "command", "command": "/bin/seamark gate --enforce --hook"},
-		}},
-	}}}
-
-	assert.Equal(t, gateModeWarn, resolveGateMode("", ""))
-	assert.Equal(t, gateModeEnforce, resolveGateMode("", gateModeEnforce))
-	assert.Equal(t, gateModeEnforce, resolveGateMode(installedGateMode(installed), ""))
-	assert.Equal(t, gateModeWarn, resolveGateMode(installedGateMode(installed), gateModeWarn))
-}
-
 func TestRunInitShowsHookCommandsWhenKept(t *testing.T) {
 	// The exact-command listing must not depend on whether settings.json
 	// needed an update: a no-op re-run (or its --print preview) shows the
@@ -569,91 +560,6 @@ func TestRunInitLeavesForeignGateHookAlone(t *testing.T) {
 	assert.Contains(t, b.String(), "gate    warn", "a foreign enforce hook must not flip our default")
 }
 
-func TestStarterPolicyLoadsAndEvaluates(t *testing.T) {
-	// The scaffolded policy REPLACES the embedded default gate policy, so
-	// a CEL typo in the template would break the gate on every command for
-	// every init'd user. Load and evaluate it through the real path.
-	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"),
-		[]byte(starterPolicy), 0o644))
-
-	policy, err := gate.LoadPolicy(root)
-	require.NoError(t, err, "starter policy must parse and its CEL must compile")
-
-	catalog, err := effects.Load(root)
-	require.NoError(t, err)
-
-	d, err := gate.EvalCommand(policy, catalog, root, "ls -la")
-	require.NoError(t, err, "starter policy must evaluate a command without error")
-	assert.Equal(t, "warn", d.Mode, "starter ships in warn mode")
-}
-
-func TestStarterPolicyEnforceVariant(t *testing.T) {
-	// The enforce scaffold is the warn template with one line swapped; a
-	// template edit that breaks the swap would silently ship warn to a
-	// user who explicitly asked for enforce.
-	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"),
-		[]byte(starterPolicyFor(gateModeEnforce)), 0o644))
-
-	policy, err := gate.LoadPolicy(root)
-	require.NoError(t, err, "the enforce starter must still parse and compile")
-	assert.Equal(t, "enforce", policy.Mode)
-
-	assert.NotEqual(t, starterPolicy, starterPolicyFor(gateModeEnforce),
-		"the mode-line swap must actually change the template")
-	assert.Equal(t, starterPolicy, starterPolicyFor(gateModeWarn))
-}
-
-// brewFixture builds a fake Homebrew prefix with a Cellar keg and,
-// optionally, the opt symlink target. It returns the Cellar binary path
-// and the opt binary path.
-func brewFixture(t *testing.T, withOpt bool) (cellarBin, optBin string) {
-	t.Helper()
-
-	prefix := t.TempDir()
-	cellarBin = filepath.Join(prefix, "Cellar", "seamark", "0.5.3", "bin", "seamark")
-	optBin = filepath.Join(prefix, "opt", "seamark", "bin", "seamark")
-
-	require.NoError(t, os.MkdirAll(filepath.Dir(cellarBin), 0o755))
-	require.NoError(t, os.WriteFile(cellarBin, nil, 0o755))
-
-	if withOpt {
-		require.NoError(t, os.MkdirAll(filepath.Dir(optBin), 0o755))
-		require.NoError(t, os.WriteFile(optBin, nil, 0o755))
-	}
-
-	return cellarBin, optBin
-}
-
-func TestStableInstallPathRewritesHomebrewCellar(t *testing.T) {
-	// Homebrew deletes the versioned Cellar directory on upgrade; hooks
-	// must record the opt symlink, which survives upgrades.
-	cellarBin, optBin := brewFixture(t, true)
-
-	assert.Equal(t, optBin, stableInstallPath(cellarBin))
-}
-
-func TestStableInstallPathKeepsCellarWithoutOptLink(t *testing.T) {
-	// Without the opt symlink the Cellar path is the only one that
-	// works, so it must stay.
-	cellarBin, _ := brewFixture(t, false)
-
-	assert.Equal(t, cellarBin, stableInstallPath(cellarBin))
-}
-
-func TestStableInstallPathKeepsForeignPaths(t *testing.T) {
-	home := "/home/u/.local/bin/seamark"
-	assert.Equal(t, home, stableInstallPath(home))
-
-	// A Cellar-like fragment without the <version>/bin/seamark keg
-	// layout is not a Homebrew install and must stay untouched.
-	odd := "/x/Cellar/seamark/extra/0.1/bin/seamark"
-	assert.Equal(t, odd, stableInstallPath(odd))
-}
-
 // testWriter is a minimal io.Writer capturing output.
 type testWriter struct{ b []byte }
 
@@ -766,7 +672,7 @@ func TestRunInitWithoutSkillsPrintsHint(t *testing.T) {
 
 	var b testWriter
 	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, "", false))
-	assert.Contains(t, b.String(), skillsHint)
+	assert.Contains(t, b.String(), skillsHint(root))
 	assert.NoDirExists(t, filepath.Join(root, ".claude", "skills"), "no flag, no install")
 
 	// Once skills are installed, a plain re-run reports them instead of
@@ -822,7 +728,33 @@ func TestRunInitWithoutSkillsNamesForeignDir(t *testing.T) {
 	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, "", false))
 
 	assert.Contains(t, b.String(), "skills  claude not installed, 1 not managed")
-	assert.NotContains(t, b.String(), skillsHint, "the hint would hide the directory init --skills will not touch")
+	assert.NotContains(t, b.String(), skillsHint(root), "the hint would hide the directory init --skills will not touch")
+}
+
+func TestRunInitWithoutSkillsHintNamesOnlyTheDirsABareSkillsWrites(t *testing.T) {
+	// A bare --skills writes .agents/skills only when .agents/ exists
+	// (skills.ModeAuto). The hint names the directories of this
+	// repository, so it never promises a directory the install skips.
+	root := t.TempDir()
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeWarn, false, "", false))
+	assert.Contains(t, b.String(), "adds the seamark agent skills (.claude/skills)\n")
+	assert.NotContains(t, b.String(), ".agents/skills")
+
+	// .codex/ marks a Codex configuration, not a skills directory, so
+	// it does not change the hint.
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
+
+	var codex testWriter
+	require.NoError(t, runInit(&codex, root, "/bin/seamark", gateModeWarn, false, "", false))
+	assert.NotContains(t, codex.String(), ".agents/skills")
+
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".agents"), 0o755))
+
+	var agents testWriter
+	require.NoError(t, runInit(&agents, root, "/bin/seamark", gateModeWarn, false, "", false))
+	assert.Contains(t, agents.String(), "adds the seamark agent skills (.claude/skills, .agents/skills)\n")
 }
 
 // allowRules reads permissions.allow from the fixture's settings file.
@@ -1382,4 +1314,46 @@ func TestReportSkillsLabelsASharedDestinationForEveryConsumer(t *testing.T) {
 	var b testWriter
 	reportInstalledSkills(&b, root, inspecttest.Registry())
 	assert.Equal(t, "  skills  claude not installed · codex+shared 3/3 current\n", b.String())
+}
+
+func TestRunInitNarratesTheScaffolds(t *testing.T) {
+	// The scaffold documents carry no prose; init gives them its own
+	// lines. These are the exact lines init always printed for them.
+	scaffoldLines := func(out string) string {
+		var lines []string
+
+		for _, ln := range strings.Split(out, "\n") {
+			if strings.Contains(ln, ".seamark/") || strings.Contains(ln, ".gitignore") {
+				lines = append(lines, ln)
+			}
+		}
+
+		return strings.Join(lines, "\n")
+	}
+
+	root := t.TempDir()
+
+	var preview testWriter
+	require.NoError(t, runInit(&preview, root, "/bin/seamark", "", true, "", false))
+	assert.Equal(t, "  would write  .seamark/policy.yaml\n"+
+		"  would write  .seamark/lessons.yaml\n"+
+		"  would write  .seamark/config.yaml\n"+
+		"  would update .gitignore (seamark carve-outs)", scaffoldLines(preview.String()))
+
+	var first testWriter
+	require.NoError(t, runInit(&first, root, "/bin/seamark", "", false, "", false))
+	assert.Equal(t, "  wrote  .seamark/policy.yaml\n"+
+		"  wrote  .seamark/lessons.yaml\n"+
+		"  wrote  .seamark/config.yaml\n"+
+		"  updated .gitignore (seamark carve-outs)", scaffoldLines(first.String()))
+
+	var again testWriter
+	require.NoError(t, runInit(&again, root, "/bin/seamark", "", false, "", false))
+	assert.Equal(t, "  kept    .seamark/policy.yaml (already present)\n"+
+		"  kept    .seamark/lessons.yaml (already present)\n"+
+		"  kept    .seamark/config.yaml (already present)\n"+
+		"  kept    .gitignore (seamark carve-outs already present)", scaffoldLines(again.String()))
+
+	assert.Equal(t, starterPolicyFor(gateModeWarn), string(mustRead(t, root, ".seamark/policy.yaml")),
+		"init writes the shared starter")
 }

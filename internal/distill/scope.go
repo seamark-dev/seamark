@@ -273,7 +273,7 @@ func AuditScopes(st *store.Store, cfg *reviews.Config, root string,
 		case model.ProposalProposed:
 		// Stored note and regions: they are what --apply installs.
 		case model.ProposalApplied:
-			pin, live := cfg.FindPin(reviews.NewPinKey(p.Rule, p.Region, p.Regions))
+			pin, live := cfg.FindPin(reviews.ProposalKey(p))
 			if !live {
 				// Pruned or re-scoped by hand: the decided delivery
 				// no longer exists under this key.

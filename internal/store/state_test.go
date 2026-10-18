@@ -52,7 +52,7 @@ func TestRebuildPreservesDecisions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, lessons, 1, "mined lessons must survive a rebuild")
 
-	v, err := s.GetMeta(schemaVersionKey)
+	v, err := s.GetMeta(MetaSchemaVersion)
 	require.NoError(t, err)
 	assert.NotEmpty(t, v, "the schema stamp must survive a rebuild")
 }

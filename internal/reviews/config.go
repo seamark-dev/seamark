@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/seamark-dev/seamark/internal/model"
-	"github.com/seamark-dev/seamark/internal/wording"
 )
 
 // DefaultThreshold is the minimum recurrences before a mined lesson
@@ -191,6 +189,12 @@ func DefaultConfig() *Config {
 // presentation, not contract.
 var ErrLessonsConfig = errors.New("lessons config")
 
+// ProvenanceMarker identifies a comment line that seamark writes above a
+// pin it applies. A prune removes only comments that carry it, because
+// any other comment above an entry is the user's text. The renderer and
+// every pin editor share this one value, so the two cannot drift apart.
+const ProvenanceMarker = "seamark lessons --distill"
+
 // LoadConfig reads <root>/.seamark/lessons.yaml. A missing file is not
 // an error — it means "defaults". A malformed file IS an error: silently
 // ignoring a typo'd mute would surface noise the user asked to hide.
@@ -198,16 +202,25 @@ var ErrLessonsConfig = errors.New("lessons config")
 // DefaultConfig on error rather than failing the whole report. Every
 // error carries ErrLessonsConfig.
 func LoadConfig(root string) (*Config, error) {
-	cfg := DefaultConfig()
-
 	data, err := os.ReadFile(filepath.Join(root, ".seamark", "lessons.yaml"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return cfg, nil
+			return DefaultConfig(), nil
 		}
 
 		return nil, fmt.Errorf("%w: %w", ErrLessonsConfig, err)
 	}
+
+	return ParseConfig(data)
+}
+
+// ParseConfig decodes the bytes of .seamark/lessons.yaml by the rules of
+// LoadConfig, and LoadConfig calls it. A caller that guards a file by
+// its hash parses exactly the hashed bytes, and a pin editor checks a
+// candidate file before it writes. Empty input yields the defaults, the
+// same as an absent file. Every error carries ErrLessonsConfig.
+func ParseConfig(data []byte) (*Config, error) {
+	cfg := DefaultConfig()
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrLessonsConfig, err)
@@ -230,7 +243,18 @@ func LoadConfig(root string) (*Config, error) {
 // Muted reports whether a mined lesson is hidden by config — exported so
 // the `--list` ledger can flag what the user has already silenced.
 func (c *Config) Muted(l model.Lesson) bool {
-	for _, m := range c.Mute {
+	return len(c.MuteMatches(l)) > 0
+}
+
+// MuteMatches returns the index in c.Mute of every entry that hides the
+// mined lesson l, in file order. It holds the one mute rule, so Muted
+// and a view that explains an exclusion cannot disagree. The index
+// counts decoded entries: a null YAML item decodes to no entry, so the
+// index is not a position in the file.
+func (c *Config) MuteMatches(l model.Lesson) []int {
+	var out []int
+
+	for i, m := range c.Mute {
 		if m.Rule != "" && !strings.EqualFold(m.Rule, l.Symptom) {
 			continue
 		}
@@ -243,10 +267,10 @@ func (c *Config) Muted(l model.Lesson) bool {
 			continue // an empty mute rule matches nothing, not everything
 		}
 
-		return true
+		out = append(out, i)
 	}
 
-	return false
+	return out
 }
 
 // SurfacesMined reports whether a mined lesson clears the surfacing
@@ -254,7 +278,14 @@ func (c *Config) Muted(l model.Lesson) bool {
 // every surface (hook, why, change_set, check) applies — inlining it
 // at a call site invites the surfaces to quietly disagree.
 func (c *Config) SurfacesMined(l model.Lesson) bool {
-	return l.Occurrences >= c.Threshold && !c.Muted(l)
+	return !c.BelowThreshold(l) && !c.Muted(l)
+}
+
+// BelowThreshold reports whether a mined lesson recurred fewer than
+// Threshold times. It is the threshold half of SurfacesMined, so a view
+// that explains an exclusion uses the same rule as the filter.
+func (c *Config) BelowThreshold(l model.Lesson) bool {
+	return l.Occurrences < c.Threshold
 }
 
 // pinsFor returns the pin rules that apply to scope — a file or
@@ -380,35 +411,14 @@ func (c *Config) SurfacePins(scope string, annotate PinAnnotator) []SurfacedPin 
 	return pins
 }
 
-// CollapseRestated drops surfaced pins that restate an earlier —
-// higher-ranked, per the caller's order — pin. Greedy against the kept
-// set, not transitive: a pin is dropped only when it restates one that
-// survived. The dropped count feeds the caller's "+N more" so a
-// collapsed duplicate is pointed at, never silently hidden.
-// (Bare linter-code pins collapse only on equal codes — wording.Topic
-// owns that rule, so every dedup surface treats codes the same way.)
+// CollapseRestated drops the surfaced pins that restate an earlier pin
+// and returns the dropped count. CollapseRestatedPins holds the rule.
+// The count feeds the "+N more" line of the caller, so a collapsed pin
+// is pointed at and never hidden.
 func CollapseRestated(pins []SurfacedPin) (kept []SurfacedPin, dropped int) {
-	if len(pins) < 2 {
-		return pins, 0
-	}
+	kept, restated := CollapseRestatedPins(pins)
 
-	topics := make([]wording.Topic, 0, len(pins))
-	// Fresh storage, not pins[:0]: an in-place filter would overwrite
-	// the caller's slice contents behind its back.
-	kept = make([]SurfacedPin, 0, len(pins))
-
-	for _, sp := range pins {
-		t := wording.New(sp.Pin.Rule, sp.Pin.Note)
-
-		if slices.ContainsFunc(topics, t.Restates) {
-			continue
-		}
-
-		topics = append(topics, t)
-		kept = append(kept, sp)
-	}
-
-	return kept, len(pins) - len(kept)
+	return kept, len(restated)
 }
 
 // SurfaceBudgetAnnotated is SurfaceBudget with a PinAnnotator: pins
@@ -523,6 +533,25 @@ func NewPinKey(rule, region string, regions []string) PinKey {
 	}
 
 	return PinKey{Rule: strings.ToLower(strings.TrimSpace(rule)), Region: canonical}
+}
+
+// ProposalKey returns the key of the pin that a proposal row links to.
+// It reads the stored Rule, Region and Regions fields as NewPinKey reads
+// the fields of a pin entry. Every link, liveness check, prune and
+// collision guard calls it, so the CLI and the console link a row to one
+// pin. The CLI golden tests freeze this form, also for rows whose fields
+// disagree, so the console uses it too.
+//
+// distill.RenderPins writes the pin of a row from model.Proposal.RegionSet.
+// For a row with disagreeing fields that pin has another key, and the
+// console marks such a row as ambiguous (pinfile.FieldsAgree). The
+// console decisions read the rendered key (proposals.pinKey) instead,
+// because they ask about the pin that an apply writes. Examples are the
+// apply duplicate check and the record of an existing pin. The record
+// refuses a row whose fields disagree, so for every row that it accepts
+// both keys are equal.
+func ProposalKey(p model.Proposal) PinKey {
+	return NewPinKey(p.Rule, p.Region, p.Regions)
 }
 
 // FindPin returns the pin lessons.yaml currently carries under this

@@ -1,18 +1,22 @@
 package index
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -1106,7 +1110,7 @@ func TestParseCacheVersionBumpReparses(t *testing.T) {
 	// Simulate a seamark upgrade: a stale cache version forces a reparse.
 	st, err := store.Open(store.DefaultPath(root))
 	require.NoError(t, err)
-	require.NoError(t, st.SetMeta("parse_cache_version", "stale"))
+	require.NoError(t, st.SetMeta(store.MetaParseCacheVersion, "stale"))
 	require.NoError(t, st.Close())
 
 	again, err := Run(Options{Root: root})
@@ -1265,4 +1269,690 @@ func TestExcludeGlobSkipsFiles(t *testing.T) {
 	syms, err := st.FindSymbols("Greet", 5) // Greet lives in the excluded util.go
 	require.NoError(t, err)
 	assert.Empty(t, syms, "an excluded file's symbols must not be indexed")
+}
+
+// sourceFixture builds an indexed git repository with one fix commit
+// and a seeded review corpus. origin is the origin URL; "" means no
+// remote. Both mine stamps read "1000", so a test sees any new stamp.
+func sourceFixture(t *testing.T, origin string) (root, dbPath string) {
+	t.Helper()
+
+	root = t.TempDir()
+	writeFixture(t, root)
+
+	git := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v\n%s", args, out)
+	}
+
+	git("init", "-b", "main")
+	git("add", "-A")
+	git("commit", "-m", "initial")
+
+	mainPath := filepath.Join(root, "main.go")
+	data, err := os.ReadFile(mainPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(mainPath,
+		append(data, []byte("\nfunc resetHelperState() {}\n")...), 0o644))
+	git("add", "-A")
+	git("commit", "-m", "fix: reset helper state before reuse (#42)")
+
+	if origin != "" {
+		git("remote", "add", "origin", origin)
+	}
+
+	sum, err := Run(Options{Root: root})
+	require.NoError(t, err)
+
+	dbPath = sum.DBPath
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	require.NoError(t, st.ReplaceLessons([]model.Lesson{{
+		ClusterKey: "main.go\x00seeded", Region: "main.go", Reviewer: "person",
+		Symptom: "seeded", Occurrences: 1,
+	}}, []model.Finding{{
+		ID: 900, LessonKey: "main.go\x00seeded", Path: "main.go",
+		Body: "seeded review", Source: model.SourceReview,
+	}}))
+	require.NoError(t, st.SetMeta(store.MetaReviewsMinedAt, "1000"))
+	require.NoError(t, st.SetMeta(store.MetaFixesMinedAt, "1000"))
+
+	return root, dbPath
+}
+
+// evidenceState is the stored part of the corpus that a refresh can
+// change.
+type evidenceState struct {
+	lessons   []string
+	findings  map[string]int
+	reviewsAt string
+	fixesAt   string
+}
+
+// readEvidenceState reads evidenceState from the database at dbPath.
+func readEvidenceState(t *testing.T, dbPath string) evidenceState {
+	t.Helper()
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	lessons, err := st.TopLessons(1, 100)
+	require.NoError(t, err)
+
+	keys := make([]string, 0, len(lessons))
+	for _, l := range lessons {
+		keys = append(keys, l.Symptom)
+	}
+
+	counts, err := st.FindingCounts()
+	require.NoError(t, err)
+
+	reviewsAt, err := st.GetMeta(store.MetaReviewsMinedAt)
+	require.NoError(t, err)
+
+	fixesAt, err := st.GetMeta(store.MetaFixesMinedAt)
+	require.NoError(t, err)
+
+	return evidenceState{lessons: keys, findings: counts, reviewsAt: reviewsAt, fixesAt: fixesAt}
+}
+
+// assertReviewsKept checks that the review part of the fixture corpus
+// is unchanged, as a refresh that must keep the corpus leaves it.
+func assertReviewsKept(t *testing.T, got evidenceState) {
+	t.Helper()
+
+	assert.Equal(t, []string{"seeded"}, got.lessons, "the stored lessons stay")
+	assert.Equal(t, 1, got.findings[model.SourceReview], "the stored review findings stay")
+	assert.Equal(t, "1000", got.reviewsAt, "the review stamp stays")
+}
+
+// ghPageJSON is one gh page: an inline comment that clusters into one
+// lesson and a PR-level comment that clustering drops.
+const ghPageJSON = `[{"id":11,"user":{"login":"rev","type":"User"},` +
+	`"body":"Reset pooled state before reuse here.","path":"main.go","line":3,` +
+	`"html_url":"https://github.com/o/r/pull/1#discussion_r11","created_at":"2026-07-21T10:00:00Z",` +
+	`"pull_request_url":"https://api.github.com/repos/o/r/pulls/1"},` +
+	`{"id":12,"user":{"login":"rev","type":"User"},"body":"Overall fine.","path":"",` +
+	`"created_at":"2026-07-22T10:00:00Z","pull_request_url":"https://api.github.com/repos/o/r/pulls/1"}]`
+
+// staticFetch returns a FetchFunc that answers with raw and err.
+func staticFetch(raw string, err error) reviews.FetchFunc {
+	return func(context.Context, string, string, reviews.Options) ([]byte, error) {
+		if err != nil {
+			return nil, err
+		}
+
+		return []byte(raw), nil
+	}
+}
+
+// ghExitError returns a real *exec.ExitError with the given code.
+func ghExitError(t *testing.T, code int) error {
+	t.Helper()
+
+	err := exec.Command("sh", "-c", fmt.Sprintf("exit %d", code)).Run()
+
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+
+	return err
+}
+
+func TestRefreshSourcesLocalModeNeverFetches(t *testing.T) {
+	root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+	res, err := RefreshSources(context.Background(), RefreshRequest{
+		Root: root, Mode: SourcesLocal,
+		Fetch: func(context.Context, string, string, reviews.Options) ([]byte, error) {
+			t.Fatal("local mode must not contact GitHub")
+
+			return nil, nil
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, SourceRefreshed, res.Fixes.State)
+	assert.Equal(t, CauseNone, res.Fixes.Cause)
+	assert.Equal(t, 1, res.Fixes.Stored)
+	assert.Positive(t, res.Fixes.MinedAt)
+	assert.Equal(t, 1, res.FixCount)
+	assert.Equal(t, SourceNotAttempted, res.Reviews.State)
+
+	got := readEvidenceState(t, dbPath)
+	assertReviewsKept(t, got)
+	assert.Equal(t, 1, got.findings[model.SourceFixConventional])
+	assert.Equal(t, fmt.Sprint(res.Fixes.MinedAt), got.fixesAt, "the outcome reports the stored stamp")
+}
+
+func TestRefreshSourcesReviewMatrix(t *testing.T) {
+	missing := fmt.Errorf("gh api: %w (is the GitHub CLI installed?)",
+		&exec.Error{Name: "gh", Err: exec.ErrNotFound})
+
+	cases := []struct {
+		name    string
+		fetch   reviews.FetchFunc
+		state   SourceState
+		cause   SourceCause
+		lessons []string
+		reason  string
+	}{
+		{name: "refreshed", fetch: staticFetch(ghPageJSON, nil), state: SourceRefreshed,
+			lessons: []string{"reset pooled state before reuse here"}},
+		{name: "successful empty", fetch: staticFetch("[]", nil), state: SourceEmpty,
+			lessons: []string{}, reason: "no review comments found"},
+		{name: "zero lessons", fetch: staticFetch(`[{"id":12,"user":{"login":"rev","type":"User"},`+
+			`"body":"Overall fine.","path":"","created_at":"2026-07-22T10:00:00Z"}]`, nil),
+			state: SourceEmpty, lessons: []string{}},
+		{name: "gh missing", fetch: staticFetch("", missing), state: SourceUnavailable,
+			cause: CauseGHMissing, reason: "executable file not found"},
+		{name: "auth", fetch: staticFetch("", fmt.Errorf("gh api: To get started with GitHub CLI: %w", ghExitError(t, 4))),
+			state: SourceFailed, cause: CauseAuth, reason: "To get started with GitHub CLI"},
+		{name: "other exit code", fetch: staticFetch("", fmt.Errorf("gh api: HTTP 500: %w", ghExitError(t, 1))),
+			state: SourceFailed, cause: CauseFetchFailed, reason: "HTTP 500"},
+		{name: "fetch failed", fetch: staticFetch("", errors.New("gh api: HTTP 404: Not Found")),
+			state: SourceFailed, cause: CauseFetchFailed, reason: "HTTP 404"},
+		{name: "unreadable", fetch: staticFetch("not json", nil), state: SourceFailed,
+			cause: CauseUnreadable, reason: "review comments unreadable"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+			res, err := RefreshSources(context.Background(), RefreshRequest{
+				Root: root, Mode: SourcesReviewsAndLocal, Fetch: c.fetch,
+			})
+			require.NoError(t, err, "a degraded source is an outcome, not an error")
+
+			// The local source succeeds on its own in every row.
+			assert.Equal(t, SourceRefreshed, res.Fixes.State)
+			assert.Equal(t, 1, res.FixCount)
+
+			assert.Equal(t, c.state, res.Reviews.State)
+			assert.Equal(t, c.cause, res.Reviews.Cause, "the cause is data, so no caller parses Reason")
+			assert.Contains(t, res.Reviews.Reason, c.reason)
+
+			got := readEvidenceState(t, dbPath)
+			assert.Equal(t, 1, got.findings[model.SourceFixConventional])
+			assert.NotEqual(t, "1000", got.fixesAt)
+
+			if c.lessons == nil {
+				assertReviewsKept(t, got)
+				assert.Zero(t, res.Reviews.MinedAt)
+
+				return
+			}
+
+			// A successful fetch, even an empty one, replaces the corpus.
+			assert.Equal(t, c.lessons, got.lessons)
+			assert.Equal(t, len(c.lessons), res.Reviews.Lessons)
+			assert.Equal(t, fmt.Sprint(res.Reviews.MinedAt), got.reviewsAt)
+		})
+	}
+}
+
+// ghOnPath puts a gh script first on PATH. The script writes stderr and
+// exits with code. The rest of PATH stays, so git still resolves.
+func ghOnPath(t *testing.T, stderr string, code int) {
+	t.Helper()
+
+	bin := t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' '%s' >&2\nexit %d\n", strings.ReplaceAll(stderr, "'", `'\''`), code)
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestRefreshSourcesClassifiesGHFailures runs the default gh fetcher.
+// The stderr lines are the ones that gh 2.20.2 writes for each case. gh
+// api exits with code 1 for every HTTP error, so the status names the cause.
+func TestRefreshSourcesClassifiesGHFailures(t *testing.T) {
+	cases := []struct {
+		name   string
+		stderr string
+		code   int
+		cause  SourceCause
+		reason string
+	}{
+		{name: "no login", stderr: "To get started with GitHub CLI, please run:  gh auth login", code: 4,
+			cause: CauseAuth, reason: "gh auth login"},
+		{name: "bad or expired token", stderr: "gh: Bad credentials (HTTP 401)", code: 1,
+			cause: CauseAuth, reason: "Bad credentials (HTTP 401)"},
+		{name: "rate limit", stderr: "gh: API rate limit exceeded for user ID 1. (HTTP 403)", code: 1,
+			cause: CauseRateLimited, reason: "rate limit exceeded"},
+		{name: "too many requests", stderr: "gh: You have exceeded a secondary rate limit. (HTTP 429)", code: 1,
+			cause: CauseRateLimited, reason: "(HTTP 429)"},
+		{name: "unknown repository", stderr: "gh: Not Found (HTTP 404)", code: 1,
+			cause: CauseFetchFailed, reason: "Not Found (HTTP 404)"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+			ghOnPath(t, c.stderr, c.code)
+
+			res, err := RefreshSources(context.Background(), RefreshRequest{Root: root, Mode: SourcesReviewsAndLocal})
+			require.NoError(t, err, "a degraded source is an outcome, not an error")
+
+			assert.Equal(t, SourceFailed, res.Reviews.State)
+			assert.Equal(t, c.cause, res.Reviews.Cause)
+			assert.Contains(t, res.Reviews.Reason, c.reason)
+			assert.Zero(t, res.Reviews.MinedAt)
+			assertReviewsKept(t, readEvidenceState(t, dbPath))
+		})
+	}
+}
+
+func TestRefreshSourcesWithoutGitHubOrigin(t *testing.T) {
+	root, dbPath := sourceFixture(t, "")
+
+	res, err := RefreshSources(context.Background(), RefreshRequest{
+		Root: root, Mode: SourcesReviewsAndLocal,
+		Fetch: func(context.Context, string, string, reviews.Options) ([]byte, error) {
+			t.Fatal("no GitHub origin, so no fetch")
+
+			return nil, nil
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, SourceRefreshed, res.Fixes.State)
+	assert.Equal(t, SourceUnavailable, res.Reviews.State)
+	assert.Equal(t, CauseNoRepository, res.Reviews.Cause)
+	assert.Equal(t, "not a GitHub repository", res.Reviews.Reason)
+	assertReviewsKept(t, readEvidenceState(t, dbPath))
+}
+
+func TestRefreshSourcesStopDuringFetchKeepsTheCorpus(t *testing.T) {
+	root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+
+	// The fake blocks like a slow gh until the stop arrives.
+	fetch := func(ctx context.Context, _, _ string, _ reviews.Options) ([]byte, error) {
+		close(started)
+		<-ctx.Done()
+
+		return nil, ctx.Err()
+	}
+
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	begin := time.Now()
+	res, err := RefreshSources(ctx, RefreshRequest{Root: root, Mode: SourcesReviewsAndLocal, Fetch: fetch})
+	require.NoError(t, err)
+
+	assert.Less(t, time.Since(begin), 10*time.Second, "the stop returns without waiting for the fetch")
+	assert.Equal(t, SourceRefreshed, res.Fixes.State, "the local phase committed before the fetch")
+	assert.Equal(t, SourceStopped, res.Reviews.State)
+	assert.Equal(t, CauseStopped, res.Reviews.Cause)
+	require.ErrorIs(t, res.Reviews.Err, context.Canceled)
+	assert.Equal(t, reviews.OutcomeStopped, res.Review.Outcome)
+
+	assertReviewsKept(t, readEvidenceState(t, dbPath))
+}
+
+func TestRefreshSourcesStopAfterFetchNeverPublishes(t *testing.T) {
+	root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// The data arrives complete, but after the stop: it must not replace
+	// the stored corpus.
+	fetch := func(context.Context, string, string, reviews.Options) ([]byte, error) {
+		cancel()
+
+		return []byte(ghPageJSON), nil
+	}
+
+	res, err := RefreshSources(ctx, RefreshRequest{Root: root, Mode: SourcesReviewsAndLocal, Fetch: fetch})
+	require.NoError(t, err)
+
+	assert.Equal(t, SourceStopped, res.Reviews.State)
+	assert.Equal(t, CauseStopped, res.Reviews.Cause)
+	assert.False(t, res.Review.Fetched)
+	assertReviewsKept(t, readEvidenceState(t, dbPath))
+}
+
+func TestRefreshSourcesStopDuringTheLocalPhaseSkipsGitHub(t *testing.T) {
+	root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+	// The fix mine cannot stop part way, so a stop that arrives during it
+	// is seen after it: a context that is already done models that.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	res, err := RefreshSources(ctx, RefreshRequest{
+		Root: root, Mode: SourcesReviewsAndLocal,
+		Fetch: func(context.Context, string, string, reviews.Options) ([]byte, error) {
+			t.Fatal("a stop before the fetch must not start it")
+
+			return nil, nil
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, SourceRefreshed, res.Fixes.State, "the local phase finishes and persists")
+	assert.Equal(t, SourceStopped, res.Reviews.State)
+	assert.Equal(t, CauseStopped, res.Reviews.Cause)
+	assert.Equal(t, "stopped before the GitHub fetch", res.Reviews.Reason)
+
+	got := readEvidenceState(t, dbPath)
+	assertReviewsKept(t, got)
+	assert.NotEqual(t, "1000", got.fixesAt)
+}
+
+// failWrites installs a trigger that makes every write to table fail.
+// It stands in for a store error at the commit boundary.
+func failWrites(t *testing.T, dbPath, table string) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = db.Close() }()
+
+	for _, op := range []string{"INSERT", "DELETE"} {
+		_, err := db.Exec(fmt.Sprintf(
+			"CREATE TRIGGER fail_%s_%s BEFORE %s ON %s BEGIN SELECT RAISE(ABORT, 'disk says no'); END",
+			strings.ToLower(op), table, op, table))
+		require.NoError(t, err)
+	}
+}
+
+func TestRefreshSourcesReviewWriteFailure(t *testing.T) {
+	root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+	res, err := RefreshSources(context.Background(), RefreshRequest{
+		Root: root, Mode: SourcesReviewsAndLocal, Fetch: staticFetch(ghPageJSON, nil),
+		BeforePersist: func(source string) error {
+			if source == SourceReviews {
+				failWrites(t, dbPath, "lesson")
+			}
+
+			return nil
+		},
+	})
+	require.Error(t, err, "a write failure is an error, as RefreshReviews has always returned")
+
+	assert.Equal(t, SourceRefreshed, res.Fixes.State, "the local success stays visible")
+	assert.Equal(t, SourceFailed, res.Reviews.State)
+	assert.Equal(t, CauseStore, res.Reviews.Cause, "a write failure is not a fetch failure")
+	assert.Contains(t, res.Reviews.Reason, "disk says no")
+	assert.True(t, res.Review.Fetched, "the raw result still reports the fetch")
+
+	got := readEvidenceState(t, dbPath)
+	assertReviewsKept(t, got)
+	assert.Equal(t, 1, got.findings[model.SourceFixConventional])
+}
+
+func TestRefreshSourcesFixWriteFailureSkipsReviews(t *testing.T) {
+	root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+	res, err := RefreshSources(context.Background(), RefreshRequest{
+		Root: root, Mode: SourcesReviewsAndLocal,
+		Fetch: func(context.Context, string, string, reviews.Options) ([]byte, error) {
+			t.Fatal("a failed local write must stop the refresh before GitHub")
+
+			return nil, nil
+		},
+		BeforePersist: func(source string) error {
+			if source == SourceFixes {
+				failWrites(t, dbPath, "finding")
+			}
+
+			return nil
+		},
+	})
+	require.Error(t, err)
+
+	assert.Equal(t, SourceFailed, res.Fixes.State)
+	assert.Equal(t, CauseStore, res.Fixes.Cause)
+	assert.Contains(t, res.Fixes.Reason, "disk says no")
+	assert.Equal(t, SourceNotAttempted, res.Reviews.State)
+
+	got := readEvidenceState(t, dbPath)
+	assertReviewsKept(t, got)
+	assert.Equal(t, "1000", got.fixesAt, "the rolled-back write keeps the old stamp")
+}
+
+func TestRefreshSourcesBeforePersistGuardsEveryWrite(t *testing.T) {
+	root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+	var seen []string
+
+	res, err := RefreshSources(context.Background(), RefreshRequest{
+		Root: root, Mode: SourcesReviewsAndLocal, Fetch: staticFetch(ghPageJSON, nil),
+		BeforePersist: func(source string) error {
+			seen = append(seen, source)
+
+			if source == SourceReviews {
+				return context.Canceled
+			}
+
+			return nil
+		},
+	})
+	require.ErrorIs(t, err, context.Canceled)
+
+	assert.Equal(t, []string{SourceFixes, SourceReviews}, seen)
+	assert.Equal(t, SourceRefreshed, res.Fixes.State)
+	assert.Equal(t, SourceStopped, res.Reviews.State, "a context error from the hook is a stop")
+	assert.Equal(t, CauseStopped, res.Reviews.Cause)
+	assertReviewsKept(t, readEvidenceState(t, dbPath))
+
+	// Any other hook error is a failure of that source.
+	root, _ = sourceFixture(t, "git@github.com:o/r.git")
+	conflict := errors.New("the database changed since the preview")
+
+	res, err = RefreshSources(context.Background(), RefreshRequest{
+		Root: root, Mode: SourcesLocal,
+		BeforePersist: func(string) error { return conflict },
+	})
+	require.ErrorIs(t, err, conflict)
+	assert.Equal(t, SourceFailed, res.Fixes.State)
+	assert.Equal(t, CauseRefused, res.Fixes.Cause)
+}
+
+// errRefused stands in for a caller's check that refuses the work.
+var errRefused = errors.New("the workspace changed since the preview")
+
+// removeDatabase deletes the database at dbPath with its SQLite side
+// files, as a user who deletes .seamark/index.db does.
+func removeDatabase(t *testing.T, dbPath string) {
+	t.Helper()
+
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		err := os.Remove(dbPath + suffix)
+		if !errors.Is(err, os.ErrNotExist) {
+			require.NoError(t, err)
+		}
+	}
+}
+
+// TestRefreshSourcesRunsTheHookBeforeTheStoreOpens pins the order hook,
+// then open. store.Open creates a missing database and migrates an
+// older one, so a hook after the open would guard a changed database.
+func TestRefreshSourcesRunsTheHookBeforeTheStoreOpens(t *testing.T) {
+	noFetch := func(context.Context, string, string, reviews.Options) ([]byte, error) {
+		t.Error("a refused fix phase must stop the refresh before GitHub")
+
+		return nil, errors.New("unexpected fetch")
+	}
+
+	t.Run("mined fixes", func(t *testing.T) {
+		root, _ := sourceFixture(t, "git@github.com:o/r.git")
+		dbPath := filepath.Join(t.TempDir(), ".seamark", "index.db")
+
+		var existed []bool
+
+		res, err := RefreshSources(context.Background(), RefreshRequest{
+			Root: root, DBPath: dbPath, Mode: SourcesReviewsAndLocal, Fetch: noFetch,
+			BeforePersist: func(string) error {
+				_, statErr := os.Stat(dbPath)
+				existed = append(existed, statErr == nil)
+
+				return errRefused
+			},
+		})
+		require.ErrorIs(t, err, errRefused)
+
+		assert.Equal(t, []bool{false}, existed, "the hook sees the database before the open")
+		assert.Equal(t, SourceFailed, res.Fixes.State)
+		assert.Equal(t, CauseRefused, res.Fixes.Cause)
+		assert.Equal(t, SourceNotAttempted, res.Reviews.State)
+		assert.NoDirExists(t, filepath.Dir(dbPath), "a refused open creates nothing")
+	})
+
+	t.Run("unmined fixes", func(t *testing.T) {
+		// A directory without git gives an unmined result. Its store still
+		// opens, so the hook still runs.
+		root := t.TempDir()
+		dbPath := filepath.Join(t.TempDir(), ".seamark", "index.db")
+
+		var seen []string
+
+		res, err := RefreshSources(context.Background(), RefreshRequest{
+			Root: root, DBPath: dbPath, Mode: SourcesLocal,
+			BeforePersist: func(source string) error {
+				seen = append(seen, source)
+
+				return errRefused
+			},
+		})
+		require.ErrorIs(t, err, errRefused)
+
+		assert.Equal(t, []string{SourceFixes}, seen)
+		assert.Equal(t, CauseRefused, res.Fixes.Cause)
+		assert.NoDirExists(t, filepath.Dir(dbPath), "a refused open creates nothing")
+
+		// Without a hook the CLI behaviour stays: the store opens and the
+		// source reads unavailable.
+		res, err = RefreshSources(context.Background(), RefreshRequest{Root: root, DBPath: dbPath, Mode: SourcesLocal})
+		require.NoError(t, err)
+
+		assert.Equal(t, SourceUnavailable, res.Fixes.State)
+		assert.Equal(t, CauseNoHistory, res.Fixes.Cause)
+		assert.FileExists(t, dbPath)
+	})
+
+	t.Run("reviews", func(t *testing.T) {
+		root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+		// The database goes away during the fetch, and the hook refuses.
+		fetch := func(context.Context, string, string, reviews.Options) ([]byte, error) {
+			removeDatabase(t, dbPath)
+
+			return []byte(ghPageJSON), nil
+		}
+
+		var existed []bool
+
+		res, err := RefreshSources(context.Background(), RefreshRequest{
+			Root: root, Mode: SourcesReviewsAndLocal, Fetch: fetch,
+			BeforePersist: func(source string) error {
+				if source != SourceReviews {
+					return nil
+				}
+
+				_, statErr := os.Stat(dbPath)
+				existed = append(existed, statErr == nil)
+
+				return errRefused
+			},
+		})
+		require.ErrorIs(t, err, errRefused)
+
+		assert.Equal(t, []bool{false}, existed, "the hook sees the database before the open")
+		assert.Equal(t, SourceRefreshed, res.Fixes.State)
+		assert.Equal(t, SourceFailed, res.Reviews.State)
+		assert.Equal(t, CauseRefused, res.Reviews.Cause)
+		assert.NoFileExists(t, dbPath, "a refused review write creates no database")
+	})
+}
+
+func TestSourceCauseNames(t *testing.T) {
+	assert.Equal(t, "none", CauseNone.String())
+	assert.Equal(t, "auth", CauseAuth.String())
+	assert.Equal(t, "rate-limited", CauseRateLimited.String())
+	assert.Equal(t, "store", CauseStore.String())
+	assert.Equal(t, "refused", CauseRefused.String())
+	assert.Equal(t, "SourceCause(99)", SourceCause(99).String())
+}
+
+func TestRefreshSourcesReportsTypedProgress(t *testing.T) {
+	root, _ := sourceFixture(t, "git@github.com:o/r.git")
+
+	var events []RefreshEvent
+
+	_, err := RefreshSources(context.Background(), RefreshRequest{
+		Root: root, Mode: SourcesReviewsAndLocal, Fetch: staticFetch(ghPageJSON, nil),
+		Progress: func(e RefreshEvent) { events = append(events, e) },
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, []RefreshEvent{
+		{Phase: PhaseMineFixes, Source: SourceFixes},
+		{Phase: PhasePersist, Source: SourceFixes},
+		{Phase: PhaseSourceDone, Source: SourceFixes, State: SourceRefreshed},
+		{Phase: PhaseFetchReviews, Source: SourceReviews, Repository: "o/r"},
+		{Phase: PhaseFetched, Source: SourceReviews, Repository: "o/r", Comments: 2, Kept: 2},
+		{Phase: PhaseCluster, Source: SourceReviews, Repository: "o/r"},
+		{Phase: PhasePersist, Source: SourceReviews},
+		{Phase: PhaseSourceDone, Source: SourceReviews, State: SourceRefreshed},
+	}, events)
+}
+
+func TestRefreshSourcesReasonIsOneSafeLine(t *testing.T) {
+	root, _ := sourceFixture(t, "git@github.com:o/r.git")
+
+	hostile := errors.New("gh api: \x1b]0;pwned\x07HTTP 500 GH_TOKEN=abc123\nsecond line")
+
+	res, err := RefreshSources(context.Background(), RefreshRequest{
+		Root: root, Mode: SourcesReviewsAndLocal, Fetch: staticFetch("", hostile),
+	})
+	require.NoError(t, err)
+
+	reason := res.Reviews.Reason
+	assert.NotContains(t, reason, "\x1b")
+	assert.NotContains(t, reason, "\x07")
+	assert.NotContains(t, reason, "\n")
+	assert.NotContains(t, reason, "abc123")
+	assert.Contains(t, reason, "[REDACTED]")
+	require.ErrorIs(t, res.Reviews.Err, hostile, "the raw cause stays available for errors.Is")
+}
+
+func TestRefreshFixesReturnsTheMineCount(t *testing.T) {
+	root, dbPath := sourceFixture(t, "")
+
+	count, err := RefreshFixes(root, dbPath, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	count, err = RefreshFixes(t.TempDir(), filepath.Join(t.TempDir(), "index.db"), nil)
+	require.NoError(t, err)
+	assert.Zero(t, count, "an unmined source prints 0, as the CLI always has")
+}
+
+func TestSourceModeNames(t *testing.T) {
+	assert.Equal(t, "local", SourcesLocal.String())
+	assert.Equal(t, "reviews-and-local", SourcesReviewsAndLocal.String())
+	assert.Equal(t, "SourceMode(7)", SourceMode(7).String())
 }

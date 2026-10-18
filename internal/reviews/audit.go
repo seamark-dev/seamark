@@ -250,40 +250,61 @@ func appendFiring(root string, rec Firing) error {
 	return json.NewEncoder(f).Encode(rec)
 }
 
+// AuditLogPath returns the firing log path under root. A reader that
+// must tell a missing log from an empty log stats this path, because
+// ReadFirings returns no records for both.
+func AuditLogPath(root string) string {
+	return filepath.Join(root, ".seamark", auditFile)
+}
+
 // ReadFirings loads the firing log. A missing log is empty history, not
 // an error; an unparseable line is skipped so one corrupt append never
 // hides the rest.
 func ReadFirings(root string) ([]Firing, error) {
-	f, err := os.Open(filepath.Join(root, ".seamark", auditFile))
+	out, _, err := ReadFiringsCounted(root)
+
+	return out, err
+}
+
+// ReadFiringsCounted is ReadFirings plus the number of skipped lines.
+// A skipped line is not valid JSON or is longer than the line bound.
+// The count lets a view say that unreadable records exist, instead of
+// showing a log of corrupt lines as an empty log. Blank lines are not
+// records, so the count excludes them.
+func ReadFiringsCounted(root string) (firings []Firing, skipped int, err error) {
+	f, err := os.Open(AuditLogPath(root))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, 0, nil
 		}
 
-		return nil, err
+		return nil, 0, err
 	}
 	defer func() { _ = f.Close() }()
-
-	var out []Firing
 
 	br := bufio.NewReader(f)
 
 	for {
-		line, tooLong, err := readAuditLine(br, maxAuditLine)
+		line, tooLong, rerr := readAuditLine(br, maxAuditLine)
 
-		if len(line) > 0 && !tooLong {
+		switch {
+		case tooLong:
+			skipped++
+		case len(line) > 0:
 			var rec Firing
 			if json.Unmarshal(line, &rec) == nil {
-				out = append(out, rec)
+				firings = append(firings, rec)
+			} else {
+				skipped++
 			}
 		}
 
-		if err != nil {
-			if err == io.EOF {
-				return out, nil
+		if rerr != nil {
+			if rerr == io.EOF {
+				return firings, skipped, nil
 			}
 
-			return out, err
+			return firings, skipped, rerr
 		}
 	}
 }

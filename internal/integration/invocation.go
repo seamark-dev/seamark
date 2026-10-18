@@ -7,9 +7,15 @@ import (
 	"github.com/seamark-dev/seamark/internal/agent"
 )
 
+// DefaultInvocationID is the agent.cli value that an absent or empty key
+// resolves to. The settings editor shows it as the default, so the UI
+// does not repeat the literal.
+const DefaultInvocationID = ClaudeID
+
 // ResolveInvocation resolves the configured agent's command for root.
 // It skips PATH and authentication checks so dry runs and diagnostics work
-// without the client installed. Use agent.NewCommand to create the invoker.
+// without the client installed. Use agent.NewCommand to create the invoker,
+// or agent.NewGroupCommand when no terminal interrupt reaches the caller.
 //
 // Custom argv takes precedence, uses the name "custom", and inherits the
 // caller's directory. Otherwise agent.cli selects a registered client,
@@ -22,7 +28,7 @@ func (r *Registry) ResolveInvocation(cfg *agent.Config, root string) (agent.Comm
 
 	id := cfg.Agent.CLI
 	if id == "" {
-		id = ClaudeID
+		id = DefaultInvocationID
 	}
 
 	known := strings.Join(r.InvocationIDs(), ", ")

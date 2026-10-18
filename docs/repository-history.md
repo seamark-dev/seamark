@@ -86,6 +86,15 @@ clients        claude  gate (warn) + lessons hooks installed; registered in .mcp
                codex   no hooks installed; MCP registration not registered
 ```
 
+When git tracks files that the working tree no longer has, and the
+deletions are not staged, a `deleted` line after `parsed` says, for
+example, `47 tracked files in the working tree (deletions not staged)`.
+These are the paths that `git status` shows as deleted. They are not in
+the seen count and are not parse errors, because no file exists to
+parse. `--json` carries the count as
+`coverage.files_deleted`, and `seamark index` adds
+`(47 deleted in the working tree)` after the seen count.
+
 The `clients` block is the per-agent view: which hooks and which MCP
 registration each agent has, the native evidence behind them (a
 recorded check on a named version and surface, a pending check, or

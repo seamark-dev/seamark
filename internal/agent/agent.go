@@ -62,16 +62,24 @@ type Config struct {
 // error (the same contract as everywhere else: a typo'd config must
 // not be silently ignored).
 func LoadConfig(root string) (*Config, error) {
-	cfg := &Config{}
-
 	data, err := os.ReadFile(filepath.Join(root, ".seamark", "config.yaml"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return cfg, nil
+			return &Config{}, nil
 		}
 
 		return nil, err
 	}
+
+	return ParseConfig(data)
+}
+
+// ParseConfig decodes the agent section from the bytes of config.yaml.
+// LoadConfig calls it, so both entry points report the same error text.
+// The settings editor calls it to validate planned bytes before a write.
+// Empty input yields the defaults, the same as an absent file.
+func ParseConfig(data []byte) (*Config, error) {
+	cfg := &Config{}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("agent config: %w", err)
@@ -102,6 +110,33 @@ func New(cfg *Config) (Invoker, error) {
 	return NewCommand(spec)
 }
 
+// NewGroupCommand is NewCommand for a caller that no terminal interrupt
+// reaches, such as the full-screen console in raw mode. Each run starts
+// the client in a new process group. Cancellation then kills the whole
+// group, so a wrapper script or a launcher cannot leave its model call
+// running. The end of each run kills the group too, so no descendant
+// outlives the call. The commands keep NewCommand: a terminal interrupt
+// stops them only while the client shares their process group.
+//
+// The new group is not the foreground group of the terminal, so no
+// terminal signal reaches the client, a hangup included. The caller
+// must turn such a signal into a cancellation of the context.
+func NewGroupCommand(spec CommandSpec) (Invoker, error) {
+	inv, err := NewCommand(spec)
+	if err != nil {
+		return nil, err
+	}
+
+	c, ok := inv.(*cliInvoker)
+	if !ok {
+		return nil, fmt.Errorf("agent %s: no process group for this invoker", spec.Name)
+	}
+
+	c.ownGroup = true
+
+	return c, nil
+}
+
 // cliInvoker shells out to an agent CLI in one-shot mode.
 type cliInvoker struct {
 	name string
@@ -110,6 +145,9 @@ type cliInvoker struct {
 	dir string
 	// diagnostic selects the output included in errors.
 	diagnostic Diagnostic
+	// ownGroup starts each run in a new process group and kills that
+	// group on cancellation and at the end of the run (NewGroupCommand).
+	ownGroup bool
 }
 
 // Keep CLI errors short enough to display as notes.
@@ -119,8 +157,10 @@ const (
 )
 
 // waitDelay bounds pipe cleanup after exit or cancellation, even when
-// descendants keep pipes open. Cancellation kills only the client;
-// it shares the caller's process group so terminal interrupts still reach it.
+// descendants keep pipes open. By default, cancellation kills only the
+// client. The client shares the caller's process group, so a terminal
+// interrupt reaches its descendants too. NewGroupCommand kills the whole
+// group instead, because a console in raw mode gets no such interrupt.
 // Tests can shorten this delay.
 var waitDelay = 5 * time.Second
 
@@ -158,19 +198,24 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 func (b *boundedBuffer) String() string { return b.buf.String() }
 
 // Invoke sends the prompt on stdin to avoid argv limits and process-table
-// exposure. Cancellation kills the client; waitDelay bounds pipe cleanup.
+// exposure. Cancellation kills the client, or its process group for
+// NewGroupCommand. waitDelay bounds pipe cleanup.
 func (c *cliInvoker) Invoke(ctx context.Context, prompt string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.argv[0], c.argv[1:]...)
 	cmd.Dir = c.dir
 	cmd.WaitDelay = waitDelay
 	cmd.Stdin = strings.NewReader(prompt)
 
+	if c.ownGroup {
+		killGroupOnCancel(cmd)
+	}
+
 	out := &boundedBuffer{max: maxStdout}
 	errb := &boundedBuffer{max: maxStderr}
 	cmd.Stdout = out
 	cmd.Stderr = errb
 
-	if err := cmd.Run(); err != nil {
+	if err := c.run(ctx, cmd); err != nil {
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("agent %s: %w", c.name, ctx.Err())
 		}
@@ -193,6 +238,42 @@ func (c *cliInvoker) Invoke(ctx context.Context, prompt string) (string, error) 
 	}
 
 	return out.String(), nil
+}
+
+// run runs cmd to its end. For NewGroupCommand it also ends the process
+// group of the client. exec cancels only while the client runs, so a
+// descendant that holds stdout after the client exits would ignore a
+// stop for up to waitDelay. A watch kills the group when ctx ends before
+// Wait returns. A descendant that closed its pipes never delays Wait, so
+// a last kill ends the group after every run, whatever its outcome.
+func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
+	if !c.ownGroup {
+		return cmd.Run()
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	waited := make(chan struct{})
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			// An error means that the group is gone already.
+			_ = killGroup(cmd)
+		case <-waited:
+		}
+	}()
+
+	err := cmd.Wait()
+	close(waited)
+
+	// The group is empty after a clean exit, and then the kill fails with
+	// nothing to report.
+	_ = killGroup(cmd)
+
+	return err
 }
 
 // diagnostic selects the first non-empty line or the last few, in order,

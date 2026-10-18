@@ -76,7 +76,10 @@ seamark lessons --distill --dry-run   # the full disclosure, nothing sent
 ```
 
 The dry run prints metadata only — never finding bodies — and works
-even when the agent CLI is not installed.
+even when the agent CLI is not installed. It plans exactly as the real
+run does: pending proposals whose evidence group is gone are left out of
+the plan and named at the end, because the real run prunes them before
+its first agent call. The dry run itself deletes nothing.
 
 With `agent.cli: codex`, the command is `codex exec` with `--ephemeral`
 (no session files), `--sandbox read-only` (model-generated commands cannot

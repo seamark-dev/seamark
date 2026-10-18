@@ -34,10 +34,10 @@ func HookBudget(cfg *reviews.Config) LessonBudget {
 	return LessonBudget{Total: HookLessonTotal, Pins: cfg.HookPinBudget()}
 }
 
-// clamped returns the budget with the pin cap at most the total cap. A
+// Clamped returns the budget with the pin cap at most the total cap. A
 // larger pin cap lets the total cap remove pins after the pin count is
 // final, and the held-back count must include every removed pin.
-func (b LessonBudget) clamped() LessonBudget {
+func (b LessonBudget) Clamped() LessonBudget {
 	if b.Total > 0 && b.Pins > b.Total {
 		b.Pins = b.Total
 	}
@@ -46,7 +46,8 @@ func (b LessonBudget) clamped() LessonBudget {
 }
 
 // LessonsForFilesBudget selects the lessons of one edit operation that
-// touches files, under one two-part budget. It reuses the union of
+// touches files, under one two-part budget. It reads the evidence once
+// (ReadEvidence) and applies hookFold. The union is the one of
 // LessonsForFiles: each pin appears once and ranks across all files,
 // and mined lessons appear once per cluster.
 //
@@ -66,13 +67,32 @@ func (b LessonBudget) clamped() LessonBudget {
 func LessonsForFilesBudget(st *store.Store, cfg *reviews.Config, files []string,
 	budget LessonBudget,
 ) (lessons []model.Lesson, heldBack int, err error) {
-	budget = budget.clamped()
-	ambient := budget.Pins > 0
-
-	merged, err := unionForFiles(st, cfg, files, ambient)
+	ev, err := ReadEvidence(st, files, cfg)
 	if err != nil {
 		return nil, 0, err
 	}
+
+	sel := ev.hookFold(cfg, budget)
+
+	return sel.Lessons, sel.HeldBack, nil
+}
+
+// hookFold is the budget rule of the edit hook. It clamps the budget
+// and collapses restatements (ambient budgets only). It cuts the pins
+// at the pin cap, then at the total cap. The mined lessons fill the
+// rest of the total cap. Each cut is a separate step, so the Selection
+// records what each step removes. LessonsForFilesBudget states the
+// held-back count.
+func (ev *Evidence) hookFold(cfg *reviews.Config, budget LessonBudget) Selection {
+	// The clamp lowers a larger pin cap to the total cap. So with a pin
+	// cap, the pins above it go to OverPinCap and OverTotal stays empty.
+	// Without a pin cap, the total cut moves the pins above the total
+	// cap to OverTotal.
+	budget = budget.Clamped()
+	ambient := budget.Pins > 0
+
+	merged := ev.union(cfg, ambient)
+	sel := Selection{Excluded: merged.excluded}
 
 	// everyPin keeps a pin that repeats an identity in lessons.yaml, as
 	// the single-file selector does. The collapse below then counts it,
@@ -81,29 +101,30 @@ func LessonsForFilesBudget(st *store.Store, cfg *reviews.Config, files []string,
 
 	// Two wordings of one theme must not spend two pin slots.
 	if ambient {
-		pins, heldBack = reviews.CollapseRestated(pins)
+		pins, sel.Restated = reviews.CollapseRestatedPins(pins)
 	}
 
-	for _, limit := range []int{budget.Pins, budget.Total} {
-		if limit > 0 && len(pins) > limit {
-			heldBack += len(pins) - limit
-			pins = pins[:limit]
-		}
+	pins, sel.OverPinCap = cutAt(pins, budget.Pins)
+	sel.Pins, sel.OverTotal = cutAt(pins, budget.Total)
+	sel.HeldBack = len(sel.Restated) + len(sel.OverPinCap) + len(sel.OverTotal)
+
+	// The mined lessons fill the room that the pins leave under the
+	// total cap. The reminder points at pins only, so MinedOverTotal is
+	// not part of HeldBack.
+	sel.Mined = merged.mined
+	if budget.Total > 0 {
+		sel.Mined, sel.MinedOverTotal = splitAt(merged.mined, budget.Total-len(sel.Pins))
 	}
 
 	// No preallocation: an empty selection stays nil, exactly as the
 	// single-file selector returns it.
-	for _, sp := range pins {
-		lessons = append(lessons, sp.Lesson())
+	for _, sp := range sel.Pins {
+		sel.Lessons = append(sel.Lessons, sp.Lesson())
 	}
 
-	lessons = append(lessons, merged.mined...)
+	sel.Lessons = append(sel.Lessons, sel.Mined...)
 
-	if budget.Total > 0 && len(lessons) > budget.Total {
-		lessons = lessons[:budget.Total]
-	}
-
-	return lessons, heldBack, nil
+	return sel
 }
 
 // PrintEditReminder writes the advisory block for one edit operation.

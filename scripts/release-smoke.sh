@@ -55,6 +55,10 @@ expect() {
 }
 
 expect seamark          "$BIN" version
+# The console needs a terminal. A pipe gets the plain commands and a
+# failure status, never escape sequences.
+if "$BIN" tui >/dev/null 2>&1 </dev/null; then fail "tui without a terminal must refuse"; fi
+"$BIN" tui 2>/dev/null </dev/null | grep -q "seamark doctor" || fail "tui without a terminal must print plain guidance"
 expect "gate    warn"   "$BIN" init
 # Preview only: the fixture stays free of installed skills so `doctor`
 # below keeps reporting them as info and passing. The "would write"

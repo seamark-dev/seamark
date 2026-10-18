@@ -63,7 +63,7 @@ func seededStore(t *testing.T) (st *store.Store, root string) {
 			Ref: "abc", TS: 1700000000, Title: "seed"})
 	}))
 
-	require.NoError(t, st.SetMeta("index_summary",
+	require.NoError(t, st.SetMeta(store.MetaIndexSummary,
 		`{"files_seen":10,"files_parsed":8,"files_skipped":1,"parse_errors":1}`))
 
 	return st, root
@@ -110,6 +110,68 @@ func TestPrintSurfacesTheUncomfortableParts(t *testing.T) {
 	assert.Contains(t, out, "no gate hook installed")
 	assert.Contains(t, out, "clients        claude  no hooks installed; MCP registration not registered")
 	assert.Contains(t, out, "               codex   no hooks installed; MCP registration not registered")
+}
+
+func TestGatherReadsTheDeletedCount(t *testing.T) {
+	st, root := seededStore(t)
+
+	// The seeded summary predates the field, so the count reads 0.
+	s, err := Gather(st, root)
+	require.NoError(t, err)
+	assert.Zero(t, s.Coverage.FilesDeleted, "an index summary without the field reads as 0")
+
+	require.NoError(t, st.SetMeta(store.MetaIndexSummary,
+		`{"files_seen":10,"files_parsed":8,"files_skipped":1,"files_deleted":47,"parse_errors":0}`))
+
+	s, err = Gather(st, root)
+	require.NoError(t, err)
+	assert.Equal(t, 47, s.Coverage.FilesDeleted)
+
+	data, err := json.Marshal(s)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"files_deleted":47`, "status --json carries the count")
+}
+
+func TestPrintNamesUnstagedDeletionsApartFromParseErrors(t *testing.T) {
+	for _, tc := range []struct {
+		deleted int
+		want    string
+	}{
+		{0, ""},
+		{1, "deleted        1 tracked file in the working tree (deletion not staged)\n"},
+		{47, "deleted        47 tracked files in the working tree (deletions not staged)\n"},
+	} {
+		s := &Status{Coverage: Coverage{Known: true, FilesSeen: 632, FilesParsed: 580, FilesSkipped: 5, FilesDeleted: tc.deleted}}
+
+		var b bytes.Buffer
+		Print(&b, s)
+		out := b.String()
+
+		parsed := "parsed         580 of 632 seen files (5 skipped by config)\n"
+		assert.Contains(t, out, parsed+tc.want+"symbols", "the note follows the coverage line")
+		assert.NotContains(t, out, "PARSE ERRORS", "a deleted path is not a parse error")
+
+		if tc.deleted == 0 {
+			assert.NotContains(t, out, "in the working tree", "no note without a deleted path")
+		}
+	}
+}
+
+func TestPrintKeepsUnstagedDeletionsApartFromParseErrorLines(t *testing.T) {
+	s := &Status{Coverage: Coverage{
+		Known: true, FilesSeen: 632, FilesParsed: 578, FilesSkipped: 5, FilesDeleted: 47, ParseErrors: 2,
+	}}
+
+	var b bytes.Buffer
+	Print(&b, s)
+
+	// The note has its own label after the parse-error lines, so it
+	// does not read as one more line of the PARSE ERRORS statement.
+	assert.Contains(t, b.String(),
+		"parsed         578 of 632 seen files (5 skipped by config) — 2 PARSE ERRORS:\n"+
+			"               those files are invisible to every answer\n"+
+			"deleted        47 tracked files in the working tree (deletions not staged)\n"+
+			"symbols")
 }
 
 func TestGatherReportsBrokenPolicy(t *testing.T) {

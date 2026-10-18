@@ -68,23 +68,24 @@ yet available. Windows is unsupported.
 
 ## Connect an AI coding agent
 
-From the repository you want to work on, choose one command:
+From the repository you want to work on, set up the AI coding agents you use:
 
 ```bash
-seamark init --client claude --skills --approve-tools
-seamark init --client codex --skills --approve-tools
-```
+# Claude Code
+seamark init --client claude --approve-tools
 
-To configure both, repeat `--client` in one command:
+# Codex
+seamark init --client codex --approve-tools
 
-```bash
-seamark init --client claude --client codex --skills --approve-tools
+# Both, in one run
+seamark init --client claude --client codex --approve-tools
 ```
 
 Setup connects MCP, installs hooks, and scaffolds `.seamark/` configuration.
-`--skills` adds the three workflow skills. `--approve-tools` adds permission
-rules for Seamark tools while preserving existing restrictions. Omit either
-flag if you do not want that part. With `--client`, use bare `--skills`, not
+`--approve-tools` adds permission rules for Seamark tools while preserving
+existing restrictions; omit it if you prefer to approve each tool call
+yourself. The three workflow skills are optional: add `--skills` to your
+setup command, now or later. With `--client`, use bare `--skills`, not
 `--skills=codex`.
 
 Add `--print` to preview the files without changing them. Setup preserves
@@ -122,7 +123,7 @@ it using Seamark. A young repository may have little history to report.
 ## Start learning from past mistakes
 
 Follow [Learn from your repository](../README.md#learn-from-your-repository)
-to mine fixes, draft a proposal, review it, and install a lesson. The
+to mine reviews and fixes, draft a proposal, review it, and install a lesson. The
 [lessons guide](lessons.md) explains tuning and the proposal lifecycle.
 
 Installing hooks does not create lessons. A reminder appears only when there

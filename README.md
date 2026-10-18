@@ -13,12 +13,17 @@ Review proposed lessons, keep the ones that matter, and let Seamark remind
 your agent when it edits relevant code. MCP tools and agent skills also help
 it understand past decisions and find related files that may need updating.
 
-[Get started](#get-started) · [Learn from your repository](#learn-from-your-repository) · [Agent skills](#agent-skills) · [Documentation](#documentation)
+[What you can do](#what-you-can-do) · [Get started](#get-started) · [Learn from your repository](#learn-from-your-repository) · [Agent skills](#agent-skills) · [Documentation](#documentation)
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 license"></a>
   <a href="docs/getting-started.md"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg" alt="macOS and Linux"></a>
 </p>
+
+<p align="center">
+  <img src="assets/seamark-tui-lessons-pins.png" alt="The seamark tui console: Lessons › Pins shows an installed pin with its evidence, citations, outcome, and maintenance routes" width="900">
+</p>
+<p align="center"><em>The workspace console (<code>seamark tui</code>, experimental): an installed pin with its evidence, its outcome, and the routes to maintain it.</em></p>
 
 ## Why Seamark?
 
@@ -44,6 +49,21 @@ from that feedback and deliver the accepted reminder when the agent edits the
 relevant code again. You do not have to remember to repeat the correction in
 every task prompt.
 
+## What you can do
+
+After [setup](#get-started), try a command from the table, then open its
+guide to go further.
+
+| Capability | What it gives you | Try it |
+| --- | --- | --- |
+| [**Lessons from your history**](#learn-from-your-repository) | Proposed lessons from fix commits and pull-request reviews, each linked to its evidence. You decide which to keep. | `seamark index --reviews` · [Lessons guide](docs/lessons.md) |
+| **Reminders at the edit** | Hooks give your AI coding agent an accepted lesson when it edits a matching file, also in a new session. | `seamark lessons --file path/to/file` · [Agent setup](docs/agent-integrations.md) |
+| [**Repository evidence over MCP**](#mcp-tools) | Five tools tell your agent where to start, why code is there, which files usually change together, and what a diff can reach. | `seamark orient` · [History and analysis](docs/repository-history.md) |
+| [**Agent skills**](#agent-skills) (optional) | Three skills tell your agent when to use Seamark to explore, plan, and review a change. | `seamark init --client claude --skills` · [Skills guide](skills/README.md) |
+| **Workspace console** (experimental) | One full-screen view of the index, integrations, evidence, proposals, pins, and settings. Every change starts from a preview. | `seamark tui` · [Console guide](docs/tui.md) |
+| **Command and diff checks** (experimental) | Agent shell commands and diffs checked against a repository policy. New repositories start in warn mode. | `seamark check` · [Policy guide](docs/policies.md) |
+| **Health and reports** | A check of the setup and the index, and a local HTML report of proposals and accepted lessons. | `seamark doctor` · `seamark report --open` · [Troubleshooting](docs/getting-started.md#if-something-is-missing) |
+
 ## Get started
 
 These instructions are for **v0.7.0 or newer**.
@@ -55,22 +75,29 @@ brew install seamark-dev/tap/seamark
 seamark version
 ```
 
-Open a repository with Git history and choose **one** setup command:
+Open a repository with Git history and set up the AI coding agents you use:
 
 ```bash
 cd your-project
 
 # Claude Code
-seamark init --client claude --skills --approve-tools
+seamark init --client claude --approve-tools
 
 # Codex
-seamark init --client codex --skills --approve-tools
+seamark init --client codex --approve-tools
+
+# Both, in one run
+seamark init --client claude --client codex --approve-tools
 ```
 
-This connects Seamark's MCP tools, installs the three agent skills, and sets
-up lesson and command hooks. `--approve-tools` adds tool permissions while
-preserving existing restrictions. New repositories start with command checks
-in warn mode; they do not block commands. Existing policy settings are preserved.
+This connects Seamark's MCP tools and sets up lesson and command hooks.
+`--approve-tools` adds tool permissions while preserving existing
+restrictions; omit it if you prefer to approve each tool call yourself. New
+repositories start with command checks in warn mode; they do not block
+commands. Existing policy settings are preserved.
+
+The three [agent skills](#agent-skills) are optional. Add `--skills` to your
+setup command, now or later, to install them.
 
 Build the index and check the setup:
 
@@ -101,17 +128,19 @@ The learning workflow is simple:
 
 **Past fixes and reviews → proposed lessons → your review → reminders during edits.**
 
-Start with fixes from local Git history:
+Mine pull-request review comments and fix commits, then list the findings:
 
 ```bash
-seamark index --fixes-only
+seamark index --reviews
 seamark lessons --list
 ```
 
-To include GitHub pull-request review comments, use `seamark index --reviews`
-instead. That requires the GitHub CLI (`gh`) authenticated for the repository.
-A new repository or one with little relevant feedback may have few findings.
-You can also [write a lesson by hand](docs/lessons.md#tuning-what-surfaces-lessonsyaml).
+Review comments come from GitHub through the GitHub CLI (`gh`), authenticated
+for the repository. Without it, the run keeps the fix commits of local Git
+history and reports the reviews as skipped. To stay offline, use
+`seamark index --fixes-only` instead. A new repository or one with little
+relevant feedback may have few findings. You can also
+[write a lesson by hand](docs/lessons.md#tuning-what-surfaces-lessonsyaml).
 
 To turn findings into proposed lessons, Seamark can use your installed AI
 coding agent CLI. Claude Code is the default. For Codex, set `agent.cli: codex`
@@ -145,6 +174,17 @@ Your configured hooks deliver matching reminders during supported edits.
 
 [Learning guide: review, tune, dismiss, and update lessons →](docs/lessons.md)
 
+`seamark tui` (experimental) opens a full-screen console for one workspace:
+index state, agent integrations, evidence refresh, distillation runs that
+you can stop, proposal decisions, the installed pins with a previewed
+retarget or prune, manual pins that you create, edit, or remove, trigger
+extraction for the proposals you select, delivery statistics, focused
+settings of `config.yaml` and `lessons.yaml` (threshold, budgets,
+repetition mode, and mutes), a selection sample that compares the
+lessons of explicit paths before and after a reviewed change, and doctor
+checks. Browsing never writes; every change, fetch, and agent run starts
+from a preview that names its exact effects. [Workspace console →](docs/tui.md)
+
 ## Agent skills
 
 [Agent skills](https://agentskills.io) give your AI coding agent instructions
@@ -162,8 +202,9 @@ the planning skill tells it to check which other files usually change with
 them. This can reveal a generated client or another implementation that
 needs attention.
 
-The quick start installs the skills with `--skills`. They are optional, and
-small tasks such as typo fixes do not require a repository overview.
+Install them by adding `--skills` to your setup command, for example
+`seamark init --client claude --skills`. They are optional, and small tasks
+such as typo fixes do not require a repository overview.
 After upgrading Seamark, repeat your setup command to refresh managed copies.
 
 [Skill installation and customization →](skills/README.md)
@@ -218,7 +259,7 @@ diff policies are available, but they are not the main onboarding path.
 See the [policy guide](docs/policies.md) before enabling enforcement.
 
 Next, we plan to build on lesson delivery and the agent integration framework
-with unified hook management. This is future work, not part of v0.7.0.
+with unified hook management. This is future work, not part of v0.8.0.
 See [current status](docs/STATUS.md) and the [changelog](CHANGELOG.md).
 
 ## Privacy and local data
@@ -238,6 +279,7 @@ YAML can be committed separately. [Configuration and backups →](docs/configura
 - [Installation and first use](docs/getting-started.md)
 - [AI coding agent setup and compatibility](docs/agent-integrations.md)
 - [Lessons and proposals](docs/lessons.md)
+- [Workspace console (experimental)](docs/tui.md)
 - [Repository history and code analysis](docs/repository-history.md)
 - [Configuration and local state](docs/configuration.md)
 - [Data flow](docs/data-flow.md) and [trust boundaries](docs/threat-model.md)

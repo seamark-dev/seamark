@@ -159,7 +159,7 @@ func Gather(st *store.Store, cfg *reviews.Config, applied []model.Proposal,
 			continue
 		}
 
-		pin, ok := cfg.FindPin(reviews.NewPinKey(p.Rule, p.Region, p.Regions))
+		pin, ok := cfg.FindPin(reviews.ProposalKey(p))
 		if !ok {
 			continue
 		}

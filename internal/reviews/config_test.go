@@ -53,6 +53,24 @@ func TestMuteByRuleAndRegion(t *testing.T) {
 		"F541 muted by rule, E501 muted by region, RUF001 below threshold")
 }
 
+// TestBelowThresholdComparesOccurrencesWithTheThreshold covers finding
+// L5. BelowThreshold is the threshold half of SurfacesMined, and a lesson
+// at the threshold surfaces.
+func TestBelowThresholdComparesOccurrencesWithTheThreshold(t *testing.T) {
+	cfg := &Config{Threshold: 3}
+
+	assert.True(t, cfg.BelowThreshold(model.Lesson{Symptom: "E1", Occurrences: 2}))
+	assert.False(t, cfg.BelowThreshold(model.Lesson{Symptom: "E1", Occurrences: 3}), "a lesson at the threshold surfaces")
+	assert.False(t, cfg.BelowThreshold(model.Lesson{Symptom: "E1", Occurrences: 4}))
+
+	// A mute is the other half of SurfacesMined, not a part of this one.
+	muted := &Config{Threshold: 3, Mute: []MuteRule{{Rule: "E1"}}}
+	lesson := model.Lesson{Symptom: "E1", Occurrences: 5}
+
+	assert.False(t, muted.BelowThreshold(lesson))
+	assert.False(t, muted.SurfacesMined(lesson))
+}
+
 func TestThresholdOverride(t *testing.T) {
 	cfg := &Config{Threshold: 1} // surface even one-offs
 
@@ -315,4 +333,41 @@ func TestNewPinKeyCommaRegionsDoNotCollide(t *testing.T) {
 	// A comma is a legal path byte: one region named "a,b" must never
 	// share an identity with the two-region set {a, b}.
 	assert.NotEqual(t, NewPinKey("r", "a,b", nil), NewPinKey("r", "a", []string{"b"}))
+}
+
+func TestProposalKeyIsTheKeyOfAPinWithTheStoredFields(t *testing.T) {
+	// The first five rows are spellings that one key absorbs. The other
+	// rows have disagreeing fields: the console also linked them by the
+	// region set that RenderPins writes. Now each row has one key, and a
+	// pin entry with the same fields has that key.
+	cases := []struct {
+		name, rule, region string
+		regions            []string
+		want               PinKey
+	}{
+		{"rule spelling", " Close-DB ", "api", nil, NewPinKey("close-db", "api", nil)},
+		{"empty region", "r", "", nil, NewPinKey("r", "*", nil)},
+		{"trailing slash", "r", "api/", nil, NewPinKey("r", "api", nil)},
+		{"set order and repeats", "r", "db", []string{"db", "api", "api/"}, NewPinKey("r", "", []string{"api", "db"})},
+		{"star region with a set", "r", "*", []string{"api"}, NewPinKey("r", "api", nil)},
+		{"wildcard next to a real region", "r", "api", []string{"*", "db"}, NewPinKey("r", "", []string{"api", "db"})},
+		{"empty region in the set", "r", "api", []string{"", "db"}, NewPinKey("r", "", []string{"api", "db"})},
+		{"region outside the set", "r", "x", []string{"a", "b"}, NewPinKey("r", "", []string{"a", "b", "x"})},
+		{"set without a real region", "r", "api", []string{"/"}, NewPinKey("r", "api", nil)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := model.Proposal{Rule: tc.rule, Region: tc.region, Regions: tc.regions}
+			key := ProposalKey(p)
+
+			assert.Equal(t, tc.want, key)
+			assert.Equal(t, NewPinKey(tc.rule, tc.region, tc.regions), key, "the CLI form")
+
+			cfg := &Config{Pin: []PinRule{{Rule: tc.rule, Region: tc.region, Regions: tc.regions, Note: "live"}}}
+			pin, live := cfg.FindPin(key)
+			require.True(t, live, "a pin entry with the stored fields has the key")
+			assert.Equal(t, "live", pin.Note)
+		})
+	}
 }

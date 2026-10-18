@@ -59,16 +59,25 @@ func (c *Config) ReviewWindowDays() int {
 // error (defaults apply); a malformed one is, so a typo'd exclude is not
 // silently ignored.
 func LoadConfig(root string) (*Config, error) {
-	cfg := &Config{}
-
 	data, err := os.ReadFile(filepath.Join(root, ".seamark", "config.yaml"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return cfg, nil
+			return &Config{}, nil
 		}
 
 		return nil, err
 	}
+
+	return ParseConfig(data)
+}
+
+// ParseConfig decodes the index and reviews sections from the bytes of
+// config.yaml and checks every exclude pattern. LoadConfig calls it, so
+// both entry points report the same error text. The settings editor
+// calls it to validate planned bytes before a write. Empty input yields
+// the defaults, the same as an absent file.
+func ParseConfig(data []byte) (*Config, error) {
+	cfg := &Config{}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("index config: %w", err)
@@ -81,6 +90,13 @@ func LoadConfig(root string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// CheckExclude reports why the reader rejects one exclude pattern, or
+// nil for a valid pattern. The settings editor validates each draft
+// item with it, so the form shows the reader's own message.
+func CheckExclude(pattern string) error {
+	return checkExclude(pattern)
 }
 
 // checkExclude rejects at load time the patterns matchExclude would

@@ -100,7 +100,7 @@ func TestRunDetectsNewerDatabase(t *testing.T) {
 
 	st, err := store.Open(dbPath)
 	require.NoError(t, err)
-	require.NoError(t, st.SetMeta("schema_version", strconv.Itoa(store.SupportedSchema()+5)))
+	require.NoError(t, st.SetMeta(store.MetaSchemaVersion, strconv.Itoa(store.SupportedSchema()+5)))
 	require.NoError(t, st.Close())
 
 	r := Run(root, dbPath, "test")

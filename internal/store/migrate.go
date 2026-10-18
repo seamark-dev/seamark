@@ -11,9 +11,6 @@ import (
 // migration would leave every existing database behind.
 const schemaVersion = 6
 
-// schemaVersionKey is the meta row recording a database's version.
-const schemaVersionKey = "schema_version"
-
 // migration is one ordered upgrade step: run brings a database from any
 // version below `to` up to `to`.
 type migration struct {
@@ -217,7 +214,7 @@ func ensureVersion(db *sql.DB) error {
 	_, err = db.Exec(
 		`INSERT INTO meta (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		schemaVersionKey, strconv.Itoa(schemaVersion),
+		MetaSchemaVersion, strconv.Itoa(schemaVersion),
 	)
 
 	return err
@@ -228,7 +225,7 @@ func ensureVersion(db *sql.DB) error {
 func readVersion(db *sql.DB) (int, error) {
 	var v string
 
-	err := db.QueryRow(`SELECT value FROM meta WHERE key = ?`, schemaVersionKey).Scan(&v)
+	err := db.QueryRow(`SELECT value FROM meta WHERE key = ?`, MetaSchemaVersion).Scan(&v)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
@@ -250,7 +247,7 @@ func writeVersion(tx *sql.Tx, v int) error {
 	_, err := tx.Exec(
 		`INSERT INTO meta (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		schemaVersionKey, strconv.Itoa(v),
+		MetaSchemaVersion, strconv.Itoa(v),
 	)
 
 	return err

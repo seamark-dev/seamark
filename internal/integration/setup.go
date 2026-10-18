@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/hooks"
@@ -52,6 +51,34 @@ const defaultFileMode fs.FileMode = 0o644
 func isCleanRel(rel string) bool {
 	return rel != "" && path.Clean(rel) == rel && !path.IsAbs(rel) &&
 		rel != "." && rel != ".." && !strings.HasPrefix(rel, "../")
+}
+
+// readOnlyReason is the reason the engine never replaces a file without
+// the owner write bit.
+func readOnlyReason(mode fs.FileMode) string {
+	return fmt.Sprintf("the file is read-only (%s); seamark does not replace it", mode)
+}
+
+// deniedReason is the reason the engine never replaces a file that this
+// user may not write. The mode can show the owner write bit, so the text
+// does not quote it.
+const deniedReason = "this user cannot write the file; seamark does not replace it"
+
+// WriteRefusal returns the reason the engine refuses to replace the file
+// that guard observed, or an empty string. An editor that reads a file
+// itself uses it to show the refusal before it plans a write. The engine
+// and the editors share these texts, so they cannot drift apart.
+func WriteRefusal(guard FileGuard) string {
+	switch {
+	case guard.Linked != "":
+		return approve.LinkReason(guard.Linked)
+	case guard.Exists && guard.Mode&0o200 == 0:
+		return readOnlyReason(guard.Mode)
+	case guard.Exists && guard.Denied:
+		return deniedReason
+	}
+
+	return ""
 }
 
 // ReadGuarded reads one native document that setup owns and records
@@ -135,6 +162,7 @@ func ReadInput(root, rel string) (FileGuard, []byte, error) {
 	}
 
 	guard.Exists, guard.SHA256, guard.Mode = true, sha256.Sum256(data), mode.Perm()
+	guard.Denied = writeDenied(filepath.Join(root, filepath.FromSlash(rel)))
 
 	return guard, data, nil
 }
@@ -171,7 +199,7 @@ func StatGuarded(root, rel string) (FileGuard, error) {
 		guard.Exists = true
 
 		return guard, nil
-	case !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR):
+	case !absent(err):
 		return FileGuard{}, fmt.Errorf("%s: %w", rel, err)
 	}
 
@@ -904,10 +932,12 @@ func applyWrite(plan *SetupPlan, rel string, written map[string]bool) error {
 		return replaceFile(target, write.After, mode, false)
 	}
 
-	// The rename would replace a file the user made read-only. A plain
-	// write fails on such a file, and setup must respect that choice too.
-	if guard.Mode&0o200 == 0 {
-		return fmt.Errorf("the file is read-only (%s); seamark does not replace it", guard.Mode)
+	// The rename needs write access to the directory only. So it would
+	// replace a read-only file, or a file that an access control list or
+	// another owner protects. A plain write fails on such a file, and
+	// setup must respect that choice too. addWrite already refused a link.
+	if reason := WriteRefusal(guard); reason != "" {
+		return errors.New(reason)
 	}
 
 	return replaceFile(target, write.After, guard.Mode, true)

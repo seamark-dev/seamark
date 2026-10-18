@@ -1,0 +1,126 @@
+// Package tui is the experimental `seamark tui` workspace console. It is
+// a presentation layer over the shared engines: it reads doctor, status,
+// integration, proposal and delivery state through typed services, and
+// every write goes through a reviewed preview. It adds no business rule
+// and no settings store of its own.
+//
+// # File map
+//
+// Each file has one subject, and its name starts with the subject. A
+// new file joins a group below, so a reader finds a screen by its name.
+// TestDocListsEveryFile fails when a file and this map disagree.
+//
+// Shell: the program, the frame, the state that every screen reads, and
+// the widgets that name a seamark concept.
+//
+//   - doc.go: the package doc and this file map.
+//   - tui.go: Options and Run, the terminal lifecycle and the clipboard.
+//   - app.go: the model, the five destinations, the frame, the overlays,
+//     the help and the help of an open layer.
+//   - app_run.go: the run line, the quit question and the drafts that it
+//     names, the wait at exit.
+//   - state.go: the data sections, the generation tickets, the messages.
+//   - state_saved.go: the receivers of a saved lessons.yaml, the check
+//     of the reload after a write, and the outcome texts of a write.
+//   - keys.go: the global keys of the shell.
+//   - widgets.go: the domain widgets, which draw with package ui.
+//
+// Shared screen types: what several screens embed.
+//
+//   - listpane.go: listPane and filterInput of Proposals and Pins.
+//   - previewflow.go: previewFlow, the stages of a preview and a commit.
+//   - sample.go: the selection sample that a pin, mute or delivery
+//     review opens, its keys and the markers of its two sides.
+//   - sample_view.go: the modal of the selection sample.
+//
+// Overview (destination 1):
+//
+//   - overview.go: the screen state, the focus and the keys.
+//   - overview_view.go: the layout, the Attention box and the Detail box.
+//   - overview_items.go: the attention items and their groups.
+//   - overview_cards.go: the summary cards of the wide layout.
+//   - overview_summary.go: the summary item of the collapsed layouts.
+//   - overview_learn.go: the learning links into Lessons.
+//   - overview_build.go: the index build modal and its progress.
+//
+// Integrations (destination 2) and its setup wizard:
+//
+//   - integrations.go: the client list, the detail box and the keys.
+//   - integrations_detail.go: the capability table and the sections.
+//   - integrations_text.go: the line helpers of the boxes and the wizard.
+//   - setup.go: the wizard steps, the messages and the keys.
+//   - setup_choose.go: the client step and the choice step.
+//   - setup_preview.go: the review step, which is the confirmation.
+//   - setup_diff.go: the numbered diff of the review step.
+//   - setup_result.go: the apply step and the new inspection.
+//
+// Lessons (destination 3), its container and its five sub-views:
+//
+//   - lessons.go: the container, the sub-view line and the switch keys.
+//   - proposals.go: Proposals, the filters, the marks and the decisions.
+//   - proposals_view.go: the Proposals list box and detail box.
+//   - proposals_modal.go: the decision previews and their results.
+//   - proposals_summary.go: the one-line summary of a review finding.
+//   - pins.go: Pins, the installed pins and their keys.
+//   - pins_view.go: the Pins list box and detail box.
+//   - pins_compare.go: the read-only comparison of similar pins.
+//   - pins_modal.go: the retarget and prune preview flow.
+//   - pins_modal_view.go: the stages of the retarget and prune preview.
+//   - pins_msgs.go: the typed requests between Pins and the shell.
+//   - pins_author.go: the pin drafts, the pin form and the pin review.
+//   - pins_author_view.go: the pin form and the stages of the review.
+//   - stats.go: Stats, the delivery statistics.
+//   - evidence.go: Evidence, the two sources and their actions.
+//   - evidence_preview.go: the evidence refresh preview.
+//   - evidence_run.go: the evidence run record and its worker.
+//   - evidence_run_view.go: the boxes and the verdict of that record.
+//   - evidence_words.go: the shared words of the evidence workflow.
+//   - run.go: Run, the records of this session and their messages.
+//   - run_agent.go: the state that both paid agent run records share.
+//   - distill.go: the distillation record and its commands.
+//   - distill_keys.go: the keys of a distillation record.
+//   - distill_scope.go: the context line and the scope form.
+//   - distill_plan.go: the Preview step of a distillation.
+//   - distill_run.go: the running distillation and its result.
+//   - extract.go: the trigger extraction record and its commands.
+//   - extract_view.go: the steps of a trigger extraction record.
+//
+// Doctor (destination 4), Settings (destination 5) and the first run:
+//
+//   - doctor.go: the doctor checks and the detail of one check.
+//   - settings.go: the screen state, the groups and the keys.
+//   - settings_draft.go: the draft, one edit per changed field.
+//   - settings_edit.go: the radio editor, the number input, and the
+//     list editor.
+//   - settings_save.go: the review and the save of one group.
+//   - settings_view.go: the field list, the editor box, and the
+//     numbered rows of the list editors.
+//   - settings_lessons.go: the lesson delivery and lesson mutes groups
+//     of lessons.yaml, the mute editor and its record form.
+//   - settings_lessons_view.go: the views of the lessons groups.
+//   - firstrun.go: the guide of a fresh workspace.
+//
+// # Rules
+//
+// Layers: the console has three packages, and the imports go one way.
+// internal/tui/ui draws and tracks positions without seamark
+// vocabulary. internal/tui/services adapts the engines and returns
+// plain values. internal/tui holds the shell and the screens and
+// imports both. ui never imports services or internal/tui, and services
+// never imports ui, internal/tui, Bubble Tea, Lip Gloss or Bubbles. So a
+// primitive cannot reach a screen, and an engine call cannot carry a
+// screen rule. The guard tests of ui and services check the imports.
+// The ui package doc states which declaration belongs there.
+//
+// Embedding: a holder never declares a field or a method with the name
+// of a member of an embedded listPane, filterInput or previewFlow. Go
+// embedding has no virtual dispatch, so the shared code would read the
+// embedded member and not the holder's one. embedscan_test.go checks
+// the rule.
+//
+// Messages: a worker never changes the model; it returns a message,
+// and Update applies it. A screen reaches another screen only through
+// a shell message, such as navigateMsg, openRunMsg or openMaintMsg.
+// So each screen changes only its own files, and every state change
+// happens on the event loop.
+package tui

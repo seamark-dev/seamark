@@ -38,8 +38,9 @@ deferred.
       CGO needed for storage; CGO is still required by tree-sitter)
 - [x] SQLite schema v1 (see `internal/store/schema.sql`)
 - [~] Release engineering: tagged releases ship smoke-tested native
-      macOS/Linux archives (amd64/arm64) and SHA-256 checksums. Artifact
-      signing, SBOMs, Homebrew/npm distribution, and Windows support remain.
+      macOS/Linux archives (amd64/arm64) and SHA-256 checksums. Homebrew
+      installs from `seamark-dev/homebrew-tap`. Artifact signing, SBOMs,
+      npm distribution, and Windows support remain.
 
 ### M1 — Indexer + history miner (gate passed 2026-07-25)
 
@@ -479,7 +480,8 @@ internal/cli/           init, index, why/orient, lessons, gate/check, state,
                         doctor/status, report, LSP, and MCP commands
 internal/index/         orchestrator: walk → parse → resolve → store + history
 internal/parse/         Go, TypeScript/JavaScript, and Python extractors
-internal/history/       git log miner: co-change pairs + decision rows
+internal/history/       git log miner: co-change pairs + decision rows; the
+                        repository root rule (git top level)
 internal/effects/       sink matching and transitive effect propagation
 internal/gate/          command/diff policy, classification, and safe audit
 internal/reviews/       review ingestion and finding normalization

@@ -123,3 +123,125 @@ func TestLoadConfigRejectsMalformed(t *testing.T) {
 	_, err := LoadConfig(root)
 	require.Error(t, err)
 }
+
+// indexConfigErrorCases pins the exact LoadConfig error texts. The CLI
+// prints them verbatim, so the bytes entry point must not change them.
+var indexConfigErrorCases = []struct {
+	name, yaml, want string
+}{
+	{"syntax", "index: [\n", "index config: yaml: line 1: did not find expected node content"},
+	{
+		"unquoted star pattern", "index:\n  exclude:\n    - *.pb.go\n",
+		"index config: yaml: line 3: did not find expected alphabetic or numeric character",
+	},
+	{
+		"never-matching exclude", "index:\n  exclude: [\"a/**/b\"]\n",
+		"index config: exclude \"a/**/b\": `**` is only supported as a leading `**/`",
+	},
+	{
+		"empty exclude item", "index:\n  exclude: [\"\"]\n",
+		"index config: exclude \"\": empty pattern",
+	},
+	{
+		"duplicate owned key", "index:\n  generated: true\n  generated: false\n",
+		"index config: yaml: unmarshal errors:\n  line 3: mapping key \"generated\" already defined at line 2",
+	},
+	{
+		"string window", "reviews:\n  window_days: \"30\"\n",
+		"index config: yaml: unmarshal errors:\n  line 2: cannot unmarshal !!str `30` into int",
+	},
+	{
+		"sequence root", "- a\n",
+		"index config: yaml: unmarshal errors:\n  line 1: cannot unmarshal !!seq into index.Config",
+	},
+}
+
+// writeIndexConfig writes text as <root>/.seamark/config.yaml.
+func writeIndexConfig(t *testing.T, root, text string) {
+	t.Helper()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "config.yaml"), []byte(text), 0o644))
+}
+
+func TestLoadConfigErrorTextsAreStable(t *testing.T) {
+	for _, c := range indexConfigErrorCases {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeIndexConfig(t, root, c.yaml)
+
+			_, err := LoadConfig(root)
+			require.Error(t, err)
+			assert.Equal(t, c.want, err.Error())
+		})
+	}
+}
+
+func TestReviewWindowDaysMapping(t *testing.T) {
+	// The mapping pins the legacy quirk: a stored negative value is
+	// accepted and reaches the miner as unlimited.
+	cases := []struct {
+		yaml string
+		want int
+	}{
+		{"", 0},
+		{"reviews:\n  window_days:\n", 0},
+		{"reviews:\n  window_days: 0\n", -1},
+		{"reviews:\n  window_days: 30\n", 30},
+		{"reviews:\n  window_days: -5\n", -5},
+	}
+
+	for _, c := range cases {
+		root := t.TempDir()
+		writeIndexConfig(t, root, c.yaml)
+
+		cfg, err := LoadConfig(root)
+		require.NoError(t, err, "yaml %q", c.yaml)
+		assert.Equal(t, c.want, cfg.ReviewWindowDays(), "yaml %q", c.yaml)
+	}
+}
+
+func TestParseConfigMatchesLoadConfig(t *testing.T) {
+	for _, c := range indexConfigErrorCases {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeIndexConfig(t, root, c.yaml)
+
+			_, loadErr := LoadConfig(root)
+			_, parseErr := ParseConfig([]byte(c.yaml))
+
+			require.Error(t, parseErr)
+			assert.Equal(t, loadErr.Error(), parseErr.Error(), "both entry points report one text")
+		})
+	}
+
+	valid := "agent:\n  cli: codex\nindex:\n  generated: true\n  exclude: ['*.pb.go', 'gen/']\nreviews:\n  window_days: 30\n"
+
+	root := t.TempDir()
+	writeIndexConfig(t, root, valid)
+
+	loaded, err := LoadConfig(root)
+	require.NoError(t, err)
+
+	parsed, err := ParseConfig([]byte(valid))
+	require.NoError(t, err)
+	assert.Equal(t, loaded, parsed)
+	assert.True(t, parsed.Index.Generated)
+	assert.Equal(t, []string{"*.pb.go", "gen/"}, parsed.Index.Exclude)
+	assert.Equal(t, 30, parsed.ReviewWindowDays())
+
+	empty, err := ParseConfig(nil)
+	require.NoError(t, err)
+	assert.Equal(t, &Config{}, empty, "empty input means defaults, as an absent file does")
+}
+
+func TestCheckExcludeExportsTheReaderRule(t *testing.T) {
+	// The exported check must give the same verdict and text as the
+	// reader, because the settings form shows that text for a draft item.
+	for _, pattern := range []string{"*.pb.go", "**/*_test.go", "gen/", "", "[", "**/gen/*.go", "a/**/b.go"} {
+		assert.Equal(t, checkExclude(pattern), CheckExclude(pattern), "pattern %q", pattern)
+	}
+
+	assert.EqualError(t, CheckExclude(""), "empty pattern")
+	assert.EqualError(t, CheckExclude("**/gen/*.go"), "`**/` takes a basename glob, not a path")
+}

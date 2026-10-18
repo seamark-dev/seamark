@@ -1,0 +1,725 @@
+package tui
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
+	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/distill"
+	"github.com/seamark-dev/seamark/internal/doctor"
+	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/lessonstats"
+	"github.com/seamark-dev/seamark/internal/maintain"
+	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/proposals"
+	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/services"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
+	"github.com/seamark-dev/seamark/internal/workspace"
+)
+
+// TestMain fixes the color profile and disables timers, so views are
+// plain text and no test waits for a real tick.
+func TestMain(m *testing.M) {
+	lipgloss.SetColorProfile(termenv.Ascii)
+	lipgloss.SetHasDarkBackground(true)
+
+	after = func(time.Duration, func(time.Time) tea.Msg) tea.Cmd { return nil }
+
+	os.Exit(m.Run())
+}
+
+// fakeServices is a scripted services.All for screen tests. Read methods
+// return the fields and count the call in reads. Plan, preview and
+// mutation methods call the function fields and record the call in
+// calls, so a test can prove that browsing never plans or mutates.
+type fakeServices struct {
+	mu sync.Mutex
+
+	root, dbPath, version string
+
+	fresh    bool
+	freshErr error
+
+	doctor       *doctor.Report
+	index        services.IndexView
+	integrations []integration.Inspection
+	clients      []integration.Client
+	ledger       *proposals.Ledger
+	ledgerErr    error
+	stats        lessonstats.Snapshot
+	agentsOnPath []string
+
+	planSetup       func([]integration.ClientSetup) (*services.SetupPreview, error)
+	applySetup      func(*services.SetupPreview) (integration.SetupResult, error)
+	buildIndex      func(bool, func(services.IndexEvent)) (*index.Summary, error)
+	previewDecision func(proposals.Action, []int64) (*proposals.Preview, error)
+	commitDecision  func(*proposals.Preview) (proposals.Result, error)
+
+	// learning is the evidence snapshot. The zero value reads as an
+	// absent index, so a view shows no counts.
+	learning learning.Snapshot
+	// settings is the settings snapshot; fakeSettingsSnapshot builds a
+	// real one. nil with a nil settingsErr means no configuration read.
+	settings    *settings.Snapshot
+	settingsErr error
+
+	planEvidence   func(index.SourceMode) (*learning.Plan, error)
+	runEvidence    func(context.Context, *learning.Plan, func(index.RefreshEvent)) (learning.Outcome, error)
+	planDistill    func(learning.DistillRequest) (*learning.DistillPreview, error)
+	runDistill     func(context.Context, *learning.DistillPreview, func(distill.Event)) (*distill.Execution, error)
+	cleanupPending func(*learning.DistillPreview) (int, error)
+	planSettings   func(*settings.Snapshot, []settings.Edit) (*settings.Plan, error)
+	saveSettings   func(*settings.Plan) (settings.Result, error)
+
+	// pins is the inspection of the installed pins. nil reads as an
+	// absent pin file over an empty ledger (fakePins).
+	pins *maintain.Inspection
+
+	planMaintenance   func(maintain.Request) (*maintain.Plan, error)
+	commitMaintenance func(*maintain.Plan) (maintain.Result, error)
+	planRecovery      func(*maintain.Recovery) (*maintain.Plan, error)
+	commitRecovery    func(*maintain.Plan) (maintain.Result, error)
+	planExtract       func(learning.ExtractRequest) (*learning.ExtractPreview, error)
+	runExtract        func(context.Context, *learning.ExtractPreview, func(distill.ExtractEvent)) (*distill.ExtractExecution, error)
+	planAuthor        func(maintain.AuthorRequest) (*maintain.AuthorPlan, error)
+	commitAuthor      func(*maintain.AuthorPlan) (maintain.AuthorResult, error)
+
+	// sample answers a selection sample. nil answers with an unavailable
+	// view, so no test reads an unscripted sample as zero lessons.
+	sample func(services.SampleRequest) services.SampleView
+	// samples records every sample request in call order, so a test can
+	// prove which review bytes a sample sends. Read it under mu.
+	samples []services.SampleRequest
+
+	// calls records every plan, preview and mutation call by name.
+	calls []string
+	// reads counts the read calls of the Phase 2 sources by name. Reads
+	// stay out of calls, because every view refresh makes them.
+	reads map[string]int
+}
+
+// The fake implements every area, so a test can pass it where a helper
+// takes one area. One assertion per area names the area in the build
+// error when a fake method drifts.
+var (
+	_ services.All         = (*fakeServices)(nil)
+	_ services.Reader      = (*fakeServices)(nil)
+	_ services.Setup       = (*fakeServices)(nil)
+	_ services.Decisions   = (*fakeServices)(nil)
+	_ services.Learning    = (*fakeServices)(nil)
+	_ services.Maintenance = (*fakeServices)(nil)
+	_ services.Settings    = (*fakeServices)(nil)
+)
+
+func newFake() *fakeServices {
+	return &fakeServices{
+		root:    "/work/repo",
+		dbPath:  "/work/repo/.seamark/index.db",
+		version: "test",
+		doctor:  &doctor.Report{},
+		clients: integration.Builtin().Clients(),
+	}
+}
+
+func (f *fakeServices) record(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.calls = append(f.calls, name)
+}
+
+// called returns the recorded calls.
+func (f *fakeServices) called() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return append([]string(nil), f.calls...)
+}
+
+// count records one read call by name.
+func (f *fakeServices) count(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.reads == nil {
+		f.reads = map[string]int{}
+	}
+
+	f.reads[name]++
+}
+
+// readCount returns how often the named read ran.
+func (f *fakeServices) readCount(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.reads[name]
+}
+
+// callCount returns how often the named plan or mutation ran.
+func (f *fakeServices) callCount(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	n := 0
+
+	for _, c := range f.calls {
+		if c == name {
+			n++
+		}
+	}
+
+	return n
+}
+
+func (f *fakeServices) Root() string                           { return f.root }
+func (f *fakeServices) DBPath() string                         { return f.dbPath }
+func (f *fakeServices) Version() string                        { return f.version }
+func (f *fakeServices) Fresh() (bool, error)                   { return f.fresh, f.freshErr }
+func (f *fakeServices) Doctor() *doctor.Report                 { return f.doctor }
+func (f *fakeServices) Index() services.IndexView              { return f.index }
+func (f *fakeServices) Integrations() []integration.Inspection { return f.integrations }
+func (f *fakeServices) Clients() []integration.Client          { return f.clients }
+func (f *fakeServices) Ledger() (*proposals.Ledger, error)     { return f.ledger, f.ledgerErr }
+func (f *fakeServices) Stats() lessonstats.Snapshot            { return f.stats }
+func (f *fakeServices) AgentsOnPath() []string                 { return f.agentsOnPath }
+
+func (f *fakeServices) PlanSetup(setups []integration.ClientSetup) (*services.SetupPreview, error) {
+	f.record("PlanSetup")
+
+	if f.planSetup == nil {
+		return &services.SetupPreview{Setups: setups, Plan: &integration.SetupPlan{}}, nil
+	}
+
+	return f.planSetup(setups)
+}
+
+func (f *fakeServices) ApplySetup(p *services.SetupPreview) (integration.SetupResult, error) {
+	f.record("ApplySetup")
+
+	if f.applySetup == nil {
+		return integration.SetupResult{}, nil
+	}
+
+	return f.applySetup(p)
+}
+
+func (f *fakeServices) BuildIndex(force bool, progress func(services.IndexEvent)) (*index.Summary, error) {
+	f.record("BuildIndex")
+
+	if f.buildIndex == nil {
+		return &index.Summary{}, nil
+	}
+
+	return f.buildIndex(force, progress)
+}
+
+func (f *fakeServices) PreviewDecision(a proposals.Action, ids []int64) (*proposals.Preview, error) {
+	f.record("PreviewDecision:" + a.String())
+
+	if f.previewDecision == nil {
+		return &proposals.Preview{Action: a}, nil
+	}
+
+	return f.previewDecision(a, ids)
+}
+
+func (f *fakeServices) CommitDecision(p *proposals.Preview) (proposals.Result, error) {
+	f.record("CommitDecision:" + p.Action.String())
+
+	if f.commitDecision == nil {
+		return proposals.Result{Action: p.Action}, nil
+	}
+
+	return f.commitDecision(p)
+}
+
+func (f *fakeServices) Learning() learning.Snapshot {
+	f.count("Learning")
+
+	return f.learning
+}
+
+func (f *fakeServices) Settings() (*settings.Snapshot, error) {
+	f.count("Settings")
+
+	return f.settings, f.settingsErr
+}
+
+func (f *fakeServices) PlanEvidence(mode index.SourceMode) (*learning.Plan, error) {
+	f.record("PlanEvidence:" + mode.String())
+
+	if f.planEvidence == nil {
+		return &learning.Plan{Mode: mode, PlannedAt: time.Now()}, nil
+	}
+
+	return f.planEvidence(mode)
+}
+
+func (f *fakeServices) RunEvidence(ctx context.Context, p *learning.Plan,
+	progress func(index.RefreshEvent),
+) (learning.Outcome, error) {
+	f.record("RunEvidence")
+
+	// The default run attempts no source and leaves the evidence as the
+	// learning field describes it.
+	if f.runEvidence == nil {
+		none := index.SourceOutcome{State: index.SourceNotAttempted}
+
+		return learning.Outcome{Fixes: none, Reviews: none, After: f.learning, FinishedAt: time.Now()}, nil
+	}
+
+	return f.runEvidence(ctx, p, progress)
+}
+
+func (f *fakeServices) PlanDistill(req learning.DistillRequest) (*learning.DistillPreview, error) {
+	f.record("PlanDistill")
+
+	if f.planDistill == nil {
+		return &learning.DistillPreview{Request: req, Plan: &distill.Plan{}, PlannedAt: time.Now()}, nil
+	}
+
+	return f.planDistill(req)
+}
+
+func (f *fakeServices) RunDistill(ctx context.Context, p *learning.DistillPreview,
+	progress func(distill.Event),
+) (*distill.Execution, error) {
+	f.record("RunDistill")
+
+	if f.runDistill == nil {
+		return &distill.Execution{}, nil
+	}
+
+	return f.runDistill(ctx, p, progress)
+}
+
+func (f *fakeServices) CleanupPending(p *learning.DistillPreview) (int, error) {
+	f.record("CleanupPending")
+
+	if f.cleanupPending == nil {
+		return 0, nil
+	}
+
+	return f.cleanupPending(p)
+}
+
+func (f *fakeServices) PlanSettings(snap *settings.Snapshot, edits []settings.Edit) (*settings.Plan, error) {
+	f.record("PlanSettings")
+
+	if f.planSettings == nil {
+		return &settings.Plan{Snapshot: snap, Edits: edits, NoOp: true}, nil
+	}
+
+	return f.planSettings(snap, edits)
+}
+
+func (f *fakeServices) SaveSettings(p *settings.Plan) (settings.Result, error) {
+	f.record("SaveSettings")
+
+	if f.saveSettings == nil {
+		return settings.Result{}, nil
+	}
+
+	return f.saveSettings(p)
+}
+
+func (f *fakeServices) Pins() *maintain.Inspection {
+	f.count("Pins")
+
+	if f.pins == nil {
+		return fakePins()
+	}
+
+	return f.pins
+}
+
+func (f *fakeServices) PlanMaintenance(req maintain.Request) (*maintain.Plan, error) {
+	f.record("PlanMaintenance:" + req.Action.String())
+
+	if f.planMaintenance == nil {
+		return &maintain.Plan{Action: req.Action, Request: req, PlannedAt: time.Now()}, nil
+	}
+
+	return f.planMaintenance(req)
+}
+
+// fakeMaintResult is the result of a scripted commit: it names the
+// action of the plan, as the engine does for a commit that did not
+// start.
+func fakeMaintResult(p *maintain.Plan) maintain.Result {
+	if p == nil {
+		return maintain.Result{}
+	}
+
+	return maintain.Result{Action: p.Action}
+}
+
+func (f *fakeServices) CommitMaintenance(p *maintain.Plan) (maintain.Result, error) {
+	f.record("CommitMaintenance:" + fakeAction(p))
+
+	if f.commitMaintenance == nil {
+		return fakeMaintResult(p), nil
+	}
+
+	return f.commitMaintenance(p)
+}
+
+func (f *fakeServices) PlanRecovery(r *maintain.Recovery) (*maintain.Plan, error) {
+	action := maintain.Action(0)
+	if r != nil {
+		action = r.Action
+	}
+
+	f.record("PlanRecovery:" + action.String())
+
+	if f.planRecovery == nil {
+		return &maintain.Plan{Action: action, Recovery: r, PlannedAt: time.Now()}, nil
+	}
+
+	return f.planRecovery(r)
+}
+
+func (f *fakeServices) CommitRecovery(p *maintain.Plan) (maintain.Result, error) {
+	f.record("CommitRecovery:" + fakeAction(p))
+
+	if f.commitRecovery == nil {
+		return fakeMaintResult(p), nil
+	}
+
+	return f.commitRecovery(p)
+}
+
+func (f *fakeServices) PlanExtract(req learning.ExtractRequest) (*learning.ExtractPreview, error) {
+	f.record("PlanExtract")
+
+	if f.planExtract == nil {
+		return &learning.ExtractPreview{Request: req, Plan: &distill.ExtractPlan{}, PlannedAt: time.Now()}, nil
+	}
+
+	return f.planExtract(req)
+}
+
+func (f *fakeServices) RunExtract(ctx context.Context, p *learning.ExtractPreview,
+	progress func(distill.ExtractEvent),
+) (*distill.ExtractExecution, error) {
+	f.record("RunExtract")
+
+	if f.runExtract == nil {
+		return &distill.ExtractExecution{}, nil
+	}
+
+	return f.runExtract(ctx, p, progress)
+}
+
+func (f *fakeServices) PlanAuthor(req maintain.AuthorRequest) (*maintain.AuthorPlan, error) {
+	f.record("PlanAuthor:" + req.Op.String())
+
+	if f.planAuthor == nil {
+		return &maintain.AuthorPlan{Request: req, Root: f.root}, nil
+	}
+
+	return f.planAuthor(req)
+}
+
+func (f *fakeServices) CommitAuthor(p *maintain.AuthorPlan) (maintain.AuthorResult, error) {
+	op := "none"
+	if p != nil {
+		op = p.Request.Op.String()
+	}
+
+	f.record("CommitAuthor:" + op)
+
+	if f.commitAuthor == nil {
+		return maintain.AuthorResult{}, nil
+	}
+
+	return f.commitAuthor(p)
+}
+
+func (f *fakeServices) Sample(req services.SampleRequest) services.SampleView {
+	f.record("Sample")
+
+	f.mu.Lock()
+	f.samples = append(f.samples, req)
+	f.mu.Unlock()
+
+	if f.sample == nil {
+		return services.SampleView{Surface: req.Surface, Unavailable: "Sample unavailable: no scripted sample."}
+	}
+
+	return f.sample(req)
+}
+
+// sampleRequests returns a copy of the recorded sample requests in call
+// order. A test proves with it which review bytes a sample sent.
+func (f *fakeServices) sampleRequests() []services.SampleRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return append([]services.SampleRequest(nil), f.samples...)
+}
+
+// fakeAction names the action of a maintenance plan for the call record.
+func fakeAction(p *maintain.Plan) string {
+	if p == nil {
+		return "none"
+	}
+
+	return p.Action.String()
+}
+
+// fakePins is the inspection of an absent pin file over an empty ledger:
+// no entry, no superseded history, and every link known.
+func fakePins() *maintain.Inspection {
+	doc := &pinfile.Document{}
+
+	return &maintain.Inspection{
+		Doc: doc, Links: pinfile.Classify(doc, nil, nil, nil),
+		Index: workspace.IndexProbe{State: workspace.IndexReady, Root: "/work/repo"},
+	}
+}
+
+// fakeSettingsSnapshot inspects a temporary workspace whose config.yaml
+// holds content, with the shared reader, so a screen test sees a real
+// snapshot. An empty content leaves the file absent.
+func fakeSettingsSnapshot(t testing.TB, content string) *settings.Snapshot {
+	t.Helper()
+
+	root := t.TempDir()
+
+	if content != "" {
+		path := filepath.Join(root, filepath.FromSlash(settings.File))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	}
+
+	snap, err := settings.Inspect(root, integration.Builtin())
+	require.NoError(t, err)
+
+	return snap
+}
+
+// harness drives the root model synchronously: it runs every command
+// and feeds the resulting messages back, like the Bubble Tea loop. t is
+// a testing.TB, so the Phase 4 benchmarks drive the same console.
+type harness struct {
+	t    testing.TB
+	m    *model
+	quit bool
+}
+
+// newHarness starts a console over svc at w by h cells.
+func newHarness(t testing.TB, svc services.All, w, h int) *harness {
+	t.Helper()
+
+	hs := &harness{t: t, m: newModel(svc, ui.NewTheme(false))}
+	hs.run(hs.m.Init())
+	hs.send(tea.WindowSizeMsg{Width: w, Height: h})
+
+	return hs
+}
+
+// send delivers one message and runs the commands it returns.
+func (h *harness) send(msg tea.Msg) {
+	h.t.Helper()
+
+	_, cmd := h.m.Update(msg)
+	h.run(cmd)
+}
+
+// run executes a command tree until it settles. Commands must not use
+// tea.Sequence; the harness cannot see inside it.
+func (h *harness) run(cmd tea.Cmd) {
+	h.t.Helper()
+
+	queue := []tea.Cmd{cmd}
+
+	for steps := 0; len(queue) > 0; steps++ {
+		require.Less(h.t, steps, 5000, "command loop does not settle")
+
+		c := queue[0]
+		queue = queue[1:]
+
+		if c == nil {
+			continue
+		}
+
+		switch msg := c().(type) {
+		case nil:
+		case tea.BatchMsg:
+			queue = append(queue, msg...)
+		case tea.QuitMsg:
+			h.quit = true
+		default:
+			_, next := h.m.Update(msg)
+			queue = append(queue, next)
+		}
+	}
+}
+
+// press sends key presses by name: "enter", "esc", "tab", "shift+tab",
+// "up", "down", "left", "right", "space", "pgdown", "pgup", "home",
+// "end", "ctrl+c", "ctrl+j", "alt+enter", "backspace", "delete", or
+// literal runes such as "j" or "?".
+func (h *harness) press(keys ...string) {
+	h.t.Helper()
+
+	for _, k := range keys {
+		h.send(keyMsg(k))
+	}
+}
+
+// typeText sends each rune of s as a key press.
+func (h *harness) typeText(s string) {
+	h.t.Helper()
+
+	for _, r := range s {
+		h.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+}
+
+// paste sends text as one bracketed paste: one key message with every
+// rune and Paste set, as Bubble Tea delivers it. A key binding never
+// matches such a message, so a paste cannot act as a shortcut.
+func (h *harness) paste(text string) {
+	h.t.Helper()
+	h.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text), Paste: true})
+}
+
+// view returns the current frame without escape sequences.
+func (h *harness) view() string {
+	return ansi.Strip(h.m.View())
+}
+
+// resize sends a new terminal size.
+func (h *harness) resize(w, hgt int) {
+	h.t.Helper()
+	h.send(tea.WindowSizeMsg{Width: w, Height: hgt})
+}
+
+func keyMsg(k string) tea.KeyMsg {
+	named := map[string]tea.KeyType{
+		"enter": tea.KeyEnter, "esc": tea.KeyEsc, "tab": tea.KeyTab, "shift+tab": tea.KeyShiftTab,
+		"up": tea.KeyUp, "down": tea.KeyDown, "left": tea.KeyLeft, "right": tea.KeyRight,
+		"pgdown": tea.KeyPgDown, "pgup": tea.KeyPgUp, "home": tea.KeyHome, "end": tea.KeyEnd,
+		"ctrl+c": tea.KeyCtrlC, "backspace": tea.KeyBackspace, "delete": tea.KeyDelete, "ctrl+j": tea.KeyCtrlJ,
+	}
+
+	if t, ok := named[k]; ok {
+		return tea.KeyMsg{Type: t}
+	}
+
+	// A terminal sends alt+enter as enter with the alt flag.
+	switch k {
+	case "space":
+		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
+	case "alt+enter":
+		return tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
+	}
+
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+}
+
+// assertFrame checks that every line of a frame fits the terminal, so
+// no layout overflows or wraps.
+func assertFrame(t *testing.T, frame string, w, h int) {
+	t.Helper()
+
+	lines := strings.Split(frame, "\n")
+	require.LessOrEqual(t, len(lines), h, "frame is taller than the terminal")
+
+	for i, l := range lines {
+		require.LessOrEqual(t, lipgloss.Width(l), w, "line %d is wider than the terminal: %q", i, l)
+	}
+}
+
+func TestShellRendersChromeAndNavigates(t *testing.T) {
+	f := newFake()
+	h := newHarness(t, f, 120, 32)
+
+	frame := h.view()
+	assertFrame(t, frame, 120, 32)
+	require.Contains(t, frame, "▶┊◀ seamark")
+	require.Contains(t, frame, "1 Overview")
+	require.Contains(t, frame, "2 Integrations")
+	require.Contains(t, frame, "3 Lessons")
+	require.Contains(t, frame, "4 Doctor")
+
+	h.press("2")
+	require.Equal(t, destIntegrations, h.m.active)
+
+	h.press("3")
+	require.Equal(t, destLessons, h.m.active)
+
+	h.press("4")
+	require.Equal(t, destDoctor, h.m.active)
+
+	h.press("?")
+	require.True(t, h.m.help)
+	require.Contains(t, h.view(), "? or esc to close")
+
+	h.press("esc")
+	require.False(t, h.m.help)
+	require.NotContains(t, h.view(), "? or esc to close")
+
+	h.press("q")
+	require.True(t, h.quit)
+	require.Empty(t, f.called(), "browsing must not plan, preview, or mutate")
+}
+
+func TestShellAsksForSpaceWhenTooSmall(t *testing.T) {
+	h := newHarness(t, newFake(), 40, 10)
+
+	frame := h.view()
+	require.Contains(t, frame, "More space needed")
+	require.Contains(t, frame, "q")
+
+	h.resize(120, 32)
+	require.Contains(t, h.view(), "1 Overview")
+}
+
+func TestShellOffersFirstRunOnlyForFreshWorkspace(t *testing.T) {
+	f := newFake()
+	f.fresh = true
+
+	h := newHarness(t, f, 120, 32)
+	require.Contains(t, h.view(), "Set up seamark in this repository")
+
+	h.press("v")
+	require.NotContains(t, h.view(), "Set up seamark in this repository")
+	require.Equal(t, destOverview, h.m.active)
+	require.Empty(t, f.called(), "the read-only view writes no marker and plans nothing")
+
+	f2 := newFake()
+	h2 := newHarness(t, f2, 120, 32)
+	require.NotContains(t, h2.view(), "Set up seamark in this repository")
+}
+
+func TestShellDefersQuitWhileMutationRuns(t *testing.T) {
+	h := newHarness(t, newFake(), 120, 32)
+
+	require.True(t, h.m.st.begin("Building the index"))
+	h.press("q")
+	require.False(t, h.quit)
+	require.Contains(t, h.view(), "Exit after the running operation?")
+
+	h.press("enter")
+	require.False(t, h.quit)
+
+	h.send(mutationDoneMsg{})
+	require.True(t, h.quit)
+}

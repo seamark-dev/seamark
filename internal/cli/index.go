@@ -144,7 +144,15 @@ network access.`,
 			}
 
 			fmt.Fprintf(out, "indexed %s in %s\n", sum.Root, sum.Duration.Round(1e6))
-			fmt.Fprintf(out, "  files    %d seen, %d parsed", sum.FilesSeen, sum.FilesParsed)
+			fmt.Fprintf(out, "  files    %d seen", sum.FilesSeen)
+
+			// The note sits beside "seen", because a deleted path is
+			// not in that count. It is not an error: no file exists.
+			if sum.FilesDeleted > 0 {
+				fmt.Fprintf(out, " (%d deleted in the working tree)", sum.FilesDeleted)
+			}
+
+			fmt.Fprintf(out, ", %d parsed", sum.FilesParsed)
 
 			if sum.ParseErrors > 0 {
 				fmt.Fprintf(out, " (%d errors)", sum.ParseErrors)
