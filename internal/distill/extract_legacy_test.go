@@ -182,23 +182,29 @@ Use {"triggers": []} when no item qualifies.
 // text of a type mismatch. The CLI prints it in its batch warning, and
 // the text names the Go target type, so a named answer type would change
 // the CLI output.
+//
+// The test pins the prefix and the type text only. The field path between
+// them changes with the Go release: Go 1.25 writes "Go struct field
+// .triggers" for an item, and Go 1.27 writes ".triggers.0". CI tests the
+// go.mod version, so an exact match fails on one of the two.
 func TestParseExtractReplyKeepsTheDecoderTypeText(t *testing.T) {
 	tests := []struct {
-		name  string
-		reply string
-		want  string
+		name     string
+		reply    string
+		prefix   string
+		typeText string
 	}{
 		{
-			name:  "string instead of a list",
-			reply: `{"triggers": "none"}`,
-			want: "reply is not the requested JSON: json: cannot unmarshal string into Go struct field .triggers of type " +
-				`[]struct { ID int64 "json:\"id\""; TriggerPaths []string "json:\"trigger_paths\"" }`,
+			name:     "string instead of a list",
+			reply:    `{"triggers": "none"}`,
+			prefix:   "reply is not the requested JSON: json: cannot unmarshal string into ",
+			typeText: `[]struct { ID int64 "json:\"id\""; TriggerPaths []string "json:\"trigger_paths\"" }`,
 		},
 		{
-			name:  "number instead of an item",
-			reply: `{"triggers": [1, 2]}`,
-			want: "reply is not the requested JSON: json: cannot unmarshal number into .triggers.0 of type " +
-				`struct { ID int64 "json:\"id\""; TriggerPaths []string "json:\"trigger_paths\"" }`,
+			name:     "number instead of an item",
+			reply:    `{"triggers": [1, 2]}`,
+			prefix:   "reply is not the requested JSON: json: cannot unmarshal number into ",
+			typeText: `struct { ID int64 "json:\"id\""; TriggerPaths []string "json:\"trigger_paths\"" }`,
 		},
 	}
 
@@ -206,7 +212,10 @@ func TestParseExtractReplyKeepsTheDecoderTypeText(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := parseExtractReply(tc.reply)
 			require.Error(t, err)
-			assert.Equal(t, tc.want, err.Error())
+
+			text := err.Error()
+			assert.True(t, strings.HasPrefix(text, tc.prefix), "decoder prefix: %s", text)
+			assert.True(t, strings.HasSuffix(text, " of type "+tc.typeText), "target type text: %s", text)
 		})
 	}
 }

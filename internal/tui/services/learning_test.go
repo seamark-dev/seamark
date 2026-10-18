@@ -330,7 +330,10 @@ func TestEngineMutationsReleaseTheLockOnEveryPath(t *testing.T) {
 	engUnlocked(t, e)
 
 	// A changed config.yaml makes the preview stale; the run refuses it.
-	servicestest.Write(t, ws, settings.File, "agent:\n  cli: claude\n")
+	// The new command is sh, which every host has on PATH. The extraction
+	// plan below reads this file, and an agent CLI missing from PATH
+	// would block that plan before its "nothing to extract" check.
+	servicestest.Write(t, ws, settings.File, "agent:\n  argv: [\"sh\", \"-c\", \"cat >/dev/null\"]\n")
 
 	x, err := e.RunDistill(context.Background(), preview, nil)
 	require.ErrorIs(t, err, distill.ErrStale)
