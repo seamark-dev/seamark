@@ -539,7 +539,7 @@ func classifyHook(entry *CapabilityInspection, spec hooks.Spec, sources []hookSo
 	case len(possible) > 0:
 		first := slices.IndexFunc(sources, func(s hookSource) bool { return !s.certain })
 		entry.State = StatePartial
-		entry.Detail = fmt.Sprintf("%s may run from %s: `%s`", name, sources[first].path, describeCommand(sources[first].command))
+		entry.Detail = fmt.Sprintf("%s may run from %s: %#q", name, sources[first].path, describeCommand(sources[first].command))
 		entry.Action = "run the seamark hook directly in that definition, or remove it and re-run setup, so setup can tell"
 	default:
 		entry.State = StateAbsent
@@ -579,7 +579,7 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 
 		switch {
 		case !s.certain:
-			reason := fmt.Sprintf("has `%s`, which can run the seamark %s hook; setup cannot tell", command, spec.Name)
+			reason := fmt.Sprintf("has %#q, which can run the seamark %s hook; setup cannot tell", command, spec.Name)
 			if len(twice) > 0 {
 				reason += ", and when it does, the hook runs twice"
 			}
@@ -591,7 +591,7 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 				Action: "run the seamark hook directly in that definition, or remove it, so setup can tell",
 			})
 		case len(twice) > 0:
-			reason := fmt.Sprintf("also runs `%s` for %s; the managed %s hook runs too, so the hook runs twice",
+			reason := fmt.Sprintf("also runs %#q for %s; the managed %s hook runs too, so the hook runs twice",
 				command, strings.Join(toolNames(twice), ", "), spec.Name)
 
 			// The other definition can carry another gate mode. Both run,
@@ -610,7 +610,7 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 			*findings = append(*findings, Finding{
 				Level:  FindingInfo,
 				Path:   s.path,
-				Reason: fmt.Sprintf("runs the seamark %s hook as `%s`; setup does not manage that definition", spec.Name, command),
+				Reason: fmt.Sprintf("runs the seamark %s hook as %#q; setup does not manage that definition", spec.Name, command),
 			})
 		}
 	}
@@ -636,7 +636,7 @@ func neverFiresFinding(path, command, event, matcher string, spec hooks.Spec) Fi
 	return Finding{
 		Level: FindingInfo,
 		Path:  path,
-		Reason: fmt.Sprintf("has `%s` under %s %q, which never runs for %s %s; it is not a handler of that hook",
+		Reason: fmt.Sprintf("has %#q under %s %q, which never runs for %s %s; it is not a handler of that hook",
 			describeCommand(command), event, render.Sanitize(matcher), spec.Event, strings.Join(toolNames(spec.Tools()), ", ")),
 	}
 }

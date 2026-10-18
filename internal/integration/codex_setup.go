@@ -380,7 +380,7 @@ func reportCodexHookSources(plan *ClientPlan, sources []hookSource, owned bool, 
 			finding.Reason = fmt.Sprintf("has `%s`, which can run the seamark hook; setup cannot tell, so it installed "+
 				"%s; when that command runs the hook, the hook runs twice", command, managed)
 		case owned:
-			finding.Reason = fmt.Sprintf("also runs the seamark hook: `%s`; %s exists too, so the hook runs twice", command, managed)
+			finding.Reason = fmt.Sprintf("also runs the seamark hook: %#q; %s exists too, so the hook runs twice", command, managed)
 		case !delivered:
 			finding.Reason = fmt.Sprintf("already runs the seamark gate hook: `%s`, %s; the run asked for %s mode, "+
 				"so setup installed %s too, and the hook runs twice", command, describeGateMode(s.mode), asked, managed)
