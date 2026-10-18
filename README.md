@@ -13,7 +13,7 @@ Review proposed lessons, keep the ones that matter, and let Seamark remind
 your agent when it edits relevant code. MCP tools and agent skills also help
 it understand past decisions and find related files that may need updating.
 
-[Get started](#get-started) · [Learn from your repository](#learn-from-your-repository) · [Agent skills](#agent-skills) · [Documentation](#documentation)
+[What you can do](#what-you-can-do) · [Get started](#get-started) · [Learn from your repository](#learn-from-your-repository) · [Agent skills](#agent-skills) · [Documentation](#documentation)
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 license"></a>
@@ -48,6 +48,21 @@ also requires regenerating the frontend client. Seamark can propose a lesson
 from that feedback and deliver the accepted reminder when the agent edits the
 relevant code again. You do not have to remember to repeat the correction in
 every task prompt.
+
+## What you can do
+
+After [setup](#get-started), try a command from the table, then open its
+guide to go further.
+
+| Capability | What it gives you | Try it |
+| --- | --- | --- |
+| [**Lessons from your history**](#learn-from-your-repository) | Proposed lessons from fix commits and pull-request reviews, each linked to its evidence. You decide which to keep. | `seamark index --reviews` · [Lessons guide](docs/lessons.md) |
+| **Reminders at the edit** | Hooks give your AI coding agent an accepted lesson when it edits a matching file, also in a new session. | `seamark lessons --file path/to/file` · [Agent setup](docs/agent-integrations.md) |
+| [**Repository evidence over MCP**](#mcp-tools) | Five tools tell your agent where to start, why code is there, which files usually change together, and what a diff can reach. | `seamark orient` · [History and analysis](docs/repository-history.md) |
+| [**Agent skills**](#agent-skills) (optional) | Three skills tell your agent when to use Seamark to explore, plan, and review a change. | `seamark init --client claude --skills` · [Skills guide](skills/README.md) |
+| **Workspace console** (experimental) | One full-screen view of the index, integrations, evidence, proposals, pins, and settings. Every change starts from a preview. | `seamark tui` · [Console guide](docs/tui.md) |
+| **Command and diff checks** (experimental) | Agent shell commands and diffs checked against a repository policy. New repositories start in warn mode. | `seamark check` · [Policy guide](docs/policies.md) |
+| **Health and reports** | A check of the setup and the index, and a local HTML report of proposals and accepted lessons. | `seamark doctor` · `seamark report --open` · [Troubleshooting](docs/getting-started.md#if-something-is-missing) |
 
 ## Get started
 
@@ -244,7 +259,7 @@ diff policies are available, but they are not the main onboarding path.
 See the [policy guide](docs/policies.md) before enabling enforcement.
 
 Next, we plan to build on lesson delivery and the agent integration framework
-with unified hook management. This is future work, not part of v0.7.0.
+with unified hook management. This is future work, not part of v0.8.0.
 See [current status](docs/STATUS.md) and the [changelog](CHANGELOG.md).
 
 ## Privacy and local data

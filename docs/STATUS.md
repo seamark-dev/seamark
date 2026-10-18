@@ -1,6 +1,6 @@
 # Production status
 
-This page describes **v0.7.0**, released on 2026-10-03.
+This page describes **v0.8.0**, released on 2026-10-18.
 See [Distribution](#distribution) for installation and release details.
 
 The current state of Seamark — what each capability profile can
@@ -17,7 +17,7 @@ Local indexing, history mining, orientation, and the read surfaces.
 
 | Capability | State |
 |---|---|
-| Indexer (Go, TypeScript/TSX/JS, Python) | working; parse cache, self-repairing freshness |
+| Indexer (Go, TypeScript/TSX/JS, Python) | working; parse cache, self-repairing freshness; tracked files deleted in the working tree (deletions not staged) are counted apart from parse errors (`status` line `deleted`, `status --json` field `coverage.files_deleted`) |
 | History layer (co-change, decisions, fix density) | working; needs git history to be useful |
 | `why`, `orient`, `change_set` | working (CLI + MCP; `change_set` is MCP-only) |
 | LSP server (hover, lenses, omission diagnostics) | **experimental**; implementation retained, manual editor setup, not a current development priority ([editors.md](editors.md)) |
@@ -75,11 +75,11 @@ agents inside real isolation regardless.
 
 ## Distribution
 
-Current release: [v0.7.0](https://github.com/seamark-dev/seamark/releases/tag/v0.7.0)
-(2026-10-03). It adds the
-shared AI coding agent integration framework, explicit `--client` setup,
-Codex lesson hooks and inference, and consistent integration diagnostics.
-The [changelog](../CHANGELOG.md) records the full release scope. Every release
+Current release: [v0.8.0](https://github.com/seamark-dev/seamark/releases/tag/v0.8.0)
+(2026-10-18). It adds the experimental workspace console `seamark tui`,
+runs the pin writes and checks of `seamark lessons` on the engines of the
+console, and counts tracked files deleted in the working tree apart from
+parse errors. The [changelog](../CHANGELOG.md) records the full release scope. Every release
 ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
 (`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
@@ -95,8 +95,9 @@ SBOMs, and an npm install are the next distribution milestone.
 ## Direction
 
 The current focus is lessons and proposals, MCP tools, and agent skills.
-Unified hook management across AI coding agents is planned beyond v0.7.0,
-building on the shared integration framework. Policy refinement remains
+The workspace console stays experimental; the plain commands stay the
+stable interface. Unified hook management across AI coding agents is
+planned beyond v0.8.0, building on the shared integration framework. Policy refinement remains
 future work; editor integrations remain experimental.
 
 ## Verification
@@ -107,7 +108,9 @@ future work; editor integrations remain experimental.
   credential); regression tests pin the trust baseline (non-blocking
   default init, audit redaction, durable state surviving rebuilds,
   docs-command drift, and the command names, flags, and Makefile targets
-  the agent-integrations guide shows).
+  the agent-integrations guide shows). Golden tests pin the output of the
+  `seamark lessons` and `seamark index` commands that the console shares,
+  and the lesson selection of the edit hook, `change_set`, and `check`.
 - Native agent checks are separate, reusable Makefile targets
   ([agent-integrations.md](agent-integrations.md)): `make
   agents-native-check CLIENT=codex` runs offline against the installed

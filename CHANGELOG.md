@@ -6,7 +6,15 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
-## Unreleased
+## v0.8.0 — 2026-10-18
+
+The workspace console release. `seamark tui` (experimental) opens one
+full-screen console for a workspace. It sets up and repairs agent
+integrations, refreshes evidence, runs distillation, decides on
+proposals, maintains and writes pins, and edits settings, each from a
+preview. `seamark lessons` now writes and checks pins with the engines
+of the console, so the two surfaces refuse the same changes. The plain
+commands stay the stable interface.
 
 - **Console pin authoring, lesson settings, and selection sample
   (`seamark tui`, experimental).** The console now writes manual pins
@@ -99,6 +107,22 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   - A pin rule or region in the file that is longer than 256 characters
     opens read-only, and the form names the length. A long region also
     locks the scope rows.
+- **The README shows the console, the capabilities, and a shorter quick
+  start.** A screenshot of Lessons › Pins comes before "Why Seamark?". A
+  new "What you can do" table lists each capability with a command to try
+  and its guide. The setup
+  commands no longer add `--skills`: the three agent skills are an
+  optional add-on, and one example sets up Claude Code and Codex in one
+  run. The learning
+  step starts with `seamark index --reviews`, which keeps the fix
+  commits of local Git history when `gh` is not available. `seamark
+  index --fixes-only` is the offline route.
+  [docs/getting-started.md](docs/getting-started.md) says the same.
+  [docs/tui.md](docs/tui.md) is now a user guide. The table of the
+  console settings moved to
+  [docs/configuration.md](docs/configuration.md#console-settings), and
+  the pin file layout rules moved to the package doc of
+  `internal/pinfile`.
 - **`seamark init` without `--client` names only the skill directories
   that a bare `--skills` writes.** Its hint named `.agents/skills` in
   every repository. A bare `--skills` writes `.agents/skills` only when
