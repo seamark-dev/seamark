@@ -4,6 +4,7 @@ package pinfile
 // one entry, in place. A prune deletes the own lines of one entry and
 // its bound provenance lines. A rewrite sets the rule, the note, or the
 // region set of one entry that a person edits in the console, in place.
+// It also sets the mode and the check of the lesson checks (contract K6).
 // The planner splices the reviewed text. Every field that the edit does
 // not change stays as the user wrote it. So do the comments, the unknown
 // keys, and the entry position.
@@ -89,6 +90,15 @@ type Rewrite struct {
 	// set means repository-wide. The region keys change by the rules of
 	// a retarget.
 	Regions *[]string
+	// Mode is the new mode text of the lesson checks (contract K6). An
+	// empty mode removes the mode key, because an absent mode means
+	// advisory. Other text goes in as written; the strict check tier of
+	// Prepare refuses an unknown mode.
+	Mode *string
+	// Check is the new check ID. An empty check removes the check key,
+	// as for Mode, so one splice rule serves both keys. lessons --set-mode
+	// never sends an empty check (contract K6).
+	Check *string
 }
 
 // Change is a planned and verified candidate file.
@@ -181,6 +191,23 @@ func (p *planned) requested() (rule, note string) {
 	}
 
 	return rule, note
+}
+
+// requestedChecks returns the mode and the check that the edit p asks
+// for, by the rule of requested. A retarget asks for the values of the
+// entry, so the verifier proves that it keeps them.
+func (p *planned) requestedChecks() (mode, check string) {
+	mode, check = p.entry.Mode, p.entry.Check
+
+	if rw := p.edit.Rewrite; rw != nil && rw.Mode != nil {
+		mode = *rw.Mode
+	}
+
+	if rw := p.edit.Rewrite; rw != nil && rw.Check != nil {
+		check = *rw.Check
+	}
+
+	return mode, check
 }
 
 // Plan computes the candidate file for the edits on the bytes of d. It
@@ -380,6 +407,16 @@ func (a *analysis) changes(p *planned) (Rewrite, error) {
 		ch.Note = rw.Note
 	}
 
+	// The planner compares the raw text and does not validate a mode
+	// word. The strict check tier of Prepare owns that rule.
+	if rw.Mode != nil && *rw.Mode != e.Mode {
+		ch.Mode = rw.Mode
+	}
+
+	if rw.Check != nil && *rw.Check != e.Check {
+		ch.Check = rw.Check
+	}
+
 	if rw.Regions == nil {
 		return ch, nil
 	}
@@ -401,14 +438,19 @@ func (a *analysis) changes(p *planned) (Rewrite, error) {
 }
 
 // rewriteSplices returns the splices of the changed fields of p. The
-// note splices come first. An absent note and absent region keys both
-// go in after the rule key. spliced keeps the order of two insertions at
-// one line, and the first insertion ends up below. The region keys thus
-// stay above the note, as distill.RenderPins writes them.
+// mode and check splices come first, then the note splices. An absent
+// note and absent region keys both go in after the rule key. spliced
+// keeps the order of two insertions at one line, and the first insertion
+// ends up below. The region keys thus stay above the note, as
+// distill.RenderPins writes them, and a new mode or check key stays
+// below both.
 func (a *analysis) rewriteSplices(p *planned) ([]splice, error) {
 	ch := p.change
 
-	var out []splice
+	out, err := a.checkKeySplices(p)
+	if err != nil {
+		return nil, err
+	}
 
 	if ch.Note != nil {
 		s, err := a.setNote(p.item, *ch.Note)
@@ -526,6 +568,132 @@ func (a *analysis) insertNote(it item, note string) ([]splice, error) {
 	lines := append([]string{strings.Repeat(" ", col) + "note: " + enc[0]}, noteBlock(col, enc)...)
 
 	return []splice{{from: rule.Last + 1, to: rule.Last, lines: lines}}, nil
+}
+
+// checkKeySplices returns the splices of the mode and check changes of
+// p (contract K6). A present key changes in place, or goes away for an
+// empty value. An absent key goes in at the key indentation, in the
+// order mode, check. A new mode goes after the anchor of
+// checkKeyAnchor. A new check goes after a mode key that stays, else
+// after the anchor too.
+func (a *analysis) checkKeySplices(p *planned) ([]splice, error) {
+	ch, it := p.change, p.item
+	stop := it.last + 1
+	indent := strings.Repeat(" ", a.doc.BlockIndent(it.node))
+
+	var (
+		out []splice
+		add []string
+	)
+
+	mode, hasMode := a.doc.KeySpan(it.node, "mode", stop)
+
+	if ch.Mode != nil {
+		s, line, err := a.checkKey(mode, hasMode, indent, "mode", *ch.Mode)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, s...)
+		add = append(add, line...)
+	}
+
+	if ch.Check != nil {
+		check, hasCheck := a.doc.KeySpan(it.node, "check", stop)
+
+		s, line, err := a.checkKey(check, hasCheck, indent, "check", *ch.Check)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, s...)
+
+		// The check follows a mode key that stays, so the two keys keep
+		// the order mode, check.
+		modeStays := hasMode && (ch.Mode == nil || *ch.Mode != "")
+
+		if len(line) > 0 && modeStays {
+			out = append(out, splice{from: mode.Last + 1, to: mode.Last, lines: line})
+		} else {
+			add = append(add, line...)
+		}
+	}
+
+	if len(add) == 0 {
+		return out, nil
+	}
+
+	at, err := a.checkKeyAnchor(it)
+	if err != nil {
+		return nil, err
+	}
+
+	return append(out, splice{from: at + 1, to: at, lines: add}), nil
+}
+
+// checkKey returns the splices that set the present key s to value, or
+// the new key line for an absent key. name is "mode" or "check". changes
+// keeps a field only when its value differs from the decoded value, so
+// an absent key never gets an empty value here.
+func (a *analysis) checkKey(s yamledit.Span, present bool, indent, name, value string) ([]splice, []string, error) {
+	if !present {
+		text, err := yamledit.BlockScalar(value)
+		if err != nil {
+			return nil, nil, noText("the " + name)
+		}
+
+		return nil, []string{indent + name + ": " + text}, nil
+	}
+
+	if value != "" {
+		out, err := a.setScalar(s, "the "+name, value)
+
+		return out, nil, err
+	}
+
+	// A key on the dash line holds the dash. Another key would have to
+	// move onto that line, so the removal is left to the user.
+	switch {
+	case a.onDashLine(s.Key):
+		return nil, nil, fail(ErrUnsupported, "the "+name+" key is on the dash line")
+	case !s.Inline:
+		return nil, nil, fail(ErrUnsupported, "the "+name+" value is not on its key line")
+	case a.doc.CommentIn(s.First, s.Last):
+		return nil, nil, fail(ErrUnsupported, "removing the "+name+" key would drop a comment")
+	}
+
+	return []splice{{from: s.First, to: s.Last}}, nil, nil
+}
+
+// checkKeyAnchor returns the line after which a new mode or check key
+// goes: the last line of the note key, else of the last region key, else
+// of the rule key. Contract K6 fixes this place, and the spec example
+// writes the two keys there.
+func (a *analysis) checkKeyAnchor(it item) (int, error) {
+	stop := it.last + 1
+
+	if note, ok := a.doc.KeySpan(it.node, "note", stop); ok {
+		return note.Last, nil
+	}
+
+	last := 0
+
+	for _, name := range []string{"region", "regions"} {
+		if s, ok := a.doc.KeySpan(it.node, name, stop); ok {
+			last = max(last, s.Last)
+		}
+	}
+
+	if last > 0 {
+		return last, nil
+	}
+
+	rule, ok := a.doc.KeySpan(it.node, "rule", stop)
+	if !ok {
+		return 0, fail(ErrUnsupported, "the entry has no rule key to place the mode or the check after")
+	}
+
+	return rule.Last, nil
 }
 
 // keyComment returns the trailing comment of the key line of s, with

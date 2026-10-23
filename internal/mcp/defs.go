@@ -51,6 +51,11 @@ var toolDefs = []map[string]any{
 				"type":        "string",
 				"description": "unified diff; optional",
 			},
+			// The option name, its type, and the text are frozen (contract K5).
+			"lesson_checks": map[string]any{
+				"type":        "boolean",
+				"description": "also verify the working tree against executable lesson checks (lesson-verification/1); default false",
+			},
 		}, nil),
 	},
 	{

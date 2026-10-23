@@ -7,14 +7,18 @@ package mcp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -330,14 +334,31 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (string, error){
 
 	"check": func(s *Server, args json.RawMessage) (string, error) {
 		var p struct {
-			Diff string `json:"diff"`
+			Diff         string `json:"diff"`
+			LessonChecks bool   `json:"lesson_checks"`
 		}
 
 		if len(args) > 0 {
 			if err := json.Unmarshal(args, &p); err != nil {
-				return "", fmt.Errorf("check takes {\"diff\": \"<unified diff>\"} (optional)")
+				return "", errors.New(checkUsage)
 			}
 		}
+
+		// The lesson checks read a git work tree. A directory outside git
+		// is refused before the index refresh and the audit append, so
+		// the refusal writes nothing, as in check --lessons.
+		var lessonsRoot string
+
+		if p.LessonChecks {
+			root, err := s.lessonsRoot()
+			if err != nil {
+				return "", err
+			}
+
+			lessonsRoot = root
+		}
+
+		policyInput := report.PolicyInputStdinDiff
 
 		if p.Diff == "" {
 			out, err := exec.Command("git", "-C", s.root, "diff", "HEAD").Output()
@@ -346,15 +367,20 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (string, error){
 			}
 
 			p.Diff = string(out)
+			policyInput = report.PolicyInputGitDiffHead
 		}
 
-		return s.withStore(func(st *store.Store) (string, error) {
+		// The lesson checks need the policy decision after withStore
+		// returns, so the callback keeps it here.
+		var decision *gate.Decision
+
+		text, err := s.withStore(func(st *store.Store) (string, error) {
 			policy, err := gate.LoadPolicy(s.root)
 			if err != nil {
 				return "", err
 			}
 
-			decision, err := gate.EvalDiff(policy, st, p.Diff)
+			decision, err = gate.EvalDiff(policy, st, p.Diff)
 			if err != nil {
 				return "", err
 			}
@@ -375,5 +401,60 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (string, error){
 
 			return b.String(), nil
 		})
+		if err != nil || !p.LessonChecks {
+			return text, err
+		}
+
+		// withStore has closed the index here. SQLite keeps its WAL files
+		// next to an open index, and the snapshot must not see them change.
+		return s.checkLessons(text, lessonsRoot, decision, policyInput)
 	},
+}
+
+// checkUsage is the refusal of malformed check arguments (contracts
+// §4.1). It names every argument, so the model can correct the call.
+const checkUsage = `check takes {"diff": "<unified diff>", "lesson_checks": true|false} (both optional)`
+
+// lessonsRoot returns the top level of the git work tree of the server
+// root. It refuses a root outside git with the text of check --lessons.
+// The server cannot import cli, so it repeats that check here.
+func (s *Server) lessonsRoot() (string, error) {
+	if !history.IsRepo(s.root) {
+		return "", fmt.Errorf("lesson checks: %s is not inside a git work tree", s.root)
+	}
+
+	return history.ResolveRoot(s.root)
+}
+
+// checkLessons appends the lesson verification to the policy text of
+// one check call (contract K5): a blank line, the lesson report, and the
+// combined line. report.NewCheckLessonsEnvelope derives the combined
+// values, so this line and check --lessons print the same verdict.
+//
+// A violation and a blocking policy stay in band: the result is text,
+// not an isError result. Only a usage or root failure of Verify is an
+// error. No path here constructs an invoker (AC-1).
+func (s *Server) checkLessons(policyText, root string, decision *gate.Decision, policyInput string) (string, error) {
+	// Verify sets the verify-timeout deadline itself. The server has no
+	// request context, so the call starts from the background context.
+	v, err := lessoncheck.Verify(context.Background(), lessoncheck.VerifyRequest{
+		Root:           root,
+		Caller:         lessoncheck.CallerMCP,
+		SeamarkVersion: s.version,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	env := report.NewCheckLessonsEnvelope(decision, v, policyInput)
+
+	var b strings.Builder
+
+	b.WriteString(policyText)
+	b.WriteString("\n")
+	lessoncheck.RenderText(&b, v)
+	fmt.Fprintf(&b, "combined: %s (policy %s, lessons %s; CLI exit %d)\n",
+		env.Combined.State, env.Combined.Policy, env.Combined.Lessons, env.Combined.ExitCode)
+
+	return b.String(), nil
 }

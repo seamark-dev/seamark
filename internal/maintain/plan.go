@@ -11,6 +11,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/reviews"
@@ -88,6 +89,12 @@ type Plan struct {
 	// Change is the verified candidate file of the ready items; nil when
 	// no item is ready.
 	Change *pinfile.Change
+	// Impact holds the checker impact of each edited pin that is check or
+	// enforce (contract K1). A retarget and a replacement fill it from
+	// Change, so a surface shows it before the apply. It is empty for an
+	// advisory pin, a prune, and a plan without Change. Commit compares
+	// Change, and Impact follows from Change alone.
+	Impact []lessoncheck.Impact
 	// Retarget and Supersede are the guarded ledger changes of the ready
 	// items, in item order.
 	Retarget  []store.RegionChange
@@ -423,7 +430,79 @@ func (pl *planner) edit() error {
 
 	pl.plan.Change = change
 
+	// A prune removes the pin, so no check evaluates it after the edit.
+	// Contract K1 shows the impact of a scope, note, or binding change.
+	if pl.plan.Action == ActionRetarget {
+		impact, err := checkImpact(pl.doc, change)
+		if err != nil {
+			return err
+		}
+
+		pl.plan.Impact = impact
+	}
+
 	return nil
+}
+
+// checkImpact returns the checker impact of the rewrites and retargets
+// in change (contract K1). It decodes both files with the lenient reader,
+// because the strict tier of pinfile.Prepare runs only at the write. A
+// decode error is returned: a pin that cannot be read must never pass
+// as advisory.
+//
+// A pin entry is its position in doc.Entries. The listing skips null
+// items, as reviews.ParseConfig does, so that position is the position
+// in Config.Pin. Entry.Index counts the null items and cannot serve. The
+// key test below proves the pairing for each edit, and the edit keeps
+// the position in the candidate.
+func checkImpact(doc *pinfile.Document, change *pinfile.Change) ([]lessoncheck.Impact, error) {
+	if change == nil {
+		return nil, nil
+	}
+
+	before, err := reviews.ParseConfig(change.Before)
+	if err != nil {
+		return nil, fmt.Errorf("maintain: read the checker impact: %w", err)
+	}
+
+	after, err := reviews.ParseConfig(change.After)
+	if err != nil {
+		return nil, fmt.Errorf("maintain: read the checker impact of the candidate: %w", err)
+	}
+
+	var entries []int
+
+	for i, e := range change.Edits {
+		if e.Delete {
+			continue
+		}
+
+		at := slices.IndexFunc(doc.Entries, func(x pinfile.Entry) bool { return x.Index == e.Ref.Index })
+		if at < 0 || !pinAt(before, at, e.Ref.Key) || !pinAt(after, at, change.NewKeys[i]) {
+			return nil, fmt.Errorf("maintain: read the checker impact: entry %d does not pair with the pin list",
+				e.Ref.Index+1)
+		}
+
+		entries = append(entries, at+1)
+	}
+
+	impacts, err := lessoncheck.ImpactOf(before, after, entries)
+	if err != nil {
+		return nil, fmt.Errorf("maintain: read the checker impact: %w", err)
+	}
+
+	return impacts, nil
+}
+
+// pinAt reports whether the pin at position at of cfg has key.
+func pinAt(cfg *reviews.Config, at int, key reviews.PinKey) bool {
+	if at >= len(cfg.Pin) {
+		return false
+	}
+
+	p := cfg.Pin[at]
+
+	return reviews.NewPinKey(p.Rule, p.Region, p.Regions) == key
 }
 
 // otherApplied returns the keys of the applied rows that no selected

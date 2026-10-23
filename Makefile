@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-native-smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test lesson-check lesson-check-race tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-native-smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -47,6 +47,25 @@ AGENTS_TEST_RUN  := 'Test(RunInit|InitClient|InitDefault|InitGateMode|ReportSkil
 agents-test: ## Run the agent-integration contract and characterization tests
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(AGENTS_TEST_PKGS)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./internal/cli ./internal/reviews ./internal/report ./internal/mcp -run $(AGENTS_TEST_RUN)
+
+# Lesson-check tests: the check configuration, the working-tree
+# snapshot, both /1 checkers, and the verification surfaces. The new
+# packages run whole: lessoncheck, and privatedir, which holds the
+# private-directory helpers that lessoncheck shares with the archive.
+# The CLI and the MCP server run only the tests whose names match
+# LESSON_CHECK_RUN, because -run applies to every package of one line.
+# Nothing here calls a model or the network.
+# Later milestones append test-name prefixes and packages here.
+LESSON_CHECK_PKGS := ./internal/lessoncheck/... ./internal/privatedir/...
+LESSON_CHECK_RUN  := 'Test(LessonCheck|LessonsVerify|LessonsSetMode|CheckLessons)'
+
+lesson-check: ## Run the lesson-check core, configuration, and verification tests (offline, no model)
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(LESSON_CHECK_PKGS)
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./internal/cli ./internal/mcp -run $(LESSON_CHECK_RUN)
+
+lesson-check-race: ## Run the lesson-check tests with the race detector
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race $(LESSON_CHECK_PKGS)
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race ./internal/cli ./internal/mcp -run $(LESSON_CHECK_RUN)
 
 # Native checks run against the installed client CLI (CLIENT=codex or
 # claude) and are separate from agents-test because they need the client

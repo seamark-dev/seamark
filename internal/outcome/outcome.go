@@ -180,12 +180,12 @@ func Gather(st *store.Store, cfg *reviews.Config, applied []model.Proposal,
 			// at ts == first must count as "before" too.
 			pre, err := st.CountCommitsTouching(pin.AllRegions(), 0, first+1)
 			if err != nil {
-				return nil, fmt.Errorf("failed to count pre-exposure commits for %s: %w", pin, err)
+				return nil, fmt.Errorf("failed to count pre-exposure commits for %s: %w", pinText(pin), err)
 			}
 
 			post, err := st.CountCommitsTouching(pin.AllRegions(), first+1, 0)
 			if err != nil {
-				return nil, fmt.Errorf("failed to count post-exposure commits for %s: %w", pin, err)
+				return nil, fmt.Errorf("failed to count post-exposure commits for %s: %w", pinText(pin), err)
 			}
 
 			r = assess(exp, true, linked(p.Members, links), pre, post, minedThrough)
@@ -197,6 +197,14 @@ func Gather(st *store.Store, cfg *reviews.Config, applied []model.Proposal,
 	}
 
 	return out, nil
+}
+
+// pinText names a pin in an error of Gather. Earlier releases printed
+// the whole PinRule, which then held four fields. The lesson-check
+// fields Mode and Check came later, so this function prints only the
+// first four fields. The error text thus stays the same.
+func pinText(p reviews.PinRule) string {
+	return fmt.Sprintf("{%s %s %v %s}", p.Rule, p.Region, p.Regions, p.Note)
 }
 
 // findingLinks indexes the two one-hop relationships used by outcome

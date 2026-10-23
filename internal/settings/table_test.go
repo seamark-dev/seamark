@@ -151,8 +151,11 @@ func TestFieldTableMatchesTheReaderStructs(t *testing.T) {
 		assert.ElementsMatch(t, slices.Collect(maps.Keys(keys)), fields)
 	})
 
-	// The pin list is the one key of reviews.Config that is not a field:
-	// the pin editors of internal/pinfile and internal/maintain own it.
+	// Three keys of reviews.Config are not fields. The pin editors of
+	// internal/pinfile and internal/maintain own the pin list.
+	// lesson_checks_version and checks are the check definitions, which
+	// lessoncheck validates and a check-definition editor owns. Settings
+	// keeps them unchanged.
 	t.Run("every lessons field is a key of reviews.Config", func(t *testing.T) {
 		var fields []string
 
@@ -162,7 +165,8 @@ func TestFieldTableMatchesTheReaderStructs(t *testing.T) {
 			assert.Equal(t, ReaderLessons, f.Reader(), "%s", f)
 		}
 
-		assert.ElementsMatch(t, slices.Collect(maps.Keys(lessonsKeys(t))), append(fields, "pin"))
+		notFields := []string{"pin", "lesson_checks_version", "checks"}
+		assert.ElementsMatch(t, slices.Collect(maps.Keys(lessonsKeys(t))), append(fields, notFields...))
 	})
 
 	// An owned section gets the structural analysis. A decoded section

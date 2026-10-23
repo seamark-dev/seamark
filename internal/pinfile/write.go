@@ -16,6 +16,7 @@ import (
 	"io"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
@@ -37,8 +38,9 @@ type Prepared struct {
 // that changed returns ErrStale. A link or a file that this user cannot
 // write returns ErrNotWritable. Bytes that the lessons reader rejects
 // are refused, because the edit hook would then drop every pin without a
-// word. An absent file returns ErrStale: a retarget or a prune edits an
-// entry, so it needs the file.
+// word. Bytes that fail lessoncheck.Validate are refused too, with the
+// reason of CandidateRefusal. An absent file returns ErrStale: a retarget
+// or a prune edits an entry, so it needs the file.
 func Prepare(reg *integration.Registry, root string, expect integration.FileGuard, after []byte) (*Prepared, error) {
 	if !expect.Exists {
 		return nil, fail(ErrStale, "the pin file does not exist")
@@ -60,9 +62,21 @@ func PrepareAppend(reg *integration.Registry, root string, expect integration.Fi
 // prepare plans the guarded write of after. The file must still exist
 // as expect observed it, with the same SHA-256, or be absent as expect
 // observed it.
+//
+// The candidate must also pass the strict check tier (contract K1,
+// writer rule). The check reads the whole candidate, so an error that
+// an earlier hand edit made also refuses the write (§5 row 5). An
+// invalid check configuration must never come from a seamark write.
 func prepare(reg *integration.Registry, root string, expect integration.FileGuard, after []byte, detail string) (*Prepared, error) {
-	if _, err := reviews.ParseConfig(after); err != nil {
+	cfg, err := reviews.ParseConfig(after)
+	if err != nil {
 		return nil, fmt.Errorf("%w: the candidate does not load: %w", ErrUnverified, err)
+	}
+
+	// The refusal type keeps the exact contract text. A wrap with %w
+	// would put the text of ErrUnverified in front of it.
+	if reason := CandidateRefusal(cfg); reason != "" {
+		return nil, &refusal{text: "pinfile: " + reason, kind: ErrUnverified}
 	}
 
 	setup, err := guardedWrite(reg, root, detail, after, func(existing []byte, exists bool) error {
@@ -77,6 +91,22 @@ func prepare(reg *integration.Registry, root string, expect integration.FileGuar
 	}
 
 	return &Prepared{Guard: setup.Reads[0], Written: sha256.Sum256(after), setup: setup}, nil
+}
+
+// CandidateRefusal returns the reason that a writer refuses the decoded
+// candidate cfg, or "" when cfg passes lessoncheck.Validate. The reason
+// names the first error and the count of the others (contract K1).
+//
+// Two writers use it: prepare, and the settings editor, which writes
+// lessons.yaml without prepare. One function gives both the same text.
+// The count is always in the text, also when it is 0.
+func CandidateRefusal(cfg *reviews.Config) string {
+	errs := lessoncheck.Validate(cfg)
+	if len(errs) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("the candidate does not validate: %s (and %d more)", errs[0].Message, len(errs)-1)
 }
 
 // Apply writes the prepared bytes. The engine checks the guard once more

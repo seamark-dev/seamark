@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 )
 
 // version is stamped by the Makefile via -ldflags.
@@ -59,12 +60,14 @@ func newVersionCmd() *cobra.Command {
 
 // Execute runs the CLI and returns a process exit code. Policy blocks get
 // a distinct code (2) so PreToolUse hooks and CI can tell "denied" from
-// "broken".
+// "broken". A lesson-check violation gets code 2 too, because CI must
+// tell an observed violation from an incomplete check (code 1,
+// contracts §4.2).
 func Execute() int {
 	if err := New().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "seamark:", err)
 
-		if errors.Is(err, gate.ErrBlocked) {
+		if errors.Is(err, gate.ErrBlocked) || errors.Is(err, lessoncheck.ErrViolation) {
 			return 2
 		}
 

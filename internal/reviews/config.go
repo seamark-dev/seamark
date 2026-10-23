@@ -64,6 +64,38 @@ type Config struct {
 	// Pin surfaces curated lessons unconditionally — the "must not be
 	// ignored" list — even when mining never found them.
 	Pin []PinRule `yaml:"pin"`
+	// LessonChecksVersion is the format version of Checks and of the pin
+	// fields Mode and Check. 0 means absent. This binary reads up to
+	// MaxLessonChecksVersion. The key is omitempty, so a file without it
+	// keeps its bytes.
+	LessonChecksVersion int `yaml:"lesson_checks_version,omitempty"`
+	// Checks maps a check ID to its definition. The map keys are the IDs.
+	// The decode stays lenient: lessoncheck.Validate owns the semantic
+	// rules, so an advisory reader keeps its pins when a definition is
+	// wrong (contract K1, tier 2).
+	Checks map[string]CheckDef `yaml:"checks,omitempty"`
+}
+
+// MaxLessonChecksVersion is the newest lesson_checks_version that this
+// binary reads. ParseConfig accepts a newer version, because
+// lessoncheck.Validate reports it as version-unsupported and advisory
+// readers must keep the pins of such a file (contract K1, K-6).
+const MaxLessonChecksVersion = 1
+
+// CheckDef is one check definition under the checks key. Each parameter
+// is a typed field. A new parameter is a new field, and it needs a new
+// checker kind version when it changes the predicate.
+type CheckDef struct {
+	// Kind names the checker and its version, for example
+	// "forbid-path-change/1" or "no-added-pattern/1".
+	Kind string `yaml:"kind"`
+	// Pattern is the regular expression of no-added-pattern/1. Other
+	// kinds take no pattern.
+	Pattern string `yaml:"pattern,omitempty"`
+	// Unknown collects the keys that no field reads. yaml.v3 ignores an
+	// unknown struct key without an error, so only an inline map lets
+	// lessoncheck.Validate refuse a key such as "flags: i".
+	Unknown map[string]any `yaml:",inline"`
 }
 
 // HookDelivery resolves the effective edit-hook delivery mode.
@@ -113,6 +145,14 @@ type PinRule struct {
 	// the set's first entry — narrower than the `*` they used to get.
 	Regions []string `yaml:"regions,omitempty,flow"`
 	Note    string   `yaml:"note"` // guidance shown in output
+	// Mode and Check come after Note and are omitempty. yaml.Marshal
+	// (distill.RenderPins) then writes the same bytes as before when both
+	// are empty. lessoncheck.Validate owns the allowed values.
+	//
+	// Mode is "", "advisory", "check", or "enforce". "" means "advisory".
+	Mode string `yaml:"mode,omitempty"`
+	// Check is a key of Config.Checks, or "" when the pin binds no check.
+	Check string `yaml:"check,omitempty"`
 }
 
 // AllRegions returns the pin's effective region set — Region and
@@ -184,7 +224,8 @@ func DefaultConfig() *Config {
 
 // ErrLessonsConfig marks a failed read, parse, or validation of
 // .seamark/lessons.yaml — an unreadable file, malformed yaml, and
-// invalid field values (an unknown hook_delivery) all carry it.
+// invalid field values (an unknown hook_delivery, a negative
+// lesson_checks_version) all carry it.
 // Callers branch with errors.Is; the message text around it is
 // presentation, not contract.
 var ErrLessonsConfig = errors.New("lessons config")
@@ -219,6 +260,12 @@ func LoadConfig(root string) (*Config, error) {
 // its hash parses exactly the hashed bytes, and a pin editor checks a
 // candidate file before it writes. Empty input yields the defaults, the
 // same as an absent file. Every error carries ErrLessonsConfig.
+//
+// The lesson-check keys get only the decode tier here (contract K1).
+// yaml.v3 refuses a duplicate check ID, and a negative
+// lesson_checks_version is an error. A version above
+// MaxLessonChecksVersion decodes without an error: lessoncheck.Validate
+// reports it, and the advisory readers keep the pins of the file.
 func ParseConfig(data []byte) (*Config, error) {
 	cfg := DefaultConfig()
 
@@ -235,6 +282,13 @@ func ParseConfig(data []byte) (*Config, error) {
 	default:
 		return nil, fmt.Errorf("%w: hook_delivery must be %q or %q, got %q",
 			ErrLessonsConfig, HookDeliveryAlways, HookDeliveryOncePerContext, cfg.Delivery)
+	}
+
+	// The message text is frozen by contract K1, so it names the
+	// supported version literally.
+	if cfg.LessonChecksVersion < 0 {
+		return nil, fmt.Errorf("%w: lesson_checks_version must be 1, got %d",
+			ErrLessonsConfig, cfg.LessonChecksVersion)
 	}
 
 	return cfg, nil

@@ -205,6 +205,7 @@ func newCheckCmd(opts *options) *cobra.Command {
 	var (
 		enforce bool
 		asJSON  bool
+		lessons bool
 	)
 
 	cmd := &cobra.Command{
@@ -213,7 +214,11 @@ func newCheckCmd(opts *options) *cobra.Command {
 		Long: `Maps a unified diff's changed lines to symbols and unions their
 transitively-propagated effect tags: what can this change ultimately
 reach? Reads the diff from stdin when piped, else runs "git diff HEAD".
-Policy rules over diff.* decide the verdict.`,
+Policy rules over diff.* decide the verdict.
+
+With --lessons, check also verifies the working tree against the
+executable lesson checks, as "seamark lessons --verify" does, whatever
+diff the policy read. A lesson violation exits 2, as a policy block does.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Locate does not test the directory. For a missing -C, the
@@ -224,6 +229,17 @@ Policy rules over diff.* decide the verdict.`,
 			}
 
 			root, dbPath := ws.Root, ws.DBPath
+
+			// The lesson checks read a git work tree. A directory outside
+			// git is refused before the index refresh and the audit
+			// append, so the refusal writes nothing.
+			var lessonsRoot string
+
+			if lessons {
+				if lessonsRoot, err = verifyRoot(opts.workspace); err != nil {
+					return err
+				}
+			}
 
 			// A stale index makes blast-radius answers WRONG (line spans
 			// drift); check repairs freshness instead of warning about it.
@@ -246,7 +262,7 @@ Policy rules over diff.* decide the verdict.`,
 			}
 			defer func() { _ = st.Close() }() // read-only
 
-			diffText, err := readDiff(cmd.InOrStdin(), root)
+			diffText, policyInput, err := readDiff(cmd.InOrStdin(), root)
 			if err != nil {
 				return err
 			}
@@ -271,6 +287,18 @@ Policy rules over diff.* decide the verdict.`,
 				fmt.Fprintf(cmd.ErrOrStderr(), "seamark: audit log: %v\n", err)
 			}
 
+			if lessons {
+				return runCheckLessons(cmd, checkLessonsRun{
+					root:        root,
+					lessonsRoot: lessonsRoot,
+					st:          st,
+					diff:        diffText,
+					policyInput: policyInput,
+					decision:    decision,
+					asJSON:      asJSON,
+				})
+			}
+
 			renderErr := renderDecision(cmd.OutOrStdout(), decision, asJSON)
 
 			// A blocked check still gets its advisory — a deny is
@@ -293,30 +321,34 @@ Policy rules over diff.* decide the verdict.`,
 
 	cmd.Flags().BoolVar(&enforce, "enforce", false, "override policy mode: block on deny/approval verdicts")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
+	cmd.Flags().BoolVar(&lessons, "lessons", false,
+		"also verify the working tree against the executable lesson checks; with --json print the check-lessons/1 document")
 
 	return cmd
 }
 
 // readDiff prefers piped stdin; otherwise asks git for the working-tree
-// diff against HEAD.
-func readDiff(stdin io.Reader, root string) (string, error) {
+// diff against HEAD. input is the source of the diff as a
+// check-lessons/1 policy input. Empty stdin falls back to git, so input
+// names the branch that gave the diff.
+func readDiff(stdin io.Reader, root string) (diff, input string, err error) {
 	if f, ok := stdin.(*os.File); !ok || (f == os.Stdin && !isTerminal(f)) {
 		data, err := io.ReadAll(stdin)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 
 		if len(data) > 0 {
-			return string(data), nil
+			return string(data), report.PolicyInputStdinDiff, nil
 		}
 	}
 
 	out, err := gitOutput(root, "diff", "HEAD")
 	if err != nil {
-		return "", fmt.Errorf("git diff: %w", err)
+		return "", "", fmt.Errorf("git diff: %w", err)
 	}
 
-	return out, nil
+	return out, report.PolicyInputGitDiffHead, nil
 }
 
 func isTerminal(f *os.File) bool {
@@ -347,17 +379,24 @@ func renderDecision(w io.Writer, d *gate.Decision, asJSON bool) error {
 		return err
 	}
 
-	if d.Blocking() {
-		// The reasons must travel on stderr: that is what PreToolUse hooks
-		// feed back to the agent, and "blocked" without a why leaves it
-		// guessing instead of correcting course.
-		reasons := make([]string, 0, len(d.Matches))
-		for _, m := range d.Matches {
-			reasons = append(reasons, render.Sanitize(m.Message))
-		}
+	return blockedError(d)
+}
 
-		return &gate.Blocked{Cause: errors.New(strings.Join(reasons, "; "))}
+// blockedError returns the gate.Blocked error of a blocking decision,
+// or nil. check --lessons --json needs the error without the printed
+// verdict, so the error has its own function.
+func blockedError(d *gate.Decision) error {
+	if !d.Blocking() {
+		return nil
 	}
 
-	return nil
+	// The reasons must travel on stderr: that is what PreToolUse hooks
+	// feed back to the agent, and "blocked" without a why leaves it
+	// guessing instead of correcting course.
+	reasons := make([]string, 0, len(d.Matches))
+	for _, m := range d.Matches {
+		reasons = append(reasons, render.Sanitize(m.Message))
+	}
+
+	return &gate.Blocked{Cause: errors.New(strings.Join(reasons, "; "))}
 }

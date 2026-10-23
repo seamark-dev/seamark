@@ -30,7 +30,9 @@ import (
 
 func newLessonsCmd(opts *options) *cobra.Command {
 	var (
-		file            string
+		files           []string
+		verify          bool
+		asJSON          bool
 		region          string
 		hookMode        bool
 		hookReset       bool
@@ -45,16 +47,20 @@ func newLessonsCmd(opts *options) *cobra.Command {
 		dismissIDs      string
 		pruneIDs        string
 		retargetIDs     string
+		confirmChecks   bool
 		extractTriggers bool
+		setMode         setModeFlags
 	)
 
 	cmd := &cobra.Command{
-		Use:   "lessons [--file <path> | --list [--region <prefix>] | --stats | --distill | --proposals]",
+		Use: "lessons [--file <path> | --list [--region <prefix>] | --stats | --distill | --proposals | " +
+			"--verify [--file <path>]... [--json] | --set-mode <mode> --pin <pin-ref> [--check <check-id>]]",
 		Short: "Show the recurring review feedback mined from pull requests",
 		Long: `Prints the review lessons (mined by "index --reviews", tuned by
 .seamark/lessons.yaml) — the mistakes reviewers keep flagging.
 
-  --file <path>    the lessons that apply to one file's area
+  --file <path>    the lessons that apply to one file's area; with
+                   --verify, a path to check (repeat --file for more)
   --list           every mined lesson repo-wide, with config syntax to
                    mute the noise or pin what must never be ignored
   --region <path>  narrow --list to one directory's area: its lessons
@@ -72,6 +78,25 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    distill only drafts them.
   --proposals      the decision ledger — what is pending, applied, and
                    dismissed. Read-only: never spends an agent call.
+  --verify         check the working tree against the executable pins
+                   (mode check or enforce in lessons.yaml): the tracked
+                   changes against HEAD plus the untracked files that
+                   git does not ignore. Repeat --file <path> to check
+                   only those paths, ignored files included; a relative
+                   path starts at the current directory. Exit code 0:
+                   no violation; 2: a violation; 1: a result is
+                   unknown, the files changed during the check, or the
+                   configuration is invalid. No agent call, no network.
+  --json           with --verify: print only the lesson-verification/1
+                   JSON document instead of the text report
+  --set-mode <mode> --pin <pin-ref> [--check <check-id>]
+                   set the mode of one pin: advisory, check, or enforce.
+                   The pin-ref comes from the pin column of --verify.
+                   --check binds a check that lessons.yaml defines under
+                   checks; check and enforce need one. Changes only the
+                   mode and check keys of that pin, and only when the
+                   whole file still validates. Write-gated like --apply,
+                   else prints the lines to set by hand. No agent call.
   --apply p3,p7    turn chosen proposals into pins; ranges work too
                    (p1..p9 applies whatever inside is still pending).
                    Writes lessons.yaml only when config.yaml sets
@@ -91,6 +116,9 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    only the region keys of the entry, in place, and the
                    ledger with them; write-gated like --apply, else
                    prints the change to make by hand.
+  --confirm-checks with --retarget: move the regions of a pin with mode
+                   check or enforce. Without it, such a retarget prints
+                   the checker impact and changes nothing.
   --extract-triggers
                    backfill trigger paths for proposals distilled
                    before extraction existed: small agent calls name
@@ -115,6 +143,20 @@ a file has no lessons.`,
 			// a command carrying --dry-run must not mutate anything.
 			if dryRun && !distillRun && !extractTriggers {
 				return fmt.Errorf("--dry-run only applies to --distill and --extract-triggers")
+			}
+
+			// --verify, --json, and a repeated --file are checked before
+			// the older guards. Then a call with --verify always names its
+			// mode conflict, and no other mode reads a second --file value
+			// without notice.
+			if err := verifyFlagError(cmd, verify, asJSON, len(files)); err != nil {
+				return err
+			}
+
+			// --set-mode, --pin, and --check are checked next, for the
+			// same reason: a call with --set-mode names its own conflict.
+			if err := setModeFlagError(cmd, setMode); err != nil {
+				return err
 			}
 
 			// Apply, dismiss and prune are three different decisions
@@ -152,6 +194,12 @@ a file has no lessons.`,
 					"--retarget, --distill, or --extract-triggers — run it before or after")
 			}
 
+			// The confirmation belongs to one retarget run. On another mode
+			// it would read as a confirmation that nothing checks.
+			if confirmChecks && strings.TrimSpace(retargetIDs) == "" {
+				return errors.New("--confirm-checks applies to --retarget only")
+			}
+
 			// --client selects the native event format of a hook run. The
 			// inference agent of --distill is a separate setting, agent.cli.
 			// A user can take one for the other, so the error names both.
@@ -173,6 +221,10 @@ a file has no lessons.`,
 				return runLessonsHook(cmd, opts, hookClient)
 			case hookReset:
 				return runLessonsHookReset(cmd, opts, hookClient)
+			case verify:
+				return runLessonsVerify(cmd, opts, files, asJSON)
+			case cmd.Flags().Changed("set-mode"):
+				return runLessonsSetMode(cmd, opts, setMode)
 			case strings.TrimSpace(applyIDs) != "":
 				return runLessonsApply(cmd, opts, applyIDs+","+extra)
 			case strings.TrimSpace(dismissIDs) != "":
@@ -180,7 +232,7 @@ a file has no lessons.`,
 			case strings.TrimSpace(pruneIDs) != "":
 				return runLessonsPrune(cmd, opts, pruneIDs+","+extra)
 			case strings.TrimSpace(retargetIDs) != "":
-				return runLessonsRetarget(cmd, opts, retargetIDs+","+extra)
+				return runLessonsRetarget(cmd, opts, retargetIDs+","+extra, confirmChecks)
 			case proposalList:
 				return runLessonsProposals(cmd, opts)
 			case extractTriggers:
@@ -191,7 +243,9 @@ a file has no lessons.`,
 				return runLessonsList(cmd, opts, strings.TrimSpace(region))
 			case stats:
 				return runLessonsStats(cmd, opts)
-			case strings.TrimSpace(file) != "":
+			case len(files) == 1 && strings.TrimSpace(files[0]) != "":
+				file := files[0]
+
 				st, root, err := openIndex(opts)
 				if err != nil {
 					return err
@@ -205,12 +259,24 @@ a file has no lessons.`,
 
 				return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, file), lessons, 0)
 			default:
-				return fmt.Errorf("provide --file <path>, --list, --stats, --distill, --proposals, --apply, --dismiss, or --hook")
+				return fmt.Errorf("provide --file <path>, --list, --stats, --distill, --proposals, --verify, --apply, --dismiss, or --hook")
 			}
 		},
 	}
 
-	cmd.Flags().StringVar(&file, "file", "", "repo-relative (or absolute) path to look up")
+	// --file is a list, because --verify takes several paths (A12). Every
+	// other mode takes one value, and verifyFlagError refuses more.
+	cmd.Flags().StringArrayVar(&files, "file", nil,
+		"repo-relative (or absolute) path to look up; with --verify, a path to check (repeatable)")
+	cmd.Flags().BoolVar(&verify, "verify", false,
+		"check the working tree against the executable pins (mode check or enforce); exit 2 on a violation")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "with --verify: print the lesson-verification/1 JSON document")
+	cmd.Flags().StringVar(&setMode.mode, "set-mode", "",
+		"set the mode of the pin that --pin names: advisory, check, or enforce; writes lessons.yaml only with distill.write")
+	cmd.Flags().StringVar(&setMode.pin, "pin", "",
+		"with --set-mode: the pin-ref of the pin to change, from the pin column of --verify")
+	cmd.Flags().StringVar(&setMode.check, "check", "",
+		"with --set-mode: the ID of a check under checks in lessons.yaml to bind to the pin")
 	cmd.Flags().BoolVar(&list, "list", false, "list every mined lesson with config-tuning syntax")
 	cmd.Flags().StringVar(&region, "region", "", "narrow --list or --distill to a directory's area")
 	cmd.Flags().BoolVar(&stats, "stats", false, "summarize the firing log: what surfaced, what never fires")
@@ -238,6 +304,8 @@ a file has no lessons.`,
 		"remove applied pins that restate another (p16,p45) — the theme stays pinned by its survivor")
 	cmd.Flags().StringVar(&retargetIDs, "retarget", "",
 		"update applied pins to the regions today's inference computes (p3,p7) — lessons.yaml and the ledger together, write-gated like --apply")
+	cmd.Flags().BoolVar(&confirmChecks, "confirm-checks", false,
+		"with --retarget: move the regions of a pin with mode check or enforce, after a review of the checker impact")
 	cmd.Flags().BoolVar(&extractTriggers, "extract-triggers", false,
 		"backfill trigger paths for existing proposals via small agent calls (needs the agent CLI); composes with --dry-run")
 
