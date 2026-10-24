@@ -31,9 +31,11 @@ Documented facts the fixtures encode:
   carries both, with its own `turn_id` and `transcript_path`. The native
   run of 2026-09-21 observed this and refuted the earlier reference-derived
   claim that `PreToolUse` carries no subagent identity. The adapter reads
-  no receiving context from it yet: a reset inside a subagent is
-  unverified, so suppression stays off by policy, not because the event
-  names no receiver.
+  the receiving context from `session_id` and `agent_id`: the root lane
+  without `agent_id`, the child lane with it. No reset of a Codex context
+  is verified, so no context is resettable and suppression stays off by
+  policy, not because the event names no receiver. The edit decoder also
+  reads `turn_id` as the turn.
 - `PostCompact` and `SessionStart` with `source: "compact"` both run after
   compaction of a root session.
 - Hook `timeout` is seconds (default 600). `additionalContextLimit`
@@ -61,8 +63,8 @@ Files:
   inside a subagent: the parent `session_id`, its own `agent_id` and
   `agent_type`, its own `turn_id`, and an absolute patch path. Shaped from
   the native capture. The decoder reads the same paths as for a parent
-  edit and no receiver; a test pins that the identity is present and
-  left unread.
+  edit and names the child lane, which is not resettable; a test pins
+  the lane, the turn, and that suppression stays off.
 - `pre_tool_use_bash.json`: the shell event the gate matches. The command
   codec reads `tool_input.command` from a `Bash` event only; an event of
   another tool, `apply_patch` included, is not applicable, so a patch is
@@ -98,6 +100,7 @@ Files:
   no native run yet). A test compares the generated gate and lesson
   entries with this file, entry for entry. The adapter writes no
   `description` key: the file can hold the user's own hooks too. The file holds no
-  `PostCompact` entry: the edit decoder reads no receiver yet, so a reset
-  has nothing to clear, and setup installs no hook without an effect. The
-  reset decoder exists and is tested against `post_compact.json`.
+  `PostCompact` entry: the edit decoder names no resettable receiver, so
+  a reset has nothing to clear, and setup installs no hook without an
+  effect. The reset decoder exists and is tested against
+  `post_compact.json`.

@@ -11,7 +11,8 @@ const ClaudeID = "claude"
 // claudeClient describes Claude Code. The setup adapter plans the
 // hooks, the allow rules, and the MCP registration. The edit and reset
 // codecs translate the lessons hook events, and the command codec
-// translates the gate hook event. The invocation capability reuses the
+// translates the gate hook event. The explore codec translates the
+// structured Read event. The invocation capability reuses the
 // existing one-shot preset so the compatibility resolver and the
 // registry cannot disagree about the command.
 func claudeClient() Client {
@@ -24,6 +25,7 @@ func claudeClient() Client {
 		Edits:     claudeEdits{},
 		Commands:  claudeCommands{},
 		Resets:    claudeResets{},
+		Explores:  claudeExplores{},
 		Invocation: func(string) (agent.CommandSpec, error) {
 			// Dir stays empty: the legacy preset inherits the caller's
 			// working directory, and this slice preserves that.

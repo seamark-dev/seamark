@@ -677,16 +677,17 @@ func rerunCommand(root string, paths []string) string {
 
 	for _, p := range paths {
 		b.WriteString(" --file ")
-		b.WriteString(quoteArg(filepath.Join(root, filepath.FromSlash(p))))
+		b.WriteString(QuoteArg(filepath.Join(root, filepath.FromSlash(p))))
 	}
 
 	return b.String()
 }
 
-// quoteArg single-quotes a shell word that holds a character outside
+// QuoteArg single-quotes a shell word that holds a character outside
 // [A-Za-z0-9_./-] (contracts §1.3). A plain path stays as it is, so the
-// common command stays easy to read.
-func quoteArg(s string) string {
+// common command stays easy to read. The rerun command uses it, and so
+// does the inspect command of a preparation, so the two quote alike.
+func QuoteArg(s string) string {
 	if s != "" && strings.TrimLeftFunc(s, plainArgRune) == "" {
 		return s
 	}

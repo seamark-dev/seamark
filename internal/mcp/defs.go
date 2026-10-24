@@ -31,14 +31,20 @@ var toolDefs = []map[string]any{
 		}, []string{"query"}),
 	},
 	{
+		// The preparation clause states the contract L1 guidance obligation
+		// in the words of the preparation notice. So all surfaces give one
+		// meaning to "prepare" and "construct".
 		"name": "change_set",
 		"description": "Pre-edit blast radius for planned files: what history says changes " +
-			"together with them, who calls their symbols, which effects they can reach.",
+			"together with them, who calls their symbols, which effects they can reach. " +
+			"It also prepares the pins and checks that apply; call it before you construct " +
+			"any change, also for one file or a new path, then construct the change in a " +
+			"later step, not in the same generated program. Preparation authorizes no write.",
 		"inputSchema": objSchema(map[string]any{
 			"files": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
-				"description": "repo-relative paths you plan to edit",
+				"description": "repo-relative paths you plan to edit or create",
 			},
 		}, []string{"files"}),
 	},
@@ -164,21 +170,28 @@ var promptDefs = []map[string]any{
 // system prompt. It explains when to use each tool and how to read its
 // results, without requiring orientation when the target is known.
 // The skills in skills/ provide the same guidance in more detail.
+//
+// The change_set rule covers one file and a new path too. A pin can
+// cover one file, and the edit hook reminds only after the edit call is
+// built. Contract L1 lists these guidance obligations.
 const serverInstructions = "Seamark answers questions that need history, co-change, lessons, or " +
-	"effect reach. Call change_set with planned files before editing more than one file or an " +
-	"unfamiliar area; why for a load-bearing symbol you change; orient only when the repo or " +
-	"subsystem is unfamiliar; check on the diff before reporting completion, with new files " +
-	"staged first because git diff HEAD skips them, and answer every file it lists under " +
-	"history suggests also reviewing; expand only for a ref you need. Co-change " +
-	"means usually changes together, not depends on. Missing or unindexed evidence never " +
-	"means safe. Read a known file or symbol directly."
+	"effect reach. Call change_set with the planned files before you construct any change, " +
+	"also for one file or a new path, and again when the file set grows: it prepares the pins " +
+	"and checks that apply. Construct the change in a later step, not in the same generated " +
+	"program; preparation authorizes no write. Call why for a load-bearing symbol you change; " +
+	"orient only when the repo or subsystem is unfamiliar; check on the diff before reporting " +
+	"completion, with new files staged first because git diff HEAD skips them, and answer " +
+	"every file it lists under history suggests also reviewing; expand only for a ref you " +
+	"need. Co-change means usually changes together, not depends on. Missing or unindexed " +
+	"evidence never means safe. Read a known file or symbol directly; a typo, comment, or " +
+	"formatting edit needs no call."
 
 // onboardPrompt states the serverInstructions rules as numbered steps. It
 // no longer opens with an unconditional orient call: an agent that already
 // knows its target pays for the overview and learns nothing.
 const onboardPrompt = `Use the Seamark tools by need, not by ritual:
 1. Call orient only when the repository or subsystem is unfamiliar.
-2. Call change_set with planned files before editing more than one file or an unfamiliar area; read what usually changes with them, who calls them, which effects they reach.
+2. Call change_set with the planned files before you construct any change, also for one file or a new path, and again when the file set grows; read what usually changes with them, who calls them, which effects they reach, and the pins and checks it prepares. Construct the change in a later step, not in the same generated program; preparation authorizes no write.
 3. Call why for a load-bearing symbol you will change; expand only for a ref you need.
 4. Read a known file or symbol directly; a typo or comment edit needs no Seamark call.
 5. Stage new files, because git diff HEAD skips them, then call check on the diff before reporting completion; address policy matches, open or exclude with a reason every file under history suggests also reviewing, treat lessons as advisory, treat unindexed files as unknown, not clean.

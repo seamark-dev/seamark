@@ -28,18 +28,18 @@ import (
 // `--verify --hook` to the post-edit handler.
 var verifyConflicts = []string{
 	"list", "region", "stats", "distill", "proposals", "apply",
-	"dismiss", "prune", "retarget", "extract-triggers", "hook", "hook-reset",
+	"dismiss", "prune", "retarget", "extract-triggers", "hook", "explore", "hook-reset",
 }
 
 // verifyFlagError checks the flags that --verify adds before any
-// dispatch. --json and a second --file value apply to --verify only,
-// and --verify combines with no other mode. The texts are the
-// milestone P1 forms of contracts §4.1: later milestones add modes to
-// the --json text.
-func verifyFlagError(cmd *cobra.Command, verify, asJSON bool, files int) error {
+// dispatch. --json applies to --verify and --prepare only, a second
+// --file value to --verify only, and --verify combines with no other
+// mode. The --json text is the milestone P3 form of contracts §4.1:
+// milestone P5 adds --delivery to it (§4.2 subset rule).
+func verifyFlagError(cmd *cobra.Command, verify, prepare, asJSON bool, files int) error {
 	switch {
-	case asJSON && !verify:
-		return errors.New("--json applies to --verify only")
+	case asJSON && !verify && !prepare:
+		return errors.New("--json applies to --verify and --prepare only")
 	case files > 1 && !verify:
 		return errors.New("--file takes one path except with --verify")
 	case !verify:

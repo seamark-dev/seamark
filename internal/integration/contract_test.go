@@ -178,6 +178,20 @@ func checkClientContract(t *testing.T, c Client) {
 		// The firing log stores the name, so it follows the ID rule.
 		assert.Regexp(t, clientIDPattern, c.Edits.AdviceMechanism(), "%s: mechanism name", c.ID)
 	}
+
+	if c.Explores != nil {
+		// Exploration advice arrives after the read, so neither reply
+		// form may block or report an error to the client.
+		for _, read := range []bool{true, false} {
+			reply, err := c.Explores.EncodeExploreAdvice("advice", read)
+			require.NoError(t, err, "%s: explore advice encoding (read %v)", c.ID, read)
+			assert.Zero(t, reply.ExitCode, "%s: explore advice is always nonblocking (read %v)", c.ID, read)
+			assert.Empty(t, reply.Stderr, "%s: explore advice writes no stderr (read %v)", c.ID, read)
+			assert.NotEmpty(t, reply.Stdout, "%s: explore advice carries the text (read %v)", c.ID, read)
+		}
+
+		assert.Regexp(t, clientIDPattern, c.Explores.ExploreMechanism(), "%s: explore mechanism name", c.ID)
+	}
 }
 
 func TestBuiltinClientsSatisfyTheContract(t *testing.T) {

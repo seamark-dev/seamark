@@ -75,6 +75,12 @@ func validateClient(c Client) error {
 			c.ID, c.Edits.AdviceMechanism(), clientIDPattern)
 	}
 
+	// The exploration records of the firing log store this name too.
+	if c.Explores != nil && !clientIDPattern.MatchString(c.Explores.ExploreMechanism()) {
+		return fmt.Errorf("client %q: explore mechanism %q: must match %s",
+			c.ID, c.Explores.ExploreMechanism(), clientIDPattern)
+	}
+
 	if c.SetupOps.GateHook && !c.SetupOps.Hooks {
 		return fmt.Errorf("client %q: a gate hook is declared without hook installation", c.ID)
 	}

@@ -374,18 +374,18 @@ func TestLessonCheckVerifySummaryStates(t *testing.T) {
 		assert.Equal(t, []string{"generated/a.txt", "src/my file.go"}, v.Selection.Paths)
 		assert.Equal(t, SummaryViolation, v.Summary.State)
 		assert.Equal(t, verifyCommand+
-			" --file "+quoteArg(filepath.Join(g.root, "generated", "a.txt"))+
-			" --file "+quoteArg(filepath.Join(g.root, "src", "my file.go")), v.Rerun)
+			" --file "+QuoteArg(filepath.Join(g.root, "generated", "a.txt"))+
+			" --file "+QuoteArg(filepath.Join(g.root, "src", "my file.go")), v.Rerun)
 		assert.Contains(t, v.Rerun, "my file.go'", "a path with a space is quoted")
 	})
 
 	t.Run("a rerun argument is quoted only when it needs it", func(t *testing.T) {
-		assert.Equal(t, "/repo/src/a_b-c.go", quoteArg("/repo/src/a_b-c.go"))
-		assert.Equal(t, "'/repo/my file.go'", quoteArg("/repo/my file.go"))
-		assert.Equal(t, `'/repo/it'\''s.go'`, quoteArg("/repo/it's.go"))
-		assert.Equal(t, "'/repo/$x'", quoteArg("/repo/$x"))
-		assert.Equal(t, "'/repo/ä.go'", quoteArg("/repo/ä.go"))
-		assert.Equal(t, "''", quoteArg(""))
+		assert.Equal(t, "/repo/src/a_b-c.go", QuoteArg("/repo/src/a_b-c.go"))
+		assert.Equal(t, "'/repo/my file.go'", QuoteArg("/repo/my file.go"))
+		assert.Equal(t, `'/repo/it'\''s.go'`, QuoteArg("/repo/it's.go"))
+		assert.Equal(t, "'/repo/$x'", QuoteArg("/repo/$x"))
+		assert.Equal(t, "'/repo/ä.go'", QuoteArg("/repo/ä.go"))
+		assert.Equal(t, "''", QuoteArg(""))
 	})
 
 	t.Run("a request that no verification can serve is an error", func(t *testing.T) {

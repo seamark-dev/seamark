@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test lesson-check lesson-check-race tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-native-smoke lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test lesson-check lesson-check-race tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-native-smoke capture-native-check capture-native-record lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -54,10 +54,15 @@ agents-test: ## Run the agent-integration contract and characterization tests
 # private-directory helpers that lessoncheck shares with the archive.
 # The CLI and the MCP server run only the tests whose names match
 # LESSON_CHECK_RUN, because -run applies to every package of one line.
+# Preparation (lessons --prepare, MCP change_set) and the exploration
+# hook (lessons --explore --hook) run here too. Neither calls a model.
+# LessonsHookNeverInvokes proves that the edit hook and the reset hook
+# write their audit records offline. The full name stays here, because
+# the prefix LessonsHook also selects the other TestLessonsHook tests.
 # Nothing here calls a model or the network.
 # Later milestones append test-name prefixes and packages here.
 LESSON_CHECK_PKGS := ./internal/lessoncheck/... ./internal/privatedir/...
-LESSON_CHECK_RUN  := 'Test(LessonCheck|LessonsVerify|LessonsSetMode|CheckLessons)'
+LESSON_CHECK_RUN  := 'Test(LessonCheck|LessonsVerify|LessonsSetMode|CheckLessons|LessonsPrepare|LessonsExploreHook|ChangeSetPreparation|LessonsHookNeverInvokes)'
 
 lesson-check: ## Run the lesson-check core, configuration, and verification tests (offline, no model)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(LESSON_CHECK_PKGS)
@@ -83,6 +88,26 @@ agents-native-check: build ## Offline checks against the installed $(CLIENT) CLI
 
 agents-native-smoke: build ## One bounded distillation through the installed $(CLIENT) CLI (costs tokens; needs your own login)
 	scripts/agent-integration-smoke.sh smoke $(CLIENT) $(BINARY)
+
+# Native timing recordings for CLIENT=claude or codex. `check` is
+# offline: no model, no credentials, no client CLI. It runs the Go tests
+# that replay the reviewed recording in
+# internal/integration/testdata/$(CLIENT)/timing. Without a reviewed
+# recording they skip as pending, and a skip gives no evidence. `record`
+# runs the timing prompts with the installed client and your own login,
+# so it costs tokens. It prints one cost line per run. It refuses a binary
+# or a tree with uncommitted changes unless SEAMARK_ALLOW_DIRTY=1. It
+# writes a sanitized copy for review and never writes into testdata. A
+# blocked check exits 3, never 0.
+# CAPTURE_NATIVE_SCENARIO=timing (with record) runs the gate-3 timing
+# prompts; it is the only scenario, so it is also the default.
+CAPTURE_NATIVE_RUN = '^TestCaptureNative$(if $(filter claude,$(CLIENT)),Claude,$(if $(filter codex,$(CLIENT)),Codex,$(error CLIENT must be claude or codex)))'
+
+capture-native-check: build ## Offline: replay the reviewed $(CLIENT) timing recording (no model)
+	SEAMARK_NATIVE_CLIENT=$(CLIENT) CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -v -run $(CAPTURE_NATIVE_RUN) ./internal/integration
+
+capture-native-record: build ## Record native timing traces through the installed $(CLIENT) CLI (costs tokens; needs your own login)
+	scripts/capture-native.sh record $(CLIENT) $(BINARY)
 
 # The console tests run offline against fixtures, a scripted service
 # fake, a fake gh, and a fake agent. They cover the shell, the five

@@ -226,29 +226,42 @@ func ResetHookDelivery(root, sessionID string) error {
 // its delivered lesson set. A client's context-reset hook calls this after the
 // client summarizes old context, so the lessons can reach the agent again. A
 // context that names no client or no receiver resets nothing: a partial
-// identity must not reset an unrelated context.
+// identity must not reset an unrelated context. ResetContextGeneration
+// holds the rule; this wrapper keeps the API of the callers that need no
+// generation.
 func ResetContextDelivery(root string, dc DeliveryContext) error {
+	_, err := ResetContextGeneration(root, dc)
+
+	return err
+}
+
+// ResetContextGeneration is ResetContextDelivery that also returns the
+// new generation of the context. The reset record of the firing log
+// carries it, so a reader can join the records of one generation. The
+// generation is zero when nothing was reset: an invalid context, no
+// state file, or an error.
+func ResetContextGeneration(root string, dc DeliveryContext) (uint64, error) {
 	if !dc.valid() {
-		return nil
+		return 0, nil
 	}
 	// Do not create state merely because init installs the lifecycle hook. A
 	// file exists only after once-per-context delivery has actually been used.
 	if _, err := os.Lstat(filepath.Join(root, ".seamark", deliveryStateFile)); os.IsNotExist(err) {
-		return nil
+		return 0, nil
 	} else if err != nil {
-		return err
+		return 0, err
 	}
 
 	dir, lock, err := openDeliveryState(root)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = unlockDeliveryFile(lock); _ = lock.Close() }()
 
 	path := filepath.Join(dir, deliveryStateFile)
 	state, err := readDeliveryState(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	now := time.Now().UTC()
@@ -265,7 +278,13 @@ func ResetContextDelivery(root string, dc DeliveryContext) error {
 	current.Delivered = make(map[string]bool)
 	state.Contexts[key] = current
 
-	return writeDeliveryState(path, state)
+	// A failed write leaves the old generation on disk, so the new value
+	// is not reported.
+	if err := writeDeliveryState(path, state); err != nil {
+		return 0, err
+	}
+
+	return current.Generation, nil
 }
 
 func openDeliveryState(root string) (string, *os.File, error) {

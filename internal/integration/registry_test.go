@@ -57,6 +57,15 @@ func TestNewRegistryRejectsInvalidDescriptors(t *testing.T) {
 
 	_, err = NewRegistry(Client{ID: "edits", Name: "Edits", Edits: namedEdits{mechanism: "stdout-text"}})
 	require.NoError(t, err)
+
+	// Exploration records store the explore mechanism by the same rule.
+	for _, mechanism := range []string{"", "Post Tool Use", "with\nnewline"} {
+		_, err := NewRegistry(Client{ID: "reads", Name: "Reads", Explores: namedExplores{mechanism: mechanism}})
+		assert.Error(t, err, "explore mechanism %q must be rejected", mechanism)
+	}
+
+	_, err = NewRegistry(Client{ID: "reads", Name: "Reads", Explores: namedExplores{mechanism: "stdout-text"}})
+	require.NoError(t, err)
 }
 
 // namedEdits is an edit codec that only names its mechanism.
@@ -67,6 +76,17 @@ type namedEdits struct {
 }
 
 func (n namedEdits) AdviceMechanism() string { return n.mechanism }
+
+// namedExplores is an explore codec that only names its mechanism.
+type namedExplores struct{ mechanism string }
+
+func (namedExplores) DecodeExplore([]byte) (ExploreEvent, error) { return ExploreEvent{}, nil }
+
+func (namedExplores) EncodeExploreAdvice(text string, _ bool) (HookReply, error) {
+	return HookReply{Stdout: []byte(text)}, nil
+}
+
+func (n namedExplores) ExploreMechanism() string { return n.mechanism }
 
 func TestSelectDeduplicatesAndFollowsRegistryOrder(t *testing.T) {
 	r := Builtin()

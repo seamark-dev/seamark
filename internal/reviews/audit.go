@@ -95,6 +95,30 @@ type Firing struct {
 	// client identifies one. A session can hold several receiving
 	// contexts, so SessionSHA alone does not say who got the advice.
 	ContextSHA string `json:"context_sha256,omitempty"`
+
+	// The keys of record version 2 (contract L3) follow the legacy keys
+	// in this order. A v2 line without them is the legacy line byte for
+	// byte, so every legacy reader keeps its counts. Only RecordEvent
+	// sets them, and the v1 entry points above leave them empty.
+	SchemaVersion     int         `json:"schema_version,omitempty"`
+	EventID           string      `json:"event_id,omitempty"`
+	EventSeq          int         `json:"event_seq,omitempty"`
+	EventRecords      int         `json:"event_records,omitempty"`
+	Emission          string      `json:"emission,omitempty"`
+	Evaluation        string      `json:"evaluation,omitempty"`
+	PathsComplete     *bool       `json:"paths_complete,omitempty"`
+	RejectedPaths     int         `json:"rejected_paths,omitempty"`
+	GuidanceSHA       string      `json:"guidance_sha256,omitempty"`
+	GuidanceStatus    string      `json:"guidance_status,omitempty"`
+	TurnSHA           string      `json:"turn_sha256,omitempty"`
+	Lane              string      `json:"lane,omitempty"`
+	ContextResettable *bool       `json:"context_resettable,omitempty"`
+	ExploreGeneration uint64      `json:"explore_generation,omitempty"`
+	CaptureOptIn      bool        `json:"capture_opt_in,omitempty"`
+	Read              *bool       `json:"read,omitempty"`
+	ScopeSHA          string      `json:"scope_sha256,omitempty"`
+	Pins              []FiringPin `json:"pins,omitempty"`
+	PinsOmitted       int         `json:"pins_omitted,omitempty"`
 }
 
 // Delivered reports whether the record represents context that reached the
@@ -235,19 +259,26 @@ func newFiring(surface string, files []string, tool string, lessons []model.Less
 
 // appendFiring writes one record to the firing log.
 func appendFiring(root string, rec Firing) error {
-	dir := filepath.Join(root, ".seamark")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-
-	f, err := os.OpenFile(filepath.Join(dir, auditFile),
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := openAuditLog(root)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
 
 	return json.NewEncoder(f).Encode(rec)
+}
+
+// openAuditLog opens the firing log of root for appends and creates it
+// when it is absent. The v1 entry points and RecordEvent share it, so
+// both writers use one path and one file mode.
+func openAuditLog(root string) (*os.File, error) {
+	dir := filepath.Join(root, ".seamark")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+
+	return os.OpenFile(filepath.Join(dir, auditFile),
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 }
 
 // AuditLogPath returns the firing log path under root. A reader that

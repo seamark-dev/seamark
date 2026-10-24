@@ -142,8 +142,9 @@ must not hold a slot a strong one wants, and among equals a pin on the
 file beats its package beats a repo-wide `*` — with a `+N more` pointer
 for the rest. Deliberate views (`--file`, `why`, `orient`) apply no
 pin budget. They keep the first 8 (`--file`) or 6 (`why`, `orient`)
-lessons, with no count of the rest. Only the edit hook has a pin
-budget.
+lessons, with no count of the rest. Only the edit hook and the
+exploration hook have a pin budget; the exploration hook uses the edit
+hook's budget and prints no `+N more` pointer.
 
 ### Hook delivery modes
 
@@ -190,10 +191,13 @@ conversation is the session, and `PostCompact` resets it. An edit inside a
 subagent carries `agent_id` and is its own context: the subagent's context
 window never saw what the parent got. No reset event is documented for a
 subagent, so a subagent gets repeated delivery, and a reset that fires inside
-it never resets the parent. For Codex the adapter reads no receiver yet. A
-Codex edit event names a subagent by `agent_id` too, but only a manual
-compaction of the parent has been verified natively, so Codex reminders
-repeat until a native check establishes the reset of each receiver.
+it never resets the parent. For Codex the adapter names the receiver too: an
+edit without `agent_id` belongs to the main session (the root lane), and an
+edit that carries `agent_id` belongs to that subagent (a child lane). The
+firing log keeps the lane and a digest of the context. Only a manual
+compaction of the parent has been observed natively, so no Codex context is
+resettable, and Codex reminders repeat until a native check establishes the
+reset of each receiver.
 
 The state file carries a version. This release writes version 2. It reads a
 version 1 file as empty, because a session-keyed entry does not say which
@@ -570,22 +574,60 @@ change different things:
 | Prune | Removes a linked pin and marks its proposal superseded. | The pin file and the ledger. `seamark lessons --prune <ids>`, or `-` in Lessons › Pins. |
 | Mute | Hides mined lessons from selection; never pins. A rule matches in any case; a region matches that region and every region under it. A region with a trailing "/" (`api/`) matches only the regions under it, not `api` itself. | The `mute:` list. The mined lessons stay in the index, and `lessons --list` marks them `(muted)`. |
 | Threshold | The minimum mined recurrences. Mined lessons only; never pins. | The `threshold:` key. |
-| Budget | A cap on one injection or one answer. `pin_budget` caps the pins of one edit-hook injection (at most 8 lessons in total per edit). `change_budget` caps one `change_set` answer or one `check` advisory. | The budget keys. `--file` and `why` apply no pin budget and keep every restatement. `--file` shows at most 8 lessons and `why` at most 6, with no count of the rest. |
-| Repetition | Once-per-context suppression of repeats in one agent context (`hook_delivery: once-per-context`). Edit hook only. | Delivery state in `.seamark/lessons-hook-state.json`; `change_set`, `check`, `why`, and the CLI views always show their selection. |
+| Budget | A cap on one injection or one answer. `pin_budget` caps the pins of one edit-hook or exploration injection (at most 8 lessons in total per injection). `change_budget` caps one `change_set` answer, one preparation, or one `check` advisory. The checks that a preparation lists have no budget. | The budget keys. `--file` and `why` apply no pin budget and keep every restatement. `--file` shows at most 8 lessons and `why` at most 6, with no count of the rest. |
+| Repetition | Once-per-context suppression of repeats in one agent context (`hook_delivery: once-per-context`). Edit hook only. The exploration hook keeps its own repeat state, which `hook_delivery` does not configure. | Delivery state in `.seamark/lessons-hook-state.json` (exploration: `.seamark/lessons-explore-state.json`); `change_set`, `lessons --prepare`, `check`, `why`, and the CLI views always show their selection. |
 | Sample | The local selection for explicit paths, before suppression, with no record. Console only: `s` in a pin review or a lessons Settings review. | Nothing: no file, no firing record, no delivery state. |
 
 A mute, the threshold, and a budget act when a surface selects lessons,
 so the next read of the file applies them without re-mining. Remove and
 Prune change the pin list itself.
 
-## The moment of change: hook, change_set, check
+## The moment of change: prepare, change_set, hook, check
 
-Three ambient surfaces inject the memory exactly when it can still
-change the outcome, each budgeted (an injection is someone else's
-tokens) and each deduplicated — a mined lesson whose whole cluster an
-applied pin already cites is suppressed rather than said twice, and two
-pins wording one theme never spend two slots:
+A lesson can reach an agent before the agent builds a change, or when the
+built change runs. Only the first moment can shape the change. The edit
+hook is a pre-tool hook: it runs after the agent has written the
+arguments of the edit call, so its reminder reaches a call that already
+exists. The reminder can inform the next step, not the edit it arrives
+with. When one response or one generated program already holds several
+edits, the hook of the first edit gives the later edits no earlier chance
+either, because the agent built them before that hook ran.
 
+Preparation is the earlier moment. `seamark lessons --prepare <path>...`
+and the MCP tool `change_set` return the guidance for the paths that an
+agent plans to change, before it builds the change: one file, several
+files, or a path that does not exist yet. Preparation is advisory. It
+authorizes no write, and it does not show that a model read it. A program
+that prepares and then applies a patch it already built gains nothing:
+a later step must build the change. Preparation never touches a repeat
+state, so a pin that a preparation returned still reaches the edit hook
+and the exploration hook at the next matching edit or read.
+
+Each surface below is budgeted (an injection is someone else's tokens)
+and deduplicated — a mined lesson whose whole cluster an applied pin
+already cites is suppressed rather than said twice, and two pins wording
+one theme never spend two slots:
+
+- **Preparation** (`seamark lessons --prepare <path>...`, no agent
+  call): the pins and mined lessons of the paths under `change_budget`
+  (default 6), each pin with its pin-ref, its exact version, its mode, and
+  the paths it applies to; with no budget, every pin in scope whose mode
+  is `check` or `enforce`, and every advisory pin with a `check` (listed
+  as not run); and each pin or lesson that the budget or the restatement
+  collapse left out, with the `seamark lessons --file <path>` command that
+  shows it. A relative path starts at the current directory, and a new
+  path need not exist. Without an index the result holds the pins of
+  `lessons.yaml` (`mined lessons no-index`). `--json` prints the
+  versioned `lesson-preparation/1` document. The command exits 0 also
+  when no pin applies, and 1 when it gets no path, when no path is inside
+  the workspace, or when another mode flag is given; it never exits 2,
+  because it blocks nothing. Preparation keeps no delivery state: every
+  call returns the current selection. Prepare again when the file set
+  grows, when
+  `.seamark/lessons.yaml` changes (the guidance digest in the result
+  changes with it), or when another agent or subagent will build the
+  change. The result names its receiver `unknown`, because a command or
+  an MCP call does not say which agent context reads the answer.
 - **The edit hook** (`lessons --hook`, wired by `seamark init`): per
   file, at most `pin_budget` pins (default 3, confidence-ranked, a
   `+N more` pointer for the rest) plus the file's recurring mined
@@ -602,45 +644,106 @@ pins wording one theme never spend two slots:
   without running anything. The whole patch gets one reminder under the
   same budget, each line tagged with its region. A patch the hook cannot
   read completely gets no reminder rather than a guessed one, and Codex
-  reminders always repeat: the adapter does not read which agent or
-  subagent receives them yet, because a reset inside a subagent is
-  unverified.
-- **`change_set` (MCP)**: before a multi-file edit, the union of the
-  files' lessons under `change_budget` (default 6) — merged by
-  identity, ranked by confidence across the whole set, regions shown as
-  the map back onto the files. New files count: a brand-new file in a
-  pinned region gets its guidance before its first line exists.
+  reminders always repeat: the adapter names the main session or the
+  subagent that receives them, but no reset of a Codex context is
+  verified (see [Hook delivery modes](#hook-delivery-modes)).
+- **`change_set` (MCP)**: before an edit of one or more files, the
+  union of the files' lessons under `change_budget` (default 6) — merged
+  by identity, ranked by confidence across the whole set, regions shown
+  as the map back onto the files. New files count: a brand-new file in a
+  pinned region gets its guidance before its first line exists. This text
+  stays the first part of the answer. When the preparation of the same
+  files has a pin, a check, an omission, or a rejected path, a second
+  text part lists the pin-refs, versions, modes, checks, and omissions
+  with their inspect commands, without the lesson text again. A client
+  that negotiated MCP protocol `2025-06-18` or later also gets the whole
+  `lesson-preparation/1` document as `structuredContent` under
+  `lesson_preparation`. A relative path starts at the repository root.
+- **The exploration hook** (`seamark lessons --explore --hook`, Claude
+  Code only): after the `Read` tool reads a file, the hook gives the
+  agent that read it the file's pins and mined lessons, under the edit
+  hook's budget, as lessons for a file "which you just read". It runs no
+  check and blocks nothing. It keeps its own repeat state in
+  `.seamark/lessons-explore-state.json`, keyed by the receiving context,
+  its generation, and the pin version, so a changed pin is new again.
+  The main conversation gets each lesson once until Claude Code compacts
+  it, whatever `hook_delivery` says; a subagent, or an event without a
+  session, gets every lesson each time. Like the edit hook's state, this
+  state fails open and its entries expire after 24 hours. The
+  `PostCompact` hook that `seamark init` installs resets this state
+  together with the edit state. The exploration hook never reads or
+  writes the edit hook's state, so an edit right after a read still gets
+  its reminder. Claude Code puts the content of the file in the `Read`
+  event, so a read of a large file, an image, a PDF, or a notebook with
+  outputs can make the event larger than 1 MiB. Such an event gets no
+  lessons and no record, also with the recording switch on: the hook never
+  decodes a part of an event, so it fails open. Codex has no structured
+  read event, so `--client codex` writes nothing. `seamark init` does not
+  install this hook yet.
 - **`check`** (CLI and MCP): after the policy verdict, the touched
   files' lessons as a clearly-marked advisory — printed even when the
   verdict blocks, because a deny is exactly when they matter; `--json`
   stays verdict-shaped.
 
-All three record what they surfaced to the firing log, tagged by
-surface, so the stats below never conflate a speculative plan with an
-actual pre-edit reminder.
+Each surface records what it surfaced to the firing log, tagged by
+surface (`prepare`, `change_set`, the edit hook, `explore`, `check`), so
+the stats below never conflate a speculative plan with a reminder that
+reached an agent.
 
 ## Is it working? lessons --stats
 
 Every ambient surface appends a line to `.seamark/lessons-audit.jsonl`
-when it reminds an agent — the impact/decay counterpart to the gate's
+when it surfaces a lesson — the impact/decay counterpart to the gate's
 audit log. Edit-hook records also carry the rendered context byte count,
 delivery status, context generation, and repository-scoped SHA-256 digests of
 the provider session and tool-use match; raw provider identifiers are never
 persisted or made correlatable across repositories. These fields make repeated
 delivery and opt-in suppression measurable. Current records also name the
 `client`, the `mechanism` that carries the reminder (`pre-tool-use-context`
-for Claude Code), and a digest of the receiving context when the client
-reports one. A record written before these fields existed names no client, and
+for the edit hook, `post-tool-use-context` for the exploration hook), and a
+digest of the receiving context when the client reports one. A record
+written before these fields existed names no client, and
 the statistics keep it that way instead of guessing: a repeat is counted only
 among records of one client and one receiving context, never across the
 records from before and after these fields. An edit operation on
 several files is one record with every path and one byte total. A record says
 that a reminder was emitted, never that the agent followed it.
+
+This release writes record version 2 (`schema_version: 2`). The new keys
+follow the earlier keys, which keep their names, order, and meaning, so an
+older seamark and `lessons --stats` keep their counts of the earlier record
+kinds; the new `explore` and `prepare` surfaces add counts of their own. One
+run of a surface is one event with a random `event_id`, and every record of
+the event carries it. A record names the digest and status of the
+`lessons.yaml` that it evaluated and every matched pin by its identity digest and
+exact version, with what happened to the pin: `injected`, `returned`,
+`suppressed-repeat`, `held-back` (with the cause: restated, over the pin
+budget, or over the total), or `emit-failed`. Edit-hook and exploration
+records add a digest of the turn, the lane (`root`, `child`, or `unknown`),
+and whether the receiving context is resettable; preparation, `change_set`,
+and `check` records name no receiver. Two record kinds need the recording
+switch: the hook process must run with `SEAMARK_RECORD_EVALUATIONS=1` in its
+environment. The native recording script (`make capture-native-record`) sets
+it for its paid runs. A hook process sees it only when the client that
+starts the hook passes its own environment on. The two kinds are an
+`evaluation` record when a
+hook emitted nothing (no match, a rejected path, a failed selection or reply,
+or, for a read, only lessons that the context already got), and a `reset`
+record when `PostCompact` resets a receiving context. Without the switch,
+the hooks write the same record kinds as before, with the new keys.
+Records written with the switch on say so (`capture_opt_in`), because a
+missing `reset` record shows that no compaction happened only between two
+such records. Raw session, agent, tool-use, and turn identifiers are never
+stored.
+
 `seamark lessons --stats` turns
 the log into which lessons actually reach agents, split by surface (a
-`change_set` plan and a CI `check` are exposure, not edits reminded), and which
+`change_set` plan, a preparation, and a CI `check` are exposure, not edits
+reminded), and which
 *would* surface but never have (a lesson whose region no edit touches is a
-pruning candidate). For
+pruning candidate). The first line names the `explore` and `prepare` counts
+only when the log holds such records, so the line of an older log stays the
+same. For
 instrumented hook records it also reports injected context bytes, repeated
 in-session injections, and suppressed repeats. Per-lesson rankings keep actual
 delivery and matching opportunities separate: after one injection and three

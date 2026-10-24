@@ -58,6 +58,13 @@ func composeDigest(parts ...string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(compose(parts...))))
 }
 
+// ComposeDigest is composeDigest for a package that builds a digest of
+// its own label (registry §2.2), such as the scope digest of a
+// preparation. One composer keeps every compose digest byte-equal.
+func ComposeDigest(parts ...string) string {
+	return composeDigest(parts...)
+}
+
 // PinIdentityDigest is the hex SHA-256 of compose("pin", key.Rule,
 // key.Region). Every pin-ref is a prefix of it. Two entries with one
 // PinKey share one identity digest.

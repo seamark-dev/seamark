@@ -130,6 +130,11 @@ type Client struct {
 	// Invocation returns the one-shot inference command for a workspace
 	// root. It is pure: no PATH lookup, no login, no process start.
 	Invocation func(root string) (agent.CommandSpec, error)
+	// Explores translates native structured read events and the advice
+	// reply after them. It is nil for a client without a tested
+	// structured read path. Setup does not install the exploration hook
+	// yet, so no Capability constant declares it.
+	Explores ExploreHooks
 }
 
 // Supports reports whether the descriptor declares a capability.
@@ -232,6 +237,26 @@ type ResetHooks interface {
 	DecodeReset(payload []byte) (ResetEvent, error)
 }
 
+// ExploreHooks translates a client's structured read events for
+// exploration advice. DecodeExplore turns one native payload into the
+// path that the agent read. It returns ErrNotApplicable for an event of
+// another tool or another lifecycle stage, and ErrMalformedEvent for a
+// read event without a path. A decoder never reads paths out of shell
+// text, search results, or tool output, because only a structured read
+// names its file without inference.
+//
+// EncodeExploreAdvice turns rendered advisory text into the native,
+// nonblocking reply. read is the ExploreEvent.Read value, because the
+// reply names the event that it answers.
+//
+// ExploreMechanism names the native reply path, as AdviceMechanism does
+// for edit advice. The firing log records it.
+type ExploreHooks interface {
+	DecodeExplore(payload []byte) (ExploreEvent, error)
+	EncodeExploreAdvice(text string, read bool) (HookReply, error)
+	ExploreMechanism() string
+}
+
 // ReceivingContext identifies the conversation that can see injected
 // advice. It is the actual receiver, not merely a shared parent
 // session: a subagent reports the session id of its parent, and that
@@ -244,6 +269,11 @@ type ReceivingContext struct {
 	// Resettable is true when the adapter's compatibility checks
 	// established that a reset event reaches this exact context.
 	Resettable bool
+	// Lane names the place of the receiver in its session: LaneRoot for
+	// the session itself, LaneChild for an agent inside it. Only
+	// ReceivingContextOf sets it. The audit records it apart from
+	// Resettable, because a known lane does not make suppression safe.
+	Lane string
 }
 
 // EventMeta carries the identity every native event shares. Values are
@@ -264,6 +294,10 @@ type EventMeta struct {
 	// Context is the receiving context, or nil when the adapter cannot
 	// identify one. Nil disables once-per-context suppression.
 	Context *ReceivingContext
+	// Turn is the client's turn identity (Claude prompt_id, Codex
+	// turn_id), or empty when the event carries none. It stays in memory
+	// only: the audit log gets a digest of it, never the raw value.
+	Turn string
 }
 
 // EditEvent is one normalized edit opportunity: the complete set of
@@ -277,6 +311,19 @@ type EditEvent struct {
 	Paths []string
 }
 
+// ExploreEvent is one normalized structured read: the file that the
+// agent asked to read. The exploration hook advises on that file only.
+type ExploreEvent struct {
+	EventMeta
+	// Paths holds exactly one path for a read, as the client reported
+	// it. The shared normalization resolves it against CWD.
+	Paths []string
+	// Read is false when the native event reports a failed read. The
+	// advice then says that the file was not read, because the path can
+	// name a file that does not exist yet.
+	Read bool
+}
+
 // CommandEvent is one validated shell-command event. Command is the
 // shell text the gate evaluates; patch text never reaches this type.
 type CommandEvent struct {
@@ -288,6 +335,11 @@ type CommandEvent struct {
 // again after a native reset such as compaction.
 type ResetEvent struct {
 	Context ReceivingContext
+	// SessionID is the client's session identifier. The reset record of
+	// the audit log joins the edit records of that session through it.
+	SessionID string
+	// Turn is the client's turn identity, by the rule of EventMeta.Turn.
+	Turn string
 }
 
 // HookReply is what a hook run writes back to the client. Advice is

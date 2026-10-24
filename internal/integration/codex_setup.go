@@ -216,10 +216,10 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 		narrateCodexHooks(w, binary, managed, change, status == OpPlanned)
 	}
 
-	// The adapter reads no receiver from a Codex event yet. The event
-	// names one, but the reset of a subagent is unverified. The
-	// once-per-context mode therefore has no effect there. Say so once,
-	// at setup, in the words inspection repeats.
+	// The adapter names the receiver of a Codex event, but no reset of a
+	// Codex context is verified. The once-per-context mode therefore has
+	// no effect there. Say so once, at setup, in the words inspection
+	// repeats.
 	plan.Findings = append(plan.Findings, codexContextFinding)
 
 	// Hooks turned off in the project configuration make every hook of
@@ -573,7 +573,7 @@ const codexResetDetail = "no reset hook is installed: reminders repeat, so a res
 // definitions that run, the mode of the ones that may run, and the mode
 // of the managed hook alone. It also reports the limitations the reader
 // must know. Those are trust that seamark cannot read, and the receiving
-// context the adapter does not identify. Hooks turned off in the project
+// context that no verified reset reaches. Hooks turned off in the project
 // configuration and a definition Codex never runs are limitations too.
 func inspectCodexHooks(root string) (entries []CapabilityInspection, gate gateInspection, findings []Finding) {
 	edits := CapabilityInspection{Capability: CapabilityEdits, Supported: true, Verification: codexEditsEvidence}
@@ -679,7 +679,7 @@ var (
 	codexContextFinding = Finding{
 		Level: FindingInfo,
 		Path:  codexHooksFile,
-		Reason: "the Codex adapter reads no receiving context yet (the reset of a subagent is unverified), " +
+		Reason: "the Codex adapter names the receiving context, but no reset of a Codex context is verified, " +
 			"so `hook_delivery: once-per-context` does not apply: reminders repeat, within the hook budget",
 	}
 )
