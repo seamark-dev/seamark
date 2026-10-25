@@ -156,6 +156,12 @@ type Side struct {
 	// unexported, so no JSON output and no record ever carries file
 	// content (contracts §1.6).
 	text []byte
+	// limit names the limit that left the content out of a too-large
+	// side when the size of the side does not show it. Only ObserveAfter
+	// sets it: a pending record drops content above max-baseline-bytes
+	// (contract K7), and the size of such a file is below max-file-bytes.
+	// It is unexported, so neither the JSON output nor the digest holds it.
+	limit string
 }
 
 // Change is one observed or projected change of one path, or of a pair
@@ -179,6 +185,14 @@ type Change struct {
 	// a change. It is unexported, so neither the JSON output nor the
 	// digest holds it.
 	unobserved bool
+	// unprojectable is set when ProjectOperation (contract K8) cannot
+	// compute the after content of the change. It holds the detail for
+	// the deny text, for example "old_string occurs 2 times".
+	// no-added-pattern/1 reads a set value as unprojectable-edit.
+	// forbid-path-change/1 ignores it, because a projected change is a
+	// change whatever its content (spec L168). It is unexported, so
+	// neither the JSON output nor the digest holds it.
+	unprojectable string
 }
 
 // LimitHit names one evaluation limit that a producer reached.
@@ -240,6 +254,11 @@ type Snapshot struct {
 	// caused it, for example a read error. incompletePaths reads it,
 	// because K3 gives resource-limit with the limit name for such a path.
 	undecidedLimit string
+	// attribution tells how the observed result of an actual-edit
+	// snapshot relates to its projection (contract K9). Only ObserveAfter
+	// sets it, and it is "" when the post-edit budget ended the read. It
+	// is unexported, because the frozen JSON form has no such field.
+	attribution Attribution
 }
 
 // pathState tells what the producer found at one worktree path.

@@ -283,6 +283,18 @@ func PlanSetup(reg *Registry, req SetupRequest) (*SetupPlan, error) {
 		// resolveIntents already proved the ID is registered.
 		client, _ := reg.Lookup(intent.ClientID)
 
+		// The lesson-check support comes before the hook support. An
+		// enforce request for a client without a guard must fail, and
+		// supportedIntent would only skip it with the hooks.
+		var lessonFindings []Finding
+
+		intent, lessonFindings, err = lessonCheckIntent(client, intent)
+		if err != nil {
+			return nil, err
+		}
+
+		b.plan.Findings = append(b.plan.Findings, lessonFindings...)
+
 		effective, findings := supportedIntent(client, intent)
 		b.plan.Findings = append(b.plan.Findings, findings...)
 
@@ -339,6 +351,10 @@ func resolveIntents(reg *Registry, requested []ClientSetup) ([]ClientSetup, erro
 				intent.ClientID, hooks.ModeWarn, hooks.ModeEnforce, m)
 		}
 
+		if err := validLessonIntent(intent); err != nil {
+			return nil, err
+		}
+
 		if seen, dup := byID[intent.ClientID]; dup && seen != intent {
 			return nil, fmt.Errorf("setup: client %q is requested twice with different intent", intent.ClientID)
 		}
@@ -383,9 +399,12 @@ func supportedIntent(c Client, intent ClientSetup) (ClientSetup, []Finding) {
 	skip(&intent.ApproveTools, c.SetupOps.ApproveTools, "tool grants are")
 
 	// The gate mode belongs to the hooks. Without them it has no meaning,
-	// and an adapter must not see a mode it cannot install.
+	// and an adapter must not see a mode it cannot install. The
+	// lesson-check intents go into the same hook document, so the same
+	// rule applies to them.
 	if !intent.Hooks {
 		intent.GateMode = ""
+		intent.LessonChecks, intent.LessonExploration = "", ""
 	}
 
 	return intent, findings

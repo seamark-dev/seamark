@@ -24,18 +24,20 @@ import (
 // --verify refuses, in the order of the help text. The first flag that
 // the call sets names the conflict (contracts §4.2). Each modifier flag,
 // for example --client, keeps its own guard and is not here.
-// The P1 refusal of --hook goes when milestone P4 routes
-// `--verify --hook` to the post-edit handler.
+// --hook is not here, because `--verify --hook` is the post-edit hook
+// (contract K9).
 var verifyConflicts = []string{
 	"list", "region", "stats", "distill", "proposals", "apply",
-	"dismiss", "prune", "retarget", "extract-triggers", "hook", "explore", "hook-reset",
+	"dismiss", "prune", "retarget", "extract-triggers", "explore", "hook-reset",
 }
 
 // verifyFlagError checks the flags that --verify adds before any
 // dispatch. --json applies to --verify and --prepare only, a second
 // --file value to --verify only, and --verify combines with no other
-// mode. The --json text is the milestone P3 form of contracts §4.1:
-// milestone P5 adds --delivery to it (§4.2 subset rule).
+// mode. With --hook, --verify takes no --file and no --json, because the
+// post-edit hook reads its paths from the event. The --json text is the
+// milestone P3 form of contracts §4.1: milestone P5 adds --delivery to
+// it (§4.2 subset rule).
 func verifyFlagError(cmd *cobra.Command, verify, prepare, asJSON bool, files int) error {
 	switch {
 	case asJSON && !verify && !prepare:
@@ -50,6 +52,10 @@ func verifyFlagError(cmd *cobra.Command, verify, prepare, asJSON bool, files int
 		if cmd.Flags().Changed(name) {
 			return fmt.Errorf("--verify does not combine with --%s", name)
 		}
+	}
+
+	if cmd.Flags().Changed("hook") && (asJSON || cmd.Flags().Changed("file")) {
+		return errVerifyHookFlags
 	}
 
 	return nil
@@ -99,7 +105,17 @@ func runLessonsVerify(cmd *cobra.Command, opts *options, files []string, asJSON 
 		lessoncheck.RenderText(out, v)
 	}
 
-	return v.ExitError()
+	exitErr := v.ExitError()
+
+	// A failed audit record never changes the outcome or the exit code
+	// (contract K9). On an exit-0 path no other line tells the user, so
+	// one stderr line names it. A non-zero exit has its own line, and
+	// the K5 text keeps that line alone.
+	if auditErr := v.AuditError(); auditErr != nil && exitErr == nil {
+		fmt.Fprintln(cmd.ErrOrStderr(), "seamark: lesson-check audit:", auditErr)
+	}
+
+	return exitErr
 }
 
 // verifyRoot returns the top level of the git work tree of the -C

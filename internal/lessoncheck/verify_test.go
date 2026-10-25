@@ -1498,3 +1498,163 @@ func TestLessonCheckCombine(t *testing.T) {
 		}
 	})
 }
+
+// TestLessonCheckRevalidate proves the exported Revalidate (contract K5,
+// Freshness; K-13; AC-30). A result stays fresh while its inputs stay.
+// A change of content, baseline, scope, mode, or check definition makes
+// it stale. Revalidate runs no checker and writes nothing, so a refresh
+// of the console never adds an audit record.
+func TestLessonCheckRevalidate(t *testing.T) {
+	// fresh returns a repository and its fresh verification. The check
+	// pin passes on a clean line in src, and nothing is in generated.
+	fresh := func(t *testing.T, paths ...string) (*gitRepo, *Verification) {
+		t.Helper()
+
+		g := verifyRepo(t, mixedYAML)
+		g.write("src/a.go", "package a\n\nfunc A() {}\n")
+
+		v := g.verify(paths...)
+		require.Equal(t, FreshnessFresh, v.Freshness)
+		require.Equal(t, SummaryPassed, v.Summary.State)
+
+		return g, v
+	}
+
+	revalidate := func(t *testing.T, g *gitRepo, v *Verification) Freshness {
+		t.Helper()
+
+		got, err := Revalidate(context.Background(), g.root, v)
+		require.NoError(t, err)
+
+		return got
+	}
+
+	t.Run("unchanged inputs stay fresh and nothing is written", func(t *testing.T) {
+		g, v := fresh(t)
+		state := listTree(t, filepath.Join(g.root, ".seamark"))
+
+		assert.Equal(t, FreshnessFresh, revalidate(t, g, v))
+		assert.Equal(t, FreshnessFresh, revalidate(t, g, v), "a second refresh reads the same inputs")
+		assert.Equal(t, state, listTree(t, filepath.Join(g.root, ".seamark")),
+			"no audit record, no sweep, no other file")
+	})
+
+	stale := []struct {
+		name   string
+		change func(g *gitRepo)
+	}{
+		{"a content edit in the selection", func(g *gitRepo) { g.write("src/a.go", "package a\n\nfunc B() {}\n") }},
+		{"a new untracked file", func(g *gitRepo) { g.write("src/new.go", "package a\n") }},
+		{"a new commit moves the baseline", func(g *gitRepo) {
+			g.write("docs/readme.md", "new\n")
+			g.git("commit", "-q", "-m", "docs", "--", "docs/readme.md")
+		}},
+		{"a mode edit", func(g *gitRepo) {
+			writeLessons(g.t, g.root, strings.Replace(mixedYAML, "    mode: check\n", "    mode: enforce\n", 1))
+		}},
+		{"a check definition edit", func(g *gitRepo) {
+			writeLessons(g.t, g.root, strings.Replace(mixedYAML, `'TODO\('`, `'FIXME'`, 1))
+		}},
+		{"a scope edit", func(g *gitRepo) {
+			writeLessons(g.t, g.root, strings.Replace(mixedYAML,
+				"    region: src\n    note: Do not add TODO markers.", "    region: docs\n    note: Do not add TODO markers.", 1))
+		}},
+		{"a removed lessons.yaml", func(g *gitRepo) { g.remove(".seamark/lessons.yaml") }},
+	}
+
+	for _, tc := range stale {
+		t.Run(tc.name+" makes the result stale", func(t *testing.T) {
+			g, v := fresh(t)
+			tc.change(g)
+
+			assert.Equal(t, FreshnessStale, revalidate(t, g, v))
+		})
+	}
+
+	t.Run("an explicit selection ignores a change outside it", func(t *testing.T) {
+		g, v := fresh(t, "src")
+		require.Equal(t, []string{"src"}, v.Selection.Paths)
+
+		g.write("docs/readme.md", "changed\n")
+		assert.Equal(t, FreshnessFresh, revalidate(t, g, v), "docs is outside the selection")
+
+		g.write("src/a.go", "package a\n\nfunc B() {}\n")
+		assert.Equal(t, FreshnessStale, revalidate(t, g, v))
+	})
+
+	// The stand-in results of configBinding must give the digests that
+	// Verify computes from the results of Evaluate, for a valid, an
+	// invalid, an undecodable, and an absent configuration.
+	t.Run("the binding equals the binding of Verify for every configuration state", func(t *testing.T) {
+		for name, lessons := range map[string]string{
+			"valid":   mixedYAML,
+			"tier 2":  strings.Replace(mixedYAML, `'TODO\('`, `'TODO('`, 1),
+			"tier 1":  "pin: [\n",
+			"absent":  "",
+			"no pins": "lesson_checks_version: 1\n",
+		} {
+			g := verifyRepo(t, lessons)
+			v := g.verify()
+
+			pins, kinds := configBinding(loadConfig(g.root).cfg)
+			assert.Equal(t, v.Binding.PinsSHA256, pins, name)
+			assert.Equal(t, v.Binding.CheckerVersions, kinds, name)
+			assert.Equal(t, FreshnessFresh, revalidate(t, g, v), name)
+		}
+	})
+
+	// An absent and an unreadable lessons.yaml both have the digest "".
+	// A read error is never an absent file, so the result goes stale.
+	t.Run("an unreadable lessons.yaml is not an absent one", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads a file without read permission")
+		}
+
+		g := verifyRepo(t, "")
+		v := g.verify()
+		require.True(t, v.Config.Valid)
+
+		writeLessons(t, g.root, mixedYAML)
+		require.NoError(t, os.Chmod(configPath(g.root), 0))
+		t.Cleanup(func() { _ = os.Chmod(configPath(g.root), 0o600) })
+
+		assert.Equal(t, FreshnessStale, revalidate(t, g, v))
+	})
+
+	t.Run("a stale result stays stale without a read", func(t *testing.T) {
+		_, v := fresh(t)
+		v.Freshness = FreshnessStale
+
+		// The root is no repository, so a read would fail.
+		got, err := Revalidate(context.Background(), t.TempDir(), v)
+		require.NoError(t, err)
+		assert.Equal(t, FreshnessStale, got)
+	})
+
+	t.Run("a canceled context gives stale without an error", func(t *testing.T) {
+		g, v := fresh(t)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		got, err := Revalidate(ctx, g.root, v)
+		require.NoError(t, err)
+		assert.Equal(t, FreshnessStale, got)
+	})
+
+	t.Run("a usage or root failure gives stale with an error", func(t *testing.T) {
+		g, v := fresh(t)
+
+		got, err := Revalidate(context.Background(), g.root, nil)
+		require.EqualError(t, err, "lesson checks: revalidate needs a result")
+		assert.Equal(t, FreshnessStale, got)
+
+		got, err = Revalidate(context.Background(), "repo", v)
+		require.EqualError(t, err, `lesson checks: root "repo" is not an absolute path`)
+		assert.Equal(t, FreshnessStale, got)
+
+		got, err = Revalidate(context.Background(), t.TempDir(), v)
+		require.ErrorContains(t, err, "is not inside a git work tree")
+		assert.Equal(t, FreshnessStale, got)
+	})
+}

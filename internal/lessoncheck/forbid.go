@@ -26,7 +26,7 @@ import "github.com/seamark-dev/seamark/internal/reviews"
 // review ruling 3, fix F-B). A change that git reports through a link
 // is observed and stays evidence (review fixes snapshot-git:F5,
 // checkers:K3-F2).
-func evaluateForbid(_ Check, snap *Snapshot, scope []string) Result {
+func evaluateForbid(_ budget, _ Check, snap *Snapshot, scope []string) Result {
 	var (
 		res      Result
 		evidence []Evidence

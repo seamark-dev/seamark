@@ -156,12 +156,55 @@ func (p *pinsView) formLines(w, rows int) (lines []string, keep [2]int) {
 	notes := pinRowNotes(t, "", notice, issues, maintain.FieldRegions, -1, vw)
 	row(f.addRow(), label, add, append(notes, propLines(t.Muted, pinRegionsHelp, vw)...))
 
+	if d.checks {
+		p.checkRows(row, issues, vw)
+	}
+
 	lines = out.lines
 	lines = append(lines, "", t.Heading.Render("GUIDANCE")+"  "+t.Faint.Render(pinGuidanceLabel))
 	lines = append(lines, ui.ClipWithEllipsis(propLines(t.Body, p.formGuidance(), w), pinGuidancePreview, w,
 		t.Glyphs.Ellipsis)...)
 
 	return lines, out.keep
+}
+
+// checkRows renders the Mode and Check rows of an edit (contract K1,
+// writer row "Manual edit"). Each row names its stored value when the
+// draft changes it. The review shows the checker impact before the
+// save, so the rows need no preview of their own.
+func (p *pinsView) checkRows(row func(int, string, []string, []string), issues []maintain.FieldIssue, vw int) {
+	t := p.st.theme
+	f := p.author.form
+	d := f.draft
+
+	was := func(changed bool, stored string) string {
+		if !changed {
+			return ""
+		}
+
+		return "  " + t.Faint.Render("was "+stored)
+	}
+
+	mode := t.Body.Render(ui.OneLine(string(d.mode))) + was(d.mode != pinDraftMode(d.baseMode),
+		ui.OneLine(string(pinDraftMode(d.baseMode))))
+	row(f.modeRow(), "Mode", []string{mode}, pinRowNotes(t, "", "", issues, maintain.FieldMode, -1, vw))
+
+	value := t.Body.Render(ui.OneLine(d.check))
+	if d.check == "" {
+		value = t.Faint.Render("(none)")
+	}
+
+	stored := ui.OneLine(d.baseCheck)
+	if stored == "" {
+		stored = "none"
+	}
+
+	notes := pinRowNotes(t, "", "", issues, maintain.FieldCheck, -1, vw)
+	if len(d.checkIDs) == 0 {
+		notes = append(notes, propLines(t.Muted, "No check is defined yet: M in Pins adds one.", vw)...)
+	}
+
+	row(f.checkRow(), "Check", []string{value + was(d.check != d.baseCheck, stored)}, notes)
 }
 
 // formLead returns the notes above the rows: an orphaned draft, a
@@ -186,7 +229,7 @@ func (p *pinsView) formLead(w int) []string {
 	}
 
 	if d.op == maintain.AuthorEdit && d.unknown && d.orphan == "" {
-		note(ui.ToneUnknown, ovSentenceEnd(pinUnknownNote))
+		note(ui.ToneUnknown, ovSentenceEnd(pinUnknownNote(d.checks)))
 	}
 
 	if len(p.selected) > 0 {
@@ -484,6 +527,7 @@ func (r *pinReview) planView(w int) ui.ModalOpts {
 	body = append(body, r.factLines(w)...)
 	body = append(body, r.guidanceLines(w)...)
 	body = append(body, r.changedLines(w)...)
+	body = append(body, r.impactLines(w)...)
 	body = append(body, r.historyLines(w)...)
 	body = append(body, r.noteLines(w)...)
 	body = append(body, r.diffLines(w)...)
@@ -491,6 +535,19 @@ func (r *pinReview) planView(w int) ui.ModalOpts {
 	return ui.ModalOpts{
 		Title: r.planTitle(), Right: r.planRight(), Body: body, Tail: r.planTail(w), Actions: r.previewActions(false),
 	}
+}
+
+// impactLines shows the checker impact of an edit of a check or enforce
+// pin (contract K1, "Checker impact before apply"), before y. An edit of
+// an advisory pin has no block, so its review keeps its lines.
+func (r *pinReview) impactLines(w int) []string {
+	if len(r.preview.Impact) == 0 {
+		return nil
+	}
+
+	t := r.st.theme
+
+	return append([]string{"", maintImpactHead(t)}, impactLines(t, r.preview.Impact, "", w)...)
 }
 
 // pinOpTitle names an operation in a title.
@@ -881,6 +938,8 @@ func pinBlockWords(b maintain.AuthorBlocker, gateErr error, removal bool) string
 		}
 
 		return "distill.write is off"
+	case maintain.BlockCheck:
+		return "the lesson-check keys do not validate"
 	}
 
 	return "the pin file cannot be changed"

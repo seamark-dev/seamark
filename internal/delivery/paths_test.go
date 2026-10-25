@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,6 +70,13 @@ func TestNormalizePathsRejectsAPathBehindAnUnreadableDirectory(t *testing.T) {
 	assert.Equal(t, []string{"a.go/child.go"}, got.Files,
 		"a regular file in the ancestor position is an absent path, not a hidden one")
 	assert.Equal(t, []RejectedPath{{Path: "locked/ext/hosts", Reason: RejectUnresolvable}}, got.Rejected)
+
+	entries := NormalizeEntryPaths(root, root, []string{"locked/ext", "locked/ext/hosts"})
+	assert.Empty(t, entries.Files)
+	assert.Equal(t, []RejectedPath{
+		{Path: "locked/ext", Reason: RejectUnresolvable},
+		{Path: "locked/ext/hosts", Reason: RejectUnresolvable},
+	}, entries.Rejected)
 }
 
 func TestNormalizePathsKeepsAbsentFiles(t *testing.T) {
@@ -214,4 +222,118 @@ func TestNormalizePathsBoundsTheRejectionList(t *testing.T) {
 	assert.Empty(t, got.Files)
 	assert.Len(t, got.Rejected, maxRejections, "the diagnostic stays small for a huge patch")
 	assert.Equal(t, maxRejections+5, got.RejectedCount, "the count stays exact")
+}
+
+func TestNormalizeEntryPathsKeepsOnlyTheFinalLink(t *testing.T) {
+	root := workspace(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "api", "nested"), 0o755))
+	require.NoError(t, os.Symlink("api/nested", filepath.Join(root, "parent")))
+	require.NoError(t, os.Symlink("../db/query.go", filepath.Join(root, "api", "final")))
+	require.NoError(t, os.Symlink("../absent", filepath.Join(root, "api", "dangling")))
+	require.NoError(t, os.Symlink("loop", filepath.Join(root, "api", "loop")))
+	require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(root, "outside")))
+
+	got := NormalizeEntryPaths(root, "", []string{
+		"api/final", "api/dangling", "api/loop", "parent/../final", "api/absent", "outside/file", "api/loop/file", "", "bad\x00name",
+	})
+	assert.Equal(t, []string{"api/final", "api/dangling", "api/loop", "api/absent"}, got.Files)
+	assert.Equal(t, []RejectedPath{
+		{Path: "outside/file", Reason: RejectOutside},
+		{Path: "api/loop/file", Reason: RejectUnresolvable},
+		{Path: "", Reason: RejectMalformed},
+		{Path: "bad\x00name", Reason: RejectMalformed},
+	}, got.Rejected)
+
+	through := NormalizePaths(root, "", []string{"api/final", "api/dangling", "api/loop"})
+	assert.Equal(t, []string{"db/query.go", "absent"}, through.Files, "writes still follow the final link")
+	assert.Equal(t, RejectUnresolvable, through.Rejected[0].Reason)
+
+	require.NoError(t, os.Symlink(filepath.Join(root, "api", "nested"), filepath.Join(root, "linked-cwd")))
+	assert.Equal(t, []string{"api/final"}, NormalizeEntryPaths(root, "linked-cwd", []string{"../final"}).Files)
+	assert.Equal(t, []string{"api/final"}, NormalizeEntryPaths(root, "", []string{root + "/parent/../final"}).Files)
+}
+
+// requireCaseInsensitive skips the test when the file system of root is
+// case-sensitive. There two names that differ by case are two files.
+func requireCaseInsensitive(t *testing.T, root string) {
+	t.Helper()
+
+	if _, err := os.Lstat(filepath.Join(root, "API")); err != nil {
+		t.Skip("the file system of the fixture is case-sensitive")
+	}
+}
+
+func TestNormalizePathsUsesTheOnDiskSpelling(t *testing.T) {
+	root := workspace(t)
+	requireCaseInsensitive(t, root)
+
+	require.NoError(t, os.Symlink("API/Handler.GO", filepath.Join(root, "link.go")))
+	require.NoError(t, os.Symlink("DB", filepath.Join(root, "dirlink")))
+
+	realRoot, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+
+	got := NormalizePaths(root, root, []string{
+		"API/HANDLER.go",                    // existing directory and file
+		"Api/New.GO",                        // absent tail under an aliased directory
+		"API/Sub/Deep/New.go",               // absent directories keep their spelling
+		"link.go",                           // a link target spelled with another case
+		"DIRLINK/Query.go",                  // a link to an aliased directory
+		"DB/../A.GO",                        // a parent step leaves the on-disk directory
+		strings.ToUpper(realRoot) + "/a.go", // an aliased root
+	})
+	assert.Empty(t, got.Rejected)
+	assert.Equal(t, []string{
+		"api/handler.go", "api/New.GO", "api/Sub/Deep/New.go", "db/query.go", "a.go",
+	}, got.Files)
+
+	// A relative path resolves against an aliased event directory.
+	assert.Equal(t, []string{"api/handler.go"}, NormalizePaths(root, "API", []string{"HANDLER.GO"}).Files)
+	assert.Equal(t, []string{"api/handler.go"}, NormalizePaths(root, strings.ToUpper(realRoot), []string{"api/handler.go"}).Files)
+}
+
+func TestNormalizeEntryPathsUsesTheOnDiskSpellingOfTheFinalLink(t *testing.T) {
+	root := workspace(t)
+	requireCaseInsensitive(t, root)
+
+	require.NoError(t, os.Symlink("../db/query.go", filepath.Join(root, "api", "Final")))
+
+	got := NormalizeEntryPaths(root, "", []string{"API/FINAL", "API/final"})
+	assert.Equal(t, []string{"api/Final"}, got.Files, "the final link stays an entry with its own spelling")
+	assert.Equal(t, []string{"db/query.go"}, NormalizePaths(root, "", []string{"API/FINAL"}).Files)
+}
+
+func TestNormalizePathsKeepsExactSpellingOnAnyFileSystem(t *testing.T) {
+	root := workspace(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "Mixed", "Dir"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "Mixed", "Dir", "File.go"), nil, 0o644))
+
+	got := NormalizePaths(root, "", []string{"Mixed/Dir/File.go", "Mixed/Dir/Absent.go", "Mixed/NEW/x.go"})
+	assert.Equal(t, []string{"Mixed/Dir/File.go", "Mixed/Dir/Absent.go", "Mixed/NEW/x.go"}, got.Files)
+	assert.Empty(t, got.Rejected)
+}
+
+func TestNormalizePathsRejectsAnAliasInAnUnreadableDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+
+	root := workspace(t)
+	requireCaseInsensitive(t, root)
+
+	// The directory allows a lookup but no listing. On this file system
+	// the lookup cannot tell an exact name from an alias, so only the
+	// listing settles the spelling of an existing name.
+	locked := filepath.Join(root, "locked")
+	require.NoError(t, os.MkdirAll(locked, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(locked, "file.go"), nil, 0o644))
+	require.NoError(t, os.Chmod(locked, 0o311))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	got := NormalizePaths(root, root, []string{"locked/file.go", "locked/FILE.GO", "locked/absent.go"})
+	assert.Equal(t, []string{"locked/absent.go"}, got.Files, "an absent name has no alias")
+	assert.Equal(t, []RejectedPath{
+		{Path: "locked/file.go", Reason: RejectUnresolvable},
+		{Path: "locked/FILE.GO", Reason: RejectUnresolvable},
+	}, got.Rejected)
 }

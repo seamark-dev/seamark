@@ -2,6 +2,7 @@ package lessoncheck
 
 import (
 	"errors"
+	"regexp"
 
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -32,7 +33,7 @@ type patternMatch struct {
 // A path set that is not complete adds its cause to the causes of step
 // 3. So it gives unknown before step 4: a pass needs the full path set,
 // because no cut evaluation reads as pass (contract K3, Bounds).
-func evaluatePattern(check Check, snap *Snapshot, scope []string) Result {
+func evaluatePattern(b budget, check Check, snap *Snapshot, scope []string) Result {
 	var (
 		res     Result
 		matches []patternMatch
@@ -52,7 +53,7 @@ func evaluatePattern(check Check, snap *Snapshot, scope []string) Result {
 		n := endpointsInScope(ch, scope)
 		res.Coverage.PathsInScope += n
 
-		added, cause := addedLines(ch, scope, snap.Boundary, lim)
+		added, cause := addedLines(b, ch, scope, snap.Boundary, lim)
 		if cause.reason != "" {
 			res.UnknownPaths = append(res.UnknownPaths,
 				Evidence{Path: ch.Path, OldPath: ch.OldPath, Change: ch.Kind, Reason: cause.reason, limit: cause.limit})
@@ -64,10 +65,13 @@ func evaluatePattern(check Check, snap *Snapshot, scope []string) Result {
 		res.Coverage.PathsEvaluated += n
 		res.Coverage.AddedLines += len(added)
 
-		for _, line := range added {
-			if check.Pattern.MatchString(line.text) {
-				matches = append(matches, patternMatch{change: ch, line: line})
-			}
+		found, cause := matchAdded(b, check.Pattern, ch, added)
+		matches = append(matches, found...)
+
+		if cause.reason != "" {
+			res.UnknownPaths = append(res.UnknownPaths,
+				Evidence{Path: ch.Path, OldPath: ch.OldPath, Change: ch.Kind, Reason: cause.reason, limit: cause.limit})
+			causes = append(causes, cause)
 		}
 	}
 
@@ -91,6 +95,32 @@ func evaluatePattern(check Check, snap *Snapshot, scope []string) Result {
 	return res
 }
 
+// matchBudgetStride is the number of lines between two checks of the
+// budget. The check costs more than one match of a short line.
+const matchBudgetStride = 4096
+
+// matchAdded returns the added lines of one change that match the
+// pattern. It returns the cause of the end of the budget when the budget
+// ends before the last line. The matches found until then stay, because
+// an observed violation stays observed (spec L162).
+func matchAdded(b budget, pattern *regexp.Regexp, ch Change, added []addedLine) ([]patternMatch, reasonHit) {
+	var matches []patternMatch
+
+	for i, line := range added {
+		if i%matchBudgetStride == 0 {
+			if cause, ended := b.ended(); ended {
+				return matches, cause
+			}
+		}
+
+		if pattern.MatchString(line.text) {
+			matches = append(matches, patternMatch{change: ch, line: line})
+		}
+	}
+
+	return matches, reasonHit{}
+}
+
 // addedLines returns the lines that one touching change adds to the
 // scope (the K3 table). It returns a cause instead when the content that
 // the change needs is not text or not available.
@@ -98,7 +128,13 @@ func evaluatePattern(check Check, snap *Snapshot, scope []string) Result {
 // A modify or an in-scope move whose content and type are unchanged adds
 // no line and needs no content. A mode change alone adds no line, and a
 // producer does not read the content of an identical move.
-func addedLines(ch Change, scope []string, boundary Boundary, lim Limits) ([]addedLine, reasonHit) {
+func addedLines(b budget, ch Change, scope []string, boundary Boundary, lim Limits) ([]addedLine, reasonHit) {
+	// A path that starts after the budget ended is unknown, so a long
+	// list of paths never extends the evaluation.
+	if cause, ended := b.ended(); ended {
+		return nil, cause
+	}
+
 	sourceIn := ch.OldPath != "" && inScope(ch.OldPath, scope)
 	destIn := inScope(ch.Path, scope)
 
@@ -107,7 +143,7 @@ func addedLines(ch Change, scope []string, boundary Boundary, lim Limits) ([]add
 		return nil, reasonHit{}
 	case ch.Kind == ChangeAdd, ch.Kind == ChangeMove && !sourceIn:
 		// A move into the scope from outside adds its whole content.
-		after, cause := sideLines(ch.After, false, boundary, lim)
+		after, cause := afterLines(ch, boundary, lim)
 		if cause.reason != "" {
 			return nil, cause
 		}
@@ -127,7 +163,7 @@ func addedLines(ch Change, scope []string, boundary Boundary, lim Limits) ([]add
 		return nil, cause
 	}
 
-	after, cause := sideLines(ch.After, false, boundary, lim)
+	after, cause := afterLines(ch, boundary, lim)
 	if cause.reason != "" {
 		return nil, cause
 	}
@@ -138,7 +174,19 @@ func addedLines(ch Change, scope []string, boundary Boundary, lim Limits) ([]add
 		return nil, reasonHit{reason: ReasonResourceLimit, limit: LimitMaxDiffLines}
 	}
 
-	return diffLines(before, after), reasonHit{}
+	return diffLinesWithin(b, before, after)
+}
+
+// afterLines returns the lines of the after side of a change. A
+// projected change whose after content the projection cannot compute
+// gives unprojectable-edit (contract K8). The before side of a modify
+// is read first, so its own cause, such as binary content, wins.
+func afterLines(ch Change, boundary Boundary, lim Limits) ([]string, reasonHit) {
+	if ch.unprojectable != "" {
+		return nil, reasonHit{reason: ReasonUnprojectableEdit}
+	}
+
+	return sideLines(ch.After, false, boundary, lim)
 }
 
 // sideLines returns the lines of one side, or the cause that keeps them
@@ -170,6 +218,13 @@ func sideLines(side Side, before bool, boundary Boundary, lim Limits) ([]string,
 	case ContentBinary, ContentInvalidUTF8:
 		return nil, reasonHit{reason: ReasonUnsupportedContent}
 	case ContentTooLarge:
+		// A side that names its own limit keeps it. A pending record
+		// drops content above max-baseline-bytes, and the size of the
+		// side does not show that limit (contract K7).
+		if side.limit != "" {
+			return nil, reasonHit{reason: ReasonResourceLimit, limit: side.limit}
+		}
+
 		// A side above max-file-bytes is too large on its own. A smaller
 		// side is too large because the snapshot reached its total.
 		if side.Size > lim.MaxFileBytes {

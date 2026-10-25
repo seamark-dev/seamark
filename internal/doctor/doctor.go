@@ -95,6 +95,7 @@ func run(reg *integration.Registry, root, dbPath, version string) *Report {
 	inspections := reg.Inspect(root)
 
 	checkHooks(r, inspections)
+	checkLessonChecks(r, inspections, root, integration.SelfIdentity(version))
 	checkAgent(r, reg, root)
 	checkGH(r)
 	checkMCP(r, inspections)

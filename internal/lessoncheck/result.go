@@ -136,6 +136,10 @@ type Verification struct {
 	// the limitation git-stderr. It is unexported, so the JSON output
 	// does not change.
 	statusStderr string
+	// auditErr is the error of the K9 verify record, or nil. The record
+	// never changes the result, so the error stays out of the JSON
+	// output. AuditError returns it.
+	auditErr error
 }
 
 // ErrViolation is the sentinel of a verification with a violation. The

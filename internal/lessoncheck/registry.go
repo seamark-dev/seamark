@@ -1,6 +1,7 @@
 package lessoncheck
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -146,13 +147,14 @@ type Result struct {
 
 // checker is one entry of the registry. evaluate gets the compiled
 // definition, the snapshot, and the pin scope, and it fills the outcome
-// part of a Result. Evaluate fills the pin part.
+// part of a Result. Evaluate fills the pin part. The budget bounds the
+// work of the checker: an ended budget gives unknown, never a pass.
 //
 // The contract sketch also names a compile function and a parameter
 // list. Validate compiles each definition once (Config.Checks), so the
 // registry holds no second compile step.
 type checker struct {
-	evaluate func(Check, *Snapshot, []string) Result
+	evaluate func(budget, Check, *Snapshot, []string) Result
 	describe func(reviews.CheckDef) (string, error)
 }
 
@@ -200,11 +202,29 @@ func Describe(def reviews.CheckDef) (string, error) {
 // Evaluate is pure: it reads only its arguments, changes neither of
 // them, and does no I/O.
 func Evaluate(cfg *Config, snap *Snapshot) []Result {
+	return evaluate(budget{}, cfg, snap)
+}
+
+// EvaluateWithin is Evaluate with a time budget. The guard and the
+// post-edit verification call it with the context of their budget, and
+// limit names that budget (LimitGuardBudget or LimitPostEditBudget).
+//
+// When ctx ends, every result that no checker finished is
+// unknown/resource-limit with limit, or unknown/interrupted for a
+// cancellation. So the end of the budget fails closed when an enforce
+// pin applies (contract K8, step 2), and it stays advisory for a check
+// pin. When ctx does not end, or is nil, the results equal those of Evaluate.
+func EvaluateWithin(ctx context.Context, limit string, cfg *Config, snap *Snapshot) []Result {
+	return evaluate(budget{ctx: ctx, limit: limit}, cfg, snap)
+}
+
+// evaluate is the shared body of Evaluate and EvaluateWithin.
+func evaluate(b budget, cfg *Config, snap *Snapshot) []Result {
 	results := []Result{}
 
 	for _, pin := range cfg.Pins {
 		if isExecutable(pin.Mode) {
-			results = append(results, evaluatePin(cfg, snap, pin))
+			results = append(results, evaluatePin(b, cfg, snap, pin))
 		}
 	}
 
@@ -212,28 +232,50 @@ func Evaluate(cfg *Config, snap *Snapshot) []Result {
 }
 
 // evaluatePin runs the checker of one executable pin and adds the pin
-// fields to its result.
-func evaluatePin(cfg *Config, snap *Snapshot, pin Pin) Result {
+// fields to its result. A pin that starts after the budget ended runs
+// no checker.
+func evaluatePin(b budget, cfg *Config, snap *Snapshot, pin Pin) Result {
 	var res Result
 
-	check, compiled := cfg.Checks[pin.CheckID]
-	run, known := registry[check.Kind]
+	check, run, ok := runnable(cfg, pin)
 
-	// Validate guarantees a compiled, known check for every executable
-	// pin of a valid config. A hand-built Config can break that promise,
-	// so a missing check also gives configuration-error, never a pass.
-	if len(cfg.Errors) > 0 || !compiled || !known {
+	switch cause, ended := b.ended(); {
+	case !ok:
 		res = Result{Outcome: OutcomeUnknown, Reason: ReasonConfigurationError, Check: rawCheckRef(cfg.Raw, pin.CheckID)}
-	} else {
-		res = run.evaluate(check, snap, pin.Scope)
+	case ended:
+		res = Result{Outcome: OutcomeUnknown, Reason: cause.reason, Limit: cause.limit}
+		res.Check = CheckRef{ID: check.ID, Kind: check.Kind, Version: check.Version}
+	default:
+		res = run.evaluate(b, check, snap, pin.Scope)
 		res.Check = CheckRef{ID: check.ID, Kind: check.Kind, Version: check.Version}
 	}
 
+	return withPin(res, pin, snap.limits().MaxRuleRunes)
+}
+
+// runnable returns the compiled check and the checker of an executable
+// pin. ok is false when no checker can run it: the config is invalid,
+// or the check is missing or of an unknown kind. Validate guarantees a
+// compiled, known check for every executable pin of a valid config. A
+// hand-built Config can break that promise, so a missing check also
+// gives configuration-error, never a pass. Evaluate and the binding of
+// Revalidate use this one rule, so their checker kinds agree.
+func runnable(cfg *Config, pin Pin) (check Check, run checker, ok bool) {
+	check, compiled := cfg.Checks[pin.CheckID]
+	run, known := registry[check.Kind]
+
+	return check, run, len(cfg.Errors) == 0 && compiled && known
+}
+
+// withPin adds the pin fields to the outcome part of a result. The
+// post-edit evaluation also builds results without a checker run, for a
+// call without a baseline, so the pin fields have one writer.
+func withPin(res Result, pin Pin, maxRuleRunes int) Result {
 	res.PinRef = pin.Ref
 	res.PinIdentity = pin.Identity
 	res.PinVersion = pin.Version
 	res.Entry = pin.Entry
-	res.Rule = render.Truncate(render.Sanitize(pin.Rule.Rule), snap.limits().MaxRuleRunes)
+	res.Rule = render.Truncate(render.Sanitize(pin.Rule.Rule), maxRuleRunes)
 	res.Mode = pin.Mode
 	// The copy keeps the result apart from the Config, so a caller that
 	// edits a result never edits the pin. The copy of a non-nil scope is

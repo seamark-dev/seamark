@@ -19,6 +19,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -494,6 +495,12 @@ func (s *Server) changeSet(st *store.Store, files []string) (toolOutput, error) 
 	// relative to the workspace root, so the root is also the directory
 	// of a relative path. Config stays nil, so Prepare reads lessons.yaml
 	// itself and names an undecodable file as invalid.
+	//
+	// The badges of each check come from the capability report of the
+	// workspace (contract K10), so preparation computes no badge.
+	capability := integration.LessonCapability(integration.Builtin().Inspect(s.root), s.root,
+		integration.SelfIdentity(s.version))
+
 	prep, prepErr := prepareChangeSet(context.Background(), st, delivery.PrepareRequest{
 		Root:           s.root,
 		CWD:            s.root,
@@ -501,6 +508,7 @@ func (s *Server) changeSet(st *store.Store, files []string) (toolOutput, error) 
 		Surface:        delivery.SurfaceChangeSet,
 		MinedStatus:    minedStatus(st),
 		SeamarkVersion: s.version,
+		Capability:     &capability,
 	})
 
 	var b bytes.Buffer

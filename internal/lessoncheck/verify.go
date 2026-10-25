@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,7 +23,11 @@ import (
 // lessons --verify, check --lessons, the MCP check option, and the
 // console call it. Verify reads the configuration and the working-tree
 // snapshot, evaluates every executable pin, reads the inputs again, and
-// publishes the result as fresh or stale.
+// publishes the result as fresh or stale. Then it appends one record to
+// the lesson-check audit stream and sweeps the pending baselines.
+// Revalidate checks later whether the binding of a published result
+// still holds. The console calls it on refresh, because it shows a
+// result after the working tree can change.
 
 // VerifyRequest is the input of Verify.
 type VerifyRequest struct {
@@ -137,11 +142,143 @@ func Verify(ctx context.Context, req VerifyRequest) (*Verification, error) {
 
 	v.CheckedAt = now().UTC().Format(time.RFC3339)
 
-	// Milestone P4 adds two steps here, after the result is composed:
-	// one K9 verify audit record, whose failure never changes the outcome
-	// or the exit code, and the K7 sweep of .seamark/checks/pending.
+	// Two steps follow the composed result (contract K5). Neither one
+	// changes the result or the exit code. They take no context, because
+	// the context of a stopped read has already ended, and the record
+	// of that run must still land.
+	v.auditErr = AppendAudit(req.Root, verifyRecord(v))
+
+	// The sweep is crash cleanup (contract K7). The next pre-edit,
+	// post-edit, or verify run repeats it, so its error is dropped here.
+	_, _ = Sweep(req.Root, req.Caller, lim)
 
 	return v, nil
+}
+
+// Revalidate reports whether the binding of an earlier result v still
+// holds (contract K5, Freshness; K-13). It reads the snapshot again from
+// the selection of v and compares the baseline, the snapshot digest, the
+// lessons.yaml digest, the pins digest, and the checker kinds with v. A
+// change of content, scope, mode, check definition, baseline, or checker
+// version gives stale (spec L265).
+//
+// Revalidate runs no checker and writes nothing: no audit record and no
+// sweep, because it publishes no new result. It reads with
+// DefaultLimits, the limits of every console verification. Other
+// limits can fill other content digests on an unchanged tree.
+//
+// A result that is already stale stays stale without a read. Its rows
+// read unknown/stale-snapshot, so a fresh answer would contradict them.
+// A read that the context ends proves nothing, so it gives stale and no
+// error, as in Verify. The error reports a usage or a root failure, and
+// the freshness is then stale too, so a caller that drops the error
+// never shows a fresh result.
+func Revalidate(ctx context.Context, root string, v *Verification) (Freshness, error) {
+	switch {
+	case v == nil:
+		return FreshnessStale, errors.New("lesson checks: revalidate needs a result")
+	case !filepath.IsAbs(root):
+		return FreshnessStale, fmt.Errorf("lesson checks: root %q is not an absolute path", root)
+	case v.Freshness != FreshnessFresh:
+		return FreshnessStale, nil
+	}
+
+	lim := DefaultLimits()
+
+	ctx, cancel := context.WithTimeout(ctx, lim.VerifyTimeout)
+	defer cancel()
+
+	var paths []string
+	if v.Selection.Kind == SelectionExplicitPaths {
+		paths = v.Selection.Paths
+	}
+
+	snap, err := ReadWorkingTree(ctx, root, paths, lim)
+
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return FreshnessStale, nil
+	case err != nil:
+		return FreshnessStale, fmt.Errorf("lesson checks: revalidate: %w", err)
+	}
+
+	loaded := loadConfig(root)
+	now := Binding{SnapshotSHA256: snap.SHA256, ConfigSHA256: loaded.sha256}
+	now.PinsSHA256, now.CheckerVersions = configBinding(loaded.cfg)
+
+	// An unreadable file and an absent file both have the digest "", so
+	// the validity of the configuration decides between them. A read
+	// error is never an absent file.
+	if snap.Baseline != v.Baseline || !sameBinding(now, v.Binding) || loaded.report.Valid != v.Config.Valid {
+		return FreshnessStale, nil
+	}
+
+	return FreshnessFresh, nil
+}
+
+// configBinding returns the pins digest and the checker kinds that
+// Verify derives from the results of cfg. It builds one stand-in result
+// per executable pin, as Evaluate does, with the kind of runnable. So it
+// needs no snapshot and runs no checker, and pinsDigest and
+// checkerVersions stay the one rule of both digests. A nil cfg (a
+// tier-1 error) has no result, as in Verify.
+func configBinding(cfg *Config) (pins string, kinds []Kind) {
+	results := []Result{}
+
+	if cfg != nil {
+		for _, pin := range cfg.Pins {
+			if !isExecutable(pin.Mode) {
+				continue
+			}
+
+			res := Result{Entry: pin.Entry, PinVersion: pin.Version, Reason: ReasonConfigurationError}
+			if check, _, ok := runnable(cfg, pin); ok {
+				res.Reason, res.Check.Kind = "", check.Kind
+			}
+
+			results = append(results, res)
+		}
+	}
+
+	return pinsDigest(results), checkerVersions(results)
+}
+
+// sameBinding reports whether two bindings name the same snapshot,
+// config, pins, and checker kinds.
+func sameBinding(a, b Binding) bool {
+	return a.SnapshotSHA256 == b.SnapshotSHA256 && a.ConfigSHA256 == b.ConfigSHA256 &&
+		a.PinsSHA256 == b.PinsSHA256 && slices.Equal(a.CheckerVersions, b.CheckerVersions)
+}
+
+// AuditError returns the error of the verify audit record (contract
+// K9), or nil. lessons --verify prints it on its exit-0 paths only.
+// check --lessons and the MCP server stay silent about it (contract K5).
+func (v *Verification) AuditError() error {
+	return v.auditErr
+}
+
+// verifyRecord returns the K9 verify record of a composed result. It
+// holds the digests, the paths, and the outcome of each pin, and no
+// evidence excerpt (contracts §1.6).
+func verifyRecord(v *Verification) AuditRecord {
+	paths := make([]string, 0, 2*len(v.Changes))
+
+	for _, ch := range v.Changes {
+		paths = append(paths, ch.Path, ch.OldPath)
+	}
+
+	return AuditRecord{
+		TS:            v.CheckedAt,
+		Kind:          AuditVerify,
+		Caller:        v.Caller,
+		Boundary:      v.Boundary,
+		ConfigSHA256:  v.Binding.ConfigSHA256,
+		SnapshotSHA:   v.Binding.SnapshotSHA256,
+		Paths:         sortedUnique(paths),
+		PathsComplete: v.PathsComplete,
+		Pins:          auditPinsOf(v.Results),
+		State:         v.Summary.State,
+	}
 }
 
 // checkRequest refuses a request that no verification can serve. Each

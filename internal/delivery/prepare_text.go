@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
 )
@@ -202,7 +203,30 @@ func writeChecks(w io.Writer, p *Preparation) {
 		}
 
 		fmt.Fprintf(w, "  paths %s\n", joinSanitized(c.Paths))
+
+		if len(c.Enforcement) > 0 {
+			fmt.Fprintf(w, "  enforcement %s\n", enforcementText(c.Enforcement))
+		}
 	}
+}
+
+// enforcementText names the badge of each client, with its reasons, for
+// example "claude enforced-unverified (native-deny-unverified) · codex
+// requested-inactive (not-installed)". The badges come from the
+// capability report, so preparation never computes one.
+func enforcementText(clients []lessoncheck.PinClient) string {
+	parts := make([]string, 0, len(clients))
+
+	for _, c := range clients {
+		text := render.Sanitize(c.Client) + " " + render.Sanitize(c.Badge)
+		if len(c.Reasons) > 0 {
+			text += " (" + render.Sanitize(lessoncheck.JoinCapReasons(c.Reasons)) + ")"
+		}
+
+		parts = append(parts, text)
+	}
+
+	return strings.Join(parts, " · ")
 }
 
 // checkText names a check by ID, kind, and short version. A reference

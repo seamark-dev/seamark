@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/seamark-dev/seamark/internal/delivery"
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -75,6 +76,10 @@ func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON
 		return err
 	}
 
+	// The badges of each check come from the capability report of this
+	// workspace (contract K10), so preparation computes no badge.
+	capability := integration.LessonCapability(integration.Builtin().Inspect(root), root, integration.SelfIdentity(version))
+
 	// Config and ConfigErr stay nil, so Prepare loads lessons.yaml from
 	// root itself. The guidance status then names a file that does not
 	// decode as invalid, which loadLessonsConfig would hide.
@@ -85,6 +90,7 @@ func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON
 		Surface:        delivery.SurfacePrepare,
 		MinedStatus:    mined,
 		SeamarkVersion: version,
+		Capability:     &capability,
 	})
 	if err != nil {
 		return err

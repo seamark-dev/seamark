@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -562,6 +563,28 @@ func TestClaudeWithoutTheSourceCheckNeverReadsTheLocalFile(t *testing.T) {
 
 	_, err = claudeSetup{}.Plan(root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true})
 	require.NoError(t, err)
+}
+
+func TestClaudeReadsTheLocalFileForEveryLessonCheckMode(t *testing.T) {
+	// The narrator states the capability of the pre-write path, and a
+	// local wrapper or a broken local file changes it (R-6). Check mode
+	// reads the personal file as enforce does. A run without a mode, and
+	// the off mode, keep the rule that setup never reads it.
+	root := t.TempDir()
+	writeRel(t, root, claudeLocalSettings, "{ broken")
+
+	for mode, reads := range map[string]bool{
+		"":                        false,
+		hooks.LessonChecksOff:     false,
+		hooks.LessonChecksCheck:   true,
+		hooks.LessonChecksEnforce: true,
+	} {
+		// Without CheckHookSources, as the form without --client runs.
+		plan, err := claudeSetup{}.Plan(root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: mode})
+		require.NoError(t, err)
+
+		assert.Equal(t, reads, slices.Contains(guardPaths(plan), claudeLocalSettings), "mode %q", mode)
+	}
 }
 
 func TestClaudeIgnoresALocalEntryThatNeverFires(t *testing.T) {

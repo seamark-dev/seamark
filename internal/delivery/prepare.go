@@ -143,6 +143,12 @@ type PrepareRequest struct {
 	EventID func() string
 	// SeamarkVersion fills Preparation.SeamarkVersion.
 	SeamarkVersion string
+	// Capability is the lesson-capability/1 report of the workspace, or
+	// nil. Prepare copies the badges of each pin into
+	// CheckSummary.Enforcement (contract L1, milestone P4). The caller
+	// builds it, because the report joins the client inspections, and
+	// this package reads no client hook document.
+	Capability *lessoncheck.CapabilityReport
 }
 
 // Preparation is the lesson-preparation/1 document.
@@ -347,6 +353,7 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 	root := inspectRoot(req.Root)
 	pinPaths, pinCounts := pinScopes(cfg, files)
 	checks, checkCounts := checkSummaries(cfg, pinPaths)
+	withEnforcement(checks, req.Capability)
 
 	for i, f := range files {
 		p.Request.Paths[i].Pins = pinCounts[f]
@@ -646,6 +653,25 @@ func checkSummaries(cfg *reviews.Config, pinPaths map[reviews.PinKey][]string) (
 	}
 
 	return summaries, counts
+}
+
+// withEnforcement copies the K10 badges of each pin into its check
+// summary. A pin joins only with the same pin-ref and pin version, so a
+// report of another file state never lends its badges. Without a report
+// the field stays absent.
+func withEnforcement(checks []CheckSummary, capability *lessoncheck.CapabilityReport) {
+	if capability == nil {
+		return
+	}
+
+	for i := range checks {
+		pin, ok := capability.Pin(checks[i].PinRef)
+		if !ok || pin.PinVersion != checks[i].PinVersion || len(pin.Clients) == 0 {
+			continue
+		}
+
+		checks[i].Enforcement = slices.Clone(pin.Clients)
+	}
 }
 
 // checkRefOf names the check of a pin and its predicate. It reads the

@@ -22,6 +22,19 @@ Files:
   `session_id`, the case in which a session-keyed receiver hides advice
   from the subagent. The reference does not say which `session_id` a
   subagent reports; a native parent/subagent run is pending.
+- `pre_tool_use_edit_replace_all.json`, `pre_tool_use_multiedit_create.json`,
+  `pre_tool_use_write_new_file.json`: **synthetic** inputs of the
+  lesson-check guard decoder (`claude_guard.go`), shaped from the edit
+  fixtures above and the tool input fields that the decoder reads
+  (`replace_all`, `edits[]`); local CLI at writing time:
+  Claude Code 2.1.310. They are an `Edit` with
+  `replace_all: true`; a `MultiEdit` on a file that does not exist yet,
+  whose first edit has an empty `old_string`; a `Write` of a new file
+  inside a subagent (`agent_id`). No native run produced them. Whether
+  one `Edit` or a first `MultiEdit` step with an empty `old_string`
+  creates an absent file is not verified: the guard projects such an
+  edit as `unprojectable-edit` until a reviewed native guard recording
+  shows it.
 - `pre_tool_use_bash.json`: the shell event the gate hook matches.
 - `post_compact.json`: the lifecycle event the reset hook matches.
 - `post_compact_subagent.json`: a PostCompact with `agent_id`. The

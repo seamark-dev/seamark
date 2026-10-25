@@ -227,10 +227,7 @@ func targetCheck(cfg *reviews.Config, pin lessoncheck.Pin, mode lessoncheck.Mode
 // advisory mode removes the mode key, because an absent mode means
 // advisory. The check key changes only when the request names a check.
 func modeRewrite(mode lessoncheck.Mode, id string) *pinfile.Rewrite {
-	text := string(mode)
-	if mode == lessoncheck.ModeAdvisory {
-		text = ""
-	}
+	text := modeKey(mode)
 
 	rw := &pinfile.Rewrite{Mode: &text}
 	if id != "" {
@@ -238,6 +235,18 @@ func modeRewrite(mode lessoncheck.Mode, id string) *pinfile.Rewrite {
 	}
 
 	return rw
+}
+
+// modeKey returns the text of the mode key for mode. Advisory gives "",
+// which removes the key, because an absent mode reads as advisory. The
+// mode command and the authoring form share it, so both write the same
+// bytes (R-17).
+func modeKey(mode lessoncheck.Mode) string {
+	if mode == lessoncheck.ModeAdvisory {
+		return ""
+	}
+
+	return string(mode)
 }
 
 // sameMode reports whether the raw mode text of a pin already reads as

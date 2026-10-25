@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/status"
 	"github.com/seamark-dev/seamark/internal/store"
@@ -133,7 +134,9 @@ func (s *Server) readResource(params json.RawMessage) (any, *rpcError) {
 		}
 	case statusURI:
 		render = func(st *store.Store) (string, error) {
-			health, err := status.Gather(st, s.root)
+			// The lesson checks block identifies each hook binary against
+			// this server binary and its version (contract K10).
+			health, err := status.GatherAs(st, s.root, integration.SelfIdentity(s.version))
 			if err != nil {
 				return "", err
 			}

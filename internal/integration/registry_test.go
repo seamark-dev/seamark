@@ -165,7 +165,12 @@ func TestSkillDirsAreCopiedAtEveryRegistryBoundary(t *testing.T) {
 func TestCodexDeclaresEveryCapability(t *testing.T) {
 	codex, _ := Builtin().Lookup(CodexID)
 
-	assert.Equal(t, Capabilities, codex.Declared())
+	// Codex declares every capability but one. It reports no structured
+	// read event, so it has no exploration codec.
+	want := slices.DeleteFunc(slices.Clone(Capabilities), func(c Capability) bool {
+		return c == CapabilityLessonExploration
+	})
+	assert.Equal(t, want, codex.Declared())
 	assert.True(t, codex.SetupOps.Hooks, "codex installs the lesson hooks")
 	assert.True(t, codex.SetupOps.GateHook, "codex installs the command gate hook")
 
@@ -333,6 +338,7 @@ func TestClaudeInvocationIsPureAndReusesThePreset(t *testing.T) {
 	assert.Equal(t, []Capability{
 		CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants,
 		CapabilityEdits, CapabilityCommands, CapabilityResets, CapabilityInvocation,
+		CapabilityLessonVerify, CapabilityLessonGuard, CapabilityLessonExploration,
 	}, claude.Declared())
 
 	spec, err := claude.Invocation(t.TempDir())

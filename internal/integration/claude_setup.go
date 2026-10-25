@@ -111,6 +111,10 @@ func finishClaudeSettings(plan *ClientPlan, narration *claudeNarration, settings
 		parts = append(parts, "gate + lessons + context reset hooks")
 	}
 
+	if narration.lessons.changed() {
+		parts = append(parts, narration.lessons.detail())
+	}
+
 	if narration.grants != nil && len(narration.grants.Missing) > 0 {
 		parts = append(parts, fmt.Sprintf("%d allow rules", len(narration.grants.Missing)))
 	}
@@ -177,11 +181,16 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 	// other definition of a hook, wrapped in the shared file or anywhere
 	// in the personal file, is the same evidence inspection reads: setup
 	// reports it with its tools and its mode, and never edits it. The
-	// local file is read only when the run looks at every hook source.
+	// local file is also read for explicit enforce, because a local
+	// wrapper must not bypass the preflight refusal. Check mode reads it
+	// too, because the narrator states the capability of the pre-write
+	// path, and a local wrapper or an unreadable file changes that
+	// capability. Plain init, without a lesson-check mode, does not read it.
 	var local map[string]any
+	var localErr error
 
-	if req.CheckHookSources {
-		local = readLocalHooks(plan, root)
+	if req.CheckHookSources || req.LessonChecks == hooks.LessonChecksEnforce || req.LessonChecks == hooks.LessonChecksCheck {
+		local, localErr = readLocalHooks(plan, root)
 	}
 
 	for i, spec := range specs {
@@ -216,6 +225,29 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 	narration.hooks, narration.hooksChanged = true, merged.Changed
 	narration.specs, narration.removedEnforce = specs, merged.RemovesEnforce(hooks.GateMarker(hooks.ModeEnforce))
 
+	// The lesson-check hooks go into the shared file beside the lessons
+	// hook. The enforce preconditions read the definitions that this plan
+	// already read: a definition in either file that discards the exit
+	// status of the guard keeps the guard inactive.
+	pre := hooks.ClaudeLessonCheckSpecs(hooks.LessonChecksEnforce)[0]
+
+	state := lessonSourceState{sourceUnreadable: localErr != nil}
+
+	if reportOnlyIn(settings, pre, hooks.ClaudeMatcher) {
+		state.reportOnly = append(state.reportOnly, approve.ClaudeSettings)
+	}
+
+	if reportOnlyIn(local, pre, hooks.ClaudeMatcher) {
+		state.reportOnly = append(state.reportOnly, claudeLocalSettings)
+	}
+
+	lessons, err := planLessonChecks(settings, approve.ClaudeSettings, root, narration.binary, claudeLessonHooks, req, state)
+	if err != nil {
+		return err
+	}
+
+	narration.lessons = lessons
+
 	return nil
 }
 
@@ -226,8 +258,8 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 // it after the plan would make the report wrong. A local file that
 // cannot be read is reported and does not stop setup, because setup does
 // not own that file.
-func readLocalHooks(plan *ClientPlan, root string) map[string]any {
-	skipped := func(err error) map[string]any {
+func readLocalHooks(plan *ClientPlan, root string) (map[string]any, error) {
+	skipped := func(err error) (map[string]any, error) {
 		plan.Findings = append(plan.Findings, Finding{
 			Level:  FindingWarning,
 			Path:   claudeLocalSettings,
@@ -235,7 +267,7 @@ func readLocalHooks(plan *ClientPlan, root string) map[string]any {
 			Action: "fix the file, then run the command again",
 		})
 
-		return nil
+		return nil, err
 	}
 
 	// An input: the read may follow a link, for example into a dotfiles
@@ -248,7 +280,7 @@ func readLocalHooks(plan *ClientPlan, root string) map[string]any {
 	plan.Reads = append(plan.Reads, guard)
 
 	if !guard.Exists {
-		return nil
+		return nil, nil
 	}
 
 	local, err := hooks.ParseDocument(data)
@@ -256,7 +288,7 @@ func readLocalHooks(plan *ClientPlan, root string) map[string]any {
 		return skipped(err)
 	}
 
-	return local
+	return local, nil
 }
 
 // reportMissingCoverage names, after the merge, each tool that no
@@ -401,7 +433,36 @@ func (claudeSetup) Inspect(root string) Inspection {
 		ManagedGateMode:   gate.managed,
 		HookDocumentError: gate.err,
 		Findings:          findings,
+		LessonHooks:       inspectClaudeLessonHooks(root),
 	}
+}
+
+// inspectClaudeLessonHooks reads the lesson-check and exploration hooks
+// of .claude/settings.json for the capability report (contract K10). A
+// definition in either settings file that runs the pre-write hook and
+// discards its exit status keeps the guard inactive, by the rule of the
+// enforce preconditions. The reading adds no finding, so the existing
+// doctor and status lines keep their bytes. An unreadable document
+// gives nil, because HookDocumentError already names it, and so does a
+// document without such a hook.
+func inspectClaudeLessonHooks(root string) *LessonHookInspection {
+	_, settings, err := readClaudeSettings(root)
+	if err != nil {
+		return nil
+	}
+
+	// The local file is an input. A file that cannot be read is named by
+	// the finding of inspectClaudeHooks, so the scratch findings stay here.
+	var scratch ClientPlan
+
+	local, localErr := readLocalHooks(&scratch, root)
+	pre := claudeLessonHooks.specs(hooks.LessonChecksEnforce)[0]
+
+	return lessonHookReading(LessonHookInspection{
+		Entries:          lessonHookEntries(settings, claudeLessonHooks),
+		ReportOnly:       reportOnlyIn(settings, pre, hooks.ClaudeMatcher) || reportOnlyIn(local, pre, hooks.ClaudeMatcher),
+		SourceUnreadable: localErr != nil,
+	})
 }
 
 // gateInspection is what an inspection learns about the gate hooks of
@@ -444,7 +505,7 @@ func inspectClaudeHooks(root string, evidence VerificationEvidence) (entries []C
 	// reported and does not make the shared file's hooks unknown.
 	var scratch ClientPlan
 
-	local := readLocalHooks(&scratch, root)
+	local, _ := readLocalHooks(&scratch, root)
 	findings = scratch.Findings
 
 	for i, spec := range hooks.ClaudeSpecs(hooks.ModeWarn) {

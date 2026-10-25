@@ -178,7 +178,7 @@ func spliceDelivery(data []byte, edits []Edit) ([]byte, error) {
 		return nil, err
 	}
 
-	return appendTopLevel(doc, added), nil
+	return doc.AppendTopLevel(added), nil
 }
 
 // parseLessons parses an intermediate text of a lessons splice.
@@ -362,7 +362,7 @@ func addMute(lp *LessonsPart, m MuteEdit) (after []byte, notes []string, err err
 
 	span, present := doc.KeySpan(doc.Root, keyMute, doc.Limit)
 	if !present {
-		return appendTopLevel(doc, append([]string{keyMute + ":"}, indentAll(item, 2)...)), notes, nil
+		return doc.AppendTopLevel(append([]string{keyMute + ":"}, yamledit.IndentLines(item, 2)...)), notes, nil
 	}
 
 	var at, col int
@@ -389,7 +389,7 @@ func addMute(lp *LessonsPart, m MuteEdit) (after []byte, notes []string, err err
 		return nil, nil, lessonsBlock("the mute key does not hold a block list", span.First)
 	}
 
-	lines := slices.Insert(slices.Clone(doc.Lines), at, indentAll(item, col)...)
+	lines := slices.Insert(slices.Clone(doc.Lines), at, yamledit.IndentLines(item, col)...)
 
 	return yamledit.JoinLines(lines, doc.FinalEOL), notes, nil
 }

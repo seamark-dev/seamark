@@ -28,11 +28,13 @@ type claudeNarration struct {
 	removedEnforce bool
 	// grants is the allow-rule plan; nil when none was requested.
 	grants *approve.ClaudePlan
+	// lessons is what the plan does to the lesson-check hooks.
+	lessons lessonChange
 }
 
 // changed reports whether the document is written.
 func (n *claudeNarration) changed() bool {
-	return n.hooksChanged || (n.grants != nil && len(n.grants.Missing) > 0)
+	return n.hooksChanged || n.lessons.changed() || (n.grants != nil && len(n.grants.Missing) > 0)
 }
 
 // narrate prints the settings.json lines in the words init has always
@@ -42,11 +44,22 @@ func (n *claudeNarration) narrate(w io.Writer, status OpStatus) {
 	preview := status == OpPlanned
 
 	if n.hooks {
+		// The words of the hooks part. A plan without a lesson-check
+		// change prints the line that init has always printed.
+		hooksPart := "gate + lessons + context reset hooks"
+		if n.lessons.changed() {
+			hooksPart = n.lessons.detail()
+
+			if n.hooksChanged {
+				hooksPart = "gate + lessons + context reset hooks; " + hooksPart
+			}
+		}
+
 		switch {
 		case !n.changed():
 			fmt.Fprintf(w, "  kept    %s (seamark hooks already wired)\n", approve.ClaudeSettings)
-		case n.hooksChanged:
-			fmt.Fprintf(w, "  %s %s (gate + lessons + context reset hooks)\n", verb("updated", "would update", preview), approve.ClaudeSettings)
+		case n.hooksChanged || n.lessons.changed():
+			fmt.Fprintf(w, "  %s %s (%s)\n", verb("updated", "would update", preview), approve.ClaudeSettings, hooksPart)
 		default:
 			fmt.Fprintf(w, "  %s %s (permissions; seamark hooks already wired)\n", verb("updated", "would update", preview), approve.ClaudeSettings)
 		}
@@ -62,6 +75,8 @@ func (n *claudeNarration) narrate(w io.Writer, status OpStatus) {
 			fmt.Fprintf(w, "          %-30s %s\n", where, spec.Command(n.binary))
 		}
 
+		n.lessons.narrateCommands(w, n.binary)
+
 		// The note states only what changed, the hook flag. Whether
 		// anything still blocks is the effective-mode line's job: a kept
 		// enforce policy blocks whatever the flag says.
@@ -70,6 +85,8 @@ func (n *claudeNarration) narrate(w io.Writer, status OpStatus) {
 				"          instead — re-run with --gate-mode enforce to restore the baked-in flag\n",
 				verb("removed", "would remove", preview))
 		}
+
+		n.lessons.narrateLine(w)
 	}
 
 	if n.grants != nil {

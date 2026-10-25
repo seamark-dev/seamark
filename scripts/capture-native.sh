@@ -19,10 +19,13 @@
 #   CAPTURE_NATIVE_RUNS   0 skips the paid runs and only collects
 #   CAPTURE_NATIVE_CLAUDE_MODEL  default haiku
 #   CAPTURE_NATIVE_CODEX_MODEL   default gpt-5.6-luna (low reasoning)
-#   CAPTURE_NATIVE_SCENARIO      timing (the default and the only scenario)
-#                                runs the gate-3 timing prompts in a
-#                                scratch repository with lesson hooks (see
-#                                "The gate-3 timing scenario" below).
+#   CAPTURE_NATIVE_SCENARIO      timing (the default) runs the gate-3 timing
+#                                prompts in a scratch repository with
+#                                lesson hooks (see "The gate-3 timing
+#                                scenario" below); guard runs the gate-5
+#                                sentinel prompts in a scratch repository
+#                                with enforce pins (see "The gate-5 guard
+#                                scenario" below).
 #
 # Every check prints ok, FAIL, or blocked. The exit status is 0 when
 # every check prints ok, 1 when one prints FAIL, and 3 when one prints
@@ -62,8 +65,8 @@ esac
 SCENARIO=${CAPTURE_NATIVE_SCENARIO:-timing}
 
 case "$SCENARIO" in
-    timing) ;;
-    *) echo "$0: unknown scenario \"$SCENARIO\" (known: timing)" >&2; exit 2 ;;
+    timing|guard) ;;
+    *) echo "$0: unknown scenario \"$SCENARIO\" (known: timing, guard)" >&2; exit 2 ;;
 esac
 
 SEAMARK_REPO=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -203,18 +206,23 @@ record_mode() {
         # scenario of its setup.
         set_up=
         [ ! -f "$INSTR/scenario-timing" ] || set_up=timing
+        [ ! -f "$INSTR/scenario-guard" ] || set_up=guard
 
         if [ "$set_up" != "$SCENARIO" ]; then
             blocked "$REPO was set up for the ${set_up:-another} scenario, not $SCENARIO; use another CAPTURE_NATIVE_REPO"
             summary
         fi
     else
-        timing_setup
+        case "$SCENARIO" in
+            timing) timing_setup ;;
+            guard)  guard_setup ;;
+        esac
     fi
 
-    # Codex runs project hooks only after a trust review. A new timing
-    # repository has no trusted hook yet, so a paid run there records no
-    # hook payload. The script stops before the paid runs instead.
+    # Codex runs project hooks only after a trust review. A new timing or
+    # guard repository has no trusted hook yet, so a paid run there
+    # records no hook payload. The script stops before the paid runs
+    # instead.
     if [ "$CLIENT" = codex ] && [ -z "$reuse" ]; then
         note "Codex runs project hooks only after you trust them; setup never grants trust:"
         note "  1. cd $REPO && $CODEX_TRUST   (accept the project trust prompt)"
@@ -238,9 +246,11 @@ record_mode() {
         note "CAPTURE_NATIVE_RUNS=0: no paid run; collecting what the repository already holds"
     else
         echo "paid runs ($CLIENT; costs tokens)"
-        case "$CLIENT" in
-            claude) timing_begin; record_claude_timing ;;
-            codex)  timing_begin; record_codex_timing ;;
+        case "$SCENARIO:$CLIENT" in
+            timing:claude) timing_begin; record_claude_timing ;;
+            timing:codex)  timing_begin; record_codex_timing ;;
+            guard:claude)  guard_begin; record_claude_guard ;;
+            guard:codex)   guard_begin; record_codex_guard ;;
         esac
     fi
 
@@ -286,6 +296,8 @@ with open(os.path.join(out, "runs.txt")) as f:
 record = {
     "client": client, "client_version": version, "repo": repo, "home": home, "seamark": seamark,
     "instrumentation": instr, "observed": observed, "runs": runs,
+    # guard_extras reads the exit status of each hook from these logs.
+    "debug_logs": sorted(glob.glob(os.path.join(out, "run-*-debug.log"))),
     "transcripts": sorted(p for p in paths if os.path.isfile(p)),
     "extras": {"exec-events.jsonl": os.path.join(out, "exec-events.jsonl")}
     if os.path.isfile(os.path.join(out, "exec-events.jsonl")) else {},
@@ -294,7 +306,10 @@ with open(os.path.join(out, "record.json"), "w") as f:
     json.dump(record, f, indent=1)
 PY
 
-    timing_extras
+    case "$SCENARIO" in
+        timing) timing_extras ;;
+        guard)  guard_extras ;;
+    esac
 
     if python3 -I "$SCRIPTS/capture-native-sanitize.py" "$OUT/record.json" "$OUT/sanitized"; then
         ok "sanitized copy in $OUT/sanitized; compare it with $DATA before you replace the evidence"
@@ -686,6 +701,818 @@ if os.path.isfile(audit):
     extras["lessons-audit.jsonl"] = tail
 
 with open(record_path, "w", encoding="utf-8") as f:
+    json.dump(record, f, indent=1)
+PY
+}
+
+# The gate-5 guard scenario (CAPTURE_NATIVE_SCENARIO=guard). It records
+# whether the client stops a write that the
+# lesson-check guard denies, and what it does with the replies of the
+# post-edit hook. The scratch repository holds three fixture
+# directories: sentinel/ under an enforce forbid-path-change/1 pin,
+# notes/ under an enforce no-added-pattern/1 pin, and free/ without a
+# pin. Each paid run is one case. guard-cases.jsonl names the case of
+# each run and the state of the three directories before and after the
+# run, so the replay tests need no session identifier. The reviewer
+# copies the reviewed sanitized copy into
+# internal/integration/testdata/<client>/guard. There the tests
+# TestCaptureNativeClaudeGuardRecording and
+# TestCaptureNativeCodexGuardRecording decode it, and
+# TestGuardEvidenceMatchesRecordings checks the evidence against it.
+#
+# Each case runs in one phase. The phase sets the lessons.yaml variant,
+# the form of the hook document, and the mode of the indirection entry:
+#
+#   enforce          the setup of init --lesson-checks enforce
+#   check-pins       the same hooks; both pins have mode check
+#   broken-config    the same hooks; one check kind does not exist
+#   check-installed  init --lesson-checks check (Claude Code only)
+#   post-only        no pre-write hook; the post-edit hooks stay
+#   wrapper          no owned guard; the indirection entry runs the guard
+#                    and discards its exit status (report-only)
+#   slow             no owned guard; the indirection entry waits past the
+#                    hook timeout and then runs the guard
+#
+# The indirection entry is the command sh <instrumentation>/pre-write.sh.
+# Its text holds no guard marker, so neither setup nor inspection reads
+# it as a wrapper of the guard. Setup adds it once, so one Codex trust
+# review covers it. A phase without the owned guard changes the hook
+# document only by the removal of that entry.
+
+# GUARD_SLOW_SECONDS is the wait of the slow mode. It is above the
+# timeout of the guard hook, 10 seconds, so the client stops the slow
+# entry before it runs the guard.
+GUARD_SLOW_SECONDS=15
+
+# guard_vars sets the client parts of the guard scenario: the hook
+# document, the marker of the owned guard, and the matcher of the guard
+# spec. The values follow the guard hook specs that init writes.
+guard_vars() {
+    if [ "$CLIENT" = claude ]; then
+        GUARD_DOC=$REPO/.claude/settings.json
+        GUARD_MARKER="lessons --guard --hook"
+        GUARD_MATCHER="Edit|Write|MultiEdit"
+    else
+        GUARD_DOC=$REPO/.codex/hooks.json
+        GUARD_MARKER="lessons --guard --hook --client codex"
+        GUARD_MATCHER=apply_patch
+    fi
+}
+
+# guard_setup creates the scratch repository of the guard scenario. It
+# commits the fixture files and writes the lessons.yaml variants.
+# `seamark init --lesson-checks enforce` installs the guard and the
+# post-edit hooks of the round binary there. Setup then adds the
+# observer entries and the indirection entry, and keeps a copy of the
+# hook document for the phases.
+guard_setup() {
+    guard_vars
+    new_repo "$REPO"
+    mkdir -p "$REPO/sentinel" "$REPO/notes" "$REPO/free" "$REPO/.seamark" "$OBS"
+
+    for f in edit update delete move; do
+        printf 'alpha\n' > "$REPO/sentinel/$f.txt"
+    done
+
+    for f in unknown failure update; do
+        printf 'alpha\n' > "$REPO/notes/$f.txt"
+    done
+
+    printf 'alpha\ngamma\n' > "$REPO/notes/multi.txt"
+    printf 'one\ntwo\nthree\n' > "$REPO/free/oracle.txt"
+    git -C "$REPO" add sentinel notes free
+    git -C "$REPO" commit -q -m 'guard fixture'
+
+    guard_lessons
+    cp "$INSTR/lessons-enforce.yaml" "$REPO/.seamark/lessons.yaml"
+    ok "fixture files under sentinel/, notes/, and free/; one enforce pin on sentinel/ and one on notes/"
+
+    # Setup refuses enforce on a known-bad state. The refusal names the
+    # reason, so the script shows it and stops.
+    if ! "$BIN" -C "$REPO" init --client "$CLIENT" --lesson-checks enforce > "$OUT/init.txt" 2>&1; then
+        fail "init --lesson-checks enforce refused: $(tail -1 "$OUT/init.txt")"
+        summary
+    fi
+
+    ok "init --client $CLIENT --lesson-checks enforce installed the guard and the post-edit hooks"
+
+    # `seamark status` reads the index, so the capability reports of the
+    # phases need one.
+    "$BIN" -C "$REPO" index > "$OUT/index.txt" 2>&1
+    ok "index built for the capability reports of seamark status"
+
+    cp "$SCRIPTS/capture-native-observer.py" "$INSTR/observer.py"
+    guard_prewrite_script
+
+    # The observer runs on PreToolUse too, because the guard reads that
+    # event. The indirection entry gets the matcher and the timeout of
+    # the guard spec, so the slow mode meets the timeout of the guard.
+    python3 -I - "$CLIENT" "python3 -I $INSTR/observer.py $OBS $CLIENT" "sh $INSTR/pre-write.sh" "$GUARD_MATCHER" "$GUARD_DOC" <<'PY'
+import json, os, sys
+
+client, observer, prewrite, matcher, path = sys.argv[1:6]
+tools = {"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionDenied"}
+
+if client == "claude":
+    events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionDenied", "Stop",
+              "StopFailure", "SubagentStart", "SubagentStop", "PreCompact", "PostCompact",
+              "SessionStart", "SessionEnd"]
+else:
+    events = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStart",
+              "SubagentStop", "PreCompact", "PostCompact", "Interrupt", "SessionEnd"]
+
+doc = {"hooks": {}}
+if os.path.exists(path):
+    with open(path) as f:
+        doc = json.load(f)
+
+hooks = doc.setdefault("hooks", {})
+
+for e in events:
+    timeout = 3 if client == "codex" and e in ("Interrupt", "SessionEnd") else 10
+    entry = {"hooks": [{"type": "command", "command": observer, "timeout": timeout}]}
+    if e in tools:
+        entry["matcher"] = "*"
+    hooks.setdefault(e, []).append(entry)
+
+hooks.setdefault("PreToolUse", []).append(
+    {"matcher": matcher, "hooks": [{"type": "command", "command": prewrite, "timeout": 10}]})
+
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w") as f:
+    json.dump(doc, f, indent=2)
+PY
+    ok "instrumentation entries added beside the lesson hook entries"
+
+    cp "$GUARD_DOC" "$INSTR/hooks-enforce.json"
+    : > "$INSTR/scenario-guard"
+}
+
+# guard_lessons writes the three lessons.yaml variants into the
+# instrumentation directory. The check variant keeps the pins and sets
+# their mode to check. The broken variant names a check kind that no
+# release has, a tier-2 configuration error.
+guard_lessons() {
+    cat > "$INSTR/lessons-enforce.yaml" <<'YAML'
+# The synthetic lessons of the gate-5 guard recording
+# (scripts/capture-native.sh, CAPTURE_NATIVE_SCENARIO=guard).
+lesson_checks_version: 1
+checks:
+  frozen-sentinel:
+    kind: forbid-path-change/1
+  gate5-marker:
+    kind: no-added-pattern/1
+    pattern: 'GATE5-MARKER'
+pin:
+  - rule: frozen-sentinel
+    region: sentinel/
+    note: 'Gate-5 sentinel lesson. The files under sentinel/ stay as committed.'
+    mode: enforce
+    check: frozen-sentinel
+  - rule: no-gate5-marker
+    region: notes/
+    note: 'Gate-5 pattern lesson. No file under notes/ gets a line with the gate-5 marker.'
+    mode: enforce
+    check: gate5-marker
+YAML
+    sed 's/^    mode: enforce$/    mode: check/' "$INSTR/lessons-enforce.yaml" > "$INSTR/lessons-check.yaml"
+    sed 's|kind: forbid-path-change/1|kind: forbid-path-change/9|' "$INSTR/lessons-enforce.yaml" > "$INSTR/lessons-broken.yaml"
+}
+
+# guard_prewrite_script writes the indirection entry. The file
+# pre-write-mode selects what it does: off exits 0, report-only runs the
+# guard and discards its exit status, and slow waits GUARD_SLOW_SECONDS
+# and then runs the guard. Each guard run appends its mode and exit
+# status to pre-write.log. A slow run that the client stops at the
+# timeout appends nothing.
+guard_prewrite_script() {
+    cat > "$INSTR/pre-write.sh" <<EOF
+#!/bin/sh
+# Test instrumentation of the gate-5 guard scenario (scripts/capture-native.sh).
+mode=\$(cat '$INSTR/pre-write-mode' 2>/dev/null || echo off)
+case "\$mode" in
+    report-only)
+        '$BIN' $GUARD_MARKER
+        echo "report-only \$?" >> '$INSTR/pre-write.log'
+        exit 0 ;;
+    slow)
+        sleep $GUARD_SLOW_SECONDS
+        '$BIN' $GUARD_MARKER
+        status=\$?
+        echo "slow \$status" >> '$INSTR/pre-write.log'
+        exit \$status ;;
+esac
+exit 0
+EOF
+    printf 'off\n' > "$INSTR/pre-write-mode"
+}
+
+# guard_doc <form> writes one form of the hook document from the copy
+# that setup kept: enforce (the copy itself), no-guard (without the
+# owned guard entry), or inline-wrapper (the owned guard command with
+# "|| true" after it, a report-only wrapper that inspection detects).
+guard_doc() {
+    python3 -I - "$INSTR/hooks-enforce.json" "$GUARD_DOC" "$GUARD_MARKER" "$1" <<'PY'
+import json, shutil, sys
+
+saved, path, marker, form = sys.argv[1:5]
+
+if form == "enforce":
+    shutil.copyfile(saved, path)
+    sys.exit(0)
+
+with open(saved, encoding="utf-8") as f:
+    doc = json.load(f)
+
+entries = []
+for entry in doc.get("hooks", {}).get("PreToolUse", []):
+    hooks = []
+    for h in entry.get("hooks", []):
+        command = h.get("command", "")
+        if command.endswith(" " + marker):
+            if form == "no-guard":
+                continue
+            h = dict(h, command=command + " || true")
+        hooks.append(h)
+    if hooks:
+        entries.append(dict(entry, hooks=hooks))
+
+doc["hooks"]["PreToolUse"] = entries
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(doc, f, indent=2)
+PY
+}
+
+# guard_capability <phase> appends the lesson-check report of
+# `seamark status --json` to guard-capability.jsonl. The report shows
+# the capability state of the phase before its runs.
+guard_capability() {
+    "$BIN" -C "$REPO" status --json > "$OUT/status-$1.json" 2> /dev/null || true
+    python3 -I - "$OUT/status-$1.json" "$1" "$OUT/guard-capability.jsonl" <<'PY'
+import json, sys
+
+src, phase, dst = sys.argv[1:4]
+try:
+    with open(src, encoding="utf-8") as f:
+        report = json.load(f).get("lesson_checks")
+except ValueError:
+    report = None
+
+with open(dst, "a", encoding="utf-8") as w:
+    w.write(json.dumps({"phase": phase, "lesson_checks": report}) + "\n")
+PY
+}
+
+# guard_restore puts back the enforce setup: the enforce lessons.yaml,
+# the hook document that setup kept, and the indirection entry off.
+guard_restore() {
+    cp "$INSTR/lessons-enforce.yaml" "$REPO/.seamark/lessons.yaml"
+    guard_doc enforce
+    printf 'off\n' > "$INSTR/pre-write-mode"
+}
+
+# guard_phase <phase> sets up one phase (see the list above) and appends
+# its capability report. A case in the current phase changes nothing.
+guard_phase() {
+    [ "$1" != "${GUARD_PHASE:-}" ] || return 0
+    GUARD_PHASE=$1
+    guard_restore
+
+    case "$1" in
+        check-pins)
+            cp "$INSTR/lessons-check.yaml" "$REPO/.seamark/lessons.yaml" ;;
+        broken-config)
+            cp "$INSTR/lessons-broken.yaml" "$REPO/.seamark/lessons.yaml" ;;
+        check-installed)
+            "$BIN" -C "$REPO" init --client "$CLIENT" --lesson-checks check > "$OUT/init-check.txt" 2>&1 ||
+                fail "init --lesson-checks check failed: $(tail -1 "$OUT/init-check.txt")" ;;
+        post-only)
+            guard_doc no-guard ;;
+        wrapper)
+            # Inspection reads an inline wrapper as report-only. No run
+            # uses that form, so its report is the only evidence of it.
+            guard_doc inline-wrapper
+            guard_capability wrapper-inline
+            guard_doc no-guard
+            printf 'report-only\n' > "$INSTR/pre-write-mode" ;;
+        slow)
+            guard_doc no-guard
+            printf 'slow\n' > "$INSTR/pre-write-mode" ;;
+    esac
+
+    guard_capability "$1"
+}
+
+# guard_reset puts the fixture directories back to the commit, so each
+# case starts from the same files.
+guard_reset() {
+    git -C "$REPO" checkout -q -- sentinel notes free
+    git -C "$REPO" clean -fdq -- sentinel notes free
+}
+
+# guard_state <file> writes the state of the fixture directories: the
+# SHA-256 of every file, the text of every file under free/, and the git
+# status lines. A denied write leaves all three unchanged.
+guard_state() {
+    python3 -I - "$REPO" "$1" <<'PY'
+import hashlib, json, os, subprocess, sys
+
+repo, dst = sys.argv[1:3]
+dirs = ["sentinel", "notes", "free"]
+files, text = {}, {}
+
+for d in dirs:
+    for base, _, names in os.walk(os.path.join(repo, d)):
+        for name in names:
+            path = os.path.join(base, name)
+            rel = os.path.relpath(path, repo).replace(os.sep, "/")
+            with open(path, "rb") as f:
+                data = f.read()
+            files[rel] = hashlib.sha256(data).hexdigest()
+            if rel.startswith("free/"):
+                text[rel] = data.decode("utf-8", "replace")
+
+status = subprocess.run(["git", "-C", repo, "status", "--porcelain", "--untracked-files=all", "--"] + dirs,
+                        capture_output=True, text=True, check=True).stdout.splitlines()
+
+with open(dst, "w", encoding="utf-8") as f:
+    json.dump({"files": files, "text": text, "status": status}, f)
+PY
+}
+
+# guard_lines <file> prints the number of lines of a file, or 0 when the
+# file is absent.
+guard_lines() {
+    if [ -f "$1" ]; then
+        wc -l < "$1" | tr -d ' '
+    else
+        echo 0
+    fi
+}
+
+# guard_begin keeps one guard recording to the runs of one call of the
+# script. It moves the hook payloads of an earlier call aside, notes the
+# length of the lesson-check audit stream, and starts empty case and
+# capability lists.
+guard_begin() {
+    guard_vars
+
+    if [ -n "$(find "$OBS" -name '*.json' 2>/dev/null | head -1)" ]; then
+        mv "$OBS" "$INSTR/observed-before-$(date +%s)"
+        mkdir -p "$OBS"
+        note "moved the hook payloads of an earlier call aside"
+    fi
+
+    AUDIT_LINES0=$(guard_lines "$REPO/.seamark/lesson-check-audit.jsonl")
+    : > "$OUT/guard-cases.jsonl"
+    : > "$OUT/guard-capability.jsonl"
+    GUARD_PHASE=
+}
+
+# guard_run <phase> <case> <prompt> runs one case. It sets up the phase,
+# resets the fixture, notes the state, runs one paid client session,
+# notes the state again, and appends the case line to guard-cases.jsonl.
+# The start time of the run assigns each later hook payload to it.
+guard_run() {
+    guard_phase "$1"
+    guard_reset
+    guard_state "$OUT/state-before.json"
+    audit_from=$(guard_lines "$REPO/.seamark/lesson-check-audit.jsonl")
+    log_from=$(guard_lines "$INSTR/pre-write.log")
+
+    gcase=$2
+    RUN=$(( $(wc -l < "$OUT/runs.txt") + 1 ))
+    perl -MTime::HiRes=time -e 'printf "%d\n", time * 1e9' >> "$OUT/runs.txt" 2>/dev/null || echo "$(date +%s)000000000" >> "$OUT/runs.txt"
+    printf '%s' "$3" > "$OUT/prompt-$RUN.txt"
+    : > "$OUT/reply-$RUN.txt"
+
+    case "$CLIENT" in
+        claude) guard_claude ;;
+        codex)  guard_codex ;;
+    esac
+
+    guard_state "$OUT/state-after.json"
+    python3 -I - "$OUT" "$RUN" "$gcase" "$GUARD_PHASE" "${AUDIT_LINES0:-0}" "$audit_from" \
+        "$(guard_lines "$REPO/.seamark/lesson-check-audit.jsonl")" "$INSTR/pre-write.log" "$log_from" <<'PY'
+import json, os, re, sys
+
+out, run, case, phase = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+base, audit_from, audit_to = int(sys.argv[5]), int(sys.argv[6]), int(sys.argv[7])
+log, log_from = sys.argv[8], int(sys.argv[9])
+
+
+def load(name):
+    with open(os.path.join(out, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+lines = []
+if os.path.isfile(log):
+    with open(log, encoding="utf-8") as f:
+        lines = [line.strip() for line in f][log_from:]
+
+# The reply is a corroboration only. A single word stays, for example
+# done, blocked, no-multiedit, or a check id. Other text does not.
+with open(os.path.join(out, "reply-%d.txt" % run), encoding="utf-8") as f:
+    reply = f.read().strip().strip(".").lower()
+
+record = {
+    "run": run, "case": case, "phase": phase,
+    "before": load("state-before.json"), "after": load("state-after.json"),
+    "audit": [audit_from - base, audit_to - base],
+    "pre_write": lines,
+    "reply": reply if re.fullmatch(r"[a-z0-9_-]{1,40}", reply) else "",
+}
+
+with open(os.path.join(out, "guard-cases.jsonl"), "a", encoding="utf-8") as w:
+    w.write(json.dumps(record) + "\n")
+PY
+}
+
+# guard_claude runs the prompt of the current case in a new print-mode
+# session. Bash is not an allowed tool, so a denied write has no shell
+# path around the guard. The final reply goes to reply-<run>.txt.
+guard_claude() {
+    set -- --model "$model" --output-format json --setting-sources project,local --strict-mcp-config \
+        --max-budget-usd 0.40 --debug hooks --debug-file "$OUT/run-$RUN-debug.log" \
+        --allowedTools Read Edit Write MultiEdit Agent Task --agents "$agents"
+
+    if (cd "$REPO" && claude -p "$@" < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN.json" 2> "$OUT/run-$RUN-stderr.txt"); then
+        line=$(python3 -I -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+with open(sys.argv[2], "w") as f:
+    f.write(str(d.get("result") or ""))
+print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "$OUT/run-$RUN.json" "$OUT/reply-$RUN.txt")
+        SESSION=${line%% *}
+        echo "  cost     run $RUN ($gcase): claude -p --model $model: total_cost_usd $(printf '%s' "$line" | cut -d' ' -f2)"
+
+        if [ "$(printf '%s' "$line" | cut -d' ' -f3)" = True ]; then
+            fail "run $RUN ($gcase) reported an error; see $OUT/run-$RUN.json"
+        else
+            ok "run $RUN ($gcase) finished (session $SESSION)"
+        fi
+    else
+        fail "run $RUN ($gcase) failed: $(tail -1 "$OUT/run-$RUN-stderr.txt")"
+    fi
+}
+
+# guard_codex runs the prompt of the current case in a new `codex exec`
+# thread, as timing_codex does. The final agent message goes to
+# reply-<run>.txt. It never passes --dangerously-bypass-hook-trust,
+# because trust stays the operator's decision.
+guard_codex() {
+    if (cd "$REPO" && PATH="$(dirname "$BIN"):$PATH" codex exec -m "$model" -c model_reasoning_effort=low --json \
+        -s workspace-write -C "$REPO" - < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN-events.jsonl" 2> "$OUT/run-$RUN-stderr.txt"); then
+        cat "$OUT/run-$RUN-events.jsonl" >> "$OUT/exec-events.jsonl"
+        line=$(python3 -I -c '
+import json, sys
+thread, usage, reply = "", {}, ""
+for raw in open(sys.argv[1]):
+    try:
+        e = json.loads(raw)
+    except ValueError:
+        continue
+    item = e.get("item") if isinstance(e.get("item"), dict) else {}
+    if e.get("type") == "thread.started":
+        thread = e.get("thread_id", "")
+    if e.get("type") == "turn.completed":
+        usage = e.get("usage", {})
+    if e.get("type") == "item.completed" and item.get("type") == "agent_message":
+        reply = item.get("text", "")
+with open(sys.argv[2], "w") as f:
+    f.write(reply)
+print(thread, " ".join("%s=%s" % kv for kv in sorted(usage.items())))' "$OUT/run-$RUN-events.jsonl" "$OUT/reply-$RUN.txt")
+        [ -z "${line%% *}" ] || SESSION=${line%% *}
+        echo "  cost     run $RUN ($gcase): codex exec -m $model -c model_reasoning_effort=low: ${line#* }"
+        ok "run $RUN ($gcase) finished (thread $SESSION)"
+    else
+        fail "run $RUN ($gcase) failed: $(tail -1 "$OUT/run-$RUN-stderr.txt")"
+    fi
+}
+
+# The prompt parts of the guard cases. The model must not retry a
+# blocked call or go around it, so the first attempt is the evidence.
+GUARD_STEPS='Do exactly these steps in order, and do not add steps.'
+GUARD_STOP='If a tool call is blocked or fails, do not retry it and do not try another tool or another way.
+Then reply with the single word: done, or with the single word: blocked when a tool call was blocked or failed.'
+GUARD_REPORT='Then reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came.'
+
+# record_claude_guard runs the thirteen Claude Code guard cases, each in
+# a new session. The writer subagent has only the Write tool. The phases
+# that change the hook document run last.
+record_claude_guard() {
+    model=${CAPTURE_NATIVE_CLAUDE_MODEL:-haiku}
+    agents='{"writer":{"description":"Creates the one file it is given with the given content.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Write"]}}'
+
+    guard_run enforce edit-violation "$GUARD_STEPS
+1. Use the Read tool to read the file sentinel/edit.txt.
+2. Use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+$GUARD_STOP"
+
+    guard_run enforce write-violation "$GUARD_STEPS
+1. Use the Write tool once to create the new file sentinel/written.txt with the single line: written
+$GUARD_STOP"
+
+    guard_run enforce multiedit-violation "$GUARD_STEPS
+1. Use the Read tool to read the file notes/multi.txt.
+2. Use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
+If you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: no-multiedit.
+$GUARD_STOP"
+
+    guard_run enforce subagent-violation "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"writer\" and ask it to create the new file sentinel/child.txt with the single line: child
+$GUARD_STOP"
+
+    guard_run enforce unknown-edit "$GUARD_STEPS
+1. Use the Read tool to read the file notes/unknown.txt.
+2. Use the Edit tool once on notes/unknown.txt with the old_string gamma and the new_string delta. The text gamma does not occur in the file; make the call anyway.
+$GUARD_STOP"
+
+    guard_run enforce n1-absent-edit "$GUARD_STEPS
+1. Use the Edit tool once on the file free/n1.txt with an empty old_string and the new_string: created
+The file does not exist yet. Do not read it first, and do not use the Write tool.
+$GUARD_STOP"
+
+    guard_run enforce permitted-write "$GUARD_STEPS
+1. Use the Write tool once to create the new file notes/permitted.txt with the single line: permitted
+$GUARD_STOP"
+
+    guard_run broken-config config-error "$GUARD_STEPS
+1. Use the Write tool once to create the new file free/config.txt with the single line: config
+$GUARD_STOP"
+
+    guard_run check-pins check-only "$GUARD_STEPS
+1. Use the Write tool once to create the new file sentinel/checked.txt with the single line: checked
+$GUARD_REPORT"
+
+    guard_run check-installed check-installed "$GUARD_STEPS
+1. Use the Write tool once to create the new file sentinel/baseline.txt with the single line: baseline
+$GUARD_REPORT"
+
+    guard_run post-only failure-reach "$GUARD_STEPS
+1. Use the Read tool to read the file notes/failure.txt.
+2. Use the Edit tool once on notes/failure.txt with the old_string gamma and the new_string delta. The text gamma does not occur in the file, so the call fails; make it anyway and do not retry it.
+$GUARD_REPORT"
+
+    guard_run wrapper report-only-wrapper "$GUARD_STEPS
+1. Use the Write tool once to create the new file sentinel/wrapped.txt with the single line: wrapped
+$GUARD_STOP"
+
+    guard_run slow slow-guard "$GUARD_STEPS
+1. Use the Write tool once to create the new file sentinel/slow.txt with the single line: slow
+$GUARD_STOP"
+
+    guard_restore
+}
+
+# record_codex_guard runs the thirteen Codex guard cases, each in a new
+# thread: the four apply_patch section kinds, the update content cases,
+# and the phase cases. The phases that change the hook document run last.
+record_codex_guard() {
+    model=${CAPTURE_NATIVE_CODEX_MODEL:-gpt-5.6-luna}
+
+    guard_run enforce add-violation "$GUARD_STEPS
+1. Use apply_patch once to add the new file sentinel/added.txt with the single line: added
+$GUARD_STOP"
+
+    guard_run enforce update-violation "$GUARD_STEPS
+1. Use apply_patch once to replace the line alpha with the line beta in sentinel/update.txt.
+$GUARD_STOP"
+
+    guard_run enforce delete-violation "$GUARD_STEPS
+1. Use apply_patch once to delete the file sentinel/delete.txt.
+$GUARD_STOP"
+
+    guard_run enforce move-violation "$GUARD_STEPS
+1. Use apply_patch once to move the file sentinel/move.txt to free/moved.txt without a change to its content: one Update File section with a Move to line and no hunk.
+$GUARD_STOP"
+
+    guard_run enforce multi-file-violation "$GUARD_STEPS
+1. Use one single apply_patch call that adds two new files: notes/multi-ok.txt with the single line: ok, and sentinel/multi.txt with the single line: multi.
+$GUARD_STOP"
+
+    guard_run enforce subagent-violation "$GUARD_STEPS
+1. Use spawn_agent to start one worker agent, and ask it to use apply_patch once to add the new file sentinel/child.txt with the single line: child. Tell it not to retry a blocked call.
+2. Wait for the agent with wait_agent, then close it.
+$GUARD_STOP"
+
+    guard_run enforce update-unknown "$GUARD_STEPS
+1. Use apply_patch once to replace the line alpha with the line beta in notes/update.txt.
+$GUARD_STOP"
+
+    guard_run enforce permitted-write "$GUARD_STEPS
+1. Use apply_patch once to add the new file notes/permitted.txt with the single line: permitted
+$GUARD_STOP"
+
+    guard_run enforce update-permitted "$GUARD_STEPS
+1. Use apply_patch once to replace the line two with the line TWO in free/oracle.txt.
+$GUARD_STOP"
+
+    guard_run broken-config config-error "$GUARD_STEPS
+1. Use apply_patch once to add the new file free/config.txt with the single line: config
+$GUARD_STOP"
+
+    guard_run check-pins check-only "$GUARD_STEPS
+1. Use apply_patch once to add the new file sentinel/checked.txt with the single line: checked
+$GUARD_REPORT"
+
+    guard_run wrapper report-only-wrapper "$GUARD_STEPS
+1. Use apply_patch once to add the new file sentinel/wrapped.txt with the single line: wrapped
+$GUARD_STOP"
+
+    guard_run slow slow-guard "$GUARD_STEPS
+1. Use apply_patch once to add the new file sentinel/slow.txt with the single line: slow
+$GUARD_STOP"
+
+    guard_restore
+}
+
+# guard_extras adds the evidence of the guard scenario to record.json:
+# the case list, the capability reports, the lesson-check audit records
+# of this call, the transcript records that hold a guard deny or a
+# post-edit reply, and the guard and post-edit hook results of the
+# Claude Code debug logs. The sanitizer replaces the text of attachments
+# and developer messages with a marker, so only this copy keeps the text
+# that the model got. Assistant and reasoning records stay out, because
+# the sanitizer removes thinking text.
+guard_extras() {
+    for f in guard-cases.jsonl guard-capability.jsonl; do
+        [ -f "$OUT/$f" ] || : > "$OUT/$f"
+    done
+
+    python3 -I - "$OUT/record.json" "$REPO/.seamark/lesson-check-audit.jsonl" "${AUDIT_LINES0:-0}" "$OUT" <<'PY'
+import glob, json, os, re, sys
+
+record_path, audit, start, out = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+needles = ("blocked by policy", "seamark post-edit lesson checks after this")
+markers = (("lessons --guard --hook", "guard"), ("lessons --baseline --hook", "baseline"),
+           ("lessons --verify --hook", "verify"), ("pre-write.sh", "pre-write"))
+finished = re.compile(r"Hooks: ([A-Za-z]+)(?::([^ ]*))? \[(.*?)\] finished with status (\d+) \((\d+)ms\)")
+stopped = re.compile(r"time ?out|timed out|cancel|abort|kill", re.IGNORECASE)
+
+with open(record_path, encoding="utf-8") as f:
+    record = json.load(f)
+
+
+def model_output(r):
+    """Return True for a record that the model wrote."""
+    msg = r.get("message")
+    if isinstance(msg, dict) and msg.get("role") == "assistant":
+        return True
+
+    p = r.get("payload")
+    if not isinstance(p, dict):
+        return False
+
+    item = p.get("item") if isinstance(p.get("item"), dict) else {}
+    return p.get("role") == "assistant" or p.get("type") in ("reasoning", "agent_reasoning") or \
+        item.get("type") == "Reasoning"
+
+
+# Every Codex case runs a thread of its own, and a subagent payload can
+# name no rollout. So every thread and agent ID of the payloads adds its
+# own rollout, as in timing_extras.
+if record["client"] == "codex":
+    base = os.environ.get("CODEX_HOME") or os.path.join(record["home"], ".codex")
+    ids = set()
+    for name in glob.glob(os.path.join(record["observed"], "*.json")):
+        if name.endswith(".meta.json"):
+            continue
+        with open(name, encoding="utf-8") as f:
+            payload = json.load(f)
+        ids.update(payload.get(k) for k in ("session_id", "agent_id") if payload.get(k))
+    found = set(record.get("transcripts", []))
+    for i in ids:
+        found.update(glob.glob(os.path.join(base, "sessions", "*", "*", "*", "rollout-*-%s.jsonl" % i)))
+    record["transcripts"] = sorted(found)
+
+context = os.path.join(out, "guard-context.jsonl")
+with open(context, "w", encoding="utf-8") as w:
+    for path in record.get("transcripts", []):
+        if not path.endswith(".jsonl"):
+            continue
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                r = json.loads(line)
+                text = json.dumps(r, ensure_ascii=False)
+                if any(n in text for n in needles) and not model_output(r):
+                    w.write(text + "\n")
+
+# The debug log of a Claude Code run names the exit status of each hook
+# command. A line about a stopped hook has no status, so its text stays.
+results = os.path.join(out, "guard-hooks.jsonl")
+with open(results, "w", encoding="utf-8") as w:
+    for path in record.get("debug_logs", []):
+        run = int(re.search(r"run-(\d+)-debug\.log$", path).group(1))
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                hook = next((name for marker, name in markers if marker in line), None)
+                if hook is None:
+                    continue
+                m = finished.search(line)
+                if m:
+                    entry = {"run": run, "hook": hook, "event": m.group(1), "tool": m.group(2) or "",
+                             "status": int(m.group(4)), "ms": int(m.group(5))}
+                elif stopped.search(line):
+                    entry = {"run": run, "hook": hook, "note": line.strip()[:300]}
+                else:
+                    continue
+                w.write(json.dumps(entry) + "\n")
+
+extras = record.setdefault("extras", {})
+for name in ("guard-cases.jsonl", "guard-capability.jsonl", "guard-context.jsonl", "guard-hooks.jsonl"):
+    extras[name] = os.path.join(out, name)
+
+# The audit stream can hold the records of an earlier call. Only the
+# lines after the count that guard_begin noted belong to this recording.
+tail = os.path.join(out, "lesson-check-audit.jsonl")
+with open(tail, "w", encoding="utf-8") as w:
+    if os.path.isfile(audit):
+        with open(audit, encoding="utf-8") as f:
+            w.writelines(list(f)[start:])
+extras["lesson-check-audit.jsonl"] = tail
+
+with open(record_path, "w", encoding="utf-8") as f:
+    json.dump(record, f, indent=1)
+PY
+
+    guard_identities
+}
+
+# guard_identities binds observed pre-write files to the audit digests.
+# The fresh fixture's canonical git root and index root must agree. A
+# mismatch refuses collection; no alternate identity or hash is tried.
+guard_identities() {
+    python3 -I - "$OUT/record.json" <<'PY'
+import glob, hashlib, json, os, sqlite3, subprocess, sys
+from pathlib import Path
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    record = json.load(f)
+repo, observed = record["repo"], record["observed"]
+git_root = subprocess.run(["git", "-C", repo, "rev-parse", "--show-toplevel"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+db_path = Path(repo, ".seamark", "index.db")
+with sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True) as db:
+    row = db.execute("SELECT value FROM meta WHERE key = 'repo_root'").fetchone()
+if repo != os.path.realpath(repo) or git_root != repo or row != (repo,):
+    sys.exit("guard identity metadata requires the canonical fixture git/index root")
+
+out = os.path.dirname(sys.argv[1])
+with open(os.path.join(out, "guard-cases.jsonl"), encoding="utf-8") as f:
+    cases = [json.loads(line) for line in f if line.strip()]
+by_run = {c["run"]: c["case"] for c in cases}
+if len(by_run) != len(cases) or len(set(by_run.values())) != len(cases):
+    sys.exit("guard identity metadata requires unique case runs")
+
+metas = []
+for path in glob.glob(os.path.join(observed, "*.meta.json")):
+    with open(path, encoding="utf-8") as f:
+        meta = json.load(f)
+    meta["file"] = os.path.basename(path)[:-len(".meta.json")] + ".json"
+    metas.append(meta)
+metas.sort(key=lambda m: m["start_ns"])
+if len({m["start_ns"] for m in metas}) != len(metas):
+    sys.exit("guard identity metadata requires distinct observer timestamps")
+
+def compose(parts):
+    return "".join("%d:%s" % (len(p.encode("utf-8")), p) for p in parts)
+
+def digest(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+client = record["client"]
+tools = {"claude": {"Edit", "Write", "MultiEdit"}, "codex": {"apply_patch"}}[client]
+destination = os.path.join(out, "guard-identities.jsonl")
+with open(destination, "w", encoding="utf-8") as w:
+    for i, meta in enumerate(metas, 1):
+        if meta["event"] != "PreToolUse":
+            continue
+        run = 0
+        for n, start in enumerate(record["runs"], 1):
+            if meta["start_ns"] >= start:
+                run = n
+        if run not in by_run:
+            continue
+        with open(os.path.join(observed, meta["file"]), encoding="utf-8") as f:
+            payload = json.load(f)
+        session, call = payload.get("session_id"), payload.get("tool_use_id")
+        agent, tool = payload.get("agent_id", ""), payload.get("tool_name")
+        if tool not in tools or not isinstance(session, str) or not session or \
+                not isinstance(call, str) or not call or not isinstance(agent, str):
+            continue
+        receiver = compose([session, agent] if agent else [session])
+        entry = {"file": "hooks/%03d-PreToolUse.json" % i, "run": run, "case": by_run[run],
+                 "client": client, "tool": tool, "lane": "child" if agent else "root",
+                 "session_sha256": digest(repo + "\0" + session),
+                 "match_sha256": digest(repo + "\0" + session + "\0" + call),
+                 "context_sha256": digest(compose(["context", repo, client, receiver]))}
+        w.write(json.dumps(entry) + "\n")
+record.setdefault("extras", {})["guard-identities.jsonl"] = destination
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(record, f, indent=1)
 PY
 }

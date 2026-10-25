@@ -30,9 +30,9 @@ var setModeConflicts = []string{
 	"dismiss", "prune", "retarget", "extract-triggers", "hook", "hook-reset",
 }
 
-// setModePaths is the line that names the supported operation paths of
-// an executable pin in milestone P1 (K6 step 6, plan row P1-g). No hook
-// exists yet, so only the explicit verification surfaces run a check.
+// setModePaths is the line that names the explicit verification paths
+// of an executable pin (K6 step 6, plan row P1-g). They run a check
+// whatever hooks are installed. The active lines name the hook paths.
 const setModePaths = "supported paths: seamark lessons --verify, seamark check --lessons, " +
 	"and the MCP check tool with lesson_checks: true"
 
@@ -123,6 +123,9 @@ func runLessonsSetMode(cmd *cobra.Command, opts *options, f setModeFlags) error 
 		return plan.GateErr
 	}
 
+	// The impact block prints on both routes, so the join comes first.
+	joinActiveState(plan, deps.Reg, ws.Root)
+
 	if !plan.Write {
 		printImpact(out, plan.Impact)
 
@@ -136,6 +139,34 @@ func runLessonsSetMode(cmd *cobra.Command, opts *options, f setModeFlags) error 
 	printSetMode(out, plan)
 
 	return nil
+}
+
+// joinActiveState replaces the fixed active text of milestone P1 with
+// the K10 join (K6 step 6, §5 row 41). The report reads the candidate
+// bytes of the plan, so it shows the mode that the pin requests after
+// the edit, also when the write gate is off and nothing is written. The
+// pin-ref is a prefix of the pin identity, so it names the same pin
+// before and after the edit. The impact block gets the one-line form,
+// and the active lines get one line per client. A candidate that does
+// not decode keeps the fixed text, because the plan validated it and
+// such a state is not reachable.
+//
+// SetModePlan.Active keeps its type of display lines (K-4). The CLI
+// fills it, because the engine has no binary identity.
+func joinActiveState(plan *maintain.SetModePlan, reg *integration.Registry, root string) {
+	cfg, errs, err := lessoncheck.Parse(plan.Change.After)
+	if err != nil {
+		return
+	}
+
+	report := integration.LessonCapabilityOf(reg.Inspect(root), cfg, errs, integration.SelfIdentity(version))
+	plan.Active = report.ActiveLines(plan.After.Ref)
+
+	for i := range plan.Impact {
+		if plan.Impact[i].PinRef == plan.Before.Ref {
+			plan.Impact[i].Active = report.ActiveText(plan.After.Ref)
+		}
+	}
 }
 
 // printSetMode prints the output of a written edit (K6 step 6): the

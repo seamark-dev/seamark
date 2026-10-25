@@ -44,7 +44,16 @@ func (e *engine) PlanMaintenance(req maintain.Request) (*maintain.Plan, error) {
 	}
 	defer func() { _ = st.Close() }()
 
-	return maintain.NewPlan(e.maintDeps(st, probe), req)
+	p, err := maintain.NewPlan(e.maintDeps(st, probe), req)
+	if err != nil {
+		return nil, err
+	}
+
+	if p.Change != nil {
+		e.joinActive(p.Impact, p.Change.After)
+	}
+
+	return p, nil
 }
 
 // CommitMaintenance commits a reviewed maintenance plan under the

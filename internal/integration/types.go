@@ -6,7 +6,8 @@
 // rules, or proposal validation; those stay in the shared engines.
 //
 // Dependency direction is deliberate. This package may import agent,
-// skills, approve, hooks, and gate contracts. It must not import the
+// skills, approve, hooks, and gate contracts, and the operation types of
+// lessoncheck, which the guard decoders return. It must not import the
 // CLI, doctor, status, MCP, report, or distill packages, because they
 // consume the registry and an import in the other direction is a cycle.
 package integration
@@ -21,6 +22,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -55,10 +57,29 @@ const (
 	CapabilityInvocation Capability = "invocation"
 )
 
+// The lesson-check capabilities (contract K10). They are in
+// Capabilities, so Declared lists them. They are not in
+// ConfiguredCapabilities: completeCapabilities adds an entry for each
+// element of that list to every inspection, and the TUI Overview of
+// every repository would then show new items, also without checks.
+// The lesson-check capability report shows their install state.
+const (
+	// CapabilityLessonVerify decodes the pre-edit and the post-edit
+	// events, so the hooks can record a baseline and verify the result.
+	CapabilityLessonVerify Capability = "lesson-verify"
+	// CapabilityLessonGuard decodes a pending edit completely and
+	// encodes a deny before the write.
+	CapabilityLessonGuard Capability = "lesson-guard"
+	// CapabilityLessonExploration decodes structured read events for
+	// exploration advice.
+	CapabilityLessonExploration Capability = "lesson-exploration"
+)
+
 // Capabilities lists every capability in stable presentation order.
 var Capabilities = []Capability{
 	CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants,
 	CapabilityEdits, CapabilityCommands, CapabilityResets, CapabilityInvocation,
+	CapabilityLessonVerify, CapabilityLessonGuard, CapabilityLessonExploration,
 }
 
 // ConfiguredCapabilities lists the capabilities that have project
@@ -93,6 +114,18 @@ type SetupSupport struct {
 	// ApproveTools means the adapter can add the exact per-tool grants.
 	// It is independent of RegisterMCP.
 	ApproveTools bool `json:"approve_tools"`
+	// LessonVerify means the adapter can install the lesson-check hooks
+	// of check mode: the pre-edit baseline and the post-edit
+	// verification (contract K10). init installs them only on an
+	// explicit `--lesson-checks` request.
+	LessonVerify bool `json:"lesson_verify"`
+	// LessonGuard means the adapter can install the pre-write guard of
+	// enforce mode. Enforce installs the post-edit verification too, so
+	// it needs LessonVerify.
+	LessonGuard bool `json:"lesson_guard"`
+	// LessonExploration means the adapter can install the exploration
+	// hook on a structured read.
+	LessonExploration bool `json:"lesson_exploration"`
 }
 
 // Client describes one coding agent. Built-in descriptors are assembled
@@ -132,9 +165,17 @@ type Client struct {
 	Invocation func(root string) (agent.CommandSpec, error)
 	// Explores translates native structured read events and the advice
 	// reply after them. It is nil for a client without a tested
-	// structured read path. Setup does not install the exploration hook
-	// yet, so no Capability constant declares it.
+	// structured read path. It declares CapabilityLessonExploration.
 	Explores ExploreHooks
+	// Guards translates a pending native edit into a complete operation
+	// and encodes the deny reply. It is nil for a client without a
+	// pre-write guard. It declares CapabilityLessonGuard.
+	Guards GuardHooks
+	// Completions translates the native event after an edit tool ran
+	// and encodes the post-edit findings. It is nil for a client without
+	// a post-edit observation. CapabilityLessonVerify needs it and
+	// Guards, because the check-mode baseline uses the guard decoder.
+	Completions CompletionHooks
 }
 
 // Supports reports whether the descriptor declares a capability.
@@ -156,6 +197,14 @@ func (c Client) Supports(capability Capability) bool {
 		return c.Resets != nil
 	case CapabilityInvocation:
 		return c.Invocation != nil
+	case CapabilityLessonVerify:
+		// The baseline before the edit comes from the guard decoder, and
+		// the observation after it from the completion decoder.
+		return c.Guards != nil && c.Completions != nil
+	case CapabilityLessonGuard:
+		return c.Guards != nil
+	case CapabilityLessonExploration:
+		return c.Explores != nil
 	default:
 		return false
 	}
@@ -255,6 +304,55 @@ type ExploreHooks interface {
 	DecodeExplore(payload []byte) (ExploreEvent, error)
 	EncodeExploreAdvice(text string, read bool) (HookReply, error)
 	ExploreMechanism() string
+}
+
+// GuardHooks translates a client's pending edit for the lesson-check
+// guard (contract K8). DecodeGuard turns one native payload into the
+// complete operation: every file it changes and the content it writes.
+// A decoder returns the complete operation or an error, never a part of
+// the edit, because a partial edit looks like a smaller edit and the
+// guard could then allow it (§6 A8).
+//
+// On success PathsComplete is true: the decoder named every path. The
+// paths are raw, as the client wrote them. The handler resolves them
+// with delivery.NormalizePaths and clears PathsComplete when that
+// rejects a path that can lie inside the worktree.
+//
+// DecodeGuard returns ErrNotApplicable for a tool outside the covered
+// list, ErrUnsupportedGrammar when the decoder cannot name every path,
+// and ErrMalformedEvent for every other request that it cannot read.
+// With an error, the Operation holds the event identity only: the
+// client, the tool, the session, the match, the directory, and the
+// receiver, when the payload names them. It holds no FileOp, and
+// PathsComplete is false. The handler needs that identity for the deny
+// text and the audit record.
+//
+// A decoder takes the client ID from its own descriptor, never from the
+// payload, so a payload cannot choose how it is judged.
+//
+// EncodeDeny renders the deny reasons in the native blocking form. The
+// reply blocks the tool, also when reasons is empty.
+type GuardHooks interface {
+	DecodeGuard(payload []byte) (lessoncheck.Operation, error)
+	EncodeDeny(reasons []string) HookReply
+}
+
+// CompletionHooks translates the native event after a covered edit
+// tool ran (contract K9). DecodeCompletion turns one native payload into
+// the outcome of the tool and the paths of its input. It returns
+// ErrNotApplicable for another event or another tool, and
+// ErrMalformedEvent or ErrUnsupportedGrammar when it cannot name every
+// path. With an error, the Completion holds the event identity and the
+// outcome when the payload names them, and no path: the post-edit record
+// still joins the guard record of the same call by its match.
+//
+// EncodeFindings renders the post-edit findings in the native reply.
+// outcome is the Completion.Outcome value, because a client can answer a
+// failed tool through another event name. The reply never blocks and
+// never asks the client to undo the edit (L122): the tool already ran.
+type CompletionHooks interface {
+	DecodeCompletion(payload []byte) (lessoncheck.Completion, error)
+	EncodeFindings(text string, outcome lessoncheck.ToolOutcome) (HookReply, error)
 }
 
 // ReceivingContext identifies the conversation that can see injected
@@ -610,6 +708,51 @@ type Inspection struct {
 	// adapter sees: trust it cannot read, a receiving context it does not
 	// identify, a second source that runs the same hook.
 	Findings []Finding `json:"findings,omitempty"`
+	// LessonHooks is what the adapter reads about its lesson-check and
+	// exploration hooks. It is nil when the hook sources hold no such
+	// hook, so a view without them survives a JSON round trip.
+	// LessonCheckPaths turns it into the paths of lesson-capability/1.
+	// It has no JSON form: status --json reports the capability report
+	// under its own key, so clients[] keeps its bytes (contract K10).
+	LessonHooks *LessonHookInspection `json:"-"`
+}
+
+// LessonHookInspection is the offline reading of one client's
+// lesson-check and exploration hook sources (contract K10). It holds the
+// facts only. LessonCheckPaths derives the reasons, and
+// lessoncheck.CapabilityReportOf derives the states. The document error
+// and the trust come from the other fields of the inspection, so the two
+// readings never disagree.
+type LessonHookInspection struct {
+	// Entries lists every owned lesson-check and exploration command of
+	// the hook document that setup manages, in document order.
+	Entries []LessonHookEntry
+	// ReportOnly is true when a definition that setup does not own runs
+	// the pre-write hook and discards its exit status. No deny of such a
+	// definition blocks.
+	ReportOnly bool
+	// HooksDisabled is true when the project configuration turns every
+	// hook of the client off.
+	HooksDisabled bool
+	// SourceUnreadable means a supplemental hook source cannot be read
+	// or parsed. Its effect on installed hooks is unknown.
+	SourceUnreadable bool
+}
+
+// LessonHookEntry is one owned lesson-check or exploration command.
+type LessonHookEntry struct {
+	// Stage is the hook stage of the spec that owns the command.
+	Stage lessoncheck.HookStage
+	// Event is the hook event of the entry, for example "PostToolUse".
+	Event string
+	// Marker is the owned marker that ends the command.
+	Marker string
+	// Binary is the binary path of the command, unquoted.
+	Binary string
+	// Tools lists the tools of the spec that the client runs the entry
+	// for. It is empty for an entry that never fires: another type, or
+	// a matcher that names none of the tools.
+	Tools []string
 }
 
 // FindingLevel grades a finding for presentation.
@@ -702,6 +845,13 @@ type ClientSetup struct {
 	// it off: that form never read those files, and it must stay as it
 	// was.
 	CheckHookSources bool
+	// LessonChecks is off, check, or enforce (contract K10). Empty
+	// preserves the installed mode, as GateMode does, so a run without
+	// the flag installs nothing new. It never changes GateMode.
+	LessonChecks string
+	// LessonExploration is off or on. Empty preserves the installed
+	// choice.
+	LessonExploration string
 }
 
 // SetupRequest is one complete setup run. Selection is resolved once,

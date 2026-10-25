@@ -61,8 +61,12 @@ const (
 
 // verifyFixture builds a committed repository under dir with
 // verifyLessonsYAML, the sentinel, and a .gitignore that ignores
-// generated/*.log. It returns the git top level, which is dir with its
-// symbolic links resolved, because the rerun commands name that path.
+// generated/*.log. The .gitignore also holds the .seamark carve-outs
+// that seamark init writes. Since milestone P4, every verification
+// appends a record to .seamark/lesson-check-audit.jsonl (contract K5),
+// and a later run must not see that file as a change. It returns the
+// git top level, which is dir with its symbolic links resolved, because
+// the rerun commands name that path.
 func verifyFixture(t *testing.T, dir string) (root string, sentinel *invokerSentinel) {
 	t.Helper()
 
@@ -73,7 +77,8 @@ func verifyFixture(t *testing.T, dir string) (root string, sentinel *invokerSent
 
 	verifyGit(t, dir, "init", "-q", "-b", "main")
 
-	verifyWrite(t, dir, ".gitignore", "generated/*.log\n")
+	verifyWrite(t, dir, ".gitignore",
+		"generated/*.log\n.seamark/*\n!.seamark/lessons.yaml\n!.seamark/config.yaml\n")
 	verifyWrite(t, dir, "generated/a.txt", "asset\n")
 	verifyWrite(t, dir, "src/handler.go", "package src\n\nfunc Handle() {}\n")
 	verifyWrite(t, dir, "docs/readme.md", "readme\n")
@@ -1069,7 +1074,8 @@ func TestLessonsVerifyFlagConflicts(t *testing.T) {
 // TestLessonsVerifyNeverInvokes proves AC-1 for lessons --verify: every
 // outcome, both output forms, explicit paths, and a configuration error
 // run without an agent, a model CLI, or the network. The command also
-// writes no file: no index, no audit, no state.
+// writes no index and no state. Its only write is the record of the
+// lesson-check audit stream (contract K5, milestone P4).
 func TestLessonsVerifyNeverInvokes(t *testing.T) {
 	root, sentinel := verifyFixture(t, t.TempDir())
 
@@ -1103,7 +1109,87 @@ func TestLessonsVerifyNeverInvokes(t *testing.T) {
 	after := treeListing(t, root)
 	delete(before, filepath.Join(root, ".seamark", "lessons.yaml"))
 	delete(after, filepath.Join(root, ".seamark", "lessons.yaml"))
-	assert.Equal(t, before, after, "lessons --verify writes no file")
+
+	// Since milestone P4, each run appends one record to the lesson-check
+	// audit stream (contract K5). The stream, its lock, and the entry of
+	// .seamark are the only writes.
+	assert.FileExists(t, filepath.Join(root, ".seamark", "lesson-check-audit.jsonl"))
+
+	for _, rel := range []string{".seamark", ".seamark/lesson-check-audit.jsonl", ".seamark/lesson-check-audit.jsonl.lock"} {
+		delete(before, filepath.Join(root, filepath.FromSlash(rel)))
+		delete(after, filepath.Join(root, filepath.FromSlash(rel)))
+	}
+
+	assert.Equal(t, before, after, "lessons --verify writes no file except the lesson-check audit stream")
+
+	sentinel.requireNoCall(t)
+}
+
+// TestLessonsVerifyWritesAuditRecord proves the milestone P4 additions
+// of contract K5 through the CLI: each run appends one verify record to
+// .seamark/lesson-check-audit.jsonl with the caller cli, and a failed
+// record gives one stderr line on an exit-0 path only. The failure
+// never changes the exit code, and the report keeps its own line.
+func TestLessonsVerifyWritesAuditRecord(t *testing.T) {
+	root, sentinel := verifyFixture(t, t.TempDir())
+
+	verifyWrite(t, root, "src/handler.go", "package src\n\n// Handle serves.\nfunc Handle() {}\n")
+
+	audit := filepath.Join(root, ".seamark", "lesson-check-audit.jsonl")
+
+	t.Run("one verify record per run", func(t *testing.T) {
+		_, err := verifyRun(t, root)
+		require.NoError(t, err)
+
+		data, err := os.ReadFile(audit)
+		require.NoError(t, err)
+
+		lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+		require.Len(t, lines, 1)
+
+		var rec lessoncheck.AuditRecord
+		require.NoError(t, json.Unmarshal([]byte(lines[0]), &rec))
+
+		assert.Equal(t, lessoncheck.AuditSchema, rec.Schema)
+		assert.Equal(t, lessoncheck.AuditVerify, rec.Kind)
+		assert.Equal(t, lessoncheck.CallerCLI, rec.Caller)
+		assert.Equal(t, lessoncheck.BoundaryWorkingTree, rec.Boundary)
+		assert.Equal(t, lessoncheck.SummaryPassed, rec.State)
+		assert.Equal(t, []string{"src/handler.go"}, rec.Paths)
+		assert.True(t, rec.PathsComplete)
+		require.Len(t, rec.Pins, 2)
+		assert.NotContains(t, string(data), "Handle serves", "a record holds no file content")
+
+		assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-audit.jsonl"), "the firing log gets nothing")
+	})
+
+	t.Run("a failed record on an exit-0 path prints one line", func(t *testing.T) {
+		target := filepath.Join(t.TempDir(), "target")
+		require.NoError(t, os.WriteFile(target, []byte("keep\n"), 0o644))
+		require.NoError(t, os.Remove(audit))
+		require.NoError(t, os.Symlink(target, audit))
+
+		want := []string{"seamark: lesson-check audit: unsafe path: " + audit + " is a symbolic link"}
+
+		for _, args := range [][]string{nil, {"--json"}} {
+			stdout, stderr, code := seamarkProcess(t, root, append([]string{"-C", root, "lessons", "--verify"}, args...)...)
+			assert.Equal(t, 0, code, "args %v: stdout: %s\nstderr: %s", args, stdout, stderr)
+			assert.Equal(t, want, seamarkLines(stderr), "args %v", args)
+			assert.NotContains(t, stdout, "lesson-check audit", "the line goes to stderr only")
+		}
+
+		data, err := os.ReadFile(target)
+		require.NoError(t, err)
+		assert.Equal(t, "keep\n", string(data), "nothing goes through the link")
+	})
+
+	t.Run("a failed record on a non-zero exit keeps the K5 line alone", func(t *testing.T) {
+		verifyEditAsset(t, root)
+
+		_, stderr, code := seamarkProcess(t, root, "-C", root, "lessons", "--verify")
+		assert.Equal(t, 2, code)
+		assert.Equal(t, []string{verifyViolationLine}, seamarkLines(stderr))
+	})
 
 	sentinel.requireNoCall(t)
 }

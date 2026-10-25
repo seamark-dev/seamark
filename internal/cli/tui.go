@@ -29,7 +29,10 @@ var errNotInteractive = errors.New("seamark tui needs an interactive terminal")
 // maintenance. The trigger extraction shares the executor and the
 // guarded save. So the text names no other difference. Pin authoring,
 // the lesson settings, and the selection sample have no command. So the
-// text names the files to edit by hand and the views that help.
+// text names the files to edit by hand and the views that help. The
+// lesson checks of Pins share the engines of lessons --verify and
+// lessons --set-mode. The console only shows the lesson-check hooks, so
+// the text names the init flags that install and remove them.
 const tuiGuidance = `seamark tui is an interactive, full-screen console (experimental).
 This session has no interactive terminal, so it did not start.
 
@@ -51,12 +54,19 @@ The same information and the closest actions are available as plain commands:
   seamark lessons --stats             lesson delivery statistics
   seamark lessons --list              mined rules and regions to copy into a pin that you write
   seamark lessons --file <path>       the lessons of one file (closest to the selection sample)
+  seamark lessons --verify            check the working tree against the lesson checks
+  seamark lessons --set-mode <mode> --pin <pin-ref>  set the mode of one pin (needs distill.write)
+  seamark init --client <claude|codex> --lesson-checks <off|check|enforce>
+                                      install, switch, or remove the lesson-check hooks
+  seamark init --client <claude|codex> --lesson-exploration <off|on>
+                                      install or remove the exploration hook
 
 Settings live in .seamark/config.yaml: agent.cli, distill.write,
 reviews.window_days, index.generated, and index.exclude.
 Lesson delivery and mutes live in .seamark/lessons.yaml: threshold,
 pin_budget, change_budget, hook_delivery, and mute.
 Pins that you write live there too, in the pin: list.
+Check definitions live there under checks:; key M in Pins edits one.
 `
 
 func newTUICmd(opts *options) *cobra.Command {

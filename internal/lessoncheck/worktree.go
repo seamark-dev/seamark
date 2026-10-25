@@ -409,6 +409,9 @@ func (r *treeReader) objectFormat() string {
 // reads every '2' record as a move, so a copy would hide its added
 // lines (review fix snapshot-git:F1).
 //
+// The default selection drops the untracked records of the audit files
+// (ownStatePath) before the parse and the digest.
+//
 // The digest holds the stdout of each call and the census result, so
 // the revalidation (contract K5) also sees a directory that becomes
 // unreadable after the read. It does not hold the stderr of git, because
@@ -420,6 +423,14 @@ func (r *treeReader) statusRecords(selected []string) (records []statusRecord, s
 		"--untracked-files=all", "--ignored=no", "--ignore-submodules=none", "--find-renames")
 	if !ok {
 		return nil, "", false
+	}
+
+	// The default selection leaves out the untracked audit files that
+	// Verify itself writes (review fix R-8). The digest leaves them out
+	// too, so the write of a record never makes an earlier result stale.
+	// A tracked audit file and an explicit selection keep every record.
+	if len(selected) == 0 {
+		out.Stdout = withoutUntracked(out.Stdout, ownStatePath)
 	}
 
 	records, err := parseStatusV2(out.Stdout)

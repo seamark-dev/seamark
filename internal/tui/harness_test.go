@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/pinfile"
@@ -97,6 +99,22 @@ type fakeServices struct {
 	planAuthor        func(maintain.AuthorRequest) (*maintain.AuthorPlan, error)
 	commitAuthor      func(*maintain.AuthorPlan) (maintain.AuthorResult, error)
 
+	// planCheckDef and commitCheckDef answer the check-definition
+	// authoring (contract K1); nil answers with an empty plan and an
+	// empty result.
+	planCheckDef   func(maintain.CheckDefRequest) (*maintain.CheckDefPlan, error)
+	commitCheckDef func(*maintain.CheckDefPlan) (maintain.AuthorResult, error)
+
+	// lessonCapability is the lesson-capability/1 report (contract K10).
+	// The zero value lists no client and no pin.
+	lessonCapability lessoncheck.CapabilityReport
+	// verifyLessons answers a verification (contract K5). nil answers
+	// with an error, so no test reads an unscripted result as a pass.
+	verifyLessons func(context.Context, []string) (*lessoncheck.Verification, error)
+	// revalidateLessons answers a revalidation. nil answers stale, so no
+	// test reads an unscripted result as fresh.
+	revalidateLessons func(context.Context, *lessoncheck.Verification) (lessoncheck.Freshness, error)
+
 	// sample answers a selection sample. nil answers with an unavailable
 	// view, so no test reads an unscripted sample as zero lessons.
 	sample func(services.SampleRequest) services.SampleView
@@ -122,6 +140,7 @@ var (
 	_ services.Learning    = (*fakeServices)(nil)
 	_ services.Maintenance = (*fakeServices)(nil)
 	_ services.Settings    = (*fakeServices)(nil)
+	_ services.Checks      = (*fakeServices)(nil)
 )
 
 func newFake() *fakeServices {
@@ -448,6 +467,57 @@ func (f *fakeServices) CommitAuthor(p *maintain.AuthorPlan) (maintain.AuthorResu
 	}
 
 	return f.commitAuthor(p)
+}
+
+func (f *fakeServices) PlanCheckDef(req maintain.CheckDefRequest) (*maintain.CheckDefPlan, error) {
+	f.record("PlanCheckDef")
+
+	if f.planCheckDef == nil {
+		return &maintain.CheckDefPlan{Request: req, Root: f.root}, nil
+	}
+
+	return f.planCheckDef(req)
+}
+
+func (f *fakeServices) CommitCheckDef(p *maintain.CheckDefPlan) (maintain.AuthorResult, error) {
+	f.record("CommitCheckDef")
+
+	if f.commitCheckDef == nil {
+		return maintain.AuthorResult{}, nil
+	}
+
+	return f.commitCheckDef(p)
+}
+
+// LessonCapability is a read: it counts the call and returns the field.
+func (f *fakeServices) LessonCapability([]integration.Inspection) lessoncheck.CapabilityReport {
+	f.count("LessonCapability")
+
+	return f.lessonCapability
+}
+
+// VerifyLessons appends an audit record in the engine, so the fake
+// records it as a call, not as a read.
+func (f *fakeServices) VerifyLessons(ctx context.Context, paths []string) (*lessoncheck.Verification, error) {
+	f.record("VerifyLessons")
+
+	if f.verifyLessons == nil {
+		return nil, errors.New("fake: no scripted verification")
+	}
+
+	return f.verifyLessons(ctx, paths)
+}
+
+// RevalidateLessons writes nothing in the engine, so the fake counts it
+// as a read.
+func (f *fakeServices) RevalidateLessons(ctx context.Context, v *lessoncheck.Verification) (lessoncheck.Freshness, error) {
+	f.count("RevalidateLessons")
+
+	if f.revalidateLessons == nil {
+		return lessoncheck.FreshnessStale, nil
+	}
+
+	return f.revalidateLessons(ctx, v)
 }
 
 func (f *fakeServices) Sample(req services.SampleRequest) services.SampleView {

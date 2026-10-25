@@ -12,17 +12,24 @@ import (
 const CodexID = "codex"
 
 // codexClient registers Codex setup, hook codecs, and one-shot invocation.
+// It has guard and completion codecs for apply_patch. It has no explore
+// codec, because Codex reports no structured read event.
 func codexClient() Client {
 	return Client{
-		ID:         CodexID,
-		Name:       "Codex",
-		SkillDirs:  []string{skills.AgentsDir},
-		Setup:      codexSetup{},
-		SetupOps:   SetupSupport{Hooks: true, GateHook: true, RegisterMCP: true, ApproveTools: true},
-		Edits:      codexEdits{},
-		Commands:   codexCommands{},
-		Resets:     codexResets{},
-		Invocation: codexInvocation,
+		ID:        CodexID,
+		Name:      "Codex",
+		SkillDirs: []string{skills.AgentsDir},
+		Setup:     codexSetup{},
+		SetupOps: SetupSupport{
+			Hooks: true, GateHook: true, RegisterMCP: true, ApproveTools: true,
+			LessonVerify: true, LessonGuard: true,
+		},
+		Edits:       codexEdits{},
+		Commands:    codexCommands{},
+		Resets:      codexResets{},
+		Guards:      codexGuards{},
+		Completions: codexCompletions{},
+		Invocation:  codexInvocation,
 	}
 }
 

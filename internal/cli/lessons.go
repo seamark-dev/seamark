@@ -37,6 +37,8 @@ func newLessonsCmd(opts *options) *cobra.Command {
 		hookMode        bool
 		hookReset       bool
 		explore         bool
+		guard           bool
+		baseline        bool
 		hookClient      string
 		list            bool
 		stats           bool
@@ -89,6 +91,10 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    no violation; 2: a violation; 1: a result is
                    unknown, the files changed during the check, or the
                    configuration is invalid. No agent call, no network.
+                   With --hook: read an agent's event after an edit tool
+                   ran and check the actual result of that edit against
+                   its state before the edit. It reports findings to the
+                   agent, never undoes the edit, and always exits 0.
   --prepare <path>...
                    before you construct a change: the pins, mined
                    lessons, and checks that apply to these paths, each
@@ -150,6 +156,14 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    file that the agent just read. The main conversation
                    gets each lesson once until it compacts. Its state is
                    separate, so it never hides an edit reminder.
+  --guard          with --hook: read a pending edit event from stdin and
+                   check the edit against the enforce pins before the
+                   tool writes. A violation, an edit that the check
+                   cannot evaluate, or an invalid lessons.yaml denies
+                   the edit (exit 2). No agent call, no network.
+  --baseline       with --hook: read a pending edit event from stdin and
+                   store the state before the edit for the check after
+                   it. Never denies the edit. No agent call, no network.
 
 --hook is read-only and offline: no network, no re-indexing, silent when
 a file has no lessons.`,
@@ -185,6 +199,20 @@ a file has no lessons.`,
 			// no other mode, so a granted --file or --region prefix never
 			// reaches the exploration hook.
 			if err := exploreFlagError(cmd, explore, hookMode); err != nil {
+				return err
+			}
+
+			// --guard and --baseline are checked next, for the same reason:
+			// each needs --hook and combines with no other mode, so a call
+			// with another mode never reaches a pre-edit hook.
+			if err := preEditFlagError(cmd, guard, baseline, hookMode); err != nil {
+				return err
+			}
+
+			// The plain --hook and --hook-reset calls are checked last: a
+			// granted --file, --region, --list, or --stats prefix never
+			// reaches an advisory hook (P3 review ruling R3).
+			if err := hookFlagError(cmd, hookMode, hookReset); err != nil {
 				return err
 			}
 
@@ -232,12 +260,12 @@ a file has no lessons.`,
 			// --client selects the native event format of a hook run. The
 			// inference agent of --distill is a separate setting, agent.cli.
 			// A user can take one for the other, so the error names both.
-			// --explore needs --hook, so the --hook check covers it. The
-			// text is the milestone P3 form of contracts §4.1: milestone P4
-			// adds --guard, --baseline, and --verify --hook (§4.2 subset rule).
+			// --guard, --baseline, --explore, and --verify --hook need
+			// --hook, so the --hook check covers them. The text is the
+			// final form of contracts §4.1.
 			if hookClient != "" && !hookMode && !hookReset {
-				return fmt.Errorf("--client applies to --hook, --hook-reset, and --explore only; " +
-					"the agent that --distill runs is agent.cli in .seamark/config.yaml")
+				return fmt.Errorf("--client applies to --hook, --hook-reset, --guard, --baseline, --explore, " +
+					"and --verify --hook only; the agent that --distill runs is agent.cli in .seamark/config.yaml")
 			}
 
 			// `--apply p1, p2` is natural typing; the shell splits the
@@ -254,6 +282,19 @@ a file has no lessons.`,
 				// Before --hook: --explore --hook reads a read event, never
 				// an edit event.
 				return runLessonsExplore(cmd, opts, hookClient)
+			case guard:
+				// Before --hook: the guard fails closed, and the advisory
+				// edit hook fails open. The two never share a path (§6 A7,
+				// BRIEF rule 15).
+				return runLessonsGuard(cmd, opts, hookClient)
+			case baseline:
+				// Before --hook, for the same reason: the baseline handler
+				// stores state that the advisory edit hook never writes.
+				return runLessonsBaseline(cmd, opts, hookClient)
+			case verify && hookMode:
+				// Before --hook: --verify --hook reads a completion event and
+				// checks the actual result of the edit (contract K9).
+				return runLessonsVerifyHook(cmd, opts, hookClient)
 			case hookMode:
 				return runLessonsHook(cmd, opts, hookClient)
 			case hookReset:
@@ -309,7 +350,8 @@ a file has no lessons.`,
 	cmd.Flags().StringArrayVar(&files, "file", nil,
 		"repo-relative (or absolute) path to look up; with --verify, a path to check (repeatable)")
 	cmd.Flags().BoolVar(&verify, "verify", false,
-		"check the working tree against the executable pins (mode check or enforce); exit 2 on a violation")
+		"check the working tree against the executable pins (mode check or enforce); exit 2 on a violation; "+
+			"with --hook, check the actual result of one agent edit")
 	cmd.Flags().BoolVar(&prepare, "prepare", false,
 		"print the lessons, pins, and checks of the paths you give before you construct a change (no agent call)")
 	cmd.Flags().BoolVar(&asJSON, "json", false,
@@ -330,6 +372,10 @@ a file has no lessons.`,
 	_ = cmd.Flags().MarkHidden("hook-reset")
 	cmd.Flags().BoolVar(&explore, "explore", false,
 		"with --hook: read an agent's structured read event from stdin and emit the lessons of the read file")
+	cmd.Flags().BoolVar(&guard, "guard", false,
+		"with --hook: check an agent's pending edit against the enforce pins before the write; a violation denies it (exit 2)")
+	cmd.Flags().BoolVar(&baseline, "baseline", false,
+		"with --hook: store the state before an agent's pending edit for the check after it; never denies the edit")
 	cmd.Flags().StringVar(&hookClient, "client", "",
 		"with --hook: the agent whose hook event to read ("+strings.Join(integration.Builtin().IDs(), ", ")+
 			"); without it the event is a Claude Code event")

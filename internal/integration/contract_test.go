@@ -15,6 +15,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 )
 
 // thirdID is the test-only client's registry ID.
@@ -192,12 +193,164 @@ func checkClientContract(t *testing.T, c Client) {
 
 		assert.Regexp(t, clientIDPattern, c.Explores.ExploreMechanism(), "%s: explore mechanism name", c.ID)
 	}
+
+	if c.Guards != nil {
+		checkGuardContract(t, c)
+	}
+
+	if c.Completions != nil {
+		checkCompletionContract(t, c)
+	}
+}
+
+// checkGuardContract checks a pre-write guard codec (contract K8). A
+// deny always blocks with the reason on stderr and writes no stdout.
+// A payload that the codec cannot read is an error with no file
+// operation, and the error result names the descriptor's client, never
+// a client from the payload.
+func checkGuardContract(t *testing.T, c Client) {
+	t.Helper()
+
+	for _, reasons := range [][]string{{"lesson check denies"}, nil} {
+		reply := c.Guards.EncodeDeny(reasons)
+		assert.Equal(t, hookBlockExit, reply.ExitCode, "%s: a deny blocks (reasons %q)", c.ID, reasons)
+		assert.Empty(t, reply.Stdout, "%s: a deny writes no stdout (reasons %q)", c.ID, reasons)
+	}
+
+	assert.Equal(t, "lesson check denies", string(c.Guards.EncodeDeny([]string{"lesson check denies"}).Stderr),
+		"%s: the deny reason travels on stderr", c.ID)
+
+	for _, payload := range []string{`not json`, `{}`, `{"client": "other", "tool_name": ""}`} {
+		op, err := c.Guards.DecodeGuard([]byte(payload))
+		require.ErrorIs(t, err, ErrMalformedEvent, "%s: %s", c.ID, payload)
+		assert.Empty(t, op.Ops, "%s: an error carries no file operation (%s)", c.ID, payload)
+		assert.False(t, op.PathsComplete, "%s: an error never claims complete paths (%s)", c.ID, payload)
+		assert.Equal(t, c.ID, op.Client, "%s: the client comes from the descriptor (%s)", c.ID, payload)
+	}
+}
+
+// checkCompletionContract checks a post-edit completion codec (contract
+// K9). The findings reply never blocks, for every tool outcome, because
+// the tool already ran. A payload that the codec cannot read is an
+// error with no path, and it names the descriptor's client.
+func checkCompletionContract(t *testing.T, c Client) {
+	t.Helper()
+
+	for _, outcome := range []lessoncheck.ToolOutcome{
+		lessoncheck.ToolSucceeded, lessoncheck.ToolFailed, lessoncheck.ToolInterrupted,
+		lessoncheck.ToolDenied, lessoncheck.ToolUnknown,
+	} {
+		reply, err := c.Completions.EncodeFindings("finding", outcome)
+		require.NoError(t, err, "%s: findings encoding (%s)", c.ID, outcome)
+		assert.Zero(t, reply.ExitCode, "%s: post-edit findings never block (%s)", c.ID, outcome)
+		assert.Contains(t, string(reply.Stdout)+string(reply.Stderr), "finding",
+			"%s: the reply carries the text (%s)", c.ID, outcome)
+	}
+
+	completion, err := c.Completions.DecodeCompletion([]byte(`not json`))
+	require.ErrorIs(t, err, ErrMalformedEvent, "%s: a malformed completion", c.ID)
+	assert.Empty(t, completion.Paths, "%s: an error carries no path", c.ID)
+	assert.Equal(t, c.ID, completion.Client, "%s: the client comes from the descriptor", c.ID)
 }
 
 func TestBuiltinClientsSatisfyTheContract(t *testing.T) {
 	for _, c := range Builtin().Clients() {
 		t.Run(c.ID, func(t *testing.T) { checkClientContract(t, c) })
 	}
+}
+
+// TestBuiltinClientsDeclareLessonCheckCapabilities checks §5 row 117:
+// the three lesson-check capabilities join Capabilities and follow the
+// descriptor fields, but never ConfiguredCapabilities, so an inspection
+// and the support line stay as they were.
+func TestBuiltinClientsDeclareLessonCheckCapabilities(t *testing.T) {
+	lessonCaps := []Capability{CapabilityLessonVerify, CapabilityLessonGuard, CapabilityLessonExploration}
+
+	assert.Equal(t, []Capability{
+		CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants,
+		CapabilityEdits, CapabilityCommands, CapabilityResets, CapabilityInvocation,
+		CapabilityLessonVerify, CapabilityLessonGuard, CapabilityLessonExploration,
+	}, Capabilities, "the new names follow the existing ones")
+	assert.Equal(t, []string{"lesson-verify", "lesson-guard", "lesson-exploration"},
+		[]string{string(lessonCaps[0]), string(lessonCaps[1]), string(lessonCaps[2])}, "the K10 names are frozen")
+	assert.Equal(t, []Capability{
+		CapabilitySkills, CapabilityMCPRegistration, CapabilityToolGrants,
+		CapabilityEdits, CapabilityCommands, CapabilityResets,
+	}, ConfiguredCapabilities, "no lesson-check capability has a configured state")
+
+	claude, ok := Builtin().Lookup(ClaudeID)
+	require.True(t, ok)
+
+	codex, ok := Builtin().Lookup(CodexID)
+	require.True(t, ok)
+
+	assert.Subset(t, claude.Declared(), lessonCaps, "Claude Code has a guard, a completion, and an explore codec")
+	assert.Subset(t, codex.Declared(), []Capability{CapabilityLessonVerify, CapabilityLessonGuard})
+	assert.NotContains(t, codex.Declared(), CapabilityLessonExploration, "Codex reports no structured read")
+	assert.Equal(t, "skills, hooks, command gate, MCP registration, tool grants, inference", claude.DescribeSupport(),
+		"the support line does not change")
+
+	t.Run("verify needs the guard and the completion codec", func(t *testing.T) {
+		guardOnly := Client{ID: "guard-only", Name: "Guard only", Guards: claudeGuards{}}
+		completionOnly := Client{ID: "completion-only", Name: "Completion only", Completions: claudeCompletions{}}
+
+		assert.Equal(t, []Capability{CapabilityLessonGuard}, guardOnly.Declared())
+		assert.Empty(t, completionOnly.Declared(), "a completion without a baseline decoder verifies nothing")
+
+		for _, c := range []Client{guardOnly, completionOnly} {
+			_, err := NewRegistry(c)
+			require.NoError(t, err)
+			checkCapabilityViewsAgree(t, c)
+		}
+	})
+
+	t.Run("every pre-write path waits for its recording", func(t *testing.T) {
+		// No reviewed gate-5 recording exists, so no guard path claims a
+		// verified block (K10: never "enforced" for an unverified path).
+		for client, tools := range map[string][]string{
+			ClaudeID: {"Edit", "Write", "MultiEdit"},
+			CodexID:  {"apply_patch"},
+		} {
+			for _, tool := range tools {
+				for _, context := range []lessoncheck.PathContext{"root", "child"} {
+					evidence := GuardEvidence(client, tool, context)
+					assert.Equal(t, VerificationPending, evidence.Level, "%s %s %s", client, tool, context)
+					assert.Empty(t, evidence.ClientVersion, "the recording names the version it ran against")
+					assert.Contains(t, evidence.Surface, tool)
+					require.NoError(t, evidence.Validate())
+				}
+			}
+		}
+
+		// A writer without a guard path, a guard tool of another client,
+		// and an unknown context have no evidence at all.
+		for _, tc := range []struct{ client, tool, context string }{
+			{ClaudeID, "NotebookEdit", "root"},
+			{ClaudeID, "Bash", "root"},
+			{ClaudeID, "apply_patch", "root"},
+			{CodexID, "Edit", "root"},
+			{CodexID, "Bash", "child"},
+			{thirdID, "Edit", "root"},
+			{ClaudeID, "Edit", "unknown"},
+		} {
+			assert.Equal(t, VerificationEvidence{}, GuardEvidence(tc.client, tc.tool, lessoncheck.PathContext(tc.context)),
+				"%s %s %s", tc.client, tc.tool, tc.context)
+		}
+	})
+
+	t.Run("an inspection synthesizes no lesson-check entry", func(t *testing.T) {
+		root := t.TempDir()
+
+		for _, insp := range Builtin().Inspect(root) {
+			assert.Subset(t, insp.Declared, []Capability{CapabilityLessonVerify, CapabilityLessonGuard},
+				"%s: the declared list carries them", insp.ClientID)
+
+			for _, entry := range insp.Capabilities {
+				assert.NotContains(t, lessonCaps, entry.Capability,
+					"%s: the TUI Overview and status clients[].capabilities stay as they were", insp.ClientID)
+			}
+		}
+	})
 }
 
 func TestThirdClientNeedsOnlyADescriptorAndARegistration(t *testing.T) {

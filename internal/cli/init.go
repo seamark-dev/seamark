@@ -33,6 +33,10 @@ func newInitCmd(opts *options) *cobra.Command {
 		skillsOpt    skillsFlag
 		approveTools bool
 		clients      []string
+		// lessonChecks and lessonExploration are the two lesson-check
+		// flags; empty keeps the installed choice.
+		lessonChecks      string
+		lessonExploration string
 	)
 
 	cmd := &cobra.Command{
@@ -103,6 +107,19 @@ not support yet is reported, not skipped silently. Without --client,
 init behaves exactly as before. --client takes a bare --skills only:
 --skills=codex and the other values belong to the form without --client.
 
+--lesson-checks off|check|enforce installs, switches, or removes the
+lesson-check hooks of the hooked clients: check records a baseline
+before each covered edit and verifies the result after it; enforce also
+denies a covered violation before the write. --lesson-exploration on|off
+installs or removes the advice hook on a structured Read; Claude Code
+has one, and a client without it gets a note. Without these
+flags init keeps the installed choice and installs nothing new. Enforce
+needs a valid .seamark/lessons.yaml and a client with a pre-write guard;
+otherwise init stops before any write. The flags never change the gate
+mode. To roll back, run:
+
+  seamark init --lesson-checks off --lesson-exploration off
+
 Use --print to preview every change without writing anything.`,
 		// init takes no positional arguments. The one likely mistake,
 		// "--skills codex", parses as the bare flag plus a stray word
@@ -119,6 +136,10 @@ Use --print to preview every change without writing anything.`,
 			if gateMode != "" && gateMode != gateModeWarn && gateMode != gateModeEnforce {
 				return fmt.Errorf("init: --gate-mode must be %s or %s, got %q",
 					gateModeWarn, gateModeEnforce, gateMode)
+			}
+
+			if err := lessonCheckFlagError(cmd, lessonChecks, lessonExploration); err != nil {
+				return err
 			}
 
 			if skillsOpt.mode != "" && !slices.Contains(skills.Modes, skillsOpt.mode) {
@@ -141,13 +162,14 @@ Use --print to preview every change without writing anything.`,
 			run := initRun{
 				w: cmd.OutOrStdout(), root: root, bin: scaffold.BinaryPath(),
 				gateMode: gateMode, printOnly: printOnly, approveTools: approveTools,
+				lessonChecks: lessonChecks, lessonExploration: lessonExploration,
 			}
 
 			if len(clients) > 0 {
 				return runInitClients(run, clients, skillsOpt.requested)
 			}
 
-			return runInit(run.w, run.root, run.bin, gateMode, printOnly, skillsOpt.legacyMode(), approveTools)
+			return runInitLegacy(run, skillsOpt.legacyMode())
 		},
 	}
 
@@ -165,6 +187,11 @@ Use --print to preview every change without writing anything.`,
 	cmd.Flags().BoolVar(&approveTools, "approve-tools", false,
 		"let the seamark MCP tools run without prompts: Claude Code allow rules in .claude/settings.json, "+
 			"Codex per-tool approvals in .codex/config.toml (additive; never removes a setting)")
+	cmd.Flags().StringVar(&lessonChecks, "lesson-checks", "",
+		"lesson-check hooks: off (remove them), check (baseline before and verification after each covered edit), "+
+			"or enforce (also deny a covered violation before the write); omitted keeps the installed choice")
+	cmd.Flags().StringVar(&lessonExploration, "lesson-exploration", "",
+		"exploration advice hook on a structured Read: on or off; omitted keeps the installed choice")
 	cmd.Flags().StringArrayVar(&clients, "client", nil,
 		"set up this agent only ("+clientSupport(integration.Builtin())+"); repeat the flag for several. "+
 			"Omitted keeps the detection init always used")
@@ -256,19 +283,49 @@ type initRun struct {
 	gateMode     string
 	printOnly    bool
 	approveTools bool
+	// lessonChecks and lessonExploration are the lesson-check flags;
+	// empty keeps the installed choice (contract K10).
+	lessonChecks      string
+	lessonExploration string
 }
 
-// runInit is an init run without --client. skillsMode is one of
-// skills.Modes, or empty for "not requested". The run is translated
+// lessonCheckFlagError checks the values of the two lesson-check flags
+// (contract K10). An explicit empty value is an error too: the empty
+// intent means "keep the installed choice", and a script that passes an
+// unset variable must learn that its flag did nothing.
+func lessonCheckFlagError(cmd *cobra.Command, checks, exploration string) error {
+	switch {
+	case cmd.Flags().Changed("lesson-checks") &&
+		!slices.Contains([]string{hooks.LessonChecksOff, hooks.LessonChecksCheck, hooks.LessonChecksEnforce}, checks):
+		return fmt.Errorf("--lesson-checks takes off, check, or enforce, got %q", checks)
+	case cmd.Flags().Changed("lesson-exploration") &&
+		!slices.Contains([]string{hooks.LessonExplorationOff, hooks.LessonExplorationOn}, exploration):
+		return fmt.Errorf("--lesson-exploration takes off or on, got %q", exploration)
+	}
+
+	return nil
+}
+
+// runInit is an init run without --client and without a lesson-check
+// flag. skillsMode is one of skills.Modes, or empty for "not
+// requested".
+func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode string, approveTools bool) error {
+	return runInitLegacy(initRun{w: w, root: root, bin: bin, gateMode: gateMode, printOnly: printOnly, approveTools: approveTools},
+		skillsMode)
+}
+
+// runInitLegacy is an init run without --client. The run is translated
 // into the per-client intent it always had and then takes the same path
 // as an explicit selection, so there is one implementation of setup.
-func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode string, approveTools bool) error {
-	setups, err := integration.LegacySetups(root, skillsMode, approveTools, gateMode)
+// The lesson-check flags reach the clients that get hooks, and in this
+// form that is Claude Code only.
+func runInitLegacy(run initRun, skillsMode string) error {
+	setups, err := integration.LegacySetups(run.root, skillsMode, run.approveTools, run.gateMode)
 	if err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
 
-	run := initRun{w: w, root: root, bin: bin, gateMode: gateMode, printOnly: printOnly, approveTools: approveTools}
+	setups = integration.WithLessonChecks(setups, run.lessonChecks, run.lessonExploration)
 	reg := integration.Builtin()
 
 	return applyInit(run, reg, setups, legacyNotes{reg: reg, skillsRequested: skillsMode != ""})
@@ -282,6 +339,8 @@ func runInitClients(run initRun, clients []string, installSkills bool) error {
 	if err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
+
+	setups = integration.WithLessonChecks(setups, run.lessonChecks, run.lessonExploration)
 
 	return applyInit(run, reg, setups, selectedNotes{reg: reg, skillsRequested: installSkills})
 }

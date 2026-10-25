@@ -17,10 +17,90 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/hooks"
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
+	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
+
+// TestLessonsCheckImpactPreviews covers the installed capability of the
+// CLI retarget review before the command can write the candidate.
+func TestLessonsCheckImpactPreviews(t *testing.T) {
+	for _, installation := range []string{"absent", "unverified", "binary unavailable"} {
+		t.Run("retarget/"+installation, func(t *testing.T) {
+			root, sentinel := confirmChecksWorkspace(t, true)
+
+			if installation != "absent" {
+				binary := capabilitySeamark(t)
+				plan, err := integration.PlanSetup(integration.Builtin(), integration.SetupRequest{
+					Root: root, Binary: binary, Clients: []integration.ClientSetup{{
+						ClientID: integration.ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksEnforce,
+					}},
+				})
+				require.NoError(t, err)
+				_, err = integration.ApplySetup(plan, integration.ApplyOptions{})
+				require.NoError(t, err)
+				if installation == "binary unavailable" {
+					require.NoError(t, os.Remove(binary))
+				}
+			}
+
+			before, _ := maintainLessons(t, root)
+			ledger := maintainLedger(t, root, 0)
+			out, _, err := runErr(t, "-C", root, "lessons", "--retarget", "p1")
+			require.ErrorContains(t, err, "--confirm-checks")
+			assert.Contains(t, out, "scope repository-wide -> scripts")
+
+			switch installation {
+			case "absent":
+				assert.Contains(t, out, "active: "+lessoncheck.ActiveRequested)
+			case "unverified":
+				assert.Contains(t, out, activeEnforceBlock)
+			case "binary unavailable":
+				assert.Contains(t, out, "active: requested; inactive:")
+				assert.Contains(t, out, "binary-missing")
+			}
+
+			after, _ := maintainLessons(t, root)
+			assert.Equal(t, before, after)
+			assert.Equal(t, ledger, maintainLedger(t, root, 0))
+			sentinel.requireNoCall(t)
+		})
+	}
+}
+
+// TestLessonsCheckImpactCandidate proves the join reads candidate bytes
+// rather than the installed file or the old pin reference.
+func TestLessonsCheckImpactCandidate(t *testing.T) {
+	root := maintainWorkspace(t, nil)
+	maintainWriteLessons(t, root, proposalsChecksLessons, 0o644)
+	capabilityInstall(t, root, integration.ClientSetup{ClientID: integration.ClaudeID, LessonChecks: hooks.LessonChecksEnforce})
+	deps := maintain.Deps{Root: root, Reg: integration.Builtin()}
+
+	for _, tc := range []struct {
+		name, after, want string
+	}{
+		{"check mode and new scope", strings.ReplaceAll(strings.ReplaceAll(proposalsChecksLessons, "mode: enforce", "mode: check"), "region: internal/store", "region: scripts"), "claude checked"},
+		{"advisory", strings.ReplaceAll(proposalsChecksLessons, "mode: enforce", "mode: advisory"), lessoncheck.ActiveAdvisory},
+		{"invalid binding", strings.ReplaceAll(proposalsChecksLessons, "check: frozen-assets", "check: undefined"), "configuration-error"},
+		{"malformed", "pin: [", lessoncheck.ActiveRequested},
+		{"no candidate", "", lessoncheck.ActiveRequested},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &maintain.Plan{
+				Change: &pinfile.Change{After: []byte(tc.after)},
+				Impact: []lessoncheck.Impact{{Entry: 1, Active: lessoncheck.ActiveRequested}},
+			}
+			joinCheckImpact(p, deps)
+			assert.Contains(t, p.Impact[0].Active, tc.want)
+			got, _ := maintainLessons(t, root)
+			assert.Equal(t, proposalsChecksLessons, got)
+		})
+	}
+}
 
 // writersChecksLessons is the spec example of a check configuration
 // with one more, advisory pin and a tuning value. Every command below
@@ -348,3 +428,21 @@ func TestLessonsRetargetNeedsConfirmChecks(t *testing.T) {
 		sentinel.requireNoCall(t)
 	})
 }
+
+// proposalsChecksLessons holds an enforced pin with the provenance
+// comment of its applied row p1, and a hand-written advisory pin.
+const proposalsChecksLessons = `lesson_checks_version: 1
+checks:
+  frozen-assets:
+    kind: forbid-path-change/1
+pin:
+  # distilled by claude/v2 from 2 findings (seamark lessons --distill, p1)
+  - rule: wrap-sql-errors
+    region: internal/store
+    note: Wrap SQL errors with the query name.
+    mode: enforce
+    check: frozen-assets
+  - rule: hand-written
+    region: web
+    note: Keep this one.
+`

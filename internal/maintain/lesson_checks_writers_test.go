@@ -450,3 +450,256 @@ func TestRetargetShowsCheckImpact(t *testing.T) {
 		assert.Empty(t, p.Impact)
 	})
 }
+
+// modeAuthorLessons is checksAuthorLessons with a third pin: an advisory
+// pin without a check, at entry 3.
+var modeAuthorLessons = strings.Replace(checksAuthorLessons, "mute:\n",
+	"  - rule: plain\n    region: web\n    note: A plain advisory pin.\n"+"mute:\n", 1)
+
+// modeAuthorFixture is a workspace with modeAuthorLessons and the gate on.
+func modeAuthorFixture(t *testing.T) *fixture {
+	t.Helper()
+
+	f := newFixture(t, nil, "web/index.html")
+	f.write(modeAuthorLessons, 0o644)
+
+	return f
+}
+
+// editKeys returns the request of a lesson-check edit of ref. A nil
+// value leaves that key unset.
+func editKeys(ref pinfile.EntryRef, mode *lessoncheck.Mode, check *string) AuthorRequest {
+	req := AuthorRequest{Op: AuthorEdit, Ref: ref}
+
+	if mode != nil {
+		req.Mode, req.ModeSet = *mode, true
+	}
+
+	if check != nil {
+		req.Check, req.CheckSet = *check, true
+	}
+
+	return req
+}
+
+// TestAuthorEditSetsMode proves the K1 writer row "Manual edit" of
+// milestone P4 (AC-27). The form sets the mode and the check of one pin.
+// The planner routes them to the Rewrite keys of lessons --set-mode, so
+// only those lines change, and the plan shows the K1 impact block before
+// the save. A linked pin takes a mode edit too, as the command allows.
+func TestAuthorEditSetsMode(t *testing.T) {
+	enforce, check, advisory := lessoncheck.ModeEnforce, lessoncheck.ModeCheck, lessoncheck.ModeAdvisory
+	frozen, todo, none := "frozen-assets", "no-todo", ""
+
+	cases := []struct {
+		name, rule  string
+		mode        *lessoncheck.Mode
+		check       *string
+		old, new    string
+		pins        []string
+		impactMode  lessoncheck.Mode
+		impactCheck string
+		active      string
+		predicate   bool
+	}{
+		{
+			name: "enforce binds a check to an advisory pin", rule: "plain", mode: &enforce, check: &frozen,
+			old: "    note: A plain advisory pin.\n",
+			new: "    note: A plain advisory pin.\n    mode: enforce\n    check: frozen-assets\n",
+			pins: []string{
+				"Manual-Rule mode=enforce check=frozen-assets", "todo-free mode=check check=no-todo",
+				"plain mode=enforce check=frozen-assets",
+			},
+			impactMode: enforce, impactCheck: "frozen-assets", active: lessoncheck.ActiveRequested, predicate: true,
+		},
+		{
+			name: "advisory removes the mode and keeps the check", rule: "Manual-Rule", mode: &advisory,
+			old: "    mode: enforce\n    check: frozen-assets\n", new: "    check: frozen-assets\n",
+			pins: []string{
+				"Manual-Rule mode=advisory check=frozen-assets", "todo-free mode=check check=no-todo",
+				"plain mode=advisory check=",
+			},
+			impactMode: advisory, impactCheck: "frozen-assets", active: lessoncheck.ActiveAdvisory, predicate: true,
+		},
+		{
+			name: "advisory with an empty check removes both keys", rule: "Manual-Rule", mode: &advisory, check: &none,
+			old: "    mode: enforce\n    check: frozen-assets\n", new: "",
+			pins: []string{
+				"Manual-Rule mode=advisory check=", "todo-free mode=check check=no-todo", "plain mode=advisory check=",
+			},
+			impactMode: advisory, impactCheck: "frozen-assets", active: lessoncheck.ActiveAdvisory, predicate: true,
+		},
+		{
+			name: "a check edit keeps the mode", rule: "Manual-Rule", check: &todo,
+			old: "    check: frozen-assets\n  - rule: todo-free\n", new: "    check: no-todo\n  - rule: todo-free\n",
+			pins: []string{
+				"Manual-Rule mode=enforce check=no-todo", "todo-free mode=check check=no-todo", "plain mode=advisory check=",
+			},
+			impactMode: enforce, impactCheck: "no-todo", active: lessoncheck.ActiveRequested, predicate: true,
+		},
+		{
+			name: "check replaces enforce in place", rule: "Manual-Rule", mode: &check,
+			old: "    mode: enforce\n", new: "    mode: check\n",
+			pins: []string{
+				"Manual-Rule mode=check check=frozen-assets", "todo-free mode=check check=no-todo",
+				"plain mode=advisory check=",
+			},
+			impactMode: check, impactCheck: "frozen-assets", active: lessoncheck.ActiveRequested,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := modeAuthorFixture(t)
+
+			p := f.authorPlan(f.deps(), editKeys(f.ref(tc.rule, ""), tc.mode, tc.check))
+			require.True(t, p.Confirmable, "blocked: %v issues: %v", blockerLines(p), p.Issues)
+			assert.Equal(t, modeAuthorLessons, f.lessons(), "a plan writes nothing")
+
+			// The review shows the block of the edited pin before the save.
+			require.Len(t, p.Impact, 1)
+			im := p.Impact[0]
+			assert.Equal(t, tc.impactMode, im.Mode)
+			assert.Equal(t, tc.impactCheck, im.Check.ID)
+			assert.Equal(t, tc.active, im.Active)
+			assert.Equal(t, "scope unchanged", strings.TrimSpace(lessoncheck.ImpactLines(p.Impact)[1]))
+			assert.NotEqual(t, im.VersionBefore, im.VersionAfter, "the mode and the check are pin-version parts")
+			assert.Equal(t, tc.predicate, im.PredicateChanged,
+				"a binding change shows the predicate; check and enforce run the same checker")
+
+			res, err := CommitAuthor(f.deps(), p)
+			require.NoError(t, err)
+			require.NoError(t, res.Err)
+			assert.Equal(t, Written, res.Outcome)
+
+			want := strings.Replace(modeAuthorLessons, tc.old, tc.new, 1)
+			require.NotEqual(t, modeAuthorLessons, want, "the golden anchor must occur")
+			assert.Equal(t, want, f.lessons(), "only the mode and check lines change")
+			assert.Equal(t, tc.pins, pinChecks(t, f.lessons()))
+		})
+	}
+
+	t.Run("a linked pin takes a mode edit", func(t *testing.T) {
+		f := checkWritersFixture(t)
+
+		p := f.authorPlan(f.deps(), editKeys(f.ref("guard-scripts", ""), &check, nil))
+		require.True(t, p.Confirmable, "blocked: %v issues: %v", blockerLines(p), p.Issues)
+		require.Equal(t, pinfile.LinkLinked, p.Link)
+
+		_, err := CommitAuthor(f.deps(), p)
+		require.NoError(t, err)
+
+		assert.Equal(t, strings.Replace(checkWritersLessons, "    mode: enforce\n    check: no-todo\n",
+			"    mode: check\n    check: no-todo\n", 1), f.lessons())
+	})
+
+	t.Run("the gate-off preview carries the block", func(t *testing.T) {
+		f := modeAuthorFixture(t)
+		f.gate(false)
+
+		p := f.authorPlan(f.deps(), editKeys(f.ref("plain", ""), &enforce, &frozen))
+		assert.False(t, p.Confirmable)
+		require.Len(t, p.Impact, 1)
+		assert.Equal(t, BlockGate, p.Blockers[len(p.Blockers)-1].Kind)
+	})
+
+	t.Run("an equal mode and check change nothing", func(t *testing.T) {
+		f := modeAuthorFixture(t)
+
+		p := f.authorPlan(f.deps(), editKeys(f.ref("Manual-Rule", ""), &enforce, &frozen))
+		assert.True(t, p.NoOp)
+		assert.False(t, p.Confirmable)
+		assert.Empty(t, p.Impact)
+	})
+}
+
+// TestAuthorEditRefusesEnforceWithoutCheck proves the K1 writer rule for
+// the authoring form: the plan runs the strict check tier on the
+// candidate and blocks a candidate that fails it, before the save. An
+// executable mode without a check, an undefined check, and an error that
+// the file already holds all refuse. Nothing is written.
+func TestAuthorEditRefusesEnforceWithoutCheck(t *testing.T) {
+	enforce, check := lessoncheck.ModeEnforce, lessoncheck.ModeCheck
+	missing, none := "no-such-check", ""
+
+	cases := []struct {
+		name, rule string
+		mode       *lessoncheck.Mode
+		check      *string
+		text       string
+	}{
+		{
+			name: "enforce without a check", rule: "plain", mode: &enforce,
+			text: "the candidate does not validate: pin 3 (plain @ web): mode enforce requires check: <check-id> (and 0 more)",
+		},
+		{
+			name: "a check that checks does not define", rule: "plain", mode: &check, check: &missing,
+			text: `the candidate does not validate: pin 3 (plain @ web): check "no-such-check" is not defined under ` +
+				"checks (and 0 more)",
+		},
+		{
+			name: "an empty check on a check pin", rule: "todo-free", check: &none,
+			text: "the candidate does not validate: pin 2 (todo-free @ web): mode check requires check: <check-id> " +
+				"(and 0 more)",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := modeAuthorFixture(t)
+
+			p := f.authorPlan(f.deps(), editKeys(f.ref(tc.rule, ""), tc.mode, tc.check))
+			assert.False(t, p.Confirmable)
+			assert.Equal(t, []AuthorBlocker{{Kind: BlockCheck, Text: tc.text, Route: routeCheckDraft}}, p.Blockers)
+			assert.NotNil(t, p.After, "the review still shows the candidate")
+			require.Len(t, p.Impact, 1, "the impact shows before the strict tier refuses")
+
+			_, err := CommitAuthor(f.deps(), p)
+			require.ErrorIs(t, err, ErrNotConfirmable)
+			assert.Equal(t, modeAuthorLessons, f.lessons(), "nothing is written")
+		})
+	}
+
+	t.Run("an error that the file holds refuses every edit", func(t *testing.T) {
+		f := modeAuthorFixture(t)
+		invalid := strings.Replace(modeAuthorLessons, "    check: no-todo\n", "    check: no-todos\n", 1)
+		f.write(invalid, 0o644)
+
+		p := f.authorPlan(f.deps(), editNote(f.ref("plain", ""), "Another note."))
+		assert.False(t, p.Confirmable)
+		require.Len(t, p.Blockers, 1)
+		assert.Equal(t, BlockCheck, p.Blockers[0].Kind)
+		assert.Contains(t, p.Blockers[0].Text, `check "no-todos" is not defined under checks`)
+		assert.Equal(t, routeByHand, p.Blockers[0].Route)
+		assert.Empty(t, p.Impact, "an advisory pin gets no block")
+		assert.Equal(t, invalid, f.lessons())
+	})
+
+	t.Run("a mode outside the closed list is a field issue", func(t *testing.T) {
+		f := modeAuthorFixture(t)
+		bogus := lessoncheck.Mode("block")
+
+		p := f.authorPlan(f.deps(), editKeys(f.ref("plain", ""), &bogus, nil))
+		assert.False(t, p.Confirmable)
+		assert.Equal(t, []FieldIssue{{Field: FieldMode, Index: -1, Text: issueMode}}, p.Issues)
+		assert.Nil(t, p.After, "a blocking issue gets no candidate")
+	})
+
+	t.Run("a create with a mode or a check is a field issue", func(t *testing.T) {
+		f := modeAuthorFixture(t)
+
+		req := newPin("new-rule", "Guidance.", "web")
+		req.Mode, req.Check = enforce, "frozen-assets"
+
+		p := f.authorPlan(f.deps(), req)
+		assert.False(t, p.Confirmable)
+		assert.Equal(t, []FieldIssue{
+			{Field: FieldMode, Index: -1, Text: issueCreateCheck},
+			{Field: FieldCheck, Index: -1, Text: issueCreateCheck},
+		}, p.Issues)
+
+		req.Mode, req.Check = lessoncheck.ModeAdvisory, ""
+		p = f.authorPlan(f.deps(), req)
+		assert.True(t, p.Confirmable, "an advisory create is the K1 row: blocked: %v", blockerLines(p))
+	})
+}

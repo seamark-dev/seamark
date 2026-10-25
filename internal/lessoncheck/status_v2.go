@@ -90,6 +90,38 @@ func parseStatusV2(out []byte) ([]statusRecord, error) {
 	return records, nil
 }
 
+// withoutUntracked returns the status output without the untracked
+// records whose path drop accepts. The other tokens keep their bytes and
+// their order, so the digest of an output that holds no such record does
+// not change. A rename record owns the token after it: that token is a
+// source path and never a record of its own.
+func withoutUntracked(out []byte, drop func(path string) bool) []byte {
+	tokens := strings.Split(string(out), "\x00")
+
+	// The output ends with a NUL, so the last token is empty.
+	if n := len(tokens); n > 0 && tokens[n-1] == "" {
+		tokens = tokens[:n-1]
+	}
+
+	var kept strings.Builder
+
+	for i := 0; i < len(tokens); i++ {
+		tok := tokens[i]
+
+		switch {
+		case tok != "" && tok[0] == '2' && i+1 < len(tokens):
+			kept.WriteString(tok + "\x00" + tokens[i+1] + "\x00")
+
+			i++
+		case strings.HasPrefix(tok, "? ") && drop(tok[2:]):
+		default:
+			kept.WriteString(tok + "\x00")
+		}
+	}
+
+	return []byte(kept.String())
+}
+
 // statusFields splits a record header into n fields and checks the
 // submodule field and the path. The last field is the path.
 func statusFields(tok string, n int) ([]string, error) {

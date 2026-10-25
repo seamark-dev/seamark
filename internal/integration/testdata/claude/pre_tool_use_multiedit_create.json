@@ -1,0 +1,16 @@
+{
+  "session_id": "synthetic-claude-session-0001",
+  "transcript_path": "/home/user/.claude/projects/-workspace-repo/synthetic-claude-session-0001.jsonl",
+  "cwd": "/workspace/repo",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "MultiEdit",
+  "tool_use_id": "toolu_synthetic_0007",
+  "tool_input": {
+    "file_path": "/workspace/repo/docs/created-by-multiedit.md",
+    "edits": [
+      {"old_string": "", "new_string": "# Created\n\nDraft.\n"},
+      {"old_string": "Draft.", "new_string": "Final.", "replace_all": false}
+    ]
+  }
+}

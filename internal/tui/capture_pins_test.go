@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/pinfile"
@@ -61,7 +63,10 @@ func TestCapturePins(t *testing.T) {
 // and the details of a linked, an edited and an ambiguous pin. They also
 // show a label with every attention word, both history filters, the
 // comparison, the filters, the malformed file, the empty states, and
-// ASCII variants. Each scene starts on Lessons › Pins.
+// ASCII variants. The scenes 71c to 71i show the lesson checks: the
+// CHECK section, the keys M and V, the verification view, the
+// check-definition form and its review, and the Mode and Check rows of
+// the pin form. Each scene starts on Lessons › Pins.
 func pinsCaptureScenes() []captureScene {
 	over := func(in func() *maintain.Inspection) func() *fakeServices {
 		return func() *fakeServices {
@@ -102,7 +107,10 @@ func pinsCaptureScenes() []captureScene {
 	// keys presses named keys and single runes, and types any other
 	// text into the focused input.
 	keys := func(ks ...string) func(h *harness) {
-		named := map[string]bool{"enter": true, "down": true, "space": true, "esc": true, "tab": true}
+		named := map[string]bool{
+			"enter": true, "down": true, "up": true, "end": true, "space": true, "esc": true, "tab": true,
+			"backspace": true,
+		}
 
 		return func(h *harness) {
 			for _, k := range ks {
@@ -167,6 +175,14 @@ func pinsCaptureScenes() []captureScene {
 
 	return []captureScene{
 		{name: "70-pins-list", fake: pinsFake, drive: none},
+		{name: "71c-pins-check-section", fake: checkCaptureFake, drive: detail(1, 0, "Active")},
+		{name: "71d-pins-check-advisory", fake: checkCaptureFake, drive: detail(3, 0, "advisory-with-check")},
+		{name: "71e-pins-check-help", fake: checkCaptureFake, drive: keys("?")},
+		{name: "71f-pins-check-verify", fake: checkCaptureFake, drive: keys("V")},
+		{name: "71g-pins-check-definition", fake: checkCaptureFake, drive: keys("down", "M")},
+		{name: "71h-pins-check-definition-review", fake: checkCaptureFake, drive: keys("down", "M", "end", "enter",
+			"backspace", "backspace", "backspace", "backspace", "backspace", "backspace", "TODO|FIXME", "enter", "s")},
+		{name: "71i-pins-edit-mode", fake: checkCaptureFake, drive: keys("i", "end", "up", "enter")},
 		{name: "70b-pins-list-ascii", fake: over(pinsASCIIInspection), ascii: true, drive: none},
 		{name: "70c-pins-list-every-flag", fake: over(flags), drive: none},
 		// Pin 1 has current regions, an answered trigger question and no
@@ -217,5 +233,94 @@ func TestCapturePinsScenesAreNamed(t *testing.T) {
 		assert.GreaterOrEqual(t, n, 70, sc.name)
 		assert.LessOrEqual(t, n, 79, sc.name)
 		assert.True(t, strings.Contains(sc.name, "pins"), sc.name)
+	}
+}
+
+// checkCaptureFake is the fake of the lesson-check scenes: the real
+// inspection and capability join of checkLessonsYAML, a scripted
+// verification, and scripted definition and pin plans with the impact
+// of the engine. A capture has no test handle, so a fixture error stops
+// the run.
+func checkCaptureFake() *fakeServices {
+	f, err := checkFakeOf()
+	if err != nil {
+		panic(err)
+	}
+
+	impact := func(before, after string, entries ...int) []lessoncheck.Impact {
+		old, err := reviews.ParseConfig([]byte(before))
+		if err != nil {
+			panic(err)
+		}
+
+		next, err := reviews.ParseConfig([]byte(after))
+		if err != nil {
+			panic(err)
+		}
+
+		out, err := lessoncheck.ImpactOf(old, next, entries)
+		if err != nil {
+			panic(err)
+		}
+
+		return out
+	}
+
+	f.verifyLessons = func(context.Context, []string) (*lessoncheck.Verification, error) {
+		return checkCaptureVerification(f.pins), nil
+	}
+
+	// The review of M on the check pin widens the pattern of no-todo.
+	after := strings.Replace(checkLessonsYAML, `'TODO\(`+"'", "'TODO|FIXME'", 1)
+	f.planCheckDef = func(req maintain.CheckDefRequest) (*maintain.CheckDefPlan, error) {
+		return &maintain.CheckDefPlan{
+			Request: req, Root: f.root, Before: []byte(checkLessonsYAML), After: []byte(after),
+			Diff: "--- a/.seamark/lessons.yaml\n+++ b/.seamark/lessons.yaml\n@@ -5,3 +5,3 @@\n   no-todo:\n" +
+				"     kind: no-added-pattern/1\n-    pattern: 'TODO\\('\n+    pattern: 'TODO|FIXME'\n",
+			Added: 1, Removed: 1, Predicate: "no added line matches TODO|FIXME",
+			Impact: impact(checkLessonsYAML, after, 2, 3), Write: true, Confirmable: true,
+		}, nil
+	}
+
+	return f
+}
+
+// checkCaptureVerification is a fixed verification of the lesson-check
+// scenes: a violation of the enforce pin and a pass of the check pin.
+// Every value is fixed, so the frame is the same in every run.
+func checkCaptureVerification(in *maintain.Inspection) *lessoncheck.Verification {
+	enforce, check := in.Pins[0].Check, in.Pins[1].Check
+
+	return &lessoncheck.Verification{
+		Schema: "lesson-verification/1", Caller: lessoncheck.CallerTUI, Boundary: lessoncheck.BoundaryWorkingTree,
+		Baseline: lessoncheck.Baseline{Kind: lessoncheck.BaselineHead, Commit: strings.Repeat("a1b2c3d4", 5)},
+		Selection: lessoncheck.Selection{
+			Kind: lessoncheck.SelectionDefault, Description: "tracked changes against HEAD plus untracked nonignored files",
+			Excludes: []string{"ignored files not named by --file", "writes outside this snapshot"},
+		},
+		Freshness: lessoncheck.FreshnessFresh, PathsComplete: true, Rerun: "seamark lessons --verify",
+		Config: lessoncheck.ConfigReport{Valid: true, LessonChecksVersion: 1},
+		Summary: lessoncheck.Summary{
+			State: lessoncheck.SummaryViolation, PinsEvaluated: 2, Pass: 1, Violation: 1, NotCheckable: 1,
+			AdvisoryWithCheck: 1, Changes: 2,
+		},
+		Results: []lessoncheck.Result{
+			{
+				PinRef: enforce.Ref, Entry: 1, Rule: "frozen-assets", Mode: lessoncheck.ModeEnforce, Scope: enforce.Scope,
+				Check: *enforce.Check, Outcome: lessoncheck.OutcomeViolation,
+				Evidence: []lessoncheck.Evidence{{Path: "generated/schema.go", Change: lessoncheck.ChangeModify}},
+			},
+			{
+				PinRef: check.Ref, Entry: 2, Rule: "no-todo", Mode: lessoncheck.ModeCheck, Scope: check.Scope,
+				Check: *check.Check, Outcome: lessoncheck.OutcomePass,
+			},
+		},
+		Listings: []lessoncheck.PinListing{
+			{
+				PinRef: in.Pins[2].Check.Ref, Entry: 3, Rule: "later-check", Listing: lessoncheck.ListingAdvisoryWithCheck,
+				Check: in.Pins[2].Check.Check,
+			},
+			{PinRef: in.Pins[3].Check.Ref, Entry: 4, Rule: "prose", Listing: lessoncheck.ListingNotCheckable},
+		},
 	}
 }

@@ -149,6 +149,27 @@ func lessonsReceivers() []lessonsReceiver {
 			},
 		},
 		{
+			name: "check-definition review closes and keeps the form",
+			open: func(t *testing.T) *harness {
+				f := checkFake(t)
+				f.planCheckDef = func(req maintain.CheckDefRequest) (*maintain.CheckDefPlan, error) {
+					return &maintain.CheckDefPlan{Request: req, After: []byte("pin: []\n"), Write: true, Confirmable: true}, nil
+				}
+
+				h := pinsOpen(t, f, 120, 40)
+				h.press("M", "s")
+				require.True(t, pinsOf(h).checkDef.showsPreview())
+
+				return h
+			},
+			check: func(t *testing.T, h *harness) {
+				require.NotNil(t, pinsOf(h).checkDef, "the form stays")
+				assert.False(t, pinsOf(h).checkDef.active())
+				assert.Equal(t, "Lessons › Pins changed .seamark/lessons.yaml, so the check-definition review closed. "+
+					"Press s in the form to review again.", h.m.toast.text)
+			},
+		},
+		{
 			name: "settings lessons review closes and keeps the draft",
 			open: func(t *testing.T) *harness {
 				h := lessonsOpen(t, lessonsSnapFake(t, "threshold: 4\n"), "group:delivery", 120, 40)

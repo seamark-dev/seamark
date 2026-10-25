@@ -89,6 +89,10 @@ func validateClient(c Client) error {
 		return fmt.Errorf("client %q: a reset hook is declared without hook installation", c.ID)
 	}
 
+	if err := validateLessonCheckOps(c); err != nil {
+		return err
+	}
+
 	// A declared operation without an adapter is a broken descriptor, not
 	// an unsupported operation: nothing could plan the declared work.
 	if c.Setup == nil && c.SetupOps != (SetupSupport{}) {

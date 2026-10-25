@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/status"
 )
 
@@ -30,7 +31,9 @@ and asks how much its answers can be trusted.`,
 			}
 			defer func() { _ = st.Close() }() // read-only
 
-			s, err := status.Gather(st, root)
+			// The lesson-check report identifies each hook binary against
+			// this binary and its version (contract K10).
+			s, err := status.GatherAs(st, root, integration.SelfIdentity(version))
 			if err != nil {
 				return err
 			}

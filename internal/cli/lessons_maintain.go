@@ -144,6 +144,8 @@ func maintainPins(out io.Writer, deps maintain.Deps, action maintain.Action, ps 
 		return nil
 	}
 
+	joinCheckImpact(plan, deps)
+
 	// The gate decides only a change. A config that cannot be read is
 	// an error then, never a default.
 	if plan.GateErr != nil {
@@ -474,6 +476,27 @@ func printImpact(out io.Writer, impacts []lessoncheck.Impact) {
 	}
 
 	fmt.Fprintln(out)
+}
+
+// joinCheckImpact reports installed capability for the candidate pin
+// identities. The core plan has no binary identity and remains deterministic.
+func joinCheckImpact(plan *maintain.Plan, deps maintain.Deps) {
+	if plan.Change == nil || len(plan.Impact) == 0 {
+		return
+	}
+
+	cfg, errs, err := lessoncheck.Parse(plan.Change.After)
+	if err != nil {
+		return
+	}
+
+	report := integration.LessonCapabilityOf(deps.Reg.Inspect(deps.Root), cfg, errs, integration.SelfIdentity(version))
+
+	for i := range plan.Impact {
+		if n := plan.Impact[i].Entry; n >= 1 && n <= len(cfg.Pins) {
+			plan.Impact[i].Active = report.ActiveText(cfg.Pins[n-1].Ref)
+		}
+	}
 }
 
 // checksRefusal is the §4.1 refusal of a retarget that moves the regions

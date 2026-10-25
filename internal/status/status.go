@@ -22,6 +22,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -117,6 +118,16 @@ type Status struct {
 	// compatibility evidence, and the limitations the adapter reports.
 	// Additive: the fields above keep their Claude Code meaning.
 	Clients []integration.Inspection `json:"clients,omitempty"`
+
+	// LessonChecks is the lesson-capability/1 report: the requested
+	// modes of lessons.yaml against the installed lesson-check hook
+	// paths (contract K10). It is nil when no lesson-check or
+	// exploration hook is installed and lessons.yaml uses no
+	// lesson-check key, so such a repository keeps its JSON bytes.
+	LessonChecks *lessoncheck.CapabilityReport `json:"lesson_checks,omitempty"`
+	// lessonPins are the pin counts that the pins line of the lesson
+	// checks block prints. The JSON holds the report only.
+	lessonPins pinCounts
 }
 
 // Gather assembles the health report from the store and the workspace.
@@ -124,9 +135,23 @@ func Gather(st *store.Store, root string) (*Status, error) {
 	return gather(integration.Builtin(), st, root)
 }
 
+// GatherAs is Gather for the running binary self. The lesson-check
+// report identifies each hook binary against it (contract K10). Gather
+// reads the identity from the build information of the running binary.
+func GatherAs(st *store.Store, root string, self integration.BinaryIdentity) (*Status, error) {
+	return gatherAs(integration.Builtin(), st, root, self)
+}
+
 // gather is Gather over one registry, so a test can hand it a registry
 // with a fake client and check the client-neutral rendering.
 func gather(reg *integration.Registry, st *store.Store, root string) (*Status, error) {
+	return gatherAs(reg, st, root, integration.SelfIdentity(""))
+}
+
+// gatherAs is GatherAs over one registry.
+func gatherAs(reg *integration.Registry, st *store.Store, root string,
+	self integration.BinaryIdentity,
+) (*Status, error) {
 	// Unknown until a recorded fingerprint proves otherwise: a non-git
 	// workspace has no change signal, and unknown must not read as
 	// current.
@@ -223,6 +248,10 @@ func gather(reg *integration.Registry, st *store.Store, root string) (*Status, e
 		s.GateHookError = s.Clients[i].HookDocumentError
 	}
 
+	// The lesson-check report joins the same inspection, so its hook
+	// state agrees with the per-client view.
+	gatherLessonChecks(s, root, self)
+
 	return s, nil
 }
 
@@ -317,6 +346,7 @@ func Print(w io.Writer, s *Status) {
 	printSkills(w, s)
 	printApprovals(w, s)
 	printClients(w, s)
+	printLessonChecks(w, s)
 }
 
 // printClients renders the per-client block: one line per client with
