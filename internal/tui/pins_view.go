@@ -676,7 +676,8 @@ func (p *pinsView) regionValues(set []string, w int) []string {
 }
 
 // pinDetail renders an installed pin. It shows the rule and its state,
-// the live note, the file facts, the related proposals, the readings,
+// the live note, the file facts, the lesson check, the related
+// proposals, the readings,
 // similar pins, and the maintenance routes.
 func (p *pinsView) pinDetail(in *maintain.Inspection, r pinRow, w int) []string {
 	t := p.st.theme
@@ -709,6 +710,14 @@ func (p *pinsView) pinDetail(in *maintain.Inspection, r pinRow, w int) []string 
 
 	out = append(out, "")
 	out = append(out, p.entryFacts(e, w)...)
+
+	// The CHECK section shows only in a repository that uses lesson
+	// checks, so every other detail keeps its bytes (pinsCheckShown).
+	if check := p.checkLines(in, pin, w); len(check) > 0 {
+		out = append(out, "")
+		out = append(out, check...)
+	}
+
 	out = append(out, "")
 	out = append(out, p.linkLines(in, pin, w)...)
 	out = append(out, "")
@@ -1443,7 +1452,15 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 	// A foreign root with --db leaves retarget and prune on, but the
 	// authoring keys treat the relationship as unknown. So i then opens
 	// every row, and the sentence about the note does not apply.
+	//
+	// The pin form shows the Mode and Check rows only while Pins shows
+	// its lesson-check parts (pinsCheckShown). So the sentence names them
+	// only then.
 	edit := " i edits the note of this pin only."
+	if p.checkShown() {
+		edit = " i edits the note, mode, and check of this pin only."
+	}
+
 	if authorForeignRoot(p.st) != "" {
 		edit = ""
 	}

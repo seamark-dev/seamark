@@ -7,15 +7,24 @@ package mcp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"strings"
 
+	"github.com/seamark-dev/seamark/internal/delivery"
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
+	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
+	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -31,6 +40,10 @@ type Server struct {
 	dbPath  string
 	version string
 	logf    func(format string, a ...any)
+	// protocol is the protocol version that initialize negotiated. It
+	// is "" before initialize. outputResult reads it to decide on the
+	// structuredContent of change_set (contract L1).
+	protocol string
 }
 
 // New builds a server for the workspace at root; logf receives
@@ -196,6 +209,11 @@ func (s *Server) initialize(params json.RawMessage) any {
 		p.ProtocolVersion = "2025-06-18"
 	}
 
+	// The server answers with the version of the client, so that version
+	// is the negotiated one. Serve handles one request at a time, so the
+	// field needs no lock.
+	s.protocol = p.ProtocolVersion
+
 	return map[string]any{
 		// Echo the client's version: this server depends on nothing
 		// version-specific in the core initialize/tools/resources flow.
@@ -248,14 +266,14 @@ func (s *Server) callTool(params json.RawMessage) (any, *rpcError) {
 		return nil, &rpcError{Code: codeInvalidParams, Message: "unknown tool: " + p.Name}
 	}
 
-	text, err := run(s, p.Arguments)
+	out, err := run(s, p.Arguments)
 	if err != nil {
 		// Tool failures travel in-band (isError), not as protocol errors:
 		// the model should see "nothing matches X" and correct course.
 		return toolResult(err.Error(), true), nil
 	}
 
-	return toolResult(text, false), nil
+	return s.outputResult(out), nil
 }
 
 func toolResult(text string, isErr bool) map[string]any {
@@ -265,96 +283,162 @@ func toolResult(text string, isErr bool) map[string]any {
 	}
 }
 
+// structuredSince is the first protocol version whose tool results can
+// hold structuredContent. The versions are dates, so a string compare
+// orders them (contract L1).
+const structuredSince = "2025-06-18"
+
+// toolOutput is the result of one tool runner. Each Text entry is one
+// text part of the content list, in order. Structured is the
+// structuredContent object. callTool adds it only for a protocol that
+// knows the key.
+type toolOutput struct {
+	Text       []string
+	Structured map[string]any
+}
+
+// textOutput wraps the report text of a runner as one text part. Every
+// tool except change_set returns exactly this shape, so its bytes stay.
+func textOutput(text string, err error) (toolOutput, error) {
+	return toolOutput{Text: []string{text}}, err
+}
+
+// outputResult builds the tools/call result of a successful runner. An
+// older client gets no structuredContent, because it cannot read it.
+func (s *Server) outputResult(out toolOutput) map[string]any {
+	content := make([]map[string]any, 0, len(out.Text))
+	for _, text := range out.Text {
+		content = append(content, map[string]any{"type": "text", "text": text})
+	}
+
+	result := map[string]any{"content": content, "isError": false}
+
+	if len(out.Structured) > 0 && s.protocol >= structuredSince {
+		result["structuredContent"] = out.Structured
+	}
+
+	return result
+}
+
 // toolRunners maps tool names to implementations. Each returns the full
-// report text; freshness and store lifecycle live in withStore.
-var toolRunners = map[string]func(*Server, json.RawMessage) (string, error){
-	"orient": func(s *Server, _ json.RawMessage) (string, error) {
-		return s.withStore(func(st *store.Store) (string, error) {
+// report text as its content parts; freshness and store lifecycle live
+// in withStore.
+var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
+	"orient": func(s *Server, _ json.RawMessage) (toolOutput, error) {
+		return textOutput(s.withStore(func(st *store.Store) (string, error) {
 			var b bytes.Buffer
 			err := report.Orient(&b, st, s.root)
 
 			return b.String(), err
-		})
+		}))
 	},
 
-	"why": func(s *Server, args json.RawMessage) (string, error) {
+	"why": func(s *Server, args json.RawMessage) (toolOutput, error) {
 		var p struct {
 			Query string `json:"query"`
 		}
 
 		if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.Query) == "" {
-			return "", fmt.Errorf("why needs {\"query\": \"<symbol or file>\"}")
+			return toolOutput{}, fmt.Errorf("why needs {\"query\": \"<symbol or file>\"}")
 		}
 
-		return s.withStore(func(st *store.Store) (string, error) {
+		return textOutput(s.withStore(func(st *store.Store) (string, error) {
 			var b bytes.Buffer
 			err := report.Why(&b, st, s.root, p.Query)
 
 			return b.String(), err
-		})
+		}))
 	},
 
-	"change_set": func(s *Server, args json.RawMessage) (string, error) {
+	"change_set": func(s *Server, args json.RawMessage) (toolOutput, error) {
 		var p struct {
 			Files []string `json:"files"`
 		}
 
 		if err := json.Unmarshal(args, &p); err != nil || len(p.Files) == 0 {
-			return "", fmt.Errorf("change_set needs {\"files\": [\"path\", …]}")
+			return toolOutput{}, fmt.Errorf("change_set needs {\"files\": [\"path\", …]}")
 		}
 
-		return s.withStore(func(st *store.Store) (string, error) {
-			var b bytes.Buffer
-			err := report.ChangeSet(&b, st, s.root, p.Files)
+		// The preparation needs the open store, and withStore closes it
+		// when the callback returns. So the callback keeps the result here.
+		var out toolOutput
 
-			return b.String(), err
+		_, err := s.withStore(func(st *store.Store) (string, error) {
+			var err error
+			out, err = s.changeSet(st, p.Files)
+
+			return "", err
 		})
+
+		return out, err
 	},
 
-	"expand": func(s *Server, args json.RawMessage) (string, error) {
+	"expand": func(s *Server, args json.RawMessage) (toolOutput, error) {
 		var p struct {
 			Ref string `json:"ref"`
 		}
 
 		if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.Ref) == "" {
-			return "", fmt.Errorf("expand needs {\"ref\": \"<symbol, file:start-end, or lessons:<dir>>\"}")
+			return toolOutput{}, fmt.Errorf("expand needs {\"ref\": \"<symbol, file:start-end, or lessons:<dir>>\"}")
 		}
 
-		return s.withStore(func(st *store.Store) (string, error) {
+		return textOutput(s.withStore(func(st *store.Store) (string, error) {
 			var b bytes.Buffer
 			err := report.Expand(&b, st, s.root, p.Ref)
 
 			return b.String(), err
-		})
+		}))
 	},
 
-	"check": func(s *Server, args json.RawMessage) (string, error) {
+	"check": func(s *Server, args json.RawMessage) (toolOutput, error) {
 		var p struct {
-			Diff string `json:"diff"`
+			Diff         string `json:"diff"`
+			LessonChecks bool   `json:"lesson_checks"`
 		}
 
 		if len(args) > 0 {
 			if err := json.Unmarshal(args, &p); err != nil {
-				return "", fmt.Errorf("check takes {\"diff\": \"<unified diff>\"} (optional)")
+				return toolOutput{}, errors.New(checkUsage)
 			}
 		}
+
+		// The lesson checks read a git work tree. A directory outside git
+		// is refused before the index refresh and the audit append, so
+		// the refusal writes nothing, as in check --lessons.
+		var lessonsRoot string
+
+		if p.LessonChecks {
+			root, err := s.lessonsRoot()
+			if err != nil {
+				return toolOutput{}, err
+			}
+
+			lessonsRoot = root
+		}
+
+		policyInput := report.PolicyInputStdinDiff
 
 		if p.Diff == "" {
 			out, err := exec.Command("git", "-C", s.root, "diff", "HEAD").Output()
 			if err != nil {
-				return "", fmt.Errorf("no diff given and `git diff HEAD` failed: %w", err)
+				return toolOutput{}, fmt.Errorf("no diff given and `git diff HEAD` failed: %w", err)
 			}
 
 			p.Diff = string(out)
+			policyInput = report.PolicyInputGitDiffHead
 		}
 
-		return s.withStore(func(st *store.Store) (string, error) {
+		// The lesson checks need the policy decision after withStore
+		// returns, so the callback keeps it here.
+		var decision *gate.Decision
+
+		text, err := s.withStore(func(st *store.Store) (string, error) {
 			policy, err := gate.LoadPolicy(s.root)
 			if err != nil {
 				return "", err
 			}
 
-			decision, err := gate.EvalDiff(policy, st, p.Diff)
+			decision, err = gate.EvalDiff(policy, st, p.Diff)
 			if err != nil {
 				return "", err
 			}
@@ -375,5 +459,183 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (string, error){
 
 			return b.String(), nil
 		})
+		if err != nil || !p.LessonChecks {
+			return textOutput(text, err)
+		}
+
+		// withStore has closed the index here. SQLite keeps its WAL files
+		// next to an open index, and the snapshot must not see them change.
+		return textOutput(s.checkLessons(text, lessonsRoot, decision, policyInput))
 	},
+}
+
+// prepareChangeSet is the preparation service of change_set. It is a
+// variable, so a test can make the preparation fail: no repository
+// state makes delivery.Prepare fail while the change_set text succeeds.
+var prepareChangeSet = delivery.Prepare
+
+// changeSetText writes the change_set text, content[0]. It is a variable,
+// so a test can make the text fail after a successful preparation: no
+// repository state makes a store read fail between the two calls.
+var changeSetText = report.ChangeSetWith
+
+// changeSet answers one change_set call from the open store st
+// (contract L1). content[0] is the change_set text of the P2 head, byte
+// for byte. A second text part and structuredContent carry the
+// lesson-preparation/1 result.
+//
+// Prepare runs first and returns the one firing record of the call, so
+// the text runs without its legacy record. The record is written only
+// after the text succeeds: a call that returns an error leaves no
+// returned record (P3 review, ruling A). A failed preparation never
+// fails the call: the second part names the error, and the fallback
+// record keeps the lessons of the text in the firing log.
+func (s *Server) changeSet(st *store.Store, files []string) (toolOutput, error) {
+	// MCP has no receiver identity and no request context. MCP paths are
+	// relative to the workspace root, so the root is also the directory
+	// of a relative path. Config stays nil, so Prepare reads lessons.yaml
+	// itself and names an undecodable file as invalid.
+	//
+	// The badges of each check come from the capability report of the
+	// workspace (contract K10), so preparation computes no badge.
+	capability := integration.LessonCapability(integration.Builtin().Inspect(s.root), s.root,
+		integration.SelfIdentity(s.version))
+
+	prep, prepErr := prepareChangeSet(context.Background(), st, delivery.PrepareRequest{
+		Root:           s.root,
+		CWD:            s.root,
+		Paths:          files,
+		Surface:        delivery.SurfaceChangeSet,
+		MinedStatus:    minedStatus(st),
+		SeamarkVersion: s.version,
+		Capability:     &capability,
+	})
+
+	var b bytes.Buffer
+
+	selected, err := changeSetText(&b, st, s.root, files, report.ChangeSetOptions{Record: false})
+	if err != nil {
+		return toolOutput{}, err
+	}
+
+	out := toolOutput{Text: []string{b.String()}}
+
+	if prepErr != nil {
+		s.recordFailedPreparation(st, files, selected)
+		out.Text = append(out.Text, "lesson preparation unavailable: "+render.Sanitize(prepErr.Error()))
+
+		return out, nil
+	}
+
+	// The answer is complete now, so the record of the preparation goes
+	// to the firing log. Record sets the event ID that the document names.
+	prep.Record()
+
+	// RenderPreparation writes nothing when the preparation adds nothing
+	// to the text: no pin, no check, no omission, and no rejected path.
+	var supplement bytes.Buffer
+
+	delivery.RenderPreparation(&supplement, prep, delivery.FormSupplement)
+
+	if supplement.Len() > 0 {
+		out.Text = append(out.Text, supplement.String())
+	}
+
+	out.Structured = map[string]any{"lesson_preparation": prep}
+
+	return out, nil
+}
+
+// minedStatus says what st holds for the mined lessons of a preparation.
+// withStore refreshes the index and opens it, but a refresh outside git
+// fails and leaves an empty database. The rule is the one of lessons
+// --prepare: no completed index run is no-index, and a failed meta read
+// is unavailable.
+func minedStatus(st *store.Store) string {
+	at, err := st.GetMeta(store.MetaIndexedAt)
+
+	switch {
+	case err != nil:
+		return delivery.MinedUnavailable
+	case at == "":
+		return delivery.MinedNoIndex
+	default:
+		return delivery.MinedOK
+	}
+}
+
+// recordFailedPreparation writes the firing record of a change_set call
+// whose preparation failed (contract L3). The record keeps the lessons
+// of the text, so the firing log still counts the call. It carries no
+// pins, because no preparation named them. A call without lessons
+// writes nothing, as in the legacy rule. The write is best effort.
+func (s *Server) recordFailedPreparation(st *store.Store, files []string, selected []model.Lesson) {
+	if len(selected) == 0 {
+		return
+	}
+
+	// The legacy record named the files as the text names them, so the
+	// fallback record does the same.
+	names, _ := report.ChangeSetNames(st, s.root, files)
+
+	_, err := reviews.RecordEvent(reviews.AuditEvent{
+		Root:          s.root,
+		Surface:       string(delivery.SurfaceChangeSet),
+		Files:         names,
+		Records:       []reviews.EventRecord{{Lessons: selected}},
+		Emission:      delivery.EmissionReturned,
+		Evaluation:    delivery.EvaluationFailed,
+		PathsComplete: false,
+	})
+	if err != nil {
+		s.logf("mcp: firing log: %v", err)
+	}
+}
+
+// checkUsage is the refusal of malformed check arguments (contracts
+// §4.1). It names every argument, so the model can correct the call.
+const checkUsage = `check takes {"diff": "<unified diff>", "lesson_checks": true|false} (both optional)`
+
+// lessonsRoot returns the top level of the git work tree of the server
+// root. It refuses a root outside git with the text of check --lessons.
+// The server cannot import cli, so it repeats that check here.
+func (s *Server) lessonsRoot() (string, error) {
+	if !history.IsRepo(s.root) {
+		return "", fmt.Errorf("lesson checks: %s is not inside a git work tree", s.root)
+	}
+
+	return history.ResolveRoot(s.root)
+}
+
+// checkLessons appends the lesson verification to the policy text of
+// one check call (contract K5): a blank line, the lesson report, and the
+// combined line. report.NewCheckLessonsEnvelope derives the combined
+// values, so this line and check --lessons print the same verdict.
+//
+// A violation and a blocking policy stay in band: the result is text,
+// not an isError result. Only a usage or root failure of Verify is an
+// error. No path here constructs an invoker (AC-1).
+func (s *Server) checkLessons(policyText, root string, decision *gate.Decision, policyInput string) (string, error) {
+	// Verify sets the verify-timeout deadline itself. The server has no
+	// request context, so the call starts from the background context.
+	v, err := lessoncheck.Verify(context.Background(), lessoncheck.VerifyRequest{
+		Root:           root,
+		Caller:         lessoncheck.CallerMCP,
+		SeamarkVersion: s.version,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	env := report.NewCheckLessonsEnvelope(decision, v, policyInput)
+
+	var b strings.Builder
+
+	b.WriteString(policyText)
+	b.WriteString("\n")
+	lessoncheck.RenderText(&b, v)
+	fmt.Fprintf(&b, "combined: %s (policy %s, lessons %s; CLI exit %d)\n",
+		env.Combined.State, env.Combined.Policy, env.Combined.Lessons, env.Combined.ExitCode)
+
+	return b.String(), nil
 }

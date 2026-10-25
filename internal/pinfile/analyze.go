@@ -23,8 +23,9 @@ import (
 // pinFields are the keys that reviews.PinRule reads. Every other key in
 // an item is unknown to the readers. TestPinFieldsAreTheKeysOfPinRule
 // compares the list with the yaml tags of PinRule, so a new field fails
-// the test until it joins the list.
-var pinFields = []string{"rule", "region", "regions", "note"}
+// the test until it joins the list. mode and check are the lesson-check
+// keys of contract K1.
+var pinFields = []string{"rule", "region", "regions", "note", "mode", "check"}
 
 // provenanceRe finds the proposal ID at the end of a provenance comment,
 // as distill.RenderPins writes it: "(seamark lessons --distill, p12)".
@@ -253,6 +254,7 @@ func (a *analysis) entry(i int, m *yaml.Node) Entry {
 	e := Entry{
 		Index: i, Line: it.first, EndLine: it.last,
 		Rule: pin.Rule, Region: pin.Region, Regions: pin.Regions, Note: pin.Note,
+		Mode: pin.Mode, Check: pin.Check,
 		Key:           reviews.NewPinKey(pin.Rule, pin.Region, pin.Regions),
 		Unknown:       unknownKeys(m),
 		ProvenanceIDs: a.provenanceIDs(i),

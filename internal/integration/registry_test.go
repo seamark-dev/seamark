@@ -57,6 +57,15 @@ func TestNewRegistryRejectsInvalidDescriptors(t *testing.T) {
 
 	_, err = NewRegistry(Client{ID: "edits", Name: "Edits", Edits: namedEdits{mechanism: "stdout-text"}})
 	require.NoError(t, err)
+
+	// Exploration records store the explore mechanism by the same rule.
+	for _, mechanism := range []string{"", "Post Tool Use", "with\nnewline"} {
+		_, err := NewRegistry(Client{ID: "reads", Name: "Reads", Explores: namedExplores{mechanism: mechanism}})
+		assert.Error(t, err, "explore mechanism %q must be rejected", mechanism)
+	}
+
+	_, err = NewRegistry(Client{ID: "reads", Name: "Reads", Explores: namedExplores{mechanism: "stdout-text"}})
+	require.NoError(t, err)
 }
 
 // namedEdits is an edit codec that only names its mechanism.
@@ -67,6 +76,17 @@ type namedEdits struct {
 }
 
 func (n namedEdits) AdviceMechanism() string { return n.mechanism }
+
+// namedExplores is an explore codec that only names its mechanism.
+type namedExplores struct{ mechanism string }
+
+func (namedExplores) DecodeExplore([]byte) (ExploreEvent, error) { return ExploreEvent{}, nil }
+
+func (namedExplores) EncodeExploreAdvice(text string, _ bool) (HookReply, error) {
+	return HookReply{Stdout: []byte(text)}, nil
+}
+
+func (n namedExplores) ExploreMechanism() string { return n.mechanism }
 
 func TestSelectDeduplicatesAndFollowsRegistryOrder(t *testing.T) {
 	r := Builtin()
@@ -145,7 +165,12 @@ func TestSkillDirsAreCopiedAtEveryRegistryBoundary(t *testing.T) {
 func TestCodexDeclaresEveryCapability(t *testing.T) {
 	codex, _ := Builtin().Lookup(CodexID)
 
-	assert.Equal(t, Capabilities, codex.Declared())
+	// Codex declares every capability but one. It reports no structured
+	// read event, so it has no exploration codec.
+	want := slices.DeleteFunc(slices.Clone(Capabilities), func(c Capability) bool {
+		return c == CapabilityLessonExploration
+	})
+	assert.Equal(t, want, codex.Declared())
 	assert.True(t, codex.SetupOps.Hooks, "codex installs the lesson hooks")
 	assert.True(t, codex.SetupOps.GateHook, "codex installs the command gate hook")
 
@@ -313,6 +338,7 @@ func TestClaudeInvocationIsPureAndReusesThePreset(t *testing.T) {
 	assert.Equal(t, []Capability{
 		CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants,
 		CapabilityEdits, CapabilityCommands, CapabilityResets, CapabilityInvocation,
+		CapabilityLessonVerify, CapabilityLessonGuard, CapabilityLessonExploration,
 	}, claude.Declared())
 
 	spec, err := claude.Invocation(t.TempDir())

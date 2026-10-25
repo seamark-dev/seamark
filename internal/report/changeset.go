@@ -6,17 +6,43 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 )
+
+// ChangeSetOptions are the options of ChangeSetWith.
+type ChangeSetOptions struct {
+	// Record appends the legacy firing record of the change_set surface
+	// for the printed lessons. MCP change_set sets it to false, because
+	// the record of its preparation is the one record of the call
+	// (contract L1).
+	Record bool
+}
 
 // ChangeSet reports what a planned edit to the given files drags along:
 // the files history says change together with them, the externally
 // visible symbols whose callers will feel the edit, and the effect tags
 // the change can ultimately reach. This is the pre-edit question — "what
 // am I about to forget?" — answered from evidence, not vibes.
+//
+// ChangeSet records the printed lessons with the legacy writer. No
+// production caller uses it since MCP change_set moved to ChangeSetWith
+// (plan risk Lead P3-i). The tests of the text and of the legacy record
+// keep it.
 func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error {
+	_, err := ChangeSetWith(w, st, root, files, ChangeSetOptions{Record: true})
+
+	return err
+}
+
+// ChangeSetWith writes the text of ChangeSet and returns the lessons of
+// its lesson block. The text does not depend on opts. MCP change_set
+// needs the lessons for the fallback record of a failed preparation.
+func ChangeSetWith(w io.Writer, st *store.Store, root string, files []string,
+	opts ChangeSetOptions,
+) (selected []model.Lesson, err error) {
 	names, unindexed := ChangeSetNames(st, root, files)
 	notIndexed := make(map[string]bool, len(unindexed))
 
@@ -48,7 +74,7 @@ func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error 
 		// six, while the closing list must see past the planned files.
 		partners, err := st.CoChangePartners(file, 1.0, set.partnerLimit())
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		for _, p := range partners[:min(len(partners), maxCompanions)] {
@@ -63,7 +89,7 @@ func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error 
 		}
 
 		if err := exposureLines(w, st, file); err != nil {
-			return err
+			return nil, err
 		}
 
 		fmt.Fprintln(w)
@@ -82,15 +108,19 @@ func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error 
 	}
 
 	lessons, trimmed, err := LessonsForFiles(st, cfg, names, cfg.ChangeSetBudget())
-	if err == nil && len(lessons) > 0 {
-		PrintLessonBlock(w,
-			"lessons for this change  (regions map to the files above; avoid repeating these)",
-			lessons, trimmed)
+	if err != nil || len(lessons) == 0 {
+		return nil, nil
+	}
 
+	PrintLessonBlock(w,
+		"lessons for this change  (regions map to the files above; avoid repeating these)",
+		lessons, trimmed)
+
+	if opts.Record {
 		_ = reviews.RecordFiringSurface(root, "change_set", names, "", lessons)
 	}
 
-	return nil
+	return lessons, nil
 }
 
 // ChangeSetNames names the files of a change_set request the way the

@@ -39,14 +39,14 @@ func codexHooksDetail(specs []hooks.Spec) string {
 // tool must never require opening the file to find out.
 func narrateCodexHooks(w io.Writer, binary string, specs []hooks.Spec, change codexHooksChange, preview bool) {
 	switch {
-	case len(specs) == 0:
+	case len(specs) == 0 && len(change.lessons.specs) == 0 && !change.changed:
 		fmt.Fprintf(w, "  kept    %s (no hook installed: the seamark hooks run from definitions that setup does not manage)\n", codexHooksFile)
 	case !change.changed:
 		fmt.Fprintf(w, "  kept    %s (seamark hooks already wired)\n", codexHooksFile)
 	case change.created:
-		fmt.Fprintf(w, "  %s %s (%s)\n", verb("wrote  ", "would write", preview), codexHooksFile, codexHooksDetail(specs))
+		fmt.Fprintf(w, "  %s %s (%s)\n", verb("wrote  ", "would write", preview), codexHooksFile, change.detail(specs))
 	default:
-		fmt.Fprintf(w, "  %s %s (%s)\n", verb("updated", "would update", preview), codexHooksFile, codexHooksDetail(specs))
+		fmt.Fprintf(w, "  %s %s (%s)\n", verb("updated", "would update", preview), codexHooksFile, change.detail(specs))
 	}
 
 	for _, spec := range specs {
@@ -58,6 +58,8 @@ func narrateCodexHooks(w io.Writer, binary string, specs []hooks.Spec, change co
 		fmt.Fprintf(w, "          %-30s %s\n", where, spec.Command(binary))
 	}
 
+	change.lessons.narrateCommands(w, binary)
+
 	// The note states only what changed, the hook flag. Whether anything
 	// still blocks is the effective-mode line's job: a kept enforce
 	// policy blocks whatever the flag says.
@@ -66,15 +68,36 @@ func narrateCodexHooks(w io.Writer, binary string, specs []hooks.Spec, change co
 			"          instead — re-run with --gate-mode enforce to restore the baked-in flag\n",
 			verb("removed", "would remove", preview))
 	}
+
+	change.lessons.narrateLine(w)
 }
 
 // codexHooksChange says what the plan does to hooks.json.
 type codexHooksChange struct {
 	changed bool // the plan writes the file
 	created bool // the file does not exist yet
+	// hooksChanged is true when the merge of the gate and lesson hooks
+	// changes the file.
+	hooksChanged bool
 	// removedEnforce is true when the merge removes --enforce from an
 	// owned gate command.
 	removedEnforce bool
+	// lessons is what the plan does to the lesson-check hooks.
+	lessons lessonChange
+}
+
+// detail says what the write does, in init's words. A plan without a
+// lesson-check change names the managed hooks, as init always did.
+func (c codexHooksChange) detail(specs []hooks.Spec) string {
+	if !c.lessons.changed() {
+		return codexHooksDetail(specs)
+	}
+
+	if c.hooksChanged {
+		return codexHooksDetail(specs) + "; " + c.lessons.detail()
+	}
+
+	return c.lessons.detail()
 }
 
 // codexWriteDetail says what the write adds, in init's words.

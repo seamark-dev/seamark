@@ -110,6 +110,16 @@ such a log as sensitive.
 git diff | seamark check          # or: seamark check   (uses git diff HEAD)
 ```
 
+A stdin pipe that sends no byte within 1 s counts as idle: `check`
+prints `seamark: stdin idle after 1s; checking git diff HEAD` on stderr
+and uses `git diff HEAD`, so a harness that keeps stdin open cannot
+make `check` wait forever. Under enforcement (`--enforce` or
+`mode: enforce`) an idle pipe blocks with exit 2 instead, because the
+diff of `git diff HEAD` can allow what the piped diff blocks. Write a
+slow diff to a file first
+(`gh pr diff 42 > pr.diff; seamark check --enforce < pr.diff`), or run
+`seamark check </dev/null` to check `git diff HEAD` on purpose.
+
 Changed lines map to symbols; symbols carry transitively-propagated
 effect tags; the union is what the change can _ultimately_ reach — even
 when the edited function never touches a sink itself. Policy rules over

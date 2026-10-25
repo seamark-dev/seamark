@@ -120,6 +120,10 @@ type Entry struct {
 	// Rule, Region, Regions, and Note are the decoded pin fields.
 	Rule, Region, Note string
 	Regions            []string
+	// Mode and Check are the decoded lesson-check fields (contract K1).
+	// They hold the raw text, and "" means the key is absent. The listing
+	// does not validate them, because lessoncheck.Validate owns that rule.
+	Mode, Check string
 	// Unknown lists the keys that no reader uses, in file order. They do
 	// not block an edit; a retarget keeps them.
 	Unknown []string

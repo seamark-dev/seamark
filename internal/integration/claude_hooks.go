@@ -35,10 +35,15 @@ type claudeAdvice struct {
 // decoder does not check tool_name: the installed matcher selects the
 // tools, and a user can point the hook at another tool with file_path.
 // An event without file_path is valid and holds no paths.
+//
+// prompt_id names the user prompt in progress, so it is the turn. An
+// event before the first user input carries none, and the turn is then
+// empty. The turn is identity only: it never selects a lesson.
 func (claudeEdits) DecodeEdit(payload []byte) (EditEvent, error) {
 	var native struct {
 		SessionID string `json:"session_id"`
 		AgentID   string `json:"agent_id"`
+		PromptID  string `json:"prompt_id"`
 		CWD       string `json:"cwd"`
 		ToolUseID string `json:"tool_use_id"`
 		ToolName  string `json:"tool_name"`
@@ -57,6 +62,7 @@ func (claudeEdits) DecodeEdit(payload []byte) (EditEvent, error) {
 		NativeTool: native.ToolName,
 		CWD:        native.CWD,
 		Context:    claudeContext(native.SessionID, native.AgentID),
+		Turn:       native.PromptID,
 	}}
 
 	if native.ToolInput.FilePath != "" {
@@ -85,22 +91,39 @@ func (claudeEdits) EncodeAdvice(text string) (HookReply, error) {
 // AdviceMechanism returns the reply path that the firing log records.
 func (claudeEdits) AdviceMechanism() string { return claudeAdviceMechanism }
 
-// DecodeReset reads the context that PostCompact resets. An event
+// DecodeReset reads the context that PostCompact resets. A PostCompact
 // without session_id is valid and names no context, so nothing resets.
 // The decoder reads agent_id by the rule of DecodeEdit. A reset that
 // fires inside a subagent then names the subagent context, which is not
 // resettable, and it can never reset the context of the parent.
+//
+// The decoder also reads the session and the turn (prompt_id), so the
+// reset record of the audit log joins the edit records of that session.
+// The native recording of Claude Code 2.1.300 shows prompt_id on
+// PostCompact.
+//
+// Every other hook_event_name, also a missing one, gives
+// ErrNotApplicable. Setup installs the reset hook only for PostCompact.
+// A hook that a user points at another event, for example SessionStart,
+// must not reset the delivery state, because a reset makes old advice
+// repeat (P3 review). The Codex decoder has the same rule.
 func (claudeResets) DecodeReset(payload []byte) (ResetEvent, error) {
 	var native struct {
+		Event     string `json:"hook_event_name"`
 		SessionID string `json:"session_id"`
 		AgentID   string `json:"agent_id"`
+		PromptID  string `json:"prompt_id"`
 	}
 
 	if err := json.Unmarshal(payload, &native); err != nil {
 		return ResetEvent{}, fmt.Errorf("%w: %v", ErrMalformedEvent, err)
 	}
 
-	event := ResetEvent{}
+	if native.Event != claudeEventPostCompact {
+		return ResetEvent{}, fmt.Errorf("%w: event %q is not %s", ErrNotApplicable, native.Event, claudeEventPostCompact)
+	}
+
+	event := ResetEvent{SessionID: native.SessionID, Turn: native.PromptID}
 	if receiver := claudeContext(native.SessionID, native.AgentID); receiver != nil {
 		event.Context = *receiver
 	}
@@ -109,25 +132,8 @@ func (claudeResets) DecodeReset(payload []byte) (ResetEvent, error) {
 }
 
 // claudeContext maps the identity of a Claude Code event to its
-// receiving context. An empty session gives no context, and suppression
-// stays off.
-//
-// The main conversation is the session. PostCompact reports the same
-// session id, so that context is resettable.
-//
-// Claude Code adds agent_id to an event that fires inside a subagent.
-// A subagent has its own context window, so it is its own receiver: a
-// lesson that the parent got is not in the window of the subagent. No
-// documented reset event reaches a subagent, so its context is not
-// resettable. The delivery service then repeats the advice there and
-// never hides it.
+// receiving context through the one receiver derivation,
+// ReceivingContextOf, which holds the rules.
 func claudeContext(sessionID, agentID string) *ReceivingContext {
-	switch {
-	case sessionID == "":
-		return nil
-	case agentID != "":
-		return &ReceivingContext{ID: receiverID(sessionID, agentID)}
-	default:
-		return &ReceivingContext{ID: receiverID(sessionID), Resettable: true}
-	}
+	return ReceivingContextOf(ClaudeID, sessionID, agentID)
 }

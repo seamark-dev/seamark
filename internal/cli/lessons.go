@@ -15,7 +15,6 @@ import (
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/delivery"
 	"github.com/seamark-dev/seamark/internal/distill"
-	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/model"
@@ -30,10 +29,16 @@ import (
 
 func newLessonsCmd(opts *options) *cobra.Command {
 	var (
-		file            string
+		files           []string
+		verify          bool
+		prepare         bool
+		asJSON          bool
 		region          string
 		hookMode        bool
 		hookReset       bool
+		explore         bool
+		guard           bool
+		baseline        bool
 		hookClient      string
 		list            bool
 		stats           bool
@@ -45,16 +50,21 @@ func newLessonsCmd(opts *options) *cobra.Command {
 		dismissIDs      string
 		pruneIDs        string
 		retargetIDs     string
+		confirmChecks   bool
 		extractTriggers bool
+		setMode         setModeFlags
 	)
 
 	cmd := &cobra.Command{
-		Use:   "lessons [--file <path> | --list [--region <prefix>] | --stats | --distill | --proposals]",
+		Use: "lessons [--file <path> | --list [--region <prefix>] | --stats | --distill | --proposals | " +
+			"--verify [--file <path>]... [--json] | --prepare <path>... [--json] | " +
+			"--set-mode <mode> --pin <pin-ref> [--check <check-id>]]",
 		Short: "Show the recurring review feedback mined from pull requests",
 		Long: `Prints the review lessons (mined by "index --reviews", tuned by
 .seamark/lessons.yaml) — the mistakes reviewers keep flagging.
 
-  --file <path>    the lessons that apply to one file's area
+  --file <path>    the lessons that apply to one file's area; with
+                   --verify, a path to check (repeat --file for more)
   --list           every mined lesson repo-wide, with config syntax to
                    mute the noise or pin what must never be ignored
   --region <path>  narrow --list to one directory's area: its lessons
@@ -72,6 +82,39 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    distill only drafts them.
   --proposals      the decision ledger — what is pending, applied, and
                    dismissed. Read-only: never spends an agent call.
+  --verify         check the working tree against the executable pins
+                   (mode check or enforce in lessons.yaml): the tracked
+                   changes against HEAD plus the untracked files that
+                   git does not ignore. Repeat --file <path> to check
+                   only those paths, ignored files included; a relative
+                   path starts at the current directory. Exit code 0:
+                   no violation; 2: a violation; 1: a result is
+                   unknown, the files changed during the check, or the
+                   configuration is invalid. No agent call, no network.
+                   With --hook: read an agent's event after an edit tool
+                   ran and check the actual result of that edit against
+                   its state before the edit. It reports findings to the
+                   agent, never undoes the edit, and always exits 0.
+  --prepare <path>...
+                   before you construct a change: the pins, mined
+                   lessons, and checks that apply to these paths, each
+                   pin with its version, and what the change budget
+                   leaves out. A relative path starts at the current
+                   directory; a new path does not need to exist yet.
+                   Advisory: it authorizes no write, runs no check, and
+                   leaves the edit-hook state alone. No agent call, no
+                   network.
+  --json           with --verify or --prepare: print only the JSON
+                   document (lesson-verification/1 or
+                   lesson-preparation/1) instead of the text report
+  --set-mode <mode> --pin <pin-ref> [--check <check-id>]
+                   set the mode of one pin: advisory, check, or enforce.
+                   The pin-ref comes from the pin column of --verify.
+                   --check binds a check that lessons.yaml defines under
+                   checks; check and enforce need one. Changes only the
+                   mode and check keys of that pin, and only when the
+                   whole file still validates. Write-gated like --apply,
+                   else prints the lines to set by hand. No agent call.
   --apply p3,p7    turn chosen proposals into pins; ranges work too
                    (p1..p9 applies whatever inside is still pending).
                    Writes lessons.yaml only when config.yaml sets
@@ -91,6 +134,9 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    only the region keys of the entry, in place, and the
                    ledger with them; write-gated like --apply, else
                    prints the change to make by hand.
+  --confirm-checks with --retarget: move the regions of a pin with mode
+                   check or enforce. Without it, such a retarget prints
+                   the checker impact and changes nothing.
   --extract-triggers
                    backfill trigger paths for proposals distilled
                    before extraction existed: small agent calls name
@@ -105,6 +151,19 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    lessons of the edited files as additionalContext. The
                    payload is a Claude Code PreToolUse event; with
                    --client codex it is a Codex apply_patch event.
+  --explore        with --hook: read a Claude Code PostToolUse event of
+                   the Read tool from stdin and emit the lessons of the
+                   file that the agent just read. The main conversation
+                   gets each lesson once until it compacts. Its state is
+                   separate, so it never hides an edit reminder.
+  --guard          with --hook: read a pending edit event from stdin and
+                   check the edit against the enforce pins before the
+                   tool writes. A violation, an edit that the check
+                   cannot evaluate, or an invalid lessons.yaml denies
+                   the edit (exit 2). No agent call, no network.
+  --baseline       with --hook: read a pending edit event from stdin and
+                   store the state before the edit for the check after
+                   it. Never denies the edit. No agent call, no network.
 
 --hook is read-only and offline: no network, no re-indexing, silent when
 a file has no lessons.`,
@@ -115,6 +174,46 @@ a file has no lessons.`,
 			// a command carrying --dry-run must not mutate anything.
 			if dryRun && !distillRun && !extractTriggers {
 				return fmt.Errorf("--dry-run only applies to --distill and --extract-triggers")
+			}
+
+			// --prepare, --verify, --json, and a repeated --file are
+			// checked before the older guards. Then a call with --prepare
+			// or --verify always names its mode conflict, and no other mode
+			// reads a second --file value without notice. --prepare goes
+			// first, so `--prepare --verify` names the --prepare conflict.
+			if err := prepareFlagError(cmd, prepare, len(args)); err != nil {
+				return err
+			}
+
+			if err := verifyFlagError(cmd, verify, prepare, asJSON, len(files)); err != nil {
+				return err
+			}
+
+			// --set-mode, --pin, and --check are checked next, for the
+			// same reason: a call with --set-mode names its own conflict.
+			if err := setModeFlagError(cmd, setMode); err != nil {
+				return err
+			}
+
+			// --explore is checked next: it needs --hook and combines with
+			// no other mode, so a granted --file or --region prefix never
+			// reaches the exploration hook.
+			if err := exploreFlagError(cmd, explore, hookMode); err != nil {
+				return err
+			}
+
+			// --guard and --baseline are checked next, for the same reason:
+			// each needs --hook and combines with no other mode, so a call
+			// with another mode never reaches a pre-edit hook.
+			if err := preEditFlagError(cmd, guard, baseline, hookMode); err != nil {
+				return err
+			}
+
+			// The plain --hook and --hook-reset calls are checked last: a
+			// granted --file, --region, --list, or --stats prefix never
+			// reaches an advisory hook (P3 review ruling R3).
+			if err := hookFlagError(cmd, hookMode, hookReset); err != nil {
+				return err
 			}
 
 			// Apply, dismiss and prune are three different decisions
@@ -152,27 +251,60 @@ a file has no lessons.`,
 					"--retarget, --distill, or --extract-triggers — run it before or after")
 			}
 
+			// The confirmation belongs to one retarget run. On another mode
+			// it would read as a confirmation that nothing checks.
+			if confirmChecks && strings.TrimSpace(retargetIDs) == "" {
+				return errors.New("--confirm-checks applies to --retarget only")
+			}
+
 			// --client selects the native event format of a hook run. The
 			// inference agent of --distill is a separate setting, agent.cli.
 			// A user can take one for the other, so the error names both.
+			// --guard, --baseline, --explore, and --verify --hook need
+			// --hook, so the --hook check covers them. The text is the
+			// final form of contracts §4.1.
 			if hookClient != "" && !hookMode && !hookReset {
-				return fmt.Errorf("--client applies to --hook and --hook-reset only; " +
-					"the agent that --distill runs is agent.cli in .seamark/config.yaml")
+				return fmt.Errorf("--client applies to --hook, --hook-reset, --guard, --baseline, --explore, " +
+					"and --verify --hook only; the agent that --distill runs is agent.cli in .seamark/config.yaml")
 			}
 
 			// `--apply p1, p2` is natural typing; the shell splits the
 			// spaced list into positional args, so fold them back in.
-			if len(args) > 0 && decisions == 0 {
+			// The positional arguments of --prepare are its paths.
+			if len(args) > 0 && decisions == 0 && !prepare {
 				return fmt.Errorf("unexpected argument %q — provide --file, --list, --distill, --apply, --dismiss, or --prune", args[0])
 			}
 
 			extra := strings.Join(args, ",")
 
 			switch {
+			case explore:
+				// Before --hook: --explore --hook reads a read event, never
+				// an edit event.
+				return runLessonsExplore(cmd, opts, hookClient)
+			case guard:
+				// Before --hook: the guard fails closed, and the advisory
+				// edit hook fails open. The two never share a path (§6 A7,
+				// BRIEF rule 15).
+				return runLessonsGuard(cmd, opts, hookClient)
+			case baseline:
+				// Before --hook, for the same reason: the baseline handler
+				// stores state that the advisory edit hook never writes.
+				return runLessonsBaseline(cmd, opts, hookClient)
+			case verify && hookMode:
+				// Before --hook: --verify --hook reads a completion event and
+				// checks the actual result of the edit (contract K9).
+				return runLessonsVerifyHook(cmd, opts, hookClient)
 			case hookMode:
 				return runLessonsHook(cmd, opts, hookClient)
 			case hookReset:
 				return runLessonsHookReset(cmd, opts, hookClient)
+			case verify:
+				return runLessonsVerify(cmd, opts, files, asJSON)
+			case prepare:
+				return runLessonsPrepare(cmd, opts, args, asJSON)
+			case cmd.Flags().Changed("set-mode"):
+				return runLessonsSetMode(cmd, opts, setMode)
 			case strings.TrimSpace(applyIDs) != "":
 				return runLessonsApply(cmd, opts, applyIDs+","+extra)
 			case strings.TrimSpace(dismissIDs) != "":
@@ -180,7 +312,7 @@ a file has no lessons.`,
 			case strings.TrimSpace(pruneIDs) != "":
 				return runLessonsPrune(cmd, opts, pruneIDs+","+extra)
 			case strings.TrimSpace(retargetIDs) != "":
-				return runLessonsRetarget(cmd, opts, retargetIDs+","+extra)
+				return runLessonsRetarget(cmd, opts, retargetIDs+","+extra, confirmChecks)
 			case proposalList:
 				return runLessonsProposals(cmd, opts)
 			case extractTriggers:
@@ -191,7 +323,9 @@ a file has no lessons.`,
 				return runLessonsList(cmd, opts, strings.TrimSpace(region))
 			case stats:
 				return runLessonsStats(cmd, opts)
-			case strings.TrimSpace(file) != "":
+			case len(files) == 1 && strings.TrimSpace(files[0]) != "":
+				file := files[0]
+
 				st, root, err := openIndex(opts)
 				if err != nil {
 					return err
@@ -205,12 +339,29 @@ a file has no lessons.`,
 
 				return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, file), lessons, 0)
 			default:
-				return fmt.Errorf("provide --file <path>, --list, --stats, --distill, --proposals, --apply, --dismiss, or --hook")
+				return fmt.Errorf("provide --file <path>, --list, --stats, --distill, --proposals, --verify, --prepare, " +
+					"--apply, --dismiss, or --hook")
 			}
 		},
 	}
 
-	cmd.Flags().StringVar(&file, "file", "", "repo-relative (or absolute) path to look up")
+	// --file is a list, because --verify takes several paths (A12). Every
+	// other mode takes one value, and verifyFlagError refuses more.
+	cmd.Flags().StringArrayVar(&files, "file", nil,
+		"repo-relative (or absolute) path to look up; with --verify, a path to check (repeatable)")
+	cmd.Flags().BoolVar(&verify, "verify", false,
+		"check the working tree against the executable pins (mode check or enforce); exit 2 on a violation; "+
+			"with --hook, check the actual result of one agent edit")
+	cmd.Flags().BoolVar(&prepare, "prepare", false,
+		"print the lessons, pins, and checks of the paths you give before you construct a change (no agent call)")
+	cmd.Flags().BoolVar(&asJSON, "json", false,
+		"with --verify or --prepare: print the lesson-verification/1 or lesson-preparation/1 JSON document")
+	cmd.Flags().StringVar(&setMode.mode, "set-mode", "",
+		"set the mode of the pin that --pin names: advisory, check, or enforce; writes lessons.yaml only with distill.write")
+	cmd.Flags().StringVar(&setMode.pin, "pin", "",
+		"with --set-mode: the pin-ref of the pin to change, from the pin column of --verify")
+	cmd.Flags().StringVar(&setMode.check, "check", "",
+		"with --set-mode: the ID of a check under checks in lessons.yaml to bind to the pin")
 	cmd.Flags().BoolVar(&list, "list", false, "list every mined lesson with config-tuning syntax")
 	cmd.Flags().StringVar(&region, "region", "", "narrow --list or --distill to a directory's area")
 	cmd.Flags().BoolVar(&stats, "stats", false, "summarize the firing log: what surfaced, what never fires")
@@ -219,6 +370,12 @@ a file has no lessons.`,
 	cmd.Flags().BoolVar(&hookReset, "hook-reset", false,
 		"read an agent's context-reset JSON payload from stdin and reset once-per-context delivery")
 	_ = cmd.Flags().MarkHidden("hook-reset")
+	cmd.Flags().BoolVar(&explore, "explore", false,
+		"with --hook: read an agent's structured read event from stdin and emit the lessons of the read file")
+	cmd.Flags().BoolVar(&guard, "guard", false,
+		"with --hook: check an agent's pending edit against the enforce pins before the write; a violation denies it (exit 2)")
+	cmd.Flags().BoolVar(&baseline, "baseline", false,
+		"with --hook: store the state before an agent's pending edit for the check after it; never denies the edit")
 	cmd.Flags().StringVar(&hookClient, "client", "",
 		"with --hook: the agent whose hook event to read ("+strings.Join(integration.Builtin().IDs(), ", ")+
 			"); without it the event is a Claude Code event")
@@ -238,6 +395,8 @@ a file has no lessons.`,
 		"remove applied pins that restate another (p16,p45) — the theme stays pinned by its survivor")
 	cmd.Flags().StringVar(&retargetIDs, "retarget", "",
 		"update applied pins to the regions today's inference computes (p3,p7) — lessons.yaml and the ledger together, write-gated like --apply")
+	cmd.Flags().BoolVar(&confirmChecks, "confirm-checks", false,
+		"with --retarget: move the regions of a pin with mode check or enforce, after a review of the checker impact")
 	cmd.Flags().BoolVar(&extractTriggers, "extract-triggers", false,
 		"backfill trigger paths for existing proposals via small agent calls (needs the agent CLI); composes with --dry-run")
 
@@ -965,9 +1124,21 @@ func runLessonsHook(cmd *cobra.Command, opts *options, clientID string) error {
 		return err
 	}
 
+	// The hook keeps the read error, so the firing log can name the
+	// guidance invalid. The advice still uses the defaults then.
+	cfg, cfgErr := reviews.LoadConfig(root)
+	if cfgErr != nil {
+		cfg = reviews.DefaultConfig()
+	}
+
+	// One identity root and one read of the recording switch per run. The
+	// switch gates the evaluation records only, never the advice.
+	idRoot := hookIdentityRoot(opts)
+
 	_, err = delivery.Deliver(cmd.Context(), st, delivery.Request{
-		Root: root, ClientID: client.ID, Mechanism: client.Edits.AdviceMechanism(),
-		Event: event, Config: loadLessonsConfig(root),
+		Root: root, IdentityRoot: idRoot, ClientID: client.ID, Mechanism: client.Edits.AdviceMechanism(),
+		Event: event, Config: cfg, ConfigErr: cfgErr,
+		RecordEvaluations: recordEvaluations(),
 	}, emit)
 
 	// Only a failed reply is the hook's own failure. A failed lookup
@@ -999,12 +1170,23 @@ func runLessonsHookReset(cmd *cobra.Command, opts *options, clientID string) err
 		return nil
 	}
 
-	root, err := index.ResolveRoot(opts.workspace)
-	if err != nil {
+	// The edit hook and the exploration hook key their state under the
+	// index-meta root of openHookIndex. hookIdentityRoot reads the same
+	// meta (contract K2), so the reset finds the state keys of the hooks.
+	// The git top level can differ, and a reset there leaves the advice
+	// hidden after compaction (P3 review ruling R1). The reset record
+	// hashes over this root too, so it joins the edit records of the same
+	// receiver (§5 row 121).
+	idRoot := hookIdentityRoot(opts)
+	if idRoot == "" {
+		// No root resolves, so no state file of the hooks can be found.
 		return nil
 	}
 
-	_ = delivery.Reset(delivery.ResetRequest{Root: root, ClientID: client.ID, Event: event})
+	_ = delivery.Reset(delivery.ResetRequest{
+		Root: idRoot, IdentityRoot: idRoot, ClientID: client.ID, Event: event,
+		RecordEvaluations: recordEvaluations(),
+	})
 
 	return nil
 }

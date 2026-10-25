@@ -37,6 +37,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
@@ -56,9 +57,11 @@ const (
 // inference computes from their living evidence. It is the upgrade path
 // for pins distilled before region sets, or whose evidence moved. The
 // region keys of the entry and the ledger row change together. A key in
-// only one of them breaks liveness and coverage.
-func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
-	return runLessonsMaintain(cmd, opts, raw, maintain.ActionRetarget)
+// only one of them breaks liveness and coverage. confirmChecks is the
+// --confirm-checks flag: it lets the run move the regions of an
+// executable pin (contract K1).
+func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string, confirmChecks bool) error {
+	return runLessonsMaintain(cmd, opts, raw, maintain.ActionRetarget, confirmChecks)
 }
 
 // runLessonsPrune retires applied pins that restate another. It is not
@@ -66,12 +69,14 @@ func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string) error {
 // proposal becomes superseded, and the distiller still knows the theme.
 // Editing lessons.yaml obeys the same gate as --apply.
 func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
-	return runLessonsMaintain(cmd, opts, raw, maintain.ActionPrune)
+	return runLessonsMaintain(cmd, opts, raw, maintain.ActionPrune, false)
 }
 
 // runLessonsMaintain resolves the selection against the applied
 // proposals and runs one maintenance action on their pins.
-func runLessonsMaintain(cmd *cobra.Command, opts *options, raw string, action maintain.Action) error {
+func runLessonsMaintain(cmd *cobra.Command, opts *options, raw string, action maintain.Action,
+	confirmChecks bool,
+) error {
 	st, probe, err := openIndexProbe(opts)
 	if err != nil {
 		return err
@@ -94,7 +99,7 @@ func runLessonsMaintain(cmd *cobra.Command, opts *options, raw string, action ma
 	// atomic write of the setup engine.
 	deps := maintain.Deps{Root: probe.Root, Reg: integration.Builtin(), Reader: st, Probe: probe}
 
-	return maintainPins(cmd.OutOrStdout(), deps, action, ps)
+	return maintainPins(cmd.OutOrStdout(), deps, action, ps, confirmChecks)
 }
 
 // maintainPins plans the action for the selected rows, prints the rows
@@ -102,7 +107,15 @@ func runLessonsMaintain(cmd *cobra.Command, opts *options, raw string, action ma
 // entry is ready enter the commit. So a run changes what it can, and it
 // names each row that it left with the reason. With distill.write off,
 // it prints the change to make by hand instead.
-func maintainPins(out io.Writer, deps maintain.Deps, action maintain.Action, ps []model.Proposal) error {
+//
+// A retarget that moves the regions of a check or enforce pin prints the
+// checker impact of the plan first (contract K1). With the gate on, it
+// then refuses and writes nothing unless confirmChecks is set (§4.1,
+// §5 row 113). An advisory pin has no impact, so its output keeps its
+// bytes.
+func maintainPins(out io.Writer, deps maintain.Deps, action maintain.Action, ps []model.Proposal,
+	confirmChecks bool,
+) error {
 	sel, err := selectPins(deps, action, ps)
 	if err != nil {
 		return err
@@ -131,6 +144,8 @@ func maintainPins(out io.Writer, deps maintain.Deps, action maintain.Action, ps 
 		return nil
 	}
 
+	joinCheckImpact(plan, deps)
+
 	// The gate decides only a change. A config that cannot be read is
 	// an error then, never a default.
 	if plan.GateErr != nil {
@@ -140,6 +155,10 @@ func maintainPins(out io.Writer, deps maintain.Deps, action maintain.Action, ps 
 	ready := sel.rowsOf(plan.Items)
 
 	if !plan.Write {
+		// A hand edit changes the same regions, so the person sees the
+		// checker impact before the lines to change.
+		printImpact(out, plan.Impact)
+
 		// Every entry is ready, so the editor accepts the file. A file
 		// block is then a write refusal, for example a symbolic link.
 		printManual(out, handChange{
@@ -152,6 +171,15 @@ func maintainPins(out io.Writer, deps maintain.Deps, action maintain.Action, ps 
 
 	if plan.FileBlock != "" {
 		return fmt.Errorf("the pin file cannot be replaced: %s", render.Sanitize(plan.FileBlock))
+	}
+
+	// The refusal comes before the commit, so nothing is written. It
+	// comes after the file block, because a rerun with --confirm-checks
+	// cannot lift that block.
+	if len(plan.Impact) > 0 && !confirmChecks {
+		printImpact(out, plan.Impact)
+
+		return checksRefusal(plan.Impact[0], ready)
 	}
 
 	res, err := maintain.Commit(deps, plan)
@@ -431,6 +459,54 @@ func printManual(out io.Writer, h handChange) {
 
 	fmt.Fprintf(out, "\n(nothing was changed; %s)\n",
 		h.tail("enable distill.write to let retarget edit the file and the ledger together"))
+}
+
+// printImpact prints the checker impact block of each executable pin of
+// a plan (contract K1), then one empty line. It prints nothing for an
+// empty block, so a run on advisory pins keeps its bytes. ImpactLines
+// sanitizes the text from the file.
+func printImpact(out io.Writer, impacts []lessoncheck.Impact) {
+	lines := lessoncheck.ImpactLines(impacts)
+	if len(lines) == 0 {
+		return
+	}
+
+	for _, line := range lines {
+		fmt.Fprintln(out, line)
+	}
+
+	fmt.Fprintln(out)
+}
+
+// joinCheckImpact reports installed capability for the candidate pin
+// identities. The core plan has no binary identity and remains deterministic.
+func joinCheckImpact(plan *maintain.Plan, deps maintain.Deps) {
+	if plan.Change == nil || len(plan.Impact) == 0 {
+		return
+	}
+
+	cfg, errs, err := lessoncheck.Parse(plan.Change.After)
+	if err != nil {
+		return
+	}
+
+	report := integration.LessonCapabilityOf(deps.Reg.Inspect(deps.Root), cfg, errs, integration.SelfIdentity(version))
+
+	for i := range plan.Impact {
+		if n := plan.Impact[i].Entry; n >= 1 && n <= len(cfg.Pins) {
+			plan.Impact[i].Active = report.ActiveText(cfg.Pins[n-1].Ref)
+		}
+	}
+}
+
+// checksRefusal is the §4.1 refusal of a retarget that moves the regions
+// of an executable pin without --confirm-checks. The block above names
+// every such pin. One error line names the first one, and the rerun
+// names the rows of the plan, so it changes exactly what was shown.
+func checksRefusal(im lessoncheck.Impact, ready []model.Proposal) error {
+	return fmt.Errorf("lessons --retarget: pin %s is executable (mode %s, check %s); review the checker impact "+
+		"above, then rerun: seamark lessons --retarget %s --confirm-checks",
+		im.PinRef, im.Mode, render.Sanitize(im.Check.ID), pidArg(proposalIDs(ready)))
 }
 
 // tail returns the end of the last line of the answer. When the command

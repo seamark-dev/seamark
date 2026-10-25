@@ -4,7 +4,7 @@ description: Maps an unfamiliar repository, module, or subsystem when asked to u
 license: Apache-2.0
 metadata:
   seamark: managed
-allowed-tools: mcp__seamark__orient mcp__seamark__why mcp__seamark__change_set mcp__seamark__check mcp__seamark__expand Bash(seamark orient*) Bash(seamark why *) Bash(seamark check*) Bash(seamark status*) Bash(seamark lessons --file *) Bash(seamark lessons --region *)
+allowed-tools: mcp__seamark__orient mcp__seamark__why mcp__seamark__change_set mcp__seamark__check mcp__seamark__expand Bash(seamark orient*) Bash(seamark why *) Bash(seamark check*) Bash(seamark status*) Bash(seamark lessons --file *) Bash(seamark lessons --region *) Bash(seamark lessons --prepare *) Bash(seamark lessons --verify) Bash(seamark lessons --verify --json*) Bash(seamark lessons --verify --file *)
 ---
 
 # Understand a repository with Seamark
@@ -20,7 +20,7 @@ Do not use it, and make no Seamark call, when:
 - the task is to implement, add, expose, change, refactor, or fix something, in a familiar area or not; `seamark-plan-change` owns that request and calls `orient` itself when the area is new, so two skills never race for one prompt;
 - the question is a pinpoint lookup of a known file or symbol ("what does X return", "where is Y defined"); a direct read or a search answers it;
 - the task is a typo, a comment, or a formatting edit;
-- the task is a one-file change in an area you already understand; start from the file, and let `seamark-plan-change` decide whether `change_set` is worth a call.
+- the task is a one-file change in an area you already understand; start from the file, and let `seamark-plan-change` prepare it with `change_set`, because a pin or a lesson check can cover one file.
 
 Never call `orient` because Seamark exists. Call it once, when the repository or the subsystem is unfamiliar, and not again in the same session.
 

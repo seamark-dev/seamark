@@ -1,8 +1,8 @@
 package maintain
 
 // The authoring of pins. A person creates a pin, edits an unlinked pin,
-// edits the note of a linked pin, or removes an unlinked pin in the
-// console. PlanAuthor computes the complete candidate file and every
+// edits the note, mode, or check of a linked pin, or removes an
+// unlinked pin in the console. PlanAuthor computes the candidate file and every
 // reason that blocks it. CommitAuthor plans again from fresh
 // observations and writes the one file only when nothing changed.
 //
@@ -17,6 +17,9 @@ package maintain
 // readGate reads distill.write, and readLedger reads the rows.
 // integration.Landed reads the outcome of a failed write. The checks of
 // typed text are reviews.CheckAuthoredText and reviews.CheckPinRegion.
+// An edit can also set the mode and the check of a pin (contract K1).
+// checkImpact gives the impact block, and the strict check tier of
+// lessoncheck refuses an invalid candidate before the save.
 
 import (
 	"bytes"
@@ -28,6 +31,7 @@ import (
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/reviews"
@@ -91,9 +95,16 @@ type AuthorRequest struct {
 	// the person typed them; the check normalizes them.
 	Scope   ScopeChoice
 	Regions []string
-	// RuleSet, NoteSet, and ScopeSet mark the fields of an edit that the
-	// person changed. A create ignores them.
-	RuleSet, NoteSet, ScopeSet bool
+	// Mode and Check are the lesson-check keys of an edit (contract K1,
+	// writer row "Manual edit"). Mode advisory removes the mode key,
+	// because an absent mode reads as advisory. An empty Check removes
+	// the check key. A new pin is advisory (writer row "Manual create"),
+	// so a create with a mode or a check gets an issue.
+	Mode  lessoncheck.Mode
+	Check string
+	// RuleSet, NoteSet, ScopeSet, ModeSet, and CheckSet mark the fields
+	// of an edit that the person changed. A create ignores them.
+	RuleSet, NoteSet, ScopeSet, ModeSet, CheckSet bool
 }
 
 // AuthorField names a field of the authoring form.
@@ -105,6 +116,8 @@ const (
 	FieldNote
 	FieldScope
 	FieldRegions
+	FieldMode
+	FieldCheck
 )
 
 // String returns the lower-case name of the field.
@@ -118,6 +131,10 @@ func (f AuthorField) String() string {
 		return "scope"
 	case FieldRegions:
 		return "regions"
+	case FieldMode:
+		return "mode"
+	case FieldCheck:
+		return "check"
 	default:
 		return "AuthorField(" + strconv.Itoa(int(f)) + ")"
 	}
@@ -160,6 +177,11 @@ const (
 	BlockForeignRoot
 	// BlockGate means that distill.write is off or cannot be read.
 	BlockGate
+	// BlockCheck means that the candidate fails the strict check tier
+	// (contract K1, writer rule), for example a mode enforce without a
+	// check. The kind comes last, so the earlier kinds keep their values.
+	// A plan lists it before the ledger, root, and gate blockers.
+	BlockCheck
 )
 
 // AuthorBlocker is one reason that a plan cannot be confirmed. Route
@@ -237,6 +259,11 @@ type AuthorPlan struct {
 	Missing []string
 	// NewRef binds the new or edited entry in After; nil otherwise.
 	NewRef *pinfile.EntryRef
+	// Impact is the checker impact of an edit (contract K1), shown before
+	// the save. It holds the block of the edited pin when the pin is check
+	// or enforce before or after the edit. It is empty otherwise, also for
+	// a create, because a new pin is advisory.
+	Impact []lessoncheck.Impact
 	// Confirmable is true when nothing blocks the write.
 	Confirmable bool
 }
@@ -319,6 +346,8 @@ const (
 	issueNoNote      = "a new pin needs a note"
 	issueBlankNote   = "the note holds only white space; clear it or write guidance"
 	issueBareRule    = "a pin without a note needs a rule"
+	issueMode        = "choose advisory, check, or enforce"
+	issueCreateCheck = "a new pin starts advisory; set its mode and check in an edit after the save"
 )
 
 // The fixed texts and routes of the blockers. A blocker can also quote a
@@ -334,13 +363,14 @@ const (
 	routeRefresh    = "review the entry in Pins again"
 	textFileBlock   = "the pin file cannot be changed: "
 	textEntryGone   = "the pin changed since the draft started"
-	textLinkedNote  = "linked to proposal #%d; only its note can change here"
+	textLinkedNote  = "linked to proposal #%d; only its note, mode, and check can change here"
 	textLinkedOnly  = "linked to proposal #%d; Remove is only for unlinked pins"
 	textOwnedBy     = "the rule and scope are already held by "
 	textGateUnread  = "distill.write cannot be read"
 	routeGateUnread = "fix .seamark/config.yaml first"
 	textGateOff     = "distill.write is off: this preview changes nothing"
 	routeGateOff    = "turn on Settings › Pin writing and preview again"
+	routeCheckDraft = "choose a check that checks defines, or the advisory mode"
 )
 
 // The review texts of an authoring plan (contracts §5). B2 shows them as
@@ -356,6 +386,15 @@ const (
 	textLinkedKeeps = "Proposal #%d keeps its recorded rule, note, and evidence. Pins shows the " +
 		"difference as 'edited'. Trigger extraction still asks about the recorded note. Saving does " +
 		"not extract triggers or retarget."
+	// The two texts below replace textIdentityKept and textLinkedKeeps for
+	// an edit of the mode or the check only. Such an edit changes no
+	// spelling and no note, so the texts of a wording edit would claim
+	// effects that it does not have (review finding R-7).
+	textChecksKept = "The delivery identity does not change. This edit changes only the %s of the pin; its " +
+		"rule, note, and scope stay as they are."
+	textLinkedChecks = "Proposal #%d keeps its recorded rule, note, and evidence. This edit leaves the note as " +
+		"it is, and Pins marks a pin 'edited' only for a note difference. Saving does not extract triggers " +
+		"or retarget."
 	textLedgerEffect = "The proposal ledger does not change."
 	noteNoOp         = "the draft changes nothing"
 	noteCreateLast   = "the new pin goes after the last pin, so the earlier pins keep their order"
@@ -410,6 +449,12 @@ func gateBlocker(write bool, gateErr error) *AuthorBlocker {
 // scope in two keys, region and regions, so a typed list has no one
 // stored text to compare with. A legacy region that CheckPinRegion
 // refuses thus blocks every scope edit of its entry.
+//
+// A set mode must be a mode word of contract K1. A create with a mode
+// other than advisory or with a check gets an issue, because a new pin
+// is advisory and the create never drops a field without a word. The
+// strict check tier on the candidate decides the rest, for example a
+// check that checks does not define (PlanAuthor, BlockCheck).
 func CheckDraft(req AuthorRequest, base *reviews.PinRule) []FieldIssue {
 	issues, _ := checkDraft(req, base)
 
@@ -442,6 +487,8 @@ func checkDraft(req AuthorRequest, base *reviews.PinRule) (issues []FieldIssue, 
 	if create || req.ScopeSet {
 		set = c.scope(req)
 	}
+
+	c.checkKeys(req)
 
 	return c.issues, set
 }
@@ -541,6 +588,24 @@ func (c *draftCheck) scope(req AuthorRequest) []string {
 	}
 
 	return set
+}
+
+// checkKeys checks the lesson-check keys of a draft (CheckDraft).
+func (c *draftCheck) checkKeys(req AuthorRequest) {
+	switch {
+	case req.Op == AuthorCreate:
+		if req.Mode != "" && req.Mode != lessoncheck.ModeAdvisory {
+			c.add(FieldMode, -1, issueCreateCheck, false)
+		}
+
+		if req.Check != "" {
+			c.add(FieldCheck, -1, issueCreateCheck, false)
+		}
+	case req.ModeSet:
+		if _, err := ParseMode(string(req.Mode)); err != nil {
+			c.add(FieldMode, -1, issueMode, false)
+		}
+	}
 }
 
 // Blocking reports whether an issue blocks the draft: an issue blocks
@@ -766,6 +831,15 @@ func edited(old reviews.PinRule, req AuthorRequest, set []string) reviews.PinRul
 
 	if req.ScopeSet {
 		pin = reviews.PinForRegions(pin.Rule, pin.Note, set)
+		pin.Mode, pin.Check = old.Mode, old.Check
+	}
+
+	if req.ModeSet {
+		pin.Mode = modeKey(req.Mode)
+	}
+
+	if req.CheckSet {
+		pin.Check = req.Check
 	}
 
 	return pin
@@ -784,7 +858,8 @@ func (a *authoring) history(key reviews.PinKey) []model.Proposal {
 
 // relation applies the relationship matrix to an edit or a removal. Only
 // an entry without a proposal permits every field. A linked entry
-// permits a note edit; Retarget and Prune own its scope and its removal.
+// permits note, mode, and check edits. Retarget and Prune own its scope
+// and its removal, so those edits use their own plans.
 func (a *authoring) relation() {
 	p := a.plan
 
@@ -876,7 +951,9 @@ func (a *authoring) candidate() error {
 	}
 
 	if a.req.Op == AuthorCreate {
-		a.create()
+		if a.create() {
+			return a.strict(nil)
+		}
 
 		return nil
 	}
@@ -919,18 +996,63 @@ func (a *authoring) candidate() error {
 		}
 	}
 
+	return a.strict(change)
+}
+
+// strict adds the checker impact of an edit and refuses a candidate
+// that fails the strict check tier (contract K1). pinfile.Prepare runs
+// the same tier at the write. A refusal there comes after the review,
+// so the plan names it before the save instead. change is nil for a
+// create, which writes an advisory pin and so has no impact.
+//
+// The impact reads the lenient decodes, so the review shows it also when
+// the strict tier refuses the candidate. The route depends on the cause:
+// an error that the file already holds needs a manual fix, and an error
+// that only the draft makes needs another mode or check.
+func (a *authoring) strict(change *pinfile.Change) error {
+	p := a.plan
+
+	if change != nil {
+		impact, err := checkImpact(a.doc, change)
+		if err != nil {
+			return err
+		}
+
+		p.Impact = impact
+	}
+
+	cfg, err := reviews.ParseConfig(p.After)
+	if err != nil {
+		a.block(BlockFile, textFileBlock+"the candidate does not load: "+err.Error(), routeByHand)
+
+		return nil
+	}
+
+	reason := pinfile.CandidateRefusal(cfg)
+	if reason == "" {
+		return nil
+	}
+
+	route := routeCheckDraft
+	if before, err := reviews.ParseConfig(p.Before); err != nil || len(lessoncheck.Validate(before)) > 0 {
+		route = routeByHand
+	}
+
+	a.block(BlockCheck, reason, route)
+
 	return nil
 }
 
-// create renders the new pin and appends it after the last entry.
-func (a *authoring) create() {
+// create renders the new pin and appends it after the last entry. It
+// reports whether a candidate exists.
+func (a *authoring) create() bool {
 	p := a.plan
 
 	block, err := pinfile.RenderPin(p.New)
 	if err != nil {
 		a.block(BlockFile, err.Error(), routeByHand)
 
-		return
+		return false
 	}
 
 	after, err := pinfile.PlanAppend(a.doc, block, pinfile.Placement{Tail: true})
@@ -943,7 +1065,7 @@ func (a *authoring) create() {
 
 		a.block(BlockFile, err.Error(), route)
 
-		return
+		return false
 	}
 
 	p.After = after
@@ -954,6 +1076,8 @@ func (a *authoring) create() {
 	if n := len(d.Entries); n > 0 && d.Entries[n-1].Key == a.newKey {
 		a.bindNew(d.Entries[n-1])
 	}
+
+	return true
 }
 
 // bindNew binds the new or edited entry e of the candidate, and takes New
@@ -993,6 +1117,18 @@ func (a *authoring) rewrite() *pinfile.Rewrite {
 		rw.Regions = &set
 	}
 
+	// The lesson-check keys follow the splice rule of lessons --set-mode
+	// (contract K6), so the form and the command write the same bytes.
+	if a.req.ModeSet {
+		mode := modeKey(a.req.Mode)
+		rw.Mode = &mode
+	}
+
+	if a.req.CheckSet {
+		check := a.req.Check
+		rw.Check = &check
+	}
+
 	return rw
 }
 
@@ -1029,10 +1165,13 @@ func (a *authoring) notes() []string {
 	var notes []string
 
 	linked := p.Link == pinfile.LinkLinked && p.Proposal != nil
+	checks, only := a.checksEdit()
 
 	switch {
 	case a.req.Op == AuthorCreate:
 		notes = append(notes, noteCreateLast)
+	case a.req.Op == AuthorEdit && a.drafted && only && !p.IdentityChanged:
+		notes = append(notes, fmt.Sprintf(textChecksKept, checks))
 	case a.req.Op == AuthorEdit && a.drafted && p.IdentityChanged:
 		notes = append(notes, textIdentityChanged)
 		if linked {
@@ -1042,7 +1181,10 @@ func (a *authoring) notes() []string {
 		notes = append(notes, textIdentityKept)
 	}
 
-	if a.req.Op == AuthorEdit && linked {
+	switch {
+	case a.req.Op == AuthorEdit && linked && only:
+		notes = append(notes, fmt.Sprintf(textLinkedChecks, p.Proposal.ID))
+	case a.req.Op == AuthorEdit && linked:
 		notes = append(notes, fmt.Sprintf(textLinkedKeeps, p.Proposal.ID))
 	}
 
@@ -1053,6 +1195,33 @@ func (a *authoring) notes() []string {
 	}
 
 	return notes
+}
+
+// checksEdit reports which lesson-check keys the edit changes: "mode",
+// "check", or "mode and check". only is true when the edit changes no
+// other field of the pin. The test compares the old and the new pin, not
+// the set flags, because a draft can set a field to its current value.
+func (a *authoring) checksEdit() (keys string, only bool) {
+	p := a.plan
+	old, next := p.Old, p.New
+
+	modeChanged, checkChanged := old.Mode != next.Mode, old.Check != next.Check
+	if !a.drafted || (!modeChanged && !checkChanged) {
+		return "", false
+	}
+
+	same := old.Rule == next.Rule && old.Note == next.Note && slices.Equal(old.AllRegions(), next.AllRegions())
+
+	switch {
+	case modeChanged && checkChanged:
+		keys = "mode and check"
+	case modeChanged:
+		keys = "mode"
+	default:
+		keys = "check"
+	}
+
+	return keys, same
 }
 
 // proposalIDs returns the IDs of rows, which come in ascending order.
@@ -1144,9 +1313,29 @@ func CommitAuthor(d Deps, p *AuthorPlan) (AuthorResult, error) {
 		return refuse(&StaleError{Differences: diffs})
 	}
 
-	err = d.author().Write(d.Reg, d.Root, q.Guard, q.After, q.Request.Op == AuthorCreate)
+	res, err := writeAuthored(d, q.Guard, q.After, q.Request.Op == AuthorCreate)
+	if err != nil {
+		return refuse(err)
+	}
+
+	if res.Outcome == Written {
+		res.NewRef = q.NewRef
+	}
+
+	return res, nil
+}
+
+// writeAuthored writes after over the file that guard observed, through
+// Deps.Author. create allows an absent file. A non-nil error means that
+// nothing was written before the engine write: the refusal or the stale
+// observation. After the write starts, the error is nil and the result
+// holds the outcome. A failed write reads the file again, and
+// integration.Landed decides the outcome (P4-18). The pin authoring and
+// the check-definition authoring share this rule.
+func writeAuthored(d Deps, guard integration.FileGuard, after []byte, create bool) (AuthorResult, error) {
+	err := d.author().Write(d.Reg, d.Root, guard, after, create)
 	if err == nil {
-		return AuthorResult{Outcome: Written, NewRef: q.NewRef}, nil
+		return AuthorResult{Outcome: Written}, nil
 	}
 
 	if beforeWrite(err) {
@@ -1154,16 +1343,16 @@ func CommitAuthor(d Deps, p *AuthorPlan) (AuthorResult, error) {
 			err = &StaleError{Differences: []string{diffBytes}}
 		}
 
-		return refuse(err)
+		return AuthorResult{Outcome: NotWritten, Err: err}, err
 	}
 
-	holds, rerr := fileHolds(d.Root, sha256.Sum256(q.After))
+	holds, rerr := fileHolds(d.Root, sha256.Sum256(after))
 
 	switch {
 	case rerr != nil:
 		return AuthorResult{Outcome: Unknown, Err: readBackFailed(err, rerr)}, nil
 	case holds:
-		return AuthorResult{Outcome: Written, Err: err, NewRef: q.NewRef}, nil
+		return AuthorResult{Outcome: Written, Err: err}, nil
 	}
 
 	return AuthorResult{Outcome: NotWritten, Err: err}, nil

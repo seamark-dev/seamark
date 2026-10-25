@@ -253,7 +253,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		cmd := m.broadcast(msg)
 
-		return m, tea.Batch(cmd, m.st.checkRefresh(msg))
+		return m, tea.Batch(cmd, m.st.checkRefresh(msg), m.st.followChecks(msg))
 
 	case freshMsg:
 		if msg.err != nil {

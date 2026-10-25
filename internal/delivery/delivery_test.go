@@ -473,14 +473,15 @@ func TestDeliverGivesEquivalentEventsOfTwoClientsTheSameAdvice(t *testing.T) {
 	_, nested := advise(integration.CodexID, []byte(strings.ReplaceAll(string(raw), "/workspace/repo", root)))
 	assert.Equal(t, []string{"internal/api/handler.go", "docs/from-nested.md"}, nested.Files)
 
-	// The Codex adapter reads no receiver yet. Under once-per-context the
-	// advice repeats, the outcome says why, and no state appears.
+	// The Codex adapter names the receiver, but no reset of a Codex
+	// context is verified. Under once-per-context the advice repeats, the
+	// outcome says why, and no state appears.
 	cfg.Delivery = reviews.HookDeliveryOncePerContext
 
 	for range 2 {
 		_, out := advise(integration.CodexID, fixture("codex", "pre_tool_use_apply_patch_update.json"))
 		assert.Equal(t, StatusEmitted, out.Status)
-		assert.Equal(t, SuppressionNoContext, out.Suppression)
+		assert.Equal(t, SuppressionNotResettable, out.Suppression)
 	}
 
 	assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-hook-state.json"))
@@ -492,7 +493,7 @@ func TestDeliverGivesEquivalentEventsOfTwoClientsTheSameAdvice(t *testing.T) {
 	assert.Equal(t, integration.CodexID, last.Client)
 	assert.Equal(t, "apply_patch", last.Tool)
 	assert.Len(t, last.SessionSHA, 64)
-	assert.Empty(t, last.ContextSHA, "the log holds no identity that the client did not report")
+	assert.Len(t, last.ContextSHA, 64, "the log names the lane that the client reported")
 }
 
 func TestDeliverKeepsAdviceEligibleWhenTheReplyFails(t *testing.T) {

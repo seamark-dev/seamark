@@ -57,6 +57,7 @@ func (codexSetup) Plan(root, binary string, req ClientSetup) (ClientPlan, error)
 // reuses it: a second read of one path gives a second guard, and the
 // coordinator takes two different guards for a file that changed.
 type codexConfigRead struct {
+	err    error
 	data   []byte
 	exists bool
 }
@@ -207,19 +208,43 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 		plan.GateHooks = append(plan.GateHooks, GateHook{Path: codexHooksFile, Mode: gateMode, Managed: true})
 	}
 
-	change := codexHooksChange{
-		changed: merged.Changed, created: !guard.Exists,
-		removedEnforce: merged.RemovesEnforce(hooks.CodexGateMarker(hooks.ModeEnforce)),
+	// The lesson-check hooks go into hooks.json beside the lessons hook.
+	// The enforce preconditions read the sources that this plan already
+	// read: hooks turned off in the project configuration, and a
+	// definition in either source that discards the exit status of the
+	// guard. Codex trust stays unknown, so an installed guard is at most
+	// active-unverified.
+	lessons, err := planLessonChecks(document, codexHooksFile, root, binary, codexLessonHooks, req,
+		codexLessonSources(document, inline, config))
+	if err != nil {
+		return err
 	}
-	changed := merged.Changed
+
+	for _, spec := range lessons.specs {
+		sources := unmanagedSources(codexHookSources(&plan.Findings, document, inline, spec))
+		for _, source := range sources {
+			if source.certain {
+				return duplicateLessonHandler(spec, source, lessons.requested)
+			}
+		}
+		// An uncertain wrapper does not establish coverage. It warns while
+		// setup installs the managed handler, as ordinary hook setup does.
+		reportCodexHookSources(plan, sources, true, "")
+	}
+
+	change := codexHooksChange{
+		changed: merged.Changed || lessons.changed(), created: !guard.Exists, hooksChanged: merged.Changed,
+		removedEnforce: merged.RemovesEnforce(hooks.CodexGateMarker(hooks.ModeEnforce)), lessons: lessons,
+	}
+	changed := change.changed
 	narrate := func(w io.Writer, status OpStatus) {
 		narrateCodexHooks(w, binary, managed, change, status == OpPlanned)
 	}
 
-	// The adapter reads no receiver from a Codex event yet. The event
-	// names one, but the reset of a subagent is unverified. The
-	// once-per-context mode therefore has no effect there. Say so once,
-	// at setup, in the words inspection repeats.
+	// The adapter names the receiver of a Codex event, but no reset of a
+	// Codex context is verified. The once-per-context mode therefore has
+	// no effect there. Say so once, at setup, in the words inspection
+	// repeats.
 	plan.Findings = append(plan.Findings, codexContextFinding)
 
 	// Hooks turned off in the project configuration make every hook of
@@ -231,13 +256,13 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 	// Codex records trust against the hash of a hook, so a new or changed
 	// hook is skipped until the user reviews it. The fact holds for a
 	// kept hook too; inspection repeats it in the same words.
-	if len(managed) > 0 {
+	if len(managed) > 0 || len(lessons.specs) > 0 {
 		plan.Findings = append(plan.Findings, codexTrustFinding)
 	}
 
 	if !changed {
 		detail := "seamark hooks already wired"
-		if len(managed) == 0 {
+		if len(managed) == 0 && len(lessons.specs) == 0 {
 			detail = "no hook installed: the seamark hooks run from definitions that setup does not manage"
 		}
 
@@ -256,10 +281,50 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 
 	plan.Writes = append(plan.Writes, FileWrite{
 		Path: codexHooksFile, After: after,
-		Detail: codexHooksDetail(managed), Narrate: narrate,
+		Detail: change.detail(managed), Narrate: narrate,
 	})
 
 	return nil
+}
+
+// duplicateLessonHandler returns the refusal for a second lesson handler
+// in a source that setup does not manage. Setup refuses because two
+// handlers would run the same check twice. A run that requests a lesson
+// change asks setup to manage the handler, so the advice is to remove the
+// other definition. A run that requests none keeps a handler that setup
+// already manages, so the advice says that setup owns the handler.
+func duplicateLessonHandler(spec hooks.Spec, source hookSource, requested bool) error {
+	where := fmt.Sprintf("lesson checks: codex %s %s already runs a handler from %s: %#q",
+		spec.Event, strings.Join(source.tools, ", "), source.path, describeCommand(source.command))
+	if requested {
+		return fmt.Errorf("%s; setup refuses a second handler; remove that definition to let setup manage lesson checks", where)
+	}
+
+	return fmt.Errorf("%s; setup already manages this handler, so remove that definition", where)
+}
+
+// codexLessonSources reads the state of the Codex hook sources that the
+// enforce preconditions need, from the reads of the hook plan (P0 ruling
+// M4). An unreadable configuration gives unknown source state. Setup
+// permits installation, but capability preserves the read failure.
+func codexLessonSources(document map[string]any, inline []approve.InlineHook, config *codexConfigRead) lessonSourceState {
+	pre := hooks.CodexLessonCheckSpecs(hooks.LessonChecksEnforce)[0]
+	state := lessonSourceState{}
+
+	if reportOnlyIn(document, pre, hooks.CodexMatcher) {
+		state.reportOnly = append(state.reportOnly, codexHooksFile)
+	}
+
+	if reportOnlyInline(inline, pre, hooks.CodexMatcher) {
+		state.reportOnly = append(state.reportOnly, approve.CodexConfig+" [hooks]")
+	}
+
+	if config != nil && config.exists {
+		state.hooksDisabled = len(codexHooksDisabledFinding(config.data)) > 0
+	}
+	state.sourceUnreadable = config != nil && config.err != nil
+
+	return state
 }
 
 // codexInstalledGateMode reads the mode of the managed gate hook from a
@@ -380,7 +445,7 @@ func reportCodexHookSources(plan *ClientPlan, sources []hookSource, owned bool, 
 			finding.Reason = fmt.Sprintf("has `%s`, which can run the seamark hook; setup cannot tell, so it installed "+
 				"%s; when that command runs the hook, the hook runs twice", command, managed)
 		case owned:
-			finding.Reason = fmt.Sprintf("also runs the seamark hook: `%s`; %s exists too, so the hook runs twice", command, managed)
+			finding.Reason = fmt.Sprintf("also runs the seamark hook: %#q; %s exists too, so the hook runs twice", command, managed)
 		case !delivered:
 			finding.Reason = fmt.Sprintf("already runs the seamark gate hook: `%s`, %s; the run asked for %s mode, "+
 				"so setup installed %s too, and the hook runs twice", command, describeGateMode(s.mode), asked, managed)
@@ -444,11 +509,16 @@ func codexInlineCommands(plan *ClientPlan, root string, config *codexConfigRead)
 	}
 
 	if !config.exists {
+		if config.err != nil {
+			return skipped(config.err)
+		}
+
 		return nil
 	}
 
 	entries, present, err := approve.CodexInlineHookEntries(config.data)
 	if err != nil {
+		config.err = err
 		return skipped(err)
 	}
 
@@ -533,7 +603,37 @@ func (codexSetup) Inspect(root string) Inspection {
 		ManagedGateMode:   gate.managed,
 		HookDocumentError: gate.err,
 		Findings:          findings,
+		LessonHooks:       inspectCodexLessonHooks(root),
 	}
+}
+
+// inspectCodexLessonHooks reads the lesson-check hooks of
+// .codex/hooks.json for the capability report (contract K10). The hook
+// sources are those of the enforce preconditions: a wrapper in
+// hooks.json or in the inline [hooks] of config.toml that discards the
+// exit status of the pre-write hook, and [features] hooks = false in the
+// project configuration. The reading adds no finding, so the existing
+// doctor and status lines keep their bytes. An unreadable document
+// gives nil, because HookDocumentError already names it, and so does a
+// document without such a hook.
+func inspectCodexLessonHooks(root string) *LessonHookInspection {
+	_, document, err := readCodexHooks(root)
+	if err != nil {
+		return nil
+	}
+
+	// The readers report an unreadable config.toml in inspectCodexHooks,
+	// so the scratch findings stay here.
+	var scratch ClientPlan
+
+	config := readCodexConfig(&scratch, root)
+	state := codexLessonSources(document, codexInlineCommands(&scratch, root, config), config)
+
+	return lessonHookReading(LessonHookInspection{
+		Entries:    lessonHookEntries(document, codexLessonHooks),
+		ReportOnly: len(state.reportOnly) > 0, HooksDisabled: state.hooksDisabled,
+		SourceUnreadable: state.sourceUnreadable,
+	})
 }
 
 // The native evidence of the Codex adapter, from the compatibility
@@ -573,7 +673,7 @@ const codexResetDetail = "no reset hook is installed: reminders repeat, so a res
 // definitions that run, the mode of the ones that may run, and the mode
 // of the managed hook alone. It also reports the limitations the reader
 // must know. Those are trust that seamark cannot read, and the receiving
-// context the adapter does not identify. Hooks turned off in the project
+// context that no verified reset reaches. Hooks turned off in the project
 // configuration and a definition Codex never runs are limitations too.
 func inspectCodexHooks(root string) (entries []CapabilityInspection, gate gateInspection, findings []Finding) {
 	edits := CapabilityInspection{Capability: CapabilityEdits, Supported: true, Verification: codexEditsEvidence}
@@ -651,13 +751,13 @@ func readCodexHooks(root string) (FileGuard, map[string]any, error) {
 	})
 }
 
-// readCodexConfig reads .codex/config.toml as an input, for the inline
-// hooks and the feature flags. A file that cannot be read is reported
-// by the inline reader, which then reads it again and names the reason.
+// readCodexConfig reads .codex/config.toml for inline hooks and feature
+// flags. It retains read failures so the inline reader and capability
+// can report the same state without a second read.
 func readCodexConfig(plan *ClientPlan, root string) *codexConfigRead {
 	guard, data, err := ReadInput(root, approve.CodexConfig)
 	if err != nil {
-		return nil
+		return &codexConfigRead{err: err}
 	}
 
 	plan.Reads = append(plan.Reads, guard)
@@ -679,7 +779,7 @@ var (
 	codexContextFinding = Finding{
 		Level: FindingInfo,
 		Path:  codexHooksFile,
-		Reason: "the Codex adapter reads no receiving context yet (the reset of a subagent is unverified), " +
+		Reason: "the Codex adapter names the receiving context, but no reset of a Codex context is verified, " +
 			"so `hook_delivery: once-per-context` does not apply: reminders repeat, within the hook budget",
 	}
 )

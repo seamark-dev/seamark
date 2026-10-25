@@ -322,3 +322,13 @@ func TestGather(t *testing.T) {
 	assert.Equal(t, "untested — evidence not mined since exposure (fired 1×)", stale[1].Line())
 	assert.Equal(t, VerdictNotLanding, stale[2].Verdict)
 }
+
+func TestPinTextKeepsTheEarlierErrorText(t *testing.T) {
+	// Gather errors named a pin by printing the whole PinRule. PinRule
+	// gained Mode and Check later; the text must not change with them.
+	advisory := reviews.PinRule{Rule: "guard-empty", Region: "scripts", Note: "Guard empty datasets."}
+	assert.Equal(t, "{guard-empty scripts [] Guard empty datasets.}", pinText(advisory))
+
+	bound := reviews.PinRule{Rule: "r", Region: "api", Regions: []string{"api", "db"}, Note: "n", Mode: "enforce", Check: "c"}
+	assert.Equal(t, "{r api [api db] n}", pinText(bound))
+}

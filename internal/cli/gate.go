@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -205,6 +206,7 @@ func newCheckCmd(opts *options) *cobra.Command {
 	var (
 		enforce bool
 		asJSON  bool
+		lessons bool
 	)
 
 	cmd := &cobra.Command{
@@ -213,7 +215,13 @@ func newCheckCmd(opts *options) *cobra.Command {
 		Long: `Maps a unified diff's changed lines to symbols and unions their
 transitively-propagated effect tags: what can this change ultimately
 reach? Reads the diff from stdin when piped, else runs "git diff HEAD".
-Policy rules over diff.* decide the verdict.`,
+A pipe that sends no byte within 1s also falls back to "git diff HEAD";
+under enforcement such a pipe blocks instead.
+Policy rules over diff.* decide the verdict.
+
+With --lessons, check also verifies the working tree against the
+executable lesson checks, as "seamark lessons --verify" does, whatever
+diff the policy read. A lesson violation exits 2, as a policy block does.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Locate does not test the directory. For a missing -C, the
@@ -224,6 +232,17 @@ Policy rules over diff.* decide the verdict.`,
 			}
 
 			root, dbPath := ws.Root, ws.DBPath
+
+			// The lesson checks read a git work tree. A directory outside
+			// git is refused before the index refresh and the audit
+			// append, so the refusal writes nothing.
+			var lessonsRoot string
+
+			if lessons {
+				if lessonsRoot, err = verifyRoot(opts.workspace); err != nil {
+					return err
+				}
+			}
 
 			// A stale index makes blast-radius answers WRONG (line spans
 			// drift); check repairs freshness instead of warning about it.
@@ -246,11 +265,8 @@ Policy rules over diff.* decide the verdict.`,
 			}
 			defer func() { _ = st.Close() }() // read-only
 
-			diffText, err := readDiff(cmd.InOrStdin(), root)
-			if err != nil {
-				return err
-			}
-
+			// The policy loads before stdin is read, because the mode
+			// decides what an idle stdin means.
 			policy, err := gate.LoadPolicy(root)
 			if err != nil {
 				return err
@@ -258,6 +274,12 @@ Policy rules over diff.* decide the verdict.`,
 
 			if enforce {
 				policy.Mode = "enforce"
+			}
+
+			diffText, policyInput, err := readDiff(cmd.InOrStdin(), cmd.ErrOrStderr(), root, stdinIdleWait,
+				policy.Mode == "enforce")
+			if err != nil {
+				return err
 			}
 
 			decision, err := gate.EvalDiff(policy, st, diffText)
@@ -269,6 +291,18 @@ Policy rules over diff.* decide the verdict.`,
 			// and truncated when raw logging is opted into.
 			if err := gate.Audit(root, "check", diffText, policy, decision); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "seamark: audit log: %v\n", err)
+			}
+
+			if lessons {
+				return runCheckLessons(cmd, checkLessonsRun{
+					root:        root,
+					lessonsRoot: lessonsRoot,
+					st:          st,
+					diff:        diffText,
+					policyInput: policyInput,
+					decision:    decision,
+					asJSON:      asJSON,
+				})
 			}
 
 			renderErr := renderDecision(cmd.OutOrStdout(), decision, asJSON)
@@ -293,30 +327,129 @@ Policy rules over diff.* decide the verdict.`,
 
 	cmd.Flags().BoolVar(&enforce, "enforce", false, "override policy mode: block on deny/approval verdicts")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
+	cmd.Flags().BoolVar(&lessons, "lessons", false,
+		"also verify the working tree against the executable lesson checks; with --json print the check-lessons/1 document")
 
 	return cmd
 }
 
+// stdinIdleWait is how long check waits for the first byte of a piped
+// diff. An agent harness can give check a stdin pipe that stays open and
+// sends nothing. Without a limit, check then waits forever.
+const stdinIdleWait = time.Second
+
 // readDiff prefers piped stdin; otherwise asks git for the working-tree
-// diff against HEAD.
-func readDiff(stdin io.Reader, root string) (string, error) {
-	if f, ok := stdin.(*os.File); !ok || (f == os.Stdin && !isTerminal(f)) {
-		data, err := io.ReadAll(stdin)
+// diff against HEAD. input is the source of the diff as a
+// check-lessons/1 policy input. Empty stdin falls back to git, so input
+// names the branch that gave the diff.
+//
+// Stdin that sends no byte within wait is idle. Without enforcement,
+// idle stdin also falls back to git, and stderr names the fallback,
+// because the source of the diff changes the verdict.
+//
+// Under enforcement, idle stdin blocks. A diff producer that starts
+// late would otherwise get the verdict of `git diff HEAD`, which can
+// allow what its own diff blocks. This follows the gate rule that a
+// failure under enforcement must not fail open.
+func readDiff(stdin io.Reader, stderr io.Writer, root string, wait time.Duration, enforced bool) (diff, input string, err error) {
+	if f, ok := stdin.(*os.File); !ok || !isTerminal(f) {
+		data, idle, err := readStdinDiff(stdin, wait)
 		if err != nil {
-			return "", err
+			return "", "", err
+		}
+
+		switch {
+		case idle && enforced:
+			return "", "", gate.FailClosed(fmt.Errorf("stdin idle after %s; "+
+				"enforce mode does not fall back to git diff HEAD (redirect stdin from /dev/null to check it)", wait), true)
+		case idle:
+			fmt.Fprintf(stderr, "seamark: stdin idle after %s; checking git diff HEAD\n", wait)
 		}
 
 		if len(data) > 0 {
-			return string(data), nil
+			return string(data), report.PolicyInputStdinDiff, nil
 		}
 	}
 
 	out, err := gitOutput(root, "diff", "HEAD")
 	if err != nil {
-		return "", fmt.Errorf("git diff: %w", err)
+		return "", "", fmt.Errorf("git diff: %w", err)
 	}
 
-	return out, nil
+	return out, report.PolicyInputGitDiffHead, nil
+}
+
+// readStdinDiff reads stdin to EOF when its first byte arrives within
+// wait. idle is true when no byte and no EOF arrive within wait.
+//
+// A goroutine does the first read, because Go cannot stop a read from a
+// blocking pipe: os.Stdin usually has no read deadline. After a timeout,
+// that read continues until the pipe sends a byte or closes, or the
+// process exits. The channel holds the one result, so the goroutine
+// never blocks on its send and always ends after its read. check reads
+// stdin once per process, so bytes of that late read belong to no diff.
+func readStdinDiff(stdin io.Reader, wait time.Duration) (data []byte, idle bool, err error) {
+	first := make(chan firstRead, 1)
+
+	go func() {
+		buf := make([]byte, 32*1024)
+		n, err := io.ReadAtLeast(stdin, buf, 1)
+		first <- firstRead{data: buf[:n], err: err}
+	}()
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	got, ok := awaitFirstRead(first, timer.C)
+	if !ok {
+		return nil, true, nil
+	}
+
+	// EOF before the first byte is an empty stdin, for example a closed
+	// pipe. The caller then uses git without a notice.
+	if errors.Is(got.err, io.EOF) {
+		return nil, false, nil
+	}
+
+	if got.err != nil {
+		return nil, false, got.err
+	}
+
+	// The first read has ended, so this is the only reader now. The bytes
+	// of the first read start the diff.
+	rest, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return append(got.data, rest...), false, nil
+}
+
+// firstRead is the result of the first read of a piped diff.
+type firstRead struct {
+	data []byte
+	err  error
+}
+
+// awaitFirstRead returns the first read, or false when the deadline
+// comes first.
+//
+// A select picks at random when both channels are ready. The second
+// select therefore takes a first read that is ready at the deadline.
+// Without it, the verdict could depend on chance, not on the input.
+func awaitFirstRead(first <-chan firstRead, deadline <-chan time.Time) (firstRead, bool) {
+	select {
+	case got := <-first:
+		return got, true
+	case <-deadline:
+	}
+
+	select {
+	case got := <-first:
+		return got, true
+	default:
+		return firstRead{}, false
+	}
 }
 
 func isTerminal(f *os.File) bool {
@@ -347,17 +480,24 @@ func renderDecision(w io.Writer, d *gate.Decision, asJSON bool) error {
 		return err
 	}
 
-	if d.Blocking() {
-		// The reasons must travel on stderr: that is what PreToolUse hooks
-		// feed back to the agent, and "blocked" without a why leaves it
-		// guessing instead of correcting course.
-		reasons := make([]string, 0, len(d.Matches))
-		for _, m := range d.Matches {
-			reasons = append(reasons, render.Sanitize(m.Message))
-		}
+	return blockedError(d)
+}
 
-		return &gate.Blocked{Cause: errors.New(strings.Join(reasons, "; "))}
+// blockedError returns the gate.Blocked error of a blocking decision,
+// or nil. check --lessons --json needs the error without the printed
+// verdict, so the error has its own function.
+func blockedError(d *gate.Decision) error {
+	if !d.Blocking() {
+		return nil
 	}
 
-	return nil
+	// The reasons must travel on stderr: that is what PreToolUse hooks
+	// feed back to the agent, and "blocked" without a why leaves it
+	// guessing instead of correcting course.
+	reasons := make([]string, 0, len(d.Matches))
+	for _, m := range d.Matches {
+		reasons = append(reasons, render.Sanitize(m.Message))
+	}
+
+	return &gate.Blocked{Cause: errors.New(strings.Join(reasons, "; "))}
 }

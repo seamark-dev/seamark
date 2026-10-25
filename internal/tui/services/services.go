@@ -55,6 +55,7 @@ type All interface {
 	Learning
 	Maintenance
 	Settings
+	Checks
 }
 
 // Reader is the shared read side of the workspace: the paths, the
@@ -151,9 +152,10 @@ type Learning interface {
 }
 
 // Maintenance covers the installed pins of .seamark/lessons.yaml: the
-// pin read, the pin authoring, the retarget and prune maintenance, and
-// the recovery of a partial operation. Lessons › Pins, its authoring
-// form, and its maintenance modal use it.
+// pin read, the pin authoring, the check-definition authoring, the
+// retarget and prune maintenance, and the recovery of a partial
+// operation. Lessons › Pins, its authoring forms, and its maintenance
+// modal use it.
 type Maintenance interface {
 	// Pins reads the installed pins of .seamark/lessons.yaml and relates
 	// them to the ledger. It needs no index and never fails: a file or
@@ -178,6 +180,15 @@ type Maintenance interface {
 	// bytes. It never writes the ledger, and it refuses a foreign root
 	// with ErrForeignRoot.
 	CommitAuthor(p *maintain.AuthorPlan) (maintain.AuthorResult, error)
+	// PlanCheckDef plans the edit of one check definition: the
+	// checks.<id> entry and lesson_checks_version (contract K1). It
+	// writes nothing and takes no lock. A foreign root and a closed
+	// write gate are blockers of the plan.
+	PlanCheckDef(req maintain.CheckDefRequest) (*maintain.CheckDefPlan, error)
+	// CommitCheckDef writes exactly the reviewed definition plan under
+	// the engine lock. It never changes a pin and never writes the
+	// ledger, and it refuses a foreign root with ErrForeignRoot.
+	CommitCheckDef(p *maintain.CheckDefPlan) (maintain.AuthorResult, error)
 }
 
 // Settings covers the focused settings of the two settings documents,
@@ -275,6 +286,7 @@ var (
 	_ Learning    = (*engine)(nil)
 	_ Maintenance = (*engine)(nil)
 	_ Settings    = (*engine)(nil)
+	_ Checks      = (*engine)(nil)
 )
 
 // Deps are the three external boundaries of the engine: the GitHub

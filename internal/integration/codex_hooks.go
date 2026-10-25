@@ -56,20 +56,20 @@ type codexAdvice struct {
 // parses the patch text and never runs it. An event of another tool
 // gives ErrNotApplicable.
 //
-// The decoder reads no receiving context yet, so suppression stays off
-// and the advice repeats. This is a policy, not a limit of the event. A
-// native run of codex-cli 0.154.0 showed that an edit inside a subagent
-// carries agent_id and agent_type with the session id of its parent. A
-// parent edit carries no agent_id. The event therefore names its
-// receiver. Only a manual compaction of the parent was observed. An
-// automatic compaction, a compaction inside a subagent, and nested
-// subagents are unverified. A receiver needs a verified reset policy,
-// so this decoder and DecodeReset change together when a native check
-// establishes one. The session id still reaches the firing log as a
-// digest.
+// The decoder names the receiver from session_id and agent_id, by the
+// rules of ReceivingContextOf. That context is never resettable, because
+// no reset of a Codex context is verified. So suppression stays off and
+// the advice repeats, and the lane still reaches the firing log. This
+// decoder and DecodeReset change together when a native check
+// establishes a reset policy.
+//
+// turn_id is the turn. The decoder reads identity from the top-level
+// fields only, never from the patch text.
 func (codexEdits) DecodeEdit(payload []byte) (EditEvent, error) {
 	var native struct {
 		SessionID string `json:"session_id"`
+		AgentID   string `json:"agent_id"`
+		TurnID    string `json:"turn_id"`
 		CWD       string `json:"cwd"`
 		ToolUseID string `json:"tool_use_id"`
 		ToolName  string `json:"tool_name"`
@@ -101,6 +101,8 @@ func (codexEdits) DecodeEdit(payload []byte) (EditEvent, error) {
 			MatchID:    native.ToolUseID,
 			NativeTool: native.ToolName,
 			CWD:        native.CWD,
+			Context:    ReceivingContextOf(CodexID, native.SessionID, native.AgentID),
+			Turn:       native.TurnID,
 		},
 		Paths: paths,
 	}, nil
@@ -125,13 +127,14 @@ func (codexEdits) EncodeAdvice(text string) (HookReply, error) {
 func (codexEdits) AdviceMechanism() string { return codexAdviceMechanism }
 
 // DecodeReset reads a PostCompact event. The result names no context:
-// DecodeEdit reads no receiver yet, so no suppression state exists for
-// a Codex context, and a reset has nothing to clear. Setup installs no
-// PostCompact hook for Codex, because a hook without an effect still
-// costs a trust review. The command `lessons --hook-reset --client
-// codex` still runs this decoder, so a hook that a user wires stays
-// valid. When a native check establishes the reset policy of each
-// receiver, the edit decoder and this decoder change together.
+// DecodeEdit names a receiver, but that receiver is never resettable, so
+// no suppression state exists for a Codex context, and a reset has
+// nothing to clear. Setup installs no PostCompact hook for Codex,
+// because a hook without an effect still costs a trust review. The
+// command `lessons --hook-reset --client codex` still runs this decoder,
+// so a hook that a user wires stays valid. When a native check
+// establishes the reset policy of each receiver, the edit decoder and
+// this decoder change together.
 func (codexResets) DecodeReset(payload []byte) (ResetEvent, error) {
 	var native struct {
 		Event string `json:"hook_event_name"`

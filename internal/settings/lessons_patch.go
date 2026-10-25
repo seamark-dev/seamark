@@ -178,7 +178,7 @@ func spliceDelivery(data []byte, edits []Edit) ([]byte, error) {
 		return nil, err
 	}
 
-	return appendTopLevel(doc, added), nil
+	return doc.AppendTopLevel(added), nil
 }
 
 // parseLessons parses an intermediate text of a lessons splice.
@@ -362,7 +362,7 @@ func addMute(lp *LessonsPart, m MuteEdit) (after []byte, notes []string, err err
 
 	span, present := doc.KeySpan(doc.Root, keyMute, doc.Limit)
 	if !present {
-		return appendTopLevel(doc, append([]string{keyMute + ":"}, indentAll(item, 2)...)), notes, nil
+		return doc.AppendTopLevel(append([]string{keyMute + ":"}, yamledit.IndentLines(item, 2)...)), notes, nil
 	}
 
 	var at, col int
@@ -389,7 +389,7 @@ func addMute(lp *LessonsPart, m MuteEdit) (after []byte, notes []string, err err
 		return nil, nil, lessonsBlock("the mute key does not hold a block list", span.First)
 	}
 
-	lines := slices.Insert(slices.Clone(doc.Lines), at, indentAll(item, col)...)
+	lines := slices.Insert(slices.Clone(doc.Lines), at, yamledit.IndentLines(item, col)...)
 
 	return yamledit.JoinLines(lines, doc.FinalEOL), notes, nil
 }
@@ -625,7 +625,8 @@ func removeMute(lp *LessonsPart, m MuteEdit) (after []byte, notes []string, err 
 
 // verifyLessons is the safety net under the lessons splices. It proves
 // that only the intended keys and lines changed and that the reader
-// reads exactly the intended values. It returns the candidate as a
+// reads exactly the intended values. It also refuses a candidate that
+// fails lessoncheck.Validate. It returns the candidate as a
 // lessons part, for the after states of the plan. The line rule takes
 // its allowed lines from the nodes of the reviewed text. It never uses
 // KeySpan, Extent, or ItemSpan, so a defect of the splice helpers
@@ -641,6 +642,14 @@ func verifyLessons(lp *LessonsPart, group Group, edits []Edit, after []byte) (*L
 		return nil, refusal(pinfile.File, "the edited text does not parse")
 	case got.ReaderErr != nil:
 		return nil, refusal(pinfile.File, fmt.Sprintf("the lessons reader would reject the result: %v", got.ReaderErr))
+	}
+
+	// The settings editor writes without pinfile.Prepare, so it runs the
+	// strict check tier itself (contract K1, writer rule). The check
+	// reads the whole candidate, so an error that an earlier hand edit
+	// made also refuses the save (§5 row 5).
+	if reason := pinfile.CandidateRefusal(got.Config); reason != "" {
+		return nil, refusal(pinfile.File, reason)
 	}
 
 	was, now, err := lineDocs(pinfile.File, lp.doc, lp.data, got.doc, after)

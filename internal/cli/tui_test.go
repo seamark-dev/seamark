@@ -51,6 +51,32 @@ func TestTUIWithoutTerminalPrintsPlainGuidance(t *testing.T) {
 	assert.Equal(t, before, snapshot(t, root), "a refused launch writes nothing")
 }
 
+// TestTUIGuidanceNamesLessonChecks proves that the plain guidance names
+// the command route of each lesson-check action of the console: the
+// verification of V, the mode edit of the pin form, the definitions that
+// M edits, and the init flags that install and remove the hooks, which
+// the console only shows (P4.10). A refused launch still writes nothing.
+func TestTUIGuidanceNamesLessonChecks(t *testing.T) {
+	root := writeFixture(t)
+	before := snapshot(t, root)
+
+	out, err := run(t, "-C", root, "tui")
+	require.ErrorIs(t, err, errNotInteractive)
+
+	assert.Contains(t, out, "seamark lessons --verify ")
+	assert.Contains(t, out, "seamark lessons --set-mode <mode> --pin <pin-ref>")
+	assert.Contains(t, out, "--lesson-checks <off|check|enforce>")
+	assert.Contains(t, out, "--lesson-exploration <off|on>")
+	assert.Contains(t, out, "Check definitions live there under checks:")
+	assert.NotContains(t, out, "\x1b", "plain guidance carries no escape sequence")
+
+	for _, line := range strings.Split(out, "\n") {
+		assert.LessOrEqual(t, len([]rune(line)), 100, "a guidance line stays readable in a narrow terminal: %q", line)
+	}
+
+	assert.Equal(t, before, snapshot(t, root), "a refused launch writes nothing")
+}
+
 // TestTUIRejectsInvalidWorkspaceFirst proves that a bad workspace fails
 // before any terminal handling, with a readable error.
 func TestTUIRejectsInvalidWorkspaceFirst(t *testing.T) {

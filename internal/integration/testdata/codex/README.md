@@ -31,9 +31,11 @@ Documented facts the fixtures encode:
   carries both, with its own `turn_id` and `transcript_path`. The native
   run of 2026-09-21 observed this and refuted the earlier reference-derived
   claim that `PreToolUse` carries no subagent identity. The adapter reads
-  no receiving context from it yet: a reset inside a subagent is
-  unverified, so suppression stays off by policy, not because the event
-  names no receiver.
+  the receiving context from `session_id` and `agent_id`: the root lane
+  without `agent_id`, the child lane with it. No reset of a Codex context
+  is verified, so no context is resettable and suppression stays off by
+  policy, not because the event names no receiver. The edit decoder also
+  reads `turn_id` as the turn.
 - `PostCompact` and `SessionStart` with `source: "compact"` both run after
   compaction of a root session.
 - Hook `timeout` is seconds (default 600). `additionalContextLimit`
@@ -61,8 +63,8 @@ Files:
   inside a subagent: the parent `session_id`, its own `agent_id` and
   `agent_type`, its own `turn_id`, and an absolute patch path. Shaped from
   the native capture. The decoder reads the same paths as for a parent
-  edit and no receiver; a test pins that the identity is present and
-  left unread.
+  edit and names the child lane, which is not resettable; a test pins
+  the lane, the turn, and that suppression stays off.
 - `pre_tool_use_bash.json`: the shell event the gate matches. The command
   codec reads `tool_input.command` from a `Bash` event only; an event of
   another tool, `apply_patch` included, is not applicable, so a patch is
@@ -72,6 +74,11 @@ Files:
   the codec uses the exit protocol. No native run has observed the
   generated gate hook block a command yet.
 - `post_compact.json`, `session_start_compact.json`: reset lifecycle.
+- `post_tool_use.json`: **synthetic**. An `apply_patch` result whose
+  `tool_response` is the exec header text with exit code 0.
+- `post_tool_use_nonzero_exit.json`: **synthetic**. A `Bash` result whose
+  `tool_response` is an object with `exit_code: 1`. It pins a decoder
+  rule; the 0.157.1 source sends no such object for a shell command.
 - `subagent_start.json`: shows the separate `agent_id`; not consumed by
   Seamark today. Natively, the same `agent_id` appears in the subagent's
   edit events and in `SubagentStop`.
@@ -93,6 +100,7 @@ Files:
   no native run yet). A test compares the generated gate and lesson
   entries with this file, entry for entry. The adapter writes no
   `description` key: the file can hold the user's own hooks too. The file holds no
-  `PostCompact` entry: the edit decoder reads no receiver yet, so a reset
-  has nothing to clear, and setup installs no hook without an effect. The
-  reset decoder exists and is tested against `post_compact.json`.
+  `PostCompact` entry: the edit decoder names no resettable receiver, so
+  a reset has nothing to clear, and setup installs no hook without an
+  effect. The reset decoder exists and is tested against
+  `post_compact.json`.

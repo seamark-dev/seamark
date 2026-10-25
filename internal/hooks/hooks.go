@@ -77,18 +77,31 @@ func ForEachCommand(pre []any, fn func(matcher string, h map[string]any, cmd str
 // `/opt/wrapper /usr/local/bin/seamark gate --hook` ends like our command,
 // and a rewrite to the bare command removes the wrapper without a word.
 func OwnedBySeamark(cmd string, markers []string) bool {
-	for _, marker := range markers {
-		rest, ok := strings.CutSuffix(cmd, " "+marker)
-		if !ok {
+	_, _, ok := OwnedCommand(cmd, markers)
+
+	return ok
+}
+
+// OwnedCommand splits a command that OwnedBySeamark accepts into the
+// binary path of its one shell word, unquoted, and the marker that ends
+// it. The capability report identifies the hook binary from the path
+// without running it (contract K10). ok is false for any other command.
+func OwnedCommand(cmd string, markers []string) (binary, marker string, ok bool) {
+	for _, m := range markers {
+		rest, found := strings.CutSuffix(cmd, " "+m)
+		if !found {
 			continue
 		}
 
-		binary, ok := shellWord(rest)
+		word, isWord := shellWord(rest)
+		if !isWord || !IsSeamarkBinary(word) {
+			return "", "", false
+		}
 
-		return ok && IsSeamarkBinary(binary)
+		return word, m, true
 	}
 
-	return false
+	return "", "", false
 }
 
 // shellWord returns the value of s when s is exactly one shell word in

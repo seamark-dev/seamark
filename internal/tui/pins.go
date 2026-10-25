@@ -37,10 +37,14 @@ import (
 // pinKeys are the bindings that only the Pins sub-view uses. The shared
 // keys (space, x, f, /, t) keep their meaning from Proposals. n, i and
 // d open the authoring of pins_author.go; they act on the cursor row
-// only, never on the marks.
+// only, never on the marks. M and V open the check-definition form and
+// the verification view of the lesson checks (pins_checkdef.go,
+// pins_checks.go). They show only in a repository that uses lesson
+// checks (pinsCheckShown). P5 keeps g, X and U for its own keys.
 var pinKeys = struct {
 	Search, Compare, Retarget, Prune key.Binding
 	New, Edit, Remove                key.Binding
+	Define, Verify                   key.Binding
 }{
 	Search:   key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "search")),
 	Compare:  key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "compare")),
@@ -49,6 +53,8 @@ var pinKeys = struct {
 	New:      key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new pin")),
 	Edit:     key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "edit")),
 	Remove:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove")),
+	Define:   key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "check definition")),
+	Verify:   key.NewBinding(key.WithKeys("V"), key.WithHelp("V", "verify checks")),
 }
 
 // pinFilter is the list filter of the Pins sub-view. The installed pins
@@ -152,6 +158,10 @@ type pinsView struct {
 
 	// compare is the open comparison of two similar pins, or nil.
 	compare *pinCompare
+	// checkDef is the open check-definition form of M, or nil.
+	checkDef *checkDefModal
+	// verify is the open verification view of V, or nil.
+	verify *pinVerify
 }
 
 // newPinsView builds the Pins sub-view over the shared state. The list
@@ -493,7 +503,8 @@ func pinMatch(n int, refAt func(int) pinfile.EntryRef, ref pinfile.EntryRef) (in
 // focused input, or an open comparison. Each takes every key, so the
 // Lessons switch keys wait.
 func (p *pinsView) capturing() bool {
-	return p.author.open() || p.host.open() || p.editing != filterNone || p.compare != nil
+	return p.author.open() || p.host.open() || p.editing != filterNone || p.compare != nil || p.checkDef != nil ||
+		p.verify != nil
 }
 
 // modal returns the open pin review or discard question, the open
@@ -505,6 +516,14 @@ func (p *pinsView) modal(w, h int) (string, bool) {
 
 	if p.host.open() {
 		return p.host.view(w, h)
+	}
+
+	if m := p.checkDef; m != nil {
+		return p.st.theme.Modal(m.content(ui.ModalBodyWidth(ui.ModalMinW, w)), m.modalScroll(), w, h), true
+	}
+
+	if v := p.verify; v != nil {
+		return p.st.theme.Modal(v.content(ui.ModalBodyWidth(ui.ModalMinW, w)), &v.scroll, w, h), true
 	}
 
 	if p.compare != nil {
@@ -535,6 +554,13 @@ func (p *pinsView) update(msg tea.Msg) tea.Cmd {
 	// stack.
 	if p.host.open() {
 		p.compare = nil
+	}
+
+	checked, done := p.checkRoute(msg)
+	cmd = tea.Batch(cmd, checked)
+
+	if done {
+		return cmd
 	}
 
 	switch m := msg.(type) {
@@ -615,6 +641,14 @@ func (p *pinsView) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return p.requestMaint(maintain.ActionPrune)
 	case key.Matches(msg, extractKey):
 		return p.extract()
+	case key.Matches(msg, pinKeys.Define) && p.checkShown():
+		return p.openCheckDef()
+	case key.Matches(msg, pinKeys.Verify) && p.checkShown():
+		var cmd tea.Cmd
+
+		p.verify, cmd = newPinVerify(p.st)
+
+		return cmd
 	default:
 		p.navKey(msg, rows)
 	}
@@ -1170,6 +1204,10 @@ func (p *pinsView) keys() []key.Binding {
 	}
 
 	switch {
+	case p.checkDef != nil:
+		return p.checkDef.keys()
+	case p.verify != nil:
+		return p.verify.keys()
 	case p.editing != filterNone:
 		return p.editKeys()
 	case p.compare != nil:
@@ -1211,6 +1249,14 @@ func (p *pinsView) keys() []key.Binding {
 		default:
 			off = append(off, ui.Unavailable(a.b))
 		}
+	}
+
+	// M and V need no target: a definition is not a pin, and the
+	// verification reads the whole working tree. They show only in a
+	// repository that uses lesson checks, so every other frame keeps its
+	// bytes.
+	if p.checkShown() {
+		on = append(on, pinKeys.Define, pinKeys.Verify)
 	}
 
 	// The label names what x clears, because the help lists x also when

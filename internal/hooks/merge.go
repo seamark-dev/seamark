@@ -30,6 +30,7 @@ type Spec struct {
 	// migrates an existing hook and never adds a duplicate beside it.
 	Legacy []string
 	// Status is the message the client shows while the hook runs.
+	// Empty means no message: Merge then writes no statusMessage key.
 	Status string
 	// Timeout is the hook timeout in seconds.
 	Timeout int
@@ -220,14 +221,15 @@ func Merge(settings map[string]any, bin string, specs []Spec) (Merged, error) {
 			continue
 		}
 
-		entry := map[string]any{
-			"hooks": []any{map[string]any{
-				"type":          "command",
-				"command":       want,
-				"timeout":       spec.Timeout,
-				"statusMessage": spec.Status,
-			}},
+		hook := map[string]any{"type": "command", "command": want, "timeout": spec.Timeout}
+
+		// Both clients document the status message as optional. A spec
+		// without one gets no key, so the client shows its own default.
+		if spec.Status != "" {
+			hook["statusMessage"] = spec.Status
 		}
+
+		entry := map[string]any{"hooks": []any{hook}}
 		if spec.Matcher != "" {
 			entry["matcher"] = spec.Matcher
 		}

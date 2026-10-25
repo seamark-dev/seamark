@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/reviews"
@@ -62,11 +63,23 @@ var authorKeys = struct {
 const (
 	pinByHand      = "; edit " + pinfile.File + " by hand"
 	pinTextLock    = "this text holds characters the editor cannot show" + pinByHand
-	pinUnknownNote = "relationship unknown: a linked pin allows only a note edit; saving needs a readable index of " +
-		"this workspace"
+	pinUnknownTail = "; saving needs a readable index of this workspace"
 	pinRegionsHelp = "A region matches that file, or everything under that directory; no wildcards."
 	pinMarksNote   = "Marks are ignored: this acts on the cursor pin only, and the marks stay."
 )
+
+// pinUnknownNote returns the note of an unknown relationship. It names
+// only the edits that the form offers, so a form without the Mode and
+// Check rows never promises them. checks is the draft field of the same
+// name.
+func pinUnknownNote(checks bool) string {
+	edits := "only a note edit"
+	if checks {
+		edits = "note, mode, and check edits"
+	}
+
+	return "relationship unknown: a linked pin allows " + edits + pinUnknownTail
+}
 
 // pinField names the text field of the form that has the keys.
 type pinField int
@@ -114,6 +127,19 @@ type pinDraft struct {
 	// orphan says why the draft lost its entry, or "". An orphaned draft
 	// offers copy and discard only.
 	orphan string
+
+	// checks is true when the form shows the Mode and Check rows of an
+	// edit (setChecks). checkIDs are the check IDs that lessons.yaml
+	// defines, for the Check row.
+	checks   bool
+	checkIDs []string
+	// baseMode and baseCheck are the raw lesson-check keys of the entry
+	// (contract K1); "" means that the key is absent. mode and check are
+	// the drafted values. A linked pin takes a mode edit too, as lessons
+	// --set-mode does, so no link locks these rows.
+	baseMode, baseCheck string
+	mode                lessoncheck.Mode
+	check               string
 }
 
 // newCreateDraft returns an empty new-pin draft. The scope starts
@@ -163,10 +189,11 @@ func pinRefusedRune(r rune) bool {
 	return r != '\n' && r != '\t' && reviews.CheckAuthoredText(reviews.TextPinNote, string(r)) != nil
 }
 
-// pinNoteOnly reports a pin that allows a note edit only: a linked pin
-// whose relationship the authoring keys know (contracts §4.2). load
-// locks its rule and scope, and follow drops their edits.
-func pinNoteOnly(pin *maintain.Pin, known bool) bool {
+// pinRuleScopeLocked reports a pin whose rule and scope the form keeps
+// read-only: a linked pin whose relationship the authoring keys know
+// (contracts §4.2). Its note, mode, and check stay editable. load locks
+// the rule and the scope, and follow drops their edits.
+func pinRuleScopeLocked(pin *maintain.Pin, known bool) bool {
 	return known && pinLinked(pin)
 }
 
@@ -216,11 +243,13 @@ func pinStoredLock(lock string) bool {
 // Each widget gets the raw text only when it can edit it (pinEditable),
 // so an untouched field compares equal to the entry. Any other field is
 // read-only, and its lock names the reason (pinInputLock). A linked pin
-// allows a note edit only.
+// locks its rule and scope, and keeps its note, mode, and check.
 func (d *pinDraft) load(pin *maintain.Pin, known bool) {
 	e := pin.Entry
 	d.ref = e.Ref()
 	d.base = reviews.PinRule{Rule: e.Rule, Region: e.Region, Regions: e.Regions, Note: e.Note}
+	d.baseMode, d.baseCheck = e.Mode, e.Check
+	d.mode, d.check = pinDraftMode(e.Mode), e.Check
 	d.unknown = !known
 	d.ruleLock, d.noteLock, d.scopeLock = "", "", ""
 
@@ -256,13 +285,58 @@ func (d *pinDraft) load(pin *maintain.Pin, known bool) {
 		}
 	}
 
-	if pinNoteOnly(pin, known) {
+	if pinRuleScopeLocked(pin, known) {
 		// The rule is the recorded rule of the proposal, so a new rule
 		// is a new pin. The scope has its own route, the retarget.
 		linked := "linked to proposal #" + strconv.FormatInt(pin.Link.Applied[0].ID, 10)
 		d.ruleLock = linked + "; to change the rule, use - Prune and add a new pin with n"
 		d.scopeLock = linked + "; change the scope with w Retarget"
 	}
+}
+
+// pinDraftMode returns the mode that a raw mode key reads as in the
+// form. An absent key reads advisory. An unknown word stays as it is,
+// so an untouched row never sets the mode; the first change of the row
+// moves to a known mode.
+func pinDraftMode(raw string) lessoncheck.Mode {
+	if raw == "" {
+		return lessoncheck.ModeAdvisory
+	}
+
+	return lessoncheck.Mode(raw)
+}
+
+// setChecks decides whether the form shows the Mode and Check rows. An
+// edit shows them when Pins shows its lesson-check parts, or when the
+// draft already holds a mode or check change, so no typed change goes
+// away unseen. A new pin is advisory (contract K1, writer row "Manual
+// create"), so its form never shows them.
+func (d *pinDraft) setChecks(show bool, ids []string) {
+	d.checks = d.op == maintain.AuthorEdit && (show || d.checksEdited())
+	d.checkIDs = ids
+}
+
+// checksEdited reports a mode or check value that differs from the entry.
+func (d *pinDraft) checksEdited() bool {
+	return d.mode != pinDraftMode(d.baseMode) || d.check != d.baseCheck
+}
+
+// nextMode moves the Mode row to the next mode of the closed list.
+func (d *pinDraft) nextMode() {
+	modes := []lessoncheck.Mode{lessoncheck.ModeAdvisory, lessoncheck.ModeCheck, lessoncheck.ModeEnforce}
+	d.mode = modes[(slices.Index(modes, d.mode)+1)%len(modes)]
+}
+
+// nextCheck moves the Check row to the next choice: no check, each
+// defined ID, and the ID of the entry when no definition has it, so the
+// row can go back to the stored value.
+func (d *pinDraft) nextCheck() {
+	choices := append([]string{""}, d.checkIDs...)
+	if d.baseCheck != "" && !slices.Contains(choices, d.baseCheck) {
+		choices = append(choices, d.baseCheck)
+	}
+
+	d.check = choices[(slices.Index(choices, d.check)+1)%len(choices)]
 }
 
 // ruleValue returns the rule of the draft.
@@ -297,6 +371,14 @@ func (d *pinDraft) request() maintain.AuthorRequest {
 		req.ScopeSet = d.scope != scope || !slices.Equal(d.regions, regions)
 	}
 
+	// The lesson-check keys go only into an edit that shows their rows,
+	// so a repository without lesson checks sends the request of before.
+	if d.op == maintain.AuthorEdit && d.checks {
+		req.Mode, req.Check = d.mode, d.check
+		req.ModeSet = d.mode != pinDraftMode(d.baseMode)
+		req.CheckSet = d.check != d.baseCheck
+	}
+
 	return req
 }
 
@@ -320,7 +402,7 @@ func (d *pinDraft) dirty() bool {
 
 	req := d.request()
 
-	return req.RuleSet || req.NoteSet || req.ScopeSet
+	return req.RuleSet || req.NoteSet || req.ScopeSet || req.ModeSet || req.CheckSet
 }
 
 // follow binds the draft to pin after a reload. how is the kind of the
@@ -331,10 +413,9 @@ func (d *pinDraft) dirty() bool {
 // draft as changed, so the review shows the current value next to the
 // draft (contracts §4.2).
 //
-// A pin that the reload shows as linked allows a note edit only. So its
-// rule and scope edits go away, because the rows are read-only now and
-// the review would refuse them. follow returns the names of the fields
-// that lost an edit, for the message of reconcile.
+// A pin that the reload shows as linked allows note, mode, and check
+// edits. Its rule and scope edits go away, because the review refuses
+// them. follow returns the dropped field names for the message of reconcile.
 func (d *pinDraft) follow(pin *maintain.Pin, known bool, how pinRebind) (dropped []string) {
 	old := d.base
 	oldScope, oldRegions := pinBaseScope(old)
@@ -344,14 +425,25 @@ func (d *pinDraft) follow(pin *maintain.Pin, known bool, how pinRebind) (dropped
 	noteEdited := d.noteValue() != old.Note
 	scope, regions := d.scope, slices.Clone(d.regions)
 	scopeEdited := scope != oldScope || !slices.Equal(regions, oldRegions)
+	mode, check := d.mode, d.check
+	modeEdited, checkEdited := mode != pinDraftMode(d.baseMode), check != d.baseCheck
 
 	d.load(pin, known)
+
+	// A link never locks the lesson-check keys, so an edit of them stays.
+	if modeEdited {
+		d.mode = mode
+	}
+
+	if checkEdited {
+		d.check = check
+	}
 
 	if how == rebindChanged {
 		d.changed = true
 	}
 
-	linked := pinNoteOnly(pin, known)
+	linked := pinRuleScopeLocked(pin, known)
 
 	// An edited value is typed text, so the widgets hold it. A lock of
 	// the stored text of the current entry (pinStoredLock), for its
@@ -467,10 +559,27 @@ func newPinForm(d *pinDraft) *pinForm {
 	return &pinForm{draft: d, regionAt: -1}
 }
 
-// rows returns the number of rows: the fixed rows, the regions and the
-// row that adds a region.
+// rows returns the number of rows: the fixed rows, the regions, the row
+// that adds a region, and the Mode and Check rows when the form shows
+// them.
 func (f *pinForm) rows() int {
-	return pinRowFirstRegion + len(f.draft.regions) + 1
+	n := pinRowFirstRegion + len(f.draft.regions) + 1
+	if f.draft.checks {
+		n += 2
+	}
+
+	return n
+}
+
+// modeRow and checkRow return the rows of the lesson-check keys. They
+// follow the row that adds a region, so the rows of a form without them
+// keep their numbers.
+func (f *pinForm) modeRow() int  { return f.addRow() + 1 }
+func (f *pinForm) checkRow() int { return f.addRow() + 2 }
+
+// checkKeysRow reports whether the cursor is on a Mode or a Check row.
+func (f *pinForm) checkKeysRow() bool {
+	return f.draft.checks && (f.row == f.modeRow() || f.row == f.checkRow())
 }
 
 // regionIndex returns the region of the cursor row, or -1.
@@ -1019,9 +1128,13 @@ func (p *pinsView) formKey(msg tea.KeyMsg) tea.Cmd {
 // character in a field.
 func (f *pinForm) activate(space bool) tea.Cmd {
 	d := f.draft
-	refused := func(lock string) tea.Cmd { return toast(ui.ToneNeutral, "Read-only: "+ui.OneLine(lock)+".") }
+	refused := refusedToast
 
 	switch row := f.row; {
+	case f.checkKeysRow() && row == f.modeRow():
+		d.nextMode()
+	case f.checkKeysRow():
+		d.nextCheck()
 	case row == pinRowRepoWide || row == pinRowRegions:
 		if d.scopeLock != "" {
 			return refused(d.scopeLock)
@@ -1234,6 +1347,7 @@ func (p *pinsView) editPin() tea.Cmd {
 		a.edits[ref] = d
 	}
 
+	d.setChecks(p.checkShown(), p.inspection().Checks.IDs())
 	a.form = newPinForm(d)
 
 	return nil
@@ -1357,7 +1471,7 @@ func (p *pinsView) authorKnown(in *maintain.Inspection) bool {
 // not block: the form and the review say that a save needs a readable
 // index (P4-8). Only a pending or an ambiguous link, an unreadable pin
 // file, or an entry block refuse the keys (contracts §4.2). A linked pin
-// allows a note edit only, so it refuses a removal.
+// allows note, mode, and check edits, so it refuses a removal.
 func pinAuthorBlock(in *maintain.Inspection, pin *maintain.Pin, op maintain.AuthorOp, known bool) string {
 	l := pin.Link
 
@@ -1424,7 +1538,7 @@ func (p *pinsView) rebindDrafts() []string {
 		// A region that the user typed but did not confirm belongs to the
 		// draft. It joins the rows before they change or lock, so no typed
 		// text goes away unseen.
-		linked := how != rebindOrphan && pinNoteOnly(&in.Pins[i], known)
+		linked := how != rebindOrphan && pinRuleScopeLocked(&in.Pins[i], known)
 		if open && f.field == pinFieldRegion && (how == rebindChanged || how == rebindOrphan || linked) {
 			f.keepRegion()
 		}
@@ -1442,6 +1556,7 @@ func (p *pinsView) rebindDrafts() []string {
 		}
 
 		dropped := d.follow(&in.Pins[i], known, how)
+		d.setChecks(p.checkShown(), in.Checks.IDs())
 
 		// A reload can change the request at the same binding: a new
 		// link drops the rule and scope edits. The plan of the review then
@@ -1451,7 +1566,7 @@ func (p *pinsView) rebindDrafts() []string {
 		}
 
 		if len(dropped) > 0 {
-			notes = append(notes, pinDroppedNote(dropped, label, in.Pins[i].Link.Applied[0].ID))
+			notes = append(notes, pinDroppedNote(dropped, label, in.Pins[i].Link.Applied[0].ID, d.checks))
 		}
 
 		if open {
@@ -1525,15 +1640,22 @@ func sameAuthorRequest(a, b maintain.AuthorRequest) bool {
 }
 
 // pinDroppedNote names the edits that a new link removed from a draft,
-// and the route that changes the scope of a linked pin.
-func pinDroppedNote(dropped []string, label string, id int64) string {
+// and the route that changes the scope of a linked pin. checks is true
+// when the form offers the Mode and Check rows, so the note never names
+// an edit that the form cannot make.
+func pinDroppedNote(dropped []string, label string, id int64, checks bool) string {
 	edits := " edit"
 	if len(dropped) > 1 {
 		edits = " edits"
 	}
 
+	allowed := "its note"
+	if checks {
+		allowed = "its note, mode, and check"
+	}
+
 	return "The " + strings.Join(dropped, " and ") + edits + " of " + label + " went away: the pin is linked to " +
-		propID(id) + ", so only its note edits; change the scope with w Retarget"
+		propID(id) + ", so only " + allowed + " can change here; change the scope with w Retarget"
 }
 
 // orphan handles an edit draft without a unique entry and returns the
@@ -1753,7 +1875,7 @@ func (p *pinsView) authorBindings() []key.Binding {
 // rowAction names what enter does on the cursor row.
 func (f *pinForm) rowAction() string {
 	switch {
-	case f.row == pinRowRepoWide || f.row == pinRowRegions:
+	case f.row == pinRowRepoWide || f.row == pinRowRegions, f.checkKeysRow():
 		return "choose"
 	case f.row == f.addRow():
 		return "add region"

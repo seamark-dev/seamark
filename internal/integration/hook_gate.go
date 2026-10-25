@@ -46,6 +46,24 @@ func (exitProtocolGate) EncodeFailure(err error) HookReply {
 	return HookReply{ExitCode: hookBlockExit, Stderr: []byte(render.Sanitize(err.Error()))}
 }
 
+// EncodeDeny blocks a pending edit for the lesson-check guard (contract
+// K8). It uses the exit protocol of the gate, because a native run
+// exercised exit 2 with stderr and no native run exercised the JSON
+// permissionDecision form (§6 A7). The reasons are sanitized one by one
+// and joined with "; ", as decisionReasons joins rule messages. An
+// empty list still blocks: a guard that denies must never allow.
+func (exitProtocolGate) EncodeDeny(reasons []string) HookReply {
+	parts := make([]string, 0, len(reasons))
+
+	for _, reason := range reasons {
+		if text := strings.TrimSpace(render.Sanitize(reason)); text != "" {
+			parts = append(parts, text)
+		}
+	}
+
+	return HookReply{ExitCode: hookBlockExit, Stderr: []byte(strings.Join(parts, "; "))}
+}
+
 // decisionReasons joins the messages of the matched rules, sanitized:
 // they travel to the agent, and "blocked" without a why leaves it
 // guessing instead of correcting course.

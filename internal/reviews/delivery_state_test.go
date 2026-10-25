@@ -354,3 +354,56 @@ func TestContextDeliveryRefusesAPartialIdentity(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(before), string(after))
 }
+
+func TestResetContextGenerationReportsTheNewGeneration(t *testing.T) {
+	root := t.TempDir()
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session-one"}
+	lessons := []model.Lesson{{Region: "api", Symptom: "sync the generated client"}}
+
+	// Without state, nothing resets and nothing is created.
+	generation, err := ResetContextGeneration(root, dc)
+	require.NoError(t, err)
+	assert.Zero(t, generation)
+	assert.NoDirExists(t, filepath.Join(root, ".seamark"))
+
+	lease, err := BeginContextDelivery(root, dc, lessons)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), lease.Generation())
+	require.NoError(t, lease.Commit())
+	require.NoError(t, lease.Close())
+
+	// Each reset reports the generation that the next lease reads.
+	for _, want := range []uint64{2, 3} {
+		generation, err = ResetContextGeneration(root, dc)
+		require.NoError(t, err)
+		assert.Equal(t, want, generation)
+
+		lease, err = BeginContextDelivery(root, dc, lessons)
+		require.NoError(t, err)
+		assert.Equal(t, want, lease.Generation())
+		assert.Equal(t, lessons, lease.Inject(), "the reset restores the delivered lesson")
+		require.NoError(t, lease.Close())
+	}
+
+	// A partial identity resets nothing and reports no generation.
+	for _, partial := range []DeliveryContext{{ClientID: "claude"}, {ReceiverID: "session-one"}} {
+		generation, err = ResetContextGeneration(root, partial)
+		require.NoError(t, err)
+		assert.Zero(t, generation)
+	}
+
+	// The wrapper keeps its API and advances the same counter.
+	require.NoError(t, ResetContextDelivery(root, dc))
+
+	generation, err = ResetContextGeneration(root, dc)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(5), generation)
+
+	// A state that cannot be read reports its error and no generation.
+	path := filepath.Join(root, ".seamark", deliveryStateFile)
+	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o600))
+
+	generation, err = ResetContextGeneration(root, dc)
+	require.Error(t, err)
+	assert.Zero(t, generation)
+}

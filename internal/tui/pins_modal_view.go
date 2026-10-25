@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/distill"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
@@ -357,6 +358,11 @@ func (m *maintModal) selectionLines(w int) []string {
 		out = append(out, m.itemLines(it, w)...)
 	}
 
+	if other := maintOtherImpact(p); len(other) > 0 {
+		out = append(out, "", maintImpactHead(t))
+		out = append(out, impactLines(t, other, "", w)...)
+	}
+
 	if p.Action == maintain.ActionRetarget && maintNotReady(p.Items) < len(p.Items) {
 		// Neutral notes carry no glyph: the Info glyph reads "-" in ASCII,
 		// like a removed region.
@@ -487,6 +493,53 @@ func (m *maintModal) retargetItem(it maintain.PlanItem, w int) []string {
 
 	if it.Pin.Link.NoteChanged {
 		out = append(out, m.noteCompare(it, w)...)
+	}
+
+	// A retarget of a check or enforce pin moves the scope of its checker
+	// (contract K1). The block shows before y, never only after it.
+	if impacts := maintItemImpact(m.preview.Impact, it.Ref.Key); len(impacts) > 0 {
+		out = append(out, "", maintImpactHead(t))
+		out = append(out, impactLines(t, impacts, "", w)...)
+	}
+
+	return out
+}
+
+// maintImpactHead is the heading of a checker impact block.
+func maintImpactHead(t *ui.Theme) string {
+	return t.Heading.Render("CHECK IMPACT") + "  " + t.Faint.Render("what the checkers do after the apply")
+}
+
+// maintItemImpact returns the impact blocks of the pin with key. A block
+// names its pin by the pin-ref of the key before the edit, and a pin-ref
+// is a prefix of the identity digest of that key (reviews.ShortPinRef).
+func maintItemImpact(impacts []lessoncheck.Impact, key reviews.PinKey) []lessoncheck.Impact {
+	id := reviews.PinIdentityDigest(key)
+
+	var out []lessoncheck.Impact
+
+	for _, im := range impacts {
+		if im.PinRef != "" && strings.HasPrefix(id, im.PinRef) {
+			out = append(out, im)
+		}
+	}
+
+	return out
+}
+
+// maintOtherImpact returns the impact blocks that no ready item names.
+// Each block belongs to an edited pin, so the list is empty in practice.
+// The selection shows such a block anyway, because a block must never
+// go unseen before the apply (contract K1).
+func maintOtherImpact(p *maintain.Plan) []lessoncheck.Impact {
+	var out []lessoncheck.Impact
+
+	for _, im := range p.Impact {
+		if !slices.ContainsFunc(p.Items, func(it maintain.PlanItem) bool {
+			return it.Status == maintain.ItemReady && len(maintItemImpact([]lessoncheck.Impact{im}, it.Ref.Key)) > 0
+		}) {
+			out = append(out, im)
+		}
 	}
 
 	return out

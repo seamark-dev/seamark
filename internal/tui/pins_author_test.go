@@ -398,8 +398,9 @@ func TestPinAuthoringDraftsWithUnknownRelationship(t *testing.T) {
 
 	d := authorOf(h).form.draft
 	assert.Empty(t, d.ruleLock, "an unknown relationship locks no row")
-	assert.Contains(t, lesBoxFlat(h.view()), "Relationship unknown: a linked pin allows only a note edit; saving "+
-		"needs a readable index of this workspace.")
+	assert.Contains(t, lesBoxFlat(h.view()), "Relationship unknown: a linked pin allows only a note edit; saving needs "+
+		"a readable index of this workspace.")
+	assert.NotContains(t, lesBoxFlat(h.view()), "mode, and check", "the form has no Mode or Check row")
 
 	h.press("down", "enter", "end")
 	h.typeText(" More.")
@@ -1517,7 +1518,7 @@ func TestPinDraftDropsRuleAndScopeEditsWhenTheLinkAppears(t *testing.T) {
 	require.True(t, req.RuleSet && req.NoteSet && req.ScopeSet)
 
 	// The index build of the o route reads the pins again: pin 1 is
-	// linked to p4 now, so only its note edits.
+	// linked to p4 now, so only its note, mode, and check can change.
 	authorReload(h, f, pinsInspection())
 
 	assert.Equal(t, pinFieldNone, form.field, "a locked row keeps no focus")
@@ -1531,7 +1532,7 @@ func TestPinDraftDropsRuleAndScopeEditsWhenTheLinkAppears(t *testing.T) {
 	assert.True(t, req.NoteSet, "the note edit stays")
 	assert.Equal(t, "Wrap SQL errors with the query name. Name the query.", req.Note)
 	assert.Contains(t, h.m.toast.text, `The rule and scope edits of "wrap-sql-errors" went away: the pin is linked `+
-		"to p4, so only its note edits; change the scope with w Retarget")
+		"to p4, so only its note can change here; change the scope with w Retarget")
 
 	// No row takes the typing now.
 	h.typeText("-more")
@@ -1785,7 +1786,63 @@ func TestPinAuthoringTreatsAForeignRootAsUnknown(t *testing.T) {
 	d := authorOf(h).form.draft
 	assert.Empty(t, d.ruleLock)
 	assert.True(t, d.unknown)
-	assert.Contains(t, lesBoxFlat(h.view()), "Relationship unknown: a linked pin allows only a note edit")
+	assert.Contains(t, lesBoxFlat(h.view()), "Relationship unknown: a linked pin allows only a note edit;")
+}
+
+// TestPinLinkedWordingNamesOnlyTheOfferedRows covers R-7 of the P4
+// review. The Pins detail, the unknown-relationship note, and the note
+// of a dropped edit name the mode and check edits only while the form
+// offers the Mode and Check rows.
+func TestPinLinkedWordingNamesOnlyTheOfferedRows(t *testing.T) {
+	const (
+		noteOnly  = "i edits the note of this pin only."
+		withCheck = "i edits the note, mode, and check of this pin only."
+	)
+
+	for _, uses := range []bool{false, true} {
+		in := pinsInspection()
+		in.Checks.Uses = uses
+		f := authorFake(nil)
+		f.pins = in
+		h := pinsOpen(t, f, 120, 40)
+
+		pinsCursorTo(h, 1)
+
+		detail := pinsDetail(t, h)
+		if uses {
+			assert.Contains(t, detail, withCheck)
+			assert.NotContains(t, detail, noteOnly)
+		} else {
+			assert.Contains(t, detail, noteOnly)
+			assert.NotContains(t, detail, "mode, and check")
+		}
+
+		h.press("i")
+		require.NotNil(t, authorOf(h).form)
+		assert.Equal(t, uses, authorOf(h).form.draft.checks, "the sentence matches the rows of the form")
+	}
+
+	t.Run("an unknown relationship", func(t *testing.T) {
+		assert.Contains(t, pinUnknownNote(true), "allows note, mode, and check edits")
+		assert.Contains(t, pinUnknownNote(false), "allows only a note edit;")
+		assert.NotContains(t, pinUnknownNote(false), "mode")
+
+		in := pinsNoLedger()
+		in.Checks.Uses = true
+		f := authorFake(authorNoLedger)
+		f.pins = in
+		h := pinsOpen(t, f, 120, 40)
+
+		pinsCursorTo(h, 1)
+		h.press("i")
+		require.NotNil(t, authorOf(h).form)
+		assert.Contains(t, lesBoxFlat(h.view()), "Relationship unknown: a linked pin allows note, mode, and check edits")
+	})
+
+	t.Run("a dropped edit", func(t *testing.T) {
+		assert.Contains(t, pinDroppedNote([]string{"rule"}, `"r"`, 4, true), "so only its note, mode, and check can change here")
+		assert.Contains(t, pinDroppedNote([]string{"rule"}, `"r"`, 4, false), "so only its note can change here")
+	})
 }
 
 // TestPinPlanReachesOnlyTheOpenReview covers B2-C11: a plan message of a
@@ -2000,7 +2057,7 @@ func TestPinEditReviewClosesWhenTheReloadChangesItsDraft(t *testing.T) {
 	authorReload(h, f, pinsNoLedger())
 	require.Same(t, r, authorOf(h).review)
 
-	// The pin is linked to p4 now, so only its note edits.
+	// The pin is linked to p4 now, so only its note, mode, and check can change.
 	authorReload(h, f, pinsInspection())
 	assert.Nil(t, authorOf(h).review)
 	assert.Contains(t, h.m.toast.text, "The pin review closed, because the reload changed its draft")

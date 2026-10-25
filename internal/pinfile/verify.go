@@ -7,9 +7,10 @@ package pinfile
 // use the span code that built the splices (ItemSpan, the key extents,
 // provenanceLines), so a defect there blocks an edit instead of passing
 // it. The insert positions are the one exception. They are the places
-// after the region keys of a retarget and after the rule key. A region
-// key or an absent note goes in there. See retargetLines and
-// rewriteLines.
+// after the region keys of a retarget, after the rule key, and after the
+// note and mode keys. A region key, an absent note, or a new mode or
+// check key goes in there. See retargetLines, rewriteLines, and
+// checkKeyLines.
 
 import (
 	"errors"
@@ -33,7 +34,8 @@ import (
 //  4. the decoded pin items equal the intended change of the reviewed
 //     items, in order, with duplicates and unknown keys;
 //  5. a retargeted or rewritten entry reads back with its target key and
-//     with the rule and the note of the request. It is still editable;
+//     with the rule, the note, the mode, and the check of the request. It
+//     is still editable;
 //  6. (in collide) a target key is not in use;
 //  7. only the reviewed lines change, and every other line stays
 //     byte-identical and in order.
@@ -194,7 +196,8 @@ func withRegions(m map[string]any, regions []string) map[string]any {
 
 // rewritten returns a copy of the item m with the changed fields of the
 // rewrite p. These are the region keys by the rules of retarget, the
-// rule, and the note. An empty note removes the note key. A note key on
+// rule, the note, the mode, and the check. An empty note removes the note
+// key. A note key on
 // the dash line keeps an empty value instead. dashNote finds that place
 // from the key node and the text before it.
 func (a *analysis) rewritten(m map[string]any, p *planned) map[string]any {
@@ -216,7 +219,23 @@ func (a *analysis) rewritten(m map[string]any, p *planned) map[string]any {
 		delete(out, "note")
 	}
 
+	setCheckKey(out, "mode", ch.Mode)
+	setCheckKey(out, "check", ch.Check)
+
 	return out
+}
+
+// setCheckKey states the rule of checkKey as a value: a nil value keeps
+// the key of the item m, an empty value removes it, and other text sets
+// it.
+func setCheckKey(m map[string]any, key string, value *string) {
+	switch {
+	case value == nil:
+	case *value == "":
+		delete(m, key)
+	default:
+		m[key] = *value
+	}
 }
 
 // dashNote reports whether the note key of the item sits on its dash
@@ -259,6 +278,10 @@ func sameTargets(b *analysis, ps []*planned) error {
 		e := b.entries[k]
 		if e.Key != p.target || e.Rule != rule || e.Note != note || e.Block != "" {
 			return errors.New(noun + " does not read back as its target")
+		}
+
+		if mode, check := p.requestedChecks(); e.Mode != mode || e.Check != check {
+			return errors.New(noun + " does not read back with its mode and check")
 		}
 	}
 
@@ -495,7 +518,59 @@ func (a *analysis) rewriteLines(p *planned) error {
 		}
 	}
 
+	if ch.Mode != nil || ch.Check != nil {
+		l, i := a.checkKeyLines(p)
+		maps.Copy(lines, l)
+		maps.Copy(inserts, i)
+	}
+
 	return within(p, lines, inserts)
+}
+
+// checkKeyLines returns the lines that a change of the mode or the check
+// of p may change or remove: the key line of each changed key that is
+// present. The key lines come from the nodes.
+//
+// inserts holds the places for a new key, from the key extents as in the
+// planner. A new key goes after the note key, else after the last region
+// key, else after the rule key (contract K6). A new check may also go
+// after the mode key. This rule restates checkKeyAnchor, so a wrong place
+// fails here, although check 4 compares values without order.
+func (a *analysis) checkKeyLines(p *planned) (lines, inserts map[int]bool) {
+	ch, m := p.change, mapping(p.item.node)
+	lines, inserts = map[int]bool{}, map[int]bool{}
+
+	for _, key := range []struct {
+		name  string
+		value *string
+	}{{"mode", ch.Mode}, {"check", ch.Check}} {
+		if k, _, _ := yamledit.Lookup(m, key.name); k != nil && key.value != nil {
+			lines[k.Line] = true
+		}
+	}
+
+	after := map[string]int{}
+
+	for _, name := range []string{"rule", "region", "regions", "note", "mode"} {
+		if s, ok := a.doc.KeySpan(p.item.node, name, p.item.last+1); ok {
+			after[name] = s.Last + 1
+		}
+	}
+
+	switch {
+	case after["note"] > 0:
+		inserts[after["note"]] = true
+	case after["region"] > 0 || after["regions"] > 0:
+		inserts[max(after["region"], after["regions"])] = true
+	case after["rule"] > 0:
+		inserts[after["rule"]] = true
+	}
+
+	if ch.Check != nil && after["mode"] > 0 {
+		inserts[after["mode"]] = true
+	}
+
+	return lines, inserts
 }
 
 // noteLines returns the lines that a change of the note of p may replace

@@ -652,7 +652,7 @@ func TestLessonsHookOncePerContextResetsAfterCompaction(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, strings.TrimSpace(second), "the same context receives no duplicate lesson")
 
-	_, _, err = runIn(t, `{"session_id":"session-one"}`,
+	_, _, err = runIn(t, `{"session_id":"session-one","hook_event_name":"PostCompact"}`,
 		"-C", root, "lessons", "--hook-reset")
 	require.NoError(t, err)
 
@@ -699,12 +699,13 @@ func TestLessonsHookOncePerContextNeverHidesAdviceFromASubagent(t *testing.T) {
 	assert.Contains(t, hook(child), "RUF001", "a subagent gets repeated delivery")
 
 	// A reset that fires inside the subagent does not reach the parent.
-	_, _, err = runIn(t, `{"session_id":"session-one","agent_id":"agent-7"}`,
+	_, _, err = runIn(t, `{"session_id":"session-one","agent_id":"agent-7","hook_event_name":"PostCompact"}`,
 		"-C", root, "lessons", "--hook-reset")
 	require.NoError(t, err)
 	assert.Empty(t, hook(parent))
 
-	_, _, err = runIn(t, `{"session_id":"session-one"}`, "-C", root, "lessons", "--hook-reset")
+	_, _, err = runIn(t, `{"session_id":"session-one","hook_event_name":"PostCompact"}`,
+		"-C", root, "lessons", "--hook-reset")
 	require.NoError(t, err)
 	assert.Contains(t, hook(parent), "RUF001")
 }
@@ -732,8 +733,8 @@ func TestLessonsHookClientCodexAdvisesOnAWholePatch(t *testing.T) {
 		} `json:"hookSpecificOutput"`
 	}
 
-	// The Codex adapter reads no receiver yet, so the advice repeats under
-	// once-per-context.
+	// The Codex adapter names the receiver, but no reset of a Codex
+	// context is verified, so the advice repeats under once-per-context.
 	for range 2 {
 		out, _, err := runIn(t, string(payload), "-C", root, "lessons", "--hook", "--client", "codex")
 		require.NoError(t, err)
@@ -755,7 +756,8 @@ func TestLessonsHookClientCodexAdvisesOnAWholePatch(t *testing.T) {
 	assert.Equal(t, "codex", firings[0].Client)
 	assert.Equal(t, "apply_patch", firings[0].Tool)
 	assert.Equal(t, []string{"api/handler.go", "db/handler.go"}, firings[0].Files)
-	assert.Empty(t, firings[0].ContextSHA)
+	assert.Len(t, firings[0].ContextSHA, 64, "the record names the lane that the event reported")
+	assert.Equal(t, firings[0].ContextSHA, firings[1].ContextSHA, "both edits come from one lane")
 
 	stats, err := run(t, "-C", root, "lessons", "--stats")
 	require.NoError(t, err)
@@ -843,10 +845,13 @@ func TestLessonsHookClientSelectorRules(t *testing.T) {
 	assert.Contains(t, stderr, `unknown hook client "nope" (known: claude, codex)`)
 
 	// The selector belongs to hook mode. Inference has its own setting.
+	// The text grows with each hook mode (contracts §4.2 subset rule), so
+	// the test asserts only the parts that every form keeps.
 	_, err = run(t, "-C", root, "lessons", "--list", "--client", "codex")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--client applies to --hook and --hook-reset only")
-	assert.Contains(t, err.Error(), "agent.cli")
+	assert.True(t, strings.HasPrefix(err.Error(), "--client applies to --hook, --hook-reset, "), err.Error())
+	assert.True(t, strings.HasSuffix(err.Error(),
+		" only; the agent that --distill runs is agent.cli in .seamark/config.yaml"), err.Error())
 }
 
 func TestLessonsHookAlwaysRemainsTheDefault(t *testing.T) {

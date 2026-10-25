@@ -54,6 +54,7 @@ var (
 	_ lessonsBound = (*extRecord)(nil)
 	_ lessonsBound = (*maintModal)(nil)
 	_ lessonsBound = (*pinReview)(nil)
+	_ lessonsBound = (*checkDefModal)(nil)
 	_ lessonsBound = (*settingsScreen)(nil)
 )
 
