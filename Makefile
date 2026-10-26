@@ -61,9 +61,13 @@ agents-test: ## Run the agent-integration contract and characterization tests
 # the prefix LessonsHook also selects the other TestLessonsHook tests.
 # The pre-edit hooks (lessons --guard --hook and lessons --baseline
 # --hook) run here too, through LessonsGuard and LessonsBaseline.
+# lessonreport, the read-only engine of the delivery report (delivery/1),
+# runs whole here too. It reads the audit logs and one archive snapshot,
+# and it reads the lesson-check stream, so a change to either reader
+# must fail this target.
 # Nothing here calls a model or the network.
 # Later milestones append test-name prefixes and packages here.
-LESSON_CHECK_PKGS := ./internal/lessoncheck/... ./internal/privatedir/...
+LESSON_CHECK_PKGS := ./internal/lessoncheck/... ./internal/privatedir/... ./internal/lessonreport/...
 LESSON_CHECK_RUN  := 'Test(LessonCheck|LessonsVerify|LessonsSetMode|CheckLessons|LessonsPrepare|LessonsExploreHook|ChangeSetPreparation|LessonsHookNeverInvokes|LessonsGuard|LessonsBaseline)'
 
 lesson-check: ## Run the lesson-check core, configuration, and verification tests (offline, no model)
@@ -131,11 +135,13 @@ capture-native-record: build ## Record native timing or guard traces through the
 # learning. The index tests take about 25 s.
 # They stay, because index holds the refresh engine and its stop
 # guarantees, and a regression there must fail this target.
+# lessonreport is the delivery-report engine behind the Pins view. An
+# engine regression behind a console view must fail this target too.
 TUI_TEST_PKGS := ./internal/tui/... ./internal/workspace/... ./internal/history/... ./internal/scaffold/... ./internal/proposals/... ./internal/lessonstats/... \
 	./internal/settings/... ./internal/learning/... ./internal/distill/... ./internal/reviews/... \
 	./internal/index/... ./internal/store/... ./internal/agent/... ./internal/integration/... \
 	./internal/yamledit/... ./internal/pinfile/... ./internal/maintain/... ./internal/outcome/... \
-	./internal/report/... ./internal/delivery/...
+	./internal/report/... ./internal/delivery/... ./internal/lessonreport/...
 
 # TUI_CLI_PARITY selects the CLI tests that pin the output of the
 # commands behind the console: the console entry point, lessons (with
