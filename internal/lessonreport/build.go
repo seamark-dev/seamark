@@ -68,13 +68,15 @@ const maxErrorRunes = 200
 // (*reviews.PinRefError), and only when pinRef is not empty.
 //
 // Build fills the per-version reading: as_of, capture, units, totals,
-// one PinReading per config pin with its delivery counts, the coverage
-// counts that the audit alone gives, and the version list of an
-// expansion. The report reads no capture archive, so the classes, the
-// occurrences, the historical section, and the unlinked feedback stay
-// empty, and as_of.archive is a fixed state. The timing, observation
-// windows, check reading, guard attempts, and next steps stay empty until
-// code derives them. An empty value never reads like a result.
+// one PinReading per config pin with its delivery counts and its
+// observation windows, the coverage counts that the audit alone gives,
+// and the versions and session windows of an expansion. The report reads
+// no capture archive, so the classes, the occurrences, the timing, the
+// historical section, and the unlinked feedback stay empty, and
+// as_of.archive is a fixed state. Every delivered session reads
+// incomplete, because no session is captured. The check reading, guard
+// attempts, and next steps stay empty until code derives them. An empty
+// value never reads like a result.
 func Build(in Inputs, pinRef string) (Report, error) {
 	var expandIdentity string
 
@@ -115,11 +117,12 @@ func Build(in Inputs, pinRef string) (Report, error) {
 
 	current := currentPins(in.Config)
 	for _, p := range current {
-		report.Pins = append(report.Pins, idx.reading(p))
+		report.Pins = append(report.Pins, idx.reading(p, an))
 	}
 
 	if expandIdentity != "" {
 		report.Expanded = expansion(expandIdentity, current)
+		report.Expanded.Sessions = an.sessions(expandIdentity, report.Expanded.Versions)
 	}
 
 	return report, nil
@@ -193,7 +196,7 @@ func sortedScope(regions []string) []string {
 // expansion returns the --pin detail that Build can fill now: the
 // versions of one identity, in config file order. ResolveRef reads the
 // config only, so the identity is always a current one. The occurrences
-// and the session windows stay empty until code derives them.
+// stay empty, and Build adds the session windows.
 func expansion(identity string, current []pinVersion) *Expansion {
 	exp := &Expansion{
 		Versions:    []string{},
@@ -222,9 +225,10 @@ func expansion(identity string, current []pinVersion) *Expansion {
 	return exp
 }
 
-// reading builds the PinReading of one version from the audit index.
-func (idx *index) reading(p pinVersion) PinReading {
-	return PinReading{
+// reading builds the PinReading of one version from the audit index and
+// the window reading.
+func (idx *index) reading(p pinVersion, an *analysis) PinReading {
+	reading := PinReading{
 		PinRef:      p.ref,
 		PinIdentity: p.identity,
 		PinVersion:  p.version,
@@ -250,6 +254,10 @@ func (idx *index) reading(p pinVersion) PinReading {
 		NextSteps:   []NextStep{},
 		Checks:      PinCheckReading{Outcomes: map[string]int{}},
 	}
+
+	an.fill(&reading, versionKey{p.identity, p.version})
+
+	return reading
 }
 
 // emptyCheckReading is the check section before any code reads the

@@ -243,7 +243,26 @@ func TestBuildCountsDeliveryPerVersion(t *testing.T) {
 	assert.Equal(t, b.PinRef, exp.PinRef)
 	assert.Equal(t, []string{verB}, exp.Versions)
 	assert.Empty(t, exp.Occurrences)
-	assert.Empty(t, exp.Sessions)
+
+	// Only the sessions of delivered injections of the current version open
+	// a window: s2 and s6. The report reads no capture archive, so no
+	// session is captured. The denied call s5 opens no window, and the
+	// older version is not in the expansion.
+	require.Len(t, exp.Sessions, 2)
+
+	for _, w := range exp.Sessions {
+		assert.Equal(t, PartitionIncomplete, w.Partition)
+		assert.Equal(t, []Code{CodeSessionNotCaptured}, w.Reasons)
+		assert.Equal(t, TimingUnknown, w.Timing)
+	}
+
+	assert.Equal(t, []string{"lessons-audit.jsonl:3", "lessons-audit.jsonl:7"},
+		[]string{exp.Sessions[0].StartRecord, exp.Sessions[1].StartRecord})
+	assert.Equal(t, []string{verB, verB},
+		[]string{exp.Sessions[0].PinVersion, exp.Sessions[1].PinVersion},
+		"each window names the version whose delivery opened it")
+	assert.NotContains(t, []string{exp.Sessions[0].SessionRef, exp.Sessions[1].SessionRef},
+		shortRef(digest64("s5")))
 }
 
 // TestBuildStatesAreData proves that a missing or unreadable source is
@@ -338,7 +357,9 @@ func TestBuildStatesAreData(t *testing.T) {
 }
 
 // TestBuildLeavesUnderivedSectionsEmpty keeps the sections that Build does
-// not derive yet empty: a default there would read like a real result.
+// not derive yet empty: a default there would read like a real result. The
+// observation is derived: a delivered session reads incomplete, because
+// the report reads no capture archive.
 func TestBuildLeavesUnderivedSectionsEmpty(t *testing.T) {
 	cfg := testConfig("n")
 	id, ver := pinOf(cfg, 0)
@@ -354,8 +375,11 @@ func TestBuildLeavesUnderivedSectionsEmpty(t *testing.T) {
 	assert.Empty(t, p.Reasons)
 	assert.Empty(t, p.Limitations)
 	assert.Empty(t, p.NextSteps)
-	assert.Equal(t, 0, p.Observation.Linked+p.Observation.NoLinkedCorrection+p.Observation.Incomplete)
-	assert.Empty(t, p.Observation.ByTiming)
+	assert.Equal(t, 0, p.Observation.Linked)
+	assert.Equal(t, 0, p.Observation.NoLinkedCorrection)
+	assert.Equal(t, 1, p.Observation.Incomplete, "the delivered session is not captured")
+	assert.Equal(t, map[Code]int{CodeSessionNotCaptured: 1}, p.Observation.IncompleteByReason)
+	assert.Equal(t, map[Timing]Partition{TimingUnknown: {Incomplete: 1}}, p.Observation.ByTiming)
 	assert.Equal(t, Unlinked{Unit: "feedback items", ByReason: map[Code]int{}, NextSteps: []NextStep{}}, r.Unlinked)
 	assert.Empty(t, r.Checks.State, "Build does not read the check stream yet; its state is in as_of")
 	assert.Equal(t, GuardAttempts{}, r.Checks.GuardAttempts)

@@ -22,3 +22,11 @@ const PairMixed PairClass = "mixed"
 // laneUnknown is the lane value of an audit record whose receiver lane is
 // not known.
 const laneUnknown = "unknown"
+
+// actionRefLength is the length of a printed key or digest prefix.
+const actionRefLength = 12
+
+// shortRef returns the printed prefix of a key or digest.
+func shortRef(key string) string {
+	return key[:min(actionRefLength, len(key))]
+}

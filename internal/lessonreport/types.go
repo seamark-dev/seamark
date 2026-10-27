@@ -315,6 +315,7 @@ type EvidenceRef struct {
 // SessionWindow is the observation window of one delivered session.
 type SessionWindow struct {
 	SessionRef  string `json:"session_ref"` // 12 hex of session_sha256
+	PinVersion  string `json:"pin_version"` // the pin version whose delivery opened the window
 	Lane        string `json:"lane"`
 	Partition   string `json:"partition"` // closed: "linked", "no-linked-correction", "incomplete"
 	Timing      Timing `json:"decision_timing"`
