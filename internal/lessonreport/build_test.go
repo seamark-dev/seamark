@@ -381,7 +381,7 @@ func TestBuildLeavesUnderivedSectionsEmpty(t *testing.T) {
 	assert.Equal(t, map[Code]int{CodeSessionNotCaptured: 1}, p.Observation.IncompleteByReason)
 	assert.Equal(t, map[Timing]Partition{TimingUnknown: {Incomplete: 1}}, p.Observation.ByTiming)
 	assert.Equal(t, Unlinked{Unit: "feedback items", ByReason: map[Code]int{}, NextSteps: []NextStep{}}, r.Unlinked)
-	assert.Empty(t, r.Checks.State, "Build does not read the check stream yet; its state is in as_of")
+	assert.Equal(t, StateAbsent, r.Checks.State, "this fixture has no check stream")
 	assert.Equal(t, GuardAttempts{}, r.Checks.GuardAttempts)
 
 	// The JSON holds none of the codes that read like a result.

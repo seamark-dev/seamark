@@ -74,9 +74,10 @@ const maxErrorRunes = 200
 // no capture archive, so the classes, the occurrences, the timing, the
 // historical section, and the unlinked feedback stay empty, and
 // as_of.archive is a fixed state. Every delivered session reads
-// incomplete, because no session is captured. The check reading, guard
-// attempts, and next steps stay empty until code derives them. An empty
-// value never reads like a result.
+// incomplete, because no session is captured. Check operations and guard
+// attempts use separate units. Every next step needs a corrected action
+// or captured feedback, so the next steps stay empty. An empty value
+// never reads like a result.
 func Build(in Inputs, pinRef string) (Report, error) {
 	var expandIdentity string
 
@@ -92,6 +93,7 @@ func Build(in Inputs, pinRef string) (Report, error) {
 	auditRead := auditSource(in)
 	idx := newIndex(in, auditRead.State == StateRead)
 	an := analyze(idx)
+	checks := readChecks(in)
 
 	report := Report{
 		Schema: Schema,
@@ -108,7 +110,7 @@ func Build(in Inputs, pinRef string) (Report, error) {
 		Historical: []PinReading{},
 		Unlinked:   Unlinked{Unit: UnlinkedUnit, ByReason: map[Code]int{}, NextSteps: []NextStep{}},
 		Coverage:   an.coverage,
-		Checks:     emptyCheckReading(),
+		Checks:     checks.reading,
 	}
 
 	report.Coverage.DeniedCallInjections = idx.deniedInjections
@@ -117,7 +119,7 @@ func Build(in Inputs, pinRef string) (Report, error) {
 
 	current := currentPins(in.Config)
 	for _, p := range current {
-		report.Pins = append(report.Pins, idx.reading(p, an))
+		report.Pins = append(report.Pins, idx.reading(p, an, checks))
 	}
 
 	if expandIdentity != "" {
@@ -226,8 +228,8 @@ func expansion(identity string, current []pinVersion) *Expansion {
 }
 
 // reading builds the PinReading of one version from the audit index and
-// the window reading.
-func (idx *index) reading(p pinVersion, an *analysis) PinReading {
+// the window reading, with the check reading of the same version.
+func (idx *index) reading(p pinVersion, an *analysis, checks *checkIndex) PinReading {
 	reading := PinReading{
 		PinRef:      p.ref,
 		PinIdentity: p.identity,
@@ -252,23 +254,12 @@ func (idx *index) reading(p pinVersion, an *analysis) PinReading {
 		Reasons:     map[Code]int{},
 		Limitations: []Code{},
 		NextSteps:   []NextStep{},
-		Checks:      PinCheckReading{Outcomes: map[string]int{}},
+		Checks:      checks.pin(versionKey{p.identity, p.version}),
 	}
 
 	an.fill(&reading, versionKey{p.identity, p.version})
 
 	return reading
-}
-
-// emptyCheckReading is the check section before any code reads the
-// lesson-check stream. State stays empty: the stream state is in
-// as_of.check_audit.
-func emptyCheckReading() CheckReading {
-	return CheckReading{
-		Operations:      map[string]int{},
-		Outcomes:        map[string]int{},
-		UnknownByReason: map[string]int{},
-	}
 }
 
 // formatTime renders a time as RFC 3339 UTC. The zero time renders empty:
