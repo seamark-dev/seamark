@@ -68,12 +68,13 @@ const maxErrorRunes = 200
 // (*reviews.PinRefError), and only when pinRef is not empty.
 //
 // Build fills the per-version reading: as_of, capture, units, totals,
-// one PinReading per config pin with its delivery counts, and the version
-// list of an expansion. The report reads no capture archive, so the
-// historical section stays empty and as_of.archive is a fixed state. The
-// classes, occurrences, timing, observation windows, check reading, guard
-// attempts, next steps, unlinked, and most coverage counts stay empty
-// until code derives them. An empty value never reads like a result.
+// one PinReading per config pin with its delivery counts, the coverage
+// counts that the audit alone gives, and the version list of an
+// expansion. The report reads no capture archive, so the classes, the
+// occurrences, the historical section, and the unlinked feedback stay
+// empty, and as_of.archive is a fixed state. The timing, observation
+// windows, check reading, guard attempts, and next steps stay empty until
+// code derives them. An empty value never reads like a result.
 func Build(in Inputs, pinRef string) (Report, error) {
 	var expandIdentity string
 
@@ -88,6 +89,7 @@ func Build(in Inputs, pinRef string) (Report, error) {
 
 	auditRead := auditSource(in)
 	idx := newIndex(in, auditRead.State == StateRead)
+	an := analyze(idx)
 
 	report := Report{
 		Schema: Schema,
@@ -103,9 +105,11 @@ func Build(in Inputs, pinRef string) (Report, error) {
 		Pins:       []PinReading{},
 		Historical: []PinReading{},
 		Unlinked:   Unlinked{Unit: UnlinkedUnit, ByReason: map[Code]int{}, NextSteps: []NextStep{}},
-		Coverage:   Coverage{DeniedCallInjections: idx.deniedInjections},
+		Coverage:   an.coverage,
 		Checks:     emptyCheckReading(),
 	}
+
+	report.Coverage.DeniedCallInjections = idx.deniedInjections
 
 	report.Capture = captureState(report.AsOf.Archive)
 

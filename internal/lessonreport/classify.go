@@ -1,0 +1,24 @@
+package lessonreport
+
+// This file holds the closed list of the action-level delivery classes.
+// The class of a corrected action needs the capture archive, which this
+// build does not read. So no reading here gets a class, and every class
+// count of the report stays at zero. The values stay, because the
+// delivery/1 format names them.
+
+// The action-level classes.
+const (
+	ClassAtAction         Class = "at-action"
+	ClassEarlierInContext Class = "earlier-in-context"
+	ClassOtherLane        Class = "other-lane"
+	ClassRegionNotMatched Class = "region-not-matched"
+	ClassNotEmitted       Class = "not-emitted"
+	ClassUnknown          Class = "unknown"
+)
+
+// PairMixed is the class of an occurrence whose actions disagree.
+const PairMixed PairClass = "mixed"
+
+// laneUnknown is the lane value of an audit record whose receiver lane is
+// not known.
+const laneUnknown = "unknown"

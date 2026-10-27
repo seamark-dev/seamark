@@ -56,8 +56,7 @@ type Inputs struct {
 	// AuditError and CheckAuditError carry the error text of a failed
 	// ReadAuditPrefix. A failed read returns no prefix, so without these
 	// fields Build could not tell an unreadable source from an absent one
-	// (lesson error-is-not-absence). Build sanitizes the text. This is an
-	// addition to the L5 field list.
+	// (lesson error-is-not-absence). Build sanitizes the text.
 	AuditError      string
 	CheckAuditError string
 }
