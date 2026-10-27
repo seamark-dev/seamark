@@ -316,6 +316,13 @@ func configPath(root string) string {
 // the binding and the revalidation still need the digest of the bytes.
 func loadConfig(root string) loadedConfig {
 	data, err := os.ReadFile(configPath(root))
+
+	return parseLoadedConfig(data, err)
+}
+
+// parseLoadedConfig keeps the file-read result and its bytes together.
+// All configuration consumers use the same absence and error rules.
+func parseLoadedConfig(data []byte, err error) loadedConfig {
 	if errors.Is(err, os.ErrNotExist) {
 		cfg, _ := newConfig(reviews.DefaultConfig(), "")
 

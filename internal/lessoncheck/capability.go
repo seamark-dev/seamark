@@ -1,6 +1,7 @@
 package lessoncheck
 
 import (
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -142,7 +143,16 @@ const (
 // decode-error entry in the errors. The report then names the file as
 // invalid in the K5 form, and it never reads a broken file as absent.
 func LoadForCapability(root string) (*Config, []ConfigError) {
-	loaded := loadConfig(root)
+	data, err := os.ReadFile(configPath(root))
+
+	return ParseForCapability(data, err)
+}
+
+// ParseForCapability is LoadForCapability on an existing file-read result.
+// readErr carries absence (os.ErrNotExist) and unreadability exactly as
+// the file read does. The caller can share these bytes with other readers.
+func ParseForCapability(data []byte, readErr error) (*Config, []ConfigError) {
+	loaded := parseLoadedConfig(data, readErr)
 	if loaded.cfg != nil {
 		return loaded.cfg, loaded.report.Errors
 	}
