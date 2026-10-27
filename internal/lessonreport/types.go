@@ -164,14 +164,18 @@ type DeliveryCounts struct {
 
 // OccurrenceCounts are the assessed occurrences of one pin version.
 type OccurrenceCounts struct {
-	Occurrences            int               `json:"occurrences"`    // occurrence keys (canonical feedback, identity, version)
-	Incidents              int               `json:"incidents"`      // distinct incident digests among them
-	UnknownAction          int               `json:"unknown_action"` // occurrences without a located action; never incidents
-	ByClass                map[PairClass]int `json:"by_class"`       // sums to Occurrences
-	ByOrigin               map[Origin]int    `json:"by_origin"`
-	Excluded               int               `json:"excluded"` // newest review excluded; not in Occurrences
-	ChangedEvidence        int               `json:"changed_evidence"`
-	IndependenceUnresolved bool              `json:"independence_unresolved"`
+	Occurrences     int               `json:"occurrences"`    // occurrence keys (canonical feedback, identity, version)
+	Incidents       int               `json:"incidents"`      // distinct incident digests among them
+	UnknownAction   int               `json:"unknown_action"` // occurrences without a located action; never incidents
+	ByClass         map[PairClass]int `json:"by_class"`       // sums to Occurrences
+	ByOrigin        map[Origin]int    `json:"by_origin"`
+	Excluded        int               `json:"excluded"` // newest review excluded; not in Occurrences
+	ChangedEvidence int               `json:"changed_evidence"`
+	// IndependenceUnresolved means two counted occurrences share a session,
+	// incident, or joined anchor component. It does not read peer overlap
+	// through current episode members or fix edits, because the snapshot
+	// holds neither.
+	IndependenceUnresolved bool `json:"independence_unresolved"`
 }
 
 // Observation is the window partition of the delivered sessions of one
