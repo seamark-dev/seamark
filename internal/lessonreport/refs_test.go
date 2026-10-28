@@ -50,11 +50,11 @@ func TestResolveRef(t *testing.T) {
 		refErr := refKind(t, err)
 		assert.Equal(t, reviews.PinRefMissing, refErr.Kind)
 
-		// The middle of this text may change, so the test asserts the
-		// head and the tail only.
+		// The stable current-reference clause stays when historical
+		// inspection is available.
 		text := err.Error()
 		assert.True(t, strings.HasPrefix(text, "pin reference cccccccc names no pin in .seamark/lessons.yaml;"), text)
-		assert.True(t, strings.HasSuffix(text, "lists the current references"), text)
+		assert.Contains(t, text, "`seamark lessons --verify` lists the current references")
 	})
 
 	t.Run("malformed ref", func(t *testing.T) {

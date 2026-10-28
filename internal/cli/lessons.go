@@ -32,6 +32,7 @@ func newLessonsCmd(opts *options) *cobra.Command {
 		files           []string
 		verify          bool
 		prepare         bool
+		deliveryReport  bool
 		asJSON          bool
 		region          string
 		hookMode        bool
@@ -58,7 +59,7 @@ func newLessonsCmd(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "lessons [--file <path> | --list [--region <prefix>] | --stats | --distill | --proposals | " +
 			"--verify [--file <path>]... [--json] | --prepare <path>... [--json] | " +
-			"--set-mode <mode> --pin <pin-ref> [--check <check-id>]]",
+			"--delivery [--pin <pin-ref>] [--json] | --set-mode <mode> --pin <pin-ref> [--check <check-id>]]",
 		Short: "Show the recurring review feedback mined from pull requests",
 		Long: `Prints the review lessons (mined by "index --reviews", tuned by
 .seamark/lessons.yaml) — the mistakes reviewers keep flagging.
@@ -104,9 +105,15 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    Advisory: it authorizes no write, runs no check, and
                    leaves the edit-hook state alone. No agent call, no
                    network.
-  --json           with --verify or --prepare: print only the JSON
-                   document (lesson-verification/1 or
-                   lesson-preparation/1) instead of the text report
+  --delivery       read delivery records, assessed corrections, timing,
+                   qualified observation windows, and separate check and
+                   guard counts per pin version. --pin expands one pin,
+                   including historical versions and association refs.
+                   Read-only: no assembly, agent call, or network. Missing
+                   or unreadable evidence is report data, not a failure.
+  --json           with --verify, --prepare, or --delivery: print only
+                   lesson-verification/1, lesson-preparation/1, or
+                   delivery/1 JSON instead of the text report
   --set-mode <mode> --pin <pin-ref> [--check <check-id>]
                    set the mode of one pin: advisory, check, or enforce.
                    The pin-ref comes from the pin column of --verify.
@@ -169,6 +176,10 @@ func newLessonsCmd(opts *options) *cobra.Command {
 a file has no lessons.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := deliveryFlagError(cmd, deliveryReport); err != nil {
+				return err
+			}
+
 			// Validated BEFORE any dispatch: `--apply p1 --dry-run` must
 			// be a usage error, never an apply that ignored the flag —
 			// a command carrying --dry-run must not mutate anything.
@@ -185,13 +196,13 @@ a file has no lessons.`,
 				return err
 			}
 
-			if err := verifyFlagError(cmd, verify, prepare, asJSON, len(files)); err != nil {
+			if err := verifyFlagError(cmd, verify, prepare, deliveryReport, asJSON, len(files)); err != nil {
 				return err
 			}
 
 			// --set-mode, --pin, and --check are checked next, for the
 			// same reason: a call with --set-mode names its own conflict.
-			if err := setModeFlagError(cmd, setMode); err != nil {
+			if err := setModeFlagError(cmd, setMode, deliveryReport); err != nil {
 				return err
 			}
 
@@ -303,6 +314,8 @@ a file has no lessons.`,
 				return runLessonsVerify(cmd, opts, files, asJSON)
 			case prepare:
 				return runLessonsPrepare(cmd, opts, args, asJSON)
+			case deliveryReport:
+				return runLessonsDelivery(cmd, opts, setMode.pin, asJSON)
 			case cmd.Flags().Changed("set-mode"):
 				return runLessonsSetMode(cmd, opts, setMode)
 			case strings.TrimSpace(applyIDs) != "":
@@ -340,7 +353,7 @@ a file has no lessons.`,
 				return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, file), lessons, 0)
 			default:
 				return fmt.Errorf("provide --file <path>, --list, --stats, --distill, --proposals, --verify, --prepare, " +
-					"--apply, --dismiss, or --hook")
+					"--delivery, --apply, --dismiss, or --hook")
 			}
 		},
 	}
@@ -354,12 +367,14 @@ a file has no lessons.`,
 			"with --hook, check the actual result of one agent edit")
 	cmd.Flags().BoolVar(&prepare, "prepare", false,
 		"print the lessons, pins, and checks of the paths you give before you construct a change (no agent call)")
+	cmd.Flags().BoolVar(&deliveryReport, "delivery", false,
+		"read per-version capture delivery evidence and separate check/guard counts (no writes or agent call)")
 	cmd.Flags().BoolVar(&asJSON, "json", false,
-		"with --verify or --prepare: print the lesson-verification/1 or lesson-preparation/1 JSON document")
+		"with --verify, --prepare, or --delivery: print the lesson-verification/1, lesson-preparation/1, or delivery/1 JSON document")
 	cmd.Flags().StringVar(&setMode.mode, "set-mode", "",
 		"set the mode of the pin that --pin names: advisory, check, or enforce; writes lessons.yaml only with distill.write")
 	cmd.Flags().StringVar(&setMode.pin, "pin", "",
-		"with --set-mode: the pin-ref of the pin to change, from the pin column of --verify")
+		"with --set-mode or --delivery: a current pin-ref from --verify, or with --delivery a historical identity reference")
 	cmd.Flags().StringVar(&setMode.check, "check", "",
 		"with --set-mode: the ID of a check under checks in lessons.yaml to bind to the pin")
 	cmd.Flags().BoolVar(&list, "list", false, "list every mined lesson with config-tuning syntax")

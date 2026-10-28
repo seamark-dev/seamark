@@ -200,18 +200,15 @@ type PinRefError struct {
 	Entries []int
 }
 
-// Error returns the exact message of contract K2. The texts are frozen,
-// so they name the length 8 of MinPinRef literally. The missing message
-// is the milestone P1 form: the delivery report does not exist yet, so
-// the text names only `seamark lessons --verify` (contracts §4.2 subset
-// rule).
+// Error describes a selection failure and names the commands that list
+// current and historical references.
 func (e *PinRefError) Error() string {
 	switch e.Kind {
 	case PinRefMalformed:
 		return fmt.Sprintf("pin reference %q: give at least 8 hex characters from the pin column of `seamark lessons --verify`",
 			e.Ref)
 	case PinRefMissing:
-		return fmt.Sprintf("pin reference %s names no pin in .seamark/lessons.yaml; `seamark lessons --verify` lists the current references",
+		return fmt.Sprintf("pin reference %s names no pin in .seamark/lessons.yaml; `seamark lessons --verify` lists the current references and `seamark lessons --delivery` the historical ones",
 			e.Ref)
 	case PinRefAmbiguousPrefix:
 		return fmt.Sprintf("pin reference %s names more than one pin; give more hex characters", e.Ref)

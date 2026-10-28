@@ -68,7 +68,7 @@ agents-test: ## Run the agent-integration contract and characterization tests
 # Nothing here calls a model or the network.
 # Later milestones append test-name prefixes and packages here.
 LESSON_CHECK_PKGS := ./internal/lessoncheck/... ./internal/privatedir/... ./internal/lessonreport/...
-LESSON_CHECK_RUN  := 'Test(LessonCheck|LessonsVerify|LessonsSetMode|CheckLessons|LessonsPrepare|LessonsExploreHook|ChangeSetPreparation|LessonsHookNeverInvokes|LessonsGuard|LessonsBaseline)'
+LESSON_CHECK_RUN  := 'Test(LessonCheck|LessonsVerify|LessonsSetMode|CheckLessons|LessonsPrepare|LessonsExploreHook|ChangeSetPreparation|LessonsHookNeverInvokes|LessonsGuard|LessonsBaseline|LessonsDelivery)'
 
 lesson-check: ## Run the lesson-check core, configuration, and verification tests (offline, no model)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(LESSON_CHECK_PKGS)

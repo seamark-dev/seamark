@@ -15,11 +15,6 @@ const DefaultMaxAuditBytes int64 = 256 << 20
 // Request is what a surface asks of the engine.
 type Request struct {
 	Root string
-	// IdentityRoot is the identity root of this run
-	// (cli.hookIdentityRoot). The engine compares it and never
-	// substitutes it: as_of.archive.root_equal and
-	// coverage.root_mismatch_sessions.
-	IdentityRoot string
 	// PinRef is "" for the overview. Otherwise it is a pin-ref of the
 	// current config.
 	PinRef string

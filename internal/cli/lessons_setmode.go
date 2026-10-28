@@ -42,18 +42,18 @@ type setModeFlags struct {
 }
 
 // setModeFlagError checks the flags that --set-mode adds before any
-// dispatch. --pin and --check apply to --set-mode only, and --set-mode
-// combines with no other mode. The --pin text is the milestone P1 form
-// of contracts §4.1: milestone P5 adds --delivery to it.
-func setModeFlagError(cmd *cobra.Command, f setModeFlags) error {
+// dispatch. --pin selects a pin for mode changes or delivery inspection;
+// --check belongs to mode changes only. A mode change combines with no
+// other mode.
+func setModeFlagError(cmd *cobra.Command, f setModeFlags, deliveryReport bool) error {
 	setMode := cmd.Flags().Changed("set-mode")
 	checkSet := cmd.Flags().Changed("check")
 
 	switch {
 	case checkSet && !setMode:
 		return errors.New("--check applies to --set-mode only")
-	case cmd.Flags().Changed("pin") && !setMode:
-		return errors.New("--pin applies to --set-mode only")
+	case cmd.Flags().Changed("pin") && !setMode && !deliveryReport:
+		return errors.New("--pin applies to --set-mode and --delivery only")
 	case !setMode:
 		return nil
 	}
