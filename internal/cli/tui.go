@@ -52,6 +52,7 @@ The same information and the closest actions are available as plain commands:
   seamark lessons --extract-triggers --dry-run  plan a trigger backfill of every
                                       eligible proposal (drop --dry-run to run it)
   seamark lessons --stats             lesson delivery statistics
+  seamark lessons --delivery [--pin <ref>]  capture delivery and version-isolated expansion
   seamark lessons --list              mined rules and regions to copy into a pin that you write
   seamark lessons --file <path>       the lessons of one file (closest to the selection sample)
   seamark lessons --verify            check the working tree against the lesson checks

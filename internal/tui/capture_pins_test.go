@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
+	"github.com/seamark-dev/seamark/internal/lessonreport"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/pinfile"
@@ -175,6 +176,10 @@ func pinsCaptureScenes() []captureScene {
 
 	return []captureScene{
 		{name: "70-pins-list", fake: pinsFake, drive: none},
+		{name: "71j-pins-delivery-section", fake: deliveryCaptureFake, drive: detail(1, 1, "Capture delivery")},
+		{name: "71k-pins-delivery-help", fake: deliveryCaptureFake, drive: keys("?")},
+		{name: "71l-pins-delivery-expansion", fake: deliveryCaptureFake, drive: keys("g")},
+		{name: "71o-pins-delivery-error", fake: deliveryErrorCaptureFake, drive: keys("g")},
 		{name: "71c-pins-check-section", fake: checkCaptureFake, drive: detail(1, 0, "Active")},
 		{name: "71d-pins-check-advisory", fake: checkCaptureFake, drive: detail(3, 0, "advisory-with-check")},
 		{name: "71e-pins-check-help", fake: checkCaptureFake, drive: keys("?")},
@@ -216,6 +221,38 @@ func pinsCaptureScenes() []captureScene {
 		{name: "79c-pins-no-ledger-missing", fake: over(pinsNoLedger), drive: keys("f")},
 		{name: "79d-pins-every-pin-present", fake: over(fakePins), drive: keys("f")},
 	}
+}
+
+// deliveryCaptureFake supplies deterministic analyzed delivery readings without
+// opening a real archive or changing any of the older scene fixtures.
+func deliveryCaptureFake() *fakeServices {
+	f, _, err := deliveryFakeOf()
+	if err != nil {
+		panic(err)
+	}
+
+	return f
+}
+
+// deliveryErrorCaptureFake returns a real selection error, not a report whose
+// source state would misrepresent a missing pin as a failed archive read.
+func deliveryErrorCaptureFake() *fakeServices {
+	f, report, err := deliveryFakeOf()
+	if err != nil {
+		panic(err)
+	}
+
+	f.delivery = func(req lessonreport.Request) (lessonreport.Report, error) {
+		if req.PinRef != "" {
+			return lessonreport.Report{}, &reviews.PinRefError{Kind: reviews.PinRefMissing, Ref: req.PinRef}
+		}
+
+		report.Expanded = nil
+
+		return report, nil
+	}
+
+	return f
 }
 
 // TestCapturePinsScenesAreNamed keeps the scene list in its range:
