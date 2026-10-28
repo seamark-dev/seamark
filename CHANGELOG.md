@@ -6,6 +6,38 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## Unreleased
+
+v0.9.0 is the planned first release with lesson-check hook handlers,
+not a published release. Shipping is blocked on the
+[mandatory native verification and release fixes](docs/agent-integrations.md#release-checklist).
+Fixtures do not establish native enforcement, prevention or earlier
+model-boundary delivery.
+
+- **Earlier preparation and exploration.** `lessons --prepare` and MCP
+  `change_set` return versioned guidance and check listings. Optional
+  Claude `Read` exploration uses separate repeat state. Preparation is
+  receiver-unknown; own-call edit reminders remain same-call-only.
+- **Executable lessons.** Advisory/check/enforce modes, hand-authored
+  `forbid-path-change/1` and `no-added-pattern/1` predicates, explicit
+  `--verify`, `check --lessons`, MCP `lesson_checks`, mode changes and
+  separate baseline/guard/post-edit hooks. Installation differs from
+  active or native-verified coverage. Codex Update content projection
+  is still incomplete and is required before release.
+- **Capture delivery reading.** `lessons --delivery [--pin <ref>]`
+  (`delivery/1` JSON), version-isolated classes/timing/windows and
+  metadata-only inspection. Compact lines sit beside, never inside,
+  finding-based outcome readings in proposals, stats, HTML and TUI.
+  Current native evidence keeps prevention at zero and otherwise
+  negative observation windows qualified as incomplete.
+- **Console controls.** Pins can edit mode/check on linked pins,
+  author check definitions (`M`), verify (`V`), and expand capture
+  delivery (`g`) with confirmed association exclude/restore (`X`/`U`).
+  Read-only browsing never applies a decision.
+
+See [current capability states](docs/STATUS.md#unreleased--lesson-checks-and-capture-delivery)
+and the [lesson guide](docs/lessons.md) for limits and commands.
+
 ## v0.8.0 — 2026-10-18
 
 The workspace console release. `seamark tui` (experimental) opens one

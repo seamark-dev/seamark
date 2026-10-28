@@ -539,17 +539,19 @@ comment, and it never creates, changes, or links a proposal row.
   equal rank and specificity.
 - Without a `pin:` key, the console adds one at the end of the file. A
   missing file gets only the `pin:` key and the new pin.
-- An edit changes only the rule, the note, or the regions that you
+- An edit changes only the rule, note, regions, mode, or check that you
   edit. A removal deletes one entry and the seamark provenance
   comments directly above it, because they would read as the
   provenance of the next pin. A free comment above the entry stays.
   It then reads as the comment of the next pin. Every other line stays
   byte for byte.
-- A linked pin (one applied proposal records it) allows a note edit
-  only. Its scope changes with `w` (retarget), and its removal is `-`
-  (prune). The proposal keeps its recorded rule, note, and evidence. So
-  Pins shows the pin as `edited`. Trigger extraction still asks about
-  the recorded note.
+- A linked pin (one applied proposal records it) allows note, mode,
+  and check edits. Its rule stays read-only. Its scope changes with `w`
+  (retarget), and its removal is `-` (prune). The proposal keeps its
+  recorded rule, note, and evidence. A changed note makes Pins show
+  `edited`; trigger extraction still asks about the recorded note.
+  Mode and check edits have their own review notes and change the pin
+  version, not the proposal evidence.
 - The same `distill.write` gate applies. With the gate off, the review
   shows the exact diff and writes nothing.
 - A save needs a readable index of this workspace, because the
@@ -644,9 +646,9 @@ one theme never spend two slots:
   without running anything. The whole patch gets one reminder under the
   same budget, each line tagged with its region. A patch the hook cannot
   read completely gets no reminder rather than a guessed one, and Codex
-  reminders always repeat: the adapter names the main session or the
-  subagent that receives them, but no reset of a Codex context is
-  verified (see [Hook delivery modes](#hook-delivery-modes)).
+  reminders always repeat: the adapter derives a receiving context, but
+  Codex child-lane attribution and context reset remain unverified
+  (see [Hook delivery modes](#hook-delivery-modes)).
 - **`change_set` (MCP)**: before an edit of one or more files, the
   union of the files' lessons under `change_budget` (default 6) — merged
   by identity, ranked by confidence across the whole set, regions shown
@@ -678,8 +680,10 @@ one theme never spend two slots:
   outputs can make the event larger than 1 MiB. Such an event gets no
   lessons and no record, also with the recording switch on: the hook never
   decodes a part of an event, so it fails open. Codex has no structured
-  read event, so `--client codex` writes nothing. `seamark init` does not
-  install this hook yet.
+  read event, so `--client codex` writes nothing. Install it explicitly
+  with `seamark init --client claude --lesson-exploration on`; turn it
+  off with `--lesson-exploration off`. Omission preserves the installed
+  choice. Native model-visible exploration delivery remains unverified.
 - **`check`** (CLI and MCP): after the policy verdict, the touched
   files' lessons as a clearly-marked advisory — printed even when the
   verdict blocks, because a deny is exactly when they matter; `--json`
@@ -689,6 +693,183 @@ Each surface records what it surfaced to the firing log, tagged by
 surface (`prepare`, `change_set`, the edit hook, `explore`, `check`), so
 the stats below never conflate a speculative plan with a reminder that
 reached an agent.
+
+## Executable lessons: advisory, check, and enforce
+
+A pin's mode is a request, not proof that a client runs its hooks:
+
+| Mode | Behavior |
+| --- | --- |
+| `advisory` (default) | Show guidance. An attached check is listed but not run by verification. |
+| `check` | Evaluate the check during explicit verification and installed post-edit hooks. Do not request a pre-write deny. |
+| `enforce` | Also evaluate the proposed edit in a separate installed guard. Request denial for a violation or an unknown result. |
+
+Checks are hand-authored predicates, not executable interpretations of
+arbitrary prose. Define them in `.seamark/lessons.yaml` with
+`lesson_checks_version: 1`, then bind a pin to an existing check:
+
+```bash
+seamark lessons --verify                        # lists current pin references too
+seamark lessons --set-mode check --pin <pin-ref> --check <check-id>
+seamark lessons --set-mode enforce --pin <pin-ref> --check <check-id>
+seamark lessons --set-mode advisory --pin <pin-ref>
+```
+
+A mode change validates the configuration and follows `distill.write`.
+With writing off it refuses the write and prints the change to make by
+hand. It does not install hooks or grant trust. The impact view states
+requested mode and active state per client. Note, mode, check definition
+and effective scope changes can change the exact pin version; earlier
+versions keep their own history.
+
+The supported predicates are deliberately narrow:
+
+- **`forbid-path-change/1`** reports a violation for any observed change
+  in scope: add, content change, delete, mode/type change, or either end
+  of a move. It reads no content. No touching change gives
+  `not-applicable`, not `pass`; incomplete paths can give `unknown`.
+- **`no-added-pattern/1`** matches a Go regular expression against each
+  added text line in scope. A new file adds every line. Moving a file
+  into scope adds its content; moving it out removes it. A deletion or
+  mode-only change adds no line. It does not scan unchanged lines for
+  old violations. A match gives `violation`; otherwise incomplete,
+  binary, unreadable or unprojectable content gives `unknown`. A fully
+  checked touching change without a match gives `pass`.
+
+See [configuration](configuration.md#executable-lesson-configuration)
+for keys and bounds. A detected violation stays visible beside unknown
+paths; an incomplete evaluation never becomes a pass.
+
+### Verify the work, not just one proposed call
+
+```bash
+seamark lessons --verify
+seamark lessons --verify --file path/to/file --file path/to/other
+seamark lessons --verify --json
+seamark check --lessons
+```
+
+Default verification compares the current working tree with `HEAD`
+(the empty tree before the first commit). It includes staged and
+unstaged tracked changes plus nonignored untracked files. Repeated
+`--file` selects only those paths, including ignored files. A relative
+path starts at the process directory. The result names the snapshot,
+configuration and checker versions, selection, omissions and freshness.
+Exit 0 means passed, no applicable checks, or no executable checks;
+exit 1 means incomplete; exit 2 means a violation. This does not certify
+the whole repository against every lesson.
+
+Default selection leaves out exactly the untracked lesson-check audit,
+its rotated generation and its lock. Tracked files and explicit
+`--file` selections keep them. Current `not covered` output does not yet
+name those three exclusions; that output fix is required before release.
+[Configuration](configuration.md#verification-state-and-report-inputs)
+names the paths and other limits.
+
+`check --lessons` runs the existing policy check, then verifies the
+working tree independently of the supplied policy diff. Its JSON is a
+`check-lessons/1` envelope with both results and their combined state.
+Plain `check --json` stays verdict-shaped. MCP `check` accepts
+`lesson_checks: true` for the same combined reading; omission or false
+keeps its existing policy/advisory behavior.
+
+A pre-write guard checks one native edit. A post-edit hook checks the
+observed edit against its saved baseline; missing or mismatched evidence
+stays qualified. Neither replaces the completion check above. Install
+checks separately with `seamark init --client claude --lesson-checks check`
+or the selected client's `enforce` mode. The advisory edit hook remains
+fail-open and never becomes a guard.
+
+The current guard can request denial, but native denial, timeout and
+reply behavior remain unverified. Codex Update content is currently
+unprojectable for a content predicate, so an armed guard denies that
+unknown result. Verified Update projection and native evidence are
+required before v0.9.0 can ship. See the
+[integration guide](agent-integrations.md#lesson-checks-and-exploration-unreleased).
+
+## Capture delivery: lessons --delivery
+
+This model-free reading asks which exact pin version reached the context
+of an assessed correction. It does not judge whether the pin works:
+
+```bash
+seamark lessons --delivery
+seamark lessons --delivery --pin <pin-ref>
+seamark lessons --delivery --pin <pin-ref> --json
+```
+
+JSON uses `delivery/1`. The overview separates current entries from
+historical versions. `--pin` expands one identity into its versions,
+occurrences, cited actions, observation windows, reasons, limitations and
+inspection commands. A historical identity prefix can select a removed
+pin. Ambiguous or missing references fail instead of selecting another
+pin. Source failures such as an absent, busy or older archive are report
+data, not a zero-correction success claim. The report never assembles
+new evidence or calls a model.
+
+An assessed feedback item associated with the same behavior of one pin
+version is an **occurrence**. Known copies count once. Located corrected
+actions supply **incidents**; one occurrence can cite several actions.
+A shared incident or session can leave independence unresolved. Human,
+unverified-user and peer origins stay distinct. Association is an
+assessment, not proof of cause; missing actions remain unknown.
+
+| Class | What the records establish |
+| --- | --- |
+| `at-action` | The action's own pre-tool hook emitted the version. The call arguments already existed. |
+| `earlier-in-context` | An earlier injection in the same receiving context supports the recorded repeat suppression. |
+| `other-lane` | Earlier delivery reached another context, not the lane of the corrected action. Parent delivery does not cover a child. |
+| `region-not-matched` | A complete evaluation of the exact configuration establishes that the action's paths did not match. |
+| `not-emitted` | The version matched but was held back or emission failed; the reason names why. |
+| `unknown` | Identity, configuration, audit, action or continuity evidence cannot support a stronger reading. |
+| `mixed` | The cited actions of one occurrence have different classes. |
+
+`decision_timing` is separate. Own-call delivery is `same-call-only`,
+not an earlier chance to build that call. Preparation has the separate
+fact `receiver-unknown-preparation`; returning guidance proves no
+receiving lane or model boundary. `before-construction` requires verified
+boundary and continuity evidence, unavailable in the current native
+evidence. Current timing stays `same-call-only` or `unknown`, with
+`mixed` for occurrences whose action timings differ. Timestamps alone
+do not prove that a model read guidance.
+
+A delivered session opens an observation window for that version. Its
+endpoint is a captured session end, not a wall-clock wait. A window is
+linked, incomplete, or **no linked correction observed (qualified)**.
+The last phrase requires consent coverage, an ended and unreopened
+session, complete capture and assembly, assessed evidence, a complete
+comparison, a captured edit after injection, and verified lane coverage.
+Unresolved exclusions and audit gaps also prevent that negative reading.
+Today unverified lane identity leaves otherwise negative windows
+`incomplete` with `lane-coverage-unknown`. No absence is a success or
+prevention rate, or proof that the agent obeyed.
+
+The report keeps these units separate:
+
+| Unit | Meaning |
+| --- | --- |
+| Records | Physical firing-log lines; one edit can write more than one. |
+| Events | Surface invocations with a distinct event identity. |
+| Sessions | Distinct captured or audited sessions. |
+| Delivered sessions | Sessions with an injected hook/exploration record of this version, excluding calls the guard denied. |
+| Occurrences | Assessed feedback-item/pin-version pairs, with known copies collapsed. |
+| Incidents / actions | Distinct located corrected calls / cited corrected actions. |
+| Feedback items | Captured feedback episode keys. |
+| Check operations | Retained verify, post-edit and guard audit records. |
+| Pin evaluations | Executable pins evaluated inside those operations. |
+| Guard attempts | Pre-write decisions, not edits or corrections. |
+
+A requested deny is not a prevented write. The report separately shows
+requested denies, later execution, no execution observed and verified
+native paths. `prevented` additionally needs a written deny reply, no
+later execution record and a verified native deny path. Current native
+evidence supports **`prevented: 0`**, not a prevention claim.
+
+The compact `capture delivery:` line appears beside the independent
+outcome in `--proposals`, `--stats`, the HTML report and installed TUI
+Pins. It preserves the qualified phrase and points to the full report.
+Unavailable capture means no added compact line. Counts from historical
+versions never substitute for the installed version.
 
 ## Is it working? lessons --stats
 
@@ -775,6 +956,11 @@ pin outcomes — 3 measured: 1 working, 1 not landing, 1 untested
 ```
 
 ### Do pins actually change behavior? The outcome loop
+
+The finding-based outcome below is independent of capture delivery.
+A captured peer correction is not a mined recurrence. The separate
+`capture delivery:` line never adds occurrences, sessions or guard
+attempts to the outcome counts. Neither reading proves causation.
 
 Firing counts measure *exposure* — a pin reached an agent. The `pin
 outcomes` block measures *effect*: did the pin's mistake recur after

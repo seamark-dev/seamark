@@ -48,9 +48,11 @@ guide for this session without writing anything.
   with the proposal ledger. SQLite may create its `-wal` and `-shm` side
   files next to an existing database. A selection sample only reads: it
   records no delivery and writes nothing.
-- It never starts network or model work, and never writes a durable
-  change, without a preview. The start or the save is always `y` in that
-  preview, never `enter`; `esc` before `y` changes nothing. The index
+- It never starts network/model work or changes pins, settings or
+  decisions without a preview. The start or save is `y` in that preview,
+  never `enter`; `esc` before `y` changes nothing. Explicit verification
+  (`V`) instead runs at once and appends its audit record; it changes
+  no pin or decision. The index
   build keeps its confirmation (`enter` or `y`), because it writes only
   local derived data. A retarget or a prune writes `.seamark/lessons.yaml`
   and the ledger only after `y` in its preview, and only while
@@ -138,6 +140,16 @@ installs hooks and registers MCP. Setup and the inference agent are
 independent: setting up Codex does not make it the distill agent. Exact
 rules: `internal/integration`.
 
+With lesson checks configured, the detail also shows installed mode,
+configuration, paths per tool/stage/root-child context, binary identity,
+uncovered writers and CLI install/remove commands. This section does not
+install lesson-check or exploration hooks; use the named CLI route. An
+installed choice differs from an active or native-verified path.
+Current status/TUI can summarize an unreadable hook file as `off` even
+while its path states say `inactive (document-unreadable)`. The summary
+fix is required before release; doctor already qualifies it. See
+[integration limits](agent-integrations.md#installed-active-and-verified-are-different).
+
 ### 3 Lessons
 
 Five sub-views: **Proposals** (`p`), **Pins** (`m`), **Stats** (`s`),
@@ -189,7 +201,7 @@ shows the rule, the regions (`repo-wide` for none), and a state label:
 
 | State | Meaning | Route |
 | --- | --- | --- |
-| `pN linked` | One entry and one applied proposal have this rule and regions. | `w`, `-`, `t`; `i` edits the note only |
+| `pN linked` | One entry and one applied proposal have this rule and regions. | `w`, `-`, `t`; `i` edits note, mode and check, not rule or scope |
 | `pN edited` | Linked, but the live note differs from the recorded note. | As linked |
 | `no proposal` | No applied or pending proposal has this rule and regions. | `i` edit, `d` remove |
 | `pending pN` | Only pending proposals match. | Record one as applied (`c` in Proposals) |
@@ -241,18 +253,19 @@ the same engine without a preview: they change the ready pins and print a
 reason line for each other proposal.
 
 Pins also writes pins for you. It creates, edits, and removes manual
-pins, which no proposal stands behind, and it edits the note of a
-linked pin ([Lessons](lessons.md#pins-that-a-person-writes)):
+pins, which no proposal stands behind, and edits the note, mode and check
+of a linked pin ([Lessons](lessons.md#pins-that-a-person-writes)):
 
 - `n` opens the form of a new pin in every state, also without an index.
   `i` edits and `d` removes the cursor pin; marks are ignored and stay.
-  A pin with no proposal allows every field. A linked pin allows a note
-  edit only: the rule and scope rows are read-only, and `d` reads `n/a`
-  with "use - Prune". A pending, ambiguous, or duplicate pin refuses `i`
+  A pin with no proposal allows every field. A linked pin allows note,
+  mode and check edits: rule and scope stay read-only, and `d` reads
+  `n/a` with "use - Prune". A pending, ambiguous, or duplicate pin refuses `i`
   and `d`, and so do an entry that the editor cannot change safely and
   an unreadable pin file. The press names the reason and the route.
-- The form has four rows. Rule is one line. Note takes several lines,
-  and `enter` adds a line break. Scope is repository-wide or a list of
+- The form has rule, note and scope rows, plus mode and check rows when
+  lesson-check editing is available. Rule is one line. Note takes
+  several lines, and `enter` adds a line break. Scope is repository-wide or a list of
   regions, and a new pin starts with no choice. A region matches that
   file, or everything under that directory; there are no wildcards. The
   form checks each field as you type. The fields drop control and
@@ -294,6 +307,57 @@ linked pin ([Lessons](lessons.md#pins-that-a-person-writes)):
   old edits. An edit draft stays, and `s` reviews it again; `d` reviews
   a removal again. After a refused save, `enter` reviews again from the
   current file and follows a moved entry.
+
+#### Check definitions and verification
+
+With lesson checks configured or relevant hooks installed, the CHECK
+section shows pin-ref, requested mode, check ID/kind/version, predicate,
+scope and each client's active state. An advisory pin with a check is
+listed, not evaluated. `i` edits the pin's mode and check binding; it
+does not infer a predicate from the note.
+
+`M` opens a check-definition form. It loads the cursor pin's definition
+when one exists, or starts a new definition. Choose the ID, checker kind
+and pattern (pattern checker only). `s` reviews the predicate, exact diff
+and impact on all pins using that ID; `y` writes through `distill.write`.
+This does not change any pin's binding. Invalid definitions and unsafe
+files block the save. See [configuration](configuration.md#executable-lesson-configuration).
+
+`V` runs default working-tree verification, not only the cursor pin or
+marked pins. It shows the shared verification result and appends an
+audit record, so it is an explicit action, not browsing. `V` in that
+view runs again. Freshness reads can mark the held result stale without
+rerunning the checker. Current default audit/lock exclusions are not yet
+listed in `not covered`; that output fix remains required before release.
+
+#### Capture delivery
+
+An installed pin's detail adds **Capture delivery** after its existing
+readings. The compact `capture delivery:` sentence is independent of the
+finding-based outcome and keeps its complete qualified wording. It
+requires a unique current identity and exact current version; ambiguous
+entries, unavailable capture and unknown versions show no line or `g`.
+The proposal-only **not present** and **superseded** filters have no
+trustworthy installed version and offer no `g`. Use
+`seamark lessons --delivery --pin <pin-ref>` for historical readings.
+
+The overview loads in its own worker. It does not block the pin list,
+other source loads or input. Relevant refreshes reload it independently.
+A failed reload can retain a visibly **Stale** compact reading, but
+expansion stays unavailable until fresh.
+
+`g` opens a separately loaded expansion for that pin. It lists versions,
+occurrences, actions, classes, timing, windows, reasons, limitations and
+metadata-only inspection commands from the shared report. Historical
+versions stay separate. It reads no raw conversation text. Late replies
+cannot replace a newer selection or reopen a closed expansion. A changed
+or ambiguous installed binding invalidates the old selection. A retained
+expansion after a read failure is visibly stale and read-only.
+
+Use `tab`/`shift+tab` to choose an occurrence; arrows and page keys scroll.
+Browsing, scrolling, opening and closing write nothing. See [capture delivery](lessons.md#capture-delivery-lessons---delivery)
+for classes, units and the phrase **no linked correction observed
+(qualified)**. No native timing or prevention claim follows from this view.
 
 **Selection sample** opens with `s` in a pin review or in the review of
 a lessons Settings group, while the review holds a candidate change. It
@@ -466,6 +530,11 @@ Exact rules: `internal/settings`.
 | Lessons sub-views | `p` Proposals, `m` Pins, `s` Stats, `e` Evidence, `u` Run |
 | Proposals | `space` select pending rows, `x` clear the selection, `f` state (pending, applied, dismissed, superseded), `/` region, `a` apply, `d` dismiss, `c` record as applied, `o` open the PR, `t` trigger extraction; `?` lists every key, and `n/a` marks a key that the cursor row, the selection, or the filters cannot use; the footer lists only the keys that work |
 | Pins | `↑↓` pins, `tab` detail, `space` mark, `x` clear the marks, `f` list (installed, not present, superseded), `/` region, `z` text search, `v` compare with a similar pin, `w` retarget preview, `-` prune preview, `t` trigger extraction, `n` new pin, `i` edit, `d` remove (unlinked; `i` and `d` act on the cursor pin only); `?` always lists `n`, `i`, `d`, `-`, `w`, `t`, and `v`. While one of them reads `n/a`, the footer lists all seven from 60×20. A narrow footer then shows some keys by their letter alone, and at 60×20 the pane, list, and switch keys give way without a marker. When all seven work, a narrow footer cuts keys from the end and shows `…`, as other footers do. At 120 columns `t` and `v` then give way, and at 60×20 only `space select` stays. `n/a` marks a key that the targets cannot use (its press names the reason) |
+| Pins, lesson checks | `M` check definition, `V` verify default working-tree selection; shown when lesson-check UI is available |
+| Pins, capture delivery | `g` expand a fresh uniquely bound installed reading; hidden in proposal-only history filters |
+| Capture delivery expansion | `tab`/`shift+tab` occurrence, arrows/page keys scroll, `r` refresh, `esc` close |
+| Check definition | `enter` edit a row, `space` choose kind, `s` review; review `y` writes, `esc` back |
+| Verification | `V` verify again, scroll keys, `esc` close |
 | Pins region or search field | `enter` apply, `esc` keep the previous value |
 | Pins comparison | `tab` next similar pin, `↑↓` scroll, `esc`/`enter` close |
 | Retarget or prune preview | `↑↓` scroll, `y` confirm (every pin ready, `distill.write` on, and no other operation running), `o` open Settings › Pin writing (gate off), `esc` cancel |

@@ -102,6 +102,125 @@ only the model and reasoning overrides to the preset. The tested tree was
 uncommitted; its diff was saved with the run record. Trigger extraction
 was dry-run only, and trusted-hook isolation was not tested.
 
+## Lesson checks and exploration (Unreleased)
+
+v0.9.0 is the planned first release with lesson-check hook handlers. It
+has not shipped. The features below have fixture coverage, not the native
+evidence needed to release them. Installing an `enforce` configuration
+is not a claim of verified enforcement.
+
+Choose each client's lesson hooks explicitly:
+
+```bash
+seamark init --client claude --lesson-checks check
+seamark init --client claude --lesson-checks enforce --lesson-exploration on
+seamark init --client codex --lesson-checks check
+seamark init --client codex --lesson-checks enforce
+```
+
+Omitting either option preserves that installed choice. `check` installs
+a pre-edit baseline and post-edit verification pair; `enforce` replaces
+the baseline handler with the separate pre-write guard and keeps the
+post-edit verification. Neither turns the advisory lesson hook into a
+guard. Pin modes and check definitions remain in `lessons.yaml`; see
+[executable lessons](lessons.md#executable-lessons-advisory-check-and-enforce).
+
+### Tool, stage, and context coverage
+
+Each root and child context has its own reported path. This table names
+implemented handlers, not verified native prevention:
+
+| Client / tool | Pre-write | Post-edit | Contexts and current evidence |
+| --- | --- | --- | --- |
+| Claude Code `Edit`, `Write`, `MultiEdit` | Baseline in check mode; complete-or-unknown projection and guard in enforce mode | `PostToolUse` and `PostToolUseFailure` verification | Root and child paths; native deny, timeout and model-visible reply evidence pending for each path |
+| Claude Code `Read` | None | Exploration guidance after the read, when enabled | Root and child; native model-visible delivery pending; main-context repeats reset at compaction, child reminders repeat |
+| Claude Code `NotebookEdit`, `Bash` | No lesson-check hook | No lesson-check hook | Uncovered writers in both contexts; a shell command can write files |
+| Codex `apply_patch` | Baseline or guard; Add/Delete and move metadata supported; Update before/after content projection not yet supported | `PostToolUse` verification, also for failed tools | Root and child paths declared; native deny, timeout, reply and child attribution remain pending or unsupported as detailed below |
+| Codex structured `Read` | Unsupported | No exploration hook | Setup prints the no-Read notice and installs nothing for exploration; use preparation |
+| Codex `shell` | No lesson-check hook | No lesson-check hook | Uncovered writer in both contexts |
+
+For Codex Update hunks, a content check currently gets
+`unknown/unprojectable-edit`; an armed guard requests denial instead of
+guessing the after-content. Path-only checks can still inspect complete
+path metadata. Verified before/after projection is **required before
+release**, not an accepted omission from v0.9.0. Post-edit findings and
+explicit working-tree verification do not prove pre-write projection.
+
+The installed pre-edit timeout is **10 seconds**, and the post-edit
+timeout is **15 seconds**. The handlers budget 5 seconds for the guard
+and 10 seconds for post-edit evaluation inside those limits. The hook
+timeouts remain candidates until native validation covers each supported
+tool and context. A slow-tool result cannot verify another path. Failed
+validation reopens the defaults before release.
+
+### Installed, active, and verified are different
+
+`status`, `doctor`, preparation, mode-change impact and TUI read the same
+capability report. It separates the requested pin mode, installed mode,
+path state, binary identity and native evidence. An installed path can
+be `active-unverified`, `inactive`, or `unsupported`; a requested mode
+alone does not establish a working guard. An `enforced-unverified` badge
+is explicitly unverified, not the verified `enforced` state.
+
+Setup keeps warning-and-install behavior for unknown local capability or
+trust. It refuses known-bad enforce states, such as disabled hooks or a
+report-only wrapper, rather than silently substituting check mode. A
+client without a guard cannot install enforce mode. Codex trust remains
+the user's decision: review new or changed hooks with `/hooks`. Seamark
+never grants trust, and cannot read that approval back as proof.
+
+Current Codex setup strictly refuses conflicting duplicate lesson-check
+handlers, including a relevant flag-less rerun. Equivalent Claude
+refusal is a required separate fix before release. Do not assume Claude
+already applies the same refusal. Doctor retains all-client coverage:
+a Claude-only setup can still warn about Codex.
+
+For an unreadable hook document, path states report
+`inactive (document-unreadable)`. Doctor qualifies the summary; status
+and TUI can still show the misleading installed summary `off`. Fixing
+those summaries is required before release. Do not read `off` as proof
+that an unreadable document contains no handler.
+
+### Delivery attribution
+
+Attribution is separate from hook installation and from the older
+capture/reminder recordings above:
+
+| Item | Claude root | Claude child | Codex root | Codex child |
+| --- | --- | --- | --- | --- |
+| Call match identity | Unverified | Unverified | Unverified | Unsupported |
+| Receiving-lane identity | Unverified | Unverified | Unverified | Unsupported |
+| Context reset | Unverified | Unsupported | Unsupported | Unsupported |
+| Turn boundary | Unverified | Unverified | Unverified | Unverified |
+| Model boundary | Unverified | Unverified | Unverified | Unverified |
+
+No reviewed native timing recording upgrades these pending identities or
+boundaries. Own-call advice remains `same-call-only`; a command/MCP
+preparation remains receiver-unknown. Otherwise negative observation
+windows remain incomplete with `lane-coverage-unknown`. A guard's
+requested deny is not proof of prevention; current reports retain
+`prevented: 0`. See [capture delivery](lessons.md#capture-delivery-lessons---delivery).
+
+### Disable and downgrade safely
+
+Use the binary that supports the handlers before installing a binary
+older than v0.9.0. Remove checks and exploration for **each configured
+client**, then inspect the result:
+
+```bash
+seamark init --client claude --lesson-checks off --lesson-exploration off
+seamark init --client codex --lesson-checks off --lesson-exploration off
+seamark status
+seamark doctor
+```
+
+These commands remove owned lesson-check/exploration entries, not the
+advisory reminders, accepted pins, policy, capture consent or archive.
+Inspect user-added duplicate handlers separately. A downgrade does not
+make a newer capture archive readable by an older binary; do not assume
+hook removal reverses an archive migration. Preserve a compatible backup.
+For removal of the rest of an integration, see below.
+
 ## Choose an agent for inference
 
 Setting up an agent with `--client` does not select it for inference.
@@ -205,7 +324,9 @@ prompt is not necessarily the entire model input. See
 
 ## Removing an integration
 
-Rollback leaves user content and policy intact. Remove only the
+Rollback leaves user content and policy intact. First
+[disable lesson checks and exploration](#disable-and-downgrade-safely)
+for each configured client, if installed. Remove only the remaining
 entries seamark wrote, with the agent's native controls or an exact
 edit:
 
@@ -472,8 +593,57 @@ MCP approval behavior, and trusted-hook isolation need separate checks.
 
 ### Release checklist
 
-1. `make agents-test`, then `make test`, `make test-race`, `make lint`,
-   `make build`, `make smoke`.
+**v0.9.0 is blocked until the prerequisites below are complete and
+reviewed.** Fixture success and confirmed version numbering are not
+native compatibility evidence. Do not publish the release while any
+required path or follow-up remains unresolved.
+
+Before release:
+
+- Collect and review native timing and guard recordings for each
+  supported client, tool, stage and root/child context. Record versions,
+  receiving identity, reply visibility, denied execution and slow-hook
+  behavior. Preserve pending or unsupported states for unproven paths;
+  never generalize a successful path to the rest.
+- Validate the candidate 10-second pre-edit and 15-second post-edit
+  timeouts per tool/context, including slow cases. Change defaults if
+  validation fails. Verify post-edit reply visibility separately from
+  pre-write denial, and verify Codex trust without granting it in setup.
+- Add a verified Codex Update before/after oracle, then implement and
+  test content projection. Current conservative unknown/deny behavior
+  is not sufficient for the planned release.
+- Refuse conflicting duplicate lesson-check handlers consistently across
+  clients. Retain Codex strict refusal and add equivalent Claude handling.
+- Fix the misleading status/TUI `off` summary for unreadable hook
+  configuration; keep the already qualified doctor behavior.
+- List the exact internal audit/lock exclusions in verification's
+  `not covered` output. Keep current default selection semantics and
+  explicit-path inclusion unchanged.
+- Investigate and fix the known local-script timeout flake in the
+  benchmark tests without weakening validated behavior. Handle any
+  benchmark fingerprint change explicitly; successful reruns alone do
+  not close this prerequisite.
+
+Native recording commands require the operator's login, can cost tokens,
+and run in scratch workspaces. Cover the per-tool/context cases above;
+capture recordings alone do not verify timing or denial:
+
+```bash
+CAPTURE_NATIVE_SCENARIO=timing make capture-native-record CLIENT=claude
+CAPTURE_NATIVE_SCENARIO=timing make capture-native-record CLIENT=codex
+CAPTURE_NATIVE_SCENARIO=guard make capture-native-record CLIENT=claude
+CAPTURE_NATIVE_SCENARIO=guard make capture-native-record CLIENT=codex
+```
+
+A sanitized recording needs review before evidence declarations change.
+Do not substitute an in-process handler fixture for a native result.
+Keep raw conversations and native identifiers out of public reports.
+
+Then run the existing release gates:
+
+1. `make agents-test`, `make lesson-check`, `make lesson-check-race`,
+   `make tui-test`, `make tui-race`, then `make test`, `make test-race`,
+   `make lint`, `make build`, `make smoke`.
 2. `make agents-native-check CLIENT=codex` on a machine with the CLI:
    record the installed version and every `blocked` line.
 3. `make agents-native-smoke CLIENT=codex` from a committed tree with
