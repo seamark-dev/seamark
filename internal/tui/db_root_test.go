@@ -1047,3 +1047,31 @@ func TestOverviewPinWritingItemNamesTheWayOut(t *testing.T) {
 		assert.Contains(t, it.route, "Open the console in "+origin)
 	})
 }
+
+// TestRecheckEndsWhenTheUserLeavesOverview covers a refused b whose read
+// returns after a change of tab. The confirmation must not wait on the
+// tab that the user left.
+func TestRecheckEndsWhenTheUserLeavesOverview(t *testing.T) {
+	other := dbRootRepo(t, "other")
+
+	db := filepath.Join(dbRootDir(t), "garbage.db")
+	require.NoError(t, os.WriteFile(db, []byte("this file is no database, and it is long enough to read"), 0o644))
+
+	h, _ := dbRootConsole(t, other, db)
+	h.press("1")
+
+	o := ovScreen(h)
+
+	// The read of the refused b waits in cmd, and the cause goes away.
+	cmd := o.openBuild()
+
+	require.NoError(t, os.Remove(db))
+
+	h.press("2")
+	h.run(cmd)
+
+	assert.False(t, o.capturing(), "no confirmation waits on Overview")
+
+	h.press("1")
+	assert.NotContains(t, h.view(), "Build the index?")
+}

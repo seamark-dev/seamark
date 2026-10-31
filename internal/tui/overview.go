@@ -97,6 +97,16 @@ func (o *overview) open(intent string) tea.Cmd {
 	return nil
 }
 
+// leave implements leaveGuard. It drops a recheck that still waits for
+// its read, because the answer to a refused b belongs to this screen. A
+// confirmation must not wait on a tab that the user left. Overview never
+// keeps the user.
+func (o *overview) leave(destination, string) (tea.Cmd, bool) {
+	o.rechecking = false
+
+	return nil, true
+}
+
 // capturing is true while the build confirmation is open, so the global
 // keys cannot fire through it. The progress and result modals do not
 // capture: q must reach the shell while a build runs, because the shell
