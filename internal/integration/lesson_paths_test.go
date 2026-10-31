@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -784,4 +785,87 @@ func TestInspectLessonHooksWithoutNarrowReading(t *testing.T) {
 
 	self := BinaryIdentity{Version: "v0.9.0"}
 	assert.Equal(t, LessonCapability(reg.Inspect(root), root, self), LessonCapability(narrow, root, self))
+}
+
+// TestLessonInstalledText proves the words of the summary lines on real
+// inspections of both clients. The report keeps the closed mode, and
+// only the path reason gives the qualifier.
+func TestLessonInstalledText(t *testing.T) {
+	self := BinaryIdentity{Path: fakeSeamark(t, t.TempDir(), "self")}
+
+	text := func(t *testing.T, root, clientID string) (string, lessoncheck.ClientCapability) {
+		t.Helper()
+
+		insps := Builtin().Inspect(root)
+
+		c, ok := LessonCapability(insps, root, self).Client(clientID)
+		require.True(t, ok)
+
+		return LessonInstalledText(c, LessonDocumentError(insps, clientID)), c
+	}
+
+	for _, tc := range []struct{ clientID, document, supplemental string }{
+		{ClaudeID, approve.ClaudeSettings, claudeLocalSettings},
+		{CodexID, codexHooksFile, approve.CodexConfig},
+	} {
+		t.Run(tc.clientID, func(t *testing.T) {
+			t.Run("an absent document", func(t *testing.T) {
+				got, _ := text(t, t.TempDir(), tc.clientID)
+				assert.Equal(t, "off", got)
+			})
+
+			t.Run("a valid document without a lesson-check hook", func(t *testing.T) {
+				root := t.TempDir()
+				writeRel(t, root, tc.document, `{"hooks":{}}`)
+
+				got, _ := text(t, root, tc.clientID)
+				assert.Equal(t, "off", got)
+			})
+
+			for _, mode := range []string{hooks.LessonChecksCheck, hooks.LessonChecksEnforce} {
+				t.Run("an installed "+mode, func(t *testing.T) {
+					root := t.TempDir()
+					installLessonHooks(t, root, tc.clientID, self.Path, mode, "")
+
+					got, _ := text(t, root, tc.clientID)
+					assert.Equal(t, mode, got)
+				})
+			}
+
+			t.Run("an unreadable document", func(t *testing.T) {
+				root := t.TempDir()
+				installLessonHooks(t, root, tc.clientID, self.Path, hooks.LessonChecksEnforce, "")
+				writeRel(t, root, tc.document, "{ not json")
+
+				got, c := text(t, root, tc.clientID)
+				assert.True(t, strings.HasPrefix(got, "unreadable ("+tc.document+": "), got)
+				assert.Equal(t, lessoncheck.InstalledOff, c.Installed, "the report keeps the closed mode")
+				assert.True(t, LessonSourceUnreadable(c))
+			})
+
+			t.Run("an unreadable supplemental source", func(t *testing.T) {
+				root := t.TempDir()
+				installLessonHooks(t, root, tc.clientID, self.Path, hooks.LessonChecksEnforce, "")
+				writeRel(t, root, tc.supplemental, "BROKEN [[")
+
+				got, c := text(t, root, tc.clientID)
+				assert.Equal(t, "enforce (a hook source is unreadable)", got)
+				assert.Equal(t, lessoncheck.InstalledEnforce, c.Installed)
+			})
+		})
+	}
+
+	t.Run("exploration alone beside an unreadable local file", func(t *testing.T) {
+		root := t.TempDir()
+		installLessonHooks(t, root, ClaudeID, self.Path, "", hooks.LessonExplorationOn)
+		writeRel(t, root, claudeLocalSettings, "{ broken")
+
+		got, _ := text(t, root, ClaudeID)
+		assert.Equal(t, "off (a hook source is unreadable)", got)
+	})
+
+	t.Run("a path without the reason ignores the error text", func(t *testing.T) {
+		c := lessoncheck.ClientCapability{Installed: lessoncheck.InstalledCheck}
+		assert.Equal(t, "check", LessonInstalledText(c, "stale.json: gone"))
+	})
 }

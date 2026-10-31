@@ -25,15 +25,23 @@ const integLessonLabelW = 12
 
 // integChecksShown reports whether the detail of insp shows the
 // section: a lesson-check or exploration hook of the client is
-// installed, or a pin requests check or enforce. The capability rows
-// above never list the lesson-check capabilities, so a repository
+// installed, a path reports an unreadable source, or a pin requests
+// check or enforce. An unreadable document gives no hook entries, but it
+// can hold a hook, so the section stays and says so. The capability
+// rows above never list the lesson-check capabilities, so a repository
 // without lesson checks keeps its detail (contract K10).
 func integChecksShown(st *state, insp integration.Inspection) bool {
 	if !st.capability.loaded {
 		return false
 	}
 
-	return insp.LessonHooksInstalled() || slices.ContainsFunc(st.capability.value.Pins, func(p lessoncheck.PinCapability) bool {
+	report := st.capability.value
+
+	if c, ok := report.Client(insp.ClientID); ok && integration.LessonSourceUnreadable(c) {
+		return true
+	}
+
+	return insp.LessonHooksInstalled() || slices.ContainsFunc(report.Pins, func(p lessoncheck.PinCapability) bool {
 		return p.Requested != lessoncheck.ModeAdvisory
 	})
 }
@@ -63,11 +71,17 @@ func (s *integrations) lessonCheckLines(insp integration.Inspection, w int) []st
 		return out
 	}
 
-	fact("Installed", []string{t.Body.Render(string(c.Installed))})
+	// The hooks of an unreadable document are unknown. So the section
+	// names no hook binary. It offers no setup command either, because
+	// setup stops at that file. The rows above name the file to fix.
+	readable := insp.HookDocumentError == ""
+	installed := ui.OneLine(integration.LessonInstalledText(c, insp.HookDocumentError))
+
+	fact("Installed", propLines(integInstalledStyle(t, c), installed, vw))
 	fact("Config", propLines(integConfigStyle(t, report), report.ConfigText(), vw))
 	fact("Paths", integPathValues(t, c, vw))
 
-	if binary := integBinaryValues(t, c, vw); len(binary) > 0 {
+	if binary := integBinaryValues(t, c, vw); readable && len(binary) > 0 {
 		fact("Binary", binary)
 	}
 
@@ -75,7 +89,7 @@ func (s *integrations) lessonCheckLines(insp integration.Inspection, w int) []st
 		fact("Uncovered", propLines(t.Attention, uncovered+": no lesson-check hook sees these writers", vw))
 	}
 
-	if want := integWantedMode(report, c); want != "" {
+	if want := integWantedMode(report, c); readable && want != "" {
 		fact("Set up", integCommandLines(t, "seamark init --client "+c.Client+" --lesson-checks "+string(want), vw))
 	}
 
@@ -88,6 +102,16 @@ func (s *integrations) lessonCheckLines(insp integration.Inspection, w int) []st
 	}
 
 	return out
+}
+
+// integInstalledStyle styles the installed mode: a qualified mode is an
+// attention, because the mode of an unreadable source is unknown.
+func integInstalledStyle(t *ui.Theme, c lessoncheck.ClientCapability) lipgloss.Style {
+	if integration.LessonSourceUnreadable(c) {
+		return t.Attention
+	}
+
+	return t.Body
 }
 
 // integConfigStyle styles the configuration state: an invalid file is

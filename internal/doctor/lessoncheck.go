@@ -76,36 +76,10 @@ func lessonCheckDetail(report lessoncheck.CapabilityReport, cfg *lessoncheck.Con
 	return strings.Join(append(parts, noExploration...), " · ")
 }
 
-// installedText names one client and its installed mode. An unreadable
-// hook document reads "unreadable" with its reason, because no mode is
-// known. An unreadable supplemental source keeps the mode of the
-// readable document and adds a qualifier, because its effect is unknown.
+// installedText names one client and its installed mode, in the words
+// that status and the console use.
 func installedText(c lessoncheck.ClientCapability, inspections []integration.Inspection) string {
-	switch {
-	case documentError(inspections, c.Client) != "":
-		return c.Client + " unreadable (" + documentError(inspections, c.Client) + ")"
-	case hasReason(c, lessoncheck.CapDocumentUnreadable):
-		return c.Client + " " + string(c.Installed) + " (a hook source is unreadable)"
-	default:
-		return c.Client + " " + string(c.Installed)
-	}
-}
-
-// documentError returns the reason that the hook document of a client
-// cannot be read, or "" when it can. The text starts with the file.
-func documentError(inspections []integration.Inspection, client string) string {
-	for _, insp := range inspections {
-		if insp.ClientID == client {
-			return insp.HookDocumentError
-		}
-	}
-
-	return ""
-}
-
-// hasReason reports whether a path of the client carries the reason.
-func hasReason(c lessoncheck.ClientCapability, reason lessoncheck.CapReason) bool {
-	return slices.ContainsFunc(c.Paths, func(p lessoncheck.PathCapability) bool { return slices.Contains(p.Reasons, reason) })
+	return c.Client + " " + integration.LessonInstalledText(c, integration.LessonDocumentError(inspections, c.Client))
 }
 
 // lessonCheckWarns reports whether the report holds one of the warning
@@ -173,13 +147,13 @@ func clientFixes(report lessoncheck.CapabilityReport, c lessoncheck.ClientCapabi
 ) []string {
 	var fixes []string
 
-	if doc := documentError(inspections, c.Client); doc != "" {
+	if doc := integration.LessonDocumentError(inspections, c.Client); doc != "" {
 		file, _, _ := strings.Cut(doc, ": ")
 
 		return append(fixes, "fix or remove "+file+", which does not parse; setup cannot repair it")
 	}
 
-	if hasReason(c, lessoncheck.CapDocumentUnreadable) {
+	if integration.LessonSourceUnreadable(c) {
 		fixes = append(fixes, "fix or remove the unreadable supplemental hook source of "+c.Client)
 	}
 

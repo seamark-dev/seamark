@@ -590,6 +590,50 @@ func LessonCapabilityOf(insps []Inspection, cfg *lessoncheck.Config, errs []less
 	return lessoncheck.CapabilityReportOf(cfg, errs, installed, attributions)
 }
 
+// LessonInstalledText names the installed mode of one client for a
+// summary line. Doctor, status, and the console print it, so they use
+// one set of words.
+//
+// The installed mode is a closed set without an unknown value, so the
+// report keeps "off" for a document that it cannot read. A summary must
+// not print that value alone, because an error is not absence. A path
+// with the reason document-unreadable gives the qualifier. documentErr
+// is the reason from LessonDocumentError. It is set when the hook
+// document cannot be read, and no mode is then known. Without it, a
+// supplemental source is unreadable. The readable document keeps its
+// mode, and the effect of the other source is unknown.
+func LessonInstalledText(c lessoncheck.ClientCapability, documentErr string) string {
+	switch {
+	case !LessonSourceUnreadable(c):
+		return string(c.Installed)
+	case documentErr != "":
+		return "unreadable (" + documentErr + ")"
+	default:
+		return string(c.Installed) + " (a hook source is unreadable)"
+	}
+}
+
+// LessonSourceUnreadable reports whether a path of the client carries
+// the reason document-unreadable.
+func LessonSourceUnreadable(c lessoncheck.ClientCapability) bool {
+	return slices.ContainsFunc(c.Paths, func(p lessoncheck.PathCapability) bool {
+		return slices.Contains(p.Reasons, lessoncheck.CapDocumentUnreadable)
+	})
+}
+
+// LessonDocumentError returns the reason that the hook document of a
+// client cannot be read, or "" when it can. The text starts with the
+// file.
+func LessonDocumentError(insps []Inspection, client string) string {
+	for _, insp := range insps {
+		if insp.ClientID == client {
+			return insp.HookDocumentError
+		}
+	}
+
+	return ""
+}
+
 // LessonHooksInstalled reports whether the inspection reads an owned
 // lesson-check or exploration entry. Doctor and status print their
 // lesson-check lines when one exists for some client.
