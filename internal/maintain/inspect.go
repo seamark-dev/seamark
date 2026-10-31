@@ -46,6 +46,10 @@ type Inspection struct {
 	LedgerErr, ReadingsErr error
 	// Index is the index probe that the readings used.
 	Index workspace.IndexProbe
+	// Database holds the answers of the console service about the index
+	// database. Inspect leaves it zero, and the service fills it, because
+	// the answers compare the database with the workspace.
+	Database workspace.DatabaseFacts
 	// At is the time that the readings used.
 	At time.Time
 	// Checks is the lesson-check reading of the pin file (contract K1).

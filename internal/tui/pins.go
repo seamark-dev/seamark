@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // This file holds the state and the key handling of Lessons › Pins. The
@@ -382,30 +382,43 @@ func pinTailRefused(doc *pinfile.Document, ref pinfile.EntryRef) bool {
 	return err != nil
 }
 
+// pinsDatabase returns the answers of the service about the index
+// database. Update and View must not read the disk, so the service
+// decides at read time and the console keeps the answer.
+func pinsDatabase(st *state) workspace.DatabaseFacts {
+	if !st.pins.loaded || st.pins.value == nil {
+		return workspace.DatabaseFacts{}
+	}
+
+	return st.pins.value.Database
+}
+
 // pinsForeignRoot returns the repository root that the index records
 // when it is not the workspace root, else "". It is the rule of the
 // retarget and the prune. The maintenance engine reads and writes the
 // pin file under the recorded root, as the CLI does. In a copied
 // checkout that root names the original repository, but the ledger is
 // the database of the copy. So one operation would change two
-// repositories. A --db flag makes another root normal, so the check
-// applies only to the default database path (services ownRoot).
+// repositories. Another database file makes another root normal, so the
+// rule skips it (services ownRoot).
 func pinsForeignRoot(st *state) string {
-	if pinsOtherDB(st) {
+	d := pinsDatabase(st)
+	if d.Kind == store.DatabaseOther {
 		return ""
 	}
 
-	return authorForeignRoot(st)
+	return d.ForeignRoot
 }
 
-// pinsOtherDB reports a console that runs with --db. Another recorded
-// root is then normal, so no route may name an index build.
+// pinsOtherDB reports a database that is not the default database of the
+// workspace. Another recorded root is then normal, so no route may name
+// an index build.
 func pinsOtherDB(st *state) bool {
-	return st.svc.DBPath() != store.DefaultPath(st.svc.Root())
+	return pinsDatabase(st).Kind != store.DatabaseDefault
 }
 
-// pinsDBRoot returns the recorded root under --db of another repository,
-// else "". The route of that state is pinOpenRoot.
+// pinsDBRoot returns the recorded root under a database of another
+// repository, else "". The route of that state is pinOpenRoot.
 func pinsDBRoot(st *state) string {
 	if !pinsOtherDB(st) {
 		return ""
@@ -417,21 +430,10 @@ func pinsDBRoot(st *state) string {
 // authorForeignRoot returns the repository root that the index records
 // when it is not the workspace root, else "". It is the rule of the pin
 // authoring engine, which refuses another root also with --db (services
-// foreignRoot, P4-16). So the form and the engine agree. The comparison
-// does no I/O, because Update and View must not read the disk. So,
-// unlike the engine, it does not resolve a symbolic link.
+// foreignRoot). So the form and the engine agree, also for a link
+// spelling of the workspace root.
 func authorForeignRoot(st *state) string {
-	if !st.pins.loaded || st.pins.value == nil {
-		return ""
-	}
-
-	root, ws := st.pins.value.Index.Root, st.svc.Root()
-
-	if root == "" || ws == "" || filepath.Clean(root) == filepath.Clean(ws) {
-		return ""
-	}
-
-	return root
+	return pinsDatabase(st).ForeignRoot
 }
 
 // retargetBlock returns why a retarget of pin is not offered, or "" when

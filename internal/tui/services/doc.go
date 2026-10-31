@@ -33,8 +33,9 @@
 // it as a blocker, and an authoring commit refuses it. The Settings
 // snapshot blocks the lessons groups with it, and a lessons save refuses
 // it. A sample is then unavailable. These Phase 4 rules have no --db
-// exception. A maintenance commit refuses a foreign root only with the
-// default database path, as in Phase 3.
+// exception. A maintenance commit refuses a foreign root unless the
+// database is another file than the default path names. The file
+// comparison holds for a relative path and a link spelling.
 //
 // Delivery keeps the filesystem root at the workspace root, not at R. It
 // reads applied ledger rows when available, but a missing ledger does

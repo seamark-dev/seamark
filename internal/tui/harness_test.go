@@ -28,6 +28,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
@@ -52,6 +53,9 @@ type fakeServices struct {
 	mu sync.Mutex
 
 	root, dbPath, version string
+	// database replaces the answers about the database that Pins derives
+	// from the paths of the fake.
+	database *workspace.DatabaseFacts
 
 	fresh    bool
 	freshErr error
@@ -378,7 +382,30 @@ func (f *fakeServices) Pins() *maintain.Inspection {
 		return fakePins()
 	}
 
-	return f.pins
+	return f.answered(f.pins)
+}
+
+// answered fills in the answers of the engine about the database. A test
+// can set them in f.database. Otherwise the plain paths of the fake
+// decide, because the fake has no disk.
+func (f *fakeServices) answered(in *maintain.Inspection) *maintain.Inspection {
+	if f.database != nil {
+		in.Database = *f.database
+
+		return in
+	}
+
+	in.Database = workspace.DatabaseFacts{}
+
+	if f.dbPath != store.DefaultPath(f.root) {
+		in.Database.Kind = store.DatabaseOther
+	}
+
+	if in.Index.Root != "" && f.root != "" && filepath.Clean(in.Index.Root) != filepath.Clean(f.root) {
+		in.Database.ForeignRoot = in.Index.Root
+	}
+
+	return in
 }
 
 func (f *fakeServices) PlanMaintenance(req maintain.Request) (*maintain.Plan, error) {

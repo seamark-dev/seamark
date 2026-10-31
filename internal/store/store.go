@@ -54,6 +54,60 @@ func DefaultPath(root string) string {
 	return filepath.Join(root, DefaultDir, DefaultDBName)
 }
 
+// DatabaseKind says how an index database relates to a workspace root.
+type DatabaseKind int
+
+const (
+	// DatabaseDefault is the default database of the root. The default
+	// path names the file, and the file lies inside the root.
+	DatabaseDefault DatabaseKind = iota
+	// DatabaseLinked is a file outside the root that the default path
+	// names through a link, for example the database of another worktree.
+	DatabaseLinked
+	// DatabaseOther is any other file, for example the --db value of
+	// another repository.
+	DatabaseOther
+)
+
+// ClassifyDatabase relates dbPath to root by file identity. A link
+// spelling names the same file with another string, so a string
+// comparison is not enough. Without two files, the clean paths decide,
+// because a file that does not exist has no identity.
+//
+// The file must also lie inside root to be the default database. A
+// default path that links to the database of another worktree belongs
+// to that worktree, and a rebuild here moves its recorded root. A
+// relative dbPath shows no parent directory, so it never passes this
+// test. The console makes its path absolute, and the CLI keeps the
+// spelling that the user gave.
+func ClassifyDatabase(root, dbPath string) DatabaseKind {
+	defaultPath := DefaultPath(root)
+
+	given, errGiven := os.Stat(dbPath)
+	want, errWant := os.Stat(defaultPath)
+
+	if errGiven != nil || errWant != nil {
+		if filepath.Clean(dbPath) == filepath.Clean(defaultPath) {
+			return DatabaseDefault
+		}
+
+		return DatabaseOther
+	}
+
+	if !os.SameFile(given, want) {
+		return DatabaseOther
+	}
+
+	resolved, errResolved := filepath.EvalSymlinks(dbPath)
+	resolvedRoot, errRoot := filepath.EvalSymlinks(root)
+
+	if errResolved == nil && errRoot == nil && strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator)) {
+		return DatabaseDefault
+	}
+
+	return DatabaseLinked
+}
+
 // dsn builds a "file:" DSN. Paths are parsed as URIs: a raw %, ? or #
 // in the workspace path would truncate it or swallow the params.
 func dsn(path, params string) string {

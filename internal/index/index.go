@@ -1045,27 +1045,8 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 // recorded root away from that repository. An empty recorded root says
 // nothing, so it is no difference.
 func recordsAnotherRoot(root, dbPath, recorded string) bool {
-	return recorded != "" && isDefaultDatabase(root, dbPath) && !sameDirectory(recorded, root)
-}
-
-// isDefaultDatabase reports whether dbPath is the default database of
-// root. The file comparison holds for a relative path and a link spelling.
-// The file must also lie inside root. A default path that links to the
-// database of another worktree belongs to that worktree, and a rebuild
-// here would move its recorded root on every run.
-func isDefaultDatabase(root, dbPath string) bool {
-	given, errGiven := os.Stat(dbPath)
-	want, errWant := os.Stat(store.DefaultPath(root))
-
-	if errGiven != nil || errWant != nil || !os.SameFile(given, want) {
-		return false
-	}
-
-	resolved, errResolved := filepath.EvalSymlinks(dbPath)
-	resolvedRoot, errRoot := filepath.EvalSymlinks(root)
-
-	return errResolved == nil && errRoot == nil &&
-		strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator))
+	return recorded != "" && store.ClassifyDatabase(root, dbPath) == store.DatabaseDefault &&
+		!sameDirectory(recorded, root)
 }
 
 // sameDirectory reports whether two paths name one directory. A link

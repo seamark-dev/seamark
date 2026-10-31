@@ -173,6 +173,19 @@ type IndexProbe struct {
 	Err error
 }
 
+// DatabaseFacts holds the answers about the index database that need the
+// disk. The console service fills them at read time, because a view must
+// not read the disk. The zero value describes the default database of a
+// workspace whose index records that workspace.
+type DatabaseFacts struct {
+	// Kind relates the database file to the workspace root.
+	Kind store.DatabaseKind
+	// ForeignRoot is the recorded root when it names another directory
+	// than the workspace root, else "". A link spelling of the workspace
+	// root names the same directory, so it is no foreign root.
+	ForeignRoot string
+}
+
 // Probe classifies the index database of ws without writing to it.
 func Probe(ws Workspace) IndexProbe {
 	p := IndexProbe{

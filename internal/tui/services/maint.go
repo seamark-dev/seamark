@@ -27,12 +27,14 @@ var errNoPlan = errors.New("no reviewed plan")
 // It writes nothing, takes no lock, and records no delivery.
 func (e *engine) Pins() *maintain.Inspection {
 	st, probe, err := e.openRead()
-	if err != nil {
-		return maintain.Inspect(probe.Root, nil, probe, e.deps.Now())
+	if err == nil {
+		defer func() { _ = st.Close() }()
 	}
-	defer func() { _ = st.Close() }()
 
-	return maintain.Inspect(probe.Root, st, probe, e.deps.Now())
+	in := maintain.Inspect(probe.Root, st, probe, e.deps.Now())
+	in.Database = e.databaseFacts(probe)
+
+	return in
 }
 
 // PlanMaintenance plans a retarget or a prune from a read-only store. It
