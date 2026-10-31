@@ -354,9 +354,12 @@ const (
 // pinfile, store, or engine error. routeByHand and reasonLedgerFixes are
 // in plan.go, because the maintenance plan uses them too.
 const (
-	routeIndex      = "build the index in Overview, then review again"
-	routeOwnIndex   = "build the index of this workspace in Overview, then review again"
-	routeRetarget   = "change the scope with w Retarget"
+	routeIndex    = "build the index in Overview, then review again"
+	routeOwnIndex = "build the index of this workspace in Overview, then review again"
+	// routeLinkedPin names no maintenance key. The plan holds no retarget
+	// state, so only Pins knows whether w works for this pin. MAINTENANCE
+	// in Pins gives the route that fits the current state of the pin.
+	routeLinkedPin  = "press r in Pins, then read the route for its rule and scope under MAINTENANCE"
 	routePrune      = "use - Prune, which also marks the proposal superseded"
 	routeRecord     = "Proposals › c records it as applied"
 	routeOwner      = "choose another rule or scope, or decide the proposal in Proposals"
@@ -884,7 +887,7 @@ func (a *authoring) relation() {
 		case a.req.Op == AuthorRemove:
 			a.block(BlockRelation, fmt.Sprintf(textLinkedOnly, p.Proposal.ID), routePrune)
 		case a.changesRuleOrScope():
-			a.block(BlockRelation, fmt.Sprintf(textLinkedNote, p.Proposal.ID), routeRetarget)
+			a.block(BlockRelation, fmt.Sprintf(textLinkedNote, p.Proposal.ID), routeLinkedPin)
 		}
 
 		// The apply of another applied row with disagreeing region fields

@@ -462,7 +462,7 @@ func (m *checkDefModal) reviewContent(w int) ui.ModalOpts {
 
 	for _, b := range p.Blockers {
 		body = append(body, "")
-		body = append(body, propNote(t, ui.ToneAttention, pinSentence(ui.OneLine(b.String())), w)...)
+		body = append(body, propNote(t, ui.ToneAttention, pinSentence(ui.OneLine(pinBlockerLine(m.st, b))), w)...)
 	}
 
 	body = append(body, "", t.Heading.Render("PREDICATE"))

@@ -229,7 +229,7 @@ func (p *pinsView) formLead(w int) []string {
 	}
 
 	if d.op == maintain.AuthorEdit && d.unknown && d.orphan == "" {
-		note(ui.ToneUnknown, ovSentenceEnd(pinUnknownNote(d.checks)))
+		note(ui.ToneUnknown, ovSentenceEnd(pinUnknownNote(d.checks, p.unknownTail())))
 	}
 
 	if len(p.selected) > 0 {
@@ -658,7 +658,7 @@ func (r *pinReview) blockerLines(w int) []string {
 	routed := r.routed()
 
 	for i, b := range p.Blockers {
-		text := pinSentence(pinEscapedLine(b.String()))
+		text := pinSentence(pinEscapedLine(pinBlockerLine(r.st, b)))
 		if i == routed {
 			text += " Press o to open " + words + "."
 		}
@@ -945,6 +945,18 @@ func pinBlockWords(b maintain.AuthorBlocker, gateErr error, removal bool) string
 	return "the pin file cannot be changed"
 }
 
+// pinBlockerLine returns the line of blocker b. The engine names an index
+// build for another root, because the plan cannot see --db. The console
+// can, so it gives the route that holds there (pinOpenRoot). b names the
+// recorded root in its text, so the route needs no root of its own.
+func pinBlockerLine(st *state, b maintain.AuthorBlocker) string {
+	if b.Kind == maintain.BlockForeignRoot && pinsOtherDB(st) {
+		b.Route = "open the console in that repository, because a save works there"
+	}
+
+	return b.String()
+}
+
 // pinSentence ends a blocker text with a full stop. It keeps the case of
 // the first word, because a blocker can start with a key such as
 // distill.write.
@@ -1064,7 +1076,7 @@ func (r *pinReview) refusalView(w int) ui.ModalOpts {
 	err := r.out.err
 	sep := " " + t.Glyphs.Sep + " "
 
-	body := propNote(t, ui.ToneAttention, maintRefusal(t, err, "review", ""), w)
+	body := propNote(t, ui.ToneAttention, pinCommitRefusal(r.st, err), w)
 
 	if diffs := pinStale(err); len(diffs) > 0 {
 		body = append(body, "", t.Heading.Render("WHAT CHANGED"))

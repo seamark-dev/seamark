@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -403,13 +406,16 @@ func TestPinsUnavailableKeyExplainsAndCallsNothing(t *testing.T) {
 		row   int
 		key   string
 		toast string
+		// next follows the toast. The notice row can cut it at its end, so
+		// only the toast text must hold it.
+		next string
 	}{
-		{"retarget", 1, "w", `No retarget: its regions are already current ("wrap-sql-errors").`},
-		{"extraction", 1, "t", `No trigger extraction: its trigger paths are already stored ("wrap-sql-errors").`},
-		{"compare", 1, "v", `No comparison: no other linked pin has similar wording ("wrap-sql-errors").`},
-		{"prune", 9, "-", `No prune: it has an ambiguous link ("two-proposals").`},
+		{"retarget", 1, "w", `No retarget: its regions are already current ("wrap-sql-errors").`, " " + pinsReplaceSentence},
+		{"extraction", 1, "t", `No trigger extraction: its trigger paths are already stored ("wrap-sql-errors").`, ""},
+		{"compare", 1, "v", `No comparison: no other linked pin has similar wording ("wrap-sql-errors").`, ""},
+		{"prune", 9, "-", `No prune: it has an ambiguous link ("two-proposals").`, ""},
 		{"compare unlinked", 5, "v",
-			`No comparison: it has no linked proposal, and only linked pins are compared ("keep-changelog-current").`},
+			`No comparison: it has no linked proposal, and only linked pins are compared ("keep-changelog-current").`, ""},
 	}
 
 	for _, c := range cases {
@@ -421,13 +427,536 @@ func TestPinsUnavailableKeyExplainsAndCallsNothing(t *testing.T) {
 			h.press(c.key)
 
 			assert.Empty(t, f.called(), "an unavailable key plans and writes nothing")
-			assert.Equal(t, c.toast, h.m.toast.text)
+			assert.Equal(t, c.toast+c.next, h.m.toast.text)
 			assert.Contains(t, pinsNoticeRow(h.view()), c.toast)
 
 			_, open := hookLessons(h).modal(120, 39)
 			assert.False(t, open, "an unavailable key opens no preview, review or comparison")
 			assert.False(t, hookLessons(h).capturing())
 			assert.Equal(t, lesPins, hookLessons(h).sub, "the review never opens the Run sub-view")
+		})
+	}
+}
+
+// pinsNoRetargetRoute is the scope route of p4 in pinsInspection: w reads
+// n/a, because the scope is current.
+const pinsNoRetargetRoute = "no retarget: its regions are already current; " + pinRouteReplace
+
+// pinsReplaceSentence is pinRouteReplace as the last sentence of a line.
+const pinsReplaceSentence = "To choose other regions, use - Prune and add a new pin with n."
+
+// TestPinRetargetRouteFollowsTheRetargetBlock holds one rule for each state
+// of a linked pin. The words name w only while w works, and every refused
+// state gives its actual reason and a next action. The cases change the
+// fixture of each state, so the check reads the rule that the keys use.
+func TestPinRetargetRouteFollowsTheRetargetBlock(t *testing.T) {
+	const replace = pinRouteReplace
+
+	// pinTwo is p9, the one fixture pin that offers a retarget.
+	const pinTwo = 1
+
+	cases := []struct {
+		name string
+		row  int
+		edit func(in *maintain.Inspection)
+		// reason is the retargetBlock text. It is empty for a pin that
+		// offers a retarget.
+		reason string
+		// next is the next action, also a route that the pin must offer.
+		next string
+		// prune says that the next action is the prune route.
+		prune bool
+	}{
+		{name: "a computed scope", row: 2},
+		{name: "a current scope", row: 1, reason: "its regions are already current", next: replace, prune: true},
+		{
+			name: "no living finding", row: 3, next: replace, prune: true,
+			reason: "no cited finding is living, so no scope can be computed",
+		},
+		{
+			name: "an unknown scope", row: 4, next: replace, prune: true,
+			reason: "its scope is unknown: scope advice needs an indexed database (the index is stale); " +
+				"build it with `seamark index`",
+		},
+		{
+			name: "computed regions that another pin holds", row: 2, next: replace, prune: true,
+			edit: func(in *maintain.Inspection) {
+				in.Pins[2].Entry.Rule = in.Pins[pinTwo].Entry.Rule
+				in.Pins[2].Entry.Key = reviews.NewPinKey(in.Pins[pinTwo].Entry.Rule, "",
+					in.Pins[pinTwo].Readings.Scope.Advice.Regions)
+			},
+			reason: "pin 3 (line 12) already has this rule with the computed regions",
+		},
+		{
+			name: "an unsafe entry", row: 2, next: pinRouteByHand,
+			edit:   func(in *maintain.Inspection) { in.Pins[pinTwo].Entry.Block = "a multi-line rule value" },
+			reason: "the entry cannot be edited safely (a multi-line rule value)",
+		},
+		{
+			name: "a pin file that cannot be edited", row: 2, next: pinRouteByHand,
+			edit:   func(in *maintain.Inspection) { in.Doc.FileBlock = "the file is read-only" },
+			reason: "the pin file cannot be edited (the file is read-only)",
+		},
+		{
+			name: "a foreign workspace", row: 2, next: pinRouteIndex,
+			edit:   func(in *maintain.Inspection) { in.Index.Root = "/work/original" },
+			reason: "the index records another repository, /work/original",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := pinsFake()
+			if c.edit != nil {
+				c.edit(f.pins)
+			}
+
+			h := pinsOpen(t, f, 120, 40)
+			pinsCursorTo(h, c.row)
+
+			p := pinsOf(h)
+			pin := p.rows()[c.row-1].pin
+			require.NotNil(t, pin)
+			require.True(t, pinLinked(pin), "the rule covers linked pins")
+
+			assert.Equal(t, c.reason, p.retargetBlock(pin))
+
+			if c.reason == "" {
+				assert.Equal(t, pinRouteRetarget, p.scopeRoute(pin))
+				assert.True(t, p.offers(p.retargetBlock), "the route names a key that works")
+
+				return
+			}
+
+			assert.Equal(t, c.next, p.retargetNext(pin))
+			assert.Equal(t, "no retarget: "+c.reason+"; "+c.next, p.scopeRoute(pin))
+			assert.NotContains(t, p.scopeRoute(pin), "w Retarget", "the route never points at a key that reads n/a")
+			assert.False(t, pinStoredLock(p.scopeRoute(pin)), "a reload must keep the lock of a linked pin")
+			assert.False(t, p.offers(p.retargetBlock))
+
+			h.press("w")
+			assert.Empty(t, f.called(), "an unavailable key plans and writes nothing")
+			assert.True(t, strings.HasSuffix(h.m.toast.text, pinRouteSentence(c.next)), "toast: %s", h.m.toast.text)
+			assert.Contains(t, h.m.toast.text, "No retarget: "+c.reason)
+
+			// The prune route must work, not only read well. The press opens
+			// the preview that a new pin then follows.
+			if c.prune {
+				assert.True(t, p.offers(p.editBlock), "the route names a key that works")
+				assert.Contains(t, pinsKeys(h), "n", "the route names a key that works")
+				h.press("-")
+				assert.Contains(t, f.called(), "PlanMaintenance:prune")
+			}
+		})
+	}
+}
+
+// TestPinRetargetRouteOfAnUnlinkedPin gives the state of each other link
+// a route that exists, because such a pin has no prune either.
+func TestPinRetargetRouteOfAnUnlinkedPin(t *testing.T) {
+	// refusedRegion is a region that the form refuses to edit.
+	refusedRegion := func(f *fakeServices) {
+		f.pins.Pins[4].Entry.Region, f.pins.Pins[4].Entry.Regions = "internal/\u0085api", nil
+	}
+
+	cases := []struct {
+		name string
+		row  int
+		edit func(f *fakeServices)
+		want string
+	}{
+		{name: "no proposal", row: 5, want: pinRouteForm},
+		{
+			name: "no proposal in a file that cannot be edited", row: 5, want: pinRouteByHand,
+			edit: func(f *fakeServices) { f.pins.Doc.FileBlock = "the file is read-only" },
+		},
+		{
+			name: "a pending match", row: 5, want: pinRouteRecord,
+			edit: func(f *fakeServices) { f.pins.Pins[4].Link.Link = pinfile.LinkPendingMatch },
+		},
+		{
+			// The record preview reads the pin file of the recorded root.
+			name: "a pending match in a copied checkout", row: 5, want: pinRouteIndex,
+			edit: func(f *fakeServices) {
+				pinsCopiedCheckout(f)
+				f.pins.Pins[4].Link.Link = pinfile.LinkPendingMatch
+			},
+		},
+		{name: "an ambiguous link", row: 9, want: pinRouteByHand},
+		{name: "no proposal in a copied checkout", row: 5, want: pinRouteFormIndex, edit: pinsCopiedCheckout},
+		{name: "no proposal under --db of another root", row: 5, want: pinsOpenFormRoute, edit: pinsAnotherDB},
+		{
+			// A record reads the pin that the list shows, so --db keeps it.
+			name: "a pending match under --db of another root", row: 5, want: pinRouteRecord,
+			edit: func(f *fakeServices) {
+				pinsAnotherDB(f)
+				f.pins.Pins[4].Link.Link = pinfile.LinkPendingMatch
+			},
+		},
+		{name: "a region that the form refuses", row: 5, want: pinRouteByHand, edit: refusedRegion},
+		{
+			name: "a region above the length of the form", row: 5, want: pinRouteByHand,
+			edit: func(f *fakeServices) {
+				region := pathInput()
+				f.pins.Pins[4].Entry.Region = strings.Repeat("a", region.MaxRunes()+1)
+			},
+		},
+		{
+			// A new index cannot unlock the region, so the route skips it.
+			name: "a refused region in a copied checkout", row: 5, want: pinRouteByHand,
+			edit: func(f *fakeServices) {
+				pinsCopiedCheckout(f)
+				refusedRegion(f)
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := pinsFake()
+			if c.edit != nil {
+				c.edit(f)
+			}
+
+			h := pinsOpen(t, f, 120, 40)
+			pinsCursorTo(h, c.row)
+
+			p := pinsOf(h)
+			pin := p.rows()[c.row-1].pin
+			require.NotNil(t, pin)
+			require.False(t, pinLinked(pin))
+
+			assert.Equal(t, c.want, p.retargetNext(pin))
+
+			h.press("w")
+			assert.Contains(t, h.m.toast.text, pinRouteSentence(c.want))
+		})
+	}
+}
+
+// pinsCopiedCheckout makes the fake a copied checkout: the default
+// database records another root, so a prune and a save both stop.
+func pinsCopiedCheckout(f *fakeServices) {
+	f.pins.Index.Root = "/work/original"
+}
+
+// pinsAnotherDB makes the fake a --db of another repository. A prune runs
+// there, and the authoring engine still refuses a save.
+func pinsAnotherDB(f *fakeServices) {
+	f.dbPath = "/elsewhere/index.db"
+	f.pins.Index.Root = "/work/original"
+}
+
+// The routes of a --db of another repository. The two name the recorded
+// root of pinsAnotherDB and no index build.
+const (
+	pinsOpenFormRoute    = pinGoalForm + ", open the console in /work/original"
+	pinsOpenReplaceRoute = pinGoalReplace + ", open the console in /work/original"
+)
+
+// pinsKeptTail is a pin file whose last entry keeps its trailing line
+// breaks, so the planner of a new pin refuses to append after it.
+const pinsKeptTail = "pin:\n  - rule: kept\n    region: docs\n    note: |+\n      Kept.\n\n"
+
+// TestPinReplaceRouteNeverStartsAPruneThatCannotFinish holds the rule of
+// the destructive route. A prune cannot be undone, so no state may name it
+// while the new pin would be refused. Each case keeps w refused for a scope
+// reason, the state that names the route.
+func TestPinReplaceRouteNeverStartsAPruneThatCannotFinish(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(f *fakeServices)
+		next string
+		// pruneRuns says that - still works, so the wrong route would run.
+		pruneRuns bool
+	}{
+		{"--db of another root", pinsAnotherDB, pinsOpenReplaceRoute, true},
+		{"a copied checkout", pinsCopiedCheckout, pinRouteIndex, false},
+		{
+			"a pin file whose end takes no new pin",
+			func(f *fakeServices) { f.pins.Doc.Bytes = []byte(pinsKeptTail) }, pinRouteByHand, true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := pinsFake()
+			c.edit(f)
+
+			h := pinsOpen(t, f, 120, 40)
+
+			p := pinsOf(h)
+			pin := p.rows()[0].pin
+			require.NotNil(t, pin)
+			require.NotEmpty(t, p.retargetBlock(pin), "w is refused")
+			require.Equal(t, c.pruneRuns, p.editBlock(pin) == "")
+
+			assert.Equal(t, c.next, p.retargetNext(pin))
+			assert.NotContains(t, p.scopeRoute(pin), "Prune")
+
+			h.press("w")
+			assert.True(t, strings.HasSuffix(h.m.toast.text, pinRouteSentence(c.next)), "toast: %s", h.m.toast.text)
+			assert.NotContains(t, h.m.toast.text, "Prune")
+			assert.NotContains(t, pinsDetail(t, h), pinsReplaceSentence)
+		})
+	}
+
+	t.Run("a new read asks the planners again", func(t *testing.T) {
+		f := pinsFake()
+		h := pinsOpen(t, f, 120, 40)
+
+		p := pinsOf(h)
+		require.Equal(t, pinRouteReplace, p.retargetNext(p.rows()[0].pin))
+
+		in := pinsInspection()
+		in.Doc.Bytes = []byte(pinsKeptTail)
+		authorReload(h, f, in)
+
+		assert.Equal(t, pinRouteByHand, p.retargetNext(p.rows()[0].pin))
+	})
+}
+
+// TestPinsAnotherDatabaseNeverRoutesToABuild walks each surface that can
+// name the index build. Under --db a build writes this workspace into the
+// database of the other repository, so each surface names the recorded root
+// instead. A copied checkout keeps the build, because there it is the fix.
+func TestPinsAnotherDatabaseNeverRoutesToABuild(t *testing.T) {
+	const (
+		text    = "the index records another repository root (/work/original), not this workspace (/work/repo)"
+		build   = "build the index of this workspace in Overview, then review again"
+		openNew = "open the console in that repository, because a save works there"
+	)
+
+	blocker := maintain.AuthorBlocker{Kind: maintain.BlockForeignRoot, Text: text, Route: build}
+
+	open := func(t *testing.T, setup func(*fakeServices)) (*harness, *fakeServices) {
+		t.Helper()
+
+		f := authorFake(func(p *maintain.AuthorPlan) {
+			p.Confirmable = false
+			p.Blockers = []maintain.AuthorBlocker{blocker}
+		})
+		f.pins = pinsInspection()
+		setup(f)
+
+		return pinsOpen(t, f, 200, 50), f
+	}
+
+	t.Run("the detail and the form under --db", func(t *testing.T) {
+		h, _ := open(t, pinsAnotherDB)
+		pinsCursorTo(h, 2)
+
+		detail := pinsDetail(t, h)
+		assert.Contains(t, detail, "i and d still draft a change; to save it, open the console in /work/original.")
+		assert.NotContains(t, detail, "readable index")
+
+		h.press("i")
+		require.NotNil(t, authorOf(h).form)
+		assert.Contains(t, lesBoxFlat(h.view()), "; to save, open the console in /work/original.")
+		assert.NotContains(t, lesBoxFlat(h.view()), pinUnknownTail)
+	})
+
+	t.Run("a review under --db has no build route", func(t *testing.T) {
+		h, _ := open(t, pinsAnotherDB)
+		pinsCursorTo(h, 5)
+		h.press("d")
+
+		flat := authorReviewFlat(t, h)
+		assert.Contains(t, flat, "not this workspace (/work/repo); "+openNew+".")
+		assert.NotContains(t, flat, "Overview")
+
+		review := authorOf(h).review
+		assert.Equal(t, -1, review.routed(), "o must not reach the build")
+
+		h.press("o")
+		assert.Same(t, review, authorOf(h).review, "o does nothing here")
+	})
+
+	t.Run("a review of a copied checkout keeps the build", func(t *testing.T) {
+		h, _ := open(t, pinsCopiedCheckout)
+		pinsCursorTo(h, 5)
+		h.press("d")
+
+		flat := authorReviewFlat(t, h)
+		assert.Contains(t, flat, build)
+		assert.Contains(t, flat, "Press o to open Overview")
+		assert.Equal(t, 0, authorOf(h).review.routed())
+	})
+
+	t.Run("a blocker line reads the database", func(t *testing.T) {
+		other := maintain.AuthorBlocker{Kind: maintain.BlockFile, Text: "a file reason", Route: "a file route"}
+
+		h, _ := open(t, pinsAnotherDB)
+		assert.Equal(t, text+"; "+openNew, pinBlockerLine(pinsOf(h).st, blocker))
+		assert.Equal(t, other.String(), pinBlockerLine(pinsOf(h).st, other), "only the root blocker moves")
+
+		h, _ = open(t, pinsCopiedCheckout)
+		assert.Equal(t, blocker.String(), pinBlockerLine(pinsOf(h).st, blocker))
+	})
+
+	t.Run("a refused commit reads the database", func(t *testing.T) {
+		refused := fmt.Errorf("wrapped: %w", services.ErrForeignRoot)
+
+		h, _ := open(t, pinsAnotherDB)
+		text := pinCommitRefusal(pinsOf(h).st, refused)
+		assert.Contains(t, text, "Open the console in that repository")
+		assert.NotContains(t, text, "Overview")
+
+		h, _ = open(t, pinsCopiedCheckout)
+		assert.Contains(t, pinCommitRefusal(pinsOf(h).st, refused), "Build the index of this workspace in Overview")
+	})
+}
+
+// TestPinTailRefusedReadsTheFileAfterThePrune runs the real planners. A
+// prune decides which entry comes last, so the answer depends on the pin.
+func TestPinTailRefusedReadsTheFileAfterThePrune(t *testing.T) {
+	const (
+		first  = "  - rule: plain-first\n    region: api\n    note: Plain.\n"
+		second = "  - rule: plain-second\n    region: db\n    note: Plain too.\n"
+		kept   = "  - rule: kept\n    region: docs\n    note: |+\n      Kept.\n\n"
+	)
+
+	cases := []struct {
+		name  string
+		pins  string
+		prune string
+		want  bool
+	}{
+		{"a plain file", first + second, "plain-second", false},
+		{"a kept block that stays at the end", first + kept, "plain-first", true},
+		{"a kept block that the prune removes", first + kept, "kept", false},
+		{"a kept block that the prune moves to the end", kept + first, "plain-first", true},
+		{"a kept block that stays inside", kept + first + second, "plain-second", false},
+		{"the only pin", first, "plain-first", false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			doc := pinfile.Parse([]byte("pin:\n" + c.pins))
+
+			i := slices.IndexFunc(doc.Entries, func(e pinfile.Entry) bool { return e.Rule == c.prune })
+			require.GreaterOrEqual(t, i, 0)
+
+			assert.Equal(t, c.want, pinTailRefused(doc, doc.Entries[i].Ref()))
+		})
+	}
+}
+
+// TestPinRuleLockFollowsTheReplaceGate covers the locked rule of a linked
+// pin. It names the prune only while the prune and the new pin can finish.
+func TestPinRuleLockFollowsTheReplaceGate(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(in *maintain.Inspection)
+		want string
+	}{
+		{
+			"a pin file that cannot be edited",
+			func(in *maintain.Inspection) { in.Doc.FileBlock = "the file is read-only" },
+			"the pin file cannot be edited (the file is read-only); " + pinRouteByHand,
+		},
+		{
+			"a pin file whose end takes no new pin",
+			func(in *maintain.Inspection) { in.Doc.Bytes = []byte(pinsKeptTail) },
+			"the pin file takes no new pin after this prune; " + pinRouteByHand,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := authorFake(nil)
+			f.pins = pinsInspection()
+			c.edit(f.pins)
+
+			h := pinsOpen(t, f, 120, 40)
+			h.press("i")
+
+			form := authorOf(h).form
+			require.NotNil(t, form)
+
+			d := form.draft
+			assert.Equal(t, "linked to proposal #4; "+c.want, d.ruleLock)
+			assert.NotContains(t, d.ruleLock, "Prune")
+			assert.NotContains(t, d.scopeLock, "Prune")
+			assert.False(t, pinStoredLock(d.ruleLock), "a reload must keep this lock")
+
+			authorReload(h, f, f.pins)
+			assert.Equal(t, "linked to proposal #4; "+c.want, d.ruleLock, "a reload keeps the words")
+		})
+	}
+}
+
+// TestPinsRefusalOfAnUnreadableWorkspaceNamesTheFix covers the state with
+// no target: the pins do not read, so the refusal names the workspace.
+func TestPinsRefusalOfAnUnreadableWorkspaceNamesTheFix(t *testing.T) {
+	const want = "No retarget here. The pin file or the ledger could not be read. Fix it, then press r."
+
+	for name, in := range map[string]*maintain.Inspection{
+		"a malformed file": pinsMalformed(), "no ledger": pinsNoLedger(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := pinsFake()
+			f.pins = in
+
+			h := pinsOpen(t, f, 120, 40)
+			h.press("w")
+
+			assert.Equal(t, want, h.m.toast.text)
+			assert.Empty(t, f.called())
+		})
+	}
+}
+
+// TestPinRetargetRouteWithoutAnInspection covers the gate while no read has
+// finished. Update can reach it, so the words must hold there too.
+func TestPinRetargetRouteWithoutAnInspection(t *testing.T) {
+	h := pinsOpen(t, pinsFake(), 120, 40)
+
+	p := pinsOf(h)
+	pin := p.rows()[0].pin
+	require.NotNil(t, pin)
+	require.True(t, pinLinked(pin))
+
+	p.st.pins.loaded = false
+
+	assert.Equal(t, "the pin file is not read", p.retargetBlock(pin))
+	assert.Equal(t, pinRouteRead, p.retargetNext(pin))
+	assert.Equal(t, "no retarget: the pin file is not read; "+pinRouteRead, p.scopeRoute(pin))
+}
+
+// TestPinScopeRouteReadsInTheDetailAndTheForm covers the surfaces of a
+// linked pin that reads n/a on w. The note stays editable, because a
+// retarget and a note edit have separate gates.
+func TestPinScopeRouteReadsInTheDetailAndTheForm(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		row    int
+		reason string
+	}{
+		{"a current scope", 1, "its regions are already current"},
+		{"no living finding", 3, "no cited finding is living, so no scope can be computed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := authorFake(nil)
+			h := pinsOpen(t, f, 120, 40)
+			pinsCursorTo(h, c.row)
+
+			assert.Contains(t, pinsDetail(t, h), "No retarget: "+c.reason+". "+pinsReplaceSentence)
+
+			h.press("i")
+
+			form := authorOf(h).form
+			require.NotNil(t, form)
+			assert.Contains(t, form.draft.scopeLock, "; no retarget: "+c.reason+"; "+pinRouteReplace)
+			assert.False(t, pinStoredLock(form.draft.scopeLock), "a reload must keep this lock")
+
+			h.press("down", "enter")
+			h.typeText(" More.")
+			h.press("esc")
+
+			req := authorReq(t, form.draft)
+			assert.True(t, req.NoteSet, "a note edit stays available")
+			assert.False(t, req.ScopeSet)
 		})
 	}
 }

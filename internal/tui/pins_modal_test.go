@@ -1310,6 +1310,27 @@ func TestMaintForeignIndexRootTurnsOffY(t *testing.T) {
 	assert.Contains(t, maintShown(h), "y is off: the index records another repository")
 }
 
+// TestMaintRetargetStaleIndexUnderAnotherDatabase covers the preview that
+// stays on under --db. The freshness compares this workspace, so the note
+// reads stale there. A build would move the root of the other repository,
+// so the note sends the person to that root.
+func TestMaintRetargetStaleIndexUnderAnotherDatabase(t *testing.T) {
+	fx := maintFixture(t)
+	p := fx.maintNarrow(t, maintPlanOpts{write: true, cursor: true})
+
+	f := maintFakeOf(fx, p, nil)
+	st := *f.index.Status
+	st.Freshness = status.FreshStale
+	f.index.Status = &st
+	f.dbPath = "/elsewhere/index.db"
+	f.pins.Index.Root = "/work/original"
+
+	text := maintContent(t, maintOpen(t, f, p.Request, 120, 40))
+
+	assert.Contains(t, text, "Open the console in /work/original and build it there to compute the regions")
+	assert.NotContains(t, text, "press 1")
+}
+
 func TestMaintRetargetDisclosesAStaleIndex(t *testing.T) {
 	fx := maintFixture(t)
 

@@ -101,7 +101,7 @@ func TestPlanAuthorRelationshipMatrix(t *testing.T) {
 	}
 
 	const (
-		linkedNote   = "linked to proposal #1; only its note, mode, and check can change here; " + routeRetarget
+		linkedNote   = "linked to proposal #1; only its note, mode, and check can change here; " + routeLinkedPin
 		ambiguousFix = "; " + reasonLedgerFixes
 	)
 

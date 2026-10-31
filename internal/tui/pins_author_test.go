@@ -283,7 +283,8 @@ func TestPinEditLinkedShowsReadOnlyRuleAndScope(t *testing.T) {
 
 	frame := lesBoxFlat(h.view())
 	assert.Contains(t, frame, "Edit pin 1 at line 3")
-	assert.Contains(t, frame, "Read-only: linked to proposal #4; change the scope with w Retarget.")
+	assert.Contains(t, frame, "Read-only: linked to proposal #4; "+pinsNoRetargetRoute+".",
+		"p4 has a current scope, so w reads n/a and the form names no retarget")
 	assert.Contains(t, frame, "Read-only: linked to proposal #4; to change the rule, use - Prune and add a new pin with n.",
 		"the rule row names the route of a rule, not the retarget")
 
@@ -1211,7 +1212,7 @@ func TestPinEditLocksAStoredTextOverTheLimitByLength(t *testing.T) {
 func TestPinDraftFollowDropsTheLengthLockOfATypedValue(t *testing.T) {
 	rule, region := pinRuleInput(), pathInput()
 	pin := pinsInspection().Pins[4]
-	d := newEditDraft(&pin, true)
+	d := newEditDraft(&pin, true, pinLockRoutes{})
 	require.Empty(t, d.ruleLock)
 	require.Empty(t, d.scopeLock)
 
@@ -1222,15 +1223,15 @@ func TestPinDraftFollowDropsTheLengthLockOfATypedValue(t *testing.T) {
 	long.Entry.Rule = strings.Repeat("r", rule.MaxRunes()+1)
 	long.Entry.Region = strings.Repeat("d", region.MaxRunes()+1)
 
-	assert.Empty(t, d.follow(&long, true, rebindChanged), "an unlinked pin keeps every edit")
+	assert.Empty(t, d.follow(&long, true, rebindChanged, pinLockRoutes{}), "an unlinked pin keeps every edit")
 	assert.Empty(t, d.ruleLock, "the typed rule replaces the long stored rule")
 	assert.Empty(t, d.scopeLock, "the typed regions replace the long stored region")
 	assert.Equal(t, "typed-rule", d.ruleValue())
 	assert.Equal(t, []string{"typed/region"}, d.regions)
 
 	// A field without an edit takes the stored text and its lock.
-	plain := newEditDraft(&pin, true)
-	assert.Empty(t, plain.follow(&long, true, rebindChanged))
+	plain := newEditDraft(&pin, true, pinLockRoutes{})
+	assert.Empty(t, plain.follow(&long, true, rebindChanged, pinLockRoutes{}))
 	assert.Equal(t, pinLengthLock(rule.MaxRunes()), plain.ruleLock)
 	assert.Equal(t, pinLengthLock(region.MaxRunes()), plain.scopeLock)
 }
@@ -1285,7 +1286,7 @@ func TestPinEditRegionLockNamesCharactersBeforeLength(t *testing.T) {
 			pin := pinsInspection().Pins[c.pin]
 			pin.Entry.Region, pin.Entry.Regions = "", c.regions
 
-			d := newEditDraft(&pin, true)
+			d := newEditDraft(&pin, true, pinLockRoutes{scope: pinRouteRetarget})
 			require.Equal(t, c.regions, d.regions)
 			assert.Equal(t, c.want, d.scopeLock)
 		})
@@ -1532,12 +1533,12 @@ func TestPinDraftDropsRuleAndScopeEditsWhenTheLinkAppears(t *testing.T) {
 	assert.True(t, req.NoteSet, "the note edit stays")
 	assert.Equal(t, "Wrap SQL errors with the query name. Name the query.", req.Note)
 	assert.Contains(t, h.m.toast.text, `The rule and scope edits of "wrap-sql-errors" went away: the pin is linked `+
-		"to p4, so only its note can change here; change the scope with w Retarget")
+		"to p4, so only its note can change here; "+pinsNoRetargetRoute)
 
 	// No row takes the typing now.
 	h.typeText("-more")
 	assert.Equal(t, "wrap-sql-errors", d.ruleValue())
-	assert.Contains(t, lesBoxFlat(h.view()), "Read-only: linked to proposal #4; change the scope with w Retarget.")
+	assert.Contains(t, lesBoxFlat(h.view()), "Read-only: linked to proposal #4; "+pinsNoRetargetRoute+".")
 }
 
 // TestPinDraftReloadKeepsTheCursorOfAFocusedField covers B2-BEH-3: a
@@ -1823,9 +1824,9 @@ func TestPinLinkedWordingNamesOnlyTheOfferedRows(t *testing.T) {
 	}
 
 	t.Run("an unknown relationship", func(t *testing.T) {
-		assert.Contains(t, pinUnknownNote(true), "allows note, mode, and check edits")
-		assert.Contains(t, pinUnknownNote(false), "allows only a note edit;")
-		assert.NotContains(t, pinUnknownNote(false), "mode")
+		assert.Contains(t, pinUnknownNote(true, pinUnknownTail), "allows note, mode, and check edits")
+		assert.Contains(t, pinUnknownNote(false, pinUnknownTail), "allows only a note edit;")
+		assert.NotContains(t, pinUnknownNote(false, pinUnknownTail), "mode")
 
 		in := pinsNoLedger()
 		in.Checks.Uses = true
@@ -1840,8 +1841,10 @@ func TestPinLinkedWordingNamesOnlyTheOfferedRows(t *testing.T) {
 	})
 
 	t.Run("a dropped edit", func(t *testing.T) {
-		assert.Contains(t, pinDroppedNote([]string{"rule"}, `"r"`, 4, true), "so only its note, mode, and check can change here")
-		assert.Contains(t, pinDroppedNote([]string{"rule"}, `"r"`, 4, false), "so only its note can change here")
+		assert.Contains(t, pinDroppedNote([]string{"rule"}, `"r"`, 4, true, pinRouteRetarget),
+			"so only its note, mode, and check can change here; "+pinRouteRetarget)
+		assert.Contains(t, pinDroppedNote([]string{"rule"}, `"r"`, 4, false, pinsNoRetargetRoute),
+			"so only its note can change here; "+pinsNoRetargetRoute)
 	})
 }
 
@@ -2106,7 +2109,7 @@ func TestPinAuthoringTreatsAForeignRootAsUnknownWithADBFlag(t *testing.T) {
 	assert.NotContains(t, authorUnavailable(h), "-", "a prune with --db stays offered")
 
 	detail := pinsDetail(t, h)
-	assert.Contains(t, detail, pinDraftsStill)
+	assert.Contains(t, detail, "i and d still draft a change; to save it, open the console in /work/original.")
 	assert.NotContains(t, detail, "i edits the note of this pin only")
 	assertUnknown(h, "an editable pin file")
 

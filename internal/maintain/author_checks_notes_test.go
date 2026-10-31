@@ -2,6 +2,7 @@ package maintain
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -130,4 +131,29 @@ func TestPlanAuthorChecksEditsGetTheirOwnReviewNotes(t *testing.T) {
 		assert.NotContains(t, p.Notes, fmt.Sprintf(textChecksKept, "mode"))
 		assert.NotContains(t, p.Notes, textVersionChanged, "the identity text already names the repeat")
 	})
+}
+
+// TestPlanAuthorLinkedBlockerNamesNoRetargetKey holds the layer rule. The
+// plan has no retarget state, so the blocker of a linked pin cannot name w.
+// A retarget can read n/a for that pin. Pins gives the route that fits.
+func TestPlanAuthorLinkedBlockerNamesNoRetargetKey(t *testing.T) {
+	f := newFixture(t, nil)
+	f.write(checksNotesLessons, 0o644)
+	f.propose(model.Proposal{
+		Signature: "s1", Rule: "checked", Region: "api", Note: "Recorded note.", Status: model.ProposalApplied,
+	})
+
+	doc, err := pinfile.Read(f.root)
+	require.NoError(t, err)
+
+	p := f.authorPlan(f.deps(), AuthorRequest{
+		Op: AuthorEdit, Ref: doc.Entries[0].Ref(), Scope: ScopeRegions, Regions: []string{"db"}, ScopeSet: true,
+	})
+
+	require.False(t, p.Confirmable)
+
+	lines := strings.Join(blockerLines(p), "\n")
+	assert.Contains(t, lines, "only its note, mode, and check can change here")
+	assert.Contains(t, lines, "press r in Pins")
+	assert.NotContains(t, lines, "Retarget")
 }
