@@ -19,7 +19,7 @@ func (p *pinsView) deliveryLines(row pinRow, w int) []string {
 		return nil
 	}
 
-	compact, _ := lessonreport.Compact(&p.st.delivery.value, reading.PinVersion)
+	line, _ := lessonreport.Compact(&p.st.delivery.value, reading.PinVersion)
 	t := p.st.theme
 	out := []string{t.Heading.Render("Lesson delivery")}
 
@@ -28,7 +28,7 @@ func (p *pinsView) deliveryLines(row pinRow, w int) []string {
 			ui.ErrText(p.st.delivery.err)+". Press r to read again; expansion is unavailable until then.", w)...)
 	}
 
-	return append(out, propLines(t.Body, ui.OneLine(compact.Line), w)...)
+	return append(out, propLines(t.Body, ui.OneLine(line), w)...)
 }
 
 func (v *pinDelivery) modalScroll() *ui.ScrollState {

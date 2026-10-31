@@ -118,10 +118,10 @@ func TestPinsDeliverySectionShowsCompactLine(t *testing.T) {
 		row := p.rows()[0]
 		compact, ok := lessonreport.Compact(&report, row.pin.Check.Version)
 		require.True(t, ok)
-		require.Greater(t, len([]rune(compact.Line)), 200)
+		require.Greater(t, len([]rune(compact)), 200)
 
 		text := ansi.Strip(strings.Join(p.pinDetail(p.inspection(), row, 1000), "\n"))
-		assert.Contains(t, text, compact.Line)
+		assert.Contains(t, text, compact)
 		assert.Contains(t, text, "no linked correction observed (qualified)")
 		assert.Less(t, strings.Index(text, "Outcome"), strings.Index(text, "Exposure"))
 		assert.Less(t, strings.Index(text, "Exposure"), strings.Index(text, "Lesson delivery"))

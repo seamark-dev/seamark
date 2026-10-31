@@ -34,7 +34,7 @@ func TestCaptureDeliveryCurrentVersionsOnly(t *testing.T) {
 		Pins: []lessonreport.PinReading{pin}}
 	want, ok := lessonreport.Compact(r, pin.PinVersion)
 	require.True(t, ok)
-	assert.Equal(t, map[int64]string{p.ID: want.Line}, CaptureDelivery([]model.Proposal{p}, r))
+	assert.Equal(t, map[int64]string{p.ID: want}, CaptureDelivery([]model.Proposal{p}, r))
 
 	for _, status := range []string{model.ProposalProposed, model.ProposalDismissed, ""} {
 		other := p

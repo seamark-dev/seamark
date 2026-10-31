@@ -31,8 +31,8 @@ func CaptureDelivery(applied []model.Proposal, r *lessonreport.Report) map[int64
 		}
 
 		identity := reviews.PinIdentityDigest(reviews.ProposalKey(p))
-		if summary, ok := lessonreport.Compact(r, current[identity]); ok {
-			lines[p.ID] = summary.Line
+		if line, ok := lessonreport.Compact(r, current[identity]); ok {
+			lines[p.ID] = line
 		}
 	}
 
