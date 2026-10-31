@@ -11,7 +11,6 @@ import (
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
-	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // doctorView is the Doctor destination: one row per check of `seamark
@@ -270,9 +269,8 @@ func checkAction(st *state, c doctor.Check) ovAction {
 
 	switch c.Name {
 	case "index":
-		// Seamark never rebuilds a newer database, so the check offers
-		// no build.
-		if st.index.loaded && st.index.value.Probe.State == workspace.IndexNewer {
+		// A refused build has no key here, so the check offers none.
+		if st.indexBuildRefusal() != "" {
 			return ovAction{}
 		}
 

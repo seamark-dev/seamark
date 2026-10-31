@@ -184,6 +184,10 @@ type DatabaseFacts struct {
 	// than the workspace root, else "". A link spelling of the workspace
 	// root names the same directory, so it is no foreign root.
 	ForeignRoot string
+	// BuildBlock says why an index build must not run, with the next
+	// route, or nil. It holds for every schema, because it reads the
+	// recorded root without the probe.
+	BuildBlock error
 }
 
 // Probe classifies the index database of ws without writing to it.

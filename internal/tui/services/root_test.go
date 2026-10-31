@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,7 +11,9 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/services/servicestest"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -214,8 +217,10 @@ func TestPinsAnswerTheDatabaseFacts(t *testing.T) {
 		ws, err := workspace.Resolve(rootDir(t), origin.DBPath)
 		require.NoError(t, err)
 
-		assert.Equal(t, workspace.DatabaseFacts{Kind: store.DatabaseOther, ForeignRoot: origin.Root},
-			engNew(ws, Deps{}).Pins().Database)
+		got := engNew(ws, Deps{}).Pins().Database
+		assert.Equal(t, store.DatabaseOther, got.Kind)
+		assert.Equal(t, origin.Root, got.ForeignRoot)
+		assert.ErrorIs(t, got.BuildBlock, ErrForeignRoot, "a build refuses the database of another repository")
 	})
 
 	t.Run("a moved repository with a link at its old path", func(t *testing.T) {
@@ -233,4 +238,266 @@ func TestPinsAnswerTheDatabaseFacts(t *testing.T) {
 		assert.Equal(t, workspace.DatabaseFacts{}, engNew(ws, Deps{}).Pins().Database,
 			"the old path names this directory, so the root is not foreign")
 	})
+}
+
+// rootSchema stamps the database at path with another schema version.
+func rootSchema(t *testing.T, path string, version int) {
+	t.Helper()
+
+	st, err := store.Open(path)
+	require.NoError(t, err)
+	require.NoError(t, st.SetMeta(store.MetaSchemaVersion, strconv.Itoa(version)))
+	require.NoError(t, st.Close())
+}
+
+// rootRecorded reads the root at path without the migration of an open.
+func rootRecorded(t *testing.T, path string) string {
+	t.Helper()
+
+	root, err := store.ProbeRoot(path)
+	require.NoError(t, err)
+
+	return root
+}
+
+// rootBuild runs a build and drops its progress.
+func rootBuild(e *engine, force bool) error {
+	_, err := e.BuildIndex(force, func(IndexEvent) {})
+
+	return err
+}
+
+// TestBuildIndexRefusesTheDatabaseOfAnotherRepository covers the build
+// that moved the recorded root. The other checkout then read no pins and
+// lost its maintenance. An older schema hides the root from the probe.
+func TestBuildIndexRefusesTheDatabaseOfAnotherRepository(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, origin string)
+	}{
+		{"a ready database", func(*testing.T, string) {}},
+		{"an older schema", func(t *testing.T, origin string) {
+			rootSchema(t, origin, store.SupportedSchema()-1)
+		}},
+		{"a newer schema", func(t *testing.T, origin string) {
+			rootSchema(t, origin, store.SupportedSchema()+1)
+		}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			origin, _ := servicestest.Workspace(t, "", "api")
+			other, _ := servicestest.Workspace(t, "", "api")
+
+			c.setup(t, origin.DBPath)
+
+			ws, err := workspace.Resolve(other.Root, origin.DBPath)
+			require.NoError(t, err)
+
+			before, err := os.ReadFile(origin.DBPath)
+			require.NoError(t, err)
+
+			e := engNew(ws, Deps{})
+
+			var refused error
+
+			for _, force := range []bool{false, true} {
+				refused = rootBuild(e, force)
+				require.ErrorIs(t, refused, ErrForeignRoot)
+				assert.Contains(t, refused.Error(), "open the console in "+origin.Root, "the refusal names the route")
+			}
+
+			after, err := os.ReadFile(origin.DBPath)
+			require.NoError(t, err)
+			assert.Equal(t, before, after, "the database stays as it is")
+			assert.Equal(t, origin.Root, rootRecorded(t, origin.DBPath))
+
+			require.EqualError(t, e.Index().Database.BuildBlock, refused.Error(), "the read gives the words of the refusal")
+			require.EqualError(t, e.Pins().Database.BuildBlock, refused.Error())
+		})
+	}
+}
+
+// TestBuildIndexRefusesALinkedDefaultPath covers a worktree that shares
+// the database of another worktree. No --db is set, but the file belongs
+// to the other worktree, so a build here moves its root.
+func TestBuildIndexRefusesALinkedDefaultPath(t *testing.T) {
+	origin, _ := servicestest.Workspace(t, "", "api")
+	side := rootCopy(t, origin, "side")
+
+	require.NoError(t, os.Remove(store.DefaultPath(side)))
+	require.NoError(t, os.Symlink(origin.DBPath, store.DefaultPath(side)))
+
+	// A new commit defeats the fast path, so only the gate keeps the root.
+	require.NoError(t, os.WriteFile(filepath.Join(side, "b.go"), []byte("package eng\n"), 0o644))
+	servicestest.Git(t, side, "add", "-A")
+	servicestest.Git(t, side, "commit", "-m", "second")
+
+	ws, err := workspace.Resolve(side, "")
+	require.NoError(t, err)
+
+	err = rootBuild(engNew(ws, Deps{}), false)
+	require.ErrorIs(t, err, ErrForeignRoot)
+	assert.Contains(t, err.Error(), "open the console in "+origin.Root)
+	assert.Equal(t, origin.Root, rootRecorded(t, origin.DBPath))
+}
+
+// TestBuildIndexKeepsEveryDatabaseWithoutAnotherOwner holds the cases
+// that the refusal must not reach.
+func TestBuildIndexKeepsEveryDatabaseWithoutAnotherOwner(t *testing.T) {
+	// own builds a database outside the workspace that records it.
+	own := func(t *testing.T, root string) string {
+		t.Helper()
+
+		ws, err := workspace.Resolve(root, filepath.Join(rootDir(t), "own.db"))
+		require.NoError(t, err)
+		require.NoError(t, rootBuild(engNew(ws, Deps{}), false))
+
+		return ws.DBPath
+	}
+
+	cases := []struct {
+		name string
+		// db returns the --db value for the workspace at root. "" uses
+		// the default database.
+		db func(t *testing.T, root string) string
+	}{
+		{"a --db file that does not exist", func(t *testing.T, _ string) string {
+			return filepath.Join(rootDir(t), "new.db")
+		}},
+		{"a new empty --db file", func(t *testing.T, _ string) string {
+			path := filepath.Join(rootDir(t), "empty.db")
+			require.NoError(t, os.WriteFile(path, nil, 0o644))
+
+			return path
+		}},
+		{"a --db that records this workspace", own},
+		{"a --db that records this workspace through a link", func(t *testing.T, root string) string {
+			path := own(t, root)
+
+			st, err := store.Open(path)
+			require.NoError(t, err)
+			require.NoError(t, st.SetMeta(store.MetaRepoRoot, rootLink(t, root)))
+			require.NoError(t, st.Close())
+
+			return path
+		}},
+		{"a --db with an empty recorded root", func(t *testing.T, root string) string {
+			path := own(t, root)
+
+			st, err := store.Open(path)
+			require.NoError(t, err)
+			require.NoError(t, st.SetMeta(store.MetaRepoRoot, ""))
+			require.NoError(t, st.Close())
+
+			return path
+		}},
+		{"an older --db that records this workspace", func(t *testing.T, root string) string {
+			path := own(t, root)
+			rootSchema(t, path, store.SupportedSchema()-1)
+
+			return path
+		}},
+		{"the default database", func(*testing.T, string) string { return "" }},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			base, _ := servicestest.Workspace(t, "", "api")
+
+			ws, err := workspace.Resolve(base.Root, c.db(t, base.Root))
+			require.NoError(t, err)
+
+			e := engNew(ws, Deps{})
+			require.NoError(t, e.Index().Database.BuildBlock)
+			require.NoError(t, rootBuild(e, true))
+			assert.Equal(t, base.Root, rootRecorded(t, ws.DBPath))
+		})
+	}
+}
+
+// TestBuildIndexRebuildsACopiedCheckout holds the route of a copy for
+// each spelling of its own database. The build ends the foreign root.
+func TestBuildIndexRebuildsACopiedCheckout(t *testing.T) {
+	for name, db := range map[string]func(t *testing.T, root string) string{
+		"the default database": func(*testing.T, string) string { return "" },
+		"a path through a link": func(t *testing.T, root string) string {
+			return store.DefaultPath(rootLink(t, root))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			origin, _ := servicestest.Workspace(t, "", "api")
+			root := rootCopy(t, origin, "copy")
+
+			ws, err := workspace.Resolve(root, db(t, root))
+			require.NoError(t, err)
+
+			e := engNew(ws, Deps{})
+			require.Equal(t, origin.Root, e.probe().Root)
+			require.NoError(t, e.Index().Database.BuildBlock)
+
+			require.NoError(t, rootBuild(e, false))
+			assert.Equal(t, root, rootRecorded(t, store.DefaultPath(root)))
+			assert.Equal(t, origin.Root, rootRecorded(t, origin.DBPath), "the origin keeps its own root")
+		})
+	}
+}
+
+// TestBuildIndexFailsClosedOnARootThatDoesNotRead covers a file with
+// content that gives no root. It can belong to another repository, so
+// nothing writes it.
+func TestBuildIndexFailsClosedOnARootThatDoesNotRead(t *testing.T) {
+	base, _ := servicestest.Workspace(t, "", "api")
+
+	path := filepath.Join(rootDir(t), "garbage.db")
+	garbage := []byte("this file is no database, and it is long enough to read")
+	require.NoError(t, os.WriteFile(path, garbage, 0o644))
+
+	ws, err := workspace.Resolve(base.Root, path)
+	require.NoError(t, err)
+
+	e := engNew(ws, Deps{})
+
+	err = rootBuild(e, false)
+	require.ErrorIs(t, err, errRootUnknown)
+	assert.Contains(t, err.Error(), path, "the reason names the file")
+	assert.Contains(t, err.Error(), "use another --db", "the reason names the next route")
+
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, garbage, after)
+
+	require.ErrorIs(t, e.Index().Database.BuildBlock, errRootUnknown)
+}
+
+// TestForeignRootErrorTellsTheSettingsItsRoute covers the answer that a
+// settings block carries to the view.
+func TestForeignRootErrorTellsTheSettingsItsRoute(t *testing.T) {
+	read := func(t *testing.T, ws workspace.Workspace) *ForeignRootError {
+		t.Helper()
+
+		snap, err := engNew(ws, Deps{}).Settings()
+		require.NoError(t, err)
+
+		block := snap.Editable(settings.GroupDelivery)
+		require.ErrorIs(t, block, ErrForeignRoot)
+
+		var foreign *ForeignRootError
+		require.ErrorAs(t, block, &foreign)
+
+		return foreign
+	}
+
+	origin, _ := maintWorkspace(t, true)
+
+	ws, err := workspace.Resolve(rootDir(t), origin.DBPath)
+	require.NoError(t, err)
+
+	got := read(t, ws)
+	assert.True(t, got.OtherDB, "a build refuses the database of another repository")
+	assert.Equal(t, origin.Root, got.Root)
+
+	ws, err = workspace.Resolve(rootCopy(t, origin, "copy"), "")
+	require.NoError(t, err)
+	assert.False(t, read(t, ws).OtherDB, "a build ends the state of a copied checkout")
 }

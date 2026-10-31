@@ -122,6 +122,9 @@ func (m *maintModal) planErrView(w int) ui.ModalOpts {
 	switch {
 	case errors.Is(m.err, services.ErrNoLedger), errors.Is(m.err, maintain.ErrNoLedger):
 		hint = "Proposals live in the index database. Build it from Overview (press 1, then b)."
+		if why := pinsBuildRefusal(m.st); why != "" {
+			hint = "Proposals live in the index database. " + ovSentenceEnd(why)
+		}
 	case errors.Is(m.err, maintain.ErrNothingSelected):
 		hint = "Select pins with space in Pins first."
 	default:
@@ -311,8 +314,7 @@ func (m *maintModal) planBlockers(w int) []string {
 	if m.foreign != "" {
 		note("The index of this workspace records another repository, " + ui.OneLine(m.foreign) + ", so y is off. " +
 			"A commit would write " + ui.OneLine(filepath.Join(m.foreign, pinfile.File)) + " and the ledger of this " +
-			"workspace, not " + ui.OneLine(filepath.Join(m.st.svc.Root(), pinfile.File)) + ". Run seamark index in " +
-			"this checkout, or build the index from Overview (press 1, then b).")
+			"workspace, not " + ui.OneLine(filepath.Join(m.st.svc.Root(), pinfile.File)) + ". " + pinForeignSentence(m.st))
 	}
 
 	// A cursor-row plan has no marked row. Space would mark the same row,

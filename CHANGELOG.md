@@ -33,6 +33,11 @@ model-boundary delivery.
 - **Console controls.** Pins can edit mode/check on linked pins,
   author check definitions (`M`), and verify (`V`). Read-only browsing
   never applies a decision.
+- **Console builds.** The Overview build refuses a database that
+  records another repository, at any schema, so it can no longer move
+  that repository's recorded root.
+- **Write guard.** A `--db` that names a copy's own database through a
+  link or a relative path no longer bypasses the two-repository refusal.
 - **Copied checkouts.** `seamark index` and the Overview build rebuild
   a default index that records another root, so a copy no longer stays
   on the root of its origin.

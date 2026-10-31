@@ -397,9 +397,9 @@ func settingsBlock(err error, doc string) settingsBlocked {
 
 	// The index of another repository blocks a lessons group without a
 	// fault in the file. A fix by hand would edit the file of the other
-	// repository, so the route is the index build (P4-16).
+	// repository, so the route leaves the file alone.
 	if errors.Is(err, services.ErrForeignRoot) {
-		out.route = settingsForeignRootRoute
+		out.route = settingsForeignRoute(err)
 	}
 
 	var b *settings.BlockedError

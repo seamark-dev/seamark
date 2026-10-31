@@ -168,11 +168,6 @@ func (o *overview) collapsed() bool {
 	return !o.st.wide() || o.st.height-chromeHeight < ovCardsMinBody
 }
 
-// indexNewer reports an index database from a newer seamark.
-func (o *overview) indexNewer() bool {
-	return o.st.index.loaded && o.st.index.value.Probe.State == workspace.IndexNewer
-}
-
 // freshEmpty reports the empty first-run state: no index and no client
 // with any Seamark configuration.
 func (o *overview) freshEmpty() bool {
@@ -480,13 +475,13 @@ func (o *overview) keys() []key.Binding {
 	case o.build != nil && o.showBuild && o.build.running:
 		return nil
 	case o.build != nil && o.showBuild:
-		return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "close"), ui.WithHelp(ovKeys.Build, "b", "build again")}
+		return o.resultKeys()
 	case o.freshEmpty():
 		return []key.Binding{ui.WithHelp(ovKeys.SetUp, "s", "set up"), ovKeys.Build, ui.WithHelp(ui.Nav.Enter, "enter", "show list")}
 	}
 
 	build := ovKeys.Build
-	build.SetEnabled(!o.indexNewer())
+	build.SetEnabled(o.canBuild())
 
 	setUp := ovKeys.SetUp
 	setUp.SetEnabled(o.nothingSetUp())

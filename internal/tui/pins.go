@@ -243,7 +243,8 @@ const (
 	pinRouteRecord = "record the proposal as applied: press p, select it, then press c"
 	pinRouteForm   = "use i to edit its regions"
 	// pinRouteIndex builds the index that a copied checkout needs for a
-	// pin write. It is never a route under --db: see pinOpenRoot.
+	// pin write. It is never a route under the database of another
+	// repository: see pinOpenRoot.
 	pinRouteIndex     = "build the index of this checkout from Overview (press 1, then b)"
 	pinRouteFormIndex = pinGoalForm + ", first " + pinRouteIndex
 )
@@ -255,6 +256,28 @@ const (
 // root, and a save works in a console that runs there.
 func pinOpenRoot(root string) string {
 	return "open the console in " + ui.OneLine(root)
+}
+
+// pinForeignRoute is the route of a write that pinsForeignRoot stops. A
+// build ends the state of a copied checkout. A default path that links to
+// the database of another worktree refuses the build, so its route is
+// the console of the recorded root.
+func pinForeignRoute(st *state) string {
+	if root := pinsDBRoot(st); root != "" {
+		return pinOpenRoot(root)
+	}
+
+	return pinRouteIndex
+}
+
+// pinForeignSentence is pinForeignRoute for a preview, which also names
+// the shell command when a build is the route.
+func pinForeignSentence(st *state) string {
+	if root := pinsDBRoot(st); root != "" {
+		return ovSentenceEnd(pinOpenRoot(root))
+	}
+
+	return "Run seamark index in this checkout, or build the index from Overview (press 1, then b)."
 }
 
 // editBlock returns why the file editor cannot change pin, or "" when it
@@ -281,7 +304,7 @@ func (p *pinsView) editGate(pin *maintain.Pin) (why, next string) {
 	case in == nil || in.Doc == nil:
 		return "the pin file is not read", pinRouteRead
 	case pinsForeignRoot(p.st) != "":
-		return "the index records another repository, " + ui.OneLine(pinsForeignRoot(p.st)), pinRouteIndex
+		return "the index records another repository, " + ui.OneLine(pinsForeignRoot(p.st)), pinForeignRoute(p.st)
 	case in.Doc.FileBlock != "":
 		return "the pin file cannot be edited (" + ui.Diag(in.Doc.FileBlock) + ")", pinRouteByHand
 	}
@@ -303,17 +326,17 @@ func (p *pinsView) unlinkedNext(pin *maintain.Pin) string {
 
 	switch {
 	case pin.Link.Link == pinfile.LinkPendingMatch && pinsForeignRoot(p.st) != "":
-		return pinRouteIndex
+		return pinForeignRoute(p.st)
 	case pin.Link.Link == pinfile.LinkPendingMatch:
 		return pinRouteRecord
 	case pin.Link.Link != pinfile.LinkNoProposal, in == nil, in.Doc == nil,
 		pinAuthorBlock(in, pin, maintain.AuthorEdit, p.authorKnown(in)) != "",
 		in.Doc.FileBlock != "", pinRegionLock(pinEntryRegions(pin.Entry)) != "":
 		return pinRouteByHand
-	case pinsForeignRoot(p.st) != "":
-		return pinRouteFormIndex
 	case pinsDBRoot(p.st) != "":
 		return pinGoalForm + ", " + pinOpenRoot(pinsDBRoot(p.st))
+	case pinsForeignRoot(p.st) != "":
+		return pinRouteFormIndex
 	}
 
 	return pinRouteForm
@@ -393,6 +416,16 @@ func pinsDatabase(st *state) workspace.DatabaseFacts {
 	return st.pins.value.Database
 }
 
+// pinsBuildRefusal is buildRefusal for the read of Pins, so a route agrees
+// with the index state that the same screen shows.
+func pinsBuildRefusal(st *state) string {
+	if !st.pins.loaded || st.pins.value == nil {
+		return ""
+	}
+
+	return buildRefusal(st.pins.value.Index, st.pins.value.Database)
+}
+
 // pinsForeignRoot returns the repository root that the index records
 // when it is not the workspace root, else "". It is the rule of the
 // retarget and the prune. The maintenance engine reads and writes the
@@ -411,8 +444,8 @@ func pinsForeignRoot(st *state) string {
 }
 
 // pinsOtherDB reports a database that is not the default database of the
-// workspace. Another recorded root is then normal, so no route may name
-// an index build.
+// workspace. No route may then name an index build, because a build
+// moves the recorded root of the other repository.
 func pinsOtherDB(st *state) bool {
 	return pinsDatabase(st).Kind != store.DatabaseDefault
 }

@@ -797,13 +797,13 @@ func (r *pinReview) confirmable() bool {
 
 // routes reports a blocker that o can open (A4 hand-off: route by
 // BlockKind). The ledger and the root lead to the index build, but the
-// root does not under --db (pinOpenRoot). The gate leads to Settings only
-// while it reads, because a gate that does not read has no setting to
-// change.
+// root does not under --db (pinOpenRoot), and the ledger does not while
+// a build is refused. The gate leads to Settings only while it reads,
+// because a gate that does not read has no setting to change.
 func (r *pinReview) routes(b maintain.AuthorBlocker) bool {
 	switch b.Kind {
 	case maintain.BlockLedger:
-		return true
+		return pinsBuildRefusal(r.st) == ""
 	case maintain.BlockForeignRoot:
 		return !pinsOtherDB(r.st)
 	case maintain.BlockGate:

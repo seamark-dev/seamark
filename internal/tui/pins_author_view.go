@@ -946,12 +946,18 @@ func pinBlockWords(b maintain.AuthorBlocker, gateErr error, removal bool) string
 }
 
 // pinBlockerLine returns the line of blocker b. The engine names an index
-// build for another root, because the plan cannot see --db. The console
-// can, so it gives the route that holds there (pinOpenRoot). b names the
+// build for another root and for a missing ledger, because the plan
+// cannot see --db or the rules of a build. The console can, so it gives
+// the route that holds there (pinOpenRoot). A root blocker names the
 // recorded root in its text, so the route needs no root of its own.
 func pinBlockerLine(st *state, b maintain.AuthorBlocker) string {
-	if b.Kind == maintain.BlockForeignRoot && pinsOtherDB(st) {
+	why := pinsBuildRefusal(st)
+
+	switch {
+	case b.Kind == maintain.BlockForeignRoot && pinsOtherDB(st):
 		b.Route = "open the console in that repository, because a save works there"
+	case b.Kind == maintain.BlockLedger && why != "":
+		b.Route = why
 	}
 
 	return b.String()

@@ -233,7 +233,12 @@ func (o *overview) probeCard(v services.IndexView, w int) (right string, lines [
 	case workspace.IndexNewer:
 		right, lines = t.Badge(ui.ToneFailure, "newer schema"), []string{t.Muted.Render("from a newer seamark"), schema}
 	case workspace.IndexOlder:
-		right, lines = t.Badge(ui.ToneAttention, "needs upgrade"), []string{schema, t.Muted.Render("a build migrates it")}
+		note := "a build migrates it"
+		if !o.canBuild() {
+			note = "no build in this workspace"
+		}
+
+		right, lines = t.Badge(ui.ToneAttention, "needs upgrade"), []string{schema, t.Muted.Render(note)}
 	default:
 		right, lines = t.Badge(ui.ToneAttention, "not indexed"),
 			[]string{t.Muted.Render("decisions only"), t.Muted.Render("no index run yet")}

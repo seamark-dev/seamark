@@ -11,6 +11,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // ovPhase is one step of an index build as the progress panel shows it.
@@ -229,14 +230,14 @@ func ovForward(id int, ch chan<- tea.Msg) func(services.IndexEvent) {
 }
 
 // openBuild opens the build confirmation, unless another mutation runs
-// or the index is newer than this binary.
+// or a build is refused. The refusal names the next route.
 func (o *overview) openBuild() tea.Cmd {
 	if o.st.busy() {
 		return toast(ui.ToneAttention, "Another operation is running: "+o.st.mutation)
 	}
 
-	if !o.canBuild() {
-		return toast(ui.ToneAttention, "A newer seamark wrote this index. This binary never rebuilds it.")
+	if why := o.st.indexBuildRefusal(); why != "" {
+		return toast(ui.ToneAttention, ovSentenceEnd(why))
 	}
 
 	o.confirm = true
@@ -244,10 +245,35 @@ func (o *overview) openBuild() tea.Cmd {
 	return nil
 }
 
-// canBuild reports whether a build is offered. A database from a newer
-// seamark is never rebuilt, because that would discard its data.
+// canBuild reports whether a build is offered.
 func (o *overview) canBuild() bool {
-	return !o.indexNewer()
+	return o.st.indexBuildRefusal() == ""
+}
+
+// buildRefusal returns why a build must not run, in a phrase with the
+// next route, or "". A database from a newer seamark is never rebuilt,
+// because that would discard its data. The service decides the other
+// refusals at read time, because a view must not read the disk. Every
+// route that names a build asks here, so the key and the text agree.
+func buildRefusal(p workspace.IndexProbe, d workspace.DatabaseFacts) string {
+	switch {
+	case p.State == workspace.IndexNewer:
+		return "a newer seamark wrote this index. This binary never rebuilds it"
+	case d.BuildBlock != nil:
+		return ui.ErrText(d.BuildBlock)
+	}
+
+	return ""
+}
+
+// indexBuildRefusal is buildRefusal for the read of Overview. A source
+// that has not loaded refuses nothing, and the engine still decides.
+func (st *state) indexBuildRefusal() string {
+	if !st.index.loaded {
+		return ""
+	}
+
+	return buildRefusal(st.index.value.Probe, st.index.value.Database)
 }
 
 // startBuild claims the mutation slot and starts the build. A second
@@ -434,9 +460,16 @@ func (o *overview) buildModal(w, h int) string {
 
 // resultHints are the keys of a finished build.
 func (o *overview) resultHints() string {
-	return o.st.theme.Hints([]key.Binding{
-		ui.WithHelp(ui.Nav.Enter, "enter", "close"), ui.WithHelp(ovKeys.Build, "b", "build again"),
-	})
+	return o.st.theme.Hints(o.resultKeys())
+}
+
+// resultKeys are the keys of a finished build. A refused build offers no
+// second try.
+func (o *overview) resultKeys() []key.Binding {
+	again := ui.WithHelp(ovKeys.Build, "b", "build again")
+	again.SetEnabled(o.canBuild())
+
+	return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "close"), again}
 }
 
 // elapsed renders the build duration so far, or in total. A finished

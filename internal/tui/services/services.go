@@ -109,7 +109,10 @@ type Setup interface {
 	PlanSetup(setups []integration.ClientSetup) (*SetupPreview, error)
 	// ApplySetup applies exactly the reviewed plan.
 	ApplySetup(p *SetupPreview) (integration.SetupResult, error)
-	// BuildIndex runs a local index build. It cannot be cancelled.
+	// BuildIndex runs a local index build. It cannot be cancelled. It
+	// refuses the database of another repository with an error that
+	// names the recorded root and the next route, and it writes nothing
+	// then.
 	BuildIndex(force bool, progress func(IndexEvent)) (*index.Summary, error)
 }
 
@@ -223,6 +226,9 @@ type IndexView struct {
 	// Policy summarizes the gate policy. It does not need the index, so
 	// it is filled in every index state.
 	Policy PolicySummary
+	// Database holds the answers about the index database that need the
+	// disk, because a view must not read it.
+	Database workspace.DatabaseFacts
 }
 
 // PolicySummary is the typed rule count of the gate policy, for the
@@ -384,6 +390,14 @@ func (e *engine) Doctor() *doctor.Report {
 }
 
 func (e *engine) Index() IndexView {
+	view := e.indexView()
+	view.Database = e.databaseFacts(view.Probe)
+
+	return view
+}
+
+// indexView reads the probe, the semantic health, and the gate policy.
+func (e *engine) indexView() IndexView {
 	policy := summarizePolicy(e.ws.Root)
 
 	probe := workspace.Probe(e.ws)
@@ -512,6 +526,10 @@ func (e *engine) BuildIndex(force bool, progress func(IndexEvent)) (*index.Summa
 		return nil, ErrBusy
 	}
 	defer e.mu.Unlock()
+
+	if err := e.buildBlock(); err != nil {
+		return nil, err
+	}
 
 	return index.Run(index.Options{
 		Root:   e.ws.Root,

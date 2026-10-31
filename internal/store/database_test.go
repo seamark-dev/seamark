@@ -1,8 +1,10 @@
 package store
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -89,4 +91,58 @@ func TestClassifyDatabaseWithoutAFileReadsThePaths(t *testing.T) {
 	filled := databaseRoot(t)
 	assert.Equal(t, DatabaseOther, ClassifyDatabase(filled, filepath.Join(t.TempDir(), "new.db")),
 		"a missing --db file is not the existing default database")
+}
+
+// TestProbeRootReadsEverySchemaAndChangesNothing covers the databases
+// that the version probe stops at. Their root still names their owner.
+func TestProbeRootReadsEverySchemaAndChangesNothing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+
+	st, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, st.SetMeta(MetaRepoRoot, "/work/origin"))
+	require.NoError(t, st.Close())
+
+	for _, version := range []int{SupportedSchema(), SupportedSchema() - 1, SupportedSchema() + 1} {
+		raw, err := sql.Open("sqlite", dsn(path, "_pragma=busy_timeout(5000)"))
+		require.NoError(t, err)
+
+		_, err = raw.Exec(`UPDATE meta SET value = ? WHERE key = ?`, strconv.Itoa(version), MetaSchemaVersion)
+		require.NoError(t, err)
+		require.NoError(t, raw.Close())
+
+		root, err := ProbeRoot(path)
+		require.NoError(t, err)
+		assert.Equal(t, "/work/origin", root)
+
+		stamped, err := ProbeVersion(path)
+		require.NoError(t, err)
+		assert.Equal(t, version, stamped, "the probe migrates nothing")
+	}
+}
+
+func TestProbeRootWithoutARoot(t *testing.T) {
+	empty := filepath.Join(t.TempDir(), "empty.db")
+	require.NoError(t, os.WriteFile(empty, nil, 0o644))
+
+	root, err := ProbeRoot(empty)
+	require.NoError(t, err, "a new empty file holds no root")
+	assert.Empty(t, root)
+
+	path := filepath.Join(t.TempDir(), "index.db")
+	st, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+
+	root, err = ProbeRoot(path)
+	require.NoError(t, err, "no index run recorded a root")
+	assert.Empty(t, root)
+}
+
+func TestProbeRootFailsOnAFileThatIsNoDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "garbage.db")
+	require.NoError(t, os.WriteFile(path, []byte("this file is no database, and it is long enough to read"), 0o644))
+
+	_, err := ProbeRoot(path)
+	assert.Error(t, err)
 }

@@ -35,7 +35,9 @@
 // it. A sample is then unavailable. These Phase 4 rules have no --db
 // exception. A maintenance commit refuses a foreign root unless the
 // database is another file than the default path names. The file
-// comparison holds for a relative path and a link spelling.
+// comparison holds for a relative path and a link spelling. An index
+// build refuses a database that records another repository, also with an
+// older schema, so every caller of BuildIndex keeps that root.
 //
 // Delivery keeps the filesystem root at the workspace root, not at R. It
 // reads applied ledger rows when available, but a missing ledger does

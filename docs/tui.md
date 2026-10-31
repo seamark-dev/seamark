@@ -109,7 +109,10 @@ The state of the workspace at a glance.
 - **Index build** (`b`): a local parse plus git history mining that writes
   the index database; `enter` or `y` confirms. It never fetches reviews or
   runs a distillation, and it cannot be cancelled, so `q` offers to exit
-  after it finishes.
+  after it finishes. `b` refuses a database that records another
+  repository, at any schema, and names the console of that root. It also
+  refuses a default path that links to the database of another worktree,
+  and a `--db` file whose recorded root cannot be read.
 
 Plain route: `seamark status`, `seamark doctor`, `seamark index`. Exact
 rules: the header of `internal/tui/overview_learn.go`.
@@ -629,7 +632,10 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
   sample refuse in the same way. The pin form then treats the link of
   every pin as unknown, because the index records another repository.
   Its review names that root. Pins names no build here, because `b`
-  writes this workspace into that database and moves its recorded root.
+  refuses a database that records another repository: the build would
+  move that root. The lesson settings name the console of the recorded
+  root, and `o` opens no build. A `--db` that names the default database
+  through a link or a relative path counts as the default database.
 - The new pin, pin edit, pin removal, mute, and delivery saves refuse a
   `.seamark/lessons.yaml` with CRLF line breaks. They also refuse a file
   with more than one hard link: "replacing this file would break its

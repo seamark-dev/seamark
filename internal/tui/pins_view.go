@@ -1354,9 +1354,7 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 		}
 
 		if in.Index.State != workspace.IndexReady {
-			out = append(out, propLines(t.Muted, "Build the index from Overview (press 1, then b), or run this "+
-				"command in a shell:", w)...)
-			out = append(out, commandText(t, "seamark index"))
+			out = append(out, p.buildLines(w)...)
 		}
 
 		return out
@@ -1480,6 +1478,21 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 	return append(out, p.gateLines(w)...)
 }
 
+// buildLines names the build that an index needs, or the refusal of a
+// build with its route. The shell command goes with the key, because it
+// does not write the database of the console.
+func (p *pinsView) buildLines(w int) []string {
+	t := p.st.theme
+
+	if why := pinsBuildRefusal(p.st); why != "" {
+		return propLines(t.Muted, ovSentenceEnd(why), w)
+	}
+
+	out := propLines(t.Muted, "Build the index from Overview (press 1, then b), or run this command in a shell:", w)
+
+	return append(out, commandText(t, "seamark index"))
+}
+
 // authorRootLines says where a pin write works, while only the
 // authoring rule finds another root. With
 // --db, retarget and prune accept another root (pinsForeignRoot), but
@@ -1505,6 +1518,10 @@ func (p *pinsView) foreignLines(w int) []string {
 	out := propNote(t, ui.ToneAttention, "Retarget and prune are off: the index of this workspace records another "+
 		"repository, "+ui.OneLine(root)+". A change would write "+ui.OneLine(filepath.Join(root, pinfile.File))+
 		" and the ledger of this workspace, not "+ui.OneLine(filepath.Join(p.st.svc.Root(), pinfile.File))+".", w)
+
+	if pinsDBRoot(p.st) != "" {
+		return append(out, propLines(t.Muted, ovSentenceEnd(pinOpenRoot(root)), w)...)
+	}
 
 	out = append(out, propLines(t.Muted, "Build the index of this checkout from Overview (press 1, then b), or "+
 		"run this command here, then press r:", w)...)
@@ -1697,14 +1714,14 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 			head: []string{t.Unknown.Render(g.Unknown) + " " + t.Title.Render("Unknown which pins are missing")},
 			body: reason + " Seamark never reads an error as a missing pin.",
 		}
-		p.unknownRoute(in, &m)
+		p.unknownRoute(in, &m, w)
 		count = t.Muted.Render("?")
 	case p.filter == pinSuperseded && in.LedgerErr != nil:
 		m = paneMessage{
 			head: []string{t.Unknown.Render(g.Unknown) + " " + t.Title.Render("The history is unknown")},
 			body: "The superseded proposals could not be read: " + pinReason(in.LedgerErr.Error()) + ".",
 		}
-		p.unknownRoute(in, &m)
+		p.unknownRoute(in, &m, w)
 		count = t.Muted.Render("?")
 	case p.region != "" || p.text != "":
 		m = p.filterMessage()
@@ -1724,15 +1741,19 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 }
 
 // unknownRoute adds the next valid route to the message of a history
-// filter that a read error hides. A missing index has the build route; an
-// unreadable pin file needs a fix; any other error may pass on a new
-// read. The installed pins stay listed, so f leads back to them. The
-// routes go in the next lines, because a short box clips the body first.
-func (p *pinsView) unknownRoute(in *maintain.Inspection, m *paneMessage) {
+// filter that a read error hides. A missing index has the build route,
+// unless a build is refused; an unreadable pin file needs a fix; any
+// other error may pass on a new read. The installed pins stay listed, so
+// f leads back to them. The routes go in the next lines, because a short
+// box clips the body first.
+func (p *pinsView) unknownRoute(in *maintain.Inspection, m *paneMessage, w int) {
 	t := p.st.theme
 	key := func(k string) string { return t.Key.Render(k) }
+	why := pinsBuildRefusal(p.st)
 
 	switch {
+	case in.Index.State != workspace.IndexReady && why != "":
+		m.next = append(m.next, propLines(t.Muted, ovSentenceEnd(why), min(ui.BoxInner(w), paneTextWidth))...)
 	case in.Index.State != workspace.IndexReady:
 		m.next = append(m.next,
 			t.Muted.Render("Press ")+key("1")+t.Muted.Render(", then ")+key("b")+t.Muted.Render(" to build the index, or run:"),

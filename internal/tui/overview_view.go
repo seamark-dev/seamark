@@ -633,6 +633,10 @@ func (o *overview) statusLines(it ovItem, w int) []string {
 func (o *overview) nextLines(it ovItem, w int) []string {
 	t := o.st.theme
 
+	if it.route != "" {
+		return ovStyled(t.Body.Render, ui.Wrap(ui.Diag(it.route), w))
+	}
+
 	var lines []string
 
 	switch it.act.kind {

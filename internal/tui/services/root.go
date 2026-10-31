@@ -3,6 +3,8 @@ package services
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 
 	"github.com/seamark-dev/seamark/internal/store"
@@ -23,6 +25,33 @@ import (
 // unless the database is another file than the default path names.
 var ErrForeignRoot = errors.New("the index records another repository root")
 
+// errRootUnknown reports a database whose recorded root does not read. A
+// build then refuses, because the database can belong to another
+// repository.
+var errRootUnknown = errors.New("the recorded root of the index cannot be read")
+
+// ForeignRootError is an ErrForeignRoot of one read. It carries the answer
+// about the database, because a settings block reaches the view only as
+// an error, and a view must not read the disk.
+type ForeignRootError struct {
+	// Root is the root that the index records.
+	Root string
+	// Workspace is the workspace root.
+	Workspace string
+	// OtherDB reports a database that is not the default database of the
+	// workspace. A build then refuses, so the route is the console of Root.
+	OtherDB bool
+}
+
+// Error names both roots and no route, because each caller adds the route
+// of its screen.
+func (e *ForeignRootError) Error() string {
+	return fmt.Sprintf("%v (%s), not this workspace (%s)", ErrForeignRoot, e.Root, e.Workspace)
+}
+
+// Unwrap makes the error match ErrForeignRoot.
+func (e *ForeignRootError) Unwrap() error { return ErrForeignRoot }
+
 // foreignRoot returns an error that wraps ErrForeignRoot when R names
 // another directory than the workspace root, else nil. The Phase 4
 // lessons operations use it with no --db exception (P4-16). They write
@@ -33,7 +62,9 @@ func (e *engine) foreignRoot(probe workspace.IndexProbe) error {
 		return nil
 	}
 
-	return fmt.Errorf("%w (%s), not this workspace (%s)", ErrForeignRoot, probe.Root, e.ws.Root)
+	return &ForeignRootError{
+		Root: probe.Root, Workspace: e.ws.Root, OtherDB: e.databaseKind() != store.DatabaseDefault,
+	}
 }
 
 // ownRoot refuses a maintenance write when the default path of this
@@ -44,17 +75,59 @@ func (e *engine) foreignRoot(probe workspace.IndexProbe) error {
 // root normal for maintenance, so the check compares files, not path
 // strings. A link spelling of the default path keeps the refusal. The
 // Pins view hides the keys for the same case; this check holds for
-// every caller.
+// every caller. A default path that links outside the root refuses a
+// build too, so its route is the console of the recorded root.
 func (e *engine) ownRoot(probe workspace.IndexProbe) error {
-	if e.databaseKind() == store.DatabaseOther {
+	kind := e.databaseKind()
+	if kind == store.DatabaseOther {
 		return nil
 	}
 
-	if err := e.foreignRoot(probe); err != nil {
+	err := e.foreignRoot(probe)
+
+	switch {
+	case err == nil:
+		return nil
+	case kind == store.DatabaseLinked:
+		return fmt.Errorf("%w; open the console in %s", err, probe.Root)
+	default:
 		return fmt.Errorf("%w; run seamark index here first", err)
 	}
+}
 
-	return nil
+// buildBlock returns why an index build must not run, or nil. A build
+// writes this workspace into the database and records it as the root.
+// The database of another repository then loses its root, its pins, and
+// the maintenance of its own checkout. The default database has no such
+// owner, and a rebuild is the fix of a copied checkout. A database that
+// does not exist, records no root, or records this workspace builds too.
+//
+// The probe stops before the root for an older or a newer schema, so
+// this reads the root by itself. A root that does not read fails closed.
+func (e *engine) buildBlock() error {
+	if e.databaseKind() == store.DatabaseDefault {
+		return nil
+	}
+
+	_, err := os.Stat(e.ws.DBPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+
+	recorded := ""
+	if err == nil {
+		recorded, err = store.ProbeRoot(e.ws.DBPath)
+	}
+
+	switch {
+	case err != nil:
+		return fmt.Errorf("%w (%s: %v), and a build could move the root of another repository; "+
+			"fix the file or use another --db", errRootUnknown, e.ws.DBPath, err)
+	case recorded == "", sameDir(recorded, e.ws.Root):
+		return nil
+	default:
+		return fmt.Errorf("%w, so a build here would move it; open the console in %s", ErrForeignRoot, recorded)
+	}
 }
 
 // databaseKind relates the database of this workspace to its root. It
@@ -66,7 +139,7 @@ func (e *engine) databaseKind() store.DatabaseKind {
 // databaseFacts answers what a view must not read from the disk. It uses
 // the rules of the engine, so the screens and the commits agree.
 func (e *engine) databaseFacts(probe workspace.IndexProbe) workspace.DatabaseFacts {
-	facts := workspace.DatabaseFacts{Kind: e.databaseKind()}
+	facts := workspace.DatabaseFacts{Kind: e.databaseKind(), BuildBlock: e.buildBlock()}
 
 	if e.foreignRoot(probe) != nil {
 		facts.ForeignRoot = probe.Root
