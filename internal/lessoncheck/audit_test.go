@@ -29,11 +29,11 @@ func discardedRecord() AuditRecord {
 	return AuditRecord{Kind: AuditBaselineDiscarded, Caller: CallerHook, Discarded: DiscardExpired}
 }
 
-// TestLessonCheckAuditAppendIsHardened proves the hardening that the
-// writer copies from gate.Audit: owner-only files, a refused link at
-// every path, the tightened rotated generation, the rotation by size
-// and by age, the expiry of the rotated generation, the closed lists,
-// and the output caps.
+// TestLessonCheckAuditAppendIsHardened proves the log hardening that the
+// writer gets from privatedir: owner-only files, a refused link at every
+// path, the tightened rotated generation, the rotation by size and by
+// age, and the expiry of the rotated generation. It also proves the
+// closed lists and the output caps of the writer.
 func TestLessonCheckAuditAppendIsHardened(t *testing.T) {
 	t.Run("the files are owner-only and .seamark gets 0700", func(t *testing.T) {
 		root := t.TempDir()
@@ -252,6 +252,15 @@ func TestLessonCheckAuditAppendIsHardened(t *testing.T) {
 		assert.True(t, strings.HasPrefix(got.Error, "send: Bearer [REDACTED]"), got.Error)
 		assert.Equal(t, strings.ToValidUTF8(got.Error, "?"), got.Error, "the cut keeps whole runes")
 	})
+}
+
+// TestLessonCheckAuditCutBytesKeepsRunes pins the cut without a suffix,
+// also on invalid UTF-8, where no rune start leaves nothing.
+func TestLessonCheckAuditCutBytesKeepsRunes(t *testing.T) {
+	assert.Equal(t, "short", cutBytes("short", 5))
+	assert.Equal(t, "é", cutBytes("éé", 3))
+	assert.Equal(t, "a", cutBytes("ab\x80\x80\x80\x80", 4))
+	assert.Empty(t, cutBytes(strings.Repeat("\x80", 8), 4))
 }
 
 // TestLessonCheckAuditCarriesNoContent proves the no-content rule of the

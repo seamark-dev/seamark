@@ -20,6 +20,23 @@ func TestSanitizeStripsC1AndBidiControls(t *testing.T) {
 	assert.Equal(t, "héllo wörld", Sanitize("héllo wörld"), "printable text outside ASCII stays")
 }
 
+func TestCutBytes(t *testing.T) {
+	assert.Equal(t, "short", CutBytes("short", 10))
+	assert.Equal(t, "exact", CutBytes("exact", 5), "a text that fits is never cut")
+	assert.Equal(t, "lon", CutBytes("longer", 3))
+	assert.Equal(t, "", CutBytes("anything", 0))
+	assert.Equal(t, "é", CutBytes("éa", 2), "the limit ends on a rune boundary")
+	assert.Equal(t, "é", CutBytes("éé", 3), "the cut moves back to the rune start")
+	assert.Equal(t, "", CutBytes("日本", 2), "the first rune does not fit")
+}
+
+func TestCutBytesOnInvalidUTF8(t *testing.T) {
+	assert.Equal(t, "a", CutBytes("ab\x80\x80\x80\x80", 4), "the rune start stops the walk back")
+	assert.Equal(t, "", CutBytes("\x80\x80\x80\x80\x80\x80\x80\x80", 7),
+		"the walk back has no cap, so no rune start cuts to nothing")
+	assert.Equal(t, "ab\xff", CutBytes("ab\xffcd", 3), "an invalid lead byte counts as a rune start")
+}
+
 func TestTruncate(t *testing.T) {
 	assert.Equal(t, "short", Truncate("short", 10))
 	assert.Equal(t, "exact", Truncate("exact", 5))

@@ -1,7 +1,6 @@
 package lessoncheck
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,6 +99,11 @@ const (
 	privateDirMode  os.FileMode = 0o700
 	privateFileMode os.FileMode = 0o600
 )
+
+// noFollowFlag makes a write-side open refuse a symbolic link at the
+// system call. So a link that appears between the Lstat check and the
+// open cannot redirect a pending record or an audit record.
+const noFollowFlag = privatedir.NoFollow
 
 // errUnsafePath is the error value that the privatedir helpers wrap
 // when they refuse an entry. Each caller in this package gives its own
@@ -278,11 +282,11 @@ func evidenceLines(evidence []Evidence) []int {
 // root is the git top level that holds .seamark. It sets the schema,
 // sets the time when TS is empty, and applies the output caps.
 //
-// The writer copies the hardening of gate.Audit. One exclusive lock
-// spans the tighten, rotate, and append steps. The files are 0600, and
-// every open refuses a symbolic link. The record only reports what
-// already happened. So a caller never changes a decision, an outcome, or
-// an exit code because of the returned error.
+// The writer uses the log hardening of privatedir, as gate.Audit does.
+// One exclusive lock spans the tighten, rotate, and append steps. The
+// files are 0600, and every open refuses a symbolic link. The record only
+// reports what already happened. So a caller never changes a decision, an
+// outcome, or an exit code because of the returned error.
 func AppendAudit(root string, rec AuditRecord) error {
 	rec, err := boundRecord(rec)
 	if err != nil {
@@ -303,7 +307,7 @@ func AppendAudit(root string, rec AuditRecord) error {
 		return err
 	}
 
-	unlock, err := lockAudit(dir)
+	unlock, err := privatedir.LockLog(filepath.Join(dir, auditLockFile), privateFileMode, linkRefused)
 	if err != nil {
 		return err
 	}
@@ -311,11 +315,11 @@ func AppendAudit(root string, rec AuditRecord) error {
 
 	path := filepath.Join(dir, auditFile)
 
-	if err := refuseLink(path); err != nil {
+	if err := privatedir.RefuseLink(path, linkRefused); err != nil {
 		return err
 	}
 
-	if err := tightenAndRotate(path, recordTime(rec)); err != nil {
+	if err := privatedir.RotateLog(path, maxAuditBytes, maxAuditAge, privateFileMode, recordTime(rec)); err != nil {
 		return err
 	}
 
@@ -421,143 +425,14 @@ func boundPins(pins []AuditPin) []AuditPin {
 	return out
 }
 
-// cutBytes bounds s to limit bytes on a rune boundary.
+// cutBytes bounds s to limit bytes on a rune boundary. It adds no suffix.
 func cutBytes(s string, limit int) string {
-	if len(s) <= limit {
-		return s
-	}
-
-	cut := limit
-	for cut > 0 && s[cut]&0xC0 == 0x80 {
-		cut--
-	}
-
-	return s[:cut]
+	return render.CutBytes(s, limit)
 }
 
-// lockAudit takes the exclusive lock of the stream. A platform without
-// flock gets no lock (perm_other.go), and the single-write append keeps
-// whole lines there.
-func lockAudit(dir string) (func(), error) {
-	path := filepath.Join(dir, auditLockFile)
-
-	if err := refuseLink(path); err != nil {
-		return nil, err
-	}
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|noFollowFlag, privateFileMode)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := f.Chmod(privateFileMode); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-
-	if err := lockFile(f); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-
-	return func() { _ = unlockFile(f); _ = f.Close() }, nil
-}
-
-// refuseLink returns an error when path is a symbolic link. A write or a
-// chmod through a planted link can change a file outside the repository.
-// The opens also pass noFollowFlag, as a second guard against a link
-// that appears after this check.
-func refuseLink(path string) error {
-	info, err := os.Lstat(path)
-
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return nil
-	case err != nil:
-		return err
-	case info.Mode()&os.ModeSymlink != 0:
-		return fmt.Errorf("%w: %s is a symbolic link", errUnsafePath, path)
-	}
-
-	return nil
-}
-
-// tightenAndRotate runs under the lock. It sets the mode before the
-// rotation, because a rename keeps the mode, and a loose rotated file
-// would keep the history readable for other users. The live log
-// rotates when it reaches maxAuditBytes or when its oldest record is
-// older than maxAuditAge at now, the time of the record that the writer
-// appends. The writer removes a rotated generation older than
-// maxAuditAge. Its modification time is the time of its newest record.
-// The file system sets that time, so this check uses the wall clock.
-func tightenAndRotate(path string, now time.Time) error {
-	rotated := path + ".1"
-
-	// The rotated generation gets the rules of the live log: a link is
-	// removed and never followed, an old generation expires, and a loose
-	// mode is set to 0600.
-	if info, err := os.Lstat(rotated); err == nil {
-		switch {
-		case info.Mode()&os.ModeSymlink != 0, time.Since(info.ModTime()) > maxAuditAge:
-			if err := os.Remove(rotated); err != nil {
-				return err
-			}
-		case info.Mode().Perm() != privateFileMode:
-			if err := os.Chmod(rotated, privateFileMode); err != nil {
-				return err
-			}
-		}
-	}
-
-	// A missing live log has nothing to tighten or rotate.
-	f, err := openRead(path)
-	if err != nil || f == nil {
-		return err
-	}
-
-	// The chmod acts on the open file, never on a path that a writer can
-	// swap after the check.
-	chmodErr := f.Chmod(privateFileMode)
-	info, statErr := f.Stat()
-	stale := oldestRecordStale(f, now)
-
-	_ = f.Close()
-
-	if err := errors.Join(chmodErr, statErr); err != nil {
-		return err
-	}
-
-	if info.Size() >= maxAuditBytes || stale {
-		// A rename replaces a link at the destination itself, not its
-		// target.
-		return os.Rename(path, rotated)
-	}
-
-	return nil
-}
-
-// oldestRecordStale reads the time of the first record of an open log.
-// A first line that does not read or parse counts as stale too, because
-// a rotation moves it aside and keeps it readable in the rotated
-// generation.
-func oldestRecordStale(f *os.File, now time.Time) bool {
-	// Every append reads this line, so the first buffer is small. The
-	// scanner grows it up to 1 MiB when a first line is longer.
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 4<<10), 1<<20)
-
-	if !sc.Scan() {
-		// An empty log has nothing to age. A read error counts as stale.
-		return sc.Err() != nil
-	}
-
-	var first struct {
-		TS time.Time `json:"ts"`
-	}
-
-	if err := json.Unmarshal(sc.Bytes(), &first); err != nil || first.TS.IsZero() {
-		return true
-	}
-
-	return now.Sub(first.TS) > maxAuditAge
+// linkRefused builds the error for a symbolic link at an audit path. It
+// wraps errUnsafePath, because the callers in this package check for that
+// value.
+func linkRefused(path string) error {
+	return fmt.Errorf("%w: %s is a symbolic link", errUnsafePath, path)
 }

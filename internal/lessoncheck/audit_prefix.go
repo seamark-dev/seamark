@@ -133,9 +133,8 @@ func openGenerations(path string, between func(attempt int)) (live, rotated *os.
 }
 
 // openRead opens an audit file for reading and refuses a symbolic link.
-// The reader and the writer both call it, so one open rule covers every
-// read of the stream. A missing file gives a nil file and no error. The
-// function returns every other error.
+// A missing file gives a nil file and no error. The function returns
+// every other error.
 func openRead(path string) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|noFollowFlag, 0)
 	if errors.Is(err, os.ErrNotExist) {

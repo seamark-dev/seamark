@@ -3,7 +3,10 @@
 // input (git metadata, source-derived signatures) is handled once.
 package render
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // Sanitize strips control characters before untrusted text reaches a
 // terminal or editor: commit titles and authors come straight from git
@@ -50,6 +53,27 @@ func Truncate(s string, n int) string {
 	}
 
 	return string(runes[:n-1]) + "…"
+}
+
+// CutBytes returns s when it fits in limit bytes. Else it cuts s at or
+// before limit, on a rune boundary, so a byte bound never splits a rune.
+// The limit must not be negative, because a slice bound cannot be.
+//
+// CutBytes adds no suffix, because the callers differ on purpose: one adds
+// a mark past the limit, others keep it inside the limit, and others add
+// none. The walk back has no cap. So a run of continuation bytes in
+// invalid UTF-8 moves the cut to the nearest rune start, or to 0.
+func CutBytes(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut]
 }
 
 // SanitizeBlock strips control characters from multi-line untrusted

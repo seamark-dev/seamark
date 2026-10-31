@@ -407,6 +407,32 @@ func TestAuditAppendsOneLinePerDecision(t *testing.T) {
 	assert.Contains(t, string(data), `"kind":"gate"`)
 }
 
+func TestAuditKeepsLongFreshFirstLine(t *testing.T) {
+	p, c, root := testSetup(t)
+
+	// The first line is past the first scanner buffer but inside the
+	// scanner limit. It stays readable, so a fresh log does not rotate.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	ts := time.Now().UTC().Format(time.RFC3339)
+	line := `{"ts":"` + ts + `","pad":"` + strings.Repeat("x", 512<<10) + `"}` + "\n"
+	require.NoError(t, os.WriteFile(auditPath(root), []byte(line), 0o600))
+
+	require.NoError(t, Audit(root, "gate", "ls", p, evalCmd(t, p, c, root, "ls")))
+	assert.NoFileExists(t, auditPath(root)+".1", "a long fresh line must not rotate")
+}
+
+// TestTruncateCutsOnARuneBoundary pins the cut of a raw input. The
+// marker comes after the limit. A run of continuation bytes in invalid
+// UTF-8 moves the cut back to the nearest rune start.
+func TestTruncateCutsOnARuneBoundary(t *testing.T) {
+	const marker = "…[truncated]"
+
+	assert.Equal(t, "short", truncate("short", 5), "a text that fits gets no marker")
+	assert.Equal(t, "é"+marker, truncate("éé", 3), "the cut keeps whole runes")
+	assert.Equal(t, "a"+marker, truncate("ab\x80\x80\x80\x80", 4), "the rune start stops the walk back")
+	assert.Equal(t, marker, truncate(strings.Repeat("\x80", 20), 8), "no rune start leaves only the marker")
+}
+
 func TestEvalCommandCollectsNames(t *testing.T) {
 	p, c, root := testSetup(t)
 
