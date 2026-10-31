@@ -11,12 +11,30 @@ import "strings"
 // the viewer's terminal (title changes, cursor moves, fake hyperlinks).
 func Sanitize(s string) string {
 	return strings.Map(func(r rune) rune {
-		if (r < 0x20 && r != '\t') || r == 0x7f {
+		if r != '\t' && isUnsafeRune(r) {
 			return -1
 		}
 
 		return r
 	}, s)
+}
+
+// isUnsafeRune reports whether a terminal can act on r instead of
+// showing it. Both sanitizers use it, so a one-line field and a block
+// get the same protection.
+func isUnsafeRune(r rune) bool {
+	switch {
+	case r < 0x20 || r == 0x7f:
+		return true
+	case r >= 0x80 && r <= 0x9f:
+		// C1 controls: U+009B is a one-byte CSI on some terminals.
+		return true
+	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+		// Bidirectional overrides and isolates reorder display text.
+		return true
+	}
+
+	return false
 }
 
 // Truncate shortens s to at most n runes; byte slicing would cut
@@ -39,16 +57,7 @@ func Truncate(s string, n int) string {
 // bidirectional overrides, which can reorder or hide terminal text.
 func SanitizeBlock(s string) string {
 	return strings.Map(func(r rune) rune {
-		switch {
-		case r == '\n' || r == '\t':
-			return r
-		case r < 0x20 || r == 0x7f:
-			return -1
-		case r >= 0x80 && r <= 0x9f:
-			// C1 controls: U+009B is a one-byte CSI on some terminals.
-			return -1
-		case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
-			// Bidirectional overrides and isolates reorder display text.
+		if r != '\n' && r != '\t' && isUnsafeRune(r) {
 			return -1
 		}
 

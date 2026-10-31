@@ -15,6 +15,11 @@ func TestSanitize(t *testing.T) {
 	assert.Equal(t, "del", Sanitize("del\x7f"))
 }
 
+func TestSanitizeStripsC1AndBidiControls(t *testing.T) {
+	assert.Equal(t, "2Jevilx", Sanitize("\u009b2J\u202eevil\u2066x\u2069"))
+	assert.Equal(t, "héllo wörld", Sanitize("héllo wörld"), "printable text outside ASCII stays")
+}
+
 func TestTruncate(t *testing.T) {
 	assert.Equal(t, "short", Truncate("short", 10))
 	assert.Equal(t, "exact", Truncate("exact", 5))
