@@ -203,6 +203,22 @@ func TestAuditRefusesSymlinkedLog(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm(), "target permissions must be untouched")
 }
 
+func TestAuditRefusesSymlinkedLock(t *testing.T) {
+	p, c, root := testSetup(t)
+
+	// A clone can commit a link at the lock path. The gate must not
+	// create the link target outside the repository.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+
+	victim := filepath.Join(root, "victim.txt")
+	require.NoError(t, os.Symlink(victim, filepath.Join(root, ".seamark", "audit.lock")))
+
+	err := Audit(root, "gate", "ls", p, evalCmd(t, p, c, root, "ls"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+	assert.NoFileExists(t, victim, "the link target must stay absent")
+}
+
 func TestAuditTightensRetainedGeneration(t *testing.T) {
 	p, c, root := testSetup(t)
 

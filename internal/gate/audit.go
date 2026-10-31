@@ -113,8 +113,22 @@ func Audit(root, kind, input string, p *Policy, d *Decision) error {
 // platforms without flock it degrades to best-effort single-writer
 // behaviour (see lockFile).
 func lockAudit(dir string) (func(), error) {
-	f, err := os.OpenFile(filepath.Join(dir, "audit.lock"), os.O_CREATE|os.O_WRONLY, 0o600)
+	path := filepath.Join(dir, "audit.lock")
+
+	// A cloned repository can hold a link at this path. An open through
+	// the link creates a file outside the repository, or locks and
+	// chmods an existing one.
+	if err := refuseSymlink(path); err != nil {
+		return nil, err
+	}
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|noFollow, 0o600)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
 		return nil, err
 	}
 
