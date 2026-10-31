@@ -30,9 +30,8 @@ import (
 // froze the earlier CLI loops; each golden that a move changed names the
 // defect of the A0 report (§7) that it replaces. Some goldens still pin
 // known CLI defects on purpose. These are the wider selection and the
-// texts of the CLI extraction (A0 D4 to D7). The root of a copied
-// checkout is one too (A0 D15). Each waits for its own decision, and a
-// comment names each one.
+// texts of the CLI extraction (A0 D4 to D7). Each waits for its own
+// decision, and a comment names each one.
 // The console must not copy them. A fix updates the golden in the same
 // change.
 
@@ -563,11 +562,9 @@ func TestLessonsPruneGoldenRefusals(t *testing.T) {
 }
 
 // A copied checkout keeps the index of the original, and that index
-// records the original root (A0 D15, open for a decision). The shared
-// engine has no root check of its own: the console refuses the case in
-// its service layer, before a commit. So the CLI prune still changes
-// the pin file of the recorded root and the ledger of the copy. It did
-// the same before the move to the shared engine.
+// records the original root. A prune would change the pin file of the
+// original and the ledger of the copy, so it refuses before any write.
+// The refusal uses the rule of the console, workspace.CheckRootWrite.
 func TestLessonsPruneGoldenCopiedWorkspace(t *testing.T) {
 	original := pruneGoldenWorkspace(t)
 	maintainWriteConfig(t, original, maintainGateOn)
@@ -576,24 +573,20 @@ func TestLessonsPruneGoldenCopiedWorkspace(t *testing.T) {
 	require.NoError(t, os.CopyFS(copied, os.DirFS(original)))
 	maintainWriteLessons(t, copied, "pin: []\n", 0o644)
 
-	stdout, stderr := goldenRun(t, copied, "lessons", "--prune", "p2")
-	assert.Equal(t, `pruned 1 pin(s) from .seamark/lessons.yaml, 1 proposal(s) marked superseded — review the diff and commit it
-  p2    retire-me
-`, stdout)
+	stdout, stderr, errText := maintainRunErr(t, copied, "lessons", "--prune", "p2")
+	assert.Empty(t, stdout)
 	assert.Empty(t, stderr)
+	assert.Equal(t, "the index of this checkout records another repository ("+original+
+		"), so this command would change the pin file there and the ledger in this database; "+
+		"nothing changed; run `seamark index` in <root> first, or run this command in "+original, errText)
 
-	// D15: the file of the original loses the pin, and the ledger of the
-	// copy records the prune.
 	got, _ := maintainLessons(t, original)
-	assert.Equal(t, strings.Replace(pruneGoldenLessons, `  - rule: retire-me
-    region: web
-    note: The same rule in another region stays.
-`, "", 1), got)
+	assert.Equal(t, pruneGoldenLessons, got)
 	assert.Equal(t, pruneGoldenLedger, maintainLedger(t, original, 0))
 
 	got, _ = maintainLessons(t, copied)
 	assert.Equal(t, "pin: []\n", got)
-	assert.Equal(t, pruneGoldenSuperseded(2), maintainLedger(t, copied, 0))
+	assert.Equal(t, pruneGoldenLedger, maintainLedger(t, copied, 0))
 }
 
 func TestLessonsPruneGoldenLedgerFailure(t *testing.T) {

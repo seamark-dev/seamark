@@ -633,15 +633,17 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
   sample is unavailable. Settings shows the files of the recorded root
   until the build and says so. After the build the copy reads its own
   `config.yaml`, so `distill.write` can read another value.
-  `seamark lessons --retarget` and `--prune` still edit the pin file of
-  the original repository. Run `seamark index` in the copy before you
-  use it. With `--db` of another repository, retarget, prune, apply, and
+  `seamark lessons --apply`, `--retarget`, and `--prune` refuse there
+  too. Run `seamark index` in the copy, or run the command in the
+  recorded root. With `--db` of another repository, retarget, prune, apply, and
   `config.yaml` saves stay on only when the recorded root owns the
   database: its default path names that file, also through a link, or it
   exists and has no default database. Otherwise they refuse and name the console of
   the recorded root, with this `--db` when the file is a custom database
   outside another checkout. The pin writes, the lesson settings saves, and the
-  sample refuse in the same way. The pin form then treats the link of
+  sample refuse in the same way. The CLI commands `--apply`,
+  `--retarget`, and `--prune` follow the same rule. A route to a custom
+  database names `--db`. The pin form then treats the link of
   every pin as unknown, because the index records another repository.
   Its review names that root. Pins names no build here, because `b`
   refuses a database that records another repository: the build would

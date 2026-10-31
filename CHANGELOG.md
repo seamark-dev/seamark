@@ -40,6 +40,12 @@ model-boundary delivery.
   link or a relative path no longer bypasses the two-repository refusal.
   A prune or apply also refuses a database that the recorded root does
   not own.
+- **Copied checkouts in the CLI.** `seamark lessons --apply`,
+  `--retarget`, and `--prune` refuse when the pin file and the ledger
+  lie in two repositories, as the console does, so a copy no longer
+  writes the pin file of its origin. Run `seamark index` in the copy, or
+  run the command in the recorded root, with `--db` for a custom
+  database. A `--db` that the recorded root owns keeps working.
 - **Config saves.** A Settings save in a copied checkout refuses, so
   it no longer changes the `config.yaml` of the original repository.
   Screens name the build or the console of the recorded root.

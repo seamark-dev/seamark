@@ -26,12 +26,17 @@ import (
 // distill.write. Otherwise, it prints the rendered block for manual
 // insertion. In both modes, applying requires an explicit command that
 // names the proposals.
+//
+// The pin file lies under the recorded root and the ledger in this
+// database, so openPinWriter refuses a split between two repositories.
 func runLessonsApply(cmd *cobra.Command, opts *options, raw string) error {
-	st, root, err := openIndex(opts)
+	st, probe, err := openPinWriter(opts)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
+
+	root := probe.Root
 
 	ids, err := pendingSelection(st, raw)
 	if err != nil {

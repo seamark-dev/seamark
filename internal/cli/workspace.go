@@ -2,9 +2,12 @@ package cli
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -38,8 +41,9 @@ func resolveWorkspace(opts *options) (workspace.Workspace, error) {
 // neither.
 //
 // The root is the repo_root that the index records, not the -C
-// directory. A copied workspace thus reads the original repository
-// (A0 defect D15, kept as is).
+// directory. A copied workspace thus reads the original repository. A
+// command that writes under that root uses openPinWriter, which refuses
+// that case.
 func openIndex(opts *options) (*store.Store, string, error) {
 	st, p, err := openIndexProbe(opts)
 	if err != nil {
@@ -99,4 +103,94 @@ func openIndexProbe(opts *options) (*store.Store, workspace.IndexProbe, error) {
 	}
 
 	return st, p, nil
+}
+
+// openPinWriter opens the index of a command that writes the pin file
+// under the recorded root and the ledger of this database: lessons
+// --apply, --retarget, and --prune. It refuses when the two lie in two
+// repositories, as the console does. The refusal comes before the open,
+// because the open migrates an older schema. It also comes before the
+// deletion replay of each command, which writes the index and the
+// archive.
+//
+// A refused command writes nothing and prints no change to make by
+// hand, also with distill.write off. That answer reads the write gate of
+// the recorded root, and it promises a file that this workspace does not
+// use.
+func openPinWriter(opts *options) (*store.Store, workspace.IndexProbe, error) {
+	var none workspace.IndexProbe
+
+	// Locate widens -C to the git top level also with --db, as the
+	// console does. So a directory inside a copy finds its default
+	// database, and the rule reads that file as the default database.
+	ws, err := workspace.Locate(opts.workspace, opts.dbPath)
+	if err != nil {
+		return nil, none, err
+	}
+
+	// ProbeRoot reads every schema without a write. A failed read waits
+	// for the open, so a missing or a broken database keeps its refusal.
+	recorded, readErr := store.ProbeRoot(ws.DBPath)
+	if readErr == nil {
+		if decision := ws.CheckRootWrite(recorded); decision != workspace.RootWriteAllowed {
+			return nil, none, errors.New(pinWriteRefusalText(ws, decision, recorded))
+		}
+	}
+
+	st, probe, err := openIndexProbe(opts)
+	if err != nil {
+		return nil, none, err
+	}
+
+	// The file opens, but its root did not read, for example behind a
+	// lock. The file can belong to another repository, so this fails closed.
+	if readErr != nil {
+		_ = st.Close()
+
+		return nil, none, fmt.Errorf("the recorded root of the index cannot be read (%s: %w), so this "+
+			"command could change two repositories; no pin changed; run it again",
+			render.Sanitize(ws.DBPath), readErr)
+	}
+
+	return st, probe, nil
+}
+
+// pinWriteRefusalText says why a pin write refuses and names the next
+// step. The recorded root comes from the database, so the text sanitizes
+// it. The route names an absolute --db, because a relative one means
+// another file in the recorded root. A route into a root that no longer
+// exists cannot run, so that case names the restore or the index run.
+func pinWriteRefusalText(ws workspace.Workspace, decision workspace.RootWrite, recorded string) string {
+	root := render.Sanitize(recorded)
+
+	subject := "this database"
+	if decision == workspace.RootWriteCopied {
+		subject = "the index of this checkout"
+	}
+
+	there := "run this command in " + root
+
+	if ws.CustomDatabase(recorded) {
+		there += " with --db " + render.Sanitize(ws.AbsoluteDB())
+	}
+
+	indexRun := "run `seamark index` in " + render.Sanitize(ws.Root) + " first"
+
+	if _, err := os.Stat(recorded); errors.Is(err, fs.ErrNotExist) {
+		route := "restore " + root + ", then " + there
+		if decision == workspace.RootWriteCopied {
+			route = indexRun
+		}
+
+		return fmt.Sprintf("%s records a directory that no longer exists (%s), and a write would "+
+			"recreate it; nothing changed; %s", subject, root, route)
+	}
+
+	if decision == workspace.RootWriteCopied {
+		return fmt.Sprintf("%s records another repository (%s), so this command would change the pin "+
+			"file there and the ledger in this database; nothing changed; %s, or %s", subject, root, indexRun, there)
+	}
+
+	return fmt.Sprintf("%s records another repository (%s) that does not own it, so this command would "+
+		"change the pin file there and the ledger in this database; nothing changed; %s", subject, root, there)
 }

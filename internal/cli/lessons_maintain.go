@@ -9,8 +9,9 @@ package cli
 // selected proposals to pin entries, and it maps the plan and the commit
 // outcome to those lines.
 //
-// The CLI differs from the console in four points, because it has no
-// preview and no session:
+// Both surfaces refuse a write that changes two repositories, by the
+// rule of workspace.CheckRootWrite. The CLI differs from the console in
+// three points, because it has no preview and no session:
 //
 //   - It commits the ready pins of a selection and prints one reason line
 //     for each other proposal. The console asks for a selection in which
@@ -22,8 +23,6 @@ package cli
 //   - A partial result has no recovery offer. The error names the state
 //     and the way back: find the change with git diff, undo it, and run
 //     the same command again.
-//   - In a copied checkout it edits the pin file of the recorded root, as
-//     the other lessons commands do. The console refuses that case.
 
 import (
 	"cmp"
@@ -77,7 +76,7 @@ func runLessonsPrune(cmd *cobra.Command, opts *options, raw string) error {
 func runLessonsMaintain(cmd *cobra.Command, opts *options, raw string, action maintain.Action,
 	confirmChecks bool,
 ) error {
-	st, probe, err := openIndexProbe(opts)
+	st, probe, err := openPinWriter(opts)
 	if err != nil {
 		return err
 	}
@@ -94,9 +93,9 @@ func runLessonsMaintain(cmd *cobra.Command, opts *options, raw string, action ma
 	}
 
 	// The root is the root that the index records, as for every other
-	// lessons command. So a copied checkout still works on the original
-	// files (A0 D15, open). The pin file writes go through the guarded
-	// atomic write of the setup engine.
+	// lessons command. openPinWriter has refused a root that does not fit
+	// this database. The pin file writes go through the guarded atomic
+	// write of the setup engine.
 	deps := maintain.Deps{Root: probe.Root, Reg: integration.Builtin(), Reader: st, Probe: probe}
 
 	return maintainPins(cmd.OutOrStdout(), deps, action, ps, confirmChecks)

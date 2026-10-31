@@ -42,7 +42,7 @@ type ForeignRootError struct {
 	// workspace. A build then refuses, so the route is the console of Root.
 	OtherDB bool
 	// CustomDB reports a database that the route must name. See
-	// customDatabase.
+	// workspace.Workspace.CustomDatabase.
 	CustomDB bool
 }
 
@@ -67,24 +67,13 @@ func (e *engine) foreignRoot(probe workspace.IndexProbe) error {
 
 	return &ForeignRootError{
 		Root: probe.Root, Workspace: e.ws.Root, OtherDB: e.databaseKind() != store.DatabaseDefault,
-		CustomDB: e.customDatabase(probe.Root),
+		CustomDB: e.ws.CustomDatabase(probe.Root),
 	}
-}
-
-// customDatabase reports a --db file that the console of root must keep.
-// The plain route opens the default database of root, another ledger, so
-// the rows of this file stay out of the list. A file of another checkout
-// is no such file. A console in root with it passes every guard, because
-// root is then the workspace, and it would write two repositories.
-func (e *engine) customDatabase(root string) bool {
-	return e.databaseKind() == store.DatabaseOther &&
-		store.ClassifyDatabase(root, e.ws.DBPath) == store.DatabaseOther &&
-		!store.LiesInOtherCheckout(root, e.ws.DBPath)
 }
 
 // consoleRoute names the console that can write under root.
 func (e *engine) consoleRoute(root string) string {
-	if e.customDatabase(root) {
+	if e.ws.CustomDatabase(root) {
 		return "open the console in " + root + " with this --db"
 	}
 
@@ -93,27 +82,25 @@ func (e *engine) consoleRoute(root string) string {
 
 // ownRoot refuses a write under the recorded root when that write and
 // this database lie in two repositories. The engine writes the pin file
-// and config.yaml there and the ledger in this database. The default
-// database of this workspace never fits another root, as in a copied
-// checkout. Any other file fits when the recorded root owns it
-// (store.RootOwnsDatabase), also through a link at the default path. The
-// check compares files, not path strings. The Pins view hides the keys
-// for the same case; this check holds for every caller. A build refuses
-// every database but the default one, so the route of a refused file is
-// the console of the recorded root.
+// and config.yaml there and the ledger in this database. The rule is
+// workspace.CheckRootWrite, which `seamark lessons` shares; this method
+// adds the words of the console. The Pins view hides the keys for the
+// same case; this check holds for every caller. A build refuses every
+// database but the default one, so the route of a refused file is the
+// console of the recorded root.
 func (e *engine) ownRoot(probe workspace.IndexProbe) error {
 	err := e.foreignRoot(probe)
 	if err == nil {
 		return nil
 	}
 
-	switch {
-	case e.databaseKind() == store.DatabaseDefault:
+	switch e.ws.CheckRootWrite(probe.Root) {
+	case workspace.RootWriteCopied:
 		return fmt.Errorf("%w; run seamark index here first", err)
-	case store.RootOwnsDatabase(probe.Root, e.ws.DBPath):
-		return nil
-	default:
+	case workspace.RootWriteUnowned:
 		return fmt.Errorf("%w; %s", err, e.consoleRoute(probe.Root))
+	default:
+		return nil
 	}
 }
 
@@ -166,7 +153,7 @@ func (e *engine) databaseFacts(probe workspace.IndexProbe) workspace.DatabaseFac
 	}
 
 	if e.foreignRoot(probe) != nil {
-		facts.ForeignRoot, facts.CustomDB = probe.Root, e.customDatabase(probe.Root)
+		facts.ForeignRoot, facts.CustomDB = probe.Root, e.ws.CustomDatabase(probe.Root)
 	}
 
 	return facts
