@@ -14,9 +14,9 @@ import (
 const modulePath = "github.com/seamark-dev/seamark"
 
 // allowedInternalImports are the internal packages that the non-test
-// files of lessonreport may import directly (the engine stays out of surfaces and writers).
-// A listed package is allowed, not required: distill, for example, joins
-// when the occurrence reading needs it.
+// files of lessonreport may import directly. The list keeps the engine
+// out of surfaces and writers. A listed package is allowed, not required:
+// the test does not fail when no file imports a listed package.
 var allowedInternalImports = []string{
 	modulePath + "/internal/distill",
 	modulePath + "/internal/integration",
@@ -42,10 +42,10 @@ var bannedImports = []string{
 
 // TestLessonreportImportSet keeps the direct import rule of the engine.
 // No linter rule checks it, so this test does. The test covers direct
-// imports only: integration and distill bring agent, store, and net/http
-// into the closure, so the import-set proof for the report surfaces
-// rests on their own sentinel tests. The direct imports come from every file of the
-// package, also the files of other platforms.
+// imports only, because integration and distill bring agent, store, and
+// net/http into the closure. The report surfaces prove their own import
+// sets in their own sentinel tests. The direct imports come from every
+// file of the package, also the files of other platforms.
 func TestLessonreportImportSet(t *testing.T) {
 	ctx := build.Default
 	ctx.UseAllFiles = true

@@ -536,10 +536,11 @@ func TestInspectReadsUnknownWithAReason(t *testing.T) {
 		// Inspect never reaches this state, because the linked readings
 		// need a file that parsed. The guard keeps a change of that rule
 		// from giving a zero outcome.
-		in.Doc.Bytes = []byte("threshold: lots\n")
+		in.Doc = pinfile.Parse([]byte("threshold: lots\n"))
 
 		errs := in.readOutcomes(f.st, []int{0}, []model.Proposal{in.Pins[0].Link.Applied[0]}, firingLog{})
 		require.Len(t, errs, 1)
+		require.ErrorIs(t, errs[0], reviews.ErrLessonsConfig)
 		assert.False(t, in.Pins[0].Readings.Outcome.Known)
 		assert.Equal(t, pinfile.ErrUnreadable.Error(), in.Pins[0].Readings.Outcome.Reason)
 	})

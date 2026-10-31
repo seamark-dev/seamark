@@ -1,7 +1,7 @@
 package integration
 
-// The lesson-check paths of the capability report (contract K10). Each
-// adapter reads its lesson-check and exploration hook entries into
+// The lesson-check paths of the capability report. Each adapter reads
+// its lesson-check and exploration hook entries into
 // Inspection.LessonHooks. LessonCheckPaths turns that reading into one
 // installed path per client, tool, hook stage, and context, with the
 // sources of each reason. lessoncheck.CapabilityReportOf then computes
@@ -32,10 +32,11 @@ type BinaryIdentity struct {
 }
 
 // SelfIdentity returns the identity of the running binary with the
-// given version. An empty version is read from the build information of
-// the running binary, by the rule of the hook binaries. So a caller
-// without the CLI version still names the version of a release build.
-// A path that os.Executable cannot give stays empty.
+// given version. For an empty version, it reads the build information
+// of the running binary with buildVersionOf, as identifyBinary does for
+// a hook binary. So a caller without the CLI version still names the
+// version of a release build. A path that os.Executable cannot give
+// stays empty.
 func SelfIdentity(version string) BinaryIdentity {
 	id := BinaryIdentity{Version: version}
 
@@ -74,7 +75,8 @@ var readBuildVersion = func(path string) string {
 }
 
 // buildVersionOf returns the version that -ldflags sets, else the main
-// module version unless it is "(devel)" (§5 row 116).
+// module version. A "(devel)" module version names a local build
+// without a release version, so it gives "".
 func buildVersionOf(info *debug.BuildInfo) string {
 	for _, s := range info.Settings {
 		if s.Key != "-ldflags" {
@@ -101,8 +103,8 @@ func buildVersionOf(info *debug.BuildInfo) string {
 }
 
 // releaseCore reads the vMAJOR.MINOR.PATCH core of a version. A suffix
-// after the core, such as the "-N-g<sha>" of git describe or "-dirty",
-// does not change the core, so a build after a tag counts as that tag.
+// after the core does not change it, for example the "-N-g<sha>" of git
+// describe or "-dirty". So a build after a tag counts as that tag.
 func releaseCore(version string) ([3]int, bool) {
 	var core [3]int
 
@@ -138,10 +140,10 @@ type binaryReading struct {
 	version string
 }
 
-// identifyBinary identifies a hook binary statically (contract K10).
-// The path comes from a hook document that the repository can commit,
-// so the function never runs it. It reads only a regular file with an
-// execute bit, because a FIFO or a device would block the read.
+// identifyBinary identifies a hook binary statically. The path comes
+// from a hook document that the repository can commit, so the function
+// never runs it. It reads only a regular file with an execute bit,
+// because a FIFO or a device would block the read.
 //
 // A path that is not absolute depends on the environment of the client,
 // so it reads as unknown. A stat error other than absence is unknown
@@ -192,19 +194,11 @@ func identifyBinary(binary string, self BinaryIdentity) binaryReading {
 }
 
 // lessonHookClients are the lesson-check hooks of the built-in clients,
-// by client ID. setup and the capability report read the same specs.
+// by client ID. setup and the capability report read the same specs, so
+// the report checks the hooks that setup installs.
 var lessonHookClients = map[string]lessonHookClient{
 	ClaudeID: claudeLessonHooks,
 	CodexID:  codexLessonHooks,
-}
-
-// uncoveredWriters lists, per client, the writer tools that no
-// lesson-check hook covers (contract K10, reason tool-uncovered). The
-// report names them, so it never claims coverage that it does not have
-// (AC-32).
-var uncoveredWriters = map[string][]string{
-	ClaudeID: {"NotebookEdit", "Bash"},
-	CodexID:  {"shell"},
 }
 
 // explorationTool names the exploration path of a client without the
@@ -214,14 +208,13 @@ const explorationTool = claudeReadTool
 
 // postEditEvidence is the native evidence that the post-edit reply
 // reaches the model. No reviewed recording exists yet, so the level is
-// unverified for every path (contracts §5 row 38).
+// unverified for every path.
 func postEditEvidence() VerificationEvidence {
 	return VerificationEvidence{Level: VerificationUnverified}
 }
 
 // explorationEvidence is the native evidence of the exploration path.
-// It has no reviewed recording yet, so it stays unverified (contract
-// L2, plan step P3.14).
+// It has no reviewed recording yet, so it stays unverified.
 func explorationEvidence() VerificationEvidence {
 	return VerificationEvidence{Level: VerificationUnverified}
 }
@@ -279,9 +272,9 @@ func lessonHookEntries(document map[string]any, client lessonHookClient) []Lesso
 }
 
 // lessonHookReading returns the reading, or nil when it holds no
-// lesson-check hook, wrapper, or unreadable supplemental source. The flag of the project
-// configuration alone changes no path, because only an installed path
-// carries it.
+// lesson-check hook, wrapper, or unreadable supplemental source. The
+// hooks-disabled flag of the project configuration alone changes no
+// path, because only an installed path carries that reason.
 func lessonHookReading(reading LessonHookInspection) *LessonHookInspection {
 	if len(reading.Entries) == 0 && !reading.ReportOnly && !reading.SourceUnreadable {
 		return nil
@@ -293,31 +286,28 @@ func lessonHookReading(reading LessonHookInspection) *LessonHookInspection {
 // LessonCheckPaths reads the owned lesson-check hook entries of an
 // inspection and identifies each hook binary statically. It runs
 // nothing. It returns one installed path per tool, hook stage, and
-// context, one path without a stage per writer that no hook covers, and
-// the attributions of the client, keyed by client ID.
+// context, and one path without a stage per writer that no hook covers.
 //
 // A client that has no lesson-check hook specs gives no path. A
 // built-in client without installed hooks gets its paths with reason
-// not-installed. The attributions do not depend on the lesson-check
-// hooks, because the delivery report reads them for the advisory hooks
-// too.
-func LessonCheckPaths(insp Inspection, self BinaryIdentity) (
-	paths []lessoncheck.InstalledPath, attributions map[string][]lessoncheck.CapAttribution,
-) {
-	attributions = map[string][]lessoncheck.CapAttribution{}
-	if attrs := attributionsOf(insp); attrs != nil {
-		attributions[insp.ClientID] = attrs
-	}
+// not-installed.
+func LessonCheckPaths(insp Inspection, self BinaryIdentity) []lessoncheck.InstalledPath {
+	return lessonCheckPaths(insp, self, map[string]binaryReading{})
+}
 
+// lessonCheckPaths is LessonCheckPaths with a cache of the binary
+// readings by path. The clients of one workspace often name the same
+// hook binary, so one report shares the cache and reads each binary
+// once.
+func lessonCheckPaths(insp Inspection, self BinaryIdentity,
+	binaries map[string]binaryReading,
+) []lessoncheck.InstalledPath {
 	client, ok := lessonHookClients[insp.ClientID]
 	if !ok {
-		return nil, attributions
+		return nil
 	}
 
-	r := pathReader{
-		id: insp.ClientID, client: client, self: self, binaries: map[string]binaryReading{},
-		documentErr: insp.HookDocumentError,
-	}
+	r := pathReader{client: client, self: self, binaries: binaries, documentErr: insp.HookDocumentError}
 
 	if insp.LessonHooks != nil {
 		r.lessons = *insp.LessonHooks
@@ -329,12 +319,11 @@ func LessonCheckPaths(insp Inspection, self BinaryIdentity) (
 		r.trust = edits.Trust
 	}
 
-	return r.paths(), attributions
+	return r.paths()
 }
 
 // pathReader builds the installed paths of one client.
 type pathReader struct {
-	id       string
 	lessons  LessonHookInspection
 	client   lessonHookClient
 	self     BinaryIdentity
@@ -351,13 +340,14 @@ type pathReader struct {
 func (r *pathReader) paths() []lessoncheck.InstalledPath {
 	specs := r.client.specs(hooks.LessonChecksEnforce)
 	partial := r.partial(specs[1:])
+	preEntries, postEntries := r.stageEntries(lessoncheck.StagePreWrite), r.stageEntries(lessoncheck.StagePostEdit)
 
 	var out []lessoncheck.InstalledPath
 
 	for _, tool := range specs[0].Tools() {
 		for _, context := range lessonContexts {
-			p := r.path(tool, lessoncheck.StagePreWrite, context, GuardEvidence(r.id, tool, context))
-			r.preWrite(&p, partial)
+			p := r.path(tool, lessoncheck.StagePreWrite, context, GuardEvidence(r.client.id, tool, context))
+			r.preWrite(&p, preEntries, partial)
 			out = append(out, p)
 		}
 	}
@@ -365,17 +355,17 @@ func (r *pathReader) paths() []lessoncheck.InstalledPath {
 	for _, tool := range specs[1].Tools() {
 		for _, context := range lessonContexts {
 			p := r.path(tool, lessoncheck.StagePostEdit, context, postEditEvidence())
-			r.postEdit(&p, specs[1:], partial)
+			r.postEdit(&p, postEntries, specs[1:], partial)
 			out = append(out, p)
 		}
 	}
 
 	out = append(out, r.exploration()...)
 
-	for _, tool := range uncoveredWriters[r.id] {
+	for _, tool := range r.client.uncovered {
 		for _, context := range lessonContexts {
 			out = append(out, lessoncheck.InstalledPath{
-				Client: r.id, Tool: tool, Context: context, Reasons: []lessoncheck.CapReason{lessoncheck.CapToolUncovered},
+				Client: r.client.id, Tool: tool, Context: context, Reasons: []lessoncheck.CapReason{lessoncheck.CapToolUncovered},
 			})
 		}
 	}
@@ -388,7 +378,7 @@ func (r *pathReader) path(tool string, stage lessoncheck.HookStage, context less
 	evidence VerificationEvidence,
 ) lessoncheck.InstalledPath {
 	return lessoncheck.InstalledPath{
-		Client: r.id, Tool: tool, Stage: stage, Context: context, Verification: capVerification(evidence),
+		Client: r.client.id, Tool: tool, Stage: stage, Context: context, Verification: capVerification(evidence),
 	}
 }
 
@@ -413,10 +403,10 @@ func (r *pathReader) partial(posts []hooks.Spec) bool {
 }
 
 // install fills a path from the entries of its stage that the client
-// runs for its tool. A guard entry wins over a baseline entry, because
-// one guard denies whatever the baseline does. An owned entry of the
-// stage that never fires for the tool gives tool-uncovered: a matcher
-// edited by hand omits the tool. No entry gives not-installed.
+// runs for its tool. It prefers a guard entry to a baseline entry,
+// because one guard denies whatever the baseline does. An owned entry
+// of the stage that never fires for the tool gives tool-uncovered: a
+// matcher edited by hand omits the tool. No entry gives not-installed.
 func (r *pathReader) install(p *lessoncheck.InstalledPath, entries []LessonHookEntry) {
 	if r.documentErr != "" {
 		p.Reasons = append(p.Reasons, lessoncheck.CapDocumentUnreadable)
@@ -431,7 +421,7 @@ func (r *pathReader) install(p *lessoncheck.InstalledPath, entries []LessonHookE
 			continue
 		}
 
-		if chosen == nil || strings.HasPrefix(e.Marker, lessoncheck.MarkerGuard) {
+		if chosen == nil || lessoncheck.IsGuardMarker(e.Marker) {
 			chosen = &entries[i]
 		}
 	}
@@ -466,12 +456,13 @@ func (r *pathReader) stageEntries(stage lessoncheck.HookStage) []LessonHookEntry
 	return out
 }
 
-// preWrite fills one pre-write path. A wrapper that discards the exit
-// status keeps every pre-write path inactive, also beside an owned
-// entry. The guard cannot project a Codex update with hunks yet. The
-// report keeps that reason only while an enforce pattern pin exists.
-func (r *pathReader) preWrite(p *lessoncheck.InstalledPath, partial bool) {
-	r.install(p, r.stageEntries(lessoncheck.StagePreWrite))
+// preWrite fills one pre-write path from the pre-write entries. A
+// wrapper that discards the exit status keeps every pre-write path
+// inactive, even beside an owned entry. The guard cannot project a Codex
+// update with hunks yet. The report keeps that reason only while an
+// enforce pattern pin exists.
+func (r *pathReader) preWrite(p *lessoncheck.InstalledPath, entries []LessonHookEntry, partial bool) {
+	r.install(p, entries)
 	r.shared(p, partial)
 
 	if r.lessons.ReportOnly {
@@ -483,11 +474,13 @@ func (r *pathReader) preWrite(p *lessoncheck.InstalledPath, partial bool) {
 	}
 }
 
-// postEdit fills one post-edit path. Claude Code reports a failed tool
-// through its own event, so the path needs an entry on every post-edit
-// event. A path with some of them runs, and it carries partial-install.
-func (r *pathReader) postEdit(p *lessoncheck.InstalledPath, posts []hooks.Spec, partial bool) {
-	entries := r.stageEntries(lessoncheck.StagePostEdit)
+// postEdit fills one post-edit path from the post-edit entries. Claude
+// Code reports a failed tool through its own event, so the path needs an
+// entry on every post-edit event. A path with some of them runs, and it
+// carries partial-install.
+func (r *pathReader) postEdit(p *lessoncheck.InstalledPath, entries []LessonHookEntry, posts []hooks.Spec,
+	partial bool,
+) {
 	r.install(p, entries)
 
 	if p.Installed {
@@ -505,25 +498,24 @@ func (r *pathReader) postEdit(p *lessoncheck.InstalledPath, posts []hooks.Spec, 
 
 // exploration returns the exploration paths. A client without the
 // structured Read path gets paths without a reason and without
-// evidence, which the report reads as unsupported (§5 row 42).
+// evidence, which the report reads as unsupported.
 func (r *pathReader) exploration() []lessoncheck.InstalledPath {
 	var out []lessoncheck.InstalledPath
 
 	if r.client.exploration == nil {
 		for _, context := range lessonContexts {
-			out = append(out, lessoncheck.InstalledPath{
-				Client: r.id, Tool: explorationTool, Stage: lessoncheck.StageExploration, Context: context,
-				Verification: capVerification(VerificationEvidence{}),
-			})
+			out = append(out, r.path(explorationTool, lessoncheck.StageExploration, context, VerificationEvidence{}))
 		}
 
 		return out
 	}
 
+	entries := r.stageEntries(lessoncheck.StageExploration)
+
 	for _, tool := range r.client.exploration.Tools() {
 		for _, context := range lessonContexts {
 			p := r.path(tool, lessoncheck.StageExploration, context, explorationEvidence())
-			r.install(&p, r.stageEntries(lessoncheck.StageExploration))
+			r.install(&p, entries)
 			r.shared(&p, false)
 			out = append(out, p)
 		}
@@ -562,10 +554,12 @@ func (r *pathReader) shared(p *lessoncheck.InstalledPath, partial bool) {
 
 // LessonCapability joins the inspections that the caller holds with
 // lessons.yaml at root into the capability report. It derives nothing
-// itself: LessonCheckPaths reads the paths and the attributions, and
-// lessoncheck.CapabilityReportOf computes every state and badge. Doctor,
-// status, --set-mode, preparation, the MCP server, and the console call
-// it, so they report one account.
+// itself: LessonCheckPaths reads the paths, attributionsOf reads the
+// attributions, and lessoncheck.CapabilityReportOf computes every state
+// and badge. Doctor, status, --set-mode, preparation, the MCP server,
+// and the console call it, so they report one account. A caller that
+// needs no other view of the clients passes the result of
+// Registry.InspectLessonHooks.
 func LessonCapability(insps []Inspection, root string, self BinaryIdentity) lessoncheck.CapabilityReport {
 	cfg, errs := lessoncheck.LoadForCapability(root)
 
@@ -581,13 +575,15 @@ func LessonCapabilityOf(insps []Inspection, cfg *lessoncheck.Config, errs []less
 	var installed []lessoncheck.InstalledPath
 
 	attributions := map[string][]lessoncheck.CapAttribution{}
+	binaries := map[string]binaryReading{}
 
 	for _, insp := range insps {
-		paths, attrs := LessonCheckPaths(insp, self)
-		installed = append(installed, paths...)
+		installed = append(installed, lessonCheckPaths(insp, self, binaries)...)
 
-		for id, list := range attrs {
-			attributions[id] = list
+		// The attributions do not depend on the lesson-check hooks, because
+		// the delivery report reads them for the advisory hooks too.
+		if attrs := attributionsOf(insp); attrs != nil {
+			attributions[insp.ClientID] = attrs
 		}
 	}
 
@@ -596,7 +592,7 @@ func LessonCapabilityOf(insps []Inspection, cfg *lessoncheck.Config, errs []less
 
 // LessonHooksInstalled reports whether the inspection reads an owned
 // lesson-check or exploration entry. Doctor and status print their
-// lesson-check lines when one exists for some client (contract K10).
+// lesson-check lines when one exists for some client.
 func (i Inspection) LessonHooksInstalled() bool {
 	return i.LessonHooks != nil && len(i.LessonHooks.Entries) > 0
 }
@@ -606,6 +602,6 @@ func (i Inspection) LessonHooksInstalled() bool {
 // configuration does not validate, so doctor fails only then.
 func (i Inspection) LessonGuardInstalled() bool {
 	return i.LessonHooks != nil && slices.ContainsFunc(i.LessonHooks.Entries, func(e LessonHookEntry) bool {
-		return e.Stage == lessoncheck.StagePreWrite && strings.HasPrefix(e.Marker, lessoncheck.MarkerGuard)
+		return e.Stage == lessoncheck.StagePreWrite && lessoncheck.IsGuardMarker(e.Marker)
 	})
 }

@@ -666,9 +666,6 @@ func rawText(v *yaml.Node) string {
 	return render.Truncate(displayText(text), 200)
 }
 
-// redacted replaces a secret value, as redact.Secrets does.
-const redacted = "[REDACTED]"
-
 // secretItems redacts the items of a sequence. A flag and its value can
 // be two items, for example "--api-key" and the key. The comma list
 // hides that pair from redact.Secrets, so each item is also checked
@@ -684,8 +681,8 @@ func secretItems(items []string) []string {
 		}
 
 		pair := items[i-1] + " " + item
-		if strings.HasPrefix(redact.Secrets(pair), items[i-1]+" "+redacted) {
-			out[i] = redacted
+		if strings.HasPrefix(redact.Secrets(pair), items[i-1]+" "+redact.Marker) {
+			out[i] = redact.Marker
 		}
 	}
 

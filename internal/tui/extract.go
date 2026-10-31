@@ -758,8 +758,7 @@ func (r *extRecord) blockerLink() (to navigateMsg, name string, ok bool) {
 
 // agentBlocked reports a preview blocker that Settings › Inference can
 // fix: a blocker of the agent command, not of the working directory.
-// The engine marks the working-directory blocker
-// (learning.ExtractPreview.IsWorkDirBlocker), so the review never
+// The engine marks the kind of each blocker, so the review never
 // matches its text.
 func (r *extRecord) agentBlocked() bool {
 	p := r.prev.preview
@@ -767,7 +766,9 @@ func (r *extRecord) agentBlocked() bool {
 		return false
 	}
 
-	return slices.ContainsFunc(p.Blockers, func(b string) bool { return !p.IsWorkDirBlocker(b) })
+	return slices.ContainsFunc(p.Blockers, func(b learning.ExtractBlocker) bool {
+		return b.Kind != learning.ExtractBlockWorkDir
+	})
 }
 
 // key routes a key press by step.

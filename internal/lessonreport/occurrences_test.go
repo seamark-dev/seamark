@@ -9,8 +9,8 @@ import (
 )
 
 // TestBuildCountsEventsWithoutPins proves the count of events that show a
-// delivery and carry no pin entry: evaluation, reset, and preparation
-// events, version 1 records, and events with pins are not counted.
+// delivery and carry no pin entry. The count leaves out evaluation, reset,
+// and preparation events, version 1 records, and events with pins.
 func TestBuildCountsEventsWithoutPins(t *testing.T) {
 	cfg := testConfig("n")
 	id, ver := pinOf(cfg, 0)

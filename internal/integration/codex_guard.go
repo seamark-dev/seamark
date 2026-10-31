@@ -20,10 +20,9 @@ type codexGuards struct {
 	exitProtocolGate
 }
 
-// DecodeGuard reads the complete operation of one apply_patch event
-// (contract K8, "Input decoding per client"). It parses the patch text
-// with applyPatchOps and never runs it. A patch never reaches the
-// command gate: codexCommands refuses apply_patch.
+// DecodeGuard reads the complete operation of one apply_patch event. It
+// parses the patch text with applyPatchOps and never runs it. A patch
+// never reaches the command gate: codexCommands refuses apply_patch.
 //
 // The errors follow the patch grammar. An envelope error and a patch
 // without a hunk give ErrMalformedEvent (the guard reason
@@ -35,44 +34,15 @@ type codexGuards struct {
 // ReceivingContextOf, as in DecodeEdit. The error texts name no
 // payload value, because the guard puts the text into its deny reason.
 func (codexGuards) DecodeGuard(payload []byte) (lessoncheck.Operation, error) {
-	var native struct {
-		SessionID string `json:"session_id"`
-		AgentID   string `json:"agent_id"`
-		CWD       string `json:"cwd"`
-		ToolUseID string `json:"tool_use_id"`
-		ToolName  string `json:"tool_name"`
-	}
+	return decodeGuard(CodexID, payload, "the tool is not "+codexApplyPatch,
+		func(string) ([]lessoncheck.FileOp, error) {
+			patch, err := codexPatchText(payload)
+			if err != nil {
+				return nil, err
+			}
 
-	op := lessoncheck.Operation{Client: CodexID}
-
-	if err := json.Unmarshal(payload, &native); err != nil {
-		return op, malformedJSON(err)
-	}
-
-	op.Tool, op.SessionID, op.MatchID, op.CWD = native.ToolName, native.SessionID, native.ToolUseID, native.CWD
-	op.Receiver = receiverIDOf(ReceivingContextOf(CodexID, native.SessionID, native.AgentID))
-
-	if native.ToolName == "" {
-		return op, fmt.Errorf("%w: the request names no tool_name", ErrMalformedEvent)
-	}
-
-	if native.ToolName != codexApplyPatch {
-		return op, fmt.Errorf("%w: the tool is not %s", ErrNotApplicable, codexApplyPatch)
-	}
-
-	patch, err := codexPatchText(payload)
-	if err != nil {
-		return op, err
-	}
-
-	ops, err := applyPatchOps(patch)
-	if err != nil {
-		return op, err
-	}
-
-	op.Ops, op.PathsComplete = ops, true
-
-	return op, nil
+			return applyPatchOps(patch)
+		})
 }
 
 // codexPatchText returns the patch text of an apply_patch event:

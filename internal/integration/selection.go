@@ -11,9 +11,9 @@ import (
 
 // Two init forms become one []ClientSetup here, so the setup
 // coordinator never inspects a flag. The explicit form is `--client`.
-// The legacy form is every init run without it, and it is the only
-// place outside the adapters that names the two first clients: its
-// rules were written for them, before a registry existed.
+// The legacy form is every init run without it. It is the only place
+// outside the adapters that names the two first clients, because its
+// rules date from before the registry, when only those clients existed.
 
 // ExplicitSetups translates `--client` into per-client intent. Every
 // selected client gets its hooks and its MCP registration; the skills
@@ -113,15 +113,15 @@ func LegacySetups(root, skillsMode string, approveTools bool, gateMode string) (
 // legacyApprovalTargets names the clients --approve-tools configures in
 // a run without `--client`, by one rule whether or not --skills is
 // given. Claude Code is a target unless --skills=codex. Codex is a
-// target when --skills names it (codex or all), or, without an explicit
-// client, when a .codex/ directory exists, because that is where its
-// configuration lives; --skills=claude means Claude Code only. A bare
-// --skills detects the skills target by .agents/ and the approvals
-// target by .codex/, each by the place its own artifact lives; init
-// notes the gap when only one exists. Before this rule,
+// target when --skills names it (codex or all). When --skills names no
+// client, Codex is also a target when a .codex/ directory exists,
+// because its configuration lives there. --skills=claude means Claude
+// Code only. A bare --skills detects the skills target by .agents/ and
+// the approvals target by .codex/, each by the place its own artifact
+// lives. init notes the gap when only one exists. Before this rule,
 // --skills --approve-tools skipped a repository with .codex/ and no
-// .agents/, right after the documentation promised the one-liner would
-// configure it.
+// .agents/, although the documentation said that the one command
+// configures it.
 func legacyApprovalTargets(root, skillsMode string) (claude, codex bool, err error) {
 	claude = skillsMode != skills.ModeCodex
 
@@ -193,7 +193,7 @@ func UngatedHookClients(reg *Registry, setups []ClientSetup) []string {
 // do: the run's policy scaffold and gate line must never read weaker
 // than an installed hook. Each adapter still keeps its own installed
 // mode when no mode is requested, so a client can run a warn hook in
-// an enforce run; init names such a hook beside the gate line.
+// an enforce run. init names such a hook beside the gate line.
 func InstalledGateMode(reg *Registry, root string, clientIDs []string) string {
 	installed := ""
 

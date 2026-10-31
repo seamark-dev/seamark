@@ -128,8 +128,8 @@ func mustBuild(t *testing.T, in Inputs, ref string) Report {
 }
 
 // TestBuildCountsDeliveryPerVersion proves the per-version delivery
-// reading: records count once per pin version, an older version stays
-// apart from the current one, v1 records count as legacy identity
+// reading. Records count once per pin version. An older version stays
+// apart from the current one. v1 records count as legacy identity
 // records, and a newer-schema line stays out.
 func TestBuildCountsDeliveryPerVersion(t *testing.T) {
 	cfg := testConfig("Reject unknown fields.")

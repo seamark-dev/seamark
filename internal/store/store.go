@@ -1626,6 +1626,23 @@ const (
 	MetaReviewsMinedAt = "reviews_mined_at"
 )
 
+// MetaUnix reads a Unix-seconds meta value. It returns 0 when the value
+// is absent or malformed, or when the read fails. A stamp that cannot be
+// read then counts as "never mined".
+func (s *Store) MetaUnix(key string) int64 {
+	v, err := s.GetMeta(key)
+	if err != nil {
+		return 0
+	}
+
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0
+	}
+
+	return n
+}
+
 // EvidenceHorizon returns the timestamp the finding corpus is known
 // current through: the older of the two mining stamps, because a
 // recurrence can arrive through either channel. Zero when either
@@ -1633,25 +1650,12 @@ const (
 // nothing was found, so verdicts stay untested until
 // `seamark index --reviews` runs once.
 func (s *Store) EvidenceHorizon() int64 {
-	var horizon int64
-
-	for i, key := range []string{MetaFixesMinedAt, MetaReviewsMinedAt} {
-		v, err := s.GetMeta(key)
-		if err != nil {
-			return 0
-		}
-
-		ts, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			return 0
-		}
-
-		if i == 0 || ts < horizon {
-			horizon = ts
-		}
+	fixes, reviews := s.MetaUnix(MetaFixesMinedAt), s.MetaUnix(MetaReviewsMinedAt)
+	if fixes == 0 || reviews == 0 {
+		return 0
 	}
 
-	return horizon
+	return min(fixes, reviews)
 }
 
 // RecentDecisions returns the latest repo-wide decisions, newest first.
@@ -1961,6 +1965,17 @@ type Stats struct {
 	Tagged int
 	// Lessons counts clustered review-feedback patterns (M6).
 	Lessons int
+}
+
+// LessonCount returns the number of stored lessons. A caller that needs
+// only this count uses it, because Stats runs six COUNT queries. The
+// error is the plain query error, as in Stats.
+func (s *Store) LessonCount() (int, error) {
+	var n int
+
+	err := s.db.QueryRow("SELECT COUNT(*) FROM lesson").Scan(&n)
+
+	return n, err
 }
 
 // Stats returns row counts of the derived tables.

@@ -77,8 +77,9 @@ func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON
 	}
 
 	// The badges of each check come from the capability report of this
-	// workspace (contract K10), so preparation computes no badge.
-	capability := integration.LessonCapability(integration.Builtin().Inspect(root), root, integration.SelfIdentity(version))
+	// workspace, so preparation computes no badge. Every preparation runs
+	// this read, so the narrow reading avoids the Git processes of Inspect.
+	capability := integration.LessonCapability(integration.Builtin().InspectLessonHooks(root), root, integration.SelfIdentity(version))
 
 	// Config and ConfigErr stay nil, so Prepare loads lessons.yaml from
 	// root itself. The guidance status then names a file that does not

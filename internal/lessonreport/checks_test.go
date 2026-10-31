@@ -46,7 +46,7 @@ func TestCheckReading(t *testing.T) {
 	assert.Equal(t, map[string]int{"pass": 1, "unknown": 3, "violation": 1, "not-applicable": 1}, r.Checks.Outcomes)
 	assert.Equal(t, map[string]int{"missing-baseline": 3}, r.Checks.UnknownByReason)
 	assert.Equal(t, PinCheckReading{PinEvaluations: 5, Outcomes: map[string]int{"pass": 1, "unknown": 3, "not-applicable": 1}, RequestedDenies: 1}, r.Pins[0].Checks)
-	assert.Equal(t, PinCheckReading{PinEvaluations: 1, Outcomes: map[string]int{"violation": 1}}, readChecks(in).pin(versionKey{id, old}))
+	assert.Equal(t, PinCheckReading{PinEvaluations: 1, Outcomes: map[string]int{"violation": 1}}, readChecks(in, StateRead).pin(versionKey{id, old}))
 	assert.NotContains(t, encode(t, r), "null")
 
 	t.Run("unusable streams give no counts", func(t *testing.T) {

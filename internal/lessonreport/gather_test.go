@@ -19,8 +19,8 @@ import (
 
 const gatherConfig = "pin:\n  - rule: keep-parser-strict\n    region: internal/parse\n"
 
-// gatherFile captures content, mode, and modification time. Directory
-// entries are included, so a new private directory cannot go unnoticed.
+// gatherFile captures content, mode, and modification time. The snapshot
+// also lists directory entries, so it detects a new private directory.
 type gatherFile struct {
 	Data    string
 	Mode    fs.FileMode
@@ -74,7 +74,8 @@ func gatherWrite(t *testing.T, root, rel, text string) {
 }
 
 // countedGatherSources wraps the real read boundaries. Tests use a
-// separate instance per call, so no process-wide seam or cache exists.
+// separate instance per call, so they replace no process-wide state and
+// share no cache.
 func countedGatherSources(t *testing.T, req Request) (sources gatherSources, counts map[string]int) {
 	t.Helper()
 

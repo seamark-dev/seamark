@@ -22,3 +22,9 @@ const (
 	NextReviewInterpretation      NextCode = "review-interpretation"
 	NextReviewCheckMode           NextCode = "review-check-mode"
 )
+
+// expandCommand returns the command that prints the expansion of one pin.
+// The text overview prints it under each pin reading.
+func expandCommand(ref string) string {
+	return "seamark lessons --delivery --pin " + ref
+}

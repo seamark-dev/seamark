@@ -7,8 +7,13 @@
 // (.seamark/checks). So one copy of each safety check exists, because
 // two copies of a safety check can drift apart.
 //
+// The package also holds the hardening of an append-only log in such a
+// directory: the link refusal, the exclusive lock, and the rotation. The
+// policy gate audit log and the lesson-check audit stream use it.
+//
 // The package imports the standard library only. So any package can
 // import it without an import cycle. The caller passes the modes, the
-// .gitignore body, and the error values, because each caller keeps its
-// own error texts. The package knows no directory layout.
+// limits, the .gitignore body, and the error values or error functions,
+// because each caller keeps its own error texts. The package knows no
+// directory layout.
 package privatedir

@@ -915,9 +915,12 @@ func TestTUIVerifyLessonsMatchesCLI(t *testing.T) {
 	assert.Equal(t, lessoncheck.SummaryViolation, v.res.Summary.State)
 
 	// The CLI runs the same service with the caller cli and prints the
-	// shared renderer (lessons --verify, runLessonsVerify).
+	// shared renderer (lessons --verify, runLessonsVerify). It uses the
+	// engine clock, because the audit log ages its records by the time of
+	// the new record. A wall-clock run rotates the fixed-date record away.
 	cli, err := lessoncheck.Verify(context.Background(), lessoncheck.VerifyRequest{
 		Root: ws.Root, Caller: lessoncheck.CallerCLI, SeamarkVersion: "test",
+		Now: func() time.Time { return servicestest.Now },
 	})
 	require.NoError(t, err)
 

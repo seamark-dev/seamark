@@ -2,23 +2,21 @@ package lessoncheck
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 
 	"github.com/seamark-dev/seamark/internal/history"
 )
 
-// This file holds ObserveAfter, the actual-edit producer of contract K9.
-// It reads the state of each path of a pending record from disk after
-// the native tool ran, and it compares that state with the before state
-// of the record. So a result names what the edit changed, not what the
-// working tree holds against HEAD. No step writes a file or runs a
-// command that writes.
+// This file holds ObserveAfter, the actual-edit producer. It reads the
+// state of each path of a pending record from disk after the native
+// tool ran, and it compares that state with the before state of the
+// record. So a result names what the edit changed, not what the working
+// tree holds against HEAD. No step writes a file or runs a command that
+// writes, because a write would change the after state that the
+// observation reads.
 
 // pathVerdict tells how the observed after state of one pending path
 // relates to its projected after state.
@@ -36,29 +34,27 @@ const (
 	verdictMatch
 )
 
-// ObserveAfter returns the actual-edit snapshot of one native edit
-// (contracts K4, K9). root is the top level of the git work tree.
-// pending is the record of the call as ReadPending read it. A zero lim
-// means DefaultLimits.
+// ObserveAfter returns the actual-edit snapshot of one native edit.
+// root is the top level of the git work tree. pending is the record of
+// the call as ReadPending read it. A zero lim means DefaultLimits.
 //
 // The before side of each path comes from the record, with the content
 // that the record keeps. The baseline is pre-edit, and pending_sha256 is
-// the SHA-256 of the record bytes (§5 row 119). The after side comes
-// from disk now, with the K4 worktree rules: Lstat, a symbolic link as a
-// link, an open without following a link, and the byte limits. A path
-// whose state did not change is not a change, so a failed tool that
-// wrote nothing gives no change.
+// the SHA-256 of the record bytes. The after side comes from disk now,
+// with the read rules of the working-tree snapshot: Lstat, a symbolic
+// link as a link, an open without following a link, and the byte
+// limits. A path whose state did not change is not a change, so a
+// failed tool that wrote nothing gives no change.
 //
-// The post-edit budget bounds the read. When it passes, the snapshot
-// holds no change and names post-edit-budget in Limits, so every pin
-// gives unknown/resource-limit. ObserveAfter returns an error only for a
+// The post-edit budget bounds the read. When the budget ends before the
+// read is complete, the snapshot holds no change and names
+// post-edit-budget in Limits, so every pin gives
+// unknown/resource-limit. ObserveAfter returns an error only for a
 // record that ReadPending did not return, for a path that is not
 // repository-relative, for a root outside a git work tree, and for a
 // canceled ctx (wrapping context.Canceled).
 func ObserveAfter(ctx context.Context, root string, pending *Pending, lim Limits) (*Snapshot, error) {
-	if lim == (Limits{}) {
-		lim = DefaultLimits()
-	}
+	lim = lim.orDefault()
 
 	if pending == nil || pending.fileSHA256 == "" {
 		// The baseline must name the exact record bytes. A record that
@@ -80,20 +76,8 @@ func ObserveAfter(ctx context.Context, root string, pending *Pending, lim Limits
 	ctx, cancel := context.WithTimeout(ctx, lim.PostEditBudget)
 	defer cancel()
 
-	snap := &Snapshot{
-		Schema:   SnapshotSchema,
-		Boundary: BoundaryActualEdit,
-		Baseline: Baseline{Kind: BaselinePreEdit, PendingSHA: pending.fileSHA256},
-		Selection: Selection{
-			Kind:        SelectionOperation,
-			Description: selectionOperationText,
-			Paths:       selected,
-			Excludes:    []string{selectionOperationExclude},
-		},
-		Changes:       []Change{},
-		PathsComplete: pending.PathsComplete,
-		bounds:        lim,
-	}
+	baseline := Baseline{Kind: BaselinePreEdit, PendingSHA: pending.fileSHA256}
+	snap := operationSnapshot(BoundaryActualEdit, baseline, selected, pending.PathsComplete, lim)
 
 	o := &observer{r: newTreeReader(ctx, root, lim), pending: pending}
 	o.observeAll(snap)
@@ -103,20 +87,12 @@ func ObserveAfter(ctx context.Context, root string, pending *Pending, lim Limits
 			return nil, fmt.Errorf("lesson checks: observe the edit: %w", o.r.stopped)
 		}
 
-		postEditTimedOut(snap, lim)
+		cutByBudget(snap, LimitHit{Name: LimitPostEditBudget, Value: lim.PostEditBudget.Milliseconds()})
 	}
 
 	snap.SHA256 = snapshotDigest(snap)
 
 	return snap, nil
-}
-
-// Attribution returns how the observed result of an actual-edit snapshot
-// relates to the projection of the pre-edit record (contract K9). It is
-// "" for a snapshot of another boundary and for a read that the
-// post-edit budget ended, because then no comparison exists.
-func (s *Snapshot) Attribution() Attribution {
-	return s.attribution
 }
 
 // recordPaths returns every path of a record, the move sources
@@ -135,27 +111,18 @@ func recordPaths(p *Pending) []string {
 	return paths
 }
 
-// postEditTimedOut turns a snapshot that the post-edit budget cut into
-// one without changes. A partial observation must not decide any pin, so
-// every checker then gives unknown/resource-limit with post-edit-budget.
-func postEditTimedOut(snap *Snapshot, lim Limits) {
-	snap.Changes = []Change{}
-	snap.PathsComplete = false
-	snap.Limits = []LimitHit{{Name: LimitPostEditBudget, Value: lim.PostEditBudget.Milliseconds()}}
-	snap.identities = nil
-	snap.attribution = ""
-}
-
 // observer holds the state of one observation.
 type observer struct {
-	// r reads the after side of each path. It applies the K4 worktree
-	// rules and the byte limits, and it keeps the limit hits.
+	// r reads the after side of each path. It applies the read rules of
+	// the working-tree snapshot and the byte limits, and it keeps the
+	// limit hits.
 	r       *treeReader
 	pending *Pending
 }
 
 // observeAll observes every path of the record into snap and sets the
-// attribution of the snapshot.
+// attribution of the snapshot. Every change of one pending path gets
+// the limitation of the verdict of that path.
 func (o *observer) observeAll(snap *Snapshot) {
 	noProjection := slices.Contains(o.pending.Limitations, LimitationNoProjection)
 	verdicts := make([]pathVerdict, 0, len(o.pending.Paths))
@@ -166,17 +133,14 @@ func (o *observer) observeAll(snap *Snapshot) {
 		}
 
 		changes, verdict := o.observe(pp)
-		snap.Changes = append(snap.Changes, changes...)
+		for _, ch := range changes {
+			snap.Changes = append(snap.Changes, markVerdict(ch, verdict))
+		}
+
 		verdicts = append(verdicts, verdict)
 	}
 
-	sort.SliceStable(snap.Changes, func(i, j int) bool {
-		if snap.Changes[i].Path != snap.Changes[j].Path {
-			return snap.Changes[i].Path < snap.Changes[j].Path
-		}
-
-		return snap.Changes[i].OldPath < snap.Changes[j].OldPath
-	})
+	sortChanges(snap.Changes)
 
 	snap.Limits = o.r.limitHits()
 	snap.identities = o.r.identityList()
@@ -201,23 +165,19 @@ func attributionOf(verdicts []pathVerdict, noProjection bool) Attribution {
 // observe returns the observed changes of one pending path and the
 // verdict of the path. A move has two ends: the record names the target
 // as Path and the source as OldPath, and its before side is the source.
+// The changes do not carry the verdict yet, because observeAll marks
+// every change of the path in one place.
 func (o *observer) observe(pp PendingPath) ([]Change, pathVerdict) {
 	before := o.before(pp)
 
 	if pp.OldPath == "" {
-		f, after := o.current(pp.Path)
-		verdict := verdictOf(pp, after, true)
+		f, after := o.r.current(pp.Path)
 
-		ch, changed := observedChange(pp.Path, before, f, after)
-		if !changed {
-			return nil, verdict
-		}
-
-		return []Change{markVerdict(ch, verdict)}, verdict
+		return keepChanged(observedChange(pp.Path, before, f, after)), verdictOf(pp, after, true)
 	}
 
-	src, srcAfter := o.current(pp.OldPath)
-	dst, dstAfter := o.current(pp.Path)
+	src, srcAfter := o.r.current(pp.OldPath)
+	dst, dstAfter := o.r.current(pp.Path)
 	gone := src.id.state == pathAbsent
 	verdict := verdictOf(pp, dstAfter, gone)
 
@@ -226,43 +186,33 @@ func (o *observer) observe(pp PendingPath) ([]Change, pathVerdict) {
 		// The source is gone and the target exists: the move happened.
 		// The pairing comes from the projection of the same call.
 		ch := Change{Path: pp.Path, OldPath: pp.OldPath, Kind: ChangeMove, Before: before, After: dstAfter, Move: MoveProjection}
-		setObservedFlags(&ch)
+		setChangeFlags(&ch)
 		undecidedEnd(&ch, dst)
 
-		return []Change{markVerdict(ch, verdict)}, verdict
+		return []Change{ch}, verdict
 	case gone:
 		// Both ends are absent: the edit removed the source, or the
 		// source was absent before the edit too.
-		ch, changed := observedChange(pp.OldPath, before, src, srcAfter)
-		if !changed {
-			return nil, verdict
-		}
-
-		return []Change{markVerdict(ch, verdict)}, verdict
+		return keepChanged(observedChange(pp.OldPath, before, src, srcAfter)), verdict
 	}
 
 	// The source still exists, so no move happened. Each end is its own
 	// change: the source against its before side, and a new target.
-	var changes []Change
+	source := keepChanged(observedChange(pp.OldPath, before, src, srcAfter))
+	target := keepChanged(observedChange(pp.Path, Side{Type: ObjectAbsent, Content: ContentNotRead}, dst, dstAfter))
 
-	if ch, changed := observedChange(pp.OldPath, before, src, srcAfter); changed {
-		changes = append(changes, markVerdict(ch, verdict))
-	}
-
-	if ch, changed := observedChange(pp.Path, Side{Type: ObjectAbsent, Content: ContentNotRead}, dst, dstAfter); changed {
-		changes = append(changes, markVerdict(ch, verdict))
-	}
-
-	return changes, verdict
+	return append(source, target...), verdict
 }
 
-// current reads the observed state of one path: the worktree record and
-// the after side.
-func (o *observer) current(rel string) (*worktreeFile, Side) {
-	f := o.r.load(rel)
-	side, _ := f.side("")
+// keepChanged returns ch as a list of one change, or nil when the path
+// did not change. It takes the two results of observedChange, so each
+// branch of observe stays one expression.
+func keepChanged(ch Change, changed bool) []Change {
+	if !changed {
+		return nil
+	}
 
-	return f, side
+	return []Change{ch}
 }
 
 // before returns the before side of a pending path. The text comes from
@@ -278,9 +228,7 @@ func (o *observer) before(pp PendingPath) Side {
 	switch side.Content {
 	case ContentAvailable:
 		data, err := base64.StdEncoding.DecodeString(pp.ContentB64)
-		sum := sha256.Sum256(data)
-
-		if err != nil || int64(len(data)) != side.Size || hex.EncodeToString(sum[:]) != side.SHA256 {
+		if err != nil || int64(len(data)) != side.Size || hexSHA256(data) != side.SHA256 {
 			side.Content = ContentNotRead
 
 			return side
@@ -288,8 +236,9 @@ func (o *observer) before(pp PendingPath) Side {
 
 		side.text = data
 	case ContentTooLarge:
-		// The writer drops content above max-baseline-bytes (contract K7).
-		// A side above max-file-bytes keeps the reason of its size.
+		// The writer drops content above max-baseline-bytes, so a large
+		// file never makes the record large. A side above max-file-bytes
+		// keeps the reason of its size.
 		if slices.Contains(o.pending.Limitations, LimitationBaselineTooLarge) && side.Size <= o.r.lim.MaxFileBytes {
 			side.limit = LimitMaxBaselineBytes
 			o.r.hit(LimitMaxBaselineBytes, o.r.lim.MaxBaselineBytes, 1)
@@ -318,9 +267,10 @@ func verdictOf(pp PendingPath, after Side, ends bool) pathVerdict {
 	return verdictDiffers
 }
 
-// markVerdict adds the change limitation of a verdict (contract K9):
-// projection-differs for an observed difference, and no-projection for
-// a path without a projected digest to compare.
+// markVerdict adds the change limitation of a verdict: projection-differs
+// for an observed difference, and no-projection for a path without a
+// projected digest to compare. The limitation tells the reader whether
+// the change is known to match the proposed edit.
 func markVerdict(ch Change, verdict pathVerdict) Change {
 	switch verdict {
 	case verdictDiffers:
@@ -336,8 +286,8 @@ func markVerdict(ch Change, verdict pathVerdict) Change {
 // observedChange returns the change of one path from its before side
 // and its observed state. changed is false when the path did not change.
 // A path that the observer cannot see, below a link or after a failed
-// Lstat, is an unobserved change: forbid-path-change/1 then gives
-// unknown and never a violation for it (K3).
+// Lstat, is an unobserved change. forbid-path-change/1 gives unknown for
+// it and never a violation, because nothing proves the change.
 func observedChange(rel string, before Side, f *worktreeFile, after Side) (ch Change, changed bool) {
 	ch = Change{Path: rel, Kind: ChangeModify, Before: before, After: after}
 
@@ -347,7 +297,7 @@ func observedChange(rel string, before Side, f *worktreeFile, after Side) (ch Ch
 			ch.Kind = ChangeAdd
 		}
 
-		setObservedFlags(&ch)
+		setChangeFlags(&ch)
 		undecidedEnd(&ch, f)
 
 		return ch, true
@@ -359,7 +309,7 @@ func observedChange(rel string, before Side, f *worktreeFile, after Side) (ch Ch
 		ch.Kind = ChangeDelete
 	}
 
-	setObservedFlags(&ch)
+	setChangeFlags(&ch)
 
 	if ch.Kind != ChangeModify {
 		return ch, true
@@ -394,16 +344,4 @@ func undecidedEnd(ch *Change, f *worktreeFile) {
 	case pathUnknown:
 		ch.unobserved = true
 	}
-}
-
-// setObservedFlags sets the change flags from the two sides. A side
-// without a known digest counts as changed content, because the
-// observer cannot show that the content stays the same.
-func setObservedFlags(ch *Change) {
-	known := ch.Before.SHA256 != "" && ch.After.SHA256 != ""
-	ch.ContentChanged = !known || ch.Before.SHA256 != ch.After.SHA256
-
-	present := ch.Before.Type != ObjectAbsent && ch.After.Type != ObjectAbsent
-	ch.ModeChanged = present && ch.Before.Mode != "" && ch.After.Mode != "" && ch.Before.Mode != ch.After.Mode
-	ch.TypeChanged = present && ch.Before.Type != ch.After.Type
 }

@@ -9,7 +9,8 @@ import (
 )
 
 // DefaultMaxAuditBytes is the default read bound of one audit file
-// (256 MiB) [product]. A file above the bound reads as "over-limit".
+// (256 MiB). The value is a product choice, not a measured limit. A file
+// above the bound reads as "over-limit".
 const DefaultMaxAuditBytes int64 = 256 << 20
 
 // Request is what a surface asks of the engine.
@@ -44,14 +45,14 @@ type Inputs struct {
 	Config     *reviews.Config               // current lessons.yaml (pin refs, versions, scope)
 	ConfigRead ConfigRead                    // how the config read ended
 	Checks     *lessoncheck.Config           // nil when absent or invalid
-	Capability *lessoncheck.CapabilityReport // milestone P4 input; nil before it or on an inspection failure
+	Capability *lessoncheck.CapabilityReport // capability report of the pins and clients; nil reads as no inactive enforcement and no verified attribution
 	Links      map[string]int64              // pin identity digest → applied proposal ID (LinksFromApplied)
 	Now        time.Time
 
 	// AuditError and CheckAuditError carry the error text of a failed
 	// ReadAuditPrefix. A failed read returns no prefix, so without these
-	// fields Build could not tell an unreadable source from an absent one
-	// (lesson error-is-not-absence). Build sanitizes the text.
+	// fields Build could not tell an unreadable source from an absent one.
+	// Build sanitizes the text.
 	AuditError      string
 	CheckAuditError string
 }
@@ -63,7 +64,7 @@ type Inputs struct {
 // The identity is the digest of reviews.ProposalKey, the key that
 // every link, liveness check, and prune of the ledger uses. A row that
 // is not applied links nothing. When several applied proposals share one
-// identity, the newest one (the highest ID) wins, so the map does not
+// identity, the map keeps the newest one (the highest ID), so it does not
 // depend on the order of the list. The result is never nil.
 func LinksFromApplied(applied []model.Proposal) map[string]int64 {
 	links := make(map[string]int64, len(applied))

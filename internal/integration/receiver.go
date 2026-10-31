@@ -31,29 +31,29 @@ const (
 //   - Claude Code: PostCompact reports the session id, so the root
 //     context is resettable.
 //   - Codex: a native run of codex-cli 0.154.0 showed the agent_id rule
-//     above, but only a manual compaction of the parent was observed.
+//     above, but it observed only a manual compaction of the parent.
 //     An automatic compaction and nested subagents are unverified. So
 //     no Codex context is resettable, and its lane is a fact for the
 //     audit log only.
 func ReceivingContextOf(clientID, sessionID, agentID string) *ReceivingContext {
-	if sessionID == "" {
-		return nil
-	}
-
-	var resettableRoot bool
-
-	switch clientID {
-	case ClaudeID:
-		resettableRoot = true
-	case CodexID:
-		resettableRoot = false
-	default:
+	if sessionID == "" || (clientID != ClaudeID && clientID != CodexID) {
 		return nil
 	}
 
 	if agentID != "" {
-		return &ReceivingContext{ID: receiverID(sessionID, agentID), Lane: LaneChild}
+		return &ReceivingContext{
+			ID: receiverID(sessionID, agentID), Resettable: laneResettable(clientID, LaneChild), Lane: LaneChild,
+		}
 	}
 
-	return &ReceivingContext{ID: receiverID(sessionID), Resettable: resettableRoot, Lane: LaneRoot}
+	return &ReceivingContext{ID: receiverID(sessionID), Resettable: laneResettable(clientID, LaneRoot), Lane: LaneRoot}
+}
+
+// laneResettable reports whether a verified reset event of the client
+// reaches the context of a lane, by the policy of ReceivingContextOf. A
+// child lane is never resettable. Only the Claude Code root lane is
+// resettable. The timing evidence asks this without an event, so the
+// rule needs no session or agent ID.
+func laneResettable(clientID, lane string) bool {
+	return lane != LaneChild && clientID == ClaudeID
 }

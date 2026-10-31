@@ -19,8 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The fixed selection texts of contract K4, written out here so that a
-// change of the constants in worktree.go fails the tests.
+// The fixed selection texts of the working-tree snapshot, written out
+// here so that a change of the constants in worktree.go fails the tests.
 const (
 	wantDefaultHead   = "tracked changes against HEAD plus untracked nonignored files, staged and unstaged, as present in the working tree"
 	wantDefaultEmpty  = "tracked changes against the empty tree plus untracked nonignored files, staged and unstaged, as present in the working tree"
@@ -28,7 +28,7 @@ const (
 	wantExplicitEmpty = "the paths named by --file, against the empty tree"
 )
 
-// The fixed exclude texts of contract K4.
+// The fixed exclude texts of the working-tree snapshot.
 var (
 	wantDefaultExcludes  = []string{"ignored files not named by --file", "writes outside this snapshot", "content inside submodules"}
 	wantExplicitExcludes = []string{"paths not named by --file", "writes outside this snapshot"}
@@ -36,12 +36,12 @@ var (
 
 // wantSkippedExclude is the fixed exclude text that a snapshot adds after
 // the texts of its kind when the selection holds an index entry with the
-// skip-worktree or assume-unchanged bit (manager ruling S2).
+// skip-worktree or assume-unchanged bit.
 const wantSkippedExclude = "worktree changes of skip-worktree or assume-unchanged index entries, such as paths outside a sparse checkout"
 
-// TestLessonCheckSnapshotWorkingTree proves the default selection of
-// contract K4 on one repository with every kind of change, the side
-// fields, the JSON shape, the named limits, and the K4 errors (AC-29).
+// TestLessonCheckSnapshotWorkingTree proves the default selection on one
+// repository with every kind of change, the side fields, the JSON shape,
+// the named limits, and the errors of ReadWorkingTree.
 func TestLessonCheckSnapshotWorkingTree(t *testing.T) {
 	g := newGitRepo(t)
 	g.write(".gitignore", "*.log\n")
@@ -225,7 +225,7 @@ func TestLessonCheckSnapshotWorkingTree(t *testing.T) {
 		assert.Empty(t, snap.Changes, "a cut status output is never parsed")
 	})
 
-	t.Run("a deadline after step 1 gives a snapshot that names verify-timeout", func(t *testing.T) {
+	t.Run("a deadline after the baseline read gives a snapshot that names verify-timeout", func(t *testing.T) {
 		g := newGitRepo(t)
 		g.write("x.txt", "x\n")
 		g.commitAll("x")
@@ -271,7 +271,7 @@ func TestLessonCheckSnapshotWorkingTree(t *testing.T) {
 		assert.Nil(t, snap)
 	})
 
-	t.Run("a context that ended before step 1 is an error", func(t *testing.T) {
+	t.Run("a context that ended before the baseline read is an error", func(t *testing.T) {
 		g := newGitRepo(t)
 
 		canceled, cancel := context.WithCancel(context.Background())
@@ -287,7 +287,7 @@ func TestLessonCheckSnapshotWorkingTree(t *testing.T) {
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 	})
 
-	t.Run("a directory outside a git work tree is the K4 error", func(t *testing.T) {
+	t.Run("a directory outside a git work tree is an error", func(t *testing.T) {
 		dir := t.TempDir()
 
 		_, err := ReadWorkingTree(context.Background(), dir, nil, DefaultLimits())
@@ -358,8 +358,8 @@ func TestLessonCheckSnapshotUnbornRepository(t *testing.T) {
 
 // TestLessonCheckSnapshotExplicitIgnoredPath proves the explicit-paths
 // selection: a named ignored path is inspected, a named directory takes
-// every ignored file below it (K4 step 3a, K-5, §5 row 18), and an
-// unchanged or absent named path is no change (K-1).
+// every ignored file below it, and an unchanged or absent named path is
+// no change.
 func TestLessonCheckSnapshotExplicitIgnoredPath(t *testing.T) {
 	g := newGitRepo(t)
 	g.write(".gitignore", "ign/\n*.bin\n")
@@ -424,7 +424,7 @@ func TestLessonCheckSnapshotExplicitIgnoredPath(t *testing.T) {
 
 // TestLessonCheckSnapshotSymlinks proves that every symlink is a link
 // whose content is its target, and that the producer never reads through
-// a symlinked parent directory (§5 row 17).
+// a symlinked parent directory.
 func TestLessonCheckSnapshotSymlinks(t *testing.T) {
 	skipWithoutSymlinks(t)
 
@@ -518,7 +518,7 @@ func TestLessonCheckSnapshotSymlinks(t *testing.T) {
 
 	// The producer does not look through the link, so it observes no
 	// difference for a named path below it. A forbid pin then reads
-	// unknown, never violation (review fixes snapshot-git:F5, checkers:K3-F2).
+	// unknown, never violation.
 	t.Run("a forbid pin reads a named path through a symlinked directory as unknown", func(t *testing.T) {
 		forbid := onePin(t, KindForbidPathChange, "", "dirlink")
 
@@ -553,9 +553,9 @@ func TestLessonCheckSnapshotSymlinks(t *testing.T) {
 	})
 }
 
-// TestLessonCheckSnapshotMovePairing proves the unstaged move rule of
-// contract K4: one deleted path pairs with one untracked path by the git
-// blob id and the type, and every ambiguous case stays delete plus add.
+// TestLessonCheckSnapshotMovePairing proves the unstaged move rule: one
+// deleted path pairs with one untracked path by the git blob id and the
+// type, and every ambiguous case stays delete plus add.
 func TestLessonCheckSnapshotMovePairing(t *testing.T) {
 	t.Run("an unstaged move of identical content is a move", func(t *testing.T) {
 		g := newGitRepo(t)
@@ -570,8 +570,8 @@ func TestLessonCheckSnapshotMovePairing(t *testing.T) {
 		snap := g.snapshot()
 		require.Equal(t, []string{"move a.txt->moved/a2.txt"}, changeList(snap))
 
-		// The K4 example shape: the before side keeps its oid and size
-		// and is not read; both sides carry the content SHA-256.
+		// The expected move shape: the before side keeps its oid and
+		// size and is not read; both sides carry the content SHA-256.
 		ch := snap.Changes[0]
 		assert.Equal(t, MoveIdenticalContent, ch.Move)
 		assert.False(t, ch.ContentChanged)
@@ -679,7 +679,7 @@ func superproject(t *testing.T) *gitRepo {
 	return g
 }
 
-// TestLessonCheckSnapshotGitlink proves the submodule rows of the K4
+// TestLessonCheckSnapshotGitlink proves the submodule rules of the status
 // mapping: a new commit is a gitlink change, content inside a submodule
 // is a snapshot limitation, and the Lstat rule covers a removed one.
 func TestLessonCheckSnapshotGitlink(t *testing.T) {
@@ -755,8 +755,7 @@ func TestLessonCheckSnapshotGitlink(t *testing.T) {
 // TestLessonCheckSnapshotPathInsideSubmodule proves that a --file path
 // inside a submodule or a nested repository is never a silent clean
 // result. The snapshot names the limitation and keeps the change of the
-// submodule itself, because git gives no other form of that change
-// (review fix snapshot-git:F3).
+// submodule itself, because git gives no other form of that change.
 func TestLessonCheckSnapshotPathInsideSubmodule(t *testing.T) {
 	inside := []string{LimitationSubmoduleContentNotInspected}
 
@@ -948,10 +947,11 @@ func fingerprint(t *testing.T, root string) map[string]treeState {
 	return out
 }
 
-// TestLessonCheckSnapshotNeverWrites proves AC-29: the producer runs only
-// read-only git commands with GIT_OPTIONAL_LOCKS=0 and leaves every byte
-// and every modification time of the repository unchanged, also when the
-// index is stale, so a plain `git status` would rewrite it.
+// TestLessonCheckSnapshotNeverWrites proves that the producer only reads.
+// It runs only read-only git commands with GIT_OPTIONAL_LOCKS=0. It
+// leaves every byte and every modification time of the repository
+// unchanged. This holds also when the index is stale, where a plain `git
+// status` would rewrite the index.
 func TestLessonCheckSnapshotNeverWrites(t *testing.T) {
 	g := newGitRepo(t)
 	g.write(".gitignore", "ign/\n")
@@ -1031,10 +1031,10 @@ func gitSubcommand(args []string) string {
 	return ""
 }
 
-// TestLessonCheckSnapshotCopyConfig proves that step 3 finds renames
-// only. A user setting that turns on copy detection must not make a copy
-// a move, because a move from a source that still exists hides the
-// added lines of the copy (review fix snapshot-git:F1).
+// TestLessonCheckSnapshotCopyConfig proves that the status call finds
+// renames only. A user setting that turns on copy detection must not
+// make a copy a move, because a move from a source that still exists
+// hides the added lines of the copy.
 func TestLessonCheckSnapshotCopyConfig(t *testing.T) {
 	// copyFixture copies src/a.go to src/b.go, adds a line to src/a.go,
 	// and stages both. isolateGit hides the global configuration, so the
@@ -1078,8 +1078,7 @@ func TestLessonCheckSnapshotCopyConfig(t *testing.T) {
 // TestLessonCheckSnapshotUndecidedContent proves that a byte limit or a
 // failed read never turns a path whose difference the producer did not
 // observe into a change. Such a path leaves the path set incomplete, so a
-// forbid pin reads unknown with the cause and never violation (review
-// fixes checkers:K3-F1, snapshot-git:F4).
+// forbid pin reads unknown with the cause and never violation.
 func TestLessonCheckSnapshotUndecidedContent(t *testing.T) {
 	headText := strings.Repeat("0123456789abcdef", 4)
 	sameSize := strings.Repeat("fedcba9876543210", 4)
@@ -1137,7 +1136,8 @@ func TestLessonCheckSnapshotUndecidedContent(t *testing.T) {
 		assert.Equal(t, OutcomeUnknown, pattern.Outcome)
 		assert.Equal(t, LimitMaxFileBytes, pattern.Limit)
 
-		// The K4 vector still holds under the default limits.
+		// Under the default limits, the content comparison runs, and the
+		// unchanged file is no change.
 		snap := g.snapshot()
 		assert.Empty(t, changeList(snap))
 		assert.True(t, snap.PathsComplete)
@@ -1196,8 +1196,7 @@ func TestLessonCheckSnapshotUndecidedContent(t *testing.T) {
 
 		g := bigRepo(t)
 		g.git("rm", "-q", "--cached", "generated/big.txt")
-		require.NoError(t, os.Chmod(g.path("generated/big.txt"), 0))
-		t.Cleanup(func() { _ = os.Chmod(g.path("generated/big.txt"), 0o644) })
+		chmodUntilCleanup(t, g.path("generated/big.txt"), 0, 0o644)
 
 		requireUnknown(t, g.snapshot(), "")
 	})
@@ -1213,15 +1212,15 @@ func TestLessonCheckSnapshotUndecidedContent(t *testing.T) {
 	})
 }
 
-// TestLessonCheckSnapshotLstatError proves ruling 3 of the P1 review (fix
-// F-B): an Lstat error other than absence is no observed change. A forbid
+// TestLessonCheckSnapshotLstatError proves that an Lstat error other than
+// absence is no observed change, because an error is not absence. A forbid
 // pin then lists that path as unknown/content-unavailable, never as a
 // violation, and Verify reports incomplete.
 //
 // The directory census cannot search generated in each fixture, so the
-// path set is incomplete (ruling D2, TestLessonCheckSnapshotDirectoryCensus).
-// K3 ranks incomplete-paths above content-unavailable. So the result
-// reason is incomplete-paths, and each unknown path keeps
+// path set is incomplete (see TestLessonCheckSnapshotDirectoryCensus).
+// The result reasons rank incomplete-paths above content-unavailable. So
+// the result reason is incomplete-paths, and each unknown path keeps
 // content-unavailable.
 func TestLessonCheckSnapshotLstatError(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
@@ -1236,8 +1235,7 @@ func TestLessonCheckSnapshotLstatError(t *testing.T) {
 	g := verifyRepo(t, mixedYAML)
 	g.write("generated/new.txt", "new\n")
 	g.git("rm", "-q", "--cached", "generated/a.txt")
-	require.NoError(t, os.Chmod(g.path("generated"), 0o600))
-	t.Cleanup(func() { _ = os.Chmod(g.path("generated"), 0o755) })
+	chmodUntilCleanup(t, g.path("generated"), 0o600, 0o755)
 
 	_, err := os.Lstat(g.path("generated/a.txt"))
 	require.ErrorIs(t, err, fs.ErrPermission, "the fixture must give an Lstat error other than absence")
@@ -1299,8 +1297,7 @@ func TestLessonCheckSnapshotLstatError(t *testing.T) {
 	t.Run("an explicit path that git prints no record for reads as unknown", func(t *testing.T) {
 		h := verifyRepo(t, mixedYAML)
 		h.write("generated/a.txt", "edited\n")
-		require.NoError(t, os.Chmod(h.path("generated"), 0o600))
-		t.Cleanup(func() { _ = os.Chmod(h.path("generated"), 0o755) })
+		chmodUntilCleanup(t, h.path("generated"), 0o600, 0o755)
 
 		_, err := os.Lstat(h.path("generated/a.txt"))
 		require.ErrorIs(t, err, fs.ErrPermission, "the fixture must give an Lstat error other than absence")
@@ -1330,8 +1327,8 @@ func TestLessonCheckSnapshotLstatError(t *testing.T) {
 	})
 }
 
-// TestLessonCheckSnapshotStatusStderr proves ruling D2: text that git
-// status writes to stderr is a git-stderr notice. It never makes the path
+// TestLessonCheckSnapshotStatusStderr proves that text that git status
+// writes to stderr is a git-stderr notice. It never makes the path
 // set incomplete, because a configuration warning that no rerun clears
 // must not give exit 1 on every run. The directory census decides the
 // path set instead (TestLessonCheckSnapshotDirectoryCensus).
@@ -1375,7 +1372,7 @@ func TestLessonCheckSnapshotStatusStderr(t *testing.T) {
 
 	// git, a filter, or an fsmonitor hook can write any bytes to stderr,
 	// and the CLI and MCP text print the notice. So the notice keeps the
-	// first non-blank line only, through the K3 excerpt helper: redacted,
+	// first non-blank line only, through the excerpt helper: redacted,
 	// sanitized, and cut to max-excerpt-runes.
 	t.Run("the notice is the first line, redacted, sanitized, and cut", func(t *testing.T) {
 		lim := DefaultLimits()
@@ -1395,9 +1392,10 @@ func TestLessonCheckSnapshotStatusStderr(t *testing.T) {
 		assert.Empty(t, blank.statusStderr)
 	})
 
-	// The status digest holds no stderr (ruling D2). So a warning that
-	// appears or goes away between the read and the revalidation keeps
-	// the result fresh. The notice shows the stderr of the read.
+	// The status digest holds no stderr, because stderr is a notice only.
+	// So a warning that appears or goes away between the read and the
+	// revalidation keeps the result fresh. The notice shows the stderr of
+	// the read.
 	t.Run("a warning that appears only at the revalidation keeps the result fresh", func(t *testing.T) {
 		h := verifyRepo(t, mixedYAML)
 		onRevalidate(t, func() { h.git("config", "core.fsyncObjectFiles", "true") })
@@ -1431,8 +1429,7 @@ func TestLessonCheckSnapshotStatusStderr(t *testing.T) {
 
 	g := verifyRepo(t, mixedYAML)
 	g.write("generated/a.txt", "edited\n")
-	require.NoError(t, os.Chmod(g.path("generated"), 0o600))
-	t.Cleanup(func() { _ = os.Chmod(g.path("generated"), 0o755) })
+	chmodUntilCleanup(t, g.path("generated"), 0o600, 0o755)
 
 	_, err := os.Lstat(g.path("generated/a.txt"))
 	require.ErrorIs(t, err, fs.ErrPermission, "the fixture must hide the edit from git")
@@ -1479,9 +1476,10 @@ func TestLessonCheckSnapshotStatusStderr(t *testing.T) {
 		})
 	}
 
-	// Step 3 reads the whole worktree for every selection, so git writes
-	// stderr about generated also for --file src. The census reads only
-	// the directories of the named paths, so the path set stays complete.
+	// The status call reads the whole worktree for every selection, so
+	// git writes stderr about generated also for --file src. The census
+	// reads only the directories of the named paths, so the path set
+	// stays complete.
 	t.Run("a --file path beside the directory stays complete with the notice", func(t *testing.T) {
 		v := g.verify("src")
 
@@ -1497,20 +1495,20 @@ func TestLessonCheckSnapshotStatusStderr(t *testing.T) {
 		assert.NotContains(t, text, "path set: incomplete")
 	})
 
-	// git does not open an ignored directory at step 3, so the default
+	// The status call does not open an ignored directory, so the default
 	// selection gets no stderr, and the census does not read the
 	// directory. A --file path that names the directory puts it in the
-	// census, so the path set is incomplete. Step 3a writes the notice.
+	// census, so the path set is incomplete. The status call for the
+	// ignored files writes the notice.
 	t.Run("an ignored directory that git cannot open is incomplete only when --file names it", func(t *testing.T) {
 		h := verifyRepo(t, mixedYAML)
 		h.write(".git/info/exclude", ".seamark/\ncache/\n")
 		h.write("cache/x.bin", "x\n")
-		require.NoError(t, os.Chmod(h.path("cache"), 0))
-		t.Cleanup(func() { _ = os.Chmod(h.path("cache"), 0o755) })
+		chmodUntilCleanup(t, h.path("cache"), 0, 0o755)
 
 		snap := h.snapshot()
 		assert.True(t, snap.PathsComplete, "no index entry and no status record names the ignored directory")
-		assert.Empty(t, snap.Limitations, "step 3 does not open an ignored directory, so git writes no stderr")
+		assert.Empty(t, snap.Limitations, "git status does not open an ignored directory, so git writes no stderr")
 
 		v := h.verify("cache")
 
@@ -1522,10 +1520,10 @@ func TestLessonCheckSnapshotStatusStderr(t *testing.T) {
 		assert.Contains(t, text, "  git stderr: warning: could not open directory 'cache/': Permission denied\n")
 	})
 
-	// The revalidation (contract K5) runs the census again. A directory
-	// that loses its search bit after the read hides docs/readme.md, so
-	// the census finds a new unreadable directory. The directory holds no
-	// change, so the status stdout stays the same.
+	// The revalidation runs the census again. A directory that loses its
+	// search bit after the read hides docs/readme.md, so the census finds
+	// a new unreadable directory. The directory holds no change, so the
+	// status stdout stays the same.
 	t.Run("a directory that loses its search bit before the revalidation makes the result stale", func(t *testing.T) {
 		h := verifyRepo(t, mixedYAML)
 		t.Cleanup(func() { _ = os.Chmod(h.path("docs"), 0o755) })
@@ -1540,16 +1538,16 @@ func TestLessonCheckSnapshotStatusStderr(t *testing.T) {
 	})
 }
 
-// TestLessonCheckSnapshotDirectoryCensus proves the directory census of
-// ruling D2. git status prints no record for a tracked file below a
-// directory that the user cannot search, and it exits 0. So the producer
-// reads each directory that holds a selected path. A directory that it
-// cannot read leaves the path set incomplete, with the directory as the
-// evidence. The census never reads the stderr text of git.
+// TestLessonCheckSnapshotDirectoryCensus proves the directory census.
+// git status prints no record for a tracked file below a directory that
+// the user cannot search, and it exits 0. So the producer reads each
+// directory that holds a selected path. A directory that it cannot read
+// leaves the path set incomplete, with the directory as the evidence.
+// The census never reads the stderr text of git.
 func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// The census counts directories against its own limit,
 	// max-census-directories, so a large tree cannot make the census read
-	// without a bound (D2 follow-up, ruling 1).
+	// without a bound.
 	t.Run("max-census-directories bounds the census", func(t *testing.T) {
 		assert.Equal(t, 50000, DefaultLimits().MaxCensusDirectories)
 
@@ -1605,9 +1603,9 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		assert.Empty(t, snap.Limits)
 	})
 
-	// Step 6 and the revalidation run Lstat on each parent again before a
-	// read. So the census leaves no cached directory state, and the time
-	// between a parent Lstat and a file read does not grow.
+	// The worktree read and the revalidation run Lstat on each parent
+	// again before a read. So the census leaves no cached directory state,
+	// and the time between a parent Lstat and a file read does not grow.
 	t.Run("the census leaves no cached directory state", func(t *testing.T) {
 		g := verifyRepo(t, mixedYAML)
 
@@ -1637,8 +1635,7 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		t.Run("an empty directory without the search bit hides a delete under "+tc.name, func(t *testing.T) {
 			g := verifyRepo(t, mixedYAML)
 			g.remove("generated/a.txt")
-			require.NoError(t, os.Chmod(g.path("generated"), 0o600))
-			t.Cleanup(func() { _ = os.Chmod(g.path("generated"), 0o755) })
+			chmodUntilCleanup(t, g.path("generated"), 0o600, 0o755)
 
 			assert.False(t, g.snapshot(tc.paths...).PathsComplete)
 
@@ -1660,8 +1657,7 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	t.Run("a record outside the --file paths does not put its directory in the census", func(t *testing.T) {
 		g := verifyRepo(t, mixedYAML)
 		g.write("generated/a.txt", "edited\n")
-		require.NoError(t, os.Chmod(g.path("generated"), 0o300))
-		t.Cleanup(func() { _ = os.Chmod(g.path("generated"), 0o755) })
+		chmodUntilCleanup(t, g.path("generated"), 0o300, 0o755)
 
 		require.Equal(t, []string{"modify generated/a.txt"}, changeList(g.snapshot()), "git prints the record of the edit")
 
@@ -1701,8 +1697,7 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	for _, mode := range []fs.FileMode{0, 0o600} {
 		t.Run(fmt.Sprintf("an unreadable directory that holds a tracked file is incomplete (mode %04o)", mode), func(t *testing.T) {
 			g := verifyRepo(t, mixedYAML)
-			require.NoError(t, os.Chmod(g.path("generated"), mode))
-			t.Cleanup(func() { _ = os.Chmod(g.path("generated"), 0o755) })
+			chmodUntilCleanup(t, g.path("generated"), mode, 0o755)
 
 			snap := g.snapshot()
 
@@ -1722,8 +1717,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 
 	// The JSON form carries the census evidence too, so a consumer of
 	// lesson-snapshot/1 or lesson-verification/1 (also inside the
-	// check-lessons/1 envelope) sees the directory (D2 follow-up, ruling
-	// 2). A complete path set has no such key.
+	// check-lessons/1 envelope) sees the directory. A complete path set
+	// has no such key.
 	t.Run("the JSON names the unreadable directories", func(t *testing.T) {
 		g := verifyRepo(t, mixedYAML)
 
@@ -1731,8 +1726,7 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(complete), "unreadable_directories")
 
-		require.NoError(t, os.Chmod(g.path("generated"), 0o600))
-		t.Cleanup(func() { _ = os.Chmod(g.path("generated"), 0o755) })
+		chmodUntilCleanup(t, g.path("generated"), 0o600, 0o755)
 
 		for name, doc := range map[string]any{"lesson-snapshot/1": g.snapshot(), "lesson-verification/1": g.verify()} {
 			data, err := json.Marshal(doc)
@@ -1760,8 +1754,7 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		g.commitAll("unreadable")
 
 		for _, dir := range dirs {
-			require.NoError(t, os.Chmod(g.path(dir), 0))
-			t.Cleanup(func() { _ = os.Chmod(g.path(dir), 0o755) })
+			chmodUntilCleanup(t, g.path(dir), 0, 0o755)
 		}
 
 		v := g.verify()
@@ -1787,9 +1780,9 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 
 	// No index entry and no status record names the directory, so the
 	// census does not read it. git still writes stderr, which stays a
-	// notice. With the default selection this is the accepted residual of
-	// ruling D2: the untracked files there stay unseen, because the census
-	// does not parse the git warning.
+	// notice. With the default selection, the untracked files there stay
+	// unseen, because the census does not parse the git warning. This gap
+	// is known and accepted.
 	for _, tc := range []struct {
 		name  string
 		paths []string
@@ -1800,8 +1793,7 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		t.Run("an unreadable directory without a tracked file stays complete under "+tc.name, func(t *testing.T) {
 			g := verifyRepo(t, mixedYAML)
 			g.write("secret/x.txt", "x\n")
-			require.NoError(t, os.Chmod(g.path("secret"), 0))
-			t.Cleanup(func() { _ = os.Chmod(g.path("secret"), 0o755) })
+			chmodUntilCleanup(t, g.path("secret"), 0, 0o755)
 
 			v := g.verify(tc.paths...)
 
@@ -1818,13 +1810,12 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		})
 	}
 
-	// The revalidation (contract K5) compares the status digest. A census
-	// change must reach the digest without a change of the status output,
-	// and a new modification time must not reach it.
+	// The revalidation compares the status digest. A census change must
+	// reach the digest without a change of the status output, and a new
+	// modification time must not reach it.
 	t.Run("the status digest holds the unreadable directories, never a time", func(t *testing.T) {
 		g := verifyRepo(t, mixedYAML)
-		require.NoError(t, os.Chmod(g.path("generated"), 0o600))
-		t.Cleanup(func() { _ = os.Chmod(g.path("generated"), 0o755) })
+		chmodUntilCleanup(t, g.path("generated"), 0o600, 0o755)
 
 		read := func() (string, []string) {
 			r := newTreeReader(context.Background(), g.root, DefaultLimits())
@@ -1856,8 +1847,7 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		g := verifyRepo(t, mixedYAML)
 		g.write("deep/a/b/c.txt", "c\n")
 		g.commitAll("deep")
-		require.NoError(t, os.Chmod(g.path("deep"), 0o600))
-		t.Cleanup(func() { _ = os.Chmod(g.path("deep"), 0o755) })
+		chmodUntilCleanup(t, g.path("deep"), 0o600, 0o755)
 
 		v := g.verify()
 
@@ -1873,23 +1863,22 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 
 		outside := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(outside, "a.txt"), []byte("a\n"), 0o644))
-		require.NoError(t, os.Chmod(outside, mode))
-		t.Cleanup(func() { _ = os.Chmod(outside, 0o755) })
+		chmodUntilCleanup(t, outside, mode, 0o755)
 
 		g.remove("generated")
 		g.symlink(outside, "generated")
 	}
 
-	// K4 inspects a link as a link, so the census never opens a directory
-	// through a link. git 2.50.1 runs lstat through the link instead. When
-	// the target has no search bit, git writes "Permission denied", exits
-	// 0, and prints no ".D" record for generated/a.txt, also when the link
-	// is ignored. An index entry below a link without a status record
-	// makes the path set incomplete (D2 follow-up, ruling 3). A --file
-	// path of the link or below it selects the same index entry, so the
-	// rule applies there too. A --file path below the link keeps its K4
-	// change with the content unreadable, so the forbid pin on generated
-	// lists it in unknown_paths.
+	// The snapshot inspects a link as a link, so the census never opens a
+	// directory through a link. git 2.50.1 runs lstat through the link
+	// instead. When the target has no search bit, git writes "Permission
+	// denied", exits 0, and prints no ".D" record for generated/a.txt,
+	// also when the link is ignored. An index entry below a link without
+	// a status record makes the path set incomplete. A --file path of the
+	// link or below it selects the same index entry, so the rule applies
+	// there too. A --file path below the link keeps its change with the
+	// content unreadable, so the forbid pin on generated lists it in
+	// unknown_paths.
 	unknownBelowLink := []Evidence{{Path: "generated/a.txt", Change: ChangeModify, Reason: ReasonContentUnavailable}}
 
 	for _, tc := range []struct {
@@ -1925,7 +1914,7 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 			assert.Equal(t, []string{LimitationGitStderr}, snap.Limitations)
 
 			// Each unknown path is a --file path below the link, so its
-			// change names path-through-link (K4 Validation).
+			// change names path-through-link.
 			for _, e := range tc.unknown {
 				assert.Equal(t, []string{LimitationPathThroughLink}, changeAt(t, snap, e.Path).Limitations)
 			}
@@ -1982,7 +1971,7 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		assert.Equal(t, []string{"1:unknown/stale-snapshot", "2:unknown/stale-snapshot"}, outcomes(v))
 	})
 
-	// The rule of ruling 3 looks at the parents inside root only. The top
+	// The below-link rule looks at the parents inside root only. The top
 	// level "." is root itself, so a link to the top level as root does
 	// not put a top-level index entry below a link. The exported
 	// ReadWorkingTree accepts such a root, although the CLI and MCP
@@ -2008,13 +1997,12 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// skip-worktree on each path outside its cone, docs/readme.md included
 	// here. So git prints no record and no stderr for such an entry below a
 	// link. The user keeps these entries out of the worktree on purpose, so
-	// they stay out of the rule of ruling 3. Their parents join the census,
-	// but the census never opens a link (ruling S2, option (c)). The
-	// selection then names them once in its excludes, in the JSON and in
-	// the text (manager ruling S2). An entry without a bit keeps ruling 3,
-	// and a bit outside the --file paths adds no exclude. A --file path of
-	// the entry keeps its K4 change through the link, so its content stays
-	// unavailable.
+	// they stay out of the below-link rule. Their parents join the census,
+	// but the census never opens a link. The selection then names them
+	// once in its excludes, in the JSON and in the text. An entry without a
+	// bit keeps the below-link rule, and a bit outside the --file paths adds
+	// no exclude. A --file path of the entry keeps its change through the
+	// link, so its content stays unavailable.
 	skipWorktree := []string{"update-index", "--skip-worktree", "generated/a.txt"}
 	assumeUnchanged := []string{"update-index", "--assume-unchanged", "generated/a.txt"}
 	withSkipped := func(excludes []string) []string {
@@ -2058,7 +2046,7 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 			results: []string{"1:violation", "2:not-applicable"},
 		},
 		{
-			name: "an index entry with the skip-worktree bit below a link keeps its K4 change under --file of the entry", setup: [][]string{skipWorktree},
+			name: "an index entry with the skip-worktree bit below a link keeps its change under --file of the entry", setup: [][]string{skipWorktree},
 			paths: []string{"generated/a.txt"}, changes: []string{"modify generated/a.txt"}, complete: true, excludes: withSkipped(wantExplicitExcludes),
 			results: []string{"1:unknown/content-unavailable", "2:not-applicable"}, unknown: unknownBelowLink,
 		},
@@ -2169,22 +2157,21 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// for an untracked file in it. When each index entry there is a skipped
 	// entry, no other entry puts the directory in the census. So the
 	// parents of a skipped entry join the census, and such a directory
-	// makes the path set incomplete (manager ruling S2, option (c)). The
-	// rows are the reviewer probes P8 and P3. A --file path of a parent
-	// selects the same skipped entry, but it does not name the directory.
-	// So there too, only the skipped entry puts the directory in the census.
+	// makes the path set incomplete. A --file path of a parent selects the
+	// same skipped entry, but it does not name the directory. So there too,
+	// only the skipped entry puts the directory in the census.
 	for _, tc := range []struct {
-		probe     string
-		suffix    string   // the name part between the rule and the probe
+		commit    bool     // the fixture lacks the entry, so the row commits it first
+		suffix    string   // the name part between the rule and the directory
 		paths     []string // the --file paths; none for the default selection
 		dir       string   // the directory that loses every mode bit
 		entry     string   // the skipped entry
 		untracked string   // the untracked file that git cannot see
 	}{
-		{probe: "P8", dir: "src/x", entry: "src/x/a.go", untracked: "src/x/new.go"},
-		{probe: "P3", dir: "generated", entry: "generated/a.txt", untracked: "generated/b.txt"},
+		{commit: true, dir: "src/x", entry: "src/x/a.go", untracked: "src/x/new.go"},
+		{dir: "generated", entry: "generated/a.txt", untracked: "generated/b.txt"},
 		{
-			probe: "P8", suffix: " under --file of its parent", paths: []string{"src"},
+			commit: true, suffix: " under --file of its parent", paths: []string{"src"},
 			dir: "src/x", entry: "src/x/a.go", untracked: "src/x/new.go",
 		},
 	} {
@@ -2194,17 +2181,16 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		}
 
 		for _, bit := range []string{"--skip-worktree", "--assume-unchanged"} {
-			t.Run("an unreadable directory whose index entries are all skipped entries is incomplete"+tc.suffix+" ("+tc.probe+", "+bit+")", func(t *testing.T) {
+			t.Run("an unreadable directory whose index entries are all skipped entries is incomplete"+tc.suffix+" ("+tc.dir+", "+bit+")", func(t *testing.T) {
 				g := verifyRepo(t, mixedYAML)
-				if tc.probe == "P8" {
+				if tc.commit {
 					g.write(tc.entry, "package x\n")
 					g.commitAll("x")
 				}
 
 				g.git("update-index", bit, tc.entry)
 				g.write(tc.untracked, "// TODO(x)\n")
-				require.NoError(t, os.Chmod(g.path(tc.dir), 0))
-				t.Cleanup(func() { _ = os.Chmod(g.path(tc.dir), 0o755) })
+				chmodUntilCleanup(t, g.path(tc.dir), 0, 0o755)
 
 				snap := g.snapshot(tc.paths...)
 
@@ -2258,8 +2244,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 
 	// A parent of a skipped entry below a link is a census directory, but
 	// the census never opens a link, and a skipped entry never joins the
-	// rule of ruling 3. So the path set stays complete, as in the rows of
-	// ruling S2 above. Here generated/x holds only a skipped entry.
+	// below-link rule. So the path set stays complete, as in the
+	// skipped-entry rows above. Here generated/x holds only a skipped entry.
 	t.Run("a skipped entry two directories below a link keeps the path set complete", func(t *testing.T) {
 		g := verifyRepo(t, mixedYAML)
 		g.write("generated/x/b.txt", "b\n")
@@ -2283,9 +2269,9 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	})
 
 	// A link is not absent, so a parent of a skipped entry reached through
-	// a link stays in the census. These rows pin the contract words "and
-	// it counts" of ruling S2, option (c). A filter that keeps only a real
-	// directory drops the link and gives no hit (mutant m48 of the P1 log).
+	// a link stays in the census, and it counts against
+	// max-census-directories. A filter that keeps only a real directory
+	// drops the link and gives no hit, so these rows fail on such a filter.
 	// With the default selection the census holds ., docs, generated, and
 	// src. Under --file generated it holds . and generated. The census
 	// still opens nothing through the link.
@@ -2317,10 +2303,12 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 }
 
 // TestLessonCheckSnapshotDigest proves the lesson-snapshot/1 composition
-// of contract K4 and the revalidation inputs that a snapshot keeps.
+// and the revalidation inputs that a snapshot keeps.
 func TestLessonCheckSnapshotDigest(t *testing.T) {
-	// One change written out part by part. Each part is "<length>:<bytes>"
-	// (contracts §1.2), so the test does not call compose.
+	// One change written out part by part. Each part is "<length>:<bytes>".
+	// The test writes each part by hand and does not call
+	// reviews.ComposeDigest, so a fault in the composer cannot hide in the
+	// expected value.
 	snap := &Snapshot{
 		Schema:   SnapshotSchema,
 		Boundary: BoundaryWorkingTree,
@@ -2348,7 +2336,7 @@ func TestLessonCheckSnapshotDigest(t *testing.T) {
 		"1:1" + "1:1" + "24:move-pairing-unavailable"
 	sum := sha256.Sum256([]byte(composition))
 
-	t.Run("the composition of the K4 parts", func(t *testing.T) {
+	t.Run("the composition of the snapshot parts", func(t *testing.T) {
 		assert.Equal(t, hex.EncodeToString(sum[:]), snapshotDigest(snap))
 
 		// The frozen value (shasum -a 256 of the composition above), so a
@@ -2372,7 +2360,7 @@ func TestLessonCheckSnapshotDigest(t *testing.T) {
 		assert.Equal(t, snapshotDigest(snap), snapshotDigest(&other))
 	})
 
-	t.Run("each K4 part changes the digest", func(t *testing.T) {
+	t.Run("each snapshot part changes the digest", func(t *testing.T) {
 		for name, edit := range map[string]func(s *Snapshot){
 			"baseline commit":    func(s *Snapshot) { s.Baseline.Commit = "abd" },
 			"pending sha":        func(s *Snapshot) { s.Baseline.PendingSHA = "p" },
@@ -2449,5 +2437,63 @@ func TestLessonCheckSnapshotDigest(t *testing.T) {
 		g.commitAll("a")
 
 		assert.NotEqual(t, g.snapshot().SHA256, g.snapshot("a.txt").SHA256)
+	})
+}
+
+// TestLessonCheckSnapshotReadHelpers proves the small helpers that every
+// read shares: the byte-limit check, the content rule of a side, and the
+// sorted, deduplicated path list.
+func TestLessonCheckSnapshotReadHelpers(t *testing.T) {
+	t.Run("tooLarge names max-file-bytes first, then the rest of max-snapshot-bytes", func(t *testing.T) {
+		lim := DefaultLimits()
+		lim.MaxFileBytes = 10
+		lim.MaxSnapshotBytes = 25
+
+		r := newTreeReader(context.Background(), t.TempDir(), lim)
+		r.budget = 8
+
+		assert.False(t, r.tooLarge(8), "a size at the budget fits")
+		assert.Empty(t, r.hits, "a size that fits records no hit")
+
+		assert.True(t, r.tooLarge(11), "a size above max-file-bytes is too large, also above the budget")
+		assert.True(t, r.tooLarge(9), "a size above the budget is too large")
+		assert.True(t, r.tooLarge(12))
+
+		assert.Equal(t, []LimitHit{
+			{Name: LimitMaxFileBytes, Value: 10, Paths: 2},
+			{Name: LimitMaxSnapshotBytes, Value: 25, Paths: 1},
+		}, r.limitHits())
+		assert.Equal(t, int64(8), r.budget, "the caller takes the size from the budget, never tooLarge")
+	})
+
+	t.Run("contentOf keeps the text of available content only", func(t *testing.T) {
+		sum, state, text := contentOf([]byte("a\n"))
+
+		assert.Equal(t, sha256Hex("a\n"), sum)
+		assert.Equal(t, ContentAvailable, state)
+		assert.Equal(t, []byte("a\n"), text)
+
+		sum, state, text = contentOf([]byte("a\x00b"))
+
+		assert.Equal(t, sha256Hex("a\x00b"), sum, "content that is not text still has its SHA-256")
+		assert.Equal(t, ContentBinary, state)
+		assert.Nil(t, text)
+
+		sum, state, text = contentOf([]byte{})
+
+		assert.Equal(t, sha256Hex(""), sum)
+		assert.Equal(t, ContentAvailable, state)
+		assert.NotNil(t, text, "empty text is available text")
+	})
+
+	t.Run("sortedUnique sorts, drops duplicates and the empty string, and leaves its input", func(t *testing.T) {
+		in := []string{"b", "", "a", "b", "", "c"}
+
+		assert.Equal(t, []string{"a", "b", "c"}, sortedUnique(in))
+		assert.Equal(t, []string{"b", "", "a", "b", "", "c"}, in, "the input keeps its order")
+
+		assert.Nil(t, sortedUnique(nil))
+		assert.Nil(t, sortedUnique([]string{}))
+		assert.Nil(t, sortedUnique([]string{"", ""}))
 	})
 }

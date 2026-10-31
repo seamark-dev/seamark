@@ -10,9 +10,9 @@
 // The package holds console policy, not an engine. The CLI reaches the
 // same engines without this policy: index.RefreshSources through
 // index.RefreshFixes and index.RefreshReviews, distill.Run, and
-// distill.ExtractTriggers. Golden tests pin the CLI output, so the CLI
-// takes this policy only through a separate decision. The policy differs
-// from the CLI in these points:
+// distill.ExtractTriggers. Golden tests check the exact CLI output, so
+// the CLI takes this policy only through a separate decision. The policy
+// differs from the CLI in these points:
 //
 //   - A configuration error blocks a plan, because a paid run must not
 //     use a default that the user did not review. The CLI is lenient in
@@ -20,7 +20,8 @@
 //     config.yaml and uses the default review window. `seamark lessons
 //     --distill` warns about a malformed lessons.yaml and runs without
 //     the pins, so it can propose a pinned pattern again. The CLI
-//     trigger extraction refuses both files, as the console does.
+//     trigger extraction refuses either malformed file, as the console
+//     does.
 //   - A distillation region must be inside the workspace, because a
 //     mistyped region plans an empty run. The CLI keeps its lenient path
 //     conversion.
@@ -32,9 +33,9 @@
 //   - A cleanup of stale pending proposals is a separate confirmed
 //     action, because it deletes rows that the user did not select. A
 //     CLI distillation run does this cleanup itself.
-//   - Trigger extraction asks only selected rows that the pin file and
-//     the ledger agree about, so the Pins view and the preview agree.
-//     The CLI asks a wider set of rows.
+//   - Trigger extraction sends the agent only selected rows that the
+//     pin file and the ledger agree about, so the Pins view and the
+//     preview agree. The CLI sends a wider set of rows.
 //
 // The services stay out of index and distill for two reasons. Only the
 // console uses them. They also need integration and pinfile, and the

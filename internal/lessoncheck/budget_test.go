@@ -11,11 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This file holds the tests of the evaluation budget (review finding
-// R-1). The guard and the post-edit budget must bound the evaluation and
-// the edit projection, and the end of a budget must fail closed. No test
-// here depends on a wall-clock limit: a context that has already ended,
-// a canceled context, or a counting context stands in for the time.
+// This file holds the tests of the evaluation budget. The guard and the
+// post-edit budget must bound the evaluation and the edit projection,
+// and the end of a budget must fail closed. No test here depends on a
+// wall-clock limit: a context that has already ended, a canceled
+// context, or a counting context stands in for the time.
 
 // repeatedLines is the worst input of the quadratic diff: n equal lines.
 func repeatedLines(n int) string {
@@ -43,8 +43,8 @@ func canceledContext(t *testing.T) context.Context {
 }
 
 // repeatedLinesSnapshot is a proposed edit that adds one marker to a
-// 20000-line file of equal lines. It is the input of the review probe:
-// without a budget the diff takes tens of seconds.
+// 20000-line file of equal lines. Without a budget, the diff of this
+// input takes tens of seconds.
 func repeatedLinesSnapshot() *Snapshot {
 	before := repeatedLines(DefaultLimits().MaxDiffLines)
 	after := repeatedLines(DefaultLimits().MaxDiffLines/2-1) + "TODO(x)\n" + repeatedLines(DefaultLimits().MaxDiffLines/2)
@@ -52,9 +52,9 @@ func repeatedLinesSnapshot() *Snapshot {
 	return snapshotOf(BoundaryProposedEdit, modifyChange("src/a.go", fileSide(before), fileSide(after)))
 }
 
-// countingContext reports no error for its first free calls of Err and
-// DeadlineExceeded after that. It lets a test end a budget at an exact
-// step of a loop that checks the context once per step.
+// countingContext returns nil from its first free calls of Err and
+// DeadlineExceeded from every later call. It lets a test end a budget at
+// an exact step of a loop that checks the context once per step.
 type countingContext struct {
 	context.Context
 
@@ -259,15 +259,15 @@ func TestLessonCheckApplyEditsBudget(t *testing.T) {
 	}}
 
 	t.Run("a live context applies every step", func(t *testing.T) {
-		after, tooLarge, note, err := applyEdits(context.Background(), "aaa", steps, 1<<20)
+		after, tooLarge, note, err := applyEdits(context.Background(), []byte("aaa"), steps, 1<<20)
 		require.NoError(t, err)
-		assert.Equal(t, "ddd", after)
+		assert.Equal(t, "ddd", string(after))
 		assert.Zero(t, tooLarge)
 		assert.Empty(t, note)
 	})
 
 	t.Run("an ended context stops before the first step", func(t *testing.T) {
-		after, _, note, err := applyEdits(endedBudget(t), "aaa", steps, 1<<20)
+		after, _, note, err := applyEdits(endedBudget(t), []byte("aaa"), steps, 1<<20)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 		assert.Empty(t, after, "a cut edit has no content")
 		assert.Empty(t, note, "the end of the budget is not a failed step")
@@ -276,7 +276,7 @@ func TestLessonCheckApplyEditsBudget(t *testing.T) {
 	t.Run("the context ends between two steps", func(t *testing.T) {
 		ctx := &countingContext{Context: context.Background(), free: 2}
 
-		_, _, _, err := applyEdits(ctx, "aaa", steps, 1<<20)
+		_, _, _, err := applyEdits(ctx, []byte("aaa"), steps, 1<<20)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 		assert.EqualValues(t, 3, ctx.calls.Load(), "the loop checks once per step and stops at the first end")
 	})

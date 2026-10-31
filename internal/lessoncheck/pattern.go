@@ -9,14 +9,17 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// This file holds no-added-pattern/1 (contract K3). The checker matches
-// the compiled pattern against each line that a change in scope adds.
-// The line rules are in lines.go.
+// This file holds no-added-pattern/1. The checker matches the compiled
+// pattern against each line that a change in scope adds. The line rules
+// are in lines.go.
 
-// patternMatch is one added line that matches the pattern.
+// patternMatch is one added line that matches the pattern: its evidence
+// entry without the excerpt, and the line text. It does not hold the
+// whole Change, because a pattern can match many lines and only the
+// first MaxEvidencePerResult entries stay.
 type patternMatch struct {
-	change Change
-	line   addedLine
+	evidence Evidence
+	text     string
 }
 
 // evaluatePattern applies no-added-pattern/1 in its numbered order:
@@ -32,12 +35,11 @@ type patternMatch struct {
 //
 // A path set that is not complete adds its cause to the causes of step
 // 3. So it gives unknown before step 4: a pass needs the full path set,
-// because no cut evaluation reads as pass (contract K3, Bounds).
+// because no cut evaluation reads as pass.
 func evaluatePattern(b budget, check Check, snap *Snapshot, scope []string) Result {
 	var (
 		res     Result
 		matches []patternMatch
-		causes  []reasonHit
 	)
 
 	// Validate compiles the pattern of every valid definition. A
@@ -55,9 +57,7 @@ func evaluatePattern(b budget, check Check, snap *Snapshot, scope []string) Resu
 
 		added, cause := addedLines(b, ch, scope, snap.Boundary, lim)
 		if cause.reason != "" {
-			res.UnknownPaths = append(res.UnknownPaths,
-				Evidence{Path: ch.Path, OldPath: ch.OldPath, Change: ch.Kind, Reason: cause.reason, limit: cause.limit})
-			causes = append(causes, cause)
+			res.UnknownPaths = append(res.UnknownPaths, unknownPath(ch, cause))
 
 			continue
 		}
@@ -69,15 +69,11 @@ func evaluatePattern(b budget, check Check, snap *Snapshot, scope []string) Resu
 		matches = append(matches, found...)
 
 		if cause.reason != "" {
-			res.UnknownPaths = append(res.UnknownPaths,
-				Evidence{Path: ch.Path, OldPath: ch.OldPath, Change: ch.Kind, Reason: cause.reason, limit: cause.limit})
-			causes = append(causes, cause)
+			res.UnknownPaths = append(res.UnknownPaths, unknownPath(ch, cause))
 		}
 	}
 
-	if !snap.PathsComplete {
-		causes = append(causes, incompletePaths(snap))
-	}
+	causes := unknownCauses(res.UnknownPaths, snap)
 
 	switch {
 	case len(matches) > 0:
@@ -102,9 +98,11 @@ const matchBudgetStride = 4096
 // matchAdded returns the added lines of one change that match the
 // pattern. It returns the cause of the end of the budget when the budget
 // ends before the last line. The matches found until then stay, because
-// an observed violation stays observed (spec L162).
+// an observed violation stays observed.
 func matchAdded(b budget, pattern *regexp.Regexp, ch Change, added []addedLine) ([]patternMatch, reasonHit) {
 	var matches []patternMatch
+
+	base := changeEvidence(ch)
 
 	for i, line := range added {
 		if i%matchBudgetStride == 0 {
@@ -114,7 +112,9 @@ func matchAdded(b budget, pattern *regexp.Regexp, ch Change, added []addedLine) 
 		}
 
 		if pattern.MatchString(line.text) {
-			matches = append(matches, patternMatch{change: ch, line: line})
+			e := base
+			e.Line = line.number
+			matches = append(matches, patternMatch{evidence: e, text: line.text})
 		}
 	}
 
@@ -122,8 +122,8 @@ func matchAdded(b budget, pattern *regexp.Regexp, ch Change, added []addedLine) 
 }
 
 // addedLines returns the lines that one touching change adds to the
-// scope (the K3 table). It returns a cause instead when the content that
-// the change needs is not text or not available.
+// scope. It returns a cause instead when the content that the change
+// needs is not text or not available.
 //
 // A modify or an in-scope move whose content and type are unchanged adds
 // no line and needs no content. A mode change alone adds no line, and a
@@ -143,12 +143,11 @@ func addedLines(b budget, ch Change, scope []string, boundary Boundary, lim Limi
 		return nil, reasonHit{}
 	case ch.Kind == ChangeAdd, ch.Kind == ChangeMove && !sourceIn:
 		// A move into the scope from outside adds its whole content.
-		after, cause := afterLines(ch, boundary, lim)
-		if cause.reason != "" {
+		if cause := afterCause(ch, boundary, lim); cause.reason != "" {
 			return nil, cause
 		}
 
-		return everyLine(after), reasonHit{}
+		return everyLine(sideLines(ch.After)), reasonHit{}
 	case ch.Kind == ChangeMove && !destIn:
 		// A move out of the scope is a deletion from the scope.
 		return nil, reasonHit{}
@@ -158,47 +157,48 @@ func addedLines(b budget, ch Change, scope []string, boundary Boundary, lim Limi
 
 	// A modify, or a move inside the scope with new content or type,
 	// adds the diff of the before and the after content.
-	before, cause := sideLines(ch.Before, true, boundary, lim)
-	if cause.reason != "" {
+	if cause := sideCause(ch.Before, true, boundary, lim); cause.reason != "" {
 		return nil, cause
 	}
 
-	after, cause := afterLines(ch, boundary, lim)
-	if cause.reason != "" {
+	if cause := afterCause(ch, boundary, lim); cause.reason != "" {
 		return nil, cause
 	}
 
-	if len(before) > lim.MaxDiffLines || len(after) > lim.MaxDiffLines {
-		// The diff is quadratic in the worst case, so a long side stops
-		// the evaluation of this path.
+	// The diff is quadratic in the worst case, so a long side stops the
+	// evaluation of this path. The count comes before the split, so a
+	// side above the limit is never split.
+	if sideLineCount(ch.Before) > lim.MaxDiffLines || sideLineCount(ch.After) > lim.MaxDiffLines {
 		return nil, reasonHit{reason: ReasonResourceLimit, limit: LimitMaxDiffLines}
 	}
 
-	return diffLinesWithin(b, before, after)
+	return diffLinesWithin(b, sideLines(ch.Before), sideLines(ch.After))
 }
 
-// afterLines returns the lines of the after side of a change. A
-// projected change whose after content the projection cannot compute
-// gives unprojectable-edit (contract K8). The before side of a modify
-// is read first, so its own cause, such as binary content, wins.
-func afterLines(ch Change, boundary Boundary, lim Limits) ([]string, reasonHit) {
+// afterCause returns the cause that keeps the after side of a change
+// unknown, or no cause when sideLines can read it. A projected change
+// whose after content the projection cannot compute gives
+// unprojectable-edit. addedLines checks the before side of a modify
+// first, so its own cause, such as binary content, wins.
+func afterCause(ch Change, boundary Boundary, lim Limits) reasonHit {
 	if ch.unprojectable != "" {
-		return nil, reasonHit{reason: ReasonUnprojectableEdit}
+		return reasonHit{reason: ReasonUnprojectableEdit}
 	}
 
-	return sideLines(ch.After, false, boundary, lim)
+	return sideCause(ch.After, false, boundary, lim)
 }
 
-// sideLines returns the lines of one side, or the cause that keeps them
-// unknown. before tells whether the side is the before state, because
-// a missing before state is a missing baseline (§5 row 11).
-func sideLines(side Side, before bool, boundary Boundary, lim Limits) ([]string, reasonHit) {
+// sideCause returns the cause that keeps the lines of one side unknown,
+// or no cause when sideLines can read them. before tells whether the
+// side is the before state, because a missing before state is a missing
+// baseline.
+func sideCause(side Side, before bool, boundary Boundary, lim Limits) reasonHit {
 	switch side.Type {
 	case ObjectFile, ObjectSymlink:
 	case ObjectGitlink, ObjectOther:
-		return nil, reasonHit{reason: ReasonUnsupportedContent}
+		return reasonHit{reason: ReasonUnsupportedContent}
 	default:
-		return nil, unavailable(before, boundary)
+		return unavailable(before, boundary)
 	}
 
 	switch side.Content {
@@ -206,41 +206,56 @@ func sideLines(side Side, before bool, boundary Boundary, lim Limits) ([]string,
 		// The producer classified the content. The checker repeats the
 		// text test, because a pass must never rest on a wrong label.
 		if textState(side.text) != ContentAvailable {
-			return nil, reasonHit{reason: ReasonUnsupportedContent}
+			return reasonHit{reason: ReasonUnsupportedContent}
 		}
 
-		// A link has its target as content, and the target is one line.
-		if side.Type == ObjectSymlink {
-			return []string{string(side.text)}, reasonHit{}
-		}
-
-		return splitLines(side.text), reasonHit{}
+		return reasonHit{}
 	case ContentBinary, ContentInvalidUTF8:
-		return nil, reasonHit{reason: ReasonUnsupportedContent}
+		return reasonHit{reason: ReasonUnsupportedContent}
 	case ContentTooLarge:
 		// A side that names its own limit keeps it. A pending record
 		// drops content above max-baseline-bytes, and the size of the
-		// side does not show that limit (contract K7).
+		// side does not show that limit.
 		if side.limit != "" {
-			return nil, reasonHit{reason: ReasonResourceLimit, limit: side.limit}
+			return reasonHit{reason: ReasonResourceLimit, limit: side.limit}
 		}
 
 		// A side above max-file-bytes is too large on its own. A smaller
 		// side is too large because the snapshot reached its total.
 		if side.Size > lim.MaxFileBytes {
-			return nil, reasonHit{reason: ReasonResourceLimit, limit: LimitMaxFileBytes}
+			return reasonHit{reason: ReasonResourceLimit, limit: LimitMaxFileBytes}
 		}
 
-		return nil, reasonHit{reason: ReasonResourceLimit, limit: LimitMaxSnapshotBytes}
+		return reasonHit{reason: ReasonResourceLimit, limit: LimitMaxSnapshotBytes}
 	default:
-		return nil, unavailable(before, boundary)
+		return unavailable(before, boundary)
 	}
+}
+
+// sideLines returns the lines of a side that sideCause accepts. A link
+// has its target as content, and the target is one line.
+func sideLines(side Side) []string {
+	if side.Type == ObjectSymlink {
+		return []string{string(side.text)}
+	}
+
+	return splitLines(side.text)
+}
+
+// sideLineCount returns the line count of sideLines without the split.
+// The max-diff-lines test uses it, so a long side costs no split.
+func sideLineCount(side Side) int {
+	if side.Type == ObjectSymlink {
+		return 1
+	}
+
+	return lineCount(side.text)
 }
 
 // unavailable is the cause for content that a check needs and that the
 // producer did not read. A before state that is missing at the
 // working-tree or actual-edit boundary is a missing baseline. Every
-// other missing content is content-unavailable (§5 row 11).
+// other missing content is content-unavailable.
 func unavailable(before bool, boundary Boundary) reasonHit {
 	if before && boundary != BoundaryProposedEdit {
 		return reasonHit{reason: ReasonMissingBaseline}
@@ -250,18 +265,16 @@ func unavailable(before bool, boundary Boundary) reasonHit {
 }
 
 // patternEvidence turns the first MaxEvidencePerResult matches into
-// evidence and counts the rest. Only the kept entries get an excerpt.
+// evidence and counts the rest. Only the kept entries get an excerpt,
+// so the cut matches cost no redaction.
 func patternEvidence(matches []patternMatch, lim Limits) (kept []Evidence, omitted int) {
-	all := make([]Evidence, 0, len(matches))
+	matches, omitted = boundEntries(matches, lim.MaxEvidencePerResult)
+	kept = make([]Evidence, 0, len(matches))
 
 	for _, m := range matches {
-		all = append(all, Evidence{Path: m.change.Path, OldPath: m.change.OldPath, Change: m.change.Kind, Line: m.line.number})
-	}
-
-	kept, omitted = boundEntries(all, lim.MaxEvidencePerResult)
-
-	for i := range kept {
-		kept[i].Excerpt = excerpt(matches[i].line.text, lim.MaxExcerptRunes)
+		e := m.evidence
+		e.Excerpt = excerpt(m.text, lim.MaxExcerptRunes)
+		kept = append(kept, e)
 	}
 
 	return kept, omitted
@@ -269,10 +282,10 @@ func patternEvidence(matches []patternMatch, lim Limits) (kept []Evidence, omitt
 
 // excerpt prepares one matching line for display. Redaction runs first,
 // on the raw line, so a secret is gone before the cut. Sanitize removes
-// control characters, and the cut bounds the length (contracts §1.6).
-// The producer also uses it for the first git status stderr line, the
-// text of the git-stderr notice, because that line is display text too
-// (ruling D2).
+// control characters, and the cut bounds the length, because an excerpt
+// goes to a terminal or an agent. The producer also uses it for the
+// first git status stderr line, the text of the git-stderr notice,
+// because that line is display text too.
 func excerpt(line string, maxRunes int) string {
 	return render.Truncate(render.Sanitize(redact.Secrets(line)), maxRunes)
 }

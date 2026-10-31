@@ -351,8 +351,9 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 	}
 
 	root := inspectRoot(req.Root)
+	refs := cfg.ShortPinRefs()
 	pinPaths, pinCounts := pinScopes(cfg, files)
-	checks, checkCounts := checkSummaries(cfg, pinPaths)
+	checks, checkCounts := checkSummaries(cfg, refs, pinPaths)
 	withEnforcement(checks, req.Capability)
 
 	for i, f := range files {
@@ -361,7 +362,7 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 	}
 
 	for _, sp := range sel.Pins {
-		p.Pins = append(p.Pins, preparedPin(cfg, sp, pinPaths))
+		p.Pins = append(p.Pins, preparedPin(cfg, refs, sp, pinPaths))
 	}
 
 	for _, l := range sel.Mined {
@@ -372,7 +373,7 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 	}
 
 	p.Checks = checks
-	p.Omitted = omissions(cfg, sel, root, files, pinPaths)
+	p.Omitted = omissions(cfg, refs, sel, root, files, pinPaths)
 
 	// A cancelled call returns no preparation, so it records none either.
 	if err := ctx.Err(); err != nil {
@@ -546,8 +547,11 @@ func pinScopes(cfg *reviews.Config, files []string) (paths map[reviews.PinKey][]
 
 // preparedPin is the document form of one selected pin. The entry comes
 // from report.EntryOf, so the preparation and the firing record name
-// one entry and one version for the pin.
-func preparedPin(cfg *reviews.Config, sp reviews.SurfacedPin, pinPaths map[reviews.PinKey][]string) PreparedPin {
+// one entry and one version for the pin. refs is cfg.ShortPinRefs. A
+// selected pin is an entry of cfg, so refs holds its key.
+func preparedPin(cfg *reviews.Config, refs map[reviews.PinKey]string, sp reviews.SurfacedPin,
+	pinPaths map[reviews.PinKey][]string,
+) PreparedPin {
 	key := reviews.NewPinKey(sp.Pin.Rule, sp.Pin.Region, sp.Pin.Regions)
 
 	paths := pinPaths[key]
@@ -556,13 +560,13 @@ func preparedPin(cfg *reviews.Config, sp reviews.SurfacedPin, pinPaths map[revie
 	}
 
 	return PreparedPin{
-		PinRef:      cfg.ShortPinRef(key),
+		PinRef:      refs[key],
 		PinIdentity: reviews.PinIdentityDigest(key),
 		PinVersion:  cfg.PinVersion(sp.Pin),
 		Entry:       report.EntryOf(cfg, sp),
 		Rule:        render.Sanitize(sp.Pin.Rule),
 		Note:        render.Sanitize(sp.Pin.Note),
-		Scope:       sortedScope(sp.Pin),
+		Scope:       lessoncheck.SortedScope(sp.Pin.AllRegions()),
 		Mode:        preparedMode(sp.Pin.Mode),
 		Paths:       paths,
 	}
@@ -581,44 +585,27 @@ func preparedMode(raw string) string {
 	}
 }
 
-// checkMode is the mode of a check summary. An unknown raw value is
-// advisory, as in lessoncheck: an unknown mode never arms a check.
-func checkMode(raw string) string {
-	if raw == modeCheck || raw == modeEnforce {
-		return raw
-	}
-
-	return modeAdvisory
-}
-
-// sortedScope returns the regions of a pin, sorted. The slice is never
-// nil, so a repository-wide pin encodes as [].
-func sortedScope(pin reviews.PinRule) []string {
-	scope := append([]string{}, pin.AllRegions()...)
-	slices.Sort(scope)
-
-	return scope
-}
-
 // checkSummaries lists every pin with a check mode or a check reference
 // that applies to a resolved path, in entry order. No budget, collapse,
 // or suppression applies, because an edit meets every active check. It
 // also counts the executable pins that apply to each path. An advisory
-// pin with a check never runs (§5 row 20), so it is listed with Runs false.
+// pin with a check never runs, so it is listed with Runs false.
 //
 // The paths of a pin come from pinScopes, so a pin and its check name
 // one path set. A directory above the scope of a pin thus gets the check
-// of that pin too (P3 review, ruling B). The one-way rule of contract K3
-// still decides which changes a check evaluates.
-func checkSummaries(cfg *reviews.Config, pinPaths map[reviews.PinKey][]string) (
+// of that pin too. The checkers still evaluate only the changes inside
+// the pin scope. refs is cfg.ShortPinRefs.
+func checkSummaries(cfg *reviews.Config, refs map[reviews.PinKey]string, pinPaths map[reviews.PinKey][]string) (
 	summaries []CheckSummary, counts map[string]int,
 ) {
 	summaries = []CheckSummary{}
 	counts = map[string]int{}
 
 	for _, pin := range cfg.Pin {
-		mode := checkMode(pin.Mode)
-		executable := mode != modeAdvisory
+		// An unknown mode reads advisory, as in the checkers, so it never
+		// arms a check. Runs then states what the checkers do.
+		mode, _ := lessoncheck.NormalizeMode(pin.Mode)
+		executable := mode.Executable()
 
 		if !executable && pin.Check == "" {
 			continue
@@ -642,9 +629,9 @@ func checkSummaries(cfg *reviews.Config, pinPaths map[reviews.PinKey][]string) (
 		// The pin row holds the same slice, so the summary gets a copy.
 		// A change to one field of the document then never changes the other.
 		summaries = append(summaries, CheckSummary{
-			PinRef:     cfg.ShortPinRef(key),
+			PinRef:     refs[key],
 			PinVersion: cfg.PinVersion(pin),
-			Mode:       mode,
+			Mode:       string(mode),
 			Runs:       executable,
 			Check:      ref,
 			Predicate:  predicate,
@@ -701,8 +688,8 @@ func checkRefOf(cfg *reviews.Config, id string) (ref lessoncheck.CheckRef, predi
 // omissions lists the pins and the mined lessons that the change budget
 // or the restatement collapse left out: Restated, then OverTotal, then
 // MinedOverTotal. Each names the command that shows the lessons of the
-// first requested path it applies to.
-func omissions(cfg *reviews.Config, sel report.Selection, root string, files []string,
+// first requested path it applies to. refs is cfg.ShortPinRefs.
+func omissions(cfg *reviews.Config, refs map[reviews.PinKey]string, sel report.Selection, root string, files []string,
 	pinPaths map[reviews.PinKey][]string,
 ) []Omission {
 	out := []Omission{}
@@ -711,7 +698,7 @@ func omissions(cfg *reviews.Config, sel report.Selection, root string, files []s
 		key := reviews.NewPinKey(sp.Pin.Rule, sp.Pin.Region, sp.Pin.Regions)
 
 		return Omission{
-			Kind: omittedPin, PinRef: cfg.ShortPinRef(key), PinVersion: cfg.PinVersion(sp.Pin),
+			Kind: omittedPin, PinRef: refs[key], PinVersion: cfg.PinVersion(sp.Pin),
 			Rule: render.Sanitize(sp.Pin.Rule), Reason: reason,
 			Inspect: inspectCommand(root, firstPathOf(pinPaths[key], files)),
 		}

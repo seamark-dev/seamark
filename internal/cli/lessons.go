@@ -580,8 +580,6 @@ func runLessonsProposals(cmd *cobra.Command, opts *options) error {
 		return err
 	}
 
-	health = withDelivery(health, cmd, opts, states[1])
-
 	// Applied pins are the ones that cost context on every edit, so the
 	// duplicate audit runs over them.
 	report.PrintProposalLedger(cmd.OutOrStdout(), states[0], states[1], states[2],
@@ -1253,8 +1251,7 @@ func runLessonsStats(cmd *cobra.Command, opts *options) error {
 
 	// Gather lists the applied proposals by ascending ID for the console.
 	// The command keeps its own order, newest first.
-	report.PrintOutcomes(cmd.OutOrStdout(), lessonstats.NewestFirst(snap.Applied), snap.Readings,
-		captureDelivery(cmd, opts, snap.Applied))
+	report.PrintOutcomes(cmd.OutOrStdout(), lessonstats.NewestFirst(snap.Applied), snap.Readings)
 
 	return nil
 }

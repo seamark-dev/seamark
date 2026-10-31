@@ -12,8 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// patternExampleJSON is the result example of contract K3. Its pin
-// digests are placeholders in the contract, so the test sets them.
+// patternExampleJSON is the expected JSON result of no-added-pattern/1
+// for one match and one binary path. Its pin digests are fixed
+// placeholders, so the test copies them into the result.
 const patternExampleJSON = `{
   "pin_ref": "77c0a1d2e3f4",
   "pin_identity": "77c0a1d2e3f4a5b6c7d8e9f00112233445566778899aabbccddeeff001122334",
@@ -54,7 +55,7 @@ func unreadSide(content string) Side {
 func TestLessonCheckNoAddedPattern(t *testing.T) {
 	cfg := onePin(t, KindNoAddedPattern, `TODO\(`, "src")
 
-	t.Run("the K3 example result", func(t *testing.T) {
+	t.Run("the full JSON result of a match beside a binary path", func(t *testing.T) {
 		example := parseValid(t, contractYAML+`  - rule: no-todo
     region: src
     note: Do not add TODO markers.

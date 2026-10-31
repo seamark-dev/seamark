@@ -1,11 +1,12 @@
 package lessoncheck
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,9 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This file holds the tests of ProjectOperation (contract K8). Every
-// repository lives under t.TempDir(), so no test reads or writes the
-// checkout that runs it (BRIEF rule 7).
+// This file holds the tests of ProjectOperation. Every repository lives
+// under t.TempDir(), so no test reads or writes the checkout that runs
+// it.
 
 // projectTodoYAML holds one forbid pin on generated/ and one pattern pin
 // on src. Both are check pins: these tests evaluate the snapshot, and the
@@ -92,51 +93,47 @@ func (g *gitRepo) projectWith(lim Limits, op Operation) *Snapshot {
 }
 
 // requireValidProjection checks the invariants of every proposed-edit
-// snapshot: the boundary, the pre-edit baseline without a pending
-// digest (§5 row 119), the fixed operation selection, the sorted
-// changes, the valid sides, and the digest of the fields.
+// snapshot: the shared invariants of an operation snapshot with the
+// pre-edit baseline without a pending digest, and the no-projection
+// limitation of each unprojectable change.
 func requireValidProjection(t *testing.T, snap *Snapshot, op Operation) {
 	t.Helper()
 
+	requireValidOperationSnapshot(t, snap, BoundaryProposedEdit, Baseline{Kind: BaselinePreEdit}, sortedUnique(operationPaths(op.Ops)))
+
+	for _, ch := range snap.Changes {
+		assert.Equal(t, ch.unprojectable != "", slices.Contains(ch.Limitations, LimitationNoProjection),
+			"an unprojectable change carries the limitation no-projection: %s", ch.Path)
+	}
+}
+
+// requireValidOperationSnapshot checks the invariants that the
+// proposed-edit and the actual-edit snapshots share: the boundary, the
+// baseline, the fixed operation selection, the sorted changes, the valid
+// sides, and the digest of the fields.
+func requireValidOperationSnapshot(t *testing.T, snap *Snapshot, boundary Boundary, baseline Baseline, paths []string) {
+	t.Helper()
+
 	require.Equal(t, SnapshotSchema, snap.Schema)
-	require.Equal(t, BoundaryProposedEdit, snap.Boundary)
-	require.Equal(t, Baseline{Kind: BaselinePreEdit}, snap.Baseline)
+	require.Equal(t, boundary, snap.Boundary)
+	require.Equal(t, baseline, snap.Baseline)
 	require.Equal(t, SelectionOperation, snap.Selection.Kind)
 	require.Equal(t, "the paths of one native edit", snap.Selection.Description)
 	require.Equal(t, []string{"writes outside this operation"}, snap.Selection.Excludes)
-
-	want := sortedUnique(operationPaths(op.Ops))
-	require.Equal(t, want, snap.Selection.Paths, "the selection holds every path of the operation, sorted")
+	require.Equal(t, paths, snap.Selection.Paths, "the selection holds every path of the operation, sorted")
 
 	require.NotNil(t, snap.Changes)
-	require.True(t, sort.SliceIsSorted(snap.Changes, func(i, j int) bool {
-		if snap.Changes[i].Path != snap.Changes[j].Path {
-			return snap.Changes[i].Path < snap.Changes[j].Path
-		}
-
-		return snap.Changes[i].OldPath < snap.Changes[j].OldPath
+	require.True(t, slices.IsSortedFunc(snap.Changes, func(a, b Change) int {
+		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(a.OldPath, b.OldPath))
 	}), "changes are sorted by path and old path")
 
 	for _, ch := range snap.Changes {
 		requireValidSide(t, ch.Path, ch.Before)
 		requireValidSide(t, ch.Path, ch.After)
 		require.Contains(t, []ChangeKind{ChangeAdd, ChangeDelete, ChangeModify, ChangeMove}, ch.Kind, ch.Path)
-		assert.Equal(t, ch.unprojectable != "", containsString(ch.Limitations, LimitationNoProjection),
-			"an unprojectable change carries the limitation no-projection: %s", ch.Path)
 	}
 
 	require.Equal(t, snapshotDigest(snap), snap.SHA256)
-}
-
-// containsString reports whether list holds s.
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-
-	return false
 }
 
 // projectedText returns the projected after content of a change. The
@@ -233,7 +230,7 @@ func TestLessonCheckProjectClaudeEdit(t *testing.T) {
 	}
 
 	for _, tc := range rejected {
-		t.Run("the native tool rejects "+tc.name+", so it is unprojectable-edit (§5 row 34)", func(t *testing.T) {
+		t.Run("the native tool rejects "+tc.name+", so it is unprojectable-edit", func(t *testing.T) {
 			g := newGitRepo(t)
 			g.write("src/a.go", tc.content)
 			snap := g.project(claudeOp("Edit", editOp("src/a.go", tc.old, "TODO(y)", tc.replaceAll)))
@@ -252,7 +249,7 @@ func TestLessonCheckProjectClaudeEdit(t *testing.T) {
 		})
 	}
 
-	t.Run("an absent file is unprojectable-edit, also with an empty old_string (N1)", func(t *testing.T) {
+	t.Run("an absent file is unprojectable-edit, also with an empty old_string", func(t *testing.T) {
 		for _, old := range []string{"", "x"} {
 			g := newGitRepo(t)
 			g.write("README.md", "r\n")
@@ -280,7 +277,7 @@ func TestLessonCheckProjectClaudeEdit(t *testing.T) {
 			snap := g.project(claudeOp("Edit", op))
 
 			res := resultOfRule(t, Evaluate(cfg, snap), "frozen-assets")
-			assert.Equal(t, OutcomeViolation, res.Outcome, "old_string %q (spec L168)", op.Edits[0].Old)
+			assert.Equal(t, OutcomeViolation, res.Outcome, "old_string %q", op.Edits[0].Old)
 		}
 	})
 
@@ -335,7 +332,7 @@ func TestLessonCheckProjectClaudeEdit(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(encoded), "SECRET")
 		assert.NotContains(t, string(encoded), "package a")
-		assert.NotContains(t, string(encoded), "pending_sha256", "a projection has no pending record (§5 row 119)")
+		assert.NotContains(t, string(encoded), "pending_sha256", "a projection has no pending record")
 	})
 }
 
@@ -394,7 +391,7 @@ func TestLessonCheckProjectMultiEditAtomic(t *testing.T) {
 		assert.Equal(t, "edit 2: old_string is empty", changeAt(t, snap, "src/a.go").unprojectable)
 	})
 
-	t.Run("a first empty old_string on an absent file stays unprojectable (N1)", func(t *testing.T) {
+	t.Run("a first empty old_string on an absent file stays unprojectable", func(t *testing.T) {
 		g := newGitRepo(t)
 		g.write("README.md", "r\n")
 		snap := g.project(claudeOp("MultiEdit", multiEditOp("src/new.go",
@@ -456,7 +453,7 @@ func TestLessonCheckProjectWriteAddAndModify(t *testing.T) {
 			"a line that the disk already holds is not added")
 	})
 
-	t.Run("a write of the same content is still a change (spec L168)", func(t *testing.T) {
+	t.Run("a write of the same content is still a change", func(t *testing.T) {
 		g := todoRepo(t)
 		snap := g.project(claudeOp("Write", writeOp("generated/a.txt", "frozen\n")))
 
@@ -567,7 +564,7 @@ func TestLessonCheckProjectPatchOps(t *testing.T) {
 		assert.Equal(t, []string{"docs/a.go", "src/a.go"}, snap.Selection.Paths)
 
 		res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")
-		assert.Equal(t, OutcomeViolation, res.Outcome, "a move into the scope adds every line (spec L150)")
+		assert.Equal(t, OutcomeViolation, res.Outcome, "a move into the scope adds every line")
 	})
 
 	t.Run("a move onto an existing file is a deletion and a modify", func(t *testing.T) {
@@ -586,7 +583,7 @@ func TestLessonCheckProjectPatchOps(t *testing.T) {
 		assert.Equal(t, OutcomeViolation, res.Outcome, "the target gains the source lines")
 	})
 
-	t.Run("an update with hunks has complete paths and unprojectable content (A8)", func(t *testing.T) {
+	t.Run("an update with hunks has complete paths and unprojectable content", func(t *testing.T) {
 		g := todoRepo(t)
 		snap := g.project(codexOp(FileOp{Kind: OpPatchUpdate, Path: "src/a.go", Hunks: true}))
 
@@ -939,7 +936,7 @@ func withoutNoProjection(list []string) []string {
 
 // TestLessonCheckProjectRepositoryDiscoveryDeadline proves that the
 // projection deadline bounds repository discovery. The test does not
-// assert that the git shim starts. Under CPU load the budget can pass
+// assert that the git shim starts. Under CPU load the budget can end
 // before the shell runs, and then the projection correctly starts no git.
 // Both outcomes end at the deadline, so the assertions hold in both cases
 // and do not depend on scheduler timing.

@@ -1,10 +1,9 @@
 package integration
 
-// The contract harness is the extension proof (specification AC-1): a
-// third client needs one descriptor and one registration, and nothing
-// in the shared engines or the existing descriptors changes. The
-// test-only client below is permanent contract coverage, never a
-// shipped integration.
+// The contract harness shows how a new client joins: a third client
+// needs one descriptor and one registration, and nothing in the shared
+// engines or the existing descriptors changes. The test-only client
+// below is permanent contract coverage, never a shipped integration.
 
 import (
 	"errors"
@@ -57,7 +56,8 @@ type fakeSetup struct{ inspection Inspection }
 
 func (f fakeSetup) Inspect(string) Inspection { return f.inspection }
 
-// ManagedGateMode repeats the inspection, as the contract requires.
+// ManagedGateMode repeats the inspection, because SetupAdapter requires
+// that it equals the ManagedGateMode of Inspect.
 func (f fakeSetup) ManagedGateMode(string) string { return f.inspection.ManagedGateMode }
 
 func (fakeSetup) Plan(string, string, ClientSetup) (ClientPlan, error) {
@@ -98,6 +98,18 @@ func thirdClient() Client {
 			return agent.CommandSpec{Name: thirdID, Argv: []string{"sh", "-c", "cat"}, Dir: root}, nil
 		},
 	}
+}
+
+// builtinWith returns a registry of the built-in clients plus the given
+// ones. Most tests of a test-only client register it beside the
+// built-ins, because a real contribution joins them the same way.
+func builtinWith(t *testing.T, extra ...Client) *Registry {
+	t.Helper()
+
+	reg, err := NewRegistry(append(Builtin().Clients(), extra...)...)
+	require.NoError(t, err)
+
+	return reg
 }
 
 // invocationOnlyClient declares nothing but the one-shot command: no
@@ -203,11 +215,11 @@ func checkClientContract(t *testing.T, c Client) {
 	}
 }
 
-// checkGuardContract checks a pre-write guard codec (contract K8). A
-// deny always blocks with the reason on stderr and writes no stdout.
-// A payload that the codec cannot read is an error with no file
-// operation, and the error result names the descriptor's client, never
-// a client from the payload.
+// checkGuardContract checks a pre-write guard codec. A deny always
+// blocks with the reason on stderr and writes no stdout. A payload
+// that the codec cannot read is an error with no file operation. The
+// error result names the descriptor's client, never a client from the
+// payload.
 func checkGuardContract(t *testing.T, c Client) {
 	t.Helper()
 
@@ -229,9 +241,9 @@ func checkGuardContract(t *testing.T, c Client) {
 	}
 }
 
-// checkCompletionContract checks a post-edit completion codec (contract
-// K9). The findings reply never blocks, for every tool outcome, because
-// the tool already ran. A payload that the codec cannot read is an
+// checkCompletionContract checks a post-edit completion codec. The
+// findings reply never blocks, for every tool outcome, because the
+// tool already ran. A payload that the codec cannot read is an
 // error with no path, and it names the descriptor's client.
 func checkCompletionContract(t *testing.T, c Client) {
 	t.Helper()
@@ -259,8 +271,8 @@ func TestBuiltinClientsSatisfyTheContract(t *testing.T) {
 	}
 }
 
-// TestBuiltinClientsDeclareLessonCheckCapabilities checks §5 row 117:
-// the three lesson-check capabilities join Capabilities and follow the
+// TestBuiltinClientsDeclareLessonCheckCapabilities checks that the
+// three lesson-check capabilities join Capabilities and follow the
 // descriptor fields, but never ConfiguredCapabilities, so an inspection
 // and the support line stay as they were.
 func TestBuiltinClientsDeclareLessonCheckCapabilities(t *testing.T) {
@@ -272,7 +284,7 @@ func TestBuiltinClientsDeclareLessonCheckCapabilities(t *testing.T) {
 		CapabilityLessonVerify, CapabilityLessonGuard, CapabilityLessonExploration,
 	}, Capabilities, "the new names follow the existing ones")
 	assert.Equal(t, []string{"lesson-verify", "lesson-guard", "lesson-exploration"},
-		[]string{string(lessonCaps[0]), string(lessonCaps[1]), string(lessonCaps[2])}, "the K10 names are frozen")
+		[]string{string(lessonCaps[0]), string(lessonCaps[1]), string(lessonCaps[2])}, "the lesson-check names are frozen")
 	assert.Equal(t, []Capability{
 		CapabilitySkills, CapabilityMCPRegistration, CapabilityToolGrants,
 		CapabilityEdits, CapabilityCommands, CapabilityResets,
@@ -305,8 +317,9 @@ func TestBuiltinClientsDeclareLessonCheckCapabilities(t *testing.T) {
 	})
 
 	t.Run("every pre-write path waits for its recording", func(t *testing.T) {
-		// No reviewed gate-5 recording exists, so no guard path claims a
-		// verified block (K10: never "enforced" for an unverified path).
+		// No reviewed native recording of a guard path exists yet, so no
+		// guard path claims a verified block. An unverified path never
+		// reads as "enforced".
 		for client, tools := range map[string][]string{
 			ClaudeID: {"Edit", "Write", "MultiEdit"},
 			CodexID:  {"apply_patch"},
@@ -358,8 +371,7 @@ func TestThirdClientNeedsOnlyADescriptorAndARegistration(t *testing.T) {
 	checkClientContract(t, third)
 
 	// One registration beside the unchanged built-ins.
-	r, err := NewRegistry(append(Builtin().Clients(), third)...)
-	require.NoError(t, err)
+	r := builtinWith(t, third)
 	assert.Equal(t, []string{ClaudeID, CodexID, thirdID}, r.IDs())
 
 	// Selection treats it like any other client.
@@ -404,8 +416,7 @@ func TestInvocationOnlyClientSatisfiesTheContract(t *testing.T) {
 	invoker := invocationOnlyClient()
 	checkClientContract(t, invoker)
 
-	r, err := NewRegistry(append(Builtin().Clients(), invoker)...)
-	require.NoError(t, err)
+	r := builtinWith(t, invoker)
 
 	got, ok := r.Lookup(invoker.ID)
 	require.True(t, ok)
@@ -426,8 +437,9 @@ func TestInvocationOnlyClientSatisfiesTheContract(t *testing.T) {
 }
 
 func TestRegistryInjectionReplacesTheBuiltins(t *testing.T) {
-	// Consumers take a registry value; a test can hand them one that
-	// holds only the fake client and observe no built-in leaking in.
+	// Consumers take a registry value. A test can give them one that
+	// holds only the fake client and check that no built-in client
+	// appears.
 	r, err := NewRegistry(thirdClient())
 	require.NoError(t, err)
 
@@ -439,9 +451,9 @@ func TestRegistryInjectionReplacesTheBuiltins(t *testing.T) {
 }
 
 func TestCommandFailureEncodingIsBlockingOnlyWhenAsked(t *testing.T) {
-	// The fake command codec documents the gate's contract: a failure
-	// translation carries the reason on stderr with exit 2, and it is
-	// the caller's mode decision whether to use it.
+	// The fake command codec shows the CommandHooks rule for failures. A
+	// failure translation carries the reason on stderr with exit 2. The
+	// caller's mode decides whether to use it.
 	reply := fakeCommands{}.EncodeFailure(errors.New("policy unreadable"))
 	assert.Equal(t, 2, reply.ExitCode)
 	assert.Equal(t, "policy unreadable", string(reply.Stderr))

@@ -1,6 +1,6 @@
 package integration
 
-// Offline replay of the gate-5 guard recordings (plan step P4.11).
+// Offline replay of the native guard recordings.
 // `make capture-native-record CLIENT=<client> CAPTURE_NATIVE_SCENARIO=guard`
 // records them with the installed client and the operator's own login.
 // A reviewer copies the reviewed sanitized copy into
@@ -14,11 +14,11 @@ package integration
 // For a denied case they check the blocking facts: the payload of the
 // first attempt, a deny record that wrote its reply, no post-edit record
 // of the same call, and fixture directories that the run left unchanged.
-// They also check the capability reports of the phases against the
-// contract K10 rules. They do not decide whether a deny text or a
-// post-edit reply reached the model. That answer is what the recording
-// measures, so the reviewer reads it from guard-context.jsonl and the
-// transcripts (gate-5 checklist).
+// They also check that the capability report of each phase claims no
+// enforcement without verified evidence. They do not decide whether a
+// deny text or a post-edit reply reached the model. That answer is what
+// the recording measures, so the reviewer reads it from
+// guard-context.jsonl and the transcripts.
 //
 // The replay tests run only when SEAMARK_NATIVE_CLIENT names the client
 // (make capture-native-check). Without a reviewed recording they skip as
@@ -58,15 +58,14 @@ const (
 )
 
 // The case names of the guard scenario. The script writes one name per
-// paid run, so the names are the contract between the script and these
-// tests.
+// paid run, so the script and these tests must use the same names.
 const (
 	guardEditViolation      = "edit-violation"
 	guardWriteViolation     = "write-violation"
 	guardMultiEditViolation = "multiedit-violation"
 	guardSubagentViolation  = "subagent-violation"
 	guardUnknownEdit        = "unknown-edit"
-	guardN1AbsentEdit       = "n1-absent-edit"
+	guardAbsentEdit         = "n1-absent-edit"
 	guardPermittedWrite     = "permitted-write"
 	guardConfigError        = "config-error"
 	guardCheckOnly          = "check-only"
@@ -87,7 +86,7 @@ const (
 var (
 	claudeGuardCases = []string{
 		guardEditViolation, guardWriteViolation, guardMultiEditViolation, guardSubagentViolation,
-		guardUnknownEdit, guardN1AbsentEdit, guardPermittedWrite, guardConfigError, guardCheckOnly,
+		guardUnknownEdit, guardAbsentEdit, guardPermittedWrite, guardConfigError, guardCheckOnly,
 		guardCheckInstalled, guardFailureReach, guardReportOnlyWrapper, guardSlowGuard,
 	}
 	codexGuardCases = []string{
@@ -102,12 +101,12 @@ var (
 var guardPhasesWithoutGuard = []string{"post-only", "wrapper", "slow"}
 
 // codexAddAttributions are the attributions that a post-edit record of
-// a native Add File section can have. The K8 projection joins the added
-// lines with "\n" and adds no final newline. No recording shows yet
-// whether the native applier writes one. With a final newline, the
-// observed content differs from the projection. The replay accepts both
-// and logs the answer, and the gate-5 checklist asks the reviewer to
-// report it, because the contract is frozen.
+// a native Add File section can have. The guard projection
+// (applyPatchOps) joins the added lines with "\n" and adds no final
+// newline. No recording shows yet whether the native applier writes
+// one. With a final newline, the observed content differs from the
+// projection. The replay accepts both and logs the answer for the
+// reviewer, because only native evidence can change the projection.
 var codexAddAttributions = []lessoncheck.Attribution{
 	lessoncheck.AttributionProjectionMatch, lessoncheck.AttributionProjectionDiffers,
 }
@@ -174,7 +173,7 @@ type guardCapability struct {
 	LessonChecks *lessoncheck.CapabilityReport `json:"lesson_checks"`
 }
 
-// guardRecording is one reviewed gate-5 guard recording. It embeds the
+// guardRecording is one reviewed native guard recording. It embeds the
 // timing view of a recording, so the sequence and path helpers of the
 // timing replay serve it too.
 type guardRecording struct {
@@ -187,9 +186,11 @@ type guardRecording struct {
 	identities []guardIdentity
 }
 
-// guardIdentity binds one observed payload to the audit's original identity
-// root. The collector records digests before sanitization replaces that root.
-// It stores no raw root, session, agent, receiver, or tool-call ID.
+// guardIdentity is one line of guard-identities.jsonl. It joins one
+// observed payload to its audit record. The collector writes the
+// digests before the sanitizer replaces the identity root, so they use
+// the same root as the audit digests. It stores no raw root, session,
+// agent, receiver, or tool-call ID.
 type guardIdentity struct {
 	File       string `json:"file"`
 	Run        int    `json:"run"`
@@ -236,28 +237,14 @@ func readGuardRecording(t *testing.T, client string) (guardRecording, bool) {
 		r.runs[c.Case] = c.Run
 	}
 
-	for _, h := range r.manifest.Hooks {
-		// Run 0 holds payloads from before the first paid run, for
-		// example of an interactive trust review. No case owns them.
-		if h.Run == 0 {
-			continue
-		}
-
-		payload, err := os.ReadFile(filepath.Join(dir, h.File))
-		require.NoError(t, err)
-
-		var raw map[string]any
-		require.NoError(t, json.Unmarshal(payload, &raw), h.File)
-
-		seq := len(r.events[h.Run])
-		r.events[h.Run] = append(r.events[h.Run], timingEvent{hook: h, seq: seq, payload: payload, raw: raw})
-	}
+	r.readHookEvents(t)
 
 	readGuardLines(t, filepath.Join(dir, guardAuditFile), &r.audit)
 	readGuardLines(t, filepath.Join(dir, guardHooksFile), &r.hooks)
 	readGuardLines(t, filepath.Join(dir, guardCapabilityFile), &r.capability)
-	// Older recordings have no exact event-to-audit join. Their evidence
-	// stays unknown; the replay must not guess from tool names or order.
+	// An older recording has no identity file, so no payload joins its
+	// audit record exactly. Its evidence stays unknown, because the
+	// replay must not guess the join from tool names or order.
 	if slices.Contains(r.manifest.Extras, guardIdentityFile) {
 		readGuardLines(t, filepath.Join(dir, guardIdentityFile), &r.identities)
 	}
@@ -270,19 +257,33 @@ func readGuardRecording(t *testing.T, client string) (guardRecording, bool) {
 func readGuardLines[T any](t *testing.T, file string, out *[]T) {
 	t.Helper()
 
-	data, err := os.ReadFile(file)
-	require.NoError(t, err)
-
-	if len(data) == 0 {
-		return
-	}
-
 	for _, line := range timingLines(t, file) {
 		var v T
 		require.NoError(t, json.Unmarshal(line, &v), file)
 
 		*out = append(*out, v)
 	}
+}
+
+// TestReadGuardLinesDecodesEachLine checks the JSONL reader of the guard
+// replay: each line gives one element, and a blank line or an empty
+// file gives none.
+func TestReadGuardLinesDecodesEachLine(t *testing.T) {
+	dir := t.TempDir()
+
+	lines := filepath.Join(dir, "lines.jsonl")
+	require.NoError(t, os.WriteFile(lines, []byte(`{"run":1,"hook":"guard"}`+"\n\n"+`{"run":2}`+"\n"), 0o600))
+
+	var got []guardHookResult
+	readGuardLines(t, lines, &got)
+	assert.Equal(t, []guardHookResult{{Run: 1, Hook: "guard"}, {Run: 2}}, got)
+
+	empty := filepath.Join(dir, "empty.jsonl")
+	require.NoError(t, os.WriteFile(empty, nil, 0o600))
+
+	var none []guardHookResult
+	readGuardLines(t, empty, &none)
+	assert.Nil(t, none, "an empty file gives no element")
 }
 
 // loadGuardRecording reads the reviewed guard recording of a client for
@@ -298,7 +299,7 @@ func loadGuardRecording(t *testing.T, client string, cases ...string) guardRecor
 
 	r, ok := readGuardRecording(t, client)
 	if !ok {
-		t.Skipf("pending: no reviewed gate-5 guard recording in %s; record one with "+
+		t.Skipf("pending: no reviewed native guard recording in %s; record one with "+
 			"make capture-native-record CLIENT=%s CAPTURE_NATIVE_SCENARIO=guard, review the sanitized copy, "+
 			"and copy it there", filepath.Join("testdata", client, "guard"), client)
 	}
@@ -308,7 +309,7 @@ func loadGuardRecording(t *testing.T, client string, cases ...string) guardRecor
 	// assertion on a call would fail with a message that hides the cause.
 	require.Contains(t, r.manifest.Extras, guardIdentityFile,
 		"the recording has no %s: record again with the current scripts/capture-native.sh", guardIdentityFile)
-	t.Logf("gate-5 guard recording of %s %s: %d cases", client, r.manifest.ClientVersion, len(r.cases))
+	t.Logf("native guard recording of %s %s: %d cases", client, r.manifest.ClientVersion, len(r.cases))
 
 	return r
 }
@@ -351,8 +352,10 @@ func (r guardRecording) guardRecord(t *testing.T, name, tool string) (lessonchec
 	return lessoncheck.AuditRecord{}, false
 }
 
-// guardRecordOf requires one metadata row and one audit record for this
-// event, case, client, session, call, and receiving context. Ambiguity is unknown.
+// guardRecordOf returns the guard record of one pre-write event. The
+// join needs exactly one identity row and one audit record that match
+// the event, case, client, session, call, and receiving context. A
+// missing or ambiguous join gives false, so the evidence stays unknown.
 func (r guardRecording) guardRecordOf(name string, e timingEvent) (lessoncheck.AuditRecord, bool) {
 	c, exists := r.cases[name]
 	client := r.manifest.Client
@@ -391,8 +394,8 @@ func (r guardRecording) guardRecordOf(name string, e timingEvent) (lessoncheck.A
 	return found, count == 1
 }
 
-// guardDigest accepts only the lowercase hex SHA-256 form that the
-// collector writes.
+// guardDigest reports whether s has the lowercase hex SHA-256 form that
+// the collector writes.
 func guardDigest(s string) bool {
 	raw, err := hex.DecodeString(s)
 
@@ -401,7 +404,7 @@ func guardDigest(s string) bool {
 
 // postEditOf returns the post-edit record of the call that a record
 // names, by its match digest, or false. Both records come from one
-// recording, so their digests share one identity root (contract K9).
+// recording, so their digests share one identity root.
 func (r guardRecording) postEditOf(t *testing.T, name string, call lessoncheck.AuditRecord) (lessoncheck.AuditRecord, bool) {
 	t.Helper()
 
@@ -429,10 +432,8 @@ func (r guardRecording) opPaths(op lessoncheck.Operation) []string {
 	var out []string
 
 	for _, fop := range op.Ops {
-		out = append(out, r.rel(op.CWD, fop.Path))
-
-		if fop.MoveTo != "" {
-			out = append(out, r.rel(op.CWD, fop.MoveTo))
+		for _, p := range fop.Paths() {
+			out = append(out, r.rel(op.CWD, p))
 		}
 	}
 
@@ -554,7 +555,7 @@ func assertEmitted(t *testing.T, name string, post lessoncheck.AuditRecord) {
 // assertWrapper checks the report-only wrapper case: the indirection
 // entry ran the guard, which denied, and discarded its exit status. The
 // client then ran the tool, so a post-edit record of the same call
-// exists without a baseline (contract K9, "executed after deny").
+// exists without a baseline.
 func (r guardRecording) assertWrapper(t *testing.T, tool, p string) {
 	t.Helper()
 
@@ -594,9 +595,10 @@ func (r guardRecording) assertSlow(t *testing.T, tool, p string) {
 		r.manifest.Client, r.manifest.ClientVersion, waited, p, c.created(p))
 }
 
-// assertCapability checks the capability report of each phase against
-// the contract K10 rules. No pin reads enforced unless every pre-write
-// path of the client is active with verified evidence.
+// assertCapability checks the capability report of each phase. No pin
+// reads enforced unless every pre-write path of the client is active
+// with verified evidence. Each phase gives its pre-write paths the state
+// and the reasons that its hook setup implies.
 func (r guardRecording) assertCapability(t *testing.T, client string) {
 	t.Helper()
 
@@ -711,7 +713,7 @@ func TestCaptureNativeClaudeGuardRecording(t *testing.T) {
 		name := guardUnknownEdit
 		if !r.has(name, "PreToolUse", claudeToolEdit) {
 			t.Skipf("case %s: no PreToolUse Edit payload; the client refused the call before the hook, "+
-				"or the model made no call (gate-5 checklist)", name)
+				"or the model made no call", name)
 		}
 
 		_, deny := r.assertDenied(t, name, claudeToolEdit)
@@ -719,11 +721,11 @@ func TestCaptureNativeClaudeGuardRecording(t *testing.T) {
 		assert.Contains(t, deny.Guard.Reasons, lessoncheck.ReasonUnprojectableEdit)
 	})
 
-	t.Run("one Edit on an absent file outside every pin (N1)", func(t *testing.T) {
-		name := guardN1AbsentEdit
+	t.Run("one Edit on an absent file outside every pin", func(t *testing.T) {
+		name := guardAbsentEdit
 		if !r.has(name, "PreToolUse", claudeToolEdit) {
 			t.Skipf("case %s: no PreToolUse Edit payload; the client refused the call before the hook, "+
-				"or the model made no call (gate-5 checklist)", name)
+				"or the model made no call", name)
 		}
 
 		e := r.sequence(t, name, "UserPromptSubmit", "PreToolUse:"+claudeToolEdit)[1]
@@ -737,11 +739,12 @@ func TestCaptureNativeClaudeGuardRecording(t *testing.T) {
 		require.True(t, ok, "the guard wrote a record")
 		assert.Equal(t, lessoncheck.GuardAllow, allow.Guard.Decision, "no enforce pin scopes free/")
 
-		// P0 review ruling N1: the K8 Edit row stays unprojectable-edit
-		// until this case shows that one Edit creates the absent file.
+		// The projection treats an Edit on an absent file as
+		// unprojectable, also with an empty old_string. It keeps that rule
+		// until this case shows that one Edit creates the file.
 		assert.False(t, r.cases[name].created("free/n1.txt"),
-			"N1: one Edit created an absent file on Claude Code %s; the K8 Edit row must now project an add "+
-				"with new_string (P0 review N1), and this assertion changes with it", r.manifest.ClientVersion)
+			"one Edit created an absent file on Claude Code %s; the Edit projection must now project an add "+
+				"with new_string, and this assertion changes with it", r.manifest.ClientVersion)
 	})
 
 	t.Run("a permitted Write completes and its post-edit check passes", func(t *testing.T) {
@@ -794,12 +797,12 @@ func TestCaptureNativeClaudeGuardRecording(t *testing.T) {
 	t.Run("a failed Edit without a baseline gets a PostToolUseFailure reply", func(t *testing.T) {
 		name := guardFailureReach
 		if !r.has(name, "PreToolUse", claudeToolEdit) {
-			t.Skipf("case %s: no PreToolUse Edit payload; the model made no Edit call (gate-5 checklist)", name)
+			t.Skipf("case %s: no PreToolUse Edit payload; the model made no Edit call", name)
 		}
 
 		if !r.has(name, "PostToolUseFailure", claudeToolEdit) {
 			t.Skipf("case %s: Claude Code %s sent no PostToolUseFailure for the failed Edit; the failure reply stays "+
-				"unverified (contracts §5 row 38)", name, r.manifest.ClientVersion)
+				"unverified", name, r.manifest.ClientVersion)
 		}
 
 		assert.Empty(t, ofKind(r.records(t, name), lessoncheck.AuditGuard), "the phase has no pre-write hook")
@@ -874,7 +877,7 @@ func TestCaptureNativeCodexGuardRecording(t *testing.T) {
 		assertChild(t, CodexID, steps[1], e, deny)
 	})
 
-	t.Run("an update in the pattern scope is denied as unknown (A8)", func(t *testing.T) {
+	t.Run("an update in the pattern scope is denied as unknown", func(t *testing.T) {
 		e, deny := r.assertDenied(t, guardUpdateUnknown, codexApplyPatch)
 		op := guardOp(t, CodexID, e)
 		require.Len(t, op.Ops, 1)
@@ -897,7 +900,7 @@ func TestCaptureNativeCodexGuardRecording(t *testing.T) {
 			codexAddAttributions...)
 	})
 
-	t.Run("an update outside every pin is the native content case of A8", func(t *testing.T) {
+	t.Run("an update outside every pin is a native content case of the update applier", func(t *testing.T) {
 		name := guardUpdatePermitted
 		e := r.sequence(t, name, "UserPromptSubmit", "PreToolUse:"+codexApplyPatch)[1]
 		op := guardOp(t, CodexID, e)
@@ -913,9 +916,10 @@ func TestCaptureNativeCodexGuardRecording(t *testing.T) {
 		require.NotEqual(t, c.Before.Text["free/oracle.txt"], c.After.Text["free/oracle.txt"], "the native applier changed the file")
 
 		// The patch, the content before, and the content after are one
-		// native content case for the update applier (plan step P4.12).
+		// native content case for the update applier. A verified content
+		// projection of an update needs such cases.
 		input, _ := e.raw["tool_input"].(map[string]any)
-		t.Logf("A8 content case of codex-cli %s:\npatch: %q\nbefore: %q\nafter: %q", r.manifest.ClientVersion,
+		t.Logf("update content case of codex-cli %s:\npatch: %q\nbefore: %q\nafter: %q", r.manifest.ClientVersion,
 			nativeString(input, "command"), c.Before.Text["free/oracle.txt"], c.After.Text["free/oracle.txt"])
 	})
 

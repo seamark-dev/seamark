@@ -19,14 +19,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This file holds the tests of DecideGuard (contract K8). Every
-// repository lives under t.TempDir(), so no test reads or writes the
-// checkout that runs it (BRIEF rule 7).
+// This file holds the tests of DecideGuard. Every repository lives
+// under t.TempDir(), so no test reads or writes the checkout that runs
+// it.
 
 // guardYAML holds two enforce pins and one check pin. The advisory
 // budget, the mute rules, the delivery mode, and the threshold would
 // hold back both enforce pins on the advisory hook path. The guard must
-// ignore them (ruling M2).
+// ignore them, because they would let an enforce pin miss an edit.
 const guardYAML = `lesson_checks_version: 1
 threshold: 99
 hook_delivery: once-per-context
@@ -128,8 +128,46 @@ func requireDecisionShape(t *testing.T, d GuardDecision) {
 	}
 }
 
+// TestLessonCheckGuardConstructors proves the decisions that the CLI
+// handler takes without DecideGuard. The audit record embeds them, so
+// the test freezes the JSON bytes.
+func TestLessonCheckGuardConstructors(t *testing.T) {
+	t.Run("DenyInternal equals the deny of a request without a configuration", func(t *testing.T) {
+		for _, op := range []Operation{{}, claudeOp("Write")} {
+			want, wantTexts := DecideGuard(GuardInput{Operation: op})
+			got, texts := DenyInternal(op.Tool)
+
+			requireDecisionShape(t, got)
+			assert.Equal(t, want, got)
+			assert.Equal(t, wantTexts, texts)
+		}
+
+		decision, texts := DenyInternal("Write")
+		assert.Equal(t, []string{"lesson check guard cannot decide this Write request: internal error"}, texts)
+
+		data, err := json.Marshal(decision)
+		require.NoError(t, err)
+		assert.Equal(t, `{"schema":"lesson-guard/1","decision":"deny","cause":"internal-error",`+
+			`"input_sha256":"","paths_complete":false,"pins":[],"requested":"deny",`+
+			`"protocol":"exit-2-stderr","reply_written":false,"native_blocking":""}`, string(data))
+	})
+
+	t.Run("AllowUncovered names its cause and evaluates no pin", func(t *testing.T) {
+		decision := AllowUncovered()
+
+		requireDecisionShape(t, decision)
+		assert.Equal(t, GuardAllow, decision.Decision)
+
+		data, err := json.Marshal(decision)
+		require.NoError(t, err)
+		assert.Equal(t, `{"schema":"lesson-guard/1","decision":"allow","cause":"tool-uncovered",`+
+			`"input_sha256":"","paths_complete":false,"pins":[],"requested":"none",`+
+			`"protocol":"exit-2-stderr","reply_written":false,"native_blocking":""}`, string(data))
+	})
+}
+
 // guardForbiddenWords are words that would tell the agent how to turn
-// the guard off (R-38). No deny text holds one.
+// the guard off. No deny text holds one.
 var guardForbiddenWords = []string{"set-mode", "advisory", "disable", "bypass", "uninstall", "--no-verify", "lesson-checks off", "mode: check"}
 
 func TestLessonCheckDecideGuardMatrix(t *testing.T) {
@@ -185,7 +223,7 @@ func TestLessonCheckDecideGuardMatrix(t *testing.T) {
 			pins:  []pinOutcome{},
 		},
 		{
-			name:    "an edit that the native tool rejects denies with the count (§5 row 34)",
+			name:    "an edit that the native tool rejects denies with the count",
 			op:      claudeOp("Edit", editOp("src/a.go", "zzz", "TODO(y)", false)),
 			cause:   GuardCauseUnknown,
 			reasons: []Reason{ReasonUnprojectableEdit},
@@ -193,7 +231,7 @@ func TestLessonCheckDecideGuardMatrix(t *testing.T) {
 			texts:   []string{patternHead + " cannot evaluate src/a.go: unprojectable-edit; old_string occurs 0 times"},
 		},
 		{
-			name:    "an Edit of an absent file denies until the native sentinel (N1)",
+			name:    "an Edit of an absent file denies until the native sentinel",
 			op:      claudeOp("Edit", editOp("src/new.go", "", "package new\n", false)),
 			cause:   GuardCauseUnknown,
 			reasons: []Reason{ReasonUnprojectableEdit},
@@ -201,7 +239,7 @@ func TestLessonCheckDecideGuardMatrix(t *testing.T) {
 			texts:   []string{patternHead + " cannot evaluate src/new.go: unprojectable-edit; the file does not exist"},
 		},
 		{
-			name:    "a Codex update in a pattern scope denies (A8)",
+			name:    "a Codex update in a pattern scope denies",
 			op:      codexOp(FileOp{Kind: OpPatchUpdate, Path: "src/a.go", Hunks: true}),
 			cause:   GuardCauseUnknown,
 			reasons: []Reason{ReasonUnprojectableEdit},
@@ -339,7 +377,7 @@ func TestLessonCheckDecideGuardMatrix(t *testing.T) {
 		})
 	}
 
-	t.Run("no deny text tells the agent how to turn the guard off (R-38)", func(t *testing.T) {
+	t.Run("no deny text tells the agent how to turn the guard off", func(t *testing.T) {
 		require.NotEmpty(t, allTexts)
 
 		for _, text := range allTexts {
@@ -363,7 +401,7 @@ func TestLessonCheckDecideGuardMatrix(t *testing.T) {
 		assert.Equal(t, []pinOutcome{
 			{linkCfg.Pins[0].Identity, OutcomeUnknown, ReasonIncompletePaths},
 			{linkCfg.Pins[1].Identity, OutcomeUnknown, ReasonIncompletePaths},
-		}, pinOutcomes(decision), "the link target can lie in any scope; incomplete-paths comes first in the K3 precedence")
+		}, pinOutcomes(decision), "the link target can lie in any scope; incomplete-paths comes first in the reason precedence")
 		assert.Contains(t, texts, patternHead+" cannot evaluate src/link.md: unprojectable-edit; the path is a symbolic link")
 	})
 
@@ -459,7 +497,7 @@ pin:
 		assert.Equal(t, GuardCauseInternalError, decision.Cause)
 	})
 
-	t.Run("a panic denies with internal-error (step 7)", func(t *testing.T) {
+	t.Run("a panic denies with internal-error", func(t *testing.T) {
 		beforeDecide = func() { panic("decision failure") }
 		t.Cleanup(func() { beforeDecide = nil })
 
@@ -537,7 +575,7 @@ pin:
 		}
 	})
 
-	t.Run("the decision example of contract K8 decodes into the type", func(t *testing.T) {
+	t.Run("a full deny decision round-trips through the type and matches a real deny", func(t *testing.T) {
 		const example = `{"schema": "lesson-guard/1", "decision": "deny", "cause": "unknown", "reasons": ["unprojectable-edit"], "input_sha256": "9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f3021120e4f5a0d6f3c1e", "paths_complete": true, "pins": [{"pin_identity": "77c0a1d2e3f4a5b6c7d8e9f00112233445566778899aabbccddeeff001122334", "pin_version": "c1d2e3f4a5b6c7d8e9f0112233445566778899aabbccddeeff00112233445566", "mode": "enforce", "check": {"id": "no-todo", "kind": "no-added-pattern/1", "version": "c044c91d812033b1da35c51ad301b6a3a06b09503b8e1126b392c1d643d7aa3b"}, "outcome": "unknown", "reason": "unprojectable-edit", "evidence_paths": 1}], "requested": "deny", "protocol": "exit-2-stderr", "reply_written": true, "native_blocking": "unverified"}`
 
 		var decoded GuardDecision

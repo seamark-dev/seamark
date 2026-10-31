@@ -9,20 +9,13 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// This file holds the capability report (lesson-capability/1, contract
-// K10). CapabilityReportOf joins the requested modes of lessons.yaml
-// with the hook paths that the inspection reads. It is the only place
-// that computes a path state, a badge, or an uncovered writer (§5 row
-// 41). So init, doctor, status, --set-mode, preparation, and the console
-// show one account of the coverage.
-
 // CapabilitySchema names the format of the capability report.
 const CapabilitySchema = "lesson-capability/1"
 
 // MinHandlerRelease is the first seamark release whose binary has the
 // lesson-check hook handlers. A hook binary of an older release cannot
-// run them (§5 row 116). The value is a placeholder until the release
-// that ships the handlers sets its tag.
+// run them. The value is a placeholder until the release that ships the
+// handlers sets its tag.
 const MinHandlerRelease = "v0.9.0"
 
 // The installed lesson-check modes of a client.
@@ -55,8 +48,9 @@ const (
 	PathUnsupported      PathState = "unsupported"
 )
 
-// The capability reasons. The reason table of contract K10 gives the
-// source of each one and its effect on the path state.
+// The capability reasons. The inspection puts some of them on the
+// installed paths, and CapabilityReportOf adds the others.
+// inactiveReasons lists the reasons that make a path inactive.
 const (
 	CapNotInstalled            CapReason = "not-installed"
 	CapCheckOnlyInstalled      CapReason = "check-only-installed"
@@ -85,7 +79,7 @@ var inactiveReasons = []CapReason{
 }
 
 // The binary states of a hook command, from the static identification
-// of the hook binary (contract K10).
+// of the hook binary.
 const (
 	BinaryCurrent = "current"
 	BinaryOther   = "other"
@@ -129,19 +123,19 @@ const (
 const LevelVerified = "verified"
 
 // MarkerGuard and MarkerBaseline start the pre-write markers of every
-// client (contract K10, "Hook specs and markers"). A Codex marker adds
-// " --client codex". The report reads the installed mode from them,
-// because the frozen InstalledPath has no mode field.
+// client. A Codex marker adds " --client codex". The report reads the
+// installed mode from them, because InstalledPath has no mode field.
 const (
 	MarkerGuard    = "lessons --guard --hook"
 	MarkerBaseline = "lessons --baseline --hook"
 )
 
-// LoadForCapability reads lessons.yaml for the capability report. It is
-// Load with one change: a file that does not read or decode (tier 1)
-// gives an empty Config that keeps the digest of the bytes, and one
-// decode-error entry in the errors. The report then names the file as
-// invalid in the K5 form, and it never reads a broken file as absent.
+// LoadForCapability reads lessons.yaml for the capability report. It
+// differs from Load only for a file that does not read or decode (tier
+// 1). Such a file gives an empty Config that keeps the digest of the
+// bytes, and one decode-error entry in the errors. The report then names
+// the file as invalid in the form of the verification result. So the
+// report never reads a broken file as absent.
 func LoadForCapability(root string) (*Config, []ConfigError) {
 	data, err := os.ReadFile(configPath(root))
 
@@ -157,15 +151,15 @@ func ParseForCapability(data []byte, readErr error) (*Config, []ConfigError) {
 		return loaded.cfg, loaded.report.Errors
 	}
 
-	cfg, _ := newConfig(reviews.DefaultConfig(), loaded.sha256)
+	cfg, _ := newConfig(reviews.DefaultConfig(), loaded.report.SHA256)
 
 	return cfg, loaded.report.Errors
 }
 
-// CapabilityReportOf joins the configuration and the installed paths
-// (contract K10). cfgErrs are the tier-1 and tier-2 errors of the
-// configuration, version-unsupported included. attributions is keyed by
-// client ID, and the report copies each list unchanged.
+// CapabilityReportOf joins the configuration and the installed paths.
+// cfgErrs are the tier-1 and tier-2 errors of the configuration,
+// version-unsupported included. attributions is keyed by client ID, and
+// the report copies each list unchanged.
 //
 // The installed paths come from integration.LessonCheckPaths. A path
 // without a hook stage is a writer that no lesson-check hook covers, and
@@ -232,7 +226,7 @@ func CapabilityReportOf(cfg *Config, cfgErrs []ConfigError, installed []Installe
 }
 
 // configReportOf is the configuration part of the report, in the form
-// of the verification result (contract K5).
+// of the verification result.
 func configReportOf(cfg *Config, errs []ConfigError) ConfigReport {
 	report := ConfigReport{Valid: len(errs) == 0, Errors: errs}
 
@@ -249,8 +243,8 @@ func configReportOf(cfg *Config, errs []ConfigError) ConfigReport {
 
 // enforcesPatternPin reports whether the configuration holds an enforce
 // pin whose check is of kind no-added-pattern/1. The guard cannot
-// project the content of a Codex update with hunks yet (P0 ruling A8),
-// so it denies such an update in the scope of that pin.
+// project the content of a Codex update with hunks yet, so it denies
+// such an update in the scope of that pin.
 func enforcesPatternPin(cfg *Config) bool {
 	if cfg == nil || cfg.Raw == nil {
 		return false
@@ -291,25 +285,24 @@ func clientOrder(installed []InstalledPath, attributions map[string][]CapAttribu
 // a path needs.
 type capabilityJoin struct {
 	// invalid is true when the configuration does not validate. An
-	// installed guard then denies every covered edit (contract K8).
+	// installed guard then denies every covered edit.
 	invalid bool
 	// patternPin is true when an enforce no-added-pattern/1 pin exists.
 	patternPin bool
 }
 
-// path computes the state and the reasons of one path by the reason
-// table of contract K10. The most restrictive state wins: inactive over
-// active-unverified over active. A path is active only with verified
-// evidence and no reason.
+// path computes the state and the reasons of one path. The most
+// restrictive state wins: inactive over active-unverified over active.
+// A path is active only with verified evidence and no reason.
 func (j capabilityJoin) path(p InstalledPath) PathCapability {
 	out := PathCapability{
 		Tool: p.Tool, HookStage: p.Stage, Context: p.Context,
 		BinaryVersion: p.BinaryVersion, Verification: p.Verification,
 	}
 
-	// LessonCheckPaths gives every path that the client can run a reason
-	// while the path is not installed. So a path without both is one
-	// that the client cannot run.
+	// LessonCheckPaths gives a reason to every path that the client can
+	// run but that is not installed. So a path with neither an install
+	// nor a reason is one that the client cannot run.
 	if !p.Installed && len(p.Reasons) == 0 {
 		out.State = PathUnsupported
 
@@ -320,7 +313,7 @@ func (j capabilityJoin) path(p InstalledPath) PathCapability {
 	reasons := slices.DeleteFunc(slices.Clone(p.Reasons), func(r CapReason) bool {
 		// The guard denies an update with hunks only in the scope of an
 		// enforce pattern pin, so the reason holds only while one exists.
-		return r == CapContentUnprojectable && (!j.patternPin || !p.Installed || !isGuard(p.Marker))
+		return r == CapContentUnprojectable && (!j.patternPin || !p.Installed || !IsGuardMarker(p.Marker))
 	})
 
 	if p.Installed {
@@ -328,7 +321,7 @@ func (j capabilityJoin) path(p InstalledPath) PathCapability {
 
 		// Only a reviewed native recording shows that the client honors a
 		// deny and what it does when the guard exceeds its timeout.
-		if p.Stage == StagePreWrite && isGuard(p.Marker) && !verified {
+		if p.Stage == StagePreWrite && IsGuardMarker(p.Marker) && !verified {
 			reasons = append(reasons, CapNativeDenyUnverified, CapNativeTimeoutUnverified)
 		}
 	}
@@ -351,9 +344,9 @@ func (j capabilityJoin) path(p InstalledPath) PathCapability {
 	return out
 }
 
-// binaryReasons returns the reasons of a binary state (contract K10,
-// binary identification). An unread state counts as unknown, because a
-// path must never read as current without a check.
+// binaryReasons returns the reasons of a binary state. An unread state
+// counts as unknown, because a path must never read as current without
+// a check.
 func binaryReasons(state string) []CapReason {
 	switch state {
 	case BinaryCurrent:
@@ -374,13 +367,17 @@ func isInactiveReason(r CapReason) bool {
 	return slices.Contains(inactiveReasons, r)
 }
 
-// isGuard reports whether a marker is the pre-write marker of enforce.
-func isGuard(marker string) bool {
+// IsGuardMarker reports whether a marker is the pre-write marker of
+// enforce. It matches a prefix, because a Codex marker adds a client
+// selector. The inspection and doctor also call it, so one rule reads
+// the installed mode.
+func IsGuardMarker(marker string) bool {
 	return strings.HasPrefix(marker, MarkerGuard)
 }
 
-// isBaseline reports whether a marker is the pre-write marker of check.
-func isBaseline(marker string) bool {
+// IsBaselineMarker reports whether a marker is the pre-write marker of
+// check. It matches a prefix for the same reason as IsGuardMarker.
+func IsBaselineMarker(marker string) bool {
 	return strings.HasPrefix(marker, MarkerBaseline)
 }
 
@@ -420,16 +417,17 @@ func (c *clientJoin) read(p InstalledPath) {
 
 	switch p.Stage {
 	case StagePreWrite:
-		c.guard = c.guard || isGuard(p.Marker)
-		c.baseline = c.baseline || isBaseline(p.Marker)
+		c.guard = c.guard || IsGuardMarker(p.Marker)
+		c.baseline = c.baseline || IsBaselineMarker(p.Marker)
 	case StagePostEdit:
 		c.post = true
 	}
 }
 
 // mode returns the installed mode of the client. Enforce wins over
-// check, because one guard denies whatever the baseline does. A stage
-// pair with one half only is partial.
+// check, because one guard denies whatever the baseline does. A client
+// with only one of the pre-write and the post-edit hook is partial, and
+// so is a client with a partial-install reason.
 func (c clientJoin) mode() InstalledMode {
 	pre := c.guard || c.baseline
 
@@ -468,17 +466,18 @@ func pinCapabilityOf(cfg *Config, pin Pin, clients []clientJoin) PinCapability {
 	return out
 }
 
-// badgeOf computes the badge of a pin mode for one client (contract K10,
-// badge table). An enforce pin needs every pre-write path, in every
-// context, and a check pin every post-edit path. No path of the stage
-// may be inactive or unsupported.
+// badgeOf computes the badge of a pin mode for one client. An enforce
+// pin needs every pre-write path, in every context, and a check pin
+// every post-edit path. No path of the stage may be inactive or
+// unsupported.
 func badgeOf(mode Mode, c clientJoin) PinClient {
 	out := PinClient{Client: c.capability.Client}
 
 	switch mode {
 	case ModeEnforce:
-		// A baseline records and never denies. An enforce pin then has no
-		// guard, whatever the state of the paths.
+		// A baseline records and never denies. So a client with a baseline
+		// and no guard cannot enforce the pin, whatever the state of its
+		// paths.
 		if c.baseline && !c.guard {
 			out.Badge, out.Reasons = BadgeRequestedInactive, []CapReason{CapCheckOnlyInstalled}
 
@@ -498,7 +497,8 @@ func badgeOf(mode Mode, c clientJoin) PinClient {
 // stageBadge reads the paths of one stage. verified is the badge when
 // each path is active with verified evidence, and unverified the badge
 // when each path is active or active-unverified. Any other path gives
-// requested-inactive. The reasons are the sorted union of the paths.
+// requested-inactive, and so does a stage without a path. The reasons
+// are the sorted union of the paths.
 func stageBadge(paths []PathCapability, stage HookStage, verified, unverified string) (string, []CapReason) {
 	var (
 		reasons  []CapReason
@@ -547,18 +547,14 @@ func (r CapabilityReport) Pin(ref string) (PinCapability, bool) {
 	return r.Pins[i], true
 }
 
-// ActiveText returns the one-line active state of a pin, for the K1
-// impact block. A pin that no client covers reads "requested; inactive:
-// <reasons>", the words of K6 step 6. Else the text names the badge of
-// each client.
+// ActiveText returns the one-line active state of a pin, for the
+// checker impact block. A pin that no client covers reads "requested;
+// inactive: <reasons>", the same form as ActiveRequested. Else the text
+// names the badge of each client.
 func (r CapabilityReport) ActiveText(ref string) string {
-	pin, ok := r.Pin(ref)
-	if !ok || pin.Requested == ModeAdvisory {
-		return ActiveAdvisory
-	}
-
-	if len(pin.Clients) == 0 {
-		return ActiveRequested
+	pin, fixed := r.joinedPin(ref)
+	if fixed != "" {
+		return fixed
 	}
 
 	var (
@@ -580,18 +576,14 @@ func (r CapabilityReport) ActiveText(ref string) string {
 	return "requested; " + strings.Join(badges, ", ")
 }
 
-// ActiveLines returns the active state of a pin as the lines of K6 step
-// 6: one line per client, with its badge, and for a covered pin the
-// state of each tool of the hook stage that the mode needs. A client
-// that does not cover the pin reads "requested; inactive: <reasons>".
+// ActiveLines returns the active state of a pin as lines: one line per
+// client, with its badge, and for a covered pin the state of each tool
+// of the hook stage that the mode needs. A client that does not cover
+// the pin reads "requested; inactive: <reasons>".
 func (r CapabilityReport) ActiveLines(ref string) []string {
-	pin, ok := r.Pin(ref)
-	if !ok || pin.Requested == ModeAdvisory {
-		return []string{"active: " + ActiveAdvisory}
-	}
-
-	if len(pin.Clients) == 0 {
-		return []string{"active: " + ActiveRequested}
+	pin, fixed := r.joinedPin(ref)
+	if fixed != "" {
+		return []string{"active: " + fixed}
 	}
 
 	stage := StagePreWrite
@@ -621,6 +613,24 @@ func (r CapabilityReport) ActiveLines(ref string) []string {
 	}
 
 	return lines
+}
+
+// joinedPin returns the capability of a pin and the fixed text of a pin
+// without a client badge. An advisory or unknown pin gets
+// ActiveAdvisory, and a pin that no client reports gets ActiveRequested.
+// fixed is "" when a client badge exists. ActiveText and ActiveLines
+// share it, so the one line and the client lines always agree.
+func (r CapabilityReport) joinedPin(ref string) (pin PinCapability, fixed string) {
+	pin, ok := r.Pin(ref)
+
+	switch {
+	case !ok || pin.Requested == ModeAdvisory:
+		return pin, ActiveAdvisory
+	case len(pin.Clients) == 0:
+		return pin, ActiveRequested
+	}
+
+	return pin, ""
 }
 
 // Client returns the capability of one client, and false when the
@@ -743,9 +753,9 @@ func JoinCapReasons(reasons []CapReason) string {
 // a checks map, a check or enforce mode, or a check reference. A file
 // with a semantic error counts too, because only these keys give one.
 // Doctor and status print their lesson-check lines only then, or when a
-// lesson-check or exploration hook is installed (contract K10). A file
-// that does not decode (tier 1) does not count, so a repository without
-// these keys keeps its doctor and status bytes.
+// lesson-check or exploration hook is installed. A file that does not
+// decode (tier 1) does not count, so a repository without these keys
+// keeps its doctor and status bytes.
 func UsesLessonChecks(cfg *Config, errs []ConfigError) bool {
 	if slices.ContainsFunc(errs, func(e ConfigError) bool { return e.Code != CodeDecodeError }) {
 		return true
@@ -795,8 +805,8 @@ func (r CapabilityReport) InactiveClients(mode Mode) []string {
 
 // ConfigText is the configuration part of the doctor detail and of the
 // status pins line: "config valid" or "config invalid". A newer
-// lesson_checks_version adds the note of contract K10, because the
-// advisory hooks still deliver every pin of such a file (K-6).
+// lesson_checks_version adds a note, because the advisory hooks still
+// deliver every pin of such a file.
 func (r CapabilityReport) ConfigText() string {
 	if r.Config.Valid {
 		return "config valid"

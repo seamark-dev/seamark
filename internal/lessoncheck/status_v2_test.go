@@ -19,9 +19,9 @@ const (
 	oidZ = "0000000000000000000000000000000000000000"
 )
 
-// TestLessonCheckStatusV2Mapping proves the status v2 record mapping of
-// contract K4: the parser on raw -z bytes, the mapping table, and the
-// eight K4 test vectors on real repositories (one per rule, §5 row 125).
+// TestLessonCheckStatusV2Mapping proves the status v2 record mapping:
+// the parser on raw -z bytes, the mapping table, and eight test vectors
+// on real repositories, one for each mapping rule.
 func TestLessonCheckStatusV2Mapping(t *testing.T) {
 	t.Run("the parser keeps paths with spaces and reads every record type", func(t *testing.T) {
 		raw := "# branch.oid " + oidA + "\x00" +
@@ -78,7 +78,7 @@ func TestLessonCheckStatusV2Mapping(t *testing.T) {
 		cands := mapRecords([]statusRecord{
 			// AD: added to the index, then deleted from the worktree.
 			ordinary("AD", "N...", modeAbsent, modeFile, modeAbsent, oidZ, oidA, "ad.txt"),
-			// mW=000000 takes the Lstat rule, and its '?' record folds in.
+			// mW=000000 takes the Lstat rule, and its '?' record gives no candidate.
 			ordinary("D.", "N...", modeFile, modeAbsent, modeAbsent, oidA, oidZ, "cached.txt"),
 			{kind: '?', path: "cached.txt"},
 			ordinary("A.", "N...", modeAbsent, modeFile, modeFile, oidZ, oidA, "added.txt"),
@@ -251,7 +251,7 @@ func TestLessonCheckStatusV2Mapping(t *testing.T) {
 
 // cachedRemoval is a repository with f.txt committed and then removed
 // from the index with `git rm --cached`, so status prints a record with
-// mW=000000 for it (contract K4, Lstat rule).
+// mW=000000 for it. The Lstat rule then decides the change.
 func cachedRemoval(t *testing.T) *gitRepo {
 	t.Helper()
 

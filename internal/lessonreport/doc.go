@@ -10,7 +10,7 @@
 // data in the Report, never an error. Build returns an error only for a
 // pin reference that names no single pin (*reviews.PinRefError).
 //
-// The Report holds no conversation text and no raw provider identity
+// The Report holds no conversation text and no raw provider identity.
 // Sessions and matches appear as short digest prefixes, and pin rules
 // pass through render.Sanitize.
 //
@@ -19,10 +19,11 @@
 // and one event counts once per version.
 //
 // Import rule: among the internal packages, the non-test files import
-// only reviews, integration, lessoncheck, model, render, and distill,
-// never outcome, tui, cli, mcp, store, or agent, and never net/http.
-// integration and distill bring agent and store into the import
-// closure, so TestLessonreportImportSet checks direct imports only. The
-// import-set proof for the report surfaces rests on their own sentinel
-// tests.
+// only reviews, integration, lessoncheck, model, render, and distill.
+// They never import outcome, tui, cli, mcp, store, agent, or net/http.
+// So the engine stays out of surfaces and writers and has no direct
+// path to a model or the network. integration and distill bring agent
+// and store into the import closure, so TestLessonreportImportSet
+// checks direct imports only. The report surfaces prove their own
+// import sets in their own sentinel tests.
 package lessonreport

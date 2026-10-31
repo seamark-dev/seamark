@@ -769,7 +769,7 @@ func firingDate(ts string) string {
 // pin. Not-landing pins print first because they are the ones that
 // need action. When nothing was measured it prints nothing, not an
 // empty header.
-func PrintOutcomes(w io.Writer, applied []model.Proposal, readings map[int64]outcome.Reading, delivery map[int64]string) {
+func PrintOutcomes(w io.Writer, applied []model.Proposal, readings map[int64]outcome.Reading) {
 	if len(readings) == 0 {
 		return
 	}
@@ -791,10 +791,6 @@ func PrintOutcomes(w io.Writer, applied []model.Proposal, readings map[int64]out
 			if r, ok := readings[p.ID]; ok && r.Verdict == verdict {
 				fmt.Fprintf(w, "  p%-4d %-34s %s\n",
 					p.ID, render.Sanitize(p.Rule), r.Line())
-
-				if line := delivery[p.ID]; line != "" {
-					fmt.Fprintf(w, "        %s\n", render.Sanitize(line))
-				}
 			}
 		}
 	}
@@ -1004,9 +1000,6 @@ type ProposalHealth struct {
 	// for applied pins. Empty when the pin cannot be measured: pending
 	// proposals, pruned pins, hand-written pins without citations.
 	Outcome string
-	// Delivery is the separate capture reading of the current applied pin
-	// version. It never changes the outcome sentence or its counts.
-	Delivery string
 	// Escalate is true for not-landing pins: the pin fires and the
 	// mistake recurs anyway. Drives the escalation hint in the ledger.
 	Escalate bool
@@ -1042,10 +1035,7 @@ func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Propos
 
 		for _, p := range pending {
 			printProposal(w, p)
-
-			h := health[p.ID]
-			h.Delivery = ""
-			printHealth(w, h)
+			printHealth(w, health[p.ID])
 		}
 
 		fmt.Fprintf(w, "\ndecide: `seamark lessons --apply p<id>` (ranges work: p1..p9); "+
@@ -1183,10 +1173,6 @@ func printHealth(w io.Writer, h ProposalHealth) {
 
 	if h.Outcome != "" {
 		fmt.Fprintf(w, "        %s\n", render.Sanitize(h.Outcome))
-	}
-
-	if h.Delivery != "" {
-		fmt.Fprintf(w, "        %s\n", render.Sanitize(h.Delivery))
 	}
 
 	if h.Scope != "" {

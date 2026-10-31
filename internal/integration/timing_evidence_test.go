@@ -17,9 +17,8 @@ import (
 )
 
 // timingItemCases names, per client, item, and context, the cases of
-// the gate-3 timing scenario whose replay and review show the item
-// (gate-3 checklist, "The cases"). An item and context without a case
-// has no recording that can verify it.
+// the native timing scenario whose replay and review show the item. An
+// item and context without a case has no recording that can verify it.
 var timingItemCases = map[string]map[lessoncheck.AttributionItem]map[lessoncheck.PathContext][]string{
 	ClaudeID: {
 		lessoncheck.ItemMatchIdentity: {
@@ -51,7 +50,7 @@ var timingItemCases = map[string]map[lessoncheck.AttributionItem]map[lessoncheck
 }
 
 // readTimingCases reads the manifest and the case names of the reviewed
-// gate-3 timing recording of a client. It returns false when no
+// native timing recording of a client. It returns false when no
 // recording exists. Unlike loadTimingRecording, it never skips, because
 // the evidence check runs in every test run.
 func readTimingCases(t *testing.T, client string) (nativeManifest, []string, bool) {
@@ -87,13 +86,13 @@ func readTimingCases(t *testing.T, client string) (nativeManifest, []string, boo
 
 // TestTimingEvidenceMatchesRecordings proves that TimingEvidence reads
 // verified only for an item, client version, and surface that a reviewed
-// gate-3 timing recording covers (plan step P4.11, contract K10). The
-// recording is the one that the P3.14 replay tests decode. Verified
-// evidence needs the recording in testdata/<client>/timing, its client
-// version, a surface that names the item and the context, and every
-// case that shows the item in that context. An item that the payloads
-// can give stays pending without such a recording; any other item has
-// no evidence. The test never skips.
+// native timing recording covers. The recording is the one that the
+// replay tests of timing_native_test.go decode. Verified evidence needs
+// the recording in testdata/<client>/timing, its client version, a
+// surface that names the item and the context, and every case that
+// shows the item in that context. An item that the payloads can give
+// stays pending without such a recording; any other item has no
+// evidence. The test never skips.
 func TestTimingEvidenceMatchesRecordings(t *testing.T) {
 	for _, client := range slices.Sorted(maps.Keys(payloadIdentities)) {
 		manifest, cases, recorded := readTimingCases(t, client)
@@ -121,7 +120,7 @@ func TestTimingEvidenceMatchesRecordings(t *testing.T) {
 					continue
 				}
 
-				require.True(t, recorded, "%s: verified evidence needs a reviewed gate-3 recording in testdata/%s/timing",
+				require.True(t, recorded, "%s: verified evidence needs a reviewed native timing recording in testdata/%s/timing",
 					label, client)
 				assert.True(t, sameClientVersion(evidence.ClientVersion, manifest.ClientVersion),
 					"%s: the evidence names %q, the recording ran on %q", label, evidence.ClientVersion, manifest.ClientVersion)
@@ -129,7 +128,7 @@ func TestTimingEvidenceMatchesRecordings(t *testing.T) {
 				assert.Contains(t, evidence.Surface, string(context), label)
 
 				want := timingItemCases[client][item][context]
-				require.NotEmpty(t, want, "%s: no case of the gate-3 timing scenario shows this item in this context", label)
+				require.NotEmpty(t, want, "%s: no case of the timing scenario shows this item in this context", label)
 				assert.Subset(t, cases, want, "%s: the recording lacks a case that shows the item", label)
 			}
 		}

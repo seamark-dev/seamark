@@ -324,8 +324,10 @@ func TestRunAgentAppendsWorkingTreeInstruction(t *testing.T) {
 	require.NoError(t, os.WriteFile(stub, []byte("#!/bin/sh\nprintf '%s' \"$1\"\n"), 0o755))
 	instance := SchemaSyncInstance()
 
+	// This checks prompt propagation, not startup speed. Allow environment
+	// preparation and process scheduling time when other packages run alongside it.
 	stdout, stderr, exit, timedOut, err := runAgent(context.Background(), RunConfig{
-		AgentArgv: []string{stub}, Timeout: time.Second,
+		AgentArgv: []string{stub}, Timeout: 30 * time.Second,
 	}, instance, t.TempDir())
 
 	require.NoError(t, err)
@@ -334,6 +336,57 @@ func TestRunAgentAppendsWorkingTreeInstruction(t *testing.T) {
 	assert.False(t, timedOut)
 	assert.Equal(t, agentPrompt(instance.Task), string(stdout))
 	assert.Contains(t, string(stdout), agentWorkingTreeInstruction)
+}
+
+func TestRunAgentExpiredDeadlineDoesNotStart(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "agent.sh")
+	require.NoError(t, os.WriteFile(stub, []byte("#!/bin/sh\nprintf ran > executed\n"), 0o755))
+
+	stdout, stderr, exit, timedOut, err := runAgent(context.Background(), RunConfig{
+		AgentArgv: []string{stub}, Timeout: -time.Second,
+	}, SchemaSyncInstance(), dir)
+
+	require.NoError(t, err)
+	assert.Empty(t, stdout)
+	assert.Empty(t, stderr)
+	assert.Equal(t, -1, exit)
+	assert.True(t, timedOut)
+	assert.NoFileExists(t, filepath.Join(dir, "executed"))
+}
+
+func TestRunAgentCancelledParentDoesNotStart(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "agent.sh")
+	require.NoError(t, os.WriteFile(stub, []byte("#!/bin/sh\nprintf ran > executed\n"), 0o755))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	stdout, stderr, exit, timedOut, err := runAgent(ctx, RunConfig{
+		AgentArgv: []string{stub}, Timeout: 30 * time.Second,
+	}, SchemaSyncInstance(), dir)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, stdout)
+	assert.Empty(t, stderr)
+	assert.Equal(t, -1, exit)
+	assert.False(t, timedOut)
+	assert.NoFileExists(t, filepath.Join(dir, "executed"))
+}
+
+func TestRunAgentPreservesNonzeroExitOutput(t *testing.T) {
+	stub := filepath.Join(t.TempDir(), "agent.sh")
+	require.NoError(t, os.WriteFile(stub, []byte("#!/bin/sh\nprintf stdout\nprintf stderr >&2\nexit 7\n"), 0o755))
+
+	stdout, stderr, exit, timedOut, err := runAgent(context.Background(), RunConfig{
+		AgentArgv: []string{stub}, Timeout: 30 * time.Second,
+	}, SchemaSyncInstance(), t.TempDir())
+
+	require.NoError(t, err)
+	assert.Equal(t, "stdout", string(stdout))
+	assert.Equal(t, "stderr", string(stderr))
+	assert.Equal(t, 7, exit)
+	assert.False(t, timedOut)
 }
 
 func TestAgentEnvironmentPinsCachesInsideTrial(t *testing.T) {

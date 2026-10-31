@@ -27,7 +27,18 @@ func TestLessonCheckLineSplitting(t *testing.T) {
 
 		for _, tc := range cases {
 			assert.Equal(t, tc.lines, splitLines([]byte(tc.content)), tc.name)
+			assert.Equal(t, len(tc.lines), lineCount([]byte(tc.content)), "the count without the split: "+tc.name)
 		}
+	})
+
+	t.Run("the line count of a side", func(t *testing.T) {
+		// The max-diff-lines test counts the lines of a side before the
+		// split, so the count must equal the length of sideLines.
+		for _, side := range []Side{fileSide(""), fileSide("a\nb"), fileSide("a\r\nb\r\n"), linkSide("../target")} {
+			assert.Equal(t, len(sideLines(side)), sideLineCount(side), string(side.text))
+		}
+
+		assert.Equal(t, 1, sideLineCount(linkSide("a\nb")), "a link target is one line")
 	})
 
 	t.Run("text test", func(t *testing.T) {
@@ -45,7 +56,7 @@ func TestLessonCheckLineSplitting(t *testing.T) {
 			content string
 			outcome Outcome
 		}{
-			// §5 row 15: "\r\n" is a terminator, so "foo$" matches "foo\r\n".
+			// "\r\n" is a terminator, so "foo$" matches "foo\r\n".
 			{"an end anchor matches before CRLF", `foo$`, "foo\r\n", OutcomeViolation},
 			{"the terminator is not part of the line", `\r`, "a\r\n", OutcomePass},
 			{"a lone carriage return is part of the line", `\r`, "a\rb\n", OutcomeViolation},

@@ -4,16 +4,13 @@ Provenance: shaped from the Codex hooks reference
 (https://developers.openai.com/codex/hooks/, which redirects to
 https://learn.chatgpt.com/docs/hooks; consulted 2026-09-13) and from the
 `apply_patch` grammar embedded in the installed CLI (`codex-cli 0.154.0`,
-Homebrew cask; the grammar text is recorded in
-`rfc/validation/seamark-agent-integrations-compatibility.md`). Values are
-**synthetic**: session, turn, and call ids are placeholders, and no file
-here is a raw capture from a live Codex session. A fixture is promoted to
-"confirmed" only when a recorded native run reproduces its shape. A native
-run of `codex-cli 0.154.0` on 2026-09-20/21 (recorded in
-`rfc/validation/seamark-agent-integrations-codex-2026-09-21/`) reproduced
-the field sets of `PreToolUse` for `apply_patch` and `Bash`, of
-`PostCompact`, of `SessionStart` with `source: "compact"`, of
-`SubagentStart`, and of the `apply_patch` event inside a subagent. The
+Homebrew cask). Values are **synthetic**: session, turn, and call ids are
+placeholders, and no file here is a raw capture from a live Codex session.
+A fixture is promoted to "confirmed" only when a recorded native run
+reproduces its shape. A native run of `codex-cli 0.154.0` on
+2026-09-20/21 reproduced the field sets of `PreToolUse` for `apply_patch`
+and `Bash`, of `PostCompact`, of `SessionStart` with `source: "compact"`,
+of `SubagentStart`, and of the `apply_patch` event inside a subagent. The
 values here stay synthetic. In that run the model wrote every patch path
 as an absolute path inside the workspace.
 

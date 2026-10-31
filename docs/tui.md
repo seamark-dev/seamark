@@ -330,35 +330,6 @@ view runs again. Freshness reads can mark the held result stale without
 rerunning the checker. Current default audit/lock exclusions are not yet
 listed in `not covered`; that output fix remains required before release.
 
-#### Lesson delivery
-
-An installed pin's detail adds **Lesson delivery** after its existing
-readings. The compact `lesson delivery:` sentence is independent of the
-finding-based outcome and keeps its complete qualified wording. It
-requires a unique current identity and exact current version; ambiguous
-entries, unavailable capture and unknown versions show no line or `g`.
-The proposal-only **not present** and **superseded** filters have no
-trustworthy installed version and offer no `g`. Use
-`seamark lessons --delivery --pin <pin-ref>` for historical readings.
-
-The overview loads in its own worker. It does not block the pin list,
-other source loads or input. Relevant refreshes reload it independently.
-A failed reload can retain a visibly **Stale** compact reading, but
-expansion stays unavailable until fresh.
-
-`g` opens a separately loaded expansion for that pin. It lists versions,
-occurrences, actions, classes, timing, windows, reasons, limitations and
-metadata-only inspection commands from the shared report. Historical
-versions stay separate. It reads no raw conversation text. Late replies
-cannot replace a newer selection or reopen a closed expansion. A changed
-or ambiguous installed binding invalidates the old selection. A retained
-expansion after a read failure is visibly stale and read-only.
-
-Use `tab`/`shift+tab` to choose an occurrence; arrows and page keys scroll.
-Browsing, scrolling, opening and closing write nothing. See [lesson delivery](lessons.md#lesson-delivery-lessons---delivery)
-for classes, units and the phrase **no linked correction observed
-(qualified)**. No native timing or prevention claim follows from this view.
-
 **Selection sample** opens with `s` in a pin review or in the review of
 a lessons Settings group, while the review holds a candidate change. It
 runs the lesson selection of the edit hook
@@ -531,8 +502,6 @@ Exact rules: `internal/settings`.
 | Proposals | `space` select pending rows, `x` clear the selection, `f` state (pending, applied, dismissed, superseded), `/` region, `a` apply, `d` dismiss, `c` record as applied, `o` open the PR, `t` trigger extraction; `?` lists every key, and `n/a` marks a key that the cursor row, the selection, or the filters cannot use; the footer lists only the keys that work |
 | Pins | `↑↓` pins, `tab` detail, `space` mark, `x` clear the marks, `f` list (installed, not present, superseded), `/` region, `z` text search, `v` compare with a similar pin, `w` retarget preview, `-` prune preview, `t` trigger extraction, `n` new pin, `i` edit, `d` remove (unlinked; `i` and `d` act on the cursor pin only); `?` always lists `n`, `i`, `d`, `-`, `w`, `t`, and `v`. While one of them reads `n/a`, the footer lists all seven from 60×20. A narrow footer then shows some keys by their letter alone, and at 60×20 the pane, list, and switch keys give way without a marker. When all seven work, a narrow footer cuts keys from the end and shows `…`, as other footers do. At 120 columns `t` and `v` then give way, and at 60×20 only `space select` stays. `n/a` marks a key that the targets cannot use (its press names the reason) |
 | Pins, lesson checks | `M` check definition, `V` verify default working-tree selection; shown when lesson-check UI is available |
-| Pins, lesson delivery | `g` expand a fresh uniquely bound installed reading; hidden in proposal-only history filters |
-| Lesson delivery expansion | `tab`/`shift+tab` occurrence, arrows/page keys scroll, `r` refresh, `esc` close |
 | Check definition | `enter` edit a row, `space` choose kind, `s` review; review `y` writes, `esc` back |
 | Verification | `V` verify again, scroll keys, `esc` close |
 | Pins region or search field | `enter` apply, `esc` keep the previous value |

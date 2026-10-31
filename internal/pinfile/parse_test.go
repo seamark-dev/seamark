@@ -161,6 +161,38 @@ func TestListingOfACRLFFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "CRLF")
 }
 
+func TestDocumentKeepsTheParseOfTheReader(t *testing.T) {
+	for name, text := range map[string]string{
+		"emitted layout": emitted,
+		"empty input":    "",
+		"CRLF breaks":    "pin:\r\n  - rule: a\r\n    region: api\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			want, err := reviews.ParseConfig([]byte(text))
+			require.NoError(t, err)
+
+			d := Parse([]byte(text))
+
+			require.NoError(t, d.ReaderErr)
+			assert.Equal(t, want, d.Config)
+		})
+	}
+
+	t.Run("absent file", func(t *testing.T) {
+		d, err := Read(t.TempDir())
+		require.NoError(t, err)
+
+		assert.Equal(t, reviews.DefaultConfig(), d.Config, "an absent file reads as the defaults")
+	})
+
+	t.Run("reader error", func(t *testing.T) {
+		d := Parse([]byte("hook_delivery: sometimes\npin:\n  - rule: a\n    region: api\n"))
+
+		require.Error(t, d.ReaderErr)
+		assert.Nil(t, d.Config)
+	})
+}
+
 func TestReadErrorsNeverEmptyTheListing(t *testing.T) {
 	t.Run("reader rejects a value", func(t *testing.T) {
 		d := Parse([]byte("hook_delivery: sometimes\npin:\n  - rule: a\n    region: api\n"))

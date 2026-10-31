@@ -73,8 +73,7 @@ below remains distinct from required-before-release work.
 | Codex Update projection | **Unreleased, incomplete**; content predicate gives unknown and an armed guard requests denial; verified before/after oracle and implementation required before release |
 | Setup and capability report | **Unreleased**; per-tool/stage/context paths, static binary checks, unknown-state warning/install and known-bad enforce refusal; setup never grants Codex trust; Claude duplicate-handler refusal and unreadable status/TUI summary fixes still required |
 | Delivery report (`lessons --delivery`, `delivery/1`) | **Unreleased**; read-only version-isolated classes, timing, windows, reasons and metadata inspection; own-hook timing stays same-call-only, pending lane identity keeps otherwise negative windows incomplete, current `prevented: 0` |
-| Separate compact readings | **Unreleased**; capture line beside finding-based outcome in proposals/stats/HTML/TUI; counts never merged; this added read does not make legacy command paths read-only |
-| TUI Pins checks and delivery | **Unreleased**; linked-pin mode/check editing, `M` definitions, `V` verification, `g` fresh installed reading; proposal-only history filters have no `g`; native evidence unchanged |
+| TUI Pins checks | **Unreleased**; linked-pin mode/check editing, `M` definitions, `V` verification; native evidence unchanged |
 
 Timeout candidates, consistent duplicate refusal, summary/exclusion
 output fixes and the benchmark script-timeout flake remain open in the

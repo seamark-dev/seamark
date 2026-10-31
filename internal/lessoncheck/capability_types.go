@@ -1,10 +1,9 @@
 package lessoncheck
 
 // This file declares the data types of the capability report
-// (lesson-capability/1, contract K10). Milestone P1 declares them
-// without behavior, because the preparation result of milestone P3
-// carries them before milestone P4 adds CapabilityReportOf, which fills
-// them. Each closed list is in the comment of its type.
+// (lesson-capability/1). CapabilityReportOf in capability.go fills them.
+// The lesson preparation of the delivery package carries the pin badges.
+// Each closed list is in the comment of its type.
 
 // InstalledMode is the lesson-check setup of one client. Closed list:
 // "off", "check", "enforce", "partial".
@@ -32,11 +31,11 @@ type PathState string
 // "configuration-error", "tool-uncovered".
 type CapReason string
 
-// CapVerification mirrors integration.VerificationEvidence field for
-// field, with the same JSON names and level words. integration imports
-// lessoncheck, so lessoncheck cannot import integration, and the
-// inspection copies the evidence into this type. The client version is
-// the verified one, because inspection runs no client binary.
+// CapVerification has the same fields, JSON names, and level words as
+// integration.VerificationEvidence. integration imports lessoncheck, so
+// lessoncheck cannot import integration. The inspection therefore copies
+// the evidence into this type. The client version is the verified one,
+// because inspection runs no client binary.
 type CapVerification struct {
 	Level         string `json:"level"`                    // closed: "unknown", "unverified", "pending", "verified"
 	ClientVersion string `json:"client_version,omitempty"` // the client version the recorded check ran against

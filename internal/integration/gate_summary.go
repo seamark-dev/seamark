@@ -1,17 +1,15 @@
 package integration
 
 import (
-	"slices"
-
 	"github.com/seamark-dev/seamark/internal/hooks"
 )
 
 // GateSummary groups the gate hooks of a workspace by what they do with
-// a blocking verdict. init builds it from the hooks a run leaves, and
-// status from the inspection of every client, so the two commands
-// classify one state by one rule and differ only in their words. The
-// labels are the caller's: document paths for init, client IDs for
-// status. Each label appears once per group.
+// a blocking verdict. init builds it from the hooks that a run leaves,
+// and status builds it from the inspection of every client. So the two
+// commands classify one state by one rule and differ only in their
+// words. The labels are the caller's: document paths for init, client
+// IDs for status. Each label appears once per group.
 type GateSummary struct {
 	// Enforce lists the hooks that carry --enforce. A verdict of theirs
 	// blocks, whatever the policy file says.
@@ -64,31 +62,22 @@ const (
 func (g *GateSummary) Add(label, mode string) {
 	switch mode {
 	case hooks.ModeEnforce:
-		g.Enforce = addLabel(g.Enforce, label)
+		g.Enforce = appendOnce(g.Enforce, label)
 	case hooks.ModeWarn:
-		g.Warn = addLabel(g.Warn, label)
+		g.Warn = appendOnce(g.Warn, label)
 	case GateModeReportOnly:
-		g.ReportOnly = addLabel(g.ReportOnly, label)
+		g.ReportOnly = appendOnce(g.ReportOnly, label)
 	}
 }
 
 // AddPossible records one definition that may run a gate hook.
 func (g *GateSummary) AddPossible(label string) {
-	g.Possible = addLabel(g.Possible, label)
+	g.Possible = appendOnce(g.Possible, label)
 }
 
 // AddUnreadable records one hook document that cannot be read.
 func (g *GateSummary) AddUnreadable(label string) {
-	g.Unreadable = addLabel(g.Unreadable, label)
-}
-
-// addLabel appends a label once.
-func addLabel(labels []string, label string) []string {
-	if slices.Contains(labels, label) {
-		return labels
-	}
-
-	return append(labels, label)
+	g.Unreadable = appendOnce(g.Unreadable, label)
 }
 
 // Effect returns the strongest effect among the hooks.
@@ -121,9 +110,9 @@ func SummarizeGateHooks(gateHooks []GateHook) GateSummary {
 
 // addHook records one hook by its mode and its certainty. An uncertain
 // hook in warn or enforce mode is possible: it may block. An uncertain
-// report-only hook is report-only, not possible: its exit status never
-// reaches the client, so the reader knows that it never blocks, and
-// "unknown" would say less than is known.
+// report-only hook is report-only, not possible. Its exit status never
+// reaches the client, so the reader knows that it never blocks.
+// "Unknown" would say less than is known.
 func (g *GateSummary) addHook(label, mode string, uncertain bool) {
 	if uncertain && mode != GateModeReportOnly {
 		g.AddPossible(label)

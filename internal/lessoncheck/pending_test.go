@@ -22,19 +22,18 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// The tests of the pending baselines (contract K7). Every root is a
-// temporary directory, so no test reads or writes the checkout that
-// runs it.
+// The tests of the pending baselines. Every root is a temporary
+// directory, so no test reads or writes the checkout that runs it.
 
-// The raw IDs of the test calls. A record and an audit line must never
-// hold them (contracts §1.6).
+// The raw IDs of the test calls. A record and an audit line hold only
+// their digests, so the raw IDs never persist.
 const (
 	rawSession  = "session-raw-4f1c"
 	rawMatch    = "toolu-raw-9a2e"
 	rawReceiver = "agent-raw-77b0"
 )
 
-// identityRoot is the K2 identity root that the test digests hash over.
+// identityRoot is the identity root that the test digests hash over.
 // The pending functions never read it, so it needs no directory.
 const identityRoot = "/identity/root"
 
@@ -93,7 +92,7 @@ func pendingFile(root string, p *Pending) string {
 func readAuditLines(t *testing.T, root string) []string {
 	t.Helper()
 
-	f, err := os.Open(filepath.Join(root, ".seamark", "lesson-check-audit.jsonl"))
+	f, err := os.Open(auditPath(root))
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -140,10 +139,10 @@ func ageFile(t *testing.T, path string, age time.Duration) {
 	require.NoError(t, os.Chtimes(path, old, old))
 }
 
-// TestLessonCheckPendingWriteAndConsume proves the K7 write, read, and
-// delete of one record: the layout and the modes, the key, the content
-// rule, the temporary file and the rename, and the refusal of a record
-// that names another call.
+// TestLessonCheckPendingWriteAndConsume proves the write, read, and
+// delete of one record. It covers the layout and the modes, the key,
+// the content rule, and the temporary file and the rename. It also
+// covers the refusal of a record that names another call.
 func TestLessonCheckPendingWriteAndConsume(t *testing.T) {
 	cfg := parseValid(t, mixedYAML)
 
@@ -195,7 +194,8 @@ func TestLessonCheckPendingWriteAndConsume(t *testing.T) {
 		assert.Empty(t, p.CreatedAt)
 
 		// The key is the compose digest of the label, the client, and
-		// the match digest (contracts §1.2).
+		// the match digest. The test builds it by hand, so a change of the
+		// composer shows here.
 		composed := fmt.Sprintf("%d:%s%d:%s%d:%s", len(PendingSchema), PendingSchema, len("claude"), "claude", len(p.MatchSHA), p.MatchSHA)
 		sum := sha256.Sum256([]byte(composed))
 		assert.Equal(t, hex.EncodeToString(sum[:]), PendingKey("claude", p.MatchSHA))
@@ -350,10 +350,10 @@ func TestLessonCheckPendingWriteAndConsume(t *testing.T) {
 	})
 }
 
-// TestLessonCheckPendingSweep proves the K7 crash recovery (AC-31): the
-// sweep removes expired records, unsafe entries, and old temporary
-// files, appends one baseline-discarded record per removed record, and
-// leaves every other entry. A discarded record is never a baseline.
+// TestLessonCheckPendingSweep proves the crash recovery. The sweep
+// removes expired records, unsafe entries, and old temporary files. It
+// appends one baseline-discarded record per removed record and leaves
+// every other entry. A discarded record is never a baseline.
 func TestLessonCheckPendingSweep(t *testing.T) {
 	root := t.TempDir()
 	lim := DefaultLimits()
@@ -506,11 +506,11 @@ func TestLessonCheckPendingSweep(t *testing.T) {
 	})
 }
 
-// TestLessonCheckPendingRefusesUnsafeDirectory proves the K7 unsafe
-// directory rule: a link or a non-directory at .seamark,
+// TestLessonCheckPendingRefusesUnsafeDirectory proves the unsafe
+// directory rule. A link or a non-directory at .seamark,
 // .seamark/checks, or .seamark/checks/pending stops every write, read,
-// and sweep with the K7 text, and nothing goes through the link. A
-// record file that is a link never serves as a baseline.
+// and sweep with the fixed text. Nothing goes through the link. A record
+// file that is a link never serves as a baseline.
 func TestLessonCheckPendingRefusesUnsafeDirectory(t *testing.T) {
 	skipWithoutSymlinks(t)
 
@@ -628,10 +628,10 @@ func listTree(t *testing.T, dir string) map[string]string {
 	return out
 }
 
-// TestLessonCheckPendingDropsOversizedContent proves the K7 bound: the
-// writer keeps content in path order while the total stays at or below
-// max-baseline-bytes, drops the content of a path that does not fit,
-// marks its before side too-large, and adds the limitation
+// TestLessonCheckPendingDropsOversizedContent proves the content bound.
+// The writer keeps content in path order while the total stays at or
+// below max-baseline-bytes. It drops the content of a path that does not
+// fit, marks its before side too-large, and adds the limitation
 // baseline-too-large.
 func TestLessonCheckPendingDropsOversizedContent(t *testing.T) {
 	cfg := parseValid(t, mixedYAML)
@@ -703,11 +703,11 @@ func TestLessonCheckPendingDropsOversizedContent(t *testing.T) {
 	})
 }
 
-// TestLessonCheckDiscardSession proves the K7 capture deletion:
+// TestLessonCheckDiscardSession proves the capture deletion.
 // DiscardSession finds the directory through the git top level that the
-// caller passes, removes the records of the session hashed over the
-// identity root, appends one session-deleted record per removed record, and
-// leaves the records of other sessions and of other roots.
+// caller passes. It removes the records of the session hashed over the
+// identity root and appends one session-deleted record per removed
+// record. It leaves the records of other sessions and of other roots.
 func TestLessonCheckDiscardSession(t *testing.T) {
 	skipWithoutSymlinks(t)
 
@@ -715,9 +715,9 @@ func TestLessonCheckDiscardSession(t *testing.T) {
 	g.write("src/a.go", "package a\n")
 	g.commitAll("base")
 
-	// The identity root is a link to the work tree, as an index meta
-	// root through a symbolic link is. The git top level is the
-	// resolved path.
+	// The identity root is a link to the worktree, like an index meta
+	// root through a symbolic link. The git top level is the resolved
+	// path.
 	idRoot := filepath.Join(t.TempDir(), "linked")
 	require.NoError(t, os.Symlink(g.root, idRoot))
 
@@ -746,7 +746,7 @@ func TestLessonCheckDiscardSession(t *testing.T) {
 	assert.NoFileExists(t, pendingFile(top, gone1))
 	assert.NoFileExists(t, pendingFile(top, gone2))
 	assert.FileExists(t, pendingFile(top, otherSession))
-	assert.FileExists(t, pendingFile(top, otherRoot), "no other root is tried (§5 row 107)")
+	assert.FileExists(t, pendingFile(top, otherRoot), "no other root is tried")
 
 	recs := readAudit(t, top)
 	require.Len(t, recs, 2)

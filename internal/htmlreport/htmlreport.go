@@ -12,7 +12,6 @@
 package htmlreport
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/url"
@@ -25,7 +24,6 @@ import (
 	"github.com/seamark-dev/seamark/internal/confidence"
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/index"
-	"github.com/seamark-dev/seamark/internal/lessonreport"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -125,9 +123,6 @@ type Card struct {
 	// Outcome is the passive loop's verdict sentence,
 	// present only for measured applied pins.
 	Outcome string
-	// Delivery is the independent capture reading of the current pin
-	// version. It is escaped as ordinary text beside the outcome.
-	Delivery string
 	// NotLanding styles the outcome as the class that needs action.
 	NotLanding bool
 }
@@ -188,9 +183,8 @@ type LessonRow struct {
 }
 
 // Generate builds the report from the index and writes the page.
-// An empty delivery.Root explicitly disables the added capture reading.
-func Generate(ctx context.Context, w io.Writer, st *store.Store, root string, now time.Time, delivery lessonreport.Request) error {
-	r, err := Build(ctx, st, root, now, delivery)
+func Generate(w io.Writer, st *store.Store, root string, now time.Time) error {
+	r, err := Build(st, root, now)
 	if err != nil {
 		return err
 	}
@@ -200,11 +194,7 @@ func Generate(ctx context.Context, w io.Writer, st *store.Store, root string, no
 
 // Build assembles the view model. now is a parameter rather than read
 // from the clock so a test can assert the whole page byte for byte.
-// root retains the index's legacy root for existing readings. The
-// delivery reading uses delivery.Root for filesystem reads. An empty
-// delivery.Root turns the reading off, so it never reads the working
-// directory.
-func Build(ctx context.Context, st *store.Store, root string, now time.Time, delivery lessonreport.Request) (*Report, error) {
+func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 	findings, err := st.AllFindings()
 	if err != nil {
 		return nil, err
@@ -235,19 +225,6 @@ func Build(ctx context.Context, st *store.Store, root string, now time.Time, del
 	for _, p := range proposals {
 		if p.Status == model.ProposalApplied {
 			applied = append(applied, p)
-		}
-	}
-
-	var deliveryLines map[int64]string
-
-	if delivery.Root != "" {
-		delivery.Applied = applied
-		delivery.Now = func() time.Time { return now }
-		delivery.PinRef = ""
-
-		// Capture failures are data, not failures of the legacy page.
-		if reading, err := lessonreport.Gather(ctx, delivery); err == nil {
-			deliveryLines = report.CaptureDelivery(applied, &reading)
 		}
 	}
 
@@ -345,7 +322,7 @@ func Build(ctx context.Context, st *store.Store, root string, now time.Time, del
 		FilesWithHistory: len(churn),
 	}
 
-	r.buildCards(proposals, byID, readings, deliveryLines, scopes, regionsNow, blocked, root, now)
+	r.buildCards(proposals, byID, readings, scopes, regionsNow, blocked, root, now)
 	r.buildDuplicates(proposals)
 
 	// The map first: it decides which scopes exist, and each lesson row
@@ -414,7 +391,6 @@ func (r *Report) buildCards(
 	proposals []model.Proposal,
 	byID map[int64]model.Finding,
 	readings map[int64]outcome.Reading,
-	delivery map[int64]string,
 	scopes map[int64]distill.ScopeAdvisory,
 	regionsNow map[int64][]string,
 	blocked map[int64]string,
@@ -483,8 +459,6 @@ func (r *Report) buildCards(
 				card.Outcome = clean(rd.Line())
 				card.NotLanding = rd.Verdict == outcome.VerdictNotLanding
 			}
-
-			card.Delivery = clean(delivery[p.ID])
 
 			// The trigger-scope advisory; scopes only contains flagged
 			// pending and applied rows, same rule.

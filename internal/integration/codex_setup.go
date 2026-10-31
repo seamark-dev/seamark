@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -12,17 +13,17 @@ import (
 	"github.com/seamark-dev/seamark/internal/render"
 )
 
-// codexHooksFile is the one hook representation that setup manages for
-// Codex. Codex also reads inline [hooks] in .codex/config.toml; setup
-// only inspects that source for a seamark hook that would run twice.
+// codexHooksFile is the one Codex hook document that setup manages.
+// Codex also reads inline [hooks] in .codex/config.toml. Setup only
+// inspects that source, to find a seamark hook that would run twice.
 const codexHooksFile = ".codex/hooks.json"
 
 // codexSetup plans Codex's native configuration. The MCP registration
 // and the per-tool approvals share .codex/config.toml, so one plan
-// composes both into one write. The TOML algorithm stays in the approve
-// package: it appends and inserts, and it never rewrites a user's line.
-// The gate and lesson hooks live in .codex/hooks.json, a document of
-// their own.
+// composes both into one write. The approve package holds the TOML
+// algorithm. It appends and inserts, and it never rewrites a user's
+// line. The gate and lesson hooks are in .codex/hooks.json, a document
+// of their own.
 type codexSetup struct{}
 
 // Plan composes every requested edit and writes nothing. The
@@ -54,12 +55,39 @@ func (codexSetup) Plan(root, binary string, req ClientSetup) (ClientPlan, error)
 }
 
 // codexConfigRead is config.toml as one plan read it. The hook planner
-// reuses it: a second read of one path gives a second guard, and the
-// coordinator takes two different guards for a file that changed.
+// reuses it, because a second read of one path gives a second guard.
+// The coordinator reports a changed file when two guards of one path
+// differ. Every reader returns a non-nil value, so no caller checks for
+// nil.
 type codexConfigRead struct {
 	err    error
 	data   []byte
 	exists bool
+}
+
+// hooksDisabledFindings warns when the project configuration turns
+// Codex hooks off. Every installed hook is then inert. A reader who sees
+// "installed" would expect reminders and gate verdicts that never come.
+// The user-level configuration can carry the flag too. The inspection
+// reads the project file only, and the reason says so. A missing file
+// and a file that does not parse give no finding.
+func (c *codexConfigRead) hooksDisabledFindings() []Finding {
+	if !c.exists {
+		return nil
+	}
+
+	disabled, err := approve.CodexHooksDisabled(c.data)
+	if err != nil || !disabled {
+		return nil
+	}
+
+	return []Finding{{
+		Level: FindingWarning,
+		Path:  approve.CodexConfig,
+		Reason: "[features] hooks = false turns every Codex hook off in this project, so the installed seamark hooks never run " +
+			"(the user-level configuration is not read here)",
+		Action: "set [features] hooks = true, or remove the key, to run the hooks",
+	}}
 }
 
 // planCodexConfig plans the registration and the approvals.
@@ -79,8 +107,9 @@ func planCodexConfig(plan *ClientPlan, root string, req ClientSetup) (codexConfi
 
 	plan.Reads = append(plan.Reads, guard)
 
-	// The line init has always printed for this file. It names the
-	// explicit settings that were kept, so they need no finding.
+	// narrate prints the line that init has always printed for this
+	// file. The line names the kept explicit settings, so they need no
+	// finding.
 	narrate := func(w io.Writer, status OpStatus) { approve.NarrateCodex(w, config, status == OpPlanned) }
 
 	if config.Changed() {
@@ -119,8 +148,8 @@ func planCodexConfig(plan *ClientPlan, root string, req ClientSetup) (codexConfi
 // grants trust: Codex runs a project hook only after the user reviews
 // that hook in Codex.
 //
-// An empty gate mode keeps the installed mode, and warn on a first
-// install: enforcement must never be added or removed without an
+// An empty gate mode keeps the installed mode, or selects warn on a
+// first install. Setup never adds or removes enforcement without an
 // explicit request. The narrator reports a removed --enforce flag.
 //
 // One handler per hook is the rule. Codex runs every matching handler
@@ -135,48 +164,35 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 	}
 
 	guard, document, err := readCodexHooks(root)
-
-	switch {
-	case err != nil && guard.Exists:
-		return fmt.Errorf("%w (fix or move it, then re-run)", err)
-	case err != nil:
-		return err
+	if err != nil {
+		return ownedReadError(guard, err)
 	}
 
 	plan.Reads = append(plan.Reads, guard)
 
-	gateMode := req.GateMode
-	previous := codexInstalledGateMode(document)
-
-	if gateMode == "" {
-		gateMode = previous
-	}
-
-	if gateMode == "" {
-		gateMode = hooks.ModeWarn
-	}
-
+	gateMode := cmp.Or(req.GateMode, codexInstalledGateMode(document), hooks.ModeWarn)
 	specs := hooks.CodexSpecs(gateMode)
 	gate := specs[0]
 
 	// One read of config.toml serves the inline hooks and the feature
-	// flags; the registration planner's read is reused when it ran.
+	// flags. The hook planner reuses the read of the registration
+	// planner when that planner ran.
 	if config == nil {
 		config = readCodexConfig(plan, root)
 	}
 
-	inline := codexInlineCommands(plan, root, config)
+	inline := codexInlineCommands(plan, config)
 
 	var managed []hooks.Spec
 
 	for _, spec := range specs {
 		elsewhere := unmanagedSources(codexHookSources(&plan.Findings, document, inline, spec))
 
-		// The gate hooks Codex runs from a definition setup does not manage,
-		// each with its own mode. An uncertain source is listed too, marked
-		// as such. A gate line that says "nothing blocks" while a wrapped
-		// gate blocks is the worse error. One that says "enforce" for an
-		// echo is wrong too.
+		// plan.GateHooks lists each gate hook that Codex runs from a
+		// definition that setup does not manage, with its own mode. It
+		// lists an uncertain source too and marks it. A gate line that
+		// says "nothing blocks" while a wrapped gate blocks is the worse
+		// error. A gate line that says "enforce" for an echo is wrong too.
 		asked := ""
 
 		if spec.Name == gate.Name {
@@ -194,26 +210,26 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 		managed = append(managed, spec)
 	}
 
-	// An owned gate command stays managed, so the merge rewrites it, and
-	// the narrator reports a removed --enforce from the rewrite.
+	// An owned gate command stays managed, so the merge rewrites it. The
+	// narrator reports an --enforce flag that the rewrite removes.
 	merged, err := hooks.Merge(document, binary, managed)
 	if err != nil {
 		return fmt.Errorf("%s: %w", codexHooksFile, err)
 	}
 
-	// The managed gate hook, when the merge left it where Codex runs it
-	// for the shell tool. An existing entry keeps its matcher, and one
-	// that never fires for Bash gates nothing.
+	// The plan lists the managed gate hook only when, after the merge,
+	// Codex runs it for the shell tool. An existing entry keeps its
+	// matcher. An entry whose matcher never fires for Bash gates nothing.
 	if hooks.ManagedRuns(document, gate, binary, hooks.CodexMatcher) {
 		plan.GateHooks = append(plan.GateHooks, GateHook{Path: codexHooksFile, Mode: gateMode, Managed: true})
 	}
 
 	// The lesson-check hooks go into hooks.json beside the lessons hook.
-	// The enforce preconditions read the sources that this plan already
-	// read: hooks turned off in the project configuration, and a
-	// definition in either source that discards the exit status of the
-	// guard. Codex trust stays unknown, so an installed guard is at most
-	// active-unverified.
+	// The enforce preconditions use the sources that this plan already
+	// read. They check for hooks turned off in the project configuration.
+	// They also check for a definition in either source that discards the
+	// exit status of the guard. Codex trust stays unknown, so an installed
+	// guard is at most active-unverified.
 	lessons, err := planLessonChecks(document, codexHooksFile, root, binary, codexLessonHooks, req,
 		codexLessonSources(document, inline, config))
 	if err != nil {
@@ -227,46 +243,38 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 				return duplicateLessonHandler(spec, source, lessons.requested)
 			}
 		}
-		// An uncertain wrapper does not establish coverage. It warns while
-		// setup installs the managed handler, as ordinary hook setup does.
+		// An uncertain wrapper does not prove coverage. Setup warns about
+		// it and installs the managed handler, as ordinary hook setup does.
 		reportCodexHookSources(plan, sources, true, "")
 	}
 
 	change := codexHooksChange{
-		changed: merged.Changed || lessons.changed(), created: !guard.Exists, hooksChanged: merged.Changed,
+		created: !guard.Exists, hooksChanged: merged.Changed,
 		removedEnforce: merged.RemovesEnforce(hooks.CodexGateMarker(hooks.ModeEnforce)), lessons: lessons,
 	}
-	changed := change.changed
 	narrate := func(w io.Writer, status OpStatus) {
 		narrateCodexHooks(w, binary, managed, change, status == OpPlanned)
 	}
 
 	// The adapter names the receiver of a Codex event, but no reset of a
 	// Codex context is verified. The once-per-context mode therefore has
-	// no effect there. Say so once, at setup, in the words inspection
+	// no effect there. Setup says so once, in the words that inspection
 	// repeats.
 	plan.Findings = append(plan.Findings, codexContextFinding)
 
 	// Hooks turned off in the project configuration make every hook of
-	// this run inert; the reader must learn that here, not from doctor.
-	if config != nil && config.exists {
-		plan.Findings = append(plan.Findings, codexHooksDisabledFinding(config.data)...)
-	}
+	// this run inert. The reader must learn that here, not from doctor.
+	plan.Findings = append(plan.Findings, config.hooksDisabledFindings()...)
 
-	// Codex records trust against the hash of a hook, so a new or changed
-	// hook is skipped until the user reviews it. The fact holds for a
-	// kept hook too; inspection repeats it in the same words.
+	// Codex records trust against the hash of a hook. So Codex skips a
+	// new or changed hook until the user reviews it. The fact holds for a
+	// kept hook too, and inspection repeats it in the same words.
 	if len(managed) > 0 || len(lessons.specs) > 0 {
 		plan.Findings = append(plan.Findings, codexTrustFinding)
 	}
 
-	if !changed {
-		detail := "seamark hooks already wired"
-		if len(managed) == 0 && len(lessons.specs) == 0 {
-			detail = "no hook installed: the seamark hooks run from definitions that setup does not manage"
-		}
-
-		plan.Kept = append(plan.Kept, FileKeep{Path: codexHooksFile, Detail: detail, Narrate: narrate})
+	if !change.changed() {
+		plan.Kept = append(plan.Kept, FileKeep{Path: codexHooksFile, Detail: change.keptDetail(managed), Narrate: narrate})
 
 		return nil
 	}
@@ -303,36 +311,38 @@ func duplicateLessonHandler(spec hooks.Spec, source hookSource, requested bool) 
 	return fmt.Errorf("%s; setup already manages this handler, so remove that definition", where)
 }
 
+// codexInlineHooksPath names the inline [hooks] of config.toml in a
+// finding and in a source list. One constant keeps both names equal.
+const codexInlineHooksPath = approve.CodexConfig + " [hooks]"
+
 // codexLessonSources reads the state of the Codex hook sources that the
-// enforce preconditions need, from the reads of the hook plan (P0 ruling
-// M4). An unreadable configuration gives unknown source state. Setup
-// permits installation, but capability preserves the read failure.
+// enforce preconditions need. It uses the reads of the hook plan, so it
+// sees the same files as the plan. An unreadable configuration gives
+// unknown source state. Setup still permits the install, and the
+// capability report keeps the read failure.
 func codexLessonSources(document map[string]any, inline []approve.InlineHook, config *codexConfigRead) lessonSourceState {
-	pre := hooks.CodexLessonCheckSpecs(hooks.LessonChecksEnforce)[0]
 	state := lessonSourceState{}
 
-	if reportOnlyIn(document, pre, hooks.CodexMatcher) {
+	if reportOnlyIn(document, codexLessonHooks) {
 		state.reportOnly = append(state.reportOnly, codexHooksFile)
 	}
 
-	if reportOnlyInline(inline, pre, hooks.CodexMatcher) {
-		state.reportOnly = append(state.reportOnly, approve.CodexConfig+" [hooks]")
+	if reportOnlyInline(inline, codexLessonHooks) {
+		state.reportOnly = append(state.reportOnly, codexInlineHooksPath)
 	}
 
-	if config != nil && config.exists {
-		state.hooksDisabled = len(codexHooksDisabledFinding(config.data)) > 0
-	}
-	state.sourceUnreadable = config != nil && config.err != nil
+	state.hooksDisabled = len(config.hooksDisabledFindings()) > 0
+	state.sourceUnreadable = config.err != nil
 
 	return state
 }
 
 // codexInstalledGateMode reads the mode of the managed gate hook from a
 // parsed hooks.json. It is the mode of the owned command under a matcher
-// that fires for the shell tool, enforce when any of them enforces, or
-// "" when none runs. The spec of either mode finds the hook of both.
-// Plan, Inspect, and ManagedGateMode read the mode here, so they cannot
-// disagree.
+// that fires for the shell tool. The mode is enforce when any such
+// command enforces, and "" when none runs. The spec of either mode finds
+// the gate hook of both modes. Plan, Inspect, and ManagedGateMode read
+// the mode here, so they cannot disagree.
 func codexInstalledGateMode(document map[string]any) string {
 	return hooks.EffectiveGateMode(document, hooks.CodexSpecs(hooks.ModeWarn)[0], hooks.CodexMatcher)
 }
@@ -342,12 +352,12 @@ func codexInstalledGateMode(document map[string]any) string {
 // commands of hooks.json, and the inline [hooks] commands of
 // config.toml. The command text alone is not coverage. A gate command
 // under PostToolUse, or under a matcher that only fires for
-// apply_patch, gates no shell command. A setup that took it for one
-// would leave the shell ungated. Such a definition is named in an info
-// finding and not listed. An inline entry in a layout the reader does
-// not know has no matcher or type to check. It counts as a source that
-// can run the hook for every tool: a false "runs" leaves the user
-// without any hook.
+// apply_patch, gates no shell command. If setup counted it as a gate,
+// the shell would stay ungated. An info finding names such a
+// definition, and the list leaves it out. An inline entry in a layout
+// the reader does not know has no matcher or type to check. It counts
+// as a source that can run the hook for every tool: a false "runs"
+// leaves the user without any hook.
 func codexHookSources(findings *[]Finding, document map[string]any, inline []approve.InlineHook, spec hooks.Spec) []hookSource {
 	sources := documentSources(findings, document, hooks.CodexMatcher, codexHooksFile, spec, true)
 
@@ -357,22 +367,21 @@ func codexHookSources(findings *[]Finding, document map[string]any, inline []app
 			continue
 		}
 
-		path := approve.CodexConfig + " [hooks]"
-
 		if entry.Event != spec.Event ||
 			(entry.Known && (entry.Type != "command" || !hooks.Fires(spec, entry.Matcher, hooks.CodexMatcher))) {
-			*findings = append(*findings, neverFiresFinding(path, entry.Command, entry.Event, entry.Matcher, spec))
+			*findings = append(*findings, neverFiresFinding(codexInlineHooksPath, entry.Command, entry.Event, entry.Matcher, spec))
 
 			continue
 		}
 
 		mode, asked := wrappedGateMode(spec, reading)
 		if mode != asked {
-			*findings = append(*findings, discardsStatusFinding(path, entry.Command, mode, asked))
+			*findings = append(*findings, discardsStatusFinding(codexInlineHooksPath, entry.Command, mode))
 		}
 
 		source := hookSource{
-			path: path, command: entry.Command, certain: entry.Known && reading.Use() == hooks.HookRuns, mode: mode,
+			path: codexInlineHooksPath, command: entry.Command, certain: entry.Known && reading.Use() == hooks.HookRuns,
+			mode: mode,
 		}
 
 		if entry.Known {
@@ -388,16 +397,17 @@ func codexHookSources(findings *[]Finding, document map[string]any, inline []app
 }
 
 // reportCodexHookSources records each unmanaged source of one hook and
-// reports whether setup must leave that hook alone. owned says whether
-// the managed handler already exists. asked is the gate mode the run
-// asks for, and "" for no request or for another hook.
+// reports whether setup must not install the managed handler of that
+// hook. owned says whether the managed handler already exists. asked is
+// the gate mode the run asks for, and "" for no request or for another
+// hook.
 //
 // Only a definition that certainly runs the hook stops the install. A
 // false "runs" leaves the user without any hook, and a false "does not
 // run" gives one extra reminder or one extra evaluation. A command that
-// only can run the hook, such as an unknown program with the seamark
-// command as its arguments, therefore gets a warning, and setup installs
-// the managed handler.
+// only can run the hook therefore gets a warning, and setup installs the
+// managed handler. An example is an unknown program with the seamark
+// command as its arguments.
 //
 // A run that asks for a gate mode gets a gate hook of that mode. A
 // certain definition that delivers that mode, or a stronger one, makes
@@ -409,7 +419,7 @@ func codexHookSources(findings *[]Finding, document map[string]any, inline []app
 //
 // A managed handler that already exists stays managed. Setup keeps it
 // current, because a removed handler is a bigger change than the user
-// asked for, and it warns that the hook runs twice.
+// asked for. Setup also warns that the hook runs twice.
 //
 // Each finding names the document that holds the definition. Every
 // consumer prints that path first, so the reason does not repeat it.
@@ -482,30 +492,16 @@ func describeGateMode(mode string) string {
 
 // codexInlineCommands returns the hooks of the second project hook
 // source, inline [hooks] in .codex/config.toml, with their identity.
-// Codex merges both sources. The registration plan can already hold the
-// file. Otherwise the file is an input here, so the read may follow a
-// link. A file that the function cannot read gives a warning and does
-// not stop setup.
-func codexInlineCommands(plan *ClientPlan, root string, config *codexConfigRead) []approve.InlineHook {
+// Codex merges both sources. config is the read of the file that the
+// caller made, and it is never nil. A file that does not parse sets
+// config.err, so the lesson sources report the failure without a second
+// parse. A read failure in config.err, or a file that does not parse,
+// gives a warning and does not stop setup.
+func codexInlineCommands(plan *ClientPlan, config *codexConfigRead) []approve.InlineHook {
 	skipped := func(err error) []approve.InlineHook {
-		plan.Findings = append(plan.Findings, Finding{
-			Level:  FindingWarning,
-			Path:   approve.CodexConfig,
-			Reason: "not checked for inline seamark hooks: " + render.Sanitize(readReason(approve.CodexConfig, err)),
-			Action: "fix the file, then run the command again",
-		})
+		plan.Findings = append(plan.Findings, uncheckedSourceFinding(approve.CodexConfig, "inline seamark hooks", err))
 
 		return nil
-	}
-
-	if config == nil {
-		guard, data, err := ReadInput(root, approve.CodexConfig)
-		if err != nil {
-			return skipped(err)
-		}
-
-		plan.Reads = append(plan.Reads, guard)
-		config = &codexConfigRead{data: data, exists: guard.Exists}
 	}
 
 	if !config.exists {
@@ -522,11 +518,16 @@ func codexInlineCommands(plan *ClientPlan, root string, config *codexConfigRead)
 		return skipped(err)
 	}
 
-	// The specs of either mode carry the markers of both.
+	// The specs of either mode carry the markers of both. One reading
+	// with the markers of every spec parses each command once. Its use is
+	// the strongest use of any marker, so it equals one reading per spec.
+	var markers []string
+	for _, spec := range hooks.CodexSpecs(hooks.ModeWarn) {
+		markers = append(markers, spec.Markers()...)
+	}
+
 	if present && !slices.ContainsFunc(entries, func(entry approve.InlineHook) bool {
-		return slices.ContainsFunc(hooks.CodexSpecs(hooks.ModeWarn), func(spec hooks.Spec) bool {
-			return hooks.SeamarkHookUse(entry.Command, spec.Markers()) != hooks.HookNotRun
-		})
+		return hooks.SeamarkHookUse(entry.Command, markers) != hooks.HookNotRun
 	}) {
 		plan.Findings = append(plan.Findings, Finding{
 			Level:  FindingInfo,
@@ -540,8 +541,8 @@ func codexInlineCommands(plan *ClientPlan, root string, config *codexConfigRead)
 
 // Inspect reports the registration, the grants, and the installed gate
 // hook mode, offline. The registration and the grants are pending
-// verification: the native check for the generated file is defined and
-// has not run against this version of the setup.
+// verification. Their native check for the generated file is defined
+// and has not run against this version of setup.
 func (codexSetup) Inspect(root string) Inspection {
 	evidence := VerificationEvidence{Level: VerificationPending, Surface: "project " + approve.CodexConfig}
 	record := approve.InspectCodex(root)
@@ -550,29 +551,25 @@ func (codexSetup) Inspect(root string) Inspection {
 		Capability: CapabilityMCPRegistration, Supported: true, Verification: evidence,
 	}
 
-	switch {
-	case record.Err != "":
-		registration.State, registration.Detail = StateUnreadable, unreadableDetail(errors.New(record.Err))
-	case record.Registered != "":
-		registration.State = StateCurrent
-		registration.Detail = fmt.Sprintf("registered in %s as %q", approve.CodexConfig, render.Sanitize(record.Registered))
-	case len(record.Conflicts) > 0:
-		// Without a registration every conflict is about the registration:
-		// the name is taken, or the layout cannot take the table.
-		registration.State = StateConflict
-		registration.Detail = render.Sanitize(strings.Join(record.Conflicts, "; "))
-	default:
-		registration.State = StateAbsent
+	// The record keeps its read error as text, so the text becomes the
+	// error again.
+	var readErr error
+	if record.Err != "" {
+		readErr = errors.New(record.Err)
 	}
 
-	registration.Action = registrationAction(CodexID, registration.State)
+	classifyRegistration(&registration, CodexID, approve.CodexConfig, readErr, record.Registered != "", record.Registered,
+		record.Conflicts)
 
 	// The skills entry carries evidence only; the registry fills the
-	// directory state. The 2026-09-03 trial loaded the skills from
-	// .agents/skills on codex-cli 0.152.1 (compatibility record).
+	// directory state. The native trial of 2026-09-03 loaded the skills
+	// from .agents/skills on codex-cli 0.152.1.
 	skillsEvidence := CapabilityInspection{Capability: CapabilitySkills, Supported: true, Verification: codexSkillsEvidence}
 
-	hookEntries, gate, findings := inspectCodexHooks(root)
+	// One read of each hook source serves every hook inspector below. So
+	// the hook inspectors see the same state of each file.
+	reads := readCodexHookSources(root)
+	hookEntries, gate, findings := classifyCodexHooks(reads)
 	capabilities := append([]CapabilityInspection{skillsEvidence, registration, inspectGrants(record, evidence)}, hookEntries...)
 
 	// Setup owns both documents. Inspection still reads the inline hooks
@@ -603,45 +600,83 @@ func (codexSetup) Inspect(root string) Inspection {
 		ManagedGateMode:   gate.managed,
 		HookDocumentError: gate.err,
 		Findings:          findings,
-		LessonHooks:       inspectCodexLessonHooks(root),
+		LessonHooks:       inspectCodexLessonHooks(reads),
 	}
 }
 
-// inspectCodexLessonHooks reads the lesson-check hooks of
-// .codex/hooks.json for the capability report (contract K10). The hook
-// sources are those of the enforce preconditions: a wrapper in
-// hooks.json or in the inline [hooks] of config.toml that discards the
-// exit status of the pre-write hook, and [features] hooks = false in the
-// project configuration. The reading adds no finding, so the existing
-// doctor and status lines keep their bytes. An unreadable document
-// gives nil, because HookDocumentError already names it, and so does a
-// document without such a hook.
-func inspectCodexLessonHooks(root string) *LessonHookInspection {
+// InspectLessonHooks reads the hook sources with the reader of Inspect
+// and skips the registration and the grants, because the lesson
+// capability report reads neither.
+func (codexSetup) InspectLessonHooks(root string) Inspection {
+	reads := readCodexHookSources(root)
+	entries, gate, _ := classifyCodexHooks(reads)
+
+	return Inspection{
+		ClientID: CodexID, Capabilities: entries, HookDocumentError: gate.err, LessonHooks: inspectCodexLessonHooks(reads),
+	}
+}
+
+// codexHookReads holds .codex/hooks.json and .codex/config.toml as one
+// inspection read them. Inspect passes one value to each inspector, so
+// the inspectors cannot disagree about a file that changes between
+// reads. When hooks.json cannot be read, err holds the error and the
+// other fields stay empty. The hook inspector then reports that error
+// only, and the lesson-hook reading gives nil.
+type codexHookReads struct {
+	err      error
+	document map[string]any
+	config   *codexConfigRead
+	inline   []approve.InlineHook
+	// findings holds the findings of the input readers, for example a
+	// config.toml that does not parse. Only the hook inspection reports
+	// them, so each one appears once.
+	findings []Finding
+}
+
+// readCodexHookSources reads both hook sources for an inspection. It
+// skips config.toml when hooks.json cannot be read, because no inspector
+// uses the inline hooks without the document.
+func readCodexHookSources(root string) codexHookReads {
 	_, document, err := readCodexHooks(root)
 	if err != nil {
-		return nil
+		return codexHookReads{err: err}
 	}
 
-	// The readers report an unreadable config.toml in inspectCodexHooks,
-	// so the scratch findings stay here.
+	// The scratch plan collects the findings of the shared input readers.
+	// An inspection writes nothing, so its guards stay unused.
 	var scratch ClientPlan
 
 	config := readCodexConfig(&scratch, root)
-	state := codexLessonSources(document, codexInlineCommands(&scratch, root, config), config)
+	inline := codexInlineCommands(&scratch, config)
 
-	return lessonHookReading(LessonHookInspection{
-		Entries:    lessonHookEntries(document, codexLessonHooks),
-		ReportOnly: len(state.reportOnly) > 0, HooksDisabled: state.hooksDisabled,
-		SourceUnreadable: state.sourceUnreadable,
-	})
+	return codexHookReads{document: document, config: config, inline: inline, findings: scratch.Findings}
 }
 
-// The native evidence of the Codex adapter, from the compatibility
-// record. A verified level names the tested version and surface; a
-// pending one names the surface whose check has not run. The edit hook
-// was observed in the 2026-09-21 native acceptance run: real apply_patch
-// envelopes, one lesson per patch, model-visible context. The gate hook
-// and the reset decoder have no native run yet.
+// inspectCodexLessonHooks reads the lesson-check hooks of
+// .codex/hooks.json for the capability report. It also reads the two
+// source states that the enforce preconditions check. One is a wrapper
+// in hooks.json or in the inline [hooks] that discards the exit status
+// of the pre-write hook. The other is [features] hooks = false in the
+// project configuration. The reading adds no finding, so the existing
+// doctor and status lines keep their bytes. An unreadable document
+// gives nil, because HookDocumentError already names it. A document
+// without such a hook also gives nil.
+func inspectCodexLessonHooks(reads codexHookReads) *LessonHookInspection {
+	if reads.err != nil {
+		return nil
+	}
+
+	state := codexLessonSources(reads.document, reads.inline, reads.config)
+
+	return lessonHookReading(state.inspection(reads.document, codexLessonHooks))
+}
+
+// These values are the native evidence of the Codex adapter. A verified
+// level names the tested version and surface. A pending level names the
+// surface whose check has not run. The native acceptance run of
+// 2026-09-21 observed the edit hook: real apply_patch envelopes, one
+// lesson per patch, and context that the model sees. The gate hook and
+// the reset decoder have no native run yet.
 var (
 	codexSkillsEvidence   = mustVerifiedEvidence("codex-cli 0.152.1", ".agents/skills")
 	codexEditsEvidence    = mustVerifiedEvidence("codex-cli 0.154.0", "PreToolUse apply_patch")
@@ -649,33 +684,22 @@ var (
 	codexResetsEvidence   = VerificationEvidence{Level: VerificationPending, Surface: "PostCompact"}
 )
 
-// mustVerifiedEvidence builds verified evidence from constants; the
-// contract tests validate every entry, so a blank scope is a
-// programming error.
-func mustVerifiedEvidence(clientVersion, surface string) VerificationEvidence {
-	e, err := VerifiedEvidence(clientVersion, surface)
-	if err != nil {
-		panic("integration: " + err.Error())
-	}
-
-	return e
-}
-
 // codexResetDetail explains the absent reset hook, so narration does
 // not call it missing: setup installs none on purpose.
 const codexResetDetail = "no reset hook is installed: reminders repeat, so a reset has nothing to clear " +
 	"(the reset of a subagent is unverified)"
 
-// inspectCodexHooks classifies the lifecycle hooks from .codex/hooks.json
+// classifyCodexHooks classifies the lifecycle hooks from .codex/hooks.json
 // and the inline [hooks] of .codex/config.toml, from the same evidence
 // setup plans with. The evidence is every definition of each hook with
 // the tools Codex runs it for. It reports the gate mode of the
-// definitions that run, the mode of the ones that may run, and the mode
-// of the managed hook alone. It also reports the limitations the reader
-// must know. Those are trust that seamark cannot read, and the receiving
-// context that no verified reset reaches. Hooks turned off in the project
-// configuration and a definition Codex never runs are limitations too.
-func inspectCodexHooks(root string) (entries []CapabilityInspection, gate gateInspection, findings []Finding) {
+// definitions that run and the mode of the ones that may run. It also
+// reports the mode of the managed hook alone. It reports the limitations
+// the reader must know. Those are trust that seamark cannot read, and
+// the receiving context that no verified reset reaches. Hooks turned off
+// in the project configuration and a definition Codex never runs are
+// limitations too.
+func classifyCodexHooks(reads codexHookReads) (entries []CapabilityInspection, gate gateInspection, findings []Finding) {
 	edits := CapabilityInspection{Capability: CapabilityEdits, Supported: true, Verification: codexEditsEvidence}
 	commands := CapabilityInspection{Capability: CapabilityCommands, Supported: true, Verification: codexCommandsEvidence}
 	resets := CapabilityInspection{
@@ -684,48 +708,39 @@ func inspectCodexHooks(root string) (entries []CapabilityInspection, gate gateIn
 
 	collect := func() []CapabilityInspection { return []CapabilityInspection{edits, commands, resets} }
 
-	_, document, err := readCodexHooks(root)
-	if err != nil {
-		unreadableHooks([]*CapabilityInspection{&edits, &commands}, codexHooksFile, err)
+	if reads.err != nil {
+		unreadableHooks([]*CapabilityInspection{&edits, &commands}, codexHooksFile, reads.err)
 
-		return collect(), gateInspection{err: render.Sanitize(err.Error())}, nil
+		return collect(), gateInspection{err: render.Sanitize(reads.err.Error())}, nil
 	}
 
-	// The scratch plan collects the findings of the shared input readers.
-	var scratch ClientPlan
-
-	config := readCodexConfig(&scratch, root)
-	inline := codexInlineCommands(&scratch, root, config)
-	findings = scratch.Findings
+	findings = reads.findings
 
 	specs := hooks.CodexSpecs(hooks.ModeWarn)
 	gateSpec, lessons := specs[0], specs[1]
 
-	gateSources := codexHookSources(&findings, document, inline, gateSpec)
+	gateSources := codexHookSources(&findings, reads.document, reads.inline, gateSpec)
 	classifyHook(&commands, gateSpec, gateSources)
 	sourceFindings(&findings, gateSpec, gateSources)
 
-	lessonSources := codexHookSources(&findings, document, inline, lessons)
+	lessonSources := codexHookSources(&findings, reads.document, reads.inline, lessons)
 	classifyHook(&edits, lessons, lessonSources)
 	sourceFindings(&findings, lessons, lessonSources)
 
 	gate.mode, gate.possible = hookMode(gateSources, certainSource), hookMode(gateSources, uncertainSource)
-	gate.managed = codexInstalledGateMode(document)
+	gate.managed = codexInstalledGateMode(reads.document)
 
 	if edits.State != StateAbsent || commands.State != StateAbsent {
 		findings = append(findings, codexTrustFinding, codexContextFinding)
-
-		if config != nil && config.exists {
-			findings = append(findings, codexHooksDisabledFinding(config.data)...)
-		}
+		findings = append(findings, reads.config.hooksDisabledFindings()...)
 	}
 
 	return collect(), gate, findings
 }
 
 // ManagedGateMode reads the mode of the managed gate hook from
-// .codex/hooks.json alone, by the rule that Plan and Inspect use. A file
-// that cannot be read gives "": the plan then reports the error.
+// .codex/hooks.json alone, by the rule that Plan and Inspect use. An
+// unreadable file gives "", and the plan then reports the error.
 func (codexSetup) ManagedGateMode(root string) string {
 	_, document, err := readCodexHooks(root)
 	if err != nil {
@@ -741,19 +756,12 @@ func (codexSetup) ManagedGateMode(root string) string {
 // parse error names the file, as the Claude Code parser does, so every
 // reason about a hook document reads alike.
 func readCodexHooks(root string) (FileGuard, map[string]any, error) {
-	return readOwnedDocument(root, codexHooksFile, func(data []byte) (map[string]any, error) {
-		document, err := hooks.ParseDocumentExact(data)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", codexHooksFile, err)
-		}
-
-		return document, nil
-	})
+	return readOwnedDocument(root, codexHooksFile, exactParser(codexHooksFile))
 }
 
 // readCodexConfig reads .codex/config.toml for inline hooks and feature
-// flags. It retains read failures so the inline reader and capability
-// can report the same state without a second read.
+// flags. It keeps a read failure, so the inline reader and the
+// capability report give the same state without a second read.
 func readCodexConfig(plan *ClientPlan, root string) *codexConfigRead {
 	guard, data, err := ReadInput(root, approve.CodexConfig)
 	if err != nil {
@@ -765,9 +773,9 @@ func readCodexConfig(plan *ClientPlan, root string) *codexConfigRead {
 	return &codexConfigRead{data: data, exists: guard.Exists}
 }
 
-// The limitations every installed Codex hook carries. Setup prints the
-// same facts when it installs the hooks; inspection repeats them, so
-// doctor and status say what init said.
+// These findings state the limitations of every installed Codex hook.
+// Setup prints them when it installs the hooks. Inspection repeats
+// them, so doctor and status say what init said.
 var (
 	codexTrustFinding = Finding{
 		Level: FindingInfo,
@@ -783,23 +791,3 @@ var (
 			"so `hook_delivery: once-per-context` does not apply: reminders repeat, within the hook budget",
 	}
 )
-
-// codexHooksDisabledFinding warns when the project configuration turns
-// Codex hooks off: every installed hook is then inert, and a reader who
-// sees "installed" would expect reminders and gate verdicts that never
-// come. The user-level configuration can carry the flag too; the
-// inspection reads the project file only and says so.
-func codexHooksDisabledFinding(data []byte) []Finding {
-	disabled, err := approve.CodexHooksDisabled(data)
-	if err != nil || !disabled {
-		return nil
-	}
-
-	return []Finding{{
-		Level: FindingWarning,
-		Path:  approve.CodexConfig,
-		Reason: "[features] hooks = false turns every Codex hook off in this project, so the installed seamark hooks never run " +
-			"(the user-level configuration is not read here)",
-		Action: "set [features] hooks = true, or remove the key, to run the hooks",
-	}}
-}

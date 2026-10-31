@@ -45,15 +45,13 @@ a pull request or read offline.`,
 
 			staleNote(cmd.ErrOrStderr(), st, root)
 
-			delivery := compactDeliveryRequest(opts)
-
 			if out == stdoutTarget {
 				if inBrowser {
 					fmt.Fprintln(cmd.ErrOrStderr(),
 						"note: --open needs a file; ignoring it while writing to stdout")
 				}
 
-				return htmlreport.Generate(cmd.Context(), cmd.OutOrStdout(), st, root, time.Now(), delivery)
+				return htmlreport.Generate(cmd.OutOrStdout(), st, root, time.Now())
 			}
 
 			path := out
@@ -64,7 +62,7 @@ a pull request or read offline.`,
 			// Rendered whole before anything is written: a report that
 			// failed halfway is a file someone opens and believes.
 			var page bytes.Buffer
-			if err := htmlreport.Generate(cmd.Context(), &page, st, root, time.Now(), delivery); err != nil {
+			if err := htmlreport.Generate(&page, st, root, time.Now()); err != nil {
 				return err
 			}
 

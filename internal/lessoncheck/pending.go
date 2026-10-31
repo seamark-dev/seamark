@@ -1,9 +1,9 @@
 package lessoncheck
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -21,25 +20,26 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// This file holds the pending baselines of contract K7. A pre-edit
-// handler stores the before state of one allowed tool call in
-// .seamark/checks/pending/<key>.json. The post-edit handler of the same
-// call reads it as the baseline of the actual edit and deletes it. A
-// sweep removes what a crash or a cancelled tool leaves behind.
+// This file holds the pending baselines. A pre-edit handler stores the
+// before state of one allowed tool call in .seamark/checks/pending/<key>.json.
+// The post-edit handler of the same call reads it as the baseline of the
+// actual edit and deletes it. A sweep removes the records that a crash
+// or a cancelled tool leaves.
 //
 // Two roots apply. The directory is under the git top level, as the
-// configuration and the snapshot are. Every digest inside a record and
-// the key use the K2 identity root, which the caller hashes over (§5
-// row 121). So each function here takes the git top level. DiscardSession
-// takes both roots, because its caller must match digests over the
-// identity root and must still find the directory of the selected
-// workspace.
+// configuration and the snapshot are. Every digest inside a record, and
+// the key, hash over the identity root. The caller computes these
+// digests, so each function here takes only the git top level.
+// DiscardSession takes both roots, because it computes the session
+// digest over the identity root and finds the directory under the git
+// top level.
 //
-// The directory never lives under .seamark/private, and its own
-// .gitignore keeps it out of git (contract K7).
+// The directory is never under .seamark/private, because the capture
+// run lock reads that directory as a sign that capture is on. Its own
+// .gitignore keeps it out of git.
 
 // PendingSchema is the format name of a pending record. It is also the
-// label of the key digest (contracts §2.1, §2.2).
+// label of the key digest.
 const PendingSchema = "lesson-check-pending/1"
 
 // LimitationBaselineTooLarge marks a record whose content the writer
@@ -47,8 +47,8 @@ const PendingSchema = "lesson-check-pending/1"
 // unknown/resource-limit for a pattern pin on those paths.
 const LimitationBaselineTooLarge = "baseline-too-large"
 
-// tmpMaxAge is the age at which the sweep removes an in-flight write
-// (contract K3, output caps). A write that is older crashed before its
+// tmpMaxAge is the age at which the sweep removes a temporary file. An
+// older temporary file belongs to a write that crashed before its
 // rename.
 const tmpMaxAge = 10 * time.Minute
 
@@ -64,13 +64,13 @@ const (
 // pendingMetadataBytes is the room for the fields of a record other
 // than its content. The read bound of a record is the base64 size of
 // max-baseline-bytes plus this room. A record above the bound reads as
-// absent, so a corrupt or planted file never stands in for a baseline.
+// absent, so a corrupt or planted file never serves as a baseline.
 const pendingMetadataBytes = 8 << 20
 
 // ErrUnsafeChecksDir is the error of a .seamark/checks directory that is
-// not a real directory, for example a symbolic link. The text is the
-// text of contract K7. The guard still decides, and the post-edit
-// handler gives missing-baseline.
+// not a real directory, for example a symbolic link. The CLI output and
+// the audit record print this text, so it stays fixed. The guard still
+// decides, and the post-edit handler gives missing-baseline.
 var ErrUnsafeChecksDir = errors.New("lesson checks: .seamark/checks is not a real directory")
 
 // ErrNoPending is the error of a pending record that cannot serve as a
@@ -80,7 +80,7 @@ var ErrUnsafeChecksDir = errors.New("lesson checks: .seamark/checks is not a rea
 // case, so a bad record is never a pass.
 var ErrNoPending = errors.New("lesson checks: no pending baseline")
 
-// Pending is one pending record, lesson-check-pending/1 (contract K7).
+// Pending is one pending record, lesson-check-pending/1.
 type Pending struct {
 	Schema        string `json:"schema"`         // PendingSchema; WritePending sets it
 	CreatedAt     string `json:"created_at"`     // RFC 3339 UTC; WritePending sets it when empty
@@ -114,8 +114,8 @@ type PendingPath struct {
 	Before  Side   `json:"before"`
 	// ContentB64 holds the before content only when an executable
 	// no-added-pattern/1 pin scopes the path, because only that checker
-	// reads the before text. Empty content is omitted too: Before.Content
-	// "available" with Before.Size 0 marks it.
+	// reads the before text. The writer also omits empty content, and
+	// Before.Content "available" with Before.Size 0 marks it.
 	ContentB64 string `json:"content_b64,omitempty"`
 	// ProjectedAfterSHA256 is the SHA-256 of the projected after
 	// content. It is "" when the after content was not projectable, and
@@ -123,31 +123,31 @@ type PendingPath struct {
 	ProjectedAfterSHA256 string `json:"projected_after_sha256,omitempty"`
 }
 
-// PendingKey returns the file name key of one tool call (contract K7):
-// the hex SHA-256 of compose("lesson-check-pending/1", client,
-// matchSHA). matchSHA is reviews.MatchDigest over the identity root, so
-// the pre-edit and the post-edit handler of one call compute one key.
-// An empty matchSHA gives "", because a call without a tool-use ID has
-// no record.
+// PendingKey returns the file name key of one tool call: the hex SHA-256
+// of compose("lesson-check-pending/1", client, matchSHA). matchSHA is
+// reviews.MatchDigest over the identity root, so the pre-edit and the
+// post-edit handler of one call compute one key. An empty matchSHA gives
+// "", because a call without a tool-use ID has no record.
+//
+// reviews.ComposeDigest builds the digest, so the key uses the same
+// composition as every other compose digest.
 func PendingKey(client, matchSHA string) string {
 	if matchSHA == "" {
 		return ""
 	}
 
-	sum := sha256.Sum256([]byte(compose(PendingSchema, client, matchSHA)))
-
-	return hex.EncodeToString(sum[:])
+	return reviews.ComposeDigest(PendingSchema, client, matchSHA)
 }
 
 // PendingPathsOf returns the pending paths of a proposed-edit snapshot
-// and the limitations that they give. A change is kept when an
+// and the limitations that they give. It keeps a change when an
 // executable pin of cfg scopes one of its ends. The before content goes
 // into the record only when an executable no-added-pattern/1 pin scopes
 // the change. It returns no path when no executable pin scopes the
 // edit, and then the caller writes no record.
 //
-// The snapshot keeps its content unexported (contracts §1.6), so only
-// this package can copy it into a record.
+// The snapshot keeps its content unexported, so only this package can
+// copy it into a record.
 func PendingPathsOf(cfg *Config, snap *Snapshot) (paths []PendingPath, limitations []string) {
 	var lims []string
 
@@ -186,20 +186,26 @@ func PendingPathsOf(cfg *Config, snap *Snapshot) (paths []PendingPath, limitatio
 // the change, and whether such a pin is a no-added-pattern/1 pin. The
 // kind comes from the written definition, so a pin of an invalid
 // configuration still names its kind.
+//
+// The pre-edit hook asks this for each change, so the loop reads only
+// the kind of each definition. rawCheckRef also digests the definition,
+// which this answer does not need.
 func executableScope(cfg *Config, ch Change) (scoped, needsText bool) {
 	for _, pin := range cfg.Pins {
-		if !isExecutable(pin.Mode) || endpointsInScope(ch, pin.Scope) == 0 {
+		if !pin.Mode.Executable() || endpointsInScope(ch, pin.Scope) == 0 {
 			continue
 		}
 
-		scoped = true
-
-		if rawCheckRef(cfg.Raw, pin.CheckID).Kind == KindNoAddedPattern {
-			needsText = true
+		// A pattern pin decides both answers, so the other pins cannot
+		// change them.
+		if cfg.Raw != nil && pin.CheckID != "" && Kind(cfg.Raw.Checks[pin.CheckID].Kind) == KindNoAddedPattern {
+			return true, true
 		}
+
+		scoped = true
 	}
 
-	return scoped, needsText
+	return scoped, false
 }
 
 // WritePending writes the record of one allowed tool call to
@@ -209,9 +215,7 @@ func executableScope(cfg *Config, ch Change) (scoped, needsText bool) {
 // file. It sets the schema, sets the time when CreatedAt is empty, and
 // drops content above lim.MaxBaselineBytes. It never changes p.
 func WritePending(ctx context.Context, root string, p *Pending, lim Limits) error {
-	if lim == (Limits{}) {
-		lim = DefaultLimits()
-	}
+	lim = lim.orDefault()
 
 	key := PendingKey(p.Client, p.MatchSHA)
 	if key == "" {
@@ -247,17 +251,23 @@ func WritePending(ctx context.Context, root string, p *Pending, lim Limits) erro
 // boundBaseline keeps the content of the paths in path order while the
 // decoded total stays at or below maxBytes. A path whose content does
 // not fit loses it: its before side becomes too-large, and the record
-// gets the limitation baseline-too-large (contract K7).
+// gets the limitation baseline-too-large.
 func boundBaseline(rec *Pending, maxBytes int64) {
 	paths := append([]PendingPath(nil), rec.Paths...)
 	total, dropped := int64(0), false
 
 	for i := range paths {
-		if paths[i].ContentB64 == "" {
+		content := paths[i].ContentB64
+		if content == "" {
 			continue
 		}
 
-		n := int64(base64.StdEncoding.DecodedLen(len(paths[i].ContentB64))) - int64(strings.Count(paths[i].ContentB64, "="))
+		// The standard encoder writes "=" padding only at the end. So a
+		// count of the trailing "=" characters gives the padding without a
+		// scan of the whole text.
+		pad := len(content) - len(strings.TrimRight(content, "="))
+
+		n := int64(base64.StdEncoding.DecodedLen(len(content)) - pad)
 		if total+n <= maxBytes {
 			total += n
 			continue
@@ -270,16 +280,17 @@ func boundBaseline(rec *Pending, maxBytes int64) {
 
 	rec.Paths = paths
 
-	if dropped && !slices.Contains(rec.Limitations, LimitationBaselineTooLarge) {
-		lims := append([]string{LimitationBaselineTooLarge}, rec.Limitations...)
-		sort.Strings(lims)
-		rec.Limitations = lims
+	// The clone keeps the slice of the caller unchanged, because rec
+	// shares it with the record that WritePending must not change.
+	if dropped {
+		rec.Limitations = withLimitation(slices.Clone(rec.Limitations), LimitationBaselineTooLarge)
 	}
 }
 
-// writeAtomic writes data to dir/name through dir/.tmp-<random>. The
-// temporary file is opened with O_EXCL and without following a link.
-// A context that ends before the rename removes the temporary file.
+// writeAtomic writes data to dir/name through dir/.tmp-<random>. It
+// opens the temporary file with O_EXCL and without following a link, so
+// it never writes into an existing file or through a link. When the
+// context ends before the rename, it removes the temporary file.
 func writeAtomic(ctx context.Context, dir, name string, data []byte) error {
 	tmp, err := tmpName(dir)
 	if err != nil {
@@ -325,9 +336,7 @@ func tmpName(dir string) (string, error) {
 // that cannot serve as a baseline gives an error that wraps
 // ErrNoPending. An unsafe directory gives ErrUnsafeChecksDir.
 func ReadPending(root, client, matchSHA string, lim Limits) (*Pending, error) {
-	if lim == (Limits{}) {
-		lim = DefaultLimits()
-	}
+	lim = lim.orDefault()
 
 	key := PendingKey(client, matchSHA)
 	if key == "" {
@@ -360,8 +369,7 @@ func ReadPending(root, client, matchSHA string, lim Limits) (*Pending, error) {
 		return nil, fmt.Errorf("%w: the record names another call", ErrNoPending)
 	}
 
-	sum := sha256.Sum256(data)
-	p.fileSHA256 = hex.EncodeToString(sum[:])
+	p.fileSHA256 = hexSHA256(data)
 
 	return p, nil
 }
@@ -379,27 +387,21 @@ func DeletePending(root, client, matchSHA string) error {
 		return err
 	}
 
-	if err := os.Remove(filepath.Join(dir, key+pendingSuffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-
-	return nil
+	return removeIfPresent(filepath.Join(dir, key+pendingSuffix))
 }
 
 // Sweep removes the records older than lim.PendingMaxAge, the entries
 // that are not regular files, and the temporary files older than
-// tmpMaxAge from <root>/.seamark/checks/pending (contract K7, crash
-// recovery). root is the git top level. Each removed record appends one
-// baseline-discarded audit record with caller. It never creates the
-// directory.
+// tmpMaxAge from <root>/.seamark/checks/pending. This is the crash
+// recovery of the pending baselines. root is the git top level. Each
+// removed record appends one baseline-discarded audit record with
+// caller. It never creates the directory.
 //
 // The age is the modification time, because a record that does not
 // parse must expire too. Sweep continues after an error, and it returns
 // the number of removed records and the joined errors.
 func Sweep(root string, caller Caller, lim Limits) (int, error) {
-	if lim == (Limits{}) {
-		lim = DefaultLimits()
-	}
+	lim = lim.orDefault()
 
 	dir, err := existingPendingDir(root)
 	if err != nil || dir == "" {
@@ -435,7 +437,7 @@ func Sweep(root string, caller Caller, lim Limits) (int, error) {
 		switch {
 		case strings.HasPrefix(name, pendingTmpPrefix):
 			if age > tmpMaxAge {
-				errs = append(errs, removeTmp(path))
+				errs = append(errs, removeIfPresent(path))
 			}
 		case !strings.HasSuffix(name, pendingSuffix):
 			// The name is outside the namespace of the writer, so the
@@ -444,8 +446,8 @@ func Sweep(root string, caller Caller, lim Limits) (int, error) {
 			ok, err := discardPending(root, path, nil, caller, DiscardUnsafe)
 			removed, errs = removed+ok, append(errs, err)
 		case age > lim.PendingMaxAge:
-			// An unreadable record still expires. Its record then names
-			// no call.
+			// An unreadable record still expires. Its audit record then
+			// names no call.
 			p, _ := readPendingRecord(path, lim)
 
 			ok, err := discardPending(root, path, p, caller, DiscardExpired)
@@ -457,17 +459,18 @@ func Sweep(root string, caller Caller, lim Limits) (int, error) {
 }
 
 // DiscardSession removes every pending record of one native session,
-// when its capture session is deleted (contract K7). top is the git top
-// level of the selected workspace, where the hooks store the records
-// and the audit stream. identityRoot is the K2 root that the hooks
-// hashed over. The two differ when the index records another root, for
-// example in a copied or moved repository. Each removed record appends
-// one baseline-discarded audit record with cause session-deleted.
+// when its capture session is deleted. top is the git top level of the
+// selected workspace, where the hooks store the records and the audit
+// stream. identityRoot is the root that the hooks hashed over. The two
+// differ when the index records another root, for example in a copied
+// or moved repository. Each removed record appends one
+// baseline-discarded audit record with cause session-deleted.
 //
 // The directory comes from top only, so the call never touches another
 // workspace, also when identityRoot names one. A record whose digests
-// used another root does not match. The sweep still removes it at
-// pending-max-age, and no other root or hash is tried (§5 row 107).
+// used another root does not match, because the match never loosens the
+// identity: it tries no other root and no other hash. The sweep still
+// removes such a record at pending-max-age.
 func DiscardSession(top, identityRoot, nativeSessionID string) (removed int, err error) {
 	if nativeSessionID == "" {
 		return 0, nil
@@ -545,32 +548,21 @@ func discardPending(root, path string, p *Pending, caller Caller, cause string) 
 		rec.MatchSHA = p.MatchSHA
 		rec.ContextSHA = p.ContextSHA
 		rec.ConfigSHA256 = p.ConfigSHA256
-		rec.Paths = pendingPathList(p)
+		rec.Paths = sortedUnique(recordPaths(p))
 		rec.PathsComplete = p.PathsComplete
 	}
 
 	return 1, AppendAudit(root, rec)
 }
 
-// removeTmp removes one temporary file. An absent entry is not an error.
-func removeTmp(path string) error {
+// removeIfPresent removes one pending entry or temporary file. An absent
+// entry is not an error, because a concurrent sweep can remove it first.
+func removeIfPresent(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
 	return nil
-}
-
-// pendingPathList returns the distinct paths and move sources of a
-// record, sorted.
-func pendingPathList(p *Pending) []string {
-	list := make([]string, 0, 2*len(p.Paths))
-
-	for _, pp := range p.Paths {
-		list = append(list, pp.Path, pp.OldPath)
-	}
-
-	return sortedUnique(list)
 }
 
 // readPendingRecord reads and parses one record file.
@@ -617,20 +609,26 @@ func readPendingFile(path string, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("%w: the record is above the read bound", ErrNoPending)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
-	if err != nil {
+	// The buffer takes its size from Stat, so a large baseline reads
+	// without repeated growth. The limit still applies when the file
+	// grows after Stat.
+	var buf bytes.Buffer
+
+	buf.Grow(int(info.Size()) + bytes.MinRead)
+
+	if _, err := buf.ReadFrom(io.LimitReader(f, maxBytes+1)); err != nil {
 		return nil, err
 	}
 
-	if int64(len(data)) > maxBytes {
+	if int64(buf.Len()) > maxBytes {
 		return nil, fmt.Errorf("%w: the record is above the read bound", ErrNoPending)
 	}
 
-	return data, nil
+	return buf.Bytes(), nil
 }
 
 // parsePending decodes one record. A record of another schema reads as
-// absent (contracts §1.7).
+// absent, so this reader never misreads a newer format as a baseline.
 func parsePending(data []byte) (*Pending, error) {
 	var p Pending
 
@@ -645,30 +643,40 @@ func parsePending(data []byte) (*Pending, error) {
 	return &p, nil
 }
 
-// pendingDirs returns .seamark, .seamark/checks, and
-// .seamark/checks/pending under root, in creation order.
-func pendingDirs(root string) []string {
-	seamark := filepath.Join(root, ".seamark")
-	checks := filepath.Join(seamark, checksDirName)
-
-	return []string{seamark, checks, filepath.Join(checks, pendingDirName)}
+// openPendingDir creates the pending directory when it is absent and
+// returns its path. The checks directory gets its own .gitignore.
+func openPendingDir(root string) (string, error) {
+	return pendingDir(root, true)
 }
 
-// openPendingDir creates the pending directory when it is absent and
-// returns its path. Each directory must be a real directory, because a
-// cloned repository can commit a link that redirects the baselines.
-// .seamark keeps its mode, as the other writers of .seamark do. The two
-// directories of the checks get 0700 on every open, and the checks
-// directory gets its own .gitignore.
-func openPendingDir(root string) (string, error) {
-	dirs := pendingDirs(root)
+// existingPendingDir returns the pending directory when it exists, and
+// "" when it is absent. It creates nothing, so a reader or a sweep in a
+// repository without lesson checks leaves the tree as it is.
+func existingPendingDir(root string) (string, error) {
+	return pendingDir(root, false)
+}
 
-	for i, dir := range dirs {
-		if err := ensureRealDir(dir, "lesson checks: create"); err != nil {
-			return "", unsafeChecks(err)
+// pendingDir walks .seamark, .seamark/checks, and
+// .seamark/checks/pending under root, in creation order, and returns
+// the last one. With create, it creates each absent directory. Without
+// create, an absent directory gives "".
+//
+// Each directory must be a real directory, because a cloned repository
+// can commit a link that redirects the baselines. .seamark keeps its
+// mode, as the other writers of .seamark do. The checks and the pending
+// directory get 0700 on every call.
+func pendingDir(root string, create bool) (string, error) {
+	seamark := filepath.Join(root, ".seamark")
+	checks := filepath.Join(seamark, checksDirName)
+	pending := filepath.Join(checks, pendingDirName)
+
+	for _, dir := range []string{seamark, checks, pending} {
+		exists, err := checkPendingDir(dir, create)
+		if err != nil || !exists {
+			return "", err
 		}
 
-		if i == 0 {
+		if dir == seamark {
 			continue
 		}
 
@@ -676,7 +684,7 @@ func openPendingDir(root string) (string, error) {
 			return "", err
 		}
 
-		if i == 1 {
+		if create && dir == checks {
 			ignore := filepath.Join(dir, ".gitignore")
 			if err := privatedir.EnsureGitignore(ignore, checksGitignore, privateFileMode, errUnsafePath); err != nil {
 				return "", fmt.Errorf("lesson checks: %w", err)
@@ -684,35 +692,37 @@ func openPendingDir(root string) (string, error) {
 		}
 	}
 
-	return dirs[len(dirs)-1], nil
+	return pending, nil
 }
 
-// existingPendingDir returns the pending directory when it exists, and
-// "" when it is absent. It creates nothing, so a reader or a sweep in a
-// repository without lesson checks leaves the tree as it is. An
-// existing directory gets the same checks and the same mode as in
-// openPendingDir.
-func existingPendingDir(root string) (string, error) {
-	dirs := pendingDirs(root)
-
-	for i, dir := range dirs {
-		if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-
-		// EnsureRealDir only checks an entry that exists.
+// checkPendingDir reports whether dir exists as a real directory. A link
+// or another type gives ErrUnsafeChecksDir. With create, it creates an
+// absent dir. Without create, an absent dir gives false and no error.
+//
+// The read path runs one Lstat for each directory, because the
+// post-edit hook opens the pending directory several times for each
+// edit.
+func checkPendingDir(dir string, create bool) (bool, error) {
+	if create {
 		if err := ensureRealDir(dir, "lesson checks: create"); err != nil {
-			return "", unsafeChecks(err)
+			return false, unsafeChecks(err)
 		}
 
-		if i > 0 {
-			if err := privatedir.TightenMode(dir, privateDirMode); err != nil {
-				return "", err
-			}
-		}
+		return true, nil
 	}
 
-	return dirs[len(dirs)-1], nil
+	info, err := os.Lstat(dir)
+
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, err
+	case info.Mode()&os.ModeSymlink != 0 || !info.IsDir():
+		return false, ErrUnsafeChecksDir
+	}
+
+	return true, nil
 }
 
 // unsafeChecks gives ErrUnsafeChecksDir for a refused directory and

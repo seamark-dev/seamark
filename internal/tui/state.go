@@ -12,7 +12,6 @@ import (
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
-	"github.com/seamark-dev/seamark/internal/lessonreport"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/proposals"
@@ -46,15 +45,13 @@ const (
 	// last inspection of the clients with lessons.yaml. So it loads after
 	// a load of either source (followChecks), and allSections omits it.
 	secChecks
-	// secDelivery reads lesson delivery independently of the pin inspection.
-	secDelivery
 	secCount
 )
 
 // allSections lists every source for a full view refresh. Every loader
 // only reads: none fetches, runs an agent, or writes.
 var allSections = []sectionKind{
-	secDoctor, secIndex, secIntegrations, secLedger, secStats, secLearning, secSettings, secPins, secDelivery,
+	secDoctor, secIndex, secIntegrations, secLedger, secStats, secLearning, secSettings, secPins,
 }
 
 // section is the last snapshot of one source. After a failed reload the
@@ -147,7 +144,6 @@ type state struct {
 	settings     section[*settings.Snapshot]
 	pins         section[*maintain.Inspection]
 	capability   section[lessoncheck.CapabilityReport]
-	delivery     section[lessonreport.Report]
 
 	// gens drops out-of-order results: only the newest load of a
 	// source may replace its snapshot.
@@ -538,12 +534,11 @@ func (w *workerSet) wait(d time.Duration) bool {
 func (s *state) loading() bool {
 	return s.doctor.loading || s.index.loading || s.integrations.loading ||
 		s.ledger.loading || s.stats.loading || s.learning.loading || s.settings.loading || s.pins.loading ||
-		s.capability.loading || s.delivery.loading
+		s.capability.loading
 }
 
 // load starts background loads of the named sources.
 func (s *state) load(kinds ...sectionKind) tea.Cmd {
-	kinds = deliveryRefreshKinds(kinds)
 	cmds := make([]tea.Cmd, 0, len(kinds))
 
 	for _, k := range kinds {
@@ -607,13 +602,6 @@ func (s *state) load(kinds ...sectionKind) tea.Cmd {
 			s.pins.loading = true
 			cmds = append(cmds, func() tea.Msg {
 				return loadedMsg{kind: k, gen: gen, value: svc.Pins(), at: time.Now()}
-			})
-		case secDelivery:
-			s.delivery.loading = true
-			cmds = append(cmds, func() tea.Msg {
-				v, err := svc.Delivery(lessonreport.Request{})
-
-				return loadedMsg{kind: k, gen: gen, value: v, err: err, at: time.Now()}
 			})
 		case secChecks:
 			// The report joins the inspections that the console holds, so
@@ -706,9 +694,6 @@ func (s *state) store(msg loadedMsg) bool {
 	case secPins:
 		v, _ := msg.value.(*maintain.Inspection)
 		s.pins.set(v, msg.err, msg.at)
-	case secDelivery:
-		v, _ := msg.value.(lessonreport.Report)
-		s.delivery.set(v, msg.err, msg.at)
 	case secChecks:
 		v, _ := msg.value.(lessoncheck.CapabilityReport)
 		s.capability.set(v, msg.err, msg.at)

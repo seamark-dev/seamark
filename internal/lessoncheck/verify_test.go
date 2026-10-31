@@ -20,9 +20,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// This file holds the tests of Verify, the text renderer, and Combine
-// (contract K5). Every repository lives under t.TempDir(), so no test
-// reads or writes the checkout that runs it.
+// This file holds the tests of Verify, the text renderer, and Combine.
+// Every repository lives under t.TempDir(), so no test reads or writes
+// the checkout that runs it.
 
 // verifyTestVersion is the seamark version that the tests pass.
 const verifyTestVersion = "v0.8.0-31-g96e14ef"
@@ -220,10 +220,10 @@ func pinsDigestOf(parts ...string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// TestLessonCheckVerifySummaryStates proves the five summary states of
-// contract K5, their exit errors and stderr texts, the counts, the
-// listings with the --set-mode hint, the binding, the rerun command,
-// and the request errors (AC-35).
+// TestLessonCheckVerifySummaryStates proves the five summary states,
+// their exit errors and stderr texts, the counts, the listings with the
+// --set-mode hint, the binding, the rerun command, and the request
+// errors.
 func TestLessonCheckVerifySummaryStates(t *testing.T) {
 	t.Run("no lessons.yaml gives no-executable-checks", func(t *testing.T) {
 		g := verifyRepo(t, "")
@@ -248,7 +248,7 @@ func TestLessonCheckVerifySummaryStates(t *testing.T) {
 	t.Run("advisory pins are listed and never evaluated", func(t *testing.T) {
 		g := verifyRepo(t, advisoryYAML)
 		// The added line matches the check of the advisory pin. The
-		// check never runs, so the line is no violation (§5 row 20).
+		// check never runs, so the line is no violation.
 		g.write("src/a.go", "package a\n\n// TODO(x)\n")
 
 		v := g.verify()
@@ -309,7 +309,7 @@ func TestLessonCheckVerifySummaryStates(t *testing.T) {
 		assert.NotContains(t, text, "rerun:")
 	})
 
-	t.Run("an unknown gives incomplete with the K5 stderr text", func(t *testing.T) {
+	t.Run("an unknown gives incomplete and an error that names the rerun command", func(t *testing.T) {
 		g := verifyRepo(t, mixedYAML)
 		g.write("src/logo.bin", "\x00\x01")
 
@@ -420,13 +420,45 @@ func TestLessonCheckVerifySummaryStates(t *testing.T) {
 			assert.Equal(t, caller, v.Caller)
 		}
 	})
+
+	t.Run("the shared rule counts the outcomes and orders the states", func(t *testing.T) {
+		results := []Result{
+			{Outcome: OutcomePass},
+			{Outcome: OutcomeNotApplicable},
+			{Outcome: OutcomeUnknown},
+			{Outcome: "future-outcome"},
+		}
+
+		s := countOutcomes(results)
+		assert.Equal(t, Summary{PinsEvaluated: 4, Pass: 1, NotApplicable: 1, Unknown: 2}, s,
+			"an outcome outside the closed list counts as unknown")
+		assert.Equal(t, Summary{}, countOutcomes(nil))
+
+		cases := []struct {
+			name                   string
+			counts                 Summary
+			incomplete, executable bool
+			want                   SummaryState
+		}{
+			{"a violation comes before every other state", Summary{Violation: 1, Unknown: 1}, true, false, SummaryViolation},
+			{"an unknown gives incomplete", Summary{Unknown: 1, Pass: 1}, false, true, SummaryIncomplete},
+			{"an unproven input gives incomplete", Summary{Pass: 1}, true, true, SummaryIncomplete},
+			{"no executable pin", Summary{}, false, false, SummaryNoExecutableChecks},
+			{"no pass", Summary{NotApplicable: 1}, false, true, SummaryNoApplicableChecks},
+			{"a pass", Summary{Pass: 1, NotApplicable: 1}, false, true, SummaryPassed},
+		}
+
+		for _, tc := range cases {
+			assert.Equal(t, tc.want, summaryState(tc.counts, tc.incomplete, tc.executable), tc.name)
+		}
+	})
 }
 
-// TestLessonCheckVerifyStaleOnChange proves the freshness rule of
-// contract K5 (AC-30): each input that changes between the read and the
-// publication makes the result stale. A stale result publishes no pass.
-// An observed violation stays a violation with its evidence and exit 2
-// (ruling K-3), and every other result becomes unknown/stale-snapshot.
+// TestLessonCheckVerifyStaleOnChange proves the freshness rule: each
+// input that changes between the read and the publication makes the
+// result stale. A stale result publishes no pass. An observed violation
+// stays a violation with its evidence and exit 2, and every other
+// result becomes unknown/stale-snapshot.
 func TestLessonCheckVerifyStaleOnChange(t *testing.T) {
 	// passing returns a repository whose verification passes: a clean
 	// line in src, nothing in generated.
@@ -587,7 +619,7 @@ func TestLessonCheckVerifyStaleOnChange(t *testing.T) {
 		v := g.verify()
 
 		assert.Equal(t, FreshnessStale, v.Freshness)
-		assert.Equal(t, SummaryIncomplete, v.Summary.State, "a stale result never exits 0 (K5 exit table)")
+		assert.Equal(t, SummaryIncomplete, v.Summary.State, "a stale result never exits 0")
 		assert.EqualError(t, v.ExitError(), "lesson checks incomplete: 0 unknown; rerun seamark lessons --verify")
 	})
 
@@ -626,11 +658,11 @@ func TestLessonCheckVerifyStaleOnChange(t *testing.T) {
 	})
 }
 
-// TestLessonCheckVerifyStaleKeepsFirstRunCause proves fix F-C of the P1
-// review: the stale rewrite of a first-run unknown keeps its reason and
-// its limit. The JSON keeps them in first_run beside stale-snapshot, and
-// the text keeps a first-run line, so the cause that the user can act on
-// survives the race.
+// TestLessonCheckVerifyStaleKeepsFirstRunCause proves that the stale
+// rewrite of a first-run unknown keeps its reason and its limit. The
+// JSON keeps them in first_run beside stale-snapshot, and the text keeps
+// a first-run line. So the user still sees the cause to act on after the
+// race.
 func TestLessonCheckVerifyStaleKeepsFirstRunCause(t *testing.T) {
 	// resultJSON returns the JSON object of the result of one pin entry.
 	resultJSON := func(t *testing.T, v *Verification, entry int) map[string]any {
@@ -716,10 +748,10 @@ func TestLessonCheckVerifyStaleKeepsFirstRunCause(t *testing.T) {
 	})
 }
 
-// TestLessonCheckVerifyListsCheckerLimits proves fix F-D of the P1
-// review: a limit that a checker reaches is in Verification.Limits, as
-// K3 Bounds says. The snapshot and the checkers share one list, and the
-// list counts each undecided path once.
+// TestLessonCheckVerifyListsCheckerLimits proves that a limit that a
+// checker reaches is in Verification.Limits. The snapshot and the
+// checkers share one list, and the list counts each undecided path
+// once.
 func TestLessonCheckVerifyListsCheckerLimits(t *testing.T) {
 	// twoPatternsYAML holds two pattern pins on the same scope, so both
 	// reach max-diff-lines on the same path.
@@ -824,10 +856,10 @@ pin:
 	})
 }
 
-// TestLessonCheckVerifyTier1ConfigError proves ruling P1-b for a file
+// TestLessonCheckVerifyTier1ConfigError proves the result of a file
 // that does not read or decode: no result rows, one decode-error entry,
 // version 0, state incomplete, exit 1 with the decode error. The
-// snapshot is still read (K5 Addition).
+// snapshot is still read, so the result still names its binding.
 func TestLessonCheckVerifyTier1ConfigError(t *testing.T) {
 	cases := []struct {
 		name, text string
@@ -903,12 +935,12 @@ func TestLessonCheckVerifyTier1ConfigError(t *testing.T) {
 	})
 }
 
-// TestLessonCheckVerifyTier2ConfigError proves ruling P1-b for a file
+// TestLessonCheckVerifyTier2ConfigError proves the result of a file
 // that decodes and fails Validate: the snapshot is read, no checker
 // runs, each executable pin gets one unknown/configuration-error result,
 // every other pin is listed, and config.errors holds every error.
 func TestLessonCheckVerifyTier2ConfigError(t *testing.T) {
-	t.Run("the invalid example of contract K1", func(t *testing.T) {
+	t.Run("the invalid example configuration", func(t *testing.T) {
 		g := verifyRepo(t, invalidYAML)
 		// The added line would match a valid TODO pattern. No checker
 		// runs, so it is no violation.
@@ -1014,8 +1046,8 @@ func codesOf(errs []ConfigError) []ConfigErrorCode {
 	return out
 }
 
-// goldenYAML is the configuration of the JSON golden: the four pin
-// states of the K5 example.
+// goldenYAML is the configuration of the JSON golden: one pin in each
+// of the four pin states.
 const goldenYAML = `lesson_checks_version: 1
 checks:
   frozen-assets:
@@ -1048,7 +1080,7 @@ pin:
 
 // goldenJSON is the lesson-verification/1 document of the golden
 // repository. Equal inputs give byte-equal JSON, except checked_at and
-// seamark_version (contracts §1.4), which the test fixes.
+// seamark_version, which the test fixes.
 const goldenJSON = `{
   "schema": "lesson-verification/1",
   "seamark_version": "v0.8.0-31-g96e14ef",
@@ -1244,12 +1276,13 @@ const goldenJSON = `{
 }`
 
 // emptyGoldenJSON is the document of a clean repository without
-// lessons.yaml. Every slice without omitempty encodes as [] (K-11).
+// lessons.yaml. Every slice without omitempty encodes as [], so a
+// reader never has to handle null.
 const emptyGoldenJSON = `{"schema":"lesson-verification/1","seamark_version":"v0.8.0-31-g96e14ef","checked_at":"2026-10-21T10:15:02Z","caller":"cli","boundary":"working-tree","baseline":{"kind":"head","commit":"9c0c8314d5587b1e6070566f0a08f0c95aae6014"},"selection":{"kind":"default","description":"tracked changes against HEAD plus untracked nonignored files, staged and unstaged, as present in the working tree","excludes":["ignored files not named by --file","writes outside this snapshot","content inside submodules"]},"binding":{"snapshot_sha256":"94075b6588039c67a3635a31b21ba86f1b33e8564cd8a49b12bff3da5ddbe70a","config_sha256":"","pins_sha256":"2989b6177168ee9da4f58c8fd83e4061a80619ef7b1685e907cb4cc7297dd4af","checker_versions":[]},"freshness":"fresh","paths_complete":true,"config":{"sha256":"","lesson_checks_version":0,"valid":true},"summary":{"state":"no-executable-checks","pins_evaluated":0,"pass":0,"violation":0,"not_applicable":0,"unknown":0,"not_checkable":0,"advisory_with_check":0,"changes":0},"results":[],"listings":[]}`
 
 // TestLessonCheckVerifyJSONGolden freezes the JSON bytes of
-// lesson-verification/1 (AC-35): the field order, the enums, the
-// binding digests, and [] for every empty slice without omitempty.
+// lesson-verification/1: the field order, the enums, the binding
+// digests, and [] for every empty slice without omitempty.
 func TestLessonCheckVerifyJSONGolden(t *testing.T) {
 	// The fixed dates make the commit id, and so the baseline and the
 	// snapshot digest, equal on every run.
@@ -1274,8 +1307,8 @@ func TestLessonCheckVerifyJSONGolden(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, goldenJSON, string(data))
 
-		// A second run gives the same bytes except the two fields that
-		// contracts §1.4 names.
+		// A second run gives the same bytes except checked_at and
+		// seamark_version, which change from run to run.
 		req := verifyRequest(g.root, DefaultLimits())
 		req.Now = time.Now
 		req.SeamarkVersion = "dev"
@@ -1310,8 +1343,8 @@ func TestLessonCheckVerifyJSONGolden(t *testing.T) {
 
 // TestLessonCheckVerifyTimeout proves that Verify owns the
 // verify-timeout deadline and that a deadline or a cancellation is a
-// result, not an error (AC-30): unknown/resource-limit with
-// verify-timeout, or unknown/interrupted, never a pass, and exit 1.
+// result, not an error: unknown/resource-limit with verify-timeout, or
+// unknown/interrupted, never a pass, and exit 1.
 func TestLessonCheckVerifyTimeout(t *testing.T) {
 	// requireCut checks a result whose every pin carries the cause.
 	requireCut := func(t *testing.T, v *Verification, want string) {
@@ -1343,7 +1376,7 @@ func TestLessonCheckVerifyTimeout(t *testing.T) {
 		assert.Contains(t, renderText(v), "limit reached: verify-timeout 1000 (0 paths left undecided)\n")
 	})
 
-	t.Run("a deadline during step 1 gives a result with the baseline", func(t *testing.T) {
+	t.Run("a deadline during the baseline step gives a result with the baseline", func(t *testing.T) {
 		g := verifyRepo(t, mixedYAML)
 		mark := filepath.Join(t.TempDir(), "slept")
 		gitShim(t, `case " $* " in *" --verify "*) if [ ! -e `+shellQuote(mark)+` ]; then : > `+shellQuote(mark)+`; exec sleep 10; fi;; esac`)
@@ -1442,10 +1475,10 @@ func TestLessonCheckVerifyTimeout(t *testing.T) {
 	})
 }
 
-// TestLessonCheckCombine proves the combined verdict of check --lessons
-// (ruling P1-c, K-10): the exit code by the K5 table, the state by the
-// exit code, and the policy word by the blocking flag. An unknown
-// summary state never passes.
+// TestLessonCheckCombine proves the combined verdict of check --lessons:
+// the exit code by the summary state, the state by the exit code, and
+// the policy word by the blocking flag. An unknown summary state never
+// passes.
 func TestLessonCheckCombine(t *testing.T) {
 	cases := []struct {
 		lessons  SummaryState
@@ -1499,11 +1532,11 @@ func TestLessonCheckCombine(t *testing.T) {
 	})
 }
 
-// TestLessonCheckRevalidate proves the exported Revalidate (contract K5,
-// Freshness; K-13; AC-30). A result stays fresh while its inputs stay.
-// A change of content, baseline, scope, mode, or check definition makes
-// it stale. Revalidate runs no checker and writes nothing, so a refresh
-// of the console never adds an audit record.
+// TestLessonCheckRevalidate proves the exported Revalidate. A result
+// stays fresh while its inputs stay the same. A change of content,
+// baseline, scope, mode, or check definition makes it stale. Revalidate
+// runs no checker and writes nothing, so a refresh of the console never
+// adds an audit record.
 func TestLessonCheckRevalidate(t *testing.T) {
 	// fresh returns a repository and its fresh verification. The check
 	// pin passes on a clean line in src, and nothing is in generated.

@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +45,34 @@ func ReadHookPayload(r io.Reader) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+// hookContextReply is the reply shape of a hook that adds context.
+// Claude Code and Codex add additionalContext to the context of the
+// agent and do not block the tool, so both clients use this shape.
+type hookContextReply struct {
+	HookSpecificOutput struct {
+		HookEventName     string `json:"hookEventName"`
+		AdditionalContext string `json:"additionalContext"`
+	} `json:"hookSpecificOutput"`
+}
+
+// encodeContextReply wraps text in the additionalContext reply to a hook
+// event. The edit advice of both clients, and the completion findings
+// and explore advice of Claude Code, go through this one encoder, so
+// every reply keeps the same bytes.
+func encodeContextReply(event, text string) (HookReply, error) {
+	var reply hookContextReply
+
+	reply.HookSpecificOutput.HookEventName = event
+	reply.HookSpecificOutput.AdditionalContext = text
+
+	var out bytes.Buffer
+	if err := json.NewEncoder(&out).Encode(reply); err != nil {
+		return HookReply{}, err
+	}
+
+	return HookReply{Stdout: out.Bytes()}, nil
 }
 
 // malformedJSON returns ErrMalformedEvent with fixed text for a JSON

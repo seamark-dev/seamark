@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The tests of the lesson-check audit stream (contract K9). Every root
-// is a temporary directory.
+// The tests of the lesson-check audit stream. Every root is a temporary
+// directory.
 
 // auditPath returns the path of the audit stream under root.
 func auditPath(root string) string {
@@ -29,11 +29,11 @@ func discardedRecord() AuditRecord {
 	return AuditRecord{Kind: AuditBaselineDiscarded, Caller: CallerHook, Discarded: DiscardExpired}
 }
 
-// TestLessonCheckAuditAppendIsHardened proves the hardening that the
-// writer copies from gate.Audit: owner-only files, a refused link at
-// every path, the tightened rotated generation, the rotation by size
-// and by age, the expiry of the rotated generation, the closed lists,
-// and the output caps.
+// TestLessonCheckAuditAppendIsHardened proves the log hardening that the
+// writer gets from privatedir: owner-only files, a refused link at every
+// path, the tightened rotated generation, the rotation by size and by
+// age, and the expiry of the rotated generation. It also proves the
+// closed lists and the output caps of the writer.
 func TestLessonCheckAuditAppendIsHardened(t *testing.T) {
 	t.Run("the files are owner-only and .seamark gets 0700", func(t *testing.T) {
 		root := t.TempDir()
@@ -43,7 +43,7 @@ func TestLessonCheckAuditAppendIsHardened(t *testing.T) {
 		requireMode(t, filepath.Join(root, ".seamark"), 0o700)
 		requireMode(t, auditPath(root), 0o600)
 		requireMode(t, filepath.Join(root, ".seamark", "lesson-check-audit.jsonl.lock"), 0o600)
-		assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-audit.jsonl"), "the firing log gets nothing (§5 row 39)")
+		assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-audit.jsonl"), "the firing log gets nothing")
 	})
 
 	t.Run("a loose log is tightened", func(t *testing.T) {
@@ -147,6 +147,27 @@ func TestLessonCheckAuditAppendIsHardened(t *testing.T) {
 		assert.Len(t, readAuditLines(t, root), 1)
 	})
 
+	t.Run("the time of the new record ages the log, not the wall clock", func(t *testing.T) {
+		root := t.TempDir()
+
+		// One clock that runs far behind the wall clock stamps every record.
+		stamped := func(age time.Duration) AuditRecord {
+			rec := discardedRecord()
+			rec.TS = time.Now().Add(-age).UTC().Format(time.RFC3339)
+
+			return rec
+		}
+
+		require.NoError(t, AppendAudit(root, stamped(90*24*time.Hour)))
+		require.NoError(t, AppendAudit(root, stamped(89*24*time.Hour)))
+		assert.NoFileExists(t, auditPath(root)+".1", "the two records are one day apart")
+		assert.Len(t, readAuditLines(t, root), 2)
+
+		require.NoError(t, AppendAudit(root, stamped(59*24*time.Hour)))
+		assert.FileExists(t, auditPath(root)+".1", "the new record is 31 days after the oldest record")
+		assert.Len(t, readAuditLines(t, root), 1)
+	})
+
 	t.Run("a first line that does not parse rotates", func(t *testing.T) {
 		root := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o700))
@@ -233,7 +254,16 @@ func TestLessonCheckAuditAppendIsHardened(t *testing.T) {
 	})
 }
 
-// TestLessonCheckAuditCarriesNoContent proves contracts §1.6 for the
+// TestLessonCheckAuditCutBytesKeepsRunes pins the cut without a suffix,
+// also on invalid UTF-8, where no rune start leaves nothing.
+func TestLessonCheckAuditCutBytesKeepsRunes(t *testing.T) {
+	assert.Equal(t, "short", cutBytes("short", 5))
+	assert.Equal(t, "é", cutBytes("éé", 3))
+	assert.Equal(t, "a", cutBytes("ab\x80\x80\x80\x80", 4))
+	assert.Empty(t, cutBytes(strings.Repeat("\x80", 8), 4))
+}
+
+// TestLessonCheckAuditCarriesNoContent proves the no-content rule of the
 // stream: a verify record and a baseline-discarded record hold no file
 // content, no excerpt, no rule text, no base64 content, and no raw
 // provider ID, also when the result itself shows an excerpt.
@@ -280,11 +310,11 @@ func TestLessonCheckAuditCarriesNoContent(t *testing.T) {
 		assert.NotContains(t, stream, s)
 	}
 
-	assert.NoFileExists(t, filepath.Join(g.root, ".seamark", "lessons-audit.jsonl"), "the firing log gets nothing (§5 row 39)")
+	assert.NoFileExists(t, filepath.Join(g.root, ".seamark", "lessons-audit.jsonl"), "the firing log gets nothing")
 	assert.NoDirExists(t, filepath.Join(g.root, ".seamark", "private"))
 
-	// Every key of every record is a K9 field, so no new field can carry
-	// content unnoticed.
+	// Every key of every record is a known AuditRecord field, so no new
+	// field can carry content unnoticed.
 	known := map[string]bool{}
 	for _, k := range []string{
 		"schema", "ts", "kind", "caller", "client", "tool", "session_sha256", "match_sha256", "context_sha256",
@@ -346,10 +376,10 @@ func TestLessonCheckAuditConcurrentAppends(t *testing.T) {
 	assert.Len(t, seen, writers*each, "every record lands once")
 }
 
-// TestLessonCheckVerifyWritesAuditAndSweeps proves the two milestone P4
-// steps of Verify (contract K5): one verify record after the result is
-// composed, and the K7 sweep. A failed record never changes the result.
-// A stopped read still writes its record.
+// TestLessonCheckVerifyWritesAuditAndSweeps proves the two audit steps
+// of Verify: one verify record after the result is composed, and the
+// sweep of expired pending records. A failed record never changes the
+// result. A stopped read still writes its record.
 func TestLessonCheckVerifyWritesAuditAndSweeps(t *testing.T) {
 	g := verifyRepo(t, mixedYAML)
 	g.write("generated/a.txt", "a changed\n")

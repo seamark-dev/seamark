@@ -63,8 +63,8 @@ func treeFiles(t *testing.T, root string) []string {
 }
 
 // docSetup is a test adapter that owns one document with fixed content.
-// It follows the adapter contract: read under a guard, then keep or
-// write.
+// It follows the rule that the coordinator sets for an adapter: read
+// under a guard, then keep or write.
 type docSetup struct{ path, body string }
 
 func (docSetup) Inspect(string) Inspection { return Inspection{} }
@@ -293,8 +293,7 @@ func TestSelectionFailsBeforeAnyRead(t *testing.T) {
 func TestUnsupportedIntentsAreInformationNotErrors(t *testing.T) {
 	root := t.TempDir()
 
-	reg, err := NewRegistry(append(Builtin().Clients(), thirdClient(), invocationOnlyClient())...)
-	require.NoError(t, err)
+	reg := builtinWith(t, thirdClient(), invocationOnlyClient())
 
 	plan := mustPlan(t, reg, SetupRequest{Root: root, Binary: testBinary, Clients: []ClientSetup{
 		{ClientID: CodexID, RegisterMCP: true, GateMode: "enforce"},
@@ -326,8 +325,7 @@ func TestUnsupportedIntentsAreInformationNotErrors(t *testing.T) {
 func TestASharedSkillDestinationIsPlannedAndWrittenOnce(t *testing.T) {
 	root := t.TempDir()
 
-	reg, err := NewRegistry(append(Builtin().Clients(), thirdClient())...)
-	require.NoError(t, err)
+	reg := builtinWith(t, thirdClient())
 
 	plan := mustPlan(t, reg, SetupRequest{Root: root, Clients: []ClientSetup{
 		{ClientID: thirdID, Skills: true}, {ClientID: CodexID, Skills: true},
@@ -805,8 +803,29 @@ func TestTwoPlannersOfOneDocument(t *testing.T) {
 	assert.Equal(t, "two", string(plan.Writes[0].After))
 }
 
-// unguardedSetup breaks the adapter contract: it writes a document it
-// never read under a guard.
+func TestWithConsumersAddsEachClientOnce(t *testing.T) {
+	// A merged write or keep names each client once, in the order the
+	// clients came. A common document has no client, so it adds no name.
+	assert.Nil(t, withConsumers(nil, ""), "a common document stays without a consumer")
+	assert.Equal(t, []string{"a"}, withConsumers(nil, "a"))
+	assert.Equal(t, []string{"a", "b", "c"}, withConsumers([]string{"a"}, "b", "", "a", "c", "b"))
+}
+
+func TestAnOwnedDocumentErrorAsksForAFixOnlyWhenTheFileExists(t *testing.T) {
+	// A guard that records the file means that the file does not parse.
+	// Only then must the user fix or move it. A read error stays as the
+	// reader wrote it, and errors.Is still finds its cause.
+	cause := errors.New(".claude/settings.json: invalid character")
+
+	parsed := ownedReadError(FileGuard{Path: ".claude/settings.json", Exists: true}, cause)
+	require.ErrorIs(t, parsed, cause)
+	assert.Equal(t, ".claude/settings.json: invalid character (fix or move it, then re-run)", parsed.Error())
+
+	assert.Equal(t, cause, ownedReadError(FileGuard{}, cause), "a read error is returned unchanged")
+}
+
+// unguardedSetup breaks the rule that the coordinator sets for an
+// adapter: it writes a document it never read under a guard.
 type unguardedSetup struct{}
 
 func (unguardedSetup) Inspect(string) Inspection { return Inspection{} }

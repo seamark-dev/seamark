@@ -1,15 +1,15 @@
 package lessoncheck
 
-// This file holds the operation model of contract K8: what a guard
-// decoder returns for one pending native edit. The integration decoders
-// build an Operation, the CLI guard handler normalizes its paths, and
+// This file holds the operation model of the guard: what a guard decoder
+// returns for one pending native edit. The integration decoders build an
+// Operation, the CLI guard handler normalizes its paths, and
 // ProjectOperation turns it into a proposed-edit snapshot. The types
-// live here, because lessoncheck cannot import integration (§6 A1).
+// live here, because lessoncheck cannot import integration.
 
 // OpKind names what one file operation of a native edit does.
 type OpKind string
 
-// The closed list of operation kinds (contract K8).
+// The closed list of operation kinds.
 const (
 	// OpWrite is a Claude Write: the full new content of one file.
 	OpWrite OpKind = "write"
@@ -32,10 +32,11 @@ const (
 
 // Operation is one pending native edit, as a guard decoder reads it. A
 // decoder returns a complete Operation or an error, never a part of the
-// edit (§6 A8).
+// edit, because a check on a part of the edit can miss a violation.
 //
 // SessionID and MatchID are raw provider IDs. They never go into a
-// record: the handlers hash them first (contracts §1.6, §5 row 32).
+// record: the handlers hash them first, because a record holds digests
+// and codes, not raw IDs.
 type Operation struct {
 	Client    string
 	Tool      string   // native tool name
@@ -57,7 +58,7 @@ type Operation struct {
 // Path and MoveTo are repository-relative and slash-separated at their
 // real location. The CLI handler resolves them with
 // delivery.NormalizePaths, and ProjectOperation never normalizes,
-// because lessoncheck cannot import delivery (§6 A1).
+// because lessoncheck cannot import delivery.
 type FileOp struct {
 	Kind   OpKind
 	Path   string
@@ -68,7 +69,7 @@ type FileOp struct {
 	Edits   []TextEdit // edit (one), multi-edit (many, in order)
 	// Hunks is true for a patch-update that carries hunks. The content
 	// of such an update stays unprojectable until a verified applier
-	// exists (§6 A8, plan step P4.12).
+	// exists, because a wrong projection could hide a violation.
 	Hunks bool
 }
 
@@ -78,9 +79,10 @@ type TextEdit struct {
 	ReplaceAll bool
 }
 
-// paths returns the paths of a file operation: the path, and the move
-// target when the operation moves the file.
-func (op FileOp) paths() []string {
+// Paths returns the paths of a file operation: the path, and the move
+// target when the operation moves the file. The client adapters call
+// it, so one rule lists the paths of an operation.
+func (op FileOp) Paths() []string {
 	if op.MoveTo == "" {
 		return []string{op.Path}
 	}

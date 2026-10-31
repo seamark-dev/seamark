@@ -24,12 +24,11 @@ import (
 // consumer with the same words, so no client can claim a state that
 // another contradicts.
 func (r *Registry) Inspect(root string) []Inspection {
-	dests := SkillDestinations(r.ordered)
-	states := skills.InspectTargets(root, SkillTargets(dests))
+	dests, states := r.inspectSkillDestinations(root)
 
-	byDir := make(map[string]skills.ClientState, len(dests))
+	byDir := make(map[string]skillDir, len(dests))
 	for i, d := range dests {
-		byDir[d.Dir] = states[i]
+		byDir[d.Dir] = skillDir{state: states[i], consumers: d.Consumers}
 	}
 
 	out := make([]Inspection, 0, len(r.ordered))
@@ -42,7 +41,7 @@ func (r *Registry) Inspect(root string) []Inspection {
 		}
 
 		insp.ClientID, insp.Name, insp.Declared, insp.Setup = c.ID, c.Name, c.Declared(), c.SetupOps
-		insp.Capabilities = completeCapabilities(c, insp.Capabilities, dests, byDir)
+		insp.Capabilities = completeCapabilities(c, insp.Capabilities, byDir)
 
 		out = append(out, insp)
 	}
@@ -52,19 +51,78 @@ func (r *Registry) Inspect(root string) []Inspection {
 
 // InspectSkills reports the skill directories of the registry's
 // clients, one record per destination, labelled by every consumer. It
-// is the list init, doctor, and status print, and the source of each
-// client's skills entry in Inspect, so the two views cannot disagree.
+// is the list init, doctor, and status print. Inspect builds each
+// client's skills entry through the same helper, so the two views
+// apply one rule.
 func (r *Registry) InspectSkills(root string) []skills.ClientState {
-	return skills.InspectTargets(root, SkillTargets(SkillDestinations(r.ordered)))
+	_, states := r.inspectSkillDestinations(root)
+
+	return states
+}
+
+// lessonHookInspector is a SetupAdapter with a narrow reading for the
+// lesson capability report. It stays apart from SetupAdapter, because
+// an adapter without it gives the same report through Inspect, which
+// only does more work.
+type lessonHookInspector interface {
+	// InspectLessonHooks fills only what LessonCapability reads: the hook
+	// document error, the lesson hooks, and the hook entries that hold the
+	// trust and the reset evidence. Each value follows the rules of Inspect.
+	InspectLessonHooks(root string) Inspection
+}
+
+// InspectLessonHooks returns only what LessonCapability reads for each
+// client, in registry order. A report from this result and a report
+// from Inspect are byte-identical. Preparation runs for each planned
+// change, and Inspect can start Git processes for a finding that the
+// report does not read. Nothing is written and no client binary runs.
+//
+// The result holds no findings and no entry for skills, registration,
+// grants, or capture, so only LessonCapability can use it.
+func (r *Registry) InspectLessonHooks(root string) []Inspection {
+	out := make([]Inspection, 0, len(r.ordered))
+
+	for _, c := range r.ordered {
+		insp := Inspection{ClientID: c.ID}
+
+		if narrow, ok := c.Setup.(lessonHookInspector); ok {
+			insp = narrow.InspectLessonHooks(root)
+		} else if c.Setup != nil {
+			insp = c.Setup.Inspect(root)
+		}
+
+		insp.ClientID = c.ID
+		out = append(out, insp)
+	}
+
+	return out
+}
+
+// inspectSkillDestinations groups the skill directories of the
+// registry's clients into destinations and inspects each destination
+// once. The two results are parallel: states[i] is the state of
+// dests[i].
+func (r *Registry) inspectSkillDestinations(root string) ([]SkillDestination, []skills.ClientState) {
+	dests := SkillDestinations(r.ordered)
+
+	return dests, skills.InspectTargets(root, SkillTargets(dests))
+}
+
+// skillDir is one inspected skill destination: its state and every
+// client that reads it. A client's skills entry needs both for each of
+// its directories, so Inspect keeps them in one record per directory.
+type skillDir struct {
+	state     skills.ClientState
+	consumers []string
 }
 
 // completeCapabilities returns the entries in ConfiguredCapabilities
 // order. The adapter's entry is kept where it exists; a missing entry
 // is synthesized as absent with the descriptor's support. The skills
 // entry always comes from the destination states, because the
-// directory belongs to the registry, not to one adapter; an adapter
+// directory belongs to the registry, not to one adapter. An adapter
 // entry for it contributes only its trust and verification.
-func completeCapabilities(c Client, reported []CapabilityInspection, dests []SkillDestination, byDir map[string]skills.ClientState) []CapabilityInspection {
+func completeCapabilities(c Client, reported []CapabilityInspection, byDir map[string]skillDir) []CapabilityInspection {
 	out := make([]CapabilityInspection, 0, len(ConfiguredCapabilities))
 
 	for _, capability := range ConfiguredCapabilities {
@@ -75,7 +133,7 @@ func completeCapabilities(c Client, reported []CapabilityInspection, dests []Ski
 		}
 
 		if capability == CapabilitySkills {
-			entry = skillsEntry(c, entry, dests, byDir)
+			entry = skillsEntry(c, entry, byDir)
 		}
 
 		out = append(out, entry)
@@ -85,12 +143,13 @@ func completeCapabilities(c Client, reported []CapabilityInspection, dests []Ski
 }
 
 // skillsEntry classifies the client's skill directories from the
-// destination states. The worst directory decides the state: an
-// unreadable directory first, then a managed copy that a refresh
-// repairs, then a directory under a shipped name that seamark does not
-// own, which init never replaces. The detail names each directory with
-// its state and, for a shared directory, the other consumers.
-func skillsEntry(c Client, evidence CapabilityInspection, dests []SkillDestination, byDir map[string]skills.ClientState) CapabilityInspection {
+// destination states. The worst directory decides the state. An
+// unreadable directory is the worst, and a managed copy that a refresh
+// repairs is next. Then comes a directory under a shipped name that
+// seamark does not own, which init never replaces. The detail names
+// each directory with its state and, for a shared directory, the other
+// consumers.
+func skillsEntry(c Client, evidence CapabilityInspection, byDir map[string]skillDir) CapabilityInspection {
 	entry := CapabilityInspection{
 		Capability: CapabilitySkills, Supported: len(c.SkillDirs) > 0,
 		Trust: evidence.Trust, Verification: evidence.Verification,
@@ -99,25 +158,23 @@ func skillsEntry(c Client, evidence CapabilityInspection, dests []SkillDestinati
 	var details []string
 
 	for _, dir := range c.SkillDirs {
-		state, ok := byDir[dir]
+		inspected, ok := byDir[dir]
 		if !ok {
 			continue
 		}
 
 		// Describe labels the record with its client; the directory is
 		// the label the client's own entry needs.
-		labelled := state
+		labelled := inspected.state
 		labelled.Client = dir
 		detail := labelled.Describe()
 
-		if i := slices.IndexFunc(dests, func(d SkillDestination) bool { return d.Dir == dir }); i >= 0 {
-			if others := slices.DeleteFunc(slices.Clone(dests[i].Consumers), func(id string) bool { return id == c.ID }); len(others) > 0 {
-				detail += " (shared with " + strings.Join(others, ", ") + ")"
-			}
+		if others := slices.DeleteFunc(slices.Clone(inspected.consumers), func(id string) bool { return id == c.ID }); len(others) > 0 {
+			detail += " (shared with " + strings.Join(others, ", ") + ")"
 		}
 
 		details = append(details, detail)
-		entry.State = worseSkillState(entry.State, skillState(state))
+		entry.State = worseSkillState(entry.State, skillState(inspected.state))
 	}
 
 	entry.Detail = strings.Join(details, " · ")
@@ -209,6 +266,31 @@ func inspectGrants(record approve.ClientApproval, evidence VerificationEvidence)
 	return entry
 }
 
+// classifyRegistration sets the state, the detail, and the action of the
+// MCP registration entry of a client. err is the read or parse error of
+// the file rel. server is the registered name, and conflicts name what
+// blocks a registration. Both clients classify by this rule, so their
+// entries read alike.
+func classifyRegistration(entry *CapabilityInspection, clientID, rel string, err error, registered bool, server string,
+	conflicts []string,
+) {
+	switch {
+	case err != nil:
+		entry.State, entry.Detail = StateUnreadable, unreadableDetail(err)
+	case registered:
+		entry.State = StateCurrent
+		entry.Detail = fmt.Sprintf("registered in %s as %q", rel, render.Sanitize(server))
+	case len(conflicts) > 0:
+		// Without a registration every conflict is about the registration:
+		// the name is in use, or the layout cannot hold the table.
+		entry.State, entry.Detail = StateConflict, render.Sanitize(strings.Join(conflicts, "; "))
+	default:
+		entry.State = StateAbsent
+	}
+
+	entry.Action = registrationAction(clientID, entry.State)
+}
+
 // registrationAction is the corrective command for an MCP registration
 // state. Registration is part of explicit client setup, so the command
 // names the client.
@@ -246,15 +328,15 @@ type hookSource struct {
 	certain bool
 	// managed is true for the definition setup installs and updates.
 	managed bool
-	// mode is the gate mode the definition bakes in; "" for other hooks.
+	// mode is the gate mode of the definition; "" for other hooks.
 	mode string
 }
 
 // describeCommand renders a hook command for a detail or a finding. A
-// wrapper can carry a credential ("hook-runner --token=… seamark gate
-// --hook"), and the text reaches terminals, status JSON, and the MCP
-// status resource, so secret-shaped values are scrubbed before control
-// sequences are stripped.
+// wrapper can carry a credential, for example "hook-runner --token=…
+// seamark gate --hook". The text reaches terminals, status JSON, and the
+// MCP status resource. So the function removes secret-shaped values
+// first, and then it strips control sequences.
 func describeCommand(command string) string {
 	return render.Sanitize(redact.Secrets(command))
 }
@@ -274,24 +356,46 @@ func firingTools(spec hooks.Spec, matcher string, fires hooks.MatcherRule) []str
 	return tools
 }
 
+// strongerGateMode returns the stronger of two gate modes. Enforce is
+// the strongest, because one enforcing definition blocks whatever the
+// others say. Warn is next, because a warn definition blocks when the
+// policy file enforces. Any other mode, such as GateModeReportOnly,
+// blocks nothing but still runs the gate, so it ranks above no mode. On
+// a tie the function keeps a, so a fold keeps the first of two other
+// modes.
+func strongerGateMode(a, b string) string {
+	if gateModeRank(b) > gateModeRank(a) {
+		return b
+	}
+
+	return a
+}
+
+// gateModeRank orders the gate modes for strongerGateMode, from no mode
+// to enforce.
+func gateModeRank(mode string) int {
+	switch mode {
+	case "":
+		return 0
+	case hooks.ModeWarn:
+		return 2
+	case hooks.ModeEnforce:
+		return 3
+	default:
+		return 1
+	}
+}
+
 // markerMode reads the gate mode of a command from every marker of the
-// spec that the command runs, in the given way (owned, or wrapped).
-// Enforce wins: a wrapper that runs the warn command and then the
-// enforce command blocks, whatever it ran first. A marker of another
-// hook gives "".
+// spec that the command runs, in the given way. Enforce wins: a wrapper
+// that runs the warn command and then the enforce command blocks,
+// whatever it ran first. A marker of another hook gives "".
 func markerMode(spec hooks.Spec, runs func(marker string) bool) string {
 	mode := ""
 
 	for _, marker := range spec.Markers() {
-		if !runs(marker) {
-			continue
-		}
-
-		switch hooks.GateMarkerMode(marker) {
-		case hooks.ModeEnforce:
-			return hooks.ModeEnforce
-		case hooks.ModeWarn:
-			mode = hooks.ModeWarn
+		if runs(marker) {
+			mode = strongerGateMode(mode, hooks.GateMarkerMode(marker))
 		}
 	}
 
@@ -319,13 +423,14 @@ func wrappedGateMode(spec hooks.Spec, reading hooks.HookReading) (mode, asked st
 
 // discardsStatusFinding names a definition that runs the gate and
 // discards its exit status, for example with "|| true", "&", or "| cat".
-// mode and asked come from wrappedGateMode. The finding is a warning
+// mode comes from wrappedGateMode, and the caller gives the finding
+// only when mode differs from the asked mode. The finding is a warning
 // whatever the definition asked for. With --enforce, the user asked for
 // blocking and gets none. Without it, an enforcing policy file blocks
 // nothing either, and doctor prints warnings only, so an information
 // finding would leave the user to believe that the policy is active.
 // Setup never edits the definition, so the action says what to change.
-func discardsStatusFinding(path, command, mode, asked string) Finding {
+func discardsStatusFinding(path, command, mode string) Finding {
 	finding := Finding{
 		Level: FindingWarning,
 		Path:  path,
@@ -358,6 +463,7 @@ func documentSources(findings *[]Finding, document map[string]any, fires hooks.M
 
 	hookMap, _ := document["hooks"].(map[string]any)
 	eventHooks, _ := hookMap[spec.Event].([]any)
+	markers := spec.Markers()
 
 	hooks.ForEachCommand(eventHooks, func(matcher string, h map[string]any, cmd string) {
 		source := hookSource{path: path, command: cmd}
@@ -365,14 +471,15 @@ func documentSources(findings *[]Finding, document map[string]any, fires hooks.M
 		// wrapper that discards the exit status gets another mode.
 		asked := ""
 
-		// An owned command needs no parse: ownership is a text rule. Any
-		// other command is read once, and the reading answers every
-		// question about it.
-		if hooks.OwnedBySeamark(cmd, spec.Markers()) {
+		// An owned command needs no parse, because ownership is a text
+		// rule. One marker ends an owned command, and that marker gives
+		// the mode. Any other command is read once, and the reading
+		// answers every question about it.
+		if _, marker, owned := hooks.OwnedCommand(cmd, markers); owned {
 			source.certain, source.managed = true, managed
-			source.mode = markerMode(spec, func(marker string) bool { return hooks.OwnedBySeamark(cmd, []string{marker}) })
+			source.mode = hooks.GateMarkerMode(marker)
 			asked = source.mode
-		} else if reading := hooks.ReadHook(cmd, spec.Markers()); reading.Use() != hooks.HookNotRun {
+		} else if reading := hooks.ReadHook(cmd, markers); reading.Use() != hooks.HookNotRun {
 			source.certain = reading.Use() == hooks.HookRuns
 			source.mode, asked = wrappedGateMode(spec, reading)
 		} else {
@@ -392,26 +499,13 @@ func documentSources(findings *[]Finding, document map[string]any, fires hooks.M
 		// A definition that never fires gates nothing, so only a running
 		// one gets the finding about its exit status.
 		if source.mode != asked {
-			*findings = append(*findings, discardsStatusFinding(path, cmd, source.mode, asked))
+			*findings = append(*findings, discardsStatusFinding(path, cmd, source.mode))
 		}
 
 		sources = append(sources, source)
 	})
 
 	return sources
-}
-
-// managedSources keeps the sources setup manages.
-func managedSources(sources []hookSource) []hookSource {
-	var out []hookSource
-
-	for _, s := range sources {
-		if s.managed {
-			out = append(out, s)
-		}
-	}
-
-	return out
 }
 
 // unmanagedSources keeps the sources setup does not manage.
@@ -462,19 +556,8 @@ func hookMode(sources []hookSource, keep func(hookSource) bool) string {
 	mode := ""
 
 	for _, s := range sources {
-		if s.mode == "" || !keep(s) {
-			continue
-		}
-
-		switch s.mode {
-		case hooks.ModeEnforce:
-			return hooks.ModeEnforce
-		case hooks.ModeWarn:
-			mode = hooks.ModeWarn
-		default:
-			if mode == "" {
-				mode = s.mode
-			}
+		if keep(s) {
+			mode = strongerGateMode(mode, s.mode)
 		}
 	}
 
@@ -487,14 +570,18 @@ func certainSource(s hookSource) bool { return s.certain }
 // uncertainSource keeps the sources that only can run the hook.
 func uncertainSource(s hookSource) bool { return !s.certain }
 
+// managedSource keeps the sources setup manages. Only an owned command
+// is managed, and the shell always runs an owned command, so each
+// managed source is also certain.
+func managedSource(s hookSource) bool { return s.managed }
+
 // anySource keeps every source.
 func anySource(hookSource) bool { return true }
 
-// missingTools lists the spec's tools that no certain source covers.
-func missingTools(spec hooks.Spec, sources []hookSource) []string {
-	certain := coveredTools(spec, sources, certainSource)
-
-	return slices.DeleteFunc(slices.Clone(spec.Tools()), func(tool string) bool { return slices.Contains(certain, tool) })
+// missingTools lists the spec's tools that are not in covered, in the
+// spec's order.
+func missingTools(spec hooks.Spec, covered []string) []string {
+	return slices.DeleteFunc(slices.Clone(spec.Tools()), func(tool string) bool { return slices.Contains(covered, tool) })
 }
 
 // classifyHook fills one hook entry from its sources. The tools that
@@ -508,7 +595,9 @@ func missingTools(spec hooks.Spec, sources []hookSource) []string {
 // the uncertain ones when only those exist and the detail says "may".
 func classifyHook(entry *CapabilityInspection, spec hooks.Spec, sources []hookSource) {
 	certain := coveredTools(spec, sources, certainSource)
-	possible := coveredTools(spec, sources, uncertainSource)
+	// Every source has at least one of the spec's tools, so the first
+	// uncertain source also tells whether any uncertain coverage exists.
+	first := slices.IndexFunc(sources, uncertainSource)
 	name := spec.Name + " hook"
 
 	mode := hookMode(sources, certainSource)
@@ -520,7 +609,7 @@ func classifyHook(entry *CapabilityInspection, spec hooks.Spec, sources []hookSo
 		name += " (" + mode + ")"
 	}
 
-	managed := slices.ContainsFunc(sources, func(s hookSource) bool { return s.managed && s.certain })
+	managed := slices.ContainsFunc(sources, managedSource)
 
 	switch {
 	case len(certain) == len(spec.Tools()):
@@ -528,16 +617,15 @@ func classifyHook(entry *CapabilityInspection, spec hooks.Spec, sources []hookSo
 		entry.Detail = name + " installed"
 
 		if !managed {
-			entry.Detail = fmt.Sprintf("%s runs from %s (not managed by setup)", name, sourcePaths(sources, true))
+			entry.Detail = fmt.Sprintf("%s runs from %s (not managed by setup)", name, sourcePaths(sources))
 		}
 	case len(certain) > 0:
 		entry.State = StatePartial
 		entry.Detail = fmt.Sprintf("%s runs for %s only, not for %s",
-			name, strings.Join(certain, ", "), strings.Join(missingTools(spec, sources), ", "))
+			name, strings.Join(certain, ", "), strings.Join(missingTools(spec, certain), ", "))
 		entry.Action = fmt.Sprintf("set the hook's matcher to %q in %s; setup does not change the matcher of an existing hook",
-			spec.Matcher, sourcePaths(sources, true))
-	case len(possible) > 0:
-		first := slices.IndexFunc(sources, func(s hookSource) bool { return !s.certain })
+			spec.Matcher, sourcePaths(sources))
+	case first >= 0:
 		entry.State = StatePartial
 		entry.Detail = fmt.Sprintf("%s may run from %s: %#q", name, sources[first].path, describeCommand(sources[first].command))
 		entry.Action = "run the seamark hook directly in that definition, or remove it and re-run setup, so setup can tell"
@@ -546,13 +634,14 @@ func classifyHook(entry *CapabilityInspection, spec hooks.Spec, sources []hookSo
 	}
 }
 
-// sourcePaths lists the distinct paths of the sources, certain ones
-// only when asked.
-func sourcePaths(sources []hookSource, certainOnly bool) string {
+// sourcePaths lists the distinct paths of the certain sources. A detail
+// or an action that names where the hook runs must not name a document
+// that only can run it.
+func sourcePaths(sources []hookSource) string {
 	var paths []string
 
 	for _, s := range sources {
-		if (certainOnly && !s.certain) || slices.Contains(paths, s.path) {
+		if !s.certain || slices.Contains(paths, s.path) {
 			continue
 		}
 
@@ -562,16 +651,16 @@ func sourcePaths(sources []hookSource, certainOnly bool) string {
 	return strings.Join(paths, ", ")
 }
 
-// sourceFindings names each definition setup does not manage, beside
-// the managed one when both run: the client runs every matching
-// definition, so a second one delivers each lesson twice and evaluates
-// each command twice. An uncertain definition is a warning, because
-// setup cannot tell whether the hook runs twice; the reader can. The
-// reason never starts with the path: every consumer prefixes it.
+// sourceFindings names each definition that setup does not manage. A
+// definition that runs for a tool that the managed one also runs for is
+// a warning. The client runs every matching definition, so a second one
+// delivers each lesson twice and evaluates each command twice. An
+// uncertain definition is also a warning, because setup cannot tell
+// whether the hook runs twice, but the reader can. The reason never
+// starts with the path, because every consumer prefixes it.
 func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) {
-	managed := managedSources(sources)
-	managedTools := coveredTools(spec, managed, certainSource)
-	managedMode := hookMode(managed, anySource)
+	managedTools := coveredTools(spec, sources, managedSource)
+	managedMode := hookMode(sources, managedSource)
 
 	for _, s := range unmanagedSources(sources) {
 		command := describeCommand(s.command)
@@ -616,8 +705,17 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 	}
 }
 
-// toolNames names tools for a finding; the empty tool stands for an
+// toolName names a tool for a finding. The empty tool stands for an
 // event without a matcher.
+func toolName(tool string) string {
+	if tool == "" {
+		return "the event"
+	}
+
+	return tool
+}
+
+// toolNames names tools for a finding, by the rule of toolName.
 func toolNames(tools []string) []string {
 	out := make([]string, 0, len(tools))
 
@@ -641,9 +739,9 @@ func neverFiresFinding(path, command, event, matcher string, spec hooks.Spec) Fi
 	}
 }
 
-// unreadableHooks marks every hook entry unreadable with one reason: the
-// document could not be read or parsed, so nothing about the hooks is
-// known, and "unreadable" must not read as "not installed".
+// unreadableHooks marks every hook entry unreadable with one reason.
+// The document could not be read or parsed, so nothing about the hooks
+// is known. The state must not read as "not installed".
 func unreadableHooks(entries []*CapabilityInspection, path string, err error) {
 	for _, entry := range entries {
 		entry.State = StateUnreadable
@@ -702,11 +800,11 @@ func (i Inspection) Entry(capability Capability) (CapabilityInspection, bool) {
 	return CapabilityInspection{}, false
 }
 
-// Describe renders the entry in a few words for narration: the
-// adapter's detail when it has one, else the state in the vocabulary of
-// the capability ("not installed", "not registered", "not configured").
-// init, doctor, and status all print it, so the three never phrase a
-// state differently.
+// Describe renders the entry in a few words for narration. It is the
+// adapter's detail when one exists. Otherwise it is the state in the
+// words of the capability, such as "not installed", "not registered",
+// or "not configured". init, doctor, and status all print it, so the
+// three never phrase a state differently.
 func (c CapabilityInspection) Describe() string {
 	if c.Detail != "" {
 		return c.Detail
@@ -869,11 +967,13 @@ func (i Inspection) DescribeVerification() string {
 // DescribeSupport names what the descriptor declares, for help text and
 // diagnostics: the setup operations and the lifecycle surfaces, in a
 // fixed order. Help, init, doctor, and status derive their support
-// claims from it, so they agree.
+// claims from it, so they agree. Each capability label comes from
+// Supports, so the text and Declared cannot disagree. Hooks and the
+// command gate are setup operations without a capability of their own.
 func (c Client) DescribeSupport() string {
 	var parts []string
 
-	if len(c.SkillDirs) > 0 {
+	if c.Supports(CapabilitySkills) {
 		parts = append(parts, "skills")
 	}
 
@@ -885,15 +985,15 @@ func (c Client) DescribeSupport() string {
 		parts = append(parts, "command gate")
 	}
 
-	if c.SetupOps.RegisterMCP {
+	if c.Supports(CapabilityMCPRegistration) {
 		parts = append(parts, "MCP registration")
 	}
 
-	if c.SetupOps.ApproveTools {
+	if c.Supports(CapabilityToolGrants) {
 		parts = append(parts, "tool grants")
 	}
 
-	if c.Invocation != nil {
+	if c.Supports(CapabilityInvocation) {
 		parts = append(parts, "inference")
 	}
 

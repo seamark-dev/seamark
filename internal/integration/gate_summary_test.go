@@ -27,7 +27,7 @@ func TestGateSummaryGroupsHooksAndRanksTheEffect(t *testing.T) {
 	assert.Equal(t, GateEffectBlocks, g.Effect())
 
 	// An unreadable document ranks below a hook that blocks or follows
-	// the policy, and above a report-only hook: the document can hold an
+	// the policy, and above a report-only hook. The document can hold an
 	// enforcing gate, so "nothing blocks" is not known.
 	var unknown GateSummary
 	unknown.AddUnreadable("d: unreadable")
@@ -72,8 +72,8 @@ func TestSummarizeGateHooksGroupsByPath(t *testing.T) {
 	}, g)
 	assert.Equal(t, GateEffectBlocks, g.Effect())
 
-	// The reported defect: an uncertain enforcing hook alone read as one
-	// that enforces.
+	// An uncertain enforcing hook alone is possible, not enforcing: the
+	// reader cannot tell whether it runs.
 	g = SummarizeGateHooks([]GateHook{{Path: ".claude/settings.json", Mode: hooks.ModeEnforce, Uncertain: true}})
 	assert.Equal(t, GateSummary{Possible: []string{".claude/settings.json"}}, g)
 	assert.Equal(t, GateEffectUnknown, g.Effect())

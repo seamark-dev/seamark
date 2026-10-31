@@ -32,6 +32,18 @@ func (o Outcome) Valid() bool {
 	}, o)
 }
 
+// claudeFailureOutcome maps a PostToolUseFailure event to an outcome.
+// is_interrupt marks an abort that reached Claude Code. Any other
+// failure is a failed result. Capture and the completion decoder share
+// this rule, so both read one event as one outcome.
+func claudeFailureOutcome(interrupted bool) Outcome {
+	if interrupted {
+		return OutcomeInterrupted
+	}
+
+	return OutcomeFailed
+}
+
 // codexExecHeader matches the header that Codex writes before command
 // output for the model (format_exec_output_for_model in
 // codex-rs/core/src/tools/mod.rs, rust-v0.157.1). The match needs the

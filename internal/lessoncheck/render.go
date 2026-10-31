@@ -8,9 +8,11 @@ import (
 	"github.com/seamark-dev/seamark/internal/render"
 )
 
-// This file holds the text form of a verification result. The CLI and
-// the MCP server print the same text, so one renderer exists. The text
-// layout is not a contract (spec L213); the JSON form is.
+// This file holds the text form of a verification result and the text
+// helpers that the guard and the post-edit run share with it. The CLI
+// and the MCP server print the same text, so one renderer exists. The
+// text layout can change between releases. Scripts must read the JSON
+// form, which is stable.
 
 // shortHex is the length of an object id or a version in the text.
 const shortHex = 12
@@ -152,7 +154,7 @@ func renderResult(w io.Writer, r Result, firstRun map[int]Outcome) {
 
 // renderListing writes one pin that the verification did not evaluate.
 // An advisory pin with a check names the command that arms the check,
-// because the check never runs in advisory mode (§5 row 20).
+// because the check never runs in advisory mode.
 func renderListing(w io.Writer, l PinListing) {
 	fmt.Fprintf(w, "  %s  pin %s %s (entry %d)\n", l.Listing, l.PinRef, l.Rule, l.Entry)
 
@@ -164,11 +166,12 @@ func renderListing(w io.Writer, l PinListing) {
 
 // firstRunText returns the outcome that a stale result had at the read,
 // when the result keeps it. A first-run unknown names its reason and its
-// limit, as outcomeText does (fix F-C). A first-run pass or
-// not-applicable comes from the text-only map of Verify (contract K5).
+// limit, as outcomeText does, because the limit can be the one to raise.
+// A first-run pass or not-applicable comes from the text-only map of
+// Verify.
 func firstRunText(r Result, firstRun map[int]Outcome) (string, bool) {
 	if r.FirstRun != nil {
-		return outcomeText(Result{Outcome: OutcomeUnknown, Reason: r.FirstRun.Reason, Limit: r.FirstRun.Limit}), true
+		return unknownText(r.FirstRun.Reason, r.FirstRun.Limit), true
 	}
 
 	first, ok := firstRun[r.Entry]
@@ -183,12 +186,23 @@ func outcomeText(r Result) string {
 		return string(r.Outcome)
 	}
 
-	text := string(r.Outcome) + "/" + string(r.Reason)
-	if r.Limit != "" {
-		text += " (" + r.Limit + ")"
+	return unknownText(r.Reason, r.Limit)
+}
+
+// unknownText returns an unknown outcome with its reason and its limit:
+// "unknown/<reason>", or "unknown/resource-limit (<limit>)".
+func unknownText(reason Reason, limit string) string {
+	return string(OutcomeUnknown) + "/" + reasonText(reason, limit)
+}
+
+// reasonText names an unknown reason and, for resource-limit, the limit.
+// The report, the deny texts, and the post-edit findings share it.
+func reasonText(reason Reason, limit string) string {
+	if limit == "" {
+		return string(reason)
 	}
 
-	return text
+	return string(reason) + " (" + limit + ")"
 }
 
 // checkText names a check: its ID, its kind, and the short version.
@@ -217,19 +231,27 @@ func scopeText(scope []string) string {
 }
 
 // evidenceText returns one finding: the change, the path, and for a
-// line match the line and the excerpt. The excerpt is already redacted,
-// sanitized, and bounded (contract K3).
+// line match the line and the excerpt. The checker already redacted,
+// sanitized, and cut the excerpt.
 func evidenceText(e Evidence) string {
-	path := render.Sanitize(e.Path)
-	if e.OldPath != "" {
-		path = render.Sanitize(e.OldPath) + " -> " + path
-	}
+	path := evidencePath(e)
 
 	if e.Line > 0 {
 		return fmt.Sprintf("%s %s:%d: %s", e.Change, path, e.Line, e.Excerpt)
 	}
 
 	return fmt.Sprintf("%s %s", e.Change, path)
+}
+
+// evidencePath names the path of a finding, with the source of a move:
+// "<old> -> <new>". The report, the deny texts, and the post-edit
+// findings share it, so a move reads the same everywhere.
+func evidencePath(e Evidence) string {
+	if e.OldPath == "" {
+		return render.Sanitize(e.Path)
+	}
+
+	return render.Sanitize(e.OldPath) + " -> " + render.Sanitize(e.Path)
 }
 
 // shortID returns the first shortHex characters of an id.

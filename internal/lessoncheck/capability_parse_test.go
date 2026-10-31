@@ -9,8 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLessonCheckParseForCapability preserves the file reader's exact
-// config, digest, and error text when another caller supplies the bytes.
+// TestLessonCheckParseForCapability proves that bytes from another
+// caller give the exact config, digest, and error text of the file
+// reader.
 func TestLessonCheckParseForCapability(t *testing.T) {
 	for _, tc := range []struct {
 		name string

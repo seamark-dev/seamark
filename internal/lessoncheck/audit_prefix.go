@@ -15,9 +15,9 @@ import (
 // error, and the delivery report shows the stream as unreadable.
 var errRotatedDuringRead = errors.New("rotated during read")
 
-// AuditPrefix is the result of ReadAuditPrefix (contract K9, the reader
-// for the delivery report). It states what the read found and what it
-// left out. So a report can show the limits of its own reading.
+// AuditPrefix is the result of ReadAuditPrefix, the audit stream reader
+// that the delivery report uses. It states what the read found and what it
+// left out, so a report can show the limits of its own reading.
 type AuditPrefix struct {
 	Path        string
 	Generations int           // generation files opened: 0, 1, or 2 (rotated, then live)
@@ -36,18 +36,17 @@ type AuditPrefix struct {
 // without a sign each time a rotation moves records to the other file.
 //
 // Only a missing file counts as absent. The function returns every other
-// error, because an unreadable stream is not an empty stream (lesson
-// error-is-not-absence). A line that does not parse is never an error,
-// because one corrupt append must not hide the other records. A negative
-// maxBytes reads nothing. The read writes nothing: it creates no file or
-// directory, takes no lock, and changes no mode. Only the writer uses the
-// lock file.
+// error, because an unreadable stream is not an empty stream. A line
+// that does not parse is never an error, because one corrupt append must
+// not hide the other records. A negative maxBytes reads nothing. The
+// read writes nothing: it creates no file or directory, takes no lock,
+// and changes no mode. Only the writer uses the lock file.
 //
 // A rotation between the two opens costs one reopen. Two rotations in
-// that short time need about maxAuditBytes of new writes, so the reader
-// does not detect them. It could then return a newer rotated generation
-// and miss the live file that the second rotation removed, without an
-// error. The reader accepts this risk.
+// that short time need about maxAuditBytes of new writes. That is
+// unlikely, so the reader does not detect them. It could then return a
+// newer rotated generation and miss the live file that the second
+// rotation removed, without an error. The reader accepts this risk.
 func ReadAuditPrefix(root string, maxBytes int64) (AuditPrefix, error) {
 	return readAuditPrefixAt(filepath.Join(root, ".seamark", auditFile), maxBytes, nil)
 }
@@ -66,7 +65,7 @@ func readAuditPrefixAt(path string, maxBytes int64, between func(attempt int)) (
 	defer closeAll(live, rotated)
 
 	out := AuditPrefix{Path: path}
-	remaining := max(maxBytes, 0)
+	limit := max(maxBytes, 0)
 
 	// The rotated generation comes first, because it holds the older
 	// records.
@@ -75,7 +74,7 @@ func readAuditPrefixAt(path string, maxBytes int64, between func(attempt int)) (
 			continue
 		}
 
-		if err := out.readGeneration(gen, &remaining); err != nil {
+		if err := out.readGeneration(gen, limit); err != nil {
 			return AuditPrefix{}, fmt.Errorf("lesson-check audit: %w", err)
 		}
 	}
@@ -133,9 +132,9 @@ func openGenerations(path string, between func(attempt int)) (live, rotated *os.
 	return nil, nil, errRotatedDuringRead
 }
 
-// openRead opens an audit file for reading and refuses a symbolic link,
-// as every open of the writer does. A missing file gives a nil file and
-// no error. The function returns every other error.
+// openRead opens an audit file for reading and refuses a symbolic link.
+// A missing file gives a nil file and no error. The function returns
+// every other error.
 func openRead(path string) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|noFollowFlag, 0)
 	if errors.Is(err, os.ErrNotExist) {
@@ -165,10 +164,10 @@ func sameGeneration(a, b *os.File) (bool, error) {
 	return os.SameFile(ai, bi), nil
 }
 
-// readGeneration reads one open file into the prefix. It reads at most
-// min(size at open, *remaining) bytes and lowers *remaining by the bytes
-// read. So both generations share one bound.
-func (p *AuditPrefix) readGeneration(f *os.File, remaining *int64) error {
+// readGeneration reads one open file into the prefix. limit is the
+// bound of both generations together. The bytes that this file may use
+// are limit minus p.Bytes, because p.Bytes counts every byte read so far.
+func (p *AuditPrefix) readGeneration(f *os.File, limit int64) error {
 	info, err := f.Stat()
 	if err != nil {
 		return err
@@ -176,17 +175,17 @@ func (p *AuditPrefix) readGeneration(f *os.File, remaining *int64) error {
 
 	p.Generations++
 
-	if info.Size() > *remaining {
+	left := limit - p.Bytes
+	if info.Size() > left {
 		p.OverLimit = true
 	}
 
-	read, partial, err := reviews.ScanPrefix(f, min(info.Size(), *remaining), p.add)
+	read, partial, err := reviews.ScanPrefix(f, min(info.Size(), left), p.add)
 	if err != nil {
 		return err
 	}
 
 	p.Bytes += read
-	*remaining -= read
 	p.PartialTail = p.PartialTail || partial
 
 	return nil
@@ -195,9 +194,13 @@ func (p *AuditPrefix) readGeneration(f *os.File, remaining *int64) error {
 // add classifies one complete line and keeps it when it is a record of
 // this stream. A blank line is not a record. The writer always sets the
 // schema. So a line without a schema is corrupt or foreign data, and it
-// counts as malformed. Another schema value counts as newer. The function
-// decodes the schema first and alone. So a newer record, whose other
-// fields can have another type, counts as newer and not as malformed.
+// counts as malformed. Another schema value counts as newer.
+//
+// Almost every line is a current record, so the function decodes the
+// full record first, and one decode is enough for it. Only a line that
+// fails that decode gets a second decode of the schema alone. So a newer
+// record, whose other fields can have another type, counts as newer and
+// not as malformed.
 func (p *AuditPrefix) add(_ int, raw []byte, tooLong bool) {
 	if tooLong {
 		p.Malformed++
@@ -209,28 +212,32 @@ func (p *AuditPrefix) add(_ int, raw []byte, tooLong bool) {
 		return
 	}
 
-	var head struct {
-		Schema string `json:"schema"`
-	}
-
-	if json.Unmarshal(raw, &head) != nil || head.Schema == "" {
-		p.Malformed++
+	var rec AuditRecord
+	if json.Unmarshal(raw, &rec) == nil {
+		switch rec.Schema {
+		case "":
+			p.Malformed++
+		case AuditSchema:
+			p.Records = append(p.Records, rec)
+		default:
+			p.NewerSchema++
+		}
 
 		return
 	}
 
-	if head.Schema != AuditSchema {
+	// The full decode failed: the line is not JSON, or a field has
+	// another type. A newer schema can change a field type, so only the
+	// schema value decides between newer and malformed.
+	var head struct {
+		Schema string `json:"schema"`
+	}
+
+	if json.Unmarshal(raw, &head) == nil && head.Schema != "" && head.Schema != AuditSchema {
 		p.NewerSchema++
 
 		return
 	}
 
-	var rec AuditRecord
-	if json.Unmarshal(raw, &rec) != nil {
-		p.Malformed++
-
-		return
-	}
-
-	p.Records = append(p.Records, rec)
+	p.Malformed++
 }

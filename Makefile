@@ -65,11 +65,9 @@ agents-test: ## Run the agent-integration contract and characterization tests
 # runs whole here too. It reads the audit logs and one archive snapshot,
 # and it reads the lesson-check stream, so a change to either reader
 # must fail this target.
-# The HTML card runs whole, including its existing outcome tests, because
-# it shares the delivery engine but has no focused CLI test selector.
 # Nothing here calls a model or the network.
 # Later milestones append test-name prefixes and packages here.
-LESSON_CHECK_PKGS := ./internal/lessoncheck/... ./internal/privatedir/... ./internal/lessonreport/... ./internal/htmlreport/...
+LESSON_CHECK_PKGS := ./internal/lessoncheck/... ./internal/privatedir/... ./internal/lessonreport/...
 LESSON_CHECK_RUN  := 'Test(LessonCheck|LessonsVerify|LessonsSetMode|CheckLessons|LessonsPrepare|LessonsExploreHook|ChangeSetPreparation|LessonsHookNeverInvokes|LessonsGuard|LessonsBaseline|LessonsDelivery)'
 
 lesson-check: ## Run the lesson-check, guard, preparation, and delivery-report tests (offline, no model)

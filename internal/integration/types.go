@@ -57,12 +57,12 @@ const (
 	CapabilityInvocation Capability = "invocation"
 )
 
-// The lesson-check capabilities (contract K10). They are in
-// Capabilities, so Declared lists them. They are not in
-// ConfiguredCapabilities: completeCapabilities adds an entry for each
-// element of that list to every inspection, and the TUI Overview of
-// every repository would then show new items, also without checks.
-// The lesson-check capability report shows their install state.
+// The lesson-check capabilities. They are in Capabilities, so Declared
+// lists them. They are not in ConfiguredCapabilities, because
+// completeCapabilities adds an entry for each element of that list to
+// every inspection. The TUI Overview would then show new items for
+// every repository, also for one without lesson checks. The
+// lesson-check capability report shows their install state instead.
 const (
 	// CapabilityLessonVerify decodes the pre-edit and the post-edit
 	// events, so the hooks can record a baseline and verify the result.
@@ -84,9 +84,9 @@ var Capabilities = []Capability{
 
 // ConfiguredCapabilities lists the capabilities that have project
 // configuration an inspection can classify, in presentation order.
-// Setup is the umbrella for the three setup operations, and invocation
-// has no project document: the invoker resolver reports it. Both are
-// declared, never configured.
+// Setup groups the three setup operations, and invocation has no
+// project document: the invoker resolver reports it. Both are declared,
+// never configured.
 var ConfiguredCapabilities = []Capability{
 	CapabilitySkills, CapabilityMCPRegistration, CapabilityToolGrants,
 	CapabilityEdits, CapabilityCommands, CapabilityResets,
@@ -116,8 +116,8 @@ type SetupSupport struct {
 	ApproveTools bool `json:"approve_tools"`
 	// LessonVerify means the adapter can install the lesson-check hooks
 	// of check mode: the pre-edit baseline and the post-edit
-	// verification (contract K10). init installs them only on an
-	// explicit `--lesson-checks` request.
+	// verification. init installs them only on an explicit
+	// `--lesson-checks` request.
 	LessonVerify bool `json:"lesson_verify"`
 	// LessonGuard means the adapter can install the pre-write guard of
 	// enforce mode. Enforce installs the post-edit verification too, so
@@ -307,11 +307,11 @@ type ExploreHooks interface {
 }
 
 // GuardHooks translates a client's pending edit for the lesson-check
-// guard (contract K8). DecodeGuard turns one native payload into the
-// complete operation: every file it changes and the content it writes.
-// A decoder returns the complete operation or an error, never a part of
-// the edit, because a partial edit looks like a smaller edit and the
-// guard could then allow it (§6 A8).
+// guard. DecodeGuard turns one native payload into the complete
+// operation: every file it changes and the content it writes. A
+// decoder returns the complete operation or an error, never a part of
+// the edit. A partial edit looks like a smaller edit, and the guard
+// could then allow it.
 //
 // On success PathsComplete is true: the decoder named every path. The
 // paths are raw, as the client wrote them. The handler resolves them
@@ -338,28 +338,28 @@ type GuardHooks interface {
 }
 
 // CompletionHooks translates the native event after a covered edit
-// tool ran (contract K9). DecodeCompletion turns one native payload into
-// the outcome of the tool and the paths of its input. It returns
-// ErrNotApplicable for another event or another tool, and
-// ErrMalformedEvent or ErrUnsupportedGrammar when it cannot name every
-// path. With an error, the Completion holds the event identity and the
-// outcome when the payload names them, and no path: the post-edit record
-// still joins the guard record of the same call by its match.
+// tool ran. DecodeCompletion turns one native payload into the outcome
+// of the tool and the paths of its input. It returns ErrNotApplicable
+// for another event or another tool, and ErrMalformedEvent or
+// ErrUnsupportedGrammar when it cannot name every path. With an error,
+// the Completion holds no path. It holds the event identity and the
+// outcome when the payload names them, so the post-edit record still
+// joins the guard record of the same call by its match.
 //
 // EncodeFindings renders the post-edit findings in the native reply.
 // outcome is the Completion.Outcome value, because a client can answer a
 // failed tool through another event name. The reply never blocks and
-// never asks the client to undo the edit (L122): the tool already ran.
+// never asks the client to undo the edit, because the tool already ran.
 type CompletionHooks interface {
 	DecodeCompletion(payload []byte) (lessoncheck.Completion, error)
 	EncodeFindings(text string, outcome lessoncheck.ToolOutcome) (HookReply, error)
 }
 
 // ReceivingContext identifies the conversation that can see injected
-// advice. It is the actual receiver, not merely a shared parent
-// session: a subagent reports the session id of its parent, and that
-// id alone is not a context of its own. An adapter that cannot name
-// the actual receiver leaves the context nil, and suppression stays off.
+// advice. It is the actual receiver, not only a shared parent session.
+// A subagent reports the session id of its parent, and that id alone is
+// not a context of its own. An adapter that cannot name the actual
+// receiver leaves the context nil, and suppression stays off.
 type ReceivingContext struct {
 	// ID is the client-native identity, kept in memory only. Persisted
 	// state stores a repository-scoped digest, never the raw value.
@@ -589,6 +589,18 @@ func VerifiedEvidence(clientVersion, surface string) (VerificationEvidence, erro
 	return e, nil
 }
 
+// mustVerifiedEvidence builds verified evidence from constants. The
+// contract tests validate every entry, so a blank scope is a
+// programming error.
+func mustVerifiedEvidence(clientVersion, surface string) VerificationEvidence {
+	e, err := VerifiedEvidence(clientVersion, surface)
+	if err != nil {
+		panic("integration: " + err.Error())
+	}
+
+	return e
+}
+
 // Validate checks that verified evidence names its tested version and
 // surface. Other levels carry optional scope, so they always pass.
 func (e VerificationEvidence) Validate() error {
@@ -627,10 +639,11 @@ type CapabilityInspection struct {
 	// supplemental: consumers must read the typed fields, never parse it.
 	// It never names the client: the consumer adds the client label.
 	Detail string `json:"detail,omitempty"`
-	// Action is the command or edit that changes the state, from the
-	// same adapter knowledge that installs the artifact; empty when
-	// nothing needs to change. init, doctor, and status print it as
-	// the corrective action, so the three never disagree on the fix.
+	// Action is the command or edit that changes the state. It comes
+	// from the same adapter knowledge that installs the artifact, and it
+	// is empty when nothing needs to change. init, doctor, and status
+	// print it as the corrective action, so the three never disagree on
+	// the fix.
 	Action string `json:"action,omitempty"`
 }
 
@@ -713,16 +726,16 @@ type Inspection struct {
 	// hook, so a view without them survives a JSON round trip.
 	// LessonCheckPaths turns it into the paths of lesson-capability/1.
 	// It has no JSON form: status --json reports the capability report
-	// under its own key, so clients[] keeps its bytes (contract K10).
+	// under its own key, so clients[] keeps its bytes.
 	LessonHooks *LessonHookInspection `json:"-"`
 }
 
 // LessonHookInspection is the offline reading of one client's
-// lesson-check and exploration hook sources (contract K10). It holds the
-// facts only. LessonCheckPaths derives the reasons, and
+// lesson-check and exploration hook sources. It holds the facts only.
+// LessonCheckPaths derives the reasons, and
 // lessoncheck.CapabilityReportOf derives the states. The document error
-// and the trust come from the other fields of the inspection, so the two
-// readings never disagree.
+// and the trust come from the other fields of the inspection, so the
+// two readings never disagree.
 type LessonHookInspection struct {
 	// Entries lists every owned lesson-check and exploration command of
 	// the hook document that setup manages, in document order.
@@ -741,7 +754,7 @@ type LessonHookInspection struct {
 
 // LessonHookEntry is one owned lesson-check or exploration command.
 type LessonHookEntry struct {
-	// Stage is the hook stage of the spec that owns the command.
+	// Stage is the stage of the hook spec that owns the command.
 	Stage lessoncheck.HookStage
 	// Event is the hook event of the entry, for example "PostToolUse".
 	Event string
@@ -749,8 +762,8 @@ type LessonHookEntry struct {
 	Marker string
 	// Binary is the binary path of the command, unquoted.
 	Binary string
-	// Tools lists the tools of the spec that the client runs the entry
-	// for. It is empty for an entry that never fires: another type, or
+	// Tools lists the tools of the hook spec that the client runs the
+	// entry for. It is empty for an entry that never fires: another type, or
 	// a matcher that names none of the tools.
 	Tools []string
 }
@@ -802,7 +815,7 @@ func enumName(names []string, v int) string {
 
 // enumValue returns the value of an enum name. It rejects "unknown" for
 // an enum whose table does not hold it, and every other name outside
-// the table: a JSON document from a newer binary must fail to decode,
+// the table. A JSON document from a newer binary must fail to decode,
 // not decode to the zero value in silence.
 func enumValue(names []string, kind string, text []byte) (int, error) {
 	i := slices.Index(names, string(text))
@@ -845,9 +858,9 @@ type ClientSetup struct {
 	// it off: that form never read those files, and it must stay as it
 	// was.
 	CheckHookSources bool
-	// LessonChecks is off, check, or enforce (contract K10). Empty
-	// preserves the installed mode, as GateMode does, so a run without
-	// the flag installs nothing new. It never changes GateMode.
+	// LessonChecks is off, check, or enforce. Empty preserves the
+	// installed mode, as GateMode does, so a run without the flag
+	// installs nothing new. It never changes GateMode.
 	LessonChecks string
 	// LessonExploration is off or on. Empty preserves the installed
 	// choice.
@@ -903,8 +916,8 @@ type GuardKind int
 // The guard kinds.
 const (
 	// GuardDocument guards a native document that setup owns and may
-	// rewrite. No component of its path may be a symbolic link, for the
-	// read too: a link committed in a cloned repository must never
+	// rewrite. No component of its path may be a symbolic link, also for
+	// the read. A link committed in a cloned repository must never
 	// redirect a read or a write of a client's configuration.
 	GuardDocument GuardKind = iota
 	// GuardInput guards a file that setup reads and at most extends, such
@@ -973,7 +986,7 @@ const GateModeReportOnly = "report-only"
 // the plan is applied. A plan lists every one it knows: the hook setup
 // manages, and a hook in another source that setup found and left as it
 // is. The caller's gate summary reads the list, because one enforcing
-// hook blocks whatever the managed hook's mode says, and a summary that
+// hook blocks whatever the managed hook's mode says. A summary that
 // names only the managed mode would then be false.
 type GateHook struct {
 	// ClientID is filled by the coordinator.

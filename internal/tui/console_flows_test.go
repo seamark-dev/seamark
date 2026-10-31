@@ -1264,7 +1264,7 @@ func TestConsoleFlowExtractionBlockerRoutesToSettingsAndNeedsAFreshPlan(t *testi
 
 		data, err := os.ReadFile(filepath.Join(svc.root, filepath.FromSlash(settings.File)))
 		if err != nil || !strings.Contains(string(data), "codex") {
-			p.Blockers = []string{`agent cli "claude" not found on PATH`}
+			p.Blockers = []learning.ExtractBlocker{{Kind: learning.ExtractBlockAgent, Reason: `agent cli "claude" not found on PATH`}}
 		}
 
 		return p, nil

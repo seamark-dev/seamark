@@ -1,25 +1,26 @@
 package integration
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"slices"
-	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 )
 
-// The tests of the lesson-check paths (contract K10). Every root is a
-// temporary directory, and every hook binary is a file that the test
-// writes and never runs: inspection runs nothing (§5 row 116).
+// The tests of the lesson-check paths. Every root is a temporary
+// directory, and every hook binary is a file that the test writes and
+// never runs, because inspection runs nothing.
 
 // fakeSeamark writes an executable file named seamark in a new
 // directory under dir, so a hook command that names it is owned. The
@@ -60,19 +61,57 @@ func stubBuildVersions(t *testing.T, versions map[string]string) *[]string {
 func installLessonHooks(t *testing.T, root, clientID, binary, checks, exploration string) {
 	t.Helper()
 
-	plan := mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: binary, Clients: []ClientSetup{{
+	applyLessonSetupWithBinary(t, root, binary, ClientSetup{
 		ClientID: clientID, Hooks: true, LessonChecks: checks, LessonExploration: exploration,
-	}}})
+	})
+}
 
-	_, err := ApplySetup(plan, ApplyOptions{})
+// assertNarrowReport compares the report of InspectLessonHooks with the
+// report of insps, the full inspections of root. It compares the values
+// because JSON can hide nil against empty, and the bytes because
+// preparation prints them.
+func assertNarrowReport(t *testing.T, root string, insps []Inspection) {
+	t.Helper()
+
+	// Both reports identify the hook binaries with the same code. The stub
+	// keeps this check out of the reads that stubBuildVersions records.
+	saved := readBuildVersion
+	readBuildVersion = func(string) string { return "v0.9.0" }
+
+	defer func() { readBuildVersion = saved }()
+
+	self := BinaryIdentity{Version: "v0.9.0"}
+	full := LessonCapability(insps, root, self)
+	narrow := LessonCapability(Builtin().InspectLessonHooks(root), root, self)
+
+	assert.Equal(t, full, narrow)
+
+	fullJSON, err := json.Marshal(full)
 	require.NoError(t, err)
+
+	narrowJSON, err := json.Marshal(narrow)
+	require.NoError(t, err)
+
+	assert.Equal(t, string(fullJSON), string(narrowJSON))
+}
+
+// inspectAll returns the registry inspections of root. Each call also
+// compares the two report paths, so every setup of these tests proves
+// InspectLessonHooks.
+func inspectAll(t *testing.T, root string) []Inspection {
+	t.Helper()
+
+	insps := Builtin().Inspect(root)
+	assertNarrowReport(t, root, insps)
+
+	return insps
 }
 
 // inspectionOf returns the registry inspection of one client.
 func inspectionOf(t *testing.T, root, clientID string) Inspection {
 	t.Helper()
 
-	for _, insp := range Builtin().Inspect(root) {
+	for _, insp := range inspectAll(t, root) {
 		if insp.ClientID == clientID {
 			return insp
 		}
@@ -148,12 +187,11 @@ func pathKey(p lessoncheck.InstalledPath) string {
 }
 
 // TestLessonCheckPathsIdentifiesHookBinary proves the static binary
-// identification of contract K10 (§5 row 116, AC-34): the same file or
-// the same version is current, a readable version at or above
-// MinHandlerRelease is other, below it old, no readable version unknown,
-// and no file or no execute bit missing. Nothing runs, a non-regular
-// file is never opened, and each path appears once per client, tool,
-// hook stage, and context.
+// identification. The same file or the same version is current. A
+// readable version at or above MinHandlerRelease is other, and one below
+// it is old. No readable version is unknown. No file or no execute bit
+// is missing. Nothing runs, a non-regular file is never opened, and each
+// path appears once per client, tool, hook stage, and context.
 func TestLessonCheckPathsIdentifiesHookBinary(t *testing.T) {
 	dir := t.TempDir()
 	self := BinaryIdentity{Path: fakeSeamark(t, dir, "self"), Version: "v0.9.2"}
@@ -231,11 +269,11 @@ func TestLessonCheckPathsIdentifiesHookBinary(t *testing.T) {
 
 	t.Run("the pre-write markers start with the report constants", func(t *testing.T) {
 		for _, marker := range []string{hooks.LessonGuardMarker, hooks.CodexLessonGuardMarker} {
-			assert.True(t, strings.HasPrefix(marker, lessoncheck.MarkerGuard), marker)
+			assert.True(t, lessoncheck.IsGuardMarker(marker), marker)
 		}
 
 		for _, marker := range []string{hooks.LessonBaselineMarker, hooks.CodexLessonBaselineMarker} {
-			assert.True(t, strings.HasPrefix(marker, lessoncheck.MarkerBaseline), marker)
+			assert.True(t, lessoncheck.IsBaselineMarker(marker), marker)
 		}
 	})
 
@@ -244,7 +282,7 @@ func TestLessonCheckPathsIdentifiesHookBinary(t *testing.T) {
 		installLessonHooks(t, root, ClaudeID, older, hooks.LessonChecksEnforce, hooks.LessonExplorationOn)
 		installLessonHooks(t, root, CodexID, self.Path, hooks.LessonChecksCheck, "")
 
-		claude, _ := LessonCheckPaths(inspectionOf(t, root, ClaudeID), self)
+		claude := LessonCheckPaths(inspectionOf(t, root, ClaudeID), self)
 
 		var keys []string
 		for _, p := range claude {
@@ -271,7 +309,7 @@ func TestLessonCheckPathsIdentifiesHookBinary(t *testing.T) {
 		assert.Equal(t, "v0.8.0", guard.BinaryVersion)
 		assert.Equal(t, capVerification(GuardEvidence(ClaudeID, "Write", lessoncheck.ContextChild)), guard.Verification)
 
-		codex, _ := LessonCheckPaths(inspectionOf(t, root, CodexID), self)
+		codex := LessonCheckPaths(inspectionOf(t, root, CodexID), self)
 		baseline := installedPathOf(t, codex, "apply_patch", lessoncheck.StagePreWrite, lessoncheck.ContextRoot)
 		assert.Equal(t, hooks.CodexLessonBaselineMarker, baseline.Marker)
 		assert.Equal(t, lessoncheck.BinaryCurrent, baseline.BinaryState)
@@ -280,7 +318,7 @@ func TestLessonCheckPathsIdentifiesHookBinary(t *testing.T) {
 		assert.False(t, explore.Installed)
 		assert.Empty(t, explore.Reasons, "a path that Codex cannot run has no reason, so the report reads it as unsupported")
 
-		report := LessonCapability(Builtin().Inspect(root), root, self)
+		report := LessonCapability(inspectAll(t, root), root, self)
 		c, ok := report.Client(CodexID)
 		require.True(t, ok)
 		assert.Equal(t, lessoncheck.InstalledCheck, c.Installed)
@@ -293,6 +331,25 @@ func TestLessonCheckPathsIdentifiesHookBinary(t *testing.T) {
 			"native-timeout-unverified, other-binary)", claudeCap.StageText(lessoncheck.StagePreWrite))
 	})
 
+	t.Run("one report reads a hook binary of several clients once", func(t *testing.T) {
+		root := t.TempDir()
+		shared := fakeSeamark(t, dir, "shared")
+		installLessonHooks(t, root, ClaudeID, shared, hooks.LessonChecksCheck, "")
+		installLessonHooks(t, root, CodexID, shared, hooks.LessonChecksCheck, "")
+
+		insps := inspectAll(t, root)
+		before := len(*reads)
+
+		report := LessonCapability(insps, root, self)
+		assert.Equal(t, []string{shared}, (*reads)[before:], "the clients share one reading of the binary")
+
+		for _, clientID := range []string{ClaudeID, CodexID} {
+			c, ok := report.Client(clientID)
+			require.True(t, ok, clientID)
+			assert.Equal(t, lessoncheck.InstalledCheck, c.Installed, clientID)
+		}
+	})
+
 	t.Run("a partial install and a narrowed matcher", func(t *testing.T) {
 		root := t.TempDir()
 		writeRel(t, root, ".claude/settings.json", `{"hooks": {
@@ -301,7 +358,7 @@ func TestLessonCheckPathsIdentifiesHookBinary(t *testing.T) {
 }}
 `)
 
-		paths, _ := LessonCheckPaths(inspectionOf(t, root, ClaudeID), self)
+		paths := LessonCheckPaths(inspectionOf(t, root, ClaudeID), self)
 
 		edit := installedPathOf(t, paths, "Edit", lessoncheck.StagePreWrite, lessoncheck.ContextRoot)
 		assert.True(t, edit.Installed)
@@ -323,12 +380,11 @@ func TestLessonCheckPathsIdentifiesHookBinary(t *testing.T) {
 
 // TestLessonCheckPathsDetectsReportOnlyWrapper proves that a definition
 // that runs the pre-write hook and discards its exit status keeps every
-// pre-write path inactive (reason report-only-wrapper), in either Claude
-// Code settings file, in hooks.json, and in the inline [hooks] of the
-// Codex configuration. A wrapper that passes the status is no such
-// definition. The reading adds no finding, so doctor and status keep
-// their existing lines (GateModeReportOnly wrapper detection, P0 ruling
-// A7).
+// pre-write path inactive, with reason report-only-wrapper. The rule
+// holds in either Claude Code settings file, in hooks.json, and in the
+// inline [hooks] of the Codex configuration. A wrapper that passes the
+// status is no such definition. The reading adds no finding, so doctor
+// and status keep their existing lines.
 func TestLessonCheckPathsDetectsReportOnlyWrapper(t *testing.T) {
 	self := BinaryIdentity{Path: fakeSeamark(t, t.TempDir(), "self")}
 
@@ -343,7 +399,7 @@ func TestLessonCheckPathsDetectsReportOnlyWrapper(t *testing.T) {
 	preWriteReasons := func(t *testing.T, insp Inspection) [][]lessoncheck.CapReason {
 		t.Helper()
 
-		paths, _ := LessonCheckPaths(insp, self)
+		paths := LessonCheckPaths(insp, self)
 
 		var out [][]lessoncheck.CapReason
 
@@ -385,7 +441,7 @@ func TestLessonCheckPathsDetectsReportOnlyWrapper(t *testing.T) {
 		installLessonHooks(t, root, ClaudeID, self.Path, hooks.LessonChecksEnforce, "")
 		writeRel(t, root, claudeLocalSettings, wrapper(discarding))
 
-		report := LessonCapability(Builtin().Inspect(root), root, self)
+		report := LessonCapability(inspectAll(t, root), root, self)
 		c, _ := report.Client(ClaudeID)
 
 		for _, p := range c.Paths {
@@ -430,12 +486,12 @@ func TestLessonCheckPathsDetectsReportOnlyWrapper(t *testing.T) {
 }
 
 // TestLessonCheckPathsReportsTrustAndDisabledHooks proves the sources
-// of the trust and configuration reasons (contract K10, reason table):
-// every installed Codex path carries trust-unknown, because seamark
-// cannot read the Codex trust record; [features] hooks = false gives
-// hooks-disabled; a pending trust gives untrusted; and a hook document
-// that cannot be read gives document-unreadable, never not-installed.
-// Claude Code needs no trust review, so its paths carry no trust reason.
+// of the trust and configuration reasons. Every installed Codex path
+// carries trust-unknown, because seamark cannot read the Codex trust
+// record. [features] hooks = false gives hooks-disabled. A pending trust
+// gives untrusted. A hook document that cannot be read gives
+// document-unreadable, never not-installed. Claude Code needs no trust
+// review, so its paths carry no trust reason.
 func TestLessonCheckPathsReportsTrustAndDisabledHooks(t *testing.T) {
 	self := BinaryIdentity{Path: fakeSeamark(t, t.TempDir(), "self")}
 
@@ -444,19 +500,19 @@ func TestLessonCheckPathsReportsTrustAndDisabledHooks(t *testing.T) {
 		installLessonHooks(t, root, CodexID, self.Path, hooks.LessonChecksEnforce, "")
 		installLessonHooks(t, root, ClaudeID, self.Path, hooks.LessonChecksEnforce, "")
 
-		codex, _ := LessonCheckPaths(inspectionOf(t, root, CodexID), self)
+		codex := LessonCheckPaths(inspectionOf(t, root, CodexID), self)
 		for _, p := range codex {
 			if p.Installed {
 				assert.Contains(t, p.Reasons, lessoncheck.CapTrustUnknown, pathKey(p))
 			}
 		}
 
-		claude, _ := LessonCheckPaths(inspectionOf(t, root, ClaudeID), self)
+		claude := LessonCheckPaths(inspectionOf(t, root, ClaudeID), self)
 		for _, p := range claude {
 			assert.NotContains(t, p.Reasons, lessoncheck.CapTrustUnknown, pathKey(p))
 		}
 
-		report := LessonCapability(Builtin().Inspect(root), root, self)
+		report := LessonCapability(inspectAll(t, root), root, self)
 		c, _ := report.Client(CodexID)
 		post := c.Paths[slices.IndexFunc(c.Paths, func(p lessoncheck.PathCapability) bool {
 			return p.HookStage == lessoncheck.StagePostEdit
@@ -488,13 +544,13 @@ func TestLessonCheckPathsReportsTrustAndDisabledHooks(t *testing.T) {
 		root := t.TempDir()
 		installLessonHooks(t, root, CodexID, self.Path, hooks.LessonChecksCheck, "")
 
-		// No adapter sets a pending trust today (contract K10: reserved),
-		// so the test sets it on the inspection.
+		// No adapter sets a pending trust today, so the test sets it on the
+		// inspection.
 		insp := inspectionOf(t, root, CodexID)
 		i := slices.IndexFunc(insp.Capabilities, func(c CapabilityInspection) bool { return c.Capability == CapabilityEdits })
 		insp.Capabilities[i].Trust = TrustPending
 
-		paths, _ := LessonCheckPaths(insp, self)
+		paths := LessonCheckPaths(insp, self)
 		for _, p := range paths {
 			if p.Installed {
 				assert.Contains(t, p.Reasons, lessoncheck.CapUntrusted, pathKey(p))
@@ -510,7 +566,7 @@ func TestLessonCheckPathsReportsTrustAndDisabledHooks(t *testing.T) {
 		insp := inspectionOf(t, root, CodexID)
 		require.NotEmpty(t, insp.HookDocumentError)
 
-		paths, _ := LessonCheckPaths(insp, self)
+		paths := LessonCheckPaths(insp, self)
 		for _, p := range paths {
 			switch p.Stage {
 			case lessoncheck.StagePreWrite, lessoncheck.StagePostEdit:
@@ -524,20 +580,20 @@ func TestLessonCheckPathsReportsTrustAndDisabledHooks(t *testing.T) {
 	})
 }
 
-// TestLessonCheckPathsAttributions proves the K10 attributions, one per
-// item and context: unverified without a reviewed recording, never
-// verified; unsupported for the Codex child lane and for a payload
-// without a turn identity (prompt_id); context-reset equal to the
-// evidence of the resets capability, and unsupported where no verified
-// reset reaches the context (§5 row 108; AC-21, AC-24).
+// TestLessonCheckPathsAttributions proves the attributions, one per
+// item and context. No attribution is verified, because no reviewed
+// recording exists. The identity items are unsupported for the Codex
+// child lane. The turn items are unsupported for a payload without a
+// turn identity (prompt_id). context-reset copies the evidence of the
+// resets capability. It is unsupported where no verified reset reaches
+// the context.
 func TestLessonCheckPathsAttributions(t *testing.T) {
 	root := t.TempDir()
 
 	for _, clientID := range []string{ClaudeID, CodexID} {
 		insp := inspectionOf(t, root, clientID)
-		_, attributions := LessonCheckPaths(insp, BinaryIdentity{})
 
-		list := attributions[clientID]
+		list := attributionsOf(insp)
 		require.Len(t, list, len(lessoncheck.AttributionItems)*len(lessonContexts), clientID)
 
 		resets, _ := insp.Entry(CapabilityResets)
@@ -586,10 +642,10 @@ func TestLessonCheckPathsAttributions(t *testing.T) {
 		}
 		t.Cleanup(func() { delete(payloadIdentities, id) })
 
-		paths, attributions := LessonCheckPaths(Inspection{ClientID: id}, BinaryIdentity{})
-		assert.Empty(t, paths, "a client without lesson-check hooks has no path")
+		insp := Inspection{ClientID: id}
+		assert.Empty(t, LessonCheckPaths(insp, BinaryIdentity{}), "a client without lesson-check hooks has no path")
 
-		for _, a := range attributions[id] {
+		for _, a := range attributionsOf(insp) {
 			switch a.Item {
 			case lessoncheck.ItemTurnBoundary, lessoncheck.ItemModelBoundary, lessoncheck.ItemContextReset:
 				assert.Equal(t, lessoncheck.AttrUnsupported, a.State, "%s %s", a.Item, a.Context)
@@ -597,21 +653,135 @@ func TestLessonCheckPathsAttributions(t *testing.T) {
 				assert.Equal(t, lessoncheck.AttrUnverified, a.State, "%s %s", a.Item, a.Context)
 			}
 		}
+
+		// The report carries the attributions of a client without
+		// lesson-check hooks, because the delivery report reads them for
+		// the advisory hooks too.
+		report := LessonCapabilityOf([]Inspection{insp}, nil, nil, BinaryIdentity{})
+
+		c, ok := report.Client(id)
+		require.True(t, ok, id)
+		assert.Equal(t, attributionsOf(insp), c.Attributions)
 	})
 
 	t.Run("the report copies the attributions unchanged", func(t *testing.T) {
-		insps := Builtin().Inspect(root)
+		insps := inspectAll(t, root)
 		report := LessonCapability(insps, root, BinaryIdentity{})
 
 		for _, insp := range insps {
-			_, attributions := LessonCheckPaths(insp, BinaryIdentity{})
-			if len(attributions[insp.ClientID]) == 0 {
+			attributions := attributionsOf(insp)
+			if len(attributions) == 0 {
 				continue
 			}
 
 			c, ok := report.Client(insp.ClientID)
 			require.True(t, ok, insp.ClientID)
-			assert.Equal(t, attributions[insp.ClientID], c.Attributions)
+			assert.Equal(t, attributions, c.Attributions)
 		}
 	})
+}
+
+// TestInspectLessonHooksMatchesInspect proves the narrow reading on the
+// states where Inspect does work that the report does not read:
+// documents outside the hooks, and hook documents that cannot be read.
+// inspectAll proves the other states through the tests of the
+// lesson-check paths.
+func TestInspectLessonHooksMatchesInspect(t *testing.T) {
+	binary := fakeSeamark(t, t.TempDir(), "self")
+	hookDocuments := []string{approve.ClaudeSettings, codexHooksFile}
+
+	install := func(t *testing.T, root string) {
+		t.Helper()
+
+		installLessonHooks(t, root, ClaudeID, binary, hooks.LessonChecksEnforce, hooks.LessonExplorationOn)
+		installLessonHooks(t, root, CodexID, binary, hooks.LessonChecksCheck, "")
+		writeRel(t, root, ".seamark/lessons.yaml", lessonPatternYAML)
+	}
+
+	cases := []struct {
+		name string
+		// unreadable is true when no client can read its hook document.
+		unreadable bool
+		build      func(t *testing.T, root string)
+	}{
+		{name: "an empty workspace", build: func(*testing.T, string) {}},
+		{name: "registrations that cannot be read", build: func(t *testing.T, root string) {
+			install(t, root)
+			writeRel(t, root, approve.MCPConfig, "{not json")
+			writeRel(t, root, approve.CodexConfig, "BROKEN [[")
+		}},
+		{name: "a local settings file behind a link", build: func(t *testing.T, root string) {
+			install(t, root)
+
+			target := filepath.Join(t.TempDir(), "settings.local.json")
+			require.NoError(t, os.WriteFile(target, []byte("{}\n"), 0o644))
+			require.NoError(t, os.Symlink(target, filepath.Join(root, filepath.FromSlash(claudeLocalSettings))))
+		}},
+		{name: "a lessons.yaml that does not decode", build: func(t *testing.T, root string) {
+			install(t, root)
+			writeRel(t, root, ".seamark/lessons.yaml", "{not yaml")
+		}},
+		{name: "hook documents that do not parse", unreadable: true, build: func(t *testing.T, root string) {
+			for _, rel := range hookDocuments {
+				writeRel(t, root, rel, "{not json")
+			}
+		}},
+		{name: "directories at the hook documents", unreadable: true, build: func(t *testing.T, root string) {
+			for _, rel := range hookDocuments {
+				require.NoError(t, os.MkdirAll(filepath.Join(root, filepath.FromSlash(rel)), 0o755))
+			}
+		}},
+		{name: "links at the hook documents", unreadable: true, build: func(t *testing.T, root string) {
+			target := filepath.Join(t.TempDir(), "hooks.json")
+			require.NoError(t, os.WriteFile(target, []byte("{}\n"), 0o644))
+
+			for _, rel := range hookDocuments {
+				path := filepath.Join(root, filepath.FromSlash(rel))
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(t, os.Symlink(target, path))
+			}
+		}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			c.build(t, root)
+
+			assertNarrowReport(t, root, Builtin().Inspect(root))
+
+			for _, insp := range Builtin().InspectLessonHooks(root) {
+				assert.Equal(t, c.unreadable, insp.HookDocumentError != "", insp.ClientID)
+			}
+		})
+	}
+}
+
+// TestInspectLessonHooksWithoutNarrowReading proves the fallback. An
+// adapter without the narrow reading gives the report of Inspect, and a
+// client without an adapter gives an inspection with its ID alone. The
+// registry sets the client ID, as Inspect does.
+func TestInspectLessonHooksWithoutNarrowReading(t *testing.T) {
+	root := t.TempDir()
+	setup := fakeSetup{inspection: Inspection{
+		ClientID: "other-id", HookDocumentError: "hooks.json: unreadable",
+		Capabilities: []CapabilityInspection{
+			{Capability: CapabilityEdits, Trust: TrustPending},
+			{Capability: CapabilityResets, Verification: VerificationEvidence{Level: VerificationPending, Surface: "fake"}},
+		},
+		LessonHooks: &LessonHookInspection{ReportOnly: true},
+	}}
+
+	reg, err := NewRegistry(Client{ID: ClaudeID, Name: "Fake", Setup: setup}, Client{ID: "plain", Name: "Plain"})
+	require.NoError(t, err)
+
+	narrow := reg.InspectLessonHooks(root)
+
+	require.Len(t, narrow, 2)
+	assert.Equal(t, ClaudeID, narrow[0].ClientID)
+	assert.Equal(t, setup.inspection.HookDocumentError, narrow[0].HookDocumentError)
+	assert.Equal(t, Inspection{ClientID: "plain"}, narrow[1])
+
+	self := BinaryIdentity{Version: "v0.9.0"}
+	assert.Equal(t, LessonCapability(reg.Inspect(root), root, self), LessonCapability(narrow, root, self))
 }

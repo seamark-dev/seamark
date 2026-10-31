@@ -18,7 +18,7 @@ import (
 
 // lessonPatternYAML is a valid lessons.yaml with an enforce pin that has
 // a no-added-pattern/1 check. The Codex guard cannot project an update
-// with hunks in its scope (P0 ruling A8).
+// with hunks in its scope.
 const lessonPatternYAML = `lesson_checks_version: 1
 checks:
   no-todo:
@@ -100,20 +100,13 @@ func TestSetupLessonChecksSummaryUsesPreservedPaths(t *testing.T) {
 	require.NoError(t, err)
 	writeRel(t, root, approve.ClaudeSettings, string(data))
 
-	plan := mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: binary, Clients: []ClientSetup{{
+	out, _ := applyLessonSetupWithBinary(t, root, binary, ClientSetup{
 		ClientID: ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksEnforce,
-	}}})
-	var out bytes.Buffer
-	_, err = ApplySetup(plan, ApplyOptions{Observe: func(op OpResult) {
-		if op.Narrate != nil {
-			op.Narrate(&out, op.Status)
-		}
-	}})
-	require.NoError(t, err)
-	assert.Contains(t, out.String(), "pre-write Write inactive (tool-uncovered)")
-	assert.Contains(t, out.String(), "post-edit MultiEdit inactive (tool-uncovered)")
-	assert.Contains(t, out.String(), "PreToolUse Edit                "+binary+" "+hooks.LessonGuardMarker)
-	assert.NotContains(t, out.String(), "PreToolUse Edit|Write|MultiEdit "+binary+" "+hooks.LessonGuardMarker)
+	})
+	assert.Contains(t, out, "pre-write Write inactive (tool-uncovered)")
+	assert.Contains(t, out, "post-edit MultiEdit inactive (tool-uncovered)")
+	assert.Contains(t, out, "PreToolUse Edit                "+binary+" "+hooks.LessonGuardMarker)
+	assert.NotContains(t, out, "PreToolUse Edit|Write|MultiEdit "+binary+" "+hooks.LessonGuardMarker)
 	assert.Equal(t, document, parseRel(t, root, approve.ClaudeSettings), "setup preserves user matchers")
 
 	report := LessonCapability([]Inspection{inspectionOf(t, root, ClaudeID)}, root, BinaryIdentity{Path: binary})
@@ -123,7 +116,7 @@ func TestSetupLessonChecksSummaryUsesPreservedPaths(t *testing.T) {
 		if path.State == lessoncheck.PathActive {
 			continue
 		}
-		assert.Contains(t, out.String(), (lessonPath{stage: path.HookStage, tool: path.Tool,
+		assert.Contains(t, out, (lessonPath{stage: path.HookStage, tool: path.Tool,
 			state: path.State, reasons: path.Reasons}).String())
 	}
 }
@@ -334,9 +327,10 @@ func TestValidateClientLessonCheckOperations(t *testing.T) {
 	}
 }
 
-// A run without a lesson flag keeps the installed mode. A second handler
-// still blocks the plan. The message must not tell the user to let setup
-// manage a handler that setup already manages.
+// TestSetupLessonChecksCodexKeptModeRefusalNamesTheDuplicate proves
+// that a second handler blocks the plan of a run without a lesson flag,
+// which keeps the installed mode. The message must not tell the user to
+// let setup manage a handler that setup already manages.
 func TestSetupLessonChecksCodexKeptModeRefusalNamesTheDuplicate(t *testing.T) {
 	root := t.TempDir()
 	applyLessonSetup(t, root, ClientSetup{ClientID: CodexID, Hooks: true, LessonChecks: hooks.LessonChecksCheck})
@@ -386,8 +380,8 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 	}
 
 	t.Run("trust pending", func(t *testing.T) {
-		// No built-in adapter reads a trust record (contract K10:
-		// "reserved"), so the shared decision gets the state directly.
+		// No built-in adapter reads a trust record, so the shared decision
+		// gets the state directly.
 		err := enforceRefusal(CodexID, lessonSourceState{trust: TrustPending})
 		require.Error(t, err)
 		assert.Equal(t, "lesson checks: enforce for codex would stay inactive (untrusted); resolve it, then rerun", err.Error())
@@ -474,9 +468,8 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 
 	t.Run("an inspection that cannot tell installs", func(t *testing.T) {
 		// Seamark cannot read the Codex trust record, so the state is
-		// unknown: setup installs, and the line names the reason (P0
-		// ruling M4). The enforce pattern pin limits the apply_patch
-		// path too (contracts §5 row 40).
+		// unknown: setup installs, and the line names the reason. The
+		// enforce pattern pin limits the apply_patch path too.
 		root := t.TempDir()
 		binary := fakeSeamark(t, t.TempDir(), "self")
 		writeRel(t, root, ".seamark/lessons.yaml", lessonPatternYAML)
@@ -524,7 +517,7 @@ func TestSetupLessonChecksPreservesGateAndOtherHooks(t *testing.T) {
 			inspection := client.Setup.Inspect(root)
 			untouched := readRel(t, root, tc.document)
 
-			// A run without the flags installs nothing new (L170).
+			// A run without the flags installs nothing new.
 			out, _ := applyLessonSetup(t, root, ClientSetup{ClientID: tc.clientID, Hooks: true})
 			assert.Equal(t, untouched, readRel(t, root, tc.document))
 			assert.NotContains(t, out, "lesson checks")
@@ -547,7 +540,7 @@ func TestSetupLessonChecksPreservesGateAndOtherHooks(t *testing.T) {
 				assert.Equal(t, hooks.ModeEnforce, client.Setup.ManagedGateMode(root), "after %q: the gate mode stays", step.request)
 
 				// The lesson-check entries are invisible to the gate, lessons,
-				// and reset inspection (contract K10).
+				// and reset inspection.
 				now := client.Setup.Inspect(root)
 				assert.Equal(t, inspection.Capabilities, now.Capabilities, "after %q", step.request)
 				assert.Equal(t, inspection.Findings, now.Findings, "after %q", step.request)
@@ -646,7 +639,7 @@ func TestSetupLessonExplorationInstallsClaudeRead(t *testing.T) {
 	assert.Equal(t, []any{map[string]any{"matcher": "Read", "hooks": []any{map[string]any{
 		"type": "command", "command": binary + " " + hooks.LessonExploreMarker, "timeout": float64(10),
 	}}}}, hookMap["PostToolUse"], "one Read entry, no status message")
-	assert.NotContains(t, hookMap, "PostToolUseFailure", "a failed read stays uncovered (contracts §5 row 89)")
+	assert.NotContains(t, hookMap, "PostToolUseFailure", "a failed read stays uncovered")
 	assert.Equal(t, hooks.LessonChecksOff,
 		hooks.InstalledLessonChecks(parseRel(t, root, approve.ClaudeSettings), hooks.ClaudeLessonCheckSpecs(hooks.LessonChecksEnforce)),
 		"exploration installs no lesson-check hook")
@@ -664,7 +657,7 @@ func TestSetupLessonExplorationInstallsClaudeRead(t *testing.T) {
 	assert.Contains(t, out, "  updated .claude/settings.json (removed the exploration hook)\n")
 
 	// Codex has no structured Read path: the run does not fail, installs
-	// nothing for it, and names it (contracts §5 row 42).
+	// nothing for it, and names it.
 	root = t.TempDir()
 	applyLessonSetupWithBinary(t, root, binary, ClientSetup{ClientID: CodexID, Hooks: true})
 	codexBefore := readRel(t, root, codexHooksFile)

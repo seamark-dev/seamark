@@ -18,8 +18,8 @@ import (
 
 // This file holds the helpers that the checker tests share, and the
 // tests of the registry and of Evaluate itself. The tests build the
-// snapshots by hand, because the producers of milestone P1 (git) and
-// milestone P4 (projection, observation) are not under test here.
+// snapshots by hand, because the snapshot producers (git, projection,
+// and observation) have their own tests.
 
 // fileSide is a regular file side with the given content. The content
 // state comes from the text test, as a producer sets it.
@@ -189,7 +189,7 @@ func mixedSnapshot() *Snapshot {
 }
 
 func TestLessonCheckUnknownReasonPrecedence(t *testing.T) {
-	t.Run("the order is the K3 list", func(t *testing.T) {
+	t.Run("the precedence order stays fixed", func(t *testing.T) {
 		assert.Equal(t, []Reason{
 			"configuration-error", "unparseable-input", "incomplete-paths", "missing-baseline",
 			"unprojectable-edit", "content-unavailable", "unsupported-content", "resource-limit",
@@ -350,7 +350,7 @@ func TestLessonCheckResourceLimits(t *testing.T) {
 		assert.Equal(t, ReasonResourceLimit, res.Reason)
 		assert.Equal(t, LimitMaxDiffLines, res.Limit)
 		assert.Equal(t, []Evidence{{Path: "src/a.go", Change: ChangeModify, Reason: ReasonResourceLimit, limit: LimitMaxDiffLines}},
-			res.UnknownPaths, "the unknown path names its limit for Verification.Limits (fix F-D)")
+			res.UnknownPaths, "the unknown path names its limit for Verification.Limits")
 
 		res = onlyResult(t, pattern, bounded(long, func(l *Limits) { l.MaxDiffLines = 5 }))
 		assert.Equal(t, OutcomeViolation, res.Outcome, "a side of exactly the limit is compared")

@@ -3,17 +3,15 @@ package lessoncheck
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 )
 
-// This file holds DecideGuard, the pure decision of the pre-write guard
-// (contract K8, steps 1, 3, and 7), and the deny texts. The CLI handler
-// decodes the request, builds the snapshot, writes the reply, the
-// pending record, and the audit record. DecideGuard does no I/O, so a
-// decision depends only on its input.
+// This file holds DecideGuard, the pure decision of the pre-write guard,
+// and the deny texts. The CLI handler decodes the request, builds the
+// snapshot, writes the reply, the pending record, and the audit record.
+// DecideGuard does no I/O, so a decision depends only on its input.
 
 // GuardSchema is the format name of a guard decision.
 const GuardSchema = "lesson-guard/1"
@@ -42,7 +40,8 @@ const (
 
 // The closed list of requested replies (GuardDecision.Requested). An
 // allow requests nothing: the guard writes an empty reply and never
-// forces an allow (spec L166).
+// forces an allow, so the other permission rules of the client still
+// apply.
 const (
 	GuardRequestedDeny = "deny"
 	GuardRequestedNone = "none"
@@ -50,7 +49,7 @@ const (
 
 // GuardProtocolExit2 is the deny protocol: exit status 2 with the
 // reasons on stderr. A JSON permission decision replaces it only after
-// a native recording shows that a client ignores exit 2 (§6 A7).
+// a recording of a native client shows that the client ignores exit 2.
 const GuardProtocolExit2 = "exit-2-stderr"
 
 // The closed list of native blocking levels (GuardDecision.NativeBlocking).
@@ -61,8 +60,8 @@ const (
 	GuardNativeUnverified = "unverified"
 )
 
-// The output caps of the deny texts (contract K3, output caps). A cap
-// cuts the text and never changes the decision.
+// The output caps of the deny texts. A cap cuts the text and never
+// changes the decision.
 const (
 	// maxDenyReasons bounds the deny texts. One more text counts the rest.
 	maxDenyReasons = 5
@@ -94,38 +93,37 @@ type GuardInput struct {
 	// Context carries the guard budget of the run, and the handler gives
 	// the same context that bounded the projection. The evaluation stops
 	// when it ends, and every applicable enforce pin then gives
-	// unknown/resource-limit, which denies (contract K8, step 2). The
-	// zero value leaves the evaluation unbounded, for tests and callers
-	// without a budget.
+	// unknown/resource-limit, which denies. The zero value leaves the
+	// evaluation unbounded, for tests and callers without a budget.
 	Context context.Context
 }
 
 // beforeDecide runs at the start of DecideGuard when it is not nil.
 // Only tests set it: it is the one point where a test can make the
-// decision panic and check the recovery of step 7.
+// decision panic and check the panic recovery.
 var beforeDecide func()
 
-// DecideGuard decides one guard request (contract K8). It returns the
-// decision and, for a deny, the deny texts for stderr. The decision
-// holds codes, digests, and counts only, because the audit record
-// embeds it (contracts §1.6). The texts can hold a path and a redacted
-// excerpt, and they go to stderr only.
+// DecideGuard decides one guard request. It returns the decision and,
+// for a deny, the deny texts for stderr. The decision holds codes,
+// digests, and counts only, because the audit record embeds it. The
+// texts can hold a path and a redacted excerpt, and they go to stderr
+// only.
 //
 // The applicable pins are the enforce pins whose scope holds a path of
 // the operation. The budgets, mute rules, restatement, and lease state
-// of the advisory hook never apply (ruling M2). When the guard cannot
-// resolve a path of the operation, every enforce pin applies, because
-// the path can lie in any scope. Any violation or unknown result of an
-// applicable pin denies. A check pin never denies (spec L261).
+// of the advisory hook never apply, because they would hold back an
+// enforce pin. When the guard cannot resolve a path of the operation,
+// every enforce pin applies, because the path can lie in any scope. Any
+// violation or unknown result of an applicable pin denies. A check pin
+// never denies, because only the mode enforce blocks an edit.
 //
 // DecideGuard leaves ReplyWritten and NativeBlocking empty. The handler
 // sets them, because only the handler writes the reply and reads the
-// capability report. A panic gives a deny with cause internal-error
-// (step 7).
+// capability report. A panic gives a deny with cause internal-error.
 func DecideGuard(in GuardInput) (decision GuardDecision, reasons []string) {
 	defer func() {
 		if recover() != nil {
-			decision, reasons = denyInternal(in.Operation.Tool)
+			decision, reasons = DenyInternal(in.Operation.Tool)
 		}
 	}()
 
@@ -134,11 +132,11 @@ func DecideGuard(in GuardInput) (decision GuardDecision, reasons []string) {
 	}
 
 	if in.LoadErr != nil {
-		return denyConfiguration(nil, strings.TrimPrefix(in.LoadErr.Error(), configErrorPrefix))
+		return denyConfiguration(nil, configErrorText(in.LoadErr))
 	}
 
 	if in.Config == nil {
-		return denyInternal(in.Operation.Tool)
+		return DenyInternal(in.Operation.Tool)
 	}
 
 	if len(in.Config.Errors) > 0 {
@@ -151,7 +149,7 @@ func DecideGuard(in GuardInput) (decision GuardDecision, reasons []string) {
 	}
 
 	if in.ProjectErr != nil || in.Snapshot == nil {
-		return denyInternal(in.Operation.Tool)
+		return DenyInternal(in.Operation.Tool)
 	}
 
 	results := enforceResults(EvaluateWithin(in.Context, LimitGuardBudget, in.Config, in.Snapshot), applicable)
@@ -187,23 +185,18 @@ func DecideGuard(in GuardInput) (decision GuardDecision, reasons []string) {
 }
 
 // DenyUnparseable returns the deny of a covered request that does not
-// decode (contract K8, fail-closed cases). tool is the native tool name
-// from the request, or "" when the request names none. The decoder
-// error goes into the text redacted and sanitized, because it can quote
-// a part of the request.
+// decode. The guard fails closed, because an edit that it cannot read
+// can break any pin. tool is the native tool name from the request, or
+// "" when the request names none. The decoder error goes into the text
+// redacted and sanitized, because it can quote a part of the request.
 func DenyUnparseable(tool string, err error) (decision GuardDecision, texts []string) {
-	subject := "this request"
-	if tool != "" {
-		subject = "this " + render.Sanitize(tool) + " request"
-	}
-
 	detail := "the request does not decode"
 	if err != nil {
 		detail = redact.Secrets(err.Error())
 	}
 
 	decision = denyOnly(GuardCauseUnparseableInput, []Reason{ReasonUnparseableInput})
-	texts = []string{denyText("lesson check guard cannot read " + subject + ": " + detail)}
+	texts = []string{denyText("lesson check guard cannot read " + requestSubject(tool) + ": " + detail)}
 
 	return decision, texts
 }
@@ -213,8 +206,7 @@ func DenyUnparseable(tool string, err error) (decision GuardDecision, texts []st
 // operation. Every enforce pin applies when the operation holds a path
 // whose real location the guard or the projection cannot name.
 func applicablePins(cfg *Config, op Operation, snap *Snapshot) map[int]bool {
-	unresolved := !op.PathsComplete ||
-		(snap != nil && !snap.PathsComplete && incompletePaths(snap).reason == ReasonIncompletePaths)
+	unresolved := !op.PathsComplete || (snap != nil && unresolvedPaths(snap))
 
 	paths := operationPaths(op.Ops)
 	applicable := map[int]bool{}
@@ -244,7 +236,8 @@ func anyInScope(paths, scope []string) bool {
 }
 
 // enforceResults keeps the results of the enforce pins. A nil set keeps
-// every enforce pin. The check pins never decide the guard (spec L261).
+// every enforce pin. The check pins never decide the guard, because only
+// the mode enforce blocks an edit.
 func enforceResults(results []Result, applicable map[int]bool) []Result {
 	out := []Result{}
 
@@ -258,7 +251,7 @@ func enforceResults(results []Result, applicable map[int]bool) []Result {
 }
 
 // unknownReasons returns the reasons of the unknown results, once each,
-// in the reason precedence order of contract K3.
+// in the order of reasonPrecedence.
 func unknownReasons(results []Result) []Reason {
 	var out []Reason
 
@@ -299,6 +292,16 @@ func allowDecision(op Operation, snap *Snapshot, results []Result) GuardDecision
 	return decision
 }
 
+// AllowUncovered returns the allow of a tool outside the covered list.
+// The CLI handler calls it, because such a tool never reaches DecideGuard.
+// No projection exists, so the decision has no input digest and no pins.
+func AllowUncovered() GuardDecision {
+	decision := allowDecision(Operation{}, nil, []Result{})
+	decision.Cause = GuardCauseToolUncovered
+
+	return decision
+}
+
 // denyOnly returns a deny without a snapshot: the guard decided before
 // a projection existed, or without one.
 func denyOnly(cause string, reasons []Reason) GuardDecision {
@@ -314,10 +317,10 @@ func denyOnly(cause string, reasons []Reason) GuardDecision {
 }
 
 // denyConfiguration returns the deny of a check set that cannot be
-// established (step 1). results holds the configuration-error result
-// of each enforce pin of a tier-2 error, and nil for a tier-1 error.
-// No fallback to DefaultConfig exists, because a fallback would allow
-// what the broken file meant to forbid (spec L166).
+// established. results holds the configuration-error result of each
+// enforce pin when lessons.yaml decodes but is invalid. It is nil when
+// lessons.yaml does not decode. No fallback to DefaultConfig exists,
+// because a fallback would allow what the broken file meant to forbid.
 func denyConfiguration(results []Result, message string) (decision GuardDecision, texts []string) {
 	decision = denyOnly(GuardCauseConfigurationError, []Reason{ReasonConfigurationError})
 	if results != nil {
@@ -331,29 +334,34 @@ func denyConfiguration(results []Result, message string) (decision GuardDecision
 
 	// The cut falls inside the message, so the text keeps its tail.
 	room := maxDenyReasonBytes - len(head) - len(tail)
-	message = render.Sanitize(redact.Secrets(message))
-
-	if len(message) > room {
-		message = cutBytes(message, room-len(denyEllipsis)) + denyEllipsis
-	}
+	message = cutWithEllipsis(render.Sanitize(redact.Secrets(message)), room)
 
 	texts = []string{head + message + tail}
 
 	return decision, texts
 }
 
-// denyInternal returns the deny of a guard that cannot decide: a panic,
-// a projection error, or a missing configuration (step 7).
-func denyInternal(tool string) (decision GuardDecision, texts []string) {
-	subject := "this request"
-	if tool != "" {
-		subject = "this " + render.Sanitize(tool) + " request"
-	}
-
+// DenyInternal returns the deny of a guard that cannot decide: a panic,
+// a projection error, or a missing configuration. tool is the native
+// tool name from the request, or "" when the request names none. The CLI
+// handler calls it for a failure outside DecideGuard, so only this
+// function holds the text.
+func DenyInternal(tool string) (decision GuardDecision, texts []string) {
 	decision = denyOnly(GuardCauseInternalError, nil)
-	texts = []string{denyText("lesson check guard cannot decide " + subject + ": internal error")}
+	texts = []string{denyText("lesson check guard cannot decide " + requestSubject(tool) + ": internal error")}
 
 	return decision, texts
+}
+
+// requestSubject names the request in a deny text: "this <tool>
+// request", or "this request" when the request names no tool. The deny
+// texts share it, so they name the tool the same way.
+func requestSubject(tool string) string {
+	if tool == "" {
+		return "this request"
+	}
+
+	return "this " + render.Sanitize(tool) + " request"
 }
 
 // denyTexts returns the deny texts of the denying results, in pin file
@@ -386,10 +394,8 @@ func denyTexts(op Operation, snap *Snapshot, results []Result) []string {
 		}
 	}
 
-	if len(texts) > maxDenyReasons {
-		omitted += len(texts) - maxDenyReasons
-		texts = texts[:maxDenyReasons]
-	}
+	texts, more := boundEntries(texts, maxDenyReasons)
+	omitted += more
 
 	for i := range texts {
 		texts[i] = denyText(texts[i])
@@ -402,8 +408,8 @@ func denyTexts(op Operation, snap *Snapshot, results []Result) []string {
 	return texts
 }
 
-// checkHead names the check and the pin of a result, as each deny text
-// of contract K8 starts.
+// checkHead names the check and the pin of a result. Each deny text of
+// a result starts with it.
 func checkHead(r Result) string {
 	return fmt.Sprintf("lesson check %s (%s) of pin %s",
 		render.Sanitize(r.Check.ID), render.Sanitize(string(r.Check.Kind)), render.Sanitize(r.PinRef))
@@ -482,33 +488,20 @@ func projectionNote(snap *Snapshot, u Evidence) string {
 	return ""
 }
 
-// reasonText names an unknown reason and, for resource-limit, the limit.
-func reasonText(reason Reason, limit string) string {
-	if limit == "" {
-		return string(reason)
-	}
-
-	return string(reason) + " (" + limit + ")"
-}
-
-// evidencePath names the path of a finding, with the source of a move.
-func evidencePath(e Evidence) string {
-	if e.OldPath == "" {
-		return render.Sanitize(e.Path)
-	}
-
-	return render.Sanitize(e.OldPath) + " -> " + render.Sanitize(e.Path)
-}
-
 // denyText sanitizes one deny text and cuts it to maxDenyReasonBytes,
 // ellipsis included. The bound is in bytes, because stderr of a hook
 // is a byte stream that a client can cut.
 func denyText(text string) string {
-	text = render.Sanitize(text)
+	return cutWithEllipsis(render.Sanitize(text), maxDenyReasonBytes)
+}
 
-	if len(text) <= maxDenyReasonBytes {
-		return text
+// cutWithEllipsis returns s when it fits in maxBytes. Else it cuts s on a
+// rune boundary and adds denyEllipsis, and the result with the mark fits
+// in maxBytes. The deny texts share it, so each cut keeps the same bound.
+func cutWithEllipsis(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
 	}
 
-	return cutBytes(text, maxDenyReasonBytes-len(denyEllipsis)) + denyEllipsis
+	return cutBytes(s, maxBytes-len(denyEllipsis)) + denyEllipsis
 }

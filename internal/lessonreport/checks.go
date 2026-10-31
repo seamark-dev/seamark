@@ -11,10 +11,12 @@ type checkIndex struct {
 
 // readChecks makes one reverse pass. The set of later completions lets
 // each deny read its outcome without a scan of the rest of the stream.
-func readChecks(in Inputs) *checkIndex {
+// state is the read state of the stream. Build derives it once for the
+// source section and for this reading, so the two always agree.
+func readChecks(in Inputs, state string) *checkIndex {
 	c := &checkIndex{
 		reading: CheckReading{
-			State: checkAuditSource(in).State, Operations: map[string]int{},
+			State: state, Operations: map[string]int{},
 			Outcomes: map[string]int{}, UnknownByReason: map[string]int{},
 		},
 		pins: map[versionKey]PinCheckReading{},
@@ -37,7 +39,7 @@ func readChecks(in Inputs) *checkIndex {
 			continue
 		}
 
-		deny := r.Kind == lessoncheck.AuditGuard && r.Guard != nil && r.Guard.Decision == "deny"
+		deny := isGuardDeny(r)
 		seen := map[versionKey]bool{}
 
 		for _, p := range r.Pins {
@@ -48,8 +50,15 @@ func readChecks(in Inputs) *checkIndex {
 				c.reading.UnknownByReason[string(p.Reason)]++
 			}
 
+			// The pass owns the stored maps and counts in place. Only the
+			// accessor pin copies them, for callers outside the index.
 			key := versionKey{p.PinIdentity, p.PinVersion}
-			pin := c.pin(key)
+			pin := c.pins[key]
+
+			if pin.Outcomes == nil {
+				pin.Outcomes = map[string]int{}
+			}
+
 			pin.PinEvaluations++
 			pin.Outcomes[string(p.Outcome)]++
 
@@ -83,16 +92,23 @@ func (c *checkIndex) pin(key versionKey) PinCheckReading {
 	return p
 }
 
+// isGuardDeny reports whether a lesson-check record is a guard run that
+// requested a deny. The check reading and the denied-call set of the
+// index use this one test, so they agree on which records are denies.
+func isGuardDeny(r lessoncheck.AuditRecord) bool {
+	return r.Kind == lessoncheck.AuditGuard && r.Guard != nil && r.Guard.Decision == lessoncheck.GuardDeny
+}
+
 // add partitions each requested deny by the later execution evidence.
 // A verified path alone does not prove that its reply prevented a write.
 func (g *GuardAttempts) add(d *lessoncheck.GuardDecision, executed bool) {
-	if d.Decision == "allow" {
+	if d.Decision == lessoncheck.GuardAllow {
 		g.Allowed++
 
 		return
 	}
 
-	if d.Decision != "deny" {
+	if d.Decision != lessoncheck.GuardDeny {
 		return
 	}
 

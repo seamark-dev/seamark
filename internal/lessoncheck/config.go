@@ -1,13 +1,12 @@
 package lessoncheck
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
-	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -15,8 +14,8 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// Mode is the normalized mode of a pin (contract K1). The pin modes
-// check and enforce make a pin executable: the checkers evaluate it.
+// Mode is the normalized mode of a pin. The pin modes check and enforce
+// make a pin executable: the checkers evaluate it.
 type Mode string
 
 // The closed list of modes. An omitted mode is advisory.
@@ -26,8 +25,9 @@ const (
 	ModeEnforce  Mode = "enforce"
 )
 
-// Kind names a checker and its version (contract K3). A behavior change
-// of a checker is a new kind version, never a change of a known kind.
+// Kind names a checker and its version. A behavior change of a checker
+// is a new kind version, never a change of a known kind, so a stored kind
+// keeps one meaning.
 type Kind string
 
 // The closed list of checker kinds. Validate refuses every other kind.
@@ -37,7 +37,7 @@ const (
 )
 
 // knownKinds is the kind list of the check-kind-unknown message. The
-// order is the sorted order of the kinds, as contract K1 prints it.
+// order is the sorted order of the kinds, so the message text is stable.
 const knownKinds = string(KindForbidPathChange) + ", " + string(KindNoAddedPattern)
 
 // Check is one compiled check definition. Config.Checks holds only the
@@ -51,8 +51,8 @@ type Check struct {
 }
 
 // CheckRef names the check of a pin in every output format: the ID, the
-// kind, and the definition version (contract K3). The outputs keep it as
-// one object, so a reader never splits the three values.
+// kind, and the definition version. The outputs keep it as one object,
+// so a reader never splits the three values.
 type CheckRef struct {
 	ID      string `json:"id"`
 	Kind    Kind   `json:"kind"`
@@ -60,7 +60,7 @@ type CheckRef struct {
 }
 
 // ConfigReport is the configuration state that the verification result
-// and the capability report carry (contracts K5, K10).
+// and the capability report carry.
 type ConfigReport struct {
 	SHA256              string        `json:"sha256"`
 	LessonChecksVersion int           `json:"lesson_checks_version"`
@@ -73,7 +73,7 @@ type ConfigErrorCode string
 
 // The closed list of codes. Validate returns the tier-2 codes. Only the
 // reports use CodeDecodeError, for a file that does not read or decode
-// (tier 1).
+// (tier 1, reviews.ParseConfig).
 const (
 	CodeVersionUnsupported     ConfigErrorCode = "version-unsupported"
 	CodeVersionMissing         ConfigErrorCode = "version-missing"
@@ -97,9 +97,18 @@ const (
 // like a tier-1 error of reviews.ParseConfig.
 const configErrorPrefix = "lessons config: "
 
+// configErrorText returns the text of a configuration error without the
+// "lessons config: " prefix. ConfigError.Error adds the prefix again.
+// The guard deny text and the post-edit findings print the message after
+// their own lead. So the message has one form in every output, the same
+// form as ConfigError.Message.
+func configErrorText(err error) string {
+	return strings.TrimPrefix(err.Error(), configErrorPrefix)
+}
+
 // ConfigError is one semantic configuration error. Code is the stable
-// identifier. Error() is the exact message of contract K1 with the
-// prefix "lessons config: ".
+// identifier. Error() is the fixed message text with the prefix
+// "lessons config: ". The outputs print that text, so it does not change.
 type ConfigError struct {
 	Code    ConfigErrorCode `json:"code"`
 	Subject string          `json:"subject"` // "lesson_checks_version", "checks.<id>", "pin <n>", or "lessons.yaml" (decode-error)
@@ -124,7 +133,7 @@ type Config struct {
 	Pins   []Pin            // every pin entry, file order
 	Checks map[string]Check // compiled definitions; a definition that does not compile is absent
 	// Errors holds the tier-2 errors of Validate. Non-empty means
-	// invalid: Evaluate then runs no checker (contracts K3, K5).
+	// invalid: Evaluate then runs no checker.
 	Errors []ConfigError
 }
 
@@ -148,18 +157,20 @@ const (
 	subjectChecks  = "checks."
 )
 
-// checkIDPattern is the rule for a check ID (contracts K1, §5 row 3).
+// checkIDPattern is the rule for a check ID. An ID that passes it holds
+// no control character, so a message can print it raw.
 var checkIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
-// pinLabelRunes bounds the pin key text inside a pin message. Contract
-// K1 freezes the value, so it is not a Limits field.
+// pinLabelRunes bounds the pin key text inside a pin message. The value
+// is part of the fixed message text, so it is not a Limits field.
 const pinLabelRunes = 80
 
-// Validate is the strict semantic tier (tier 2 of contract K1). It
-// returns every error in this order: lesson_checks_version, then
-// checks.<id> sorted by ID, then pin <n> by entry, and Code (byte-wise)
-// inside one subject. A Go map holds no file order of check IDs, so the
-// ID sort keeps the output deterministic. nil means valid.
+// Validate is the strict semantic tier (tier 2). Tier 1 is the decode
+// of reviews.ParseConfig. Validate returns every error in this order:
+// lesson_checks_version, then checks.<id> sorted by ID, then pin <n> by
+// entry, and Code (byte-wise) inside one subject. A Go map holds no file
+// order of check IDs, so the ID sort keeps the output deterministic. nil
+// means valid.
 func Validate(cfg *reviews.Config) []ConfigError {
 	errs, _ := validate(cfg)
 
@@ -191,14 +202,7 @@ func validate(cfg *reviews.Config) (errs []ConfigError, checks map[string]Check)
 		})
 	}
 
-	ids := make([]string, 0, len(cfg.Checks))
-	for id := range cfg.Checks {
-		ids = append(ids, id)
-	}
-
-	sort.Strings(ids)
-
-	for _, id := range ids {
+	for _, id := range slices.Sorted(maps.Keys(cfg.Checks)) {
 		checkErrs, check := validateCheck(id, cfg.Checks[id])
 		if len(checkErrs) == 0 {
 			checks[id] = check
@@ -223,7 +227,7 @@ func usesLessonChecks(cfg *reviews.Config) bool {
 	}
 
 	for _, pin := range cfg.Pin {
-		if pin.Mode == string(ModeCheck) || pin.Mode == string(ModeEnforce) || pin.Check != "" {
+		if Mode(pin.Mode).Executable() || pin.Check != "" {
 			return true
 		}
 	}
@@ -253,14 +257,7 @@ func validateCheck(id string, def reviews.CheckDef) ([]ConfigError, Check) {
 		errs = append(errs, ConfigError{Code: code, Subject: subject, Message: subject + ": " + text})
 	}
 
-	unknown := make([]string, 0, len(def.Unknown))
-	for key := range def.Unknown {
-		unknown = append(unknown, key)
-	}
-
-	sort.Strings(unknown)
-
-	for _, key := range unknown {
+	for _, key := range slices.Sorted(maps.Keys(def.Unknown)) {
 		add(CodeCheckFieldUnknown, fmt.Sprintf("unknown field %q", key))
 	}
 
@@ -300,10 +297,9 @@ func validateCheck(id string, def reviews.CheckDef) ([]ConfigError, Check) {
 	return errs, check
 }
 
-// sortByCode puts the errors of one subject in byte-wise Code order
-// (contract K1, §5 row 118). The sort is stable, so repeated
-// check-field-unknown errors keep their key order and repeated
-// pin-region-invalid errors keep their scope order.
+// sortByCode puts the errors of one subject in byte-wise Code order. The
+// sort is stable, so repeated check-field-unknown errors keep their key
+// order and repeated pin-region-invalid errors keep their scope order.
 func sortByCode(errs []ConfigError) {
 	sort.SliceStable(errs, func(i, j int) bool { return errs[i].Code < errs[j].Code })
 }
@@ -320,30 +316,30 @@ func validatePin(cfg *reviews.Config, entry int, pin reviews.PinRule) []ConfigEr
 		errs = append(errs, ConfigError{Code: code, Subject: subject, Message: label + ": " + text})
 	}
 
-	mode, known := normalizeMode(pin.Mode)
+	mode, known := NormalizeMode(pin.Mode)
 	if !known {
 		add(CodePinModeUnknown, fmt.Sprintf("unknown mode %q; use advisory, check, or enforce", pin.Mode))
 	}
 
-	executable := isExecutable(mode)
+	executable := mode.Executable()
 
 	if executable && pin.Check == "" {
 		add(CodePinCheckRequired, fmt.Sprintf("mode %s requires check: <check-id>", mode))
 	}
 
-	// The reference must resolve in every mode (§5 row 1). The test reads
-	// the raw map: a definition that fails its own rules is still
-	// defined, and its own error names the problem.
+	// The reference must resolve in every mode. The test reads the raw
+	// map: a definition that fails its own rules is still defined, and
+	// its own error names the problem.
 	if pin.Check != "" {
 		if _, ok := cfg.Checks[pin.Check]; !ok {
 			add(CodePinCheckMissing, fmt.Sprintf("check %q is not defined under checks", pin.Check))
 		}
 	}
 
-	// Only an executable pin needs canonical regions (§6 A3). The checker
-	// scope is AllRegions(), and the scope must equal the PinKey regions.
+	// Only an executable pin needs canonical regions. The checker scope
+	// is AllRegions(), and the scope must equal the PinKey regions.
 	if executable {
-		for _, region := range scopeOf(pin) {
+		for _, region := range SortedScope(pin.AllRegions()) {
 			if reason := regionProblem(region); reason != "" {
 				add(CodePinRegionInvalid, fmt.Sprintf("region %q cannot scope a check: %s", region, reason))
 			}
@@ -368,17 +364,18 @@ func regionProblem(region string) string {
 	case strings.TrimSpace(region) == in.Value:
 		return "surrounding spaces"
 	default:
-		// Contract K1 gives no text for another removal, such as a
-		// leading "./". The notes of CheckPinRegion name each removal.
+		// No fixed text exists for another removal, such as a leading
+		// "./". So the notes of CheckPinRegion name each removal.
 		return render.Sanitize(strings.Join(in.Notes, ", "))
 	}
 }
 
-// normalizeMode maps a raw mode to its Mode. It reports false for an
-// unknown value and then returns ModeAdvisory, because an invalid file
-// still lists every pin and an unknown mode must never arm a check
-// (contract K1, Load).
-func normalizeMode(raw string) (Mode, bool) {
+// NormalizeMode maps a raw mode to its Mode. It reports false for an
+// unknown value and then returns ModeAdvisory. It uses ModeAdvisory because
+// an invalid file still lists every pin, and an unknown mode must never make
+// a pin executable. The delivery report and the preparation call it, so each
+// prints the mode that the checkers use.
+func NormalizeMode(raw string) (Mode, bool) {
 	switch Mode(raw) {
 	case "", ModeAdvisory:
 		return ModeAdvisory, true
@@ -389,15 +386,19 @@ func normalizeMode(raw string) (Mode, bool) {
 	}
 }
 
-// isExecutable reports whether the checkers evaluate a pin of this mode.
-func isExecutable(mode Mode) bool {
-	return mode == ModeCheck || mode == ModeEnforce
+// Executable reports whether the checkers evaluate a pin of this mode.
+// Every package that asks this question calls it, so the rule has one
+// form.
+func (m Mode) Executable() bool {
+	return m == ModeCheck || m == ModeEnforce
 }
 
-// scopeOf returns the checker scope of a pin: AllRegions(), sorted. The
-// slice is never nil, so an empty scope encodes as [] (repository-wide).
-func scopeOf(pin reviews.PinRule) []string {
-	scope := append([]string{}, pin.AllRegions()...)
+// SortedScope returns a sorted copy of a region list. A pin scope is
+// SortedScope(pin.AllRegions()). The slice is never nil, so an empty
+// scope encodes as [] (repository-wide). The checkers, the preparation,
+// and the delivery report share it, so each shows one region order.
+func SortedScope(regions []string) []string {
+	scope := append([]string{}, regions...)
 	sort.Strings(scope)
 
 	return scope
@@ -407,25 +408,31 @@ func scopeOf(pin reviews.PinRule) []string {
 // reviews.ParseConfig, and validates it.
 //
 // Only an absent file means "no checks": it gives a Config without pins
-// and SHA256 "". Every other read error, such as a permission error, is
-// returned, because an unreadable file is not an empty one. A read or
-// decode error (tier 1) returns err, which wraps reviews.ErrLessonsConfig,
-// and no Config.
+// and SHA256 "". Load returns every other read error, such as a
+// permission error, because an unreadable file is not an empty one. A
+// read or decode error (tier 1) returns err, which wraps
+// reviews.ErrLessonsConfig, and no Config.
 //
 // Tier-2 errors return the Config anyway, with Errors equal to the
-// returned slice, because verification and the capability report list
-// every pin of an invalid file. Every pin entry is in Pins, and a pin
-// with an unknown mode gets ModeAdvisory.
+// returned slice. Verification and the capability report need it,
+// because they list every pin of an invalid file. Every pin entry is in
+// Pins, and a pin with an unknown mode gets ModeAdvisory.
 func Load(root string) (*Config, []ConfigError, error) {
-	data, err := os.ReadFile(filepath.Join(root, ".seamark", "lessons.yaml"))
-	if errors.Is(err, os.ErrNotExist) {
+	return parseRead(os.ReadFile(configPath(root)))
+}
+
+// parseRead applies the rules of Load to one file read: its bytes and
+// its read error. Load and the configuration of Verify both call it, so
+// they treat an absent file and a read error the same way.
+func parseRead(data []byte, readErr error) (*Config, []ConfigError, error) {
+	if errors.Is(readErr, os.ErrNotExist) {
 		cfg, errs := newConfig(reviews.DefaultConfig(), "")
 
 		return cfg, errs, nil
 	}
 
-	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", reviews.ErrLessonsConfig, err)
+	if readErr != nil {
+		return nil, nil, fmt.Errorf("%w: %w", reviews.ErrLessonsConfig, readErr)
 	}
 
 	return Parse(data)
@@ -439,33 +446,36 @@ func Parse(data []byte) (*Config, []ConfigError, error) {
 		return nil, nil, err
 	}
 
-	sum := sha256.Sum256(data)
-	cfg, errs := newConfig(raw, hex.EncodeToString(sum[:]))
+	cfg, errs := newConfig(raw, hexSHA256(data))
 
 	return cfg, errs, nil
 }
 
 // newConfig validates a decoded config and derives the pin views. The
 // identity, the pin-ref, and the version come from reviews, so one
-// derivation of each exists (contract K2).
+// derivation of each exists.
 func newConfig(raw *reviews.Config, digest string) (*Config, []ConfigError) {
 	errs, checks := validate(raw)
 
 	pins := make([]Pin, 0, len(raw.Pin))
 
+	// The hooks load the config on each edit, so the references come from
+	// one pass. One ShortPinRef call per pin is quadratic in the pin count.
+	refs := raw.ShortPinRefs()
+
 	for i, rule := range raw.Pin {
 		key := reviews.NewPinKey(rule.Rule, rule.Region, rule.Regions)
-		mode, _ := normalizeMode(rule.Mode)
+		mode, _ := NormalizeMode(rule.Mode)
 
 		pins = append(pins, Pin{
 			Entry:    i + 1,
 			Rule:     rule,
 			Key:      key,
 			Identity: reviews.PinIdentityDigest(key),
-			Ref:      raw.ShortPinRef(key),
+			Ref:      refs[key],
 			Version:  raw.PinVersion(rule),
 			Mode:     mode,
-			Scope:    scopeOf(rule),
+			Scope:    SortedScope(rule.AllRegions()),
 			CheckID:  rule.Check,
 		})
 	}

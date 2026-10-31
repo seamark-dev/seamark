@@ -9,26 +9,37 @@ import (
 )
 
 // applyPatchOps returns the file operations of an apply_patch text, in
-// patch order, for the lesson-check guard (contract K8). It reads the
-// text by the rules of applyPatchPaths and through the same helpers
-// (patchBody, patchHeader, patchBodyLine). So the paths of the
-// operations, each path followed by its move target, equal the result
-// of applyPatchPaths, and the errors are of the same kind
-// (TestApplyPatchOpsKeepThePathOracle).
+// patch order, for the lesson-check guard. The advisory edit hook reads
+// the paths of the same operations (applyPatchPaths).
 //
-// applyPatchPaths stays a separate function. The advisory edit hook
-// calls it, and that hook must keep its result byte for byte (§6 A7).
+// The advisory edit hook is fail-open. Its replies must stay the same,
+// byte for byte, although the guard now shares this decoder. So a change
+// here must keep the paths and the error class of every patch. TestCodexEditsAgreeWithTheCodexParser
+// checks those paths against the native parser.
+//
+// The result is complete or it is an error. A missing envelope or a
+// patch without a hunk gives ErrMalformedEvent. A line that the known
+// rules do not cover gives ErrUnsupportedGrammar.
+//
+// The function follows the Codex parser for every rule that decides
+// which line is a header and what its path is. It matches a header
+// after the trim that the parser applies, so "*** Update File: a.go "
+// names a.go. A wrong path here means advice for a file that Codex does
+// not touch, and no advice for the file that it does. The function
+// checks the change lines less strictly than Codex does. Codex never
+// applies a patch that it rejects, so advice for such a patch costs
+// nothing.
 //
 // The operations:
 //   - An add section gives OpPatchAdd. Its content is the "+" lines
-//     without the "+", joined with "\n" (contract K8). A section without
-//     lines gives an empty content, not a nil one.
+//     without the "+", joined with "\n". A section without lines gives
+//     an empty content, not a nil one.
 //   - A delete section gives OpPatchDelete.
 //   - An update section with a move and no other line gives
 //     OpPatchMove: the native tool moves the file and keeps its content.
 //   - Every other update section gives OpPatchUpdate. Any line below
 //     the header, a move line excepted, sets Hunks, because the content
-//     of a hunk has no verified projection yet (§6 A8, plan step P4.12).
+//     of a hunk has no verified projection yet.
 //
 // The function never runs the patch and never reads a file.
 func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
@@ -56,8 +67,9 @@ func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 	}
 
 	for _, raw := range lines {
-		// The trim rules are the rules of applyPatchPaths: both ends
-		// outside an update section, the end only inside one.
+		// Codex trims both ends of a line outside an update section.
+		// Inside one it trims the end only: a leading space marks a
+		// context line, so an indented header there is file content.
 		line := strings.TrimSpace(raw)
 		if hunk == patchUpdateFile {
 			line = strings.TrimRightFunc(raw, unicode.IsSpace)
@@ -67,6 +79,7 @@ func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 
 		switch {
 		case isHeader && kind == patchMoveTo:
+			// Codex reads a move only directly under its update header.
 			if hunk != patchUpdateFile || !movable {
 				return nil, fmt.Errorf("%w: %q outside an update header", ErrUnsupportedGrammar, patchMoveTo)
 			}
@@ -87,10 +100,12 @@ func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 			ops = append(ops, patchSection(kind, name))
 			hunk, movable = kind, kind == patchUpdateFile
 		case strings.HasPrefix(line, patchEnvironment):
-			// The environment root is not known, so no path of the patch
-			// can be resolved (applyPatchPaths has the same rule).
+			// The line names an environment that is not the primary one.
+			// No native capture shows that the event cwd belongs to that
+			// environment, so no path of the patch can be resolved.
 			return nil, fmt.Errorf("%w: the patch names an environment", ErrUnsupportedGrammar)
 		case strings.HasPrefix(line, patchHeaderPrefix):
+			// An unknown header can name a file.
 			return nil, fmt.Errorf("%w: unknown header line", ErrUnsupportedGrammar)
 		case !patchBodyLine(hunk, raw):
 			return nil, fmt.Errorf("%w: unexpected line in the patch body", ErrUnsupportedGrammar)
@@ -111,6 +126,19 @@ func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 	}
 
 	return ops, nil
+}
+
+// patchOpPaths returns the paths of the operations in patch order: each
+// path, then its move target. patchHeader never gives an empty name, so
+// an empty MoveTo means that the section has no move.
+func patchOpPaths(ops []lessoncheck.FileOp) []string {
+	var paths []string
+
+	for _, op := range ops {
+		paths = append(paths, op.Paths()...)
+	}
+
+	return paths
 }
 
 // patchSection returns the operation that a section header opens.

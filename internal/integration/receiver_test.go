@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 )
 
 func TestReceivingContextOfMatchesTheDecoders(t *testing.T) {
@@ -120,4 +122,26 @@ func TestReceivingContextOfMatchesTheDecoders(t *testing.T) {
 	for _, lane := range []string{"claude/root", "claude/child", "codex/root", "codex/child"} {
 		assert.Positive(t, lanes[lane], lane)
 	}
+}
+
+func TestResetReachesFollowsTheReceiverRule(t *testing.T) {
+	// A path context and a lane share their words, so the timing evidence
+	// can ask the lane rule with a path context.
+	require.Equal(t, LaneRoot, string(lessoncheck.ContextRoot))
+	require.Equal(t, LaneChild, string(lessoncheck.ContextChild))
+
+	for _, client := range []string{ClaudeID, CodexID} {
+		for _, context := range []lessoncheck.PathContext{lessoncheck.ContextRoot, lessoncheck.ContextChild} {
+			agent := ""
+			if context == lessoncheck.ContextChild {
+				agent = "a-1"
+			}
+
+			receiver := ReceivingContextOf(client, "s-1", agent)
+			require.NotNil(t, receiver)
+			assert.Equal(t, receiver.Resettable, resetReaches(client, context), "%s %s", client, context)
+		}
+	}
+
+	assert.False(t, resetReaches("third", lessoncheck.ContextRoot), "a client without a rule has no resettable lane")
 }

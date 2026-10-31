@@ -19,10 +19,10 @@ import (
 // write, so the lines describe exactly what was composed.
 type claudeNarration struct {
 	binary string
-	// hooks is true when the hooks were requested, and specs lists the
-	// hooks setup manages in this run. removedEnforce is true when the
-	// merge removes --enforce from an owned gate command.
-	hooks          bool
+	// hooksChanged is true when the merge of the managed hooks changes
+	// the file. specs lists the hooks that setup manages in this run, and
+	// it is empty when the run requested no hooks. removedEnforce is true
+	// when the merge removes --enforce from an owned gate command.
 	hooksChanged   bool
 	specs          []hooks.Spec
 	removedEnforce bool
@@ -43,17 +43,8 @@ func (n *claudeNarration) changed() bool {
 func (n *claudeNarration) narrate(w io.Writer, status OpStatus) {
 	preview := status == OpPlanned
 
-	if n.hooks {
-		// The words of the hooks part. A plan without a lesson-check
-		// change prints the line that init has always printed.
-		hooksPart := "gate + lessons + context reset hooks"
-		if n.lessons.changed() {
-			hooksPart = n.lessons.detail()
-
-			if n.hooksChanged {
-				hooksPart = "gate + lessons + context reset hooks; " + hooksPart
-			}
-		}
+	if len(n.specs) > 0 {
+		hooksPart := withLessonDetail(hooksDetail(n.specs), n.hooksChanged, n.lessons)
 
 		switch {
 		case !n.changed():
@@ -64,26 +55,11 @@ func (n *claudeNarration) narrate(w io.Writer, status OpStatus) {
 			fmt.Fprintf(w, "  %s %s (permissions; seamark hooks already wired)\n", verb("updated", "would update", preview), approve.ClaudeSettings)
 		}
 
-		// The exact hook commands: what runs on which tool must never
-		// require opening settings.json to find out.
-		for _, spec := range n.specs {
-			where := spec.Event
-			if spec.Matcher != "" {
-				where += " " + spec.Matcher
-			}
+		narrateHookSpecs(w, n.binary, n.specs)
+		n.lessons.narrateCommands(w)
 
-			fmt.Fprintf(w, "          %-30s %s\n", where, spec.Command(n.binary))
-		}
-
-		n.lessons.narrateCommands(w, n.binary)
-
-		// The note states only what changed, the hook flag. Whether
-		// anything still blocks is the effective-mode line's job: a kept
-		// enforce policy blocks whatever the flag says.
 		if n.removedEnforce {
-			fmt.Fprintf(w, "  note    %s --enforce from the gate hook: the hook follows .seamark/policy.yaml\n"+
-				"          instead — re-run with --gate-mode enforce to restore the baked-in flag\n",
-				verb("removed", "would remove", preview))
+			narrateRemovedEnforce(w, "the gate hook", preview)
 		}
 
 		n.lessons.narrateLine(w)
@@ -96,8 +72,8 @@ func (n *claudeNarration) narrate(w io.Writer, status OpStatus) {
 
 // narrateGrants lists every allow rule the run added: what a repository
 // pre-approves must never require opening settings.json to find out.
-// Explicit deny or ask entries are named as kept, like the Codex line
-// does, so the user learns why a tool still prompts.
+// It names explicit deny or ask entries as kept, like the Codex line,
+// so the user learns why a tool still prompts.
 func (n *claudeNarration) narrateGrants(w io.Writer, preview bool) {
 	kept := approve.KeptSuffix(n.grants.Conflicts)
 
@@ -116,6 +92,47 @@ func (n *claudeNarration) narrateGrants(w io.Writer, preview bool) {
 			fmt.Fprintf(w, "          %s\n", rule)
 		}
 	}
+}
+
+// withLessonDetail joins the hooks text of a settings file with the
+// lesson-check detail. A plan without a lesson-check change keeps the
+// line that init has always printed. Claude Code and Codex share this
+// rule, so their lines stay in the same form.
+func withLessonDetail(hooksPart string, hooksChanged bool, lessons lessonChange) string {
+	if !lessons.changed() {
+		return hooksPart
+	}
+
+	if hooksChanged {
+		return hooksPart + "; " + lessons.detail()
+	}
+
+	return lessons.detail()
+}
+
+// narrateHookSpecs prints the exact command of each managed hook, with
+// its event and matcher. What runs on which tool must never require
+// opening the settings file to find out.
+func narrateHookSpecs(w io.Writer, binary string, specs []hooks.Spec) {
+	for _, spec := range specs {
+		where := spec.Event
+		if spec.Matcher != "" {
+			where += " " + spec.Matcher
+		}
+
+		fmt.Fprintf(w, "          %-30s %s\n", where, spec.Command(binary))
+	}
+}
+
+// narrateRemovedEnforce prints the note when the merge removes --enforce
+// from the gate hook that gateHook names. The note states only what
+// changed, the hook flag. Whether anything still blocks is the job of
+// the effective-mode line, because a kept enforce policy blocks whatever
+// the flag says.
+func narrateRemovedEnforce(w io.Writer, gateHook string, preview bool) {
+	fmt.Fprintf(w, "  note    %s --enforce from %s: the hook follows .seamark/policy.yaml\n"+
+		"          instead — re-run with --gate-mode enforce to restore the baked-in flag\n",
+		verb("removed", "would remove", preview), gateHook)
 }
 
 // verb picks the preview form of a narration verb.

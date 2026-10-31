@@ -16,7 +16,7 @@ import (
 const modulePath = "github.com/seamark-dev/seamark"
 
 // lessonCheckInternalImports are the internal packages that lessoncheck
-// may import directly (§6 A1, P0 review §5).
+// may import directly. The package doc comment states the same rule.
 var lessonCheckInternalImports = []string{
 	modulePath + "/internal/history",
 	modulePath + "/internal/privatedir",
@@ -26,8 +26,8 @@ var lessonCheckInternalImports = []string{
 }
 
 // lessonCheckModuleImports are the modules outside the standard library
-// that lessoncheck may import directly (contract K2): the line diff of
-// no-added-pattern/1 and the YAML decoder.
+// that lessoncheck may import directly: the line diff of no-added-pattern/1
+// and the YAML decoder.
 var lessonCheckModuleImports = []string{
 	"github.com/pmezard/go-difflib/difflib",
 	"gopkg.in/yaml.v3",
@@ -42,11 +42,11 @@ var lessonCheckBannedDeps = []string{
 	"agent", "distill", "gate", "integration", "report", "store",
 }
 
-// TestLessonCheckImportSet keeps the import rule of the package (AC-1
-// structural part). No linter rule checks it, so this test does. The
-// direct imports come from every file of the package, also the files of
-// other platforms. The closure comes from go list, because a banned
-// package can arrive through an allowed one.
+// TestLessonCheckImportSet keeps the import rule of the package. No
+// linter rule checks it, so this test does. The direct imports come from
+// every file of the package, also the files of other platforms. The
+// closure comes from go list, because a banned package can arrive
+// through an allowed one.
 func TestLessonCheckImportSet(t *testing.T) {
 	ctx := build.Default
 	ctx.UseAllFiles = true

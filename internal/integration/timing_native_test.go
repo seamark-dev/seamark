@@ -1,6 +1,6 @@
 package integration
 
-// Offline replay of the gate-3 timing recordings (plan step P3.14).
+// Offline replay of the native timing recordings.
 // `make capture-native-record CLIENT=<client> CAPTURE_NATIVE_SCENARIO=timing`
 // records them with the installed client and the operator's own login.
 // A reviewer copies the reviewed sanitized copy into
@@ -14,7 +14,7 @@ package integration
 // check that the audit records of the recording name the turn and the
 // lane. They do not decide whether a hook reply reached the model. That
 // answer is what the recording measures, so the reviewer reads it from
-// hook-context.jsonl and the transcripts (gate-3 checklist).
+// hook-context.jsonl and the transcripts.
 //
 // The tests run only when SEAMARK_NATIVE_CLIENT names the client (make
 // capture-native-check). Without a reviewed recording they skip as
@@ -47,8 +47,7 @@ const (
 )
 
 // The case names of the timing scenario. The script writes one name per
-// paid run, so the names are the contract between the script and these
-// tests.
+// paid run, so the script and these tests must use the same names.
 const (
 	timingPriorResult           = "prior-result"
 	timingNewModelStep          = "new-model-step"
@@ -63,7 +62,7 @@ const (
 	timingSubagentPatch         = "subagent-patch"
 )
 
-// timingRecording is one reviewed gate-3 timing recording.
+// timingRecording is one reviewed native timing recording.
 type timingRecording struct {
 	dir      string
 	manifest nativeManifest
@@ -82,8 +81,8 @@ type timingEvent struct {
 // tool returns the tool name of the payload, or "".
 func (e timingEvent) tool() string { return nativeString(e.raw, "tool_name") }
 
-// timingAudit is the part of one audit record (contract L3) that the
-// replay reads. The tags are the frozen field names of the log.
+// timingAudit is the part of one audit record that the replay reads.
+// The tags are the stable field names of the audit log.
 type timingAudit struct {
 	Surface      string `json:"surface"`
 	Delivery     string `json:"delivery"`
@@ -112,7 +111,7 @@ func loadTimingRecording(t *testing.T, client string, cases ...string) timingRec
 
 	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if errors.Is(err, fs.ErrNotExist) {
-		t.Skipf("pending: no reviewed gate-3 timing recording in %s; record one with "+
+		t.Skipf("pending: no reviewed native timing recording in %s; record one with "+
 			"make capture-native-record CLIENT=%s CAPTURE_NATIVE_SCENARIO=timing, review the sanitized copy, "+
 			"and copy it there", dir, client)
 	}
@@ -139,6 +138,19 @@ func loadTimingRecording(t *testing.T, client string, cases ...string) timingRec
 
 	require.ElementsMatch(t, cases, slices.Collect(maps.Keys(r.runs)), "the recording holds every case of the scenario")
 
+	r.readHookEvents(t)
+
+	t.Logf("native timing recording of %s %s: %d cases", client, r.manifest.ClientVersion, len(r.runs))
+
+	return r
+}
+
+// readHookEvents reads the hook payloads of the manifest into events,
+// per paid run in recorded order. The timing and the guard loaders share
+// it, so both replays number the payloads of a run alike.
+func (r *timingRecording) readHookEvents(t *testing.T) {
+	t.Helper()
+
 	for _, h := range r.manifest.Hooks {
 		// Run 0 holds payloads from before the first paid run, for
 		// example of an interactive trust review. No case owns them.
@@ -146,7 +158,7 @@ func loadTimingRecording(t *testing.T, client string, cases ...string) timingRec
 			continue
 		}
 
-		payload, err := os.ReadFile(filepath.Join(dir, h.File))
+		payload, err := os.ReadFile(filepath.Join(r.dir, h.File))
 		require.NoError(t, err)
 
 		var raw map[string]any
@@ -155,10 +167,6 @@ func loadTimingRecording(t *testing.T, client string, cases ...string) timingRec
 		seq := len(r.events[h.Run])
 		r.events[h.Run] = append(r.events[h.Run], timingEvent{hook: h, seq: seq, payload: payload, raw: raw})
 	}
-
-	t.Logf("gate-3 timing recording of %s %s: %d cases", client, r.manifest.ClientVersion, len(r.runs))
-
-	return r
 }
 
 // timingLines returns the non-empty lines of a JSONL file.
@@ -177,6 +185,44 @@ func timingLines(t *testing.T, file string) [][]byte {
 	}
 
 	return lines
+}
+
+// TestTimingRecordingReadsHookEvents checks the payload reader that the
+// timing and the guard replays share, on a synthetic recording. The
+// payload file of run 0 does not exist, so a read of it fails the test.
+func TestTimingRecordingReadsHookEvents(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "hooks"), 0o755))
+
+	payloads := map[string]string{
+		"hooks/002-UserPromptSubmit.json": `{"session_id":"s1"}`,
+		"hooks/003-PreToolUse.json":       `{"session_id":"s1","tool_name":"Write"}`,
+		"hooks/004-PreToolUse.json":       `{"session_id":"s2","tool_name":"Edit"}`,
+	}
+
+	for name, payload := range payloads {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(payload), 0o600))
+	}
+
+	r := timingRecording{dir: dir, events: map[int][]timingEvent{}}
+	r.manifest.Hooks = []nativeHook{
+		{File: "hooks/001-SessionStart.json", Run: 0, Event: "SessionStart"},
+		{File: "hooks/002-UserPromptSubmit.json", Run: 1, Event: "UserPromptSubmit"},
+		{File: "hooks/003-PreToolUse.json", Run: 1, Event: "PreToolUse"},
+		{File: "hooks/004-PreToolUse.json", Run: 2, Event: "PreToolUse"},
+	}
+
+	r.readHookEvents(t)
+
+	require.Len(t, r.events, 2, "run 0 has no case, so the reader skips it")
+	require.Len(t, r.events[1], 2)
+	require.Len(t, r.events[2], 1)
+
+	assert.Equal(t, []int{0, 1}, []int{r.events[1][0].seq, r.events[1][1].seq}, "a run numbers its payloads from 0")
+	assert.Equal(t, 0, r.events[2][0].seq, "each run starts its own numbering")
+	assert.Equal(t, "Write", r.events[1][1].tool())
+	assert.Equal(t, payloads["hooks/003-PreToolUse.json"], string(r.events[1][1].payload))
+	assert.Equal(t, r.manifest.Hooks[3], r.events[2][0].hook)
 }
 
 // sequence returns the payloads of one case that match the steps in
@@ -273,9 +319,9 @@ func (r timingRecording) transcript(t *testing.T, hint string) string {
 	return filepath.Join(r.dir, filepath.FromSlash(rel))
 }
 
-// audit reads the v2 audit records of the recording (contract L3). The
-// hook, exploration, and preparation surfaces write v2 records. A record
-// of another version holds none of the identity fields that the replay
+// audit reads the v2 audit records of the recording. The hook,
+// exploration, and preparation surfaces write v2 records. A record of
+// another version holds none of the identity fields that the replay
 // reads, so the reader leaves it out.
 func (r timingRecording) audit(t *testing.T) []timingAudit {
 	t.Helper()
@@ -299,7 +345,7 @@ func (r timingRecording) audit(t *testing.T) []timingAudit {
 // assertPreparationsHaveNoReceiver checks the preparation records of the
 // audit: at least one exists, and none names a receiver. A preparation
 // command returns its text to whoever ran it, so its record can never
-// name the receiving context (contract L1, P0 review ruling N2).
+// name the receiving context.
 func assertPreparationsHaveNoReceiver(t *testing.T, records []timingAudit) {
 	t.Helper()
 
@@ -413,7 +459,8 @@ func assertClaudeRoot(t *testing.T, name string, meta EventMeta) {
 }
 
 // assertCodexLane checks the lane and turn identity of a Codex event.
-// No Codex context is resettable (contract L3, Codex row).
+// No Codex context is resettable, because no native run verifies an
+// automatic compaction or a nested subagent (see ReceivingContextOf).
 func assertCodexLane(t *testing.T, name, lane string, meta EventMeta) {
 	t.Helper()
 
@@ -475,8 +522,8 @@ func TestCaptureNativeClaudeTimingRecording(t *testing.T) {
 		assertClaudeRoot(t, timingSameCall, event.EventMeta)
 		r.claudeCall(t, write, event.EventMeta)
 
-		// The own hook is the only delivery path of the case: no read
-		// came before the write in the new session.
+		// The hook of the write is the only delivery path of the case,
+		// because no read came before the write in the new session.
 		for _, e := range r.before(timingSameCall, write) {
 			assert.NotEqual(t, claudeReadTool, e.tool(), "%s: no read before the write", e.hook.File)
 		}
@@ -494,7 +541,7 @@ func TestCaptureNativeClaudeTimingRecording(t *testing.T) {
 		assert.Equal(t, first.Turn, second.Turn, "one prompt: both writes share the turn")
 
 		// One response holds both calls. So the hook of the first write
-		// ran after the model had constructed the second one (AC-24).
+		// ran after the model had constructed the second one.
 		assert.Equal(t, r.claudeCall(t, steps[1], first.EventMeta), r.claudeCall(t, steps[2], second.EventMeta),
 			"one response constructed both writes; if not, the model did not batch them, so record the case again")
 
@@ -505,7 +552,7 @@ func TestCaptureNativeClaudeTimingRecording(t *testing.T) {
 
 		// The shell writes the file, so no edit hook sees it.
 		for _, e := range r.events[r.runs[timingBatchAndProgram]] {
-			if e.hook.Event == claudePreToolUse && slices.Contains([]string{"Edit", "Write", "MultiEdit"}, e.tool()) {
+			if e.hook.Event == claudeEventPreToolUse && slices.Contains([]string{"Edit", "Write", "MultiEdit"}, e.tool()) {
 				assert.NotContains(t, r.rels(claudeTimingEdit(t, e)), "timing/program.txt", e.hook.File)
 			}
 		}
@@ -634,7 +681,7 @@ func TestCaptureNativeCodexTimingRecording(t *testing.T) {
 		event := codexTimingEdit(t, patch)
 
 		// One call names both files, so one hook reply covers both edits
-		// after the model constructed them together (AC-24).
+		// after the model constructed them together.
 		assert.ElementsMatch(t, []string{"timing/multi-a.txt", "timing/multi-b.txt"}, r.rels(event),
 			"one patch adds both files; if not, record the case again")
 		assertCodexLane(t, timingMultiFilePatch, LaneRoot, event.EventMeta)
@@ -668,7 +715,7 @@ func TestCaptureNativeCodexTimingRecording(t *testing.T) {
 
 			assert.NotEmpty(t, a.SessionSHA, "a hook record names its session")
 			assert.NotEmpty(t, a.MatchSHA, "a hook record names its call")
-			assert.NotEmpty(t, a.ContextSHA, "a hook record names its lane (§5 row 96)")
+			assert.NotEmpty(t, a.ContextSHA, "a hook record names its lane")
 			assert.NotEmpty(t, a.TurnSHA, "a hook record names its turn")
 			assert.Contains(t, []string{LaneRoot, LaneChild}, a.Lane)
 

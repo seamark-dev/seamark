@@ -6,9 +6,9 @@ import (
 )
 
 // codexShellTool is the name of the Codex shell tool in a PreToolUse
-// event and in the matcher of the gate hook (hooks reference, consulted
-// 2026-09-26; a native run of codex-cli 0.154.0 on 2026-09-21 reported a
-// shell command under this name).
+// event and in the matcher of the gate hook. The Codex hooks reference
+// gives this name (consulted 2026-09-26). A native run of codex-cli
+// 0.154.0 on 2026-09-21 reported a shell command under this name.
 const codexShellTool = "Bash"
 
 // codexCommands translates the Codex PreToolUse Bash event for the
@@ -19,13 +19,14 @@ type codexCommands struct {
 }
 
 // DecodeCommand reads the shell text of one Bash event. An event of
-// another tool gives ErrNotApplicable: Codex also fires PreToolUse for
+// another tool gives ErrNotApplicable. Codex also fires PreToolUse for
 // apply_patch, for MCP tools, and for other function tools, and the
 // gate evaluates shell commands only. A patch in particular is an edit
 // and is never read as a command. The installed matcher selects Bash,
-// so such an event reaches the gate only through a matcher the user
-// widened; the caller then blocks under enforcement and names the tool,
-// because a gate that skips what it cannot classify is a bypass.
+// so such an event reaches the gate only through a matcher that the
+// user widened. The caller then blocks under enforcement and names the
+// tool. A gate that skips an event that it cannot classify lets that
+// event run unchecked.
 //
 // A Bash event without a string command is malformed. The decoder
 // reads no receiving context: the gate needs none.

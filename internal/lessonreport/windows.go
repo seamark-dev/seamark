@@ -63,9 +63,9 @@ func (w *windowBuilder) of(key versionKey) *windowResult {
 	}
 
 	for _, o := range w.openings(key.version) {
-		session := w.session(o, key)
-		out.sessions = append(out.sessions, session)
-		out.observation.add(session, session.Timing)
+		s := w.session(o, key)
+		out.sessions = append(out.sessions, s)
+		out.observation.add(s)
 	}
 
 	w.results[key] = out
@@ -74,8 +74,8 @@ func (w *windowBuilder) of(key versionKey) *windowResult {
 }
 
 // add counts one session window in the partition and in its timing row.
-func (o *Observation) add(s SessionWindow, timing Timing) {
-	p := o.ByTiming[timing]
+func (o *Observation) add(s SessionWindow) {
+	p := o.ByTiming[s.Timing]
 
 	switch s.Partition {
 	case PartitionLinked:
@@ -93,7 +93,7 @@ func (o *Observation) add(s SessionWindow, timing Timing) {
 		}
 	}
 
-	o.ByTiming[timing] = p
+	o.ByTiming[s.Timing] = p
 }
 
 // opening is the first injection of a pin version in a delivered session.
@@ -113,8 +113,7 @@ func (w *windowBuilder) openings(version string) []opening {
 
 	for _, i := range w.idx.byVersion[version] {
 		f := w.idx.lines[i].Firing
-		if f.SessionSHA == "" || (f.Surface != "" && f.Surface != surfaceExplore) ||
-			!injects(f, version) || w.idx.isDeniedInjection(f) || seen[f.SessionSHA] {
+		if seen[f.SessionSHA] || !w.idx.opensSession(f, version) {
 			continue
 		}
 

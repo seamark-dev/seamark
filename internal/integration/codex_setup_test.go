@@ -128,7 +128,7 @@ func TestCodexInspection(t *testing.T) {
 					"%s: the native check is defined and has not run", entry.Capability)
 			default:
 				assert.Equal(t, VerificationVerified, entry.Verification.Level,
-					"%s: the compatibility record holds a native run", entry.Capability)
+					"%s: the native compatibility evidence holds a run", entry.Capability)
 			}
 
 			if entry.Capability == CapabilitySkills {
