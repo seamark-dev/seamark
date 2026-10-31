@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -469,6 +470,7 @@ func TestLessonCheckPendingSweep(t *testing.T) {
 		var wg sync.WaitGroup
 
 		counts := make([]int, 8)
+		errs := make([]error, len(counts))
 
 		for i := range counts {
 			wg.Add(1)
@@ -476,7 +478,7 @@ func TestLessonCheckPendingSweep(t *testing.T) {
 			go func() {
 				defer wg.Done()
 
-				counts[i], _ = Sweep(root, CallerHook, lim)
+				counts[i], errs[i] = Sweep(root, CallerHook, lim)
 			}()
 		}
 
@@ -487,6 +489,7 @@ func TestLessonCheckPendingSweep(t *testing.T) {
 			total += n
 		}
 
+		require.NoError(t, errors.Join(errs...))
 		assert.Equal(t, 1, total)
 		assert.Len(t, readAudit(t, root), 1)
 	})

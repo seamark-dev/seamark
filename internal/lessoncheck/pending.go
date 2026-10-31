@@ -535,7 +535,10 @@ func discardPending(root, path string, p *Pending, caller Caller, cause string) 
 		return 0, err
 	}
 
-	if err := os.Remove(claimed); err != nil {
+	// The rename keeps the old modification time, so a concurrent sweep
+	// can remove the claimed file as a stale temporary file. This call
+	// still owns the discard, so it still writes the audit record.
+	if err := removeIfPresent(claimed); err != nil {
 		return 1, err
 	}
 
