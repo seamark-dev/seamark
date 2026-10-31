@@ -121,7 +121,9 @@ type Setup interface {
 type Decisions interface {
 	// PreviewDecision describes a proposal decision. It writes nothing.
 	PreviewDecision(action proposals.Action, ids []int64) (*proposals.Preview, error)
-	// CommitDecision revalidates and applies a reviewed decision.
+	// CommitDecision revalidates and applies a reviewed decision. An
+	// apply refuses a foreign root as a maintenance commit does, and the
+	// preview names that refusal in RootBlock.
 	CommitDecision(p *proposals.Preview) (proposals.Result, error)
 }
 
@@ -557,7 +559,14 @@ func (e *engine) PreviewDecision(action proposals.Action, ids []int64) (*proposa
 	case proposals.ActionReconcile:
 		return proposals.PreviewReconcile(st, probe.Root, ids)
 	default:
-		return proposals.PreviewApply(st, probe.Root, ids)
+		pv, err := proposals.PreviewApply(st, probe.Root, ids)
+		if err != nil {
+			return nil, err
+		}
+
+		pv.RootBlock = e.ownRoot(probe)
+
+		return pv, nil
 	}
 }
 
@@ -570,6 +579,14 @@ func (e *engine) CommitDecision(p *proposals.Preview) (proposals.Result, error) 
 	probe := workspace.Probe(e.ws)
 	if probe.State != workspace.IndexReady && probe.State != workspace.IndexNotIndexed {
 		return proposals.Result{Action: p.Action}, fmt.Errorf("%w (%s)", ErrNoLedger, probe.State)
+	}
+
+	// An apply writes the pin file under the recorded root and the ledger
+	// in this database. A dismissal and a record write only the ledger.
+	if p.Action == proposals.ActionApply {
+		if err := e.ownRoot(probe); err != nil {
+			return proposals.Result{Action: p.Action}, err
+		}
 	}
 
 	// A decision is a short write; the store closes right after it, so

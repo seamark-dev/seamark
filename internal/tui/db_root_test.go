@@ -24,6 +24,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/store/storetest"
 	"github.com/seamark-dev/seamark/internal/tui/services"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -624,4 +625,109 @@ func TestLinkedDefaultPathRoutesToItsOwner(t *testing.T) {
 	h.press("b")
 	assert.Equal(t, dbRootRefusal(origin), h.m.toast.text)
 	assert.Equal(t, origin, dbRootRecorded(t, store.DefaultPath(origin)))
+}
+
+// dbRootNewRow adds a pending proposal without a pin to the database at
+// path and returns its ID.
+func dbRootNewRow(t *testing.T, path string) int64 {
+	t.Helper()
+
+	st, err := store.Open(path)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	row := domain.Proposal{
+		Signature: "sig-n", Rule: "new-rule", Region: "api", Note: "New note here.",
+		Members: []int64{3}, Status: domain.ProposalProposed,
+	}
+	require.NoError(t, storetest.InsertProposal(st, &row))
+
+	return row.ID
+}
+
+// dbRootStatus reads the status of a proposal at path.
+func dbRootStatus(t *testing.T, path string, id int64) string {
+	t.Helper()
+
+	st, err := store.OpenReadOnly(path)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	for _, status := range []string{domain.ProposalProposed, domain.ProposalApplied} {
+		rows, err := st.Proposals(status)
+		require.NoError(t, err)
+
+		if slices.ContainsFunc(rows, func(r domain.Proposal) bool { return r.ID == id }) {
+			return status
+		}
+	}
+
+	return ""
+}
+
+// dbRootApplyPreview moves to the row in Proposals and opens its preview.
+func dbRootApplyPreview(t *testing.T, h *harness, id int64) *propView {
+	t.Helper()
+
+	h.press("p")
+	h.send(focusProposalMsg{id: id})
+
+	p := hookLessons(h).props
+
+	h.press("a")
+	require.NotNil(t, p.dec)
+	require.NotNil(t, p.dec.preview, "%v", p.dec.err)
+
+	return p
+}
+
+// TestApplyInACopyStopsAtThePreview walks the keys of the defect. y wrote
+// the pin to the file of the origin, and the preview warned about nothing.
+func TestApplyInACopyStopsAtThePreview(t *testing.T) {
+	origin := dbRootRepo(t, "origin")
+	id := dbRootNewRow(t, store.DefaultPath(origin))
+	copied := dbRootCopy(t, origin)
+
+	before, err := os.ReadFile(filepath.Join(origin, pinfile.File))
+	require.NoError(t, err)
+
+	h, _ := dbRootConsole(t, copied, "")
+
+	h.press("p")
+	assert.Contains(t, dbRootFlat(h.view()), "The index records another repository")
+	assert.Contains(t, dbRootFlat(h.view()), "Apply is off")
+
+	h.send(focusProposalMsg{id: id})
+
+	detail := dbRootFlat(propDetailText(h))
+	assert.Contains(t, detail, "Apply is off: the index records another repository")
+	assert.NotContains(t, detail, "apply writes pins")
+
+	p := dbRootApplyPreview(t, h, id)
+	assert.False(t, p.confirmable(), "y is off")
+
+	frame := dbRootFlat(h.view())
+	assert.Contains(t, frame, "so y is off")
+	assert.Contains(t, frame, "Run seamark index in this checkout")
+	assert.NotContains(t, frame, "add 1 pin")
+
+	h.press("y")
+
+	after, err := os.ReadFile(filepath.Join(origin, pinfile.File))
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "the pin file of the origin stays")
+	assert.Equal(t, domain.ProposalProposed, dbRootStatus(t, store.DefaultPath(copied), id))
+}
+
+// TestApplyRefusalReadsAsThePreview covers a root that turns foreign
+// after the preview, so y runs and the engine refuses it.
+func TestApplyRefusalReadsAsThePreview(t *testing.T) {
+	assert.Equal(t, "The index records another repository root, so nothing was written. Build the index of this "+
+		"workspace in Overview, then preview again.", propRefusal(services.ErrForeignRoot, ui.NewTheme(false)))
+
+	refused := &services.ForeignRootError{Root: "/work/origin", Workspace: "/work/repo", OtherDB: true}
+	assert.Equal(t, "The index records another repository root, so nothing was written. Open the console in "+
+		"/work/origin.", propRefusal(fmt.Errorf("%w; route", refused), ui.NewTheme(false)))
 }

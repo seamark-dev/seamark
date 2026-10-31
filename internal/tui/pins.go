@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -270,6 +272,10 @@ func pinForeignRoute(st *state) string {
 	return pinRouteIndex
 }
 
+// pinForeignBuild is the sentence of a preview when a build ends the
+// state. It also names the shell command.
+const pinForeignBuild = "Run seamark index in this checkout, or build the index from Overview (press 1, then b)."
+
 // pinForeignSentence is pinForeignRoute for a preview, which also names
 // the shell command when a build is the route.
 func pinForeignSentence(st *state) string {
@@ -277,7 +283,21 @@ func pinForeignSentence(st *state) string {
 		return ovSentenceEnd(pinOpenRoot(root))
 	}
 
-	return "Run seamark index in this checkout, or build the index from Overview (press 1, then b)."
+	return pinForeignBuild
+}
+
+// foreignRefusal is the refusal of a commit that another recorded root
+// stops. The service marks an error whose build refuses too, so the words
+// need no read of the disk. noun names what the user confirmed.
+func foreignRefusal(err error, noun string) string {
+	const lead = "The index records another repository root, so nothing was written. "
+
+	var foreign *services.ForeignRootError
+	if errors.As(err, &foreign) && foreign.OtherDB {
+		return lead + ovSentenceEnd(pinOpenRoot(foreign.Root))
+	}
+
+	return lead + "Build the index of this workspace in Overview, then " + noun + " again."
 }
 
 // editBlock returns why the file editor cannot change pin, or "" when it

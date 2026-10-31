@@ -10,9 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/maintain"
+	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 	"github.com/seamark-dev/seamark/internal/tui/services/servicestest"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -500,4 +503,168 @@ func TestForeignRootErrorTellsTheSettingsItsRoute(t *testing.T) {
 	ws, err = workspace.Resolve(rootCopy(t, origin, "copy"), "")
 	require.NoError(t, err)
 	assert.False(t, read(t, ws).OtherDB, "a build ends the state of a copied checkout")
+}
+
+// rootPending adds one pending proposal to the database at path.
+func rootPending(t *testing.T, path, rule, region, note string) domain.Proposal {
+	t.Helper()
+
+	st, err := store.Open(path)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	p := domain.Proposal{
+		Signature: "sig-" + rule, Rule: rule, Region: region, Note: note, Members: []int64{41},
+		Status: domain.ProposalProposed,
+	}
+	require.NoError(t, storetest.InsertProposal(st, &p))
+
+	return p
+}
+
+// rootStatus reads the status of proposal id in the database at path.
+func rootStatus(t *testing.T, path string, id int64) string {
+	t.Helper()
+
+	st, err := store.OpenReadOnly(path)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	for _, status := range []string{domain.ProposalProposed, domain.ProposalApplied, domain.ProposalDismissed} {
+		rows, err := st.Proposals(status)
+		require.NoError(t, err)
+
+		for _, r := range rows {
+			if r.ID == id {
+				return status
+			}
+		}
+	}
+
+	return ""
+}
+
+// rootFile reads the pin file of root.
+func rootFile(t *testing.T, root string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(root, pinfile.File))
+	require.NoError(t, err)
+
+	return string(data)
+}
+
+// TestApplyRefusesTheTwoRepositoryWrite covers a proposal apply in a
+// copied checkout. The pin would land in the file of the origin and the
+// row would turn applied in the ledger of the copy.
+func TestApplyRefusesTheTwoRepositoryWrite(t *testing.T) {
+	for name, db := range map[string]func(t *testing.T, root string) string{
+		"the default database": func(*testing.T, string) string { return "" },
+		"a path through a link": func(t *testing.T, root string) string {
+			return store.DefaultPath(rootLink(t, root))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			origin, _ := maintWorkspace(t, true)
+			row := rootPending(t, origin.DBPath, "new-rule", "api", "A new rule.")
+			root := rootCopy(t, origin, "copy")
+			before := rootFile(t, origin.Root)
+
+			ws, err := workspace.Resolve(root, db(t, root))
+			require.NoError(t, err)
+
+			e := engNew(ws, Deps{})
+
+			pv, err := e.PreviewDecision(proposals.ActionApply, []int64{row.ID})
+			require.NoError(t, err)
+			require.True(t, pv.Write)
+			require.ErrorIs(t, pv.RootBlock, ErrForeignRoot, "the preview names the refusal of the commit")
+
+			res, err := e.CommitDecision(pv)
+			require.ErrorIs(t, err, ErrForeignRoot)
+			assert.False(t, res.FileWritten)
+			assert.Equal(t, before, rootFile(t, origin.Root), "the pin file of the origin stays")
+			assert.Equal(t, domain.ProposalProposed, rootStatus(t, store.DefaultPath(root), row.ID))
+		})
+	}
+}
+
+// TestApplyWorksAfterTheBuildOfACopy holds the route that the refusal
+// names: after the build the pin lands in the file of the copy.
+func TestApplyWorksAfterTheBuildOfACopy(t *testing.T) {
+	origin, _ := maintWorkspace(t, true)
+	row := rootPending(t, origin.DBPath, "new-rule", "api", "A new rule.")
+	root := rootCopy(t, origin, "copy")
+	before := rootFile(t, origin.Root)
+
+	ws, err := workspace.Resolve(root, "")
+	require.NoError(t, err)
+
+	e := engNew(ws, Deps{})
+	require.NoError(t, rootBuild(e, false))
+
+	pv, err := e.PreviewDecision(proposals.ActionApply, []int64{row.ID})
+	require.NoError(t, err)
+	require.NoError(t, pv.RootBlock)
+
+	res, err := e.CommitDecision(pv)
+	require.NoError(t, err)
+	assert.True(t, res.FileWritten)
+	assert.Contains(t, rootFile(t, root), "new-rule")
+	assert.Equal(t, before, rootFile(t, origin.Root))
+}
+
+// TestLedgerDecisionsWorkInACopy holds the actions that write only the
+// ledger. They change one repository, so the refusal must not reach them.
+func TestLedgerDecisionsWorkInACopy(t *testing.T) {
+	origin, _ := maintWorkspace(t, true)
+	dropped := rootPending(t, origin.DBPath, "dropped-rule", "api", "A dropped rule.")
+	pinned := rootPending(t, origin.DBPath, "keep-docs-current", "", "Keep the docs current.")
+
+	root := rootCopy(t, origin, "copy")
+	before := rootFile(t, origin.Root)
+
+	ws, err := workspace.Resolve(root, "")
+	require.NoError(t, err)
+
+	e := engNew(ws, Deps{})
+
+	pv, err := e.PreviewDecision(proposals.ActionDismiss, []int64{dropped.ID})
+	require.NoError(t, err)
+
+	_, err = e.CommitDecision(pv)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ProposalDismissed, rootStatus(t, store.DefaultPath(root), dropped.ID))
+
+	pv, err = e.PreviewDecision(proposals.ActionReconcile, []int64{pinned.ID})
+	require.NoError(t, err)
+
+	_, err = e.CommitDecision(pv)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ProposalApplied, rootStatus(t, store.DefaultPath(root), pinned.ID))
+
+	assert.Equal(t, before, rootFile(t, origin.Root))
+}
+
+// TestApplyKeepsTheExceptionOfAnotherDatabase holds the case without a
+// second repository: the pin and the ledger both belong to the origin.
+func TestApplyKeepsTheExceptionOfAnotherDatabase(t *testing.T) {
+	origin, _ := maintWorkspace(t, true)
+	row := rootPending(t, origin.DBPath, "new-rule", "api", "A new rule.")
+
+	ws, err := workspace.Resolve(rootDir(t), origin.DBPath)
+	require.NoError(t, err)
+
+	e := engNew(ws, Deps{})
+
+	pv, err := e.PreviewDecision(proposals.ActionApply, []int64{row.ID})
+	require.NoError(t, err)
+	require.NoError(t, pv.RootBlock)
+
+	_, err = e.CommitDecision(pv)
+	require.NoError(t, err)
+	assert.Contains(t, rootFile(t, origin.Root), "new-rule")
+	assert.Equal(t, domain.ProposalApplied, rootStatus(t, origin.DBPath, row.ID))
 }

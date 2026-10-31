@@ -1166,8 +1166,7 @@ func maintRefusal(t *ui.Theme, err error, noun, fix string) string {
 	case errors.Is(err, services.ErrBusy):
 		return "Another operation is running, so this one did not start."
 	case errors.Is(err, services.ErrForeignRoot):
-		return "The index records another repository root, so nothing was written. Build the index of this " +
-			"workspace in Overview, then " + noun + " again."
+		return foreignRefusal(err, noun)
 	case errors.Is(err, services.ErrNoLedger), errors.Is(err, maintain.ErrNoLedger):
 		return "The index database is not readable, so nothing was changed."
 	default:

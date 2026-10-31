@@ -166,6 +166,11 @@ func (p *propView) view(w, h int) string {
 			". The list shows the last good snapshot.", w-1, t.Glyphs.Ellipsis)))
 	}
 
+	if root := pinsForeignRoot(p.st); root != "" {
+		head = append(head, " "+t.Attention.Render(ui.Truncate(t.Glyphs.Warn+" The index records another repository: "+
+			ui.OneLine(root)+". Apply is off.", w-1, t.Glyphs.Ellipsis)))
+	}
+
 	boxH := max(4, h-len(head)-2)
 
 	return strings.Join(head, "\n") + "\n\n" + p.body(w, boxH)
@@ -823,7 +828,10 @@ func (p *propView) decisionLines(pr domain.Proposal, l *proposals.Ledger, w int)
 	out = append(out, propLines(t.Body, apply+" and d previews a dismissal of the selection, or of this "+
 		"proposal when nothing is selected. Nothing changes before you confirm with y.", w)...)
 
-	switch {
+	switch root := pinsForeignRoot(p.st); {
+	case root != "":
+		out = append(out, propNote(t, ui.ToneAttention, "Apply is off: the index records another repository, "+
+			ui.OneLine(root)+". "+pinForeignSentence(p.st), w)...)
 	case l == nil:
 	case l.WriteErr != nil:
 		out = append(out, propNote(t, ui.ToneAttention, "The write gate could not be read: "+ui.ErrText(l.WriteErr), w)...)
