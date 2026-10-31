@@ -117,8 +117,13 @@ func liesInside(path, dir string) bool {
 // owns the file that its default path names. A root without a default
 // database can own any file that records it. A root with another default
 // database does not own this file, because a copy or a renamed database
-// keeps the recorded root of its origin.
+// keeps the recorded root of its origin. A root that no longer exists owns
+// nothing, because a write under it would recreate the old path.
 func RootOwnsDatabase(root, dbPath string) bool {
+	if _, err := os.Stat(root); errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+
 	if _, err := os.Stat(DefaultPath(root)); errors.Is(err, fs.ErrNotExist) {
 		return true
 	}

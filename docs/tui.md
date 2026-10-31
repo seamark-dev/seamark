@@ -638,7 +638,7 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
   use it. With `--db` of another repository, retarget, prune, apply, and
   `config.yaml` saves stay on only when the recorded root owns the
   database: its default path names that file, also through a link, or it
-  has no default database. Otherwise they refuse and name the console of
+  exists and has no default database. Otherwise they refuse and name the console of
   the recorded root, with this `--db` when the file is a custom database
   outside another checkout. The pin writes, the lesson settings saves, and the
   sample refuse in the same way. The pin form then treats the link of

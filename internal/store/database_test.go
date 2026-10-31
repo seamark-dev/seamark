@@ -168,7 +168,10 @@ func TestRootOwnsDatabaseFollowsTheDefaultPathOfTheRoot(t *testing.T) {
 
 	t.Run("no default database", func(t *testing.T) {
 		assert.True(t, RootOwnsDatabase(t.TempDir(), other), "a custom database of a repository")
-		assert.True(t, RootOwnsDatabase(filepath.Join(t.TempDir(), "gone"), other), "a root that moved away")
+	})
+
+	t.Run("a root that no longer exists owns nothing", func(t *testing.T) {
+		assert.False(t, RootOwnsDatabase(filepath.Join(t.TempDir(), "gone"), other))
 	})
 }
 

@@ -776,6 +776,32 @@ func TestOwnRootKeepsACustomDatabaseOfARootWithoutADefault(t *testing.T) {
 	assert.True(t, res.FileWritten)
 }
 
+// TestOwnRootRefusesARootThatNoLongerExists covers a database whose
+// recorded root is gone. A write under that root would recreate the old
+// path, and the ledger would then name a pin that nobody reads.
+func TestOwnRootRefusesARootThatNoLongerExists(t *testing.T) {
+	origin, _ := maintWorkspace(t, true)
+	row := rootPending(t, origin.DBPath, "new-rule", "api", "A new rule.")
+
+	db := filepath.Join(rootDir(t), "custom.db")
+	require.NoError(t, os.Rename(origin.DBPath, db))
+	require.NoError(t, os.RemoveAll(origin.Root))
+
+	ws, err := workspace.Resolve(rootDir(t), db)
+	require.NoError(t, err)
+
+	e := engNew(ws, Deps{})
+	require.Error(t, e.Pins().Database.WriteBlock)
+
+	pv, err := e.PreviewDecision(proposals.ActionApply, []int64{row.ID})
+	require.NoError(t, err)
+	require.Error(t, pv.RootBlock)
+
+	_, err = e.CommitDecision(pv)
+	require.ErrorIs(t, err, ErrForeignRoot)
+	assert.NoDirExists(t, origin.Root, "the refusal recreates no directory")
+}
+
 // TestRecordedRootInAnotherCaseIsNotForeign covers a case-insensitive
 // volume: the index can record a spelling that the user typed. It names
 // this directory, so no rule may read it as another repository.
