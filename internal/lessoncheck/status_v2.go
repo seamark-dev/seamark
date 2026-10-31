@@ -6,9 +6,9 @@ import (
 )
 
 // This file reads the output of `git status --porcelain=v2 -z` and maps
-// each record to a change candidate (contract K4, status v2 record
-// mapping). The mapping reads no file. The producer in worktree.go then
-// looks at the worktree and decides the final kind and flags.
+// each record to a change candidate. The mapping reads no file. The
+// producer in worktree.go then looks at the worktree and decides the
+// final kind and flags.
 
 // The git modes that the mapping compares.
 const (
@@ -38,12 +38,7 @@ type statusRecord struct {
 // and the path is the rest. A record that does not parse is an error,
 // because a partial parse must never read as a complete path set.
 func parseStatusV2(out []byte) ([]statusRecord, error) {
-	tokens := strings.Split(string(out), "\x00")
-
-	// The output ends with a NUL, so the last token is empty.
-	if n := len(tokens); n > 0 && tokens[n-1] == "" {
-		tokens = tokens[:n-1]
-	}
+	tokens := statusTokens(out)
 
 	var records []statusRecord
 
@@ -90,12 +85,10 @@ func parseStatusV2(out []byte) ([]statusRecord, error) {
 	return records, nil
 }
 
-// withoutUntracked returns the status output without the untracked
-// records whose path drop accepts. The other tokens keep their bytes and
-// their order, so the digest of an output that holds no such record does
-// not change. A rename record owns the token after it: that token is a
-// source path and never a record of its own.
-func withoutUntracked(out []byte, drop func(path string) bool) []byte {
+// statusTokens splits the NUL-separated status output into tokens. The
+// parser and withoutUntracked share it, so both readers always see the
+// same tokens.
+func statusTokens(out []byte) []string {
 	tokens := strings.Split(string(out), "\x00")
 
 	// The output ends with a NUL, so the last token is empty.
@@ -103,23 +96,36 @@ func withoutUntracked(out []byte, drop func(path string) bool) []byte {
 		tokens = tokens[:n-1]
 	}
 
-	var kept strings.Builder
+	return tokens
+}
+
+// withoutUntracked returns the status output without the untracked
+// records whose path drop accepts. The other tokens keep their bytes and
+// their order, so the digest of an output that holds no such record does
+// not change. A rename record owns the token after it: that token is a
+// source path and never a record of its own.
+//
+// The result takes the capacity of out, because the output can hold
+// tens of thousands of records and most of them stay.
+func withoutUntracked(out []byte, drop func(path string) bool) []byte {
+	tokens := statusTokens(out)
+	kept := make([]byte, 0, len(out))
 
 	for i := 0; i < len(tokens); i++ {
 		tok := tokens[i]
+		if strings.HasPrefix(tok, "? ") && drop(tok[2:]) {
+			continue
+		}
 
-		switch {
-		case tok != "" && tok[0] == '2' && i+1 < len(tokens):
-			kept.WriteString(tok + "\x00" + tokens[i+1] + "\x00")
+		kept = append(append(kept, tok...), 0)
 
+		if tok != "" && tok[0] == '2' && i+1 < len(tokens) {
 			i++
-		case strings.HasPrefix(tok, "? ") && drop(tok[2:]):
-		default:
-			kept.WriteString(tok + "\x00")
+			kept = append(append(kept, tokens[i]...), 0)
 		}
 	}
 
-	return []byte(kept.String())
+	return kept
 }
 
 // statusFields splits a record header into n fields and checks the
@@ -196,7 +202,7 @@ type candidate struct {
 	headOid     string // the object id of the before side in HEAD
 	treeMode    string // the worktree mode that status gives; "" means the producer takes it from Lstat
 	treeOid     string // the gitlink commit of the worktree side, when status gives it
-	lstatRule   bool   // a '1' or '2' record with mW=000000 (contract K4, Lstat rule)
+	lstatRule   bool   // a '1' or '2' record with mW=000000: the Lstat rule decides the change
 	needsHead   bool   // a 'u' record: the HEAD side comes from ls-tree
 	dropIfSame  bool   // a '1' record: no content, mode, or type difference means no change
 	untracked   bool   // a '?' or '!' record, so a candidate for move pairing
@@ -208,12 +214,11 @@ type candidate struct {
 	gitObserved bool
 }
 
-// mapRecords applies the status v2 record mapping of contract K4 and
-// returns the change candidates. A '?' or '!' record folds into a
-// tracked record of the same path, because the tracked record owns that
-// path (the Lstat rule). A path appears in at most one candidate. The
-// caller decides the submodule limitation, because it depends on the
-// selection.
+// mapRecords applies the status v2 record mapping and returns the change
+// candidates. A '?' or '!' record gives no candidate when a tracked
+// record has the same path, because the tracked record owns that path
+// (the Lstat rule). A path appears in at most one candidate. The caller
+// decides the submodule limitation, because it depends on the selection.
 func mapRecords(records []statusRecord) []*candidate {
 	var cands []*candidate
 
@@ -278,7 +283,8 @@ func mapOrdinary(rec *statusRecord) *candidate {
 		return &candidate{path: rec.path, kind: ChangeAdd, treeMode: rec.modeTree, treeOid: gitlinkTreeOid(rec)}
 	case rec.modeHead == modeGitlink || rec.modeTree == modeGitlink:
 		// A submodule changes only when its commit or its mode changes.
-		// Content inside it is not inspected (a snapshot limitation).
+		// The snapshot does not inspect content inside it, and the
+		// producer reports this as a limitation.
 		if rec.modeHead == rec.modeTree && rec.oidHead == rec.oidIndex && !submoduleCommitChanged(rec.sub) {
 			return nil
 		}

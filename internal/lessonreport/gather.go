@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/integration"
@@ -69,10 +70,10 @@ func gatherInputs(req Request, sources gatherSources) Inputs {
 	}
 
 	data, readErr := sources.config(filepath.Join(req.Root, ".seamark", "lessons.yaml"))
-	in.Config, in.ConfigRead = readConfig(data, readErr)
-
 	checkCfg, checkErrs := lessoncheck.ParseForCapability(data, readErr)
-	if readErr == nil && in.Config != nil && len(checkErrs) == 0 {
+	in.Config, in.ConfigRead = readConfig(checkCfg, checkErrs, readErr)
+
+	if in.Config != nil && len(checkErrs) == 0 {
 		in.Checks = checkCfg
 	}
 
@@ -85,20 +86,22 @@ func gatherInputs(req Request, sources gatherSources) Inputs {
 	return in
 }
 
-// readConfig keeps absent and invalid files distinct. A tier-two check
+// readConfig keeps absent and invalid files distinct. It takes the
+// decoded file from the capability parse, so the report decodes
+// lessons.yaml once. That parse decodes with reviews.ParseConfig and
+// reports a decode failure only as a decode-error entry. A tier-2 check
 // error does not discard advisory pins that the lenient reader accepts.
-func readConfig(data []byte, readErr error) (*reviews.Config, ConfigRead) {
+func readConfig(checkCfg *lessoncheck.Config, checkErrs []lessoncheck.ConfigError, readErr error) (*reviews.Config, ConfigRead) {
+	decodeFailed := slices.ContainsFunc(checkErrs, func(e lessoncheck.ConfigError) bool {
+		return e.Code == lessoncheck.CodeDecodeError
+	})
+
 	switch {
 	case errors.Is(readErr, os.ErrNotExist):
 		return nil, ConfigRead{State: StateAbsent}
-	case readErr != nil:
+	case readErr != nil, decodeFailed:
 		return nil, ConfigRead{State: ConfigInvalid}
 	}
 
-	cfg, err := reviews.ParseConfig(data)
-	if err != nil {
-		return nil, ConfigRead{State: ConfigInvalid}
-	}
-
-	return cfg, ConfigRead{State: ConfigOK}
+	return checkCfg.Raw, ConfigRead{State: ConfigOK}
 }

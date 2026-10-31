@@ -14,8 +14,8 @@ import (
 const openFlags = os.O_RDONLY
 
 // inodeOf returns 0, because the platform gives no inode in its file
-// information. The revalidation identity (contract K5) then rests on the
-// size, the mode, and the modification time.
+// information. The revalidation identity then rests on the size, the
+// mode, and the modification time.
 func inodeOf(fs.FileInfo) uint64 {
 	return 0
 }

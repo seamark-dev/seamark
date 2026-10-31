@@ -1,13 +1,13 @@
 package integration_test
 
-// The extension proof through the shared engines (specification AC-1):
-// the test-only third client goes through the real setup coordinator,
-// the shared delivery service, the gate helpers, the inspection, and
-// the shared invoker and distillation pipeline. No engine and no
-// built-in adapter changes for it. The client is the one the contract
-// harness registers; it shares the Codex skill directory, decodes edits,
-// grants tools, invokes a fake process, and lacks the command, reset,
-// hook, and MCP-registration capabilities.
+// These tests run the test-only third client through the shared
+// engines: the real setup coordinator, the shared delivery service, the
+// gate helpers, the inspection, and the shared invoker and distillation
+// pipeline. No engine and no built-in adapter changes for it. The
+// client is the one the contract harness registers. It shares the Codex
+// skill directory, decodes edits, grants tools, and invokes a fake
+// process. It lacks the command, reset, hook, and MCP-registration
+// capabilities.
 
 import (
 	"bytes"
@@ -232,7 +232,8 @@ func TestThirdClientCommandGateIsUnsupportedNotBroken(t *testing.T) {
 
 // scriptedThird is the third client with an invocation that answers
 // every prompt with one proposal, the way a real client's one-shot
-// mode would. The prompt is consumed from stdin as the contract asks.
+// mode would. The script reads the prompt from stdin and discards it,
+// because the shared invoker always sends the prompt there.
 func scriptedThird() integration.Client {
 	c := integration.ThirdClient()
 	reply := `{"patterns":[{"rule":"pooled-state-reset","note":"Reset pooled state before reuse.","finding_ids":[1,2,3],"trigger_paths":[]}]}`

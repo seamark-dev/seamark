@@ -1,25 +1,28 @@
 package lessoncheck
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
+	"slices"
 	"strconv"
-	"strings"
+
+	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// This file holds the snapshot and change model of contract K4. A
+// This file holds the snapshot and change model of lesson checks. A
 // snapshot is the one immutable input of Evaluate. A producer reads it
 // once, with bounds, and labels it with its boundary, its baseline, and
-// its selection. Milestone P1 declares one producer, ReadWorkingTree.
-// The producers of the proposed-edit and actual-edit boundaries join in
-// milestone P4.
+// its selection. ReadWorkingTree produces the working-tree boundary,
+// ProjectOperation the proposed-edit boundary, and ObserveAfter the
+// actual-edit boundary.
 
 // SnapshotSchema is the format name of a snapshot. It is also the label
-// of the snapshot digest (contracts §2.2).
+// of the snapshot digest.
 const SnapshotSchema = "lesson-snapshot/1"
 
-// Boundary names the state that a snapshot shows (spec L243). A result
-// of one boundary never stands in for a result of another boundary.
+// Boundary names the state that a snapshot shows. A result of one
+// boundary never counts as a result of another boundary.
 type Boundary string
 
 // The three boundaries.
@@ -116,8 +119,9 @@ const (
 	LimitationMovePairingUnavailable       = "move-pairing-unavailable"
 	LimitationSubmoduleContentNotInspected = "submodule-content-not-inspected"
 	// LimitationGitStderr is a git status call that exited 0 and wrote
-	// text to stderr. It is a notice only and never makes the path set
-	// incomplete (ruling D2). The text output shows the first line.
+	// text to stderr. It is a notice only. It never makes the path set
+	// incomplete, because a warning that no rerun clears must not fail
+	// every run. The text output shows the first line.
 	LimitationGitStderr = "git-stderr"
 )
 
@@ -136,7 +140,7 @@ type Baseline struct {
 // out. Each kind has fixed texts, so a reader always sees the same
 // words for the same selection. Excludes gets one more fixed text when
 // the selection holds an index entry with the skip-worktree or
-// assume-unchanged bit (manager ruling S2).
+// assume-unchanged bit.
 type Selection struct {
 	Kind        SelectionKind `json:"kind"`
 	Description string        `json:"description"`     // fixed text per kind
@@ -154,13 +158,13 @@ type Side struct {
 	Content ContentState `json:"content"`
 	// text holds the raw content when Content is available. It is
 	// unexported, so no JSON output and no record ever carries file
-	// content (contracts §1.6).
+	// content.
 	text []byte
 	// limit names the limit that left the content out of a too-large
 	// side when the size of the side does not show it. Only ObserveAfter
-	// sets it: a pending record drops content above max-baseline-bytes
-	// (contract K7), and the size of such a file is below max-file-bytes.
-	// It is unexported, so neither the JSON output nor the digest holds it.
+	// sets it: a pending record drops content above max-baseline-bytes,
+	// and the size of such a file is below max-file-bytes. It is
+	// unexported, so neither the JSON output nor the digest holds it.
 	limit string
 }
 
@@ -178,21 +182,59 @@ type Change struct {
 	Move           MoveDetection `json:"move_detection,omitempty"`
 	Limitations    []string      `json:"limitations,omitempty"` // closed: the change limitations above
 	// unobserved is true when the producer made the change without an
-	// observed difference: a --file path below a symbolic link that no
-	// status record covers (K4), or a worktree path whose Lstat failed for
-	// a reason other than absence (fix F-B). forbid-path-change/1 reads
-	// it as undecided, because K3 counts only an observed difference as
-	// a change. It is unexported, so neither the JSON output nor the
-	// digest holds it.
-	unobserved bool
-	// unprojectable is set when ProjectOperation (contract K8) cannot
-	// compute the after content of the change. It holds the detail for
-	// the deny text, for example "old_string occurs 2 times".
-	// no-added-pattern/1 reads a set value as unprojectable-edit.
-	// forbid-path-change/1 ignores it, because a projected change is a
-	// change whatever its content (spec L168). It is unexported, so
+	// observed difference. Two cases do that: a --file path below a
+	// symbolic link that no status record covers, and a worktree path
+	// whose Lstat failed for a reason other than absence.
+	// forbid-path-change/1 reads it as undecided, because only an
+	// observed difference counts as a change. It is unexported, so
 	// neither the JSON output nor the digest holds it.
+	unobserved bool
+	// unprojectable is set when ProjectOperation cannot compute the after
+	// content of the change. It holds the detail for the deny text, for
+	// example "old_string occurs 2 times". no-added-pattern/1 reads a set
+	// value as unprojectable-edit. forbid-path-change/1 ignores it,
+	// because a projected change is a change whatever its content. It is
+	// unexported, so neither the JSON output nor the digest holds it.
 	unprojectable string
+}
+
+// sortChanges sorts changes by path and then by old path. The sort is
+// stable, so two changes with the same paths keep the producer order.
+// ProjectOperation, ObserveAfter, and the scope filter touching use it.
+// ReadWorkingTree sorts its candidates by the same rule in
+// sortedCandidates. So every snapshot and every checker sees one order.
+func sortChanges(changes []Change) {
+	slices.SortStableFunc(changes, func(a, b Change) int {
+		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(a.OldPath, b.OldPath))
+	})
+}
+
+// setChangeFlags sets the change flags from the two sides. A side
+// without a known digest counts as changed content, because the
+// producer cannot show that the content stays the same. The observer
+// uses it as it is, and setProjectedFlags adds the projection rules.
+func setChangeFlags(ch *Change) {
+	known := ch.Before.SHA256 != "" && ch.After.SHA256 != ""
+	ch.ContentChanged = !known || ch.Before.SHA256 != ch.After.SHA256
+
+	present := ch.Before.Type != ObjectAbsent && ch.After.Type != ObjectAbsent
+	ch.ModeChanged = present && ch.Before.Mode != "" && ch.After.Mode != "" && ch.Before.Mode != ch.After.Mode
+	ch.TypeChanged = present && ch.Before.Type != ch.After.Type
+}
+
+// withLimitation adds a limitation once and keeps the list sorted. It
+// can change the array of list in place, so a caller that shares the
+// slice passes a copy. The producers use it for the change limitations,
+// and WritePending uses it for the record limitations.
+func withLimitation(list []string, limitation string) []string {
+	if slices.Contains(list, limitation) {
+		return list
+	}
+
+	list = append(list, limitation)
+	slices.Sort(list)
+
+	return list
 }
 
 // LimitHit names one evaluation limit that a producer reached.
@@ -204,7 +246,7 @@ type LimitHit struct {
 
 // Snapshot is one immutable, bounded input of Evaluate. Changes holds
 // observed differences only. An unchanged path named by --file is not a
-// change, so a checker gives not-applicable for it (P0 review K-1).
+// change, so a checker gives not-applicable for it.
 type Snapshot struct {
 	Schema        string    `json:"schema"` // SnapshotSchema
 	Boundary      Boundary  `json:"boundary"`
@@ -212,13 +254,13 @@ type Snapshot struct {
 	Selection     Selection `json:"selection"`
 	Changes       []Change  `json:"changes"` // sorted by (path, old_path); non-nil
 	PathsComplete bool      `json:"paths_complete"`
-	// UnreadableDirectories names each directory that the census (K4 step
-	// 3b) could not read, sorted, without the directories below one of
+	// UnreadableDirectories names each directory that the directory
+	// census could not read, sorted, without the directories below one of
 	// them. Each one makes PathsComplete false, so the list is the
-	// evidence of the incomplete path set (D2 follow-up, ruling 2). It
-	// holds at most max-unreadable-directories entries. It is not a part
-	// of snapshot_sha256, because K4 freezes the part list. The status
-	// digest holds the whole list for the revalidation.
+	// evidence of the incomplete path set. It holds at most
+	// max-unreadable-directories entries. It is not a part of
+	// snapshot_sha256, because the part list of that digest is frozen.
+	// The status digest holds the whole list for the revalidation.
 	UnreadableDirectories []string `json:"unreadable_directories,omitempty"`
 	// UnreadableDirectoriesOmitted counts the unreadable directories that
 	// the output cap max-unreadable-directories left out of the list.
@@ -228,36 +270,37 @@ type Snapshot struct {
 	SHA256                       string     `json:"snapshot_sha256"`
 	// bounds holds the limits that the producer read the snapshot with.
 	// Evaluate applies the same limits, because Evaluate has no limits
-	// parameter (contract K3) and one evaluation must use one set of
-	// bounds. The zero value means DefaultLimits.
+	// parameter and one evaluation must use one set of bounds. The zero
+	// value means DefaultLimits.
 	bounds Limits
 	// identities holds what the producer saw at each worktree path that
-	// it looked at, sorted by path. Revalidation (contract K5) looks at
-	// each path again, so a change after the read makes the result stale.
+	// it looked at, sorted by path. Revalidation looks at each path
+	// again, so a change after the read makes the result stale.
 	identities []fileID
 	// statusSHA256 is the hex SHA-256 of the git status stdout that the
-	// producer read (contract K4 steps 3 and 3a) and of the census result
-	// (step 3b): the result byte and the unreadable directories.
-	// Revalidation runs status and the census again and compares, because
-	// no other field holds these bytes. So a directory that becomes
-	// unreadable after the read makes the result stale.
+	// producer read and of the census result: the result byte and the
+	// unreadable directories. Revalidation runs status and the census
+	// again and compares, because no other field holds these bytes. So a
+	// directory that becomes unreadable after the read makes the result
+	// stale.
 	statusSHA256 string
 	// statusStderr is the first line that git status wrote to stderr,
 	// redacted, sanitized, and cut to max-excerpt-runes. It goes with the
-	// limitation git-stderr and never changes PathsComplete (ruling D2).
-	// The text output prints it as the notice. It is unexported, so
-	// neither the JSON output nor the digest holds it.
+	// limitation git-stderr and never changes PathsComplete. The text
+	// output prints it as the notice. It is unexported, so neither the
+	// JSON output nor the digest holds it.
 	statusStderr string
-	// undecidedLimit names the content limit that left a path undecided:
-	// the producer could not compare its content with HEAD, so the path is
-	// not in Changes and PathsComplete is false. It is "" when no limit
-	// caused it, for example a read error. incompletePaths reads it,
-	// because K3 gives resource-limit with the limit name for such a path.
+	// undecidedLimit names the content limit that left a path undecided.
+	// The producer could not compare the content of that path with HEAD.
+	// So the path is not in Changes, and PathsComplete is false. It is ""
+	// when no limit caused it, for example a read error. incompletePaths
+	// reads it, because a result for such a path gives resource-limit
+	// with the limit name.
 	undecidedLimit string
 	// attribution tells how the observed result of an actual-edit
-	// snapshot relates to its projection (contract K9). Only ObserveAfter
-	// sets it, and it is "" when the post-edit budget ended the read. It
-	// is unexported, because the frozen JSON form has no such field.
+	// snapshot relates to its projection. Only ObserveAfter sets it, and
+	// it is "" when the post-edit budget ended the read. It is
+	// unexported, because the frozen JSON form has no such field.
 	attribution Attribution
 }
 
@@ -271,7 +314,7 @@ const (
 	// pathPresent means that Lstat found the path.
 	pathPresent
 	// pathThroughLink means that a parent component of the path is a
-	// symbolic link. The producer never looks through it (§5 row 17).
+	// symbolic link. The producer never looks through it.
 	pathThroughLink
 	// pathUnknown means that Lstat failed for a reason other than
 	// absence, for example a permission error. An error is not absence.
@@ -294,28 +337,24 @@ type fileID struct {
 	sha256 string
 }
 
-// compose joins the parts of a digest. Each part gets its decimal byte
-// length and a colon in front, so no two part lists give the same bytes
-// (contracts §1.2). It is a copy of capture.compose, because lessoncheck
-// must not import capture (§6 A1), and reviews keeps its copy unexported.
-func compose(parts ...string) string {
-	var b strings.Builder
+// hexSHA256 returns the lowercase hex SHA-256 of data. Every content
+// digest of the package uses it, so all content digests have one form.
+func hexSHA256(data []byte) string {
+	sum := sha256.Sum256(data)
 
-	for _, part := range parts {
-		b.WriteString(strconv.Itoa(len(part)))
-		b.WriteByte(':')
-		b.WriteString(part)
-	}
-
-	return b.String()
+	return hex.EncodeToString(sum[:])
 }
 
 // snapshotDigest returns snapshot_sha256: the hex SHA-256 of the
-// lesson-snapshot/1 composition of contract K4. The digest uses the
-// content SHA-256 of each side and never a git object id, so the same
-// content gives the same digest in SHA-1 and SHA-256 repositories.
-// Limit hits, the change flags, and the change limitations are not part
-// of it, because the contract freezes the part list.
+// lesson-snapshot/1 composition. Each part gets its decimal byte length
+// and a colon in front, so no two part lists give the same bytes.
+// reviews.ComposeDigest computes it, so the lesson-check digests and
+// the reviews digests share one composer. The digest uses the content
+// SHA-256 of each side and never a git object id, so the same content
+// gives the same digest in SHA-1 and SHA-256 repositories. Limit hits,
+// the change flags, and the change limitations are not part of it,
+// because the part list is frozen. A change of the list changes every
+// stored snapshot_sha256.
 func snapshotDigest(s *Snapshot) string {
 	parts := []string{
 		SnapshotSchema,
@@ -345,9 +384,7 @@ func snapshotDigest(s *Snapshot) string {
 	parts = append(parts, complete, strconv.Itoa(len(s.Limitations)))
 	parts = append(parts, s.Limitations...)
 
-	sum := sha256.Sum256([]byte(compose(parts...)))
-
-	return hex.EncodeToString(sum[:])
+	return reviews.ComposeDigest(parts...)
 }
 
 // limits returns the bounds of the snapshot. A snapshot without bounds
@@ -355,9 +392,9 @@ func snapshotDigest(s *Snapshot) string {
 // snapshot also gets DefaultLimits, because Evaluate on an invalid
 // config reads no snapshot.
 func (s *Snapshot) limits() Limits {
-	if s == nil || s.bounds == (Limits{}) {
+	if s == nil {
 		return DefaultLimits()
 	}
 
-	return s.bounds
+	return s.bounds.orDefault()
 }

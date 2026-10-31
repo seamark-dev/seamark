@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The tests of the lesson-check audit stream (contract K9). Every root
-// is a temporary directory.
+// The tests of the lesson-check audit stream. Every root is a temporary
+// directory.
 
 // auditPath returns the path of the audit stream under root.
 func auditPath(root string) string {
@@ -43,7 +43,7 @@ func TestLessonCheckAuditAppendIsHardened(t *testing.T) {
 		requireMode(t, filepath.Join(root, ".seamark"), 0o700)
 		requireMode(t, auditPath(root), 0o600)
 		requireMode(t, filepath.Join(root, ".seamark", "lesson-check-audit.jsonl.lock"), 0o600)
-		assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-audit.jsonl"), "the firing log gets nothing (§5 row 39)")
+		assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-audit.jsonl"), "the firing log gets nothing")
 	})
 
 	t.Run("a loose log is tightened", func(t *testing.T) {
@@ -233,7 +233,7 @@ func TestLessonCheckAuditAppendIsHardened(t *testing.T) {
 	})
 }
 
-// TestLessonCheckAuditCarriesNoContent proves contracts §1.6 for the
+// TestLessonCheckAuditCarriesNoContent proves the no-content rule of the
 // stream: a verify record and a baseline-discarded record hold no file
 // content, no excerpt, no rule text, no base64 content, and no raw
 // provider ID, also when the result itself shows an excerpt.
@@ -280,11 +280,11 @@ func TestLessonCheckAuditCarriesNoContent(t *testing.T) {
 		assert.NotContains(t, stream, s)
 	}
 
-	assert.NoFileExists(t, filepath.Join(g.root, ".seamark", "lessons-audit.jsonl"), "the firing log gets nothing (§5 row 39)")
+	assert.NoFileExists(t, filepath.Join(g.root, ".seamark", "lessons-audit.jsonl"), "the firing log gets nothing")
 	assert.NoDirExists(t, filepath.Join(g.root, ".seamark", "private"))
 
-	// Every key of every record is a K9 field, so no new field can carry
-	// content unnoticed.
+	// Every key of every record is a known AuditRecord field, so no new
+	// field can carry content unnoticed.
 	known := map[string]bool{}
 	for _, k := range []string{
 		"schema", "ts", "kind", "caller", "client", "tool", "session_sha256", "match_sha256", "context_sha256",
@@ -346,10 +346,10 @@ func TestLessonCheckAuditConcurrentAppends(t *testing.T) {
 	assert.Len(t, seen, writers*each, "every record lands once")
 }
 
-// TestLessonCheckVerifyWritesAuditAndSweeps proves the two milestone P4
-// steps of Verify (contract K5): one verify record after the result is
-// composed, and the K7 sweep. A failed record never changes the result.
-// A stopped read still writes its record.
+// TestLessonCheckVerifyWritesAuditAndSweeps proves the two audit steps
+// of Verify: one verify record after the result is composed, and the
+// sweep of expired pending records. A failed record never changes the
+// result. A stopped read still writes its record.
 func TestLessonCheckVerifyWritesAuditAndSweeps(t *testing.T) {
 	g := verifyRepo(t, mixedYAML)
 	g.write("generated/a.txt", "a changed\n")

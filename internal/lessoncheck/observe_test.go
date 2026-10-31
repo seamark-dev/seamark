@@ -9,7 +9,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This file holds the tests of ObserveAfter (contracts K4, K9) and of
-// EvaluatePostEdit. Every repository lives under t.TempDir(), so no
-// test reads or writes the checkout that runs it (BRIEF rule 7).
+// This file holds the tests of ObserveAfter and of EvaluatePostEdit.
+// Every repository lives under t.TempDir(), so no test reads or writes
+// the checkout that runs it.
 
 // recordCall projects op in g and stores its pending record, as a
 // pre-edit hook does. It returns the record as ReadPending reads it, so
@@ -54,9 +54,9 @@ func (g *gitRepo) observe(p *Pending) *Snapshot {
 }
 
 // requireValidObservation checks the invariants of every actual-edit
-// snapshot: the boundary, the pre-edit baseline with the digest of the
-// record file (§5 row 119), the fixed operation selection, the sorted
-// changes, the valid sides, and the digest of the fields.
+// snapshot: the shared invariants of an operation snapshot with the
+// pre-edit baseline that holds the digest of the record file, and no
+// unprojectable change.
 func requireValidObservation(t *testing.T, root string, snap *Snapshot, p *Pending) {
 	t.Helper()
 
@@ -64,33 +64,14 @@ func requireValidObservation(t *testing.T, root string, snap *Snapshot, p *Pendi
 	require.NoError(t, err)
 
 	sum := sha256.Sum256(data)
+	baseline := Baseline{Kind: BaselinePreEdit, PendingSHA: hex.EncodeToString(sum[:])}
 
-	require.Equal(t, SnapshotSchema, snap.Schema)
-	require.Equal(t, BoundaryActualEdit, snap.Boundary)
-	require.Equal(t, Baseline{Kind: BaselinePreEdit, PendingSHA: hex.EncodeToString(sum[:])}, snap.Baseline,
-		"pending_sha256 is the SHA-256 of the record bytes")
-	require.Equal(t, SelectionOperation, snap.Selection.Kind)
-	require.Equal(t, "the paths of one native edit", snap.Selection.Description)
-	require.Equal(t, []string{"writes outside this operation"}, snap.Selection.Excludes)
-	require.Equal(t, sortedUnique(recordPaths(p)), snap.Selection.Paths)
-
-	require.NotNil(t, snap.Changes)
-	require.True(t, sort.SliceIsSorted(snap.Changes, func(i, j int) bool {
-		if snap.Changes[i].Path != snap.Changes[j].Path {
-			return snap.Changes[i].Path < snap.Changes[j].Path
-		}
-
-		return snap.Changes[i].OldPath < snap.Changes[j].OldPath
-	}), "changes are sorted by path and old path")
+	require.Equal(t, baseline, snap.Baseline, "pending_sha256 is the SHA-256 of the record bytes")
+	requireValidOperationSnapshot(t, snap, BoundaryActualEdit, baseline, sortedUnique(recordPaths(p)))
 
 	for _, ch := range snap.Changes {
-		requireValidSide(t, ch.Path, ch.Before)
-		requireValidSide(t, ch.Path, ch.After)
-		require.Contains(t, []ChangeKind{ChangeAdd, ChangeDelete, ChangeModify, ChangeMove}, ch.Kind, ch.Path)
 		require.Empty(t, ch.unprojectable, "an observed change is never unprojectable: %s", ch.Path)
 	}
-
-	require.Equal(t, snapshotDigest(snap), snap.SHA256)
 }
 
 // limitedPaths returns the paths of the changes that carry the
@@ -99,7 +80,7 @@ func limitedPaths(snap *Snapshot, limitation string) []string {
 	var out []string
 
 	for _, ch := range snap.Changes {
-		if containsString(ch.Limitations, limitation) {
+		if slices.Contains(ch.Limitations, limitation) {
 			out = append(out, ch.Path)
 		}
 	}
@@ -128,7 +109,7 @@ func TestLessonCheckObserveAfter(t *testing.T) {
 
 		assert.Equal(t, []string{"modify src/a.go"}, changeList(snap))
 		assert.True(t, snap.PathsComplete)
-		assert.Equal(t, AttributionProjectionMatch, snap.Attribution())
+		assert.Equal(t, AttributionProjectionMatch, snap.attribution)
 		assert.Empty(t, changeAt(t, snap, "src/a.go").Limitations)
 
 		res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")
@@ -160,7 +141,7 @@ func TestLessonCheckObserveAfter(t *testing.T) {
 		snap := g.observe(p)
 
 		assert.Empty(t, snap.Changes, "a path whose state did not change is not a change")
-		assert.Equal(t, AttributionProjectionDiffers, snap.Attribution(), "the projected write did not happen")
+		assert.Equal(t, AttributionProjectionDiffers, snap.attribution, "the projected write did not happen")
 		assert.Equal(t, OutcomeNotApplicable, resultOfRule(t, Evaluate(cfg, snap), "frozen-assets").Outcome)
 	})
 
@@ -173,7 +154,7 @@ func TestLessonCheckObserveAfter(t *testing.T) {
 
 		snap := g.observe(p)
 
-		assert.Equal(t, AttributionProjectionDiffers, snap.Attribution())
+		assert.Equal(t, AttributionProjectionDiffers, snap.attribution)
 		assert.Equal(t, []string{"src/a.go"}, limitedPaths(snap, LimitationProjectionDiffers))
 
 		res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")
@@ -201,7 +182,7 @@ func TestLessonCheckObserveAfter(t *testing.T) {
 		assert.Equal(t, []string{"delete generated/a.txt", "add src/b.go", "move src/old.go->src/new.go"}, changeList(snap))
 		assert.Equal(t, MoveProjection, changeAt(t, snap, "src/new.go").Move)
 		assert.False(t, changeAt(t, snap, "src/new.go").ContentChanged)
-		assert.Equal(t, AttributionProjectionMatch, snap.Attribution())
+		assert.Equal(t, AttributionProjectionMatch, snap.attribution)
 		assert.Equal(t, OutcomeViolation, resultOfRule(t, Evaluate(cfg, snap), "frozen-assets").Outcome)
 		assert.Equal(t, OutcomePass, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Outcome)
 	})
@@ -215,7 +196,7 @@ func TestLessonCheckObserveAfter(t *testing.T) {
 		snap := g.observe(p)
 
 		assert.Equal(t, []string{"add src/c.go"}, changeList(snap))
-		assert.Equal(t, AttributionProjectionDiffers, snap.Attribution())
+		assert.Equal(t, AttributionProjectionDiffers, snap.attribution)
 	})
 
 	t.Run("an update without a projection is checked on the actual result", func(t *testing.T) {
@@ -228,7 +209,7 @@ func TestLessonCheckObserveAfter(t *testing.T) {
 
 		snap := g.observe(p)
 
-		assert.Equal(t, AttributionNoProjection, snap.Attribution())
+		assert.Equal(t, AttributionNoProjection, snap.attribution)
 		assert.Equal(t, []string{"src/a.go"}, limitedPaths(snap, LimitationNoProjection))
 
 		res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")
@@ -321,7 +302,7 @@ func TestLessonCheckObserveAfter(t *testing.T) {
 		assert.Empty(t, snap.Changes)
 		assert.False(t, snap.PathsComplete)
 		assert.Equal(t, []LimitHit{{Name: LimitPostEditBudget, Value: 0}}, snap.Limits)
-		assert.Empty(t, snap.Attribution(), "no comparison exists")
+		assert.Empty(t, snap.attribution, "no comparison exists")
 		assert.Equal(t, snapshotDigest(snap), snap.SHA256)
 
 		res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")

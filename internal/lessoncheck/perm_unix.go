@@ -9,7 +9,7 @@ import (
 
 // noFollowFlag makes a write-side open refuse a symbolic link at the
 // system call. So a link that appears between the Lstat check and the
-// open cannot redirect a record (contracts K7, K9).
+// open cannot redirect a pending record or an audit record.
 const noFollowFlag = syscall.O_NOFOLLOW
 
 // lockFile takes an exclusive advisory flock. Concurrent hooks then run

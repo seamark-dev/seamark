@@ -2,9 +2,9 @@ package lessoncheck
 
 import "github.com/seamark-dev/seamark/internal/reviews"
 
-// This file holds forbid-path-change/1 (contract K3). The checker reads
-// path and change metadata only, so it supports binary content and
-// never needs a file read.
+// This file holds forbid-path-change/1. The checker reads path and
+// change metadata only, so it supports binary content and never needs a
+// file read.
 
 // evaluateForbid applies forbid-path-change/1 in its numbered order:
 //
@@ -16,21 +16,19 @@ import "github.com/seamark-dev/seamark/internal/reviews"
 //
 // The checker has no pass outcome: a pin that forbids changes holds when
 // no change touches its scope. An unchanged path named by --file is not
-// a change, so it gives not-applicable (P0 review K-1).
+// a change, so it gives not-applicable.
 //
-// K3 counts only an observed difference as a change at working-tree. A
+// At the working-tree boundary, only an observed difference counts as a
+// change, so a violation never names a change that did not happen. A
 // --file path below a symbolic link is a change that the producer did
-// not observe (Change.unobserved), so it is an unknown path with reason
-// content-unavailable (K4 validation) and never evidence. A path whose
-// Lstat failed for a reason other than absence is unobserved too (P1
-// review ruling 3, fix F-B). A change that git reports through a link
-// is observed and stays evidence (review fixes snapshot-git:F5,
-// checkers:K3-F2).
+// not observe (Change.unobserved). So it is an unknown path with reason
+// content-unavailable and never evidence. A path whose Lstat failed for
+// a reason other than absence is unobserved too. A change that git
+// reports through a link is observed, so it stays evidence.
 func evaluateForbid(_ budget, _ Check, snap *Snapshot, scope []string) Result {
 	var (
 		res      Result
 		evidence []Evidence
-		causes   []reasonHit
 	)
 
 	for _, ch := range touching(snap, scope) {
@@ -38,9 +36,7 @@ func evaluateForbid(_ budget, _ Check, snap *Snapshot, scope []string) Result {
 		res.Coverage.PathsInScope += n
 
 		if ch.unobserved {
-			res.UnknownPaths = append(res.UnknownPaths,
-				Evidence{Path: ch.Path, OldPath: ch.OldPath, Change: ch.Kind, Reason: ReasonContentUnavailable})
-			causes = append(causes, reasonHit{reason: ReasonContentUnavailable})
+			res.UnknownPaths = append(res.UnknownPaths, unknownPath(ch, reasonHit{reason: ReasonContentUnavailable}))
 
 			continue
 		}
@@ -48,12 +44,10 @@ func evaluateForbid(_ budget, _ Check, snap *Snapshot, scope []string) Result {
 		// Every end in scope is decided: the change itself is the finding.
 		res.Coverage.PathsEvaluated += n
 
-		evidence = append(evidence, Evidence{Path: ch.Path, OldPath: ch.OldPath, Change: ch.Kind})
+		evidence = append(evidence, changeEvidence(ch))
 	}
 
-	if !snap.PathsComplete {
-		causes = append(causes, incompletePaths(snap))
-	}
+	causes := unknownCauses(res.UnknownPaths, snap)
 
 	switch {
 	case len(evidence) > 0:

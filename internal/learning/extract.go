@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -24,12 +23,12 @@ import (
 // explicitly selected proposals, and RunExtract sends exactly that
 // preview. The CLI calls distill.ExtractTriggers, which runs the same
 // plan and execute steps, with the same store checks and guarded save,
-// over its own wider selection. A separate decision can move the CLI to
-// this selection. Both paths share the question rule, the batches, the
+// over its own wider selection. A move of the CLI to this selection is a
+// separate change. Both paths share the question rule, the batches, the
 // prompt builder, and the executor.
 //
-// The console excludes more rows than the CLI. A row is asked only when
-// the pin file and the ledger agree about it: an applied row needs
+// The console excludes more rows than the CLI. It asks about a row only
+// when the pin file and the ledger agree about it. An applied row needs
 // exactly one linked pin, and a pending row must not already be in the
 // file. Both link rules come from pinfile.Classify, so the Pins view and
 // the extraction preview agree. A third rule excludes a row whose two
@@ -38,9 +37,10 @@ import (
 // pinfile.FieldsAgree, for pending rows.
 //
 // A lessons.yaml that does not read or parse refuses the whole preview
-// with an *ExtractConfigError (contract §2.3b, strict configuration).
-// The "pin file unreadable" exclusion of D-5 then never runs; it stays
-// as a second guard, because an error is never an absence.
+// with an *ExtractConfigError. A paid run must not use a configuration
+// that the user cannot review. The exclusion for an unreadable pin file
+// then never runs. It stays as a second guard, because an error is
+// never an absence.
 
 var (
 	// ErrExtractNotReady reports an index that is absent, not indexed,
@@ -179,7 +179,7 @@ func (p *ExtractPreview) Ineligible() []distill.ExtractSkip {
 // the index through a read-only store, never runs the agent, and never
 // stamps a row. It checks only that the agent executable is on PATH. A
 // malformed config.yaml or lessons.yaml returns an *ExtractConfigError
-// that names the file, and no preview: a paid run must not use a pin
+// that names the file, and no preview. A paid run must not use a pin
 // file that the user cannot see. It does not read distill.write, because
 // extraction never writes a pin.
 func PlanExtract(ws workspace.Workspace, reg *integration.Registry, req ExtractRequest) (*ExtractPreview, error) {
@@ -194,24 +194,18 @@ func PlanExtract(ws workspace.Workspace, reg *integration.Registry, req ExtractR
 		reg = integration.Builtin()
 	}
 
-	in, err := distReadInputs(reg, root, func(path string, err error) error {
+	b, _, err := distReadInputs(reg, distill.ErrExtractStale, root, ws.DBPath, func(path string, err error) error {
 		return &ExtractConfigError{Path: path, Err: err}
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	b := in.bind(distill.ErrExtractStale, root, ws.DBPath)
-
-	st, now, err := workspace.OpenReadOnly(ws)
+	st, err := b.openIndex(ws, ErrExtractNotReady)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrExtractNotReady, err)
+		return nil, err
 	}
 	defer func() { _ = st.Close() }()
-
-	if now.State != workspace.IndexReady || now.Root != root {
-		return nil, fmt.Errorf("%w: the index changed while planning; prepare again", distill.ErrExtractStale)
-	}
 
 	view, err := observePins(st, root, b.lessons)
 	if err != nil {
@@ -274,23 +268,19 @@ func PlanExtract(ws workspace.Workspace, reg *integration.Registry, req ExtractR
 		}
 	}
 
-	// Only PATH is checked: running a configured command, even with
-	// --version, could start a login flow or spend money.
-	if _, err := exec.LookPath(b.invocation.Argv[0]); err != nil {
-		p.Blockers = append(p.Blockers,
-			distSafe(fmt.Sprintf("agent cli %q not found on PATH", b.invocation.Argv[0])))
-	}
+	p.Blockers = append(p.Blockers, b.agentBlockers()...)
 
 	return p, nil
 }
 
 // RunExtract executes a confirmed preview. Before any work it checks the
-// workspace identity, both bound files, the resolved invocation, the
-// working directory, every planned row with its living evidence, and the
-// pin links of the planned rows. A changed input returns an error that
-// wraps distill.ErrExtractStale (and so distill.ErrStale) and starts
-// nothing. It then calls distill.ExecuteExtract, which repeats the file,
-// identity, and link checks before each batch through its Check option.
+// workspace identity, both bound files, the resolved invocation, and the
+// working directory. It also checks every planned row with its living
+// evidence, and the pin links of the planned rows. A changed input
+// returns an error that wraps distill.ErrExtractStale (and so
+// distill.ErrStale), and the run starts nothing. It then calls
+// distill.ExecuteExtract, which repeats the file, identity, and link
+// checks before each batch through its Check option.
 //
 // A nil inv builds the invoker from the preview's invocation; tests pass
 // a fake. That invoker starts the agent in its own process group, so a
@@ -318,21 +308,9 @@ func RunExtract(ctx context.Context, ws workspace.Workspace, reg *integration.Re
 		return nil, err
 	}
 
-	if reg == nil {
-		reg = integration.Builtin()
-	}
-
-	if err := distCheckInvocation(reg, b); err != nil {
+	inv, err := distInvoker(reg, b, inv, ErrExtractBlocked)
+	if err != nil {
 		return nil, err
-	}
-
-	if inv == nil {
-		command, err := agent.NewGroupCommand(p.Invocation)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrExtractBlocked, err)
-		}
-
-		inv = command
 	}
 
 	st, err := store.Open(ws.DBPath)

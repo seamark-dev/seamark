@@ -3,15 +3,17 @@ package lessonreport
 import (
 	"fmt"
 	"io"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/render"
 )
 
-// RenderText prints the overview or selected identity's version-isolated
-// expansion. It presents existing readings and suggestions, never infers
-// delivery, timing, or efficacy from counts. All dynamic lines are sanitized.
+// RenderText prints the overview or the expansion of the selected
+// identity, one version at a time. It presents existing readings and
+// suggestions. It never infers delivery, timing, or efficacy from counts.
+// Every dynamic line passes through render.Sanitize.
 //
 // The text shows only what the audit logs give. This build reads no
 // capture archive, so the text leaves out the capture and archive state,
@@ -32,14 +34,17 @@ func RenderText(w io.Writer, report Report) error {
 		report.Totals.Events, report.Totals.DistinctPreparations)
 
 	p.line("Units:")
-	for _, key := range textKeys(report.Units) {
+	for _, key := range slices.Sorted(maps.Keys(report.Units)) {
 		p.line("  %s: %s", key, report.Units[key])
 	}
 
 	p.line("Current pins:")
 	for _, pin := range report.Pins {
-		if report.Expanded == nil || textSelected(pin, report.Expanded) {
-			p.pin(pin)
+		// The expansion names its pin by the same rule, so this
+		// comparison selects the expanded identity.
+		ref := shownPinRef(pin.PinRef, pin.PinIdentity)
+		if report.Expanded == nil || ref == report.Expanded.PinRef {
+			p.pin(pin, ref)
 		}
 	}
 
@@ -71,21 +76,8 @@ func (p *textReport) source(name string, s SourceRead) {
 		name, s.State, s.Path, s.Generations, s.Bytes, s.Records, s.Legacy, s.Malformed, s.NewerSchema, s.PartialTail, s.Error)
 }
 
-func textSelected(pin PinReading, exp *Expansion) bool {
-	ref := pin.PinRef
-	if ref == "" {
-		ref = shortRef(pin.PinIdentity)
-	}
-
-	return ref == exp.PinRef
-}
-
-func (p *textReport) pin(pin PinReading) {
-	ref := pin.PinRef
-	if ref == "" {
-		ref = shortRef(pin.PinIdentity)
-	}
-
+// pin prints one reading under its shown pin-ref.
+func (p *textReport) pin(pin PinReading, ref string) {
 	p.line("  pin %s; version %s; mode %s; rule: %s", ref, pin.PinVersion, pin.Mode, pin.Rule)
 	p.line("    scope: %s", strings.Join(pin.Scope, ", "))
 	p.line("    delivery records: %s; injected %d; suppressed-repeat %d; held-back %d; emit-failed %d; returned %d",
@@ -95,7 +87,7 @@ func (p *textReport) pin(pin PinReading) {
 	p.line("    check pin evaluations: %d; outcomes: %s; requested denies (guard attempts): %d",
 		pin.Checks.PinEvaluations, textCounts(pin.Checks.Outcomes), pin.Checks.RequestedDenies)
 
-	p.line("    expand: seamark lessons --delivery --pin %s", ref)
+	p.line("    expand: %s", expandCommand(ref))
 	p.steps(pin.NextSteps)
 }
 
@@ -130,20 +122,9 @@ func (p *textReport) expansion(exp Expansion) {
 	}
 }
 
-func textKeys[K ~string, V any](values map[K]V) []K {
-	keys := make([]K, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-
-	return keys
-}
-
 func textCounts[K ~string](counts map[K]int) string {
 	parts := make([]string, 0, len(counts))
-	for _, key := range textKeys(counts) {
+	for _, key := range slices.Sorted(maps.Keys(counts)) {
 		parts = append(parts, fmt.Sprintf("%s %d", key, counts[key]))
 	}
 

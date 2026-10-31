@@ -1,7 +1,5 @@
 package integration
 
-import "crypto/sha256"
-
 // Landed reports whether the file rel under root now holds the bytes
 // with the SHA-256 want. An editor calls it after a guarded write that
 // returned an error, because the write error alone does not prove the
@@ -15,14 +13,15 @@ import "crypto/sha256"
 //     unknown. The caller must not report "written" or "not written".
 //
 // It reads through ReadInput, so it follows a link for the read as the
-// editors do, and it writes nothing.
+// editors do, and it writes nothing. ReadInput already hashes an
+// existing file, so the guard digest is the digest of the bytes read.
 func Landed(root, rel string, want [32]byte) (bool, error) {
-	guard, data, err := ReadInput(root, rel)
+	guard, _, err := ReadInput(root, rel)
 	if err != nil {
 		return false, err
 	}
 
-	return guard.Exists && sha256.Sum256(data) == want, nil
+	return guard.Exists && guard.SHA256 == want, nil
 }
 
 // SameGuard reports whether two observations of one file describe the
@@ -37,10 +36,12 @@ func Landed(root, rel string, want [32]byte) (bool, error) {
 // the observation of its own setup plan, not with the reviewed guard.
 // pinfile.Prepare compares only the existence and the content with the
 // reviewed guard. So the editor compares the rest with SameGuard.
+//
+// The function compares the whole struct after it copies the two
+// identity fields. So a state field that FileGuard gains later is
+// compared too, and the check never skips it silently.
 func SameGuard(a, b FileGuard) bool {
-	return a.Exists == b.Exists &&
-		a.SHA256 == b.SHA256 &&
-		a.Mode == b.Mode &&
-		a.Linked == b.Linked &&
-		a.Denied == b.Denied
+	a.Path, a.Kind = b.Path, b.Kind
+
+	return a == b
 }

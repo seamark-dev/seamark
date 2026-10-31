@@ -2,6 +2,7 @@ package lessoncheck
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +16,7 @@ import (
 
 // This file holds the temporary git repositories of the snapshot tests.
 // Every repository lives under t.TempDir(), so no test reads or writes
-// the checkout that runs it (BRIEF rule 7).
+// the checkout that runs it.
 
 // isolateGit hides the global and the system git configuration from
 // every git process of the test, the producer's processes included.
@@ -25,8 +26,8 @@ import (
 // of the test, also in a submodule clone without its own configuration.
 // LC_ALL=C keeps the git messages in English, because some tests compare
 // the stderr line of git status. A git with gettext translates them in
-// another locale. t.Setenv rules out t.Parallel, which these tests do
-// not use.
+// another locale. A test that calls t.Setenv cannot call t.Parallel,
+// and these tests do not call it.
 func isolateGit(t *testing.T) {
 	t.Helper()
 
@@ -98,6 +99,17 @@ func (g *gitRepo) remove(rel string) {
 	g.t.Helper()
 
 	require.NoError(g.t, os.RemoveAll(g.path(rel)))
+}
+
+// chmodUntilCleanup sets the mode of name to mode, and sets it to
+// restore when the test ends. A directory without the read or search bit
+// stops the removal of t.TempDir(), so each test that removes a bit must
+// set it again.
+func chmodUntilCleanup(t *testing.T, name string, mode, restore fs.FileMode) {
+	t.Helper()
+
+	require.NoError(t, os.Chmod(name, mode))
+	t.Cleanup(func() { _ = os.Chmod(name, restore) })
 }
 
 // symlink creates a symbolic link at rel with the given target.

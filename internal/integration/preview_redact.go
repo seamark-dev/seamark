@@ -40,10 +40,10 @@ var credentialWords = map[string]bool{
 // credential.
 var credentialSuffixes = []string{"key", "token", "secret", "password", "passwd"}
 
-// credentialTables hold environment variables or HTTP headers. Every
-// string value in them is hidden, whatever its key, because a value
-// such as a bare token has no name that marks it. The names are
-// compared without case, "_" and "-".
+// credentialTables hold environment variables or HTTP headers. The
+// preview hides every string value in them, whatever its key, because a
+// value such as a bare token has no name that marks it. The name match
+// ignores case, "_" and "-".
 var credentialTables = map[string]bool{
 	"env": true, "environment": true, "headers": true, "httpheaders": true, "envhttpheaders": true,
 }
@@ -75,14 +75,17 @@ type diffSide struct {
 }
 
 // newDiffSide splits content into diff lines and finds the ranges to
-// hide. Only JSON and TOML files are scanned: those are the native
+// hide. It scans only JSON and TOML files, because those are the native
 // client files. Other files keep the shared redaction only, so the
 // Seamark documents stay readable for review.
 func newDiffSide(rel string, content []byte) diffSide {
-	side := diffSide{lines: diffLines(content)}
+	// One conversion serves the split and the scan, because each copy of
+	// a large settings file costs a full allocation.
+	text := string(content)
+	side := diffSide{lines: diffLines(text)}
 
 	if dialect, ok := structuredDialect(rel); ok {
-		side.hide = lineMasks(string(content), scanSecrets(string(content), dialect))
+		side.hide = lineMasks(text, scanSecrets(text, dialect))
 	}
 
 	return side
@@ -198,6 +201,12 @@ func mergeMasks(a, b []maskRange) []maskRange {
 // every range that falls on it, relative to the line start and without
 // the newline. The result is parallel to the lines of diffLines.
 func lineMasks(text string, masks []maskRange) [][]maskRange {
+	// Most files hide nothing. hideAt returns nil past the end, so a nil
+	// result gives the same diff and saves one slice per line.
+	if len(masks) == 0 {
+		return nil
+	}
+
 	var out [][]maskRange
 
 	k := 0
@@ -533,8 +542,8 @@ func isBareKeyByte(c byte) bool {
 }
 
 // unquoteKey returns the text of a quoted key or string. An escape that
-// Go does not know keeps the raw text: the name is only matched, never
-// written.
+// Go does not know keeps the raw text, because the scanner only matches
+// the name and never writes it.
 func unquoteKey(quoted string) string {
 	if len(quoted) < 2 || (quoted[0] != '"' && quoted[0] != '\'') {
 		return quoted
@@ -575,8 +584,8 @@ func hiddenPath(keys []string) bool {
 
 // takesCredential reports whether an argument is an option whose next
 // argument is a credential or a header, for example "--api-key" or
-// "--header". The option with an "=" value is left to the shared
-// redaction, which already reads that shape.
+// "--header". The shared redaction handles the option with an "="
+// value, because it already reads that shape.
 func takesCredential(arg string) bool {
 	if headerFlags[arg] {
 		return true
@@ -587,9 +596,9 @@ func takesCredential(arg string) bool {
 	return name != arg && name != "" && !strings.ContainsAny(name, "= ") && credentialName(name)
 }
 
-// credentialName reports whether a key names a credential. The key is
-// split at every byte that is not a letter or digit and at each
-// lower-to-upper case change, so "X-API-Key", "OPENAI_KEY" and
+// credentialName reports whether a key names a credential. It splits
+// the key at every byte that is not a letter or digit and at each
+// lower-to-upper case change. So "X-API-Key", "OPENAI_KEY" and
 // "accessToken" all match.
 func credentialName(key string) bool {
 	for _, seg := range keySegments(key) {
@@ -643,8 +652,13 @@ func keySegments(key string) []string {
 	return segs
 }
 
+// nameSeparators drops "_" and "-" from a table name. The package builds
+// it once, because hiddenPath folds every key of every string value. A
+// Replacer is safe for concurrent use, so one shared value is enough.
+var nameSeparators = strings.NewReplacer("_", "", "-", "")
+
 // foldName lowers a table name and drops "_" and "-", so "http_headers"
 // and "httpHeaders" compare equal.
 func foldName(name string) string {
-	return strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(name))
+	return strings.ToLower(nameSeparators.Replace(name))
 }

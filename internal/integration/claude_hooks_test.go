@@ -162,8 +162,8 @@ func TestClaudeResetsDecodeTheCompactedContext(t *testing.T) {
 
 // TestClaudeResetsRequirePostCompact proves that the reset decoder acts
 // only on PostCompact, the event that setup installs the reset hook for.
-// Before this rule, any payload with a session id named a context, so a
-// stray SessionStart reset both delivery states (P3 review, probe B3).
+// Before this rule, any payload with a session id named a context. So a
+// stray SessionStart reset both delivery states.
 func TestClaudeResetsRequirePostCompact(t *testing.T) {
 	for name, payload := range map[string]string{
 		"SessionStart after compaction": `{"session_id":"s-1","hook_event_name":"SessionStart","source":"compact"}`,

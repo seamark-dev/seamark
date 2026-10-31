@@ -10,28 +10,36 @@ import (
 // zero value is unbounded, so Evaluate and Verify keep their results.
 //
 // An evaluation that the budget ends must never read as a pass. Every
-// checker then reports the cause as unknown, so an enforce pin denies
-// (contract K8, step 2).
+// checker then reports the cause as unknown, so an enforce pin denies.
 type budget struct {
 	ctx   context.Context
 	limit string
 }
 
 // ended reports whether the budget is over, and the cause that the
-// results then carry: resource-limit with the limit name for a
-// deadline, and interrupted for a cancellation.
+// results then carry, as causeOf gives it. Context.Err returns only nil,
+// a cancellation, or a deadline, so causeOf maps each end of the budget.
 func (b budget) ended() (reasonHit, bool) {
 	if b.ctx == nil {
 		return reasonHit{}, false
 	}
 
-	switch err := b.ctx.Err(); {
-	case err == nil:
-		return reasonHit{}, false
+	return causeOf(b.ctx.Err(), b.limit)
+}
+
+// causeOf returns the cause that the results carry when err ends an
+// evaluation: interrupted for a cancellation, and resource-limit with
+// limit for a deadline. ok is false for every other error and for nil.
+// The budget and the stand-in snapshot of Verify use it, so both map a
+// context error to the same cause.
+func causeOf(err error, limit string) (cause reasonHit, ok bool) {
+	switch {
 	case errors.Is(err, context.Canceled):
 		return reasonHit{reason: ReasonInterrupted}, true
+	case errors.Is(err, context.DeadlineExceeded):
+		return reasonHit{reason: ReasonResourceLimit, limit: limit}, true
 	default:
-		return reasonHit{reason: ReasonResourceLimit, limit: b.limit}, true
+		return reasonHit{}, false
 	}
 }
 
@@ -57,8 +65,8 @@ type diffResult struct {
 // exit right after the decision. A bounded diff gives the same lines
 // as diffLines, because the work is the same.
 //
-// A panic of the diff goes back to the caller, so the recovery of
-// DecideGuard (contract K8, step 7) still sees it.
+// A panic of the diff goes back to the caller, so the panic recovery of
+// DecideGuard still sees it.
 func diffLinesWithin(b budget, before, after []string) ([]addedLine, reasonHit) {
 	if b.ctx == nil {
 		return runDiff(before, after), reasonHit{}

@@ -1,16 +1,8 @@
 package integration
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-)
-
-// The two Claude Code events that report a structured read. The reply
-// repeats the name of the event that it answers.
-const (
-	claudePostToolUse        = "PostToolUse"
-	claudePostToolUseFailure = "PostToolUseFailure"
 )
 
 // claudeReadTool is the one tool that the explore decoder accepts. Its
@@ -61,7 +53,7 @@ func (claudeExplores) DecodeExplore(payload []byte) (ExploreEvent, error) {
 
 	// The error texts name no payload value: the event and tool names
 	// are client input of any length.
-	if native.HookEventName != claudePostToolUse && native.HookEventName != claudePostToolUseFailure {
+	if native.HookEventName != claudeEventPostTool && native.HookEventName != claudeEventToolFailure {
 		return ExploreEvent{}, fmt.Errorf("%w: the event does not report a tool result", ErrNotApplicable)
 	}
 
@@ -93,7 +85,7 @@ func (claudeExplores) DecodeExplore(payload []byte) (ExploreEvent, error) {
 			Turn:       native.PromptID,
 		},
 		Paths: []string{input.FilePath},
-		Read:  native.HookEventName == claudePostToolUse,
+		Read:  native.HookEventName == claudeEventPostTool,
 	}, nil
 }
 
@@ -102,21 +94,11 @@ func (claudeExplores) DecodeExplore(payload []byte) (ExploreEvent, error) {
 // after a failed read. The reply never blocks, because the tool already
 // ran.
 func (claudeExplores) EncodeExploreAdvice(text string, read bool) (HookReply, error) {
-	var reply claudeAdvice
-
-	reply.HookSpecificOutput.HookEventName = claudePostToolUseFailure
 	if read {
-		reply.HookSpecificOutput.HookEventName = claudePostToolUse
+		return encodeContextReply(claudeEventPostTool, text)
 	}
 
-	reply.HookSpecificOutput.AdditionalContext = text
-
-	var out bytes.Buffer
-	if err := json.NewEncoder(&out).Encode(reply); err != nil {
-		return HookReply{}, err
-	}
-
-	return HookReply{Stdout: out.Bytes()}, nil
+	return encodeContextReply(claudeEventToolFailure, text)
 }
 
 // ExploreMechanism returns the reply path that the firing log records.

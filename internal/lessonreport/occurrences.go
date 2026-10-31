@@ -1,6 +1,6 @@
 package lessonreport
 
-import "github.com/seamark-dev/seamark/internal/reviews"
+import "maps"
 
 // This file holds the reading that the pin readings of one report share:
 // the coverage counts that the audit alone gives and the observation
@@ -30,57 +30,11 @@ func analyze(idx *index) *analysis {
 	an := &analysis{}
 	an.coverage.EventsWithoutPins = idx.eventsWithoutPins()
 	an.coverage.UnknownLaneRecords = idx.unknownLaneRecords()
+	an.coverage.DeniedCallInjections = idx.deniedInjections
 
 	an.windows = newWindowBuilder(idx)
 
 	return an
-}
-
-// eventsWithoutPins counts the v2 events that show an injected or a
-// suppressed delivery and have no pin entry in any of their records. An
-// evaluation event, a reset event, and a preparation event that returned
-// nothing show no such delivery.
-func (idx *index) eventsWithoutPins() int {
-	n := 0
-
-	for _, positions := range idx.byEvent {
-		var delivered, pinned bool
-
-		for _, i := range positions {
-			f := idx.lines[i].Firing
-			if f.SchemaVersion == 0 {
-				continue
-			}
-
-			delivered = delivered || f.Delivery == reviews.DeliveryInjected || f.Delivery == reviews.DeliverySuppressedRepeat
-			pinned = pinned || len(f.Pins) > 0
-		}
-
-		if delivered && !pinned {
-			n++
-		}
-	}
-
-	return n
-}
-
-// unknownLaneRecords counts the v2 records of the hook and the
-// exploration surface that name no receiving context or an unknown lane.
-func (idx *index) unknownLaneRecords() int {
-	n := 0
-
-	for _, l := range idx.lines {
-		f := l.Firing
-		if f.SchemaVersion == 0 || (f.Surface != "" && f.Surface != surfaceExplore) {
-			continue
-		}
-
-		if f.ContextSHA == "" || f.Lane == laneUnknown {
-			n++
-		}
-	}
-
-	return n
 }
 
 // fill copies the window reading of a version into a pin reading.
@@ -89,11 +43,12 @@ func (an *analysis) fill(p *PinReading, key versionKey) {
 	p.Observation = an.windows.of(key).observation.copied()
 }
 
-func copyMap[K comparable](m map[K]int) map[K]int {
-	out := make(map[K]int, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+// copyMap returns a copy of a map. The copy is never nil, also for a nil
+// map, so it encodes as {} and not as null. maps.Clone keeps a nil map nil,
+// so it does not fit here.
+func copyMap[K comparable, V any](m map[K]V) map[K]V {
+	out := make(map[K]V, len(m))
+	maps.Copy(out, m)
 
 	return out
 }
@@ -102,13 +57,7 @@ func copyMap[K comparable](m map[K]int) map[K]int {
 // share one.
 func (o Observation) copied() Observation {
 	o.IncompleteByReason = copyMap(o.IncompleteByReason)
-
-	timing := make(map[Timing]Partition, len(o.ByTiming))
-	for k, v := range o.ByTiming {
-		timing[k] = v
-	}
-
-	o.ByTiming = timing
+	o.ByTiming = copyMap(o.ByTiming)
 
 	return o
 }

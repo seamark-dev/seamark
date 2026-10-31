@@ -1,25 +1,29 @@
 package lessonreport
 
-import "github.com/seamark-dev/seamark/internal/reviews"
+import (
+	"maps"
+
+	"github.com/seamark-dev/seamark/internal/reviews"
+)
 
 // index holds the keyed lookups of the audit prefix (read-only).
-// newIndex builds them in one pass over the lines, so no pin and
-// no episode rescans the log. Every list holds positions into
-// lines, in file order, because the file order of the append-only log
-// orders the records. Times never do.
+// newIndex builds them in one pass over the lines, so no pin and no
+// episode rescans the log. Every list holds positions into lines, in file
+// order, because the file order of the append-only log orders the
+// records. Times never do.
 //
-// The lookups by context and turn serve the action classes and the
-// decision timing, which Build does not derive yet. Build reads the
-// lookups by version, session, and event, plus the denied-call set.
+// byVersion serves the delivery counts and the windows. byEvent serves
+// the coverage counts and the totals. byMatch, bySession, and byContext
+// serve the action classes and the decision timing. These need a capture
+// archive, so this build fills the three lookups but does not read them.
 type index struct {
 	lines []reviews.AuditLine
 
 	byMatch   map[string][]int // match_sha256 → positions
-	byContext map[string][]int // context_sha256 → positions, in file order
+	byContext map[string][]int // context_sha256 → positions
 	bySession map[string][]int // session_sha256 → positions
 	byEvent   map[string][]int // event_id → positions
 	byVersion map[string][]int // pin version → positions of v2 records whose pins name it
-	byTurn    map[string][]int // turn_sha256 → positions
 
 	// legacy holds the exposure of each pin identity in the v1 records.
 	// reviews.FirstFirings is the one reader that canonicalizes a
@@ -38,31 +42,31 @@ type index struct {
 }
 
 // newIndex builds the lookups and the totals. It reads the prefix lines
-// only when usable is true: a source that is unreadable or over its limit
-// gives no counts, because a partial count would read like a result. The
-// denied set comes from the lesson-check records, which are usable on their own
-// state.
-func newIndex(in Inputs, usable bool) *index {
+// only when auditState is StateRead. A source that is unreadable or over
+// its limit gives no counts, because a partial count would read like a
+// result. The denied set comes from the lesson-check records, and only
+// when checkState is StateRead. The check reading uses the same test, so
+// both agree on whether the check stream is usable.
+func newIndex(in Inputs, auditState, checkState string) *index {
 	idx := &index{
 		byMatch:   map[string][]int{},
 		byContext: map[string][]int{},
 		bySession: map[string][]int{},
 		byEvent:   map[string][]int{},
 		byVersion: map[string][]int{},
-		byTurn:    map[string][]int{},
 		denied:    map[string]bool{},
 		totals:    Totals{DeliveredRecords: map[string]int{}},
 	}
 
-	if in.CheckAuditError == "" && !in.CheckAudit.OverLimit {
+	if checkState == StateRead {
 		for _, r := range in.CheckAudit.Records {
-			if guardDenied(r) {
+			if isGuardDeny(r) && r.MatchSHA != "" {
 				idx.denied[r.MatchSHA] = true
 			}
 		}
 	}
 
-	if !usable {
+	if auditState != StateRead {
 		return idx
 	}
 
@@ -72,8 +76,8 @@ func newIndex(in Inputs, usable bool) *index {
 	legacy := make([]reviews.Firing, 0, in.Audit.Legacy)
 	preparations := map[[3]string]bool{}
 
-	for i, l := range idx.lines {
-		f := l.Firing
+	for i := range idx.lines {
+		f := idx.lines[i].Firing
 		firings[i] = f
 
 		if f.SchemaVersion == 0 {
@@ -84,7 +88,6 @@ func newIndex(in Inputs, usable bool) *index {
 		put(idx.byContext, f.ContextSHA, i)
 		put(idx.bySession, f.SessionSHA, i)
 		put(idx.byEvent, f.EventID, i)
-		put(idx.byTurn, f.TurnSHA, i)
 
 		// A record lists a version once, also when duplicate pin entries
 		// name it twice.
@@ -115,9 +118,7 @@ func newIndex(in Inputs, usable bool) *index {
 	}
 
 	summary := reviews.Summarize(firings, nil)
-	for surface, n := range summary.BySurface {
-		idx.totals.DeliveredRecords[surface] = n
-	}
+	maps.Copy(idx.totals.DeliveredRecords, summary.BySurface)
 
 	idx.totals.SuppressedHookRecords = summary.SuppressedHookFirings
 	idx.totals.Events = len(idx.byEvent)
@@ -143,6 +144,14 @@ func surfaceName(surface string) string {
 	return surface
 }
 
+// receiverSurface reports whether the records of a surface name a
+// receiver: the hook surface, stored as "", or the exploration surface. A
+// preparation record names no receiver, so it opens no session and has no
+// lane.
+func receiverSurface(surface string) bool {
+	return surface == "" || surface == surfaceExplore
+}
+
 // isDeniedInjection reports whether a hook record belongs to a call that
 // the guard denied: the match digests are equal.
 func (idx *index) isDeniedInjection(f reviews.Firing) bool {
@@ -161,13 +170,35 @@ func injects(f reviews.Firing, version string) bool {
 	return false
 }
 
-// deliveryCounts counts the audit records of one pin version. The version's records come from the lookup by version, so an
-// older version of the same identity never adds to this one. One record
-// counts once per delivery value, also when two config entries share the
-// version. A delivered session needs an injected record of the hook or
-// the exploration surface with a session digest, and not on a denied
-// call. The v1 records name only the identity, so they count apart and on
-// the current version only; see legacyIdentity.
+// deliveriesOf returns the set of delivery values that a record gives the
+// pin version.
+func deliveriesOf(f reviews.Firing, version string) map[reviews.PinDelivery]bool {
+	out := map[reviews.PinDelivery]bool{}
+
+	for _, p := range f.Pins {
+		if p.Version == version {
+			out[p.Delivery] = true
+		}
+	}
+
+	return out
+}
+
+// opensSession reports whether a record opens a delivered session of a pin
+// version. It needs an injection of the version from the hook or the
+// exploration surface, a session digest, and a call that the guard did not
+// deny. The delivery counts and the windows both use this test, so they
+// count the same sessions.
+func (idx *index) opensSession(f reviews.Firing, version string) bool {
+	return f.SessionSHA != "" && receiverSurface(f.Surface) && injects(f, version) && !idx.isDeniedInjection(f)
+}
+
+// deliveryCounts counts the audit records of one pin version. The
+// version's records come from the lookup by version, so an older version
+// of the same identity never adds to this one. One record counts once per
+// delivery value, also when two config entries share the version. The v1
+// records name only the identity, so they count separately and on the
+// current version only.
 func (idx *index) deliveryCounts(p pinVersion) DeliveryCounts {
 	out := DeliveryCounts{Records: map[string]int{}}
 	sessions := map[string]bool{}
@@ -176,62 +207,79 @@ func (idx *index) deliveryCounts(p pinVersion) DeliveryCounts {
 		f := idx.lines[i].Firing
 		out.Records[surfaceName(f.Surface)]++
 
-		var injected, suppressed, held, failed, returned bool
+		d := deliveriesOf(f, p.version)
+		out.Injected += boolInt(d[reviews.PinInjected])
+		out.SuppressedRepeat += boolInt(d[reviews.PinSuppressedRepeat])
+		out.HeldBack += boolInt(d[reviews.PinHeldBack])
+		out.EmitFailed += boolInt(d[reviews.PinEmitFailed])
+		out.Returned += boolInt(d[reviews.PinReturned])
 
-		for _, pin := range f.Pins {
-			if pin.Version != p.version {
-				continue
-			}
-
-			switch pin.Delivery {
-			case reviews.PinInjected:
-				injected = true
-			case reviews.PinSuppressedRepeat:
-				suppressed = true
-			case reviews.PinHeldBack:
-				held = true
-			case reviews.PinEmitFailed:
-				failed = true
-			case reviews.PinReturned:
-				returned = true
-			}
-		}
-
-		out.Injected += boolInt(injected)
-		out.SuppressedRepeat += boolInt(suppressed)
-		out.HeldBack += boolInt(held)
-		out.EmitFailed += boolInt(failed)
-		out.Returned += boolInt(returned)
-
-		opensSession := injected && f.SessionSHA != "" &&
-			(f.Surface == "" || f.Surface == surfaceExplore) && !idx.isDeniedInjection(f)
-		if opensSession {
+		if idx.opensSession(f, p.version) {
 			sessions[f.SessionSHA] = true
 		}
 	}
 
 	out.Sessions = len(sessions)
-	if identity, ok := idx.legacyIdentity(p); ok {
-		out.LegacyIdentityRecords = idx.legacy[identity].Matches
+
+	// The v1 hook wrote the rendered symptom, "rule — note", into Fired.
+	// So the lookup renders the configured entry the way every surface
+	// does (reviews.PinIdentity), note included. A v1 record carries no
+	// version, so only a current reading shows the count. A historical
+	// version has no config entry and reads 0 by rule, not as a measured
+	// zero. Duplicate entries of one identity each show the count, as they
+	// show every other count.
+	if p.configured != nil {
+		out.LegacyIdentityRecords = idx.legacy[reviews.PinIdentity(*p.configured)].Matches
 	}
 
 	return out
 }
 
-// legacyIdentity is the canonical identity under which the v1 records
-// name a current pin. It renders the configured entry the way every
-// surface does (reviews.PinIdentity), note included, because the v1 hook
-// wrote the rendered symptom, "rule — note", into Fired. A v1 record
-// carries no version, so its identity count belongs to the current
-// reading alone. A historical version has no config entry and reads 0 by
-// rule, not as a measured zero. Duplicate entries of one identity each
-// show the count, as they each show every other count.
-func (idx *index) legacyIdentity(p pinVersion) (reviews.FiredLesson, bool) {
-	if p.configured == nil {
-		return reviews.FiredLesson{}, false
+// eventsWithoutPins counts the v2 events that show an injected or a
+// suppressed delivery and have no pin entry in any of their records. An
+// evaluation event, a reset event, and a preparation event that returned
+// nothing show no such delivery.
+func (idx *index) eventsWithoutPins() int {
+	n := 0
+
+	for _, positions := range idx.byEvent {
+		var delivered, pinned bool
+
+		for _, i := range positions {
+			f := idx.lines[i].Firing
+			if f.SchemaVersion == 0 {
+				continue
+			}
+
+			delivered = delivered || f.Delivery == reviews.DeliveryInjected || f.Delivery == reviews.DeliverySuppressedRepeat
+			pinned = pinned || len(f.Pins) > 0
+		}
+
+		if delivered && !pinned {
+			n++
+		}
 	}
 
-	return reviews.PinIdentity(*p.configured), true
+	return n
+}
+
+// unknownLaneRecords counts the v2 records of the hook and the
+// exploration surface that name no receiving context or an unknown lane.
+func (idx *index) unknownLaneRecords() int {
+	n := 0
+
+	for _, l := range idx.lines {
+		f := l.Firing
+		if f.SchemaVersion == 0 || !receiverSurface(f.Surface) {
+			continue
+		}
+
+		if f.ContextSHA == "" || f.Lane == laneUnknown {
+			n++
+		}
+	}
+
+	return n
 }
 
 func boolInt(b bool) int {

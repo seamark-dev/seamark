@@ -7,15 +7,15 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 )
 
 // This file holds EvaluatePostEdit, the pure evaluation of the post-edit
-// verification (contract K9), and the text of its findings. The CLI
-// handler decodes the event, reads the pending record, observes the
-// result, writes the reply, the audit record, and deletes the record.
-// EvaluatePostEdit does no I/O, so its result depends only on its input.
+// verification, and the text of its findings. The CLI handler does the
+// I/O: it decodes the event, reads the pending record, and observes the
+// result. Then it writes the reply and the audit record, and it deletes
+// the pending record. EvaluatePostEdit does no I/O, so its result
+// depends only on its input.
 
 // maxFindingLines bounds the result lines of the findings text (an
 // output cap). One more line counts the rest. The text goes into the
@@ -45,7 +45,8 @@ type PostEditInput struct {
 	// The zero value means missing-baseline.
 	NoBaseline Reason
 	// Root is the git top level, for the absolute paths of the rerun
-	// command (contracts §1.3).
+	// command. Another process runs that command, maybe from another
+	// directory.
 	Root    string
 	Tool    string
 	Outcome ToolOutcome
@@ -71,18 +72,19 @@ type PostEdit struct {
 	Findings string
 }
 
-// EvaluatePostEdit evaluates the actual result of one covered edit
-// (contract K9). The applicable pins are the check and enforce pins
-// whose scope holds a path of the operation: a path of the record or of
-// the event. The budgets, mute rules, restatement, and lease state of
-// the advisory hook never apply (ruling M2). When a path is unresolved,
-// every executable pin applies, because the path can lie in any scope.
+// EvaluatePostEdit evaluates the actual result of one covered edit. The
+// applicable pins are the check and enforce pins whose scope holds a
+// path of the operation: a path of the record or of the event. The
+// budgets, mute rules, restatement, and lease state of the advisory
+// hook never apply, because a verification must report every
+// applicable pin. When a path is unresolved, every executable pin
+// applies, because the path can lie in any scope.
 //
 // Without a record, each applicable pin is unknown with the NoBaseline
 // reason, and the attribution is no-baseline. An invalid check set
 // gives configuration-error for every executable pin, because the scope
 // of a broken entry is not known. The evaluation never denies, rewinds,
-// or reverts anything: the tool already ran (spec L122).
+// or reverts anything: the tool already ran.
 func EvaluatePostEdit(in PostEditInput) PostEdit {
 	out := PostEdit{Results: []Result{}, Attribution: AttributionNoBaseline}
 	if in.Snapshot != nil {
@@ -122,10 +124,9 @@ func (in PostEditInput) operationPaths() (paths []string, complete bool) {
 		return sortedUnique(in.Paths), in.PathsComplete
 	}
 
-	paths = sortedUnique(append(append([]string{}, in.Snapshot.Selection.Paths...), in.Paths...))
-	unresolved := !in.Snapshot.PathsComplete && incompletePaths(in.Snapshot).reason == ReasonIncompletePaths
+	paths = sortedUnique(slices.Concat(in.Snapshot.Selection.Paths, in.Paths))
 
-	return paths, !unresolved
+	return paths, !unresolvedPaths(in.Snapshot)
 }
 
 // noBaselineReason returns the reason of the results of a run without a
@@ -161,7 +162,8 @@ func applicableResults(results []Result, paths []string, complete bool) []Result
 // holds an event path that the record does not hold. Such a path has no
 // before state, so a pass or not-applicable would claim an edit that no
 // check saw. The record can lack a path when lessons.yaml changed
-// between the two hooks. A violation stays: it was observed.
+// between the two hooks. A violation stays, because the checker observed
+// it.
 func markUnrecorded(results []Result, eventPaths, recorded []string) {
 	var missing []string
 
@@ -190,7 +192,7 @@ func markUnrecorded(results []Result, eventPaths, recorded []string) {
 
 // withoutBaseline returns one unknown result with reason for each
 // executable pin whose scope holds a path. No checker runs, because no
-// before state exists to compare (contract K9, no record).
+// before state exists to compare.
 func withoutBaseline(cfg *Config, paths []string, complete bool, reason Reason) []Result {
 	results := []Result{}
 	maxRuleRunes := DefaultLimits().MaxRuleRunes
@@ -205,9 +207,13 @@ func withoutBaseline(cfg *Config, paths []string, complete bool, reason Reason) 
 			continue
 		}
 
-		ref := rawCheckRef(cfg.Raw, pin.CheckID)
-		if check, ok := cfg.Checks[pin.CheckID]; ok {
-			ref = CheckRef{ID: check.ID, Kind: check.Kind, Version: check.Version}
+		// The compiled check already holds its version digest. So only a pin
+		// without a compiled check hashes its raw definition again.
+		check, ok := cfg.Checks[pin.CheckID]
+		ref := checkRef(check)
+
+		if !ok {
+			ref = rawCheckRef(cfg.Raw, pin.CheckID)
 		}
 
 		res := Result{Outcome: OutcomeUnknown, Reason: reason, Check: ref}
@@ -220,59 +226,29 @@ func withoutBaseline(cfg *Config, paths []string, complete bool, reason Reason) 
 }
 
 // postEditState returns the summary state of a post-edit run, in the
-// order of contract K5: violation, incomplete, no-executable-checks,
-// no-applicable-checks, passed. A check set that cannot be established
-// is incomplete even without a result.
+// state order of Verify. A check set that cannot be established is
+// incomplete even without a result. The executable argument tests cfg
+// for nil first, because hasExecutable reads cfg.Pins and Go evaluates
+// every argument before the call.
 func postEditState(cfg *Config, loadErr error, results []Result) SummaryState {
-	var pass, violation, unknown int
+	broken := loadErr != nil || cfg == nil || len(cfg.Errors) > 0
 
-	for _, r := range results {
-		switch r.Outcome {
-		case OutcomePass:
-			pass++
-		case OutcomeViolation:
-			violation++
-		case OutcomeNotApplicable:
-		default:
-			// An outcome outside the closed list counts as unknown, so it
-			// never counts toward a pass.
-			unknown++
-		}
-	}
-
-	switch {
-	case violation > 0:
-		return SummaryViolation
-	case unknown > 0 || loadErr != nil || cfg == nil || len(cfg.Errors) > 0:
-		return SummaryIncomplete
-	case !hasExecutable(cfg):
-		return SummaryNoExecutableChecks
-	case pass == 0:
-		return SummaryNoApplicableChecks
-	default:
-		return SummaryPassed
-	}
+	return summaryState(countOutcomes(results), broken, cfg != nil && hasExecutable(cfg))
 }
 
 // hasExecutable reports whether the check set holds a pin of mode check
 // or enforce.
 func hasExecutable(cfg *Config) bool {
-	for _, pin := range cfg.Pins {
-		if isExecutable(pin.Mode) {
-			return true
-		}
-	}
-
-	return false
+	return slices.ContainsFunc(cfg.Pins, func(pin Pin) bool { return isExecutable(pin.Mode) })
 }
 
 // findingsText returns the reply text of a run with a violation or an
 // unknown result. It names the state, the snapshot digest, and for each
 // such result the pin-ref, the check, the outcome, and the paths with
-// their lines. It holds no excerpt and no rule text: a hook reply
-// carries paths, line numbers, digests, codes, and counts (contracts
-// §1.6). It never says that the edit was stopped, because the tool
-// already ran (spec L122, L168).
+// their lines. It holds no excerpt and no rule text, because a hook
+// reply carries only paths, line numbers, digests, codes, and counts.
+// It never says that the edit was stopped, because the tool already
+// ran.
 func findingsText(in PostEditInput, out PostEdit, paths []string, complete bool) string {
 	var (
 		b                   strings.Builder
@@ -315,10 +291,8 @@ func findingsText(in PostEditInput, out PostEdit, paths []string, complete bool)
 		fmt.Fprintf(&b, "- unknown/configuration-error: lesson checks cannot be established: %s; ask the user to fix .seamark/lessons.yaml\n", message)
 	}
 
-	if len(lines) > maxFindingLines {
-		omitted += len(lines) - maxFindingLines
-		lines = lines[:maxFindingLines]
-	}
+	lines, more := boundEntries(lines, maxFindingLines)
+	omitted += more
 
 	for _, line := range lines {
 		b.WriteString(render.Sanitize(line))
@@ -373,14 +347,14 @@ func configMessage(in PostEditInput) string {
 
 	switch {
 	case in.LoadErr != nil:
-		message = strings.TrimPrefix(in.LoadErr.Error(), configErrorPrefix)
+		message = configErrorText(in.LoadErr)
 	case in.Config != nil && len(in.Config.Errors) > 0:
 		message = in.Config.Errors[0].Message
 	default:
 		return ""
 	}
 
-	return render.Truncate(render.Sanitize(redact.Secrets(message)), DefaultLimits().MaxExcerptRunes)
+	return excerpt(message, DefaultLimits().MaxExcerptRunes)
 }
 
 // resultHead names the pin and the check of a result.

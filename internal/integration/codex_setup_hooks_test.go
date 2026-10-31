@@ -2,6 +2,7 @@ package integration
 
 import (
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -144,8 +145,8 @@ func TestCodexReRunReportsAnEnforceFlagThatTheMergeRemoves(t *testing.T) {
 }
 
 func TestCodexGateHookInAnotherSourceKeepsItsOwnMode(t *testing.T) {
-	// A wrapped enforcing gate in hooks.json: setup does not own it,
-	// installs no second gate handler, and reports its mode so the
+	// A wrapped enforcing gate in hooks.json: setup does not own it and
+	// installs no second gate handler. Setup reports its mode, so the
 	// gate line of the run cannot say "nothing blocks".
 	root := t.TempDir()
 	writeRel(t, root, ".codex/hooks.json", `{"hooks": {"PreToolUse": [
@@ -714,6 +715,92 @@ func TestCodexHooksReadTheInlineSourceWithoutOwningIt(t *testing.T) {
 	assert.Contains(t, strings.Join(findingReasons(plan, FindingWarning), "\n"), "not checked for inline seamark hooks")
 }
 
+func TestCodexInlineCommandsNameOnlyForeignInlineHooks(t *testing.T) {
+	// One reading with the markers of both hooks decides whether an
+	// inline hook is seamark's. A gate of either mode and the lessons
+	// hook are seamark's, and so is a command that can run one of them.
+	inline := func(command string) *codexConfigRead {
+		return &codexConfigRead{exists: true, data: []byte(
+			"[[hooks.PreToolUse]]\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"" + command + "\"\n")}
+	}
+
+	for name, tc := range map[string]struct {
+		command string
+		foreign bool
+	}{
+		"the warn gate":          {"/usr/local/bin/seamark " + hooks.CodexGateMarker(hooks.ModeWarn), false},
+		"the enforce gate":       {"/usr/local/bin/seamark " + hooks.CodexGateMarker(hooks.ModeEnforce), false},
+		"the lessons hook":       {"/usr/local/bin/seamark " + hooks.CodexLessonsMarker, false},
+		"a wrapped lessons hook": {"timeout 5 /usr/local/bin/seamark " + hooks.CodexLessonsMarker, false},
+		"a foreign hook":         {"/opt/notify.sh", true},
+		"printed hook text":      {"echo '/usr/local/bin/seamark " + hooks.CodexLessonsMarker + "'", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var plan ClientPlan
+
+			entries := codexInlineCommands(&plan, inline(tc.command))
+			require.Len(t, entries, 1)
+			assert.Equal(t, tc.command, entries[0].Command)
+			assert.Empty(t, plan.Reads, "the caller owns the read and its guard")
+
+			infos := findingReasons(plan, FindingInfo)
+			if !tc.foreign {
+				assert.Empty(t, infos, "a seamark hook needs no note about inline hooks")
+
+				return
+			}
+
+			require.Len(t, infos, 1)
+			assert.Contains(t, infos[0], "inline [hooks] are present")
+		})
+	}
+
+	// A file that does not parse keeps its error for the lesson sources.
+	broken := &codexConfigRead{exists: true, data: []byte("model = [broken")}
+
+	var plan ClientPlan
+	assert.Nil(t, codexInlineCommands(&plan, broken))
+	require.Error(t, broken.err)
+	assert.Contains(t, strings.Join(findingReasons(plan, FindingWarning), "\n"), "not checked for inline seamark hooks")
+
+	// A read failure gives the same warning. A missing file gives nothing.
+	plan = ClientPlan{}
+	assert.Nil(t, codexInlineCommands(&plan, &codexConfigRead{err: errors.New("permission denied")}))
+	assert.Len(t, findingReasons(plan, FindingWarning), 1)
+
+	plan = ClientPlan{}
+	assert.Nil(t, codexInlineCommands(&plan, &codexConfigRead{}))
+	assert.Empty(t, plan.Findings)
+}
+
+func TestCodexConfigReadReportsHooksTurnedOff(t *testing.T) {
+	for name, tc := range map[string]struct {
+		config   codexConfigRead
+		disabled bool
+	}{
+		"hooks turned off":  {codexConfigRead{exists: true, data: []byte("[features]\nhooks = false\n")}, true},
+		"hooks turned on":   {codexConfigRead{exists: true, data: []byte("[features]\nhooks = true\n")}, false},
+		"no feature flag":   {codexConfigRead{exists: true, data: []byte("model = \"x\"\n")}, false},
+		"a broken file":     {codexConfigRead{exists: true, data: []byte("model = [broken")}, false},
+		"a missing file":    {codexConfigRead{}, false},
+		"an unreadable one": {codexConfigRead{err: errors.New("permission denied")}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			findings := tc.config.hooksDisabledFindings()
+			if !tc.disabled {
+				assert.Empty(t, findings)
+
+				return
+			}
+
+			require.Len(t, findings, 1)
+			assert.Equal(t, FindingWarning, findings[0].Level)
+			assert.Equal(t, ".codex/config.toml", findings[0].Path)
+			assert.Contains(t, findings[0].Reason, "[features] hooks = false turns every Codex hook off")
+		})
+	}
+}
+
 func TestCodexHooksAndRegistrationShareOneReadOfTheConfig(t *testing.T) {
 	// Both parts of the plan need config.toml. Two reads give two guards,
 	// and the coordinator takes two different guards for a changed file.
@@ -786,8 +873,8 @@ func TestCodexGateHookIgnoresADefinitionThatNeverFires(t *testing.T) {
 	}
 
 	// An inline entry in a layout the reader does not know has no
-	// matcher or type to check: it can run the hook, so the managed
-	// hook is installed and the entry is named as uncertain.
+	// matcher or type to check, so it can run the hook. Setup installs
+	// the managed hook and names the entry as uncertain.
 	root := t.TempDir()
 	writeRel(t, root, ".codex/config.toml", "[hooks.PreToolUse]\ncommand = \""+gateCommand+"\"\n")
 

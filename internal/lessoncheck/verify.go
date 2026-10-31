@@ -2,8 +2,6 @@ package lessoncheck
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,16 +13,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// This file holds Verify, the one verification service of contract K5.
-// lessons --verify, check --lessons, the MCP check option, and the
-// console call it. Verify reads the configuration and the working-tree
-// snapshot, evaluates every executable pin, reads the inputs again, and
-// publishes the result as fresh or stale. Then it appends one record to
-// the lesson-check audit stream and sweeps the pending baselines.
+// This file holds Verify, the one verification service. lessons
+// --verify, check --lessons, the MCP check option, and the console call
+// it, so all four report the same result. Verify reads the
+// configuration and the working-tree snapshot, evaluates every
+// executable pin, reads the inputs again, and publishes the result as
+// fresh or stale. Then it appends one record to the lesson-check audit
+// stream and sweeps the pending baselines.
 // Revalidate checks later whether the binding of a published result
 // still holds. The console calls it on refresh, because it shows a
 // result after the working tree can change.
@@ -37,14 +35,15 @@ type VerifyRequest struct {
 	Limits Limits           // a zero value means DefaultLimits
 	Now    func() time.Time // nil means time.Now
 	// SeamarkVersion fills Verification.SeamarkVersion. The caller passes
-	// it, because lessoncheck must not import cli (§6 A1).
+	// it, because lessoncheck must not import cli, which holds the version.
 	SeamarkVersion string
 }
 
 // verifyCommand is the rerun command without --file arguments.
 const verifyCommand = "seamark lessons --verify"
 
-// pinsLabel is the label of the pins_sha256 digest (contracts §2.2).
+// pinsLabel is the first part of the pins_sha256 composition. The label
+// keeps this digest apart from the other compose digests.
 const pinsLabel = "lesson-pins/1"
 
 // standInBaselineTimeout bounds the one git call that names the baseline
@@ -58,23 +57,20 @@ const standInBaselineTimeout = 2 * time.Second
 var beforeRevalidate func()
 
 // Verify verifies the working tree of req.Root against every executable
-// pin (contract K5). It never returns an error for an evaluation
-// problem: a configuration error, a limit, a stale snapshot, a timeout,
-// and a cancellation all give a result. err is only a usage or root
-// failure, and then no result exists.
+// pin. It never returns an error for an evaluation problem: a
+// configuration error, a limit, a stale snapshot, a timeout, and a
+// cancellation all give a result. err is only a usage or root failure,
+// and then no result exists.
 //
-// The deadline of the whole verification is Limits.VerifyTimeout (K3).
+// The deadline of the whole verification is Limits.VerifyTimeout.
 // Verify never reads a hook result, so a proposed-edit or actual-edit
-// result never stands in for the working tree (AC-30).
+// result never stands in for the working tree.
 func Verify(ctx context.Context, req VerifyRequest) (*Verification, error) {
 	if err := checkRequest(req); err != nil {
 		return nil, err
 	}
 
-	lim := req.Limits
-	if lim == (Limits{}) {
-		lim = DefaultLimits()
-	}
+	lim := req.Limits.orDefault()
 
 	selected, err := selectionPaths(req.Paths)
 	if err != nil {
@@ -105,7 +101,7 @@ func Verify(ctx context.Context, req VerifyRequest) (*Verification, error) {
 		Selection:      snap.Selection,
 		Binding: Binding{
 			SnapshotSHA256:  snap.SHA256,
-			ConfigSHA256:    loaded.sha256,
+			ConfigSHA256:    loaded.report.SHA256,
 			PinsSHA256:      pinsDigest(results),
 			CheckerVersions: checkerVersions(results),
 		},
@@ -130,10 +126,10 @@ func Verify(ctx context.Context, req VerifyRequest) (*Verification, error) {
 			beforeRevalidate()
 		}
 
-		publish(v, revalidate(ctx, req.Root, snap, loaded.sha256), lim)
+		publish(v, revalidate(ctx, req.Root, snap, loaded.report.SHA256), lim)
 	}
 
-	summarize(v, len(snap.Changes), req.Root)
+	summarize(v, req.Root)
 
 	now := time.Now
 	if req.Now != nil {
@@ -142,25 +138,26 @@ func Verify(ctx context.Context, req VerifyRequest) (*Verification, error) {
 
 	v.CheckedAt = now().UTC().Format(time.RFC3339)
 
-	// Two steps follow the composed result (contract K5). Neither one
-	// changes the result or the exit code. They take no context, because
-	// the context of a stopped read has already ended, and the record
-	// of that run must still land.
+	// Two steps follow the composed result. Neither one changes the
+	// result or the exit code. They take no context, because the context
+	// of a stopped read has already ended. Verify must still append the
+	// record of that run.
 	v.auditErr = AppendAudit(req.Root, verifyRecord(v))
 
-	// The sweep is crash cleanup (contract K7). The next pre-edit,
-	// post-edit, or verify run repeats it, so its error is dropped here.
+	// The sweep removes old pending records that a crashed hook left
+	// behind. The next pre-edit, post-edit, or verify run repeats it, so
+	// Verify drops its error here.
 	_, _ = Sweep(req.Root, req.Caller, lim)
 
 	return v, nil
 }
 
 // Revalidate reports whether the binding of an earlier result v still
-// holds (contract K5, Freshness; K-13). It reads the snapshot again from
-// the selection of v and compares the baseline, the snapshot digest, the
-// lessons.yaml digest, the pins digest, and the checker kinds with v. A
-// change of content, scope, mode, check definition, baseline, or checker
-// version gives stale (spec L265).
+// holds. It reads the snapshot again from the selection of v and
+// compares the baseline, the snapshot digest, the lessons.yaml digest,
+// the pins digest, and the checker kinds with v. A change of content,
+// scope, mode, check definition, baseline, or checker version gives
+// stale.
 //
 // Revalidate runs no checker and writes nothing: no audit record and no
 // sweep, because it publishes no new result. It reads with
@@ -174,11 +171,11 @@ func Verify(ctx context.Context, req VerifyRequest) (*Verification, error) {
 // the freshness is then stale too, so a caller that drops the error
 // never shows a fresh result.
 func Revalidate(ctx context.Context, root string, v *Verification) (Freshness, error) {
-	switch {
+	switch err := checkRoot(root); {
 	case v == nil:
 		return FreshnessStale, errors.New("lesson checks: revalidate needs a result")
-	case !filepath.IsAbs(root):
-		return FreshnessStale, fmt.Errorf("lesson checks: root %q is not an absolute path", root)
+	case err != nil:
+		return FreshnessStale, err
 	case v.Freshness != FreshnessFresh:
 		return FreshnessStale, nil
 	}
@@ -203,7 +200,7 @@ func Revalidate(ctx context.Context, root string, v *Verification) (Freshness, e
 	}
 
 	loaded := loadConfig(root)
-	now := Binding{SnapshotSHA256: snap.SHA256, ConfigSHA256: loaded.sha256}
+	now := Binding{SnapshotSHA256: snap.SHA256, ConfigSHA256: loaded.report.SHA256}
 	now.PinsSHA256, now.CheckerVersions = configBinding(loaded.cfg)
 
 	// An unreadable file and an absent file both have the digest "", so
@@ -218,10 +215,10 @@ func Revalidate(ctx context.Context, root string, v *Verification) (Freshness, e
 
 // configBinding returns the pins digest and the checker kinds that
 // Verify derives from the results of cfg. It builds one stand-in result
-// per executable pin, as Evaluate does, with the kind of runnable. So it
-// needs no snapshot and runs no checker, and pinsDigest and
-// checkerVersions stay the one rule of both digests. A nil cfg (a
-// tier-1 error) has no result, as in Verify.
+// per executable pin, as Evaluate does, with the check kind that
+// runnable returns. So it needs no snapshot and runs no checker.
+// pinsDigest and checkerVersions stay the one rule of both digests. A
+// nil cfg (a tier-1 error) has no result, as in Verify.
 func configBinding(cfg *Config) (pins string, kinds []Kind) {
 	results := []Result{}
 
@@ -250,16 +247,18 @@ func sameBinding(a, b Binding) bool {
 		a.PinsSHA256 == b.PinsSHA256 && slices.Equal(a.CheckerVersions, b.CheckerVersions)
 }
 
-// AuditError returns the error of the verify audit record (contract
-// K9), or nil. lessons --verify prints it on its exit-0 paths only.
-// check --lessons and the MCP server stay silent about it (contract K5).
+// AuditError returns the error of the verify audit record, or nil. A
+// failed record never changes the result or the exit code. lessons
+// --verify prints it on its exit-0 paths only, because a non-zero exit
+// has its own stderr line. check --lessons and the MCP server stay
+// silent about it.
 func (v *Verification) AuditError() error {
 	return v.auditErr
 }
 
-// verifyRecord returns the K9 verify record of a composed result. It
-// holds the digests, the paths, and the outcome of each pin, and no
-// evidence excerpt (contracts §1.6).
+// verifyRecord returns the verify audit record of a composed result. It
+// holds the digests, the paths, and the outcome of each pin. It holds no
+// evidence excerpt, because an audit record never holds file content.
 func verifyRecord(v *Verification) AuditRecord {
 	paths := make([]string, 0, 2*len(v.Changes))
 
@@ -284,25 +283,30 @@ func verifyRecord(v *Verification) AuditRecord {
 // checkRequest refuses a request that no verification can serve. Each
 // case is a programming error of the caller, so the text names it.
 func checkRequest(req VerifyRequest) error {
-	switch req.Caller {
-	case CallerCLI, CallerMCP, CallerTUI, CallerHook:
-	default:
+	if !req.Caller.known() {
 		return fmt.Errorf("lesson checks: unknown caller %q", req.Caller)
 	}
 
-	// The rerun command names absolute paths (contracts §1.3), and an
-	// empty root would make git read the process directory.
-	if !filepath.IsAbs(req.Root) {
-		return fmt.Errorf("lesson checks: root %q is not an absolute path", req.Root)
+	return checkRoot(req.Root)
+}
+
+// checkRoot refuses a root that is not an absolute path. The rerun
+// command names absolute paths, and an empty root would make git read
+// the process directory. Verify and Revalidate share it, so both give
+// the same error text.
+func checkRoot(root string) error {
+	if !filepath.IsAbs(root) {
+		return fmt.Errorf("lesson checks: root %q is not an absolute path", root)
 	}
 
 	return nil
 }
 
-// loadedConfig is the configuration as Verify read it.
+// loadedConfig is the configuration as Verify read it. report.SHA256 is
+// the hex SHA-256 of the bytes, and "" when the file is absent or
+// unreadable.
 type loadedConfig struct {
 	cfg    *Config // nil after a tier-1 error
-	sha256 string  // hex SHA-256 of the bytes; "" when the file is absent or unreadable
 	report ConfigReport
 }
 
@@ -320,53 +324,39 @@ func loadConfig(root string) loadedConfig {
 	return parseLoadedConfig(data, err)
 }
 
-// parseLoadedConfig keeps the file-read result and its bytes together.
-// All configuration consumers use the same absence and error rules.
-func parseLoadedConfig(data []byte, err error) loadedConfig {
-	if errors.Is(err, os.ErrNotExist) {
-		cfg, _ := newConfig(reviews.DefaultConfig(), "")
-
-		return loadedConfig{cfg: cfg, report: ConfigReport{Valid: true}}
+// parseLoadedConfig builds the loaded configuration from one file read:
+// its bytes and its read error. Verify and the capability report share
+// it, and it applies the read rules of Load. So all three treat an
+// absent file and a read error the same way.
+func parseLoadedConfig(data []byte, readErr error) loadedConfig {
+	cfg, errs, err := parseRead(data, readErr)
+	if err == nil {
+		return loadedConfig{cfg: cfg, report: configReportOf(cfg, errs)}
 	}
 
-	if err != nil {
-		return tierOne(fmt.Errorf("%w: %w", reviews.ErrLessonsConfig, err), "")
+	// A tier-1 error leaves no Config, so this branch hashes the bytes
+	// itself. A file that did not read has no bytes and no digest.
+	digest := ""
+	if readErr == nil {
+		digest = hexSHA256(data)
 	}
 
-	sum := sha256.Sum256(data)
-	digest := hex.EncodeToString(sum[:])
-
-	cfg, errs, err := Parse(data)
-	if err != nil {
-		return tierOne(err, digest)
-	}
-
-	return loadedConfig{
-		cfg:    cfg,
-		sha256: digest,
-		report: ConfigReport{
-			SHA256:              digest,
-			LessonChecksVersion: cfg.Raw.LessonChecksVersion,
-			Valid:               len(errs) == 0,
-			Errors:              errs,
-		},
-	}
+	return tierOne(err, digest)
 }
 
 // tierOne reports a file that does not read or decode. The report holds
 // one decode-error entry. Its message is the error text without the
-// "lessons config: " prefix (contract K1), and the version is 0,
-// because no version was read (K5 Addition).
+// "lessons config: " prefix, because ConfigError.Error adds the prefix
+// again. The version is 0, because no version was read.
 func tierOne(err error, digest string) loadedConfig {
 	return loadedConfig{
-		sha256: digest,
 		report: ConfigReport{
 			SHA256: digest,
 			Valid:  false,
 			Errors: []ConfigError{{
 				Code:    CodeDecodeError,
 				Subject: "lessons.yaml",
-				Message: strings.TrimPrefix(err.Error(), configErrorPrefix),
+				Message: configErrorText(err),
 			}},
 		},
 	}
@@ -375,27 +365,22 @@ func tierOne(err error, digest string) loadedConfig {
 // readSnapshot reads the working-tree snapshot. When the context ends
 // before a snapshot exists, it returns a stand-in snapshot without
 // changes and the cause that every result then carries, because a
-// timeout or a cancellation is a result, not an error (contract K5).
+// timeout or a cancellation is a result, not an error.
 func readSnapshot(ctx context.Context, root string, selected []string, lim Limits) (*Snapshot, reasonHit, error) {
 	snap, err := ReadWorkingTree(ctx, root, selected, lim)
 	if err == nil {
 		return snap, reasonHit{}, nil
 	}
 
-	var stopped reasonHit
-
-	switch {
-	case errors.Is(err, context.Canceled):
-		stopped = reasonHit{reason: ReasonInterrupted}
-	case errors.Is(err, context.DeadlineExceeded):
-		stopped = reasonHit{reason: ReasonResourceLimit, limit: LimitVerifyTimeout}
-	default:
+	stopped, ok := causeOf(err, LimitVerifyTimeout)
+	if !ok {
 		return nil, reasonHit{}, err
 	}
 
-	// The result needs a baseline from the closed list. The read stopped
-	// before or after step 1, so one more bounded step 1 names it. When
-	// that fails too, no result can name its baseline.
+	// The result needs a baseline from the closed list. The stopped read
+	// returns no baseline, also when it stopped after its baseline read.
+	// So one more bounded baseline read names it. When that fails too, no
+	// result can name its baseline.
 	retry, cancel := context.WithTimeout(context.WithoutCancel(ctx), standInBaselineTimeout)
 	defer cancel()
 
@@ -404,15 +389,8 @@ func readSnapshot(ctx context.Context, root string, selected []string, lim Limit
 		return nil, reasonHit{}, err
 	}
 
-	snap = &Snapshot{
-		Schema:        SnapshotSchema,
-		Boundary:      BoundaryWorkingTree,
-		Baseline:      baseline,
-		Selection:     selectionOf(selected, baseline.Kind),
-		Changes:       []Change{},
-		PathsComplete: false,
-		bounds:        lim,
-	}
+	snap = newWorkingTreeSnapshot(baseline, selected, lim)
+	snap.PathsComplete = false
 
 	if stopped.reason == ReasonResourceLimit {
 		timedOut(snap, lim)
@@ -424,9 +402,10 @@ func readSnapshot(ctx context.Context, root string, selected []string, lim Limit
 }
 
 // withCheckerLimits returns the limit hits of the snapshot plus each
-// limit that a checker reached and the snapshot does not list (fix F-D).
-// K3 Bounds gives one list for every evaluation limit. A checker reaches
-// max-diff-lines without a snapshot read, so only Verify can add it.
+// limit that a checker reached and the snapshot does not list.
+// Verification.Limits is the one list of every evaluation limit. A
+// checker reaches max-diff-lines without a snapshot read, so only Verify
+// can add it.
 // Paths counts each undecided path once, also when several pins reach
 // the limit on it. A limit that the snapshot lists keeps its count,
 // because the producer already counted its paths. The list is sorted by
@@ -488,37 +467,31 @@ func pinsDigest(results []Result) string {
 
 	sort.Strings(parts)
 
-	sum := sha256.Sum256([]byte(compose(append([]string{pinsLabel}, parts...)...)))
-
-	return hex.EncodeToString(sum[:])
+	return reviews.ComposeDigest(append([]string{pinsLabel}, parts...)...)
 }
 
 // checkerVersions returns the sorted kinds whose checker ran. A
 // configuration-error result ran no checker, so its kind does not
 // count. The slice is never nil, so it encodes as [].
 func checkerVersions(results []Result) []Kind {
-	seen := map[Kind]bool{}
 	kinds := []Kind{}
 
 	for _, r := range results {
-		if r.Reason == ReasonConfigurationError || r.Check.Kind == "" || seen[r.Check.Kind] {
-			continue
+		if r.Reason != ReasonConfigurationError && r.Check.Kind != "" {
+			kinds = append(kinds, r.Check.Kind)
 		}
-
-		seen[r.Check.Kind] = true
-		kinds = append(kinds, r.Check.Kind)
 	}
 
-	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	slices.Sort(kinds)
 
-	return kinds
+	return slices.Compact(kinds)
 }
 
 // listings returns one listing per pin that Verify does not evaluate, in
-// file order. An advisory pin with a check never runs (§5 row 20), so
-// the listing names the check, and the text names the command that arms
-// it. A pin with an unknown mode is advisory (contract K1). The slice is
-// never nil.
+// file order. An advisory pin with a check never runs, so the listing
+// names the check, and the text names the command that arms it. A pin
+// with an unknown mode is advisory, because an unknown mode must never
+// arm a check. The slice is never nil.
 func listings(cfg *Config, lim Limits) []PinListing {
 	out := []PinListing{}
 
@@ -535,7 +508,7 @@ func listings(cfg *Config, lim Limits) []PinListing {
 			PinRef:     pin.Ref,
 			PinVersion: pin.Version,
 			Entry:      pin.Entry,
-			Rule:       render.Truncate(render.Sanitize(pin.Rule.Rule), lim.MaxRuleRunes),
+			Rule:       ruleText(pin.Rule.Rule, lim.MaxRuleRunes),
 			Listing:    ListingNotCheckable,
 		}
 
@@ -562,16 +535,19 @@ type recheck struct {
 }
 
 // revalidate reads the inputs of snap again and compares them with the
-// read (contract K5, Freshness): the HEAD commit, the status output with
-// the directory census, the content SHA-256 of each file whose content
-// the producer read, the
+// read: the HEAD commit, the status output with the directory census,
+// the content SHA-256 of each file whose content the producer read, the
 // Lstat identity of each other path that it looked at, and the
 // lessons.yaml bytes. It writes nothing.
+//
+// A budget with verify-timeout names the cause when ctx ends. So the
+// revalidation maps a context error to a cause as every checker does.
 func revalidate(ctx context.Context, root string, snap *Snapshot, configSHA string) recheck {
 	r := newTreeReader(ctx, root, snap.limits())
+	b := budget{ctx: ctx, limit: LimitVerifyTimeout}
 
 	baseline, err := r.baseline()
-	if hit, ended := contextEnded(ctx); ended {
+	if hit, ended := b.ended(); ended {
 		return recheck{unconfirmed: hit}
 	}
 
@@ -579,17 +555,16 @@ func revalidate(ctx context.Context, root string, snap *Snapshot, configSHA stri
 		return recheck{changed: true}
 	}
 
-	// An empty status digest means that the producer never read status
-	// (P1.7). Its path set is then not complete, so no result is a pass.
-	// The other inputs still get their check, but freshness stays
-	// unproven.
+	// An empty status digest means that the producer never read status.
+	// Its path set is then not complete, so no result is a pass. The
+	// other inputs still get their check, but freshness stays unproven.
 	var unconfirmed reasonHit
 
 	if snap.statusSHA256 == "" {
 		unconfirmed = reasonHit{reason: ReasonIncompletePaths}
 	} else {
 		_, sum, _ := r.statusRecords(snap.Selection.Paths)
-		if hit, ended := contextEnded(ctx); ended {
+		if hit, ended := b.ended(); ended {
 			return recheck{unconfirmed: hit}
 		}
 
@@ -600,7 +575,7 @@ func revalidate(ctx context.Context, root string, snap *Snapshot, configSHA stri
 
 	for _, id := range snap.identities {
 		same := sameIdentity(r, id)
-		if hit, ended := contextEnded(ctx); ended {
+		if hit, ended := b.ended(); ended {
 			return recheck{unconfirmed: hit}
 		}
 
@@ -636,7 +611,7 @@ func sameIdentity(r *treeReader, old fileID) bool {
 	}
 
 	if old.sha256 != "" {
-		return now.mode&identityModeBits == old.mode&identityModeBits && r.load(old.path).sha256 == old.sha256
+		return now.mode&identityModeBits == old.mode&identityModeBits && r.load(old.path).id.sha256 == old.sha256
 	}
 
 	return now.size == old.size && now.mtimeNS == old.mtimeNS && now.mode == old.mode && now.inode == old.inode
@@ -650,34 +625,17 @@ func configDigest(root string) string {
 		return ""
 	}
 
-	sum := sha256.Sum256(data)
-
-	return hex.EncodeToString(sum[:])
+	return hexSHA256(data)
 }
 
-// contextEnded reports whether ctx ended, and the cause that the
-// results then carry: interrupted for a cancellation, and
-// resource-limit with verify-timeout for a deadline.
-func contextEnded(ctx context.Context) (reasonHit, bool) {
-	switch err := ctx.Err(); {
-	case err == nil:
-		return reasonHit{}, false
-	case errors.Is(err, context.DeadlineExceeded):
-		return reasonHit{reason: ReasonResourceLimit, limit: LimitVerifyTimeout}, true
-	default:
-		return reasonHit{reason: ReasonInterrupted}, true
-	}
-}
-
-// publish applies the revalidation to the result (contract K5, ruling
-// K-3). A fresh result stays as it is. A changed input makes the result
-// stale: a violation stays with its evidence, because an observed
-// violation stays observed (spec L162), and every other result becomes
-// unknown/stale-snapshot. A first-run unknown keeps its cause in
-// FirstRun (fix F-C). A revalidation that could not finish proves
-// nothing, so the result is stale too. Its pass and not-applicable
-// results then become unknown with the cause, and an unknown result
-// keeps its own reason, which names the real cause.
+// publish applies the revalidation to the result. A fresh result stays
+// as it is. A changed input makes the result stale: a violation stays
+// with its evidence, because an observed violation stays observed, and
+// every other result becomes unknown/stale-snapshot. A first-run
+// unknown keeps its cause in FirstRun. A revalidation that could not
+// finish proves nothing, so the result is stale too. Its pass and
+// not-applicable results then become unknown with the cause, and an
+// unknown result keeps its own reason, which names the real cause.
 func publish(v *Verification, check recheck, lim Limits) {
 	switch {
 	case check.changed:
@@ -717,15 +675,16 @@ func markUnconfirmed(v *Verification, cause reasonHit, all bool) {
 }
 
 // setUnknown makes result i unknown with the cause. The findings of the
-// first run describe inputs that the result no longer vouches for, so
-// they go. A first-run pass or not-applicable stays for the text output
-// only (contract K5).
+// first run describe inputs that the result no longer confirms, so
+// setUnknown removes them. A first-run pass or not-applicable stays in
+// the text output only, so no JSON reader takes it for a current
+// outcome.
 //
 // The stale rewrite keeps the reason and the limit of a first-run
 // unknown in FirstRun, for the JSON and the text output. They name the
-// cause that the user can act on (fix F-C). Every other rewrite of an
-// unknown comes from a stand-in snapshot, which evaluated nothing, so it
-// keeps no first run.
+// cause that the user can act on. Every other rewrite of an unknown
+// comes from a stand-in snapshot, which evaluated nothing, so it keeps
+// no first run.
 func setUnknown(v *Verification, i int, cause reasonHit) {
 	r := &v.Results[i]
 
@@ -750,25 +709,40 @@ func setUnknown(v *Verification, i int, cause reasonHit) {
 
 // hasLimit reports whether a limit hit with the name exists.
 func hasLimit(hits []LimitHit, name string) bool {
-	for _, h := range hits {
-		if h.Name == name {
-			return true
-		}
-	}
-
-	return false
+	return slices.ContainsFunc(hits, func(h LimitHit) bool { return h.Name == name })
 }
 
 // summarize counts the results and the listings and sets the state and
-// the rerun command. The state order is violation, incomplete,
-// no-executable-checks, no-applicable-checks, passed. An invalid config
-// and a stale result are incomplete even without an unknown result
-// (contract K5). root is the root of the request, for the rerun
-// command.
-func summarize(v *Verification, changes int, root string) {
-	s := Summary{PinsEvaluated: len(v.Results), Changes: changes}
+// the rerun command. An invalid config and a stale result are incomplete
+// even without an unknown result, because neither proves a pass. root is
+// the root of the request, for the rerun command.
+func summarize(v *Verification, root string) {
+	s := countOutcomes(v.Results)
+	s.Changes = len(v.Changes)
 
-	for _, r := range v.Results {
+	for _, l := range v.Listings {
+		if l.Listing == ListingAdvisoryWithCheck {
+			s.AdvisoryWithCheck++
+		} else {
+			s.NotCheckable++
+		}
+	}
+
+	s.State = summaryState(s, !v.Config.Valid || v.Freshness != FreshnessFresh, s.PinsEvaluated > 0)
+	v.Summary = s
+
+	if s.State == SummaryViolation || s.State == SummaryIncomplete {
+		v.Rerun = rerunCommand(root, v.Selection.Paths)
+	}
+}
+
+// countOutcomes counts the results by outcome. It fills PinsEvaluated,
+// Pass, Violation, NotApplicable, and Unknown. Verify and the post-edit
+// hook share it, so both count by one rule.
+func countOutcomes(results []Result) Summary {
+	s := Summary{PinsEvaluated: len(results)}
+
+	for _, r := range results {
 		switch r.Outcome {
 		case OutcomePass:
 			s.Pass++
@@ -783,37 +757,33 @@ func summarize(v *Verification, changes int, root string) {
 		}
 	}
 
-	for _, l := range v.Listings {
-		if l.Listing == ListingAdvisoryWithCheck {
-			s.AdvisoryWithCheck++
-		} else {
-			s.NotCheckable++
-		}
-	}
+	return s
+}
 
+// summaryState returns the summary state of the counts. The state order
+// is violation, incomplete, no-executable-checks, no-applicable-checks,
+// passed, so the state always names the most serious result. incomplete
+// is true when the caller cannot confirm the check set or the snapshot.
+// executable is true when the check set holds an executable pin. Verify
+// and the post-edit hook share it, so both order the states alike.
+func summaryState(s Summary, incomplete, executable bool) SummaryState {
 	switch {
 	case s.Violation > 0:
-		s.State = SummaryViolation
-	case s.Unknown > 0 || !v.Config.Valid || v.Freshness != FreshnessFresh:
-		s.State = SummaryIncomplete
-	case s.PinsEvaluated == 0:
-		s.State = SummaryNoExecutableChecks
+		return SummaryViolation
+	case s.Unknown > 0 || incomplete:
+		return SummaryIncomplete
+	case !executable:
+		return SummaryNoExecutableChecks
 	case s.Pass == 0:
-		s.State = SummaryNoApplicableChecks
+		return SummaryNoApplicableChecks
 	default:
-		s.State = SummaryPassed
-	}
-
-	v.Summary = s
-
-	if s.State == SummaryViolation || s.State == SummaryIncomplete {
-		v.Rerun = rerunCommand(root, v.Selection.Paths)
+		return SummaryPassed
 	}
 }
 
 // rerunCommand returns the exact command that repeats a verification.
 // Each --file path is absolute, because another process runs the
-// command, maybe from another directory (contracts §1.3).
+// command, maybe from another directory.
 func rerunCommand(root string, paths []string) string {
 	var b strings.Builder
 
@@ -828,9 +798,10 @@ func rerunCommand(root string, paths []string) string {
 }
 
 // QuoteArg single-quotes a shell word that holds a character outside
-// [A-Za-z0-9_./-] (contracts §1.3). A plain path stays as it is, so the
-// common command stays easy to read. The rerun command uses it, and so
-// does the inspect command of a preparation, so the two quote alike.
+// [A-Za-z0-9_./-], so a shell reads the word as one argument. A plain
+// path stays as it is, so the common command stays easy to read. The
+// rerun command uses it, and so does the inspect command of a
+// preparation, so the two quote alike.
 func QuoteArg(s string) string {
 	if s != "" && strings.TrimLeftFunc(s, plainArgRune) == "" {
 		return s

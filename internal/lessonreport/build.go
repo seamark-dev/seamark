@@ -91,16 +91,17 @@ func Build(in Inputs, pinRef string) (Report, error) {
 	}
 
 	auditRead := auditSource(in)
-	idx := newIndex(in, auditRead.State == StateRead)
+	checkRead := checkAuditSource(in)
+	idx := newIndex(in, auditRead.State, checkRead.State)
 	an := analyze(idx)
-	checks := readChecks(in)
+	checks := readChecks(in, checkRead.State)
 
 	report := Report{
 		Schema: Schema,
 		AsOf: AsOf{
 			GeneratedAt: formatTime(in.Now),
 			Audit:       auditRead,
-			CheckAudit:  checkAuditSource(in),
+			CheckAudit:  checkRead,
 			Archive:     archiveRead(),
 			Config:      configRead(in),
 		},
@@ -113,8 +114,6 @@ func Build(in Inputs, pinRef string) (Report, error) {
 		Checks:     checks.reading,
 	}
 
-	report.Coverage.DeniedCallInjections = idx.deniedInjections
-
 	report.Capture = captureState(report.AsOf.Archive)
 
 	current := currentPins(in.Config)
@@ -123,8 +122,7 @@ func Build(in Inputs, pinRef string) (Report, error) {
 	}
 
 	if expandIdentity != "" {
-		report.Expanded = expansion(expandIdentity, current)
-		report.Expanded.Sessions = an.sessions(expandIdentity, report.Expanded.Versions)
+		report.Expanded = expansion(expandIdentity, current, an)
 	}
 
 	return report, nil
@@ -138,7 +136,7 @@ type pinVersion struct {
 	rule     string // the rule text as configured
 	identity string
 	version  string
-	mode     string // modeText of the configured mode
+	mode     string // the configured mode as lessoncheck.NormalizeMode reads it
 	scope    []string
 
 	// configured is the config entry of the version. Its note is part of
@@ -158,13 +156,18 @@ func currentPins(cfg *reviews.Config) []pinVersion {
 	for i, p := range cfg.Pin {
 		key := reviews.NewPinKey(p.Rule, p.Region, p.Regions)
 
+		// The report prints the mode that the checker uses. An omitted or
+		// unknown mode reads advisory, so the report never shows an armed
+		// check where the checker sees none.
+		mode, _ := lessoncheck.NormalizeMode(p.Mode)
+
 		out = append(out, pinVersion{
 			ref:      cfg.ShortPinRef(key),
 			entry:    i + 1,
 			rule:     p.Rule,
 			identity: reviews.PinIdentityDigest(key),
 			version:  cfg.PinVersion(p),
-			mode:     modeText(p.Mode),
+			mode:     string(mode),
 			scope:    sortedScope(p.AllRegions()),
 
 			configured: &cfg.Pin[i],
@@ -172,18 +175,6 @@ func currentPins(cfg *reviews.Config) []pinVersion {
 	}
 
 	return out
-}
-
-// modeText is the configured mode as the report prints it. An omitted or
-// unknown mode reads advisory, as lessoncheck normalizes it: an invalid
-// file never arms a check.
-func modeText(raw string) string {
-	switch raw {
-	case "check", "enforce":
-		return raw
-	default:
-		return "advisory"
-	}
 }
 
 // sortedScope returns the regions sorted, in a non-nil slice. An empty
@@ -195,16 +186,13 @@ func sortedScope(regions []string) []string {
 	return out
 }
 
-// expansion returns the --pin detail that Build can fill now: the
-// versions of one identity, in config file order. ResolveRef reads the
-// config only, so the identity is always a current one. The occurrences
-// stay empty, and Build adds the session windows.
-func expansion(identity string, current []pinVersion) *Expansion {
-	exp := &Expansion{
-		Versions:    []string{},
-		Occurrences: []OccurrenceDetail{},
-		Sessions:    []SessionWindow{},
-	}
+// expansion returns the --pin detail of one identity: its versions in
+// config file order, and the session windows in the order of the
+// versions. ResolveRef reads the config only, so the identity is always
+// a current one. The occurrences stay empty, because they need a capture
+// archive.
+func expansion(identity string, current []pinVersion, an *analysis) *Expansion {
+	exp := &Expansion{Versions: []string{}, Occurrences: []OccurrenceDetail{}}
 
 	seen := map[string]bool{}
 	add := func(p pinVersion) {
@@ -224,12 +212,29 @@ func expansion(identity string, current []pinVersion) *Expansion {
 		add(p)
 	}
 
+	exp.PinRef = shownPinRef(exp.PinRef, identity)
+	exp.Sessions = an.sessions(identity, exp.Versions)
+
 	return exp
 }
 
+// shownPinRef returns the printed name of a pin. A configured identity
+// prints its pin-ref. An identity that no config entry holds prints the
+// shown prefix of its digest. Every surface uses this one rule, so the
+// text selection and the expand commands print the same name.
+func shownPinRef(ref, identity string) string {
+	if ref != "" {
+		return ref
+	}
+
+	return identity[:min(reviews.ShownPinRef, len(identity))]
+}
+
 // reading builds the PinReading of one version from the audit index and
-// the window reading, with the check reading of the same version.
+// the window reading, with the check reading of the same version. The
+// literal leaves out the observation, because fill always sets it.
 func (idx *index) reading(p pinVersion, an *analysis, checks *checkIndex) PinReading {
+	key := versionKey{p.identity, p.version}
 	reading := PinReading{
 		PinRef:      p.ref,
 		PinIdentity: p.identity,
@@ -243,21 +248,15 @@ func (idx *index) reading(p pinVersion, an *analysis, checks *checkIndex) PinRea
 			ByClass:  map[PairClass]int{},
 			ByOrigin: map[Origin]int{},
 		},
-		Timing: map[PairTiming]int{},
-		Observation: Observation{
-			Unit:               ObservationUnit,
-			IncompleteByReason: map[Code]int{},
-			ByTiming:           map[Timing]Partition{},
-			Endpoint:           ObservationEndpoint,
-		},
+		Timing:      map[PairTiming]int{},
 		Facts:       map[Fact]int{},
 		Reasons:     map[Code]int{},
 		Limitations: []Code{},
 		NextSteps:   []NextStep{},
-		Checks:      checks.pin(versionKey{p.identity, p.version}),
+		Checks:      checks.pin(key),
 	}
 
-	an.fill(&reading, versionKey{p.identity, p.version})
+	an.fill(&reading, key)
 
 	return reading
 }
@@ -342,9 +341,10 @@ func archiveRead() ArchiveRead {
 	return ArchiveRead{State: StateAbsent, Error: ArchiveNotReadError}
 }
 
-// configRead states how the config read ended. The caller's state wins.
-// An empty state derives from the config. The guidance digest and the pin
-// count come from the config when the caller left them out.
+// configRead states how the config read ended. A state that the caller
+// sets takes precedence. An empty state derives from the config. The
+// guidance digest and the pin count come from the config when the
+// caller left them out.
 func configRead(in Inputs) ConfigRead {
 	out := in.ConfigRead
 
@@ -380,9 +380,4 @@ func captureState(a ArchiveRead) CaptureState {
 	}
 
 	return CaptureState{State: CaptureUnavailable, Reason: reason, Message: CaptureUnavailableMessage}
-}
-
-// guardDenied reports whether a lesson-check record is a guard deny with a match.
-func guardDenied(r lessoncheck.AuditRecord) bool {
-	return r.Kind == lessoncheck.AuditGuard && r.Guard != nil && r.Guard.Decision == "deny" && r.MatchSHA != ""
 }

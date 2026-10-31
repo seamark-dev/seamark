@@ -269,9 +269,9 @@ func recordedMode(inspections []integration.Inspection, client string) lessonche
 		for _, e := range insp.LessonHooks.Entries {
 			switch {
 			case e.Stage != lessoncheck.StagePreWrite:
-			case strings.HasPrefix(e.Marker, lessoncheck.MarkerGuard):
+			case lessoncheck.IsGuardMarker(e.Marker):
 				return lessoncheck.ModeEnforce
-			case strings.HasPrefix(e.Marker, lessoncheck.MarkerBaseline):
+			case lessoncheck.IsBaselineMarker(e.Marker):
 				mode = lessoncheck.ModeCheck
 			}
 		}

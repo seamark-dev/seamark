@@ -366,11 +366,11 @@ func TestGuardEvidenceValidatorSlowRecording(t *testing.T) {
 }
 
 // TestGuardIdentityCollectorMatchesProduction runs the guard_identities
-// step of scripts/capture-native.sh over a synthetic observer directory. It
-// proves that the collector writes the digests of the production
-// derivations (contract K2) and no raw ID, and that it refuses a fixture
-// whose roots disagree. The step needs python3, git, and its sqlite3
-// module; without them the test skips, and a skip proves nothing.
+// step of scripts/capture-native.sh over a synthetic observer directory.
+// It proves that the collector writes the digests of the production
+// derivations and no raw ID, and that it refuses a fixture whose roots
+// disagree. The step needs python3, git, and its sqlite3 module; without
+// them the test skips, and a skip proves nothing.
 func TestGuardIdentityCollectorMatchesProduction(t *testing.T) {
 	for _, tool := range []string{"python3", "git", "sh", "sed"} {
 		if _, err := exec.LookPath(tool); err != nil {

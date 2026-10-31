@@ -44,8 +44,8 @@ func TestLegacyApprovalTargetsFollowSkillsModeOrDetectCodex(t *testing.T) {
 }
 
 func TestLegacyApprovalTargetsUseOneRuleWithAndWithoutSkills(t *testing.T) {
-	// .codex/ without .agents/: the documented one-liner must configure
-	// Codex, whichever way the skills target was detected.
+	// .codex/ without .agents/: the documented single command must
+	// configure Codex, whichever way the skills target was detected.
 	root := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(root, ".codex"), 0o755))
 
@@ -162,8 +162,7 @@ func TestLegacySetupsKeepTheGranularIntent(t *testing.T) {
 }
 
 func TestExplicitSetupsScopeEveryOperationToTheSelection(t *testing.T) {
-	reg, err := NewRegistry(append(Builtin().Clients(), thirdClient())...)
-	require.NoError(t, err)
+	reg := builtinWith(t, thirdClient())
 
 	// Repeated IDs collapse, and the order of the flags does not matter.
 	got, err := ExplicitSetups(reg, []string{thirdID, CodexID, thirdID}, true, false, "warn")
@@ -194,8 +193,7 @@ func TestASharedSkillDirectoryDoesNotSelectItsOtherConsumer(t *testing.T) {
 	// .agents/skills is shared storage, not proof that Codex is set up.
 	// An explicit selection of the third client installs the skills there
 	// and asks nothing of Codex.
-	reg, err := NewRegistry(append(Builtin().Clients(), thirdClient())...)
-	require.NoError(t, err)
+	reg := builtinWith(t, thirdClient())
 
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0o755))
@@ -251,8 +249,7 @@ func TestGateModeComesFromTheSelectedHookClients(t *testing.T) {
 func TestUngatedHookClientsNamesAHooksOnlyClient(t *testing.T) {
 	hooksOnly := Client{ID: "hooksonly", Name: "Hooks Only", Setup: fakeSetup{}, SetupOps: SetupSupport{Hooks: true}}
 
-	reg, err := NewRegistry(append(Builtin().Clients(), hooksOnly)...)
-	require.NoError(t, err)
+	reg := builtinWith(t, hooksOnly)
 
 	setups, err := ExplicitSetups(reg, []string{"hooksonly", CodexID}, false, false, "")
 	require.NoError(t, err)
@@ -296,4 +293,21 @@ func TestInstalledGateModeRunsNoFullInspection(t *testing.T) {
 	assert.Equal(t, hooks.ModeWarn, InstalledGateMode(reg, t.TempDir(), []string{"first", "third"}))
 	assert.Equal(t, hooks.ModeEnforce, InstalledGateMode(reg, t.TempDir(), []string{"first", "second"}), "enforce wins")
 	assert.Empty(t, InstalledGateMode(reg, t.TempDir(), []string{"third"}))
+}
+
+func TestStrongerGateModeRanksEnforceThenWarnThenOtherModes(t *testing.T) {
+	for _, tc := range []struct{ a, b, want string }{
+		{"", "", ""},
+		{"", GateModeReportOnly, GateModeReportOnly},
+		{GateModeReportOnly, "", GateModeReportOnly},
+		{GateModeReportOnly, hooks.ModeWarn, hooks.ModeWarn},
+		{hooks.ModeWarn, GateModeReportOnly, hooks.ModeWarn},
+		{hooks.ModeWarn, hooks.ModeEnforce, hooks.ModeEnforce},
+		{hooks.ModeEnforce, hooks.ModeWarn, hooks.ModeEnforce},
+		{hooks.ModeEnforce, GateModeReportOnly, hooks.ModeEnforce},
+		// Two other modes tie, and the first one stays.
+		{GateModeReportOnly, "unknown", GateModeReportOnly},
+	} {
+		assert.Equal(t, tc.want, strongerGateMode(tc.a, tc.b), "%q, %q", tc.a, tc.b)
+	}
 }

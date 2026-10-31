@@ -8,20 +8,20 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// This file holds the checker impact of a pin edit (contract K1,
-// "Checker impact before apply"). A writer that changes the scope, the
-// note, or the check binding of an executable pin shows the impact
-// before the explicit apply. A person then reviews what the checkers do
-// after the edit, not only the new text (spec L120, L275).
+// This file holds the checker impact of a pin edit. A writer that
+// changes the scope, the note, or the check binding of an executable pin
+// shows the impact before the explicit apply. A person then reviews what
+// the checkers do after the edit, not only the new text.
 
-// ActiveRequested is the active state of an executable pin in milestone
-// P1. No guard and no verification hook exist before milestone P4, so
-// the text is fixed and is not a K10 join (contract K6 step 6, §5 row 41).
+// ActiveRequested is the active state of a pin that is executable after
+// the edit. The text is fixed, because ImpactOf does not read the hook
+// installation state. A caller with the capability report shows
+// CapabilityReport.ActiveText instead.
 const ActiveRequested = "requested; inactive: not-installed"
 
 // ActiveAdvisory is the active state of a pin that is advisory after the
-// edit. Contract K1 gives no text for this case. It occurs only when an
-// edit makes an executable pin advisory (lessons --set-mode).
+// edit. It occurs only when an edit makes an executable pin advisory
+// (lessons --set-mode).
 const ActiveAdvisory = "not requested; mode advisory runs no check"
 
 // Impact is the checker impact of one edited pin. ImpactOf fills it, and
@@ -47,11 +47,12 @@ type Impact struct {
 	// for example after a note-only change.
 	Predicate        string
 	PredicateChanged bool
-	// VersionBefore and VersionAfter are the pin versions (contract K2).
-	// The regions and the note are parts of the version.
+	// VersionBefore and VersionAfter are the pin versions. The regions and
+	// the note are parts of the version.
 	VersionBefore, VersionAfter string
-	// Active is the active state after the edit: ActiveRequested or
-	// ActiveAdvisory in milestone P1.
+	// Active is the active state after the edit. ImpactOf sets
+	// ActiveRequested or ActiveAdvisory. A caller that reads the
+	// capability report replaces it with CapabilityReport.ActiveText.
 	Active string
 }
 
@@ -62,11 +63,11 @@ type Impact struct {
 // or after the edit, in the order of entries. An advisory pin gets none.
 //
 // The configs come from the lenient decode (reviews.ParseConfig), not
-// from Validate. A writer shows the impact before its strict tier
-// refuses a candidate, and the pin versions stay deterministic for an
-// invalid reference (contract K2). ImpactOf returns an error for an entry
-// outside either pin list, because a missing pin must never read as an
-// advisory one.
+// from Validate. So a writer can show the impact before its strict tier
+// refuses a candidate. The pin versions also stay deterministic for an
+// invalid reference. ImpactOf returns an error for an entry outside
+// either pin list, because a missing pin must never read as an advisory
+// one.
 func ImpactOf(before, after *reviews.Config, entries []int) ([]Impact, error) {
 	var out []Impact
 
@@ -77,8 +78,8 @@ func ImpactOf(before, after *reviews.Config, entries []int) ([]Impact, error) {
 		}
 
 		old, next := before.Pin[n-1], after.Pin[n-1]
-		oldMode, _ := normalizeMode(old.Mode)
-		nextMode, _ := normalizeMode(next.Mode)
+		oldMode, _ := NormalizeMode(old.Mode)
+		nextMode, _ := NormalizeMode(next.Mode)
 
 		if !isExecutable(oldMode) && !isExecutable(nextMode) {
 			continue
@@ -97,7 +98,7 @@ func ImpactOf(before, after *reviews.Config, entries []int) ([]Impact, error) {
 		out = append(out, Impact{
 			Entry:       n,
 			PinRef:      before.ShortPinRef(reviews.NewPinKey(old.Rule, old.Region, old.Regions)),
-			Rule:        render.Truncate(render.Sanitize(old.Rule), DefaultLimits().MaxRuleRunes),
+			Rule:        ruleText(old.Rule, DefaultLimits().MaxRuleRunes),
 			Check:       check,
 			Mode:        nextMode,
 			ScopeBefore: scopeBefore,
@@ -160,10 +161,11 @@ func activeText(mode Mode) string {
 	return ActiveAdvisory
 }
 
-// ImpactLines renders the K1 block of each impact, in order. The first
-// line of a block names the pin; the other lines are indented by two
+// ImpactLines renders the impact block of each impact, in order. The first
+// line of a block names the pin, and the other lines start with two
 // spaces. A nil or empty slice gives no lines, so a surface without an
-// executable pin keeps its bytes. Every text from the file is sanitized.
+// executable pin keeps its bytes. Every text from the file passes
+// render.Sanitize.
 func ImpactLines(impacts []Impact) []string {
 	var lines []string
 

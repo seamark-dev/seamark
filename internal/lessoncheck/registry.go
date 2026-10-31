@@ -3,18 +3,18 @@ package lessoncheck
 import (
 	"context"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// This file holds the checker registry and Evaluate (contract K3). The
-// registry is a fixed map in the binary. No plugin and no command can
-// add a checker (spec L152), and every surface calls Evaluate, so no
-// second checker exists.
+// This file holds the checker registry and Evaluate. The registry is a
+// fixed map in the binary. No plugin and no command can add a checker,
+// and every surface calls Evaluate, so no second checker exists.
 
-// Outcome is the result of one checker run on one pin (spec L154).
+// Outcome is the result of one checker run on one pin.
 type Outcome string
 
 // The closed list of outcomes.
@@ -25,8 +25,8 @@ const (
 	OutcomeUnknown       Outcome = "unknown"
 )
 
-// Listing is a pin state outside the outcome list (spec L154). A listed
-// pin is not evaluated, so a listing never implies a pass.
+// Listing is a pin state outside the outcome list. Evaluate never runs a
+// listed pin, so a listing never implies a pass.
 type Listing string
 
 // The closed list of listings.
@@ -34,42 +34,42 @@ const (
 	// ListingNotCheckable is an advisory pin without a check.
 	ListingNotCheckable Listing = "not-checkable"
 	// ListingAdvisoryWithCheck is an advisory pin with a check that does
-	// not run until the mode changes (§5 row 20).
+	// not run until the mode changes.
 	ListingAdvisoryWithCheck Listing = "advisory-with-check"
 )
 
 // Reason tells why an outcome is unknown.
 type Reason string
 
-// The closed list of reasons (§5 row 11).
+// The closed list of reasons.
 const (
 	// ReasonUnsupportedContent is binary content, invalid UTF-8, a
 	// gitlink, or another non-text type where a check needs text.
 	ReasonUnsupportedContent Reason = "unsupported-content"
-	// ReasonContentUnavailable is required content that could not be
-	// read: the path vanished, a permission error, or a path through a
-	// link.
+	// ReasonContentUnavailable is required content that the producer
+	// cannot read: a vanished path, a permission error, or a path through
+	// a link.
 	ReasonContentUnavailable Reason = "content-unavailable"
 	// ReasonMissingBaseline is a before state that is absent or was
 	// discarded, or a HEAD blob that cannot be read.
 	ReasonMissingBaseline Reason = "missing-baseline"
 	// ReasonStaleSnapshot is an input that changed between the read and
-	// the publication of a result (contract K5).
+	// the publication of a result.
 	ReasonStaleSnapshot Reason = "stale-snapshot"
 	// ReasonIncompletePaths is an affected path set that is not fully
 	// known when no named limit caused it.
 	ReasonIncompletePaths Reason = "incomplete-paths"
 	// ReasonUnparseableInput is a covered hook request that does not
-	// decode (contract K8).
+	// decode.
 	ReasonUnparseableInput Reason = "unparseable-input"
 	// ReasonUnprojectableEdit is a pending edit whose result cannot be
-	// computed exactly (contract K8).
+	// computed exactly.
 	ReasonUnprojectableEdit Reason = "unprojectable-edit"
 	// ReasonResourceLimit is a named limit that an evaluation reached.
 	// Result.Limit names it.
 	ReasonResourceLimit Reason = "resource-limit"
-	// ReasonConfigurationError is a check set that cannot be established
-	// (contract K1, tier 1 or tier 2).
+	// ReasonConfigurationError is a check set that cannot be established:
+	// lessons.yaml does not decode, or a pin or a check is invalid.
 	ReasonConfigurationError Reason = "configuration-error"
 	// ReasonInterrupted is a cancellation, or an interrupted tool or hook,
 	// before the evaluation finished.
@@ -77,8 +77,8 @@ const (
 )
 
 // reasonPrecedence is the order in which a result picks its reason from
-// several unknown paths (contract K3, no-added-pattern/1 step 3). The
-// first reason in this list that is present wins.
+// several unknown paths. The first reason in this list that is present
+// wins.
 var reasonPrecedence = []Reason{
 	ReasonConfigurationError,
 	ReasonUnparseableInput,
@@ -92,7 +92,7 @@ var reasonPrecedence = []Reason{
 	ReasonStaleSnapshot,
 }
 
-// ChangeKind is the kind of one change (contract K4).
+// ChangeKind is the kind of one change.
 type ChangeKind string
 
 // The closed list of change kinds.
@@ -113,8 +113,8 @@ type Evidence struct {
 	Excerpt string     `json:"excerpt,omitempty"` // display only: redact.Secrets, render.Sanitize, MaxExcerptRunes; never persisted
 	Reason  Reason     `json:"reason,omitempty"`  // for unknown_paths entries only
 	// limit names the limit of a resource-limit unknown path. Verify reads
-	// it to list a limit that only a checker reaches (fix F-D). It is
-	// unexported, so the JSON output does not change.
+	// it to list a limit that only a checker reaches. It is unexported, so
+	// the JSON output does not change.
 	limit string
 }
 
@@ -138,7 +138,7 @@ type Result struct {
 	Outcome         Outcome    `json:"outcome"`
 	Reason          Reason     `json:"reason,omitempty"`    // set iff Outcome == unknown
 	Limit           string     `json:"limit,omitempty"`     // set iff Reason == resource-limit
-	FirstRun        *FirstRun  `json:"first_run,omitempty"` // Verify only: the cause of a first-run unknown that went stale (K5)
+	FirstRun        *FirstRun  `json:"first_run,omitempty"` // Verify only: the cause of a first-run unknown that went stale
 	Evidence        []Evidence `json:"evidence,omitempty"`
 	EvidenceOmitted int        `json:"evidence_omitted,omitempty"`
 	UnknownPaths    []Evidence `json:"unknown_paths,omitempty"` // in-scope paths left undecided (also when Outcome == violation)
@@ -150,9 +150,8 @@ type Result struct {
 // part of a Result. Evaluate fills the pin part. The budget bounds the
 // work of the checker: an ended budget gives unknown, never a pass.
 //
-// The contract sketch also names a compile function and a parameter
-// list. Validate compiles each definition once (Config.Checks), so the
-// registry holds no second compile step.
+// The registry holds no compile step. Validate compiles each definition
+// once into Config.Checks, so a second compile step would only repeat it.
 type checker struct {
 	evaluate func(budget, Check, *Snapshot, []string) Result
 	describe func(reviews.CheckDef) (string, error)
@@ -166,21 +165,13 @@ var registry = map[Kind]checker{
 
 // Kinds returns the checker kinds of the registry, sorted.
 func Kinds() []Kind {
-	kinds := make([]Kind, 0, len(registry))
-
-	for kind := range registry {
-		kinds = append(kinds, kind)
-	}
-
-	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
-
-	return kinds
+	return slices.Sorted(maps.Keys(registry))
 }
 
 // Describe returns the predicate of a check definition as one line of
 // text. The CLI and the console show it, because a user must review the
-// predicate and not assume that the pin note defines it (spec L120). It
-// returns an error for a definition that no checker can run.
+// predicate and not assume that the pin note defines it. It returns an
+// error for a definition that no checker can run.
 func Describe(def reviews.CheckDef) (string, error) {
 	c, ok := registry[Kind(def.Kind)]
 	if !ok {
@@ -192,12 +183,13 @@ func Describe(def reviews.CheckDef) (string, error) {
 
 // Evaluate runs the checker of every executable pin on the snapshot and
 // returns one Result per pin, in file order. It never evaluates an
-// advisory pin (§5 row 20). The slice is never nil, so it encodes as [].
+// advisory pin, because an advisory pin runs no check. The slice is
+// never nil, so it encodes as [].
 //
 // On a Config with Errors, Evaluate runs no checker. It returns one
 // unknown/configuration-error result per executable pin, because the
-// check set cannot be established (ruling P1-b). It then reads no
-// snapshot, so snap can be nil.
+// check set cannot be established. It then reads no snapshot, so snap
+// can be nil.
 //
 // Evaluate is pure: it reads only its arguments, changes neither of
 // them, and does no I/O.
@@ -212,8 +204,8 @@ func Evaluate(cfg *Config, snap *Snapshot) []Result {
 // When ctx ends, every result that no checker finished is
 // unknown/resource-limit with limit, or unknown/interrupted for a
 // cancellation. So the end of the budget fails closed when an enforce
-// pin applies (contract K8, step 2), and it stays advisory for a check
-// pin. When ctx does not end, or is nil, the results equal those of Evaluate.
+// pin applies, and it stays advisory for a check pin. When ctx does not
+// end, or is nil, the results equal those of Evaluate.
 func EvaluateWithin(ctx context.Context, limit string, cfg *Config, snap *Snapshot) []Result {
 	return evaluate(budget{ctx: ctx, limit: limit}, cfg, snap)
 }
@@ -243,11 +235,10 @@ func evaluatePin(b budget, cfg *Config, snap *Snapshot, pin Pin) Result {
 	case !ok:
 		res = Result{Outcome: OutcomeUnknown, Reason: ReasonConfigurationError, Check: rawCheckRef(cfg.Raw, pin.CheckID)}
 	case ended:
-		res = Result{Outcome: OutcomeUnknown, Reason: cause.reason, Limit: cause.limit}
-		res.Check = CheckRef{ID: check.ID, Kind: check.Kind, Version: check.Version}
+		res = Result{Outcome: OutcomeUnknown, Reason: cause.reason, Limit: cause.limit, Check: checkRef(check)}
 	default:
 		res = run.evaluate(b, check, snap, pin.Scope)
-		res.Check = CheckRef{ID: check.ID, Kind: check.Kind, Version: check.Version}
+		res.Check = checkRef(check)
 	}
 
 	return withPin(res, pin, snap.limits().MaxRuleRunes)
@@ -257,8 +248,8 @@ func evaluatePin(b budget, cfg *Config, snap *Snapshot, pin Pin) Result {
 // pin. ok is false when no checker can run it: the config is invalid,
 // or the check is missing or of an unknown kind. Validate guarantees a
 // compiled, known check for every executable pin of a valid config. A
-// hand-built Config can break that promise, so a missing check also
-// gives configuration-error, never a pass. Evaluate and the binding of
+// hand-built Config can lack such a check, so a missing check also gives
+// configuration-error, never a pass. Evaluate and the binding of
 // Revalidate use this one rule, so their checker kinds agree.
 func runnable(cfg *Config, pin Pin) (check Check, run checker, ok bool) {
 	check, compiled := cfg.Checks[pin.CheckID]
@@ -275,7 +266,7 @@ func withPin(res Result, pin Pin, maxRuleRunes int) Result {
 	res.PinIdentity = pin.Identity
 	res.PinVersion = pin.Version
 	res.Entry = pin.Entry
-	res.Rule = render.Truncate(render.Sanitize(pin.Rule.Rule), maxRuleRunes)
+	res.Rule = ruleText(pin.Rule.Rule, maxRuleRunes)
 	res.Mode = pin.Mode
 	// The copy keeps the result apart from the Config, so a caller that
 	// edits a result never edits the pin. The copy of a non-nil scope is
@@ -283,6 +274,21 @@ func withPin(res Result, pin Pin, maxRuleRunes int) Result {
 	res.Scope = append([]string{}, pin.Scope...)
 
 	return res
+}
+
+// ruleText returns the display form of a pin rule: sanitized and cut to
+// maxRunes. The results and the impact block share it, so a rule reads
+// the same in both. The guard prints Result.Rule as it is, because
+// withPin already cut it.
+func ruleText(rule string, maxRunes int) string {
+	return render.Truncate(render.Sanitize(rule), maxRunes)
+}
+
+// checkRef names the compiled check of a pin. Every result of a runnable
+// pin names its check with it, so the ID, the kind, and the version
+// always come from one compiled check.
+func checkRef(check Check) CheckRef {
+	return CheckRef{ID: check.ID, Kind: check.Kind, Version: check.Version}
 }
 
 // rawCheckRef names the check of a pin in an invalid config. It reads the
@@ -304,7 +310,7 @@ func rawCheckRef(raw *reviews.Config, id string) CheckRef {
 }
 
 // inScope reports whether a path is in the scope of a pin. An empty scope
-// is repository-wide. The test is one-directional (§6 A3): a region
+// is repository-wide. The test goes in one direction only: a region
 // covers the paths below it, and a path never covers a region.
 func inScope(path string, scope []string) bool {
 	if len(scope) == 0 {
@@ -349,13 +355,7 @@ func touching(snap *Snapshot, scope []string) []Change {
 		}
 	}
 
-	sort.SliceStable(changes, func(i, j int) bool {
-		if changes[i].Path != changes[j].Path {
-			return changes[i].Path < changes[j].Path
-		}
-
-		return changes[i].OldPath < changes[j].OldPath
-	})
+	sortChanges(changes)
 
 	return changes
 }
@@ -365,6 +365,39 @@ func touching(snap *Snapshot, scope []string) []Change {
 type reasonHit struct {
 	reason Reason
 	limit  string
+}
+
+// changeEvidence returns the evidence entry that names a change. The
+// checkers add the line, the reason, or the limit that an entry needs.
+func changeEvidence(ch Change) Evidence {
+	return Evidence{Path: ch.Path, OldPath: ch.OldPath, Change: ch.Kind}
+}
+
+// unknownPath returns the unknown-path entry of a change that cause
+// leaves undecided. The entry keeps the limit, so Verify can list it.
+func unknownPath(ch Change, cause reasonHit) Evidence {
+	e := changeEvidence(ch)
+	e.Reason, e.limit = cause.reason, cause.limit
+
+	return e
+}
+
+// unknownCauses returns the causes of an unknown outcome: the cause of
+// each unknown path in order, then the cause of a path set that is not
+// complete. The checkers read the causes from their unknown paths, so
+// the two lists cannot differ.
+func unknownCauses(unknown []Evidence, snap *Snapshot) []reasonHit {
+	var hits []reasonHit
+
+	for _, u := range unknown {
+		hits = append(hits, reasonHit{reason: u.Reason, limit: u.limit})
+	}
+
+	if !snap.PathsComplete {
+		hits = append(hits, incompletePaths(snap))
+	}
+
+	return hits
 }
 
 // pickReason returns the reason and the limit of an unknown outcome from
@@ -403,6 +436,14 @@ func incompletePaths(snap *Snapshot) reasonHit {
 	return reasonHit{reason: ReasonIncompletePaths}
 }
 
+// unresolvedPaths reports whether the path set of a snapshot holds a
+// path that no scope test can place: the set is incomplete without a
+// named limit. The guard and the post-edit evaluation share this rule,
+// so both apply every pin to such a path set.
+func unresolvedPaths(snap *Snapshot) bool {
+	return !snap.PathsComplete && incompletePaths(snap).reason == ReasonIncompletePaths
+}
+
 // isContentLimit reports whether a limit bounds the content of one path
 // instead of the path set.
 func isContentLimit(name string) bool {
@@ -415,8 +456,8 @@ func isContentLimit(name string) bool {
 }
 
 // boundEntries keeps the first max entries and counts the rest. The cut
-// changes the display only and never the outcome (contract K3, Bounds).
-// The evidence of a result and the unreadable directories of a snapshot
+// changes the display only and never the outcome. The evidence of a
+// result, the unreadable directories of a snapshot, and the deny texts
 // use it.
 func boundEntries[T any](all []T, maxEntries int) (kept []T, omitted int) {
 	maxEntries = max(maxEntries, 0)

@@ -11,8 +11,8 @@ import (
 )
 
 // impactChecks is the checks map of the impact fixtures: the two
-// definitions of the spec example and a second ID with the definition of
-// frozen-assets.
+// definitions of contractYAML, and frozen-copy, a second ID with the
+// definition of frozen-assets.
 const impactChecks = `lesson_checks_version: 1
 checks:
   frozen-assets:
@@ -79,10 +79,10 @@ func versionOf(cfg *reviews.Config, n int) string {
 	return cfg.PinVersion(cfg.Pin[n-1])[:12]
 }
 
-// TestLessonCheckImpact proves the K1 block "Checker impact before
-// apply": its five lines, the rule that an advisory pin gets no block,
-// the "unchanged" forms, the fixed active line of milestone P1 (§5 row
-// 41), and the deterministic text of an invalid reference.
+// TestLessonCheckImpact proves the checker impact block that a writer
+// shows before the apply: its five lines, the rule that an advisory pin
+// gets no block, the "unchanged" forms, the fixed active line, and the
+// deterministic text of an invalid reference.
 func TestLessonCheckImpact(t *testing.T) {
 	before := rawConfig(t, impactBefore)
 	forbid := "violation if any change touches a file in scope: an add, a content change, a deletion, " +
@@ -198,7 +198,7 @@ func TestLessonCheckImpact(t *testing.T) {
 		assert.Equal(t, "frozen-copy", impacts[0].Check.ID, "the block names the check after the edit")
 		assert.False(t, impacts[0].PredicateChanged)
 		assert.Equal(t, impacts[0].VersionBefore, impacts[0].VersionAfter,
-			"the pin version holds the definition, not the ID (contract K2)")
+			"the pin version holds the definition, not the ID")
 	})
 
 	t.Run("a repository-wide scope", func(t *testing.T) {

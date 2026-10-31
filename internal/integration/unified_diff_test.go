@@ -13,7 +13,8 @@ import (
 )
 
 // guardedCommon is a common document that replaces the file at rel with
-// after, as the settings and pin editors do (Route A).
+// after. The settings and pin editors write through the setup engine in
+// the same way.
 func guardedCommon(rel string, after []byte) Document {
 	return Document{
 		Path: rel, Detail: "update", KeptDetail: "no change",
@@ -97,8 +98,9 @@ func TestUnifiedDiffMasksStructuredCredentials(t *testing.T) {
 }
 
 func TestGuardedCommonDocumentWritesTheExactBytes(t *testing.T) {
-	// The helper above must behave like a real Route A document, or the
-	// equality test would compare against the wrong preview.
+	// The helper above must behave like a real common document of the
+	// setup engine. Otherwise the equality test compares against the
+	// wrong preview.
 	root := t.TempDir()
 	writeRel(t, root, "doc.txt", "old\n")
 

@@ -25,13 +25,13 @@ import (
 )
 
 // This file holds the evidence refresh service: a read-only plan and a
-// confirmed run over the two sources, the local fix commits and the
-// GitHub review comments. Its rules:
+// confirmed run. The run reads two sources: the local fix commits and
+// the GitHub review comments. Its rules:
 //
 //   - The freshness of a source comes from the mine stamp that the store
 //     records after a saved refresh. Nothing guesses a time, so findings
-//     without a stamp read as an unknown time (the console words live in
-//     evFreshness of internal/tui).
+//     without a stamp read as an unknown time. evFreshness of
+//     internal/tui holds the console words for it.
 //   - The local refresh mines the fix commits reachable from HEAD and
 //     makes no network call. The combined refresh mines the local fixes
 //     first, then fetches the review comments through gh (Plan.Network).
@@ -40,8 +40,8 @@ import (
 //     ErrConflict.
 //   - Each source ends with its own typed outcome (index.SourceState and
 //     index.SourceCause). A failed, skipped or stopped fetch never
-//     replaces the stored reviews, and a source counts as refreshed only
-//     after its data is saved.
+//     replaces the stored reviews. A source counts as refreshed only
+//     after the store saves its data.
 //   - A stop during the local mine lets that mine finish and save, then
 //     ends the run before any GitHub work. A stop during the fetch
 //     cancels gh and keeps the stored reviews.
@@ -109,21 +109,30 @@ type Snapshot struct {
 // nothing, and never creates a database: the store opens read-only.
 // Local git runs only to resolve the origin remote.
 func Inspect(ws workspace.Workspace) Snapshot {
-	snap := evReadLocal(ws)
-	snap.Repository, snap.RepoState = reviews.ResolveRepository(snap.Probe.Root)
-	snap.GHPath = evLookGH()
+	snap, _ := evReadLocal(ws)
+	evResolve(&snap)
 
 	return snap
 }
 
 // evReadLocal reads the stored evidence and the review window. It runs
 // no git and no gh, so a blocked run can report the state it left
-// without work. The repository stays unresolved.
-func evReadLocal(ws workspace.Workspace) Snapshot {
-	snap := evReadStore(ws)
-	snap.Window, _ = evReadWindow(snap.Probe.Root)
+// without work. The repository stays unresolved. configDigest is the
+// digest of the config.yaml bytes that gave the window, which a plan
+// binds.
+func evReadLocal(ws workspace.Workspace) (snap Snapshot, configDigest string) {
+	snap = evReadStore(ws)
+	snap.Window, configDigest = evReadWindow(snap.Probe.Root)
 
-	return snap
+	return snap, configDigest
+}
+
+// evResolve sets the GitHub repository of the origin remote and the gh
+// path of snap. It runs local git only and never runs gh, so it makes
+// no network call.
+func evResolve(snap *Snapshot) {
+	snap.Repository, snap.RepoState = reviews.ResolveRepository(snap.Probe.Root)
+	snap.GHPath = evLookGH()
 }
 
 // EffectKind tells how a refresh relates to one part of the stored data.
@@ -215,7 +224,7 @@ func (p *Plan) Ready() bool {
 // PlanRefresh previews an evidence refresh in mode. It writes nothing
 // and runs no gh. An index that is not ready blocks the plan before any
 // git command runs. A malformed config.yaml blocks the plan, so a run
-// never spends network work against a default the user did not review.
+// never uses the network with a default that the user did not review.
 // A missing GitHub origin or gh is no blocker: the local source still
 // runs, and the plan discloses that reviews are unavailable.
 func PlanRefresh(ws workspace.Workspace, mode index.SourceMode) (*Plan, error) {
@@ -230,22 +239,21 @@ func PlanRefresh(ws workspace.Workspace, mode index.SourceMode) (*Plan, error) {
 		PlannedAt:     time.Now(),
 	}
 
-	p.Current = evReadStore(ws)
+	var configDigest string
+
+	p.Current, configDigest = evReadLocal(ws)
 	p.Probe = p.Current.Probe
 	p.Root = p.Probe.Root
-
-	window, configDigest := evReadWindow(p.Root)
-	p.Window = window
-	p.Current.Window = window
+	p.Window = p.Current.Window
 
 	if p.Probe.State != workspace.IndexReady {
 		p.Blockers = append(p.Blockers, evIndexBlocker(p.Probe))
 	}
 
-	if window.ConfigErr != nil {
+	if p.Window.ConfigErr != nil {
 		p.Blockers = append(p.Blockers, Blocker{
 			Kind:   BlockConfig,
-			Reason: evSafe(window.ConfigErr.Error()),
+			Reason: evSafe(p.Window.ConfigErr.Error()),
 			Path:   evConfigPath(p.Root),
 		})
 	}
@@ -260,10 +268,8 @@ func PlanRefresh(ws workspace.Workspace, mode index.SourceMode) (*Plan, error) {
 		return p, nil
 	}
 
-	p.Repository, p.RepoState = reviews.ResolveRepository(p.Root)
-	p.Current.Repository, p.Current.RepoState = p.Repository, p.RepoState
-	p.GHPath = evLookGH()
-	p.Current.GHPath = p.GHPath
+	evResolve(&p.Current)
+	p.Repository, p.RepoState, p.GHPath = p.Current.Repository, p.Current.RepoState, p.Current.GHPath
 	p.Network = mode == index.SourcesReviewsAndLocal && p.RepoState == reviews.RepositoryGitHub
 	p.observed = evObserve(ws, p.Current, configDigest)
 	p.Head = p.observed.head
@@ -300,9 +306,9 @@ type Outcome struct {
 // RunRefresh runs a confirmed plan. It checks the bound observation
 // first; any change returns a conflict and starts nothing. Before each
 // store open it checks the database again, because the open would
-// create a missing database or migrate an older one. A nil fetch uses gh. A stop
-// through ctx ends the GitHub fetch, and the stored review corpus then
-// stays; the local fix phase always finishes its write.
+// create a missing database or migrate an older one. A nil fetch uses
+// gh. A stop through ctx ends the GitHub fetch and keeps the stored
+// review corpus. The local fix phase always finishes its write.
 //
 // The two sources succeed or fail on their own. The fix write commits
 // before the fetch starts, so a failed fetch never undoes saved fixes.
@@ -339,7 +345,7 @@ func RunRefresh(ctx context.Context, p *Plan, fetch reviews.FetchFunc,
 	// A blocked plan runs no git and no gh, because its index can be
 	// foreign or half built. After is still a fresh read of what stays.
 	if !p.Ready() {
-		out.After = evReadLocal(p.Workspace)
+		out.After, _ = evReadLocal(p.Workspace)
 		out.FinishedAt = time.Now()
 
 		return out, ErrRefreshBlocked
@@ -383,8 +389,7 @@ func RunRefresh(ctx context.Context, p *Plan, fetch reviews.FetchFunc,
 // revalidate compares a new observation with the bound one. It names
 // every change in one ErrConflict error.
 func (p *Plan) revalidate() error {
-	now := evReadStore(p.Workspace)
-	_, configDigest := evReadWindow(now.Probe.Root)
+	now, configDigest := evReadLocal(p.Workspace)
 
 	if changes := p.observed.diff(evObserve(p.Workspace, now, configDigest)); len(changes) > 0 {
 		return fmt.Errorf("%w: %s", ErrConflict, strings.Join(changes, "; "))
@@ -394,8 +399,8 @@ func (p *Plan) revalidate() error {
 }
 
 // checkDatabase checks the database before a source opens the store.
-// Our own writes change the stamps, so only the database identity and
-// state count.
+// The run's own writes change the stamps, so only the database identity
+// and state count.
 func (p *Plan) checkDatabase() error {
 	probe := workspace.Probe(p.Workspace)
 
@@ -406,8 +411,8 @@ func (p *Plan) checkDatabase() error {
 	return nil
 }
 
-// evObservation is the state that a plan binds (decision D-9). It holds
-// the repository root, the index database, HEAD, the origin remote,
+// evObservation is the state that a plan binds. It holds the
+// repository root, the index database, HEAD, the origin remote,
 // config.yaml, and the two mine stamps. A change of any of them before
 // the start makes the plan stale, because the user confirmed the old
 // facts.
@@ -427,8 +432,8 @@ type evObservation struct {
 // kept as digests: a URL can carry credentials, and the plan needs only
 // equality.
 func evObserve(ws workspace.Workspace, snap Snapshot, configDigest string) evObservation {
-	origin, _ := evGit(snap.Probe.Root, "remote", "get-url", reviews.OriginRemote)
-	head, _ := evGit(snap.Probe.Root, "rev-parse", "--verify", "--quiet", "HEAD")
+	origin := evGit(snap.Probe.Root, "remote", "get-url", reviews.OriginRemote)
+	head := evGit(snap.Probe.Root, "rev-parse", "--verify", "--quiet", "HEAD")
 
 	return evObservation{
 		root:      snap.Probe.Root,
@@ -464,8 +469,8 @@ func (o evObservation) diff(now evObservation) []string {
 }
 
 // databaseChanges names each change of the index database from the
-// bound observation o. A removed file is one change: its state, schema,
-// and identity changes follow from it and only add noise.
+// bound observation o. A removed file is one change. Its state, schema,
+// and identity changes follow from the removal, so the list omits them.
 func (o evObservation) databaseChanges(state workspace.IndexState, schema int, file fs.FileInfo) []string {
 	if state == workspace.IndexAbsent && o.state != workspace.IndexAbsent {
 		return []string{"the index database file was removed"}
@@ -656,9 +661,10 @@ func evIndexBlocker(probe workspace.IndexProbe) Blocker {
 	return Blocker{Kind: BlockIndex, Reason: evSafe(reason), Path: probe.Path}
 }
 
-// evConfigPath is the config.yaml path under root.
+// evConfigPath is the config.yaml path under root. It joins the same
+// repository-relative path that a distillation preview binds.
 func evConfigPath(root string) string {
-	return filepath.Join(root, ".seamark", "config.yaml")
+	return filepath.Join(root, filepath.FromSlash(distConfigFile))
 }
 
 // evLookGH finds gh on PATH without running it. Running gh could reach
@@ -673,17 +679,18 @@ func evLookGH() string {
 }
 
 // evGit runs one local git command in root and returns its trimmed
-// output.
-func evGit(root string, args ...string) (string, bool) {
+// output, or "" when the command fails. The observation compares only
+// the output, so a failure and an empty output count the same.
+func evGit(root string, args ...string) string {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = root
 
 	out, err := cmd.Output()
 	if err != nil {
-		return "", false
+		return ""
 	}
 
-	return strings.TrimSpace(string(out)), true
+	return strings.TrimSpace(string(out))
 }
 
 // evStat returns the file info of path, or nil when stat fails.

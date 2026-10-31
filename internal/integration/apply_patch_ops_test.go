@@ -12,22 +12,6 @@ import (
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 )
 
-// patchOpPaths returns the paths of the operations in the order of
-// applyPatchPaths: each path, then its move target.
-func patchOpPaths(ops []lessoncheck.FileOp) []string {
-	var paths []string
-
-	for _, op := range ops {
-		paths = append(paths, op.Path)
-
-		if op.MoveTo != "" {
-			paths = append(paths, op.MoveTo)
-		}
-	}
-
-	return paths
-}
-
 // grammarClass names the error class of a patch decoder result: "" for
 // no error, else the sentinel that the error wraps.
 func grammarClass(t *testing.T, err error) string {
@@ -47,12 +31,13 @@ func grammarClass(t *testing.T, err error) string {
 	return ""
 }
 
-// TestApplyPatchOpsKeepThePathOracle is the differential check of the
-// operation decoder against the path decoder. For every patch of
-// testdata/codex/apply_patch_oracle.json, applyPatchOps and
-// applyPatchPaths agree on the error class, and the operation paths
-// equal the path list in order. So the guard and the advisory hook read
-// one patch alike, and both name every file that Codex touched.
+// TestApplyPatchOpsKeepThePathOracle checks the operation decoder
+// against the native parser, for every patch of
+// testdata/codex/apply_patch_oracle.json. applyPatchPaths reads its
+// paths from applyPatchOps, so the error-class and path asserts hold by
+// construction. They stay to catch a later split of the two functions.
+// The oracle check is the Subset assertion: for each patch that Codex
+// accepts, the operations name every file that Codex touched.
 func TestApplyPatchOpsKeepThePathOracle(t *testing.T) {
 	var oracle struct {
 		Cases []struct {
@@ -106,11 +91,11 @@ func TestApplyPatchOpsKeepThePathOracle(t *testing.T) {
 			patch   string
 			content []string // the content of each add section, in order
 		}{
-			// 05: a header with leading spaces after an add ends the add.
+			// Oracle case 05: a header with leading spaces after an add ends the add.
 			{"*** Begin Patch\n*** Add File: n.txt\n+hi\n  *** Delete File: b.txt\n*** End Patch", []string{"hi"}},
-			// 14: an add without lines has an empty, non-nil content.
+			// Oracle case 14: an add without lines has an empty, non-nil content.
 			{"*** Begin Patch\n*** Add File: n.txt\n*** Delete File: b.txt\n*** End Patch", []string{""}},
-			// 19: header text after the "+" is content.
+			// Oracle case 19: header text after the "+" is content.
 			{"*** Begin Patch\n*** Add File: n.txt\n+*** Delete File: b.txt\n*** End Patch", []string{"*** Delete File: b.txt"}},
 			// One carriage return per line end goes, as in the Codex parser.
 			{"*** Begin Patch\r\n*** Add File: n.txt\r\n+a\r\n+\r\n+ b \r\n*** End Patch", []string{"a\n\n b "}},

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 )
 
@@ -17,6 +18,24 @@ import (
 // version, as claudeRecordedVersion does.
 func sameClientVersion(evidence, recorded string) bool {
 	return recorded != "" && (evidence == recorded || strings.HasSuffix(evidence, " "+recorded))
+}
+
+// blockedDeny reports whether a guard record shows a block: a deny that
+// wrote its reply with the exit protocol. The deny check and the slow
+// check share it, so both accept the same proof.
+func blockedDeny(rec lessoncheck.AuditRecord) bool {
+	return rec.Guard.Decision == lessoncheck.GuardDeny && rec.Guard.ReplyWritten &&
+		rec.Guard.Protocol == lessoncheck.GuardProtocolExit2
+}
+
+// eventContext returns the context path of a recorded payload: child
+// when the payload names an agent, root otherwise.
+func eventContext(e timingEvent) lessoncheck.PathContext {
+	if nativeString(e.raw, "agent_id") != "" {
+		return lessoncheck.ContextChild
+	}
+
+	return lessoncheck.ContextRoot
 }
 
 // deniedPaths returns the pre-write paths that the recording shows
@@ -41,8 +60,7 @@ func (r guardRecording) deniedPaths(t *testing.T, client string) map[guardPath]b
 			}
 
 			deny, ok := r.guardRecordOf(name, e)
-			if !ok || deny.Guard.Decision != lessoncheck.GuardDeny || !deny.Guard.ReplyWritten ||
-				deny.Guard.Protocol != lessoncheck.GuardProtocolExit2 {
+			if !ok || !blockedDeny(deny) {
 				continue
 			}
 
@@ -50,28 +68,25 @@ func (r guardRecording) deniedPaths(t *testing.T, client string) map[guardPath]b
 				continue
 			}
 
-			context := lessoncheck.ContextRoot
-			if nativeString(e.raw, "agent_id") != "" {
-				context = lessoncheck.ContextChild
-			}
-
-			out[guardPath{client: client, tool: tool, context: context}] = true
+			out[guardPath{client: client, tool: tool, context: eventContext(e)}] = true
 		}
 	}
 
 	return out
 }
 
-// slowRecorded requires an observed protected slow call for the requested
-// path. A write, an unjoined denial, or a timeout without proof stays unknown.
+// slowRecorded reports whether the slow-guard case shows a protected
+// slow call on the given path. A write, a deny without a joined record,
+// or a timeout without proof gives false, so the evidence stays unknown.
 // With no path, it reports whether any path has that proof.
 func (r guardRecording) slowRecorded(paths ...guardPath) bool {
 	c, ok := r.cases[guardSlowGuard]
 	if !ok || c.Phase != "slow" || !c.unchanged() || !slices.Contains(c.PreWrite, "slow 2") {
 		return false
 	}
-	// The slow wrapper's completion line names no call. Require one
-	// covered attempt so the line cannot describe a different denial.
+	// The completion line of the slow wrapper names no call. So the case
+	// must hold exactly one covered attempt, or the line can describe
+	// another deny.
 	var attempts []timingEvent
 	for _, e := range r.events[c.Run] {
 		if e.hook.Event == "PreToolUse" && slices.Contains(guardTools[r.manifest.Client], e.tool()) {
@@ -83,8 +98,7 @@ func (r guardRecording) slowRecorded(paths ...guardPath) bool {
 	}
 	e := attempts[0]
 	deny, ok := r.guardRecordOf(guardSlowGuard, e)
-	if !ok || deny.Guard.Decision != lessoncheck.GuardDeny || !deny.Guard.ReplyWritten ||
-		deny.Guard.Protocol != lessoncheck.GuardProtocolExit2 {
+	if !ok || !blockedDeny(deny) {
 		return false
 	}
 	for _, post := range ofKind(r.audit[c.Audit[0]:c.Audit[1]], lessoncheck.AuditPostEdit) {
@@ -92,31 +106,28 @@ func (r guardRecording) slowRecorded(paths ...guardPath) bool {
 			return false
 		}
 	}
-	// A native successful post event also defeats proof if its audit
-	// record was lost. Failed or permission-denied events can follow denial.
+	// A native PostToolUse event of the tool shows that the tool ran,
+	// also when its audit record is lost, so it cancels the proof. A
+	// failure or permission-denied event can follow a deny, so it does not.
 	for _, observed := range r.events[c.Run] {
 		if observed.hook.Event == "PostToolUse" && observed.tool() == e.tool() {
 			return false
 		}
 	}
-	context := lessoncheck.ContextRoot
-	if nativeString(e.raw, "agent_id") != "" {
-		context = lessoncheck.ContextChild
-	}
-	p := guardPath{client: r.manifest.Client, tool: e.tool(), context: context}
+	p := guardPath{client: r.manifest.Client, tool: e.tool(), context: eventContext(e)}
 	return len(paths) == 0 || len(paths) == 1 && paths[0] == p
 }
 
 // TestGuardEvidenceMatchesRecordings proves that GuardEvidence reads
-// verified only for a pre-write path that a reviewed gate-5 recording
-// covers (plan step P4.11, contract K10). Verified evidence needs the
-// recording in testdata/<client>/guard, its client version, a surface
-// that names the tool and the context, a blocked deny of the tool in
-// that context, and the slow-guard case. One level lifts both
-// native-deny-unverified and native-timeout-unverified, so it needs
-// both cases. Without a recording, every pre-write path stays pending.
-// The test reads the recordings in every run and never skips, so a skip
-// of the replay never hides a claim.
+// verified only for a pre-write path that a reviewed native guard
+// recording covers. Verified evidence needs the recording in
+// testdata/<client>/guard, its client version, a surface that names the
+// tool and the context, a blocked deny of the tool in that context, and
+// the slow-guard case. One verified level removes both reasons
+// native-deny-unverified and native-timeout-unverified, so it needs both
+// cases. Without a recording, every pre-write path stays pending. The
+// test reads the recordings in every run and never skips, so a skip of
+// the replay never hides a claim.
 func TestGuardEvidenceMatchesRecordings(t *testing.T) {
 	for _, client := range slices.Sorted(maps.Keys(guardTools)) {
 		rec, recorded := readGuardRecording(t, client)
@@ -141,7 +152,7 @@ func TestGuardEvidenceMatchesRecordings(t *testing.T) {
 					continue
 				}
 
-				require.True(t, recorded, "%s: verified evidence needs a reviewed gate-5 recording in testdata/%s/guard",
+				require.True(t, recorded, "%s: verified evidence needs a reviewed native guard recording in testdata/%s/guard",
 					label, client)
 				assert.True(t, sameClientVersion(evidence.ClientVersion, rec.manifest.ClientVersion),
 					"%s: the evidence names %q, the recording ran on %q", label, evidence.ClientVersion, rec.manifest.ClientVersion)
@@ -165,9 +176,27 @@ func TestGuardEvidenceMatchesRecordings(t *testing.T) {
 	t.Run("post-edit evidence names no client, so it stays below verified", func(t *testing.T) {
 		// postEditEvidence takes no client, tool, or context. A verified
 		// level would then claim every client version at once. A reviewed
-		// gate-5 recording verifies one client, so the function must first
-		// take the client (contracts §5 row 38).
+		// native guard recording verifies one client, so the function must
+		// first take the client.
 		assert.NotEqual(t, VerificationVerified, postEditEvidence().Level)
 		require.NoError(t, postEditEvidence().Validate())
 	})
+}
+
+// TestGuardToolsMatchTheInstalledMatchers ties the tools that the guard
+// decoder reads to the matcher of the installed pre-write hook, in both
+// modes. The guard and the baseline handler both use that decoder. The
+// capability report asks GuardEvidence about each matcher tool. So a
+// tool in only one list fires a hook that the decoder refuses, or it
+// reads unknown in the report, and no other test fails.
+func TestGuardToolsMatchTheInstalledMatchers(t *testing.T) {
+	for client, specs := range map[string]func(string) []hooks.Spec{
+		ClaudeID: hooks.ClaudeLessonCheckSpecs,
+		CodexID:  hooks.CodexLessonCheckSpecs,
+	} {
+		for _, mode := range []string{hooks.LessonChecksEnforce, hooks.LessonChecksCheck} {
+			assert.Equal(t, specs(mode)[0].Tools(), guardTools[client],
+				"%s %s: the pre-write hook fires on exactly the tools that the guard decoder reads", client, mode)
+		}
+	}
 }

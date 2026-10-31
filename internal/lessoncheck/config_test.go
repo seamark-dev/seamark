@@ -16,8 +16,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// specYAML is the lessons.yaml example of the spec (spec L133-142), byte
-// for byte. Contract K1 names it as the positive vector of Validate.
+// specYAML is the reference lessons.yaml: one forbid definition and one
+// enforce pin. It is the positive case of Validate, so the tests keep its
+// bytes fixed.
 const specYAML = `lesson_checks_version: 1
 checks:
   frozen-assets:
@@ -30,8 +31,7 @@ pin:
     check: frozen-assets
 `
 
-// contractYAML is the example of contract K1: the spec example with a
-// second definition that has a pattern.
+// contractYAML is specYAML with a second definition that has a pattern.
 const contractYAML = `lesson_checks_version: 1
 checks:
   frozen-assets:
@@ -47,8 +47,8 @@ pin:
     check: frozen-assets
 `
 
-// invalidYAML is the invalid example of contract K1. Its validation
-// report is the "config" object of the K1 JSON example.
+// invalidYAML is the reference invalid lessons.yaml. It holds one
+// pattern that does not compile and one pin that names a missing check.
 const invalidYAML = `lesson_checks_version: 1
 checks:
   no-todo:
@@ -65,7 +65,9 @@ pin:
     check: no-todos
 `
 
-// The K2 vectors of the spec example pin and of the two definitions.
+// The fixed identity, pin-ref, and version digests of the specYAML pin
+// and of the two definitions. Fixed values catch any change of the
+// derivation.
 const (
 	specIdentity      = "3215e7b483d134443a8204970767f1a0057d4726f235e946b6c0c27abd8cd055"
 	specPinRef        = "3215e7b483d1"
@@ -102,12 +104,11 @@ func writeLessons(t *testing.T, root, text string) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(text), 0o644))
 }
 
-// TestLessonCheckValidateSpecExample proves the positive vector of
-// contract K1: the spec example and the contract example validate with
-// no error, and the pin view carries the K2 identity, pin-ref, and
-// version.
+// TestLessonCheckValidateSpecExample proves that specYAML and
+// contractYAML validate with no error, and that the pin view carries the
+// fixed identity, pin-ref, and version.
 func TestLessonCheckValidateSpecExample(t *testing.T) {
-	for name, text := range map[string]string{"spec": specYAML, "contract": contractYAML} {
+	for name, text := range map[string]string{"specYAML": specYAML, "contractYAML": contractYAML} {
 		t.Run(name, func(t *testing.T) {
 			assert.Nil(t, validateYAML(t, text), "nil means valid")
 
@@ -137,7 +138,7 @@ func TestLessonCheckValidateSpecExample(t *testing.T) {
 		})
 	}
 
-	t.Run("the contract example compiles its pattern", func(t *testing.T) {
+	t.Run("contractYAML compiles its pattern", func(t *testing.T) {
 		cfg, _, err := Parse([]byte(contractYAML))
 		require.NoError(t, err)
 		require.Len(t, cfg.Checks, 2)
@@ -172,8 +173,8 @@ func TestLessonCheckValidateSpecExample(t *testing.T) {
 	})
 }
 
-// TestLessonCheckValidateErrors proves every tier-2 code of contract K1
-// with its exact subject and message, and the error order.
+// TestLessonCheckValidateErrors proves every tier-2 code with its exact
+// subject and message, and the error order.
 func TestLessonCheckValidateErrors(t *testing.T) {
 	cases := []struct {
 		name string
@@ -226,9 +227,9 @@ func TestLessonCheckValidateErrors(t *testing.T) {
 			},
 		},
 		{
-			// Contract K1 orders the errors of one subject by Code, byte-wise
-			// (§1.4). The code table puts check-id-invalid first, so only the
-			// byte order puts check-field-unknown before it.
+			// Validate orders the errors of one subject by Code, byte-wise.
+			// The code list in config.go puts check-id-invalid first, so only
+			// the byte order puts check-field-unknown before it.
 			name: "inside one check subject the order is the byte order of the code",
 			yaml: "lesson_checks_version: 1\nchecks:\n  Bad:\n    kind: forbid-path-change/1\n    flags: x\n",
 			want: []ConfigError{
@@ -441,19 +442,19 @@ func TestLessonCheckValidateErrors(t *testing.T) {
 	})
 }
 
-// TestLessonCheckParseReturnsConfigWithErrors proves the K-12 shape: a
-// tier-2 error returns the Config together with its errors, every pin
-// stays listed, and a refused definition is absent from the compiled
-// checks. A tier-1 error returns no Config.
+// TestLessonCheckParseReturnsConfigWithErrors proves the result shape of
+// Parse: a tier-2 error returns the Config together with its errors,
+// every pin stays listed, and a refused definition is absent from the
+// compiled checks. A tier-1 error returns no Config.
 func TestLessonCheckParseReturnsConfigWithErrors(t *testing.T) {
-	t.Run("the invalid contract example", func(t *testing.T) {
+	t.Run("invalidYAML", func(t *testing.T) {
 		cfg, errs, err := Parse([]byte(invalidYAML))
 		require.NoError(t, err)
 		require.NotNil(t, cfg)
 		assert.Equal(t, errs, cfg.Errors)
 		assert.Equal(t, sha256Hex(invalidYAML), cfg.SHA256)
 
-		// The errors encode as the "errors" array of the K1 JSON example.
+		// The errors encode as the "errors" array of the JSON outputs.
 		encoded, err := json.Marshal(errs)
 		require.NoError(t, err)
 		assert.JSONEq(t, `[
@@ -482,7 +483,7 @@ func TestLessonCheckParseReturnsConfigWithErrors(t *testing.T) {
 		assert.Equal(t, ModeAdvisory, cfg.Pins[0].Mode)
 		assert.Equal(t, "strict", cfg.Pins[0].Rule.Mode, "the raw rule keeps the written mode")
 
-		// The version keeps the unknown mode apart from advisory (K2).
+		// The version keeps the unknown mode apart from advisory.
 		assert.Equal(t, cfg.Raw.PinVersion(cfg.Pins[0].Rule), cfg.Pins[0].Version)
 		assert.NotEqual(t, cfg.Raw.PinVersion(reviews.PinRule{Rule: "r", Region: "a", Note: "n"}), cfg.Pins[0].Version)
 	})
@@ -518,8 +519,9 @@ func TestLessonCheckParseReturnsConfigWithErrors(t *testing.T) {
 }
 
 // TestLessonCheckLoadFileStates proves that Load reads only an absent
-// file as "no checks" (lesson error-is-not-absence), and that it returns
-// the Parse result for the bytes of a present file.
+// file as "no checks", because an unreadable file is not an empty one. It
+// also proves that Load returns the Parse result for the bytes of a
+// present file.
 func TestLessonCheckLoadFileStates(t *testing.T) {
 	t.Run("no .seamark directory", func(t *testing.T) {
 		cfg, errs, err := Load(t.TempDir())

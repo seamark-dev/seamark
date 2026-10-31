@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// forbidExampleJSON is the first result of the lesson-verification/1
-// example of contract K5: the spec example pin on a modified file. Its
-// digests are the K2 vectors of specYAML.
+// forbidExampleJSON is the expected JSON result of the specYAML pin on
+// one modified file. Its digests are the fixed digests of specYAML. The
+// test compares the whole result, because scripts read the JSON form.
 const forbidExampleJSON = `{
   "pin_ref": "3215e7b483d1",
   "pin_identity": "3215e7b483d134443a8204970767f1a0057d4726f235e946b6c0c27abd8cd055",
@@ -28,7 +28,7 @@ const forbidExampleJSON = `{
 func TestLessonCheckForbidPathChange(t *testing.T) {
 	spec := parseValid(t, specYAML)
 
-	t.Run("the K5 example result", func(t *testing.T) {
+	t.Run("the full JSON result of a modified file", func(t *testing.T) {
 		snap := snapshotOf(BoundaryWorkingTree, modifyChange("generated/a.txt", fileSide("a\n"), fileSide("b\n")))
 
 		encoded, err := json.Marshal(onlyResult(t, spec, snap))
@@ -87,8 +87,8 @@ func TestLessonCheckForbidPathChange(t *testing.T) {
 	})
 
 	t.Run("not-applicable: an unchanged path named by --file", func(t *testing.T) {
-		// K4 vector: a staged change reverted in the worktree is dropped,
-		// so the explicit path has no change (P0 review K-1).
+		// A staged change that the worktree reverts is dropped, so the
+		// explicit path has no change.
 		snap := snapshotOf(BoundaryWorkingTree)
 		snap.Selection = Selection{Kind: SelectionExplicitPaths, Paths: []string{"generated/a.txt"}, Excludes: []string{}}
 
@@ -110,7 +110,7 @@ func TestLessonCheckForbidPathChange(t *testing.T) {
 
 	// A --file path below a link is a change without an observed
 	// difference. Its reason joins the other causes, and reasonPrecedence
-	// picks one (review fixes snapshot-git:F5, checkers:K3-F2).
+	// picks one.
 	t.Run("unknown: an unobserved change takes its place in the reason precedence", func(t *testing.T) {
 		linked := addChange("generated/x.txt", Side{Type: ObjectFile, Content: ContentUnreadable})
 		linked.Limitations = []string{LimitationPathThroughLink}

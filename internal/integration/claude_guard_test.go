@@ -31,10 +31,10 @@ func claudeGuardPayload(t *testing.T, tool string, input any) []byte {
 	return payload
 }
 
-// TestClaudeGuardDecodesEditTools checks the Claude rows of the K8
-// decoding table: each covered tool gives one complete file operation
-// with its raw path, its content or its replacements, and the identity
-// of the event. The receiver is the one of the advisory edit decoder.
+// TestClaudeGuardDecodesEditTools checks the Claude guard decoder: each
+// covered tool gives one complete file operation with its raw path, its
+// content or its replacements, and the identity of the event. The
+// receiver is the one of the advisory edit decoder.
 func TestClaudeGuardDecodesEditTools(t *testing.T) {
 	const handler = "/workspace/repo/internal/api/handler.go"
 
@@ -72,7 +72,8 @@ func TestClaudeGuardDecodesEditTools(t *testing.T) {
 			Edits: []lessoncheck.TextEdit{{Old: "a", New: "b"}, {Old: "c", New: "d"}},
 		}},
 		// The decoder keeps an empty old_string. The projection decides
-		// that it is unprojectable-edit on an absent file (N1).
+		// that it is unprojectable-edit on an absent file, because no
+		// native run shows yet that such an edit creates the file.
 		{"pre_tool_use_multiedit_create.json", "MultiEdit", "toolu_synthetic_0007", root, lessoncheck.FileOp{
 			Kind: lessoncheck.OpMultiEdit, Path: "/workspace/repo/docs/created-by-multiedit.md",
 			Edits: []lessoncheck.TextEdit{{Old: "", New: "# Created\n\nDraft.\n"}, {Old: "Draft.", New: "Final."}},
@@ -164,8 +165,8 @@ func TestClaudeGuardDecodesEditTools(t *testing.T) {
 	})
 }
 
-// TestClaudeGuardRefusesMalformedInput checks the fail-closed rows of
-// K8 for Claude: every covered request that the decoder cannot read is
+// TestClaudeGuardRefusesMalformedInput checks that the Claude guard
+// decoder fails closed: every covered request that it cannot read is
 // ErrMalformedEvent (the guard reason unparseable-input), never a part
 // of the edit. The error text names no payload value, because the guard
 // puts it into the deny reason.

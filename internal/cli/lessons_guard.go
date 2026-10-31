@@ -773,11 +773,7 @@ func operationPaths(op lessoncheck.Operation) []string {
 	var paths []string
 
 	for _, fop := range op.Ops {
-		paths = append(paths, fop.Path)
-
-		if fop.MoveTo != "" {
-			paths = append(paths, fop.MoveTo)
-		}
+		paths = append(paths, fop.Paths()...)
 	}
 
 	sort.Strings(paths)

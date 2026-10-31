@@ -26,9 +26,9 @@ const noNewlineMarker = `\ No newline at end of file` + "\n"
 
 // WritePreview pairs one planned write with the current file content so
 // a reviewer sees the exact change before apply. Native client files
-// hold other servers' tokens, so the diff hides credential values by
-// key and by table (see preview_redact.go), then applies redact.Secrets
-// and a block sanitizer to every line.
+// hold the tokens of other servers. So the diff hides credential values
+// by key and by table (see preview_redact.go). Then it applies
+// redact.Secrets and a block sanitizer to every line.
 type WritePreview struct {
 	// Path is the repository-relative path of the write.
 	Path string
@@ -53,10 +53,10 @@ type WritePreview struct {
 // PreviewWrites reads the current content of every planned write and
 // returns one preview per write, in plan order. It writes nothing.
 //
-// Each file is read by the rule of its plan guard, the same rule apply
-// uses. A file that differs from its guard makes the preview stale. A
-// read failure also makes it stale, because apply refuses the plan for
-// the same failure.
+// It reads each file by the rule of its plan guard, the same rule that
+// apply uses. A file that differs from its guard makes the preview
+// stale. A read failure also makes it stale, because apply refuses the
+// plan for the same failure.
 func PreviewWrites(plan *SetupPlan) []WritePreview {
 	if plan == nil {
 		return nil
@@ -79,7 +79,7 @@ func previewWrite(plan *SetupPlan, write FileWrite) WritePreview {
 		Detail:    render.Sanitize(write.Detail),
 	}
 
-	i := slices.IndexFunc(plan.Reads, func(g FileGuard) bool { return g.Path == write.Path })
+	i := guardIndex(plan.Reads, write.Path)
 	if i < 0 {
 		// PlanSetup refuses such a write, so only a hand-made plan gets here.
 		preview.Err = fmt.Errorf("%s: the write has no read guard", write.Path)
@@ -98,11 +98,7 @@ func previewWrite(plan *SetupPlan, write FileWrite) WritePreview {
 	}
 
 	preview.Stale = now != planned
-
-	before, after := newDiffSide(write.Path, current), newDiffSide(write.Path, write.After)
-
-	preview.Diff = unifiedDiff(write.Path, before, after)
-	preview.Added, preview.Removed = changedLines(before.lines, after.lines)
+	preview.Diff, preview.Added, preview.Removed = UnifiedDiff(write.Path, current, write.After)
 
 	return preview
 }
@@ -113,41 +109,18 @@ func previewWrite(plan *SetupPlan, write FileWrite) WritePreview {
 // the user still sees the exact change. Added and removed count the
 // changed lines. The diff is for display only; never apply it.
 func UnifiedDiff(rel string, before, after []byte) (diff string, added, removed int) {
-	old, next := newDiffSide(rel, before), newDiffSide(rel, after)
-
-	diff = unifiedDiff(rel, old, next)
-	added, removed = changedLines(old.lines, next.lines)
-
-	return diff, added, removed
+	return unifiedDiff(rel, newDiffSide(rel, before), newDiffSide(rel, after))
 }
 
-// observeContent reads a guarded file by the rule of its guard kind and
-// returns the observed guard with the content. It follows the same rules
-// as observe, which apply uses. A create-only file is observed by its
-// existence alone: setup never looks inside a file it must not replace,
-// so its content is empty here.
-func observeContent(root string, g FileGuard) (FileGuard, []byte, error) {
-	switch g.Kind {
-	case GuardInput:
-		return ReadInput(root, g.Path)
-	case GuardPresence:
-		now, err := StatGuarded(root, g.Path)
-
-		return now, nil, err
-	default:
-		return ReadGuarded(root, g.Path)
-	}
-}
-
-// diffLines splits content into lines that each end with a newline. A
+// diffLines splits text into lines that each end with a newline. A
 // last line without a newline gets one, followed by noNewlineMarker,
 // so the diff never joins two lines and still shows the difference.
-func diffLines(content []byte) []string {
-	if len(content) == 0 {
+func diffLines(text string) []string {
+	if text == "" {
 		return nil
 	}
 
-	lines := strings.SplitAfter(string(content), "\n")
+	lines := strings.SplitAfter(text, "\n")
 
 	last := lines[len(lines)-1]
 	if last == "" {
@@ -158,19 +131,24 @@ func diffLines(content []byte) []string {
 }
 
 // unifiedDiff renders the diff between two sides in the unified
-// format of difflib. It writes the lines itself, because each line
-// needs the hidden ranges of its own side, and difflib prints only the
-// compared text. The line matching still compares the real lines, so
-// the hunks and counts describe the real change.
+// format of difflib and counts the added and removed lines. It writes
+// the lines itself, because each line needs the hidden ranges of its
+// own side, and difflib prints only the compared text. The line
+// matching still compares the real lines, so the hunks and counts
+// describe the real change.
+//
+// The counts come from the same hunks as the text, so the line
+// matching runs once. A hunk holds every change in full, because
+// difflib trims only the unchanged ranges.
 //
 // Every line goes through scrubLine on its own, because a quoted value
 // can span lines and must not join two lines into one match. The
 // result is then sanitized, so control sequences in a file stay inert
 // in a terminal.
-func unifiedDiff(rel string, before, after diffSide) string {
+func unifiedDiff(rel string, before, after diffSide) (diff string, added, removed int) {
 	groups := difflib.NewMatcher(before.lines, after.lines).GetGroupedOpCodes(previewContext)
 	if len(groups) == 0 {
-		return ""
+		return "", 0, 0
 	}
 
 	var out strings.Builder
@@ -198,21 +176,22 @@ func unifiedDiff(rel string, before, after diffSide) string {
 				continue
 			}
 
-			if op.Tag == 'r' || op.Tag == 'd' {
-				for i := op.I1; i < op.I2; i++ {
-					line('-', before.lines[i], before.hideAt(i))
-				}
+			// A delete has an empty range on the after side, and an insert
+			// has one on the before side. So one rule prints every change.
+			for i := op.I1; i < op.I2; i++ {
+				line('-', before.lines[i], before.hideAt(i))
 			}
 
-			if op.Tag == 'r' || op.Tag == 'i' {
-				for j := op.J1; j < op.J2; j++ {
-					line('+', after.lines[j], after.hideAt(j))
-				}
+			for j := op.J1; j < op.J2; j++ {
+				line('+', after.lines[j], after.hideAt(j))
 			}
+
+			removed += fileLineCount(before.lines[op.I1:op.I2])
+			added += fileLineCount(after.lines[op.J1:op.J2])
 		}
 	}
 
-	return render.SanitizeBlock(out.String())
+	return render.SanitizeBlock(out.String()), added, removed
 }
 
 // unifiedRange formats a hunk range as difflib does: the first line
@@ -231,33 +210,17 @@ func unifiedRange(start, stop int) string {
 	return fmt.Sprintf("%d,%d", first, length)
 }
 
-// changedLines counts the added and removed lines between two line
-// lists. The missing-newline marker is not a line of the file, so it
-// does not count.
-func changedLines(before, after []string) (added, removed int) {
-	count := func(lines []string) int {
-		n := 0
+// fileLineCount counts the diff lines that are lines of the file. The
+// missing-newline marker is not a line of the file, so it does not
+// count.
+func fileLineCount(lines []string) int {
+	n := 0
 
-		for _, line := range lines {
-			if line != noNewlineMarker {
-				n++
-			}
-		}
-
-		return n
-	}
-
-	for _, op := range difflib.NewMatcher(before, after).GetOpCodes() {
-		switch op.Tag {
-		case 'r':
-			removed += count(before[op.I1:op.I2])
-			added += count(after[op.J1:op.J2])
-		case 'd':
-			removed += count(before[op.I1:op.I2])
-		case 'i':
-			added += count(after[op.J1:op.J2])
+	for _, line := range lines {
+		if line != noNewlineMarker {
+			n++
 		}
 	}
 
-	return added, removed
+	return n
 }

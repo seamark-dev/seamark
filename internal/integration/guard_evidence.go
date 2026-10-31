@@ -7,7 +7,7 @@ import (
 )
 
 // guardTools lists, per client, the tools of its pre-write guard path.
-// The decoders read the same lists, so a tool has a pre-write path
+// The guard decoders read the same lists, so a tool has a pre-write path
 // exactly when the guard decodes it.
 var guardTools = map[string][]string{
 	ClaudeID: claudeGuardTools,
@@ -29,37 +29,32 @@ type guardPath struct {
 	context lessoncheck.PathContext
 }
 
-// guardRecorded lists the pre-write paths that a reviewed gate-5
-// sentinel recording verifies (plan step P4.11). A reviewer adds an
-// entry only after a review of the recording in
-// testdata/<client>/guard. The recording must show a deny of the tool in
-// the context and the slow-guard case, because one level lifts both
-// native-deny-unverified and native-timeout-unverified (contract K10).
+// guardRecorded lists the pre-write paths that a reviewed native guard
+// recording verifies. A reviewer adds an entry only after a review of
+// the recording in testdata/<client>/guard. The recording must show a
+// deny of the tool in the context and the slow-guard case. One verified
+// level removes both reasons native-deny-unverified and
+// native-timeout-unverified, so it needs proof of both.
 // TestGuardEvidenceMatchesRecordings checks each entry against the
-// recording. The map is empty: no reviewed recording exists yet.
+// recording. The map is empty, because no reviewed recording exists yet.
 var guardRecorded = map[guardPath]recordedEvidence{}
 
 // GuardEvidence returns the native evidence that a deny of the guard
 // stops the tool, for one client, tool, and context path. The guard
-// copies its level into the native_blocking field of its decision
-// (contract K8), and the capability report shows it per pre-write path
-// (contract K10).
+// copies its level into the native_blocking field of its decision, and
+// the capability report shows it per pre-write path.
 //
 // The evidence is static, because inspection runs no client binary. A
 // path in guardRecorded is verified, with the client version and the
-// surface of its reviewed gate-5 recording. Every other pre-write path
-// is pending. The pending evidence names no client version, because the
+// surface of its reviewed recording. Every other pre-write path is
+// pending. The pending evidence names no client version, because the
 // recording sets the version it ran against.
 //
 // A tool or a context without a pre-write path gives the zero value,
 // which means unknown. Both built-in clients name a subagent in their
-// edit events, so the child context has a path of its own.
+// edit events, so every context of lessonContexts has a path of its own.
 func GuardEvidence(clientID, tool string, context lessoncheck.PathContext) VerificationEvidence {
-	if !slices.Contains(guardTools[clientID], tool) {
-		return VerificationEvidence{}
-	}
-
-	if context != lessoncheck.PathContext(LaneRoot) && context != lessoncheck.PathContext(LaneChild) {
+	if !slices.Contains(guardTools[clientID], tool) || !slices.Contains(lessonContexts, context) {
 		return VerificationEvidence{}
 	}
 

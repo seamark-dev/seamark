@@ -8,16 +8,15 @@ import (
 )
 
 // This file holds the verification result lesson-verification/1 and
-// the combined verdict of check --lessons (contract K5). The CLI, the
-// MCP server, and the console print the same result, so one type and
-// one exit rule exist.
+// the combined verdict of check --lessons. The CLI, the MCP server, and
+// the console print the same result, so one type and one exit rule
+// exist.
 
 // VerificationSchema is the format name of a verification result.
 const VerificationSchema = "lesson-verification/1"
 
-// Caller names the interface that ran a lesson check. The audit of
-// milestone P4 records it. It is not the delivery surface of the
-// lessons audit.
+// Caller names the interface that ran a lesson check. The lesson-check
+// audit records it. It is not the delivery surface of the lessons audit.
 type Caller string
 
 // The closed list of callers.
@@ -27,6 +26,18 @@ const (
 	CallerTUI  Caller = "tui"
 	CallerHook Caller = "hook"
 )
+
+// known reports whether c is in the closed list of callers. Verify and
+// the audit writer both refuse an unknown caller, so they share the one
+// list.
+func (c Caller) known() bool {
+	switch c {
+	case CallerCLI, CallerMCP, CallerTUI, CallerHook:
+		return true
+	default:
+		return false
+	}
+}
 
 // SummaryState is the state of one verification.
 type SummaryState string
@@ -46,7 +57,7 @@ const (
 	// result, a stale snapshot, or a configuration error.
 	SummaryIncomplete SummaryState = "incomplete"
 	// SummaryViolation means at least one violation. The unknown results
-	// stay in the result (spec L162).
+	// stay in the result, because a violation does not decide them.
 	SummaryViolation SummaryState = "violation"
 )
 
@@ -61,7 +72,7 @@ const (
 )
 
 // Binding names the exact inputs of a result. A held result is stale
-// when one of them changes (spec L265).
+// when one of them changes.
 type Binding struct {
 	SnapshotSHA256  string `json:"snapshot_sha256"`
 	ConfigSHA256    string `json:"config_sha256"`    // lessons.yaml bytes ("" when absent)
@@ -81,8 +92,8 @@ type PinListing struct {
 }
 
 // FirstRun is the cause of an unknown result before the stale rewrite
-// made it unknown/stale-snapshot (K5 Addition 2026-10-22, fix F-C). The
-// cause can name a limit to raise, so a race must not hide it.
+// made it unknown/stale-snapshot. The cause can name a limit to raise,
+// so a race must not hide it.
 type FirstRun struct {
 	Reason Reason `json:"reason"`
 	Limit  string `json:"limit,omitempty"` // set iff Reason == resource-limit
@@ -119,7 +130,7 @@ type Verification struct {
 	// The text output prints them beside the incomplete path set.
 	UnreadableDirectories        []string     `json:"unreadable_directories,omitempty"`
 	UnreadableDirectoriesOmitted int          `json:"unreadable_directories_omitted,omitempty"`
-	Limits                       []LimitHit   `json:"limits,omitempty"`      // the snapshot hits plus the checker hits, sorted by name (fix F-D)
+	Limits                       []LimitHit   `json:"limits,omitempty"`      // the snapshot hits plus the checker hits, sorted by name
 	Limitations                  []string     `json:"limitations,omitempty"` // the snapshot-level limitations, sorted
 	Config                       ConfigReport `json:"config"`
 	Summary                      Summary      `json:"summary"`
@@ -127,16 +138,17 @@ type Verification struct {
 	Listings                     []PinListing `json:"listings"`          // non-nil; [] when empty
 	Changes                      []Change     `json:"changes,omitempty"` // the JSON output only; the text output omits them
 	// firstRun holds the pass or not-applicable outcome that a result had
-	// before the publication made it unknown, by pin entry. Contract K5
-	// keeps that outcome in the text output only, so the field is
-	// unexported. A first-run unknown keeps its cause in Result.FirstRun.
+	// before the publication made it unknown, by pin entry. Only the text
+	// output shows that outcome, because a script must not read a pass
+	// that the publication did not confirm. A first-run unknown keeps its
+	// cause in Result.FirstRun.
 	firstRun map[int]Outcome
 	// statusStderr is the first git status stderr line of the snapshot
 	// (Snapshot.statusStderr). The text output prints it as the notice of
 	// the limitation git-stderr. It is unexported, so the JSON output
 	// does not change.
 	statusStderr string
-	// auditErr is the error of the K9 verify record, or nil. The record
+	// auditErr is the error of the verify audit record, or nil. The record
 	// never changes the result, so the error stays out of the JSON
 	// output. AuditError returns it.
 	auditErr error
@@ -151,14 +163,14 @@ var ErrViolation = errors.New("lesson check violation")
 var ErrIncomplete = errors.New("lesson checks incomplete")
 
 // ViolationError is the error of a verification with a violation. Its
-// text is the exact stderr line of contract K5 without the "seamark: "
-// prefix, which cli.Execute adds.
+// text is the exact stderr line without the "seamark: " prefix, which
+// cli.Execute adds.
 type ViolationError struct {
 	Violations int // results with outcome violation
 	Evaluated  int // summary.pins_evaluated
 }
 
-// Error returns the K5 stderr text.
+// Error returns the stderr text.
 func (e *ViolationError) Error() string {
 	return fmt.Sprintf("%s: %d of %d evaluated pins (see the report)", ErrViolation, e.Violations, e.Evaluated)
 }
@@ -168,8 +180,7 @@ func (e *ViolationError) Error() string {
 func (e *ViolationError) Is(target error) bool { return target == ErrViolation }
 
 // IncompleteError is the error of an incomplete verification. Its text
-// is the exact stderr line of contract K5 without the "seamark: "
-// prefix.
+// is the exact stderr line without the "seamark: " prefix.
 type IncompleteError struct {
 	Unknown int    // summary.unknown
 	Rerun   string // the rerun command of the result
@@ -179,7 +190,7 @@ type IncompleteError struct {
 	Config *ConfigError
 }
 
-// Error returns the K5 stderr text. Sanitize removes control characters,
+// Error returns the stderr text. Sanitize removes control characters,
 // because a path in the rerun command comes from the file system and
 // the text goes to a terminal.
 func (e *IncompleteError) Error() string {
@@ -200,10 +211,10 @@ func (e *IncompleteError) Is(target error) bool { return target == ErrIncomplete
 // the report, so lessons --verify and check --lessons print the same
 // stderr line.
 func (v *Verification) ExitError() error {
-	switch v.Summary.State {
-	case SummaryPassed, SummaryNoApplicableChecks, SummaryNoExecutableChecks:
+	switch state := v.Summary.State; {
+	case state.passing():
 		return nil
-	case SummaryViolation:
+	case state == SummaryViolation:
 		return &ViolationError{Violations: v.Summary.Violation, Evaluated: v.Summary.PinsEvaluated}
 	}
 
@@ -215,6 +226,19 @@ func (v *Verification) ExitError() error {
 	}
 
 	return e
+}
+
+// passing reports whether a summary state gives exit 0: passed,
+// no-applicable-checks, or no-executable-checks. ExitError and Combine
+// share it, so lessons --verify and check --lessons give the same exit
+// code. A state outside the closed list does not pass.
+func (s SummaryState) passing() bool {
+	switch s {
+	case SummaryPassed, SummaryNoApplicableChecks, SummaryNoExecutableChecks:
+		return true
+	default:
+		return false
+	}
 }
 
 // CombinedState is the closed state of check --lessons: "pass", "fail",
@@ -243,14 +267,14 @@ type Combined struct {
 }
 
 // Combine owns the combined state and the exit rule of check --lessons
-// for the CLI and the MCP server (ruling P1-c). It is pure: the caller
-// passes the summary state and gate.Decision.Blocking(), because
-// lessoncheck must not import gate.
+// for the CLI and the MCP server, so the two surfaces cannot differ. It
+// is pure: the caller passes the summary state and
+// gate.Decision.Blocking(), because lessoncheck must not import gate.
 //
 // A summary state outside the closed list gives exit 1. A check whose
 // state is not known must never pass.
 func Combine(lessons SummaryState, policyBlocking bool) Combined {
-	c := Combined{State: CombinedPass, Policy: policyPass}
+	c := Combined{Policy: policyPass}
 
 	if policyBlocking {
 		c.Policy = policyBlocked
@@ -259,7 +283,7 @@ func Combine(lessons SummaryState, policyBlocking bool) Combined {
 	switch {
 	case policyBlocking || lessons == SummaryViolation:
 		c.State, c.ExitCode = CombinedFail, 2
-	case lessons == SummaryPassed, lessons == SummaryNoApplicableChecks, lessons == SummaryNoExecutableChecks:
+	case lessons.passing():
 		c.State, c.ExitCode = CombinedPass, 0
 	default:
 		c.State, c.ExitCode = CombinedIncomplete, 1

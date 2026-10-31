@@ -10,10 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The tests of the capability report (contract K10). CapabilityReportOf
-// is the only place that computes a path state, a badge, and an
-// uncovered writer, so these tests walk every row of the reason table
-// (P0 ruling M3) and of the badge table.
+// The tests of the capability report. CapabilityReportOf is the only
+// place that computes a path state, a badge, and an uncovered writer, so
+// these tests walk every capability reason and every badge.
 
 // capabilityYAML holds an enforce pin with a forbid check, a check pin
 // with a pattern check, an advisory pin with a check, and a plain
@@ -67,33 +66,31 @@ var capTools = []string{"Edit", "Write"}
 // for no pre-write hook; post says whether the post-edit hook exists.
 // Each path has the given evidence level and binary state.
 func installedPaths(client, pre string, post bool, level, binary string) []InstalledPath {
-	var out []InstalledPath
-
-	for _, tool := range capTools {
-		for _, context := range []PathContext{ContextRoot, ContextChild} {
-			p := InstalledPath{Client: client, Tool: tool, Stage: StagePreWrite, Context: context,
-				Verification: CapVerification{Level: level}}
-			if pre != "" {
-				p.Installed, p.Marker, p.BinaryState = true, pre, binary
-			} else {
-				p.Reasons = []CapReason{CapNotInstalled}
-			}
-
-			out = append(out, p)
-		}
+	stages := []struct {
+		stage     HookStage
+		marker    string
+		installed bool
+		level     string
+	}{
+		{StagePreWrite, pre, pre != "", level},
+		{StagePostEdit, testVerify, post, "unverified"},
 	}
 
-	for _, tool := range capTools {
-		for _, context := range []PathContext{ContextRoot, ContextChild} {
-			p := InstalledPath{Client: client, Tool: tool, Stage: StagePostEdit, Context: context,
-				Verification: CapVerification{Level: "unverified"}}
-			if post {
-				p.Installed, p.Marker, p.BinaryState = true, testVerify, binary
-			} else {
-				p.Reasons = []CapReason{CapNotInstalled}
-			}
+	var out []InstalledPath
 
-			out = append(out, p)
+	for _, s := range stages {
+		for _, tool := range capTools {
+			for _, context := range []PathContext{ContextRoot, ContextChild} {
+				p := InstalledPath{Client: client, Tool: tool, Stage: s.stage, Context: context,
+					Verification: CapVerification{Level: s.level}}
+				if s.installed {
+					p.Installed, p.Marker, p.BinaryState = true, s.marker, binary
+				} else {
+					p.Reasons = []CapReason{CapNotInstalled}
+				}
+
+				out = append(out, p)
+			}
 		}
 	}
 
@@ -136,10 +133,10 @@ func badgeOfPin(t *testing.T, r CapabilityReport, ref, client string) PinClient 
 	return PinClient{}
 }
 
-// TestLessonCheckCapabilityReportPathStates walks every row of the K10
-// reason table (P0 ruling M3): the source of each reason and its effect
-// on the path state. The most restrictive state wins, and a path
-// without verified evidence is at most active-unverified.
+// TestLessonCheckCapabilityReportPathStates walks every capability
+// reason: the source of each reason and its effect on the path state.
+// The most restrictive state wins, and a path without verified evidence
+// is at most active-unverified.
 func TestLessonCheckCapabilityReportPathStates(t *testing.T) {
 	cfg := capabilityConfig(t, capabilityYAML)
 
@@ -171,7 +168,7 @@ func TestLessonCheckCapabilityReportPathStates(t *testing.T) {
 		{"trust-unknown", withReasons(installedBaseline, CapTrustUnknown), PathActiveUnverified, []CapReason{CapTrustUnknown}},
 		{"hooks-disabled", withReasons(installedBaseline, CapHooksDisabled), PathInactive, []CapReason{CapHooksDisabled}},
 		{"document-unreadable", InstalledPath{Reasons: []CapReason{CapDocumentUnreadable}}, PathInactive, []CapReason{CapDocumentUnreadable}},
-		{"partial-install keeps the state of the other rows", withReasons(installedBaseline, CapPartialInstall),
+		{"partial-install leaves the state to the other reasons", withReasons(installedBaseline, CapPartialInstall),
 			PathActiveUnverified, []CapReason{CapPartialInstall}},
 		{"other binary", withBinary(installedBaseline, BinaryOther), PathActiveUnverified, []CapReason{CapOtherBinary}},
 		{"old binary", withBinary(installedBaseline, BinaryOld), PathInactive, []CapReason{CapVersionOld, CapOtherBinary}},
@@ -267,7 +264,7 @@ func TestLessonCheckCapabilityReportPathStates(t *testing.T) {
 		}
 
 		explore := pathOf(t, r, "claude", "Edit", StageExploration, ContextRoot)
-		assert.Equal(t, PathActiveUnverified, explore.State, "advisory readers keep their pins (K-6)")
+		assert.Equal(t, PathActiveUnverified, explore.State, "advisory readers keep their pins")
 		assert.False(t, r.Config.Valid)
 		assert.Equal(t, errs, r.Config.Errors)
 
@@ -275,7 +272,7 @@ func TestLessonCheckCapabilityReportPathStates(t *testing.T) {
 		assert.Contains(t, badgeOfPin(t, r, cfg.Pins[0].Ref, "claude").Reasons, CapConfigurationError)
 	})
 
-	t.Run("tool-uncovered on a writer that no spec covers lists an uncovered writer and no path", func(t *testing.T) {
+	t.Run("tool-uncovered on a writer that no lesson-check hook covers lists an uncovered writer and no path", func(t *testing.T) {
 		writer := InstalledPath{Client: "claude", Tool: "NotebookEdit", Context: ContextChild, Reasons: []CapReason{CapToolUncovered}}
 		r := report(nil, append(installedPaths("claude", "", false, "pending", ""), writer)...)
 
@@ -302,10 +299,10 @@ func withBinary(p InstalledPath, state string) InstalledPath {
 	return p
 }
 
-// TestLessonCheckCapabilityReportBadges proves the K10 badge table, the
+// TestLessonCheckCapabilityReportBadges proves every badge, the
 // installed modes, the client order, the copied attributions, the
-// configuration part, and the K6 step-6 texts. No path gives enforced
-// before its evidence is verified (AC-32).
+// configuration part, and the active texts. No path gives enforced
+// before its evidence is verified.
 func TestLessonCheckCapabilityReportBadges(t *testing.T) {
 	cfg := capabilityConfig(t, capabilityYAML)
 	enforce, check, withCheck := cfg.Pins[0], cfg.Pins[1], cfg.Pins[2]
@@ -363,13 +360,13 @@ func TestLessonCheckCapabilityReportBadges(t *testing.T) {
 		assert.Equal(t, BadgeRequestedInactive, badgeOfPin(t, r, check.Ref, "claude").Badge)
 	})
 
-	t.Run("requested-inactive without handlers keeps the words of K6 step 6", func(t *testing.T) {
+	t.Run("requested-inactive without handlers reads not-installed", func(t *testing.T) {
 		paths := append(installedPaths("claude", "", false, "pending", ""), installedPaths("codex", "", false, "pending", "")...)
 		r := CapabilityReportOf(cfg, nil, paths, nil)
 
 		assert.Equal(t, PinClient{Client: "codex", Badge: BadgeRequestedInactive, Reasons: []CapReason{CapNotInstalled}},
 			badgeOfPin(t, r, enforce.Ref, "codex"))
-		assert.Equal(t, "requested; inactive: not-installed", r.ActiveText(enforce.Ref), "the P1 text of a root without handlers")
+		assert.Equal(t, "requested; inactive: not-installed", r.ActiveText(enforce.Ref), "the text of a root without handlers")
 		assert.Equal(t, []string{
 			"active: claude requested; inactive: not-installed",
 			"active: codex requested; inactive: not-installed",
@@ -379,6 +376,20 @@ func TestLessonCheckCapabilityReportBadges(t *testing.T) {
 		for _, c := range r.Clients {
 			assert.Equal(t, InstalledOff, c.Installed)
 		}
+	})
+
+	t.Run("a pin without a client badge reads the same fixed text in both forms", func(t *testing.T) {
+		r := CapabilityReportOf(cfg, nil, nil, nil)
+
+		pin, ok := r.Pin(enforce.Ref)
+		require.True(t, ok)
+		require.Empty(t, pin.Clients, "no client reports a path")
+
+		assert.Equal(t, ActiveRequested, r.ActiveText(enforce.Ref))
+		assert.Equal(t, []string{"active: " + ActiveRequested}, r.ActiveLines(enforce.Ref))
+
+		assert.Equal(t, ActiveAdvisory, r.ActiveText("no-such-pin"), "an unknown pin reads advisory")
+		assert.Equal(t, []string{"active: " + ActiveAdvisory}, r.ActiveLines("no-such-pin"))
 	})
 
 	t.Run("an advisory pin with a check reads advisory, a plain advisory pin is not listed", func(t *testing.T) {
@@ -423,7 +434,7 @@ func TestLessonCheckCapabilityReportBadges(t *testing.T) {
 			`"clients":[],"pins":[],"uncovered_writers":[]}`, string(data))
 	})
 
-	t.Run("the configuration part follows the K5 form", func(t *testing.T) {
+	t.Run("the configuration part follows the form of the verification result", func(t *testing.T) {
 		root := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
 
@@ -449,7 +460,7 @@ func TestLessonCheckCapabilityReportBadges(t *testing.T) {
 		newer, errs := LoadForCapability(root)
 		require.Len(t, errs, 1)
 		assert.Equal(t, CodeVersionUnsupported, errs[0].Code)
-		require.Len(t, newer.Pins, 1, "advisory readers keep the pins (K-6)")
+		require.Len(t, newer.Pins, 1, "advisory readers keep the pins")
 
 		r = CapabilityReportOf(newer, errs, nil, nil)
 		assert.Equal(t, 2, r.Config.LessonChecksVersion)

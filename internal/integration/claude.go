@@ -33,8 +33,8 @@ func claudeClient() Client {
 		Guards:      claudeGuards{},
 		Completions: claudeCompletions{},
 		Invocation: func(string) (agent.CommandSpec, error) {
-			// Dir stays empty: the legacy preset inherits the caller's
-			// working directory, and this slice preserves that.
+			// Dir stays empty, because the legacy preset inherits the
+			// caller's working directory. The registry keeps that behavior.
 			return agent.ClaudeCommand(), nil
 		},
 	}

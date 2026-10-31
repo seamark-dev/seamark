@@ -15,15 +15,15 @@ import (
 )
 
 // This file holds the writer of the lesson-check audit stream
-// .seamark/lesson-check-audit.jsonl (contract K9). The stream is a
-// separate file. The firing log .seamark/lessons-audit.jsonl gets no
-// record from it (§5 row 39), because a firing log reader counts
-// deliveries and a check is not a delivery.
+// .seamark/lesson-check-audit.jsonl. The stream is a separate file. The
+// firing log .seamark/lessons-audit.jsonl gets no record from it,
+// because a firing log reader counts deliveries and a check is not a
+// delivery.
 //
 // The file also declares the data types that a record carries: the
-// guard decision of contract K8 and the tool outcome, completion, and
-// attribution of contract K9. They live in lessoncheck, because
-// lessoncheck cannot import integration, and the record embeds them.
+// guard decision, the tool outcome, the completion, and the
+// attribution. They live in lessoncheck, because lessoncheck cannot
+// import integration, and the record embeds them.
 
 // AuditSchema is the format name of one audit record.
 const AuditSchema = "lesson-check-audit/1"
@@ -60,10 +60,9 @@ const (
 // ownStatePath reports whether path is a file that the audit writer
 // owns: the live log, its rotated generation, or the lock file. The
 // path is repository-relative and slash-separated. The default
-// working-tree snapshot leaves these files out when they are untracked
-// (K4 Addition of review fix R-8), because every verification writes its
-// own record and a second verification must not report that record as a
-// change.
+// working-tree snapshot leaves these files out when they are untracked,
+// because every verification writes its own record and a second
+// verification must not report that record as a change.
 func ownStatePath(path string) bool {
 	switch path {
 	case ".seamark/" + auditFile, ".seamark/" + auditFile + ".1", ".seamark/" + auditLockFile:
@@ -75,16 +74,16 @@ func ownStatePath(path string) bool {
 
 // The retention of the stream. The values come from gate.Audit: the
 // live log rotates when it reaches maxAuditBytes or when its oldest
-// record is older than maxAuditAge. One rotated generation stays, and it
-// goes when it is older than maxAuditAge. So the stream holds at most
-// about two times maxAuditBytes on disk.
+// record is older than maxAuditAge. One rotated generation stays, and
+// the writer removes it when it is older than maxAuditAge. So the
+// stream holds at most about two times maxAuditBytes on disk.
 const (
 	maxAuditBytes = 5 << 20
 	maxAuditAge   = 30 * 24 * time.Hour
 )
 
-// The output caps of a record (contract K3, output caps). A cap cuts a
-// field and never changes an outcome, a decision, or a state.
+// The output caps of a record. A cap cuts a field and never changes an
+// outcome, a decision, or a state.
 const (
 	// maxAuditPaths bounds AuditRecord.Paths. PathsOmitted counts the rest.
 	maxAuditPaths = 50
@@ -120,9 +119,9 @@ const (
 	ToolUnknown     ToolOutcome = "unknown"
 )
 
-// Completion is one decoded post-edit event (contract K9). The session
-// and match IDs are raw. A handler hashes them before it persists
-// anything (contracts §1.6).
+// Completion is one decoded post-edit event. The session and match IDs
+// are raw. A handler hashes them before it persists anything, because no
+// stored file may hold a raw provider ID.
 type Completion struct {
 	Client, Tool, SessionID, MatchID, CWD string
 	Outcome                               ToolOutcome
@@ -151,8 +150,8 @@ const (
 	AttributionNoBaseline Attribution = "no-baseline"
 )
 
-// GuardDecision is the decision of the pre-write guard (contract K8,
-// lesson-guard/1). The guard adapter fills it, and a guard record
+// GuardDecision is the decision of the pre-write guard, schema
+// lesson-guard/1. The guard adapter fills it, and a guard record
 // embeds it. It holds no field that tells whether the tool ran after a
 // deny: the guard writes the record before the tool runs, and the
 // stream is append-only. The delivery report derives that fact through
@@ -160,7 +159,7 @@ const (
 type GuardDecision struct {
 	Schema        string     `json:"schema"`          // "lesson-guard/1"
 	Decision      string     `json:"decision"`        // closed: "allow", "deny"
-	Cause         string     `json:"cause,omitempty"` // closed; contract K8
+	Cause         string     `json:"cause,omitempty"` // closed: the cause list in guard.go
 	Reasons       []Reason   `json:"reasons,omitempty"`
 	InputSHA256   string     `json:"input_sha256"` // the snapshot digest of the proposed edit
 	PathsComplete bool       `json:"paths_complete"`
@@ -176,8 +175,9 @@ type GuardDecision struct {
 
 // AuditRecord is one line of .seamark/lesson-check-audit.jsonl. It
 // holds digests, codes, counts, paths, and line numbers only: no file
-// content, no excerpt, no patch text, and no raw provider ID
-// (contracts §1.6).
+// content, no excerpt, no patch text, and no raw provider ID. The
+// stream stays on disk after the session, so it must not keep that
+// data.
 type AuditRecord struct {
 	Schema string `json:"schema"` // AuditSchema; AppendAudit sets it
 	TS     string `json:"ts"`     // RFC 3339 UTC; AppendAudit sets it when empty
@@ -186,8 +186,8 @@ type AuditRecord struct {
 	Client string `json:"client,omitempty"`
 	Tool   string `json:"tool,omitempty"`
 	// The three digests are reviews.SessionDigest, MatchDigest, and
-	// ContextDigest over the identity root (contract K7). So they are
-	// byte-equal to the fields of the same names in lessons-audit.jsonl.
+	// ContextDigest over the identity root. So they are byte-equal to the
+	// fields of the same names in lessons-audit.jsonl.
 	SessionSHA    string         `json:"session_sha256,omitempty"`
 	MatchSHA      string         `json:"match_sha256,omitempty"`
 	ContextSHA    string         `json:"context_sha256,omitempty"`
@@ -278,11 +278,11 @@ func evidenceLines(evidence []Evidence) []int {
 // root is the git top level that holds .seamark. It sets the schema,
 // sets the time when TS is empty, and applies the output caps.
 //
-// The writer copies the hardening of gate.Audit: one exclusive lock
-// spans the tighten, rotate, and append steps, the files are 0600, and
-// every open refuses a symbolic link. A caller never changes a decision,
-// an outcome, or an exit code because of the returned error (contract
-// K9).
+// The writer copies the hardening of gate.Audit. One exclusive lock
+// spans the tighten, rotate, and append steps. The files are 0600, and
+// every open refuses a symbolic link. The record only reports what
+// already happened. So a caller never changes a decision, an outcome, or
+// an exit code because of the returned error.
 func AppendAudit(root string, rec AuditRecord) error {
 	rec, err := boundRecord(rec)
 	if err != nil {
@@ -357,9 +357,7 @@ func boundRecord(rec AuditRecord) (AuditRecord, error) {
 		return rec, fmt.Errorf("lesson-check audit: unknown record kind %q", rec.Kind)
 	}
 
-	switch rec.Caller {
-	case CallerCLI, CallerMCP, CallerTUI, CallerHook:
-	default:
+	if !rec.Caller.known() {
 		return rec, fmt.Errorf("lesson-check audit: unknown caller %q", rec.Caller)
 	}
 
@@ -452,9 +450,10 @@ func lockAudit(dir string) (func(), error) {
 	return func() { _ = unlockFile(f); _ = f.Close() }, nil
 }
 
-// refuseLink returns an error when path is a symbolic link. A write
-// through a planted link can change, and chmod, a file outside the
-// repository. The noFollowFlag on the opens backs the check.
+// refuseLink returns an error when path is a symbolic link. A write or a
+// chmod through a planted link can change a file outside the repository.
+// The opens also pass noFollowFlag, as a second guard against a link
+// that appears after this check.
 func refuseLink(path string) error {
 	info, err := os.Lstat(path)
 
@@ -474,8 +473,9 @@ func refuseLink(path string) error {
 // rotation, because a rename keeps the mode, and a loose rotated file
 // would keep the history readable for other users. The live log
 // rotates when it reaches maxAuditBytes or when its oldest record is
-// older than maxAuditAge. A rotated generation older than maxAuditAge
-// goes. Its modification time is the time of its newest record.
+// older than maxAuditAge. The writer removes a rotated generation older
+// than maxAuditAge. Its modification time is the time of its newest
+// record.
 func tightenAndRotate(path string) error {
 	rotated := path + ".1"
 
@@ -495,12 +495,9 @@ func tightenAndRotate(path string) error {
 		}
 	}
 
-	f, err := os.OpenFile(path, os.O_RDONLY|noFollowFlag, 0)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-
-	if err != nil {
+	// A missing live log has nothing to tighten or rotate.
+	f, err := openRead(path)
+	if err != nil || f == nil {
 		return err
 	}
 
@@ -530,8 +527,10 @@ func tightenAndRotate(path string) error {
 // a rotation moves it aside and keeps it readable in the rotated
 // generation.
 func oldestRecordStale(f *os.File) bool {
+	// Every append reads this line, so the first buffer is small. The
+	// scanner grows it up to 1 MiB when a first line is longer.
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	sc.Buffer(make([]byte, 0, 4<<10), 1<<20)
 
 	if !sc.Scan() {
 		// An empty log has nothing to age. A read error counts as stale.

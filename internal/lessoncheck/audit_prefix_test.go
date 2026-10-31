@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -12,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These tests cover the bounded audit reader (contract K9, the reader
-// for the delivery report). Every root is a temporary directory.
+// These tests cover the bounded audit reader that the delivery report uses.
+// Every root is a temporary directory.
 
 // prefixRecord returns one valid record line with its newline. The
 // discard cause is the marker that tells records apart in a test.
@@ -51,28 +50,7 @@ func markers(p AuditPrefix) []string {
 	return out
 }
 
-// dirState returns every entry under dir with its mode, size, and
-// modification time. A test uses it to show that a read changed nothing.
-func dirState(t *testing.T, dir string) map[string]string {
-	t.Helper()
-
-	out := map[string]string{}
-
-	require.NoError(t, filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		require.NoError(t, err)
-
-		info, err := d.Info()
-		require.NoError(t, err)
-
-		out[path] = info.Mode().String() + " " + info.ModTime().String() + " " + strconv.FormatInt(info.Size(), 10)
-
-		return nil
-	}))
-
-	return out
-}
-
-// TestLessonCheckReadAuditPrefixGenerations tests the K9 reader. It
+// TestLessonCheckReadAuditPrefixGenerations tests the bounded reader. It
 // covers the order of the generations, the single bound, the counts, the
 // partial tail, and the read-only guarantee. It also covers the one
 // reopen after a rotation and the rule that an I/O error is never an
@@ -192,6 +170,19 @@ func TestLessonCheckReadAuditPrefixGenerations(t *testing.T) {
 		assert.False(t, got.PartialTail)
 	})
 
+	t.Run("a newer record that also decodes as the current shape counts as newer", func(t *testing.T) {
+		root := t.TempDir()
+		content := `{"schema":"lesson-check-audit/2","kind":"verify","caller":"cli"}` + "\n" + prefixRecord(t, "keep")
+		writeGeneration(t, root, false, content)
+
+		got, err := ReadAuditPrefix(root, int64(len(content)))
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"keep"}, markers(got))
+		assert.Equal(t, 1, got.NewerSchema, "the schema decides, also when every field fits AuditRecord")
+		assert.Zero(t, got.Malformed)
+	})
+
 	t.Run("a tail without a newline is ignored", func(t *testing.T) {
 		root := t.TempDir()
 		complete := prefixRecord(t, "keep")
@@ -210,12 +201,12 @@ func TestLessonCheckReadAuditPrefixGenerations(t *testing.T) {
 		writeGeneration(t, root, true, prefixRecord(t, "old-1"))
 		writeGeneration(t, root, false, prefixRecord(t, "new-1"))
 
-		before := dirState(t, root)
+		before := listTree(t, root)
 
 		_, err := ReadAuditPrefix(root, 1<<20)
 		require.NoError(t, err)
 
-		assert.Equal(t, before, dirState(t, root), "no file, directory, or mode change")
+		assert.Equal(t, before, listTree(t, root), "no file, directory, or mode change")
 		assert.NoFileExists(t, auditPath(root)+".lock")
 	})
 

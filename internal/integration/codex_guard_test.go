@@ -10,11 +10,11 @@ import (
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 )
 
-// TestCodexGuardDecodesApplyPatchOps checks the Codex row of the K8
-// decoding table: an apply_patch event gives one file operation per
-// section, in patch order, with the raw paths, and the identity of the
-// event. An update with hunks has complete paths and Hunks set, because
-// its content has no verified projection yet (§6 A8).
+// TestCodexGuardDecodesApplyPatchOps checks the Codex guard decoder: an
+// apply_patch event gives one file operation per section, in patch
+// order, with the raw paths, and the identity of the event. An update
+// with hunks has complete paths and Hunks set, because its content has
+// no verified projection yet.
 func TestCodexGuardDecodesApplyPatchOps(t *testing.T) {
 	cases := []struct {
 		fixture  string

@@ -36,11 +36,11 @@ type claudeTextEdit struct {
 	ReplaceAll *bool   `json:"replace_all"`
 }
 
-// DecodeGuard reads the complete operation of one edit event (contract
-// K8, "Input decoding per client"). Unlike DecodeEdit, it checks
-// tool_name, because a guard decision about another tool with the same
-// input shape would be a guess. The receiver comes from claudeContext,
-// so the guard and the advisory hook name one context alike.
+// DecodeGuard reads the complete operation of one edit event. Unlike
+// DecodeEdit, it checks tool_name, because a guard decision about
+// another tool with the same input shape would be a guess. The receiver
+// comes from ReceivingContextOf, as in claudeContext, so the guard and
+// the advisory hook name one context alike.
 //
 // The decoder does not read hook_event_name. The installed matcher
 // selects PreToolUse, and a request of another event still decodes as
@@ -49,42 +49,15 @@ type claudeTextEdit struct {
 // The error texts name no payload value. The guard puts the text into
 // its deny reason, and a payload value can hold file content.
 func (claudeGuards) DecodeGuard(payload []byte) (lessoncheck.Operation, error) {
-	var native struct {
-		SessionID string `json:"session_id"`
-		AgentID   string `json:"agent_id"`
-		CWD       string `json:"cwd"`
-		ToolUseID string `json:"tool_use_id"`
-		ToolName  string `json:"tool_name"`
-		// ToolInput stays raw until the tool is known, because the input
-		// of an uncovered tool has another shape.
-		ToolInput json.RawMessage `json:"tool_input"`
-	}
+	return decodeGuard(ClaudeID, payload, "the tool is not one of the covered edit tools",
+		func(tool string) ([]lessoncheck.FileOp, error) {
+			fop, err := claudeFileOp(tool, payload)
+			if err != nil {
+				return nil, err
+			}
 
-	op := lessoncheck.Operation{Client: ClaudeID}
-
-	if err := json.Unmarshal(payload, &native); err != nil {
-		return op, malformedJSON(err)
-	}
-
-	op.Tool, op.SessionID, op.MatchID, op.CWD = native.ToolName, native.SessionID, native.ToolUseID, native.CWD
-	op.Receiver = receiverIDOf(claudeContext(native.SessionID, native.AgentID))
-
-	if native.ToolName == "" {
-		return op, fmt.Errorf("%w: the request names no tool_name", ErrMalformedEvent)
-	}
-
-	if !slices.Contains(claudeGuardTools, native.ToolName) {
-		return op, fmt.Errorf("%w: the tool is not one of the covered edit tools", ErrNotApplicable)
-	}
-
-	fop, err := claudeFileOp(native.ToolName, payload)
-	if err != nil {
-		return op, err
-	}
-
-	op.Ops, op.PathsComplete = []lessoncheck.FileOp{fop}, true
-
-	return op, nil
+			return []lessoncheck.FileOp{fop}, nil
+		})
 }
 
 // claudeFileOp reads the tool input of one covered tool into its file
@@ -164,9 +137,58 @@ func (e claudeTextEdit) textEdit(subject string) (lessoncheck.TextEdit, error) {
 	return lessoncheck.TextEdit{Old: *e.OldString, New: *e.NewString, ReplaceAll: e.ReplaceAll != nil && *e.ReplaceAll}, nil
 }
 
+// decodeGuard reads the identity of one pre-write event of the client
+// and checks its tool against guardTools. Both clients use it, so the
+// guard decodes a tool exactly when the tool has a pre-write path.
+//
+// It sets the identity fields right after the JSON parse, before the
+// tool and tool-input checks. So an event that these checks refuse
+// still names its tool and its call, and its audit record joins the
+// later records of the same call. notCovered is the error text of an
+// uncovered tool. fileOps reads the tool input of a covered tool.
+// decodeGuard sets Ops and PathsComplete only when fileOps succeeds.
+func decodeGuard(clientID string, payload []byte, notCovered string,
+	fileOps func(tool string) ([]lessoncheck.FileOp, error),
+) (lessoncheck.Operation, error) {
+	var native struct {
+		SessionID string `json:"session_id"`
+		AgentID   string `json:"agent_id"`
+		CWD       string `json:"cwd"`
+		ToolUseID string `json:"tool_use_id"`
+		ToolName  string `json:"tool_name"`
+	}
+
+	op := lessoncheck.Operation{Client: clientID}
+
+	if err := json.Unmarshal(payload, &native); err != nil {
+		return op, malformedJSON(err)
+	}
+
+	op.Tool, op.SessionID, op.MatchID, op.CWD = native.ToolName, native.SessionID, native.ToolUseID, native.CWD
+	op.Receiver = receiverIDOf(ReceivingContextOf(clientID, native.SessionID, native.AgentID))
+
+	if native.ToolName == "" {
+		return op, fmt.Errorf("%w: the request names no tool_name", ErrMalformedEvent)
+	}
+
+	if !slices.Contains(guardTools[clientID], native.ToolName) {
+		return op, fmt.Errorf("%w: %s", ErrNotApplicable, notCovered)
+	}
+
+	ops, err := fileOps(native.ToolName)
+	if err != nil {
+		return op, err
+	}
+
+	op.Ops, op.PathsComplete = ops, true
+
+	return op, nil
+}
+
 // receiverIDOf returns the ID of a receiving context, or "" when the
-// adapter names none. The guard handler hashes it with the K2 context
-// digest, as the advisory hook hashes EventMeta.Context.
+// adapter names none. The guard handler hashes it into the context
+// digest, as the advisory hook hashes EventMeta.Context, so the records
+// of both hooks name one receiver alike.
 func receiverIDOf(receiver *ReceivingContext) string {
 	if receiver == nil {
 		return ""

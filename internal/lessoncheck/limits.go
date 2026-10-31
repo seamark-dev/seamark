@@ -2,8 +2,8 @@ package lessoncheck
 
 import "time"
 
-// Limits holds the named limits of contract K3. Each field comment gives
-// the limit name that a result or a snapshot reports.
+// Limits holds the named limits of the lesson checks. Each field comment
+// gives the limit name that a result or a snapshot reports.
 //
 // Only an evaluation limit gives unknown/resource-limit when a check
 // exceeds it, because a cut evaluation must never read as pass.
@@ -12,13 +12,13 @@ import "time"
 // MaxRuleRunes cut display text only and never change an outcome.
 //
 // MaxSnapshotPaths bounds the status records. MaxCensusDirectories
-// bounds the directory census of K4 step 3b. The census has its own
-// bound, because a clean tree has many more directories than a change
-// has records (D2 follow-up, ruling 1).
+// bounds the directory census of the working-tree snapshot. The census
+// has its own bound, because a clean tree has many more directories
+// than a change has records.
 //
-// Tests inject smaller values. DefaultLimits gives the values of the K3
-// table. The values are provisional until the checker gate measures
-// them (assumed pending Yuri's confirmation).
+// Tests inject smaller values. DefaultLimits gives the default values.
+// The defaults are assumptions that the maintainer has not confirmed yet.
+// They stay provisional until measurements of the checkers confirm them.
 type Limits struct {
 	MaxSnapshotPaths     int           // max-snapshot-paths
 	MaxCensusDirectories int           // max-census-directories
@@ -51,11 +51,11 @@ const (
 	LimitMaxBaselineBytes     = "max-baseline-bytes"
 )
 
-// mebibyte is the byte count of one MiB. The K3 table gives the byte
+// mebibyte is the byte count of one MiB. The defaults give the byte
 // limits in MiB.
 const mebibyte = 1 << 20
 
-// DefaultLimits returns the K3 table values.
+// DefaultLimits returns the default limits.
 func DefaultLimits() Limits {
 	return Limits{
 		MaxSnapshotPaths:     5000,
@@ -73,6 +73,16 @@ func DefaultLimits() Limits {
 		MaxExcerptRunes:      160,
 		MaxRuleRunes:         80,
 	}
+}
+
+// orDefault returns DefaultLimits for a zero Limits and l otherwise.
+// Each entry point calls it, because a zero bound cuts every evaluation.
+func (l Limits) orDefault() Limits {
+	if l == (Limits{}) {
+		return DefaultLimits()
+	}
+
+	return l
 }
 
 // MaxPatternBytes bounds a check pattern at validation (limit name

@@ -1,12 +1,12 @@
 package integration
 
-// The lesson-check setup (contract K10). `seamark init --lesson-checks
-// off|check|enforce` and `--lesson-exploration off|on` install, switch,
-// and remove the lesson-check and exploration hooks of a client. The
-// entries go into the hook document that holds the lesson hook of the
-// client, through the coordinator of every other setup write. This file
-// holds what both client adapters share: the intent rules, the enforce
-// preconditions, the composition, and the narration of the result.
+// The lesson-check setup. `seamark init --lesson-checks off|check|enforce`
+// and `--lesson-exploration off|on` install, switch, and remove the
+// lesson-check and exploration hooks of a client. The entries go into
+// the hook document that holds the lesson hook of the client, through
+// the coordinator of every other setup write. This file holds what both
+// client adapters share: the intent rules, the enforce preconditions,
+// the composition, and the narration of the result.
 //
 // An empty intent preserves the installed choice, so a run without the
 // flags installs nothing new. No rule here reads or changes the gate
@@ -24,14 +24,14 @@ import (
 	"github.com/seamark-dev/seamark/internal/render"
 )
 
-// lessonContexts are the context paths of every hook (contract K10).
-// Both built-in clients name a subagent in their edit events, so each
-// hook has a root path and a child path.
+// lessonContexts are the context paths of every hook. Both built-in
+// clients name a subagent in their edit events, so each hook has a root
+// path and a child path.
 var lessonContexts = []lessoncheck.PathContext{lessoncheck.PathContext(LaneRoot), lessoncheck.PathContext(LaneChild)}
 
 // explorationNotice is the notice for --lesson-exploration on and a
-// client without the structured Read path (contracts §5 row 42). The
-// run does not fail, because preparation covers such a client.
+// client without the structured Read path. The run does not fail,
+// because preparation covers such a client.
 const explorationNotice = "lesson exploration: nothing was installed for %s (no structured Read path); " +
 	"preparation (seamark lessons --prepare) covers it"
 
@@ -99,11 +99,10 @@ func validateLessonCheckOps(c Client) error {
 // lessonCheckIntent applies the lesson-check support of the descriptor
 // to one intent, before the hook support does. An enforce request for a
 // client without a pre-write guard fails, because setup never
-// substitutes check-only behavior (contracts §5 row 40). A check
-// request for a client without the hooks is skipped with a finding, as
-// any other unsupported operation is. An exploration request for a
-// client without the structured Read path gets the notice and installs
-// nothing.
+// substitutes check-only behavior. Setup skips a check request for a
+// client without the hooks and adds a finding, as for any other
+// unsupported operation. An exploration request for a client without
+// the structured Read path gets the notice and installs nothing.
 func lessonCheckIntent(c Client, intent ClientSetup) (ClientSetup, []Finding, error) {
 	var findings []Finding
 
@@ -113,10 +112,7 @@ func lessonCheckIntent(c Client, intent ClientSetup) (ClientSetup, []Finding, er
 	case intent.LessonChecks != "" && !c.SetupOps.LessonVerify:
 		// An off request for such a client has nothing to remove.
 		if intent.LessonChecks == hooks.LessonChecksCheck {
-			findings = append(findings, Finding{
-				Level:  FindingInfo,
-				Reason: c.Name + ": lesson checks are not supported by this integration; skipped",
-			})
+			findings = append(findings, skippedFinding(c, "lesson checks are"))
 		}
 
 		intent.LessonChecks = ""
@@ -136,11 +132,12 @@ func lessonCheckIntent(c Client, intent ClientSetup) (ClientSetup, []Finding, er
 }
 
 // unsupportedEnforce is the refusal for a client without a pre-write
-// guard (contract K10). It names the client, then the write tools and
-// the contexts that have no guard. Such a client has no guard in any
-// context. The tools are the guard tools that the registry knows for
-// the client, sorted. A client without such a list gets the words "its
-// edit tools", because the coordinator knows no other tool list.
+// guard. It names the client, then the write tools and the contexts
+// that have no guard. Such a client has no guard in any context, so the
+// message names every context. The tools are the guard tools that the
+// registry knows for the client, sorted. A client without such a list
+// gets the words "its edit tools", because the coordinator knows no
+// other tool list.
 func unsupportedEnforce(clientID string) error {
 	tools := slices.Sorted(slices.Values(guardTools[clientID]))
 
@@ -175,10 +172,20 @@ type lessonHookClient struct {
 	// after the user reviews it. Seamark cannot read that trust record.
 	trustReview bool
 	// patchTool is the tool whose update hunks the guard cannot project
-	// yet (P0 ruling A8). The guard denies such an update in the scope
-	// of an enforce no-added-pattern/1 pin. It is empty for a client
-	// whose edits are all projectable.
+	// yet. The guard denies such an update in the scope of an enforce
+	// no-added-pattern/1 pin. It is empty for a client whose edits are
+	// all projectable.
 	patchTool string
+	// uncovered lists the writer tools that no lesson-check hook covers.
+	// The report names them with reason tool-uncovered, so it never
+	// claims coverage that it does not have.
+	uncovered []string
+}
+
+// preWrite returns the pre-write hook of the client. The enforce mode
+// lists every lesson-check hook, and the pre-write hook comes first.
+func (c lessonHookClient) preWrite() hooks.Spec {
+	return c.specs(hooks.LessonChecksEnforce)[0]
 }
 
 // The lesson-check hooks of the built-in clients.
@@ -186,16 +193,18 @@ var (
 	claudeExplorationSpec = hooks.ClaudeExplorationSpec()
 	claudeLessonHooks     = lessonHookClient{
 		id: ClaudeID, specs: hooks.ClaudeLessonCheckSpecs, exploration: &claudeExplorationSpec, fires: hooks.ClaudeMatcher,
+		uncovered: []string{"NotebookEdit", claudeToolBash},
 	}
 	codexLessonHooks = lessonHookClient{
-		id: CodexID, specs: hooks.CodexLessonCheckSpecs, fires: hooks.CodexMatcher, trustReview: true, patchTool: "apply_patch",
+		id: CodexID, specs: hooks.CodexLessonCheckSpecs, fires: hooks.CodexMatcher, trustReview: true,
+		patchTool: codexApplyPatch, uncovered: []string{"shell"},
 	}
 )
 
 // lessonSourceState is what one plan reads about the hook sources of a
-// client. The enforce preconditions read it (P0 ruling M4). The adapter
-// fills it from the reads of its own plan, so the decision and the
-// guards of the plan describe one file state.
+// client. The enforce preconditions read it. The adapter fills it from
+// the reads of its own plan, so the decision and the file guards of the
+// plan describe one file state.
 type lessonSourceState struct {
 	// trust is the project trust of the hook document. No built-in
 	// adapter reads a trust record, so it stays unknown for both.
@@ -207,13 +216,25 @@ type lessonSourceState struct {
 	// pre-write hook that discards the exit status of the hook. No deny
 	// of such a definition blocks.
 	reportOnly []string
-	// sourceUnreadable preserves uncertainty from a supplemental source.
-	// Installation is allowed, but capability cannot establish coverage.
+	// sourceUnreadable is true when a supplemental hook source cannot be
+	// read or parsed, so its effect is unknown. Setup still installs the
+	// hooks, but the capability report cannot establish coverage.
 	sourceUnreadable bool
 }
 
+// inspection returns the lesson-hook reading of one hook document with
+// this source state. The plan summary and both inspections build the
+// reading here, so they cannot disagree on the source state.
+func (s lessonSourceState) inspection(document map[string]any, client lessonHookClient) LessonHookInspection {
+	return LessonHookInspection{
+		Entries: lessonHookEntries(document, client), ReportOnly: len(s.reportOnly) > 0,
+		HooksDisabled: s.hooksDisabled, SourceUnreadable: s.sourceUnreadable,
+	}
+}
+
 // blockers returns the known-bad states, sorted. Under enforce, each one
-// keeps the guard inactive, so setup refuses before any write.
+// keeps the guard inactive, so setup refuses before any write. Each
+// reason appears at most once, so a sort is enough.
 func (s lessonSourceState) blockers() []lessoncheck.CapReason {
 	var reasons []lessoncheck.CapReason
 
@@ -229,12 +250,14 @@ func (s lessonSourceState) blockers() []lessoncheck.CapReason {
 		reasons = append(reasons, lessoncheck.CapReportOnlyWrapper)
 	}
 
-	return sortedReasons(reasons)
+	slices.Sort(reasons)
+
+	return reasons
 }
 
 // enforceRefusal is the refusal of an enforce request for a client in a
-// known-bad state, or nil (contract K10). The reasons are sorted and
-// joined with commas.
+// known-bad state, or nil. The message lists the sorted reasons, joined
+// with commas.
 func enforceRefusal(clientID string, state lessonSourceState) error {
 	blockers := state.blockers()
 	if len(blockers) == 0 {
@@ -242,32 +265,27 @@ func enforceRefusal(clientID string, state lessonSourceState) error {
 	}
 
 	return fmt.Errorf("lesson checks: enforce for %s would stay inactive (%s); resolve it, then rerun",
-		clientID, joinReasons(blockers))
+		clientID, lessoncheck.JoinCapReasons(blockers))
 }
 
-// lessonConfig is the result of lessoncheck.Load for one plan.
+// lessonConfig is the result of lessoncheck.Load for one plan. errs
+// holds a read or decode error too, so the refusal and the summary read
+// one list.
 type lessonConfig struct {
 	cfg  *lessoncheck.Config
 	errs []lessoncheck.ConfigError
-	err  error
 }
 
 // configRefusal is the refusal of an enforce request for a
-// configuration that does not validate, or nil (contract K10). The
-// message names the read error, else the first semantic error.
+// configuration that does not validate, or nil. The message names the
+// first error, which is the read error when the file does not decode.
 func configRefusal(config lessonConfig) error {
-	var first string
-
-	switch {
-	case config.err != nil:
-		first = config.err.Error()
-	case len(config.errs) > 0:
-		first = config.errs[0].Message
-	default:
+	if len(config.errs) == 0 {
 		return nil
 	}
 
-	return fmt.Errorf("lesson checks: .seamark/lessons.yaml does not validate: %s; fix it before enabling enforce", first)
+	return fmt.Errorf("lesson checks: .seamark/lessons.yaml does not validate: %s; fix it before enabling enforce",
+		config.errs[0].Message)
 }
 
 // lessonChange is what the lesson-check part of a plan does to one hook
@@ -290,7 +308,7 @@ type lessonChange struct {
 	checksRemoved, explorationRemoved int
 	// mode is the installed lesson-check mode after the plan.
 	mode string
-	// summary names the limited paths after the plan.
+	// summary names the paths that are not active after the plan.
 	summary string
 }
 
@@ -328,17 +346,17 @@ func (c lessonChange) detail() string {
 }
 
 // narrateCommands prints the command of each merged hook, in the form
-// of the other hook lines: what runs on which tool must never require
-// opening the document to find out. The adapter's narrator prints the
-// file line, and its detail names this change.
-func (c lessonChange) narrateCommands(w io.Writer, _ string) {
+// of the other hook lines. So the user sees what runs on which tool
+// without opening the document. The adapter's narrator prints the file
+// line, and its detail names this change.
+func (c lessonChange) narrateCommands(w io.Writer) {
 	for _, command := range c.commands {
 		fmt.Fprintf(w, "          %-30s %s\n", render.Sanitize(command.event+" "+command.matcher), render.Sanitize(command.command))
 	}
 }
 
 // narrateLine prints the lesson checks line of the client, only when
-// the run named a lesson-check or exploration intent (contract K10).
+// the run named a lesson-check or exploration intent.
 func (c lessonChange) narrateLine(w io.Writer) {
 	if c.requested {
 		fmt.Fprintf(w, "  lesson checks  %s %s — %s\n", c.clientID, c.mode, c.summary)
@@ -367,7 +385,16 @@ func planLessonChecks(document map[string]any, path, root, binary string, client
 	var config lessonConfig
 
 	if change.requested {
-		config.cfg, config.errs, config.err = lessoncheck.Load(root)
+		var err error
+
+		config.cfg, config.errs, err = lessoncheck.Load(root)
+		if err != nil {
+			// Load gives no semantic error beside a read or decode error. The
+			// capability report reads such an error as a decode-error entry.
+			config.errs = []lessoncheck.ConfigError{{
+				Code: lessoncheck.CodeDecodeError, Subject: "lessons.yaml", Message: err.Error(),
+			}}
+		}
 	}
 
 	if req.LessonChecks == hooks.LessonChecksEnforce {
@@ -405,8 +432,10 @@ func planLessonChecks(document map[string]any, path, root, binary string, client
 	change.mode = hooks.InstalledLessonChecks(document, all)
 	change.summary = lessonSummary(document, binary, client, change.mode, config, state)
 	hookMap, _ := document["hooks"].(map[string]any)
+
 	for _, spec := range change.specs {
 		entries, _ := hookMap[spec.Event].([]any)
+
 		hooks.ForEachCommand(entries, func(matcher string, _ map[string]any, command string) {
 			if hooks.OwnedBySeamark(command, spec.Markers()) {
 				change.commands = append(change.commands, lessonHookCommand{spec.Event, matcher, command})
@@ -476,55 +505,64 @@ type lessonPath struct {
 	reasons []lessoncheck.CapReason
 }
 
-// String renders the path as "<hook_stage> <tool> <state> (<reasons>)"
-// (contract K10). A path without a reason has no parentheses.
+// String renders the path as "<hook_stage> <tool> <state> (<reasons>)".
+// A path without a reason has no parentheses.
 func (p lessonPath) String() string {
 	text := fmt.Sprintf("%s %s %s", p.stage, p.tool, p.state)
+
 	if p.context != "" {
 		text = fmt.Sprintf("%s %s %s %s", p.stage, p.tool, p.context, p.state)
 	}
+
 	if len(p.reasons) > 0 {
-		text += " (" + joinReasons(p.reasons) + ")"
+		text += " (" + lessoncheck.JoinCapReasons(p.reasons) + ")"
 	}
 
 	return text
 }
 
 // lessonSummary names each hook path that is not active after the plan,
-// joined with "; " (contract K10). It is the setup-time reading of the
-// facts that the plan holds: the installed entries, the configuration,
-// the hook sources, and the static native evidence. Equal root and
-// child paths share one line. Unequal paths name their context, because
-// one context cannot establish the other's coverage. Off collapses
-// its not-installed paths into one phrase, because the line would otherwise repeat "inactive
-// (not-installed)" for every tool.
+// joined with "; ". It is the setup-time reading of the facts that the
+// plan holds: the installed entries, the configuration, the hook
+// sources, and the static native evidence. Equal root and child paths
+// share one line. Unequal paths name their context, because one context
+// cannot establish the other's coverage. Off collapses its
+// not-installed paths into one phrase, so the line does not repeat
+// "inactive (not-installed)" for every tool.
 func lessonSummary(document map[string]any, binary string, client lessonHookClient, mode string, config lessonConfig,
 	state lessonSourceState,
 ) string {
 	r := pathReader{
-		id: client.id, client: client, self: BinaryIdentity{Path: binary}, trust: state.trust,
+		client: client, self: BinaryIdentity{Path: binary}, trust: state.trust,
 		binaries: map[string]binaryReading{},
-		lessons: LessonHookInspection{
-			Entries: lessonHookEntries(document, client), ReportOnly: len(state.reportOnly) > 0,
-			HooksDisabled: state.hooksDisabled, SourceUnreadable: state.sourceUnreadable,
-		},
+		lessons:  state.inspection(document, client),
 	}
-	errs := config.errs
-	if config.err != nil && len(errs) == 0 {
-		errs = []lessoncheck.ConfigError{{Code: "decode-error", Subject: "lessons.yaml", Message: config.err.Error()}}
-	}
-	report := lessoncheck.CapabilityReportOf(config.cfg, errs, r.paths(), nil)
+
+	report := lessoncheck.CapabilityReportOf(config.cfg, config.errs, r.paths(), nil)
 	capability, _ := report.Client(client.id)
+
 	var items []string
 	if mode == hooks.LessonChecksOff {
 		items = append(items, "no pre-write or post-edit hook installed")
 	}
+
+	explorationOwned := client.exploration != nil && hooks.Owned(document, *client.exploration)
+
 	for _, path := range capability.Paths {
-		if path.State == lessoncheck.PathActive ||
-			(mode == hooks.LessonChecksOff && path.HookStage != lessoncheck.StageExploration) ||
-			(path.HookStage == lessoncheck.StageExploration && (client.exploration == nil || !hooks.Owned(document, *client.exploration))) {
+		switch {
+		case path.State == lessoncheck.PathActive:
+			continue
+		case path.HookStage == lessoncheck.StageExploration:
+			// The exploration hook is optional, so the line names its paths
+			// only when the hook is installed.
+			if !explorationOwned {
+				continue
+			}
+		case mode == hooks.LessonChecksOff:
+			// The phrase before the loop already names these paths.
 			continue
 		}
+
 		reading := lessonPath{stage: path.HookStage, tool: path.Tool, state: path.State, reasons: path.Reasons}
 		if slices.ContainsFunc(capability.Paths, func(other lessoncheck.PathCapability) bool {
 			return other.HookStage == path.HookStage && other.Tool == path.Tool &&
@@ -532,6 +570,7 @@ func lessonSummary(document map[string]any, binary string, client lessonHookClie
 		}) {
 			reading.context = path.Context
 		}
+
 		item := reading.String()
 		if !slices.Contains(items, item) {
 			items = append(items, item)
@@ -545,86 +584,29 @@ func lessonSummary(document map[string]any, binary string, client lessonHookClie
 	return strings.Join(items, "; ")
 }
 
-// sortedReasons sorts and deduplicates reasons.
-func sortedReasons(reasons []lessoncheck.CapReason) []lessoncheck.CapReason {
-	slices.Sort(reasons)
-
-	return slices.Compact(reasons)
-}
-
-// joinReasons joins reasons with ", ".
-func joinReasons(reasons []lessoncheck.CapReason) string {
-	words := make([]string, 0, len(reasons))
-	for _, reason := range reasons {
-		words = append(words, string(reason))
-	}
-
-	return strings.Join(words, ", ")
-}
-
-// wrappedLessonCheckMode reads the mode of a pre-write definition that
-// setup does not own, by the rule of wrappedGateMode. asked is the mode
-// of the markers that the command runs. mode is the mode of the markers
-// whose exit status can reach the client. A deny blocks only by exit
-// status 2, so a definition that runs a marker and passes no status is
-// GateModeReportOnly. The reading of the gate hook does not apply here,
-// because GateMarkerMode names no lesson-check marker.
-func wrappedLessonCheckMode(spec hooks.Spec, reading hooks.HookReading) (mode, asked string) {
-	asked = lessonMarkerMode(spec, func(marker string) bool { return reading.UseFor(marker) != hooks.HookNotRun })
-	mode = lessonMarkerMode(spec, reading.StatusPassesFor)
-
-	if mode == "" && asked != "" {
-		mode = GateModeReportOnly
-	}
-
-	return mode, asked
-}
-
-// lessonMarkerMode reads the mode of the pre-write markers that a
-// command runs in the given way. Enforce wins, as for the gate.
-func lessonMarkerMode(spec hooks.Spec, runs func(marker string) bool) string {
-	mode := ""
-
-	for _, marker := range spec.Markers() {
-		if !runs(marker) {
-			continue
-		}
-
-		switch hooks.LessonCheckMarkerMode(marker) {
-		case hooks.LessonChecksEnforce:
-			return hooks.LessonChecksEnforce
-		case hooks.LessonChecksCheck:
-			mode = hooks.LessonChecksCheck
-		}
-	}
-
-	return mode
-}
-
 // discardsPreWriteStatus reports whether one definition that setup does
 // not own runs the pre-write hook of the spec and discards its exit
-// status. An owned command is one shell word and a marker, so only
-// another definition can discard the status.
+// status. A deny blocks only by exit status 2, so such a definition
+// never blocks. An owned command is one shell word and a marker, so
+// only another definition can discard the status. The reading answers
+// for every marker of the spec. Each marker of a pre-write spec is a
+// guard or a baseline marker, so no other marker can change the answer.
 func discardsPreWriteStatus(spec hooks.Spec, cmd string) bool {
 	if hooks.OwnedBySeamark(cmd, spec.Markers()) {
 		return false
 	}
 
 	reading := hooks.ReadHook(cmd, spec.Markers())
-	if reading.Use() == hooks.HookNotRun {
-		return false
-	}
 
-	mode, _ := wrappedLessonCheckMode(spec, reading)
-
-	return mode == GateModeReportOnly
+	return reading.Use() != hooks.HookNotRun && !reading.StatusPasses()
 }
 
 // reportOnlyIn reports whether a parsed hook document holds a
-// definition of the pre-write hook that discards its exit status. Only
-// a "command" hook under a matcher that fires runs, so only such a
-// definition counts.
-func reportOnlyIn(document map[string]any, spec hooks.Spec, fires hooks.MatcherRule) bool {
+// definition of the client's pre-write hook that discards its exit
+// status. Only a "command" hook under a matcher that fires runs, so
+// only such a definition counts.
+func reportOnlyIn(document map[string]any, client lessonHookClient) bool {
+	spec, fires := client.preWrite(), client.fires
 	hookMap, _ := document["hooks"].(map[string]any)
 	eventHooks, _ := hookMap[spec.Event].([]any)
 	found := false
@@ -643,7 +625,9 @@ func reportOnlyIn(document map[string]any, spec hooks.Spec, fires hooks.MatcherR
 // reportOnlyInline is reportOnlyIn for the inline [hooks] of the Codex
 // configuration. An entry in a layout that the reader does not know has
 // no matcher or type to check, so it counts as one that runs.
-func reportOnlyInline(entries []approve.InlineHook, spec hooks.Spec, fires hooks.MatcherRule) bool {
+func reportOnlyInline(entries []approve.InlineHook, client lessonHookClient) bool {
+	spec, fires := client.preWrite(), client.fires
+
 	return slices.ContainsFunc(entries, func(entry approve.InlineHook) bool {
 		if entry.Event != spec.Event || (entry.Known && (entry.Type != "command" || !hooks.Fires(spec, entry.Matcher, fires))) {
 			return false

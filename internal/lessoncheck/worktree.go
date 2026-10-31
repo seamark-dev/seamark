@@ -11,25 +11,30 @@ import (
 	"hash"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/render"
+	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// This file holds ReadWorkingTree, the working-tree producer of contract
-// K4. It only reads: git runs rev-parse, status, ls-files, cat-file, and
-// ls-tree through history.RunGit, which stops the optional index lock,
-// and the worktree reads never follow a symbolic link (AC-29). No step
-// adds, stages, checks out, stashes, or refreshes the index.
+// This file holds ReadWorkingTree, the producer of the working-tree
+// snapshot. It only reads, because a check must not change the
+// repository that it checks. git runs rev-parse, status, ls-files,
+// cat-file, and ls-tree through history.RunGit, which turns off the
+// optional index lock. The worktree reads never follow a symbolic link.
+// No step adds, stages, checks out, stashes, or refreshes the index.
 
-// The fixed selection texts of contract K4. The output prints them, so a
-// reader sees what the snapshot covers and what it leaves out.
+// The fixed selection texts of the working-tree snapshot. The output
+// prints them, so a reader sees what the snapshot covers and what it
+// leaves out.
 const (
 	selectionDefaultHead   = "tracked changes against HEAD plus untracked nonignored files, staged and unstaged, as present in the working tree"
 	selectionDefaultEmpty  = "tracked changes against the empty tree plus untracked nonignored files, staged and unstaged, as present in the working tree"
@@ -38,10 +43,10 @@ const (
 )
 
 // selectionExcludeSkipped is the fixed exclude text for the index entries
-// with the skip-worktree or assume-unchanged bit (manager ruling S2). git
-// does not read the worktree side of such an entry, and the user set the
-// bit on purpose. A snapshot adds the text after the texts of its kind,
-// once, only when its selection holds such an entry.
+// with the skip-worktree or assume-unchanged bit. git does not read the
+// worktree side of such an entry, and the user set the bit on purpose. A
+// snapshot adds the text after the texts of its kind, once, only when its
+// selection holds such an entry.
 const selectionExcludeSkipped = "worktree changes of skip-worktree or assume-unchanged index entries, such as paths outside a sparse checkout"
 
 // selectionExcludes returns the fixed exclude texts of a selection kind.
@@ -80,27 +85,25 @@ func selectionOf(paths []string, baseline BaselineKind) Selection {
 // tracked changes against HEAD plus untracked nonignored files. A
 // non-empty list is the explicit-paths selection: the changes at or
 // below each path, ignored files included. The CLI normalizes each path
-// first (contracts §1.3), so paths are repository-relative and
-// slash-separated. A zero lim means DefaultLimits.
+// first, so paths are repository-relative and slash-separated. A zero
+// lim means DefaultLimits.
 //
 // ReadWorkingTree returns an error only when root is not in a git work
-// tree, when a path is not repository-relative, when step 1 cannot read
-// HEAD, or when ctx is canceled. Every later failure stays in the
-// snapshot: an incomplete path set or an unreadable side, never an
-// empty pass.
+// tree, when a path is not repository-relative, when the baseline read
+// cannot read HEAD, or when ctx is canceled. Every later failure stays
+// in the snapshot: an incomplete path set or an unreadable side, never
+// an empty pass.
 //
-// When the ctx deadline passes after step 1, the snapshot keeps its
-// baseline and selection, holds no change, and names verify-timeout in
-// Limits. The working-tree boundary serves lessons --verify, check
-// --lessons, and MCP check, whose deadline is verify-timeout (contract
-// K3). A deadline during step 1 returns an error that wraps
-// context.DeadlineExceeded, because the snapshot has no baseline then.
-// A canceled ctx returns an error that wraps context.Canceled, so the
-// caller can report the results as interrupted.
+// When the ctx deadline passes after the baseline read, the snapshot
+// keeps its baseline and selection, holds no change, and names
+// verify-timeout in Limits. The working-tree boundary serves lessons
+// --verify, check --lessons, and MCP check. verify-timeout is the
+// deadline of these three. A deadline during the baseline read returns
+// an error that wraps context.DeadlineExceeded, because the snapshot has
+// no baseline then. A canceled ctx returns an error that wraps
+// context.Canceled, so the caller can report the results as interrupted.
 func ReadWorkingTree(ctx context.Context, root string, paths []string, lim Limits) (*Snapshot, error) {
-	if lim == (Limits{}) {
-		lim = DefaultLimits()
-	}
+	lim = lim.orDefault()
 
 	selected, err := selectionPaths(paths)
 	if err != nil {
@@ -118,15 +121,7 @@ func ReadWorkingTree(ctx context.Context, root string, paths []string, lim Limit
 		return nil, err
 	}
 
-	snap := &Snapshot{
-		Schema:        SnapshotSchema,
-		Boundary:      BoundaryWorkingTree,
-		Baseline:      baseline,
-		Selection:     selectionOf(selected, baseline.Kind),
-		Changes:       []Change{},
-		PathsComplete: true,
-		bounds:        lim,
-	}
+	snap := newWorkingTreeSnapshot(baseline, selected, lim)
 
 	r.fill(snap, selected)
 
@@ -152,43 +147,44 @@ func selectionPaths(paths []string) ([]string, error) {
 		return nil, nil
 	}
 
-	seen := map[string]bool{}
-	out := make([]string, 0, len(paths))
-
 	for _, p := range paths {
 		if p == "" || p == "." || path.IsAbs(p) || path.Clean(p) != p || p == ".." || strings.HasPrefix(p, "../") {
 			return nil, fmt.Errorf("lesson checks: path %q is not repository-relative", p)
 		}
-
-		if !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
 	}
 
-	sort.Strings(out)
+	// The check above rejects the empty string, which is the only value
+	// that sortedUnique drops. So the result holds each path once.
+	return sortedUnique(paths), nil
+}
 
-	return out, nil
+// newWorkingTreeSnapshot returns a working-tree snapshot without
+// changes, before any read. PathsComplete starts true, and each read
+// that leaves a path undecided sets it to false.
+func newWorkingTreeSnapshot(baseline Baseline, selected []string, lim Limits) *Snapshot {
+	return &Snapshot{
+		Schema:        SnapshotSchema,
+		Boundary:      BoundaryWorkingTree,
+		Baseline:      baseline,
+		Selection:     selectionOf(selected, baseline.Kind),
+		Changes:       []Change{},
+		PathsComplete: true,
+		bounds:        lim,
+	}
 }
 
 // timedOut turns a snapshot that the deadline cut into one without
 // changes. A partial read must not decide any pin, so every checker then
-// gives unknown/resource-limit with verify-timeout (contract K3).
+// gives unknown/resource-limit with verify-timeout. The snapshot starts
+// again from its baseline and selection, so no field of the partial read
+// stays. The rebuilt selection has only the fixed excludes of its kind.
+// The skipped-entry exclude comes from the census, and a deadline can
+// cut the census. So the exclude stays out, because each deadline must
+// give the same result.
 func timedOut(snap *Snapshot, lim Limits) {
-	snap.Changes = []Change{}
+	*snap = *newWorkingTreeSnapshot(snap.Baseline, snap.Selection.Paths, lim)
 	snap.PathsComplete = false
 	snap.Limits = []LimitHit{{Name: LimitVerifyTimeout, Value: lim.VerifyTimeout.Milliseconds()}}
-	snap.Limitations = nil
-	snap.identities = nil
-	snap.statusSHA256 = ""
-	snap.statusStderr = ""
-	snap.UnreadableDirectories = nil
-	snap.UnreadableDirectoriesOmitted = 0
-	snap.undecidedLimit = ""
-	// The skipped-entry exclude comes from the census, which a deadline
-	// can cut. The fixed texts of the kind keep the result the same for
-	// each deadline.
-	snap.Selection.Excludes = selectionExcludes(snap.Selection.Kind)
 }
 
 // treeReader holds the state of one working-tree read.
@@ -288,7 +284,8 @@ func (r *treeReader) git(stdin []byte, args ...string) (history.GitOutput, bool)
 	return out, out.ExitCode == 0
 }
 
-// baseline runs step 1: HEAD or, in an unborn repository, the empty tree.
+// baseline reads the before state of the snapshot: HEAD or, in an unborn
+// repository, the empty tree.
 func (r *treeReader) baseline() (Baseline, error) {
 	out, err := history.RunGit(r.ctx, history.GitCall{
 		Dir:       r.root,
@@ -310,15 +307,18 @@ func (r *treeReader) baseline() (Baseline, error) {
 	}
 }
 
-// maxUnreadableDirectories is the output cap max-unreadable-directories
-// (K3 output caps). A snapshot lists at most this many unreadable census
-// directories and counts the rest, so the JSON stays bounded. The cut
-// never changes PathsComplete or the status digest, which use the whole
-// list. The value is the value of max-audit-paths. The name is new,
-// because each cap name applies to one field.
+// maxUnreadableDirectories is the output cap max-unreadable-directories.
+// A snapshot lists at most this many unreadable census directories and
+// counts the rest, so the JSON stays bounded. The cut never changes
+// PathsComplete or the status digest, which use the whole list. The
+// value is the value of max-audit-paths. The cap has its own name and
+// does not reuse max-audit-paths, because each cap name applies to one
+// field.
 const maxUnreadableDirectories = 50
 
-// fill runs steps 2 to 6 and writes the result into snap.
+// fill reads everything after the baseline and writes the result into
+// snap. It reads the object format, the status records and the census,
+// the HEAD entries, the HEAD blobs, and the worktree, in that order.
 func (r *treeReader) fill(snap *Snapshot, selected []string) {
 	r.format = r.objectFormat()
 	if r.format == "" {
@@ -338,7 +338,7 @@ func (r *treeReader) fill(snap *Snapshot, selected []string) {
 	containers := map[string]bool{}
 
 	for i := range records {
-		if submoduleContentChanged(records[i].sub) && selects(selected, records[i].path) {
+		if submoduleContentChanged(records[i].sub) && inScope(records[i].path, selected) {
 			r.limitations[LimitationSubmoduleContentNotInspected] = true
 		}
 
@@ -355,15 +355,16 @@ func (r *treeReader) fill(snap *Snapshot, selected []string) {
 	}
 
 	cands := mapRecords(records)
+	uncov := uncovered(records, selected)
 
-	head := r.headEntries(cands, records, selected, snap.Baseline.Kind)
+	head := r.headEntries(cands, uncov, snap.Baseline.Kind)
 	if head == nil {
 		snap.PathsComplete = false
 	}
 
 	unmergedHeads(cands, head)
 
-	cands = append(cands, r.linkedPaths(records, selected, head)...)
+	cands = append(cands, r.linkedPaths(uncov, head)...)
 	cands = r.applyLstatRule(cands, selected)
 	sizes := r.blobSizes(cands)
 	cands = r.pairMoves(cands, selected, sizes)
@@ -380,8 +381,8 @@ func (r *treeReader) fill(snap *Snapshot, selected []string) {
 	snap.identities = r.identityList()
 }
 
-// objectFormat runs step 2. It returns "" when git cannot tell, and move
-// pairing is then not available.
+// objectFormat reads the object format of the repository. It returns ""
+// when git cannot tell, and move pairing is then not available.
 func (r *treeReader) objectFormat() string {
 	out, ok := r.git(nil, "rev-parse", "--show-object-format")
 	if !ok {
@@ -396,26 +397,27 @@ func (r *treeReader) objectFormat() string {
 	}
 }
 
-// statusRecords runs step 3, for an explicit selection step 3a, and then
-// the directory census. It returns the records, the hex SHA-256 of the
-// status output and the census result, and whether the path set is
-// complete. Step 3a gives only its '!' records: the ignored files at or
-// below each named path. --literal-pathspecs makes git read each named
-// path as a plain name, so a "*" or a ":" in a name is no pattern.
+// statusRecords runs git status and then the directory census. An
+// explicit selection adds a second status call for the ignored files. It
+// returns the records, the hex SHA-256 of the status output and the
+// census result, and whether the path set is complete. The second call
+// gives only its '!' records: the ignored files at or below each named
+// path. --literal-pathspecs makes git read each named path as a plain
+// name, so a "*" or a ":" in a name is no pattern.
 //
-// Step 3 sets status.renames=true on the command line. A user or
+// The first call sets status.renames=true on the command line. A user or
 // repository setting diff.renames=copies or status.renames=copies
-// otherwise makes git print a copy as a '2' record. The K4 mapping
+// otherwise makes git print a copy as a '2' record. The record mapping
 // reads every '2' record as a move, so a copy would hide its added
-// lines (review fix snapshot-git:F1).
+// lines.
 //
 // The default selection drops the untracked records of the audit files
 // (ownStatePath) before the parse and the digest.
 //
 // The digest holds the stdout of each call and the census result, so
-// the revalidation (contract K5) also sees a directory that becomes
-// unreadable after the read. It does not hold the stderr of git, because
-// stderr is a notice only (ruling D2).
+// the revalidation also sees a directory that becomes unreadable after
+// the read. It does not hold the stderr of git, because stderr is a
+// notice only.
 func (r *treeReader) statusRecords(selected []string) (records []statusRecord, sum string, complete bool) {
 	h := sha256.New()
 
@@ -426,8 +428,8 @@ func (r *treeReader) statusRecords(selected []string) (records []statusRecord, s
 	}
 
 	// The default selection leaves out the untracked audit files that
-	// Verify itself writes (review fix R-8). The digest leaves them out
-	// too, so the write of a record never makes an earlier result stale.
+	// Verify itself writes. The digest leaves them out too, so the write
+	// of a record never makes an earlier result stale.
 	// A tracked audit file and an explicit selection keep every record.
 	if len(selected) == 0 {
 		out.Stdout = withoutUntracked(out.Stdout, ownStatePath)
@@ -448,7 +450,13 @@ func (r *treeReader) statusRecords(selected []string) (records []statusRecord, s
 			"--untracked-files=all", "--ignored=traditional", "--"}, selected...)
 
 		ignored, ok := r.git(nil, args...)
-		extra, err := parseStatusV2(ignored.Stdout)
+
+		// A failed call can stop in the middle of its output, so only the
+		// output of a call that succeeded gets a parse.
+		var extra []statusRecord
+		if ok {
+			extra, err = parseStatusV2(ignored.Stdout)
+		}
 
 		if ok && err == nil {
 			for _, rec := range extra {
@@ -476,8 +484,8 @@ func (r *treeReader) statusRecords(selected []string) (records []statusRecord, s
 // noteStderr records the stderr of one status call that exited 0. Text
 // there gives the snapshot limitation git-stderr, a notice only. It never
 // makes the path set incomplete, because a configuration warning that no
-// rerun clears must not give exit 1 on every run (ruling D2). The census
-// decides the path set. The first stderr line becomes the notice text.
+// rerun clears must not give exit 1 on every run. The census decides the
+// path set. The first stderr line becomes the notice text.
 func (r *treeReader) noteStderr(stderr []byte) {
 	text := strings.TrimSpace(string(stderr))
 	if text == "" {
@@ -492,29 +500,28 @@ func (r *treeReader) noteStderr(stderr []byte) {
 	}
 }
 
-// census runs the directory census of ruling D2. git 2.50.1 prints no
-// status record for a tracked file below a directory that the producer
-// cannot search, and it exits 0. So the producer reads each directory of
-// censusDirs in path order. An unreadable directory leaves its subtree
-// undecided, and the census does not read below it. The result is false
-// when a directory is unreadable, when git cannot list the index, when
-// the directories pass max-census-directories, or when an index entry
-// below a link has no status record (belowLink). An index entry with the
-// skip-worktree or assume-unchanged bit stays out of belowLink (manager
-// ruling S2). Its parent directories join the census when they exist
-// (ruling S2, option (c)).
+// census runs the directory census. git 2.50.1 prints no status record
+// for a tracked file below a directory that the producer cannot search,
+// and it exits 0. So the producer reads each directory of censusDirs in
+// path order. An unreadable directory leaves its subtree undecided, and
+// the census does not read below it. The result is false when a
+// directory is unreadable, when git cannot list the index, when the
+// directories pass max-census-directories, or when an index entry below
+// a link has no status record (belowLink). An index entry with the
+// skip-worktree or assume-unchanged bit stays out of belowLink. Its
+// parent directories join the census when they exist.
 //
 // The status digest gets a NUL and a census byte, then each unreadable
 // directory with a NUL after it. The byte is '0' for a limit, a git
 // failure, or an index entry below a link without a status record. Else
-// it is '1'. So the revalidation (contract K5) sees a directory that
-// becomes unreadable after the read, and a link that replaces a
-// directory without a change of the status output. No time goes into
-// the digest.
+// it is '1'. So the revalidation sees a directory that becomes
+// unreadable after the read, and a link that replaces a directory
+// without a change of the status output. No time goes into the digest.
 //
-// The census empties the directory cache at its end. Step 6 and the
-// revalidation then run Lstat on each parent again, so the census does
-// not make the time between a parent Lstat and a file read longer.
+// The census empties the directory cache at its end. The worktree read
+// and the revalidation then run Lstat on each parent again, so the
+// census does not make the time between a parent Lstat and a file read
+// longer.
 func (r *treeReader) census(h hash.Hash, records []statusRecord, selected []string) bool {
 	defer clear(r.dirs)
 
@@ -577,15 +584,14 @@ func (r *treeReader) census(h hash.Hash, records []statusRecord, selected []stri
 // unrecorded entry. git does not read its worktree side, so no status
 // record and no stderr shows a worktree change of it. The user set the
 // bit on purpose. The census notes that such an entry exists, so fill can
-// name it once in the selection excludes (manager ruling S2).
+// name it once in the selection excludes.
 //
 // The parent directories of such an entry join the census, unless dirState
 // gives absent. git cannot list an unreadable directory, so the census
-// must read it, also when it holds only such entries (ruling S2, option
-// (c)). An absent parent costs at most one Lstat and does not count
-// against max-census-directories. The output bound of ls-files bounds
-// these Lstat calls, and the dirState cache gives one call per absent
-// subtree.
+// must read it, also when it holds only such entries. An absent parent
+// costs at most one Lstat and does not count against
+// max-census-directories. The output bound of ls-files bounds these Lstat
+// calls, and the dirState cache gives one call per absent subtree.
 func (r *treeReader) censusDirs(records []statusRecord, selected []string) (dirs, unrecorded []string, ok bool) {
 	// -v puts the tag of each entry before its path, so the census can see
 	// the two bits.
@@ -599,7 +605,6 @@ func (r *treeReader) censusDirs(records []statusRecord, selected []string) (dirs
 	seen := map[string]bool{}
 	recorded := map[string]bool{}
 	skippedParents := map[string]bool{}
-	skipped := false
 
 	for i := range records {
 		for _, p := range []string{strings.TrimSuffix(records[i].path, "/"), records[i].origPath} {
@@ -609,13 +614,16 @@ func (r *treeReader) censusDirs(records []statusRecord, selected []string) (dirs
 
 			recorded[p] = true
 
-			if selects(selected, p) {
+			if inScope(p, selected) {
 				addParents(seen, p)
 			}
 		}
 	}
 
-	for _, line := range strings.Split(string(out.Stdout), "\x00") {
+	// The loop uses SplitSeq, so it builds no slice of every index entry.
+	// That matters because the ls-files output can reach
+	// max-git-output-bytes.
+	for line := range strings.SplitSeq(string(out.Stdout), "\x00") {
 		if line == "" {
 			continue
 		}
@@ -628,14 +636,14 @@ func (r *treeReader) censusDirs(records []statusRecord, selected []string) (dirs
 			return nil, nil, false
 		}
 
+		entry := line[2:]
+
 		if worktreeSkipped(line[0]) {
-			skipped = true
-			addParents(skippedParents, line[2:])
+			addParents(skippedParents, entry)
 
 			continue
 		}
 
-		entry := line[2:]
 		addParents(seen, entry)
 
 		if !recorded[entry] {
@@ -662,16 +670,11 @@ func (r *treeReader) censusDirs(records []statusRecord, selected []string) (dirs
 		}
 	}
 
-	dirs = make([]string, 0, len(seen))
-	for dir := range seen {
-		dirs = append(dirs, dir)
-	}
+	// addParents adds at least one directory for each entry, so a
+	// non-empty skippedParents means that a skipped entry exists.
+	r.skippedEntries = len(skippedParents) > 0
 
-	sort.Strings(dirs)
-
-	r.skippedEntries = skipped
-
-	return dirs, unrecorded, true
+	return slices.Sorted(maps.Keys(seen)), unrecorded, true
 }
 
 // indexTags holds the tags that git ls-files -v prints for an index entry.
@@ -691,15 +694,14 @@ func worktreeSkipped(tag byte) bool {
 }
 
 // belowLink reports whether an index entry without a status record lies
-// below a symbolic link inside root (D2 follow-up, ruling 3). git 2.50.1
-// runs lstat through such a link. When the target has no search bit, git
-// prints no record for the entry and exits 0, so the entry is undecided.
-// A target that git can search or that is absent gives a delete record.
-// An entry with the skip-worktree or assume-unchanged bit gets no record
-// and no stderr below any link, so censusDirs keeps it out of entries
-// (manager ruling S2). Else such an entry would make the path set
-// incomplete on every run. dirState runs Lstat only, so the census opens
-// nothing through the link.
+// below a symbolic link inside root. git 2.50.1 runs lstat through such
+// a link. When the target has no search bit, git prints no record for
+// the entry and exits 0, so the entry is undecided. A target that git
+// can search or that is absent gives a delete record. An entry with the
+// skip-worktree or assume-unchanged bit gets no record and no stderr
+// below any link, so censusDirs keeps it out of entries. Else such an
+// entry would make the path set incomplete on every run. dirState runs
+// Lstat only, so the census opens nothing through the link.
 func (r *treeReader) belowLink(entries []string) bool {
 	for _, entry := range entries {
 		// The top level "." is root itself, not a directory inside root.
@@ -744,8 +746,9 @@ func below(dir string, list []string) bool {
 // lookup in it fails, also in an empty directory. So the census also
 // looks up the name "." in the directory (searchable).
 //
-// An absent path, a file, and a link give true: git reports an absent
-// path, and K4 inspects a link as a link, so the census never opens one.
+// An absent path, a file, and a link give true. git reports an absent
+// path, and the snapshot inspects a link as a link, so the census never
+// opens one.
 func (r *treeReader) readableDir(dir string) bool {
 	switch r.dirState(dir) {
 	case pathAbsent, pathThroughLink:
@@ -787,8 +790,8 @@ func (r *treeReader) readableDir(dir string) bool {
 // searchable reports whether a lookup in the directory name works. open
 // is the Stat information of the directory that the census opened. The
 // lookup of the name "." needs the search bit and no listed name. The
-// path is joined by hand, because filepath.Join removes the "/.". The
-// standard library has no lookup through an open directory on every
+// code joins the path by hand, because filepath.Join removes the "/.".
+// The standard library has no lookup through an open directory on every
 // unix, so the lookup goes through the path again. Its result must be
 // the open directory, else a swap happened and the directory reads as
 // unreadable. On windows, which has no search bit, "." is the directory.
@@ -811,12 +814,6 @@ func (r *treeReader) cutRecords(records []statusRecord, complete bool) ([]status
 	}
 
 	return records, complete
-}
-
-// selects reports whether a selection covers a path. An empty selection
-// is the default selection, which covers every path.
-func selects(selected []string, p string) bool {
-	return len(selected) == 0 || inScope(p, selected)
 }
 
 // containerPaths returns the paths of a status record that hold content
@@ -863,12 +860,12 @@ type headEntry struct {
 	oid  string
 }
 
-// headEntries runs step 5 for the paths whose HEAD side status does not
-// give: the unmerged paths and the explicit paths that no status record
-// covers. It returns an empty map in an unborn repository, where HEAD
-// holds nothing. It returns nil when ls-tree fails, because the HEAD
-// side of those paths is then unknown.
-func (r *treeReader) headEntries(cands []*candidate, records []statusRecord, selected []string, baseline BaselineKind) map[string]headEntry {
+// headEntries runs ls-tree on HEAD for the paths whose HEAD side status
+// does not give: the unmerged paths and uncov, the explicit paths that
+// no status record covers. It returns an empty map in an unborn
+// repository, where HEAD holds nothing. It returns nil when ls-tree
+// fails, because the HEAD side of those paths is then unknown.
+func (r *treeReader) headEntries(cands []*candidate, uncov []string, baseline BaselineKind) map[string]headEntry {
 	entries := map[string]headEntry{}
 
 	var paths []string
@@ -879,7 +876,7 @@ func (r *treeReader) headEntries(cands []*candidate, records []statusRecord, sel
 		}
 	}
 
-	paths = append(paths, uncovered(records, selected)...)
+	paths = append(paths, uncov...)
 
 	if len(paths) == 0 || baseline == BaselineEmptyTree {
 		return entries
@@ -892,7 +889,7 @@ func (r *treeReader) headEntries(cands []*candidate, records []statusRecord, sel
 		return nil
 	}
 
-	for _, tok := range strings.Split(string(out.Stdout), "\x00") {
+	for tok := range strings.SplitSeq(string(out.Stdout), "\x00") {
 		meta, name, found := strings.Cut(tok, "\t")
 		if !found {
 			continue
@@ -917,7 +914,7 @@ func uncovered(records []statusRecord, selected []string) []string {
 
 		for i := range records {
 			rec := &records[i]
-			if inScope(strings.TrimSuffix(rec.path, "/"), []string{p}) || (rec.origPath != "" && inScope(rec.origPath, []string{p})) {
+			if reviews.RegionMatches(p, strings.TrimSuffix(rec.path, "/")) || (rec.origPath != "" && reviews.RegionMatches(p, rec.origPath)) {
 				covered = true
 
 				break
@@ -932,23 +929,24 @@ func uncovered(records []statusRecord, selected []string) []string {
 	return out
 }
 
-// linkedPaths returns a candidate for each explicit path that no status
-// record covers and whose worktree side the producer cannot observe:
+// linkedPaths returns a candidate for each path of uncov, the explicit
+// paths that no status record covers, whose worktree side the producer
+// cannot observe:
 //
 //   - A path below a symbolic link. The producer does not read through
 //     the link, so the change carries the limitation path-through-link
-//     and an unreadable after side (contract K4).
+//     and an unreadable after side.
 //   - A path whose Lstat fails for a reason other than absence. git then
 //     prints no record and still exits 0, so the error is the only sign.
 //     An error is not absence, so the path is an unobserved change and
-//     never a silent clean result (P1 review ruling 3, fix F-B).
+//     never a silent clean result.
 //
 // Any other uncovered path is present or absent as git saw it, so it is
 // no change.
-func (r *treeReader) linkedPaths(records []statusRecord, selected []string, head map[string]headEntry) []*candidate {
+func (r *treeReader) linkedPaths(uncov []string, head map[string]headEntry) []*candidate {
 	var cands []*candidate
 
-	for _, p := range uncovered(records, selected) {
+	for _, p := range uncov {
 		state := r.inspect(p).id.state
 		if state != pathThroughLink && state != pathUnknown {
 			continue
@@ -967,13 +965,13 @@ func (r *treeReader) linkedPaths(records []statusRecord, selected []string, head
 	return cands
 }
 
-// applyLstatRule decides the candidates of the Lstat rule (contract K4,
-// §5 row 125): an absent worktree path is a delete; a present one is a
-// modify until the comparison of the blob id, the type, and the
-// executable bit shows no difference. A submodule that is still present
-// is no change, because the producer does not inspect its commit. The
-// snapshot then names that limitation when the selection covers the path.
-// fill names it when a selected path lies inside the submodule.
+// applyLstatRule decides the candidates of the Lstat rule. An absent
+// worktree path is a delete. A present path is a modify until the
+// comparison of the blob id, the type, and the executable bit shows no
+// difference. A submodule that is still present is no change, because
+// the producer does not inspect its commit. The snapshot then names that
+// limitation when the selection covers the path. fill names it when a
+// selected path lies inside the submodule.
 func (r *treeReader) applyLstatRule(cands []*candidate, selected []string) []*candidate {
 	out := cands[:0]
 
@@ -995,7 +993,7 @@ func (r *treeReader) applyLstatRule(cands []*candidate, selected []string) []*ca
 			c.kind = ChangeDelete
 			c.limitations = append(c.limitations, LimitationPathThroughLink)
 		case c.headMode == modeGitlink:
-			if selects(selected, c.path) {
+			if inScope(c.path, selected) {
 				r.limitations[LimitationSubmoduleContentNotInspected] = true
 			}
 
@@ -1017,23 +1015,23 @@ type blobInfo struct {
 	found bool
 }
 
-// blobSizes runs the first half of step 4: one `cat-file --batch-check`
-// for every HEAD blob that a candidate names. Move pairing compares the
-// sizes, and every before side reports its size. A failed call leaves
-// the map empty, and every before side that needs content is then
-// unreadable.
+// blobSizes runs the first half of the HEAD blob read: one `cat-file
+// --batch-check` for every HEAD blob that a candidate names. Move
+// pairing compares the sizes, and every before side reports its size. A
+// failed call leaves the map empty, and every before side that needs
+// content is then unreadable.
 func (r *treeReader) blobSizes(cands []*candidate) map[string]blobInfo {
 	sizes := map[string]blobInfo{}
 
 	var oids []string
 
 	for _, c := range cands {
-		t := typeOfMode(c.headMode)
-		if (t == ObjectFile || t == ObjectSymlink) && c.headOid != "" {
+		if hasBlob(typeOfMode(c.headMode)) {
 			oids = append(oids, c.headOid)
 		}
 	}
 
+	// sortedUnique also drops the empty object id of a side without one.
 	oids = sortedUnique(oids)
 	if len(oids) == 0 {
 		return sizes
@@ -1044,7 +1042,7 @@ func (r *treeReader) blobSizes(cands []*candidate) map[string]blobInfo {
 		return sizes
 	}
 
-	for _, line := range strings.Split(string(out.Stdout), "\n") {
+	for line := range strings.SplitSeq(string(out.Stdout), "\n") {
 		f := strings.Fields(line)
 		if len(f) != 3 || f[1] != "blob" {
 			continue
@@ -1060,10 +1058,12 @@ func (r *treeReader) blobSizes(cands []*candidate) map[string]blobInfo {
 
 // pairMoves pairs a deleted path with an untracked path when the git blob
 // id of the untracked content equals the HEAD blob id of the deleted path
-// and both types match (contract K4, unstaged move). An id that more than
-// one deleted path or more than one untracked path holds is not paired.
-// Only untracked files whose size equals a deleted blob size are read.
-// Under an explicit selection, a pair needs one end in the selection.
+// and both types match. Such a pair is an unstaged move. pairMoves does
+// not pair an id that more than one deleted path or more than one
+// untracked path holds, because the pair would then be a guess. It reads
+// only the untracked files whose size equals a deleted blob size,
+// because a different size cannot give the same blob id. Under an
+// explicit selection, a pair needs one end in the selection.
 func (r *treeReader) pairMoves(cands []*candidate, selected []string, sizes map[string]blobInfo) []*candidate {
 	if r.format == "" {
 		return cands
@@ -1079,7 +1079,7 @@ func (r *treeReader) pairMoves(cands []*candidate, selected []string, sizes map[
 
 	for _, c := range cands {
 		t := typeOfMode(c.headMode)
-		if c.kind != ChangeDelete || c.throughLink || len(c.limitations) > 0 || (t != ObjectFile && t != ObjectSymlink) {
+		if c.kind != ChangeDelete || c.throughLink || len(c.limitations) > 0 || !hasBlob(t) {
 			continue
 		}
 
@@ -1139,15 +1139,15 @@ func (r *treeReader) pairMoves(cands []*candidate, selected []string, sizes map[
 	return out
 }
 
-// wantsPairing reports whether an untracked path is worth a read for move
-// pairing: a deleted path of the same size exists, and under an explicit
-// selection the untracked path or that deleted path is selected.
+// wantsPairing reports whether move pairing reads an untracked path. A
+// deleted path of the same size must exist. Under an explicit selection,
+// the untracked path or that deleted path must also be selected.
 func wantsPairing(c *candidate, sameSize []*candidate, selected []string) bool {
 	if len(sameSize) == 0 {
 		return false
 	}
 
-	if len(selected) == 0 || inScope(c.path, selected) {
+	if inScope(c.path, selected) {
 		return true
 	}
 
@@ -1204,19 +1204,20 @@ func sortedCandidates(cands []*candidate) []*candidate {
 }
 
 // changes resolves each candidate into a Change: it reads the worktree
-// side (step 6), compares it with the HEAD side, reads the HEAD content
-// that a checker needs (step 4), and drops a candidate that shows no
-// difference. The result is sorted by path and old path.
+// side, compares it with the HEAD side, reads the HEAD content that a
+// checker needs, and drops a candidate that shows no difference. The
+// result is sorted by path and old path.
 //
 // A candidate whose content comparison stays open after the HEAD read is
 // undecided: a byte limit or a read error hid one side. It is not a
-// change, because K3 counts only an observed difference. It makes the
-// path set incomplete instead, so no checker gives pass or violation
-// for it (review fixes checkers:K3-F1, snapshot-git:F4).
+// change, because only an observed difference counts as a change. It
+// makes the path set incomplete instead, so no checker gives pass or
+// violation for it.
 func (r *treeReader) changes(cands []*candidate, sizes map[string]blobInfo) []Change {
+	// A pending entry with readHead set has a before side with a blob, so
+	// ch.Before.Oid is the HEAD blob id to read.
 	type pending struct {
 		ch         Change
-		headOid    string
 		readHead   bool
 		dropIfSame bool
 		open       bool // the content comparison waits for both SHA-256 values
@@ -1241,14 +1242,14 @@ func (r *treeReader) changes(cands []*candidate, sizes map[string]blobInfo) []Ch
 		needsContent := ch.Kind != ChangeDelete && (ch.ContentChanged || ch.TypeChanged)
 		readHead := needsContent && hasBlob(ch.Before.Type) && ch.Before.Content == ContentNotRead &&
 			(!open || ch.After.SHA256 != "")
-		list = append(list, pending{ch: ch, headOid: c.headOid, readHead: readHead, dropIfSame: c.dropIfSame, open: open})
+		list = append(list, pending{ch: ch, readHead: readHead, dropIfSame: c.dropIfSame, open: open})
 	}
 
 	var oids []string
 
 	for _, p := range list {
 		if p.readHead {
-			oids = append(oids, p.headOid)
+			oids = append(oids, p.ch.Before.Oid)
 		}
 	}
 
@@ -1258,7 +1259,7 @@ func (r *treeReader) changes(cands []*candidate, sizes map[string]blobInfo) []Ch
 	for _, p := range list {
 		ch := p.ch
 		if p.readHead {
-			ch.Before = withBlob(ch.Before, blobs[p.headOid])
+			ch.Before = withBlob(ch.Before, blobs[ch.Before.Oid])
 			// Without a blob id, the comparison waits for both contents.
 			if ch.Before.SHA256 != "" && ch.After.SHA256 != "" {
 				ch.ContentChanged = ch.Before.SHA256 != ch.After.SHA256
@@ -1336,10 +1337,11 @@ func hasBlob(t ObjectType) bool {
 	return t == ObjectFile || t == ObjectSymlink
 }
 
-// unmergedHeads fills the HEAD side of each unmerged path from step 5,
-// before step 4 asks for the blob sizes. A path that HEAD lacks has an
-// absent before side. When ls-tree failed, the before side is a file
-// without an object id, so it reads as unreadable and never as absent.
+// unmergedHeads fills the HEAD side of each unmerged path from the
+// ls-tree entries, before blobSizes asks for the blob sizes. A path that
+// HEAD lacks has an absent before side. When ls-tree failed, the before
+// side is a file without an object id, so it reads as unreadable and
+// never as absent.
 func unmergedHeads(cands []*candidate, head map[string]headEntry) {
 	for _, c := range cands {
 		if !c.needsHead {
@@ -1360,10 +1362,10 @@ func unmergedHeads(cands []*candidate, head map[string]headEntry) {
 
 // resolve builds the Change of one candidate. keep is false when the
 // candidate shows no difference against HEAD. open is true when only a
-// content comparison can tell whether a modify candidate is a change:
-// no blob id decides it, git did not observe the difference, and the
-// sizes, the mode, and the type are equal. The caller then compares the
-// content SHA-256 values after the HEAD read.
+// content comparison can tell whether a modify candidate is a change.
+// That is so when no blob id decides it, git did not observe the
+// difference, and the sizes, the mode, and the type are equal. The
+// caller then compares the content SHA-256 values after the HEAD read.
 func (r *treeReader) resolve(c *candidate, sizes map[string]blobInfo) (ch Change, keep, open bool) {
 	ch = Change{Path: c.path, OldPath: c.oldPath, Kind: c.kind, Move: c.move, Limitations: c.limitations}
 	ch.Before = headSide(c)
@@ -1404,7 +1406,7 @@ func (r *treeReader) resolve(c *candidate, sizes map[string]blobInfo) (ch Change
 
 		// An Lstat error other than absence hides the worktree side, so
 		// the producer observes no difference. The marker keeps forbid from
-		// reading the change as a violation (P1 review ruling 3, fix F-B).
+		// reading the change as a violation.
 		if f.id.state == pathUnknown {
 			ch.unobserved = true
 		}
@@ -1463,9 +1465,9 @@ func finalKind(ch Change) ChangeKind {
 // setFlags sets the content, mode, and type flags of a change with two
 // present sides. Content compares the git blob id of the worktree side
 // with the HEAD blob id. When no blob id exists, the content counts as
-// changed until both contents are read, because a pass must never rest
-// on an equality that the producer did not see. For a candidate that
-// only a content comparison can decide, changes then compares the
+// changed until the producer reads both contents. A pass must never
+// depend on an equality that the producer did not see. For a candidate
+// that only a content comparison can decide, changes then compares the
 // SHA-256 values or makes the path undecided. Equal content gives the
 // before side the SHA-256 of the after side, so the producer does not
 // read the HEAD blob.
@@ -1494,7 +1496,7 @@ func setFlags(ch *Change, headOid, blobID string) {
 }
 
 // headSide returns the before side that status or ls-tree gives, without
-// content. Step 4 reads the content when a checker needs it.
+// content. readBlobs reads the content when a checker needs it.
 func headSide(c *candidate) Side {
 	t := typeOfMode(c.headMode)
 	if t == ObjectAbsent {
@@ -1504,19 +1506,23 @@ func headSide(c *candidate) Side {
 	return Side{Type: t, Mode: c.headMode, Oid: c.headOid, Content: ContentNotRead}
 }
 
-// headBlob is the result of one HEAD blob read.
+// headBlob is the result of one HEAD blob read. It holds no size,
+// because resolve already gives the before side the size from the
+// --batch-check answer.
 type headBlob struct {
-	size    int64
-	state   ContentState
+	state ContentState
+	// content is the blob content that the read returned. It stays also
+	// when it is not text, because the before side needs its SHA-256.
 	content []byte
-	known   bool // the --batch-check answer gave a size
 }
 
-// readBlobs runs the second half of step 4: `cat-file --batch` for each
-// blob that a checker needs. A blob above max-file-bytes or above the
-// rest of max-snapshot-bytes is not requested and reads as too-large
-// with its true size. The calls are split so that each output fits in
-// max-git-output-bytes.
+// readBlobs runs the second half of the HEAD blob read: `cat-file
+// --batch` for each blob that a checker needs. It does not request a
+// blob above max-file-bytes or above the rest of max-snapshot-bytes, and
+// such a blob reads as too-large. The before side keeps the true size
+// from --batch-check. readBlobs splits the calls so that each output
+// fits in max-git-output-bytes, because RunGit stops a call with more
+// output and returns no content.
 func (r *treeReader) readBlobs(oids []string, sizes map[string]blobInfo) map[string]headBlob {
 	blobs := map[string]headBlob{}
 
@@ -1526,17 +1532,15 @@ func (r *treeReader) readBlobs(oids []string, sizes map[string]blobInfo) map[str
 		info := sizes[oid]
 
 		switch {
-		case oid == "" || !info.found:
+		case !info.found:
+			// Without a size, the byte limits cannot apply, so readBlobs
+			// does not request the blob.
 			blobs[oid] = headBlob{state: ContentUnreadable}
-		case info.size > r.lim.MaxFileBytes:
-			blobs[oid] = headBlob{size: info.size, state: ContentTooLarge, known: true}
-			r.hit(LimitMaxFileBytes, r.lim.MaxFileBytes, 1)
-		case info.size > r.budget:
-			blobs[oid] = headBlob{size: info.size, state: ContentTooLarge, known: true}
-			r.hit(LimitMaxSnapshotBytes, r.lim.MaxSnapshotBytes, 1)
+		case r.tooLarge(info.size):
+			blobs[oid] = headBlob{state: ContentTooLarge}
 		default:
 			r.budget -= info.size
-			blobs[oid] = headBlob{size: info.size, state: ContentUnreadable, known: true}
+			blobs[oid] = headBlob{state: ContentUnreadable}
 			want = append(want, oid)
 		}
 	}
@@ -1596,10 +1600,8 @@ func (r *treeReader) readBatch(oids []string, blobs map[string]headBlob) {
 			return
 		}
 
-		// The content stays for the SHA-256 also when it is not text.
-		content := body[:size]
 		b := blobs[f[0]]
-		b.size, b.state, b.content = size, textState(content), content
+		b.content = body[:size]
 		blobs[f[0]] = b
 		rest = body[size+1:]
 	}
@@ -1610,30 +1612,36 @@ func (r *treeReader) readBatch(oids []string, blobs map[string]headBlob) {
 // unreadable, because a before side must never claim a state that the
 // producer did not see.
 func withBlob(side Side, b headBlob) Side {
-	if b.known {
-		side.Size = b.size
-	}
-
 	side.Content = b.state
 	if side.Content == "" {
 		side.Content = ContentUnreadable
 	}
 
 	if b.content != nil {
-		sum := sha256.Sum256(b.content)
-		side.SHA256 = hex.EncodeToString(sum[:])
-	}
-
-	if b.state == ContentAvailable {
-		side.text = b.content
+		side.SHA256, side.Content, side.text = contentOf(b.content)
 	}
 
 	return side
 }
 
+// contentOf returns the hex SHA-256, the content state, and the text of
+// content that a read returned. The text is nil unless the state is
+// available, because only an available side carries text. The worktree
+// read and the HEAD blob read both use it, so their sides follow one
+// rule.
+func contentOf(data []byte) (sum string, state ContentState, text []byte) {
+	state = textState(data)
+
+	if state == ContentAvailable {
+		text = data
+	}
+
+	return hexSHA256(data), state, text
+}
+
 // worktreeFile is what the producer saw at one worktree path.
 type worktreeFile struct {
-	id   fileID
+	id   fileID      // the Lstat identity, plus the content SHA-256 after a read
 	info fs.FileInfo // the Lstat result; nil unless the path is present
 	typ  ObjectType  // file, symlink, or other for a present path
 	exec bool
@@ -1645,7 +1653,6 @@ type worktreeFile struct {
 	loaded bool
 	state  ContentState
 	text   []byte // the content when state is available
-	sha256 string // the hex SHA-256 of the whole content, when read
 	blobID string // the git blob id in the repository object format
 }
 
@@ -1712,7 +1719,7 @@ type dirLook struct {
 
 // dirState returns whether a directory below root is a real directory.
 // A symbolic link at any level gives pathThroughLink, because the
-// producer never looks through a link (§5 row 17).
+// producer never looks through a link.
 func (r *treeReader) dirState(dir string) pathState {
 	if look, ok := r.dirs[dir]; ok {
 		return look.state
@@ -1747,13 +1754,25 @@ func (r *treeReader) dirState(dir string) pathState {
 	return look.state
 }
 
-// load inspects a path and reads its content once (step 6). A symbolic
+// current reads the current state of one path: the worktree record and
+// its side. A path through a link reads as an unreadable file, and a
+// symbolic link reads as a link with its target as content. The
+// projector reads the before side with it, and the observer reads the
+// after side.
+func (r *treeReader) current(rel string) (*worktreeFile, Side) {
+	f := r.load(rel)
+	side, _ := f.side("")
+
+	return f, side
+}
+
+// load inspects a path and reads its worktree content once. A symbolic
 // link reads as its target string and is never followed. A regular file
 // opens without following a link and reads at most max-file-bytes + 1.
 // Each read takes its size from max-snapshot-bytes.
 func (r *treeReader) load(rel string) *worktreeFile {
 	f := r.inspect(rel)
-	if f.loaded || f.id.state != pathPresent || (f.typ != ObjectFile && f.typ != ObjectSymlink) {
+	if f.loaded || f.id.state != pathPresent || !hasBlob(f.typ) {
 		return f
 	}
 
@@ -1773,15 +1792,8 @@ func (r *treeReader) load(rel string) *worktreeFile {
 		return f
 	}
 
-	switch {
-	case f.size > r.lim.MaxFileBytes:
+	if r.tooLarge(f.size) {
 		f.state = ContentTooLarge
-		r.hit(LimitMaxFileBytes, r.lim.MaxFileBytes, 1)
-
-		return f
-	case f.size > r.budget:
-		f.state = ContentTooLarge
-		r.hit(LimitMaxSnapshotBytes, r.lim.MaxSnapshotBytes, 1)
 
 		return f
 	}
@@ -1791,18 +1803,13 @@ func (r *treeReader) load(rel string) *worktreeFile {
 		return f
 	}
 
-	if int64(len(data)) > min(r.lim.MaxFileBytes, r.budget) {
-		// The file grew after Lstat. Its true size is not known, so the
-		// read size is a lower bound.
+	// A read above min(max-file-bytes, budget) means that the file grew
+	// after Lstat. Its true size is not known, so the read size is a
+	// lower bound.
+	if r.tooLarge(int64(len(data))) {
 		f.size = int64(len(data))
 		f.sizeBound = true
 		f.state = ContentTooLarge
-
-		if f.size > r.lim.MaxFileBytes {
-			r.hit(LimitMaxFileBytes, r.lim.MaxFileBytes, 1)
-		} else {
-			r.hit(LimitMaxSnapshotBytes, r.lim.MaxSnapshotBytes, 1)
-		}
 
 		return f
 	}
@@ -1812,20 +1819,29 @@ func (r *treeReader) load(rel string) *worktreeFile {
 	return f
 }
 
+// tooLarge reports whether content of size bytes passes a byte limit,
+// and records the hit of that limit. max-file-bytes comes first, so
+// each read names the same limit for the same size. The caller takes
+// the size from the budget only when tooLarge gives false.
+func (r *treeReader) tooLarge(size int64) bool {
+	switch {
+	case size > r.lim.MaxFileBytes:
+		r.hit(LimitMaxFileBytes, r.lim.MaxFileBytes, 1)
+	case size > r.budget:
+		r.hit(LimitMaxSnapshotBytes, r.lim.MaxSnapshotBytes, 1)
+	default:
+		return false
+	}
+
+	return true
+}
+
 // accept records the content of a read: its size, text state, SHA-256,
 // and git blob id.
 func (r *treeReader) accept(f *worktreeFile, data []byte) {
 	r.budget -= int64(len(data))
 	f.size = int64(len(data))
-	f.state = textState(data)
-
-	if f.state == ContentAvailable {
-		f.text = data
-	}
-
-	sum := sha256.Sum256(data)
-	f.sha256 = hex.EncodeToString(sum[:])
-	f.id.sha256 = f.sha256
+	f.id.sha256, f.state, f.text = contentOf(data)
 	f.blobID = gitBlobID(r.format, data)
 }
 
@@ -1868,7 +1884,7 @@ func (f *worktreeFile) side(treeMode string) (after Side, blobID string) {
 		return Side{Type: ObjectFile, Content: ContentUnreadable}, ""
 	}
 
-	s := Side{Type: f.typ, Size: f.size, Content: f.state, SHA256: f.sha256, text: f.text}
+	s := Side{Type: f.typ, Size: f.size, Content: f.state, SHA256: f.id.sha256, text: f.text}
 
 	switch f.typ {
 	case ObjectFile:
@@ -1926,17 +1942,10 @@ func (r *treeReader) limitHits() []LimitHit {
 	return out
 }
 
-// limitationList returns the snapshot limitations, sorted.
+// limitationList returns the snapshot limitations, sorted. It returns
+// nil when no limitation exists, so the JSON field stays out.
 func (r *treeReader) limitationList() []string {
-	var out []string
-
-	for l := range r.limitations {
-		out = append(out, l)
-	}
-
-	sort.Strings(out)
-
-	return out
+	return slices.Sorted(maps.Keys(r.limitations))
 }
 
 // identityList returns the identity of every inspected path, sorted.
@@ -1952,20 +1961,21 @@ func (r *treeReader) identityList() []fileID {
 }
 
 // sortedUnique returns the values sorted, without duplicates and without
-// the empty string.
+// the empty string. It returns nil when no value is left. It sorts a
+// copy, because some callers pass a slice that their own caller owns.
 func sortedUnique(values []string) []string {
-	seen := map[string]bool{}
+	out := slices.Clone(values)
+	slices.Sort(out)
+	out = slices.Compact(out)
 
-	var out []string
-
-	for _, v := range values {
-		if v != "" && !seen[v] {
-			seen[v] = true
-			out = append(out, v)
-		}
+	// The empty string sorts first, and Compact leaves at most one.
+	if len(out) > 0 && out[0] == "" {
+		out = out[1:]
 	}
 
-	sort.Strings(out)
+	if len(out) == 0 {
+		return nil
+	}
 
 	return out
 }

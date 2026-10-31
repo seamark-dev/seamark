@@ -8,10 +8,9 @@ import (
 )
 
 // codexCompletions translates the Codex PostToolUse apply_patch event
-// for the post-edit verification (contract K9). Codex has no separate
-// failure event: a failed tool reports a non-zero exit status in
-// tool_response (§5 row 37). The capture decoder declares the event name
-// (codexPostToolUse).
+// for the post-edit verification. Codex has no separate failure event:
+// a failed tool reports a non-zero exit status in tool_response. The
+// capture decoder declares the event name (codexPostToolUse).
 type codexCompletions struct{}
 
 // DecodeCompletion reads the outcome and the paths of one apply_patch
@@ -76,16 +75,16 @@ func (codexCompletions) DecodeCompletion(payload []byte) (lessoncheck.Completion
 // EncodeFindings writes the findings to stderr with exit 0. The Codex
 // hooks reference documents that a PostToolUse hook can give the model
 // text this way. No native recording shows yet that the text reaches
-// the model (§5 row 38), so the post-edit path stays active-unverified
-// until plan step P4.11.
+// the model, so the post-edit path stays active-unverified until a
+// reviewed native guard recording shows it.
 func (codexCompletions) EncodeFindings(text string, _ lessoncheck.ToolOutcome) (HookReply, error) {
 	return HookReply{Stderr: []byte(text)}, nil
 }
 
 // toolOutcomeOf converts a capture outcome to the tool outcome of the
-// lesson-check stream. Both lists hold the same words (contracts §1.8).
-// The empty capture outcome gives unknown, because a post-edit record
-// always names an outcome.
+// lesson-check stream. Both lists hold the same words, so a type
+// conversion is enough. The empty capture outcome gives unknown,
+// because a post-edit record always names an outcome.
 func toolOutcomeOf(o Outcome) lessoncheck.ToolOutcome {
 	if o == OutcomeNone {
 		return lessoncheck.ToolUnknown

@@ -3,6 +3,7 @@ package integration
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -131,16 +132,6 @@ func commandsIn(settings map[string]any, event string) []string {
 	return out
 }
 
-func guardPaths(plan ClientPlan) []string {
-	var out []string
-
-	for _, g := range plan.Reads {
-		out = append(out, g.Path)
-	}
-
-	return out
-}
-
 func TestClaudeHooksAndGrantsShareOneWrite(t *testing.T) {
 	root := t.TempDir()
 	writeRel(t, root, ".claude/settings.json", `{
@@ -196,7 +187,7 @@ func TestClaudeHooksAndGrantsShareOneWrite(t *testing.T) {
 
 	// .mcp.json was read for the server name only: guarded, not written.
 	// The absent local file is guarded too, so its creation is noticed.
-	assert.Equal(t, []string{approve.ClaudeSettings, claudeLocalSettings, approve.MCPConfig}, guardPaths(plan))
+	assert.Equal(t, []string{approve.ClaudeSettings, claudeLocalSettings, approve.MCPConfig}, readPaths(plan.Reads))
 	assert.Empty(t, plan.Kept)
 }
 
@@ -228,7 +219,7 @@ func TestClaudeRegistrationWithoutGrants(t *testing.T) {
 
 	require.Len(t, plan.Writes, 1)
 	assert.Equal(t, approve.MCPConfig, plan.Writes[0].Path)
-	assert.Equal(t, []string{approve.MCPConfig}, guardPaths(plan), "settings.json is not read without a settings intent")
+	assert.Equal(t, []string{approve.MCPConfig}, readPaths(plan.Reads), "settings.json is not read without a settings intent")
 
 	doc := writeFor(t, plan, approve.MCPConfig)
 	assert.NotNil(t, doc["mcpServers"].(map[string]any)["seamark"])
@@ -391,7 +382,7 @@ func TestClaudeInstallsEveryHookAndReportsTheLocalDuplicate(t *testing.T) {
 	assert.Contains(t, warnings[0], "runs in enforce mode, and both apply",
 		"a local --enforce still blocks under the shared warn hook")
 
-	assert.Contains(t, guardPaths(plan), claudeLocalSettings, "the other hook source is a guarded input")
+	assert.Contains(t, readPaths(plan.Reads), claudeLocalSettings, "the other hook source is a guarded input")
 
 	// Both gate hooks reach the caller, each with its own mode, so the
 	// gate summary can say that the run still blocks.
@@ -555,7 +546,7 @@ func TestClaudeWithoutTheSourceCheckNeverReadsTheLocalFile(t *testing.T) {
 	}
 
 	assert.Empty(t, plan.Findings)
-	assert.Equal(t, []string{approve.ClaudeSettings}, guardPaths(plan), "the local file is not an input of this run")
+	assert.Equal(t, []string{approve.ClaudeSettings}, readPaths(plan.Reads), "the local file is not an input of this run")
 	assert.Equal(t, []GateHook{{Path: approve.ClaudeSettings, Mode: hooks.ModeWarn, Managed: true}}, plan.GateHooks)
 
 	// A broken local file is none of this run's business either.
@@ -567,9 +558,9 @@ func TestClaudeWithoutTheSourceCheckNeverReadsTheLocalFile(t *testing.T) {
 
 func TestClaudeReadsTheLocalFileForEveryLessonCheckMode(t *testing.T) {
 	// The narrator states the capability of the pre-write path, and a
-	// local wrapper or a broken local file changes it (R-6). Check mode
-	// reads the personal file as enforce does. A run without a mode, and
-	// the off mode, keep the rule that setup never reads it.
+	// local wrapper or a broken local file changes it. Check mode reads
+	// the personal file as enforce does. A run without a mode, and the
+	// off mode, keep the rule that setup never reads it.
 	root := t.TempDir()
 	writeRel(t, root, claudeLocalSettings, "{ broken")
 
@@ -583,8 +574,42 @@ func TestClaudeReadsTheLocalFileForEveryLessonCheckMode(t *testing.T) {
 		plan, err := claudeSetup{}.Plan(root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: mode})
 		require.NoError(t, err)
 
-		assert.Equal(t, reads, slices.Contains(guardPaths(plan), claudeLocalSettings), "mode %q", mode)
+		assert.Equal(t, reads, slices.Contains(readPaths(plan.Reads), claudeLocalSettings), "mode %q", mode)
 	}
+}
+
+func TestClaudeLessonSourcesNameEveryReportOnlyFile(t *testing.T) {
+	// Plan and inspection read the enforce preconditions here. A wrapper
+	// that discards the exit status of the pre-write hook makes its file
+	// report-only. The shared file comes before the local file.
+	wrapper := func(t *testing.T, command string) map[string]any {
+		t.Helper()
+
+		document, err := hooks.ParseDocument([]byte(`{"hooks": {"PreToolUse": [{"matcher": "Edit|Write|MultiEdit", ` +
+			`"hooks": [{"type": "command", "command": "` + command + `"}]}]}}`))
+		require.NoError(t, err)
+
+		return document
+	}
+
+	discarding := wrapper(t, testBinary+" lessons --guard --hook || true")
+	passing := wrapper(t, "/usr/bin/env "+testBinary+" lessons --guard --hook")
+
+	t.Run("a wrapper in both files", func(t *testing.T) {
+		state := claudeLessonSources(discarding, discarding, nil)
+		assert.Equal(t, []string{approve.ClaudeSettings, claudeLocalSettings}, state.reportOnly)
+		assert.False(t, state.sourceUnreadable)
+	})
+
+	t.Run("a wrapper that passes the status", func(t *testing.T) {
+		assert.Empty(t, claudeLessonSources(passing, passing, nil).reportOnly)
+	})
+
+	t.Run("a local file that cannot be read", func(t *testing.T) {
+		state := claudeLessonSources(map[string]any{}, nil, errors.New("broken"))
+		assert.Empty(t, state.reportOnly, "a nil local document holds no definition")
+		assert.True(t, state.sourceUnreadable)
+	})
 }
 
 func TestClaudeIgnoresALocalEntryThatNeverFires(t *testing.T) {
@@ -744,8 +769,8 @@ func TestClaudeKeepsAWrappedHookAndReportsIt(t *testing.T) {
 }
 
 func TestClaudeReadsTheShellOptionsOfAWrappedGate(t *testing.T) {
-	// The reported defect: "--norc" holds the letter c, so the reader took
-	// it for -c. The reader saw no gate in the enforcing wrapper. The run
+	// A past defect: "--norc" holds the letter c, so the reader took it
+	// for -c. The reader saw no gate in the enforcing wrapper. The run
 	// then reported only the managed warn gate, and nothing about the
 	// second one.
 	root := t.TempDir()
@@ -771,11 +796,10 @@ func TestClaudeReadsTheShellOptionsOfAWrappedGate(t *testing.T) {
 }
 
 func TestClaudeGateThatMayRunIsPossibleNotInstalled(t *testing.T) {
-	// The reported defect: "echo seamark gate --enforce --hook" made the
+	// A past defect: "echo seamark gate --enforce --hook" made the
 	// inspection say "enforce". The reader cannot tell what an unknown
-	// program does with the gate command, so the gate is one that may
-	// run, with the mode it has when it runs, and nothing is known to
-	// block.
+	// program does with the gate command. So the gate is one that may
+	// run, with the mode it has when it runs. Nothing is known to block.
 	root := t.TempDir()
 	printed := "echo /usr/local/bin/seamark gate --enforce --hook"
 	writeRel(t, root, ".claude/settings.json", bashHook(printed))

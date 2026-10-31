@@ -47,23 +47,23 @@ type timingPath struct {
 	context lessoncheck.PathContext
 }
 
-// timingRecorded lists the attributions that a reviewed gate-3 timing
-// recording verifies (plan steps P3.14 and P4.11). A reviewer adds an
-// entry only after a review of the recording in testdata/<client>/timing
-// with the gate-3 checklist. TestTimingEvidenceMatchesRecordings checks
-// each entry against the cases of the recording. The map is empty: no
-// reviewed recording exists yet.
+// timingRecorded lists the attributions that a reviewed native timing
+// recording verifies. A reviewer adds an entry only after a review of
+// the recording in testdata/<client>/timing.
+// TestTimingEvidenceMatchesRecordings checks each entry against the
+// cases of the recording. The map is empty, because no reviewed
+// recording exists yet.
 var timingRecorded = map[timingPath]recordedEvidence{}
 
 // TimingEvidence returns the native evidence of one identity or timing
-// item for one client and context path (contract K10). It is the gate-3
-// analog of GuardEvidence.
+// item for one client and context path. It is the timing analog of
+// GuardEvidence.
 //
 // The evidence is static, because inspection runs no client binary. An
 // item in timingRecorded is verified, with the client version and the
-// surface of its reviewed gate-3 recording. Every other item that the
-// payloads can give is pending. The pending evidence names no client
-// version, because the recording sets the version it ran against.
+// surface of its reviewed recording. Every other item that the payloads
+// can give is pending. The pending evidence names no client version,
+// because the recording sets the version it ran against.
 //
 // An item that the payloads cannot give, context-reset, and an unknown
 // client give the zero value, which means unknown.
@@ -83,12 +83,12 @@ func TimingEvidence(clientID string, item lessoncheck.AttributionItem, context l
 }
 
 // attributionsOf returns the attributions of one client: one per item
-// and context path, items first (contract K10). context-reset copies the
-// evidence of the resets capability. The state is unsupported for a
-// context that no verified reset reaches. The other items read
-// TimingEvidence, and the state is unsupported when the payloads cannot
-// give the item. Else the state is verified only with verified evidence.
-// A client without an entry in payloadIdentities gives nil.
+// and context path, items first. context-reset copies the evidence of
+// the resets capability, and its state is unsupported for a context
+// that no verified reset reaches. The other items read TimingEvidence,
+// and their state is unsupported when the payloads cannot give the
+// item. Else the state is verified only with verified evidence. A
+// client without an entry in payloadIdentities gives nil.
 func attributionsOf(insp Inspection) []lessoncheck.CapAttribution {
 	contexts, ok := payloadIdentities[insp.ClientID]
 	if !ok {
@@ -129,15 +129,9 @@ func attributionsOf(insp Inspection) []lessoncheck.CapAttribution {
 }
 
 // resetReaches reports whether a reset event of the client reaches the
-// context path, by the one receiver rule (ReceivingContextOf). A child
-// context and every Codex context are not resettable.
+// context path, by the one receiver rule (laneResettable). A child
+// context and every Codex context are not resettable. A path context
+// uses the lane words, so the context converts to a lane.
 func resetReaches(clientID string, context lessoncheck.PathContext) bool {
-	agent := ""
-	if context == lessoncheck.ContextChild {
-		agent = "agent"
-	}
-
-	receiver := ReceivingContextOf(clientID, "session", agent)
-
-	return receiver != nil && receiver.Resettable
+	return laneResettable(clientID, string(context))
 }

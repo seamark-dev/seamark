@@ -277,7 +277,7 @@ func TestPlanExtractWritesNothingAndRunsNoAgent(t *testing.T) {
 	assert.Equal(t, rows[0].ID, p.Request.IDs[0])
 }
 
-// Every console exclusion of D-17 names its reason. The link exclusions
+// Every console exclusion names its reason. The link exclusions
 // come from pinfile.Classify, the status, answer, and evidence exclusions
 // from the shared plan rules, and the disagreeing region fields of a row
 // in any status from pinfile.FieldsAgree.

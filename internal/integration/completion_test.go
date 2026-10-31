@@ -20,8 +20,8 @@ func completionPayload(t *testing.T, fields map[string]any) []byte {
 	return payload
 }
 
-// TestCompletionDecodersReadToolOutcome checks the K9 completion
-// decoders (§5 row 37): Claude PostToolUse is succeeded and
+// TestCompletionDecodersReadToolOutcome checks the completion decoders
+// of the post-edit verification: Claude PostToolUse is succeeded and
 // PostToolUseFailure is failed or interrupted; Codex PostToolUse takes
 // the exit status of tool_response. The paths come from the tool input,
 // and an error keeps the identity for the match join. The findings
@@ -192,7 +192,7 @@ func TestCompletionDecodersReadToolOutcome(t *testing.T) {
 		assert.Equal(t, lessoncheck.ToolUnknown, toolOutcomeOf(OutcomeNone))
 
 		for _, o := range []Outcome{OutcomeSucceeded, OutcomeFailed, OutcomeInterrupted, OutcomeDenied, OutcomeUnknown} {
-			assert.Equal(t, string(o), string(toolOutcomeOf(o)), "contracts §1.8: one word list")
+			assert.Equal(t, string(o), string(toolOutcomeOf(o)), "both lists hold the same words")
 		}
 	})
 }

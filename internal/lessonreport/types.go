@@ -1,9 +1,8 @@
 package lessonreport
 
 // This file holds every type of the delivery/1 document, with the exact
-// JSON tags. Build leaves some sections empty until code derives them. An
-// underived section holds an empty value, never a default that reads like
-// a result.
+// JSON tags. A section with no evidence to derive it holds an empty value.
+// It never holds a default that reads like a result.
 
 // Schema is the format name of the report.
 const Schema = "delivery/1"
@@ -29,8 +28,8 @@ type PairTiming string
 // is "human", "user-unverified", and "peer".
 type Origin string
 
-// Code is one reason code. The set is closed: the code that derives
-// reasons defines its values.
+// Code is one reason code. The set is closed. Each file that derives
+// reasons declares its own Code values.
 type Code string
 
 // Fact is a secondary fact of an action. The closed list is
@@ -44,8 +43,8 @@ type Fact string
 // "receiver-unknown-surface", and "timestamp-only".
 type EvidenceKind string
 
-// NextCode is the code of a next step. The set is closed: the code that
-// derives next steps defines its values.
+// NextCode is the code of a next step. The set is closed: nextsteps.go
+// declares every value.
 type NextCode string
 
 // Report is the delivery/1 document.
@@ -159,7 +158,7 @@ type DeliveryCounts struct {
 	EmitFailed            int            `json:"emit_failed"`
 	Returned              int            `json:"returned"`
 	Sessions              int            `json:"sessions"`                // unit delivered sessions
-	LegacyIdentityRecords int            `json:"legacy_identity_records"` // v1 records naming the identity (PinIdentity, note included); current version only, 0 on a historical one by rule; no version, never diagnosed
+	LegacyIdentityRecords int            `json:"legacy_identity_records"` // v1 records naming the identity (PinIdentity, note included); current version only, 0 on a historical one by rule; no version, so never diagnosed
 }
 
 // OccurrenceCounts are the assessed occurrences of one pin version.
@@ -182,9 +181,9 @@ type OccurrenceCounts struct {
 // pin version.
 type Observation struct {
 	Unit               string               `json:"unit"`                 // "delivered sessions"
-	Linked             int                  `json:"linked"`               // (a) linked
-	NoLinkedCorrection int                  `json:"no_linked_correction"` // (b) qualified negative observation
-	Incomplete         int                  `json:"incomplete"`           // (c)
+	Linked             int                  `json:"linked"`               // a counted occurrence has a located action in the window
+	NoLinkedCorrection int                  `json:"no_linked_correction"` // qualified negative observation (NoLinkedCorrectionText)
+	Incomplete         int                  `json:"incomplete"`           // neither linked nor a qualified negative observation
 	IncompleteByReason map[Code]int         `json:"incomplete_by_reason"` // a session can have several reasons
 	ByTiming           map[Timing]Partition `json:"by_timing"`            // by decision timing
 	Endpoint           string               `json:"endpoint"`             // "captured-session-end"
@@ -229,13 +228,13 @@ type Coverage struct {
 // NextStep is one suggestion with a fixed text. Nothing runs it.
 type NextStep struct {
 	Code    NextCode `json:"code"`
-	Text    string   `json:"text"`              // the fixed sentence of the table, refs filled
+	Text    string   `json:"text"`              // the fixed sentence of its NextCode, refs filled
 	Command string   `json:"command,omitempty"` // exact shipped command; never executed
 	Scope   string   `json:"scope"`             // closed: "pin", "repository"
 }
 
-// CheckReading is the lesson-check stream reading. Its units are check operations,
-// pin evaluations, and guard attempts.
+// CheckReading is the lesson-check stream reading. Its units are check
+// operations, pin evaluations, and guard attempts.
 type CheckReading struct {
 	State               string         `json:"state"`      // as SourceRead.State
 	Operations          map[string]int `json:"operations"` // record kinds verify, post-edit, guard
@@ -247,9 +246,9 @@ type CheckReading struct {
 }
 
 // GuardAttempts separates a requested deny, verified native blocking, and
-// the observed tool execution. The observation is
-// derived through match_sha256, because the guard writes its record
-// before the tool would run.
+// the observed tool execution. The report derives the observation through
+// match_sha256, because the guard writes its record before the tool would
+// run.
 type GuardAttempts struct {
 	Allowed             int `json:"allowed"`
 	RequestedDenies     int `json:"requested_denies"` // decision deny
@@ -328,8 +327,8 @@ type SessionWindow struct {
 	Endpoint    string `json:"endpoint,omitempty"`     // "captured-session-end" when reached
 }
 
-// unitTable returns the units map of the report, verbatim. Each call returns a new map, so no Report shares a map with another
-// Report.
+// unitTable returns the units map of the report, verbatim. Each call
+// returns a new map, so no Report shares a map with another Report.
 func unitTable() map[string]string {
 	return map[string]string{
 		"records":            "lines of .seamark/lessons-audit.jsonl; one edit can write two",

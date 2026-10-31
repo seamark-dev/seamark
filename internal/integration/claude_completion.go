@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -20,9 +19,9 @@ type claudeCompletions struct{}
 // DecodeCompletion reads the outcome and the path of one completion
 // event. PostToolUse gives succeeded. PostToolUseFailure gives
 // interrupted when is_interrupt is true, and failed otherwise, by the
-// rule of the capture decoder (toolFailure). The decoder checks the
-// event and the tool, because a finding about another tool would name
-// an edit that did not happen.
+// rule of the capture decoder (claudeFailureOutcome). The decoder
+// checks the event and the tool, because a finding about another tool
+// would name an edit that did not happen.
 //
 // The decoder never reads tool_response or error: they can hold file
 // content, and the verification reads the file itself.
@@ -48,13 +47,10 @@ func (claudeCompletions) DecodeCompletion(payload []byte) (lessoncheck.Completio
 	c.Tool, c.SessionID, c.MatchID, c.CWD = native.ToolName, native.SessionID, native.ToolUseID, native.CWD
 
 	switch native.HookEventName {
-	case claudePostToolUse:
+	case claudeEventPostTool:
 		c.Outcome = lessoncheck.ToolSucceeded
-	case claudePostToolUseFailure:
-		c.Outcome = lessoncheck.ToolFailed
-		if native.IsInterrupt {
-			c.Outcome = lessoncheck.ToolInterrupted
-		}
+	case claudeEventToolFailure:
+		c.Outcome = toolOutcomeOf(claudeFailureOutcome(native.IsInterrupt))
 	default:
 		return c, fmt.Errorf("%w: the event does not report a tool result", ErrNotApplicable)
 	}
@@ -90,22 +86,13 @@ func (claudeCompletions) DecodeCompletion(payload []byte) (lessoncheck.Completio
 // the event that the hook answers: PostToolUseFailure after a failed or
 // interrupted tool, PostToolUse otherwise. The Claude Code hooks
 // reference documents this form. No native recording shows yet that the
-// text reaches the model (§5 row 38), so the post-edit path stays
-// active-unverified until plan step P4.11.
+// text reaches the model, so the post-edit path stays active-unverified
+// until a reviewed native guard recording shows it.
 func (claudeCompletions) EncodeFindings(text string, outcome lessoncheck.ToolOutcome) (HookReply, error) {
-	var reply claudeAdvice
-
-	reply.HookSpecificOutput.HookEventName = claudePostToolUse
+	event := claudeEventPostTool
 	if outcome == lessoncheck.ToolFailed || outcome == lessoncheck.ToolInterrupted {
-		reply.HookSpecificOutput.HookEventName = claudePostToolUseFailure
+		event = claudeEventToolFailure
 	}
 
-	reply.HookSpecificOutput.AdditionalContext = text
-
-	var out bytes.Buffer
-	if err := json.NewEncoder(&out).Encode(reply); err != nil {
-		return HookReply{}, err
-	}
-
-	return HookReply{Stdout: out.Bytes()}, nil
+	return encodeContextReply(event, text)
 }

@@ -1,18 +1,15 @@
 package integration
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
 
-// claudePreToolUse is the hook event name Claude Code expects back in
-// an advisory reply to an edit event.
-const claudePreToolUse = "PreToolUse"
-
-// claudeAdviceMechanism names the reply path of claudeEdits: the
-// additionalContext field of a PreToolUse hook reply.
-const claudeAdviceMechanism = "pre-tool-use-context"
+// preToolUseContextMechanism names the reply path of the edit advice of
+// Claude Code and Codex: the additionalContext field of a PreToolUse
+// hook reply. The firing log records this name, so a rename splits the
+// statistics.
+const preToolUseContextMechanism = "pre-tool-use-context"
 
 // claudeEdits translates the Claude Code PreToolUse edit event. Edit,
 // Write, and MultiEdit all carry one tool_input.file_path, so every
@@ -21,15 +18,6 @@ type claudeEdits struct{}
 
 // claudeResets translates the Claude Code PostCompact event.
 type claudeResets struct{}
-
-// claudeAdvice is the PreToolUse reply shape. Claude Code adds
-// additionalContext to the agent's context and does not block the tool.
-type claudeAdvice struct {
-	HookSpecificOutput struct {
-		HookEventName     string `json:"hookEventName"`
-		AdditionalContext string `json:"additionalContext"`
-	} `json:"hookSpecificOutput"`
-}
 
 // DecodeEdit reads the path and the identity of one edit event. The
 // decoder does not check tool_name: the installed matcher selects the
@@ -75,27 +63,17 @@ func (claudeEdits) DecodeEdit(payload []byte) (EditEvent, error) {
 // EncodeAdvice wraps the advisory text in the PreToolUse reply. The
 // bytes equal what the hook wrote before the adapter existed.
 func (claudeEdits) EncodeAdvice(text string) (HookReply, error) {
-	var reply claudeAdvice
-
-	reply.HookSpecificOutput.HookEventName = claudePreToolUse
-	reply.HookSpecificOutput.AdditionalContext = text
-
-	var out bytes.Buffer
-	if err := json.NewEncoder(&out).Encode(reply); err != nil {
-		return HookReply{}, err
-	}
-
-	return HookReply{Stdout: out.Bytes()}, nil
+	return encodeContextReply(claudeEventPreToolUse, text)
 }
 
 // AdviceMechanism returns the reply path that the firing log records.
-func (claudeEdits) AdviceMechanism() string { return claudeAdviceMechanism }
+func (claudeEdits) AdviceMechanism() string { return preToolUseContextMechanism }
 
 // DecodeReset reads the context that PostCompact resets. A PostCompact
 // without session_id is valid and names no context, so nothing resets.
 // The decoder reads agent_id by the rule of DecodeEdit. A reset that
 // fires inside a subagent then names the subagent context, which is not
-// resettable, and it can never reset the context of the parent.
+// resettable. So that reset can never reset the context of the parent.
 //
 // The decoder also reads the session and the turn (prompt_id), so the
 // reset record of the audit log joins the edit records of that session.
@@ -104,9 +82,9 @@ func (claudeEdits) AdviceMechanism() string { return claudeAdviceMechanism }
 //
 // Every other hook_event_name, also a missing one, gives
 // ErrNotApplicable. Setup installs the reset hook only for PostCompact.
-// A hook that a user points at another event, for example SessionStart,
-// must not reset the delivery state, because a reset makes old advice
-// repeat (P3 review). The Codex decoder has the same rule.
+// A user can point the hook at another event, for example SessionStart.
+// That event must not reset the delivery state, because a reset makes
+// old advice repeat. The Codex decoder has the same rule.
 func (claudeResets) DecodeReset(payload []byte) (ResetEvent, error) {
 	var native struct {
 		Event     string `json:"hook_event_name"`
@@ -132,8 +110,8 @@ func (claudeResets) DecodeReset(payload []byte) (ResetEvent, error) {
 }
 
 // claudeContext maps the identity of a Claude Code event to its
-// receiving context through the one receiver derivation,
-// ReceivingContextOf, which holds the rules.
+// receiving context. ReceivingContextOf holds the rules, so every
+// client derives the receiver in the same way.
 func claudeContext(sessionID, agentID string) *ReceivingContext {
 	return ReceivingContextOf(ClaudeID, sessionID, agentID)
 }

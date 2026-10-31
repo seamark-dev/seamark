@@ -1,8 +1,8 @@
 // Package lessoncheck holds the executable lesson checks: the check
 // configuration in .seamark/lessons.yaml, its strict validation, the
-// named limits, and the data types of the capability report. Later
-// files add the working-tree snapshot, the two /1 checkers, and the
-// verification result.
+// named limits, the snapshots of a change, the two /1 checkers, the
+// guard decision, the verification result, and the data types of the
+// capability report.
 //
 // The CLI, the MCP server, the console, and the hooks call this one
 // package, so no second checker exists.

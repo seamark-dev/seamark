@@ -430,7 +430,34 @@ func TestPreviewDiffEqualsDifflibOutput(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		assert.Equal(t, want, unifiedDiff("doc.txt", before, after), "%q -> %q", pair[0], pair[1])
+		got, _, _ := unifiedDiff("doc.txt", before, after)
+		assert.Equal(t, want, got, "%q -> %q", pair[0], pair[1])
+	}
+}
+
+func TestPreviewCountsTheChangedFileLines(t *testing.T) {
+	// The counts come from the same hunks as the text. A change in a later
+	// hunk must still count, and the missing-newline marker never counts.
+	cases := []struct {
+		name, before, after string
+		added, removed      int
+	}{
+		{"a new file", "", "a\nb\n", 2, 0},
+		{"equal content", "a\n", "a\n", 0, 0},
+		{"two hunks", "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n", "0\n1\n2\n3\nX\n5\n6\n7\n8\n9\n10\n11\nY\n13\n14\n15\n16\n", 4, 2},
+		{"a changed line and a final newline", "a\nb\nc", "a\nB\nc\n", 1, 1},
+		{"only a final newline", "a", "a\n", 0, 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before, after := newDiffSide("doc.txt", []byte(tc.before)), newDiffSide("doc.txt", []byte(tc.after))
+
+			_, added, removed := unifiedDiff("doc.txt", before, after)
+
+			assert.Equal(t, tc.added, added)
+			assert.Equal(t, tc.removed, removed)
+		})
 	}
 }
 
@@ -440,7 +467,7 @@ func TestPreviewUnchangedLineHidesWhatEitherSideHides(t *testing.T) {
 	before := newDiffSide("a.toml", []byte("[x.env]\nA = \"secret-a\"\n"))
 	after := newDiffSide("a.toml", []byte("[x.plain]\nA = \"secret-a\"\nB = 1\n"))
 
-	got := unifiedDiff("a.toml", before, after)
+	got, _, _ := unifiedDiff("a.toml", before, after)
 
 	assert.NotContains(t, got, "secret-a")
 	assert.Contains(t, got, " A = \"[REDACTED]\"\n")

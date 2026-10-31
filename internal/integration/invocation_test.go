@@ -102,15 +102,14 @@ func TestResolveInvocationNeedsNoBinary(t *testing.T) {
 func TestResolveInvocationNamesWhatWouldResolve(t *testing.T) {
 	hooksOnly := Client{ID: "hooksonly", Name: "Hooks Only", Setup: fakeSetup{}, SetupOps: SetupSupport{Hooks: true}}
 
-	reg, err := NewRegistry(append(Builtin().Clients(), hooksOnly)...)
-	require.NoError(t, err)
+	reg := builtinWith(t, hooksOnly)
 
 	assert.Equal(t, []string{ClaudeID, CodexID}, reg.InvocationIDs(), "a client without a command is not a value of agent.cli")
 
 	// Invalid clients report supported names and the custom argv option.
 	cfg := &agent.Config{}
 	cfg.Agent.CLI = "hal9000"
-	_, err = reg.ResolveInvocation(cfg, t.TempDir())
+	_, err := reg.ResolveInvocation(cfg, t.TempDir())
 	require.ErrorContains(t, err, `unknown agent cli "hal9000" (known: claude, codex; or set agent.argv)`)
 
 	cfg.Agent.CLI = "hooksonly"

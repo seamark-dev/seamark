@@ -9,10 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This file holds the tests of review fix R-8: a default verification
-// leaves out the untracked audit files that it writes itself. Every
-// repository lives under t.TempDir(), so no test reads or writes the
-// checkout that runs it (BRIEF rule 7).
+// This file holds the tests of the own-state rule: a default
+// verification leaves out the untracked audit files that it writes
+// itself. Every repository lives under t.TempDir(), so no test reads or
+// writes the checkout that runs it.
 
 // forbidEverythingYAML holds one repository-wide forbid pin. Any change
 // that the snapshot holds is a violation, so the pin shows exactly
@@ -30,8 +30,8 @@ pin:
 `
 
 // ownStateRepo is a committed repository with the forbid-everything pin
-// where only lessons.yaml is ignored. It is the setup of the review
-// reproduction: no carve-out hides the audit files.
+// where only lessons.yaml is ignored. No ignore rule hides the audit
+// files, so only the own-state rule can leave them out.
 func ownStateRepo(t *testing.T) *gitRepo {
 	t.Helper()
 

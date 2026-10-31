@@ -8,10 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestGuardEncodeDenyUsesExitProtocol checks the K8 deny reply of every
+// TestGuardEncodeDenyUsesExitProtocol checks the deny reply of every
 // built-in guard: exit 2 with the reasons on stderr, the protocol of
-// the command gate (§6 A7). The reply holds no JSON permissionDecision
-// on stdout, because no native run exercised that form. Each reason is
+// the command gate. The reply holds no JSON permissionDecision on
+// stdout, because no native run exercised that form. Each reason is
 // sanitized, because it travels to the agent and the terminal.
 func TestGuardEncodeDenyUsesExitProtocol(t *testing.T) {
 	builtins := Builtin().Clients()

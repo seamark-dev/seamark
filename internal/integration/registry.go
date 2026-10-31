@@ -153,10 +153,10 @@ func (r *Registry) Lookup(id string) (Client, bool) {
 	return r.ordered[i].clone(), true
 }
 
-// Select resolves user-supplied IDs into descriptors: duplicates
-// collapse, unknown IDs fail before any work, and the result follows
-// registration order regardless of the input order, so repeated runs
-// with reordered flags produce the same plan. The descriptors are copies.
+// Select resolves user-supplied IDs into descriptors. Duplicates
+// collapse, and an unknown ID fails before any work. The result follows
+// registration order, whatever the input order, so repeated runs with
+// reordered flags produce the same plan. The descriptors are copies.
 func (r *Registry) Select(ids []string) ([]Client, error) {
 	want := make(map[string]bool, len(ids))
 

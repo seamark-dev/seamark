@@ -3,13 +3,12 @@ package lessonreport
 import (
 	"fmt"
 	"strings"
-
-	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
 // CompactSummary is the fixed lesson-delivery line, separate from any
-// outcome reading. Command is also available to an expansion key.
-// Surfaces print the complete line; its length depends on the counts.
+// outcome reading. Command holds the expansion command alone, so a
+// surface with an expansion key can use it. Surfaces print the complete
+// line, and its length depends on the counts.
 type CompactSummary struct {
 	PinVersion string
 	Line       string
@@ -35,6 +34,9 @@ func Compact(r *Report, pinVersion string) (CompactSummary, bool) {
 	return CompactSummary{}, false
 }
 
+// compactPin builds the line of one reading. The command prefers the
+// pin-ref of a current entry with the same identity, so every version of
+// one identity prints the same command.
 func compactPin(r *Report, p PinReading) CompactSummary {
 	ref := p.PinRef
 	for _, current := range r.Pins {
@@ -44,11 +46,7 @@ func compactPin(r *Report, p PinReading) CompactSummary {
 		}
 	}
 
-	if ref == "" {
-		ref = p.PinIdentity[:min(reviews.ShownPinRef, len(p.PinIdentity))]
-	}
-
-	command := "seamark lessons --delivery --pin " + ref
+	command := expandCommand(shownPinRef(ref, p.PinIdentity))
 	summary := CompactSummary{PinVersion: p.PinVersion, Command: command}
 
 	if p.Occurrences.Occurrences == 0 && p.Delivery.Sessions == 0 {
@@ -89,8 +87,8 @@ func compactPin(r *Report, p PinReading) CompactSummary {
 	}
 
 	summary.Line += fmt.Sprintf(
-		"; %d delivered session(s): %d no linked correction observed (qualified), %d incomplete — %s",
-		p.Delivery.Sessions, p.Observation.NoLinkedCorrection, p.Observation.Incomplete, command,
+		"; %d delivered session(s): %d %s, %d incomplete — %s",
+		p.Delivery.Sessions, p.Observation.NoLinkedCorrection, NoLinkedCorrectionText, p.Observation.Incomplete, command,
 	)
 
 	return summary
