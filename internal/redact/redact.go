@@ -14,6 +14,11 @@ import (
 	"strings"
 )
 
+// Marker replaces a hidden value. Packages that hide a value outside
+// the patterns here use it too, so every hidden value reads the same. A
+// reader can also test for it to detect the output of Secrets.
+const Marker = "[REDACTED]"
+
 // redaction is one secret-shaped pattern and its replacement.
 type redaction struct {
 	re          *regexp.Regexp
@@ -65,24 +70,24 @@ var redactions = []redaction{
 	// Assignments whose name smells secret-bearing, in shell, env, and
 	// code shapes: MY_TOKEN=abc, API_TOKEN = "abc", dbPassword := "x".
 	{regexp.MustCompile(`(?i)\b([A-Z0-9_]*` + secretNames + `[A-Z0-9_]*\s*:?=\s*)` + secretValue),
-		"${1}[REDACTED]"},
+		"${1}" + Marker},
 	// Value-taking secret flags: --password x, --token=x, --api-key x.
 	{regexp.MustCompile(`(?i)(--?(?:password|passwd|token|api-?key|secret|access-?key|private-?key|auth(?:orization)?)[= ])` + secretValue),
-		"${1}[REDACTED]"},
+		"${1}" + Marker},
 	// Config-file key/value forms: password: hunter2 (YAML),
 	// "api_key": "abc" (JSON) — with colonNames, see above.
 	{regexp.MustCompile(`(?i)(['"]?[A-Z0-9_.-]*` + colonNames + `[A-Z0-9_.-]*['"]?\s*:\s*)` + secretValue),
-		"${1}[REDACTED]"},
+		"${1}" + Marker},
 	// URL userinfo: scheme://user:pass@host keeps user and host. The
 	// password class excludes "/" (RFC 3986 requires it percent-encoded
 	// in userinfo), or host:port/path@… — a URL whose PATH carries an
 	// "@" — would read as credentials and be mangled.
-	{regexp.MustCompile(`(://[^/\s@:]+:)[^@/\s]+@`), "${1}[REDACTED]@"},
+	{regexp.MustCompile(`(://[^/\s@:]+:)[^@/\s]+@`), "${1}" + Marker + "@"},
 	// Bearer tokens in headers: Authorization: Bearer eyJ…. A
 	// termEscape can take the place of the word boundary. Group 1
 	// (leadGroup) keeps that escape in the output. Text without an
 	// escape matches as before.
-	{regexp.MustCompile(`(?i)(?P<` + leadGroup + `>` + termEscape + `|\b)(bearer\s+)\S+`), "${1}${2}[REDACTED]"},
+	{regexp.MustCompile(`(?i)(?P<` + leadGroup + `>` + termEscape + `|\b)(bearer\s+)\S+`), "${1}${2}" + Marker},
 }
 
 // Secrets scrubs known secret-bearing patterns from s.

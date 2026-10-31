@@ -22,10 +22,6 @@ import (
 	"github.com/seamark-dev/seamark/internal/redact"
 )
 
-// redactedValue replaces a hidden value. It is the marker of the shared
-// redact package, so every hidden value reads the same.
-const redactedValue = "[REDACTED]"
-
 // credentialWords are the key segments that name a credential. A
 // segment matches with or without a plural "s".
 var credentialWords = map[string]bool{
@@ -127,7 +123,7 @@ func structuredDialect(rel string) (fileDialect, bool) {
 // sit in an argument list, where no key names it.
 func scrubLine(rel, text string) string {
 	if _, ok := structuredDialect(rel); ok {
-		text = authorizationValue.ReplaceAllString(text, "${1}"+redactedValue)
+		text = authorizationValue.ReplaceAllString(text, "${1}"+redact.Marker)
 	}
 
 	return redact.Secrets(text)
@@ -160,10 +156,10 @@ func applyMasks(line string, masks []maskRange) string {
 // as JSON or TOML.
 func maskText(s string) string {
 	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') && s[len(s)-1] == s[0] {
-		return s[:1] + redactedValue + s[:1]
+		return s[:1] + redact.Marker + s[:1]
 	}
 
-	return redactedValue
+	return redact.Marker
 }
 
 // mergeMasks joins the ranges of the same line from both sides of the
