@@ -227,7 +227,7 @@ func usesLessonChecks(cfg *reviews.Config) bool {
 	}
 
 	for _, pin := range cfg.Pin {
-		if isExecutable(Mode(pin.Mode)) || pin.Check != "" {
+		if Mode(pin.Mode).Executable() || pin.Check != "" {
 			return true
 		}
 	}
@@ -321,7 +321,7 @@ func validatePin(cfg *reviews.Config, entry int, pin reviews.PinRule) []ConfigEr
 		add(CodePinModeUnknown, fmt.Sprintf("unknown mode %q; use advisory, check, or enforce", pin.Mode))
 	}
 
-	executable := isExecutable(mode)
+	executable := mode.Executable()
 
 	if executable && pin.Check == "" {
 		add(CodePinCheckRequired, fmt.Sprintf("mode %s requires check: <check-id>", mode))
@@ -339,7 +339,7 @@ func validatePin(cfg *reviews.Config, entry int, pin reviews.PinRule) []ConfigEr
 	// Only an executable pin needs canonical regions. The checker scope
 	// is AllRegions(), and the scope must equal the PinKey regions.
 	if executable {
-		for _, region := range scopeOf(pin) {
+		for _, region := range SortedScope(pin.AllRegions()) {
 			if reason := regionProblem(region); reason != "" {
 				add(CodePinRegionInvalid, fmt.Sprintf("region %q cannot scope a check: %s", region, reason))
 			}
@@ -373,8 +373,8 @@ func regionProblem(region string) string {
 // NormalizeMode maps a raw mode to its Mode. It reports false for an
 // unknown value and then returns ModeAdvisory. It uses ModeAdvisory because
 // an invalid file still lists every pin, and an unknown mode must never make
-// a pin executable. The delivery report calls it, so the report prints the
-// mode that the checkers use.
+// a pin executable. The delivery report and the preparation call it, so each
+// prints the mode that the checkers use.
 func NormalizeMode(raw string) (Mode, bool) {
 	switch Mode(raw) {
 	case "", ModeAdvisory:
@@ -386,15 +386,19 @@ func NormalizeMode(raw string) (Mode, bool) {
 	}
 }
 
-// isExecutable reports whether the checkers evaluate a pin of this mode.
-func isExecutable(mode Mode) bool {
-	return mode == ModeCheck || mode == ModeEnforce
+// Executable reports whether the checkers evaluate a pin of this mode.
+// Every package that asks this question calls it, so the rule has one
+// form.
+func (m Mode) Executable() bool {
+	return m == ModeCheck || m == ModeEnforce
 }
 
-// scopeOf returns the checker scope of a pin: AllRegions(), sorted. The
-// slice is never nil, so an empty scope encodes as [] (repository-wide).
-func scopeOf(pin reviews.PinRule) []string {
-	scope := append([]string{}, pin.AllRegions()...)
+// SortedScope returns a sorted copy of a region list. A pin scope is
+// SortedScope(pin.AllRegions()). The slice is never nil, so an empty
+// scope encodes as [] (repository-wide). The checkers, the preparation,
+// and the delivery report share it, so each shows one region order.
+func SortedScope(regions []string) []string {
+	scope := append([]string{}, regions...)
 	sort.Strings(scope)
 
 	return scope
@@ -455,6 +459,10 @@ func newConfig(raw *reviews.Config, digest string) (*Config, []ConfigError) {
 
 	pins := make([]Pin, 0, len(raw.Pin))
 
+	// The hooks load the config on each edit, so the references come from
+	// one pass. One ShortPinRef call per pin is quadratic in the pin count.
+	refs := raw.ShortPinRefs()
+
 	for i, rule := range raw.Pin {
 		key := reviews.NewPinKey(rule.Rule, rule.Region, rule.Regions)
 		mode, _ := NormalizeMode(rule.Mode)
@@ -464,10 +472,10 @@ func newConfig(raw *reviews.Config, digest string) (*Config, []ConfigError) {
 			Rule:     rule,
 			Key:      key,
 			Identity: reviews.PinIdentityDigest(key),
-			Ref:      raw.ShortPinRef(key),
+			Ref:      refs[key],
 			Version:  raw.PinVersion(rule),
 			Mode:     mode,
-			Scope:    scopeOf(rule),
+			Scope:    SortedScope(rule.AllRegions()),
 			CheckID:  rule.Check,
 		})
 	}

@@ -128,6 +128,44 @@ func requireDecisionShape(t *testing.T, d GuardDecision) {
 	}
 }
 
+// TestLessonCheckGuardConstructors proves the decisions that the CLI
+// handler takes without DecideGuard. The audit record embeds them, so
+// the test freezes the JSON bytes.
+func TestLessonCheckGuardConstructors(t *testing.T) {
+	t.Run("DenyInternal equals the deny of a request without a configuration", func(t *testing.T) {
+		for _, op := range []Operation{{}, claudeOp("Write")} {
+			want, wantTexts := DecideGuard(GuardInput{Operation: op})
+			got, texts := DenyInternal(op.Tool)
+
+			requireDecisionShape(t, got)
+			assert.Equal(t, want, got)
+			assert.Equal(t, wantTexts, texts)
+		}
+
+		decision, texts := DenyInternal("Write")
+		assert.Equal(t, []string{"lesson check guard cannot decide this Write request: internal error"}, texts)
+
+		data, err := json.Marshal(decision)
+		require.NoError(t, err)
+		assert.Equal(t, `{"schema":"lesson-guard/1","decision":"deny","cause":"internal-error",`+
+			`"input_sha256":"","paths_complete":false,"pins":[],"requested":"deny",`+
+			`"protocol":"exit-2-stderr","reply_written":false,"native_blocking":""}`, string(data))
+	})
+
+	t.Run("AllowUncovered names its cause and evaluates no pin", func(t *testing.T) {
+		decision := AllowUncovered()
+
+		requireDecisionShape(t, decision)
+		assert.Equal(t, GuardAllow, decision.Decision)
+
+		data, err := json.Marshal(decision)
+		require.NoError(t, err)
+		assert.Equal(t, `{"schema":"lesson-guard/1","decision":"allow","cause":"tool-uncovered",`+
+			`"input_sha256":"","paths_complete":false,"pins":[],"requested":"none",`+
+			`"protocol":"exit-2-stderr","reply_written":false,"native_blocking":""}`, string(data))
+	})
+}
+
 // guardForbiddenWords are words that would tell the agent how to turn
 // the guard off. No deny text holds one.
 var guardForbiddenWords = []string{"set-mode", "advisory", "disable", "bypass", "uninstall", "--no-verify", "lesson-checks off", "mode: check"}

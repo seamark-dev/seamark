@@ -224,7 +224,7 @@ func configBinding(cfg *Config) (pins string, kinds []Kind) {
 
 	if cfg != nil {
 		for _, pin := range cfg.Pins {
-			if !isExecutable(pin.Mode) {
+			if !pin.Mode.Executable() {
 				continue
 			}
 
@@ -417,7 +417,7 @@ func withCheckerLimits(hits []LimitHit, results []Result, lim Limits) []LimitHit
 
 	for _, r := range results {
 		for _, e := range r.UnknownPaths {
-			if e.limit == "" || hasLimit(hits, e.limit) {
+			if e.limit == "" || HasLimit(hits, e.limit) {
 				continue
 			}
 
@@ -500,7 +500,7 @@ func listings(cfg *Config, lim Limits) []PinListing {
 	}
 
 	for _, pin := range cfg.Pins {
-		if isExecutable(pin.Mode) {
+		if pin.Mode.Executable() {
 			continue
 		}
 
@@ -649,7 +649,7 @@ func publish(v *Verification, check recheck, lim Limits) {
 	case check.unconfirmed.reason != "":
 		markUnconfirmed(v, check.unconfirmed, false)
 
-		if check.unconfirmed.limit == LimitVerifyTimeout && !hasLimit(v.Limits, LimitVerifyTimeout) {
+		if check.unconfirmed.limit == LimitVerifyTimeout && !HasLimit(v.Limits, LimitVerifyTimeout) {
 			v.Limits = append(v.Limits, LimitHit{Name: LimitVerifyTimeout, Value: lim.VerifyTimeout.Milliseconds()})
 		}
 	default:
@@ -707,8 +707,8 @@ func setUnknown(v *Verification, i int, cause reasonHit) {
 	r.UnknownPaths = nil
 }
 
-// hasLimit reports whether a limit hit with the name exists.
-func hasLimit(hits []LimitHit, name string) bool {
+// HasLimit reports whether a limit hit with the name exists.
+func HasLimit(hits []LimitHit, name string) bool {
 	return slices.ContainsFunc(hits, func(h LimitHit) bool { return h.Name == name })
 }
 

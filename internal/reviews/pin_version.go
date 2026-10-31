@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -98,7 +100,7 @@ func (c *Config) PinVersion(p PinRule) string {
 	key := NewPinKey(p.Rule, p.Region, p.Regions)
 
 	return composeDigest(PinVersionScheme, key.Rule, key.Region,
-		pinVersionNote(p.Note), pinVersionMode(p.Mode), c.pinVersionCheck(p.Check))
+		pinVersionNote(p.Note), pinVersionMode(p.Mode), c.CheckPart(p.Check))
 }
 
 // pinVersionNote keeps the case and the inner text of the note. Only the
@@ -121,10 +123,12 @@ func pinVersionMode(mode string) string {
 	}
 }
 
-// pinVersionCheck is the check part: the version of the bound definition,
-// so a renamed check ID keeps the pin version. A reference to an absent
-// definition keeps its ID behind a marker.
-func (c *Config) pinVersionCheck(id string) string {
+// CheckPart is the check part of the pin version: the version of the
+// bound definition, so a renamed check ID keeps the pin version. A
+// reference to an absent definition keeps its ID behind a marker. An
+// empty ID gives "". The checker impact compares this value too, so the
+// impact and the pin version agree on what counts as the same check.
+func (c *Config) CheckPart(id string) string {
 	if id == "" {
 		return ""
 	}
@@ -142,32 +146,78 @@ func (c *Config) pinVersionCheck(id string) string {
 // share one digest, so they do not make the reference longer. A key that
 // c.Pin does not hold gets a prefix that names no entry of c.Pin.
 func (c *Config) ShortPinRef(key PinKey) string {
-	identity := PinIdentityDigest(key)
+	_, sorted := c.pinIdentities()
 
-	var others []string
+	return shortRef(PinIdentityDigest(key), sorted)
+}
+
+// ShortPinRefs returns the ShortPinRef of every pin key of c.Pin.
+// Duplicate entries share one key, so they share one map entry. A caller
+// that needs the reference of each pin uses this method, because each
+// ShortPinRef call hashes every entry and a loop of calls is quadratic.
+func (c *Config) ShortPinRefs() map[PinKey]string {
+	identities, sorted := c.pinIdentities()
+
+	refs := make(map[PinKey]string, len(identities))
+	for key, identity := range identities {
+		refs[key] = shortRef(identity, sorted)
+	}
+
+	return refs
+}
+
+// pinIdentities returns the identity digest of each pin key of c.Pin, and
+// the distinct digests in sorted order for shortRef. It hashes each
+// distinct key once.
+func (c *Config) pinIdentities() (identities map[PinKey]string, sorted []string) {
+	identities = make(map[PinKey]string, len(c.Pin))
 
 	for _, p := range c.Pin {
-		if other := PinIdentityDigest(NewPinKey(p.Rule, p.Region, p.Regions)); other != identity {
-			others = append(others, other)
+		key := NewPinKey(p.Rule, p.Region, p.Regions)
+		if _, seen := identities[key]; !seen {
+			identities[key] = PinIdentityDigest(key)
 		}
 	}
 
+	return identities, slices.Sorted(maps.Values(identities))
+}
+
+// shortRef is the one prefix rule of ShortPinRef and ShortPinRefs. sorted
+// holds the distinct identity digests of a config, and it can hold
+// identity. In a sorted list, the value that shares the longest prefix
+// with identity is a direct neighbor. So two comparisons replace a scan,
+// and the result is the same.
+func shortRef(identity string, sorted []string) string {
+	at, found := slices.BinarySearch(sorted, identity)
+
+	next := at
+	if found {
+		next++
+	}
+
 	n := ShownPinRef
-	for n < len(identity) && anyHasPrefix(others, identity[:n]) {
-		n++
+
+	if at > 0 {
+		n = max(n, sharedPrefixLen(identity, sorted[at-1])+1)
+	}
+
+	if next < len(sorted) {
+		n = max(n, sharedPrefixLen(identity, sorted[next])+1)
 	}
 
 	return identity[:n]
 }
 
-func anyHasPrefix(values []string, prefix string) bool {
-	for _, v := range values {
-		if strings.HasPrefix(v, prefix) {
-			return true
+// sharedPrefixLen returns the length of the longest common prefix of a
+// and b, in bytes.
+func sharedPrefixLen(a, b string) int {
+	for i := range min(len(a), len(b)) {
+		if a[i] != b[i] {
+			return i
 		}
 	}
 
-	return false
+	return min(len(a), len(b))
 }
 
 // ErrPinRef marks every ResolvePinRef failure. Callers branch with

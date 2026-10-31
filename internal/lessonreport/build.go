@@ -1,7 +1,6 @@
 package lessonreport
 
 import (
-	"sort"
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
@@ -152,6 +151,7 @@ func currentPins(cfg *reviews.Config) []pinVersion {
 	}
 
 	out := make([]pinVersion, 0, len(cfg.Pin))
+	refs := cfg.ShortPinRefs()
 
 	for i, p := range cfg.Pin {
 		key := reviews.NewPinKey(p.Rule, p.Region, p.Regions)
@@ -162,26 +162,17 @@ func currentPins(cfg *reviews.Config) []pinVersion {
 		mode, _ := lessoncheck.NormalizeMode(p.Mode)
 
 		out = append(out, pinVersion{
-			ref:      cfg.ShortPinRef(key),
+			ref:      refs[key],
 			entry:    i + 1,
 			rule:     p.Rule,
 			identity: reviews.PinIdentityDigest(key),
 			version:  cfg.PinVersion(p),
 			mode:     string(mode),
-			scope:    sortedScope(p.AllRegions()),
+			scope:    lessoncheck.SortedScope(p.AllRegions()),
 
 			configured: &cfg.Pin[i],
 		})
 	}
-
-	return out
-}
-
-// sortedScope returns the regions sorted, in a non-nil slice. An empty
-// slice means a repository-wide pin.
-func sortedScope(regions []string) []string {
-	out := append([]string{}, regions...)
-	sort.Strings(out)
 
 	return out
 }

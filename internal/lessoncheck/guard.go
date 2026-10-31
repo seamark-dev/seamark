@@ -123,7 +123,7 @@ var beforeDecide func()
 func DecideGuard(in GuardInput) (decision GuardDecision, reasons []string) {
 	defer func() {
 		if recover() != nil {
-			decision, reasons = denyInternal(in.Operation.Tool)
+			decision, reasons = DenyInternal(in.Operation.Tool)
 		}
 	}()
 
@@ -136,7 +136,7 @@ func DecideGuard(in GuardInput) (decision GuardDecision, reasons []string) {
 	}
 
 	if in.Config == nil {
-		return denyInternal(in.Operation.Tool)
+		return DenyInternal(in.Operation.Tool)
 	}
 
 	if len(in.Config.Errors) > 0 {
@@ -149,7 +149,7 @@ func DecideGuard(in GuardInput) (decision GuardDecision, reasons []string) {
 	}
 
 	if in.ProjectErr != nil || in.Snapshot == nil {
-		return denyInternal(in.Operation.Tool)
+		return DenyInternal(in.Operation.Tool)
 	}
 
 	results := enforceResults(EvaluateWithin(in.Context, LimitGuardBudget, in.Config, in.Snapshot), applicable)
@@ -292,6 +292,16 @@ func allowDecision(op Operation, snap *Snapshot, results []Result) GuardDecision
 	return decision
 }
 
+// AllowUncovered returns the allow of a tool outside the covered list.
+// The CLI handler calls it, because such a tool never reaches DecideGuard.
+// No projection exists, so the decision has no input digest and no pins.
+func AllowUncovered() GuardDecision {
+	decision := allowDecision(Operation{}, nil, []Result{})
+	decision.Cause = GuardCauseToolUncovered
+
+	return decision
+}
+
 // denyOnly returns a deny without a snapshot: the guard decided before
 // a projection existed, or without one.
 func denyOnly(cause string, reasons []Reason) GuardDecision {
@@ -331,9 +341,12 @@ func denyConfiguration(results []Result, message string) (decision GuardDecision
 	return decision, texts
 }
 
-// denyInternal returns the deny of a guard that cannot decide: a panic,
-// a projection error, or a missing configuration.
-func denyInternal(tool string) (decision GuardDecision, texts []string) {
+// DenyInternal returns the deny of a guard that cannot decide: a panic,
+// a projection error, or a missing configuration. tool is the native
+// tool name from the request, or "" when the request names none. The CLI
+// handler calls it for a failure outside DecideGuard, so only this
+// function holds the text.
+func DenyInternal(tool string) (decision GuardDecision, texts []string) {
 	decision = denyOnly(GuardCauseInternalError, nil)
 	texts = []string{denyText("lesson check guard cannot decide " + requestSubject(tool) + ": internal error")}
 

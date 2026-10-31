@@ -21,21 +21,21 @@ import (
 )
 
 // This file holds the two pre-edit hooks of the lesson checks: lessons
-// --guard --hook (contract K8) and lessons --baseline --hook (contract
-// K8, check-only). Both decode one native pre-edit event, resolve its
-// paths at the git top level, load the check set strictly, and project
-// the edit. The guard then decides and can deny the edit. The baseline
-// handler never denies. Both store the pending baseline of contract K7
-// and append one record to the lesson-check audit stream (contract K9).
+// --guard --hook and lessons --baseline --hook (check-only). Both decode
+// one native pre-edit event, resolve its paths at the git top level, load
+// the check set strictly, and project the edit. The guard then decides
+// and can deny the edit. The baseline handler never denies. Both store
+// the pending baseline for the post-edit handler and append one record
+// to the lesson-check audit stream.
 //
 // Neither handler is a part of lessons --hook. That hook stays advisory
-// and fail-open, and it never runs a check (§6 A7, BRIEF rule 15).
+// and fail-open, and it never runs a check.
 // Neither handler opens the capture archive or reads the capture opt-in,
-// because a K9 record needs no opt-in (spec L263).
+// because a lesson-check audit record needs no opt-in.
 
 // preEditConflicts lists the lessons modes and decision flags that
 // --guard and --baseline refuse, in the order of the help text. The
-// first flag that the call sets names the conflict (contracts §4.2).
+// first flag that the call sets names the conflict.
 // --hook is not here, because both modes need it. --json is not here,
 // because verifyFlagError refuses it first. Each modifier flag, for
 // example --client, keeps its own guard and is not here.
@@ -91,7 +91,7 @@ var hookLimits = lessoncheck.DefaultLimits
 
 // beforeGuardDecision runs right before the guard decides, when it is
 // not nil. Only tests set it: it is the one point where a test can make
-// the handler panic and check the recovery of contract K8, step 7.
+// the handler panic and check its panic recovery.
 var beforeGuardDecision func()
 
 // The audit errors of the pre-edit runs that the libraries do not name.
@@ -103,7 +103,7 @@ var (
 	// ended. The post-edit handler then finds no baseline.
 	errBudgetCut = errors.New("lesson checks: the guard budget ended the projection, so no pending baseline exists")
 	// errNoMatchID is the error of an event without a tool-use ID. A
-	// pending record needs the match digest as its key (contract K7).
+	// pending record needs the match digest as its key.
 	errNoMatchID = errors.New("lesson checks: the event names no tool-use ID, so no pending baseline exists")
 )
 
@@ -117,12 +117,12 @@ const maxAuditToolRunes = 64
 type preEdit struct {
 	cmd *cobra.Command
 	// root is the git top level. lessons.yaml, the snapshot, the path
-	// normalization, .seamark/checks, and the audit stream use it
-	// (contract K2, identity root). rootErr is set when no git work tree
-	// holds the -C directory, and root is "" then.
+	// normalization, .seamark/checks, and the audit stream use it.
+	// rootErr is set when no git work tree holds the -C directory, and
+	// root is "" then.
 	root    string
 	rootErr error
-	// idRoot is the K2 identity root. Every session, match, and context
+	// idRoot is the identity root. Every session, match, and context
 	// digest of the run hashes over it, so the records of one tool call
 	// join the firing log on equal bytes.
 	idRoot string
@@ -176,22 +176,22 @@ func preEditClient(clientID string) (integration.Client, error) {
 	return client, nil
 }
 
-// runLessonsGuard implements lessons --guard --hook (contract K8). It
-// fails closed when enforcement is armed or cannot be established.
-// A valid configuration without enforce pins never denies the edit. An allow writes nothing on stdout
-// and exits 0, because the guard never forces an allow (spec L166). A
-// deny returns gate.Blocked, so Execute prints "seamark: blocked by
-// policy: <reasons>" on stderr and exits 2.
+// runLessonsGuard implements lessons --guard --hook. It fails closed when
+// enforcement is armed or cannot be established. A valid configuration
+// without enforce pins never denies the edit. An allow writes nothing on
+// stdout and exits 0, because the guard never forces an allow. A deny
+// returns gate.Blocked, so Execute prints "seamark: blocked by policy:
+// <reasons>" on stderr and exits 2.
 //
 // The run appends its guard record after it composes the reply. A
-// failed pending write, audit append, or sweep never changes the reply
-// (AC-33), and the hook says nothing about it (contract K9).
+// failed pending write, audit append, or sweep never changes the reply,
+// and the hook says nothing about it.
 func runLessonsGuard(cmd *cobra.Command, opts *options, clientID string) (err error) {
 	run := newPreEdit(cmd, opts)
 
-	// A panic in any step denies with cause internal-error (contract
-	// K8, step 7). DecideGuard recovers its own panic, but the decode,
-	// the projection, and the writers run outside it.
+	// A panic in any step denies with cause internal-error. DecideGuard
+	// recovers its own panic, but the decode, the projection, and the
+	// writers run outside it.
 	defer func() {
 		if recover() != nil {
 			err = run.panicDeny()
@@ -204,7 +204,7 @@ func runLessonsGuard(cmd *cobra.Command, opts *options, clientID string) (err er
 	if err != nil {
 		// No adapter of the client can encode the deny. The run blocks in
 		// the form that the gate gives a broken hook command.
-		decision, _ := internalDeny(lessoncheck.Operation{})
+		decision, _ := lessoncheck.DenyInternal("")
 		decision.ReplyWritten = true
 		decision.NativeBlocking = lessoncheck.GuardNativeUnverified
 		run.appendGuard(decision, err)
@@ -219,7 +219,7 @@ func runLessonsGuard(cmd *cobra.Command, opts *options, clientID string) (err er
 
 	if decision.Decision == lessoncheck.GuardAllow {
 		// The tool runs as soon as the hook exits, so the baseline goes
-		// to disk before the exit (contract K7).
+		// to disk before the exit.
 		failure = errors.Join(failure, run.writePending(lessoncheck.ModeEnforce))
 		run.appendGuard(decision, failure)
 
@@ -233,9 +233,10 @@ func runLessonsGuard(cmd *cobra.Command, opts *options, clientID string) (err er
 	return blocked
 }
 
-// decideGuard runs the guard up to its decision: contract K8, steps 1
-// to 3, and the fail-closed cases. It returns the decision, the deny
-// texts for stderr, and the failure that the audit record names.
+// decideGuard runs the guard up to its decision: it reads the event,
+// loads the check set, projects the edit, and decides, and it covers the
+// fail-closed cases. It returns the decision, the deny texts for stderr,
+// and the failure that the audit record names.
 func (r *preEdit) decideGuard() (decision lessoncheck.GuardDecision, texts []string, failure error) {
 	op, err := r.readOperation()
 	r.op = identityOf(op)
@@ -243,8 +244,8 @@ func (r *preEdit) decideGuard() (decision lessoncheck.GuardDecision, texts []str
 	switch {
 	case errors.Is(err, integration.ErrNotApplicable):
 		// A tool outside the covered list has no projection. The guard
-		// allows it, and the record names the cause (§5 row 35).
-		return uncoveredDecision(), nil, nil
+		// allows it, and the record names the cause.
+		return lessoncheck.AllowUncovered(), nil, nil
 	case errors.Is(err, integration.ErrUnsupportedGrammar):
 		// The decoder cannot name every path. The operation holds the
 		// identity only, with paths_complete false, so every enforce pin
@@ -257,7 +258,7 @@ func (r *preEdit) decideGuard() (decision lessoncheck.GuardDecision, texts []str
 	if r.rootErr != nil {
 		// Without a work tree no check set and no snapshot exist. The
 		// guard cannot decide, so it denies.
-		decision, texts = internalDeny(r.op)
+		decision, texts = lessoncheck.DenyInternal(r.op.Tool)
 
 		return decision, texts, r.rootErr
 	}
@@ -271,7 +272,7 @@ func (r *preEdit) decideGuard() (decision lessoncheck.GuardDecision, texts []str
 	defer cancel()
 
 	// Load is strict: a tier-1 or tier-2 error denies, and no fallback
-	// to the defaults exists (contract K8, step 1).
+	// to the defaults exists.
 	cfg, _, loadErr := lessoncheck.Load(r.root)
 	r.cfg = cfg
 
@@ -293,11 +294,11 @@ func (r *preEdit) decideGuard() (decision lessoncheck.GuardDecision, texts []str
 }
 
 // unreadableDecision establishes arming from the selected workspace only.
-// A valid check-only configuration never denies an unreadable request (AC-33).
+// A valid check-only configuration never denies an unreadable request.
 // An unknown root or configuration cannot prove that enforcement is absent.
 func (r *preEdit) unreadableDecision(op lessoncheck.Operation, readErr error) (lessoncheck.GuardDecision, []string, error) {
 	if r.rootErr != nil {
-		decision, texts := internalDeny(r.op)
+		decision, texts := lessoncheck.DenyInternal(r.op.Tool)
 		return decision, texts, errors.Join(readErr, r.rootErr)
 	}
 
@@ -312,11 +313,10 @@ func (r *preEdit) unreadableDecision(op lessoncheck.Operation, readErr error) (l
 	return decision, texts, readErr
 }
 
-// runLessonsBaseline implements lessons --baseline --hook (contract K8,
-// check-only). It stores the pending baseline of contract K7 for the
-// post-edit handler. It never denies: every run exits 0 and writes
-// nothing on stdout. A run that stores no baseline names the reason in
-// its baseline record (contract K9).
+// runLessonsBaseline implements lessons --baseline --hook (check-only).
+// It stores the pending baseline for the post-edit handler. It never
+// denies: every run exits 0 and writes nothing on stdout. A run that
+// stores no baseline names the reason in its baseline record.
 func runLessonsBaseline(cmd *cobra.Command, opts *options, clientID string) error {
 	run := newPreEdit(cmd, opts)
 
@@ -405,9 +405,9 @@ func identityOf(op lessoncheck.Operation) lessoncheck.Operation {
 
 // normalizeOperation resolves the native paths of op at root with
 // delivery.NormalizePaths. Delete and move sources keep their final entry.
-// It resolves one path at a time, so each file
-// operation keeps its own paths (contract K8). A file operation stays
-// in the result only when every path of it resolves inside root:
+// It resolves one path at a time, so each file operation keeps its own
+// paths. A file operation stays in the result only when every path of it
+// resolves inside root:
 //
 //   - A path outside root by its text alone is outside every pin scope.
 //     An operation with only such paths leaves the evaluation, and
@@ -472,12 +472,11 @@ func normalizeOperation(root string, op lessoncheck.Operation) lessoncheck.Opera
 }
 
 // outsideByText reports whether a native path lies outside root by its
-// text alone, without a link in the path (contract K8, "a lexical path
-// outside root"). A relative path starts at the real location of cwd,
-// as the operating system resolves it. A client can spell root through
-// a link, for example /var for /private/var on macOS. So the path is
-// outside only when it is outside root and outside the real location of
-// root.
+// text alone, without a link in the path. A relative path starts at the
+// real location of cwd, as the operating system resolves it. A client
+// can spell root through a link, for example /var for /private/var on
+// macOS. So the path is outside only when it is outside root and outside
+// the real location of root.
 //
 // The callers ask only after delivery rejected the path as outside by
 // its on-disk location. That location uses the on-disk spelling of
@@ -517,31 +516,9 @@ func outsideByText(root, cwd, native string) bool {
 	return true
 }
 
-// internalDeny returns the deny of a guard that cannot decide, with the
-// internal-error text of contract K8. DecideGuard owns that text and
-// gives it for a request without a configuration. So the handler asks
-// DecideGuard, and no second copy of the text exists.
-func internalDeny(op lessoncheck.Operation) (decision lessoncheck.GuardDecision, texts []string) {
-	return lessoncheck.DecideGuard(lessoncheck.GuardInput{Operation: op})
-}
-
-// uncoveredDecision returns the allow of a tool outside the covered
-// list (contract K8, cause tool-uncovered). No snapshot exists, so the
-// decision has no input digest.
-func uncoveredDecision() lessoncheck.GuardDecision {
-	return lessoncheck.GuardDecision{
-		Schema:    lessoncheck.GuardSchema,
-		Decision:  lessoncheck.GuardAllow,
-		Cause:     lessoncheck.GuardCauseToolUncovered,
-		Pins:      []lessoncheck.AuditPin{},
-		Requested: lessoncheck.GuardRequestedNone,
-		Protocol:  lessoncheck.GuardProtocolExit2,
-	}
-}
-
-// nativeBlocking returns the native_blocking level of a decision
-// (contract K8). It is verified only when the evidence of the pre-write
-// path of this client, tool, and context is verified (contract K10).
+// nativeBlocking returns the native_blocking level of a decision. It is
+// verified only when the evidence of the pre-write path of this client,
+// tool, and context is verified.
 //
 // The decoders name the receiver and not its lane. The lane comes from
 // ReceivingContextOf, the one receiver derivation that the decoders
@@ -588,11 +565,11 @@ func (r *preEdit) denyReply(texts []string) (written bool, blocked error) {
 	return false, &gate.Blocked{}
 }
 
-// panicDeny returns the deny of a guard run that panicked (contract K8,
-// step 7). The run appends its record unless it already tried, because
-// a second panic in the writer would end the process.
+// panicDeny returns the deny of a guard run that panicked. The run
+// appends its record unless it already tried, because a second panic in
+// the writer would end the process.
 func (r *preEdit) panicDeny() error {
-	decision, texts := internalDeny(r.op)
+	decision, texts := lessoncheck.DenyInternal(r.op.Tool)
 	decision.ReplyWritten = true
 	decision.NativeBlocking = nativeBlocking(r.op)
 
@@ -603,18 +580,18 @@ func (r *preEdit) panicDeny() error {
 	return &gate.Blocked{Cause: errors.New(strings.Join(texts, "; "))}
 }
 
-// writePending stores the pending baseline of an allowed call (contract
-// K7). It keeps the paths that an executable pin scopes, so a run
-// without such a path writes nothing. installed is the mode of the
-// installed pre-edit hook. A run whose guard budget ended the
-// projection returns that reason, because the post-edit handler then
-// finds no baseline.
+// writePending stores the pending baseline of an allowed call. It keeps
+// the paths that an executable pin scopes, so a run without such a path
+// writes nothing. installed is the mode of the installed pre-edit hook.
+// A run whose guard budget ended the projection returns that reason,
+// because the post-edit handler then finds no baseline. The snapshot of
+// such a run holds no change.
 func (r *preEdit) writePending(installed lessoncheck.Mode) error {
 	if r.cfg == nil || r.snap == nil {
 		return nil
 	}
 
-	if budgetCut(r.snap) && hasExecutablePin(r.cfg) {
+	if lessoncheck.HasLimit(r.snap.Limits, lessoncheck.LimitGuardBudget) && lessoncheck.HasExecutablePin(r.cfg) {
 		return errBudgetCut
 	}
 
@@ -642,23 +619,7 @@ func (r *preEdit) writePending(installed lessoncheck.Mode) error {
 	}, r.lim)
 }
 
-// budgetCut reports whether the guard budget ended the projection. The
-// snapshot then holds no change.
-func budgetCut(snap *lessoncheck.Snapshot) bool {
-	return slices.ContainsFunc(snap.Limits, func(hit lessoncheck.LimitHit) bool {
-		return hit.Name == lessoncheck.LimitGuardBudget
-	})
-}
-
-// hasExecutablePin reports whether the check set holds a pin of mode
-// check or enforce.
-func hasExecutablePin(cfg *lessoncheck.Config) bool {
-	return slices.ContainsFunc(cfg.Pins, func(pin lessoncheck.Pin) bool {
-		return pin.Mode == lessoncheck.ModeCheck || pin.Mode == lessoncheck.ModeEnforce
-	})
-}
-
-// digests returns the K2 session, match, and context digests of the
+// digests returns the session, match, and context digests of the
 // run over the identity root. Each digest needs its raw IDs, as in the
 // firing log (reviews.RecordEvent), so the records join on equal bytes.
 func (r *preEdit) digests() (session, match, contextSHA string) {
@@ -684,7 +645,7 @@ func (r *preEdit) digests() (session, match, contextSHA string) {
 // record returns the audit record of the run with the fields that the
 // guard and the baseline records share. It holds digests, codes, and
 // repository-relative paths only: no raw ID, no content, and no patch
-// text (contracts §1.6). AppendAudit redacts and bounds the error.
+// text. AppendAudit redacts and bounds the error.
 func (r *preEdit) record(kind string, failure error) lessoncheck.AuditRecord {
 	session, match, contextSHA := r.digests()
 
@@ -718,9 +679,9 @@ func (r *preEdit) record(kind string, failure error) lessoncheck.AuditRecord {
 }
 
 // appendGuard appends the guard record of the run. The record carries
-// the decision, and its pins also at the top level, because K9 counts
-// the evaluated pins of every record kind as len(pins). A failed append
-// stays silent and never changes the reply (contract K9).
+// the decision, and its pins also at the top level, because a reader
+// counts the evaluated pins of every record kind as len(pins). A failed
+// append stays silent and never changes the reply.
 func (r *preEdit) appendGuard(decision lessoncheck.GuardDecision, failure error) {
 	r.recorded = true
 
@@ -753,9 +714,9 @@ func (r *preEdit) appendBaseline(failure error) {
 }
 
 // sweep removes the pending records that a crash or a cancelled tool
-// left behind (contract K7, crash recovery). Each pre-edit run sweeps
-// after its record, so the sweep never delays a decision. A failure
-// and a panic stay silent, because the next run sweeps again.
+// left behind. Each pre-edit run sweeps after its record, so the sweep
+// never delays a decision. A failure and a panic stay silent, because
+// the next run sweeps again.
 func (r *preEdit) sweep() {
 	defer func() { _ = recover() }()
 
@@ -768,7 +729,7 @@ func (r *preEdit) sweep() {
 
 // operationPaths returns the paths of the file operations, both ends of
 // a move included, sorted and without duplicates. A path outside root
-// is no longer in the operation, so no record names it (contract K8).
+// is no longer in the operation, so no record names it.
 func operationPaths(op lessoncheck.Operation) []string {
 	var paths []string
 

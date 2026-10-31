@@ -216,7 +216,7 @@ func targetCheck(cfg *reviews.Config, pin lessoncheck.Pin, mode lessoncheck.Mode
 		return id, nil
 	}
 
-	if executable(mode) && pin.CheckID == "" {
+	if mode.Executable() && pin.CheckID == "" {
 		return "", fmt.Errorf("--set-mode %s needs --check <check-id>: pin %s has no check", mode, pin.Ref)
 	}
 
@@ -256,11 +256,6 @@ func sameMode(raw string, mode lessoncheck.Mode) bool {
 	return raw == string(mode) || (raw == "" && mode == lessoncheck.ModeAdvisory)
 }
 
-// executable reports whether the checkers evaluate a pin of this mode.
-func executable(mode lessoncheck.Mode) bool {
-	return mode == lessoncheck.ModeCheck || mode == lessoncheck.ModeEnforce
-}
-
 // predicateOf returns the predicate text of check id in cfg, or "" when
 // no definition with a valid predicate exists.
 func predicateOf(cfg *reviews.Config, id string) string {
@@ -281,7 +276,7 @@ func predicateOf(cfg *reviews.Config, id string) string {
 // No guard and no verification hook exist in milestone P1, so the text
 // of an executable mode is the fixed text of K6 step 6, not a K10 join.
 func activeLines(mode lessoncheck.Mode) []string {
-	if executable(mode) {
+	if mode.Executable() {
 		return []string{"active: " + lessoncheck.ActiveRequested}
 	}
 

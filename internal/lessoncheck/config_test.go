@@ -623,3 +623,67 @@ func TestLessonCheckLoadFileStates(t *testing.T) {
 		assert.NotErrorIs(t, err, os.ErrNotExist)
 	})
 }
+
+// TestLessonCheckExecutablePredicates proves the exported predicates that
+// the CLI, the preparation, and the mode writer call. An unknown mode
+// must never read as executable.
+func TestLessonCheckExecutablePredicates(t *testing.T) {
+	t.Run("Mode.Executable", func(t *testing.T) {
+		assert.True(t, ModeCheck.Executable())
+		assert.True(t, ModeEnforce.Executable())
+		assert.False(t, ModeAdvisory.Executable())
+		assert.False(t, Mode("").Executable())
+		assert.False(t, Mode("strict").Executable())
+	})
+
+	t.Run("HasExecutablePin", func(t *testing.T) {
+		assert.False(t, HasExecutablePin(&Config{}))
+		assert.False(t, HasExecutablePin(&Config{Pins: []Pin{{Mode: ModeAdvisory}}}))
+		assert.True(t, HasExecutablePin(&Config{Pins: []Pin{{Mode: ModeAdvisory}, {Mode: ModeCheck}}}))
+		assert.True(t, HasExecutablePin(&Config{Pins: []Pin{{Mode: ModeEnforce}}}))
+	})
+
+	t.Run("HasLimit", func(t *testing.T) {
+		hits := []LimitHit{{Name: LimitVerifyTimeout}, {Name: LimitGuardBudget}}
+
+		assert.True(t, HasLimit(hits, LimitGuardBudget))
+		assert.False(t, HasLimit(hits, "other"))
+		assert.False(t, HasLimit(nil, LimitGuardBudget))
+	})
+}
+
+// TestLessonCheckSortedScope proves the scope form that the checkers, the
+// preparation, and the delivery report share.
+func TestLessonCheckSortedScope(t *testing.T) {
+	regions := []string{"src/b", "src/a"}
+
+	assert.Equal(t, []string{"src/a", "src/b"}, SortedScope(regions))
+	assert.Equal(t, []string{"src/b", "src/a"}, regions, "the caller keeps its order")
+
+	data, err := json.Marshal(SortedScope(nil))
+	require.NoError(t, err)
+	assert.Equal(t, "[]", string(data), "a repository-wide scope encodes as []")
+}
+
+// TestLessonCheckPinRefsAtLoad proves that every pin view holds the
+// reference of ShortPinRef, also for a duplicate entry. The two pins named
+// r1080792 and r8398215 have identity digests that share 12 hex characters.
+func TestLessonCheckPinRefsAtLoad(t *testing.T) {
+	cfg, errs, err := Parse([]byte(`pin:
+  - rule: r1080792
+    region: x
+  - rule: r8398215
+    region: x
+  - rule: r1080792
+    region: x/
+    note: The same rule and region set.
+`))
+	require.NoError(t, err)
+	require.Empty(t, errs)
+	require.Len(t, cfg.Pins, 3)
+
+	for _, pin := range cfg.Pins {
+		assert.Equal(t, cfg.Raw.ShortPinRef(pin.Key), pin.Ref, "entry %d", pin.Entry)
+		assert.Len(t, pin.Ref, reviews.ShownPinRef+1, "entry %d", pin.Entry)
+	}
+}

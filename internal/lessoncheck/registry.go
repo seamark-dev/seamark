@@ -215,7 +215,7 @@ func evaluate(b budget, cfg *Config, snap *Snapshot) []Result {
 	results := []Result{}
 
 	for _, pin := range cfg.Pins {
-		if isExecutable(pin.Mode) {
+		if pin.Mode.Executable() {
 			results = append(results, evaluatePin(b, cfg, snap, pin))
 		}
 	}

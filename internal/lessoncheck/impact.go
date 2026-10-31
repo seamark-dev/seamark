@@ -81,7 +81,7 @@ func ImpactOf(before, after *reviews.Config, entries []int) ([]Impact, error) {
 		oldMode, _ := NormalizeMode(old.Mode)
 		nextMode, _ := NormalizeMode(next.Mode)
 
-		if !isExecutable(oldMode) && !isExecutable(nextMode) {
+		if !oldMode.Executable() && !nextMode.Executable() {
 			continue
 		}
 
@@ -93,7 +93,7 @@ func ImpactOf(before, after *reviews.Config, entries []int) ([]Impact, error) {
 		}
 
 		check := rawCheckRef(checkCfg, checkID)
-		scopeBefore, scopeAfter := scopeOf(old), scopeOf(next)
+		scopeBefore, scopeAfter := SortedScope(old.AllRegions()), SortedScope(next.AllRegions())
 
 		out = append(out, Impact{
 			Entry:       n,
@@ -105,8 +105,8 @@ func ImpactOf(before, after *reviews.Config, entries []int) ([]Impact, error) {
 			ScopeAfter:  scopeAfter,
 			Predicate:   predicateText(checkCfg, checkID),
 			PredicateChanged: !slices.Equal(scopeBefore, scopeAfter) ||
-				checkPart(before, old.Check) != checkPart(after, next.Check) ||
-				isExecutable(oldMode) != isExecutable(nextMode),
+				before.CheckPart(old.Check) != after.CheckPart(next.Check) ||
+				oldMode.Executable() != nextMode.Executable(),
 			VersionBefore: before.PinVersion(old),
 			VersionAfter:  after.PinVersion(next),
 			Active:        activeText(nextMode),
@@ -114,21 +114,6 @@ func ImpactOf(before, after *reviews.Config, entries []int) ([]Impact, error) {
 	}
 
 	return out, nil
-}
-
-// checkPart identifies the check definition of a pin: its version, or a
-// marked ID for an ID that names no definition. Two IDs with one
-// definition give one part, so a renamed check keeps the predicate.
-func checkPart(cfg *reviews.Config, id string) string {
-	if id == "" {
-		return ""
-	}
-
-	if def, ok := cfg.Checks[id]; ok {
-		return reviews.CheckVersion(def)
-	}
-
-	return "unresolved:" + id
 }
 
 // predicateText returns the predicate of check id in cfg, or the reason
@@ -154,7 +139,7 @@ func predicateText(cfg *reviews.Config, id string) string {
 
 // activeText returns the active state of a pin with mode after the edit.
 func activeText(mode Mode) string {
-	if isExecutable(mode) {
+	if mode.Executable() {
 		return ActiveRequested
 	}
 

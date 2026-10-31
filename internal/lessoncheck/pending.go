@@ -192,7 +192,7 @@ func PendingPathsOf(cfg *Config, snap *Snapshot) (paths []PendingPath, limitatio
 // which this answer does not need.
 func executableScope(cfg *Config, ch Change) (scoped, needsText bool) {
 	for _, pin := range cfg.Pins {
-		if !isExecutable(pin.Mode) || endpointsInScope(ch, pin.Scope) == 0 {
+		if !pin.Mode.Executable() || endpointsInScope(ch, pin.Scope) == 0 {
 			continue
 		}
 

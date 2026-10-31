@@ -2,6 +2,8 @@ package reviews
 
 import (
 	"errors"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -510,6 +512,122 @@ func TestResolvePinRef(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, got)
 	})
+}
+
+// TestCheckPart proves the three forms of the check part. The pin version
+// and the checker impact both compare this value.
+func TestCheckPart(t *testing.T) {
+	def := CheckDef{Kind: "no-added-pattern/1", Pattern: "TODO"}
+	cfg := &Config{Checks: map[string]CheckDef{"no-todo": def}}
+	renamed := &Config{Checks: map[string]CheckDef{"no-todo-marks": def}}
+
+	assert.Empty(t, cfg.CheckPart(""), "a pin without a check has no check part")
+	assert.Equal(t, CheckVersion(def), cfg.CheckPart("no-todo"))
+	assert.Equal(t, cfg.CheckPart("no-todo"), renamed.CheckPart("no-todo-marks"),
+		"a renamed check keeps its part")
+	assert.Equal(t, "unresolved:no-such", cfg.CheckPart("no-such"))
+}
+
+// TestShortPinRefsMatchShortPinRef proves that the batch form prints the
+// reference of ShortPinRef for each entry. The config holds a near pair
+// whose digests share 12 hex characters, and a duplicate entry.
+func TestShortPinRefsMatchShortPinRef(t *testing.T) {
+	pinA := PinRule{Rule: "r1080792", Region: "x"}
+	pinB := PinRule{Rule: "r8398215", Region: "x"}
+
+	twin := specPin
+	twin.Region, twin.Note = "generated", "Another note."
+
+	cfg := &Config{Pin: []PinRule{specPin, pinA, strictPin, pinB, twin}}
+	refs := cfg.ShortPinRefs()
+
+	assert.Len(t, refs, 4, "duplicate entries share one key")
+
+	var digests []string
+
+	for _, p := range cfg.Pin {
+		digests = append(digests, PinIdentityDigest(NewPinKey(p.Rule, p.Region, p.Regions)))
+	}
+
+	for i, p := range cfg.Pin {
+		key := NewPinKey(p.Rule, p.Region, p.Regions)
+
+		assert.Equal(t, cfg.ShortPinRef(key), refs[key], "entry %d", i+1)
+		assert.Equal(t, scanRef(digests[i], digests), refs[key], "entry %d", i+1)
+	}
+
+	assert.Equal(t, specRef, refs[NewPinKey(twin.Rule, twin.Region, nil)],
+		"a duplicate entry keeps the shown length")
+	assert.Len(t, refs[NewPinKey(pinA.Rule, pinA.Region, nil)], ShownPinRef+1, "the near pair extends the reference")
+	assert.Empty(t, (&Config{}).ShortPinRefs(), "a config without pins has no references")
+}
+
+// TestShortRefEqualsPrefixScan proves the neighbor rule of shortRef
+// against the definition of the reference, a scan of every other digest.
+// Real digests almost never share 12 characters. So these values use two
+// letters only, and many of them share a long prefix.
+func TestShortRefEqualsPrefixScan(t *testing.T) {
+	const (
+		held   = 2000
+		absent = 200
+	)
+
+	twoLetters := func(seed int) string {
+		return strings.Map(func(r rune) rune { return '0' + r%2 }, composeDigest(strconv.Itoa(seed)))
+	}
+
+	digests := make([]string, held)
+	for i := range digests {
+		digests[i] = twoLetters(i)
+	}
+
+	sorted := slices.Sorted(slices.Values(digests))
+	extended := 0
+
+	for _, digest := range digests {
+		got := shortRef(digest, sorted)
+		require.Equal(t, scanRef(digest, digests), got)
+
+		if len(got) > ShownPinRef {
+			extended++
+		}
+	}
+
+	assert.Positive(t, extended, "the values must reach the extension, or the test proves nothing")
+
+	for i := range absent {
+		digest := twoLetters(held + i)
+		require.Equal(t, scanRef(digest, digests), shortRef(digest, sorted), "a digest outside the list")
+	}
+
+	t.Run("a pair that differs in the last character prints the full digest", func(t *testing.T) {
+		a := strings.Repeat("a", 64)
+		b := a[:63] + "b"
+
+		assert.Equal(t, a, shortRef(a, []string{a, b}))
+		assert.Equal(t, b, shortRef(b, []string{a, b}))
+	})
+
+	t.Run("an empty list gives the shown length", func(t *testing.T) {
+		assert.Equal(t, specRef, shortRef(specIdentity, nil))
+	})
+}
+
+// scanRef is the definition of a reference: the shortest prefix of at
+// least ShownPinRef characters that no other digest shares.
+func scanRef(identity string, digests []string) string {
+	shared := func(prefix string) bool {
+		return slices.ContainsFunc(digests, func(d string) bool {
+			return d != identity && strings.HasPrefix(d, prefix)
+		})
+	}
+
+	n := ShownPinRef
+	for n < len(identity) && shared(identity[:n]) {
+		n++
+	}
+
+	return identity[:n]
 }
 
 // TestIdentityDigestsMatchFiringLog proves that the exported identity

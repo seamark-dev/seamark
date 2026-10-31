@@ -198,7 +198,7 @@ func withoutBaseline(cfg *Config, paths []string, complete bool, reason Reason) 
 	maxRuleRunes := DefaultLimits().MaxRuleRunes
 
 	for _, pin := range cfg.Pins {
-		if !isExecutable(pin.Mode) {
+		if !pin.Mode.Executable() {
 			continue
 		}
 
@@ -228,18 +228,18 @@ func withoutBaseline(cfg *Config, paths []string, complete bool, reason Reason) 
 // postEditState returns the summary state of a post-edit run, in the
 // state order of Verify. A check set that cannot be established is
 // incomplete even without a result. The executable argument tests cfg
-// for nil first, because hasExecutable reads cfg.Pins and Go evaluates
+// for nil first, because HasExecutablePin reads cfg.Pins and Go evaluates
 // every argument before the call.
 func postEditState(cfg *Config, loadErr error, results []Result) SummaryState {
 	broken := loadErr != nil || cfg == nil || len(cfg.Errors) > 0
 
-	return summaryState(countOutcomes(results), broken, cfg != nil && hasExecutable(cfg))
+	return summaryState(countOutcomes(results), broken, cfg != nil && HasExecutablePin(cfg))
 }
 
-// hasExecutable reports whether the check set holds a pin of mode check
-// or enforce.
-func hasExecutable(cfg *Config) bool {
-	return slices.ContainsFunc(cfg.Pins, func(pin Pin) bool { return isExecutable(pin.Mode) })
+// HasExecutablePin reports whether the check set holds a pin of mode
+// check or enforce.
+func HasExecutablePin(cfg *Config) bool {
+	return slices.ContainsFunc(cfg.Pins, func(pin Pin) bool { return pin.Mode.Executable() })
 }
 
 // findingsText returns the reply text of a run with a violation or an
