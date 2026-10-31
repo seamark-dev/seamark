@@ -559,8 +559,9 @@ func TestClaudeWithoutTheSourceCheckNeverReadsTheLocalFile(t *testing.T) {
 func TestClaudeReadsTheLocalFileForEveryLessonCheckMode(t *testing.T) {
 	// The narrator states the capability of the pre-write path, and a
 	// local wrapper or a broken local file changes it. Check mode reads
-	// the personal file as enforce does. A run without a mode, and the
-	// off mode, keep the rule that setup never reads it.
+	// the personal file as enforce does. In a repository without a
+	// lesson-check hook, a run without a mode and the off mode keep the
+	// rule that setup never reads it.
 	root := t.TempDir()
 	writeRel(t, root, claudeLocalSettings, "{ broken")
 
@@ -571,6 +572,24 @@ func TestClaudeReadsTheLocalFileForEveryLessonCheckMode(t *testing.T) {
 		hooks.LessonChecksEnforce: true,
 	} {
 		// Without CheckHookSources, as the form without --client runs.
+		plan, err := claudeSetup{}.Plan(root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: mode})
+		require.NoError(t, err)
+
+		assert.Equal(t, reads, slices.Contains(readPaths(plan.Reads), claudeLocalSettings), "mode %q", mode)
+	}
+}
+
+func TestClaudeReadsTheLocalFileForAKeptLessonCheckMode(t *testing.T) {
+	// A run without a mode merges the installed lesson-check hooks again.
+	// The rule of one handler holds for them, so the form without
+	// --client reads the personal file too. Off plans no such hook.
+	for mode, reads := range map[string]bool{
+		"":                    true,
+		hooks.LessonChecksOff: false,
+	} {
+		root := t.TempDir()
+		installLessonHooks(t, root, ClaudeID, testBinary, hooks.LessonChecksCheck, "")
+
 		plan, err := claudeSetup{}.Plan(root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: mode})
 		require.NoError(t, err)
 

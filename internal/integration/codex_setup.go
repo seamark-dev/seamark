@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strings"
 
 	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/hooks"
@@ -238,11 +237,11 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 
 	for _, spec := range lessons.specs {
 		sources := unmanagedSources(codexHookSources(&plan.Findings, document, inline, spec))
-		for _, source := range sources {
-			if source.certain {
-				return duplicateLessonHandler(spec, source, lessons.requested)
-			}
+
+		if err := refuseSecondLessonHandler(CodexID, spec, sources, lessons.requested); err != nil {
+			return err
 		}
+
 		// An uncertain wrapper does not prove coverage. Setup warns about
 		// it and installs the managed handler, as ordinary hook setup does.
 		reportCodexHookSources(plan, sources, true, "")
@@ -293,22 +292,6 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 	})
 
 	return nil
-}
-
-// duplicateLessonHandler returns the refusal for a second lesson handler
-// in a source that setup does not manage. Setup refuses because two
-// handlers would run the same check twice. A run that requests a lesson
-// change asks setup to manage the handler, so the advice is to remove the
-// other definition. A run that requests none keeps a handler that setup
-// already manages, so the advice says that setup owns the handler.
-func duplicateLessonHandler(spec hooks.Spec, source hookSource, requested bool) error {
-	where := fmt.Sprintf("lesson checks: codex %s %s already runs a handler from %s: %#q",
-		spec.Event, strings.Join(source.tools, ", "), source.path, describeCommand(source.command))
-	if requested {
-		return fmt.Errorf("%s; setup refuses a second handler; remove that definition to let setup manage lesson checks", where)
-	}
-
-	return fmt.Errorf("%s; setup already manages this handler, so remove that definition", where)
 }
 
 // codexInlineHooksPath names the inline [hooks] of config.toml in a

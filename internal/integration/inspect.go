@@ -664,7 +664,7 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 
 	for _, s := range unmanagedSources(sources) {
 		command := describeCommand(s.command)
-		twice := slices.DeleteFunc(slices.Clone(s.tools), func(tool string) bool { return !slices.Contains(managedTools, tool) })
+		twice := sharedTools(s.tools, managedTools)
 
 		switch {
 		case !s.certain:
@@ -703,6 +703,12 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 			})
 		}
 	}
+}
+
+// sharedTools keeps the tools of a definition that the managed
+// definition also runs for. The client runs each of them twice.
+func sharedTools(tools, managedTools []string) []string {
+	return slices.DeleteFunc(slices.Clone(tools), func(tool string) bool { return !slices.Contains(managedTools, tool) })
 }
 
 // toolName names a tool for a finding. The empty tool stands for an

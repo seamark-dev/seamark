@@ -268,6 +268,39 @@ func enforceRefusal(clientID string, state lessonSourceState) error {
 		clientID, lessoncheck.JoinCapReasons(blockers))
 }
 
+// refuseSecondLessonHandler applies the rule of one handler per lesson
+// check to definitions that setup does not manage. A definition that
+// certainly runs the hook refuses the plan, before any write. A
+// definition that only can run the hook does not prove a second run, so
+// the caller warns about it and keeps the managed handler. The two
+// adapters share the rule, so one state gets one answer on both clients.
+// requested is true when the run names a lesson-check mode.
+func refuseSecondLessonHandler(clientID string, spec hooks.Spec, sources []hookSource, requested bool) error {
+	for _, source := range sources {
+		if source.certain {
+			return duplicateLessonHandler(clientID, spec, source, requested)
+		}
+	}
+
+	return nil
+}
+
+// duplicateLessonHandler returns the refusal for a second lesson handler
+// in a source that setup does not manage. Setup refuses because two
+// handlers would run the same check twice. A run that requests a lesson
+// change asks setup to manage the handler, so the advice is to remove the
+// other definition. A run that requests none keeps a handler that setup
+// already manages, so the advice says that setup owns the handler.
+func duplicateLessonHandler(clientID string, spec hooks.Spec, source hookSource, requested bool) error {
+	where := fmt.Sprintf("lesson checks: %s %s %s already runs a handler from %s: %#q",
+		clientID, spec.Event, strings.Join(source.tools, ", "), source.path, describeCommand(source.command))
+	if requested {
+		return fmt.Errorf("%s; setup refuses a second handler; remove that definition to let setup manage lesson checks", where)
+	}
+
+	return fmt.Errorf("%s; setup already manages this handler, so remove that definition", where)
+}
+
 // lessonConfig is the result of lessoncheck.Load for one plan. errs
 // holds a read or decode error too, so the refusal and the summary read
 // one list.
