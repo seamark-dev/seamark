@@ -230,19 +230,36 @@ func ovForward(id int, ch chan<- tea.Msg) func(services.IndexEvent) {
 }
 
 // openBuild opens the build confirmation, unless another mutation runs
-// or a build is refused. The refusal names the next route.
+// or a build is refused. A refusal comes from the last read, and the user
+// can fix its cause at any time. So a refused b reads the index again,
+// and recheckBuild decides from the new read.
 func (o *overview) openBuild() tea.Cmd {
 	if o.st.busy() {
 		return toast(ui.ToneAttention, "Another operation is running: "+o.st.mutation)
 	}
 
-	if why := o.st.indexBuildRefusal(); why != "" {
-		return toast(ui.ToneAttention, ovSentenceEnd(why))
+	if !o.canBuild() {
+		o.rechecking = true
+
+		return refresh(secIndex)
 	}
 
 	o.confirm = true
 
 	return nil
+}
+
+// recheckBuild ends a refused b after the new read of the index. A
+// refusal that holds names the next route. Without it, b opens the build
+// confirmation as usual.
+func (o *overview) recheckBuild() tea.Cmd {
+	o.rechecking = false
+
+	if why := o.st.indexBuildRefusal(); why != "" {
+		return toast(ui.ToneAttention, ovSentenceEnd(why))
+	}
+
+	return o.openBuild()
 }
 
 // canBuild reports whether a build is offered.

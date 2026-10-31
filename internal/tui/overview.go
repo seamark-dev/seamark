@@ -66,6 +66,8 @@ type overview struct {
 
 	// confirm shows the build confirmation.
 	confirm bool
+	// rechecking is true between a refused b and the new read of the index.
+	rechecking bool
 	// build is the latest index build; showBuild keeps its modal open.
 	build     *ovBuild
 	showBuild bool
@@ -160,6 +162,10 @@ func (o *overview) update(msg tea.Msg) tea.Cmd {
 		return o.onBuildEvent(msg)
 	case ovBuildDoneMsg:
 		return o.onBuildDone(msg)
+	case loadedMsg:
+		if msg.kind == secIndex && o.rechecking {
+			return o.recheckBuild()
+		}
 	case tea.KeyMsg:
 		return o.onKey(msg)
 	}

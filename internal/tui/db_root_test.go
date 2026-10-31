@@ -808,3 +808,28 @@ func TestCopyThroughACaseVariantKeepsTheRoutesOfACopy(t *testing.T) {
 
 	assertCopyRoutes(t, h, svc, origin, copied)
 }
+
+// TestRefusedBuildReadsTheIndexAgain covers a refusal whose cause goes
+// away. The refusal came from the last read, so the next b must not
+// repeat a toast about a file that no longer exists.
+func TestRefusedBuildReadsTheIndexAgain(t *testing.T) {
+	other := dbRootRepo(t, "other")
+
+	db := filepath.Join(dbRootDir(t), "garbage.db")
+	require.NoError(t, os.WriteFile(db, []byte("this file is no database, and it is long enough to read"), 0o644))
+
+	h, _ := dbRootConsole(t, other, db)
+	h.press("1")
+
+	h.press("b")
+	assert.Contains(t, h.m.toast.text, "use another --db")
+	require.False(t, ovScreen(h).capturing())
+
+	require.NoError(t, os.Remove(db))
+
+	h.press("b")
+	assert.True(t, ovScreen(h).capturing(), "the next press reads the fix")
+
+	h.press("enter")
+	assert.Equal(t, other, dbRootRecorded(t, db), "the build of the new file runs")
+}
