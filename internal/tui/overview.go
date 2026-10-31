@@ -130,7 +130,12 @@ func (o *overview) banner(w int) (string, bool) {
 
 	left := " " + t.Attention.Bold(true).Render(t.Glyphs.Warn) + " " + t.Body.Render("Index is stale.") + " " +
 		t.Muted.Render(msg+".")
-	right := t.Key.Render("b") + " " + t.Body.Render("rebuild now") + " "
+
+	// The key side follows the footer, so a refused build offers no key.
+	right := ""
+	if o.canBuild() {
+		right = t.Key.Render("b") + " " + t.Body.Render("rebuild now") + " "
+	}
 
 	// The banner cuts the message itself, because spread would cut it
 	// with the Unicode ellipsis in the ASCII theme too.

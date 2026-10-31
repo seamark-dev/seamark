@@ -297,6 +297,11 @@ func TestOverviewRefusesABuildThatMovesAnotherRoot(t *testing.T) {
 
 	assert.False(t, dbRootOffersBuild(h), "the footer offers no key that refuses")
 
+	banner, ok := o.banner(150)
+	require.True(t, ok, "the index is stale")
+	assert.Contains(t, banner, "Index is stale.")
+	assert.NotContains(t, banner, "rebuild now", "the banner agrees with the footer")
+
 	h.press("b")
 	assert.Equal(t, dbRootRefusal(origin), h.m.toast.text)
 	assert.False(t, o.capturing(), "no confirmation opens")
