@@ -21,7 +21,9 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	stdpath "path"
@@ -68,6 +70,20 @@ const (
 	// another repository.
 	DatabaseOther
 )
+
+// RootOwnsDatabase reports whether dbPath can belong to root, so that a
+// write to the file and a write under root change one repository. A root
+// owns the file that its default path names. A root without a default
+// database can own any file that records it. A root with another default
+// database does not own this file, because a copy or a renamed database
+// keeps the recorded root of its origin.
+func RootOwnsDatabase(root, dbPath string) bool {
+	if _, err := os.Stat(DefaultPath(root)); errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+
+	return ClassifyDatabase(root, dbPath) != DatabaseOther
+}
 
 // ClassifyDatabase relates dbPath to root by file identity. A link
 // spelling names the same file with another string, so a string

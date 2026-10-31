@@ -33,9 +33,9 @@
 // it as a blocker, and an authoring commit refuses it. The Settings
 // snapshot blocks the lessons groups with it, and a lessons save refuses
 // it. A sample is then unavailable. These Phase 4 rules have no --db
-// exception. A maintenance commit refuses a foreign root unless the
-// database is another file than the default path names. The file
-// comparison holds for a relative path and a link spelling. An index
+// exception. A maintenance commit and a proposal apply refuse a foreign
+// root unless the recorded root owns the database. The file comparison
+// holds for a relative path and a link spelling. An index
 // build refuses a database that records another repository, also with an
 // older schema, so every caller of BuildIndex keeps that root.
 //

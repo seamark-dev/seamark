@@ -146,3 +146,27 @@ func TestProbeRootFailsOnAFileThatIsNoDatabase(t *testing.T) {
 	_, err := ProbeRoot(path)
 	assert.Error(t, err)
 }
+
+// TestRootOwnsDatabaseFollowsTheDefaultPathOfTheRoot covers the rule of
+// the write guard: a recorded root proves nothing about a file unless its
+// default path names that file or it has no default database.
+func TestRootOwnsDatabaseFollowsTheDefaultPathOfTheRoot(t *testing.T) {
+	root := databaseRoot(t)
+	other := filepath.Join(t.TempDir(), "other.db")
+	require.NoError(t, os.WriteFile(other, []byte("x"), 0o644))
+
+	assert.True(t, RootOwnsDatabase(root, DefaultPath(root)), "the default database")
+	assert.False(t, RootOwnsDatabase(root, other), "another file beside a default database")
+
+	t.Run("the default path links to the file", func(t *testing.T) {
+		require.NoError(t, os.Remove(DefaultPath(root)))
+		require.NoError(t, os.Symlink(other, DefaultPath(root)))
+
+		assert.True(t, RootOwnsDatabase(root, other))
+	})
+
+	t.Run("no default database", func(t *testing.T) {
+		assert.True(t, RootOwnsDatabase(t.TempDir(), other), "a custom database of a repository")
+		assert.True(t, RootOwnsDatabase(filepath.Join(t.TempDir(), "gone"), other), "a root that moved away")
+	})
+}

@@ -184,6 +184,9 @@ type DatabaseFacts struct {
 	// than the workspace root, else "". A link spelling of the workspace
 	// root names the same directory, so it is no foreign root.
 	ForeignRoot string
+	// WriteBlock says why a write to the pin file and the ledger must not
+	// run, or nil. The maintenance commits and a proposal apply refuse it.
+	WriteBlock error
 	// BuildBlock says why an index build must not run, with the next
 	// route, or nil. It holds for every schema, because it reads the
 	// recorded root without the probe.

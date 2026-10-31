@@ -210,8 +210,10 @@ func TestPinsAnswerTheDatabaseFacts(t *testing.T) {
 		ws, err := workspace.Resolve(root, store.DefaultPath(rootLink(t, root)))
 		require.NoError(t, err)
 
-		assert.Equal(t, workspace.DatabaseFacts{ForeignRoot: origin.Root}, engNew(ws, Deps{}).Pins().Database,
-			"a link spelling is the default database")
+		got := engNew(ws, Deps{}).Pins().Database
+		assert.Equal(t, store.DatabaseDefault, got.Kind, "a link spelling is the default database")
+		assert.Equal(t, origin.Root, got.ForeignRoot)
+		assert.ErrorIs(t, got.WriteBlock, ErrForeignRoot)
 	})
 
 	t.Run("a database of another repository", func(t *testing.T) {
@@ -224,6 +226,7 @@ func TestPinsAnswerTheDatabaseFacts(t *testing.T) {
 		assert.Equal(t, store.DatabaseOther, got.Kind)
 		assert.Equal(t, origin.Root, got.ForeignRoot)
 		assert.ErrorIs(t, got.BuildBlock, ErrForeignRoot, "a build refuses the database of another repository")
+		assert.NoError(t, got.WriteBlock, "the recorded root owns the file, so a prune changes one repository")
 	})
 
 	t.Run("a moved repository with a link at its old path", func(t *testing.T) {
@@ -667,4 +670,106 @@ func TestApplyKeepsTheExceptionOfAnotherDatabase(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, rootFile(t, origin.Root), "new-rule")
 	assert.Equal(t, domain.ProposalApplied, rootStatus(t, origin.DBPath, row.ID))
+}
+
+// rootThirdDirectory returns a workspace outside origin whose --db names
+// the database of a copy, and the path of that database. The file records
+// origin, but origin has its own default database.
+func rootThirdDirectory(t *testing.T, origin workspace.Workspace) (ws workspace.Workspace, db string) {
+	t.Helper()
+
+	db = store.DefaultPath(rootCopy(t, origin, "copy"))
+
+	ws, err := workspace.Resolve(rootDir(t), db)
+	require.NoError(t, err)
+
+	return ws, db
+}
+
+// rootRenamed returns a copy of origin whose database moved to another
+// name, so the default path of the copy names no file.
+func rootRenamed(t *testing.T, origin workspace.Workspace) (ws workspace.Workspace, db string) {
+	t.Helper()
+
+	root := rootCopy(t, origin, "copy")
+	db = filepath.Join(root, store.DefaultDir, "keep.db")
+	require.NoError(t, os.Rename(store.DefaultPath(root), db))
+
+	ws, err := workspace.Resolve(root, db)
+	require.NoError(t, err)
+
+	return ws, db
+}
+
+// TestOwnRootRefusesADatabaseThatTheRecordedRootDoesNotOwn covers a file
+// that names no default path of this workspace but still is not the
+// ledger of the recorded root. A write would change two repositories.
+func TestOwnRootRefusesADatabaseThatTheRecordedRootDoesNotOwn(t *testing.T) {
+	for name, resolve := range map[string]func(*testing.T, workspace.Workspace) (workspace.Workspace, string){
+		"a third directory with the database of a copy": rootThirdDirectory,
+		"a copy with a renamed database":                rootRenamed,
+	} {
+		t.Run(name, func(t *testing.T) {
+			origin, linked := maintWorkspace(t, true)
+			row := rootPending(t, origin.DBPath, "new-rule", "api", "A new rule.")
+			ws, db := resolve(t, origin)
+			before := rootFile(t, origin.Root)
+
+			e := engNew(ws, Deps{})
+			require.Equal(t, store.DatabaseOther, e.Pins().Database.Kind)
+			require.ErrorIs(t, e.Pins().Database.WriteBlock, ErrForeignRoot)
+
+			_, err := e.CommitMaintenance(rootPrune(t, e))
+			require.ErrorIs(t, err, ErrForeignRoot)
+			assert.Contains(t, err.Error(), "open the console in "+origin.Root)
+
+			pv, err := e.PreviewDecision(proposals.ActionApply, []int64{row.ID})
+			require.NoError(t, err)
+			require.ErrorIs(t, pv.RootBlock, ErrForeignRoot)
+
+			_, err = e.CommitDecision(pv)
+			require.ErrorIs(t, err, ErrForeignRoot)
+
+			assert.Equal(t, before, rootFile(t, origin.Root), "the pin file of the origin stays")
+			assert.Equal(t, domain.ProposalApplied, rootStatus(t, db, linked.ID), "the ledger of the file stays")
+			assert.Equal(t, domain.ProposalProposed, rootStatus(t, db, row.ID))
+
+			// The route of the refusal works: the console of the recorded
+			// root writes its own file and its own ledger.
+			own := engNew(origin, Deps{})
+
+			res, err := own.CommitMaintenance(rootPrune(t, own))
+			require.NoError(t, err)
+			assert.True(t, res.LedgerDone)
+		})
+	}
+}
+
+// TestOwnRootKeepsACustomDatabaseOfARootWithoutADefault covers a
+// repository that keeps its index only in a --db file. That file is the
+// ledger of the root, so one write changes one repository.
+func TestOwnRootKeepsACustomDatabaseOfARootWithoutADefault(t *testing.T) {
+	origin, _ := maintWorkspace(t, true)
+	row := rootPending(t, origin.DBPath, "new-rule", "api", "A new rule.")
+
+	db := filepath.Join(rootDir(t), "custom.db")
+	require.NoError(t, os.Rename(origin.DBPath, db))
+
+	ws, err := workspace.Resolve(rootDir(t), db)
+	require.NoError(t, err)
+
+	e := engNew(ws, Deps{})
+	require.NoError(t, e.Pins().Database.WriteBlock)
+
+	pv, err := e.PreviewDecision(proposals.ActionApply, []int64{row.ID})
+	require.NoError(t, err)
+	require.NoError(t, pv.RootBlock)
+
+	_, err = e.CommitDecision(pv)
+	require.NoError(t, err)
+	assert.Contains(t, rootFile(t, origin.Root), "new-rule")
+
+	res, err := e.CommitMaintenance(rootPrune(t, e))
+	require.NoError(t, err)
+	assert.True(t, res.FileWritten)
 }

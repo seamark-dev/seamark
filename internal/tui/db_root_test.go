@@ -731,3 +731,54 @@ func TestApplyRefusalReadsAsThePreview(t *testing.T) {
 	assert.Equal(t, "The index records another repository root, so nothing was written. Open the console in "+
 		"/work/origin.", propRefusal(fmt.Errorf("%w; route", refused), ui.NewTheme(false)))
 }
+
+// TestDatabaseThatTheRootDoesNotOwnRoutesToTheRoot covers a database that
+// records the origin and is not its ledger. The keys stay off, and every
+// route names the console of the origin, where the write works.
+func TestDatabaseThatTheRootDoesNotOwnRoutesToTheRoot(t *testing.T) {
+	cases := map[string]func(t *testing.T, copied string) (dir, db string){
+		"a third directory": func(t *testing.T, copied string) (string, string) {
+			return dbRootDir(t), store.DefaultPath(copied)
+		},
+		"a renamed database": func(t *testing.T, copied string) (string, string) {
+			db := filepath.Join(copied, store.DefaultDir, "keep.db")
+			require.NoError(t, os.Rename(store.DefaultPath(copied), db))
+
+			return copied, db
+		},
+	}
+
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			origin := dbRootRepo(t, "origin")
+			dir, db := setup(t, dbRootCopy(t, origin))
+
+			h, svc := dbRootConsole(t, dir, db)
+			pinsCursorTo(h, 1)
+
+			p := pinsOf(h)
+			assert.Equal(t, origin, pinsForeignRoot(p.st), "the keys stay off")
+			assert.Equal(t, origin, pinsDBRoot(p.st), "the route names the origin")
+			assert.NotContains(t, pinsKeys(h), "-")
+
+			detail := pinsDetail(t, h)
+			assert.Contains(t, detail, "Open the console in "+origin+".")
+			assert.NotContains(t, detail, "Build the index")
+
+			_, err := svc.CommitMaintenance(dbRootPrune(t, svc))
+			require.ErrorIs(t, err, services.ErrForeignRoot)
+
+			h.press("1")
+			h.press("b")
+			assert.Equal(t, dbRootRefusal(origin), h.m.toast.text)
+
+			// The console that the routes name offers the prune.
+			own, ownSvc := dbRootConsole(t, origin, "")
+			pinsCursorTo(own, 1)
+			assert.Contains(t, pinsKeys(own), "-")
+
+			_, err = ownSvc.CommitMaintenance(dbRootPrune(t, ownSvc))
+			assert.NoError(t, err)
+		})
+	}
+}

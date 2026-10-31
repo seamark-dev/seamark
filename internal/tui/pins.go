@@ -452,11 +452,11 @@ func pinsBuildRefusal(st *state) string {
 // pin file under the recorded root, as the CLI does. In a copied
 // checkout that root names the original repository, but the ledger is
 // the database of the copy. So one operation would change two
-// repositories. Another database file makes another root normal, so the
-// rule skips it (services ownRoot).
+// repositories. A database that the recorded root owns makes that root
+// normal, so the service reports no refusal (services ownRoot).
 func pinsForeignRoot(st *state) string {
 	d := pinsDatabase(st)
-	if d.Kind == store.DatabaseOther {
+	if d.WriteBlock == nil {
 		return ""
 	}
 

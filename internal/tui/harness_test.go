@@ -403,6 +403,10 @@ func (f *fakeServices) answered(in *maintain.Inspection) *maintain.Inspection {
 
 	if in.Index.Root != "" && f.root != "" && filepath.Clean(in.Index.Root) != filepath.Clean(f.root) {
 		in.Database.ForeignRoot = in.Index.Root
+
+		if in.Database.Kind == store.DatabaseDefault {
+			in.Database.WriteBlock = services.ErrForeignRoot
+		}
 	}
 
 	return in
