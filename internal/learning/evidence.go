@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -515,7 +514,7 @@ func evReadStore(ws workspace.Workspace) Snapshot {
 		return snap
 	}
 
-	stats, err := st.Stats()
+	lessons, err := st.LessonCount()
 	if err != nil {
 		snap.CountsErr = err
 
@@ -531,15 +530,15 @@ func evReadStore(ws workspace.Workspace) Snapshot {
 
 	snap.Findings = counts
 	snap.DistilledGroups = distilled
-	snap.Lessons = stats.Lessons
+	snap.Lessons = lessons
 	snap.ReviewFindings = counts[model.SourceReview]
 
 	for _, source := range model.FixMinedSources() {
 		snap.FixFindings += counts[source]
 	}
 
-	snap.FixesMinedAt = evMetaUnix(st, store.MetaFixesMinedAt)
-	snap.ReviewsMinedAt = evMetaUnix(st, store.MetaReviewsMinedAt)
+	snap.FixesMinedAt = st.MetaUnix(store.MetaFixesMinedAt)
+	snap.ReviewsMinedAt = st.MetaUnix(store.MetaReviewsMinedAt)
 
 	return snap
 }
@@ -727,21 +726,6 @@ func evDigestString(s string) string {
 	}
 
 	return evDigest([]byte(s))
-}
-
-// evMetaUnix reads a Unix-seconds meta value; 0 when absent or malformed.
-func evMetaUnix(st *store.Store, key string) int64 {
-	v, err := st.GetMeta(key)
-	if err != nil {
-		return 0
-	}
-
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		return 0
-	}
-
-	return n
 }
 
 // evSafe makes untrusted text safe for one display line. Reader and

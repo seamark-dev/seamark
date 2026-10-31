@@ -54,6 +54,10 @@ type analysis struct {
 	// entries are the listed pins, in file order.
 	entries []Entry
 
+	// cfg is the reader's parse of the raw bytes. It is nil when readerErr
+	// is set.
+	cfg *reviews.Config
+
 	decodeErr, readerErr error
 	// listErr reports a listing that differs from the delivered pins.
 	listErr error
@@ -86,6 +90,8 @@ func analyze(raw []byte) *analysis {
 		a.readerErr = err
 		a.errLine = yamledit.ErrorLine(err)
 	}
+
+	a.cfg = cfg
 
 	doc, issue := yamledit.Parse(data)
 	if issue == nil {

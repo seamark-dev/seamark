@@ -129,31 +129,43 @@ type ExtractPreview struct {
 	// sends the recorded note, so a surface shows both. The values are
 	// file text: a surface sanitizes them. Nil means no note differs.
 	LiveNotes map[int64]string
-	// Blockers are safe display lines that stop a run, for example a
-	// missing agent executable. The preview still discloses the plan.
-	Blockers []string
-	// WorkDirErr is the error that kept PlanExtract from reading the
-	// console's working directory, or nil. Blockers then also holds its
-	// display line. A surface uses IsWorkDirBlocker to tell that line
-	// from an agent blocker, because a setting cannot fix it.
-	WorkDirErr error
+	// Blockers stop a run, for example a missing agent executable. The
+	// preview still discloses the plan.
+	Blockers []ExtractBlocker
 	// PlannedAt is when the plan was made.
 	PlannedAt time.Time
 }
 
-// IsWorkDirBlocker reports whether line is the blocker of WorkDirErr.
-// The agent runs in the console's working directory, so only a restart
-// from a readable directory removes this blocker. The check compares
-// the line that PlanExtract built, so a surface never parses the text.
-func (p *ExtractPreview) IsWorkDirBlocker(line string) bool {
-	return p.WorkDirErr != nil && line == workDirBlocker(p.WorkDirErr)
+// ExtractBlockKind says what removes a blocker of an extraction run. A
+// surface reads the kind, so it never parses the reason text.
+type ExtractBlockKind int
+
+const (
+	// ExtractBlockAgent means that the agent executable is not on PATH.
+	// A setting can fix it.
+	ExtractBlockAgent ExtractBlockKind = iota + 1
+	// ExtractBlockWorkDir means that PlanExtract could not read the
+	// console's working directory. The agent runs there, so only a
+	// restart from a readable directory removes this blocker.
+	ExtractBlockWorkDir
+)
+
+// ExtractBlocker is one reason why an extraction cannot run.
+type ExtractBlocker struct {
+	Kind ExtractBlockKind
+	// Reason is one safe display line.
+	Reason string
 }
 
-// workDirBlocker returns the safe display line of a working-directory
-// error. PlanExtract and IsWorkDirBlocker share it, so both build the
-// same line.
-func workDirBlocker(err error) string {
-	return distSafe(fmt.Sprintf("the agent's working directory is unknown: %v", err))
+// blockerText joins the reasons of the blockers into one line, in
+// preview order.
+func (p *ExtractPreview) blockerText() string {
+	reasons := make([]string, len(p.Blockers))
+	for i, b := range p.Blockers {
+		reasons[i] = b.Reason
+	}
+
+	return strings.Join(reasons, "; ")
 }
 
 // NoOp reports a preview without an eligible proposal. The console shows
@@ -263,12 +275,16 @@ func PlanExtract(ws workspace.Workspace, reg *integration.Registry, req ExtractR
 	// preview must name that directory, or the run is not disclosed.
 	if p.WorkDir == "" {
 		if p.WorkDir, err = extGetwd(); err != nil {
-			p.WorkDirErr = err
-			p.Blockers = append(p.Blockers, workDirBlocker(err))
+			p.Blockers = append(p.Blockers, ExtractBlocker{
+				Kind:   ExtractBlockWorkDir,
+				Reason: distSafe(fmt.Sprintf("the agent's working directory is unknown: %v", err)),
+			})
 		}
 	}
 
-	p.Blockers = append(p.Blockers, b.agentBlockers()...)
+	for _, line := range b.agentBlockers() {
+		p.Blockers = append(p.Blockers, ExtractBlocker{Kind: ExtractBlockAgent, Reason: line})
+	}
 
 	return p, nil
 }
@@ -295,7 +311,7 @@ func RunExtract(ctx context.Context, ws workspace.Workspace, reg *integration.Re
 	}
 
 	if len(p.Blockers) > 0 {
-		return nil, fmt.Errorf("%w: %s", ErrExtractBlocked, strings.Join(p.Blockers, "; "))
+		return nil, fmt.Errorf("%w: %s", ErrExtractBlocked, p.blockerText())
 	}
 
 	if p.NoOp() {

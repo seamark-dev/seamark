@@ -320,6 +320,61 @@ func TestEvidenceHorizon(t *testing.T) {
 	// older stamp still bounds it.
 	require.NoError(t, s.SetMeta(MetaReviewsMinedAt, "3000"))
 	assert.Equal(t, int64(2000), s.EvidenceHorizon())
+
+	// A malformed stamp proves nothing, whichever channel holds it.
+	require.NoError(t, s.SetMeta(MetaFixesMinedAt, "yesterday"))
+	assert.Zero(t, s.EvidenceHorizon())
+
+	require.NoError(t, s.SetMeta(MetaFixesMinedAt, "2000"))
+	require.NoError(t, s.SetMeta(MetaReviewsMinedAt, "yesterday"))
+	assert.Zero(t, s.EvidenceHorizon())
+}
+
+func TestMetaUnix(t *testing.T) {
+	s := openTestStore(t)
+
+	assert.Zero(t, s.MetaUnix(MetaFixesMinedAt), "an absent stamp reads as zero")
+
+	for value, want := range map[string]int64{
+		"1700000000":           1700000000,
+		"":                     0,
+		"yesterday":            0,
+		"12.5":                 0,
+		"99999999999999999999": 0, // out of range: ParseInt also returns MaxInt64
+	} {
+		require.NoError(t, s.SetMeta(MetaFixesMinedAt, value))
+		assert.Equal(t, want, s.MetaUnix(MetaFixesMinedAt), "value %q", value)
+	}
+
+	require.NoError(t, s.Close())
+	assert.Zero(t, s.MetaUnix(MetaFixesMinedAt), "a failed read reads as zero")
+}
+
+func TestLessonCount(t *testing.T) {
+	s := openTestStore(t)
+
+	n, err := s.LessonCount()
+	require.NoError(t, err)
+	assert.Zero(t, n)
+
+	seed(t, s)
+	require.NoError(t, s.ReplaceLessons([]model.Lesson{
+		{ClusterKey: "first", Region: "pkg/a", Symptom: "first", Occurrences: 1},
+		{ClusterKey: "second", Region: "pkg/b", Symptom: "second", Occurrences: 2},
+	}, nil))
+
+	n, err = s.LessonCount()
+	require.NoError(t, err)
+
+	stats, err := s.Stats()
+	require.NoError(t, err)
+	assert.Equal(t, stats.Lessons, n, "the count agrees with Stats")
+	assert.Equal(t, 2, n)
+
+	require.NoError(t, s.Close())
+
+	_, err = s.LessonCount()
+	require.Error(t, err)
 }
 
 func TestRebuildReplacesDerivedTables(t *testing.T) {

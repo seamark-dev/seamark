@@ -752,7 +752,7 @@ func refreshFixPhase(root, dbPath string, req RefreshRequest, logf func(string, 
 		state = SourceEmpty
 	}
 
-	done(SourceOutcome{State: state, Stored: count, MinedAt: metaUnix(st, store.MetaFixesMinedAt)})
+	done(SourceOutcome{State: state, Stored: count, MinedAt: st.MetaUnix(store.MetaFixesMinedAt)})
 
 	return nil
 }
@@ -835,7 +835,7 @@ func refreshReviewPhase(ctx context.Context, root, dbPath string, windowDays int
 
 	done(SourceOutcome{
 		State: state, Stored: len(mined.Findings), Lessons: len(mined.Lessons),
-		MinedAt: metaUnix(st, store.MetaReviewsMinedAt), Reason: safeReason(mined.Note),
+		MinedAt: st.MetaUnix(store.MetaReviewsMinedAt), Reason: safeReason(mined.Note),
 	})
 
 	return nil
@@ -914,21 +914,6 @@ func abortedSource(err error) SourceOutcome {
 // secrets, joins the lines, and strips control characters.
 func safeReason(s string) string {
 	return render.SanitizeBlock(strings.Join(strings.Fields(redact.Secrets(s)), " "))
-}
-
-// metaUnix reads a Unix-seconds meta value; 0 when absent or malformed.
-func metaUnix(st *store.Store, key string) int64 {
-	v, err := st.GetMeta(key)
-	if err != nil {
-		return 0
-	}
-
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		return 0
-	}
-
-	return n
 }
 
 // RefreshFixes mines and persists only fix commits reachable from the

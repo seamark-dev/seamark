@@ -367,12 +367,12 @@ func (r *extRecord) planNotes(w int) []string {
 	// Each kind of blocker names the step that removes it.
 	for _, b := range r.prev.preview.Blockers {
 		advice := ". Install it, or press o to choose another agent in Settings. Then press enter to plan again."
-		if r.prev.preview.IsWorkDirBlocker(b) {
+		if b.Kind == learning.ExtractBlockWorkDir {
 			advice = ". The agent runs in the directory of the console, so Settings cannot change it. Quit, then " +
 				"start Seamark again from an existing directory."
 		}
 
-		out = append(out, propNote(t, ui.ToneAttention, ui.OneLine(b)+advice, w)...)
+		out = append(out, propNote(t, ui.ToneAttention, ui.OneLine(b.Reason)+advice, w)...)
 		out = append(out, "")
 	}
 

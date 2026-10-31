@@ -491,14 +491,14 @@ func (in *Inspection) readOutcomes(st *store.Store, linked []int, rows []model.P
 		return nil
 	}
 
-	// The parse cannot fail here: pinfile parses the same bytes into
-	// Doc.ReaderErr, and the linked readings run only when it is nil.
-	// The check keeps a change of that rule from giving a zero outcome.
-	cfg, err := reviews.ParseConfig(in.Doc.Bytes)
-	if err != nil {
+	// Config is set here: pinfile leaves it nil only with Doc.ReaderErr,
+	// and the linked readings run only when that error is nil. The check
+	// keeps a change of that rule from giving a zero outcome.
+	cfg := in.Doc.Config
+	if cfg == nil {
 		unknown(pinfile.ErrUnreadable.Error())
 
-		return []error{err}
+		return []error{in.Doc.ReaderErr}
 	}
 
 	readings, err := outcome.Gather(st, cfg, rows, audit.firings)

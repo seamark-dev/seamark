@@ -174,7 +174,7 @@ func buildPlan(st *store.Store, grouper Grouper, opts PlanOptions, mode cleanupM
 		return nil, 0, err
 	}
 
-	ledger, err := readLedger(st)
+	ledger, err := ReadLedger(st)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -237,7 +237,7 @@ func (p *Plan) Revalidate(st *store.Store) error {
 		return err
 	}
 
-	ledger, err := readLedger(st)
+	ledger, err := ReadLedger(st)
 	if err != nil {
 		return err
 	}
@@ -379,9 +379,11 @@ var ledgerStatuses = []string{
 	model.ProposalDismissed, model.ProposalSuperseded,
 }
 
-// readLedger reads every stored proposal in ledgerStatuses order, each
-// status newest first.
-func readLedger(st *store.Store) ([]model.Proposal, error) {
+// ReadLedger reads every stored proposal in ledgerStatuses order, each
+// status newest first. The caller of FreezeLivePlan and RunLive both
+// read here, and both hash the rows into the ledger fingerprint. A
+// status that only one side read would make every stored plan stale.
+func ReadLedger(st *store.Store) ([]model.Proposal, error) {
 	var ledger []model.Proposal
 
 	for _, status := range ledgerStatuses {
