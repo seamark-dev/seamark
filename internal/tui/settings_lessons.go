@@ -85,7 +85,7 @@ func settingsFileExists(snap *settings.Snapshot, g settings.Group) bool {
 func settingsForeignRoute(err error) string {
 	var foreign *services.ForeignRootError
 	if errors.As(err, &foreign) && foreign.OtherDB {
-		return ovSentence(pinOpenRoot(foreign.Root)) + ", because a save works there."
+		return ovSentence(openRootRoute(foreign.Root, foreign.CustomDB)) + ", because a save works there."
 	}
 
 	return settingsForeignRootRoute

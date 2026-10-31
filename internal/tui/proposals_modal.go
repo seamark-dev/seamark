@@ -467,7 +467,7 @@ func propRootText(err error, target string) string {
 
 	route := pinForeignBuild
 	if foreign.OtherDB {
-		route = ovSentenceEnd(pinOpenRoot(foreign.Root))
+		route = ovSentenceEnd(openRootRoute(foreign.Root, foreign.CustomDB))
 	}
 
 	return "The index of this workspace records another repository, " + ui.OneLine(foreign.Root) + ", so y is off. " +

@@ -41,6 +41,9 @@ type ForeignRootError struct {
 	// OtherDB reports a database that is not the default database of the
 	// workspace. A build then refuses, so the route is the console of Root.
 	OtherDB bool
+	// CustomDB reports a database that the route must name. See
+	// customDatabase.
+	CustomDB bool
 }
 
 // Error names both roots and no route, because each caller adds the route
@@ -64,7 +67,28 @@ func (e *engine) foreignRoot(probe workspace.IndexProbe) error {
 
 	return &ForeignRootError{
 		Root: probe.Root, Workspace: e.ws.Root, OtherDB: e.databaseKind() != store.DatabaseDefault,
+		CustomDB: e.customDatabase(probe.Root),
 	}
+}
+
+// customDatabase reports a --db file that the console of root must keep.
+// The plain route opens the default database of root, another ledger, so
+// the rows of this file stay out of the list. A file of another checkout
+// is no such file. A console in root with it passes every guard, because
+// root is then the workspace, and it would write two repositories.
+func (e *engine) customDatabase(root string) bool {
+	return e.databaseKind() == store.DatabaseOther &&
+		store.ClassifyDatabase(root, e.ws.DBPath) == store.DatabaseOther &&
+		!store.LiesInOtherCheckout(root, e.ws.DBPath)
+}
+
+// consoleRoute names the console that can write under root.
+func (e *engine) consoleRoute(root string) string {
+	if e.customDatabase(root) {
+		return "open the console in " + root + " with this --db"
+	}
+
+	return "open the console in " + root
 }
 
 // ownRoot refuses a write under the recorded root when that write and
@@ -89,7 +113,7 @@ func (e *engine) ownRoot(probe workspace.IndexProbe) error {
 	case store.RootOwnsDatabase(probe.Root, e.ws.DBPath):
 		return nil
 	default:
-		return fmt.Errorf("%w; open the console in %s", err, probe.Root)
+		return fmt.Errorf("%w; %s", err, e.consoleRoute(probe.Root))
 	}
 }
 
@@ -124,7 +148,7 @@ func (e *engine) buildBlock() error {
 	case recorded == "", store.SameDirectory(recorded, e.ws.Root):
 		return nil
 	default:
-		return fmt.Errorf("%w, so a build here would move it; open the console in %s", ErrForeignRoot, recorded)
+		return fmt.Errorf("%w, so a build here would move it; %s", ErrForeignRoot, e.consoleRoute(recorded))
 	}
 }
 
@@ -142,7 +166,7 @@ func (e *engine) databaseFacts(probe workspace.IndexProbe) workspace.DatabaseFac
 	}
 
 	if e.foreignRoot(probe) != nil {
-		facts.ForeignRoot = probe.Root
+		facts.ForeignRoot, facts.CustomDB = probe.Root, e.customDatabase(probe.Root)
 	}
 
 	return facts

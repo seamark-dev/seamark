@@ -217,3 +217,23 @@ func TestSameDirectoryComparesIdentity(t *testing.T) {
 	assert.False(t, SameDirectory(dir, gone))
 	assert.True(t, SameDirectory(gone, gone+string(filepath.Separator)), "a clean path needs no file")
 }
+
+func TestLiesInOtherCheckoutReadsTheStateDirectory(t *testing.T) {
+	root, other := databaseRoot(t), databaseRoot(t)
+
+	assert.True(t, LiesInOtherCheckout(root, DefaultPath(other)), "the default database of a copy")
+
+	renamed := filepath.Join(other, DefaultDir, "keep.db")
+	require.NoError(t, os.WriteFile(renamed, []byte("x"), 0o644))
+	assert.True(t, LiesInOtherCheckout(root, renamed), "a renamed database of a copy")
+
+	own := filepath.Join(root, DefaultDir, "custom.db")
+	require.NoError(t, os.WriteFile(own, []byte("x"), 0o644))
+	assert.False(t, LiesInOtherCheckout(root, own), "a file of this root")
+
+	plain := filepath.Join(t.TempDir(), "custom.db")
+	require.NoError(t, os.WriteFile(plain, []byte("x"), 0o644))
+	assert.False(t, LiesInOtherCheckout(root, plain), "a file outside any checkout")
+
+	assert.False(t, LiesInOtherCheckout(root, filepath.Join(t.TempDir(), "missing.db")))
+}

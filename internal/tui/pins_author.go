@@ -86,7 +86,7 @@ func pinUnknownNote(checks bool, tail string) string {
 // because an index build there moves the root of the other repository.
 func (p *pinsView) unknownTail() string {
 	if root := pinsDBRoot(p.st); root != "" {
-		return "; to save, " + pinOpenRoot(root)
+		return "; to save, " + pinOpenRoot(p.st, root)
 	}
 
 	return pinUnknownTail

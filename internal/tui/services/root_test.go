@@ -723,6 +723,7 @@ func TestOwnRootRefusesADatabaseThatTheRecordedRootDoesNotOwn(t *testing.T) {
 			_, err := e.CommitMaintenance(rootPrune(t, e))
 			require.ErrorIs(t, err, ErrForeignRoot)
 			assert.Contains(t, err.Error(), "open the console in "+origin.Root)
+			assert.NotContains(t, err.Error(), "--db", "this file with a console in the origin splits two repositories")
 
 			pv, err := e.PreviewDecision(proposals.ActionApply, []int64{row.ID})
 			require.NoError(t, err)
@@ -991,4 +992,86 @@ func TestCopyReadsItsOwnConfigAfterItsBuild(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, rootConfig(t, root), "write: true")
 	assert.Equal(t, originConfig, rootConfig(t, origin.Root), "the save stays in the copy")
+}
+
+// TestRouteOfACustomDatabaseKeepsItsDB covers a --db file outside any
+// checkout. The default database of the recorded root is another ledger,
+// so the plain route would not list the rows of this file.
+func TestRouteOfACustomDatabaseKeepsItsDB(t *testing.T) {
+	origin, _ := maintWorkspace(t, true)
+
+	db := filepath.Join(rootDir(t), "custom.db")
+
+	data, err := os.ReadFile(origin.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(db, data, 0o644))
+
+	row := rootPending(t, db, "custom-rule", "api", "A custom rule.")
+
+	ws, err := workspace.Resolve(rootDir(t), db)
+	require.NoError(t, err)
+
+	e := engNew(ws, Deps{})
+
+	_, err = e.CommitMaintenance(rootPrune(t, e))
+	require.ErrorIs(t, err, ErrForeignRoot)
+	assert.Contains(t, err.Error(), "open the console in "+origin.Root+" with this --db")
+
+	require.ErrorContains(t, e.Index().Database.BuildBlock, "open the console in "+origin.Root+" with this --db")
+	assert.True(t, e.Pins().Database.CustomDB)
+
+	var foreign *ForeignRootError
+	require.ErrorAs(t, err, &foreign)
+	assert.True(t, foreign.CustomDB)
+
+	// The route works: the console of the root with this file lists the
+	// row and writes it. The plain route opens another ledger.
+	named, err := workspace.Resolve(origin.Root, db)
+	require.NoError(t, err)
+
+	own := engNew(named, Deps{})
+
+	pv, err := own.PreviewDecision(proposals.ActionApply, []int64{row.ID})
+	require.NoError(t, err)
+
+	_, err = own.CommitDecision(pv)
+	require.NoError(t, err)
+	assert.Contains(t, rootFile(t, origin.Root), "custom-rule")
+	assert.Equal(t, domain.ProposalApplied, rootStatus(t, db, row.ID))
+	assert.Empty(t, rootStatus(t, origin.DBPath, row.ID), "the default ledger never held this row")
+}
+
+// TestRouteOfADatabaseOfTheRootNamesNoDB holds the plain route: the
+// default database of the root is this file, so a console there opens it.
+func TestRouteOfADatabaseOfTheRootNamesNoDB(t *testing.T) {
+	origin, _ := maintWorkspace(t, true)
+
+	ws, err := workspace.Resolve(rootDir(t), origin.DBPath)
+	require.NoError(t, err)
+
+	got := engNew(ws, Deps{}).Pins().Database
+	assert.False(t, got.CustomDB)
+	assert.NotContains(t, got.BuildBlock.Error(), "--db")
+}
+
+// TestRouteOfALinkedDefaultPathNamesNoDB covers a default path that links
+// to a file outside any checkout. The user gave no --db, so the route has
+// none to keep.
+func TestRouteOfALinkedDefaultPathNamesNoDB(t *testing.T) {
+	origin, _ := maintWorkspace(t, true)
+	side := rootCopy(t, origin, "side")
+
+	shared := filepath.Join(rootDir(t), "shared.db")
+	require.NoError(t, os.Rename(store.DefaultPath(side), shared))
+	require.NoError(t, os.Symlink(shared, store.DefaultPath(side)))
+
+	ws, err := workspace.Resolve(side, "")
+	require.NoError(t, err)
+
+	e := engNew(ws, Deps{})
+
+	_, err = e.CommitMaintenance(rootPrune(t, e))
+	require.ErrorIs(t, err, ErrForeignRoot)
+	assert.Contains(t, err.Error(), "open the console in "+origin.Root)
+	assert.NotContains(t, err.Error(), "--db")
 }

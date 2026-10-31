@@ -1504,7 +1504,7 @@ func (p *pinsView) authorRootLines(w int) []string {
 		return nil
 	}
 
-	return propLines(p.st.theme.Muted, "i and d still draft a change; to save it, "+pinOpenRoot(root)+".", w)
+	return propLines(p.st.theme.Muted, "i and d still draft a change; to save it, "+pinOpenRoot(p.st, root)+".", w)
 }
 
 // foreignLines explains why retarget and prune are off when the index
@@ -1520,7 +1520,7 @@ func (p *pinsView) foreignLines(w int) []string {
 		" and the ledger of this workspace, not "+ui.OneLine(filepath.Join(p.st.svc.Root(), pinfile.File))+".", w)
 
 	if pinsDBRoot(p.st) != "" {
-		return append(out, propLines(t.Muted, ovSentenceEnd(pinOpenRoot(root)), w)...)
+		return append(out, propLines(t.Muted, ovSentenceEnd(pinOpenRoot(p.st, root)), w)...)
 	}
 
 	out = append(out, propLines(t.Muted, "Build the index of this checkout from Overview (press 1, then b), or "+

@@ -187,7 +187,7 @@ func (m *maintModal) staleIndexNote() string {
 // note reads stale there too, and only the recorded root may build.
 func (m *maintModal) staleRoute() string {
 	if root := pinsDBRoot(m.st); root != "" {
-		return ovSentence(pinOpenRoot(root)) + " and build it there"
+		return ovSentence(pinOpenRoot(m.st, root)) + " and build it there"
 	}
 
 	return "Build it from Overview (press 1, then b)"
@@ -1142,7 +1142,7 @@ func (m *maintModal) refusalView(w int) ui.ModalOpts {
 func pinCommitRefusal(st *state, err error) string {
 	if errors.Is(err, services.ErrForeignRoot) && pinsOtherDB(st) {
 		return "The index records another repository root, so nothing was written. Open the console in that " +
-			"repository, because a save works there."
+			"repository" + pinKeepDB(pinsDatabase(st).CustomDB) + ", because a save works there."
 	}
 
 	return maintRefusal(st.theme, err, "review", "")

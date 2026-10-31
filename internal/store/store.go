@@ -126,6 +126,20 @@ func RootOwnsDatabase(root, dbPath string) bool {
 	return ClassifyDatabase(root, dbPath) != DatabaseOther
 }
 
+// LiesInOtherCheckout reports a file in the state directory of another
+// directory than root. Such a file belongs to that checkout, whatever
+// root it records, as a copied or a renamed database does.
+func LiesInOtherCheckout(root, dbPath string) bool {
+	resolved, err := filepath.EvalSymlinks(dbPath)
+	if err != nil {
+		return false
+	}
+
+	state := filepath.Dir(resolved)
+
+	return filepath.Base(state) == DefaultDir && !SameDirectory(filepath.Dir(state), root)
+}
+
 // ClassifyDatabase relates dbPath to root by file identity. A link
 // spelling names the same file with another string, so a string
 // comparison is not enough. Without two files, the clean paths decide,

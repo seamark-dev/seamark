@@ -184,6 +184,9 @@ type DatabaseFacts struct {
 	// than the workspace root, else "". A link spelling of the workspace
 	// root names the same directory, so it is no foreign root.
 	ForeignRoot string
+	// CustomDB reports a database that the console of ForeignRoot must
+	// name, because the default database of that root is another ledger.
+	CustomDB bool
 	// WriteBlock says why a write to the pin file and the ledger must not
 	// run, or nil. The maintenance commits and a proposal apply refuse it.
 	WriteBlock error

@@ -1131,3 +1131,46 @@ func TestWorktreeThatLinksToTheDatabaseOfItsRootWrites(t *testing.T) {
 		})
 	}
 }
+
+// TestScreensNameTheDBOfACustomDatabase covers every text of the route.
+// A console in the root without this file opens another ledger.
+func TestScreensNameTheDBOfACustomDatabase(t *testing.T) {
+	origin := dbRootRepo(t, "origin")
+
+	db := filepath.Join(dbRootDir(t), "custom.db")
+
+	data, err := os.ReadFile(store.DefaultPath(origin))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(db, data, 0o644))
+
+	id := dbRootNewRow(t, db)
+	want := "pen the console in " + origin + " with this --db"
+
+	h, svc := dbRootConsole(t, dbRootDir(t), db)
+	pinsCursorTo(h, 1)
+
+	assert.Contains(t, pinsDetail(t, h), want)
+
+	_, err = svc.CommitMaintenance(dbRootPrune(t, svc))
+	require.ErrorIs(t, err, services.ErrForeignRoot)
+	assert.Contains(t, foreignRefusal(err, "preview"), want)
+
+	pv, err := svc.PreviewDecision(proposals.ActionApply, []int64{id})
+	require.NoError(t, err)
+	assert.Contains(t, propRootText(pv.RootBlock, pinfile.File), want)
+
+	snap, err := svc.Settings()
+	require.NoError(t, err)
+	assert.Contains(t, settingsBlock(snap.Editable(settings.GroupPinWrite), settingsFile).route, want)
+
+	review := dbRootReview(t, h)
+
+	for _, b := range review.preview.Blockers {
+		if b.Kind == maintain.BlockForeignRoot {
+			assert.Contains(t, pinBlockerLine(review.st, b), "that repository with this --db")
+		}
+	}
+
+	h.press("esc", "esc", "1", "b")
+	assert.Contains(t, h.m.toast.text, want)
+}

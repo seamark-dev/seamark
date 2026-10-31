@@ -256,8 +256,23 @@ const (
 // the database of that repository and moves its recorded root, so that
 // checkout loses its maintenance. The pin is in the file of the recorded
 // root, and a save works in a console that runs there.
-func pinOpenRoot(root string) string {
-	return "open the console in " + ui.OneLine(root)
+func pinOpenRoot(st *state, root string) string {
+	return openRootRoute(root, pinsDatabase(st).CustomDB)
+}
+
+// openRootRoute names the console of root. custom keeps the --db of this
+// console, because the default database of root is another ledger.
+func openRootRoute(root string, custom bool) string {
+	return "open the console in " + ui.OneLine(root) + pinKeepDB(custom)
+}
+
+// pinKeepDB is the clause of a route that keeps the --db of this console.
+func pinKeepDB(custom bool) string {
+	if custom {
+		return " with this --db"
+	}
+
+	return ""
 }
 
 // pinForeignRoute is the route of a write that pinsForeignRoot stops. A
@@ -266,7 +281,7 @@ func pinOpenRoot(root string) string {
 // the console of the recorded root.
 func pinForeignRoute(st *state) string {
 	if root := pinsDBRoot(st); root != "" {
-		return pinOpenRoot(root)
+		return pinOpenRoot(st, root)
 	}
 
 	return pinRouteIndex
@@ -280,7 +295,7 @@ const pinForeignBuild = "Run seamark index in this checkout, or build the index 
 // the shell command when a build is the route.
 func pinForeignSentence(st *state) string {
 	if root := pinsDBRoot(st); root != "" {
-		return ovSentenceEnd(pinOpenRoot(root))
+		return ovSentenceEnd(pinOpenRoot(st, root))
 	}
 
 	return pinForeignBuild
@@ -301,7 +316,7 @@ func foreignRefusal(err error, noun string) string {
 
 	var foreign *services.ForeignRootError
 	if errors.As(err, &foreign) && foreign.OtherDB {
-		return lead + ovSentenceEnd(pinOpenRoot(foreign.Root))
+		return lead + ovSentenceEnd(openRootRoute(foreign.Root, foreign.CustomDB))
 	}
 
 	return lead + "Build the index of this workspace in Overview, then " + noun + " again."
@@ -361,7 +376,7 @@ func (p *pinsView) unlinkedNext(pin *maintain.Pin) string {
 		in.Doc.FileBlock != "", pinRegionLock(pinEntryRegions(pin.Entry)) != "":
 		return pinRouteByHand
 	case pinsDBRoot(p.st) != "":
-		return pinGoalForm + ", " + pinOpenRoot(pinsDBRoot(p.st))
+		return pinGoalForm + ", " + pinOpenRoot(p.st, pinsDBRoot(p.st))
 	case pinsForeignRoot(p.st) != "":
 		return pinRouteFormIndex
 	}
@@ -380,7 +395,7 @@ func (p *pinsView) replaceGate(pin *maintain.Pin) (why, next string) {
 	// A prune still runs under --db, and the authoring engine refuses the
 	// new pin.
 	if root := pinsDBRoot(p.st); root != "" {
-		return "the index records another repository, " + ui.OneLine(root), pinGoalReplace + ", " + pinOpenRoot(root)
+		return "the index records another repository, " + ui.OneLine(root), pinGoalReplace + ", " + pinOpenRoot(p.st, root)
 	}
 
 	if p.tailRefused(pin) {
