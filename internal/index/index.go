@@ -1043,12 +1043,27 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 // another directory. Only the default database belongs to root. A --db
 // database can belong to another repository, and a rebuild would move its
 // recorded root away from that repository. An empty recorded root says
-// nothing, so it is no difference. A link spelling of the root is the
-// same root. The hooks hash the recorded spelling, so a rebuild for the
-// spelling alone would change their keys.
+// nothing, so it is no difference.
 func recordsAnotherRoot(root, dbPath, recorded string) bool {
 	return recorded != "" && store.ClassifyDatabase(root, dbPath) == store.DatabaseDefault &&
-		!store.SameDirectory(recorded, root)
+		!sameSpelling(recorded, root)
+}
+
+// sameSpelling reports whether the recorded root resolves to the text of
+// root. It is a string test on purpose, unlike store.SameDirectory, which
+// a guard uses. The path readers compute relative paths against the
+// recorded text, so a rename that changes only the case needs a rebuild.
+// A link spelling resolves to the same text and needs none, because the
+// hooks hash the recorded spelling.
+func sameSpelling(recorded, root string) bool {
+	if filepath.Clean(recorded) == filepath.Clean(root) {
+		return true
+	}
+
+	resolvedRecorded, errRecorded := filepath.EvalSymlinks(recorded)
+	resolvedRoot, errRoot := filepath.EvalSymlinks(root)
+
+	return errRecorded == nil && errRoot == nil && resolvedRecorded == resolvedRoot
 }
 
 // WorkspaceState fingerprints the workspace content the index depends

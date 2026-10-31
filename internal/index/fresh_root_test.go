@@ -3,6 +3,7 @@ package index
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -217,4 +218,27 @@ func TestRunKeepsALinkedDatabaseOfAnotherWorktree(t *testing.T) {
 
 	assert.True(t, sum.Skipped, "the fingerprint matches, so the fast path holds")
 	assert.Equal(t, origin, recordedRoot(t, store.DefaultPath(origin)))
+}
+
+// TestRunHealsARenameThatChangesOnlyTheCase covers a case-insensitive
+// volume. The directory stays one directory, but the path readers compare
+// the recorded text, so an old spelling loses every absolute path lookup.
+func TestRunHealsARenameThatChangesOnlyTheCase(t *testing.T) {
+	root := indexedRepo(t)
+	parent := filepath.Dir(root)
+	renamed := filepath.Join(parent, strings.ToUpper(filepath.Base(root)))
+
+	if _, err := os.Stat(renamed); err != nil {
+		t.Skip("the volume is case-sensitive")
+	}
+
+	moved := filepath.Join(parent, "moved")
+	require.NoError(t, os.Rename(root, moved))
+	require.NoError(t, os.Rename(moved, renamed))
+
+	sum, err := Run(Options{Root: renamed})
+	require.NoError(t, err)
+
+	assert.False(t, sum.Skipped, "the recorded spelling is wrong, so the fast path does not hold")
+	assert.Equal(t, renamed, recordedRoot(t, store.DefaultPath(renamed)))
 }
