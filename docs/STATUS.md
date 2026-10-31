@@ -71,14 +71,14 @@ below remains distinct from required-before-release work.
 | Verification (`lessons --verify`, `check --lessons`, MCP `lesson_checks`) | **Unreleased**; shared bounded snapshot and result, CLI/TUI/MCP fixture coverage; default internal audit/lock exclusions already apply, but naming them in `not covered` remains a release fix |
 | Baseline, guard and post-edit hooks | **Unreleased**; Claude Edit/Write/MultiEdit and Codex apply_patch handlers, separate root/child paths; native denial, timeout and reply evidence pending; installed does not mean active or verified |
 | Codex Update projection | **Unreleased, incomplete**; content predicate gives unknown and an armed guard requests denial; verified before/after oracle and implementation required before release |
-| Setup and capability report | **Unreleased**; per-tool/stage/context paths, static binary checks, unknown-state warning/install and known-bad enforce refusal; setup never grants Codex trust; Claude duplicate-handler refusal and unreadable status/TUI summary fixes still required |
+| Setup and capability report | **Unreleased**; per-tool/stage/context paths, static binary checks, unknown-state warning/install and known-bad enforce refusal; setup never grants Codex trust; Claude and Codex setup refuse a certain second lesson-check handler and warn about an uncertain one; doctor, status and TUI summaries name an unreadable hook document |
 | Delivery report (`lessons --delivery`, `delivery/1`) | **Unreleased**; read-only version-isolated classes, timing, windows, reasons and metadata inspection; own-hook timing stays same-call-only, pending lane identity keeps otherwise negative windows incomplete, current `prevented: 0` |
 | TUI Pins checks | **Unreleased**; linked-pin mode/check editing, `M` definitions, `V` verification; native evidence unchanged |
 
-Timeout candidates, consistent duplicate refusal, summary/exclusion
-output fixes and the benchmark script-timeout flake remain open in the
-same checklist. None is completed by documenting it. Doctor keeps
-all-client coverage and warnings.
+Timeout candidates, the exclusion output fix and the benchmark
+script-timeout flake remain open in the same checklist. None is
+completed by documenting it. Doctor keeps all-client coverage and
+warnings.
 
 ## Guard — experimental
 

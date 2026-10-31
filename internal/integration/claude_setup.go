@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/approve"
@@ -168,15 +169,12 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 	// definition of a hook is the same evidence that inspection reads. It
 	// can be a wrapper in the shared file or any definition in the
 	// personal file. Setup reports it with its tools and its mode, and
-	// never edits it. Explicit enforce also reads the local file, because
-	// a local wrapper must not bypass the preflight refusal. Check mode
-	// reads it too, because the narrator states the capability of the
-	// pre-write path. A local wrapper or an unreadable file changes that
-	// capability. Plain init, without a lesson-check mode, does not read it.
+	// never edits it. readsClaudeLocalHooks says when a run reads the
+	// local file.
 	var local map[string]any
 	var localErr error
 
-	if req.CheckHookSources || req.LessonChecks == hooks.LessonChecksEnforce || req.LessonChecks == hooks.LessonChecksCheck {
+	if readsClaudeLocalHooks(req, settings) {
 		local, localErr = readLocalHooks(plan, root)
 	}
 
@@ -223,7 +221,75 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 
 	narration.lessons = lessons
 
+	return checkClaudeLessonHandlers(plan, settings, local, lessons.specs, req.LessonChecks != "")
+}
+
+// readsClaudeLocalHooks reports whether a run reads the local file. An
+// explicit setup reads it to report duplicate hooks. Explicit enforce
+// reads it, because a local wrapper must not bypass the preflight
+// refusal. Check mode reads it, because the narrator states the
+// capability of the pre-write path, and a local wrapper or an unreadable
+// file changes that capability. A run that keeps an installed
+// lesson-check mode reads it, because the rule of one handler per lesson
+// check holds for a kept handler too. Plain init in a repository without
+// a lesson-check hook does not read it.
+func readsClaudeLocalHooks(req ClientSetup, settings map[string]any) bool {
+	if req.CheckHookSources {
+		return true
+	}
+
+	mode := resolveLessonChecks(settings, claudeLessonHooks.specs(hooks.LessonChecksEnforce), req.LessonChecks)
+
+	return mode == hooks.LessonChecksCheck || mode == hooks.LessonChecksEnforce
+}
+
+// checkClaudeLessonHandlers applies the rule of one handler per lesson
+// check to the hooks that the plan merged. Claude Code runs every
+// matching definition of both settings files, so a second handler runs
+// each check twice. Only a run that installs or keeps a lesson-check
+// hook gets here with a spec, so a repository without one is not
+// refused for a definition of its own.
+//
+// Claude Code has several edit tools, and setup keeps a matcher that the
+// user narrowed. A definition for a tool that the managed handler does
+// not run for repeats no check, so it gets the finding alone.
+//
+// The exploration hook delivers advice and evaluates no check. So it
+// keeps the rule of the other advisory hooks: a finding and no refusal.
+// specs comes after the merge, so the shared file holds the managed
+// handlers. requested is true when the run names a lesson-check mode.
+func checkClaudeLessonHandlers(plan *ClientPlan, settings, local map[string]any, specs []hooks.Spec, requested bool) error {
+	for _, spec := range specs {
+		sources := claudeHookSources(&plan.Findings, settings, local, spec)
+
+		if spec.Marker != claudeExplorationSpec.Marker {
+			if err := refuseSecondLessonHandler(ClaudeID, spec, runsBesideManaged(spec, sources), requested); err != nil {
+				return err
+			}
+		}
+
+		sourceFindings(&plan.Findings, spec, sources)
+	}
+
 	return nil
+}
+
+// claudeHookSources lists every definition of the spec's hook in both
+// settings files. Setup manages the shared file only.
+func claudeHookSources(findings *[]Finding, settings, local map[string]any, spec hooks.Spec) []hookSource {
+	sources := documentSources(findings, settings, hooks.ClaudeMatcher, approve.ClaudeSettings, spec, true)
+
+	return append(sources, documentSources(findings, local, hooks.ClaudeMatcher, claudeLocalSettings, spec, false)...)
+}
+
+// runsBesideManaged keeps the definitions that setup does not manage and
+// that run for a tool of the managed handler.
+func runsBesideManaged(spec hooks.Spec, sources []hookSource) []hookSource {
+	managedTools := coveredTools(spec, sources, managedSource)
+
+	return slices.DeleteFunc(unmanagedSources(sources), func(s hookSource) bool {
+		return len(sharedTools(s.tools, managedTools)) == 0
+	})
 }
 
 // claudeLessonSources reads the state of the Claude Code hook sources
@@ -248,11 +314,11 @@ func claudeLessonSources(settings, local map[string]any, localErr error) lessonS
 
 // readLocalHooks reads the user's local settings file, the second hook
 // source Claude Code runs. Setup never edits it and never lets it change
-// what the shared file gets. Setup only reports a handler that both
-// files run. The plan guards the file, also when it is absent, because a
-// hook added to it after the plan would make the report wrong. Setup
-// reports a local file that it cannot read and continues, because setup
-// does not own that file.
+// what the shared file gets. Setup reports a handler that both files
+// run, and it refuses a second lesson-check handler. The plan guards the
+// file, also when it is absent, because a hook added to it after the
+// plan would make the report wrong. Setup reports a local file that it
+// cannot read and continues, because setup does not own that file.
 func readLocalHooks(plan *ClientPlan, root string) (map[string]any, error) {
 	skipped := func(err error) (map[string]any, error) {
 		plan.Findings = append(plan.Findings, uncheckedSourceFinding(claudeLocalSettings, "duplicate seamark hooks", err))
@@ -473,8 +539,7 @@ func inspectClaudeHooks(root string, evidence VerificationEvidence) (
 	findings = scratch.Findings
 
 	for i, spec := range hooks.ClaudeSpecs(hooks.ModeWarn) {
-		sources := documentSources(&findings, settings, hooks.ClaudeMatcher, approve.ClaudeSettings, spec, true)
-		sources = append(sources, documentSources(&findings, local, hooks.ClaudeMatcher, claudeLocalSettings, spec, false)...)
+		sources := claudeHookSources(&findings, settings, local, spec)
 
 		classifyHook(all[i], spec, sources)
 		sourceFindings(&findings, spec, sources)

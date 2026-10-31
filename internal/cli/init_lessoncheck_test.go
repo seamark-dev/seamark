@@ -288,12 +288,12 @@ func TestRunInitLessonChecksCallsNoInvoker(t *testing.T) {
 	assert.Contains(t, string(mustRead(t, root, ".codex/hooks.json")), "lessons --baseline --hook --client codex")
 }
 
-// TestRunInitLessonChecksNarratesLocalHookSources proves that the
-// narration of `init --lesson-checks` reads the personal hook file in
-// both modes, with and without --client (R-6). A local file that does
-// not parse, or a wrapper that discards the exit status of the
-// pre-write hook, makes that path inactive. So the init line must not
-// say active-unverified while status says inactive.
+// TestRunInitLessonChecksNarratesLocalHookSources proves that
+// `init --lesson-checks` reads the personal hook file in both modes,
+// with and without --client. A local file that does not parse makes the
+// path inactive, so the init line must not say active-unverified while
+// status says inactive. A wrapper that discards the exit status of the
+// pre-write hook is a second handler, so setup refuses it.
 func TestRunInitLessonChecksNarratesLocalHookSources(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -308,8 +308,8 @@ func TestRunInitLessonChecksNarratesLocalHookSources(t *testing.T) {
 	} {
 		for _, clients := range [][]string{{integration.ClaudeID}, nil} {
 			for _, mode := range []string{hooks.LessonChecksCheck, hooks.LessonChecksEnforce} {
-				// Enforce refuses a report-only wrapper before any write, so
-				// only the check run narrates it.
+				// Enforce refuses a report-only wrapper for its own reason
+				// before this check runs, so only the check mode reaches it.
 				if mode == hooks.LessonChecksEnforce && tc.reason == "report-only-wrapper" {
 					continue
 				}
@@ -320,6 +320,12 @@ func TestRunInitLessonChecksNarratesLocalHookSources(t *testing.T) {
 					require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.local.json"), []byte(tc.local), 0o644))
 
 					out, err := initLessonRun(t, root, binary, initRun{lessonChecks: mode}, clients...)
+					if tc.reason == "report-only-wrapper" {
+						require.ErrorContains(t, err, "setup refuses a second handler")
+
+						return
+					}
+
 					require.NoError(t, err)
 
 					report := integration.LessonCapability(integration.Builtin().Inspect(root), root, integration.SelfIdentity(""))

@@ -165,3 +165,114 @@ func TestStatusLessonChecksBlockAndJSON(t *testing.T) {
 		assert.Equal(t, false, report["config"].(map[string]any)["valid"])
 	})
 }
+
+// TestStatusLessonChecksUnreadableDocument proves that the block tells
+// an unreadable hook document from a document without a hook. The text
+// uses the words of doctor. The JSON keeps the closed installed mode and
+// its keys, so a reader of the report sees no new value, and the path
+// reason stays the machine-readable fact.
+func TestStatusLessonChecksUnreadableDocument(t *testing.T) {
+	seamark := statusSeamark(t)
+
+	const pins = "               codex   off · exploration inactive (no structured Read path)\n"
+
+	offLine := "lesson checks  claude  off · exploration inactive (not-installed)\n" + pins
+
+	settings := func(root string) string { return filepath.Join(root, ".claude", "settings.json") }
+	local := func(root string) string { return filepath.Join(root, ".claude", "settings.local.json") }
+	write := func(t *testing.T, path, text string) {
+		t.Helper()
+
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(text), 0o600))
+	}
+
+	seed := func(t *testing.T) (*store.Store, string) {
+		t.Helper()
+
+		st, root := seededStore(t)
+		write(t, filepath.Join(root, ".seamark", "lessons.yaml"), statusLessonsYAML)
+
+		return st, root
+	}
+
+	enforce := integration.ClientSetup{ClientID: integration.ClaudeID, LessonChecks: hooks.LessonChecksEnforce}
+
+	t.Run("an absent document reads off", func(t *testing.T) {
+		st, root := seed(t)
+		require.NoFileExists(t, settings(root))
+
+		_, text, _ := statusText(t, st, root)
+		assert.Contains(t, text, offLine)
+	})
+
+	t.Run("a valid document without a lesson-check hook reads off", func(t *testing.T) {
+		st, root := seed(t)
+		statusInstall(t, root, seamark, integration.ClientSetup{ClientID: integration.ClaudeID})
+
+		_, text, _ := statusText(t, st, root)
+		assert.Contains(t, text, offLine)
+	})
+
+	t.Run("an installed document reads its mode", func(t *testing.T) {
+		st, root := seed(t)
+		statusInstall(t, root, seamark, enforce)
+
+		_, text, _ := statusText(t, st, root)
+		assert.Contains(t, text, "lesson checks  claude  enforce · pre-write Edit, Write, MultiEdit active-unverified · ")
+		assert.NotContains(t, text, "unreadable")
+	})
+
+	t.Run("an unreadable document reads unreadable", func(t *testing.T) {
+		st, root := seed(t)
+		statusInstall(t, root, seamark, enforce)
+		write(t, settings(root), "{ not json")
+
+		s, text, doc := statusText(t, st, root)
+
+		reason := s.Clients[0].HookDocumentError
+		require.NotEmpty(t, reason)
+		assert.True(t, strings.HasPrefix(reason, ".claude/settings.json: "), reason)
+
+		assert.Contains(t, text, "lesson checks  claude  unreadable ("+reason+") · "+
+			"pre-write Edit, Write, MultiEdit inactive (document-unreadable) · post-edit inactive (document-unreadable) · "+
+			"exploration inactive (document-unreadable)\n"+pins)
+		assert.NotContains(t, text, "lesson checks  claude  off")
+
+		claude, ok := s.LessonChecks.Client(integration.ClaudeID)
+		require.True(t, ok)
+		assert.Equal(t, lessoncheck.InstalledOff, claude.Installed, "the enum keeps its closed set")
+
+		report := doc["lesson_checks"].(map[string]any)
+		first := report["clients"].([]any)[0].(map[string]any)
+		assert.Equal(t, "off", first["installed"], "the JSON report keeps the value")
+		assert.ElementsMatch(t, []string{"client", "installed", "paths", "attributions"}, mapKeys(first), "the JSON report keeps its keys")
+	})
+
+	t.Run("an unreadable supplemental source qualifies the installed mode", func(t *testing.T) {
+		st, root := seed(t)
+		statusInstall(t, root, seamark, enforce)
+		write(t, local(root), "{ not json")
+
+		_, text, _ := statusText(t, st, root)
+		assert.Contains(t, text, "lesson checks  claude  enforce (a hook source is unreadable) · pre-write ")
+	})
+
+	t.Run("an unreadable supplemental source beside no handler keeps off", func(t *testing.T) {
+		st, root := seed(t)
+		write(t, local(root), "{ not json")
+
+		_, text, _ := statusText(t, st, root)
+		assert.Contains(t, text, offLine, "no path reports the source, and doctor reads the same")
+	})
+}
+
+// mapKeys lists the keys of a JSON object.
+func mapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+
+	return keys
+}

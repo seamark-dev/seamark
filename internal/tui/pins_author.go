@@ -71,14 +71,25 @@ const (
 // pinUnknownNote returns the note of an unknown relationship. It names
 // only the edits that the form offers, so a form without the Mode and
 // Check rows never promises them. checks is the draft field of the same
-// name.
-func pinUnknownNote(checks bool) string {
+// name, and tail is what a save needs (pinsView.unknownTail).
+func pinUnknownNote(checks bool, tail string) string {
 	edits := "only a note edit"
 	if checks {
 		edits = "note, mode, and check edits"
 	}
 
-	return "relationship unknown: a linked pin allows " + edits + pinUnknownTail
+	return "relationship unknown: a linked pin allows " + edits + tail
+}
+
+// unknownTail returns what a save of a form with an unknown relationship
+// needs. Under --db of another root that is the console of that root,
+// because an index build there moves the root of the other repository.
+func (p *pinsView) unknownTail() string {
+	if root := pinsDBRoot(p.st); root != "" {
+		return "; to save, " + pinOpenRoot(root)
+	}
+
+	return pinUnknownTail
 }
 
 // pinField names the text field of the form that has the keys.
@@ -149,10 +160,11 @@ func newCreateDraft() *pinDraft {
 }
 
 // newEditDraft returns the edit draft of pin. known reports whether the
-// inspection knows the relationship of the pin.
-func newEditDraft(pin *maintain.Pin, known bool) *pinDraft {
+// inspection knows the relationship of the pin. routes is the
+// pinsView.lockRoutes of pin.
+func newEditDraft(pin *maintain.Pin, known bool, routes pinLockRoutes) *pinDraft {
 	d := &pinDraft{op: maintain.AuthorEdit}
-	d.load(pin, known)
+	d.load(pin, known, routes)
 
 	return d
 }
@@ -243,8 +255,9 @@ func pinStoredLock(lock string) bool {
 // Each widget gets the raw text only when it can edit it (pinEditable),
 // so an untouched field compares equal to the entry. Any other field is
 // read-only, and its lock names the reason (pinInputLock). A linked pin
-// locks its rule and scope, and keeps its note, mode, and check.
-func (d *pinDraft) load(pin *maintain.Pin, known bool) {
+// locks its rule and scope, and keeps its note, mode, and check. The draft
+// holds no state of the view, so the caller gives routes for those locks.
+func (d *pinDraft) load(pin *maintain.Pin, known bool, routes pinLockRoutes) {
 	e := pin.Entry
 	d.ref = e.Ref()
 	d.base = reviews.PinRule{Rule: e.Rule, Region: e.Region, Regions: e.Regions, Note: e.Note}
@@ -265,33 +278,41 @@ func (d *pinDraft) load(pin *maintain.Pin, known bool) {
 
 	d.scope, d.regions = pinBaseScope(d.base)
 
-	// The probe is the input that edits a region (startRegion). So the
-	// form names the reason when it opens, not after the first edit key.
-	// One lock covers every region row. So the loop checks every region
-	// and keeps the order of pinInputLock: a refused character in any
-	// region comes before a length.
-	probe := pathInput()
-
-	for _, r := range d.regions {
-		lock := pinInputLock(&probe, r)
-		if lock == pinTextLock {
-			d.scopeLock = lock
-
-			break
-		}
-
-		if d.scopeLock == "" {
-			d.scopeLock = lock
-		}
-	}
+	d.scopeLock = pinRegionLock(d.regions)
 
 	if pinRuleScopeLocked(pin, known) {
 		// The rule is the recorded rule of the proposal, so a new rule
-		// is a new pin. The scope has its own route, the retarget.
+		// is a new pin. The scope has its own route: the retarget while w
+		// offers it, else the reason and the next action.
 		linked := "linked to proposal #" + strconv.FormatInt(pin.Link.Applied[0].ID, 10)
-		d.ruleLock = linked + "; to change the rule, use - Prune and add a new pin with n"
-		d.scopeLock = linked + "; change the scope with w Retarget"
+		d.ruleLock = linked + "; " + routes.rule
+		d.scopeLock = linked + "; " + routes.scope
 	}
+}
+
+// pinRegionLock returns why the form cannot edit the stored regions, or
+// "". The next action of a retarget asks it too, so the route and the form
+// agree. The probe is the input that edits a region (startRegion). So the
+// form names the reason when it opens, not after the first edit key. One
+// lock covers every region row. So the loop checks every region and keeps
+// the order of pinInputLock: a refused character in any region comes
+// before a length.
+func pinRegionLock(regions []string) string {
+	probe := pathInput()
+	lock := ""
+
+	for _, r := range regions {
+		found := pinInputLock(&probe, r)
+		if found == pinTextLock {
+			return found
+		}
+
+		if lock == "" {
+			lock = found
+		}
+	}
+
+	return lock
 }
 
 // pinDraftMode returns the mode that a raw mode key reads as in the
@@ -416,7 +437,8 @@ func (d *pinDraft) dirty() bool {
 // A pin that the reload shows as linked allows note, mode, and check
 // edits. Its rule and scope edits go away, because the review refuses
 // them. follow returns the dropped field names for the message of reconcile.
-func (d *pinDraft) follow(pin *maintain.Pin, known bool, how pinRebind) (dropped []string) {
+// routes is the pinsView.lockRoutes of pin.
+func (d *pinDraft) follow(pin *maintain.Pin, known bool, how pinRebind, routes pinLockRoutes) (dropped []string) {
 	old := d.base
 	oldScope, oldRegions := pinBaseScope(old)
 	ruleW, noteW := d.rule, d.note
@@ -428,7 +450,7 @@ func (d *pinDraft) follow(pin *maintain.Pin, known bool, how pinRebind) (dropped
 	mode, check := d.mode, d.check
 	modeEdited, checkEdited := mode != pinDraftMode(d.baseMode), check != d.baseCheck
 
-	d.load(pin, known)
+	d.load(pin, known, routes)
 
 	// A link never locks the lesson-check keys, so an edit of them stays.
 	if modeEdited {
@@ -774,13 +796,16 @@ func (r *pinReview) confirmable() bool {
 }
 
 // routes reports a blocker that o can open (A4 hand-off: route by
-// BlockKind). The ledger and the root lead to the index build. The gate
-// leads to Settings only while it reads, because a gate that does not
-// read has no setting to change.
+// BlockKind). The ledger and the root lead to the index build, but the
+// root does not under --db (pinOpenRoot). The gate leads to Settings only
+// while it reads, because a gate that does not read has no setting to
+// change.
 func (r *pinReview) routes(b maintain.AuthorBlocker) bool {
 	switch b.Kind {
-	case maintain.BlockLedger, maintain.BlockForeignRoot:
+	case maintain.BlockLedger:
 		return true
+	case maintain.BlockForeignRoot:
+		return !pinsOtherDB(r.st)
 	case maintain.BlockGate:
 		return r.preview.GateErr == nil
 	}
@@ -1343,7 +1368,7 @@ func (p *pinsView) editPin() tea.Cmd {
 
 	d := a.edits[ref]
 	if d == nil {
-		d = newEditDraft(pin, p.authorKnown(p.inspection()))
+		d = newEditDraft(pin, p.authorKnown(p.inspection()), p.lockRoutes(pin))
 		a.edits[ref] = d
 	}
 
@@ -1555,7 +1580,8 @@ func (p *pinsView) rebindDrafts() []string {
 			notes = append(notes, "The pin of the edit draft of "+label+" changed since the draft started")
 		}
 
-		dropped := d.follow(&in.Pins[i], known, how)
+		routes := p.lockRoutes(&in.Pins[i])
+		dropped := d.follow(&in.Pins[i], known, how, routes)
 		d.setChecks(p.checkShown(), in.Checks.IDs())
 
 		// A reload can change the request at the same binding: a new
@@ -1566,7 +1592,7 @@ func (p *pinsView) rebindDrafts() []string {
 		}
 
 		if len(dropped) > 0 {
-			notes = append(notes, pinDroppedNote(dropped, label, in.Pins[i].Link.Applied[0].ID, d.checks))
+			notes = append(notes, pinDroppedNote(dropped, label, in.Pins[i].Link.Applied[0].ID, d.checks, routes.scope))
 		}
 
 		if open {
@@ -1642,8 +1668,9 @@ func sameAuthorRequest(a, b maintain.AuthorRequest) bool {
 // pinDroppedNote names the edits that a new link removed from a draft,
 // and the route that changes the scope of a linked pin. checks is true
 // when the form offers the Mode and Check rows, so the note never names
-// an edit that the form cannot make.
-func pinDroppedNote(dropped []string, label string, id int64, checks bool) string {
+// an edit that the form cannot make. route is the pinsView.scopeRoute of
+// the pin.
+func pinDroppedNote(dropped []string, label string, id int64, checks bool, route string) string {
 	edits := " edit"
 	if len(dropped) > 1 {
 		edits = " edits"
@@ -1655,7 +1682,7 @@ func pinDroppedNote(dropped []string, label string, id int64, checks bool) strin
 	}
 
 	return "The " + strings.Join(dropped, " and ") + edits + " of " + label + " went away: the pin is linked to " +
-		propID(id) + ", so only " + allowed + " can change here; change the scope with w Retarget"
+		propID(id) + ", so only " + allowed + " can change here; " + route
 }
 
 // orphan handles an edit draft without a unique entry and returns the

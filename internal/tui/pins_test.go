@@ -382,7 +382,7 @@ func TestPinsHiddenKeysNameTheTargetAndTheReason(t *testing.T) {
 	// Without marks the cursor pin is the target, so the note names it
 	// after the reason.
 	h.press("w")
-	assert.Equal(t, `No retarget: its regions are already current ("wrap-sql-errors").`, h.m.toast.text)
+	assert.Equal(t, `No retarget: its regions are already current ("wrap-sql-errors"). `+pinsReplaceSentence, h.m.toast.text)
 
 	h.press("t")
 	assert.Equal(t, `No trigger extraction: its trigger paths are already stored ("wrap-sql-errors").`,
@@ -391,7 +391,7 @@ func TestPinsHiddenKeysNameTheTargetAndTheReason(t *testing.T) {
 	pinsCursorTo(h, 4)
 	h.press("w")
 	assert.Equal(t, "No retarget: its scope is unknown: scope advice needs an indexed database (the index is "+
-		"stale); build it with `seamark index` (\"close-database-handles\").", h.m.toast.text)
+		"stale); build it with `seamark index` (\"close-database-handles\"). "+pinsReplaceSentence, h.m.toast.text)
 
 	// With marks the selection is the target, so the note says so and
 	// names the selected pin whose reason it gives.
@@ -400,7 +400,7 @@ func TestPinsHiddenKeysNameTheTargetAndTheReason(t *testing.T) {
 	pinsCursorTo(h, 1)
 	h.press("w")
 	assert.Equal(t, `No retarget: no cited finding is living, so no scope can be computed ("close-db-handles", `+
-		"the selected pin).", h.m.toast.text)
+		"the selected pin). "+pinsReplaceSentence, h.m.toast.text)
 
 	h.press("t")
 	assert.Equal(t, `No trigger extraction: no cited finding is living ("close-db-handles", the selected pin).`,
@@ -410,7 +410,7 @@ func TestPinsHiddenKeysNameTheTargetAndTheReason(t *testing.T) {
 	pinsCursorTo(h, 4)
 	h.press("space", "w")
 	assert.Equal(t, `No retarget: no cited finding is living, so no scope can be computed ("close-db-handles", `+
-		"the first of 2 selected pins).", h.m.toast.text)
+		"the first of 2 selected pins). "+pinsReplaceSentence, h.m.toast.text)
 
 	// A history row is no target at all.
 	h.press("x", "f", "w")
@@ -1325,7 +1325,7 @@ func TestPinsRetargetNamesThePinThatHasTheComputedRegions(t *testing.T) {
 		assert.NotContains(t, text, "w previews a retarget", c.name)
 
 		h.press("w")
-		assert.Equal(t, "No retarget: "+c.owner+` ("check-nil-errors").`, h.m.toast.text, c.name)
+		assert.Equal(t, "No retarget: "+c.owner+` ("check-nil-errors"). `+pinsReplaceSentence, h.m.toast.text, c.name)
 		assert.False(t, pinsOf(h).host.open(), "%s: w opens no preview that can only refuse", c.name)
 		assert.Empty(t, f.called(), c.name)
 	}

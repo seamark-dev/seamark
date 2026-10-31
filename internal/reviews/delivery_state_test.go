@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -206,7 +207,7 @@ func TestHookDeliveryStateVersionTwoStopsAnOlderBinary(t *testing.T) {
 	root := t.TempDir()
 
 	lease, err := BeginContextDelivery(root, DeliveryContext{ClientID: "claude", ReceiverID: "session"},
-		[]model.Lesson{{Region: "api", Symptom: "lesson"}})
+		unversionedItems([]model.Lesson{{Region: "api", Symptom: "lesson"}}))
 	require.NoError(t, err)
 	require.NoError(t, lease.Commit())
 	require.NoError(t, lease.Close())
@@ -277,6 +278,148 @@ func TestHookDeliveryStateDiscardsVersionOneEntries(t *testing.T) {
 	assert.Contains(t, string(raw), `"version":2`)
 }
 
+// deliverItems runs one lease over items and commits it. It returns what
+// the lease injected.
+func deliverItems(t *testing.T, root string, dc DeliveryContext, items []DeliveryItem) []model.Lesson {
+	t.Helper()
+
+	lease, err := BeginContextDelivery(root, dc, items)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, lease.Close()) }()
+
+	require.NoError(t, lease.Commit())
+
+	return lease.Inject()
+}
+
+func TestContextDeliveryKeysAPinByItsVersion(t *testing.T) {
+	root := t.TempDir()
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session"}
+	lesson := model.Lesson{Region: "api", Symptom: "frozen-assets — one text for two versions"}
+
+	first := DeliveryItem{Lesson: lesson, PinVersion: strings.Repeat("a", 64)}
+	second := DeliveryItem{Lesson: lesson, PinVersion: strings.Repeat("b", 64)}
+
+	assert.Len(t, deliverItems(t, root, dc, []DeliveryItem{first}), 1)
+	assert.Empty(t, deliverItems(t, root, dc, []DeliveryItem{first}), "one version reaches a context once")
+	assert.Len(t, deliverItems(t, root, dc, []DeliveryItem{second}), 1, "a new version of one text is new to the context")
+	assert.Empty(t, deliverItems(t, root, dc, []DeliveryItem{first}), "the context keeps the earlier version")
+
+	// A failed reply commits nothing, so the new version stays eligible.
+	third := DeliveryItem{Lesson: lesson, PinVersion: strings.Repeat("c", 64)}
+
+	lease, err := BeginContextDelivery(root, dc, []DeliveryItem{third})
+	require.NoError(t, err)
+	assert.Len(t, lease.Inject(), 1)
+	require.NoError(t, lease.Close())
+	assert.Len(t, deliverItems(t, root, dc, []DeliveryItem{third}), 1)
+
+	require.NoError(t, ResetContextDelivery(root, dc))
+	assert.Len(t, deliverItems(t, root, dc, []DeliveryItem{first}), 1, "a reset clears every version")
+
+	other := DeliveryContext{ClientID: "claude", ReceiverID: "child"}
+	assert.Len(t, deliverItems(t, root, other, []DeliveryItem{first}), 1, "a version in one context hides nothing in another")
+}
+
+// TestContextDeliveryKeepsOneItemPerEvent proves the dedupe within one
+// lease. A repeated pin version and a repeated mined lesson each go out once.
+func TestContextDeliveryKeepsOneItemPerEvent(t *testing.T) {
+	root := t.TempDir()
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session"}
+	pin := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "pin"}, PinVersion: strings.Repeat("a", 64)}
+	mined := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "RUF001"}}
+
+	lease, err := BeginContextDelivery(root, dc, []DeliveryItem{pin, pin, mined, mined})
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, lease.Close()) }()
+
+	assert.Equal(t, []model.Lesson{pin.Lesson, mined.Lesson}, lease.Inject())
+	assert.Equal(t, []model.Lesson{pin.Lesson, mined.Lesson}, lease.Suppressed())
+}
+
+// TestContextDeliveryNamesTheInjectedPinVersions proves the list that names
+// the pins of an event. One lesson text cannot do that, because two
+// versions of a pin can render it. A mined lesson has no entry in the list.
+func TestContextDeliveryNamesTheInjectedPinVersions(t *testing.T) {
+	root := t.TempDir()
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session"}
+	lesson := model.Lesson{Region: "api", Symptom: "one text"}
+	delivered := DeliveryItem{Lesson: lesson, PinVersion: strings.Repeat("a", 64)}
+	fresh := DeliveryItem{Lesson: lesson, PinVersion: strings.Repeat("b", 64)}
+	mined := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "RUF001"}}
+
+	require.Len(t, deliverItems(t, root, dc, []DeliveryItem{delivered}), 1)
+
+	lease, err := BeginContextDelivery(root, dc, []DeliveryItem{delivered, fresh, fresh, mined})
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, lease.Close()) }()
+
+	assert.Equal(t, []string{fresh.PinVersion}, lease.InjectedPinVersions())
+	assert.Equal(t, []model.Lesson{lesson, mined.Lesson}, lease.Inject())
+	assert.Equal(t, []model.Lesson{lesson, lesson}, lease.Suppressed())
+}
+
+// TestContextDeliveryFailsSafeOverEarlierContentKeys holds the upgrade
+// rule. A file from a binary with content keys for pins stays readable. A
+// pin in it is delivered once more and never hidden. A mined lesson keeps
+// its entry. The rewritten file keeps the shape that an older binary reads.
+func TestContextDeliveryFailsSafeOverEarlierContentKeys(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".seamark")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session"}
+	pin := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "pin text"}, PinVersion: strings.Repeat("a", 64)}
+	mined := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "RUF001"}}
+
+	// The state of an earlier binary: both lessons are delivered under
+	// their content digests, at generation 4.
+	earlier := fmt.Sprintf(
+		`{"version":2,"contexts":{%q:{"generation":4,"updated_at":%q,"delivered":{%q:true,%q:true}}}}`,
+		contextDigest(root, dc), time.Now().UTC().Format(time.RFC3339),
+		lessonDeliveryDigest(pin.Lesson), lessonDeliveryDigest(mined.Lesson))
+	path := filepath.Join(dir, deliveryStateFile)
+	require.NoError(t, os.WriteFile(path, []byte(earlier+"\n"), 0o600))
+
+	lease, err := BeginContextDelivery(root, dc, []DeliveryItem{pin, mined})
+	require.NoError(t, err)
+	assert.Equal(t, []model.Lesson{pin.Lesson}, lease.Inject(), "at worst a pin is delivered again")
+	assert.Equal(t, []model.Lesson{mined.Lesson}, lease.Suppressed(), "a mined lesson keeps its entry")
+	assert.Equal(t, uint64(4), lease.Generation(), "the context keeps its generation")
+	require.NoError(t, lease.Commit())
+	require.NoError(t, lease.Close())
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"version":2`)
+
+	// The file has no new field, so the strict reader of an older binary
+	// accepts it. Its digest finds no entry for the new key, and the older
+	// binary delivers again instead of hiding the pin.
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+
+	var older struct {
+		Version  int `json:"version"`
+		Contexts map[string]struct {
+			Generation uint64          `json:"generation"`
+			UpdatedAt  time.Time       `json:"updated_at"`
+			Delivered  map[string]bool `json:"delivered"`
+		} `json:"contexts"`
+	}
+
+	require.NoError(t, decoder.Decode(&older))
+
+	delivered := older.Contexts[contextDigest(root, dc)].Delivered
+	assert.True(t, delivered[pin.digest()])
+	assert.NotEqual(t, lessonDeliveryDigest(pin.Lesson), pin.digest())
+
+	assert.Empty(t, deliverItems(t, root, dc, []DeliveryItem{pin, mined}), "suppression works under the new key")
+}
+
 func TestContextDeliverySeparatesClientsAndReceivers(t *testing.T) {
 	root := t.TempDir()
 	lessons := []model.Lesson{{Region: "api", Symptom: "lesson"}}
@@ -284,7 +427,7 @@ func TestContextDeliverySeparatesClientsAndReceivers(t *testing.T) {
 	deliver := func(receiver DeliveryContext) int {
 		t.Helper()
 
-		lease, err := BeginContextDelivery(root, receiver, lessons)
+		lease, err := BeginContextDelivery(root, receiver, unversionedItems(lessons))
 		require.NoError(t, err)
 		require.NoError(t, lease.Commit())
 		require.NoError(t, lease.Close())
@@ -328,7 +471,7 @@ func TestContextDeliveryRefusesAPartialIdentity(t *testing.T) {
 	partial := []DeliveryContext{{}, {ClientID: "claude"}, {ReceiverID: "session"}}
 
 	for _, dc := range partial {
-		_, err := BeginContextDelivery(root, dc, lessons)
+		_, err := BeginContextDelivery(root, dc, unversionedItems(lessons))
 		require.Error(t, err, "%+v", dc)
 		require.NoError(t, ResetContextDelivery(root, dc), "a partial identity resets nothing")
 	}
@@ -337,7 +480,7 @@ func TestContextDeliveryRefusesAPartialIdentity(t *testing.T) {
 
 	// The rule matters most when state exists: a reset with a partial
 	// identity must not rewrite the file or add an entry to it.
-	lease, err := BeginContextDelivery(root, DeliveryContext{ClientID: "claude", ReceiverID: "session"}, lessons)
+	lease, err := BeginContextDelivery(root, DeliveryContext{ClientID: "claude", ReceiverID: "session"}, unversionedItems(lessons))
 	require.NoError(t, err)
 	require.NoError(t, lease.Commit())
 	require.NoError(t, lease.Close())
@@ -366,7 +509,7 @@ func TestResetContextGenerationReportsTheNewGeneration(t *testing.T) {
 	assert.Zero(t, generation)
 	assert.NoDirExists(t, filepath.Join(root, ".seamark"))
 
-	lease, err := BeginContextDelivery(root, dc, lessons)
+	lease, err := BeginContextDelivery(root, dc, unversionedItems(lessons))
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), lease.Generation())
 	require.NoError(t, lease.Commit())
@@ -378,7 +521,7 @@ func TestResetContextGenerationReportsTheNewGeneration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, want, generation)
 
-		lease, err = BeginContextDelivery(root, dc, lessons)
+		lease, err = BeginContextDelivery(root, dc, unversionedItems(lessons))
 		require.NoError(t, err)
 		assert.Equal(t, want, lease.Generation())
 		assert.Equal(t, lessons, lease.Inject(), "the reset restores the delivered lesson")

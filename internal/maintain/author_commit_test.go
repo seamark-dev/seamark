@@ -510,3 +510,30 @@ func TestStaleErrorMatchesErrStale(t *testing.T) {
 	require.ErrorIs(t, err, ErrStale)
 	assert.True(t, strings.HasSuffix(err.Error(), ": file bytes; new owner: pending #9"))
 }
+
+// TestLinkedPinReplaceRouteChangesTheScope runs the route that Pins names
+// for a linked pin without a retarget, through the real engines. A prune
+// removes the pin, and a new pin takes other regions. So the route
+// promises a change that a person can finish.
+func TestLinkedPinReplaceRouteChangesTheScope(t *testing.T) {
+	f := pruneFixture(t)
+
+	pruned := f.plan(f.deps(), f.request(ActionPrune, "ruff-unused-import@scripts"))
+	require.True(t, pruned.Confirmable, "blocked: %v", pruned.Blocked)
+
+	_, err := Commit(f.deps(), pruned)
+	require.NoError(t, err)
+
+	created := f.authorPlan(f.deps(), AuthorRequest{
+		Op: AuthorCreate, Rule: "ruff-unused-import", Note: "Remove unused imports in the tools.",
+		Scope: ScopeRegions, Regions: []string{"tools"},
+	})
+	require.True(t, created.Confirmable, "blocked: %v", blockerLines(created))
+
+	res, err := CommitAuthor(f.deps(), created)
+	require.NoError(t, err)
+	assert.Equal(t, Written, res.Outcome)
+
+	assert.Contains(t, f.lessons(), "region: tools")
+	assert.NotContains(t, f.lessons(), "region: scripts")
+}

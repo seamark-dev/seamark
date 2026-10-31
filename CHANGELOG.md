@@ -33,6 +33,18 @@ model-boundary delivery.
 - **Console controls.** Pins can edit mode/check on linked pins,
   author check definitions (`M`), and verify (`V`). Read-only browsing
   never applies a decision.
+- **Copied checkouts.** `seamark index` and the Overview build rebuild
+  a default index that records another root, so a copy no longer stays
+  on the root of its origin.
+- **Pin repeats.** With `once-per-context`, a delivered pin follows its
+  version, so a mode or check change can deliver it again. Mined lessons
+  keep their content key.
+- **Second lesson handlers.** Claude setup refuses a certain second
+  lesson-check handler as Codex does, and warns about an uncertain one.
+- **Unreadable hook documents.** Status and the console read
+  `unreadable`, as doctor does, not `off`.
+- **Retarget route.** A linked pin names `w` Retarget only while `w`
+  works; otherwise Pins gives the reason and a next action.
 
 See [current capability states](docs/STATUS.md#unreleased--lesson-checks-and-lesson-delivery)
 and the [lesson guide](docs/lessons.md) for limits and commands.

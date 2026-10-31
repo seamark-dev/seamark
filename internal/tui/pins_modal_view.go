@@ -175,8 +175,19 @@ func (m *maintModal) staleIndexNote() string {
 		built = " built " + ageSince(v.Probe.IndexedAt)
 	}
 
-	return "Scope advice reads a stale index" + built + ". Build it from Overview (press 1, then b) to compute " +
-		"the regions from the current history."
+	return "Scope advice reads a stale index" + built + ". " + m.staleRoute() + " to compute the regions from " +
+		"the current history."
+}
+
+// staleRoute names the build that refreshes the scope advice. A retarget
+// stays on under --db, and the freshness compares this workspace. So the
+// note reads stale there too, and only the recorded root may build.
+func (m *maintModal) staleRoute() string {
+	if root := pinsDBRoot(m.st); root != "" {
+		return ovSentence(pinOpenRoot(root)) + " and build it there"
+	}
+
+	return "Build it from Overview (press 1, then b)"
 }
 
 // planTitle names the action and the selection. A prune verb takes the
@@ -1122,6 +1133,18 @@ func (m *maintModal) refusalView(w int) ui.ModalOpts {
 		Title: t.Attention.Render("Not written"), Body: body, Actions: m.resultActions(false),
 		Tail: propNote(t, ui.ToneAttention, next, w),
 	}
+}
+
+// pinCommitRefusal is maintRefusal for a pin commit. A maintenance commit
+// refuses another root only with the default database, where a build
+// helps. A pin commit also refuses it under --db (pinOpenRoot).
+func pinCommitRefusal(st *state, err error) string {
+	if errors.Is(err, services.ErrForeignRoot) && pinsOtherDB(st) {
+		return "The index records another repository root, so nothing was written. Open the console in that " +
+			"repository, because a save works there."
+	}
+
+	return maintRefusal(st.theme, err, "review", "")
 }
 
 // maintRefusal maps a commit refusal to one sentence. Every refusal

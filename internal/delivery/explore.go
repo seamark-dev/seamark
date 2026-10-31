@@ -231,38 +231,21 @@ func Explore(ctx context.Context, st *store.Store, req ExploreRequest, emit Emit
 }
 
 // explorePinDeliveries returns the delivery of each selected pin of sel,
-// in the order of sel.Pins. A pin whose version is among the sent items
-// gets sent, and every other selected pin gets suppressed-repeat. The
-// match uses the pin version, the key of the exploration state. So two
-// pins with one lesson text and two versions stay apart.
+// in the order of sel.Pins. sentItems holds the items that the event
+// sends, and pinDeliveries holds the rule. The match uses the pin version,
+// the key of the exploration state.
 func explorePinDeliveries(cfg *reviews.Config, sel report.Selection, sentItems []reviews.ExploreItem,
 	sent reviews.PinDelivery,
 ) []reviews.PinDelivery {
-	// The lease sends one pin version once. Without a lease, every pin
-	// is sent, also a repeated version, so the count keeps each one.
-	pending := make(map[string]int, len(sentItems))
+	sentPins := make([]string, 0, len(sentItems))
 
 	for _, item := range sentItems {
 		if item.Kind == reviews.ExploreItemPin {
-			pending[item.ID]++
+			sentPins = append(sentPins, item.ID)
 		}
 	}
 
-	deliveries := make([]reviews.PinDelivery, len(sel.Pins))
-
-	for i, sp := range sel.Pins {
-		version := cfg.PinVersion(sp.Pin)
-		if pending[version] > 0 {
-			deliveries[i] = sent
-			pending[version]--
-
-			continue
-		}
-
-		deliveries[i] = reviews.PinSuppressedRepeat
-	}
-
-	return deliveries
+	return pinDeliveries(selectedVersions(cfg, sel), sentPins, sent)
 }
 
 // exploreItems maps a selection to the items of the exploration state,

@@ -80,7 +80,7 @@ func commitExplore(t *testing.T, root string, dc DeliveryContext, items []Explor
 func seedEditState(t *testing.T, root string, dc DeliveryContext, lessons []model.Lesson) []byte {
 	t.Helper()
 
-	lease, err := BeginContextDelivery(root, dc, lessons)
+	lease, err := BeginContextDelivery(root, dc, unversionedItems(lessons))
 	require.NoError(t, err)
 	require.Equal(t, lessons, lease.Inject())
 	require.NoError(t, lease.Commit())
@@ -420,7 +420,7 @@ func TestExploreLeaseCommitsOnlyAfterEmitAndIsExclusive(t *testing.T) {
 	assert.NoFileExists(t, editStatePath(root))
 	assert.NoFileExists(t, filepath.Join(root, ".seamark", deliveryLockFile))
 
-	edit, err := BeginContextDelivery(root, exploreTestContext, lessonsOf(items))
+	edit, err := BeginContextDelivery(root, exploreTestContext, unversionedItems(lessonsOf(items)))
 	require.NoError(t, err)
 	assert.Equal(t, lessonsOf(items), edit.Inject(), "the edit reminder still fires after exploration")
 	assert.Empty(t, edit.Suppressed())
@@ -450,7 +450,7 @@ func TestExploreLeaseCommitsOnlyAfterEmitAndIsExclusive(t *testing.T) {
 	assert.Equal(t, editBefore, editAfter, "exploration never writes deliveryContextState.Delivered")
 
 	// The edit hook still suppresses what it delivered itself, and only that.
-	edit, err = BeginContextDelivery(populated, exploreTestContext, lessonsOf(items))
+	edit, err = BeginContextDelivery(populated, exploreTestContext, unversionedItems(lessonsOf(items)))
 	require.NoError(t, err)
 	assert.Empty(t, edit.Inject())
 	assert.Equal(t, lessonsOf(items), edit.Suppressed())

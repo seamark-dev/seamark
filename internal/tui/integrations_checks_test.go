@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,7 +12,9 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/tui/services/servicestest"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // The tests of the read-only "Lesson checks" section of the Integrations
@@ -107,6 +111,118 @@ func TestTUILessonChecksSetupView(t *testing.T) {
 	})
 }
 
+// TestTUILessonChecksUnreadableDocument proves that the section tells
+// an unreadable hook document from a document without a hook. It uses
+// the words of doctor. It stays visible without an executable pin,
+// because an unreadable document can hold a hook. It names no binary
+// and offers no setup command, because setup stops at that file.
+func TestTUILessonChecksUnreadableDocument(t *testing.T) {
+	settings := func(t *testing.T, ws workspace.Workspace, rel, text string) {
+		t.Helper()
+
+		require.NoError(t, os.MkdirAll(filepath.Join(ws.Root, ".claude"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(ws.Root, filepath.FromSlash(rel)), []byte(text), 0o600))
+	}
+
+	t.Run("an absent document reads off", func(t *testing.T) {
+		_, svc, _, _ := checkEngine(t)
+
+		h := newHarness(t, svc, 160, 50)
+		h.press("2")
+
+		claude := lessonDetailText(t, h, integration.ClaudeID)
+		assert.Contains(t, claude, "LESSON CHECKS Installed off Config")
+		assert.Contains(t, claude, "not-installed")
+		assert.Contains(t, claude, "Set up", "a readable document can take the install")
+	})
+
+	t.Run("a valid document without a lesson-check hook reads off", func(t *testing.T) {
+		ws, svc, _, _ := checkEngine(t)
+		settings(t, ws, ".claude/settings.json", `{"hooks":{}}`)
+
+		h := newHarness(t, svc, 160, 50)
+		h.press("2")
+
+		assert.Contains(t, lessonDetailText(t, h, integration.ClaudeID), "LESSON CHECKS Installed off Config")
+	})
+
+	t.Run("an installed document reads its mode", func(t *testing.T) {
+		ws, svc, _, _ := checkEngine(t)
+		installClaudeGuard(t, ws)
+
+		h := newHarness(t, svc, 160, 50)
+		h.press("2")
+
+		claude := lessonDetailText(t, h, integration.ClaudeID)
+		assert.Contains(t, claude, "LESSON CHECKS Installed enforce Config")
+		assert.Contains(t, claude, "Binary test")
+		assert.NotContains(t, claude, "unreadable")
+	})
+
+	t.Run("an unreadable document reads unreadable", func(t *testing.T) {
+		ws, svc, _, _ := checkEngine(t)
+		installClaudeGuard(t, ws)
+		settings(t, ws, ".claude/settings.json", "{ not json")
+
+		h := newHarness(t, svc, 160, 50)
+		h.press("2")
+
+		claude := lessonDetailText(t, h, integration.ClaudeID)
+		assert.Contains(t, claude, "LESSON CHECKS Installed unreadable (.claude/settings.json: ")
+		assert.NotContains(t, claude, "Installed off")
+		assert.Contains(t, claude, "pre-write Edit in root: inactive (document-unreadable)")
+		assert.NotContains(t, claude, "Set up", "setup stops at a file that does not parse")
+		assert.NotContains(t, claude, "Binary", "the hooks of the file are unknown")
+		assert.NotContains(t, claude, "Remove")
+
+		codex := lessonDetailText(t, h, integration.CodexID)
+		assert.Contains(t, codex, "LESSON CHECKS Installed off", "the other client keeps its own state")
+		assert.Contains(t, codex, "Set up")
+	})
+
+	t.Run("an unreadable document keeps the section without an executable pin", func(t *testing.T) {
+		ws, svc, _, _ := checkEngine(t)
+		servicestest.Write(t, ws, pinfile.File, checkPlainYAML)
+		settings(t, ws, ".claude/settings.json", "{ not json")
+
+		h := newHarness(t, svc, 160, 50)
+		h.press("2")
+
+		assert.Contains(t, lessonDetailText(t, h, integration.ClaudeID), "LESSON CHECKS Installed unreadable (.claude/settings.json: ")
+		assert.NotContains(t, lessonDetailText(t, h, integration.CodexID), "LESSON CHECKS", "the rule keeps the detail of a readable client")
+	})
+
+	t.Run("an unreadable supplemental source qualifies the installed mode", func(t *testing.T) {
+		ws, svc, _, _ := checkEngine(t)
+		installClaudeGuard(t, ws)
+		settings(t, ws, ".claude/settings.local.json", "{ not json")
+
+		h := newHarness(t, svc, 160, 50)
+		h.press("2")
+
+		claude := lessonDetailText(t, h, integration.ClaudeID)
+		assert.Contains(t, claude, "LESSON CHECKS Installed enforce (a hook source is unreadable) Config")
+		assert.Contains(t, claude, "Binary test", "the shared file still names the binary")
+	})
+
+	t.Run("a long reason wraps inside the column", func(t *testing.T) {
+		ws, svc, _, _ := checkEngine(t)
+		settings(t, ws, ".claude/settings.json", "{ not json")
+
+		h := newHarness(t, svc, 160, 50)
+		h.press("2")
+
+		s, ok := h.m.screens[destIntegrations].(*integrations)
+		require.True(t, ok)
+
+		for _, insp := range h.m.st.integrations.value {
+			for _, line := range s.lessonCheckLines(insp, 48) {
+				assert.LessOrEqual(t, ansi.StringWidth(line), 48, insp.ClientID)
+			}
+		}
+	})
+}
+
 func TestTUIOverviewUnchangedWithoutLessonChecks(t *testing.T) {
 	// The lesson-check capabilities stay out of the configured list, so
 	// no inspection synthesizes an Overview item for them (contract K10).
@@ -128,7 +244,9 @@ func TestTUIOverviewUnchangedWithoutLessonChecks(t *testing.T) {
 
 		h.press("2")
 
-		return overview, h.view()
+		// The status bar shows the wall clock. The two renders can fall in
+		// different seconds, so the comparison leaves the clock out.
+		return footerClock.ReplaceAllString(overview, "hh:mm:ss"), footerClock.ReplaceAllString(h.view(), "hh:mm:ss")
 	}
 
 	for _, size := range captureSizes {

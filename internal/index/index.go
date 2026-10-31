@@ -1010,6 +1010,13 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 		return nil
 	}
 
+	// The fingerprint holds no path, so a copied or a moved checkout keeps
+	// the fingerprint of its origin. Only a rebuild records the new root.
+	recorded, _ := st.GetMeta(store.MetaRepoRoot)
+	if recordsAnotherRoot(root, dbPath, recorded) {
+		return nil
+	}
+
 	// A database from before coverage persistence has no index_summary;
 	// skipping would strand it on "coverage unknown" forever, because the
 	// fingerprint still matches. One full pass records it.
@@ -1022,15 +1029,57 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 		return nil
 	}
 
-	root, _ = st.GetMeta(store.MetaRepoRoot)
 	mined, _ := st.GetMeta(store.MetaHistoryMined)
 
 	return &Summary{
-		Root: root, DBPath: dbPath, Skipped: true,
+		Root: recorded, DBPath: dbPath, Skipped: true,
 		HistoryMined: mined == "true",
 		Stats:        stats,
 		Duration:     time.Since(start),
 	}
+}
+
+// recordsAnotherRoot reports a default database of root that records
+// another directory. Only the default database belongs to root. A --db
+// database can belong to another repository, and a rebuild would move its
+// recorded root away from that repository. An empty recorded root says
+// nothing, so it is no difference.
+func recordsAnotherRoot(root, dbPath, recorded string) bool {
+	return recorded != "" && isDefaultDatabase(root, dbPath) && !sameDirectory(recorded, root)
+}
+
+// isDefaultDatabase reports whether dbPath is the default database of
+// root. The file comparison holds for a relative path and a link spelling.
+// The file must also lie inside root. A default path that links to the
+// database of another worktree belongs to that worktree, and a rebuild
+// here would move its recorded root on every run.
+func isDefaultDatabase(root, dbPath string) bool {
+	given, errGiven := os.Stat(dbPath)
+	want, errWant := os.Stat(store.DefaultPath(root))
+
+	if errGiven != nil || errWant != nil || !os.SameFile(given, want) {
+		return false
+	}
+
+	resolved, errResolved := filepath.EvalSymlinks(dbPath)
+	resolvedRoot, errRoot := filepath.EvalSymlinks(root)
+
+	return errResolved == nil && errRoot == nil &&
+		strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator))
+}
+
+// sameDirectory reports whether two paths name one directory. A link
+// spelling of the root is the same root. The hooks hash the recorded
+// spelling, so a rebuild for the spelling alone would change their keys.
+func sameDirectory(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+
+	resolvedA, errA := filepath.EvalSymlinks(a)
+	resolvedB, errB := filepath.EvalSymlinks(b)
+
+	return errA == nil && errB == nil && resolvedA == resolvedB
 }
 
 // WorkspaceState fingerprints the workspace content the index depends

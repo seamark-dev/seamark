@@ -406,8 +406,12 @@ func TestPlanAuthorIdentityConsequence(t *testing.T) {
 		lessons string
 		req     func(ref pinfile.EntryRef) AuthorRequest
 		changed bool
+		// version is an identity that stays while the pin version moves. A
+		// note case edit is the one such wording edit, so its review adds
+		// that a context can receive the pin again.
+		version bool
 	}{
-		{name: "note case only", lessons: inline, req: note("reset in free and CLONE."), changed: false},
+		{name: "note case only", lessons: inline, req: note("reset in free and CLONE."), changed: false, version: true},
 		{name: "trailing note newline", lessons: literal, req: note("Reset in Free and clone."), changed: false},
 		{name: "inner double space", lessons: inline, req: note("Reset in  Free and clone."), changed: true},
 		{name: "leading space", lessons: inline, req: note(" Reset in Free and clone."), changed: true},
@@ -441,12 +445,16 @@ func TestPlanAuthorIdentityConsequence(t *testing.T) {
 			assert.Equal(t, tc.changed, p.IdentityChanged)
 			assert.Equal(t, tc.changed, reviews.PinIdentity(p.Old) != reviews.PinIdentity(p.New))
 
-			want := textIdentityKept
-			if tc.changed {
-				want = textIdentityChanged
+			want := []string{textIdentityKept}
+
+			switch {
+			case tc.changed:
+				want = []string{textIdentityChanged}
+			case tc.version:
+				want = append(want, textVersionChanged)
 			}
 
-			assert.Equal(t, []string{want, textLedgerEffect, noteRedacted}, p.Notes)
+			assert.Equal(t, append(want, textLedgerEffect, noteRedacted), p.Notes)
 		})
 	}
 }

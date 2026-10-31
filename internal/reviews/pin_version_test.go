@@ -43,8 +43,10 @@ var strictPin = PinRule{
 // TestPinIdentityIgnoresModeAndCheck proves that the firing identity of
 // a pin stays as 96e14ef computes it (contracts K2). The goldens are the
 // spec example pin: NewPinKey, PinIdentity, and the delivery digest of
-// its rendered lesson. The firing log and the hook state join on these
-// values, so a change here splits the history of every installed pin.
+// its rendered lesson. The firing log joins on these values, so a change
+// here splits the history of every installed pin. The edit hook state
+// reads the digest for a mined lesson only: it keys a pin by its version
+// (TestDeliveredPinKeyVector), so a mode change delivers the pin again.
 // The variants add a mode and a check, also values that Validate refuses,
 // because the lenient readers see such values too. The goldens and the
 // identity digest stay the same for every variant.
@@ -86,6 +88,17 @@ func TestPinIdentityIgnoresModeAndCheck(t *testing.T) {
 		assert.Equal(t, deliveryDigest, lessonDeliveryDigest(pinLesson(p)))
 		assert.Equal(t, specIdentity, PinIdentityDigest(NewPinKey(p.Rule, p.Region, p.Regions)))
 	}
+}
+
+// TestDeliveredPinKeyVector fixes the key of a delivered pin. The value
+// is the SHA-256 of compose("delivered-pin/1", specVersion), computed
+// outside Go. A new value makes every installed context repeat its pins.
+func TestDeliveredPinKeyVector(t *testing.T) {
+	assert.Equal(t, "9e521d3dff6b65a8e7f6c2a8782fe36b2c8ab98b8acc0f55b4866e2ef2b4d81a",
+		DeliveryItem{Lesson: pinLesson(specPin), PinVersion: specVersion}.digest())
+
+	assert.Equal(t, lessonDeliveryDigest(pinLesson(specPin)), DeliveryItem{Lesson: pinLesson(specPin)}.digest(),
+		"an item without a version keeps its content key")
 }
 
 // TestPinVersionVectors asserts the K2 vector table. The configs come

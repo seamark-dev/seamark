@@ -169,17 +169,29 @@ client without a guard cannot install enforce mode. Codex trust remains
 the user's decision: review new or changed hooks with `/hooks`. Seamark
 never grants trust, and cannot read that approval back as proof.
 
-Current Codex setup strictly refuses conflicting duplicate lesson-check
-handlers, including a relevant flag-less rerun. Equivalent Claude
-refusal is a required separate fix before release. Do not assume Claude
-already applies the same refusal. Doctor retains all-client coverage:
-a Claude-only setup can still warn about Codex.
+Claude and Codex setup both keep one handler per lesson check. When a
+definition that setup does not manage certainly runs a lesson-check hook
+that the run installs or keeps, setup refuses before any write, including
+a relevant flag-less rerun. When setup cannot tell whether a definition
+runs the hook, it warns and installs the managed handler. Claude refuses
+only when the definition shares a tool with the managed handler, because
+setup keeps a matcher that the user narrowed. A second exploration
+handler gets a warning and no refusal, because that hook runs no check.
+`--lesson-checks off` is never refused. A plain `init` reads
+`.claude/settings.local.json` for this rule only when it installs or keeps
+lesson-check hooks, and an unreadable file there gets a warning. Doctor
+retains all-client coverage: a Claude-only setup can still warn about
+Codex.
 
 For an unreadable hook document, path states report
-`inactive (document-unreadable)`. Doctor qualifies the summary; status
-and TUI can still show the misleading installed summary `off`. Fixing
-those summaries is required before release. Do not read `off` as proof
-that an unreadable document contains no handler.
+`inactive (document-unreadable)`. The doctor, status and TUI summaries
+read `unreadable (<reason>)`, and the reason names the file. An unreadable
+supplemental source keeps the installed mode and adds
+`(a hook source is unreadable)`. Beside no installed handler, no path
+reports that source, so the summary stays `off`. The JSON report has no
+unknown mode, so it keeps `installed: off` and the path reason
+`document-unreadable`. Do not read `off` as proof that an unreadable
+document contains no handler.
 
 ### Delivery attribution
 
@@ -448,7 +460,9 @@ The rules that hold every adapter to the same behavior:
   the marker (`gate --hook --client codex`). A wrapper, a shell
   condition, or an environment prefix is someone else's definition:
   keep it as written, report it, and install
-  no second handler when it certainly runs the hook. When the adapter
+  no second handler when it certainly runs the hook. For a lesson-check
+  hook, setup refuses the run instead (`refuseSecondLessonHandler`).
+  When the adapter
   cannot tell whether a command runs the hook, install the managed hook
   and name the command; a missing hook costs more than a repeated
   reminder. Such a definition is one that *may* run a gate: the
@@ -612,9 +626,10 @@ Before release:
 - Add a verified Codex Update before/after oracle, then implement and
   test content projection. Current conservative unknown/deny behavior
   is not sufficient for the planned release.
-- Refuse conflicting duplicate lesson-check handlers consistently across
-  clients. Retain Codex strict refusal and add equivalent Claude handling.
-- Fix the misleading status/TUI `off` summary for unreadable hook
+- **Done:** Refuse conflicting duplicate lesson-check handlers consistently
+  across clients. Retain Codex strict refusal and add equivalent Claude
+  handling.
+- **Done:** Fix the misleading status/TUI `off` summary for unreadable hook
   configuration; keep the already qualified doctor behavior.
 - List the exact internal audit/lock exclusions in verification's
   `not covered` output. Keep current default selection semantics and

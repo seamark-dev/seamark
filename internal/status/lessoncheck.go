@@ -50,7 +50,9 @@ func printLessonChecks(w io.Writer, s *Status) {
 	label := "lesson checks"
 
 	for _, c := range r.Clients {
-		fmt.Fprintf(w, "%-14s %-7s %s\n", label, c.Client, lessonClientText(c))
+		documentErr := integration.LessonDocumentError(s.Clients, c.Client)
+
+		fmt.Fprintf(w, "%-14s %-7s %s\n", label, c.Client, lessonClientText(c, documentErr))
 
 		label = ""
 	}
@@ -63,8 +65,12 @@ func printLessonChecks(w io.Writer, s *Status) {
 // paths of a client without a lesson-check hook read as the mode off
 // alone. A client without the structured Read path reads exploration
 // inactive (§5 row 42). Its report path keeps the state unsupported.
-func lessonClientText(c lessoncheck.ClientCapability) string {
-	parts := []string{string(c.Installed)}
+//
+// documentErr is the reason that the hook document cannot be read. The
+// mode text then says unreadable, in the words of doctor, because the
+// file can hold a hook. The JSON report keeps its closed set of modes.
+func lessonClientText(c lessoncheck.ClientCapability, documentErr string) string {
+	parts := []string{integration.LessonInstalledText(c, documentErr)}
 
 	if !onlyNotInstalled(c) {
 		parts = append(parts, c.StageText(lessoncheck.StagePreWrite), c.StageText(lessoncheck.StagePostEdit))

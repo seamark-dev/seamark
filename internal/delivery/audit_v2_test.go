@@ -449,6 +449,255 @@ func TestDeliverWritesNewRecordKindsOnlyUnderCaptureOptIn(t *testing.T) {
 }
 
 // mustNotEmit is an emit callback for an event with nothing to say.
+// TestDeliverRestoresEligibilityOnASemanticPinChange holds the rule of
+// the delivered set: a pin reaches a context once per version. The
+// reminder text of a mode or check change is the same, so only the
+// version can tell the receiver apart from a repeat.
+func TestDeliverRestoresEligibilityOnASemanticPinChange(t *testing.T) {
+	const checks = "hook_delivery: once-per-context\nlesson_checks_version: 1\nchecks:\n" +
+		"  frozen:\n    kind: forbid-path-change/1\n" +
+		"  frozen-too:\n    kind: forbid-path-change/1\n" +
+		"  no-todo:\n    kind: no-added-pattern/1\n    pattern: 'TODO'\n"
+
+	const pinBase = "pin:\n  - rule: boundary-validation\n    region: api\n" +
+		"    note: Validate request payloads at the edge.\n"
+
+	const base = checks + pinBase + "    mode: advisory\n    check: frozen\n"
+
+	cases := []struct {
+		name  string
+		after string
+		// again says whether the pin version moves, so that the context
+		// gets the pin once more.
+		again bool
+	}{
+		{"a mode change", checks + pinBase + "    mode: check\n    check: frozen\n", true},
+		{"a check change", checks + pinBase + "    mode: advisory\n    check: no-todo\n", true},
+		{"a mode and check change", checks + pinBase + "    mode: enforce\n    check: no-todo\n", true},
+		{"a definition that no pin binds", strings.Replace(base, "pattern: 'TODO'", "pattern: 'FIXME'", 1), false},
+		{
+			"a check rebound to its own definition",
+			checks + pinBase + "    mode: advisory\n    check: frozen-too\n", false,
+		},
+		{"an omitted advisory mode", checks + pinBase + "    check: frozen\n", false},
+		{
+			"a change of the bound definition",
+			strings.Replace(base, "  frozen:\n    kind: forbid-path-change/1\n",
+				"  frozen:\n    kind: no-added-pattern/1\n    pattern: 'NOPE'\n", 1), true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := workspace(t)
+			st := lessonStore(t, root)
+			cfg := writeConfig(t, root, base)
+
+			deliver := func(cfg *reviews.Config, match string) Outcome {
+				t.Helper()
+
+				var got capture
+
+				out, err := Deliver(context.Background(), st,
+					claudeRequest(root, cfg, claudeEvent(root, "session-1", "", match, "prompt-1", "api/handler.go")), got.emit)
+				require.NoError(t, err)
+
+				return out
+			}
+
+			// The fixture store also holds mined RUF001 for api, so the first
+			// edit emits both and the mined lesson stays apart from the pin.
+			first := deliver(cfg, "m1")
+			require.Equal(t, StatusEmitted, first.Status)
+			require.Equal(t, StatusSuppressed, deliver(cfg, "m2").Status)
+
+			after := writeConfig(t, root, tc.after)
+			next := deliver(after, "m3")
+
+			if !tc.again {
+				assert.Equal(t, StatusSuppressed, next.Status, "the pin version stays the same")
+
+				return
+			}
+
+			assert.Equal(t, StatusEmitted, next.Status)
+			assert.Equal(t, 1, next.Emitted, "only the pin has a new version")
+			assert.Equal(t, 1, next.Suppressed, "the mined lesson stays delivered")
+
+			records := firings(t, root)
+			injected := records[len(records)-2]
+			assert.Equal(t, reviews.DeliveryInjected, injected.Delivery)
+			assert.Equal(t, []reviews.FiringPin{pinOf(after, after.Pin[0], reviews.PinInjected, "")}, injected.Pins)
+
+			assert.Equal(t, StatusSuppressed, deliver(after, "m4").Status, "the new version reaches the context once")
+		})
+	}
+}
+
+// TestDeliverKeepsOneReminderForOneTextInTwoVersions covers a rule with a
+// Latin label: the hook budget collapses the repeat before the lease. A
+// rule without such a label reaches the lease, and
+// TestDeliverNamesTheVersionThatTheLeaseSent covers that.
+func TestDeliverKeepsOneReminderForOneTextInTwoVersions(t *testing.T) {
+	root := workspace(t)
+	st := lessonStore(t, root)
+	cfg := writeConfig(t, root, "hook_delivery: once-per-context\npin:\n"+
+		"  - {rule: boundary-validation, region: api, note: Validate request payloads at the edge.}\n"+
+		"  - {rule: boundary-validation, region: api, note: Validate request payloads at the edge., mode: check}\n")
+
+	require.NotEqual(t, cfg.PinVersion(cfg.Pin[0]), cfg.PinVersion(cfg.Pin[1]))
+
+	var got capture
+
+	out, err := Deliver(context.Background(), st,
+		claudeRequest(root, cfg, claudeEvent(root, "session-1", "", "m1", "prompt-1", "api/handler.go")), got.emit)
+	require.NoError(t, err)
+
+	require.Len(t, got.advice, 1)
+	assert.Equal(t, 1, strings.Count(got.advice[0], "boundary-validation"))
+	assert.Equal(t, 1, out.HeldBackPins, "the fold counts the repeat")
+}
+
+// TestDeliverNamesTheVersionThatTheLeaseSent holds the rule of the firing
+// log: a record names the version that the lease sent. The rule of these
+// pins has no Latin letter, so its label is empty and the restatement check
+// keeps both entries. They render one lesson, so a lesson cannot name a pin.
+func TestDeliverNamesTheVersionThatTheLeaseSent(t *testing.T) {
+	const (
+		head    = "hook_delivery: once-per-context\npin:\n"
+		advised = "  - {rule: 'границы', region: api, note: 'Проверяйте вход.'}\n"
+		checked = "  - {rule: 'границы', region: api, note: 'Проверяйте вход.', mode: check}\n"
+	)
+
+	// deliverOne runs one edit of match with cfg and returns the outcome.
+	deliverOne := func(t *testing.T, root string, st *store.Store, cfg *reviews.Config, match string, emit Emit) Outcome {
+		t.Helper()
+
+		req := claudeRequest(root, cfg, claudeEvent(root, "session-1", "", match, "prompt-1", "api/handler.go"))
+		req.RecordEvaluations = true
+
+		out, _ := Deliver(context.Background(), st, req, emit)
+
+		return out
+	}
+
+	for _, tc := range []struct {
+		name string
+		// entries is the pin list after the first edit. old and fresh are
+		// the indexes of the delivered entry and of the new entry in it.
+		entries    string
+		old, fresh int
+	}{
+		{"the new entry after the delivered one", advised + checked, 0, 1},
+		{"the new entry before the delivered one", checked + advised, 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := workspace(t)
+			st := lessonStore(t, root)
+
+			var got capture
+
+			first := deliverOne(t, root, st, writeConfig(t, root, head+advised), "m1", got.emit)
+			require.Equal(t, StatusEmitted, first.Status)
+
+			cfg := writeConfig(t, root, head+tc.entries)
+			require.NotEqual(t, cfg.PinVersion(cfg.Pin[0]), cfg.PinVersion(cfg.Pin[1]))
+
+			next := deliverOne(t, root, st, cfg, "m2", got.emit)
+			require.Equal(t, StatusEmitted, next.Status)
+			assert.Equal(t, 1, next.Emitted, "only the new version is new to the context")
+
+			records := firings(t, root)
+			assert.Equal(t, []reviews.FiringPin{
+				pinOf(cfg, cfg.Pin[tc.fresh], reviews.PinInjected, ""),
+				pinOf(cfg, cfg.Pin[tc.old], reviews.PinSuppressedRepeat, ""),
+			}, records[1].Pins, "the log and the state name one version")
+
+			last := deliverOne(t, root, st, cfg, "m3", got.emit)
+			assert.Equal(t, StatusSuppressed, last.Status, "the state holds both versions")
+			assert.ElementsMatch(t, []reviews.FiringPin{
+				pinOf(cfg, cfg.Pin[0], reviews.PinSuppressedRepeat, ""),
+				pinOf(cfg, cfg.Pin[1], reviews.PinSuppressedRepeat, ""),
+			}, firings(t, root)[len(firings(t, root))-1].Pins)
+		})
+	}
+
+	t.Run("a failed reply names the version that it tried", func(t *testing.T) {
+		root := workspace(t)
+		st := lessonStore(t, root)
+
+		var got capture
+
+		deliverOne(t, root, st, writeConfig(t, root, head+advised), "m1", got.emit)
+
+		cfg := writeConfig(t, root, head+advised+checked)
+		deliverOne(t, root, st, cfg, "m2", func(string) error { return errors.New("reply failed") })
+
+		records := firings(t, root)
+		assert.Equal(t, []reviews.FiringPin{
+			pinOf(cfg, cfg.Pin[0], reviews.PinSuppressedRepeat, ""),
+			pinOf(cfg, cfg.Pin[1], reviews.PinEmitFailed, ""),
+		}, records[len(records)-1].Pins)
+	})
+
+	t.Run("two new versions both reach the context", func(t *testing.T) {
+		root := workspace(t)
+		st := lessonStore(t, root)
+		cfg := writeConfig(t, root, head+advised+checked)
+
+		var got capture
+
+		out := deliverOne(t, root, st, cfg, "m1", got.emit)
+		require.Equal(t, StatusEmitted, out.Status)
+
+		assert.Equal(t, []reviews.FiringPin{
+			pinOf(cfg, cfg.Pin[0], reviews.PinInjected, ""),
+			pinOf(cfg, cfg.Pin[1], reviews.PinInjected, ""),
+		}, firings(t, root)[0].Pins)
+	})
+
+	t.Run("without a lease every pin is sent", func(t *testing.T) {
+		root := workspace(t)
+		st := lessonStore(t, root)
+		cfg := writeConfig(t, root, "pin:\n"+advised+checked)
+
+		var got capture
+
+		out := deliverOne(t, root, st, cfg, "m1", got.emit)
+		require.Equal(t, SuppressionOff, out.Suppression)
+
+		assert.Equal(t, []reviews.FiringPin{
+			pinOf(cfg, cfg.Pin[0], reviews.PinInjected, ""),
+			pinOf(cfg, cfg.Pin[1], reviews.PinInjected, ""),
+		}, firings(t, root)[0].Pins)
+	})
+}
+
+func TestPinDeliveriesWalksByVersion(t *testing.T) {
+	const (
+		sent     = reviews.PinInjected
+		repeated = reviews.PinSuppressedRepeat
+	)
+
+	cases := []struct {
+		name           string
+		versions, sent []string
+		want           []reviews.PinDelivery
+	}{
+		{"nothing sent", []string{"a", "b"}, nil, []reviews.PinDelivery{repeated, repeated}},
+		{"the second version", []string{"a", "b"}, []string{"b"}, []reviews.PinDelivery{repeated, sent}},
+		{"one version, one send", []string{"a", "a"}, []string{"a"}, []reviews.PinDelivery{sent, repeated}},
+		{"one version, two sends", []string{"a", "a"}, []string{"a", "a"}, []reviews.PinDelivery{sent, sent}},
+		{"no pin", nil, nil, []reviews.PinDelivery{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, pinDeliveries(tc.versions, tc.sent, sent))
+		})
+	}
+}
+
 func mustNotEmit(string) error {
 	return errors.New("nothing to say, so the reply must not be written")
 }

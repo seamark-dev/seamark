@@ -361,6 +361,492 @@ func TestSetupLessonChecksCodexKeptModeRefusalNamesTheDuplicate(t *testing.T) {
 	assert.NoError(t, err, "off removes the managed handler and leaves no duplicate")
 }
 
+// lessonHandlerDocument returns a hook document with one command under
+// one event and matcher.
+func lessonHandlerDocument(event, matcher, command string) string {
+	data, err := json.Marshal(map[string]any{"hooks": map[string]any{event: []any{map[string]any{
+		"matcher": matcher,
+		"hooks":   []any{map[string]any{"type": "command", "command": command}},
+	}}}})
+	if err != nil {
+		panic(err)
+	}
+
+	return string(data)
+}
+
+// refusedLessonSetup plans a run that must fail. It proves that no plan
+// exists and that the workspace keeps every file.
+func refusedLessonSetup(t *testing.T, root string, setups ...ClientSetup) string {
+	t.Helper()
+
+	before := treeFiles(t, root)
+
+	plan, err := PlanSetup(Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: setups})
+	require.Error(t, err)
+	assert.Nil(t, plan, "no plan exists, so nothing can be written")
+	assert.Equal(t, before, treeFiles(t, root), "the refusal writes nothing")
+
+	return err.Error()
+}
+
+// TestSetupLessonChecksClaudeRefusesSecondHandler proves the rule of one
+// handler per lesson check on an explicit request. Each definition
+// certainly runs a hook that the run installs. The local file and the
+// shared file are both sources, and both modes refuse.
+func TestSetupLessonChecksClaudeRefusesSecondHandler(t *testing.T) {
+	const tools = "Edit|Write|MultiEdit"
+
+	for name, tc := range map[string]struct{ rel, event, matcher, command string }{
+		"a guard in the local file": {
+			claudeLocalSettings, "PreToolUse", tools, "/opt/bin/seamark " + hooks.LessonGuardMarker,
+		},
+		"a baseline in the local file": {
+			claudeLocalSettings, "PreToolUse", tools, "/opt/bin/seamark " + hooks.LessonBaselineMarker,
+		},
+		"a post-edit handler in the local file": {
+			claudeLocalSettings, "PostToolUse", tools, "/opt/bin/seamark " + hooks.LessonVerifyMarker,
+		},
+		"a failure handler in the local file": {
+			claudeLocalSettings, "PostToolUseFailure", tools, "/opt/bin/seamark " + hooks.LessonVerifyMarker,
+		},
+		"a narrow matcher in the local file": {
+			claudeLocalSettings, "PreToolUse", "Write", "/opt/bin/seamark " + hooks.LessonGuardMarker,
+		},
+		"a wrapper in the local file": {
+			claudeLocalSettings, "PostToolUse", tools, "timeout 5 /opt/bin/seamark " + hooks.LessonVerifyMarker,
+		},
+		"a wrapper in the shared file": {
+			approve.ClaudeSettings, "PreToolUse", tools, "timeout 5 /opt/bin/seamark " + hooks.LessonGuardMarker,
+		},
+	} {
+		for _, mode := range []string{hooks.LessonChecksCheck, hooks.LessonChecksEnforce} {
+			t.Run(name+" under "+mode, func(t *testing.T) {
+				root := t.TempDir()
+				writeRel(t, root, tc.rel, lessonHandlerDocument(tc.event, tc.matcher, tc.command))
+
+				got := refusedLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: mode})
+				assert.Contains(t, got, "lesson checks: claude "+tc.event+" ")
+				assert.Contains(t, got, " already runs a handler from "+tc.rel+": `"+tc.command+"`")
+				assert.Contains(t, got, "setup refuses a second handler")
+			})
+		}
+	}
+
+	t.Run("the message names the event, the tools, the file, and the command", func(t *testing.T) {
+		root := t.TempDir()
+		writeRel(t, root, claudeLocalSettings, lessonHandlerDocument("PreToolUse", "Edit|Write", "/opt/bin/seamark "+hooks.LessonGuardMarker))
+
+		got := refusedLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksEnforce})
+		assert.Equal(t, "lesson checks: claude PreToolUse Edit, Write already runs a handler from .claude/settings.local.json: "+
+			"`/opt/bin/seamark lessons --guard --hook`; setup refuses a second handler; "+
+			"remove that definition to let setup manage lesson checks", got)
+	})
+
+	t.Run("a secret in the command stays out of the message", func(t *testing.T) {
+		root := t.TempDir()
+		secret := "ghp_" + strings.Repeat("a", 36)
+		writeRel(t, root, claudeLocalSettings, lessonHandlerDocument("PreToolUse", tools,
+			"GITHUB_TOKEN="+secret+" /opt/bin/seamark "+hooks.LessonGuardMarker))
+
+		got := refusedLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksCheck})
+		assert.NotContains(t, got, secret)
+	})
+}
+
+// TestSetupLessonChecksClaudeKeptModeRefusalNamesTheDuplicate proves
+// that a second handler blocks the plan of a run without a lesson-check
+// mode, which keeps the installed mode. Both forms of init read the
+// local file for that rule. The message must not tell the user to let
+// setup manage a handler that setup already manages.
+func TestSetupLessonChecksClaudeKeptModeRefusalNamesTheDuplicate(t *testing.T) {
+	explicit := ClientSetup{ClientID: ClaudeID, Hooks: true, CheckHookSources: true}
+	plain := ClientSetup{ClientID: ClaudeID, Hooks: true}
+
+	for _, tc := range []struct {
+		name, rel, command string
+		setup              ClientSetup
+	}{
+		{"init --client, a local handler", claudeLocalSettings, "/opt/bin/seamark " + hooks.LessonGuardMarker, explicit},
+		{"plain init, a local handler", claudeLocalSettings, "/opt/bin/seamark " + hooks.LessonGuardMarker, plain},
+		{"init --client, a local wrapper", claudeLocalSettings, "timeout 5 /opt/bin/seamark " + hooks.LessonGuardMarker, explicit},
+		{"plain init, a shared wrapper", approve.ClaudeSettings, "timeout 5 /opt/bin/seamark " + hooks.LessonGuardMarker, plain},
+	} {
+		for _, installed := range []string{hooks.LessonChecksCheck, hooks.LessonChecksEnforce} {
+			t.Run(tc.name+" keeps "+installed, func(t *testing.T) {
+				root := t.TempDir()
+				applyLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: installed})
+
+				document := map[string]any{}
+				if tc.rel == approve.ClaudeSettings {
+					document = parseRel(t, root, tc.rel)
+				}
+
+				addHandler(t, document, "PreToolUse", tc.command)
+				writeRel(t, root, tc.rel, marshalled(t, document))
+
+				got := refusedLessonSetup(t, root, tc.setup)
+				assert.Contains(t, got, "lesson checks: claude PreToolUse Edit, Write, MultiEdit already runs a handler from "+tc.rel)
+				assert.Contains(t, got, "setup already manages this handler, so remove that definition")
+				assert.NotContains(t, got, "to let setup manage lesson checks")
+			})
+		}
+	}
+
+	root := t.TempDir()
+	applyLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksCheck})
+	writeRel(t, root, claudeLocalSettings, lessonHandlerDocument("PostToolUse", "Edit", "/opt/bin/seamark "+hooks.LessonVerifyMarker))
+
+	t.Run("an explicit request keeps its wording", func(t *testing.T) {
+		got := refusedLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksCheck})
+		assert.Contains(t, got, "remove that definition to let setup manage lesson checks")
+		assert.NotContains(t, got, "already manages")
+	})
+
+	t.Run("an exploration request keeps the installed handler", func(t *testing.T) {
+		got := refusedLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonExploration: hooks.LessonExplorationOn})
+		assert.Contains(t, got, "setup already manages this handler, so remove that definition")
+	})
+
+	t.Run("off removes the managed handler and leaves no duplicate", func(t *testing.T) {
+		local := readRel(t, root, claudeLocalSettings)
+
+		applyLessonSetup(t, root, ClientSetup{
+			ClientID: ClaudeID, Hooks: true, CheckHookSources: true, LessonChecks: hooks.LessonChecksOff,
+		})
+		assert.Equal(t, hooks.LessonChecksOff, hooks.InstalledLessonChecks(parseRel(t, root, approve.ClaudeSettings),
+			hooks.ClaudeLessonCheckSpecs(hooks.LessonChecksEnforce)))
+		assert.Equal(t, local, readRel(t, root, claudeLocalSettings), "setup never edits the local file")
+	})
+}
+
+// addHandler appends one command entry to a parsed hook document.
+func addHandler(t *testing.T, document map[string]any, event, command string) {
+	t.Helper()
+
+	hookMap, ok := document["hooks"].(map[string]any)
+	if !ok {
+		hookMap = map[string]any{}
+		document["hooks"] = hookMap
+	}
+
+	entries, _ := hookMap[event].([]any)
+	hookMap[event] = append(entries, map[string]any{
+		"matcher": "Edit|Write|MultiEdit",
+		"hooks":   []any{map[string]any{"type": "command", "command": command}},
+	})
+}
+
+// marshalled encodes a parsed hook document.
+func marshalled(t *testing.T, document map[string]any) string {
+	t.Helper()
+
+	data, err := json.Marshal(document)
+	require.NoError(t, err)
+
+	return string(data)
+}
+
+// TestSetupLessonChecksClaudeKeepsNonConflictingHooks holds the controls
+// of the refusal. None of these states runs a lesson check twice for
+// certain, so each one installs, and the other hooks keep their bytes.
+func TestSetupLessonChecksClaudeKeepsNonConflictingHooks(t *testing.T) {
+	const tools = "Edit|Write|MultiEdit"
+
+	check := ClientSetup{ClientID: ClaudeID, Hooks: true, CheckHookSources: true, LessonChecks: hooks.LessonChecksCheck}
+	installed := func(t *testing.T, root string) {
+		t.Helper()
+
+		assert.Equal(t, hooks.LessonChecksCheck, hooks.InstalledLessonChecks(parseRel(t, root, approve.ClaudeSettings),
+			hooks.ClaudeLessonCheckSpecs(hooks.LessonChecksEnforce)))
+	}
+
+	t.Run("an uncertain wrapper warns and installs", func(t *testing.T) {
+		for _, rel := range []string{claudeLocalSettings, approve.ClaudeSettings} {
+			root := t.TempDir()
+			command := "/opt/wrapper /opt/bin/seamark " + hooks.LessonVerifyMarker
+			writeRel(t, root, rel, lessonHandlerDocument("PostToolUse", tools, command))
+
+			_, findings := applyLessonSetup(t, root, check)
+			installed(t, root)
+			assert.True(t, slices.ContainsFunc(findings, func(f Finding) bool {
+				return f.Level == FindingWarning && f.Path == rel && strings.Contains(f.Reason, "can run the seamark lesson verify hook")
+			}), rel)
+		}
+	})
+
+	t.Run("an uncertain wrapper warns on a kept mode too", func(t *testing.T) {
+		root := t.TempDir()
+		applyLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksCheck})
+		writeRel(t, root, claudeLocalSettings, lessonHandlerDocument("PreToolUse", tools,
+			"/opt/wrapper /opt/bin/seamark "+hooks.LessonBaselineMarker))
+
+		_, findings := applyLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true})
+		assert.NotEmpty(t, findingsWith(findings, "can run the seamark lesson baseline hook"))
+	})
+
+	t.Run("a definition that never fires is no handler", func(t *testing.T) {
+		for name, local := range map[string]string{
+			"another tool":  lessonHandlerDocument("PreToolUse", "Bash", "/opt/bin/seamark "+hooks.LessonGuardMarker),
+			"another event": lessonHandlerDocument("SessionStart", tools, "/opt/bin/seamark "+hooks.LessonGuardMarker),
+			"another type": `{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"prompt","command":"/opt/bin/seamark ` +
+				hooks.LessonGuardMarker + `"}]}]}}`,
+		} {
+			root := t.TempDir()
+			writeRel(t, root, claudeLocalSettings, local)
+
+			_, findings := applyLessonSetup(t, root, check)
+			installed(t, root)
+			assert.Empty(t, findingsWith(findings, "runs twice"), name)
+			assert.Equal(t, local, readRel(t, root, claudeLocalSettings), name)
+		}
+	})
+
+	t.Run("a definition for a tool outside the managed matcher repeats no check", func(t *testing.T) {
+		root := t.TempDir()
+		applyLessonSetup(t, root, check)
+
+		document := parseRel(t, root, approve.ClaudeSettings)
+		pre := document["hooks"].(map[string]any)["PreToolUse"].([]any)
+
+		for _, entry := range pre {
+			hooks.ForEachCommand([]any{entry}, func(_ string, _ map[string]any, command string) {
+				if hooks.OwnedBySeamark(command, []string{hooks.LessonBaselineMarker}) {
+					entry.(map[string]any)["matcher"] = "Edit"
+				}
+			})
+		}
+
+		writeRel(t, root, approve.ClaudeSettings, marshalled(t, document))
+		writeRel(t, root, claudeLocalSettings, lessonHandlerDocument("PreToolUse", "Write", "/opt/bin/seamark "+hooks.LessonBaselineMarker))
+
+		_, findings := applyLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true, CheckHookSources: true})
+		assert.Empty(t, findingsWith(findings, "runs twice"))
+		assert.NotEmpty(t, findingsWith(findings, "setup does not manage that definition"))
+	})
+
+	t.Run("a run that plans no lesson-check hook is not refused", func(t *testing.T) {
+		for _, rel := range []string{claudeLocalSettings, approve.ClaudeSettings} {
+			root := t.TempDir()
+			writeRel(t, root, rel, lessonHandlerDocument("PreToolUse", tools, "timeout 5 /opt/bin/seamark "+hooks.LessonGuardMarker))
+
+			applyLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true})
+			applyLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true, CheckHookSources: true})
+			assert.Equal(t, hooks.LessonChecksOff, hooks.InstalledLessonChecks(parseRel(t, root, approve.ClaudeSettings),
+				hooks.ClaudeLessonCheckSpecs(hooks.LessonChecksEnforce)), rel)
+		}
+	})
+
+	t.Run("an unreadable local file warns and installs", func(t *testing.T) {
+		for _, setup := range []ClientSetup{check, {ClientID: ClaudeID, Hooks: true}} {
+			root := t.TempDir()
+			applyLessonSetup(t, root, ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksCheck})
+			writeRel(t, root, claudeLocalSettings, "{ broken")
+
+			_, findings := applyLessonSetup(t, root, setup)
+			installed(t, root)
+			assert.NotEmpty(t, findingsWith(findings, "not checked for duplicate seamark hooks"))
+			assert.Equal(t, "{ broken", readRel(t, root, claudeLocalSettings))
+		}
+	})
+
+	t.Run("the advisory hooks and unrelated hooks are no conflict", func(t *testing.T) {
+		root := t.TempDir()
+
+		local := map[string]any{}
+		addHandler(t, local, "PreToolUse", "/opt/bin/seamark "+hooks.LessonsMarker)
+		addHandler(t, local, "PreToolUse", "/opt/bin/linter --fix")
+		addHandler(t, local, "PostToolUse", "/opt/bin/linter --report")
+		writeRel(t, root, claudeLocalSettings, marshalled(t, local))
+
+		before := readRel(t, root, claudeLocalSettings)
+
+		_, findings := applyLessonSetup(t, root, check)
+		installed(t, root)
+		assert.Equal(t, before, readRel(t, root, claudeLocalSettings))
+		assert.NotEmpty(t, findingsWith(findings, "the hook runs twice"), "the advisory hook keeps its warning")
+	})
+
+	t.Run("a second exploration handler warns and never refuses", func(t *testing.T) {
+		root := t.TempDir()
+		writeRel(t, root, claudeLocalSettings, lessonHandlerDocument("PostToolUse", "Read", "/opt/bin/seamark "+hooks.LessonExploreMarker))
+
+		_, findings := applyLessonSetup(t, root, ClientSetup{
+			ClientID: ClaudeID, Hooks: true, CheckHookSources: true, LessonExploration: hooks.LessonExplorationOn,
+		})
+		assert.Contains(t, readRel(t, root, approve.ClaudeSettings), hooks.LessonExploreMarker)
+		assert.NotEmpty(t, findingsWith(findings, "the hook runs twice"))
+	})
+
+	t.Run("exploration stays free of a lesson-check definition", func(t *testing.T) {
+		root := t.TempDir()
+		writeRel(t, root, claudeLocalSettings, lessonHandlerDocument("PreToolUse", tools, "/opt/bin/seamark "+hooks.LessonGuardMarker))
+
+		for _, value := range []string{hooks.LessonExplorationOn, hooks.LessonExplorationOff} {
+			applyLessonSetup(t, root, ClientSetup{
+				ClientID: ClaudeID, Hooks: true, CheckHookSources: true, LessonExploration: value,
+			})
+		}
+
+		assert.NotContains(t, readRel(t, root, approve.ClaudeSettings), hooks.LessonExploreMarker)
+	})
+
+	t.Run("the setup that removes the handlers is never refused", func(t *testing.T) {
+		root := t.TempDir()
+		applyLessonSetup(t, root, ClientSetup{
+			ClientID: ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksCheck, LessonExploration: hooks.LessonExplorationOn,
+		})
+		writeRel(t, root, claudeLocalSettings, lessonHandlerDocument("PreToolUse", tools, "/opt/bin/seamark "+hooks.LessonGuardMarker))
+
+		applyLessonSetup(t, root, ClientSetup{
+			ClientID: ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksOff, LessonExploration: hooks.LessonExplorationOff,
+		})
+		assert.NotContains(t, readRel(t, root, approve.ClaudeSettings), hooks.LessonBaselineMarker)
+	})
+}
+
+// lessonParityClient holds what a cross-client case needs from one
+// client: the documents, the markers, and the tools of its handlers.
+type lessonParityClient struct {
+	id, managed, other, matcher, baseline, guard, verify string
+}
+
+// lessonParityClients lists both clients. The other document is the
+// source that setup does not manage. It is JSON for Claude Code and
+// TOML for Codex.
+var lessonParityClients = []lessonParityClient{
+	{
+		id: ClaudeID, managed: approve.ClaudeSettings, other: claudeLocalSettings, matcher: "Edit|Write|MultiEdit",
+		baseline: hooks.LessonBaselineMarker, guard: hooks.LessonGuardMarker, verify: hooks.LessonVerifyMarker,
+	},
+	{
+		id: CodexID, managed: codexHooksFile, other: approve.CodexConfig, matcher: "apply_patch",
+		baseline: hooks.CodexLessonBaselineMarker, guard: hooks.CodexLessonGuardMarker, verify: hooks.CodexLessonVerifyMarker,
+	},
+}
+
+// otherSource returns the text of the unmanaged source of a client with
+// one command under the event.
+func (c lessonParityClient) otherSource(event, command string) string {
+	if c.id == ClaudeID {
+		return lessonHandlerDocument(event, c.matcher, command)
+	}
+
+	return "[[hooks." + event + "]]\nmatcher = \"" + c.matcher + "\"\n[[hooks." + event + ".hooks]]\ntype = \"command\"\n" +
+		"command = \"" + command + "\"\n"
+}
+
+// TestSetupLessonChecksRefusalParity proves that one state gets one
+// answer on both clients. Each case runs for each client with the
+// markers and the documents of that client.
+func TestSetupLessonChecksRefusalParity(t *testing.T) {
+	const (
+		explicitTail = "setup refuses a second handler; remove that definition to let setup manage lesson checks"
+		keptTail     = "setup already manages this handler, so remove that definition"
+	)
+
+	for _, c := range lessonParityClients {
+		t.Run(c.id, func(t *testing.T) {
+			setup := func(mode string) ClientSetup {
+				return ClientSetup{ClientID: c.id, Hooks: true, CheckHookSources: true, LessonChecks: mode}
+			}
+
+			for _, mode := range []string{hooks.LessonChecksCheck, hooks.LessonChecksEnforce} {
+				for marker, event := range map[string]string{c.baseline: "PreToolUse", c.guard: "PreToolUse", c.verify: "PostToolUse"} {
+					t.Run("the unmanaged source holds "+marker+" under "+mode, func(t *testing.T) {
+						root := t.TempDir()
+						writeRel(t, root, c.other, c.otherSource(event, "/opt/bin/seamark "+marker))
+
+						got := refusedLessonSetup(t, root, setup(mode))
+						assert.Contains(t, got, "lesson checks: "+c.id+" "+event+" ")
+						assert.Contains(t, got, c.other)
+						assert.Contains(t, got, explicitTail)
+					})
+				}
+
+				t.Run("the managed document holds a certain wrapper under "+mode, func(t *testing.T) {
+					root := t.TempDir()
+					writeRel(t, root, c.managed, lessonHandlerDocument("PostToolUse", c.matcher, "timeout 5 /opt/bin/seamark "+c.verify))
+
+					got := refusedLessonSetup(t, root, setup(mode))
+					assert.Contains(t, got, "lesson checks: "+c.id+" PostToolUse ")
+					assert.Contains(t, got, c.managed)
+					assert.Contains(t, got, explicitTail)
+				})
+			}
+
+			t.Run("a wrapper that discards the exit status is a certain second handler", func(t *testing.T) {
+				root := t.TempDir()
+				writeRel(t, root, c.other, c.otherSource("PreToolUse", "/opt/bin/seamark "+c.baseline+" || true"))
+
+				assert.Contains(t, refusedLessonSetup(t, root, setup(hooks.LessonChecksCheck)), explicitTail)
+			})
+
+			t.Run("a kept mode refuses with its own advice", func(t *testing.T) {
+				root := t.TempDir()
+				applyLessonSetup(t, root, setup(hooks.LessonChecksCheck))
+				writeRel(t, root, c.other, c.otherSource("PostToolUse", "/opt/bin/seamark "+c.verify))
+
+				got := refusedLessonSetup(t, root, setup(""))
+				assert.Contains(t, got, "lesson checks: "+c.id+" PostToolUse ")
+				assert.Contains(t, got, keptTail)
+			})
+
+			t.Run("off is not refused", func(t *testing.T) {
+				root := t.TempDir()
+				applyLessonSetup(t, root, setup(hooks.LessonChecksCheck))
+				writeRel(t, root, c.other, c.otherSource("PostToolUse", "/opt/bin/seamark "+c.verify))
+
+				applyLessonSetup(t, root, setup(hooks.LessonChecksOff))
+				assert.Contains(t, readRel(t, root, c.other), c.verify, "setup keeps the definition of the user")
+				assert.NotContains(t, readRel(t, root, c.managed), c.verify)
+			})
+
+			t.Run("an uncertain wrapper warns and installs", func(t *testing.T) {
+				root := t.TempDir()
+				command := "/opt/wrapper /opt/bin/seamark " + c.verify
+				writeRel(t, root, c.other, c.otherSource("PostToolUse", command))
+
+				_, findings := applyLessonSetup(t, root, setup(hooks.LessonChecksCheck))
+				assert.Contains(t, readRel(t, root, c.other), command)
+				assert.Contains(t, readRel(t, root, c.managed), testBinary+" "+c.verify)
+				assert.True(t, slices.ContainsFunc(findings, func(f Finding) bool {
+					return f.Level == FindingWarning && f.Path != "" && strings.Contains(f.Reason, "can run the seamark")
+				}))
+			})
+
+			t.Run("a definition under another event is no handler", func(t *testing.T) {
+				root := t.TempDir()
+				writeRel(t, root, c.other, c.otherSource("SessionStart", "/opt/bin/seamark "+c.verify))
+
+				applyLessonSetup(t, root, setup(hooks.LessonChecksCheck))
+				assert.Contains(t, readRel(t, root, c.managed), testBinary+" "+c.verify)
+			})
+
+			t.Run("a definition without a planned lesson-check hook is not refused", func(t *testing.T) {
+				root := t.TempDir()
+				writeRel(t, root, c.other, c.otherSource("PostToolUse", "/opt/bin/seamark "+c.verify))
+
+				applyLessonSetup(t, root, setup(""))
+				assert.NotContains(t, readRel(t, root, c.managed), testBinary+" "+c.verify)
+			})
+		})
+	}
+
+	t.Run("a refusal of one client writes nothing for the other", func(t *testing.T) {
+		for _, c := range lessonParityClients {
+			root := t.TempDir()
+			writeRel(t, root, c.other, c.otherSource("PostToolUse", "/opt/bin/seamark "+c.verify))
+
+			got := refusedLessonSetup(t, root,
+				ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksCheck},
+				ClientSetup{ClientID: CodexID, Hooks: true, LessonChecks: hooks.LessonChecksCheck},
+			)
+			assert.Contains(t, got, "lesson checks: "+c.id+" PostToolUse ")
+		}
+	})
+}
+
 func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 	enforce := func(clientID string) ClientSetup {
 		return ClientSetup{ClientID: clientID, Hooks: true, CheckHookSources: true, LessonChecks: hooks.LessonChecksEnforce}
@@ -423,11 +909,15 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 		err := refuse(t, root, enforce(CodexID))
 		assert.Contains(t, err.Error(), "(report-only-wrapper)")
 
-		// A wrapper whose exit status passes is no report-only wrapper.
+		// A wrapper whose exit status passes is no report-only wrapper. It
+		// still runs a second handler, so setup refuses it for that reason.
 		root = t.TempDir()
 		writeRel(t, root, approve.ClaudeSettings, `{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[`+
 			`{"type":"command","command":"cd /repo && /opt/bin/seamark lessons --guard --hook"}]}]}}`)
-		_, _ = applyLessonSetup(t, root, enforce(ClaudeID))
+
+		err = refuse(t, root, enforce(ClaudeID))
+		assert.ErrorContains(t, err, "setup refuses a second handler")
+		assert.NotContains(t, err.Error(), "report-only-wrapper")
 	})
 
 	t.Run("a configuration that does not validate", func(t *testing.T) {

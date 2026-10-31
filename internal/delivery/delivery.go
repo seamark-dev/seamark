@@ -194,10 +194,13 @@ func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outc
 		return out, nil
 	}
 
-	lease, suppression := beginLease(req, cfg, lessons)
+	versions := selectedVersions(cfg, sel)
+
+	lease, suppression := beginLease(req, cfg, deliveryItems(sel, versions))
 	out.Suppression = suppression
 
-	selected, suppressed := lessons, []model.Lesson(nil)
+	// Without a lease, the event sends every lesson and every pin.
+	selected, suppressed, sentPins := lessons, []model.Lesson(nil), versions
 
 	if lease != nil {
 		// Close is safe after the explicit Close calls below. The defer
@@ -205,6 +208,7 @@ func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outc
 		defer func() { _ = lease.Close() }()
 
 		selected, suppressed = lease.Inject(), lease.Suppressed()
+		sentPins = lease.InjectedPinVersions()
 		out.Generation = lease.Generation()
 	}
 
@@ -220,7 +224,7 @@ func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outc
 		out.Status = StatusSuppressed
 		out.record(req, cfg,
 			[]reviews.EventRecord{{Status: reviews.DeliverySuppressedRepeat, Lessons: suppressed}},
-			sel.FiringPins(cfg, pinDeliveries(sel, selected, reviews.PinInjected)),
+			sel.FiringPins(cfg, pinDeliveries(versions, sentPins, reviews.PinInjected)),
 			emissionNotNeeded, evaluationComplete)
 
 		return out, nil
@@ -245,7 +249,7 @@ func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outc
 		}
 
 		out.record(req, cfg, evaluationRecord(),
-			sel.FiringPins(cfg, pinDeliveries(sel, selected, reviews.PinEmitFailed)),
+			sel.FiringPins(cfg, pinDeliveries(versions, sentPins, reviews.PinEmitFailed)),
 			emissionFailed, evaluationComplete)
 
 		return out, &EmitError{Err: err}
@@ -276,7 +280,7 @@ func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outc
 	}
 
 	out.record(req, cfg, records,
-		sel.FiringPins(cfg, pinDeliveries(sel, selected, reviews.PinInjected)),
+		sel.FiringPins(cfg, pinDeliveries(versions, sentPins, reviews.PinInjected)),
 		emissionEmitted, evaluationComplete)
 
 	return out, nil
@@ -297,23 +301,32 @@ func hookSelection(st *store.Store, cfg *reviews.Config, files []string) (report
 	return ev.HookSelection(cfg)
 }
 
-// pinDeliveries returns the delivery of each selected pin of sel, in
-// the order of sel.Pins. kept holds the lessons that the event sends:
-// a pin whose lesson is in kept gets sent, and every other selected
-// pin gets suppressed-repeat.
+// pinDeliveries returns the delivery of each selected pin. versions holds
+// the version of each selected pin, and sentPins holds the versions that
+// the event sends. A pin with such a version gets sent, and every other
+// selected pin gets suppressed-repeat.
 //
-// kept is a subsequence of sel.Lessons in the same order, and the pins
-// come first in sel.Lessons. One forward walk therefore pairs each kept
-// lesson with its own pin. The walk also keeps two pins with one lesson
-// apart: the lease keeps the first and suppresses the repeat.
-func pinDeliveries(sel report.Selection, kept []model.Lesson, sent reviews.PinDelivery) []reviews.PinDelivery {
-	deliveries := make([]reviews.PinDelivery, len(sel.Pins))
-	next := 0
+// The walk matches on the version, the key of the delivered set, and never
+// on a lesson. Two entries with one text render one lesson and can hold
+// two versions. The hook budget does not always collapse them. A rule
+// without a Latin letter has an empty label, so the restatement check
+// cannot compare the two.
+//
+// The lease sends one version once. Without a lease, every pin is sent,
+// also a repeated version, so the count keeps each one.
+func pinDeliveries(versions, sentPins []string, sent reviews.PinDelivery) []reviews.PinDelivery {
+	pending := make(map[string]int, len(sentPins))
 
-	for i := range sel.Pins {
-		if next < len(kept) && kept[next] == sel.Lessons[i] {
+	for _, version := range sentPins {
+		pending[version]++
+	}
+
+	deliveries := make([]reviews.PinDelivery, len(versions))
+
+	for i, version := range versions {
+		if pending[version] > 0 {
 			deliveries[i] = sent
-			next++
+			pending[version]--
 
 			continue
 		}
@@ -322,6 +335,18 @@ func pinDeliveries(sel report.Selection, kept []model.Lesson, sent reviews.PinDe
 	}
 
 	return deliveries
+}
+
+// selectedVersions returns the pin version of each selected pin, in the
+// order of sel.Pins. The hook already holds cfg, so one version costs one
+// hash and no file read.
+func selectedVersions(cfg *reviews.Config, sel report.Selection) []string {
+	versions := make([]string, len(sel.Pins))
+	for i, sp := range sel.Pins {
+		versions[i] = cfg.PinVersion(sp.Pin)
+	}
+
+	return versions
 }
 
 // ResetRequest is one context-reset event.
@@ -419,7 +444,7 @@ func deliveryContext(clientID string, receiving *integration.ReceivingContext) r
 // and the Suppression value says why. Suppression needs a receiver that
 // the client names and can reset. A parent session id is not a receiver:
 // it hides advice from a subagent that never got it.
-func beginLease(req Request, cfg *reviews.Config, lessons []model.Lesson) (*reviews.HookDeliveryLease, Suppression) {
+func beginLease(req Request, cfg *reviews.Config, items []reviews.DeliveryItem) (*reviews.HookDeliveryLease, Suppression) {
 	if cfg.HookDelivery() != reviews.HookDeliveryOncePerContext {
 		return nil, SuppressionOff
 	}
@@ -433,13 +458,31 @@ func beginLease(req Request, cfg *reviews.Config, lessons []model.Lesson) (*revi
 		return nil, SuppressionNotResettable
 	}
 
-	lease, err := reviews.BeginContextDelivery(req.Root, deliveryContext(req.ClientID, receiving), lessons)
+	lease, err := reviews.BeginContextDelivery(req.Root, deliveryContext(req.ClientID, receiving), items)
 	if err != nil {
 		// The state is an optimization, never permission to hide advice.
 		return nil, SuppressionStateUnavailable
 	}
 
 	return lease, SuppressionActive
+}
+
+// deliveryItems maps a selection to the items of the edit state, in the
+// order of sel.Lessons, where the pins come first. versions holds the
+// version of each selected pin, so a change of meaning reaches the
+// receiver again.
+func deliveryItems(sel report.Selection, versions []string) []reviews.DeliveryItem {
+	items := make([]reviews.DeliveryItem, len(sel.Lessons))
+
+	for i, lesson := range sel.Lessons {
+		items[i].Lesson = lesson
+
+		if i < len(versions) {
+			items[i].PinVersion = versions[i]
+		}
+	}
+
+	return items
 }
 
 // The emission values of a firing record (contract L3). The list is

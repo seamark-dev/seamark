@@ -1470,7 +1470,7 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 	out = append(out, p.authorRootLines(w)...)
 
 	if noRetarget != "" {
-		out = append(out, propLines(t.Muted, "No retarget: "+noRetarget+".", w)...)
+		out = append(out, propLines(t.Muted, "No retarget: "+noRetarget+". "+pinRouteSentence(p.retargetNext(pin)), w)...)
 	}
 
 	if noExtract != "" {
@@ -1480,17 +1480,18 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 	return append(out, p.gateLines(w)...)
 }
 
-// authorRootLines says that a pin write needs an index of this
-// workspace, while only the authoring rule finds another root. With
+// authorRootLines says where a pin write works, while only the
+// authoring rule finds another root. With
 // --db, retarget and prune accept another root (pinsForeignRoot), but
 // the authoring engine refuses it (authorForeignRoot, P4-16). Without
 // --db, foreignLines already says so, and this returns nil.
 func (p *pinsView) authorRootLines(w int) []string {
-	if authorForeignRoot(p.st) == "" || pinsForeignRoot(p.st) != "" {
+	root := pinsDBRoot(p.st)
+	if root == "" {
 		return nil
 	}
 
-	return propLines(p.st.theme.Muted, pinDraftsStill, w)
+	return propLines(p.st.theme.Muted, "i and d still draft a change; to save it, "+pinOpenRoot(root)+".", w)
 }
 
 // foreignLines explains why retarget and prune are off when the index

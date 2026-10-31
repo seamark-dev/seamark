@@ -145,9 +145,11 @@ configuration, paths per tool/stage/root-child context, binary identity,
 uncovered writers and CLI install/remove commands. This section does not
 install lesson-check or exploration hooks; use the named CLI route. An
 installed choice differs from an active or native-verified path.
-Current status/TUI can summarize an unreadable hook file as `off` even
-while its path states say `inactive (document-unreadable)`. The summary
-fix is required before release; doctor already qualifies it. See
+The section also stays for an unreadable hook document, because that file
+can hold a hook. The Installed row then reads `unreadable (<reason>)`, in
+the words of doctor, and the section names no binary and no setup command,
+because setup stops at that file. An unreadable supplemental source keeps
+the installed mode and adds `(a hook source is unreadable)`. See
 [integration limits](agent-integrations.md#installed-active-and-verified-are-different).
 
 ### 3 Lessons
@@ -284,10 +286,24 @@ of a linked pin ([Lessons](lessons.md#pins-that-a-person-writes)):
   before and after, the exact diff, and every blocker with its route.
   It also states the ledger effect: "The proposal ledger does not
   change." A wording or
-  scope edit says whether the delivery identity changes. A new pin goes
+  scope edit says whether the delivery identity changes. A mode, check,
+  or note edit that keeps the identity but gives the pin a new version
+  says that a context that already saw the pin can receive it again,
+  also in `once-per-context` mode. A new pin goes
   after the last pin; apply still inserts at the head. `y` writes only
   while `distill.write` is on and a readable index records this
   workspace; `o` opens Settings › Pin writing or the Overview build.
+  With `--db` of another repository, `o` names no build.
+- The form and the MAINTENANCE detail name `w` Retarget for a linked pin
+  only while `w` offers it. While `w` reads `n/a`, they and a press of
+  `w` give the reason and a next action. That action is a route that
+  can finish in that state: `-` Prune and a new pin with `n` for other
+  regions, an edit by hand, `r` to read again, the Overview build in a
+  copied checkout, or the console in the recorded root with `--db` of
+  another repository. Pins names Prune only while the new pin can save,
+  and the rule row follows the same rule. A review blocker cannot tell
+  the retarget state, so it says to press `r` and read the route under
+  MAINTENANCE.
 - `y` plans again from the current file, ledger, and gate. Any
   difference writes nothing, and the result lists the differences. The
   save replaces the file: it keeps the permission bits, not an access
@@ -510,7 +526,7 @@ Exact rules: `internal/settings`.
 | Retarget or prune result | `enter` close, or preview again after a refusal; with a recovery offer: `c` preview the ledger-only completion, `esc` drop it |
 | Ledger completion preview | `y` complete the ledger update, `o` open Settings › Pin writing (gate off), `esc` back to the result |
 | Pin form | `enter` edit the row, `esc` leave a field (keeps the text) or close the form (keeps the draft), `s` review, `a` add a region, `x` remove the region under the cursor, or on another row discard the draft (`d` confirm, `esc` keep), `↑↓` rows, `?` help (no field focused); in the Note field `enter` adds a line break. The footer lists the keys in this order, so `esc close` stays in view at 60×20 |
-| Pin review | `y` confirm, `s` sample (while the review holds a candidate file), `o` open the route of a blocker (Settings › Pin writing or the Overview build), `esc` back to the form (close for a removal), scroll keys |
+| Pin review | `y` confirm, `s` sample (while the review holds a candidate file), `o` open the route of a blocker (Settings › Pin writing or the Overview build; no build with `--db` of another repository), `esc` back to the form (close for a removal), scroll keys |
 | Pin result | `enter` close after a written result; after any other result `enter` reviews again and `esc` goes back; `r` read the file again after a failed read |
 | Orphaned pin draft | `c` copy the draft, `x` discard, `esc` close |
 | Sample | `↑↓` rows, `enter` edit a path, `a` add path, `x` remove path, `space` surface, `esc` back |
@@ -612,7 +628,8 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
   as in the CLI. The pin writes, the lesson settings saves, and the
   sample refuse in the same way. The pin form then treats the link of
   every pin as unknown, because the index records another repository.
-  Its review names that root.
+  Its review names that root. Pins names no build here, because `b`
+  writes this workspace into that database and moves its recorded root.
 - The new pin, pin edit, pin removal, mute, and delivery saves refuse a
   `.seamark/lessons.yaml` with CRLF line breaks. They also refuse a file
   with more than one hard link: "replacing this file would break its
