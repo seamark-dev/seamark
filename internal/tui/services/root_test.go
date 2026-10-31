@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,10 +26,10 @@ func TestSameDirAcceptsALinkToTheSameDirectory(t *testing.T) {
 	link := filepath.Join(t.TempDir(), "link")
 	require.NoError(t, os.Symlink(dir, link))
 
-	assert.True(t, sameDir(dir, dir+"/"))
-	assert.True(t, sameDir(link, dir), "a link spelling names the same directory")
-	assert.False(t, sameDir(dir, t.TempDir()))
-	assert.False(t, sameDir(dir, filepath.Join(dir, "missing")))
+	assert.True(t, store.SameDirectory(dir, dir+"/"))
+	assert.True(t, store.SameDirectory(link, dir), "a link spelling names the same directory")
+	assert.False(t, store.SameDirectory(dir, t.TempDir()))
+	assert.False(t, store.SameDirectory(dir, filepath.Join(dir, "missing")))
 }
 
 // TestTheRootRulesDifferOnlyInTheDBException pins the two root rules.
@@ -772,4 +773,36 @@ func TestOwnRootKeepsACustomDatabaseOfARootWithoutADefault(t *testing.T) {
 	res, err := e.CommitMaintenance(rootPrune(t, e))
 	require.NoError(t, err)
 	assert.True(t, res.FileWritten)
+}
+
+// TestRecordedRootInAnotherCaseIsNotForeign covers a case-insensitive
+// volume: the index can record a spelling that the user typed. It names
+// this directory, so no rule may read it as another repository.
+func TestRecordedRootInAnotherCaseIsNotForeign(t *testing.T) {
+	origin, _ := maintWorkspace(t, true)
+
+	// The last element of a test directory holds digits only, so the
+	// whole path changes case.
+	variant := strings.ToUpper(origin.Root)
+	if _, err := os.Stat(variant); err != nil {
+		t.Skip("the volume is case-sensitive")
+	}
+
+	st, err := store.Open(origin.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, st.SetMeta(store.MetaRepoRoot, variant))
+	require.NoError(t, st.Close())
+
+	db := filepath.Join(rootDir(t), "own.db")
+	require.NoError(t, os.Rename(origin.DBPath, db))
+
+	ws, err := workspace.Resolve(origin.Root, db)
+	require.NoError(t, err)
+
+	e := engNew(ws, Deps{})
+
+	got := e.Pins().Database
+	assert.Empty(t, got.ForeignRoot)
+	assert.NoError(t, got.BuildBlock)
+	assert.NoError(t, got.WriteBlock)
 }

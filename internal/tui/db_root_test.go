@@ -787,3 +787,24 @@ func TestDatabaseThatTheRootDoesNotOwnRoutesToTheRoot(t *testing.T) {
 		})
 	}
 }
+
+// TestCopyThroughACaseVariantKeepsTheRoutesOfACopy covers a working
+// directory that the user typed in another case. Git prints the true
+// case and the --db path keeps the typed case, but both name one file.
+func TestCopyThroughACaseVariantKeepsTheRoutesOfACopy(t *testing.T) {
+	origin := dbRootRepo(t, "origin")
+	copied := dbRootCopy(t, origin)
+
+	variant := filepath.Join(filepath.Dir(copied), strings.ToUpper(filepath.Base(copied)))
+	if _, err := os.Stat(variant); err != nil {
+		t.Skip("the volume is case-sensitive")
+	}
+
+	t.Chdir(variant)
+
+	h, svc := dbRootConsole(t, ".", filepath.Join(store.DefaultDir, store.DefaultDBName))
+	require.Equal(t, copied, svc.Root(), "git prints the true case")
+	require.Equal(t, store.DefaultPath(variant), svc.DBPath(), "the path keeps the typed case")
+
+	assertCopyRoutes(t, h, svc, origin, copied)
+}

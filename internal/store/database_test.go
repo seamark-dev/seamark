@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -169,4 +170,50 @@ func TestRootOwnsDatabaseFollowsTheDefaultPathOfTheRoot(t *testing.T) {
 		assert.True(t, RootOwnsDatabase(t.TempDir(), other), "a custom database of a repository")
 		assert.True(t, RootOwnsDatabase(filepath.Join(t.TempDir(), "gone"), other), "a root that moved away")
 	})
+}
+
+// caseVariant returns another case of the last element of dir, or skips
+// on a case-sensitive volume, which treats it as another name.
+func caseVariant(t *testing.T, dir string) string {
+	t.Helper()
+
+	variant := filepath.Join(filepath.Dir(dir), strings.ToUpper(filepath.Base(dir)))
+
+	if _, err := os.Stat(variant); err != nil {
+		t.Skip("the volume is case-sensitive")
+	}
+
+	return variant
+}
+
+// TestClassifyDatabaseAcceptsACaseVariantOfTheRoot covers a case-insensitive
+// volume. A path keeps the case that the user typed, so only file identity
+// shows that the file lies inside the root.
+func TestClassifyDatabaseAcceptsACaseVariantOfTheRoot(t *testing.T) {
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	root := filepath.Join(parent, "repo")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, DefaultDir), 0o755))
+	require.NoError(t, os.WriteFile(DefaultPath(root), []byte("x"), 0o644))
+
+	variant := caseVariant(t, root)
+
+	assert.Equal(t, DatabaseDefault, ClassifyDatabase(root, DefaultPath(variant)))
+	assert.Equal(t, DatabaseDefault, ClassifyDatabase(variant, DefaultPath(root)))
+	assert.True(t, SameDirectory(root, variant))
+}
+
+func TestSameDirectoryComparesIdentity(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(dir, link))
+
+	assert.True(t, SameDirectory(dir, dir+string(filepath.Separator)))
+	assert.True(t, SameDirectory(link, dir), "a link spelling names the same directory")
+	assert.False(t, SameDirectory(dir, t.TempDir()))
+
+	gone := filepath.Join(dir, "gone")
+	assert.False(t, SameDirectory(dir, gone))
+	assert.True(t, SameDirectory(gone, gone+string(filepath.Separator)), "a clean path needs no file")
 }

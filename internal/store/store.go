@@ -71,6 +71,47 @@ const (
 	DatabaseOther
 )
 
+// SameDirectory reports whether two paths name one directory. A clean
+// comparison comes first, because a path that no longer exists has no
+// identity. File identity then covers a link and a case-insensitive
+// volume, where a path keeps the case that the user typed.
+func SameDirectory(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+
+	infoA, errA := os.Stat(a)
+	infoB, errB := os.Stat(b)
+
+	return errA == nil && errB == nil && os.SameFile(infoA, infoB)
+}
+
+// liesInside reports whether the file at path lies below dir. It walks up
+// and compares file identity, because a string test fails for a spelling
+// in another case on a case-insensitive volume. A relative path shows no
+// parent directory, so it never passes.
+func liesInside(path, dir string) bool {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || !filepath.IsAbs(resolved) {
+		return false
+	}
+
+	want, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+
+	for p := filepath.Dir(resolved); ; p = filepath.Dir(p) {
+		if info, err := os.Stat(p); err == nil && os.SameFile(info, want) {
+			return true
+		}
+
+		if p == filepath.Dir(p) {
+			return false
+		}
+	}
+}
+
 // RootOwnsDatabase reports whether dbPath can belong to root, so that a
 // write to the file and a write under root change one repository. A root
 // owns the file that its default path names. A root without a default
@@ -92,10 +133,9 @@ func RootOwnsDatabase(root, dbPath string) bool {
 //
 // The file must also lie inside root to be the default database. A
 // default path that links to the database of another worktree belongs
-// to that worktree, and a rebuild here moves its recorded root. A
-// relative dbPath shows no parent directory, so it never passes this
-// test. The console makes its path absolute, and the CLI keeps the
-// spelling that the user gave.
+// to that worktree, and a rebuild here moves its recorded root. The
+// console makes its path absolute, and the CLI keeps the spelling that
+// the user gave, so a relative path of the CLI reads as DatabaseLinked.
 func ClassifyDatabase(root, dbPath string) DatabaseKind {
 	defaultPath := DefaultPath(root)
 
@@ -114,10 +154,7 @@ func ClassifyDatabase(root, dbPath string) DatabaseKind {
 		return DatabaseOther
 	}
 
-	resolved, errResolved := filepath.EvalSymlinks(dbPath)
-	resolvedRoot, errRoot := filepath.EvalSymlinks(root)
-
-	if errResolved == nil && errRoot == nil && strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator)) {
+	if liesInside(dbPath, root) {
 		return DatabaseDefault
 	}
 

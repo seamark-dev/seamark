@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/workspace"
@@ -58,7 +57,7 @@ func (e *ForeignRootError) Unwrap() error { return ErrForeignRoot }
 // lessons.yaml under R but plan for this workspace. The text names both
 // roots and no route, because each caller adds the route of its screen.
 func (e *engine) foreignRoot(probe workspace.IndexProbe) error {
-	if sameDir(probe.Root, e.ws.Root) {
+	if store.SameDirectory(probe.Root, e.ws.Root) {
 		return nil
 	}
 
@@ -122,7 +121,7 @@ func (e *engine) buildBlock() error {
 	case err != nil:
 		return fmt.Errorf("%w (%s: %v), and a build could move the root of another repository; "+
 			"fix the file or use another --db", errRootUnknown, e.ws.DBPath, err)
-	case recorded == "", sameDir(recorded, e.ws.Root):
+	case recorded == "", store.SameDirectory(recorded, e.ws.Root):
 		return nil
 	default:
 		return fmt.Errorf("%w, so a build here would move it; open the console in %s", ErrForeignRoot, recorded)
@@ -147,18 +146,4 @@ func (e *engine) databaseFacts(probe workspace.IndexProbe) workspace.DatabaseFac
 	}
 
 	return facts
-}
-
-// sameDir reports whether two paths name one directory. It compares the
-// clean paths first and then the resolved links, so a link spelling of
-// the same directory is not a foreign root.
-func sameDir(a, b string) bool {
-	if filepath.Clean(a) == filepath.Clean(b) {
-		return true
-	}
-
-	ra, errA := filepath.EvalSymlinks(a)
-	rb, errB := filepath.EvalSymlinks(b)
-
-	return errA == nil && errB == nil && ra == rb
 }
