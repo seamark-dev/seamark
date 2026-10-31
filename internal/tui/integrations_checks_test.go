@@ -244,7 +244,9 @@ func TestTUIOverviewUnchangedWithoutLessonChecks(t *testing.T) {
 
 		h.press("2")
 
-		return overview, h.view()
+		// The status bar shows the wall clock. The two renders can fall in
+		// different seconds, so the comparison leaves the clock out.
+		return footerClock.ReplaceAllString(overview, "hh:mm:ss"), footerClock.ReplaceAllString(h.view(), "hh:mm:ss")
 	}
 
 	for _, size := range captureSizes {
