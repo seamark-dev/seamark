@@ -16,6 +16,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // These tests drive `lessons --apply`, `--retarget`, and `--prune`
@@ -39,22 +40,28 @@ const (
     note: A pin to retarget.
 `
 	// rootWriteIgnore keeps the state of a run out of git, as `seamark
-	// init` does, and leaves the pin file and the config tracked.
-	rootWriteIgnore = ".seamark/*\n!.seamark/lessons.yaml\n!.seamark/config.yaml\n"
+	// init` does, and leaves the pin file and the config tracked. An
+	// ignored custom database leaves the workspace fingerprint as it is.
+	rootWriteIgnore = ".seamark/*\n!.seamark/lessons.yaml\n!.seamark/config.yaml\ncustom.db*\n"
+	// rootWriteHold is longer than the wait of a read before the open and
+	// shorter than the wait of the open.
+	rootWriteHold = 3 * time.Second
 )
 
 // rootWriteCommand is one command that writes under the recorded root.
 type rootWriteCommand struct {
 	name string
 	args []string
+	// done is a part of the output of a run that reached the pin file.
+	done string
 }
 
 // rootWriteCommands lists the commands that the rule guards. Each one
 // names a row that the fixture holds in the state that the command wants.
 var rootWriteCommands = []rootWriteCommand{
-	{"apply", []string{"lessons", "--apply", "p1"}},
-	{"retarget", []string{"lessons", "--retarget", "p3"}},
-	{"prune", []string{"lessons", "--prune", "p2"}},
+	{"apply", []string{"lessons", "--apply", "p1"}, "applied 1 pin(s)"},
+	{"retarget", []string{"lessons", "--retarget", "p3"}, "evidence aged out"},
+	{"prune", []string{"lessons", "--prune", "p2"}, "pruned 1 pin(s)"},
 }
 
 // rootWriteDir returns a new directory by its resolved path, because git
@@ -74,6 +81,29 @@ func rootWriteDir(t *testing.T) string {
 func rootWriteRepo(t *testing.T) string {
 	t.Helper()
 
+	root := rootWriteTree(t)
+
+	gitify(t, root)
+	rootWriteIndex(t, root)
+
+	return root
+}
+
+// rootWritePlainRoot is rootWriteRepo for a directory outside git.
+func rootWritePlainRoot(t *testing.T) string {
+	t.Helper()
+
+	root := rootWriteTree(t)
+
+	rootWriteIndex(t, root)
+
+	return root
+}
+
+// rootWriteTree writes the files of the fixture in a new directory.
+func rootWriteTree(t *testing.T) string {
+	t.Helper()
+
 	root := filepath.Join(rootWriteDir(t), "origin")
 
 	for rel, content := range map[string]string{
@@ -89,14 +119,17 @@ func rootWriteRepo(t *testing.T) string {
 		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
 	}
 
-	gitify(t, root)
+	return root
+}
+
+// rootWriteIndex runs a real index in root and stores the fixture rows.
+func rootWriteIndex(t *testing.T, root string) {
+	t.Helper()
 
 	_, err := run(t, "-C", root, "index")
 	require.NoError(t, err)
 
 	rootWriteSeed(t, root)
-
-	return root
 }
 
 // rootWriteSeed stores the rows of the fixture in the default database
@@ -209,9 +242,47 @@ func rootWriteRefused(t *testing.T, want string, files func() map[string]string,
 
 // rootWriteCopied is the refusal of the default database of a copy.
 func rootWriteCopied(origin, copied string) string {
+	return rootWriteCopiedNoLedger(origin, copied) + ", or run this command in " + origin
+}
+
+// rootWriteCopiedNoLedger is rootWriteCopied for a recorded root without
+// a default database. A route there can only answer "no index found".
+func rootWriteCopiedNoLedger(origin, copied string) string {
 	return "the index of this checkout records another repository (" + origin + "), so this command would " +
 		"change the pin file there and the ledger in this database; nothing changed; " +
-		"run `seamark index` in " + copied + " first, or run this command in " + origin
+		"run `seamark index` in " + copied + " first"
+}
+
+// rootWriteLock holds an exclusive lock on the database at path for
+// rootWriteHold, and it returns the function that waits for the release.
+// A rollback journal holds the lock, because a write-ahead log lets a
+// reader pass.
+func rootWriteLock(t *testing.T, path string) (wait func()) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	db.SetMaxOpenConns(1)
+
+	_, err = db.Exec(`PRAGMA journal_mode = DELETE`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`BEGIN EXCLUSIVE`)
+	require.NoError(t, err)
+
+	released := make(chan error, 1)
+
+	timer := time.AfterFunc(rootWriteHold, func() {
+		_, err := db.Exec(`COMMIT`)
+		released <- err
+	})
+
+	t.Cleanup(func() { timer.Stop() })
+
+	return func() { require.NoError(t, <-released) }
 }
 
 // rootWriteUnowned is the refusal of a database that the recorded root
@@ -331,6 +402,48 @@ func TestRootWriteRefusesAnOlderCopyBeforeTheOpen(t *testing.T) {
 	}
 }
 
+// TestRootWriteKeepsTheUpgradeMessageOfANewerCopy covers a schema that
+// this binary cannot read. The route of the rule is an index run, and
+// that run fails on this schema. So the open answers: it refuses without
+// a write and names the upgrade.
+func TestRootWriteKeepsTheUpgradeMessageOfANewerCopy(t *testing.T) {
+	origin := rootWriteRepo(t)
+	copied := rootWriteCopy(t, origin)
+	db := store.DefaultPath(copied)
+
+	writeIndexDB(t, db, schemaMeta(+1))
+
+	want := storeOpenErr(t, db)
+	require.Contains(t, want, "upgrade seamark")
+
+	files := func() map[string]string { return rootWriteFiles(t, []string{origin, copied}) }
+
+	for _, c := range rootWriteCommands {
+		t.Run(c.name, func(t *testing.T) {
+			rootWriteRefused(t, want, files, append([]string{"-C", copied}, c.args...)...)
+		})
+	}
+}
+
+// TestRootWriteUpgradesAnOlderSchemaInACheckout covers a normal checkout
+// with an older schema. The rule runs before the open that migrates, so
+// the rule must read that schema and let each command through.
+func TestRootWriteUpgradesAnOlderSchemaInACheckout(t *testing.T) {
+	for _, c := range rootWriteCommands {
+		t.Run(c.name, func(t *testing.T) {
+			root := rootWriteRepo(t)
+			db := store.DefaultPath(root)
+
+			writeIndexDB(t, db, schemaMeta(-1))
+
+			out, err := run(t, append([]string{"-C", root}, c.args...)...)
+			require.NoError(t, err)
+			assert.Contains(t, out, c.done)
+			assertSchemaSupported(t, db)
+		})
+	}
+}
+
 // TestRootWriteRefusesEverySpellingOfACopyDatabase removes the default
 // database of the origin, so the origin owns any file that records it.
 // Only the rule for this workspace can then refuse. Each spelling names
@@ -350,17 +463,17 @@ func TestRootWriteRefusesEverySpellingOfACopyDatabase(t *testing.T) {
 	t.Run("a relative --db", func(t *testing.T) {
 		t.Chdir(copied)
 
-		rootWriteRefused(t, rootWriteCopied(origin, copied), files,
+		rootWriteRefused(t, rootWriteCopiedNoLedger(origin, copied), files,
 			"--db", filepath.Join(".seamark", "index.db"), "lessons", "--apply", "p1")
 	})
 
 	t.Run("a --db from a directory inside the copy", func(t *testing.T) {
-		rootWriteRefused(t, rootWriteCopied(origin, copied), files,
+		rootWriteRefused(t, rootWriteCopiedNoLedger(origin, copied), files,
 			"-C", inside, "--db", store.DefaultPath(copied), "lessons", "--apply", "p1")
 	})
 
 	t.Run("a --db through a link", func(t *testing.T) {
-		rootWriteRefused(t, rootWriteCopied(origin, copied), files,
+		rootWriteRefused(t, rootWriteCopiedNoLedger(origin, copied), files,
 			"-C", copied, "--db", store.DefaultPath(link), "lessons", "--prune", "p2")
 	})
 }
@@ -445,10 +558,10 @@ func TestRootWriteRefusesARootThatNoLongerExists(t *testing.T) {
 		assert.NoDirExists(t, origin)
 	})
 
-	t.Run("a custom database", func(t *testing.T) {
+	t.Run("a custom database outside the workspace", func(t *testing.T) {
 		origin := rootWriteRepo(t)
 		third := rootWriteDir(t)
-		custom := filepath.Join(third, "custom.db")
+		custom := filepath.Join(rootWriteDir(t), "custom.db")
 
 		require.NoError(t, os.Rename(store.DefaultPath(origin), custom))
 		require.NoError(t, os.RemoveAll(origin))
@@ -464,48 +577,92 @@ func TestRootWriteRefusesARootThatNoLongerExists(t *testing.T) {
 
 		assert.NoDirExists(t, origin)
 	})
+
+	// A restore moves this file too, so a route with its path cannot run.
+	// git ignores the file, so the workspace fingerprint stays the same.
+	// The test shows that a plain index run keeps the old root.
+	t.Run("a custom database inside the moved repository", func(t *testing.T) {
+		origin := rootWriteRepo(t)
+		moved := filepath.Join(rootWriteDir(t), "moved")
+		custom := filepath.Join(moved, "custom.db")
+
+		require.NoError(t, os.Rename(origin, moved))
+		require.NoError(t, os.Rename(store.DefaultPath(moved), custom))
+
+		files := func() map[string]string { return rootWriteFiles(t, []string{moved}, custom) }
+		want := "this database records a directory that no longer exists (" + origin +
+			"), and a write would recreate it; nothing changed; run `seamark index --force --db " + custom +
+			"` in " + moved + " first"
+
+		for _, c := range rootWriteCommands {
+			rootWriteRefused(t, want, files, append([]string{"-C", moved, "--db", custom}, c.args...)...)
+		}
+
+		_, err := run(t, "-C", moved, "--db", custom, "index")
+		require.NoError(t, err)
+
+		recorded, err := store.ProbeRoot(custom)
+		require.NoError(t, err)
+		require.Equal(t, origin, recorded, "an unchanged workspace skips a plain index run")
+
+		_, err = run(t, "-C", moved, "--db", custom, "index", "--force")
+		require.NoError(t, err)
+
+		out, err := run(t, "-C", moved, "--db", custom, "lessons", "--apply", "p1")
+		require.NoError(t, err, "the route of the refusal works")
+		assert.Contains(t, out, "applied 1 pin(s)")
+		assert.NoDirExists(t, origin)
+	})
 }
 
-// TestRootWriteFailsClosedBehindALock covers a root that does not read
-// while the file still opens. A lock longer than the wait of the root
-// read and shorter than the wait of the open gives that state. The file
-// can belong to another repository, so the command stops. A rollback
-// journal holds the lock, because a write-ahead log lets a reader pass.
+// TestRootWriteFailsClosedBehindALock covers a read before the open that
+// a lock stops. The open waits longer, so the store reads the root. A
+// locked copy then gets the usual refusal and writes no pin.
 func TestRootWriteFailsClosedBehindALock(t *testing.T) {
 	origin := rootWriteRepo(t)
 	copied := rootWriteCopy(t, origin)
 	path := store.DefaultPath(copied)
-
-	db, err := sql.Open("sqlite", path)
-	require.NoError(t, err)
-
-	defer func() { _ = db.Close() }()
-
-	db.SetMaxOpenConns(1)
-
-	_, err = db.Exec(`PRAGMA journal_mode = DELETE`)
-	require.NoError(t, err)
-
-	_, err = db.Exec(`BEGIN EXCLUSIVE`)
-	require.NoError(t, err)
-
-	released := make(chan error, 1)
-	timer := time.AfterFunc(4*time.Second, func() {
-		_, err := db.Exec(`COMMIT`)
-		released <- err
-	})
-
-	defer timer.Stop()
-
 	before := rootWriteFiles(t, []string{origin})
+	wait := rootWriteLock(t, path)
 
-	_, err = run(t, "-C", copied, "lessons", "--apply", "p1")
-	require.ErrorContains(t, err, "the recorded root of the index cannot be read ("+path+": ")
-	assert.ErrorContains(t, err, "so this command could change two repositories; no pin changed; run it again")
+	_, err := run(t, "-C", copied, "lessons", "--apply", "p1")
+	require.EqualError(t, err, rootWriteCopied(origin, copied))
 
-	require.NoError(t, <-released)
+	wait()
+
 	assert.Equal(t, before, rootWriteFiles(t, []string{origin}), "the origin stays as it is")
 	assert.Equal(t, model.ProposalProposed, rootWriteStatus(t, path, 1), "the ledger of the copy stays")
+}
+
+// TestRootWriteWaitsForALockInACheckout covers the same lock in a normal
+// checkout. The command waits and writes, as it did before the rule.
+func TestRootWriteWaitsForALockInACheckout(t *testing.T) {
+	root := rootWriteRepo(t)
+	wait := rootWriteLock(t, store.DefaultPath(root))
+
+	out, err := run(t, "-C", root, "lessons", "--apply", "p1")
+	require.NoError(t, err)
+	assert.Contains(t, out, "applied 1 pin(s)")
+
+	wait()
+
+	assert.Equal(t, model.ProposalApplied, rootWriteStatus(t, store.DefaultPath(root), 1))
+}
+
+// TestRootWriteFailsClosedWithoutAStoredRoot covers the last read. A
+// closed store gives a failed read without a timed lock. The file can
+// belong to another repository, so the command stops.
+func TestRootWriteFailsClosedWithoutAStoredRoot(t *testing.T) {
+	path := filepath.Join(rootWriteDir(t), "index.db")
+
+	st, err := store.Open(path)
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+
+	err = refusalOfStore(workspace.Workspace{Root: rootWriteDir(t), DBPath: path}, st)
+
+	require.ErrorContains(t, err, "the recorded root of the index cannot be read ("+path+": ")
+	assert.ErrorContains(t, err, "so this command could change two repositories; no pin changed; run it again")
 }
 
 // TestRootWriteSanitizesTheRecordedRoot covers a root that the database
@@ -614,6 +771,70 @@ func TestRootWriteKeepsTheStatesOfOneRepository(t *testing.T) {
 			assert.NotContains(t, lessons, "retire-me")
 			assert.Equal(t, model.ProposalApplied, rootWriteStatus(t, ledger, 1))
 			assert.Equal(t, model.ProposalSuperseded, rootWriteStatus(t, ledger, 2))
+		})
+	}
+}
+
+// TestRootWriteKeepsADirectoryInsideARootWithoutGit covers a root outside
+// git. Without a top level, -C stays as given, but the command still runs
+// in the recorded root. So a custom file of that root keeps working.
+func TestRootWriteKeepsADirectoryInsideARootWithoutGit(t *testing.T) {
+	root := rootWritePlainRoot(t)
+	inside := filepath.Join(root, "pkg")
+	custom := filepath.Join(rootWriteDir(t), "custom.db")
+
+	require.NoError(t, os.MkdirAll(inside, 0o755))
+
+	db, err := os.ReadFile(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(custom, db, 0o644))
+
+	for _, c := range rootWriteCommands {
+		out, err := run(t, append([]string{"-C", inside, "--db", custom}, c.args...)...)
+		require.NoError(t, err, c.name)
+		assert.Contains(t, out, c.done, c.name)
+	}
+
+	lessons, _ := maintainLessons(t, root)
+	assert.Contains(t, lessons, "new-rule")
+	assert.NotContains(t, lessons, "retire-me")
+	assert.Equal(t, model.ProposalApplied, rootWriteStatus(t, custom, 1))
+	assert.Equal(t, model.ProposalProposed, rootWriteStatus(t, store.DefaultPath(root), 1),
+		"the default ledger of the root stays")
+}
+
+// TestRootWriteRefusesAnotherWorkspaceInsideARootWithoutGit bounds the
+// rule above. A directory with its own git top level is another
+// repository. The default database of a directory is a copy there.
+func TestRootWriteRefusesAnotherWorkspaceInsideARootWithoutGit(t *testing.T) {
+	root := rootWritePlainRoot(t)
+	custom := filepath.Join(rootWriteDir(t), "custom.db")
+
+	db, err := os.ReadFile(store.DefaultPath(root))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(custom, db, 0o644))
+
+	nested := filepath.Join(root, "nested")
+
+	require.NoError(t, os.MkdirAll(nested, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(nested, "b.go"), []byte("package b\n"), 0o644))
+	gitify(t, nested)
+
+	copied := filepath.Join(root, "pkg")
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(store.DefaultPath(copied)), 0o755))
+	require.NoError(t, os.WriteFile(store.DefaultPath(copied), db, 0o644))
+
+	files := func() map[string]string { return rootWriteFiles(t, []string{root, copied}, custom) }
+
+	for _, c := range rootWriteCommands {
+		t.Run(c.name+" in a nested repository", func(t *testing.T) {
+			rootWriteRefused(t, rootWriteUnowned(root, " with --db "+custom), files,
+				append([]string{"-C", nested, "--db", custom}, c.args...)...)
+		})
+
+		t.Run(c.name+" with a default database inside", func(t *testing.T) {
+			rootWriteRefused(t, rootWriteCopied(root, copied), files, append([]string{"-C", copied}, c.args...)...)
 		})
 	}
 }

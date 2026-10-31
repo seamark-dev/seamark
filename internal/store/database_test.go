@@ -221,6 +221,24 @@ func TestSameDirectoryComparesIdentity(t *testing.T) {
 	assert.True(t, SameDirectory(gone, gone+string(filepath.Separator)), "a clean path needs no file")
 }
 
+// TestLiesInsideComparesIdentity covers a directory inside a root, the
+// spelling through a link, and the two paths that are not below it.
+func TestLiesInsideComparesIdentity(t *testing.T) {
+	root := t.TempDir()
+	inside := filepath.Join(root, "pkg")
+	link := filepath.Join(t.TempDir(), "link")
+
+	require.NoError(t, os.MkdirAll(inside, 0o755))
+	require.NoError(t, os.Symlink(root, link))
+
+	assert.True(t, LiesInside(inside, root))
+	assert.True(t, LiesInside(inside, link), "a link spelling of the root")
+	assert.True(t, LiesInside(filepath.Join(link, "pkg"), root), "a link spelling of the path")
+	assert.False(t, LiesInside(root, root), "a directory is not below itself")
+	assert.False(t, LiesInside(t.TempDir(), root))
+	assert.False(t, LiesInside(filepath.Join(root, "missing"), root), "a missing path has no identity")
+}
+
 func TestLiesInOtherCheckoutReadsTheStateDirectory(t *testing.T) {
 	root, other := databaseRoot(t), databaseRoot(t)
 

@@ -86,11 +86,11 @@ func SameDirectory(a, b string) bool {
 	return errA == nil && errB == nil && os.SameFile(infoA, infoB)
 }
 
-// liesInside reports whether the file at path lies below dir. It walks up
+// LiesInside reports whether the file at path lies below dir. It walks up
 // and compares file identity, because a string test fails for a spelling
 // in another case on a case-insensitive volume. A relative path shows no
 // parent directory, so it never passes.
-func liesInside(path, dir string) bool {
+func LiesInside(path, dir string) bool {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil || !filepath.IsAbs(resolved) {
 		return false
@@ -173,7 +173,7 @@ func ClassifyDatabase(root, dbPath string) DatabaseKind {
 		return DatabaseOther
 	}
 
-	if liesInside(dbPath, root) {
+	if LiesInside(dbPath, root) {
 		return DatabaseDefault
 	}
 

@@ -128,13 +128,8 @@ func openPinWriter(opts *options) (*store.Store, workspace.IndexProbe, error) {
 		return nil, none, err
 	}
 
-	// ProbeRoot reads every schema without a write. A failed read waits
-	// for the open, so a missing or a broken database keeps its refusal.
-	recorded, readErr := store.ProbeRoot(ws.DBPath)
-	if readErr == nil {
-		if decision := ws.CheckRootWrite(recorded); decision != workspace.RootWriteAllowed {
-			return nil, none, errors.New(pinWriteRefusalText(ws, decision, recorded))
-		}
+	if err := refusalBeforeOpen(ws); err != nil {
+		return nil, none, err
 	}
 
 	st, probe, err := openIndexProbe(opts)
@@ -142,55 +137,131 @@ func openPinWriter(opts *options) (*store.Store, workspace.IndexProbe, error) {
 		return nil, none, err
 	}
 
-	// The file opens, but its root did not read, for example behind a
-	// lock. The file can belong to another repository, so this fails closed.
-	if readErr != nil {
+	if err := refusalOfStore(ws, st); err != nil {
 		_ = st.Close()
 
-		return nil, none, fmt.Errorf("the recorded root of the index cannot be read (%s: %w), so this "+
-			"command could change two repositories; no pin changed; run it again",
-			render.Sanitize(ws.DBPath), readErr)
+		return nil, none, err
 	}
 
 	return st, probe, nil
 }
 
+// refusalBeforeOpen applies the rule without a write, because
+// store.ProbeRoot reads every schema. A failed read waits for the open:
+// the open waits longer for a lock, and it reports a missing or a broken
+// database in its own words.
+//
+// A newer schema also goes to the open. The open refuses it without a
+// write and names the upgrade, and the index run of a refusal route
+// would fail on that schema.
+func refusalBeforeOpen(ws workspace.Workspace) error {
+	version, err := store.ProbeVersion(ws.DBPath)
+	if err != nil || version > store.SupportedSchema() {
+		return nil
+	}
+
+	recorded, err := store.ProbeRoot(ws.DBPath)
+	if err != nil {
+		return nil
+	}
+
+	return pinWriteRefusal(ws, recorded)
+}
+
+// refusalOfStore applies the rule to the root of the open store, so a
+// read that failed before the open still reaches the rule. A root that
+// does not read fails closed, because the file can belong to another
+// repository.
+func refusalOfStore(ws workspace.Workspace, st *store.Store) error {
+	recorded, err := st.GetMeta(store.MetaRepoRoot)
+	if err != nil {
+		return fmt.Errorf("the recorded root of the index cannot be read (%s: %w), so this "+
+			"command could change two repositories; no pin changed; run it again",
+			render.Sanitize(ws.DBPath), err)
+	}
+
+	return pinWriteRefusal(ws, recorded)
+}
+
+// pinWriteRefusal returns why a pin write must not run when the database
+// of ws records the root recorded, or nil.
+func pinWriteRefusal(ws workspace.Workspace, recorded string) error {
+	decision := ws.CheckCommandRootWrite(recorded)
+	if decision == workspace.RootWriteAllowed {
+		return nil
+	}
+
+	return errors.New(pinWriteRefusalText(ws, decision, recorded))
+}
+
 // pinWriteRefusalText says why a pin write refuses and names the next
 // step. The recorded root comes from the database, so the text sanitizes
-// it. The route names an absolute --db, because a relative one means
-// another file in the recorded root. A route into a root that no longer
-// exists cannot run, so that case names the restore or the index run.
+// it.
 func pinWriteRefusalText(ws workspace.Workspace, decision workspace.RootWrite, recorded string) string {
 	root := render.Sanitize(recorded)
+	route := pinWriteRoute(ws, decision, recorded)
 
 	subject := "this database"
 	if decision == workspace.RootWriteCopied {
 		subject = "the index of this checkout"
 	}
 
-	there := "run this command in " + root
-
-	if ws.CustomDatabase(recorded) {
-		there += " with --db " + render.Sanitize(ws.AbsoluteDB())
-	}
-
-	indexRun := "run `seamark index` in " + render.Sanitize(ws.Root) + " first"
-
-	if _, err := os.Stat(recorded); errors.Is(err, fs.ErrNotExist) {
-		route := "restore " + root + ", then " + there
-		if decision == workspace.RootWriteCopied {
-			route = indexRun
-		}
-
+	if rootIsGone(recorded) {
 		return fmt.Sprintf("%s records a directory that no longer exists (%s), and a write would "+
 			"recreate it; nothing changed; %s", subject, root, route)
 	}
 
 	if decision == workspace.RootWriteCopied {
 		return fmt.Sprintf("%s records another repository (%s), so this command would change the pin "+
-			"file there and the ledger in this database; nothing changed; %s, or %s", subject, root, indexRun, there)
+			"file there and the ledger in this database; nothing changed; %s", subject, root, route)
 	}
 
 	return fmt.Sprintf("%s records another repository (%s) that does not own it, so this command would "+
-		"change the pin file there and the ledger in this database; nothing changed; %s", subject, root, there)
+		"change the pin file there and the ledger in this database; nothing changed; %s", subject, root, route)
+}
+
+// pinWriteRoute names a next step that can run in this state. The route
+// names an absolute --db, because a relative one means another file in
+// the recorded root.
+//
+// The recorded root is a route only with a ledger there. Without a
+// default database it answers that it has no index. After a move, a file
+// inside this workspace leaves with the restore, so its --db path stops
+// being valid. An index run then records this workspace. That run needs
+// --force, because an unchanged workspace skips the run and keeps the
+// old root.
+func pinWriteRoute(ws workspace.Workspace, decision workspace.RootWrite, recorded string) string {
+	root := render.Sanitize(recorded)
+	here := render.Sanitize(ws.Root)
+	db := render.Sanitize(ws.AbsoluteDB())
+
+	there := "run this command in " + root
+
+	if ws.CustomDatabase(recorded) {
+		there += " with --db " + db
+	}
+
+	switch {
+	case decision == workspace.RootWriteCopied:
+		indexRun := "run `seamark index` in " + here + " first"
+
+		if _, err := os.Stat(store.DefaultPath(recorded)); err != nil {
+			return indexRun
+		}
+
+		return indexRun + ", or " + there
+	case !rootIsGone(recorded):
+		return there
+	case store.LiesInside(ws.AbsoluteDB(), ws.Root):
+		return "run `seamark index --force --db " + db + "` in " + here + " first"
+	default:
+		return "restore " + root + ", then " + there
+	}
+}
+
+// rootIsGone reports a recorded root that no longer exists.
+func rootIsGone(recorded string) bool {
+	_, err := os.Stat(recorded)
+
+	return errors.Is(err, fs.ErrNotExist)
 }

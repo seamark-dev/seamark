@@ -3,6 +3,7 @@ package workspace
 import (
 	"path/filepath"
 
+	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -48,6 +49,27 @@ func (ws Workspace) CheckRootWrite(recorded string) RootWrite {
 	default:
 		return RootWriteUnowned
 	}
+}
+
+// CheckCommandRootWrite is CheckRootWrite for a CLI command. Without a
+// git top level, Locate keeps the -C directory as the root. A directory
+// inside the recorded root then reads as another repository, although
+// the command runs in that repository. So that directory gets the answer
+// of the recorded root. The default database of such a directory stays
+// refused, because it is a copy in that directory. A directory with its
+// own git top level is another repository. The console asks
+// CheckRootWrite, so it keeps its refusal and its route.
+func (ws Workspace) CheckCommandRootWrite(recorded string) RootWrite {
+	decision := ws.CheckRootWrite(recorded)
+	if decision != RootWriteUnowned || !store.LiesInside(ws.Root, recorded) {
+		return decision
+	}
+
+	if _, ok := history.TopLevel(ws.Root); ok {
+		return decision
+	}
+
+	return RootWriteAllowed
 }
 
 // CustomDatabase reports a --db file that a command in root must name.
