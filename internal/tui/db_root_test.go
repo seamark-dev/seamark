@@ -833,3 +833,217 @@ func TestRefusedBuildReadsTheIndexAgain(t *testing.T) {
 	h.press("enter")
 	assert.Equal(t, other, dbRootRecorded(t, db), "the build of the new file runs")
 }
+
+// dbRootTail returns the messages under the Settings table on one line,
+// because a frame wraps them beside the other box.
+func dbRootTail(s *settingsScreen) string {
+	var lines []string
+
+	for _, it := range s.tailItems(400) {
+		lines = append(lines, it.lines...)
+	}
+
+	return dbRootFlat(strings.Join(lines, " "))
+}
+
+// dbRootGate writes distill.write into the config.yaml of root.
+func dbRootGate(t *testing.T, root string, on bool) {
+	t.Helper()
+
+	text := "distill:\n  write: " + strconv.FormatBool(on) + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, filepath.FromSlash(settings.File)), []byte(text), 0o644))
+}
+
+// dbRootGateOff returns a repository whose gate reads off, with a copy.
+func dbRootGateOff(t *testing.T) (origin, copied string) {
+	t.Helper()
+
+	origin = dbRootRepo(t, "origin")
+	dbRootGate(t, origin, false)
+
+	return origin, dbRootCopy(t, origin)
+}
+
+// TestSettingsOfACopyShowsTheRefusalBeforeADraft covers the config.yaml
+// groups of a copied checkout. A row that fails only on save would hide
+// that the save reaches the origin.
+func TestSettingsOfACopyShowsTheRefusalBeforeADraft(t *testing.T) {
+	origin, copied := dbRootGateOff(t)
+	dbRootGate(t, copied, true)
+
+	ws, err := workspace.Resolve(copied, "")
+	require.NoError(t, err)
+
+	h := lessonsOpen(t, services.New(ws, "test", "/usr/local/bin/seamark"), "group:pinwrite", 150, 50)
+
+	s := settingsScr(h)
+	block := settingsBlock(s.snap().Editable(settings.GroupPinWrite), settingsFile)
+	assert.Equal(t, settingsForeignRootRoute, block.route)
+	assert.True(t, s.foreignRoot())
+
+	assert.Contains(t, dbRootTail(s), "These values come from")
+	assert.Contains(t, dbRootTail(s), "the root that the index records, not from this workspace")
+	assert.Contains(t, footerLine(h.view()), "o index build")
+
+	h.press("enter", "space", "enter")
+	assert.Zero(t, settingsScr(h).draftTotal(), "the row takes no draft")
+	h.press("esc")
+
+	before, err := os.ReadFile(filepath.Join(origin, filepath.FromSlash(settings.File)))
+	require.NoError(t, err)
+
+	// The route: o opens the build, and the build frees the group.
+	h.press("o")
+	require.True(t, ovScreen(h).capturing())
+	h.press("enter", "enter", "5")
+
+	s = settingsScr(h)
+	require.NoError(t, s.snap().Editable(settings.GroupPinWrite), "the build reloads Settings")
+	assert.NotContains(t, dbRootTail(s), "These values come from")
+	assert.True(t, s.snap().Distill.Distill.Write, "the copy reads its own file")
+
+	after, err := os.ReadFile(filepath.Join(origin, filepath.FromSlash(settings.File)))
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
+}
+
+// TestSettingsRoutesToTheRootOfADatabaseItDoesNotOwn covers the console
+// route, because a build is refused there.
+func TestSettingsRoutesToTheRootOfADatabaseItDoesNotOwn(t *testing.T) {
+	origin, copied := dbRootGateOff(t)
+
+	ws, err := workspace.Resolve(dbRootDir(t), store.DefaultPath(copied))
+	require.NoError(t, err)
+
+	h := lessonsOpen(t, services.New(ws, "test", "/usr/local/bin/seamark"), "group:pinwrite", 150, 50)
+
+	s := settingsScr(h)
+	assert.Equal(t, "Open the console in "+origin+", because a save works there.",
+		settingsBlock(s.snap().Editable(settings.GroupPinWrite), settingsFile).route)
+	assert.False(t, s.foreignRoot())
+	assert.NotContains(t, footerLine(h.view()), "index build")
+}
+
+// TestSettingsOfAnOwnedDatabaseSaysWhichFileItShows covers the state where
+// config.yaml stays editable: the value belongs to the recorded root.
+func TestSettingsOfAnOwnedDatabaseSaysWhichFileItShows(t *testing.T) {
+	origin := dbRootRepo(t, "origin")
+
+	ws, err := workspace.Resolve(dbRootDir(t), store.DefaultPath(origin))
+	require.NoError(t, err)
+
+	h := lessonsOpen(t, services.New(ws, "test", "/usr/local/bin/seamark"), "group:pinwrite", 150, 50)
+
+	require.NoError(t, settingsScr(h).snap().Editable(settings.GroupPinWrite))
+	assert.Contains(t, dbRootTail(settingsScr(h)), "These values come from")
+}
+
+// TestPinReviewGateRouteNamesTheWayOutOfAForeignRoot covers the gate of a
+// pin review. o opened Settings, whose save refuses in these states.
+func TestPinReviewGateRouteNamesTheWayOutOfAForeignRoot(t *testing.T) {
+	t.Run("a copied checkout", func(t *testing.T) {
+		_, copied := dbRootGateOff(t)
+
+		h, _ := dbRootConsole(t, copied, "")
+		review := dbRootReview(t, h)
+
+		for _, b := range review.preview.Blockers {
+			if b.Kind == maintain.BlockGate {
+				line := pinBlockerLine(review.st, b)
+				assert.Contains(t, line, "build the index of this checkout")
+				assert.NotContains(t, line, "Settings")
+			}
+		}
+
+		dest, intent, _, ok := review.route()
+		require.True(t, ok)
+		assert.Equal(t, destOverview, dest, "the build comes first")
+		assert.Equal(t, ovIntentBuild, intent)
+	})
+
+	t.Run("a database that the root does not own", func(t *testing.T) {
+		origin, copied := dbRootGateOff(t)
+
+		h, _ := dbRootConsole(t, dbRootDir(t), store.DefaultPath(copied))
+		review := dbRootReview(t, h)
+
+		for _, b := range review.preview.Blockers {
+			if b.Kind == maintain.BlockGate {
+				assert.Contains(t, pinBlockerLine(review.st, b), "open the console in "+origin)
+			}
+		}
+
+		assert.Negative(t, review.routed(), "o opens no save that refuses")
+	})
+
+	t.Run("a database that the root owns keeps the gate route", func(t *testing.T) {
+		origin := dbRootRepo(t, "origin")
+		dbRootGate(t, origin, false)
+
+		h, _ := dbRootConsole(t, dbRootDir(t), store.DefaultPath(origin))
+
+		dest, _, _, ok := dbRootReview(t, h).route()
+		require.True(t, ok)
+		assert.Equal(t, destSettings, dest)
+	})
+}
+
+// TestMaintGateRouteNamesTheWayOutOfAForeignRoot covers the plan and the
+// recovery previews of Pins, which share the note.
+func TestMaintGateRouteNamesTheWayOutOfAForeignRoot(t *testing.T) {
+	fx := maintFixture(t)
+	p := fx.maintNarrow(t, maintPlanOpts{write: false, cursor: true})
+
+	open := func(f *fakeServices) *harness { return maintOpen(t, f, p.Request, 120, 40) }
+
+	t.Run("a copied checkout", func(t *testing.T) {
+		f := maintFakeOf(fx, p, nil)
+		f.pins.Index.Root = "/work/original"
+
+		h := open(f)
+		assert.False(t, maintHasKey(h, "o"), "no key opens a save that refuses")
+		assert.NotContains(t, maintContent(t, h), "Press o for Settings")
+		assert.Contains(t, maintContent(t, h), "Run seamark index in this checkout")
+	})
+
+	t.Run("a recovery names the build itself", func(t *testing.T) {
+		f := maintFakeOf(fx, p, nil)
+		f.pins.Index.Root = "/work/original"
+
+		m := maintHostOf(open(f)).modal
+		m.foreign = ""
+
+		assert.Contains(t, m.gateRoute("after."), "Run seamark index in this checkout")
+	})
+
+	t.Run("the default database keeps the Settings route", func(t *testing.T) {
+		h := open(maintFakeOf(fx, p, nil))
+		assert.True(t, maintHasKey(h, "o"))
+		assert.Contains(t, maintContent(t, h), "Press o for Settings")
+	})
+}
+
+// TestOverviewPinWritingItemNamesTheWayOut covers the Overview link to the
+// gate, which must not end at a save that refuses.
+func TestOverviewPinWritingItemNamesTheWayOut(t *testing.T) {
+	t.Run("a copied checkout builds first", func(t *testing.T) {
+		_, copied := dbRootGateOff(t)
+
+		h, _ := dbRootConsole(t, copied, "")
+		h.press("1")
+
+		it := ovFind(t, ovScreen(h), "learn:pinwrite")
+		assert.Equal(t, ovActBuild, it.act.kind)
+	})
+
+	t.Run("a database that the root does not own names the console", func(t *testing.T) {
+		origin, copied := dbRootGateOff(t)
+
+		h, _ := dbRootConsole(t, dbRootDir(t), store.DefaultPath(copied))
+		h.press("1")
+
+		it := ovFind(t, ovScreen(h), "learn:pinwrite")
+		assert.Equal(t, ovActNone, it.act.kind)
+		assert.Contains(t, it.route, "Open the console in "+origin)
+	})
+}

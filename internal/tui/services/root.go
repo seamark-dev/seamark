@@ -20,8 +20,9 @@ import (
 // ErrForeignRoot reports an index that records another repository root
 // than the workspace, as in a copied checkout or a --db of another
 // repository. A pin authoring commit and a lessons save refuse it, and a
-// selection sample is then unavailable. A maintenance commit and a
-// proposal apply refuse it unless the recorded root owns the database.
+// selection sample is then unavailable. A maintenance commit, a proposal
+// apply, and a config.yaml save refuse it unless the recorded root owns
+// the database.
 var ErrForeignRoot = errors.New("the index records another repository root")
 
 // errRootUnknown reports a database whose recorded root does not read. A
@@ -66,9 +67,9 @@ func (e *engine) foreignRoot(probe workspace.IndexProbe) error {
 	}
 }
 
-// ownRoot refuses a write to the pin file and the ledger when the two
-// lie in two repositories. The engine writes the pin file under the
-// recorded root and the ledger in this database. A foreign root is normal
+// ownRoot refuses a write under the recorded root when that write and
+// this database lie in two repositories. The engine writes the pin file
+// and config.yaml there and the ledger in this database. A foreign root is normal
 // only for a file that the recorded root owns (store.RootOwnsDatabase).
 // A database that the default path of this workspace names never counts,
 // as in a copied checkout. The check compares files, not path strings.

@@ -958,6 +958,8 @@ func pinBlockerLine(st *state, b maintain.AuthorBlocker) string {
 		b.Route = "open the console in that repository, because a save works there"
 	case b.Kind == maintain.BlockLedger && why != "":
 		b.Route = why
+	case b.Kind == maintain.BlockGate && pinGateBlocked(st):
+		b.Route = pinForeignRoute(st)
 	}
 
 	return b.String()

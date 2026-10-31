@@ -213,7 +213,9 @@ type Settings interface {
 	// writes nothing.
 	PlanSettings(snap *settings.Snapshot, edits []settings.Edit) (*settings.Plan, error)
 	// SaveSettings writes exactly the reviewed plan, or reports it stale.
-	// A lessons save refuses a foreign root with ErrForeignRoot.
+	// A lessons save refuses a foreign root with ErrForeignRoot. A
+	// config.yaml save refuses it unless the recorded root owns the
+	// database.
 	SaveSettings(p *settings.Plan) (settings.Result, error)
 }
 

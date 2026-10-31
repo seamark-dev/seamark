@@ -167,17 +167,26 @@ func TestEngineLessonsSaveRefusesAnotherRoot(t *testing.T) {
 				require.ErrorIs(t, snap.Editable(g), ErrForeignRoot, "%s names the foreign root before a draft", g)
 			}
 
-			assert.NoError(t, snap.Editable(settings.GroupPinWrite), "config.yaml keeps its root rules")
-
 			_, err = tc.e.PlanSettings(snap, []settings.Edit{muteAdd("RUF001", "")})
 			require.ErrorIs(t, err, ErrForeignRoot)
 
 			_, err = tc.e.PlanSettings(snap, []settings.Edit{{Field: settings.Threshold, Int: 3}})
 			require.ErrorIs(t, err, ErrForeignRoot)
 
+			// config.yaml follows the rule of a pin write: a database that
+			// the recorded root owns keeps one repository, a copy does not.
 			config, err := tc.e.PlanSettings(snap, []settings.Edit{{Field: settings.DistillWrite, Bool: true}})
-			require.NoError(t, err, "a config.yaml plan is not a lessons plan")
+
+			if tc.e.ownRoot(tc.e.probe()) != nil {
+				require.ErrorIs(t, err, ErrForeignRoot)
+				require.ErrorIs(t, snap.Editable(settings.GroupPinWrite), ErrForeignRoot)
+
+				return
+			}
+
+			require.NoError(t, err, "the recorded root owns this database")
 			assert.Equal(t, settings.File, config.File)
+			assert.NoError(t, snap.Editable(settings.GroupPinWrite))
 		})
 	}
 }

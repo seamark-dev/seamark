@@ -91,9 +91,21 @@ func settingsForeignRoute(err error) string {
 	return settingsForeignRootRoute
 }
 
-// foreignRoot reports a selected lessons group whose block has the route
-// of the index build. o then opens that build. The key reads the route
-// of settingsBlock, so it follows the route that the note shows.
+// settingsShownRoot returns the root whose files the screen shows when it
+// is not this workspace, else "". The lessons block carries that root
+// for every foreign root, also when config.yaml stays editable.
+func settingsShownRoot(snap *settings.Snapshot) string {
+	var foreign *services.ForeignRootError
+	if snap.Lessons != nil && errors.As(snap.Lessons.Blocked, &foreign) {
+		return foreign.Root
+	}
+
+	return ""
+}
+
+// foreignRoot reports a selected group whose block has the route of the
+// index build. o then opens that build. The key reads the route of
+// settingsBlock, so it follows the route that the note shows.
 func (s *settingsScreen) foreignRoot() bool {
 	snap := s.snap()
 	if snap == nil {

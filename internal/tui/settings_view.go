@@ -301,6 +301,13 @@ func (s *settingsScreen) tailItems(w int) []settingsTail {
 		out = append(out, s.blockTail(settingsGroupTitle(group), snap.Editable(group), group.Document(), w))
 	}
 
+	// Settings reads the files of the recorded root, so the screen says
+	// that these values are not the files of this workspace.
+	if root := settingsShownRoot(snap); root != "" {
+		warn("These values come from " + ui.OneLine(root) + ", the root that the index records, not from this " +
+			"workspace.")
+	}
+
 	if n := s.draftTotal(); n > 0 {
 		if s.st.busy() {
 			warn("Saving waits for the running operation: " + ui.OneLine(s.st.mutation) + ".")

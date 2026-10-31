@@ -346,7 +346,7 @@ func (o *overview) onBuildDone(msg ovBuildDoneMsg) tea.Cmd {
 
 	// The evidence view shows the index state and reads its counts
 	// from the index, so it reloads too.
-	return tea.Batch(mutationDone, refresh(secIndex, secDoctor, secLedger, secStats, secLearning, secPins), note)
+	return tea.Batch(mutationDone, refresh(secIndex, secDoctor, secLedger, secStats, secLearning, secPins, secSettings), note)
 }
 
 // ovModalW is the widest build modal. It keeps the lines of the modal

@@ -286,6 +286,13 @@ func pinForeignSentence(st *state) string {
 	return pinForeignBuild
 }
 
+// pinGateBlocked reports that Settings refuses the save that turns on
+// pin writing. config.yaml follows the rule of a pin write, so a route
+// to the gate names the way out of that state first.
+func pinGateBlocked(st *state) bool {
+	return pinsForeignRoot(st) != ""
+}
+
 // foreignRefusal is the refusal of a commit that another recorded root
 // stops. The service marks an error whose build refuses too, so the words
 // need no read of the disk. noun names what the user confirmed.

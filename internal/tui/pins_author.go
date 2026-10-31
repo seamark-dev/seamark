@@ -799,7 +799,8 @@ func (r *pinReview) confirmable() bool {
 // BlockKind). The ledger and the root lead to the index build, but the
 // root does not under --db (pinOpenRoot), and the ledger does not while
 // a build is refused. The gate leads to Settings only while it reads,
-// because a gate that does not read has no setting to change.
+// because a gate that does not read has no setting to change, and only
+// while Settings can save it.
 func (r *pinReview) routes(b maintain.AuthorBlocker) bool {
 	switch b.Kind {
 	case maintain.BlockLedger:
@@ -807,7 +808,7 @@ func (r *pinReview) routes(b maintain.AuthorBlocker) bool {
 	case maintain.BlockForeignRoot:
 		return !pinsOtherDB(r.st)
 	case maintain.BlockGate:
-		return r.preview.GateErr == nil
+		return r.preview.GateErr == nil && !pinGateBlocked(r.st)
 	}
 
 	return false

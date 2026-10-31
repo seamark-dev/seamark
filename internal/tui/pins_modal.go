@@ -295,7 +295,23 @@ func (m *maintModal) confirmable() bool {
 // gateOff reports a preview whose only route is the write gate: the plan
 // read distill.write as off, not as unreadable.
 func (m *maintModal) gateOff() bool {
-	return m.showsPreview() && !m.preview.Write && m.preview.GateErr == nil
+	return m.showsPreview() && !m.preview.Write && m.preview.GateErr == nil &&
+		!pinGateBlocked(m.st)
+}
+
+// gateRoute is the end of a note about a gate that reads off. after says
+// what follows a save. Settings refuses that save under another recorded
+// root, so the note then names the way out of that state. A preview with
+// a foreign note names it already.
+func (m *maintModal) gateRoute(after string) string {
+	switch {
+	case m.foreign != "":
+		return ""
+	case pinGateBlocked(m.st):
+		return " " + pinForeignSentence(m.st)
+	default:
+		return " Press o for Settings " + m.st.theme.Glyphs.Arrow + " Pin writing; " + after
+	}
 }
 
 // reviewAgain reports a result that a new preview can resolve: a

@@ -806,3 +806,189 @@ func TestRecordedRootInAnotherCaseIsNotForeign(t *testing.T) {
 	assert.NoError(t, got.BuildBlock)
 	assert.NoError(t, got.WriteBlock)
 }
+
+// rootGate saves distill.write through the engine and returns the result
+// of the plan and of the save.
+func rootGate(e *engine) (settings.Result, error) {
+	snap, err := e.Settings()
+	if err != nil {
+		return settings.Result{}, err
+	}
+
+	plan, err := e.PlanSettings(snap, []settings.Edit{{Field: settings.DistillWrite, Bool: true}})
+	if err != nil {
+		return settings.Result{}, err
+	}
+
+	return e.SaveSettings(plan)
+}
+
+// rootConfig reads the config.yaml of root.
+func rootConfig(t *testing.T, root string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(settings.File)))
+	require.NoError(t, err)
+
+	return string(data)
+}
+
+// TestConfigSaveRefusesTheFileOfAnotherRepository covers a Settings save
+// that changed the config.yaml of the origin from a copied checkout. The
+// same rule covers a database that the recorded root does not own.
+func TestConfigSaveRefusesTheFileOfAnotherRepository(t *testing.T) {
+	cases := map[string]func(*testing.T, workspace.Workspace) workspace.Workspace{
+		"a copied checkout": func(t *testing.T, origin workspace.Workspace) workspace.Workspace {
+			ws, err := workspace.Resolve(rootCopy(t, origin, "copy"), "")
+			require.NoError(t, err)
+
+			return ws
+		},
+		"a third directory with the database of a copy": func(t *testing.T, origin workspace.Workspace) workspace.Workspace {
+			ws, _ := rootThirdDirectory(t, origin)
+
+			return ws
+		},
+		"a copy with a renamed database": func(t *testing.T, origin workspace.Workspace) workspace.Workspace {
+			ws, _ := rootRenamed(t, origin)
+
+			return ws
+		},
+	}
+
+	for name, resolve := range cases {
+		t.Run(name, func(t *testing.T) {
+			origin, _ := maintWorkspace(t, false)
+			ws := resolve(t, origin)
+			before := rootConfig(t, origin.Root)
+
+			e := engNew(ws, Deps{})
+
+			snap, err := e.Settings()
+			require.NoError(t, err)
+
+			for _, g := range []settings.Group{
+				settings.GroupInference, settings.GroupPinWrite, settings.GroupEvidence, settings.GroupIndexing,
+			} {
+				require.ErrorIs(t, snap.Editable(g), ErrForeignRoot, "%s shows the refusal before a draft", g)
+			}
+
+			_, err = rootGate(e)
+			require.ErrorIs(t, err, ErrForeignRoot)
+			assert.Equal(t, before, rootConfig(t, origin.Root), "the config.yaml of the origin stays")
+		})
+	}
+}
+
+// TestConfigSaveRefusesARootThatTurnedForeignAfterThePlan covers the check
+// of the commit. A plan that passed writes nothing once the root moved.
+func TestConfigSaveRefusesARootThatTurnedForeignAfterThePlan(t *testing.T) {
+	origin, _ := maintWorkspace(t, false)
+	e := engNew(origin, Deps{})
+
+	snap, err := e.Settings()
+	require.NoError(t, err)
+
+	plan, err := e.PlanSettings(snap, []settings.Edit{{Field: settings.DistillWrite, Bool: true}})
+	require.NoError(t, err)
+
+	before := rootConfig(t, origin.Root)
+
+	st, err := store.Open(origin.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, st.SetMeta(store.MetaRepoRoot, rootDir(t)))
+	require.NoError(t, st.Close())
+
+	_, err = e.SaveSettings(plan)
+	require.ErrorIs(t, err, ErrForeignRoot)
+	assert.Equal(t, before, rootConfig(t, origin.Root))
+}
+
+// TestConfigSaveKeepsTheDatabaseOfTheRecordedRoot holds the exception: the
+// file and the database belong to one repository.
+func TestConfigSaveKeepsTheDatabaseOfTheRecordedRoot(t *testing.T) {
+	origin, _ := maintWorkspace(t, false)
+
+	ws, err := workspace.Resolve(rootDir(t), origin.DBPath)
+	require.NoError(t, err)
+
+	_, err = rootGate(engNew(ws, Deps{}))
+	require.NoError(t, err)
+	assert.Contains(t, rootConfig(t, origin.Root), "write: true")
+}
+
+// TestConfigSaveWorksWithoutARecordedRoot holds the first-run routes: no
+// index, a new --db file, and a database that records no root.
+func TestConfigSaveWorksWithoutARecordedRoot(t *testing.T) {
+	repo := func(t *testing.T) string {
+		t.Helper()
+
+		root := rootDir(t)
+		servicestest.Git(t, root, "init", "-b", "main")
+
+		return root
+	}
+
+	cases := map[string]func(t *testing.T, root string) string{
+		"no index":        func(*testing.T, string) string { return "" },
+		"a new --db file": func(t *testing.T, _ string) string { return filepath.Join(rootDir(t), "new.db") },
+		"an empty --db file": func(t *testing.T, _ string) string {
+			path := filepath.Join(rootDir(t), "empty.db")
+			require.NoError(t, os.WriteFile(path, nil, 0o644))
+
+			return path
+		},
+	}
+
+	for name, db := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := repo(t)
+
+			ws, err := workspace.Resolve(root, db(t, root))
+			require.NoError(t, err)
+
+			_, err = rootGate(engNew(ws, Deps{}))
+			require.NoError(t, err)
+			assert.Contains(t, rootConfig(t, root), "write: true", "the save creates the file of this workspace")
+		})
+	}
+}
+
+// TestCopyReadsItsOwnConfigAfterItsBuild states what a build changes. The
+// copy shows the file of the origin before it and its own file after it,
+// so the gate can read another value. A save then stays in the copy.
+func TestCopyReadsItsOwnConfigAfterItsBuild(t *testing.T) {
+	origin, _ := maintWorkspace(t, true)
+	root := rootCopy(t, origin, "copy")
+
+	// The two files differ, as they do once the origin moves on.
+	own := filepath.Join(root, filepath.FromSlash(settings.File))
+	data, err := os.ReadFile(own)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(own, []byte(strings.ReplaceAll(string(data), "write: true", "write: false")), 0o644))
+
+	ws, err := workspace.Resolve(root, "")
+	require.NoError(t, err)
+
+	e := engNew(ws, Deps{})
+
+	before, err := e.Settings()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(origin.Root, filepath.FromSlash(settings.File)), before.Path)
+	assert.True(t, before.Distill.Distill.Write, "before the build the screen reads the origin")
+
+	require.NoError(t, rootBuild(e, false))
+
+	after, err := e.Settings()
+	require.NoError(t, err)
+	assert.Equal(t, own, after.Path)
+	assert.False(t, after.Distill.Distill.Write, "after the build the copy reads its own file")
+	require.NoError(t, after.Editable(settings.GroupPinWrite))
+
+	originConfig := rootConfig(t, origin.Root)
+
+	_, err = rootGate(e)
+	require.NoError(t, err)
+	assert.Contains(t, rootConfig(t, root), "write: true")
+	assert.Equal(t, originConfig, rootConfig(t, origin.Root), "the save stays in the copy")
+}

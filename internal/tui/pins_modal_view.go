@@ -337,8 +337,8 @@ func (m *maintModal) planBlockers(w int) []string {
 		note("distill.write cannot be read: " + ui.ErrText(p.GateErr) + ". Fix " + settingsFile + " first; a reader " +
 			"error never counts as on.")
 	case !p.Write:
-		note("distill.write is off, so this preview changes nothing. Press o for Settings " + t.Glyphs.Arrow +
-			" Pin writing; after a save, press " + open + " in Pins for a new preview.")
+		note("distill.write is off, so this preview changes nothing." +
+			m.gateRoute("after a save, press "+open+" in Pins for a new preview."))
 	}
 
 	if len(out) == 0 {
@@ -1002,8 +1002,7 @@ func (m *maintModal) recoveryBlockers(w int) []string {
 		note("distill.write cannot be read: " + ui.ErrText(p.GateErr) + ". Fix " + settingsFile + " first. esc " +
 			"returns to the result, which keeps this offer; press c there to check the proof again.")
 	case !p.Write:
-		note("distill.write is off. Press o for Settings " + t.Glyphs.Arrow + " Pin writing; after a save, press " +
-			"c on the result to check the proof again.")
+		note("distill.write is off." + m.gateRoute("after a save, press c on the result to check the proof again."))
 	}
 
 	if maintNotReady(p.Items) > 0 {
