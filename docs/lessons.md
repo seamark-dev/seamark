@@ -136,7 +136,8 @@ pin removal deletes those of its own entry. A prune (`-` in Lessons ›
 Pins) deletes those that name its proposal.
 
 Pins are powerful, so their injection cost is budgeted: the edit hook
-carries at most `pin_budget` pins per edit (default 3), ranked by
+carries at most `pin_budget` pins per edit (default 3, and never more
+than 8), ranked by
 evidence confidence first and region specificity second — a weak pin
 must not hold a slot a strong one wants, and among equals a pin on the
 file beats its package beats a repo-wide `*` — with a `+N more` pointer
@@ -169,7 +170,10 @@ hook_delivery: once-per-context
 With `once-per-context`, the first matching edit injects the lesson and later
 matching edits in the same provider session stay silent for that lesson.
 Different lessons can still be injected, and changing a lesson's region or
-symptom gives it a new identity. `seamark init` installs a `PostCompact`
+symptom gives it a new identity. A delivered pin follows its exact version,
+so a mode or check change can also deliver it again. A cosmetic edit of
+`lessons.yaml` keeps the version. A mined lesson has no version and keeps its
+content key: its region and symptom. `seamark init` installs a `PostCompact`
 lifecycle hook that starts a fresh delivery generation after Claude Code
 summarizes old context, so delivered reminders can return when they are useful
 again. After upgrading Seamark, run init once to install or refresh the hooks.
@@ -547,7 +551,9 @@ comment, and it never creates, changes, or links a proposal row.
   byte for byte.
 - A linked pin (one applied proposal records it) allows note, mode,
   and check edits. Its rule stays read-only. Its scope changes with `w`
-  (retarget), and its removal is `-` (prune). The proposal keeps its
+  (retarget) while `w` offers the recomputed regions, and its removal is
+  `-` (prune). While `w` reads `n/a`, Pins gives the reason and a next
+  action. The proposal keeps its
   recorded rule, note, and evidence. A changed note makes Pins show
   `edited`; trigger extraction still asks about the recorded note.
   Mode and check edits have their own review notes and change the pin
@@ -564,6 +570,12 @@ identity, and the review says whether it does. A context that already
 saw the old wording can then receive the pin again, also in
 `once-per-context` mode. Earlier deliveries stay recorded under the
 earlier wording and scope; nothing is reset or moved.
+
+A mode edit, a check edit, or a note edit of letter case alone keeps the
+delivery identity but gives the pin a new version. The review says so,
+and a context that already saw the pin can receive it again, also in
+`once-per-context` mode. A renamed check with the same definition keeps
+the version. Mined lessons keep their content key.
 
 ### Remove, Prune, Mute, and the other filters
 
