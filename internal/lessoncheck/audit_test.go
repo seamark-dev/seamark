@@ -147,6 +147,27 @@ func TestLessonCheckAuditAppendIsHardened(t *testing.T) {
 		assert.Len(t, readAuditLines(t, root), 1)
 	})
 
+	t.Run("the time of the new record ages the log, not the wall clock", func(t *testing.T) {
+		root := t.TempDir()
+
+		// One clock that runs far behind the wall clock stamps every record.
+		stamped := func(age time.Duration) AuditRecord {
+			rec := discardedRecord()
+			rec.TS = time.Now().Add(-age).UTC().Format(time.RFC3339)
+
+			return rec
+		}
+
+		require.NoError(t, AppendAudit(root, stamped(90*24*time.Hour)))
+		require.NoError(t, AppendAudit(root, stamped(89*24*time.Hour)))
+		assert.NoFileExists(t, auditPath(root)+".1", "the two records are one day apart")
+		assert.Len(t, readAuditLines(t, root), 2)
+
+		require.NoError(t, AppendAudit(root, stamped(59*24*time.Hour)))
+		assert.FileExists(t, auditPath(root)+".1", "the new record is 31 days after the oldest record")
+		assert.Len(t, readAuditLines(t, root), 1)
+	})
+
 	t.Run("a first line that does not parse rotates", func(t *testing.T) {
 		root := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o700))

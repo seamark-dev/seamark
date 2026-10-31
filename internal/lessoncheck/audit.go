@@ -315,7 +315,7 @@ func AppendAudit(root string, rec AuditRecord) error {
 		return err
 	}
 
-	if err := tightenAndRotate(path); err != nil {
+	if err := tightenAndRotate(path, recordTime(rec)); err != nil {
 		return err
 	}
 
@@ -343,6 +343,19 @@ func ensureRealDir(dir, createPrefix string) error {
 	}
 
 	return err
+}
+
+// recordTime returns the time of a bounded record. The log age uses this
+// time, so one clock stamps and ages the records. A caller with its own
+// clock then gets no rotation from the wall clock. A TS that does not
+// parse gives the wall clock.
+func recordTime(rec AuditRecord) time.Time {
+	t, err := time.Parse(time.RFC3339, rec.TS)
+	if err != nil {
+		return time.Now()
+	}
+
+	return t
 }
 
 // boundRecord checks the closed lists of a record and applies the
@@ -473,10 +486,11 @@ func refuseLink(path string) error {
 // rotation, because a rename keeps the mode, and a loose rotated file
 // would keep the history readable for other users. The live log
 // rotates when it reaches maxAuditBytes or when its oldest record is
-// older than maxAuditAge. The writer removes a rotated generation older
-// than maxAuditAge. Its modification time is the time of its newest
-// record.
-func tightenAndRotate(path string) error {
+// older than maxAuditAge at now, the time of the record that the writer
+// appends. The writer removes a rotated generation older than
+// maxAuditAge. Its modification time is the time of its newest record.
+// The file system sets that time, so this check uses the wall clock.
+func tightenAndRotate(path string, now time.Time) error {
 	rotated := path + ".1"
 
 	// The rotated generation gets the rules of the live log: a link is
@@ -505,7 +519,7 @@ func tightenAndRotate(path string) error {
 	// swap after the check.
 	chmodErr := f.Chmod(privateFileMode)
 	info, statErr := f.Stat()
-	stale := oldestRecordStale(f)
+	stale := oldestRecordStale(f, now)
 
 	_ = f.Close()
 
@@ -526,7 +540,7 @@ func tightenAndRotate(path string) error {
 // A first line that does not read or parse counts as stale too, because
 // a rotation moves it aside and keeps it readable in the rotated
 // generation.
-func oldestRecordStale(f *os.File) bool {
+func oldestRecordStale(f *os.File, now time.Time) bool {
 	// Every append reads this line, so the first buffer is small. The
 	// scanner grows it up to 1 MiB when a first line is longer.
 	sc := bufio.NewScanner(f)
@@ -545,5 +559,5 @@ func oldestRecordStale(f *os.File) bool {
 		return true
 	}
 
-	return time.Since(first.TS) > maxAuditAge
+	return now.Sub(first.TS) > maxAuditAge
 }
