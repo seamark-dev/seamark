@@ -20,6 +20,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/maintain"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
+	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/store/storetest"
@@ -595,15 +596,16 @@ func TestSettingsKeepsTheBuildRouteOfACopiedCheckout(t *testing.T) {
 	assert.True(t, ovScreen(h).capturing(), "o opens the build of a copied checkout")
 }
 
-// TestLinkedDefaultPathRoutesToItsOwner covers a worktree that shares the
-// database of another worktree. Retarget and prune stay off, as without a
-// link. A build refuses, so every route names the console of the owner.
+// TestLinkedDefaultPathRoutesToItsOwner covers a default path that links
+// to the database of a copy. That file records the origin and is not its
+// ledger, so retarget and prune stay off. A build refuses, so every route
+// names the console of the origin.
 func TestLinkedDefaultPathRoutesToItsOwner(t *testing.T) {
 	origin := dbRootRepo(t, "origin")
-	side := dbRootCopy(t, origin)
+	shared, side := dbRootCopy(t, origin), dbRootCopy(t, origin)
 
 	require.NoError(t, os.Remove(store.DefaultPath(side)))
-	require.NoError(t, os.Symlink(store.DefaultPath(origin), store.DefaultPath(side)))
+	require.NoError(t, os.Symlink(store.DefaultPath(shared), store.DefaultPath(side)))
 
 	h, svc := dbRootConsole(t, side, "")
 
@@ -1074,4 +1076,58 @@ func TestRecheckEndsWhenTheUserLeavesOverview(t *testing.T) {
 
 	h.press("1")
 	assert.NotContains(t, h.view(), "Build the index?")
+}
+
+// TestWorktreeThatLinksToTheDatabaseOfItsRootWrites covers a worktree that
+// shares the database of the main checkout. The pin and the ledger both
+// belong to the main checkout, so one write changes one repository. A
+// build still refuses, because it would move the recorded root.
+func TestWorktreeThatLinksToTheDatabaseOfItsRootWrites(t *testing.T) {
+	for name, db := range map[string]func(origin string) string{
+		"the linked default path":  func(string) string { return "" },
+		"--db of the main default": store.DefaultPath,
+	} {
+		t.Run(name, func(t *testing.T) {
+			origin := dbRootRepo(t, "origin")
+			id := dbRootNewRow(t, store.DefaultPath(origin))
+			side := dbRootCopy(t, origin)
+
+			require.NoError(t, os.Remove(store.DefaultPath(side)))
+			require.NoError(t, os.Symlink(store.DefaultPath(origin), store.DefaultPath(side)))
+
+			h, svc := dbRootConsole(t, side, db(origin))
+			pinsCursorTo(h, 1)
+
+			// The keys, the route, and the answer of the service agree.
+			p := pinsOf(h)
+			assert.NoError(t, pinsDatabase(p.st).WriteBlock)
+			assert.Empty(t, pinsForeignRoot(p.st), "the keys stay on")
+			assert.Contains(t, pinsKeys(h), "-")
+
+			detail := pinsDetail(t, h)
+			assert.NotContains(t, detail, "Retarget and prune are off")
+			assert.NotContains(t, detail, "Build the index")
+			assert.Contains(t, detail, "to save it, open the console in "+origin)
+
+			pv, err := svc.PreviewDecision(proposals.ActionApply, []int64{id})
+			require.NoError(t, err)
+			require.NoError(t, pv.RootBlock)
+
+			_, err = svc.CommitDecision(pv)
+			require.NoError(t, err)
+
+			data, err := os.ReadFile(filepath.Join(origin, pinfile.File))
+			require.NoError(t, err)
+			assert.Contains(t, string(data), "new-rule", "the pin lands in the file of the owner")
+			assert.Equal(t, domain.ProposalApplied, dbRootStatus(t, store.DefaultPath(origin), id))
+
+			_, err = svc.CommitMaintenance(dbRootPrune(t, svc))
+			assert.NoError(t, err, "a prune follows the same rule")
+
+			h.press("1")
+			h.press("b")
+			assert.Equal(t, dbRootRefusal(origin), h.m.toast.text)
+			assert.Equal(t, origin, dbRootRecorded(t, store.DefaultPath(origin)))
+		})
+	}
 }

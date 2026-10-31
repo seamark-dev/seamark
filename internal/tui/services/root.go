@@ -69,26 +69,25 @@ func (e *engine) foreignRoot(probe workspace.IndexProbe) error {
 
 // ownRoot refuses a write under the recorded root when that write and
 // this database lie in two repositories. The engine writes the pin file
-// and config.yaml there and the ledger in this database. A foreign root is normal
-// only for a file that the recorded root owns (store.RootOwnsDatabase).
-// A database that the default path of this workspace names never counts,
-// as in a copied checkout. The check compares files, not path strings.
-// The Pins view hides the keys for the same case; this check holds for
-// every caller. A build refuses every database but the default one, so
-// the route of those is the console of the recorded root.
+// and config.yaml there and the ledger in this database. The default
+// database of this workspace never fits another root, as in a copied
+// checkout. Any other file fits when the recorded root owns it
+// (store.RootOwnsDatabase), also through a link at the default path. The
+// check compares files, not path strings. The Pins view hides the keys
+// for the same case; this check holds for every caller. A build refuses
+// every database but the default one, so the route of a refused file is
+// the console of the recorded root.
 func (e *engine) ownRoot(probe workspace.IndexProbe) error {
 	err := e.foreignRoot(probe)
 	if err == nil {
 		return nil
 	}
 
-	kind := e.databaseKind()
-
 	switch {
-	case kind == store.DatabaseOther && store.RootOwnsDatabase(probe.Root, e.ws.DBPath):
-		return nil
-	case kind == store.DatabaseDefault:
+	case e.databaseKind() == store.DatabaseDefault:
 		return fmt.Errorf("%w; run seamark index here first", err)
+	case store.RootOwnsDatabase(probe.Root, e.ws.DBPath):
+		return nil
 	default:
 		return fmt.Errorf("%w; open the console in %s", err, probe.Root)
 	}
