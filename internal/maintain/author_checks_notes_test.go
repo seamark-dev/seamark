@@ -32,7 +32,9 @@ pin:
 // TestPlanAuthorChecksEditsGetTheirOwnReviewNotes covers R-7 of the P4
 // review. A mode-only or check-only edit changes no spelling and no
 // note, so its review must not claim a spelling row in Stats or an
-// 'edited' mark in Pins. A note edit keeps its notes.
+// 'edited' mark in Pins. A note edit keeps its notes. An edit that moves
+// the pin version says so, because a context then receives the pin again.
+// A check ID with the same definition keeps the version, so it stays quiet.
 func TestPlanAuthorChecksEditsGetTheirOwnReviewNotes(t *testing.T) {
 	mode := func(ref pinfile.EntryRef) AuthorRequest {
 		return AuthorRequest{Op: AuthorEdit, Ref: ref, Mode: lessoncheck.ModeEnforce, ModeSet: true}
@@ -59,11 +61,13 @@ func TestPlanAuthorChecksEditsGetTheirOwnReviewNotes(t *testing.T) {
 		name string
 		req  func(ref pinfile.EntryRef) AuthorRequest
 		keys string
+		// version says whether the edit moves the pin version.
+		version bool
 	}{
-		{name: "mode only", req: mode, keys: "mode"},
+		{name: "mode only", req: mode, keys: "mode", version: true},
 		{name: "check only", req: check, keys: "check"},
-		{name: "mode and check", req: both, keys: "mode and check"},
-		{name: "mode with the same note", req: modeWithSameNote, keys: "mode"},
+		{name: "mode and check", req: both, keys: "mode and check", version: true},
+		{name: "mode with the same note", req: modeWithSameNote, keys: "mode", version: true},
 	}
 
 	for _, link := range []bool{false, true} {
@@ -89,6 +93,10 @@ func TestPlanAuthorChecksEditsGetTheirOwnReviewNotes(t *testing.T) {
 				assert.Equal(t, p.Old.Note, p.New.Note)
 
 				want := []string{fmt.Sprintf(textChecksKept, tc.keys)}
+				if tc.version {
+					want = append(want, textVersionChanged)
+				}
+
 				if link {
 					want = append(want, fmt.Sprintf(textLinkedChecks, p.Proposal.ID))
 				}
@@ -120,5 +128,6 @@ func TestPlanAuthorChecksEditsGetTheirOwnReviewNotes(t *testing.T) {
 		assert.Contains(t, p.Notes, textIdentityChanged)
 		assert.Contains(t, p.Notes, fmt.Sprintf(textLinkedKeeps, p.Proposal.ID))
 		assert.NotContains(t, p.Notes, fmt.Sprintf(textChecksKept, "mode"))
+		assert.NotContains(t, p.Notes, textVersionChanged, "the identity text already names the repeat")
 	})
 }

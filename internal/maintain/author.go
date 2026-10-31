@@ -395,6 +395,11 @@ const (
 	textLinkedChecks = "Proposal #%d keeps its recorded rule, note, and evidence. This edit leaves the note as " +
 		"it is, and Pins marks a pin 'edited' only for a note difference. Saving does not extract triggers " +
 		"or retarget."
+	// textVersionChanged follows a text that keeps the delivery identity, when
+	// the pin version still changes. A mode, a check, or a note case edit
+	// keeps the identity, and the once-per-context state follows the version.
+	textVersionChanged = "The pin gets a new version, so a context that already saw it can receive it " +
+		"again, also in once-per-context mode."
 	textLedgerEffect = "The proposal ledger does not change."
 	noteNoOp         = "the draft changes nothing"
 	noteCreateLast   = "the new pin goes after the last pin, so the earlier pins keep their order"
@@ -1181,6 +1186,10 @@ func (a *authoring) notes() []string {
 		notes = append(notes, textIdentityKept)
 	}
 
+	if a.req.Op == AuthorEdit && !p.IdentityChanged && a.versionChanged() {
+		notes = append(notes, textVersionChanged)
+	}
+
 	switch {
 	case a.req.Op == AuthorEdit && linked && only:
 		notes = append(notes, fmt.Sprintf(textLinkedChecks, p.Proposal.ID))
@@ -1195,6 +1204,30 @@ func (a *authoring) notes() []string {
 	}
 
 	return notes
+}
+
+// versionChanged reports whether the candidate gives the pin a new pin
+// version. Each side reads its own check definitions, so a renamed check
+// with the same definition is no change. A plan without a candidate
+// reports false, because it writes nothing.
+func (a *authoring) versionChanged() bool {
+	p := a.plan
+
+	if !a.drafted || p.After == nil {
+		return false
+	}
+
+	before, err := reviews.ParseConfig(p.Before)
+	if err != nil {
+		return false
+	}
+
+	after, err := reviews.ParseConfig(p.After)
+	if err != nil {
+		return false
+	}
+
+	return before.PinVersion(p.Old) != after.PinVersion(p.New)
 }
 
 // checksEdit reports which lesson-check keys the edit changes: "mode",

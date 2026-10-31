@@ -307,8 +307,8 @@ func TestDeliverSeparatesReceivingContextsAndClients(t *testing.T) {
 }
 
 func TestDeliverEmitsAgainWhenTheLessonTextChanges(t *testing.T) {
-	// The delivered set holds content digests. A reworded note is another
-	// reminder, so the same context gets it once more.
+	// The delivered set keys a pin by its version. A reworded note is
+	// another version, so the same context gets it once more.
 	root := workspace(t)
 	st := lessonStore(t, root)
 	cfg := pinnedConfig(reviews.HookDeliveryOncePerContext)

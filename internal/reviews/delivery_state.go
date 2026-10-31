@@ -25,6 +25,12 @@ const (
 	maxDeliveryStateBytes = 1 << 20
 )
 
+// deliveredPinScheme labels the delivered key of a pin. The label keeps
+// the key apart from lessonDeliveryDigest: the state of an earlier binary
+// holds content digests, and such an entry must never match a pin
+// version. A change of the parts is a new label.
+const deliveredPinScheme = "delivered-pin/1"
+
 // LegacyClientID is the client of the session-keyed entry points
 // BeginHookDelivery and ResetHookDelivery. Claude Code was the only
 // client when those entry points were the API, so they keep its name.
@@ -55,6 +61,12 @@ type deliveryState struct {
 	Contexts map[string]deliveryContextState `json:"contexts"`
 }
 
+// deliveryContextState is the state of one receiving context. Delivered
+// holds opaque keys (DeliveryItem.digest). A key of an earlier scheme
+// stays until a reset or the TTL removes it, and it matches no current
+// key. So a new scheme repeats a reminder once and never hides one. It
+// also keeps the file version: an older binary refuses another version
+// and then repeats advice on every edit.
 type deliveryContextState struct {
 	Generation uint64          `json:"generation"`
 	UpdatedAt  time.Time       `json:"updated_at"`
@@ -70,6 +82,38 @@ type deliveryStateFileShape struct {
 	Sessions map[string]json.RawMessage      `json:"sessions"`
 }
 
+// DeliveryItem is one selected lesson of an edit delivery.
+type DeliveryItem struct {
+	// Lesson is what the reminder renders.
+	Lesson model.Lesson
+	// PinVersion is the version of a pin (Config.PinVersion). It is empty
+	// for a mined lesson, because a mined lesson has no version.
+	PinVersion string
+}
+
+// digest is the key of the item in the delivered set. A pin gets the key
+// of its version, so a change of its note, scope, mode, or check delivers
+// it again. A cosmetic edit of lessons.yaml keeps the key. A mined lesson
+// keeps its content key, so its delivered entries stay valid.
+func (item DeliveryItem) digest() string {
+	if item.PinVersion == "" {
+		return lessonDeliveryDigest(item.Lesson)
+	}
+
+	return composeDigest(deliveredPinScheme, item.PinVersion)
+}
+
+// unversionedItems gives each lesson the item of a lesson without a pin
+// version, in order.
+func unversionedItems(lessons []model.Lesson) []DeliveryItem {
+	items := make([]DeliveryItem, len(lessons))
+	for i, lesson := range lessons {
+		items[i].Lesson = lesson
+	}
+
+	return items
+}
+
 // HookDeliveryLease is a locked selection of lessons not yet delivered in
 // one provider context window. Commit must be called only after the selected
 // context has been emitted successfully. Close releases the cross-process
@@ -83,17 +127,21 @@ type HookDeliveryLease struct {
 	inject     []model.Lesson
 	suppressed []model.Lesson
 	injectSHA  []string
+	// injectPins holds the pin version of each pin in inject, in order.
+	injectPins []string
 	committed  bool
 }
 
 // BeginHookDelivery is BeginContextDelivery for the session-keyed Claude
 // Code hook: the session is the receiver and the client is LegacyClientID.
+// The lessons carry no pin version, so each one gets its content key.
 func BeginHookDelivery(root, sessionID string, lessons []model.Lesson) (*HookDeliveryLease, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("hook delivery session id is empty")
 	}
 
-	return BeginContextDelivery(root, DeliveryContext{ClientID: LegacyClientID, ReceiverID: sessionID}, lessons)
+	return BeginContextDelivery(root, DeliveryContext{ClientID: LegacyClientID, ReceiverID: sessionID},
+		unversionedItems(lessons))
 }
 
 // BeginContextDelivery selects lessons for once-per-context delivery and keeps
@@ -102,7 +150,7 @@ func BeginHookDelivery(root, sessionID string, lessons []model.Lesson) (*HookDel
 // error so callers inject normally instead of relying on unsafe, unlocked
 // read-modify-write state. Callers must always fail open on any error: this
 // state is an optimization, never permission to hide advice.
-func BeginContextDelivery(root string, dc DeliveryContext, lessons []model.Lesson) (*HookDeliveryLease, error) {
+func BeginContextDelivery(root string, dc DeliveryContext, items []DeliveryItem) (*HookDeliveryLease, error) {
 	if !dc.valid() {
 		return nil, fmt.Errorf("hook delivery context names no client or no receiver")
 	}
@@ -138,19 +186,23 @@ func BeginContextDelivery(root string, dc DeliveryContext, lessons []model.Lesso
 		dir: dir, lock: lock, state: state, contextSHA: contextSHA, context: current,
 	}
 
-	pending := make(map[string]bool, len(lessons))
+	pending := make(map[string]bool, len(items))
 
-	for _, lesson := range lessons {
-		digest := lessonDeliveryDigest(lesson)
+	for _, item := range items {
+		digest := item.digest()
 
 		if current.Delivered[digest] || pending[digest] {
-			lease.suppressed = append(lease.suppressed, lesson)
+			lease.suppressed = append(lease.suppressed, item.Lesson)
 			continue
 		}
 
 		pending[digest] = true
-		lease.inject = append(lease.inject, lesson)
+		lease.inject = append(lease.inject, item.Lesson)
 		lease.injectSHA = append(lease.injectSHA, digest)
+
+		if item.PinVersion != "" {
+			lease.injectPins = append(lease.injectPins, item.PinVersion)
+		}
 	}
 
 	return lease, nil
@@ -159,6 +211,13 @@ func BeginContextDelivery(root string, dc DeliveryContext, lessons []model.Lesso
 // Inject returns the lessons that still need to reach this context window.
 func (l *HookDeliveryLease) Inject() []model.Lesson {
 	return l.inject
+}
+
+// InjectedPinVersions returns the version of each pin in Inject, in order.
+// A caller names the injected pins by this list, not by Inject. Two
+// versions of a pin can render one lesson, so a lesson cannot name a pin.
+func (l *HookDeliveryLease) InjectedPinVersions() []string {
+	return l.injectPins
 }
 
 // Suppressed returns matching lessons already delivered in this context.
@@ -439,6 +498,8 @@ func pruneDeliveryState(state *deliveryState, now time.Time) {
 	}
 }
 
+// lessonDeliveryDigest is the content key of a lesson. It reads the
+// rendered text only, so it cannot see the mode or the check of a pin.
 func lessonDeliveryDigest(lesson model.Lesson) string {
 	identity := (FiredLesson{Region: lesson.Region, Symptom: lesson.Symptom}).canonicalIdentity()
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(identity.Region+"\x00"+identity.Symptom)))
