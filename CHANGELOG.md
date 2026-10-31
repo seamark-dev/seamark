@@ -38,6 +38,16 @@ model-boundary delivery.
   that repository's recorded root.
 - **Write guard.** A `--db` that names a copy's own database through a
   link or a relative path no longer bypasses the two-repository refusal.
+  A prune or apply also refuses a database that the recorded root does
+  not own.
+- **Config saves.** A Settings save in a copied checkout refuses, so
+  it no longer changes the `config.yaml` of the original repository.
+  Screens name the build or the console of the recorded root.
+- **Case-only renames.** `seamark index` rebuilds after a rename that
+  changes only the case, so absolute path lookups keep working.
+- **Proposal apply.** Apply in a copied checkout no longer writes the
+  pin file of the original repository. The preview names the refusal,
+  and `c` and `d` keep working.
 - **Copied checkouts.** `seamark index` and the Overview build rebuild
   a default index that records another root, so a copy no longer stays
   on the root of its origin.
