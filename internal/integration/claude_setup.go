@@ -355,12 +355,17 @@ func planClaudeRegistration(plan *ClientPlan, mcp *approve.ClaudeMCPPlan) error 
 	return nil
 }
 
+// claudeHookEvidence is the evidence of the Claude Code entries without
+// a native recording. The lesson capability report copies it from the
+// resets entry, so both readings of the hooks use this value.
+var claudeHookEvidence = VerificationEvidence{Level: VerificationUnverified}
+
 // Inspect reports the native documents of Claude Code, offline: the
 // registration, the grants, the lifecycle hooks, and the lesson-check
 // hooks. No native recording verifies these entries, so each capability
 // entry stays unverified.
 func (claudeSetup) Inspect(root string) Inspection {
-	evidence := VerificationEvidence{Level: VerificationUnverified}
+	evidence := claudeHookEvidence
 
 	hookEntries, gate, findings, lessons := inspectClaudeHooks(root, evidence)
 
@@ -403,6 +408,16 @@ func (claudeSetup) Inspect(root string) Inspection {
 		Findings:          findings,
 		LessonHooks:       lessons,
 	}
+}
+
+// InspectLessonHooks reads the two settings files with the reader of
+// Inspect and skips the other documents. The capture inspection can
+// start Git for a finding, and the lesson capability report reads no
+// finding.
+func (claudeSetup) InspectLessonHooks(root string) Inspection {
+	entries, gate, _, lessons := inspectClaudeHooks(root, claudeHookEvidence)
+
+	return Inspection{ClientID: ClaudeID, Capabilities: entries, HookDocumentError: gate.err, LessonHooks: lessons}
 }
 
 // gateInspection is what an inspection learns about the gate hooks of

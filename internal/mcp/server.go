@@ -497,8 +497,10 @@ func (s *Server) changeSet(st *store.Store, files []string) (toolOutput, error) 
 	// itself and names an undecodable file as invalid.
 	//
 	// The badges of each check come from the capability report of the
-	// workspace (contract K10), so preparation computes no badge.
-	capability := integration.LessonCapability(integration.Builtin().Inspect(s.root), s.root,
+	// workspace, so preparation computes no badge. Every change_set call
+	// runs this read, so the narrow reading avoids the Git processes of
+	// Inspect.
+	capability := integration.LessonCapability(integration.Builtin().InspectLessonHooks(s.root), s.root,
 		integration.SelfIdentity(s.version))
 
 	prep, prepErr := prepareChangeSet(context.Background(), st, delivery.PrepareRequest{

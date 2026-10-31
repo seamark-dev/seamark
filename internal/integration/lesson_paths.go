@@ -557,7 +557,9 @@ func (r *pathReader) shared(p *lessoncheck.InstalledPath, partial bool) {
 // itself: LessonCheckPaths reads the paths, attributionsOf reads the
 // attributions, and lessoncheck.CapabilityReportOf computes every state
 // and badge. Doctor, status, --set-mode, preparation, the MCP server,
-// and the console call it, so they report one account.
+// and the console call it, so they report one account. A caller that
+// needs no other view of the clients passes the result of
+// Registry.InspectLessonHooks.
 func LessonCapability(insps []Inspection, root string, self BinaryIdentity) lessoncheck.CapabilityReport {
 	cfg, errs := lessoncheck.LoadForCapability(root)
 

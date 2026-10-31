@@ -604,6 +604,18 @@ func (codexSetup) Inspect(root string) Inspection {
 	}
 }
 
+// InspectLessonHooks reads the hook sources with the reader of Inspect
+// and skips the registration and the grants, because the lesson
+// capability report reads neither.
+func (codexSetup) InspectLessonHooks(root string) Inspection {
+	reads := readCodexHookSources(root)
+	entries, gate, _ := classifyCodexHooks(reads)
+
+	return Inspection{
+		ClientID: CodexID, Capabilities: entries, HookDocumentError: gate.err, LessonHooks: inspectCodexLessonHooks(reads),
+	}
+}
+
 // codexHookReads holds .codex/hooks.json and .codex/config.toml as one
 // inspection read them. Inspect passes one value to each inspector, so
 // the inspectors cannot disagree about a file that changes between

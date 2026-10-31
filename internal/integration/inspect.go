@@ -60,6 +60,44 @@ func (r *Registry) InspectSkills(root string) []skills.ClientState {
 	return states
 }
 
+// lessonHookInspector is a SetupAdapter with a narrow reading for the
+// lesson capability report. It stays apart from SetupAdapter, because
+// an adapter without it gives the same report through Inspect, which
+// only does more work.
+type lessonHookInspector interface {
+	// InspectLessonHooks fills only what LessonCapability reads: the hook
+	// document error, the lesson hooks, and the hook entries that hold the
+	// trust and the reset evidence. Each value follows the rules of Inspect.
+	InspectLessonHooks(root string) Inspection
+}
+
+// InspectLessonHooks returns only what LessonCapability reads for each
+// client, in registry order. A report from this result and a report
+// from Inspect are byte-identical. Preparation runs for each planned
+// change, and Inspect can start Git processes for a finding that the
+// report does not read. Nothing is written and no client binary runs.
+//
+// The result holds no findings and no entry for skills, registration,
+// grants, or capture, so only LessonCapability can use it.
+func (r *Registry) InspectLessonHooks(root string) []Inspection {
+	out := make([]Inspection, 0, len(r.ordered))
+
+	for _, c := range r.ordered {
+		insp := Inspection{ClientID: c.ID}
+
+		if narrow, ok := c.Setup.(lessonHookInspector); ok {
+			insp = narrow.InspectLessonHooks(root)
+		} else if c.Setup != nil {
+			insp = c.Setup.Inspect(root)
+		}
+
+		insp.ClientID = c.ID
+		out = append(out, insp)
+	}
+
+	return out
+}
+
 // inspectSkillDestinations groups the skill directories of the
 // registry's clients into destinations and inspects each destination
 // once. The two results are parallel: states[i] is the state of
