@@ -21,13 +21,11 @@ import (
 
 // These golden tests pin `lessons --apply` and `lessons --dismiss`. Both
 // run through the shared decision flow of internal/proposals, as the
-// console does. The Phase 3 trials found two apply defects, which the
-// A0 report records as D15 and D16. D16 is fixed in the shared flow: a
-// selection with a repeated key is refused, and its golden pins that.
-// A proposal with the key of an applied proposal is refused for the same
-// reason, and TestLessonsApplyGoldenAppliedKey pins that.
-// D15 stays open: the CLI keeps its root resolution, and its golden pins
-// the defect until a decision.
+// console does. A selection with a repeated key is refused in the shared
+// flow, and its golden pins that. A proposal with the key of an applied
+// proposal is refused for the same reason, and
+// TestLessonsApplyGoldenAppliedKey pins that. A copied workspace refuses
+// every apply, and TestLessonsApplyGoldenCopiedWorkspace pins that.
 
 // applyGoldenLessons is the pin file before an apply. The hand-written
 // entry shows that apply inserts above it and keeps it.
@@ -49,10 +47,11 @@ func applyGoldenRow(signature, rule, region, note string) model.Proposal {
 		Members: []int64{1, 2}, Agent: "claude/v6", Status: model.ProposalProposed}
 }
 
-// D15: in a copied workspace, apply edits the pin file and reads the
-// write gate of the original repository. The ledger write goes to the
-// copy. Cause: openIndex replaces the -C root with the repo_root that
-// the index metadata stores, and the copy keeps that metadata.
+// In a copied workspace the index still records the original root. An
+// apply would edit the pin file of the original and write the ledger of
+// the copy, so it refuses before any write. The write gate does not
+// change the answer: its value comes from the original too, and the
+// gate-off block names a pin file that the copy does not use.
 func TestLessonsApplyGoldenCopiedWorkspace(t *testing.T) {
 	original := maintainWorkspace(t, nil)
 	maintainWriteConfig(t, original, maintainGateOn)
@@ -69,61 +68,38 @@ func TestLessonsApplyGoldenCopiedWorkspace(t *testing.T) {
 	require.NoError(t, os.CopyFS(copied, os.DirFS(original)))
 	maintainWriteLessons(t, copied, applyGoldenCopyLessons, 0o644)
 
-	stdout, stderr := goldenRun(t, copied, "lessons", "--apply", "p1")
+	ledger := maintainLedger(t, original, 0)
+	require.Equal(t, ledger, maintainLedger(t, copied, 0))
 
-	assert.Equal(t, "applied 1 pin(s) to .seamark/lessons.yaml — review the diff and commit it\n"+
-		"  p1    first-rule\n", stdout)
-	assert.Empty(t, stderr)
+	for name, config := range map[string]string{
+		"the gate on":  maintainGateOn,
+		"the gate off": "distill:\n  write: false\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			maintainWriteConfig(t, copied, config)
+			maintainWriteConfig(t, original, config)
 
-	// Defect: the original file gains the pin, and the file of the copy
-	// stays unchanged.
-	got, _ := maintainLessons(t, original)
-	assert.Equal(t, `threshold: 3
+			stdout, stderr, errText := maintainRunErr(t, copied, "lessons", "--apply", "p1")
 
-pin:
-  # distilled by claude/v6 from 2 findings (seamark lessons --distill, p1)
-  - rule: first-rule
-    region: api
-    note: The first pending pin.
-  - rule: hand-written
-    region: web
-    note: A person wrote this pin.
-`, got)
+			assert.Empty(t, stdout, "a refusal prints no paste block")
+			assert.Empty(t, stderr)
+			assert.Equal(t, "the index of this checkout records another repository ("+original+
+				"), so this command would change the pin file there and the ledger in this database; "+
+				"nothing changed; run `seamark index` in <root> first", errText)
 
-	got, _ = maintainLessons(t, copied)
-	assert.Equal(t, applyGoldenCopyLessons, got)
+			got, _ := maintainLessons(t, original)
+			assert.Equal(t, applyGoldenLessons, got)
 
-	// Defect: the ledger of the copy records the apply, and the ledger
-	// of the original does not.
-	pending2 := `p2 proposed   "second-rule" region="db" regions=[] triggers=[] checked=0 v0 note="The second pending pin."` + "\n"
+			got, _ = maintainLessons(t, copied)
+			assert.Equal(t, applyGoldenCopyLessons, got)
 
-	assert.Equal(t, `p1 proposed   "first-rule" region="api" regions=[] triggers=[] checked=0 v0 note="The first pending pin."`+"\n"+
-		pending2, maintainLedger(t, original, 0))
-	assert.Equal(t, `p1 applied    "first-rule" region="api" regions=[] triggers=[] checked=0 v0 note="The first pending pin."`+"\n"+
-		pending2, maintainLedger(t, copied, 0))
-
-	// Defect: the copy turns the write gate off, but apply reads the gate
-	// of the original. It writes the original file again and does not
-	// print the paste block.
-	maintainWriteConfig(t, copied, "distill:\n  write: false\n")
-
-	stdout, stderr = goldenRun(t, copied, "lessons", "--apply", "p2")
-
-	assert.Equal(t, "applied 1 pin(s) to .seamark/lessons.yaml — review the diff and commit it\n"+
-		"  p2    second-rule\n", stdout)
-	assert.Empty(t, stderr)
-
-	got, _ = maintainLessons(t, original)
-	assert.Contains(t, got, "(seamark lessons --distill, p2)\n  - rule: second-rule\n")
-
-	got, _ = maintainLessons(t, copied)
-	assert.Equal(t, applyGoldenCopyLessons, got)
-
-	assert.Contains(t, maintainLedger(t, copied, 0), `p2 applied    "second-rule"`)
-	assert.Contains(t, maintainLedger(t, original, 0), `p2 proposed   "second-rule"`)
+			assert.Equal(t, ledger, maintainLedger(t, original, 0))
+			assert.Equal(t, ledger, maintainLedger(t, copied, 0))
+		})
+	}
 }
 
-// D16: two rows with one key used to write two entries with that key
+// Two rows with one key used to write two entries with that key
 // and print "applied 2 pin(s)". The Pins view then called both entries
 // duplicate pins and blocked every action on them. One entry for both
 // rows does not help: two applied rows record it, so Pins reads it as

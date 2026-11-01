@@ -524,6 +524,9 @@ func (s *Server) handleDidSave(p *didSaveParams) error {
 
 	start := time.Now()
 
+	// A failed run ends this save only. The loop logs the error and the
+	// reads keep working. This holds for the refusal of a move of another
+	// root too, because the server has no flag that allows the move.
 	if _, err := index.Run(index.Options{Root: s.root, DBPath: s.dbPath, Logf: s.logf}); err != nil {
 		return fmt.Errorf("reindex: %w", err)
 	}

@@ -376,6 +376,10 @@ type Preview struct {
 	// applied proposal records such a pin, because the preview refuses
 	// that case first (ErrAppliedKey).
 	AlreadyPinned []int64
+	// RootBlock is why the console refuses this apply, or nil. The
+	// console service sets it, because only the service compares the
+	// database with the workspace. So y, the text, and the commit agree.
+	RootBlock error
 }
 
 // ids returns the eligible IDs in preview order.

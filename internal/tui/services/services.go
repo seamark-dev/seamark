@@ -109,7 +109,10 @@ type Setup interface {
 	PlanSetup(setups []integration.ClientSetup) (*SetupPreview, error)
 	// ApplySetup applies exactly the reviewed plan.
 	ApplySetup(p *SetupPreview) (integration.SetupResult, error)
-	// BuildIndex runs a local index build. It cannot be cancelled.
+	// BuildIndex runs a local index build. It cannot be cancelled. It
+	// refuses the database of another repository with an error that
+	// names the recorded root and the next route, and it writes nothing
+	// then.
 	BuildIndex(force bool, progress func(IndexEvent)) (*index.Summary, error)
 }
 
@@ -118,7 +121,9 @@ type Setup interface {
 type Decisions interface {
 	// PreviewDecision describes a proposal decision. It writes nothing.
 	PreviewDecision(action proposals.Action, ids []int64) (*proposals.Preview, error)
-	// CommitDecision revalidates and applies a reviewed decision.
+	// CommitDecision revalidates and applies a reviewed decision. An
+	// apply refuses a foreign root as a maintenance commit does, and the
+	// preview names that refusal in RootBlock.
 	CommitDecision(p *proposals.Preview) (proposals.Result, error)
 }
 
@@ -208,7 +213,9 @@ type Settings interface {
 	// writes nothing.
 	PlanSettings(snap *settings.Snapshot, edits []settings.Edit) (*settings.Plan, error)
 	// SaveSettings writes exactly the reviewed plan, or reports it stale.
-	// A lessons save refuses a foreign root with ErrForeignRoot.
+	// A lessons save refuses a foreign root with ErrForeignRoot. A
+	// config.yaml save refuses it unless the recorded root owns the
+	// database.
 	SaveSettings(p *settings.Plan) (settings.Result, error)
 }
 
@@ -223,6 +230,9 @@ type IndexView struct {
 	// Policy summarizes the gate policy. It does not need the index, so
 	// it is filled in every index state.
 	Policy PolicySummary
+	// Database holds the answers about the index database that need the
+	// disk, because a view must not read it.
+	Database workspace.DatabaseFacts
 }
 
 // PolicySummary is the typed rule count of the gate policy, for the
@@ -384,6 +394,14 @@ func (e *engine) Doctor() *doctor.Report {
 }
 
 func (e *engine) Index() IndexView {
+	view := e.indexView()
+	view.Database = e.databaseFacts(view.Probe).DatabaseFacts
+
+	return view
+}
+
+// indexView reads the probe, the semantic health, and the gate policy.
+func (e *engine) indexView() IndexView {
 	policy := summarizePolicy(e.ws.Root)
 
 	probe := workspace.Probe(e.ws)
@@ -513,6 +531,10 @@ func (e *engine) BuildIndex(force bool, progress func(IndexEvent)) (*index.Summa
 	}
 	defer e.mu.Unlock()
 
+	if err := e.buildBlock(); err != nil {
+		return nil, err
+	}
+
 	return index.Run(index.Options{
 		Root:   e.ws.Root,
 		DBPath: e.ws.DBPath,
@@ -539,7 +561,14 @@ func (e *engine) PreviewDecision(action proposals.Action, ids []int64) (*proposa
 	case proposals.ActionReconcile:
 		return proposals.PreviewReconcile(st, probe.Root, ids)
 	default:
-		return proposals.PreviewApply(st, probe.Root, ids)
+		pv, err := proposals.PreviewApply(st, probe.Root, ids)
+		if err != nil {
+			return nil, err
+		}
+
+		pv.RootBlock = e.ownRoot(probe)
+
+		return pv, nil
 	}
 }
 
@@ -552,6 +581,14 @@ func (e *engine) CommitDecision(p *proposals.Preview) (proposals.Result, error) 
 	probe := workspace.Probe(e.ws)
 	if probe.State != workspace.IndexReady && probe.State != workspace.IndexNotIndexed {
 		return proposals.Result{Action: p.Action}, fmt.Errorf("%w (%s)", ErrNoLedger, probe.State)
+	}
+
+	// An apply writes the pin file under the recorded root and the ledger
+	// in this database. A dismissal and a record write only the ledger.
+	if p.Action == proposals.ActionApply {
+		if err := e.ownRoot(probe); err != nil {
+			return proposals.Result{Action: p.Action}, err
+		}
 	}
 
 	// A decision is a short write; the store closes right after it, so

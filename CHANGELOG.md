@@ -33,6 +33,41 @@ model-boundary delivery.
 - **Console controls.** Pins can edit mode/check on linked pins,
   author check definitions (`M`), and verify (`V`). Read-only browsing
   never applies a decision.
+- **Console builds.** The Overview build refuses a database that
+  records another repository, at any schema, so it can no longer move
+  that repository's recorded root.
+- **Write guard.** A `--db` that names a copy's own database through a
+  link or a relative path no longer bypasses the two-repository refusal.
+  A prune or apply also refuses a database that the recorded root does
+  not own.
+- **Index builds keep the root of another repository.** `seamark index`
+  refuses a database that records another repository, also with
+  `--force`, unless `--move-root` allows the move. A recorded path that
+  does not exist counts, because it can be a detached disk; only a file
+  inside the workspace replaces it by itself. A run that would skip still
+  skips, also on a file that refuses writes. `seamark check` and the MCP
+  `check` tool stop on any failed refresh, and MCP reads carry a one-line
+  note. A relative `--db` names the file that the system opens, also
+  behind a link.
+- **Refusals name one route that runs.** A route never writes two
+  repositories or applies another proposal. A custom file of a copy
+  routes to `seamark index --move-root --db <file>` in that copy, a file
+  of a third checkout routes to another `--db`, a route to the recorded
+  root keeps `--db` for a custom file, and a path that needs quotes gets
+  them.
+- **Copied checkouts in the CLI.** `seamark lessons --apply`,
+  `--retarget`, and `--prune` refuse when the pin file and the ledger
+  lie in two repositories, as the console does, so a copy no longer
+  writes the pin file of its origin. Run `seamark index` in the copy. A
+  `--db` that the recorded root owns keeps working.
+- **Config saves.** A Settings save in a copied checkout refuses, so
+  it no longer changes the `config.yaml` of the original repository.
+  Screens name the build or the console of the recorded root.
+- **Case-only renames.** `seamark index` rebuilds after a rename that
+  changes only the case, so absolute path lookups keep working.
+- **Proposal apply.** Apply in a copied checkout no longer writes the
+  pin file of the original repository. The preview names the refusal,
+  and `c` and `d` keep working.
 - **Copied checkouts.** `seamark index` and the Overview build rebuild
   a default index that records another root, so a copy no longer stays
   on the root of its origin.

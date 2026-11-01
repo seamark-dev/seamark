@@ -27,9 +27,9 @@ optional.
 | Pin apply (`lessons --apply`) | your decision | `.seamark/lessons.yaml` (committed file; only with `distill.write`) | none | yes |
 | Gate hook (`gate --hook`) | the agent's proposed command | verdict on stdout/exit code; `.seamark/audit.jsonl` | none | audit entries |
 | Edit hook (`lessons --hook`, for Codex `lessons --hook --client codex`) | edited file paths and provider session ID; for Codex the `apply_patch` text, which is parsed for paths and never run | lesson reminders on stdout | none | firing log plus optional local, digest-only once-per-context state |
-| Diff check (`seamark check`) | a unified diff | verdict; audit entry; index self-repair | none | audit entries, refreshed index |
-| MCP server (`seamark mcp`) | `index.db` | the connected agent client, per request (stdio) | none | index self-repair |
-| LSP server (`seamark lsp`) | source tree, `index.db` | your editor (stdio) | none | refreshed index |
+| Diff check (`seamark check`) | a unified diff | verdict; audit entry; index self-repair, which stops the check on any failure (exit 1, no audit entry) | none | audit entries, refreshed index |
+| MCP server (`seamark mcp`) | `index.db` | the connected agent client, per request (stdio) | none | index self-repair; when it fails, reads open with a one-line note and `check` refuses |
+| LSP server (`seamark lsp`) | source tree, `index.db` | your editor (stdio) | none | refreshed index, except under a database of another repository, where a save does not rebuild |
 | Report (`seamark report`) | `index.db` | a local HTML file | none | yes |
 | State (`seamark state export`/`import`) | durable tables in `index.db` | a local JSON file, or stdin/stdout | none | yes |
 | Health (`seamark status`, `seamark doctor`) | `index.db`, local config, PATH | terminal | none | no |

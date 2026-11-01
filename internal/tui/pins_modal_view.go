@@ -122,6 +122,9 @@ func (m *maintModal) planErrView(w int) ui.ModalOpts {
 	switch {
 	case errors.Is(m.err, services.ErrNoLedger), errors.Is(m.err, maintain.ErrNoLedger):
 		hint = "Proposals live in the index database. Build it from Overview (press 1, then b)."
+		if why := pinsBuildRefusal(m.st); why != "" {
+			hint = "Proposals live in the index database. " + ovSentenceEnd(why)
+		}
 	case errors.Is(m.err, maintain.ErrNothingSelected):
 		hint = "Select pins with space in Pins first."
 	default:
@@ -184,7 +187,7 @@ func (m *maintModal) staleIndexNote() string {
 // note reads stale there too, and only the recorded root may build.
 func (m *maintModal) staleRoute() string {
 	if root := pinsDBRoot(m.st); root != "" {
-		return ovSentence(pinOpenRoot(root)) + " and build it there"
+		return ovSentence(pinOpenRoot(m.st, root)) + " and build it there"
 	}
 
 	return "Build it from Overview (press 1, then b)"
@@ -311,8 +314,7 @@ func (m *maintModal) planBlockers(w int) []string {
 	if m.foreign != "" {
 		note("The index of this workspace records another repository, " + ui.OneLine(m.foreign) + ", so y is off. " +
 			"A commit would write " + ui.OneLine(filepath.Join(m.foreign, pinfile.File)) + " and the ledger of this " +
-			"workspace, not " + ui.OneLine(filepath.Join(m.st.svc.Root(), pinfile.File)) + ". Run seamark index in " +
-			"this checkout, or build the index from Overview (press 1, then b).")
+			"workspace, not " + ui.OneLine(filepath.Join(m.st.svc.Root(), pinfile.File)) + ". " + pinForeignSentence(m.st))
 	}
 
 	// A cursor-row plan has no marked row. Space would mark the same row,
@@ -327,7 +329,7 @@ func (m *maintModal) planBlockers(w int) []string {
 	}
 
 	if p.FileBlock != "" {
-		note("The console cannot change " + pinfile.File + ": " + ui.OneLine(p.FileBlock) + ". Edit the file by hand.")
+		note(pinFileBlockNote(m.st, p.FileBlock))
 	}
 
 	switch {
@@ -335,8 +337,8 @@ func (m *maintModal) planBlockers(w int) []string {
 		note("distill.write cannot be read: " + ui.ErrText(p.GateErr) + ". Fix " + settingsFile + " first; a reader " +
 			"error never counts as on.")
 	case !p.Write:
-		note("distill.write is off, so this preview changes nothing. Press o for Settings " + t.Glyphs.Arrow +
-			" Pin writing; after a save, press " + open + " in Pins for a new preview.")
+		note("distill.write is off, so this preview changes nothing." +
+			m.gateRoute("after a save, press "+open+" in Pins for a new preview."))
 	}
 
 	if len(out) == 0 {
@@ -563,7 +565,7 @@ func maintOtherImpact(p *maintain.Plan) []lessoncheck.Impact {
 func maintFactText(it maintain.PlanItem, fact string) string {
 	for _, f := range it.Pin.Readings.Trigger.Blocked {
 		if f.BlockedLine() == fact {
-			return pinTriggerFact(f, false)
+			return pinTriggerFact(f, "")
 		}
 	}
 
@@ -1000,8 +1002,7 @@ func (m *maintModal) recoveryBlockers(w int) []string {
 		note("distill.write cannot be read: " + ui.ErrText(p.GateErr) + ". Fix " + settingsFile + " first. esc " +
 			"returns to the result, which keeps this offer; press c there to check the proof again.")
 	case !p.Write:
-		note("distill.write is off. Press o for Settings " + t.Glyphs.Arrow + " Pin writing; after a save, press " +
-			"c on the result to check the proof again.")
+		note("distill.write is off." + m.gateRoute("after a save, press c on the result to check the proof again."))
 	}
 
 	if maintNotReady(p.Items) > 0 {
@@ -1140,8 +1141,7 @@ func (m *maintModal) refusalView(w int) ui.ModalOpts {
 // helps. A pin commit also refuses it under --db (pinOpenRoot).
 func pinCommitRefusal(st *state, err error) string {
 	if errors.Is(err, services.ErrForeignRoot) && pinsOtherDB(st) {
-		return "The index records another repository root, so nothing was written. Open the console in that " +
-			"repository, because a save works there."
+		return "The index records another repository root, so nothing was written. " + ovSentenceEnd(pinSaveRoute(st))
 	}
 
 	return maintRefusal(st.theme, err, "review", "")
@@ -1164,8 +1164,7 @@ func maintRefusal(t *ui.Theme, err error, noun, fix string) string {
 	case errors.Is(err, services.ErrBusy):
 		return "Another operation is running, so this one did not start."
 	case errors.Is(err, services.ErrForeignRoot):
-		return "The index records another repository root, so nothing was written. Build the index of this " +
-			"workspace in Overview, then " + noun + " again."
+		return foreignRefusal(err, noun)
 	case errors.Is(err, services.ErrNoLedger), errors.Is(err, maintain.ErrNoLedger):
 		return "The index database is not readable, so nothing was changed."
 	default:

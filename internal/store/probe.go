@@ -17,32 +17,8 @@ func SupportedSchema() int { return schemaVersion }
 // without touching it. 0 means unstamped (a pre-versioning database);
 // an unopenable or unreadable file is an error.
 func ProbeVersion(path string) (int, error) {
-	db, err := sql.Open("sqlite", dsn(path, "mode=ro&_pragma=busy_timeout(2000)"))
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = db.Close() }()
-
-	var n int
-
-	err = db.QueryRow(
-		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'meta'`).Scan(&n)
-	if err != nil {
-		return 0, err
-	}
-
-	if n == 0 {
-		return 0, nil
-	}
-
-	var v string
-
-	err = db.QueryRow(`SELECT value FROM meta WHERE key = ?`, MetaSchemaVersion).Scan(&v)
-	if err == sql.ErrNoRows {
-		return 0, nil
-	}
-
-	if err != nil {
+	v, found, err := probeMeta(path, MetaSchemaVersion)
+	if err != nil || !found {
 		return 0, err
 	}
 
@@ -52,6 +28,49 @@ func ProbeVersion(path string) (int, error) {
 	}
 
 	return version, nil
+}
+
+// ProbeRoot reports the repository root that an existing database
+// records, without touching it. It reads every schema version, because
+// the root of an older or a newer database still names its owner. ""
+// means that the database records no root.
+func ProbeRoot(path string) (string, error) {
+	root, _, err := probeMeta(path, MetaRepoRoot)
+
+	return root, err
+}
+
+// probeMeta reads one meta value without schema or migration. found is
+// false when the database has no meta table or no such key.
+func probeMeta(path, key string) (value string, found bool, err error) {
+	db, err := sql.Open("sqlite", dsn(path, "mode=ro&_pragma=busy_timeout(2000)"))
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = db.Close() }()
+
+	var n int
+
+	err = db.QueryRow(
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'meta'`).Scan(&n)
+	if err != nil {
+		return "", false, err
+	}
+
+	if n == 0 {
+		return "", false, nil
+	}
+
+	err = db.QueryRow(`SELECT value FROM meta WHERE key = ?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, err
+	}
+
+	return value, true, nil
 }
 
 // Integrity runs SQLite's integrity check read-only and returns its

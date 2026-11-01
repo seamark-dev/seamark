@@ -26,6 +26,7 @@ import (
 	"os"
 	stdpath "path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -49,9 +50,134 @@ type Store struct {
 	db *sql.DB
 }
 
+// AbsolutePath returns the absolute form of a database path that names the
+// file the system opens. Every rule and every open use this one path, so
+// they judge one file. A relative path starts at the physical working
+// directory, as the system does. filepath.Abs starts at $PWD and cleans
+// ".." without reading links, so behind a link it names another file. So
+// a path with ".." resolves the links of its directory. A path without an
+// absolute form stays as given, because no store can open it.
+func AbsolutePath(path string) string {
+	if path == "" {
+		return path
+	}
+
+	if !filepath.IsAbs(path) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return path
+		}
+
+		if physical, err := filepath.EvalSymlinks(wd); err == nil {
+			wd = physical
+		}
+
+		path = wd + string(filepath.Separator) + path
+	}
+
+	if slices.Contains(strings.Split(filepath.ToSlash(path), "/"), "..") {
+		dir, base := filepath.Split(path)
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, base)
+		}
+	}
+
+	return filepath.Clean(path)
+}
+
 // DefaultPath returns the conventional index location for a workspace root.
 func DefaultPath(root string) string {
 	return filepath.Join(root, DefaultDir, DefaultDBName)
+}
+
+// DatabaseKind says how an index database relates to a workspace root.
+type DatabaseKind int
+
+const (
+	// DatabaseDefault is the default database of the root. The default
+	// path names the file, and the file lies inside the root.
+	DatabaseDefault DatabaseKind = iota
+	// DatabaseLinked is a file outside the root that the default path
+	// names through a link, for example the database of another worktree.
+	DatabaseLinked
+	// DatabaseOther is any other file, for example the --db value of
+	// another repository.
+	DatabaseOther
+)
+
+// SameDirectory reports whether two paths name one directory. A clean
+// comparison comes first, because a path that no longer exists has no
+// identity. File identity then covers a link and a case-insensitive
+// volume, where a path keeps the case that the user typed.
+func SameDirectory(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+
+	infoA, errA := os.Stat(a)
+	infoB, errB := os.Stat(b)
+
+	return errA == nil && errB == nil && os.SameFile(infoA, infoB)
+}
+
+// LiesInside reports whether the file at path lies below dir. It walks up
+// and compares file identity, because a string test fails for a spelling
+// in another case on a case-insensitive volume. A relative path shows no
+// parent directory, so it never passes.
+func LiesInside(path, dir string) bool {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || !filepath.IsAbs(resolved) {
+		return false
+	}
+
+	want, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+
+	for p := filepath.Dir(resolved); ; p = filepath.Dir(p) {
+		if info, err := os.Stat(p); err == nil && os.SameFile(info, want) {
+			return true
+		}
+
+		if p == filepath.Dir(p) {
+			return false
+		}
+	}
+}
+
+// ClassifyDatabase relates dbPath to root by file identity. A link
+// spelling names the same file with another string, so a string
+// comparison is not enough. Without two files, the clean paths decide,
+// because a file that does not exist has no identity.
+//
+// The file must also lie inside root to be the default database. A
+// default path that links to the database of another worktree belongs
+// to that worktree, and a rebuild here moves its recorded root. The path
+// must be absolute (AbsolutePath), or the file reads as DatabaseLinked.
+func ClassifyDatabase(root, dbPath string) DatabaseKind {
+	defaultPath := DefaultPath(root)
+
+	given, errGiven := os.Stat(dbPath)
+	want, errWant := os.Stat(defaultPath)
+
+	if errGiven != nil || errWant != nil {
+		if filepath.Clean(dbPath) == filepath.Clean(defaultPath) {
+			return DatabaseDefault
+		}
+
+		return DatabaseOther
+	}
+
+	if !os.SameFile(given, want) {
+		return DatabaseOther
+	}
+
+	if LiesInside(dbPath, root) {
+		return DatabaseDefault
+	}
+
+	return DatabaseLinked
 }
 
 // dsn builds a "file:" DSN. Paths are parsed as URIs: a raw %, ? or #

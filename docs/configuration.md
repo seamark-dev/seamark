@@ -73,6 +73,16 @@ takes `-C <dir>` to name the workspace and `--db <path>` to override
 the index location; `status`, `doctor`, `gate`, and `check` speak
 `--json` for machines.
 
+`seamark index` refuses a `--db` that records another repository, also
+with `--force`, because that repository would lose its pins and
+maintenance. A recorded path that does not exist now counts too, because
+it can be a detached disk; only a file inside this workspace replaces
+such a root by itself. A run that would skip still skips. Run the
+command in that repository, or add `--move-root` to move the recorded
+root to this workspace. The refusal names the flag only when the move
+keeps one repository. A relative `--db` starts at the physical working
+directory, as the system opens it.
+
 ### Console settings
 
 The Settings destination of `seamark tui` edits five fields of

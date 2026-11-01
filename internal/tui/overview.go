@@ -66,6 +66,8 @@ type overview struct {
 
 	// confirm shows the build confirmation.
 	confirm bool
+	// rechecking is true between a refused b and the new read of the index.
+	rechecking bool
 	// build is the latest index build; showBuild keeps its modal open.
 	build     *ovBuild
 	showBuild bool
@@ -93,6 +95,16 @@ func (o *overview) open(intent string) tea.Cmd {
 	}
 
 	return nil
+}
+
+// leave implements leaveGuard. It drops a recheck that still waits for
+// its read, because the answer to a refused b belongs to this screen. A
+// confirmation must not wait on a tab that the user left. Overview never
+// keeps the user.
+func (o *overview) leave(destination, string) (tea.Cmd, bool) {
+	o.rechecking = false
+
+	return nil, true
 }
 
 // capturing is true while the build confirmation is open, so the global
@@ -130,7 +142,12 @@ func (o *overview) banner(w int) (string, bool) {
 
 	left := " " + t.Attention.Bold(true).Render(t.Glyphs.Warn) + " " + t.Body.Render("Index is stale.") + " " +
 		t.Muted.Render(msg+".")
-	right := t.Key.Render("b") + " " + t.Body.Render("rebuild now") + " "
+
+	// The key side follows the footer, so a refused build offers no key.
+	right := ""
+	if o.canBuild() {
+		right = t.Key.Render("b") + " " + t.Body.Render("rebuild now") + " "
+	}
 
 	// The banner cuts the message itself, because spread would cut it
 	// with the Unicode ellipsis in the ASCII theme too.
@@ -155,6 +172,10 @@ func (o *overview) update(msg tea.Msg) tea.Cmd {
 		return o.onBuildEvent(msg)
 	case ovBuildDoneMsg:
 		return o.onBuildDone(msg)
+	case loadedMsg:
+		if msg.kind == secIndex && o.rechecking {
+			return o.recheckBuild()
+		}
 	case tea.KeyMsg:
 		return o.onKey(msg)
 	}
@@ -166,11 +187,6 @@ func (o *overview) update(msg tea.Msg) tea.Cmd {
 // a narrow terminal, or a wide one too short for the cards.
 func (o *overview) collapsed() bool {
 	return !o.st.wide() || o.st.height-chromeHeight < ovCardsMinBody
-}
-
-// indexNewer reports an index database from a newer seamark.
-func (o *overview) indexNewer() bool {
-	return o.st.index.loaded && o.st.index.value.Probe.State == workspace.IndexNewer
 }
 
 // freshEmpty reports the empty first-run state: no index and no client
@@ -480,13 +496,13 @@ func (o *overview) keys() []key.Binding {
 	case o.build != nil && o.showBuild && o.build.running:
 		return nil
 	case o.build != nil && o.showBuild:
-		return []key.Binding{ui.WithHelp(ui.Nav.Enter, "enter", "close"), ui.WithHelp(ovKeys.Build, "b", "build again")}
+		return o.resultKeys()
 	case o.freshEmpty():
 		return []key.Binding{ui.WithHelp(ovKeys.SetUp, "s", "set up"), ovKeys.Build, ui.WithHelp(ui.Nav.Enter, "enter", "show list")}
 	}
 
 	build := ovKeys.Build
-	build.SetEnabled(!o.indexNewer())
+	build.SetEnabled(o.canBuild())
 
 	setUp := ovKeys.SetUp
 	setUp.SetEnabled(o.nothingSetUp())

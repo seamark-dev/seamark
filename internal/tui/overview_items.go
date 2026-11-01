@@ -100,6 +100,9 @@ type ovItem struct {
 	// it as selectable text and never runs it.
 	fix string
 	act ovAction
+	// route replaces the key and the fix when the next step is a
+	// sentence, for example the console of another repository.
+	route string
 	// area names the doctor check that the item overlaps, so the
 	// Action group lists one fact once.
 	area string
@@ -123,7 +126,7 @@ func ovNav(dest destination, intent, label string) ovAction {
 // reads no prose: every class comes from a typed field, because
 // diagnostic wording is not a contract.
 func (o *overview) attention() []ovItem {
-	index := o.indexItems()
+	index := o.refusedBuild(o.indexItems())
 	integ := o.integrationItems()
 	props := o.proposalItems()
 	learn := o.learningItems()
@@ -163,6 +166,24 @@ func (o *overview) attention() []ovItem {
 
 		return ovToneRank(items[i].tone) < ovToneRank(items[j].tone)
 	})
+
+	return items
+}
+
+// refusedBuild replaces the build route of items with the refusal of a
+// build, so the list, the detail, and the key agree. The shell command
+// goes too, because it writes the default database, not this one.
+func (o *overview) refusedBuild(items []ovItem) []ovItem {
+	why := o.st.indexBuildRefusal()
+	if why == "" {
+		return items
+	}
+
+	for i := range items {
+		if items[i].act.kind == ovActBuild {
+			items[i].act, items[i].fix, items[i].route = ovAction{}, "", ovSentenceEnd(why)
+		}
+	}
 
 	return items
 }

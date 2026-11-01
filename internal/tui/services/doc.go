@@ -26,15 +26,20 @@
 // # Roots
 //
 // The effective root R is the root that a readable index records, else
-// the workspace root. The Pins read, the pin authoring, both settings
-// documents, the ledger and the sample use R. So every editor of
-// .seamark/lessons.yaml sees the file that Pins lists. When R is not
-// the workspace root, ErrForeignRoot applies. A pin authoring plan names
-// it as a blocker, and an authoring commit refuses it. The Settings
-// snapshot blocks the lessons groups with it, and a lessons save refuses
-// it. A sample is then unavailable. These Phase 4 rules have no --db
-// exception. A maintenance commit refuses a foreign root only with the
-// default database path, as in Phase 3.
+// the workspace root. The Pins read, the pin authoring, the ledger and
+// the sample use R, and Settings reads both settings documents under R.
+// So every editor of .seamark/lessons.yaml sees the file that Pins lists,
+// and a copied checkout shows the files of its origin until its build.
+// When R is not the workspace root, ErrForeignRoot applies. A pin
+// authoring plan names it as a blocker, and an authoring commit refuses
+// it. The Settings snapshot blocks the lessons groups with it, and a
+// lessons save refuses it. A sample is then unavailable. These rules have
+// no --db exception. A maintenance commit, a proposal apply, and a
+// config.yaml save refuse a foreign root unless the recorded root owns
+// the database, and the snapshot then blocks the config.yaml groups too.
+// The file comparison holds for a relative path and a link spelling. An index
+// build refuses a database that records another repository, also with an
+// older schema, so every caller of BuildIndex keeps that root.
 //
 // Delivery keeps the filesystem root at the workspace root, not at R. It
 // reads applied ledger rows when available, but a missing ledger does

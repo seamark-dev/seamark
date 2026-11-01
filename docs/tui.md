@@ -109,7 +109,18 @@ The state of the workspace at a glance.
 - **Index build** (`b`): a local parse plus git history mining that writes
   the index database; `enter` or `y` confirms. It never fetches reviews or
   runs a distillation, and it cannot be cancelled, so `q` offers to exit
-  after it finishes.
+  after it finishes. `b` refuses a database that records another
+  repository and names the console of that root. A newer schema asks for
+  an upgrade instead. When that console cannot run, it names `seamark
+  index --move-root --db <file>` in this workspace when the file lies in
+  it and in no nested checkout, else `use another --db`. A missing root
+  can be a moved repository or a detached disk, so `b` builds over it
+  only for a file inside this workspace and outside any repository nested
+  in it. It also
+  refuses a default path that links to the database of another worktree,
+  and a `--db` file whose recorded root cannot be read. A refused `b`
+  reads the index again first, so a fixed cause opens the confirmation
+  on that press. Leaving Overview drops that check.
 
 Plain route: `seamark status`, `seamark doctor`, `seamark index`. Exact
 rules: the header of `internal/tui/overview_learn.go`.
@@ -170,7 +181,10 @@ advisories of `seamark lessons --proposals`. `space` marks pending rows;
   change. With `distill.write` off the preview only shows the YAML to
   paste under `pin:` (`c` copies it through OSC 52 where the terminal
   allows it). With the gate on, `y` writes the pins at the head of the
-  `pin:` list and records the proposals as applied.
+  `pin:` list and records the proposals as applied. When a retarget or a
+  prune would refuse, the preview names the refusal and `y` stays off.
+  `c` still copies the block or records existing pins, and `d` still
+  dismisses, because they write no pin.
 - `d` **dismiss** marks proposals dismissed for the same evidence; pins
   stay. There is no undo.
 - `c` **record as applied** updates the ledger only, for a proposal
@@ -526,7 +540,7 @@ Exact rules: `internal/settings`.
 | Retarget or prune result | `enter` close, or preview again after a refusal; with a recovery offer: `c` preview the ledger-only completion, `esc` drop it |
 | Ledger completion preview | `y` complete the ledger update, `o` open Settings › Pin writing (gate off), `esc` back to the result |
 | Pin form | `enter` edit the row, `esc` leave a field (keeps the text) or close the form (keeps the draft), `s` review, `a` add a region, `x` remove the region under the cursor, or on another row discard the draft (`d` confirm, `esc` keep), `↑↓` rows, `?` help (no field focused); in the Note field `enter` adds a line break. The footer lists the keys in this order, so `esc close` stays in view at 60×20 |
-| Pin review | `y` confirm, `s` sample (while the review holds a candidate file), `o` open the route of a blocker (Settings › Pin writing or the Overview build; no build with `--db` of another repository), `esc` back to the form (close for a removal), scroll keys |
+| Pin review | `y` confirm, `s` sample (while the review holds a candidate file), `o` open the route of a blocker (Settings › Pin writing or the Overview build; no build with `--db` of another repository; no Settings route while Settings refuses the save), `esc` back to the form (close for a removal), scroll keys |
 | Pin result | `enter` close after a written result; after any other result `enter` reviews again and `esc` goes back; `r` read the file again after a failed read |
 | Orphaned pin draft | `c` copy the draft, `x` discard, `esc` close |
 | Sample | `↑↓` rows, `enter` edit a path, `a` add path, `x` remove path, `space` surface, `esc` back |
@@ -620,16 +634,38 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
 - A copied checkout keeps the index of the original repository until it
   is indexed again, and the console then works on the files of that
   root, as the CLI does. Pins detects the case and turns retarget and
-  prune off. A pin review names it as a blocker, the lesson settings
-  groups refuse a save, and the sample is unavailable.
-  `seamark lessons --retarget` and `--prune` still edit the pin file of
-  the original repository. Run `seamark index` in the copy before you
-  use it. With `--db` of another repository, retarget and prune stay on,
-  as in the CLI. The pin writes, the lesson settings saves, and the
-  sample refuse in the same way. The pin form then treats the link of
+  prune off. Proposals turns apply off in the same way. A pin review
+  names it as a blocker, every Settings group refuses a save, and the
+  sample is unavailable. Settings shows the files of the recorded root
+  until the build and says so. After the build the copy reads its own
+  `config.yaml`, so `distill.write` can read another value.
+  `seamark lessons --apply`, `--retarget`, and `--prune` refuse there
+  too. Run `seamark index` in the copy. With `--db` of another repository, retarget, prune, apply, and
+  `config.yaml` saves stay on only when the recorded root owns the
+  database: its default path names that file, also through a link, or it
+  exists and has no default database. Otherwise they refuse and name the console of
+  the recorded root, with this `--db` when the file is a custom database
+  outside another checkout. A file of this checkout, also in its state
+  directory, names `seamark index --move-root --db <file>` in this
+  workspace instead. A command in the recorded root with that file would
+  write two repositories, and without it an id names a row of another
+  ledger. A root that a stat cannot find or reach, or that git now
+  widens, names that run here when the file lies in this workspace and
+  in no nested checkout, else another `--db`, because no command can
+  enter that root. The home directory counts as no checkout. The pin writes, the lesson settings saves, and the
+  sample refuse in the same way. The CLI commands `--apply`,
+  `--retarget`, and `--prune` follow the same rule, with one difference:
+  outside git, a command in a directory inside the recorded root counts
+  as that root, unless that directory holds `.seamark` or `.git`. A
+  route to a custom database names `--db`. The pin form then treats the link of
   every pin as unknown, because the index records another repository.
   Its review names that root. Pins names no build here, because `b`
-  writes this workspace into that database and moves its recorded root.
+  refuses a database that records another repository: the build would
+  move that root. The lesson settings name the console of the recorded
+  root, or the `--move-root` run or another `--db` when that console
+  cannot run, and `o` opens no build. A `--db` that names the default database
+  through a link, a relative path, or another case of the path counts as
+  the default database.
 - The new pin, pin edit, pin removal, mute, and delivery saves refuse a
   `.seamark/lessons.yaml` with CRLF line breaks. They also refuse a file
   with more than one hard link: "replacing this file would break its

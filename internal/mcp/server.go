@@ -34,7 +34,10 @@ const maxLine = 16 * 1024 * 1024
 
 // Server answers MCP requests from the index at root. Every tool call
 // self-repairs freshness first (the indexer's fast path makes that free
-// when nothing changed), so answers never come from a stale graph.
+// when nothing changed), so answers come from a current graph. The one
+// exception is a repair that fails, as under a database that records
+// another repository. A read then opens with a note, and a verdict
+// refuses (withCurrentStore).
 type Server struct {
 	root    string
 	dbPath  string
@@ -230,25 +233,109 @@ func (s *Server) initialize(params json.RawMessage) any {
 	}
 }
 
+// The notes that open an answer from an index that did not refresh. An
+// agent acts on the answer, and the log of the server does not reach it.
+const (
+	// staleNote follows the refusal of a move of another root.
+	staleNote = "note: seamark did not refresh this index, because a rebuild here could move the root of " +
+		"another repository; this answer can miss recent changes.\n"
+	// brokenNote follows any other failed refresh. The log names the cause.
+	brokenNote = "note: seamark could not refresh this index; this answer can miss recent changes.\n"
+)
+
+// refreshNote returns the note of a refresh that failed, or "".
+func refreshNote(failure error) string {
+	switch {
+	case failure == nil:
+		return ""
+	case errors.Is(failure, index.ErrRootMove):
+		return staleNote
+	default:
+		return brokenNote
+	}
+}
+
 // withStore refreshes the index if the workspace changed, then runs fn
-// against the opened store.
+// against the opened store. A failed refresh must not kill reads, so the
+// answer comes from what exists. It opens with a note, also when it is an
+// error such as "nothing matches", because the index can be the cause.
 func (s *Server) withStore(fn func(st *store.Store) (string, error)) (string, error) {
-	sum, err := index.Run(index.Options{Root: s.root, DBPath: s.dbPath, Logf: s.logf})
+	failure := s.refresh()
+
+	st, err := s.open(failure)
 	if err != nil {
-		// A broken refresh (e.g. not a git repo yet) must not kill reads:
-		// answer from what exists, the staleness is logged.
-		s.logf("mcp: index refresh: %v", err)
-	} else if !sum.Skipped {
-		s.logf("mcp: index refreshed")
+		return "", err
+	}
+	defer func() { _ = st.Close() }() // read-only surface, nothing to lose
+
+	note := refreshNote(failure)
+
+	text, err := fn(st)
+
+	switch {
+	case note == "":
+		return text, err
+	case err != nil:
+		return "", fmt.Errorf("%s%w", note, err)
+	default:
+		return note + text, nil
+	}
+}
+
+// withCurrentStore is withStore for a verdict. A verdict needs a current
+// graph: changed lines inside an old symbol still map to it, so a stale
+// graph can allow what a current one denies. So any failed refresh ends
+// the call, as it ends `seamark check`.
+func (s *Server) withCurrentStore(fn func(st *store.Store) (string, error)) (string, error) {
+	if failure := s.refresh(); failure != nil {
+		return "", failure
 	}
 
-	st, err := store.Open(s.dbPath)
+	st, err := s.open(nil)
 	if err != nil {
-		return "", fmt.Errorf("open index: %w", err)
+		return "", err
 	}
 	defer func() { _ = st.Close() }() // read-only surface, nothing to lose
 
 	return fn(st)
+}
+
+// refresh refreshes the index and returns why it failed, or nil. The log
+// names each failure.
+func (s *Server) refresh() error {
+	sum, err := index.Run(index.Options{Root: s.root, DBPath: s.dbPath, Logf: s.logf})
+
+	switch {
+	case err != nil:
+		s.logf("mcp: index refresh: %v", err)
+
+		return err
+	case !sum.Skipped:
+		s.logf("mcp: index refreshed")
+	}
+
+	return nil
+}
+
+// open opens the index after refresh. After a refused move the open is
+// read-only, so the file also keeps its schema. A file that this open
+// cannot read gives the refusal, because it names the route.
+func (s *Server) open(failure error) (*store.Store, error) {
+	if errors.Is(failure, index.ErrRootMove) {
+		st, err := store.OpenReadOnly(s.dbPath)
+		if err != nil {
+			return nil, failure
+		}
+
+		return st, nil
+	}
+
+	st, err := store.Open(s.dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open index: %w", err)
+	}
+
+	return st, nil
 }
 
 func (s *Server) callTool(params json.RawMessage) (any, *rpcError) {
@@ -361,16 +448,25 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 
 		// The preparation needs the open store, and withStore closes it
 		// when the callback returns. So the callback keeps the result here.
+		// The first text part goes through withStore, which can add a note.
 		var out toolOutput
 
-		_, err := s.withStore(func(st *store.Store) (string, error) {
+		text, err := s.withStore(func(st *store.Store) (string, error) {
 			var err error
-			out, err = s.changeSet(st, p.Files)
 
-			return "", err
+			if out, err = s.changeSet(st, p.Files); err != nil {
+				return "", err
+			}
+
+			return out.Text[0], nil
 		})
+		if err != nil {
+			return toolOutput{}, err
+		}
 
-		return out, err
+		out.Text[0] = text
+
+		return out, nil
 	},
 
 	"expand": func(s *Server, args json.RawMessage) (toolOutput, error) {
@@ -428,11 +524,11 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 			policyInput = report.PolicyInputGitDiffHead
 		}
 
-		// The lesson checks need the policy decision after withStore
+		// The lesson checks need the policy decision after withCurrentStore
 		// returns, so the callback keeps it here.
 		var decision *gate.Decision
 
-		text, err := s.withStore(func(st *store.Store) (string, error) {
+		text, err := s.withCurrentStore(func(st *store.Store) (string, error) {
 			policy, err := gate.LoadPolicy(s.root)
 			if err != nil {
 				return "", err
@@ -463,8 +559,9 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 			return textOutput(text, err)
 		}
 
-		// withStore has closed the index here. SQLite keeps its WAL files
-		// next to an open index, and the snapshot must not see them change.
+		// withCurrentStore has closed the index here. SQLite keeps its WAL
+		// files next to an open index, and the snapshot must not see them
+		// change.
 		return textOutput(s.checkLessons(text, lessonsRoot, decision, policyInput))
 	},
 }

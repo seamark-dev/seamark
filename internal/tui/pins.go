@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -17,7 +18,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // This file holds the state and the key handling of Lessons › Pins. The
@@ -225,8 +228,8 @@ func pinLinked(pin *maintain.Pin) bool {
 // route that works in its state. replaceGate and unlinkedNext ask the
 // gates of the form and of the engine, not only the gate of the first key.
 // A hand edit stays the last route for a linked pin, because it unlinks
-// the proposal. The text never ends in pinByHand: pinStoredLock would read
-// such a link lock as a lock of the stored text.
+// the proposal. pinHandRoute gives its words, because they follow the
+// recorded root.
 const (
 	// pinRouteRetarget is the route while w offers a retarget.
 	pinRouteRetarget = "change the scope with w Retarget"
@@ -238,12 +241,12 @@ const (
 	pinRouteReplace = pinGoalReplace + ", use - Prune and add a new pin with n"
 	// pinRouteRule is pinRouteReplace for the locked rule of a linked pin.
 	pinRouteRule   = "to change the rule, use - Prune and add a new pin with n"
-	pinRouteByHand = "edit the pin by hand in " + pinfile.File
 	pinRouteRead   = "press r to read it again"
 	pinRouteRecord = "record the proposal as applied: press p, select it, then press c"
 	pinRouteForm   = "use i to edit its regions"
 	// pinRouteIndex builds the index that a copied checkout needs for a
-	// pin write. It is never a route under --db: see pinOpenRoot.
+	// pin write. It is never a route under the database of another
+	// repository: see pinOpenRoot.
 	pinRouteIndex     = "build the index of this checkout from Overview (press 1, then b)"
 	pinRouteFormIndex = pinGoalForm + ", first " + pinRouteIndex
 )
@@ -253,8 +256,140 @@ const (
 // the database of that repository and moves its recorded root, so that
 // checkout loses its maintenance. The pin is in the file of the recorded
 // root, and a save works in a console that runs there.
-func pinOpenRoot(root string) string {
-	return "open the console in " + ui.OneLine(root)
+func pinOpenRoot(st *state, root string) string {
+	d := pinsDatabase(st)
+
+	return openRootRoute(root, d.CustomDB, d.RootRoute)
+}
+
+// openRootRoute names the console of root. custom keeps the --db of this
+// console, because the default database of root is another ledger.
+// replace is a step that takes the place of that console, or "".
+func openRootRoute(root string, custom bool, replace string) string {
+	if replace != "" {
+		return ui.OneLine(replace)
+	}
+
+	return "open the console in " + ui.OneLine(root) + pinKeepDB(custom)
+}
+
+// pinSaveRoute is the route of a pin save under a database of another
+// repository. A text with no root of its own uses it (pinBlockerLine).
+func pinSaveRoute(st *state) string {
+	d := pinsDatabase(st)
+	if d.RootRoute != "" {
+		return ui.OneLine(d.RootRoute)
+	}
+
+	return "open the console in that repository" + pinKeepDB(d.CustomDB) + ", because a save works there"
+}
+
+// pinKeepDB is the clause of a route that keeps the --db of this console.
+func pinKeepDB(custom bool) string {
+	if custom {
+		return " with this --db"
+	}
+
+	return ""
+}
+
+// pinForeignRoute is the route of a write that pinsForeignRoot stops. A
+// build ends the state of a copied checkout. A default path that links to
+// the database of another worktree refuses the build, so its route is
+// the console of the recorded root.
+func pinForeignRoute(st *state) string {
+	if root := pinsDBRoot(st); root != "" {
+		return pinOpenRoot(st, root)
+	}
+
+	return pinRouteIndex
+}
+
+// pinHandPlace decides where a hand edit of a pin goes, so every surface
+// agrees. The Pins list reads the file under the recorded root, so the
+// relative name is true only when that root is the workspace. step is ""
+// or a step that comes first, and file is the words for the pin file. With
+// a step, the file of the recorded root belongs to another repository or is
+// gone. One decision changes one repository, also by hand. After the step
+// the recorded root is the workspace, so the relative name is true.
+func pinHandPlace(st *state) (step, file string) {
+	root := authorForeignRoot(st)
+
+	switch {
+	case root == "":
+		return "", pinfile.File
+	case pinsDBRoot(st) != "" && pinsDatabase(st).RootRoute == "":
+		// A root is untrusted text in a terminal.
+		return "", ui.OneLine(filepath.Join(root, pinfile.File))
+	}
+
+	return pinForeignRoute(st), pinfile.File
+}
+
+// pinHandAfter puts the step of pinHandPlace before clause.
+func pinHandAfter(step, clause string) string {
+	if step == "" {
+		return clause
+	}
+
+	return step + ", then " + clause
+}
+
+// pinHandRoute returns a hand edit as a phrase. The caller keeps its own
+// words in lead and tail, and only the location or the first step changes.
+func pinHandRoute(st *state, lead, tail string) string {
+	step, file := pinHandPlace(st)
+
+	return pinHandAfter(step, lead+file+tail)
+}
+
+// pinRouteByHand is the next action that sends the user to a hand edit.
+func pinRouteByHand(st *state) string {
+	return pinHandRoute(st, "edit the pin by hand in ", "")
+}
+
+// pinFileBlockNote is the note of a preview whose pin file the console
+// cannot change. Pins and Proposals show the same words.
+func pinFileBlockNote(st *state, block string) string {
+	step, file := pinHandPlace(st)
+
+	return "The console cannot change " + file + ": " + ui.OneLine(block) + ". " +
+		ovSentenceEnd(pinHandAfter(step, "edit the file by hand"))
+}
+
+// pinForeignBuild is the sentence of a preview when a build ends the
+// state. It also names the shell command.
+const pinForeignBuild = "Run seamark index in this checkout, or build the index from Overview (press 1, then b)."
+
+// pinForeignSentence is pinForeignRoute for a preview, which also names
+// the shell command when a build is the route.
+func pinForeignSentence(st *state) string {
+	if root := pinsDBRoot(st); root != "" {
+		return ovSentenceEnd(pinOpenRoot(st, root))
+	}
+
+	return pinForeignBuild
+}
+
+// pinGateBlocked reports that Settings refuses the save that turns on
+// pin writing. config.yaml follows the rule of a pin write, so a route
+// to the gate names the way out of that state first.
+func pinGateBlocked(st *state) bool {
+	return pinsForeignRoot(st) != ""
+}
+
+// foreignRefusal is the refusal of a commit that another recorded root
+// stops. The service marks an error whose build refuses too, so the words
+// need no read of the disk. noun names what the user confirmed.
+func foreignRefusal(err error, noun string) string {
+	const lead = "The index records another repository root, so nothing was written. "
+
+	var foreign *services.ForeignRootError
+	if errors.As(err, &foreign) && foreign.OtherDB {
+		return lead + ovSentenceEnd(openRootRoute(foreign.Root, foreign.CustomDB, foreign.RootRoute))
+	}
+
+	return lead + "Build the index of this workspace in Overview, then " + noun + " again."
 }
 
 // editBlock returns why the file editor cannot change pin, or "" when it
@@ -277,13 +412,13 @@ func (p *pinsView) editGate(pin *maintain.Pin) (why, next string) {
 	case !pinLinked(pin):
 		return "it has " + pinLinkNoun(pin.Link.Link), p.unlinkedNext(pin)
 	case pin.Entry.Block != "":
-		return "the entry cannot be edited safely (" + ui.Diag(pin.Entry.Block) + ")", pinRouteByHand
+		return "the entry cannot be edited safely (" + ui.Diag(pin.Entry.Block) + ")", pinRouteByHand(p.st)
 	case in == nil || in.Doc == nil:
 		return "the pin file is not read", pinRouteRead
 	case pinsForeignRoot(p.st) != "":
-		return "the index records another repository, " + ui.OneLine(pinsForeignRoot(p.st)), pinRouteIndex
+		return "the index records another repository, " + ui.OneLine(pinsForeignRoot(p.st)), pinForeignRoute(p.st)
 	case in.Doc.FileBlock != "":
-		return "the pin file cannot be edited (" + ui.Diag(in.Doc.FileBlock) + ")", pinRouteByHand
+		return "the pin file cannot be edited (" + ui.Diag(in.Doc.FileBlock) + ")", pinRouteByHand(p.st)
 	}
 
 	return "", ""
@@ -303,17 +438,17 @@ func (p *pinsView) unlinkedNext(pin *maintain.Pin) string {
 
 	switch {
 	case pin.Link.Link == pinfile.LinkPendingMatch && pinsForeignRoot(p.st) != "":
-		return pinRouteIndex
+		return pinForeignRoute(p.st)
 	case pin.Link.Link == pinfile.LinkPendingMatch:
 		return pinRouteRecord
 	case pin.Link.Link != pinfile.LinkNoProposal, in == nil, in.Doc == nil,
-		pinAuthorBlock(in, pin, maintain.AuthorEdit, p.authorKnown(in)) != "",
+		pinAuthorBlock(p.st, in, pin, maintain.AuthorEdit, p.authorKnown(in)) != "",
 		in.Doc.FileBlock != "", pinRegionLock(pinEntryRegions(pin.Entry)) != "":
-		return pinRouteByHand
+		return pinRouteByHand(p.st)
+	case pinsDBRoot(p.st) != "":
+		return pinGoalForm + ", " + pinOpenRoot(p.st, pinsDBRoot(p.st))
 	case pinsForeignRoot(p.st) != "":
 		return pinRouteFormIndex
-	case pinsDBRoot(p.st) != "":
-		return pinGoalForm + ", " + pinOpenRoot(pinsDBRoot(p.st))
 	}
 
 	return pinRouteForm
@@ -330,11 +465,11 @@ func (p *pinsView) replaceGate(pin *maintain.Pin) (why, next string) {
 	// A prune still runs under --db, and the authoring engine refuses the
 	// new pin.
 	if root := pinsDBRoot(p.st); root != "" {
-		return "the index records another repository, " + ui.OneLine(root), pinGoalReplace + ", " + pinOpenRoot(root)
+		return "the index records another repository, " + ui.OneLine(root), pinGoalReplace + ", " + pinOpenRoot(p.st, root)
 	}
 
 	if p.tailRefused(pin) {
-		return "the pin file takes no new pin after this prune", pinRouteByHand
+		return "the pin file takes no new pin after this prune", pinRouteByHand(p.st)
 	}
 
 	return "", ""
@@ -382,30 +517,53 @@ func pinTailRefused(doc *pinfile.Document, ref pinfile.EntryRef) bool {
 	return err != nil
 }
 
+// pinsDatabase returns the answers of the service about the index
+// database. Update and View must not read the disk, so the service
+// decides at read time and the console keeps the answer.
+func pinsDatabase(st *state) workspace.DatabaseFacts {
+	if !st.pins.loaded || st.pins.value == nil {
+		return workspace.DatabaseFacts{}
+	}
+
+	return st.pins.value.Database
+}
+
+// pinsBuildRefusal is buildRefusal for the read of Pins, so a route agrees
+// with the index state that the same screen shows.
+func pinsBuildRefusal(st *state) string {
+	if !st.pins.loaded || st.pins.value == nil {
+		return ""
+	}
+
+	return buildRefusal(st.pins.value.Index, st.pins.value.Database)
+}
+
 // pinsForeignRoot returns the repository root that the index records
 // when it is not the workspace root, else "". It is the rule of the
 // retarget and the prune. The maintenance engine reads and writes the
 // pin file under the recorded root, as the CLI does. In a copied
 // checkout that root names the original repository, but the ledger is
 // the database of the copy. So one operation would change two
-// repositories. A --db flag makes another root normal, so the check
-// applies only to the default database path (services ownRoot).
+// repositories. A database that the recorded root owns makes that root
+// normal, so the service reports no refusal (services ownRoot).
 func pinsForeignRoot(st *state) string {
-	if pinsOtherDB(st) {
+	d := pinsDatabase(st)
+	if d.WriteBlock == nil {
 		return ""
 	}
 
-	return authorForeignRoot(st)
+	return d.ForeignRoot
 }
 
-// pinsOtherDB reports a console that runs with --db. Another recorded
-// root is then normal, so no route may name an index build.
+// pinsOtherDB reports a database that is not the default database of the
+// workspace. No route may then name an index build, because a build
+// moves the recorded root of the other repository.
 func pinsOtherDB(st *state) bool {
-	return st.svc.DBPath() != store.DefaultPath(st.svc.Root())
+	return pinsDatabase(st).Kind != store.DatabaseDefault
 }
 
-// pinsDBRoot returns the recorded root under --db of another repository,
-// else "". The route of that state is pinOpenRoot.
+// pinsDBRoot returns the recorded root under a database of another
+// repository, else "". The route of that state is pinOpenRoot.
 func pinsDBRoot(st *state) string {
 	if !pinsOtherDB(st) {
 		return ""
@@ -417,21 +575,10 @@ func pinsDBRoot(st *state) string {
 // authorForeignRoot returns the repository root that the index records
 // when it is not the workspace root, else "". It is the rule of the pin
 // authoring engine, which refuses another root also with --db (services
-// foreignRoot, P4-16). So the form and the engine agree. The comparison
-// does no I/O, because Update and View must not read the disk. So,
-// unlike the engine, it does not resolve a symbolic link.
+// foreignRoot). So the form and the engine agree, also for a link
+// spelling of the workspace root.
 func authorForeignRoot(st *state) string {
-	if !st.pins.loaded || st.pins.value == nil {
-		return ""
-	}
-
-	root, ws := st.pins.value.Index.Root, st.svc.Root()
-
-	if root == "" || ws == "" || filepath.Clean(root) == filepath.Clean(ws) {
-		return ""
-	}
-
-	return root
+	return pinsDatabase(st).ForeignRoot
 }
 
 // retargetBlock returns why a retarget of pin is not offered, or "" when
@@ -506,15 +653,17 @@ func (p *pinsView) ruleRoute(pin *maintain.Pin) string {
 	return why + "; " + next
 }
 
-// pinLockRoutes holds the words for the locked rows of a linked pin. The
-// form holds no state of the view, so the view gives it these words.
+// pinLockRoutes holds the words for the locked rows of a pin. The form
+// holds no state of the view, so the view gives it these words. rule and
+// scope are for the rows of a linked pin, and hand ends a lock of the
+// stored text (pinStoredHand).
 type pinLockRoutes struct {
-	rule, scope string
+	rule, scope, hand string
 }
 
-// lockRoutes returns the words for the locked rows of a linked pin.
+// lockRoutes returns the words for the locked rows of a pin.
 func (p *pinsView) lockRoutes(pin *maintain.Pin) pinLockRoutes {
-	return pinLockRoutes{rule: p.ruleRoute(pin), scope: p.scopeRoute(pin)}
+	return pinLockRoutes{rule: p.ruleRoute(pin), scope: p.scopeRoute(pin), hand: pinStoredHand(p.st)}
 }
 
 // pinTargetOwner returns a clause that names the other pin or the

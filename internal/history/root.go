@@ -23,12 +23,24 @@ func ResolveRoot(dir string) (string, error) {
 		return "", err
 	}
 
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	cmd.Dir = abs
-
-	if out, err := cmd.Output(); err == nil {
-		return strings.TrimSpace(string(out)), nil
+	if top, ok := TopLevel(abs); ok {
+		return top, nil
 	}
 
 	return abs, nil
+}
+
+// TopLevel returns the git top level of dir. ok is false when git does
+// not know one. A caller then cannot tell a repository root from a plain
+// directory, so it can apply the rule of a workspace without git.
+func TopLevel(dir string) (top string, ok bool) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+
+	return strings.TrimSpace(string(out)), true
 }

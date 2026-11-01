@@ -57,12 +57,12 @@ var authorKeys = struct {
 
 // The words of a read-only row (contracts §4.2). A row that the editor
 // cannot hold exactly stays read-only, because an edit would change
-// characters that the user never touched. pinByHand ends the reason of
-// every row that its stored text locks (pinStoredLock), because only a
-// hand edit of the file can change that text.
+// characters that the user never touched. pinStoredLead starts the reason
+// of every row that its stored text locks (pinStoredLock). pinStoredHand
+// ends it, because only a hand edit of the file can change that text.
 const (
-	pinByHand      = "; edit " + pinfile.File + " by hand"
-	pinTextLock    = "this text holds characters the editor cannot show" + pinByHand
+	pinStoredLead  = "this text "
+	pinTextLock    = pinStoredLead + "holds characters the editor cannot show"
 	pinUnknownTail = "; saving needs a readable index of this workspace"
 	pinRegionsHelp = "A region matches that file, or everything under that directory; no wildcards."
 	pinMarksNote   = "Marks are ignored: this acts on the cursor pin only, and the marks stay."
@@ -86,7 +86,7 @@ func pinUnknownNote(checks bool, tail string) string {
 // because an index build there moves the root of the other repository.
 func (p *pinsView) unknownTail() string {
 	if root := pinsDBRoot(p.st); root != "" {
-		return "; to save, " + pinOpenRoot(root)
+		return "; to save, " + pinOpenRoot(p.st, root)
 	}
 
 	return pinUnknownTail
@@ -223,7 +223,7 @@ func pinEditable(s string, holds func(string) bool) bool {
 // input refuses every edit of such a text, because an edit could only
 // shorten it by a cut.
 func pinLengthLock(limit int) string {
-	return "this text is longer than " + strconv.Itoa(limit) + " characters" + pinByHand
+	return pinStoredLead + "is longer than " + strconv.Itoa(limit) + " characters"
 }
 
 // pinInputLock puts the stored text s into in and returns why in cannot
@@ -246,9 +246,25 @@ func pinInputLock(in *ui.LineInput, s string) string {
 
 // pinStoredLock reports a lock that load sets from the stored text of a
 // row (pinInputLock), not from the link of the pin. A typed value
-// replaces the stored text, so follow removes such a lock.
+// replaces the stored text, so follow removes such a lock. The test reads
+// the lead, because the end of a lock changes with the recorded root.
 func pinStoredLock(lock string) bool {
-	return strings.HasSuffix(lock, pinByHand)
+	return strings.HasPrefix(lock, pinStoredLead)
+}
+
+// pinStoredHand returns the end of a lock of the stored text.
+func pinStoredHand(st *state) string {
+	return "; " + pinHandRoute(st, "edit ", " by hand")
+}
+
+// pinWithHand adds hand to a lock of the stored text. A row without a
+// lock stays without one.
+func pinWithHand(lock, hand string) string {
+	if lock == "" {
+		return ""
+	}
+
+	return lock + hand
 }
 
 // load puts the entry of pin into the draft as its base and its values.
@@ -267,18 +283,18 @@ func (d *pinDraft) load(pin *maintain.Pin, known bool, routes pinLockRoutes) {
 	d.ruleLock, d.noteLock, d.scopeLock = "", "", ""
 
 	d.rule = pinRuleInput()
-	d.ruleLock = pinInputLock(&d.rule, e.Rule)
+	d.ruleLock = pinWithHand(pinInputLock(&d.rule, e.Rule), routes.hand)
 
 	d.note = pinNoteArea()
 	if pinEditable(e.Note, d.note.Holds) {
 		d.note.SetValue(e.Note)
 	} else {
-		d.noteLock = pinTextLock
+		d.noteLock = pinWithHand(pinTextLock, routes.hand)
 	}
 
 	d.scope, d.regions = pinBaseScope(d.base)
 
-	d.scopeLock = pinRegionLock(d.regions)
+	d.scopeLock = pinWithHand(pinRegionLock(d.regions), routes.hand)
 
 	if pinRuleScopeLocked(pin, known) {
 		// The rule is the recorded rule of the proposal, so a new rule
@@ -369,7 +385,7 @@ func (d *pinDraft) ruleValue() string {
 // cannot hold stays the raw entry note, because the area would drop
 // some of its characters.
 func (d *pinDraft) noteValue() string {
-	if d.noteLock == pinTextLock {
+	if pinStoredLock(d.noteLock) {
 		return d.base.Note
 	}
 
@@ -797,17 +813,18 @@ func (r *pinReview) confirmable() bool {
 
 // routes reports a blocker that o can open (A4 hand-off: route by
 // BlockKind). The ledger and the root lead to the index build, but the
-// root does not under --db (pinOpenRoot). The gate leads to Settings only
-// while it reads, because a gate that does not read has no setting to
-// change.
+// root does not under --db (pinOpenRoot), and the ledger does not while
+// a build is refused. The gate leads to Settings only while it reads,
+// because a gate that does not read has no setting to change, and only
+// while Settings can save it.
 func (r *pinReview) routes(b maintain.AuthorBlocker) bool {
 	switch b.Kind {
 	case maintain.BlockLedger:
-		return true
+		return pinsBuildRefusal(r.st) == ""
 	case maintain.BlockForeignRoot:
 		return !pinsOtherDB(r.st)
 	case maintain.BlockGate:
-		return r.preview.GateErr == nil
+		return r.preview.GateErr == nil && !pinGateBlocked(r.st)
 	}
 
 	return false
@@ -1455,7 +1472,7 @@ func (p *pinsView) authorTarget(op maintain.AuthorOp) (pin *maintain.Pin, refusa
 		return nil, "No " + action + " here. No pin is in the list."
 	}
 
-	if why := pinAuthorBlock(in, cur.pin, op, p.authorKnown(in)); why != "" {
+	if why := pinAuthorBlock(p.st, in, cur.pin, op, p.authorKnown(in)); why != "" {
 		return nil, pinRefusal(action, why, p.quoteRule(cur.pin.Entry.Rule))
 	}
 
@@ -1497,14 +1514,15 @@ func (p *pinsView) authorKnown(in *maintain.Inspection) bool {
 // index (P4-8). Only a pending or an ambiguous link, an unreadable pin
 // file, or an entry block refuse the keys (contracts §4.2). A linked pin
 // allows note, mode, and check edits, so it refuses a removal.
-func pinAuthorBlock(in *maintain.Inspection, pin *maintain.Pin, op maintain.AuthorOp, known bool) string {
+func pinAuthorBlock(st *state, in *maintain.Inspection, pin *maintain.Pin, op maintain.AuthorOp, known bool) string {
 	l := pin.Link
 
 	switch {
 	case in.DocErr != nil || in.Doc.Unreadable():
 		return "the pin file could not be read; fix it, then press r"
 	case pin.Entry.Block != "":
-		return "the entry cannot be edited safely (" + ui.Diag(pin.Entry.Block) + "); edit it by hand in " + pinfile.File
+		return "the entry cannot be edited safely (" + ui.Diag(pin.Entry.Block) + "); " +
+			pinHandRoute(st, "edit it by hand in ", "")
 	case !known, l.Link == pinfile.LinkNoProposal:
 		return ""
 	case pinLinked(pin) && op == maintain.AuthorRemove:
@@ -1517,7 +1535,7 @@ func pinAuthorBlock(in *maintain.Inspection, pin *maintain.Pin, op maintain.Auth
 		return "only pending proposals match; record one as applied in Proposals first"
 	}
 
-	return "its link is ambiguous; edit " + pinfile.File + " by hand"
+	return "its link is ambiguous; " + pinHandRoute(st, "edit ", " by hand")
 }
 
 // The words of a draft that lost its entry, and the route to it.

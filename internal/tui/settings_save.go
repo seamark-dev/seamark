@@ -506,7 +506,12 @@ func (s *settingsScreen) previewErrModal(err error, w int) ui.ModalOpts {
 		var body []string
 
 		if b.route != "" {
-			body = propNote(t, ui.ToneAttention, "The lessons settings cannot be saved here: "+b.reason+".", w)
+			subject := "The settings"
+			if s.flow.group.Document() == pinfile.File {
+				subject = "The lessons settings"
+			}
+
+			body = propNote(t, ui.ToneAttention, subject+" cannot be saved here: "+b.reason+".", w)
 			body = append(body, "")
 			body = append(body, propLines(t.Body, b.route, w)...)
 		} else {

@@ -160,7 +160,8 @@ func TestResolveMakesRelativeDBFlagAbsoluteAgainstCwd(t *testing.T) {
 	ws, err := Resolve(dir, filepath.Join("custom", "x.db"))
 	require.NoError(t, err)
 
-	wd, err := os.Getwd()
+	// The system starts a relative path at the physical directory.
+	wd, err := filepath.EvalSymlinks(cwd)
 	require.NoError(t, err)
 
 	assert.Equal(t, filepath.Join(wd, "custom", "x.db"), ws.DBPath,
@@ -534,4 +535,16 @@ func TestProbeReadyWithMalformedIndexTime(t *testing.T) {
 	assert.Equal(t, IndexReady, p.State, "the CLI tests only for a non-empty indexed_at")
 	assert.Zero(t, p.IndexedAt, "a malformed time is unknown, not a failure")
 	assert.NoError(t, p.Err)
+}
+
+// TestAbsoluteDBKeepsAnAbsolutePath covers both spellings. The console
+// passes an absolute path, and the rule must not change it.
+func TestAbsoluteDBKeepsAnAbsolutePath(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	t.Chdir(dir)
+
+	assert.Equal(t, filepath.Join(dir, "x.db"), Workspace{DBPath: filepath.Join(dir, "x.db")}.AbsoluteDB())
+	assert.Equal(t, filepath.Join(dir, "x.db"), Workspace{DBPath: "x.db"}.AbsoluteDB())
 }

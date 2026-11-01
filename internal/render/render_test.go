@@ -1,9 +1,11 @@
 package render
 
 import (
+	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSanitize(t *testing.T) {
@@ -50,4 +52,27 @@ func TestSanitizeBlockKeepsLinesAndStripsControls(t *testing.T) {
 	in := "line one\n\tline two\x1b[31m red\x07\r\u009b2J\u202eevil\u2066x\u2069\x7f"
 
 	assert.Equal(t, "line one\n\tline two[31m red2Jevilx", SanitizeBlock(in))
+}
+
+// TestShellWordGivesOneWordInARealShell covers each kind of path. A plain
+// path stays as it is, so normal output does not change. Any other path
+// must reach a real shell as one word with the same text.
+func TestShellWordGivesOneWordInARealShell(t *testing.T) {
+	for _, plain := range []string{"/a/b.db", "/tmp/x-y_z.1/index.db", "/Users/me/.seamark/index.db", "/дом/x.db"} {
+		assert.Equal(t, plain, ShellWord(plain), "a plain path stays as it is")
+	}
+
+	for _, path := range []string{
+		"/my repo/x.db", "/it's/x.db", `/a"b/x.db`, "/$HOME/x.db", "/a;b/x.db", "/a*b/x.db", "/a`b/x.db", `/a\b/x.db`, "/a\tb/x.db",
+	} {
+		word := ShellWord(path)
+		assert.NotEqual(t, path, word)
+
+		out, err := exec.Command("sh", "-c", "printf %s "+word).CombinedOutput()
+		require.NoError(t, err, string(out))
+		assert.Equal(t, path, string(out))
+	}
+
+	assert.Equal(t, "''", ShellWord(""), "an empty word stays a word")
+	assert.Equal(t, "/a/b.db", ShellWord("/a/b\x1b.db"), "the text passes Sanitize")
 }

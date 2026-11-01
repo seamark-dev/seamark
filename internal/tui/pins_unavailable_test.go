@@ -488,12 +488,12 @@ func TestPinRetargetRouteFollowsTheRetargetBlock(t *testing.T) {
 			reason: "pin 3 (line 12) already has this rule with the computed regions",
 		},
 		{
-			name: "an unsafe entry", row: 2, next: pinRouteByHand,
+			name: "an unsafe entry", row: 2, next: pinsHandRoute,
 			edit:   func(in *maintain.Inspection) { in.Pins[pinTwo].Entry.Block = "a multi-line rule value" },
 			reason: "the entry cannot be edited safely (a multi-line rule value)",
 		},
 		{
-			name: "a pin file that cannot be edited", row: 2, next: pinRouteByHand,
+			name: "a pin file that cannot be edited", row: 2, next: pinsHandRoute,
 			edit:   func(in *maintain.Inspection) { in.Doc.FileBlock = "the file is read-only" },
 			reason: "the pin file cannot be edited (the file is read-only)",
 		},
@@ -567,7 +567,7 @@ func TestPinRetargetRouteOfAnUnlinkedPin(t *testing.T) {
 	}{
 		{name: "no proposal", row: 5, want: pinRouteForm},
 		{
-			name: "no proposal in a file that cannot be edited", row: 5, want: pinRouteByHand,
+			name: "no proposal in a file that cannot be edited", row: 5, want: pinsHandRoute,
 			edit: func(f *fakeServices) { f.pins.Doc.FileBlock = "the file is read-only" },
 		},
 		{
@@ -582,7 +582,7 @@ func TestPinRetargetRouteOfAnUnlinkedPin(t *testing.T) {
 				f.pins.Pins[4].Link.Link = pinfile.LinkPendingMatch
 			},
 		},
-		{name: "an ambiguous link", row: 9, want: pinRouteByHand},
+		{name: "an ambiguous link", row: 9, want: pinsHandRoute},
 		{name: "no proposal in a copied checkout", row: 5, want: pinRouteFormIndex, edit: pinsCopiedCheckout},
 		{name: "no proposal under --db of another root", row: 5, want: pinsOpenFormRoute, edit: pinsAnotherDB},
 		{
@@ -593,17 +593,18 @@ func TestPinRetargetRouteOfAnUnlinkedPin(t *testing.T) {
 				f.pins.Pins[4].Link.Link = pinfile.LinkPendingMatch
 			},
 		},
-		{name: "a region that the form refuses", row: 5, want: pinRouteByHand, edit: refusedRegion},
+		{name: "a region that the form refuses", row: 5, want: pinsHandRoute, edit: refusedRegion},
 		{
-			name: "a region above the length of the form", row: 5, want: pinRouteByHand,
+			name: "a region above the length of the form", row: 5, want: pinsHandRoute,
 			edit: func(f *fakeServices) {
 				region := pathInput()
 				f.pins.Pins[4].Entry.Region = strings.Repeat("a", region.MaxRunes()+1)
 			},
 		},
 		{
-			// A new index cannot unlock the region, so the route skips it.
-			name: "a refused region in a copied checkout", row: 5, want: pinRouteByHand,
+			// The build comes first, because the file of the recorded root
+			// belongs to the original repository.
+			name: "a refused region in a copied checkout", row: 5, want: pinRouteIndex + ", then " + pinsHandRoute,
 			edit: func(f *fakeServices) {
 				pinsCopiedCheckout(f)
 				refusedRegion(f)
@@ -647,6 +648,13 @@ func pinsAnotherDB(f *fakeServices) {
 	f.pins.Index.Root = "/work/original"
 }
 
+// The words of a hand edit when the recorded root is the workspace. They
+// are literals, so a change of the production words fails the tests.
+const (
+	pinsHandRoute = "edit the pin by hand in .seamark/lessons.yaml"
+	pinsHandLock  = "; edit .seamark/lessons.yaml by hand"
+)
+
 // The routes of a --db of another repository. The two name the recorded
 // root of pinsAnotherDB and no index build.
 const (
@@ -674,7 +682,7 @@ func TestPinReplaceRouteNeverStartsAPruneThatCannotFinish(t *testing.T) {
 		{"a copied checkout", pinsCopiedCheckout, pinRouteIndex, false},
 		{
 			"a pin file whose end takes no new pin",
-			func(f *fakeServices) { f.pins.Doc.Bytes = []byte(pinsKeptTail) }, pinRouteByHand, true,
+			func(f *fakeServices) { f.pins.Doc.Bytes = []byte(pinsKeptTail) }, pinsHandRoute, true,
 		},
 	}
 
@@ -712,7 +720,7 @@ func TestPinReplaceRouteNeverStartsAPruneThatCannotFinish(t *testing.T) {
 		in.Doc.Bytes = []byte(pinsKeptTail)
 		authorReload(h, f, in)
 
-		assert.Equal(t, pinRouteByHand, p.retargetNext(p.rows()[0].pin))
+		assert.Equal(t, pinsHandRoute, p.retargetNext(p.rows()[0].pin))
 	})
 }
 
@@ -853,12 +861,12 @@ func TestPinRuleLockFollowsTheReplaceGate(t *testing.T) {
 		{
 			"a pin file that cannot be edited",
 			func(in *maintain.Inspection) { in.Doc.FileBlock = "the file is read-only" },
-			"the pin file cannot be edited (the file is read-only); " + pinRouteByHand,
+			"the pin file cannot be edited (the file is read-only); " + pinsHandRoute,
 		},
 		{
 			"a pin file whose end takes no new pin",
 			func(in *maintain.Inspection) { in.Doc.Bytes = []byte(pinsKeptTail) },
-			"the pin file takes no new pin after this prune; " + pinRouteByHand,
+			"the pin file takes no new pin after this prune; " + pinsHandRoute,
 		},
 	}
 

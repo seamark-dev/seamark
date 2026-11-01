@@ -32,6 +32,23 @@ func realPath(t *testing.T, path string) string {
 	return resolved
 }
 
+// TestTopLevelTellsARepositoryFromAPlainDirectory covers the answer that
+// ResolveRoot hides: it returns a path in both cases.
+func TestTopLevelTellsARepositoryFromAPlainDirectory(t *testing.T) {
+	root, commit := gitRepo(t)
+	commit("init", "pkg/a.go")
+
+	top, ok := TopLevel(filepath.Join(root, "pkg"))
+	assert.True(t, ok)
+	assert.Equal(t, realPath(t, root), top)
+
+	_, ok = TopLevel(outsideRepo(t))
+	assert.False(t, ok, "git knows no top level outside a repository")
+
+	_, ok = TopLevel(filepath.Join(outsideRepo(t), "missing"))
+	assert.False(t, ok, "a missing directory has no top level")
+}
+
 func TestResolveRoot(t *testing.T) {
 	t.Run("a subdirectory widens to the git top level", func(t *testing.T) {
 		root, commit := gitRepo(t)

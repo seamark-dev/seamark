@@ -525,7 +525,7 @@ func (o *overview) pinWriteItem() (ovItem, bool) {
 		route = settingsGroupTitle(settings.GroupPinWrite) + " cannot be edited here: " + ui.ErrText(err) + "."
 	}
 
-	return ovItem{
+	it := ovItem{
 		key: "learn:pinwrite", group: ovOptional, tone: ui.ToneNeutral, badge: "off",
 		title: "Pin writing is off", source: settings.File + o.dot() + "distill.write",
 		body: []string{
@@ -534,5 +534,16 @@ func (o *overview) pinWriteItem() (ovItem, bool) {
 			route,
 		},
 		act: ovSettingsLink(settings.GroupPinWrite),
-	}, true
+	}
+
+	// Settings refuses this save under another recorded root, so the
+	// item names the way out of that state and no Settings link.
+	switch block := settingsBlock(snap.Editable(settings.GroupPinWrite), settings.File); {
+	case block.route == settingsForeignRootRoute:
+		it.act = ovBuildAction
+	case block.route != "":
+		it.act, it.route = ovAction{}, block.route
+	}
+
+	return it, true
 }

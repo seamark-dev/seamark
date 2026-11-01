@@ -688,14 +688,14 @@ func TestTUICheckDefinitionFormLocksHostileText(t *testing.T) {
 			h.press("enter")
 
 			assert.False(t, m.editing, "a locked row takes no keys")
-			assert.Contains(t, h.m.toast.text, "Read-only: "+pinTextLock)
+			assert.Contains(t, h.m.toast.text, "Read-only: "+pinTextLock+pinsHandLock)
 			assertInert(t, h)
 
 			h.press("a", "backspace")
 			assert.Equal(t, hostile, c.value(m), "keys never change the stored text")
 
 			shown := checkDefText(t, h)
-			assert.Contains(t, shown, "Read-only: "+pinTextLock)
+			assert.Contains(t, shown, "Read-only: "+pinTextLock+pinsHandLock)
 			assert.Contains(t, shown, "U+001B", "the row shows the escape as a name")
 		})
 	}

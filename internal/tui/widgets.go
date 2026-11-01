@@ -610,6 +610,9 @@ type paneMessage struct {
 	next []string
 }
 
+// paneTextWidth is the widest line of a message box.
+const paneTextWidth = 72
+
 // messageBox renders a full-width box with a centered message. When the
 // box is too short, the body gives up lines first, so the head and the
 // next action stay visible. The empty states of Proposals and Pins use
@@ -617,7 +620,7 @@ type paneMessage struct {
 func messageBox(t *ui.Theme, title, right string, m paneMessage, w, h int) string {
 	inner := ui.BoxInner(w)
 	rows := ui.BoxRows(h)
-	textW := min(inner, 72)
+	textW := min(inner, paneTextWidth)
 
 	var body []string
 	if m.body != "" {
