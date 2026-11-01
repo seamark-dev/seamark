@@ -163,31 +163,34 @@ func checkRootMove(root, db string, moveRoot bool) error {
 }
 
 // rootMoveRoute names the next steps of a build in root under the file
-// db, which records another root. A route into a root that a stat cannot
-// find or reach cannot run, so it stays out. So does a move that would
-// split two repositories (moveKeepsOneRepository). When neither remains,
-// the shortest true step is another file. A file of this workspace is no
-// part of the recorded root. A route there would send it to another
-// repository, so only the move remains.
+// db, which records another root. The move comes first when it is the one
+// step (store.MoveTarget). A route into a root that a command cannot
+// enter stays out. So does a move that would split two repositories
+// (moveKeepsOneRepository). When nothing remains, the shortest true step
+// is another file.
 func rootMoveRoute(recorded, root, db string) string {
-	there, here, file := render.Sanitize(recorded), render.Sanitize(root), render.Sanitize(db)
-	inRecorded := "run `seamark index --db " + file + "` in " + there
-	move := "run `seamark index --move-root --db " + file + "` in " + here + " to move the root"
-	keeps := moveKeepsOneRepository(recorded, root, db)
-	reachable := store.StatRoot(recorded) == store.RootFound
+	file := render.ShellWord(db)
+	moveIn := func(dir string) string {
+		return "run `seamark index --move-root --db " + file + "` in " + render.Sanitize(dir) + " to move the root"
+	}
 
-	switch {
-	case store.BelongsToCheckout(root, recorded, db):
-		return move
-	case keeps && reachable:
-		return inRecorded + ", or " + move
-	case keeps:
-		return move
-	case reachable:
-		return inRecorded
-	default:
+	top, _ := history.WidenedRoot(recorded)
+
+	if dir, ok := store.MoveTarget(root, recorded, db, top); ok {
+		return moveIn(dir)
+	}
+
+	if store.StatRoot(recorded) != store.RootFound {
 		return "use another --db"
 	}
+
+	inRecorded := "run `seamark index --db " + file + "` in " + render.Sanitize(recorded)
+
+	if moveKeepsOneRepository(recorded, root, db) {
+		return inRecorded + ", or " + moveIn(root)
+	}
+
+	return inRecorded
 }
 
 // moveKeepsOneRepository reports whether root can take the file db. After

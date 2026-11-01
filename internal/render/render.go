@@ -5,8 +5,26 @@ package render
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
+
+// ShellWord returns s as one word of a shell command, so a printed route
+// runs when the user pastes it. A plain path stays as it is, so normal
+// output does not change. The text passes Sanitize first.
+func ShellWord(s string) string {
+	s = Sanitize(s)
+	if s != "" && !strings.ContainsFunc(s, needsShellQuote) {
+		return s
+	}
+
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// needsShellQuote reports a rune that a shell can read as syntax.
+func needsShellQuote(r rune) bool {
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("/._-+,:=@%", r)
+}
 
 // Sanitize strips control characters before untrusted text reaches a
 // terminal or editor: commit titles and authors come straight from git

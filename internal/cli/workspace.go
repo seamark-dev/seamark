@@ -227,8 +227,9 @@ func pinWriteRefusalText(ws workspace.Workspace, decision workspace.RootWrite, r
 //
 // The default database of a copy has no route to the recorded root, for
 // that reason. MoveRootRoute and OwnerRoute name the step of a file that
-// a command in the recorded root cannot take. A root that a stat cannot
-// reach is no route either, and only another file remains.
+// a command in the recorded root cannot take. When they name none, a root
+// that a stat cannot reach is no route either, so only another file
+// remains.
 func pinWriteRoute(ws workspace.Workspace, decision workspace.RootWrite, recorded string) string {
 	if decision == workspace.RootWriteCopied {
 		return "run `seamark index` in " + render.Sanitize(ws.Root) + " first"
@@ -244,7 +245,7 @@ func pinWriteRoute(ws workspace.Workspace, decision workspace.RootWrite, recorde
 		return "use another --db"
 	}
 
-	return "run this command in " + render.Sanitize(recorded) + " with --db " + render.Sanitize(ws.AbsoluteDB())
+	return "run this command in " + render.Sanitize(recorded) + " with --db " + render.ShellWord(ws.AbsoluteDB())
 }
 
 // rootIsGone reports a recorded root that no longer exists.

@@ -515,7 +515,7 @@ func TestBuildIndexKeepsARootOnADetachedDisk(t *testing.T) {
 
 // TestRouteOfARootThatCannotBeReachedNamesNoConsole covers EACCES. The
 // root can still exist, so the refusal stays. Its console cannot open,
-// so no route names it.
+// so the route is the move, as in the CLI.
 func TestRouteOfARootThatCannotBeReachedNamesNoConsole(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a directory with mode 0000")
@@ -541,11 +541,52 @@ func TestRouteOfARootThatCannotBeReachedNamesNoConsole(t *testing.T) {
 	require.NoError(t, err)
 
 	got := engNew(ws, Deps{}).Pins().Database
+	want := "run `seamark index --move-root --db " + db + "` in " + base.Root + " first"
 
 	require.ErrorIs(t, got.BuildBlock, ErrForeignRoot)
-	assert.Contains(t, got.BuildBlock.Error(), "use another --db")
+	assert.Contains(t, got.BuildBlock.Error(), want)
 	assert.NotContains(t, got.BuildBlock.Error(), "open the console in")
-	assert.Equal(t, "use another --db", got.RootRoute)
+	assert.Equal(t, want, got.RootRoute)
+}
+
+// TestRouteOfARootThatCannotBeReachedKeepsAFileWithItsOwner bounds the
+// rule above. A move here would split the file from its checkout. A
+// Seamark checkout takes the step. Any other checkout leaves no step
+// here, so only another file remains.
+func TestRouteOfARootThatCannotBeReachedKeepsAFileWithItsOwner(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory with mode 0000")
+	}
+
+	base, _ := servicestest.Workspace(t, "", "api")
+	parent := rootDir(t)
+	hidden := filepath.Join(parent, "hidden")
+	owner, repo := rootDir(t), rootDir(t)
+	owned := filepath.Join(owner, store.DefaultDir, "keep.db")
+	other := filepath.Join(repo, "keep.db")
+
+	require.NoError(t, os.Mkdir(hidden, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(owned), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+
+	for _, db := range []string{owned, other} {
+		st, err := store.Open(db)
+		require.NoError(t, err)
+		require.NoError(t, st.SetMeta(store.MetaRepoRoot, hidden))
+		require.NoError(t, st.Close())
+	}
+
+	require.NoError(t, os.Chmod(parent, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+
+	ws, err := workspace.Resolve(base.Root, owned)
+	require.NoError(t, err)
+	assert.Equal(t, "run `seamark index --move-root --db "+owned+"` in "+owner+" first",
+		engNew(ws, Deps{}).Pins().Database.RootRoute)
+
+	ws, err = workspace.Resolve(base.Root, other)
+	require.NoError(t, err)
+	assert.Equal(t, "use another --db", engNew(ws, Deps{}).Pins().Database.RootRoute)
 }
 
 // TestBuildIndexFailsClosedOnARootThatDoesNotRead covers a file with

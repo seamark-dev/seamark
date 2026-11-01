@@ -745,3 +745,57 @@ func TestRootMovesItselfReadsTheNearestCheckout(t *testing.T) {
 	assert.False(t, RootMovesItself(root, gone, beside), "a file of the nested repository")
 	assert.False(t, RootMovesItself(root, gone, state), "a file in the state directory of the nested repository")
 }
+
+// TestMoveTargetNamesOneStep covers the one rule of every surface. The
+// file decides first, so a widened root never sends a file of this
+// workspace or of a third checkout to its top level.
+func TestMoveTargetNamesOneStep(t *testing.T) {
+	root, third := checkoutDir(t, ".git"), checkoutDir(t, DefaultDir)
+	top := checkoutDir(t, ".git")
+	recorded := filepath.Join(top, "R")
+	gone := filepath.Join(top, "gone")
+	plain := checkoutDir(t, "")
+	nested := filepath.Join(root, "lib")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(recorded, DefaultDir), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(nested, ".git"), 0o755))
+
+	file := func(dir string) string {
+		path := filepath.Join(dir, "custom.db")
+		require.NoError(t, os.WriteFile(path, nil, 0o644))
+
+		return path
+	}
+
+	cases := []struct {
+		name          string
+		recorded, top string
+		db            string
+		want          string
+	}{
+		{"a file of this checkout", recorded, "", file(root), root},
+		{"a file of this checkout with a widened root", recorded, top, file(root), root},
+		{"a file of the widened root", recorded, top, file(recorded), top},
+		{"a file without an owner with a widened root", recorded, top, file(plain), top},
+		{"a file of a third checkout with a widened root", recorded, top, file(third), third},
+		{"a file without an owner with a gone root", gone, "", file(plain), root},
+		{"a file of a third checkout with a gone root", gone, "", file(third), third},
+		{"a file of a nested repository without a state directory", gone, "", file(nested), ""},
+		{"a file without an owner with a live root", recorded, "", file(plain), ""},
+		{"a file of a live root", recorded, "", file(recorded), ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := MoveTarget(root, tc.recorded, tc.db, tc.top)
+			if tc.want == "" {
+				assert.False(t, ok)
+
+				return
+			}
+
+			assert.True(t, ok)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}

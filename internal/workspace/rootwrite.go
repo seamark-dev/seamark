@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -75,32 +76,31 @@ func (ws Workspace) CheckCommandRootWrite(recorded string) RootWrite {
 func (ws Workspace) CustomDatabase(root string) bool {
 	_, other := store.OtherOwner(ws.Root, root, ws.AbsoluteDB())
 
-	return ws.namesOtherFile(root) && !ws.holdsDatabase(root) && !other
+	return ws.namesOtherFile(root) && !store.BelongsToCheckout(ws.Root, root, ws.AbsoluteDB()) && !other
 }
 
 // MoveRootRoute returns the step that replaces a route to the recorded
-// root, else "". Both surfaces print this text. The file can belong to
-// this workspace although it records that root, as the custom file of a
-// copied checkout does. A route to the root would then write two
-// repositories with this file, and without it an id names a row of
-// another ledger. Or nothing exists at that root, and a stat cannot tell a
-// moved repository from a detached disk, so the user decides. The step
-// records this workspace in the file, and that run needs the flag.
+// root, else "". Both surfaces print this text, and `seamark index` asks
+// the same rule (store.MoveTarget). The step records a directory in the
+// file, and that run needs the flag.
 func (ws Workspace) MoveRootRoute(recorded string) string {
 	db := ws.AbsoluteDB()
+	top, _ := history.WidenedRoot(recorded)
 
-	if !ws.holdsDatabase(recorded) && (store.StatRoot(recorded) != store.RootGone || !store.FileFitsRoot(ws.Root, db)) {
+	dir, ok := store.MoveTarget(ws.Root, recorded, db, top)
+	if !ok {
 		return ""
 	}
 
-	return moveRootRoute(db, ws.Root)
+	return moveRootRoute(db, dir)
 }
 
 // OwnerRoute returns the route of a --db file of a third checkout, else
-// "". A command in the recorded root has the problems of MoveRootRoute,
-// so the route records the owner of the file in it. The console has no
-// such route: its route to the recorded root opens a list, and the user
-// picks from it, so no id can name another row.
+// "". A command in the recorded root would write two repositories with
+// this file, and without it an id names a row of another ledger. So the
+// route records the owner of the file in it. The console has no such
+// route: its route to the recorded root opens a list, and the user picks
+// from it, so no id can name another row.
 func (ws Workspace) OwnerRoute(recorded string) string {
 	db := ws.AbsoluteDB()
 
@@ -113,7 +113,7 @@ func (ws Workspace) OwnerRoute(recorded string) string {
 
 // moveRootRoute names the index run that records root in the file db.
 func moveRootRoute(db, root string) string {
-	return "run `seamark index --move-root --db " + render.Sanitize(db) + "` in " + render.Sanitize(root) + " first"
+	return "run `seamark index --move-root --db " + render.ShellWord(db) + "` in " + render.Sanitize(root) + " first"
 }
 
 // namesOtherFile reports a file that is the default database of neither
@@ -123,11 +123,6 @@ func (ws Workspace) namesOtherFile(root string) bool {
 
 	return store.ClassifyDatabase(ws.Root, db) == store.DatabaseOther &&
 		store.ClassifyDatabase(root, db) == store.DatabaseOther
-}
-
-// holdsDatabase reports a file that belongs to this workspace.
-func (ws Workspace) holdsDatabase(recorded string) bool {
-	return ws.namesOtherFile(recorded) && store.BelongsToCheckout(ws.Root, recorded, ws.AbsoluteDB())
 }
 
 // AbsoluteDB returns the database path in absolute form. The commands

@@ -329,11 +329,36 @@ func OtherOwner(root, recorded, dbPath string) (string, bool) {
 // directories belongs to the inner one.
 func BelongsToCheckout(root, recorded, dbPath string) bool {
 	owner, ok := CheckoutOf(dbPath)
-	if !ok || !SameDirectory(owner, root) {
+	if !ok || !SameDirectory(owner, root) || ClassifyDatabase(root, dbPath) != DatabaseOther ||
+		ClassifyDatabase(recorded, dbPath) != DatabaseOther {
 		return false
 	}
 
 	return !LiesInside(dbPath, recorded) || LiesInside(root, recorded)
+}
+
+// MoveTarget returns the directory where --move-root is the next step for
+// the file at dbPath, or false. Every surface asks this one rule, so all
+// name one step. A file of this checkout stays here. A live root keeps its
+// own routes. No command can enter any other root: git widens it to the
+// top level top, or a stat cannot find or reach it, and that can be a
+// detached disk. So the user moves it, and the file goes with its owner:
+// a third checkout, else top, else this workspace if it can take the file.
+func MoveTarget(root, recorded, dbPath, top string) (string, bool) {
+	owner, owned := OtherOwner(root, recorded, dbPath)
+
+	switch {
+	case BelongsToCheckout(root, recorded, dbPath):
+		return root, true
+	case top == "" && StatRoot(recorded) == RootFound:
+		return "", false
+	case owned:
+		return owner, true
+	case top != "":
+		return top, true
+	default:
+		return root, FileFitsRoot(root, dbPath)
+	}
 }
 
 // ClassifyDatabase relates dbPath to root by file identity. A link
