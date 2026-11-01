@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -37,13 +38,11 @@ type ForeignRootError struct {
 	// Workspace is the workspace root.
 	Workspace string
 	// OtherDB reports a database that is not the default database of the
-	// workspace. A build then refuses, so the route is consoleRoute.
+	// workspace. No route may then name a plain index build.
 	OtherDB bool
-	// CustomDB reports a database that the route must name. See
-	// workspace.Workspace.CustomDatabase.
+	// CustomDB reports a database that the route to Root must name.
 	CustomDB bool
-	// RootRoute replaces the console of Root in a route, else "". See
-	// rootRoute.
+	// RootRoute replaces the console of Root in a route, else "".
 	RootRoute string
 }
 
@@ -57,114 +56,86 @@ func (e *ForeignRootError) Error() string {
 func (e *ForeignRootError) Unwrap() error { return ErrForeignRoot }
 
 // foreignRoot returns an error that wraps ErrForeignRoot when R names
-// another directory than the workspace root, else nil. The Phase 4
-// lessons operations use it with no --db exception (P4-16). They write
-// lessons.yaml under R but plan for this workspace. The text names both
-// roots and no route, because each caller adds the route of its screen.
+// another directory than the workspace root, else nil. The lessons
+// operations use it with no --db exception. They write lessons.yaml under
+// R but plan for this workspace. The text names both roots and no route,
+// because each caller adds the route of its screen.
 func (e *engine) foreignRoot(probe workspace.IndexProbe) error {
-	if store.SameDirectory(probe.Root, e.ws.Root) {
-		return nil
+	if foreign := e.databaseFacts(probe).foreign; foreign != nil {
+		return foreign
 	}
 
-	return &ForeignRootError{
-		Root: probe.Root, Workspace: e.ws.Root,
-		OtherDB:   e.databaseKind() != store.DatabaseDefault,
-		CustomDB:  e.ws.CustomDatabase(probe.Root),
-		RootRoute: e.rootRoute(probe.Root),
-	}
-}
-
-// rootRoute returns the step that replaces the console of root, or "".
-// That console cannot open a root that a stat cannot find or reach. The
-// step names --db, because a shell run without it builds another file.
-// When no such step can run, only another file remains.
-func (e *engine) rootRoute(root string) string {
-	if route := e.ws.MoveRootRoute(root); route != "" {
-		return route
-	}
-
-	if store.StatRoot(root) != store.RootFound {
-		return "use another --db"
-	}
-
-	return ""
-}
-
-// consoleRoute names the next step of a write under root. That step is
-// the console of root, unless rootRoute names another.
-func (e *engine) consoleRoute(root string) string {
-	if route := e.rootRoute(root); route != "" {
-		return route
-	}
-
-	if e.ws.CustomDatabase(root) {
-		return "open the console in " + root + " with this --db"
-	}
-
-	return "open the console in " + root
+	return nil
 }
 
 // ownRoot refuses a write under the recorded root when that write and
 // this database lie in two repositories. The engine writes the pin file
-// and config.yaml there and the ledger in this database. The rule is
-// workspace.CheckRootWrite, which `seamark lessons` shares; this method
-// adds the words of the console. The Pins view hides the keys for the
-// same case; this check holds for every caller. A build refuses every
-// database but the default one, so the route of a refused file is
-// consoleRoute.
+// and config.yaml there and the ledger in this database. The Pins view
+// hides the keys for the same case; this check holds for every caller.
 func (e *engine) ownRoot(probe workspace.IndexProbe) error {
-	err := e.foreignRoot(probe)
-	if err == nil {
-		return nil
-	}
-
-	switch e.ws.CheckRootWrite(probe.Root) {
-	case workspace.RootWriteCopied:
-		return fmt.Errorf("%w; run seamark index here first", err)
-	case workspace.RootWriteUnowned:
-		return fmt.Errorf("%w; %s", err, e.consoleRoute(probe.Root))
-	default:
-		return nil
-	}
+	return e.databaseFacts(probe).WriteBlock
 }
 
-// buildBlock returns why an index build must not run, or nil. The rule
-// is store.RootMovedByBuild, which `seamark index` shares; this method
-// adds the words of the console. The console has no flag that allows the
-// move, so it refuses every such build, also one that would skip. The
-// probe stops before the root for an older or a newer schema, so the
-// rule reads the root by itself. A root that does not read fails closed.
+// buildBlock returns why an index build must not run, or nil. The console
+// has no flag that allows the move, so it refuses every such build, also
+// one that would skip. The probe stops before the root for an older or a
+// newer schema, so the rule reads the root by itself.
 func (e *engine) buildBlock() error {
-	recorded, err := store.RootMovedByBuild(e.ws.Root, e.ws.DBPath)
+	return e.databaseFacts(workspace.IndexProbe{Root: e.ws.Root}).BuildBlock
+}
+
+// rootFacts holds the answers of one read and the error behind them.
+type rootFacts struct {
+	workspace.DatabaseFacts
+	foreign *ForeignRootError
+}
+
+// databaseFacts answers what a view must not read from the disk. It uses
+// one gather and one decision, so the screens and the commits agree, and
+// the console and the CLI agree. It adds only the words of the console.
+func (e *engine) databaseFacts(probe workspace.IndexProbe) rootFacts {
+	state := ownership.Gather(e.ws.Root, e.ws.AbsoluteDB())
+	d := ownership.Decide(state.Facts)
+	route := state.Route(d.Route, ownership.SurfaceConsole)
+	facts := rootFacts{DatabaseFacts: workspace.DatabaseFacts{Kind: e.databaseKind()}}
 
 	switch {
-	case err != nil:
-		return fmt.Errorf("%w (%s: %v), and a build could move the root of another repository; "+
-			"fix the file or use another --db", errRootUnknown, e.ws.DBPath, err)
-	case recorded == "":
-		return nil
+	case d.Build != ownership.BuildRefused:
+	case state.Root == ownership.RootUnreadable:
+		facts.BuildBlock = fmt.Errorf("%w (%s: %v), and a build could move the root of another repository; %s",
+			errRootUnknown, e.ws.DBPath, state.ReadErr, route)
 	default:
-		return fmt.Errorf("%w, so a build here would move it; %s", ErrForeignRoot, e.consoleRoute(recorded))
+		facts.BuildBlock = fmt.Errorf("%w, so a build here would move it; %s", ErrForeignRoot, route)
 	}
+
+	if store.SameDirectory(probe.Root, e.ws.Root) {
+		return facts
+	}
+
+	facts.ForeignRoot, facts.CustomDB = probe.Root, d.Route == ownership.RouteRunInRootDB
+
+	// A view adds its own words to a route to the recorded root. A plain
+	// index run belongs to this workspace, so its view has own words too.
+	switch d.Route {
+	case ownership.RouteRunInRoot, ownership.RouteRunInRootDB, ownership.RouteIndexHere:
+	default:
+		facts.RootRoute = route
+	}
+
+	facts.foreign = &ForeignRootError{
+		Root: probe.Root, Workspace: e.ws.Root,
+		OtherDB: facts.Kind != store.DatabaseDefault, CustomDB: facts.CustomDB, RootRoute: facts.RootRoute,
+	}
+
+	if d.Write == ownership.WriteRefused {
+		facts.WriteBlock = fmt.Errorf("%w; %s", facts.foreign, route)
+	}
+
+	return facts
 }
 
 // databaseKind relates the database of this workspace to its root. It
 // reads the file system, so a view gets the answer from databaseFacts.
 func (e *engine) databaseKind() store.DatabaseKind {
 	return store.ClassifyDatabase(e.ws.Root, e.ws.DBPath)
-}
-
-// databaseFacts answers what a view must not read from the disk. It uses
-// the rules of the engine, so the screens and the commits agree.
-func (e *engine) databaseFacts(probe workspace.IndexProbe) workspace.DatabaseFacts {
-	facts := workspace.DatabaseFacts{
-		Kind: e.databaseKind(), WriteBlock: e.ownRoot(probe), BuildBlock: e.buildBlock(),
-	}
-
-	if e.foreignRoot(probe) != nil {
-		facts.ForeignRoot, facts.CustomDB = probe.Root, e.ws.CustomDatabase(probe.Root)
-		facts.RootRoute = e.rootRoute(probe.Root)
-	}
-
-	return facts
 }

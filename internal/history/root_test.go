@@ -1,8 +1,6 @@
 package history
 
 import (
-	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -100,37 +98,4 @@ func TestResolveRoot(t *testing.T) {
 
 		assert.Equal(t, realPath(t, root), got)
 	})
-}
-
-// TestWidenedRootNamesTheTopLevelAboveADirectory covers each answer. A
-// top level and a directory outside git are no widened root. A link to
-// a top level names that top level.
-func TestWidenedRootNamesTheTopLevelAboveADirectory(t *testing.T) {
-	top, err := filepath.EvalSymlinks(outsideRepo(t))
-	require.NoError(t, err)
-
-	out, err := exec.Command("git", "-C", top, "init", "-q").CombinedOutput()
-	require.NoError(t, err, string(out))
-
-	inside := filepath.Join(top, "a", "b")
-	require.NoError(t, os.MkdirAll(inside, 0o755))
-
-	got, ok := WidenedRoot(inside)
-	assert.True(t, ok)
-	assert.Equal(t, top, got)
-
-	_, ok = WidenedRoot(top)
-	assert.False(t, ok, "a top level")
-
-	link := filepath.Join(t.TempDir(), "link")
-	require.NoError(t, os.Symlink(top, link))
-
-	_, ok = WidenedRoot(link)
-	assert.False(t, ok, "a link to a top level")
-
-	_, ok = WidenedRoot(outsideRepo(t))
-	assert.False(t, ok, "a directory outside git")
-
-	_, ok = WidenedRoot(filepath.Join(top, "missing"))
-	assert.False(t, ok, "a directory that does not exist")
 }

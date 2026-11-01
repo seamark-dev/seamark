@@ -395,7 +395,7 @@ func (e *engine) Doctor() *doctor.Report {
 
 func (e *engine) Index() IndexView {
 	view := e.indexView()
-	view.Database = e.databaseFacts(view.Probe)
+	view.Database = e.databaseFacts(view.Probe).DatabaseFacts
 
 	return view
 }

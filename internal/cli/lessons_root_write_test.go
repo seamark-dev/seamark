@@ -3,6 +3,7 @@ package cli
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/store/storetest"
 	"github.com/seamark-dev/seamark/internal/tui/services"
@@ -502,8 +504,7 @@ func TestRootWriteRefusesADatabaseTheRootDoesNotOwn(t *testing.T) {
 		name, dir, db, want string
 	}{
 		{"a custom file outside any checkout", third, custom, rootWriteUnowned(origin, " with --db "+custom)},
-		{"the database of a copy from a third directory", third, store.DefaultPath(copied),
-			rootWriteMoved(origin, copied, store.DefaultPath(copied))},
+		{"the database of a copy from a third directory", third, store.DefaultPath(copied), rootWriteClosed(origin)},
 		{"a renamed database in a copy", copied, renamed, rootWriteMoved(origin, copied, renamed)},
 	}
 
@@ -539,6 +540,13 @@ func rootWriteMoved(origin, here, db string) string {
 	return "this database records another repository (" + origin + ") that does not own it, so this command " +
 		"would change the pin file there and the ledger in this database; nothing changed; " +
 		"run `seamark index --move-root --db " + db + "` in " + here + " first"
+}
+
+// rootWriteClosed is the refusal of a file of a third checkout. No command
+// can take this file, so only another file remains.
+func rootWriteClosed(origin string) string {
+	return "this database records another repository (" + origin + ") that does not own it, so this command " +
+		"would change the pin file there and the ledger in this database; nothing changed; use another --db"
 }
 
 // rootWriteCustomCopy returns the origin, a copy, and a custom file of
@@ -629,13 +637,14 @@ func TestConsoleRouteOfACustomFileInACopyWorks(t *testing.T) {
 // TestRootWriteNamesNoRouteThatSplitsAFileOfAnotherCheckout covers the
 // custom file of a copy from a third directory. A route to the origin
 // with this file would write two repositories. One without it would
-// resolve the id in the ledger of the origin. So the route records the
-// owner of the file. The test follows it and repeats the command.
+// resolve the id in the ledger of the origin. So the route names another
+// file. The move in the copy still works, so the test runs it and repeats
+// the command.
 func TestRootWriteNamesNoRouteThatSplitsAFileOfAnotherCheckout(t *testing.T) {
 	origin, copied, custom := rootWriteCustomCopy(t)
 	third := rootWriteDir(t)
 
-	rootWriteRefused(t, rootWriteMoved(origin, copied, custom), rootMoveFiles(t, []string{origin}, custom),
+	rootWriteRefused(t, rootWriteClosed(origin), rootMoveFiles(t, []string{origin}, custom),
 		"-C", third, "--db", custom, "lessons", "--apply", "p1")
 
 	before := rootWriteFiles(t, []string{origin})
@@ -698,7 +707,7 @@ func TestRootWriteRouteNeverNamesAnotherProposal(t *testing.T) {
 			require.NoError(t, os.Rename(store.DefaultPath(copied), renamed))
 
 			return renamed, []string{"-C", rootWriteDir(t), "--db", renamed}
-		}, rootWriteMoved, func(copied, ledger string) []string {
+		}, func(origin, _, _ string) string { return rootWriteClosed(origin) }, func(copied, ledger string) []string {
 			return []string{"-C", copied, "index", "--move-root", "--db", ledger}
 		}},
 		{"the default database of a copy", func(_ *testing.T, copied string) (string, []string) {
@@ -842,7 +851,7 @@ func TestRootWriteRouteOfACustomFileInACopyWorksOutsideGit(t *testing.T) {
 
 	files := rootMoveFiles(t, []string{origin, copied}, custom)
 
-	rootWriteRefused(t, rootWriteMoved(origin, copied, custom), files, "-C", third, "--db", custom, "lessons", "--apply", "p1")
+	rootWriteRefused(t, rootWriteClosed(origin), files, "-C", third, "--db", custom, "lessons", "--apply", "p1")
 	rootWriteRefused(t, rootWriteMoved(origin, copied, custom), files, "-C", copied, "--db", custom, "lessons", "--apply", "p1")
 
 	before := rootWriteFiles(t, []string{origin})
@@ -907,7 +916,7 @@ func TestRootWriteIgnoresAMarkInTheHomeDirectory(t *testing.T) {
 	rootWriteRefused(t, rootWriteUnowned(origin, " with --db "+shared), rootMoveFiles(t, []string{origin}, shared),
 		"-C", third, "--db", shared, "lessons", "--prune", "p2")
 
-	assert.True(t, workspace.Workspace{Root: third, DBPath: shared}.CustomDatabase(origin),
+	assert.Equal(t, ownership.RouteRunInRootDB, ownership.Decide(ownership.Gather(third, shared).Facts).Route,
 		"the route of the console keeps this file")
 
 	_, err = run(t, "-C", origin, "--db", shared, "lessons", "--apply", "p1")
@@ -983,14 +992,14 @@ func TestRootWriteRefusesARootThatNoLongerExists(t *testing.T) {
 
 		files := func() map[string]string { return rootWriteFiles(t, []string{moved}, custom) }
 		want := "this database records a directory that no longer exists (" + origin +
-			"), and a write would recreate it; nothing changed; run `seamark index --move-root --db " + custom +
+			"), and a write would recreate it; nothing changed; run `seamark index --db " + custom +
 			"` in " + moved + " first"
 
 		for _, c := range rootWriteCommands {
 			rootWriteRefused(t, want, files, append([]string{"-C", moved, "--db", custom}, c.args...)...)
 		}
 
-		_, err := run(t, "-C", moved, "--db", custom, "index", "--move-root")
+		_, err := run(t, "-C", moved, "--db", custom, "index")
 		require.NoError(t, err)
 
 		out, err := run(t, "-C", moved, "--db", custom, "lessons", "--apply", "p1")
@@ -1034,20 +1043,19 @@ func TestRootWriteWaitsForALockInACheckout(t *testing.T) {
 	assert.Equal(t, model.ProposalApplied, rootWriteStatus(t, store.DefaultPath(root), 1))
 }
 
-// TestRootWriteFailsClosedWithoutAStoredRoot covers the last read. A
-// closed store gives a failed read without a timed lock. The file can
-// belong to another repository, so the command stops.
+// TestRootWriteFailsClosedWithoutAStoredRoot covers the last read. The
+// file can belong to another repository, so the command stops.
 func TestRootWriteFailsClosedWithoutAStoredRoot(t *testing.T) {
 	path := filepath.Join(rootWriteDir(t), "index.db")
 
-	st, err := store.Open(path)
-	require.NoError(t, err)
-	require.NoError(t, st.Close())
+	state := ownership.State{DB: path, ReadErr: errors.New("database is locked")}
+	state.Root = ownership.RootUnreadable
 
-	err = refusalOfStore(workspace.Workspace{Root: rootWriteDir(t), DBPath: path}, st)
+	err := pinWriteRefusal(state)
 
 	require.ErrorContains(t, err, "the recorded root of the index cannot be read ("+path+": ")
-	assert.ErrorContains(t, err, "so this command could change two repositories; no pin changed; run it again")
+	assert.ErrorContains(t, err, "so this command could change two repositories; no pin changed; "+
+		"run it again, fix the file or use another --db")
 }
 
 // TestRootWriteSanitizesTheRecordedRoot covers a root that the database

@@ -598,8 +598,8 @@ func TestSettingsKeepsTheBuildRouteOfACopiedCheckout(t *testing.T) {
 
 // TestLinkedDefaultPathRoutesToItsOwner covers a default path that links
 // to the database of a copy. That file records the origin and is not its
-// ledger, so retarget and prune stay off. A build refuses, so every route
-// names the console of the origin.
+// ledger, so retarget and prune stay off. A build refuses, and no route can
+// keep this file in one repository, so every route names another file.
 func TestLinkedDefaultPathRoutesToItsOwner(t *testing.T) {
 	origin := dbRootRepo(t, "origin")
 	shared, side := dbRootCopy(t, origin), dbRootCopy(t, origin)
@@ -620,19 +620,22 @@ func TestLinkedDefaultPathRoutesToItsOwner(t *testing.T) {
 		assert.NotContains(t, detail, "Build the index", "pin %d", pin)
 
 		h.press("w")
-		assert.Contains(t, strings.ToLower(h.m.toast.text), "open the console in "+strings.ToLower(origin), "pin %d", pin)
+		assert.Contains(t, strings.ToLower(h.m.toast.text), "use another --db", "pin %d", pin)
 		assert.NotContains(t, h.m.toast.text, "press 1", "pin %d", pin)
 	}
 
 	_, err := svc.CommitMaintenance(dbRootPrune(t, svc))
 	require.ErrorIs(t, err, services.ErrForeignRoot)
-	assert.Contains(t, err.Error(), "open the console in "+origin)
+	assert.Contains(t, err.Error(), "use another --db")
 
 	h.press("1")
 	h.press("b")
-	assert.Equal(t, dbRootRefusal(origin), h.m.toast.text)
+	assert.Equal(t, dbRootClosed, h.m.toast.text)
 	assert.Equal(t, origin, dbRootRecorded(t, store.DefaultPath(origin)))
 }
+
+// dbRootClosed is the refusal of b under a file of a third checkout.
+const dbRootClosed = "The index records another repository root, so a build here would move it; use another --db."
 
 // dbRootNewRow adds a pending proposal without a pin to the database at
 // path and returns its ID.
@@ -740,8 +743,8 @@ func TestApplyRefusalReadsAsThePreview(t *testing.T) {
 }
 
 // TestDatabaseThatTheRootDoesNotOwnRoutesToTheRoot covers a database that
-// records the origin and is not its ledger. The keys stay off, and every
-// route names the console of the origin, where the write works.
+// records the origin and is not its ledger. The keys stay off, and a file
+// of a third checkout has no route, so every route names another file.
 func TestDatabaseThatTheRootDoesNotOwnRoutesToTheRoot(t *testing.T) {
 	cases := map[string]func(t *testing.T, copied string) (dir, db string){
 		"a third directory": func(t *testing.T, copied string) (string, string) {
@@ -763,7 +766,7 @@ func TestDatabaseThatTheRootDoesNotOwnRoutesToTheRoot(t *testing.T) {
 			assert.NotContains(t, pinsKeys(h), "-")
 
 			detail := pinsDetail(t, h)
-			assert.Contains(t, detail, "Open the console in "+origin+".")
+			assert.Contains(t, detail, "Use another --db.")
 			assert.NotContains(t, detail, "Build the index")
 
 			_, err := svc.CommitMaintenance(dbRootPrune(t, svc))
@@ -771,9 +774,9 @@ func TestDatabaseThatTheRootDoesNotOwnRoutesToTheRoot(t *testing.T) {
 
 			h.press("1")
 			h.press("b")
-			assert.Equal(t, dbRootRefusal(origin), h.m.toast.text)
+			assert.Equal(t, dbRootClosed, h.m.toast.text)
 
-			// The console that the routes name offers the prune.
+			// The console of the origin still offers the prune.
 			own, ownSvc := dbRootConsole(t, origin, "")
 			pinsCursorTo(own, 1)
 			assert.Contains(t, pinsKeys(own), "-")
@@ -906,7 +909,7 @@ func TestSettingsOfACopyShowsTheRefusalBeforeADraft(t *testing.T) {
 // TestSettingsRoutesToTheRootOfADatabaseItDoesNotOwn covers the console
 // route, because a build is refused there.
 func TestSettingsRoutesToTheRootOfADatabaseItDoesNotOwn(t *testing.T) {
-	origin, copied := dbRootGateOff(t)
+	_, copied := dbRootGateOff(t)
 
 	ws, err := workspace.Resolve(dbRootDir(t), store.DefaultPath(copied))
 	require.NoError(t, err)
@@ -914,7 +917,7 @@ func TestSettingsRoutesToTheRootOfADatabaseItDoesNotOwn(t *testing.T) {
 	h := lessonsOpen(t, services.New(ws, "test", "/usr/local/bin/seamark"), "group:pinwrite", 150, 50)
 
 	s := settingsScr(h)
-	assert.Equal(t, "Open the console in "+origin+", because a save works there.",
+	assert.Equal(t, "Use another --db.",
 		settingsBlock(s.snap().Editable(settings.GroupPinWrite), settingsFile).route)
 	assert.False(t, s.foreignRoot())
 	assert.NotContains(t, footerLine(h.view()), "index build")
@@ -958,14 +961,14 @@ func TestPinReviewGateRouteNamesTheWayOutOfAForeignRoot(t *testing.T) {
 	})
 
 	t.Run("a database that the root does not own", func(t *testing.T) {
-		origin, copied := dbRootGateOff(t)
+		_, copied := dbRootGateOff(t)
 
 		h, _ := dbRootConsole(t, dbRootDir(t), store.DefaultPath(copied))
 		review := dbRootReview(t, h)
 
 		for _, b := range review.preview.Blockers {
 			if b.Kind == maintain.BlockGate {
-				assert.Contains(t, pinBlockerLine(review.st, b), "open the console in "+origin)
+				assert.Contains(t, pinBlockerLine(review.st, b), "use another --db")
 			}
 		}
 
@@ -1033,14 +1036,14 @@ func TestOverviewPinWritingItemNamesTheWayOut(t *testing.T) {
 	})
 
 	t.Run("a database that the root does not own names the console", func(t *testing.T) {
-		origin, copied := dbRootGateOff(t)
+		_, copied := dbRootGateOff(t)
 
 		h, _ := dbRootConsole(t, dbRootDir(t), store.DefaultPath(copied))
 		h.press("1")
 
 		it := ovFind(t, ovScreen(h), "learn:pinwrite")
 		assert.Equal(t, ovActNone, it.act.kind)
-		assert.Contains(t, it.route, "Open the console in "+origin)
+		assert.Contains(t, it.route, "Use another --db")
 	})
 }
 
@@ -1173,28 +1176,31 @@ func TestScreensNameTheDBOfACustomDatabase(t *testing.T) {
 // file. The console of the old root cannot open. A shell run without
 // --db builds the default database, so every text names the flag.
 func TestGoneRootNamesTheRunWithItsFile(t *testing.T) {
-	cases := map[string]func(t *testing.T, moved string) string{
-		"a file outside the workspace": func(t *testing.T, _ string) string {
+	cases := map[string]struct {
+		place func(t *testing.T, moved string) string
+		flag  string
+	}{
+		"a file outside the workspace": {func(t *testing.T, _ string) string {
 			return filepath.Join(dbRootDir(t), "custom.db")
-		},
-		"a file inside the workspace": func(_ *testing.T, moved string) string {
+		}, "--move-root "},
+		"a file inside the workspace": {func(_ *testing.T, moved string) string {
 			return filepath.Join(moved, "custom.db")
-		},
+		}, ""},
 	}
 
-	for name, place := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			origin := dbRootRepo(t, "origin")
 			moved := filepath.Join(dbRootDir(t), "moved")
 
 			require.NoError(t, os.Rename(origin, moved))
 
-			db := place(t, moved)
+			db := tc.place(t, moved)
 
 			require.NoError(t, os.Rename(store.DefaultPath(moved), db))
 
 			id := dbRootNewRow(t, db)
-			want := "un `seamark index --move-root --db " + db + "` in " + moved + " first"
+			want := "un `seamark index " + tc.flag + "--db " + db + "` in " + moved + " first"
 
 			h, svc := dbRootConsole(t, moved, db)
 

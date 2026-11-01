@@ -41,6 +41,14 @@ func TestTheRootRulesDifferOnlyInTheDBException(t *testing.T) {
 	foreign := workspace.IndexProbe{Root: other}
 	own := workspace.IndexProbe{Root: root}
 
+	// Each file records the other root, because the rule reads the disk.
+	for _, path := range []string{store.DefaultPath(root), filepath.Join(other, "index.db")} {
+		st, err := store.Open(path)
+		require.NoError(t, err)
+		require.NoError(t, st.SetMeta(store.MetaRepoRoot, other))
+		require.NoError(t, st.Close())
+	}
+
 	defaultDB := engNew(workspace.Workspace{Root: root, DBPath: store.DefaultPath(root)}, Deps{})
 	flagDB := engNew(workspace.Workspace{Root: root, DBPath: filepath.Join(other, "index.db")}, Deps{})
 
@@ -277,7 +285,9 @@ func rootBuild(e *engine, force bool) error {
 
 // TestBuildIndexRefusesTheDatabaseOfAnotherRepository covers the build
 // that moved the recorded root. The other checkout then read no pins and
-// lost its maintenance. An older schema hides the root from the probe.
+// lost its maintenance. An older schema hides the root from the probe. A
+// newer schema goes to the open, which writes nothing and asks for an
+// upgrade.
 func TestBuildIndexRefusesTheDatabaseOfAnotherRepository(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -286,9 +296,6 @@ func TestBuildIndexRefusesTheDatabaseOfAnotherRepository(t *testing.T) {
 		{"a ready database", func(*testing.T, string) {}},
 		{"an older schema", func(t *testing.T, origin string) {
 			rootSchema(t, origin, store.SupportedSchema()-1)
-		}},
-		{"a newer schema", func(t *testing.T, origin string) {
-			rootSchema(t, origin, store.SupportedSchema()+1)
 		}},
 	}
 
@@ -324,6 +331,28 @@ func TestBuildIndexRefusesTheDatabaseOfAnotherRepository(t *testing.T) {
 			require.EqualError(t, e.Pins().Database.BuildBlock, refused.Error())
 		})
 	}
+
+	t.Run("a newer schema", func(t *testing.T) {
+		origin, _ := servicestest.Workspace(t, "", "api")
+		other, _ := servicestest.Workspace(t, "", "api")
+
+		rootSchema(t, origin.DBPath, store.SupportedSchema()+1)
+
+		ws, err := workspace.Resolve(other.Root, origin.DBPath)
+		require.NoError(t, err)
+
+		before, err := os.ReadFile(origin.DBPath)
+		require.NoError(t, err)
+
+		err = rootBuild(engNew(ws, Deps{}), false)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrForeignRoot)
+
+		after, err := os.ReadFile(origin.DBPath)
+		require.NoError(t, err)
+		assert.Equal(t, before, after, "the open writes nothing")
+	})
+
 }
 
 // TestBuildIndexRefusesALinkedDefaultPath covers a worktree that shares
@@ -470,7 +499,7 @@ func TestBuildIndexRecordsAMovedRepository(t *testing.T) {
 	got := e.Pins().Database
 
 	require.NoError(t, got.BuildBlock)
-	require.ErrorContains(t, got.WriteBlock, "run `seamark index --move-root --db "+db+"` in "+moved+" first")
+	require.ErrorContains(t, got.WriteBlock, "run `seamark index --db "+db+"` in "+moved+" first")
 
 	require.NoError(t, rootBuild(e, false))
 	assert.Equal(t, moved, rootRecorded(t, db), "a plain build must not skip")
@@ -541,7 +570,7 @@ func TestRouteOfARootThatCannotBeReachedNamesNoConsole(t *testing.T) {
 	require.NoError(t, err)
 
 	got := engNew(ws, Deps{}).Pins().Database
-	want := "run `seamark index --move-root --db " + db + "` in " + base.Root + " first"
+	want := "use another --db"
 
 	require.ErrorIs(t, got.BuildBlock, ErrForeignRoot)
 	assert.Contains(t, got.BuildBlock.Error(), want)
@@ -550,9 +579,8 @@ func TestRouteOfARootThatCannotBeReachedNamesNoConsole(t *testing.T) {
 }
 
 // TestRouteOfARootThatCannotBeReachedKeepsAFileWithItsOwner bounds the
-// rule above. A move here would split the file from its checkout. A
-// Seamark checkout takes the step. Any other checkout leaves no step
-// here, so only another file remains.
+// rule above. A move here would split the file from its checkout, so
+// only another file remains.
 func TestRouteOfARootThatCannotBeReachedKeepsAFileWithItsOwner(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a directory with mode 0000")
@@ -581,8 +609,7 @@ func TestRouteOfARootThatCannotBeReachedKeepsAFileWithItsOwner(t *testing.T) {
 
 	ws, err := workspace.Resolve(base.Root, owned)
 	require.NoError(t, err)
-	assert.Equal(t, "run `seamark index --move-root --db "+owned+"` in "+owner+" first",
-		engNew(ws, Deps{}).Pins().Database.RootRoute)
+	assert.Equal(t, "use another --db", engNew(ws, Deps{}).Pins().Database.RootRoute)
 
 	ws, err = workspace.Resolve(base.Root, other)
 	require.NoError(t, err)
@@ -852,7 +879,7 @@ func TestOwnRootRefusesADatabaseThatTheRecordedRootDoesNotOwn(t *testing.T) {
 		route func(origin, ws workspace.Workspace, db string) string
 	}{
 		"a third directory with the database of a copy": {rootThirdDirectory,
-			func(origin, _ workspace.Workspace, _ string) string { return "open the console in " + origin.Root }},
+			func(_, _ workspace.Workspace, _ string) string { return "use another --db" }},
 		"a copy with a renamed database": {rootRenamed, func(_, ws workspace.Workspace, db string) string {
 			return "run `seamark index --move-root --db " + db + "` in " + ws.Root + " first"
 		}},
@@ -1286,10 +1313,10 @@ func TestRouteOfADatabaseOfTheRootNamesNoDB(t *testing.T) {
 	assert.NotContains(t, got.BuildBlock.Error(), "--db")
 }
 
-// TestRouteOfALinkedDefaultPathNamesNoDB covers a default path that links
-// to a file outside any checkout. The user gave no --db, so the route has
-// none to keep.
-func TestRouteOfALinkedDefaultPathNamesNoDB(t *testing.T) {
+// TestRouteOfALinkedDefaultPathNamesItsDB covers a default path that links
+// to a file outside any checkout. The default database of the origin is
+// another ledger, so the route must name this file.
+func TestRouteOfALinkedDefaultPathNamesItsDB(t *testing.T) {
 	origin, _ := maintWorkspace(t, true)
 	side := rootCopy(t, origin, "side")
 
@@ -1304,6 +1331,5 @@ func TestRouteOfALinkedDefaultPathNamesNoDB(t *testing.T) {
 
 	_, err = e.CommitMaintenance(rootPrune(t, e))
 	require.ErrorIs(t, err, ErrForeignRoot)
-	assert.Contains(t, err.Error(), "open the console in "+origin.Root)
-	assert.NotContains(t, err.Error(), "--db")
+	assert.Contains(t, err.Error(), "open the console in "+origin.Root+" with this --db")
 }

@@ -10,7 +10,7 @@ package cli
 // outcome to those lines.
 //
 // Both surfaces refuse a write that changes two repositories, by the
-// rule of workspace.CheckRootWrite. The CLI differs from the console in
+// rule of ownership.Decide. The CLI differs from the console in
 // three points, because it has no preview and no session:
 //
 //   - It commits the ready pins of a selection and prints one reason line

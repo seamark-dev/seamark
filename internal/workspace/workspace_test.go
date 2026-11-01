@@ -536,3 +536,15 @@ func TestProbeReadyWithMalformedIndexTime(t *testing.T) {
 	assert.Zero(t, p.IndexedAt, "a malformed time is unknown, not a failure")
 	assert.NoError(t, p.Err)
 }
+
+// TestAbsoluteDBKeepsAnAbsolutePath covers both spellings. The console
+// passes an absolute path, and the rule must not change it.
+func TestAbsoluteDBKeepsAnAbsolutePath(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	t.Chdir(dir)
+
+	assert.Equal(t, filepath.Join(dir, "x.db"), Workspace{DBPath: filepath.Join(dir, "x.db")}.AbsoluteDB())
+	assert.Equal(t, filepath.Join(dir, "x.db"), Workspace{DBPath: "x.db"}.AbsoluteDB())
+}

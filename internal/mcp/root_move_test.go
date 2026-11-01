@@ -106,7 +106,7 @@ func TestToolsKeepTheRootOfAnotherDatabase(t *testing.T) {
 	assert.Equal(t, origin, recorded)
 
 	assert.Contains(t, log.String(), "this database records another repository ("+origin+")")
-	assert.Contains(t, log.String(), "run `seamark index --db "+dbPath+"` in "+origin)
+	assert.Contains(t, log.String(), "run `seamark index` in "+origin)
 	assert.NotContains(t, log.String(), "mcp: index refreshed")
 }
 
@@ -129,7 +129,7 @@ func TestToolsKeepAnOlderSchemaOfAnotherDatabase(t *testing.T) {
 	text, isError := rootMoveText(t, resps["1"])
 	assert.True(t, isError)
 	assert.Contains(t, text, "this database records another repository ("+origin+")")
-	assert.Contains(t, text, "run `seamark index --db "+dbPath+"` in "+origin)
+	assert.Contains(t, text, "run `seamark index` in "+origin)
 
 	after, err := os.ReadFile(dbPath)
 	require.NoError(t, err)

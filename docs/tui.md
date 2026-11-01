@@ -110,13 +110,13 @@ The state of the workspace at a glance.
   the index database; `enter` or `y` confirms. It never fetches reviews or
   runs a distillation, and it cannot be cancelled, so `q` offers to exit
   after it finishes. `b` refuses a database that records another
-  repository, at any schema, and names the console of that root. When
-  that console cannot run, it names `seamark index --move-root --db
-  <file>` in the directory that can take the file. That covers a file of
-  this checkout, a recorded root that a stat cannot find or reach, and a
-  root that git now widens to a top level. A missing root can be a moved
-  repository or a detached disk, so `b` builds over it only for a file
-  inside this workspace and outside any repository nested in it. It also
+  repository and names the console of that root. A newer schema asks for
+  an upgrade instead. When that console cannot run, it names `seamark
+  index --move-root --db <file>` in this workspace when the file lies in
+  it and in no nested checkout, else `use another --db`. A missing root
+  can be a moved repository or a detached disk, so `b` builds over it
+  only for a file inside this workspace and outside any repository nested
+  in it. It also
   refuses a default path that links to the database of another worktree,
   and a `--db` file whose recorded root cannot be read. A refused `b`
   reads the index again first, so a fixed cause opens the confirmation
@@ -650,10 +650,9 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
   workspace instead. A command in the recorded root with that file would
   write two repositories, and without it an id names a row of another
   ledger. A root that a stat cannot find or reach, or that git now
-  widens, names the same run in the checkout that owns the file, because
-  no command can enter that root. The CLI also names that run for a file
-  of a third checkout with a `.seamark` directory. The home directory
-  counts as no checkout. The pin writes, the lesson settings saves, and the
+  widens, names that run here when the file lies in this workspace and
+  in no nested checkout, else another `--db`, because no command can
+  enter that root. The home directory counts as no checkout. The pin writes, the lesson settings saves, and the
   sample refuse in the same way. The CLI commands `--apply`,
   `--retarget`, and `--prune` follow the same rule, with one difference:
   outside git, a command in a directory inside the recorded root counts
@@ -663,8 +662,8 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
   Its review names that root. Pins names no build here, because `b`
   refuses a database that records another repository: the build would
   move that root. The lesson settings name the console of the recorded
-  root, or the `--move-root` run when that console cannot run, and `o`
-  opens no build. A `--db` that names the default database
+  root, or the `--move-root` run or another `--db` when that console
+  cannot run, and `o` opens no build. A `--db` that names the default database
   through a link, a relative path, or another case of the path counts as
   the default database.
 - The new pin, pin edit, pin removal, mute, and delivery saves refuse a

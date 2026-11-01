@@ -564,7 +564,7 @@ func TestLessonsPruneGoldenRefusals(t *testing.T) {
 // A copied checkout keeps the index of the original, and that index
 // records the original root. A prune would change the pin file of the
 // original and the ledger of the copy, so it refuses before any write.
-// The refusal uses the rule of the console, workspace.CheckRootWrite.
+// The refusal uses the rule of the console, ownership.Decide.
 func TestLessonsPruneGoldenCopiedWorkspace(t *testing.T) {
 	original := pruneGoldenWorkspace(t)
 	maintainWriteConfig(t, original, maintainGateOn)

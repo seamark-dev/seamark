@@ -28,6 +28,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/fixes"
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/parse"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -121,85 +122,33 @@ func (r rootMoveRefusal) Error() string { return string(r) }
 // Unwrap makes the refusal match ErrRootMove.
 func (r rootMoveRefusal) Unwrap() error { return ErrRootMove }
 
-// checkRootMove returns the refusal of a build in root, or nil. It reads
-// the file without a write, so it can run before the first open.
-//
-// A newer schema gets no refusal here. The open refuses it without a
-// write and names the upgrade, and no route of this refusal can run on
-// that schema. MoveRoot allows a root that reads. A root that does not
-// read names no move that the user can allow.
-func checkRootMove(root, db string, moveRoot bool) error {
-	recorded, err := store.RootMovedByBuild(root, db)
-	if err != nil {
+// buildRefusal returns the refusal of a build in this state, or nil. Its
+// text has the facts and the route of the decision.
+func buildRefusal(s ownership.State, d ownership.Decision) error {
+	if d.Build != ownership.BuildRefused {
+		return nil
+	}
+
+	there, here := render.Sanitize(s.Recorded), render.Sanitize(s.Workspace)
+	route := s.Route(d.Route, ownership.SurfaceBuild)
+
+	switch {
+	case s.Root == ownership.RootUnreadable:
 		return rootMoveRefusal(fmt.Sprintf("the recorded root of this database cannot be read (%s: %s), so a "+
-			"rebuild could move the root of another repository; nothing changed; run it again, fix the file, "+
-			"or use another --db", render.Sanitize(db), render.Sanitize(err.Error())))
-	}
-
-	if recorded == "" || moveRoot {
-		return nil
-	}
-
-	if version, err := store.ProbeVersion(db); err == nil && version > store.SupportedSchema() {
-		return nil
-	}
-
-	there, here, route := render.Sanitize(recorded), render.Sanitize(root), rootMoveRoute(recorded, root, db)
-
-	if store.StatRoot(recorded) == store.RootGone {
+			"rebuild could move the root of another repository; nothing changed; run it again, %s",
+			render.Sanitize(s.DB), render.Sanitize(s.ReadErr.Error()), route))
+	case s.Root == ownership.RootGone:
 		return rootMoveRefusal(fmt.Sprintf("this database records a directory that does not exist now (%s), which "+
 			"can be a moved repository or a detached disk, so a rebuild in %s would replace that root; "+
 			"nothing changed; %s", there, here, route))
-	}
-
-	if store.BelongsToCheckout(root, recorded, db) {
+	case s.Owner == ownership.OwnerWorkspace:
 		return rootMoveRefusal(fmt.Sprintf("this database lies in %s but records another repository (%s), so a "+
 			"rebuild here would move its recorded root; nothing changed; %s", here, there, route))
+	default:
+		return rootMoveRefusal(fmt.Sprintf("this database records another repository (%s), so a rebuild in %s would "+
+			"move its recorded root, and that repository would lose its pins and maintenance; nothing changed; %s",
+			there, here, route))
 	}
-
-	return rootMoveRefusal(fmt.Sprintf("this database records another repository (%s), so a rebuild in %s would "+
-		"move its recorded root, and that repository would lose its pins and maintenance; nothing changed; %s",
-		there, here, route))
-}
-
-// rootMoveRoute names the next steps of a build in root under the file
-// db, which records another root. The move comes first when it is the one
-// step (store.MoveTarget). A route into a root that a command cannot
-// enter stays out. So does a move that would split two repositories
-// (moveKeepsOneRepository). When nothing remains, the shortest true step
-// is another file.
-func rootMoveRoute(recorded, root, db string) string {
-	file := render.ShellWord(db)
-	moveIn := func(dir string) string {
-		return "run `seamark index --move-root --db " + file + "` in " + render.Sanitize(dir) + " to move the root"
-	}
-
-	top, _ := history.WidenedRoot(recorded)
-
-	if dir, ok := store.MoveTarget(root, recorded, db, top); ok {
-		return moveIn(dir)
-	}
-
-	if store.StatRoot(recorded) != store.RootFound {
-		return "use another --db"
-	}
-
-	inRecorded := "run `seamark index --db " + file + "` in " + render.Sanitize(recorded)
-
-	if moveKeepsOneRepository(recorded, root, db) {
-		return inRecorded + ", or " + moveIn(root)
-	}
-
-	return inRecorded
-}
-
-// moveKeepsOneRepository reports whether root can take the file db. After
-// a move, a pin command in root writes its pin file there and its ledger
-// in db. A file of another checkout then lies in a second repository, so
-// the flag must not be a recommendation for it. It still works.
-func moveKeepsOneRepository(recorded, root, db string) bool {
-	return store.ClassifyDatabase(recorded, db) == store.DatabaseOther && !store.LiesInside(db, recorded) &&
-		store.FileFitsRoot(root, db)
 }
 
 // Run executes a full indexing pass.
@@ -224,7 +173,10 @@ func Run(opts Options) (*Summary, error) {
 
 	// The guard runs before the fast path, because the open of the fast
 	// path migrates an older schema, and a refusal must write nothing.
-	refusal := checkRootMove(root, dbPath, opts.MoveRoot)
+	state := ownership.Gather(root, dbPath)
+	state.MoveRoot = opts.MoveRoot
+	decision := ownership.Decide(state.Facts)
+	refusal := buildRefusal(state, decision)
 
 	// Fast path: an unchanged workspace needs no work. This makes
 	// "reindex whenever unsure" free (~30ms) for the CLI, and no-change
@@ -237,9 +189,9 @@ func Run(opts Options) (*Summary, error) {
 	switch {
 	case refusal != nil:
 		if !opts.Force && !opts.MoveRoot {
-			if sum := freshSummary(root, dbPath, start, store.OpenReadOnly); sum != nil {
+			if sum := freshSummary(root, dbPath, start, store.OpenReadOnly, state, decision); sum != nil {
 				if sum.Root != "" && !store.SameDirectory(sum.Root, root) {
-					sum.RootRoute = rootMoveRoute(sum.Root, root, dbPath)
+					sum.RootRoute = state.Route(decision.Route, ownership.SurfaceBuild)
 				}
 
 				return sum, nil
@@ -248,7 +200,7 @@ func Run(opts Options) (*Summary, error) {
 
 		return nil, refusal
 	case !opts.Force && !opts.MoveRoot:
-		if sum := freshSummary(root, dbPath, start, store.Open); sum != nil {
+		if sum := freshSummary(root, dbPath, start, store.Open, state, decision); sum != nil {
 			return sum, nil
 		}
 	}
@@ -1124,8 +1076,11 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 // freshSummary returns a Skipped summary when the index at dbPath was
 // built from the current workspace state; nil when a rebuild is needed.
 // open is the opener of the database, so a caller decides whether an
-// older schema migrates.
-func freshSummary(root, dbPath string, start time.Time, open func(string) (*store.Store, error)) *Summary {
+// older schema migrates. state and decision say whether a rebuild must
+// record root.
+func freshSummary(root, dbPath string, start time.Time, open func(string) (*store.Store, error),
+	state ownership.State, decision ownership.Decision,
+) *Summary {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil
 	}
@@ -1149,7 +1104,7 @@ func freshSummary(root, dbPath string, start time.Time, open func(string) (*stor
 	// The fingerprint holds no path, so a copied or a moved checkout keeps
 	// the fingerprint of its origin. Only a rebuild records the new root.
 	recorded, _ := st.GetMeta(store.MetaRepoRoot)
-	if recordsAnotherRoot(root, dbPath, recorded) {
+	if recordsAnotherRoot(root, dbPath, recorded, state, decision) {
 		return nil
 	}
 
@@ -1176,22 +1131,18 @@ func freshSummary(root, dbPath string, start time.Time, open func(string) (*stor
 }
 
 // recordsAnotherRoot reports a database that needs a rebuild to record
-// root. The default database belongs to root, so any other root ends the
-// skip. A --db database can belong to another repository, and a rebuild
-// would move its root away from that repository. Only a file that moved
-// with root ends the skip, because a moved repository keeps its
-// fingerprint (store.RootMovesItself). A file that does not accept the
-// write keeps the skip for both, or every run would fail. An empty
-// recorded root says nothing, so it is no difference.
-func recordsAnotherRoot(root, dbPath, recorded string) bool {
+// root. A moved or a copied checkout keeps its fingerprint, so the decision
+// ends the skip. A default database also ends it for a new spelling of
+// root. A file that does not accept the write keeps the skip for both, or
+// every run would fail. An empty recorded root says nothing, so it is no
+// difference.
+func recordsAnotherRoot(root, dbPath, recorded string, state ownership.State, decision ownership.Decision) bool {
 	if recorded == "" {
 		return false
 	}
 
-	differs := store.RootMovesItself(root, recorded, dbPath)
-	if store.ClassifyDatabase(root, dbPath) == store.DatabaseDefault {
-		differs = !sameSpelling(recorded, root)
-	}
+	differs := decision.Build == ownership.BuildRecords ||
+		state.File == ownership.FileDefault && !sameSpelling(recorded, root)
 
 	return differs && fileAcceptsWrites(dbPath)
 }

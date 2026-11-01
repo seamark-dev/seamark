@@ -50,10 +50,11 @@ model-boundary delivery.
   note. A relative `--db` names the file that the system opens, also
   behind a link.
 - **Refusals name one route that runs.** A route never writes two
-  repositories or applies another proposal. A file of a copied or third
-  checkout routes to `seamark index --move-root --db <file>` in that
-  checkout, a route to the recorded root always keeps `--db`, and a path
-  that needs quotes gets them.
+  repositories or applies another proposal. A custom file of a copy
+  routes to `seamark index --move-root --db <file>` in that copy, a file
+  of a third checkout routes to another `--db`, a route to the recorded
+  root keeps `--db` for a custom file, and a path that needs quotes gets
+  them.
 - **Copied checkouts in the CLI.** `seamark lessons --apply`,
   `--retarget`, and `--prune` refuse when the pin file and the ledger
   lie in two repositories, as the console does, so a copy no longer

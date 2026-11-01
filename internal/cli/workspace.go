@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/workspace"
@@ -127,8 +128,14 @@ func openPinWriter(opts *options) (*store.Store, workspace.IndexProbe, error) {
 		return nil, none, err
 	}
 
-	if err := refusalBeforeOpen(ws); err != nil {
-		return nil, none, err
+	state := ownership.GatherCommand(ws.Root, ws.AbsoluteDB())
+
+	// A root that does not read waits for the open: the open waits longer
+	// for a lock, and it reports a broken database in its own words.
+	if state.Root != ownership.RootUnreadable {
+		if err := pinWriteRefusal(state); err != nil {
+			return nil, none, err
+		}
 	}
 
 	st, probe, err := openIndexProbe(opts)
@@ -136,119 +143,51 @@ func openPinWriter(opts *options) (*store.Store, workspace.IndexProbe, error) {
 		return nil, none, err
 	}
 
-	if err := refusalOfStore(ws, st); err != nil {
-		_ = st.Close()
+	// The open can end the failure of the first read, so a root that
+	// reads now reaches the rule. A root that still does not read fails
+	// closed, because the file can belong to another repository.
+	if state.Root == ownership.RootUnreadable {
+		if err := pinWriteRefusal(ownership.GatherCommand(ws.Root, ws.AbsoluteDB())); err != nil {
+			_ = st.Close()
 
-		return nil, none, err
+			return nil, none, err
+		}
 	}
 
 	return st, probe, nil
 }
 
-// refusalBeforeOpen applies the rule without a write, because
-// store.ProbeRoot reads every schema. A failed read waits for the open:
-// the open waits longer for a lock, and it reports a missing or a broken
-// database in its own words.
-//
-// A newer schema also goes to the open. The open refuses it without a
-// write and names the upgrade, and the index run of a refusal route
-// would fail on that schema.
-func refusalBeforeOpen(ws workspace.Workspace) error {
-	version, err := store.ProbeVersion(ws.DBPath)
-	if err != nil || version > store.SupportedSchema() {
+// pinWriteRefusal says why a pin write must not run in this state and
+// names the next step, or it returns nil. Only an open that follows can
+// report a file without an index or a newer schema. The recorded root
+// comes from the database, so the text sanitizes it.
+func pinWriteRefusal(s ownership.State) error {
+	d := ownership.Decide(s.Facts)
+	if d.Write != ownership.WriteRefused {
 		return nil
 	}
 
-	recorded, err := store.ProbeRoot(ws.DBPath)
-	if err != nil {
-		return nil
-	}
-
-	return pinWriteRefusal(ws, recorded)
-}
-
-// refusalOfStore applies the rule to the root of the open store, so a
-// read that failed before the open still reaches the rule. A root that
-// does not read fails closed, because the file can belong to another
-// repository.
-func refusalOfStore(ws workspace.Workspace, st *store.Store) error {
-	recorded, err := st.GetMeta(store.MetaRepoRoot)
-	if err != nil {
-		return fmt.Errorf("the recorded root of the index cannot be read (%s: %w), so this "+
-			"command could change two repositories; no pin changed; run it again",
-			render.Sanitize(ws.DBPath), err)
-	}
-
-	return pinWriteRefusal(ws, recorded)
-}
-
-// pinWriteRefusal returns why a pin write must not run when the database
-// of ws records the root recorded, or nil.
-func pinWriteRefusal(ws workspace.Workspace, recorded string) error {
-	decision := ws.CheckCommandRootWrite(recorded)
-	if decision == workspace.RootWriteAllowed {
-		return nil
-	}
-
-	return errors.New(pinWriteRefusalText(ws, decision, recorded))
-}
-
-// pinWriteRefusalText says why a pin write refuses and names the next
-// step. The recorded root comes from the database, so the text sanitizes
-// it.
-func pinWriteRefusalText(ws workspace.Workspace, decision workspace.RootWrite, recorded string) string {
-	root := render.Sanitize(recorded)
-	route := pinWriteRoute(ws, decision, recorded)
+	root := render.Sanitize(s.Recorded)
+	route := s.Route(d.Route, ownership.SurfaceCommand)
 
 	subject := "this database"
-	if decision == workspace.RootWriteCopied {
+	if s.File == ownership.FileDefault {
 		subject = "the index of this checkout"
 	}
 
-	if rootIsGone(recorded) {
-		return fmt.Sprintf("%s records a directory that no longer exists (%s), and a write would "+
+	switch {
+	case s.Root == ownership.RootUnreadable:
+		return fmt.Errorf("the recorded root of the index cannot be read (%s: %w), so this "+
+			"command could change two repositories; no pin changed; run it again, %s",
+			render.Sanitize(s.DB), s.ReadErr, route)
+	case s.Root == ownership.RootGone:
+		return fmt.Errorf("%s records a directory that no longer exists (%s), and a write would "+
 			"recreate it; nothing changed; %s", subject, root, route)
-	}
-
-	if decision == workspace.RootWriteCopied {
-		return fmt.Sprintf("%s records another repository (%s), so this command would change the pin "+
+	case s.File == ownership.FileDefault:
+		return fmt.Errorf("%s records another repository (%s), so this command would change the pin "+
 			"file there and the ledger in this database; nothing changed; %s", subject, root, route)
+	default:
+		return fmt.Errorf("%s records another repository (%s) that does not own it, so this command would "+
+			"change the pin file there and the ledger in this database; nothing changed; %s", subject, root, route)
 	}
-
-	return fmt.Sprintf("%s records another repository (%s) that does not own it, so this command would "+
-		"change the pin file there and the ledger in this database; nothing changed; %s", subject, root, route)
-}
-
-// pinWriteRoute names a next step that can run in this state. A route
-// to the recorded root always names --db. Without it, an id of this
-// command names a row of another ledger. The command would then apply a
-// proposal that the user did not name. The path is absolute, because a
-// relative one means another file in the recorded root.
-//
-// The default database of a copy has no route to the recorded root, for
-// that reason. MoveRootRoute and OwnerRoute name the step of a file that
-// a command in the recorded root cannot take. When they name none, a root
-// that a stat cannot reach is no route either, so only another file
-// remains.
-func pinWriteRoute(ws workspace.Workspace, decision workspace.RootWrite, recorded string) string {
-	if decision == workspace.RootWriteCopied {
-		return "run `seamark index` in " + render.Sanitize(ws.Root) + " first"
-	}
-
-	for _, route := range []string{ws.MoveRootRoute(recorded), ws.OwnerRoute(recorded)} {
-		if route != "" {
-			return route
-		}
-	}
-
-	if store.StatRoot(recorded) != store.RootFound {
-		return "use another --db"
-	}
-
-	return "run this command in " + render.Sanitize(recorded) + " with --db " + render.ShellWord(ws.AbsoluteDB())
-}
-
-// rootIsGone reports a recorded root that no longer exists.
-func rootIsGone(recorded string) bool {
-	return store.StatRoot(recorded) == store.RootGone
 }

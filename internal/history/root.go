@@ -1,7 +1,6 @@
 package history
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -29,26 +28,6 @@ func ResolveRoot(dir string) (string, error) {
 	}
 
 	return abs, nil
-}
-
-// WidenedRoot returns the git top level above dir when dir is no top level
-// itself. A command in dir then runs in that top level, so a route into
-// dir leads back to the same state. ok is false for a top level and for a
-// directory outside git.
-func WidenedRoot(dir string) (string, bool) {
-	top, ok := TopLevel(dir)
-	if !ok {
-		return "", false
-	}
-
-	topInfo, errTop := os.Stat(top)
-	dirInfo, errDir := os.Stat(dir)
-
-	if errTop != nil || errDir != nil || os.SameFile(topInfo, dirInfo) {
-		return "", false
-	}
-
-	return top, true
 }
 
 // TopLevel returns the git top level of dir. ok is false when git does

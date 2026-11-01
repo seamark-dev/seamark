@@ -169,6 +169,15 @@ type IndexProbe struct {
 	Err error
 }
 
+// AbsoluteDB returns the database path in absolute form. The commands
+// pass that form already, and this method holds for any other caller.
+// store.ClassifyDatabase cannot walk the parent directories of a relative
+// path, and a route in another directory needs a path that stays valid
+// there.
+func (ws Workspace) AbsoluteDB() string {
+	return store.AbsolutePath(ws.DBPath)
+}
+
 // DatabaseFacts holds the answers about the index database that need the
 // disk. The console service fills them at read time, because a view must
 // not read the disk. The zero value describes the default database of a

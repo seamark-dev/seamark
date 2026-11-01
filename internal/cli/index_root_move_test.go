@@ -46,18 +46,16 @@ func rootMoveLead(recorded, here string) string {
 		" would move its recorded root, and that repository would lose its pins and maintenance; nothing changed; "
 }
 
-// rootMoveRefused is the refusal of a build in here under a file of the
-// recorded root. The move would split two repositories, so the only route
-// is the recorded root.
+// rootMoveRefused is the refusal of a build in here under a custom file.
+// The only route is the recorded root, with the file.
 func rootMoveRefused(recorded, here, db string) string {
 	return rootMoveLead(recorded, here) + "run `seamark index --db " + db + "` in " + recorded
 }
 
-// rootMoveRefusedWithMove is rootMoveRefused for a file that no checkout
-// owns, or that lies in this workspace. The move keeps one repository.
-func rootMoveRefusedWithMove(recorded, here, db string) string {
-	return rootMoveRefused(recorded, here, db) +
-		", or run `seamark index --move-root --db " + db + "` in " + here + " to move the root"
+// rootMoveRefusedDefault is the refusal of a build in here under the
+// default database of the recorded root. That file needs no --db there.
+func rootMoveRefusedDefault(recorded, here string) string {
+	return rootMoveLead(recorded, here) + "run `seamark index` in " + recorded
 }
 
 // rootMoveFiles reads every state file of the roots, the databases
@@ -106,7 +104,7 @@ func TestIndexRefusesTheDatabaseOfAnotherRepository(t *testing.T) {
 		"--max-commits": {"--max-commits", "5"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rootWriteRefused(t, rootMoveRefused(origin, third, db), files,
+			rootWriteRefused(t, rootMoveRefusedDefault(origin, third), files,
 				append([]string{"-C", third, "--db", db, "index"}, flags...)...)
 		})
 	}
@@ -118,13 +116,13 @@ func TestIndexRefusesTheDatabaseOfAnotherRepository(t *testing.T) {
 
 		spelled := store.DefaultPath(link)
 
-		rootWriteRefused(t, rootMoveRefused(origin, third, spelled), files, "-C", third, "--db", spelled, "index")
+		rootWriteRefused(t, rootMoveRefusedDefault(origin, third), files, "-C", third, "--db", spelled, "index")
 	})
 
 	t.Run("a relative --db reads as an absolute route", func(t *testing.T) {
 		t.Chdir(filepath.Dir(db))
 
-		rootWriteRefused(t, rootMoveRefused(origin, third, db), files, "-C", third, "--db", "index.db", "index")
+		rootWriteRefused(t, rootMoveRefusedDefault(origin, third), files, "-C", third, "--db", "index.db", "index")
 	})
 
 	t.Run("the route of the recorded root works", func(t *testing.T) {
@@ -169,7 +167,7 @@ func TestIndexRefusesADirectoryInsideARootWithoutGit(t *testing.T) {
 	require.NoError(t, os.MkdirAll(inside, 0o755))
 	require.NoError(t, os.Rename(store.DefaultPath(root), custom))
 
-	rootWriteRefused(t, rootMoveRefusedWithMove(root, inside, custom), rootMoveFiles(t, []string{root}, custom),
+	rootWriteRefused(t, rootMoveRefused(root, inside, custom), rootMoveFiles(t, []string{root}, custom),
 		"-C", inside, "--db", custom, "index")
 }
 
@@ -242,7 +240,7 @@ func TestIndexRefusesAnOlderDatabaseBeforeTheOpen(t *testing.T) {
 	for name, here := range map[string]string{"another repository": third, "a sibling worktree": tree} {
 		for _, flags := range [][]string{nil, {"--force"}} {
 			t.Run(name+" "+strings.Join(flags, " "), func(t *testing.T) {
-				rootWriteRefused(t, rootMoveRefused(origin, here, db), files,
+				rootWriteRefused(t, rootMoveRefusedDefault(origin, here), files,
 					append([]string{"-C", here, "--db", db, "index"}, flags...)...)
 				assert.Equal(t, want, rootMoveVersion(t, db), "the refusal does not migrate the schema")
 			})
@@ -289,7 +287,7 @@ func TestIndexFailsClosedOnARootThatDoesNotRead(t *testing.T) {
 			_, err := run(t, append([]string{"-C", third, "--db", path, "index"}, flags...)...)
 			require.ErrorContains(t, err, "the recorded root of this database cannot be read ("+path+": ")
 			assert.ErrorContains(t, err, "so a rebuild could move the root of another repository; nothing changed; "+
-				"run it again, fix the file, or use another --db")
+				"run it again, fix the file or use another --db")
 			assert.ErrorIs(t, err, index.ErrRootMove)
 
 			after, err := os.ReadFile(path)
@@ -486,17 +484,17 @@ func TestIndexInASiblingWorktree(t *testing.T) {
 
 	out, err := run(t, "-C", tree, "--db", db, "index")
 	require.NoError(t, err)
-	assert.Equal(t, "index already up to date ("+db+"); it records "+origin+"; to rebuild, run `seamark index --db "+
-		db+"` in "+origin+"\n", out, "--force refuses here, and a move would split the file from its repository")
+	assert.Equal(t, "index already up to date ("+db+"); it records "+origin+"; to rebuild, run `seamark index` in "+
+		origin+"\n", out, "--force refuses here, and a move would split the file from its repository")
 	assert.Equal(t, before, rootWriteFiles(t, []string{origin}), "a skip writes nothing")
 
 	files := rootMoveFiles(t, []string{origin})
 
-	rootWriteRefused(t, rootMoveRefused(origin, tree, db), files, "-C", tree, "--db", db, "index", "--force")
+	rootWriteRefused(t, rootMoveRefusedDefault(origin, tree), files, "-C", tree, "--db", db, "index", "--force")
 
 	require.NoError(t, os.WriteFile(filepath.Join(tree, "side.go"), []byte("package main\n"), 0o644))
 
-	rootWriteRefused(t, rootMoveRefused(origin, tree, db), files, "-C", tree, "--db", db, "index")
+	rootWriteRefused(t, rootMoveRefusedDefault(origin, tree), files, "-C", tree, "--db", db, "index")
 	assert.Equal(t, origin, rootMoveRecorded(t, db))
 }
 
@@ -517,7 +515,7 @@ func TestIndexRefusesALinkedDefaultPath(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(filepath.Join(tree, "side.go"), []byte("package main\n"), 0o644))
 
-	rootWriteRefused(t, rootMoveRefused(origin, tree, store.DefaultPath(tree)), rootMoveFiles(t, []string{origin}),
+	rootWriteRefused(t, rootMoveRefusedDefault(origin, tree), rootMoveFiles(t, []string{origin}),
 		"-C", tree, "index")
 }
 
@@ -534,7 +532,7 @@ func TestCheckRefusesToMoveTheRootOfAnotherRepository(t *testing.T) {
 	before := rootWriteFiles(t, []string{origin, third})
 
 	_, _, err := runIn(t, "", "-C", third, "--db", db, "check")
-	require.EqualError(t, err, rootMoveRefused(origin, third, db))
+	require.EqualError(t, err, rootMoveRefusedDefault(origin, third))
 
 	assert.Equal(t, before, rootWriteFiles(t, []string{origin, third}))
 	assert.NoFileExists(t, filepath.Join(third, ".seamark", "audit.jsonl"))
@@ -601,9 +599,9 @@ func TestRootWriteRouteOfAMovedRepositoryNamesARunThatWorks(t *testing.T) {
 	require.NoError(t, os.Rename(store.DefaultPath(moved), custom))
 
 	_, err := run(t, "-C", moved, "--db", custom, "lessons", "--apply", "p1")
-	require.ErrorContains(t, err, "run `seamark index --move-root --db "+custom+"` in "+moved+" first")
+	require.ErrorContains(t, err, "run `seamark index --db "+custom+"` in "+moved+" first")
 
-	_, err = run(t, "-C", moved, "--db", custom, "index", "--move-root")
+	_, err = run(t, "-C", moved, "--db", custom, "index")
 	require.NoError(t, err)
 
 	out, err := run(t, "-C", moved, "--db", custom, "lessons", "--apply", "p1")
@@ -631,19 +629,19 @@ func TestIndexRefusalLeavesTheWorkTree(t *testing.T) {
 // TestIndexRefusalNamesNoMoveThatSplits covers the route of the flag. After
 // a move, a pin command here writes its pin file here and its ledger in
 // the file. A file of another checkout then lies in a second repository,
-// so the refusal must not recommend the flag. A file without an owner
-// keeps the recommendation, and the flag still works for every file.
+// so the refusal must not recommend the flag. The flag still works for
+// every file.
 func TestIndexRefusalNamesNoMoveThatSplits(t *testing.T) {
 	type setup func(t *testing.T, origin string) string
 
 	cases := []struct {
-		name     string
-		db       setup
-		wantMove bool
+		name string
+		db   setup
+		want func(origin, third, db string) string
 	}{
 		{"the default database of the recorded root", func(_ *testing.T, origin string) string {
 			return store.DefaultPath(origin)
-		}, false},
+		}, func(origin, third, _ string) string { return rootMoveRefusedDefault(origin, third) }},
 		{"a file in the checkout of the recorded root", func(t *testing.T, origin string) string {
 			path := filepath.Join(origin, "custom.db")
 
@@ -652,7 +650,7 @@ func TestIndexRefusalNamesNoMoveThatSplits(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, data, 0o644))
 
 			return path
-		}, false},
+		}, rootMoveRefused},
 		{"a file that the default path of the recorded root links to", func(t *testing.T, origin string) string {
 			path := filepath.Join(rootWriteDir(t), "shared.db")
 
@@ -660,7 +658,7 @@ func TestIndexRefusalNamesNoMoveThatSplits(t *testing.T) {
 			require.NoError(t, os.Symlink(path, store.DefaultPath(origin)))
 
 			return path
-		}, false},
+		}, func(origin, third, _ string) string { return rootMoveRefusedDefault(origin, third) }},
 		{"a file of a third checkout", func(t *testing.T, origin string) string {
 			copied := rootWriteCopy(t, origin)
 			path := filepath.Join(copied, "custom.db")
@@ -668,7 +666,7 @@ func TestIndexRefusalNamesNoMoveThatSplits(t *testing.T) {
 			require.NoError(t, os.Rename(store.DefaultPath(copied), path))
 
 			return path
-		}, false},
+		}, func(origin, third, _ string) string { return rootMoveLead(origin, third) + "use another --db" }},
 		{"a file that no checkout owns", func(t *testing.T, origin string) string {
 			path := filepath.Join(rootWriteDir(t), "custom.db")
 
@@ -677,7 +675,7 @@ func TestIndexRefusalNamesNoMoveThatSplits(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, data, 0o644))
 
 			return path
-		}, true},
+		}, rootMoveRefused},
 	}
 
 	for _, tc := range cases {
@@ -686,13 +684,8 @@ func TestIndexRefusalNamesNoMoveThatSplits(t *testing.T) {
 			third := rootMoveThird(t)
 			db := tc.db(t, origin)
 
-			want := rootMoveRefused(origin, third, db)
-			if tc.wantMove {
-				want = rootMoveRefusedWithMove(origin, third, db)
-			}
-
 			_, err := run(t, "-C", third, "--db", db, "index")
-			require.EqualError(t, err, want)
+			require.EqualError(t, err, tc.want(origin, third, db))
 
 			_, err = run(t, "-C", third, "--db", db, "index", "--move-root")
 			require.NoError(t, err, "the flag works, also where no refusal names it")
@@ -881,24 +874,23 @@ func TestIndexKeepsTheFileOfAnotherCheckoutOfAGoneRoot(t *testing.T) {
 			require.NoError(t, os.Remove(store.DefaultPath(third)))
 
 			db := place(t, origin, moved)
-			move := "run `seamark index --move-root --db " + db + "` in " + moved
+			route := "use another --db"
 
 			require.Equal(t, index.WorkspaceState(moved), index.WorkspaceState(third), "a plain run must be able to skip")
 
 			out, err := run(t, "-C", third, "--db", db, "index")
 			require.NoError(t, err)
-			assert.Contains(t, out, move+" to move the root")
+			assert.Contains(t, out, "to rebuild, "+route)
 			assert.Equal(t, origin, rootMoveRecorded(t, db))
 
 			require.NoError(t, os.WriteFile(filepath.Join(third, "b.go"), []byte("package main\n"), 0o644))
 
 			files := rootMoveFiles(t, []string{third}, db)
 
-			rootWriteRefused(t, rootMoveGoneLead(origin, third)+move+" to move the root", files,
-				"-C", third, "--db", db, "index")
+			rootWriteRefused(t, rootMoveGoneLead(origin, third)+route, files, "-C", third, "--db", db, "index")
 
 			rootWriteRefused(t, "this database records a directory that no longer exists ("+origin+"), and a write "+
-				"would recreate it; nothing changed; "+move+" first",
+				"would recreate it; nothing changed; "+route,
 				files, "-C", third, "--db", db, "lessons", "--apply", "p1")
 		})
 	}
@@ -1003,11 +995,10 @@ func TestIndexDropsTheRouteOfARootThatCannotBeReached(t *testing.T) {
 		writeIndexDB(t, custom, map[string]string{store.MetaRepoRoot: hidden})
 
 		_, err := run(t, "-C", third, "--db", custom, "index")
-		require.EqualError(t, err, rootMoveLead(hidden, third)+
-			"run `seamark index --move-root --db "+custom+"` in "+third+" to move the root")
+		require.EqualError(t, err, rootMoveLead(hidden, third)+"use another --db")
 
 		_, err = run(t, "-C", third, "--db", custom, "index", "--move-root")
-		require.NoError(t, err, "the route of the refusal works")
+		require.NoError(t, err, "the flag still works")
 		assert.Equal(t, third, rootMoveRecorded(t, custom))
 	})
 
@@ -1020,8 +1011,7 @@ func TestIndexDropsTheRouteOfARootThatCannotBeReached(t *testing.T) {
 		writeIndexDB(t, custom, map[string]string{store.MetaRepoRoot: hidden})
 
 		_, err := run(t, "-C", third, "--db", custom, "index")
-		require.EqualError(t, err, rootMoveLead(hidden, third)+
-			"run `seamark index --move-root --db "+custom+"` in "+origin+" to move the root")
+		require.EqualError(t, err, rootMoveLead(hidden, third)+"use another --db")
 	})
 
 	t.Run("a file that no route can reach", func(t *testing.T) {
@@ -1051,7 +1041,7 @@ func TestIndexDropsTheRouteOfARootThatCannotBeReached(t *testing.T) {
 		_, err := run(t, "-C", third, "--db", custom, "lessons", "--apply", "p1")
 		require.EqualError(t, err, "this database records another repository ("+hidden+") that does not own it, "+
 			"so this command would change the pin file there and the ledger in this database; nothing changed; "+
-			"run `seamark index --move-root --db "+custom+"` in "+third+" first")
+			"use another --db")
 	})
 }
 
@@ -1060,18 +1050,28 @@ func TestIndexDropsTheRouteOfARootThatCannotBeReached(t *testing.T) {
 // nearest mark above the file names its checkout, so the outer workspace
 // does not own it, and a move would split the two repositories.
 func TestIndexRefusalNamesTheNestedOwner(t *testing.T) {
-	for name, mark := range map[string]string{"a git repository": ".git", "a Seamark checkout": store.DefaultDir} {
+	cases := map[string]struct {
+		mark string
+		want func(third, outer, custom string) string
+	}{
+		"a git repository": {".git", rootMoveRefused},
+		"a Seamark checkout": {store.DefaultDir, func(third, outer, _ string) string {
+			return rootMoveLead(third, outer) + "use another --db"
+		}},
+	}
+
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			third := rootWriteRepo(t)
 			outer := rootMoveThird(t)
 			nested := filepath.Join(outer, "nested")
 			custom := filepath.Join(nested, "custom.db")
 
-			require.NoError(t, os.MkdirAll(filepath.Join(nested, mark), 0o755))
+			require.NoError(t, os.MkdirAll(filepath.Join(nested, tc.mark), 0o755))
 			writeIndexDB(t, custom, map[string]string{store.MetaRepoRoot: third})
 
 			_, err := run(t, "-C", outer, "--db", custom, "index")
-			require.EqualError(t, err, rootMoveRefused(third, outer, custom))
+			require.EqualError(t, err, tc.want(third, outer, custom))
 		})
 	}
 }
@@ -1139,7 +1139,7 @@ func TestRelativeDBBehindALinkJudgesTheFileOfTheOpen(t *testing.T) {
 	t.Run("index", func(t *testing.T) {
 		origin, here, shared := rootMoveBehindALink(t)
 
-		rootWriteRefused(t, rootMoveRefusedWithMove(origin, here, shared), rootMoveFiles(t, []string{here}, shared),
+		rootWriteRefused(t, rootMoveRefused(origin, here, shared), rootMoveFiles(t, []string{here}, shared),
 			"--db", filepath.Join("..", "shared.db"), "index")
 		assert.Equal(t, origin, rootMoveRecorded(t, shared))
 	})
@@ -1148,7 +1148,7 @@ func TestRelativeDBBehindALinkJudgesTheFileOfTheOpen(t *testing.T) {
 		origin, here, shared := rootMoveBehindALink(t)
 
 		_, _, err := runIn(t, "", "--db", filepath.Join("..", "shared.db"), "check")
-		require.EqualError(t, err, rootMoveRefusedWithMove(origin, here, shared))
+		require.EqualError(t, err, rootMoveRefused(origin, here, shared))
 		assert.Equal(t, origin, rootMoveRecorded(t, shared))
 	})
 
@@ -1265,9 +1265,9 @@ func TestSkipOfAWritableFileKeepsItsLine(t *testing.T) {
 
 // TestRouteLeavesARootThatGitWidens covers a plain root in a directory
 // that became a git repository. A command in the root now runs in the top
-// level, so a route into the root refused again and had no end. The top
-// level holds that repository now, so the move runs there. The route
-// reads the same from each directory, and the test follows it.
+// level, so a route into the root refused again and had no end. The state
+// directory of the root marks a nested checkout, so a refusal names another
+// file. The text reads the same from each directory, and the flag works.
 func TestRouteLeavesARootThatGitWidens(t *testing.T) {
 	// widened returns a plain root inside a directory that is a new git
 	// repository with the write gate on.
@@ -1287,7 +1287,7 @@ func TestRouteLeavesARootThatGitWidens(t *testing.T) {
 	t.Run("an index run", func(t *testing.T) {
 		root, top := widened(t)
 		db := store.DefaultPath(root)
-		want := rootMoveLead(root, top) + "run `seamark index --move-root --db " + db + "` in " + top + " to move the root"
+		want := rootMoveLead(root, top) + "use another --db"
 
 		for name, dir := range map[string]string{"the top level": top, "the old root": root} {
 			t.Run(name, func(t *testing.T) {
@@ -1300,7 +1300,7 @@ func TestRouteLeavesARootThatGitWidens(t *testing.T) {
 		assert.Equal(t, top, rootMoveRecorded(t, db))
 
 		_, err = run(t, "-C", root, "--db", db, "index", "--force")
-		require.NoError(t, err, "the route ends the refusal")
+		require.NoError(t, err, "the move ends the refusal")
 	})
 
 	t.Run("a pin write", func(t *testing.T) {
@@ -1312,8 +1312,7 @@ func TestRouteLeavesARootThatGitWidens(t *testing.T) {
 		require.NoError(t, os.WriteFile(custom, data, 0o644))
 
 		want := "this database records another repository (" + root + ") that does not own it, so this command would " +
-			"change the pin file there and the ledger in this database; nothing changed; " +
-			"run `seamark index --move-root --db " + custom + "` in " + top + " first"
+			"change the pin file there and the ledger in this database; nothing changed; use another --db"
 
 		rootWriteRefused(t, want, rootMoveFiles(t, []string{root, top}, custom), "-C", root, "--db", custom, "lessons", "--apply", "p1")
 
@@ -1321,7 +1320,7 @@ func TestRouteLeavesARootThatGitWidens(t *testing.T) {
 		require.NoError(t, err)
 		require.Error(t, services.New(ws, "test", "/usr/local/bin/seamark").Pins().Database.WriteBlock)
 		assert.Contains(t, services.New(ws, "test", "/usr/local/bin/seamark").Pins().Database.WriteBlock.Error(),
-			"run `seamark index --move-root --db "+custom+"` in "+top+" first", "the console names the same step")
+			"use another --db", "the console names the same step")
 
 		_, err = run(t, "-C", top, "--db", custom, "index", "--move-root")
 		require.NoError(t, err)
@@ -1333,9 +1332,8 @@ func TestRouteLeavesARootThatGitWidens(t *testing.T) {
 }
 
 // TestRouteOfAWidenedRootKeepsTheFileWithItsOwner bounds the rule above.
-// The file decides first. A file of this workspace stays here, and a file
-// of a third checkout goes with its owner. A move to the top level would
-// split two repositories.
+// A file of this workspace stays here. No command can take a file of a
+// third checkout, so only another file remains.
 func TestRouteOfAWidenedRootKeepsTheFileWithItsOwner(t *testing.T) {
 	root := rootWritePlainRoot(t)
 	top := filepath.Dir(root)
@@ -1358,8 +1356,7 @@ func TestRouteOfAWidenedRootKeepsTheFileWithItsOwner(t *testing.T) {
 		custom := filepath.Join(copied, "custom.db")
 
 		_, err := run(t, "-C", third, "--db", custom, "index")
-		require.EqualError(t, err, rootMoveLead(root, third)+
-			"run `seamark index --move-root --db "+custom+"` in "+copied+" to move the root")
+		require.EqualError(t, err, rootMoveLead(root, third)+"use another --db")
 	})
 }
 
@@ -1392,7 +1389,7 @@ func TestRouteQuotesAPathThatNeedsIt(t *testing.T) {
 	_, err = run(t, "-C", third, "--db", custom, "index")
 	require.Error(t, err)
 	assert.Equal(t, custom, word(t, err.Error()))
-	assert.Contains(t, err.Error(), "--move-root --db '"+custom+"'`")
+	assert.Contains(t, err.Error(), "run `seamark index --db '"+custom+"'` in "+origin)
 
 	_, err = run(t, "-C", third, "--db", custom, "lessons", "--apply", "p1")
 	require.Error(t, err)

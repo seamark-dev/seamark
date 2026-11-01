@@ -32,7 +32,7 @@ func (e *engine) Pins() *maintain.Inspection {
 	}
 
 	in := maintain.Inspect(probe.Root, st, probe, e.deps.Now())
-	in.Database = e.databaseFacts(probe)
+	in.Database = e.databaseFacts(probe).DatabaseFacts
 
 	return in
 }
