@@ -8,6 +8,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/render"
 )
 
 // indexProgress adapts index.Run's phase events to the live terminal
@@ -44,6 +45,7 @@ func newIndexCmd(opts *options) *cobra.Command {
 
 	var (
 		force     bool
+		moveRoot  bool
 		reviews   bool
 		fixesOnly bool
 	)
@@ -57,7 +59,14 @@ under .seamark/; re-running replaces derived data atomically.
 With --reviews, also mines pull-request review comments from GitHub and fix
 commits from local Git history. With
 --fixes-only, mines only local fix commits reachable from HEAD and performs no
-network access.`,
+network access.
+
+A rebuild records this workspace in the database. So a --db that records
+another repository is refused, also with --force, because that repository
+would lose its pins and maintenance. A recorded path that does not exist now
+counts too, because it can be a detached disk. Only a file inside this
+workspace replaces such a root by itself. Run the command in that repository,
+or add --move-root to move the recorded root to this workspace.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			logf := func(format string, a ...any) {
@@ -72,6 +81,7 @@ network access.`,
 				DBPath:   opts.dbPath,
 				History:  histOpts,
 				Force:    force,
+				MoveRoot: moveRoot,
 				Logf:     logf,
 				Progress: indexProgress(u),
 			})
@@ -138,7 +148,13 @@ network access.`,
 				return nil
 			}
 
-			if sum.Skipped {
+			switch {
+			case sum.RootRoute != "":
+				// --force refuses in this state, so the line must not name it.
+				fmt.Fprintf(out, "index already up to date (%s); it records %s; to rebuild, %s\n",
+					sum.DBPath, render.Sanitize(sum.Root), sum.RootRoute)
+				return mineLessons()
+			case sum.Skipped:
 				fmt.Fprintf(out, "index already up to date (%s); --force rebuilds\n", sum.DBPath)
 				return mineLessons()
 			}
@@ -192,6 +208,8 @@ network access.`,
 
 	cmd.Flags().BoolVar(&force, "force", false,
 		"rebuild even when the workspace is unchanged since the last index")
+	cmd.Flags().BoolVar(&moveRoot, "move-root", false,
+		"rebuild and move the recorded root of the database to this workspace, also from another repository")
 	cmd.Flags().BoolVar(&reviews, "reviews", false,
 		"also mine lesson sources: PR review comments (needs gh + GitHub) and fix commits (local git)")
 	cmd.Flags().BoolVar(&fixesOnly, "fixes-only", false,

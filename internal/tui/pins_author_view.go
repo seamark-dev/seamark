@@ -955,8 +955,7 @@ func pinBlockerLine(st *state, b maintain.AuthorBlocker) string {
 
 	switch {
 	case b.Kind == maintain.BlockForeignRoot && pinsOtherDB(st):
-		b.Route = "open the console in that repository" + pinKeepDB(pinsDatabase(st).CustomDB) +
-			", because a save works there"
+		b.Route = pinSaveRoute(st)
 	case b.Kind == maintain.BlockLedger && why != "":
 		b.Route = why
 	case b.Kind == maintain.BlockGate && pinGateBlocked(st):

@@ -3,8 +3,6 @@ package services
 import (
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/workspace"
@@ -39,11 +37,14 @@ type ForeignRootError struct {
 	// Workspace is the workspace root.
 	Workspace string
 	// OtherDB reports a database that is not the default database of the
-	// workspace. A build then refuses, so the route is the console of Root.
+	// workspace. A build then refuses, so the route is consoleRoute.
 	OtherDB bool
 	// CustomDB reports a database that the route must name. See
 	// workspace.Workspace.CustomDatabase.
 	CustomDB bool
+	// RootRoute replaces the console of Root in a route, else "". See
+	// rootRoute.
+	RootRoute string
 }
 
 // Error names both roots and no route, because each caller adds the route
@@ -66,13 +67,36 @@ func (e *engine) foreignRoot(probe workspace.IndexProbe) error {
 	}
 
 	return &ForeignRootError{
-		Root: probe.Root, Workspace: e.ws.Root, OtherDB: e.databaseKind() != store.DatabaseDefault,
-		CustomDB: e.ws.CustomDatabase(probe.Root),
+		Root: probe.Root, Workspace: e.ws.Root,
+		OtherDB:   e.databaseKind() != store.DatabaseDefault,
+		CustomDB:  e.ws.CustomDatabase(probe.Root),
+		RootRoute: e.rootRoute(probe.Root),
 	}
 }
 
-// consoleRoute names the console that can write under root.
+// rootRoute returns the step that replaces the console of root, or "".
+// That console cannot open a root that a stat cannot find or reach. The
+// step names --db, because a shell run without it builds another file.
+// When no such step can run, only another file remains.
+func (e *engine) rootRoute(root string) string {
+	if route := e.ws.MoveRootRoute(root); route != "" {
+		return route
+	}
+
+	if store.StatRoot(root) != store.RootFound {
+		return "use another --db"
+	}
+
+	return ""
+}
+
+// consoleRoute names the next step of a write under root. That step is
+// the console of root, unless rootRoute names another.
 func (e *engine) consoleRoute(root string) string {
+	if route := e.rootRoute(root); route != "" {
+		return route
+	}
+
 	if e.ws.CustomDatabase(root) {
 		return "open the console in " + root + " with this --db"
 	}
@@ -86,8 +110,8 @@ func (e *engine) consoleRoute(root string) string {
 // workspace.CheckRootWrite, which `seamark lessons` shares; this method
 // adds the words of the console. The Pins view hides the keys for the
 // same case; this check holds for every caller. A build refuses every
-// database but the default one, so the route of a refused file is the
-// console of the recorded root.
+// database but the default one, so the route of a refused file is
+// consoleRoute.
 func (e *engine) ownRoot(probe workspace.IndexProbe) error {
 	err := e.foreignRoot(probe)
 	if err == nil {
@@ -104,35 +128,20 @@ func (e *engine) ownRoot(probe workspace.IndexProbe) error {
 	}
 }
 
-// buildBlock returns why an index build must not run, or nil. A build
-// writes this workspace into the database and records it as the root.
-// The database of another repository then loses its root, its pins, and
-// the maintenance of its own checkout. The default database has no such
-// owner, and a rebuild is the fix of a copied checkout. A database that
-// does not exist, records no root, or records this workspace builds too.
-//
-// The probe stops before the root for an older or a newer schema, so
-// this reads the root by itself. A root that does not read fails closed.
+// buildBlock returns why an index build must not run, or nil. The rule
+// is store.RootMovedByBuild, which `seamark index` shares; this method
+// adds the words of the console. The console has no flag that allows the
+// move, so it refuses every such build, also one that would skip. The
+// probe stops before the root for an older or a newer schema, so the
+// rule reads the root by itself. A root that does not read fails closed.
 func (e *engine) buildBlock() error {
-	if e.databaseKind() == store.DatabaseDefault {
-		return nil
-	}
-
-	_, err := os.Stat(e.ws.DBPath)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-
-	recorded := ""
-	if err == nil {
-		recorded, err = store.ProbeRoot(e.ws.DBPath)
-	}
+	recorded, err := store.RootMovedByBuild(e.ws.Root, e.ws.DBPath)
 
 	switch {
 	case err != nil:
 		return fmt.Errorf("%w (%s: %v), and a build could move the root of another repository; "+
 			"fix the file or use another --db", errRootUnknown, e.ws.DBPath, err)
-	case recorded == "", store.SameDirectory(recorded, e.ws.Root):
+	case recorded == "":
 		return nil
 	default:
 		return fmt.Errorf("%w, so a build here would move it; %s", ErrForeignRoot, e.consoleRoute(recorded))
@@ -154,6 +163,7 @@ func (e *engine) databaseFacts(probe workspace.IndexProbe) workspace.DatabaseFac
 
 	if e.foreignRoot(probe) != nil {
 		facts.ForeignRoot, facts.CustomDB = probe.Root, e.ws.CustomDatabase(probe.Root)
+		facts.RootRoute = e.rootRoute(probe.Root)
 	}
 
 	return facts

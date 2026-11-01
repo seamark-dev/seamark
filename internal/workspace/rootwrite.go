@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 
 	"github.com/seamark-dev/seamark/internal/history"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -84,6 +85,26 @@ func (ws Workspace) CustomDatabase(root string) bool {
 	return store.ClassifyDatabase(ws.Root, db) == store.DatabaseOther &&
 		store.ClassifyDatabase(root, db) == store.DatabaseOther &&
 		!store.LiesInOtherCheckout(root, db)
+}
+
+// MoveRootRoute returns the route of a --db file whose recorded root
+// cannot take a command, else "". Nothing exists at that root, and a stat
+// cannot tell a moved repository from a detached disk. So the user
+// decides, and the route is the run that records this workspace in the
+// file. Both surfaces print this text.
+func (ws Workspace) MoveRootRoute(recorded string) string {
+	db := ws.AbsoluteDB()
+
+	if store.StatRoot(recorded) != store.RootGone || !store.FileFitsRoot(ws.Root, db) {
+		return ""
+	}
+
+	return moveRootRoute(db, ws.Root)
+}
+
+// moveRootRoute names the index run that records root in the file db.
+func moveRootRoute(db, root string) string {
+	return "run `seamark index --move-root --db " + render.Sanitize(db) + "` in " + render.Sanitize(root) + " first"
 }
 
 // AbsoluteDB returns the database path in absolute form. The CLI keeps a

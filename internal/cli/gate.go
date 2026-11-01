@@ -247,6 +247,8 @@ diff the policy read. A lesson violation exits 2, as a policy block does.`,
 			// A stale index makes blast-radius answers WRONG (line spans
 			// drift); check repairs freshness instead of warning about it.
 			// Run's internal fast path makes this free when nothing changed.
+			// A refresh that fails stops the command, also the refusal of a
+			// move of another root, because a verdict needs a current graph.
 			sum, err := index.Run(index.Options{Root: root, DBPath: dbPath,
 				Logf: func(format string, a ...any) {
 					fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...)

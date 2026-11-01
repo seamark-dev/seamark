@@ -257,13 +257,31 @@ const (
 // checkout loses its maintenance. The pin is in the file of the recorded
 // root, and a save works in a console that runs there.
 func pinOpenRoot(st *state, root string) string {
-	return openRootRoute(root, pinsDatabase(st).CustomDB)
+	d := pinsDatabase(st)
+
+	return openRootRoute(root, d.CustomDB, d.RootRoute)
 }
 
 // openRootRoute names the console of root. custom keeps the --db of this
 // console, because the default database of root is another ledger.
-func openRootRoute(root string, custom bool) string {
+// replace is a step that takes the place of that console, or "".
+func openRootRoute(root string, custom bool, replace string) string {
+	if replace != "" {
+		return ui.OneLine(replace)
+	}
+
 	return "open the console in " + ui.OneLine(root) + pinKeepDB(custom)
+}
+
+// pinSaveRoute is the route of a pin save under a database of another
+// repository. A text with no root of its own uses it (pinBlockerLine).
+func pinSaveRoute(st *state) string {
+	d := pinsDatabase(st)
+	if d.RootRoute != "" {
+		return ui.OneLine(d.RootRoute)
+	}
+
+	return "open the console in that repository" + pinKeepDB(d.CustomDB) + ", because a save works there"
 }
 
 // pinKeepDB is the clause of a route that keeps the --db of this console.
@@ -316,7 +334,7 @@ func foreignRefusal(err error, noun string) string {
 
 	var foreign *services.ForeignRootError
 	if errors.As(err, &foreign) && foreign.OtherDB {
-		return lead + ovSentenceEnd(openRootRoute(foreign.Root, foreign.CustomDB))
+		return lead + ovSentenceEnd(openRootRoute(foreign.Root, foreign.CustomDB, foreign.RootRoute))
 	}
 
 	return lead + "Build the index of this workspace in Overview, then " + noun + " again."

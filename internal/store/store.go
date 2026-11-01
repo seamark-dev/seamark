@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -112,6 +113,37 @@ func LiesInside(path, dir string) bool {
 	}
 }
 
+// RootState says what a stat of a recorded root shows.
+type RootState int
+
+const (
+	// RootFound means that the recorded path exists.
+	RootFound RootState = iota
+	// RootGone means that nothing exists at the path. A part of the path
+	// can also be a file now, which gives ENOTDIR and not ENOENT.
+	RootGone
+	// RootHidden means that the stat failed in another way, for example
+	// without permission. The root can still exist, so it keeps its rights,
+	// but no route can enter it.
+	RootHidden
+)
+
+// StatRoot says what a stat of the recorded root shows. All rules and
+// routes ask this one function, so they agree on a root that is gone. A
+// stat of a dead network mount can block, so no hook path may call it.
+func StatRoot(root string) RootState {
+	_, err := os.Stat(root)
+
+	switch {
+	case err == nil:
+		return RootFound
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+		return RootGone
+	default:
+		return RootHidden
+	}
+}
+
 // RootOwnsDatabase reports whether dbPath can belong to root, so that a
 // write to the file and a write under root change one repository. A root
 // owns the file that its default path names. A root without a default
@@ -120,7 +152,7 @@ func LiesInside(path, dir string) bool {
 // keeps the recorded root of its origin. A root that no longer exists owns
 // nothing, because a write under it would recreate the old path.
 func RootOwnsDatabase(root, dbPath string) bool {
-	if _, err := os.Stat(root); errors.Is(err, fs.ErrNotExist) {
+	if StatRoot(root) == RootGone {
 		return false
 	}
 
@@ -129,6 +161,98 @@ func RootOwnsDatabase(root, dbPath string) bool {
 	}
 
 	return ClassifyDatabase(root, dbPath) != DatabaseOther
+}
+
+// RootMovedByBuild returns the root that an index build in root would
+// take from another repository, or "" when the build moves nothing. A
+// build records root in the file, so that repository then loses its pins
+// and its maintenance. An error means that the recorded root does not
+// read. The file can belong to another repository, so the caller refuses.
+//
+// The default database of root has no other owner, and a rebuild is the
+// fix of a copied checkout. A missing file, a file without a root, and a
+// file that records root move nothing. Any other recorded root counts as
+// another repository, also one that a stat cannot find or reach, because
+// that can be a detached disk. A sibling at one commit would take its
+// root, and a pin write there would land in the sibling when the disk
+// returns. Only RootMovesItself lets a build replace such a root.
+//
+// The console and the CLI ask this one rule. It reads every schema and
+// writes nothing. dbPath must be absolute, because ClassifyDatabase
+// cannot place a relative path.
+func RootMovedByBuild(root, dbPath string) (string, error) {
+	if ClassifyDatabase(root, dbPath) == DatabaseDefault {
+		return "", nil
+	}
+
+	if _, err := os.Stat(dbPath); errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+
+	recorded, err := ProbeRoot(dbPath)
+	if err != nil {
+		return "", err
+	}
+
+	if recorded == "" || SameDirectory(recorded, root) || RootMovesItself(root, recorded, dbPath) {
+		return "", nil
+	}
+
+	return recorded, nil
+}
+
+// RootMovesItself reports a recorded root that a plain build in root may
+// replace. The file lies inside root, so it moved with root, and nothing
+// exists at the recorded path. The test of the file comes first, because
+// only a file inside root needs the stat of the recorded root.
+func RootMovesItself(root, recorded, dbPath string) bool {
+	return LiesInside(dbPath, root) && StatRoot(recorded) == RootGone
+}
+
+// IsCheckout reports a directory that marks a checkout: it holds .git,
+// which is a file in a linked worktree, or the state directory.
+func IsCheckout(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return true
+	}
+
+	return holdsState(dir)
+}
+
+// holdsState reports a directory with a state directory.
+func holdsState(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, DefaultDir))
+
+	return err == nil && info.IsDir()
+}
+
+// CheckoutOf returns the checkout that holds the file at path: the nearest
+// directory above it that IsCheckout reports. It follows a link first,
+// because a link does not move the file. ok is false when no directory
+// shows a checkout. The path must be absolute.
+func CheckoutOf(path string) (string, bool) {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+
+	for dir := filepath.Dir(path); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		if IsCheckout(dir) {
+			return dir, true
+		}
+	}
+
+	return "", false
+}
+
+// FileFitsRoot reports a file that root can take: no checkout shows up
+// above it, or that checkout is root. A file of any other checkout, also a
+// repository nested in root, would then lie in a second repository.
+func FileFitsRoot(root, dbPath string) bool {
+	owner, ok := CheckoutOf(dbPath)
+
+	return !ok || SameDirectory(owner, root)
 }
 
 // LiesInOtherCheckout reports a file in the state directory of another

@@ -66,8 +66,15 @@ type rpcResp struct {
 func serve(t *testing.T, root string, requests ...string) map[string]rpcResp {
 	t.Helper()
 
-	srv := New(root, filepath.Join(root, ".seamark", "index.db"), "test",
-		func(format string, a ...any) { t.Logf("server: "+format, a...) })
+	return serveDB(t, root, filepath.Join(root, ".seamark", "index.db"), t.Logf, requests...)
+}
+
+// serveDB is serve with the database at dbPath and with logf as the log
+// of the server.
+func serveDB(t *testing.T, root, dbPath string, logf func(string, ...any), requests ...string) map[string]rpcResp {
+	t.Helper()
+
+	srv := New(root, dbPath, "test", func(format string, a ...any) { logf("server: "+format, a...) })
 
 	var out strings.Builder
 	require.NoError(t, srv.Serve(strings.NewReader(strings.Join(requests, "\n")+"\n"), &out))

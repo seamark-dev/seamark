@@ -258,3 +258,247 @@ func TestLiesInOtherCheckoutReadsTheStateDirectory(t *testing.T) {
 
 	assert.False(t, LiesInOtherCheckout(root, filepath.Join(t.TempDir(), "missing.db")))
 }
+
+// statRootHidden returns a path that a stat cannot reach, because its
+// parent gives no permission. The test skips as root, because root
+// ignores the file mode.
+func statRootHidden(t *testing.T) string {
+	t.Helper()
+
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory with mode 0000")
+	}
+
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+
+	require.NoError(t, os.Mkdir(root, 0o755))
+	require.NoError(t, os.Chmod(parent, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+
+	return root
+}
+
+// TestStatRootReadsEachState covers each answer. ENOTDIR means that
+// nothing exists at the path. Another failure leaves the root unknown.
+func TestStatRootReadsEachState(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file")
+
+	require.NoError(t, os.WriteFile(file, nil, 0o644))
+
+	assert.Equal(t, RootFound, StatRoot(dir))
+	assert.Equal(t, RootGone, StatRoot(filepath.Join(dir, "missing")))
+	assert.Equal(t, RootGone, StatRoot(filepath.Join(file, "below")))
+	assert.Equal(t, RootHidden, StatRoot(statRootHidden(t)))
+}
+
+// TestRootOwnsDatabaseReadsARootBelowAFileAsGone keeps the two rules
+// together: a root that the build rule calls gone owns nothing.
+func TestRootOwnsDatabaseReadsARootBelowAFileAsGone(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+
+	require.NoError(t, os.WriteFile(file, nil, 0o644))
+
+	assert.False(t, RootOwnsDatabase(filepath.Join(file, "old"), filepath.Join(t.TempDir(), "custom.db")))
+}
+
+// TestRootMovedByBuild pins the answer of the rule for each state. The
+// console and the CLI read this one answer, so each state holds for both.
+func TestRootMovedByBuild(t *testing.T) {
+	// records returns a database that records root, in its own directory.
+	records := func(t *testing.T, root string) string {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "custom.db")
+
+		st, err := Open(path)
+		require.NoError(t, err)
+		require.NoError(t, st.SetMeta(MetaRepoRoot, root))
+		require.NoError(t, st.Close())
+
+		return path
+	}
+
+	cases := []struct {
+		name string
+		// setup returns the workspace, the database, and the root that the
+		// build would move, or "".
+		setup func(t *testing.T) (root, db, moved string)
+	}{
+		{"a database of another repository", func(t *testing.T) (string, string, string) {
+			other := t.TempDir()
+
+			return t.TempDir(), records(t, other), other
+		}},
+		{"a database that records this workspace", func(t *testing.T) (string, string, string) {
+			root := t.TempDir()
+
+			return root, records(t, root), ""
+		}},
+		{"a link to this workspace as the recorded root", func(t *testing.T) (string, string, string) {
+			root := t.TempDir()
+			link := filepath.Join(t.TempDir(), "link")
+
+			require.NoError(t, os.Symlink(root, link))
+
+			return root, records(t, link), ""
+		}},
+		{"a recorded root that no longer exists", func(t *testing.T) (string, string, string) {
+			gone := filepath.Join(t.TempDir(), "gone")
+
+			return t.TempDir(), records(t, gone), gone
+		}},
+		{"a recorded root that no longer exists with a file inside root", func(t *testing.T) (string, string, string) {
+			root := t.TempDir()
+			path := filepath.Join(root, "custom.db")
+
+			require.NoError(t, os.Rename(records(t, filepath.Join(t.TempDir(), "gone")), path))
+
+			return root, path, ""
+		}},
+		{"a recorded root below a file", func(t *testing.T) (string, string, string) {
+			file := filepath.Join(t.TempDir(), "file")
+
+			require.NoError(t, os.WriteFile(file, nil, 0o644))
+
+			gone := filepath.Join(file, "old")
+
+			return t.TempDir(), records(t, gone), gone
+		}},
+		{"a recorded root that a stat cannot reach", func(t *testing.T) (string, string, string) {
+			hidden := statRootHidden(t)
+
+			return t.TempDir(), records(t, hidden), hidden
+		}},
+		{"an empty recorded root", func(t *testing.T) (string, string, string) {
+			return t.TempDir(), records(t, ""), ""
+		}},
+		{"a file that does not exist", func(t *testing.T) (string, string, string) {
+			return t.TempDir(), filepath.Join(t.TempDir(), "new.db"), ""
+		}},
+		{"an empty file", func(t *testing.T) (string, string, string) {
+			path := filepath.Join(t.TempDir(), "empty.db")
+
+			require.NoError(t, os.WriteFile(path, nil, 0o644))
+
+			return t.TempDir(), path, ""
+		}},
+		{"the default database of a copied checkout", func(t *testing.T) (string, string, string) {
+			root := t.TempDir()
+			path := DefaultPath(root)
+
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.Rename(records(t, t.TempDir()), path))
+
+			return root, path, ""
+		}},
+		{"a default path that links to another repository", func(t *testing.T) (string, string, string) {
+			root, other := t.TempDir(), t.TempDir()
+			path := DefaultPath(root)
+
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.Symlink(records(t, other), path))
+
+			return root, path, other
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, db, want := tc.setup(t)
+
+			got, err := RootMovedByBuild(root, db)
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+// TestRootMovedByBuildReturnsTheErrorOfARead covers a file with content
+// that gives no root. The caller refuses, so the rule must not read it as
+// a file without a root.
+func TestRootMovedByBuildReturnsTheErrorOfARead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "garbage.db")
+
+	require.NoError(t, os.WriteFile(path, []byte("this file is no database, and it is long enough to read"), 0o644))
+
+	_, err := RootMovedByBuild(t.TempDir(), path)
+	require.Error(t, err)
+}
+
+// checkoutDir returns a new resolved directory that holds mark, a
+// directory such as .git or .seamark. An empty mark leaves it plain.
+func checkoutDir(t *testing.T, mark string) string {
+	t.Helper()
+
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	if mark != "" {
+		require.NoError(t, os.Mkdir(filepath.Join(dir, mark), 0o755))
+	}
+
+	return dir
+}
+
+// TestCheckoutOfNamesTheNearestMark covers each answer. A nearer mark
+// wins, so a nested repository owns its files. A link does not move a
+// file, and .git is a file in a linked worktree.
+func TestCheckoutOfNamesTheNearestMark(t *testing.T) {
+	outer := checkoutDir(t, DefaultDir)
+	nested := filepath.Join(outer, "a", "nested")
+	deep := filepath.Join(nested, "b")
+	plain := checkoutDir(t, "")
+
+	require.NoError(t, os.MkdirAll(deep, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(nested, ".git"), []byte("gitdir: x\n"), 0o644))
+
+	file := filepath.Join(deep, "custom.db")
+	require.NoError(t, os.WriteFile(file, nil, 0o644))
+
+	link := filepath.Join(outer, "link.db")
+	require.NoError(t, os.Symlink(file, link))
+
+	got, ok := CheckoutOf(file)
+	assert.True(t, ok)
+	assert.Equal(t, nested, got)
+
+	got, ok = CheckoutOf(link)
+	assert.True(t, ok)
+	assert.Equal(t, nested, got, "a link does not move the file")
+
+	got, ok = CheckoutOf(filepath.Join(outer, "a", "x.db"))
+	assert.True(t, ok)
+	assert.Equal(t, outer, got)
+
+	got, ok = CheckoutOf(filepath.Join(outer, DefaultDir, "sub", "x.db"))
+	assert.True(t, ok)
+	assert.Equal(t, outer, got, "the state directory belongs to its checkout")
+
+	_, ok = CheckoutOf(filepath.Join(plain, "custom.db"))
+	assert.False(t, ok)
+}
+
+// TestFileFitsRootReadsTheNearestMark covers the file that a workspace
+// can take. A repository nested in root owns its file, also without a
+// state directory, so a move to root would split the two.
+func TestFileFitsRootReadsTheNearestMark(t *testing.T) {
+	root := checkoutDir(t, ".git")
+	nested := filepath.Join(root, "nested")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(nested, ".git"), 0o755))
+
+	file := func(dir string) string {
+		path := filepath.Join(dir, "custom.db")
+		require.NoError(t, os.WriteFile(path, nil, 0o644))
+
+		return path
+	}
+
+	assert.True(t, FileFitsRoot(root, file(root)))
+	assert.True(t, FileFitsRoot(root, file(checkoutDir(t, ""))), "a file that shows no owner")
+	assert.False(t, FileFitsRoot(root, file(nested)), "a repository nested in root")
+	assert.False(t, FileFitsRoot(root, file(checkoutDir(t, DefaultDir))), "a third checkout")
+	assert.False(t, FileFitsRoot(root, file(checkoutDir(t, ".git"))), "a git work tree without a state directory")
+}

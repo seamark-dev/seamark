@@ -568,8 +568,8 @@ func TestRootWriteRefusesARootThatNoLongerExists(t *testing.T) {
 
 		files := func() map[string]string { return rootWriteFiles(t, nil, custom) }
 		want := "this database records a directory that no longer exists (" + origin +
-			"), and a write would recreate it; nothing changed; restore " + origin +
-			", then run this command in " + origin + " with --db " + custom
+			"), and a write would recreate it; nothing changed; run `seamark index --move-root --db " + custom +
+			"` in " + third + " first"
 
 		for _, c := range rootWriteCommands {
 			rootWriteRefused(t, want, files, append([]string{"-C", third, "--db", custom}, c.args...)...)
@@ -578,9 +578,9 @@ func TestRootWriteRefusesARootThatNoLongerExists(t *testing.T) {
 		assert.NoDirExists(t, origin)
 	})
 
-	// A restore moves this file too, so a route with its path cannot run.
-	// git ignores the file, so the workspace fingerprint stays the same.
-	// The test shows that a plain index run keeps the old root.
+	// The file moved with the repository. git ignores the file, so the
+	// workspace fingerprint stays the same. The route still works, and a
+	// plain index run also records this workspace (index_root_move_test).
 	t.Run("a custom database inside the moved repository", func(t *testing.T) {
 		origin := rootWriteRepo(t)
 		moved := filepath.Join(rootWriteDir(t), "moved")
@@ -591,21 +591,14 @@ func TestRootWriteRefusesARootThatNoLongerExists(t *testing.T) {
 
 		files := func() map[string]string { return rootWriteFiles(t, []string{moved}, custom) }
 		want := "this database records a directory that no longer exists (" + origin +
-			"), and a write would recreate it; nothing changed; run `seamark index --force --db " + custom +
+			"), and a write would recreate it; nothing changed; run `seamark index --move-root --db " + custom +
 			"` in " + moved + " first"
 
 		for _, c := range rootWriteCommands {
 			rootWriteRefused(t, want, files, append([]string{"-C", moved, "--db", custom}, c.args...)...)
 		}
 
-		_, err := run(t, "-C", moved, "--db", custom, "index")
-		require.NoError(t, err)
-
-		recorded, err := store.ProbeRoot(custom)
-		require.NoError(t, err)
-		require.Equal(t, origin, recorded, "an unchanged workspace skips a plain index run")
-
-		_, err = run(t, "-C", moved, "--db", custom, "index", "--force")
+		_, err := run(t, "-C", moved, "--db", custom, "index", "--move-root")
 		require.NoError(t, err)
 
 		out, err := run(t, "-C", moved, "--db", custom, "lessons", "--apply", "p1")

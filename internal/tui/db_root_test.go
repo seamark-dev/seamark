@@ -1174,3 +1174,92 @@ func TestScreensNameTheDBOfACustomDatabase(t *testing.T) {
 	h.press("esc", "esc", "1", "b")
 	assert.Contains(t, h.m.toast.text, want)
 }
+
+// TestGoneRootNamesTheRunWithItsFile covers a gone root under a custom
+// file. The console of the old root cannot open. A shell run without
+// --db builds the default database, so every text names the flag.
+func TestGoneRootNamesTheRunWithItsFile(t *testing.T) {
+	cases := map[string]func(t *testing.T, moved string) string{
+		"a file outside the workspace": func(t *testing.T, _ string) string {
+			return filepath.Join(dbRootDir(t), "custom.db")
+		},
+		"a file inside the workspace": func(_ *testing.T, moved string) string {
+			return filepath.Join(moved, "custom.db")
+		},
+	}
+
+	for name, place := range cases {
+		t.Run(name, func(t *testing.T) {
+			origin := dbRootRepo(t, "origin")
+			moved := filepath.Join(dbRootDir(t), "moved")
+
+			require.NoError(t, os.Rename(origin, moved))
+
+			db := place(t, moved)
+
+			require.NoError(t, os.Rename(store.DefaultPath(moved), db))
+
+			id := dbRootNewRow(t, db)
+			want := "un `seamark index --move-root --db " + db + "` in " + moved + " first"
+
+			h, svc := dbRootConsole(t, moved, db)
+
+			p := pinsOf(h)
+			assert.Equal(t, origin, pinsForeignRoot(p.st), "the keys stay off")
+			assert.Contains(t, pinForeignSentence(p.st), want)
+			assert.Contains(t, pinForeignRoute(p.st), want)
+
+			pv, err := svc.PreviewDecision(proposals.ActionApply, []int64{id})
+			require.NoError(t, err)
+			assert.Contains(t, propRootText(pv.RootBlock, pinfile.File), want)
+			assert.NotContains(t, propRootText(pv.RootBlock, pinfile.File), pinForeignBuild)
+		})
+	}
+}
+
+// TestSaveRouteTakesTheStepOfTheService covers the texts of a pin save.
+// They name no root of their own, so they read the step from the facts.
+func TestSaveRouteTakesTheStepOfTheService(t *testing.T) {
+	st := &state{}
+	st.pins.loaded = true
+	st.pins.value = pinsInspection()
+	st.pins.value.Database = workspace.DatabaseFacts{
+		Kind: store.DatabaseOther, ForeignRoot: "/work/origin", CustomDB: true, RootRoute: "use another --db",
+	}
+
+	blocker := maintain.AuthorBlocker{Kind: maintain.BlockForeignRoot, Text: "a reason", Route: "a route"}
+
+	for name, text := range map[string]string{
+		"the route":       pinSaveRoute(st),
+		"a refused save":  pinCommitRefusal(st, services.ErrForeignRoot),
+		"a review blocks": pinBlockerLine(st, blocker),
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Contains(t, strings.ToLower(text), "use another --db")
+			assert.NotContains(t, text, "the console in")
+			assert.NotContains(t, text, "a save works there")
+		})
+	}
+}
+
+// TestRouteReplacesTheConsoleOfARoot covers every text of a step that
+// takes the place of the console, without the disk. The service sets it
+// when that console cannot open.
+func TestRouteReplacesTheConsoleOfARoot(t *testing.T) {
+	refused := &services.ForeignRootError{
+		Root: "/work/origin", Workspace: "/work/repo", OtherDB: true, CustomDB: true, RootRoute: "use another --db",
+	}
+
+	for name, text := range map[string]string{
+		"a commit":  foreignRefusal(fmt.Errorf("%w; route", refused), "preview"),
+		"a preview": propRootText(refused, pinfile.File),
+		"settings":  settingsForeignRoute(refused),
+		"a route":   openRootRoute(refused.Root, refused.CustomDB, refused.RootRoute),
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Contains(t, strings.ToLower(text), "use another --db")
+			assert.NotContains(t, text, "the console in")
+			assert.NotContains(t, text, "a save works there", "the step does not lead to a save there")
+		})
+	}
+}

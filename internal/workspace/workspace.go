@@ -187,6 +187,9 @@ type DatabaseFacts struct {
 	// CustomDB reports a database that the console of ForeignRoot must
 	// name, because the default database of that root is another ledger.
 	CustomDB bool
+	// RootRoute replaces the console of ForeignRoot in a route, else "".
+	// That console cannot run for such a root or such a file.
+	RootRoute string
 	// WriteBlock says why a write to the pin file and the ledger must not
 	// run, or nil. The maintenance commits and a proposal apply refuse it.
 	WriteBlock error

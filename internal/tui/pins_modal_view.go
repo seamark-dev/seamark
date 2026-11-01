@@ -1141,8 +1141,7 @@ func (m *maintModal) refusalView(w int) ui.ModalOpts {
 // helps. A pin commit also refuses it under --db (pinOpenRoot).
 func pinCommitRefusal(st *state, err error) string {
 	if errors.Is(err, services.ErrForeignRoot) && pinsOtherDB(st) {
-		return "The index records another repository root, so nothing was written. Open the console in that " +
-			"repository" + pinKeepDB(pinsDatabase(st).CustomDB) + ", because a save works there."
+		return "The index records another repository root, so nothing was written. " + ovSentenceEnd(pinSaveRoute(st))
 	}
 
 	return maintRefusal(st.theme, err, "review", "")

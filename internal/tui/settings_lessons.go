@@ -84,11 +84,14 @@ func settingsFileExists(snap *settings.Snapshot, g settings.Group) bool {
 // that error, and the route is the console of the recorded root.
 func settingsForeignRoute(err error) string {
 	var foreign *services.ForeignRootError
-	if errors.As(err, &foreign) && foreign.OtherDB {
-		return ovSentence(openRootRoute(foreign.Root, foreign.CustomDB)) + ", because a save works there."
+	switch {
+	case !errors.As(err, &foreign) || !foreign.OtherDB:
+		return settingsForeignRootRoute
+	case foreign.RootRoute != "":
+		return ovSentenceEnd(ui.OneLine(foreign.RootRoute))
+	default:
+		return ovSentence(openRootRoute(foreign.Root, foreign.CustomDB, "")) + ", because a save works there."
 	}
-
-	return settingsForeignRootRoute
 }
 
 // settingsShownRoot returns the root whose files the screen shows when it

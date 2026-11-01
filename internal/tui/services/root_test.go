@@ -450,6 +450,103 @@ func TestBuildIndexRebuildsACopiedCheckout(t *testing.T) {
 	}
 }
 
+// TestBuildIndexRecordsAMovedRepository covers a git repository that
+// moved with its custom file. The fingerprint holds no path, so a plain
+// build skipped and the old root stayed. The file lies inside the
+// workspace, so the plain build must end the state.
+func TestBuildIndexRecordsAMovedRepository(t *testing.T) {
+	origin, _ := servicestest.Workspace(t, "", "api")
+	moved := filepath.Join(rootDir(t), "moved")
+	db := filepath.Join(moved, "custom.db")
+
+	require.NoError(t, os.Rename(origin.Root, moved))
+	require.NoError(t, os.Rename(store.DefaultPath(moved), db))
+
+	ws, err := workspace.Resolve(moved, db)
+	require.NoError(t, err)
+
+	e := engNew(ws, Deps{})
+	got := e.Pins().Database
+
+	require.NoError(t, got.BuildBlock)
+	require.ErrorContains(t, got.WriteBlock, "run `seamark index --move-root --db "+db+"` in "+moved+" first")
+
+	require.NoError(t, rootBuild(e, false))
+	assert.Equal(t, moved, rootRecorded(t, db), "a plain build must not skip")
+	assert.NoError(t, e.Pins().Database.WriteBlock)
+	assert.NoDirExists(t, origin.Root, "the build recreates no directory")
+}
+
+// TestBuildIndexKeepsARootOnADetachedDisk covers a gone root with a file
+// outside the workspace. A stat cannot tell a detached disk from a moved
+// repository, so the console refuses and names the flag of the CLI. The
+// old root cannot open, so no route names its console.
+func TestBuildIndexKeepsARootOnADetachedDisk(t *testing.T) {
+	origin, _ := servicestest.Workspace(t, "", "api")
+	moved := filepath.Join(rootDir(t), "moved")
+	db := filepath.Join(rootDir(t), "shared.db")
+
+	require.NoError(t, os.Rename(origin.DBPath, db))
+	require.NoError(t, os.Rename(origin.Root, moved))
+
+	ws, err := workspace.Resolve(moved, db)
+	require.NoError(t, err)
+
+	want := "run `seamark index --move-root --db " + db + "` in " + moved + " first"
+
+	e := engNew(ws, Deps{})
+	got := e.Pins().Database
+
+	require.ErrorIs(t, got.BuildBlock, ErrForeignRoot)
+	assert.Contains(t, got.BuildBlock.Error(), want)
+	assert.Contains(t, got.WriteBlock.Error(), want)
+	assert.NotContains(t, got.WriteBlock.Error(), "open the console in")
+	assert.Equal(t, want, got.RootRoute)
+
+	var foreign *ForeignRootError
+	require.ErrorAs(t, got.WriteBlock, &foreign)
+	assert.True(t, foreign.OtherDB, "a build refuses, so no screen names it")
+
+	require.ErrorIs(t, rootBuild(e, false), ErrForeignRoot)
+	require.ErrorIs(t, rootBuild(e, true), ErrForeignRoot)
+	assert.Equal(t, origin.Root, rootRecorded(t, db))
+}
+
+// TestRouteOfARootThatCannotBeReachedNamesNoConsole covers EACCES. The
+// root can still exist, so the refusal stays. Its console cannot open,
+// so no route names it.
+func TestRouteOfARootThatCannotBeReachedNamesNoConsole(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory with mode 0000")
+	}
+
+	base, _ := servicestest.Workspace(t, "", "api")
+	parent := rootDir(t)
+	hidden := filepath.Join(parent, "hidden")
+	db := filepath.Join(rootDir(t), "custom.db")
+
+	require.NoError(t, os.Mkdir(hidden, 0o755))
+
+	st, err := store.Open(db)
+	require.NoError(t, err)
+	require.NoError(t, st.SetMeta(store.MetaRepoRoot, hidden))
+	require.NoError(t, st.SetMeta(store.MetaIndexedAt, "1"))
+	require.NoError(t, st.Close())
+
+	require.NoError(t, os.Chmod(parent, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+
+	ws, err := workspace.Resolve(base.Root, db)
+	require.NoError(t, err)
+
+	got := engNew(ws, Deps{}).Pins().Database
+
+	require.ErrorIs(t, got.BuildBlock, ErrForeignRoot)
+	assert.Contains(t, got.BuildBlock.Error(), "use another --db")
+	assert.NotContains(t, got.BuildBlock.Error(), "open the console in")
+	assert.Equal(t, "use another --db", got.RootRoute)
+}
+
 // TestBuildIndexFailsClosedOnARootThatDoesNotRead covers a file with
 // content that gives no root. It can belong to another repository, so
 // nothing writes it.

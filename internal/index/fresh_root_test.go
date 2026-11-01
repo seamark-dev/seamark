@@ -15,7 +15,7 @@ import (
 // The fast path of Run compares a workspace fingerprint, and the
 // fingerprint holds no path. These tests hold the rule for the root. The
 // default database of a checkout must record that checkout. A --db
-// database keeps the rules that it always had.
+// database keeps its root unless the caller allows the move.
 
 // tempDir returns a new directory by its resolved path, because Run
 // records the resolved root.
@@ -164,7 +164,7 @@ func TestRunKeepsTheFastPathOfItsOwnRoot(t *testing.T) {
 
 // TestRunUnderAnotherDatabaseKeepsItsRules holds the --db rules. Another
 // recorded root is normal there. A rebuild would move the root away from
-// the repository that owns the database, so only a new fingerprint does it.
+// the repository that owns the database, so only MoveRoot does it.
 func TestRunUnderAnotherDatabaseKeepsItsRules(t *testing.T) {
 	// sibling returns a worktree of root at the same commit.
 	sibling := func(t *testing.T, root string) string {
@@ -188,7 +188,7 @@ func TestRunUnderAnotherDatabaseKeepsItsRules(t *testing.T) {
 		assert.Equal(t, root, recordedRoot(t, store.DefaultPath(root)))
 	})
 
-	t.Run("another fingerprint rebuilds and records the workspace", func(t *testing.T) {
+	t.Run("another fingerprint refuses and keeps the root", func(t *testing.T) {
 		root := indexedRepo(t)
 		side := sibling(t, root)
 
@@ -196,9 +196,27 @@ func TestRunUnderAnotherDatabaseKeepsItsRules(t *testing.T) {
 		gitIn(t, side, "add", "-A")
 		gitIn(t, side, "commit", "-m", "side")
 
-		sum, err := Run(Options{Root: side, DBPath: store.DefaultPath(root)})
+		_, err := Run(Options{Root: side, DBPath: store.DefaultPath(root)})
+		require.ErrorIs(t, err, ErrRootMove)
+		assert.Equal(t, root, recordedRoot(t, store.DefaultPath(root)))
+	})
+
+	t.Run("force does not pass the guard", func(t *testing.T) {
+		root := indexedRepo(t)
+		side := sibling(t, root)
+
+		_, err := Run(Options{Root: side, DBPath: store.DefaultPath(root), Force: true})
+		require.ErrorIs(t, err, ErrRootMove)
+		assert.Equal(t, root, recordedRoot(t, store.DefaultPath(root)))
+	})
+
+	t.Run("MoveRoot rebuilds and records the workspace", func(t *testing.T) {
+		root := indexedRepo(t)
+		side := sibling(t, root)
+
+		sum, err := Run(Options{Root: side, DBPath: store.DefaultPath(root), MoveRoot: true})
 		require.NoError(t, err)
-		assert.False(t, sum.Skipped)
+		assert.False(t, sum.Skipped, "one fingerprint must not keep the old root")
 		assert.Equal(t, side, recordedRoot(t, store.DefaultPath(root)))
 	})
 }

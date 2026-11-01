@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -227,9 +226,10 @@ func pinWriteRefusalText(ws workspace.Workspace, decision workspace.RootWrite, r
 // The recorded root is a route only with a ledger there. Without a
 // default database it answers that it has no index. After a move, a file
 // inside this workspace leaves with the restore, so its --db path stops
-// being valid. An index run then records this workspace. That run needs
-// --force, because an unchanged workspace skips the run and keeps the
-// old root.
+// being valid. So a recorded root that a stat cannot find has no route
+// into it. The user can tell a moved repository from a detached disk, so
+// the route is the move. When that move is no route either, only another
+// file remains.
 func pinWriteRoute(ws workspace.Workspace, decision workspace.RootWrite, recorded string) string {
 	root := render.Sanitize(recorded)
 	here := render.Sanitize(ws.Root)
@@ -250,18 +250,18 @@ func pinWriteRoute(ws workspace.Workspace, decision workspace.RootWrite, recorde
 		}
 
 		return indexRun + ", or " + there
-	case !rootIsGone(recorded):
+	case store.StatRoot(recorded) == store.RootFound:
 		return there
-	case store.LiesInside(ws.AbsoluteDB(), ws.Root):
-		return "run `seamark index --force --db " + db + "` in " + here + " first"
 	default:
-		return "restore " + root + ", then " + there
+		if route := ws.MoveRootRoute(recorded); route != "" {
+			return route
+		}
+
+		return "use another --db"
 	}
 }
 
 // rootIsGone reports a recorded root that no longer exists.
 func rootIsGone(recorded string) bool {
-	_, err := os.Stat(recorded)
-
-	return errors.Is(err, fs.ErrNotExist)
+	return store.StatRoot(recorded) == store.RootGone
 }
