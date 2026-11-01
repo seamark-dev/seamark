@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -227,8 +228,8 @@ func pinLinked(pin *maintain.Pin) bool {
 // route that works in its state. replaceGate and unlinkedNext ask the
 // gates of the form and of the engine, not only the gate of the first key.
 // A hand edit stays the last route for a linked pin, because it unlinks
-// the proposal. The text never ends in pinByHand: pinStoredLock would read
-// such a link lock as a lock of the stored text.
+// the proposal. pinHandRoute gives its words, because they follow the
+// recorded root.
 const (
 	// pinRouteRetarget is the route while w offers a retarget.
 	pinRouteRetarget = "change the scope with w Retarget"
@@ -240,7 +241,6 @@ const (
 	pinRouteReplace = pinGoalReplace + ", use - Prune and add a new pin with n"
 	// pinRouteRule is pinRouteReplace for the locked rule of a linked pin.
 	pinRouteRule   = "to change the rule, use - Prune and add a new pin with n"
-	pinRouteByHand = "edit the pin by hand in " + pinfile.File
 	pinRouteRead   = "press r to read it again"
 	pinRouteRecord = "record the proposal as applied: press p, select it, then press c"
 	pinRouteForm   = "use i to edit its regions"
@@ -305,6 +305,58 @@ func pinForeignRoute(st *state) string {
 	return pinRouteIndex
 }
 
+// pinHandPlace decides where a hand edit of a pin goes, so every surface
+// agrees. The Pins list reads the file under the recorded root, so the
+// relative name is true only when that root is the workspace. step is ""
+// or a step that comes first, and file is the words for the pin file. With
+// a step, the file of the recorded root belongs to another repository or is
+// gone. One decision changes one repository, also by hand. After the step
+// the recorded root is the workspace, so the relative name is true.
+func pinHandPlace(st *state) (step, file string) {
+	root := authorForeignRoot(st)
+
+	switch {
+	case root == "":
+		return "", pinfile.File
+	case pinsDBRoot(st) != "" && pinsDatabase(st).RootRoute == "":
+		// A root is untrusted text in a terminal.
+		return "", ui.OneLine(filepath.Join(root, pinfile.File))
+	}
+
+	return pinForeignRoute(st), pinfile.File
+}
+
+// pinHandAfter puts the step of pinHandPlace before clause.
+func pinHandAfter(step, clause string) string {
+	if step == "" {
+		return clause
+	}
+
+	return step + ", then " + clause
+}
+
+// pinHandRoute returns a hand edit as a phrase. The caller keeps its own
+// words in lead and tail, and only the location or the first step changes.
+func pinHandRoute(st *state, lead, tail string) string {
+	step, file := pinHandPlace(st)
+
+	return pinHandAfter(step, lead+file+tail)
+}
+
+// pinRouteByHand is the next action that sends the user to a hand edit.
+func pinRouteByHand(st *state) string {
+	return pinHandRoute(st, "edit the pin by hand in ", "")
+}
+
+// pinFileBlockNote is the note of a preview whose pin file the console
+// cannot change. Pins and Proposals show the same words.
+func pinFileBlockNote(st *state, block string) string {
+	step, file := pinHandPlace(st)
+
+	return "The console cannot change " + file + ": " + ui.OneLine(block) + ". " +
+		ovSentenceEnd(pinHandAfter(step, "edit the file by hand"))
+}
+
 // pinForeignBuild is the sentence of a preview when a build ends the
 // state. It also names the shell command.
 const pinForeignBuild = "Run seamark index in this checkout, or build the index from Overview (press 1, then b)."
@@ -360,13 +412,13 @@ func (p *pinsView) editGate(pin *maintain.Pin) (why, next string) {
 	case !pinLinked(pin):
 		return "it has " + pinLinkNoun(pin.Link.Link), p.unlinkedNext(pin)
 	case pin.Entry.Block != "":
-		return "the entry cannot be edited safely (" + ui.Diag(pin.Entry.Block) + ")", pinRouteByHand
+		return "the entry cannot be edited safely (" + ui.Diag(pin.Entry.Block) + ")", pinRouteByHand(p.st)
 	case in == nil || in.Doc == nil:
 		return "the pin file is not read", pinRouteRead
 	case pinsForeignRoot(p.st) != "":
 		return "the index records another repository, " + ui.OneLine(pinsForeignRoot(p.st)), pinForeignRoute(p.st)
 	case in.Doc.FileBlock != "":
-		return "the pin file cannot be edited (" + ui.Diag(in.Doc.FileBlock) + ")", pinRouteByHand
+		return "the pin file cannot be edited (" + ui.Diag(in.Doc.FileBlock) + ")", pinRouteByHand(p.st)
 	}
 
 	return "", ""
@@ -390,9 +442,9 @@ func (p *pinsView) unlinkedNext(pin *maintain.Pin) string {
 	case pin.Link.Link == pinfile.LinkPendingMatch:
 		return pinRouteRecord
 	case pin.Link.Link != pinfile.LinkNoProposal, in == nil, in.Doc == nil,
-		pinAuthorBlock(in, pin, maintain.AuthorEdit, p.authorKnown(in)) != "",
+		pinAuthorBlock(p.st, in, pin, maintain.AuthorEdit, p.authorKnown(in)) != "",
 		in.Doc.FileBlock != "", pinRegionLock(pinEntryRegions(pin.Entry)) != "":
-		return pinRouteByHand
+		return pinRouteByHand(p.st)
 	case pinsDBRoot(p.st) != "":
 		return pinGoalForm + ", " + pinOpenRoot(p.st, pinsDBRoot(p.st))
 	case pinsForeignRoot(p.st) != "":
@@ -417,7 +469,7 @@ func (p *pinsView) replaceGate(pin *maintain.Pin) (why, next string) {
 	}
 
 	if p.tailRefused(pin) {
-		return "the pin file takes no new pin after this prune", pinRouteByHand
+		return "the pin file takes no new pin after this prune", pinRouteByHand(p.st)
 	}
 
 	return "", ""
@@ -601,15 +653,17 @@ func (p *pinsView) ruleRoute(pin *maintain.Pin) string {
 	return why + "; " + next
 }
 
-// pinLockRoutes holds the words for the locked rows of a linked pin. The
-// form holds no state of the view, so the view gives it these words.
+// pinLockRoutes holds the words for the locked rows of a pin. The form
+// holds no state of the view, so the view gives it these words. rule and
+// scope are for the rows of a linked pin, and hand ends a lock of the
+// stored text (pinStoredHand).
 type pinLockRoutes struct {
-	rule, scope string
+	rule, scope, hand string
 }
 
-// lockRoutes returns the words for the locked rows of a linked pin.
+// lockRoutes returns the words for the locked rows of a pin.
 func (p *pinsView) lockRoutes(pin *maintain.Pin) pinLockRoutes {
-	return pinLockRoutes{rule: p.ruleRoute(pin), scope: p.scopeRoute(pin)}
+	return pinLockRoutes{rule: p.ruleRoute(pin), scope: p.scopeRoute(pin), hand: pinStoredHand(p.st)}
 }
 
 // pinTargetOwner returns a clause that names the other pin or the

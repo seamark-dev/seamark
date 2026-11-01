@@ -1185,7 +1185,10 @@ func (p *pinsView) triggerValues(pin *maintain.Pin, tr maintain.TriggerReading, 
 	// and the scope is not current. Else w makes the change, or no change
 	// is due.
 	s := pin.Readings.Scope
-	route := p.retargetBlock(pin) != "" && (!s.Known || s.Advice.Kind != distill.ScopeCurrent)
+	route := ""
+	if p.retargetBlock(pin) != "" && (!s.Known || s.Advice.Kind != distill.ScopeCurrent) {
+		route = pinHandRoute(p.st, "edit the regions in ", " by hand")
+	}
 
 	for _, f := range tr.Blocked {
 		out = append(out, propNote(t, ui.ToneAttention, ui.OneLine(pinTriggerFact(f, route)), w)...)
@@ -1198,9 +1201,8 @@ func (p *pinsView) triggerValues(pin *maintain.Pin, tr maintain.TriggerReading, 
 // fields of distill.TriggerFact. The shared BlockedLine always ends with
 // a hand edit route, because the CLI plan, the CLI ledger and the HTML
 // report print it, and none of them offers the change. The console
-// offers w for it, so its own words name the hand edit only when route
-// is set.
-func pinTriggerFact(f distill.TriggerFact, route bool) string {
+// offers w for it, so route is "" or the hand edit that the state needs.
+func pinTriggerFact(f distill.TriggerFact, route string) string {
 	why := "directly cited by the evidence"
 	if !f.Direct {
 		why = "confirmed by co-change (" + strconv.Itoa(f.Together) + " shared commits)"
@@ -1213,8 +1215,8 @@ func pinTriggerFact(f distill.TriggerFact, route bool) string {
 		text += "the region set is full"
 	}
 
-	if route {
-		text += "; edit the regions in " + pinfile.File + " by hand"
+	if route != "" {
+		text += "; " + route
 	}
 
 	return text
@@ -1373,7 +1375,7 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 		// The keys still draft and review, and the review names the block
 		// (contracts §4.2). So the text never promises a write.
 		note(ui.ToneAttention, "The pin file cannot be edited ("+ui.Diag(in.Doc.FileBlock)+"). "+pinBlockedDrafts+
-			" Edit the pin by hand in "+pinfile.File+".")
+			" "+ovSentenceEnd(pinRouteByHand(p.st)))
 
 		return out
 	case l.Link == pinfile.LinkNoProposal && pin.Entry.Block == "":
@@ -1385,8 +1387,8 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 
 		return append(out, p.gateLines(w)...)
 	case l.Link == pinfile.LinkNoProposal:
-		note(ui.ToneAttention, "Blocked: this entry cannot be edited safely ("+ui.Diag(pin.Entry.Block)+"). Edit it "+
-			"by hand in "+pinfile.File+".")
+		note(ui.ToneAttention, "Blocked: this entry cannot be edited safely ("+ui.Diag(pin.Entry.Block)+"). "+
+			ovSentenceEnd(pinHandRoute(p.st, "edit it by hand in ", "")))
 
 		return out
 	case l.Link == pinfile.LinkPendingMatch:
@@ -1394,17 +1396,17 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 
 		return out
 	case l.Link == pinfile.LinkAmbiguousFile:
-		note(ui.ToneAttention, "Blocked: remove or change the duplicate entries in "+pinfile.File+
-			" by hand. Maintenance and extraction stay off until one entry remains.")
+		note(ui.ToneAttention, "Blocked: "+pinHandRoute(p.st, "remove or change the duplicate entries in ", " by hand")+
+			". Maintenance and extraction stay off until one entry remains.")
 
 		return out
 	case l.Link == pinfile.LinkAmbiguousLedger:
 		note(ui.ToneAttention, "Blocked: "+propIDList(pinProposalIDs(l.Applied))+" all record this pin, so no "+
-			"action can choose one. Edit the pin by hand in "+pinfile.File+".")
+			"action can choose one. "+ovSentenceEnd(pinRouteByHand(p.st)))
 
 		return out
 	case l.Link != pinfile.LinkLinked:
-		note(ui.ToneAttention, "Blocked: "+l.Link.Reason()+". Edit the pin by hand in "+pinfile.File+".")
+		note(ui.ToneAttention, "Blocked: "+l.Link.Reason()+". "+ovSentenceEnd(pinRouteByHand(p.st)))
 
 		return out
 	case pinsForeignRoot(p.st) != "":
@@ -1426,7 +1428,7 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 		return append(out, p.extractLines(pin, w)...)
 	case pin.Entry.Block != "":
 		note(ui.ToneAttention, "Retarget and prune are off: this entry cannot be edited safely ("+
-			ui.Diag(pin.Entry.Block)+"). Edit it by hand in "+pinfile.File+".")
+			ui.Diag(pin.Entry.Block)+"). "+ovSentenceEnd(pinHandRoute(p.st, "edit it by hand in ", "")))
 
 		return append(out, p.extractLines(pin, w)...)
 	}
@@ -1630,8 +1632,8 @@ func (p *pinsView) propDetail(pr domain.Proposal, w int) []string {
 			"Seamark cannot prove that its pin is gone, and it does not supersede the proposal.", w)...)
 		out = append(out, "")
 
-		return append(out, propLines(t.Muted, "This row is read-only here. Resolve it by hand in "+pinfile.File+
-			" or in the ledger, then press r.", w)...)
+		return append(out, propLines(t.Muted, "This row is read-only here. "+
+			ovSentenceEnd(pinHandRoute(p.st, "resolve it by hand in ", " or in the ledger, then press r")), w)...)
 	}
 
 	out = append(out, t.Heading.Render("MISMATCH"))
@@ -1645,9 +1647,9 @@ func (p *pinsView) propDetail(pr domain.Proposal, w int) []string {
 
 	// Bare absence does not prove who removed the pin, so the console
 	// offers no repair. The text names both manual outcomes instead.
-	return append(out, propLines(t.Muted, "To restore the pin, add the rule, the note and the regions above to "+
-		pinfile.File+" by hand, then press r. If the pin was meant to go, the row stays here as a known "+
-		"mismatch; the console offers no repair for it.", w)...)
+	return append(out, propLines(t.Muted, "To restore the pin, "+
+		pinHandRoute(p.st, "add the rule, the note and the regions above to ", " by hand, then press r")+
+		". If the pin was meant to go, the row stays here as a known mismatch; the console offers no repair for it.", w)...)
 }
 
 // loadingBox shows the first read of the pins.

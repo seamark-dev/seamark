@@ -329,7 +329,7 @@ func (m *maintModal) planBlockers(w int) []string {
 	}
 
 	if p.FileBlock != "" {
-		note("The console cannot change " + pinfile.File + ": " + ui.OneLine(p.FileBlock) + ". Edit the file by hand.")
+		note(pinFileBlockNote(m.st, p.FileBlock))
 	}
 
 	switch {
@@ -565,7 +565,7 @@ func maintOtherImpact(p *maintain.Plan) []lessoncheck.Impact {
 func maintFactText(it maintain.PlanItem, fact string) string {
 	for _, f := range it.Pin.Readings.Trigger.Blocked {
 		if f.BlockedLine() == fact {
-			return pinTriggerFact(f, false)
+			return pinTriggerFact(f, "")
 		}
 	}
 

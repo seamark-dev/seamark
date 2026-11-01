@@ -1120,9 +1120,9 @@ func TestPinEditOpensUnholdableTextReadOnly(t *testing.T) {
 
 	d := authorOf(h).form.draft
 	rule := pinRuleInput()
-	assert.Equal(t, pinLengthLock(rule.MaxRunes()), d.ruleLock, "a rule over the limit names its length")
-	assert.Equal(t, pinTextLock, d.noteLock, "a note with a control opens read-only")
-	assert.Equal(t, pinTextLock, d.scopeLock, "a region with a C1 control opens read-only")
+	assert.Equal(t, pinLengthLock(rule.MaxRunes())+pinsHandLock, d.ruleLock, "a rule over the limit names its length")
+	assert.Equal(t, pinTextLock+pinsHandLock, d.noteLock, "a note with a control opens read-only")
+	assert.Equal(t, pinTextLock+pinsHandLock, d.scopeLock, "a region with a C1 control opens read-only")
 
 	frame := lesBoxFlat(h.view())
 	assert.Contains(t, frame, "Read-only: this text holds characters the editor cannot show; edit "+
@@ -1167,8 +1167,8 @@ func TestPinEditLocksAStoredTextOverTheLimitByLength(t *testing.T) {
 	want := "Read-only: this text is longer than " + strconv.Itoa(rule.MaxRunes()) +
 		" characters; edit .seamark/lessons.yaml by hand."
 
-	assert.Equal(t, pinLengthLock(rule.MaxRunes()), d.ruleLock, "a rule over the limit names its length")
-	assert.Equal(t, pinLengthLock(region.MaxRunes()), d.scopeLock, "a region over the limit locks the scope at load")
+	assert.Equal(t, pinLengthLock(rule.MaxRunes())+pinsHandLock, d.ruleLock, "a rule over the limit names its length")
+	assert.Equal(t, pinLengthLock(region.MaxRunes())+pinsHandLock, d.scopeLock, "a region over the limit locks the scope at load")
 	assert.Empty(t, d.noteLock, "a note has no limit")
 
 	frame := lesBoxFlat(h.view())
@@ -1724,9 +1724,9 @@ func TestPinEditOpensSeparatorAndBidiTextReadOnly(t *testing.T) {
 	h.press("i")
 
 	d := authorOf(h).form.draft
-	assert.Equal(t, pinTextLock, d.ruleLock, "a rule with a bidi mark opens read-only")
-	assert.Equal(t, pinTextLock, d.noteLock, "a note with a separator opens read-only")
-	assert.Equal(t, pinTextLock, d.scopeLock, "a region with a separator opens read-only")
+	assert.Equal(t, pinTextLock+pinsHandLock, d.ruleLock, "a rule with a bidi mark opens read-only")
+	assert.Equal(t, pinTextLock+pinsHandLock, d.noteLock, "a note with a separator opens read-only")
+	assert.Equal(t, pinTextLock+pinsHandLock, d.scopeLock, "a region with a separator opens read-only")
 
 	frame := lesBoxFlat(h.view())
 	assert.Contains(t, frame, "keepU+200Fchangelog")

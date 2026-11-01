@@ -96,8 +96,8 @@ func newCheckDefModal(st *state, in *maintain.Inspection, pin *maintain.Pin) *ch
 		return m
 	}
 
-	id := pin.Check.Check.ID
-	m.idLock = pinInputLock(&m.id, id)
+	id, hand := pin.Check.Check.ID, pinStoredHand(st)
+	m.idLock = pinWithHand(pinInputLock(&m.id, id), hand)
 
 	if in == nil {
 		return m
@@ -105,7 +105,7 @@ func newCheckDefModal(st *state, in *maintain.Inspection, pin *maintain.Pin) *ch
 
 	if def, ok := in.Checks.Defs[id]; ok {
 		m.kind = lessoncheck.Kind(def.Kind)
-		m.patternLock = pinInputLock(&m.pattern, def.Pattern)
+		m.patternLock = pinWithHand(pinInputLock(&m.pattern, def.Pattern), hand)
 	}
 
 	return m
