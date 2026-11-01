@@ -40,13 +40,25 @@ model-boundary delivery.
   link or a relative path no longer bypasses the two-repository refusal.
   A prune or apply also refuses a database that the recorded root does
   not own.
+- **Index builds keep the root of another repository.** `seamark index`
+  refuses a database that records another repository, also with
+  `--force`, unless `--move-root` allows the move. A recorded path that
+  does not exist counts, because it can be a detached disk; only a file
+  inside the workspace replaces it by itself. A run that would skip still
+  skips, also on a file that refuses writes. `seamark check` and the MCP
+  `check` tool stop on any failed refresh, and MCP reads carry a one-line
+  note. A relative `--db` names the file that the system opens, also
+  behind a link.
+- **Refusals name one route that runs.** A route never writes two
+  repositories or applies another proposal. A file of a copied or third
+  checkout routes to `seamark index --move-root --db <file>` in that
+  checkout, a route to the recorded root always keeps `--db`, and a path
+  that needs quotes gets them.
 - **Copied checkouts in the CLI.** `seamark lessons --apply`,
   `--retarget`, and `--prune` refuse when the pin file and the ledger
   lie in two repositories, as the console does, so a copy no longer
-  writes the pin file of its origin. Run `seamark index` in the copy.
-  When the recorded root has its own index, you can also run the command
-  there, with `--db` for a custom database. A `--db` that the recorded
-  root owns keeps working.
+  writes the pin file of its origin. Run `seamark index` in the copy. A
+  `--db` that the recorded root owns keeps working.
 - **Config saves.** A Settings save in a copied checkout refuses, so
   it no longer changes the `config.yaml` of the original repository.
   Screens name the build or the console of the recorded root.

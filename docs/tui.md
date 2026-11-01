@@ -110,7 +110,13 @@ The state of the workspace at a glance.
   the index database; `enter` or `y` confirms. It never fetches reviews or
   runs a distillation, and it cannot be cancelled, so `q` offers to exit
   after it finishes. `b` refuses a database that records another
-  repository, at any schema, and names the console of that root. It also
+  repository, at any schema, and names the console of that root. When
+  that console cannot run, it names `seamark index --move-root --db
+  <file>` in the directory that can take the file. That covers a file of
+  this checkout, a recorded root that a stat cannot find or reach, and a
+  root that git now widens to a top level. A missing root can be a moved
+  repository or a detached disk, so `b` builds over it only for a file
+  inside this workspace and outside any repository nested in it. It also
   refuses a default path that links to the database of another worktree,
   and a `--db` file whose recorded root cannot be read. A refused `b`
   reads the index again first, so a fixed cause opens the confirmation
@@ -634,22 +640,31 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
   until the build and says so. After the build the copy reads its own
   `config.yaml`, so `distill.write` can read another value.
   `seamark lessons --apply`, `--retarget`, and `--prune` refuse there
-  too. Run `seamark index` in the copy. When the recorded root has its
-  own index, you can also run the command there. With `--db` of another repository, retarget, prune, apply, and
+  too. Run `seamark index` in the copy. With `--db` of another repository, retarget, prune, apply, and
   `config.yaml` saves stay on only when the recorded root owns the
   database: its default path names that file, also through a link, or it
   exists and has no default database. Otherwise they refuse and name the console of
   the recorded root, with this `--db` when the file is a custom database
-  outside another checkout. The pin writes, the lesson settings saves, and the
+  outside another checkout. A file of this checkout, also in its state
+  directory, names `seamark index --move-root --db <file>` in this
+  workspace instead. A command in the recorded root with that file would
+  write two repositories, and without it an id names a row of another
+  ledger. A root that a stat cannot find or reach, or that git now
+  widens, names the same run in the checkout that owns the file, because
+  no command can enter that root. The CLI also names that run for a file
+  of a third checkout with a `.seamark` directory. The home directory
+  counts as no checkout. The pin writes, the lesson settings saves, and the
   sample refuse in the same way. The CLI commands `--apply`,
   `--retarget`, and `--prune` follow the same rule, with one difference:
   outside git, a command in a directory inside the recorded root counts
-  as that root. A route to a custom database names `--db`. The pin form then treats the link of
+  as that root, unless that directory holds `.seamark` or `.git`. A
+  route to a custom database names `--db`. The pin form then treats the link of
   every pin as unknown, because the index records another repository.
   Its review names that root. Pins names no build here, because `b`
   refuses a database that records another repository: the build would
   move that root. The lesson settings name the console of the recorded
-  root, and `o` opens no build. A `--db` that names the default database
+  root, or the `--move-root` run when that console cannot run, and `o`
+  opens no build. A `--db` that names the default database
   through a link, a relative path, or another case of the path counts as
   the default database.
 - The new pin, pin edit, pin removal, mute, and delivery saves refuse a
