@@ -1,8 +1,6 @@
 package workspace
 
 import (
-	"path/filepath"
-
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -132,16 +130,11 @@ func (ws Workspace) holdsDatabase(recorded string) bool {
 	return ws.namesOtherFile(recorded) && store.BelongsToCheckout(ws.Root, recorded, ws.AbsoluteDB())
 }
 
-// AbsoluteDB returns the database path in absolute form. The CLI keeps a
-// relative --db as the user wrote it. store.ClassifyDatabase cannot walk
-// the parent directories of such a path, and a route in another directory
-// needs a path that stays valid there. A path that has no absolute form
-// stays as given, because no store can open it either.
+// AbsoluteDB returns the database path in absolute form. The commands
+// pass that form already, and this method holds for any other caller.
+// store.ClassifyDatabase cannot walk the parent directories of a relative
+// path, and a route in another directory needs a path that stays valid
+// there.
 func (ws Workspace) AbsoluteDB() string {
-	abs, err := filepath.Abs(ws.DBPath)
-	if err != nil {
-		return ws.DBPath
-	}
-
-	return abs
+	return store.AbsolutePath(ws.DBPath)
 }

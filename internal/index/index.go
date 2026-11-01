@@ -70,6 +70,9 @@ type Summary struct {
 	// Skipped is true when the workspace fingerprint matched the index
 	// and nothing was rebuilt.
 	Skipped bool
+	// ReadOnly is true on a skip of a file that does not accept writes. A
+	// rebuild there fails, so no surface may offer one.
+	ReadOnly bool
 	// RootRoute names the next step of a rebuild after a skip under a
 	// database of another repository, as for a sibling worktree at one
 	// commit. Root then names that repository, and Force would refuse.
@@ -118,18 +121,6 @@ func (r rootMoveRefusal) Error() string { return string(r) }
 // Unwrap makes the refusal match ErrRootMove.
 func (r rootMoveRefusal) Unwrap() error { return ErrRootMove }
 
-// absolutePath returns file in absolute form. The rules compare files and
-// cannot place a relative path. A path without an absolute form stays as
-// given, because no store can open it either.
-func absolutePath(file string) string {
-	abs, err := filepath.Abs(file)
-	if err != nil {
-		return file
-	}
-
-	return abs
-}
-
 // checkRootMove returns the refusal of a build in root, or nil. It reads
 // the file without a write, so it can run before the first open.
 //
@@ -137,9 +128,7 @@ func absolutePath(file string) string {
 // write and names the upgrade, and no route of this refusal can run on
 // that schema. MoveRoot allows a root that reads. A root that does not
 // read names no move that the user can allow.
-func checkRootMove(root, dbPath string, moveRoot bool) error {
-	db := absolutePath(dbPath)
-
+func checkRootMove(root, db string, moveRoot bool) error {
 	recorded, err := store.RootMovedByBuild(root, db)
 	if err != nil {
 		return rootMoveRefusal(fmt.Sprintf("the recorded root of this database cannot be read (%s: %s), so a "+
@@ -224,7 +213,8 @@ func Run(opts Options) (*Summary, error) {
 		return nil, err
 	}
 
-	dbPath := opts.DBPath
+	// The guard and each open use this one path, so they judge one file.
+	dbPath := store.AbsolutePath(opts.DBPath)
 	if dbPath == "" {
 		dbPath = store.DefaultPath(root)
 	}
@@ -246,7 +236,7 @@ func Run(opts Options) (*Summary, error) {
 		if !opts.Force && !opts.MoveRoot {
 			if sum := freshSummary(root, dbPath, start, store.OpenReadOnly); sum != nil {
 				if sum.Root != "" && !store.SameDirectory(sum.Root, root) {
-					sum.RootRoute = rootMoveRoute(sum.Root, root, absolutePath(dbPath))
+					sum.RootRoute = rootMoveRoute(sum.Root, root, dbPath)
 				}
 
 				return sum, nil
@@ -1175,7 +1165,7 @@ func freshSummary(root, dbPath string, start time.Time, open func(string) (*stor
 	mined, _ := st.GetMeta(store.MetaHistoryMined)
 
 	return &Summary{
-		Root: recorded, DBPath: dbPath, Skipped: true,
+		Root: recorded, DBPath: dbPath, Skipped: true, ReadOnly: !fileAcceptsWrites(dbPath),
 		HistoryMined: mined == "true",
 		Stats:        stats,
 		Duration:     time.Since(start),
@@ -1188,20 +1178,19 @@ func freshSummary(root, dbPath string, start time.Time, open func(string) (*stor
 // would move its root away from that repository. Only a file that moved
 // with root ends the skip, because a moved repository keeps its
 // fingerprint (store.RootMovesItself). A file that does not accept the
-// write keeps the skip, or every run would fail. An empty recorded root
-// says nothing, so it is no difference.
+// write keeps the skip for both, or every run would fail. An empty
+// recorded root says nothing, so it is no difference.
 func recordsAnotherRoot(root, dbPath, recorded string) bool {
 	if recorded == "" {
 		return false
 	}
 
-	db := absolutePath(dbPath)
-
-	if store.ClassifyDatabase(root, db) == store.DatabaseDefault {
-		return !sameSpelling(recorded, root)
+	differs := store.RootMovesItself(root, recorded, dbPath)
+	if store.ClassifyDatabase(root, dbPath) == store.DatabaseDefault {
+		differs = !sameSpelling(recorded, root)
 	}
 
-	return store.RootMovesItself(root, recorded, db) && fileAcceptsWrites(db)
+	return differs && fileAcceptsWrites(dbPath)
 }
 
 // fileAcceptsWrites reports whether the file opens for a write. The open

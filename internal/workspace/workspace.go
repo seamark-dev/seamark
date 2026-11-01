@@ -63,19 +63,15 @@ func Resolve(dir, dbFlag string) (Workspace, error) {
 	// index.Run opens a relative --db against the process directory.
 	// The absolute form names the same file and stays valid in messages.
 	if dbFlag != "" {
-		ws.DBPath, err = filepath.Abs(dbFlag)
-		if err != nil {
-			return Workspace{}, fmt.Errorf("index database %s: %w", dbFlag, err)
-		}
+		ws.DBPath = store.AbsolutePath(dbFlag)
 	}
 
 	return ws, nil
 }
 
 // Locate derives the root and the database path without the checks of
-// Resolve. A missing dir is no error, and a relative dbFlag stays as
-// given. The CLI commands use it, because they report a missing
-// workspace in their own words and print --db as the user wrote it.
+// Resolve. A missing dir is no error. The CLI commands use it, because
+// they report a missing workspace in their own words.
 // It returns the resolver error unchanged for the same reason.
 func Locate(dir, dbFlag string) (Workspace, error) {
 	// history.ResolveRoot is the resolver that index.Run uses. The same

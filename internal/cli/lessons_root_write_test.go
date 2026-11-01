@@ -883,6 +883,45 @@ func TestRootWriteKeepsTheRouteOfACustomFileInTheRecordedRoot(t *testing.T) {
 	assert.Contains(t, out, "applied 1 pin(s)")
 }
 
+// TestRootWriteIgnoresAMarkInTheHomeDirectory covers a shared file below
+// a home directory with a mark. An earlier run leaves a state directory
+// there. The route named --move-root in the home directory, which moved a
+// live root to the home directory, and the next pin command passed the
+// guard. The file shows no owner, so the route is the recorded root.
+func TestRootWriteIgnoresAMarkInTheHomeDirectory(t *testing.T) {
+	home := rootWriteDir(t)
+
+	t.Setenv("HOME", home)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(home, store.DefaultDir), 0o755))
+
+	origin := rootWriteRepo(t)
+	third := rootMoveThird(t)
+	shared := filepath.Join(home, "dbs", "shared.db")
+
+	data, err := os.ReadFile(store.DefaultPath(origin))
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(shared), 0o755))
+	require.NoError(t, os.WriteFile(shared, data, 0o644))
+
+	rootWriteRefused(t, rootWriteUnowned(origin, " with --db "+shared), rootMoveFiles(t, []string{origin}, shared),
+		"-C", third, "--db", shared, "lessons", "--prune", "p2")
+
+	assert.True(t, workspace.Workspace{Root: third, DBPath: shared}.CustomDatabase(origin),
+		"the route of the console keeps this file")
+
+	_, err = run(t, "-C", origin, "--db", shared, "lessons", "--apply", "p1")
+	require.NoError(t, err, "the route of the refusal works")
+	assert.Equal(t, origin, rootMoveRecorded(t, shared))
+
+	t.Run("a gone root keeps its move", func(t *testing.T) {
+		require.NoError(t, os.Rename(origin, origin+".away"))
+
+		_, err := run(t, "-C", third, "--db", shared, "lessons", "--apply", "p1")
+		require.ErrorContains(t, err, "run `seamark index --move-root --db "+shared+"` in "+third+" first")
+	})
+}
+
 // TestRootWriteRefusesARootThatNoLongerExists covers a recorded root
 // that is gone. A route into it cannot run, so the words differ. A write
 // would recreate the old path, so the test proves that it stays absent.

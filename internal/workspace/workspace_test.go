@@ -160,7 +160,8 @@ func TestResolveMakesRelativeDBFlagAbsoluteAgainstCwd(t *testing.T) {
 	ws, err := Resolve(dir, filepath.Join("custom", "x.db"))
 	require.NoError(t, err)
 
-	wd, err := os.Getwd()
+	// The system starts a relative path at the physical directory.
+	wd, err := filepath.EvalSymlinks(cwd)
 	require.NoError(t, err)
 
 	assert.Equal(t, filepath.Join(wd, "custom", "x.db"), ws.DBPath,

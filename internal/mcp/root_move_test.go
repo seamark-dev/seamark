@@ -452,3 +452,41 @@ func TestToolsKeepAReadOnlyFileOfAMovedRepository(t *testing.T) {
 	assert.NotContains(t, text, "note:")
 	assert.NotContains(t, log.String(), "index refresh")
 }
+
+// TestToolsKeepAReadOnlyDefaultDatabaseOfAMovedCheckout covers a default
+// database that does not accept writes. A rebuild failed on every call,
+// so a verdict refused and every read carried a note, although the
+// fingerprint proves that the index is current.
+func TestToolsKeepAReadOnlyDefaultDatabaseOfAMovedCheckout(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a file with mode 0444")
+	}
+
+	origin, err := filepath.EvalSymlinks(writeFixture(t))
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, ".gitignore"), []byte(".seamark/\n"), 0o644))
+	rootMoveGit(t, origin, "add", "-A")
+	rootMoveGit(t, origin, "commit", "-m", "ignore")
+
+	_, err = index.Run(index.Options{Root: origin})
+	require.NoError(t, err)
+
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	moved := filepath.Join(parent, "moved")
+	require.NoError(t, os.Rename(origin, moved))
+	require.NoError(t, os.Chmod(store.DefaultPath(moved), 0o444))
+
+	resps := serveDB(t, moved, store.DefaultPath(moved), t.Logf,
+		rootMoveCall(1, "check", `{}`), rootMoveCall(2, "why", `{"query":"helper"}`))
+
+	text, isError := rootMoveText(t, resps["1"])
+	assert.False(t, isError, text)
+	assert.Contains(t, text, "verdict")
+
+	text, isError = rootMoveText(t, resps["2"])
+	assert.False(t, isError, text)
+	assert.NotContains(t, text, "note:")
+}

@@ -154,6 +154,9 @@ or add --move-root to move the recorded root to this workspace.`,
 				fmt.Fprintf(out, "index already up to date (%s); it records %s; to rebuild, %s\n",
 					sum.DBPath, render.Sanitize(sum.Root), sum.RootRoute)
 				return mineLessons()
+			case sum.ReadOnly:
+				fmt.Fprintf(out, "index already up to date (%s)\n", sum.DBPath)
+				return mineLessons()
 			case sum.Skipped:
 				fmt.Fprintf(out, "index already up to date (%s); --force rebuilds\n", sum.DBPath)
 				return mineLessons()

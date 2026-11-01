@@ -28,6 +28,7 @@ import (
 	"os"
 	stdpath "path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -50,6 +51,41 @@ const DefaultDBName = "index.db"
 // Store wraps the SQLite index database.
 type Store struct {
 	db *sql.DB
+}
+
+// AbsolutePath returns the absolute form of a database path that names the
+// file the system opens. Every rule and every open use this one path, so
+// they judge one file. A relative path starts at the physical working
+// directory, as the system does. filepath.Abs starts at $PWD and cleans
+// ".." without reading links, so behind a link it names another file. So
+// a path with ".." resolves the links of its directory. A path without an
+// absolute form stays as given, because no store can open it.
+func AbsolutePath(path string) string {
+	if path == "" {
+		return path
+	}
+
+	if !filepath.IsAbs(path) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return path
+		}
+
+		if physical, err := filepath.EvalSymlinks(wd); err == nil {
+			wd = physical
+		}
+
+		path = wd + string(filepath.Separator) + path
+	}
+
+	if slices.Contains(strings.Split(filepath.ToSlash(path), "/"), "..") {
+		dir, base := filepath.Split(path)
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, base)
+		}
+	}
+
+	return filepath.Clean(path)
 }
 
 // DefaultPath returns the conventional index location for a workspace root.
@@ -204,11 +240,12 @@ func RootMovedByBuild(root, dbPath string) (string, error) {
 }
 
 // RootMovesItself reports a recorded root that a plain build in root may
-// replace. The file lies inside root, so it moved with root, and nothing
-// exists at the recorded path. The test of the file comes first, because
-// only a file inside root needs the stat of the recorded root.
+// replace. The file lies inside root and in no checkout nested in root, so
+// it moved with root, and nothing exists at the recorded path. The tests
+// of the file come first, because only such a file needs the stat of the
+// recorded root.
 func RootMovesItself(root, recorded, dbPath string) bool {
-	return LiesInside(dbPath, root) && StatRoot(recorded) == RootGone
+	return LiesInside(dbPath, root) && FileFitsRoot(root, dbPath) && StatRoot(recorded) == RootGone
 }
 
 // IsCheckout reports a directory that marks a checkout: it holds .git,
@@ -230,20 +267,36 @@ func holdsState(dir string) bool {
 
 // CheckoutOf returns the checkout that holds the file at path: the nearest
 // directory above it that IsCheckout reports. It follows a link first,
-// because a link does not move the file. ok is false when no directory
-// shows a checkout. The path must be absolute.
+// because a link does not move the file. The home directory is no
+// checkout. An earlier run there leaves a state directory, and dotfiles
+// can make it a git work tree. So a mark there says nothing about a file
+// below it. ok is false when no directory shows a checkout. The path must
+// be absolute.
 func CheckoutOf(path string) (string, bool) {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
 	}
 
-	for dir := filepath.Dir(path); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
-		if IsCheckout(dir) {
+	home, err := os.UserHomeDir()
+
+	return nearestDirectory(filepath.Dir(path), func(dir string) bool {
+		return IsCheckout(dir) && (err != nil || !SameDirectory(dir, home))
+	})
+}
+
+// nearestDirectory returns the first directory from dir up to the
+// filesystem root that marks reports. The filesystem root takes part,
+// because a container can hold a workspace there.
+func nearestDirectory(dir string, marks func(string) bool) (string, bool) {
+	for ; ; dir = filepath.Dir(dir) {
+		if marks(dir) {
 			return dir, true
 		}
-	}
 
-	return "", false
+		if dir == filepath.Dir(dir) {
+			return "", false
+		}
+	}
 }
 
 // FileFitsRoot reports a file that root can take: no checkout shows up
@@ -290,9 +343,8 @@ func BelongsToCheckout(root, recorded, dbPath string) bool {
 //
 // The file must also lie inside root to be the default database. A
 // default path that links to the database of another worktree belongs
-// to that worktree, and a rebuild here moves its recorded root. The
-// console makes its path absolute, and the CLI keeps the spelling that
-// the user gave, so a relative path of the CLI reads as DatabaseLinked.
+// to that worktree, and a rebuild here moves its recorded root. The path
+// must be absolute (AbsolutePath), or the file reads as DatabaseLinked.
 func ClassifyDatabase(root, dbPath string) DatabaseKind {
 	defaultPath := DefaultPath(root)
 

@@ -116,6 +116,18 @@ func TestRunRebuildsADefaultDatabaseOfAnotherRoot(t *testing.T) {
 		assert.Equal(t, moved, recordedRoot(t, store.DefaultPath(moved)))
 	})
 
+	t.Run("a relative spelling of the default database", func(t *testing.T) {
+		dst := copyOf(t, indexedRepo(t))
+
+		t.Chdir(dst)
+
+		built, err := Run(Options{Root: dst, DBPath: filepath.Join(store.DefaultDir, store.DefaultDBName)})
+		require.NoError(t, err)
+		assert.False(t, built.Skipped)
+		assert.Equal(t, store.DefaultPath(dst), built.DBPath, "the rules cannot place a relative path")
+		assert.Equal(t, dst, recordedRoot(t, store.DefaultPath(dst)))
+	})
+
 	t.Run("a link spelling of the default database", func(t *testing.T) {
 		dst := copyOf(t, indexedRepo(t))
 
@@ -259,4 +271,34 @@ func TestRunHealsARenameThatChangesOnlyTheCase(t *testing.T) {
 
 	assert.False(t, sum.Skipped, "the recorded spelling is wrong, so the fast path does not hold")
 	assert.Equal(t, renamed, recordedRoot(t, store.DefaultPath(renamed)))
+}
+
+// TestRunJudgesTheFileThatItOpens covers the library path: an MCP or an
+// LSP server hands Run the path of a caller. Behind a link, ".." must
+// name the same file for the guard and for the open.
+func TestRunJudgesTheFileThatItOpens(t *testing.T) {
+	origin := indexedRepo(t)
+	base := tempDir(t)
+	here := filepath.Join(base, "data", "here")
+	link := filepath.Join(base, "links", "here")
+	shared := filepath.Join(base, "data", "shared.db")
+
+	require.NoError(t, os.MkdirAll(here, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o755))
+	require.NoError(t, os.Symlink(here, link))
+	require.NoError(t, os.WriteFile(filepath.Join(here, "here.go"), []byte("package here\n"), 0o644))
+	gitIn(t, here, "init", "-b", "main")
+	gitIn(t, here, "add", "-A")
+	gitIn(t, here, "commit", "-m", "here")
+
+	data, err := os.ReadFile(store.DefaultPath(origin))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(shared, data, 0o644))
+
+	t.Chdir(link)
+
+	_, err = Run(Options{Root: here, DBPath: filepath.Join("..", "shared.db")})
+	require.ErrorIs(t, err, ErrRootMove)
+	assert.Equal(t, origin, recordedRoot(t, shared))
+	assert.NoFileExists(t, filepath.Join(base, "links", "shared.db"))
 }

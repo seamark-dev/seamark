@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -1050,4 +1051,191 @@ func TestIndexRefusalNamesTheNestedOwner(t *testing.T) {
 			require.EqualError(t, err, rootMoveRefused(third, outer, custom))
 		})
 	}
+}
+
+// TestEveryCommandHoldsOneDatabasePath covers the flag itself. A command
+// receives one absolute path for its rules and its opens, from the
+// physical working directory. A report can still show what the user wrote.
+func TestEveryCommandHoldsOneDatabasePath(t *testing.T) {
+	_, here, shared := rootMoveBehindALink(t)
+
+	opts := &options{}
+	root := newRoot(opts)
+	given := filepath.Join("..", "shared.db")
+
+	root.AddCommand(&cobra.Command{Use: "probe", Run: func(*cobra.Command, []string) {}})
+	root.SetArgs([]string{"--db", given, "probe"})
+
+	require.NoError(t, root.Execute())
+	assert.Equal(t, shared, opts.dbPath)
+	assert.Equal(t, given, opts.dbGiven)
+
+	opts = &options{}
+	root = newRoot(opts)
+
+	root.AddCommand(&cobra.Command{Use: "probe", Run: func(*cobra.Command, []string) {}})
+	root.SetArgs([]string{"-C", here, "probe"})
+
+	require.NoError(t, root.Execute())
+	assert.Empty(t, opts.dbPath, "no --db stays no --db")
+}
+
+// rootMoveBehindALink builds a real repository at data/here, a link at
+// links/here, and data/shared.db with the rows of an origin that stays
+// alive. The working directory is the link, so $PWD holds the link.
+func rootMoveBehindALink(t *testing.T) (origin, here, shared string) {
+	t.Helper()
+
+	origin = rootWriteRepo(t)
+
+	base := rootWriteDir(t)
+	here = filepath.Join(base, "data", "here")
+	link := filepath.Join(base, "links", "here")
+	shared = filepath.Join(base, "data", "shared.db")
+
+	require.NoError(t, os.MkdirAll(here, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o755))
+	require.NoError(t, os.Symlink(here, link))
+	require.NoError(t, os.WriteFile(filepath.Join(here, "here.go"), []byte("package here\n"), 0o644))
+	gitify(t, here)
+
+	data, err := os.ReadFile(store.DefaultPath(origin))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(shared, data, 0o644))
+
+	t.Chdir(link)
+
+	return origin, here, shared
+}
+
+// TestRelativeDBBehindALinkJudgesTheFileOfTheOpen covers ".." from a
+// working directory behind a link. The guard judged a missing file beside
+// the link and let the build pass. The open then reached the real file
+// and took the root of a live repository, with no flag and no message.
+func TestRelativeDBBehindALinkJudgesTheFileOfTheOpen(t *testing.T) {
+	t.Run("index", func(t *testing.T) {
+		origin, here, shared := rootMoveBehindALink(t)
+
+		rootWriteRefused(t, rootMoveRefusedWithMove(origin, here, shared), rootMoveFiles(t, []string{here}, shared),
+			"--db", filepath.Join("..", "shared.db"), "index")
+		assert.Equal(t, origin, rootMoveRecorded(t, shared))
+	})
+
+	t.Run("check", func(t *testing.T) {
+		origin, here, shared := rootMoveBehindALink(t)
+
+		_, _, err := runIn(t, "", "--db", filepath.Join("..", "shared.db"), "check")
+		require.EqualError(t, err, rootMoveRefusedWithMove(origin, here, shared))
+		assert.Equal(t, origin, rootMoveRecorded(t, shared))
+	})
+
+	t.Run("a pin write names the real file", func(t *testing.T) {
+		origin, _, shared := rootMoveBehindALink(t)
+
+		_, err := run(t, "--db", filepath.Join("..", "shared.db"), "lessons", "--apply", "p1")
+		require.ErrorContains(t, err, "run this command in "+origin+" with --db "+shared)
+
+		out, err := run(t, "-C", origin, "--db", shared, "lessons", "--apply", "p1")
+		require.NoError(t, err, "the route of the refusal works")
+		assert.Contains(t, out, "applied 1 pin(s)")
+	})
+}
+
+// TestIndexKeepsAGoneRootOfANestedRepository covers a file of a repository
+// nested in the workspace. A plain run took its root, because the file
+// lies inside the workspace. A pin command there then wrote its pin in
+// the workspace and its ledger in the nested repository. Each nested state
+// keeps the root.
+func TestIndexKeepsAGoneRootOfANestedRepository(t *testing.T) {
+	mark := func(t *testing.T, dir, kind string) {
+		t.Helper()
+
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+
+		if kind == store.DefaultDir {
+			require.NoError(t, os.MkdirAll(filepath.Join(dir, store.DefaultDir), 0o755))
+
+			return
+		}
+
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "m.go"), []byte("package m\n"), 0o644))
+		gitify(t, dir)
+	}
+
+	kinds := []string{".git", store.DefaultDir}
+
+	for _, outerKind := range kinds {
+		for _, innerKind := range kinds {
+			for _, rel := range []string{"custom.db", filepath.Join(store.DefaultDir, "custom.db")} {
+				t.Run(outerKind+" "+innerKind+" "+rel, func(t *testing.T) {
+					outer := rootWriteDir(t)
+					inner := filepath.Join(outer, "lib")
+					file := filepath.Join(inner, rel)
+					gone := filepath.Join(rootWriteDir(t), "gone")
+
+					mark(t, outer, outerKind)
+					mark(t, inner, innerKind)
+					writeIndexDB(t, file, map[string]string{store.MetaRepoRoot: gone})
+
+					_, err := run(t, "-C", outer, "--db", file, "index")
+					require.ErrorIs(t, err, index.ErrRootMove)
+					assert.Equal(t, gone, rootMoveRecorded(t, file))
+
+					_, err = run(t, "-C", outer, "--db", file, "lessons", "--apply", "p1")
+					require.ErrorContains(t, err, "nothing changed")
+					assert.NoFileExists(t, filepath.Join(outer, store.DefaultDir, "lessons.yaml"))
+				})
+			}
+		}
+	}
+}
+
+// TestIndexKeepsTheSkipOfAReadOnlyDefaultDatabase covers a moved or a
+// copied checkout whose default database does not accept writes. A skip
+// reads, so it stays. A rebuild failed on every run, and a check gave no
+// verdict. The line offers no rebuild, because none can run.
+func TestIndexKeepsTheSkipOfAReadOnlyDefaultDatabase(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a file with mode 0444")
+	}
+
+	for name, place := range map[string]func(t *testing.T, origin string) string{
+		"a moved checkout": func(t *testing.T, origin string) string {
+			moved := filepath.Join(rootWriteDir(t), "moved")
+
+			require.NoError(t, os.Rename(origin, moved))
+
+			return moved
+		},
+		"a copied checkout": rootWriteCopy,
+	} {
+		t.Run(name, func(t *testing.T) {
+			origin := rootWriteRepo(t)
+			root := place(t, origin)
+			db := store.DefaultPath(root)
+
+			require.NoError(t, os.Chmod(db, 0o444))
+
+			for range 2 {
+				out, err := run(t, "-C", root, "index")
+				require.NoError(t, err, "a run must converge")
+				assert.Equal(t, "index already up to date ("+db+")\n", out)
+			}
+
+			stdout, _, err := runIn(t, "", "-C", root, "check")
+			require.NoError(t, err)
+			assert.Contains(t, stdout, "verdict")
+			assert.Equal(t, origin, rootMoveRecorded(t, db))
+		})
+	}
+}
+
+// TestSkipOfAWritableFileKeepsItsLine bounds the rule above. A file that
+// accepts writes can rebuild, so the line still names --force.
+func TestSkipOfAWritableFileKeepsItsLine(t *testing.T) {
+	root := rootWriteRepo(t)
+
+	out, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+	assert.Equal(t, "index already up to date ("+store.DefaultPath(root)+"); --force rebuilds\n", out)
 }

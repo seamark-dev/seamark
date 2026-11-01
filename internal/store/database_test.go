@@ -643,3 +643,105 @@ func TestBelongsToCheckoutReadsTheInnerDirectory(t *testing.T) {
 		})
 	}
 }
+
+// TestAbsolutePathNamesTheFileThatTheOpenOpens covers a working directory
+// behind a link. $PWD holds the link, so filepath.Abs names a file beside
+// the link. The system starts at the physical directory.
+func TestAbsolutePathNamesTheFileThatTheOpenOpens(t *testing.T) {
+	base := checkoutDir(t, "")
+	here := filepath.Join(base, "data", "here")
+	link := filepath.Join(base, "links", "here")
+	shared := filepath.Join(base, "data", "shared.db")
+
+	require.NoError(t, os.MkdirAll(here, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o755))
+	require.NoError(t, os.Symlink(here, link))
+	require.NoError(t, os.WriteFile(shared, nil, 0o644))
+
+	t.Chdir(link)
+
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	require.Equal(t, link, wd, "the test needs a logical working directory")
+
+	assert.Equal(t, shared, AbsolutePath("../shared.db"), "a file that exists")
+	assert.Equal(t, filepath.Join(base, "data", "new.db"), AbsolutePath("../new.db"), "a file that does not exist")
+	assert.Equal(t, filepath.Join(here, "x.db"), AbsolutePath("x.db"), "a plain name")
+	assert.Equal(t, shared, AbsolutePath(filepath.Join(link, "..")+"/../data/shared.db"), "a path that Clean would shorten")
+	assert.Equal(t, shared, AbsolutePath(link+"/../shared.db"), "an absolute path through a link")
+	assert.Equal(t, filepath.Join(base, "data", "new.db"), AbsolutePath(link+"/../new.db"),
+		"a new file through a link lands where the system puts it")
+	assert.Equal(t, shared, AbsolutePath(shared), "an absolute path stays")
+	assert.Empty(t, AbsolutePath(""), "no --db stays no --db")
+}
+
+// TestCheckoutOfSkipsTheHomeDirectory covers a mark in the home directory.
+// An earlier run there leaves a state directory, and dotfiles can make it
+// a git work tree. Neither says that the home directory owns a file below
+// it. A checkout below the home directory still counts.
+func TestCheckoutOfSkipsTheHomeDirectory(t *testing.T) {
+	for _, mark := range []string{DefaultDir, ".git"} {
+		t.Run(mark, func(t *testing.T) {
+			home := checkoutDir(t, mark)
+			repo := filepath.Join(home, "work", "repo")
+
+			t.Setenv("HOME", home)
+
+			require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+
+			_, ok := CheckoutOf(filepath.Join(home, "dbs", "shared.db"))
+			assert.False(t, ok, "the home directory owns no file")
+
+			got, ok := CheckoutOf(filepath.Join(repo, "custom.db"))
+			assert.True(t, ok)
+			assert.Equal(t, repo, got)
+
+			assert.True(t, FileFitsRoot(repo, filepath.Join(home, "dbs", "shared.db")), "a file without an owner fits")
+		})
+	}
+}
+
+// TestNearestDirectoryTestsTheFilesystemRoot covers a workspace at the
+// filesystem root, as in a container. The test needs no mark at the real
+// root, because the walk takes the test as a value. LiesInside tests that
+// directory too, so the two rules agree.
+func TestNearestDirectoryTestsTheFilesystemRoot(t *testing.T) {
+	seen := []string{}
+
+	got, ok := nearestDirectory("/a/b", func(dir string) bool {
+		seen = append(seen, dir)
+
+		return dir == "/"
+	})
+
+	assert.True(t, ok)
+	assert.Equal(t, "/", got)
+	assert.Equal(t, []string{"/a/b", "/a", "/"}, seen)
+
+	_, ok = nearestDirectory("/a", func(string) bool { return false })
+	assert.False(t, ok, "the walk ends at the filesystem root")
+}
+
+// TestRootMovesItselfReadsTheNearestCheckout covers a file of a repository
+// nested in the workspace. It lies inside the workspace but moved with
+// the nested repository, so a build in the workspace must not replace
+// its root.
+func TestRootMovesItselfReadsTheNearestCheckout(t *testing.T) {
+	root := checkoutDir(t, ".git")
+	nested := filepath.Join(root, "lib")
+	gone := filepath.Join(root, "gone")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(nested, DefaultDir), 0o755))
+
+	inside := filepath.Join(root, "custom.db")
+	beside := filepath.Join(nested, "custom.db")
+	state := filepath.Join(nested, DefaultDir, "custom.db")
+
+	for _, path := range []string{inside, beside, state} {
+		require.NoError(t, os.WriteFile(path, nil, 0o644))
+	}
+
+	assert.True(t, RootMovesItself(root, gone, inside))
+	assert.False(t, RootMovesItself(root, gone, beside), "a file of the nested repository")
+	assert.False(t, RootMovesItself(root, gone, state), "a file in the state directory of the nested repository")
+}
