@@ -137,8 +137,8 @@ func TestIndexRefusesTheDatabaseOfAnotherRepository(t *testing.T) {
 }
 
 // TestIndexRefusesADatabaseInThisWorkspace covers the file of a copied
-// checkout. The file records the origin, and only the owner decides that
-// it belongs here, so the run asks for the flag.
+// checkout. The move needs the flag there too. The file is no part of the
+// origin, so the refusal names only the move and no route to the origin.
 func TestIndexRefusesADatabaseInThisWorkspace(t *testing.T) {
 	origin := rootWriteRepo(t)
 	copied := rootWriteCopy(t, origin)
@@ -146,7 +146,11 @@ func TestIndexRefusesADatabaseInThisWorkspace(t *testing.T) {
 
 	require.NoError(t, os.Rename(store.DefaultPath(copied), custom))
 
-	rootWriteRefused(t, rootMoveRefusedWithMove(origin, copied, custom), rootMoveFiles(t, []string{origin, copied}, custom),
+	want := "this database lies in " + copied + " but records another repository (" + origin + "), so a rebuild " +
+		"here would move its recorded root; nothing changed; run `seamark index --move-root --db " + custom +
+		"` in " + copied + " to move the root"
+
+	rootWriteRefused(t, want, rootMoveFiles(t, []string{origin, copied}, custom),
 		"-C", copied, "--db", custom, "index", "--force")
 }
 
@@ -888,7 +892,8 @@ func TestIndexKeepsTheFileOfAnotherCheckoutOfAGoneRoot(t *testing.T) {
 				"-C", third, "--db", db, "index")
 
 			rootWriteRefused(t, "this database records a directory that no longer exists ("+origin+"), and a write "+
-				"would recreate it; nothing changed; use another --db", files, "-C", third, "--db", db, "lessons", "--apply", "p1")
+				"would recreate it; nothing changed; run `seamark index --move-root --db "+db+"` in "+moved+" first",
+				files, "-C", third, "--db", db, "lessons", "--apply", "p1")
 		})
 	}
 }
@@ -1024,4 +1029,25 @@ func TestIndexDropsTheRouteOfARootThatCannotBeReached(t *testing.T) {
 			"so this command would change the pin file there and the ledger in this database; nothing changed; "+
 			"use another --db")
 	})
+}
+
+// TestIndexRefusalNamesTheNestedOwner covers a file in a repository nested
+// in this workspace, with a third repository as the recorded root. The
+// nearest mark above the file names its checkout, so the outer workspace
+// does not own it, and a move would split the two repositories.
+func TestIndexRefusalNamesTheNestedOwner(t *testing.T) {
+	for name, mark := range map[string]string{"a git repository": ".git", "a Seamark checkout": store.DefaultDir} {
+		t.Run(name, func(t *testing.T) {
+			third := rootWriteRepo(t)
+			outer := rootMoveThird(t)
+			nested := filepath.Join(outer, "nested")
+			custom := filepath.Join(nested, "custom.db")
+
+			require.NoError(t, os.MkdirAll(filepath.Join(nested, mark), 0o755))
+			writeIndexDB(t, custom, map[string]string{store.MetaRepoRoot: third})
+
+			_, err := run(t, "-C", outer, "--db", custom, "index")
+			require.EqualError(t, err, rootMoveRefused(third, outer, custom))
+		})
+	}
 }

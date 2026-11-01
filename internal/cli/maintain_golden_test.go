@@ -578,7 +578,7 @@ func TestLessonsPruneGoldenCopiedWorkspace(t *testing.T) {
 	assert.Empty(t, stderr)
 	assert.Equal(t, "the index of this checkout records another repository ("+original+
 		"), so this command would change the pin file there and the ledger in this database; "+
-		"nothing changed; run `seamark index` in <root> first, or run this command in "+original, errText)
+		"nothing changed; run `seamark index` in <root> first", errText)
 
 	got, _ := maintainLessons(t, original)
 	assert.Equal(t, pruneGoldenLessons, got)

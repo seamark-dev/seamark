@@ -3,7 +3,6 @@ package workspace
 import (
 	"path/filepath"
 
-	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -56,17 +55,13 @@ func (ws Workspace) CheckRootWrite(recorded string) RootWrite {
 // git top level, Locate keeps the -C directory as the root. A directory
 // inside the recorded root then reads as another repository, although
 // the command runs in that repository. So that directory gets the answer
-// of the recorded root. The default database of such a directory stays
-// refused, because it is a copy in that directory. A directory with its
-// own git top level is another repository. The console asks
-// CheckRootWrite, so it keeps its refusal and its route.
+// of the recorded root. A directory that marks a checkout keeps the
+// refusal: a copy nested in the root, or a repository of its own, whatever
+// file it names. The console asks CheckRootWrite, so it keeps its refusal
+// and its route.
 func (ws Workspace) CheckCommandRootWrite(recorded string) RootWrite {
 	decision := ws.CheckRootWrite(recorded)
-	if decision != RootWriteUnowned || !store.LiesInside(ws.Root, recorded) {
-		return decision
-	}
-
-	if _, ok := history.TopLevel(ws.Root); ok {
+	if decision != RootWriteUnowned || !store.LiesInside(ws.Root, recorded) || store.IsCheckout(ws.Root) {
 		return decision
 	}
 
@@ -78,33 +73,63 @@ func (ws Workspace) CheckCommandRootWrite(recorded string) RootWrite {
 // so the rows of this file stay out of the list. A file of another
 // checkout is no such file. A command in root with it passes every
 // guard, because root is then the workspace, and it would write two
-// repositories.
+// repositories. MoveRootRoute and OwnerRoute name the route of such a file.
 func (ws Workspace) CustomDatabase(root string) bool {
-	db := ws.AbsoluteDB()
+	_, other := store.OtherOwner(ws.Root, root, ws.AbsoluteDB())
 
-	return store.ClassifyDatabase(ws.Root, db) == store.DatabaseOther &&
-		store.ClassifyDatabase(root, db) == store.DatabaseOther &&
-		!store.LiesInOtherCheckout(root, db)
+	return ws.namesOtherFile(root) && !ws.holdsDatabase(root) && !other
 }
 
-// MoveRootRoute returns the route of a --db file whose recorded root
-// cannot take a command, else "". Nothing exists at that root, and a stat
-// cannot tell a moved repository from a detached disk. So the user
-// decides, and the route is the run that records this workspace in the
-// file. Both surfaces print this text.
+// MoveRootRoute returns the step that replaces a route to the recorded
+// root, else "". Both surfaces print this text. The file can belong to
+// this workspace although it records that root, as the custom file of a
+// copied checkout does. A route to the root would then write two
+// repositories with this file, and without it an id names a row of
+// another ledger. Or nothing exists at that root, and a stat cannot tell a
+// moved repository from a detached disk, so the user decides. The step
+// records this workspace in the file, and that run needs the flag.
 func (ws Workspace) MoveRootRoute(recorded string) string {
 	db := ws.AbsoluteDB()
 
-	if store.StatRoot(recorded) != store.RootGone || !store.FileFitsRoot(ws.Root, db) {
+	if !ws.holdsDatabase(recorded) && (store.StatRoot(recorded) != store.RootGone || !store.FileFitsRoot(ws.Root, db)) {
 		return ""
 	}
 
 	return moveRootRoute(db, ws.Root)
 }
 
+// OwnerRoute returns the route of a --db file of a third checkout, else
+// "". A command in the recorded root has the problems of MoveRootRoute,
+// so the route records the owner of the file in it. The console has no
+// such route: its route to the recorded root opens a list, and the user
+// picks from it, so no id can name another row.
+func (ws Workspace) OwnerRoute(recorded string) string {
+	db := ws.AbsoluteDB()
+
+	if owner, ok := store.OtherOwner(ws.Root, recorded, db); ok {
+		return moveRootRoute(db, owner)
+	}
+
+	return ""
+}
+
 // moveRootRoute names the index run that records root in the file db.
 func moveRootRoute(db, root string) string {
 	return "run `seamark index --move-root --db " + render.Sanitize(db) + "` in " + render.Sanitize(root) + " first"
+}
+
+// namesOtherFile reports a file that is the default database of neither
+// directory.
+func (ws Workspace) namesOtherFile(root string) bool {
+	db := ws.AbsoluteDB()
+
+	return store.ClassifyDatabase(ws.Root, db) == store.DatabaseOther &&
+		store.ClassifyDatabase(root, db) == store.DatabaseOther
+}
+
+// holdsDatabase reports a file that belongs to this workspace.
+func (ws Workspace) holdsDatabase(recorded string) bool {
+	return ws.namesOtherFile(recorded) && store.BelongsToCheckout(ws.Root, recorded, ws.AbsoluteDB())
 }
 
 // AbsoluteDB returns the database path in absolute form. The CLI keeps a

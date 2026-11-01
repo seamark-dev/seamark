@@ -163,6 +163,11 @@ func checkRootMove(root, dbPath string, moveRoot bool) error {
 			"nothing changed; %s", there, here, route))
 	}
 
+	if store.BelongsToCheckout(root, recorded, db) {
+		return rootMoveRefusal(fmt.Sprintf("this database lies in %s but records another repository (%s), so a "+
+			"rebuild here would move its recorded root; nothing changed; %s", here, there, route))
+	}
+
 	return rootMoveRefusal(fmt.Sprintf("this database records another repository (%s), so a rebuild in %s would "+
 		"move its recorded root, and that repository would lose its pins and maintenance; nothing changed; %s",
 		there, here, route))
@@ -172,7 +177,9 @@ func checkRootMove(root, dbPath string, moveRoot bool) error {
 // db, which records another root. A route into a root that a stat cannot
 // find or reach cannot run, so it stays out. So does a move that would
 // split two repositories (moveKeepsOneRepository). When neither remains,
-// the shortest true step is another file.
+// the shortest true step is another file. A file of this workspace is no
+// part of the recorded root. A route there would send it to another
+// repository, so only the move remains.
 func rootMoveRoute(recorded, root, db string) string {
 	there, here, file := render.Sanitize(recorded), render.Sanitize(root), render.Sanitize(db)
 	inRecorded := "run `seamark index --db " + file + "` in " + there
@@ -181,6 +188,8 @@ func rootMoveRoute(recorded, root, db string) string {
 	reachable := store.StatRoot(recorded) == store.RootFound
 
 	switch {
+	case store.BelongsToCheckout(root, recorded, db):
+		return move
 	case keeps && reachable:
 		return inRecorded + ", or " + move
 	case keeps:

@@ -165,6 +165,30 @@ func TestCheckCommandRootWrite(t *testing.T) {
 		{"a directory outside the root", func(t *testing.T, _, custom string) Workspace {
 			return Workspace{Root: rootWriteDir(t), DBPath: custom}
 		}, RootWriteUnowned, RootWriteUnowned},
+		{"a file in the state directory of a directory inside the root", func(t *testing.T, root, _ string) Workspace {
+			inside := filepath.Join(root, "backup")
+
+			return Workspace{Root: inside, DBPath: rootWriteDB(t, filepath.Join(inside, store.DefaultDir, "renamed.db"))}
+		}, RootWriteUnowned, RootWriteUnowned},
+		{"a file beside the state directory of a directory inside the root", func(t *testing.T, root, _ string) Workspace {
+			inside := filepath.Join(root, "backup")
+
+			rootWriteDB(t, filepath.Join(inside, store.DefaultDir, "renamed.db"))
+
+			return Workspace{Root: inside, DBPath: rootWriteDB(t, filepath.Join(inside, "custom.db"))}
+		}, RootWriteUnowned, RootWriteUnowned},
+		{"a file below the state directory of a directory inside the root", func(t *testing.T, root, _ string) Workspace {
+			inside := filepath.Join(root, "backup")
+
+			return Workspace{Root: inside, DBPath: rootWriteDB(t, filepath.Join(inside, store.DefaultDir, "sub", "x.db"))}
+		}, RootWriteUnowned, RootWriteUnowned},
+		{"a file in the state directory of the root", func(t *testing.T, root, _ string) Workspace {
+			inside := filepath.Join(root, "pkg")
+
+			require.NoError(t, os.MkdirAll(inside, 0o755))
+
+			return Workspace{Root: inside, DBPath: rootWriteDB(t, filepath.Join(root, store.DefaultDir, "renamed.db"))}
+		}, RootWriteUnowned, RootWriteAllowed},
 	}
 
 	for _, tc := range cases {
@@ -202,6 +226,119 @@ func TestCustomDatabaseNamesOnlyAFileThatARouteCanKeep(t *testing.T) {
 		"the default database of the root")
 	assert.False(t, Workspace{Root: copied, DBPath: rootWriteDB(t, store.DefaultPath(copied))}.CustomDatabase(origin),
 		"the default database of this workspace")
+}
+
+// TestMoveRootRouteNamesOnlyAFileOfThisWorkspace covers the route of a
+// custom file that belongs to this workspace. A route to the recorded
+// root with that file would write two repositories, so CustomDatabase
+// must not name it either.
+func TestMoveRootRouteNamesOnlyAFileOfThisWorkspace(t *testing.T) {
+	origin, copied := rootWriteDir(t), rootWriteDir(t)
+
+	rootWriteDB(t, store.DefaultPath(origin))
+
+	nested := filepath.Join(origin, "nested")
+	require.NoError(t, os.MkdirAll(nested, 0o755))
+
+	out, err := exec.Command("git", "-C", nested, "init", "-q").CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	plain := filepath.Join(origin, "plain")
+
+	tree := rootWriteDir(t)
+
+	out, err = exec.Command("git", "-C", tree, "init", "-q").CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	treeFile := rootWriteDB(t, filepath.Join(tree, "custom.db"))
+	custom := rootWriteDB(t, filepath.Join(copied, "custom.db"))
+	ownFile := rootWriteDB(t, filepath.Join(nested, "custom.db"))
+	plainFile := rootWriteDB(t, filepath.Join(plain, "custom.db"))
+	rootFile := rootWriteDB(t, filepath.Join(origin, "custom.db"))
+	renamed := rootWriteDB(t, filepath.Join(copied, store.DefaultDir, "renamed.db"))
+	outside := rootWriteDB(t, filepath.Join(rootWriteDir(t), "custom.db"))
+
+	route := func(db, root string) string {
+		return "run `seamark index --move-root --db " + db + "` in " + root + " first"
+	}
+
+	cases := []struct {
+		name       string
+		ws         Workspace
+		wantRoute  string
+		wantCustom bool
+	}{
+		{"a custom file of a copy without git", Workspace{Root: copied, DBPath: custom}, route(custom, copied), false},
+		{"a custom file of a copy with git", Workspace{Root: tree, DBPath: treeFile}, route(treeFile, tree), false},
+		{"a file of a repository inside the root", Workspace{Root: nested, DBPath: ownFile}, route(ownFile, nested), false},
+		{"a file of a directory inside the root without git", Workspace{Root: plain, DBPath: plainFile}, "", true},
+		{"a file of a plain directory", Workspace{Root: filepath.Dir(outside), DBPath: outside}, "", true},
+		{"a file of the root from the parent", Workspace{Root: filepath.Dir(origin), DBPath: rootFile}, "", true},
+		{"a file of the root from a third directory", Workspace{Root: rootWriteDir(t), DBPath: rootFile}, "", true},
+		{"a file in the state directory of a copy", Workspace{Root: copied, DBPath: renamed}, route(renamed, copied), false},
+		{"a file outside any checkout", Workspace{Root: rootWriteDir(t), DBPath: outside}, "", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.wantRoute, tc.ws.MoveRootRoute(origin))
+			assert.Equal(t, tc.wantCustom, tc.ws.CustomDatabase(origin))
+		})
+	}
+}
+
+// TestCustomDatabaseLeavesAFileOfAnotherWorkTree covers a custom file of
+// a copy from a third directory. git names the owner of that file, so a
+// route to the recorded root must not keep it. A custom file inside the
+// recorded root stays a file that the route names.
+func TestCustomDatabaseLeavesAFileOfAnotherWorkTree(t *testing.T) {
+	origin, copied, third := rootWriteDir(t), rootWriteDir(t), rootWriteDir(t)
+
+	rootWriteDB(t, store.DefaultPath(origin))
+
+	for _, dir := range []string{origin, copied} {
+		out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+
+	rootWriteDB(t, store.DefaultPath(copied))
+
+	other := rootWriteDB(t, filepath.Join(copied, "custom.db"))
+	own := rootWriteDB(t, filepath.Join(origin, "custom.db"))
+
+	home := rootWriteDir(t)
+
+	out, err := exec.Command("git", "-C", home, "init", "-q").CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	shared := rootWriteDB(t, filepath.Join(home, ".cache", "seamark", "shared.db"))
+
+	assert.False(t, Workspace{Root: third, DBPath: other}.CustomDatabase(origin))
+	assert.True(t, Workspace{Root: third, DBPath: own}.CustomDatabase(origin))
+	assert.True(t, Workspace{Root: third, DBPath: shared}.CustomDatabase(origin),
+		"a git work tree without a state directory owns no database")
+	assert.Empty(t, Workspace{Root: third, DBPath: shared}.OwnerRoute(origin))
+	assert.Contains(t, Workspace{Root: third, DBPath: other}.OwnerRoute(origin), "` in "+copied+" first")
+}
+
+// TestCustomDatabaseLeavesAFileOfACheckoutOutsideGit covers the same file
+// without git. The state directory names the checkout, also for a file
+// in a directory below it. A plain directory names no checkout.
+func TestCustomDatabaseLeavesAFileOfACheckoutOutsideGit(t *testing.T) {
+	origin, copied, third := rootWriteDir(t), rootWriteDir(t), rootWriteDir(t)
+
+	rootWriteDB(t, store.DefaultPath(origin))
+	require.NoError(t, os.MkdirAll(filepath.Join(copied, store.DefaultDir), 0o755))
+
+	beside := rootWriteDB(t, filepath.Join(copied, "custom.db"))
+	below := rootWriteDB(t, filepath.Join(copied, "state", "deep", "custom.db"))
+	own := rootWriteDB(t, filepath.Join(origin, "custom.db"))
+	plain := rootWriteDB(t, filepath.Join(rootWriteDir(t), "custom.db"))
+
+	assert.False(t, Workspace{Root: third, DBPath: beside}.CustomDatabase(origin))
+	assert.False(t, Workspace{Root: third, DBPath: below}.CustomDatabase(origin))
+	assert.True(t, Workspace{Root: third, DBPath: own}.CustomDatabase(origin))
+	assert.True(t, Workspace{Root: third, DBPath: plain}.CustomDatabase(origin))
 }
 
 // TestAbsoluteDBKeepsAnAbsolutePath covers both spellings. The console

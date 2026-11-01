@@ -255,18 +255,32 @@ func FileFitsRoot(root, dbPath string) bool {
 	return !ok || SameDirectory(owner, root)
 }
 
-// LiesInOtherCheckout reports a file in the state directory of another
-// directory than root. Such a file belongs to that checkout, whatever
-// root it records, as a copied or a renamed database does.
-func LiesInOtherCheckout(root, dbPath string) bool {
-	resolved, err := filepath.EvalSymlinks(dbPath)
-	if err != nil {
+// OtherOwner returns a third checkout that owns the file at dbPath, or
+// false. It is a Seamark checkout, so it has a state directory. A git work
+// tree without one, such as a home directory, owns no database. A file
+// that lies in the recorded root stays with that root, also in a
+// submodule of it.
+func OtherOwner(root, recorded, dbPath string) (string, bool) {
+	owner, ok := CheckoutOf(dbPath)
+	if !ok || !holdsState(owner) || SameDirectory(owner, root) || LiesInside(dbPath, recorded) {
+		return "", false
+	}
+
+	return owner, true
+}
+
+// BelongsToCheckout reports a file of the checkout root that does not
+// belong to the root recorded, as the custom file of a copied checkout
+// does. The nearest mark above the file names its checkout (CheckoutOf),
+// so a repository nested in root keeps its own files. A file in both
+// directories belongs to the inner one.
+func BelongsToCheckout(root, recorded, dbPath string) bool {
+	owner, ok := CheckoutOf(dbPath)
+	if !ok || !SameDirectory(owner, root) {
 		return false
 	}
 
-	state := filepath.Dir(resolved)
-
-	return filepath.Base(state) == DefaultDir && !SameDirectory(filepath.Dir(state), root)
+	return !LiesInside(dbPath, recorded) || LiesInside(root, recorded)
 }
 
 // ClassifyDatabase relates dbPath to root by file identity. A link

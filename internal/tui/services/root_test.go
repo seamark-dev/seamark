@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
@@ -803,14 +804,24 @@ func rootRenamed(t *testing.T, origin workspace.Workspace) (ws workspace.Workspa
 // that names no default path of this workspace but still is not the
 // ledger of the recorded root. A write would change two repositories.
 func TestOwnRootRefusesADatabaseThatTheRecordedRootDoesNotOwn(t *testing.T) {
-	for name, resolve := range map[string]func(*testing.T, workspace.Workspace) (workspace.Workspace, string){
-		"a third directory with the database of a copy": rootThirdDirectory,
-		"a copy with a renamed database":                rootRenamed,
-	} {
+	cases := map[string]struct {
+		resolve func(*testing.T, workspace.Workspace) (workspace.Workspace, string)
+		// route returns the route of the refusal. The file of a copy names
+		// the move, because a console of the origin opens another ledger.
+		route func(origin, ws workspace.Workspace, db string) string
+	}{
+		"a third directory with the database of a copy": {rootThirdDirectory,
+			func(origin, _ workspace.Workspace, _ string) string { return "open the console in " + origin.Root }},
+		"a copy with a renamed database": {rootRenamed, func(_, ws workspace.Workspace, db string) string {
+			return "run `seamark index --move-root --db " + db + "` in " + ws.Root + " first"
+		}},
+	}
+
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			origin, linked := maintWorkspace(t, true)
 			row := rootPending(t, origin.DBPath, "new-rule", "api", "A new rule.")
-			ws, db := resolve(t, origin)
+			ws, db := tc.resolve(t, origin)
 			before := rootFile(t, origin.Root)
 
 			e := engNew(ws, Deps{})
@@ -819,8 +830,8 @@ func TestOwnRootRefusesADatabaseThatTheRecordedRootDoesNotOwn(t *testing.T) {
 
 			_, err := e.CommitMaintenance(rootPrune(t, e))
 			require.ErrorIs(t, err, ErrForeignRoot)
-			assert.Contains(t, err.Error(), "open the console in "+origin.Root)
-			assert.NotContains(t, err.Error(), "--db", "this file with a console in the origin splits two repositories")
+			assert.Contains(t, err.Error(), tc.route(origin, ws, db))
+			assert.NotContains(t, err.Error(), "with this --db", "this file with a console in the origin splits two repositories")
 
 			pv, err := e.PreviewDecision(proposals.ActionApply, []int64{row.ID})
 			require.NoError(t, err)
@@ -833,8 +844,8 @@ func TestOwnRootRefusesADatabaseThatTheRecordedRootDoesNotOwn(t *testing.T) {
 			assert.Equal(t, domain.ProposalApplied, rootStatus(t, db, linked.ID), "the ledger of the file stays")
 			assert.Equal(t, domain.ProposalProposed, rootStatus(t, db, row.ID))
 
-			// The route of the refusal works: the console of the recorded
-			// root writes its own file and its own ledger.
+			// The console of the recorded root writes its own file and its
+			// own ledger.
 			own := engNew(origin, Deps{})
 
 			res, err := own.CommitMaintenance(rootPrune(t, own))
@@ -1162,6 +1173,63 @@ func TestRouteOfACustomDatabaseKeepsItsDB(t *testing.T) {
 	assert.Contains(t, rootFile(t, origin.Root), "custom-rule")
 	assert.Equal(t, domain.ProposalApplied, rootStatus(t, db, row.ID))
 	assert.Empty(t, rootStatus(t, origin.DBPath, row.ID), "the default ledger never held this row")
+}
+
+// TestRouteOfACustomFileInACopyRecordsThatCopy covers a custom file that
+// belongs to a copied checkout. The console of the origin with this file
+// would change the pin file of the origin and the ledger of the copy.
+// So the route records the copy in the file. The test runs the index run
+// of that route, and the console of the copy then writes only the copy.
+func TestRouteOfACustomFileInACopyRecordsThatCopy(t *testing.T) {
+	origin, _ := maintWorkspace(t, true)
+	root := rootCopy(t, origin, "copy")
+	db := filepath.Join(root, "custom.db")
+
+	require.NoError(t, os.Rename(store.DefaultPath(root), db))
+
+	row := rootPending(t, db, "custom-rule", "api", "A custom rule.")
+	before := rootFile(t, origin.Root)
+
+	ws, err := workspace.Resolve(root, db)
+	require.NoError(t, err)
+
+	want := "run `seamark index --move-root --db " + db + "` in " + root + " first"
+
+	e := engNew(ws, Deps{})
+	got := e.Pins().Database
+
+	assert.Equal(t, want, got.RootRoute)
+	assert.False(t, got.CustomDB, "a route to the origin must not keep this file")
+	require.ErrorContains(t, got.WriteBlock, want)
+	require.ErrorContains(t, got.BuildBlock, want)
+	assert.NotContains(t, got.WriteBlock.Error(), "with this --db")
+	assert.NotContains(t, got.BuildBlock.Error(), "with this --db")
+
+	_, err = e.CommitMaintenance(rootPrune(t, e))
+	require.ErrorIs(t, err, ErrForeignRoot)
+	assert.Contains(t, err.Error(), want)
+
+	var foreign *ForeignRootError
+	require.ErrorAs(t, err, &foreign)
+	assert.Equal(t, want, foreign.RootRoute)
+
+	require.Error(t, rootBuild(e, true), "the console has no flag that allows the move")
+
+	_, err = index.Run(index.Options{Root: root, DBPath: db, MoveRoot: true})
+	require.NoError(t, err)
+
+	own := engNew(ws, Deps{})
+	require.NoError(t, own.Pins().Database.WriteBlock)
+
+	pv, err := own.PreviewDecision(proposals.ActionApply, []int64{row.ID})
+	require.NoError(t, err)
+
+	_, err = own.CommitDecision(pv)
+	require.NoError(t, err)
+
+	assert.Contains(t, rootFile(t, root), "custom-rule")
+	assert.Equal(t, domain.ProposalApplied, rootStatus(t, db, row.ID))
+	assert.Equal(t, before, rootFile(t, origin.Root), "the origin stays as it is")
 }
 
 // TestRouteOfADatabaseOfTheRootNamesNoDB holds the plain route: the

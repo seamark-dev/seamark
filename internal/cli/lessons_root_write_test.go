@@ -3,9 +3,13 @@ package cli
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +20,8 @@ import (
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -240,14 +246,10 @@ func rootWriteRefused(t *testing.T, want string, files func() map[string]string,
 	assert.Equal(t, before, files(), "a refusal writes nothing")
 }
 
-// rootWriteCopied is the refusal of the default database of a copy.
+// rootWriteCopied is the refusal of the default database of a copy. The
+// only route is an index run there. A route to the origin would resolve
+// the id of the command in another ledger.
 func rootWriteCopied(origin, copied string) string {
-	return rootWriteCopiedNoLedger(origin, copied) + ", or run this command in " + origin
-}
-
-// rootWriteCopiedNoLedger is rootWriteCopied for a recorded root without
-// a default database. A route there can only answer "no index found".
-func rootWriteCopiedNoLedger(origin, copied string) string {
 	return "the index of this checkout records another repository (" + origin + "), so this command would " +
 		"change the pin file there and the ledger in this database; nothing changed; " +
 		"run `seamark index` in " + copied + " first"
@@ -463,17 +465,17 @@ func TestRootWriteRefusesEverySpellingOfACopyDatabase(t *testing.T) {
 	t.Run("a relative --db", func(t *testing.T) {
 		t.Chdir(copied)
 
-		rootWriteRefused(t, rootWriteCopiedNoLedger(origin, copied), files,
+		rootWriteRefused(t, rootWriteCopied(origin, copied), files,
 			"--db", filepath.Join(".seamark", "index.db"), "lessons", "--apply", "p1")
 	})
 
 	t.Run("a --db from a directory inside the copy", func(t *testing.T) {
-		rootWriteRefused(t, rootWriteCopiedNoLedger(origin, copied), files,
+		rootWriteRefused(t, rootWriteCopied(origin, copied), files,
 			"-C", inside, "--db", store.DefaultPath(copied), "lessons", "--apply", "p1")
 	})
 
 	t.Run("a --db through a link", func(t *testing.T) {
-		rootWriteRefused(t, rootWriteCopiedNoLedger(origin, copied), files,
+		rootWriteRefused(t, rootWriteCopied(origin, copied), files,
 			"-C", copied, "--db", store.DefaultPath(link), "lessons", "--prune", "p2")
 	})
 }
@@ -497,18 +499,18 @@ func TestRootWriteRefusesADatabaseTheRootDoesNotOwn(t *testing.T) {
 	files := func() map[string]string { return rootWriteFiles(t, []string{origin, copied}, custom, renamed) }
 
 	cases := []struct {
-		name, dir, db, route string
+		name, dir, db, want string
 	}{
-		{"a custom file outside any checkout", third, custom, " with --db " + custom},
-		{"the database of a copy from a third directory", third, store.DefaultPath(copied), ""},
-		{"a renamed database in a copy", copied, renamed, ""},
+		{"a custom file outside any checkout", third, custom, rootWriteUnowned(origin, " with --db "+custom)},
+		{"the database of a copy from a third directory", third, store.DefaultPath(copied),
+			rootWriteMoved(origin, copied, store.DefaultPath(copied))},
+		{"a renamed database in a copy", copied, renamed, rootWriteMoved(origin, copied, renamed)},
 	}
 
 	for _, tc := range cases {
 		for _, c := range rootWriteCommands {
 			t.Run(tc.name+" with "+c.name, func(t *testing.T) {
-				rootWriteRefused(t, rootWriteUnowned(origin, tc.route), files,
-					append([]string{"-C", tc.dir, "--db", tc.db}, c.args...)...)
+				rootWriteRefused(t, tc.want, files, append([]string{"-C", tc.dir, "--db", tc.db}, c.args...)...)
 			})
 		}
 	}
@@ -528,6 +530,357 @@ func TestRootWriteRefusesADatabaseTheRootDoesNotOwn(t *testing.T) {
 		assert.Contains(t, lessons, "new-rule")
 		assert.Equal(t, model.ProposalApplied, rootWriteStatus(t, custom, 1))
 	})
+}
+
+// rootWriteMoved is the refusal of a file of this workspace. Its route
+// records this workspace in the file, because a route to the recorded root
+// would write two repositories.
+func rootWriteMoved(origin, here, db string) string {
+	return "this database records another repository (" + origin + ") that does not own it, so this command " +
+		"would change the pin file there and the ledger in this database; nothing changed; " +
+		"run `seamark index --move-root --db " + db + "` in " + here + " first"
+}
+
+// rootWriteCustomCopy returns the origin, a copy, and a custom file of
+// that copy. The file is the database of the copy under another name, so
+// it records the origin and holds the rows of the fixture.
+func rootWriteCustomCopy(t *testing.T) (origin, copied, custom string) {
+	t.Helper()
+
+	origin = rootWriteRepo(t)
+	copied = rootWriteCopy(t, origin)
+	custom = filepath.Join(copied, "custom.db")
+
+	require.NoError(t, os.Rename(store.DefaultPath(copied), custom))
+
+	return origin, copied, custom
+}
+
+// TestRootWriteRouteOfACustomFileInACopyWorks follows the refusal of the
+// custom file of a copied checkout. A route to the origin with this file
+// changed the pin file of the origin and the ledger of the copy. The test
+// runs the route that the refusal prints, and then each command. Each one
+// changes the copy and nothing of the origin.
+func TestRootWriteRouteOfACustomFileInACopyWorks(t *testing.T) {
+	origin, copied, custom := rootWriteCustomCopy(t)
+	flags := []string{"-C", copied, "--db", custom}
+	files := rootMoveFiles(t, []string{origin, copied}, custom)
+
+	for _, c := range rootWriteCommands {
+		t.Run("refuses "+c.name, func(t *testing.T) {
+			rootWriteRefused(t, rootWriteMoved(origin, copied, custom), files, append(flags, c.args...)...)
+		})
+	}
+
+	t.Run("a relative --db reads as an absolute route", func(t *testing.T) {
+		t.Chdir(copied)
+
+		rootWriteRefused(t, rootWriteMoved(origin, copied, custom), files, "--db", "custom.db", "lessons", "--apply", "p1")
+	})
+
+	before := rootWriteFiles(t, []string{origin})
+
+	_, err := run(t, "-C", copied, "index", "--move-root", "--db", custom)
+	require.NoError(t, err)
+	assert.Equal(t, copied, rootMoveRecorded(t, custom))
+
+	for _, c := range rootWriteCommands {
+		out, err := run(t, append(flags, c.args...)...)
+		require.NoError(t, err, c.name)
+		assert.Contains(t, out, c.done, c.name)
+	}
+
+	lessons, _ := maintainLessons(t, copied)
+	assert.Contains(t, lessons, "new-rule", "the apply writes the pin file of the copy")
+	assert.Equal(t, model.ProposalApplied, rootWriteStatus(t, custom, 1))
+	assert.Equal(t, before, rootWriteFiles(t, []string{origin}), "the origin stays as it is")
+}
+
+// TestConsoleRouteOfACustomFileInACopyWorks follows the text of the
+// console through the CLI. The command and its directory come from the
+// refusal of the service, so a change of that text fails here.
+func TestConsoleRouteOfACustomFileInACopyWorks(t *testing.T) {
+	origin, copied, custom := rootWriteCustomCopy(t)
+
+	ws, err := workspace.Resolve(copied, custom)
+	require.NoError(t, err)
+
+	refusal := services.New(ws, "test", "/usr/local/bin/seamark").Pins().Database.WriteBlock
+	require.ErrorIs(t, refusal, services.ErrForeignRoot)
+
+	route := regexp.MustCompile("run `seamark ([^`]*)` in (\\S+) first").FindStringSubmatch(refusal.Error())
+	require.Len(t, route, 3, refusal.Error())
+
+	before := rootWriteFiles(t, []string{origin})
+
+	_, err = run(t, append([]string{"-C", route[2]}, strings.Fields(route[1])...)...)
+	require.NoError(t, err)
+	assert.Equal(t, copied, rootMoveRecorded(t, custom))
+
+	again := services.New(ws, "test", "/usr/local/bin/seamark").Pins().Database
+	require.NoError(t, again.WriteBlock, "the route ends the refusal")
+	assert.Empty(t, again.ForeignRoot)
+
+	_, err = run(t, "-C", copied, "--db", custom, "lessons", "--apply", "p1")
+	require.NoError(t, err)
+	assert.Equal(t, before, rootWriteFiles(t, []string{origin}), "the origin stays as it is")
+}
+
+// TestRootWriteNamesNoRouteThatSplitsAFileOfAnotherCheckout covers the
+// custom file of a copy from a third directory. A route to the origin
+// with this file would write two repositories. One without it would
+// resolve the id in the ledger of the origin. So the route records the
+// owner of the file. The test follows it and repeats the command.
+func TestRootWriteNamesNoRouteThatSplitsAFileOfAnotherCheckout(t *testing.T) {
+	origin, copied, custom := rootWriteCustomCopy(t)
+	third := rootWriteDir(t)
+
+	rootWriteRefused(t, rootWriteMoved(origin, copied, custom), rootMoveFiles(t, []string{origin}, custom),
+		"-C", third, "--db", custom, "lessons", "--apply", "p1")
+
+	before := rootWriteFiles(t, []string{origin})
+
+	_, err := run(t, "-C", copied, "index", "--move-root", "--db", custom)
+	require.NoError(t, err)
+
+	_, err = run(t, "-C", third, "--db", custom, "lessons", "--apply", "p1")
+	require.NoError(t, err)
+
+	lessons, _ := maintainLessons(t, copied)
+	assert.Contains(t, lessons, "new-rule", "the pin lands in the owner of the file")
+	assert.Equal(t, model.ProposalApplied, rootWriteStatus(t, custom, 1))
+	assert.Equal(t, before, rootWriteFiles(t, []string{origin}), "the origin stays as it is")
+}
+
+// rootWriteRow stores one pending row in the database at path and
+// returns its id.
+func rootWriteRow(t *testing.T, path, rule string) int64 {
+	t.Helper()
+
+	st, err := store.Open(path)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	row := model.Proposal{Signature: rule, Rule: rule, Region: "api", Note: "A pending pin.",
+		Members: []int64{1}, Agent: "claude/v6", Status: model.ProposalProposed}
+	require.NoError(t, storetest.InsertProposal(st, &row))
+
+	return row.ID
+}
+
+// TestRootWriteRouteNeverNamesAnotherProposal covers one id in two
+// ledgers. Each ledger holds another row under that id, so a route that
+// drops --db applies a proposal that the user did not name. Each case
+// follows the route, repeats the command, and reads the pin that it wrote.
+func TestRootWriteRouteNeverNamesAnotherProposal(t *testing.T) {
+	cases := []struct {
+		name string
+		// setup returns the ledger of the copy and the flags of the command.
+		setup func(t *testing.T, copied string) (ledger string, flags []string)
+		// want is the refusal for the origin, the copy, and the ledger.
+		want func(origin, copied, ledger string) string
+		// follow returns the arguments of the route.
+		follow func(copied, ledger string) []string
+	}{
+		{"a renamed database in a copy", func(t *testing.T, copied string) (string, []string) {
+			renamed := filepath.Join(copied, store.DefaultDir, "renamed.db")
+
+			require.NoError(t, os.Rename(store.DefaultPath(copied), renamed))
+
+			return renamed, []string{"-C", copied, "--db", renamed}
+		}, rootWriteMoved, func(copied, ledger string) []string {
+			return []string{"-C", copied, "index", "--move-root", "--db", ledger}
+		}},
+		{"a renamed database from a third directory", func(t *testing.T, copied string) (string, []string) {
+			renamed := filepath.Join(copied, store.DefaultDir, "renamed.db")
+
+			require.NoError(t, os.Rename(store.DefaultPath(copied), renamed))
+
+			return renamed, []string{"-C", rootWriteDir(t), "--db", renamed}
+		}, rootWriteMoved, func(copied, ledger string) []string {
+			return []string{"-C", copied, "index", "--move-root", "--db", ledger}
+		}},
+		{"the default database of a copy", func(_ *testing.T, copied string) (string, []string) {
+			return store.DefaultPath(copied), []string{"-C", copied}
+		}, func(origin, copied, _ string) string { return rootWriteCopied(origin, copied) },
+			func(copied, _ string) []string { return []string{"-C", copied, "index"} }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			origin := rootWriteRepo(t)
+			copied := rootWriteCopy(t, origin)
+			ledger, flags := tc.setup(t, copied)
+
+			id := rootWriteRow(t, store.DefaultPath(origin), "origin-rule")
+			require.Equal(t, id, rootWriteRow(t, ledger, "copy-rule"), "one id must name two rows")
+
+			command := slices.Concat(flags, []string{"lessons", "--apply", fmt.Sprintf("p%d", id)})
+
+			rootWriteRefused(t, tc.want(origin, copied, ledger),
+				rootMoveFiles(t, []string{origin, copied}, ledger), command...)
+
+			before := rootWriteFiles(t, []string{origin})
+
+			_, err := run(t, tc.follow(copied, ledger)...)
+			require.NoError(t, err)
+
+			_, err = run(t, command...)
+			require.NoError(t, err)
+
+			lessons, _ := maintainLessons(t, copied)
+			assert.Contains(t, lessons, "copy-rule", "the command applies the row that it named")
+			assert.NotContains(t, lessons, "origin-rule")
+			assert.Equal(t, before, rootWriteFiles(t, []string{origin}), "the origin stays as it is")
+		})
+	}
+}
+
+// TestRootWriteRefusesADatabaseOfANestedCopy covers a copy nested in a
+// root outside git. The directory read as the root, but its state
+// directory marks another checkout. A pin went to the root and its ledger
+// to the nested file. The route records the copy in the file.
+func TestRootWriteRefusesADatabaseOfANestedCopy(t *testing.T) {
+	for name, rel := range map[string]string{
+		"a renamed database":               filepath.Join(store.DefaultDir, "renamed.db"),
+		"a custom file":                    "custom.db",
+		"a file below the state directory": filepath.Join(store.DefaultDir, "sub", "x.db"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := rootWritePlainRoot(t)
+			backup := filepath.Join(root, "backup")
+			file := filepath.Join(backup, rel)
+
+			require.NoError(t, os.Rename(rootWriteCopy(t, root), backup))
+			require.NoError(t, os.MkdirAll(filepath.Dir(file), 0o755))
+			require.NoError(t, os.Rename(store.DefaultPath(backup), file))
+
+			before := rootWriteFiles(t, []string{root})
+
+			rootWriteRefused(t, rootWriteMoved(root, backup, file), rootMoveFiles(t, []string{root}, file),
+				"-C", backup, "--db", file, "lessons", "--apply", "p1")
+
+			_, err := run(t, "-C", backup, "index", "--move-root", "--db", file)
+			require.NoError(t, err)
+
+			out, err := run(t, "-C", backup, "--db", file, "lessons", "--apply", "p1")
+			require.NoError(t, err)
+			assert.Contains(t, out, "applied 1 pin(s)")
+
+			assert.Equal(t, model.ProposalApplied, rootWriteStatus(t, file, 1))
+			assert.Equal(t, before, rootWriteFiles(t, []string{root}), "the root stays as it is")
+		})
+	}
+}
+
+// TestRootWriteKeepsTheRouteOfAFileThatNoCheckoutOwns covers a git work
+// tree that is no Seamark checkout, such as a home directory that holds
+// a shared database. A route to --move-root there took the root from the
+// repository. A file in a submodule or a linked worktree of the recorded
+// root has the same answer: the route is the recorded root with this file.
+func TestRootWriteKeepsTheRouteOfAFileThatNoCheckoutOwns(t *testing.T) {
+	cases := map[string]func(t *testing.T, origin string) string{
+		"a home directory that is a git work tree": func(t *testing.T, _ string) string {
+			home := rootWriteDir(t)
+
+			require.NoError(t, os.WriteFile(filepath.Join(home, ".bashrc"), []byte("x\n"), 0o644))
+			gitify(t, home)
+
+			return filepath.Join(home, ".cache", "seamark", "shared.db")
+		},
+		"a submodule of the recorded root": func(t *testing.T, origin string) string {
+			sub := filepath.Join(origin, "sub")
+
+			require.NoError(t, os.MkdirAll(filepath.Join(sub, store.DefaultDir), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(sub, "s.go"), []byte("package sub\n"), 0o644))
+			gitify(t, sub)
+
+			return filepath.Join(sub, "shared.db")
+		},
+		"a linked worktree without a state directory": func(t *testing.T, origin string) string {
+			tree := rootWriteWorktree(t, origin)
+
+			require.NoError(t, os.RemoveAll(filepath.Join(tree, store.DefaultDir)))
+
+			return filepath.Join(tree, "shared.db")
+		},
+	}
+
+	for name, place := range cases {
+		t.Run(name, func(t *testing.T) {
+			origin := rootWriteRepo(t)
+			third := rootWriteDir(t)
+			shared := place(t, origin)
+
+			data, err := os.ReadFile(store.DefaultPath(origin))
+			require.NoError(t, err)
+			require.NoError(t, os.MkdirAll(filepath.Dir(shared), 0o755))
+			require.NoError(t, os.WriteFile(shared, data, 0o644))
+
+			rootWriteRefused(t, rootWriteUnowned(origin, " with --db "+shared), rootMoveFiles(t, []string{origin}, shared),
+				"-C", third, "--db", shared, "lessons", "--apply", "p1")
+
+			out, err := run(t, "-C", origin, "--db", shared, "lessons", "--apply", "p1")
+			require.NoError(t, err, "the route of the refusal works")
+			assert.Contains(t, out, "applied 1 pin(s)")
+			assert.Equal(t, origin, rootMoveRecorded(t, shared), "the root stays with its repository")
+		})
+	}
+}
+
+// TestRootWriteRouteOfACustomFileInACopyWorksOutsideGit follows the
+// refusal for a copy without git. The state directory names the checkout,
+// so no route takes this file to the origin.
+func TestRootWriteRouteOfACustomFileInACopyWorksOutsideGit(t *testing.T) {
+	origin := rootWritePlainRoot(t)
+	copied := rootWriteCopy(t, origin)
+	custom := filepath.Join(copied, "custom.db")
+	third := rootWriteDir(t)
+
+	require.NoError(t, os.Rename(store.DefaultPath(copied), custom))
+
+	files := rootMoveFiles(t, []string{origin, copied}, custom)
+
+	rootWriteRefused(t, rootWriteMoved(origin, copied, custom), files, "-C", third, "--db", custom, "lessons", "--apply", "p1")
+	rootWriteRefused(t, rootWriteMoved(origin, copied, custom), files, "-C", copied, "--db", custom, "lessons", "--apply", "p1")
+
+	before := rootWriteFiles(t, []string{origin})
+
+	_, err := run(t, "-C", copied, "index", "--move-root", "--db", custom)
+	require.NoError(t, err)
+
+	_, err = run(t, "-C", copied, "--db", custom, "lessons", "--apply", "p1")
+	require.NoError(t, err)
+
+	lessons, _ := maintainLessons(t, copied)
+	assert.Contains(t, lessons, "new-rule")
+	assert.Equal(t, before, rootWriteFiles(t, []string{origin}), "the origin stays as it is")
+}
+
+// TestRootWriteKeepsTheRouteOfACustomFileInTheRecordedRoot bounds the rule
+// above. A custom file that lies in the recorded root belongs to that
+// root, so the route keeps --db, also from a workspace around that root.
+func TestRootWriteKeepsTheRouteOfACustomFileInTheRecordedRoot(t *testing.T) {
+	origin := rootWriteRepo(t)
+	custom := filepath.Join(origin, "custom.db")
+
+	data, err := os.ReadFile(store.DefaultPath(origin))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(custom, data, 0o644))
+
+	files := rootMoveFiles(t, []string{origin}, custom)
+
+	for name, dir := range map[string]string{"a third directory": rootWriteDir(t), "the parent": filepath.Dir(origin)} {
+		t.Run(name, func(t *testing.T) {
+			rootWriteRefused(t, rootWriteUnowned(origin, " with --db "+custom), files,
+				"-C", dir, "--db", custom, "lessons", "--apply", "p1")
+		})
+	}
+
+	out, err := run(t, "-C", origin, "--db", custom, "lessons", "--apply", "p1")
+	require.NoError(t, err, "the route of the refusal works")
+	assert.Contains(t, out, "applied 1 pin(s)")
 }
 
 // TestRootWriteRefusesARootThatNoLongerExists covers a recorded root

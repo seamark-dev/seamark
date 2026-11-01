@@ -747,12 +747,6 @@ func TestDatabaseThatTheRootDoesNotOwnRoutesToTheRoot(t *testing.T) {
 		"a third directory": func(t *testing.T, copied string) (string, string) {
 			return dbRootDir(t), store.DefaultPath(copied)
 		},
-		"a renamed database": func(t *testing.T, copied string) (string, string) {
-			db := filepath.Join(copied, store.DefaultDir, "keep.db")
-			require.NoError(t, os.Rename(store.DefaultPath(copied), db))
-
-			return copied, db
-		},
 	}
 
 	for name, setup := range cases {
@@ -1262,4 +1256,107 @@ func TestRouteReplacesTheConsoleOfARoot(t *testing.T) {
 			assert.NotContains(t, text, "a save works there", "the step does not lead to a save there")
 		})
 	}
+}
+
+// TestScreensNameTheMoveOfACustomFileInACopy covers every text of the
+// route of a custom file that belongs to a copied checkout. A console of
+// the origin with this file would write two repositories, so no text may
+// name it.
+func TestScreensNameTheMoveOfACustomFileInACopy(t *testing.T) {
+	origin := dbRootRepo(t, "origin")
+	copied := dbRootCopy(t, origin)
+	db := filepath.Join(copied, "custom.db")
+
+	require.NoError(t, os.Rename(store.DefaultPath(copied), db))
+
+	id := dbRootNewRow(t, db)
+	want := "un `seamark index --move-root --db " + db + "` in " + copied + " first"
+
+	assertRoute := func(t *testing.T, text string) {
+		t.Helper()
+
+		assert.Contains(t, text, want)
+		assert.NotContains(t, text, "with this --db")
+		assert.NotContains(t, text, "a save works there", "a save works here after the run")
+	}
+
+	h, svc := dbRootConsole(t, copied, db)
+	pinsCursorTo(h, 1)
+
+	assertRoute(t, pinsDetail(t, h))
+
+	_, err := svc.CommitMaintenance(dbRootPrune(t, svc))
+	require.ErrorIs(t, err, services.ErrForeignRoot)
+	assertRoute(t, foreignRefusal(err, "preview"))
+
+	pv, err := svc.PreviewDecision(proposals.ActionApply, []int64{id})
+	require.NoError(t, err)
+	assertRoute(t, propRootText(pv.RootBlock, pinfile.File))
+
+	snap, err := svc.Settings()
+	require.NoError(t, err)
+	assertRoute(t, settingsBlock(snap.Editable(settings.GroupPinWrite), settingsFile).route)
+
+	review := dbRootReview(t, h)
+	assertRoute(t, pinCommitRefusal(review.st, services.ErrForeignRoot))
+
+	for _, b := range review.preview.Blockers {
+		if b.Kind == maintain.BlockForeignRoot {
+			assertRoute(t, pinBlockerLine(review.st, b))
+		}
+	}
+
+	h.press("esc", "esc", "1", "b")
+	assertRoute(t, h.m.toast.text)
+}
+
+// TestRenamedDatabaseInACopyNamesTheMove covers a renamed database in the
+// state directory of a copy. A console of the origin opens another
+// ledger, so an id there names another row. The file belongs to the copy,
+// so every route records the copy in it, and the console of the copy then
+// writes only the copy.
+func TestRenamedDatabaseInACopyNamesTheMove(t *testing.T) {
+	origin := dbRootRepo(t, "origin")
+	copied := dbRootCopy(t, origin)
+	db := filepath.Join(copied, store.DefaultDir, "keep.db")
+
+	require.NoError(t, os.Rename(store.DefaultPath(copied), db))
+
+	want := "un `seamark index --move-root --db " + db + "` in " + copied + " first"
+
+	h, svc := dbRootConsole(t, copied, db)
+	pinsCursorTo(h, 1)
+
+	p := pinsOf(h)
+	assert.Equal(t, origin, pinsForeignRoot(p.st), "the keys stay off")
+	assert.NotContains(t, pinsKeys(h), "-")
+
+	detail := pinsDetail(t, h)
+	assert.Contains(t, detail, want)
+	assert.NotContains(t, detail, "pen the console")
+	assert.NotContains(t, detail, "Build the index")
+
+	_, err := svc.CommitMaintenance(dbRootPrune(t, svc))
+	require.ErrorIs(t, err, services.ErrForeignRoot)
+
+	h.press("1")
+	h.press("b")
+	assert.Contains(t, h.m.toast.text, want)
+
+	before, err := os.ReadFile(filepath.Join(origin, pinfile.File))
+	require.NoError(t, err)
+
+	_, err = index.Run(index.Options{Root: copied, DBPath: db, MoveRoot: true})
+	require.NoError(t, err)
+
+	own, ownSvc := dbRootConsole(t, copied, db)
+	pinsCursorTo(own, 1)
+	assert.Contains(t, pinsKeys(own), "-")
+
+	_, err = ownSvc.CommitMaintenance(dbRootPrune(t, ownSvc))
+	require.NoError(t, err)
+
+	after, err := os.ReadFile(filepath.Join(origin, pinfile.File))
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "the pin file of the origin stays")
 }

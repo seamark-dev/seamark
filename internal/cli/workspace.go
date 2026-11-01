@@ -219,46 +219,32 @@ func pinWriteRefusalText(ws workspace.Workspace, decision workspace.RootWrite, r
 		"change the pin file there and the ledger in this database; nothing changed; %s", subject, root, route)
 }
 
-// pinWriteRoute names a next step that can run in this state. The route
-// names an absolute --db, because a relative one means another file in
-// the recorded root.
+// pinWriteRoute names a next step that can run in this state. A route
+// to the recorded root always names --db. Without it, an id of this
+// command names a row of another ledger. The command would then apply a
+// proposal that the user did not name. The path is absolute, because a
+// relative one means another file in the recorded root.
 //
-// The recorded root is a route only with a ledger there. Without a
-// default database it answers that it has no index. After a move, a file
-// inside this workspace leaves with the restore, so its --db path stops
-// being valid. So a recorded root that a stat cannot find has no route
-// into it. The user can tell a moved repository from a detached disk, so
-// the route is the move. When that move is no route either, only another
-// file remains.
+// The default database of a copy has no route to the recorded root, for
+// that reason. MoveRootRoute and OwnerRoute name the step of a file that
+// a command in the recorded root cannot take. A root that a stat cannot
+// reach is no route either, and only another file remains.
 func pinWriteRoute(ws workspace.Workspace, decision workspace.RootWrite, recorded string) string {
-	root := render.Sanitize(recorded)
-	here := render.Sanitize(ws.Root)
-	db := render.Sanitize(ws.AbsoluteDB())
-
-	there := "run this command in " + root
-
-	if ws.CustomDatabase(recorded) {
-		there += " with --db " + db
+	if decision == workspace.RootWriteCopied {
+		return "run `seamark index` in " + render.Sanitize(ws.Root) + " first"
 	}
 
-	switch {
-	case decision == workspace.RootWriteCopied:
-		indexRun := "run `seamark index` in " + here + " first"
-
-		if _, err := os.Stat(store.DefaultPath(recorded)); err != nil {
-			return indexRun
-		}
-
-		return indexRun + ", or " + there
-	case store.StatRoot(recorded) == store.RootFound:
-		return there
-	default:
-		if route := ws.MoveRootRoute(recorded); route != "" {
+	for _, route := range []string{ws.MoveRootRoute(recorded), ws.OwnerRoute(recorded)} {
+		if route != "" {
 			return route
 		}
+	}
 
+	if store.StatRoot(recorded) != store.RootFound {
 		return "use another --db"
 	}
+
+	return "run this command in " + render.Sanitize(recorded) + " with --db " + render.Sanitize(ws.AbsoluteDB())
 }
 
 // rootIsGone reports a recorded root that no longer exists.

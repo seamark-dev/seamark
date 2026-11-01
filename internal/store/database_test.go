@@ -240,23 +240,32 @@ func TestLiesInsideComparesIdentity(t *testing.T) {
 }
 
 func TestLiesInOtherCheckoutReadsTheStateDirectory(t *testing.T) {
-	root, other := databaseRoot(t), databaseRoot(t)
+	root, other, recorded := databaseRoot(t), databaseRoot(t), databaseRoot(t)
 
-	assert.True(t, LiesInOtherCheckout(root, DefaultPath(other)), "the default database of a copy")
+	got, ok := OtherOwner(root, recorded, DefaultPath(other))
+	assert.True(t, ok, "the default database of a copy")
+	assert.Equal(t, other, got)
 
 	renamed := filepath.Join(other, DefaultDir, "keep.db")
 	require.NoError(t, os.WriteFile(renamed, []byte("x"), 0o644))
-	assert.True(t, LiesInOtherCheckout(root, renamed), "a renamed database of a copy")
+
+	_, ok = OtherOwner(root, recorded, renamed)
+	assert.True(t, ok, "a renamed database of a copy")
 
 	own := filepath.Join(root, DefaultDir, "custom.db")
 	require.NoError(t, os.WriteFile(own, []byte("x"), 0o644))
-	assert.False(t, LiesInOtherCheckout(root, own), "a file of this root")
+
+	_, ok = OtherOwner(root, recorded, own)
+	assert.False(t, ok, "a file of this root")
 
 	plain := filepath.Join(t.TempDir(), "custom.db")
 	require.NoError(t, os.WriteFile(plain, []byte("x"), 0o644))
-	assert.False(t, LiesInOtherCheckout(root, plain), "a file outside any checkout")
 
-	assert.False(t, LiesInOtherCheckout(root, filepath.Join(t.TempDir(), "missing.db")))
+	_, ok = OtherOwner(root, recorded, plain)
+	assert.False(t, ok, "a file outside any checkout")
+
+	_, ok = OtherOwner(root, recorded, filepath.Join(t.TempDir(), "missing.db"))
+	assert.False(t, ok)
 }
 
 // statRootHidden returns a path that a stat cannot reach, because its
@@ -501,4 +510,136 @@ func TestFileFitsRootReadsTheNearestMark(t *testing.T) {
 	assert.False(t, FileFitsRoot(root, file(nested)), "a repository nested in root")
 	assert.False(t, FileFitsRoot(root, file(checkoutDir(t, DefaultDir))), "a third checkout")
 	assert.False(t, FileFitsRoot(root, file(checkoutDir(t, ".git"))), "a git work tree without a state directory")
+}
+
+// TestOtherOwnerNeedsAStateDirectory covers the third checkout. A git work
+// tree without a state directory, such as a home directory, owns no
+// database. A file in the recorded root stays with that root.
+func TestOtherOwnerNeedsAStateDirectory(t *testing.T) {
+	root, recorded := checkoutDir(t, DefaultDir), checkoutDir(t, DefaultDir)
+	copied := checkoutDir(t, DefaultDir)
+	home := checkoutDir(t, ".git")
+	submodule := filepath.Join(recorded, "sub")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(submodule, DefaultDir), 0o755))
+
+	file := func(dir string) string {
+		path := filepath.Join(dir, "custom.db")
+		require.NoError(t, os.WriteFile(path, nil, 0o644))
+
+		return path
+	}
+
+	got, ok := OtherOwner(root, recorded, file(copied))
+	assert.True(t, ok)
+	assert.Equal(t, copied, got)
+
+	_, ok = OtherOwner(root, recorded, file(home))
+	assert.False(t, ok, "a git work tree without a state directory")
+
+	_, ok = OtherOwner(root, recorded, file(submodule))
+	assert.False(t, ok, "a submodule of the recorded root")
+
+	_, ok = OtherOwner(root, recorded, file(root))
+	assert.False(t, ok, "a file of this workspace")
+
+	_, ok = OtherOwner(root, recorded, file(recorded))
+	assert.False(t, ok, "a file of the recorded root")
+
+	_, ok = OtherOwner(root, recorded, file(checkoutDir(t, "")))
+	assert.False(t, ok, "a file that shows no owner")
+}
+
+// TestBelongsToCheckoutReadsTheInnerDirectory covers each place of a file
+// relative to the workspace and the recorded root.
+func TestBelongsToCheckoutReadsTheInnerDirectory(t *testing.T) {
+	// inner returns a new directory below dir with the mark, if any.
+	inner := func(t *testing.T, dir, mark string) string {
+		t.Helper()
+
+		path := filepath.Join(dir, "inner")
+		require.NoError(t, os.MkdirAll(filepath.Join(path, mark), 0o755))
+
+		return path
+	}
+
+	// file creates a file in dir and returns its path.
+	file := func(t *testing.T, dir string) string {
+		t.Helper()
+
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+
+		path := filepath.Join(dir, "custom.db")
+		require.NoError(t, os.WriteFile(path, nil, 0o644))
+
+		return path
+	}
+
+	cases := []struct {
+		name  string
+		setup func(t *testing.T) (root, recorded, db string)
+		want  bool
+	}{
+		{"a file in a checkout with git", func(t *testing.T) (string, string, string) {
+			root := checkoutDir(t, ".git")
+
+			return root, checkoutDir(t, ""), file(t, root)
+		}, true},
+		{"a file in a checkout outside git", func(t *testing.T) (string, string, string) {
+			root := checkoutDir(t, DefaultDir)
+
+			return root, checkoutDir(t, ""), file(t, root)
+		}, true},
+		{"a file in a plain directory", func(t *testing.T) (string, string, string) {
+			root := checkoutDir(t, "")
+
+			return root, checkoutDir(t, ""), file(t, root)
+		}, false},
+		{"a file outside the workspace", func(t *testing.T) (string, string, string) {
+			return checkoutDir(t, ".git"), checkoutDir(t, ""), file(t, checkoutDir(t, ""))
+		}, false},
+		{"a file of a recorded root inside the workspace", func(t *testing.T) (string, string, string) {
+			root := checkoutDir(t, ".git")
+			recorded := inner(t, root, "")
+
+			return root, recorded, file(t, recorded)
+		}, false},
+		{"a file of a repository inside the recorded root", func(t *testing.T) (string, string, string) {
+			recorded := checkoutDir(t, ".git")
+			root := inner(t, recorded, ".git")
+
+			return root, recorded, file(t, root)
+		}, true},
+		{"a file beside the state directory of a copy in the recorded root", func(t *testing.T) (string, string, string) {
+			recorded := checkoutDir(t, DefaultDir)
+			root := inner(t, recorded, DefaultDir)
+
+			return root, recorded, file(t, root)
+		}, true},
+		{"a file below the state directory of a copy in the recorded root", func(t *testing.T) (string, string, string) {
+			recorded := checkoutDir(t, DefaultDir)
+			root := inner(t, recorded, DefaultDir)
+
+			return root, recorded, file(t, filepath.Join(root, DefaultDir, "sub"))
+		}, true},
+		{"a file of a plain directory inside the recorded root", func(t *testing.T) (string, string, string) {
+			recorded := checkoutDir(t, DefaultDir)
+			root := inner(t, recorded, "")
+
+			return root, recorded, file(t, root)
+		}, false},
+		{"a file of a repository nested in the workspace", func(t *testing.T) (string, string, string) {
+			root := checkoutDir(t, ".git")
+
+			return root, checkoutDir(t, ".git"), file(t, inner(t, root, ".git"))
+		}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, recorded, db := tc.setup(t)
+
+			assert.Equal(t, tc.want, BelongsToCheckout(root, recorded, db))
+		})
+	}
 }
