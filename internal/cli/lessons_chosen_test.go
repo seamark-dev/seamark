@@ -149,3 +149,16 @@ func TestExtractSummaryNamesTheConsoleForAChosenRow(t *testing.T) {
 	assert.Equal(t, plain, appliedTriggersHint(0), "a run with no chosen row keeps its bytes")
 	assert.Contains(t, appliedTriggersHint(1), "`seamark tui`, Lessons › Pins")
 }
+
+// The run prints the hint with the count of the extraction, so a stored
+// trigger of a chosen row reaches the text that names the console.
+func TestLessonsExtractTriggersPrintsTheConsoleRouteOfAChosenRow(t *testing.T) {
+	root := extractGoldenWorkspace(t)
+	capture := maintainAgent(t, root, maintainReplyStep)
+
+	maintainReply(t, capture, `{"triggers":[{"id":6,"trigger_paths":["api/k.go"]}]}`)
+	maintainChoose(t, root, 6)
+
+	stdout, _ := goldenRun(t, root, "lessons", "--extract-triggers")
+	assert.Contains(t, stdout, "except a pin whose regions a person chose: review that pin in `seamark tui`, Lessons › Pins\n")
+}

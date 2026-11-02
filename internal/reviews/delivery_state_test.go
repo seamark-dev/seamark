@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -616,6 +617,219 @@ func TestContextDeliveryResetFailsAfterTheWait(t *testing.T) {
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
+}
+
+// TestResetWaitsMatchInBothStates holds the wait of each real reset, not
+// only the two constants. Both resets of one compaction follow one rule, so
+// each state runs one case. The bound is a literal, because a bound that a
+// test reads from the constant cannot show the value of the constant.
+func TestResetWaitsMatchInBothStates(t *testing.T) {
+	const wait = 200 * time.Millisecond
+
+	assert.Equal(t, wait, deliveryResetLockWait)
+	assert.Equal(t, exploreResetLockWait, deliveryResetLockWait)
+
+	t.Run("the edit reset", func(t *testing.T) {
+		root := t.TempDir()
+		dc := DeliveryContext{ClientID: "claude", ReceiverID: "session-one"}
+		pin := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "pin text"}, PinVersion: strings.Repeat("a", 64)}
+
+		deliverItems(t, root, dc, []DeliveryItem{pin})
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+
+		defer func() { require.NoError(t, lease.Close()) }()
+
+		requireResetTakes(t, wait, func() error {
+			_, err := ResetContextGeneration(root, dc)
+
+			return err
+		})
+	})
+
+	t.Run("the exploration reset", func(t *testing.T) {
+		root := t.TempDir()
+		items := exploreTestItems()
+
+		commitExplore(t, root, exploreTestContext, items)
+
+		lease, err := BeginExploreDelivery(root, exploreTestContext, items)
+		require.NoError(t, err)
+
+		defer func() { require.NoError(t, lease.Close()) }()
+
+		requireResetTakes(t, wait, func() error {
+			_, err := ResetExploreDelivery(root, exploreTestContext)
+
+			return err
+		})
+	})
+}
+
+// requireResetTakes runs a reset against a lock that stays held, and holds
+// the time of its failure between wait and one and a half times wait. A reset
+// returns only after its wait, so a longer wait fails every attempt. A slow
+// run only adds time, so one attempt under the limit is enough proof.
+func requireResetTakes(t *testing.T, wait time.Duration, reset func() error) {
+	t.Helper()
+
+	const attempts = 10
+
+	limit := wait + wait/2
+	fastest := time.Hour
+
+	for attempt := 0; attempt < attempts && fastest >= limit; attempt++ {
+		start := time.Now()
+		err := reset()
+		elapsed := time.Since(start)
+
+		require.ErrorIs(t, err, syscall.EWOULDBLOCK, "only a held lock measures the wait")
+		require.GreaterOrEqual(t, elapsed, wait, "the reset waits before it fails")
+
+		fastest = min(fastest, elapsed)
+	}
+
+	assert.Less(t, fastest, limit, "the reset takes no more than its own wait")
+}
+
+// ageDeliveryEntries moves every entry of the state file back by age. A
+// lease reads the wall clock, so the test moves the stored time. The
+// commit that wrote that time stays real.
+func ageDeliveryEntries(t *testing.T, root string, age time.Duration) {
+	t.Helper()
+
+	path := filepath.Join(root, ".seamark", deliveryStateFile)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var state deliveryState
+	require.NoError(t, json.Unmarshal(raw, &state))
+	require.NotEmpty(t, state.Contexts, "the state holds no entry to age")
+
+	for key, entry := range state.Contexts {
+		entry.UpdatedAt = entry.UpdatedAt.Add(-age)
+		state.Contexts[key] = entry
+	}
+
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+}
+
+// TestContextDeliveryLeaseAppliesTheTTL holds what restores eligibility one
+// day after the last commit. Compaction can happen with no reset hook, so the
+// age of an entry is the last way for a pin to reach the context again. Every
+// age here is a literal, because an age that a test computes from the constant
+// cannot show the value of the constant. Each entry comes from a real commit,
+// so the age of an entry is also the time since that commit.
+func TestContextDeliveryLeaseAppliesTheTTL(t *testing.T) {
+	const (
+		oneDay = 24 * time.Hour
+		// margin keeps the wall clock of a slow run away from the limit.
+		margin = time.Minute
+	)
+
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session"}
+	pin := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "pin text"}, PinVersion: strings.Repeat("a", 64)}
+	later := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "later text"}, PinVersion: strings.Repeat("b", 64)}
+
+	// commitInGenerationTwo delivers pin after one reset. The generation
+	// then tells a kept entry from a new context, which starts at 1.
+	commitInGenerationTwo := func(t *testing.T, root string) {
+		t.Helper()
+
+		deliverItems(t, root, dc, []DeliveryItem{pin})
+
+		generation, err := ResetContextGeneration(root, dc)
+		require.NoError(t, err)
+		require.Equal(t, uint64(2), generation)
+
+		deliverItems(t, root, dc, []DeliveryItem{pin})
+	}
+
+	// delivered reports whether the next lease of dc reads the version.
+	delivered := func(t *testing.T, root string, item DeliveryItem) bool {
+		t.Helper()
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+
+		defer func() { require.NoError(t, lease.Close()) }()
+
+		return lease.PinDelivered(item.PinVersion)
+	}
+
+	t.Run("an entry just older than one day goes", func(t *testing.T) {
+		root := t.TempDir()
+		commitInGenerationTwo(t, root)
+		ageDeliveryEntries(t, root, oneDay+margin)
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+
+		defer func() { require.NoError(t, lease.Close()) }()
+
+		assert.False(t, lease.PinDelivered(pin.PinVersion))
+		assert.Equal(t, uint64(1), lease.Generation(), "the context starts again, as a new context does")
+
+		lease.Select([]DeliveryItem{pin})
+		assert.Equal(t, []model.Lesson{pin.Lesson}, lease.Inject())
+	})
+
+	t.Run("an entry just younger than one day stays", func(t *testing.T) {
+		root := t.TempDir()
+		commitInGenerationTwo(t, root)
+		ageDeliveryEntries(t, root, oneDay-margin)
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+
+		defer func() { require.NoError(t, lease.Close()) }()
+
+		assert.True(t, lease.PinDelivered(pin.PinVersion))
+		assert.Equal(t, uint64(2), lease.Generation())
+	})
+
+	t.Run("a later commit restarts the age", func(t *testing.T) {
+		root := t.TempDir()
+		deliverItems(t, root, dc, []DeliveryItem{pin})
+		ageDeliveryEntries(t, root, 23*time.Hour)
+
+		require.Len(t, deliverItems(t, root, dc, []DeliveryItem{later}), 1)
+		ageDeliveryEntries(t, root, 2*time.Hour)
+
+		// One entry holds both versions, so the second commit keeps the
+		// first version 25 hours after its own commit.
+		assert.True(t, delivered(t, root, pin), "the age runs from the last commit, not the first")
+		assert.True(t, delivered(t, root, later))
+
+		ageDeliveryEntries(t, root, 22*time.Hour+margin)
+
+		assert.False(t, delivered(t, root, pin), "one day after the last commit the entry goes")
+		assert.False(t, delivered(t, root, later))
+	})
+
+	t.Run("a lease that marks nothing keeps the age", func(t *testing.T) {
+		root := t.TempDir()
+		deliverItems(t, root, dc, []DeliveryItem{pin})
+		ageDeliveryEntries(t, root, 23*time.Hour)
+
+		// The commit of a suppressed pin marks nothing. If it restarted the
+		// age, a busy context would never receive the pin again.
+		require.Empty(t, deliverItems(t, root, dc, []DeliveryItem{pin}))
+
+		// A failed reply closes the lease with no commit.
+		lease, err := BeginContextDelivery(root, dc, []DeliveryItem{later})
+		require.NoError(t, err)
+		require.Len(t, lease.Inject(), 1)
+		require.NoError(t, lease.Close())
+
+		ageDeliveryEntries(t, root, 2*time.Hour)
+
+		assert.False(t, delivered(t, root, pin), "25 hours after the last commit the entry goes")
+	})
 }
 
 func TestContextDeliverySeparatesClientsAndReceivers(t *testing.T) {

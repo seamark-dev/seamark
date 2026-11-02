@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -275,4 +276,64 @@ func mapKeys(m map[string]any) []string {
 	}
 
 	return keys
+}
+
+// oldRelease is a release below lessoncheck.MinHandlerRelease.
+const oldRelease = "v0.8.0"
+
+// oldSeamark builds a small program that names oldRelease the way the
+// Makefile names a release, and returns its path. The version of a hook
+// binary comes from its Go build information, and the reader of that
+// information is private to package integration. So a real binary is the
+// only way to reach this state from here. The build needs no module and
+// no network.
+func oldSeamark(t *testing.T) string {
+	t.Helper()
+
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "go.mod"), []byte("module example.com/oldseamark\n\ngo 1.21\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o600))
+
+	binary := filepath.Join(t.TempDir(), "seamark")
+
+	cmd := exec.Command("go", "build", "-o", binary,
+		"-ldflags=-X github.com/seamark-dev/seamark/internal/cli.version="+oldRelease, ".")
+	cmd.Dir = src
+	cmd.Env = append(os.Environ(), "GOFLAGS=", "GOWORK=off")
+
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	return binary
+}
+
+// TestStatusLessonChecksOlderBinary proves that the block reports a hook
+// binary below the first release with a handler. Such a binary has no
+// lesson-check command, so the installed hooks do nothing. The mode alone
+// reads enforce, so only the path states tell the reader.
+func TestStatusLessonChecksOlderBinary(t *testing.T) {
+	binary := oldSeamark(t)
+
+	st, root := seededStore(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(statusLessonsYAML), 0o600))
+	statusInstall(t, root, binary, integration.ClientSetup{ClientID: integration.ClaudeID, LessonChecks: hooks.LessonChecksEnforce})
+
+	s, text, _ := statusText(t, st, root)
+
+	assert.Contains(t, text, "lesson checks  claude  enforce · pre-write Edit, Write, MultiEdit inactive "+
+		"(capability-version-old, native-deny-unverified, native-timeout-unverified, other-binary) · "+
+		"post-edit inactive (capability-version-old, other-binary) · ")
+	assert.Contains(t, text, "1 enforce (requested-inactive on claude, codex)", "an inactive path serves no enforce pin")
+
+	require.NotNil(t, s.LessonChecks)
+
+	claude, ok := s.LessonChecks.Client(integration.ClaudeID)
+	require.True(t, ok)
+	require.NotEmpty(t, claude.Paths)
+
+	for _, p := range claude.Paths {
+		if p.HookStage == lessoncheck.StagePreWrite {
+			assert.Equal(t, oldRelease, p.BinaryVersion, "the report names the version that it read")
+		}
+	}
 }

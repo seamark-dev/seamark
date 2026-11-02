@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/store"
 )
 
 // Tests of the rule that an inferred scope replaces a chosen scope only
@@ -122,10 +123,11 @@ func TestChosenRowKeepsTheReasonThatStopsTheRetargetKey(t *testing.T) {
 	}
 }
 
-// A chosen row writes nothing, so another selected entry with the same
-// computed key is no collision. The console reads w per row and gives the
-// same answer, so reasonChosen stays true for the chosen row.
-func TestChosenRowIsPlannedAloneAgainstTheSelection(t *testing.T) {
+// twinFixture holds two pins of one rule that compute one key. Row 1 is
+// chosen, and it is the entry in region web.
+func twinFixture(t *testing.T) *fixture {
+	t.Helper()
+
 	f := newFixture(t, retargetFindings)
 	f.write(`pin:
   - rule: twin-rule
@@ -143,11 +145,36 @@ func TestChosenRowIsPlannedAloneAgainstTheSelection(t *testing.T) {
 	)
 	f.choose(1)
 
+	return f
+}
+
+// A chosen row writes nothing, so another selected entry with the same
+// computed key is no collision. The console reads w per row and gives the
+// same answer, so reasonChosen stays true for the chosen row.
+func TestChosenRowIsPlannedAloneAgainstTheSelection(t *testing.T) {
+	f := twinFixture(t)
+
 	p := f.plan(f.deps(), f.request(ActionRetarget, "twin-rule@web", "twin-rule@lib"))
 	require.Len(t, p.Items, 2)
 	assert.Equal(t, ItemBlocked, p.Items[0].Status)
 	assert.Equal(t, reasonChosen, p.Items[0].Reason)
 	assert.Equal(t, ItemReady, p.Items[1].Status)
+
+	require.NotNil(t, p.Change)
+	assert.Len(t, p.Change.Edits, 1)
+	assert.False(t, p.Confirmable, "a mixed selection never acts on a subset")
+}
+
+// The same selection with the chosen row second. The other entry now plans
+// first, so a plan that read its edit would report a collision here.
+func TestChosenRowIsPlannedAloneAfterAnEarlierEntry(t *testing.T) {
+	f := twinFixture(t)
+
+	p := f.plan(f.deps(), f.request(ActionRetarget, "twin-rule@lib", "twin-rule@web"))
+	require.Len(t, p.Items, 2)
+	assert.Equal(t, ItemReady, p.Items[0].Status)
+	assert.Equal(t, ItemBlocked, p.Items[1].Status)
+	assert.Equal(t, reasonChosen, p.Items[1].Reason)
 
 	require.NotNil(t, p.Change)
 	assert.Len(t, p.Change.Edits, 1)
@@ -186,4 +213,39 @@ func TestRetargetPlanOfBeforeAChoiceGoesStale(t *testing.T) {
 
 	_, err := Commit(f.deps(), p)
 	require.ErrorIs(t, err, ErrStale, "a plan that predates a choice writes nothing")
+}
+
+// Only a scope edit accepts another stamp, because only a person at another
+// console writes the same regions with another time. Any other stamp on the
+// row of a retarget means that another change ran.
+func TestRowsHoldPlannedAcceptsAnotherStampOnlyForAScopeEdit(t *testing.T) {
+	const other = scopeAt + 60
+
+	t.Run("a retarget", func(t *testing.T) {
+		f := retargetFixture(t)
+
+		p := f.plan(f.deps(), f.request(ActionRetarget, "Guard-Empty-Datasets"))
+		require.True(t, p.Confirmable, "blocked: %v", p.Blocked)
+
+		change := p.Retarget[0]
+		change.Chosen = other
+		require.NoError(t, f.st.RetargetApplied([]store.RegionChange{change}))
+
+		_, target := RowsHoldPlanned(p, f.rows())
+		assert.False(t, target)
+	})
+
+	t.Run("a scope edit", func(t *testing.T) {
+		f := authorFixture(t)
+
+		p := f.scopePlan(f.deps(), f.linkedDraft("web"))
+		require.True(t, p.Confirmable, "blocked: %v", p.Blocked)
+
+		change := p.Retarget[0]
+		change.Chosen = other
+		require.NoError(t, f.st.RetargetApplied([]store.RegionChange{change}))
+
+		_, target := RowsHoldPlanned(p, f.rows())
+		assert.True(t, target)
+	})
 }

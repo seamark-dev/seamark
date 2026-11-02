@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/tui/services"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // The manual scope edit of a linked pin in the console. The tests with a
@@ -701,4 +703,259 @@ func TestPinChosenRowOfferingNoRetargetRoutesToTheForm(t *testing.T) {
 	assert.Contains(t, detail, "A person chose these regions on "+scopeChosenDate+".")
 	assert.Contains(t, detail, pinsFormSentence)
 	assert.NotContains(t, detail, "suggests a change", "a current scope has no suggestion")
+}
+
+// A scope edit of a chosen row replaces a choice with a new choice, so the
+// line of a computed retarget has no place in its preview.
+func TestPinScopeSecondEditOfAChosenRowKeepsItsWords(t *testing.T) {
+	h, svc, _ := scopeRepo(t, nil)
+
+	h.press("i", "a")
+	h.typeText("web")
+	h.press("enter", "s", "y", "enter")
+	require.Positive(t, scopeLedgerRow(t, svc).ScopeChosen)
+
+	authorDraftRegions(h, "api")
+	h.press("s")
+
+	text := maintContent(t, h)
+	assert.Contains(t, text, "Edit regions")
+	assert.NotContains(t, text, "This retarget replaces")
+	scopeNoRetarget(t, text)
+}
+
+// A row without a stamp has no choice to replace, so its retarget preview
+// names no person and no date.
+func TestPinRetargetOfARowWithoutAChoiceNamesNoChoice(t *testing.T) {
+	fx := maintFixture(t)
+
+	p := fx.maintNarrow(t, maintPlanOpts{write: true, cursor: true})
+	p.Items[0].Rows = []domain.Proposal{maintRows()[maintWrap]}
+
+	h := pinsOpen(t, maintFakeOf(fx, p, nil), 120, 60)
+	h.press("w")
+
+	text := maintContent(t, h)
+	assert.Contains(t, text, "y retarget")
+	assert.NotContains(t, text, "a person chose")
+}
+
+// A blocked draft has no candidate file, so the DIFF section keeps its place
+// and says why, in the words of this route.
+func TestPinScopePreviewWithoutACandidateSaysWhy(t *testing.T) {
+	h, _, _ := scopeRepo(t, nil)
+
+	authorDraftRegions(h, "../outside")
+	h.press("s")
+
+	text := maintContent(t, h)
+	assert.Contains(t, text, "No file change: the draft has items to fix, or a blocker stops the plan.")
+	scopeNoRetarget(t, text)
+}
+
+// The pin of a scope edit can carry a note that a person edited after
+// distillation. The comparison must say what this route does to that note.
+func TestPinScopePreviewOfAnEditedNoteKeepsTheRouteWords(t *testing.T) {
+	h, _, _ := scopeRepo(t, func(root string) {
+		path := filepath.Join(root, pinfile.File)
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+
+		edited := strings.Replace(string(data), "Linked note here.", "A note that a person edited.", 1)
+		require.NoError(t, os.WriteFile(path, []byte(edited), 0o644))
+	})
+
+	authorDraftRegions(h, "api", "web")
+	h.press("s")
+
+	text := maintContent(t, h)
+	assert.Contains(t, text, "LIVE NOTE")
+	assert.Contains(t, text, "The note was edited after distillation. The recorded note of p1 stays as history, "+
+		"and the live note changes only when the draft changes it.")
+	scopeNoRetarget(t, text)
+}
+
+// A refused commit writes nothing, and the draft stays. So the route is the
+// key that opens the draft, not a new selection.
+func TestPinScopeRefusedCommitNamesTheDraftRoute(t *testing.T) {
+	fx := maintFixture(t)
+	p := fx.scopePlan(t, maintPlanOpts{write: true}, nil, "internal/store", scopeTyped)
+	f := scopeFake(fx, p, func(q *maintain.Plan) (maintain.Result, error) {
+		return fakeMaintResult(q), maintain.ErrNotConfirmable
+	})
+	h := scopeOpen(t, f)
+
+	h.press("y")
+
+	text := maintContent(t, h)
+	assert.Contains(t, text, "The preview cannot be confirmed, so nothing was written. Press i in Pins to open the draft again.")
+	assert.NotContains(t, text, "Revise the selection and preview again.")
+	scopeNoRetarget(t, text)
+}
+
+// The notice row and the quit question show this name while the commit runs.
+func TestPinScopeCommitNamesItsWork(t *testing.T) {
+	fx := maintFixture(t)
+	p := fx.scopePlan(t, maintPlanOpts{write: true}, nil, "internal/store", scopeTyped)
+	h := scopeOpen(t, scopeFake(fx, p, nil))
+
+	mod := maintHostOf(h).modal
+
+	commit := mod.commit()
+	require.Equal(t, flowCommitting, mod.stage)
+	assert.Equal(t, "Writing the regions of 1 pin", h.m.st.mutation)
+	assert.Contains(t, h.view(), "Writing the regions of 1 pin")
+
+	h.run(commit)
+	assert.Empty(t, h.m.st.mutation)
+}
+
+// A region that the user typed but did not confirm belongs to the draft. A
+// reload that locks the rows must count it as an edit, so the note says that
+// it went away. The fake changes the stored regions and keeps the binding,
+// so the reload takes the branch of an unchanged entry.
+func TestPinDraftReloadThatLocksTheRegionsReportsTheTypedText(t *testing.T) {
+	f := authorFake(nil)
+	f.pins = pinsNoLedger()
+	h := pinsOpen(t, f, 120, 40)
+
+	pinsCursorTo(h, 1)
+	h.press("i", "a")
+	h.typeText("internal/typed")
+
+	form := authorOf(h).form
+	require.Equal(t, pinFieldRegion, form.field)
+
+	locked := pinsInspection()
+	ref := locked.Pins[0].Entry.Ref()
+	locked.Pins[0].Entry.Region = "internal/store\u0085"
+	locked.Doc.Entries[0] = locked.Pins[0].Entry
+	require.Equal(t, ref, locked.Pins[0].Entry.Ref(), "the reload keeps the binding")
+
+	authorReload(h, f, locked)
+
+	assert.Contains(t, h.m.toast.text, `The scope edit of "wrap-sql-errors" went away`)
+	assert.Contains(t, form.draft.scopeLock, "linked to proposal #4")
+	assert.Equal(t, pinFieldNone, form.field, "a read-only row takes no typing")
+}
+
+// The console opens this preview after a stale result under --db. The plan of
+// the engine can be confirmable there, so only the console keeps y off, and
+// the tail names the reason.
+func TestPinScopePreviewUnderAnotherDatabaseNamesTheRoot(t *testing.T) {
+	fx := maintFixture(t)
+	p := fx.scopePlan(t, maintPlanOpts{write: true}, nil, "internal/store", scopeTyped)
+	f := scopeFake(fx, p, func(q *maintain.Plan) (maintain.Result, error) {
+		return fakeMaintResult(q), maintain.ErrStale
+	})
+	h := scopeOpen(t, f)
+
+	h.press("y")
+
+	f.database = &workspace.DatabaseFacts{Kind: store.DatabaseOther, ForeignRoot: "/work/original"}
+	h.send(refreshMsg{kinds: []sectionKind{secPins}})
+	h.press("enter")
+
+	assert.False(t, maintHasKey(h, "y"))
+	assert.Contains(t, maintContent(t, h), "y is off: the index records another repository")
+
+	h.press("y")
+	assert.Equal(t, 1, f.callCount("CommitMaintenance:scope"), "y writes nothing")
+}
+
+// A repository-wide pin that takes regions is the main path of a manual
+// scope edit, so the real engine must label the plan as narrower.
+func TestPinScopeEditOfARepositoryWidePinReadsNarrower(t *testing.T) {
+	h, _, _ := scopeRepo(t, func(root string) {
+		path := filepath.Join(root, pinfile.File)
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+
+		wide := strings.Replace(string(data), "rule: linked-rule\n    region: api\n", "rule: linked-rule\n    region: '*'\n", 1)
+		require.NoError(t, os.WriteFile(path, []byte(wide), 0o644))
+
+		db, err := sql.Open("sqlite", store.DefaultPath(root))
+		require.NoError(t, err)
+
+		defer func() { _ = db.Close() }()
+
+		_, err = db.Exec(`UPDATE proposal SET region = '' WHERE rule = 'linked-rule'`)
+		require.NoError(t, err)
+	})
+
+	h.press("i")
+
+	d := authorOf(h).form.draft
+	require.Equal(t, maintain.ScopeRepoWide, d.scope)
+
+	d.scope, d.regions = maintain.ScopeRegions, []string{"api"}
+	h.press("s")
+
+	assert.Equal(t, "narrower", ansi.Strip(maintHostOf(h).modal.planRight()))
+
+	text := maintContent(t, h)
+	assert.Contains(t, text, maintNarrowerText)
+	assert.NotContains(t, text, "Broader:")
+	scopeNoRetarget(t, text)
+}
+
+// The lists say what y writes. A draft that changes another field writes that
+// field too, so the list that says the live note stays must change.
+func TestPinScopeEffectsFollowTheFieldsOfTheDraft(t *testing.T) {
+	const (
+		other    = "write the other fields of the draft"
+		keepNote = "change the rule, the live note, the comments or the position of the pin"
+		keep     = "change the rule, the comments or the position of the pin"
+	)
+
+	// open previews a draft that sets the fields of edit.
+	open := func(t *testing.T, opts maintPlanOpts, edit maintain.AuthorRequest) string {
+		t.Helper()
+
+		fx := maintFixture(t)
+		p := fx.scopePlan(t, opts, nil, "internal/store", scopeTyped)
+		p.Scoping = &maintain.ScopeRequest{Edit: edit, At: scopeChosenAt}
+
+		return maintContent(t, scopeOpen(t, scopeFake(fx, p, nil)))
+	}
+
+	fields := map[string]maintain.AuthorRequest{
+		"the note":  {NoteSet: true},
+		"the mode":  {ModeSet: true},
+		"the check": {CheckSet: true},
+	}
+
+	for name, edit := range fields {
+		t.Run(name, func(t *testing.T) {
+			text := open(t, maintPlanOpts{write: true}, edit)
+			assert.Contains(t, text, other)
+			assert.Contains(t, text, keep)
+			assert.NotContains(t, text, "the live note")
+		})
+
+		t.Run(name+" with y off", func(t *testing.T) {
+			text := open(t, maintPlanOpts{}, edit)
+			assert.NotContains(t, text, "WILL")
+			assert.NotContains(t, text, "WON'T")
+			assert.NotContains(t, text, other)
+		})
+	}
+
+	t.Run("a draft of the regions alone", func(t *testing.T) {
+		text := open(t, maintPlanOpts{write: true}, maintain.AuthorRequest{})
+		assert.Contains(t, text, keepNote)
+		assert.NotContains(t, text, other)
+	})
+
+	t.Run("the real engine reads the draft", func(t *testing.T) {
+		h, _, _ := scopeRepo(t, nil)
+
+		authorDraftRegions(h, "api", "web")
+		authorOf(h).form.draft.note.SetValue("A new note.")
+		h.press("s")
+
+		text := maintContent(t, h)
+		assert.Contains(t, text, other)
+		assert.Contains(t, text, keep)
+	})
 }

@@ -3,11 +3,13 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	domain "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/pinfile"
@@ -140,4 +142,70 @@ func TestEngineRefusesAScopeCommitUnderAnotherRoot(t *testing.T) {
 			assert.Zero(t, row.ScopeChosen)
 		})
 	}
+}
+
+// A scope edit is pin authoring, so another recorded root is a blocker, also
+// with --db. The plan stays a plan: the preview can show why y is off.
+func TestEnginePlanScopeBlocksAnotherRoot(t *testing.T) {
+	for name, tc := range foreignCases(t) {
+		t.Run(name, func(t *testing.T) {
+			servicestest.Write(t, workspace.Workspace{Root: tc.other}, pinfile.File, maintPins)
+
+			before := servicestest.Tree(t, tc.other)
+
+			plan, err := tc.e.PlanScope(scopeRequest(t, tc.e, "api", "web"))
+			require.NoError(t, err, "a blocker is data in the plan, not an error")
+
+			assert.False(t, plan.Confirmable)
+			require.NotEmpty(t, plan.Blocked)
+			assert.Contains(t, plan.Blocked[0], ErrForeignRoot.Error())
+			assert.Contains(t, plan.Blocked[0], tc.other)
+			assert.Equal(t, before, servicestest.Tree(t, tc.other), "a plan writes nothing")
+		})
+	}
+}
+
+// The preview of a check or enforce pin names the state of the installed
+// hooks, not only the requested mode, so a person sees whether the check
+// runs. Without a hook, the text of the planner and the joined text agree. So
+// the second case installs the hook, and only the join can name it.
+func TestEnginePlanScopeJoinsTheActiveState(t *testing.T) {
+	const pins = `lesson_checks_version: 1
+checks:
+  frozen:
+    kind: forbid-path-change/1
+pin:
+  - rule: close-db-handles
+    region: api
+    note: Close the handle on every error path.
+    mode: check
+    check: frozen
+`
+
+	t.Run("no hook is installed", func(t *testing.T) {
+		ws, _ := maintWorkspace(t, true)
+		servicestest.Write(t, ws, pinfile.File, pins)
+
+		e := engNew(ws, Deps{})
+
+		plan, err := e.PlanScope(scopeRequest(t, e, "api", "web"))
+		require.NoError(t, err)
+		require.True(t, plan.Confirmable, "%v", plan.Blocked)
+		assert.Contains(t, strings.Join(lessoncheck.ImpactLines(plan.Impact), "\n"),
+			"active: requested; inactive: not-installed")
+	})
+
+	t.Run("a hook is installed", func(t *testing.T) {
+		ws, _ := maintWorkspace(t, true)
+		servicestest.Write(t, ws, pinfile.File, pins)
+		installClaudeGuard(t, ws)
+
+		e := engNew(ws, Deps{})
+
+		plan, err := e.PlanScope(scopeRequest(t, e, "api", "web"))
+		require.NoError(t, err)
+		require.True(t, plan.Confirmable, "%v", plan.Blocked)
+		require.Len(t, plan.Impact, 1)
+		assert.Contains(t, plan.Impact[0].Active, "claude checked")
+	})
 }

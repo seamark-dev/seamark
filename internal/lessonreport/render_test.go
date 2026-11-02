@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -286,3 +287,27 @@ func (w renderFailWriter) Write([]byte) (int, error) { return 0, w.err }
 type renderShortWriter struct{}
 
 func (renderShortWriter) Write(b []byte) (int, error) { return len(b) - 1, nil }
+
+// TestRenderPrintsNoSplitWithoutAHeldBackRecord proves the condition of the
+// split on a read audit. The empty split prints no line, so the sessions
+// line follows the counts directly.
+func TestRenderPrintsNoSplitWithoutAHeldBackRecord(t *testing.T) {
+	cfg := testConfig("Reject unknown fields.")
+	id, ver := pinOf(cfg, 0)
+
+	r := mustBuild(t, Inputs{
+		Audit: auditLines(v2("e", "s", "m", pin(id, ver, reviews.PinInjected))), Config: cfg, Now: fixedNow,
+	}, "")
+
+	out := rendered(t, r)
+	assert.NotContains(t, out, "held back by cause")
+
+	lines := strings.Split(out, "\n")
+	at := slices.IndexFunc(lines, func(line string) bool {
+		return strings.HasPrefix(line, "    delivery records: hook 1; injected 1;")
+	})
+
+	require.GreaterOrEqual(t, at, 0, out)
+	require.Less(t, at+1, len(lines))
+	assert.True(t, strings.HasPrefix(lines[at+1], "    delivered sessions: "), "next line: %q", lines[at+1])
+}

@@ -225,3 +225,29 @@ func TestSelectionLineSanitizesTheSurface(t *testing.T) {
 	assert.NotContains(t, line, "\x1b")
 	assert.Len(t, strings.Split(line, "\n"), 7, "a surface name adds no line")
 }
+
+// TestSelectionLinePrintsOneStringForTwoSurfaces proves the rule of one
+// source. The map of a split has no order, so the loop repeats the read: a
+// walk without the sort prints the two surfaces in either order.
+func TestSelectionLinePrintsOneStringForTwoSurfaces(t *testing.T) {
+	const want = "held back by cause (records): change_set/over-total 1, hook/over-pin-cap 1"
+
+	cfg := testConfig("Reject unknown fields.")
+	_, ver := pinOf(cfg, 0)
+
+	audit := auditLines(
+		v2("e1", "s", "m1", heldBackPin(cfg, reviews.CauseOverPinCap)),
+		onSurface(v2("e2", "s", "m2", heldBackPin(cfg, reviews.CauseOverTotal)), "change_set"),
+	)
+
+	for range 32 {
+		r := mustBuild(t, Inputs{Audit: audit, Config: cfg, Now: fixedNow}, "")
+
+		line, ok := SelectionLine(&r, ver)
+		require.True(t, ok)
+
+		lines := strings.Split(line, "\n")
+		require.Equal(t, want, lines[len(lines)-1])
+		require.Equal(t, 1, strings.Count(rendered(t, r), "    "+want+"\n"), "the report prints the same string")
+	}
+}

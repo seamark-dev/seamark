@@ -346,6 +346,53 @@ func TestHookDeliveryWithoutDelivered(t *testing.T) {
 		assert.Empty(t, got.MinedOverTotal)
 		assert.Zero(t, got.HeldBack)
 	})
+
+	t.Run("the mined input keeps Mined before MinedOverTotal", func(t *testing.T) {
+		// Both mined lists hold a lesson here. The second cut reads them in
+		// that order, so a lesson that the first cut kept stays first.
+		cfg := goldenConfig(distinctPins("*", 2)...)
+		budget := LessonBudget{Total: 3, Pins: 3}
+
+		pins := make([]reviews.SurfacedPin, 0, len(cfg.Pin))
+		for _, p := range cfg.Pin {
+			pins = append(pins, reviews.SurfacedPin{Pin: p})
+		}
+
+		var plain Selection
+
+		plain.applyBudget(pins, []model.Lesson{{Symptom: "first"}, {Symptom: "second"}, {Symptom: "third"}}, budget)
+		require.Equal(t, "first\n", symptomsOf(plain.Mined))
+		require.Equal(t, "second\nthird\n", symptomsOf(plain.MinedOverTotal))
+
+		got := plain.WithoutDelivered(budget, byRule("alpha-guard"))
+
+		assert.Equal(t, "first\nsecond\n", symptomsOf(got.Mined))
+		assert.Equal(t, "third\n", symptomsOf(got.MinedOverTotal))
+	})
+}
+
+func TestApplyBudgetCutsAtThePinCapWithoutATotal(t *testing.T) {
+	// No production budget has a pin cap without a total. The guard still
+	// states what such a budget means: a pin cap is the limit, because no
+	// total cap stands above it.
+	cfg := goldenConfig(distinctPins("*", 4)...)
+
+	pins := make([]reviews.SurfacedPin, 0, len(cfg.Pin))
+	for _, p := range cfg.Pin {
+		pins = append(pins, reviews.SurfacedPin{Pin: p})
+	}
+
+	var sel Selection
+
+	sel.applyBudget(pins, []model.Lesson{{Symptom: "first"}}, LessonBudget{Pins: 3})
+
+	assert.Len(t, sel.Pins, 3)
+	require.Len(t, sel.OverPinCap, 1)
+	assert.Equal(t, cfg.Pin[3], sel.OverPinCap[0].Pin)
+	assert.Empty(t, sel.OverTotal)
+	assert.Equal(t, 1, sel.HeldBack)
+	assert.Equal(t, "first\n", symptomsOf(sel.Mined), "no total cap cuts a mined lesson")
+	assert.Empty(t, sel.MinedOverTotal)
 }
 
 func TestChangeSetSelectionCutsPinsAndMinedAtOneBudget(t *testing.T) {

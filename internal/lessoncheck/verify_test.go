@@ -1691,3 +1691,34 @@ func TestLessonCheckRevalidate(t *testing.T) {
 		assert.Equal(t, FreshnessStale, got)
 	})
 }
+
+// TestLessonCheckNotCoveredLine proves the whole `not covered:` line.
+// The line is the only place in the text where a reader sees what a
+// result does not cover. So a wrong label or a dropped text hides an
+// exclusion, and the check needs every text in order.
+func TestLessonCheckNotCoveredLine(t *testing.T) {
+	cases := []struct {
+		name  string
+		paths []string
+		want  []string
+	}{
+		{name: "the default selection", want: wantDefaultExcludes},
+		{name: "an explicit path selection", paths: []string{"src/a.go"}, want: wantExplicitExcludes},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := verifyRepo(t, mixedYAML)
+
+			var lines []string
+
+			for _, line := range strings.Split(renderText(g.verify(tc.paths...)), "\n") {
+				if strings.Contains(line, "not covered") {
+					lines = append(lines, line)
+				}
+			}
+
+			assert.Equal(t, []string{"  not covered: " + strings.Join(tc.want, "; ")}, lines)
+		})
+	}
+}

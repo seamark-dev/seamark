@@ -519,6 +519,21 @@ func TestScopeEditRows(t *testing.T) {
 	})
 }
 
+// The preview reads the link and the rows of the real item. A surface shows
+// the ledger row and the note comparison from these two fields.
+func TestPlanScopeItemHoldsTheLinkAndTheRow(t *testing.T) {
+	f := authorFixture(t)
+
+	p := f.scopePlan(f.deps(), f.linkedDraft("web"))
+	require.Len(t, p.Items, 1)
+
+	it := p.Items[0]
+	assert.Equal(t, "linked-rule", it.Pin.Entry.Rule)
+	assert.Equal(t, pinfile.LinkLinked, it.Pin.Link.Link)
+	assert.Equal(t, []model.Proposal{f.row(1)}, it.Pin.Link.Applied)
+	assert.Equal(t, []model.Proposal{f.row(1)}, it.Rows)
+}
+
 // TestScopeEditRefusesAnotherRoot holds the engine refusal, which runs
 // again at the commit. The console review keeps y off, but a root can
 // change between the preview and the key.

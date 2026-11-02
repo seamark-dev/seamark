@@ -1263,3 +1263,25 @@ func TestProposalLedgerReadsAChosenRowAsASuggestion(t *testing.T) {
 	assert.NotContains(t, sb.String(), "--retarget")
 	assert.NotContains(t, sb.String(), "trigger scope:")
 }
+
+// TestProposalLedgerNamesOnlyAChosenRowWithAnAdvisory proves that the tail
+// line needs both facts. A chosen row without an advisory has nothing to
+// review, so the line must not send a person to it.
+func TestProposalLedgerNamesOnlyAChosenRowWithAnAdvisory(t *testing.T) {
+	scope := "delivery may miss the trigger: the note names api/schemas.py"
+	chosenAt := int64(1_790_000_000)
+
+	applied := []model.Proposal{
+		{ID: 5, Rule: "advised-pin", Region: "api"},
+		{ID: 6, Rule: "quiet-pin", Region: "api"},
+	}
+
+	var sb strings.Builder
+
+	PrintProposalLedger(&sb, nil, applied, nil, nil, map[int64]ProposalHealth{
+		5: {Tier: "strong", Scope: scope, Chosen: chosenAt},
+		6: {Tier: "strong", Chosen: chosenAt},
+	})
+
+	assert.Contains(t, sb.String(), "\nchosen scope: p5 — a person chose these regions;")
+}
