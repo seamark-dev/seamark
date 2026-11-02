@@ -210,7 +210,8 @@ func TestBuildCountsDeliveryPerVersion(t *testing.T) {
 	// emit-failed are their own counts.
 	assert.Equal(t, DeliveryCounts{
 		Records: map[string]int{"hook": 2, "change_set": 1}, Injected: 1, HeldBack: 1, EmitFailed: 1,
-		Sessions: 1,
+		HeldBackCauses: map[string]map[string]int{"change_set": {HeldBackCauseUnknown: 1}},
+		Sessions:       1,
 	}, a.Delivery)
 
 	// Pin B, current version: the older version's record (e4) is not here.
@@ -388,5 +389,214 @@ func TestBuildLeavesUnderivedSectionsEmpty(t *testing.T) {
 	out := encode(t, r)
 	for _, word := range []string{"not-emitted", "no-linked-correction", "at-action"} {
 		assert.NotContains(t, out, fmt.Sprintf("%q", word))
+	}
+}
+
+// heldBackPin is a held-back entry of pin A of testConfig.
+func heldBackPin(cfg *reviews.Config, cause string) reviews.FiringPin {
+	id, ver := pinOf(cfg, 0)
+	p := pin(id, ver, reviews.PinHeldBack)
+	p.Cause = cause
+
+	return p
+}
+
+// onSurface moves a hook record to another surface.
+func onSurface(f reviews.Firing, surface string) reviews.Firing {
+	f.Surface = surface
+
+	return f
+}
+
+// sumCauses adds the counts of a held-back split.
+func sumCauses(causes map[string]map[string]int) int {
+	total := 0
+
+	for _, bySurface := range causes {
+		for _, n := range bySurface {
+			total += n
+		}
+	}
+
+	return total
+}
+
+// TestBuildSplitsHeldBackCauses proves each delivery state of one record.
+// A held-back record adds one count to one surface and one cause, and
+// every other state leaves the split absent.
+func TestBuildSplitsHeldBackCauses(t *testing.T) {
+	cfg := testConfig("Reject unknown fields.")
+	id, ver := pinOf(cfg, 0)
+
+	entry := func(d reviews.PinDelivery) reviews.FiringPin { return pin(id, ver, d) }
+	split := func(surface, cause string) map[string]map[string]int {
+		return map[string]map[string]int{surface: {cause: 1}}
+	}
+
+	tests := []struct {
+		name   string
+		record reviews.Firing
+		want   DeliveryCounts
+	}{
+		{"injected", v2("e", "s", "m", entry(reviews.PinInjected)), DeliveryCounts{
+			Records: map[string]int{"hook": 1}, Injected: 1, Sessions: 1,
+		}},
+		{"returned", onSurface(v2("e", "s", "m", entry(reviews.PinReturned)), surfaceChangeSet), DeliveryCounts{
+			Records: map[string]int{"change_set": 1}, Returned: 1,
+		}},
+		{"suppressed-repeat", v2("e", "s", "m", entry(reviews.PinSuppressedRepeat)), DeliveryCounts{
+			Records: map[string]int{"hook": 1}, SuppressedRepeat: 1,
+		}},
+		{"emit-failed", v2("e", "s", "m", entry(reviews.PinEmitFailed)), DeliveryCounts{
+			Records: map[string]int{"hook": 1}, EmitFailed: 1,
+		}},
+		{"restated", v2("e", "s", "m", heldBackPin(cfg, reviews.CauseRestated)), DeliveryCounts{
+			Records: map[string]int{"hook": 1}, HeldBack: 1, HeldBackCauses: split("hook", reviews.CauseRestated),
+		}},
+		{"over-pin-cap", v2("e", "s", "m", heldBackPin(cfg, reviews.CauseOverPinCap)), DeliveryCounts{
+			Records: map[string]int{"hook": 1}, HeldBack: 1, HeldBackCauses: split("hook", reviews.CauseOverPinCap),
+		}},
+		{"over-total", onSurface(v2("e", "s", "m", heldBackPin(cfg, reviews.CauseOverTotal)), surfacePrepare), DeliveryCounts{
+			Records: map[string]int{"prepare": 1}, HeldBack: 1, HeldBackCauses: split("prepare", reviews.CauseOverTotal),
+		}},
+		{"empty cause", v2("e", "s", "m", heldBackPin(cfg, "")), DeliveryCounts{
+			Records: map[string]int{"hook": 1}, HeldBack: 1, HeldBackCauses: split("hook", HeldBackCauseUnknown),
+		}},
+		{"cause outside the closed list", v2("e", "s", "m", heldBackPin(cfg, "over-budget")), DeliveryCounts{
+			Records: map[string]int{"hook": 1}, HeldBack: 1, HeldBackCauses: split("hook", HeldBackCauseUnknown),
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := mustBuild(t, Inputs{Audit: auditLines(tc.record), Config: cfg, Now: fixedNow}, "")
+
+			assert.Equal(t, tc.want, r.Pins[0].Delivery)
+			assert.Equal(t, r.Pins[0].Delivery.HeldBack, sumCauses(r.Pins[0].Delivery.HeldBackCauses))
+		})
+	}
+
+	t.Run("records add per surface and cause", func(t *testing.T) {
+		audit := auditLines(
+			v2("e1", "s1", "m1", heldBackPin(cfg, reviews.CauseOverPinCap)),
+			v2("e2", "s1", "m2", heldBackPin(cfg, reviews.CauseOverPinCap)),
+			v2("e3", "s1", "m3", heldBackPin(cfg, reviews.CauseRestated)),
+			onSurface(v2("e4", "s1", "m4", heldBackPin(cfg, reviews.CauseOverTotal)), surfaceExplore),
+			onSurface(v2("e5", "s1", "m5", heldBackPin(cfg, reviews.CauseOverTotal)), surfaceCheck),
+		)
+		r := mustBuild(t, Inputs{Audit: audit, Config: cfg, Now: fixedNow}, "")
+
+		d := r.Pins[0].Delivery
+		assert.Equal(t, map[string]map[string]int{
+			"hook":    {reviews.CauseOverPinCap: 2, reviews.CauseRestated: 1},
+			"explore": {reviews.CauseOverTotal: 1},
+			"check":   {reviews.CauseOverTotal: 1},
+		}, d.HeldBackCauses)
+		assert.Equal(t, 5, d.HeldBack)
+		assert.Equal(t, d.HeldBack, sumCauses(d.HeldBackCauses))
+	})
+
+	t.Run("a legacy record never enters the split", func(t *testing.T) {
+		legacy := reviews.Firing{
+			Delivery: reviews.DeliveryInjected, TS: "2026-10-01T00:00:00Z",
+			Fired: []reviews.FiredLesson{reviews.PinIdentity(cfg.Pin[0])},
+		}
+		r := mustBuild(t, Inputs{Audit: auditLines(legacy), Config: cfg, Now: fixedNow}, "")
+
+		assert.Equal(t, DeliveryCounts{Records: map[string]int{}, LegacyIdentityRecords: 1}, r.Pins[0].Delivery)
+	})
+}
+
+// TestBuildCountsOneRecordOnce proves that a record that names a version
+// twice adds one count per delivery value, and that the split takes the one
+// cause of causeOf. The sum therefore stays equal to the held-back count.
+func TestBuildCountsOneRecordOnce(t *testing.T) {
+	cfg := testConfig("Reject unknown fields.")
+	id, ver := pinOf(cfg, 0)
+
+	tests := []struct {
+		name string
+		pins []reviews.FiringPin
+		want DeliveryCounts
+	}{
+		{
+			"two causes",
+			[]reviews.FiringPin{heldBackPin(cfg, reviews.CauseRestated), heldBackPin(cfg, reviews.CauseOverPinCap)},
+			DeliveryCounts{
+				Records: map[string]int{"hook": 1}, HeldBack: 1,
+				HeldBackCauses: map[string]map[string]int{"hook": {reviews.CauseRestated: 1}},
+			},
+		},
+		{
+			"two delivery values",
+			[]reviews.FiringPin{pin(id, ver, reviews.PinInjected), heldBackPin(cfg, reviews.CauseOverTotal)},
+			DeliveryCounts{
+				Records: map[string]int{"hook": 1}, Injected: 1, HeldBack: 1, Sessions: 1,
+				HeldBackCauses: map[string]map[string]int{"hook": {reviews.CauseOverTotal: 1}},
+			},
+		},
+		{
+			// The writer sorts held-back first, so only a changed log gets
+			// this order. causeOf then names the emission failure.
+			"emit-failed before held-back",
+			[]reviews.FiringPin{pin(id, ver, reviews.PinEmitFailed), heldBackPin(cfg, reviews.CauseRestated)},
+			DeliveryCounts{
+				Records: map[string]int{"hook": 1}, HeldBack: 1, EmitFailed: 1,
+				HeldBackCauses: map[string]map[string]int{"hook": {HeldBackCauseUnknown: 1}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			audit := auditLines(v2("e", "s", "m", tc.pins...))
+			r := mustBuild(t, Inputs{Audit: audit, Config: cfg, Now: fixedNow}, "")
+
+			assert.Equal(t, tc.want, r.Pins[0].Delivery)
+			assert.Equal(t, r.Pins[0].Delivery.HeldBack, sumCauses(r.Pins[0].Delivery.HeldBackCauses))
+		})
+	}
+}
+
+// TestBuildReadsTheEvidenceState proves that the state follows the audit
+// only. A readable audit reads "read", also when it holds only a legacy
+// line. An audit that does not read gives "unknown" and no split.
+func TestBuildReadsTheEvidenceState(t *testing.T) {
+	cfg := testConfig("Reject unknown fields.")
+	heldBack := v2("e", "s", "m", heldBackPin(cfg, reviews.CauseRestated))
+
+	legacy := reviews.Firing{Delivery: reviews.DeliveryInjected, TS: "2026-10-01T00:00:00Z"}
+
+	overLimit := auditLines(heldBack)
+	overLimit.OverLimit = true
+
+	tests := []struct {
+		name       string
+		in         Inputs
+		audit      string
+		evidence   string
+		wantRecord int
+	}{
+		{"read", Inputs{Audit: auditLines(heldBack)}, StateRead, EvidenceRead, 1},
+		{"read, legacy line only", Inputs{Audit: auditLines(legacy)}, StateRead, EvidenceRead, 0},
+		{"absent", Inputs{}, StateAbsent, EvidenceUnknown, 0},
+		{"unreadable", Inputs{Audit: auditLines(heldBack), AuditError: "denied"}, StateUnreadable, EvidenceUnknown, 0},
+		{"over-limit", Inputs{Audit: overLimit}, StateOverLimit, EvidenceUnknown, 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.in.Config, tc.in.Now = cfg, fixedNow
+			r := mustBuild(t, tc.in, "")
+
+			require.NotNil(t, r.Selection)
+			assert.Equal(t, tc.audit, r.AsOf.Audit.State)
+			assert.Equal(t, tc.evidence, r.Selection.Evidence.State)
+			assert.Equal(t, tc.wantRecord, r.Pins[0].Delivery.HeldBack)
+
+			if tc.wantRecord == 0 {
+				assert.Nil(t, r.Pins[0].Delivery.HeldBackCauses)
+			}
+		})
 	}
 }

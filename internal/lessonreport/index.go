@@ -198,7 +198,8 @@ func (idx *index) opensSession(f reviews.Firing, version string) bool {
 // of the same identity never adds to this one. One record counts once per
 // delivery value, also when two config entries share the version. The v1
 // records name only the identity, so they count separately and on the
-// current version only.
+// current version only. They hold no pin list, so they never enter the
+// split of the held-back causes.
 func (idx *index) deliveryCounts(p pinVersion) DeliveryCounts {
 	out := DeliveryCounts{Records: map[string]int{}}
 	sessions := map[string]bool{}
@@ -211,6 +212,13 @@ func (idx *index) deliveryCounts(p pinVersion) DeliveryCounts {
 		out.Injected += boolInt(d[reviews.PinInjected])
 		out.SuppressedRepeat += boolInt(d[reviews.PinSuppressedRepeat])
 		out.HeldBack += boolInt(d[reviews.PinHeldBack])
+
+		// causeOf gives one cause per record, so the split stays equal to
+		// the held-back count when a record names the version twice.
+		if d[reviews.PinHeldBack] {
+			out.addHeldBackCause(surfaceName(f.Surface), causeOf(f, p.version))
+		}
+
 		out.EmitFailed += boolInt(d[reviews.PinEmitFailed])
 		out.Returned += boolInt(d[reviews.PinReturned])
 
@@ -233,6 +241,49 @@ func (idx *index) deliveryCounts(p pinVersion) DeliveryCounts {
 	}
 
 	return out
+}
+
+// addHeldBackCause counts one held-back record under its surface and cause.
+// A cause outside the closed list counts under HeldBackCauseUnknown, so
+// the split stays equal to the held-back count.
+func (d *DeliveryCounts) addHeldBackCause(surface, cause string) {
+	if !reviews.KnownHeldBackCause(cause) {
+		cause = HeldBackCauseUnknown
+	}
+
+	if d.HeldBackCauses == nil {
+		d.HeldBackCauses = map[string]map[string]int{}
+	}
+
+	if d.HeldBackCauses[surface] == nil {
+		d.HeldBackCauses[surface] = map[string]int{}
+	}
+
+	d.HeldBackCauses[surface][cause]++
+}
+
+// causeEmitFailed is the cause that causeOf gives a failed emission. It is
+// no held-back cause, so the split counts it under HeldBackCauseUnknown.
+const causeEmitFailed = "emit-failed"
+
+// causeOf returns the cause of the held-back or failed delivery of the
+// pin version. The writer sorts held-back entries before failed entries,
+// so a held-back entry of the version decides when the record has both.
+func causeOf(f reviews.Firing, version string) string {
+	for _, p := range f.Pins {
+		if p.Version != version {
+			continue
+		}
+
+		switch p.Delivery {
+		case reviews.PinHeldBack:
+			return p.Cause
+		case reviews.PinEmitFailed:
+			return causeEmitFailed
+		}
+	}
+
+	return ""
 }
 
 // eventsWithoutPins counts the v2 events that show an injected or a

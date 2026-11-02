@@ -34,9 +34,10 @@ func HookBudget(cfg *reviews.Config) LessonBudget {
 	return LessonBudget{Total: HookLessonTotal, Pins: cfg.HookPinBudget()}
 }
 
-// Clamped returns the budget with the pin cap at most the total cap. A
-// larger pin cap lets the total cap remove pins after the pin count is
-// final, and the held-back count must include every removed pin.
+// Clamped returns the budget with the pin cap at most the total cap.
+// This pin cap is the effective number that the settings and the report
+// show. hookFold does not use it, because the cut must name the total
+// cap when the total cap is the limit.
 func (b LessonBudget) Clamped() LessonBudget {
 	if b.Total > 0 && b.Pins > b.Total {
 		b.Pins = b.Total
@@ -77,19 +78,22 @@ func LessonsForFilesBudget(st *store.Store, cfg *reviews.Config, files []string,
 	return sel.Lessons, sel.HeldBack, nil
 }
 
-// hookFold is the budget rule of the edit hook. It clamps the budget
-// and collapses restatements (ambient budgets only). It cuts the pins
-// at the pin cap, then at the total cap. The mined lessons fill the
-// rest of the total cap. Each cut is a separate step, so the Selection
-// records what each step removes. LessonsForFilesBudget states the
-// held-back count.
+// hookFold is the budget rule of the edit hook. It collapses
+// restatements (ambient budgets only). It cuts the pins at the pin cap,
+// then at the total cap. The mined lessons fill the rest of the total
+// cap. Each cut is a separate step, so the Selection records what each
+// step removes. LessonsForFilesBudget states the held-back count.
 func (ev *Evidence) hookFold(cfg *reviews.Config, budget LessonBudget) Selection {
-	// The clamp lowers a larger pin cap to the total cap. So with a pin
-	// cap, the pins above it go to OverPinCap and OverTotal stays empty.
-	// Without a pin cap, the total cut moves the pins above the total
-	// cap to OverTotal.
-	budget = budget.Clamped()
+	// This reads the caller's pin cap. The step below changes the pin
+	// cap, and it must not turn an ambient budget into a deliberate view.
 	ambient := budget.Pins > 0
+
+	// A pin cap at or above the total cap is not the limit. Zero means
+	// no pin cap, so the total cut moves those pins to OverTotal. The
+	// recorded cause then names the cap that a setting cannot raise.
+	if budget.Total > 0 && budget.Pins >= budget.Total {
+		budget.Pins = 0
+	}
 
 	merged := ev.union(cfg, ambient)
 	sel := Selection{Excluded: merged.excluded}

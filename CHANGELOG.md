@@ -30,6 +30,11 @@ model-boundary delivery.
   reads no capture archive: the text leaves out the sections that need
   one, and the JSON keeps those fields with fixed values. Current native
   evidence keeps prevention at zero.
+- **Selection reading.** `lessons --delivery` shows requested and
+  effective budgets and splits held-back records by surface and cause. A
+  hook record now reads `over-total`, not `over-pin-cap`, when
+  `pin_budget` is at or above the fixed total. An unread audit prints
+  `unknown`, not a zero count.
 - **Console controls.** Pins can edit mode/check on linked pins,
   author check definitions (`M`), and verify (`V`). Read-only browsing
   never applies a decision.

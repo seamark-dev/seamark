@@ -96,9 +96,9 @@ func pinIdentities(pins []reviews.SurfacedPin) map[reviews.PinKey]bool {
 }
 
 func TestHookSelectionClampsThePinCapBeforeTheCuts(t *testing.T) {
-	// pin_budget 20 is above the hook total of 8. The clamp lowers the
-	// pin cap to 8 before the two cuts, so the two pins above it are
-	// over the pin cap, not over the total.
+	// pin_budget 20 is above the hook total of 8. The effective pin cap
+	// is 8, and the fixed total is the limit. So the two pins above it
+	// are over the total, not over the pin cap.
 	st, _ := seedStore(t)
 
 	cfg := goldenConfig(distinctPins("*", 10)...)
@@ -112,10 +112,10 @@ func TestHookSelectionClampsThePinCapBeforeTheCuts(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, sel.Pins, HookLessonTotal)
-	require.Len(t, sel.OverPinCap, 2)
-	assert.Equal(t, "india-guard", sel.OverPinCap[0].Pin.Rule)
-	assert.Equal(t, "juliet-guard", sel.OverPinCap[1].Pin.Rule)
-	assert.Empty(t, sel.OverTotal, "the total cut removes no pin after the clamp")
+	require.Len(t, sel.OverTotal, 2)
+	assert.Equal(t, "india-guard", sel.OverTotal[0].Pin.Rule)
+	assert.Equal(t, "juliet-guard", sel.OverTotal[1].Pin.Rule)
+	assert.Empty(t, sel.OverPinCap, "a pin cap at or above the total is not the limit")
 	assert.Empty(t, sel.Restated)
 	assert.Empty(t, sel.Mined, "eight pins fill the total cap")
 	assert.Equal(t, "RUF001\n", symptomsOf(sel.MinedOverTotal))
@@ -129,9 +129,10 @@ func TestHookSelectionClampsThePinCapBeforeTheCuts(t *testing.T) {
 }
 
 func TestHookSelectionWithoutAPinCapCutsPinsAtTheTotal(t *testing.T) {
-	// A pin cap of zero means no pin cap, so the clamp changes nothing.
-	// The total cut then removes the pins above the total cap, and they
-	// go to OverTotal. This is the view budget of the golden "view total
+	// A pin cap of zero means no pin cap. The total cut then removes the
+	// pins above the total cap, and they go to OverTotal. Unlike a pin
+	// cap at the total, this budget does not collapse restatements. This
+	// is the view budget of the golden "view total
 	// 8 pins 0" (finding A3s2-R3).
 	st, _ := seedStore(t)
 
@@ -203,17 +204,31 @@ func TestSelectionListsShareNoSpareCapacity(t *testing.T) {
 
 	sel, err := ev.HookSelection(cfg)
 	require.NoError(t, err)
-	require.Len(t, sel.OverPinCap, 2)
+	require.Len(t, sel.OverTotal, 2)
 	require.Len(t, sel.MinedOverTotal, 1)
 
-	overPinCap := slices.Clone(sel.OverPinCap)
+	overTotal := slices.Clone(sel.OverTotal)
 	minedOver := slices.Clone(sel.MinedOverTotal)
 
 	_ = append(sel.Pins, reviews.SurfacedPin{Pin: reviews.PinRule{Rule: "appended"}})
 	_ = append(sel.Mined, model.Lesson{Symptom: "appended"})
 
-	assert.Equal(t, overPinCap, sel.OverPinCap)
+	assert.Equal(t, overTotal, sel.OverTotal)
 	assert.Equal(t, minedOver, sel.MinedOverTotal)
+
+	// A pin cap below the total makes the first cut the one that splits
+	// the array, so the same guarantee needs its own check.
+	cfg.PinBudget = 5
+
+	sel, err = ev.HookSelection(cfg)
+	require.NoError(t, err)
+	require.Len(t, sel.OverPinCap, 5)
+
+	overPinCap := slices.Clone(sel.OverPinCap)
+
+	_ = append(sel.Pins, reviews.SurfacedPin{Pin: reviews.PinRule{Rule: "appended"}})
+
+	assert.Equal(t, overPinCap, sel.OverPinCap)
 }
 
 func TestSelectionListsTheRestatedPins(t *testing.T) {

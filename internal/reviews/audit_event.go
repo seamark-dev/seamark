@@ -82,6 +82,13 @@ var heldBackCauses = map[string]bool{
 	CauseOverTotal:  true,
 }
 
+// KnownHeldBackCause reports whether cause is in the closed list of the
+// held-back causes. The log can hold any string, so a reader tests a stored
+// cause before it counts the cause under its name.
+func KnownHeldBackCause(cause string) bool {
+	return heldBackCauses[cause]
+}
+
 // turnDigestLabel is the first compose part of TurnDigest. The label
 // keeps the digest apart from every other compose digest (registry §2.2).
 const turnDigestLabel = "turn"

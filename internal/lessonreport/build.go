@@ -49,12 +49,13 @@ const (
 // The surface names of the audit log. The hook surface is stored as the
 // empty string, and the report names it "hook" (reviews.Summarize does
 // too). The names equal delivery.Surface*, which lessonreport must not
-// import.
+// import, and the check surface of report.
 const (
 	surfaceHook      = "hook"
 	surfaceChangeSet = "change_set"
 	surfacePrepare   = "prepare"
 	surfaceExplore   = reviews.ExploreSurface
+	surfaceCheck     = "check"
 )
 
 // maxErrorRunes bounds a source error text in the report.
@@ -76,7 +77,8 @@ const maxErrorRunes = 200
 // incomplete, because no session is captured. Check operations and guard
 // attempts use separate units. Every next step needs a corrected action
 // or captured feedback, so the next steps stay empty. An empty value
-// never reads like a result.
+// never reads like a result. The selection reading states the current
+// budgets and whether the audit read.
 func Build(in Inputs, pinRef string) (Report, error) {
 	var expandIdentity string
 
@@ -111,6 +113,7 @@ func Build(in Inputs, pinRef string) (Report, error) {
 		Unlinked:   Unlinked{Unit: UnlinkedUnit, ByReason: map[Code]int{}, NextSteps: []NextStep{}},
 		Coverage:   an.coverage,
 		Checks:     checks.reading,
+		Selection:  selectionReading(in, auditRead),
 	}
 
 	report.Capture = captureState(report.AsOf.Archive)

@@ -1,6 +1,7 @@
 package report
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -145,6 +146,51 @@ func TestFiringPinsMapEverySelectionList(t *testing.T) {
 			firingPin(cfg, cfg.Pin[4], reviews.PinHeldBack, reviews.CauseOverTotal),
 		}, got)
 	})
+}
+
+func TestHookDeliveryNamesTheTotalCap(t *testing.T) {
+	// The cause must name the cap that is the limit. pin_budget can raise
+	// a pin cap below the total, and nothing can raise the total. So 7 is
+	// the last value that reads over-pin-cap.
+	cases := []struct {
+		stored   int
+		injected int
+		cause    string
+	}{
+		{stored: 7, injected: 7, cause: reviews.CauseOverPinCap},
+		{stored: 8, injected: HookLessonTotal, cause: reviews.CauseOverTotal},
+		{stored: 16, injected: HookLessonTotal, cause: reviews.CauseOverTotal},
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("pin_budget %d", tc.stored), func(t *testing.T) {
+			st, _ := seedStore(t)
+
+			cfg := goldenConfig(distinctPins("*", 10)...)
+			cfg.PinBudget = tc.stored
+
+			ev, err := ReadEvidence(st, []string{"scripts/task.py"}, cfg)
+			require.NoError(t, err)
+
+			hook, err := ev.HookSelection(cfg)
+			require.NoError(t, err)
+
+			want := make([]reviews.FiringPin, 0, len(cfg.Pin))
+			for i, p := range cfg.Pin {
+				if i < tc.injected {
+					want = append(want, firingPin(cfg, p, reviews.PinInjected, ""))
+
+					continue
+				}
+
+				want = append(want, firingPin(cfg, p, reviews.PinHeldBack, tc.cause))
+			}
+
+			got := hook.FiringPins(cfg, deliveries(reviews.PinInjected, len(hook.Pins)))
+			assert.Equal(t, want, got)
+			assert.Equal(t, hook.HeldBack, countHeldBack(got), "the hook count is the held-back pins")
+		})
+	}
 }
 
 // countHeldBack counts the held-back pins of a firing record.

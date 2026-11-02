@@ -877,6 +877,46 @@ native paths. `prevented` additionally needs a written deny reply, no
 later execution record and a verified native deny path. Current native
 evidence supports **`prevented: 0`**, not a prevention claim.
 
+After the totals, the report states what selection applied:
+
+```text
+Selection budgets (current lessons.yaml; a past count can come from another budget):
+  pin cap: requested 16, effective 8 pins per injection; pin_budget cannot raise the pin cap above the fixed total
+  total cap: fixed 8 lessons per injection
+  change budget: requested 6, effective 6 lessons per answer
+  evidence read
+  These counts show what Seamark emitted or left out. They do not show what a model saw, or that a pin came before an action.
+```
+
+"Requested" is the number that `lessons.yaml` asks for, or the default.
+"Effective" is the number that selection applies. The budgets describe the
+`lessons.yaml` of this read. A record stores no budget, so a past count can
+come from another budget. With an invalid `lessons.yaml` the requested
+value prints as `unknown`, and the effective value is the default.
+
+Each pin version adds a split of its held-back records:
+
+```text
+held back by cause (records): hook/over-pin-cap 3, hook/restated 1
+```
+
+The keys are surface and cause. `restated` means that the restatement
+collapse dropped the pin, `over-pin-cap` means a `pin_budget` below the fixed
+total, and `over-total` means the fixed total on `hook` and `explore`, or
+`change_budget` on `change_set`, `prepare` and `check`. A record with an empty
+or unknown cause counts under `unknown`. `suppressed-repeat` and `emit-failed` are delivery
+values with their own counts, not held-back causes. The counts are records,
+and `held-back` equals the sum of the split. JSON holds the same reading in
+`selection` and `held_back_causes`, both optional under `delivery/1`.
+
+When the delivery audit is absent, unreadable or over its limit, a zero
+would state nothing. The evidence reading, the delivery totals and each
+pin's `delivery records:` line then print `unknown (audit <state>)` and no
+count, and the split is absent. The budgets stay, because they read
+`lessons.yaml`. In an audit that reads, a zero means that no readable record
+names the version. The `delivery audit:` line at the top names the state.
+There is no per-recipient view.
+
 ## Is it working? lessons --stats
 
 Every ambient surface appends a line to `.seamark/lessons-audit.jsonl`

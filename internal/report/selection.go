@@ -47,8 +47,10 @@ type Selection struct {
 	// change_set, a repeat of a pin identity is never in this list. The
 	// fold keeps one pin per identity before the collapse.
 	Restated []reviews.SurfacedPin
-	// OverPinCap holds the pins above the pin cap of the edit hook.
-	// change_set has no pin cap, so there it is empty.
+	// OverPinCap holds the pins above the pin cap of the edit hook, when
+	// that pin cap is below the total cap. At or above the total cap the
+	// total cut removes the pins, so they are in OverTotal. change_set
+	// has no pin cap, so there it is empty.
 	OverPinCap []reviews.SurfacedPin
 	// OverTotal holds the pins above the total cap.
 	OverTotal []reviews.SurfacedPin

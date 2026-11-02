@@ -65,8 +65,11 @@ type Report struct {
 	Coverage   Coverage     `json:"coverage"`
 	// Checks reads the lesson-check stream in units of its own. Its counts
 	// never add to a delivery count.
-	Checks   CheckReading `json:"checks"`
-	Expanded *Expansion   `json:"expanded,omitempty"` // --pin only
+	Checks CheckReading `json:"checks"`
+	// Selection holds the budgets of the current lessons.yaml and the
+	// evidence state of the audit. A report of an older build has none.
+	Selection *SelectionReading `json:"selection,omitempty"`
+	Expanded  *Expansion        `json:"expanded,omitempty"` // --pin only
 }
 
 // AsOf states what each source was when the report read it.
@@ -151,14 +154,49 @@ type PinReading struct {
 
 // DeliveryCounts are the audit counts of one pin version.
 type DeliveryCounts struct {
-	Records               map[string]int `json:"records"` // v2 records whose pins name this version, by surface; unit records
-	Injected              int            `json:"injected"`
-	SuppressedRepeat      int            `json:"suppressed_repeat"`
-	HeldBack              int            `json:"held_back"`
-	EmitFailed            int            `json:"emit_failed"`
-	Returned              int            `json:"returned"`
-	Sessions              int            `json:"sessions"`                // unit delivered sessions
-	LegacyIdentityRecords int            `json:"legacy_identity_records"` // v1 records naming the identity (PinIdentity, note included); current version only, 0 on a historical one by rule; no version, so never diagnosed
+	Records          map[string]int `json:"records"` // v2 records whose pins name this version, by surface; unit records
+	Injected         int            `json:"injected"`
+	SuppressedRepeat int            `json:"suppressed_repeat"`
+	HeldBack         int            `json:"held_back"`
+	// HeldBackCauses splits HeldBack by surface, then by cause, in records.
+	// Its counts sum to HeldBack. An audit that does not read leaves it absent.
+	HeldBackCauses        map[string]map[string]int `json:"held_back_causes,omitempty"`
+	EmitFailed            int                       `json:"emit_failed"`
+	Returned              int                       `json:"returned"`
+	Sessions              int                       `json:"sessions"`                // unit delivered sessions
+	LegacyIdentityRecords int                       `json:"legacy_identity_records"` // v1 records naming the identity (PinIdentity, note included); current version only, 0 on a historical one by rule; no version, so never diagnosed
+}
+
+// SelectionReading states the limits that selection applies now and
+// whether the audit counts can be read at all. It feeds no class, no timing,
+// and no observation window, so it cannot change a delivery reading.
+type SelectionReading struct {
+	Budgets  SelectionBudgets  `json:"budgets"`
+	Evidence SelectionEvidence `json:"evidence"`
+}
+
+// SelectionBudgets holds the three limits of the current lessons.yaml. A
+// record stores no budget, so no reader can join a limit to a past count.
+type SelectionBudgets struct {
+	PinCap       BudgetLimit `json:"pin_cap"`
+	HookTotal    BudgetLimit `json:"hook_total"`
+	ChangeBudget BudgetLimit `json:"change_budget"`
+}
+
+// BudgetLimit is one limit: what the config asks for and what selection
+// applies. The two differ when the fixed total clamps the pin cap.
+type BudgetLimit struct {
+	Key       string   `json:"key,omitempty"`       // the lessons.yaml key; empty for the fixed total
+	Source    string   `json:"source"`              // closed: "file", "default", "fixed", "unread"
+	Requested int      `json:"requested,omitempty"` // absent for a fixed or unread limit
+	Effective int      `json:"effective"`
+	Unit      string   `json:"unit"` // pins or lessons per injection, or lessons per answer
+	Surfaces  []string `json:"surfaces"`
+}
+
+// SelectionEvidence says whether a zero count can be read as a zero.
+type SelectionEvidence struct {
+	State string `json:"state"` // closed: "read", "unknown"
 }
 
 // OccurrenceCounts are the assessed occurrences of one pin version.
