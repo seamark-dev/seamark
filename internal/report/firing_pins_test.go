@@ -193,6 +193,38 @@ func TestHookDeliveryNamesTheTotalCap(t *testing.T) {
 	}
 }
 
+func TestHookDeliveryNamesAnAlreadyDeliveredPin(t *testing.T) {
+	// A delivered pin reads suppressed-repeat with no cause, also above the
+	// cap. The event removes it before the budget, so a budget cause would
+	// name a cut that never touched it.
+	st := openLessonStore(t)
+
+	cfg := goldenConfig(distinctPins("api", 4)...)
+	cfg.PinBudget = 2
+
+	ev, err := ReadEvidence(st, []string{"api/a.go"}, cfg)
+	require.NoError(t, err)
+
+	plain, err := ev.HookSelection(cfg)
+	require.NoError(t, err)
+	require.Len(t, plain.OverPinCap, 2)
+
+	sel := plain.WithoutDelivered(HookBudget(cfg), func(sp reviews.SurfacedPin) bool {
+		return sp.Pin.Rule == "bravo-guard" || sp.Pin.Rule == "delta-guard"
+	})
+
+	got := sel.FiringPins(cfg, deliveries(reviews.PinInjected, len(sel.Pins)))
+
+	assert.Equal(t, []reviews.FiringPin{
+		firingPin(cfg, cfg.Pin[0], reviews.PinInjected, ""),
+		firingPin(cfg, cfg.Pin[1], reviews.PinSuppressedRepeat, ""),
+		firingPin(cfg, cfg.Pin[2], reviews.PinInjected, ""),
+		firingPin(cfg, cfg.Pin[3], reviews.PinSuppressedRepeat, ""),
+	}, got, "each pin reads one line, in entry order")
+	assert.Zero(t, countHeldBack(got))
+	assert.Zero(t, sel.HeldBack, "the count and the record agree")
+}
+
 // countHeldBack counts the held-back pins of a firing record.
 func countHeldBack(pins []reviews.FiringPin) int {
 	n := 0

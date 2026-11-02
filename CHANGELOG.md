@@ -35,6 +35,13 @@ model-boundary delivery.
   hook record now reads `over-total`, not `over-pin-cap`, when
   `pin_budget` is at or above the fixed total. An unread audit prints
   `unknown`, not a zero count.
+- **A later edit reaches the next pin.** Under `hook_delivery:
+  once-per-context` in the main Claude Code conversation, a pin that the
+  context already has leaves the selection before the budget, so the edit
+  hook emits the next pin on a later matching edit. No native recording
+  covers this. Such a pin now reads `suppressed-repeat`, not `held-back`,
+  and `lessons --stats` counts it as a match. Every other receiver and the
+  exploration hook select as before.
 - **Console controls.** Pins can edit mode/check on linked pins,
   author check definitions (`M`), and verify (`V`). Read-only browsing
   never applies a decision.

@@ -23,6 +23,13 @@ const (
 	deliveryStateFile     = "lessons-hook-state.json"
 	deliveryLockFile      = "lessons-hook-state.lock"
 	maxDeliveryStateBytes = 1 << 20
+	// deliveryResetLockWait bounds the wait of a reset for the state lock.
+	// One lock covers every context, so a lease of another session can
+	// hold it. A failed reset keeps the delivered pins hidden after a
+	// compaction until the TTL ends. A failed lease only repeats advice,
+	// so a lease never waits. The value equals exploreResetLockWait, so
+	// both resets of one compaction follow one rule.
+	deliveryResetLockWait = 200 * time.Millisecond
 )
 
 // deliveredPinScheme labels the delivered key of a pin. The label keeps
@@ -114,10 +121,11 @@ func unversionedItems(lessons []model.Lesson) []DeliveryItem {
 	return items
 }
 
-// HookDeliveryLease is a locked selection of lessons not yet delivered in
-// one provider context window. Commit must be called only after the selected
-// context has been emitted successfully. Close releases the cross-process
-// lock without marking anything delivered.
+// HookDeliveryLease is a locked view of the lessons delivered in one
+// provider context window. Select picks the lessons not yet delivered.
+// Commit must be called only after the selected context has been emitted
+// successfully. Close releases the cross-process lock without marking
+// anything delivered.
 type HookDeliveryLease struct {
 	dir        string
 	lock       *os.File
@@ -144,18 +152,35 @@ func BeginHookDelivery(root, sessionID string, lessons []model.Lesson) (*HookDel
 		unversionedItems(lessons))
 }
 
-// BeginContextDelivery selects lessons for once-per-context delivery and keeps
-// the state lock until Commit or Close. State leasing is supported on Unix,
-// the platforms Seamark currently releases for. Other platforms return an
-// error so callers inject normally instead of relying on unsafe, unlocked
-// read-modify-write state. Callers must always fail open on any error: this
-// state is an optimization, never permission to hide advice.
+// BeginContextDelivery opens the lease of a context and selects items in
+// one call. See OpenContextDelivery for the lock and for the rule on errors.
 func BeginContextDelivery(root string, dc DeliveryContext, items []DeliveryItem) (*HookDeliveryLease, error) {
+	lease, err := OpenContextDelivery(root, dc)
+	if err != nil {
+		return nil, err
+	}
+
+	lease.Select(items)
+
+	return lease, nil
+}
+
+// OpenContextDelivery reads the delivered set of a context for
+// once-per-context delivery and keeps the state lock until Commit or Close.
+// The open is apart from Select, so a caller can read the delivered set
+// under the lock before it decides what to select. It makes one lock
+// attempt, because a failed lease only repeats advice. State leasing is
+// supported on Unix, the platforms Seamark currently releases for. Other
+// platforms return an error so callers inject normally instead of relying
+// on unsafe, unlocked read-modify-write state. Callers must always fail
+// open on any error: this state is an optimization, never permission to
+// hide advice.
+func OpenContextDelivery(root string, dc DeliveryContext) (*HookDeliveryLease, error) {
 	if !dc.valid() {
 		return nil, fmt.Errorf("hook delivery context names no client or no receiver")
 	}
 
-	dir, lock, err := openDeliveryState(root)
+	dir, lock, err := openDeliveryState(root, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -182,30 +207,42 @@ func BeginContextDelivery(root string, dc DeliveryContext, items []DeliveryItem)
 		current.Delivered = make(map[string]bool)
 	}
 
-	lease := &HookDeliveryLease{
+	return &HookDeliveryLease{
 		dir: dir, lock: lock, state: state, contextSHA: contextSHA, context: current,
-	}
+	}, nil
+}
 
+// Select splits items into the lessons to inject and the lessons that this
+// context already has. It also suppresses a key that repeats inside items.
+// It reads no file, so a caller can run it under the lock of a hook. A
+// lease selects once: a second call adds to the first selection.
+func (l *HookDeliveryLease) Select(items []DeliveryItem) {
 	pending := make(map[string]bool, len(items))
 
 	for _, item := range items {
 		digest := item.digest()
 
-		if current.Delivered[digest] || pending[digest] {
-			lease.suppressed = append(lease.suppressed, item.Lesson)
+		if l.context.Delivered[digest] || pending[digest] {
+			l.suppressed = append(l.suppressed, item.Lesson)
 			continue
 		}
 
 		pending[digest] = true
-		lease.inject = append(lease.inject, item.Lesson)
-		lease.injectSHA = append(lease.injectSHA, digest)
+		l.inject = append(l.inject, item.Lesson)
+		l.injectSHA = append(l.injectSHA, digest)
 
 		if item.PinVersion != "" {
-			lease.injectPins = append(lease.injectPins, item.PinVersion)
+			l.injectPins = append(l.injectPins, item.PinVersion)
 		}
 	}
+}
 
-	return lease, nil
+// PinDelivered reports whether this context already has the pin version in
+// its current generation. It compares the delivered-pin key only, so an
+// entry of a mined lesson or of an earlier binary never matches: at worst
+// a pin repeats, and advice never stays hidden.
+func (l *HookDeliveryLease) PinDelivered(version string) bool {
+	return l.context.Delivered[DeliveryItem{PinVersion: version}.digest()]
 }
 
 // Inject returns the lessons that still need to reach this context window.
@@ -232,7 +269,7 @@ func (l *HookDeliveryLease) Generation() uint64 {
 }
 
 // Commit marks the selected lessons delivered. It is intentionally separate
-// from BeginHookDelivery so a failed stdout write never creates false state.
+// from Select so a failed stdout write never creates false state.
 func (l *HookDeliveryLease) Commit() error {
 	if l.committed || len(l.injectSHA) == 0 {
 		l.committed = true
@@ -298,7 +335,8 @@ func ResetContextDelivery(root string, dc DeliveryContext) error {
 // new generation of the context. The reset record of the firing log
 // carries it, so a reader can join the records of one generation. The
 // generation is zero when nothing was reset: an invalid context, no
-// state file, or an error.
+// state file, or an error. The reset waits deliveryResetLockWait for the
+// lock, so a short lease of another session does not fail it.
 func ResetContextGeneration(root string, dc DeliveryContext) (uint64, error) {
 	if !dc.valid() {
 		return 0, nil
@@ -311,7 +349,7 @@ func ResetContextGeneration(root string, dc DeliveryContext) (uint64, error) {
 		return 0, err
 	}
 
-	dir, lock, err := openDeliveryState(root)
+	dir, lock, err := openDeliveryState(root, deliveryResetLockWait)
 	if err != nil {
 		return 0, err
 	}
@@ -346,7 +384,11 @@ func ResetContextGeneration(root string, dc DeliveryContext) (uint64, error) {
 	return current.Generation, nil
 }
 
-func openDeliveryState(root string) (string, *os.File, error) {
+// openDeliveryState opens and locks the state lock file. When another
+// process holds the lock, the open tries again until wait ends, and then
+// it returns an error. A wait of zero is one attempt: a lease passes
+// zero, and a reset passes deliveryResetLockWait.
+func openDeliveryState(root string, wait time.Duration) (string, *os.File, error) {
 	dir := filepath.Join(root, ".seamark")
 
 	if info, err := os.Lstat(dir); err == nil {
@@ -378,7 +420,7 @@ func openDeliveryState(root string) (string, *os.File, error) {
 		return "", nil, err
 	}
 
-	if err := lockDeliveryFile(lock); err != nil {
+	if err := lockDeliveryFileWithin(lock, wait); err != nil {
 		_ = lock.Close()
 		return "", nil, err
 	}

@@ -36,7 +36,7 @@ func HookBudget(cfg *reviews.Config) LessonBudget {
 
 // Clamped returns the budget with the pin cap at most the total cap.
 // This pin cap is the effective number that the settings and the report
-// show. hookFold does not use it, because the cut must name the total
+// show. applyBudget does not use it, because the cut must name the total
 // cap when the total cap is the limit.
 func (b LessonBudget) Clamped() LessonBudget {
 	if b.Total > 0 && b.Pins > b.Total {
@@ -78,22 +78,13 @@ func LessonsForFilesBudget(st *store.Store, cfg *reviews.Config, files []string,
 	return sel.Lessons, sel.HeldBack, nil
 }
 
-// hookFold is the budget rule of the edit hook. It collapses
-// restatements (ambient budgets only). It cuts the pins at the pin cap,
-// then at the total cap. The mined lessons fill the rest of the total
-// cap. Each cut is a separate step, so the Selection records what each
-// step removes. LessonsForFilesBudget states the held-back count.
+// hookFold is the fold of the edit hook. It collapses restatements
+// (ambient budgets only), and applyBudget then cuts the rest.
+// LessonsForFilesBudget states the held-back count.
 func (ev *Evidence) hookFold(cfg *reviews.Config, budget LessonBudget) Selection {
-	// This reads the caller's pin cap. The step below changes the pin
-	// cap, and it must not turn an ambient budget into a deliberate view.
+	// This reads the caller's pin cap. applyBudget changes the pin cap,
+	// and that must not turn an ambient budget into a deliberate view.
 	ambient := budget.Pins > 0
-
-	// A pin cap at or above the total cap is not the limit. Zero means
-	// no pin cap, so the total cut moves those pins to OverTotal. The
-	// recorded cause then names the cap that a setting cannot raise.
-	if budget.Total > 0 && budget.Pins >= budget.Total {
-		budget.Pins = 0
-	}
 
 	merged := ev.union(cfg, ambient)
 	sel := Selection{Excluded: merged.excluded}
@@ -108,27 +99,46 @@ func (ev *Evidence) hookFold(cfg *reviews.Config, budget LessonBudget) Selection
 		pins, sel.Restated = reviews.CollapseRestatedPins(pins)
 	}
 
-	pins, sel.OverPinCap = cutAt(pins, budget.Pins)
-	sel.Pins, sel.OverTotal = cutAt(pins, budget.Total)
-	sel.HeldBack = len(sel.Restated) + len(sel.OverPinCap) + len(sel.OverTotal)
+	sel.applyBudget(pins, merged.mined, budget)
+
+	return sel
+}
+
+// applyBudget cuts pins at the pin cap, then at the total cap. The mined
+// lessons fill the rest of the total cap. Each cut is a separate step, so
+// the Selection records what each step removes.
+//
+// It sets every list that the cut decides, and it keeps Restated. The
+// plain fold and WithoutDelivered both call it, so one event applies one
+// cut rule, whichever path selects its lessons.
+func (s *Selection) applyBudget(pins []reviews.SurfacedPin, mined []model.Lesson, budget LessonBudget) {
+	// A pin cap at or above the total cap is not the limit. Zero means
+	// no pin cap, so the total cut moves those pins to OverTotal. The
+	// recorded cause then names the cap that a setting cannot raise.
+	if budget.Total > 0 && budget.Pins >= budget.Total {
+		budget.Pins = 0
+	}
+
+	pins, s.OverPinCap = cutAt(pins, budget.Pins)
+	s.Pins, s.OverTotal = cutAt(pins, budget.Total)
+	s.HeldBack = len(s.Restated) + len(s.OverPinCap) + len(s.OverTotal)
 
 	// The mined lessons fill the room that the pins leave under the
 	// total cap. The reminder points at pins only, so MinedOverTotal is
 	// not part of HeldBack.
-	sel.Mined = merged.mined
+	s.Mined, s.MinedOverTotal = mined, nil
 	if budget.Total > 0 {
-		sel.Mined, sel.MinedOverTotal = splitAt(merged.mined, budget.Total-len(sel.Pins))
+		s.Mined, s.MinedOverTotal = splitAt(mined, budget.Total-len(s.Pins))
 	}
 
 	// No preallocation: an empty selection stays nil, exactly as the
 	// single-file selector returns it.
-	for _, sp := range sel.Pins {
-		sel.Lessons = append(sel.Lessons, sp.Lesson())
+	s.Lessons = nil
+	for _, sp := range s.Pins {
+		s.Lessons = append(s.Lessons, sp.Lesson())
 	}
 
-	sel.Lessons = append(sel.Lessons, sel.Mined...)
-
-	return sel
+	s.Lessons = append(s.Lessons, s.Mined...)
 }
 
 // PrintEditReminder writes the advisory block for one edit operation.

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -222,6 +223,67 @@ func TestLessonsHookRecordsHeldBackPins(t *testing.T) {
 		pin(cfg.Pin[2], reviews.PinHeldBack, reviews.CauseOverPinCap),
 		pin(cfg.Pin[3], reviews.PinHeldBack, reviews.CauseOverPinCap),
 	}, firings[0].Pins, "a held-back pin keeps its cause and is never recorded as injected")
+}
+
+// TestLessonsHookOverflowReachesTheNextEdit runs the overflow through the
+// native Claude payloads. The root context moves to the next pin, and a
+// child keeps the plain selection, because no reset reaches it.
+func TestLessonsHookOverflowReachesTheNextEdit(t *testing.T) {
+	root := hookRepo(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"hook_delivery: once-per-context\npin_budget: 3\npin:\n"+
+			"  - {rule: boundary-validation, region: a.go, note: Validate request payloads at the edge.}\n"+
+			"  - {rule: idempotent-retries, region: a.go, note: Make retried requests idempotent.}\n"+
+			"  - {rule: transaction-atomicity, region: a.go, note: Wrap dependent writes in one transaction.}\n"+
+			"  - {rule: structured-logging, region: a.go, note: Log fields and never format strings.}\n"), 0o644))
+
+	const last = "structured-logging"
+
+	first := []string{"boundary-validation", "idempotent-retries", "transaction-atomicity"}
+
+	edit := func(toolUse string) string {
+		t.Helper()
+
+		out, _, err := runIn(t, editPayload(filepath.Join(root, "a.go"), "session-1", toolUse, "prompt-1"),
+			"-C", root, "lessons", "--hook")
+		require.NoError(t, err)
+
+		return out
+	}
+
+	assertFirstPins := func(out string) {
+		t.Helper()
+
+		for _, rule := range first {
+			assert.Contains(t, out, rule)
+		}
+
+		assert.NotContains(t, out, last)
+		assert.Contains(t, out, "+1 more pins")
+	}
+
+	assertFirstPins(edit("toolu-1"))
+
+	out := edit("toolu-2")
+	assert.Contains(t, out, last, "the next edit reaches the pin above the cap")
+	assert.NotContains(t, out, "more pins")
+	assert.NotContains(t, out, first[0])
+
+	// The child has its own receiver and no reset, so it repeats the first pins.
+	child := strings.Replace(editPayload(filepath.Join(root, "a.go"), "session-1", "toolu-3", "prompt-1"),
+		`"prompt_id"`, `"agent_id":"agent-7","prompt_id"`, 1)
+
+	for range 2 {
+		out, _, err := runIn(t, child, "-C", root, "lessons", "--hook")
+		require.NoError(t, err)
+		assertFirstPins(out)
+	}
+
+	_, _, err := runIn(t, resetPayload("session-1", "PostCompact"), "-C", root, "lessons", "--hook-reset")
+	require.NoError(t, err)
+
+	assertFirstPins(edit("toolu-4"))
 }
 
 // TestLessonsHookNeverInvokes proves AC-1 for the record paths that

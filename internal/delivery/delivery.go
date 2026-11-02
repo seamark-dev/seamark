@@ -1,8 +1,9 @@
 // Package delivery is the shared advisory-delivery transaction of the
 // edit hooks. One edit event from any client runs one sequence:
 // normalize the paths, select the lessons, lease the once-per-context
-// state, emit, commit, and audit. The package owns that order, so a
-// client adapter cannot mark advice delivered before the client has it.
+// state, remove what the receiver already has, emit, commit, and audit.
+// The package owns that order, so a client adapter cannot mark advice
+// delivered before the client has it.
 //
 // The package does not know a native payload. A client adapter decodes
 // the event before Deliver and encodes the advice inside the emit
@@ -114,7 +115,8 @@ type Outcome struct {
 	Rejected      []RejectedPath
 	RejectedCount int
 	// Emitted and Suppressed count lessons. HeldBackPins counts the
-	// applicable pins that the budget left out of the advice.
+	// applicable pins that the collapse or the budget left out of the
+	// advice. A pin that the receiver already has is not in that count.
 	Emitted      int
 	Suppressed   int
 	HeldBackPins int
@@ -143,6 +145,13 @@ func (e *EmitError) Unwrap() error { return e.Err }
 
 // Deliver runs the delivery sequence for one edit event. st must be an
 // open index: Deliver does not index, mine, or create a database.
+//
+// Under a lease, the pins that the receiver already has leave the
+// selection before the budget, so a later matching edit reaches the next
+// pin. The lock covers that step, the emit, and the commit, so the
+// delivered set cannot change between them. No store read runs under the
+// lock, because a longer hold makes more hooks fail the lock and repeat
+// advice.
 //
 // The error is an *EmitError when the emit callback fails. It is a
 // plain error when the lesson lookup fails or ctx ends. In both cases
@@ -185,29 +194,40 @@ func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outc
 		return out, fmt.Errorf("select lessons: %w", err)
 	}
 
-	lessons := sel.Lessons
-	out.HeldBackPins = sel.HeldBack
-
-	if len(lessons) == 0 {
+	if len(sel.Lessons) == 0 {
 		out.record(req, cfg, evaluationRecord(), sel.FiringPins(cfg, nil), emissionNotNeeded, evaluationComplete)
 
 		return out, nil
 	}
 
-	versions := selectedVersions(cfg, sel)
-
-	lease, suppression := beginLease(req, cfg, deliveryItems(sel, versions))
+	// The lease opens only here, after the store reads. An event with no
+	// lesson then creates no state, and the lock never covers a store read.
+	lease, suppression := beginLease(req, cfg)
 	out.Suppression = suppression
-
-	// Without a lease, the event sends every lesson and every pin.
-	selected, suppressed, sentPins := lessons, []model.Lesson(nil), versions
 
 	if lease != nil {
 		// Close is safe after the explicit Close calls below. The defer
 		// releases the lock on every early return.
 		defer func() { _ = lease.Close() }()
 
-		selected, suppressed = lease.Inject(), lease.Suppressed()
+		sel = sel.WithoutDelivered(report.HookBudget(cfg), func(sp reviews.SurfacedPin) bool {
+			return lease.PinDelivered(cfg.PinVersion(sp.Pin))
+		})
+	}
+
+	// Both values read the final selection, so the reminder never counts
+	// a pin that the receiver already has.
+	out.HeldBackPins = sel.HeldBack
+	versions := selectedVersions(cfg, sel)
+
+	// Without a lease, the event sends every lesson and every pin.
+	selected, suppressed, sentPins := sel.Lessons, []model.Lesson(nil), versions
+
+	if lease != nil {
+		lease.Select(deliveryItems(sel, versions))
+
+		selected = lease.Inject()
+		suppressed = append(pinLessons(sel.AlreadyDelivered), lease.Suppressed()...)
 		sentPins = lease.InjectedPinVersions()
 		out.Generation = lease.Generation()
 	}
@@ -304,7 +324,9 @@ func hookSelection(st *store.Store, cfg *reviews.Config, files []string) (report
 // pinDeliveries returns the delivery of each selected pin. versions holds
 // the version of each selected pin, and sentPins holds the versions that
 // the event sends. A pin with such a version gets sent, and every other
-// selected pin gets suppressed-repeat.
+// selected pin gets suppressed-repeat. A delivered pin is not a selected
+// pin here, because WithoutDelivered already moved it, so FiringPins names
+// it. Only a version that repeats inside the event reaches that branch.
 //
 // The walk matches on the version, the key of the delivered set, and never
 // on a lesson. Two entries with one text render one lesson and can hold
@@ -444,7 +466,10 @@ func deliveryContext(clientID string, receiving *integration.ReceivingContext) r
 // and the Suppression value says why. Suppression needs a receiver that
 // the client names and can reset. A parent session id is not a receiver:
 // it hides advice from a subagent that never got it.
-func beginLease(req Request, cfg *reviews.Config, items []reviews.DeliveryItem) (*reviews.HookDeliveryLease, Suppression) {
+//
+// The lease selects nothing yet: the caller reads the delivered set
+// first, and it gives the lease the result of the second budget cut.
+func beginLease(req Request, cfg *reviews.Config) (*reviews.HookDeliveryLease, Suppression) {
 	if cfg.HookDelivery() != reviews.HookDeliveryOncePerContext {
 		return nil, SuppressionOff
 	}
@@ -458,7 +483,7 @@ func beginLease(req Request, cfg *reviews.Config, items []reviews.DeliveryItem) 
 		return nil, SuppressionNotResettable
 	}
 
-	lease, err := reviews.BeginContextDelivery(req.Root, deliveryContext(req.ClientID, receiving), items)
+	lease, err := reviews.OpenContextDelivery(req.Root, deliveryContext(req.ClientID, receiving))
 	if err != nil {
 		// The state is an optimization, never permission to hide advice.
 		return nil, SuppressionStateUnavailable
@@ -483,6 +508,17 @@ func deliveryItems(sel report.Selection, versions []string) []reviews.DeliveryIt
 	}
 
 	return items
+}
+
+// pinLessons returns the lesson of each pin, in order. The lease reads
+// only the selected items, so these pins join the suppressed lessons here.
+func pinLessons(pins []reviews.SurfacedPin) []model.Lesson {
+	lessons := make([]model.Lesson, len(pins))
+	for i, sp := range pins {
+		lessons[i] = sp.Lesson()
+	}
+
+	return lessons
 }
 
 // The emission values of a firing record (contract L3). The list is

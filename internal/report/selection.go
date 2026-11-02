@@ -62,6 +62,10 @@ type Selection struct {
 	// most 100 mined lessons per file, so a lesson past that read is in
 	// no list.
 	Excluded []Exclusion
+	// AlreadyDelivered holds the pins that WithoutDelivered removes, in
+	// fold order. These pins are outside HeldBack, because the receiver
+	// has them and a pointer to them gives no new advice.
+	AlreadyDelivered []reviews.SurfacedPin
 }
 
 // Exclusion explains why the config keeps a mined lesson out of a
@@ -91,6 +95,42 @@ func (ev *Evidence) HookSelection(cfg *reviews.Config) (Selection, error) {
 	}
 
 	return ev.hookFold(cfg, HookBudget(cfg)), nil
+}
+
+// WithoutDelivered returns the selection for a receiver that already has
+// some pins. delivered names those pins. budget must be the budget of s.
+//
+// It moves each delivered pin of Pins, OverTotal, and OverPinCap to
+// AlreadyDelivered, then applies the budget again to the rest. So the
+// next pins take the room, and a later matching edit reaches them. That
+// list order is fold order, and the move never sorts, so the eligible
+// pins keep their rank.
+//
+// Restated stays as it is. A restatement of a delivered pin must not take
+// the room of that pin, because the receiver already has its advice.
+//
+// The mined input is Mined, then MinedOverTotal, so a mined lesson that
+// the first cut left out can use the room of a delivered pin.
+//
+// It reads no file, so a caller can run it under the lock of a hook.
+func (s Selection) WithoutDelivered(budget LessonBudget, delivered func(reviews.SurfacedPin) bool) Selection {
+	var eligible []reviews.SurfacedPin
+
+	for _, list := range [][]reviews.SurfacedPin{s.Pins, s.OverTotal, s.OverPinCap} {
+		for _, sp := range list {
+			if delivered(sp) {
+				s.AlreadyDelivered = append(s.AlreadyDelivered, sp)
+
+				continue
+			}
+
+			eligible = append(eligible, sp)
+		}
+	}
+
+	s.applyBudget(eligible, slices.Concat(s.Mined, s.MinedOverTotal), budget)
+
+	return s
 }
 
 // ChangeSetSelection selects the lessons of one change_set answer or

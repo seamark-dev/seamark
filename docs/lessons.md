@@ -180,6 +180,25 @@ again. After upgrading Seamark, run init once to install or refresh the hooks.
 Configuration is then read on every hook invocation, so switching modes does
 not require re-running init.
 
+A pin that the receiving context already has leaves the selection before the
+budget. It takes no slot, so a later matching edit reaches the next pin. With
+`pin_budget: 3` and four matching pins of equal rank, the first edit sends
+three pins and `+1 more`, the second edit sends the fourth pin, and the third
+edit sends nothing. After a reset the pins go out again from the top. Here
+"reaches" means that the hook emitted the pin. No native recording covers this
+case, and an emitted pin does not show that a model read it.
+
+This holds only for a receiver that can reset, with usable state: today the
+main Claude Code conversation under `once-per-context`. Under `always`, in a
+subagent, on Codex, and when the state fails open, the budget applies to every
+matching pin, so the same edit sends the same first pins each time. A pin that
+restates a delivered pin stays held back, because the restatement collapse
+runs first and ignores what the context has. The exploration hook applies the
+budget before its repeat state, so a read does not move to the next pin.
+Mined lessons have no version, so this step leaves them alone. They use the
+room that pins leave, and the repeat check of a mined lesson runs after the
+budget, so a delivered mined lesson can still hold a slot.
+
 The optimization is deliberately fail-open: missing session identity, corrupt
 local state, or a state-lock failure causes normal injection rather than
 silently hiding a lesson. Only repository-scoped digests of the receiving
@@ -682,7 +701,9 @@ one theme never spend two slots:
   `+N more` pointer for the rest) plus the file's recurring mined
   lessons. Offline, silent when there is nothing to say. With opt-in
   `hook_delivery: once-per-context`, already-delivered lessons stay silent
-  until Claude Code compacts the current session. Only files inside the
+  until Claude Code compacts the current session, and a pin that the context
+  already has leaves the selection before the budget, so a later matching
+  edit reaches the next pin. Only files inside the
   workspace count: a path outside it, or behind a symbolic link that
   leaves it, gets no reminder. A new file counts by its path. Without an
   index the hook still delivers the pins of `lessons.yaml`, and it never
@@ -943,6 +964,12 @@ or unknown cause counts under `unknown`. `suppressed-repeat` and `emit-failed` a
 values with their own counts, not held-back causes. The counts are records,
 and `held-back` equals the sum of the split. JSON holds the same reading in
 `selection` and `held_back_causes`, both optional under `delivery/1`.
+
+On the edit hook, a pin that the delivered set of the context names reads
+`suppressed-repeat`, with no cause, and never a budget cause. A budget cause
+still does not show that the receiver lacks the pin: an event with no delivery
+state does not read that set, and an older record can read `held-back` for a
+pin that the context already had.
 
 When the delivery audit is absent, unreadable or over its limit, a zero
 would state nothing. The evidence reading, the delivery totals and each
