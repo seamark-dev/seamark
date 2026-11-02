@@ -205,8 +205,8 @@ type OccurrenceCounts struct {
 	Incidents       int               `json:"incidents"`      // distinct incident digests among them
 	UnknownAction   int               `json:"unknown_action"` // occurrences without a located action; never incidents
 	ByClass         map[PairClass]int `json:"by_class"`       // sums to Occurrences
-	ByOrigin        map[Origin]int    `json:"by_origin"`
-	Excluded        int               `json:"excluded"` // newest review excluded; not in Occurrences
+	ByOrigin        map[Origin]int    `json:"by_origin"`      // one count per distinct origin, so it can sum above Occurrences
+	Excluded        int               `json:"excluded"`       // newest review excluded; not in Occurrences
 	ChangedEvidence int               `json:"changed_evidence"`
 	// IndependenceUnresolved means two counted occurrences share a session,
 	// incident, or joined anchor component. It does not read peer overlap
@@ -319,8 +319,9 @@ type OccurrenceDetail struct {
 	EpisodeRef     string         `json:"episode_ref"` // 12 hex of the episode key + "@" + revision (capture show)
 	Family         string         `json:"family"`      // closed: "user", "peer"
 	Origin         Origin         `json:"origin"`
-	Assessment     string         `json:"assessment"` // prompt version of the plan, e.g. "live-v2"
-	Review         string         `json:"review"`     // closed: "counted", "excluded", "changed-evidence"
+	Origins        []Origin       `json:"origins,omitempty"` // every distinct origin, sorted, when the members differ; absent otherwise, so one origin keeps its bytes
+	Assessment     string         `json:"assessment"`        // prompt version of the plan, e.g. "live-v2"
+	Review         string         `json:"review"`            // closed: "counted", "excluded", "changed-evidence"
 	Class          PairClass      `json:"class"`
 	Reason         Code           `json:"reason,omitempty"` // set when class is unknown
 	Timing         PairTiming     `json:"decision_timing"`
@@ -373,7 +374,7 @@ func unitTable() map[string]string {
 		"events":             "surface invocations (distinct event_id)",
 		"sessions":           "distinct captured or audited sessions (session_sha256)",
 		"delivered sessions": "sessions with at least one injected record (hook or explore) of the pin version, not counting injections on calls the guard denied",
-		"occurrences":        "assessed feedback occurrences: one feedback item and one pin version (association key; known copies of one feedback count once)",
+		"occurrences":        "assessed feedback occurrences: one feedback item and one pin version (association key; known copies of one feedback count once); by_origin counts each distinct origin of an occurrence once, so one occurrence can count under two origins",
 		"incidents":          "distinct corrected actions (session and tool-use identity)",
 		"actions":            "cited corrected actions",
 		"feedback items":     "captured feedback (episode keys)",
