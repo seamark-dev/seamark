@@ -9,7 +9,7 @@ import (
 // schemaVersion is the schema this binary understands and writes. Bump it
 // together with a new migrations entry — never alone: a version without a
 // migration would leave every existing database behind.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // migration is one ordered upgrade step: run brings a database from any
 // version below `to` up to `to`.
@@ -34,6 +34,7 @@ var migrations = []migration{
 	{to: 5, run: addProposalTriggerChecked},
 	{to: 6, run: addProposalTriggerPromptVersion},
 	{to: 7, run: addProposalSourceAndProvenance},
+	{to: 8, run: addProposalScopeChosen},
 }
 
 // addFindingSource (v1 → v2): finding.source arrived with fix mining —
@@ -149,6 +150,23 @@ func addProposalSourceAndProvenance(tx *sql.Tx) error {
 	}
 
 	return nil
+}
+
+// addProposalScopeChosen (v7 → v8) lets the ledger record that a person
+// chose the regions of a row. The stored regions cannot say it, and an
+// inferred scope must not replace a chosen set without a review. The zero
+// default means "no person chose them", so existing rows need no rewrite.
+func addProposalScopeChosen(tx *sql.Tx) error {
+	has, err := hasColumn(tx, "proposal", "scope_chosen_at")
+	if err != nil {
+		return err
+	}
+
+	if !has {
+		_, err = tx.Exec(`ALTER TABLE proposal ADD COLUMN scope_chosen_at INTEGER NOT NULL DEFAULT 0`)
+	}
+
+	return err
 }
 
 // refuseNewer rejects a database stamped by a newer seamark BEFORE any

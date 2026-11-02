@@ -1122,11 +1122,51 @@ func (p *pinsView) citationLine(f domain.Finding, withID bool, w int) string {
 	return ui.Truncate(line, w, t.Glyphs.Ellipsis)
 }
 
-// scopeValues renders the scope advice: current, a change from the live
+// pinEditRows names the rows that the form of a linked pin edits, for
+// example "note, mode, and check". checks and regions say which rows it
+// offers, so a text never names a row that the form does not edit.
+func pinEditRows(checks, regions bool) string {
+	switch {
+	case checks && regions:
+		return "note, mode, check, and regions"
+	case checks:
+		return "note, mode, and check"
+	case regions:
+		return "note and regions"
+	}
+
+	return "note"
+}
+
+// pinScopeChoice returns the sentence that names the scope choice of pin,
+// or "" when no person chose its regions. A chosen row outranks a computed
+// scope, so the reader needs the choice beside any suggestion.
+func pinScopeChoice(pin *maintain.Pin) string {
+	if len(pin.Link.Applied) != 1 || pin.Link.Applied[0].ScopeChosen == 0 {
+		return ""
+	}
+
+	return "A person chose these regions on " + domain.ScopeChoiceDate(pin.Link.Applied[0].ScopeChosen) + "."
+}
+
+// scopeValues renders the scope advice and the scope choice of pin. A
+// choice shows in every state of the advice.
+func (p *pinsView) scopeValues(pin *maintain.Pin, s maintain.ScopeReading, w int) []string {
+	out := p.scopeAdvice(pin, s, w)
+
+	if choice := pinScopeChoice(pin); choice != "" {
+		out = append(out, propLines(p.st.theme.Muted, choice, w)...)
+	}
+
+	return out
+}
+
+// scopeAdvice renders the scope advice: current, a change from the live
 // set to the computed set with explicit rows, or no recompute. A broader
 // or repository-wide change carries a warning, because it delivers the
-// pin to more paths.
-func (p *pinsView) scopeValues(pin *maintain.Pin, s maintain.ScopeReading, w int) []string {
+// pin to more paths. For a chosen row the change is a suggestion, because
+// only a reviewed preview can replace a choice.
+func (p *pinsView) scopeAdvice(pin *maintain.Pin, s maintain.ScopeReading, w int) []string {
 	t := p.st.theme
 
 	if !s.Known {
@@ -1143,7 +1183,12 @@ func (p *pinsView) scopeValues(pin *maintain.Pin, s maintain.ScopeReading, w int
 			propLines(t.Muted, "No cited finding is living. The current regions stay; missing evidence never widens a pin.", w)...)
 	}
 
-	out := []string{t.Attention.Render(t.Glyphs.Warn + " would change")}
+	word := " would change"
+	if pinScopeChoice(pin) != "" {
+		word = " suggests a change"
+	}
+
+	out := []string{t.Attention.Render(t.Glyphs.Warn + word)}
 	out = append(out, regionDelta(t, pinEntryRegions(pin.Entry), a.Regions, w)...)
 
 	if a.RepoWide {
@@ -1454,12 +1499,10 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 	// every row, and the sentence about the note does not apply.
 	//
 	// The pin form shows the Mode and Check rows only while Pins shows
-	// its lesson-check parts (pinsCheckShown). So the sentence names them
-	// only then.
-	edit := " i edits the note of this pin only."
-	if p.checkShown() {
-		edit = " i edits the note, mode, and check of this pin only."
-	}
+	// its lesson-check parts (pinsCheckShown), and it edits the regions
+	// only while it can hold them. So the sentence names only those rows.
+	regions := pinRegionLock(pinEntryRegions(pin.Entry)) == ""
+	edit := " i edits the " + pinEditRows(p.checkShown(), regions) + " of this pin only."
 
 	if authorForeignRoot(p.st) != "" {
 		edit = ""

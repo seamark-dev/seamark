@@ -215,6 +215,7 @@ func TestConsoleFlowRetargetFromPinsRefreshesThePinWithoutALossNote(t *testing.T
 	h.press("w")
 	require.Equal(t, []maintain.Request{{
 		Action: maintain.ActionRetarget, Refs: []pinfile.EntryRef{fx.pins[maintWrap].Entry.Ref()}, Cursor: true,
+		ReplaceChosen: true,
 	}}, reqs)
 	require.True(t, maintHasKey(h, "y"))
 	assert.Contains(t, maintContent(t, h), "Retarget 1 pin · y writes lessons.yaml and the ledger")

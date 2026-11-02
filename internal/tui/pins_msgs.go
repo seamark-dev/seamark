@@ -184,6 +184,20 @@ func (h *maintHost) route(msg tea.Msg) (cmd tea.Cmd, consumed bool) {
 	return h.after(h.modal.update(msg)), false
 }
 
+// openScope opens the scope preview of the draft d. The open preview
+// captures every key, so a second request cannot come from the keyboard.
+func (h *maintHost) openScope(d *pinDraft) tea.Cmd {
+	if h.modal != nil {
+		return nil
+	}
+
+	var cmd tea.Cmd
+
+	h.modal, cmd = newScopeModal(h.st, d)
+
+	return cmd
+}
+
 // after collects the entries that the preview changed, drops a closed
 // preview, and passes cmd on.
 func (h *maintHost) after(cmd tea.Cmd) tea.Cmd {
@@ -208,6 +222,15 @@ func (h *maintHost) takeActed() []pinfile.EntryRef {
 	h.acted = nil
 
 	return refs
+}
+
+// scopeDraft returns the draft of the open scope preview, or nil.
+func (h *maintHost) scopeDraft() *pinDraft {
+	if h.modal == nil {
+		return nil
+	}
+
+	return h.modal.draft
 }
 
 // view renders the open preview for the shell, which dims the frame

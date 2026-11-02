@@ -313,7 +313,7 @@ func TestStateV3RoundTripsSourceAndProvenance(t *testing.T) {
 
 	state, err := src.ExportState()
 	require.NoError(t, err)
-	assert.Equal(t, 3, state.Version)
+	assert.Equal(t, StateVersion, state.Version)
 	require.Len(t, state.Proposals, 1)
 	assert.Equal(t, model.ProposalSourceFindings, state.Proposals[0].Source)
 	assert.Empty(t, state.Proposals[0].Provenance)

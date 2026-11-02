@@ -139,7 +139,9 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    --proposals ledger names the candidates). Changes
                    only the region keys of the entry, in place, and the
                    ledger with them; write-gated like --apply, else
-                   prints the change to make by hand.
+                   prints the change to make by hand. Refuses a pin
+                   whose regions a person chose when the computed scope
+                   differs: review that pin in seamark tui.
   --confirm-checks with --retarget: move the regions of a pin with mode
                    check or enforce. Without it, such a retarget prints
                    the checker impact and changes nothing.
@@ -990,11 +992,25 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 	fmt.Fprintf(out, "; ~%s tokens %s / ~%s back\n", res.TokensSent(), verb, res.TokensBack())
 
 	if res.AppliedStored > 0 {
-		fmt.Fprintln(out, "applied pins with new triggers show their current delivery scopes in "+
-			"`lessons --proposals`; `--retarget` applies them")
+		fmt.Fprintln(out, appliedTriggersHint(res.AppliedChosen))
 	}
 
 	return nil
+}
+
+// appliedTriggersHint returns the tail of an extraction that stored
+// triggers on applied pins. chosen counts the rows whose regions a person
+// chose. `--retarget` refuses those rows, so the tail then names the
+// console too.
+func appliedTriggersHint(chosen int) string {
+	const hint = "applied pins with new triggers show their current delivery scopes in " +
+		"`lessons --proposals`; `--retarget` applies them"
+
+	if chosen == 0 {
+		return hint
+	}
+
+	return hint + ", except a pin whose regions a person chose: review that pin in `seamark tui`, Lessons › Pins"
 }
 
 // printPreflight renders the pre-invocation disclosure: what would be

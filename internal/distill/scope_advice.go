@@ -103,16 +103,17 @@ func RecommendScope(st *store.Store, root string, p model.Proposal, living []mod
 	}
 
 	advice.Kind = ScopeChanged
-	advice.Broader = reaches(regions, current)
-	advice.Narrower = reaches(current, regions)
+	advice.Broader = Reaches(regions, current)
+	advice.Narrower = Reaches(current, regions)
 
 	return advice, nil
 }
 
-// reaches reports whether set next delivers to a path that set cur does
+// Reaches reports whether set next delivers to a path that set cur does
 // not. An empty set is repository-wide: it reaches every path, and no
-// set reaches beyond it.
-func reaches(next, cur []string) bool {
+// set reaches beyond it. A scope edit compares a typed set with this
+// rule, so a preview has one meaning of broader and narrower.
+func Reaches(next, cur []string) bool {
 	if len(cur) == 0 {
 		return false
 	}

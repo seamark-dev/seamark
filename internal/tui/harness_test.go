@@ -100,6 +100,7 @@ type fakeServices struct {
 	pins *maintain.Inspection
 
 	planMaintenance   func(maintain.Request) (*maintain.Plan, error)
+	planScope         func(maintain.ScopeRequest) (*maintain.Plan, error)
 	commitMaintenance func(*maintain.Plan) (maintain.Result, error)
 	planRecovery      func(*maintain.Recovery) (*maintain.Plan, error)
 	commitRecovery    func(*maintain.Plan) (maintain.Result, error)
@@ -410,6 +411,16 @@ func (f *fakeServices) answered(in *maintain.Inspection) *maintain.Inspection {
 	}
 
 	return in
+}
+
+func (f *fakeServices) PlanScope(req maintain.ScopeRequest) (*maintain.Plan, error) {
+	f.record("PlanScope")
+
+	if f.planScope == nil {
+		return &maintain.Plan{Action: maintain.ActionScope, PlannedAt: time.Now()}, nil
+	}
+
+	return f.planScope(req)
 }
 
 func (f *fakeServices) PlanMaintenance(req maintain.Request) (*maintain.Plan, error) {

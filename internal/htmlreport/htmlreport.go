@@ -112,6 +112,10 @@ type Card struct {
 	Facts      string
 	Era        string
 	RegionsNow string
+	// ScopeChosen is the date that a person chose the stored regions, or
+	// empty. The card then reads RegionsNow as a suggestion and prints no
+	// command, because `--retarget` refuses that row.
+	ScopeChosen string
 	// Scope is the trigger-scope advisory sentence (RFC-004): the note
 	// and co-change history point outside the pin's regions, so
 	// delivery may miss the trigger site. Same Line() the ledger prints.
@@ -451,6 +455,10 @@ func (r *Report) buildCards(
 						card.RegionsNow = "*"
 					}
 				}
+			}
+
+			if p.Status == model.ProposalApplied && p.ScopeChosen > 0 {
+				card.ScopeChosen = model.ScopeChoiceDate(p.ScopeChosen)
 			}
 
 			// The passive-loop verdict; readings only contains measured

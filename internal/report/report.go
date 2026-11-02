@@ -988,6 +988,10 @@ type ProposalHealth struct {
 	Facts    string
 	Era      string // e.g. "distilled under prompt v1, before the recurrence rule"
 	Retarget string // recomputed regions when they differ; "" when current
+	// Chosen is the time that a person chose the regions of an applied row,
+	// or 0. A chosen row reads Retarget as a suggestion, and its routes name
+	// the console, because `--retarget` refuses that row.
+	Chosen int64
 	// Scope is the trigger-scope advisory (RFC-004 Phase 1): the note
 	// names a path outside the pin's regions and co-change evidence
 	// agrees. Empty when the signals do not agree — the common case.
@@ -1069,6 +1073,11 @@ func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Propos
 		fmt.Fprintf(w, "\ntrigger scope: %s — each advisory above names a trigger and "+
 			"delivery scope to review (applied pins change through `--retarget`; "+
 			"pending pins change when applied)\n", strings.Join(ids, ", "))
+	}
+
+	if ids := chosenScopeIDs(applied, health); len(ids) > 0 {
+		fmt.Fprintf(w, "\nchosen scope: %s — a person chose these regions; review each advisory above "+
+			"in `seamark tui`, Lessons › Pins\n", strings.Join(ids, ", "))
 	}
 
 	// Pins applied before duplicate detection existed (or written by
@@ -1167,7 +1176,12 @@ func printHealth(w io.Writer, h ProposalHealth) {
 		fmt.Fprintf(w, "        %s\n", render.Sanitize(h.Era))
 	}
 
-	if h.Retarget != "" {
+	switch {
+	case h.Retarget == "":
+	case h.Chosen > 0:
+		fmt.Fprintf(w, "        regions now: %s (a suggestion; a person chose the stored regions on %s)\n",
+			render.Sanitize(h.Retarget), model.ScopeChoiceDate(h.Chosen))
+	default:
 		fmt.Fprintf(w, "        regions now: %s\n", render.Sanitize(h.Retarget))
 	}
 
@@ -1185,12 +1199,13 @@ func printHealth(w io.Writer, h ProposalHealth) {
 }
 
 // retargetIDs lists the applied proposals whose recomputed regions
-// differ, in pN form for the command line.
+// differ, in pN form for the command line. A chosen row stays out,
+// because the command refuses it.
 func retargetIDs(applied []model.Proposal, health map[int64]ProposalHealth) []string {
 	var out []string
 
 	for _, p := range applied {
-		if health[p.ID].Retarget != "" {
+		if h := health[p.ID]; h.Retarget != "" && h.Chosen == 0 {
 			out = append(out, fmt.Sprintf("p%d", p.ID))
 		}
 	}
@@ -1214,15 +1229,30 @@ func escalateIDs(applied []model.Proposal, health map[int64]ProposalHealth) []st
 
 // scopeIDs lists the proposals whose trigger-scope advisory fired, in
 // pN form for the tail line. Pending rows lead: they are decidable
-// now, before a mis-scoped pin is installed.
+// now, before a mis-scoped pin is installed. A chosen row stays out,
+// because the tail line of scopeIDs names `--retarget`.
 func scopeIDs(pending, applied []model.Proposal, health map[int64]ProposalHealth) []string {
 	var out []string
 
 	for _, ps := range [][]model.Proposal{pending, applied} {
 		for _, p := range ps {
-			if health[p.ID].Scope != "" {
+			if h := health[p.ID]; h.Scope != "" && h.Chosen == 0 {
 				out = append(out, fmt.Sprintf("p%d", p.ID))
 			}
+		}
+	}
+
+	return out
+}
+
+// chosenScopeIDs lists the applied proposals with a trigger-scope advisory
+// whose regions a person chose, in pN form for their own tail line.
+func chosenScopeIDs(applied []model.Proposal, health map[int64]ProposalHealth) []string {
+	var out []string
+
+	for _, p := range applied {
+		if h := health[p.ID]; h.Scope != "" && h.Chosen > 0 {
+			out = append(out, fmt.Sprintf("p%d", p.ID))
 		}
 	}
 

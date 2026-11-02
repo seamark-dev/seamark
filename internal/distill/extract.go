@@ -100,6 +100,10 @@ type ExtractResult struct {
 	// explicit counter: inferring it from Stored minus Retargeted
 	// miscounts pending rows whose regions did not change.
 	AppliedStored int
+	// AppliedChosen counts the rows of AppliedStored whose regions a person
+	// chose. `--retarget` refuses such a row, so the summary names the
+	// console for it.
+	AppliedChosen int
 	BatchesFailed int // batches lost to agent or parse errors (retryable)
 	// Conflicts counts the proposals that another writer changed during
 	// their agent call. The run discarded their answers and wrote nothing

@@ -284,8 +284,8 @@ like the built-ins.
 The derived graph — symbols, edges, co-change, decisions, effects — is
 rebuilt from the workspace on every reindex. But the same file also holds
 **durable decisions**: proposal history with your applied/dismissed
-verdicts, and the distillation memory that keeps paid agent calls from
-ever being repeated. Rebuilds (including `--force`) preserve those
+verdicts and any regions that a person chose, and the distillation
+memory that keeps paid agent calls from ever being repeated. Rebuilds (including `--force`) preserve those
 tables; **deleting the file destroys them**. The schema is versioned with
 ordered migrations — an older seamark refuses a newer database instead of
 guessing at it.
@@ -300,3 +300,31 @@ seamark state import decisions.json         # merge into this clone (works pre-i
 Import never overwrites a local decision: it adds missing rows, and a
 still-pending proposal may adopt an imported verdict — a decision beats
 no decision.
+
+### Going back to an older seamark
+
+The first open by a new binary moves the database to schema 8 in place,
+and the older binary then refuses it. That first open can come from a
+hook, so make the backup before you replace the binary. Each worktree
+has its own database, so each one needs its own backup.
+
+A bundle exported by the new binary has state version 4, so it is no way
+back: an older binary refuses it. The way back is a backup made before
+that first open, in one of two forms:
+
+- a copy of `.seamark/index.db` with any `-wal` and `-shm` file, made
+  while no seamark process runs. Put all of them back together, so that
+  no side file of the schema 8 database stays beside the copy.
+- `seamark state export`, run by the older binary. Move the schema 8
+  files aside first, then run `seamark state import` with the older
+  binary. Then rebuild with `seamark index`.
+
+Keep the schema 8 files: they hold your decisions. Decisions after the
+backup do not return. A pin whose regions changed after the backup then
+reads as no proposal, so put `.seamark/lessons.yaml` back to the same
+point. Use git if your repository tracks that file, else keep a copy with
+the backup. A pin that you added after the backup leaves the file with
+that step, so copy its text out first.
+
+A newer binary still reads a bundle of an older version. A row of such a
+bundle records no scope choice.

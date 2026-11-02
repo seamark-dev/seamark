@@ -1229,3 +1229,37 @@ func TestReminderTextIsStable(t *testing.T) {
 	require.NoError(t, PrintLessonReminder(&b, "main.go", nil, 5))
 	assert.Empty(t, b.String())
 }
+
+func TestProposalLedgerReadsAChosenRowAsASuggestion(t *testing.T) {
+	scope := "delivery may miss the trigger: the note names api/schemas.py"
+	chosenAt := int64(1_790_000_000)
+	date := model.ScopeChoiceDate(chosenAt)
+
+	applied := []model.Proposal{
+		{ID: 5, Rule: "chosen-pin", Region: "api"},
+		{ID: 6, Rule: "computed-pin", Region: "api"},
+	}
+
+	var sb strings.Builder
+
+	PrintProposalLedger(&sb, nil, applied, nil, nil, map[int64]ProposalHealth{
+		5: {Tier: "strong", Retarget: "api, db", Scope: scope, Chosen: chosenAt},
+		6: {Tier: "strong", Retarget: "db", Scope: scope},
+	})
+	out := sb.String()
+
+	assert.Contains(t, out, "regions now: api, db (a suggestion; a person chose the stored regions on "+date+")")
+	assert.Contains(t, out, "regions now: db\n", "a computed row keeps its line")
+	assert.Contains(t, out, "seamark lessons --retarget p6`", "the command leaves the chosen row out")
+	assert.Contains(t, out, "trigger scope: p6 —", "the sentence that names --retarget leaves the chosen row out")
+	assert.Contains(t, out, "chosen scope: p5 —")
+	assert.Contains(t, out, "`seamark tui`, Lessons › Pins")
+
+	// With only chosen rows, no line names the command at all.
+	sb.Reset()
+	PrintProposalLedger(&sb, nil, applied[:1], nil, nil, map[int64]ProposalHealth{
+		5: {Tier: "strong", Retarget: "api, db", Scope: scope, Chosen: chosenAt},
+	})
+	assert.NotContains(t, sb.String(), "--retarget")
+	assert.NotContains(t, sb.String(), "trigger scope:")
+}

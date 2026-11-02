@@ -790,7 +790,8 @@ func (s *Store) DistilledCount() (int, error) {
 // proposalCols is the column list every proposal query selects, in
 // scanProposals order.
 const proposalCols = `id, signature, rule, region, regions, trigger_paths, trigger_checked_at,
-trigger_prompt_version, note, members, agent, status, created_at, source, provenance`
+trigger_prompt_version, note, members, agent, status, created_at, source, provenance,
+scope_chosen_at`
 
 // execer is the slice of database/sql shared by *sql.DB and *sql.Tx.
 type execer interface {
@@ -835,10 +836,11 @@ func insertProposal(db execer, p *model.Proposal) error {
 
 	res, err := db.Exec(
 		`INSERT INTO proposal (signature, rule, region, regions, trigger_paths, trigger_checked_at,
-		   trigger_prompt_version, note, members, agent, status, created_at, source, provenance)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		   trigger_prompt_version, note, members, agent, status, created_at, source, provenance,
+		   scope_chosen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.Signature, p.Rule, p.Region, regions, triggers, p.TriggerChecked, p.TriggerPromptVersion,
-		p.Note, string(members), p.Agent, p.Status, p.CreatedAt, source, p.Provenance,
+		p.Note, string(members), p.Agent, p.Status, p.CreatedAt, source, p.Provenance, p.ScopeChosen,
 	)
 	if err != nil {
 		return fmt.Errorf("store: insert proposal %s: %w", p.Rule, err)
@@ -908,7 +910,8 @@ func scanProposals(rows *sql.Rows) ([]model.Proposal, error) {
 
 		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &regions,
 			&triggers, &p.TriggerChecked, &p.TriggerPromptVersion,
-			&p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt, &p.Source, &p.Provenance)
+			&p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt, &p.Source, &p.Provenance,
+			&p.ScopeChosen)
 		if err != nil {
 			return nil, err
 		}

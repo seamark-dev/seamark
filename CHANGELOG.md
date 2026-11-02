@@ -38,6 +38,12 @@ model-boundary delivery.
 - **Console controls.** Pins can edit mode/check on linked pins,
   author check definitions (`M`), and verify (`V`). Read-only browsing
   never applies a decision.
+- **Scope edit of a linked pin.** `i` in Pins now edits the regions of
+  a linked pin through a preview that writes one region set to the pin
+  file and to the ledger. The row records that a person chose the set
+  and the date. A computed scope then reads as a suggestion: only a
+  console preview replaces the choice, and `lessons --retarget` refuses
+  it and names the console. No command makes this edit.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.
@@ -85,6 +91,20 @@ model-boundary delivery.
   `unreadable`, as doctor does, not `off`.
 - **Retarget route.** A linked pin names `w` Retarget only while `w`
   works; otherwise Pins gives the reason and a next action.
+
+Upgrade note: the database upgrades to schema 8 in place on first open
+(the scope choice of a proposal), and state bundles move to version 4.
+An older binary then refuses the upgraded database and a bundle of
+version 4 — the versioning contract. That covers a build of schema 7 and
+state version 3 as well as v0.8.0, which has schema 6 and state version
+2. The installed hooks move with the binary. A new binary still reads
+every older bundle, and a row of such a bundle records no scope choice.
+An export of the new binary is no way back, so make a backup before you
+replace the binary: a copy of `.seamark/index.db` with any `-wal` and
+`-shm` file, or `seamark state export` run by the older binary. Decisions
+after that backup do not return, and `.seamark/lessons.yaml` goes back
+from git with it. See
+[Going back to an older seamark](docs/configuration.md#going-back-to-an-older-seamark).
 
 See [current capability states](docs/STATUS.md#unreleased--lesson-checks-and-lesson-delivery)
 and the [lesson guide](docs/lessons.md) for limits and commands.

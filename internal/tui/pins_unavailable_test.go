@@ -410,7 +410,7 @@ func TestPinsUnavailableKeyExplainsAndCallsNothing(t *testing.T) {
 		// only the toast text must hold it.
 		next string
 	}{
-		{"retarget", 1, "w", `No retarget: its regions are already current ("wrap-sql-errors").`, " " + pinsReplaceSentence},
+		{"retarget", 1, "w", `No retarget: its regions are already current ("wrap-sql-errors").`, " " + pinsFormSentence},
 		{"extraction", 1, "t", `No trigger extraction: its trigger paths are already stored ("wrap-sql-errors").`, ""},
 		{"compare", 1, "v", `No comparison: no other linked pin has similar wording ("wrap-sql-errors").`, ""},
 		{"prune", 9, "-", `No prune: it has an ambiguous link ("two-proposals").`, ""},
@@ -438,9 +438,12 @@ func TestPinsUnavailableKeyExplainsAndCallsNothing(t *testing.T) {
 	}
 }
 
+// pinsFormSentence is pinRouteForm as the last sentence of a line.
+const pinsFormSentence = "Use i to edit its regions."
+
 // pinsNoRetargetRoute is the scope route of p4 in pinsInspection: w reads
 // n/a, because the scope is current.
-const pinsNoRetargetRoute = "no retarget: its regions are already current; " + pinRouteReplace
+const pinsNoRetargetRoute = "no retarget: its regions are already current; " + pinRouteForm
 
 // pinsReplaceSentence is pinRouteReplace as the last sentence of a line.
 const pinsReplaceSentence = "To choose other regions, use - Prune and add a new pin with n."
@@ -450,7 +453,7 @@ const pinsReplaceSentence = "To choose other regions, use - Prune and add a new 
 // state gives its actual reason and a next action. The cases change the
 // fixture of each state, so the check reads the rule that the keys use.
 func TestPinRetargetRouteFollowsTheRetargetBlock(t *testing.T) {
-	const replace = pinRouteReplace
+	const form = pinRouteForm
 
 	// pinTwo is p9, the one fixture pin that offers a retarget.
 	const pinTwo = 1
@@ -464,22 +467,20 @@ func TestPinRetargetRouteFollowsTheRetargetBlock(t *testing.T) {
 		reason string
 		// next is the next action, also a route that the pin must offer.
 		next string
-		// prune says that the next action is the prune route.
-		prune bool
 	}{
 		{name: "a computed scope", row: 2},
-		{name: "a current scope", row: 1, reason: "its regions are already current", next: replace, prune: true},
+		{name: "a current scope", row: 1, reason: "its regions are already current", next: form},
 		{
-			name: "no living finding", row: 3, next: replace, prune: true,
+			name: "no living finding", row: 3, next: form,
 			reason: "no cited finding is living, so no scope can be computed",
 		},
 		{
-			name: "an unknown scope", row: 4, next: replace, prune: true,
+			name: "an unknown scope", row: 4, next: form,
 			reason: "its scope is unknown: scope advice needs an indexed database (the index is stale); " +
 				"build it with `seamark index`",
 		},
 		{
-			name: "computed regions that another pin holds", row: 2, next: replace, prune: true,
+			name: "computed regions that another pin holds", row: 2, next: form,
 			edit: func(in *maintain.Inspection) {
 				in.Pins[2].Entry.Rule = in.Pins[pinTwo].Entry.Rule
 				in.Pins[2].Entry.Key = reviews.NewPinKey(in.Pins[pinTwo].Entry.Rule, "",
@@ -539,13 +540,12 @@ func TestPinRetargetRouteFollowsTheRetargetBlock(t *testing.T) {
 			assert.True(t, strings.HasSuffix(h.m.toast.text, pinRouteSentence(c.next)), "toast: %s", h.m.toast.text)
 			assert.Contains(t, h.m.toast.text, "No retarget: "+c.reason)
 
-			// The prune route must work, not only read well. The press opens
-			// the preview that a new pin then follows.
-			if c.prune {
-				assert.True(t, p.offers(p.editBlock), "the route names a key that works")
-				assert.Contains(t, pinsKeys(h), "n", "the route names a key that works")
-				h.press("-")
-				assert.Contains(t, f.called(), "PlanMaintenance:prune")
+			// The form route must work, not only read well.
+			if c.next == form {
+				assert.Contains(t, pinsKeys(h), "i", "the route names a key that works")
+				h.press("i")
+				require.NotNil(t, authorOf(h).form)
+				assert.Empty(t, authorOf(h).form.draft.scopeLock)
 			}
 		})
 	}
@@ -666,10 +666,17 @@ const (
 // breaks, so the planner of a new pin refuses to append after it.
 const pinsKeptTail = "pin:\n  - rule: kept\n    region: docs\n    note: |+\n      Kept.\n\n"
 
+// pinsStoredRefusal gives p4 a stored region that the form cannot hold.
+// That is the one state that still reaches the prune route.
+func pinsStoredRefusal(f *fakeServices) {
+	f.pins.Pins[0].Entry.Region = "docs\u0085"
+}
+
 // TestPinReplaceRouteNeverStartsAPruneThatCannotFinish holds the rule of
 // the destructive route. A prune cannot be undone, so no state may name it
 // while the new pin would be refused. Each case keeps w refused for a scope
-// reason, the state that names the route.
+// reason and holds stored regions that the form cannot hold, the state
+// that names the route.
 func TestPinReplaceRouteNeverStartsAPruneThatCannotFinish(t *testing.T) {
 	cases := []struct {
 		name string
@@ -689,6 +696,7 @@ func TestPinReplaceRouteNeverStartsAPruneThatCannotFinish(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := pinsFake()
+			pinsStoredRefusal(f)
 			c.edit(f)
 
 			h := pinsOpen(t, f, 120, 40)
@@ -711,6 +719,7 @@ func TestPinReplaceRouteNeverStartsAPruneThatCannotFinish(t *testing.T) {
 
 	t.Run("a new read asks the planners again", func(t *testing.T) {
 		f := pinsFake()
+		pinsStoredRefusal(f)
 		h := pinsOpen(t, f, 120, 40)
 
 		p := pinsOf(h)
@@ -718,10 +727,62 @@ func TestPinReplaceRouteNeverStartsAPruneThatCannotFinish(t *testing.T) {
 
 		in := pinsInspection()
 		in.Doc.Bytes = []byte(pinsKeptTail)
+		f.pins = in
+		pinsStoredRefusal(f)
 		authorReload(h, f, in)
 
 		assert.Equal(t, pinsHandRoute, p.retargetNext(p.rows()[0].pin))
 	})
+
+	// The form needs no new pin, so a pin whose regions it holds keeps its
+	// route where the end of the file refuses a new pin.
+	t.Run("a pin whose regions the form holds", func(t *testing.T) {
+		f := pinsFake()
+		f.pins.Doc.Bytes = []byte(pinsKeptTail)
+
+		h := pinsOpen(t, f, 120, 40)
+		p := pinsOf(h)
+
+		assert.Equal(t, pinRouteForm, p.retargetNext(p.rows()[0].pin))
+	})
+}
+
+// TestPinStoredRefusalKeepsTheReplaceRoute holds the one state of the
+// prune route: stored regions that the form cannot hold, with w not
+// offered. The lock of the form names the link and the stored text, so a
+// reload keeps it.
+func TestPinStoredRefusalKeepsTheReplaceRoute(t *testing.T) {
+	f := authorFake(nil)
+	pinsStoredRefusal(f)
+
+	h := pinsOpen(t, f, 120, 40)
+	pinsCursorTo(h, 1)
+
+	p := pinsOf(h)
+	pin := p.rows()[0].pin
+	require.NotEmpty(t, p.retargetBlock(pin), "w is refused")
+
+	assert.Equal(t, pinRouteReplace, p.retargetNext(pin))
+	assert.Contains(t, pinsDetail(t, h), pinsReplaceSentence)
+
+	h.press("i")
+
+	form := authorOf(h).form
+	require.NotNil(t, form)
+	assert.Contains(t, form.draft.scopeLock, "linked to proposal #4; "+pinTextLock+"; no retarget: ")
+	assert.Contains(t, form.draft.scopeLock, pinRouteReplace)
+	assert.False(t, pinStoredLock(form.draft.scopeLock), "a reload must keep this lock")
+
+	h.press("a")
+	assert.Equal(t, pinFieldNone, form.field, "the row stays read-only")
+	h.press("esc")
+
+	// The prune route must work, not only read well. The press opens the
+	// preview that a new pin then follows.
+	assert.True(t, p.offers(p.editBlock), "the route names a key that works")
+	assert.Contains(t, pinsKeys(h), "n", "the route names a key that works")
+	h.press("-")
+	assert.Contains(t, f.called(), "PlanMaintenance:prune")
 }
 
 // TestPinsAnotherDatabaseNeverRoutesToABuild walks each surface that can
@@ -949,14 +1010,13 @@ func TestPinScopeRouteReadsInTheDetailAndTheForm(t *testing.T) {
 			h := pinsOpen(t, f, 120, 40)
 			pinsCursorTo(h, c.row)
 
-			assert.Contains(t, pinsDetail(t, h), "No retarget: "+c.reason+". "+pinsReplaceSentence)
+			assert.Contains(t, pinsDetail(t, h), "No retarget: "+c.reason+". "+pinsFormSentence)
 
 			h.press("i")
 
 			form := authorOf(h).form
 			require.NotNil(t, form)
-			assert.Contains(t, form.draft.scopeLock, "; no retarget: "+c.reason+"; "+pinRouteReplace)
-			assert.False(t, pinStoredLock(form.draft.scopeLock), "a reload must keep this lock")
+			assert.Empty(t, form.draft.scopeLock, "the route of the detail works in this form")
 
 			h.press("down", "enter")
 			h.typeText(" More.")

@@ -67,8 +67,8 @@
 //   - pins.go: Pins, the installed pins and their keys.
 //   - pins_view.go: the Pins list box and detail box.
 //   - pins_compare.go: the read-only comparison of similar pins.
-//   - pins_modal.go: the retarget and prune preview flow.
-//   - pins_modal_view.go: the stages of the retarget and prune preview.
+//   - pins_modal.go: the retarget, prune, and scope preview flow.
+//   - pins_modal_view.go: the stages of that preview.
 //   - pins_msgs.go: the typed requests between Pins and the shell.
 //   - pins_author.go: the pin drafts, the pin form and the pin review.
 //   - pins_author_view.go: the pin form and the stages of the review.

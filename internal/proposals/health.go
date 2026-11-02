@@ -76,6 +76,8 @@ func Health(st *store.Store, root string, ps []model.Proposal) (map[int64]report
 			if _, live := cfg.FindPin(reviews.ProposalKey(p)); !live {
 				h.Pruned = true
 			}
+
+			h.Chosen = p.ScopeChosen
 		}
 
 		var living []model.Finding

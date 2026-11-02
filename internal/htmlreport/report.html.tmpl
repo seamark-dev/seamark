@@ -162,7 +162,7 @@ footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line); co
   <p class="health">{{.Era}}</p>
   {{- end}}
   {{- if .RegionsNow}}
-  <p class="health drift">regions now: {{.RegionsNow}}</p>
+  <p class="health drift">regions now: {{.RegionsNow}}{{if .ScopeChosen}} (a suggestion; a person chose the stored regions on {{.ScopeChosen}}){{end}}</p>
   {{- end}}
   {{- if .Scope}}
   <p class="health drift">{{.Scope}}</p>
@@ -188,7 +188,7 @@ footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line); co
     <code tabindex="0" role="button" aria-label="Copy the apply command">seamark lessons --apply p{{.ID}}</code>
     <code tabindex="0" role="button" aria-label="Copy the dismiss command">seamark lessons --dismiss p{{.ID}}</code>
   </div>
-  {{- else if .RegionsNow}}
+  {{- else if and .RegionsNow (not .ScopeChosen)}}
   <div class="actions">
     <code tabindex="0" role="button" aria-label="Copy the retarget command">seamark lessons --retarget p{{.ID}}</code>
   </div>

@@ -10,6 +10,8 @@ package maintain
 // supersedes nothing, and a note edit keeps the recorded note of its
 // proposal. So the commit has no second write to compensate, and it
 // keeps no Recovery. Its outcome is the outcome of one file write.
+// PlanScope reuses this planner for a manual scope edit, and Commit
+// writes that plan, because such an edit also changes the ledger.
 //
 // The plan reuses the rules of the other editors, so no rule exists
 // twice. pinfile.Classify gives the relationship, and pinfile.KeyOwners
@@ -356,17 +358,26 @@ const (
 const (
 	routeIndex    = "build the index in Overview, then review again"
 	routeOwnIndex = "build the index of this workspace in Overview, then review again"
-	// routeLinkedPin names no maintenance key. The plan holds no retarget
-	// state, so only Pins knows whether w works for this pin. MAINTENANCE
-	// in Pins gives the route that fits the current state of the pin.
-	routeLinkedPin  = "press r in Pins, then read the route for its rule and scope under MAINTENANCE"
+	// routeLinkedPin names the rule only, because the scope preview now
+	// owns the regions of a linked pin. It names no maintenance key:
+	// MAINTENANCE in Pins gives the route that fits the state of the pin.
+	routeLinkedPin  = "press r in Pins, then read the route for its rule under MAINTENANCE"
 	routePrune      = "use - Prune, which also marks the proposal superseded"
 	routeRecord     = "Proposals › c records it as applied"
 	routeOwner      = "choose another rule or scope, or decide the proposal in Proposals"
-	routeRefresh    = "review the entry in Pins again"
-	textFileBlock   = "the pin file cannot be changed: "
-	textEntryGone   = "the pin changed since the draft started"
-	textLinkedNote  = "linked to proposal #%d; only its note, mode, and check can change here"
+	routeOwnerScope = "choose other regions, or decide the proposal in Proposals"
+	routeScopeLink  = "press esc, then i, and review the draft again"
+	// routeScopeFile replaces the hand route of a scope plan. A region
+	// change by hand unlinks the pin, so the route tells the person to
+	// fix the file and to keep the regions out of that fix.
+	routeScopeFile = "fix what blocks .seamark/lessons.yaml and leave the regions of this pin as they are, " +
+		"then press i to open the draft again; a region change by hand unlinks the pin"
+	routeRefresh   = "review the entry in Pins again"
+	textFileBlock  = "the pin file cannot be changed: "
+	textEntryGone  = "the pin changed since the draft started"
+	textLinkedNote = "linked to proposal #%d; only its note, mode, check, and regions can change here"
+	// textLinkedScope has no route, because the text names the way.
+	textLinkedScope = "linked to proposal #%d; a change of its regions needs the scope preview"
 	textLinkedOnly  = "linked to proposal #%d; Remove is only for unlinked pins"
 	textOwnedBy     = "the rule and scope are already held by "
 	textGateUnread  = "distill.write cannot be read"
@@ -386,9 +397,11 @@ const (
 		"'untested' until the new wording is delivered."
 	textIdentityKept = "The delivery identity does not change. Stats can still list the old and new " +
 		"spelling as separate rows."
-	textLinkedKeeps = "Proposal #%d keeps its recorded rule, note, and evidence. Pins shows the " +
-		"difference as 'edited'. Trigger extraction still asks about the recorded note. Saving does " +
-		"not extract triggers or retarget."
+	// textLinkedEdited holds the sentences that a note edit and a scoped plan
+	// share, so the two texts cannot differ on the 'edited' mark.
+	textLinkedEdited = "Proposal #%d keeps its recorded rule, note, and evidence. Pins shows the " +
+		"difference as 'edited'. Trigger extraction still asks about the recorded note."
+	textLinkedKeeps = textLinkedEdited + " Saving does not extract triggers or retarget."
 	// The two texts below replace textIdentityKept and textLinkedKeeps for
 	// an edit of the mode or the check only. Such an edit changes no
 	// spelling and no note, so the texts of a wording edit would claim
@@ -404,8 +417,16 @@ const (
 	textVersionChanged = "The pin gets a new version, so a context that already saw it can receive it " +
 		"again, also in once-per-context mode."
 	textLedgerEffect = "The proposal ledger does not change."
-	noteNoOp         = "the draft changes nothing"
-	noteCreateLast   = "the new pin goes after the last pin, so the earlier pins keep their order"
+	// The three texts below serve a scope plan, which writes the ledger. A
+	// new order keeps the key, so the spelling words of textIdentityKept
+	// would state something false. A scope plan changes the regions, so
+	// the last words of textLinkedKeeps would state something false too.
+	textScopeLedger = "The proposal ledger records the new regions and that a person chose them. " +
+		"Its rule, note, and evidence stay."
+	textScopeOrder = "The delivery identity does not change, because the region set stays. Only its order changes."
+	textScopeKeeps = textLinkedEdited + " Saving does not extract triggers."
+	noteNoOp       = "the draft changes nothing"
+	noteCreateLast = "the new pin goes after the last pin, so the earlier pins keep their order"
 )
 
 // The differences of a stale authoring commit.
@@ -632,6 +653,19 @@ func Blocking(issues []FieldIssue) bool {
 // candidate, the diff, and the identity. A draft with a blocking issue
 // gets no candidate, because the issue names the fix.
 func PlanAuthor(d Deps, req AuthorRequest) (*AuthorPlan, error) {
+	a, err := planAuthoring(d, req, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return a.plan, nil
+}
+
+// planAuthoring runs the authoring planner. scoped is true for PlanScope:
+// a region change of a linked pin then passes, because Commit writes the
+// ledger row with it. PlanAuthor passes false, so CommitAuthor can never
+// write a region change that leaves the row behind.
+func planAuthoring(d Deps, req AuthorRequest, scoped bool) (*authoring, error) {
 	switch {
 	case req.Op < AuthorCreate || req.Op > AuthorRemove:
 		return nil, fmt.Errorf("maintain: unknown authoring operation %s", req.Op)
@@ -641,7 +675,7 @@ func PlanAuthor(d Deps, req AuthorRequest) (*AuthorPlan, error) {
 		return nil, errors.New("maintain: workspace root is empty")
 	}
 
-	a := &authoring{deps: d, req: req, plan: &AuthorPlan{Request: req, Root: d.Root}}
+	a := &authoring{deps: d, req: req, scoped: scoped, plan: &AuthorPlan{Request: req, Root: d.Root}}
 	a.plan.Write, a.plan.GateErr = readGate(d.Root)
 
 	a.read()
@@ -657,14 +691,16 @@ func PlanAuthor(d Deps, req AuthorRequest) (*AuthorPlan, error) {
 
 	a.finish()
 
-	return a.plan, nil
+	return a, nil
 }
 
-// authoring holds the state of one PlanAuthor call.
+// authoring holds the state of one PlanAuthor or PlanScope call.
 type authoring struct {
 	deps Deps
 	req  AuthorRequest
 	plan *AuthorPlan
+	// scoped is true for a manual scope edit (planAuthoring).
+	scoped bool
 
 	doc *pinfile.Document
 	// structural is true when the editing gate of pinfile refuses the
@@ -678,6 +714,10 @@ type authoring struct {
 
 	// entry is the bound entry of an edit or a removal, or nil.
 	entry *pinfile.Entry
+	// link is the classification of entry while the links are known.
+	link pinfile.EntryLink
+	// change is the candidate of an edit, which a scope plan commits.
+	change *pinfile.Change
 	// set is the normalized region set of the draft (checkDraft).
 	set []string
 	// drafted is true when New, the keys, and the owners are computed.
@@ -767,6 +807,7 @@ func (a *authoring) bind() {
 	}
 
 	el := pinfile.Classify(a.doc, a.rows.applied, a.rows.pending, a.rows.superseded).Entries[k]
+	a.link = el
 	p.Link = el.Link
 	p.EntryApplied, p.EntryPending = proposalIDs(el.Applied), proposalIDs(el.Pending)
 
@@ -866,8 +907,10 @@ func (a *authoring) history(key reviews.PinKey) []model.Proposal {
 
 // relation applies the relationship matrix to an edit or a removal. Only
 // an entry without a proposal permits every field. A linked entry
-// permits note, mode, and check edits. Retarget and Prune own its scope
-// and its removal, so those edits use their own plans.
+// permits note, mode, and check edits. A region change needs a scoped
+// plan, because the row must change with the entry. Prune owns its
+// removal, so that edit uses its own plan. A scoped plan also needs a
+// link: an entry that lost its row has no ledger change to write.
 func (a *authoring) relation() {
 	p := a.plan
 
@@ -879,15 +922,22 @@ func (a *authoring) relation() {
 	case pinfile.LinkNoProposal:
 		// A row with disagreeing region fields can own the key of an
 		// entry that reads as unlinked (pinfile.KeyOwners).
-		if p.OldOwners.Any() {
+		switch {
+		case p.OldOwners.Any():
 			a.ambiguousOwners(p.OldOwners)
+		case a.scoped:
+			a.block(BlockRelation, p.Link.Reason(), routeScopeLink)
 		}
 	case pinfile.LinkLinked:
 		switch {
 		case a.req.Op == AuthorRemove:
 			a.block(BlockRelation, fmt.Sprintf(textLinkedOnly, p.Proposal.ID), routePrune)
-		case a.changesRuleOrScope():
+		case a.req.RuleSet && a.req.Rule != p.Old.Rule:
 			a.block(BlockRelation, fmt.Sprintf(textLinkedNote, p.Proposal.ID), routeLinkedPin)
+		}
+
+		if !a.scoped && ChangesRegions(p.Old, a.req) {
+			a.block(BlockRelation, fmt.Sprintf(textLinkedScope, p.Proposal.ID), "")
 		}
 
 		// The apply of another applied row with disagreeing region fields
@@ -915,25 +965,6 @@ func (a *authoring) ambiguousOwners(o pinfile.Owners) {
 	a.block(BlockRelation, pinfile.LinkAmbiguousFields.Reason()+" ("+labels+")", reasonLedgerFixes)
 }
 
-// changesRuleOrScope reports whether an edit asks for another rule or
-// another region list than the entry holds. The rule compares byte for
-// byte, so a change of case counts. A flag with an equal value is no
-// change: a draft can set the flags while the relationship is unknown.
-// A draft with a blocking issue has no New, so its flags decide.
-func (a *authoring) changesRuleOrScope() bool {
-	p := a.plan
-
-	if !a.req.RuleSet && !a.req.ScopeSet {
-		return false
-	}
-
-	if !a.drafted {
-		return true
-	}
-
-	return p.New.Rule != p.Old.Rule || !slices.Equal(p.New.AllRegions(), p.Old.AllRegions())
-}
-
 // owner blocks a create, a rename, or a rescope whose new key another
 // pin or proposal holds. The editor never merges two pins and never
 // adopts a proposal by its label. A note edit keeps its key, so its own
@@ -945,7 +976,12 @@ func (a *authoring) owner() {
 		return
 	}
 
-	a.block(BlockOwner, textOwnedBy+strings.Join(ownerLabels(p.NewOwners), ", "), routeOwner)
+	route := routeOwner
+	if a.scoped {
+		route = routeOwnerScope
+	}
+
+	a.block(BlockOwner, textOwnedBy+strings.Join(ownerLabels(p.NewOwners), ", "), route)
 }
 
 // candidate computes and verifies the candidate file with the pinfile
@@ -994,6 +1030,7 @@ func (a *authoring) candidate() error {
 		return nil
 	}
 
+	a.change = change
 	p.After, p.Diff, p.Added, p.Removed = change.After, change.Diff, change.Added, change.Removed
 
 	// An edit keeps the position of its entry; a removal leaves no entry.
@@ -1178,6 +1215,8 @@ func (a *authoring) notes() []string {
 	switch {
 	case a.req.Op == AuthorCreate:
 		notes = append(notes, noteCreateLast)
+	case a.scoped && a.drafted && !p.IdentityChanged:
+		notes = append(notes, textScopeOrder)
 	case a.req.Op == AuthorEdit && a.drafted && only && !p.IdentityChanged:
 		notes = append(notes, fmt.Sprintf(textChecksKept, checks))
 	case a.req.Op == AuthorEdit && a.drafted && p.IdentityChanged:
@@ -1193,14 +1232,24 @@ func (a *authoring) notes() []string {
 		notes = append(notes, textVersionChanged)
 	}
 
+	// Pins marks 'edited' only for a note difference. So a scoped plan
+	// takes the text about that mark only when the note really changes. A
+	// draft with a blocking issue has no New, so it compares nothing.
 	switch {
+	case a.scoped && linked && a.drafted && p.New.Note != p.Old.Note:
+		notes = append(notes, fmt.Sprintf(textScopeKeeps, p.Proposal.ID))
+	case a.scoped:
 	case a.req.Op == AuthorEdit && linked && only:
 		notes = append(notes, fmt.Sprintf(textLinkedChecks, p.Proposal.ID))
 	case a.req.Op == AuthorEdit && linked:
 		notes = append(notes, fmt.Sprintf(textLinkedKeeps, p.Proposal.ID))
 	}
 
-	notes = append(notes, textLedgerEffect)
+	if a.scoped {
+		notes = append(notes, textScopeLedger)
+	} else {
+		notes = append(notes, textLedgerEffect)
+	}
 
 	if p.After != nil {
 		notes = append(notes, noteRedacted)

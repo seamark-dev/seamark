@@ -39,8 +39,9 @@ import (
 var ErrGuard = errors.New("ledger rows changed since the plan")
 
 // GuardError names the proposals whose rows missed their guard. A missed
-// row is gone, has another status, or holds other identity or region
-// values. It wraps ErrGuard, so errors.Is(err, ErrGuard) matches it.
+// row is gone, has another status, or holds other identity, region or
+// scope choice values. It wraps ErrGuard, so errors.Is(err, ErrGuard)
+// matches it.
 type GuardError struct {
 	// IDs lists the proposals that missed, in ascending order.
 	IDs []int64
@@ -63,13 +64,15 @@ func (e *GuardError) Unwrap() error { return ErrGuard }
 // RowGuard is the planned observation of one proposal row. Signature and
 // Rule identify the proposal, because an ID alone can name a newer row.
 // Status, Region and Regions bind the decision and the delivery scope
-// that the plan reviewed. The note and the trigger fields are not part
-// of it: maintenance never changes them, and SaveTriggerAnswer binds the
-// trigger fields separately.
+// that the plan reviewed. ScopeChosen binds the scope choice, so a plan
+// that predates a choice goes stale. The note and the trigger fields are
+// not part of it: maintenance never changes them, and SaveTriggerAnswer
+// binds the trigger fields separately.
 type RowGuard struct {
 	ID                              int64
 	Status, Signature, Rule, Region string
 	Regions                         []string
+	ScopeChosen                     int64
 }
 
 // NewRowGuard returns the guard that binds a write to row p as it is
@@ -78,7 +81,7 @@ type RowGuard struct {
 func NewRowGuard(p model.Proposal) RowGuard {
 	return RowGuard{
 		ID: p.ID, Status: p.Status, Signature: p.Signature, Rule: p.Rule,
-		Region: p.Region, Regions: slices.Clone(p.Regions),
+		Region: p.Region, Regions: slices.Clone(p.Regions), ScopeChosen: p.ScopeChosen,
 	}
 }
 
@@ -88,15 +91,21 @@ func NewRowGuard(p model.Proposal) RowGuard {
 // the same empty column.
 func (g RowGuard) Matches(p model.Proposal) bool {
 	return p.ID == g.ID && p.Status == g.Status && p.Signature == g.Signature &&
-		p.Rule == g.Rule && p.Region == g.Region && slices.Equal(p.Regions, g.Regions)
+		p.Rule == g.Rule && p.Region == g.Region && slices.Equal(p.Regions, g.Regions) &&
+		p.ScopeChosen == g.ScopeChosen
 }
 
 // RegionChange is one guarded region update of an applied proposal: the
-// row must still match Guard, and it then takes Region and Regions.
+// row must still match Guard, and it then takes Region, Regions and
+// Chosen. The field always writes, so a reviewed computed retarget clears
+// a choice with Chosen 0.
 type RegionChange struct {
 	Guard   RowGuard
 	Region  string
 	Regions []string
+	// Chosen is the stamp that the row takes: a time for a manual scope
+	// edit, 0 for a computed retarget.
+	Chosen int64
 }
 
 // TriggerAnswer is one answered trigger question, bound to the row that
@@ -136,7 +145,8 @@ func (s *Store) ProposalsWithIDs(ids []int64) ([]model.Proposal, error) {
 // RetargetApplied updates the regions of applied proposals in one
 // transaction. Every row must still be applied and match its guard. When
 // any row misses, it changes no row and returns a *GuardError that names
-// each missed row.
+// each missed row. A manual scope edit uses this writer too, so
+// regionWrite names the route in each error.
 func (s *Store) RetargetApplied(changes []RegionChange) error {
 	if len(changes) == 0 {
 		return nil
@@ -160,20 +170,33 @@ func (s *Store) RetargetApplied(changes []RegionChange) error {
 		return err
 	}
 
-	return s.writeTx("guarded retarget", func(ctx context.Context, conn *sql.Conn) error {
+	what := regionWrite(changes)
+
+	return s.writeTx("guarded "+what, func(ctx context.Context, conn *sql.Conn) error {
 		if err := matchGuards(ctx, conn, guards); err != nil {
 			return err
 		}
 
 		for i, c := range changes {
-			if err := execOne(ctx, conn, `UPDATE proposal SET region = ?, regions = ? WHERE id = ?`,
-				c.Region, encoded[i], c.Guard.ID); err != nil {
-				return fmt.Errorf("store: retarget p%d: %w", c.Guard.ID, err)
+			if err := execOne(ctx, conn, `UPDATE proposal SET region = ?, regions = ?, scope_chosen_at = ? WHERE id = ?`,
+				c.Region, encoded[i], c.Chosen, c.Guard.ID); err != nil {
+				return fmt.Errorf("store: %s p%d: %w", what, c.Guard.ID, err)
 			}
 		}
 
 		return nil
 	})
+}
+
+// regionWrite names a region write in its errors. The console and the CLI
+// print those errors unchanged, and each route keeps its own words. A
+// stamp marks a manual scope edit, and a computed retarget has no stamp.
+func regionWrite(changes []RegionChange) string {
+	if slices.ContainsFunc(changes, func(c RegionChange) bool { return c.Chosen > 0 }) {
+		return "scope edit"
+	}
+
+	return "retarget"
 }
 
 // SupersedeExact moves applied proposals to superseded in one

@@ -11,8 +11,9 @@ import (
 // StateVersion is the version of the portable state format. Bump only
 // with a reader that still accepts every older version. Version 3 adds
 // the proposal source and the provenance; a row of an older bundle
-// reads as findings.
-const StateVersion = 3
+// reads as findings. Version 4 adds the scope choice; a row of an older
+// bundle reads as no choice.
+const StateVersion = 4
 
 // State is the portable durable-state bundle: the proposal decisions and
 // paid distillation memory that a rebuild cannot regenerate. Everything
@@ -54,6 +55,10 @@ type ProposalState struct {
 	// Provenance is the provenance document of the source. A findings row
 	// has none, so its bundle row writes no provenance key.
 	Provenance string `json:"provenance,omitempty"`
+	// ScopeChosen is the scope choice of the row. A rebuild cannot
+	// regenerate a decision of a person, so it travels. Absent reads as
+	// 0, so a bundle of an older version keeps its meaning.
+	ScopeChosen int64 `json:"scope_chosen_at,omitempty"`
 }
 
 // DistilledMark is one row of distillation memory: evidence sets already
@@ -108,7 +113,7 @@ func (s *Store) ExportState() (*State, error) {
 			TriggerChecked: p.TriggerChecked, TriggerPromptVersion: p.TriggerPromptVersion,
 			Note: p.Note, Members: p.Members,
 			Agent: p.Agent, Status: p.Status, CreatedAt: p.CreatedAt,
-			Source: p.Source, Provenance: p.Provenance,
+			Source: p.Source, Provenance: p.Provenance, ScopeChosen: p.ScopeChosen,
 		})
 	}
 
@@ -213,7 +218,9 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 			// own (possibly repo-wide) region would desynchronize pin
 			// identity from the lessons.yaml the same bundle's apply
 			// wrote. Triggers ride along so a later retarget cannot
-			// silently narrow the adopted delivery.
+			// silently narrow the adopted delivery. The scope choice rides
+			// along too: it states who decided these regions, so it must
+			// come from the row that holds them.
 			regions, err := encodeStrings(p.Regions)
 			if err != nil {
 				return stats, err
@@ -229,18 +236,18 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 				}
 
 				if _, err := tx.Exec(
-					`UPDATE proposal SET status = ?, region = ?, regions = ?,
+					`UPDATE proposal SET status = ?, region = ?, regions = ?, scope_chosen_at = ?,
 					   trigger_paths = ?, trigger_checked_at = ?, trigger_prompt_version = ?
 					 WHERE signature = ? AND rule = ?`,
-					p.Status, p.Region, regions, triggers, p.TriggerChecked,
+					p.Status, p.Region, regions, p.ScopeChosen, triggers, p.TriggerChecked,
 					p.TriggerPromptVersion, p.Signature, p.Rule,
 				); err != nil {
 					return stats, err
 				}
 			} else if _, err := tx.Exec(
-				`UPDATE proposal SET status = ?, region = ?, regions = ?
+				`UPDATE proposal SET status = ?, region = ?, regions = ?, scope_chosen_at = ?
 				 WHERE signature = ? AND rule = ?`,
-				p.Status, p.Region, regions, p.Signature, p.Rule,
+				p.Status, p.Region, regions, p.ScopeChosen, p.Signature, p.Rule,
 			); err != nil {
 				return stats, err
 			}
@@ -284,7 +291,7 @@ func (s *Store) ImportState(st *State) (ImportStats, error) {
 				TriggerChecked: p.TriggerChecked, TriggerPromptVersion: p.TriggerPromptVersion,
 				Note: p.Note, Members: p.Members,
 				Agent: p.Agent, Status: p.Status, CreatedAt: p.CreatedAt,
-				Source: p.Source, Provenance: p.Provenance,
+				Source: p.Source, Provenance: p.Provenance, ScopeChosen: p.ScopeChosen,
 			}
 
 			if err := insertProposal(tx, &row); err != nil {

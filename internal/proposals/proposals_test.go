@@ -523,3 +523,21 @@ func exportsUsedIn(t *testing.T, pkg string) []string {
 
 	return slices.Compact(used)
 }
+
+func TestHealthMarksAChosenRow(t *testing.T) {
+	f := newFixture(t, true)
+
+	f.writeLessons("pin:\n  - rule: chosen-pin\n    region: api\n    note: Chosen.\n")
+
+	chosen := f.propose("chosen-pin", "Chosen.", model.ProposalApplied, "api")
+	chosen.ScopeChosen = 1_790_000_000
+
+	history := f.propose("old-pin", "Superseded.", model.ProposalSuperseded, "api")
+	history.ScopeChosen = 1_790_000_000
+
+	h, err := Health(f.st, f.root, []model.Proposal{chosen, history})
+	require.NoError(t, err)
+
+	assert.Equal(t, chosen.ScopeChosen, h[chosen.ID].Chosen)
+	assert.Zero(t, h[history.ID].Chosen, "a superseded row keeps its stamp as history, not as a live choice")
+}

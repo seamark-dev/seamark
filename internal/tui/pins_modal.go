@@ -13,8 +13,8 @@ import (
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
-// This file holds the flow of the retarget and prune preview of Lessons
-// › Pins: the keys, and the commands that plan and commit. The stages
+// This file holds the flow of the retarget, prune, and scope preview of
+// Lessons › Pins: the keys, and the commands that plan and commit. The stages
 // come from previewFlow (previewflow.go), and pins_modal_view.go renders
 // them. The preview follows the decision modal of Proposals: a plan
 // read, a preview, y, a commit that cannot stop, and a result. Nothing
@@ -42,6 +42,9 @@ var maintKeys = struct {
 const (
 	maintRetargetKey = "w"
 	maintPruneKey    = "-"
+	// maintScopeKey opens the draft of a scope edit. The texts of that
+	// preview name it, because w can read n/a on the pin that it edits.
+	maintScopeKey = "i"
 )
 
 // maintPlannedMsg carries a plan read. m and seq drop the result of a
@@ -75,7 +78,7 @@ type maintOutcome struct {
 	check *refreshCheck
 }
 
-// maintModal is the preview of one retarget or prune request. The Pins
+// maintModal is the preview of one retarget, prune, or scope request. The Pins
 // sub-view hosts it through maintHost, which gives it every key while
 // it is open and every non-key message. The embedded flow holds the
 // stage and the shown plan. flowClosed tells the host to drop the
@@ -109,12 +112,27 @@ type maintModal struct {
 	// acted holds the entries that the last commit or recovery changed,
 	// until maintHost takes them (takeActed).
 	acted []pinfile.EntryRef
+
+	// draft is the edit draft of a manual scope edit, nil for every other
+	// action. It stays in the session, so esc and a failed write keep it.
+	draft *pinDraft
 }
 
 // newMaintModal opens the preview of req. The returned command reads the
 // plan, so no I/O runs in Update.
 func newMaintModal(st *state, req maintain.Request) (*maintModal, tea.Cmd) {
 	m := &maintModal{st: st, req: req}
+	read := m.prepare()
+
+	return m, read
+}
+
+// newScopeModal opens the scope preview of the draft d. The returned
+// command reads the plan, so no I/O runs in Update.
+func newScopeModal(st *state, d *pinDraft) (*maintModal, tea.Cmd) {
+	m := &maintModal{
+		st: st, req: maintain.Request{Action: maintain.ActionScope, Refs: []pinfile.EntryRef{d.ref}}, draft: d,
+	}
 	read := m.prepare()
 
 	return m, read
@@ -130,6 +148,21 @@ func (m *maintModal) prepare() tea.Cmd {
 	req := m.req
 
 	var svc services.Maintenance = m.st.svc
+
+	// A scope edit reads the draft on every plan, because the draft
+	// follows its entry across a reload (rebindDrafts). Each read makes a
+	// new time. A draft that a reload made equal to the entry still asks
+	// for a plan, so the preview says why it has nothing to write.
+	if d := m.draft; d != nil {
+		edit := d.request()
+		edit.ScopeSet = true
+
+		return func() tea.Msg {
+			plan, err := svc.PlanScope(maintain.ScopeRequest{Edit: edit})
+
+			return maintPlannedMsg{m: m, seq: seq, plan: plan, err: err}
+		}
+	}
 
 	return func() tea.Msg {
 		plan, err := svc.PlanMaintenance(req)
@@ -182,8 +215,13 @@ func (m *maintModal) planned(msg maintPlannedMsg) {
 	// can still open through enter after a refusal, so the plan itself
 	// loses y. The change goes to a copy, so the plan of the engine stays
 	// as it is. A recovery plan follows a commit of this session and keeps
-	// its proof.
-	if root := pinsForeignRoot(m.st); root != "" && m.preview != nil && !m.recovering {
+	// its proof. A scope edit is pin authoring, so --db is no exception.
+	root := pinsForeignRoot(m.st)
+	if m.req.Action == maintain.ActionScope {
+		root = authorForeignRoot(m.st)
+	}
+
+	if root != "" && m.preview != nil && !m.recovering {
 		blocked := *m.preview
 		blocked.Confirmable = false
 		m.preview, m.foreign = &blocked, root
@@ -369,6 +407,8 @@ func maintWorkName(p *maintain.Plan, recovering bool) string {
 		return "Completing the ledger update"
 	case p.Action == maintain.ActionPrune:
 		return "Pruning " + propPlural(len(p.Items), "pin", "pins")
+	case p.Action == maintain.ActionScope:
+		return "Writing the regions of " + propPlural(len(p.Items), "pin", "pins")
 	default:
 		return "Retargeting " + propPlural(len(p.Items), "pin", "pins")
 	}
@@ -479,11 +519,14 @@ func (m *maintModal) closeStale(changed string) tea.Cmd {
 
 // maintOpenKey names the Pins key that opens the preview of an action.
 func maintOpenKey(a maintain.Action) string {
-	if a == maintain.ActionPrune {
+	switch a {
+	case maintain.ActionPrune:
 		return maintPruneKey
+	case maintain.ActionScope:
+		return maintScopeKey
+	default:
+		return maintRetargetKey
 	}
-
-	return maintRetargetKey
 }
 
 // closed reports a preview that the host drops.
@@ -555,6 +598,10 @@ func (m *maintModal) confirmLabel(short bool) string {
 		return "complete"
 	case m.recovering:
 		return "complete the ledger update"
+	case m.preview.Action == maintain.ActionScope && short:
+		return "save"
+	case m.preview.Action == maintain.ActionScope:
+		return "save the regions"
 	case short:
 		return m.preview.Action.String()
 	default:

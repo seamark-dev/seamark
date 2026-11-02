@@ -8,13 +8,15 @@ inference agent, deciding on those proposals, maintaining and writing
 the installed pins, and editing the settings that these workflows read.
 Pin maintenance covers a retarget or a prune of a proposal-linked pin and
 a trigger extraction for selected proposals. Pin authoring writes a new
-pin, a pin edit, or a pin removal, and never the proposal ledger.
+pin, a pin edit, or a pin removal, and never the proposal ledger. A scope
+edit of a linked pin is the one pin edit that also writes the ledger.
 Settings also edits the lesson settings of `.seamark/lessons.yaml`: the
 threshold, the budgets, the repetition mode, and the mutes. A selection
 sample shows what a reviewed change does to the lessons of explicit
 paths. It is experimental. The plain commands stay the stable
-interface. Every console write has a plain route: a command, or an edit
-of the file by hand.
+interface. Every console write but one has a plain route: a command, or
+an edit of the file by hand. The exception is a scope edit of a linked
+pin: no command makes it, and a region change by hand unlinks the pin.
 
 ```bash
 seamark tui                 # the enclosing git repository of the cwd
@@ -56,8 +58,9 @@ guide for this session without writing anything.
   build keeps its confirmation (`enter` or `y`), because it writes only
   local derived data. A retarget or a prune writes `.seamark/lessons.yaml`
   and the ledger only after `y` in its preview, and only while
-  `distill.write` is on. A new pin, a pin edit, and a pin removal follow
-  the same rule, but they write `.seamark/lessons.yaml` only, never the
+  `distill.write` is on. A scope edit of a linked pin writes both too.
+  Any other new pin, pin edit, or pin removal follows
+  the same rule, but it writes `.seamark/lessons.yaml` only, never the
   ledger. A save of a lesson setting writes `.seamark/lessons.yaml` only;
   it needs neither the gate nor an index, because it writes no pin.
 - It never chains steps. An evidence refresh does not start a
@@ -70,9 +73,10 @@ guide for this session without writing anything.
 - It never retries work, and it runs one mutation at a time.
 - It never changes the policy, the gate mode, or pins outside a reviewed
   apply, retarget, prune, new pin, pin edit, or pin removal. It never
-  edits the rule of a linked pin. It never sets a scope of your choice
-  on a linked pin: only a retarget changes that scope, to the computed
-  regions. It never removes a linked pin: that is a prune. It never
+  edits the rule of a linked pin. It changes the scope of a linked pin
+  in two reviewed ways only: a retarget sets the computed regions, and a
+  scope edit sets the regions that you choose. It never removes a linked
+  pin: that is a prune. It never
   retargets or prunes a pin without exactly one linked proposal.
   Settings edits only the five fields of `config.yaml` and the five
   lesson settings listed in
@@ -217,7 +221,7 @@ shows the rule, the regions (`repo-wide` for none), and a state label:
 
 | State | Meaning | Route |
 | --- | --- | --- |
-| `pN linked` | One entry and one applied proposal have this rule and regions. | `w`, `-`, `t`; `i` edits note, mode and check, not rule or scope |
+| `pN linked` | One entry and one applied proposal have this rule and regions. | `w`, `-`, `t`; `i` edits note, mode, check, and regions, not the rule |
 | `pN edited` | Linked, but the live note differs from the recorded note. | As linked |
 | `no proposal` | No applied or pending proposal has this rule and regions. | `i` edit, `d` remove |
 | `pending pN` | Only pending proposals match. | Record one as applied (`c` in Proposals) |
@@ -247,6 +251,10 @@ Attention words follow the relationship, the most urgent first: `blocked`,
   removes linked pins and moves their proposals from applied to
   superseded; it is a deliberate retirement, not a dismiss. `t` opens a
   trigger extraction review for the linked proposals.
+- A retarget replaces regions that a person chose only in this preview.
+  The preview says so before `y`, and the retarget clears the choice.
+  The detail names the choice and its date, and it calls a computed scope
+  a suggestion.
 - The preview lists every selected pin as `ready`, `no-op`, or `blocked`,
   the regions that change or the note that leaves, WILL and WON'T lines,
   the file diff, and the ledger change. `y` shows only when every pin is ready and
@@ -269,15 +277,17 @@ the same engine without a preview: they change the ready pins and print a
 reason line for each other proposal.
 
 Pins also writes pins for you. It creates, edits, and removes manual
-pins, which no proposal stands behind, and edits the note, mode and check
-of a linked pin ([Lessons](lessons.md#pins-that-a-person-writes)):
+pins, which no proposal stands behind, and edits the note, mode, check,
+and regions of a linked pin
+([Lessons](lessons.md#pins-that-a-person-writes)):
 
 - `n` opens the form of a new pin in every state, also without an index.
   `i` edits and `d` removes the cursor pin; marks are ignored and stay.
   A pin with no proposal allows every field. A linked pin allows note,
-  mode and check edits: rule and scope stay read-only, and `d` reads
-  `n/a` with "use - Prune". A pending, ambiguous, or duplicate pin refuses `i`
-  and `d`, and so do an entry that the editor cannot change safely and
+  mode, check, and region edits: the rule stays read-only, and `d` reads
+  `n/a` with "use - Prune". The scope row of a linked pin stays read-only
+  only when the form cannot hold its stored regions. A pending, ambiguous,
+  or duplicate pin refuses `i` and `d`, and so do an entry that the editor cannot change safely and
   an unreadable pin file. The press names the reason and the route.
 - The form has rule, note and scope rows, plus mode and check rows when
   lesson-check editing is available. Rule is one line. Note takes
@@ -299,7 +309,8 @@ of a linked pin ([Lessons](lessons.md#pins-that-a-person-writes)):
   The review shows the operation, the file, the entry, the guidance
   before and after, the exact diff, and every blocker with its route.
   It also states the ledger effect: "The proposal ledger does not
-  change." A wording or
+  change." The exception is a draft that changes the regions of a linked
+  pin, which takes the scope preview below. A wording or
   scope edit says whether the delivery identity changes. A mode, check,
   or note edit that keeps the identity but gives the pin a new version
   says that a context that already saw the pin can receive it again,
@@ -308,16 +319,38 @@ of a linked pin ([Lessons](lessons.md#pins-that-a-person-writes)):
   while `distill.write` is on and a readable index records this
   workspace; `o` opens Settings › Pin writing or the Overview build.
   With `--db` of another repository, `o` names no build.
+- `s` on a draft that changes the regions of a linked pin opens the
+  scope preview. The preview holds every field of the draft as one save.
+  It shows the old and new regions, narrower or broader or
+  repository-wide, each region that names no path yet, the ledger change,
+  and the diff. For a `check` or `enforce` pin it also shows the impact
+  block with the active state, and one coverage sentence. The preview
+  never says that evidence supports your scope. With `y` off, it shows
+  each blocker with its route.
+- A scope edit writes the pin file and the ledger in the same way as a
+  retarget, and a partial result offers the same `c` completion. The row
+  records that a person chose the regions and the date. Its rule, note,
+  and evidence stay. A changed set gives the pin a new delivery identity
+  and version. A new order of the same regions
+  writes both stores, but it keeps the identity and the version. A
+  retyped spelling of the same regions is no change, so it takes the pin
+  review and records no choice. A chosen set can hold more than three
+  regions, and a pin with scope `*` reads as repository-wide.
+- Only the console in its own recorded root can save a scope edit. A
+  copied checkout and `--db` of another repository refuse it, also where
+  they allow a retarget or a prune. If a fix of the file comes first,
+  leave the regions of the pin as they are, then press `i` to open the
+  draft again. A region change by hand unlinks the pin.
 - The form and the MAINTENANCE detail name `w` Retarget for a linked pin
   only while `w` offers it. While `w` reads `n/a`, they and a press of
   `w` give the reason and a next action. That action is a route that
-  can finish in that state: `-` Prune and a new pin with `n` for other
-  regions, an edit by hand, `r` to read again, the Overview build in a
-  copied checkout, or the console in the recorded root with `--db` of
-  another repository. Pins names Prune only while the new pin can save,
-  and the rule row follows the same rule. A review blocker cannot tell
-  the retarget state, so it says to press `r` and read the route under
-  MAINTENANCE.
+  can finish in that state: `i` to edit the regions, `-` Prune and a new
+  pin with `n` when the form cannot hold the stored regions, an edit by
+  hand, `r` to read again, the Overview build in a copied checkout, or
+  the console in the recorded root with `--db` of another repository.
+  Pins names Prune only while the new pin can save, and the rule row
+  follows the same rule. A review blocker of a rule change says to press
+  `r` and read the route for the rule under MAINTENANCE.
 - `y` plans again from the current file, ledger, and gate. Any
   difference writes nothing, and the result lists the differences. The
   save replaces the file: it keeps the permission bits, not an access
@@ -445,7 +478,9 @@ keys).
 
 Plain route for pin authoring: edit `.seamark/lessons.yaml` by hand;
 `seamark lessons --list` prints the exact rule and region values to
-paste. The sample has no plain command. `seamark lessons --file <path>`
+paste. A scope edit of a linked pin has no plain route, because it writes
+the ledger too and a hand edit of the regions unlinks the pin. The sample
+has no plain command. `seamark lessons --file <path>`
 lists up to 8 lessons of one file, with no pin budget.
 
 ### 4 Doctor
@@ -538,6 +573,8 @@ Exact rules: `internal/settings`.
 | Pins comparison | `tab` next similar pin, `↑↓` scroll, `esc`/`enter` close |
 | Retarget or prune preview | `↑↓` scroll, `y` confirm (every pin ready, `distill.write` on, and no other operation running), `o` open Settings › Pin writing (gate off), `esc` cancel |
 | Retarget or prune result | `enter` close, or preview again after a refusal; with a recovery offer: `c` preview the ledger-only completion, `esc` drop it |
+| Scope preview | `↑↓` scroll, `y` confirm (no blocker, `distill.write` on, and no other operation running), `o` open Settings › Pin writing (gate off), `esc` cancel (keeps the draft; `i` opens it again) |
+| Scope edit result | `enter` close (a draft that did not save stays; `i` opens it again); with a recovery offer: `c` preview the ledger-only completion, `esc` drop it |
 | Ledger completion preview | `y` complete the ledger update, `o` open Settings › Pin writing (gate off), `esc` back to the result |
 | Pin form | `enter` edit the row, `esc` leave a field (keeps the text) or close the form (keeps the draft), `s` review, `a` add a region, `x` remove the region under the cursor, or on another row discard the draft (`d` confirm, `esc` keep), `↑↓` rows, `?` help (no field focused); in the Note field `enter` adds a line break. The footer lists the keys in this order, so `esc close` stays in view at 60×20 |
 | Pin review | `y` confirm, `s` sample (while the review holds a candidate file), `o` open the route of a blocker (Settings › Pin writing or the Overview build; no build with `--db` of another repository; no Settings route while Settings refuses the save), `esc` back to the form (close for a removal), scroll keys |
@@ -584,7 +621,7 @@ discards the drafts and quits, and `esc` stays.
 
 These stay on the CLI or need a hand edit:
 
-- the rule or a scope of your own choice for a linked pin
+- the rule of a linked pin, and stored regions that the form cannot hold
 - a pin with a pending, ambiguous, or duplicate link
 - the order of the pins
 - more than one pin or one mute per save

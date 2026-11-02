@@ -400,7 +400,7 @@ the run sends no further batch, and re-running resumes.
 Pending proposals adopt their verified trigger scopes in place; applied pins
 only store the triggers and surface a `regions now:` drift line —
 delivery of an installed pin never changes without an explicit
-`--retarget`. Hand-pruned pins are skipped: there is no delivery to
+`--retarget` or a scope edit in the console. Hand-pruned pins are skipped: there is no delivery to
 retarget. When the note itself names a real outside path and co-change
 agrees, the ledger additionally flags the pin — `delivery may miss the
 trigger: …` — with a tail block naming every flagged id.
@@ -449,6 +449,31 @@ the recomputed regions (lessons.yaml and the ledger together)
 `--retarget` is the upgrade path for pins distilled before region sets
 or trigger extraction existed. "Regions now" is one shared recompute:
 verified trigger scopes when available, evidence coverage otherwise.
+
+A person can choose the regions of a linked pin in the console. Such a row
+keeps its set until a person reviews a replacement. Its `regions now:` line
+reads as a suggestion and names the date of the choice:
+
+```text
+  p65   train-serve-parity                 workers, jobs
+        regions now: workers (a suggestion; a person chose the stored regions on 2026-11-01)
+
+chosen scope: p65 — a person chose these regions; review each advisory above in `seamark tui`, Lessons › Pins
+```
+
+The `retarget:` and `trigger scope:` lines leave that row out, because the
+command does not change it. The `chosen scope:` line appears when the row has
+a `delivery may miss the trigger` advisory. `lessons --retarget` refuses a
+chosen row and names the console. It refuses the row when the computed scope
+differs, and `--confirm-checks` does not change that. The row prints its
+reason, and the other rows of the run continue. A chosen row with a current
+scope or with aged-out evidence keeps its usual line. The reason names `w`,
+the console key that reviews the computed scope. When another pin or row owns
+the computed scope, or the pin file blocks the change, the console does not
+offer `w`. The reason then names what stops it, and it names `i`.
+
+In `seamark tui`, the preview of `w` in Lessons › Pins says that it replaces
+the choice before you confirm it.
 Retarget runs on the engine of the console's Pins view: it changes only
 the `region` and `regions` lines of each entry, in place, so the rule
 spelling, a hand-edited note, comments, unknown keys, and the position
@@ -532,7 +557,8 @@ new pin. `i` edits and `d` removes the pin under the cursor, never the
 marked pins.
 A new pin is manual, and so is a pin that no proposal records: no
 proposal stands behind it. For every pin, the console writes no provenance
-comment, and it never creates, changes, or links a proposal row.
+comment, and it never creates or links a proposal row. It changes a
+proposal row in one case: a scope edit of a linked pin.
 
 - A new pin goes after the last pin of the `pin:` list. Apply still
   inserts its pins at the head of the list. So a manual pin never moves
@@ -550,14 +576,22 @@ comment, and it never creates, changes, or links a proposal row.
   It then reads as the comment of the next pin. Every other line stays
   byte for byte.
 - A linked pin (one applied proposal records it) allows note, mode,
-  and check edits. Its rule stays read-only. Its scope changes with `w`
-  (retarget) while `w` offers the recomputed regions, and its removal is
-  `-` (prune). While `w` reads `n/a`, Pins gives the reason and a next
+  check, and region edits. Its rule stays read-only, and its removal is
+  `-` (prune). Its scope has two routes. `w` (retarget) sets the
+  recomputed regions while `w` offers them. `i` sets the regions that you
+  choose, through a scope preview, unless the form cannot hold the stored
+  regions. While `w` reads `n/a`, Pins gives the reason and a next
   action. The proposal keeps its
   recorded rule, note, and evidence. A changed note makes Pins show
   `edited`; trigger extraction still asks about the recorded note.
   Mode and check edits have their own review notes and change the pin
   version, not the proposal evidence.
+- A scope edit writes the pin file and the ledger, and every other
+  edit writes the pin file only. The row records that a person chose the
+  regions and the date, so inference no longer replaces them unasked.
+  Its rule, note, and evidence stay. No command makes this edit, and a
+  region change by hand unlinks the pin. Only the console in its own
+  recorded root can save it, so a copied checkout refuses it.
 - The same `distill.write` gate applies. With the gate off, the review
   shows the exact diff and writes nothing.
 - A save needs a readable index of this workspace, because the
@@ -569,7 +603,8 @@ An edit of the wording or the scope can give the pin a new delivery
 identity, and the review says whether it does. A context that already
 saw the old wording can then receive the pin again, also in
 `once-per-context` mode. Earlier deliveries stay recorded under the
-earlier wording and scope; nothing is reset or moved.
+earlier wording and scope; nothing is reset or moved. A new order of the
+same regions keeps the identity and the version.
 
 A mode edit, a check edit, or a note edit of letter case alone keeps the
 delivery identity but gives the pin a new version. The review says so,
@@ -1063,7 +1098,9 @@ machine with no network. Four sections:
   health: the confidence tier with its facts, the prompt-era note, the
   outcome verdict for applied pins (`not landing` highlighted — it is
   the one that needs action), and a `regions now:` drift line with the
-  `--retarget` command when today's inference disagrees. The header
+  `--retarget` command when today's inference disagrees. A row whose
+  regions a person chose reads that line as a suggestion with the date of
+  the choice, and it prints no command. The header
   stats row carries the aggregate: how many pins were measured, and
   how many are not landing. The evidence-mix line says what it all
   rests on: *469 review · 34 fix:conventional · 15 fix:subject*.

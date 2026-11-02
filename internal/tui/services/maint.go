@@ -12,8 +12,8 @@ import (
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
-// The installed lesson services: the Pins read, the retarget and prune
-// maintenance, its session recovery, and the trigger extraction. Reads
+// The installed lesson services: the Pins read, the retarget, prune, and
+// scope maintenance, its session recovery, and the trigger extraction. Reads
 // and plans take no lock, so the views stay responsive during a run.
 // Commits and runs take the engine lock with TryLock, so a second
 // mutation fails with ErrBusy and never waits (contracts D-21).
@@ -58,9 +58,36 @@ func (e *engine) PlanMaintenance(req maintain.Request) (*maintain.Plan, error) {
 	return p, nil
 }
 
+// PlanScope plans a manual scope edit. It uses the authoring deps, because
+// a scope edit is pin authoring: another recorded root is a blocker, also
+// with --db. Without a readable index the plan still holds the candidate,
+// and a blocker names the missing ledger. It writes nothing, so it takes
+// no lock.
+func (e *engine) PlanScope(req maintain.ScopeRequest) (*maintain.Plan, error) {
+	st, probe, err := e.openRead()
+	if err == nil {
+		defer func() { _ = st.Close() }()
+	}
+
+	p, err := maintain.PlanScope(e.authorDeps(st, probe), req)
+	if err != nil {
+		return nil, err
+	}
+
+	if p.Change != nil {
+		e.joinActive(p.Impact, p.Change.After)
+	}
+
+	return p, nil
+}
+
 // CommitMaintenance commits a reviewed maintenance plan under the
 // mutation lock. maintain.Commit plans again from fresh observations and
 // refuses a stale plan before any write.
+//
+// A scope edit is pin authoring, so it takes the authoring deps. The
+// recorded root can change after the review, and maintain.Commit then
+// refuses it, also with --db, where ownRoot passes.
 func (e *engine) CommitMaintenance(p *maintain.Plan) (maintain.Result, error) {
 	if !e.mu.TryLock() {
 		return maintResult(p), ErrBusy
@@ -81,7 +108,12 @@ func (e *engine) CommitMaintenance(p *maintain.Plan) (maintain.Result, error) {
 		return maintResult(p), err
 	}
 
-	return maintain.Commit(e.maintDeps(st, probe), p)
+	deps := e.maintDeps(st, probe)
+	if p.Action == maintain.ActionScope {
+		deps = e.authorDeps(st, probe)
+	}
+
+	return maintain.Commit(deps, p)
 }
 
 // PlanRecovery plans the ledger-only completion of a partial operation

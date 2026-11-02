@@ -893,3 +893,34 @@ func relativeLuminance(hex string) float64 {
 
 	return 0.2126*channel(red) + 0.7152*channel(green) + 0.0722*channel(blue)
 }
+
+func TestReportCardOfAChosenRowPrintsNoCommand(t *testing.T) {
+	st, root := seed(t)
+
+	const chosenAt = int64(1_790_000_000)
+
+	for _, c := range []struct {
+		rule   string
+		chosen int64
+	}{{"chosen-pin", chosenAt}, {"computed-pin", 0}} {
+		// Finding 21 sits in api, so the computed scope differs from web.
+		p := model.Proposal{
+			Signature: "sig-" + c.rule, Rule: c.rule, Region: "web", Note: "Keep the region.",
+			Members: []int64{21}, Agent: "claude/v3", Status: model.ProposalProposed, ScopeChosen: c.chosen,
+		}
+		require.NoError(t, storetest.InsertProposal(st, &p))
+
+		_, err := st.SetProposalStatus([]int64{p.ID}, model.ProposalApplied)
+		require.NoError(t, err)
+
+		page := renderPage(t, st, root)
+		command := fmt.Sprintf("seamark lessons --retarget p%d", p.ID)
+
+		if c.chosen > 0 {
+			assert.Contains(t, page, "(a suggestion; a person chose the stored regions on "+model.ScopeChoiceDate(chosenAt)+")")
+			assert.NotContains(t, page, command)
+		} else {
+			assert.Contains(t, page, command, "a computed row keeps its command")
+		}
+	}
+}

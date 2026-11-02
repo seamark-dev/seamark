@@ -20,9 +20,11 @@ import (
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
-// This file renders the stages of the retarget and prune preview. The
-// preview states what is selected, the state of every selected pin, the
-// exact file and ledger change, and what WILL and WON'T happen. Every
+// This file renders the stages of the retarget, prune, and scope preview.
+// The preview states what is selected, the state of every selected pin,
+// the exact file and ledger change, and what WILL and WON'T happen. A
+// scope preview shows the regions that a person typed, so its texts name
+// neither a retarget nor evidence. Every
 // text from the pin file, the ledger, a model or an error passes through
 // ui.OneLine, ui.MultiLine or ui.ErrText here, at the leaf, because the
 // maintenance engine returns it raw (internal/maintain package doc).
@@ -199,8 +201,12 @@ func (m *maintModal) planTitle() string {
 	t := m.st.theme
 
 	verb := t.TabActive.Render("Retarget")
-	if m.preview.Action == maintain.ActionPrune {
+
+	switch m.preview.Action {
+	case maintain.ActionPrune:
 		verb = t.Failure.Bold(true).Render("Prune")
+	case maintain.ActionScope:
+		verb = t.TabActive.Render("Edit regions")
 	}
 
 	return verb + " " + t.Body.Render(maintSubject(t, m.preview.Items))
@@ -224,7 +230,7 @@ func (m *maintModal) planRight() string {
 	return t.Muted.Render(propPlural(len(m.preview.Items), "pin", "pins"))
 }
 
-// The scope labels of a retarget plan.
+// The scope labels of a retarget or scope plan.
 const (
 	maintScopeRepoWide = "repository-wide"
 	maintScopeBroader  = "broader"
@@ -232,8 +238,13 @@ const (
 )
 
 // maintScopeLabel returns the widest scope change among the ready items
-// of a retarget, or an empty string.
+// of a retarget, or an empty string. A scope plan labels its typed set,
+// also with y off, because the preview shows that set when it is blocked.
 func maintScopeLabel(p *maintain.Plan) string {
+	if p.Action == maintain.ActionScope {
+		return maintTypedScopeLabel(p)
+	}
+
 	if p.Action != maintain.ActionRetarget {
 		return ""
 	}
@@ -253,6 +264,26 @@ func maintScopeLabel(p *maintain.Plan) string {
 	}
 
 	return label
+}
+
+// maintTypedScopeLabel returns the label of the typed set of a scope plan.
+// A set that gains and loses paths reads broader, because the gain delivers
+// the pin to more paths. retargetItem names the loss too.
+func maintTypedScopeLabel(p *maintain.Plan) string {
+	if len(p.Items) != 1 || !p.Items[0].Drafted {
+		return ""
+	}
+
+	switch it := p.Items[0]; {
+	case it.RepoWide:
+		return maintScopeRepoWide
+	case it.Broader:
+		return maintScopeBroader
+	case it.Narrower:
+		return maintScopeNarrower
+	}
+
+	return ""
 }
 
 // planLead is the first paragraph: what y does, or that y is off.
@@ -276,9 +307,15 @@ func (m *maintModal) planLead(w int) []string {
 
 	lead := "Seamark sets the regions of " + n + " in " + pinfile.File + " to the scope that today's evidence " +
 		"supports, and records them for " + ids + " in the ledger."
-	if p.Action == maintain.ActionPrune {
+	switch p.Action {
+	case maintain.ActionPrune:
 		lead = "Seamark removes " + n + " from " + pinfile.File + " and records " + ids + " as superseded in the " +
 			"ledger."
+	case maintain.ActionScope:
+		// The set is a choice of a person. No text here may read as support
+		// from evidence, because no evidence stands behind the set.
+		lead = "Seamark sets the regions of " + n + " in " + pinfile.File + " to the regions that you chose, and " +
+			"records them and your choice for " + ids + " in the ledger."
 	}
 
 	out := propLines(t.Body, lead+" distill.write is on. Nothing changes before you press y.", w)
@@ -293,7 +330,10 @@ func (m *maintModal) planLead(w int) []string {
 
 // planBlockers explains why y is off, each with its route. It reads the
 // typed plan fields, so every reason names its own next step. A plan
-// that is not confirmable for another reason shows the engine reasons.
+// that is not confirmable for another reason shows the engine reasons. A
+// scope plan has one pin and no selection, so it skips the selection
+// notes. It prints every engine reason, so a gate note never hides a
+// collision.
 func (m *maintModal) planBlockers(w int) []string {
 	t := m.st.theme
 	p := m.preview
@@ -319,7 +359,10 @@ func (m *maintModal) planBlockers(w int) []string {
 
 	// A cursor-row plan has no marked row. Space would mark the same row,
 	// so its route is another pin, not an unmark.
+	scope := p.Action == maintain.ActionScope
+
 	switch k := maintNotReady(p.Items); {
+	case scope:
 	case k > 0 && p.Request.Cursor:
 		note("The cursor row cannot change, so y is off. Press esc, move to another pin in Pins, then press " +
 			open + " again.")
@@ -341,7 +384,7 @@ func (m *maintModal) planBlockers(w int) []string {
 			m.gateRoute("after a save, press "+open+" in Pins for a new preview."))
 	}
 
-	if len(out) == 0 {
+	if scope || len(out) == 0 {
 		for _, b := range p.Blocked {
 			note(ovSentenceEnd(ui.OneLine(b)))
 		}
@@ -402,6 +445,17 @@ func (m *maintModal) itemLines(it maintain.PlanItem, w int) []string {
 	}
 
 	out = append(out, t.Faint.Render(ui.Truncate(maintWhere(t, it), w, t.Glyphs.Ellipsis)))
+
+	// A scope plan prints no reason line here, because planBlockers prints
+	// each one. blockedScope has nothing for it, because a typed set is no
+	// computed scope.
+	if m.preview.Action == maintain.ActionScope {
+		if it.Drafted {
+			return append(out, m.retargetItem(it, w)...)
+		}
+
+		return append(out, integLabeled(t, "Regions", maintLabelW, maintRegionText(it.From), t.Body, w)...)
+	}
 
 	switch it.Status {
 	case maintain.ItemReady:
@@ -475,9 +529,10 @@ func (m *maintModal) goneText(it maintain.PlanItem) (where, reason string) {
 		"these regions now. It was removed, or its rule or regions changed."
 }
 
-// retargetItem renders a ready retarget: the region change, a warning
-// for a wider scope, the facts that support it, and both notes when
-// the live note was edited.
+// retargetItem renders a ready retarget or a scope edit with a valid set:
+// the region change, a warning for a wider scope, the facts that support
+// a retarget, and both notes when the live note was edited. A scope edit
+// also names each region without a path and the coverage of its check.
 func (m *maintModal) retargetItem(it maintain.PlanItem, w int) []string {
 	t := m.st.theme
 
@@ -491,8 +546,22 @@ func (m *maintModal) retargetItem(it maintain.PlanItem, w int) []string {
 		out = append(out, propNote(t, ui.ToneAttention, "Broader: the new regions reach paths that the current "+
 			"regions do not.", w)...)
 	case it.Pin.Readings.Scope.Advice.Narrower:
-		out = append(out, propLines(t.Muted, "Narrower: the new regions reach fewer paths than the current regions.",
-			w)...)
+		out = append(out, propLines(t.Muted, maintNarrowerText, w)...)
+	}
+
+	// A typed set can be broader and narrower at once, so this line also
+	// follows the warning above.
+	if it.Narrower && !it.RepoWide {
+		out = append(out, propLines(t.Muted, maintNarrowerText, w)...)
+	}
+
+	if len(it.Missing) > 0 {
+		out = append(out, propLines(t.Muted, "No file yet: "+maintRegionText(pinEscapedSet(it.Missing))+". A pin can "+
+			"name a future file; it applies once the file exists.", w)...)
+	}
+
+	if line := maintReplacedChoice(m.preview, it); line != "" {
+		out = append(out, propNote(t, ui.ToneAttention, line, w)...)
 	}
 
 	for i, f := range it.Facts {
@@ -513,9 +582,34 @@ func (m *maintModal) retargetItem(it maintain.PlanItem, w int) []string {
 	if impacts := maintItemImpact(m.preview.Impact, it.Ref.Key); len(impacts) > 0 {
 		out = append(out, "", maintImpactHead(t))
 		out = append(out, impactLines(t, impacts, "", w)...)
+
+		if m.preview.Action == maintain.ActionScope {
+			out = append(out, propLines(t.Body, it.Coverage(), w)...)
+		}
 	}
 
 	return out
+}
+
+// maintNarrowerText says that a set drops paths. A scope set and a
+// computed set use the same words.
+const maintNarrowerText = "Narrower: the new regions reach fewer paths than the current regions."
+
+// maintReplacedChoice names the choice that a ready retarget replaces, or
+// returns "". The modal prints no Plan.Notes for a retarget, so this line
+// carries the choice to the screen before y.
+func maintReplacedChoice(p *maintain.Plan, it maintain.PlanItem) string {
+	if p.Action != maintain.ActionRetarget || it.Status != maintain.ItemReady || len(it.Rows) == 0 {
+		return ""
+	}
+
+	at := it.Rows[0].ScopeChosen
+	if at == 0 {
+		return ""
+	}
+
+	return "This retarget replaces the regions that a person chose on " + domain.ScopeChoiceDate(at) +
+		". y clears the choice."
 }
 
 // maintImpactHead is the heading of a checker impact block.
@@ -540,8 +634,10 @@ func maintItemImpact(impacts []lessoncheck.Impact, key reviews.PinKey) []lessonc
 	return out
 }
 
-// maintOtherImpact returns the impact blocks that no ready item names.
-// Each block belongs to an edited pin, so the list is empty in practice.
+// maintOtherImpact returns the impact blocks that no ready item names. A
+// drafted item of a scope edit shows its block too, also when it is
+// blocked. Each block belongs to an edited pin, so the list is empty in
+// practice.
 // The selection shows such a block anyway, because a block must never
 // go unseen before the apply (contract K1).
 func maintOtherImpact(p *maintain.Plan) []lessoncheck.Impact {
@@ -549,7 +645,8 @@ func maintOtherImpact(p *maintain.Plan) []lessoncheck.Impact {
 
 	for _, im := range p.Impact {
 		if !slices.ContainsFunc(p.Items, func(it maintain.PlanItem) bool {
-			return it.Status == maintain.ItemReady && len(maintItemImpact([]lessoncheck.Impact{im}, it.Ref.Key)) > 0
+			return (it.Status == maintain.ItemReady || it.Drafted) &&
+				len(maintItemImpact([]lessoncheck.Impact{im}, it.Ref.Key)) > 0
 		}) {
 			out = append(out, im)
 		}
@@ -574,7 +671,8 @@ func maintFactText(it maintain.PlanItem, fact string) string {
 
 // noteCompare shows the live note beside the recorded note. A retarget
 // keeps the live note in the file and the recorded note in the ledger,
-// so neither replaces the other.
+// so neither replaces the other. A scope edit can also carry a note edit,
+// so its words say that only the draft changes the live note.
 func (m *maintModal) noteCompare(it maintain.PlanItem, w int) []string {
 	t := m.st.theme
 	pw := pairWidth(w)
@@ -588,14 +686,20 @@ func (m *maintModal) noteCompare(it maintain.PlanItem, w int) []string {
 		recorded, id = it.Rows[0].Note, propID(it.Rows[0].ID)
 	}
 
-	lh := t.Heading.Render("LIVE NOTE") + "  " + t.Faint.Render("stays in the file")
+	keeps, tail := "stays in the file", "The note was edited after distillation. The retarget keeps the live note; "+
+		"the recorded note of "+id+" stays as history."
+	if m.preview.Action == maintain.ActionScope {
+		keeps, tail = "in the file", "The note was edited after distillation. The recorded note of "+id+
+			" stays as history, and the live note changes only when the draft changes it."
+	}
+
+	lh := t.Heading.Render("LIVE NOTE") + "  " + t.Faint.Render(keeps)
 	rh := t.Heading.Render("RECORDED") + "  " + t.Faint.Render(id)
 
 	out := []string{""}
 	out = append(out, pair(t, lh, rh, propLines(t.Body, pinNoteText(it.Pin.Entry.Note), pw),
 		propLines(t.Muted, pinNoteText(recorded), pw), w)...)
-	out = append(out, propLines(t.Muted, "The note was edited after distillation. The retarget keeps the live note; "+
-		"the recorded note of "+id+" stays as history.", w)...)
+	out = append(out, propLines(t.Muted, tail, w)...)
 
 	return out
 }
@@ -706,7 +810,11 @@ func maintLedgerLines(t *ui.Theme, p *maintain.Plan, w int) []string {
 		out = append(out, arrowRow(t, r.id, r.old, r.next, labelW, w)...)
 	}
 
-	if len(p.Retarget) > 0 {
+	switch {
+	case len(p.Retarget) > 0 && p.Action == maintain.ActionScope:
+		out = append(out, propLines(t.Faint, "The proposal stays applied; only its stored regions and the scope "+
+			"choice change.", w)...)
+	case len(p.Retarget) > 0:
 		out = append(out, propLines(t.Faint, "The proposals stay applied; only their stored regions change.", w)...)
 	}
 
@@ -714,10 +822,15 @@ func maintLedgerLines(t *ui.Theme, p *maintain.Plan, w int) []string {
 }
 
 // planEffects states what y does and what it never does. A plan that
-// y cannot confirm has no effects, so it shows none.
+// y cannot confirm has no effects, so it shows none, except the notes of
+// a scope plan.
 func (m *maintModal) planEffects(w int) []string {
 	t := m.st.theme
 	p := m.preview
+
+	if p.Action == maintain.ActionScope {
+		return m.scopeEffects(w)
+	}
 
 	if !p.Confirmable {
 		return nil
@@ -767,6 +880,49 @@ func (m *maintModal) planEffects(w int) []string {
 	}, w)
 }
 
+// scopeEffects prints the notes of a scope plan, also with y off, as the
+// pin review does, because they say what the edit does to delivery. The
+// WILL and WON'T lists follow while y can commit. A draft can also change
+// the note, the mode, or the check, so the lists name those fields only
+// when the draft does not touch them.
+func (m *maintModal) scopeEffects(w int) []string {
+	t := m.st.theme
+	p := m.preview
+
+	var out []string
+
+	if len(p.Notes) > 0 {
+		out = append(out, "", t.Heading.Render("EFFECTS"))
+	}
+
+	for _, n := range p.Notes {
+		out = append(out, propLines(t.Body, ovSentenceEnd(ui.OneLine(n)), w)...)
+	}
+
+	if !p.Confirmable {
+		return out
+	}
+
+	will := []effect{
+		{glyph: "~", tone: ui.ToneAttention, text: "change the region keys of this pin in " + pinfile.File},
+		{glyph: "~", tone: ui.ToneAttention, text: "record the new regions of " + propIDList(maintLedgerIDs(p)) +
+			" and the time of your choice in the ledger"},
+	}
+	wont := "change the rule, the live note, the comments or the position of the pin"
+
+	if edit := p.Scoping; edit != nil && (edit.Edit.NoteSet || edit.Edit.ModeSet || edit.Edit.CheckSet) {
+		will = append(will, effect{glyph: "~", tone: ui.ToneAttention, text: "write the other fields of the draft"})
+		wont = "change the rule, the comments or the position of the pin"
+	}
+
+	return append(out, effectLines(t, will, []string{
+		wont,
+		"change other pins, mutes or settings in the file",
+		"change the recorded rule, note, or evidence of the proposal",
+		"write anything before you press y",
+	}, w)...)
+}
+
 // maintCommentIDs returns the proposals whose provenance comment a prune
 // removes. The prune removes only a comment that exists above the entry
 // and names the pruned row (pinfile boundProvenance). A pin without such
@@ -808,8 +964,12 @@ func (m *maintModal) diffLines(w int) []string {
 	c := p.Change
 
 	if c == nil {
-		return append([]string{"", t.Heading.Render("DIFF")},
-			propLines(t.Muted, "No file change: no selected pin is ready.", w)...)
+		none := "No file change: no selected pin is ready."
+		if p.Action == maintain.ActionScope {
+			none = "No file change: the draft has items to fix, or a blocker stops the plan."
+		}
+
+		return append([]string{"", t.Heading.Render("DIFF")}, propLines(t.Muted, none, w)...)
 	}
 
 	head := t.Heading.Render("DIFF") + "  " + maintCounts(t, c.Added, c.Removed)
@@ -819,7 +979,8 @@ func (m *maintModal) diffLines(w int) []string {
 
 	out := []string{"", head}
 
-	if maintNotReady(p.Items) > 0 {
+	// A scope plan has one pin, so its diff is the diff of the draft.
+	if maintNotReady(p.Items) > 0 && p.Action != maintain.ActionScope {
 		out = append(out, propLines(t.Muted, "The diff holds the ready pins only.", w)...)
 	}
 
@@ -845,6 +1006,12 @@ func (m *maintModal) planTail(w int) []string {
 		if ids := maintLedgerIDs(p); len(ids) > 0 {
 			scope += sep + maintTailIDList(t, ids) + " " + t.Glyphs.Arrow + " superseded"
 		}
+	case p.Action == maintain.ActionScope:
+		scope = "Edit the regions of " + propPlural(len(p.Items), "pin", "pins")
+
+		if l := maintScopeLabel(p); l == maintScopeRepoWide || l == maintScopeBroader {
+			scope += sep + l
+		}
 	case maintScopeLabel(p) == maintScopeRepoWide || maintScopeLabel(p) == maintScopeBroader:
 		scope += sep + maintScopeLabel(p)
 	}
@@ -865,6 +1032,8 @@ func (m *maintModal) planTail(w int) []string {
 		return propLines(t.Body, scope+sep+"y writes lessons.yaml and the ledger", w)
 	case m.foreign != "":
 		state = "y is off: the index records another repository"
+	case maintNotReady(p.Items) > 0 && p.Action == maintain.ActionScope:
+		state = "y is off: this draft cannot be written"
 	case maintNotReady(p.Items) > 0 && p.Request.Cursor:
 		state = "y is off: the cursor row cannot change"
 	case maintNotReady(p.Items) > 0:
@@ -922,6 +1091,10 @@ func (m *maintModal) recoveryView(w int) ui.ModalOpts {
 		lead = "The pruned pin is still absent from " + pinfile.File + ", and this session removed it. Seamark " +
 			"records " + ids + " as superseded in the ledger only; the pin file stays as it is. A fresh read " +
 			"proved this just now, and the commit checks it again. Nothing changes before you press y."
+	case p.Action == maintain.ActionScope:
+		lead = "The pin file still holds the regions that this session wrote. Seamark records them and your choice " +
+			"for " + ids + " in the ledger only; the pin file stays as it is. A fresh read proved this just now, " +
+			"and the commit checks it again. Nothing changes before you press y."
 	default:
 		lead = "The pin file still holds the result of this session's retarget. Seamark records the new regions " +
 			"of " + ids + " in the ledger only; the pin file stays as it is. A fresh read proved this just now, " +
@@ -1044,10 +1217,15 @@ func maintManualRoute(a maintain.Action, ids string) string {
 			"prune again while the file keeps the change."
 	}
 
+	verb := "retarget"
+	if a == maintain.ActionScope {
+		verb = "edit the regions"
+	}
+
 	return check + "If the file holds the new regions while the ledger still records the earlier ones (" + ids +
 		"), Pins shows the mismatch. To reconcile, restore the earlier entry with git if it changed, then press " +
-		maintRetargetKey + " in Pins for a new preview; or keep the file and accept the mismatch. Do not retarget " +
-		"again while the file keeps the change."
+		maintOpenKey(a) + " in Pins for a new preview; or keep the file and accept the mismatch. Do not " + verb +
+		" again while the file keeps the change."
 }
 
 // proofLines renders the proof of one item of a completion.
@@ -1061,8 +1239,14 @@ func (m *maintModal) proofLines(it maintain.PlanItem, w int) []string {
 	}
 
 	proof := "The file holds the reviewed entry, and its earlier regions are gone."
-	if m.preview.Action == maintain.ActionPrune {
+
+	switch m.preview.Action {
+	case maintain.ActionPrune:
 		proof = "The pin is absent from the file, and this session removed it."
+	case maintain.ActionScope:
+		// A new order keeps the key, so "earlier regions are gone" can be
+		// false here.
+		proof = "The file holds the reviewed entry with the new regions."
 	}
 
 	return append(out, propLines(t.Muted, proof, w)...)
@@ -1107,7 +1291,13 @@ func (m *maintModal) refusalView(w int) ui.ModalOpts {
 	t := m.st.theme
 	o := m.out
 
-	body := propNote(t, ui.ToneAttention, maintRefusal(t, o.err, "preview", "Revise the selection and preview again."), w)
+	// A scope edit has its draft, so its route opens the draft again.
+	fix := "Revise the selection and preview again."
+	if o.plan != nil && o.plan.Action == maintain.ActionScope {
+		fix = "Press " + maintScopeKey + " in Pins to open the draft again."
+	}
+
+	body := propNote(t, ui.ToneAttention, maintRefusal(t, o.err, "preview", fix), w)
 	body = append(body, "")
 	body = append(body, propLines(t.Muted, "Details: "+ui.ErrText(o.err), w)...)
 
@@ -1180,6 +1370,7 @@ func (m *maintModal) outcome(o *maintOutcome) (title string, tone ui.Tone, lead 
 	ids := propIDList(maintLedgerIDs(o.plan))
 	file := pinfile.File
 	prune := o.plan.Action == maintain.ActionPrune
+	scope := o.plan.Action == maintain.ActionScope
 	open := maintOpenKey(o.plan.Action)
 
 	done := "records the new regions"
@@ -1196,6 +1387,9 @@ func (m *maintModal) outcome(o *maintOutcome) (title string, tone ui.Tone, lead 
 	case res.LedgerDone && len(res.Moved) > 0 && prune:
 		return "Pruned " + n, ui.ToneSuccess, "Removed " + n + " from " + file + " and recorded " +
 			propIDList(res.Moved) + " as superseded. Review the diff and commit it."
+	case res.LedgerDone && len(res.Moved) > 0 && scope:
+		return "Regions saved", ui.ToneSuccess, "Wrote the regions that you chose to " + file + " and recorded them " +
+			"and your choice for " + propIDList(res.Moved) + ". Review the diff and commit it."
 	case res.LedgerDone && len(res.Moved) > 0:
 		return "Retargeted " + n, ui.ToneSuccess, "Wrote the new regions of " + n + " to " + file + " and recorded " +
 			"them for " + propIDList(res.Moved) + ". Review the diff and commit it."
@@ -1245,8 +1439,12 @@ func maintPartialOutcome(a maintain.Action, ids string, offer, unread bool) (tit
 	verb := "retarget"
 
 	title = "Regions written, ledger incomplete"
-	if a == maintain.ActionPrune {
+
+	switch a {
+	case maintain.ActionPrune:
 		verb, title = "prune", "Pin removed, ledger incomplete"
+	case maintain.ActionScope:
+		verb = "edit the regions"
 	}
 
 	switch {
@@ -1283,8 +1481,12 @@ func (m *maintModal) resultFacts(o *maintOutcome) [][2]string {
 		rows = append(rows, [2]string{"Pin file", "changed or not checked: the write reported a failure"})
 	case res.FileWritten:
 		removed := "retargeted"
-		if prune {
+
+		switch {
+		case prune:
 			removed = "removed"
+		case o.plan.Action == maintain.ActionScope:
+			removed = "edited"
 		}
 
 		rows = append(rows, [2]string{"Pin file", "written: " + pinfile.File + " (" +

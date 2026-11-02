@@ -210,7 +210,7 @@ func TestMigrateV7AddsSourceAndProvenance(t *testing.T) {
 
 	v, err := s.GetMeta(MetaSchemaVersion)
 	require.NoError(t, err)
-	assert.Equal(t, "7", v)
+	assert.Equal(t, strconv.Itoa(schemaVersion), v)
 
 	// The existing row reads as findings without a rewrite.
 	old, err := s.Proposals(model.ProposalApplied)
@@ -235,6 +235,61 @@ func TestMigrateV7AddsSourceAndProvenance(t *testing.T) {
 	tx, err := s.db.Begin()
 	require.NoError(t, err)
 	require.NoError(t, addProposalSourceAndProvenance(tx))
+	require.NoError(t, tx.Rollback())
+}
+
+func TestMigrateAddsTheScopeChoice(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+
+	// Rewind a current database to v7: drop the v8 column and stamp the
+	// old version. The row that the test inserts before the rewind is a
+	// v7 row.
+	s, err := Open(path)
+	require.NoError(t, err)
+
+	row := model.Proposal{
+		Signature: "s1", Rule: "old-row", Region: "api", Regions: []string{"api", "web"},
+		Note: "n", Members: []int64{1, 2}, Status: model.ProposalApplied, CreatedAt: 5,
+	}
+	require.NoError(t, s.InsertProposal(&row))
+	require.NoError(t, s.Close())
+
+	db, err := rawOpen(t, path)
+	require.NoError(t, err)
+	_, err = db.Exec(`ALTER TABLE proposal DROP COLUMN scope_chosen_at`)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE meta SET value = '7' WHERE key = ?`, MetaSchemaVersion)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	s, err = Open(path)
+	require.NoError(t, err)
+
+	defer func() { _ = s.Close() }()
+
+	v, err := s.GetMeta(MetaSchemaVersion)
+	require.NoError(t, err)
+	assert.Equal(t, "8", v)
+
+	got, err := s.Proposals(model.ProposalApplied)
+	require.NoError(t, err)
+	assert.Equal(t, []model.Proposal{row}, got,
+		"an existing row reads as no choice, and its other fields stay")
+
+	// The new column reads back unchanged.
+	chosen := model.Proposal{Signature: "s2", Rule: "new-row", Note: "n",
+		Status: model.ProposalApplied, ScopeChosen: 1_800_000_000}
+	require.NoError(t, s.InsertProposal(&chosen))
+
+	got, err = s.ProposalsWithIDs([]int64{chosen.ID})
+	require.NoError(t, err)
+	assert.Equal(t, []model.Proposal{chosen}, got)
+
+	// The step guards on the live schema, so a second run changes
+	// nothing. A pre-versioning database can carry the column already.
+	tx, err := s.db.Begin()
+	require.NoError(t, err)
+	require.NoError(t, addProposalScopeChosen(tx))
 	require.NoError(t, tx.Rollback())
 }
 
