@@ -68,15 +68,15 @@ below remains distinct from required-before-release work.
 | Preparation (`lessons --prepare`, MCP `change_set`) | **Unreleased**; versioned guidance/check listing, no model call, no repeat-state change; receiver-unknown, not proof of before-construction delivery |
 | Claude `Read` exploration | **Unreleased**; opt-in setup, independent repeat state; native model-visible reply evidence pending; Codex structured Read unsupported |
 | Executable lesson configuration | **Unreleased**; advisory/check/enforce modes and two versioned predicates; mode/check and definition editors, validation and explicit working-tree verification implemented; arbitrary prose is not checkable |
-| Verification (`lessons --verify`, `check --lessons`, MCP `lesson_checks`) | **Unreleased**; shared bounded snapshot and result, CLI/TUI/MCP fixture coverage; default internal audit/lock exclusions already apply, but naming them in `not covered` remains a release fix |
+| Verification (`lessons --verify`, `check --lessons`, MCP `lesson_checks`) | **Unreleased**; shared bounded snapshot and result, CLI/TUI/MCP fixture coverage; default internal audit/lock exclusions apply and `not covered` names them |
 | Baseline, guard and post-edit hooks | **Unreleased**; Claude Edit/Write/MultiEdit and Codex apply_patch handlers, separate root/child paths; native denial, timeout and reply evidence pending; installed does not mean active or verified |
 | Codex Update projection | **Unreleased, incomplete**; content predicate gives unknown and an armed guard requests denial; verified before/after oracle and implementation required before release |
 | Setup and capability report | **Unreleased**; per-tool/stage/context paths, static binary checks, unknown-state warning/install and known-bad enforce refusal; setup never grants Codex trust; Claude and Codex setup refuse a certain second lesson-check handler and warn about an uncertain one; doctor, status and TUI summaries name an unreadable hook document |
 | Delivery report (`lessons --delivery`, `delivery/1`) | **Unreleased**; read-only version-isolated classes, timing, windows, reasons and metadata inspection; own-hook timing stays same-call-only, pending lane identity keeps otherwise negative windows incomplete, current `prevented: 0` |
 | TUI Pins checks | **Unreleased**; linked-pin mode/check editing, manual scope edit of a linked pin (console only, one save in both stores; a computed scope then reads as a suggestion), `M` definitions, `V` verification; native evidence unchanged |
 
-Timeout candidates, the exclusion output fix and the benchmark
-script-timeout flake remain open in the same checklist. None is
+Timeout candidates and the benchmark script-timeout flake remain
+open in the same checklist. None is
 completed by documenting it. Doctor keeps all-client coverage and
 warnings.
 

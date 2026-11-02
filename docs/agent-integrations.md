@@ -631,9 +631,9 @@ Before release:
   handling.
 - **Done:** Fix the misleading status/TUI `off` summary for unreadable hook
   configuration; keep the already qualified doctor behavior.
-- List the exact internal audit/lock exclusions in verification's
-  `not covered` output. Keep current default selection semantics and
-  explicit-path inclusion unchanged.
+- **Done:** Name the internal audit/lock exclusions in verification's
+  `not covered` output, as one fixed text. Default selection semantics
+  and explicit-path inclusion stay unchanged.
 - Investigate and fix the known local-script timeout flake in the
   benchmark tests without weakening validated behavior. Handle any
   benchmark fingerprint change explicitly; successful reruns alone do

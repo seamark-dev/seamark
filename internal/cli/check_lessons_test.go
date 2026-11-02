@@ -629,6 +629,27 @@ func resultOfRule(t *testing.T, v lessoncheck.Verification, rule string) lessonc
 	return lessoncheck.Result{}
 }
 
+// TestCheckLessonsNamesOwnAudit proves that check --lessons shows the
+// own-state exclusion. It runs the default selection, so its text and
+// its lessons member name the audit files.
+func TestCheckLessonsNamesOwnAudit(t *testing.T) {
+	root, sentinel := checkLessonsFixture(t)
+	checkLessonsEditHandler(t, root)
+
+	stdout, _, err := runIn(t, "", "-C", root, "check", "--lessons")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "; "+ownAuditExclude+"\n")
+
+	stdout, _, err = runIn(t, "", "-C", root, "check", "--lessons", "--json")
+	require.NoError(t, err)
+
+	var lessons lessoncheck.Verification
+	require.NoError(t, json.Unmarshal(decodeCheckLessons(t, stdout).Lessons, &lessons))
+	assert.Contains(t, lessons.Selection.Excludes, ownAuditExclude)
+
+	sentinel.requireNoCall(t)
+}
+
 // TestCheckLessonsNeverInvokes proves AC-1 for check --lessons: the
 // text and JSON forms, a piped diff, and --enforce start no agent, no
 // model CLI, and no network client.

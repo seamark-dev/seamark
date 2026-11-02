@@ -49,14 +49,22 @@ const (
 // selection holds such an entry.
 const selectionExcludeSkipped = "worktree changes of skip-worktree or assume-unchanged index entries, such as paths outside a sparse checkout"
 
+// selectionExcludeOwnState is the fixed exclude text for the untracked
+// audit files that statusRecords leaves out (ownStatePath). A default
+// snapshot holds it on every run, also when no such file exists. Each
+// run writes the audit file, so a text that depends on the files differs
+// between the first run and the second run.
+const selectionExcludeOwnState = "seamark's own lesson-check audit files"
+
 // selectionExcludes returns the fixed exclude texts of a selection kind.
-// It returns a new slice each time, so no snapshot shares it.
+// It returns a new slice each time, so no snapshot shares it. An explicit
+// selection keeps the audit files, so only the default list names them.
 func selectionExcludes(kind SelectionKind) []string {
 	if kind == SelectionExplicitPaths {
 		return []string{"paths not named by --file", "writes outside this snapshot"}
 	}
 
-	return []string{"ignored files not named by --file", "writes outside this snapshot", "content inside submodules"}
+	return []string{"ignored files not named by --file", "writes outside this snapshot", "content inside submodules", selectionExcludeOwnState}
 }
 
 // selectionOf returns the selection of a working-tree snapshot.
@@ -412,7 +420,8 @@ func (r *treeReader) objectFormat() string {
 // lines.
 //
 // The default selection drops the untracked records of the audit files
-// (ownStatePath) before the parse and the digest.
+// (ownStatePath) before the parse and the digest. Its exclude list names
+// them with selectionExcludeOwnState.
 //
 // The digest holds the stdout of each call and the census result, so
 // the revalidation also sees a directory that becomes unreadable after

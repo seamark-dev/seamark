@@ -3,6 +3,7 @@ package lessoncheck
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,6 +14,11 @@ import (
 // verification leaves out the untracked audit files that it writes
 // itself. Every repository lives under t.TempDir(), so no test reads or
 // writes the checkout that runs it.
+
+// ownStateExclude is the fixed text that names the audit files. The test
+// holds the words and not the producer constant, so a change of the
+// words fails here.
+const ownStateExclude = "seamark's own lesson-check audit files"
 
 // forbidEverythingYAML holds one repository-wide forbid pin. Any change
 // that the snapshot holds is a violation, so the pin shows exactly
@@ -142,6 +148,68 @@ func TestLessonCheckVerifyLeavesOutOwnAudit(t *testing.T) {
 		assert.Equal(t, SummaryViolation, v.Summary.State)
 		assert.Equal(t, []string{".seamark/lesson-check-audit.jsonl"}, verifiedEvidencePaths(t, v))
 		assert.Equal(t, ChangeAdd, v.Results[0].Evidence[0].Change)
+	})
+}
+
+// TestLessonCheckNamesOwnAudit proves that a reader sees the own-state
+// exclusion. A selection that can drop the audit files names them on
+// every run. A selection that cannot drop them keeps its list. Only the
+// words change, so the selected files and the verdict stay the same.
+func TestLessonCheckNamesOwnAudit(t *testing.T) {
+	t.Run("a default run with the three files names them and reads no change", func(t *testing.T) {
+		g := ownStateRepo(t)
+		g.write(".seamark/lesson-check-audit.jsonl", "{}\n")
+		g.write(".seamark/lesson-check-audit.jsonl.1", "{}\n")
+		g.write(".seamark/lesson-check-audit.jsonl.lock", "")
+
+		v := g.verify()
+
+		assert.Equal(t, SummaryNoApplicableChecks, v.Summary.State)
+		assert.Empty(t, v.Changes)
+		assert.Equal(t, wantDefaultExcludes, v.Selection.Excludes)
+		assert.Equal(t, 1, strings.Count(renderText(v), ownStateExclude))
+	})
+
+	t.Run("the list and the digest do not depend on the files", func(t *testing.T) {
+		g := ownStateRepo(t)
+
+		before := g.snapshot()
+		assert.NoFileExists(t, g.path(".seamark/lesson-check-audit.jsonl"))
+
+		g.verify()
+		require.FileExists(t, g.path(".seamark/lesson-check-audit.jsonl"))
+
+		after := g.snapshot()
+
+		assert.Equal(t, wantDefaultExcludes, before.Selection.Excludes)
+		assert.Equal(t, wantDefaultExcludes, after.Selection.Excludes)
+		assert.Equal(t, before.SHA256, after.SHA256)
+	})
+
+	t.Run("a tracked audit file keeps its change beside the text", func(t *testing.T) {
+		g := ownStateRepo(t)
+		g.write(".seamark/lesson-check-audit.jsonl", "{}\n")
+		g.commitAll("track the audit file")
+
+		// The first run appends a record, so the tracked file is modified.
+		g.verify()
+		v := g.verify()
+
+		assert.Equal(t, SummaryViolation, v.Summary.State)
+		assert.Equal(t, []string{".seamark/lesson-check-audit.jsonl"}, verifiedEvidencePaths(t, v))
+		assert.Equal(t, wantDefaultExcludes, v.Selection.Excludes)
+	})
+
+	t.Run("a path that the user names keeps the explicit list", func(t *testing.T) {
+		g := ownStateRepo(t)
+		g.write(".seamark/lesson-check-audit.jsonl.lock", "")
+
+		v := g.verify(".seamark/lesson-check-audit.jsonl.lock")
+
+		assert.Equal(t, SummaryViolation, v.Summary.State)
+		assert.Equal(t, []string{".seamark/lesson-check-audit.jsonl.lock"}, verifiedEvidencePaths(t, v))
+		assert.Equal(t, wantExplicitExcludes, v.Selection.Excludes)
+		assert.NotContains(t, renderText(v), ownStateExclude)
 	})
 }
 

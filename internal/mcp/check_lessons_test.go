@@ -525,6 +525,17 @@ func TestCheckLessonsMCPOption(t *testing.T) {
 		sentinel.requireNoCall(t)
 	})
 
+	t.Run("the text names the own audit files", func(t *testing.T) {
+		root, sentinel := lessonChecksFixture(t, "warn")
+		editHandler(t, root)
+
+		got, isErr := callCheck(t, root, `{"lesson_checks":true}`)
+		assert.False(t, isErr, got)
+		assert.Contains(t, got, "; seamark's own lesson-check audit files\n")
+
+		sentinel.requireNoCall(t)
+	})
+
 	t.Run("malformed arguments get the usage text", func(t *testing.T) {
 		root := writeFixture(t)
 

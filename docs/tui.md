@@ -390,8 +390,8 @@ files block the save. See [configuration](configuration.md#executable-lesson-con
 marked pins. It shows the shared verification result and appends an
 audit record, so it is an explicit action, not browsing. `V` in that
 view runs again. Freshness reads can mark the held result stale without
-rerunning the checker. Current default audit/lock exclusions are not yet
-listed in `not covered`; that output fix remains required before release.
+rerunning the checker. A default selection names the audit and lock
+exclusions in `not covered`.
 
 **Selection sample** opens with `s` in a pin review or in the review of
 a lessons Settings group, while the review holds a candidate change. It

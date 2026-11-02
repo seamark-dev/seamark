@@ -829,8 +829,7 @@ the whole repository against every lesson.
 
 Default selection leaves out exactly the untracked lesson-check audit,
 its rotated generation and its lock. Tracked files and explicit
-`--file` selections keep them. Current `not covered` output does not yet
-name those three exclusions; that output fix is required before release.
+`--file` selections keep them.
 [Configuration](configuration.md#verification-state-and-report-inputs)
 names the paths and other limits.
 

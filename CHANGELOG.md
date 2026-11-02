@@ -67,6 +67,8 @@ model-boundary delivery.
   `check` tool stop on any failed refresh, and MCP reads carry a one-line
   note. A relative `--db` names the file that the system opens, also
   behind a link.
+- **Verification names its own exclusions.** The `not covered` line of a
+  default selection now names Seamark's own lesson-check audit files.
 - **Refusals name one route that runs.** A route never writes two
   repositories or applies another proposal. A custom file of a copy
   routes to `seamark index --move-root --db <file>` in that copy, a file

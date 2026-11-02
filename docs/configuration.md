@@ -209,10 +209,9 @@ are untracked**:
 - `.seamark/lesson-check-audit.jsonl.lock`
 
 Tracked copies and explicit `--file` selections keep them. Other
-`.seamark` files are not a blanket exemption. Current `not covered`
-output does not list these three internal exclusions; adding those
-lines is a required [release fix](agent-integrations.md#release-checklist),
-not a change to the selection already described.
+`.seamark` files are not a blanket exemption. The `not covered` line of
+a default selection names these three as `seamark's own lesson-check
+audit files`.
 
 Evaluation is bounded: 5000 snapshot paths, 50000 census directories,
 4 MiB per file, 64 MiB snapshot content and Git output, and 20000 diff

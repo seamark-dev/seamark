@@ -1097,7 +1097,8 @@ const goldenJSON = `{
     "excludes": [
       "ignored files not named by --file",
       "writes outside this snapshot",
-      "content inside submodules"
+      "content inside submodules",
+      "seamark's own lesson-check audit files"
     ]
   },
   "binding": {
@@ -1278,7 +1279,7 @@ const goldenJSON = `{
 // emptyGoldenJSON is the document of a clean repository without
 // lessons.yaml. Every slice without omitempty encodes as [], so a
 // reader never has to handle null.
-const emptyGoldenJSON = `{"schema":"lesson-verification/1","seamark_version":"v0.8.0-31-g96e14ef","checked_at":"2026-10-21T10:15:02Z","caller":"cli","boundary":"working-tree","baseline":{"kind":"head","commit":"9c0c8314d5587b1e6070566f0a08f0c95aae6014"},"selection":{"kind":"default","description":"tracked changes against HEAD plus untracked nonignored files, staged and unstaged, as present in the working tree","excludes":["ignored files not named by --file","writes outside this snapshot","content inside submodules"]},"binding":{"snapshot_sha256":"94075b6588039c67a3635a31b21ba86f1b33e8564cd8a49b12bff3da5ddbe70a","config_sha256":"","pins_sha256":"2989b6177168ee9da4f58c8fd83e4061a80619ef7b1685e907cb4cc7297dd4af","checker_versions":[]},"freshness":"fresh","paths_complete":true,"config":{"sha256":"","lesson_checks_version":0,"valid":true},"summary":{"state":"no-executable-checks","pins_evaluated":0,"pass":0,"violation":0,"not_applicable":0,"unknown":0,"not_checkable":0,"advisory_with_check":0,"changes":0},"results":[],"listings":[]}`
+const emptyGoldenJSON = `{"schema":"lesson-verification/1","seamark_version":"v0.8.0-31-g96e14ef","checked_at":"2026-10-21T10:15:02Z","caller":"cli","boundary":"working-tree","baseline":{"kind":"head","commit":"9c0c8314d5587b1e6070566f0a08f0c95aae6014"},"selection":{"kind":"default","description":"tracked changes against HEAD plus untracked nonignored files, staged and unstaged, as present in the working tree","excludes":["ignored files not named by --file","writes outside this snapshot","content inside submodules","seamark's own lesson-check audit files"]},"binding":{"snapshot_sha256":"94075b6588039c67a3635a31b21ba86f1b33e8564cd8a49b12bff3da5ddbe70a","config_sha256":"","pins_sha256":"2989b6177168ee9da4f58c8fd83e4061a80619ef7b1685e907cb4cc7297dd4af","checker_versions":[]},"freshness":"fresh","paths_complete":true,"config":{"sha256":"","lesson_checks_version":0,"valid":true},"summary":{"state":"no-executable-checks","pins_evaluated":0,"pass":0,"violation":0,"not_applicable":0,"unknown":0,"not_checkable":0,"advisory_with_check":0,"changes":0},"results":[],"listings":[]}`
 
 // TestLessonCheckVerifyJSONGolden freezes the JSON bytes of
 // lesson-verification/1: the field order, the enums, the binding

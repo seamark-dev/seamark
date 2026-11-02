@@ -1126,6 +1126,42 @@ func TestLessonsVerifyNeverInvokes(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
+// ownAuditExclude is the fixed text of the lesson-check audit files in
+// the `not covered:` line and in selection.excludes.
+const ownAuditExclude = "seamark's own lesson-check audit files"
+
+// TestLessonsVerifyNamesOwnAudit proves that the command shows the
+// own-state exclusion. The default selection can drop the audit files,
+// so its text and its JSON name them. An explicit path cannot drop them,
+// so its list does not change.
+func TestLessonsVerifyNamesOwnAudit(t *testing.T) {
+	root, sentinel := verifyFixture(t, t.TempDir())
+
+	t.Run("the default selection", func(t *testing.T) {
+		stdout, err := verifyRun(t, root)
+		require.NoError(t, err)
+		assert.Contains(t, stdout, "; "+ownAuditExclude+"\n")
+
+		stdout, err = verifyRun(t, root, "--json")
+		require.NoError(t, err)
+		assert.Contains(t, verifyDocument(t, stdout).Selection.Excludes, ownAuditExclude)
+	})
+
+	t.Run("an explicit path", func(t *testing.T) {
+		handler := filepath.Join(root, "src", "handler.go")
+
+		stdout, err := verifyRun(t, root, "--file", handler)
+		require.NoError(t, err)
+		assert.NotContains(t, stdout, ownAuditExclude)
+
+		stdout, err = verifyRun(t, root, "--json", "--file", handler)
+		require.NoError(t, err)
+		assert.NotContains(t, verifyDocument(t, stdout).Selection.Excludes, ownAuditExclude)
+	})
+
+	sentinel.requireNoCall(t)
+}
+
 // TestLessonsVerifyWritesAuditRecord proves the milestone P4 additions
 // of contract K5 through the CLI: each run appends one verify record to
 // .seamark/lesson-check-audit.jsonl with the caller cli, and a failed
@@ -1176,7 +1212,10 @@ func TestLessonsVerifyWritesAuditRecord(t *testing.T) {
 			stdout, stderr, code := seamarkProcess(t, root, append([]string{"-C", root, "lessons", "--verify"}, args...)...)
 			assert.Equal(t, 0, code, "args %v: stdout: %s\nstderr: %s", args, stdout, stderr)
 			assert.Equal(t, want, seamarkLines(stderr), "args %v", args)
-			assert.NotContains(t, stdout, "lesson-check audit", "the line goes to stderr only")
+
+			// The colon marks the failure line. The fixed exclude text of
+			// the report holds the same words without a colon.
+			assert.NotContains(t, stdout, "lesson-check audit:", "the line goes to stderr only")
 		}
 
 		data, err := os.ReadFile(target)
