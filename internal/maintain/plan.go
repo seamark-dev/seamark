@@ -404,7 +404,7 @@ func (pl *planner) scope(n int, row model.Proposal, meta map[int64]model.Finding
 	it.Pin.Readings.Scope = ScopeReading{Known: true, Advice: advice}
 
 	for _, f := range advice.Facts {
-		if f.BlockedLine() != "" {
+		if f.BlockedLine(row.Status) != "" {
 			it.Pin.Readings.Trigger.Blocked = append(it.Pin.Readings.Trigger.Blocked, f)
 		}
 	}
@@ -746,7 +746,8 @@ func findingIDs(fs []model.Finding) []int64 {
 
 // factLines explains what supports a computed scope: each stored trigger
 // path and its state, then the evidence coverage when no trigger sets
-// the scope.
+// the scope. A plan item holds one applied row, so a blocked trigger
+// takes the words of an applied proposal.
 func factLines(advice distill.ScopeAdvice, living int) []string {
 	var (
 		lines    []string
@@ -762,8 +763,8 @@ func factLines(advice distill.ScopeAdvice, living int) []string {
 			selected = true
 			lines = append(lines, fmt.Sprintf("trigger %s changed together with the evidence in %d commit(s); "+
 				"it delivers to %s", f.Path, f.Together, f.Region))
-		case f.BlockedLine() != "":
-			lines = append(lines, f.BlockedLine())
+		case f.BlockedLine(model.ProposalApplied) != "":
+			lines = append(lines, f.BlockedLine(model.ProposalApplied))
 		default:
 			lines = append(lines, fmt.Sprintf("trigger %s is not confirmed by the evidence or the history; "+
 				"it does not set the scope", f.Path))

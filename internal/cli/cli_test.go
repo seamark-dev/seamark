@@ -1614,6 +1614,35 @@ func TestPlanAnnotationsReportsDirectTriggerDelivery(t *testing.T) {
 		notes[p.ID][0])
 }
 
+// TestPlanAnnotationsKeepsTheHandRouteOfAPendingRow covers the distill
+// plan, which holds pending rows. Such a row has no linked pin to lose, so
+// it keeps the hand words.
+func TestPlanAnnotationsKeepsTheHandRouteOfAPendingRow(t *testing.T) {
+	root := writeFixture(t)
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{{
+		ID: 1, Path: "api/gone.go", Body: "b", Source: model.SourceFixConventional,
+	}}))
+
+	p := model.Proposal{
+		ID: 1, Rule: "keep-boundary-synchronized", Region: "api", TriggerPaths: []string{"api/gone.go"},
+		Members: []int64{1}, Status: model.ProposalProposed, Note: "Keep the boundary synchronized.",
+	}
+
+	notes, flagged, err := planAnnotations(st, &reviews.Config{}, root, []model.Proposal{p})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"p1"}, flagged)
+	assert.Contains(t, notes[p.ID], "trigger api/gone.go — directly cited by the evidence but not deliverable: "+
+		"the region set is full or the path is absent from the working tree; "+
+		"review the trigger or edit regions in .seamark/lessons.yaml by hand")
+}
+
 // TestRetargetKeepsStoredTriggerScope pins the unified recompute: a pin
 // already targeting a confirmed trigger shows no drift, while a broad
 // evidence-scoped pin is retargeted to that precise edit surface.
@@ -1682,55 +1711,70 @@ func TestRetargetKeepsStoredTriggerScope(t *testing.T) {
 
 // TestLedgerShowsBlockedTrigger pins finding visibility: a stored
 // trigger that vanished from the working tree produces no drift and no
-// note advisory — the ledger must still say so.
+// note advisory — the ledger must still say so. A hand edit of the
+// regions unlinks the pin of an applied row, so only a pending row keeps
+// the hand words.
 func TestLedgerShowsBlockedTrigger(t *testing.T) {
-	root := writeFixture(t)
-
-	for _, rel := range []string{"web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
-		p := filepath.Join(root, filepath.FromSlash(rel))
-
-		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
-		require.NoError(t, os.WriteFile(p, []byte("x\n"), 0o644))
+	cases := []struct {
+		name   string
+		status string
+		route  string
+	}{
+		{"applied", model.ProposalApplied, "review the trigger or edit its regions in seamark tui, Lessons › Pins, with i"},
+		{"pending", model.ProposalProposed, "review the trigger or edit regions in .seamark/lessons.yaml by hand"},
 	}
 
-	_, err := run(t, "-C", root, "index")
-	require.NoError(t, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := writeFixture(t)
 
-	st, err := store.Open(store.DefaultPath(root))
-	require.NoError(t, err)
+			for _, rel := range []string{"web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
+				p := filepath.Join(root, filepath.FromSlash(rel))
 
-	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
-		return tx.InsertCoChange(model.CoChange{
-			FileA: "api/schemas.py", FileB: "web/src/api/schema.ts",
-			Together: 38, Total: 400, Lift: 6.6,
+				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+				require.NoError(t, os.WriteFile(p, []byte("x\n"), 0o644))
+			}
+
+			_, err := run(t, "-C", root, "index")
+			require.NoError(t, err)
+
+			st, err := store.Open(store.DefaultPath(root))
+			require.NoError(t, err)
+
+			require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+				return tx.InsertCoChange(model.CoChange{
+					FileA: "api/schemas.py", FileB: "web/src/api/schema.ts",
+					Together: 38, Total: 400, Lift: 6.6,
+				})
+			}))
+
+			require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+				{ID: 1, Path: "web/src/api/schema.ts", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+				{ID: 2, Path: "cmd/a.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+				{ID: 3, Path: "internal/b.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+			}))
+
+			require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
+				Signature: "s1", Rule: "capped-pin", Region: "web/src/api",
+				Regions:      []string{"web/src/api", "cmd", "internal"},
+				TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: time.Now().Unix(),
+				Note: "n", Members: []int64{1, 2, 3},
+				Agent: "claude/v4", Status: tc.status,
+			}))
+			require.NoError(t, st.Close())
+
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+				"pin:\n  - rule: capped-pin\n    region: web/src/api\n"+
+					"    regions: [web/src/api, cmd, internal]\n    note: n\n"), 0o644))
+
+			out, err := run(t, "-C", root, "lessons", "--proposals")
+			require.NoError(t, err)
+
+			assert.Contains(t, out, "trigger api/schemas.py — confirmed by co-change (38 shared commits) but not deliverable: "+
+				"the region set is full or the path is absent from the working tree; "+tc.route+"\n")
+			assert.NotContains(t, out, "regions now:", "no verified trigger leaves evidence coverage unchanged")
 		})
-	}))
-
-	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
-		{ID: 1, Path: "web/src/api/schema.ts", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
-		{ID: 2, Path: "cmd/a.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
-		{ID: 3, Path: "internal/b.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
-	}))
-
-	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
-		Signature: "s1", Rule: "capped-pin", Region: "web/src/api",
-		Regions:      []string{"web/src/api", "cmd", "internal"},
-		TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: time.Now().Unix(),
-		Note: "n", Members: []int64{1, 2, 3},
-		Agent: "claude/v4", Status: model.ProposalApplied,
-	}))
-	require.NoError(t, st.Close())
-
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
-		"pin:\n  - rule: capped-pin\n    region: web/src/api\n"+
-			"    regions: [web/src/api, cmd, internal]\n    note: n\n"), 0o644))
-
-	out, err := run(t, "-C", root, "lessons", "--proposals")
-	require.NoError(t, err)
-
-	assert.Contains(t, out, "confirmed by co-change (38 shared commits) but not deliverable")
-	assert.Contains(t, out, "absent from the working tree")
-	assert.NotContains(t, out, "regions now:", "no verified trigger leaves evidence coverage unchanged")
+	}
 }
 
 // TestLedgerNamesPrunedPinsInsteadOfAdvising pins the p45 lesson from

@@ -1411,9 +1411,8 @@ func TestPinsCitationsNameEachFindingAndTheGoneOnes(t *testing.T) {
 	assert.NotContains(t, text, "finding 303", "a row that differs needs no ID")
 }
 
-func TestPinsTriggerReadingNamesAHandEditOnlyWithoutARetarget(t *testing.T) {
+func TestPinsTriggerReadingNamesARouteOnlyWithoutARetarget(t *testing.T) {
 	blocked := distill.TriggerFact{Path: "internal/store/rows.go", Together: 3}
-	hand := "edit the regions in .seamark/lessons.yaml by hand"
 
 	f := pinsFake()
 	f.pins.Pins[1].Readings.Trigger.Blocked = []distill.TriggerFact{blocked}
@@ -1426,9 +1425,10 @@ func TestPinsTriggerReadingNamesAHandEditOnlyWithoutARetarget(t *testing.T) {
 	assert.Contains(t, text, "! trigger internal/store/rows.go is confirmed by co-change (3 shared commits), but it "+
 		"sets no region: the path is not in the working tree")
 	assert.NotContains(t, text, "by hand", "w makes the change, so no hand edit is a route")
-	assert.NotContains(t, text, blocked.BlockedLine(), "the CLI words stay out of the console")
+	assert.NotContains(t, text, pinRouteForm, "w makes the change, so no other route shows")
+	assert.NotContains(t, text, blocked.BlockedLine(domain.ProposalApplied), "the CLI words stay out of the console")
 
-	// Without a retarget, the hand edit is the route, and the words say
+	// Without a retarget, the route of the pin shows, and the words say
 	// so. A full region set is told apart from a gone path.
 	full := distill.TriggerFact{Path: "internal/store/rows.go", Region: "internal/store/rows.go", Direct: true}
 	f = pinsFake()
@@ -1439,7 +1439,7 @@ func TestPinsTriggerReadingNamesAHandEditOnlyWithoutARetarget(t *testing.T) {
 	require.NotContains(t, pinsKeys(h), "w")
 
 	assert.Contains(t, pinsDetail(t, h), "! trigger internal/store/rows.go is directly cited by the evidence, but it "+
-		"sets no region: the region set is full; "+hand)
+		"sets no region: the region set is full; use i to edit its regions")
 }
 
 func TestPinsBlockScalarNoteHasNoTrailingBlankRow(t *testing.T) {

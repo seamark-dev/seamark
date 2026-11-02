@@ -799,7 +799,7 @@ func planAnnotations(st *store.Store, lcfg *reviews.Config, root string,
 				default:
 					// Confirmed but blocked — the shared sentence, so
 					// the ledger and report cannot disagree.
-					notes[p.ID] = append(notes[p.ID], f.BlockedLine())
+					notes[p.ID] = append(notes[p.ID], f.BlockedLine(p.Status))
 					missed[p.ID] = true
 				}
 			}

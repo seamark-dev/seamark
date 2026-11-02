@@ -305,36 +305,116 @@ func handState(t *testing.T, edit func(f *fakeServices)) *state {
 	return pinsOf(pinsOpen(t, f, 120, 40)).st
 }
 
-// TestPinTriggerRouteFollowsTheRecordedRoot covers the trigger text, which
-// names the hand edit only while w offers no retarget.
+// pinsTriggerFact is a confirmed trigger whose path left the working tree.
+var pinsTriggerFact = distill.TriggerFact{Path: "internal/store/rows.go", Together: 3}
+
+// pinsTriggerLead is the sentence of pinsTriggerFact before its route.
+const pinsTriggerLead = "trigger internal/store/rows.go is confirmed by co-change (3 shared commits), but it sets no " +
+	"region: the path is not in the working tree; "
+
+// TestPinTriggerRouteOfALinkedPin covers a linked pin that offers no
+// retarget. A hand edit of its regions unlinks it, so its route is the one
+// of retargetNext. Only a state where no console route can change the
+// regions names a hand edit.
+func TestPinTriggerRouteOfALinkedPin(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(f *fakeServices)
+		want string
+	}{
+		{
+			name: "the pin file and the form allow an edit",
+			edit: func(*fakeServices) {},
+			want: "use i to edit its regions",
+		},
+		{
+			name: "the form refuses a stored region",
+			edit: func(f *fakeServices) { f.pins.Pins[3].Entry.Region = strings.Repeat("r", 600) },
+			want: "to choose other regions, use - Prune and add a new pin with n",
+		},
+		{
+			name: "the entry cannot be edited safely",
+			edit: func(f *fakeServices) { f.pins.Pins[3].Entry.Block = "a multi-line rule value" },
+			want: "edit the pin by hand in .seamark/lessons.yaml",
+		},
+		{
+			name: "the pin file refuses a write",
+			edit: func(f *fakeServices) { f.pins.Doc.FileBlock = "the file is read-only" },
+			want: "edit the pin by hand in .seamark/lessons.yaml",
+		},
+		{
+			name: "the database owns a reachable root",
+			edit: pinsAnotherDB,
+			want: "to choose other regions, open the console in /work/original",
+		},
+		{
+			name: "no console of the root can take this",
+			edit: handStates[2].edit,
+			want: "to choose other regions, use another --db",
+		},
+		{
+			name: "a copied checkout before its build",
+			edit: pinsCopiedCheckout,
+			want: "build the index of this checkout from Overview (press 1, then b)",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := authorFake(nil)
+			f.pins = pinsInspection()
+			f.pins.Pins[3].Readings.Trigger.Blocked = []distill.TriggerFact{pinsTriggerFact}
+			f.pins.Pins[3].Link.Applied[0].TriggerPaths = []string{pinsTriggerFact.Path}
+			tc.edit(f)
+
+			h := pinsOpen(t, f, 120, 40)
+			pinsCursorTo(h, 4)
+			require.NotContains(t, pinsKeys(h), "w")
+
+			// The next reading follows, so the route ends the sentence.
+			assert.Contains(t, pinsDetail(t, h), "! "+pinsTriggerLead+tc.want+" Outcome ")
+		})
+	}
+}
+
+// TestPinTriggerRouteFollowsTheRecordedRoot covers a pin without a link.
+// It has no link to lose, so its route stays the hand edit. Only a linked
+// pin reaches the trigger reading today, so this test asks triggerRoute.
 func TestPinTriggerRouteFollowsTheRecordedRoot(t *testing.T) {
-	const lead = "trigger internal/store/rows.go is confirmed by co-change (3 shared commits), but it sets no " +
-		"region: the path is not in the working tree; "
-
 	want := handWords{
-		lead + "edit the regions in .seamark/lessons.yaml by hand",
-		lead + "edit the regions in " + handAbsolute + " by hand",
-		lead + handReplace + "edit the regions in .seamark/lessons.yaml by hand",
-		lead + handBuild + "edit the regions in .seamark/lessons.yaml by hand",
+		pinsTriggerLead + "edit the regions in .seamark/lessons.yaml by hand",
+		pinsTriggerLead + "edit the regions in " + handAbsolute + " by hand",
+		pinsTriggerLead + handReplace + "edit the regions in .seamark/lessons.yaml by hand",
+		pinsTriggerLead + handBuild + "edit the regions in .seamark/lessons.yaml by hand",
 	}
 
-	fact := distill.TriggerFact{Path: "internal/store/rows.go", Together: 3}
+	forEachHandState(t, want, nil, func(t *testing.T, h *harness, want string) {
+		p := pinsOf(h)
+		pin := p.rows()[4].pin
+		require.False(t, pinLinked(pin))
 
-	blocked := func(f *fakeServices) {
-		f.pins.Pins[3].Readings.Trigger.Blocked = []distill.TriggerFact{fact}
-		f.pins.Pins[3].Link.Applied[0].TriggerPaths = []string{fact.Path}
-	}
-
-	forEachHandState(t, want, blocked, func(t *testing.T, h *harness, want string) {
-		pinsCursorTo(h, 4)
-		require.NotContains(t, pinsKeys(h), "w")
-
-		assert.Contains(t, pinsDetail(t, h), want)
+		assert.Equal(t, want, pinTriggerFact(pinsTriggerFact, p.triggerRoute(pin)))
 	})
 
 	t.Run("no route", func(t *testing.T) {
-		assert.NotContains(t, pinTriggerFact(fact, ""), "by hand")
+		assert.NotContains(t, pinTriggerFact(pinsTriggerFact, ""), "by hand")
 	})
+}
+
+// TestMaintFactTextDropsTheRouteOfABlockedTrigger covers the preview of a
+// retarget. The plan holds the words of an applied proposal, and the
+// preview is the retarget itself, so the console words name no route.
+func TestMaintFactTextDropsTheRouteOfABlockedTrigger(t *testing.T) {
+	var it maintain.PlanItem
+
+	it.Pin.Readings.Trigger.Blocked = []distill.TriggerFact{pinsTriggerFact}
+
+	const want = "trigger internal/store/rows.go is confirmed by co-change (3 shared commits), but it sets no " +
+		"region: the path is not in the working tree"
+
+	assert.Equal(t, want, maintFactText(it, "trigger internal/store/rows.go — confirmed by co-change (3 shared "+
+		"commits) but not deliverable: the region set is full or the path is absent from the working tree; "+
+		"review the trigger or edit its regions in seamark tui, Lessons › Pins, with i"))
 }
 
 // TestPinFileBlockNoteFollowsTheRecordedRoot covers the note of a retarget

@@ -292,7 +292,7 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		regionsNow[p.ID] = recomputed
 
 		for _, f := range facts {
-			if line := f.BlockedLine(); line != "" {
+			if line := f.BlockedLine(p.Status); line != "" {
 				if blocked[p.ID] != "" {
 					blocked[p.ID] += "; "
 				}

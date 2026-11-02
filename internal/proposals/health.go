@@ -107,7 +107,7 @@ func Health(st *store.Store, root string, ps []model.Proposal) (map[int64]report
 			// without this line, a confirmed delivery miss is
 			// invisible everywhere after the extraction summary.
 			for _, f := range facts {
-				if line := f.BlockedLine(); line != "" {
+				if line := f.BlockedLine(p.Status); line != "" {
 					if h.Blocked != "" {
 						h.Blocked += "; "
 					}

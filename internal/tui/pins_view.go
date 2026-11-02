@@ -1226,13 +1226,12 @@ func (p *pinsView) triggerValues(pin *maintain.Pin, tr maintain.TriggerReading, 
 		out = append(out, t.Accent.Render(ui.Truncate(ui.OneLine(path), w, t.Glyphs.Ellipsis)))
 	}
 
-	// The hand edit is a route only while the console offers no retarget
-	// and the scope is not current. Else w makes the change, or no change
-	// is due.
+	// A route shows only while the console offers no retarget and the
+	// scope is not current. Else w makes the change, or no change is due.
 	s := pin.Readings.Scope
 	route := ""
 	if p.retargetBlock(pin) != "" && (!s.Known || s.Advice.Kind != distill.ScopeCurrent) {
-		route = pinHandRoute(p.st, "edit the regions in ", " by hand")
+		route = p.triggerRoute(pin)
 	}
 
 	for _, f := range tr.Blocked {
@@ -1242,11 +1241,24 @@ func (p *pinsView) triggerValues(pin *maintain.Pin, tr maintain.TriggerReading, 
 	return out
 }
 
+// triggerRoute returns the next action for a trigger that sets no region
+// while w offers no retarget. A hand edit of the regions of a linked pin
+// changes its key and unlinks it. So a linked pin takes the route of
+// retargetNext, which decides stored refusals, file blocks, and other
+// roots. Any other pin has no link to lose, so the hand edit stays.
+func (p *pinsView) triggerRoute(pin *maintain.Pin) string {
+	if pinLinked(pin) {
+		return p.retargetNext(pin)
+	}
+
+	return pinHandRoute(p.st, "edit the regions in ", " by hand")
+}
+
 // pinTriggerFact words a confirmed trigger that sets no region, from the
-// fields of distill.TriggerFact. The shared BlockedLine always ends with
-// a hand edit route, because the CLI plan, the CLI ledger and the HTML
-// report print it, and none of them offers the change. The console
-// offers w for it, so route is "" or the hand edit that the state needs.
+// fields of distill.TriggerFact. The shared BlockedLine picks its route
+// from the status of a row, because the CLI plan, the CLI ledger, the
+// HTML report and the proposal detail cannot ask the pin form. This view
+// can, so route is "" or the result of triggerRoute.
 func pinTriggerFact(f distill.TriggerFact, route string) string {
 	why := "directly cited by the evidence"
 	if !f.Direct {

@@ -656,12 +656,13 @@ func maintOtherImpact(p *maintain.Plan) []lessoncheck.Impact {
 }
 
 // maintFactText returns the console words of one engine fact. A fact
-// that is the BlockedLine of a trigger ends with a hand edit route, as
-// the CLI plan and ledger print it. This preview is the retarget itself,
-// so the console words drop the route (pinTriggerFact).
+// that is the BlockedLine of a trigger ends with a route. A plan item
+// holds one applied row, so the comparison uses the words of an applied
+// proposal. This preview is the retarget itself, so the console words
+// drop the route (pinTriggerFact).
 func maintFactText(it maintain.PlanItem, fact string) string {
 	for _, f := range it.Pin.Readings.Trigger.Blocked {
-		if f.BlockedLine() == fact {
+		if f.BlockedLine(domain.ProposalApplied) == fact {
 			return pinTriggerFact(f, "")
 		}
 	}
