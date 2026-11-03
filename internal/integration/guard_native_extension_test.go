@@ -295,7 +295,8 @@ func (r guardRecording) assertExtensionSlowDeny(t *testing.T, client string, x g
 // the write under check pins, and the post-edit record of the same call
 // reports the violation and writes its reply. Whether the reply reached
 // the child model request is the reviewer's reading of the subagent
-// transcript.
+// transcript. For Codex, the replay logs the rollout records that hold
+// the PostToolUse context of the call.
 func (r guardRecording) assertExtensionReply(t *testing.T, client string, x guardExtension) {
 	t.Helper()
 
@@ -314,6 +315,10 @@ func (r guardRecording) assertExtensionReply(t *testing.T, client string, x guar
 
 	post := r.assertExecuted(t, x.name, allow, x.path, lessoncheck.SummaryViolation, attributions...)
 	assertEmitted(t, x.name, post)
+
+	if client == CodexID {
+		r.logCodexPostEditContext(t, x.name, x.path)
+	}
 }
 
 // slowDenyObserved reports whether an in-budget slow case shows its

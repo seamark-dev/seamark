@@ -146,6 +146,23 @@ path metadata. Verified before/after projection is **required before
 release**, not an accepted omission from v0.9.0. Post-edit findings and
 explicit working-tree verification do not prove pre-write projection.
 
+Codex post-edit findings go back as `additionalContext` in the
+`PostToolUse` hook reply on stdout, with exit 0. The advisory edit hook
+uses the same form on `PreToolUse`. A native recording of codex-cli
+0.164.0 showed that findings on stderr never reached the model, so that
+channel is no longer used. No reviewed recording shows yet that the new
+reply reaches the model, so the Codex post-edit path stays
+`active-unverified` in root and child contexts.
+
+Codex bounds model-visible hook context with `additionalContextLimit`,
+about 2,500 tokens by default. So the Codex reply holds at most 3,072
+bytes of findings. A longer text, such as the findings of a patch on many
+files, keeps its first whole lines. Its last line counts the lines left
+out and names `seamark lessons --verify`. That command checks tracked
+changes and untracked files that git does not ignore, so it can skip an
+ignored file that the call wrote. The Claude Code reply keeps the whole
+text.
+
 The installed pre-edit timeout is **10 seconds**, and the post-edit
 timeout is **15 seconds**. The handlers budget 5 seconds for the guard
 and 10 seconds for post-edit evaluation inside those limits. The hook

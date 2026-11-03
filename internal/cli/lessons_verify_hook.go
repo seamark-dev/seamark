@@ -317,9 +317,10 @@ func normalizeEventPaths(root, cwd string, native []string) (paths []string, com
 	return paths, complete
 }
 
-// reply writes the findings in the native reply of the client. A client
-// answers on stdout or on stderr, and the exit status stays 0. written
-// is false when the encoding or a write fails.
+// reply writes the findings in the native reply of the client. Both
+// built-in clients answer on stdout. A HookReply can also hold stderr
+// text, so the function writes that too. The exit status stays 0.
+// written is false when the encoding or a write fails.
 func (r *postEdit) reply(findings string) (written bool, err error) {
 	reply, err := r.client.Completions.EncodeFindings(findings, r.outcome())
 	if err != nil {

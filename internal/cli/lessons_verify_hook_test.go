@@ -239,8 +239,9 @@ func TestLessonsVerifyHookReportsActualDelta(t *testing.T) {
 // interrupted tool: the hook checks the state on disk anyway, names the
 // tool outcome, and answers with the event of the failure. A failed tool
 // that wrote nothing gives no finding. Codex reports a failed patch by a
-// non-zero exit code in PostToolUse, and the findings go to stderr with
-// exit 0.
+// non-zero exit code in PostToolUse. The findings go to stdout as the
+// PostToolUse additionalContext reply with exit 0, and a pass writes
+// nothing.
 func TestLessonsVerifyHookFailedAndInterrupted(t *testing.T) {
 	root, sentinel := guardFixture(t)
 	content := "readme\nTODO(partial): x\n"
@@ -287,7 +288,7 @@ func TestLessonsVerifyHookFailedAndInterrupted(t *testing.T) {
 		assert.Equal(t, lessoncheck.AttributionProjectionDiffers, rec.Attribution, "the projected write did not happen")
 	})
 
-	t.Run("a failed Codex patch reports on stderr", func(t *testing.T) {
+	t.Run("a failed Codex patch reports in the PostToolUse context", func(t *testing.T) {
 		body := "*** Add File: docs/new.md\n+TODO(codex): y\n"
 
 		_, _, err := baselineHook(t, root, codexPatchEvent(t, root, body), "--client", "codex")
@@ -296,16 +297,46 @@ func TestLessonsVerifyHookFailedAndInterrupted(t *testing.T) {
 		verifyWrite(t, root, "docs/new.md", "TODO(codex): y\n")
 
 		stdout, stderr := verifyHook(t, root, codexCompletionEvent(t, root, body, 1), "--client", "codex")
-		assert.Empty(t, stdout, "Codex reads the findings from stderr")
-		assert.Contains(t, stderr, "seamark post-edit lesson checks after this apply_patch call: violation")
-		assert.Contains(t, stderr, "docs/new.md:1 adds a line that matches the pattern")
-		assert.Contains(t, stderr, "The apply_patch tool failed, so the checks ran on the files as they are now.")
-		requireReportOnly(t, stderr)
+		assert.Empty(t, stderr, "Codex never shows stderr of a PostToolUse hook with exit 0 to the model")
 
 		rec := lastRecord(t, root, lessoncheck.AuditPostEdit)
 		assert.Equal(t, integration.CodexID, rec.Client)
 		assert.Equal(t, lessoncheck.ToolFailed, rec.ToolOutcome)
 		assert.Equal(t, []string{"docs/new.md"}, rec.Paths)
+		require.Len(t, rec.SnapshotSHA, 64)
+
+		text := "seamark post-edit lesson checks after this apply_patch call: violation " +
+			"(1 evaluated pin: 1 violation, 0 unknown; snapshot " + rec.SnapshotSHA[:12] + ")\n" +
+			"- violation: pin " + pinRefOf(t, root, "no-todo-docs") + ", check no-todo (no-added-pattern/1): " +
+			"docs/new.md:1 adds a line that matches the pattern\n" +
+			"The apply_patch tool failed, so the checks ran on the files as they are now.\n" +
+			// The Add projection writes no final newline, so the file
+			// that the test writes differs from it.
+			"The observed result differs from the proposed edit, so the change can include a change by another writer.\n" +
+			"The files stay as written; repair the violation in a later edit. " +
+			"Check again: seamark lessons --verify --file " + filepath.Join(root, "docs", "new.md") + "\n"
+		assert.Equal(t, `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"`+
+			strings.ReplaceAll(text, "\n", `\n`)+`"}}`+"\n", stdout, "the exact JSON reply of one finding")
+		requireReportOnly(t, text)
+	})
+
+	t.Run("a Codex patch without a finding writes nothing", func(t *testing.T) {
+		body := "*** Add File: docs/clean.md\n+clean\n"
+
+		_, _, err := baselineHook(t, root, codexPatchEvent(t, root, body), "--client", "codex")
+		require.NoError(t, err)
+
+		verifyWrite(t, root, "docs/clean.md", "clean\n")
+
+		stdout, stderr := verifyHook(t, root, codexCompletionEvent(t, root, body, 0), "--client", "codex")
+		assert.Empty(t, stdout, "a pass gives no JSON reply")
+		assert.Empty(t, stderr)
+
+		rec := lastRecord(t, root, lessoncheck.AuditPostEdit)
+		assert.Equal(t, integration.CodexID, rec.Client)
+		assert.Equal(t, lessoncheck.SummaryPassed, rec.State)
+		require.NotNil(t, rec.Emitted)
+		assert.False(t, *rec.Emitted, "the hook wrote no reply")
 	})
 
 	sentinel.requireNoCall(t)

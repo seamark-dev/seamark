@@ -319,6 +319,60 @@ func findingsText(in PostEditInput, out PostEdit, paths []string, complete bool)
 	return b.String()
 }
 
+// BoundFindings returns the findings text when it fits in maxBytes.
+// Else it keeps the first lines that fit and adds one line that counts
+// the rest and names the rerun command without --file arguments. A
+// client whose context channel has a size limit calls it. So the
+// findings text stays the same for every client, and a client without
+// such a limit gets every byte. The line cap of findingsText does not
+// bound the bytes: each unknown line and the rerun command list every
+// path of the call. The cut keeps whole lines, because a cut rerun
+// command checks fewer files than the call changed. The result fits in
+// maxBytes when maxBytes holds the line that counts the rest.
+func BoundFindings(findings string, maxBytes int) string {
+	if len(findings) <= maxBytes {
+		return findings
+	}
+
+	lines := strings.SplitAfter(findings, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	// The count of every line gives the longest form of the last line,
+	// so the room also holds each shorter form.
+	room := maxBytes - len(cutFindingsLine(len(lines)))
+
+	var (
+		b    strings.Builder
+		kept int
+	)
+
+	for _, line := range lines {
+		if b.Len()+len(line) > room {
+			break
+		}
+
+		b.WriteString(line)
+
+		kept++
+	}
+
+	b.WriteString(cutFindingsLine(len(lines) - kept))
+
+	return b.String()
+}
+
+// cutFindingsLine counts the lines that BoundFindings leaves out. It
+// names the rerun command without --file arguments, because that
+// command is short. It uses the default selection: tracked changes and
+// untracked files that git does not ignore. So it can skip an ignored
+// file that the call wrote.
+func cutFindingsLine(omitted int) string {
+	return fmt.Sprintf("- and %d more %s, left out to fit the context limit of the client. Check again: %s\n",
+		omitted, plural(omitted, "line", "lines"), verifyCommand)
+}
+
 // writeNotes writes the notes that qualify the results: a failed or
 // interrupted tool, an observed result that differs from the proposed
 // edit, and a call without a baseline.
