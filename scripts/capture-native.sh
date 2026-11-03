@@ -6,7 +6,10 @@
 #           prints one cost line per paid run. It refuses a binary or a
 #           tree with uncommitted changes unless SEAMARK_ALLOW_DIRTY=1. It
 #           writes the raw recording and a sanitized copy into an output
-#           directory for review. It never writes into testdata.
+#           directory for review. It never writes into testdata. It
+#           turns off the advisor tool of Claude Code for each Claude
+#           run, and records the advisor state of each run. A run with
+#           the advisor on or unknown prints FAIL (see claude_print).
 #
 # The script has no offline mode. The Go tests replay a reviewed
 # recording offline (make capture-native-check).
@@ -233,6 +236,7 @@ record_mode() {
     fi
 
     : > "$OUT/runs.txt"
+    rm -f "$OUT/advisor.jsonl"
     SESSION=
 
     # The hook processes start as children of the client, so they get
@@ -302,6 +306,12 @@ record = {
     "extras": {"exec-events.jsonl": os.path.join(out, "exec-events.jsonl")}
     if os.path.isfile(os.path.join(out, "exec-events.jsonl")) else {},
 }
+
+# The advisor state of each Claude run goes into the sanitized copy, so
+# the reviewer sees it beside the transcripts.
+if os.path.isfile(os.path.join(out, "advisor.jsonl")):
+    record["extras"]["advisor.jsonl"] = os.path.join(out, "advisor.jsonl")
+
 with open(os.path.join(out, "record.json"), "w") as f:
     json.dump(record, f, indent=1)
 PY
@@ -329,6 +339,77 @@ PY
     else
         ok "the hooks recorded $(find "$OBS" -name '*.meta.json' | wc -l | tr -d ' ') payloads"
     fi
+}
+
+# claude_print <run> <claude arguments...> runs one print-mode session
+# in the scratch repository. The prompt comes from prompt-<run>.txt. The
+# result goes to run-<run>.json, and stderr goes to run-<run>-stderr.txt.
+# It returns the exit status of claude. Each paid Claude run goes through
+# this function, so each run gets the same advisor switch.
+#
+# Claude Code 2.1.314 has a server-side advisor tool that calls a stronger
+# model. So a run can call a model that --model does not name. The client
+# turns the tool on through a server flag or through
+# CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL, and only for some API
+# providers. This script cannot see or set the server flag. The client
+# checks CLAUDE_CODE_DISABLE_ADVISOR_TOOL before both, so
+# CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 keeps the tool off. The change log of
+# the installed client names this switch.
+#
+# The function removes the result, stderr, and debug files of the run
+# before claude starts. Claude Code appends to the --debug-file path, and
+# a file of an earlier call of this script can use the same run number.
+# Without the removal, claude_advisor can read the advisor line of that
+# earlier run. The function then records the advisor state of the run,
+# also after a failed run.
+claude_print() {
+    print_run=$1
+    shift
+    print_status=0
+    rm -f "$OUT/run-$print_run.json" "$OUT/run-$print_run-stderr.txt" "$OUT/run-$print_run-debug.log"
+    (cd "$REPO" && CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 claude -p "$@" < "$OUT/prompt-$print_run.txt" \
+        > "$OUT/run-$print_run.json" 2> "$OUT/run-$print_run-stderr.txt") || print_status=$?
+    claude_advisor "$print_run"
+    return "$print_status"
+}
+
+# claude_advisor <run> prints the advisor state of one Claude run, and
+# appends it to advisor.jsonl. Claude Code writes the debug line
+# "[AdvisorTool] Server-side tool enabled with <model> as the advisor
+# model" only when the tool is on. It writes no line when the tool is
+# off. So a debug log without that line reads off. A missing or empty
+# debug log reads unknown, because it shows nothing.
+#
+# A state of on or unknown prints FAIL, so the summary counts it. No
+# recording run may use the advisor, and unknown gives no proof that the
+# tool was off. The FAIL line comes in addition to the advisor record and
+# the exit status of the run, so the run keeps its own cost and result.
+claude_advisor() {
+    advisor_log=$OUT/run-$1-debug.log
+    advisor_model=
+
+    if [ ! -s "$advisor_log" ]; then
+        advisor_state=unknown
+    elif grep -q -F '[AdvisorTool] Server-side tool enabled with' "$advisor_log"; then
+        advisor_state=on
+        advisor_model=$(sed -n 's/.*Server-side tool enabled with \([^" \\]*\) as the advisor model.*/\1/p' "$advisor_log" | head -1)
+    else
+        advisor_state=off
+    fi
+
+    printf '{"run": %d, "advisor": "%s", "advisor_model": "%s", "switch": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1"}\n' \
+        "$1" "$advisor_state" "$advisor_model" >> "$OUT/advisor.jsonl"
+
+    case "$advisor_state" in
+        on)
+            echo "  advisor  run $1: on, with the advisor model ${advisor_model:-(not named)}"
+            fail "run $1 used the advisor tool; no recording run may use it" ;;
+        unknown)
+            echo "  advisor  run $1: unknown"
+            fail "run $1 has no advisor state, because its debug log is missing or empty" ;;
+        *)
+            echo "  advisor  run $1: $advisor_state" ;;
+    esac
 }
 
 # The gate-3 timing scenario (CAPTURE_NATIVE_SCENARIO=timing). It records
@@ -476,7 +557,7 @@ timing_claude() {
         --allowedTools Read Edit Write Bash Agent Task --agents "$agents"
     [ "$session" = new ] || set -- "$@" --resume "$SESSION"
 
-    if (cd "$REPO" && claude -p "$@" < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN.json" 2> "$OUT/run-$RUN-stderr.txt"); then
+    if claude_print "$RUN" "$@"; then
         line=$(python3 -I -c '
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -1137,7 +1218,7 @@ guard_claude() {
         --max-budget-usd 0.40 --debug hooks --debug-file "$OUT/run-$RUN-debug.log" \
         --allowedTools Read Edit Write MultiEdit Agent Task --agents "$agents"
 
-    if (cd "$REPO" && claude -p "$@" < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN.json" 2> "$OUT/run-$RUN-stderr.txt"); then
+    if claude_print "$RUN" "$@"; then
         line=$(python3 -I -c '
 import json, sys
 d = json.load(open(sys.argv[1]))
