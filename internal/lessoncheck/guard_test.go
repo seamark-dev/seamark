@@ -231,8 +231,21 @@ func TestLessonCheckDecideGuardMatrix(t *testing.T) {
 			texts:   []string{patternHead + " cannot evaluate src/a.go: unprojectable-edit; old_string occurs 0 times"},
 		},
 		{
-			name:    "an Edit of an absent file denies until the native sentinel",
-			op:      claudeOp("Edit", editOp("src/new.go", "", "package new\n", false)),
+			name:  "an Edit that creates an absent file allows a clean add",
+			op:    claudeOp("Edit", editOp("src/new.go", "", "package new\n", false)),
+			allow: true,
+			pins:  []pinOutcome{{todo.Identity, OutcomePass, ""}},
+		},
+		{
+			name:  "an Edit that creates an absent file denies a violating add as a Write does",
+			op:    claudeOp("Edit", editOp("src/new.go", "", "package new\n// TODO(x)\n", false)),
+			cause: GuardCauseViolation,
+			pins:  []pinOutcome{{todo.Identity, OutcomeViolation, ""}},
+			texts: []string{patternHead + ` "no-todo": Edit adds a line matching the pattern at src/new.go:2: // TODO(x)`},
+		},
+		{
+			name:    "an Edit of an absent file with a non-empty old_string denies",
+			op:      claudeOp("Edit", editOp("src/new.go", "package", "package new\n", false)),
 			cause:   GuardCauseUnknown,
 			reasons: []Reason{ReasonUnprojectableEdit},
 			pins:    []pinOutcome{{todo.Identity, OutcomeUnknown, ReasonUnprojectableEdit}},

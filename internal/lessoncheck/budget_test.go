@@ -259,7 +259,7 @@ func TestLessonCheckApplyEditsBudget(t *testing.T) {
 	}}
 
 	t.Run("a live context applies every step", func(t *testing.T) {
-		after, tooLarge, note, err := applyEdits(context.Background(), []byte("aaa"), steps, 1<<20)
+		after, tooLarge, note, err := applyEdits(context.Background(), []byte("aaa"), steps, false, 1<<20)
 		require.NoError(t, err)
 		assert.Equal(t, "ddd", string(after))
 		assert.Zero(t, tooLarge)
@@ -267,7 +267,7 @@ func TestLessonCheckApplyEditsBudget(t *testing.T) {
 	})
 
 	t.Run("an ended context stops before the first step", func(t *testing.T) {
-		after, _, note, err := applyEdits(endedBudget(t), []byte("aaa"), steps, 1<<20)
+		after, _, note, err := applyEdits(endedBudget(t), []byte("aaa"), steps, false, 1<<20)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 		assert.Empty(t, after, "a cut edit has no content")
 		assert.Empty(t, note, "the end of the budget is not a failed step")
@@ -276,7 +276,7 @@ func TestLessonCheckApplyEditsBudget(t *testing.T) {
 	t.Run("the context ends between two steps", func(t *testing.T) {
 		ctx := &countingContext{Context: context.Background(), free: 2}
 
-		_, _, _, err := applyEdits(ctx, []byte("aaa"), steps, 1<<20)
+		_, _, _, err := applyEdits(ctx, []byte("aaa"), steps, false, 1<<20)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 		assert.EqualValues(t, 3, ctx.calls.Load(), "the loop checks once per step and stops at the first end")
 	})

@@ -227,6 +227,7 @@ func TestLessonCheckProjectClaudeEdit(t *testing.T) {
 		{"two occurrences without replace_all", "x x\n", "x", false, "old_string occurs 2 times"},
 		{"an empty old_string on an existing file", "a\n", "", false, "old_string is empty"},
 		{"an empty old_string with replace_all", "a\n", "", true, "old_string is empty"},
+		{"an empty old_string on an existing empty file", "", "", false, "old_string is empty"},
 	}
 
 	for _, tc := range rejected {
@@ -249,21 +250,49 @@ func TestLessonCheckProjectClaudeEdit(t *testing.T) {
 		})
 	}
 
-	t.Run("an absent file is unprojectable-edit, also with an empty old_string", func(t *testing.T) {
-		for _, old := range []string{"", "x"} {
+	t.Run("an empty old_string on an absent file projects the add of a Write", func(t *testing.T) {
+		const created = "package a\n\n// TODO(z)\n"
+
+		for _, replaceAll := range []bool{false, true} {
 			g := newGitRepo(t)
 			g.write("README.md", "r\n")
-			snap := g.project(claudeOp("Edit", editOp("src/new.go", old, "TODO(z)", false)))
+			snap := g.project(claudeOp("Edit", editOp("src/new.go", "", created, replaceAll)))
 
 			ch := changeAt(t, snap, "src/new.go")
-			assert.Equal(t, ChangeAdd, ch.Kind, "old_string %q", old)
-			assert.Equal(t, ObjectAbsent, ch.Before.Type)
-			assert.Equal(t, "the file does not exist", ch.unprojectable)
+			assert.Equal(t, ChangeAdd, ch.Kind, "replace_all %t", replaceAll)
+			assert.Equal(t, Side{Type: ObjectAbsent, Content: ContentNotRead}, ch.Before)
+			assert.Equal(t, created, projectedText(t, ch), "the file holds new_string byte for byte")
+			assert.Equal(t, "100644", ch.After.Mode)
+			assert.Empty(t, ch.unprojectable)
+			assert.Empty(t, ch.Limitations)
+			assert.True(t, snap.PathsComplete)
+
+			// The guard checks the add as it checks a Write of the same new
+			// file, so both projections and both results must be equal.
+			written := g.project(claudeOp("Write", writeOp("src/new.go", created)))
+			assert.Equal(t, changeAt(t, written, "src/new.go"), ch)
 
 			res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")
-			assert.Equal(t, OutcomeUnknown, res.Outcome)
-			assert.Equal(t, ReasonUnprojectableEdit, res.Reason, "never an add of the new text before the native sentinel")
+			assert.Equal(t, OutcomeViolation, res.Outcome)
+			assert.Equal(t, []Evidence{{Path: "src/new.go", Change: ChangeAdd, Line: 3, Excerpt: "// TODO(z)"}}, res.Evidence)
+			assert.Equal(t, resultOfRule(t, Evaluate(cfg, written), "no-todo"), res)
 		}
+	})
+
+	t.Run("an absent file with a non-empty old_string stays unprojectable-edit", func(t *testing.T) {
+		g := newGitRepo(t)
+		g.write("README.md", "r\n")
+		snap := g.project(claudeOp("Edit", editOp("src/new.go", "x", "TODO(z)", false)))
+
+		ch := changeAt(t, snap, "src/new.go")
+		assert.Equal(t, ChangeAdd, ch.Kind)
+		assert.Equal(t, ObjectAbsent, ch.Before.Type)
+		assert.Equal(t, "the file does not exist", ch.unprojectable)
+		assert.Equal(t, Side{Type: ObjectFile, Mode: "100644", Content: ContentNotRead}, ch.After, "no guessed after content")
+
+		res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")
+		assert.Equal(t, OutcomeUnknown, res.Outcome)
+		assert.Equal(t, ReasonUnprojectableEdit, res.Reason)
 	})
 
 	t.Run("forbid-path-change/1 sees every edited path as a change", func(t *testing.T) {
@@ -391,18 +420,72 @@ func TestLessonCheckProjectMultiEditAtomic(t *testing.T) {
 		assert.Equal(t, "edit 2: old_string is empty", changeAt(t, snap, "src/a.go").unprojectable)
 	})
 
-	t.Run("a first empty old_string on an absent file stays unprojectable", func(t *testing.T) {
+	t.Run("a first empty old_string on an absent file creates the content of the later steps", func(t *testing.T) {
 		g := newGitRepo(t)
 		g.write("README.md", "r\n")
 		snap := g.project(claudeOp("MultiEdit", multiEditOp("src/new.go",
-			TextEdit{Old: "", New: "package a\n"},
+			TextEdit{Old: "", New: "package a\n\nvar x, y = 1, 1\n"},
 			TextEdit{Old: "package a", New: "package b"},
+			TextEdit{Old: "1", New: "2", ReplaceAll: true},
+		)))
+
+		ch := changeAt(t, snap, "src/new.go")
+		assert.Equal(t, ChangeAdd, ch.Kind)
+		assert.Equal(t, ObjectAbsent, ch.Before.Type)
+		assert.Equal(t, "package b\n\nvar x, y = 2, 2\n", projectedText(t, ch))
+		assert.Equal(t, "100644", ch.After.Mode)
+		assert.Empty(t, ch.Limitations)
+		assert.Equal(t, OutcomePass, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Outcome)
+	})
+
+	t.Run("a failing later step after the create step makes the whole call unprojectable", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			later TextEdit
+			note  string
+		}{
+			{"a missing old_string", TextEdit{Old: "missing", New: "b"}, "edit 2: old_string occurs 0 times"},
+			{"an empty old_string", TextEdit{Old: "", New: "b"}, "edit 2: old_string is empty"},
+		} {
+			g := newGitRepo(t)
+			g.write("README.md", "r\n")
+			snap := g.project(claudeOp("MultiEdit", multiEditOp("src/new.go",
+				TextEdit{Old: "", New: "TODO(a)\n"},
+				tc.later,
+			)))
+
+			ch := changeAt(t, snap, "src/new.go")
+			assert.Equal(t, ChangeAdd, ch.Kind, tc.name)
+			assert.Equal(t, tc.note, ch.unprojectable, tc.name)
+			assert.Equal(t, Side{Type: ObjectFile, Mode: "100644", Content: ContentNotRead}, ch.After,
+				"%s: the create step leaves no partial content, because the native call is atomic", tc.name)
+			assert.Equal(t, ReasonUnprojectableEdit, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Reason, tc.name)
+		}
+	})
+
+	t.Run("an absent file stays unprojectable unless the first step has an empty old_string", func(t *testing.T) {
+		g := newGitRepo(t)
+		g.write("README.md", "r\n")
+		snap := g.project(claudeOp("MultiEdit", multiEditOp("src/new.go",
+			TextEdit{Old: "package a", New: "package b"},
+			TextEdit{Old: "", New: "package a\n"},
 		)))
 
 		ch := changeAt(t, snap, "src/new.go")
 		assert.Equal(t, ChangeAdd, ch.Kind)
 		assert.Equal(t, "the file does not exist", ch.unprojectable)
 		assert.Equal(t, ReasonUnprojectableEdit, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Reason)
+	})
+
+	t.Run("a first empty old_string on an existing file fails", func(t *testing.T) {
+		g := newGitRepo(t)
+		g.write("src/a.go", "a\n")
+		snap := g.project(claudeOp("MultiEdit", multiEditOp("src/a.go",
+			TextEdit{Old: "", New: "b\n"},
+			TextEdit{Old: "a", New: "c"},
+		)))
+
+		assert.Equal(t, "edit 1: old_string is empty", changeAt(t, snap, "src/a.go").unprojectable)
 	})
 
 	t.Run("a clean multi-edit passes", func(t *testing.T) {
@@ -688,6 +771,30 @@ func TestLessonCheckProjectBoundsAndDeadline(t *testing.T) {
 
 		ch := changeAt(t, snap, "src/new.go")
 		assert.Equal(t, Side{Type: ObjectFile, Mode: "100644", Size: 17, Content: ContentTooLarge}, ch.After)
+		assert.Equal(t, LimitMaxFileBytes, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Limit)
+	})
+
+	t.Run("a created content above max-file-bytes gives resource-limit", func(t *testing.T) {
+		g := todoRepo(t)
+		snap := g.projectWith(small, claudeOp("Edit", editOp("src/new.go", "", strings.Repeat("b", 17), false)))
+
+		ch := changeAt(t, snap, "src/new.go")
+		assert.Equal(t, ChangeAdd, ch.Kind)
+		assert.Equal(t, Side{Type: ObjectFile, Mode: "100644", Size: 17, Content: ContentTooLarge}, ch.After)
+		assert.Equal(t, []LimitHit{{Name: LimitMaxFileBytes, Value: 16, Paths: 1}}, snap.Limits)
+		assert.Equal(t, LimitMaxFileBytes, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Limit)
+	})
+
+	t.Run("a create step above max-file-bytes stops before a later step shrinks it", func(t *testing.T) {
+		g := todoRepo(t)
+		snap := g.projectWith(small, claudeOp("MultiEdit", multiEditOp("src/new.go",
+			TextEdit{Old: "", New: strings.Repeat("b", 17)},
+			TextEdit{Old: strings.Repeat("b", 17), New: "b"},
+		)))
+
+		ch := changeAt(t, snap, "src/new.go")
+		assert.Equal(t, Side{Type: ObjectFile, Mode: "100644", Size: 17, Content: ContentTooLarge}, ch.After,
+			"the size check runs before each step, as for a replacement")
 		assert.Equal(t, LimitMaxFileBytes, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Limit)
 	})
 

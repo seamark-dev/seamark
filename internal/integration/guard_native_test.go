@@ -739,12 +739,18 @@ func TestCaptureNativeClaudeGuardRecording(t *testing.T) {
 		require.True(t, ok, "the guard wrote a record")
 		assert.Equal(t, lessoncheck.GuardAllow, allow.Guard.Decision, "no enforce pin scopes free/")
 
-		// The projection treats an Edit on an absent file as
-		// unprojectable, also with an empty old_string. It keeps that rule
-		// until this case shows that one Edit creates the file.
-		assert.False(t, r.cases[name].created("free/n1.txt"),
-			"one Edit created an absent file on Claude Code %s; the Edit projection must now project an add "+
-				"with new_string, and this assertion changes with it", r.manifest.ClientVersion)
+		// The projection gives such an Edit an add with the bytes of
+		// new_string. So the native run must create the file with
+		// exactly those bytes.
+		c := r.cases[name]
+		created := op.Ops[0].Edits[0].New
+		sum := sha256.Sum256([]byte(created))
+
+		require.True(t, c.created("free/n1.txt"),
+			"one Edit with an empty old_string did not create the absent file on Claude Code %s; "+
+				"the Edit projection gives an add, so it must change with this answer", r.manifest.ClientVersion)
+		assert.Equal(t, hex.EncodeToString(sum[:]), c.After.Files["free/n1.txt"], "the file holds new_string byte for byte")
+		assert.Equal(t, created, c.After.Text["free/n1.txt"])
 	})
 
 	t.Run("a permitted Write completes and its post-edit check passes", func(t *testing.T) {

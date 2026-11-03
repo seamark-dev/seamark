@@ -294,28 +294,36 @@ func (p *projector) write(fop FileOp) Change {
 // in the running content. A failing step makes the whole call
 // unprojectable, because the native call is atomic.
 //
-// An absent file is unprojectable, also with an empty old_string. No
-// recording of the native tool shows yet that one Edit creates the file,
-// so the projection does not guess the result.
+// An absent file gets an add when the first step has an empty
+// old_string. A native Edit run on Claude Code 2.1.314 shows that the
+// client creates the absent file with new_string. No native run shows a
+// MultiEdit that creates a file, so its first step follows the Edit
+// result by analogy. Any other edit of an absent file stays
+// unprojectable, because no content exists that can hold its old_string.
 func (p *projector) edit(fop FileOp) Change {
 	f, before := p.r.current(fop.Path)
 
 	ch := Change{Path: fop.Path, Kind: ChangeModify, Before: before, After: Side{Type: ObjectFile, Mode: keptMode(before)}}
 
-	switch {
-	case before.Type == ObjectAbsent:
+	absent := before.Type == ObjectAbsent
+	if absent {
 		ch.Kind = ChangeAdd
+	}
 
+	switch {
+	case absent && fop.Edits[0].Old != "":
 		unprojectable(&ch, noteAbsent)
-	case before.Type != ObjectFile:
+	case !absent && before.Type != ObjectFile:
 		unprojectable(&ch, noteNotFile)
-	case before.Content != ContentAvailable:
+	case !absent && before.Content != ContentAvailable:
 		// The before side keeps its own state, such as binary or
 		// too-large. The pattern checker reads it first, so that state
 		// names the reason.
 		unprojectable(&ch, noteNotText)
 	default:
-		after, tooLarge, note, err := applyEdits(p.r.ctx, before.text, fop, p.r.lim.MaxFileBytes)
+		// An absent file has no before text, so the create step gives
+		// the first content.
+		after, tooLarge, note, err := applyEdits(p.r.ctx, before.text, fop, absent, p.r.lim.MaxFileBytes)
 
 		switch {
 		case err != nil:
@@ -345,6 +353,10 @@ func (p *projector) edit(fop FileOp) Change {
 // step. The size check runs before each replacement, because one
 // replace_all can grow the content far above the payload size.
 //
+// absent tells that the file does not exist. A first step with an empty
+// old_string then creates the file with new_string, and the later steps
+// apply to that content. In every other step an empty old_string fails.
+//
 // A MultiEdit can hold thousands of steps, and each step scans the whole
 // content. So the function checks ctx before each step and returns its
 // error, because the guard budget must bound the projection.
@@ -352,7 +364,7 @@ func (p *projector) edit(fop FileOp) Change {
 // The content stays in bytes, because a string copy of a file up to
 // max-file-bytes costs memory on each guard call. bytes.Replace always
 // returns a new slice, so the result never shares memory with content.
-func applyEdits(ctx context.Context, content []byte, fop FileOp, maxBytes int64) (after []byte, tooLarge int64, note string, err error) {
+func applyEdits(ctx context.Context, content []byte, fop FileOp, absent bool, maxBytes int64) (after []byte, tooLarge int64, note string, err error) {
 	for i, e := range fop.Edits {
 		if err := ctx.Err(); err != nil {
 			return nil, 0, "", err
@@ -361,6 +373,16 @@ func applyEdits(ctx context.Context, content []byte, fop FileOp, maxBytes int64)
 		step := ""
 		if fop.Kind == OpMultiEdit {
 			step = fmt.Sprintf("edit %d: ", i+1)
+		}
+
+		if absent && i == 0 && e.Old == "" {
+			if size := int64(len(e.New)); size > maxBytes {
+				return nil, size, "", nil
+			}
+
+			content = []byte(e.New)
+
+			continue
 		}
 
 		// bytes.Count gives len+1 for an empty separator, so the empty

@@ -341,6 +341,13 @@ func TestLessonsGuardHookDeniesViolation(t *testing.T) {
 			path:    "src/new.go",
 			reasons: patternHead + "Write adds a line matching the pattern at src/new.go:3: // TODO(owner): fill in.",
 		},
+		{
+			name:    "an Edit with an empty old_string that creates a file with a TODO line",
+			payload: claudeEditEvent(t, root, "src/created.go", "", "package src\n\n// TODO(owner): fill in.\n"),
+			pin:     todo,
+			path:    "src/created.go",
+			reasons: patternHead + "Edit adds a line matching the pattern at src/created.go:3: // TODO(owner): fill in.",
+		},
 	}
 
 	for _, tc := range cases {
@@ -622,14 +629,14 @@ func TestLessonsGuardHookFailsClosed(t *testing.T) {
 			},
 		},
 		{
-			name: "an Edit of an absent file stays unprojectable (ruling N1)",
+			name: "an Edit of an absent file with a non-empty old_string stays unprojectable",
 			payload: func(t *testing.T, root string) string {
-				return claudeEditEvent(t, root, "src/absent.go", "", "package src\n")
+				return claudeEditEvent(t, root, "src/absent.go", "package", "package src\n")
 			},
 			cause:  lessoncheck.GuardCauseUnknown,
 			reason: lessoncheck.ReasonUnprojectableEdit,
 			check: func(t *testing.T, reasons string) {
-				assert.Contains(t, reasons, "cannot evaluate src/absent.go: unprojectable-edit")
+				assert.Contains(t, reasons, "cannot evaluate src/absent.go: unprojectable-edit; the file does not exist")
 			},
 		},
 		{
