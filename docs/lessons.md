@@ -728,7 +728,11 @@ one theme never spend two slots:
   with their inspect commands, without the lesson text again. A client
   that negotiated MCP protocol `2025-06-18` or later also gets the whole
   `lesson-preparation/1` document as `structuredContent` under
-  `lesson_preparation`. A relative path starts at the repository root.
+  `lesson_preparation`, and the first text part again, byte for byte,
+  under `change_set_report`, because a client can show
+  `structuredContent` in place of the text parts. A failed preparation
+  has no `structuredContent`, so the text parts stay the whole answer. A
+  relative path starts at the repository root.
 - **The exploration hook** (`seamark lessons --explore --hook`, Claude
   Code only): after the `Read` tool reads a file, the hook gives the
   agent that read it the file's pins and mined lessons, under the edit

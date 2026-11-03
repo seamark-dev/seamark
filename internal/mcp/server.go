@@ -466,6 +466,17 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 
 		out.Text[0] = text
 
+		// A client can show structuredContent in place of the text parts, and
+		// the blast radius then never reaches the agent. So the structured
+		// result repeats the first part. The key gets its value here, after
+		// withStore adds its note, because that note warns of a stale answer.
+		// The same string gives the report one renderer and one sanitizing
+		// path. A failed preparation has no structured result, so it gets no
+		// key.
+		if out.Structured != nil {
+			out.Structured["change_set_report"] = text
+		}
+
 		return out, nil
 	},
 
@@ -579,7 +590,9 @@ var changeSetText = report.ChangeSetWith
 // changeSet answers one change_set call from the open store st
 // (contract L1). content[0] is the change_set text of the P2 head, byte
 // for byte. A second text part and structuredContent carry the
-// lesson-preparation/1 result.
+// lesson-preparation/1 result. The change_set runner adds the key
+// change_set_report beside that document, because only the runner holds
+// the final content[0].
 //
 // Prepare runs first and returns the one firing record of the call, so
 // the text runs without its legacy record. The record is written only

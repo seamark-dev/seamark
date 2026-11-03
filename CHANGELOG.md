@@ -100,6 +100,11 @@ model-boundary delivery.
   `unreadable`, as doctor does, not `off`.
 - **Retarget route.** A linked pin names `w` Retarget only while `w`
   works; otherwise Pins gives the reason and a next action.
+- **`change_set` keeps its report in every client.** A client that shows
+  `structuredContent` in place of the text parts lost the blast radius.
+  `structuredContent` now repeats the first text part under
+  `change_set_report`; the text parts and `lesson-preparation/1` do not
+  change.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
