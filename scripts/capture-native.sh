@@ -1587,9 +1587,14 @@ $GUARD_STOP"
 1. Use one single apply_patch call that adds two new files: notes/multi-ok.txt with the single line: ok, and sentinel/multi.txt with the single line: multi.
 $GUARD_STOP"
 
+    # The prompt names the agent tools as Codex 0.164.0 lists them in code
+    # mode. With the short name spawn_agent, the model called a tool that
+    # does not exist, and no worker started. The prompt also names the
+    # agent_type and message fields, because without agent_type the tool
+    # starts a fork of the whole history, not a worker.
     guard_run enforce subagent-violation "$GUARD_STEPS
-1. Use spawn_agent to start one worker agent, and ask it to use apply_patch once to add the new file sentinel/child.txt with the single line: child. Tell it not to retry a blocked call.
-2. Wait for the agent with wait_agent, then close it.
+1. Use multi_agent_v1__spawn_agent with agent_type worker to start one worker agent. In its message, ask it to use apply_patch once to add the new file sentinel/child.txt with the single line: child, and not to retry a blocked call.
+2. Wait for the agent with multi_agent_v1__wait_agent, then close it with multi_agent_v1__close_agent.
 $GUARD_STOP"
 
     guard_run enforce update-unknown "$GUARD_STEPS
@@ -1600,8 +1605,21 @@ $GUARD_STOP"
 1. Use apply_patch once to add the new file notes/permitted.txt with the single line: permitted
 $GUARD_STOP"
 
+    # The prompt gives the exact patch for the fixture one, two, three. A
+    # description in words let the model write the line text "line two",
+    # which the file does not hold, so the applier refused the patch. The
+    # patch has the one-hunk shape of the content oracle, so a successful
+    # run gives a live update case.
     guard_run enforce update-permitted "$GUARD_STEPS
-1. Use apply_patch once to replace the line two with the line TWO in free/oracle.txt.
+1. Use apply_patch once with exactly this patch, line for line. The context lines one and three each start with one space.
+*** Begin Patch
+*** Update File: free/oracle.txt
+@@
+ one
+-two
++TWO
+ three
+*** End Patch
 $GUARD_STOP"
 
     guard_run broken-config config-error "$GUARD_STEPS
