@@ -1069,3 +1069,14 @@ func jsonString(t *testing.T, s string) string {
 
 	return string(encoded)
 }
+
+// TestEnforcementTextNamesTheLimit proves that the enforcement line of a
+// prepared check names the limit of an enforced badge.
+func TestEnforcementTextNamesTheLimit(t *testing.T) {
+	got := enforcementText([]lessoncheck.PinClient{
+		{Client: "claude", Badge: lessoncheck.BadgeEnforced, Limits: []string{"the client lets the write run after its 10 s hook timeout"}},
+		{Client: "codex", Badge: lessoncheck.BadgeRequestedInactive, Reasons: []lessoncheck.CapReason{lessoncheck.CapNotInstalled}},
+	})
+	assert.Equal(t, "claude enforced (limit: the client lets the write run after its 10 s hook timeout) · "+
+		"codex requested-inactive (not-installed)", got)
+}

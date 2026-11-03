@@ -162,6 +162,20 @@ be `active-unverified`, `inactive`, or `unsupported`; a requested mode
 alone does not establish a working guard. An `enforced-unverified` badge
 is explicitly unverified, not the verified `enforced` state.
 
+A verified path can carry a limit. A client can stop a slow pre-edit
+hook at its timeout and let the write run (fail-open). Claude Code
+2.1.314 does this at 10 seconds. Such a path reads `enforced` only when a
+reviewed native recording of that client version, tool, and context
+shows a guard that is slow but ends inside the timeout, and the client
+waits for it and honors its deny. The claim then holds only inside the
+limit, so every surface that shows it names the limit too, for example
+`claude enforced (limit: the client lets the write run after its 10 s
+hook timeout)`. Status, doctor, setup, preparation, mode-change impact,
+and the TUI print it. The JSON report carries it in `verification.limit`
+of the path and in `limits` of the pin badge. A client that waits for a
+hook past its timeout, or blocks the write, gives no limit. No path reads
+`enforced` before its recording is reviewed and committed as test data.
+
 Setup keeps warning-and-install behavior for unknown local capability or
 trust. It refuses known-bad enforce states, such as disabled hooks or a
 report-only wrapper, rather than silently substituting check mode. A

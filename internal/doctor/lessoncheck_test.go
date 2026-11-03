@@ -445,3 +445,28 @@ func TestDoctorLessonChecksOlderBinary(t *testing.T) {
 				"to restore the missing lesson-check hook")
 	})
 }
+
+// TestDoctorLessonChecksNamesTheLimit proves that the row names the
+// limit of a verified pre-write path, so the row never reads as full
+// enforcement.
+func TestDoctorLessonChecksNamesTheLimit(t *testing.T) {
+	report := lessoncheck.CapabilityReport{Config: lessoncheck.ConfigReport{Valid: true}, Clients: []lessoncheck.ClientCapability{limitClient()}}
+
+	got := lessonCheckDetail(report, &lessoncheck.Config{}, nil)
+	assert.Contains(t, got, "claude pre-write limit: the client lets the write run after its 10 s hook timeout")
+}
+
+// limitClient is a client whose pre-write paths read active with a
+// synthetic verified limit. It tests the narration only and gives no
+// native proof.
+func limitClient() lessoncheck.ClientCapability {
+	v := lessoncheck.CapVerification{
+		Level: lessoncheck.LevelVerified, ClientVersion: "synthetic-fixture", Surface: "fixture",
+		Limit: "the client lets the write run after its 10 s hook timeout",
+	}
+
+	return lessoncheck.ClientCapability{Client: "claude", Installed: lessoncheck.InstalledEnforce, Paths: []lessoncheck.PathCapability{
+		{Tool: "Write", HookStage: lessoncheck.StagePreWrite, Context: lessoncheck.ContextRoot, State: lessoncheck.PathActive, Verification: v},
+		{Tool: "Write", HookStage: lessoncheck.StagePreWrite, Context: lessoncheck.ContextChild, State: lessoncheck.PathActive, Verification: v},
+	}}
+}

@@ -40,6 +40,7 @@ type CapVerification struct {
 	Level         string `json:"level"`                    // closed: "unknown", "unverified", "pending", "verified"
 	ClientVersion string `json:"client_version,omitempty"` // the client version the recorded check ran against
 	Surface       string `json:"surface,omitempty"`        // the native surface the check exercised
+	Limit         string `json:"limit,omitempty"`          // a known gap of a verified claim, for example a fail-open timeout
 }
 
 // AttributionItem is one identity or timing fact that the delivery
@@ -120,6 +121,10 @@ type PinClient struct {
 	Client  string      `json:"client"`
 	Badge   string      `json:"badge"` // closed: "enforced", "enforced-unverified", "checked", "requested-inactive", "advisory"
 	Reasons []CapReason `json:"reasons,omitempty"`
+	// Limits are the distinct limits of the paths behind an enforced
+	// badge. The badge claims enforcement only inside these limits, so
+	// each surface that prints the badge prints them too.
+	Limits []string `json:"limits,omitempty"`
 }
 
 // UncoveredWriter names a writer path that no lesson-check hook covers,

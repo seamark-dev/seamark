@@ -222,7 +222,9 @@ func explorationEvidence() VerificationEvidence {
 // capVerification copies native evidence into the mirror type of the
 // report, field for field.
 func capVerification(e VerificationEvidence) lessoncheck.CapVerification {
-	return lessoncheck.CapVerification{Level: e.Level.String(), ClientVersion: e.ClientVersion, Surface: e.Surface}
+	return lessoncheck.CapVerification{
+		Level: e.Level.String(), ClientVersion: e.ClientVersion, Surface: e.Surface, Limit: e.Limit,
+	}
 }
 
 // lessonHookEntries reads the owned lesson-check and exploration

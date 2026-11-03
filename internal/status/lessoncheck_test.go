@@ -337,3 +337,25 @@ func TestStatusLessonChecksOlderBinary(t *testing.T) {
 		}
 	}
 }
+
+// TestStatusLessonChecksNamesTheLimit proves that the client line names
+// the limit of its verified pre-write paths.
+func TestStatusLessonChecksNamesTheLimit(t *testing.T) {
+	got := lessonClientText(limitClient(), "")
+	assert.Contains(t, got, "pre-write Write active (limit: the client lets the write run after its 10 s hook timeout)")
+}
+
+// limitClient is a client whose pre-write paths read active with a
+// synthetic verified limit. It tests the narration only and gives no
+// native proof.
+func limitClient() lessoncheck.ClientCapability {
+	v := lessoncheck.CapVerification{
+		Level: lessoncheck.LevelVerified, ClientVersion: "synthetic-fixture", Surface: "fixture",
+		Limit: "the client lets the write run after its 10 s hook timeout",
+	}
+
+	return lessoncheck.ClientCapability{Client: "claude", Installed: lessoncheck.InstalledEnforce, Paths: []lessoncheck.PathCapability{
+		{Tool: "Write", HookStage: lessoncheck.StagePreWrite, Context: lessoncheck.ContextRoot, State: lessoncheck.PathActive, Verification: v},
+		{Tool: "Write", HookStage: lessoncheck.StagePreWrite, Context: lessoncheck.ContextChild, State: lessoncheck.PathActive, Verification: v},
+	}}
+}

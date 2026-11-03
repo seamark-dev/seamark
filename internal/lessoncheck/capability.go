@@ -485,6 +485,9 @@ func badgeOf(mode Mode, c clientJoin) PinClient {
 		}
 
 		out.Badge, out.Reasons = stageBadge(c.capability.Paths, StagePreWrite, BadgeEnforced, BadgeEnforcedUnverified)
+		if out.Badge == BadgeEnforced {
+			out.Limits = c.capability.Limits(StagePreWrite)
+		}
 	case ModeCheck:
 		out.Badge, out.Reasons = stageBadge(c.capability.Paths, StagePostEdit, BadgeChecked, BadgeChecked)
 	default:
@@ -564,7 +567,12 @@ func (r CapabilityReport) ActiveText(ref string) string {
 	)
 
 	for _, c := range pin.Clients {
-		badges = append(badges, c.Client+" "+c.Badge)
+		badge := c.Client + " " + c.Badge
+		if len(c.Limits) > 0 {
+			badge += " (" + LimitText(c.Limits) + ")"
+		}
+
+		badges = append(badges, badge)
 		reasons = append(reasons, c.Reasons...)
 		covered = covered || c.Badge != BadgeRequestedInactive
 	}
@@ -601,8 +609,8 @@ func (r CapabilityReport) ActiveLines(ref string) []string {
 		}
 
 		line := "active: " + pc.Client + " " + pc.Badge
-		if len(pc.Reasons) > 0 {
-			line += " (" + JoinCapReasons(pc.Reasons) + ")"
+		if note := pc.Note(); note != "" {
+			line += " (" + note + ")"
 		}
 
 		if c, ok := r.Client(pc.Client); ok {
@@ -644,6 +652,57 @@ func (r CapabilityReport) Client(id string) (ClientCapability, bool) {
 	return r.Clients[i], true
 }
 
+// Note returns the text that follows the badge in parentheses: the
+// reasons, then the limits. It is "" when the client has neither. The
+// surfaces that print a badge share it, so a limit never goes missing
+// from one of them.
+func (c PinClient) Note() string {
+	var parts []string
+
+	if len(c.Reasons) > 0 {
+		parts = append(parts, JoinCapReasons(c.Reasons))
+	}
+
+	if len(c.Limits) > 0 {
+		parts = append(parts, LimitText(c.Limits))
+	}
+
+	return strings.Join(parts, "; ")
+}
+
+// LimitText joins the limits of a claim after the word "limit:", for
+// example "limit: the client lets the write run after its 10 s hook
+// timeout".
+func LimitText(limits []string) string {
+	return "limit: " + strings.Join(limits, "; ")
+}
+
+// Limits returns the distinct limits of the active paths of one stage
+// with verified evidence, in path order. Only such a path makes a
+// verified claim, so only its limit narrows one.
+func (c ClientCapability) Limits(stage HookStage) []string {
+	var out []string
+
+	for _, p := range c.Paths {
+		limit := pathLimit(p)
+		if p.HookStage == stage && limit != "" && !slices.Contains(out, limit) {
+			out = append(out, limit)
+		}
+	}
+
+	return out
+}
+
+// pathLimit returns the limit of an active path with verified evidence,
+// and "" for any other path.
+func pathLimit(p PathCapability) string {
+	if p.State != PathActive || p.Verification.Level != LevelVerified {
+		return ""
+	}
+
+	return p.Verification.Limit
+}
+
 // HasStage reports whether the client has a path of the stage that it
 // can run.
 func (c ClientCapability) HasStage(stage HookStage) bool {
@@ -656,26 +715,32 @@ func (c ClientCapability) HasStage(stage HookStage) bool {
 // Edit, Write, MultiEdit active-unverified". A tool whose contexts share
 // a state reads once. Else each context reads as "<tool> in <context>".
 // Tools of one state form a group, and "; " separates the groups. An
-// inactive group names its reasons. A stage other than pre-write with
+// inactive group names its reasons, and an active group names the limit
+// of its verified claim. A stage other than pre-write with
 // one group names no tool, because its tools repeat the pre-write tools.
 func (c ClientCapability) StageText(stage HookStage) string {
 	type group struct {
 		state   PathState
 		reasons string
+		limit   string
 		labels  []string
 	}
 
 	var groups []group
 
-	add := func(label string, state PathState, reasons []CapReason) {
+	add := func(label string, p PathCapability) {
 		text := ""
-		if state == PathInactive {
-			text = JoinCapReasons(reasons)
+		if p.State == PathInactive {
+			text = JoinCapReasons(p.Reasons)
 		}
 
-		i := slices.IndexFunc(groups, func(g group) bool { return g.state == state && g.reasons == text })
+		limit := pathLimit(p)
+
+		i := slices.IndexFunc(groups, func(g group) bool {
+			return g.state == p.State && g.reasons == text && g.limit == limit
+		})
 		if i < 0 {
-			groups = append(groups, group{state: state, reasons: text})
+			groups = append(groups, group{state: p.State, reasons: text, limit: limit})
 			i = len(groups) - 1
 		}
 
@@ -692,16 +757,17 @@ func (c ClientCapability) StageText(stage HookStage) string {
 		}
 
 		if slices.ContainsFunc(paths, func(p PathCapability) bool {
-			return p.State != paths[0].State || !slices.Equal(p.Reasons, paths[0].Reasons)
+			return p.State != paths[0].State || !slices.Equal(p.Reasons, paths[0].Reasons) ||
+				pathLimit(p) != pathLimit(paths[0])
 		}) {
 			for _, p := range paths {
-				add(tool+" in "+string(p.Context), p.State, p.Reasons)
+				add(tool+" in "+string(p.Context), p)
 			}
 
 			continue
 		}
 
-		add(tool, paths[0].State, paths[0].Reasons)
+		add(tool, paths[0])
 	}
 
 	parts := make([]string, 0, len(groups))
@@ -710,6 +776,10 @@ func (c ClientCapability) StageText(stage HookStage) string {
 		text := string(g.state)
 		if g.reasons != "" {
 			text += " (" + g.reasons + ")"
+		}
+
+		if g.limit != "" {
+			text += " (" + LimitText([]string{g.limit}) + ")"
 		}
 
 		if stage == StagePreWrite || len(groups) > 1 {

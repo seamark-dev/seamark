@@ -173,8 +173,8 @@ func (p *pinsView) activeValues(in *maintain.Inspection, c maintain.PinCheck, w 
 
 	for _, client := range pc.Clients {
 		text := ui.OneLine(client.Client) + " " + client.Badge
-		if len(client.Reasons) > 0 {
-			text += " (" + lessoncheck.JoinCapReasons(client.Reasons) + ")"
+		if note := client.Note(); note != "" {
+			text += " (" + ui.OneLine(note) + ")"
 		}
 
 		style := t.Body

@@ -574,6 +574,11 @@ type VerificationEvidence struct {
 	// Surface names the native surface the check exercised, for example
 	// "PreToolUse apply_patch".
 	Surface string `json:"surface,omitempty"`
+	// Limit is a known gap of a verified claim, in words for the user.
+	// For example, a client can let the write run after its hook
+	// timeout. The claim holds only inside the limit, so each surface
+	// that shows the claim shows the limit too.
+	Limit string `json:"limit,omitempty"`
 }
 
 // VerifiedEvidence builds evidence at VerificationVerified. It rejects
@@ -602,9 +607,15 @@ func mustVerifiedEvidence(clientVersion, surface string) VerificationEvidence {
 }
 
 // Validate checks that verified evidence names its tested version and
-// surface. Other levels carry optional scope, so they always pass.
+// surface. Other levels carry optional scope, so they pass unless they
+// carry a limit. A limit narrows a verified claim, so it has no meaning
+// on a lower level.
 func (e VerificationEvidence) Validate() error {
 	if e.Level != VerificationVerified {
+		if e.Limit != "" {
+			return errors.New("evidence below verified names a limit")
+		}
+
 		return nil
 	}
 

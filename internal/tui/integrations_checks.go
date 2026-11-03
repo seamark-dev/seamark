@@ -126,8 +126,8 @@ func integConfigStyle(t *ui.Theme, report lessoncheck.CapabilityReport) lipgloss
 }
 
 // integPathValues renders one line per path of the client: the hook
-// stage, the tool, the context, the state, and the reasons. A path that
-// the client cannot run reads unsupported.
+// stage, the tool, the context, the state, the reasons, and the limit of
+// a verified claim. A path that the client cannot run reads unsupported.
 func integPathValues(t *ui.Theme, c lessoncheck.ClientCapability, w int) []string {
 	if len(c.Paths) == 0 {
 		return propLines(t.Muted, "no path", w)
@@ -139,6 +139,10 @@ func integPathValues(t *ui.Theme, c lessoncheck.ClientCapability, w int) []strin
 		text := string(p.HookStage) + " " + ui.OneLine(p.Tool) + " in " + string(p.Context) + ": " + string(p.State)
 		if len(p.Reasons) > 0 {
 			text += " (" + lessoncheck.JoinCapReasons(p.Reasons) + ")"
+		}
+
+		if p.State == lessoncheck.PathActive && p.Verification.Limit != "" {
+			text += " (" + ui.OneLine(lessoncheck.LimitText([]string{p.Verification.Limit})) + ")"
 		}
 
 		style := t.Body
