@@ -135,6 +135,10 @@ future work; editor integrations remain experimental.
   needs the [native timing and guard recordings](agent-integrations.md#release-checklist),
   reviewed per client/tool/context. These test targets supply no native
   compatibility or prevention evidence.
+- Delivery report cost: `make report-bench` measures the report build over
+  synthetic audit logs of 1k, 10k and 100k records, offline. It reads no
+  real log and no archive, and its numbers say nothing about real archives
+  or efficacy.
 - CI: full test suite + lint on every change, plus the end-to-end
   smoke of the built binary (generated agent configuration and the hook
   commands it wrote, in a fresh repository, without an agent CLI or a

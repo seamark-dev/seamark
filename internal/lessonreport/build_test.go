@@ -118,7 +118,7 @@ func TestBuildIsDeterministic(t *testing.T) {
 	}
 }
 
-func mustBuild(t *testing.T, in Inputs, ref string) Report {
+func mustBuild(t testing.TB, in Inputs, ref string) Report {
 	t.Helper()
 
 	r, err := Build(in, ref)

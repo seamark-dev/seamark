@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test lesson-check lesson-check-race tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-native-smoke capture-native-check capture-native-record lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test lesson-check lesson-check-race report-bench tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-native-smoke capture-native-check capture-native-record lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -80,6 +80,12 @@ lesson-check: ## Run the lesson-check, guard, preparation, and delivery-report t
 lesson-check-race: ## Run the lesson-check tests with the race detector
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race $(LESSON_CHECK_PKGS)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race ./internal/cli ./internal/mcp -run $(LESSON_CHECK_RUN)
+
+# The fixture is synthetic and deterministic, so this target reads no real
+# log, no archive, and no file under .seamark. The numbers depend on the
+# machine.
+report-bench: ## Measure the delivery report build over synthetic audit logs (offline, no model)
+	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -run '^$$' -bench '^BenchmarkBuild' -benchmem ./internal/lessonreport
 
 # Native checks run against the installed client CLI (CLIENT=codex or
 # claude) and are separate from agents-test because they need the client
