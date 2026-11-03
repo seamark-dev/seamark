@@ -813,6 +813,12 @@ PY
 #                    and discards its exit status (report-only)
 #   slow             no owned guard; the indirection entry waits past the
 #                    hook timeout and then runs the guard
+#   slow-deny        no owned guard; the indirection entry waits inside the
+#                    hook timeout and then runs the guard
+#
+# The cases after slow-guard came later than the first recordings. They
+# run after the earlier cases, so each earlier case keeps its run number
+# and its prompt, and an earlier recording still replays.
 #
 # The indirection entry is the command sh <instrumentation>/pre-write.sh.
 # Its text holds no guard marker, so neither setup nor inspection reads
@@ -824,6 +830,12 @@ PY
 # timeout of the guard hook, 10 seconds, so the client stops the slow
 # entry before it runs the guard.
 GUARD_SLOW_SECONDS=15
+
+# GUARD_IN_BUDGET_SECONDS is the wait of the slow-deny mode. It is below
+# the 10-second timeout of the guard hook, so a client that waits for its
+# hook runs the guard to the end. A deny then shows that the client waits
+# for a slow guard and honors its exit status.
+GUARD_IN_BUDGET_SECONDS=7
 
 # guard_vars sets the client parts of the guard scenario: the hook
 # document, the marker of the owned guard, and the matcher of the guard
@@ -962,10 +974,11 @@ YAML
 
 # guard_prewrite_script writes the indirection entry. The file
 # pre-write-mode selects what it does: off exits 0, report-only runs the
-# guard and discards its exit status, and slow waits GUARD_SLOW_SECONDS
-# and then runs the guard. Each guard run appends its mode and exit
-# status to pre-write.log. A slow run that the client stops at the
-# timeout appends nothing.
+# guard and discards its exit status, slow waits GUARD_SLOW_SECONDS and
+# then runs the guard, and slow-deny waits GUARD_IN_BUDGET_SECONDS and
+# then runs the guard. Each guard run appends its mode and exit status to
+# pre-write.log. A run that the client stops at the timeout appends
+# nothing.
 guard_prewrite_script() {
     cat > "$INSTR/pre-write.sh" <<EOF
 #!/bin/sh
@@ -981,6 +994,12 @@ case "\$mode" in
         '$BIN' $GUARD_MARKER
         status=\$?
         echo "slow \$status" >> '$INSTR/pre-write.log'
+        exit \$status ;;
+    slow-deny)
+        sleep $GUARD_IN_BUDGET_SECONDS
+        '$BIN' $GUARD_MARKER
+        status=\$?
+        echo "slow-deny \$status" >> '$INSTR/pre-write.log'
         exit \$status ;;
 esac
 exit 0
@@ -1079,6 +1098,9 @@ guard_phase() {
         slow)
             guard_doc no-guard
             printf 'slow\n' > "$INSTR/pre-write-mode" ;;
+        slow-deny)
+            guard_doc no-guard
+            printf 'slow-deny\n' > "$INSTR/pre-write-mode" ;;
     esac
 
     guard_capability "$1"
@@ -1279,9 +1301,17 @@ GUARD_STOP='If a tool call is blocked or fails, do not retry it and do not try a
 Then reply with the single word: done, or with the single word: blocked when a tool call was blocked or failed.'
 GUARD_REPORT='Then reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came.'
 
-# record_claude_guard runs the thirteen Claude Code guard cases, each in
-# a new session. The writer subagent has only the Write tool. The phases
-# that change the hook document run last.
+# The prompt parts of the child cases. The parent cannot see the tool
+# results of the child, so it repeats the reply word of the child. That
+# relay is a corroboration only. The parent can reword the reply, so the
+# replay reads the reply of the child from its SubagentStop payload.
+GUARD_RELAY='Do not use any tool yourself. Then reply with the single word that the subagent replied.'
+
+# record_claude_guard runs the twenty-two Claude Code guard cases, each
+# in a new session. The writer subagent has only the Write tool. The
+# phases that change the hook document run last among the first thirteen
+# cases. The nine later cases add child denies, a child post-edit reply,
+# and the in-budget slow deny of each tool and lane.
 record_claude_guard() {
     model=${CAPTURE_NATIVE_CLAUDE_MODEL:-haiku}
     agents='{"writer":{"description":"Creates the one file it is given with the given content.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Write"]}}'
@@ -1344,12 +1374,60 @@ $GUARD_STOP"
 1. Use the Write tool once to create the new file sentinel/slow.txt with the single line: slow
 $GUARD_STOP"
 
+    # The later cases get two more subagents. The earlier cases keep the
+    # agent list of their first recordings. The editor reads before it
+    # edits, because Edit and MultiEdit need a read of the file first.
+    agents='{"writer":{"description":"Creates the one file it is given with the given content.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Write"]},'
+    agents=$agents'"editor":{"description":"Reads the one file it is given, then makes the one edit it is given.","prompt":"Use the Read tool once on the file that you are given. Then make the edit that you are given with exactly the tool that you are given, once. If you do not have that tool, use no other tool and reply with the single word no-multiedit. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Read","Edit","MultiEdit"]},'
+    agents=$agents'"reporter":{"description":"Creates the one file it is given, then reports the post-edit message.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. Do not retry it. Then reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came.","model":"'"$model"'","tools":["Write"]}}'
+
+    guard_run enforce subagent-edit-violation "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"editor\" and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+$GUARD_RELAY"
+
+    guard_run enforce subagent-multiedit-violation "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"editor\" and ask it to read notes/multi.txt and then use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
+$GUARD_RELAY"
+
+    guard_run check-pins subagent-check-only "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"reporter\" and ask it to create the new file sentinel/child-checked.txt with the single line: checked
+Do not use any tool yourself. Then reply with the one line that the subagent replied."
+
+    guard_run slow-deny slow-deny-write "$GUARD_STEPS
+1. Use the Write tool once to create the new file sentinel/slow-deny.txt with the single line: slow
+$GUARD_STOP"
+
+    guard_run slow-deny slow-deny-edit "$GUARD_STEPS
+1. Use the Read tool to read the file sentinel/edit.txt.
+2. Use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+$GUARD_STOP"
+
+    guard_run slow-deny slow-deny-multiedit "$GUARD_STEPS
+1. Use the Read tool to read the file notes/multi.txt.
+2. Use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
+If you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: no-multiedit.
+$GUARD_STOP"
+
+    guard_run slow-deny slow-deny-subagent-write "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"writer\" and ask it to create the new file sentinel/slow-child.txt with the single line: child
+$GUARD_RELAY"
+
+    guard_run slow-deny slow-deny-subagent-edit "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"editor\" and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+$GUARD_RELAY"
+
+    guard_run slow-deny slow-deny-subagent-multiedit "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"editor\" and ask it to read notes/multi.txt and then use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
+$GUARD_RELAY"
+
     guard_restore
 }
 
-# record_codex_guard runs the thirteen Codex guard cases, each in a new
+# record_codex_guard runs the sixteen Codex guard cases, each in a new
 # thread: the four apply_patch section kinds, the update content cases,
-# and the phase cases. The phases that change the hook document run last.
+# and the phase cases. The phases that change the hook document run last
+# among the first thirteen cases. The three later cases add a worker
+# post-edit reply and the in-budget slow deny of the root and the worker.
 record_codex_guard() {
     model=${CAPTURE_NATIVE_CODEX_MODEL:-gpt-5.6-luna}
 
@@ -1404,6 +1482,20 @@ $GUARD_STOP"
 
     guard_run slow slow-guard "$GUARD_STEPS
 1. Use apply_patch once to add the new file sentinel/slow.txt with the single line: slow
+$GUARD_STOP"
+
+    guard_run check-pins subagent-check-only "$GUARD_STEPS
+1. Use spawn_agent to start one worker agent, and ask it to use apply_patch once to add the new file sentinel/child-checked.txt with the single line: checked. Tell it not to retry the call, and to reply with one line: the check id that a seamark post-edit message named after the call, or the single word none when no such message came.
+2. Wait for the agent with wait_agent, then close it.
+Do not use apply_patch yourself. Then reply with the one line that the worker replied."
+
+    guard_run slow-deny slow-deny-add "$GUARD_STEPS
+1. Use apply_patch once to add the new file sentinel/slow-deny.txt with the single line: slow
+$GUARD_STOP"
+
+    guard_run slow-deny slow-deny-subagent-add "$GUARD_STEPS
+1. Use spawn_agent to start one worker agent, and ask it to use apply_patch once to add the new file sentinel/slow-child.txt with the single line: child. Tell it not to retry a blocked call.
+2. Wait for the agent with wait_agent, then close it.
 $GUARD_STOP"
 
     guard_restore

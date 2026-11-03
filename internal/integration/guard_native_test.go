@@ -98,7 +98,7 @@ var (
 
 // The phases of the guard scenario that remove the owned guard entry.
 // The capability report of each reads every pre-write path as inactive.
-var guardPhasesWithoutGuard = []string{"post-only", "wrapper", "slow"}
+var guardPhasesWithoutGuard = []string{"post-only", "wrapper", "slow", guardPhaseSlowDeny}
 
 // codexAddAttributions are the attributions that a post-edit record of
 // a native Add File section can have. The guard projection
@@ -288,7 +288,8 @@ func TestReadGuardLinesDecodesEachLine(t *testing.T) {
 
 // loadGuardRecording reads the reviewed guard recording of a client for
 // its replay, or skips. The recording must hold each named case exactly
-// once.
+// once. It can also hold the extension cases of the client, all of them
+// or none, because a recording from before the extension has none.
 func loadGuardRecording(t *testing.T, client string, cases ...string) guardRecording {
 	t.Helper()
 
@@ -304,7 +305,15 @@ func loadGuardRecording(t *testing.T, client string, cases ...string) guardRecor
 			"and copy it there", filepath.Join("testdata", client, "guard"), client)
 	}
 
-	require.ElementsMatch(t, cases, slices.Collect(maps.Keys(r.cases)), "the recording holds every case of the scenario")
+	recorded := slices.Collect(maps.Keys(r.cases))
+	require.Subset(t, recorded, cases, "the recording holds every case of the scenario")
+
+	extra := slices.DeleteFunc(recorded, func(name string) bool { return slices.Contains(cases, name) })
+	if len(extra) > 0 {
+		require.ElementsMatch(t, guardExtensionNames(client), extra,
+			"a recording with extension cases holds every extension case of the client and no other case")
+	}
+
 	// Without identity rows, no payload joins its audit record, so every
 	// assertion on a call would fail with a message that hides the cause.
 	require.Contains(t, r.manifest.Extras, guardIdentityFile,
