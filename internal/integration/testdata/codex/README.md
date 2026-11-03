@@ -91,6 +91,34 @@ Files:
   headers outside an update hunk, and accepts a shell heredoc wrapper. The
   file records parser behavior only. It is not a hook payload, and it says
   nothing about what `tool_input.command` carries in a live `PreToolUse`.
+  The `content` part of the same file is also **not synthetic**: schema
+  `apply-patch-content/1`, recorded from `codex-cli 0.164.0` on
+  2026-11-03 by `make agents-oracle-record ORACLE_VERSION=0.164.0`
+  (`native_codex_content_oracle_test.go`). Each case holds the before
+  files, the patch text, and what the installed applier did with them,
+  offline in a new scratch directory with a scratch `CODEX_HOME`: the
+  exit status, stdout, stderr (the scratch directory written as
+  `<scratch>`), and every file after the run, also after a refusal. The
+  shapes are one and many hunks, `*** End of File`, a before file
+  without a final newline, CRLF files and patches, repeated context with
+  and without an `@@` anchor, `*** Move to` with a hunk, extra
+  whitespace in headers, a context that does not match, a refusal after
+  a good file, fuzzy context (trailing spaces, an en dash), Add with and
+  without a final newline, and Delete. What the cases prove: the bytes
+  that this applier version writes for these inputs. For example, it
+  writes a final newline, it keeps CRLF line ends, it changes the first
+  match of repeated context, and a refusal in a later file keeps the
+  earlier files written. What they do not prove: what
+  `tool_input.command` carries in a live `PreToolUse`, how the Codex
+  tool call applies a patch inside a session, or any other version. The
+  live tie is a recorded guard run of an Update patch from a real
+  Codex session. `make agents-native-check`
+  replays every content case and skips with the reason when the
+  installed version differs from the recorded one. A different version
+  never rewrites the file by itself: the recorder runs only when
+  `ORACLE_VERSION` names the installed version, and it keeps the bytes
+  of the path cases. Every file in a case is UTF-8 text, so a JSON
+  string holds its exact bytes.
 - `hooks.seamark.json`: the `.codex/hooks.json` entries the Codex setup
   adapter generates in warn mode (binary path is a placeholder; the lesson
   entry was confirmed by the native run of 2026-09-21, the gate entry by
