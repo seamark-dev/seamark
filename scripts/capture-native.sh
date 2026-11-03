@@ -822,9 +822,16 @@ PY
 #
 # The indirection entry is the command sh <instrumentation>/pre-write.sh.
 # Its text holds no guard marker, so neither setup nor inspection reads
-# it as a wrapper of the guard. Setup adds it once, so one Codex trust
-# review covers it. A phase without the owned guard changes the hook
-# document only by the removal of that entry.
+# it as a wrapper of the guard. Setup adds it once, and the phases select
+# its behavior through the file pre-write-mode. A phase without the owned
+# guard changes the hook document only by the removal of that entry.
+#
+# Codex keys the trust of a project hook by its position (event, group,
+# handler) and compares a hash of its content at that key. A moved entry
+# is "modified", and Codex does not run it without a new review. So the
+# Codex setup puts the owned guard in the last PreToolUse group. Its
+# removal then moves no other entry, and the one review of the enforce
+# form covers every form that a Codex case runs with (see guard_keys).
 
 # GUARD_SLOW_SECONDS is the wait of the slow mode. It is above the
 # timeout of the guard hook, 10 seconds, so the client stops the slow
@@ -857,7 +864,9 @@ guard_vars() {
 # `seamark init --lesson-checks enforce` installs the guard and the
 # post-edit hooks of the round binary there. Setup then adds the
 # observer entries and the indirection entry, and keeps a copy of the
-# hook document for the phases.
+# hook document for the phases. For Codex, it moves the owned guard to
+# the last PreToolUse group before it keeps the copy, because the operator
+# reviews the trust of that copy.
 guard_setup() {
     guard_vars
     new_repo "$REPO"
@@ -896,7 +905,29 @@ guard_setup() {
 
     cp "$SCRIPTS/capture-native-observer.py" "$INSTR/observer.py"
     guard_prewrite_script
+    guard_instrument
+    [ "$CLIENT" != codex ] || guard_last
+    ok "instrumentation entries added beside the lesson hook entries"
 
+    cp "$GUARD_DOC" "$INSTR/hooks-enforce.json"
+    : > "$INSTR/scenario-guard"
+
+    # A failure here means that the lesson hook entries have a layout that
+    # guard_last does not expect. One trust review would then not cover
+    # every phase, so setup stops before the operator reviews anything.
+    if [ "$CLIENT" = codex ]; then
+        if reason=$(guard_keys); then
+            ok "every Codex hook form keeps the trust keys and the content of the enforce form"
+        else
+            fail "a Codex hook form moves or changes a trusted entry: $reason"
+            summary
+        fi
+    fi
+}
+
+# guard_instrument adds the observer entries and the indirection entry
+# after the lesson hook entries of the hook document.
+guard_instrument() {
     # The observer runs on PreToolUse too, because the guard reads that
     # event. The indirection entry gets the matcher and the timeout of
     # the guard spec, so the slow mode meets the timeout of the guard.
@@ -935,10 +966,97 @@ os.makedirs(os.path.dirname(path), exist_ok=True)
 with open(path, "w") as f:
     json.dump(doc, f, indent=2)
 PY
-    ok "instrumentation entries added beside the lesson hook entries"
+}
 
-    cp "$GUARD_DOC" "$INSTR/hooks-enforce.json"
-    : > "$INSTR/scenario-guard"
+# guard_last moves the owned guard entry of the Codex hook document into
+# a new PreToolUse group after all other groups. The group keeps the
+# matcher and the other fields of the group that init wrote. Only the
+# position changes, so the guard runs with the same command, matcher,
+# and timeout. The no-guard form then removes the last group, and no
+# other entry changes its trust key.
+guard_last() {
+    python3 -I - "$GUARD_DOC" "$GUARD_MARKER" <<'PY'
+import json, sys
+
+path, marker = sys.argv[1:3]
+
+with open(path, encoding="utf-8") as f:
+    doc = json.load(f)
+
+kept, moved = [], []
+for entry in doc["hooks"]["PreToolUse"]:
+    hooks = entry.get("hooks", [])
+    owned = [h for h in hooks if h.get("command", "").endswith(" " + marker)]
+    others = [h for h in hooks if not h.get("command", "").endswith(" " + marker)]
+    if owned:
+        moved.append(dict(entry, hooks=owned))
+        if others:
+            kept.append(dict(entry, hooks=others))
+    else:
+        kept.append(entry)
+
+doc["hooks"]["PreToolUse"] = kept + moved
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(doc, f, indent=2)
+PY
+}
+
+# guard_keys checks the trust keys of the Codex hook forms against the
+# enforce form that setup kept, and that the operator reviews. The enforce
+# form must hold one owned guard entry, alone in the last PreToolUse
+# group. The no-guard form must hold every other entry at the same key
+# (event, group, handler) with the same content, because Codex hashes
+# the content of each entry and compares it per key. It prints the
+# problems on one line, and returns 1 when a problem exists.
+#
+# The enforce, check-pins, and broken-config phases run with the enforce
+# form itself. The wrapper, slow, and slow-deny phases run with the
+# no-guard form. The inline-wrapper form exists only while seamark status
+# reads it, and no Codex turn runs with it.
+guard_keys() {
+    guard_doc no-guard "$INSTR/hooks-no-guard.json"
+    python3 -I - "$INSTR/hooks-enforce.json" "$INSTR/hooks-no-guard.json" "$GUARD_MARKER" <<'PY'
+import json, sys
+
+enforce_path, form_path, marker = sys.argv[1:4]
+
+
+def entries(path):
+    """Return the entries of a hook document by trust key, and its PreToolUse group count."""
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    out = {}
+    for event, groups in doc.get("hooks", {}).items():
+        for g, entry in enumerate(groups):
+            fields = {k: v for k, v in entry.items() if k != "hooks"}
+            for h, hook in enumerate(entry.get("hooks", [])):
+                out["%s:%d:%d" % (event, g, h)] = (fields, hook)
+    return out, len(doc.get("hooks", {}).get("PreToolUse", []))
+
+
+enforce, groups = entries(enforce_path)
+form, _ = entries(form_path)
+problems = []
+
+owned = [k for k, (_, hook) in enforce.items() if hook.get("command", "").endswith(" " + marker)]
+last = "PreToolUse:%d:0" % (groups - 1)
+if len(owned) != 1:
+    problems.append("the enforce form holds %d owned guard entries, not one" % len(owned))
+elif owned[0] != last or "PreToolUse:%d:1" % (groups - 1) in enforce:
+    problems.append("the owned guard entry is at %s, not alone at %s" % (owned[0], last))
+
+for key in sorted(form):
+    if key not in enforce:
+        problems.append("%s is not in the enforce form" % key)
+    elif form[key] != enforce[key]:
+        problems.append("%s holds other content than in the enforce form" % key)
+
+for key in sorted(set(enforce) - set(form) - set(owned)):
+    problems.append("%s of the enforce form is missing" % key)
+
+print("; ".join(problems))
+sys.exit(1 if problems else 0)
+PY
 }
 
 # guard_lessons writes the three lessons.yaml variants into the
@@ -1007,12 +1125,14 @@ EOF
     printf 'off\n' > "$INSTR/pre-write-mode"
 }
 
-# guard_doc <form> writes one form of the hook document from the copy
-# that setup kept: enforce (the copy itself), no-guard (without the
-# owned guard entry), or inline-wrapper (the owned guard command with
-# "|| true" after it, a report-only wrapper that inspection detects).
+# guard_doc <form> [<file>] writes one form of the hook document from
+# the copy that setup kept: enforce (the copy itself), no-guard (without
+# the owned guard entry), or inline-wrapper (the owned guard command with
+# "|| true" after it, a report-only wrapper that inspection detects). It
+# writes the hook document of the client, or <file> when it is given, so
+# guard_keys can read a form that no client reads.
 guard_doc() {
-    python3 -I - "$INSTR/hooks-enforce.json" "$GUARD_DOC" "$GUARD_MARKER" "$1" <<'PY'
+    python3 -I - "$INSTR/hooks-enforce.json" "${2:-$GUARD_DOC}" "$GUARD_MARKER" "$1" <<'PY'
 import json, shutil, sys
 
 saved, path, marker, form = sys.argv[1:5]
@@ -1157,8 +1277,24 @@ guard_lines() {
 # script. It moves the hook payloads of an earlier call aside, notes the
 # length of the lesson-check audit stream, and starts empty case and
 # capability lists.
+#
+# For Codex it first checks the trust keys of the hook forms. A
+# repository that an older version of this script set up keeps the owned
+# guard before the observer and the indirection entry. There the no-guard
+# form moves both entries, Codex does not run them, and the wrapper,
+# slow, and slow-deny cases record nothing. So no paid turn starts there.
 guard_begin() {
     guard_vars
+
+    if [ "$CLIENT" = codex ]; then
+        if reason=$(guard_keys); then
+            ok "every Codex hook form keeps the trust keys and the content of the enforce form"
+        else
+            blocked "a Codex hook form moves or changes a trusted entry: $reason"
+            note "set up a new repository with this script (another CAPTURE_NATIVE_REPO), and review its trust"
+            summary
+        fi
+    fi
 
     if [ -n "$(find "$OBS" -name '*.json' 2>/dev/null | head -1)" ]; then
         mv "$OBS" "$INSTR/observed-before-$(date +%s)"
