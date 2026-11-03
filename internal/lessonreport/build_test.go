@@ -124,6 +124,10 @@ func mustBuild(t testing.TB, in Inputs, ref string) Report {
 	r, err := Build(in, ref)
 	require.NoError(t, err)
 
+	// Every fixture that builds a report here also proves that the position
+	// lists give the report of the plain walk over the audit.
+	requireSameAsLinear(t, in, ref, r)
+
 	return r
 }
 

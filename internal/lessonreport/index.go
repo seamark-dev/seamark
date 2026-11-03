@@ -39,6 +39,12 @@ type index struct {
 	deniedInjections int
 
 	totals Totals
+
+	// scans answers the classifier's questions that look back from one
+	// position. newIndex fills it with the position lists of this index.
+	// The classifier needs a capture archive, so this build fills the
+	// lists but does not read them.
+	scans positionScans
 }
 
 // newIndex builds the lookups and the totals. It reads the prefix lines
@@ -67,6 +73,8 @@ func newIndex(in Inputs, auditState, checkState string) *index {
 	}
 
 	if auditState != StateRead {
+		idx.scans = newPositionIndex(idx)
+
 		return idx
 	}
 
@@ -124,6 +132,7 @@ func newIndex(in Inputs, auditState, checkState string) *index {
 	idx.totals.Events = len(idx.byEvent)
 	idx.totals.DistinctPreparations = len(preparations)
 	idx.legacy = reviews.FirstFirings(legacy)
+	idx.scans = newPositionIndex(idx)
 
 	return idx
 }

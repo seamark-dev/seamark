@@ -144,9 +144,17 @@ type benchFixture struct {
 func newBenchInputs(tb testing.TB, records int, shape benchShape) (Inputs, benchStats) {
 	tb.Helper()
 
+	return newSeededBenchInputs(tb, records, shape, benchSeed)
+}
+
+// newSeededBenchInputs is newBenchInputs with another seed. The
+// differential test of the position lists draws several logs of each shape.
+func newSeededBenchInputs(tb testing.TB, records int, shape benchShape, seed uint64) (Inputs, benchStats) {
+	tb.Helper()
+
 	b := &benchFixture{
 		t:   tb,
-		rng: rand.New(rand.NewPCG(benchSeed, 0)), //nolint:gosec // a fixed seed keeps the fixture deterministic.
+		rng: rand.New(rand.NewPCG(seed, 0)), //nolint:gosec // a fixed seed keeps the fixture deterministic.
 	}
 	b.addPins()
 

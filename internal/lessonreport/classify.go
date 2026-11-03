@@ -23,6 +23,11 @@ const PairMixed PairClass = "mixed"
 // not known.
 const laneUnknown = "unknown"
 
+// emissionEmitted is the emission value of a hook record whose reminder
+// the hook wrote. The position lists of scans.go read it, because a hook
+// injection counts in its context only when the hook wrote the reminder.
+const emissionEmitted = "emitted"
+
 // actionRefLength is the length of a printed key or digest prefix.
 const actionRefLength = 12
 
