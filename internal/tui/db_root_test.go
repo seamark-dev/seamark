@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -693,6 +694,17 @@ func dbRootApplyPreview(t *testing.T, h *harness, id int64) *propView {
 	return p
 }
 
+// dbRootPreviewText renders the body of the open preview in one wide
+// column and flattens it. The frame shows the preview in a modal over the
+// other boxes, so each frame row also holds their borders. A wrapped
+// phrase then has border glyphs inside it. The paths in the text change
+// where it wraps, so a frame assertion depends on the temp folder.
+func dbRootPreviewText(p *propView) string {
+	m := p.modalContent(p.dec, 400)
+
+	return dbRootFlat(ansi.Strip(strings.Join(m.Body, "\n")))
+}
+
 // TestApplyInACopyStopsAtThePreview walks the keys of the defect. y wrote
 // the pin to the file of the origin, and the preview warned about nothing.
 func TestApplyInACopyStopsAtThePreview(t *testing.T) {
@@ -717,11 +729,12 @@ func TestApplyInACopyStopsAtThePreview(t *testing.T) {
 
 	p := dbRootApplyPreview(t, h, id)
 	assert.False(t, p.confirmable(), "y is off")
+	assert.Contains(t, h.view(), fmt.Sprintf("YAML p%d", id), "the screen shows the preview")
 
-	frame := dbRootFlat(h.view())
-	assert.Contains(t, frame, "so y is off")
-	assert.Contains(t, frame, "Run seamark index in this checkout")
-	assert.NotContains(t, frame, "add 1 pin")
+	preview := dbRootPreviewText(p)
+	assert.Contains(t, preview, "so y is off")
+	assert.Contains(t, preview, "Run seamark index in this checkout")
+	assert.NotContains(t, preview, "add 1 pin")
 
 	h.press("y")
 

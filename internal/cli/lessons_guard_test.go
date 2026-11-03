@@ -586,8 +586,16 @@ func TestLessonsGuardHookFailsClosed(t *testing.T) {
 			cause:   lessoncheck.GuardCauseConfigurationError,
 			reason:  lessoncheck.ReasonConfigurationError,
 			check: func(t *testing.T, reasons string) {
-				assert.True(t, strings.HasPrefix(reasons, configHead), reasons)
-				assert.Contains(t, reasons, "permission denied")
+				// The deny text has a byte bound, and the cut falls inside the
+				// message. A long temp folder fills the message with the root
+				// path before the cause. So the start and the end always hold,
+				// and the cause must show whenever the text was not cut.
+				assert.True(t, strings.HasPrefix(reasons, configHead+"open "), reasons)
+				assert.True(t, strings.HasSuffix(reasons, configTail), reasons)
+
+				if !strings.HasSuffix(reasons, "…"+configTail) {
+					assert.True(t, strings.HasSuffix(reasons, ": permission denied"+configTail), reasons)
+				}
 			},
 		},
 		{
