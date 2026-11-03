@@ -65,10 +65,13 @@ agents-test: ## Run the agent-integration contract and characterization tests
 # runs whole here too. It reads the audit logs and one archive snapshot,
 # and it reads the lesson-check stream, so a change to either reader
 # must fail this target.
+# mcpusage runs whole, and MCPUsage and LessonsStats select the MCP tool
+# counter and the stats section that reads it, because both write or read
+# a local log beside the audit logs.
 # Nothing here calls a model or the network.
 # Later milestones append test-name prefixes and packages here.
-LESSON_CHECK_PKGS := ./internal/lessoncheck/... ./internal/privatedir/... ./internal/lessonreport/...
-LESSON_CHECK_RUN  := 'Test(LessonCheck|LessonsVerify|LessonsSetMode|CheckLessons|LessonsPrepare|LessonsExploreHook|ChangeSetPreparation|LessonsHookNeverInvokes|LessonsGuard|LessonsBaseline|LessonsDelivery)'
+LESSON_CHECK_PKGS := ./internal/lessoncheck/... ./internal/privatedir/... ./internal/lessonreport/... ./internal/mcpusage/...
+LESSON_CHECK_RUN  := 'Test(LessonCheck|LessonsVerify|LessonsSetMode|CheckLessons|LessonsPrepare|LessonsExploreHook|ChangeSetPreparation|LessonsHookNeverInvokes|LessonsGuard|LessonsBaseline|LessonsDelivery|MCPUsage|LessonsStats)'
 
 lesson-check: ## Run the lesson-check, guard, preparation, and delivery-report tests (offline, no model)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(LESSON_CHECK_PKGS)

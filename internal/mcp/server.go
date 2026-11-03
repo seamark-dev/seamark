@@ -47,6 +47,13 @@ type Server struct {
 	// is "" before initialize. outputResult reads it to decide on the
 	// structuredContent of change_set (contract L1).
 	protocol string
+	// client is the raw clientInfo.name of initialize. It is "" before
+	// initialize. The usage record cleans it and names only this value.
+	client string
+	// usageFailed counts the usage appends that failed in this session,
+	// and usageErr holds the last failure. Serve logs them when it ends.
+	usageFailed int
+	usageErr    error
 }
 
 // New builds a server for the workspace at root; logf receives
@@ -94,6 +101,8 @@ const (
 // rather than tearing the connection down (bufio.Scanner's fatal
 // ErrTooLong is exactly the failure mode we must not have here).
 func (s *Server) Serve(r io.Reader, w io.Writer) error {
+	defer s.logUsageFailures()
+
 	br := bufio.NewReader(r)
 
 	for {
@@ -187,7 +196,7 @@ func (s *Server) handle(req request) (any, *rpcError) {
 	case "tools/list":
 		return map[string]any{"tools": toolDefs}, nil
 	case "tools/call":
-		return s.callTool(req.Params)
+		return s.countedCall(req.Params)
 	case "resources/list":
 		return map[string]any{"resources": resourceDefs}, nil
 	case "resources/read":
@@ -204,6 +213,9 @@ func (s *Server) handle(req request) (any, *rpcError) {
 func (s *Server) initialize(params json.RawMessage) any {
 	var p struct {
 		ProtocolVersion string `json:"protocolVersion"`
+		ClientInfo      struct {
+			Name string `json:"name"`
+		} `json:"clientInfo"`
 	}
 
 	_ = json.Unmarshal(params, &p)
@@ -214,8 +226,9 @@ func (s *Server) initialize(params json.RawMessage) any {
 
 	// The server answers with the version of the client, so that version
 	// is the negotiated one. Serve handles one request at a time, so the
-	// field needs no lock.
+	// fields need no lock.
 	s.protocol = p.ProtocolVersion
+	s.client = p.ClientInfo.Name
 
 	return map[string]any{
 		// Echo the client's version: this server depends on nothing

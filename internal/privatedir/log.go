@@ -9,9 +9,9 @@ import (
 )
 
 // This file holds the hardening of an append-only JSON Lines log in a
-// private directory. The policy gate audit log and the lesson-check
-// audit stream both use it. Each caller keeps its own file names,
-// limits, record encoding, and error texts.
+// private directory. The policy gate audit log, the lesson-check audit
+// stream, and the MCP usage log use it. Each caller keeps its own file
+// names, limits, record encoding, and error texts.
 
 // The scanner sizes for the first line of a log. Every append reads this
 // line, so the first buffer is small. The scanner grows the buffer up to
@@ -85,7 +85,16 @@ func LockLog(path string, mode os.FileMode, refused func(path string) error) (fu
 // The function removes a rotated generation older than maxAge. Its
 // modification time is the time of its newest record. The file system
 // sets that time, so this check uses the wall clock and not now.
+//
+// The records of the log hold their time in the field "ts".
 func RotateLog(path string, maxBytes int64, maxAge time.Duration, mode os.FileMode, now time.Time) error {
+	return RotateLogField(path, "ts", maxBytes, maxAge, mode, now)
+}
+
+// RotateLogField is RotateLog for a log whose records hold their time in
+// timeField. The field name must match, because a first record without a
+// readable time counts as stale, and each append then rotates the log.
+func RotateLogField(path, timeField string, maxBytes int64, maxAge time.Duration, mode os.FileMode, now time.Time) error {
 	rotated := path + ".1"
 
 	// The rotated generation gets the rules of the live log: a link is
@@ -118,7 +127,7 @@ func RotateLog(path string, maxBytes int64, maxAge time.Duration, mode os.FileMo
 	// swap after the check.
 	chmodErr := f.Chmod(mode)
 	info, statErr := f.Stat()
-	stale := oldestRecordStale(f, maxAge, now)
+	stale := oldestRecordStale(f, timeField, maxAge, now)
 
 	_ = f.Close()
 
@@ -135,11 +144,11 @@ func RotateLog(path string, maxBytes int64, maxAge time.Duration, mode os.FileMo
 	return nil
 }
 
-// oldestRecordStale reads the "ts" field of the first record of an open
+// oldestRecordStale reads the time field of the first record of an open
 // log. A first line that does not read or parse counts as stale too,
 // because a rotation moves it aside and keeps it readable in the rotated
 // generation.
-func oldestRecordStale(f *os.File, maxAge time.Duration, now time.Time) bool {
+func oldestRecordStale(f *os.File, timeField string, maxAge time.Duration, now time.Time) bool {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, firstLineStartBytes), firstLineMaxBytes)
 
@@ -148,13 +157,17 @@ func oldestRecordStale(f *os.File, maxAge time.Duration, now time.Time) bool {
 		return sc.Err() != nil
 	}
 
-	var first struct {
-		TS time.Time `json:"ts"`
-	}
+	var first map[string]json.RawMessage
 
-	if err := json.Unmarshal(sc.Bytes(), &first); err != nil || first.TS.IsZero() {
+	if err := json.Unmarshal(sc.Bytes(), &first); err != nil {
 		return true
 	}
 
-	return now.Sub(first.TS) > maxAge
+	var at time.Time
+
+	if err := json.Unmarshal(first[timeField], &at); err != nil || at.IsZero() {
+		return true
+	}
+
+	return now.Sub(at) > maxAge
 }

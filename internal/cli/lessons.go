@@ -17,6 +17,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
+	"github.com/seamark-dev/seamark/internal/mcpusage"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/redact"
@@ -1269,7 +1270,27 @@ func runLessonsStats(cmd *cobra.Command, opts *options) error {
 	// The command keeps its own order, newest first.
 	report.PrintOutcomes(cmd.OutOrStdout(), lessonstats.NewestFirst(snap.Applied), snap.Readings)
 
+	// This read stays outside Gather, because the console and the hooks
+	// have no use for it. An unreadable usage log prints as unknown and
+	// does not fail the command, because the sections above are complete.
+	report.PrintToolUsage(cmd.OutOrStdout(), readToolUsage(opts))
+
 	return nil
+}
+
+// readToolUsage reads the usage log that `seamark mcp` writes with the
+// same flags. The server writes under the root of workspace.Locate. The
+// root of openIndex is the recorded root, which can name another checkout
+// or a directory that no longer exists.
+func readToolUsage(opts *options) mcpusage.Report {
+	ws, err := workspace.Locate(opts.workspace, opts.dbPath)
+	if err != nil {
+		// Present makes the section print, so a failure reads as unknown
+		// and not as a workspace without a usage log.
+		return mcpusage.Report{Present: true, Err: err}
+	}
+
+	return mcpusage.Read(ws.Root)
 }
 
 // lessonsForFile normalizes path to repo-relative and returns the

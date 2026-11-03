@@ -1064,7 +1064,30 @@ pin outcomes — 3 measured: 1 working, 1 not landing, 1 untested
   p47   leak-exception-to-client           not landing — recurred 2× since exposure (fired 12×)
   p16   pooled-state-reset                 working — flagged 10× in ~200 region-commits before exposure; 0× in 84 since (fired 41×)
   p9    cap-per-request-query              untested — 3 region-commits since exposure (fired 5×)
+
+mcp tool usage — calls: 142, failed: 3 (counts calls, not whether a call helped)
+  change_set   claude-code          calls: 88, failed: 1; latency median 120 ms, largest 900 ms; reply median 5120 bytes
+  why          claude-code          calls: 54, failed: 2; latency median 40 ms, largest 310 ms; reply median 1890 bytes
 ```
+
+The `mcp tool usage` section reads `.seamark/mcp-usage.jsonl` and its one
+rotated file, in the workspace that `seamark mcp` serves with the same `-C`
+and `--db`. A linked worktree thus shows its own calls, also when its index
+records the main checkout. The MCP server appends one line per `tools/call`:
+the tool name, the client name from `initialize`, the time, the latency, the
+size of the text parts of the reply, and whether the call worked. A line
+holds no argument, path, symbol, query, or reply text, because a query can
+hold private text. A tool name that the server does not know reads `unknown`,
+and so does a client without a name. Recording is best effort: a failed
+append changes no reply, and the server creates no `.seamark` directory for
+it. The server writes one note about failed appends to stderr after its last
+reply, because a stderr write during a session can stop the server. The file
+rotates at 5 MiB or 30 days, as `.seamark/audit.jsonl` does, so the section
+covers the retained calls only. Without a file the section does not
+print and the rest of the output stays the same. A damaged line is skipped
+and counted, and a file that does not read prints `unknown`, not zero. A
+count shows calls. It does not show that a call helped, and no hook reads
+this file.
 
 ### Do pins actually change behavior? The outcome loop
 

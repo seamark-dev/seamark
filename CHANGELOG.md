@@ -105,6 +105,9 @@ model-boundary delivery.
   `structuredContent` now repeats the first text part under
   `change_set_report`; the text parts and `lesson-preparation/1` do not
   change.
+- **MCP tool usage in `lessons --stats`.** The MCP server counts each
+  tool call in the local `.seamark/mcp-usage.jsonl`, with no argument, and
+  `lessons --stats` prints calls, failures, latency, and reply size.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
