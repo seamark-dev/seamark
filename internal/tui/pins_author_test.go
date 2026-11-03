@@ -271,7 +271,7 @@ func TestPinFormBlankScopeIsIncomplete(t *testing.T) {
 	assert.Contains(t, lesBoxFlat(h.view()), "Draft complete")
 }
 
-func TestPinEditLinkedShowsReadOnlyRuleAndScope(t *testing.T) {
+func TestPinEditLinkedLocksTheRuleAndOpensTheScope(t *testing.T) {
 	f := authorFake(nil)
 	h := pinsOpen(t, f, 120, 40)
 
@@ -283,21 +283,17 @@ func TestPinEditLinkedShowsReadOnlyRuleAndScope(t *testing.T) {
 
 	frame := lesBoxFlat(h.view())
 	assert.Contains(t, frame, "Edit pin 1 at line 3")
-	assert.Contains(t, frame, "Read-only: linked to proposal #4; "+pinsNoRetargetRoute+".",
-		"p4 has a current scope, so w reads n/a and the form names no retarget")
+	assert.Empty(t, form.draft.scopeLock, "the link locks the rule only")
 	assert.Contains(t, frame, "Read-only: linked to proposal #4; to change the rule, use - Prune and add a new pin with n.",
 		"the rule row names the route of a rule, not the retarget")
 
-	// enter on the rule and on a scope row is refused; the note edits.
+	// enter on the rule is refused; the note edits.
 	h.press("enter")
 	assert.Equal(t, pinFieldNone, form.field)
 	assert.Equal(t, "Read-only: linked to proposal #4; to change the rule, use - Prune and add a new pin with n.",
 		h.m.toast.text)
 
-	h.press("down", "down", "enter")
-	assert.Equal(t, maintain.ScopeRegions, form.draft.scope, "the scope stays as the entry has it")
-
-	h.press("up", "enter", "end")
+	h.press("down", "enter", "end")
 	h.typeText(" Name the query.")
 	h.press("esc")
 
@@ -307,9 +303,10 @@ func TestPinEditLinkedShowsReadOnlyRuleAndScope(t *testing.T) {
 	assert.False(t, req.ScopeSet)
 	assert.Equal(t, "Wrap SQL errors with the query name. Name the query.", req.Note)
 
-	// a adds no region to a linked pin.
+	// a adds a region to a linked pin, because the scope preview writes it
+	// to the entry and to its row.
 	h.press("a")
-	assert.Equal(t, pinFieldNone, form.field)
+	assert.Equal(t, pinFieldRegion, form.field)
 }
 
 func TestPinRemoveLinkedRoutesToPrune(t *testing.T) {
@@ -399,9 +396,9 @@ func TestPinAuthoringDraftsWithUnknownRelationship(t *testing.T) {
 
 	d := authorOf(h).form.draft
 	assert.Empty(t, d.ruleLock, "an unknown relationship locks no row")
-	assert.Contains(t, lesBoxFlat(h.view()), "Relationship unknown: a linked pin allows only a note edit; saving needs "+
-		"a readable index of this workspace.")
-	assert.NotContains(t, lesBoxFlat(h.view()), "mode, and check", "the form has no Mode or Check row")
+	assert.Contains(t, lesBoxFlat(h.view()), "Relationship unknown: a linked pin allows note and region edits; saving "+
+		"needs a readable index of this workspace.")
+	assert.NotContains(t, lesBoxFlat(h.view()), "mode, check", "the form has no Mode or Check row")
 
 	h.press("down", "enter", "end")
 	h.typeText(" More.")
@@ -1280,7 +1277,8 @@ func TestPinEditRegionLockNamesCharactersBeforeLength(t *testing.T) {
 		{"control before long", 4, []string{"docs\u0085", long}, pinTextLock},
 		{"long before plain", 4, []string{long, "docs"}, length},
 		{"plain before long", 4, []string{"docs", long}, length},
-		{"linked", 0, []string{long, "docs\u0085"}, "linked to proposal #4; change the scope with w Retarget"},
+		{"linked", 0, []string{long, "docs\u0085"}, "linked to proposal #4; " + pinTextLock +
+			"; change the scope with w Retarget"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			pin := pinsInspection().Pins[c.pin]
@@ -1493,11 +1491,12 @@ func TestPinDraftUneditedFieldTakesTheCurrentValue(t *testing.T) {
 	assert.False(t, req.ScopeSet)
 }
 
-// TestPinDraftDropsRuleAndScopeEditsWhenTheLinkAppears covers B2-BEH-1:
-// a reload that shows a linked pin locks its rule and scope. The edits
-// that the user made while the relationship was unknown go away with a
-// note, and a locked row keeps no focus.
-func TestPinDraftDropsRuleAndScopeEditsWhenTheLinkAppears(t *testing.T) {
+// TestPinDraftDropsTheRuleEditWhenTheLinkAppears covers B2-BEH-1: a reload
+// that shows a linked pin locks its rule. The rule edit that the user made
+// while the relationship was unknown goes away with a note, and a locked
+// row keeps no focus. The scope edit stays, because the scope preview
+// takes it.
+func TestPinDraftDropsTheRuleEditWhenTheLinkAppears(t *testing.T) {
 	f := authorFake(nil)
 	f.pins = pinsNoLedger()
 	h := pinsOpen(t, f, 120, 40)
@@ -1519,26 +1518,52 @@ func TestPinDraftDropsRuleAndScopeEditsWhenTheLinkAppears(t *testing.T) {
 	require.True(t, req.RuleSet && req.NoteSet && req.ScopeSet)
 
 	// The index build of the o route reads the pins again: pin 1 is
-	// linked to p4 now, so only its note, mode, and check can change.
+	// linked to p4 now, so its rule cannot change.
 	authorReload(h, f, pinsInspection())
 
 	assert.Equal(t, pinFieldNone, form.field, "a locked row keeps no focus")
 	assert.Equal(t, "wrap-sql-errors", d.ruleValue(), "the rule edit goes away")
-	assert.Equal(t, []string{"internal/store"}, d.regions, "the scope edit goes away")
+	assert.Equal(t, []string{"internal/store", "internal/extra"}, d.regions, "the scope edit stays")
 	assert.Less(t, form.row, form.rows())
 
 	req = d.request()
 	assert.False(t, req.RuleSet)
-	assert.False(t, req.ScopeSet)
+	assert.True(t, req.ScopeSet)
 	assert.True(t, req.NoteSet, "the note edit stays")
 	assert.Equal(t, "Wrap SQL errors with the query name. Name the query.", req.Note)
-	assert.Contains(t, h.m.toast.text, `The rule and scope edits of "wrap-sql-errors" went away: the pin is linked `+
-		"to p4, so only its note can change here; "+pinsNoRetargetRoute)
+	assert.Contains(t, h.m.toast.text, `The rule edit of "wrap-sql-errors" went away: the pin is linked `+
+		"to p4, so only its note and regions can change here; "+pinRouteRule)
 
 	// No row takes the typing now.
 	h.typeText("-more")
 	assert.Equal(t, "wrap-sql-errors", d.ruleValue())
-	assert.Contains(t, lesBoxFlat(h.view()), "Read-only: linked to proposal #4; "+pinsNoRetargetRoute+".")
+	assert.Contains(t, lesBoxFlat(h.view()), "Read-only: linked to proposal #4; "+pinRouteRule+".")
+}
+
+// A reload can show a linked pin whose stored regions the form cannot
+// hold. The row then locks, so a typed scope edit goes away with a note
+// that names the rows that stay open.
+func TestPinDraftDropsTheScopeEditWhenTheStoredRegionsLockTheRow(t *testing.T) {
+	f := authorFake(nil)
+	f.pins = pinsNoLedger()
+	h := pinsOpen(t, f, 120, 40)
+
+	pinsCursorTo(h, 1)
+	h.press("i", "a")
+	h.typeText("internal/extra")
+	h.press("enter")
+
+	d := authorOf(h).form.draft
+	require.True(t, d.request().ScopeSet)
+
+	in := pinsInspection()
+	in.Pins[0].Entry.Region = "docs\u0085"
+	authorReload(h, f, in)
+
+	assert.Equal(t, []string{"docs\u0085"}, d.regions, "the scope edit goes away")
+	assert.Contains(t, h.m.toast.text, `The scope edit of "wrap-sql-errors" went away`)
+	assert.Contains(t, h.m.toast.text, "so only its note can change here")
+	assert.False(t, pinStoredLock(d.scopeLock), "a reload must keep this lock")
 }
 
 // TestPinDraftReloadKeepsTheCursorOfAFocusedField covers B2-BEH-3: a
@@ -1787,17 +1812,18 @@ func TestPinAuthoringTreatsAForeignRootAsUnknown(t *testing.T) {
 	d := authorOf(h).form.draft
 	assert.Empty(t, d.ruleLock)
 	assert.True(t, d.unknown)
-	assert.Contains(t, lesBoxFlat(h.view()), "Relationship unknown: a linked pin allows only a note edit;")
+	assert.Contains(t, lesBoxFlat(h.view()), "Relationship unknown: a linked pin allows note and region edits;")
 }
 
 // TestPinLinkedWordingNamesOnlyTheOfferedRows covers R-7 of the P4
 // review. The Pins detail, the unknown-relationship note, and the note
 // of a dropped edit name the mode and check edits only while the form
-// offers the Mode and Check rows.
+// offers the Mode and Check rows. The detail names the regions only while
+// the form can hold them.
 func TestPinLinkedWordingNamesOnlyTheOfferedRows(t *testing.T) {
 	const (
-		noteOnly  = "i edits the note of this pin only."
-		withCheck = "i edits the note, mode, and check of this pin only."
+		noteOnly  = "i edits the note and regions of this pin only."
+		withCheck = "i edits the note, mode, check, and regions of this pin only."
 	)
 
 	for _, uses := range []bool{false, true} {
@@ -1815,7 +1841,7 @@ func TestPinLinkedWordingNamesOnlyTheOfferedRows(t *testing.T) {
 			assert.NotContains(t, detail, noteOnly)
 		} else {
 			assert.Contains(t, detail, noteOnly)
-			assert.NotContains(t, detail, "mode, and check")
+			assert.NotContains(t, detail, "mode, check")
 		}
 
 		h.press("i")
@@ -1823,9 +1849,27 @@ func TestPinLinkedWordingNamesOnlyTheOfferedRows(t *testing.T) {
 		assert.Equal(t, uses, authorOf(h).form.draft.checks, "the sentence matches the rows of the form")
 	}
 
+	for _, c := range []struct {
+		uses bool
+		want string
+	}{
+		{true, "i edits the note, mode, and check of this pin only."},
+		{false, "i edits the note of this pin only."},
+	} {
+		in := pinsInspection()
+		in.Checks.Uses = c.uses
+		in.Pins[0].Entry.Region = "docs\u0085"
+		f := authorFake(nil)
+		f.pins = in
+		h := pinsOpen(t, f, 120, 40)
+
+		pinsCursorTo(h, 1)
+		assert.Contains(t, pinsDetail(t, h), c.want, "a stored refusal keeps the regions out of the sentence")
+	}
+
 	t.Run("an unknown relationship", func(t *testing.T) {
-		assert.Contains(t, pinUnknownNote(true, pinUnknownTail), "allows note, mode, and check edits")
-		assert.Contains(t, pinUnknownNote(false, pinUnknownTail), "allows only a note edit;")
+		assert.Contains(t, pinUnknownNote(true, pinUnknownTail), "allows note, mode, check, and region edits")
+		assert.Contains(t, pinUnknownNote(false, pinUnknownTail), "allows note and region edits;")
 		assert.NotContains(t, pinUnknownNote(false, pinUnknownTail), "mode")
 
 		in := pinsNoLedger()
@@ -1837,13 +1881,15 @@ func TestPinLinkedWordingNamesOnlyTheOfferedRows(t *testing.T) {
 		pinsCursorTo(h, 1)
 		h.press("i")
 		require.NotNil(t, authorOf(h).form)
-		assert.Contains(t, lesBoxFlat(h.view()), "Relationship unknown: a linked pin allows note, mode, and check edits")
+		assert.Contains(t, lesBoxFlat(h.view()), "Relationship unknown: a linked pin allows note, mode, check, and region edits")
 	})
 
 	t.Run("a dropped edit", func(t *testing.T) {
-		assert.Contains(t, pinDroppedNote([]string{"rule"}, `"r"`, 4, true, pinRouteRetarget),
-			"so only its note, mode, and check can change here; "+pinRouteRetarget)
-		assert.Contains(t, pinDroppedNote([]string{"rule"}, `"r"`, 4, false, pinsNoRetargetRoute),
+		routes := pinLockRoutes{rule: pinRouteRule, scope: pinsNoRetargetRoute}
+
+		assert.Contains(t, pinDroppedNote([]string{"rule"}, `"r"`, 4, &pinDraft{checks: true}, routes),
+			"so only its note, mode, check, and regions can change here; "+pinRouteRule)
+		assert.Contains(t, pinDroppedNote([]string{"scope"}, `"r"`, 4, &pinDraft{scopeLock: "linked"}, routes),
 			"so only its note can change here; "+pinsNoRetargetRoute)
 	})
 }

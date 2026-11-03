@@ -311,6 +311,7 @@ func testGatherRequestInputs(t *testing.T) {
 	in := gatherInputs(req, sources)
 	assertGatherCalls(t, calls)
 	assert.Equal(t, LinksFromApplied(req.Applied), in.Links)
+	assert.Equal(t, ChosenFromApplied(req.Applied), in.Chosen)
 	assert.Contains(t, in.Links, reviews.PinIdentityDigest(reviews.NewPinKey("keep-parser-strict", "internal/parse", nil)))
 	assert.Equal(t, fixedNow, in.Now)
 

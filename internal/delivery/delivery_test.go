@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -656,6 +657,458 @@ func TestDeliverStaysSilentWhenNothingApplies(t *testing.T) {
 	firings, err := reviews.ReadFirings(root)
 	require.NoError(t, err)
 	assert.Empty(t, firings, "silence is not a firing")
+}
+
+// overflowPins lists eight pins on api that do not restate each other,
+// in fold order. They share a rank, so only the file order ranks them.
+var overflowPins = []string{
+	"  - {rule: boundary-validation, region: api, note: Validate request payloads at the edge.}\n",
+	"  - {rule: idempotent-retries, region: api, note: Make retried requests idempotent.}\n",
+	"  - {rule: transaction-atomicity, region: api, note: Wrap dependent writes in one transaction.}\n",
+	"  - {rule: structured-logging, region: api, note: Log fields and never format strings.}\n",
+	"  - {rule: cache-invalidation, region: api, note: Purge entries after every write.}\n",
+	"  - {rule: lock-ordering, region: api, note: Take mutexes by ascending address.}\n",
+	"  - {rule: metric-naming, region: api, note: Prefix counters with their subsystem.}\n",
+	"  - {rule: error-wrapping, region: api, note: Keep the cause inside returned failures.}\n",
+}
+
+// overflowConfig writes the first count pins of overflowPins with
+// pin_budget 3 under once-per-context delivery.
+func overflowConfig(t *testing.T, root string, count int) *reviews.Config {
+	t.Helper()
+
+	return writeConfig(t, root, "hook_delivery: once-per-context\npin_budget: 3\npin:\n"+
+		strings.Join(overflowPins[:count], ""))
+}
+
+// emptyStore opens an index with no mined lesson, so only the pins of the
+// configuration can fill the advice.
+func emptyStore(t *testing.T) *store.Store {
+	t.Helper()
+
+	st, err := store.OpenMemory()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	return st
+}
+
+// overflowRun holds the fixed values of one receiver's matching edits.
+type overflowRun struct {
+	st   *store.Store
+	root string
+	cfg  *reviews.Config
+}
+
+// edit delivers one matching edit of the Claude root context of session-1
+// and returns the outcome and the advice. The advice is empty when the
+// event emits nothing.
+func (r overflowRun) edit(t *testing.T) (out Outcome, advice string) {
+	t.Helper()
+
+	var got capture
+
+	out, err := Deliver(context.Background(), r.st,
+		claudeRequest(r.root, r.cfg, claudeEvent(r.root, "session-1", "", "match", "prompt", "api/handler.go")), got.emit)
+	require.NoError(t, err)
+
+	return out, strings.Join(got.advice, "")
+}
+
+// reset starts a new generation of the Claude root context of session-1.
+func (r overflowRun) reset(t *testing.T) {
+	t.Helper()
+
+	require.NoError(t, Reset(ResetRequest{Root: r.root, ClientID: integration.ClaudeID, Event: integration.ResetEvent{
+		Context: *integration.ReceivingContextOf(integration.ClaudeID, "session-1", ""),
+	}}))
+}
+
+// pinsOfLastEvent returns the pins of the last event in the firing log.
+// Only the first record of an event carries them. The log orders them by
+// delivery, so a test compares them as a set.
+func pinsOfLastEvent(t *testing.T, root string) []reviews.FiringPin {
+	t.Helper()
+
+	records := firings(t, root)
+	require.NotEmpty(t, records)
+
+	for i := len(records) - 1; i >= 0; i-- {
+		if len(records[i].Pins) > 0 {
+			return records[i].Pins
+		}
+	}
+
+	require.Fail(t, "no record carries pins")
+
+	return nil
+}
+
+// assertSends proves that advice names the rules of sent in that order
+// and names no other rule of the pins.
+func assertSends(t *testing.T, advice string, pins []reviews.PinRule, sent ...int) {
+	t.Helper()
+
+	position := -1
+
+	for _, i := range sent {
+		at := strings.Index(advice, pins[i].Rule)
+		require.Greater(t, at, position, "the eligible pins keep the fold order: %s", pins[i].Rule)
+		position = at
+	}
+
+	for i, pin := range pins {
+		if !slices.Contains(sent, i) {
+			assert.NotContains(t, advice, pin.Rule)
+		}
+	}
+}
+
+func TestDeliverMovesToTheNextPinAfterTheBudget(t *testing.T) {
+	// Four pins of equal rank, budget three, and a resettable receiver.
+	root := workspace(t)
+	cfg := overflowConfig(t, root, 4)
+	run := overflowRun{st: emptyStore(t), root: root, cfg: cfg}
+	a, b, c, d := cfg.Pin[0], cfg.Pin[1], cfg.Pin[2], cfg.Pin[3]
+
+	// The first three pins fill the budget, and the pointer names the rest.
+	first, advice := run.edit(t)
+	assert.Equal(t, StatusEmitted, first.Status)
+	assert.Equal(t, SuppressionActive, first.Suppression)
+	assert.Equal(t, 3, first.Emitted)
+	assert.Zero(t, first.Suppressed)
+	assert.Equal(t, 1, first.HeldBackPins)
+	assertSends(t, advice, cfg.Pin, 0, 1, 2)
+	assert.Contains(t, advice, "+1 more pins")
+	assert.ElementsMatch(t, []reviews.FiringPin{
+		pinOf(cfg, a, reviews.PinInjected, ""),
+		pinOf(cfg, b, reviews.PinInjected, ""),
+		pinOf(cfg, c, reviews.PinInjected, ""),
+		pinOf(cfg, d, reviews.PinHeldBack, reviews.CauseOverPinCap),
+	}, pinsOfLastEvent(t, root))
+
+	// The delivered pins leave before the budget, so the last pin goes out.
+	second, advice := run.edit(t)
+	assert.Equal(t, StatusEmitted, second.Status)
+	assert.Equal(t, 1, second.Emitted)
+	assert.Equal(t, 3, second.Suppressed)
+	assert.Zero(t, second.HeldBackPins, "a delivered pin is not a held-back pin")
+	assertSends(t, advice, cfg.Pin, 3)
+	assert.NotContains(t, advice, "more pins")
+	assert.ElementsMatch(t, []reviews.FiringPin{
+		pinOf(cfg, a, reviews.PinSuppressedRepeat, ""),
+		pinOf(cfg, b, reviews.PinSuppressedRepeat, ""),
+		pinOf(cfg, c, reviews.PinSuppressedRepeat, ""),
+		pinOf(cfg, d, reviews.PinInjected, ""),
+	}, pinsOfLastEvent(t, root))
+
+	records := firings(t, root)
+	require.Len(t, records, 3)
+	assert.Equal(t, []string{"structured-logging — Log fields and never format strings."}, symptoms(records[1].Fired))
+	assert.Equal(t, reviews.DeliverySuppressedRepeat, records[2].Delivery)
+	assert.Len(t, records[2].Fired, 3, "the second record names the delivered pins")
+
+	// The receiver now has every pin.
+	third, advice := run.edit(t)
+	assert.Equal(t, StatusSuppressed, third.Status)
+	assert.Equal(t, 4, third.Suppressed)
+	assert.Empty(t, advice)
+
+	// A reset restores the order from the top of the pins.
+	run.reset(t)
+
+	fourth, advice := run.edit(t)
+	assert.Equal(t, uint64(2), fourth.Generation)
+	assertSends(t, advice, cfg.Pin, 0, 1, 2)
+	assert.Contains(t, advice, "+1 more pins")
+
+	_, advice = run.edit(t)
+	assertSends(t, advice, cfg.Pin, 3)
+}
+
+func TestDeliverKeepsARestatementCollapsedAfterDelivery(t *testing.T) {
+	root := workspace(t)
+	cfg := writeConfig(t, root, "hook_delivery: once-per-context\npin_budget: 1\npin:\n"+
+		"  - {rule: boundary-validation, region: api, note: Validate request payloads at the edge.}\n"+
+		"  - {rule: boundary-validation, region: '*', note: Validate request payloads at the edge.}\n"+
+		"  - {rule: idempotent-retries, region: api, note: Make retried requests idempotent.}\n"+
+		"  - {rule: transaction-atomicity, region: api, note: Wrap dependent writes in one transaction.}\n")
+	run := overflowRun{st: emptyStore(t), root: root, cfg: cfg}
+	kept, restated, next, last := cfg.Pin[0], cfg.Pin[1], cfg.Pin[2], cfg.Pin[3]
+	collapsed := pinOf(cfg, restated, reviews.PinHeldBack, reviews.CauseRestated)
+
+	_, advice := run.edit(t)
+	assert.Contains(t, advice, "+3 more pins")
+
+	// The restatement never takes the room of the pin that it restates.
+	out, advice := run.edit(t)
+	assert.Equal(t, 2, out.HeldBackPins, "the restatement and the last pin")
+	assert.Contains(t, advice, next.Rule)
+	assert.Contains(t, advice, "+2 more pins")
+	assert.ElementsMatch(t, []reviews.FiringPin{
+		pinOf(cfg, kept, reviews.PinSuppressedRepeat, ""),
+		collapsed,
+		pinOf(cfg, next, reviews.PinInjected, ""),
+		pinOf(cfg, last, reviews.PinHeldBack, reviews.CauseOverPinCap),
+	}, pinsOfLastEvent(t, root))
+
+	out, advice = run.edit(t)
+	assert.Equal(t, 1, out.HeldBackPins, "the restatement stays held back")
+	assert.Contains(t, advice, last.Rule)
+	assert.Contains(t, advice, "+1 more pins")
+
+	// Nothing is new, so the restatement stays out and no text goes out.
+	out, advice = run.edit(t)
+	assert.Equal(t, StatusSuppressed, out.Status)
+	assert.Empty(t, advice)
+	assert.ElementsMatch(t, []reviews.FiringPin{
+		pinOf(cfg, kept, reviews.PinSuppressedRepeat, ""),
+		collapsed,
+		pinOf(cfg, next, reviews.PinSuppressedRepeat, ""),
+		pinOf(cfg, last, reviews.PinSuppressedRepeat, ""),
+	}, pinsOfLastEvent(t, root))
+}
+
+func TestDeliverRestoresOverflowEligibility(t *testing.T) {
+	t.Run("a failed reply keeps the tried pins eligible", func(t *testing.T) {
+		root := workspace(t)
+		cfg := overflowConfig(t, root, 4)
+		run := overflowRun{st: emptyStore(t), root: root, cfg: cfg}
+
+		// Run the first edit, so the failed event is the one of the last pin.
+		_, advice := run.edit(t)
+		assertSends(t, advice, cfg.Pin, 0, 1, 2)
+
+		broken := errors.New("stdout closed")
+
+		// A failed reply is an evaluation record, so it needs capture opt-in.
+		req := claudeRequest(root, cfg, claudeEvent(root, "session-1", "", "m", "p", "api/handler.go"))
+		req.RecordEvaluations = true
+
+		_, err := Deliver(context.Background(), run.st, req, func(string) error { return broken })
+		require.ErrorIs(t, err, broken)
+		assert.ElementsMatch(t, []reviews.FiringPin{
+			pinOf(cfg, cfg.Pin[0], reviews.PinSuppressedRepeat, ""),
+			pinOf(cfg, cfg.Pin[1], reviews.PinSuppressedRepeat, ""),
+			pinOf(cfg, cfg.Pin[2], reviews.PinSuppressedRepeat, ""),
+			pinOf(cfg, cfg.Pin[3], reviews.PinEmitFailed, ""),
+		}, pinsOfLastEvent(t, root))
+
+		_, advice = run.edit(t)
+		assertSends(t, advice, cfg.Pin, 3)
+	})
+
+	t.Run("a reset empties the delivered set", func(t *testing.T) {
+		root := workspace(t)
+		cfg := overflowConfig(t, root, 4)
+		run := overflowRun{st: emptyStore(t), root: root, cfg: cfg}
+
+		_, _ = run.edit(t)
+		run.reset(t)
+
+		_, advice := run.edit(t)
+		assertSends(t, advice, cfg.Pin, 0, 1, 2)
+		assert.Contains(t, advice, "+1 more pins")
+	})
+
+	t.Run("a new version is eligible at its rank", func(t *testing.T) {
+		root := workspace(t)
+		cfg := overflowConfig(t, root, 4)
+		st := emptyStore(t)
+		run := overflowRun{st: st, root: root, cfg: cfg}
+
+		_, _ = run.edit(t)
+		_, _ = run.edit(t)
+
+		// A new note gives the second pin a new version. The rest stay delivered.
+		changed := writeConfig(t, root, "hook_delivery: once-per-context\npin_budget: 3\npin:\n"+
+			overflowPins[0]+
+			"  - {rule: idempotent-retries, region: api, note: Retry only with an idempotency key.}\n"+
+			strings.Join(overflowPins[2:4], ""))
+
+		out, advice := overflowRun{st: st, root: root, cfg: changed}.edit(t)
+		assert.Equal(t, 1, out.Emitted)
+		assert.Equal(t, 3, out.Suppressed)
+		assert.Contains(t, advice, "Retry only with an idempotency key.")
+		assert.NotContains(t, advice, "more pins")
+		assert.NotContains(t, advice, "boundary-validation")
+	})
+}
+
+func TestDeliverKeepsThePlainSelectionForEveryOtherReceiver(t *testing.T) {
+	statePath := func(root string) string { return filepath.Join(root, ".seamark", "lessons-hook-state.json") }
+
+	cases := []struct {
+		name  string
+		first string
+		event func(root string) integration.EditEvent
+		// prepare fills the state and returns a function that ends the case.
+		prepare func(t *testing.T, run overflowRun) func()
+		want    Suppression
+		// hasState says that the case keeps a state file, which must not change.
+		hasState bool
+	}{
+		{
+			name:  "the configuration asks for repeats",
+			first: "hook_delivery: always\n",
+			event: func(root string) integration.EditEvent {
+				return claudeEvent(root, "session-1", "", "m", "p", "api/handler.go")
+			},
+			want: SuppressionOff,
+		},
+		{
+			name:  "no receiving context",
+			first: "hook_delivery: once-per-context\n",
+			event: func(root string) integration.EditEvent { return editEvent(root, "", false, "api/handler.go") },
+			want:  SuppressionNoContext,
+		},
+		{
+			name:  "a child lane has no reset",
+			first: "hook_delivery: once-per-context\n",
+			event: func(root string) integration.EditEvent {
+				return claudeEvent(root, "session-1", "agent-7", "m", "p", "api/handler.go")
+			},
+			want: SuppressionNotResettable,
+		},
+		{
+			name:  "a busy lock",
+			first: "hook_delivery: once-per-context\n",
+			event: func(root string) integration.EditEvent {
+				return claudeEvent(root, "session-1", "", "m", "p", "api/handler.go")
+			},
+			prepare: func(t *testing.T, run overflowRun) func() {
+				t.Helper()
+
+				// The state names the first pins, and the lease of another
+				// session hides that set from this event.
+				_, _ = run.edit(t)
+
+				held, err := reviews.BeginHookDelivery(run.root, "another-session", nil)
+				require.NoError(t, err)
+
+				return func() { require.NoError(t, held.Close()) }
+			},
+			want: SuppressionStateUnavailable, hasState: true,
+		},
+		{
+			name:  "a damaged state file",
+			first: "hook_delivery: once-per-context\n",
+			event: func(root string) integration.EditEvent {
+				return claudeEvent(root, "session-1", "", "m", "p", "api/handler.go")
+			},
+			prepare: func(t *testing.T, run overflowRun) func() {
+				t.Helper()
+
+				require.NoError(t, os.WriteFile(statePath(run.root), []byte("{not json"), 0o600))
+
+				return func() {}
+			},
+			want: SuppressionStateUnavailable, hasState: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := workspace(t)
+			cfg := writeConfig(t, root, tc.first+"pin_budget: 3\npin:\n"+strings.Join(overflowPins[:4], ""))
+			st := lessonStore(t, root)
+			run := overflowRun{st: st, root: root, cfg: cfg}
+
+			finish := func() {}
+			if tc.prepare != nil {
+				finish = tc.prepare(t, run)
+			}
+
+			defer finish()
+
+			// The expected bytes come from the fold, which no state reaches.
+			plain, err := hookSelection(st, cfg, []string{"api/handler.go"})
+			require.NoError(t, err)
+
+			var want strings.Builder
+			require.NoError(t, report.PrintEditReminder(&want, []string{"api/handler.go"}, plain.Lessons, plain.HeldBack))
+
+			var before []byte
+			if tc.hasState {
+				before, err = os.ReadFile(statePath(root))
+				require.NoError(t, err)
+			}
+
+			request := claudeRequest(root, cfg, tc.event(root))
+
+			for range 2 {
+				var got capture
+
+				out, err := Deliver(context.Background(), st, request, got.emit)
+				require.NoError(t, err)
+
+				assert.Equal(t, StatusEmitted, out.Status)
+				assert.Equal(t, tc.want, out.Suppression)
+				assert.Equal(t, 1, out.HeldBackPins)
+				assert.Zero(t, out.Suppressed)
+				assert.Zero(t, out.Generation)
+				require.Len(t, got.advice, 1)
+				assert.Equal(t, want.String(), got.advice[0], "the reminder keeps its bytes on every edit")
+				assert.ElementsMatch(t, []reviews.FiringPin{
+					pinOf(cfg, cfg.Pin[0], reviews.PinInjected, ""),
+					pinOf(cfg, cfg.Pin[1], reviews.PinInjected, ""),
+					pinOf(cfg, cfg.Pin[2], reviews.PinInjected, ""),
+					pinOf(cfg, cfg.Pin[3], reviews.PinHeldBack, reviews.CauseOverPinCap),
+				}, pinsOfLastEvent(t, root))
+			}
+
+			if !tc.hasState {
+				assert.NoFileExists(t, statePath(root), "no lease means no state")
+
+				return
+			}
+
+			after, err := os.ReadFile(statePath(root))
+			require.NoError(t, err)
+			assert.Equal(t, before, after, "the event changes no state")
+		})
+	}
+}
+
+func TestDeliverSendsANewMinedLessonWhenEveryPinIsDelivered(t *testing.T) {
+	// Eight pins fill the total cap, so the first cut leaves the mined
+	// lesson out. A second cut that reads only Mined never finds it.
+	root := workspace(t)
+	st := lessonStore(t, root)
+	cfg := writeConfig(t, root, "hook_delivery: once-per-context\npin_budget: 8\npin:\n"+strings.Join(overflowPins, ""))
+	run := overflowRun{st: st, root: root, cfg: cfg}
+
+	first, advice := run.edit(t)
+	assert.Equal(t, 8, first.Emitted)
+	assert.NotContains(t, advice, "RUF001")
+
+	second, advice := run.edit(t)
+	assert.Equal(t, StatusEmitted, second.Status)
+	assert.Equal(t, SuppressionActive, second.Suppression)
+	assert.Equal(t, 1, second.Emitted)
+	assert.Equal(t, 8, second.Suppressed)
+	assert.Contains(t, advice, "RUF001")
+	assert.NotContains(t, advice, "more pins")
+
+	third, advice := run.edit(t)
+	assert.Equal(t, StatusSuppressed, third.Status)
+	assert.Equal(t, 9, third.Suppressed)
+	assert.Empty(t, advice)
+}
+
+func TestDeliverOpensNoLeaseWhenNothingApplies(t *testing.T) {
+	root := workspace(t)
+	st := lessonStore(t, root)
+	cfg := writeConfig(t, root, "hook_delivery: once-per-context\n")
+
+	out, err := Deliver(context.Background(), st,
+		claudeRequest(root, cfg, claudeEvent(root, "session-1", "", "m", "p", "db/query.go")), mustNotEmit)
+	require.NoError(t, err)
+
+	assert.Equal(t, StatusSilent, out.Status)
+	assert.Equal(t, SuppressionOff, out.Suppression)
+	assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-hook-state.json"))
+	assert.NoFileExists(t, filepath.Join(root, ".seamark", "lessons-hook-state.lock"))
 }
 
 func TestDeliverAdvisesOnANewFileByItsPath(t *testing.T) {

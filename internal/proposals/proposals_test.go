@@ -523,3 +523,60 @@ func exportsUsedIn(t *testing.T, pkg string) []string {
 
 	return slices.Compact(used)
 }
+
+// TestHealthBlockedRouteFollowsTheRow covers the sentence that the CLI
+// ledger and the proposal detail print. A hand edit of the regions unlinks
+// the pin of an applied row, so only other rows keep the hand words.
+func TestHealthBlockedRouteFollowsTheRow(t *testing.T) {
+	const lead = "trigger api/handler.go — directly cited by the evidence but not deliverable: " +
+		"the region set is full or the path is absent from the working tree; "
+
+	cases := []struct {
+		name   string
+		status string
+		want   string
+	}{
+		{"applied", model.ProposalApplied, lead + "review the trigger or edit its regions in seamark tui, Lessons › Pins, with i"},
+		{"pending", model.ProposalProposed, lead + "review the trigger or edit regions in .seamark/lessons.yaml by hand"},
+		{"dismissed", model.ProposalDismissed, lead + "review the trigger or edit regions in .seamark/lessons.yaml by hand"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, true)
+
+			f.writeLessons("pin:\n  - rule: blocked-pin\n    region: api\n    note: Blocked.\n")
+
+			require.NoError(t, f.st.ReplaceLessons(nil, []model.Finding{
+				{ID: 1, Path: "api/handler.go", Body: "b", CreatedAt: time.Now().Unix(), Source: model.SourceReview},
+			}))
+
+			p := f.propose("blocked-pin", "Blocked.", tc.status, "api")
+			p.Members = []int64{1}
+			p.TriggerPaths = []string{"api/handler.go"}
+
+			h, err := Health(f.st, f.root, []model.Proposal{p})
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.want, h[p.ID].Blocked)
+		})
+	}
+}
+
+func TestHealthMarksAChosenRow(t *testing.T) {
+	f := newFixture(t, true)
+
+	f.writeLessons("pin:\n  - rule: chosen-pin\n    region: api\n    note: Chosen.\n")
+
+	chosen := f.propose("chosen-pin", "Chosen.", model.ProposalApplied, "api")
+	chosen.ScopeChosen = 1_790_000_000
+
+	history := f.propose("old-pin", "Superseded.", model.ProposalSuperseded, "api")
+	history.ScopeChosen = 1_790_000_000
+
+	h, err := Health(f.st, f.root, []model.Proposal{chosen, history})
+	require.NoError(t, err)
+
+	assert.Equal(t, chosen.ScopeChosen, h[chosen.ID].Chosen)
+	assert.Zero(t, h[history.ID].Chosen, "a superseded row keeps its stamp as history, not as a live choice")
+}

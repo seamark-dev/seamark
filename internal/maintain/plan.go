@@ -61,13 +61,24 @@ type PlanItem struct {
 	// pinfile error with a rule or a path from the file, so a caller
 	// sanitizes it before display.
 	Reason string
-	// From is the live region set; To is the computed set of a retarget.
-	// Nil is repository-wide. To is meaningful only for a ready or a
-	// no-op retarget. Both hold paths from the file or the model, so a
+	// From is the live region set; To is the computed set of a retarget,
+	// or the typed set of a scope edit. Nil is repository-wide. To is
+	// meaningful only for a ready or a no-op retarget, and for a scope
+	// edit with Drafted. Both hold paths from the file or the model, so a
 	// caller sanitizes them before display.
 	From, To []string
-	// Broader and RepoWide label a retarget that widens the scope.
+	// Broader and RepoWide label a change that widens the scope.
 	Broader, RepoWide bool
+	// Drafted is true for a scope edit whose draft holds a valid set, so
+	// To is the new set. It is false with a blocking issue.
+	Drafted bool
+	// Narrower is true for a scope edit whose new set no longer reaches a
+	// path of the old set. A set can be Broader and Narrower together.
+	Narrower bool
+	// Missing lists the regions of a scope edit that name no path yet. It
+	// is information and never blocks the item. It holds typed paths, so
+	// a caller sanitizes it before display.
+	Missing []string
 	// Facts explain what supports the computed scope. They hold file and
 	// model data, so a caller sanitizes them before display.
 	Facts []string
@@ -99,6 +110,10 @@ type Plan struct {
 	// items, in item order.
 	Retarget  []store.RegionChange
 	Supersede []store.RowGuard
+	// Scoping is the request of a manual scope edit, nil for every other
+	// action. Commit plans the edit again from it, because Request does
+	// not hold the draft and the same At keeps the plan identical.
+	Scoping *ScopeRequest
 	// Write is distill.write at plan time; GateErr is its read failure.
 	Write   bool
 	GateErr error
@@ -137,6 +152,22 @@ const (
 	// reasons both end with it, so one route has one text.
 	routeByHand = "edit .seamark/lessons.yaml by hand"
 )
+
+// reasonChosen is the reason of a chosen row whose computed scope differs,
+// when the request has no ReplaceChosen. Only the console has a preview
+// that shows the replacement, so the reason names it. refuseChosen uses it
+// only when the console offers w for this row.
+const reasonChosen = "a person chose these regions, so a computed scope does not replace them here; " +
+	"review it in seamark tui, Lessons › Pins, with w"
+
+// routeChosenForm ends the reason of a chosen row when the console does
+// not offer w. The key i stays open for a linked pin in these states, so
+// the route still names a key that works.
+const routeChosenForm = "to edit the regions that a person chose, use seamark tui, Lessons › Pins, with i"
+
+// noteChoiceReplaced is the note of a ready retarget of a chosen row. It
+// names the row and the date, so the reviewer sees which choice goes.
+const noteChoiceReplaced = "p%d: this retarget replaces the regions that a person chose on %s"
 
 // reasonNotPreview is the reason of every reading that a plan does not
 // compute. A preview reads only the scope and the trigger state.
@@ -373,7 +404,7 @@ func (pl *planner) scope(n int, row model.Proposal, meta map[int64]model.Finding
 	it.Pin.Readings.Scope = ScopeReading{Known: true, Advice: advice}
 
 	for _, f := range advice.Facts {
-		if f.BlockedLine() != "" {
+		if f.BlockedLine(row.Status) != "" {
 			it.Pin.Readings.Trigger.Blocked = append(it.Pin.Readings.Trigger.Blocked, f)
 		}
 	}
@@ -384,9 +415,46 @@ func (pl *planner) scope(n int, row model.Proposal, meta map[int64]model.Finding
 	case distill.ScopeCurrent:
 		it.Status, it.Reason, it.To = ItemNoOp, reasonCurrent, advice.Regions
 	default:
+		edit := pinfile.Edit{Ref: it.Ref, Regions: advice.Regions}
+
+		// Only this branch reads the stamp, because only here a computed
+		// set can replace a choice. The other kinds keep their own lines.
+		if row.ScopeChosen > 0 && !pl.plan.Request.ReplaceChosen {
+			return pl.refuseChosen(it, row, edit)
+		}
+
 		it.To, it.Broader, it.RepoWide = advice.Regions, advice.Broader, advice.RepoWide
 		it.Facts = factLines(advice, len(living))
-		pl.add(n, pinfile.Edit{Ref: it.Ref, Regions: advice.Regions})
+		pl.add(n, edit)
+	}
+
+	return nil
+}
+
+// refuseChosen blocks a chosen row and gives a reason that names a key
+// that works. The console reads n/a on w for a pin file block and for a
+// key that another pin or row owns. So those reasons come first, and the
+// route names i. The check reads the file block first, as the console
+// does, because pinfile.Plan does not stop at a write refusal. The row
+// writes nothing, so this check plans its edit alone. A selected entry
+// then cannot change the answer, and the plan keeps no candidate of it.
+func (pl *planner) refuseChosen(it *PlanItem, row model.Proposal, e pinfile.Edit) error {
+	if pl.doc.FileBlock != "" {
+		it.Reason = textFileBlock + pl.doc.FileBlock + "; " + routeChosenForm
+
+		return nil
+	}
+
+	_, err := pinfile.Plan(pl.doc, []pinfile.Edit{e}, appliedKeys(pl.rows.applied, map[int64]bool{row.ID: true}))
+
+	refused := pinfile.EditErrors(err)
+	if err != nil && len(refused) == 0 {
+		return fmt.Errorf("maintain: plan the pin file: %w", err)
+	}
+
+	it.Reason = reasonChosen
+	if len(refused) > 0 {
+		it.Reason = refused[0].Error() + "; " + routeChosenForm
 	}
 
 	return nil
@@ -588,7 +656,7 @@ func (pl *planner) finish() {
 	}
 
 	if p.FileBlock != "" {
-		p.Blocked = append(p.Blocked, "the pin file cannot be changed: "+p.FileBlock)
+		p.Blocked = append(p.Blocked, textFileBlock+p.FileBlock)
 	}
 
 	ready := 0
@@ -622,6 +690,13 @@ func (pl *planner) notes() []string {
 			"only the region keys of each entry change; the rule, the note, the comments, and the position stay",
 			"the proposal keeps its recorded note; only its stored regions change",
 			"delivery history restarts under the new pin identity; the outcome reads untested until the pin fires again")
+
+		for _, it := range pl.plan.Items {
+			if it.Status == ItemReady && it.Rows[0].ScopeChosen > 0 {
+				notes = append(notes, fmt.Sprintf(noteChoiceReplaced, it.Rows[0].ID,
+					model.ScopeChoiceDate(it.Rows[0].ScopeChosen)))
+			}
+		}
 
 		if at := pl.deps.Probe.IndexedAt; at > 0 {
 			notes = append(notes, "scope advice reads the index built "+
@@ -671,7 +746,8 @@ func findingIDs(fs []model.Finding) []int64 {
 
 // factLines explains what supports a computed scope: each stored trigger
 // path and its state, then the evidence coverage when no trigger sets
-// the scope.
+// the scope. A plan item holds one applied row, so a blocked trigger
+// takes the words of an applied proposal.
 func factLines(advice distill.ScopeAdvice, living int) []string {
 	var (
 		lines    []string
@@ -687,8 +763,8 @@ func factLines(advice distill.ScopeAdvice, living int) []string {
 			selected = true
 			lines = append(lines, fmt.Sprintf("trigger %s changed together with the evidence in %d commit(s); "+
 				"it delivers to %s", f.Path, f.Together, f.Region))
-		case f.BlockedLine() != "":
-			lines = append(lines, f.BlockedLine())
+		case f.BlockedLine(model.ProposalApplied) != "":
+			lines = append(lines, f.BlockedLine(model.ProposalApplied))
 		default:
 			lines = append(lines, fmt.Sprintf("trigger %s is not confirmed by the evidence or the history; "+
 				"it does not set the scope", f.Path))

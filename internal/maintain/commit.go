@@ -117,6 +117,12 @@ func Commit(deps Deps, p *Plan) (Result, error) {
 		return res, errors.New("maintain: a recovery plan commits through CommitRecovery")
 	}
 
+	// A scope edit plans for this workspace. The recorded root can change
+	// after the review, so the commit refuses again.
+	if p.Action == ActionScope && deps.ForeignRoot != nil {
+		return res, deps.ForeignRoot
+	}
+
 	if err := confirmable(p); err != nil {
 		return res, err
 	}
@@ -126,7 +132,7 @@ func Commit(deps Deps, p *Plan) (Result, error) {
 		return res, fmt.Errorf("%w: no ledger writer", ErrNoLedger)
 	}
 
-	q, err := NewPlan(deps, p.Request)
+	q, err := planAgain(deps, p)
 	if err != nil {
 		return res, err
 	}
@@ -142,6 +148,21 @@ func Commit(deps Deps, p *Plan) (Result, error) {
 	commit(deps, ledger, q, &res)
 
 	return res, nil
+}
+
+// planAgain plans p again from the current observations. A scope edit
+// plans through PlanScope from its request. Every other action plans
+// through NewPlan, which refuses a scope edit.
+func planAgain(deps Deps, p *Plan) (*Plan, error) {
+	if p.Action != ActionScope {
+		return NewPlan(deps, p.Request)
+	}
+
+	if p.Scoping == nil {
+		return nil, errors.New("maintain: a scope plan has no request")
+	}
+
+	return PlanScope(deps, *p.Scoping)
 }
 
 // confirmable returns why a plan cannot be committed, or nil.
@@ -362,10 +383,22 @@ func RowsHoldPlanned(p *Plan, observed []model.Proposal) (planned, target bool) 
 		row, ok := byID[g[0].ID]
 
 		planned = planned && ok && g[0].Matches(row)
-		target = target && ok && g[1].Matches(row)
+		target = target && ok && holdsTarget(p, g[1], row)
 	}
 
 	return planned, target
+}
+
+// holdsTarget reports whether row holds the target values done. Another
+// console can save the same regions with its own time. Both stores then
+// agree and a person chose the set, so a scope edit accepts any stamp
+// above 0. A stamp of 0 means that no person chose the set.
+func holdsTarget(p *Plan, done store.RowGuard, row model.Proposal) bool {
+	if p.Action == ActionScope && row.ScopeChosen > 0 {
+		done.ScopeChosen = row.ScopeChosen
+	}
+
+	return done.Matches(row)
 }
 
 // rowsHold classifies the observed rows of a plan. The planned values
@@ -396,7 +429,7 @@ func guardPairs(q *Plan) [][2]store.RowGuard {
 
 	for _, c := range q.Retarget {
 		done := c.Guard
-		done.Region, done.Regions = c.Region, slices.Clone(c.Regions)
+		done.Region, done.Regions, done.ScopeChosen = c.Region, slices.Clone(c.Regions), c.Chosen
 		out = append(out, [2]store.RowGuard{c.Guard, done})
 	}
 
@@ -438,7 +471,10 @@ func differences(p, q *Plan) []string {
 		}
 	}
 
-	add(p.File.Exists != q.File.Exists || p.File.SHA256 != q.File.SHA256, "the pin file changed")
+	// A scope edit is pin authoring, so it also binds the file mode and
+	// the link state, as an authoring commit does.
+	add(p.File.Exists != q.File.Exists || p.File.SHA256 != q.File.SHA256 ||
+		(p.Action == ActionScope && !integration.SameGuard(p.File, q.File)), "the pin file changed")
 	add(!sameChange(p.Change, q.Change), "the planned file content changed")
 	add(p.Write != q.Write || (p.GateErr == nil) != (q.GateErr == nil), "distill.write changed")
 	add(p.FileBlock != q.FileBlock, "the pin file can no longer be changed")

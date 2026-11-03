@@ -182,7 +182,8 @@ See the [lesson guide](docs/lessons.md) for executable checks and limits.
 `seamark tui` (experimental) opens a full-screen console for one workspace:
 index state, agent integrations, evidence refresh, distillation runs that
 you can stop, proposal decisions, the installed pins with a previewed
-retarget or prune, manual pins that you create, edit, or remove, trigger
+retarget, prune, or scope edit of a linked pin, manual pins that you
+create, edit, or remove, trigger
 extraction for the proposals you select, delivery statistics, focused
 settings of `config.yaml` and `lessons.yaml` (threshold, budgets,
 repetition mode, and mutes), a selection sample that compares the

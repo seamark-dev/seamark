@@ -87,11 +87,21 @@ type TriggerFact struct {
 	Selected bool   // true when the recomputed delivery set reaches it
 }
 
+// The routes of BlockedLine. A hand edit of the regions changes the key
+// of a pin. So for an applied proposal it unlinks the pin, and the route
+// names the console key that keeps the link. Any other row has no linked
+// pin to lose.
+const (
+	blockedRouteApplied = "review the trigger or edit its regions in seamark tui, Lessons › Pins, with i"
+	blockedRouteHand    = "review the trigger or edit regions in .seamark/lessons.yaml by hand"
+)
+
 // BlockedLine renders the confirmed-but-undeliverable sentence every
 // surface prints — the plan, the ledger, and the HTML report must not
 // phrase the same fact differently. Empty for selected or unconfirmed
-// facts.
-func (f TriggerFact) BlockedLine() string {
+// facts. status is the status of the proposal row that the surface holds.
+// It selects the route, because these surfaces cannot ask the pin form.
+func (f TriggerFact) BlockedLine(status string) string {
 	if f.Selected || (!f.Direct && f.Together == 0) {
 		return ""
 	}
@@ -101,9 +111,14 @@ func (f TriggerFact) BlockedLine() string {
 		confirmation = fmt.Sprintf("confirmed by co-change (%d shared commits)", f.Together)
 	}
 
+	route := blockedRouteHand
+	if status == model.ProposalApplied {
+		route = blockedRouteApplied
+	}
+
 	return fmt.Sprintf("trigger %s — %s but not "+
 		"deliverable: the region set is full or the path is absent from the working tree; "+
-		"review the trigger or edit regions in .seamark/lessons.yaml by hand", f.Path, confirmation)
+		"%s", f.Path, confirmation, route)
 }
 
 // RecomputeRegions returns the regions today's inference assigns a

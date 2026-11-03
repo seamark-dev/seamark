@@ -163,7 +163,7 @@ type Learning interface {
 
 // Maintenance covers the installed pins of .seamark/lessons.yaml: the
 // pin read, the pin authoring, the check-definition authoring, the
-// retarget and prune maintenance, and the recovery of a partial
+// retarget, prune, and scope maintenance, and the recovery of a partial
 // operation. Lessons › Pins, its authoring forms, and its maintenance
 // modal use it.
 type Maintenance interface {
@@ -174,7 +174,11 @@ type Maintenance interface {
 	// PlanMaintenance plans a retarget or a prune of the selected pins.
 	// It writes nothing.
 	PlanMaintenance(req maintain.Request) (*maintain.Plan, error)
+	// PlanScope plans the region set that a person chose for a linked pin.
+	// It writes nothing.
+	PlanScope(req maintain.ScopeRequest) (*maintain.Plan, error)
 	// CommitMaintenance revalidates and commits exactly the reviewed plan.
+	// It also commits a scope plan of PlanScope.
 	CommitMaintenance(p *maintain.Plan) (maintain.Result, error)
 	// PlanRecovery plans the ledger-only completion of a partial
 	// maintenance operation of this session. It writes nothing.

@@ -180,8 +180,9 @@ CREATE TABLE IF NOT EXISTS proposal (
     signature  TEXT NOT NULL,
     rule       TEXT NOT NULL,
     region     TEXT NOT NULL DEFAULT '',  -- first region of regions ('' = repo-wide)
-    -- The evidence-coverage region set (JSON array, ≤3 entries), '' to
-    -- derive from region. (Migration-added on existing databases.)
+    -- The delivery region set (JSON array, ≤3 entries for a computed set,
+    -- no bound for a set that a person chose), '' to derive from region.
+    -- (Migration-added on existing databases.)
     regions    TEXT NOT NULL DEFAULT '',
     -- Validated trigger paths (JSON array), '' for none. Named by the
     -- distiller, verified by the harness; region recomputation reads
@@ -198,6 +199,17 @@ CREATE TABLE IF NOT EXISTS proposal (
     members    TEXT NOT NULL,             -- JSON array of cited finding ids
     agent      TEXT NOT NULL DEFAULT '',  -- provenance: adapter + prompt version
     status     TEXT NOT NULL DEFAULT 'proposed',
-    created_at INTEGER NOT NULL DEFAULT 0
+    created_at INTEGER NOT NULL DEFAULT 0,
+    -- The evidence kind: 'findings' for review findings, the only source
+    -- that this build creates. The finding cleanup deletes findings rows
+    -- only. (Migration-added on existing databases.)
+    source     TEXT NOT NULL DEFAULT 'findings',
+    -- The provenance document (JSON) of the source, '' for a findings
+    -- row. (Migration-added on existing databases.)
+    provenance TEXT NOT NULL DEFAULT '',
+    -- When a person chose the regions (unix seconds, 0 = no person chose
+    -- them): an inferred scope must not replace a choice without a
+    -- review. (Migration-added on existing databases.)
+    scope_chosen_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS proposal_status ON proposal (status);

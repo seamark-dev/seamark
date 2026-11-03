@@ -9,7 +9,8 @@
 //
 // The package also holds the hardening of an append-only log in such a
 // directory: the link refusal, the exclusive lock, and the rotation. The
-// policy gate audit log and the lesson-check audit stream use it.
+// policy gate audit log, the lesson-check audit stream, and the MCP usage
+// log use it.
 //
 // The package imports the standard library only. So any package can
 // import it without an import cycle. The caller passes the modes, the

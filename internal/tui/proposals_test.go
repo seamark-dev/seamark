@@ -1091,3 +1091,19 @@ func TestLessonsDistillCleanupIsNoOutsideChange(t *testing.T) {
 		})
 	}
 }
+
+func TestProposalDetailNamesTheChoiceBesideTheSuggestion(t *testing.T) {
+	chosenAt := int64(1_790_000_000)
+
+	f := newFake()
+	f.ledger = lesLedger()
+	f.ledger.Health[4] = report.ProposalHealth{Tier: "fair", Facts: "1 cited", Retarget: "internal", Chosen: chosenAt}
+
+	h := lesOpen(t, f, 120, 60)
+	h.press("f")
+
+	detail := lesFixDetail(h)
+	assert.Contains(t, detail, "today's evidence suggests internal")
+	assert.Contains(t, detail, "a person chose the stored regions on "+domain.ScopeChoiceDate(chosenAt))
+	assert.NotContains(t, detail, "--retarget")
+}

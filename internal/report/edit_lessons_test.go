@@ -280,8 +280,8 @@ func TestLessonsForFilesBudgetCountsHeldBackPinsExactly(t *testing.T) {
 	assert.Len(t, lessons, 4, "three pins and the mined lesson")
 	assert.Equal(t, 2, heldBack, "one restatement and one pin above the cap")
 
-	// A pin cap above the total cap is clamped, so the total cap never
-	// removes an uncounted pin.
+	// A pin cap above the total cap leaves the total cut as the limit.
+	// The count includes the pins of that cut, so no pin goes uncounted.
 	cfg.Pin = distinctPins("*", 10)
 
 	lessons, heldBack, err = LessonsForFilesBudget(st, cfg,

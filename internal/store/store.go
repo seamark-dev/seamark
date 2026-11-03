@@ -790,14 +790,30 @@ func (s *Store) DistilledCount() (int, error) {
 // proposalCols is the column list every proposal query selects, in
 // scanProposals order.
 const proposalCols = `id, signature, rule, region, regions, trigger_paths, trigger_checked_at,
-trigger_prompt_version, note, members, agent, status, created_at`
+trigger_prompt_version, note, members, agent, status, created_at, source, provenance,
+scope_chosen_at`
 
 // execer is the slice of database/sql shared by *sql.DB and *sql.Tx.
 type execer interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
+// insertProposal is the one insert path of the proposal table. An empty
+// source stores findings, as insertFinding does for a finding without a
+// source, so older callers and state bundles keep their meaning. The
+// stored source goes back into p with the ID, so the caller's row equals
+// the stored row. insertProposal refuses an unknown source, because the
+// finding paths filter on the closed set.
 func insertProposal(db execer, p *model.Proposal) error {
+	source := p.Source
+	if source == "" {
+		source = model.ProposalSourceFindings
+	}
+
+	if !model.ValidProposalSource(source) {
+		return fmt.Errorf("store: proposal %s has unknown source %q", p.Rule, source)
+	}
+
 	if len(p.TriggerPaths) > model.MaxTriggerPaths {
 		return fmt.Errorf("store: proposal %s has %d trigger paths; maximum is %d",
 			p.Rule, len(p.TriggerPaths), model.MaxTriggerPaths)
@@ -820,15 +836,17 @@ func insertProposal(db execer, p *model.Proposal) error {
 
 	res, err := db.Exec(
 		`INSERT INTO proposal (signature, rule, region, regions, trigger_paths, trigger_checked_at,
-		   trigger_prompt_version, note, members, agent, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		   trigger_prompt_version, note, members, agent, status, created_at, source, provenance,
+		   scope_chosen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.Signature, p.Rule, p.Region, regions, triggers, p.TriggerChecked, p.TriggerPromptVersion,
-		p.Note, string(members), p.Agent, p.Status, p.CreatedAt,
+		p.Note, string(members), p.Agent, p.Status, p.CreatedAt, source, p.Provenance, p.ScopeChosen,
 	)
 	if err != nil {
 		return fmt.Errorf("store: insert proposal %s: %w", p.Rule, err)
 	}
 
+	p.Source = source
 	p.ID, err = res.LastInsertId()
 
 	return err
@@ -892,7 +910,8 @@ func scanProposals(rows *sql.Rows) ([]model.Proposal, error) {
 
 		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &regions,
 			&triggers, &p.TriggerChecked, &p.TriggerPromptVersion,
-			&p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt)
+			&p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt, &p.Source, &p.Provenance,
+			&p.ScopeChosen)
 		if err != nil {
 			return nil, err
 		}
@@ -977,8 +996,13 @@ func (s *Store) transition(ids []int64, from, to string) (int, error) {
 // longer exists in the current grouping (its membership changed, so a
 // fresh distill of the new signature supersedes them). Applied and
 // dismissed rows are never touched — they are the decision memory.
+// Only findings rows are candidates: a row of another source has no
+// finding group, so the finding grouping says nothing about it.
 func (s *Store) PruneStaleProposals(liveSignatures map[string]bool) (int, error) {
-	rows, err := s.db.Query(`SELECT DISTINCT signature FROM proposal WHERE status = 'proposed'`)
+	rows, err := s.db.Query(
+		`SELECT DISTINCT signature FROM proposal WHERE status = 'proposed' AND source = ?`,
+		model.ProposalSourceFindings,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -1009,7 +1033,8 @@ func (s *Store) PruneStaleProposals(liveSignatures map[string]bool) (int, error)
 	marks := strings.Repeat(",?", len(stale))[1:]
 
 	res, err := s.db.Exec(
-		`DELETE FROM proposal WHERE status = 'proposed' AND signature IN (`+marks+`)`, stale...,
+		`DELETE FROM proposal WHERE status = 'proposed' AND source = ? AND signature IN (`+marks+`)`,
+		append([]any{model.ProposalSourceFindings}, stale...)...,
 	)
 	if err != nil {
 		return 0, err

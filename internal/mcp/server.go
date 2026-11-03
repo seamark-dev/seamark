@@ -47,6 +47,13 @@ type Server struct {
 	// is "" before initialize. outputResult reads it to decide on the
 	// structuredContent of change_set (contract L1).
 	protocol string
+	// client is the raw clientInfo.name of initialize. It is "" before
+	// initialize. The usage record cleans it and names only this value.
+	client string
+	// usageFailed counts the usage appends that failed in this session,
+	// and usageErr holds the last failure. Serve logs them when it ends.
+	usageFailed int
+	usageErr    error
 }
 
 // New builds a server for the workspace at root; logf receives
@@ -94,6 +101,8 @@ const (
 // rather than tearing the connection down (bufio.Scanner's fatal
 // ErrTooLong is exactly the failure mode we must not have here).
 func (s *Server) Serve(r io.Reader, w io.Writer) error {
+	defer s.logUsageFailures()
+
 	br := bufio.NewReader(r)
 
 	for {
@@ -187,7 +196,7 @@ func (s *Server) handle(req request) (any, *rpcError) {
 	case "tools/list":
 		return map[string]any{"tools": toolDefs}, nil
 	case "tools/call":
-		return s.callTool(req.Params)
+		return s.countedCall(req.Params)
 	case "resources/list":
 		return map[string]any{"resources": resourceDefs}, nil
 	case "resources/read":
@@ -204,6 +213,9 @@ func (s *Server) handle(req request) (any, *rpcError) {
 func (s *Server) initialize(params json.RawMessage) any {
 	var p struct {
 		ProtocolVersion string `json:"protocolVersion"`
+		ClientInfo      struct {
+			Name string `json:"name"`
+		} `json:"clientInfo"`
 	}
 
 	_ = json.Unmarshal(params, &p)
@@ -214,8 +226,9 @@ func (s *Server) initialize(params json.RawMessage) any {
 
 	// The server answers with the version of the client, so that version
 	// is the negotiated one. Serve handles one request at a time, so the
-	// field needs no lock.
+	// fields need no lock.
 	s.protocol = p.ProtocolVersion
+	s.client = p.ClientInfo.Name
 
 	return map[string]any{
 		// Echo the client's version: this server depends on nothing
@@ -466,6 +479,17 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 
 		out.Text[0] = text
 
+		// A client can show structuredContent in place of the text parts, and
+		// the blast radius then never reaches the agent. So the structured
+		// result repeats the first part. The key gets its value here, after
+		// withStore adds its note, because that note warns of a stale answer.
+		// The same string gives the report one renderer and one sanitizing
+		// path. A failed preparation has no structured result, so it gets no
+		// key.
+		if out.Structured != nil {
+			out.Structured["change_set_report"] = text
+		}
+
 		return out, nil
 	},
 
@@ -579,7 +603,9 @@ var changeSetText = report.ChangeSetWith
 // changeSet answers one change_set call from the open store st
 // (contract L1). content[0] is the change_set text of the P2 head, byte
 // for byte. A second text part and structuredContent carry the
-// lesson-preparation/1 result.
+// lesson-preparation/1 result. The change_set runner adds the key
+// change_set_report beside that document, because only the runner holds
+// the final content[0].
 //
 // Prepare runs first and returns the one firing record of the call, so
 // the text runs without its legacy record. The record is written only

@@ -50,7 +50,7 @@ func gatherInputs(req Request, sources gatherSources) Inputs {
 		now = time.Now
 	}
 
-	in := Inputs{Links: LinksFromApplied(req.Applied), Now: now()}
+	in := Inputs{Links: LinksFromApplied(req.Applied), Chosen: ChosenFromApplied(req.Applied), Now: now()}
 
 	maxBytes := req.Limits.MaxAuditBytes
 	if maxBytes == 0 {

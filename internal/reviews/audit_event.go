@@ -43,7 +43,8 @@ const (
 	PinInjected PinDelivery = "injected"
 	// PinReturned means change_set, prepare, or check returned the pin to its caller.
 	PinReturned PinDelivery = "returned"
-	// PinSuppressedRepeat means a delivery lease held the matched pin back as delivered.
+	// PinSuppressedRepeat means the delivered set of this receiver names the matched
+	// version. The edit hook decides before the budget, and exploration after it.
 	PinSuppressedRepeat PinDelivery = "suppressed-repeat"
 	// PinHeldBack means a budget or the restatement collapse left the matched pin out.
 	PinHeldBack PinDelivery = "held-back"
@@ -80,6 +81,13 @@ var heldBackCauses = map[string]bool{
 	CauseRestated:   true,
 	CauseOverPinCap: true,
 	CauseOverTotal:  true,
+}
+
+// KnownHeldBackCause reports whether cause is in the closed list of the
+// held-back causes. The log can hold any string, so a reader tests a stored
+// cause before it counts the cause under its name.
+func KnownHeldBackCause(cause string) bool {
+	return heldBackCauses[cause]
 }
 
 // turnDigestLabel is the first compose part of TurnDigest. The label

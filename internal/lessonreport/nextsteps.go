@@ -23,6 +23,12 @@ const (
 	NextReviewCheckMode           NextCode = "review-check-mode"
 )
 
+// hookLessonTotal is the fixed lesson total of one hook injection. It repeats
+// report.HookLessonTotal, so this package needs no import of report and its
+// store dependencies. TestSelectionBudgetsFollowTheHookBudget keeps the two
+// values equal.
+const hookLessonTotal = 8
+
 // expandCommand returns the command that prints the expansion of one pin.
 // The text overview prints it under each pin reading.
 func expandCommand(ref string) string {

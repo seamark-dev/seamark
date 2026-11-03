@@ -30,7 +30,7 @@ const (
 
 // The fixed exclude texts of the working-tree snapshot.
 var (
-	wantDefaultExcludes  = []string{"ignored files not named by --file", "writes outside this snapshot", "content inside submodules"}
+	wantDefaultExcludes  = []string{"ignored files not named by --file", "writes outside this snapshot", "content inside submodules", ownStateExclude}
 	wantExplicitExcludes = []string{"paths not named by --file", "writes outside this snapshot"}
 )
 
@@ -2356,6 +2356,7 @@ func TestLessonCheckSnapshotDigest(t *testing.T) {
 		other.Changes[0].Limitations = []string{LimitationUnmerged}
 		other.Limits = []LimitHit{{Name: LimitMaxFileBytes, Value: 1, Paths: 1}}
 		other.Selection.Description = "another text"
+		other.Selection.Excludes = []string{"another text"}
 
 		assert.Equal(t, snapshotDigest(snap), snapshotDigest(&other))
 	})

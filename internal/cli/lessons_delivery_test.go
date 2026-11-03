@@ -65,7 +65,7 @@ func TestLessonsDeliveryJSONIsDelivery1(t *testing.T) {
 	assert.Zero(t, r.Pins[0].Occurrences.Occurrences)
 	assert.Equal(t, 1, r.Pins[0].Delivery.Injected)
 	assert.Equal(t, 1, r.Totals.DeliveredRecords["hook"])
-	assert.Equal(t, "assessed feedback occurrences: one feedback item and one pin version (association key; known copies of one feedback count once)", r.Units["occurrences"])
+	assert.Equal(t, "assessed feedback occurrences: one feedback item and one pin version (association key; known copies of one feedback count once); by_origin counts each distinct origin of an occurrence once, so one occurrence can count under two origins", r.Units["occurrences"])
 	assert.Equal(t, "delivered sessions", r.Pins[0].Observation.Unit)
 	assert.Equal(t, "feedback items", r.Unlinked.Unit)
 	assert.Equal(t, 1, r.Checks.Operations["verify"])

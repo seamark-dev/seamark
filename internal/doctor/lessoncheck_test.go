@@ -3,6 +3,7 @@ package doctor
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 )
 
 // The tests of the doctor row "checks" (contract K10, "Doctor and
@@ -27,6 +29,18 @@ pin:
   - rule: frozen-assets
     region: generated/
     mode: enforce
+    check: frozen
+`
+
+// lessonCheckYAML holds one check pin with a forbid check.
+const lessonCheckYAML = `lesson_checks_version: 1
+checks:
+  frozen:
+    kind: forbid-path-change/1
+pin:
+  - rule: frozen-assets
+    region: generated/
+    mode: check
     check: frozen
 `
 
@@ -341,5 +355,93 @@ func TestDoctorLessonChecksUnreadableDocument(t *testing.T) {
 		row, ok := checksRow(t, root, dbPath)
 		require.True(t, ok)
 		assert.Contains(t, row.Detail, "claude enforce (a hook source is unreadable)")
+	})
+}
+
+// oldRelease is a release below lessoncheck.MinHandlerRelease.
+const oldRelease = "v0.8.0"
+
+// releaseSeamark builds a small program that names release the way the
+// Makefile names a release, and returns its path. The version of a hook
+// binary comes from its Go build information, and the reader of that
+// information is private to package integration. So a real binary is the
+// only way to reach this state from here. The build needs no module and
+// no network.
+func releaseSeamark(t *testing.T, release string) string {
+	t.Helper()
+
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "go.mod"), []byte("module example.com/oldseamark\n\ngo 1.21\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o600))
+
+	binary := filepath.Join(t.TempDir(), "seamark")
+
+	cmd := exec.Command("go", "build", "-o", binary,
+		"-ldflags=-X github.com/seamark-dev/seamark/internal/cli.version="+release, ".")
+	cmd.Dir = src
+	cmd.Env = append(os.Environ(), "GOFLAGS=", "GOWORK=off")
+
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	return binary
+}
+
+// TestDoctorLessonChecksOlderBinary proves what the row does with a hook
+// binary below the first release with a handler. The row warns and names
+// the rerun for every binary that is not the running one. So those two
+// facts cannot show the reading of the version, and a partial install
+// shows it. An older binary runs no handler, so a check pin stays
+// requested and the repair names its mode. A binary at the first handler
+// release serves that pin, so the repair names both modes. The status
+// block and the console name the older release, and this row does not.
+func TestDoctorLessonChecksOlderBinary(t *testing.T) {
+	older := releaseSeamark(t, oldRelease)
+	first := releaseSeamark(t, lessoncheck.MinHandlerRelease)
+
+	stubAgent(t)
+
+	t.Run("the row warns and names the rerun", func(t *testing.T) {
+		// The repository holds no pin, so the row has no other cause to warn.
+		root, dbPath := fixtureRoot(t)
+		installLessonChecks(t, root, older, integration.ClientSetup{
+			ClientID: integration.ClaudeID, LessonChecks: hooks.LessonChecksEnforce,
+		})
+
+		row, ok := checksRow(t, root, dbPath)
+		require.True(t, ok)
+		assert.Equal(t, StateWarn, row.State, "the hooks of this binary run no handler")
+		assert.Contains(t, row.Fix, "run `seamark init --client claude` with the current binary, so the hooks name it")
+	})
+
+	// partialRow returns the row of a repository with one check pin after
+	// the guard entry of an enforce install goes. The post-edit entry
+	// stays and can serve a check pin, so the version of the hook binary
+	// alone decides whether the pin is served.
+	partialRow := func(t *testing.T, binary string) Check {
+		t.Helper()
+
+		root, dbPath := fixtureRoot(t)
+		writeLessons(t, root, lessonCheckYAML)
+		installLessonChecks(t, root, binary, integration.ClientSetup{
+			ClientID: integration.ClaudeID, LessonChecks: hooks.LessonChecksEnforce,
+		})
+		dropOwnedHooks(t, root, hooks.LessonGuardMarker)
+
+		row, ok := checksRow(t, root, dbPath)
+		require.True(t, ok)
+
+		return row
+	}
+
+	t.Run("an older binary leaves the pin requested", func(t *testing.T) {
+		assert.Contains(t, partialRow(t, older).Fix,
+			"run `seamark init --client claude --lesson-checks check` to restore the missing lesson-check hook")
+	})
+
+	t.Run("a binary at the first handler release serves the pin", func(t *testing.T) {
+		assert.Contains(t, partialRow(t, first).Fix,
+			"run `seamark init --client claude --lesson-checks check` or `seamark init --client claude --lesson-checks enforce` "+
+				"to restore the missing lesson-check hook")
 	})
 }

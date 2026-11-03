@@ -629,6 +629,27 @@ func resultOfRule(t *testing.T, v lessoncheck.Verification, rule string) lessonc
 	return lessoncheck.Result{}
 }
 
+// TestCheckLessonsNamesOwnAudit proves that check --lessons shows the
+// own-state exclusion. It runs the default selection, so its text and
+// its lessons member name the audit files.
+func TestCheckLessonsNamesOwnAudit(t *testing.T) {
+	root, sentinel := checkLessonsFixture(t)
+	checkLessonsEditHandler(t, root)
+
+	stdout, _, err := runIn(t, "", "-C", root, "check", "--lessons")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "; "+ownAuditExclude+"\n")
+
+	stdout, _, err = runIn(t, "", "-C", root, "check", "--lessons", "--json")
+	require.NoError(t, err)
+
+	var lessons lessoncheck.Verification
+	require.NoError(t, json.Unmarshal(decodeCheckLessons(t, stdout).Lessons, &lessons))
+	assert.Contains(t, lessons.Selection.Excludes, ownAuditExclude)
+
+	sentinel.requireNoCall(t)
+}
+
 // TestCheckLessonsNeverInvokes proves AC-1 for check --lessons: the
 // text and JSON forms, a piped diff, and --enforce start no agent, no
 // model CLI, and no network client.
@@ -654,4 +675,40 @@ func TestCheckLessonsNeverInvokes(t *testing.T) {
 	}
 
 	sentinel.requireNoCall(t)
+}
+
+// TestCheckLessonsStaleResult proves that check --lessons keeps the
+// stale result of the verification. The policy does not block here, so
+// the combined state and the exit code come from the lessons alone.
+func TestCheckLessonsStaleResult(t *testing.T) {
+	for _, c := range staleCases {
+		t.Run(c.name, func(t *testing.T) {
+			root, sentinel := checkLessonsFixture(t)
+			c.edit(t, root)
+
+			reset := lateChange(t, root)
+
+			stdout, stderr, code := seamarkProcess(t, root, "-C", root, "check", "--lessons")
+			assert.Equal(t, c.code, code, "stdout: %s\nstderr: %s", stdout, stderr)
+			assert.Equal(t, []string{c.stderr}, checkExitLines(stderr))
+			assert.Contains(t, stdout, "\n  stale: the inputs changed after the read")
+			assert.True(t, strings.HasSuffix(stdout, combinedLine(c.combined, "pass", string(c.state))), stdout)
+
+			reset()
+
+			jsonOut, _, jsonCode := seamarkProcess(t, root, "-C", root, "check", "--lessons", "--json")
+			assert.Equal(t, c.code, jsonCode)
+
+			env := decodeCheckLessons(t, jsonOut)
+			assert.Equal(t, c.code, env.Combined.ExitCode)
+			assert.Equal(t, c.state, env.Combined.Lessons)
+
+			var v lessoncheck.Verification
+			require.NoError(t, json.Unmarshal(env.Lessons, &v))
+			assert.Equal(t, lessoncheck.FreshnessStale, v.Freshness)
+			assert.Equal(t, c.outcomes, outcomeWords(v.Results))
+
+			sentinel.requireNoCall(t)
+		})
+	}
 }

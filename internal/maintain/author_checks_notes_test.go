@@ -153,7 +153,7 @@ func TestPlanAuthorLinkedBlockerNamesNoRetargetKey(t *testing.T) {
 	require.False(t, p.Confirmable)
 
 	lines := strings.Join(blockerLines(p), "\n")
-	assert.Contains(t, lines, "only its note, mode, and check can change here")
-	assert.Contains(t, lines, "press r in Pins")
+	assert.Contains(t, lines, "a change of its regions needs the scope preview")
+	assert.NotContains(t, lines, "only its note")
 	assert.NotContains(t, lines, "Retarget")
 }

@@ -47,6 +47,7 @@ type Inputs struct {
 	Checks     *lessoncheck.Config           // nil when absent or invalid
 	Capability *lessoncheck.CapabilityReport // capability report of the pins and clients; nil reads as no inactive enforcement and no verified attribution
 	Links      map[string]int64              // pin identity digest → applied proposal ID (LinksFromApplied)
+	Chosen     map[string]int64              // pin identity digest → scope choice of the row that Links keeps; no entry for 0 (ChosenFromApplied)
 	Now        time.Time
 
 	// AuditError and CheckAuditError carry the error text of a failed
@@ -69,16 +70,45 @@ type Inputs struct {
 func LinksFromApplied(applied []model.Proposal) map[string]int64 {
 	links := make(map[string]int64, len(applied))
 
+	for identity, p := range newestApplied(applied) {
+		links[identity] = p.ID
+	}
+
+	return links
+}
+
+// ChosenFromApplied maps the identity digest of each linked pin to the
+// time that a person chose its regions. It reads the row that
+// LinksFromApplied keeps, so the link and the choice never come from two
+// rows. A stamp on an older row of one identity does not count. A row
+// with no choice has no entry. The result is never nil.
+func ChosenFromApplied(applied []model.Proposal) map[string]int64 {
+	chosen := map[string]int64{}
+
+	for identity, p := range newestApplied(applied) {
+		if p.ScopeChosen > 0 {
+			chosen[identity] = p.ScopeChosen
+		}
+	}
+
+	return chosen
+}
+
+// newestApplied returns the applied row that links each pin identity. It
+// keeps the highest ID, so the result does not depend on the list order.
+func newestApplied(applied []model.Proposal) map[string]model.Proposal {
+	rows := make(map[string]model.Proposal, len(applied))
+
 	for _, p := range applied {
 		if p.Status != model.ProposalApplied {
 			continue
 		}
 
 		identity := reviews.PinIdentityDigest(reviews.ProposalKey(p))
-		if id, ok := links[identity]; !ok || p.ID > id {
-			links[identity] = p.ID
+		if kept, ok := rows[identity]; !ok || p.ID > kept.ID {
+			rows[identity] = p
 		}
 	}
 
-	return links
+	return rows
 }

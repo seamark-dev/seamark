@@ -293,7 +293,7 @@ func TestInspectReportsBlockedTriggers(t *testing.T) {
 
 	require.Len(t, r.Trigger.Blocked, 1, "the trigger reading reuses the facts of the scope advice")
 	assert.Equal(t, "lib/gone.go", r.Trigger.Blocked[0].Path)
-	assert.NotEmpty(t, r.Trigger.Blocked[0].BlockedLine())
+	assert.NotEmpty(t, r.Trigger.Blocked[0].BlockedLine(model.ProposalApplied))
 }
 
 func TestInspectScopeNeedsAReadyIndex(t *testing.T) {

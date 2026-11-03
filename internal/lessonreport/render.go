@@ -13,7 +13,9 @@ import (
 // RenderText prints the overview or the expansion of the selected
 // identity, one version at a time. It presents existing readings and
 // suggestions. It never infers delivery, timing, or efficacy from counts.
-// Every dynamic line passes through render.Sanitize.
+// Every dynamic line passes through render.Sanitize. When the audit does not
+// read, each delivery line prints the unknown text and no count, because a
+// count there would be a zero that no record states.
 //
 // The text shows only what the audit logs give. This build reads no
 // capture archive, so the text leaves out the capture and archive state,
@@ -28,10 +30,10 @@ func RenderText(w io.Writer, report Report) error {
 	p.source("check audit", report.AsOf.CheckAudit)
 	p.line("config: %s; pins %d; guidance %s", report.AsOf.Config.State,
 		report.AsOf.Config.Pins, report.AsOf.Config.GuidanceSHA256)
-	p.line("Delivery totals (records, not corrections): %s", textCounts(report.Totals.DeliveredRecords))
-	p.line("  suppressed hook records: %d; evaluations: %d; resets: %d; events: %d; distinct preparations: %d",
-		report.Totals.SuppressedHookRecords, report.Totals.EvaluationRecords, report.Totals.ResetRecords,
-		report.Totals.Events, report.Totals.DistinctPreparations)
+
+	gap := deliveryGap(report)
+	p.totals(report.Totals, gap)
+	p.selection(report)
 
 	p.line("Units:")
 	for _, key := range slices.Sorted(maps.Keys(report.Units)) {
@@ -44,7 +46,7 @@ func RenderText(w io.Writer, report Report) error {
 		// comparison selects the expanded identity.
 		ref := shownPinRef(pin.PinRef, pin.PinIdentity)
 		if report.Expanded == nil || ref == report.Expanded.PinRef {
-			p.pin(pin, ref)
+			p.pin(pin, ref, gap)
 		}
 	}
 
@@ -76,14 +78,63 @@ func (p *textReport) source(name string, s SourceRead) {
 		name, s.State, s.Path, s.Generations, s.Bytes, s.Records, s.Legacy, s.Malformed, s.NewerSchema, s.PartialTail, s.Error)
 }
 
-// pin prints one reading under its shown pin-ref.
-func (p *textReport) pin(pin PinReading, ref string) {
+// totals prints the record totals, or gap in their place when it is not
+// empty. The suppressed line goes too, because it also counts audit records.
+func (p *textReport) totals(t Totals, gap string) {
+	if gap != "" {
+		p.line("Delivery totals (records, not corrections): %s", gap)
+
+		return
+	}
+
+	p.line("Delivery totals (records, not corrections): %s", textCounts(t.DeliveredRecords))
+	p.line("  suppressed hook records: %d; evaluations: %d; resets: %d; events: %d; distinct preparations: %d",
+		t.SuppressedHookRecords, t.EvaluationRecords, t.ResetRecords, t.Events, t.DistinctPreparations)
+}
+
+// selection prints the current budgets, the evidence reading, and the fixed
+// limit of the counts. The budgets read lessons.yaml, so they print whether
+// or not the audit reads. A report that Build did not fill holds no reading.
+func (p *textReport) selection(report Report) {
+	if report.Selection == nil {
+		return
+	}
+
+	lines := budgetLines(report.Selection.Budgets)
+	p.line("%s", lines[0])
+
+	for _, line := range lines[1:] {
+		p.line("  %s", line)
+	}
+
+	p.line("  %s", evidenceLine(report))
+	p.line("  %s", EmissionSentence)
+}
+
+// delivery prints the count lines of one reading, or one gap line in their
+// place when gap is not empty.
+func (p *textReport) delivery(d DeliveryCounts, gap string) {
+	if gap != "" {
+		p.line("    delivery records: %s", gap)
+
+		return
+	}
+
+	p.line("    %s", deliveryCountLine(d))
+
+	if split := heldBackCauseLine(d); split != "" {
+		p.line("    %s", split)
+	}
+
+	p.line("    delivered sessions: %d; legacy identity records (unversioned): %d", d.Sessions, d.LegacyIdentityRecords)
+}
+
+// pin prints one reading under its shown pin-ref. A gap that is not empty
+// replaces the delivery counts.
+func (p *textReport) pin(pin PinReading, ref, gap string) {
 	p.line("  pin %s; version %s; mode %s; rule: %s", ref, pin.PinVersion, pin.Mode, pin.Rule)
 	p.line("    scope: %s", strings.Join(pin.Scope, ", "))
-	p.line("    delivery records: %s; injected %d; suppressed-repeat %d; held-back %d; emit-failed %d; returned %d",
-		textCounts(pin.Delivery.Records), pin.Delivery.Injected, pin.Delivery.SuppressedRepeat,
-		pin.Delivery.HeldBack, pin.Delivery.EmitFailed, pin.Delivery.Returned)
-	p.line("    delivered sessions: %d; legacy identity records (unversioned): %d", pin.Delivery.Sessions, pin.Delivery.LegacyIdentityRecords)
+	p.delivery(pin.Delivery, gap)
 	p.line("    check pin evaluations: %d; outcomes: %s; requested denies (guard attempts): %d",
 		pin.Checks.PinEvaluations, textCounts(pin.Checks.Outcomes), pin.Checks.RequestedDenies)
 

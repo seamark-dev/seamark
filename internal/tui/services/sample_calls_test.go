@@ -38,6 +38,7 @@ var sampleBannedCalls = []string{
 	"internal/report.CheckAdvisory",
 	"internal/reviews.RecordFiring*",
 	"internal/reviews.BeginContextDelivery",
+	"internal/reviews.OpenContextDelivery",
 	"internal/store.Open",
 	"internal/index.*",
 	servicesPath + ".engine.openWrite",

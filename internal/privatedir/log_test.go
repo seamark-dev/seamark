@@ -300,3 +300,39 @@ func TestPrivateDirRotateLogFirstLine(t *testing.T) {
 		})
 	}
 }
+
+// TestPrivateDirRotateLogFieldReadsTheNamedField holds the name of the
+// time field. A log that names another field must age by its own field,
+// or each append sees a first record without a time and rotates.
+func TestPrivateDirRotateLogFieldReadsTheNamedField(t *testing.T) {
+	const noSizeLimit = 1 << 30
+
+	wall := time.Now()
+	young := wall.UTC().Format(time.RFC3339)
+	old := wall.Add(-2 * testMaxAge).UTC().Format(time.RFC3339)
+
+	for _, tc := range []struct {
+		name    string
+		body    string
+		rotates bool
+	}{
+		{name: "a young record stays", body: `{"at":"` + young + `"}` + "\n", rotates: false},
+		{name: "an old record rotates", body: `{"at":"` + old + `"}` + "\n", rotates: true},
+		{name: "another field gives no time", body: `{"ts":"` + young + `"}` + "\n", rotates: true},
+		{name: "a value that is no time rotates", body: `{"at":"soon"}` + "\n", rotates: true},
+		{name: "a zero time rotates", body: `{"at":"0001-01-01T00:00:00Z"}` + "\n", rotates: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeLog(t, tc.body)
+
+			require.NoError(t, privatedir.RotateLogField(path, "at", noSizeLimit, testMaxAge, 0o600, wall))
+
+			if tc.rotates {
+				assert.FileExists(t, path+".1")
+				return
+			}
+
+			assert.NoFileExists(t, path+".1")
+		})
+	}
+}

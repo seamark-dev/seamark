@@ -61,6 +61,40 @@ func TestPendingProposalsOutsideListsWhatThePruneDeletes(t *testing.T) {
 	assert.Equal(t, len(listed), pruned)
 }
 
+// TestFindingCleanupKeepsARowOfAnotherSource proves that the plan, the
+// delete, and the prune of the finding cleanup act on findings rows only.
+// The raw insert skips insertProposal, so the row can hold a source that
+// insertProposal refuses.
+func TestFindingCleanupKeepsARowOfAnotherSource(t *testing.T) {
+	s := openTestStore(t)
+
+	stale := pendingProposal(t, s, "gone", "stale", model.ProposalProposed)
+
+	res, err := s.db.Exec(`INSERT INTO proposal (signature, rule, note, members, status, source)
+		VALUES ('gone', 'other-row', 'n', '[]', ?, 'other')`, model.ProposalProposed)
+	require.NoError(t, err)
+
+	otherID, err := res.LastInsertId()
+	require.NoError(t, err)
+
+	live := map[string]bool{}
+
+	listed, err := s.PendingProposalsOutside(live)
+	require.NoError(t, err)
+	require.Len(t, listed, 1, "the plan lists findings rows only")
+	assert.Equal(t, stale.ID, listed[0].ID)
+
+	deleted, err := s.DeletePendingProposals([]int64{stale.ID, otherID})
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted, "a listed row of another source stays")
+
+	pruned, err := s.PruneStaleProposals(live)
+	require.NoError(t, err)
+	assert.Zero(t, pruned, "the prune never deletes a row of another source")
+
+	assert.Equal(t, []string{"other-row"}, pendingRules(t, s, model.ProposalProposed))
+}
+
 func TestPendingProposalsOutsideWorksReadOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.db")
 

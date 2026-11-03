@@ -23,13 +23,16 @@ var ErrAlreadyDistilled = errors.New("the evidence group is already distilled")
 // limits their number, and the other IN-list readers use the same size.
 const pendingChunk = 500
 
-// PendingProposalsOutside returns the pending proposals whose signature
-// is not in live, in ID order. It is the read-only half of
+// PendingProposalsOutside returns the pending findings proposals whose
+// signature is not in live, in ID order. It is the read-only half of
 // PruneStaleProposals: a plan lists these rows, so the operator sees
-// the cleanup before any row is deleted. It writes nothing.
+// the cleanup before any row is deleted. It writes nothing. A row of
+// another source is never listed, because the finding grouping does not
+// produce its signature.
 func (s *Store) PendingProposalsOutside(live map[string]bool) ([]model.Proposal, error) {
 	rows, err := s.db.Query(
-		`SELECT ` + proposalCols + ` FROM proposal WHERE status = 'proposed' ORDER BY id`,
+		`SELECT `+proposalCols+` FROM proposal WHERE status = 'proposed' AND source = ? ORDER BY id`,
+		model.ProposalSourceFindings,
 	)
 	if err != nil {
 		return nil, err
@@ -52,11 +55,13 @@ func (s *Store) PendingProposalsOutside(live map[string]bool) ([]model.Proposal,
 	return out, nil
 }
 
-// DeletePendingProposals deletes the listed proposals that are still
-// pending and reports how many it deleted. A decided row stays, because
-// a decision is memory. A row that another writer created after the plan
-// is not in the list, so it stays too. All deletes share one
-// transaction, so a failure removes nothing.
+// DeletePendingProposals deletes the listed findings proposals that are
+// still pending and reports how many it deleted. A decided row stays,
+// because a decision is memory. A row that another writer created after
+// the plan is not in the list, so it stays too. A row of another source
+// stays also when a caller lists it, because only the finding cleanup
+// calls this. All deletes share one transaction, so a failure removes
+// nothing.
 func (s *Store) DeletePendingProposals(ids []int64) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -75,8 +80,8 @@ func (s *Store) DeletePendingProposals(ids []int64) (int, error) {
 		marks := strings.Repeat(",?", len(chunk))[1:]
 
 		res, err := tx.Exec(
-			`DELETE FROM proposal WHERE status = 'proposed' AND id IN (`+marks+`)`,
-			int64Args(chunk)...,
+			`DELETE FROM proposal WHERE status = 'proposed' AND source = ? AND id IN (`+marks+`)`,
+			append([]any{model.ProposalSourceFindings}, int64Args(chunk)...)...,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("store: delete pending proposals: %w", err)

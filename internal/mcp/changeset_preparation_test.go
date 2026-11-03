@@ -310,22 +310,42 @@ func initializeLine(version string) string {
 		`","capabilities":{},"clientInfo":{"name":"test"}}}`
 }
 
-// structuredPreparation decodes the structuredContent of a change_set
-// result. It requires exactly the key lesson_preparation.
-func structuredPreparation(t *testing.T, res toolParts) delivery.Preparation {
+// structuredKeys decodes the structuredContent of a change_set result.
+// It requires exactly the keys lesson_preparation and change_set_report.
+func structuredKeys(t *testing.T, res toolParts) map[string]json.RawMessage {
 	t.Helper()
 
 	require.NotEmpty(t, res.StructuredContent, "the result holds structuredContent")
 
 	var structured map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(res.StructuredContent, &structured))
-	require.Len(t, structured, 1, "structuredContent holds one key")
+	require.Len(t, structured, 2, "structuredContent holds two keys")
 	require.Contains(t, structured, "lesson_preparation")
+	require.Contains(t, structured, "change_set_report")
+
+	return structured
+}
+
+// structuredPreparation decodes the lesson_preparation key of a
+// change_set result.
+func structuredPreparation(t *testing.T, res toolParts) delivery.Preparation {
+	t.Helper()
 
 	var p delivery.Preparation
-	require.NoError(t, json.Unmarshal(structured["lesson_preparation"], &p))
+	require.NoError(t, json.Unmarshal(structuredKeys(t, res)["lesson_preparation"], &p))
 
 	return p
+}
+
+// structuredReport decodes the change_set_report key of a change_set
+// result.
+func structuredReport(t *testing.T, res toolParts) string {
+	t.Helper()
+
+	var text string
+	require.NoError(t, json.Unmarshal(structuredKeys(t, res)["change_set_report"], &text))
+
+	return text
 }
 
 // supplementOf renders p in the supplement form, which is the second
@@ -537,6 +557,177 @@ func TestChangeSetPreparationAddsSupplementAndStructuredContent(t *testing.T) {
 		assert.Contains(t, res.Content[1].Text, "checks (every check in scope; no budget applies)")
 		assert.Contains(t, res.Content[1].Text, p.Checks[0].Predicate)
 		assert.NotContains(t, res.Content[1].Text, "Change the docs only in a release.")
+	})
+}
+
+// TestChangeSetPreparationRepeatsTheReportInStructuredContent proves the
+// change_set_report key. A client can show structuredContent in place of
+// the text parts, so the key carries the report of the first text part.
+// The key equals that part byte for byte, and it sits beside the
+// preparation document, because lesson-preparation/1 does not change. An
+// older session gets no key. TestChangeSetPreparationSurvivesAPrepareFailure
+// proves the failed state, which has no structured result at all.
+func TestChangeSetPreparationRepeatsTheReportInStructuredContent(t *testing.T) {
+	root := changeSetPrepFixture(t)
+
+	t.Run("the key equals the first text part", func(t *testing.T) {
+		cases := []struct {
+			name  string
+			files []string
+		}{
+			{name: "a pinned path", files: []string{"internal/parse/strict.go"}},
+			{name: "a path without pins", files: []string{"store.go"}},
+			{name: "a new path", files: []string{"docs/new.md"}},
+			{name: "a rejected path", files: []string{"store.go", filepath.Join(t.TempDir(), "outside.go")}},
+			{name: "two paths", files: []string{"internal/parse/strict.go", "store.go"}},
+
+			// The report sanitizes the name that the client sends. The key
+			// must hold the sanitized text, not the raw request.
+			{name: "a path with an escape byte", files: []string{"docs/new\x1b[2J.md"}},
+		}
+
+		for _, version := range []string{"2025-06-18", "2025-11-25"} {
+			requests := []string{initializeLine(version)}
+
+			for i, c := range cases {
+				requests = append(requests, changeSetCall(t, i+1, c.files...))
+			}
+
+			resps := serve(t, root, requests...)
+
+			for i, c := range cases {
+				res := decodeToolParts(t, resps[strconv.Itoa(i+1)])
+				assert.False(t, res.IsError, c.name)
+
+				text := structuredReport(t, res)
+				assert.NotEmpty(t, text, c.name)
+				assert.Equal(t, res.Content[0].Text, text, c.name)
+				assert.NotContains(t, text, "\x1b", c.name)
+			}
+		}
+	})
+
+	t.Run("the preparation document does not hold the key", func(t *testing.T) {
+		resps := serve(t, root, initializeLine("2025-06-18"), changeSetCall(t, 1, "internal/parse/strict.go"))
+
+		var document map[string]json.RawMessage
+
+		structured := structuredKeys(t, decodeToolParts(t, resps["1"]))
+		require.NoError(t, json.Unmarshal(structured["lesson_preparation"], &document))
+		assert.Contains(t, document, "schema")
+		assert.NotContains(t, document, "change_set_report")
+	})
+
+	t.Run("a session before 2025-06-18 gets no key", func(t *testing.T) {
+		for name, requests := range map[string][]string{
+			"2025-03-26":    {initializeLine("2025-03-26"), changeSetCall(t, 1, "internal/parse/strict.go")},
+			"no initialize": {changeSetCall(t, 1, "internal/parse/strict.go")},
+		} {
+			resps := serve(t, root, requests...)
+
+			res := decodeToolParts(t, resps["1"])
+			assert.Empty(t, res.StructuredContent, name)
+			assert.NotContains(t, string(resps["1"].Result), "change_set_report", name)
+		}
+	})
+}
+
+// breakRefresh writes a configuration that does not decode. Each later
+// refresh of root then fails, and the answers come from the existing
+// index.
+func breakRefresh(t *testing.T, root string) {
+	t.Helper()
+
+	fixtureWrite(t, root, filepath.Join(store.DefaultDir, "config.yaml"), "index: [\n")
+}
+
+// TestChangeSetPreparationRepeatsTheRefreshNote proves the
+// change_set_report key after a failed refresh. withStore opens
+// content[0] with a note that says the answer can be stale. The log does
+// not reach the agent, so a client that shows only structuredContent gets
+// this warning from the key or not at all.
+func TestChangeSetPreparationRepeatsTheRefreshNote(t *testing.T) {
+	const pinned, plain = "internal/parse/strict.go", "store.go"
+
+	assertNoted := func(t *testing.T, res toolParts, note string) {
+		t.Helper()
+
+		text := res.Content[0].Text
+
+		assert.False(t, res.IsError, text)
+		assert.True(t, strings.HasPrefix(text, note), text)
+		assert.Equal(t, 1, strings.Count(text, note), "the report names the note once")
+		assert.Equal(t, text, structuredReport(t, res), "the key equals content[0]")
+	}
+
+	t.Run("a refresh that fails", func(t *testing.T) {
+		root := changeSetPrepFixture(t)
+		requests := []string{initializeLine("2025-06-18"), changeSetCall(t, 1, pinned), changeSetCall(t, 2, plain)}
+
+		// The call before the break gives the text without the note.
+		clean := serve(t, root, requests...)
+
+		breakRefresh(t, root)
+
+		noted := serve(t, root, requests...)
+
+		for _, id := range []string{"1", "2"} {
+			res := decodeToolParts(t, noted[id])
+
+			assertNoted(t, res, brokenNote)
+			assert.Equal(t, brokenNote+decodeToolParts(t, clean[id]).Content[0].Text, res.Content[0].Text,
+				"content[0] gains only the note")
+		}
+	})
+
+	t.Run("a refused move of another root", func(t *testing.T) {
+		_, other, dbPath := rootMoveFixture(t)
+
+		resps := serveDB(t, other, dbPath, t.Logf, initializeLine("2025-06-18"), changeSetCall(t, 1, "a.go"))
+
+		assertNoted(t, decodeToolParts(t, resps["1"]), staleNote)
+	})
+
+	t.Run("a linked worktree after an edit", func(t *testing.T) {
+		_, tree := rootMoveLinked(t, true)
+
+		rootMoveEdit(t, tree)
+
+		resps := serveDB(t, tree, store.DefaultPath(tree), t.Logf, initializeLine("2025-06-18"), changeSetCall(t, 1, "a.go"))
+
+		assertNoted(t, decodeToolParts(t, resps["1"]), staleNote)
+	})
+
+	t.Run("a session before 2025-06-18 gets the note and no key", func(t *testing.T) {
+		root := changeSetPrepFixture(t)
+
+		serve(t, root, changeSetCall(t, 1, pinned))
+		breakRefresh(t, root)
+
+		resps := serve(t, root, initializeLine("2025-03-26"), changeSetCall(t, 1, pinned))
+
+		res := decodeToolParts(t, resps["1"])
+		assert.True(t, strings.HasPrefix(res.Content[0].Text, brokenNote), res.Content[0].Text)
+		assert.Empty(t, res.StructuredContent)
+		assert.NotContains(t, string(resps["1"].Result), "change_set_report")
+	})
+
+	// A failed preparation has no structured result. So the key has no
+	// map to go in, and the text parts carry the note.
+	t.Run("a failed preparation gets the note and no structured result", func(t *testing.T) {
+		root := changeSetPrepFixture(t)
+
+		serve(t, root, changeSetCall(t, 1, pinned))
+		breakRefresh(t, root)
+		failPreparation(t, errors.New("select lessons: disk I/O error"))
+
+		resps := serve(t, root, initializeLine("2025-06-18"), changeSetCall(t, 1, pinned))
+
+		res := decodeToolParts(t, resps["1"])
+		assert.False(t, res.IsError, "a failed preparation never fails change_set")
+		require.Len(t, res.Content, 2)
+		assert.True(t, strings.HasPrefix(res.Content[0].Text, brokenNote), res.Content[0].Text)
+		assert.Empty(t, res.StructuredContent)
 	})
 }
 

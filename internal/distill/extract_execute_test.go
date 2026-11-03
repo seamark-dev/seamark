@@ -1149,3 +1149,19 @@ func TestExtractStatusStrings(t *testing.T) {
 		[]string{ExtractBatchStarted.String(), ExtractBatchDone.String(), ExtractStopped.String(),
 			ExtractEventKind(3).String()})
 }
+
+func TestExtractCountsTheChosenRowsApart(t *testing.T) {
+	var (
+		x   ExtractExecution
+		res ExtractResult
+	)
+
+	for _, chosen := range []int64{0, 1_790_000_000} {
+		x.tallyItem(&res, ExtractItemOutcome{
+			Proposal: model.Proposal{ID: 1, Status: model.ProposalApplied, ScopeChosen: chosen}, Status: ExtractStored,
+		})
+	}
+
+	assert.Equal(t, 2, res.AppliedStored)
+	assert.Equal(t, 1, res.AppliedChosen, "--retarget refuses a chosen row, so the summary names the console")
+}

@@ -770,7 +770,12 @@ func (p *propView) advisoryLines(pr domain.Proposal, l *proposals.Ledger, w int)
 	}
 
 	if h.Retarget != "" {
-		rows = append(rows, [2]string{"Regions now", "today's evidence suggests " + ui.OneLine(h.Retarget)})
+		v := "today's evidence suggests " + ui.OneLine(h.Retarget)
+		if h.Chosen > 0 {
+			v += "; a person chose the stored regions on " + domain.ScopeChoiceDate(h.Chosen)
+		}
+
+		rows = append(rows, [2]string{"Regions now", v})
 	}
 
 	if h.Scope != "" {

@@ -673,6 +673,35 @@ func TestDeliverNamesTheVersionThatTheLeaseSent(t *testing.T) {
 	})
 }
 
+// TestDeliverRecordsAVersionThatRepeatsInsideTheEvent holds one line of the
+// audit table. The rule has no Latin letter, so the collapse keeps both
+// entries, and only the lease can drop the second one. The pin went out once,
+// so the record must not name it injected twice.
+func TestDeliverRecordsAVersionThatRepeatsInsideTheEvent(t *testing.T) {
+	const advised = "  - {rule: 'границы', region: api, note: 'Проверяйте вход.'}\n"
+
+	root := workspace(t)
+	st := lessonStore(t, root)
+	cfg := writeConfig(t, root, "hook_delivery: once-per-context\npin:\n"+advised+advised)
+	require.Equal(t, cfg.PinVersion(cfg.Pin[0]), cfg.PinVersion(cfg.Pin[1]))
+
+	var got capture
+
+	req := claudeRequest(root, cfg, claudeEvent(root, "session-1", "", "m1", "prompt-1", "api/handler.go"))
+
+	out, err := Deliver(context.Background(), st, req, got.emit)
+	require.NoError(t, err)
+	require.Equal(t, StatusEmitted, out.Status)
+	assert.Equal(t, 1, out.Suppressed)
+
+	records := firings(t, root)
+	require.Len(t, records, 2)
+	assert.Equal(t, []reviews.FiringPin{
+		pinOf(cfg, cfg.Pin[0], reviews.PinInjected, ""),
+		pinOf(cfg, cfg.Pin[1], reviews.PinSuppressedRepeat, ""),
+	}, records[0].Pins)
+}
+
 func TestPinDeliveriesWalksByVersion(t *testing.T) {
 	const (
 		sent     = reviews.PinInjected

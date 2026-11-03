@@ -17,6 +17,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
+	"github.com/seamark-dev/seamark/internal/mcpusage"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/redact"
@@ -139,7 +140,9 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    --proposals ledger names the candidates). Changes
                    only the region keys of the entry, in place, and the
                    ledger with them; write-gated like --apply, else
-                   prints the change to make by hand.
+                   prints the change to make by hand. Refuses a pin
+                   whose regions a person chose when the computed scope
+                   differs: review that pin in seamark tui.
   --confirm-checks with --retarget: move the regions of a pin with mode
                    check or enforce. Without it, such a retarget prints
                    the checker impact and changes nothing.
@@ -797,7 +800,7 @@ func planAnnotations(st *store.Store, lcfg *reviews.Config, root string,
 				default:
 					// Confirmed but blocked — the shared sentence, so
 					// the ledger and report cannot disagree.
-					notes[p.ID] = append(notes[p.ID], f.BlockedLine())
+					notes[p.ID] = append(notes[p.ID], f.BlockedLine(p.Status))
 					missed[p.ID] = true
 				}
 			}
@@ -990,11 +993,25 @@ func runLessonsExtractTriggers(cmd *cobra.Command, opts *options, dryRun bool) e
 	fmt.Fprintf(out, "; ~%s tokens %s / ~%s back\n", res.TokensSent(), verb, res.TokensBack())
 
 	if res.AppliedStored > 0 {
-		fmt.Fprintln(out, "applied pins with new triggers show their current delivery scopes in "+
-			"`lessons --proposals`; `--retarget` applies them")
+		fmt.Fprintln(out, appliedTriggersHint(res.AppliedChosen))
 	}
 
 	return nil
+}
+
+// appliedTriggersHint returns the tail of an extraction that stored
+// triggers on applied pins. chosen counts the rows whose regions a person
+// chose. `--retarget` refuses those rows, so the tail then names the
+// console too.
+func appliedTriggersHint(chosen int) string {
+	const hint = "applied pins with new triggers show their current delivery scopes in " +
+		"`lessons --proposals`; `--retarget` applies them"
+
+	if chosen == 0 {
+		return hint
+	}
+
+	return hint + ", except a pin whose regions a person chose: review that pin in `seamark tui`, Lessons › Pins"
 }
 
 // printPreflight renders the pre-invocation disclosure: what would be
@@ -1253,7 +1270,27 @@ func runLessonsStats(cmd *cobra.Command, opts *options) error {
 	// The command keeps its own order, newest first.
 	report.PrintOutcomes(cmd.OutOrStdout(), lessonstats.NewestFirst(snap.Applied), snap.Readings)
 
+	// This read stays outside Gather, because the console and the hooks
+	// have no use for it. An unreadable usage log prints as unknown and
+	// does not fail the command, because the sections above are complete.
+	report.PrintToolUsage(cmd.OutOrStdout(), readToolUsage(opts))
+
 	return nil
+}
+
+// readToolUsage reads the usage log that `seamark mcp` writes with the
+// same flags. The server writes under the root of workspace.Locate. The
+// root of openIndex is the recorded root, which can name another checkout
+// or a directory that no longer exists.
+func readToolUsage(opts *options) mcpusage.Report {
+	ws, err := workspace.Locate(opts.workspace, opts.dbPath)
+	if err != nil {
+		// Present makes the section print, so a failure reads as unknown
+		// and not as a workspace without a usage log.
+		return mcpusage.Report{Present: true, Err: err}
+	}
+
+	return mcpusage.Read(ws.Root)
 }
 
 // lessonsForFile normalizes path to repo-relative and returns the

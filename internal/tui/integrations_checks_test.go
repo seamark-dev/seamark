@@ -261,3 +261,69 @@ func TestTUIOverviewUnchangedWithoutLessonChecks(t *testing.T) {
 		assert.NotContains(t, strings.ToLower(joinedOverview), "lesson check")
 	}
 }
+
+// binaryReport joins checkLessonsYAML with one guard path of Claude Code
+// whose hook binary has the given state. It uses the real join, so the
+// reasons are the reasons that an inspection of that binary gives. Each
+// state keeps its other-binary reason beside the specific one.
+func binaryReport(t *testing.T, state, version string) lessoncheck.CapabilityReport {
+	t.Helper()
+
+	cfg, errs, err := lessoncheck.Parse([]byte(checkLessonsYAML))
+	require.NoError(t, err)
+
+	return lessoncheck.CapabilityReportOf(cfg, errs, []lessoncheck.InstalledPath{{
+		Client: integration.ClaudeID, Tool: "Edit", Stage: lessoncheck.StagePreWrite, Context: lessoncheck.ContextRoot,
+		Installed: true, Marker: lessoncheck.MarkerGuard, BinaryState: state, BinaryVersion: version,
+		Verification: lessoncheck.CapVerification{Level: "unverified"},
+	}}, nil)
+}
+
+// TestTUILessonChecksBinaryWords proves that the section names each state
+// of the hook binary in its own words. A hook binary that is not this one
+// keeps the path from its handler, so the words tell the reader why a
+// requested pin stays inactive. Each state carries other-binary, so a
+// lost case falls through to the words of another state.
+func TestTUILessonChecksBinaryWords(t *testing.T) {
+	cases := []struct {
+		name, state, version string
+		path, binary         string
+	}{
+		{
+			name: "an older binary", state: lessoncheck.BinaryOld, version: "v0.8.0",
+			path:   "pre-write Edit in root: inactive (capability-version-old, ",
+			binary: "Binary v0.8.0 · older than " + lessoncheck.MinHandlerRelease + ": it has no lesson-check handler",
+		},
+		{
+			name: "a missing binary", state: lessoncheck.BinaryMissing,
+			path:   "pre-write Edit in root: inactive (binary-missing, ",
+			binary: "Binary missing: the hook names no executable file",
+		},
+		{
+			name: "a binary without a readable version", state: lessoncheck.BinaryUnknown,
+			path:   "pre-write Edit in root: inactive (capability-unknown, ",
+			binary: "Binary version unknown: another binary",
+		},
+		{
+			name: "a release at or above the first handler", state: lessoncheck.BinaryOther, version: "v0.10.0",
+			path:   "pre-write Edit in root: active-unverified (",
+			binary: "Binary v0.10.0 · another seamark binary",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFake()
+			f.integrations = integMatrix()
+			f.lessonCapability = binaryReport(t, c.state, c.version)
+
+			h := newHarness(t, f, 160, 50)
+			h.press("2")
+
+			claude := lessonDetailText(t, h, integration.ClaudeID)
+			assert.Contains(t, claude, c.path)
+			assert.Contains(t, claude, c.binary)
+			assert.NotContains(t, claude, "this seamark binary")
+		})
+	}
+}

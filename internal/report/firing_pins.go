@@ -61,9 +61,11 @@ func GuidanceOf(root string, cfg *reviews.Config, loadErr error) (digest, status
 //
 // The pins that the fold left out are held back with their cause:
 // Restated is restated, OverPinCap is over-pin-cap, and OverTotal is
-// over-total. Mined lessons have no pin identity, so the result never
-// holds them. cfg must be the config of the selection, else a pin has
-// no entry and goes after the pins with an entry.
+// over-total. An AlreadyDelivered pin is suppressed-repeat with no cause,
+// because the budget did not remove it. Mined lessons have no pin
+// identity, so the result never holds them. cfg must be the config of
+// the selection, else a pin has no entry and goes after the pins with an
+// entry.
 func (s Selection) FiringPins(cfg *reviews.Config, selected []reviews.PinDelivery) []reviews.FiringPin {
 	type entryPin struct {
 		entry int
@@ -91,6 +93,10 @@ func (s Selection) FiringPins(cfg *reviews.Config, selected []reviews.PinDeliver
 		}
 
 		add(sp, delivery, "")
+	}
+
+	for _, sp := range s.AlreadyDelivered {
+		add(sp, reviews.PinSuppressedRepeat, "")
 	}
 
 	for _, held := range []struct {

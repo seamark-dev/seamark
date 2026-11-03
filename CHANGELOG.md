@@ -30,9 +30,27 @@ model-boundary delivery.
   reads no capture archive: the text leaves out the sections that need
   one, and the JSON keeps those fields with fixed values. Current native
   evidence keeps prevention at zero.
+- **Selection reading.** `lessons --delivery` shows requested and
+  effective budgets and splits held-back records by surface and cause. A
+  hook record now reads `over-total`, not `over-pin-cap`, when
+  `pin_budget` is at or above the fixed total. An unread audit prints
+  `unknown`, not a zero count.
+- **A later edit reaches the next pin.** Under `hook_delivery:
+  once-per-context` in the main Claude Code conversation, a pin that the
+  context already has leaves the selection before the budget, so the edit
+  hook emits the next pin on a later matching edit. No native recording
+  covers this. Such a pin now reads `suppressed-repeat`, not `held-back`,
+  and `lessons --stats` counts it as a match. Every other receiver and the
+  exploration hook select as before.
 - **Console controls.** Pins can edit mode/check on linked pins,
   author check definitions (`M`), and verify (`V`). Read-only browsing
   never applies a decision.
+- **Scope edit of a linked pin.** `i` in Pins now edits the regions of
+  a linked pin through a preview that writes one region set to the pin
+  file and to the ledger. The row records that a person chose the set
+  and the date. A computed scope then reads as a suggestion: only a
+  console preview replaces the choice, and `lessons --retarget` refuses
+  it and names the console. No command makes this edit.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.
@@ -49,6 +67,8 @@ model-boundary delivery.
   `check` tool stop on any failed refresh, and MCP reads carry a one-line
   note. A relative `--db` names the file that the system opens, also
   behind a link.
+- **Verification names its own exclusions.** The `not covered` line of a
+  default selection now names Seamark's own lesson-check audit files.
 - **Refusals name one route that runs.** A route never writes two
   repositories or applies another proposal. A custom file of a copy
   routes to `seamark index --move-root --db <file>` in that copy, a file
@@ -80,6 +100,28 @@ model-boundary delivery.
   `unreadable`, as doctor does, not `off`.
 - **Retarget route.** A linked pin names `w` Retarget only while `w`
   works; otherwise Pins gives the reason and a next action.
+- **`change_set` keeps its report in every client.** A client that shows
+  `structuredContent` in place of the text parts lost the blast radius.
+  `structuredContent` now repeats the first text part under
+  `change_set_report`; the text parts and `lesson-preparation/1` do not
+  change.
+- **MCP tool usage in `lessons --stats`.** The MCP server counts each
+  tool call in the local `.seamark/mcp-usage.jsonl`, with no argument, and
+  `lessons --stats` prints calls, failures, latency, and reply size.
+
+Upgrade note: the database upgrades to schema 8 in place on first open
+(the scope choice of a proposal), and state bundles move to version 4.
+An older binary then refuses the upgraded database and a bundle of
+version 4 — the versioning contract. That covers a build of schema 7 and
+state version 3 as well as v0.8.0, which has schema 6 and state version
+2. The installed hooks move with the binary. A new binary still reads
+every older bundle, and a row of such a bundle records no scope choice.
+An export of the new binary is no way back, so make a backup before you
+replace the binary: a copy of `.seamark/index.db` with any `-wal` and
+`-shm` file, or `seamark state export` run by the older binary. Decisions
+after that backup do not return, and `.seamark/lessons.yaml` goes back
+from git with it. See
+[Going back to an older seamark](docs/configuration.md#going-back-to-an-older-seamark).
 
 See [current capability states](docs/STATUS.md#unreleased--lesson-checks-and-lesson-delivery)
 and the [lesson guide](docs/lessons.md) for limits and commands.

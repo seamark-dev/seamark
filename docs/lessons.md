@@ -180,6 +180,25 @@ again. After upgrading Seamark, run init once to install or refresh the hooks.
 Configuration is then read on every hook invocation, so switching modes does
 not require re-running init.
 
+A pin that the receiving context already has leaves the selection before the
+budget. It takes no slot, so a later matching edit reaches the next pin. With
+`pin_budget: 3` and four matching pins of equal rank, the first edit sends
+three pins and `+1 more`, the second edit sends the fourth pin, and the third
+edit sends nothing. After a reset the pins go out again from the top. Here
+"reaches" means that the hook emitted the pin. No native recording covers this
+case, and an emitted pin does not show that a model read it.
+
+This holds only for a receiver that can reset, with usable state: today the
+main Claude Code conversation under `once-per-context`. Under `always`, in a
+subagent, on Codex, and when the state fails open, the budget applies to every
+matching pin, so the same edit sends the same first pins each time. A pin that
+restates a delivered pin stays held back, because the restatement collapse
+runs first and ignores what the context has. The exploration hook applies the
+budget before its repeat state, so a read does not move to the next pin.
+Mined lessons have no version, so this step leaves them alone. They use the
+room that pins leave, and the repeat check of a mined lesson runs after the
+budget, so a delivered mined lesson can still hold a slot.
+
 The optimization is deliberately fail-open: missing session identity, corrupt
 local state, or a state-lock failure causes normal injection rather than
 silently hiding a lesson. Only repository-scoped digests of the receiving
@@ -400,7 +419,7 @@ the run sends no further batch, and re-running resumes.
 Pending proposals adopt their verified trigger scopes in place; applied pins
 only store the triggers and surface a `regions now:` drift line —
 delivery of an installed pin never changes without an explicit
-`--retarget`. Hand-pruned pins are skipped: there is no delivery to
+`--retarget` or a scope edit in the console. Hand-pruned pins are skipped: there is no delivery to
 retarget. When the note itself names a real outside path and co-change
 agrees, the ledger additionally flags the pin — `delivery may miss the
 trigger: …` — with a tail block naming every flagged id.
@@ -449,6 +468,31 @@ the recomputed regions (lessons.yaml and the ledger together)
 `--retarget` is the upgrade path for pins distilled before region sets
 or trigger extraction existed. "Regions now" is one shared recompute:
 verified trigger scopes when available, evidence coverage otherwise.
+
+A person can choose the regions of a linked pin in the console. Such a row
+keeps its set until a person reviews a replacement. Its `regions now:` line
+reads as a suggestion and names the date of the choice:
+
+```text
+  p65   train-serve-parity                 workers, jobs
+        regions now: workers (a suggestion; a person chose the stored regions on 2026-11-01)
+
+chosen scope: p65 — a person chose these regions; review each advisory above in `seamark tui`, Lessons › Pins
+```
+
+The `retarget:` and `trigger scope:` lines leave that row out, because the
+command does not change it. The `chosen scope:` line appears when the row has
+a `delivery may miss the trigger` advisory. `lessons --retarget` refuses a
+chosen row and names the console. It refuses the row when the computed scope
+differs, and `--confirm-checks` does not change that. The row prints its
+reason, and the other rows of the run continue. A chosen row with a current
+scope or with aged-out evidence keeps its usual line. The reason names `w`,
+the console key that reviews the computed scope. When another pin or row owns
+the computed scope, or the pin file blocks the change, the console does not
+offer `w`. The reason then names what stops it, and it names `i`.
+
+In `seamark tui`, the preview of `w` in Lessons › Pins says that it replaces
+the choice before you confirm it.
 Retarget runs on the engine of the console's Pins view: it changes only
 the `region` and `regions` lines of each entry, in place, so the rule
 spelling, a hand-edited note, comments, unknown keys, and the position
@@ -532,7 +576,8 @@ new pin. `i` edits and `d` removes the pin under the cursor, never the
 marked pins.
 A new pin is manual, and so is a pin that no proposal records: no
 proposal stands behind it. For every pin, the console writes no provenance
-comment, and it never creates, changes, or links a proposal row.
+comment, and it never creates or links a proposal row. It changes a
+proposal row in one case: a scope edit of a linked pin.
 
 - A new pin goes after the last pin of the `pin:` list. Apply still
   inserts its pins at the head of the list. So a manual pin never moves
@@ -550,14 +595,22 @@ comment, and it never creates, changes, or links a proposal row.
   It then reads as the comment of the next pin. Every other line stays
   byte for byte.
 - A linked pin (one applied proposal records it) allows note, mode,
-  and check edits. Its rule stays read-only. Its scope changes with `w`
-  (retarget) while `w` offers the recomputed regions, and its removal is
-  `-` (prune). While `w` reads `n/a`, Pins gives the reason and a next
+  check, and region edits. Its rule stays read-only, and its removal is
+  `-` (prune). Its scope has two routes. `w` (retarget) sets the
+  recomputed regions while `w` offers them. `i` sets the regions that you
+  choose, through a scope preview, unless the form cannot hold the stored
+  regions. While `w` reads `n/a`, Pins gives the reason and a next
   action. The proposal keeps its
   recorded rule, note, and evidence. A changed note makes Pins show
   `edited`; trigger extraction still asks about the recorded note.
   Mode and check edits have their own review notes and change the pin
   version, not the proposal evidence.
+- A scope edit writes the pin file and the ledger, and every other
+  edit writes the pin file only. The row records that a person chose the
+  regions and the date, so inference no longer replaces them unasked.
+  Its rule, note, and evidence stay. No command makes this edit, and a
+  region change by hand unlinks the pin. Only the console in its own
+  recorded root can save it, so a copied checkout refuses it.
 - The same `distill.write` gate applies. With the gate off, the review
   shows the exact diff and writes nothing.
 - A save needs a readable index of this workspace, because the
@@ -569,7 +622,8 @@ An edit of the wording or the scope can give the pin a new delivery
 identity, and the review says whether it does. A context that already
 saw the old wording can then receive the pin again, also in
 `once-per-context` mode. Earlier deliveries stay recorded under the
-earlier wording and scope; nothing is reset or moved.
+earlier wording and scope; nothing is reset or moved. A new order of the
+same regions keeps the identity and the version.
 
 A mode edit, a check edit, or a note edit of letter case alone keeps the
 delivery identity but gives the pin a new version. The review says so,
@@ -647,7 +701,9 @@ one theme never spend two slots:
   `+N more` pointer for the rest) plus the file's recurring mined
   lessons. Offline, silent when there is nothing to say. With opt-in
   `hook_delivery: once-per-context`, already-delivered lessons stay silent
-  until Claude Code compacts the current session. Only files inside the
+  until Claude Code compacts the current session, and a pin that the context
+  already has leaves the selection before the budget, so a later matching
+  edit reaches the next pin. Only files inside the
   workspace count: a path outside it, or behind a symbolic link that
   leaves it, gets no reminder. A new file counts by its path. Without an
   index the hook still delivers the pins of `lessons.yaml`, and it never
@@ -672,7 +728,11 @@ one theme never spend two slots:
   with their inspect commands, without the lesson text again. A client
   that negotiated MCP protocol `2025-06-18` or later also gets the whole
   `lesson-preparation/1` document as `structuredContent` under
-  `lesson_preparation`. A relative path starts at the repository root.
+  `lesson_preparation`, and the first text part again, byte for byte,
+  under `change_set_report`, because a client can show
+  `structuredContent` in place of the text parts. A failed preparation
+  has no `structuredContent`, so the text parts stay the whole answer. A
+  relative path starts at the repository root.
 - **The exploration hook** (`seamark lessons --explore --hook`, Claude
   Code only): after the `Read` tool reads a file, the hook gives the
   agent that read it the file's pins and mined lessons, under the edit
@@ -773,8 +833,7 @@ the whole repository against every lesson.
 
 Default selection leaves out exactly the untracked lesson-check audit,
 its rotated generation and its lock. Tracked files and explicit
-`--file` selections keep them. Current `not covered` output does not yet
-name those three exclusions; that output fix is required before release.
+`--file` selections keep them.
 [Configuration](configuration.md#verification-state-and-report-inputs)
 names the paths and other limits.
 
@@ -877,6 +936,52 @@ native paths. `prevented` additionally needs a written deny reply, no
 later execution record and a verified native deny path. Current native
 evidence supports **`prevented: 0`**, not a prevention claim.
 
+After the totals, the report states what selection applied:
+
+```text
+Selection budgets (current lessons.yaml; a past count can come from another budget):
+  pin cap: requested 16, effective 8 pins per injection; pin_budget cannot raise the pin cap above the fixed total
+  total cap: fixed 8 lessons per injection
+  change budget: requested 6, effective 6 lessons per answer
+  evidence read
+  These counts show what Seamark emitted or left out. They do not show what a model saw, or that a pin came before an action.
+```
+
+"Requested" is the number that `lessons.yaml` asks for, or the default.
+"Effective" is the number that selection applies. The budgets describe the
+`lessons.yaml` of this read. A record stores no budget, so a past count can
+come from another budget. With an invalid `lessons.yaml` the requested
+value prints as `unknown`, and the effective value is the default.
+
+Each pin version adds a split of its held-back records:
+
+```text
+held back by cause (records): hook/over-pin-cap 3, hook/restated 1
+```
+
+The keys are surface and cause. `restated` means that the restatement
+collapse dropped the pin, `over-pin-cap` means a `pin_budget` below the fixed
+total, and `over-total` means the fixed total on `hook` and `explore`, or
+`change_budget` on `change_set`, `prepare` and `check`. A record with an empty
+or unknown cause counts under `unknown`. `suppressed-repeat` and `emit-failed` are delivery
+values with their own counts, not held-back causes. The counts are records,
+and `held-back` equals the sum of the split. JSON holds the same reading in
+`selection` and `held_back_causes`, both optional under `delivery/1`.
+
+On the edit hook, a pin that the delivered set of the context names reads
+`suppressed-repeat`, with no cause, and never a budget cause. A budget cause
+still does not show that the receiver lacks the pin: an event with no delivery
+state does not read that set, and an older record can read `held-back` for a
+pin that the context already had.
+
+When the delivery audit is absent, unreadable or over its limit, a zero
+would state nothing. The evidence reading, the delivery totals and each
+pin's `delivery records:` line then print `unknown (audit <state>)` and no
+count, and the split is absent. The budgets stay, because they read
+`lessons.yaml`. In an audit that reads, a zero means that no readable record
+names the version. The `delivery audit:` line at the top names the state.
+There is no per-recipient view.
+
 ## Is it working? lessons --stats
 
 Every ambient surface appends a line to `.seamark/lessons-audit.jsonl`
@@ -959,7 +1064,30 @@ pin outcomes — 3 measured: 1 working, 1 not landing, 1 untested
   p47   leak-exception-to-client           not landing — recurred 2× since exposure (fired 12×)
   p16   pooled-state-reset                 working — flagged 10× in ~200 region-commits before exposure; 0× in 84 since (fired 41×)
   p9    cap-per-request-query              untested — 3 region-commits since exposure (fired 5×)
+
+mcp tool usage — calls: 142, failed: 3 (counts calls, not whether a call helped)
+  change_set   claude-code          calls: 88, failed: 1; latency median 120 ms, largest 900 ms; reply median 5120 bytes
+  why          claude-code          calls: 54, failed: 2; latency median 40 ms, largest 310 ms; reply median 1890 bytes
 ```
+
+The `mcp tool usage` section reads `.seamark/mcp-usage.jsonl` and its one
+rotated file, in the workspace that `seamark mcp` serves with the same `-C`
+and `--db`. A linked worktree thus shows its own calls, also when its index
+records the main checkout. The MCP server appends one line per `tools/call`:
+the tool name, the client name from `initialize`, the time, the latency, the
+size of the text parts of the reply, and whether the call worked. A line
+holds no argument, path, symbol, query, or reply text, because a query can
+hold private text. A tool name that the server does not know reads `unknown`,
+and so does a client without a name. Recording is best effort: a failed
+append changes no reply, and the server creates no `.seamark` directory for
+it. The server writes one note about failed appends to stderr after its last
+reply, because a stderr write during a session can stop the server. The file
+rotates at 5 MiB or 30 days, as `.seamark/audit.jsonl` does, so the section
+covers the retained calls only. Without a file the section does not
+print and the rest of the output stays the same. A damaged line is skipped
+and counted, and a file that does not read prints `unknown`, not zero. A
+count shows calls. It does not show that a call helped, and no hook reads
+this file.
 
 ### Do pins actually change behavior? The outcome loop
 
@@ -1023,7 +1151,9 @@ machine with no network. Four sections:
   health: the confidence tier with its facts, the prompt-era note, the
   outcome verdict for applied pins (`not landing` highlighted — it is
   the one that needs action), and a `regions now:` drift line with the
-  `--retarget` command when today's inference disagrees. The header
+  `--retarget` command when today's inference disagrees. A row whose
+  regions a person chose reads that line as a suggestion with the date of
+  the choice, and it prints no command. The header
   stats row carries the aggregate: how many pins were measured, and
   how many are not landing. The evidence-mix line says what it all
   rests on: *469 review · 34 fix:conventional · 15 fix:subject*.

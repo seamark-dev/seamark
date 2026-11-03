@@ -101,7 +101,8 @@ func TestPlanAuthorRelationshipMatrix(t *testing.T) {
 	}
 
 	const (
-		linkedNote   = "linked to proposal #1; only its note, mode, and check can change here; " + routeLinkedPin
+		linkedNote   = "linked to proposal #1; only its note, mode, check, and regions can change here; " + routeLinkedPin
+		linkedScope  = "linked to proposal #1; a change of its regions needs the scope preview"
 		ambiguousFix = "; " + reasonLedgerFixes
 	)
 
@@ -123,7 +124,7 @@ func TestPlanAuthorRelationshipMatrix(t *testing.T) {
 		{name: "linked note with the same rule", entry: "linked", req: noteSameRule, link: pinfile.LinkLinked},
 		{name: "linked note with the same scope", entry: "linked", req: noteSameScope, link: pinfile.LinkLinked},
 		{name: "linked rename", entry: "linked", req: rename, link: pinfile.LinkLinked, blocker: linkedNote},
-		{name: "linked rescope", entry: "linked", req: rescope, link: pinfile.LinkLinked, blocker: linkedNote},
+		{name: "linked rescope", entry: "linked", req: rescope, link: pinfile.LinkLinked, blocker: linkedScope},
 		{
 			name: "linked removal", entry: "linked", req: remove, link: pinfile.LinkLinked,
 			blocker: "linked to proposal #1; Remove is only for unlinked pins; " + routePrune,

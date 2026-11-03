@@ -525,6 +525,17 @@ func TestCheckLessonsMCPOption(t *testing.T) {
 		sentinel.requireNoCall(t)
 	})
 
+	t.Run("the text names the own audit files", func(t *testing.T) {
+		root, sentinel := lessonChecksFixture(t, "warn")
+		editHandler(t, root)
+
+		got, isErr := callCheck(t, root, `{"lesson_checks":true}`)
+		assert.False(t, isErr, got)
+		assert.Contains(t, got, "; seamark's own lesson-check audit files\n")
+
+		sentinel.requireNoCall(t)
+	})
+
 	t.Run("malformed arguments get the usage text", func(t *testing.T) {
 		root := writeFixture(t)
 
@@ -704,4 +715,93 @@ func closedLocalURL(t *testing.T) string {
 	require.NoError(t, ln.Close())
 
 	return "http://" + addr
+}
+
+// lateChange puts a git wrapper first on PATH for the rest of the test.
+// A verification reads the status twice: once for the snapshot, and once
+// to revalidate it. The wrapper adds an untracked file under src/ just
+// before the second read, so an input changes after the read and before
+// the publication. The hook for that moment is private to lessoncheck,
+// and this wrapper needs no change of the server.
+func lateChange(t *testing.T, root string) {
+	t.Helper()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("the git wrapper is a shell script")
+	}
+
+	gitPath, err := exec.LookPath("git")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	count := shellQuote(filepath.Join(dir, "count"))
+	late := shellQuote(filepath.Join(root, "src", "late.go"))
+
+	script := "#!/bin/sh\n" +
+		"case \"$*\" in\n" +
+		"*--ignored=no*)\n" +
+		"  n=$(cat " + count + " 2>/dev/null || echo 0)\n" +
+		"  n=$((n + 1))\n" +
+		"  echo \"$n\" > " + count + "\n" +
+		"  if [ \"$n\" = 2 ]; then echo 'package src' > " + late + "; fi\n" +
+		"  ;;\n" +
+		"esac\n" +
+		"exec " + shellQuote(gitPath) + " \"$@\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755))
+
+	// macOS can scan a new executable on its first run. This run takes
+	// that time before a verification starts its deadline.
+	out, err := exec.Command(filepath.Join(dir, "git"), "--version").CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestCheckLessonsMCPStaleResult proves that a stale verification stays
+// in band. The agent must read the stale line and the exit code that the
+// CLI gives, because a tool error would hide the report. A stale result
+// publishes no pass, and a violation that the run observed stays.
+func TestCheckLessonsMCPStaleResult(t *testing.T) {
+	cases := []struct {
+		name    string
+		edit    func(t *testing.T, root string)
+		frozen  string // the outcome of the frozen-assets row
+		state   string
+		lessons string
+		exit    int
+	}{
+		{
+			name:   "a pass reads unknown",
+			edit:   editHandler,
+			frozen: "unknown/stale-snapshot",
+			state:  "incomplete", lessons: "incomplete", exit: 1,
+		},
+		{
+			name:   "an observed violation stays",
+			edit:   editAsset,
+			frozen: "violation",
+			state:  "fail", lessons: "violation", exit: 2,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root, sentinel := lessonChecksFixture(t, "warn")
+			c.edit(t, root)
+			lateChange(t, root)
+
+			got, isErr := callCheck(t, root, `{"lesson_checks":true}`)
+			assert.False(t, isErr, "a stale result stays in band: %s", got)
+
+			assert.Contains(t, got, "lesson checks: "+c.lessons+"\n")
+			assert.Contains(t, got, ", stale\n")
+			assert.Contains(t, got, "\n  stale: the inputs changed after the read")
+			assert.True(t, strings.HasSuffix(got, mcpCombinedLine(c.state, "pass", c.lessons, c.exit)), got)
+
+			assert.Regexp(t, `(?m)^  `+c.frozen+`  pin [0-9a-f]+ frozen-assets `, got)
+			assert.Regexp(t, `(?m)^  unknown/stale-snapshot  pin [0-9a-f]+ no-todo `, got)
+
+			sentinel.requireNoCall(t)
+		})
+	}
 }

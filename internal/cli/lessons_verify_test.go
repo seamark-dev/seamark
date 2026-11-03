@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1125,6 +1126,42 @@ func TestLessonsVerifyNeverInvokes(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
+// ownAuditExclude is the fixed text of the lesson-check audit files in
+// the `not covered:` line and in selection.excludes.
+const ownAuditExclude = "seamark's own lesson-check audit files"
+
+// TestLessonsVerifyNamesOwnAudit proves that the command shows the
+// own-state exclusion. The default selection can drop the audit files,
+// so its text and its JSON name them. An explicit path cannot drop them,
+// so its list does not change.
+func TestLessonsVerifyNamesOwnAudit(t *testing.T) {
+	root, sentinel := verifyFixture(t, t.TempDir())
+
+	t.Run("the default selection", func(t *testing.T) {
+		stdout, err := verifyRun(t, root)
+		require.NoError(t, err)
+		assert.Contains(t, stdout, "; "+ownAuditExclude+"\n")
+
+		stdout, err = verifyRun(t, root, "--json")
+		require.NoError(t, err)
+		assert.Contains(t, verifyDocument(t, stdout).Selection.Excludes, ownAuditExclude)
+	})
+
+	t.Run("an explicit path", func(t *testing.T) {
+		handler := filepath.Join(root, "src", "handler.go")
+
+		stdout, err := verifyRun(t, root, "--file", handler)
+		require.NoError(t, err)
+		assert.NotContains(t, stdout, ownAuditExclude)
+
+		stdout, err = verifyRun(t, root, "--json", "--file", handler)
+		require.NoError(t, err)
+		assert.NotContains(t, verifyDocument(t, stdout).Selection.Excludes, ownAuditExclude)
+	})
+
+	sentinel.requireNoCall(t)
+}
+
 // TestLessonsVerifyWritesAuditRecord proves the milestone P4 additions
 // of contract K5 through the CLI: each run appends one verify record to
 // .seamark/lesson-check-audit.jsonl with the caller cli, and a failed
@@ -1175,7 +1212,10 @@ func TestLessonsVerifyWritesAuditRecord(t *testing.T) {
 			stdout, stderr, code := seamarkProcess(t, root, append([]string{"-C", root, "lessons", "--verify"}, args...)...)
 			assert.Equal(t, 0, code, "args %v: stdout: %s\nstderr: %s", args, stdout, stderr)
 			assert.Equal(t, want, seamarkLines(stderr), "args %v", args)
-			assert.NotContains(t, stdout, "lesson-check audit", "the line goes to stderr only")
+
+			// The colon marks the failure line. The fixed exclude text of
+			// the report holds the same words without a colon.
+			assert.NotContains(t, stdout, "lesson-check audit:", "the line goes to stderr only")
 		}
 
 		data, err := os.ReadFile(target)
@@ -1192,4 +1232,132 @@ func TestLessonsVerifyWritesAuditRecord(t *testing.T) {
 	})
 
 	sentinel.requireNoCall(t)
+}
+
+// lateChange puts a git wrapper first on PATH for the rest of the test.
+// Every verification reads the status twice: once for the snapshot, and
+// once to revalidate it. The wrapper adds an untracked file under src/
+// just before the second read, so an input changes after the read and
+// before the publication. The hook for that moment is private to
+// lessoncheck, and this wrapper needs no change of the command. It returns
+// a function that restores the state, so a test can run a second command.
+func lateChange(t *testing.T, root string) (reset func()) {
+	t.Helper()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("the git wrapper is a shell script")
+	}
+
+	gitPath, err := exec.LookPath("git")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	count := filepath.Join(dir, "count")
+	late := filepath.Join(root, "src", "late.go")
+
+	script := "#!/bin/sh\n" +
+		"case \"$*\" in\n" +
+		"*--ignored=no*)\n" +
+		"  n=$(cat " + shellQuote(count) + " 2>/dev/null || echo 0)\n" +
+		"  n=$((n + 1))\n" +
+		"  echo \"$n\" > " + shellQuote(count) + "\n" +
+		"  if [ \"$n\" = 2 ]; then echo 'package src' > " + shellQuote(late) + "; fi\n" +
+		"  ;;\n" +
+		"esac\n" +
+		"exec " + shellQuote(gitPath) + " \"$@\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755))
+
+	// macOS can scan a new executable on its first run. This run takes
+	// that time before a verification starts its deadline.
+	out, err := exec.Command(filepath.Join(dir, "git"), "--version").CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	return func() {
+		require.FileExists(t, late, "the wrapper changed an input")
+		require.NoError(t, os.Remove(count))
+		require.NoError(t, os.Remove(late))
+	}
+}
+
+// shellQuote quotes s for a POSIX shell.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// outcomeWords lists the outcome of each result in the words of the text
+// report. A reason exists only for an unknown result.
+func outcomeWords(results []lessoncheck.Result) []string {
+	words := make([]string, 0, len(results))
+
+	for _, r := range results {
+		word := string(r.Outcome)
+		if r.Reason != "" {
+			word += "/" + string(r.Reason)
+		}
+
+		words = append(words, word)
+	}
+
+	return words
+}
+
+// The stale cases of the commands: what each one exits with and what its
+// JSON reads when an input changes after the read. A stale result never
+// publishes a pass, and a violation that the run observed stays.
+var staleCases = []struct {
+	name     string
+	edit     func(t *testing.T, root string)
+	code     int
+	stderr   string
+	outcomes []string
+	state    lessoncheck.SummaryState
+	combined string
+}{
+	{
+		name: "a pass reads unknown",
+		edit: checkLessonsEditHandler, code: 1, stderr: "seamark: lesson checks incomplete: 2 unknown; rerun seamark lessons --verify",
+		outcomes: []string{"unknown/stale-snapshot", "unknown/stale-snapshot"},
+		state:    lessoncheck.SummaryIncomplete, combined: "incomplete",
+	},
+	{
+		name: "an observed violation stays",
+		edit: verifyEditAsset, code: 2, stderr: verifyViolationLine,
+		outcomes: []string{"violation", "unknown/stale-snapshot"},
+		state:    lessoncheck.SummaryViolation, combined: "fail",
+	},
+}
+
+// TestLessonsVerifyStaleResult proves the text, the JSON, and the exit
+// code of a stale result through the real Execute and a real change of
+// the working tree.
+func TestLessonsVerifyStaleResult(t *testing.T) {
+	for _, c := range staleCases {
+		t.Run(c.name, func(t *testing.T) {
+			root, sentinel := verifyFixture(t, t.TempDir())
+			c.edit(t, root)
+
+			reset := lateChange(t, root)
+
+			stdout, stderr, code := seamarkProcess(t, root, "-C", root, "lessons", "--verify")
+			assert.Equal(t, c.code, code, "stdout: %s\nstderr: %s", stdout, stderr)
+			assert.Equal(t, []string{c.stderr}, seamarkLines(stderr))
+			assert.Contains(t, stdout, ", stale\n")
+			assert.Contains(t, stdout, "\n  stale: the inputs changed after the read")
+
+			reset()
+
+			jsonOut, _, jsonCode := seamarkProcess(t, root, "-C", root, "lessons", "--verify", "--json")
+			assert.Equal(t, c.code, jsonCode)
+
+			v := verifyDocument(t, jsonOut)
+			assert.Equal(t, lessoncheck.FreshnessStale, v.Freshness)
+			assert.Equal(t, c.state, v.Summary.State)
+			assert.Equal(t, c.outcomes, outcomeWords(v.Results))
+			assert.NotEmpty(t, v.Rerun, "a state that exits non-zero names its rerun")
+
+			sentinel.requireNoCall(t)
+		})
+	}
 }

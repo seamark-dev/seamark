@@ -470,7 +470,7 @@ func (in *Inspection) readOne(r *Readings, root string, st *store.Store, row mod
 	r.Scope = ScopeReading{Known: true, Advice: advice}
 
 	for _, f := range advice.Facts {
-		if f.BlockedLine() != "" {
+		if f.BlockedLine(row.Status) != "" {
 			r.Trigger.Blocked = append(r.Trigger.Blocked, f)
 		}
 	}

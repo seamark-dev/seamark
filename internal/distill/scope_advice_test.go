@@ -172,7 +172,7 @@ func TestReachesComparesDeliveredPaths(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		assert.Equal(t, tc.want, reaches(tc.next, tc.cur), "reaches(%q, %q)", tc.next, tc.cur)
+		assert.Equal(t, tc.want, Reaches(tc.next, tc.cur), "Reaches(%q, %q)", tc.next, tc.cur)
 	}
 }
 

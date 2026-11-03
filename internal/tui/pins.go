@@ -236,8 +236,8 @@ const (
 	// pinGoalReplace and pinGoalForm open a route that names its goal.
 	pinGoalReplace = "to choose other regions"
 	pinGoalForm    = "to edit its regions"
-	// pinRouteReplace is the route while w offers none and replaceGate
-	// passes. A form field for the scope of a linked pin does not exist.
+	// pinRouteReplace is the route while w offers none, the form cannot
+	// hold the stored regions, and replaceGate passes.
 	pinRouteReplace = pinGoalReplace + ", use - Prune and add a new pin with n"
 	// pinRouteRule is pinRouteReplace for the locked rule of a linked pin.
 	pinRouteRule   = "to change the rule, use - Prune and add a new pin with n"
@@ -458,18 +458,27 @@ func (p *pinsView) unlinkedNext(pin *maintain.Pin) string {
 // for pin, and the next action, or two empty strings when it can. A prune
 // cannot be undone, so the route stands only when both steps can finish.
 func (p *pinsView) replaceGate(pin *maintain.Pin) (why, next string) {
-	if why, next = p.editGate(pin); why != "" {
+	if why, next = p.saveGate(pin); why != "" {
 		return why, next
-	}
-
-	// A prune still runs under --db, and the authoring engine refuses the
-	// new pin.
-	if root := pinsDBRoot(p.st); root != "" {
-		return "the index records another repository, " + ui.OneLine(root), pinGoalReplace + ", " + pinOpenRoot(p.st, root)
 	}
 
 	if p.tailRefused(pin) {
 		return "the pin file takes no new pin after this prune", pinRouteByHand(p.st)
+	}
+
+	return "", ""
+}
+
+// saveGate returns why this console can save no pin write for pin, and
+// the next action, or two empty strings when it can. A prune still runs
+// under --db, and the authoring engine refuses what follows it.
+func (p *pinsView) saveGate(pin *maintain.Pin) (why, next string) {
+	if why, next = p.editGate(pin); why != "" {
+		return why, next
+	}
+
+	if root := pinsDBRoot(p.st); root != "" {
+		return "the index records another repository, " + ui.OneLine(root), pinGoalReplace + ", " + pinOpenRoot(p.st, root)
 	}
 
 	return "", ""
@@ -617,10 +626,20 @@ func (p *pinsView) retargetBlock(pin *maintain.Pin) string {
 }
 
 // retargetNext returns the next action for the retargetBlock reason of
-// pin. A prune has the gate of editBlock, so after that gate a prune runs
-// for every reason. pinRouteReplace still holds only when replaceGate says
-// that the new pin can follow.
+// pin. The form edits every region set that it can hold, so that is the
+// route after the gates of a save. Only stored regions that the form
+// cannot hold reach the prune. A prune has the gate of editBlock, so
+// pinRouteReplace holds only when replaceGate says that the new pin can
+// follow.
 func (p *pinsView) retargetNext(pin *maintain.Pin) string {
+	if _, next := p.saveGate(pin); next != "" {
+		return next
+	}
+
+	if pinRegionLock(pinEntryRegions(pin.Entry)) == "" {
+		return pinRouteForm
+	}
+
 	if _, next := p.replaceGate(pin); next != "" {
 		return next
 	}
@@ -942,11 +961,16 @@ func (p *pinsView) update(msg tea.Msg) tea.Cmd {
 // markActed drops the entries that a maintenance commit changed from the
 // selection, and keeps them so the next load reports no loss for them.
 // The user caused the change: a prune removes an entry, and a retarget
-// changes its key.
+// changes its key. A scope edit changes its key too, and its draft has
+// landed. So the draft goes, and rebindDrafts never reports it as lost.
 func (p *pinsView) markActed(refs []pinfile.EntryRef) {
 	for _, ref := range refs {
 		delete(p.selected, ref)
 		p.acted[ref] = true
+	}
+
+	if d := p.host.scopeDraft(); d != nil && len(refs) > 0 {
+		p.author.drop(d)
 	}
 }
 
@@ -1179,6 +1203,8 @@ func pinSelectionNoun(n int) string {
 // requestMaint sends the preview request of action a over the targets. The
 // request carries every target, also the blocked ones, so the preview
 // lists them and offers no y (D-15). It reads and writes nothing itself.
+// A retarget sets ReplaceChosen, because its preview shows a replaced
+// choice before y.
 func (p *pinsView) requestMaint(a maintain.Action) tea.Cmd {
 	if name, block, next := p.actionGate(a); !p.offers(block) {
 		return p.refusal(name, block, next)
@@ -1191,7 +1217,9 @@ func (p *pinsView) requestMaint(a maintain.Action) tea.Cmd {
 		refs[i] = pin.Entry.Ref()
 	}
 
-	return openMaint(maintain.Request{Action: a, Refs: refs, Cursor: cursor})
+	return openMaint(maintain.Request{
+		Action: a, Refs: refs, Cursor: cursor, ReplaceChosen: a == maintain.ActionRetarget,
+	})
 }
 
 // extract sends the extraction review request of the targets. Linked
