@@ -697,9 +697,12 @@ Then reply with the single word: done"
 1. Use one single apply_patch call that adds two new files: timing/multi-a.txt with the single line: one, and timing/multi-b.txt with the single line: two.
 Then reply with the single word: done"
 
+    # The prompt names the agent tools as Codex lists them in code mode, and
+    # the worker agent_type. The comment at the guard case subagent-violation
+    # gives the reason.
     timing_codex subagent-patch new "$steps
-1. Use spawn_agent to start one worker agent, and ask it to use apply_patch to add the new file timing/child-patch.txt with the single line: child.
-2. Wait for the agent with wait_agent, then close it.
+1. Use multi_agent_v1__spawn_agent with agent_type worker to start one worker agent. In its message, ask it to use apply_patch to add the new file timing/child-patch.txt with the single line: child.
+2. Wait for the agent with multi_agent_v1__wait_agent, then close it with multi_agent_v1__close_agent.
 Then reply with the single word: done"
 }
 
@@ -1638,18 +1641,22 @@ $GUARD_STOP"
 1. Use apply_patch once to add the new file sentinel/slow.txt with the single line: slow
 $GUARD_STOP"
 
+    # The prompt names the agent tools and the worker agent_type for the
+    # reason in the comment at the case subagent-violation.
     guard_run check-pins subagent-check-only "$GUARD_STEPS
-1. Use spawn_agent to start one worker agent, and ask it to use apply_patch once to add the new file sentinel/child-checked.txt with the single line: checked. Tell it not to retry the call, and to reply with one line: the check id that a seamark post-edit message named after the call, or the single word none when no such message came.
-2. Wait for the agent with wait_agent, then close it.
+1. Use multi_agent_v1__spawn_agent with agent_type worker to start one worker agent. In its message, ask it to use apply_patch once to add the new file sentinel/child-checked.txt with the single line: checked, not to retry the call, and to reply with one line: the check id that a seamark post-edit message named after the call, or the single word none when no such message came.
+2. Wait for the agent with multi_agent_v1__wait_agent, then close it with multi_agent_v1__close_agent.
 Do not use apply_patch yourself. Then reply with the one line that the worker replied."
 
     guard_run slow-deny slow-deny-add "$GUARD_STEPS
 1. Use apply_patch once to add the new file sentinel/slow-deny.txt with the single line: slow
 $GUARD_STOP"
 
+    # The prompt names the agent tools and the worker agent_type for the
+    # reason in the comment at the case subagent-violation.
     guard_run slow-deny slow-deny-subagent-add "$GUARD_STEPS
-1. Use spawn_agent to start one worker agent, and ask it to use apply_patch once to add the new file sentinel/slow-child.txt with the single line: child. Tell it not to retry a blocked call.
-2. Wait for the agent with wait_agent, then close it.
+1. Use multi_agent_v1__spawn_agent with agent_type worker to start one worker agent. In its message, ask it to use apply_patch once to add the new file sentinel/slow-child.txt with the single line: child, and not to retry a blocked call.
+2. Wait for the agent with multi_agent_v1__wait_agent, then close it with multi_agent_v1__close_agent.
 $GUARD_STOP"
 
     guard_restore
