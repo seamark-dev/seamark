@@ -9,7 +9,9 @@
 #           directory for review. It never writes into testdata. It
 #           turns off the advisor tool of Claude Code for each Claude
 #           run, and records the advisor state of each run. A run with
-#           the advisor on or unknown prints FAIL (see claude_print).
+#           the advisor on or unknown prints FAIL (see claude_print). A
+#           Codex run at a usage or account limit prints FAIL and stops
+#           the call before the next run (see codex_verdict).
 #
 # The script has no offline mode. The Go tests replay a reviewed
 # recording offline (make capture-native-check).
@@ -412,6 +414,118 @@ claude_advisor() {
     esac
 }
 
+# codex_failure <events> reads the `codex exec --json` events of one turn.
+# Codex reports a failed turn in the event stream, not on stderr: a usage
+# limit gave an error event and a turn.failed event, and stderr was empty.
+# The function prints the message of the failure on one line. Its exit
+# status is the verdict:
+#   0  no turn.failed event and no limit message; the line holds the
+#      message of the last error event, or nothing
+#   1  a turn.failed event; the line holds its message, or else the
+#      message of the last error event
+#   2  a turn.failed or error message reports a usage or account limit;
+#      the line holds that message
+# Only the words "usage limit" and "account limit" count as a limit. A
+# plain rate limit can pass after a retry, so it does not stop the call.
+# The line drops control characters, because the message goes to the
+# terminal.
+codex_failure() {
+    python3 -I - "$1" <<'PY'
+import json, re, sys
+
+LIMIT = re.compile(r"\b(usage|account)[ _-]limit", re.IGNORECASE)
+
+
+def message(event):
+    # A turn.failed event nests the message under error. An error event
+    # holds it at the top level.
+    error = event.get("error")
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        return error["message"]
+    if isinstance(event.get("message"), str):
+        return event["message"]
+    return ""
+
+
+def one_line(text):
+    text = "".join(c if c.isprintable() else " " for c in text)
+    text = " ".join(text.split())
+    return text if len(text) <= 400 else text[:397] + "..."
+
+
+failed, failed_text, error_text, limit_text = False, "", "", ""
+
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+except OSError:
+    lines = []
+
+for raw in lines:
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        continue
+    if not isinstance(event, dict) or event.get("type") not in ("turn.failed", "error"):
+        continue
+
+    text = one_line(message(event))
+    if event["type"] == "turn.failed":
+        failed = True
+        failed_text = text or failed_text
+    else:
+        error_text = text or error_text
+    if not limit_text and LIMIT.search(text):
+        limit_text = text
+
+if limit_text:
+    print(limit_text)
+    sys.exit(2)
+
+if failed:
+    print(failed_text or error_text)
+    sys.exit(1)
+
+print(error_text)
+PY
+}
+
+# codex_verdict <label> <exit status> <events> <stderr> judges one Codex
+# turn. It returns 0 for a turn that passed. For a failed turn it prints
+# FAIL with the event message, or else the last stderr line, and returns
+# 1. A turn that exits 0 and still sends turn.failed is a failed turn.
+# At a usage or account limit it prints FAIL and stops the record call,
+# because every later turn fails the same way and the stop rule must not
+# depend on an operator who watches the output.
+codex_verdict() {
+    verdict_status=0
+    verdict_reason=$(codex_failure "$3") || verdict_status=$?
+
+    if [ "$verdict_status" = 2 ]; then
+        fail "$1 stopped at a Codex usage or account limit: $verdict_reason"
+        limit_stop
+    fi
+
+    if [ "$2" = 0 ] && [ "$verdict_status" = 0 ]; then
+        return 0
+    fi
+
+    [ -n "$verdict_reason" ] || verdict_reason=$(tail -1 "$4" 2> /dev/null || true)
+    [ -n "$verdict_reason" ] || verdict_reason="codex exited with status $2 and printed no message"
+    fail "$1 failed: $verdict_reason"
+    return 1
+}
+
+# limit_stop ends the record call after a Codex limit, before the next
+# run. The guard scenario first puts back the enforce setup, so the
+# reused repository keeps the hook document that the operator trusted.
+# The summary exits with status 1, because the limit line counts as FAIL.
+limit_stop() {
+    [ "$SCENARIO" != guard ] || guard_restore
+    note "no later run starts; run the record call again after the limit resets"
+    summary
+}
+
 # The gate-3 timing scenario (CAPTURE_NATIVE_SCENARIO=timing). It records
 # when lesson advice reaches the model: a prior result before a later
 # model step, a reminder on its own call, edits that one response
@@ -649,7 +763,10 @@ timing_codex() {
     # command on PATH. So the run puts the directory of the round binary
     # first on PATH. The MCP server then comes from the commit under test,
     # not from an older installed binary with other instructions.
-    if (cd "$REPO" && PATH="$(dirname "$BIN"):$PATH" codex "$@" < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN-events.jsonl" 2> "$OUT/run-$RUN-stderr.txt"); then
+    exec_status=0
+    (cd "$REPO" && PATH="$(dirname "$BIN"):$PATH" codex "$@" < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN-events.jsonl" 2> "$OUT/run-$RUN-stderr.txt") || exec_status=$?
+
+    if codex_verdict "run $RUN ($tcase)" "$exec_status" "$OUT/run-$RUN-events.jsonl" "$OUT/run-$RUN-stderr.txt"; then
         cat "$OUT/run-$RUN-events.jsonl" >> "$OUT/exec-events.jsonl"
         line=$(python3 -I -c '
 import json, sys
@@ -669,7 +786,6 @@ print(thread, " ".join("%s=%s" % kv for kv in sorted(usage.items())))' "$OUT/run
         ok "run $RUN ($tcase) finished (thread $SESSION)"
     else
         SESSION=
-        fail "run $RUN ($tcase) failed: $(tail -1 "$OUT/run-$RUN-stderr.txt")"
     fi
 }
 
@@ -1404,8 +1520,11 @@ print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "
 # reply-<run>.txt. It never passes --dangerously-bypass-hook-trust,
 # because trust stays the operator's decision.
 guard_codex() {
-    if (cd "$REPO" && PATH="$(dirname "$BIN"):$PATH" codex exec -m "$model" -c model_reasoning_effort=low --json \
-        -s workspace-write -C "$REPO" - < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN-events.jsonl" 2> "$OUT/run-$RUN-stderr.txt"); then
+    exec_status=0
+    (cd "$REPO" && PATH="$(dirname "$BIN"):$PATH" codex exec -m "$model" -c model_reasoning_effort=low --json \
+        -s workspace-write -C "$REPO" - < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN-events.jsonl" 2> "$OUT/run-$RUN-stderr.txt") || exec_status=$?
+
+    if codex_verdict "run $RUN ($gcase)" "$exec_status" "$OUT/run-$RUN-events.jsonl" "$OUT/run-$RUN-stderr.txt"; then
         cat "$OUT/run-$RUN-events.jsonl" >> "$OUT/exec-events.jsonl"
         line=$(python3 -I -c '
 import json, sys
@@ -1428,8 +1547,6 @@ print(thread, " ".join("%s=%s" % kv for kv in sorted(usage.items())))' "$OUT/run
         [ -z "${line%% *}" ] || SESSION=${line%% *}
         echo "  cost     run $RUN ($gcase): codex exec -m $model -c model_reasoning_effort=low: ${line#* }"
         ok "run $RUN ($gcase) finished (thread $SESSION)"
-    else
-        fail "run $RUN ($gcase) failed: $(tail -1 "$OUT/run-$RUN-stderr.txt")"
     fi
 }
 
