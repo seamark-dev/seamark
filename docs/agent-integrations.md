@@ -9,6 +9,9 @@ Seamark connects to Claude Code and Codex in three ways:
   repository. MCP is the protocol the agent uses to call Seamark tools.
 - **Hooks** run automatically before supported edits and shell commands.
   They provide lesson reminders and check commands against repository policy.
+  The agent reads a lesson reminder in its next model request, with the
+  result of the edit call. So the reminder can guide the next step, not
+  the edit that triggered it.
 - **Optional inference** asks your installed agent CLI to draft lessons from
   findings or suggest where existing lessons apply.
 

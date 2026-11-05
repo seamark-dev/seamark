@@ -35,8 +35,11 @@ Seamark helps you put that knowledge to work:
 
 - **Learn from your own repository.** Turn past fixes and code review feedback
   into proposed lessons, with links back to the evidence. You decide what to keep.
-- **Bring lessons to the next edit.** Hooks deliver relevant reminders when
+- **Bring lessons back to the agent.** Hooks deliver relevant reminders when
   your AI coding agent edits matching files, including in a new session.
+  The agent reads a reminder with the edit result, so the reminder can
+  guide the next step. For guidance before an edit, use `seamark lessons --prepare` or
+  the `change_set` tool.
 - **Find changes that belong together.** Use Git history to spot a generated
   client, another implementation, or a test that often changes with your code.
 - **Keep the knowledge with your project.** Accepted lessons live in a YAML
@@ -57,7 +60,7 @@ guide to go further.
 | Capability | What it gives you | Try it |
 | --- | --- | --- |
 | [**Lessons from your history**](#learn-from-your-repository) | Proposed lessons from fix commits and pull-request reviews, each linked to its evidence. You decide which to keep. | `seamark index --reviews` · [Lessons guide](docs/lessons.md) |
-| **Reminders at the edit** | Hooks give your AI coding agent an accepted lesson when it edits a matching file, also in a new session. | `seamark lessons --file path/to/file` · [Agent setup](docs/agent-integrations.md) |
+| **Reminders with the edit result** | Hooks give your AI coding agent an accepted lesson when it edits a matching file, also in a new session. The agent reads it with the edit result and can use it in the next step. | `seamark lessons --file path/to/file` · [Agent setup](docs/agent-integrations.md) |
 | [**Repository evidence over MCP**](#mcp-tools) | Five tools tell your agent where to start, why code is there, which files usually change together, and what a diff can reach. | `seamark orient` · [History and analysis](docs/repository-history.md) |
 | [**Agent skills**](#agent-skills) (optional) | Three skills tell your agent when to use Seamark to explore, plan, and review a change. | `seamark init --client claude --skills` · [Skills guide](skills/README.md) |
 | **Workspace console** (experimental) | One full-screen view of the index, integrations, evidence, proposals, pins, and settings. Every change starts from a preview. | `seamark tui` · [Console guide](docs/tui.md) |
