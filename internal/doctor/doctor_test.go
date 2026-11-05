@@ -586,6 +586,48 @@ func TestRunNamesTheCodexLimitationsOnItsOwnLine(t *testing.T) {
 	assert.Contains(t, checks["codex"].Fix, "hooks = true")
 }
 
+func TestRunWarnsWhenClaudeHooksAreTurnedOff(t *testing.T) {
+	_, want := runFixture(t, inspecttest.Named("current"))
+
+	// The current fixture with disableAllHooks: true in the shared file.
+	off := inspecttest.Named("current")
+	write := off.Write
+	off.Write = func(root string) error {
+		if err := write(root); err != nil {
+			return err
+		}
+
+		path := filepath.Join(root, approve.ClaudeSettings)
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		settings := map[string]any{}
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return err
+		}
+
+		settings["disableAllHooks"] = true
+
+		if data, err = json.Marshal(settings); err != nil {
+			return err
+		}
+
+		return os.WriteFile(path, data, 0o644)
+	}
+
+	_, checks := runFixture(t, off)
+
+	// The installed hooks never run: the client line warns, and the hooks
+	// line stays as it is.
+	assert.Equal(t, want["hooks"], checks["hooks"])
+	assert.Equal(t, StateWarn, checks["claude"].State)
+	assert.Contains(t, checks["claude"].Detail, ".claude/settings.json: disableAllHooks: true turns off the project hooks of Claude Code")
+	assert.Contains(t, checks["claude"].Fix, "remove disableAllHooks, or set it to false")
+}
+
 func TestRunWarnsOnAHalfInstalledClient(t *testing.T) {
 	// Codex with the lessons hook and no gate hook: the hooks line warns
 	// and names the client command that restores the missing half.
@@ -595,11 +637,12 @@ func TestRunWarnsOnAHalfInstalledClient(t *testing.T) {
 	assert.Contains(t, checks["hooks"].Detail, "codex lessons hook installed, gate hook missing")
 	assert.Contains(t, checks["hooks"].Fix, "seamark init --client codex")
 
-	// The unmanaged personal handler beside the managed one: the client
-	// line warns that the hook runs twice.
+	// A personal copy of the managed handler with other fields: the client
+	// line warns that setup cannot name the fields that Claude Code runs.
 	_, checks = runFixture(t, inspecttest.Named("duplicate"))
 	assert.Equal(t, StateWarn, checks["claude"].State)
-	assert.Contains(t, checks["claude"].Detail, "runs twice")
+	assert.Contains(t, checks["claude"].Detail, "Claude Code runs it once, with the fields of one copy that setup cannot name")
+	assert.NotContains(t, checks["claude"].Detail, "runs twice")
 }
 
 func TestRunSkipsTheClientLineWhenNothingIsInstalled(t *testing.T) {

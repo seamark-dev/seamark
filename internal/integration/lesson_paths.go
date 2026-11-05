@@ -230,7 +230,10 @@ func capVerification(e VerificationEvidence) lessoncheck.CapVerification {
 // lessonHookEntries reads the owned lesson-check and exploration
 // commands of one parsed hook document. A command counts by ownership,
 // under any matcher and type. Its tools are the tools that the client
-// runs it for, so a narrowed matcher shows as a coverage gap.
+// runs it for, so a narrowed matcher shows as a coverage gap. An entry
+// with an if filter gets no tools: setup cannot tell which calls the
+// client runs it for, so it claims none, and the path reads
+// tool-uncovered.
 func lessonHookEntries(document map[string]any, client lessonHookClient) []LessonHookEntry {
 	specs := client.specs(hooks.LessonChecksEnforce)
 
@@ -262,7 +265,7 @@ func lessonHookEntries(document map[string]any, client lessonHookClient) []Lesso
 			}
 
 			entry := LessonHookEntry{Stage: s.stage, Event: s.spec.Event, Marker: marker, Binary: binary}
-			if hookType, _ := h["type"].(string); hookType == "command" {
+			if hookType, _ := h["type"].(string); hookType == "command" && client.exec(h).Filter == "" {
 				entry.Tools = firingTools(s.spec, matcher, client.fires)
 			}
 
@@ -459,8 +462,9 @@ func (r *pathReader) stageEntries(stage lessoncheck.HookStage) []LessonHookEntry
 }
 
 // preWrite fills one pre-write path from the pre-write entries. A
-// wrapper that discards the exit status keeps every pre-write path
-// inactive, even beside an owned entry. The guard cannot project a Codex
+// definition that discards the exit status, or that the client runs in
+// the background, keeps every pre-write path inactive, even beside an
+// owned entry. The guard cannot project a Codex
 // update with hunks yet. The report keeps that reason only while an
 // enforce pattern pin exists.
 func (r *pathReader) preWrite(p *lessoncheck.InstalledPath, entries []LessonHookEntry, partial bool) {

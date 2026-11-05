@@ -657,9 +657,10 @@ built change runs. Only the first moment can shape the change. The edit
 hook is a pre-tool hook: it runs after the agent has written the
 arguments of the edit call, so its reminder reaches a call that already
 exists. The reminder can inform the next step, not the edit it arrives
-with. When one response or one generated program already holds several
-edits, the hook of the first edit gives the later edits no earlier chance
-either, because the agent built them before that hook ran.
+with. When one response or one generated program holds several edits,
+the reminder of the first edit cannot inform the later edits either.
+All of these edits come from one model request. The agent reads a hook
+reminder only in its next model request, together with the tool result.
 
 Preparation is the earlier moment. `seamark lessons --prepare <path>...`
 and the MCP tool `change_set` return the guidance for the paths that an

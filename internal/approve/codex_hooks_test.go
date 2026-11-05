@@ -112,3 +112,24 @@ func TestCodexHooksDisabledReadsTheFeatureFlag(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), CodexConfig)
 }
+
+func TestCodexInlineHookEntriesReadAsync(t *testing.T) {
+	// Codex starts an async hook in the background and never reads its
+	// exit status. Only the TOML boolean true counts.
+	config := "[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n" +
+		"[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"a\"\nasync = true\n" +
+		"[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"b\"\nasync = false\n" +
+		"[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"c\"\nasync = \"true\"\n" +
+		"[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"d\"\n"
+
+	entries, present, err := CodexInlineHookEntries([]byte(config))
+	require.NoError(t, err)
+	require.True(t, present)
+
+	assert.Equal(t, []InlineHook{
+		{Event: "PreToolUse", Matcher: "Bash", Type: "command", Command: "a", Async: true, Known: true},
+		{Event: "PreToolUse", Matcher: "Bash", Type: "command", Command: "b", Known: true},
+		{Event: "PreToolUse", Matcher: "Bash", Type: "command", Command: "c", Known: true},
+		{Event: "PreToolUse", Matcher: "Bash", Type: "command", Command: "d", Known: true},
+	}, entries)
+}

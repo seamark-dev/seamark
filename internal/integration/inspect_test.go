@@ -369,7 +369,8 @@ func TestHookEvidenceCoversBothClaudeFiles(t *testing.T) {
 	assert.Equal(t, "lessons hook runs for Edit only, not for Write, MultiEdit", edits.Detail)
 
 	// The managed hook beside a personal copy for some tools: the hook is
-	// current, and the overlap is a warning that names the tools.
+	// current. The copy has the handler key of the managed hook and no
+	// timeout, so Claude Code runs it once with the fields of one copy.
 	require.NoError(t, inspecttest.Named("current").Write(root))
 
 	insp = claude()
@@ -378,16 +379,32 @@ func TestHookEvidenceCoversBothClaudeFiles(t *testing.T) {
 	assert.Equal(t, "warn", insp.GateMode)
 	assert.Equal(t, "warn", insp.ManagedGateMode)
 
-	var twice []string
+	var warnings []string
 	for _, f := range insp.Findings {
 		if f.Level == integration.FindingWarning {
-			twice = append(twice, f.Reason)
+			warnings = append(warnings, f.Reason)
 		}
 	}
 
-	require.Len(t, twice, 1)
-	assert.Contains(t, twice[0], "also runs `/usr/local/bin/seamark lessons --hook` for Edit")
-	assert.Contains(t, twice[0], "the managed lessons hook runs too, so the hook runs twice")
+	require.Len(t, warnings, 1)
+	assert.Equal(t, "has a copy of the managed lessons hook of .claude/settings.json that differs in timeout; "+
+		"Claude Code runs it once, with the fields of one copy that setup cannot name", warnings[0])
+
+	// A copy with another binary path has another handler key, so Claude
+	// Code runs both, and the overlap is a warning that names the tools.
+	require.NoError(t, inspecttest.WriteFile(root, local,
+		inspecttest.PreToolUseDocument("Edit", "/opt/bin/seamark lessons --hook")))
+
+	warnings = nil
+	for _, f := range claude().Findings {
+		if f.Level == integration.FindingWarning {
+			warnings = append(warnings, f.Reason)
+		}
+	}
+
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "also runs `/opt/bin/seamark lessons --hook` for Edit")
+	assert.Contains(t, warnings[0], "the managed lessons hook runs too, so the hook runs twice")
 }
 
 func TestGateModeCombinesEveryCodexSource(t *testing.T) {

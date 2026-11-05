@@ -144,6 +144,26 @@ func TestSetupLessonChecksCodexRefusesSecondHandler(t *testing.T) {
 		})
 	}
 
+	// Codex also tests a matcher against the aliases Edit and Write of
+	// apply_patch. So an inline baseline under Edit runs for every edit,
+	// as under apply_patch above, and a second baseline would run too.
+	t.Run("an inline baseline under the Edit alias", func(t *testing.T) {
+		root := t.TempDir()
+		command := "/opt/bin/seamark " + hooks.CodexLessonBaselineMarker
+		writeRel(t, root, ".codex/config.toml", "[[hooks.PreToolUse]]\nmatcher = \"Edit\"\n[[hooks.PreToolUse.hooks]]\n"+
+			"type = \"command\"\ncommand = \""+command+"\"\n")
+		before := treeFiles(t, root)
+
+		plan, err := PlanSetup(Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: []ClientSetup{{
+			ClientID: CodexID, Hooks: true, LessonChecks: hooks.LessonChecksCheck,
+		}}})
+		require.Error(t, err)
+		assert.Equal(t, "lesson checks: codex PreToolUse apply_patch already runs a handler from .codex/config.toml [hooks]: "+
+			"`"+command+"`; setup refuses a second handler; remove that definition to let setup manage lesson checks", err.Error())
+		assert.Nil(t, plan)
+		assert.Equal(t, before, treeFiles(t, root))
+	})
+
 	t.Run("a certain wrapper in hooks.json", func(t *testing.T) {
 		root := t.TempDir()
 		writeRel(t, root, codexHooksFile, `{"hooks":{"PostToolUse":[{"matcher":"apply_patch","hooks":[`+
@@ -902,6 +922,19 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 		err := refuse(t, root, enforce(CodexID))
 		assert.Equal(t, "lesson checks: enforce for codex would stay inactive (hooks-disabled); resolve it, then rerun", err.Error())
 	})
+
+	// Claude Code merges the local file after the shared file, so either
+	// file can turn the hooks off.
+	for _, rel := range []string{approve.ClaudeSettings, claudeLocalSettings} {
+		t.Run("claude disableAllHooks in "+rel, func(t *testing.T) {
+			root := t.TempDir()
+			writeRel(t, root, rel, `{"disableAllHooks": true}`)
+
+			err := refuse(t, root, enforce(ClaudeID))
+			assert.Equal(t, "lesson checks: enforce for claude would stay inactive (hooks-disabled); resolve it, then rerun",
+				err.Error())
+		})
+	}
 
 	t.Run("a report-only wrapper", func(t *testing.T) {
 		wrapped := `{"hooks":{"PreToolUse":[{"matcher":"Edit|Write|MultiEdit","hooks":[` +

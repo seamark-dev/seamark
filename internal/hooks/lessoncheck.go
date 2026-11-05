@@ -73,6 +73,10 @@ const (
 type lessonCheckClient struct {
 	guard, baseline, verify string
 	matcher                 string
+	// background lists the handler keys that make the client run a hook
+	// in the background. The pre-write spec carries them, so Merge
+	// removes them from seamark's own pre-write entry.
+	background []string
 	// postEvents lists the events after an edit. Claude Code reports a
 	// failed tool through its own event, and the verification also reads
 	// the partial edit of a failed tool.
@@ -83,12 +87,14 @@ var (
 	claudeLessonChecks = lessonCheckClient{
 		guard: LessonGuardMarker, baseline: LessonBaselineMarker, verify: LessonVerifyMarker,
 		matcher: claudeEditMatcher, postEvents: []string{"PostToolUse", "PostToolUseFailure"},
+		background: ClaudeBackgroundKeys,
 	}
 	// Codex has no failure event: PostToolUse also runs after a failed
 	// apply_patch.
 	codexLessonChecks = lessonCheckClient{
 		guard: CodexLessonGuardMarker, baseline: CodexLessonBaselineMarker, verify: CodexLessonVerifyMarker,
 		matcher: codexEditMatcher, postEvents: []string{"PostToolUse"},
+		background: CodexBackgroundKeys,
 	}
 )
 
@@ -109,13 +115,16 @@ func CodexLessonCheckSpecs(mode string) []Spec {
 // any other mode installs the baseline. The pre-write hook lists the
 // marker of the other mode as legacy, so a mode switch rewrites the
 // existing entry in place, as a gate mode switch does. The post-edit
-// hooks share one marker and are the same in both modes.
+// hooks share one marker and are the same in both modes. The pre-write
+// hook of both modes runs in the foreground: a guard denies only by exit
+// status 2, and a baseline in the background can finish after the write.
 func (c lessonCheckClient) specs(mode string) []Spec {
 	pre := Spec{
 		Name:  "lesson guard",
 		Event: "PreToolUse", Matcher: c.matcher,
 		Marker: c.guard, Legacy: []string{c.baseline},
 		Status: "seamark: checking the lesson checks before the write", Timeout: lessonPreWriteTimeout,
+		BackgroundKeys: c.background,
 	}
 
 	if mode != LessonChecksEnforce {

@@ -449,7 +449,8 @@ func summarizeGateHooks(s *Status) integration.GateSummary {
 // warn hook still follows an enforcing policy file. The legacy Claude
 // Code fields stay in the JSON. The text reads the broader view, because
 // a Codex gate hook blocks a Codex command whatever .claude/settings.json
-// says.
+// says. A report-only line names the cause that the inspection read: a
+// discarded exit status, or a hook that the client runs in the background.
 func printGate(w io.Writer, s *Status) {
 	g := summarizeGateHooks(s)
 	names := func(ids []string) string { return strings.Join(ids, ", ") }
@@ -466,8 +467,8 @@ func printGate(w io.Writer, s *Status) {
 				s.GatePolicyError, names(g.Warn))
 		case integration.GateEffectReportOnly:
 			fmt.Fprintf(w, "gate           POLICY BROKEN (%s)\n"+
-				"               the report-only hook discards its exit status (%s): nothing blocks, and nothing is being checked\n",
-				s.GatePolicyError, names(g.ReportOnly))
+				"               the report-only hook %s (%s): nothing blocks, and nothing is being checked\n",
+				s.GatePolicyError, g.ReportOnlyCause(g.ReportOnly), names(g.ReportOnly))
 		case integration.GateEffectUnknown:
 			// Broken policy AND an unknown hook: the effective behaviour is
 			// unknown, not "no hook".
@@ -490,8 +491,8 @@ func printGate(w io.Writer, s *Status) {
 	case integration.GateEffectReportOnly:
 		// A verdict blocks only by exit status 2, so the policy mode cannot
 		// make such a hook block.
-		fmt.Fprintf(w, "gate           report-only (%s hook discards its exit status); nothing blocks, whatever policy mode %s says\n",
-			names(g.ReportOnly), s.GatePolicyMode)
+		fmt.Fprintf(w, "gate           report-only (%s hook %s); nothing blocks, whatever policy mode %s says\n",
+			names(g.ReportOnly), g.ReportOnlyCause(g.ReportOnly), s.GatePolicyMode)
 	case integration.GateEffectBlocks:
 		if len(g.Warn) > 0 {
 			fmt.Fprintf(w, "gate           enforce for %s (hook carries --enforce; blocking verdicts exit 2); "+
@@ -504,7 +505,7 @@ func printGate(w io.Writer, s *Status) {
 	}
 
 	if len(g.ReportOnly) > 0 && g.Effect() > integration.GateEffectReportOnly {
-		fmt.Fprintf(w, "               the %s hook discards its exit status, so it never blocks\n", names(g.ReportOnly))
+		fmt.Fprintf(w, "               the %s hook %s, so it never blocks\n", names(g.ReportOnly), g.ReportOnlyCause(g.ReportOnly))
 	}
 
 	// The unknown line above already names an unreadable document and a

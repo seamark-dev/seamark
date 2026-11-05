@@ -3,7 +3,6 @@ package integration
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -615,17 +614,17 @@ func TestClaudeLessonSourcesNameEveryReportOnlyFile(t *testing.T) {
 	passing := wrapper(t, "/usr/bin/env "+testBinary+" lessons --guard --hook")
 
 	t.Run("a wrapper in both files", func(t *testing.T) {
-		state := claudeLessonSources(discarding, discarding, nil)
+		state := claudeLessonSources(discarding, discarding, claudeLocalRead, false)
 		assert.Equal(t, []string{approve.ClaudeSettings, claudeLocalSettings}, state.reportOnly)
 		assert.False(t, state.sourceUnreadable)
 	})
 
 	t.Run("a wrapper that passes the status", func(t *testing.T) {
-		assert.Empty(t, claudeLessonSources(passing, passing, nil).reportOnly)
+		assert.Empty(t, claudeLessonSources(passing, passing, claudeLocalRead, false).reportOnly)
 	})
 
 	t.Run("a local file that cannot be read", func(t *testing.T) {
-		state := claudeLessonSources(map[string]any{}, nil, errors.New("broken"))
+		state := claudeLessonSources(map[string]any{}, nil, claudeLocalUnreadable, false)
 		assert.Empty(t, state.reportOnly, "a nil local document holds no definition")
 		assert.True(t, state.sourceUnreadable)
 	})
@@ -887,4 +886,194 @@ func TestClaudeWrappedGateThatDiscardsItsExitStatusIsReportOnly(t *testing.T) {
 	discards = findingsWith(plan.Findings, "discards the exit status")
 	require.Len(t, discards, 1)
 	assert.Equal(t, claudeLocalSettings, discards[0].Path)
+}
+
+// setClaudeKey sets one top-level key of a Claude Code settings file to
+// a raw JSON value. It keeps every other key, and it creates an absent
+// file.
+func setClaudeKey(t *testing.T, root, rel, key, raw string) {
+	t.Helper()
+
+	document := map[string]any{}
+
+	if data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel))); err == nil {
+		require.NoError(t, json.Unmarshal(data, &document))
+	}
+
+	var value any
+	require.NoError(t, json.Unmarshal([]byte(raw), &value))
+
+	document[key] = value
+
+	data, err := json.Marshal(document)
+	require.NoError(t, err)
+	writeRel(t, root, rel, string(data))
+}
+
+// disabledReason is the start of the disableAllHooks finding reason.
+const disabledReason = "disableAllHooks: true turns off the project hooks of Claude Code"
+
+func TestClaudeHooksDisabledFollowsClaudeCodePrecedence(t *testing.T) {
+	// Claude Code merges the local file after the shared file, and only a
+	// boolean true turns the hooks off. A local file that the run did not
+	// read or could not read leaves the shared file alone to decide, and
+	// the finding says so.
+	doc := func(raw string) map[string]any {
+		switch raw {
+		case "":
+			return nil
+		case "{}":
+			return map[string]any{}
+		}
+
+		document, err := hooks.ParseDocument([]byte(`{"disableAllHooks": ` + raw + `}`))
+		require.NoError(t, err)
+
+		return document
+	}
+
+	for name, tc := range map[string]struct {
+		settings, local string
+		state           claudeLocalState
+		path            string
+		note            string
+	}{
+		"P1 shared true, local absent":           {settings: "true", state: claudeLocalRead, path: approve.ClaudeSettings},
+		"P1 shared true, local without the key":  {settings: "true", local: "{}", state: claudeLocalRead, path: approve.ClaudeSettings},
+		"P2 local false wins over shared true":   {settings: "true", local: "false", state: claudeLocalRead},
+		"P3 local true, shared absent":           {local: "true", state: claudeLocalRead, path: claudeLocalSettings},
+		"P3 local true wins over shared false":   {settings: "false", local: "true", state: claudeLocalRead, path: claudeLocalSettings},
+		"P4 a local string leaves the shared":    {settings: "true", local: `"yes"`, state: claudeLocalRead, path: approve.ClaudeSettings},
+		"P5 a shared string is not set":          {settings: `"true"`, state: claudeLocalRead},
+		"P5 a shared number is not set":          {settings: "1", state: claudeLocalRead},
+		"P5 a shared null is not set":            {settings: "null", state: claudeLocalRead},
+		"P6 both absent":                         {state: claudeLocalRead},
+		"P7 the local file is not read":          {settings: "true", local: "false", state: claudeLocalUnread, path: approve.ClaudeSettings, note: "this run did not read"},
+		"P8 the local file cannot be read":       {settings: "true", state: claudeLocalUnreadable, path: approve.ClaudeSettings, note: "could not be read"},
+		"P9 shared false, local cannot be read":  {settings: "false", state: claudeLocalUnreadable},
+		"P9 shared absent, local cannot be read": {state: claudeLocalUnreadable},
+		"P7 shared absent, local true is unread": {local: "true", state: claudeLocalUnread},
+	} {
+		t.Run(name, func(t *testing.T) {
+			settings, local := doc(tc.settings), doc(tc.local)
+
+			path, disabled := claudeHooksDisabled(settings, local, tc.state)
+			assert.Equal(t, tc.path, path)
+			assert.Equal(t, tc.path != "", disabled)
+
+			assert.Equal(t, disabled, claudeLessonSources(settings, local, tc.state, false).hooksDisabled,
+				"the enforce preconditions use the same reading")
+
+			findings := claudeHooksDisabledFindings(settings, local, tc.state)
+			if !disabled {
+				assert.Empty(t, findings)
+
+				return
+			}
+
+			require.Len(t, findings, 1)
+			assert.Equal(t, FindingWarning, findings[0].Level)
+			assert.Equal(t, tc.path, findings[0].Path)
+			assert.True(t, strings.HasPrefix(findings[0].Reason, disabledReason+", so the installed seamark hooks never run "+
+				"(user-level, --settings, and managed settings are not read here)"), findings[0].Reason)
+			assert.Equal(t, "remove disableAllHooks, or set it to false, to run the hooks", findings[0].Action)
+
+			if tc.note == "" {
+				assert.NotContains(t, findings[0].Reason, ";")
+			} else {
+				assert.Contains(t, findings[0].Reason, tc.note)
+			}
+		})
+	}
+}
+
+func TestClaudeSetupAndInspectionWarnOnceWhenHooksAreDisabled(t *testing.T) {
+	for _, rel := range []string{approve.ClaudeSettings, claudeLocalSettings} {
+		t.Run(rel, func(t *testing.T) {
+			root := t.TempDir()
+			setClaudeKey(t, root, rel, "disableAllHooks", "true")
+
+			plan := planClaude(t, root, ClientSetup{Hooks: true})
+			disabled := findingsWith(plan.Findings, disabledReason)
+			require.Len(t, disabled, 1)
+			assert.Equal(t, rel, disabled[0].Path, "the finding names the deciding file")
+
+			// Inspection names it once for all installed hooks.
+			applyLessonSetupWithBinary(t, root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true})
+
+			insp := claudeSetup{}.Inspect(root)
+			disabled = findingsWith(insp.Findings, disabledReason)
+			require.Len(t, disabled, 1)
+			assert.Equal(t, rel, disabled[0].Path)
+		})
+	}
+
+	t.Run("lesson-check hooks alone", func(t *testing.T) {
+		// The baseline and verify hooks are seamark hooks too. The user can
+		// remove the gate, lessons, and reset hooks and keep these two.
+		document := map[string]any{"disableAllHooks": true}
+		_, err := hooks.Merge(document, testBinary, hooks.ClaudeLessonCheckSpecs(hooks.LessonChecksCheck))
+		require.NoError(t, err)
+
+		data, err := json.Marshal(document)
+		require.NoError(t, err)
+
+		root := t.TempDir()
+		writeRel(t, root, approve.ClaudeSettings, string(data))
+
+		insp := claudeSetup{}.Inspect(root)
+
+		// The three hook entries stay absent, so only the lesson-check
+		// reading can ask for the finding.
+		for _, capability := range []Capability{CapabilityCommands, CapabilityEdits, CapabilityResets} {
+			entry, ok := insp.Entry(capability)
+			require.True(t, ok, "%s", capability)
+			require.Equal(t, StateAbsent, entry.State, "%s", capability)
+		}
+
+		require.NotNil(t, insp.LessonHooks)
+		assert.True(t, insp.LessonHooks.HooksDisabled)
+
+		disabled := findingsWith(insp.Findings, disabledReason)
+		require.Len(t, disabled, 1)
+		assert.Equal(t, approve.ClaudeSettings, disabled[0].Path)
+	})
+
+	t.Run("no seamark hooks", func(t *testing.T) {
+		root := t.TempDir()
+		setClaudeKey(t, root, approve.ClaudeSettings, "disableAllHooks", "true")
+
+		assert.Empty(t, findingsWith(claudeSetup{}.Inspect(root).Findings, disabledReason),
+			"a repository without seamark hooks gets no finding for a setting of its own")
+	})
+
+	t.Run("a plain run that does not read the local file", func(t *testing.T) {
+		root := t.TempDir()
+		setClaudeKey(t, root, approve.ClaudeSettings, "disableAllHooks", "true")
+		setClaudeKey(t, root, claudeLocalSettings, "disableAllHooks", "false")
+
+		plan, err := claudeSetup{}.Plan(root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true})
+		require.NoError(t, err)
+		require.NotContains(t, readPaths(plan.Reads), claudeLocalSettings)
+
+		disabled := findingsWith(plan.Findings, disabledReason)
+		require.Len(t, disabled, 1)
+		assert.Equal(t, approve.ClaudeSettings, disabled[0].Path)
+		assert.Contains(t, disabled[0].Reason, "this run did not read "+claudeLocalSettings)
+
+		// The inspection reads the local file, so its false turns the hooks on.
+		applyLessonSetupWithBinary(t, root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true})
+		assert.Empty(t, findingsWith(claudeSetup{}.Inspect(root).Findings, disabledReason))
+	})
+
+	t.Run("a local false gives the output of no key", func(t *testing.T) {
+		plain, overridden := t.TempDir(), t.TempDir()
+		writeRel(t, plain, claudeLocalSettings, `{"disableAllHooks": false}`)
+		writeRel(t, overridden, claudeLocalSettings, `{"disableAllHooks": false}`)
+		setClaudeKey(t, overridden, approve.ClaudeSettings, "disableAllHooks", "true")
+
+		want := planClaude(t, plain, ClientSetup{Hooks: true})
+		got := planClaude(t, overridden, ClientSetup{Hooks: true})
+		assert.Equal(t, want.Findings, got.Findings)
+	})
 }

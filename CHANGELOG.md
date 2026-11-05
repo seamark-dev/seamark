@@ -51,6 +51,19 @@ model-boundary delivery.
   and the date. A computed scope then reads as a suggestion: only a
   console preview replaces the choice, and `lessons --retarget` refuses
   it and names the console. No command makes this edit.
+- **Claude Code hooks turned off.** With `disableAllHooks: true` in a
+  project settings file, Claude setup refuses lesson-check enforce, and
+  setup, doctor, and status warn that the seamark hooks never run.
+- **Background and filtered hooks.** Setup, doctor, and status no longer
+  report enforcement for a gate or lesson guard that runs in the
+  background (async, Claude Code asyncRewake) or that a Claude Code if
+  field filters. Setup removes the background key from its own gate and
+  guard entries, and Codex asks once to review that entry in /hooks.
+- **Codex matchers.** Setup and doctor read a Codex matcher of only
+  letters, digits, _ and | as exact tool names, and match apply_patch
+  also as Edit and Write, as Codex does. A gate under ash no longer
+  reads as running for Bash, and an inline lesson hook under Edit is no
+  longer installed twice.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.
@@ -96,6 +109,9 @@ model-boundary delivery.
   keep their content key.
 - **Second lesson handlers.** Claude setup refuses a certain second
   lesson-check handler as Codex does, and warns about an uncertain one.
+  A copy in .claude/settings.local.json that equals the managed handler
+  is accepted, because Claude Code runs it once, and doctor no longer
+  says that it runs twice.
 - **Unreadable hook documents.** Status and the console read
   `unreadable`, as doctor does, not `off`.
 - **Retarget route.** A linked pin names `w` Retarget only while `w`

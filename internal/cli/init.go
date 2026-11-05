@@ -597,12 +597,21 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 				"          too; both must change to stop blocking\n")
 		}
 	case effect == integration.GateEffectReportOnly:
-		// Every gate hook of the run discards its exit status. No mode and
-		// no policy makes it block, so the line must not name one.
-		fmt.Fprintf(w, "  gate    report-only — the gate hook in %s discards its exit status: verdicts\n"+
+		// Every gate hook of the run discards its exit status or runs in
+		// the background. No mode and no policy makes it block, so the line
+		// must not name one. The fix names the cause of each hook.
+		fix := "run the gate last in that hook"
+		if len(summary.Background) > 0 {
+			fix = "remove the background key from that hook"
+			if len(summary.Background) < len(summary.ReportOnly) {
+				fix = "run the gate last and in the foreground in that hook"
+			}
+		}
+
+		fmt.Fprintf(w, "  gate    report-only — the gate hook in %s %s: verdicts\n"+
 			"          are reported, nothing blocks, whatever --enforce or .seamark/policy.yaml says. Setup never\n"+
-			"          edits a gate hook it does not manage; run the gate last in that hook, or remove it and re-run\n",
-			strings.Join(summary.ReportOnly, ", "))
+			"          edits a gate hook it does not manage; %s, or remove it and re-run\n",
+			strings.Join(summary.ReportOnly, ", "), summary.ReportOnlyCause(summary.ReportOnly), fix)
 
 		if policyErr != nil {
 			fmt.Fprintf(w, "          note: .seamark/policy.yaml also failed to load (%v)\n", policyErr)

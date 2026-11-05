@@ -317,6 +317,10 @@ type hookSource struct {
 	// path is the document that holds the definition, for narration.
 	path    string
 	command string
+	// handler is the handler map of a JSON definition, or nil for an
+	// inline Codex definition. A Claude Code handler copy is compared
+	// field by field, so the source keeps the map.
+	handler map[string]any
 	// tools lists the spec's tools the client runs the definition for:
 	// a "command"-typed entry under a matcher that fires. Empty when the
 	// client never runs it for the spec's tools.
@@ -324,13 +328,37 @@ type hookSource struct {
 	// certain is true when hooks.SeamarkHookUse answers HookRuns: the
 	// shell executes the seamark hook each time. It is false for
 	// HookMayRun, for example when another program gets the seamark
-	// command as arguments.
+	// command as arguments. An if filter does not change it: the rule of
+	// one lesson handler reads it so. certainSource adds the filter.
 	certain bool
 	// managed is true for the definition setup installs and updates.
 	managed bool
 	// mode is the gate mode of the definition; "" for other hooks.
 	mode string
+	// background names the key that makes the client run a foreground
+	// hook in the background, or "". A gate in the background has
+	// GateModeReportOnly. The key of another hook is not recorded,
+	// because such a hook delivers its result late and blocks nothing.
+	background string
+	// filter is the Claude Code if field of the definition, or "". The
+	// client runs a filtered hook only for the calls that match, so its
+	// coverage is uncertain. On an event without a tool it never runs.
+	filter string
 }
+
+// hookRules are the rules of one client for reading a hook document:
+// its ID for an action, its matcher rule, and its execution rule.
+type hookRules struct {
+	clientID string
+	fires    hooks.MatcherRule
+	exec     hooks.ExecutionRule
+}
+
+// The hook rules of the built-in clients.
+var (
+	claudeHookRules = hookRules{clientID: ClaudeID, fires: hooks.ClaudeMatcher, exec: hooks.ClaudeExecution}
+	codexHookRules  = hookRules{clientID: CodexID, fires: hooks.CodexMatcher, exec: hooks.CodexExecution}
+)
 
 // describeCommand renders a hook command for a detail or a finding. A
 // wrapper can carry a credential, for example "hook-runner --token=…
@@ -450,6 +478,103 @@ func discardsStatusFinding(path, command, mode string) Finding {
 	return finding
 }
 
+// backgroundFinding names a definition of a foreground hook that the
+// client runs in the background. The client does not wait for it, so no
+// verdict or deny blocks. Setup removes the key from its own entry, so
+// the action for a managed definition is a re-run of setup.
+func backgroundFinding(s hookSource, spec hooks.Spec, clientID string) Finding {
+	action := fmt.Sprintf("remove %#q from that definition", s.background)
+	if s.managed {
+		action = fmt.Sprintf("run `seamark init --client %s`, which removes %#q from that hook", clientID, s.background)
+	}
+
+	return Finding{
+		Level: FindingWarning,
+		Path:  s.path,
+		Reason: fmt.Sprintf("has %#q with `%s: true`, so the client runs the seamark %s hook in the background, "+
+			"and no verdict blocks", describeCommand(s.command), s.background, spec.Name),
+		Action: action,
+	}
+}
+
+// filterFinding names a definition with a Claude Code if filter on an
+// event with a tool. Claude Code runs it only for the calls that match,
+// and for Bash also when it cannot tell what the command runs. So setup
+// cannot tell which calls the hook covers. Setup never removes the
+// field, because the filter can be the user's choice.
+func filterFinding(s hookSource, spec hooks.Spec) Finding {
+	return Finding{
+		Level: FindingWarning,
+		Path:  s.path,
+		Reason: fmt.Sprintf("has %#q with the if filter %#q, so Claude Code runs the seamark %s hook only for the %s calls "+
+			"that match; setup cannot tell which calls it covers", describeCommand(s.command), describeCommand(s.filter),
+			spec.Name, spec.Event),
+		Action: "remove the `if` field, or remove the definition, so setup can tell",
+	}
+}
+
+// neverRunsFilterFinding names a definition with a Claude Code if filter
+// on an event without a tool. Claude Code never runs such a hook. The
+// finding is a warning, not the information of neverFiresFinding,
+// because the action is to edit the field, not the matcher.
+func neverRunsFilterFinding(s hookSource, spec hooks.Spec) Finding {
+	return Finding{
+		Level: FindingWarning,
+		Path:  s.path,
+		Reason: fmt.Sprintf("has %#q with an if field on %s, which has no tool call; Claude Code never runs that hook",
+			describeCommand(s.command), spec.Event),
+		Action: fmt.Sprintf("remove the `if` field from the %s hook in %s", spec.Event, s.path),
+	}
+}
+
+// neverRuns reports whether a source has an if filter on an event
+// without a tool, so the client never runs it.
+func (s hookSource) neverRuns() bool {
+	return s.filter != "" && len(s.tools) == 0
+}
+
+// executionFindings returns the findings about how the client runs the
+// definition: in the background, or only for the calls that a filter
+// matches. documentSources gives them for each source. The lesson-check
+// inspection gives them alone, because it reads the hooks in another way.
+func (s hookSource) executionFindings(spec hooks.Spec, clientID string) []Finding {
+	var findings []Finding
+
+	if s.background != "" {
+		findings = append(findings, backgroundFinding(s, spec, clientID))
+	}
+
+	switch {
+	case s.neverRuns():
+		findings = append(findings, neverRunsFilterFinding(s, spec))
+	case s.filter != "":
+		findings = append(findings, filterFinding(s, spec))
+	}
+
+	return findings
+}
+
+// applyExecution records the execution of a definition on its source. A
+// background key counts only for a foreground spec. A gate in the
+// background runs and reports, but no verdict blocks, so its mode is
+// GateModeReportOnly. A filter on an event without a tool leaves the
+// source without tools.
+func (s *hookSource) applyExecution(spec hooks.Spec, execution hooks.Execution) {
+	if execution.Background != "" && spec.Foreground() {
+		s.background = execution.Background
+
+		if s.mode != "" {
+			s.mode = GateModeReportOnly
+		}
+	}
+
+	s.filter = execution.Filter
+
+	if s.filter != "" && !hooks.ClaudeToolEvent(spec.Event) {
+		s.tools = nil
+	}
+}
+
 // documentSources lists every definition of the spec's hook in one hook
 // document. The owned commands are such definitions, and setup manages
 // them when the document is the managed one. The wrapped commands are
@@ -457,8 +582,10 @@ func discardsStatusFinding(path, command, mode string) Finding {
 // the tools the client runs it for. A definition the client never runs
 // for the spec's tools has another type, or a matcher that never fires.
 // It is named in an info finding and has no tools, so it counts for
-// nothing.
-func documentSources(findings *[]Finding, document map[string]any, fires hooks.MatcherRule, path string, spec hooks.Spec, managed bool) []hookSource {
+// nothing. A definition with an if filter on an event without a tool
+// never runs either. It is kept without tools, so the classification can
+// name the field.
+func documentSources(findings *[]Finding, document map[string]any, rules hookRules, path string, spec hooks.Spec, managed bool) []hookSource {
 	var sources []hookSource
 
 	hookMap, _ := document["hooks"].(map[string]any)
@@ -466,7 +593,7 @@ func documentSources(findings *[]Finding, document map[string]any, fires hooks.M
 	markers := spec.Markers()
 
 	hooks.ForEachCommand(eventHooks, func(matcher string, h map[string]any, cmd string) {
-		source := hookSource{path: path, command: cmd}
+		source := hookSource{path: path, command: cmd, handler: h}
 		// asked is the gate mode of the markers that the command runs. A
 		// wrapper that discards the exit status gets another mode.
 		asked := ""
@@ -486,10 +613,13 @@ func documentSources(findings *[]Finding, document map[string]any, fires hooks.M
 			return
 		}
 
-		if hookType, _ := h["type"].(string); hookType == "command" {
-			source.tools = firingTools(spec, matcher, fires)
+		hookType, _ := h["type"].(string)
+		if hookType == "command" {
+			source.tools = firingTools(spec, matcher, rules.fires)
 		}
 
+		// The matcher decides first. A definition that never fires gets the
+		// finding about its matcher, whatever its other fields say.
 		if len(source.tools) == 0 {
 			*findings = append(*findings, neverFiresFinding(path, cmd, spec.Event, matcher, spec))
 
@@ -502,10 +632,107 @@ func documentSources(findings *[]Finding, document map[string]any, fires hooks.M
 			*findings = append(*findings, discardsStatusFinding(path, cmd, source.mode))
 		}
 
+		source.applyExecution(spec, rules.exec(h))
+		*findings = append(*findings, source.executionFindings(spec, rules.clientID)...)
+
 		sources = append(sources, source)
 	})
 
 	return sources
+}
+
+// executionFindingsIn appends the execution findings of every definition
+// of the spec's hook in one document, and no other finding. The
+// lesson-check inspection uses it, because it reads the owned entries
+// without documentSources, and doctor must keep its other lines.
+func executionFindingsIn(findings *[]Finding, document map[string]any, rules hookRules, path string, spec hooks.Spec,
+	managed bool,
+) {
+	var scratch []Finding
+
+	for _, s := range documentSources(&scratch, document, rules, path, spec, managed) {
+		*findings = append(*findings, s.executionFindings(spec, rules.clientID)...)
+	}
+}
+
+// sourceGateHook lists one gate definition that setup does not manage,
+// with its own mode. A definition that only can run the gate, or that
+// runs only for the calls that a filter matches, is uncertain.
+func sourceGateHook(s hookSource) GateHook {
+	return GateHook{Path: s.path, Mode: s.mode, Uncertain: uncertainSource(s), Background: s.background != ""}
+}
+
+// managedGateHook lists the managed gate hook of a plan in the mode that
+// the plan installs. The managed sources of the plan can change that
+// reading: a Claude Code copy in the background makes the hook
+// report-only, and an if filter on every managed entry makes it
+// uncertain.
+func managedGateHook(path, mode string, sources []hookSource) GateHook {
+	hook := GateHook{Path: path, Mode: mode, Managed: true}
+
+	var managed []hookSource
+
+	for _, s := range sources {
+		if s.managed {
+			managed = append(managed, s)
+		}
+	}
+
+	if i := slices.IndexFunc(managed, func(s hookSource) bool { return s.mode == GateModeReportOnly }); i >= 0 {
+		hook.Mode, hook.Background = GateModeReportOnly, managed[i].background != ""
+	}
+
+	hook.Uncertain = len(managed) > 0 && !slices.ContainsFunc(managed, certainSource)
+
+	return hook
+}
+
+// backgroundReportOnly reports whether the gate sources are report-only
+// because the client runs each of them in the background. Status then
+// names that cause, not a discarded exit status. A mix of both causes
+// reads as a discarded status, which is true for one of them.
+func backgroundReportOnly(sources []hookSource) bool {
+	found := false
+
+	for _, s := range sources {
+		if !certainSource(s) || s.mode != GateModeReportOnly {
+			continue
+		}
+
+		if s.background == "" {
+			return false
+		}
+
+		found = true
+	}
+
+	return found
+}
+
+// backgroundRemovalFindings reports each background key that Merge
+// removed from seamark's own entry in the document at path. A warning,
+// because a plain init prints no information finding. Codex hashes the
+// handler into its trust record, so the Codex finding names the review.
+func backgroundRemovalFindings(path string, removed []hooks.BackgroundRemoval, codex bool) []Finding {
+	findings := make([]Finding, 0, len(removed))
+
+	for _, r := range removed {
+		finding := Finding{
+			Level: FindingWarning,
+			Path:  path,
+			Reason: fmt.Sprintf("setup removed `%s: true` from the seamark %s hook under %s, "+
+				"because a hook in the background cannot block", r.Key, r.Name, r.Event),
+		}
+
+		if codex {
+			finding.Reason += "; the change alters the Codex trust hash, so Codex asks you to review that hook again in /hooks"
+			finding.Action = "open the project in Codex and review the hooks with /hooks"
+		}
+
+		findings = append(findings, finding)
+	}
+
+	return findings
 }
 
 // unmanagedSources keeps the sources setup does not manage.
@@ -542,7 +769,8 @@ func coveredTools(spec hooks.Spec, sources []hookSource, keep func(hookSource) b
 // hookMode returns the gate mode of the sources that pass keep. It is
 // enforce when any of them enforces. It is warn when any of them
 // follows the policy file. It is GateModeReportOnly when each of them
-// discards its exit status, and "" without such a source. One enforcing
+// is report-only: it discards its exit status, or the client runs it in
+// the background. It is "" without such a source. One enforcing
 // definition blocks whatever the others say. A warn definition blocks
 // when the policy file enforces.
 //
@@ -564,15 +792,17 @@ func hookMode(sources []hookSource, keep func(hookSource) bool) string {
 	return mode
 }
 
-// certainSource keeps the sources that certainly run the hook.
-func certainSource(s hookSource) bool { return s.certain }
+// certainSource keeps the sources that certainly run the hook for each
+// call of their tools. An if filter makes the coverage uncertain,
+// because Claude Code runs the hook only for the calls that match.
+func certainSource(s hookSource) bool { return s.certain && s.filter == "" }
 
 // uncertainSource keeps the sources that only can run the hook.
-func uncertainSource(s hookSource) bool { return !s.certain }
+func uncertainSource(s hookSource) bool { return !certainSource(s) }
 
 // managedSource keeps the sources setup manages. Only an owned command
-// is managed, and the shell always runs an owned command, so each
-// managed source is also certain.
+// is managed, and the shell always runs an owned command. An if filter
+// on the entry can still make a managed source uncertain.
 func managedSource(s hookSource) bool { return s.managed }
 
 // anySource keeps every source.
@@ -592,12 +822,16 @@ func missingTools(spec hooks.Spec, covered []string) []string {
 // an uncertain one makes the hook partial, and nothing makes it absent.
 // The detail names the mode of a gate hook and the source of a hook
 // setup does not manage. The mode is that of the certain sources, or of
-// the uncertain ones when only those exist and the detail says "may".
+// the uncertain ones when only those exist and the detail says "may". A
+// definition that never runs because of an if filter makes the hook
+// partial, not absent, so the action names the field and no re-run of
+// setup claims to repair it.
 func classifyHook(entry *CapabilityInspection, spec hooks.Spec, sources []hookSource) {
 	certain := coveredTools(spec, sources, certainSource)
-	// Every source has at least one of the spec's tools, so the first
-	// uncertain source also tells whether any uncertain coverage exists.
-	first := slices.IndexFunc(sources, uncertainSource)
+	// Every other source has at least one of the spec's tools, so the
+	// first uncertain one also tells whether any uncertain coverage exists.
+	first := slices.IndexFunc(sources, func(s hookSource) bool { return uncertainSource(s) && !s.neverRuns() })
+	never := slices.IndexFunc(sources, hookSource.neverRuns)
 	name := spec.Name + " hook"
 
 	mode := hookMode(sources, certainSource)
@@ -629,6 +863,15 @@ func classifyHook(entry *CapabilityInspection, spec hooks.Spec, sources []hookSo
 		entry.State = StatePartial
 		entry.Detail = fmt.Sprintf("%s may run from %s: %#q", name, sources[first].path, describeCommand(sources[first].command))
 		entry.Action = "run the seamark hook directly in that definition, or remove it and re-run setup, so setup can tell"
+
+		// A filter is a field of the definition, so the action names it.
+		if sources[first].filter != "" {
+			entry.Action = "remove the `if` field from that definition, or remove the definition, so setup can tell"
+		}
+	case never >= 0:
+		entry.State = StatePartial
+		entry.Detail = fmt.Sprintf("%s never runs from %s: it has an if field on %s", name, sources[never].path, spec.Event)
+		entry.Action = fmt.Sprintf("remove the `if` field from the %s hook in %s", spec.Event, sources[never].path)
 	default:
 		entry.State = StateAbsent
 	}
@@ -641,7 +884,7 @@ func sourcePaths(sources []hookSource) string {
 	var paths []string
 
 	for _, s := range sources {
-		if !s.certain || slices.Contains(paths, s.path) {
+		if !certainSource(s) || slices.Contains(paths, s.path) {
 			continue
 		}
 
@@ -653,14 +896,21 @@ func sourcePaths(sources []hookSource) string {
 
 // sourceFindings names each definition that setup does not manage. A
 // definition that runs for a tool that the managed one also runs for is
-// a warning. The client runs every matching definition, so a second one
-// delivers each lesson twice and evaluates each command twice. An
-// uncertain definition is also a warning, because setup cannot tell
-// whether the hook runs twice, but the reader can. The reason never
-// starts with the path, because every consumer prefixes it.
+// a warning. Codex runs every matching definition, so a second one
+// delivers each lesson twice and evaluates each command twice. Claude
+// Code runs a local copy with the handler key of a managed definition
+// once. So the Claude Code callers first take out each local copy that
+// shares a tool with a managed definition of its key. A definition left
+// here can still have the key of a managed definition when the two share
+// no tool. Each managed definition that shares a tool with it has
+// another key, so Claude Code runs both for that tool. An uncertain
+// definition is also a warning, because setup cannot tell whether the
+// hook runs twice, but the reader can. The reason never starts with the
+// path, because every consumer prefixes it.
 func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) {
 	managedTools := coveredTools(spec, sources, managedSource)
 	managedMode := hookMode(sources, managedSource)
+	managedFiltered := slices.ContainsFunc(sources, func(s hookSource) bool { return s.managed && s.filter != "" })
 
 	for _, s := range unmanagedSources(sources) {
 		command := describeCommand(s.command)
@@ -671,6 +921,12 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 			reason := fmt.Sprintf("has %#q, which can run the seamark %s hook; setup cannot tell", command, spec.Name)
 			if len(twice) > 0 {
 				reason += ", and when it does, the hook runs twice"
+
+				// A filtered managed handler runs only for the calls that its
+				// filter matches. So the second run happens only for those calls.
+				if managedFiltered {
+					reason += " for each call that both definitions run"
+				}
 			}
 
 			*findings = append(*findings, Finding{
@@ -680,12 +936,22 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 				Action: "run the seamark hook directly in that definition, or remove it, so setup can tell",
 			})
 		case len(twice) > 0:
-			reason := fmt.Sprintf("also runs %#q for %s; the managed %s hook runs too, so the hook runs twice",
-				command, strings.Join(toolNames(twice), ", "), spec.Name)
+			// A Claude Code if filter is part of the handler key, so a
+			// filtered definition runs beside the managed one. Each runs only
+			// for the calls that its filter matches.
+			ending := "so the hook runs twice"
+			if s.filter != "" || managedFiltered {
+				ending = "so the hook runs twice for each call that both definitions run"
+			}
+
+			reason := fmt.Sprintf("also runs %#q for %s; the managed %s hook runs too, %s",
+				command, strings.Join(toolNames(twice), ", "), spec.Name, ending)
 
 			// The other definition can carry another gate mode. Both run,
 			// so a local --enforce still blocks under a managed warn hook.
-			if s.mode != "" && s.mode != managedMode {
+			// For a filtered definition, the filter finding already says that
+			// setup cannot tell which calls it covers.
+			if s.mode != "" && s.mode != managedMode && s.filter == "" {
 				reason += fmt.Sprintf("; that definition runs in %s mode, and both apply", s.mode)
 			}
 
@@ -695,6 +961,10 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 				Reason: reason,
 				Action: "remove one of the two definitions",
 			})
+		case s.filter != "":
+			// The filter finding of documentSources already names this
+			// definition and what setup cannot tell about it.
+			continue
 		default:
 			*findings = append(*findings, Finding{
 				Level:  FindingInfo,
@@ -706,7 +976,8 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 }
 
 // sharedTools keeps the tools of a definition that the managed
-// definition also runs for. The client runs each of them twice.
+// definition also runs for. The client can run the hook twice for each
+// of them.
 func sharedTools(tools, managedTools []string) []string {
 	return slices.DeleteFunc(slices.Clone(tools), func(tool string) bool { return !slices.Contains(managedTools, tool) })
 }
