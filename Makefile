@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test lesson-check lesson-check-race report-bench tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-native-smoke capture-native-check capture-native-record lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test lesson-check lesson-check-race report-bench tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-oracle-record agents-native-smoke capture-native-check capture-native-record lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -100,6 +100,18 @@ CLIENT ?= codex
 agents-native-check: build ## Offline checks against the installed $(CLIENT) CLI: version, exec surface, patch oracle, sandbox, generated setup
 	SEAMARK_NATIVE_CLIENT=$(CLIENT) CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -v -run '^TestNative' ./internal/integration
 	scripts/agent-integration-smoke.sh check $(CLIENT) $(BINARY)
+
+# The apply_patch content oracle: the installed codex binary, run offline
+# under the name apply_patch in scratch directories, applies each content
+# case, and the recorder writes what it did into
+# internal/integration/testdata/codex/apply_patch_oracle.json. No model,
+# no login. ORACLE_VERSION must name the installed version (for example
+# 0.164.0), so a different installed version never rewrites the file by
+# itself. The path cases keep their bytes. agents-native-check replays
+# the content cases.
+agents-oracle-record: ## Record the apply_patch content oracle from the installed codex (offline; ORACLE_VERSION=<codex version>)
+	@test -n "$(ORACLE_VERSION)" || { echo "ORACLE_VERSION must name the installed codex version, for example ORACLE_VERSION=0.164.0" >&2; exit 2; }
+	SEAMARK_NATIVE_CLIENT=codex SEAMARK_ORACLE_RECORD="$(ORACLE_VERSION)" CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -v -run '^TestRecordCodexContentOracle$$' ./internal/integration
 
 agents-native-smoke: build ## One bounded distillation through the installed $(CLIENT) CLI (costs tokens; needs your own login)
 	scripts/agent-integration-smoke.sh smoke $(CLIENT) $(BINARY)

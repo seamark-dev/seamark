@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
@@ -112,8 +113,11 @@ func synthRecording(name, phase string, calls ...synthCall) guardRecording {
 	}
 
 	c.Audit = [2]int{0, len(r.audit)}
-	if phase == guardSlowPhase {
+	switch phase {
+	case guardSlowPhase:
 		c.PreWrite = []string{"slow 2"}
+	case guardPhaseSlowDeny:
+		c.PreWrite = []string{guardSlowDenyLine}
 	}
 
 	r.cases = map[string]guardCase{name: c}
@@ -276,16 +280,16 @@ func TestGuardEvidenceValidatorSlowRecording(t *testing.T) {
 
 	t.Run("a protected slow call qualifies its own path only", func(t *testing.T) {
 		r := synthRecording(guardSlowGuard, guardSlowPhase, deny)
-		assert.True(t, r.slowRecorded(), "any path")
-		assert.True(t, r.slowRecorded(rootWrite))
-		assert.False(t, r.slowRecorded(synthPath("Write", lessoncheck.ContextChild)), "another lane")
-		assert.False(t, r.slowRecorded(synthPath("Edit", lessoncheck.ContextRoot)), "another tool")
-		assert.False(t, r.slowRecorded(rootWrite, synthPath("Edit", lessoncheck.ContextRoot)), "two paths")
+		assert.True(t, r.slowRecorded(slowPastTimeout), "any path")
+		assert.True(t, r.slowRecorded(slowPastTimeout, rootWrite))
+		assert.False(t, r.slowRecorded(slowPastTimeout, synthPath("Write", lessoncheck.ContextChild)), "another lane")
+		assert.False(t, r.slowRecorded(slowPastTimeout, synthPath("Edit", lessoncheck.ContextRoot)), "another tool")
+		assert.False(t, r.slowRecorded(slowPastTimeout, rootWrite, synthPath("Edit", lessoncheck.ContextRoot)), "two paths")
 	})
 	t.Run("a protected child call qualifies the child path", func(t *testing.T) {
 		r := synthRecording(guardSlowGuard, guardSlowPhase, synthDeny("Write", "agent-1", "call-slow"))
-		assert.True(t, r.slowRecorded(synthPath("Write", lessoncheck.ContextChild)))
-		assert.False(t, r.slowRecorded(rootWrite))
+		assert.True(t, r.slowRecorded(slowPastTimeout, synthPath("Write", lessoncheck.ContextChild)))
+		assert.False(t, r.slowRecorded(slowPastTimeout, rootWrite))
 	})
 
 	for _, tc := range []struct {
@@ -359,10 +363,249 @@ func TestGuardEvidenceValidatorSlowRecording(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := tc.build()
-			assert.False(t, r.slowRecorded(), "any path")
-			assert.False(t, r.slowRecorded(rootWrite), "root Write")
+			assert.False(t, r.slowRecorded(slowPastTimeout), "any path")
+			assert.False(t, r.slowRecorded(slowPastTimeout, rootWrite), "root Write")
 		})
 	}
+}
+
+func TestGuardEvidenceValidatorInBudgetSlowRecording(t *testing.T) {
+	deny := synthDeny("Edit", "", "call-slow")
+	rootEdit := synthPath("Edit", lessoncheck.ContextRoot)
+
+	t.Run("an in-budget slow deny qualifies its own path only", func(t *testing.T) {
+		r := synthRecording("slow-deny-edit", guardPhaseSlowDeny, deny)
+		assert.True(t, r.slowRecorded(slowInBudget), "any path")
+		assert.True(t, r.slowRecorded(slowInBudget, rootEdit))
+		assert.False(t, r.slowRecorded(slowInBudget, synthPath("Edit", lessoncheck.ContextChild)), "another lane")
+		assert.False(t, r.slowRecorded(slowInBudget, synthPath("Write", lessoncheck.ContextRoot)), "another tool")
+		assert.False(t, r.slowRecorded(slowPastTimeout, rootEdit), "an in-budget case is no proof past the timeout")
+	})
+	t.Run("a slow-guard case is no in-budget proof", func(t *testing.T) {
+		r := synthRecording(guardSlowGuard, guardSlowPhase, deny)
+		assert.False(t, r.slowRecorded(slowInBudget, rootEdit))
+	})
+	t.Run("a child in-budget slow deny qualifies the child path", func(t *testing.T) {
+		r := synthRecording("slow-deny-subagent-edit", guardPhaseSlowDeny, synthDeny("Edit", "agent-1", "call-slow"))
+		assert.True(t, r.slowRecorded(slowInBudget, synthPath("Edit", lessoncheck.ContextChild)))
+		assert.False(t, r.slowRecorded(slowInBudget, rootEdit))
+	})
+
+	for _, tc := range []struct {
+		name  string
+		build func() guardRecording
+	}{
+		{"a stopped hook logs no deny", func() guardRecording {
+			r := synthRecording("slow-deny-edit", guardPhaseSlowDeny, deny)
+			r.mutateCase(func(c *guardCase) { c.PreWrite = nil })
+
+			return r
+		}},
+		{"a write after the deny gives no proof", func() guardRecording {
+			r := synthRecording("slow-deny-edit", guardPhaseSlowDeny, deny)
+			r.mutateCase(func(c *guardCase) { c.After.Status = []string{" M sentinel/edit.txt"} })
+
+			return r
+		}},
+		{"the line of the slow-guard mode is no in-budget deny", func() guardRecording {
+			r := synthRecording("slow-deny-edit", guardPhaseSlowDeny, deny)
+			r.mutateCase(func(c *guardCase) { c.PreWrite = []string{"slow 2"} })
+
+			return r
+		}},
+		{"another phase is no in-budget case", func() guardRecording {
+			r := synthRecording("slow-deny-edit", "enforce", deny)
+			r.mutateCase(func(c *guardCase) { c.PreWrite = []string{guardSlowDenyLine} })
+
+			return r
+		}},
+		{"a native PostToolUse of the tool defeats the proof", func() guardRecording {
+			c := deny
+			c.postHook = true
+
+			return synthRecording("slow-deny-edit", guardPhaseSlowDeny, c)
+		}},
+		{"a post-edit record of the call shows that the tool ran", func() guardRecording {
+			c := deny
+			c.post = true
+
+			return synthRecording("slow-deny-edit", guardPhaseSlowDeny, c)
+		}},
+		{"a deny without a joined record stays unknown", func() guardRecording {
+			c := deny
+			c.noJoin = true
+
+			return synthRecording("slow-deny-edit", guardPhaseSlowDeny, c)
+		}},
+		{"two covered attempts leave the wrapper line without a call", func() guardRecording {
+			return synthRecording("slow-deny-edit", guardPhaseSlowDeny, deny, synthDeny("Edit", "", "call-other"))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := tc.build()
+			assert.False(t, r.slowRecorded(slowInBudget), "any path")
+			assert.False(t, r.slowRecorded(slowInBudget, rootEdit), "root Edit")
+		})
+	}
+}
+
+func TestGuardEvidenceValidatorTimeoutOutcome(t *testing.T) {
+	stopped := synthCall{tool: "Write", call: "call-slow"}
+
+	for _, tc := range []struct {
+		name  string
+		build func() guardRecording
+		want  timeoutOutcome // 0 means unknown
+	}{
+		{"a protected slow call shows a client that waits", func() guardRecording {
+			return synthRecording(guardSlowGuard, guardSlowPhase, synthDeny("Write", "", "call-slow"))
+		}, timeoutWaits},
+		{"a stopped hook, a run tool, and a new file show fail-open", func() guardRecording {
+			c := stopped
+			c.postHook = true
+			r := synthRecording(guardSlowGuard, guardSlowPhase, c)
+			r.mutateCase(func(c *guardCase) {
+				c.PreWrite = nil
+				c.After = guardState{Files: map[string]string{"sentinel/a.txt": "hash", "sentinel/slow.txt": "created"}}
+			})
+
+			return r
+		}, timeoutFailOpen},
+		{"a stopped hook and no write show fail-closed", func() guardRecording {
+			r := synthRecording(guardSlowGuard, guardSlowPhase, stopped)
+			r.mutateCase(func(c *guardCase) { c.PreWrite = nil })
+
+			return r
+		}, timeoutFailClosed},
+		{"a run tool without a fixture change stays unknown", func() guardRecording {
+			c := stopped
+			c.postHook = true
+			r := synthRecording(guardSlowGuard, guardSlowPhase, c)
+			r.mutateCase(func(c *guardCase) { c.PreWrite = nil })
+
+			return r
+		}, 0},
+		{"a fixture change without a run tool stays unknown", func() guardRecording {
+			r := synthRecording(guardSlowGuard, guardSlowPhase, stopped)
+			r.mutateCase(func(c *guardCase) {
+				c.PreWrite = nil
+				c.After.Status = []string{"?? sentinel/slow.txt"}
+			})
+
+			return r
+		}, 0},
+		{"no covered attempt stays unknown", func() guardRecording {
+			r := synthRecording(guardSlowGuard, guardSlowPhase)
+			r.mutateCase(func(c *guardCase) { c.PreWrite = nil })
+
+			return r
+		}, 0},
+		{"a guard that allowed after the wait stays unknown", func() guardRecording {
+			r := synthRecording(guardSlowGuard, guardSlowPhase, stopped)
+			r.mutateCase(func(c *guardCase) { c.PreWrite = []string{"slow 0"} })
+
+			return r
+		}, 0},
+		{"an in-budget case says nothing about the timeout", func() guardRecording {
+			return synthRecording("slow-deny-write", guardPhaseSlowDeny, synthDeny("Write", "", "call-slow"))
+		}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := tc.build().timeoutOutcomeOf()
+			assert.Equal(t, tc.want != 0, ok)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestGuardEvidenceNamesTheFailOpenLimit(t *testing.T) {
+	// Synthetic entries test the rule only. They give no native proof.
+	rootWrite := guardPath{client: ClaudeID, tool: "Write", context: lessoncheck.ContextRoot}
+	withSyntheticFailOpen(t, rootWrite)
+
+	got := GuardEvidence(ClaudeID, "Write", lessoncheck.ContextRoot)
+	require.NoError(t, got.Validate())
+	assert.Equal(t, VerificationVerified, got.Level, "an in-budget slow deny verifies a fail-open path")
+	assert.Equal(t, "the client lets the write run after its 10 s hook timeout", got.Limit)
+
+	child := GuardEvidence(ClaudeID, "Write", lessoncheck.ContextChild)
+	assert.Equal(t, VerificationPending, child.Level, "no path takes the proof of another path")
+	assert.Empty(t, child.Limit)
+
+	for _, tc := range []struct {
+		name    string
+		outcome timeoutOutcome
+	}{
+		{"a client that waits gives no limit", timeoutWaits},
+		{"a client that blocks gives no limit", timeoutFailClosed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			saved := timeoutRecorded
+			t.Cleanup(func() { timeoutRecorded = saved })
+			timeoutRecorded = map[clientVersion]timeoutDisposition{
+				{client: ClaudeID, version: "synthetic-fixture"}: {outcome: tc.outcome, seconds: 10},
+			}
+
+			e := GuardEvidence(ClaudeID, "Write", lessoncheck.ContextRoot)
+			assert.Equal(t, VerificationVerified, e.Level)
+			assert.Empty(t, e.Limit)
+		})
+	}
+
+	t.Run("the outcome of another version gives no limit", func(t *testing.T) {
+		saved := timeoutRecorded
+		t.Cleanup(func() { timeoutRecorded = saved })
+		timeoutRecorded = map[clientVersion]timeoutDisposition{
+			{client: ClaudeID, version: "another-version"}: {outcome: timeoutFailOpen, seconds: 10},
+		}
+
+		assert.Empty(t, GuardEvidence(ClaudeID, "Write", lessoncheck.ContextRoot).Limit)
+	})
+
+	t.Run("the capability report shows the limit on the path and the badge", func(t *testing.T) {
+		withSyntheticFailOpen(t, guardPathsOf(ClaudeID)...)
+
+		report := lessoncheck.CapabilityReportOf(&lessoncheck.Config{}, nil, verifiedGuardPaths(ClaudeID), nil)
+		c, ok := report.Client(ClaudeID)
+		require.True(t, ok)
+
+		for _, p := range c.Paths {
+			assert.Equal(t, lessoncheck.PathActive, p.State, p.Tool)
+			assert.Equal(t, "the client lets the write run after its 10 s hook timeout", p.Verification.Limit, p.Tool)
+		}
+
+		assert.Equal(t, []string{"the client lets the write run after its 10 s hook timeout"},
+			c.Limits(lessoncheck.StagePreWrite))
+	})
+}
+
+// guardPathsOf returns every pre-write path of a client.
+func guardPathsOf(client string) []guardPath {
+	var out []guardPath
+
+	for _, tool := range guardTools[client] {
+		for _, context := range lessonContexts {
+			out = append(out, guardPath{client: client, tool: tool, context: context})
+		}
+	}
+
+	return out
+}
+
+// verifiedGuardPaths returns an installed current guard path per
+// pre-write path of a client, with the evidence of GuardEvidence.
+func verifiedGuardPaths(client string) []lessoncheck.InstalledPath {
+	var out []lessoncheck.InstalledPath
+
+	for _, p := range guardPathsOf(client) {
+		out = append(out, lessoncheck.InstalledPath{
+			Client: client, Tool: p.tool, Stage: lessoncheck.StagePreWrite, Context: p.context, Installed: true,
+			Marker: hooks.LessonGuardMarker, BinaryState: "current",
+			Verification: capVerification(GuardEvidence(client, p.tool, p.context)),
+		})
+	}
+
+	return out
 }
 
 // TestGuardIdentityCollectorMatchesProduction runs the guard_identities

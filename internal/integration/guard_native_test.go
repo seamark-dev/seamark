@@ -18,7 +18,9 @@ package integration
 // enforcement without verified evidence. They do not decide whether a
 // deny text or a post-edit reply reached the model. That answer is what
 // the recording measures, so the reviewer reads it from
-// guard-context.jsonl and the transcripts.
+// guard-context.jsonl and the transcripts. For a Codex post-edit case,
+// the replay logs the guard-context.jsonl records that hold the
+// findings.
 //
 // The replay tests run only when SEAMARK_NATIVE_CLIENT names the client
 // (make capture-native-check). Without a reviewed recording they skip as
@@ -27,6 +29,7 @@ package integration
 // test run (guard_evidence_test.go).
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -36,6 +39,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -98,7 +102,7 @@ var (
 
 // The phases of the guard scenario that remove the owned guard entry.
 // The capability report of each reads every pre-write path as inactive.
-var guardPhasesWithoutGuard = []string{"post-only", "wrapper", "slow"}
+var guardPhasesWithoutGuard = []string{"post-only", "wrapper", "slow", guardPhaseSlowDeny}
 
 // codexAddAttributions are the attributions that a post-edit record of
 // a native Add File section can have. The guard projection
@@ -288,7 +292,8 @@ func TestReadGuardLinesDecodesEachLine(t *testing.T) {
 
 // loadGuardRecording reads the reviewed guard recording of a client for
 // its replay, or skips. The recording must hold each named case exactly
-// once.
+// once. It can also hold the extension cases of the client, all of them
+// or none, because a recording from before the extension has none.
 func loadGuardRecording(t *testing.T, client string, cases ...string) guardRecording {
 	t.Helper()
 
@@ -304,7 +309,15 @@ func loadGuardRecording(t *testing.T, client string, cases ...string) guardRecor
 			"and copy it there", filepath.Join("testdata", client, "guard"), client)
 	}
 
-	require.ElementsMatch(t, cases, slices.Collect(maps.Keys(r.cases)), "the recording holds every case of the scenario")
+	recorded := slices.Collect(maps.Keys(r.cases))
+	require.Subset(t, recorded, cases, "the recording holds every case of the scenario")
+
+	extra := slices.DeleteFunc(recorded, func(name string) bool { return slices.Contains(cases, name) })
+	if len(extra) > 0 {
+		require.ElementsMatch(t, guardExtensionNames(client), extra,
+			"a recording with extension cases holds every extension case of the client and no other case")
+	}
+
 	// Without identity rows, no payload joins its audit record, so every
 	// assertion on a call would fail with a message that hides the cause.
 	require.Contains(t, r.manifest.Extras, guardIdentityFile,
@@ -552,6 +565,75 @@ func assertEmitted(t *testing.T, name string, post lessoncheck.AuditRecord) {
 	assert.True(t, *post.Emitted, "case %s: the post-edit hook wrote its findings", name)
 }
 
+// postEditContext returns the payload role of each guard-context.jsonl
+// record that holds the post-edit findings for the file p after a tool
+// call. The findings name p with its line, so the path ties a record to
+// its case. The script keeps only the records that the model did not
+// write.
+func (r guardRecording) postEditContext(t *testing.T, tool, p string) []string {
+	t.Helper()
+
+	header := "seamark post-edit lesson checks after this " + tool + " call"
+
+	var roles []string
+
+	for _, line := range timingLines(t, filepath.Join(r.dir, guardContextFile)) {
+		if !bytes.Contains(line, []byte(header)) || !bytes.Contains(line, []byte(p+":")) {
+			continue
+		}
+
+		var rec struct {
+			Payload struct {
+				Role string `json:"role"`
+			} `json:"payload"`
+		}
+		require.NoError(t, json.Unmarshal(line, &rec), guardContextFile)
+
+		roles = append(roles, rec.Payload.Role)
+	}
+
+	return roles
+}
+
+// logCodexPostEditContext logs the rollout records that hold the
+// post-edit findings of a Codex case. The hook replies with
+// additionalContext under PostToolUse. Codex adds PreToolUse context of
+// that form to the thread as a developer message, so a recording can
+// show the findings in the rollout. The replay does not decide whether
+// they reached the model, because the reviewer reads that answer.
+func (r guardRecording) logCodexPostEditContext(t *testing.T, name, p string) {
+	t.Helper()
+
+	roles := r.postEditContext(t, codexApplyPatch, p)
+	t.Logf("case %s: %d rollout records hold the PostToolUse context for %s, with the roles %v",
+		name, len(roles), p, roles)
+}
+
+// TestPostEditContextFindsTheRecordsOfACase checks the reader of the
+// post-edit context on a synthetic guard-context.jsonl. It gives no
+// native proof.
+func TestPostEditContextFindsTheRecordsOfACase(t *testing.T) {
+	dir := t.TempDir()
+	lines := []string{
+		`{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text",` +
+			`"text":"seamark post-edit lesson checks after this apply_patch call: violation\n- violation: pin a, ` +
+			`check c (no-added-pattern/1): sentinel/checked.txt:1 adds a line that matches the pattern\n"}]}}`,
+		`{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text",` +
+			`"text":"seamark post-edit lesson checks after this apply_patch call: violation\n- violation: pin a, ` +
+			`check c (no-added-pattern/1): sentinel/child-checked.txt:1 adds a line that matches the pattern\n"}]}}`,
+		`{"type":"response_item","payload":{"type":"function_call_output","output":"blocked by policy: sentinel/checked.txt"}}`,
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, guardContextFile), []byte(strings.Join(lines, "\n")+"\n"), 0o600))
+
+	r := guardRecording{timingRecording: timingRecording{dir: dir}}
+
+	assert.Equal(t, []string{"developer"}, r.postEditContext(t, codexApplyPatch, "sentinel/checked.txt"),
+		"the path of another case and a deny text are not the findings of this case")
+	assert.Equal(t, []string{"developer"}, r.postEditContext(t, codexApplyPatch, "sentinel/child-checked.txt"))
+	assert.Empty(t, r.postEditContext(t, codexApplyPatch, "notes/permitted.txt"))
+	assert.Empty(t, r.postEditContext(t, claudeToolWrite, "sentinel/checked.txt"), "the header names the tool")
+}
+
 // assertWrapper checks the report-only wrapper case: the indirection
 // entry ran the guard, which denied, and discarded its exit status. The
 // client then ran the tool, so a post-edit record of the same call
@@ -739,12 +821,18 @@ func TestCaptureNativeClaudeGuardRecording(t *testing.T) {
 		require.True(t, ok, "the guard wrote a record")
 		assert.Equal(t, lessoncheck.GuardAllow, allow.Guard.Decision, "no enforce pin scopes free/")
 
-		// The projection treats an Edit on an absent file as
-		// unprojectable, also with an empty old_string. It keeps that rule
-		// until this case shows that one Edit creates the file.
-		assert.False(t, r.cases[name].created("free/n1.txt"),
-			"one Edit created an absent file on Claude Code %s; the Edit projection must now project an add "+
-				"with new_string, and this assertion changes with it", r.manifest.ClientVersion)
+		// The projection gives such an Edit an add with the bytes of
+		// new_string. So the native run must create the file with
+		// exactly those bytes.
+		c := r.cases[name]
+		created := op.Ops[0].Edits[0].New
+		sum := sha256.Sum256([]byte(created))
+
+		require.True(t, c.created("free/n1.txt"),
+			"one Edit with an empty old_string did not create the absent file on Claude Code %s; "+
+				"the Edit projection gives an add, so it must change with this answer", r.manifest.ClientVersion)
+		assert.Equal(t, hex.EncodeToString(sum[:]), c.After.Files["free/n1.txt"], "the file holds new_string byte for byte")
+		assert.Equal(t, created, c.After.Text["free/n1.txt"])
 	})
 
 	t.Run("a permitted Write completes and its post-edit check passes", func(t *testing.T) {
@@ -939,6 +1027,7 @@ func TestCaptureNativeCodexGuardRecording(t *testing.T) {
 		post := r.assertExecuted(t, name, allow, "sentinel/checked.txt", lessoncheck.SummaryViolation,
 			codexAddAttributions...)
 		assertEmitted(t, name, post)
+		r.logCodexPostEditContext(t, name, "sentinel/checked.txt")
 	})
 
 	t.Run("a report-only wrapper lets the denied patch run", func(t *testing.T) {

@@ -2,6 +2,8 @@ package integration
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -181,11 +183,18 @@ func TestCompletionDecodersReadToolOutcome(t *testing.T) {
 				string(reply.Stdout), "the reply names the event that it answers (%s)", tc.outcome)
 		}
 
-		reply, err := codexCompletions{}.EncodeFindings("post-edit finding", lessoncheck.ToolFailed)
-		require.NoError(t, err)
-		assert.Zero(t, reply.ExitCode, "stderr with exit 0 reaches the model and never blocks")
-		assert.Empty(t, reply.Stdout)
-		assert.Equal(t, "post-edit finding", string(reply.Stderr))
+		// Codex has no failure event, so every outcome gets the
+		// PostToolUse reply. Its stderr text with exit 0 never reached
+		// the model on codex-cli 0.164.0.
+		for _, outcome := range []lessoncheck.ToolOutcome{
+			lessoncheck.ToolSucceeded, lessoncheck.ToolFailed, lessoncheck.ToolUnknown,
+		} {
+			reply, err := codexCompletions{}.EncodeFindings("post-edit finding", outcome)
+			require.NoError(t, err)
+			assert.Equal(t, HookReply{
+				Stdout: []byte(`{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"post-edit finding"}}` + "\n"),
+			}, reply, "the reply is the exact PostToolUse context on stdout with exit 0 (%s)", outcome)
+		}
 	})
 
 	t.Run("every capture outcome converts to a tool outcome", func(t *testing.T) {
@@ -195,4 +204,133 @@ func TestCompletionDecodersReadToolOutcome(t *testing.T) {
 			assert.Equal(t, string(o), string(toolOutcomeOf(o)), "both lists hold the same words")
 		}
 	})
+}
+
+// TestCodexFindingsReplyAtTheLineCap checks the Codex reply for a
+// findings text with all the result lines that the line cap of the
+// post-edit hook keeps: the summary line, 20 result lines, the line that
+// counts the rest, the note of a failed tool, and the rerun line. The
+// paths are short, so the text fits in codexMaxFindingsBytes and the
+// reply holds every byte. The line cap alone does not bound the bytes;
+// TestCodexFindingsReplyBoundsALongPatch covers a longer text. The JSON
+// encoder writes a line end and "&" as escapes, and a JSON reader gets
+// the same text back.
+func TestCodexFindingsReplyAtTheLineCap(t *testing.T) {
+	var b strings.Builder
+
+	b.WriteString("seamark post-edit lesson checks after this apply_patch call: violation " +
+		"(23 evaluated pins: 23 violation, 0 unknown; snapshot 0123456789ab)\n")
+
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&b, "- violation: pin %012x, check no-todo (no-added-pattern/1): docs/R&D/note-%02d.md:%d "+
+			"adds a line that matches the pattern\n", i, i, i)
+	}
+
+	b.WriteString("- and 3 more\n")
+	b.WriteString("The apply_patch tool failed, so the checks ran on the files as they are now.\n")
+	b.WriteString("The files stay as written; repair the violation in a later edit. Check again: seamark lessons --verify\n")
+
+	text := b.String()
+	require.Equal(t, 21, strings.Count(text, "\n- "), "20 result lines and the line that counts the rest")
+	require.LessOrEqual(t, len(text), codexMaxFindingsBytes, "this text fits the byte bound of the reply")
+
+	reply, err := codexCompletions{}.EncodeFindings(text, lessoncheck.ToolFailed)
+	require.NoError(t, err)
+
+	escaped := strings.NewReplacer("\n", `\n`, "&", fmt.Sprintf(`\u%04x`, '&')).Replace(text)
+	assert.Equal(t, HookReply{
+		Stdout: []byte(`{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"` + escaped + `"}}` + "\n"),
+	}, reply, "the exact JSON of the text at the line cap")
+
+	var decoded hookContextReply
+	require.NoError(t, json.Unmarshal(reply.Stdout, &decoded))
+	assert.Equal(t, text, decoded.HookSpecificOutput.AdditionalContext, "the model context holds the same bytes")
+}
+
+// TestCodexFindingsReplyAtTheByteCap checks the exact JSON of the Codex
+// reply at codexMaxFindingsBytes. A text of exactly that size keeps
+// every byte. One more line makes the text too long, so the reply keeps
+// the first lines that fit and a line that counts the rest. That line
+// names the rerun command without --file arguments, because the reply
+// never holds a cut command.
+func TestCodexFindingsReplyAtTheByteCap(t *testing.T) {
+	const head = "seamark post-edit lesson checks after this apply_patch call: incomplete " +
+		"(1 evaluated pin: 0 violation, 1 unknown; snapshot none)\n"
+
+	// The result line fills the text to the bound exactly.
+	const resultHead = "- unknown/missing-baseline: pin 0123456789ab, check no-todo (no-added-pattern/1): "
+
+	atCap := head + resultHead + strings.Repeat("x", codexMaxFindingsBytes-len(head)-len(resultHead)-1) + "\n"
+	require.Len(t, atCap, codexMaxFindingsBytes)
+
+	reply, err := codexCompletions{}.EncodeFindings(atCap, lessoncheck.ToolSucceeded)
+	require.NoError(t, err)
+	assert.Equal(t, HookReply{
+		Stdout: []byte(`{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"` +
+			strings.ReplaceAll(atCap, "\n", `\n`) + `"}}` + "\n"),
+	}, reply, "a text at the bound keeps every byte")
+
+	overCap := atCap + "Check again: seamark lessons --verify --file /work/repo/src/a.go\n"
+
+	reply, err = codexCompletions{}.EncodeFindings(overCap, lessoncheck.ToolSucceeded)
+	require.NoError(t, err)
+	assert.Equal(t, HookReply{
+		Stdout: []byte(`{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"` +
+			strings.ReplaceAll(head, "\n", `\n`) +
+			`- and 2 more lines, left out to fit the context limit of the client. Check again: seamark lessons --verify\n"}}` + "\n"),
+	}, reply, "a text above the bound keeps the lines that fit and counts the rest")
+}
+
+// TestCodexFindingsReplyBoundsALongPatch checks the Codex reply for the
+// findings of one apply_patch call on 100 files without a baseline. The
+// line cap keeps the text to a few lines, but the unknown line and the
+// rerun command list every path, so the text holds many kilobytes.
+// Codex bounds model-visible context with additionalContextLimit, about
+// 2,500 tokens by default. So the reply keeps the first lines that fit
+// in codexMaxFindingsBytes, and it never holds a cut rerun command.
+func TestCodexFindingsReplyBoundsALongPatch(t *testing.T) {
+	cfg, errs, err := lessoncheck.Parse([]byte(`lesson_checks_version: 1
+checks:
+  no-todo:
+    kind: no-added-pattern/1
+    pattern: 'TODO\('
+pin:
+  - rule: no-todo
+    region: src
+    mode: check
+    check: no-todo
+`))
+	require.NoError(t, err)
+	require.Empty(t, errs)
+
+	paths := make([]string, 100)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("src/module-%03d/internal/handler_test.go", i)
+	}
+
+	out := lessoncheck.EvaluatePostEdit(lessoncheck.PostEditInput{
+		Config: cfg, Paths: paths, PathsComplete: true,
+		Root: "/Users/someone/Documents/projects/example-repo", Tool: codexApplyPatch, Outcome: lessoncheck.ToolSucceeded,
+	})
+	require.Greater(t, len(out.Findings), 3*codexMaxFindingsBytes, "the findings of a long patch are far above the bound")
+	require.Equal(t, 4, strings.Count(out.Findings, "\n"),
+		"the summary, the unknown line, the note of the missing baseline, and the rerun line")
+
+	reply, err := codexCompletions{}.EncodeFindings(out.Findings, lessoncheck.ToolSucceeded)
+	require.NoError(t, err)
+	assert.Empty(t, reply.Stderr)
+	assert.Zero(t, reply.ExitCode)
+
+	var decoded hookContextReply
+	require.NoError(t, json.Unmarshal(reply.Stdout, &decoded))
+
+	modelContext := decoded.HookSpecificOutput.AdditionalContext
+	assert.LessOrEqual(t, len(modelContext), codexMaxFindingsBytes, "the model context stays inside the default additionalContextLimit")
+
+	// The unknown line alone is longer than the bound, so only the
+	// summary line stays.
+	assert.Equal(t, strings.SplitAfter(out.Findings, "\n")[0]+
+		"- and 3 more lines, left out to fit the context limit of the client. Check again: seamark lessons --verify\n",
+		modelContext, "the reply keeps the first lines that fit and counts the rest")
+	assert.NotContains(t, modelContext, "--file", "the reply never holds a cut rerun command")
 }

@@ -6,7 +6,12 @@
 #           prints one cost line per paid run. It refuses a binary or a
 #           tree with uncommitted changes unless SEAMARK_ALLOW_DIRTY=1. It
 #           writes the raw recording and a sanitized copy into an output
-#           directory for review. It never writes into testdata.
+#           directory for review. It never writes into testdata. It
+#           turns off the advisor tool of Claude Code for each Claude
+#           run, and records the advisor state of each run. A run with
+#           the advisor on or unknown prints FAIL (see claude_print). A
+#           Codex run at a usage or account limit prints FAIL and stops
+#           the call before the next run (see codex_verdict).
 #
 # The script has no offline mode. The Go tests replay a reviewed
 # recording offline (make capture-native-check).
@@ -233,6 +238,7 @@ record_mode() {
     fi
 
     : > "$OUT/runs.txt"
+    rm -f "$OUT/advisor.jsonl"
     SESSION=
 
     # The hook processes start as children of the client, so they get
@@ -302,6 +308,12 @@ record = {
     "extras": {"exec-events.jsonl": os.path.join(out, "exec-events.jsonl")}
     if os.path.isfile(os.path.join(out, "exec-events.jsonl")) else {},
 }
+
+# The advisor state of each Claude run goes into the sanitized copy, so
+# the reviewer sees it beside the transcripts.
+if os.path.isfile(os.path.join(out, "advisor.jsonl")):
+    record["extras"]["advisor.jsonl"] = os.path.join(out, "advisor.jsonl")
+
 with open(os.path.join(out, "record.json"), "w") as f:
     json.dump(record, f, indent=1)
 PY
@@ -329,6 +341,189 @@ PY
     else
         ok "the hooks recorded $(find "$OBS" -name '*.meta.json' | wc -l | tr -d ' ') payloads"
     fi
+}
+
+# claude_print <run> <claude arguments...> runs one print-mode session
+# in the scratch repository. The prompt comes from prompt-<run>.txt. The
+# result goes to run-<run>.json, and stderr goes to run-<run>-stderr.txt.
+# It returns the exit status of claude. Each paid Claude run goes through
+# this function, so each run gets the same advisor switch.
+#
+# Claude Code 2.1.314 has a server-side advisor tool that calls a stronger
+# model. So a run can call a model that --model does not name. The client
+# turns the tool on through a server flag or through
+# CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL, and only for some API
+# providers. This script cannot see or set the server flag. The client
+# checks CLAUDE_CODE_DISABLE_ADVISOR_TOOL before both, so
+# CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 keeps the tool off. The change log of
+# the installed client names this switch.
+#
+# The function removes the result, stderr, and debug files of the run
+# before claude starts. Claude Code appends to the --debug-file path, and
+# a file of an earlier call of this script can use the same run number.
+# Without the removal, claude_advisor can read the advisor line of that
+# earlier run. The function then records the advisor state of the run,
+# also after a failed run.
+claude_print() {
+    print_run=$1
+    shift
+    print_status=0
+    rm -f "$OUT/run-$print_run.json" "$OUT/run-$print_run-stderr.txt" "$OUT/run-$print_run-debug.log"
+    (cd "$REPO" && CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 claude -p "$@" < "$OUT/prompt-$print_run.txt" \
+        > "$OUT/run-$print_run.json" 2> "$OUT/run-$print_run-stderr.txt") || print_status=$?
+    claude_advisor "$print_run"
+    return "$print_status"
+}
+
+# claude_advisor <run> prints the advisor state of one Claude run, and
+# appends it to advisor.jsonl. Claude Code writes the debug line
+# "[AdvisorTool] Server-side tool enabled with <model> as the advisor
+# model" only when the tool is on. It writes no line when the tool is
+# off. So a debug log without that line reads off. A missing or empty
+# debug log reads unknown, because it shows nothing.
+#
+# A state of on or unknown prints FAIL, so the summary counts it. No
+# recording run may use the advisor, and unknown gives no proof that the
+# tool was off. The FAIL line comes in addition to the advisor record and
+# the exit status of the run, so the run keeps its own cost and result.
+claude_advisor() {
+    advisor_log=$OUT/run-$1-debug.log
+    advisor_model=
+
+    if [ ! -s "$advisor_log" ]; then
+        advisor_state=unknown
+    elif grep -q -F '[AdvisorTool] Server-side tool enabled with' "$advisor_log"; then
+        advisor_state=on
+        advisor_model=$(sed -n 's/.*Server-side tool enabled with \([^" \\]*\) as the advisor model.*/\1/p' "$advisor_log" | head -1)
+    else
+        advisor_state=off
+    fi
+
+    printf '{"run": %d, "advisor": "%s", "advisor_model": "%s", "switch": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1"}\n' \
+        "$1" "$advisor_state" "$advisor_model" >> "$OUT/advisor.jsonl"
+
+    case "$advisor_state" in
+        on)
+            echo "  advisor  run $1: on, with the advisor model ${advisor_model:-(not named)}"
+            fail "run $1 used the advisor tool; no recording run may use it" ;;
+        unknown)
+            echo "  advisor  run $1: unknown"
+            fail "run $1 has no advisor state, because its debug log is missing or empty" ;;
+        *)
+            echo "  advisor  run $1: $advisor_state" ;;
+    esac
+}
+
+# codex_failure <events> reads the `codex exec --json` events of one turn.
+# Codex reports a failed turn in the event stream, not on stderr: a usage
+# limit gave an error event and a turn.failed event, and stderr was empty.
+# The function prints the message of the failure on one line. Its exit
+# status is the verdict:
+#   0  no turn.failed event and no limit message; the line holds the
+#      message of the last error event, or nothing
+#   1  a turn.failed event; the line holds its message, or else the
+#      message of the last error event
+#   2  a turn.failed or error message reports a usage or account limit;
+#      the line holds that message
+# Only the words "usage limit" and "account limit" count as a limit. A
+# plain rate limit can pass after a retry, so it does not stop the call.
+# The line drops control characters, because the message goes to the
+# terminal.
+codex_failure() {
+    python3 -I - "$1" <<'PY'
+import json, re, sys
+
+LIMIT = re.compile(r"\b(usage|account)[ _-]limit", re.IGNORECASE)
+
+
+def message(event):
+    # A turn.failed event nests the message under error. An error event
+    # holds it at the top level.
+    error = event.get("error")
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        return error["message"]
+    if isinstance(event.get("message"), str):
+        return event["message"]
+    return ""
+
+
+def one_line(text):
+    text = "".join(c if c.isprintable() else " " for c in text)
+    text = " ".join(text.split())
+    return text if len(text) <= 400 else text[:397] + "..."
+
+
+failed, failed_text, error_text, limit_text = False, "", "", ""
+
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+except OSError:
+    lines = []
+
+for raw in lines:
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        continue
+    if not isinstance(event, dict) or event.get("type") not in ("turn.failed", "error"):
+        continue
+
+    text = one_line(message(event))
+    if event["type"] == "turn.failed":
+        failed = True
+        failed_text = text or failed_text
+    else:
+        error_text = text or error_text
+    if not limit_text and LIMIT.search(text):
+        limit_text = text
+
+if limit_text:
+    print(limit_text)
+    sys.exit(2)
+
+if failed:
+    print(failed_text or error_text)
+    sys.exit(1)
+
+print(error_text)
+PY
+}
+
+# codex_verdict <label> <exit status> <events> <stderr> judges one Codex
+# turn. It returns 0 for a turn that passed. For a failed turn it prints
+# FAIL with the event message, or else the last stderr line, and returns
+# 1. A turn that exits 0 and still sends turn.failed is a failed turn.
+# At a usage or account limit it prints FAIL and stops the record call,
+# because every later turn fails the same way and the stop rule must not
+# depend on an operator who watches the output.
+codex_verdict() {
+    verdict_status=0
+    verdict_reason=$(codex_failure "$3") || verdict_status=$?
+
+    if [ "$verdict_status" = 2 ]; then
+        fail "$1 stopped at a Codex usage or account limit: $verdict_reason"
+        limit_stop
+    fi
+
+    if [ "$2" = 0 ] && [ "$verdict_status" = 0 ]; then
+        return 0
+    fi
+
+    [ -n "$verdict_reason" ] || verdict_reason=$(tail -1 "$4" 2> /dev/null || true)
+    [ -n "$verdict_reason" ] || verdict_reason="codex exited with status $2 and printed no message"
+    fail "$1 failed: $verdict_reason"
+    return 1
+}
+
+# limit_stop ends the record call after a Codex limit, before the next
+# run. The guard scenario first puts back the enforce setup, so the
+# reused repository keeps the hook document that the operator trusted.
+# The summary exits with status 1, because the limit line counts as FAIL.
+limit_stop() {
+    [ "$SCENARIO" != guard ] || guard_restore
+    note "no later run starts; run the record call again after the limit resets"
+    summary
 }
 
 # The gate-3 timing scenario (CAPTURE_NATIVE_SCENARIO=timing). It records
@@ -476,7 +671,7 @@ timing_claude() {
         --allowedTools Read Edit Write Bash Agent Task --agents "$agents"
     [ "$session" = new ] || set -- "$@" --resume "$SESSION"
 
-    if (cd "$REPO" && claude -p "$@" < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN.json" 2> "$OUT/run-$RUN-stderr.txt"); then
+    if claude_print "$RUN" "$@"; then
         line=$(python3 -I -c '
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -568,7 +763,10 @@ timing_codex() {
     # command on PATH. So the run puts the directory of the round binary
     # first on PATH. The MCP server then comes from the commit under test,
     # not from an older installed binary with other instructions.
-    if (cd "$REPO" && PATH="$(dirname "$BIN"):$PATH" codex "$@" < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN-events.jsonl" 2> "$OUT/run-$RUN-stderr.txt"); then
+    exec_status=0
+    (cd "$REPO" && PATH="$(dirname "$BIN"):$PATH" codex "$@" < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN-events.jsonl" 2> "$OUT/run-$RUN-stderr.txt") || exec_status=$?
+
+    if codex_verdict "run $RUN ($tcase)" "$exec_status" "$OUT/run-$RUN-events.jsonl" "$OUT/run-$RUN-stderr.txt"; then
         cat "$OUT/run-$RUN-events.jsonl" >> "$OUT/exec-events.jsonl"
         line=$(python3 -I -c '
 import json, sys
@@ -588,7 +786,6 @@ print(thread, " ".join("%s=%s" % kv for kv in sorted(usage.items())))' "$OUT/run
         ok "run $RUN ($tcase) finished (thread $SESSION)"
     else
         SESSION=
-        fail "run $RUN ($tcase) failed: $(tail -1 "$OUT/run-$RUN-stderr.txt")"
     fi
 }
 
@@ -616,9 +813,12 @@ Then reply with the single word: done"
 1. Use one single apply_patch call that adds two new files: timing/multi-a.txt with the single line: one, and timing/multi-b.txt with the single line: two.
 Then reply with the single word: done"
 
+    # The prompt names the agent tools as Codex lists them in code mode, and
+    # the worker agent_type. The comment at the guard case subagent-violation
+    # gives the reason.
     timing_codex subagent-patch new "$steps
-1. Use spawn_agent to start one worker agent, and ask it to use apply_patch to add the new file timing/child-patch.txt with the single line: child.
-2. Wait for the agent with wait_agent, then close it.
+1. Use multi_agent_v1__spawn_agent with agent_type worker to start one worker agent. In its message, ask it to use apply_patch to add the new file timing/child-patch.txt with the single line: child.
+2. Wait for the agent with multi_agent_v1__wait_agent, then close it with multi_agent_v1__close_agent.
 Then reply with the single word: done"
 }
 
@@ -732,17 +932,36 @@ PY
 #                    and discards its exit status (report-only)
 #   slow             no owned guard; the indirection entry waits past the
 #                    hook timeout and then runs the guard
+#   slow-deny        no owned guard; the indirection entry waits inside the
+#                    hook timeout and then runs the guard
+#
+# The cases after slow-guard came later than the first recordings. They
+# run after the earlier cases, so each earlier case keeps its run number
+# and its prompt, and an earlier recording still replays.
 #
 # The indirection entry is the command sh <instrumentation>/pre-write.sh.
 # Its text holds no guard marker, so neither setup nor inspection reads
-# it as a wrapper of the guard. Setup adds it once, so one Codex trust
-# review covers it. A phase without the owned guard changes the hook
-# document only by the removal of that entry.
+# it as a wrapper of the guard. Setup adds it once, and the phases select
+# its behavior through the file pre-write-mode. A phase without the owned
+# guard changes the hook document only by the removal of that entry.
+#
+# Codex keys the trust of a project hook by its position (event, group,
+# handler) and compares a hash of its content at that key. A moved entry
+# is "modified", and Codex does not run it without a new review. So the
+# Codex setup puts the owned guard in the last PreToolUse group. Its
+# removal then moves no other entry, and the one review of the enforce
+# form covers every form that a Codex case runs with (see guard_keys).
 
 # GUARD_SLOW_SECONDS is the wait of the slow mode. It is above the
 # timeout of the guard hook, 10 seconds, so the client stops the slow
 # entry before it runs the guard.
 GUARD_SLOW_SECONDS=15
+
+# GUARD_IN_BUDGET_SECONDS is the wait of the slow-deny mode. It is below
+# the 10-second timeout of the guard hook, so a client that waits for its
+# hook runs the guard to the end. A deny then shows that the client waits
+# for a slow guard and honors its exit status.
+GUARD_IN_BUDGET_SECONDS=7
 
 # guard_vars sets the client parts of the guard scenario: the hook
 # document, the marker of the owned guard, and the matcher of the guard
@@ -764,7 +983,9 @@ guard_vars() {
 # `seamark init --lesson-checks enforce` installs the guard and the
 # post-edit hooks of the round binary there. Setup then adds the
 # observer entries and the indirection entry, and keeps a copy of the
-# hook document for the phases.
+# hook document for the phases. For Codex, it moves the owned guard to
+# the last PreToolUse group before it keeps the copy, because the operator
+# reviews the trust of that copy.
 guard_setup() {
     guard_vars
     new_repo "$REPO"
@@ -803,7 +1024,29 @@ guard_setup() {
 
     cp "$SCRIPTS/capture-native-observer.py" "$INSTR/observer.py"
     guard_prewrite_script
+    guard_instrument
+    [ "$CLIENT" != codex ] || guard_last
+    ok "instrumentation entries added beside the lesson hook entries"
 
+    cp "$GUARD_DOC" "$INSTR/hooks-enforce.json"
+    : > "$INSTR/scenario-guard"
+
+    # A failure here means that the lesson hook entries have a layout that
+    # guard_last does not expect. One trust review would then not cover
+    # every phase, so setup stops before the operator reviews anything.
+    if [ "$CLIENT" = codex ]; then
+        if reason=$(guard_keys); then
+            ok "every Codex hook form keeps the trust keys and the content of the enforce form"
+        else
+            fail "a Codex hook form moves or changes a trusted entry: $reason"
+            summary
+        fi
+    fi
+}
+
+# guard_instrument adds the observer entries and the indirection entry
+# after the lesson hook entries of the hook document.
+guard_instrument() {
     # The observer runs on PreToolUse too, because the guard reads that
     # event. The indirection entry gets the matcher and the timeout of
     # the guard spec, so the slow mode meets the timeout of the guard.
@@ -842,10 +1085,97 @@ os.makedirs(os.path.dirname(path), exist_ok=True)
 with open(path, "w") as f:
     json.dump(doc, f, indent=2)
 PY
-    ok "instrumentation entries added beside the lesson hook entries"
+}
 
-    cp "$GUARD_DOC" "$INSTR/hooks-enforce.json"
-    : > "$INSTR/scenario-guard"
+# guard_last moves the owned guard entry of the Codex hook document into
+# a new PreToolUse group after all other groups. The group keeps the
+# matcher and the other fields of the group that init wrote. Only the
+# position changes, so the guard runs with the same command, matcher,
+# and timeout. The no-guard form then removes the last group, and no
+# other entry changes its trust key.
+guard_last() {
+    python3 -I - "$GUARD_DOC" "$GUARD_MARKER" <<'PY'
+import json, sys
+
+path, marker = sys.argv[1:3]
+
+with open(path, encoding="utf-8") as f:
+    doc = json.load(f)
+
+kept, moved = [], []
+for entry in doc["hooks"]["PreToolUse"]:
+    hooks = entry.get("hooks", [])
+    owned = [h for h in hooks if h.get("command", "").endswith(" " + marker)]
+    others = [h for h in hooks if not h.get("command", "").endswith(" " + marker)]
+    if owned:
+        moved.append(dict(entry, hooks=owned))
+        if others:
+            kept.append(dict(entry, hooks=others))
+    else:
+        kept.append(entry)
+
+doc["hooks"]["PreToolUse"] = kept + moved
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(doc, f, indent=2)
+PY
+}
+
+# guard_keys checks the trust keys of the Codex hook forms against the
+# enforce form that setup kept, and that the operator reviews. The enforce
+# form must hold one owned guard entry, alone in the last PreToolUse
+# group. The no-guard form must hold every other entry at the same key
+# (event, group, handler) with the same content, because Codex hashes
+# the content of each entry and compares it per key. It prints the
+# problems on one line, and returns 1 when a problem exists.
+#
+# The enforce, check-pins, and broken-config phases run with the enforce
+# form itself. The wrapper, slow, and slow-deny phases run with the
+# no-guard form. The inline-wrapper form exists only while seamark status
+# reads it, and no Codex turn runs with it.
+guard_keys() {
+    guard_doc no-guard "$INSTR/hooks-no-guard.json"
+    python3 -I - "$INSTR/hooks-enforce.json" "$INSTR/hooks-no-guard.json" "$GUARD_MARKER" <<'PY'
+import json, sys
+
+enforce_path, form_path, marker = sys.argv[1:4]
+
+
+def entries(path):
+    """Return the entries of a hook document by trust key, and its PreToolUse group count."""
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    out = {}
+    for event, groups in doc.get("hooks", {}).items():
+        for g, entry in enumerate(groups):
+            fields = {k: v for k, v in entry.items() if k != "hooks"}
+            for h, hook in enumerate(entry.get("hooks", [])):
+                out["%s:%d:%d" % (event, g, h)] = (fields, hook)
+    return out, len(doc.get("hooks", {}).get("PreToolUse", []))
+
+
+enforce, groups = entries(enforce_path)
+form, _ = entries(form_path)
+problems = []
+
+owned = [k for k, (_, hook) in enforce.items() if hook.get("command", "").endswith(" " + marker)]
+last = "PreToolUse:%d:0" % (groups - 1)
+if len(owned) != 1:
+    problems.append("the enforce form holds %d owned guard entries, not one" % len(owned))
+elif owned[0] != last or "PreToolUse:%d:1" % (groups - 1) in enforce:
+    problems.append("the owned guard entry is at %s, not alone at %s" % (owned[0], last))
+
+for key in sorted(form):
+    if key not in enforce:
+        problems.append("%s is not in the enforce form" % key)
+    elif form[key] != enforce[key]:
+        problems.append("%s holds other content than in the enforce form" % key)
+
+for key in sorted(set(enforce) - set(form) - set(owned)):
+    problems.append("%s of the enforce form is missing" % key)
+
+print("; ".join(problems))
+sys.exit(1 if problems else 0)
+PY
 }
 
 # guard_lessons writes the three lessons.yaml variants into the
@@ -881,10 +1211,11 @@ YAML
 
 # guard_prewrite_script writes the indirection entry. The file
 # pre-write-mode selects what it does: off exits 0, report-only runs the
-# guard and discards its exit status, and slow waits GUARD_SLOW_SECONDS
-# and then runs the guard. Each guard run appends its mode and exit
-# status to pre-write.log. A slow run that the client stops at the
-# timeout appends nothing.
+# guard and discards its exit status, slow waits GUARD_SLOW_SECONDS and
+# then runs the guard, and slow-deny waits GUARD_IN_BUDGET_SECONDS and
+# then runs the guard. Each guard run appends its mode and exit status to
+# pre-write.log. A run that the client stops at the timeout appends
+# nothing.
 guard_prewrite_script() {
     cat > "$INSTR/pre-write.sh" <<EOF
 #!/bin/sh
@@ -901,18 +1232,26 @@ case "\$mode" in
         status=\$?
         echo "slow \$status" >> '$INSTR/pre-write.log'
         exit \$status ;;
+    slow-deny)
+        sleep $GUARD_IN_BUDGET_SECONDS
+        '$BIN' $GUARD_MARKER
+        status=\$?
+        echo "slow-deny \$status" >> '$INSTR/pre-write.log'
+        exit \$status ;;
 esac
 exit 0
 EOF
     printf 'off\n' > "$INSTR/pre-write-mode"
 }
 
-# guard_doc <form> writes one form of the hook document from the copy
-# that setup kept: enforce (the copy itself), no-guard (without the
-# owned guard entry), or inline-wrapper (the owned guard command with
-# "|| true" after it, a report-only wrapper that inspection detects).
+# guard_doc <form> [<file>] writes one form of the hook document from
+# the copy that setup kept: enforce (the copy itself), no-guard (without
+# the owned guard entry), or inline-wrapper (the owned guard command with
+# "|| true" after it, a report-only wrapper that inspection detects). It
+# writes the hook document of the client, or <file> when it is given, so
+# guard_keys can read a form that no client reads.
 guard_doc() {
-    python3 -I - "$INSTR/hooks-enforce.json" "$GUARD_DOC" "$GUARD_MARKER" "$1" <<'PY'
+    python3 -I - "$INSTR/hooks-enforce.json" "${2:-$GUARD_DOC}" "$GUARD_MARKER" "$1" <<'PY'
 import json, shutil, sys
 
 saved, path, marker, form = sys.argv[1:5]
@@ -998,6 +1337,9 @@ guard_phase() {
         slow)
             guard_doc no-guard
             printf 'slow\n' > "$INSTR/pre-write-mode" ;;
+        slow-deny)
+            guard_doc no-guard
+            printf 'slow-deny\n' > "$INSTR/pre-write-mode" ;;
     esac
 
     guard_capability "$1"
@@ -1054,8 +1396,24 @@ guard_lines() {
 # script. It moves the hook payloads of an earlier call aside, notes the
 # length of the lesson-check audit stream, and starts empty case and
 # capability lists.
+#
+# For Codex it first checks the trust keys of the hook forms. A
+# repository that an older version of this script set up keeps the owned
+# guard before the observer and the indirection entry. There the no-guard
+# form moves both entries, Codex does not run them, and the wrapper,
+# slow, and slow-deny cases record nothing. So no paid turn starts there.
 guard_begin() {
     guard_vars
+
+    if [ "$CLIENT" = codex ]; then
+        if reason=$(guard_keys); then
+            ok "every Codex hook form keeps the trust keys and the content of the enforce form"
+        else
+            blocked "a Codex hook form moves or changes a trusted entry: $reason"
+            note "set up a new repository with this script (another CAPTURE_NATIVE_REPO), and review its trust"
+            summary
+        fi
+    fi
 
     if [ -n "$(find "$OBS" -name '*.json' 2>/dev/null | head -1)" ]; then
         mv "$OBS" "$INSTR/observed-before-$(date +%s)"
@@ -1137,7 +1495,7 @@ guard_claude() {
         --max-budget-usd 0.40 --debug hooks --debug-file "$OUT/run-$RUN-debug.log" \
         --allowedTools Read Edit Write MultiEdit Agent Task --agents "$agents"
 
-    if (cd "$REPO" && claude -p "$@" < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN.json" 2> "$OUT/run-$RUN-stderr.txt"); then
+    if claude_print "$RUN" "$@"; then
         line=$(python3 -I -c '
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -1162,8 +1520,11 @@ print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "
 # reply-<run>.txt. It never passes --dangerously-bypass-hook-trust,
 # because trust stays the operator's decision.
 guard_codex() {
-    if (cd "$REPO" && PATH="$(dirname "$BIN"):$PATH" codex exec -m "$model" -c model_reasoning_effort=low --json \
-        -s workspace-write -C "$REPO" - < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN-events.jsonl" 2> "$OUT/run-$RUN-stderr.txt"); then
+    exec_status=0
+    (cd "$REPO" && PATH="$(dirname "$BIN"):$PATH" codex exec -m "$model" -c model_reasoning_effort=low --json \
+        -s workspace-write -C "$REPO" - < "$OUT/prompt-$RUN.txt" > "$OUT/run-$RUN-events.jsonl" 2> "$OUT/run-$RUN-stderr.txt") || exec_status=$?
+
+    if codex_verdict "run $RUN ($gcase)" "$exec_status" "$OUT/run-$RUN-events.jsonl" "$OUT/run-$RUN-stderr.txt"; then
         cat "$OUT/run-$RUN-events.jsonl" >> "$OUT/exec-events.jsonl"
         line=$(python3 -I -c '
 import json, sys
@@ -1186,8 +1547,6 @@ print(thread, " ".join("%s=%s" % kv for kv in sorted(usage.items())))' "$OUT/run
         [ -z "${line%% *}" ] || SESSION=${line%% *}
         echo "  cost     run $RUN ($gcase): codex exec -m $model -c model_reasoning_effort=low: ${line#* }"
         ok "run $RUN ($gcase) finished (thread $SESSION)"
-    else
-        fail "run $RUN ($gcase) failed: $(tail -1 "$OUT/run-$RUN-stderr.txt")"
     fi
 }
 
@@ -1198,9 +1557,17 @@ GUARD_STOP='If a tool call is blocked or fails, do not retry it and do not try a
 Then reply with the single word: done, or with the single word: blocked when a tool call was blocked or failed.'
 GUARD_REPORT='Then reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came.'
 
-# record_claude_guard runs the thirteen Claude Code guard cases, each in
-# a new session. The writer subagent has only the Write tool. The phases
-# that change the hook document run last.
+# The prompt parts of the child cases. The parent cannot see the tool
+# results of the child, so it repeats the reply word of the child. That
+# relay is a corroboration only. The parent can reword the reply, so the
+# replay reads the reply of the child from its SubagentStop payload.
+GUARD_RELAY='Do not use any tool yourself. Then reply with the single word that the subagent replied.'
+
+# record_claude_guard runs the twenty-two Claude Code guard cases, each
+# in a new session. The writer subagent has only the Write tool. The
+# phases that change the hook document run last among the first thirteen
+# cases. The nine later cases add child denies, a child post-edit reply,
+# and the in-budget slow deny of each tool and lane.
 record_claude_guard() {
     model=${CAPTURE_NATIVE_CLAUDE_MODEL:-haiku}
     agents='{"writer":{"description":"Creates the one file it is given with the given content.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Write"]}}'
@@ -1263,12 +1630,60 @@ $GUARD_STOP"
 1. Use the Write tool once to create the new file sentinel/slow.txt with the single line: slow
 $GUARD_STOP"
 
+    # The later cases get two more subagents. The earlier cases keep the
+    # agent list of their first recordings. The editor reads before it
+    # edits, because Edit and MultiEdit need a read of the file first.
+    agents='{"writer":{"description":"Creates the one file it is given with the given content.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Write"]},'
+    agents=$agents'"editor":{"description":"Reads the one file it is given, then makes the one edit it is given.","prompt":"Use the Read tool once on the file that you are given. Then make the edit that you are given with exactly the tool that you are given, once. If you do not have that tool, use no other tool and reply with the single word no-multiedit. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Read","Edit","MultiEdit"]},'
+    agents=$agents'"reporter":{"description":"Creates the one file it is given, then reports the post-edit message.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. Do not retry it. Then reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came.","model":"'"$model"'","tools":["Write"]}}'
+
+    guard_run enforce subagent-edit-violation "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"editor\" and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+$GUARD_RELAY"
+
+    guard_run enforce subagent-multiedit-violation "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"editor\" and ask it to read notes/multi.txt and then use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
+$GUARD_RELAY"
+
+    guard_run check-pins subagent-check-only "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"reporter\" and ask it to create the new file sentinel/child-checked.txt with the single line: checked
+Do not use any tool yourself. Then reply with the one line that the subagent replied."
+
+    guard_run slow-deny slow-deny-write "$GUARD_STEPS
+1. Use the Write tool once to create the new file sentinel/slow-deny.txt with the single line: slow
+$GUARD_STOP"
+
+    guard_run slow-deny slow-deny-edit "$GUARD_STEPS
+1. Use the Read tool to read the file sentinel/edit.txt.
+2. Use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+$GUARD_STOP"
+
+    guard_run slow-deny slow-deny-multiedit "$GUARD_STEPS
+1. Use the Read tool to read the file notes/multi.txt.
+2. Use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
+If you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: no-multiedit.
+$GUARD_STOP"
+
+    guard_run slow-deny slow-deny-subagent-write "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"writer\" and ask it to create the new file sentinel/slow-child.txt with the single line: child
+$GUARD_RELAY"
+
+    guard_run slow-deny slow-deny-subagent-edit "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"editor\" and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+$GUARD_RELAY"
+
+    guard_run slow-deny slow-deny-subagent-multiedit "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"editor\" and ask it to read notes/multi.txt and then use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
+$GUARD_RELAY"
+
     guard_restore
 }
 
-# record_codex_guard runs the thirteen Codex guard cases, each in a new
+# record_codex_guard runs the sixteen Codex guard cases, each in a new
 # thread: the four apply_patch section kinds, the update content cases,
-# and the phase cases. The phases that change the hook document run last.
+# and the phase cases. The phases that change the hook document run last
+# among the first thirteen cases. The three later cases add a worker
+# post-edit reply and the in-budget slow deny of the root and the worker.
 record_codex_guard() {
     model=${CAPTURE_NATIVE_CODEX_MODEL:-gpt-5.6-luna}
 
@@ -1292,9 +1707,14 @@ $GUARD_STOP"
 1. Use one single apply_patch call that adds two new files: notes/multi-ok.txt with the single line: ok, and sentinel/multi.txt with the single line: multi.
 $GUARD_STOP"
 
+    # The prompt names the agent tools as Codex 0.164.0 lists them in code
+    # mode. With the short name spawn_agent, the model called a tool that
+    # does not exist, and no worker started. The prompt also names the
+    # agent_type and message fields, because without agent_type the tool
+    # starts a fork of the whole history, not a worker.
     guard_run enforce subagent-violation "$GUARD_STEPS
-1. Use spawn_agent to start one worker agent, and ask it to use apply_patch once to add the new file sentinel/child.txt with the single line: child. Tell it not to retry a blocked call.
-2. Wait for the agent with wait_agent, then close it.
+1. Use multi_agent_v1__spawn_agent with agent_type worker to start one worker agent. In its message, ask it to use apply_patch once to add the new file sentinel/child.txt with the single line: child, and not to retry a blocked call.
+2. Wait for the agent with multi_agent_v1__wait_agent, then close it with multi_agent_v1__close_agent.
 $GUARD_STOP"
 
     guard_run enforce update-unknown "$GUARD_STEPS
@@ -1305,8 +1725,21 @@ $GUARD_STOP"
 1. Use apply_patch once to add the new file notes/permitted.txt with the single line: permitted
 $GUARD_STOP"
 
+    # The prompt gives the exact patch for the fixture one, two, three. A
+    # description in words let the model write the line text "line two",
+    # which the file does not hold, so the applier refused the patch. The
+    # patch has the one-hunk shape of the content oracle, so a successful
+    # run gives a live update case.
     guard_run enforce update-permitted "$GUARD_STEPS
-1. Use apply_patch once to replace the line two with the line TWO in free/oracle.txt.
+1. Use apply_patch once with exactly this patch, line for line. The context lines one and three each start with one space.
+*** Begin Patch
+*** Update File: free/oracle.txt
+@@
+ one
+-two
++TWO
+ three
+*** End Patch
 $GUARD_STOP"
 
     guard_run broken-config config-error "$GUARD_STEPS
@@ -1323,6 +1756,24 @@ $GUARD_STOP"
 
     guard_run slow slow-guard "$GUARD_STEPS
 1. Use apply_patch once to add the new file sentinel/slow.txt with the single line: slow
+$GUARD_STOP"
+
+    # The prompt names the agent tools and the worker agent_type for the
+    # reason in the comment at the case subagent-violation.
+    guard_run check-pins subagent-check-only "$GUARD_STEPS
+1. Use multi_agent_v1__spawn_agent with agent_type worker to start one worker agent. In its message, ask it to use apply_patch once to add the new file sentinel/child-checked.txt with the single line: checked, not to retry the call, and to reply with one line: the check id that a seamark post-edit message named after the call, or the single word none when no such message came.
+2. Wait for the agent with multi_agent_v1__wait_agent, then close it with multi_agent_v1__close_agent.
+Do not use apply_patch yourself. Then reply with the one line that the worker replied."
+
+    guard_run slow-deny slow-deny-add "$GUARD_STEPS
+1. Use apply_patch once to add the new file sentinel/slow-deny.txt with the single line: slow
+$GUARD_STOP"
+
+    # The prompt names the agent tools and the worker agent_type for the
+    # reason in the comment at the case subagent-violation.
+    guard_run slow-deny slow-deny-subagent-add "$GUARD_STEPS
+1. Use multi_agent_v1__spawn_agent with agent_type worker to start one worker agent. In its message, ask it to use apply_patch once to add the new file sentinel/slow-child.txt with the single line: child, and not to retry a blocked call.
+2. Wait for the agent with multi_agent_v1__wait_agent, then close it with multi_agent_v1__close_agent.
 $GUARD_STOP"
 
     guard_restore

@@ -341,6 +341,13 @@ func TestLessonsGuardHookDeniesViolation(t *testing.T) {
 			path:    "src/new.go",
 			reasons: patternHead + "Write adds a line matching the pattern at src/new.go:3: // TODO(owner): fill in.",
 		},
+		{
+			name:    "an Edit with an empty old_string that creates a file with a TODO line",
+			payload: claudeEditEvent(t, root, "src/created.go", "", "package src\n\n// TODO(owner): fill in.\n"),
+			pin:     todo,
+			path:    "src/created.go",
+			reasons: patternHead + "Edit adds a line matching the pattern at src/created.go:3: // TODO(owner): fill in.",
+		},
 	}
 
 	for _, tc := range cases {
@@ -579,8 +586,16 @@ func TestLessonsGuardHookFailsClosed(t *testing.T) {
 			cause:   lessoncheck.GuardCauseConfigurationError,
 			reason:  lessoncheck.ReasonConfigurationError,
 			check: func(t *testing.T, reasons string) {
-				assert.True(t, strings.HasPrefix(reasons, configHead), reasons)
-				assert.Contains(t, reasons, "permission denied")
+				// The deny text has a byte bound, and the cut falls inside the
+				// message. A long temp folder fills the message with the root
+				// path before the cause. So the start and the end always hold,
+				// and the cause must show whenever the text was not cut.
+				assert.True(t, strings.HasPrefix(reasons, configHead+"open "), reasons)
+				assert.True(t, strings.HasSuffix(reasons, configTail), reasons)
+
+				if !strings.HasSuffix(reasons, "…"+configTail) {
+					assert.True(t, strings.HasSuffix(reasons, ": permission denied"+configTail), reasons)
+				}
 			},
 		},
 		{
@@ -622,14 +637,14 @@ func TestLessonsGuardHookFailsClosed(t *testing.T) {
 			},
 		},
 		{
-			name: "an Edit of an absent file stays unprojectable (ruling N1)",
+			name: "an Edit of an absent file with a non-empty old_string stays unprojectable",
 			payload: func(t *testing.T, root string) string {
-				return claudeEditEvent(t, root, "src/absent.go", "", "package src\n")
+				return claudeEditEvent(t, root, "src/absent.go", "package", "package src\n")
 			},
 			cause:  lessoncheck.GuardCauseUnknown,
 			reason: lessoncheck.ReasonUnprojectableEdit,
 			check: func(t *testing.T, reasons string) {
-				assert.Contains(t, reasons, "cannot evaluate src/absent.go: unprojectable-edit")
+				assert.Contains(t, reasons, "cannot evaluate src/absent.go: unprojectable-edit; the file does not exist")
 			},
 		},
 		{

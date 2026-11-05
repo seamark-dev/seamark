@@ -71,9 +71,8 @@ func TestClaudeGuardDecodesEditTools(t *testing.T) {
 			Kind: lessoncheck.OpMultiEdit, Path: handler,
 			Edits: []lessoncheck.TextEdit{{Old: "a", New: "b"}, {Old: "c", New: "d"}},
 		}},
-		// The decoder keeps an empty old_string. The projection decides
-		// that it is unprojectable-edit on an absent file, because no
-		// native run shows yet that such an edit creates the file.
+		// The decoder keeps an empty old_string. The projection then gives
+		// an add of the absent file with the new_string of the first edit.
 		{"pre_tool_use_multiedit_create.json", "MultiEdit", "toolu_synthetic_0007", root, lessoncheck.FileOp{
 			Kind: lessoncheck.OpMultiEdit, Path: "/workspace/repo/docs/created-by-multiedit.md",
 			Edits: []lessoncheck.TextEdit{{Old: "", New: "# Created\n\nDraft.\n"}, {Old: "Draft.", New: "Final."}},

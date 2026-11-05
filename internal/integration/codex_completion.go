@@ -72,14 +72,30 @@ func (codexCompletions) DecodeCompletion(payload []byte) (lessoncheck.Completion
 	return c, nil
 }
 
-// EncodeFindings writes the findings to stderr with exit 0. The Codex
-// hooks reference documents that a PostToolUse hook can give the model
-// text this way. No native recording shows yet that the text reaches
-// the model, so the post-edit path stays active-unverified until a
-// reviewed native guard recording shows it.
+// EncodeFindings wraps the findings in the additionalContext reply of
+// PostToolUse, on stdout with exit 0. Codex has no failure event, so a
+// failed patch gets the same event name. A native guard recording of
+// codex-cli 0.164.0 showed that PostToolUse text on stderr never reaches
+// the model. That binary embeds the PostToolUse output schema with
+// hookSpecificOutput and additionalContext. The advisory edit hook uses
+// the same form on PreToolUse, and Codex adds that context to the
+// thread. No reviewed recording shows yet that the PostToolUse context
+// reaches the model, so the post-edit path stays active-unverified.
+//
+// The text in the reply holds at most codexMaxFindingsBytes. A text
+// that fits keeps every byte, and a longer text loses its last lines.
 func (codexCompletions) EncodeFindings(text string, _ lessoncheck.ToolOutcome) (HookReply, error) {
-	return HookReply{Stderr: []byte(text)}, nil
+	return encodeContextReply(codexPostToolUse, lessoncheck.BoundFindings(text, codexMaxFindingsBytes))
 }
+
+// codexMaxFindingsBytes bounds the findings text in the PostToolUse
+// reply. Codex bounds model-visible hook context with
+// additionalContextLimit, about 2,500 tokens by default. A text of this
+// size stays inside that bound while a token holds 1.23 bytes or more
+// on average. English text holds about 4 bytes per token. Without the
+// bound, a patch of 100 files can give a text of more than 12 KB,
+// because each unknown line and the rerun command list every path.
+const codexMaxFindingsBytes = 3072
 
 // toolOutcomeOf converts a capture outcome to the tool outcome of the
 // lesson-check stream. Both lists hold the same words, so a type

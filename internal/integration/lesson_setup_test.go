@@ -211,9 +211,10 @@ func TestSetupLessonChecksSummaryKeepsContextsDistinct(t *testing.T) {
 	// Synthetic evidence exercises narration only. It establishes no native support.
 	saved := guardRecorded
 	t.Cleanup(func() { guardRecorded = saved })
-	guardRecorded = map[guardPath]recordedEvidence{
+	guardRecorded = map[guardPath]guardProof{
 		{client: ClaudeID, tool: "Edit", context: lessoncheck.ContextRoot}: {
-			clientVersion: "synthetic-fixture", surface: "fixture root Edit",
+			recordedEvidence: recordedEvidence{clientVersion: "synthetic-fixture", surface: "fixture root Edit"},
+			slow:             slowPastTimeout,
 		},
 	}
 	root := t.TempDir()
@@ -222,6 +223,20 @@ func TestSetupLessonChecksSummaryKeepsContextsDistinct(t *testing.T) {
 	})
 	assert.Contains(t, out, "pre-write Edit child active-unverified (native-deny-unverified, native-timeout-unverified)")
 	assert.NotContains(t, out, "pre-write Edit root active-unverified")
+	assert.NotContains(t, out, "limit:", "a client that waits for its hook gives no limit")
+}
+
+func TestSetupLessonChecksSummaryNamesTheFailOpenLimit(t *testing.T) {
+	// Synthetic evidence exercises narration only. It establishes no native support.
+	withSyntheticFailOpen(t, guardPath{client: ClaudeID, tool: "Edit", context: lessoncheck.ContextRoot})
+
+	root := t.TempDir()
+	out, _ := applyLessonSetupWithBinary(t, root, fakeSeamark(t, t.TempDir(), "self"), ClientSetup{
+		ClientID: ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksEnforce,
+	})
+	assert.Contains(t, out, "pre-write Edit root active (limit: the client lets the write run after its 10 s hook timeout)",
+		"an active path with a limit still shows in the summary")
+	assert.Contains(t, out, "pre-write Edit child active-unverified (native-deny-unverified, native-timeout-unverified)")
 }
 
 // hookEntries returns the JSON of every entry of a hook document whose

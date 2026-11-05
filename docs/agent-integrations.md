@@ -146,6 +146,23 @@ path metadata. Verified before/after projection is **required before
 release**, not an accepted omission from v0.9.0. Post-edit findings and
 explicit working-tree verification do not prove pre-write projection.
 
+Codex post-edit findings go back as `additionalContext` in the
+`PostToolUse` hook reply on stdout, with exit 0. The advisory edit hook
+uses the same form on `PreToolUse`. A native recording of codex-cli
+0.164.0 showed that findings on stderr never reached the model, so that
+channel is no longer used. No reviewed recording shows yet that the new
+reply reaches the model, so the Codex post-edit path stays
+`active-unverified` in root and child contexts.
+
+Codex bounds model-visible hook context with `additionalContextLimit`,
+about 2,500 tokens by default. So the Codex reply holds at most 3,072
+bytes of findings. A longer text, such as the findings of a patch on many
+files, keeps its first whole lines. Its last line counts the lines left
+out and names `seamark lessons --verify`. That command checks tracked
+changes and untracked files that git does not ignore, so it can skip an
+ignored file that the call wrote. The Claude Code reply keeps the whole
+text.
+
 The installed pre-edit timeout is **10 seconds**, and the post-edit
 timeout is **15 seconds**. The handlers budget 5 seconds for the guard
 and 10 seconds for post-edit evaluation inside those limits. The hook
@@ -161,6 +178,20 @@ path state, binary identity and native evidence. An installed path can
 be `active-unverified`, `inactive`, or `unsupported`; a requested mode
 alone does not establish a working guard. An `enforced-unverified` badge
 is explicitly unverified, not the verified `enforced` state.
+
+A verified path can carry a limit. A client can stop a slow pre-edit
+hook at its timeout and let the write run (fail-open). Claude Code
+2.1.314 does this at 10 seconds. Such a path reads `enforced` only when a
+reviewed native recording of that client version, tool, and context
+shows a guard that is slow but ends inside the timeout, and the client
+waits for it and honors its deny. The claim then holds only inside the
+limit, so every surface that shows it names the limit too, for example
+`claude enforced (limit: the client lets the write run after its 10 s
+hook timeout)`. Status, doctor, setup, preparation, mode-change impact,
+and the TUI print it. The JSON report carries it in `verification.limit`
+of the path and in `limits` of the pin badge. A client that waits for a
+hook past its timeout, or blocks the write, gives no limit. No path reads
+`enforced` before its recording is reviewed and committed as test data.
 
 Setup keeps warning-and-install behavior for unknown local capability or
 trust. It refuses known-bad enforce states, such as disabled hooks or a
@@ -573,7 +604,8 @@ installed version to catch parser drift.
 | --- | --- | --- |
 | `make agents-test` | Go and the repository's build prerequisites; no agent CLI or credentials | adapter contracts, setup, hooks, delivery, gates, diagnostics, and fake subprocesses; also covered by `make test` and CI |
 | `make smoke` | the built binary | the generated Claude Code and Codex configuration in a fresh repository, the hook commands it wrote running as written, and no credential in a generated file; part of CI and of every release |
-| `make agents-native-check CLIENT=codex` | the client CLI on PATH; no model, no credentials | the installed version beside the recorded evidence; the preset's flags on this version; the patch oracle on this version; the preset refusing a workspace write under an allow rule, returning the final message on stdout, and failing with the provider's reason; the generated configuration read by the client from a scratch home that trusts the disposable repository |
+| `make agents-native-check CLIENT=codex` | the client CLI on PATH; no model, no credentials | the installed version beside the recorded evidence; the preset's flags on this version; the patch oracle on this version; the exit status, output, and after bytes of every apply_patch content case, when the installed version is the recorded one (else it skips with the reason); the preset refusing a workspace write under an allow rule, returning the final message on stdout, and failing with the provider's reason; the generated configuration read by the client from a scratch home that trusts the disposable repository |
+| `make agents-oracle-record ORACLE_VERSION=<version>` | the Codex CLI on PATH at that version; no model, no credentials | a new recording of the apply_patch content cases into `internal/integration/testdata/codex/apply_patch_oracle.json`, from the installed applier in scratch directories; it refuses a version that is not installed, and it keeps the bytes of the path cases |
 | `make agents-native-smoke CLIENT=codex` | the client CLI and operator authentication; costs tokens | one distillation group read through the client preset with no failed group and a proposed pin, the pin's client provenance in the ledger, the command disclosed by `--dry-run`, trigger extraction in dry-run only, and the workspace unchanged afterwards |
 
 The Go checks use ordinary test results and label missing prerequisites

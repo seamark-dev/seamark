@@ -536,10 +536,12 @@ type lessonPath struct {
 	context lessoncheck.PathContext
 	state   lessoncheck.PathState
 	reasons []lessoncheck.CapReason
+	limit   string // the limit of a verified claim; "" for none
 }
 
-// String renders the path as "<hook_stage> <tool> <state> (<reasons>)".
-// A path without a reason has no parentheses.
+// String renders the path as "<hook_stage> <tool> <state> (<reasons>)",
+// then the limit in its own parentheses. A path without a reason and a
+// limit has no parentheses.
 func (p lessonPath) String() string {
 	text := fmt.Sprintf("%s %s %s", p.stage, p.tool, p.state)
 
@@ -551,11 +553,16 @@ func (p lessonPath) String() string {
 		text += " (" + lessoncheck.JoinCapReasons(p.reasons) + ")"
 	}
 
+	if p.limit != "" {
+		text += " (" + lessoncheck.LimitText([]string{p.limit}) + ")"
+	}
+
 	return text
 }
 
 // lessonSummary names each hook path that is not active after the plan,
-// joined with "; ". It is the setup-time reading of the facts that the
+// and each active path with a limit, joined with "; ". A limit narrows
+// the claim of an active path, so the line must not hide it. It is the setup-time reading of the facts that the
 // plan holds: the installed entries, the configuration, the hook
 // sources, and the static native evidence. Equal root and child paths
 // share one line. Unequal paths name their context, because one context
@@ -583,7 +590,7 @@ func lessonSummary(document map[string]any, binary string, client lessonHookClie
 
 	for _, path := range capability.Paths {
 		switch {
-		case path.State == lessoncheck.PathActive:
+		case path.State == lessoncheck.PathActive && path.Verification.Limit == "":
 			continue
 		case path.HookStage == lessoncheck.StageExploration:
 			// The exploration hook is optional, so the line names its paths
@@ -596,10 +603,13 @@ func lessonSummary(document map[string]any, binary string, client lessonHookClie
 			continue
 		}
 
-		reading := lessonPath{stage: path.HookStage, tool: path.Tool, state: path.State, reasons: path.Reasons}
+		reading := lessonPath{
+			stage: path.HookStage, tool: path.Tool, state: path.State, reasons: path.Reasons, limit: path.Verification.Limit,
+		}
 		if slices.ContainsFunc(capability.Paths, func(other lessoncheck.PathCapability) bool {
 			return other.HookStage == path.HookStage && other.Tool == path.Tool &&
-				(other.State != path.State || !slices.Equal(other.Reasons, path.Reasons))
+				(other.State != path.State || !slices.Equal(other.Reasons, path.Reasons) ||
+					other.Verification.Limit != path.Verification.Limit)
 		}) {
 			reading.context = path.Context
 		}

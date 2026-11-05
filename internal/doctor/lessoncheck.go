@@ -46,7 +46,8 @@ func checkLessonChecks(r *Report, inspections []integration.Inspection, root str
 }
 
 // lessonCheckDetail is the detail of the row: the installed mode of each
-// client, the pin counts by mode, and the configuration state. A client
+// client, the pin counts by mode, the configuration state, and the limit
+// of each client whose verified pre-write paths have one. A client
 // without the structured Read path reads exploration inactive (§5 row
 // 42).
 //
@@ -56,10 +57,18 @@ func checkLessonChecks(r *Report, inspections []integration.Inspection, root str
 func lessonCheckDetail(report lessoncheck.CapabilityReport, cfg *lessoncheck.Config,
 	inspections []integration.Inspection,
 ) string {
-	var parts, clients, noExploration []string
+	var parts, clients, limitNotes, noExploration []string
 
 	for _, c := range report.Clients {
 		clients = append(clients, installedText(c, inspections))
+
+		// A verified pre-write path can hold only inside a limit, for
+		// example a client that lets the write run after its hook timeout.
+		// The row names the limit, because the row otherwise reads as full
+		// enforcement.
+		if limits := c.Limits(lessoncheck.StagePreWrite); len(limits) > 0 {
+			limitNotes = append(limitNotes, c.Client+" pre-write "+lessoncheck.LimitText(limits))
+		}
 
 		if !c.HasStage(lessoncheck.StageExploration) {
 			noExploration = append(noExploration, "exploration inactive for "+c.Client)
@@ -72,6 +81,8 @@ func lessonCheckDetail(report lessoncheck.CapabilityReport, cfg *lessoncheck.Con
 
 	enforce, check, advisory := lessoncheck.PinModeCounts(cfg)
 	parts = append(parts, fmt.Sprintf("%d enforce, %d check, %d advisory pin(s)", enforce, check, advisory), report.ConfigText())
+
+	parts = append(parts, limitNotes...)
 
 	return strings.Join(append(parts, noExploration...), " · ")
 }

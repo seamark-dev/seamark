@@ -666,7 +666,11 @@ pin:
 	t.Run("no path inside the workspace selects nothing", func(t *testing.T) {
 		root := workspace(t)
 		cfg := writeConfig(t, root, prepareTwoPins)
-		outside := filepath.Join(t.TempDir(), "x.go")
+
+		// The preparation cuts a long input path, and a long temp folder
+		// makes a temp path too long to show in full. A relative path stays
+		// short. It starts at root, so it names a file beside the workspace.
+		outside := filepath.Join("..", "x.go")
 
 		p := mustPrepare(t, prepareMemoryStore(t), prepareRequest(root, cfg, outside, ""))
 
@@ -1068,4 +1072,15 @@ func jsonString(t *testing.T, s string) string {
 	require.NoError(t, err)
 
 	return string(encoded)
+}
+
+// TestEnforcementTextNamesTheLimit proves that the enforcement line of a
+// prepared check names the limit of an enforced badge.
+func TestEnforcementTextNamesTheLimit(t *testing.T) {
+	got := enforcementText([]lessoncheck.PinClient{
+		{Client: "claude", Badge: lessoncheck.BadgeEnforced, Limits: []string{"the client lets the write run after its 10 s hook timeout"}},
+		{Client: "codex", Badge: lessoncheck.BadgeRequestedInactive, Reasons: []lessoncheck.CapReason{lessoncheck.CapNotInstalled}},
+	})
+	assert.Equal(t, "claude enforced (limit: the client lets the write run after its 10 s hook timeout) · "+
+		"codex requested-inactive (not-installed)", got)
 }

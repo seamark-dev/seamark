@@ -58,8 +58,8 @@ type hookContextReply struct {
 }
 
 // encodeContextReply wraps text in the additionalContext reply to a hook
-// event. The edit advice of both clients, and the completion findings
-// and explore advice of Claude Code, go through this one encoder, so
+// event. The edit advice and the completion findings of both clients,
+// and the explore advice of Claude Code, go through this one encoder, so
 // every reply keeps the same bytes.
 func encodeContextReply(event, text string) (HookReply, error) {
 	var reply hookContextReply

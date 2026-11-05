@@ -317,6 +317,47 @@ func TestLessonCheckCapabilityReportBadges(t *testing.T) {
 		assert.Equal(t, "requested; claude enforced", r.ActiveText(enforce.Ref))
 	})
 
+	t.Run("an enforced badge names the limit of its paths", func(t *testing.T) {
+		const limit = "the client lets the write run after its 10 s hook timeout"
+
+		paths := installedPaths("claude", testGuard, true, LevelVerified, BinaryCurrent)
+		for i := range paths {
+			if paths[i].Stage == StagePreWrite {
+				paths[i].Verification.Limit = limit
+			}
+		}
+
+		r := CapabilityReportOf(cfg, nil, paths, nil)
+		assert.Equal(t, PinClient{Client: "claude", Badge: BadgeEnforced, Limits: []string{limit}},
+			badgeOfPin(t, r, enforce.Ref, "claude"))
+		assert.Equal(t, []string{
+			"active: claude enforced (limit: " + limit + ") · pre-write Edit, Write active (limit: " + limit + ")",
+		}, r.ActiveLines(enforce.Ref))
+		assert.Equal(t, "requested; claude enforced (limit: "+limit+")", r.ActiveText(enforce.Ref))
+
+		c, _ := r.Client("claude")
+		assert.Equal(t, []string{limit}, c.Limits(StagePreWrite))
+		assert.Empty(t, c.Limits(StagePostEdit))
+
+		// One path without the limit splits the group, so the text never
+		// claims the limit for a path that has none, or the reverse.
+		paths[0].Verification.Limit = ""
+		c, _ = CapabilityReportOf(cfg, nil, paths, nil).Client("claude")
+		assert.Equal(t, "pre-write Edit in root active; Edit in child, Write active (limit: "+limit+")",
+			c.StageText(StagePreWrite))
+	})
+
+	t.Run("an unverified path gives no limit", func(t *testing.T) {
+		paths := installedPaths("claude", testGuard, true, "pending", BinaryCurrent)
+		paths[0].Verification.Limit = "a limit"
+
+		r := CapabilityReportOf(cfg, nil, paths, nil)
+		c, _ := r.Client("claude")
+		assert.Empty(t, c.Limits(StagePreWrite), "only a verified claim has a limit")
+		assert.Empty(t, badgeOfPin(t, r, enforce.Ref, "claude").Limits)
+		assert.NotContains(t, c.StageText(StagePreWrite), "limit")
+	})
+
 	t.Run("enforced-unverified while the native deny is unverified", func(t *testing.T) {
 		r := CapabilityReportOf(cfg, nil, installedPaths("claude", testGuard, true, "pending", BinaryCurrent), nil)
 
@@ -483,4 +524,13 @@ func TestLessonCheckCapabilityReportBadges(t *testing.T) {
 		plain := capabilityConfig(t, "pin:\n  - rule: plain\n    region: lib/\n    mode: advisory\n")
 		assert.False(t, UsesLessonChecks(plain, nil), "an explicit advisory mode uses no lesson-check key")
 	})
+}
+
+// TestPinClientNote proves the text after a badge: the reasons, then the
+// limits, and nothing for a client with neither.
+func TestPinClientNote(t *testing.T) {
+	assert.Empty(t, PinClient{Badge: BadgeEnforced}.Note())
+	assert.Equal(t, "limit: a; b", PinClient{Limits: []string{"a", "b"}}.Note())
+	assert.Equal(t, "not-installed; limit: a",
+		PinClient{Reasons: []CapReason{CapNotInstalled}, Limits: []string{"a"}}.Note())
 }

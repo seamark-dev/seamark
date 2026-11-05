@@ -14,6 +14,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/tui/services/servicestest"
+	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
@@ -326,4 +327,30 @@ func TestTUILessonChecksBinaryWords(t *testing.T) {
 			assert.NotContains(t, claude, "this seamark binary")
 		})
 	}
+}
+
+// TestTUILessonChecksPathNamesTheLimit proves that the path lines of
+// the console name the limit of a verified path.
+func TestTUILessonChecksPathNamesTheLimit(t *testing.T) {
+	lines := integPathValues(ui.NewTheme(true), limitClient(), 200)
+	require.Len(t, lines, 2)
+
+	for _, l := range lines {
+		assert.Contains(t, ansi.Strip(l), ": active (limit: the client lets the write run after its 10 s hook timeout)")
+	}
+}
+
+// limitClient is a client whose pre-write paths read active with a
+// synthetic verified limit. It tests the narration only and gives no
+// native proof.
+func limitClient() lessoncheck.ClientCapability {
+	v := lessoncheck.CapVerification{
+		Level: lessoncheck.LevelVerified, ClientVersion: "synthetic-fixture", Surface: "fixture",
+		Limit: "the client lets the write run after its 10 s hook timeout",
+	}
+
+	return lessoncheck.ClientCapability{Client: "claude", Installed: lessoncheck.InstalledEnforce, Paths: []lessoncheck.PathCapability{
+		{Tool: "Write", HookStage: lessoncheck.StagePreWrite, Context: lessoncheck.ContextRoot, State: lessoncheck.PathActive, Verification: v},
+		{Tool: "Write", HookStage: lessoncheck.StagePreWrite, Context: lessoncheck.ContextChild, State: lessoncheck.PathActive, Verification: v},
+	}}
 }

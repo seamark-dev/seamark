@@ -30,11 +30,12 @@ Files:
   Claude Code 2.1.310. They are an `Edit` with
   `replace_all: true`; a `MultiEdit` on a file that does not exist yet,
   whose first edit has an empty `old_string`; a `Write` of a new file
-  inside a subagent (`agent_id`). No native run produced them. Whether
-  one `Edit` or a first `MultiEdit` step with an empty `old_string`
-  creates an absent file is not verified: the guard projects such an
-  edit as `unprojectable-edit` until a reviewed native guard recording
-  shows it.
+  inside a subagent (`agent_id`). No native run produced them. A native
+  guard run on Claude Code 2.1.314 showed that one `Edit` with an empty
+  `old_string` creates an absent file with `new_string`, so the guard
+  projects such an edit as an add. No native run made a `MultiEdit`
+  call, so a first `MultiEdit` step with an empty `old_string` follows
+  the `Edit` result by analogy.
 - `pre_tool_use_bash.json`: the shell event the gate hook matches.
 - `post_compact.json`: the lifecycle event the reset hook matches.
 - `post_compact_subagent.json`: a PostCompact with `agent_id`. The

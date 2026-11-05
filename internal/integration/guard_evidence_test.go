@@ -75,47 +75,180 @@ func (r guardRecording) deniedPaths(t *testing.T, client string) map[guardPath]b
 	return out
 }
 
-// slowRecorded reports whether the slow-guard case shows a protected
-// slow call on the given path. A write, a deny without a joined record,
-// or a timeout without proof gives false, so the evidence stays unknown.
-// With no path, it reports whether any path has that proof.
-func (r guardRecording) slowRecorded(paths ...guardPath) bool {
-	c, ok := r.cases[guardSlowGuard]
-	if !ok || c.Phase != "slow" || !c.unchanged() || !slices.Contains(c.PreWrite, "slow 2") {
+// slowRecorded reports whether a slow case of the given kind shows a
+// protected slow call on the given path. slowPastTimeout reads the
+// slow-guard case, and slowInBudget reads each in-budget slow case. A
+// write, a deny without a joined record, or a stopped hook gives false,
+// so the evidence stays unknown. With no path, it reports whether any
+// path has that proof. Two or more paths give false, because one case
+// proves one path.
+func (r guardRecording) slowRecorded(kind slowProof, paths ...guardPath) bool {
+	if len(paths) > 1 {
 		return false
 	}
+
+	for name, c := range r.cases {
+		if !slowCaseOf(kind, name, c) {
+			continue
+		}
+
+		if p, ok := r.protectedSlowPath(name); ok && (len(paths) == 0 || paths[0] == p) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// slowCaseOf reports whether a case is a slow case of the kind and shows
+// its outcome. The slow-guard case must log the deny of the guard after
+// its wait past the timeout. An in-budget case must log exactly one deny
+// and leave the fixture unchanged (slowDenyObserved).
+func slowCaseOf(kind slowProof, name string, c guardCase) bool {
+	switch kind {
+	case slowPastTimeout:
+		return name == guardSlowGuard && c.Phase == guardSlowPhase && c.unchanged() && slices.Contains(c.PreWrite, "slow 2")
+	case slowInBudget:
+		return c.Phase == guardPhaseSlowDeny && slowDenyObserved(c)
+	default:
+		return false
+	}
+}
+
+// protectedSlowPath returns the path of the one protected call of a slow
+// case: a blocked deny that joins its payload, no post-edit record of the
+// call, and no native PostToolUse event of the tool.
+func (r guardRecording) protectedSlowPath(name string) (guardPath, bool) {
+	c := r.cases[name]
+
 	// The completion line of the slow wrapper names no call. So the case
 	// must hold exactly one covered attempt, or the line can describe
 	// another deny.
 	var attempts []timingEvent
+
 	for _, e := range r.events[c.Run] {
 		if e.hook.Event == "PreToolUse" && slices.Contains(guardTools[r.manifest.Client], e.tool()) {
 			attempts = append(attempts, e)
 		}
 	}
+
 	if len(attempts) != 1 {
-		return false
+		return guardPath{}, false
 	}
+
 	e := attempts[0]
-	deny, ok := r.guardRecordOf(guardSlowGuard, e)
+
+	deny, ok := r.guardRecordOf(name, e)
 	if !ok || !blockedDeny(deny) {
-		return false
+		return guardPath{}, false
 	}
+
+	if c.Audit[0] < 0 || c.Audit[1] > len(r.audit) || c.Audit[0] > c.Audit[1] {
+		return guardPath{}, false
+	}
+
 	for _, post := range ofKind(r.audit[c.Audit[0]:c.Audit[1]], lessoncheck.AuditPostEdit) {
 		if post.MatchSHA == deny.MatchSHA {
-			return false
+			return guardPath{}, false
 		}
 	}
+
 	// A native PostToolUse event of the tool shows that the tool ran,
 	// also when its audit record is lost, so it cancels the proof. A
 	// failure or permission-denied event can follow a deny, so it does not.
 	for _, observed := range r.events[c.Run] {
 		if observed.hook.Event == "PostToolUse" && observed.tool() == e.tool() {
-			return false
+			return guardPath{}, false
 		}
 	}
-	p := guardPath{client: r.manifest.Client, tool: e.tool(), context: eventContext(e)}
-	return len(paths) == 0 || len(paths) == 1 && paths[0] == p
+
+	return guardPath{client: r.manifest.Client, tool: e.tool(), context: eventContext(e)}, true
+}
+
+// timeoutOutcomeOf reads the timeout outcome of the client from the
+// slow-guard case. The guard waits past the hook timeout there.
+//
+//   - waits: the case shows a protected slow call (slowRecorded).
+//   - fail-open: the guard logged nothing, one covered attempt ran, the
+//     fixture changed, and a native PostToolUse event of the tool shows
+//     that the tool ran.
+//   - fail-closed: the guard logged nothing, one covered attempt ran,
+//     the fixture stayed unchanged, and no PostToolUse event of the tool
+//     exists.
+//
+// Any other case gives false, so the outcome stays unknown.
+func (r guardRecording) timeoutOutcomeOf() (timeoutOutcome, bool) {
+	if r.slowRecorded(slowPastTimeout) {
+		return timeoutWaits, true
+	}
+
+	c, ok := r.cases[guardSlowGuard]
+	if !ok || c.Phase != guardSlowPhase || len(c.PreWrite) > 0 {
+		return 0, false
+	}
+
+	var attempts []timingEvent
+
+	for _, e := range r.events[c.Run] {
+		if e.hook.Event == "PreToolUse" && slices.Contains(guardTools[r.manifest.Client], e.tool()) {
+			attempts = append(attempts, e)
+		}
+	}
+
+	if len(attempts) != 1 {
+		return 0, false
+	}
+
+	ran := slices.ContainsFunc(r.events[c.Run], func(e timingEvent) bool {
+		return e.hook.Event == "PostToolUse" && e.tool() == attempts[0].tool()
+	})
+
+	switch {
+	case ran && !c.unchanged():
+		return timeoutFailOpen, true
+	case !ran && c.unchanged():
+		return timeoutFailClosed, true
+	default:
+		return 0, false
+	}
+}
+
+// preWriteTimeout returns the timeout in seconds of the pre-write hook
+// that setup installs for the client.
+func preWriteTimeout(t *testing.T, client string) int {
+	t.Helper()
+
+	specs := map[string]func(string) []hooks.Spec{
+		ClaudeID: hooks.ClaudeLessonCheckSpecs,
+		CodexID:  hooks.CodexLessonCheckSpecs,
+	}[client]
+	require.NotNil(t, specs, "client %s has lesson-check hook specs", client)
+
+	return specs(hooks.LessonChecksEnforce)[0].Timeout
+}
+
+// withSyntheticFailOpen replaces the recorded maps for one test. Each
+// given path reads verified by an in-budget slow proof, and the client
+// version fails open at the 10 s hook timeout. The entries test the
+// narration only and give no native proof.
+func withSyntheticFailOpen(t *testing.T, paths ...guardPath) {
+	t.Helper()
+
+	savedPaths, savedTimeouts := guardRecorded, timeoutRecorded
+	t.Cleanup(func() { guardRecorded, timeoutRecorded = savedPaths, savedTimeouts })
+
+	guardRecorded = map[guardPath]guardProof{}
+	timeoutRecorded = map[clientVersion]timeoutDisposition{}
+
+	for _, p := range paths {
+		guardRecorded[p] = guardProof{
+			recordedEvidence: recordedEvidence{clientVersion: "synthetic-fixture", surface: "fixture " + p.tool},
+			slow:             slowInBudget,
+		}
+		timeoutRecorded[clientVersion{client: p.client, version: "synthetic-fixture"}] = timeoutDisposition{
+			outcome: timeoutFailOpen, seconds: 10,
+		}
+	}
 }
 
 // TestGuardEvidenceMatchesRecordings proves that GuardEvidence reads
@@ -123,7 +256,8 @@ func (r guardRecording) slowRecorded(paths ...guardPath) bool {
 // recording covers. Verified evidence needs the recording in
 // testdata/<client>/guard, its client version, a surface that names the
 // tool and the context, a blocked deny of the tool in that context, and
-// the slow-guard case. One verified level removes both reasons
+// a slow proof of the same path: the slow-guard case, or an in-budget
+// slow case. One verified level removes both reasons
 // native-deny-unverified and native-timeout-unverified, so it needs both
 // cases. Without a recording, every pre-write path stays pending. The
 // test reads the recordings in every run and never skips, so a skip of
@@ -160,11 +294,39 @@ func TestGuardEvidenceMatchesRecordings(t *testing.T) {
 				assert.Contains(t, evidence.Surface, string(context), label)
 				assert.True(t, denied[guardPath{client: client, tool: tool, context: context}],
 					"%s: the recording shows no deny of this tool in this context that left the files unchanged", label)
-				assert.True(t, rec.slowRecorded(guardPath{client: client, tool: tool, context: context}),
-					"%s: the recording shows no protected slow call on this path, so native-timeout-unverified stays", label)
+				proof := guardRecorded[guardPath{client: client, tool: tool, context: context}]
+				require.Contains(t, []slowProof{slowPastTimeout, slowInBudget}, proof.slow,
+					"%s: the entry names the kind of its slow proof", label)
+				assert.True(t, rec.slowRecorded(proof.slow, guardPath{client: client, tool: tool, context: context}),
+					"%s: the recording shows no protected slow call of this kind on this path, so "+
+						"native-timeout-unverified stays", label)
+
+				// An in-budget proof leaves open what the client does past the
+				// timeout. The reviewed outcome of the version gives the limit,
+				// so the limit cannot go missing for lack of a fact.
+				if proof.slow == slowInBudget {
+					assert.Contains(t, timeoutRecorded, clientVersion{client: client, version: evidence.ClientVersion},
+						"%s: an in-budget proof needs the timeout outcome of its client version", label)
+				}
 			}
 		}
 	}
+
+	t.Run("each timeout outcome matches the slow-guard case of its recording", func(t *testing.T) {
+		for key, d := range timeoutRecorded {
+			rec, recorded := readGuardRecording(t, key.client)
+			require.True(t, recorded, "%s %s: a timeout outcome needs a reviewed native guard recording in testdata/%s/guard",
+				key.client, key.version, key.client)
+			assert.True(t, sameClientVersion(key.version, rec.manifest.ClientVersion),
+				"%s: the outcome names %q, the recording ran on %q", key.client, key.version, rec.manifest.ClientVersion)
+
+			got, ok := rec.timeoutOutcomeOf()
+			require.True(t, ok, "%s %s: the slow-guard case shows no clear timeout outcome", key.client, key.version)
+			assert.Equal(t, d.outcome, got, "%s %s", key.client, key.version)
+			assert.Equal(t, preWriteTimeout(t, key.client), d.seconds,
+				"%s %s: the limit names the timeout of the installed pre-write hook", key.client, key.version)
+		}
+	})
 
 	t.Run("each recorded entry names a pre-write path", func(t *testing.T) {
 		for p := range guardRecorded {

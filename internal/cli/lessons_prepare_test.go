@@ -416,7 +416,12 @@ func TestLessonsPrepareRefusesEveryOtherMode(t *testing.T) {
 // with exit 0.
 func TestLessonsPrepareNeedsAPathInsideTheWorkspace(t *testing.T) {
 	root := prepareRepo(t, true)
-	outside := filepath.Join(t.TempDir(), "x.go")
+
+	// The preparation cuts a long input path, and a long temp folder makes
+	// a temp path too long to show in full. A relative path stays short. It
+	// starts at the process directory: the package directory in this process
+	// and root in a child process. Neither puts the file inside root.
+	outside := filepath.Join("..", "x.go")
 
 	before := prepareFiles(t, root)
 
