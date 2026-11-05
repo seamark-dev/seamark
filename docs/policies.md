@@ -73,7 +73,10 @@ status on. A wrapper that discards it (`… || true`, `… ; echo done`,
 none of them blocks, whatever `--enforce` or `policy.yaml` says. A gate
 in the background (`… &`) discards its exit status too. The shell does
 not wait for it, so it counts as a hook that may run, and setup
-installs the managed gate hook beside it. A hook that only may run, for
+installs the managed gate hook beside it. A hook that the client itself
+runs in the background (`"async": true`, and for Claude Code also
+`"asyncRewake": true`) reads as `report-only` too; setup removes that
+key from its own gate hook. A hook that only may run, for
 example one that another program gets as its arguments, never makes
 the `gate` line say `enforce`: the line names it as a definition that
 may run a gate, and nothing is known to block. An explicit `--gate-mode`

@@ -21,6 +21,10 @@ type InlineHook struct {
 	// Type is the hook type, for example "command".
 	Type    string
 	Command string
+	// Async is true when the hook sets async = true. Codex then starts
+	// the hook in the background and does not read its exit status, so
+	// no verdict of the hook blocks.
+	Async bool
 	// Known is true when the walk read the entry in the documented
 	// layout: an array of entries per event, each with an optional
 	// matcher and a hooks array. A command found in any other layout has
@@ -129,7 +133,12 @@ func inlineEntries(event string, value any) []InlineHook {
 			}
 
 			hookType, _ := hook["type"].(string)
-			out = append(out, InlineHook{Event: event, Matcher: matcher, Type: hookType, Command: command, Known: true})
+			// Only the TOML boolean true counts, because Codex reads the key
+			// as a boolean.
+			async, _ := hook["async"].(bool)
+			out = append(out, InlineHook{
+				Event: event, Matcher: matcher, Type: hookType, Command: command, Async: async, Known: true,
+			})
 		}
 
 		if !exact {

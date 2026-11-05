@@ -1,6 +1,8 @@
 package integration
 
 import (
+	"slices"
+
 	"github.com/seamark-dev/seamark/internal/hooks"
 )
 
@@ -17,10 +19,15 @@ type GateSummary struct {
 	// Warn lists the hooks that follow the policy file. A verdict of
 	// theirs blocks only when the policy file enforces.
 	Warn []string
-	// ReportOnly lists the hooks that discard their exit status. No
-	// verdict of theirs blocks, whatever --enforce or the policy file
-	// says.
+	// ReportOnly lists the hooks whose exit status cannot block: they
+	// discard it, or the client runs them in the background. No verdict
+	// of theirs blocks, whatever --enforce or the policy file says.
 	ReportOnly []string
+	// Background lists the report-only hooks that the client runs in the
+	// background. They keep their exit status, but the client does not
+	// wait for it. The words name that cause, so a hook that discards its
+	// exit status keeps its text.
+	Background []string
 	// Possible lists the definitions that can run a gate hook, where the
 	// reader cannot tell whether they do. What they do is unknown, not
 	// nothing.
@@ -43,8 +50,9 @@ type GateEffect int
 const (
 	// GateEffectNone means no gate hook runs.
 	GateEffectNone GateEffect = iota
-	// GateEffectReportOnly means every gate hook that runs discards its
-	// exit status: verdicts are reported, nothing blocks.
+	// GateEffectReportOnly means every gate hook that runs is
+	// report-only: it discards its exit status, or the client runs it in
+	// the background. Verdicts are reported, and nothing blocks.
 	GateEffectReportOnly
 	// GateEffectUnknown means no gate hook is known to block, and a hook
 	// document cannot be read or a definition may run a gate, so one may.
@@ -103,15 +111,44 @@ func SummarizeGateHooks(gateHooks []GateHook) GateSummary {
 
 	for _, hook := range gateHooks {
 		g.addHook(hook.Path, hook.Mode, hook.Uncertain)
+
+		if hook.Mode == GateModeReportOnly && hook.Background {
+			g.Background = appendOnce(g.Background, hook.Path)
+		}
 	}
 
 	return g
 }
 
+// ReportOnlyCause names why the report-only hooks of the labels block
+// nothing, in the words of a gate line: "discards its exit status",
+// "runs in the background", or both. A label without a recorded cause
+// discards its exit status, as every report-only hook did before a
+// background key counted.
+func (g GateSummary) ReportOnlyCause(labels []string) string {
+	background := 0
+
+	for _, label := range labels {
+		if slices.Contains(g.Background, label) {
+			background++
+		}
+	}
+
+	switch background {
+	case 0:
+		return "discards its exit status"
+	case len(labels):
+		return "runs in the background"
+	default:
+		return "discards its exit status or runs in the background"
+	}
+}
+
 // addHook records one hook by its mode and its certainty. An uncertain
 // hook in warn or enforce mode is possible: it may block. An uncertain
-// report-only hook is report-only, not possible. Its exit status never
-// reaches the client, so the reader knows that it never blocks.
+// report-only hook is report-only, not possible. The shell discards its
+// exit status, or the client does not wait for it, so the reader knows
+// that it never blocks.
 // "Unknown" would say less than is known.
 func (g *GateSummary) addHook(label, mode string, uncertain bool) {
 	if uncertain && mode != GateModeReportOnly {
@@ -144,6 +181,10 @@ func SummarizeInspections(inspections []Inspection) GateSummary {
 		}
 
 		g.Add(insp.ClientID, insp.GateMode)
+
+		if insp.GateMode == GateModeReportOnly && insp.GateBackground {
+			g.Background = appendOnce(g.Background, insp.ClientID)
+		}
 
 		if insp.PossibleGateMode != "" {
 			g.addHook(insp.ClientID, insp.PossibleGateMode, true)

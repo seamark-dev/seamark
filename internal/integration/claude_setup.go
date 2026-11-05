@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -253,10 +254,7 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 	// the other hook sources of the client (CheckHookSources). The local
 	// hook keeps its own mode, and setup never changes it.
 	gate := specs[0]
-
-	if hooks.ManagedRuns(settings, gate, narration.binary, hooks.ClaudeMatcher) {
-		plan.GateHooks = append(plan.GateHooks, GateHook{Path: approve.ClaudeSettings, Mode: gateMode, Managed: true})
-	}
+	managedRuns := hooks.ManagedRuns(settings, gate, narration.binary, hooks.ClaudeMatcher)
 
 	// After the merge the shared file holds the managed hooks. Every other
 	// definition of a hook is the same evidence that inspection reads. It
@@ -275,10 +273,10 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 	localState := claudeLocalStateOf(readsLocal, localErr)
 
 	for i, spec := range specs {
-		sources := documentSources(&plan.Findings, settings, hooks.ClaudeMatcher, approve.ClaudeSettings, spec, true)
+		sources := documentSources(&plan.Findings, settings, claudeHookRules, approve.ClaudeSettings, spec, true)
 
 		if req.CheckHookSources {
-			sources = append(sources, documentSources(&plan.Findings, local, hooks.ClaudeMatcher, claudeLocalSettings, spec, false)...)
+			sources = append(sources, documentSources(&plan.Findings, local, claudeHookRules, claudeLocalSettings, spec, false)...)
 		}
 
 		// The plan lists the gate hooks that the client runs from
@@ -287,8 +285,14 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 		// "nothing blocks" while a wrapped gate blocks is the worse error.
 		// One that says "enforce" for an echo is wrong too.
 		if i == 0 {
+			applyClaudeGateCopies(&plan.Findings, sources)
+
+			if managedRuns {
+				plan.GateHooks = append(plan.GateHooks, managedGateHook(approve.ClaudeSettings, gateMode, sources))
+			}
+
 			for _, source := range unmanagedSources(sources) {
-				plan.GateHooks = append(plan.GateHooks, GateHook{Path: source.path, Mode: source.mode, Uncertain: !source.certain})
+				plan.GateHooks = append(plan.GateHooks, sourceGateHook(source))
 			}
 		}
 
@@ -305,6 +309,7 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 	// narrator reports the removal that Merge made.
 	narration.hooksChanged, narration.specs = merged.Changed, specs
 	narration.removedEnforce = merged.RemovesEnforce(hooks.GateMarker(hooks.ModeEnforce))
+	plan.Findings = append(plan.Findings, backgroundRemovalFindings(approve.ClaudeSettings, merged.Removed, false)...)
 
 	// Hooks turned off by disableAllHooks make every hook of this run
 	// inert. The reader must learn that here, not from doctor.
@@ -313,13 +318,18 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 	// The lesson-check hooks go into the shared file beside the lessons
 	// hook. The enforce preconditions use the definitions that this plan
 	// already read, so the decision and the guards describe one file state.
+	// A run that merges the pre-write hook removes its background key, so
+	// the preconditions do not count that key on the owned entry.
+	merging := mergesLessonChecks(settings, claudeLessonHooks, req)
+
 	lessons, err := planLessonChecks(settings, approve.ClaudeSettings, root, narration.binary, claudeLessonHooks, req,
-		claudeLessonSources(settings, local, localState))
+		claudeLessonSources(settings, local, localState, merging))
 	if err != nil {
 		return err
 	}
 
 	narration.lessons = lessons
+	plan.Findings = append(plan.Findings, backgroundRemovalFindings(approve.ClaudeSettings, lessons.removed, false)...)
 
 	return checkClaudeLessonHandlers(plan, settings, local, lessons.specs, req.LessonChecks != "")
 }
@@ -377,9 +387,94 @@ func checkClaudeLessonHandlers(plan *ClientPlan, settings, local map[string]any,
 // claudeHookSources lists every definition of the spec's hook in both
 // settings files. Setup manages the shared file only.
 func claudeHookSources(findings *[]Finding, settings, local map[string]any, spec hooks.Spec) []hookSource {
-	sources := documentSources(findings, settings, hooks.ClaudeMatcher, approve.ClaudeSettings, spec, true)
+	sources := documentSources(findings, settings, claudeHookRules, approve.ClaudeSettings, spec, true)
 
-	return append(sources, documentSources(findings, local, hooks.ClaudeMatcher, claudeLocalSettings, spec, false)...)
+	return append(sources, documentSources(findings, local, claudeHookRules, claudeLocalSettings, spec, false)...)
+}
+
+// claudeHandlerKey lists the fields of Claude Code's key for a command
+// handler. Claude Code keeps one handler per key, so two copies with
+// equal fields run once. The matcher, the timeout, the background keys,
+// onFailure, and statusMessage are not in the key.
+var claudeHandlerKey = []string{"type", "shell", "command", "args", "if"}
+
+// claudeCopyFields lists the execution fields that can differ between
+// two copies of one Claude Code handler. Claude Code runs one of the two
+// copies, so setup cannot tell which value applies. sameCopyField
+// compares them.
+var claudeCopyFields = []string{"async", "asyncRewake", "timeout", "onFailure"}
+
+// sameCopyField reports whether two copies of one handler hold the same
+// value for an execution field. A background key compares by
+// hooks.InBackground, so false equals an absent key: Claude Code runs
+// both copies in the foreground. Setup keeps a false key as it is, so a
+// plain comparison gives a warning that no run can clear.
+func sameCopyField(a, b map[string]any, field string) bool {
+	if slices.Contains(hooks.ClaudeBackgroundKeys, field) {
+		return hooks.InBackground(a, field) == hooks.InBackground(b, field)
+	}
+
+	return sameField(a, b, field)
+}
+
+// sameHandlerKey reports whether two Claude Code handlers have equal key
+// fields. An absent field equals only an absent field.
+func sameHandlerKey(a, b map[string]any) bool {
+	return !slices.ContainsFunc(claudeHandlerKey, func(field string) bool { return !sameField(a, b, field) })
+}
+
+// sameField reports whether two handlers hold an equal value for the
+// field, or both omit it. Both settings files parse with one decoder, so
+// a number has one type in both.
+func sameField(a, b map[string]any, field string) bool {
+	av, aok := a[field]
+	bv, bok := b[field]
+
+	return aok == bok && reflect.DeepEqual(av, bv)
+}
+
+// applyClaudeGateCopies finds each gate definition in the local file
+// that shares the handler key of a managed gate definition and differs
+// in an execution field. Claude Code runs one of the two copies, and
+// without an equal copy in user settings it runs the later one, from
+// the local file. So a background key on the local copy makes the
+// managed gate report-only. A copy that differs in the timeout or in
+// onFailure keeps the mode, because exit status 2 blocks in either copy.
+// Each such copy gets a warning.
+func applyClaudeGateCopies(findings *[]Finding, sources []hookSource) {
+	for i := range sources {
+		managed := &sources[i]
+		if !managed.managed || managed.handler == nil {
+			continue
+		}
+
+		for _, copied := range sources {
+			if copied.path != claudeLocalSettings || copied.handler == nil || !sameHandlerKey(managed.handler, copied.handler) {
+				continue
+			}
+
+			differs := slices.DeleteFunc(slices.Clone(claudeCopyFields), func(field string) bool {
+				return sameCopyField(managed.handler, copied.handler, field)
+			})
+			if len(differs) == 0 {
+				continue
+			}
+
+			reason := fmt.Sprintf("has a copy of the managed gate hook of %s that differs in %s; Claude Code runs only one "+
+				"of the two copies, and without an equal copy in user settings it runs the one in this file",
+				approve.ClaudeSettings, strings.Join(differs, ", "))
+
+			if copied.background != "" && managed.mode != "" {
+				managed.mode, managed.background = GateModeReportOnly, copied.background
+				reason += fmt.Sprintf("; that copy has `%s: true`, so no verdict blocks", copied.background)
+			}
+
+			*findings = append(*findings, Finding{
+				Level: FindingWarning, Path: claudeLocalSettings, Reason: reason,
+				Action: "remove that copy, or make it equal to the managed hook",
+			})
+		}
+	}
 }
 
 // runsBesideManaged keeps the definitions that setup does not manage and
@@ -399,16 +494,19 @@ func runsBesideManaged(spec hooks.Spec, sources []hookSource) []hookSource {
 // keeps the guard inactive. A local file that cannot be read makes the
 // source state unknown. A nil local document holds no definition.
 // disableAllHooks keeps every path inactive, by the rule of
-// claudeHooksDisabled.
-func claudeLessonSources(settings, local map[string]any, localState claudeLocalState) lessonSourceState {
+// claudeHooksDisabled. A pre-write definition in the background keeps
+// the guard inactive too. merging is true for a plan that merges the
+// pre-write hook: that plan removes the key from the owned entry of the
+// shared file, so the key does not count there.
+func claudeLessonSources(settings, local map[string]any, localState claudeLocalState, merging bool) lessonSourceState {
 	_, disabled := claudeHooksDisabled(settings, local, localState)
 	state := lessonSourceState{sourceUnreadable: localState == claudeLocalUnreadable, hooksDisabled: disabled}
 
-	if reportOnlyIn(settings, claudeLessonHooks) {
+	if reportOnlyIn(settings, claudeLessonHooks, !merging) {
 		state.reportOnly = append(state.reportOnly, approve.ClaudeSettings)
 	}
 
-	if reportOnlyIn(local, claudeLessonHooks) {
+	if reportOnlyIn(local, claudeLessonHooks, true) {
 		state.reportOnly = append(state.reportOnly, claudeLocalSettings)
 	}
 
@@ -457,8 +555,14 @@ func readLocalHooks(plan *ClientPlan, root string) (map[string]any, error) {
 // narrow matcher can be the user's choice. So it cannot always complete
 // the coverage, and then it must say so instead of reporting a complete
 // install. sourceFindings reports a tool that only an uncertain
-// definition covers.
+// definition covers. A definition that never runs because of its if
+// field already has a warning that names the field. The matcher is not
+// the cause then, so no second finding asks for a matcher change.
 func reportMissingCoverage(plan *ClientPlan, spec hooks.Spec, sources []hookSource) {
+	if slices.ContainsFunc(sources, hookSource.neverRuns) {
+		return
+	}
+
 	missing := toolNames(missingTools(spec, coveredTools(spec, sources, anySource)))
 	if len(missing) == 0 {
 		return
@@ -571,6 +675,7 @@ func (claudeSetup) Inspect(root string) Inspection {
 		ClientID:          ClaudeID,
 		Capabilities:      capabilities,
 		GateMode:          gate.mode,
+		GateBackground:    gate.background,
 		PossibleGateMode:  gate.possible,
 		ManagedGateMode:   gate.managed,
 		HookDocumentError: gate.err,
@@ -594,9 +699,12 @@ func (claudeSetup) InspectLessonHooks(root string) Inspection {
 // the gate. possible is the mode of the definitions that may run it.
 // managed is the mode of the managed hook. err is the reason when the
 // managed document cannot be read. It is sanitized, because it reaches
-// terminals and MCP clients as it is.
+// terminals and MCP clients as it is. background is true when mode is
+// report-only because the client runs each such definition in the
+// background.
 type gateInspection struct {
 	mode, possible, managed, err string
+	background                   bool
 }
 
 // inspectClaudeHooks classifies the lifecycle hooks from the shared
@@ -648,20 +756,35 @@ func inspectClaudeHooks(root string, evidence VerificationEvidence) (
 	for i, spec := range hooks.ClaudeSpecs(hooks.ModeWarn) {
 		sources := claudeHookSources(&findings, settings, local, spec)
 
+		if i == 0 {
+			applyClaudeGateCopies(&findings, sources)
+		}
+
 		classifyHook(all[i], spec, sources)
 		sourceFindings(&findings, spec, sources)
 
 		if i == 0 {
 			gate.mode, gate.possible = hookMode(sources, certainSource), hookMode(sources, uncertainSource)
+			gate.background = backgroundReportOnly(sources)
 		}
+	}
+
+	// The lesson-check hooks are read without documentSources. So they
+	// get their findings about background keys and filters here.
+	for _, spec := range claudeLessonHooks.allSpecs() {
+		executionFindingsIn(&findings, settings, claudeHookRules, approve.ClaudeSettings, spec, true)
+		executionFindingsIn(&findings, local, claudeHookRules, claudeLocalSettings, spec, false)
 	}
 
 	// Inspection always reads the local file, so only a read failure
 	// leaves the shared file alone to decide disableAllHooks.
 	localState := claudeLocalStateOf(true, localErr)
 
+	// gate.managed is the marker mode of the owned gate, also when the
+	// owned entry runs in the background. It is the mode that setup keeps,
+	// and the next setup run removes the background key.
 	gate.managed = hooks.InstalledGateMode(settings)
-	lessons = lessonHookReading(claudeLessonSources(settings, local, localState).inspection(settings, claudeLessonHooks))
+	lessons = lessonHookReading(claudeLessonSources(settings, local, localState, false).inspection(settings, claudeLessonHooks))
 
 	installed := lessons != nil || slices.ContainsFunc(all, func(c *CapabilityInspection) bool {
 		return c.State != StateAbsent

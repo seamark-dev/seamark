@@ -54,6 +54,11 @@ model-boundary delivery.
 - **Claude Code hooks turned off.** With `disableAllHooks: true` in a
   project settings file, Claude setup refuses lesson-check enforce, and
   setup, doctor, and status warn that the seamark hooks never run.
+- **Background and filtered hooks.** Setup, doctor, and status no longer
+  report enforcement for a gate or lesson guard that runs in the
+  background (async, Claude Code asyncRewake) or that a Claude Code if
+  field filters. Setup removes the background key from its own gate and
+  guard entries, and Codex asks once to review that entry in /hooks.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.

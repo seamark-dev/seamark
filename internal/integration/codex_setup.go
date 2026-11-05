@@ -185,7 +185,11 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 	var managed []hooks.Spec
 
 	for _, spec := range specs {
-		elsewhere := unmanagedSources(codexHookSources(&plan.Findings, document, inline, spec))
+		var found []Finding
+
+		sources := codexHookSources(&found, document, inline, spec)
+		plan.Findings = append(plan.Findings, withoutManagedBackground(found, spec, sources)...)
+		elsewhere := unmanagedSources(sources)
 
 		// plan.GateHooks lists each gate hook that Codex runs from a
 		// definition that setup does not manage, with its own mode. It
@@ -198,7 +202,7 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 			asked = req.GateMode
 
 			for _, source := range elsewhere {
-				plan.GateHooks = append(plan.GateHooks, GateHook{Path: source.path, Mode: source.mode, Uncertain: !source.certain})
+				plan.GateHooks = append(plan.GateHooks, sourceGateHook(source))
 			}
 		}
 
@@ -216,6 +220,8 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 		return fmt.Errorf("%s: %w", codexHooksFile, err)
 	}
 
+	plan.Findings = append(plan.Findings, backgroundRemovalFindings(codexHooksFile, merged.Removed, true)...)
+
 	// The plan lists the managed gate hook only when, after the merge,
 	// Codex runs it for the shell tool. An existing entry keeps its
 	// matcher. An entry whose matcher never fires for Bash gates nothing.
@@ -227,13 +233,19 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 	// The enforce preconditions use the sources that this plan already
 	// read. They check for hooks turned off in the project configuration.
 	// They also check for a definition in either source that discards the
-	// exit status of the guard. Codex trust stays unknown, so an installed
-	// guard is at most active-unverified.
+	// exit status of the guard, or that Codex runs in the background.
+	// Codex trust stays unknown, so an installed guard is at most
+	// active-unverified. A run that merges the pre-write hook removes the
+	// background key from the owned entry, so that key does not count.
+	merging := mergesLessonChecks(document, codexLessonHooks, req)
+
 	lessons, err := planLessonChecks(document, codexHooksFile, root, binary, codexLessonHooks, req,
-		codexLessonSources(document, inline, config))
+		codexLessonSources(document, inline, config, merging))
 	if err != nil {
 		return err
 	}
+
+	plan.Findings = append(plan.Findings, backgroundRemovalFindings(codexHooksFile, lessons.removed, true)...)
 
 	for _, spec := range lessons.specs {
 		sources := unmanagedSources(codexHookSources(&plan.Findings, document, inline, spec))
@@ -302,11 +314,14 @@ const codexInlineHooksPath = approve.CodexConfig + " [hooks]"
 // enforce preconditions need. It uses the reads of the hook plan, so it
 // sees the same files as the plan. An unreadable configuration gives
 // unknown source state. Setup still permits the install, and the
-// capability report keeps the read failure.
-func codexLessonSources(document map[string]any, inline []approve.InlineHook, config *codexConfigRead) lessonSourceState {
+// capability report keeps the read failure. merging is true for a plan
+// that merges the pre-write hook, by the rule of claudeLessonSources.
+func codexLessonSources(document map[string]any, inline []approve.InlineHook, config *codexConfigRead,
+	merging bool,
+) lessonSourceState {
 	state := lessonSourceState{}
 
-	if reportOnlyIn(document, codexLessonHooks) {
+	if reportOnlyIn(document, codexLessonHooks, !merging) {
 		state.reportOnly = append(state.reportOnly, codexHooksFile)
 	}
 
@@ -342,7 +357,7 @@ func codexInstalledGateMode(document map[string]any) string {
 // as a source that can run the hook for every tool: a false "runs"
 // leaves the user without any hook.
 func codexHookSources(findings *[]Finding, document map[string]any, inline []approve.InlineHook, spec hooks.Spec) []hookSource {
-	sources := documentSources(findings, document, hooks.CodexMatcher, codexHooksFile, spec, true)
+	sources := documentSources(findings, document, codexHookRules, codexHooksFile, spec, true)
 
 	for _, entry := range inline {
 		reading := hooks.ReadHook(entry.Command, spec.Markers())
@@ -373,10 +388,38 @@ func codexHookSources(findings *[]Finding, document map[string]any, inline []app
 			source.tools = spec.Tools()
 		}
 
+		// The inline reader keeps only async of the execution fields, the
+		// one field that Codex reads.
+		var execution hooks.Execution
+		if entry.Async {
+			execution.Background = "async"
+		}
+
+		source.applyExecution(spec, execution)
+		*findings = append(*findings, source.executionFindings(spec, CodexID)...)
+
 		sources = append(sources, source)
 	}
 
 	return sources
+}
+
+// withoutManagedBackground removes the background finding of each
+// managed source from findings. The Codex plan reads its sources before
+// the merge, because they decide which specs the merge gets. An owned
+// entry keeps its spec in the merge, so the merge removes the key. The
+// removal finding then replaces the warning, which asks for this run.
+func withoutManagedBackground(findings []Finding, spec hooks.Spec, sources []hookSource) []Finding {
+	for _, s := range sources {
+		if !s.managed || s.background == "" {
+			continue
+		}
+
+		stale := backgroundFinding(s, spec, CodexID)
+		findings = slices.DeleteFunc(findings, func(f Finding) bool { return f == stale })
+	}
+
+	return findings
 }
 
 // reportCodexHookSources records each unmanaged source of one hook and
@@ -394,8 +437,9 @@ func codexHookSources(findings *[]Finding, document map[string]any, inline []app
 //
 // A run that asks for a gate mode gets a gate hook of that mode. A
 // certain definition that delivers that mode, or a stronger one, makes
-// the managed hook needless. One that discards its exit status delivers
-// no mode, and one in warn mode does not deliver enforce. Setup then
+// the managed hook needless. One that discards its exit status, or that
+// Codex runs in the background, delivers no mode, and one in warn mode
+// does not deliver enforce. Setup then
 // installs the managed hook beside it and warns that the hook runs
 // twice. The user asked for blocking. A run that leaves nothing able to
 // block must not look like one that honored the request.
@@ -441,7 +485,7 @@ func reportCodexHookSources(plan *ClientPlan, sources []hookSource, owned bool, 
 			finding.Reason = fmt.Sprintf("also runs the seamark hook: %#q; %s exists too, so the hook runs twice", command, managed)
 		case !delivered:
 			finding.Reason = fmt.Sprintf("already runs the seamark gate hook: `%s`, %s; the run asked for %s mode, "+
-				"so setup installed %s too, and the hook runs twice", command, describeGateMode(s.mode), asked, managed)
+				"so setup installed %s too, and the hook runs twice", command, describeGateMode(s), asked, managed)
 			finding.Action = "remove that definition to let setup manage the gate, or remove the managed handler to keep yours"
 		default:
 			finding.Reason = fmt.Sprintf("already runs the seamark hook: `%s`; setup does not manage that definition, "+
@@ -464,13 +508,17 @@ func deliversGateMode(mode, asked string) bool {
 }
 
 // describeGateMode names what a wrapped gate hook does with a verdict,
-// for a finding.
-func describeGateMode(mode string) string {
-	if mode == GateModeReportOnly {
+// for a finding. A report-only hook names its cause: a discarded exit
+// status, or a run in the background.
+func describeGateMode(s hookSource) string {
+	switch {
+	case s.mode == GateModeReportOnly && s.background != "":
+		return "which runs in the background"
+	case s.mode == GateModeReportOnly:
 		return "which discards its exit status"
+	default:
+		return "in " + s.mode + " mode"
 	}
-
-	return "in " + mode + " mode"
 }
 
 // codexInlineCommands returns the hooks of the second project hook
@@ -579,6 +627,7 @@ func (codexSetup) Inspect(root string) Inspection {
 		ClientID:          CodexID,
 		Capabilities:      capabilities,
 		GateMode:          gate.mode,
+		GateBackground:    gate.background,
 		PossibleGateMode:  gate.possible,
 		ManagedGateMode:   gate.managed,
 		HookDocumentError: gate.err,
@@ -637,9 +686,10 @@ func readCodexHookSources(root string) codexHookReads {
 
 // inspectCodexLessonHooks reads the lesson-check hooks of
 // .codex/hooks.json for the capability report. It also reads the two
-// source states that the enforce preconditions check. One is a wrapper
-// in hooks.json or in the inline [hooks] that discards the exit status
-// of the pre-write hook. The other is [features] hooks = false in the
+// source states that the enforce preconditions check. One is a
+// definition of the pre-write hook in hooks.json or in the inline
+// [hooks] that discards its exit status, or that Codex runs in the
+// background. The other is [features] hooks = false in the
 // project configuration. The reading adds no finding, so the existing
 // doctor and status lines keep their bytes. An unreadable document
 // gives nil, because HookDocumentError already names it. A document
@@ -649,7 +699,7 @@ func inspectCodexLessonHooks(reads codexHookReads) *LessonHookInspection {
 		return nil
 	}
 
-	state := codexLessonSources(reads.document, reads.inline, reads.config)
+	state := codexLessonSources(reads.document, reads.inline, reads.config, false)
 
 	return lessonHookReading(state.inspection(reads.document, codexLessonHooks))
 }
@@ -711,7 +761,23 @@ func classifyCodexHooks(reads codexHookReads) (entries []CapabilityInspection, g
 	sourceFindings(&findings, lessons, lessonSources)
 
 	gate.mode, gate.possible = hookMode(gateSources, certainSource), hookMode(gateSources, uncertainSource)
+	gate.background = backgroundReportOnly(gateSources)
+
+	// gate.managed is the marker mode of the owned gate, also when the
+	// owned entry runs in the background. It is the mode that setup keeps,
+	// and the next setup run removes the background key.
 	gate.managed = codexInstalledGateMode(reads.document)
+
+	// The lesson-check hooks are read without codexHookSources. So they
+	// get their findings about background keys here, and no other
+	// finding, so the other doctor lines keep their bytes.
+	for _, spec := range codexLessonHooks.allSpecs() {
+		var scratch []Finding
+
+		for _, s := range codexHookSources(&scratch, reads.document, reads.inline, spec) {
+			findings = append(findings, s.executionFindings(spec, CodexID)...)
+		}
+	}
 
 	if edits.State != StateAbsent || commands.State != StateAbsent {
 		findings = append(findings, codexTrustFinding, codexContextFinding)

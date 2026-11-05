@@ -705,12 +705,19 @@ type Inspection struct {
 	// GateMode is the mode the client's gate hooks run in, from every
 	// definition that certainly runs one, managed or not. It is enforce
 	// when any enforces, and warn when any follows the policy file. It is
-	// GateModeReportOnly when each one discards its exit status. It is
-	// empty when none runs or the document cannot be read. One enforcing
+	// GateModeReportOnly when each one is report-only: it discards its
+	// exit status, or the client runs it in the background. It is empty
+	// when none runs or the document cannot be read. One enforcing
 	// definition blocks whatever the managed hook says. The repository
 	// policy file can still enforce on top of a warn hook, and never on
 	// top of a report-only one.
 	GateMode string `json:"gate_mode,omitempty"`
+	// GateBackground is true when GateMode is GateModeReportOnly because
+	// the client runs each such definition in the background. Status then
+	// names that cause instead of a discarded exit status. It has no JSON
+	// form, so clients[] keeps its bytes. A view read back from JSON says
+	// "discards its exit status", as status always did.
+	GateBackground bool `json:"-"`
 	// PossibleGateMode is the mode of the definitions that can run a
 	// gate hook, by the rule of GateMode. The reader cannot tell whether
 	// they do. It is empty without such a definition. A reader must not
@@ -752,8 +759,9 @@ type LessonHookInspection struct {
 	// the hook document that setup manages, in document order.
 	Entries []LessonHookEntry
 	// ReportOnly is true when a definition that setup does not own runs
-	// the pre-write hook and discards its exit status. No deny of such a
-	// definition blocks.
+	// the pre-write hook and discards its exit status, or when any
+	// definition of the pre-write hook runs in the background. No deny of
+	// such a definition blocks.
 	ReportOnly bool
 	// HooksDisabled is true when the project configuration turns every
 	// hook of the client off.
@@ -988,9 +996,11 @@ type FileKeep struct {
 
 // GateModeReportOnly is the mode of a gate hook whose definition
 // discards the exit status of the hook, for example with "|| true" or
-// "&". The hook runs and reports its verdicts. A verdict blocks only by
-// exit status 2, so none blocks, whatever --enforce or the policy file
-// says. Only a definition that setup does not manage has this mode.
+// "&", or that the client runs in the background. The hook runs and
+// reports its verdicts. A verdict blocks only by exit status 2, so none
+// blocks, whatever --enforce or the policy file says. A managed hook
+// gets this mode only from a background key: after a hand edit, or from
+// a Claude Code copy in the local file that runs in its place.
 const GateModeReportOnly = "report-only"
 
 // GateHook is one command-gate hook that the client really runs after
@@ -1004,8 +1014,9 @@ type GateHook struct {
 	ClientID string
 	// Path is the document that holds the hook, repository-relative.
 	Path string
-	// Mode is warn, enforce, or GateModeReportOnly. Only a hook that
-	// setup does not manage can be report-only.
+	// Mode is warn, enforce, or GateModeReportOnly. A managed hook is
+	// report-only only when a Claude Code copy in the background runs in
+	// its place.
 	Mode string
 	// Managed is true for the hook setup installs and updates. False
 	// means another source, which setup never edits.
@@ -1015,6 +1026,10 @@ type GateHook struct {
 	// gate command as its arguments. Mode is then the mode the
 	// definition has when it runs.
 	Uncertain bool
+	// Background is true when a report-only hook is report-only because
+	// the client runs it in the background, not because it discards its
+	// exit status. The gate line names that cause.
+	Background bool
 }
 
 // ClientPlan is one client's read guards, composed writes, kept

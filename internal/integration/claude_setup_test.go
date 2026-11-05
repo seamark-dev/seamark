@@ -614,17 +614,17 @@ func TestClaudeLessonSourcesNameEveryReportOnlyFile(t *testing.T) {
 	passing := wrapper(t, "/usr/bin/env "+testBinary+" lessons --guard --hook")
 
 	t.Run("a wrapper in both files", func(t *testing.T) {
-		state := claudeLessonSources(discarding, discarding, claudeLocalRead)
+		state := claudeLessonSources(discarding, discarding, claudeLocalRead, false)
 		assert.Equal(t, []string{approve.ClaudeSettings, claudeLocalSettings}, state.reportOnly)
 		assert.False(t, state.sourceUnreadable)
 	})
 
 	t.Run("a wrapper that passes the status", func(t *testing.T) {
-		assert.Empty(t, claudeLessonSources(passing, passing, claudeLocalRead).reportOnly)
+		assert.Empty(t, claudeLessonSources(passing, passing, claudeLocalRead, false).reportOnly)
 	})
 
 	t.Run("a local file that cannot be read", func(t *testing.T) {
-		state := claudeLessonSources(map[string]any{}, nil, claudeLocalUnreadable)
+		state := claudeLessonSources(map[string]any{}, nil, claudeLocalUnreadable, false)
 		assert.Empty(t, state.reportOnly, "a nil local document holds no definition")
 		assert.True(t, state.sourceUnreadable)
 	})
@@ -961,7 +961,7 @@ func TestClaudeHooksDisabledFollowsClaudeCodePrecedence(t *testing.T) {
 			assert.Equal(t, tc.path, path)
 			assert.Equal(t, tc.path != "", disabled)
 
-			assert.Equal(t, disabled, claudeLessonSources(settings, local, tc.state).hooksDisabled,
+			assert.Equal(t, disabled, claudeLessonSources(settings, local, tc.state, false).hooksDisabled,
 				"the enforce preconditions use the same reading")
 
 			findings := claudeHooksDisabledFindings(settings, local, tc.state)

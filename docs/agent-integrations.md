@@ -205,6 +205,19 @@ client without a guard cannot install enforce mode. Codex trust remains
 the user's decision: review new or changed hooks with `/hooks`. Seamark
 never grants trust, and cannot read that approval back as proof.
 
+A gate or pre-write hook that runs in the background (`async`, and for
+Claude Code also `asyncRewake`) cannot block. Setup removes that key
+from its own gate, lesson guard, and lesson baseline entries and says
+so. Codex then asks you to review that entry again in `/hooks`. A
+definition that setup does not manage and that runs in the background
+is report-only: setup warns, and enforce refuses a background pre-write
+hook. A Claude Code `if` field on a tool event makes coverage uncertain:
+setup reports the hook as one that may run, and an owned lesson-check
+path reads `tool-uncovered`. On another event, such as `PostCompact`,
+that hook never runs. Setup reports an `if` field on its own entries and
+leaves it. `onFailure` does not change the gate mode, because a deny
+exits with status 2, and status 2 blocks whatever `onFailure` says.
+
 Claude and Codex setup both keep one handler per lesson check. When a
 definition that setup does not manage certainly runs a lesson-check hook
 that the run installs or keeps, setup refuses before any write, including
@@ -515,7 +528,11 @@ The rules that hold every adapter to the same behavior:
   and reports, no verdict of it blocks, and a finding says what to
   change. A gate in the background (`… &`) may run, so the adapter
   installs the managed hook beside it, and the finding about its exit
-  status still applies. The reader parses a hook command
+  status still applies. A gate definition that the client runs in the
+  background (its execution rule, read beside the matcher rule) is
+  `report-only` too, and the finding names the key. The managed mode
+  stays the mode of the owned marker, because the next setup run keeps
+  that mode and removes the key. The reader parses a hook command
   with `mvdan.cc/sh`, the parser the gate uses, in the bash dialect,
   which accepts every POSIX form, so a form that bash and dash read in
   different ways (`&>`, `((` at the start of a command) is seen and

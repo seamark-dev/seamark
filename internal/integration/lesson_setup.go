@@ -168,6 +168,9 @@ type lessonHookClient struct {
 	exploration *hooks.Spec
 	// fires is the matcher rule of the client.
 	fires hooks.MatcherRule
+	// exec is the execution rule of the client. It tells a pre-write
+	// handler in the background and a filtered handler apart.
+	exec hooks.ExecutionRule
 	// trustReview is true for a client that runs a project hook only
 	// after the user reviews it. Seamark cannot read that trust record.
 	trustReview bool
@@ -188,18 +191,40 @@ func (c lessonHookClient) preWrite() hooks.Spec {
 	return c.specs(hooks.LessonChecksEnforce)[0]
 }
 
+// allSpecs returns every lesson-check spec of the client, then its
+// exploration spec when it has one. The enforce specs list the baseline
+// marker too, so they find the hooks of both modes.
+func (c lessonHookClient) allSpecs() []hooks.Spec {
+	specs := c.specs(hooks.LessonChecksEnforce)
+	if c.exploration != nil {
+		specs = append(specs, *c.exploration)
+	}
+
+	return specs
+}
+
 // The lesson-check hooks of the built-in clients.
 var (
 	claudeExplorationSpec = hooks.ClaudeExplorationSpec()
 	claudeLessonHooks     = lessonHookClient{
 		id: ClaudeID, specs: hooks.ClaudeLessonCheckSpecs, exploration: &claudeExplorationSpec, fires: hooks.ClaudeMatcher,
-		uncovered: []string{"NotebookEdit", claudeToolBash},
+		exec: hooks.ClaudeExecution, uncovered: []string{"NotebookEdit", claudeToolBash},
 	}
 	codexLessonHooks = lessonHookClient{
-		id: CodexID, specs: hooks.CodexLessonCheckSpecs, fires: hooks.CodexMatcher, trustReview: true,
-		patchTool: codexApplyPatch, uncovered: []string{"shell"},
+		id: CodexID, specs: hooks.CodexLessonCheckSpecs, fires: hooks.CodexMatcher, exec: hooks.CodexExecution,
+		trustReview: true, patchTool: codexApplyPatch, uncovered: []string{"shell"},
 	}
 )
+
+// mergesLessonChecks reports whether a plan merges the pre-write hook of
+// the client: the run installs or keeps check or enforce mode. Such a
+// plan removes a background key from the owned pre-write entry before
+// it writes.
+func mergesLessonChecks(document map[string]any, client lessonHookClient, req ClientSetup) bool {
+	mode := resolveLessonChecks(document, client.specs(hooks.LessonChecksEnforce), req.LessonChecks)
+
+	return mode == hooks.LessonChecksCheck || mode == hooks.LessonChecksEnforce
+}
 
 // lessonSourceState is what one plan reads about the hook sources of a
 // client. The enforce preconditions read it. The adapter fills it from
@@ -213,8 +238,9 @@ type lessonSourceState struct {
 	// hook of the client off.
 	hooksDisabled bool
 	// reportOnly lists the documents that hold a definition of the
-	// pre-write hook that discards the exit status of the hook. No deny
-	// of such a definition blocks.
+	// pre-write hook that discards the exit status of the hook, or that
+	// the client runs in the background. No deny of such a definition
+	// blocks.
 	reportOnly []string
 	// sourceUnreadable is true when a supplemental hook source cannot be
 	// read or parsed, so its effect is unknown. Setup still installs the
@@ -339,6 +365,9 @@ type lessonChange struct {
 	// checksRemoved and explorationRemoved count the hooks that the plan
 	// removed.
 	checksRemoved, explorationRemoved int
+	// removed lists the background keys that the merge removed from the
+	// owned pre-write entry. The adapter reports each one.
+	removed []hooks.BackgroundRemoval
 	// mode is the installed lesson-check mode after the plan.
 	mode string
 	// summary names the paths that are not active after the plan.
@@ -452,6 +481,7 @@ func planLessonChecks(document map[string]any, path, root, binary string, client
 		removed := hooks.RemoveOwned(document, specs[0].Legacy, binary)
 		change.specs = append(change.specs, specs...)
 		change.checksChanged = merged.Changed || removed > 0
+		change.removed = merged.Removed
 	case hooks.LessonChecksOff:
 		change.checksRemoved = hooks.RemoveOwned(document, hooks.LessonCheckMarkers(all), binary)
 	}
@@ -644,11 +674,20 @@ func discardsPreWriteStatus(spec hooks.Spec, cmd string) bool {
 	return reading.Use() != hooks.HookNotRun && !reading.StatusPasses()
 }
 
+// runsPreWrite reports whether a command runs the pre-write hook of the
+// spec: an owned command, or another one that can run it.
+func runsPreWrite(spec hooks.Spec, cmd string) bool {
+	return hooks.OwnedBySeamark(cmd, spec.Markers()) || hooks.ReadHook(cmd, spec.Markers()).Use() != hooks.HookNotRun
+}
+
 // reportOnlyIn reports whether a parsed hook document holds a
 // definition of the client's pre-write hook that discards its exit
-// status. Only a "command" hook under a matcher that fires runs, so
-// only such a definition counts.
-func reportOnlyIn(document map[string]any, client lessonHookClient) bool {
+// status, or that the client runs in the background. Only a "command"
+// hook under a matcher that fires runs, so only such a definition
+// counts. countOwned is false for the managed document of a plan that
+// merges the pre-write hook, because that plan removes the background
+// key from the owned entry.
+func reportOnlyIn(document map[string]any, client lessonHookClient, countOwned bool) bool {
 	spec, fires := client.preWrite(), client.fires
 	hookMap, _ := document["hooks"].(map[string]any)
 	eventHooks, _ := hookMap[spec.Event].([]any)
@@ -659,7 +698,9 @@ func reportOnlyIn(document map[string]any, client lessonHookClient) bool {
 			return
 		}
 
-		found = found || discardsPreWriteStatus(spec, cmd)
+		background := client.exec(h).Background != "" && runsPreWrite(spec, cmd) &&
+			(countOwned || !hooks.OwnedBySeamark(cmd, spec.Markers()))
+		found = found || discardsPreWriteStatus(spec, cmd) || background
 	})
 
 	return found
@@ -667,7 +708,8 @@ func reportOnlyIn(document map[string]any, client lessonHookClient) bool {
 
 // reportOnlyInline is reportOnlyIn for the inline [hooks] of the Codex
 // configuration. An entry in a layout that the reader does not know has
-// no matcher or type to check, so it counts as one that runs.
+// no matcher or type to check, so it counts as one that runs. Setup
+// never manages an inline entry, so an owned command there counts too.
 func reportOnlyInline(entries []approve.InlineHook, client lessonHookClient) bool {
 	spec, fires := client.preWrite(), client.fires
 
@@ -676,6 +718,6 @@ func reportOnlyInline(entries []approve.InlineHook, client lessonHookClient) boo
 			return false
 		}
 
-		return discardsPreWriteStatus(spec, entry.Command)
+		return discardsPreWriteStatus(spec, entry.Command) || (entry.Async && runsPreWrite(spec, entry.Command))
 	})
 }
