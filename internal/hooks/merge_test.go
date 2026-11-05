@@ -306,16 +306,64 @@ func TestCodexMatcherFollowsTheDocumentedRules(t *testing.T) {
 		want          bool
 	}{
 		"exact name":          {"Bash", "Bash", true},
+		"exact edit tool":     {"apply_patch", "apply_patch", true},
 		"another name":        {"Bash", "apply_patch", false},
 		"empty matches all":   {"", "Bash", true},
 		"star matches all":    {"*", "Bash", true},
 		"alternation":         {"Bash|apply_patch", "Bash", true},
 		"anchored":            {"^apply_patch$", "apply_patch", true},
-		"unanchored search":   {"ash", "Bash", true},
 		"a broken expression": {"(", "Bash", false},
+
+		// A name-only matcher is a list of exact names, not a search.
+		"no substring of a name":     {"ash", "Bash", false},
+		"no substring of edit tool":  {"patch", "apply_patch", false},
+		"an empty name fires never":  {"Bash|", "apply_patch", false},
+		"only separators":            {"|", "Bash", false},
+		"an alias of another tool":   {"Edit", "Bash", false},
+		"edit alias":                 {"Edit", "apply_patch", true},
+		"write alias":                {"Write", "apply_patch", true},
+		"claude style edit list":     {"Edit|Write|MultiEdit", "apply_patch", true},
+		"expression tests the alias": {"^Edit$", "apply_patch", true},
+		"spawn alias":                {"Agent", "spawn_agent", true},
+		"a digit stays a name":       {"ash|1", "Bash", false},
+		"an underscore stays a name": {"ply_pat", "apply_patch", false},
+		"a name keeps its case":      {"bash", "Bash", false},
+
+		// Codex gives these tools no other aliases. An extra alias makes
+		// setup count a hook as running where Codex never runs it.
+		"no multi edit alias":     {"MultiEdit", "apply_patch", false},
+		"no shell alias for Bash": {"shell", "Bash", false},
+		"no task alias":           {"Task", "spawn_agent", false},
+
+		// A space, "-", ",", or "." makes a regular expression. Codex
+		// searches the whole name with it and keeps the case, so a
+		// hand-written matcher reads here as Codex reads it.
+		"a space makes an expression":  {"B |ash", "Bash", true},
+		"a dash makes an expression":   {"B-|ash", "Bash", true},
+		"a comma makes an expression":  {"B,|ash", "Bash", true},
+		"a dot makes an expression":    {"Bas.", "Bash", true},
+		"an expression searches":       {"sh$", "Bash", true},
+		"an expression keeps the case": {"^bash$", "Bash", false},
+
+		// The capture probe tool "*" has no aliases.
+		"probe with only separators": {"|", "*", false},
+		"probe with an expression":   {".*", "*", true},
+		"probe with an alias name":   {"Edit", "*", false},
 	} {
 		assert.Equal(t, tc.want, CodexMatcher(tc.matcher, tc.tool), name)
 	}
+}
+
+// TestCodexAliasesListOnlyTheCodexAliases pins the whole alias table.
+// The matcher rows reject only the names that they list. This test also
+// rejects an extra alias with another name, or a row for another tool.
+func TestCodexAliasesListOnlyTheCodexAliases(t *testing.T) {
+	// Codex 0.164.0 gives apply_patch the aliases Write and Edit, and
+	// spawn_agent the alias Agent. It gives no other tool an alias.
+	assert.Equal(t, map[string][]string{
+		"apply_patch": {"Write", "Edit"},
+		"spawn_agent": {"Agent"},
+	}, codexAliases)
 }
 
 func TestClaudeAndCodexMarkersNeverClaimEachOther(t *testing.T) {

@@ -527,6 +527,66 @@ func TestLessonCheckPathsDetectsReportOnlyWrapper(t *testing.T) {
 	})
 }
 
+// TestLessonCheckPathsFollowTheCodexMatcherRule proves that the paths
+// read an owned Codex matcher as Codex does. Codex tests a matcher
+// against the aliases Edit and Write of apply_patch, so an owned guard
+// and verify under "Edit" run for each edit. Codex reads a name-only
+// matcher as exact names, so "patch" never fires for apply_patch.
+func TestLessonCheckPathsFollowTheCodexMatcherRule(t *testing.T) {
+	self := BinaryIdentity{Path: fakeSeamark(t, t.TempDir(), "self")}
+
+	for matcher, want := range map[string]struct {
+		installed bool
+		state     lessoncheck.PathState
+	}{
+		"Edit":  {true, lessoncheck.PathActiveUnverified},
+		"patch": {false, lessoncheck.PathInactive},
+	} {
+		t.Run(matcher, func(t *testing.T) {
+			root := t.TempDir()
+			installLessonHooks(t, root, CodexID, self.Path, hooks.LessonChecksEnforce, "")
+
+			// Only the matchers hold the quoted tool name, so the edit
+			// moves every owned entry to the other matcher.
+			document := readRel(t, root, codexHooksFile)
+			require.Contains(t, document, `"apply_patch"`)
+			writeRel(t, root, codexHooksFile, strings.ReplaceAll(document, `"apply_patch"`, `"`+matcher+`"`))
+
+			insp := inspectionOf(t, root, CodexID)
+
+			var checked int
+
+			for _, p := range LessonCheckPaths(insp, self) {
+				if p.Tool != "apply_patch" || (p.Stage != lessoncheck.StagePreWrite && p.Stage != lessoncheck.StagePostEdit) {
+					continue
+				}
+
+				checked++
+
+				assert.Equal(t, want.installed, p.Installed, pathKey(p))
+				assert.Equal(t, !want.installed, slices.Contains(p.Reasons, lessoncheck.CapToolUncovered), pathKey(p))
+			}
+
+			require.NotZero(t, checked, "the report lists the apply_patch paths")
+
+			report := LessonCapability([]Inspection{insp}, root, self)
+			c, _ := report.Client(CodexID)
+
+			checked = 0
+
+			for _, p := range c.Paths {
+				if p.Tool == "apply_patch" && (p.HookStage == lessoncheck.StagePreWrite || p.HookStage == lessoncheck.StagePostEdit) {
+					checked++
+
+					assert.Equal(t, want.state, p.State, "%s %s", p.HookStage, p.Context)
+				}
+			}
+
+			require.NotZero(t, checked, "the capability report lists the apply_patch paths")
+		})
+	}
+}
+
 // TestLessonCheckPathsReportsTrustAndDisabledHooks proves the sources
 // of the trust and configuration reasons. Every installed Codex path
 // carries trust-unknown, because seamark cannot read the Codex trust

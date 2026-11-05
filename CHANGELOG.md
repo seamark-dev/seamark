@@ -59,6 +59,11 @@ model-boundary delivery.
   background (async, Claude Code asyncRewake) or that a Claude Code if
   field filters. Setup removes the background key from its own gate and
   guard entries, and Codex asks once to review that entry in /hooks.
+- **Codex matchers.** Setup and doctor read a Codex matcher of only
+  letters, digits, _ and | as exact tool names, and match apply_patch
+  also as Edit and Write, as Codex does. A gate under ash no longer
+  reads as running for Bash, and an inline lesson hook under Edit is no
+  longer installed twice.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.
