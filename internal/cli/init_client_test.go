@@ -746,3 +746,16 @@ func TestInitClientWarnsWhenCodexHooksAreTurnedOff(t *testing.T) {
 	assert.Contains(t, out, "note    .codex/config.toml: [features] hooks = false turns every Codex hook off")
 	assert.Contains(t, out, "set [features] hooks = true")
 }
+
+func TestInitClientWarnsWhenClaudeHooksAreTurnedOff(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json", `{"disableAllHooks": true}`))
+
+	// A gate mode is no lesson-check mode, so the run installs and warns.
+	// The gate line stays as it is.
+	out := initClients(t, root, false, false, false, "enforce", integration.ClaudeID)
+	assert.Contains(t, out, "note    .claude/settings.json: disableAllHooks: true turns off the project hooks of Claude Code, "+
+		"so the installed seamark hooks never run")
+	assert.Contains(t, out, "remove disableAllHooks, or set it to false")
+	assert.Equal(t, 1, strings.Count(out, "disableAllHooks: true turns off"))
+}

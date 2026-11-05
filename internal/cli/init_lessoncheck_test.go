@@ -173,6 +173,20 @@ func TestRunInitLessonChecksRefusesUnsupportedEnforce(t *testing.T) {
 	assert.Equal(t, "lesson checks: enforce for codex would stay inactive (hooks-disabled); resolve it, then rerun", err.Error())
 	assert.Equal(t, before, snapshot(t, root))
 
+	// Claude Code disableAllHooks in either project settings file refuses
+	// the same way.
+	for _, rel := range []string{".claude/settings.json", ".claude/settings.local.json"} {
+		root = t.TempDir()
+		require.NoError(t, inspecttest.WriteFile(root, rel, `{"disableAllHooks": true}`))
+
+		before = snapshot(t, root)
+		_, err = initLessonRun(t, root, binary, initRun{lessonChecks: hooks.LessonChecksEnforce}, integration.ClaudeID)
+		require.Error(t, err, rel)
+		assert.Equal(t, "lesson checks: enforce for claude would stay inactive (hooks-disabled); resolve it, then rerun",
+			err.Error(), rel)
+		assert.Equal(t, before, snapshot(t, root), rel)
+	}
+
 	// A configuration that does not validate refuses through the real
 	// command too.
 	root = writeFixture(t)

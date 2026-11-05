@@ -68,6 +68,9 @@ check project trust and `/hooks`, and check that hooks are enabled in Codex.
 Also ensure `seamark` is on the `PATH` visible to Codex. A lesson reminder
 appears only when Seamark has a relevant lesson for the edited files.
 
+For Claude Code, check that no project settings file sets
+`disableAllHooks: true`.
+
 ## What each agent supports
 
 The table distinguishes installed features from behavior verified with a
@@ -194,7 +197,9 @@ hook past its timeout, or blocks the write, gives no limit. No path reads
 `enforced` before its recording is reviewed and committed as test data.
 
 Setup keeps warning-and-install behavior for unknown local capability or
-trust. It refuses known-bad enforce states, such as disabled hooks or a
+trust. It refuses known-bad enforce states, such as disabled hooks (Claude
+Code `disableAllHooks: true` in `.claude/settings.json` or
+`.claude/settings.local.json`, Codex `[features] hooks = false`) or a
 report-only wrapper, rather than silently substituting check mode. A
 client without a guard cannot install enforce mode. Codex trust remains
 the user's decision: review new or changed hooks with `/hooks`. Seamark

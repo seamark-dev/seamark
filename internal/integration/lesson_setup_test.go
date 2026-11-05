@@ -903,6 +903,19 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 		assert.Equal(t, "lesson checks: enforce for codex would stay inactive (hooks-disabled); resolve it, then rerun", err.Error())
 	})
 
+	// Claude Code merges the local file after the shared file, so either
+	// file can turn the hooks off.
+	for _, rel := range []string{approve.ClaudeSettings, claudeLocalSettings} {
+		t.Run("claude disableAllHooks in "+rel, func(t *testing.T) {
+			root := t.TempDir()
+			writeRel(t, root, rel, `{"disableAllHooks": true}`)
+
+			err := refuse(t, root, enforce(ClaudeID))
+			assert.Equal(t, "lesson checks: enforce for claude would stay inactive (hooks-disabled); resolve it, then rerun",
+				err.Error())
+		})
+	}
+
 	t.Run("a report-only wrapper", func(t *testing.T) {
 		wrapped := `{"hooks":{"PreToolUse":[{"matcher":"Edit|Write|MultiEdit","hooks":[` +
 			`{"type":"command","command":"/opt/bin/seamark lessons --guard --hook || true"}]}]}}`

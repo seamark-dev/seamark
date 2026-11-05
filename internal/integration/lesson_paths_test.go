@@ -182,6 +182,47 @@ func TestLessonCheckPathsSupplementalDocumentUnreadable(t *testing.T) {
 	}
 }
 
+// TestClaudeHooksDisabledWinsOverVerifiedGuardEvidence proves that a
+// verified guard recording never makes a path read enforced while
+// disableAllHooks turns the project hooks off. Synthetic evidence tests
+// the precedence only and gives no native proof.
+func TestClaudeHooksDisabledWinsOverVerifiedGuardEvidence(t *testing.T) {
+	withSyntheticFailOpen(t, guardPathsOf(ClaudeID)...)
+
+	root := t.TempDir()
+	binary := fakeSeamark(t, t.TempDir(), "self")
+	self := BinaryIdentity{Path: binary, Version: "v0.9.0"}
+	installLessonHooks(t, root, ClaudeID, binary, hooks.LessonChecksEnforce, "")
+	writeRel(t, root, ".seamark/lessons.yaml", lessonPatternYAML)
+
+	// The control: the synthetic evidence makes every pre-write path active.
+	before := LessonCapability([]Inspection{inspectionOf(t, root, ClaudeID)}, root, self)
+	c, ok := before.Client(ClaudeID)
+	require.True(t, ok)
+
+	for _, p := range c.Paths {
+		if p.HookStage == lessoncheck.StagePreWrite {
+			require.Equal(t, lessoncheck.PathActive, p.State, p.Tool)
+		}
+	}
+
+	setClaudeKey(t, root, approve.ClaudeSettings, "disableAllHooks", "true")
+
+	report := LessonCapability([]Inspection{inspectionOf(t, root, ClaudeID)}, root, self)
+	c, ok = report.Client(ClaudeID)
+	require.True(t, ok)
+
+	for _, p := range c.Paths {
+		if p.HookStage == lessoncheck.StagePreWrite || p.HookStage == lessoncheck.StagePostEdit {
+			assert.Equal(t, lessoncheck.PathInactive, p.State, p.Tool)
+			assert.Contains(t, p.Reasons, lessoncheck.CapHooksDisabled, p.Tool)
+		}
+	}
+
+	require.Len(t, report.Pins, 1)
+	assert.Equal(t, lessoncheck.BadgeRequestedInactive, report.Pins[0].Clients[0].Badge)
+}
+
 // pathKey names one path for a list comparison.
 func pathKey(p lessoncheck.InstalledPath) string {
 	return p.Client + " " + string(p.Stage) + " " + p.Tool + " " + string(p.Context)
@@ -537,6 +578,28 @@ func TestLessonCheckPathsReportsTrustAndDisabledHooks(t *testing.T) {
 			if p.HookStage == lessoncheck.StagePreWrite || p.HookStage == lessoncheck.StagePostEdit {
 				assert.Equal(t, lessoncheck.PathInactive, p.State)
 				assert.Contains(t, p.Reasons, lessoncheck.CapHooksDisabled)
+			}
+		}
+	})
+
+	t.Run("claude disableAllHooks in a project settings file", func(t *testing.T) {
+		// Check mode installs with the key set and narrates the inactive
+		// paths. Only enforce refuses.
+		root := t.TempDir()
+		writeRel(t, root, approve.ClaudeSettings, `{"disableAllHooks": true}`)
+		installLessonHooks(t, root, ClaudeID, self.Path, hooks.LessonChecksCheck, "")
+
+		insp := inspectionOf(t, root, ClaudeID)
+		require.NotNil(t, insp.LessonHooks)
+		assert.True(t, insp.LessonHooks.HooksDisabled)
+
+		report := LessonCapability([]Inspection{insp}, root, self)
+		c, _ := report.Client(ClaudeID)
+
+		for _, p := range c.Paths {
+			if p.HookStage == lessoncheck.StagePreWrite || p.HookStage == lessoncheck.StagePostEdit {
+				assert.Equal(t, lessoncheck.PathInactive, p.State, p.Tool)
+				assert.Contains(t, p.Reasons, lessoncheck.CapHooksDisabled, p.Tool)
 			}
 		}
 	})

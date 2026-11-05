@@ -51,6 +51,9 @@ model-boundary delivery.
   and the date. A computed scope then reads as a suggestion: only a
   console preview replaces the choice, and `lessons --retarget` refuses
   it and names the console. No command makes this edit.
+- **Claude Code hooks turned off.** With `disableAllHooks: true` in a
+  project settings file, Claude setup refuses lesson-check enforce, and
+  setup, doctor, and status warn that the seamark hooks never run.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.
