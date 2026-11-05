@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -364,4 +365,36 @@ func TestRunInitLessonChecksNarratesLocalHookSources(t *testing.T) {
 		_, err := initLessonRun(t, root, binary, initRun{})
 		require.NoError(t, err, "a broken personal file is none of a plain init's business")
 	})
+}
+
+func TestRunInitAcceptsAVerbatimLocalGuardCopy(t *testing.T) {
+	// Claude Code runs a handler that both settings files define with
+	// equal fields once. So plain init keeps working beside such a copy.
+	binary := capabilitySeamark(t)
+	root := t.TempDir()
+
+	initLessons(t, root, binary, hooks.LessonChecksEnforce, "", integration.ClaudeID)
+
+	var guard map[string]any
+
+	entries, _ := readSettings(t, root)["hooks"].(map[string]any)["PreToolUse"].([]any)
+	hooks.ForEachCommand(entries, func(_ string, h map[string]any, command string) {
+		if hooks.OwnedBySeamark(command, []string{hooks.LessonGuardMarker}) {
+			guard = h
+		}
+	})
+	require.NotNil(t, guard)
+
+	local, err := json.Marshal(map[string]any{"hooks": map[string]any{"PreToolUse": []any{
+		map[string]any{"matcher": "Edit|Write|MultiEdit", "hooks": []any{guard}},
+	}}})
+	require.NoError(t, err)
+	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.local.json", string(local)))
+
+	before := snapshot(t, root)
+
+	_, err = initLessonRun(t, root, binary, initRun{})
+	require.NoError(t, err, "plain init accepts the copy")
+	assert.Equal(t, hooks.LessonChecksEnforce, lessonMode(t, root, integration.ClaudeID))
+	assert.Equal(t, before, snapshot(t, root), "the run keeps every file")
 }

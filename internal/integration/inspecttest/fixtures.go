@@ -174,7 +174,8 @@ const Secret = "sk-live-1234567890abcdef"
 // report:
 //
 //   - hooks turned off;
-//   - a handler that runs twice;
+//   - a local copy of the managed lessons handler with other fields,
+//     which Claude Code runs once, with the fields of one copy;
 //   - a wrapped handler in the personal file;
 //   - an enforcing inline handler beside the managed warn hook;
 //   - a gate command under a matcher that never fires;
@@ -334,8 +335,15 @@ func Fixtures() []Fixture {
 				integration.CapabilityEdits: integration.StateCurrent, integration.CapabilityCommands: integration.StateCurrent,
 			},
 			GateMode: "warn", ManagedGateMode: "warn",
-			Findings: []string{"runs twice"},
-			Words:    []string{"gate (warn) + lessons hooks installed"},
+			// The copy has the handler key of the managed lessons hook and
+			// no timeout. Claude Code runs it once, with the fields of one
+			// of the two copies.
+			Findings: []string{"Claude Code runs it once, with the fields of one copy that setup cannot name"},
+			// The init test runs another binary, so Merge rewrites the
+			// managed command. The copy then has another handler key, and
+			// Claude Code runs both.
+			InitFindings: []string{"the managed lessons hook runs too, so the hook runs twice"},
+			Words:        []string{"gate (warn) + lessons hooks installed"},
 		},
 		{
 			// A wrapped enforcing gate only in the personal file: it runs,

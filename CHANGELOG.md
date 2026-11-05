@@ -109,6 +109,9 @@ model-boundary delivery.
   keep their content key.
 - **Second lesson handlers.** Claude setup refuses a certain second
   lesson-check handler as Codex does, and warns about an uncertain one.
+  A copy in .claude/settings.local.json that equals the managed handler
+  is accepted, because Claude Code runs it once, and doctor no longer
+  says that it runs twice.
 - **Unreadable hook documents.** Status and the console read
   `unreadable`, as doctor does, not `off`.
 - **Retarget route.** A linked pin names `w` Retarget only while `w`

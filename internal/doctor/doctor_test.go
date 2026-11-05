@@ -637,11 +637,12 @@ func TestRunWarnsOnAHalfInstalledClient(t *testing.T) {
 	assert.Contains(t, checks["hooks"].Detail, "codex lessons hook installed, gate hook missing")
 	assert.Contains(t, checks["hooks"].Fix, "seamark init --client codex")
 
-	// The unmanaged personal handler beside the managed one: the client
-	// line warns that the hook runs twice.
+	// A personal copy of the managed handler with other fields: the client
+	// line warns that setup cannot name the fields that Claude Code runs.
 	_, checks = runFixture(t, inspecttest.Named("duplicate"))
 	assert.Equal(t, StateWarn, checks["claude"].State)
-	assert.Contains(t, checks["claude"].Detail, "runs twice")
+	assert.Contains(t, checks["claude"].Detail, "Claude Code runs it once, with the fields of one copy that setup cannot name")
+	assert.NotContains(t, checks["claude"].Detail, "runs twice")
 }
 
 func TestRunSkipsTheClientLineWhenNothingIsInstalled(t *testing.T) {

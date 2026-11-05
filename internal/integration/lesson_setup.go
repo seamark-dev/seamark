@@ -300,7 +300,10 @@ func enforceRefusal(clientID string, state lessonSourceState) error {
 // definition that only can run the hook does not prove a second run, so
 // the caller warns about it and keeps the managed handler. The two
 // adapters share the rule, so one state gets one answer on both clients.
-// requested is true when the run names a lesson-check mode.
+// Claude Code runs a local copy with the managed handler key and equal
+// fields once, so the Claude adapter takes such a copy out before it
+// calls this rule. Codex runs every copy. requested is true when the run
+// names a lesson-check mode.
 func refuseSecondLessonHandler(clientID string, spec hooks.Spec, sources []hookSource, requested bool) error {
 	for _, source := range sources {
 		if source.certain {
@@ -313,10 +316,12 @@ func refuseSecondLessonHandler(clientID string, spec hooks.Spec, sources []hookS
 
 // duplicateLessonHandler returns the refusal for a second lesson handler
 // in a source that setup does not manage. Setup refuses because two
-// handlers would run the same check twice. A run that requests a lesson
-// change asks setup to manage the handler, so the advice is to remove the
-// other definition. A run that requests none keeps a handler that setup
-// already manages, so the advice says that setup owns the handler.
+// handlers would run the same check twice, or, for a Claude Code copy
+// with other fields, because setup cannot tell which fields apply. A run
+// that requests a lesson change asks setup to manage the handler, so the
+// advice is to remove the other definition. A run that requests none
+// keeps a handler that setup already manages, so the advice says that
+// setup owns the handler.
 func duplicateLessonHandler(clientID string, spec hooks.Spec, source hookSource, requested bool) error {
 	where := fmt.Sprintf("lesson checks: %s %s %s already runs a handler from %s: %#q",
 		clientID, spec.Event, strings.Join(source.tools, ", "), source.path, describeCommand(source.command))

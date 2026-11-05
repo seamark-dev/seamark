@@ -896,28 +896,37 @@ func sourcePaths(sources []hookSource) string {
 
 // sourceFindings names each definition that setup does not manage. A
 // definition that runs for a tool that the managed one also runs for is
-// a warning. The client runs every matching definition, so a second one
-// delivers each lesson twice and evaluates each command twice. An
-// uncertain definition is also a warning, because setup cannot tell
-// whether the hook runs twice, but the reader can. The reason never
-// starts with the path, because every consumer prefixes it.
+// a warning. Codex runs every matching definition, so a second one
+// delivers each lesson twice and evaluates each command twice. Claude
+// Code runs a local copy with the handler key of a managed definition
+// once. So the Claude Code callers first take out each local copy that
+// shares a tool with a managed definition of its key. A definition left
+// here can still have the key of a managed definition when the two share
+// no tool. Each managed definition that shares a tool with it has
+// another key, so Claude Code runs both for that tool. An uncertain
+// definition is also a warning, because setup cannot tell whether the
+// hook runs twice, but the reader can. The reason never starts with the
+// path, because every consumer prefixes it.
 func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) {
 	managedTools := coveredTools(spec, sources, managedSource)
 	managedMode := hookMode(sources, managedSource)
+	managedFiltered := slices.ContainsFunc(sources, func(s hookSource) bool { return s.managed && s.filter != "" })
 
 	for _, s := range unmanagedSources(sources) {
 		command := describeCommand(s.command)
 		twice := sharedTools(s.tools, managedTools)
 
 		switch {
-		case s.certain && s.filter != "":
-			// The filter finding of documentSources already names this
-			// definition and what setup cannot tell about it.
-			continue
 		case !s.certain:
 			reason := fmt.Sprintf("has %#q, which can run the seamark %s hook; setup cannot tell", command, spec.Name)
 			if len(twice) > 0 {
 				reason += ", and when it does, the hook runs twice"
+
+				// A filtered managed handler runs only for the calls that its
+				// filter matches. So the second run happens only for those calls.
+				if managedFiltered {
+					reason += " for each call that both definitions run"
+				}
 			}
 
 			*findings = append(*findings, Finding{
@@ -927,12 +936,22 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 				Action: "run the seamark hook directly in that definition, or remove it, so setup can tell",
 			})
 		case len(twice) > 0:
-			reason := fmt.Sprintf("also runs %#q for %s; the managed %s hook runs too, so the hook runs twice",
-				command, strings.Join(toolNames(twice), ", "), spec.Name)
+			// A Claude Code if filter is part of the handler key, so a
+			// filtered definition runs beside the managed one. Each runs only
+			// for the calls that its filter matches.
+			ending := "so the hook runs twice"
+			if s.filter != "" || managedFiltered {
+				ending = "so the hook runs twice for each call that both definitions run"
+			}
+
+			reason := fmt.Sprintf("also runs %#q for %s; the managed %s hook runs too, %s",
+				command, strings.Join(toolNames(twice), ", "), spec.Name, ending)
 
 			// The other definition can carry another gate mode. Both run,
 			// so a local --enforce still blocks under a managed warn hook.
-			if s.mode != "" && s.mode != managedMode {
+			// For a filtered definition, the filter finding already says that
+			// setup cannot tell which calls it covers.
+			if s.mode != "" && s.mode != managedMode && s.filter == "" {
 				reason += fmt.Sprintf("; that definition runs in %s mode, and both apply", s.mode)
 			}
 
@@ -942,6 +961,10 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 				Reason: reason,
 				Action: "remove one of the two definitions",
 			})
+		case s.filter != "":
+			// The filter finding of documentSources already names this
+			// definition and what setup cannot tell about it.
+			continue
 		default:
 			*findings = append(*findings, Finding{
 				Level:  FindingInfo,
@@ -953,7 +976,8 @@ func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) 
 }
 
 // sharedTools keeps the tools of a definition that the managed
-// definition also runs for. The client runs each of them twice.
+// definition also runs for. The client can run the hook twice for each
+// of them.
 func sharedTools(tools, managedTools []string) []string {
 	return slices.DeleteFunc(slices.Clone(tools), func(tool string) bool { return !slices.Contains(managedTools, tool) })
 }

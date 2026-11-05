@@ -1,11 +1,11 @@
 package integration
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -16,8 +16,10 @@ import (
 
 // claudeLocalSettings is the second project hook source Claude Code
 // reads. It is the user's personal file. init only inspects it for a
-// duplicate seamark handler, which runs twice, and for disableAllHooks,
-// which can turn the hooks off or on again. init never writes it.
+// second seamark handler and for disableAllHooks, which can turn the
+// hooks off or on again. Claude Code runs a second handler with another
+// handler key beside the managed one, and a copy with the same key once.
+// init never writes it.
 const claudeLocalSettings = ".claude/settings.local.json"
 
 // claudeSetup plans Claude Code's native documents. The lifecycle hooks
@@ -279,14 +281,16 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 			sources = append(sources, documentSources(&plan.Findings, local, claudeHookRules, claudeLocalSettings, spec, false)...)
 		}
 
+		// A local copy of a managed definition can change the managed gate
+		// mode, so the copies are read before the gate hooks.
+		applyClaudeCopies(&plan.Findings, spec, sources)
+
 		// The plan lists the gate hooks that the client runs from
 		// definitions setup does not manage, each with its own mode. It
 		// lists an uncertain one too, and marks it. A gate line that says
 		// "nothing blocks" while a wrapped gate blocks is the worse error.
 		// One that says "enforce" for an echo is wrong too.
 		if i == 0 {
-			applyClaudeGateCopies(&plan.Findings, sources)
-
 			if managedRuns {
 				plan.GateHooks = append(plan.GateHooks, managedGateHook(approve.ClaudeSettings, gateMode, sources))
 			}
@@ -296,7 +300,7 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 			}
 		}
 
-		sourceFindings(&plan.Findings, spec, sources)
+		sourceFindings(&plan.Findings, spec, withoutClaudeCopies(sources))
 
 		if req.CheckHookSources {
 			reportMissingCoverage(plan, spec, sources)
@@ -355,10 +359,14 @@ func readsClaudeLocalHooks(req ClientSetup, settings map[string]any) bool {
 
 // checkClaudeLessonHandlers applies the rule of one handler per lesson
 // check to the hooks that the plan merged. Claude Code runs every
-// matching definition of both settings files, so a second handler runs
+// matching definition with another handler key, so a second handler runs
 // each check twice. Only a run that installs or keeps a lesson-check
 // hook gets here with a spec, so a repository without one is not
 // refused for a definition of its own.
+//
+// Claude Code runs a local copy with the handler key of the managed
+// handler once. Setup accepts such a copy only when every other field is
+// equal too, because Claude Code can run the fields of either copy.
 //
 // Claude Code has several edit tools, and setup keeps a matcher that the
 // user narrowed. A definition for a tool that the managed handler does
@@ -371,6 +379,7 @@ func readsClaudeLocalHooks(req ClientSetup, settings map[string]any) bool {
 func checkClaudeLessonHandlers(plan *ClientPlan, settings, local map[string]any, specs []hooks.Spec, requested bool) error {
 	for _, spec := range specs {
 		sources := claudeHookSources(&plan.Findings, settings, local, spec)
+		applyClaudeCopies(&plan.Findings, spec, sources)
 
 		if spec.Marker != claudeExplorationSpec.Marker {
 			if err := refuseSecondLessonHandler(ClaudeID, spec, runsBesideManaged(spec, sources), requested); err != nil {
@@ -378,7 +387,7 @@ func checkClaudeLessonHandlers(plan *ClientPlan, settings, local map[string]any,
 			}
 		}
 
-		sourceFindings(&plan.Findings, spec, sources)
+		sourceFindings(&plan.Findings, spec, withoutClaudeCopies(sources))
 	}
 
 	return nil
@@ -424,65 +433,164 @@ func sameHandlerKey(a, b map[string]any) bool {
 }
 
 // sameField reports whether two handlers hold an equal value for the
-// field, or both omit it. Both settings files parse with one decoder, so
-// a number has one type in both.
+// field, or both omit it. The values compare by their JSON form, because
+// Merge writes a new timeout as an int and the decoder reads a number as
+// a float64.
 func sameField(a, b map[string]any, field string) bool {
 	av, aok := a[field]
 	bv, bok := b[field]
 
-	return aok == bok && reflect.DeepEqual(av, bv)
+	if aok != bok {
+		return false
+	}
+
+	aj, aerr := json.Marshal(av)
+	bj, berr := json.Marshal(bv)
+
+	return aerr == nil && berr == nil && bytes.Equal(aj, bj)
 }
 
-// applyClaudeGateCopies finds each gate definition in the local file
-// that shares the handler key of a managed gate definition and differs
-// in an execution field. Claude Code runs one of the two copies, and
-// without an equal copy in user settings it runs the later one, from
-// the local file. So a background key on the local copy makes the
-// managed gate report-only. A copy that differs in the timeout or in
-// onFailure keeps the mode, because exit status 2 blocks in either copy.
-// Each such copy gets a warning.
-func applyClaudeGateCopies(findings *[]Finding, sources []hookSource) {
-	for i := range sources {
-		managed := &sources[i]
-		if !managed.managed || managed.handler == nil {
+// claudeCopyDiff lists the fields in which two handlers with one handler
+// key differ: the execution fields first, then the other fields in
+// sorted order. statusMessage never counts, because it sets only the
+// spinner text. A field that setup does not know counts, because setup
+// cannot tell what it changes.
+func claudeCopyDiff(a, b map[string]any) []string {
+	differs := slices.DeleteFunc(slices.Clone(claudeCopyFields), func(field string) bool {
+		return sameCopyField(a, b, field)
+	})
+
+	var other []string
+
+	for _, handler := range []map[string]any{a, b} {
+		for field := range handler {
+			known := field == "statusMessage" || slices.Contains(claudeHandlerKey, field) || slices.Contains(claudeCopyFields, field)
+			if known || slices.Contains(other, field) || sameField(a, b, field) {
+				continue
+			}
+
+			other = append(other, field)
+		}
+	}
+
+	slices.Sort(other)
+
+	return append(differs, other...)
+}
+
+// claudeCopy is a definition in the local file that shares the handler
+// key and a tool with a managed definition. Claude Code then runs the
+// two definitions once, with the fields of one of them.
+type claudeCopy struct {
+	// managed is the index of the managed definition in the sources.
+	managed int
+	// differs lists the fields in which the two definitions differ. An
+	// empty list means that both copies run with the same fields.
+	differs []string
+}
+
+// findClaudeCopy returns the copy that the source is, or false. Only a
+// definition in the local file can be a copy, because the shared file
+// holds the managed handler. The managed definition must run for a tool
+// of the source, else Claude Code never runs both for one call.
+func findClaudeCopy(s hookSource, sources []hookSource) (claudeCopy, bool) {
+	if s.managed || s.path != claudeLocalSettings || s.handler == nil {
+		return claudeCopy{}, false
+	}
+
+	for i, managed := range sources {
+		if !managed.managed || managed.handler == nil || !sameHandlerKey(managed.handler, s.handler) {
 			continue
 		}
 
-		for _, copied := range sources {
-			if copied.path != claudeLocalSettings || copied.handler == nil || !sameHandlerKey(managed.handler, copied.handler) {
-				continue
-			}
+		if len(sharedTools(s.tools, managed.tools)) == 0 {
+			continue
+		}
 
-			differs := slices.DeleteFunc(slices.Clone(claudeCopyFields), func(field string) bool {
-				return sameCopyField(managed.handler, copied.handler, field)
+		return claudeCopy{managed: i, differs: claudeCopyDiff(managed.handler, s.handler)}, true
+	}
+
+	return claudeCopy{}, false
+}
+
+// applyClaudeCopies reports each copy of a managed definition in the
+// local file. A copy with equal fields gets an information finding,
+// because Claude Code runs it once with the managed fields. A copy with
+// other fields gets a warning, because Claude Code runs one of the two
+// copies, and setup cannot tell which.
+//
+// For a gate copy, Claude Code runs the later copy, from the local file,
+// when user settings hold no equal copy. So a background key on the
+// local copy makes the managed gate report-only. A copy that differs in
+// the timeout or in onFailure keeps the mode, because exit status 2
+// blocks in either copy.
+func applyClaudeCopies(findings *[]Finding, spec hooks.Spec, sources []hookSource) {
+	for _, copied := range sources {
+		found, ok := findClaudeCopy(copied, sources)
+		if !ok {
+			continue
+		}
+
+		managed := &sources[found.managed]
+		command := describeCommand(copied.command)
+
+		if len(found.differs) == 0 {
+			*findings = append(*findings, Finding{
+				Level: FindingInfo, Path: claudeLocalSettings,
+				Reason: fmt.Sprintf("Claude Code runs %#q once, because it equals the managed %s hook in %s; "+
+					"setup does not manage that copy", command, spec.Name, approve.ClaudeSettings),
 			})
-			if len(differs) == 0 {
-				continue
-			}
 
-			reason := fmt.Sprintf("has a copy of the managed gate hook of %s that differs in %s; Claude Code runs only one "+
+			continue
+		}
+
+		differs := strings.Join(found.differs, ", ")
+
+		reason := fmt.Sprintf("has a copy of the managed %s hook of %s that differs in %s; Claude Code runs it once, "+
+			"with the fields of one copy that setup cannot name", spec.Name, approve.ClaudeSettings, differs)
+
+		if managed.mode != "" {
+			reason = fmt.Sprintf("has a copy of the managed gate hook of %s that differs in %s; Claude Code runs only one "+
 				"of the two copies, and without an equal copy in user settings it runs the one in this file",
-				approve.ClaudeSettings, strings.Join(differs, ", "))
+				approve.ClaudeSettings, differs)
 
-			if copied.background != "" && managed.mode != "" {
+			if copied.background != "" {
 				managed.mode, managed.background = GateModeReportOnly, copied.background
 				reason += fmt.Sprintf("; that copy has `%s: true`, so no verdict blocks", copied.background)
 			}
-
-			*findings = append(*findings, Finding{
-				Level: FindingWarning, Path: claudeLocalSettings, Reason: reason,
-				Action: "remove that copy, or make it equal to the managed hook",
-			})
 		}
+
+		*findings = append(*findings, Finding{
+			Level: FindingWarning, Path: claudeLocalSettings, Reason: reason,
+			Action: "remove that copy, or make it equal to the managed hook",
+		})
 	}
 }
 
+// withoutClaudeCopies drops each copy of a managed definition, because
+// applyClaudeCopies already reports it. Claude Code runs such a copy
+// once, so the duplicate finding of sourceFindings must not name it.
+func withoutClaudeCopies(sources []hookSource) []hookSource {
+	return slices.DeleteFunc(slices.Clone(sources), func(s hookSource) bool {
+		_, ok := findClaudeCopy(s, sources)
+
+		return ok
+	})
+}
+
 // runsBesideManaged keeps the definitions that setup does not manage and
-// that run for a tool of the managed handler.
+// that run for a tool of the managed handler. It drops a copy with equal
+// fields, because Claude Code runs it once with the managed fields. A
+// copy with other fields stays, because setup cannot tell which fields
+// apply: another timeout or a background key changes the guard.
 func runsBesideManaged(spec hooks.Spec, sources []hookSource) []hookSource {
 	managedTools := coveredTools(spec, sources, managedSource)
 
 	return slices.DeleteFunc(unmanagedSources(sources), func(s hookSource) bool {
+		if found, ok := findClaudeCopy(s, sources); ok && len(found.differs) == 0 {
+			return true
+		}
+
 		return len(sharedTools(s.tools, managedTools)) == 0
 	})
 }
@@ -712,9 +820,15 @@ type gateInspection struct {
 // both. The evidence is every definition of each hook, owned or
 // wrapped, with the tools the client runs it for. Setup manages the
 // shared file only. A definition in the local file is a running hook
-// that setup does not manage, and a handler in both files is reported
-// as running twice. Claude Code records no per-hook trust that seamark
-// could read, so trust stays unknown and no finding names it.
+// that setup does not manage. A local copy can have the handler key of
+// a managed definition and share a tool with it. Claude Code runs the
+// two once, so such a copy gets its own finding. Every other definition
+// that setup does not manage, in either file, and that shares a tool
+// with the managed one is reported as running twice. A wrapper in the
+// shared file is one of them. When such a definition only can run the
+// hook, the report says that the hook can run twice. Claude Code records
+// no per-hook trust that seamark could read, so trust stays unknown and
+// no finding names it.
 //
 // lessons is the reading of the lesson-check and exploration hooks for
 // the capability report, from the same two reads. It takes the
@@ -755,13 +869,10 @@ func inspectClaudeHooks(root string, evidence VerificationEvidence) (
 
 	for i, spec := range hooks.ClaudeSpecs(hooks.ModeWarn) {
 		sources := claudeHookSources(&findings, settings, local, spec)
-
-		if i == 0 {
-			applyClaudeGateCopies(&findings, sources)
-		}
+		applyClaudeCopies(&findings, spec, sources)
 
 		classifyHook(all[i], spec, sources)
-		sourceFindings(&findings, spec, sources)
+		sourceFindings(&findings, spec, withoutClaudeCopies(sources))
 
 		if i == 0 {
 			gate.mode, gate.possible = hookMode(sources, certainSource), hookMode(sources, uncertainSource)
