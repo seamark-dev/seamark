@@ -32,3 +32,14 @@ func parseRel(t *testing.T, root, rel string) map[string]any {
 
 	return doc
 }
+
+// readPaths lists the paths of the guarded reads of a plan.
+func readPaths(reads []FileGuard) []string {
+	var out []string
+
+	for _, g := range reads {
+		out = append(out, g.Path)
+	}
+
+	return out
+}
