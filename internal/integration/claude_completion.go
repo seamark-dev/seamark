@@ -19,7 +19,7 @@ type claudeCompletions struct{}
 // DecodeCompletion reads the outcome and the path of one completion
 // event. PostToolUse gives succeeded. PostToolUseFailure gives
 // interrupted when is_interrupt is true, and failed otherwise, by the
-// rule of the capture decoder (claudeFailureOutcome). The decoder
+// outcome rule in tool_outcome.go (claudeFailureOutcome). The decoder
 // checks the event and the tool, because a finding about another tool
 // would name an edit that did not happen.
 //

@@ -9,13 +9,13 @@ import (
 
 // codexCompletions translates the Codex PostToolUse apply_patch event
 // for the post-edit verification. Codex has no separate failure event:
-// a failed tool reports a non-zero exit status in tool_response. The
-// capture decoder declares the event name (codexPostToolUse).
+// a failed tool reports a non-zero exit status in tool_response.
+// codex_events.go declares the event name (codexPostToolUse).
 type codexCompletions struct{}
 
 // DecodeCompletion reads the outcome and the paths of one apply_patch
 // completion. The outcome comes from the exit status in tool_response,
-// by the rule of the capture decoder (codexOutcome): exit code 0 gives
+// by the outcome rule in tool_outcome.go (codexOutcome): exit code 0 gives
 // succeeded, another code gives failed, and no status gives unknown.
 // The decoder reads no other part of tool_response, because the output
 // text can hold file content.
