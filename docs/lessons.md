@@ -865,12 +865,6 @@ native paths. `prevented` additionally needs a written deny reply, no
 later execution record and a verified native deny path. Current native
 evidence supports **`prevented: 0`**, not a prevention claim.
 
-The compact `lesson delivery:` line appears beside the independent
-outcome in `--proposals`, `--stats`, the HTML report and installed TUI
-Pins. It preserves the qualified phrase and points to the full report.
-Unavailable capture means no added compact line. Counts from historical
-versions never substitute for the installed version.
-
 ## Is it working? lessons --stats
 
 Every ambient surface appends a line to `.seamark/lessons-audit.jsonl`
@@ -958,9 +952,8 @@ pin outcomes — 3 measured: 1 working, 1 not landing, 1 untested
 ### Do pins actually change behavior? The outcome loop
 
 The finding-based outcome below is independent of lesson delivery.
-A captured peer correction is not a mined recurrence. The separate
-`lesson delivery:` line never adds occurrences, sessions or guard
-attempts to the outcome counts. Neither reading proves causation.
+A captured peer correction is not a mined recurrence. Neither reading
+proves causation.
 
 Firing counts measure *exposure* — a pin reached an agent. The `pin
 outcomes` block measures *effect*: did the pin's mistake recur after

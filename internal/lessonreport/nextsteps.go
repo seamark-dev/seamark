@@ -24,8 +24,7 @@ const (
 )
 
 // expandCommand returns the command that prints the expansion of one pin.
-// The compact line and the text overview both print it, so they always
-// name the same command.
+// The text overview prints it under each pin reading.
 func expandCommand(ref string) string {
 	return "seamark lessons --delivery --pin " + ref
 }
