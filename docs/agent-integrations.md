@@ -199,7 +199,7 @@ boundaries. Own-call advice remains `same-call-only`; a command/MCP
 preparation remains receiver-unknown. Otherwise negative observation
 windows remain incomplete with `lane-coverage-unknown`. A guard's
 requested deny is not proof of prevention; current reports retain
-`prevented: 0`. See [capture delivery](lessons.md#capture-delivery-lessons---delivery).
+`prevented: 0`. See [lesson delivery](lessons.md#lesson-delivery-lessons---delivery).
 
 ### Disable and downgrade safely
 

@@ -24,18 +24,17 @@ model-boundary delivery.
   separate baseline/guard/post-edit hooks. Installation differs from
   active or native-verified coverage. Codex Update content projection
   is still incomplete and is required before release.
-- **Capture delivery reading.** `lessons --delivery [--pin <ref>]`
-  (`delivery/1` JSON), version-isolated classes/timing/windows and
-  metadata-only inspection. Compact lines sit beside, never inside,
-  finding-based outcome readings in proposals, stats, HTML and TUI.
-  Current native evidence keeps prevention at zero and otherwise
-  negative observation windows qualified as incomplete.
+- **Lesson delivery reading.** `lessons --delivery [--pin <ref>]`
+  (`delivery/1` JSON) reads the delivery records of each pin version
+  from the audit logs, with separate check and guard counts. This build
+  reads no capture archive: the text leaves out the sections that need
+  one, and the JSON keeps those fields with fixed values. Current native
+  evidence keeps prevention at zero.
 - **Console controls.** Pins can edit mode/check on linked pins,
-  author check definitions (`M`), verify (`V`), and expand capture
-  delivery (`g`) with confirmed association exclude/restore (`X`/`U`).
-  Read-only browsing never applies a decision.
+  author check definitions (`M`), and verify (`V`). Read-only browsing
+  never applies a decision.
 
-See [current capability states](docs/STATUS.md#unreleased--lesson-checks-and-capture-delivery)
+See [current capability states](docs/STATUS.md#unreleased--lesson-checks-and-lesson-delivery)
 and the [lesson guide](docs/lessons.md) for limits and commands.
 
 ## v0.8.0 — 2026-10-18

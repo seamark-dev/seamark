@@ -46,7 +46,7 @@ const (
 	// last inspection of the clients with lessons.yaml. So it loads after
 	// a load of either source (followChecks), and allSections omits it.
 	secChecks
-	// secDelivery reads capture delivery independently of the pin inspection.
+	// secDelivery reads lesson delivery independently of the pin inspection.
 	secDelivery
 	secCount
 )

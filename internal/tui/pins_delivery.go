@@ -120,7 +120,7 @@ type deliveryDisposedMsg struct{}
 var deliveryKeys = struct {
 	Open, Reload, Next, Previous key.Binding
 }{
-	Open:     key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "capture delivery")),
+	Open:     key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "lesson delivery")),
 	Reload:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
 	Next:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next occurrence")),
 	Previous: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous occurrence")),
@@ -172,11 +172,11 @@ func (v *pinDelivery) loaded(msg pinDeliveryLoadedMsg) {
 
 	err := msg.err
 	if err == nil && (msg.report.Expanded == nil || msg.report.Expanded.PinRef != v.ref) {
-		err = errors.New("the capture delivery read returned no expansion for the selected pin")
+		err = errors.New("the lesson delivery read returned no expansion for the selected pin")
 	}
 
 	if err == nil && !v.matchesReport(msg.report) {
-		err = errors.New("the selected pin changed while capture delivery was being read; press r to read again")
+		err = errors.New("the selected pin changed while lesson delivery was being read; press r to read again")
 	}
 
 	v.reading.set(msg.report, err, v.st.delivery.at)
@@ -319,7 +319,7 @@ func (p *pinsView) deliveryRoute(msg tea.Msg) (tea.Cmd, bool) {
 		}
 	case loadedMsg:
 		if m.kind == secDelivery && m.err != nil {
-			return toast(ui.ToneAttention, "Capture delivery could not be read: "+ui.ErrText(m.err)), false
+			return toast(ui.ToneAttention, "Lesson delivery could not be read: "+ui.ErrText(m.err)), false
 		}
 
 		v := p.delivery
@@ -327,7 +327,7 @@ func (p *pinsView) deliveryRoute(msg tea.Msg) (tea.Cmd, bool) {
 			if !p.rebindDelivery() {
 				p.closeDelivery()
 
-				return toast(ui.ToneAttention, "Capture delivery closed: the selected pin is no longer uniquely matched to its version."), false
+				return toast(ui.ToneAttention, "Lesson delivery closed: the selected pin is no longer uniquely matched to its version."), false
 			}
 
 			return v.reload(), false

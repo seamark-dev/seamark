@@ -124,7 +124,7 @@ func TestPinsDeliverySectionShowsCompactLine(t *testing.T) {
 		assert.Contains(t, text, compact.Line)
 		assert.Contains(t, text, "no linked correction observed (qualified)")
 		assert.Less(t, strings.Index(text, "Outcome"), strings.Index(text, "Exposure"))
-		assert.Less(t, strings.Index(text, "Exposure"), strings.Index(text, "Capture delivery"))
+		assert.Less(t, strings.Index(text, "Exposure"), strings.Index(text, "Lesson delivery"))
 		before := p.readingLines(p.inspection(), row.pin, 1000)
 		assert.Contains(t, ansi.Strip(strings.Join(before, "\n")), "not landing")
 		assert.Contains(t, pinsKeys(h), "g")
@@ -171,7 +171,7 @@ func TestPinsDeliverySectionShowsCompactLine(t *testing.T) {
 			}
 
 			h := pinsOpen(t, f, 120, 40)
-			assert.NotContains(t, pinsDetail(t, h), "Capture delivery")
+			assert.NotContains(t, pinsDetail(t, h), "Lesson delivery")
 			assert.NotContains(t, pinsKeys(h), "g")
 			h.press("g")
 			assert.Nil(t, pinsOf(h).delivery)
@@ -280,8 +280,8 @@ func TestPinsDeliveryLoadsInOwnWorker(t *testing.T) {
 		}
 		h.press("r")
 		text := pinsDetail(t, h)
-		assert.Contains(t, text, "Capture delivery")
-		assert.Contains(t, text, "Stale: capture delivery could not be read again")
+		assert.Contains(t, text, "Lesson delivery")
+		assert.Contains(t, text, "Stale: lesson delivery could not be read again")
 		assert.NotContains(t, pinsKeys(h), "g")
 		h.press("g")
 		assert.Nil(t, pinsOf(h).delivery)
@@ -300,8 +300,8 @@ func TestPinsDeliveryExpansion(t *testing.T) {
 		v := pinsOf(h).delivery
 		require.NotNil(t, v)
 		body := deliveryBody(v)
-		for _, text := range []string{"versions are never pooled", "Reminder emitted for an already-constructed action.", "lane-coverage-unknown",
-			"same-call-only", "independence-unresolved", "prevented: 0", "no linked correction observed (qualified)"} {
+		for _, text := range []string{"Lesson delivery (delivery/1;", "versions are never pooled", "same-call-only",
+			"independence-unresolved", "prevented: 0"} {
 			assert.Contains(t, body, text)
 		}
 
@@ -355,7 +355,7 @@ func TestPinsDeliveryExpansion(t *testing.T) {
 		h.press("r")
 		require.Error(t, v.reading.err)
 		assert.False(t, v.ready())
-		assert.Contains(t, deliveryBody(v), "Capture delivery could not be read")
+		assert.Contains(t, deliveryBody(v), "Lesson delivery could not be read")
 		assert.NotContains(t, deliveryBody(v), "capture evidence unavailable", "a selection failure is not an invented archive failure")
 		assert.Empty(t, f.called())
 	})

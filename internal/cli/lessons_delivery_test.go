@@ -89,11 +89,14 @@ func TestLessonsDeliveryWithoutCapture(t *testing.T) {
 	assert.Equal(t, 1, r.Pins[0].Delivery.Injected)
 	assert.Equal(t, 1, r.Pins[0].Observation.IncompleteByReason[lessonreport.CodeSessionNotCaptured])
 
+	// The text leaves out the capture and observation lines, and the JSON
+	// above keeps their fixed values.
 	out, err := deliveryRun(t, f.root)
 	require.NoError(t, err)
-	assert.Contains(t, out, "capture evidence unavailable")
+	assert.True(t, strings.HasPrefix(out, "Lesson delivery (delivery/1; seamark "), out)
 	assert.Contains(t, out, "hook 1")
-	assert.Contains(t, out, "session-not-captured 1")
+	assert.NotContains(t, out, "capture evidence unavailable")
+	assert.NotContains(t, out, "session-not-captured")
 	assert.Equal(t, before, deliveryTree(t, f.root))
 	assert.NoFileExists(t, store.DefaultPath(f.root))
 
@@ -185,7 +188,7 @@ func TestLessonsDeliveryRefusals(t *testing.T) {
 		{nil, "provide --file <path>, --list, --stats, --distill, --proposals, --verify, --prepare, --delivery, --apply, --dismiss, or --hook"},
 		{[]string{"--pin", "12345678"}, "--pin applies to --set-mode and --delivery only"},
 		{[]string{"--json"}, "--json applies to --verify, --prepare, and --delivery only"},
-		{[]string{"--delivery", "--pin", "00000000", "--json"}, "pin reference 00000000 names no pin in .seamark/lessons.yaml; `seamark lessons --verify` lists the current references and `seamark lessons --delivery` the historical ones"},
+		{[]string{"--delivery", "--pin", "00000000", "--json"}, "pin reference 00000000 names no pin in .seamark/lessons.yaml; `seamark lessons --verify` lists the current references"},
 		{[]string{"--delivery", "--pin", "bad", "--json"}, "pin reference \"bad\": give at least 8 hex characters from the pin column of `seamark lessons --verify`"},
 		{[]string{"--delivery", "unexpected", "--json"}, "unexpected argument \"unexpected\" — provide --file, --list, --distill, --apply, --dismiss, or --prune"},
 		{[]string{"--delivery=false", "--json"}, "--json applies to --verify, --prepare, and --delivery only"},

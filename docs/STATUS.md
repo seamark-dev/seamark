@@ -54,7 +54,7 @@ Review mining, fix mining, lessons, distillation, pins.
 | Once-per-context hook delivery (`hook_delivery` in `lessons.yaml`) | working; opt-in, digest-only local state, fails open; needs one `seamark init` re-run for the `PostCompact` hook |
 | Lessons benchmark (`make lessons-bench`, paired headless sessions, frozen claim registry) | working; accepted synthetic and pinned OpenTelemetry-Go cohorts; operator-run and spends provider tokens; protocol and evidence in [bench/README.md](../bench/README.md) |
 
-## Unreleased — lesson checks and capture delivery
+## Unreleased — lesson checks and lesson delivery
 
 v0.9.0 is the planned first release with lesson-check handlers. It has
 not shipped. The release is **blocked** on reviewed native-client

@@ -40,7 +40,7 @@ import (
 // only, never on the marks. M and V open the check-definition form and
 // the verification view of the lesson checks (pins_checkdef.go,
 // pins_checks.go). They show only in a repository that uses lesson
-// checks (pinsCheckShown). g opens capture delivery when a reading exists.
+// checks (pinsCheckShown). g opens lesson delivery when a reading exists.
 var pinKeys = struct {
 	Search, Compare, Retarget, Prune key.Binding
 	New, Edit, Remove                key.Binding
@@ -162,7 +162,7 @@ type pinsView struct {
 	checkDef *checkDefModal
 	// verify is the open verification view of V, or nil.
 	verify *pinVerify
-	// delivery is the open capture-delivery expansion, or nil.
+	// delivery is the open lesson-delivery expansion, or nil.
 	delivery *pinDelivery
 }
 

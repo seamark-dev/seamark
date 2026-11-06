@@ -27,7 +27,7 @@ func TestCompactSummary(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, CompactSummary{
 			PinVersion: p.PinVersion, Command: command,
-			Line: "capture delivery: 3 assessed correction occurrence(s) (at-action 2, unknown 1); timing same-call-only 2, unknown 1; 5 delivered session(s): 2 no linked correction observed (qualified), 1 incomplete — " + command,
+			Line: "lesson delivery: 3 assessed correction occurrence(s) (at-action 2, unknown 1); timing same-call-only 2, unknown 1; 5 delivered session(s): 2 no linked correction observed (qualified), 1 incomplete — " + command,
 		}, summary)
 	})
 
@@ -51,7 +51,7 @@ func TestCompactSummary(t *testing.T) {
 		clone.Pins = []PinReading{{PinRef: p.PinRef, PinVersion: p.PinVersion}}
 		summary, ok := Compact(&clone, p.PinVersion)
 		require.True(t, ok)
-		assert.Equal(t, "capture delivery: no assessed correction linked; 0 delivered session(s) — "+command, summary.Line)
+		assert.Equal(t, "lesson delivery: no assessed correction linked; 0 delivered session(s) — "+command, summary.Line)
 	})
 
 	t.Run("sessions-with-no-occurrences", func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestCompactSummary(t *testing.T) {
 		clone.Pins = []PinReading{{PinRef: p.PinRef, PinVersion: p.PinVersion, Delivery: DeliveryCounts{Sessions: 2}, Observation: Observation{Incomplete: 2}}}
 		summary, ok := Compact(&clone, p.PinVersion)
 		require.True(t, ok)
-		assert.Equal(t, "capture delivery: 0 assessed correction occurrence(s); 2 delivered session(s): 0 no linked correction observed (qualified), 2 incomplete — "+command, summary.Line)
+		assert.Equal(t, "lesson delivery: 0 assessed correction occurrence(s); 2 delivered session(s): 0 no linked correction observed (qualified), 2 incomplete — "+command, summary.Line)
 	})
 
 	t.Run("no-timing-values", func(t *testing.T) {
@@ -68,7 +68,7 @@ func TestCompactSummary(t *testing.T) {
 		clone.Pins[0].Timing = nil
 		summary, ok := Compact(&clone, p.PinVersion)
 		require.True(t, ok)
-		assert.Equal(t, "capture delivery: 3 assessed correction occurrence(s) (at-action 2, unknown 1); 5 delivered session(s): 2 no linked correction observed (qualified), 1 incomplete — "+command, summary.Line)
+		assert.Equal(t, "lesson delivery: 3 assessed correction occurrence(s) (at-action 2, unknown 1); 5 delivered session(s): 2 no linked correction observed (qualified), 1 incomplete — "+command, summary.Line)
 	})
 
 	t.Run("all-classes-and-timings", func(t *testing.T) {
@@ -82,7 +82,7 @@ func TestCompactSummary(t *testing.T) {
 		clone.Pins[0].Timing = map[PairTiming]int{PairTimingMixed: 1, PairTiming(TimingUnknown): 2, PairTiming(TimingSameCallOnly): 3, PairTiming(TimingBeforeConstruction): 1}
 		summary, ok := Compact(&clone, p.PinVersion)
 		require.True(t, ok)
-		assert.Equal(t, "capture delivery: 7 assessed correction occurrence(s) (at-action 1, earlier-in-context 1, other-lane 1, region-not-matched 1, not-emitted 1, unknown 1, mixed 1); timing before-construction 1, same-call-only 3, unknown 2, mixed 1; 5 delivered session(s): 2 no linked correction observed (qualified), 1 incomplete — "+command, summary.Line)
+		assert.Equal(t, "lesson delivery: 7 assessed correction occurrence(s) (at-action 1, earlier-in-context 1, other-lane 1, region-not-matched 1, not-emitted 1, unknown 1, mixed 1); timing before-construction 1, same-call-only 3, unknown 2, mixed 1; 5 delivered session(s): 2 no linked correction observed (qualified), 1 incomplete — "+command, summary.Line)
 		assert.Greater(t, len([]rune(summary.Line)), 200, "the complete template must not be truncated")
 	})
 

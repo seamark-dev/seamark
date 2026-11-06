@@ -200,15 +200,16 @@ type PinRefError struct {
 	Entries []int
 }
 
-// Error describes a selection failure and names the commands that list
-// current and historical references.
+// Error describes a selection failure and names the command that lists
+// the current references. This build keeps no history of removed pins,
+// so no command lists a historical reference.
 func (e *PinRefError) Error() string {
 	switch e.Kind {
 	case PinRefMalformed:
 		return fmt.Sprintf("pin reference %q: give at least 8 hex characters from the pin column of `seamark lessons --verify`",
 			e.Ref)
 	case PinRefMissing:
-		return fmt.Sprintf("pin reference %s names no pin in .seamark/lessons.yaml; `seamark lessons --verify` lists the current references and `seamark lessons --delivery` the historical ones",
+		return fmt.Sprintf("pin reference %s names no pin in .seamark/lessons.yaml; `seamark lessons --verify` lists the current references",
 			e.Ref)
 	case PinRefAmbiguousPrefix:
 		return fmt.Sprintf("pin reference %s names more than one pin; give more hex characters", e.Ref)

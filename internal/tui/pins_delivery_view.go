@@ -21,10 +21,10 @@ func (p *pinsView) deliveryLines(row pinRow, w int) []string {
 
 	compact, _ := lessonreport.Compact(&p.st.delivery.value, reading.PinVersion)
 	t := p.st.theme
-	out := []string{t.Heading.Render("Capture delivery")}
+	out := []string{t.Heading.Render("Lesson delivery")}
 
 	if p.st.delivery.stale() {
-		out = append(out, propNote(t, ui.ToneAttention, "Stale: capture delivery could not be read again. "+
+		out = append(out, propNote(t, ui.ToneAttention, "Stale: lesson delivery could not be read again. "+
 			ui.ErrText(p.st.delivery.err)+". Press r to read again; expansion is unavailable until then.", w)...)
 	}
 
@@ -51,17 +51,17 @@ func (v *pinDelivery) keys() []key.Binding {
 
 func (v *pinDelivery) content(w int) ui.ModalOpts {
 	t := v.st.theme
-	o := ui.ModalOpts{Title: t.Title.Render("Capture delivery"), Actions: v.keys()}
+	o := ui.ModalOpts{Title: t.Title.Render("Lesson delivery"), Actions: v.keys()}
 
 	switch {
 	case v.reading.loading && !v.reading.loaded:
-		o = flowWaitModal(v.st, "Reading capture delivery", "Seamark reads the selected pin's versions, "+
-			"occurrences and observation windows. Nothing is written.", true, w)
+		o = flowWaitModal(v.st, "Reading lesson delivery", "Seamark reads the versions of the selected pin "+
+			"from the audit logs. Nothing is written.", true, w)
 		o.Actions = v.keys()
 
 		return o
 	case v.reading.err != nil:
-		o.Body = append(o.Body, propNote(t, ui.ToneFailure, "Capture delivery could not be read: "+ui.ErrText(v.reading.err), w)...)
+		o.Body = append(o.Body, propNote(t, ui.ToneFailure, "Lesson delivery could not be read: "+ui.ErrText(v.reading.err), w)...)
 		if !v.reading.loaded {
 			return o
 		}

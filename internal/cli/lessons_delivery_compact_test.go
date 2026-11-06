@@ -131,7 +131,7 @@ func TestLessonsDeliveryProposalsLine(t *testing.T) {
 	out, _, err := runIn(t, "", "-C", f.root, "lessons", "--proposals")
 	require.NoError(t, err)
 	assert.Contains(t, out, "        "+outcomeLine+"\n")
-	assert.NotContains(t, out, "capture delivery:")
+	assert.NotContains(t, out, "lesson delivery:")
 	for _, raw := range f.raw {
 		assert.NotContains(t, out, raw)
 	}
@@ -151,7 +151,7 @@ func TestLessonsDeliveryStatsLine(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, outcomeLine+"\n")
 	assert.Contains(t, out, "pin outcomes — 2 measured: 0 working, 1 not landing, 1 untested")
-	assert.NotContains(t, out, "capture delivery:")
+	assert.NotContains(t, out, "lesson delivery:")
 	assertCompactLegacyWrites(t, before, deliveryTree(t, f.root))
 	sentinel.requireNoCall(t)
 }
@@ -251,7 +251,7 @@ func TestLessonsDeliveryCompactMovedRoot(t *testing.T) {
 		out, _, err := runIn(t, "", append([]string{"-C", nested, "--db", store.DefaultPath(f.root)}, args...)...)
 		require.NoError(t, err)
 		assert.Contains(t, out, legacyOutcome)
-		assert.NotContains(t, out, "capture delivery:")
+		assert.NotContains(t, out, "lesson delivery:")
 		assertCompactLegacyWrites(t, before, deliveryTree(t, original.root))
 	}
 	sentinel.requireNoCall(t)

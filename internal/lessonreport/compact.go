@@ -7,7 +7,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// CompactSummary is the fixed capture-delivery line, separate from any
+// CompactSummary is the fixed lesson-delivery line, separate from any
 // outcome reading. Command is also available to an expansion key.
 // Surfaces print the complete line; its length depends on the counts.
 type CompactSummary struct {
@@ -52,7 +52,7 @@ func compactPin(r *Report, p PinReading) CompactSummary {
 	summary := CompactSummary{PinVersion: p.PinVersion, Command: command}
 
 	if p.Occurrences.Occurrences == 0 && p.Delivery.Sessions == 0 {
-		summary.Line = fmt.Sprintf("capture delivery: no assessed correction linked; %d delivered session(s) — %s",
+		summary.Line = fmt.Sprintf("lesson delivery: no assessed correction linked; %d delivered session(s) — %s",
 			p.Delivery.Sessions, command)
 
 		return summary
@@ -79,7 +79,7 @@ func compactPin(r *Report, p PinReading) CompactSummary {
 		}
 	}
 
-	summary.Line = fmt.Sprintf("capture delivery: %d assessed correction occurrence(s)", p.Occurrences.Occurrences)
+	summary.Line = fmt.Sprintf("lesson delivery: %d assessed correction occurrence(s)", p.Occurrences.Occurrences)
 	if len(classes) > 0 {
 		summary.Line += " (" + strings.Join(classes, ", ") + ")"
 	}

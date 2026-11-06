@@ -50,8 +50,8 @@ func TestResolveRef(t *testing.T) {
 		refErr := refKind(t, err)
 		assert.Equal(t, reviews.PinRefMissing, refErr.Kind)
 
-		// The stable current-reference clause stays when historical
-		// inspection is available.
+		// The test asserts the head and the current-reference clause.
+		// Other text may follow that clause.
 		text := err.Error()
 		assert.True(t, strings.HasPrefix(text, "pin reference cccccccc names no pin in .seamark/lessons.yaml;"), text)
 		assert.Contains(t, text, "`seamark lessons --verify` lists the current references")

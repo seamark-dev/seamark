@@ -105,12 +105,11 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    Advisory: it authorizes no write, runs no check, and
                    leaves the edit-hook state alone. No agent call, no
                    network.
-  --delivery       read delivery records, assessed corrections, timing,
-                   qualified observation windows, and separate check and
-                   guard counts per pin version. --pin expands one pin,
-                   including historical versions and association refs.
-                   Read-only: no assembly, agent call, or network. Missing
-                   or unreadable evidence is report data, not a failure.
+  --delivery       read the delivery records of each pin version from the
+                   audit logs, with separate check and guard counts.
+                   --pin expands one current pin.
+                   Read-only: no agent call, no network. Missing or
+                   unreadable evidence is report data, not a failure.
   --json           with --verify, --prepare, or --delivery: print only
                    lesson-verification/1, lesson-preparation/1, or
                    delivery/1 JSON instead of the text report
@@ -368,13 +367,13 @@ a file has no lessons.`,
 	cmd.Flags().BoolVar(&prepare, "prepare", false,
 		"print the lessons, pins, and checks of the paths you give before you construct a change (no agent call)")
 	cmd.Flags().BoolVar(&deliveryReport, "delivery", false,
-		"read per-version capture delivery evidence and separate check/guard counts (no writes or agent call)")
+		"read per-version lesson delivery records and separate check/guard counts (no writes or agent call)")
 	cmd.Flags().BoolVar(&asJSON, "json", false,
 		"with --verify, --prepare, or --delivery: print the lesson-verification/1, lesson-preparation/1, or delivery/1 JSON document")
 	cmd.Flags().StringVar(&setMode.mode, "set-mode", "",
 		"set the mode of the pin that --pin names: advisory, check, or enforce; writes lessons.yaml only with distill.write")
 	cmd.Flags().StringVar(&setMode.pin, "pin", "",
-		"with --set-mode or --delivery: a current pin-ref from --verify, or with --delivery a historical identity reference")
+		"with --set-mode or --delivery: the pin-ref of a current pin, from the pin column of --verify")
 	cmd.Flags().StringVar(&setMode.check, "check", "",
 		"with --set-mode: the ID of a check under checks in lessons.yaml to bind to the pin")
 	cmd.Flags().BoolVar(&list, "list", false, "list every mined lesson with config-tuning syntax")

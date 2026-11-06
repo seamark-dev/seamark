@@ -23,9 +23,10 @@ func rendered(t *testing.T, report Report) string {
 }
 
 // TestRenderTextOverview prints the overview of two delivered sessions.
-// The text shows the delivery records, the observation, and the separate
-// check block. The renderer never changes the JSON of the report, and the
-// same inputs give the same text.
+// The text shows the delivery records and the separate check block, and
+// it leaves out each section that needs a capture archive. The renderer
+// never changes the JSON of the report, and the same inputs give the
+// same text.
 func TestRenderTextOverview(t *testing.T) {
 	cfg := testConfig("n")
 	id, ver := pinOf(cfg, 0)
@@ -38,11 +39,11 @@ func TestRenderTextOverview(t *testing.T) {
 	wire := encode(t, r)
 
 	out := rendered(t, r)
+	assert.True(t, strings.HasPrefix(out, "Lesson delivery (delivery/1; seamark "), out)
+
 	for _, needle := range []string{
 		"delivery records: hook 2; injected 2",
 		"delivered sessions: 2",
-		"observation (delivered sessions): 0 linked; 0 no linked correction observed (qualified); 2 incomplete",
-		"incomplete reasons: session-not-captured 2",
 		"Checks / guard (separate from delivery)",
 		"guard attempts",
 		"pin evaluations",
@@ -50,6 +51,15 @@ func TestRenderTextOverview(t *testing.T) {
 	} {
 		assert.Contains(t, out, needle)
 	}
+
+	for _, left := range []string{
+		"capture:", "archive:", "assessed correction occurrences", "decision timing", "observation",
+		"session-not-captured", "Historical versions", "Unlinked feedback items", "Coverage",
+	} {
+		assert.NotContains(t, out, left)
+	}
+
+	assert.Equal(t, 2, r.Pins[0].Observation.Incomplete, "the JSON keeps the observation that the text leaves out")
 
 	assert.Equal(t, wire, encode(t, r), "rendering must never change the JSON")
 	assert.Equal(t, out, rendered(t, mustBuild(t, in, "")), "the same inputs give the same text")
@@ -67,7 +77,8 @@ func TestRenderTextExpansion(t *testing.T) {
 	assert.Contains(t, out, "  version "+ver)
 	assert.Equal(t, 1, strings.Count(out, "; mode "), "the expansion prints the selected pin only")
 
-	// Version grouping, not action order, defines the expansion layout.
+	// The versions keep their order. Occurrences and session windows need
+	// a capture archive, so the text leaves them out.
 	r.Expanded.Versions = []string{"new-version", "old-version"}
 	r.Expanded.Occurrences = []OccurrenceDetail{
 		{AssociationRef: "as-old", PinVersion: "old-version", EpisodeRef: "old@1"},
@@ -75,47 +86,21 @@ func TestRenderTextExpansion(t *testing.T) {
 	}
 	r.Expanded.Sessions = []SessionWindow{{PinVersion: "old-version", SessionRef: "session-old", Partition: "no-linked-correction"}}
 	out = rendered(t, r)
-	assert.Less(t, strings.Index(out, "association as-new"), strings.Index(out, "association as-old"))
-	assert.Contains(t, out, "session session-old; lane ; no linked correction observed (qualified)")
-}
-
-func TestRenderTextClassDescriptions(t *testing.T) {
-	for _, tc := range []struct {
-		class Class
-		want  string
-	}{
-		{ClassAtAction, "Reminder emitted for an already-constructed action."},
-		{ClassEarlierInContext, "Delivered earlier in this context."},
-		{ClassOtherLane, "Delivery recorded only in another lane."},
-		{ClassRegionNotMatched, "Corrected action outside this pin's regions."},
-		{ClassNotEmitted, "Not emitted: over-total"},
-		{ClassUnknown, "Unknown: unassessed"},
-	} {
-		t.Run(string(tc.class), func(t *testing.T) {
-			r := mustBuild(t, Inputs{}, "")
-			r.Expanded = &Expansion{Versions: []string{"v1"}, Occurrences: []OccurrenceDetail{{
-				PinVersion: "v1", Class: PairClass(tc.class), Timing: PairTiming(TimingUnknown),
-				Actions: []ActionDetail{{Class: tc.class, Cause: "over-total", Reason: CodeUnassessed,
-					Timing: TimingUnknown, TimingReason: CodeUnassessed, Paths: []string{"outside.go"}}},
-			}}}
-			out := rendered(t, r)
-			assert.Contains(t, out, tc.want)
-			assert.Contains(t, out, "timing reason unassessed")
-			assert.Contains(t, out, "paths [outside.go]")
-		})
-	}
+	assert.Less(t, strings.Index(out, "  version new-version"), strings.Index(out, "  version old-version"))
+	assert.NotContains(t, out, "as-old")
+	assert.NotContains(t, out, "session-old")
 }
 
 func TestRenderTextSourcesAndSanitization(t *testing.T) {
 	cfg := &reviews.Config{Pin: []reviews.PinRule{{Rule: "safe\x1b\nrule", Note: "PRIVATE-pin-note"}}}
 	r := mustBuild(t, Inputs{Config: cfg, AuditError: "bad\x1b\naudit", CheckAuditError: "check\x00audit"}, "")
 	out := rendered(t, r)
-	for _, needle := range []string{
-		"capture evidence unavailable", "delivery audit: unreadable", "check audit: unreadable",
-		"archive: absent", ArchiveNotReadError, "safe", "badaudit", "prevented: 0",
-	} {
+	for _, needle := range []string{"delivery audit: unreadable", "check audit: unreadable", "safe", "badaudit", "prevented: 0"} {
 		assert.Contains(t, out, needle)
 	}
+
+	assert.NotContains(t, out, CaptureUnavailableMessage)
+	assert.NotContains(t, out, ArchiveNotReadError)
 
 	assert.NotContains(t, out, "\x1b")
 	assert.NotContains(t, out, "\x00")

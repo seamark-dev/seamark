@@ -75,7 +75,7 @@
 //   - pins_checks.go: the CHECK section of a pin and the verification
 //     view of V.
 //   - pins_checkdef.go: the check-definition form of M and its review.
-//   - pins_delivery.go: capture delivery pairing and expansion reads.
+//   - pins_delivery.go: lesson delivery pairing and expansion reads.
 //   - pins_delivery_view.go: the separate compact reading and expansion modals.
 //   - stats.go: Stats, the delivery statistics.
 //   - evidence.go: Evidence, the two sources and their actions.

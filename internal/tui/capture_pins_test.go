@@ -176,7 +176,7 @@ func pinsCaptureScenes() []captureScene {
 
 	return []captureScene{
 		{name: "70-pins-list", fake: pinsFake, drive: none},
-		{name: "71j-pins-delivery-section", fake: deliveryCaptureFake, drive: detail(1, 1, "Capture delivery")},
+		{name: "71j-pins-delivery-section", fake: deliveryCaptureFake, drive: detail(1, 1, "Lesson delivery")},
 		{name: "71k-pins-delivery-help", fake: deliveryCaptureFake, drive: keys("?")},
 		{name: "71l-pins-delivery-expansion", fake: deliveryCaptureFake, drive: keys("g")},
 		{name: "71o-pins-delivery-error", fake: deliveryErrorCaptureFake, drive: keys("g")},
