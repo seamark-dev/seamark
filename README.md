@@ -168,9 +168,14 @@ By default, this prints a YAML block. Paste it under `pin:` in
 [`distill.write`](docs/configuration.md#configuration) first.
 
 Inspect what applies to a file with `seamark lessons --file path/to/file`.
-Your configured hooks deliver matching reminders during supported edits.
+Your configured hooks deliver matching reminders during supported edits,
+after the agent has constructed the call. For earlier guidance, use
+`seamark lessons --prepare path/to/file` before building a change.
 `seamark report --open` opens a local report of proposals and accepted lessons;
 `seamark lessons --stats` shows which reminders have been delivered.
+The Unreleased `seamark lessons --delivery` reading keeps captured
+corrections separate from finding-based outcomes; it proves no prevention.
+See the [lesson guide](docs/lessons.md) for executable checks and limits.
 
 [Learning guide: review, tune, dismiss, and update lessons →](docs/lessons.md)
 
@@ -182,8 +187,10 @@ extraction for the proposals you select, delivery statistics, focused
 settings of `config.yaml` and `lessons.yaml` (threshold, budgets,
 repetition mode, and mutes), a selection sample that compares the
 lessons of explicit paths before and after a reviewed change, and doctor
-checks. Browsing never writes; every change, fetch, and agent run starts
-from a preview that names its exact effects. [Workspace console →](docs/tui.md)
+checks. Browsing never writes; pin, settings and decision changes,
+fetches and agent runs start from a preview of their effects. Explicit
+verification runs at once and records its audit, not a pin change.
+[Workspace console →](docs/tui.md)
 
 ## Agent skills
 

@@ -18,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/lessonreport"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/proposals"
@@ -90,6 +91,10 @@ type Reader interface {
 	Ledger() (*proposals.Ledger, error)
 	// Stats reads the lesson delivery statistics.
 	Stats() lessonstats.Snapshot
+	// Delivery builds the delivery/1 reading. It opens sources read-only,
+	// assembles nothing, and calls no model. Source failures are report
+	// data; only a pin reference that cannot select one identity fails.
+	Delivery(req lessonreport.Request) (lessonreport.Report, error)
 	// Sample runs the lesson selection of one surface for explicit
 	// paths under the two lessons.yaml texts of one review. It never
 	// emits, records, or leases delivery, and it never builds the index.

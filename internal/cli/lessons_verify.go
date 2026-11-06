@@ -32,16 +32,14 @@ var verifyConflicts = []string{
 }
 
 // verifyFlagError checks the flags that --verify adds before any
-// dispatch. --json applies to --verify and --prepare only, a second
-// --file value to --verify only, and --verify combines with no other
-// mode. With --hook, --verify takes no --file and no --json, because the
-// post-edit hook reads its paths from the event. The --json text is the
-// milestone P3 form of contracts §4.1: milestone P5 adds --delivery to
-// it (§4.2 subset rule).
-func verifyFlagError(cmd *cobra.Command, verify, prepare, asJSON bool, files int) error {
+// dispatch. JSON is available for verification, preparation and delivery;
+// repeated --file values belong to verification only. With --hook,
+// --verify takes no --file and no --json, because the post-edit hook
+// reads its paths from the event.
+func verifyFlagError(cmd *cobra.Command, verify, prepare, deliveryReport, asJSON bool, files int) error {
 	switch {
-	case asJSON && !verify && !prepare:
-		return errors.New("--json applies to --verify and --prepare only")
+	case asJSON && !verify && !prepare && !deliveryReport:
+		return errors.New("--json applies to --verify, --prepare, and --delivery only")
 	case files > 1 && !verify:
 		return errors.New("--file takes one path except with --verify")
 	case !verify:

@@ -723,6 +723,11 @@ func (p *pinsView) pinDetail(in *maintain.Inspection, r pinRow, w int) []string 
 	out = append(out, "")
 	out = append(out, p.readingLines(in, pin, w)...)
 
+	if delivery := p.deliveryLines(r, w); len(delivery) > 0 {
+		out = append(out, "")
+		out = append(out, delivery...)
+	}
+
 	if sim := p.similarLines(in, pin, w); len(sim) > 0 {
 		out = append(out, "")
 		out = append(out, sim...)

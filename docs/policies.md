@@ -132,6 +132,30 @@ printed even when the verdict blocks (a deny is exactly when they
 matter). `--json` stays verdict-shaped; `--enforce` makes blocking
 verdicts exit 2.
 
+### Executable lesson checks are a separate result (Unreleased)
+
+`seamark check --lessons` adds working-tree verification of executable
+pins after the existing policy check. MCP `check` opts in with
+`lesson_checks: true`. The policy uses its supplied diff; lesson checks
+read the current working tree against `HEAD`, including nonignored
+untracked changes. These inputs can differ. Plain `check` keeps its
+policy verdict and advisory guidance unchanged.
+
+The combined JSON uses `check-lessons/1`, with policy, lessons and
+combined results. A blocking policy or a lesson violation gives exit 2;
+without either, incomplete lesson evidence gives exit 1; otherwise exit 0.
+The advisory reminder is not a predicate result and never changes the
+policy verdict. See [executable lessons](lessons.md#executable-lessons-advisory-check-and-enforce)
+for the two supported predicates, omissions and standalone verification.
+
+A pin's `enforce` mode requests the separate pre-write guard. It is not
+policy enforcement and does not prove native denial. The ordinary edit
+hook still fails open. Its reminder arrives after the agent constructed
+the call; use preparation before construction rather than claiming the
+hook can reshape the pending arguments. Current native guard denial,
+timeout and reply evidence remain pending; v0.9.0 cannot ship without
+[reviewed native evidence and the required fixes](agent-integrations.md#release-checklist).
+
 What Guard can and cannot defend against is stated plainly in
 [Threat model](threat-model.md): it is a defense-in-depth
 policy layer, not a sandbox.

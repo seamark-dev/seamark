@@ -40,7 +40,7 @@ import (
 // only, never on the marks. M and V open the check-definition form and
 // the verification view of the lesson checks (pins_checkdef.go,
 // pins_checks.go). They show only in a repository that uses lesson
-// checks (pinsCheckShown). P5 keeps g, X and U for its own keys.
+// checks (pinsCheckShown). g opens lesson delivery when a reading exists.
 var pinKeys = struct {
 	Search, Compare, Retarget, Prune key.Binding
 	New, Edit, Remove                key.Binding
@@ -162,6 +162,8 @@ type pinsView struct {
 	checkDef *checkDefModal
 	// verify is the open verification view of V, or nil.
 	verify *pinVerify
+	// delivery is the open lesson-delivery expansion, or nil.
+	delivery *pinDelivery
 }
 
 // newPinsView builds the Pins sub-view over the shared state. The list
@@ -504,7 +506,7 @@ func pinMatch(n int, refAt func(int) pinfile.EntryRef, ref pinfile.EntryRef) (in
 // Lessons switch keys wait.
 func (p *pinsView) capturing() bool {
 	return p.author.open() || p.host.open() || p.editing != filterNone || p.compare != nil || p.checkDef != nil ||
-		p.verify != nil
+		p.verify != nil || p.delivery != nil
 }
 
 // modal returns the open pin review or discard question, the open
@@ -526,6 +528,10 @@ func (p *pinsView) modal(w, h int) (string, bool) {
 		return p.st.theme.Modal(v.content(ui.ModalBodyWidth(ui.ModalMinW, w)), &v.scroll, w, h), true
 	}
 
+	if v := p.delivery; v != nil {
+		return p.st.theme.Modal(v.content(ui.ModalBodyWidth(ui.ModalMinW, w)), v.modalScroll(), w, h), true
+	}
+
 	if p.compare != nil {
 		return p.compareModal(w, h), true
 	}
@@ -537,13 +543,18 @@ func (p *pinsView) modal(w, h int) (string, bool) {
 // preview, as maintHost asks. Then it handles the keys and the
 // refreshes of the sub-view.
 func (p *pinsView) update(msg tea.Msg) tea.Cmd {
+	delivered, done := p.deliveryRoute(msg)
+	if done {
+		return delivered
+	}
+
 	authored, done := p.authorRoute(msg)
 	if done {
 		return authored
 	}
 
 	cmd, done := p.host.route(msg)
-	cmd = tea.Batch(authored, cmd)
+	cmd = tea.Batch(delivered, authored, cmd)
 	p.markActed(p.host.takeActed())
 
 	if done {
@@ -627,6 +638,8 @@ func (p *pinsView) browseKey(msg tea.KeyMsg) tea.Cmd {
 		if p.inspection() != nil {
 			p.startEdit(filterText, p.text)
 		}
+	case key.Matches(msg, deliveryKeys.Open):
+		return p.openDelivery()
 	case key.Matches(msg, pinKeys.Compare):
 		return p.openCompare(rows)
 	case key.Matches(msg, pinKeys.New):
@@ -1195,6 +1208,10 @@ func (p *pinsView) focusRow(row pinRow, f pinFilter) tea.Cmd {
 // n/a group follows them: f is the route out of a history list. Lessons
 // adds its switch keys at the end.
 func (p *pinsView) keys() []key.Binding {
+	if p.delivery != nil {
+		return p.delivery.keys()
+	}
+
 	if p.author.open() {
 		return p.authorBindings()
 	}
@@ -1257,6 +1274,10 @@ func (p *pinsView) keys() []key.Binding {
 	// bytes.
 	if p.checkShown() {
 		on = append(on, pinKeys.Define, pinKeys.Verify)
+	}
+
+	if p.deliveryAvailable() {
+		on = append(on, deliveryKeys.Open)
 	}
 
 	// The label names what x clears, because the help lists x also when

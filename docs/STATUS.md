@@ -1,6 +1,7 @@
 # Production status
 
-This page describes **v0.8.0**, released on 2026-10-18.
+The current release is **v0.8.0**, released on 2026-10-18. This page
+also marks implemented but **Unreleased** capabilities explicitly.
 See [Distribution](#distribution) for installation and release details.
 
 The current state of Seamark — what each capability profile can
@@ -53,6 +54,33 @@ Review mining, fix mining, lessons, distillation, pins.
 | Once-per-context hook delivery (`hook_delivery` in `lessons.yaml`) | working; opt-in, digest-only local state, fails open; needs one `seamark init` re-run for the `PostCompact` hook |
 | Lessons benchmark (`make lessons-bench`, paired headless sessions, frozen claim registry) | working; accepted synthetic and pinned OpenTelemetry-Go cohorts; operator-run and spends provider tokens; protocol and evidence in [bench/README.md](../bench/README.md) |
 
+## Unreleased — lesson checks and lesson delivery
+
+v0.9.0 is the planned first release with lesson-check handlers. It has
+not shipped. The release is **blocked** on reviewed native-client
+verification, Codex Update projection and the remaining tested fixes in
+the [release checklist](agent-integrations.md#release-checklist).
+Fixture coverage does not close those prerequisites. Current behavior
+below remains distinct from required-before-release work.
+
+| Capability | Current state and native limits |
+| --- | --- |
+| Preparation (`lessons --prepare`, MCP `change_set`) | **Unreleased**; versioned guidance/check listing, no model call, no repeat-state change; receiver-unknown, not proof of before-construction delivery |
+| Claude `Read` exploration | **Unreleased**; opt-in setup, independent repeat state; native model-visible reply evidence pending; Codex structured Read unsupported |
+| Executable lesson configuration | **Unreleased**; advisory/check/enforce modes and two versioned predicates; mode/check and definition editors, validation and explicit working-tree verification implemented; arbitrary prose is not checkable |
+| Verification (`lessons --verify`, `check --lessons`, MCP `lesson_checks`) | **Unreleased**; shared bounded snapshot and result, CLI/TUI/MCP fixture coverage; default internal audit/lock exclusions already apply, but naming them in `not covered` remains a release fix |
+| Baseline, guard and post-edit hooks | **Unreleased**; Claude Edit/Write/MultiEdit and Codex apply_patch handlers, separate root/child paths; native denial, timeout and reply evidence pending; installed does not mean active or verified |
+| Codex Update projection | **Unreleased, incomplete**; content predicate gives unknown and an armed guard requests denial; verified before/after oracle and implementation required before release |
+| Setup and capability report | **Unreleased**; per-tool/stage/context paths, static binary checks, unknown-state warning/install and known-bad enforce refusal; setup never grants Codex trust; Claude duplicate-handler refusal and unreadable status/TUI summary fixes still required |
+| Delivery report (`lessons --delivery`, `delivery/1`) | **Unreleased**; read-only version-isolated classes, timing, windows, reasons and metadata inspection; own-hook timing stays same-call-only, pending lane identity keeps otherwise negative windows incomplete, current `prevented: 0` |
+| Separate compact readings | **Unreleased**; capture line beside finding-based outcome in proposals/stats/HTML/TUI; counts never merged; this added read does not make legacy command paths read-only |
+| TUI Pins checks and delivery | **Unreleased**; linked-pin mode/check editing, `M` definitions, `V` verification, `g` fresh installed reading; proposal-only history filters have no `g`; native evidence unchanged |
+
+Timeout candidates, consistent duplicate refusal, summary/exclusion
+output fixes and the benchmark script-timeout flake remain open in the
+same checklist. None is completed by documenting it. Doctor keeps
+all-client coverage and warnings.
+
 ## Guard — experimental
 
 Policies are experimental and awaiting refinement. Existing command and diff
@@ -102,6 +130,12 @@ future work; editor integrations remain experimental.
 
 ## Verification
 
+- Unreleased lesson checks and delivery: `make lesson-check` and
+  `make lesson-check-race` run offline with fake invokers; `make tui-test`
+  and `make tui-race` cover Pins/service integration. The release still
+  needs the [native timing and guard recordings](agent-integrations.md#release-checklist),
+  reviewed per client/tool/context. These test targets supply no native
+  compatibility or prevention evidence.
 - CI: full test suite + lint on every change, plus the end-to-end
   smoke of the built binary (generated agent configuration and the hook
   commands it wrote, in a fresh repository, without an agent CLI or a

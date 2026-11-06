@@ -22,6 +22,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/learning"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
+	"github.com/seamark-dev/seamark/internal/lessonreport"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/pinfile"
@@ -63,6 +64,10 @@ type fakeServices struct {
 	ledgerErr    error
 	stats        lessonstats.Snapshot
 	agentsOnPath []string
+
+	// delivery answers the delivery reading; nil keeps capture unavailable
+	// and lists no pins, so existing scenes need no delivery fixture.
+	delivery func(lessonreport.Request) (lessonreport.Report, error)
 
 	planSetup       func([]integration.ClientSetup) (*services.SetupPreview, error)
 	applySetup      func(*services.SetupPreview) (integration.SetupResult, error)
@@ -270,6 +275,16 @@ func (f *fakeServices) Learning() learning.Snapshot {
 	f.count("Learning")
 
 	return f.learning
+}
+
+func (f *fakeServices) Delivery(req lessonreport.Request) (lessonreport.Report, error) {
+	f.count("Delivery")
+
+	if f.delivery == nil {
+		return lessonreport.Build(lessonreport.Inputs{}, "")
+	}
+
+	return f.delivery(req)
 }
 
 func (f *fakeServices) Settings() (*settings.Snapshot, error) {

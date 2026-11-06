@@ -761,7 +761,7 @@ func TestPrintOutcomesOrdersActionableFirst(t *testing.T) {
 	}
 
 	var sb strings.Builder
-	PrintOutcomes(&sb, applied, readings)
+	PrintOutcomes(&sb, applied, readings, nil)
 	out := sb.String()
 
 	// The aggregate line adds up: measured = working + not landing + untested.
@@ -786,7 +786,7 @@ func TestPrintOutcomesOrdersActionableFirst(t *testing.T) {
 
 	// Nothing measured — nothing printed, not an empty header.
 	sb.Reset()
-	PrintOutcomes(&sb, applied, nil)
+	PrintOutcomes(&sb, applied, nil, nil)
 	assert.Zero(t, sb.Len())
 }
 

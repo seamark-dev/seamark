@@ -36,6 +36,11 @@
 // exception. A maintenance commit refuses a foreign root only with the
 // default database path, as in Phase 3.
 //
+// Delivery keeps the filesystem root at the workspace root, not at R. It
+// reads applied ledger rows when available, but a missing ledger does
+// not hide the audit or configuration sources. Source failures are
+// report data; an invalid or ambiguous pin selection returns an error.
+//
 // # Sample
 //
 // Sample runs the lesson selection of the edit hook or of change_set for
@@ -55,10 +60,12 @@
 // services imports the engines (workspace, index, store, distill,
 // learning, maintain, proposals, settings, lessonstats, integration,
 // doctor, status, scaffold, agent, reviews, gate, pinfile, report,
-// delivery and lessoncheck). report and delivery hold the selection and
-// the hook path rule of the sample. It never imports Bubble Tea, Lip
-// Gloss, Bubbles, internal/tui or internal/tui/ui. An adapter that knows
-// the screen would let a screen rule leak into an engine call.
+// delivery, lessonreport and lessoncheck). lessonreport builds the
+// delivery reading from read-only sources. report and delivery hold the
+// selection and the hook path rule of the sample. It never imports
+// Bubble Tea, Lip Gloss, Bubbles, internal/tui or internal/tui/ui. An
+// adapter that knows the screen would let a screen rule leak into an
+// engine call.
 // TestServicesStayBelowTheConsole checks this.
 //
 // # Writes

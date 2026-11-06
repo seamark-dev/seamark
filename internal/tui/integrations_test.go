@@ -360,7 +360,7 @@ func TestIntegrationsIntentBeforeFirstSnapshot(t *testing.T) {
 	s.open("client:codex")
 	assert.Equal(t, "codex", s.pendingClient)
 
-	h.send(h.m.st.load(secIntegrations)())
+	h.run(h.m.st.load(secIntegrations))
 	assert.Equal(t, 1, s.list.Cursor)
 	assert.Empty(t, s.pendingClient)
 }

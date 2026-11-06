@@ -177,6 +177,13 @@ func (p PinRule) AllRegions() []string {
 	return out
 }
 
+// AppliesTo reports whether the pin bears on scope. It exports the region
+// rule of the edit hook. So a report that explains a delivery decision
+// applies the same rule and never a copy of it.
+func (p PinRule) AppliesTo(scope string) bool {
+	return p.appliesTo(scope)
+}
+
 // appliesTo reports whether the pin bears on scope — any region
 // containing (or contained by) it; a repo-wide pin bears on everything.
 func (p PinRule) appliesTo(scope string) bool {

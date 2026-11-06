@@ -274,7 +274,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.startTick())
 
 	case refreshMsg:
-		return m, tea.Batch(m.st.load(msg.kinds...), m.startTick())
+		return m, tea.Batch(m.reload(msg.kinds...), m.startTick())
 
 	case navigateMsg:
 		cmd := m.goTo(msg.dest, msg.intent)
@@ -462,11 +462,20 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, gkeys.Settings):
 		return m.goTo(destSettings, "")
 	case key.Matches(msg, gkeys.Refresh):
-		return tea.Batch(m.st.load(allSections...), m.startTick(),
+		return tea.Batch(m.reload(allSections...), m.startTick(),
 			toast(ui.ToneNeutral, "Reading the current state from disk. Nothing is rebuilt or fetched."))
 	}
 
 	return scr.update(msg)
+}
+
+// reload invalidates an open delivery expansion before any replacement read
+// can finish. Other screens ignore the refresh notification.
+func (m *model) reload(kinds ...sectionKind) tea.Cmd {
+	load := m.st.load(kinds...)
+	invalidate := m.broadcast(refreshMsg{kinds: kinds})
+
+	return tea.Batch(load, invalidate)
 }
 
 // requestQuit quits at once when idle. While a mutation runs it asks
@@ -488,6 +497,8 @@ func (m *model) requestQuit() tea.Cmd {
 // question says, so no screen keeps a draft after the exit decision.
 func (m *model) exit() tea.Cmd {
 	m.discardDrafts()
+	m.st.gens[secDelivery].cancel()
+	_ = m.broadcast(deliveryDisposedMsg{})
 	m.quitting = true
 
 	return tea.Quit

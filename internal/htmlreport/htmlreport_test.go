@@ -1,6 +1,7 @@
 package htmlreport
 
 import (
+	"context"
 	"database/sql"
 	"encoding/xml"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/lessonreport"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
@@ -125,7 +127,7 @@ func renderPage(t *testing.T, st *store.Store, root string) string {
 	t.Helper()
 
 	var b strings.Builder
-	require.NoError(t, Generate(&b, st, root, clock))
+	require.NoError(t, Generate(context.Background(), &b, st, root, clock, lessonreport.Request{Root: root}))
 
 	return b.String()
 }
@@ -175,7 +177,7 @@ func TestReportEvidenceMixCountsEverySource(t *testing.T) {
 func TestHotFilesColourHotterThanCalmOnes(t *testing.T) {
 	st, root := seed(t)
 
-	r, err := Build(st, root, clock)
+	r, err := Build(context.Background(), st, root, clock, lessonreport.Request{Root: root})
 	require.NoError(t, err)
 
 	fills := map[string]string{}
@@ -204,7 +206,7 @@ func TestCellsBelowTheHistoryFloorStayCalm(t *testing.T) {
 			TS: 1700000500, Title: "fix: solo", Files: []string{"pkg/solo.py"}})
 	}))
 
-	r, err := Build(st, root, clock)
+	r, err := Build(context.Background(), st, root, clock, lessonreport.Request{Root: root})
 	require.NoError(t, err)
 
 	for _, c := range r.Cells {
@@ -225,7 +227,7 @@ func TestCellsBelowTheHistoryFloorStayCalm(t *testing.T) {
 func TestCellsScopeToWhereLessonsLive(t *testing.T) {
 	st, root := seed(t)
 
-	r, err := Build(st, root, clock)
+	r, err := Build(context.Background(), st, root, clock, lessonreport.Request{Root: root})
 	require.NoError(t, err)
 
 	for _, c := range r.Cells {
@@ -255,7 +257,7 @@ func TestAgedOutEvidenceIsNotReportedAsNoEvidence(t *testing.T) {
 	_, err := st.SetProposalStatus([]int64{old.ID}, model.ProposalApplied)
 	require.NoError(t, err)
 
-	r, err := Build(st, root, clock)
+	r, err := Build(context.Background(), st, root, clock, lessonreport.Request{Root: root})
 	require.NoError(t, err)
 
 	var card *Card
@@ -288,7 +290,7 @@ func TestPartlyAgedEvidenceSaysHowMuchSurvives(t *testing.T) {
 		Agent: "claude/v3", Status: model.ProposalProposed}
 	require.NoError(t, storetest.InsertProposal(st, &p))
 
-	r, err := Build(st, root, clock)
+	r, err := Build(context.Background(), st, root, clock, lessonreport.Request{Root: root})
 	require.NoError(t, err)
 
 	var b strings.Builder
@@ -325,7 +327,7 @@ func TestRowsCarryTheScopesTheyBelongTo(t *testing.T) {
 			Symptom: "inside the api tree", Occurrences: 3, LastTS: 10},
 	}, nil))
 
-	r, err := Build(st, root, clock)
+	r, err := Build(context.Background(), st, root, clock, lessonreport.Request{Root: root})
 	require.NoError(t, err)
 
 	scopes := map[string]string{}
@@ -370,7 +372,7 @@ func TestMapSaysHowMuchOfTheRepoItDraws(t *testing.T) {
 		return nil
 	}))
 
-	r, err := Build(st, root, clock)
+	r, err := Build(context.Background(), st, root, clock, lessonreport.Request{Root: root})
 	require.NoError(t, err)
 
 	assert.Equal(t, 40, r.FilesWithHistory, "every file with history is counted")
@@ -415,7 +417,7 @@ func TestMapFallsBackToHistoryWhenNothingWasParsed(t *testing.T) {
 		return nil
 	}))
 
-	r, err := Build(st, root, clock)
+	r, err := Build(context.Background(), st, root, clock, lessonreport.Request{Root: root})
 	require.NoError(t, err)
 	assert.NotEmpty(t, r.Cells, "history alone still draws a map")
 }
@@ -443,8 +445,8 @@ func TestOnlyTheTimestampChangesBetweenRuns(t *testing.T) {
 	later := clock.Add(97 * time.Minute)
 
 	var first, second strings.Builder
-	require.NoError(t, Generate(&first, st, root, clock))
-	require.NoError(t, Generate(&second, st, root, later))
+	require.NoError(t, Generate(context.Background(), &first, st, root, clock, lessonreport.Request{Root: root}))
+	require.NoError(t, Generate(context.Background(), &second, st, root, later, lessonreport.Request{Root: root}))
 
 	got := strings.ReplaceAll(second.String(),
 		later.Format("2006-01-02 15:04"), clock.Format("2006-01-02 15:04"))
@@ -660,7 +662,7 @@ func TestCardsCarryEvidenceHealth(t *testing.T) {
 	require.NoError(t, err)
 
 	var b strings.Builder
-	require.NoError(t, Generate(&b, st, root, time.Unix(1_700_000_000, 0)))
+	require.NoError(t, Generate(context.Background(), &b, st, root, time.Unix(1_700_000_000, 0), lessonreport.Request{Root: root}))
 
 	page := b.String()
 	assert.Contains(t, page, `class="badge weak"`, "the tier badge renders")
@@ -755,7 +757,7 @@ func TestReportKeepsTheOutcomeErrorText(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	_, err = Build(st, root, clock)
+	_, err = Build(context.Background(), st, root, clock, lessonreport.Request{Root: root})
 	require.Error(t, err)
 	assert.True(t, strings.HasPrefix(err.Error(),
 		"failed to count pre-exposure commits for {boundary-guard api [] Guard it.}: store: count commits touching [api]: "),

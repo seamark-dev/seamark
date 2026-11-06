@@ -2,12 +2,16 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"os/exec"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -58,4 +62,15 @@ func runMCP(t *testing.T, root string, requests ...string) string {
 	require.NoError(t, cmd.Execute(), "stderr: %s", errOut.String())
 
 	return out.String() + errOut.String()
+}
+
+// requireExitOne asserts a refusal that Execute maps to exit code 1,
+// never 2. Exit code 2 means a blocked gate or a lesson violation, and a
+// refusal is neither.
+func requireExitOne(t *testing.T, err error) {
+	t.Helper()
+
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, gate.ErrBlocked) || errors.Is(err, lessoncheck.ErrViolation),
+		"an association command never exits with 2")
 }

@@ -200,11 +200,9 @@ type PinRefError struct {
 	Entries []int
 }
 
-// Error returns the exact message of contract K2. The texts are frozen,
-// so they name the length 8 of MinPinRef literally. The missing message
-// is the milestone P1 form: the delivery report does not exist yet, so
-// the text names only `seamark lessons --verify` (contracts §4.2 subset
-// rule).
+// Error describes a selection failure and names the command that lists
+// the current references. This build keeps no history of removed pins,
+// so no command lists a historical reference.
 func (e *PinRefError) Error() string {
 	switch e.Kind {
 	case PinRefMalformed:
