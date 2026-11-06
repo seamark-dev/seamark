@@ -18,3 +18,12 @@ const (
 	claudeEventSessionStart  = "SessionStart"
 	claudeEventSessionEnd    = "SessionEnd"
 )
+
+// The Claude Code tools whose post-tool event gives more than an
+// attempt and a result.
+const (
+	claudeToolBash        = "Bash"
+	claudeToolAgent       = "Agent"
+	claudeToolSendMessage = "SendMessage"
+	claudeToolHandback    = "SubagentHandback"
+)
