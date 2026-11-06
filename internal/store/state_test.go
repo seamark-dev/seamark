@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -276,4 +278,105 @@ func TestImportRejectsBadBundles(t *testing.T) {
 	proposals, err := s.Proposals(model.ProposalApplied)
 	require.NoError(t, err)
 	assert.Empty(t, proposals)
+}
+
+func TestStateV2ImportsAsFindings(t *testing.T) {
+	// The wire forms of versions 1 and 2 carry no source and no
+	// provenance. Every row of such a bundle came from review findings.
+	for _, version := range []int{1, 2} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			wire := fmt.Sprintf(`{"seamark_state_version":%d,"proposals":[`+
+				`{"signature":"sig-1","rule":"r","note":"n","members":[1,2],"status":"applied","created_at":1}]}`,
+				version)
+
+			var bundle State
+			require.NoError(t, json.Unmarshal([]byte(wire), &bundle))
+
+			s := openTestStore(t)
+
+			stats, err := s.ImportState(&bundle)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.ProposalsAdded)
+
+			got, err := s.Proposals(model.ProposalApplied)
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Equal(t, model.ProposalSourceFindings, got[0].Source)
+			assert.Empty(t, got[0].Provenance)
+		})
+	}
+}
+
+func TestStateV3RoundTripsSourceAndProvenance(t *testing.T) {
+	src := openTestStore(t)
+	seedDecisions(t, src)
+
+	state, err := src.ExportState()
+	require.NoError(t, err)
+	assert.Equal(t, 3, state.Version)
+	require.Len(t, state.Proposals, 1)
+	assert.Equal(t, model.ProposalSourceFindings, state.Proposals[0].Source)
+	assert.Empty(t, state.Proposals[0].Provenance)
+
+	wire, err := json.Marshal(state)
+	require.NoError(t, err)
+	assert.Contains(t, string(wire), `"source":"findings"`)
+	assert.NotContains(t, string(wire), `"provenance"`, "a findings row writes no provenance key")
+
+	var back State
+	require.NoError(t, json.Unmarshal(wire, &back))
+
+	dst := openTestStore(t)
+
+	stats, err := dst.ImportState(&back)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.ProposalsAdded)
+
+	want, err := src.Proposals(model.ProposalDismissed)
+	require.NoError(t, err)
+
+	got, err := dst.Proposals(model.ProposalDismissed)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Len(t, want, 1)
+
+	want[0].ID = got[0].ID
+	assert.Equal(t, want, got, "a new row takes the imported source and provenance")
+
+	t.Run("an adopted decision keeps the local provenance", func(t *testing.T) {
+		local := openTestStore(t)
+
+		pending := model.Proposal{
+			Signature: "sig-1", Rule: "no-naked-returns", Note: "n",
+			Status: model.ProposalProposed, Provenance: `{"kind":"local"}`,
+		}
+		require.NoError(t, local.InsertProposal(&pending))
+
+		stats, err := local.ImportState(&back)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.ProposalsUpdated)
+
+		got := allProposals(t, local)
+		require.Len(t, got, 1)
+		assert.Equal(t, model.ProposalDismissed, got[0].Status, "the decision is adopted")
+		assert.Equal(t, model.ProposalSourceFindings, got[0].Source)
+		assert.Equal(t, pending.Provenance, got[0].Provenance, "the decision does not change the evidence")
+	})
+
+	t.Run("an unknown source refuses the whole bundle", func(t *testing.T) {
+		local := openTestStore(t)
+
+		bad := back
+		bad.Proposals = append([]ProposalState(nil), back.Proposals...)
+		bad.Proposals[0].Source = "chat"
+
+		_, err := local.ImportState(&bad)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `source="chat"`)
+		assert.Empty(t, allProposals(t, local))
+
+		marks, err := local.DistilledSignatures()
+		require.NoError(t, err)
+		assert.Empty(t, marks, "the distillation mark of the bundle is not written either")
+	})
 }

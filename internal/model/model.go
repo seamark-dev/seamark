@@ -255,6 +255,14 @@ type Proposal struct {
 	Agent                string  // provenance: adapter name + prompt version
 	Status               string  // proposed | applied | dismissed
 	CreatedAt            int64
+	// Source names the evidence kind of the row. ProposalSourceFindings
+	// marks review findings, the only source that this build creates. A
+	// row without a source reads as findings.
+	Source string
+	// Provenance is the provenance document (JSON) of the source, empty
+	// for a findings row. The ledger stores it and a state bundle carries
+	// it, but no code of this build reads its content.
+	Provenance string
 }
 
 // RegionSet returns the effective region set: Regions when present,

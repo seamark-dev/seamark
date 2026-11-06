@@ -985,3 +985,16 @@ func TestFindingsByIDsSpansChunks(t *testing.T) {
 	assert.Len(t, got, 1203)
 	assert.Equal(t, "b", got[1203].Body)
 }
+
+// TestInsertProposalRefusesAnUnknownSource proves that the one insert path
+// keeps the source in the closed set, because the finding cleanup filters on it.
+func TestInsertProposalRefusesAnUnknownSource(t *testing.T) {
+	s := openTestStore(t)
+
+	err := s.InsertProposal(&model.Proposal{
+		Signature: "s", Rule: "r", Note: "n", Status: model.ProposalProposed, Source: "chat",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown source "chat"`)
+	assert.Empty(t, allProposals(t, s))
+}

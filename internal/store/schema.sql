@@ -198,6 +198,13 @@ CREATE TABLE IF NOT EXISTS proposal (
     members    TEXT NOT NULL,             -- JSON array of cited finding ids
     agent      TEXT NOT NULL DEFAULT '',  -- provenance: adapter + prompt version
     status     TEXT NOT NULL DEFAULT 'proposed',
-    created_at INTEGER NOT NULL DEFAULT 0
+    created_at INTEGER NOT NULL DEFAULT 0,
+    -- The evidence kind: 'findings' for review findings, the only source
+    -- that this build creates. The finding cleanup deletes findings rows
+    -- only. (Migration-added on existing databases.)
+    source     TEXT NOT NULL DEFAULT 'findings',
+    -- The provenance document (JSON) of the source, '' for a findings
+    -- row. (Migration-added on existing databases.)
+    provenance TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS proposal_status ON proposal (status);

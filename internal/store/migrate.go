@@ -9,7 +9,7 @@ import (
 // schemaVersion is the schema this binary understands and writes. Bump it
 // together with a new migrations entry — never alone: a version without a
 // migration would leave every existing database behind.
-const schemaVersion = 6
+const schemaVersion = 7
 
 // migration is one ordered upgrade step: run brings a database from any
 // version below `to` up to `to`.
@@ -33,6 +33,7 @@ var migrations = []migration{
 	{to: 4, run: addProposalTriggerPaths},
 	{to: 5, run: addProposalTriggerChecked},
 	{to: 6, run: addProposalTriggerPromptVersion},
+	{to: 7, run: addProposalSourceAndProvenance},
 }
 
 // addFindingSource (v1 → v2): finding.source arrived with fix mining —
@@ -123,6 +124,31 @@ func addProposalTriggerPromptVersion(tx *sql.Tx) error {
 	}
 
 	return err
+}
+
+// addProposalSourceAndProvenance (v6 → v7) adds the source and the
+// provenance of a proposal row. Every existing row came from review
+// findings, so the default 'findings' keeps its meaning. The empty
+// provenance default means "no provenance". One step adds both columns,
+// so each database at version 7 has the same proposal table.
+func addProposalSourceAndProvenance(tx *sql.Tx) error {
+	for _, col := range []struct{ name, ddl string }{
+		{"source", `ALTER TABLE proposal ADD COLUMN source TEXT NOT NULL DEFAULT 'findings'`},
+		{"provenance", `ALTER TABLE proposal ADD COLUMN provenance TEXT NOT NULL DEFAULT ''`},
+	} {
+		has, err := hasColumn(tx, "proposal", col.name)
+		if err != nil {
+			return err
+		}
+
+		if !has {
+			if _, err := tx.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 // refuseNewer rejects a database stamped by a newer seamark BEFORE any
