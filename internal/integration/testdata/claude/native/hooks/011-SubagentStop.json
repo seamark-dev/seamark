@@ -1,0 +1,26 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000001",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000001.jsonl",
+  "cwd": "/workspace/native/sub",
+  "prompt_id": "20000000-0000-4000-8000-000000000001",
+  "permission_mode": "default",
+  "agent_id": "a0000000000000001",
+  "agent_type": "probe",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000001.jsonl",
+  "last_assistant_message": "/workspace/native/sub",
+  "background_tasks": [
+    {
+      "id": "a0000000000000001",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run pwd via probe agent",
+      "agent_type": "probe"
+    }
+  ],
+  "session_crons": []
+}

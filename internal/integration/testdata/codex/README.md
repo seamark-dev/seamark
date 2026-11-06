@@ -72,6 +72,11 @@ Files:
   the codec uses the exit protocol. No native run has observed the
   generated gate hook block a command yet.
 - `post_compact.json`, `session_start_compact.json`: reset lifecycle.
+- `post_tool_use.json`: **synthetic**. An `apply_patch` result whose
+  `tool_response` is the exec header text with exit code 0.
+- `post_tool_use_nonzero_exit.json`: **synthetic**. A `Bash` result whose
+  `tool_response` is an object with `exit_code: 1`. It pins a decoder
+  rule; the 0.157.1 source sends no such object for a shell command.
 - `subagent_start.json`: shows the separate `agent_id`; not consumed by
   Seamark today. Natively, the same `agent_id` appears in the subagent's
   edit events and in `SubagentStop`.

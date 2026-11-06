@@ -1,0 +1,27 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000001",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000001.jsonl",
+  "cwd": "/workspace/native/sub",
+  "prompt_id": "20000000-0000-4000-8000-000000000001",
+  "permission_mode": "default",
+  "agent_id": "a0000000000000001",
+  "agent_type": "probe",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "pwd",
+    "description": "Print current working directory"
+  },
+  "tool_response": {
+    "stdout": "/workspace/native/sub",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_01NativeToolUse000000006",
+  "duration_ms": 36
+}

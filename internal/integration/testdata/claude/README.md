@@ -6,7 +6,9 @@ Seamark's existing Claude hook already reads (`session_id`, `tool_name`,
 `tool_input.file_path`, `tool_use_id`). Local CLI at capture time:
 Claude Code 2.1.270. Values are **synthetic**: paths, session ids, and
 transcript paths are placeholders. No fixture is a raw capture from a
-live session.
+live session. The `native/` directory is the one exception: it holds
+sanitized native payloads of Claude Code 2.1.300, and its README names
+their provenance.
 
 Files:
 
