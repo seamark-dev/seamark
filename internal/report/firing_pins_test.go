@@ -294,7 +294,7 @@ func TestCheckAdvisoryWritesAV2RecordAndKeepsItsText(t *testing.T) {
 		assert.Empty(t, rec.TurnSHA)
 		assert.Empty(t, rec.Lane)
 		assert.Nil(t, rec.ContextResettable)
-		assert.False(t, rec.CaptureOptIn)
+		assert.False(t, rec.RecordEvaluations)
 		assert.Empty(t, rec.ScopeSHA, "scope_sha256 belongs to change_set and prepare")
 		assert.Zero(t, rec.RejectedPaths)
 	})

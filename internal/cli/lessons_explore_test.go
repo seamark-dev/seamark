@@ -228,7 +228,7 @@ func TestLessonsExploreHookIgnoresShellAndOtherTools(t *testing.T) {
 	assert.Equal(t, reviews.ExploreSurface, firings[0].Surface)
 	assert.Equal(t, "Read", firings[0].Tool)
 	assert.Equal(t, "a.go", firings[0].File)
-	assert.True(t, firings[0].CaptureOptIn)
+	assert.True(t, firings[0].RecordEvaluations)
 }
 
 // TestLessonsExploreHookFailsOpen proves the L2 error rules: every

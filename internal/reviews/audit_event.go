@@ -147,7 +147,7 @@ type AuditEvent struct {
 	Emission, Evaluation, GuidanceSHA, GuidanceStatus, ScopeSHA string
 	PathsComplete                                               bool
 	RejectedPaths                                               int
-	CaptureOptIn                                                bool
+	RecordEvaluations                                           bool
 	Generation, ExploreGeneration                               uint64
 	Read                                                        *bool
 	// EventID is empty for a new random ID. A given ID must be 32
@@ -294,7 +294,7 @@ func eventFiring(ev AuditEvent, er EventRecord) Firing {
 		Lane:              ev.Lane,
 		ContextResettable: ev.Resettable,
 		ExploreGeneration: ev.ExploreGeneration,
-		CaptureOptIn:      ev.CaptureOptIn,
+		RecordEvaluations: ev.RecordEvaluations,
 		Read:              ev.Read,
 		ScopeSHA:          ev.ScopeSHA,
 	}

@@ -771,7 +771,7 @@ func inspectRoot(root string) string {
 // (contract L3, surfaces change_set and prepare). Record appends it
 // later. It is nil when no event ID is available. The receiver is
 // unknown, so the record carries no session, match, context, turn,
-// lane, or opt-in key.
+// lane, or record_evaluations key.
 func preparationRecord(req PrepareRequest, at time.Time, files []string, rejected int, cfg *reviews.Config,
 	sel report.Selection, digest, status, scope string,
 ) *reviews.AuditEvent {

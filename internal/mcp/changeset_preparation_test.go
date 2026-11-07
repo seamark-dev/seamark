@@ -949,7 +949,7 @@ func TestChangeSetPreparationRecordsOneEventPerCall(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(line), &keys))
 
 		for _, key := range []string{"delivery", "session_sha256", "match_sha256", "context_sha256",
-			"turn_sha256", "lane", "context_resettable", "capture_opt_in", "context_generation"} {
+			"turn_sha256", "lane", "context_resettable", "record_evaluations", "context_generation"} {
 			assert.NotContains(t, keys, key)
 		}
 	}

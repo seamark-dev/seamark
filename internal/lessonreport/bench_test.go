@@ -208,7 +208,7 @@ func (b *benchFixture) addPins() {
 // addEvent appends one event of the log. A draw from 0 to 99 selects the
 // kind, so the shares of the kinds are the widths of the cases. second
 // allows an event of two records. The recording switch is on, so each
-// writer of a receiver record stamps capture_opt_in. The hook writes an
+// writer of a receiver record stamps record_evaluations. The hook writes an
 // evaluation record and a reset record only under the switch.
 func (b *benchFixture) addEvent(name string, position int, second bool) {
 	draw := b.rng.IntN(100)
@@ -342,7 +342,7 @@ func (b *benchFixture) event(spec benchEvent) {
 	rec.EventID = fmt.Sprintf("event-%d", b.events)
 	rec.EventSeq, rec.EventRecords = 1, 1
 	rec.TS = benchTime
-	rec.CaptureOptIn = true
+	rec.RecordEvaluations = true
 	rec.TurnSHA = reviews.TurnDigest(benchRoot, benchClient, native, spec.turn)
 	rec.Pins = spec.pins
 	rec.Generation = spec.generation
@@ -377,7 +377,7 @@ func (b *benchFixture) reset(session, agent string) {
 	b.records = append(b.records, reviews.Firing{
 		SchemaVersion: reviews.AuditSchemaVersion, EventID: fmt.Sprintf("event-%d", b.events), EventSeq: 1, EventRecords: 1,
 		Delivery: reviews.DeliveryReset, Client: benchClient, SessionSHA: reviews.SessionDigest(benchRoot, native),
-		ContextSHA: reviews.ContextDigest(benchRoot, benchClient, rc.ID), CaptureOptIn: true, Fired: []reviews.FiredLesson{},
+		ContextSHA: reviews.ContextDigest(benchRoot, benchClient, rc.ID), RecordEvaluations: true, Fired: []reviews.FiredLesson{},
 	})
 }
 
@@ -532,7 +532,7 @@ func TestBenchFixture(t *testing.T) {
 				f := line.Firing
 				stamped := f.SchemaVersion > 0 && f.Surface != surfaceChangeSet && f.Surface != surfacePrepare
 
-				require.Equal(t, stamped, f.CaptureOptIn, "%s line %d: the recording switch covers every record", shape.name, line.Line)
+				require.Equal(t, stamped, f.RecordEvaluations, "%s line %d: the recording switch covers every record", shape.name, line.Line)
 			}
 		}
 	})

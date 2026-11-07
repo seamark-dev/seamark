@@ -142,7 +142,7 @@ func TestLessonsHookWritesAuditV2(t *testing.T) {
 	assert.Equal(t, integration.LaneRoot, rec.Lane)
 	require.NotNil(t, rec.ContextResettable)
 	assert.True(t, *rec.ContextResettable)
-	assert.False(t, rec.CaptureOptIn)
+	assert.False(t, rec.RecordEvaluations)
 	require.Len(t, rec.Pins, 1)
 	assert.Equal(t, reviews.PinInjected, rec.Pins[0].Delivery)
 	assert.Equal(t, cfg.PinVersion(cfg.Pin[0]), rec.Pins[0].Version)
@@ -162,10 +162,10 @@ func TestLessonsHookWritesAuditV2(t *testing.T) {
 	assert.Equal(t, reviews.DeliveryEvaluation, evaluation.Delivery)
 	assert.Equal(t, "nowhere.go", evaluation.File)
 	assert.Equal(t, "not-needed", evaluation.Emission)
-	assert.True(t, evaluation.CaptureOptIn)
+	assert.True(t, evaluation.RecordEvaluations)
 	assert.Equal(t, reviews.MatchDigest(idRoot, "session-1", "toolu-3"), evaluation.MatchSHA)
 	assert.Equal(t, reviews.DeliveryInjected, injected.Delivery)
-	assert.True(t, injected.CaptureOptIn)
+	assert.True(t, injected.RecordEvaluations)
 
 	// An invalid lessons.yaml: the defaults still advise, and the record
 	// names the guidance invalid without a digest.
@@ -368,7 +368,7 @@ func TestLessonsHookResetJoinsEditRecords(t *testing.T) {
 
 	edit, rec := firings[0], firings[1]
 	assert.Equal(t, reviews.DeliveryReset, rec.Delivery)
-	assert.True(t, rec.CaptureOptIn)
+	assert.True(t, rec.RecordEvaluations)
 
 	assert.Equal(t, reviews.SessionDigest(link, "session-1"), edit.SessionSHA, "the edit hashes over the meta root")
 	assert.Equal(t, edit.SessionSHA, rec.SessionSHA, "the reset joins the edit by session")

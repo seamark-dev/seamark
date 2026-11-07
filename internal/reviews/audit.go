@@ -114,7 +114,7 @@ type Firing struct {
 	Lane              string      `json:"lane,omitempty"`
 	ContextResettable *bool       `json:"context_resettable,omitempty"`
 	ExploreGeneration uint64      `json:"explore_generation,omitempty"`
-	CaptureOptIn      bool        `json:"capture_opt_in,omitempty"`
+	RecordEvaluations bool        `json:"record_evaluations,omitempty"`
 	Read              *bool       `json:"read,omitempty"`
 	ScopeSHA          string      `json:"scope_sha256,omitempty"`
 	Pins              []FiringPin `json:"pins,omitempty"`

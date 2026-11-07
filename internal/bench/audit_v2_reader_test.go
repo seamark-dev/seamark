@@ -106,7 +106,7 @@ func TestMatchingTreatmentFiringsReadsAuditV2(t *testing.T) {
 
 	for _, f := range firings {
 		require.Equal(t, reviews.AuditSchemaVersion, f.SchemaVersion, "every record is v2")
-		require.False(t, f.CaptureOptIn, "a trial runs with the recording switch off")
+		require.False(t, f.RecordEvaluations, "a trial runs with the recording switch off")
 	}
 
 	intensity, err := matchingTreatmentFirings(dir, pin)
@@ -182,7 +182,7 @@ func writersFeedTheReader(t *testing.T) {
 
 	for _, f := range firings {
 		require.Equal(t, reviews.AuditSchemaVersion, f.SchemaVersion)
-		require.False(t, f.CaptureOptIn)
+		require.False(t, f.RecordEvaluations)
 		require.NotEqual(t, reviews.DeliveryEvaluation, f.Delivery)
 		require.NotEqual(t, reviews.DeliveryReset, f.Delivery)
 

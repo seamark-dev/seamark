@@ -48,13 +48,13 @@ func countsV2Events(root string, now time.Time, withNewKinds bool) []reviews.Aud
 	evaluation.MatchID = "tool-use-3"
 	evaluation.Records = []reviews.EventRecord{{Status: reviews.DeliveryEvaluation}}
 	evaluation.Emission = "not-needed"
-	evaluation.CaptureOptIn = true
+	evaluation.RecordEvaluations = true
 
 	reset := reviews.AuditEvent{
 		Root: root, ClientID: "claude", SessionID: "session-1", ReceiverID: "session-1",
 		Lane: "root", Resettable: &resettable,
 		Records:    []reviews.EventRecord{{Status: reviews.DeliveryReset}},
-		Generation: 2, ExploreGeneration: 2, CaptureOptIn: true, Now: now,
+		Generation: 2, ExploreGeneration: 2, RecordEvaluations: true, Now: now,
 	}
 
 	return []reviews.AuditEvent{edit, evaluation, reset, explore, check}

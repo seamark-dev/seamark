@@ -346,7 +346,7 @@ func (e exploreEvent) record(records []reviews.EventRecord, pins []reviews.Firin
 		GuidanceStatus:    status,
 		PathsComplete:     e.rejected == 0,
 		RejectedPaths:     e.rejected,
-		CaptureOptIn:      req.RecordEvaluations,
+		RecordEvaluations: req.RecordEvaluations,
 		ExploreGeneration: e.out.Generation,
 		Read:              &read,
 	}

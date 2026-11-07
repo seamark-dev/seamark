@@ -307,7 +307,7 @@ func legacyAuditEvents(root string) []AuditEvent {
 			}},
 			Pins:     []FiringPin{strictPin},
 			Emission: "emitted", Evaluation: "complete", PathsComplete: true,
-			GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", CaptureOptIn: true, Generation: 1,
+			GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", RecordEvaluations: true, Generation: 1,
 		},
 		{
 			Root: root, Tool: "Edit", Files: []string{"internal/parse/strict.go"},
@@ -434,7 +434,7 @@ func twoRecordEvent(root string) AuditEvent {
 			v2Pin("frozen-assets", "generated", PinSuppressedRepeat, ""),
 		},
 		Emission: "emitted", Evaluation: "complete", PathsComplete: true,
-		GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", CaptureOptIn: true, Generation: 1,
+		GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", RecordEvaluations: true, Generation: 1,
 		EventID: v2EventID, Now: v2EventTime,
 	}
 }
@@ -463,7 +463,7 @@ func TestRecordEventWritesOneEventInOneAppend(t *testing.T) {
 		v2Keys := `"schema_version":2,"event_id":"` + v2EventID + `",`
 		shared := `"emission":"emitted","evaluation":"complete","paths_complete":true,` +
 			`"guidance_sha256":"` + legacyGuidanceSHA + `","guidance_status":"ok",` +
-			`"turn_sha256":"{turn}","lane":"root","context_resettable":true,"capture_opt_in":true`
+			`"turn_sha256":"{turn}","lane":"root","context_resettable":true,"record_evaluations":true`
 
 		want := []string{
 			`{"ts":"2026-10-21T10:20:11Z","file":"internal/parse/strict.go","tool":"Edit","fired":[` +
@@ -725,7 +725,7 @@ func TestRecordEventStoresNoRawIdentity(t *testing.T) {
 			Root: root, ClientID: "claude", SessionID: rawSessionID, Turn: rawTurnID,
 			ReceiverID: rawReceiverID, Lane: "child", Resettable: &resettable,
 			Records:    []EventRecord{{Status: DeliveryReset}},
-			Generation: 2, ExploreGeneration: 2, CaptureOptIn: true,
+			Generation: 2, ExploreGeneration: 2, RecordEvaluations: true,
 		},
 		{ // exploration
 			Root: root, Surface: "explore", Tool: "Read", Files: []string{"internal/parse/strict.go"},
@@ -811,13 +811,13 @@ func v2ReaderEvents(root string) []AuditEvent {
 			Records:  []EventRecord{{Status: DeliveryEvaluation, Lessons: []model.Lesson{legacyLessonStrict}}},
 			Pins:     []FiringPin{v2Pin("keep-parser-strict", "internal/parse", PinEmitFailed, "")},
 			Emission: "failed", Evaluation: "complete", PathsComplete: true,
-			GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", CaptureOptIn: true, Generation: 1,
+			GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", RecordEvaluations: true, Generation: 1,
 		},
 		AuditEvent{
 			Root: root, ClientID: "claude", SessionID: legacySessionID, Turn: legacyTurnID,
 			ReceiverID: legacyReceiverID, Lane: "root", Resettable: &resettable,
 			Records:    []EventRecord{{Status: DeliveryReset}},
-			Generation: 2, ExploreGeneration: 2, CaptureOptIn: true,
+			Generation: 2, ExploreGeneration: 2, RecordEvaluations: true,
 		},
 	)
 
@@ -843,7 +843,7 @@ func exploreEvent(root string) AuditEvent {
 		}},
 		Pins:     []FiringPin{v2Pin("keep-parser-strict", "internal/parse", PinInjected, "")},
 		Emission: "emitted", Evaluation: "complete", PathsComplete: true,
-		GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", CaptureOptIn: true, ExploreGeneration: 1,
+		GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", RecordEvaluations: true, ExploreGeneration: 1,
 		Now: v2EventTime,
 	}
 }

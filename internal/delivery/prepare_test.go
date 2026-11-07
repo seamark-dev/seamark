@@ -847,7 +847,7 @@ func TestPrepareRecordsAReturnedEventWithoutReceiverIdentity(t *testing.T) {
 	t.Run("the record has no receiver identity", func(t *testing.T) {
 		for _, key := range []string{
 			"session_sha256", "match_sha256", "context_sha256", "turn_sha256", "lane", "client", "mechanism",
-			"context_resettable", "capture_opt_in", "context_generation", "explore_generation", "read",
+			"context_resettable", "record_evaluations", "context_generation", "explore_generation", "read",
 			"context_bytes", "tool", "delivery",
 		} {
 			assert.NotContains(t, line, key)

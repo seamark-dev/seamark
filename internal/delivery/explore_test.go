@@ -178,7 +178,7 @@ func TestExploreEmitsToTheActualReceiver(t *testing.T) {
 	assert.True(t, *rec.PathsComplete)
 	assert.Equal(t, cfg.GuidanceDigest(), rec.GuidanceSHA)
 	assert.Equal(t, "ok", rec.GuidanceStatus)
-	assert.False(t, rec.CaptureOptIn)
+	assert.False(t, rec.RecordEvaluations)
 	assert.Equal(t, reviews.AuditSchemaVersion, rec.SchemaVersion)
 	assert.Equal(t, eventOne, rec.EventID)
 	assert.Equal(t, 1, rec.EventSeq)
@@ -492,14 +492,14 @@ func TestExploreRecordsEvaluationsOnlyUnderTheRecordingSwitch(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, optIn := range []bool{false, true} {
+			for _, recording := range []bool{false, true} {
 				root := workspace(t)
 				st := lessonStore(t, root)
 				cfg := writeConfig(t, root, apiPin)
 				s := tc.setup(t, root, st, cfg)
 
 				req := exploreRequest(root, cfg, s.event)
-				req.RecordEvaluations = optIn
+				req.RecordEvaluations = recording
 
 				out, err := Explore(context.Background(), s.st, req, s.emit)
 				if tc.wantErr {
@@ -511,7 +511,7 @@ func TestExploreRecordsEvaluationsOnlyUnderTheRecordingSwitch(t *testing.T) {
 				assert.NotEqual(t, StatusEmitted, out.Status)
 
 				records := firings(t, root)
-				if !optIn {
+				if !recording {
 					assert.Empty(t, records, "with the recording switch off, nothing emitted means no record")
 					continue
 				}
@@ -528,7 +528,7 @@ func TestExploreRecordsEvaluationsOnlyUnderTheRecordingSwitch(t *testing.T) {
 				require.NotNil(t, rec.PathsComplete)
 				assert.Equal(t, tc.complete, *rec.PathsComplete)
 				assert.Equal(t, tc.rejected, rec.RejectedPaths)
-				assert.True(t, rec.CaptureOptIn)
+				assert.True(t, rec.RecordEvaluations)
 				require.NotNil(t, rec.Read)
 				assert.True(t, *rec.Read)
 				assert.Equal(t, exploreMechanism, rec.Mechanism)
@@ -560,14 +560,14 @@ func TestExploreRecordsEvaluationsOnlyUnderTheRecordingSwitch(t *testing.T) {
 		assert.Len(t, advice, 1, "the advice stays eligible")
 	})
 
-	t.Run("an injection is recorded with or without opt-in", func(t *testing.T) {
-		for _, optIn := range []bool{false, true} {
+	t.Run("an injection is recorded with the recording switch on or off", func(t *testing.T) {
+		for _, recording := range []bool{false, true} {
 			root := workspace(t)
 			st := lessonStore(t, root)
 			cfg := writeConfig(t, root, apiPin)
 
 			req := exploreRequest(root, cfg, readEvent(root, "s", "", "m", "api/handler.go", true))
-			req.RecordEvaluations = optIn
+			req.RecordEvaluations = recording
 
 			_, advice := explore(t, st, req)
 			require.Len(t, advice, 1)
@@ -575,7 +575,7 @@ func TestExploreRecordsEvaluationsOnlyUnderTheRecordingSwitch(t *testing.T) {
 			records := firings(t, root)
 			require.Len(t, records, 1)
 			assert.Equal(t, reviews.DeliveryInjected, records[0].Delivery)
-			assert.Equal(t, optIn, records[0].CaptureOptIn)
+			assert.Equal(t, recording, records[0].RecordEvaluations)
 		}
 	})
 

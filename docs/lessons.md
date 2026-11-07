@@ -1012,7 +1012,7 @@ hook emitted nothing (no match, a rejected path, a failed selection or reply,
 or, for a read, only lessons that the context already got), and a `reset`
 record when `PostCompact` resets a receiving context. Without the switch,
 the hooks write the same record kinds as before, with the new keys.
-Records written with the switch on say so (`capture_opt_in`), because a
+Records written with the switch on say so (`record_evaluations`), because a
 missing `reset` record shows that no compaction happened only between two
 such records. Raw session, agent, tool-use, and turn identifiers are never
 stored.

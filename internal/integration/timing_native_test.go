@@ -84,17 +84,17 @@ func (e timingEvent) tool() string { return nativeString(e.raw, "tool_name") }
 // timingAudit is the part of one audit record that the replay reads.
 // The tags are the stable field names of the audit log.
 type timingAudit struct {
-	Surface      string `json:"surface"`
-	Delivery     string `json:"delivery"`
-	SessionSHA   string `json:"session_sha256"`
-	MatchSHA     string `json:"match_sha256"`
-	ContextSHA   string `json:"context_sha256"`
-	TurnSHA      string `json:"turn_sha256"`
-	Lane         string `json:"lane"`
-	Resettable   *bool  `json:"context_resettable"`
-	CaptureOptIn bool   `json:"capture_opt_in"`
-	Read         *bool  `json:"read"`
-	Schema       int    `json:"schema_version"`
+	Surface           string `json:"surface"`
+	Delivery          string `json:"delivery"`
+	SessionSHA        string `json:"session_sha256"`
+	MatchSHA          string `json:"match_sha256"`
+	ContextSHA        string `json:"context_sha256"`
+	TurnSHA           string `json:"turn_sha256"`
+	Lane              string `json:"lane"`
+	Resettable        *bool  `json:"context_resettable"`
+	RecordEvaluations bool   `json:"record_evaluations"`
+	Read              *bool  `json:"read"`
+	Schema            int    `json:"schema_version"`
 }
 
 // loadTimingRecording reads the reviewed timing recording of a client,
@@ -607,7 +607,7 @@ func TestNativeRecordClaudeTimingRecording(t *testing.T) {
 			assert.NotEmpty(t, a.ContextSHA, "a hook record names its receiver")
 			assert.NotEmpty(t, a.TurnSHA, "a hook record names its turn")
 			assert.Contains(t, []string{LaneRoot, LaneChild}, a.Lane)
-			assert.True(t, a.CaptureOptIn, "the recording script set the recording switch for the paid runs")
+			assert.True(t, a.RecordEvaluations, "the recording script set the recording switch for the paid runs")
 
 			if a.Surface == "explore" && a.Lane == LaneChild {
 				childReads++
