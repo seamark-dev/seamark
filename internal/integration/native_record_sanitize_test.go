@@ -490,14 +490,19 @@ func TestNativeRecordSanitizeReplacesClaudeIDs(t *testing.T) {
 }
 
 // TestNativeRecordSanitizeRefusesAnUnmappedID proves the residual check.
-// A UUID that no place of the map names refuses the copy. So do a
-// background value and an agent file name that the pass did not map. The
-// message names the file and the kind, but never the value, also when the
-// value is part of a file name.
+// A UUID that no place of the map names refuses the copy. An agent, tool
+// use, message, or request ID under a member name that the pass does not
+// know also refuses it. So do a background value and an ID in a file name
+// that the pass did not map. The message names the file and the kind, but
+// never the value, also when the value is part of a file name.
 func TestNativeRecordSanitizeRefusesAnUnmappedID(t *testing.T) {
 	requireTools(t, "python3")
 
-	const unmapped = "4f0c9e8d-7b6a-4d5c-8b4a-3f2e1d0c9b8a"
+	const (
+		unmapped        = "4f0c9e8d-7b6a-4d5c-8b4a-3f2e1d0c9b8a"
+		unmappedAgent   = "a9f8e7d6c5b4a3921"
+		unmappedToolUse = "toolu_01PqRsTuVwXyZaBcDeFgHiJk"
+	)
 
 	t.Run("a UUID inside a longer string", func(t *testing.T) {
 		f := newSanitizeFixture(t)
@@ -511,45 +516,83 @@ func TestNativeRecordSanitizeRefusesAnUnmappedID(t *testing.T) {
 		assert.NotContains(t, got, unmapped)
 	})
 
-	t.Run("a UUID only in an output file name", func(t *testing.T) {
-		f := newSanitizeFixture(t)
+	// The extra file name is the only place of each ID. The message hides
+	// the ID part of the name, so each row also proves the hidden name part
+	// of its shape.
+	for _, tc := range []struct{ name, kind, value string }{
+		{"a UUID only in an output file name", "UUID", unmapped},
+		{"an agent ID only in an output file name", "agent", unmappedAgent},
+		{"a tool use ID only in an output file name", "tool use", unmappedToolUse},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSanitizeFixture(t)
 
-		var record map[string]any
-		data, err := os.ReadFile(f.record)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(data, &record))
+			var record map[string]any
+			data, err := os.ReadFile(f.record)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(data, &record))
 
-		extra := filepath.Join(f.root, "extras", "notes.jsonl")
-		writeLines(t, extra, `{"note":"no ID here"}`)
-		record["extras"] = map[string]string{"notes-" + unmapped + ".jsonl": extra}
-		f = writeSanitizeRecord(t, f.root, record)
+			extra := filepath.Join(f.root, "extras", "notes.jsonl")
+			writeLines(t, extra, `{"note":"no ID here"}`)
+			record["extras"] = map[string]string{"notes-" + tc.value + ".jsonl": extra}
+			f = writeSanitizeRecord(t, f.root, record)
 
-		got, err := f.sanitize(t, f.out)
-		require.Error(t, err)
-		assert.Contains(t, got, "notes-<id>.jsonl: holds an unmapped UUID ID")
-		assert.NotContains(t, got, unmapped)
-	})
+			got, err := f.sanitize(t, f.out)
+			require.Error(t, err)
+			assert.Contains(t, got, "notes-<id>.jsonl: holds an unmapped "+tc.kind+" ID")
+			assert.NotContains(t, got, tc.value)
+		})
+	}
 
+	// Each row puts one value that the pass does not map into one hook
+	// payload.
+	//
 	// A background task ID has no text pattern, so only the place check
-	// refuses a value that the pass did not map. The pass maps no value
-	// shorter than 8 characters. It also maps no tag or path value that has
-	// neither the agent shape nor the task shape.
+	// refuses it. The pass maps no value shorter than 8 characters. It also
+	// maps no tag or path value that has neither the agent shape nor the
+	// task shape.
+	//
+	// In a plain string value, the pass maps an agent, tool use, message, or
+	// request ID only by its member name. A new client build can add a member
+	// name that the pass does not know. Then only the text pattern of the kind
+	// refuses the value.
 	for _, tc := range []struct {
-		name, file, shown, value, payload string
+		name, file, shown, kind, value, payload string
 	}{
 		{
-			"a task-id tag value with no known shape", "p1", "hooks/001-UserPromptSubmit.json", "q7k2m9p4w1x",
+			"a task-id tag value with no known shape", "p1", "hooks/001-UserPromptSubmit.json", "task", "q7k2m9p4w1x",
 			`{"session_id":"{S1}","prompt_id":"{P1}","hook_event_name":"UserPromptSubmit","prompt":"<task-id>{V}</task-id>"}`,
 		},
 		{
-			"a short task output file value", "p3", "hooks/003-PostToolUse.json", "b7k2m9",
+			"a short task output file value", "p3", "hooks/003-PostToolUse.json", "task", "b7k2m9",
 			`{"session_id":"{S1}","prompt_id":"{P1}","hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"{T3}",` +
 				`"tool_response":{"outputFile":"/private/tmp/claude-501/{SLUG}/{S1}/tasks/{V}.output"}}`,
 		},
 		{
-			"a short background task list value", "p5", "hooks/005-Stop.json", "b7k2m9",
+			"a short background task list value", "p5", "hooks/005-Stop.json", "task", "b7k2m9",
 			`{"session_id":"{S1}","hook_event_name":"Stop","background_tasks":[{"id":"{V}","type":"local_bash"},` +
 				`{"id":"{A1}","type":"subagent"}]}`,
+		},
+		{
+			"a short backgroundTaskId value", "p3", "hooks/003-PostToolUse.json", "task", "b7k2m9",
+			`{"session_id":"{S1}","prompt_id":"{P1}","hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"{T3}",` +
+				`"tool_response":{"backgroundTaskId":"{V}"}}`,
+		},
+		{
+			"an agent ID under an unknown member name", "p5", "hooks/005-Stop.json", "agent", unmappedAgent,
+			`{"session_id":"{S1}","hook_event_name":"Stop","last_agent":"{V}"}`,
+		},
+		{
+			"a tool use ID under an unknown member name", "p5", "hooks/005-Stop.json", "tool use", unmappedToolUse,
+			`{"session_id":"{S1}","hook_event_name":"Stop","last_tool_call":"{V}"}`,
+		},
+		{
+			"a message ID under an unknown member name", "p5", "hooks/005-Stop.json", "message", "msg_01PqRsTuVwXyZaBcDeFgHiJk",
+			`{"session_id":"{S1}","hook_event_name":"Stop","last_message":"{V}"}`,
+		},
+		{
+			"a request ID under an unknown member name", "p5", "hooks/005-Stop.json", "request", "req_01PqRsTuVwXyZaBcDeFgHiJk",
+			`{"session_id":"{S1}","hook_event_name":"Stop","last_request":"{V}"}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -559,7 +602,7 @@ func TestNativeRecordSanitizeRefusesAnUnmappedID(t *testing.T) {
 
 			got, err := f.sanitize(t, f.out)
 			require.Error(t, err)
-			assert.Contains(t, got, tc.shown+": holds an unmapped task ID")
+			assert.Contains(t, got, tc.shown+": holds an unmapped "+tc.kind+" ID")
 			assert.NotContains(t, got, tc.value)
 		})
 	}
