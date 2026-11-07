@@ -19,8 +19,11 @@ request copies, and generated context with markers, because they hold
 account data and no test reads them. It replaces the user name where
 it stands alone as a word, and the encoded bytes of every image or
 document. It keeps the prompts, tool calls, tool output, and every field
-that a decoder reads. It refuses to finish when a deny-listed value is
-still present in any output file.
+that a decoder reads. A scratch directory name of the record's deny list
+becomes one fixed word where the text names it outside a full path, for
+example in a compaction summary. It refuses to finish when a deny-listed
+value is still present in any output file, for example the home path or
+the user name in a form that no rule replaces.
 
 For a Claude Code recording, an ID pass also replaces each ID that
 Claude Code or its API generates: the session, prompt, agent, tool use,
@@ -66,6 +69,20 @@ USER = os.path.basename(HOME)
 # decoders keep only a reference to an attachment, so no value of the
 # bytes is evidence.
 ATTACHMENT_BYTES = "c2FuaXRpemVk"
+
+# The placeholder of a scratch directory name in model text. A compaction
+# summary or a reply can name a shortened scratch path, such as
+# ".../claude-timing/repo", that no path pair matches. The name holds
+# machine values, such as the user ID in "claude-501", so it must not ship.
+SCRATCH = "native-scratch"
+
+# The placeholders by their manifest keys. The manifest lists them for the
+# reviewer, and the scratch rule keeps each of them whole.
+PLACEHOLDERS = {
+    "workspace": WORKSPACE, "home": HOME, "user": USER, "seamark": SEAMARK,
+    "instrumentation": INSTRUMENTATION, "claude_tasks": TASKS, "account": ACCOUNT,
+    "attachment_bytes": ATTACHMENT_BYTES, "scratch": SCRATCH,
+}
 
 # Addresses that may stay: commit trailers in the client's own prompts
 # and the scratch repository's Git identity.
@@ -174,6 +191,28 @@ SUBAGENTS = "subagents"
 def claude_slug(path):
     """Return the project directory name that Claude Code derives."""
     return "".join(c if c.isascii() and c.isalnum() else "-" for c in path)
+
+
+def scratch_pattern(record):
+    """Return the pattern of the scratch names to replace, or None.
+
+    The scratch names are the "deny" entries of the record. The match
+    ignores case, as the deny check does. The longer names come first,
+    so a name never loses only a part. A name of the home path, such as
+    the user name, stays out and keeps its refusal. So does a name inside
+    a placeholder, because the replacement would change that placeholder.
+    """
+    own = {p.casefold() for p in record["home"].split(os.sep) if p}
+    fixed = [p.casefold() for p in list(PLACEHOLDERS.values()) + [claude_slug(WORKSPACE)]]
+    names = [n for n in record.get("deny", []) if n and n.casefold() not in own and
+             not any(n.casefold() in p for p in fixed)]
+
+    if not names:
+        return None
+
+    names.sort(key=len, reverse=True)
+
+    return re.compile("|".join(re.escape(n) for n in names), re.IGNORECASE)
 
 
 def replaced_member(parent, key, v):
@@ -379,6 +418,7 @@ class Sanitizer:
 
         self.deny = [record["home"], self.repo, record["seamark"], self.user]
         self.deny += record.get("deny", [])
+        self.scratch = scratch_pattern(record)
 
         # The ID map of the Claude Code ID pass. It stays None for Codex.
         self.ids = None
@@ -394,6 +434,13 @@ class Sanitizer:
             s = self.user_word.sub(USER, s)
 
         s = CLAUDE_TASK_ROOT.sub(TASKS, s)
+
+        # The scratch rule comes after the path rules. Thus "claude-501" in
+        # a task path becomes part of the task placeholder, and only a name
+        # that no path rule replaced becomes the scratch placeholder.
+        if self.scratch:
+            s = self.scratch.sub(SCRATCH, s)
+
         s = TIMEZONE_TAG.sub("<timezone>%s</timezone>" % TIMEZONE, s)
         s = DATA_URL_BYTES.sub(r"\g<1>" + ATTACHMENT_BYTES, s)
 
@@ -878,11 +925,7 @@ def main():
         shutil.rmtree(out_dir)
     os.makedirs(out_dir)
 
-    manifest = {"client": client, "client_version": record["client_version"], "placeholders": {
-        "workspace": WORKSPACE, "home": HOME, "user": USER, "seamark": SEAMARK,
-        "instrumentation": INSTRUMENTATION, "claude_tasks": TASKS, "account": ACCOUNT,
-        "attachment_bytes": ATTACHMENT_BYTES,
-    }}
+    manifest = {"client": client, "client_version": record["client_version"], "placeholders": dict(PLACEHOLDERS)}
 
     # The count of each kind lets the testdata README state the replaced
     # IDs without their values.

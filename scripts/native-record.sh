@@ -316,10 +316,11 @@ if os.path.isfile(os.path.join(out, "advisor.jsonl")):
 
 # A compaction summary can name a shortened path of the scratch
 # repository, which the path pairs of the sanitizer do not match. So the
-# distinctive names of the scratch directories go on the deny list, and
-# such a path refuses the copy. A distinctive name has 8 or more
-# characters and a digit or a hyphen. Thus a common word such as projects
-# never refuses a copy, and a name of the home path stays out too.
+# distinctive names of the scratch directories go on the deny list. The
+# sanitizer replaces each of them with one fixed word, and its deny check
+# proves that none is left. A distinctive name has 8 or more characters
+# and a digit or a hyphen. Thus a common word such as projects never
+# changes, and a name of the home path stays out too.
 if client == "claude":
     own = set(home.split(os.sep))
     names = (set(os.path.dirname(repo).split(os.sep)) | set(out.split(os.sep))) - own

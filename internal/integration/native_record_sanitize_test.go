@@ -719,8 +719,8 @@ func TestNativeRecordSanitizeKeepsCodexIDs(t *testing.T) {
 
 // TestNativeRecordDeniesTheScratchNames runs the record.json step of the
 // script. A Claude Code record denies the distinctive names of the
-// scratch directories, so a shortened scratch path in a compaction
-// summary refuses the copy. A common word and a name of the home path stay
+// scratch directories, so the sanitizer replaces a shortened scratch path
+// in a compaction summary. A common word and a name of the home path stay
 // out. A Codex record keeps its old form without a deny list.
 func TestNativeRecordDeniesTheScratchNames(t *testing.T) {
 	requireTools(t, "python3")
@@ -759,6 +759,107 @@ func TestNativeRecordDeniesTheScratchNames(t *testing.T) {
 
 			assert.Equal(t, []any{"claude-timing", "native-20261108-release"}, record["deny"],
 				"the scratch names with a digit or a hyphen; not projects, and no part of the home path")
+		})
+	}
+}
+
+// The scratch names of the scratch rule test, as the record step denies
+// them. The first one is the Claude Code task directory of user ID 501.
+var sanitizeScratchNames = []any{"claude-501", "claude-timing", "native-20261108-release"}
+
+// newScratchFixture adds a PostCompact payload with a compaction summary
+// to the sanitizer fixture, and gives the record a deny list. The summary
+// function gets the home directory of the fixture.
+func newScratchFixture(t *testing.T, deny []any, summary func(home string) string) sanitizeFixture {
+	t.Helper()
+
+	f := newSanitizeFixture(t)
+	observed := filepath.Join(f.root, "observed")
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": sanitizeSession, "hook_event_name": "PostCompact", "trigger": "manual",
+		"compact_summary": summary(filepath.Join(f.root, "operator-q7")),
+	})
+	require.NoError(t, err)
+
+	writeLines(t, filepath.Join(observed, "p6.json"), string(payload))
+	writeLines(t, filepath.Join(observed, "p6.meta.json"),
+		fmt.Sprintf(`{"event":"PostCompact","start_ns":1005,"process_cwd":%q}`, filepath.Join(f.root, "repo")))
+
+	record := readJSON(t, f.record)
+	record["deny"] = deny
+
+	return writeSanitizeRecord(t, f.root, record)
+}
+
+// TestNativeRecordSanitizeReplacesTheScratchNames proves the scratch rule.
+// A compaction summary can name a shortened scratch path that no path
+// pair matches. Each scratch name of the deny list becomes the scratch
+// placeholder in any case, so the deny and residual checks pass. The
+// task-root rule comes first, so a task path keeps its own placeholder.
+// Every other deny-listed value still refuses the copy.
+func TestNativeRecordSanitizeReplacesTheScratchNames(t *testing.T) {
+	requireTools(t, "python3")
+
+	t.Run("a scratch name in a compaction summary becomes the placeholder", func(t *testing.T) {
+		f := newScratchFixture(t, sanitizeScratchNames, func(string) string {
+			return "The work ran in .../Native-20261108-Release/claude-timing/repo/sub, and CLAUDE-501 holds the task files."
+		})
+
+		got, err := f.sanitize(t, f.out)
+		require.NoError(t, err, got)
+
+		compact := readJSON(t, filepath.Join(f.out, "hooks", "006-PostCompact.json"))
+		assert.Equal(t, "The work ran in .../native-scratch/native-scratch/repo/sub, and native-scratch holds the task files.",
+			compact["compact_summary"])
+
+		post := readJSON(t, filepath.Join(f.out, "hooks", "003-PostToolUse.json"))
+		response, _ := post["tool_response"].(map[string]any)
+		assert.Equal(t, "/tmp/claude-tasks/-workspace-native/10000000-0000-4000-8000-000000000001/tasks/b00000001.output",
+			response["outputFile"], "the task-root rule replaces claude-501 of a task path first")
+
+		for name, data := range outputFiles(t, f.out) {
+			for _, n := range sanitizeScratchNames {
+				assert.NotContains(t, strings.ToLower(data), n, name)
+			}
+		}
+
+		manifest := readJSON(t, filepath.Join(f.out, "manifest.json"))
+		placeholders, _ := manifest["placeholders"].(map[string]any)
+		assert.Equal(t, "native-scratch", placeholders["scratch"], "the manifest names the placeholder for the reviewer")
+	})
+
+	// Each row leaves one deny-listed value that the scratch rule must not
+	// replace. The user name and the home path are no scratch names. A
+	// scratch name inside a placeholder keeps its refusal, because the
+	// replacement would change the placeholder.
+	for _, tc := range []struct {
+		name, shown string
+		deny        []any
+		summary     func(home string) string
+	}{
+		{
+			"the user name in a form that no rule replaces", "hooks/006-PostCompact.json",
+			append(slices.Clone(sanitizeScratchNames), "operator-q7"),
+			func(string) string { return "uid=501(operator-q7) ran in .../claude-timing/repo" },
+		},
+		{
+			"the home path in another case", "hooks/006-PostCompact.json", sanitizeScratchNames,
+			func(home string) string { return "see " + strings.ToUpper(home) + "/notes" },
+		},
+		{
+			"a scratch name inside a placeholder", "hooks/003-PostToolUse.json",
+			append(slices.Clone(sanitizeScratchNames), "claude-tasks"),
+			func(string) string { return "The work ran in .../claude-timing/repo." },
+		},
+	} {
+		t.Run("the refusal stays for "+tc.name, func(t *testing.T) {
+			f := newScratchFixture(t, tc.deny, tc.summary)
+
+			got, err := f.sanitize(t, f.out)
+			require.Error(t, err)
+			assert.Contains(t, got, tc.shown+": holds a deny-listed value")
+			assert.NotContains(t, got, "operator-q7", "the message names no deny-listed value")
 		})
 	}
 }
