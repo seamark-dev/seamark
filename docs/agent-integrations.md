@@ -652,6 +652,8 @@ installed version to catch parser drift.
 | `make agents-native-check CLIENT=codex` | the client CLI on PATH; no model, no credentials | the installed version beside the recorded evidence; the preset's flags on this version; the patch oracle on this version; the exit status, output, and after bytes of every apply_patch content case, when the installed version is the recorded one (else it skips with the reason); the preset refusing a workspace write under an allow rule, returning the final message on stdout, and failing with the provider's reason; the generated configuration read by the client from a scratch home that trusts the disposable repository |
 | `make agents-oracle-record ORACLE_VERSION=<version>` | the Codex CLI on PATH at that version; no model, no credentials | a new recording of the apply_patch content cases into `internal/integration/testdata/codex/apply_patch_oracle.json`, from the installed applier in scratch directories; it refuses a version that is not installed, and it keeps the bytes of the path cases |
 | `make agents-native-smoke CLIENT=codex` | the client CLI and operator authentication; costs tokens | one distillation group read through the client preset with no failed group and a proposed pin, the pin's client provenance in the ledger, the command disclosed by `--dry-run`, trigger extraction in dry-run only, and the workspace unchanged afterwards |
+| `make native-replay CLIENT=<client>` | Go and the repository's build prerequisites; no client CLI, no model, no credentials | the replay of the reviewed timing and guard recordings in `internal/integration/testdata/<client>/timing` and `.../guard`, and the offline tests of the recording script for that client; a replay without a reviewed recording skips as pending, and a skip gives no evidence |
+| `make native-record CLIENT=<client>` | the client CLI and operator authentication; costs tokens | the prompts of one scenario (`NATIVE_RECORD_SCENARIO=timing`, the default, or `guard`) in a scratch repository, with one cost line per run; it writes a sanitized copy for review and never writes into testdata; it refuses a binary or a tree with uncommitted changes unless `SEAMARK_ALLOW_DIRTY=1` |
 
 The Go checks use ordinary test results and label missing prerequisites
 as `blocked` in their failure messages. The shell script prints `ok`,
@@ -727,8 +729,11 @@ NATIVE_RECORD_SCENARIO=guard make native-record CLIENT=codex
 ```
 
 A sanitized recording needs review before evidence declarations change.
-Do not substitute an in-process handler fixture for a native result.
-Keep raw conversations and native identifiers out of public reports.
+The reviewer copies a reviewed recording into
+`internal/integration/testdata/<client>/timing` or `.../guard`, where
+`make native-replay CLIENT=<client>` replays it offline, with no model.
+Do not substitute an in-process handler fixture for a native result. Keep
+raw conversations and native identifiers out of public reports.
 
 Then run the existing release gates:
 
@@ -744,7 +749,12 @@ Then run the existing release gates:
 4. Review the generated files of the fixture run for anything
    credential-shaped; the checks grep for the canary they set, not for
    every possible secret.
-5. Update the per-agent table above, `docs/STATUS.md`, the README's
+5. `make native-replay CLIENT=claude` and `make native-replay CLIENT=codex`
+   replay the reviewed timing and guard recordings. A replay without a
+   reviewed recording skips as pending and gives no evidence. A reviewed
+   recording moves an aspect from pending to verified only for the client
+   version, tool and context that it shows.
+6. Update the per-agent table above, `docs/STATUS.md`, the README's
    setup section, and `CHANGELOG.md`. `TestUserDocsCoverEveryCommand`
    and `TestOnboardingGuidesNameRealCommands` check the command
    names and flags in the documentation against the CLI.
