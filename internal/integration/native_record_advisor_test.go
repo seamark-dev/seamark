@@ -1,6 +1,6 @@
 package integration
 
-// Tests of the advisor switch of scripts/capture-native.sh. They run the
+// Tests of the advisor switch of scripts/native-record.sh. They run the
 // shell functions claude_print and claude_advisor alone, with a stand-in
 // claude program on PATH. So they need no model, no login, and no client
 // CLI. The stand-in copies the behavior of Claude Code 2.1.314: it appends
@@ -60,11 +60,11 @@ type advisorRecord struct {
 	Switch       string `json:"switch"`
 }
 
-// captureNativeScript returns the text of scripts/capture-native.sh.
-func captureNativeScript(t *testing.T) string {
+// nativeRecordScript returns the text of scripts/native-record.sh.
+func nativeRecordScript(t *testing.T) string {
 	t.Helper()
 
-	data, err := os.ReadFile(filepath.Join("..", "..", "scripts", "capture-native.sh"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "scripts", "native-record.sh"))
 	require.NoError(t, err)
 
 	return string(data)
@@ -152,7 +152,7 @@ func newAdvisorRun(t *testing.T) advisorRun {
 func (r advisorRun) run(t *testing.T, program string, env []string, functions ...string) (string, error) {
 	t.Helper()
 
-	script := captureNativeScript(t)
+	script := nativeRecordScript(t)
 
 	var defs strings.Builder
 	defs.WriteString("FAILED=0\n")
@@ -194,10 +194,10 @@ func (r advisorRun) advisorRecords(t *testing.T) []advisorRecord {
 	return records
 }
 
-// TestCaptureNativeClaudePrintTurnsAdvisorOff proves that claude_print
+// TestNativeRecordClaudePrintTurnsAdvisorOff proves that claude_print
 // starts claude with CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 in the scratch
 // repository, and records the advisor state of the run after it.
-func TestCaptureNativeClaudePrintTurnsAdvisorOff(t *testing.T) {
+func TestNativeRecordClaudePrintTurnsAdvisorOff(t *testing.T) {
 	requireTools(t, "sh", "sed", "grep", "head")
 
 	r := newAdvisorRun(t)
@@ -217,9 +217,9 @@ func TestCaptureNativeClaudePrintTurnsAdvisorOff(t *testing.T) {
 		r.advisorRecords(t))
 }
 
-// TestCaptureNativeClaudePrintRecordsAFailedRun proves that a failed run
+// TestNativeRecordClaudePrintRecordsAFailedRun proves that a failed run
 // keeps the exit status of claude and still records its advisor state.
-func TestCaptureNativeClaudePrintRecordsAFailedRun(t *testing.T) {
+func TestNativeRecordClaudePrintRecordsAFailedRun(t *testing.T) {
 	requireTools(t, "sh", "sed", "grep", "head")
 
 	r := newAdvisorRun(t)
@@ -233,11 +233,11 @@ func TestCaptureNativeClaudePrintRecordsAFailedRun(t *testing.T) {
 		r.advisorRecords(t))
 }
 
-// TestCaptureNativeClaudePrintIgnoresAnEarlierRun proves that the files
+// TestNativeRecordClaudePrintIgnoresAnEarlierRun proves that the files
 // of an earlier call with the same run number stay out of the new run.
 // The client appends to the debug file. So an old advisor line would make
 // the new run read on, although the switch kept the tool off.
-func TestCaptureNativeClaudePrintIgnoresAnEarlierRun(t *testing.T) {
+func TestNativeRecordClaudePrintIgnoresAnEarlierRun(t *testing.T) {
 	requireTools(t, "sh", "sed", "grep", "head", "rm")
 
 	r := newAdvisorRun(t)
@@ -270,10 +270,10 @@ func TestCaptureNativeClaudePrintIgnoresAnEarlierRun(t *testing.T) {
 		r.advisorRecords(t))
 }
 
-// TestCaptureNativeClaudePrintFailsAnAdvisorRun proves that a run with
+// TestNativeRecordClaudePrintFailsAnAdvisorRun proves that a run with
 // the advisor on prints FAIL and counts it for the summary. The run keeps
 // its own exit status and its advisor record.
-func TestCaptureNativeClaudePrintFailsAnAdvisorRun(t *testing.T) {
+func TestNativeRecordClaudePrintFailsAnAdvisorRun(t *testing.T) {
 	requireTools(t, "sh", "sed", "grep", "head", "rm")
 
 	r := newAdvisorRun(t)
@@ -289,11 +289,11 @@ func TestCaptureNativeClaudePrintFailsAnAdvisorRun(t *testing.T) {
 	}}, r.advisorRecords(t))
 }
 
-// TestCaptureNativeClaudeAdvisorState proves the reading of one debug
+// TestNativeRecordClaudeAdvisorState proves the reading of one debug
 // log: the advisor line reads on with its model, a log without it reads
 // off, and a missing or empty log reads unknown. On and unknown print
 // FAIL and count it, because only off proves that the run used no advisor.
-func TestCaptureNativeClaudeAdvisorState(t *testing.T) {
+func TestNativeRecordClaudeAdvisorState(t *testing.T) {
 	requireTools(t, "sh", "sed", "grep", "head")
 
 	const unknown = "  advisor  run 1: unknown\n" +
@@ -348,12 +348,12 @@ func TestCaptureNativeClaudeAdvisorState(t *testing.T) {
 	}
 }
 
-// TestCaptureNativeClaudeRunsGoThroughClaudePrint proves that the script
+// TestNativeRecordClaudeRunsGoThroughClaudePrint proves that the script
 // starts claude in print mode only inside claude_print, so no paid run
 // misses the advisor switch. Comments and echo lines only name the
 // command.
-func TestCaptureNativeClaudeRunsGoThroughClaudePrint(t *testing.T) {
-	script := captureNativeScript(t)
+func TestNativeRecordClaudeRunsGoThroughClaudePrint(t *testing.T) {
+	script := nativeRecordScript(t)
 	body := scriptFunction(t, script, "claude_print")
 
 	invocation := regexp.MustCompile(`(^|[\s(&;|])claude\s+(-p|--print)\b`)
@@ -378,13 +378,13 @@ func TestCaptureNativeClaudeRunsGoThroughClaudePrint(t *testing.T) {
 		"the timing and guard scenarios call claude_print")
 }
 
-// TestCaptureNativeRecordListsAdvisorState runs the record.json step of
+// TestNativeRecordListsAdvisorState runs the record.json step of
 // the script. It proves that advisor.jsonl becomes an extra of the
 // sanitized copy when a Claude run wrote it, and only then.
-func TestCaptureNativeRecordListsAdvisorState(t *testing.T) {
+func TestNativeRecordListsAdvisorState(t *testing.T) {
 	requireTools(t, "python3")
 
-	script := captureNativeScript(t)
+	script := nativeRecordScript(t)
 
 	start := strings.Index(script, "\nclient, version, repo, seamark, instr, observed, out, session = sys.argv[1:9]\n")
 	require.GreaterOrEqual(t, start, 0, "the script has the record.json step")

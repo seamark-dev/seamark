@@ -1,7 +1,7 @@
 package integration
 
 // The extension cases of the native guard scenario. They come after the
-// thirteen first cases of each client in scripts/capture-native.sh:
+// thirteen first cases of each client in scripts/native-record.sh:
 // child denies, a child post-edit reply, and an in-budget slow deny per
 // tool and lane. The table below gives the expected outcome of each
 // case, so a later recording replays offline against it. A recording
@@ -108,7 +108,7 @@ func loadGuardExtension(t *testing.T, client string, base []string) guardRecordi
 	r := loadGuardRecording(t, client, base...)
 	if _, ok := r.cases[guardExtensions(client)[0].name]; !ok {
 		t.Skipf("pending: the guard recording of %s %s predates the extension cases; record again with the current "+
-			"scripts/capture-native.sh", client, r.manifest.ClientVersion)
+			"scripts/native-record.sh", client, r.manifest.ClientVersion)
 	}
 
 	return r
@@ -528,11 +528,11 @@ func (r guardRecording) assertHookStatus(t *testing.T, name, hook string, status
 	}), "case %s: the debug log shows the %s command with exit status %d", name, hook, status)
 }
 
-func TestCaptureNativeClaudeGuardExtension(t *testing.T) {
+func TestNativeRecordClaudeGuardExtension(t *testing.T) {
 	loadGuardExtension(t, ClaudeID, claudeGuardCases).replayExtension(t, ClaudeID)
 }
 
-func TestCaptureNativeCodexGuardExtension(t *testing.T) {
+func TestNativeRecordCodexGuardExtension(t *testing.T) {
 	loadGuardExtension(t, CodexID, codexGuardCases).replayExtension(t, CodexID)
 }
 
@@ -545,7 +545,7 @@ var guardRunLine = regexp.MustCompile(`(?m)^\s*guard_run (\S+) (\S+) "`)
 // cases in the order and phase of the table. So an earlier recording
 // keeps its run numbers, and a new recording replays against the table.
 func TestGuardScenarioScriptMatchesTheTable(t *testing.T) {
-	script := captureNativeScript(t)
+	script := nativeRecordScript(t)
 
 	for _, tc := range []struct {
 		client, function string
@@ -578,7 +578,7 @@ func TestGuardScenarioScriptMatchesTheTable(t *testing.T) {
 // the slow-deny mode stays below the timeout of the indirection entry,
 // and that the slow wait stays above it.
 func TestGuardScenarioSlowDenyWaitsInsideTheTimeout(t *testing.T) {
-	script := captureNativeScript(t)
+	script := nativeRecordScript(t)
 
 	value := func(prefix string) int {
 		n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(scriptLine(t, script, prefix), prefix)))
@@ -605,7 +605,7 @@ func TestGuardScenarioSlowDenyWaitsInsideTheTimeout(t *testing.T) {
 func TestGuardScenarioIndirectionModes(t *testing.T) {
 	requireTools(t, "sh", "cat", "sleep")
 
-	script := captureNativeScript(t)
+	script := nativeRecordScript(t)
 	instr := t.TempDir()
 	guard := filepath.Join(instr, "guard")
 
@@ -653,7 +653,7 @@ func TestGuardScenarioIndirectionModes(t *testing.T) {
 func TestGuardScenarioSlowDenyPhase(t *testing.T) {
 	requireTools(t, "sh", "cat")
 
-	script := captureNativeScript(t)
+	script := nativeRecordScript(t)
 	instr := t.TempDir()
 
 	stubs := "guard_restore() { echo restore; }\nguard_doc() { echo \"doc $1\"; }\nguard_capability() { echo \"capability $1\"; }\n"

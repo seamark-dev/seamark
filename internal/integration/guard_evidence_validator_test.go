@@ -609,7 +609,7 @@ func verifiedGuardPaths(client string) []lessoncheck.InstalledPath {
 }
 
 // TestGuardIdentityCollectorMatchesProduction runs the guard_identities
-// step of scripts/capture-native.sh over a synthetic observer directory.
+// step of scripts/native-record.sh over a synthetic observer directory.
 // It proves that the collector writes the digests of the production
 // derivations and no raw ID, and that it refuses a fixture whose roots
 // disagree. The step needs python3, git, and its sqlite3 module; without
@@ -621,7 +621,7 @@ func TestGuardIdentityCollectorMatchesProduction(t *testing.T) {
 		}
 	}
 
-	data, err := os.ReadFile(filepath.Join("..", "..", "scripts", "capture-native.sh"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "scripts", "native-record.sh"))
 	require.NoError(t, err)
 
 	script := string(data)

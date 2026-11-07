@@ -1016,7 +1016,7 @@ records add a digest of the turn, the lane (`root`, `child`, or `unknown`),
 and whether the receiving context is resettable; preparation, `change_set`,
 and `check` records name no receiver. Two record kinds need the recording
 switch: the hook process must run with `SEAMARK_RECORD_EVALUATIONS=1` in its
-environment. The native recording script (`make capture-native-record`) sets
+environment. The native recording script (`make native-record`) sets
 it for its paid runs. A hook process sees it only when the client that
 starts the hook passes its own environment on. The two kinds are an
 `evaluation` record when a

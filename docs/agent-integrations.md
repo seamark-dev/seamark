@@ -720,10 +720,10 @@ and run in scratch workspaces. Cover the per-tool/context cases above;
 capture recordings alone do not verify timing or denial:
 
 ```bash
-CAPTURE_NATIVE_SCENARIO=timing make capture-native-record CLIENT=claude
-CAPTURE_NATIVE_SCENARIO=timing make capture-native-record CLIENT=codex
-CAPTURE_NATIVE_SCENARIO=guard make capture-native-record CLIENT=claude
-CAPTURE_NATIVE_SCENARIO=guard make capture-native-record CLIENT=codex
+NATIVE_RECORD_SCENARIO=timing make native-record CLIENT=claude
+NATIVE_RECORD_SCENARIO=timing make native-record CLIENT=codex
+NATIVE_RECORD_SCENARIO=guard make native-record CLIENT=claude
+NATIVE_RECORD_SCENARIO=guard make native-record CLIENT=codex
 ```
 
 A sanitized recording needs review before evidence declarations change.

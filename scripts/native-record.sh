@@ -14,23 +14,23 @@
 #           the call before the next run (see codex_verdict).
 #
 # The script has no offline mode. The Go tests replay a reviewed
-# recording offline (make capture-native-check).
+# recording offline (make native-replay).
 #
 # Record settings (environment):
-#   CAPTURE_NATIVE_OUT    output directory (default: a new temporary one)
-#   CAPTURE_NATIVE_REPO   scratch repository (default: <out>/repo); the
+#   NATIVE_RECORD_OUT     output directory (default: a new temporary one)
+#   NATIVE_RECORD_REPO    scratch repository (default: <out>/repo); the
 #                         script reuses an existing one to keep Codex hook
 #                         trust
-#   CAPTURE_NATIVE_RUNS   0 skips the paid runs and only collects
-#   CAPTURE_NATIVE_CLAUDE_MODEL  default haiku
-#   CAPTURE_NATIVE_CODEX_MODEL   default gpt-5.6-luna (low reasoning)
-#   CAPTURE_NATIVE_SCENARIO      timing (the default) runs the gate-3 timing
+#   NATIVE_RECORD_RUNS    0 skips the paid runs and only collects
+#   NATIVE_RECORD_CLAUDE_MODEL   default haiku
+#   NATIVE_RECORD_CODEX_MODEL    default gpt-5.6-luna (low reasoning)
+#   NATIVE_RECORD_SCENARIO       timing (the default) runs the timing
 #                                prompts in a scratch repository with
-#                                lesson hooks (see "The gate-3 timing
-#                                scenario" below); guard runs the gate-5
-#                                sentinel prompts in a scratch repository
-#                                with enforce pins (see "The gate-5 guard
-#                                scenario" below).
+#                                lesson hooks (see "The timing scenario"
+#                                below); guard runs the guard sentinel
+#                                prompts in a scratch repository with
+#                                enforce pins (see "The guard scenario"
+#                                below).
 #
 # Every check prints ok, FAIL, or blocked. The exit status is 0 when
 # every check prints ok, 1 when one prints FAIL, and 3 when one prints
@@ -67,7 +67,7 @@ esac
 # The scenario selects the prompts of record. The script refuses an
 # unknown name before any setup, so a typing error never starts a paid
 # run of the wrong scenario.
-SCENARIO=${CAPTURE_NATIVE_SCENARIO:-timing}
+SCENARIO=${NATIVE_RECORD_SCENARIO:-timing}
 
 case "$SCENARIO" in
     timing|guard) ;;
@@ -91,7 +91,7 @@ note()    { echo "  note     $1"; }
 summary() {
     SUMMARIZED=1
     echo
-    echo "capture-native $MODE ($CLIENT): $OK ok, $FAILED failed, $BLOCKED blocked"
+    echo "native-record $MODE ($CLIENT): $OK ok, $FAILED failed, $BLOCKED blocked"
 
     if [ "$FAILED" -gt 0 ]; then
         echo "result: FAIL"
@@ -119,7 +119,7 @@ new_repo() {
     git -C "$1" commit -q -m fixture
 }
 
-echo "capture-native $MODE — client $CLIENT"
+echo "native-record $MODE — client $CLIENT"
 echo "  seamark   $("$BIN" version)"
 echo "  date      $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo
@@ -171,13 +171,13 @@ record_mode() {
     # seamark (see timing_codex). So the trust step puts the directory of
     # the round binary first on PATH, as the paid runs do. The note keeps
     # $PATH literal, so the operator's shell expands it.
-    SCENARIO_ARG=" CAPTURE_NATIVE_SCENARIO=$SCENARIO"
+    SCENARIO_ARG=" NATIVE_RECORD_SCENARIO=$SCENARIO"
     CODEX_TRUST="PATH=$(dirname "$BIN"):\$PATH codex"
 
-    OUT=${CAPTURE_NATIVE_OUT:-$(mktemp -d)}
+    OUT=${NATIVE_RECORD_OUT:-$(mktemp -d)}
     mkdir -p "$OUT"
     OUT=$(cd "$OUT" && pwd -P)
-    REPO=${CAPTURE_NATIVE_REPO:-$OUT/repo}
+    REPO=${NATIVE_RECORD_REPO:-$OUT/repo}
     INSTR=$REPO/.native-instrumentation
     OBS=$INSTR/observed
     echo "  output    $OUT"
@@ -214,7 +214,7 @@ record_mode() {
         [ ! -f "$INSTR/scenario-guard" ] || set_up=guard
 
         if [ "$set_up" != "$SCENARIO" ]; then
-            blocked "$REPO was set up for the ${set_up:-another} scenario, not $SCENARIO; use another CAPTURE_NATIVE_REPO"
+            blocked "$REPO was set up for the ${set_up:-another} scenario, not $SCENARIO; use another NATIVE_RECORD_REPO"
             summary
         fi
     else
@@ -232,7 +232,7 @@ record_mode() {
         note "Codex runs project hooks only after you trust them; setup never grants trust:"
         note "  1. cd $REPO && $CODEX_TRUST   (accept the project trust prompt)"
         note "  2. review the hooks (\"Hooks need review\", or /hooks), trust every entry, then quit"
-        note "  3. CAPTURE_NATIVE_REPO=$REPO make capture-native-record CLIENT=codex$SCENARIO_ARG"
+        note "  3. NATIVE_RECORD_REPO=$REPO make native-record CLIENT=codex$SCENARIO_ARG"
         blocked "no paid run: the new Codex hooks need your trust review first"
         summary
     fi
@@ -248,8 +248,8 @@ record_mode() {
     SEAMARK_RECORD_EVALUATIONS=1
     export SEAMARK_RECORD_EVALUATIONS
 
-    if [ "${CAPTURE_NATIVE_RUNS:-1}" = 0 ]; then
-        note "CAPTURE_NATIVE_RUNS=0: no paid run; collecting what the repository already holds"
+    if [ "${NATIVE_RECORD_RUNS:-1}" = 0 ]; then
+        note "NATIVE_RECORD_RUNS=0: no paid run; collecting what the repository already holds"
     else
         echo "paid runs ($CLIENT; costs tokens)"
         case "$SCENARIO:$CLIENT" in
@@ -323,7 +323,7 @@ PY
         guard)  guard_extras ;;
     esac
 
-    if python3 -I "$SCRIPTS/capture-native-sanitize.py" "$OUT/record.json" "$OUT/sanitized"; then
+    if python3 -I "$SCRIPTS/native-record-sanitize.py" "$OUT/record.json" "$OUT/sanitized"; then
         ok "sanitized copy in $OUT/sanitized; compare it with $DATA before you replace the evidence"
     else
         fail "the sanitizer refused the recording; nothing in $OUT/sanitized is safe to commit"
@@ -336,7 +336,7 @@ PY
             note "  1. cd $REPO && $CODEX_TRUST   (accept the project trust prompt)"
             note "  2. review the hooks (\"Hooks need review\", or /hooks) and trust every entry"
             note "  3. type one short prompt, for example: run the shell command true; then quit"
-            note "  4. CAPTURE_NATIVE_REPO=$REPO make capture-native-record CLIENT=codex$SCENARIO_ARG"
+            note "  4. NATIVE_RECORD_REPO=$REPO make native-record CLIENT=codex$SCENARIO_ARG"
         fi
     else
         ok "the hooks recorded $(find "$OBS" -name '*.meta.json' | wc -l | tr -d ' ') payloads"
@@ -526,15 +526,15 @@ limit_stop() {
     summary
 }
 
-# The gate-3 timing scenario (CAPTURE_NATIVE_SCENARIO=timing). It records
+# The timing scenario (NATIVE_RECORD_SCENARIO=timing). It records
 # when lesson advice reaches the model: a prior result before a later
 # model step, a reminder on its own call, edits that one response
 # constructs together, a failed read, and a subagent. Each paid run is
 # one case. timing-cases.jsonl names the case of each run, so the replay
 # tests need no session identifier. The reviewer copies the reviewed
 # sanitized copy into internal/integration/testdata/<client>/timing.
-# There the tests TestCaptureNativeClaudeTimingRecording and
-# TestCaptureNativeCodexTimingRecording decode it.
+# There the tests TestNativeRecordClaudeTimingRecording and
+# TestNativeRecordCodexTimingRecording decode it.
 
 # timing_setup creates the scratch repository of the timing scenario.
 # Three committed fixture files lie under timing/, and one advisory pin
@@ -557,8 +557,8 @@ timing_setup() {
 
     mkdir -p "$REPO/.seamark"
     cat > "$REPO/.seamark/lessons.yaml" <<'YAML'
-# The synthetic lesson of the gate-3 timing recording
-# (scripts/capture-native.sh, CAPTURE_NATIVE_SCENARIO=timing).
+# The synthetic lesson of the timing scenario
+# (scripts/native-record.sh, NATIVE_RECORD_SCENARIO=timing).
 hook_delivery: once-per-context
 lesson_checks_version: 1
 checks:
@@ -577,7 +577,7 @@ YAML
     ok "init --client $CLIENT installed the lesson hooks"
 
     mkdir -p "$OBS"
-    cp "$SCRIPTS/capture-native-observer.py" "$INSTR/observer.py"
+    cp "$SCRIPTS/native-record-observer.py" "$INSTR/observer.py"
     # The observer also runs on PreToolUse, because the edit hook reads
     # that event. The entries go into the documents that init wrote,
     # beside the lesson hook entries.
@@ -695,7 +695,7 @@ print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "
 # prior-result, so its edit comes one turn after the read. The reader
 # subagent has only the Read tool.
 record_claude_timing() {
-    model=${CAPTURE_NATIVE_CLAUDE_MODEL:-haiku}
+    model=${NATIVE_RECORD_CLAUDE_MODEL:-haiku}
     agents='{"reader":{"description":"Reads the one file it is given and reports its first line.","prompt":"Use the Read tool exactly once on the file that you are given, and reply with its first line only.","model":"'"$model"'","tools":["Read"]}}'
     steps='Do exactly these steps in order, and do not add steps.'
 
@@ -793,7 +793,7 @@ print(thread, " ".join("%s=%s" % kv for kv in sorted(usage.items())))' "$OUT/run
 # a new thread, except patch-after-preparation: it resumes the thread of
 # prior-preparation, so its patch comes one turn after the preparation.
 record_codex_timing() {
-    model=${CAPTURE_NATIVE_CODEX_MODEL:-gpt-5.6-luna}
+    model=${NATIVE_RECORD_CODEX_MODEL:-gpt-5.6-luna}
     steps='Do exactly these steps in order, and do not add steps.'
 
     timing_codex prior-preparation new "$steps
@@ -905,7 +905,7 @@ with open(record_path, "w", encoding="utf-8") as f:
 PY
 }
 
-# The gate-5 guard scenario (CAPTURE_NATIVE_SCENARIO=guard). It records
+# The guard scenario (NATIVE_RECORD_SCENARIO=guard). It records
 # whether the client stops a write that the
 # lesson-check guard denies, and what it does with the replies of the
 # post-edit hook. The scratch repository holds three fixture
@@ -916,8 +916,8 @@ PY
 # run, so the replay tests need no session identifier. The reviewer
 # copies the reviewed sanitized copy into
 # internal/integration/testdata/<client>/guard. There the tests
-# TestCaptureNativeClaudeGuardRecording and
-# TestCaptureNativeCodexGuardRecording decode it, and
+# TestNativeRecordClaudeGuardRecording and
+# TestNativeRecordCodexGuardRecording decode it, and
 # TestGuardEvidenceMatchesRecordings checks the evidence against it.
 #
 # Each case runs in one phase. The phase sets the lessons.yaml variant,
@@ -1022,7 +1022,7 @@ guard_setup() {
     "$BIN" -C "$REPO" index > "$OUT/index.txt" 2>&1
     ok "index built for the capability reports of seamark status"
 
-    cp "$SCRIPTS/capture-native-observer.py" "$INSTR/observer.py"
+    cp "$SCRIPTS/native-record-observer.py" "$INSTR/observer.py"
     guard_prewrite_script
     guard_instrument
     [ "$CLIENT" != codex ] || guard_last
@@ -1184,8 +1184,8 @@ PY
 # release has, a tier-2 configuration error.
 guard_lessons() {
     cat > "$INSTR/lessons-enforce.yaml" <<'YAML'
-# The synthetic lessons of the gate-5 guard recording
-# (scripts/capture-native.sh, CAPTURE_NATIVE_SCENARIO=guard).
+# The synthetic lessons of the guard scenario
+# (scripts/native-record.sh, NATIVE_RECORD_SCENARIO=guard).
 lesson_checks_version: 1
 checks:
   frozen-sentinel:
@@ -1219,7 +1219,7 @@ YAML
 guard_prewrite_script() {
     cat > "$INSTR/pre-write.sh" <<EOF
 #!/bin/sh
-# Test instrumentation of the gate-5 guard scenario (scripts/capture-native.sh).
+# Test instrumentation of the guard scenario (scripts/native-record.sh).
 mode=\$(cat '$INSTR/pre-write-mode' 2>/dev/null || echo off)
 case "\$mode" in
     report-only)
@@ -1410,7 +1410,7 @@ guard_begin() {
             ok "every Codex hook form keeps the trust keys and the content of the enforce form"
         else
             blocked "a Codex hook form moves or changes a trusted entry: $reason"
-            note "set up a new repository with this script (another CAPTURE_NATIVE_REPO), and review its trust"
+            note "set up a new repository with this script (another NATIVE_RECORD_REPO), and review its trust"
             summary
         fi
     fi
@@ -1569,7 +1569,7 @@ GUARD_RELAY='Do not use any tool yourself. Then reply with the single word that 
 # cases. The nine later cases add child denies, a child post-edit reply,
 # and the in-budget slow deny of each tool and lane.
 record_claude_guard() {
-    model=${CAPTURE_NATIVE_CLAUDE_MODEL:-haiku}
+    model=${NATIVE_RECORD_CLAUDE_MODEL:-haiku}
     agents='{"writer":{"description":"Creates the one file it is given with the given content.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Write"]}}'
 
     guard_run enforce edit-violation "$GUARD_STEPS
@@ -1685,7 +1685,7 @@ $GUARD_RELAY"
 # among the first thirteen cases. The three later cases add a worker
 # post-edit reply and the in-budget slow deny of the root and the worker.
 record_codex_guard() {
-    model=${CAPTURE_NATIVE_CODEX_MODEL:-gpt-5.6-luna}
+    model=${NATIVE_RECORD_CODEX_MODEL:-gpt-5.6-luna}
 
     guard_run enforce add-violation "$GUARD_STEPS
 1. Use apply_patch once to add the new file sentinel/added.txt with the single line: added

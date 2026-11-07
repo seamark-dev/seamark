@@ -1,7 +1,7 @@
 package integration
 
 // Offline replay of the native guard recordings.
-// `make capture-native-record CLIENT=<client> CAPTURE_NATIVE_SCENARIO=guard`
+// `make native-record CLIENT=<client> NATIVE_RECORD_SCENARIO=guard`
 // records them with the installed client and the operator's own login.
 // A reviewer copies the reviewed sanitized copy into
 // testdata/<client>/guard/. Each paid run of the scenario is one case,
@@ -23,7 +23,7 @@ package integration
 // findings.
 //
 // The replay tests run only when SEAMARK_NATIVE_CLIENT names the client
-// (make capture-native-check). Without a reviewed recording they skip as
+// (make native-replay). Without a reviewed recording they skip as
 // pending. A skip gives no evidence, so it never verifies a guard path.
 // TestGuardEvidenceMatchesRecordings reads the same recordings in every
 // test run (guard_evidence_test.go).
@@ -49,7 +49,7 @@ import (
 )
 
 // The files that the guard scenario adds to a recording, beside the hook
-// payloads and the transcripts (scripts/capture-native.sh, guard_extras
+// payloads and the transcripts (scripts/native-record.sh, guard_extras
 // and guard_identities). guardIdentityFile joins each observed payload to
 // its audit record. A recording without it gives no evidence.
 const (
@@ -298,14 +298,14 @@ func loadGuardRecording(t *testing.T, client string, cases ...string) guardRecor
 	t.Helper()
 
 	if os.Getenv(nativeClientEnv) != client {
-		t.Skipf("the guard replay runs with %s=%s (make capture-native-check CLIENT=%s)",
+		t.Skipf("the guard replay runs with %s=%s (make native-replay CLIENT=%s)",
 			nativeClientEnv, client, client)
 	}
 
 	r, ok := readGuardRecording(t, client)
 	if !ok {
 		t.Skipf("pending: no reviewed native guard recording in %s; record one with "+
-			"make capture-native-record CLIENT=%s CAPTURE_NATIVE_SCENARIO=guard, review the sanitized copy, "+
+			"make native-record CLIENT=%s NATIVE_RECORD_SCENARIO=guard, review the sanitized copy, "+
 			"and copy it there", filepath.Join("testdata", client, "guard"), client)
 	}
 
@@ -321,7 +321,7 @@ func loadGuardRecording(t *testing.T, client string, cases ...string) guardRecor
 	// Without identity rows, no payload joins its audit record, so every
 	// assertion on a call would fail with a message that hides the cause.
 	require.Contains(t, r.manifest.Extras, guardIdentityFile,
-		"the recording has no %s: record again with the current scripts/capture-native.sh", guardIdentityFile)
+		"the recording has no %s: record again with the current scripts/native-record.sh", guardIdentityFile)
 	t.Logf("native guard recording of %s %s: %d cases", client, r.manifest.ClientVersion, len(r.cases))
 
 	return r
@@ -741,7 +741,7 @@ func (r guardRecording) assertCapability(t *testing.T, client string) {
 	}
 }
 
-func TestCaptureNativeClaudeGuardRecording(t *testing.T) {
+func TestNativeRecordClaudeGuardRecording(t *testing.T) {
 	r := loadGuardRecording(t, ClaudeID, claudeGuardCases...)
 
 	t.Run("the capability report claims no enforcement without evidence", func(t *testing.T) {
@@ -913,7 +913,7 @@ func TestCaptureNativeClaudeGuardRecording(t *testing.T) {
 	})
 }
 
-func TestCaptureNativeCodexGuardRecording(t *testing.T) {
+func TestNativeRecordCodexGuardRecording(t *testing.T) {
 	r := loadGuardRecording(t, CodexID, codexGuardCases...)
 
 	t.Run("the capability report claims no enforcement without evidence", func(t *testing.T) {

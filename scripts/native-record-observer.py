@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Test instrumentation of the native recordings.
 
-This is not a seamark hook. scripts/capture-native.sh record installs it
+This is not a seamark hook. scripts/native-record.sh record installs it
 beside the lesson hook entries, for the events of the scenario, so that
 the recording keeps every native payload exactly as the client sent it.
 
-Usage: capture-native-observer.py <out-dir> <client>
+Usage: native-record-observer.py <out-dir> <client>
 
 It copies stdin into <out-dir>/NNN-<event>.json and writes the process
 directory, CLAUDE_PROJECT_DIR, the payload size, and the start time into

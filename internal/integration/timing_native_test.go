@@ -1,7 +1,7 @@
 package integration
 
 // Offline replay of the native timing recordings.
-// `make capture-native-record CLIENT=<client> CAPTURE_NATIVE_SCENARIO=timing`
+// `make native-record CLIENT=<client> NATIVE_RECORD_SCENARIO=timing`
 // records them with the installed client and the operator's own login.
 // A reviewer copies the reviewed sanitized copy into
 // testdata/<client>/timing/. Each paid run of the scenario is one case,
@@ -16,8 +16,8 @@ package integration
 // answer is what the recording measures, so the reviewer reads it from
 // hook-context.jsonl and the transcripts.
 //
-// The tests run only when SEAMARK_NATIVE_CLIENT names the client (make
-// capture-native-check). Without a reviewed recording they skip as
+// The tests run only when SEAMARK_NATIVE_CLIENT names the client
+// (make native-replay). Without a reviewed recording they skip as
 // pending. A skip gives no evidence, so it never verifies a timing item.
 
 import (
@@ -38,7 +38,7 @@ import (
 )
 
 // The files that the timing scenario adds to a recording, beside the
-// hook payloads and the transcripts (scripts/capture-native.sh,
+// hook payloads and the transcripts (scripts/native-record.sh,
 // timing_extras).
 const (
 	timingCasesFile   = "timing-cases.jsonl"
@@ -103,7 +103,7 @@ func loadTimingRecording(t *testing.T, client string, cases ...string) timingRec
 	t.Helper()
 
 	if os.Getenv(nativeClientEnv) != client {
-		t.Skipf("the timing replay runs with %s=%s (make capture-native-check CLIENT=%s)",
+		t.Skipf("the timing replay runs with %s=%s (make native-replay CLIENT=%s)",
 			nativeClientEnv, client, client)
 	}
 
@@ -112,7 +112,7 @@ func loadTimingRecording(t *testing.T, client string, cases ...string) timingRec
 	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if errors.Is(err, fs.ErrNotExist) {
 		t.Skipf("pending: no reviewed native timing recording in %s; record one with "+
-			"make capture-native-record CLIENT=%s CAPTURE_NATIVE_SCENARIO=timing, review the sanitized copy, "+
+			"make native-record CLIENT=%s NATIVE_RECORD_SCENARIO=timing, review the sanitized copy, "+
 			"and copy it there", dir, client)
 	}
 
@@ -471,7 +471,7 @@ func assertCodexLane(t *testing.T, name, lane string, meta EventMeta) {
 	assert.NotEmpty(t, meta.MatchID, "%s: the event names its tool call", name)
 }
 
-func TestCaptureNativeClaudeTimingRecording(t *testing.T) {
+func TestNativeRecordClaudeTimingRecording(t *testing.T) {
 	r := loadTimingRecording(t, ClaudeID, timingPriorResult, timingNewModelStep, timingReadThenEdit,
 		timingSameCall, timingBatchAndProgram, timingFailedRead, timingSubagentRead)
 
@@ -644,7 +644,7 @@ func TestCaptureNativeClaudeTimingRecording(t *testing.T) {
 	})
 }
 
-func TestCaptureNativeCodexTimingRecording(t *testing.T) {
+func TestNativeRecordCodexTimingRecording(t *testing.T) {
 	r := loadTimingRecording(t, CodexID, timingPriorPreparation, timingPatchAfterPreparation, timingSameCall,
 		timingMultiFilePatch, timingSubagentPatch)
 	calls := r.codexCalls(t)

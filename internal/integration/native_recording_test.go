@@ -5,7 +5,7 @@ package integration
 // these helpers are not in the capture recording checks.
 
 // nativeManifest is the manifest.json of one recording. The sanitizer
-// (scripts/capture-native-sanitize.py) writes it.
+// (scripts/native-record-sanitize.py) writes it.
 type nativeManifest struct {
 	Client        string `json:"client"`
 	ClientVersion string `json:"client_version"`
