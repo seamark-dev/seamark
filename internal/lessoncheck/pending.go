@@ -34,9 +34,7 @@ import (
 // digest over the identity root and finds the directory under the git
 // top level.
 //
-// The directory is never under .seamark/private, because the capture
-// run lock reads that directory as a sign that capture is on. Its own
-// .gitignore keeps it out of git.
+// The directory has its own .gitignore, which keeps it out of git.
 
 // PendingSchema is the format name of a pending record. It is also the
 // label of the key digest.
@@ -458,13 +456,13 @@ func Sweep(root string, caller Caller, lim Limits) (int, error) {
 	return removed, errors.Join(errs...)
 }
 
-// DiscardSession removes every pending record of one native session,
-// when its capture session is deleted. top is the git top level of the
-// selected workspace, where the hooks store the records and the audit
-// stream. identityRoot is the root that the hooks hashed over. The two
-// differ when the index records another root, for example in a copied
-// or moved repository. Each removed record appends one
-// baseline-discarded audit record with cause session-deleted.
+// DiscardSession removes every pending record of one native session.
+// top is the git top level of the selected workspace, where the hooks
+// store the records and the audit stream. identityRoot is the root that
+// the hooks hashed over. The two differ when the index records another
+// root, for example in a copied or moved repository. Each removed record
+// appends one baseline-discarded audit record with cause
+// session-deleted.
 //
 // The directory comes from top only, so the call never touches another
 // workspace, also when identityRoot names one. A record whose digests
@@ -503,7 +501,8 @@ func DiscardSession(top, identityRoot, nativeSessionID string) (removed int, err
 			continue
 		}
 
-		// capture delete is a CLI command, so the caller is the CLI.
+		// No hook, MCP tool, or console view calls DiscardSession, so the
+		// record names the CLI as its caller.
 		ok, err := discardPending(top, path, p, CallerCLI, DiscardSessionDeleted)
 		removed, errs = removed+ok, append(errs, err)
 	}

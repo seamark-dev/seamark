@@ -101,10 +101,10 @@ type Plan struct {
 	// no item is ready.
 	Change *pinfile.Change
 	// Impact holds the checker impact of each edited pin that is check or
-	// enforce (contract K1). A retarget and a replacement fill it from
-	// Change, so a surface shows it before the apply. It is empty for an
-	// advisory pin, a prune, and a plan without Change. Commit compares
-	// Change, and Impact follows from Change alone.
+	// enforce. A retarget or a scope edit fills it from Change, so a
+	// surface shows it before the apply. It is empty for an advisory pin,
+	// a prune, and a plan without Change. Commit compares Change, and
+	// Impact follows from Change alone.
 	Impact []lessoncheck.Impact
 	// Retarget and Supersede are the guarded ledger changes of the ready
 	// items, in item order.

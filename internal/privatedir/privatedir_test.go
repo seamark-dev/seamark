@@ -13,8 +13,8 @@ import (
 	"github.com/seamark-dev/seamark/internal/privatedir"
 )
 
-// errUnsafe stands for the sentinel of a caller, such as
-// archive.ErrUnsafePath. The helpers must wrap the value they receive.
+// errUnsafe stands for the sentinel of a caller, such as errUnsafePath
+// of lessoncheck. The helpers must wrap the value they receive.
 var errUnsafe = errors.New("unsafe test path")
 
 // posixModes is false where the platform has no POSIX modes. There

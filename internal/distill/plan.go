@@ -380,9 +380,9 @@ var ledgerStatuses = []string{
 }
 
 // ReadLedger reads every stored proposal in ledgerStatuses order, each
-// status newest first. The caller of FreezeLivePlan and RunLive both
-// read here, and both hash the rows into the ledger fingerprint. A
-// status that only one side read would make every stored plan stale.
+// status newest first. buildPlan and Plan.Revalidate both read here,
+// and both hash the rows into the ledger digest. A status that only one
+// side read would make every stored plan stale.
 func ReadLedger(st *store.Store) ([]model.Proposal, error) {
 	var ledger []model.Proposal
 

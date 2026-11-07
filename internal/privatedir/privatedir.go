@@ -11,7 +11,7 @@ import (
 // symbolic link, and a link must never redirect private data.
 //
 // A refused entry wraps unsafe, so the caller's errors.Is checks hold.
-// A failed create starts with createPrefix, for example "archive:
+// A failed create starts with createPrefix, for example "lesson checks:
 // create", so the caller keeps its message text.
 func EnsureRealDir(dir string, mode os.FileMode, unsafe error, createPrefix string) error {
 	info, err := os.Lstat(dir)
