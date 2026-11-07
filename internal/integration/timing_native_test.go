@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -261,6 +262,126 @@ func (r timingRecording) sequence(t *testing.T, name string, steps ...string) []
 // payloads.
 func (r timingRecording) before(name string, e timingEvent) []timingEvent {
 	return r.events[r.runs[name]][:e.seq]
+}
+
+// The launch shapes of a Claude Code Agent call. A foreground agent ends
+// before the Agent call returns. A background agent works after the call
+// returns, and its result comes as a later prompt. A default request sets
+// no run_in_background, so the shape depends on the default of the build.
+const (
+	launchForeground = "foreground"
+	launchBackground = "background"
+	launchDefault    = "default"
+)
+
+// The tool_response status of a PostToolUse Agent payload for each shape.
+const (
+	agentStatusCompleted     = "completed"
+	agentStatusAsyncLaunched = "async_launched"
+)
+
+// agentLaunch reads the launch shape of the first Agent call of a case.
+// The request comes from run_in_background of the PreToolUse Agent
+// payload. The observed shape comes from the PostToolUse Agent payload of
+// the same call: async_launched before the SubagentStop of the agent is
+// background, and completed after it is foreground. Any other pair is an
+// error, because it fits neither shape.
+func (r timingRecording) agentLaunch(name string) (requested, observed string, err error) {
+	events := r.events[r.runs[name]]
+
+	pre := slices.IndexFunc(events, func(e timingEvent) bool {
+		return e.hook.Event == claudeEventPreToolUse && e.tool() == claudeToolAgent
+	})
+	if pre < 0 {
+		return "", "", errors.New("no PreToolUse Agent payload: the model made no Agent call; record the case again")
+	}
+
+	input, _ := events[pre].raw["tool_input"].(map[string]any)
+
+	switch value, set := input["run_in_background"]; {
+	case !set:
+		requested = launchDefault
+	case value == true:
+		requested = launchBackground
+	case value == false:
+		requested = launchForeground
+	default:
+		return "", "", fmt.Errorf("run_in_background of the Agent call is %v, not a boolean", value)
+	}
+
+	call := nativeString(events[pre].raw, "tool_use_id")
+	post := slices.IndexFunc(events, func(e timingEvent) bool {
+		return e.seq > pre && e.hook.Event == "PostToolUse" && e.tool() == claudeToolAgent &&
+			nativeString(e.raw, "tool_use_id") == call
+	})
+	if post < 0 {
+		return requested, "", errors.New("no PostToolUse Agent payload names the Agent call")
+	}
+
+	response, _ := events[post].raw["tool_response"].(map[string]any)
+	status, agent := nativeString(response, "status"), nativeString(response, "agentId")
+
+	stop := slices.IndexFunc(events, func(e timingEvent) bool {
+		return e.seq > pre && e.hook.Event == "SubagentStop" && (agent == "" || nativeString(e.raw, "agent_id") == agent)
+	})
+	if stop < 0 {
+		return requested, "", errors.New("no SubagentStop payload names the agent of the Agent call")
+	}
+
+	switch {
+	case status == agentStatusAsyncLaunched && post < stop:
+		return requested, launchBackground, nil
+	case status == agentStatusCompleted && stop < post:
+		return requested, launchForeground, nil
+	}
+
+	order := "after"
+	if stop < post {
+		order = "before"
+	}
+
+	return requested, "", fmt.Errorf("the Agent call returned the status %q, and SubagentStop came %s it; "+
+		"that fits no launch shape", status, order)
+}
+
+// launchShape checks the first Agent call of a case against the shape of
+// the case. A request in another shape, also a request without the field,
+// asks for a new recording, because the model did not follow the prompt.
+// A matching request that ran in the other shape is a finding about the
+// client, and a new recording does not change it. The agent of the call
+// result must be the agent that SubagentStart announced.
+func (r timingRecording) launchShape(name, shape string) error {
+	requested, observed, err := r.agentLaunch(name)
+	if err != nil {
+		return err
+	}
+
+	if requested != shape {
+		return fmt.Errorf("the model did not set the launch shape (the request reads %s, the case needs %s); "+
+			"record the case again", requested, shape)
+	}
+
+	if observed != shape {
+		return fmt.Errorf("Claude Code %s ran a %s launch as %s", r.manifest.ClientVersion, requested, observed)
+	}
+
+	var start, result string
+
+	for _, e := range r.events[r.runs[name]] {
+		switch {
+		case e.hook.Event == "SubagentStart" && start == "":
+			start = nativeString(e.raw, "agent_id")
+		case e.hook.Event == "PostToolUse" && e.tool() == claudeToolAgent && result == "":
+			response, _ := e.raw["tool_response"].(map[string]any)
+			result = nativeString(response, "agentId")
+		}
+	}
+
+	if start == "" || result != start {
+		return errors.New("the Agent call result names another agent than SubagentStart, or no agent")
+	}
+
+	return nil
 }
 
 // timingNames prints the event and tool of each payload, for a failure
@@ -590,6 +711,9 @@ func TestNativeRecordClaudeTimingRecording(t *testing.T) {
 		child := filepath.Join(strings.TrimSuffix(main, ".jsonl"), "subagents", "agent-"+agent+".jsonl")
 		assert.Contains(t, claudeTimingCalls(t, child), event.MatchID)
 		assert.NotContains(t, claudeTimingCalls(t, main), event.MatchID)
+
+		// The prompt asks for a background agent.
+		assert.NoError(t, r.launchShape(timingSubagentRead, launchBackground), timingSubagentRead)
 	})
 
 	t.Run("the audit records name turns and lanes", func(t *testing.T) {
@@ -779,4 +903,107 @@ func (r timingRecording) codexCalls(t *testing.T) map[string]bool {
 	delete(calls, "")
 
 	return calls
+}
+
+// launchPayloads gives the payloads of a Claude Code child case in one
+// launch shape. A foreground call returns completed after SubagentStop. A
+// background call returns async_launched first, and the result of the
+// agent comes as a later prompt. A nil request leaves run_in_background
+// out of the Agent call.
+func launchPayloads(request any, status string, background bool) []map[string]any {
+	input := map[string]any{"subagent_type": "writer", "prompt": "create the file"}
+	if request != nil {
+		input["run_in_background"] = request
+	}
+
+	pre := map[string]any{"hook_event_name": "PreToolUse", "tool_name": claudeToolAgent, "tool_use_id": "toolu_1",
+		"tool_input": input}
+	post := map[string]any{"hook_event_name": "PostToolUse", "tool_name": claudeToolAgent, "tool_use_id": "toolu_1",
+		"tool_response": map[string]any{"status": status, "agentId": "a1"}}
+	start := map[string]any{"hook_event_name": "SubagentStart", "agent_id": "a1"}
+	stop := map[string]any{"hook_event_name": "SubagentStop", "agent_id": "a1"}
+	prompt := map[string]any{"hook_event_name": "UserPromptSubmit"}
+
+	if background {
+		return []map[string]any{prompt, pre, start, post, {"hook_event_name": "Stop"}, stop, prompt}
+	}
+
+	return []map[string]any{prompt, pre, start, stop, post, {"hook_event_name": "Stop"}}
+}
+
+// launchRecording builds a synthetic timing recording of one case in run 1.
+func launchRecording(t *testing.T, payloads []map[string]any) timingRecording {
+	t.Helper()
+
+	r := timingRecording{runs: map[string]int{"child": 1}, events: map[int][]timingEvent{}}
+	r.manifest.ClientVersion = "synthetic"
+	r.events[1] = syntheticEvents(t, 1, payloads)
+
+	return r
+}
+
+// TestAgentLaunchReadsTheShape checks the launch shape reader and its
+// check on synthetic recordings. They give no native proof.
+func TestAgentLaunchReadsTheShape(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		payloads           []map[string]any
+		requested, observe string
+		shape              string
+		err                string
+	}{
+		{"a foreground launch", launchPayloads(false, agentStatusCompleted, false),
+			launchForeground, launchForeground, launchForeground, ""},
+		{"a background launch", launchPayloads(true, agentStatusAsyncLaunched, true),
+			launchBackground, launchBackground, launchBackground, ""},
+		{"a request without the field", launchPayloads(nil, agentStatusAsyncLaunched, true),
+			launchDefault, launchBackground, launchBackground, "record the case again"},
+		{"a foreground request that ran in the background", launchPayloads(false, agentStatusAsyncLaunched, true),
+			launchForeground, launchBackground, launchForeground, "Claude Code synthetic ran a foreground launch as background"},
+		{"a background request that ran in the foreground", launchPayloads(true, agentStatusCompleted, false),
+			launchBackground, launchForeground, launchBackground, "Claude Code synthetic ran a background launch as foreground"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := launchRecording(t, tc.payloads)
+
+			requested, observed, err := r.agentLaunch("child")
+			require.NoError(t, err)
+			assert.Equal(t, tc.requested, requested)
+			assert.Equal(t, tc.observe, observed)
+
+			err = r.launchShape("child", tc.shape)
+			if tc.err == "" {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.err)
+			}
+		})
+	}
+
+	t.Run("a status that disagrees with the order", func(t *testing.T) {
+		for _, payloads := range [][]map[string]any{
+			launchPayloads(true, agentStatusCompleted, true),
+			launchPayloads(false, agentStatusAsyncLaunched, false),
+		} {
+			_, _, err := launchRecording(t, payloads).agentLaunch("child")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "fits no launch shape")
+		}
+	})
+
+	t.Run("a call result that names another agent", func(t *testing.T) {
+		payloads := launchPayloads(false, agentStatusCompleted, false)
+		payloads[2]["agent_id"] = "a2"
+
+		err := launchRecording(t, payloads).launchShape("child", launchForeground)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "another agent than SubagentStart")
+	})
+
+	t.Run("no Agent call", func(t *testing.T) {
+		_, _, err := launchRecording(t, []map[string]any{{"hook_event_name": "UserPromptSubmit"}}).agentLaunch("child")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "record the case again")
+	})
 }

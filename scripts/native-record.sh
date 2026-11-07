@@ -735,8 +735,10 @@ Then reply with the single word: done"
 2. Write one line: the code word of the seamark review lesson that you got for timing/missing.txt, or the word none.
 Then reply with the single word: done"
 
+    # The prompt sets the background shape of the Agent call, for the
+    # reason in the comment of record_claude_guard.
     timing_claude subagent-read new "$steps
-1. Use the Agent tool with subagent_type \"reader\" and ask it to read the file timing/child.txt.
+1. Use the Agent tool with subagent_type \"reader\" and run_in_background set to true, and ask it to read the file timing/child.txt.
 Then reply with the single word: done"
 }
 
@@ -1354,10 +1356,28 @@ guard_phase() {
 }
 
 # guard_reset puts the fixture directories back to the commit, so each
-# case starts from the same files.
+# case starts from the same files. It first makes the read-only directory
+# of guard_fixture writable again, because git clean cannot remove a file
+# inside a directory without write permission.
 guard_reset() {
+    [ ! -d "$REPO/sentinel/locked" ] || chmod 0755 "$REPO/sentinel/locked"
     git -C "$REPO" checkout -q -- sentinel notes free
     git -C "$REPO" clean -fdq -- sentinel notes free
+}
+
+# guard_fixture <case> adds the fixture files of one case after the reset.
+# The execution-failure case gets the empty directory sentinel/locked with
+# mode 0555. Claude Code checks a new Write target only for its absence
+# before the hooks. So the Write runs PreToolUse, then fails when it opens
+# its temporary file in that directory, and that failure fires
+# PostToolUseFailure. An empty directory changes no file hash and no git
+# status line, so the state of the case stays comparable.
+guard_fixture() {
+    case "$1" in
+        execution-failure)
+            mkdir -p "$REPO/sentinel/locked"
+            chmod 0555 "$REPO/sentinel/locked" ;;
+    esac
 }
 
 # guard_state <file> writes the state of the fixture directories: the
@@ -1436,12 +1456,14 @@ guard_begin() {
 }
 
 # guard_run <phase> <case> <prompt> runs one case. It sets up the phase,
-# resets the fixture, notes the state, runs one paid client session,
-# notes the state again, and appends the case line to guard-cases.jsonl.
-# The start time of the run assigns each later hook payload to it.
+# resets the fixture, adds the fixture files of the case, notes the state,
+# runs one paid client session, notes the state again, and appends the
+# case line to guard-cases.jsonl. The start time of the run assigns each
+# later hook payload to it.
 guard_run() {
     guard_phase "$1"
     guard_reset
+    guard_fixture "$2"
     guard_state "$OUT/state-before.json"
     audit_from=$(guard_lines "$REPO/.seamark/lesson-check-audit.jsonl")
     log_from=$(guard_lines "$INSTR/pre-write.log")
@@ -1571,11 +1593,20 @@ GUARD_REPORT='Then reply with one line: the check id that a seamark post-edit me
 # replay reads the reply of the child from its SubagentStop payload.
 GUARD_RELAY='Do not use any tool yourself. Then reply with the single word that the subagent replied.'
 
-# record_claude_guard runs the twenty-two Claude Code guard cases, each
+# record_claude_guard runs the twenty-three Claude Code guard cases, each
 # in a new session. The writer subagent has only the Write tool. The
 # phases that change the hook document run last among the first thirteen
-# cases. The nine later cases add child denies, a child post-edit reply,
-# and the in-budget slow deny of each tool and lane.
+# cases. The ten later cases add child denies, a child post-edit reply,
+# the in-budget slow deny of each tool and lane, and a write that fails
+# during its execution.
+#
+# Each child prompt sets run_in_background of the Agent call. Claude Code
+# 2.1.314 starts an agent in the background when the field is not set, and
+# another build can change that default. A fixed shape per case gives the
+# Write and the Edit child a deny in each shape: a foreground deny in
+# subagent-violation and subagent-edit-violation, and a background deny
+# after the in-budget wait in slow-deny-subagent-write and
+# slow-deny-subagent-edit.
 record_claude_guard() {
     model=${NATIVE_RECORD_CLAUDE_MODEL:-haiku}
     agents='{"writer":{"description":"Creates the one file it is given with the given content.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Write"]}}'
@@ -1596,7 +1627,7 @@ If you have no MultiEdit tool, use no other tool for step 2 and reply with the s
 $GUARD_STOP"
 
     guard_run enforce subagent-violation "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"writer\" and ask it to create the new file sentinel/child.txt with the single line: child
+1. Use the Agent tool with subagent_type \"writer\" and run_in_background set to false, and ask it to create the new file sentinel/child.txt with the single line: child
 $GUARD_STOP"
 
     guard_run enforce unknown-edit "$GUARD_STEPS
@@ -1646,15 +1677,15 @@ $GUARD_STOP"
     agents=$agents'"reporter":{"description":"Creates the one file it is given, then reports the post-edit message.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. Do not retry it. Then reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came.","model":"'"$model"'","tools":["Write"]}}'
 
     guard_run enforce subagent-edit-violation "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"editor\" and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+1. Use the Agent tool with subagent_type \"editor\" and run_in_background set to false, and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
 $GUARD_RELAY"
 
     guard_run enforce subagent-multiedit-violation "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"editor\" and ask it to read notes/multi.txt and then use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
+1. Use the Agent tool with subagent_type \"editor\" and run_in_background set to false, and ask it to read notes/multi.txt and then use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
 $GUARD_RELAY"
 
     guard_run check-pins subagent-check-only "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"reporter\" and ask it to create the new file sentinel/child-checked.txt with the single line: checked
+1. Use the Agent tool with subagent_type \"reporter\" and run_in_background set to true, and ask it to create the new file sentinel/child-checked.txt with the single line: checked
 Do not use any tool yourself. Then reply with the one line that the subagent replied."
 
     guard_run slow-deny slow-deny-write "$GUARD_STEPS
@@ -1673,16 +1704,26 @@ If you have no MultiEdit tool, use no other tool for step 2 and reply with the s
 $GUARD_STOP"
 
     guard_run slow-deny slow-deny-subagent-write "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"writer\" and ask it to create the new file sentinel/slow-child.txt with the single line: child
+1. Use the Agent tool with subagent_type \"writer\" and run_in_background set to true, and ask it to create the new file sentinel/slow-child.txt with the single line: child
 $GUARD_RELAY"
 
     guard_run slow-deny slow-deny-subagent-edit "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"editor\" and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+1. Use the Agent tool with subagent_type \"editor\" and run_in_background set to true, and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
 $GUARD_RELAY"
 
     guard_run slow-deny slow-deny-subagent-multiedit "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"editor\" and ask it to read notes/multi.txt and then use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
+1. Use the Agent tool with subagent_type \"editor\" and run_in_background set to true, and ask it to read notes/multi.txt and then use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
 $GUARD_RELAY"
+
+    # The Write targets a new file in the read-only directory that
+    # guard_fixture makes. An Edit with a wrong old_string cannot show this
+    # path, because the client refuses it before any hook. The phase has no
+    # baseline, so the post-edit hook reports the failed write as
+    # incomplete and replies.
+    guard_run post-only execution-failure "$GUARD_STEPS
+1. Use the Write tool once to create the new file sentinel/locked/new.txt with the single line: locked
+The directory sentinel/locked already exists. Do not read it and do not create it. If the call fails, do not retry it and do not try another way.
+$GUARD_REPORT"
 
     guard_restore
 }

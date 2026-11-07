@@ -815,6 +815,9 @@ func TestNativeRecordClaudeGuardRecording(t *testing.T) {
 		assert.Equal(t, []string{"sentinel/child.txt"}, r.opPaths(guardOp(t, ClaudeID, e)))
 		assertChild(t, ClaudeID, steps[1], e, deny)
 		r.assertGuardStatus(t, name, 2)
+
+		// The prompt asks for a foreground agent.
+		assert.NoError(t, r.launchShape(name, launchForeground), name)
 	})
 
 	t.Run("an Edit that the guard cannot project is denied", func(t *testing.T) {

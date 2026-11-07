@@ -2,16 +2,21 @@ package integration
 
 // The extension cases of the native guard scenario. They come after the
 // thirteen first cases of each client in scripts/native-record.sh:
-// child denies, a child post-edit reply, and an in-budget slow deny per
-// tool and lane. The table below gives the expected outcome of each
-// case, so a later recording replays offline against it. A recording
-// from before the extension holds none of these cases, and its replay
-// skips them as pending.
+// child denies, a child post-edit reply, an in-budget slow deny per tool
+// and lane, and for Claude Code a write that fails during its execution.
+// The table below gives the expected outcome of each case, so a later
+// recording replays offline against it. A recording from before the
+// extension holds none of these cases, and its replay skips them as
+// pending.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -47,9 +52,18 @@ const (
 	// guardOutcomeReply: check pins allow the write, and the post-edit
 	// hook reports the violation and writes its reply.
 	guardOutcomeReply guardOutcome = "post-edit-reply"
+	// guardOutcomeFailure: no pre-write hook runs, the write fails during
+	// its execution, and the post-edit hook replies to PostToolUseFailure.
+	guardOutcomeFailure guardOutcome = "post-edit-failure"
 )
 
-// guardExtension is one row of the scenario table of the extension.
+// guardExecutionFailure is the case whose Write fails during its
+// execution, in the read-only directory that guard_fixture makes.
+const guardExecutionFailure = "execution-failure"
+
+// guardExtension is one row of the scenario table of the extension. The
+// shape is the launch shape that the prompt of a Claude Code child case
+// sets. It is empty for a root case and for each Codex case.
 type guardExtension struct {
 	name    string
 	phase   string
@@ -57,25 +71,27 @@ type guardExtension struct {
 	lane    string
 	path    string
 	outcome guardOutcome
+	shape   string
 }
 
 // The extension cases of each client, in the order of the script.
 var (
 	claudeGuardExtensions = []guardExtension{
-		{"subagent-edit-violation", "enforce", claudeToolEdit, LaneChild, "sentinel/edit.txt", guardOutcomeDeny},
-		{"subagent-multiedit-violation", "enforce", claudeToolMultiEdit, LaneChild, "notes/multi.txt", guardOutcomeDeny},
-		{"subagent-check-only", "check-pins", claudeToolWrite, LaneChild, "sentinel/child-checked.txt", guardOutcomeReply},
-		{"slow-deny-write", guardPhaseSlowDeny, claudeToolWrite, LaneRoot, "sentinel/slow-deny.txt", guardOutcomeSlowDeny},
-		{"slow-deny-edit", guardPhaseSlowDeny, claudeToolEdit, LaneRoot, "sentinel/edit.txt", guardOutcomeSlowDeny},
-		{"slow-deny-multiedit", guardPhaseSlowDeny, claudeToolMultiEdit, LaneRoot, "notes/multi.txt", guardOutcomeSlowDeny},
-		{"slow-deny-subagent-write", guardPhaseSlowDeny, claudeToolWrite, LaneChild, "sentinel/slow-child.txt", guardOutcomeSlowDeny},
-		{"slow-deny-subagent-edit", guardPhaseSlowDeny, claudeToolEdit, LaneChild, "sentinel/edit.txt", guardOutcomeSlowDeny},
-		{"slow-deny-subagent-multiedit", guardPhaseSlowDeny, claudeToolMultiEdit, LaneChild, "notes/multi.txt", guardOutcomeSlowDeny},
+		{"subagent-edit-violation", "enforce", claudeToolEdit, LaneChild, "sentinel/edit.txt", guardOutcomeDeny, launchForeground},
+		{"subagent-multiedit-violation", "enforce", claudeToolMultiEdit, LaneChild, "notes/multi.txt", guardOutcomeDeny, launchForeground},
+		{"subagent-check-only", "check-pins", claudeToolWrite, LaneChild, "sentinel/child-checked.txt", guardOutcomeReply, launchBackground},
+		{"slow-deny-write", guardPhaseSlowDeny, claudeToolWrite, LaneRoot, "sentinel/slow-deny.txt", guardOutcomeSlowDeny, ""},
+		{"slow-deny-edit", guardPhaseSlowDeny, claudeToolEdit, LaneRoot, "sentinel/edit.txt", guardOutcomeSlowDeny, ""},
+		{"slow-deny-multiedit", guardPhaseSlowDeny, claudeToolMultiEdit, LaneRoot, "notes/multi.txt", guardOutcomeSlowDeny, ""},
+		{"slow-deny-subagent-write", guardPhaseSlowDeny, claudeToolWrite, LaneChild, "sentinel/slow-child.txt", guardOutcomeSlowDeny, launchBackground},
+		{"slow-deny-subagent-edit", guardPhaseSlowDeny, claudeToolEdit, LaneChild, "sentinel/edit.txt", guardOutcomeSlowDeny, launchBackground},
+		{"slow-deny-subagent-multiedit", guardPhaseSlowDeny, claudeToolMultiEdit, LaneChild, "notes/multi.txt", guardOutcomeSlowDeny, launchBackground},
+		{guardExecutionFailure, "post-only", claudeToolWrite, LaneRoot, "sentinel/locked/new.txt", guardOutcomeFailure, ""},
 	}
 	codexGuardExtensions = []guardExtension{
-		{"subagent-check-only", "check-pins", codexApplyPatch, LaneChild, "sentinel/child-checked.txt", guardOutcomeReply},
-		{"slow-deny-add", guardPhaseSlowDeny, codexApplyPatch, LaneRoot, "sentinel/slow-deny.txt", guardOutcomeSlowDeny},
-		{"slow-deny-subagent-add", guardPhaseSlowDeny, codexApplyPatch, LaneChild, "sentinel/slow-child.txt", guardOutcomeSlowDeny},
+		{"subagent-check-only", "check-pins", codexApplyPatch, LaneChild, "sentinel/child-checked.txt", guardOutcomeReply, ""},
+		{"slow-deny-add", guardPhaseSlowDeny, codexApplyPatch, LaneRoot, "sentinel/slow-deny.txt", guardOutcomeSlowDeny, ""},
+		{"slow-deny-subagent-add", guardPhaseSlowDeny, codexApplyPatch, LaneChild, "sentinel/slow-child.txt", guardOutcomeSlowDeny, ""},
 	}
 )
 
@@ -127,11 +143,22 @@ func (r guardRecording) replayExtensionCase(t *testing.T, client string, x guard
 	c := r.cases[x.name]
 	require.Equal(t, x.phase, c.Phase, "the script ran the case in its phase")
 
+	// The shape is logged before a skip, because a skipped MultiEdit case
+	// gives no proof, but its shape still tells the reviewer what ran.
+	if x.shape != "" {
+		requested, observed, err := r.agentLaunch(x.name)
+		t.Logf("case %s: launch shape requested %q, observed %q, error %v", x.name, requested, observed, err)
+	}
+
 	if x.tool == claudeToolMultiEdit && !r.has(x.name, "PreToolUse", x.tool) {
 		require.NoError(t, r.noMultiEditTool(x),
 			"case %s: no MultiEdit payload: the model did not follow the prompt, so record again", x.name)
 		t.Skipf("Claude Code %s offered no MultiEdit tool in the %s lane; the MultiEdit path keeps no native evidence",
 			r.manifest.ClientVersion, x.lane)
+	}
+
+	if x.shape != "" {
+		assert.NoError(t, r.launchShape(x.name, x.shape), "case %s", x.name)
 	}
 
 	switch x.outcome {
@@ -141,9 +168,156 @@ func (r guardRecording) replayExtensionCase(t *testing.T, client string, x guard
 		r.assertExtensionSlowDeny(t, client, x)
 	case guardOutcomeReply:
 		r.assertExtensionReply(t, client, x)
+	case guardOutcomeFailure:
+		r.assertExtensionFailure(t, x)
 	default:
 		require.Failf(t, "unknown outcome", "%s", x.outcome)
 	}
+}
+
+// assertExtensionFailure checks the write that fails during its
+// execution (see executionFailure) and logs the error text of the client
+// and the reply. The reply is a corroboration only: the reviewer reads the
+// reach of the post-edit reply from guard-context.jsonl.
+func (r guardRecording) assertExtensionFailure(t *testing.T, x guardExtension) {
+	t.Helper()
+
+	require.NoError(t, r.executionFailure(x), "case %s", x.name)
+
+	for _, e := range r.events[r.runs[x.name]] {
+		if e.hook.Event == claudeEventToolFailure && e.tool() == x.tool {
+			t.Logf("case %s: the PostToolUseFailure error of Claude Code %s: %q", x.name, r.manifest.ClientVersion,
+				nativeString(e.raw, "error"))
+		}
+	}
+
+	t.Logf("case %s: the reply names %q", x.name, r.cases[x.name].Reply)
+}
+
+// executionFailure returns nil when the run of a case shows a write that
+// fails during its execution. The run has one PreToolUse payload of the
+// tool and then a PostToolUseFailure payload of the same call in the root
+// lane, with a permission error. No guard runs in the phase. One post-edit
+// record of the call reports the failed tool without a baseline as
+// incomplete and replies. The fixture stays unchanged. The debug log shows
+// the verify command on PostToolUseFailure with exit status 0.
+//
+// A run without the PreToolUse payload, a retried call, or a successful
+// write asks for a new recording. The client checks a new file only for
+// its absence before the hooks, so no valid run skips this path, and a
+// successful write means that the directory was not read-only.
+func (r guardRecording) executionFailure(x guardExtension) error {
+	run := r.runs[x.name]
+	events := r.events[run]
+
+	var pre, failure []timingEvent
+
+	for _, e := range events {
+		switch {
+		case e.tool() != x.tool:
+		case e.hook.Event == claudeEventPreToolUse:
+			pre = append(pre, e)
+		case e.hook.Event == claudeEventToolFailure:
+			failure = append(failure, e)
+		case e.hook.Event == "PostToolUse":
+			return fmt.Errorf("a PostToolUse %s payload: the write succeeded, so %s was not read-only; record the case again",
+				x.tool, path.Dir(x.path))
+		}
+	}
+
+	switch {
+	case len(pre) == 0:
+		return fmt.Errorf("no PreToolUse %s payload: the model made no call, or the client refused it before any hook; "+
+			"record the case again", x.tool)
+	case len(pre) > 1:
+		return fmt.Errorf("%d PreToolUse %s payloads: the model retried the call; record the case again", len(pre), x.tool)
+	case len(failure) == 0:
+		return fmt.Errorf("Claude Code %s sent no PostToolUseFailure for the failed %s", r.manifest.ClientVersion, x.tool)
+	case !slices.ContainsFunc(events[:pre[0].seq], func(e timingEvent) bool { return e.hook.Event == "UserPromptSubmit" }):
+		return errors.New("no UserPromptSubmit payload comes before the call")
+	case failure[0].seq < pre[0].seq:
+		return errors.New("PostToolUseFailure comes before PreToolUse")
+	}
+
+	call := nativeString(pre[0].raw, "tool_use_id")
+	if call == "" || nativeString(failure[0].raw, "tool_use_id") != call {
+		return errors.New("PostToolUseFailure names another tool call than PreToolUse")
+	}
+
+	if interrupt, set := failure[0].raw["is_interrupt"]; set && interrupt != false {
+		return fmt.Errorf("PostToolUseFailure has is_interrupt %v: the call stopped, it did not fail", interrupt)
+	}
+
+	if nativeString(pre[0].raw, "agent_id") != "" || nativeString(failure[0].raw, "agent_id") != "" {
+		return errors.New("a payload names an agent, but the parent makes the call")
+	}
+
+	text := strings.ToLower(nativeString(failure[0].raw, "error"))
+	if !strings.Contains(text, "eacces") && !strings.Contains(text, "permission denied") {
+		return errors.New("the PostToolUseFailure error names no EACCES and no permission denied")
+	}
+
+	op, err := claudeGuards{}.DecodeGuard(pre[0].payload)
+	if err != nil {
+		return fmt.Errorf("the PreToolUse payload does not decode: %w", err)
+	}
+
+	if paths := r.opPaths(op); !slices.Equal(paths, []string{x.path}) {
+		return fmt.Errorf("the call names %v, not %s", paths, x.path)
+	}
+
+	return r.failureRecords(x, pre[0])
+}
+
+// failureRecords checks the audit records, the fixture, and the hook
+// result of the failed write in executionFailure.
+func (r guardRecording) failureRecords(x guardExtension, pre timingEvent) error {
+	c := r.cases[x.name]
+	if c.Audit[0] < 0 || c.Audit[0] > c.Audit[1] || c.Audit[1] > len(r.audit) {
+		return fmt.Errorf("the audit range %v lies outside the %d audit records", c.Audit, len(r.audit))
+	}
+
+	records := r.audit[c.Audit[0]:c.Audit[1]]
+	if guards := ofKind(records, lessoncheck.AuditGuard); len(guards) > 0 {
+		return fmt.Errorf("%d guard records: the phase has no pre-write hook", len(guards))
+	}
+
+	posts := ofKind(records, lessoncheck.AuditPostEdit)
+	if len(posts) != 1 {
+		return fmt.Errorf("%d post-edit records, not one", len(posts))
+	}
+
+	post := posts[0]
+	if post.ToolOutcome != lessoncheck.ToolFailed || post.Attribution != lessoncheck.AttributionNoBaseline ||
+		post.State != lessoncheck.SummaryIncomplete || post.Emitted == nil || !*post.Emitted {
+		return fmt.Errorf("the post-edit record reads %s, %s, %s; want a failed tool without a baseline, incomplete, "+
+			"and a written reply", post.ToolOutcome, post.Attribution, post.State)
+	}
+
+	var rows []guardIdentity
+
+	for _, id := range r.identities {
+		if id.File == pre.hook.File {
+			rows = append(rows, id)
+		}
+	}
+
+	if len(rows) != 1 || !guardDigest(rows[0].MatchSHA) || rows[0].MatchSHA != post.MatchSHA {
+		return errors.New("the post-edit record does not join the identity row of the PreToolUse payload")
+	}
+
+	if !c.unchanged() || c.created(x.path) {
+		return fmt.Errorf("the failed write changed the fixture: before %v, after %v", c.Before, c.After)
+	}
+
+	if !slices.ContainsFunc(r.hooks, func(h guardHookResult) bool {
+		return h.Run == c.Run && h.Hook == "verify" && h.Event == claudeEventToolFailure &&
+			h.Status != nil && *h.Status == 0
+	}) {
+		return errors.New("the debug log shows no verify command on PostToolUseFailure with exit status 0")
+	}
+
+	return nil
 }
 
 // guardNoMultiEdit is the reply word of a model that has no MultiEdit
@@ -667,4 +841,241 @@ func TestGuardScenarioSlowDenyPhase(t *testing.T) {
 
 	assert.Equal(t, "restore\ndoc no-guard\ncapability slow-deny\nslow-deny\n", string(got),
 		"the second call in the same phase changes nothing")
+}
+
+// syntheticEvents gives each payload of a synthetic run its hook entry,
+// its position, its decoded form, and its bytes, as readHookEvents does.
+func syntheticEvents(t *testing.T, run int, payloads []map[string]any) []timingEvent {
+	t.Helper()
+
+	events := make([]timingEvent, 0, len(payloads))
+
+	for i, raw := range payloads {
+		data, err := json.Marshal(raw)
+		require.NoError(t, err)
+
+		event, _ := raw["hook_event_name"].(string)
+		hook := nativeHook{File: fmt.Sprintf("hooks/%03d-%s.json", i+1, event), Run: run, Event: event}
+		events = append(events, timingEvent{hook: hook, seq: i, payload: data, raw: raw})
+	}
+
+	return events
+}
+
+// failurePayloads gives the payloads of the expected execution-failure
+// run: the prompt, the Write call, its failure with the permission error
+// of the temporary file, and the stop.
+func failurePayloads() []map[string]any {
+	return []map[string]any{
+		{"hook_event_name": "UserPromptSubmit", "session_id": "s1"},
+		{"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": "/workspace/native", "tool_name": claudeToolWrite,
+			"tool_use_id": "toolu_1", "tool_input": map[string]any{"file_path": "/workspace/native/sentinel/locked/new.txt",
+				"content": "locked\n"}},
+		{"hook_event_name": "PostToolUseFailure", "session_id": "s1", "tool_name": claudeToolWrite, "tool_use_id": "toolu_1",
+			"is_interrupt": false, "error": "EACCES: permission denied, open '/workspace/native/sentinel/locked/new.txt.tmp.1.abc'"},
+		{"hook_event_name": "Stop", "session_id": "s1"},
+	}
+}
+
+// failureRecording builds a synthetic Claude Code recording of the
+// execution-failure case in run 1 from the payloads. One post-edit record
+// joins the identity row of the PreToolUse payload, and the debug log
+// shows the verify command on PostToolUseFailure.
+func failureRecording(t *testing.T, payloads []map[string]any) (guardRecording, guardExtension) {
+	t.Helper()
+
+	x := guardExtensionRow(t, ClaudeID, guardExecutionFailure)
+	state := guardState{Files: map[string]string{"sentinel/edit.txt": "a"}}
+
+	r := guardRecording{
+		timingRecording: timingRecording{runs: map[string]int{x.name: 1}, events: map[int][]timingEvent{}},
+		cases: map[string]guardCase{x.name: {Run: 1, Case: x.name, Phase: x.phase, Before: state, After: state,
+			Audit: [2]int{0, 1}}},
+	}
+	r.manifest.Client, r.manifest.ClientVersion = ClaudeID, "synthetic"
+	r.manifest.Placeholders.Workspace = "/workspace/native"
+	r.events[1] = syntheticEvents(t, 1, payloads)
+
+	match, emitted, status := strings.Repeat("ab", 32), true, 0
+	r.audit = []lessoncheck.AuditRecord{{
+		Kind: lessoncheck.AuditPostEdit, MatchSHA: match, ToolOutcome: lessoncheck.ToolFailed,
+		Attribution: lessoncheck.AttributionNoBaseline, State: lessoncheck.SummaryIncomplete, Emitted: &emitted,
+	}}
+	r.identities = []guardIdentity{{File: "hooks/002-PreToolUse.json", Run: 1, Case: x.name, Client: ClaudeID,
+		Tool: claudeToolWrite, Lane: LaneRoot, MatchSHA: match}}
+	r.hooks = []guardHookResult{{Run: 1, Hook: "verify", Event: claudeEventToolFailure, Tool: claudeToolWrite, Status: &status}}
+
+	return r, x
+}
+
+// TestExecutionFailureReadsTheFailedWrite checks the rule of the
+// execution-failure case on synthetic recordings. They give no native
+// proof. Each change to the expected run must give an error that names
+// its reason.
+func TestExecutionFailureReadsTheFailedWrite(t *testing.T) {
+	t.Run("the expected run passes the replay", func(t *testing.T) {
+		r, x := failureRecording(t, failurePayloads())
+		require.NoError(t, r.executionFailure(x))
+		r.replayExtensionCase(t, ClaudeID, x)
+	})
+
+	set := func(i int, key string, value any) func([]map[string]any) []map[string]any {
+		return func(p []map[string]any) []map[string]any {
+			p[i][key] = value
+
+			return p
+		}
+	}
+
+	for _, tc := range []struct {
+		name     string
+		payloads func([]map[string]any) []map[string]any
+		record   func(r *guardRecording)
+		want     string
+	}{
+		{name: "the write succeeded", payloads: set(2, "hook_event_name", "PostToolUse"), want: "record the case again"},
+		{name: "no PostToolUseFailure", payloads: func(p []map[string]any) []map[string]any {
+			return slices.Delete(p, 2, 3)
+		}, want: "sent no PostToolUseFailure"},
+		{name: "no PreToolUse", payloads: func(p []map[string]any) []map[string]any {
+			return slices.Delete(p, 1, 2)
+		}, want: "no PreToolUse Write payload"},
+		{name: "a second PreToolUse", payloads: func(p []map[string]any) []map[string]any {
+			return slices.Insert(p, 2, maps.Clone(p[1]))
+		}, want: "retried the call"},
+		{name: "another tool call", payloads: set(2, "tool_use_id", "toolu_2"), want: "another tool call"},
+		{name: "an error without a permission error", payloads: set(2, "error", "ENOSPC: no space left on device"),
+			want: "no EACCES"},
+		{name: "an interrupt", payloads: set(2, "is_interrupt", true), want: "is_interrupt"},
+		{name: "an agent", payloads: set(2, "agent_id", "a1"), want: "names an agent"},
+		{name: "another path", payloads: set(1, "tool_input", map[string]any{"file_path": "/workspace/native/sentinel/other.txt",
+			"content": "locked\n"}), want: "not sentinel/locked/new.txt"},
+		{name: "a guard record", record: func(r *guardRecording) {
+			r.audit = append(r.audit, lessoncheck.AuditRecord{Kind: lessoncheck.AuditGuard})
+			r.cases[guardExecutionFailure] = withAudit(r.cases[guardExecutionFailure], 0, 2)
+		}, want: "1 guard records"},
+		{name: "another outcome", record: func(r *guardRecording) { r.audit[0].ToolOutcome = lessoncheck.ToolSucceeded },
+			want: "want a failed tool"},
+		{name: "another attribution", record: func(r *guardRecording) {
+			r.audit[0].Attribution = lessoncheck.AttributionProjectionDiffers
+		}, want: "want a failed tool"},
+		{name: "no identity join", record: func(r *guardRecording) { r.audit[0].MatchSHA = strings.Repeat("cd", 32) },
+			want: "does not join"},
+		{name: "a changed fixture", record: func(r *guardRecording) {
+			c := r.cases[guardExecutionFailure]
+			c.After = guardState{Files: map[string]string{"sentinel/edit.txt": "a", "sentinel/locked/new.txt": "b"}}
+			r.cases[guardExecutionFailure] = c
+		}, want: "changed the fixture"},
+		{name: "no verify result", record: func(r *guardRecording) { r.hooks[0].Event = claudeEventPostTool },
+			want: "no verify command"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payloads := failurePayloads()
+			if tc.payloads != nil {
+				payloads = tc.payloads(payloads)
+			}
+
+			r, x := failureRecording(t, payloads)
+			if tc.record != nil {
+				tc.record(&r)
+			}
+
+			err := r.executionFailure(x)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+// withAudit returns a case line with another audit range.
+func withAudit(c guardCase, from, to int) guardCase {
+	c.Audit = [2]int{from, to}
+
+	return c
+}
+
+// TestGuardScenarioFixtureOfTheFailureCase runs guard_fixture,
+// guard_state, and guard_reset of the script in a scratch Git repository.
+// The fixture step adds an empty read-only directory that leaves the
+// state unchanged. The reset removes it, also when a write left a file in
+// it, which only the chmod of guard_reset makes possible.
+func TestGuardScenarioFixtureOfTheFailureCase(t *testing.T) {
+	requireTools(t, "sh", "git", "python3", "chmod", "mkdir")
+
+	script := nativeRecordScript(t)
+	repo, out := t.TempDir(), t.TempDir()
+	locked := filepath.Join(repo, "sentinel", "locked")
+
+	// A directory without write permission blocks the removal of the
+	// temporary directory, so the test gives it back its permission.
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	git := func(args ...string) string {
+		out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput()
+		require.NoError(t, err, string(out))
+
+		return string(out)
+	}
+
+	git("init", "-q", "-b", "main")
+	git("config", "user.name", "native")
+	git("config", "user.email", "native@example.invalid")
+
+	for _, f := range []string{"sentinel/edit.txt", "notes/failure.txt", "free/oracle.txt"} {
+		writeLines(t, filepath.Join(repo, filepath.FromSlash(f)), "alpha")
+	}
+
+	git("add", "sentinel", "notes", "free")
+	git("commit", "-q", "-m", "guard fixture")
+
+	run := func(program string) {
+		defs := scriptFunction(t, script, "guard_reset") + scriptFunction(t, script, "guard_fixture") +
+			scriptFunction(t, script, "guard_state")
+		cmd := exec.Command("sh", "-eu", "-c", defs+program)
+		cmd.Env = append(os.Environ(), "REPO="+repo, "OUT="+out)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+
+	run("guard_state \"$OUT/before.json\"\nguard_fixture execution-failure\nguard_state \"$OUT/after.json\"\n")
+
+	info, err := os.Stat(locked)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+	assert.Equal(t, os.FileMode(0o555), info.Mode().Perm(), "the directory is read-only")
+
+	entries, err := os.ReadDir(locked)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "the directory holds no file")
+
+	before, err := os.ReadFile(filepath.Join(out, "before.json"))
+	require.NoError(t, err)
+	after, err := os.ReadFile(filepath.Join(out, "after.json"))
+	require.NoError(t, err)
+	assert.JSONEq(t, string(before), string(after), "an empty directory changes no file hash and no git status line")
+
+	if os.Geteuid() != 0 {
+		assert.Error(t, os.WriteFile(filepath.Join(locked, "new.txt"), []byte("locked\n"), 0o600),
+			"a file creation in the read-only directory fails")
+	}
+
+	run("guard_reset\n")
+	assert.NoDirExists(t, locked, "the reset removes the empty directory")
+	assert.Empty(t, git("status", "--porcelain", "--untracked-files=all"))
+
+	// A write that reached the directory leaves a file inside it.
+	require.NoError(t, os.MkdirAll(locked, 0o755))
+	writeLines(t, filepath.Join(locked, "x"), "written")
+	require.NoError(t, os.Chmod(locked, 0o555))
+
+	if os.Geteuid() != 0 {
+		// git clean alone cannot remove the file, so the chmod is needed.
+		out, err := exec.Command("git", "-C", repo, "clean", "-fdq", "--", "sentinel").CombinedOutput()
+		assert.Error(t, err, string(out))
+		assert.FileExists(t, filepath.Join(locked, "x"))
+	}
+
+	run("guard_reset\n")
+	assert.NoDirExists(t, locked, "the reset removes the directory and its file")
+	assert.Empty(t, git("status", "--porcelain", "--untracked-files=all"))
 }
